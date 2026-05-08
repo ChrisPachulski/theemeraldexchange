@@ -62,6 +62,18 @@
   color: var(--text);
   letter-spacing: var(--tr-tight);
   outline: none;
+  /* Kill the native search-field box: without this, Chromium draws an
+     intrinsic-content-width focus ring inside its rounded chrome,
+     which doubles up against our panel's own focus-within border. */
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* The panel renders the focus state via :focus-within (border + halo),
+   so don't let the global :focus-visible rule layer a second outline
+   onto the input itself. */
+.search-hero__field:focus-visible {
+  outline: none;
 }
 
 /* Match typed-text typography exactly — only color differs.
