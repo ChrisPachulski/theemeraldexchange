@@ -64,10 +64,13 @@
   outline: none;
 }
 
+/* Match typed-text typography exactly — only color differs.
+   Anything else creates a jarring style snap when the user starts typing. */
 .search-hero__field::placeholder {
   color: var(--text-subtle);
-  font-weight: var(--w-body);
-  letter-spacing: var(--tr-hud);
+  font-weight: inherit;
+  letter-spacing: inherit;
+  opacity: 1;
 }
 
 /* Strip the native search-input chrome (clear button, etc.) */
