@@ -1,0 +1,18 @@
+# Independent Netlify project — separate from my_site/v2.
+# Reserved for future brother access (mutual-backup arrangement).
+# Until Tailscale routing is set up, the deployed Netlify build will load
+# but tile/API calls won't resolve from outside the LAN. That's expected.
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# When brother access lands, switch the build env to point /api/sonarr,
+# /api/radarr, /api/sab at the Tailscale .ts.net addresses (or use
+# Netlify edge functions to proxy). For now the app falls back to no-data
+# states gracefully when those endpoints don't resolve.

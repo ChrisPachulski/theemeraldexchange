@@ -1,0 +1,41 @@
+.tab-placeholder {
+  display: grid;
+  gap: var(--s-3);
+  padding: var(--hero-pad-top) var(--s-5) var(--s-7);
+  max-width: var(--content-max);
+  margin: 0 auto;
+  text-align: center;
+}
+
+.tab-placeholder__title {
+  font-family: var(--font-display);
+  font-size: var(--t-2xl);
+  font-weight: var(--w-display);
+  color: var(--text);
+  letter-spacing: var(--tr-display);
+  cursor: pointer;
+  padding: var(--s-2);
+  border-radius: var(--r-md);
+  transition: color var(--dur-fast) var(--ease);
+}
+
+.tab-placeholder__title:hover {
+  color: var(--emerald);
+}
+
+.tab-placeholder__copy {
+  font-size: var(--t-base);
+  color: var(--text-muted);
+  margin: 0;
+  max-width: 56ch;
+  margin-inline: auto;
+}
+
+.tab-placeholder__hint {
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  margin: var(--s-3) 0 0;
+}

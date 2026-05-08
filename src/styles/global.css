@@ -1,0 +1,127 @@
+/* Global base — reset, body, atmosphere overlay, focus, dialog defaults. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  /* The atmospheric backdrop: solid emerald-tinted near-black,
+     plus a faint radial fog above and below the fold so depth
+     reads even before any content paints. */
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(
+      ellipse 80% 60% at 50% -10%,
+      oklch(0.26 0.05 158 / 0.55) 0%,
+      oklch(0.16 0.012 158 / 0) 60%
+    ),
+    radial-gradient(
+      ellipse 60% 40% at 80% 110%,
+      oklch(0.22 0.04 158 / 0.45) 0%,
+      oklch(0.16 0.012 158 / 0) 60%
+    );
+  background-attachment: fixed;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: var(--t-base);
+  font-weight: var(--w-body);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-kerning: normal;
+  text-rendering: optimizeLegibility;
+}
+
+#root {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  z-index: 1;
+}
+
+/* Constellation overlay — fixed behind content. Drifts slowly via transform.
+   Pure decoration. Pointer-events disabled. Honors prefers-reduced-motion. */
+.constellation {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.55;
+  overflow: hidden;
+}
+
+.constellation__sky {
+  position: absolute;
+  /* Wider than the viewport so the drift never reveals an edge. */
+  inset: -10% -20%;
+  width: 140%;
+  height: 120%;
+  animation: constellation-drift 80s var(--ease) infinite alternate;
+}
+
+@keyframes constellation-drift {
+  from { transform: translate3d(-2%, 0, 0); }
+  to   { transform: translate3d(2%, -1%, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .constellation__sky {
+    animation: none;
+  }
+}
+
+/* Hide focus ring on pointer interactions, surface it for keyboard users. */
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--emerald);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Native <dialog> baseline — restyled per-modal. Solid scrim, not blur,
+   per DESIGN.md's earned-glassmorphism rule (only the HUD pod blurs). */
+dialog {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+}
+
+dialog::backdrop {
+  background: var(--scrim);
+}

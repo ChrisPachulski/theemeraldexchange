@@ -1,0 +1,58 @@
+.tv-tab {
+  /* Top padding clears the floating HUD pod. */
+  padding: var(--hero-pad-top) 0 var(--s-7);
+  display: grid;
+  gap: var(--s-5);
+}
+
+.tv-tab__controls {
+  padding: 0 var(--s-5);
+  max-width: var(--content-max);
+  margin: 0 auto;
+  width: 100%;
+}
+
+@media (max-width: 520px) {
+  .tv-tab__controls {
+    padding: 0 var(--s-3);
+  }
+}
+
+.tv-tab__hint {
+  font-family: var(--font-display);
+  font-size: var(--t-sm);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  text-align: center;
+  padding: var(--s-7) var(--s-5);
+  margin: 0;
+}
+
+.tv-tab__error {
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: var(--s-5);
+  display: grid;
+  gap: var(--s-2);
+}
+
+.tv-tab__error p {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--t-sm);
+}
+
+.tv-tab__error-detail {
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+}
+
+@media (max-width: 520px) {
+  .tv-tab {
+    padding: var(--hero-pad-top) 0 var(--s-7);
+    gap: var(--s-4);
+  }
+}

@@ -1,0 +1,142 @@
+/* Beacon — photographic emerald cluster integrated into the scene.
+   Two stacked copies of the same gem image, both with mix-blend-mode: screen
+   so the photo's black background drops to transparent against the kraken
+   below. The gem appears on the scene with its actual irregular silhouette,
+   not inside a UI disc. The bloom layer is a blurred, scaled-up clone that
+   provides the soft chromatic halo that follows the gem's exact shape. */
+
+.beacon {
+  position: fixed;
+  /* Tucked just below the HUD nav so the gem doesn't crash the chrome,
+     close enough to the corner that the kraken's reach reads as toward it. */
+  top: clamp(96px, 10vw, 148px);
+  right: clamp(20px, 3vw, 56px);
+  width: clamp(140px, 14vw, 200px);
+  height: clamp(140px, 14vw, 200px);
+  z-index: 1;
+  pointer-events: none;
+  /* Slow handheld bob — enough to feel in-world, not enough to look spinny. */
+  animation: beacon-bob 7s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+  /* Dissolve the gem's bottom + corners into the scene's fog so the
+     PNG cutout doesn't read as a sticker — the wider scene is misty,
+     so the gem should be too at its peripheries. */
+  -webkit-mask-image:
+    radial-gradient(
+      ellipse 95% 75% at 50% 28%,
+      black 0%,
+      black 38%,
+      transparent 95%
+    );
+  mask-image:
+    radial-gradient(
+      ellipse 95% 75% at 50% 28%,
+      black 0%,
+      black 38%,
+      transparent 95%
+    );
+}
+
+/* Both gem layers share these — full-bleed, no UI frame. The PNG carries
+   real alpha (true-black background knocked out via ffmpeg colorkey), so
+   the gem's natural irregular silhouette sits on the scene without any
+   rectangular cutout exposing itself. */
+.beacon__bloom,
+.beacon__gem {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  transform-origin: center center;
+}
+
+/* Bloom — blurred, scaled-up clone behind the sharp gem. Provides the
+   chromatic halo that follows the gem's true silhouette. screen blend
+   adds light to the scene below (purely additive — never darkens), so
+   this reads as ambient emerald spillover rather than a duplicate image. */
+.beacon__bloom {
+  mix-blend-mode: screen;
+  filter:
+    saturate(1.85)
+    contrast(0.95)
+    brightness(1.15)
+    blur(18px);
+  transform: scale(1.32);
+  animation: beacon-bloom 3.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+}
+
+/* The sharp gem. Color-graded to match the kraken's slightly cooled
+   emerald-leaning palette. drop-shadow stack adds a tight inner glow
+   for the chromatic edge — the wide bloom is handled by .beacon__bloom. */
+.beacon__gem {
+  filter:
+    saturate(1.20)
+    contrast(1.10)
+    brightness(1.02)
+    drop-shadow(0 0 6px  oklch(0.78 0.20 158 / 0.65))
+    drop-shadow(0 0 14px oklch(0.62 0.18 158 / 0.55))
+    drop-shadow(0 0 28px oklch(0.62 0.18 158 / 0.30));
+  animation: beacon-gem 4.4s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+}
+
+/* Whole-assembly drift — small, asymmetric, like a buoy. Gives the
+   beacon weight in the scene without crossing into looking animated. */
+@keyframes beacon-bob {
+  from { transform: translate(0, -3px); }
+  to   { transform: translate(-2px, 4px); }
+}
+
+/* Bloom breathes — wider scale change than the gem so the halo seems
+   to swell out and pull back from a stable core. */
+@keyframes beacon-bloom {
+  from {
+    transform: scale(1.22);
+    filter: saturate(1.55) contrast(0.95) brightness(1.00) blur(16px);
+    opacity: 0.75;
+  }
+  to {
+    transform: scale(1.42);
+    filter: saturate(2.10) contrast(0.95) brightness(1.30) blur(22px);
+    opacity: 1.0;
+  }
+}
+
+/* Gem core pulses subtly — saturation and brightness lift on each beat
+   without scaling much, so the gem reads as steady in space while the
+   light around it breathes. */
+@keyframes beacon-gem {
+  from {
+    transform: scale(1.00);
+    filter:
+      saturate(1.10) contrast(1.08) brightness(0.95)
+      drop-shadow(0 0 5px  oklch(0.78 0.20 158 / 0.50))
+      drop-shadow(0 0 12px oklch(0.62 0.18 158 / 0.42))
+      drop-shadow(0 0 24px oklch(0.62 0.18 158 / 0.20));
+  }
+  to {
+    transform: scale(1.025);
+    filter:
+      saturate(1.40) contrast(1.14) brightness(1.10)
+      drop-shadow(0 0 8px  oklch(0.92 0.22 158 / 0.85))
+      drop-shadow(0 0 18px oklch(0.62 0.18 158 / 0.70))
+      drop-shadow(0 0 36px oklch(0.62 0.18 158 / 0.42));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .beacon,
+  .beacon__bloom,
+  .beacon__gem {
+    animation: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .beacon {
+    width: 130px;
+    height: 130px;
+    top: clamp(60px, 12vw, 88px);
+    right: 12px;
+  }
+}

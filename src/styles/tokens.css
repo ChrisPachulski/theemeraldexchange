@@ -1,0 +1,113 @@
+/* Design tokens for The Emerald Exchange.
+   See DESIGN.md for the rationale on every value here.
+   Palette is LOCKED — emerald never changes. New direction layers chrome
+   inspired by igloo.inc and activetheory.net on top of the existing palette. */
+
+:root {
+  color-scheme: dark;
+
+  /* Surfaces and text — tinted-neutral built on emerald hue (h=158).
+     LOCKED. Never edit these without a palette discussion. */
+  --bg:           oklch(0.16 0.012 158);
+  --surface:      oklch(0.20 0.014 158);
+  --surface-2:    oklch(0.24 0.016 158);
+  --border:       oklch(0.30 0.020 158);
+  --text:         oklch(0.94 0.008 158);
+  --text-muted:   oklch(0.70 0.012 158);
+  --text-subtle:  oklch(0.52 0.014 158);
+
+  /* Accent — Committed strategy, the palette commitment of "Emerald" Exchange. */
+  --emerald:      oklch(0.62 0.180 158);
+  --emerald-dim:  oklch(0.45 0.130 158);
+  --emerald-bg:   oklch(0.30 0.080 158);
+
+  /* Destructive — same lightness/chroma as emerald, opposite hue */
+  --danger:       oklch(0.62 0.180 25);
+  --danger-dim:   oklch(0.45 0.130 25);
+
+  /* Atmosphere additions (do not redefine LOCKED tokens above) */
+  --frost:        oklch(0.94 0.008 158 / 0.06);   /* top-edge highlight */
+  --frost-stronger: oklch(0.94 0.008 158 / 0.10); /* hover frost */
+  --ink:          oklch(0.04 0 0 / 0.55);         /* deep cool shadow */
+  --scrim:        oklch(0.06 0.005 158 / 0.72);   /* modal backdrop */
+
+  /* Type stack — display added for chrome and large headings */
+  --font-display: "Space Grotesk", ui-sans-serif, system-ui, -apple-system, "SF Pro Display", "Inter", sans-serif;
+  --font-body:    ui-sans-serif, system-ui, -apple-system, "SF Pro Text", "Inter", sans-serif;
+  --font-mono:    ui-monospace, "SF Mono", "JetBrains Mono", "Menlo", monospace;
+
+  /* Type scale (1.25 ratio) */
+  --t-xs:   0.75rem;
+  --t-sm:   0.875rem;
+  --t-base: 1rem;
+  --t-md:   1.125rem;
+  --t-lg:   1.5rem;
+  --t-xl:   2.25rem;
+  --t-2xl:  3rem;
+
+  /* Weight roles */
+  --w-body:    400;
+  --w-ui:      500;
+  --w-title:   600;
+  --w-display: 700;
+
+  /* Tracking patterns */
+  --tr-display:  -0.02em;   /* tight on big display headings */
+  --tr-tight:    -0.01em;   /* normal display tightening */
+  --tr-eyebrow:  0.14em;    /* uppercase tracked-wide chrome labels */
+  --tr-hud:      0.04em;    /* HUD micro-type, mono labels */
+
+  /* Spacing — 4pt base */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --s-8: 72px;
+  --s-9: 96px;
+
+  /* Radii — pills allowed, ice-block rounding for cards */
+  --r-sm:  6px;
+  --r-md:  12px;
+  --r-lg:  14px;
+  --r-xl:  18px;
+  --r-pod: 500px;
+
+  /* Motion */
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast:   140ms;
+  --dur-mid:    220ms;
+  --dur-slow:   280ms;
+
+  /* Layered z scale */
+  --z-overlay:  10;
+  --z-nav:      200;
+  --z-modal-bg: 300;
+  --z-modal:    400;
+  --z-toast:    500;
+
+  /* Layout */
+  --content-max: 1040px;
+  --pod-h: 56px;
+  --pod-inset: 16px;          /* top inset of the floating HUD pod */
+  --hero-pad-top: 132px;      /* below pod, on tabs that have hero search */
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0.01ms;
+    --dur-mid:  0.01ms;
+    --dur-slow: 0.01ms;
+  }
+}
+
+@media (max-width: 520px) {
+  :root {
+    --pod-h: 48px;
+    --pod-inset: 8px;
+    --hero-pad-top: 96px;
+    --t-2xl: 2rem;
+  }
+}

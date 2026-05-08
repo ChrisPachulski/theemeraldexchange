@@ -1,0 +1,105 @@
+import { useEffect, useRef, useState } from 'react'
+import './ConfirmModal.css'
+
+export type ConfirmIntent = {
+  title: string
+  body: string
+  confirmLabel: string
+  cancelLabel?: string
+  onConfirm: () => Promise<void> | void
+}
+
+type Props = {
+  intent: ConfirmIntent | null
+  onClose: () => void
+}
+
+export function ConfirmModal({ intent, onClose }: Props) {
+  const dialogRef = useRef<HTMLDialogElement>(null)
+  const cancelBtnRef = useRef<HTMLButtonElement>(null)
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!intent) return
+    const d = dialogRef.current
+    if (!d) return
+    d.showModal()
+    setError(null)
+    setPending(false)
+    cancelBtnRef.current?.focus()
+    return () => {
+      if (d.open) d.close()
+    }
+  }, [intent])
+
+  if (!intent) return null
+
+  const handleClose = () => {
+    if (pending) return
+    onClose()
+  }
+
+  const handleConfirm = async () => {
+    setError(null)
+    setPending(true)
+    try {
+      await intent.onConfirm()
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+      setPending(false)
+    }
+  }
+
+  return (
+    <dialog
+      ref={dialogRef}
+      className="confirm"
+      onCancel={(e) => {
+        if (pending) e.preventDefault()
+        else handleClose()
+      }}
+      onClose={handleClose}
+      onKeyDown={(e) => {
+        // Per DESIGN.md: Enter must NOT submit the destructive action under
+        // any circumstances. If Cancel is focused, Enter cancels (safe). If
+        // Confirm is focused, Enter is intercepted and does nothing — user
+        // must click intentionally.
+        if (e.key !== 'Enter') return
+        e.preventDefault()
+        e.stopPropagation()
+        if (document.activeElement === cancelBtnRef.current) handleClose()
+      }}
+    >
+      <div
+        className="confirm__panel"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 className="confirm__title">{intent.title}</h2>
+        <p className="confirm__body">{intent.body}</p>
+        {error && <p className="confirm__error" role="alert">{error}</p>}
+        <div className="confirm__actions">
+          <button
+            ref={cancelBtnRef}
+            type="button"
+            className="confirm__cancel"
+            onClick={handleClose}
+            disabled={pending}
+          >
+            {intent.cancelLabel ?? 'Cancel'}
+          </button>
+          <button
+            type="button"
+            className="confirm__confirm"
+            onClick={handleConfirm}
+            disabled={pending}
+            aria-busy={pending}
+          >
+            {pending ? 'Working' : intent.confirmLabel}
+          </button>
+        </div>
+      </div>
+    </dialog>
+  )
+}

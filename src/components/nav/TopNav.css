@@ -1,0 +1,207 @@
+/* The HUD pod: a floating, pill-shaped capsule centered at the top of the
+   viewport. The earned glassmorphism — backdrop-blur is allowed here per
+   DESIGN.md because this surface literally floats over content. */
+
+.top-nav-wrap {
+  position: fixed;
+  top: var(--pod-inset);
+  left: 0;
+  right: 0;
+  z-index: var(--z-nav);
+  display: flex;
+  justify-content: center;
+  pointer-events: none; /* let space around the pod pass clicks through */
+  padding: 0 var(--s-3);
+}
+
+.top-nav {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  height: var(--pod-h);
+  padding: 0 var(--s-2) 0 var(--s-4);
+  gap: var(--s-2);
+  background: color-mix(in oklch, var(--surface) 78%, transparent);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pod);
+  box-shadow:
+    inset 0 1px 0 var(--frost),
+    0 18px 40px -22px var(--ink);
+}
+
+.top-nav__brand {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  padding-right: var(--s-2);
+  white-space: nowrap;
+  font-family: var(--font-display);
+  font-weight: var(--w-display);
+  font-size: var(--t-sm);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text);
+  user-select: none;
+}
+
+.top-nav__brand-mark {
+  /* The committed name carries the brand — Emerald rendered with the
+     accent so the wordmark itself signals the palette commitment. */
+  color: var(--emerald);
+}
+
+.top-nav__brand-sep {
+  color: var(--text-subtle);
+  font-weight: var(--w-body);
+  letter-spacing: 0;
+  font-family: var(--font-mono);
+}
+
+.top-nav__brand-sub {
+  color: var(--text);
+}
+
+.top-nav__divider {
+  width: 1px;
+  height: 22px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+.top-nav__tabs {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: 0 var(--s-3);
+}
+
+.top-nav__tab {
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  padding: var(--s-3) var(--s-1);
+  position: relative;
+  transition: color var(--dur-fast) var(--ease);
+}
+
+.top-nav__tab:hover {
+  color: var(--text-muted);
+}
+
+.top-nav__tab--active {
+  color: var(--text);
+}
+
+.top-nav__indicator {
+  /* Emerald data-marker dot, sits below the active label.
+     The bottom inset places it just below the baseline of the type. */
+  position: absolute;
+  bottom: 8px;
+  left: 0;
+  height: 6px;
+  background: var(--emerald);
+  border-radius: 999px;
+  transition:
+    transform var(--dur-slow) var(--ease),
+    width var(--dur-slow) var(--ease);
+  pointer-events: none;
+  box-shadow: 0 0 12px oklch(0.62 0.180 158 / 0.55);
+}
+
+.top-nav__watch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text);
+  padding: 0 var(--s-3) 0 var(--s-2);
+  height: calc(var(--pod-h) - 8px);
+  border-radius: var(--r-pod);
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.top-nav__watch:hover {
+  background: var(--surface-2);
+}
+
+.top-nav__watch:hover .top-nav__watch-arrow {
+  color: var(--emerald);
+  transform: translateX(2px);
+}
+
+.top-nav__watch-glyph {
+  color: var(--emerald);
+  flex-shrink: 0;
+  /* Slight upward optical adjustment so the gem sits on the type baseline. */
+  transform: translateY(-1px);
+}
+
+.top-nav__watch-label {
+  /* nothing extra — inherits */
+}
+
+.top-nav__watch-arrow {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  letter-spacing: 0;
+  color: var(--text-subtle);
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition:
+    color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+@media (max-width: 720px) {
+  .top-nav {
+    padding: 0 var(--s-2);
+    gap: var(--s-1);
+  }
+
+  .top-nav__brand-sub,
+  .top-nav__brand-sep {
+    display: none;
+  }
+
+  .top-nav__divider:first-of-type {
+    display: none;
+  }
+
+  .top-nav__tabs {
+    padding: 0 var(--s-2);
+    gap: var(--s-2);
+  }
+
+  .top-nav__tab {
+    padding: var(--s-2) var(--s-1);
+  }
+
+  .top-nav__watch-label,
+  .top-nav__watch-arrow {
+    display: none;
+  }
+
+  .top-nav__watch {
+    padding: 0 var(--s-2);
+  }
+}
+
+@media (max-width: 380px) {
+  .top-nav__brand {
+    padding-right: 0;
+  }
+}
