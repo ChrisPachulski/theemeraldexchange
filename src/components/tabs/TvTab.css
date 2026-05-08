@@ -61,8 +61,14 @@
   text-transform: uppercase;
   color: var(--text-subtle);
   text-align: center;
-  padding: var(--s-7) var(--s-5);
+  padding: var(--s-5);
   margin: 0;
+  /* Center the hint in the result area instead of pinning it to the top.
+     The dock is fixed at viewport bottom (~280px), so the visible result
+     band sits between hero-pad-top and dock-pad-bottom. */
+  min-height: calc(100vh - var(--hero-pad-top) - var(--dock-pad-bottom, 280px));
+  display: grid;
+  place-content: center;
 }
 
 .tv-tab__error {

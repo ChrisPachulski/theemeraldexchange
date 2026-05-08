@@ -10,11 +10,12 @@
 .beacon {
   position: fixed;
   /* The gem sits on top of the rock spire in the kraken plate. At
-     1440x900 the spire peak lands near (1034, 478); the beacon's
-     coords place the gem's bottom against the peak so it reads as
-     resting on the stone rather than floating over the scene. */
-  top: clamp(280px, 37.5vh, 380px);
-  right: clamp(80px, 8.5vw, 180px);
+     1440x900 the spire peak measures at (1238, 501); the gem inside
+     the alpha frame is offset (~82, ~134) within the 240px box and
+     extends ~80px below center, so we land the box at approximately
+     (1156, 287) so the gem's bottom kisses the peak. */
+  top: clamp(290px, 39vh, 390px);
+  right: clamp(40px, 4.2vw, 100px);
   width: clamp(180px, 17vw, 240px);
   height: clamp(180px, 17vw, 240px);
   z-index: 1;

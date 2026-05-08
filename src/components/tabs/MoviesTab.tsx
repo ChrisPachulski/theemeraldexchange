@@ -144,7 +144,7 @@ type DiscoverProps = {
 }
 
 function DiscoverResults({ query, loading, error, results, libraryByTmdb, onCardClick }: DiscoverProps) {
-  if (query.length < 2) return <p className="tv-tab__hint">Type a few letters above. Results land as you go.</p>
+  if (query.length < 2) return null
   if (loading) return <p className="tv-tab__hint">Searching</p>
   if (error) {
     return (
