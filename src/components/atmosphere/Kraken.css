@@ -1,4 +1,4 @@
-/* Live-action kraken — seamless loop via dual-video crossfade.
+/* Live-action kraken — single video, native HTML loop.
    Source: Pixabay video #333401 (CC0). */
 
 .kraken {
@@ -47,38 +47,6 @@
       black 65%,
       transparent 100%
     );
-}
-
-/* Triangle-wave opacity crossfade. Because the two videos play 5s out of
-   phase, A's loop boundary lands at B's mid-clip and vice versa. The
-   CSS animation peaks each video's opacity at its mid-clip moment so
-   the loop cut is always covered by the other instance.
-
-   At any time t, opacity_A + opacity_B = 1 (both linear triangles).
-   Combined with mix-blend-mode this keeps total scene brightness flat. */
-.kraken__video--a {
-  animation: kraken-cf-a 10s linear infinite;
-}
-
-.kraken__video--b {
-  animation: kraken-cf-b 10s linear infinite;
-}
-
-@keyframes kraken-cf-a {
-  0%   { opacity: 0; }
-  50%  { opacity: 1; }
-  100% { opacity: 0; }
-}
-
-@keyframes kraken-cf-b {
-  0%   { opacity: 1; }
-  50%  { opacity: 0; }
-  100% { opacity: 1; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .kraken__video--a { opacity: 1; animation: none; }
-  .kraken__video--b { opacity: 0; animation: none; }
 }
 
 @media (max-width: 720px) {
