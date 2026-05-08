@@ -9,16 +9,19 @@
 
 .beacon {
   position: fixed;
-  /* Tucked under the HUD nav so it doesn't crash chrome. The kraken
-     reaches up from the lower left; this is where its gaze ends. */
-  top: clamp(80px, 9vw, 132px);
-  right: clamp(24px, 3.5vw, 64px);
+  /* The gem sits on top of the rock spire in the kraken plate. At
+     1440x900 the spire peak lands near (1034, 478); the beacon's
+     coords place the gem's bottom against the peak so it reads as
+     resting on the stone rather than floating over the scene. */
+  top: clamp(280px, 37.5vh, 380px);
+  right: clamp(80px, 8.5vw, 180px);
   width: clamp(180px, 17vw, 240px);
   height: clamp(180px, 17vw, 240px);
   z-index: 1;
   pointer-events: none;
   /* Slow handheld bob — enough to feel in-world, not enough to look
-     overtly animated. */
+     overtly animated. The gem hovers a hair off the spire rather
+     than truly resting; the bob sells the levitation. */
   animation: beacon-bob 7s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
   will-change: transform;
 }

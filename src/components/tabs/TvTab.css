@@ -1,8 +1,11 @@
 .tv-tab {
-  /* Top padding clears the floating HUD pod. */
-  padding: var(--hero-pad-top) 0 var(--s-7);
+  /* Top padding clears the floating HUD pod. Bottom padding clears the
+     fixed dock so the result grid can scroll without hiding behind it. */
+  padding: var(--hero-pad-top) 0 var(--dock-pad-bottom, 280px);
   display: grid;
   gap: var(--s-5);
+  /* So a centered hint reads against the bottom dock without crashing it. */
+  min-height: 100vh;
 }
 
 .tv-tab__controls {
@@ -12,9 +15,41 @@
   width: 100%;
 }
 
+/* Bottom dock — the search hero + mode toggle pinned to the viewport
+   bottom. Fixed positioning keeps it on screen as the result grid
+   scrolls. The kraken video sits behind it (z:0); dock is z:5 so it
+   floats above results but below modals (z:300+). A soft top-fading
+   gradient backdrop lets the kraken bleed through into the dock area
+   so the UI doesn't carve a hard horizontal cut across the scene. */
+.tv-tab__dock {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  display: grid;
+  gap: var(--s-3);
+  padding: var(--s-7) 0 var(--s-5);
+  pointer-events: none;
+  background: linear-gradient(
+    to top,
+    oklch(0.16 0.012 158 / 0.92) 0%,
+    oklch(0.16 0.012 158 / 0.65) 55%,
+    oklch(0.16 0.012 158 / 0) 100%
+  );
+}
+
+/* Restore interactivity on the actual controls (not the gradient pad). */
+.tv-tab__dock > * {
+  pointer-events: auto;
+}
+
 @media (max-width: 520px) {
   .tv-tab__controls {
     padding: 0 var(--s-3);
+  }
+  .tv-tab__dock {
+    padding: var(--s-5) 0 var(--s-4);
   }
 }
 
@@ -52,7 +87,7 @@
 
 @media (max-width: 520px) {
   .tv-tab {
-    padding: var(--hero-pad-top) 0 var(--s-7);
+    padding: var(--hero-pad-top) 0 var(--dock-pad-bottom, 220px);
     gap: var(--s-4);
   }
 }

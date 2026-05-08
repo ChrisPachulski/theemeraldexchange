@@ -91,18 +91,6 @@ export function MoviesTab() {
 
   return (
     <section className="tv-tab">
-      <div className="tv-tab__controls">
-        <ModeToggle mode={mode} onChange={setMode} libraryCount={library.data?.length} />
-      </div>
-
-      <SearchInput
-        value={query}
-        onChange={setQuery}
-        placeholder={placeholder}
-        prompt={prompt}
-        autoFocus
-      />
-
       {mode === 'discover' ? (
         <DiscoverResults
           query={debouncedQuery}
@@ -121,6 +109,19 @@ export function MoviesTab() {
           onCardClick={confirmRemove}
         />
       )}
+
+      <div className="tv-tab__dock">
+        <div className="tv-tab__controls">
+          <ModeToggle mode={mode} onChange={setMode} libraryCount={library.data?.length} />
+        </div>
+        <SearchInput
+          value={query}
+          onChange={setQuery}
+          placeholder={placeholder}
+          prompt={prompt}
+          autoFocus
+        />
+      </div>
 
       <AddMovieModal
         movie={adding}
