@@ -1,18 +1,19 @@
-# Independent Netlify project — separate from my_site/v2.
-# Reserved for future brother access (mutual-backup arrangement).
-# Until Tailscale routing is set up, the deployed Netlify build will load
-# but tile/API calls won't resolve from outside the LAN. That's expected.
+# Netlify build for the SPA only. The Hono backend lives on the NAS
+# behind a Cloudflare Tunnel at api.theemeraldexchange.com — Netlify
+# never sees server code.
 
 [build]
-  command = "npm run build"
+  command = "npm run build:spa"
   publish = "dist"
 
+[build.environment]
+  NODE_VERSION = "24"
+  # VITE_API_BASE_URL is set in the Netlify UI (Site settings → Environment
+  # variables) so secrets live in one place. Expected value:
+  #   https://api.theemeraldexchange.com
+
+# Client-side routing: every unknown path falls through to index.html.
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
-
-# When brother access lands, switch the build env to point /api/sonarr,
-# /api/radarr, /api/sab at the Tailscale .ts.net addresses (or use
-# Netlify edge functions to proxy). For now the app falls back to no-data
-# states gracefully when those endpoints don't resolve.
