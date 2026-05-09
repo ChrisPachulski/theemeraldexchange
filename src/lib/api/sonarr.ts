@@ -1,13 +1,10 @@
 import { throwApiError } from './errors'
+import { apiUrl } from './base'
 
 const BASE = '/api/sonarr/api/v3'
 
 async function get<T>(path: string, params?: Record<string, string | number | boolean>): Promise<T> {
-  const url = new URL(`${BASE}${path}`, window.location.origin)
-  if (params) {
-    for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v))
-  }
-  const res = await fetch(url.toString().replace(window.location.origin, ''), {
+  const res = await fetch(apiUrl(`${BASE}${path}`, params), {
     credentials: 'include',
   })
   if (!res.ok) await throwApiError(res, `Sonarr ${path}`)
@@ -15,7 +12,7 @@ async function get<T>(path: string, params?: Record<string, string | number | bo
 }
 
 async function post<T, B>(path: string, body: B): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await fetch(apiUrl(`${BASE}${path}`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
@@ -26,11 +23,7 @@ async function post<T, B>(path: string, body: B): Promise<T> {
 }
 
 async function del(path: string, params?: Record<string, string | number | boolean>): Promise<void> {
-  const url = new URL(`${BASE}${path}`, window.location.origin)
-  if (params) {
-    for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v))
-  }
-  const res = await fetch(url.toString().replace(window.location.origin, ''), {
+  const res = await fetch(apiUrl(`${BASE}${path}`, params), {
     method: 'DELETE',
     credentials: 'include',
   })

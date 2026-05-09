@@ -1,14 +1,16 @@
-FROM nginx:alpine
+FROM node:24-alpine
 
-# Drop the default config and replace with ours (template; envsubst at boot).
-RUN rm /etc/nginx/conf.d/default.conf
-COPY nginx/default.conf /etc/nginx/templates/default.conf.template
+WORKDIR /app
 
-# The static build output produced by `npm run build`.
-COPY dist /usr/share/nginx/html
+COPY package.json package-lock.json ./
+RUN npm ci
 
-# nginx:alpine's entrypoint runs envsubst over /etc/nginx/templates/*.template
-# automatically, substituting ${VAR} references with the container's env vars.
-# Required at runtime: SONARR_API_KEY, RADARR_API_KEY, SAB_API_KEY.
+COPY server ./server
+COPY tsconfig.json ./
 
-EXPOSE 80
+ENV NODE_ENV=production
+ENV PORT=3001
+
+EXPOSE 3001
+
+CMD ["npm", "start"]

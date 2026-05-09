@@ -1,115 +1,124 @@
-# Deploying The Emerald Exchange
+# Deploying The Emerald Exchange (V2)
 
-Live deployment recipe. The current production install runs as a `nginx:alpine` container on port **8085** (because Caddy owns port 80 on the NAS already and proxies the legacy `/tv`, `/movies`, `/downloads` paths to the raw Sonarr/Radarr/SAB UIs). Reach the dashboard at `http://theemeraldexchange.local:8085`.
+V2 splits the dashboard across two hosts. The SPA lives on Netlify; the Hono backend lives on the NAS behind a Cloudflare Tunnel.
 
-Two parts: a **one-time NAS setup** and **ongoing deploys** (`npm run build && ./scripts/deploy-nas.sh`).
+```
+theemeraldexchange.com           ──▶ Netlify (SPA)              ◀── git push triggers redeploy
+api.theemeraldexchange.com       ──▶ Cloudflare Tunnel
+                                  ──▶ cloudflared on NAS (host net)
+                                  ──▶ 127.0.0.1:3001
+                                  ──▶ exchange-backend (Hono)
+                                  ──▶ Sonarr / Radarr / SAB on the LAN
+```
+
+The legacy **V1 nginx-static container** (`exchange-dashboard` on port 8085) and its DEPLOY.md recipe are superseded. Tear it down once V2 is verified working.
 
 ---
 
-## Architecture note: nginx vs the existing Caddy
+## One-time setup
 
-The NAS already has Caddy on `:80`. The dashboard does not displace that; it runs in its own `nginx:alpine` container on a separate port. The Caddyfile is untouched, and your existing `theemeraldexchange.local/tv`, `/movies`, `/downloads` direct-app URLs keep working.
+You need three things to be working before the first deploy: a Cloudflare Tunnel, a `.env.production` on this laptop, and Netlify connected to the GitHub repo.
 
-If you ever want the dashboard at the bare hostname (no port), the change is to extend the Caddyfile with new routes. That work is deferred (see V2 in the plan file).
+### 1. Cloudflare Tunnel
 
----
+Create the tunnel in the Zero Trust dashboard. Steps:
 
-## One-time NAS setup
+1. https://one.dash.cloudflare.com/ → Networks → Connectors → Cloudflare Tunnels → **Create a tunnel**
+2. Connector type: **Cloudflared** → Tunnel name: `theemeraldexchange`
+3. On the **Install and run a connector** screen, switch the OS picker to **Docker**. The displayed `docker run …` command contains a long `--token eyJhI…` string. **Copy the token.** Don't run the command — `scripts/deploy-nas.sh` will run cloudflared on the NAS for you.
+4. **Public Hostnames**: Subdomain `api`, Domain `theemeraldexchange.com`, Service Type `HTTP`, URL `localhost:3001`.
+5. Save tunnel.
 
-Run these from a terminal that already has SSH access to `root@theemeraldexchange.local`.
+The tunnel will show **"Inactive"** until the first NAS deploy registers a connector.
 
-### 1. Provision appdata
-
-```bash
-ssh root@theemeraldexchange.local 'mkdir -p /mnt/user/appdata/exchange-dashboard/{www,conf}'
-```
-
-### 2. Build the dashboard locally and ship `dist/`
+### 2. `.env.production` on the laptop
 
 ```bash
-cd ~/Documents/theemeraldexchange
-npm run build
-rsync -av --delete dist/ root@theemeraldexchange.local:/mnt/user/appdata/exchange-dashboard/www/
-rsync -av nginx/default.conf root@theemeraldexchange.local:/mnt/user/appdata/exchange-dashboard/conf/default.conf.template
+cp .env.production.example .env.production
 ```
 
-(Building locally avoids needing Node on the NAS.)
+Open it and fill in:
 
-### 3. Start the container
+| Var | Where it comes from |
+|---|---|
+| `TUNNEL_TOKEN` | The `eyJhI…` you copied above. |
+| `PLEX_CLIENT_ID` | Same value as in your `.env.local` (or generate fresh: `node -e 'console.log(crypto.randomUUID())'`). |
+| `SESSION_SECRET` | Generate fresh: `openssl rand -base64 48`. **Different from dev** so the two environments can't share sessions. |
+| `ADMINS` | `ChrisPachulski` (or whatever Plex usernames). |
+| `PLEX_SERVER_ID` | Discoverable via the SPA's first prod login (in the `discoveredServers` payload). Or query plex.tv directly. Optional but recommended. |
+| `ALLOWED_ORIGINS` | `https://theemeraldexchange.com` |
+| `SONARR_URL`, `SONARR_API_KEY` | Existing Sonarr install. |
+| `RADARR_URL`, `RADARR_API_KEY` | Existing Radarr install. |
+| `SAB_URL`, `SAB_API_KEY` | Existing SAB install. |
+| `MIN_FREE_GB` | Default 100. |
 
-This reads the API keys directly from the existing service configs on the NAS, so the values never appear in your shell history or transcript:
+This file is gitignored. If you ever lose it, regenerate the secrets and redeploy — every active session resets, which is fine.
 
-```bash
-ssh root@theemeraldexchange.local '
-  SONARR=$(grep -oE "<ApiKey>[^<]+" /mnt/user/appdata/sonarr/config.xml | head -1 | sed "s|<ApiKey>||")
-  RADARR=$(grep -oE "<ApiKey>[^<]+" /mnt/user/appdata/radarr/config.xml | head -1 | sed "s|<ApiKey>||")
-  SAB=$(awk -F"= *" "/^api_key/ {print \$2; exit}" /mnt/user/appdata/sabnzbd/sabnzbd.ini)
+### 3. Netlify
 
-  docker rm -f exchange-dashboard 2>/dev/null
+1. https://app.netlify.com/start → **Import from Git** → connect GitHub → pick the `theemeraldexchange` repo.
+2. Netlify auto-detects `netlify.toml`; build command and publish dir come from there.
+3. **Site settings → Environment variables** → add:
+   - `VITE_API_BASE_URL` = `https://api.theemeraldexchange.com`
+4. **Domain management** → **Add a domain you already own** → `theemeraldexchange.com`.
+5. Netlify gives you DNS records to add. Back at https://dash.cloudflare.com/ → DNS → add the records Netlify shows you. Cloudflare's "proxied" toggle should be **OFF (DNS only)** for these records — Netlify handles its own SSL. (Cloudflare proxy in front of Netlify is fine but more moving parts; skip until needed.)
+6. Wait ~1 min for DNS propagation, then trigger the first Netlify deploy.
 
-  docker run -d \
-    --name exchange-dashboard \
-    --restart unless-stopped \
-    -p 8085:80 \
-    -e SONARR_API_KEY="$SONARR" \
-    -e RADARR_API_KEY="$RADARR" \
-    -e SAB_API_KEY="$SAB" \
-    -v /mnt/user/appdata/exchange-dashboard/www:/usr/share/nginx/html:ro \
-    -v /mnt/user/appdata/exchange-dashboard/conf:/etc/nginx/templates:ro \
-    nginx:alpine
-'
-```
+Site loads at https://theemeraldexchange.com but the API isn't there yet — onto the NAS deploy.
 
-The container uses the official `nginx:alpine` image, which auto-substitutes `${VAR}` references in `/etc/nginx/templates/*.template` against the container env at startup. That means the API keys exist only inside the container's process space; they never appear in the on-disk Nginx config.
-
-### 4. Verify
-
-```bash
-curl -s -o /dev/null -w "HTTP %{http_code}\n" http://10.0.0.52:8085/
-curl -s -o /dev/null -w "Sonarr proxy: HTTP %{http_code}\n" http://10.0.0.52:8085/api/sonarr/api/v3/system/status
-```
-
-Both should return 200. Then in a browser: `http://theemeraldexchange.local:8085`.
-
-If the dashboard loads but search 401s, run `docker exec exchange-dashboard env | grep API_KEY` to confirm the env vars made it in. If they're empty, redo step 3.
-
-### 5. Optional: bring it under Unraid's UI
-
-If you want to manage it via Unraid's container UI rather than `docker run`:
-
-1. Settings → Docker → Add Container
-2. **Name:** `exchange-dashboard`
-3. **Repository:** `nginx:alpine`
-4. **Network:** Bridge
-5. **Port:** Container `80` → Host `8085`
-6. **Path:** `/usr/share/nginx/html` ↔ `/mnt/user/appdata/exchange-dashboard/www` (Read Only)
-7. **Path:** `/etc/nginx/templates` ↔ `/mnt/user/appdata/exchange-dashboard/conf` (Read Only)
-8. **Variable:** `SONARR_API_KEY` = `<your sonarr key>`
-9. **Variable:** `RADARR_API_KEY` = `<your radarr key>`
-10. **Variable:** `SAB_API_KEY` = `<your sab key>`
-11. Apply.
-
-Now the container shows up in Unraid's Docker tab and starts on boot.
-
----
-
-## Ongoing deploys
-
-Once the container exists, every code change ships in one command:
+### 4. First NAS deploy
 
 ```bash
 cd ~/Documents/theemeraldexchange
 ./scripts/deploy-nas.sh
 ```
 
-That script:
+The script:
+1. Validates `.env.production` has all required keys.
+2. Rsyncs `Dockerfile`, `docker-compose.yml`, `package*.json`, `tsconfig.json`, and `server/` to `/mnt/user/appdata/exchange-backend/` on the NAS.
+3. Ships `.env.production` → NAS as `.env`, chmod 600.
+4. SSHs in and runs `docker compose up -d --build`.
 
-1. Runs `npm run build` locally.
-2. Rsyncs `dist/` → `/mnt/user/appdata/exchange-dashboard/www/`.
-3. Rsyncs `nginx/default.conf` → `/mnt/user/appdata/exchange-dashboard/conf/default.conf.template`.
-4. Restarts the container so any nginx config changes take effect.
+First build takes ~2 min (npm ci + image layers). Subsequent deploys are faster.
 
-If you only changed React code (not `nginx/default.conf`), the container restart is technically unnecessary — Nginx serves the new `dist/` immediately. The script restarts anyway to keep things deterministic.
+### 5. Verify end-to-end
+
+```bash
+curl -s https://api.theemeraldexchange.com/api/health
+# {"ok":true}
+```
+
+Then in the browser: https://theemeraldexchange.com → Plex login should work cross-origin.
+
+If `/api/health` 502s, the tunnel is up but the backend isn't reachable: `ssh root@theemeraldexchange.local 'docker logs exchange-backend --tail=30'`.
+If it never resolves, the tunnel didn't register: `ssh root@theemeraldexchange.local 'docker logs exchange-cloudflared --tail=30'`.
+
+---
+
+## Ongoing deploys
+
+| What changed | Command | Effect |
+|---|---|---|
+| SPA only (anything in `src/`) | `git push` | Netlify auto-builds and deploys. ~30s. |
+| Backend only (anything in `server/`) | `./scripts/deploy-nas.sh` | NAS rebuild + restart. ~30–60s. |
+| Both | `git push && ./scripts/deploy-nas.sh` | In any order. SPA and backend redeploy independently. |
+| Env var change in `.env.production` | `./scripts/deploy-nas.sh` | Same script; new `.env` ships and containers restart. |
+| `VITE_API_BASE_URL` change | Netlify UI → trigger redeploy | Vite bakes env vars at build time, so a redeploy is required. |
+
+---
+
+## Tearing down V1
+
+Once V2 is working end-to-end:
+
+```bash
+ssh root@theemeraldexchange.local '
+  docker rm -f exchange-dashboard 2>/dev/null
+  rm -rf /mnt/user/appdata/exchange-dashboard
+'
+```
+
+That frees host port 8085. The `nginx/` directory in the repo is dead code at that point — safe to delete in a follow-up commit.
 
 ---
 
@@ -117,23 +126,18 @@ If you only changed React code (not `nginx/default.conf`), the container restart
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| 502 Bad Gateway on `/api/sonarr/*` | Nginx can't reach the upstream | The proxy targets are already pinned to the LAN IP `10.0.0.52`. Confirm Sonarr/Radarr/SAB are running with `docker ps` and that the NAS LAN IP hasn't changed. |
-| 5-second delay on every request | Laptop's mDNS resolver is timing out unicast DNS before falling back | Add `10.0.0.52 theemeraldexchange.local` to `/etc/hosts`, or use `http://10.0.0.52:8085` directly. This is a laptop network setting, not the dashboard. |
-| 401 from `/api/sonarr/*` | API key env var missing or wrong | `docker exec exchange-dashboard env \| grep API_KEY` to confirm; redeploy with the right key |
-| Dashboard loads but tabs are empty | Network proxies fine but service is unhealthy | Open Sonarr / Radarr / SAB directly on their original ports to confirm they're up |
-| Mobile Safari shows nothing | Stale service worker / bad cache | Force-refresh; we don't ship a service worker in V1 |
-| Brother needs remote access | Tailscale routing not yet set up | Deferred to V2 — see plan file |
+| Browser: Plex login popup never closes after auth | Cookie isn't being set cross-origin | Check `ALLOWED_ORIGINS` matches the actual frontend origin exactly; check `NODE_ENV=production` is in the backend container env (`docker exec exchange-backend env \| grep NODE_ENV`). |
+| `/api/*` returns 503 | Backend not up | `docker logs exchange-backend` — usually a missing required env var. |
+| `/api/*` returns 502 / never resolves | Tunnel registered but can't reach backend | The tunnel hostname config is `localhost:3001`; cloudflared runs `network_mode: host` so this should hit the backend's `127.0.0.1:3001`. If broken, check `docker ps` shows both containers Up and `ss -ltn 'sport = :3001'` on the NAS shows the port bound. |
+| `/api/*` returns 401 | Session cookie not present | Confirm browser is sending cookies to `api.theemeraldexchange.com`; check DevTools Network tab → Request Headers → Cookie. If missing, the browser blocked it (third-party cookie blocking on Safari is the usual culprit). |
+| Tunnel shows "Inactive" in CF dashboard | cloudflared can't authenticate | Wrong `TUNNEL_TOKEN`. Re-copy from the CF dashboard, update `.env.production`, redeploy. |
+| Disk-space gate firing for everyone | `MIN_FREE_GB` too high or actually no space | `df -h /mnt/user` on the NAS. The gate applies to admins too — by design. |
 
 ---
 
-## Updating the API keys later
+## Notes on architecture decisions
 
-If you regenerate a key in Sonarr/Radarr/SAB:
-
-```bash
-ssh root@theemeraldexchange.local "docker stop exchange-dashboard && docker rm exchange-dashboard"
-```
-
-Then re-run the `docker run` from step 3 with the new key.
-
-(If you set them up via the Unraid UI in step 5, just edit the variable in the container's settings page and apply.)
+- **Netlify for SPA, NAS for backend**: Sonarr/Radarr/SAB live on the LAN and aren't reachable from a Netlify Function. The backend has to be where the services are.
+- **Cloudflare Tunnel** instead of port forwarding: free SSL, no router config, no exposing the NAS to the public internet, revocable from the dashboard if compromised.
+- **Backend runs as Docker on the NAS** (not bare metal): matches Unraid's pattern for everything else (Sonarr/Radarr/SAB/Plex are all containers), keeps env vars scoped to the container, easy to redeploy.
+- **`network_mode: host` for cloudflared**: simplest way to keep the tunnel's "service URL" config as `localhost:3001`. The backend stays bound to `127.0.0.1` (LAN-invisible); only the tunnel can reach it.

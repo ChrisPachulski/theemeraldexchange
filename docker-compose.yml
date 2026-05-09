@@ -1,0 +1,44 @@
+# Compose file for the production NAS deployment.
+#
+# Variable values come from a `.env` file in the same directory on the
+# NAS (shipped from the laptop's .env.production via scripts/deploy-nas.sh).
+# Docker Compose loads .env automatically — no env_file: directive needed.
+#
+# The backend binds 127.0.0.1:3001 only (LAN-invisible). cloudflared
+# runs in host network mode so it can dial that loopback port directly,
+# which keeps the tunnel's "URL: localhost:3001" config straightforward.
+
+services:
+  backend:
+    build: .
+    image: theemeraldexchange-backend:latest
+    container_name: exchange-backend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3001:3001"
+    environment:
+      NODE_ENV: production
+      PORT: "3001"
+      PLEX_CLIENT_ID: "${PLEX_CLIENT_ID}"
+      SESSION_SECRET: "${SESSION_SECRET}"
+      ADMINS: "${ADMINS:-}"
+      PLEX_SERVER_ID: "${PLEX_SERVER_ID:-}"
+      ALLOWED_ORIGINS: "${ALLOWED_ORIGINS}"
+      SONARR_URL: "${SONARR_URL:-}"
+      SONARR_API_KEY: "${SONARR_API_KEY}"
+      RADARR_URL: "${RADARR_URL:-}"
+      RADARR_API_KEY: "${RADARR_API_KEY}"
+      SAB_URL: "${SAB_URL:-}"
+      SAB_API_KEY: "${SAB_API_KEY}"
+      MIN_FREE_GB: "${MIN_FREE_GB:-100}"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: exchange-cloudflared
+    restart: unless-stopped
+    network_mode: host
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: "${TUNNEL_TOKEN}"
+    depends_on:
+      - backend

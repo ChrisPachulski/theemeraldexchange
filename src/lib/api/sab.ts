@@ -1,17 +1,11 @@
 import { throwApiError } from './errors'
+import { apiUrl } from './base'
 
 const BASE = '/api/sab/api'
 
 async function call<T>(mode: string, extra?: Record<string, string>): Promise<T> {
-  const url = new URL(BASE, window.location.origin)
-  url.searchParams.set('mode', mode)
-  url.searchParams.set('output', 'json')
-  if (extra) {
-    for (const [k, v] of Object.entries(extra)) url.searchParams.set(k, v)
-  }
-  const res = await fetch(url.toString().replace(window.location.origin, ''), {
-    credentials: 'include',
-  })
+  const params: Record<string, string> = { mode, output: 'json', ...(extra ?? {}) }
+  const res = await fetch(apiUrl(BASE, params), { credentials: 'include' })
   if (!res.ok) await throwApiError(res, `SAB ${mode}`)
   return res.json() as Promise<T>
 }

@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
+import { apiUrl } from './api/base'
 
 // Auth state shared by the whole app. The session is server-side
 // (HttpOnly cookie); we only mirror identity + role here so the UI can
@@ -44,7 +45,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Initial session probe.
   useEffect(() => {
     let alive = true
-    fetch('/api/me', { credentials: 'include' })
+    fetch(apiUrl('/api/me'), { credentials: 'include' })
       .then(async (r) => {
         if (!alive) return
         if (r.status === 401) {
@@ -74,7 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSignInError(null)
     setSignInState('opening')
     try {
-      const res = await fetch('/api/auth/plex/pin', {
+      const res = await fetch(apiUrl('/api/auth/plex/pin'), {
         method: 'POST',
         credentials: 'include',
       })
@@ -95,7 +96,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       pollRef.current = window.setInterval(async () => {
         try {
           const r = await fetch(
-            `/api/auth/plex/check?pinId=${encodeURIComponent(String(pinId))}`,
+            apiUrl('/api/auth/plex/check', { pinId: String(pinId) }),
             { credentials: 'include' },
           )
           if (r.status === 403) {
@@ -130,7 +131,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [stopPolling])
 
   const signOut = useCallback(async () => {
-    await fetch('/api/auth/logout', {
+    await fetch(apiUrl('/api/auth/logout'), {
       method: 'POST',
       credentials: 'include',
     }).catch(() => {})
