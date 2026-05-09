@@ -3,6 +3,7 @@ import { sab } from '../../lib/api/sab'
 import { useDownloadQueue, useDownloadHistory } from '../../lib/hooks/useDownloadQueue'
 import { useConfirm } from '../confirm/useConfirm'
 import { QueueRow } from '../queue/QueueRow'
+import { LoadingPulse } from '../feedback/LoadingPulse'
 import './DownloadsTab.css'
 
 export function DownloadsTab() {
@@ -38,7 +39,7 @@ export function DownloadsTab() {
   if (queue.isPending) {
     return (
       <section className="downloads-tab">
-        <p className="downloads-tab__hint">Loading queue</p>
+        <LoadingPulse>Loading queue</LoadingPulse>
       </section>
     )
   }

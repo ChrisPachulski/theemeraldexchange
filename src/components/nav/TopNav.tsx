@@ -1,10 +1,13 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import type { Route } from '../../lib/router'
+import { useNavTransition } from '../../lib/navTransition'
 import './TopNav.css'
 
 const PLEX_URL = 'http://theemeraldexchange.local:32400/web'
 
-const TABS: { route: Route; label: string }[] = [
+type NavRoute = Exclude<Route, 'home'>
+
+const TABS: { route: NavRoute; label: string }[] = [
   { route: 'tv', label: 'TV' },
   { route: 'movies', label: 'Movies' },
   { route: 'downloads', label: 'Downloads' },
@@ -36,12 +39,12 @@ function EmeraldGlyph() {
 
 type Props = {
   active: Route
-  onNavigate: (next: Route) => void
 }
 
-export function TopNav({ active, onNavigate }: Props) {
+export function TopNav({ active }: Props) {
+  const { transitionTo, navigate } = useNavTransition()
   const tabsRef = useRef<HTMLElement>(null)
-  const tabRefs = useRef<Record<Route, HTMLButtonElement | null>>({
+  const tabRefs = useRef<Record<NavRoute, HTMLButtonElement | null>>({
     tv: null,
     movies: null,
     downloads: null,
@@ -50,6 +53,11 @@ export function TopNav({ active, onNavigate }: Props) {
 
   useLayoutEffect(() => {
     const measure = () => {
+      // Home isn't in the tab strip — hide the indicator there.
+      if (active === 'home') {
+        setIndicator(null)
+        return
+      }
       const el = tabRefs.current[active]
       const tabsEl = tabsRef.current
       if (!el || !tabsEl) return
@@ -68,11 +76,15 @@ export function TopNav({ active, onNavigate }: Props) {
   return (
     <header className="top-nav-wrap">
       <div className="top-nav" role="banner">
-        <div className="top-nav__brand" aria-label="The Emerald Exchange">
+        <button
+          type="button"
+          className="top-nav__brand"
+          aria-label="Emerald Exchange — home"
+          onClick={() => navigate('home')}
+        >
           <span className="top-nav__brand-mark">EMERALD</span>
-          <span className="top-nav__brand-sep" aria-hidden="true">/</span>
           <span className="top-nav__brand-sub">EXCHANGE</span>
-        </div>
+        </button>
 
         <span className="top-nav__divider" aria-hidden="true" />
 
@@ -88,7 +100,7 @@ export function TopNav({ active, onNavigate }: Props) {
               aria-selected={active === t.route}
               tabIndex={active === t.route ? 0 : -1}
               className={`top-nav__tab${active === t.route ? ' top-nav__tab--active' : ''}`}
-              onClick={() => onNavigate(t.route)}
+              onClick={() => transitionTo(t.route)}
               onKeyDown={(e) => {
                 if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return
                 e.preventDefault()
@@ -97,7 +109,7 @@ export function TopNav({ active, onNavigate }: Props) {
                   e.key === 'ArrowRight'
                     ? TABS[(i + 1) % TABS.length]
                     : TABS[(i - 1 + TABS.length) % TABS.length]
-                onNavigate(next.route)
+                transitionTo(next.route)
                 tabRefs.current[next.route]?.focus()
               }}
             >

@@ -44,19 +44,18 @@
   text-transform: uppercase;
   color: var(--text);
   user-select: none;
+  cursor: pointer;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.top-nav__brand:hover {
+  opacity: 0.85;
 }
 
 .top-nav__brand-mark {
   /* The committed name carries the brand — Emerald rendered with the
      accent so the wordmark itself signals the palette commitment. */
   color: var(--emerald);
-}
-
-.top-nav__brand-sep {
-  color: var(--text-subtle);
-  font-weight: var(--w-body);
-  letter-spacing: 0;
-  font-family: var(--font-mono);
 }
 
 .top-nav__brand-sub {
@@ -172,8 +171,7 @@
     gap: var(--s-1);
   }
 
-  .top-nav__brand-sub,
-  .top-nav__brand-sep {
+  .top-nav__brand-sub {
     display: none;
   }
 

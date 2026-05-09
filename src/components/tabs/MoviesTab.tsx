@@ -6,6 +6,7 @@ import { MediaCard } from '../search/MediaCard'
 import { ModeToggle, type Mode } from '../search/ModeToggle'
 import { AddMovieModal } from '../add/AddMovieModal'
 import { Toast } from '../toast/Toast'
+import { LoadingPulse } from '../feedback/LoadingPulse'
 import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useMovieSearch } from '../../lib/hooks/useMovieSearch'
 import { useRadarrLibrary } from '../../lib/hooks/useRadarrLibrary'
@@ -87,7 +88,6 @@ export function MoviesTab() {
     mode === 'discover'
       ? 'Dune, The Substance, Past Lives'
       : 'Start typing to find one'
-  const prompt = mode === 'discover' ? 'What are you watching?' : 'In your library'
 
   return (
     <section className="tv-tab">
@@ -111,16 +111,16 @@ export function MoviesTab() {
       )}
 
       <div className="tv-tab__dock">
-        <div className="tv-tab__controls">
-          <ModeToggle mode={mode} onChange={setMode} libraryCount={library.data?.length} />
-        </div>
         <SearchInput
           value={query}
           onChange={setQuery}
           placeholder={placeholder}
-          prompt={prompt}
           autoFocus
         />
+      </div>
+
+      <div className="tv-tab__mode-anchor">
+        <ModeToggle mode={mode} onChange={setMode} libraryCount={library.data?.length} />
       </div>
 
       <AddMovieModal
@@ -145,7 +145,7 @@ type DiscoverProps = {
 
 function DiscoverResults({ query, loading, error, results, libraryByTmdb, onCardClick }: DiscoverProps) {
   if (query.length < 2) return null
-  if (loading) return <p className="tv-tab__hint">Searching</p>
+  if (loading) return <LoadingPulse>Searching</LoadingPulse>
   if (error) {
     return (
       <div className="tv-tab__error">
@@ -189,7 +189,7 @@ type LibraryProps = {
 }
 
 function LibraryResults({ query, loading, error, items, onCardClick }: LibraryProps) {
-  if (loading) return <p className="tv-tab__hint">Loading library</p>
+  if (loading) return <LoadingPulse>Loading library</LoadingPulse>
   if (error) {
     return (
       <div className="tv-tab__error">

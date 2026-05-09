@@ -1,0 +1,63 @@
+/* Replay — small glassy pill anchored to the bottom-right of the
+   viewport. Mirrors the HUD pod's surface treatment so it reads as
+   chrome, not content. */
+
+.replay-btn {
+  position: fixed;
+  right: var(--pod-inset, 16px);
+  bottom: var(--pod-inset, 16px);
+  z-index: var(--z-nav, 50);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 0 var(--s-3);
+  height: 32px;
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: color-mix(in oklch, var(--surface) 78%, transparent);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pod, 999px);
+  box-shadow:
+    inset 0 1px 0 var(--frost),
+    0 18px 40px -22px var(--ink);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+.replay-btn:hover {
+  color: var(--emerald);
+  border-color: var(--emerald);
+  transform: translateY(-1px);
+}
+
+.replay-btn:focus-visible {
+  color: var(--emerald);
+  border-color: var(--emerald);
+}
+
+.replay-btn__icon {
+  flex-shrink: 0;
+  /* Slight lift so the rotational arrow sits on the type baseline. */
+  transform: translateY(-1px);
+}
+
+@media (max-width: 480px) {
+  .replay-btn__label {
+    display: none;
+  }
+
+  .replay-btn {
+    width: 32px;
+    padding: 0;
+    justify-content: center;
+  }
+}

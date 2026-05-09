@@ -1,13 +1,24 @@
+/* Frosted-glass panel — same surface treatment as MediaCard so the queue
+   reads cleanly over the resting kraken background instead of laying
+   text directly on the video. */
 .queue-row {
   display: grid;
   gap: var(--s-2);
   padding: var(--s-4) var(--s-5);
-  border-bottom: 1px solid var(--border);
-  transition: background var(--dur-fast) var(--ease);
+  background: color-mix(in oklch, var(--surface) 92%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card, 12px);
+  box-shadow: inset 0 1px 0 var(--frost);
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
 }
 
 .queue-row:hover {
-  background: color-mix(in oklch, var(--surface) 60%, transparent);
+  background: var(--surface);
+  border-color: var(--text-subtle);
 }
 
 .queue-row--paused {

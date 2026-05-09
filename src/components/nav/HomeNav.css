@@ -1,0 +1,97 @@
+/* Home-only chrome — brand top-left, Watch top-right.
+   Both anchored at `--pod-inset` so they share a horizontal line at the
+   top that mirrors the bottom row (entry buttons + Replay). */
+
+.home-nav__brand {
+  position: fixed;
+  top: var(--pod-inset, 16px);
+  left: var(--pod-inset, 16px);
+  z-index: var(--z-nav, 200);
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  white-space: nowrap;
+  font-family: var(--font-display);
+  font-weight: var(--w-display);
+  font-size: var(--t-sm);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text);
+  user-select: none;
+  cursor: pointer;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.home-nav__brand:hover {
+  opacity: 0.85;
+}
+
+.home-nav__brand-mark {
+  color: var(--emerald);
+}
+
+.home-nav__brand-sub {
+  color: var(--text);
+}
+
+.home-nav__watch {
+  position: fixed;
+  top: var(--pod-inset, 16px);
+  right: var(--pod-inset, 16px);
+  z-index: var(--z-nav, 200);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text);
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-pod);
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.home-nav__watch:hover {
+  background: color-mix(in oklch, var(--surface) 60%, transparent);
+}
+
+.home-nav__watch:hover .home-nav__watch-arrow {
+  color: var(--emerald);
+  transform: translateX(2px);
+}
+
+.home-nav__watch-glyph {
+  color: var(--emerald);
+  flex-shrink: 0;
+  transform: translateY(-1px);
+}
+
+.home-nav__watch-arrow {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  letter-spacing: 0;
+  color: var(--text-subtle);
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition:
+    color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+@media (max-width: 720px) {
+  .home-nav__brand-sub {
+    display: none;
+  }
+
+  .home-nav__watch-label,
+  .home-nav__watch-arrow {
+    display: none;
+  }
+}

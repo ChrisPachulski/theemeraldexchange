@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 
-export type Route = 'tv' | 'movies' | 'downloads'
+export type Route = 'home' | 'tv' | 'movies' | 'downloads'
 
-const ROUTES: Route[] = ['tv', 'movies', 'downloads']
-const DEFAULT_ROUTE: Route = 'tv'
+const ROUTES: Route[] = ['home', 'tv', 'movies', 'downloads']
+const DEFAULT_ROUTE: Route = 'home'
 
 function parseHash(): Route {
   const raw = window.location.hash.replace(/^#\/?/, '').trim().toLowerCase()

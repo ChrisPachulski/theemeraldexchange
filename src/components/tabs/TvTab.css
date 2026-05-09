@@ -15,6 +15,16 @@
   width: 100%;
 }
 
+/* Discover/In-library toggle pinned bottom-left, sharing the chrome
+   line with ReplayButton (bottom-right) and the home entry buttons
+   (bottom-center). */
+.tv-tab__mode-anchor {
+  position: fixed;
+  bottom: var(--pod-inset, 16px);
+  left: var(--pod-inset, 16px);
+  z-index: var(--z-nav, 200);
+}
+
 /* Bottom dock — the search hero + mode toggle pinned to the viewport
    bottom. Fixed positioning keeps it on screen as the result grid
    scrolls. The kraken video sits behind it (z:0); dock is z:5 so it

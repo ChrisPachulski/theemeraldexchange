@@ -1,0 +1,76 @@
+/* Home — minimal landing that lets the kraken atmosphere dominate.
+   Bottom row of entry buttons (TV / Movies / Downloader) sits above
+   the viewport floor; everything above is the kraken layer.
+   Scrolling content will be added later — this is the first viewport. */
+
+.home {
+  flex: 1 1 auto;
+  min-height: 100vh;
+}
+
+/* Entry buttons share the bottom chrome line with ReplayButton — same
+   bottom inset, centered horizontally. Fixed so the kraken layer behind
+   stays unobstructed and so future scrollable home content slides under
+   them rather than pushing them off-frame. */
+.home__entries {
+  position: fixed;
+  bottom: var(--pod-inset, 16px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-nav, 200);
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: nowrap;
+}
+
+.home__entry {
+  font-family: var(--font-display);
+  font-weight: var(--w-display);
+  font-size: var(--t-sm);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text);
+  padding: var(--s-4) var(--s-6);
+  min-width: 180px;
+  text-align: center;
+  background: color-mix(in oklch, var(--surface) 78%, transparent);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pod, 999px);
+  box-shadow:
+    inset 0 1px 0 var(--frost),
+    0 18px 40px -22px var(--ink);
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+
+.home__entry:hover {
+  border-color: var(--emerald);
+  color: var(--emerald);
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 var(--frost-stronger),
+    0 22px 44px -22px var(--ink),
+    0 0 24px -8px oklch(0.62 0.180 158 / 0.45);
+}
+
+.home__entry:focus-visible {
+  border-color: var(--emerald);
+  color: var(--emerald);
+}
+
+@media (max-width: 720px) {
+  .home {
+    padding: var(--s-5) var(--s-4) var(--s-6);
+  }
+
+  .home__entry {
+    min-width: 120px;
+    padding: var(--s-3) var(--s-4);
+  }
+}

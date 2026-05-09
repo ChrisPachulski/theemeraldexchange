@@ -1,38 +1,37 @@
 import './Kraken.css'
 
-// Live-action kraken: AI-rendered classic kraken (massive cephalopod head,
-// tentacles, glowing eyes, stormy seas), played as a native HTML loop.
-// The Pixabay source is authored to be cycle-clean, so the browser's own
-// seamless-loop boundary is good enough — no opacity crossfade needed,
-// which avoids the global brightness shimmer two-video stacking caused.
+// Atmospheric background layer.
 //
-// Source: Pixabay video #333401 (CC0).
+// `kraken` variant — Pixabay #333401 (CC0). The Pixabay scene has a warm
+//   tan/grey palette so we run a CSS filter stack (saturate/hue-rotate/
+//   contrast/brightness) to push it toward the emerald grade and pull
+//   bright lightning down. Used on the home page only.
 //
-// Phase 2 (planned, not implemented): tab-driven 3D angle rotation.
-//   - Generate alternate-angle videos via scripts/_kraken-gen.mjs by
-//     re-running with the front-clip's last frame as promptImage and a
-//     prompt describing the desired orbit angle (e.g., "the same creature
-//     viewed from a 90-degree lateral angle"). Runway image-to-video
-//     preserves identity far better than re-rolling text-to-video.
-//   - Tabs map to angles: TV → 0°, Movies → 90°, Downloads → 180°, Watch → 270°.
-//   - On tab change, crossfade or play a short orbital transition clip
-//     between source and destination angle videos. The current single-
-//     video setup is the front-angle anchor for that future fan-out.
+// `resting` variant — Runway-generated emerald-radiation loop with the
+//   dark purple-charcoal-green grade and emerald gem baked in. No CSS
+//   filter; running the home filter on top would over-process it. Used
+//   on every non-home tab. The `key` prop on the <video> remounts the
+//   element when variant changes so the browser loads the new source.
 
-export function Kraken() {
+type Props = { variant?: 'kraken' | 'resting' }
+
+export function Kraken({ variant = 'kraken' }: Props) {
+  const poster = variant === 'kraken' ? '/kraken-poster.jpg' : undefined
+
   return (
-    <div className="kraken" aria-hidden="true">
+    <div className={`kraken kraken--${variant}`} aria-hidden="true">
       <video
+        key={variant}
         className="kraken__video"
         loop
         muted
         playsInline
         autoPlay
         preload="auto"
-        poster="/kraken-poster.jpg"
+        poster={poster}
       >
-        <source src="/kraken.webm" type="video/webm" />
-        <source src="/kraken.mp4" type="video/mp4" />
+        <source src={`/${variant}.webm`} type="video/webm" />
+        <source src={`/${variant}.mp4`} type="video/mp4" />
       </video>
     </div>
   )

@@ -44,12 +44,9 @@
 }
 
 .downloads-tab__queue {
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-}
-
-.downloads-tab__queue .queue-row:last-child {
-  border-bottom: 0;
+  display: grid;
+  gap: var(--s-2);
+  padding: 0 var(--s-5);
 }
 
 .downloads-tab__history {

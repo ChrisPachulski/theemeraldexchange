@@ -20,17 +20,6 @@
   object-fit: cover;
   object-position: center center;
 
-  /* Filter stack — keep the AI scene's drama, push it toward emerald.
-       saturate(0.7)  cool the AI's tan/grey cliffs and lightning
-       hue-rotate     shift remaining color toward emerald
-       contrast       punch up the kraken silhouette
-       brightness     pull bright sky/lightning down so chrome stays  */
-  filter:
-    saturate(0.7)
-    hue-rotate(95deg)
-    contrast(1.18)
-    brightness(0.78);
-
   /* Soft viewport-edge fade so the rectangular video frame doesn't
      read as a hard rectangle against the chrome at the corners. */
   -webkit-mask-image:
@@ -47,6 +36,16 @@
       black 65%,
       transparent 100%
     );
+}
+
+/* Home variant: Pixabay scene needs the emerald-pushing filter pipeline.
+   Resting variant: Runway gen has the grade baked in — no filter. */
+.kraken--kraken .kraken__video {
+  filter:
+    saturate(0.7)
+    hue-rotate(95deg)
+    contrast(1.18)
+    brightness(0.78);
 }
 
 @media (max-width: 720px) {

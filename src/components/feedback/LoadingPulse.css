@@ -1,0 +1,63 @@
+/* Shared loading state — fixed dead-center on the viewport so TV,
+   Movies, and Downloads all show the indicator in exactly the same
+   place. Slow opacity + scale pulse so it rhymes with the gem in the
+   resting background. */
+
+.loading-pulse {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  font-family: var(--font-display);
+  font-size: var(--t-sm);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  pointer-events: none;
+  animation: loading-pulse-text 1800ms ease-in-out infinite;
+}
+
+.loading-pulse__glyph {
+  display: inline-flex;
+  align-items: center;
+  color: var(--emerald);
+  filter: drop-shadow(0 0 6px oklch(0.62 0.180 158 / 0.55));
+  animation: loading-pulse-glyph 1800ms ease-in-out infinite;
+  transform-origin: center;
+}
+
+.loading-pulse__label {
+  font-feature-settings: 'tnum' 1;
+}
+
+@keyframes loading-pulse-text {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1.0; }
+}
+
+@keyframes loading-pulse-glyph {
+  0%, 100% {
+    transform: scale(0.92);
+    filter: drop-shadow(0 0 4px oklch(0.62 0.180 158 / 0.35));
+  }
+  50% {
+    transform: scale(1.10);
+    filter: drop-shadow(0 0 14px oklch(0.62 0.180 158 / 0.85));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading-pulse,
+  .loading-pulse__glyph {
+    animation: none;
+  }
+  .loading-pulse__glyph {
+    transform: none;
+  }
+}
