@@ -30,3 +30,6 @@ dist-ssr
 
 # Scratch scripts (underscore-prefixed in scripts/ are local-only)
 scripts/_*
+
+# Vitest coverage output
+coverage
