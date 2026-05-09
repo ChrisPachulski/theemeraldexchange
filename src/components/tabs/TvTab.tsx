@@ -7,6 +7,7 @@ import { ModeToggle, type Mode } from '../search/ModeToggle'
 import { AddSeriesModal } from '../add/AddSeriesModal'
 import { Toast } from '../toast/Toast'
 import { LoadingPulse } from '../feedback/LoadingPulse'
+import { useAuth } from '../../lib/auth'
 import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useSeriesSearch } from '../../lib/hooks/useSeriesSearch'
 import { useSonarrLibrary } from '../../lib/hooks/useSonarrLibrary'
@@ -33,6 +34,8 @@ export function TvTab() {
   const library = useSonarrLibrary()
   const confirm = useConfirm()
   const qc = useQueryClient()
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'admin'
 
   const [adding, setAdding] = useState<SeriesSearchResult | null>(null)
   const [toast, setToast] = useState<string | null>(null)
@@ -60,6 +63,13 @@ export function TvTab() {
     const inLib = libraryByTvdb.get(item.tvdbId)
     if (!inLib) {
       setAdding(item)
+      return
+    }
+    // Removing a series from the library is admin-only. Users get a
+    // visual confirmation that the title is already tracked, no-op
+    // beyond that.
+    if (!isAdmin) {
+      setToast(`${inLib.title} is already in your library.`)
       return
     }
     confirmRemove(inLib)
@@ -99,7 +109,7 @@ export function TvTab() {
           loading={library.isPending}
           error={library.error}
           items={filteredLibrary}
-          onCardClick={confirmRemove}
+          onCardClick={isAdmin ? confirmRemove : () => {}}
         />
       )}
 

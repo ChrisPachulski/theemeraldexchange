@@ -1,50 +1,22 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 
-const NAS_HOST = 'theemeraldexchange.local'
-
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
 
+  const backendTarget = `http://localhost:${env.PORT || '3001'}`
+
+  // Every /api/* path goes through the Hono backend now. The backend
+  // allow-lists each Sonarr/Radarr/SAB endpoint with role + disk-space
+  // checks; the SPA's API clients keep their existing /api/sonarr,
+  // /api/radarr, /api/sab paths so nothing in the SPA needs to change.
+  // In prod (Netlify) the SPA points at api.<domain> directly and this
+  // proxy block is irrelevant.
   return {
     plugins: [react()],
     server: {
       proxy: {
-        '/api/sonarr': {
-          target: `http://${NAS_HOST}:8989`,
-          changeOrigin: true,
-          rewrite: (p) => p.replace(/^\/api\/sonarr/, '/tv'),
-          configure: (proxy) => {
-            proxy.on('proxyReq', (proxyReq) => {
-              if (env.SONARR_API_KEY) proxyReq.setHeader('X-Api-Key', env.SONARR_API_KEY)
-            })
-          },
-        },
-        '/api/radarr': {
-          target: `http://${NAS_HOST}:7878`,
-          changeOrigin: true,
-          rewrite: (p) => p.replace(/^\/api\/radarr/, '/movies'),
-          configure: (proxy) => {
-            proxy.on('proxyReq', (proxyReq) => {
-              if (env.RADARR_API_KEY) proxyReq.setHeader('X-Api-Key', env.RADARR_API_KEY)
-            })
-          },
-        },
-        '/api/sab': {
-          target: `http://${NAS_HOST}:8080`,
-          changeOrigin: true,
-          rewrite: (p) => p.replace(/^\/api\/sab/, ''),
-          configure: (proxy) => {
-            proxy.on('proxyReq', (proxyReq) => {
-              if (!env.SAB_API_KEY) return
-              const url = new URL(proxyReq.path, 'http://placeholder')
-              if (!url.searchParams.has('apikey')) {
-                url.searchParams.set('apikey', env.SAB_API_KEY)
-                proxyReq.path = url.pathname + url.search
-              }
-            })
-          },
-        },
+        '/api': { target: backendTarget, changeOrigin: false },
       },
     },
   }

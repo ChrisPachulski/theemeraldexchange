@@ -1,0 +1,143 @@
+/* Compact user pill with an expanding dropdown. The component is
+   positioned by its parent (HomeNav / TopNav cluster); only the
+   dropdown is absolutely positioned, anchored to the trigger. */
+
+.user-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.user-menu__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-1) var(--s-3) var(--s-1) var(--s-1);
+  height: 32px;
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: color-mix(in oklch, var(--surface) 78%, transparent);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pod, 999px);
+  box-shadow:
+    inset 0 1px 0 var(--frost),
+    0 18px 40px -22px var(--ink);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.user-menu__trigger:hover {
+  color: var(--text);
+  border-color: var(--text-subtle);
+}
+
+.user-menu__avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-display);
+  font-weight: var(--w-display);
+  font-size: 0.75rem;
+  letter-spacing: 0;
+  color: oklch(0.18 0 0);
+  background: var(--emerald);
+  flex-shrink: 0;
+}
+
+.user-menu__name {
+  white-space: nowrap;
+}
+
+.user-menu__dropdown {
+  position: absolute;
+  top: calc(100% + var(--s-2));
+  right: 0;
+  min-width: 200px;
+  padding: var(--s-3);
+  display: grid;
+  gap: var(--s-2);
+  background: color-mix(in oklch, var(--surface) 92%, transparent);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card, 12px);
+  box-shadow:
+    inset 0 1px 0 var(--frost),
+    0 24px 48px -24px var(--ink);
+  z-index: 1;
+}
+
+.user-menu__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-subtle);
+}
+
+.user-menu__row-label {
+  color: var(--text-subtle);
+}
+
+.user-menu__role {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: var(--tr-hud);
+  padding: 2px var(--s-2);
+  border-radius: var(--r-pod);
+}
+
+.user-menu__role--admin {
+  color: var(--emerald);
+  background: var(--emerald-bg);
+}
+
+.user-menu__role--user {
+  color: var(--text-muted);
+  background: var(--surface-2);
+}
+
+.user-menu__signout {
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text);
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pod);
+  background: var(--surface);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.user-menu__signout:hover {
+  border-color: var(--danger-dim);
+  color: var(--danger);
+}
+
+@media (max-width: 720px) {
+  .user-menu__name {
+    display: none;
+  }
+  .user-menu__trigger {
+    padding: var(--s-1);
+    width: 32px;
+    justify-content: center;
+  }
+}

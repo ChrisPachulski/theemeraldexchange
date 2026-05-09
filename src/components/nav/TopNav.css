@@ -14,6 +14,16 @@
   padding: 0 var(--s-3);
 }
 
+/* User pill sits in its own anchor at the right edge so the centered
+   pill stays untouched. Same vertical line as the bottom chrome. */
+.top-nav__user-anchor {
+  position: fixed;
+  top: var(--pod-inset, 16px);
+  right: var(--pod-inset, 16px);
+  z-index: var(--z-nav, 200);
+  pointer-events: auto;
+}
+
 .top-nav {
   pointer-events: auto;
   display: inline-flex;

@@ -1,0 +1,160 @@
+/* Sign-in gate — centered card over the kraken atmosphere. */
+
+.login {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  display: grid;
+  place-items: center;
+  padding: var(--s-5);
+  background: var(--scrim);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+.login__card {
+  width: 100%;
+  max-width: 420px;
+  padding: var(--s-6);
+  display: grid;
+  gap: var(--s-3);
+  background: color-mix(in oklch, var(--surface) 92%, transparent);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card, 14px);
+  box-shadow:
+    inset 0 1px 0 var(--frost),
+    0 30px 60px -28px var(--ink);
+}
+
+.login__eyebrow {
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--emerald);
+  margin: 0;
+}
+
+.login__title {
+  font-family: var(--font-display);
+  font-size: var(--t-xl);
+  font-weight: var(--w-display);
+  letter-spacing: var(--tr-display);
+  color: var(--text);
+  margin: 0;
+  line-height: 1;
+}
+
+.login__copy {
+  font-size: var(--t-sm);
+  color: var(--text-muted);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.login__button {
+  margin-top: var(--s-3);
+  padding: var(--s-3) var(--s-5);
+  font-family: var(--font-display);
+  font-weight: var(--w-display);
+  font-size: var(--t-sm);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text);
+  background: var(--emerald-bg);
+  border: 1px solid var(--emerald);
+  border-radius: var(--r-pod, 999px);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+.login__button:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--emerald) 30%, var(--surface));
+  color: var(--text);
+  transform: translateY(-1px);
+}
+
+.login__button:focus-visible {
+  outline: 2px solid var(--emerald);
+  outline-offset: 2px;
+}
+
+.login__button:disabled {
+  opacity: 0.65;
+  cursor: progress;
+}
+
+.login__error {
+  margin: 0;
+  font-size: var(--t-sm);
+  color: var(--danger);
+}
+
+.login__discovery {
+  margin-top: var(--s-3);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: var(--s-2);
+}
+
+.login__discovery-title {
+  font-size: var(--t-xs);
+  color: var(--text-subtle);
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: var(--tr-eyebrow);
+  font-family: var(--font-display);
+}
+
+.login__discovery-title code,
+.login__discovery-id {
+  font-family: var(--font-mono);
+  color: var(--emerald);
+}
+
+.login__discovery-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s-2);
+}
+
+.login__discovery-list li {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: var(--s-2);
+  align-items: center;
+  font-size: var(--t-xs);
+}
+
+.login__discovery-name {
+  color: var(--text);
+}
+
+.login__discovery-tag {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: var(--tr-hud);
+  color: var(--emerald);
+  background: var(--emerald-bg);
+  padding: 2px 6px;
+  border-radius: var(--r-pod);
+}
+
+.login__discovery-id {
+  font-size: var(--t-xs);
+  color: var(--text-subtle);
+  user-select: all;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}

@@ -7,9 +7,11 @@ type Props = {
   percent: number
   timeLeft: string
   status: string
-  onPause: () => void
-  onResume: () => void
-  onDelete: () => void
+  /** Action handlers are optional — when omitted (e.g. for non-admin
+   *  viewers) the actions cluster is hidden entirely. */
+  onPause?: () => void
+  onResume?: () => void
+  onDelete?: () => void
   paused: boolean
   busy: boolean
 }
@@ -27,6 +29,7 @@ export function QueueRow({
   paused,
   busy,
 }: Props) {
+  const canControl = Boolean(onPause || onResume || onDelete)
   const statusLabel = paused
     ? 'PAUSED'
     : status === 'Downloading'
@@ -53,25 +56,31 @@ export function QueueRow({
         <span className="queue-row__eta">
           {timeLeft && timeLeft !== '0:00:00' ? timeLeft : ''}
         </span>
-        <div className="queue-row__actions">
-          {paused ? (
-            <button type="button" className="queue-row__btn" onClick={onResume} disabled={busy}>
-              Resume
-            </button>
-          ) : (
-            <button type="button" className="queue-row__btn" onClick={onPause} disabled={busy}>
-              Pause
-            </button>
-          )}
-          <button
-            type="button"
-            className="queue-row__btn queue-row__btn--danger"
-            onClick={onDelete}
-            disabled={busy}
-          >
-            Cancel
-          </button>
-        </div>
+        {canControl && (
+          <div className="queue-row__actions">
+            {paused
+              ? onResume && (
+                  <button type="button" className="queue-row__btn" onClick={onResume} disabled={busy}>
+                    Resume
+                  </button>
+                )
+              : onPause && (
+                  <button type="button" className="queue-row__btn" onClick={onPause} disabled={busy}>
+                    Pause
+                  </button>
+                )}
+            {onDelete && (
+              <button
+                type="button"
+                className="queue-row__btn queue-row__btn--danger"
+                onClick={onDelete}
+                disabled={busy}
+              >
+                Cancel
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </article>
   )

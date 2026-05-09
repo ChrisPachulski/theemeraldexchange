@@ -1,4 +1,5 @@
 import { useNavTransition } from '../../lib/navTransition'
+import { UserMenu } from '../auth/UserMenu'
 import './HomeNav.css'
 
 // Minimal home-page chrome — no pill, no tab strip. Just the brand
@@ -43,17 +44,20 @@ export function HomeNav() {
         <span className="home-nav__brand-sub">EXCHANGE</span>
       </button>
 
-      <a
-        href={PLEX_URL}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="home-nav__watch"
-        aria-label="Open Plex in a new tab"
-      >
-        <EmeraldGlyph />
-        <span className="home-nav__watch-label">Watch</span>
-        <span className="home-nav__watch-arrow" aria-hidden="true">{'->'}</span>
-      </a>
+      <div className="home-nav__right">
+        <a
+          href={PLEX_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="home-nav__watch"
+          aria-label="Open Plex in a new tab"
+        >
+          <EmeraldGlyph />
+          <span className="home-nav__watch-label">Watch</span>
+          <span className="home-nav__watch-arrow" aria-hidden="true">{'->'}</span>
+        </a>
+        <UserMenu />
+      </div>
     </>
   )
 }

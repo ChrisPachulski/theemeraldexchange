@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import type { Route } from '../../lib/router'
 import { useNavTransition } from '../../lib/navTransition'
+import { UserMenu } from '../auth/UserMenu'
 import './TopNav.css'
 
 const PLEX_URL = 'http://theemeraldexchange.local:32400/web'
@@ -142,6 +143,9 @@ export function TopNav({ active }: Props) {
           <span className="top-nav__watch-label">Watch</span>
           <span className="top-nav__watch-arrow" aria-hidden="true">{'->'}</span>
         </a>
+      </div>
+      <div className="top-nav__user-anchor">
+        <UserMenu />
       </div>
     </header>
   )

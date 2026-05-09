@@ -4,6 +4,7 @@ import { useDownloadQueue, useDownloadHistory } from '../../lib/hooks/useDownloa
 import { useConfirm } from '../confirm/useConfirm'
 import { QueueRow } from '../queue/QueueRow'
 import { LoadingPulse } from '../feedback/LoadingPulse'
+import { useAuth } from '../../lib/auth'
 import './DownloadsTab.css'
 
 export function DownloadsTab() {
@@ -11,6 +12,8 @@ export function DownloadsTab() {
   const history = useDownloadHistory(10)
   const confirm = useConfirm()
   const qc = useQueryClient()
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'admin'
 
   const pause = useMutation({
     mutationFn: (nzoId: string) => sab.pauseItem(nzoId),
@@ -85,17 +88,20 @@ export function DownloadsTab() {
                 status={slot.status}
                 paused={paused}
                 busy={busy}
-                onPause={() => pause.mutate(slot.nzo_id)}
-                onResume={() => resume.mutate(slot.nzo_id)}
-                onDelete={() =>
-                  confirm({
-                    title: `Cancel ${slot.filename}?`,
-                    body: 'This stops the download and removes the partial file. The library entry stays.',
-                    confirmLabel: 'Cancel download',
-                    onConfirm: async () => {
-                      await cancel.mutateAsync(slot.nzo_id)
-                    },
-                  })
+                onPause={isAdmin ? () => pause.mutate(slot.nzo_id) : undefined}
+                onResume={isAdmin ? () => resume.mutate(slot.nzo_id) : undefined}
+                onDelete={
+                  isAdmin
+                    ? () =>
+                        confirm({
+                          title: `Cancel ${slot.filename}?`,
+                          body: 'This stops the download and removes the partial file. The library entry stays.',
+                          confirmLabel: 'Cancel download',
+                          onConfirm: async () => {
+                            await cancel.mutateAsync(slot.nzo_id)
+                          },
+                        })
+                    : undefined
                 }
               />
             )

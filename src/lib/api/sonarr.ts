@@ -1,3 +1,5 @@
+import { throwApiError } from './errors'
+
 const BASE = '/api/sonarr/api/v3'
 
 async function get<T>(path: string, params?: Record<string, string | number | boolean>): Promise<T> {
@@ -5,8 +7,10 @@ async function get<T>(path: string, params?: Record<string, string | number | bo
   if (params) {
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v))
   }
-  const res = await fetch(url.toString().replace(window.location.origin, ''))
-  if (!res.ok) throw new Error(`Sonarr ${path}: ${res.status} ${res.statusText}`)
+  const res = await fetch(url.toString().replace(window.location.origin, ''), {
+    credentials: 'include',
+  })
+  if (!res.ok) await throwApiError(res, `Sonarr ${path}`)
   return res.json() as Promise<T>
 }
 
@@ -14,9 +18,10 @@ async function post<T, B>(path: string, body: B): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
     body: JSON.stringify(body),
   })
-  if (!res.ok) throw new Error(`Sonarr ${path}: ${res.status} ${res.statusText}`)
+  if (!res.ok) await throwApiError(res, `Sonarr ${path}`)
   return res.json() as Promise<T>
 }
 
@@ -25,8 +30,11 @@ async function del(path: string, params?: Record<string, string | number | boole
   if (params) {
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v))
   }
-  const res = await fetch(url.toString().replace(window.location.origin, ''), { method: 'DELETE' })
-  if (!res.ok) throw new Error(`Sonarr ${path}: ${res.status} ${res.statusText}`)
+  const res = await fetch(url.toString().replace(window.location.origin, ''), {
+    method: 'DELETE',
+    credentials: 'include',
+  })
+  if (!res.ok) await throwApiError(res, `Sonarr ${path}`)
 }
 
 export type SystemStatus = {

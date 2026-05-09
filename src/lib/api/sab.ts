@@ -1,3 +1,5 @@
+import { throwApiError } from './errors'
+
 const BASE = '/api/sab/api'
 
 async function call<T>(mode: string, extra?: Record<string, string>): Promise<T> {
@@ -7,8 +9,10 @@ async function call<T>(mode: string, extra?: Record<string, string>): Promise<T>
   if (extra) {
     for (const [k, v] of Object.entries(extra)) url.searchParams.set(k, v)
   }
-  const res = await fetch(url.toString().replace(window.location.origin, ''))
-  if (!res.ok) throw new Error(`SAB ${mode}: ${res.status} ${res.statusText}`)
+  const res = await fetch(url.toString().replace(window.location.origin, ''), {
+    credentials: 'include',
+  })
+  if (!res.ok) await throwApiError(res, `SAB ${mode}`)
   return res.json() as Promise<T>
 }
 
