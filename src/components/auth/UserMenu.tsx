@@ -14,9 +14,9 @@ import './UserMenu.css'
 //   4. Sign out
 
 const APP_LINKS = [
-  { name: 'Sonarr', href: 'http://theemeraldexchange.local/tv' },
-  { name: 'Radarr', href: 'http://theemeraldexchange.local/movies' },
-  { name: 'SAB', href: 'http://theemeraldexchange.local/downloads' },
+  { name: 'Sonarr', href: 'https://sonarr.theemeraldexchange.com' },
+  { name: 'Radarr', href: 'https://radarr.theemeraldexchange.com' },
+  { name: 'SAB', href: 'https://sab.theemeraldexchange.com' },
 ] as const
 
 export function UserMenu() {
