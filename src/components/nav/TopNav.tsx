@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useRef } from 'react'
 import type { Route } from '../../lib/router'
 import { useNavTransition } from '../../lib/navTransition'
 import { UserMenu } from '../auth/UserMenu'
@@ -44,39 +44,15 @@ type Props = {
 
 export function TopNav({ active }: Props) {
   const { transitionTo, navigate } = useNavTransition()
-  const tabsRef = useRef<HTMLElement>(null)
   const tabRefs = useRef<Record<NavRoute, HTMLButtonElement | null>>({
     tv: null,
     movies: null,
     downloads: null,
   })
-  const [indicator, setIndicator] = useState<{ left: number; width: number } | null>(null)
-
-  useLayoutEffect(() => {
-    const measure = () => {
-      // Home isn't in the tab strip — hide the indicator there.
-      if (active === 'home') {
-        setIndicator(null)
-        return
-      }
-      const el = tabRefs.current[active]
-      const tabsEl = tabsRef.current
-      if (!el || !tabsEl) return
-      const tabRect = el.getBoundingClientRect()
-      const tabsRect = tabsEl.getBoundingClientRect()
-      setIndicator({
-        left: tabRect.left - tabsRect.left + tabRect.width / 2 - 3,
-        width: 6,
-      })
-    }
-    measure()
-    window.addEventListener('resize', measure)
-    return () => window.removeEventListener('resize', measure)
-  }, [active])
 
   return (
-    <header className="top-nav-wrap">
-      <div className="top-nav" role="banner">
+    <>
+      <div className="top-nav__corner">
         <button
           type="button"
           className="top-nav__brand"
@@ -87,9 +63,7 @@ export function TopNav({ active }: Props) {
           <span className="top-nav__brand-sub">EXCHANGE</span>
         </button>
 
-        <span className="top-nav__divider" aria-hidden="true" />
-
-        <nav className="top-nav__tabs" role="tablist" aria-label="Primary" ref={tabsRef}>
+        <nav className="top-nav__tabs" role="tablist" aria-label="Primary">
           {TABS.map((t) => (
             <button
               key={t.route}
@@ -117,21 +91,10 @@ export function TopNav({ active }: Props) {
               {t.label}
             </button>
           ))}
-
-          {indicator && (
-            <span
-              className="top-nav__indicator"
-              style={{
-                transform: `translateX(${indicator.left}px)`,
-                width: `${indicator.width}px`,
-              }}
-              aria-hidden="true"
-            />
-          )}
         </nav>
+      </div>
 
-        <span className="top-nav__divider" aria-hidden="true" />
-
+      <div className="top-nav__right">
         <a
           href={PLEX_URL}
           target="_blank"
@@ -143,10 +106,8 @@ export function TopNav({ active }: Props) {
           <span className="top-nav__watch-label">Watch</span>
           <span className="top-nav__watch-arrow" aria-hidden="true">{'->'}</span>
         </a>
-      </div>
-      <div className="top-nav__user-anchor">
         <UserMenu />
       </div>
-    </header>
+    </>
   )
 }

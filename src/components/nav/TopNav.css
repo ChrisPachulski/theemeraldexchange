@@ -1,51 +1,27 @@
-/* The HUD pod: a floating, pill-shaped capsule centered at the top of the
-   viewport. The earned glassmorphism — backdrop-blur is allowed here per
-   DESIGN.md because this surface literally floats over content. */
+/* Tab-screen chrome.
+   Brand top-left with the three tab pills directly underneath, mirroring
+   HomeNav's brand-left / cluster-right layout. No floating center pod —
+   tab pages share the same chrome line with home so the visit feels
+   continuous when navigating between them. */
 
-.top-nav-wrap {
-  position: fixed;
-  top: var(--pod-inset);
-  left: 0;
-  right: 0;
-  z-index: var(--z-nav);
-  display: flex;
-  justify-content: center;
-  pointer-events: none; /* let space around the pod pass clicks through */
-  padding: 0 var(--s-3);
-}
-
-/* User pill sits in its own anchor at the right edge so the centered
-   pill stays untouched. Same vertical line as the bottom chrome. */
-.top-nav__user-anchor {
+.top-nav__corner {
   position: fixed;
   top: var(--pod-inset, 16px);
-  right: var(--pod-inset, 16px);
+  left: var(--pod-inset, 16px);
   z-index: var(--z-nav, 200);
-  pointer-events: auto;
+  display: grid;
+  gap: var(--s-3);
+  justify-items: start;
+  max-width: calc(100vw - var(--pod-inset, 16px) * 2);
 }
 
-.top-nav {
-  pointer-events: auto;
-  display: inline-flex;
-  align-items: center;
-  height: var(--pod-h);
-  padding: 0 var(--s-2) 0 var(--s-4);
-  gap: var(--s-2);
-  background: color-mix(in oklch, var(--surface) 78%, transparent);
-  backdrop-filter: blur(14px) saturate(140%);
-  -webkit-backdrop-filter: blur(14px) saturate(140%);
-  border: 1px solid var(--border);
-  border-radius: var(--r-pod);
-  box-shadow:
-    inset 0 1px 0 var(--frost),
-    0 18px 40px -22px var(--ink);
-}
-
+/* Brand — same treatment as HomeNav so the home → tab transition is
+   visually continuous (no chrome jump). Click navigates back home. */
 .top-nav__brand {
   display: inline-flex;
   align-items: baseline;
   gap: var(--s-2);
-  padding-right: var(--s-2);
+  padding: var(--s-2) var(--s-3);
   white-space: nowrap;
   font-family: var(--font-display);
   font-weight: var(--w-display);
@@ -63,8 +39,6 @@
 }
 
 .top-nav__brand-mark {
-  /* The committed name carries the brand — Emerald rendered with the
-     accent so the wordmark itself signals the palette commitment. */
   color: var(--emerald);
 }
 
@@ -72,55 +46,77 @@
   color: var(--text);
 }
 
-.top-nav__divider {
-  width: 1px;
-  height: 22px;
-  background: var(--border);
-  flex-shrink: 0;
-}
-
+/* Tab pills — horizontal row under the brand. Same pill silhouette as
+   the bottom-row entry buttons on HomeTab so the household sees one
+   button family across the whole app. */
 .top-nav__tabs {
-  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: var(--s-3);
-  padding: 0 var(--s-3);
+  gap: var(--s-2);
+  flex-wrap: wrap;
 }
 
 .top-nav__tab {
   font-family: var(--font-display);
   font-size: var(--t-xs);
-  font-weight: var(--w-ui);
+  font-weight: var(--w-display);
   letter-spacing: var(--tr-eyebrow);
   text-transform: uppercase;
-  color: var(--text-subtle);
-  padding: var(--s-3) var(--s-1);
-  position: relative;
-  transition: color var(--dur-fast) var(--ease);
+  color: var(--text);
+  padding: 0 var(--s-4);
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  background: color-mix(in oklch, var(--surface) 78%, transparent);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pod, 999px);
+  box-shadow:
+    inset 0 1px 0 var(--frost),
+    0 18px 40px -22px var(--ink);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
 }
 
 .top-nav__tab:hover {
-  color: var(--text-muted);
+  color: var(--emerald);
+  border-color: var(--emerald);
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 var(--frost-stronger),
+    0 22px 44px -22px var(--ink),
+    0 0 24px -8px oklch(0.62 0.180 158 / 0.45);
 }
 
 .top-nav__tab--active {
-  color: var(--text);
+  color: var(--emerald);
+  border-color: var(--emerald);
+  background: color-mix(in oklch, var(--emerald) 14%, var(--surface));
+  box-shadow:
+    inset 0 1px 0 var(--frost-stronger),
+    0 18px 40px -22px var(--ink),
+    0 0 24px -8px oklch(0.62 0.180 158 / 0.45);
 }
 
-.top-nav__indicator {
-  /* Emerald data-marker dot, sits below the active label.
-     The bottom inset places it just below the baseline of the type. */
-  position: absolute;
-  bottom: 8px;
-  left: 0;
-  height: 6px;
-  background: var(--emerald);
-  border-radius: 999px;
-  transition:
-    transform var(--dur-slow) var(--ease),
-    width var(--dur-slow) var(--ease);
-  pointer-events: none;
-  box-shadow: 0 0 12px oklch(0.62 0.180 158 / 0.55);
+.top-nav__tab:focus-visible {
+  outline: 2px solid var(--emerald);
+  outline-offset: 2px;
+}
+
+/* Top-right cluster — Watch + UserMenu, mirrors HomeNav's right cluster. */
+.top-nav__right {
+  position: fixed;
+  top: var(--pod-inset, 16px);
+  right: var(--pod-inset, 16px);
+  z-index: var(--z-nav, 200);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
 }
 
 .top-nav__watch {
@@ -135,8 +131,7 @@
   letter-spacing: var(--tr-eyebrow);
   text-transform: uppercase;
   color: var(--text);
-  padding: 0 var(--s-3) 0 var(--s-2);
-  height: calc(var(--pod-h) - 8px);
+  padding: var(--s-2) var(--s-3);
   border-radius: var(--r-pod);
   transition:
     background var(--dur-fast) var(--ease),
@@ -144,7 +139,7 @@
 }
 
 .top-nav__watch:hover {
-  background: var(--surface-2);
+  background: color-mix(in oklch, var(--surface) 60%, transparent);
 }
 
 .top-nav__watch:hover .top-nav__watch-arrow {
@@ -157,10 +152,6 @@
   flex-shrink: 0;
   /* Slight upward optical adjustment so the gem sits on the type baseline. */
   transform: translateY(-1px);
-}
-
-.top-nav__watch-label {
-  /* nothing extra — inherits */
 }
 
 .top-nav__watch-arrow {
@@ -176,26 +167,8 @@
 }
 
 @media (max-width: 720px) {
-  .top-nav {
-    padding: 0 var(--s-2);
-    gap: var(--s-1);
-  }
-
   .top-nav__brand-sub {
     display: none;
-  }
-
-  .top-nav__divider:first-of-type {
-    display: none;
-  }
-
-  .top-nav__tabs {
-    padding: 0 var(--s-2);
-    gap: var(--s-2);
-  }
-
-  .top-nav__tab {
-    padding: var(--s-2) var(--s-1);
   }
 
   .top-nav__watch-label,
@@ -203,13 +176,20 @@
     display: none;
   }
 
-  .top-nav__watch {
-    padding: 0 var(--s-2);
+  .top-nav__tab {
+    padding: 0 var(--s-3);
+    min-height: 40px;
   }
 }
 
-@media (max-width: 380px) {
-  .top-nav__brand {
-    padding-right: 0;
+@media (max-width: 480px) {
+  .top-nav__corner {
+    gap: var(--s-2);
+  }
+
+  .top-nav__tab {
+    font-size: 0.6875rem;
+    padding: 0 var(--s-3);
+    min-height: 38px;
   }
 }
