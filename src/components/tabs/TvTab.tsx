@@ -34,8 +34,7 @@ export function TvTab() {
   const library = useSonarrLibrary()
   const confirm = useConfirm()
   const qc = useQueryClient()
-  const { user } = useAuth()
-  const isAdmin = user?.role === 'admin'
+  const { isAdmin } = useAuth()
 
   const [adding, setAdding] = useState<SeriesSearchResult | null>(null)
   const [toast, setToast] = useState<string | null>(null)

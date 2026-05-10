@@ -22,6 +22,19 @@ type SignInState = 'idle' | 'opening' | 'pending' | 'denied' | 'error'
 type AuthCtx = {
   loading: boolean
   user: AuthUser | null
+  /** Server-truth role from the session cookie. */
+  role: Role | null
+  /**
+   * What the UI is currently gating against. Equals `role` unless the
+   * user is an admin who's toggled the "view as user" switch in the
+   * UserMenu. Server-side permissions are unchanged — this is a UI-only
+   * preview so admins can sanity-check what guests see.
+   */
+  effectiveRole: Role | null
+  /** True when effectiveRole is 'admin'. Convenience for gates. */
+  isAdmin: boolean
+  /** Toggle preview mode. Pass null to clear (back to actual role). */
+  setViewAs: (role: Role | null) => void
   signInState: SignInState
   signInError: string | null
   /** Discovered Plex servers, only present when PLEX_SERVER_ID isn't set yet. */
@@ -35,6 +48,7 @@ const AuthContext = createContext<AuthCtx | null>(null)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
   const [user, setUser] = useState<AuthUser | null>(null)
+  const [viewAs, setViewAs] = useState<Role | null>(null)
   const [signInState, setSignInState] = useState<SignInState>('idle')
   const [signInError, setSignInError] = useState<string | null>(null)
   const [discoveredServers, setDiscoveredServers] =
@@ -136,14 +150,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       credentials: 'include',
     }).catch(() => {})
     setUser(null)
+    setViewAs(null)
     setDiscoveredServers(null)
   }, [])
+
+  const role = user?.role ?? null
+  // Only admins can preview as user. Anyone else gets their actual role
+  // even if they somehow set viewAs (e.g. devtools).
+  const effectiveRole: Role | null =
+    role === 'admin' && viewAs ? viewAs : role
+  const isAdmin = effectiveRole === 'admin'
 
   return (
     <AuthContext.Provider
       value={{
         loading,
         user,
+        role,
+        effectiveRole,
+        isAdmin,
+        setViewAs,
         signInState,
         signInError,
         discoveredServers,

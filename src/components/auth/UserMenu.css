@@ -126,6 +126,93 @@
     color var(--dur-fast) var(--ease);
 }
 
+.user-menu__toggle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-1) 0;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.user-menu__toggle-label {
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  transition: color var(--dur-fast) var(--ease);
+}
+
+.user-menu__toggle:hover .user-menu__toggle-label {
+  color: var(--text);
+}
+
+.user-menu__toggle-track {
+  position: relative;
+  width: 28px;
+  height: 16px;
+  border-radius: var(--r-pod);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+
+.user-menu__toggle-track--on {
+  background: var(--emerald-bg);
+  border-color: var(--emerald);
+}
+
+.user-menu__toggle-thumb {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--text-subtle);
+  transition: transform var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+
+.user-menu__toggle-track--on .user-menu__toggle-thumb {
+  transform: translateX(12px);
+  background: var(--emerald);
+}
+
+.user-menu__apps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--s-1);
+}
+
+.user-menu__app {
+  font-family: var(--font-display);
+  font-size: 0.6875rem;
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  text-align: center;
+  text-decoration: none;
+  color: var(--text-muted);
+  padding: var(--s-2) 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pod);
+  background: var(--surface);
+  transition:
+    color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.user-menu__app:hover {
+  color: var(--emerald);
+  border-color: var(--emerald);
+}
+
 .user-menu__signout:hover {
   border-color: var(--danger-dim);
   color: var(--danger);

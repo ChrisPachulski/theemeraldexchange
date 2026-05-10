@@ -12,8 +12,7 @@ export function DownloadsTab() {
   const history = useDownloadHistory(10)
   const confirm = useConfirm()
   const qc = useQueryClient()
-  const { user } = useAuth()
-  const isAdmin = user?.role === 'admin'
+  const { isAdmin } = useAuth()
 
   const pause = useMutation({
     mutationFn: (nzoId: string) => sab.pauseItem(nzoId),
