@@ -158,3 +158,48 @@
   overflow: hidden;
   white-space: nowrap;
 }
+
+/* iPhone / small viewport: tighten outer + inner padding so the card
+   content fits a 375px-wide screen without horizontal overflow, and
+   downscale the title from --t-xl (36px) to --t-lg (24px). The
+   discovery-id row stays single-line with ellipsis so server IDs don't
+   blow out the card width. */
+@media (max-width: 480px) {
+  .login {
+    padding: var(--s-3);
+  }
+  .login__card {
+    padding: var(--s-4) var(--s-4) var(--s-5);
+    gap: var(--s-2);
+  }
+  .login__title {
+    font-size: var(--t-lg);
+    line-height: 1.1;
+  }
+  .login__copy {
+    font-size: var(--t-sm);
+    line-height: 1.45;
+  }
+  .login__button {
+    padding: var(--s-3) var(--s-4);
+    margin-top: var(--s-2);
+  }
+  .login__discovery {
+    margin-top: var(--s-2);
+    padding-top: var(--s-2);
+  }
+  .login__discovery-list li {
+    grid-template-columns: 1fr auto;
+    grid-template-areas: 'name tag' 'id id';
+    gap: var(--s-1) var(--s-2);
+  }
+  .login__discovery-name {
+    grid-area: name;
+  }
+  .login__discovery-tag {
+    grid-area: tag;
+  }
+  .login__discovery-id {
+    grid-area: id;
+  }
+}
