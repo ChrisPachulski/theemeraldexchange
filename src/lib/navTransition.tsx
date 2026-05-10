@@ -93,9 +93,9 @@ export function NavTransitionProvider({ children }: { children: ReactNode }) {
     const v = videoRef.current
     if (!v) return
     v.currentTime = 0
-    // Original 5.7s slow-mo clip; play at 2x for a 2.85s flourish that
-    // keeps frame-quality without blurring past the eye.
-    v.playbackRate = 2
+    // Play the source clip at its native speed (5.7s @ 24fps). No JS
+    // acceleration — every speed-up turned it visually janky.
+    v.playbackRate = 1
     const p = v.play()
     if (p && typeof (p as Promise<void>).catch === 'function') {
       ;(p as Promise<void>).catch(() => {
