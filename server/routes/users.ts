@@ -32,6 +32,31 @@ users.get('/', async (c) => {
     )
   }
 
+  // ?debug=1 dumps the raw responses from each Plex source so we can
+  // diagnose missing-user reports without blind-fixing. Admin-only
+  // (already gated by middleware). Remove once Users tab is stable.
+  if (c.req.query('debug') === '1') {
+    const token = session.plexAuthToken
+    const [usersXml, requestedJson, sharedServersJson] = await Promise.all([
+      fetch('https://plex.tv/api/users', {
+        headers: { 'X-Plex-Token': token, Accept: 'application/xml' },
+      }).then((r) => r.text()).catch((e) => `ERR: ${e}`),
+      fetch('https://plex.tv/api/v2/friends/requested', {
+        headers: { 'X-Plex-Token': token, Accept: 'application/json' },
+      }).then((r) => r.text()).catch((e) => `ERR: ${e}`),
+      fetch('https://plex.tv/api/v2/shared_servers', {
+        headers: { 'X-Plex-Token': token, Accept: 'application/json' },
+      }).then((r) => r.text()).catch((e) => `ERR: ${e}`),
+    ])
+    return c.json({
+      sources: {
+        'GET /api/users (XML)': usersXml,
+        'GET /api/v2/friends/requested': requestedJson,
+        'GET /api/v2/shared_servers': sharedServersJson,
+      },
+    })
+  }
+
   try {
     // Pending invites are best-effort: if the call fails (timeout, Plex
     // returning a wrapper shape we don't recognize, etc.) the route
