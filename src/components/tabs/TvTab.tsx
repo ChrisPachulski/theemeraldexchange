@@ -14,6 +14,7 @@ import { useAuth } from '../../lib/auth'
 import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useSeriesSearch } from '../../lib/hooks/useSeriesSearch'
 import { useSonarrLibrary } from '../../lib/hooks/useSonarrLibrary'
+import { useCast } from '../../lib/hooks/useCast'
 import { useConfirm } from '../confirm/useConfirm'
 import { sonarr, type Series, type SeriesSearchResult } from '../../lib/api/sonarr'
 import './TvTab.css'
@@ -102,6 +103,12 @@ export function TvTab() {
   const [adding, setAdding] = useState<SeriesSearchResult | null>(null)
   const [viewing, setViewing] = useState<SeriesSearchResult | Series | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+
+  const cast = useCast({
+    type: 'tv',
+    tvdbId: viewing?.tvdbId ?? 0,
+    enabled: viewing !== null,
+  })
 
   const libraryByTvdb = useMemo(() => {
     const map = new Map<number, Series>()
@@ -279,6 +286,8 @@ export function TvTab() {
         rating={viewing ? fmtSeriesRating(viewing) : undefined}
         overview={viewing?.overview}
         meta={viewing ? buildSeriesMeta(viewing) : []}
+        cast={cast.data}
+        castLoading={cast.isLoading}
         inLibrary={viewing !== null && 'id' in viewing}
         canRemove={isAdmin}
         onAdd={viewing && !('id' in viewing) ? () => {

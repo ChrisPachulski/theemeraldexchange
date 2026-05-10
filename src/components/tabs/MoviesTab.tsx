@@ -14,6 +14,7 @@ import { useAuth } from '../../lib/auth'
 import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useMovieSearch } from '../../lib/hooks/useMovieSearch'
 import { useRadarrLibrary } from '../../lib/hooks/useRadarrLibrary'
+import { useCast } from '../../lib/hooks/useCast'
 import { useConfirm } from '../confirm/useConfirm'
 import { radarr, type Movie, type MovieSearchResult } from '../../lib/api/radarr'
 import './TvTab.css'
@@ -116,6 +117,12 @@ export function MoviesTab() {
   const [adding, setAdding] = useState<MovieSearchResult | null>(null)
   const [viewing, setViewing] = useState<MovieSearchResult | Movie | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+
+  const cast = useCast({
+    type: 'movie',
+    tmdbId: viewing?.tmdbId ?? 0,
+    enabled: viewing !== null,
+  })
 
   const libraryByTmdb = useMemo(() => {
     const map = new Map<number, Movie>()
@@ -294,6 +301,8 @@ export function MoviesTab() {
         rating={viewing ? fmtMovieRating(viewing) : undefined}
         overview={viewing?.overview}
         meta={viewing ? buildMovieMeta(viewing) : []}
+        cast={cast.data}
+        castLoading={cast.isLoading}
         inLibrary={viewing !== null && 'id' in viewing}
         canRemove={isAdmin}
         onAdd={viewing && !('id' in viewing) ? () => {

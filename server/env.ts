@@ -70,4 +70,12 @@ export const env = {
   // we'll allow an `add`. Below this, both admins and users get a 507
   // — the user explicitly wanted everyone (including admins) gated.
   minFreeBytes: Number(process.env.MIN_FREE_GB ?? 100) * GB,
+
+  // Optional TMDB v3 API key. When set, the detail modal fetches cast
+  // for TV shows (via TVDB→TMDB find) and movies. Without it, the cast
+  // section is hidden and the modal still shows everything Sonarr/Radarr
+  // expose. Sign up at https://www.themoviedb.org/settings/api to get
+  // a free key, then add TMDB_API_KEY=... to .env.local (dev) or
+  // .env.production (prod) and redeploy.
+  tmdbApiKey: process.env.TMDB_API_KEY ?? null,
 } as const

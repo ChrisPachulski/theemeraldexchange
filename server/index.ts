@@ -21,6 +21,7 @@ import { auth, me } from './auth.js'
 import { sonarr } from './routes/sonarr.js'
 import { radarr } from './routes/radarr.js'
 import { sab } from './routes/sab.js'
+import { tmdb } from './routes/tmdb.js'
 
 const app = new Hono()
 
@@ -48,6 +49,7 @@ app.route('/api/me', me)
 app.route('/api/sonarr', sonarr)
 app.route('/api/radarr', radarr)
 app.route('/api/sab', sab)
+app.route('/api/tmdb', tmdb)
 
 serve(
   { fetch: app.fetch, port: env.port },

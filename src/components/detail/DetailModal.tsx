@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { castCharacter, TMDB_IMAGE_BASE, type CastMember } from '../../lib/api/tmdb'
 import './DetailModal.css'
 
 // Plex-style item-detail modal.
@@ -37,6 +38,10 @@ type Props = {
   meta: DetailMeta[]
   /** Optional rating display, like '8.6 IMDb · 92% RT'. */
   rating?: string
+  /** Cast members from TMDB. Empty array hides the cast section. */
+  cast?: CastMember[]
+  /** Whether cast is still loading; renders skeleton placeholders. */
+  castLoading?: boolean
   /** Whether the item is in the user's library. */
   inLibrary: boolean
   /** Whether the actor is allowed to remove. */
@@ -60,6 +65,8 @@ export function DetailModal({
   overview,
   meta,
   rating,
+  cast,
+  castLoading,
   inLibrary,
   canRemove,
   onAdd,
@@ -158,6 +165,49 @@ export function DetailModal({
             <section className="detail__section">
               <h3 className="detail__section-title">Plot</h3>
               <p id={overviewId} className="detail__overview">{overview}</p>
+            </section>
+          )}
+
+          {(castLoading || (cast && cast.length > 0)) && (
+            <section className="detail__section">
+              <h3 className="detail__section-title">Cast</h3>
+              {castLoading ? (
+                <ul className="detail__cast" aria-busy="true">
+                  {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
+                    <li key={i} className="detail__cast-card detail__cast-card--skeleton">
+                      <div className="detail__cast-photo" />
+                      <div className="detail__cast-name detail__cast-name--skeleton" />
+                      <div className="detail__cast-role detail__cast-role--skeleton" />
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <ul className="detail__cast">
+                  {cast!.slice(0, 12).map((member) => {
+                    const role = castCharacter(member)
+                    return (
+                      <li key={member.id} className="detail__cast-card">
+                        {member.profile_path ? (
+                          <img
+                            className="detail__cast-photo"
+                            src={`${TMDB_IMAGE_BASE}${member.profile_path}`}
+                            alt=""
+                            loading="lazy"
+                            decoding="async"
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          <div className="detail__cast-photo detail__cast-photo--fallback" aria-hidden="true">
+                            {member.name.charAt(0)}
+                          </div>
+                        )}
+                        <p className="detail__cast-name">{member.name}</p>
+                        {role && <p className="detail__cast-role">{role}</p>}
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
             </section>
           )}
 

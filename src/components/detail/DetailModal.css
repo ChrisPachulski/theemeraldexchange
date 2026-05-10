@@ -274,6 +274,107 @@
   font-feature-settings: 'tnum' 1;
 }
 
+/* Cast grid — small avatar + name + character. Horizontal layout that
+   wraps to a new row on overflow rather than a horizontal scroller, so
+   you can see the full ensemble at a glance. */
+.detail__cast {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: var(--s-3);
+}
+
+.detail__cast-card {
+  display: grid;
+  gap: 4px;
+  text-align: left;
+}
+
+.detail__cast-photo {
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  object-fit: cover;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  display: block;
+}
+
+.detail__cast-photo--fallback {
+  display: grid;
+  place-items: center;
+  font-family: var(--font-display);
+  font-size: var(--t-xl);
+  font-weight: var(--w-display);
+  color: var(--text-subtle);
+}
+
+.detail__cast-name {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--t-sm);
+  font-weight: var(--w-ui);
+  color: var(--text);
+  letter-spacing: var(--tr-tight);
+  line-height: 1.25;
+}
+
+.detail__cast-role {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--text-subtle);
+  letter-spacing: 0;
+  line-height: 1.3;
+  /* Clamp to two lines so an unusually long character description
+     doesn't bloat the cast row. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Skeleton variants — subtle pulse on placeholder blocks while TMDB
+   resolves. */
+.detail__cast-card--skeleton .detail__cast-photo {
+  background: linear-gradient(
+    90deg,
+    var(--surface-2) 0%,
+    color-mix(in oklch, var(--surface-2) 60%, var(--text-subtle) 40%) 50%,
+    var(--surface-2) 100%
+  );
+  background-size: 200% 100%;
+  animation: detail-cast-shimmer 1.4s ease-in-out infinite;
+}
+
+.detail__cast-name--skeleton,
+.detail__cast-role--skeleton {
+  height: 10px;
+  border-radius: 4px;
+  background: var(--surface-2);
+}
+
+.detail__cast-name--skeleton {
+  width: 80%;
+}
+
+.detail__cast-role--skeleton {
+  width: 60%;
+}
+
+@keyframes detail-cast-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .detail__cast-card--skeleton .detail__cast-photo {
+    animation: none;
+  }
+}
+
 /* Footer actions */
 .detail__actions {
   position: relative;
