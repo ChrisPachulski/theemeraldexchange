@@ -167,6 +167,13 @@
   border-color: color-mix(in oklch, var(--emerald) 60%, var(--border));
 }
 
+.users-tab__badge--pending {
+  color: color-mix(in oklch, var(--emerald) 50%, #fff);
+  border-color: color-mix(in oklch, var(--emerald) 40%, var(--border));
+  background: color-mix(in oklch, var(--emerald) 6%, var(--surface));
+  font-style: italic;
+}
+
 .users-tab__error p {
   margin: 0;
   font-size: var(--t-sm);
