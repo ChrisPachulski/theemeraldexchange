@@ -93,10 +93,8 @@ export function NavTransitionProvider({ children }: { children: ReactNode }) {
     const v = videoRef.current
     if (!v) return
     v.currentTime = 0
-    // Source clip was rendered with slow-mo; 4x lands the 5.7s clip at
-    // ~1.4s, which is the snappiest the flourish reads at without
-    // looking like a stutter.
-    v.playbackRate = 4
+    // The fast variant is already a 1.5s real-time encode; default rate.
+    v.playbackRate = 1
     const p = v.play()
     if (p && typeof (p as Promise<void>).catch === 'function') {
       ;(p as Promise<void>).catch(() => {
@@ -124,7 +122,7 @@ export function NavTransitionProvider({ children }: { children: ReactNode }) {
             onEnded={finish}
             onError={finish}
           >
-            <source src="/nav-transition.mp4" type="video/mp4" />
+            <source src="/nav-transition-fast.mp4" type="video/mp4" />
           </video>
         </div>
       )}
