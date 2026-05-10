@@ -63,6 +63,8 @@
   }
 }
 
+/* Hint sits centered in the result band, glass-pill so the text reads
+   against the kraken video without painting a full-width card. */
 .tv-tab__hint {
   font-family: var(--font-display);
   font-size: var(--t-sm);
@@ -71,22 +73,29 @@
   text-transform: uppercase;
   color: var(--text-subtle);
   text-align: center;
-  padding: var(--s-5);
-  margin: 0;
-  /* Center the hint in the result area instead of pinning it to the top.
-     The dock is fixed at viewport bottom (~280px), so the visible result
-     band sits between hero-pad-top and dock-pad-bottom. */
-  min-height: calc(100vh - var(--hero-pad-top) - var(--dock-pad-bottom, 280px));
-  display: grid;
-  place-content: center;
+  padding: var(--s-3) var(--s-5);
+  margin: calc((100vh - var(--hero-pad-top) - var(--dock-pad-bottom, 280px)) / 2 - 24px) auto;
+  max-width: max-content;
+  background: color-mix(in oklch, var(--surface) 92%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pod, 999px);
+  box-shadow: inset 0 1px 0 var(--frost);
 }
 
 .tv-tab__error {
   max-width: var(--content-max);
-  margin: 0 auto;
-  padding: var(--s-5);
+  margin: 0 var(--s-5);
+  padding: var(--s-4) var(--s-5);
   display: grid;
   gap: var(--s-2);
+  background: color-mix(in oklch, var(--surface) 92%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card, 12px);
+  box-shadow: inset 0 1px 0 var(--frost);
 }
 
 .tv-tab__error p {
