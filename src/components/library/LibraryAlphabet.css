@@ -1,17 +1,28 @@
-/* Plex-style A–Z bucket filter — horizontal pill row sitting above the
-   library result grid. Mono uppercase, single line, scrolls horizontally
-   on narrow viewports rather than wrapping (a wrapped multi-row bar
-   reads as content rather than chrome). */
+/* Plex-style A–Z bucket filter — vertical strip pinned to the right edge
+   of the viewport, between the top chrome and the bottom dock. Compact
+   single column. Internally scrolls if the viewport is too short to fit
+   all 28 chips at once. */
 
 .alpha {
+  position: fixed;
+  top: var(--hero-pad-top);
+  right: var(--pod-inset, 16px);
+  bottom: calc(var(--dock-pad-bottom, 280px) - var(--s-3));
+  z-index: var(--z-nav, 200);
   display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 0 var(--s-5);
-  max-width: var(--content-max);
-  margin: 0 auto;
-  width: 100%;
-  overflow-x: auto;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  padding: 4px;
+  background: color-mix(in oklch, var(--surface) 70%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pod, 999px);
+  box-shadow:
+    inset 0 1px 0 var(--frost),
+    0 18px 40px -22px var(--ink);
+  overflow-y: auto;
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
@@ -25,14 +36,14 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  min-width: 32px;
-  height: 32px;
-  padding: 0 var(--s-2);
+  gap: 4px;
+  width: 28px;
+  height: 22px;
+  padding: 0 2px;
   font-family: var(--font-mono);
-  font-size: var(--t-xs);
+  font-size: 0.6875rem;
   font-weight: var(--w-ui);
-  letter-spacing: var(--tr-hud);
+  letter-spacing: 0;
   text-transform: uppercase;
   color: var(--text-muted);
   background: transparent;
@@ -47,7 +58,7 @@
 
 .alpha__chip:hover:not(:disabled):not(.alpha__chip--active) {
   color: var(--text);
-  background: color-mix(in oklch, var(--surface) 50%, transparent);
+  background: color-mix(in oklch, var(--surface) 60%, transparent);
 }
 
 .alpha__chip--active {
@@ -58,54 +69,80 @@
 
 .alpha__chip--empty {
   color: var(--text-subtle);
-  opacity: 0.35;
+  opacity: 0.3;
   cursor: not-allowed;
 }
 
 .alpha__chip:focus-visible {
   outline: 2px solid var(--emerald);
-  outline-offset: 2px;
+  outline-offset: 1px;
 }
 
-/* The ALL pill is wider — label + count badge. */
+/* The ALL pill is taller and wider — label + count badge stacked. */
 .alpha__chip--all {
-  padding: 0 var(--s-3);
+  flex-direction: column;
+  width: 28px;
+  height: 32px;
+  padding: 2px 0;
   font-family: var(--font-display);
+  gap: 0;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.alpha__chip--all.alpha__chip--active {
+  border-radius: var(--r-md);
 }
 
 .alpha__chip-label {
-  font-size: var(--t-xs);
+  font-size: 0.625rem;
   letter-spacing: var(--tr-eyebrow);
+  line-height: 1;
 }
 
 .alpha__chip-count {
   font-family: var(--font-mono);
-  font-size: 0.625rem;
+  font-size: 0.5rem;
   font-feature-settings: 'tnum' 1;
   color: var(--text-subtle);
-  padding: 1px 5px;
-  border-radius: var(--r-pod);
-  background: color-mix(in oklch, var(--bg) 60%, transparent);
+  line-height: 1;
 }
 
 .alpha__chip--all.alpha__chip--active .alpha__chip-count {
   color: var(--emerald);
-  background: color-mix(in oklch, var(--bg) 70%, transparent);
 }
 
-@media (max-width: 520px) {
+/* On narrower viewports, dock the alphabet against the right edge but
+   give the cards more horizontal room by shrinking the strip. */
+@media (max-width: 720px) {
   .alpha {
-    padding: 0 var(--s-3);
-    gap: 2px;
+    right: var(--s-2);
+    padding: 2px;
+    gap: 0;
   }
-
   .alpha__chip {
-    min-width: 28px;
-    height: 28px;
-    padding: 0 6px;
+    width: 22px;
+    height: 18px;
+    font-size: 0.625rem;
   }
-
   .alpha__chip--all {
-    padding: 0 var(--s-2);
+    width: 22px;
+    height: 28px;
+  }
+  .alpha__chip-label {
+    font-size: 0.5rem;
+  }
+  .alpha__chip-count {
+    font-size: 0.4375rem;
+  }
+}
+
+/* Phones: hide the strip entirely — it's too thin to be useful, and the
+   text-search input on the dock already covers letter scoping at this
+   width. The user can still scroll the result grid normally. */
+@media (max-width: 480px) {
+  .alpha {
+    display: none;
   }
 }

@@ -1,0 +1,127 @@
+/* Sort + Status pill chips, sitting above the library result grid.
+   Each chip wraps a native <select> so keyboard nav, mobile pickers,
+   and screen readers all work without custom popover code. The chip
+   styles the surface; the <select> shows the chosen option text. */
+
+.lib-filters {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+  padding: 0 var(--s-5);
+  /* Leave room on the right for the fixed alphabet strip. */
+  padding-right: calc(var(--s-5) + 44px);
+  max-width: var(--content-max);
+  margin: 0 auto;
+  width: 100%;
+}
+
+.lib-filters__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 0 var(--s-2) 0 var(--s-3);
+  height: 36px;
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text);
+  background: color-mix(in oklch, var(--surface) 70%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pod, 999px);
+  box-shadow:
+    inset 0 1px 0 var(--frost),
+    0 12px 24px -18px var(--ink);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.lib-filters__chip:hover {
+  border-color: var(--emerald);
+  color: var(--emerald);
+}
+
+.lib-filters__chip:focus-within {
+  border-color: var(--emerald);
+  box-shadow:
+    inset 0 1px 0 var(--frost-stronger),
+    0 0 0 4px oklch(0.62 0.180 158 / 0.18);
+}
+
+.lib-filters__label {
+  font-size: 0.625rem;
+  color: var(--text-subtle);
+  letter-spacing: var(--tr-eyebrow);
+  pointer-events: none;
+}
+
+/* Strip the native chrome and let the chip wrap the <select>. */
+.lib-filters__select {
+  appearance: none;
+  -webkit-appearance: none;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  padding: var(--s-1) var(--s-2) var(--s-1) 0;
+  margin: 0;
+  outline: none;
+  cursor: pointer;
+  /* Native dropdown popup paints under the chip; ensure it isn't clipped
+     by the chip's border-radius. */
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+.lib-filters__select:focus-visible {
+  outline: none;
+}
+
+/* Native option list inherits the OS popup; only the closed-state
+   widget is styled. Options stay readable in dark mode because we set
+   color-scheme: dark globally on :root. */
+.lib-filters__select option {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.lib-filters__chevron {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--text-subtle);
+  letter-spacing: 0;
+  pointer-events: none;
+}
+
+@media (max-width: 720px) {
+  .lib-filters {
+    /* Mobile alphabet strip is narrower; less right-padding needed. */
+    padding-right: calc(var(--s-5) + 32px);
+  }
+}
+
+@media (max-width: 520px) {
+  .lib-filters {
+    padding: 0 var(--s-3);
+    padding-right: calc(var(--s-3) + 32px);
+    gap: var(--s-2);
+  }
+
+  .lib-filters__chip {
+    height: 32px;
+    padding: 0 var(--s-2);
+  }
+}
+
+@media (max-width: 480px) {
+  .lib-filters {
+    /* Alphabet strip is hidden at this width; no right-pad needed. */
+    padding-right: var(--s-3);
+  }
+}

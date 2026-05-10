@@ -5,6 +5,7 @@ import { ResultGrid } from '../search/ResultGrid'
 import { MediaCard } from '../search/MediaCard'
 import { ModeToggle, type Mode } from '../search/ModeToggle'
 import { LibraryAlphabet, libraryBucket, type LibraryLetter } from '../library/LibraryAlphabet'
+import { LibraryFilters, type FilterOption } from '../library/LibraryFilters'
 import { AddMovieModal } from '../add/AddMovieModal'
 import { Toast } from '../toast/Toast'
 import { LoadingPulse } from '../feedback/LoadingPulse'
@@ -34,10 +35,35 @@ function fmtRuntime(min?: number) {
   return h > 0 ? `${h}h ${m}m` : `${m}m`
 }
 
+type MovieSort = 'title-asc' | 'title-desc' | 'year-desc' | 'year-asc' | 'runtime-desc' | 'runtime-asc' | 'studio'
+type MovieStatus = 'all' | 'released' | 'announced' | 'inCinemas' | 'tba'
+
+const MOVIE_SORT_OPTIONS: ReadonlyArray<FilterOption<MovieSort>> = [
+  { value: 'title-asc',    label: 'Title (A–Z)' },
+  { value: 'title-desc',   label: 'Title (Z–A)' },
+  { value: 'year-desc',    label: 'Year (newest)' },
+  { value: 'year-asc',     label: 'Year (oldest)' },
+  { value: 'runtime-desc', label: 'Runtime (longest)' },
+  { value: 'runtime-asc',  label: 'Runtime (shortest)' },
+  { value: 'studio',       label: 'Studio' },
+]
+
+const MOVIE_STATUS_OPTIONS: ReadonlyArray<FilterOption<MovieStatus>> = [
+  { value: 'all',       label: 'All status' },
+  { value: 'released',  label: 'Released' },
+  { value: 'inCinemas', label: 'In cinemas' },
+  { value: 'announced', label: 'Announced' },
+  { value: 'tba',       label: 'TBA' },
+]
+
+const stripArticle = (s: string) => s.replace(/^(the|a|an)\s+/i, '')
+
 export function MoviesTab() {
   const [mode, setMode] = useState<Mode>('discover')
   const [query, setQuery] = useState('')
   const [letter, setLetter] = useState<LibraryLetter>('all')
+  const [sort, setSort] = useState<MovieSort>('title-asc')
+  const [status, setStatus] = useState<MovieStatus>('all')
   const debouncedQuery = useDebounced(query, 300)
   const search = useMovieSearch(mode === 'discover' ? debouncedQuery : '')
   const library = useRadarrLibrary()
@@ -57,11 +83,41 @@ export function MoviesTab() {
   const textFilteredLibrary = useMemo(() => {
     if (!library.data) return []
     const q = query.trim().toLowerCase()
-    const items = q ? library.data.filter((m) => m.title.toLowerCase().includes(q)) : library.data
-    return [...items].sort((a, b) =>
-      a.title.replace(/^(the|a|an)\s+/i, '').localeCompare(b.title.replace(/^(the|a|an)\s+/i, ''))
-    )
-  }, [library.data, query])
+    let items = q
+      ? library.data.filter((m) => m.title.toLowerCase().includes(q))
+      : library.data.slice()
+    if (status !== 'all') {
+      items = items.filter((m) => (m.status ?? '').toLowerCase() === status.toLowerCase())
+    }
+    const sorted = items.slice()
+    switch (sort) {
+      case 'title-asc':
+        sorted.sort((a, b) => stripArticle(a.title).localeCompare(stripArticle(b.title)))
+        break
+      case 'title-desc':
+        sorted.sort((a, b) => stripArticle(b.title).localeCompare(stripArticle(a.title)))
+        break
+      case 'year-desc':
+        sorted.sort((a, b) => (b.year ?? 0) - (a.year ?? 0) || stripArticle(a.title).localeCompare(stripArticle(b.title)))
+        break
+      case 'year-asc':
+        sorted.sort((a, b) => (a.year ?? 0) - (b.year ?? 0) || stripArticle(a.title).localeCompare(stripArticle(b.title)))
+        break
+      case 'runtime-desc':
+        sorted.sort((a, b) => (b.runtime ?? 0) - (a.runtime ?? 0) || stripArticle(a.title).localeCompare(stripArticle(b.title)))
+        break
+      case 'runtime-asc':
+        sorted.sort((a, b) => (a.runtime ?? 0) - (b.runtime ?? 0) || stripArticle(a.title).localeCompare(stripArticle(b.title)))
+        break
+      case 'studio':
+        sorted.sort((a, b) =>
+          (a.studio ?? '~').localeCompare(b.studio ?? '~') ||
+          stripArticle(a.title).localeCompare(stripArticle(b.title))
+        )
+        break
+    }
+    return sorted
+  }, [library.data, query, status, sort])
 
   const availableLetters = useMemo(
     () => new Set(textFilteredLibrary.map((m) => libraryBucket(m.title))),
@@ -122,13 +178,26 @@ export function MoviesTab() {
         />
       ) : (
         <>
-          {!library.isPending && !library.error && textFilteredLibrary.length > 0 && (
-            <LibraryAlphabet
-              available={availableLetters}
-              value={letter}
-              onChange={setLetter}
-              totalCount={textFilteredLibrary.length}
-            />
+          {!library.isPending && !library.error && (library.data?.length ?? 0) > 0 && (
+            <>
+              <LibraryFilters
+                sortOptions={MOVIE_SORT_OPTIONS}
+                sortValue={sort}
+                onSortChange={setSort}
+                statusLabel="Status"
+                statusOptions={MOVIE_STATUS_OPTIONS}
+                statusValue={status}
+                onStatusChange={setStatus}
+              />
+              {textFilteredLibrary.length > 0 && (
+                <LibraryAlphabet
+                  available={availableLetters}
+                  value={letter}
+                  onChange={setLetter}
+                  totalCount={textFilteredLibrary.length}
+                />
+              )}
+            </>
           )}
           <LibraryResults
             query={query}

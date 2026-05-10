@@ -5,6 +5,7 @@ import { ResultGrid } from '../search/ResultGrid'
 import { MediaCard } from '../search/MediaCard'
 import { ModeToggle, type Mode } from '../search/ModeToggle'
 import { LibraryAlphabet, libraryBucket, type LibraryLetter } from '../library/LibraryAlphabet'
+import { LibraryFilters, type FilterOption } from '../library/LibraryFilters'
 import { AddSeriesModal } from '../add/AddSeriesModal'
 import { Toast } from '../toast/Toast'
 import { LoadingPulse } from '../feedback/LoadingPulse'
@@ -27,10 +28,32 @@ function pickLibraryPoster(item: Series): string | undefined {
   return img?.remoteUrl ?? img?.url
 }
 
+type TvSort = 'title-asc' | 'title-desc' | 'year-desc' | 'year-asc' | 'network'
+type TvStatus = 'all' | 'continuing' | 'ended' | 'upcoming'
+
+const TV_SORT_OPTIONS: ReadonlyArray<FilterOption<TvSort>> = [
+  { value: 'title-asc',  label: 'Title (A–Z)' },
+  { value: 'title-desc', label: 'Title (Z–A)' },
+  { value: 'year-desc',  label: 'Year (newest)' },
+  { value: 'year-asc',   label: 'Year (oldest)' },
+  { value: 'network',    label: 'Network' },
+]
+
+const TV_STATUS_OPTIONS: ReadonlyArray<FilterOption<TvStatus>> = [
+  { value: 'all',         label: 'All status' },
+  { value: 'continuing',  label: 'Continuing' },
+  { value: 'ended',       label: 'Ended' },
+  { value: 'upcoming',    label: 'Upcoming' },
+]
+
+const stripArticle = (s: string) => s.replace(/^(the|a|an)\s+/i, '')
+
 export function TvTab() {
   const [mode, setMode] = useState<Mode>('discover')
   const [query, setQuery] = useState('')
   const [letter, setLetter] = useState<LibraryLetter>('all')
+  const [sort, setSort] = useState<TvSort>('title-asc')
+  const [status, setStatus] = useState<TvStatus>('all')
   const debouncedQuery = useDebounced(query, 300)
   const search = useSeriesSearch(mode === 'discover' ? debouncedQuery : '')
   const library = useSonarrLibrary()
@@ -47,18 +70,41 @@ export function TvTab() {
     return map
   }, [library.data])
 
-  // Text-filtered library, sorted with leading articles stripped (Plex
-  // behavior — "The Mandalorian" sorts under M, "An American Werewolf"
-  // sorts under A). The alphabet bucket then runs against the same
-  // article-stripped key, so what you see in the bar matches the sort.
+  // Text + status filter, then sort. Article-stripped sort key is used
+  // for title sorts (Plex behavior — "The Mandalorian" sorts under M).
+  // Alphabet bucket runs against the same key so the bar matches the sort.
   const textFilteredLibrary = useMemo(() => {
     if (!library.data) return []
     const q = query.trim().toLowerCase()
-    const items = q ? library.data.filter((s) => s.title.toLowerCase().includes(q)) : library.data
-    return [...items].sort((a, b) =>
-      a.title.replace(/^(the|a|an)\s+/i, '').localeCompare(b.title.replace(/^(the|a|an)\s+/i, ''))
-    )
-  }, [library.data, query])
+    let items = q
+      ? library.data.filter((s) => s.title.toLowerCase().includes(q))
+      : library.data.slice()
+    if (status !== 'all') {
+      items = items.filter((s) => (s.status ?? '').toLowerCase() === status)
+    }
+    const sorted = items.slice()
+    switch (sort) {
+      case 'title-asc':
+        sorted.sort((a, b) => stripArticle(a.title).localeCompare(stripArticle(b.title)))
+        break
+      case 'title-desc':
+        sorted.sort((a, b) => stripArticle(b.title).localeCompare(stripArticle(a.title)))
+        break
+      case 'year-desc':
+        sorted.sort((a, b) => (b.year ?? 0) - (a.year ?? 0) || stripArticle(a.title).localeCompare(stripArticle(b.title)))
+        break
+      case 'year-asc':
+        sorted.sort((a, b) => (a.year ?? 0) - (b.year ?? 0) || stripArticle(a.title).localeCompare(stripArticle(b.title)))
+        break
+      case 'network':
+        sorted.sort((a, b) =>
+          (a.network ?? '~').localeCompare(b.network ?? '~') ||
+          stripArticle(a.title).localeCompare(stripArticle(b.title))
+        )
+        break
+    }
+    return sorted
+  }, [library.data, query, status, sort])
 
   const availableLetters = useMemo(
     () => new Set(textFilteredLibrary.map((s) => libraryBucket(s.title))),
@@ -122,13 +168,26 @@ export function TvTab() {
         />
       ) : (
         <>
-          {!library.isPending && !library.error && textFilteredLibrary.length > 0 && (
-            <LibraryAlphabet
-              available={availableLetters}
-              value={letter}
-              onChange={setLetter}
-              totalCount={textFilteredLibrary.length}
-            />
+          {!library.isPending && !library.error && (library.data?.length ?? 0) > 0 && (
+            <>
+              <LibraryFilters
+                sortOptions={TV_SORT_OPTIONS}
+                sortValue={sort}
+                onSortChange={setSort}
+                statusLabel="Status"
+                statusOptions={TV_STATUS_OPTIONS}
+                statusValue={status}
+                onStatusChange={setStatus}
+              />
+              {textFilteredLibrary.length > 0 && (
+                <LibraryAlphabet
+                  available={availableLetters}
+                  value={letter}
+                  onChange={setLetter}
+                  totalCount={textFilteredLibrary.length}
+                />
+              )}
+            </>
           )}
           <LibraryResults
             query={query}
