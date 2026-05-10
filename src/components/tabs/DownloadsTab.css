@@ -7,20 +7,24 @@
   width: 100%;
 }
 
+/* Header / history / error get the solid panel. Queue is intentionally
+   transparent — the QueueRow children are the panels; double-wrapping
+   would just produce nested boxes. */
 .downloads-tab__header,
 .downloads-tab__history,
-.downloads-tab__error,
-.downloads-tab__queue {
+.downloads-tab__error {
   margin: 0 var(--s-5);
   padding: var(--s-4) var(--s-5);
-  /* Fully opaque — no kraken bleed-through. The tabs are functional
-     surfaces, not atmosphere; readability beats vibe here. */
   background: oklch(0.16 0.014 158);
   border: 1px solid color-mix(in oklch, var(--emerald) 25%, var(--border));
   border-radius: var(--r-card, 12px);
   box-shadow:
     inset 0 1px 0 var(--frost),
     0 24px 48px -24px var(--ink);
+}
+
+.downloads-tab__queue {
+  margin: 0 var(--s-5);
 }
 
 .downloads-tab__header {
@@ -160,9 +164,11 @@
 
   .downloads-tab__header,
   .downloads-tab__history,
-  .downloads-tab__error,
-  .downloads-tab__queue {
+  .downloads-tab__error {
     margin: 0 var(--s-3);
     padding: var(--s-3);
+  }
+  .downloads-tab__queue {
+    margin: 0 var(--s-3);
   }
 }
