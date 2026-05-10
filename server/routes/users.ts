@@ -11,7 +11,12 @@
 
 import { Hono } from 'hono'
 import { requireAdmin, type Env } from '../middleware/auth.js'
-import { getUser, listAcceptedUsers, listPendingInvites } from '../plex.js'
+import {
+  getUser,
+  listAcceptedUsers,
+  listPendingInvites,
+  listSharedServerInvitees,
+} from '../plex.js'
 import { env } from '../env.js'
 
 export const users = new Hono<Env>()
@@ -58,12 +63,18 @@ users.get('/', async (c) => {
   }
 
   try {
-    // Pending invites are best-effort: if the call fails (timeout, Plex
-    // returning a wrapper shape we don't recognize, etc.) the route
-    // still returns owner + accepted users so the tab keeps working.
-    const [me, accepted, pending] = await Promise.all([
+    // Pull from three sources in parallel and merge. The legacy XML
+    // endpoint sometimes misses users added through Plex's newer share
+    // flow, so /api/v2/shared_servers backstops it. Pending invites
+    // come from a third endpoint. All three are best-effort: if any
+    // single source fails, the others still render.
+    const [me, accepted, shared, pending] = await Promise.all([
       getUser(session.plexAuthToken),
       listAcceptedUsers(session.plexAuthToken),
+      listSharedServerInvitees(session.plexAuthToken).catch((err) => {
+        console.warn('users: listSharedServerInvitees failed, omitting:', err)
+        return []
+      }),
       listPendingInvites(session.plexAuthToken).catch((err) => {
         console.warn('users: listPendingInvites failed, omitting:', err)
         return []
@@ -79,29 +90,40 @@ users.get('/', async (c) => {
       relation: 'owner' as const,
       status: 'accepted' as const,
     }
-    // Merge accepted + pending, but suppress pending entries that have
-    // already been accepted (Plex may briefly list both during the gap
-    // between accept and cache refresh).
-    const acceptedKeys = new Set(
-      accepted.flatMap((u) => [u.email?.toLowerCase(), u.username.toLowerCase()].filter(Boolean) as string[]),
-    )
-    const pendingFiltered = pending.filter((p) => {
-      const e = p.email?.toLowerCase()
-      const u = p.username.toLowerCase()
-      return !(e && acceptedKeys.has(e)) && !(u && acceptedKeys.has(u))
-    })
-    const others = [...accepted, ...pendingFiltered]
-      .filter((u) => u.id !== me.id && (u.username || u.title))
-      .map((u) => ({
-        id: u.id,
-        username: u.username,
-        title: u.title ?? u.username,
-        email: u.email ?? null,
-        thumb: u.thumb ?? null,
-        role: roleFor(u.username),
-        relation: 'friend' as const,
-        status: u.status,
-      }))
+    // Merge sources, deduping by user id (preferred) then by email or
+    // username (lowercased). Status precedence: accepted > pending —
+    // so if a user appears as accepted in any source, they're accepted.
+    const byKey = new Map<string, typeof accepted[number]>()
+    const keyFor = (u: { id: number; email?: string | null; username: string }) =>
+      u.id > 0 ? `id:${u.id}` : u.email ? `e:${u.email.toLowerCase()}` : `u:${u.username.toLowerCase()}`
+    const ingest = (list: typeof accepted) => {
+      for (const u of list) {
+        if (u.id === me.id) continue
+        if (!u.username && !u.title) continue
+        const k = keyFor(u)
+        const existing = byKey.get(k)
+        if (!existing) {
+          byKey.set(k, u)
+        } else if (existing.status === 'pending' && u.status === 'accepted') {
+          byKey.set(k, { ...existing, ...u, status: 'accepted' })
+        }
+      }
+    }
+    // Order matters: accepted (legacy XML) first, then modern shares,
+    // then pending — earlier sources are kept and only upgraded.
+    ingest(accepted)
+    ingest(shared)
+    ingest(pending)
+    const others = [...byKey.values()].map((u) => ({
+      id: u.id,
+      username: u.username,
+      title: u.title ?? u.username,
+      email: u.email ?? null,
+      thumb: u.thumb ?? null,
+      role: roleFor(u.username),
+      relation: 'friend' as const,
+      status: u.status,
+    }))
     return c.json({ users: [owner, ...others] })
   } catch (e) {
     return c.json({ error: 'plex_lookup_failed', detail: String(e) }, 502)

@@ -220,6 +220,76 @@ export async function listPendingInvites(authToken: string): Promise<PlexFriend[
     .filter((u): u is PlexFriend => u !== null)
 }
 
+// Modern share endpoint — returns share records the token holder has
+// granted (owned shares) and ones granted to them. We want the former
+// for the Users tab. Each record nests the invitee's profile under
+// `.invited`. python-plexapi mirrors this with `rtag='sharedServers'`,
+// so the response can also be wrapped in { sharedServers: [...] }.
+type SharedServerRecord = {
+  id?: number
+  ownerId?: number
+  accepted?: boolean
+  owned?: boolean
+  invitedId?: number
+  invited?: {
+    id?: number
+    uuid?: string
+    title?: string
+    username?: string
+    friendlyName?: string
+    email?: string | null
+    thumb?: string | null
+  }
+}
+
+export async function listSharedServerInvitees(authToken: string): Promise<PlexFriend[]> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 5000)
+  let res: Response
+  try {
+    res = await fetch(`${PLEX_BASE}/shared_servers`, {
+      headers: { ...baseHeaders(), 'X-Plex-Token': authToken },
+      signal: controller.signal,
+    })
+  } finally {
+    clearTimeout(timer)
+  }
+  if (res.status === 404) return []
+  if (!res.ok) throw new Error(`plex.listSharedServerInvitees failed: ${res.status}`)
+  const raw = (await res.json().catch(() => null)) as unknown
+  const records: SharedServerRecord[] = Array.isArray(raw)
+    ? (raw as SharedServerRecord[])
+    : Array.isArray((raw as { sharedServers?: unknown })?.sharedServers)
+      ? ((raw as { sharedServers: SharedServerRecord[] }).sharedServers)
+      : []
+  return records
+    .map((r) => {
+      const inv = r.invited ?? {}
+      const id =
+        typeof inv.id === 'number' && Number.isFinite(inv.id)
+          ? inv.id
+          : typeof r.invitedId === 'number' && Number.isFinite(r.invitedId)
+            ? r.invitedId
+            : undefined
+      const email = inv.email ?? null
+      const title = inv.friendlyName || inv.title || inv.username || email || ''
+      const username = inv.username || email || ''
+      if (!title && !username) return null
+      return {
+        id: id ?? -(stableHash(email || title || username) >>> 0),
+        username,
+        title,
+        email,
+        thumb: inv.thumb ?? null,
+        // Treat as accepted if the share record says so; pending
+        // otherwise. The legacy /api/users source still wins via the
+        // merge in the route handler.
+        status: r.accepted === false ? 'pending' : 'accepted',
+      } satisfies PlexFriend
+    })
+    .filter((u): u is PlexFriend => u !== null)
+}
+
 function stableHash(s: string): number {
   let h = 0
   for (let i = 0; i < s.length; i++) {
