@@ -6,9 +6,10 @@ import { apiUrl } from '../api/base'
 export type Limits = {
   minFreeGb: number
   maxMovieGb: number
+  maxTvGbPerEpisode: number
 }
 
-const DEFAULT_LIMITS: Limits = { minFreeGb: 100, maxMovieGb: 10 }
+const DEFAULT_LIMITS: Limits = { minFreeGb: 100, maxMovieGb: 10, maxTvGbPerEpisode: 5 }
 
 export function useLimits() {
   return useQuery({

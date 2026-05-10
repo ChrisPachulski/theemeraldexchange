@@ -78,6 +78,14 @@ export const env = {
   maxMovieBytes: Number(process.env.MAX_MOVIE_SIZE_GB ?? 10) * GB,
   maxMovieGb: Number(process.env.MAX_MOVIE_SIZE_GB ?? 10),
 
+  // Hard cap on TV release size, expressed per episode. A release passes
+  // when (size / episodeCount) ≤ this value. Single-episode caps at the
+  // full per-episode value; a 10-episode season pack caps at 10× the
+  // value. 5 GB/episode blocks 4K HDR while letting 1080p Bluray rips
+  // through, matching the curated "Choose Me" profile we run.
+  maxTvBytesPerEpisode: Number(process.env.MAX_TV_GB_PER_EPISODE ?? 5) * GB,
+  maxTvGbPerEpisode: Number(process.env.MAX_TV_GB_PER_EPISODE ?? 5),
+
   // Optional TMDB v3 API key. When set, the detail modal fetches cast
   // for TV shows (via TVDB→TMDB find) and movies. Without it, the cast
   // section is hidden and the modal still shows everything Sonarr/Radarr

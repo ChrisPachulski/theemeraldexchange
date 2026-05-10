@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { sonarr, type SeriesSearchResult } from '../../lib/api/sonarr'
 import { useSonarrProfiles, useSonarrRootFolders } from '../../lib/hooks/useSonarrLibrary'
 import { useAuth } from '../../lib/auth'
+import { useLimits } from '../../lib/hooks/useLimits'
 import './AddSeriesModal.css'
 
 // Pick "Choose Me" by name when present; otherwise fall back to whatever
@@ -28,6 +29,8 @@ export function AddSeriesModal({ series, onClose, onAdded }: Props) {
   const folders = useSonarrRootFolders()
   const qc = useQueryClient()
   const { isAdmin } = useAuth()
+  const limits = useLimits()
+  const maxTvGb = limits.data?.maxTvGbPerEpisode ?? 5
 
   // userChoice = the value the user has explicitly selected. If they haven't,
   // we fall through to the first available value from the underlying service.
@@ -134,6 +137,14 @@ export function AddSeriesModal({ series, onClose, onAdded }: Props) {
       onClose={onClose}
     >
       <div className="add-series__panel">
+        <span
+          className="add-series__info"
+          tabIndex={0}
+          aria-label={`Episodes are forced below the ${maxTvGb} GB threshold`}
+          data-tooltip={`Episodes are forced below the ${maxTvGb} GB threshold`}
+        >
+          i
+        </span>
         <header className="add-series__header">
           <p className="add-series__eyebrow">[ Add to library ]</p>
           <h2 className="add-series__title">

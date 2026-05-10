@@ -51,6 +51,7 @@ app.get('/api/limits', (c) =>
   c.json({
     minFreeGb: env.minFreeBytes / (1024 * 1024 * 1024),
     maxMovieGb: env.maxMovieGb,
+    maxTvGbPerEpisode: env.maxTvGbPerEpisode,
   }),
 )
 
