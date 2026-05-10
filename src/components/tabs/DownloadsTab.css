@@ -208,6 +208,13 @@
   gap: var(--s-3);
 }
 
+/* Five-cell variant: kicks in when an active TV download adds the
+   Episode Size box. Same gap, just one more column on wide screens —
+   the small-viewport break below collapses both variants to 2 cols. */
+.downloads-tab__stats--five {
+  grid-template-columns: repeat(5, 1fr);
+}
+
 .downloads-tab__stat {
   display: grid;
   gap: var(--s-1);
@@ -246,7 +253,8 @@
 }
 
 @media (max-width: 720px) {
-  .downloads-tab__stats {
+  .downloads-tab__stats,
+  .downloads-tab__stats--five {
     grid-template-columns: repeat(2, 1fr);
     gap: var(--s-2);
   }

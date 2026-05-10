@@ -28,6 +28,10 @@ forwardRead('/api/v3/qualityprofile')
 forwardRead('/api/v3/rootfolder')
 forwardRead('/api/v3/series')
 forwardRead('/api/v3/series/lookup')
+// Read-only — used by DownloadsTab to detect season clusters
+// (multiple Sonarr queue entries against the same series/season) so
+// the active card can label totals as Season Size + Episode Size.
+forwardRead('/api/v3/queue')
 
 // Per-episode size cap for TV grabs. Mirrors the movie cap. A release
 // passes when (size / episodeCount) ≤ maxTvBytesPerEpisode. We disable
