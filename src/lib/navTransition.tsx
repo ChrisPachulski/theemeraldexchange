@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from 'react'
 import { useRoute, type Route } from './router'
+import { useAuth } from './auth'
 import './navTransition.css'
 
 // One-shot nav transition + on-demand replay.
@@ -53,6 +54,7 @@ const NavTransitionContext = createContext<Ctx | null>(null)
 
 export function NavTransitionProvider({ children }: { children: ReactNode }) {
   const [route, navigate] = useRoute()
+  const { isAdmin } = useAuth()
   const [active, setActive] = useState<Active | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
 
@@ -75,6 +77,15 @@ export function NavTransitionProvider({ children }: { children: ReactNode }) {
   const transitionTo = (next: Route) => {
     if (active !== null) return
     if (next === route) return
+    // Admins skip the splice flourish entirely — they nav between
+    // tabs frequently for ops work and the wait gets in the way.
+    // Still mark it played so a non-admin signing in afterward
+    // doesn't get an unexpected first-play.
+    if (isAdmin) {
+      markPlayed()
+      navigate(next)
+      return
+    }
     if (hasPlayed()) {
       navigate(next)
       return
