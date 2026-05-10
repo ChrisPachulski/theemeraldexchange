@@ -6,6 +6,7 @@ import { MediaCard } from '../search/MediaCard'
 import { ModeToggle, type Mode } from '../search/ModeToggle'
 import { LibraryAlphabet, libraryBucket, type LibraryLetter } from '../library/LibraryAlphabet'
 import { LibraryFilters, type FilterOption } from '../library/LibraryFilters'
+import { DetailModal, type DetailMeta } from '../detail/DetailModal'
 import { AddSeriesModal } from '../add/AddSeriesModal'
 import { Toast } from '../toast/Toast'
 import { LoadingPulse } from '../feedback/LoadingPulse'
@@ -26,6 +27,43 @@ function pickSearchPoster(item: SeriesSearchResult): string | undefined {
 function pickLibraryPoster(item: Series): string | undefined {
   const img = item.images?.find((i) => i.coverType === 'poster')
   return img?.remoteUrl ?? img?.url
+}
+
+function pickFanart(item: SeriesSearchResult | Series): string | undefined {
+  const img = item.images?.find((i) => i.coverType === 'fanart')
+  return img?.remoteUrl ?? img?.url
+}
+
+// Build the Plex-style metadata rows shared by Discover + Library views.
+function buildSeriesMeta(item: SeriesSearchResult | Series): DetailMeta[] {
+  const rows: DetailMeta[] = []
+  if (item.network) rows.push({ label: 'Network', value: item.network })
+  if (item.status) rows.push({ label: 'Status', value: item.status })
+  if (item.firstAired) {
+    const d = new Date(item.firstAired)
+    if (!isNaN(d.getTime())) rows.push({ label: 'First aired', value: d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) })
+  }
+  if (item.runtime) rows.push({ label: 'Runtime', value: `${item.runtime} min` })
+  if (item.certification) rows.push({ label: 'Rated', value: item.certification })
+  const stats = item.statistics
+  if (stats?.seasonCount) rows.push({ label: 'Seasons', value: String(stats.seasonCount) })
+  if (stats?.episodeCount) {
+    const total = stats.totalEpisodeCount ?? stats.episodeCount
+    rows.push({ label: 'Episodes', value: total === stats.episodeCount ? String(stats.episodeCount) : `${stats.episodeCount} of ${total}` })
+  }
+  if (stats?.sizeOnDisk && stats.sizeOnDisk > 0) {
+    const gb = stats.sizeOnDisk / (1024 ** 3)
+    rows.push({ label: 'On disk', value: gb >= 1 ? `${gb.toFixed(1)} GB` : `${(stats.sizeOnDisk / (1024 ** 2)).toFixed(0)} MB` })
+  }
+  if (item.imdbId) rows.push({ label: 'IMDb', value: item.imdbId })
+  rows.push({ label: 'TVDB', value: String(item.tvdbId) })
+  return rows
+}
+
+function fmtSeriesRating(item: SeriesSearchResult): string | undefined {
+  const r = item.ratings
+  if (!r?.value) return undefined
+  return r.votes ? `${r.value.toFixed(1)} (${r.votes.toLocaleString()} votes)` : r.value.toFixed(1)
 }
 
 type TvSort = 'title-asc' | 'title-desc' | 'year-desc' | 'year-asc' | 'network'
@@ -62,6 +100,7 @@ export function TvTab() {
   const { isAdmin } = useAuth()
 
   const [adding, setAdding] = useState<SeriesSearchResult | null>(null)
+  const [viewing, setViewing] = useState<SeriesSearchResult | Series | null>(null)
   const [toast, setToast] = useState<string | null>(null)
 
   const libraryByTvdb = useMemo(() => {
@@ -122,20 +161,14 @@ export function TvTab() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['sonarr', 'series'] }),
   })
 
+  // Card click in either mode now opens the detail modal first. The
+  // modal's action footer fires the underlying add/remove flows.
   const handleSearchClick = (item: SeriesSearchResult) => {
     const inLib = libraryByTvdb.get(item.tvdbId)
-    if (!inLib) {
-      setAdding(item)
-      return
-    }
-    // Removing a series from the library is admin-only. Users get a
-    // visual confirmation that the title is already tracked, no-op
-    // beyond that.
-    if (!isAdmin) {
-      setToast(`${inLib.title} is already in your library.`)
-      return
-    }
-    confirmRemove(inLib)
+    setViewing(inLib ?? item)
+  }
+  const handleLibraryClick = (s: Series) => {
+    setViewing(s)
   }
 
   const confirmRemove = (s: Series) => {
@@ -195,7 +228,7 @@ export function TvTab() {
             loading={library.isPending}
             error={library.error}
             items={filteredLibrary}
-            onCardClick={isAdmin ? confirmRemove : () => {}}
+            onCardClick={handleLibraryClick}
           />
         </>
       )}
@@ -224,6 +257,40 @@ export function TvTab() {
         series={adding}
         onClose={() => setAdding(null)}
         onAdded={(title) => setToast(`${title} added to library`)}
+      />
+
+      <DetailModal
+        open={viewing !== null}
+        onClose={() => setViewing(null)}
+        kind="TV Show"
+        title={viewing?.title ?? ''}
+        year={viewing?.year}
+        poster={viewing ? (
+          ('id' in viewing ? pickLibraryPoster(viewing) : pickSearchPoster(viewing))
+        ) : undefined}
+        backdrop={viewing ? pickFanart(viewing) : undefined}
+        metaStrip={viewing ? [
+          viewing.network,
+          viewing.status,
+          viewing.runtime ? `${viewing.runtime}m` : undefined,
+          viewing.certification,
+        ].filter((x): x is string => Boolean(x)) : []}
+        genres={viewing?.genres}
+        rating={viewing ? fmtSeriesRating(viewing) : undefined}
+        overview={viewing?.overview}
+        meta={viewing ? buildSeriesMeta(viewing) : []}
+        inLibrary={viewing !== null && 'id' in viewing}
+        canRemove={isAdmin}
+        onAdd={viewing && !('id' in viewing) ? () => {
+          const item = viewing as SeriesSearchResult
+          setViewing(null)
+          setAdding(item)
+        } : undefined}
+        onRemove={viewing && 'id' in viewing ? () => {
+          const s = viewing as Series
+          setViewing(null)
+          confirmRemove(s)
+        } : undefined}
       />
 
       <Toast message={toast} onDone={() => setToast(null)} />

@@ -1,0 +1,386 @@
+/* Plex-style item-detail modal — large, takes over most of the viewport,
+   renders the full plot + metadata so the household can read about a
+   show or movie before deciding to add it. */
+
+.detail {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  display: grid;
+  place-items: center;
+}
+
+.detail::backdrop {
+  background: var(--scrim);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.detail__panel {
+  position: relative;
+  width: min(960px, calc(100vw - var(--s-5)));
+  max-height: calc(100vh - var(--s-7));
+  background: oklch(0.18 0.014 158);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow:
+    inset 0 1px 0 var(--frost),
+    0 40px 80px -28px var(--ink);
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  animation: detail-in var(--dur-mid) var(--ease);
+}
+
+@keyframes detail-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.985); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Backdrop image bleeds across the top, fading out so the hero text
+   sits cleanly on the panel surface. */
+.detail__backdrop {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 320px;
+  background-size: cover;
+  background-position: center 30%;
+  pointer-events: none;
+  opacity: 0.3;
+  mask-image: linear-gradient(to bottom, black 0%, black 40%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black 0%, black 40%, transparent 100%);
+}
+
+.detail__close {
+  position: absolute;
+  top: var(--s-3);
+  right: var(--s-3);
+  z-index: 2;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: color-mix(in oklch, var(--surface) 90%, transparent);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.detail__close:hover {
+  border-color: var(--emerald);
+  color: var(--emerald);
+}
+
+/* Hero — poster on the left, title block on the right. */
+.detail__hero {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 168px 1fr;
+  gap: var(--s-5);
+  padding: var(--s-6) var(--s-6) var(--s-4);
+}
+
+.detail__poster {
+  width: 168px;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border);
+  box-shadow: 0 18px 36px -22px var(--ink);
+}
+
+.detail__poster--fallback {
+  display: grid;
+  place-items: center;
+  background: var(--surface-2);
+  font-family: var(--font-display);
+  font-size: 3rem;
+  font-weight: var(--w-display);
+  color: var(--text-subtle);
+}
+
+.detail__head {
+  display: grid;
+  align-content: start;
+  gap: var(--s-2);
+}
+
+.detail__eyebrow {
+  font-family: var(--font-display);
+  font-size: 0.625rem;
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--emerald);
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.detail__badge {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: var(--tr-hud);
+  text-transform: uppercase;
+  color: var(--text);
+  background: var(--emerald-bg);
+  border: 1px solid var(--emerald);
+  border-radius: var(--r-pod);
+  padding: 1px var(--s-2);
+}
+
+.detail__title {
+  font-family: var(--font-display);
+  font-size: var(--t-2xl);
+  font-weight: var(--w-display);
+  color: var(--text);
+  letter-spacing: var(--tr-display);
+  line-height: 1.05;
+  margin: 0;
+}
+
+.detail__year {
+  color: var(--text-muted);
+  font-weight: var(--w-body);
+}
+
+.detail__meta-strip {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  letter-spacing: var(--tr-hud);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 0;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--s-1);
+}
+
+.detail__meta-piece {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--s-1);
+}
+
+.detail__meta-sep {
+  color: var(--text-subtle);
+}
+
+.detail__rating {
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  color: var(--emerald);
+  margin: 0;
+  font-feature-settings: 'tnum' 1;
+}
+
+.detail__genres {
+  list-style: none;
+  margin: var(--s-1) 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1);
+}
+
+.detail__genre {
+  font-family: var(--font-display);
+  font-size: 0.625rem;
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 2px var(--s-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pod);
+}
+
+/* Body — scrollable region between hero and footer. */
+.detail__body {
+  position: relative;
+  z-index: 1;
+  overflow-y: auto;
+  padding: 0 var(--s-6) var(--s-5);
+  display: grid;
+  gap: var(--s-5);
+  scrollbar-width: thin;
+}
+
+.detail__body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.detail__body::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.detail__section-title {
+  font-family: var(--font-display);
+  font-size: 0.625rem;
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  margin: 0 0 var(--s-2);
+}
+
+.detail__overview {
+  font-size: var(--t-base);
+  line-height: 1.6;
+  color: var(--text);
+  margin: 0;
+  /* Cap line length for readability per design laws. */
+  max-width: 68ch;
+}
+
+.detail__meta-list {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--s-3) var(--s-5);
+}
+
+.detail__meta-row {
+  display: grid;
+  gap: 2px;
+}
+
+.detail__meta-key {
+  font-family: var(--font-display);
+  font-size: 0.625rem;
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-subtle);
+}
+
+.detail__meta-val {
+  font-size: var(--t-sm);
+  color: var(--text);
+  margin: 0;
+  font-feature-settings: 'tnum' 1;
+}
+
+/* Footer actions */
+.detail__actions {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s-2);
+  padding: var(--s-4) var(--s-6);
+  border-top: 1px solid var(--border);
+  background: color-mix(in oklch, var(--surface) 60%, transparent);
+}
+
+.detail__btn {
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  padding: var(--s-3) var(--s-5);
+  border-radius: var(--r-pod);
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.detail__btn--secondary {
+  color: var(--text);
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+
+.detail__btn--secondary:hover {
+  border-color: var(--text-subtle);
+  background: color-mix(in oklch, var(--surface-2) 80%, var(--text-subtle) 20%);
+}
+
+.detail__btn--primary {
+  color: var(--text);
+  background: var(--emerald-bg);
+  border-color: var(--emerald);
+}
+
+.detail__btn--primary:hover {
+  background: color-mix(in oklch, var(--emerald) 30%, var(--surface));
+}
+
+.detail__btn--danger {
+  color: var(--text);
+  background: var(--danger);
+}
+
+.detail__btn--danger:hover {
+  background: var(--danger-dim);
+}
+
+.detail__btn:focus-visible {
+  outline: 2px solid var(--emerald);
+  outline-offset: 2px;
+}
+
+@media (max-width: 720px) {
+  .detail__panel {
+    width: 100vw;
+    max-height: 100vh;
+    height: 100vh;
+    border-radius: 0;
+    border: 0;
+  }
+
+  .detail__backdrop {
+    height: 220px;
+  }
+
+  .detail__hero {
+    grid-template-columns: 120px 1fr;
+    gap: var(--s-4);
+    padding: var(--s-5) var(--s-4) var(--s-3);
+  }
+
+  .detail__poster {
+    width: 120px;
+  }
+
+  .detail__title {
+    font-size: var(--t-xl);
+  }
+
+  .detail__body {
+    padding: 0 var(--s-4) var(--s-4);
+    gap: var(--s-4);
+  }
+
+  .detail__actions {
+    padding: var(--s-3) var(--s-4);
+  }
+}
+
+@media (max-width: 480px) {
+  .detail__hero {
+    grid-template-columns: 1fr;
+  }
+
+  .detail__poster {
+    width: 100px;
+    justify-self: start;
+  }
+}

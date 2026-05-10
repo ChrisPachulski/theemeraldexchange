@@ -6,6 +6,7 @@ import { MediaCard } from '../search/MediaCard'
 import { ModeToggle, type Mode } from '../search/ModeToggle'
 import { LibraryAlphabet, libraryBucket, type LibraryLetter } from '../library/LibraryAlphabet'
 import { LibraryFilters, type FilterOption } from '../library/LibraryFilters'
+import { DetailModal, type DetailMeta } from '../detail/DetailModal'
 import { AddMovieModal } from '../add/AddMovieModal'
 import { Toast } from '../toast/Toast'
 import { LoadingPulse } from '../feedback/LoadingPulse'
@@ -33,6 +34,47 @@ function fmtRuntime(min?: number) {
   const h = Math.floor(min / 60)
   const m = min % 60
   return h > 0 ? `${h}h ${m}m` : `${m}m`
+}
+
+function pickFanart(item: MovieSearchResult | Movie): string | undefined {
+  const img = item.images?.find((i) => i.coverType === 'fanart')
+  return img?.remoteUrl ?? img?.url
+}
+
+function buildMovieMeta(item: MovieSearchResult | Movie): DetailMeta[] {
+  const rows: DetailMeta[] = []
+  if (item.studio) rows.push({ label: 'Studio', value: item.studio })
+  if (item.status) rows.push({ label: 'Status', value: item.status })
+  if (item.runtime) rows.push({ label: 'Runtime', value: fmtRuntime(item.runtime) ?? `${item.runtime}m` })
+  if (item.certification) rows.push({ label: 'Rated', value: item.certification })
+  if (item.originalTitle && item.originalTitle !== item.title) {
+    rows.push({ label: 'Original title', value: item.originalTitle })
+  }
+  for (const [label, raw] of [
+    ['In cinemas', item.inCinemas],
+    ['Digital release', item.digitalRelease],
+    ['Physical release', item.physicalRelease],
+  ] as const) {
+    if (raw) {
+      const d = new Date(raw)
+      if (!isNaN(d.getTime())) {
+        rows.push({ label, value: d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) })
+      }
+    }
+  }
+  if (item.collection?.title) rows.push({ label: 'Collection', value: item.collection.title })
+  if (item.imdbId) rows.push({ label: 'IMDb', value: item.imdbId })
+  rows.push({ label: 'TMDB', value: String(item.tmdbId) })
+  return rows
+}
+
+function fmtMovieRating(item: MovieSearchResult): string | undefined {
+  const pieces: string[] = []
+  const r = item.ratings
+  if (r?.imdb?.value) pieces.push(`${r.imdb.value.toFixed(1)} IMDb`)
+  if (r?.tmdb?.value) pieces.push(`${r.tmdb.value.toFixed(1)} TMDB`)
+  if (r?.rottenTomatoes?.value) pieces.push(`${r.rottenTomatoes.value}% RT`)
+  return pieces.length ? pieces.join(' · ') : undefined
 }
 
 type MovieSort = 'title-asc' | 'title-desc' | 'year-desc' | 'year-asc' | 'runtime-desc' | 'runtime-asc' | 'studio'
@@ -72,6 +114,7 @@ export function MoviesTab() {
   const { isAdmin } = useAuth()
 
   const [adding, setAdding] = useState<MovieSearchResult | null>(null)
+  const [viewing, setViewing] = useState<MovieSearchResult | Movie | null>(null)
   const [toast, setToast] = useState<string | null>(null)
 
   const libraryByTmdb = useMemo(() => {
@@ -137,15 +180,10 @@ export function MoviesTab() {
 
   const handleSearchClick = (item: MovieSearchResult) => {
     const inLib = libraryByTmdb.get(item.tmdbId)
-    if (!inLib) {
-      setAdding(item)
-      return
-    }
-    if (!isAdmin) {
-      setToast(`${inLib.title} is already in your library.`)
-      return
-    }
-    confirmRemove(inLib)
+    setViewing(inLib ?? item)
+  }
+  const handleLibraryClick = (m: Movie) => {
+    setViewing(m)
   }
 
   const confirmRemove = (m: Movie) => {
@@ -205,7 +243,7 @@ export function MoviesTab() {
             loading={library.isPending}
             error={library.error}
             items={filteredLibrary}
-            onCardClick={isAdmin ? confirmRemove : () => {}}
+            onCardClick={handleLibraryClick}
           />
         </>
       )}
@@ -234,6 +272,40 @@ export function MoviesTab() {
         movie={adding}
         onClose={() => setAdding(null)}
         onAdded={(title) => setToast(`${title} added to library`)}
+      />
+
+      <DetailModal
+        open={viewing !== null}
+        onClose={() => setViewing(null)}
+        kind="Movie"
+        title={viewing?.title ?? ''}
+        year={viewing?.year}
+        poster={viewing ? (
+          ('id' in viewing ? pickLibraryPoster(viewing) : pickSearchPoster(viewing))
+        ) : undefined}
+        backdrop={viewing ? pickFanart(viewing) : undefined}
+        metaStrip={viewing ? [
+          viewing.studio,
+          viewing.status,
+          fmtRuntime(viewing.runtime),
+          viewing.certification,
+        ].filter((x): x is string => Boolean(x)) : []}
+        genres={viewing?.genres}
+        rating={viewing ? fmtMovieRating(viewing) : undefined}
+        overview={viewing?.overview}
+        meta={viewing ? buildMovieMeta(viewing) : []}
+        inLibrary={viewing !== null && 'id' in viewing}
+        canRemove={isAdmin}
+        onAdd={viewing && !('id' in viewing) ? () => {
+          const item = viewing as MovieSearchResult
+          setViewing(null)
+          setAdding(item)
+        } : undefined}
+        onRemove={viewing && 'id' in viewing ? () => {
+          const m = viewing as Movie
+          setViewing(null)
+          confirmRemove(m)
+        } : undefined}
       />
 
       <Toast message={toast} onDone={() => setToast(null)} />

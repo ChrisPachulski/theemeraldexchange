@@ -41,6 +41,19 @@ export type MovieSearchResult = {
   remotePoster?: string
   images?: Array<{ coverType: string; remoteUrl?: string; url?: string }>
   runtime?: number
+  // Additional fields Radarr returns that we surface in the detail modal.
+  genres?: string[]
+  certification?: string
+  originalTitle?: string
+  inCinemas?: string
+  digitalRelease?: string
+  physicalRelease?: string
+  ratings?: {
+    imdb?: { value?: number; votes?: number }
+    tmdb?: { value?: number; votes?: number }
+    rottenTomatoes?: { value?: number }
+  }
+  collection?: { title?: string; tmdbId?: number }
 }
 
 export type Movie = MovieSearchResult & {

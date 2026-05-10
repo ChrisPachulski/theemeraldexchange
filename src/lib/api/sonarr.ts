@@ -47,6 +47,20 @@ export type SeriesSearchResult = {
   remotePoster?: string
   images?: Array<{ coverType: string; remoteUrl?: string; url?: string }>
   seasons?: Array<{ seasonNumber: number; monitored: boolean }>
+  // Additional fields Sonarr returns that we surface in the detail modal.
+  genres?: string[]
+  runtime?: number
+  certification?: string
+  firstAired?: string
+  ratings?: { value?: number; votes?: number }
+  statistics?: {
+    seasonCount?: number
+    episodeCount?: number
+    episodeFileCount?: number
+    totalEpisodeCount?: number
+    sizeOnDisk?: number
+    percentOfEpisodes?: number
+  }
 }
 
 export type Series = SeriesSearchResult & {
