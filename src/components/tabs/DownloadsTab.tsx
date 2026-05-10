@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { sab } from '../../lib/api/sab'
-import { useDownloadQueue } from '../../lib/hooks/useDownloadQueue'
+import { useDownloadQueue, useSonarrQueue } from '../../lib/hooks/useDownloadQueue'
 import { useConfirm } from '../confirm/useConfirm'
 import { QueueRow } from '../queue/QueueRow'
 import { LoadingPulse } from '../feedback/LoadingPulse'
@@ -47,6 +47,7 @@ function fmtFreeSpace(gbRaw: string | undefined): string {
 
 export function DownloadsTab() {
   const queue = useDownloadQueue()
+  const sonarrQueue = useSonarrQueue()
   const confirm = useConfirm()
   const qc = useQueryClient()
   const { isAdmin } = useAuth()
@@ -111,10 +112,54 @@ export function DownloadsTab() {
   const totalBytes = parseSabSize(sizeRaw)
   const leftBytes = parseSabSize(sizeLeftRaw)
   const downloadedBytes = Math.max(0, totalBytes - leftBytes)
+
+  // Season-cluster detection. Sonarr emits one queue record per
+  // episode — for a season pack that's a single SAB slot bundling
+  // many records under the same downloadId; for a multi-grab fallback
+  // (what HotD does today after Eweka aborts the pack) it's many SAB
+  // slots, each with its own Sonarr record, all sharing the same
+  // (seriesId, seasonNumber). Either way, the user-facing story is
+  // "downloading a season" and Episode Size = total / count.
+  const isTv = (activeSlot?.cat ?? '').toLowerCase() === 'tv'
+  const sonarrRecords = sonarrQueue.data?.records ?? []
+  const activeSonarrCtx = activeSlot
+    ? sonarrRecords.find((r) => r.downloadId === activeSlot.nzo_id)
+    : undefined
+  const clusterRecords =
+    activeSonarrCtx?.seriesId !== undefined && activeSonarrCtx.seasonNumber !== undefined
+      ? sonarrRecords.filter(
+          (r) =>
+            r.seriesId === activeSonarrCtx.seriesId &&
+            r.seasonNumber === activeSonarrCtx.seasonNumber,
+        )
+      : []
+  const clusterDownloadIds = new Set(
+    clusterRecords.map((r) => r.downloadId).filter((id): id is string => Boolean(id)),
+  )
+  const clusterBytes = slots
+    .filter((s) => clusterDownloadIds.has(s.nzo_id))
+    .reduce((sum, s) => sum + parseSabSize(s.size), 0)
+  const isSeasonCluster = isTv && clusterRecords.length > 1 && clusterBytes > 0
+  const episodeCount = isSeasonCluster ? clusterRecords.length : 1
+  // Per-episode size: the cluster's total / its episode count, or for
+  // a single TV episode, just the active slot's own size.
+  const episodeBytes = isSeasonCluster
+    ? clusterBytes / episodeCount
+    : activeSlot
+      ? parseSabSize(activeSlot.size)
+      : 0
+  // When we have a cluster, surface that as the headline total —
+  // otherwise fall back to the queue-wide sum that was already shown.
+  const totalDisplayBytes = isSeasonCluster ? clusterBytes : totalBytes
+  const totalLabel = isSeasonCluster ? 'Season size' : 'File size'
+
   const stats = [
     { label: 'Speed',       value: idle ? '—' : fmtSpeed(speedRaw) },
     { label: 'Downloaded',  value: idle ? '—' : fmtSize(downloadedBytes) },
-    { label: 'File size',   value: idle ? '—' : (sizeRaw && totalBytes > 0 ? fmtSize(totalBytes) : '—') },
+    ...(isTv && !idle
+      ? [{ label: 'Episode size', value: episodeBytes > 0 ? fmtSize(episodeBytes) : '—' }]
+      : []),
+    { label: totalLabel,    value: idle ? '—' : (totalDisplayBytes > 0 ? fmtSize(totalDisplayBytes) : '—') },
     { label: 'Available',   value: fmtFreeSpace(queue.data?.queue.diskspace1) },
   ]
 
@@ -166,7 +211,10 @@ export function DownloadsTab() {
           )}
           {isPaused && <p className="downloads-tab__paused">Queue is paused.</p>}
 
-          <ul className="downloads-tab__stats" aria-label="Download statistics">
+          <ul
+            className={`downloads-tab__stats${stats.length === 5 ? ' downloads-tab__stats--five' : ''}`}
+            aria-label="Download statistics"
+          >
             {stats.map((s) => (
               <li key={s.label} className={`downloads-tab__stat${s.value === '—' ? ' downloads-tab__stat--empty' : ''}`}>
                 <span className="downloads-tab__stat-label">{s.label}</span>
