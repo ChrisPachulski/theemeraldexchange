@@ -230,41 +230,51 @@ export async function listPendingInvites(authToken: string): Promise<PlexFriend[
     .filter((u): u is PlexFriend => u !== null)
 }
 
-// Modern share endpoint — returns share records the token holder has
-// granted (owned shares) and ones granted to them. We want the former
-// for the Users tab. Each record nests the invitee's profile under
-// `.invited`. python-plexapi mirrors this with `rtag='sharedServers'`,
-// so the response can also be wrapped in { sharedServers: [...] }.
-type SharedServerRecord = {
-  id?: number
-  ownerId?: number
-  accepted?: boolean
-  owned?: boolean
-  invitedId?: number
-  invited?: {
-    id?: number
-    uuid?: string
-    title?: string
-    username?: string
-    friendlyName?: string
-    email?: string | null
-    thumb?: string | null
+// Server-scoped share endpoint — XML, returns one <SharedServer/>
+// per share relationship the OWNER has granted on this specific
+// server. This is the endpoint python-plexapi calls in
+// MyPlexAccount.sharedServers(). Legacy /api/users misses some
+// users (e.g. recipients added through the modern web flow); this
+// endpoint catches them.
+function parseSharedServerElements(xml: string): PlexFriend[] {
+  const out: PlexFriend[] = []
+  for (const match of xml.matchAll(/<SharedServer\s+([^>]+?)\/?>/g)) {
+    const attrs: Record<string, string> = {}
+    for (const a of match[1].matchAll(/(\w+)="([^"]*)"/g)) {
+      attrs[a[1]] = unescapeXml(a[2])
+    }
+    // Identity: prefer userID (Plex account id), fall back to id.
+    const id = Number(attrs.userID || attrs.id)
+    if (!Number.isFinite(id)) continue
+    const username = attrs.username || attrs.email || ''
+    const title = attrs.username || attrs.email || ''
+    if (!username && !title) continue
+    out.push({
+      id,
+      username,
+      title,
+      email: attrs.email || null,
+      thumb: null, // legacy SharedServer doesn't carry a thumb
+      status: attrs.accepted === '0' ? 'pending' : 'accepted',
+    })
   }
+  return out
 }
 
 export async function listSharedServerInvitees(authToken: string): Promise<PlexFriend[]> {
-  // The v2 endpoint requires the server's machineIdentifier as a query
-  // param — without it Plex returns 405. PLEX_SERVER_ID holds that id.
-  // If the env var isn't set we can't query this endpoint at all, so
-  // return empty rather than throwing.
   if (!env.plexServerId) return []
-  const url = `${PLEX_BASE}/shared_servers?machineIdentifier=${encodeURIComponent(env.plexServerId)}`
+  const url = `https://plex.tv/api/servers/${encodeURIComponent(env.plexServerId)}/shared_servers?X-Plex-Token=${encodeURIComponent(authToken)}`
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 5000)
   let res: Response
   try {
     res = await fetch(url, {
-      headers: { ...baseHeaders(), 'X-Plex-Token': authToken },
+      headers: {
+        'X-Plex-Product': 'The Emerald Exchange',
+        'X-Plex-Client-Identifier': env.plexClientId,
+        'X-Plex-Token': authToken,
+        Accept: 'application/xml',
+      },
       signal: controller.signal,
     })
   } finally {
@@ -278,38 +288,12 @@ export async function listSharedServerInvitees(authToken: string): Promise<PlexF
     )
     throw new Error(`plex.listSharedServerInvitees failed: ${res.status}`)
   }
-  const raw = (await res.json().catch(() => null)) as unknown
-  const records: SharedServerRecord[] = Array.isArray(raw)
-    ? (raw as SharedServerRecord[])
-    : Array.isArray((raw as { sharedServers?: unknown })?.sharedServers)
-      ? ((raw as { sharedServers: SharedServerRecord[] }).sharedServers)
-      : []
-  return records
-    .map((r) => {
-      const inv = r.invited ?? {}
-      const id =
-        typeof inv.id === 'number' && Number.isFinite(inv.id)
-          ? inv.id
-          : typeof r.invitedId === 'number' && Number.isFinite(r.invitedId)
-            ? r.invitedId
-            : undefined
-      const email = inv.email ?? null
-      const title = inv.friendlyName || inv.title || inv.username || email || ''
-      const username = inv.username || email || ''
-      if (!title && !username) return null
-      return {
-        id: id ?? -(stableHash(email || title || username) >>> 0),
-        username,
-        title,
-        email,
-        thumb: inv.thumb ?? null,
-        // Treat as accepted if the share record says so; pending
-        // otherwise. The legacy /api/users source still wins via the
-        // merge in the route handler.
-        status: r.accepted === false ? 'pending' : 'accepted',
-      } satisfies PlexFriend
-    })
-    .filter((u): u is PlexFriend => u !== null)
+  const xml = await res.text()
+  const parsed = parseSharedServerElements(xml)
+  console.log(
+    `plex.listSharedServerInvitees: status=${res.status} bytes=${xml.length} parsed=${parsed.length} preview=${JSON.stringify(xml.slice(0, 400))}`,
+  )
+  return parsed
 }
 
 function stableHash(s: string): number {
