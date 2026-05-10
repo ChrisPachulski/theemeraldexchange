@@ -52,47 +52,48 @@ export function TopNav({ active }: Props) {
 
   return (
     <>
-      <div className="top-nav__corner">
-        <button
-          type="button"
-          className="top-nav__brand"
-          aria-label="Emerald Exchange — home"
-          onClick={() => navigate('home')}
-        >
-          <span className="top-nav__brand-mark">EMERALD</span>
-          <span className="top-nav__brand-sub">EXCHANGE</span>
-        </button>
+      <button
+        type="button"
+        className="top-nav__brand"
+        aria-label="Emerald Exchange — home"
+        onClick={() => navigate('home')}
+      >
+        <span className="top-nav__brand-mark">EMERALD</span>
+        <span className="top-nav__brand-sub">EXCHANGE</span>
+      </button>
 
-        <nav className="top-nav__tabs" role="tablist" aria-label="Primary">
-          {TABS.map((t) => (
-            <button
-              key={t.route}
-              ref={(node) => {
-                tabRefs.current[t.route] = node
-              }}
-              type="button"
-              role="tab"
-              aria-selected={active === t.route}
-              tabIndex={active === t.route ? 0 : -1}
-              className={`top-nav__tab${active === t.route ? ' top-nav__tab--active' : ''}`}
-              onClick={() => transitionTo(t.route)}
-              onKeyDown={(e) => {
-                if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return
-                e.preventDefault()
-                const i = TABS.findIndex((x) => x.route === t.route)
-                const next =
-                  e.key === 'ArrowRight'
-                    ? TABS[(i + 1) % TABS.length]
-                    : TABS[(i - 1 + TABS.length) % TABS.length]
-                transitionTo(next.route)
-                tabRefs.current[next.route]?.focus()
-              }}
-            >
-              {t.label}
-            </button>
-          ))}
-        </nav>
-      </div>
+      <nav className="top-nav__tabs" role="tablist" aria-label="Primary">
+        {/* Hide the current tab — sitting on TV Shows means the only
+            navigation actions are Movies / Downloads. The pill for the
+            page you're already on is wasted real-estate. */}
+        {TABS.filter((t) => t.route !== active).map((t) => (
+          <button
+            key={t.route}
+            ref={(node) => {
+              tabRefs.current[t.route] = node
+            }}
+            type="button"
+            role="tab"
+            tabIndex={0}
+            className="top-nav__tab"
+            onClick={() => transitionTo(t.route)}
+            onKeyDown={(e) => {
+              if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return
+              const visible = TABS.filter((x) => x.route !== active)
+              if (visible.length < 2) return
+              e.preventDefault()
+              const i = visible.findIndex((x) => x.route === t.route)
+              const next =
+                e.key === 'ArrowRight'
+                  ? visible[(i + 1) % visible.length]
+                  : visible[(i - 1 + visible.length) % visible.length]
+              tabRefs.current[next.route]?.focus()
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </nav>
 
       <div className="top-nav__right">
         <a

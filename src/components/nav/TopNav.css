@@ -1,23 +1,16 @@
 /* Tab-screen chrome.
-   Brand top-left with the three tab pills directly underneath, mirroring
-   HomeNav's brand-left / cluster-right layout. No floating center pod —
-   tab pages share the same chrome line with home so the visit feels
-   continuous when navigating between them. */
-
-.top-nav__corner {
-  position: fixed;
-  top: var(--pod-inset, 16px);
-  left: var(--pod-inset, 16px);
-  z-index: var(--z-nav, 200);
-  display: grid;
-  gap: var(--s-3);
-  justify-items: start;
-  max-width: calc(100vw - var(--pod-inset, 16px) * 2);
-}
+   Three fixed-position clusters share one horizontal band at the top of
+   the viewport: brand left, tab pills centered, Watch + UserMenu right.
+   The pill for whichever tab the user is *on* is hidden so the chrome
+   only ever offers the navigation actions that change something. */
 
 /* Brand — same treatment as HomeNav so the home → tab transition is
    visually continuous (no chrome jump). Click navigates back home. */
 .top-nav__brand {
+  position: fixed;
+  top: var(--pod-inset, 16px);
+  left: var(--pod-inset, 16px);
+  z-index: var(--z-nav, 200);
   display: inline-flex;
   align-items: baseline;
   gap: var(--s-2);
@@ -46,14 +39,24 @@
   color: var(--text);
 }
 
-/* Tab pills — horizontal row under the brand. Same pill silhouette as
-   the bottom-row entry buttons on HomeTab so the household sees one
-   button family across the whole app. */
+/* Tab pills — pinned to the top center of the viewport so they sit on
+   the same horizontal band as the brand and the Watch cluster. Same
+   pill silhouette as the bottom-row entry buttons on HomeTab so the
+   household sees one button family across the whole app. */
 .top-nav__tabs {
+  position: fixed;
+  top: var(--pod-inset, 16px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-nav, 200);
   display: inline-flex;
   align-items: center;
   gap: var(--s-2);
   flex-wrap: wrap;
+  /* Don't let the centered pills overlap the brand/right cluster on
+     narrower viewports — leave gutters wider than the brand width. */
+  max-width: calc(100vw - 320px);
+  justify-content: center;
 }
 
 .top-nav__tab {
@@ -90,16 +93,6 @@
   box-shadow:
     inset 0 1px 0 var(--frost-stronger),
     0 22px 44px -22px var(--ink),
-    0 0 24px -8px oklch(0.62 0.180 158 / 0.45);
-}
-
-.top-nav__tab--active {
-  color: var(--emerald);
-  border-color: var(--emerald);
-  background: color-mix(in oklch, var(--emerald) 14%, var(--surface));
-  box-shadow:
-    inset 0 1px 0 var(--frost-stronger),
-    0 18px 40px -22px var(--ink),
     0 0 24px -8px oklch(0.62 0.180 158 / 0.45);
 }
 
@@ -180,16 +173,23 @@
     padding: 0 var(--s-3);
     min-height: 40px;
   }
+
+  .top-nav__tabs {
+    /* Brand collapses to "EMERALD" + Watch collapses to glyph; reclaim
+       the freed gutter so the two pills don't squeeze. */
+    max-width: calc(100vw - 200px);
+  }
 }
 
 @media (max-width: 480px) {
-  .top-nav__corner {
-    gap: var(--s-2);
-  }
-
   .top-nav__tab {
     font-size: 0.6875rem;
     padding: 0 var(--s-3);
     min-height: 38px;
+  }
+
+  .top-nav__tabs {
+    max-width: calc(100vw - 160px);
+    gap: var(--s-1);
   }
 }
