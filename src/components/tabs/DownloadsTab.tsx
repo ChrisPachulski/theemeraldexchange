@@ -7,6 +7,44 @@ import { LoadingPulse } from '../feedback/LoadingPulse'
 import { useAuth } from '../../lib/auth'
 import './DownloadsTab.css'
 
+// Parse SAB's "5.5 GB" / "1024 MB" / "0" strings into bytes for arithmetic.
+// Empty / missing returns 0.
+const UNITS: Record<string, number> = { B: 1, KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3, TB: 1024 ** 4 }
+function parseSabSize(raw: string | undefined): number {
+  if (!raw) return 0
+  const m = raw.trim().match(/^([\d.]+)\s*([A-Z]+)?$/i)
+  if (!m) return 0
+  const value = parseFloat(m[1])
+  const unit = (m[2] ?? 'B').toUpperCase()
+  return value * (UNITS[unit] ?? 1)
+}
+
+function fmtSize(bytes: number): string {
+  if (bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let i = 0
+  let n = bytes
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024
+    i++
+  }
+  return `${n.toFixed(n < 10 && i > 0 ? 1 : 0)} ${units[i]}`
+}
+
+function fmtSpeed(speedRaw: string | undefined): string {
+  // SAB returns speed as a bare number in MB/s (e.g. "5.5" or "0").
+  const v = parseFloat(speedRaw ?? '0')
+  if (!isFinite(v) || v <= 0) return '—'
+  return `${v.toFixed(v < 10 ? 1 : 0)} MB/s`
+}
+
+function fmtFreeSpace(gbRaw: string | undefined): string {
+  const v = parseFloat(gbRaw ?? '')
+  if (!isFinite(v) || v <= 0) return '—'
+  // Convert raw GB → bytes → fmtSize so units scale (GB / TB).
+  return fmtSize(v * UNITS.GB)
+}
+
 export function DownloadsTab() {
   const queue = useDownloadQueue()
   const history = useDownloadHistory(10)
@@ -47,23 +85,43 @@ export function DownloadsTab() {
   }
 
   const slots = queue.data?.queue.slots ?? []
-  const speed = queue.data?.queue.speed ?? '0'
-  const sizeLeft = queue.data?.queue.sizeleft ?? '0'
-  const eta = queue.data?.queue.timeleft ?? ''
+  const speedRaw = queue.data?.queue.speed
+  const sizeRaw = queue.data?.queue.size
+  const sizeLeftRaw = queue.data?.queue.sizeleft
   const isPaused = queue.data?.queue.paused ?? false
+  const idle = slots.length === 0
+
+  // Stat-box values. When idle, speed/downloaded/size show '—'; available
+  // disk space stays populated whenever the SAB host reports it.
+  const totalBytes = parseSabSize(sizeRaw)
+  const leftBytes = parseSabSize(sizeLeftRaw)
+  const downloadedBytes = Math.max(0, totalBytes - leftBytes)
+  const stats = [
+    { label: 'Speed',       value: idle ? '—' : fmtSpeed(speedRaw) },
+    { label: 'Downloaded',  value: idle ? '—' : fmtSize(downloadedBytes) },
+    { label: 'File size',   value: idle ? '—' : (sizeRaw && totalBytes > 0 ? fmtSize(totalBytes) : '—') },
+    { label: 'Available',   value: fmtFreeSpace(queue.data?.queue.diskspace1) },
+  ]
 
   return (
     <section className="downloads-tab">
       <header className="downloads-tab__header">
-        <div>
-          <p className="downloads-tab__eyebrow">Downloads</p>
-          <h2 className="downloads-tab__summary">
-            {slots.length === 0
-              ? 'Nothing in flight.'
-              : `${slots.length} ${slots.length === 1 ? 'item' : 'items'} downloading. ${speed}/s. ${sizeLeft} left, ${eta}.`}
-          </h2>
-          {isPaused && <p className="downloads-tab__paused">Queue is paused.</p>}
-        </div>
+        <p className="downloads-tab__eyebrow">Downloads</p>
+        <h2 className="downloads-tab__summary">
+          {idle
+            ? 'Nothing downloaded.'
+            : `${slots.length} ${slots.length === 1 ? 'item' : 'items'} downloading.`}
+        </h2>
+        {isPaused && <p className="downloads-tab__paused">Queue is paused.</p>}
+
+        <ul className="downloads-tab__stats" aria-label="Download statistics">
+          {stats.map((s) => (
+            <li key={s.label} className={`downloads-tab__stat${s.value === '—' ? ' downloads-tab__stat--empty' : ''}`}>
+              <span className="downloads-tab__stat-label">{s.label}</span>
+              <span className="downloads-tab__stat-value">{s.value}</span>
+            </li>
+          ))}
+        </ul>
       </header>
 
       {slots.length > 0 && (

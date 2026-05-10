@@ -26,12 +26,23 @@ export type QueueResponse = {
   queue: {
     status: string
     speedlimit: string
+    /** Current download rate, in MB/s as a bare number string ("0" or "5.5"). */
     speed: string
+    /** Remaining size as a formatted string ("5.5 GB"). */
     sizeleft: string
+    /** Total queued size as a formatted string ("10.2 GB"). */
     size: string
     eta: string
     timeleft: string
     paused: boolean
+    /** Free space on the download (incomplete) directory, as raw GB string. */
+    diskspace1?: string
+    /** Total space on the download (incomplete) directory, as raw GB string. */
+    diskspacetotal1?: string
+    /** Free space on the completed-files directory, as raw GB string. */
+    diskspace2?: string
+    /** Total space on the completed-files directory, as raw GB string. */
+    diskspacetotal2?: string
     slots: QueueSlot[]
   }
 }
