@@ -4,6 +4,7 @@ import { SearchInput } from '../search/SearchInput'
 import { ResultGrid } from '../search/ResultGrid'
 import { MediaCard } from '../search/MediaCard'
 import { ModeToggle, type Mode } from '../search/ModeToggle'
+import { LibraryAlphabet, libraryBucket, type LibraryLetter } from '../library/LibraryAlphabet'
 import { AddMovieModal } from '../add/AddMovieModal'
 import { Toast } from '../toast/Toast'
 import { LoadingPulse } from '../feedback/LoadingPulse'
@@ -36,6 +37,7 @@ function fmtRuntime(min?: number) {
 export function MoviesTab() {
   const [mode, setMode] = useState<Mode>('discover')
   const [query, setQuery] = useState('')
+  const [letter, setLetter] = useState<LibraryLetter>('all')
   const debouncedQuery = useDebounced(query, 300)
   const search = useMovieSearch(mode === 'discover' ? debouncedQuery : '')
   const library = useRadarrLibrary()
@@ -52,12 +54,24 @@ export function MoviesTab() {
     return map
   }, [library.data])
 
-  const filteredLibrary = useMemo(() => {
+  const textFilteredLibrary = useMemo(() => {
     if (!library.data) return []
     const q = query.trim().toLowerCase()
     const items = q ? library.data.filter((m) => m.title.toLowerCase().includes(q)) : library.data
-    return [...items].sort((a, b) => a.title.localeCompare(b.title))
+    return [...items].sort((a, b) =>
+      a.title.replace(/^(the|a|an)\s+/i, '').localeCompare(b.title.replace(/^(the|a|an)\s+/i, ''))
+    )
   }, [library.data, query])
+
+  const availableLetters = useMemo(
+    () => new Set(textFilteredLibrary.map((m) => libraryBucket(m.title))),
+    [textFilteredLibrary],
+  )
+
+  const filteredLibrary = useMemo(() => {
+    if (letter === 'all') return textFilteredLibrary
+    return textFilteredLibrary.filter((m) => libraryBucket(m.title) === letter)
+  }, [textFilteredLibrary, letter])
 
   const removeMutation = useMutation({
     mutationFn: ({ id, deleteFiles }: { id: number; deleteFiles: boolean }) =>
@@ -107,13 +121,24 @@ export function MoviesTab() {
           onCardClick={handleSearchClick}
         />
       ) : (
-        <LibraryResults
-          query={query}
-          loading={library.isPending}
-          error={library.error}
-          items={filteredLibrary}
-          onCardClick={isAdmin ? confirmRemove : () => {}}
-        />
+        <>
+          {!library.isPending && !library.error && textFilteredLibrary.length > 0 && (
+            <LibraryAlphabet
+              available={availableLetters}
+              value={letter}
+              onChange={setLetter}
+              totalCount={textFilteredLibrary.length}
+            />
+          )}
+          <LibraryResults
+            query={query}
+            letter={letter}
+            loading={library.isPending}
+            error={library.error}
+            items={filteredLibrary}
+            onCardClick={isAdmin ? confirmRemove : () => {}}
+          />
+        </>
       )}
 
       <div className="tv-tab__dock">
@@ -126,7 +151,14 @@ export function MoviesTab() {
       </div>
 
       <div className="tv-tab__mode-anchor">
-        <ModeToggle mode={mode} onChange={setMode} libraryCount={library.data?.length} />
+        <ModeToggle
+          mode={mode}
+          onChange={(next) => {
+            setMode(next)
+            if (next === 'discover') setLetter('all')
+          }}
+          libraryCount={library.data?.length}
+        />
       </div>
 
       <AddMovieModal
@@ -188,13 +220,14 @@ function DiscoverResults({ query, loading, error, results, libraryByTmdb, onCard
 
 type LibraryProps = {
   query: string
+  letter: LibraryLetter
   loading: boolean
   error: unknown
   items: Movie[]
   onCardClick: (m: Movie) => void
 }
 
-function LibraryResults({ query, loading, error, items, onCardClick }: LibraryProps) {
+function LibraryResults({ query, letter, loading, error, items, onCardClick }: LibraryProps) {
   if (loading) return <LoadingPulse>Loading library</LoadingPulse>
   if (error) {
     return (
@@ -205,11 +238,12 @@ function LibraryResults({ query, loading, error, items, onCardClick }: LibraryPr
     )
   }
   if (items.length === 0) {
-    return (
-      <p className="tv-tab__hint">
-        {query.trim() ? 'Nothing in your library matches.' : 'Your library is empty. Add something from Discover.'}
-      </p>
-    )
+    const emptyMsg = query.trim()
+      ? 'Nothing in your library matches.'
+      : letter !== 'all'
+        ? `Nothing under ${letter}.`
+        : 'Your library is empty. Add something from Discover.'
+    return <p className="tv-tab__hint">{emptyMsg}</p>
   }
 
   return (
