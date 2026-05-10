@@ -6,7 +6,11 @@
   position: fixed;
   inset: 0;
   z-index: 9999;
-  background: var(--bg);
+  /* Transparent so the kraken background bleeds through while the
+     transition video is still buffering its first frame — without this,
+     the overlay's solid dark background blacks out the kraken before
+     the video paints, producing a flash on entry. */
+  background: transparent;
   display: grid;
   place-items: center;
   pointer-events: auto; /* block clicks for the duration */
@@ -18,6 +22,17 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
+  /* Hidden until the browser fires `canplay` (signalling at least one
+     frame is decoded). React adds the --ready class when that fires, so
+     the video fades in cleanly over the kraken instead of paint-flashing
+     a black HTML5-default video element. */
+  background: transparent;
+  opacity: 0;
+  transition: opacity 80ms ease;
+}
+
+.nav-transition__video--ready {
+  opacity: 1;
 }
 
 @keyframes nav-transition-in {

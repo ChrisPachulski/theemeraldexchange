@@ -54,6 +54,7 @@ const NavTransitionContext = createContext<Ctx | null>(null)
 export function NavTransitionProvider({ children }: { children: ReactNode }) {
   const [route, navigate] = useRoute()
   const [active, setActive] = useState<Active | null>(null)
+  const [ready, setReady] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
 
   // Refreshing on the home route is the natural "reset" gesture — clear
@@ -89,16 +90,27 @@ export function NavTransitionProvider({ children }: { children: ReactNode }) {
   }
 
   useEffect(() => {
-    if (!active) return
+    if (!active) {
+      setReady(false)
+      return
+    }
     const v = videoRef.current
     if (!v) return
     v.currentTime = 0
+    // Gate visibility on canplay so the video element doesn't paint a
+    // black background frame over the kraken before the source is ready.
+    const onCanPlay = () => setReady(true)
+    if (v.readyState >= 3) setReady(true)
+    else v.addEventListener('canplay', onCanPlay, { once: true })
     const p = v.play()
     if (p && typeof (p as Promise<void>).catch === 'function') {
       ;(p as Promise<void>).catch(() => {
         if (active.target) navigate(active.target)
         setActive(null)
       })
+    }
+    return () => {
+      v.removeEventListener('canplay', onCanPlay)
     }
   }, [active, navigate])
 
@@ -114,7 +126,7 @@ export function NavTransitionProvider({ children }: { children: ReactNode }) {
         <div className="nav-transition" role="presentation">
           <video
             ref={videoRef}
-            className="nav-transition__video"
+            className={`nav-transition__video${ready ? ' nav-transition__video--ready' : ''}`}
             playsInline
             preload="auto"
             onEnded={finish}

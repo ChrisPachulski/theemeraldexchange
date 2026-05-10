@@ -19,6 +19,11 @@
   height: 100%;
   object-fit: cover;
   object-position: center center;
+  /* Both variants stacked, opacity-faded based on which one is active.
+     250ms cross-fade keeps the background continuous when the route
+     changes. */
+  opacity: 0;
+  transition: opacity 250ms var(--ease, ease);
 
   /* Soft viewport-edge fade so the rectangular video frame doesn't
      read as a hard rectangle against the chrome at the corners. */
@@ -38,9 +43,15 @@
     );
 }
 
-/* Home variant: Pixabay scene needs the emerald-pushing filter pipeline.
-   Resting variant: Runway gen has the grade baked in — no filter. */
-.kraken--kraken .kraken__video {
+/* Variant gating. Each parent class lights up its matching child. */
+.kraken--kraken .kraken__video--kraken,
+.kraken--resting .kraken__video--resting {
+  opacity: 1;
+}
+
+/* Home variant: Pixabay scene needs the emerald-pushing filter pipeline
+   only on the kraken layer (resting has the grade baked in). */
+.kraken__video--kraken {
   filter:
     saturate(0.7)
     hue-rotate(95deg)
