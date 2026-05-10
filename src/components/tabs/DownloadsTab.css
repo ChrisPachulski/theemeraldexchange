@@ -1,17 +1,33 @@
+/* Fill the available main space so we can anchor the panel to the bottom.
+   The kraken video plays underneath; pinning the box low lets it breathe
+   above the UI instead of getting masked by a tall, top-aligned block. */
 .downloads-tab {
-  padding: var(--hero-pad-top) 0 var(--s-7);
-  display: grid;
-  gap: var(--s-6);
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: var(--hero-pad-top) 0 var(--s-5);
+  display: flex;
+  flex-direction: column;
   max-width: var(--content-max);
   margin: 0 auto;
   width: 100%;
 }
 
-/* Header / history / error get the solid panel. Queue is intentionally
+/* The "panel" is header + queue together. margin-top:auto pushes it to the
+   bottom of the section; min-height:0 lets the queue inside shrink and
+   scroll once content would exceed the viewport. */
+.downloads-tab__panel {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  min-height: 0;
+  flex-shrink: 1;
+}
+
+/* Header / error get the solid panel. Queue is intentionally
    transparent — the QueueRow children are the panels; double-wrapping
    would just produce nested boxes. */
 .downloads-tab__header,
-.downloads-tab__history,
 .downloads-tab__error {
   margin: 0 var(--s-5);
   padding: var(--s-4) var(--s-5);
@@ -22,10 +38,19 @@
     inset 0 1px 0 var(--frost-stronger),
     0 0 0 4px oklch(0 0 0 / 0.45),
     0 24px 48px -24px var(--ink);
+  flex-shrink: 0;
 }
 
+/* When items overflow the available space, the queue itself becomes the
+   scroll surface — the header stays anchored above it. */
 .downloads-tab__queue {
   margin: 0 var(--s-5);
+  min-height: 0;
+  overflow-y: auto;
+  /* keep a couple px so the focus ring on a row isn't clipped */
+  padding: 2px;
+  display: grid;
+  gap: var(--s-2);
 }
 
 .downloads-tab__header {
@@ -52,6 +77,22 @@
   letter-spacing: var(--tr-display);
   font-feature-settings: 'tnum' 1;
   line-height: 1.1;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* Filename mode: smaller + monospace so a long release name fits without
+   blowing out the panel height. Two-line clamp keeps it predictable. */
+.downloads-tab__summary--filename {
+  font-family: var(--font-mono);
+  font-size: var(--t-lg);
+  letter-spacing: 0;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .downloads-tab__paused {
@@ -129,83 +170,6 @@
   }
 }
 
-.downloads-tab__queue {
-  display: grid;
-  gap: var(--s-2);
-}
-
-.downloads-tab__history {
-  display: grid;
-  gap: var(--s-3);
-}
-
-.downloads-tab__history-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: var(--s-2);
-}
-
-.downloads-tab__history-row {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
-  gap: var(--s-3);
-  padding: var(--s-3) 0;
-  align-items: baseline;
-  font-size: var(--t-sm);
-  border-bottom: 1px solid var(--border);
-}
-
-.downloads-tab__history-row:last-child {
-  border-bottom: 0;
-}
-
-.downloads-tab__history-name {
-  font-family: var(--font-mono);
-  color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.downloads-tab__history-cat {
-  font-family: var(--font-mono);
-  font-size: var(--t-xs);
-  letter-spacing: var(--tr-hud);
-  text-transform: uppercase;
-  color: var(--text-subtle);
-}
-
-.downloads-tab__history-status {
-  font-family: var(--font-display);
-  font-size: var(--t-xs);
-  font-weight: var(--w-ui);
-  letter-spacing: var(--tr-eyebrow);
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-.downloads-tab__history-status--completed {
-  color: var(--emerald);
-}
-
-.downloads-tab__history-status--failed {
-  color: var(--danger);
-}
-
-.downloads-tab__hint {
-  font-family: var(--font-display);
-  font-size: var(--t-sm);
-  font-weight: var(--w-ui);
-  letter-spacing: var(--tr-eyebrow);
-  text-transform: uppercase;
-  color: var(--text-subtle);
-  text-align: center;
-  padding: var(--s-7) var(--s-5);
-  margin: 0;
-}
-
 .downloads-tab__error {
   display: grid;
   gap: var(--s-2);
@@ -225,12 +189,13 @@
 
 @media (max-width: 520px) {
   .downloads-tab {
-    padding: var(--hero-pad-top) 0 var(--s-7);
-    gap: var(--s-5);
+    padding: var(--hero-pad-top) 0 var(--s-5);
+  }
+  .downloads-tab__panel {
+    gap: var(--s-3);
   }
 
   .downloads-tab__header,
-  .downloads-tab__history,
   .downloads-tab__error {
     margin: 0 var(--s-3);
     padding: var(--s-3);

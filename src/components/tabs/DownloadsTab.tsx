@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { sab } from '../../lib/api/sab'
-import { useDownloadQueue, useDownloadHistory } from '../../lib/hooks/useDownloadQueue'
+import { useDownloadQueue } from '../../lib/hooks/useDownloadQueue'
 import { useConfirm } from '../confirm/useConfirm'
 import { QueueRow } from '../queue/QueueRow'
 import { LoadingPulse } from '../feedback/LoadingPulse'
@@ -47,7 +47,6 @@ function fmtFreeSpace(gbRaw: string | undefined): string {
 
 export function DownloadsTab() {
   const queue = useDownloadQueue()
-  const history = useDownloadHistory(10)
   const confirm = useConfirm()
   const qc = useQueryClient()
   const { isAdmin } = useAuth()
@@ -90,6 +89,12 @@ export function DownloadsTab() {
   const sizeLeftRaw = queue.data?.queue.sizeleft
   const isPaused = queue.data?.queue.paused ?? false
   const idle = slots.length === 0
+  // The "present" item: whatever SAB is actively downloading right now.
+  // Falls back to the first slot when the queue is paused / nothing has
+  // started yet so the heading still surfaces the next-up filename
+  // instead of the generic placeholder.
+  const activeSlot = slots.find((s) => s.status === 'Downloading') ?? slots[0]
+  const headingText = idle ? 'Queue is Open.' : (activeSlot?.filename ?? 'Queue is Open.')
 
   // Stat-box values. When idle, speed/downloaded/size show '—'; available
   // disk space stays populated whenever the SAB host reports it.
@@ -105,96 +110,69 @@ export function DownloadsTab() {
 
   return (
     <section className="downloads-tab">
-      <header className="downloads-tab__header">
-        <p className="downloads-tab__eyebrow">Downloads</p>
-        <h2 className="downloads-tab__summary">
-          {idle
-            ? 'Nothing downloaded.'
-            : `${slots.length} ${slots.length === 1 ? 'item' : 'items'} downloading.`}
-        </h2>
-        {isPaused && <p className="downloads-tab__paused">Queue is paused.</p>}
+      <div className="downloads-tab__panel">
+        <header className="downloads-tab__header">
+          <p className="downloads-tab__eyebrow">Downloads</p>
+          <h2
+            className={`downloads-tab__summary${idle ? '' : ' downloads-tab__summary--filename'}`}
+            title={idle ? undefined : headingText}
+          >
+            {headingText}
+          </h2>
+          {isPaused && <p className="downloads-tab__paused">Queue is paused.</p>}
 
-        <ul className="downloads-tab__stats" aria-label="Download statistics">
-          {stats.map((s) => (
-            <li key={s.label} className={`downloads-tab__stat${s.value === '—' ? ' downloads-tab__stat--empty' : ''}`}>
-              <span className="downloads-tab__stat-label">{s.label}</span>
-              <span className="downloads-tab__stat-value">{s.value}</span>
-            </li>
-          ))}
-        </ul>
-      </header>
+          <ul className="downloads-tab__stats" aria-label="Download statistics">
+            {stats.map((s) => (
+              <li key={s.label} className={`downloads-tab__stat${s.value === '—' ? ' downloads-tab__stat--empty' : ''}`}>
+                <span className="downloads-tab__stat-label">{s.label}</span>
+                <span className="downloads-tab__stat-value">{s.value}</span>
+              </li>
+            ))}
+          </ul>
+        </header>
 
-      {slots.length > 0 && (
-        <div className="downloads-tab__queue">
-          {slots.map((slot) => {
-            const percent = parseFloat(slot.percentage) || 0
-            const paused = slot.status === 'Paused'
-            const busy =
-              pause.variables === slot.nzo_id ||
-              resume.variables === slot.nzo_id ||
-              cancel.variables === slot.nzo_id
+        {slots.length > 0 && (
+          <div className="downloads-tab__queue">
+            {slots.map((slot) => {
+              const percent = parseFloat(slot.percentage) || 0
+              const paused = slot.status === 'Paused'
+              const busy =
+                pause.variables === slot.nzo_id ||
+                resume.variables === slot.nzo_id ||
+                cancel.variables === slot.nzo_id
 
-            return (
-              <QueueRow
-                key={slot.nzo_id}
-                filename={slot.filename}
-                category={slot.cat}
-                size={slot.size}
-                percent={percent}
-                timeLeft={slot.timeleft}
-                status={slot.status}
-                paused={paused}
-                busy={busy}
-                onPause={isAdmin ? () => pause.mutate(slot.nzo_id) : undefined}
-                onResume={isAdmin ? () => resume.mutate(slot.nzo_id) : undefined}
-                onDelete={
-                  isAdmin
-                    ? () =>
-                        confirm({
-                          title: `Cancel ${slot.filename}?`,
-                          body: 'This stops the download and removes the partial file. The library entry stays.',
-                          confirmLabel: 'Cancel download',
-                          onConfirm: async () => {
-                            await cancel.mutateAsync(slot.nzo_id)
-                          },
-                        })
-                    : undefined
-                }
-              />
-            )
-          })}
-        </div>
-      )}
-
-      {history.data && history.data.history.slots.length > 0 && (() => {
-        // When nothing's in flight, the household just wants confirmation
-        // of the most recent finish — not a 10-row activity log. When the
-        // queue is active, the longer list is useful operator context.
-        const idle = slots.length === 0
-        const visible = idle
-          ? history.data.history.slots.slice(0, 1)
-          : history.data.history.slots.slice(0, 10)
-        return (
-          <section className="downloads-tab__history">
-            <p className="downloads-tab__eyebrow">
-              {idle ? 'Last downloaded' : 'Recently finished'}
-            </p>
-            <ul className="downloads-tab__history-list">
-              {visible.map((h) => (
-                <li key={h.nzo_id} className="downloads-tab__history-row">
-                  <span className="downloads-tab__history-name">{h.name}</span>
-                  <span className="downloads-tab__history-cat">{h.category}</span>
-                  <span
-                    className={`downloads-tab__history-status downloads-tab__history-status--${h.status.toLowerCase()}`}
-                  >
-                    {h.status}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )
-      })()}
+              return (
+                <QueueRow
+                  key={slot.nzo_id}
+                  filename={slot.filename}
+                  category={slot.cat}
+                  size={slot.size}
+                  percent={percent}
+                  timeLeft={slot.timeleft}
+                  status={slot.status}
+                  paused={paused}
+                  busy={busy}
+                  onPause={isAdmin ? () => pause.mutate(slot.nzo_id) : undefined}
+                  onResume={isAdmin ? () => resume.mutate(slot.nzo_id) : undefined}
+                  onDelete={
+                    isAdmin
+                      ? () =>
+                          confirm({
+                            title: `Cancel ${slot.filename}?`,
+                            body: 'This stops the download and removes the partial file. The library entry stays.',
+                            confirmLabel: 'Cancel download',
+                            onConfirm: async () => {
+                              await cancel.mutateAsync(slot.nzo_id)
+                            },
+                          })
+                      : undefined
+                  }
+                />
+              )
+            })}
+          </div>
+        )}
+      </div>
     </section>
   )
 }
