@@ -12,6 +12,7 @@ type UserRow = {
   thumb: string | null
   role: 'admin' | 'user'
   relation: 'owner' | 'friend'
+  status: 'accepted' | 'pending'
 }
 
 class UsersFetchError extends Error {
@@ -141,6 +142,14 @@ export function UsersTab() {
               {u.relation === 'owner' && (
                 <span className="users-tab__badge users-tab__badge--owner" title="Plex server owner">
                   owner
+                </span>
+              )}
+              {u.status === 'pending' && (
+                <span
+                  className="users-tab__badge users-tab__badge--pending"
+                  title="Invitation sent — they haven't accepted on plex.tv yet"
+                >
+                  pending
                 </span>
               )}
             </div>

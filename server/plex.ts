@@ -83,21 +83,25 @@ export async function listResources(authToken: string): Promise<PlexResource[]> 
   return (await res.json()) as PlexResource[]
 }
 
-// People the owner has invited to their Plex server (the "Manage Library
-// Access" list). The legacy XML endpoint at plex.tv/api/users is the
-// canonical source — it's what python-plexapi's MyPlexAccount.users()
-// uses and it includes every invitee regardless of accept-state, which
-// is what an admin actually wants to see on the Users page.
+// People the owner has shared their Plex server with. Two states matter
+// to the Users tab:
+//   - ACCEPTED: the invitee accepted and can stream right now. Comes
+//     from the legacy /api/users XML endpoint, which is what
+//     python-plexapi's MyPlexAccount.users() uses.
+//   - PENDING: the owner sent an invite that hasn't been accepted yet.
+//     Comes from /api/v2/friends/requested (the outgoing-invites list,
+//     which is what python-plexapi's pendingInvites(includeSent=True)
+//     uses).
 //
-// We intentionally do NOT use /api/v2/friends — that's the Plex social
-// graph (mutual friend relationships), not server shares, and is often
-// empty even when the owner has shared with many users.
+// We intentionally do NOT use /api/v2/friends — that's the accepted
+// mutual-friends graph and overlaps awkwardly with /api/users.
 export type PlexFriend = {
   id: number
   username: string
   title?: string
   email?: string | null
   thumb?: string | null
+  status: 'accepted' | 'pending'
 }
 
 function unescapeXml(s: string): string {
@@ -124,14 +128,15 @@ function parseUserElements(xml: string): PlexFriend[] {
       title: attrs.title || attrs.username || undefined,
       email: attrs.email || null,
       thumb: attrs.thumb || null,
+      status: 'accepted',
     })
   }
   return out
 }
 
-export async function listInvitedUsers(authToken: string): Promise<PlexFriend[]> {
-  // NOTE: this is the legacy XML endpoint on the bare plex.tv host, NOT
-  // the v2 JSON tree — so the URL doesn't go through PLEX_BASE.
+export async function listAcceptedUsers(authToken: string): Promise<PlexFriend[]> {
+  // Legacy XML endpoint on the bare plex.tv host, NOT under /api/v2 —
+  // so we don't route through PLEX_BASE.
   const res = await fetch('https://plex.tv/api/users', {
     headers: {
       'X-Plex-Product': 'The Emerald Exchange',
@@ -140,9 +145,64 @@ export async function listInvitedUsers(authToken: string): Promise<PlexFriend[]>
       Accept: 'application/xml',
     },
   })
-  if (!res.ok) throw new Error(`plex.listInvitedUsers failed: ${res.status}`)
+  if (!res.ok) throw new Error(`plex.listAcceptedUsers failed: ${res.status}`)
   const xml = await res.text()
   return parseUserElements(xml)
+}
+
+// Outgoing invites the owner has sent that haven't been accepted yet.
+// /api/v2/friends/requested returns a JSON array of pending-friend
+// records; for invites sent to an email address that doesn't have a
+// Plex account yet, `username` may be empty and only `email` is set.
+type PendingRecord = {
+  id?: number
+  username?: string
+  title?: string
+  friendlyName?: string
+  email?: string | null
+  thumb?: string | null
+  invitedEmail?: string | null
+}
+
+export async function listPendingInvites(authToken: string): Promise<PlexFriend[]> {
+  const res = await fetch(`${PLEX_BASE}/friends/requested`, {
+    headers: { ...baseHeaders(), 'X-Plex-Token': authToken },
+  })
+  // Plex returns 404 when there are no pending invites on some accounts;
+  // treat that as "empty list" rather than failing the whole route.
+  if (res.status === 404) return []
+  if (!res.ok) throw new Error(`plex.listPendingInvites failed: ${res.status}`)
+  const data = (await res.json().catch(() => [])) as PendingRecord[]
+  if (!Array.isArray(data)) return []
+  return data
+    .map((r) => {
+      const id =
+        typeof r.id === 'number' && Number.isFinite(r.id) ? r.id : undefined
+      const email = r.email ?? r.invitedEmail ?? null
+      const title = r.friendlyName || r.title || r.username || email || ''
+      const username = r.username || email || ''
+      if (!title && !username) return null
+      return {
+        // Synthesize a stable-ish key when Plex hasn't assigned an
+        // account id yet (email-only invites). Negative sentinel to
+        // avoid collisions with real ids.
+        id: id ?? -(stableHash(email || title || username) >>> 0),
+        username,
+        title,
+        email,
+        thumb: r.thumb ?? null,
+        status: 'pending' as const,
+      } satisfies PlexFriend
+    })
+    .filter((u): u is PlexFriend => u !== null)
+}
+
+function stableHash(s: string): number {
+  let h = 0
+  for (let i = 0; i < s.length; i++) {
+    h = (h * 31 + s.charCodeAt(i)) | 0
+  }
+  return h
 }
 
 // Build the URL the user's browser opens to authorize the PIN. The PIN
