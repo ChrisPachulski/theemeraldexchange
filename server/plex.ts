@@ -153,7 +153,11 @@ export async function listAcceptedUsers(authToken: string): Promise<PlexFriend[]
   })
   if (!res.ok) throw new Error(`plex.listAcceptedUsers failed: ${res.status}`)
   const xml = await res.text()
-  return parseUserElements(xml)
+  const parsed = parseUserElements(xml)
+  console.log(
+    `plex.listAcceptedUsers: status=${res.status} bytes=${xml.length} parsed=${parsed.length} preview=${JSON.stringify(xml.slice(0, 400))}`,
+  )
+  return parsed
 }
 
 // Outgoing invites the owner has sent that haven't been accepted yet.
@@ -187,7 +191,13 @@ export async function listPendingInvites(authToken: string): Promise<PlexFriend[
   // Plex returns 404 when there are no pending invites on some accounts;
   // treat that as "empty list" rather than failing the whole route.
   if (res.status === 404) return []
-  if (!res.ok) throw new Error(`plex.listPendingInvites failed: ${res.status}`)
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    console.log(
+      `plex.listPendingInvites: status=${res.status} body=${JSON.stringify(body.slice(0, 400))}`,
+    )
+    throw new Error(`plex.listPendingInvites failed: ${res.status}`)
+  }
   // Response can be either a raw array OR { friends: [...] } depending on
   // account state. python-plexapi uses rtag='friends' which expects the
   // wrapped form.
@@ -243,11 +253,17 @@ type SharedServerRecord = {
 }
 
 export async function listSharedServerInvitees(authToken: string): Promise<PlexFriend[]> {
+  // The v2 endpoint requires the server's machineIdentifier as a query
+  // param — without it Plex returns 405. PLEX_SERVER_ID holds that id.
+  // If the env var isn't set we can't query this endpoint at all, so
+  // return empty rather than throwing.
+  if (!env.plexServerId) return []
+  const url = `${PLEX_BASE}/shared_servers?machineIdentifier=${encodeURIComponent(env.plexServerId)}`
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 5000)
   let res: Response
   try {
-    res = await fetch(`${PLEX_BASE}/shared_servers`, {
+    res = await fetch(url, {
       headers: { ...baseHeaders(), 'X-Plex-Token': authToken },
       signal: controller.signal,
     })
@@ -255,7 +271,13 @@ export async function listSharedServerInvitees(authToken: string): Promise<PlexF
     clearTimeout(timer)
   }
   if (res.status === 404) return []
-  if (!res.ok) throw new Error(`plex.listSharedServerInvitees failed: ${res.status}`)
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    console.log(
+      `plex.listSharedServerInvitees: status=${res.status} body=${JSON.stringify(body.slice(0, 400))}`,
+    )
+    throw new Error(`plex.listSharedServerInvitees failed: ${res.status}`)
+  }
   const raw = (await res.json().catch(() => null)) as unknown
   const records: SharedServerRecord[] = Array.isArray(raw)
     ? (raw as SharedServerRecord[])
