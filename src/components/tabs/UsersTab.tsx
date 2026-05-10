@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { apiUrl } from '../../lib/api/base'
 import { LoadingPulse } from '../feedback/LoadingPulse'
+import { useAuth } from '../../lib/auth'
 import './UsersTab.css'
 
 type UserRow = {
@@ -13,21 +14,37 @@ type UserRow = {
   relation: 'owner' | 'friend'
 }
 
+class UsersFetchError extends Error {
+  code?: string
+  constructor(message: string, code?: string) {
+    super(message)
+    this.code = code
+  }
+}
+
 async function fetchUsers(): Promise<UserRow[]> {
   const r = await fetch(apiUrl('/api/users'), { credentials: 'include' })
   if (!r.ok) {
     const body = (await r.json().catch(() => ({}))) as { message?: string; error?: string }
-    throw new Error(body.message ?? body.error ?? `users fetch ${r.status}`)
+    throw new UsersFetchError(
+      body.message ?? body.error ?? `users fetch ${r.status}`,
+      body.error,
+    )
   }
   const data = (await r.json()) as { users: UserRow[] }
   return data.users
 }
 
 export function UsersTab() {
+  const { signOut } = useAuth()
   const q = useQuery({
     queryKey: ['users'],
     queryFn: fetchUsers,
     staleTime: 60_000,
+    retry: (failureCount, err) =>
+      err instanceof UsersFetchError && err.code === 'no_plex_token'
+        ? false
+        : failureCount < 2,
   })
 
   if (q.isPending) {
@@ -39,11 +56,36 @@ export function UsersTab() {
   }
 
   if (q.error) {
+    const stale =
+      q.error instanceof UsersFetchError && q.error.code === 'no_plex_token'
+    if (stale) {
+      return (
+        <section className="users-tab">
+          <div className="users-tab__stale">
+            <p className="users-tab__stale-title">Your session is from an earlier build.</p>
+            <p className="users-tab__stale-body">
+              The Users tab needs a Plex token attached to your session — sessions
+              issued before this feature shipped don't have one. Sign out and sign
+              back in to refresh it.
+            </p>
+            <button
+              type="button"
+              className="users-tab__stale-action"
+              onClick={() => {
+                void signOut()
+              }}
+            >
+              Sign out &amp; re-authenticate
+            </button>
+          </div>
+        </section>
+      )
+    }
     return (
       <section className="users-tab">
         <div className="users-tab__error">
           <p>Couldn't load users.</p>
-          <p className="users-tab__error-detail">{String(q.error)}</p>
+          <p className="users-tab__error-detail">{q.error.message}</p>
         </div>
       </section>
     )
