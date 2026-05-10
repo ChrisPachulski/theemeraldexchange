@@ -162,9 +162,20 @@ export function NavTransitionProvider({ children }: { children: ReactNode }) {
             ref={videoRef}
             className="nav-transition__video"
             playsInline
+            // The re-encoded source has no audio track, but autoplay
+            // policy in Chrome/Safari gates on the muted *attribute*,
+            // not the actual stream. Without this, v.play() rejects
+            // with NotAllowedError on the user-gesture click, the
+            // catch branch dismisses the overlay, and the user sees a
+            // black flash → instant nav.
+            muted
             preload="auto"
             onEnded={finish}
-            onError={finish}
+            onError={(e) => {
+              const ve = (e.currentTarget as HTMLVideoElement).error
+              if (ve) console.warn('nav-transition video error', ve.code, ve.message)
+              finish()
+            }}
           >
             <source src="/nav-transition.mp4" type="video/mp4" />
           </video>
