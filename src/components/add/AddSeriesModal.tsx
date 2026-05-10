@@ -35,8 +35,28 @@ export function AddSeriesModal({ series, onClose, onAdded }: Props) {
   // deriving the effective value at render time.
   const [profileChoice, setProfileChoice] = useState<number | null>(null)
   const [folderChoice, setFolderChoice] = useState<string | null>(null)
-  const [monitor, setMonitor] = useState<'all' | 'future' | 'firstSeason'>('all')
+  // Monitor selector value: "all" or "season:<n>". We use a string union
+  // rather than a discriminated union here because <select> values are
+  // stringly-typed anyway, and the parse on submit is trivial.
+  const [monitorChoice, setMonitorChoice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  // Specials (seasonNumber 0) are intentionally excluded from the
+  // user-facing dropdown — most households don't grab them and it keeps
+  // the menu tidy. They stay unmonitored on add (since seasons[] tells
+  // Sonarr which seasons to monitor explicitly).
+  const showSeasons = (series?.seasons ?? [])
+    .filter((s) => s.seasonNumber > 0)
+    .map((s) => s.seasonNumber)
+    .sort((a, b) => a - b)
+  // Default = season 1 if it exists, else the lowest-numbered season,
+  // else "all" if no season metadata (rare for unannounced shows).
+  const defaultMonitor = showSeasons.includes(1)
+    ? 'season:1'
+    : showSeasons.length > 0
+      ? `season:${showSeasons[0]}`
+      : 'all'
+  const monitor = monitorChoice ?? defaultMonitor
 
   const profileId = profileChoice ?? pickDefaultProfileId(profiles.data)
   const rootFolder = folderChoice ?? folders.data?.[0]?.path ?? null
@@ -65,6 +85,22 @@ export function AddSeriesModal({ series, onClose, onAdded }: Props) {
   const handleAdd = () => {
     if (!canAdd) return
     setError(null)
+
+    // Translate the dropdown value into Sonarr's add-series shape:
+    //   "all"        → addOptions.monitor:'all', leave seasons[] alone.
+    //   "season:N"   → addOptions.monitor:'none', explicit seasons[]
+    //                  with only N monitored. This is what stops Sonarr
+    //                  from auto-monitoring everything when the show is
+    //                  added with our chosen season selected.
+    const isSingle = monitor.startsWith('season:')
+    const targetSeason = isSingle ? Number(monitor.slice('season:'.length)) : null
+    const seasons = isSingle && series.seasons
+      ? series.seasons.map((s) => ({
+          seasonNumber: s.seasonNumber,
+          monitored: s.seasonNumber === targetSeason,
+        }))
+      : series.seasons
+
     const body = {
       tvdbId: series.tvdbId,
       title: series.title,
@@ -73,10 +109,10 @@ export function AddSeriesModal({ series, onClose, onAdded }: Props) {
       monitored: true,
       seasonFolder: true,
       addOptions: {
-        monitor,
+        monitor: isSingle ? 'none' : 'all',
         searchForMissingEpisodes: true,
       },
-      seasons: series.seasons,
+      seasons,
     }
     mutation.mutate(body, {
       onSuccess: () => {
@@ -144,11 +180,18 @@ export function AddSeriesModal({ series, onClose, onAdded }: Props) {
             <select
               className="add-series__select"
               value={monitor}
-              onChange={(e) => setMonitor(e.target.value as 'all' | 'future' | 'firstSeason')}
+              onChange={(e) => setMonitorChoice(e.target.value)}
             >
+              {/* All Seasons stays pinned at the top so it's always
+                  visible in the menu, regardless of how many seasons
+                  the show has. The default-selected option is Season 1
+                  (or the lowest-numbered season if there is no S1). */}
               <option value="all">All seasons</option>
-              <option value="future">Future seasons only</option>
-              <option value="firstSeason">First season only</option>
+              {showSeasons.map((n) => (
+                <option key={n} value={`season:${n}`}>
+                  Season {n}
+                </option>
+              ))}
             </select>
           </label>
         </div>
