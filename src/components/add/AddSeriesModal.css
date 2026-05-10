@@ -16,6 +16,7 @@
 }
 
 .add-series__panel {
+  position: relative;
   width: min(520px, calc(100vw - var(--s-5)));
   background: var(--surface);
   border: 1px solid var(--border);
@@ -27,6 +28,67 @@
     inset 0 1px 0 var(--frost),
     0 30px 60px -28px var(--ink);
   animation: add-in var(--dur-mid) var(--ease);
+}
+
+/* Info badge — top-right of the panel. CSS-only tooltip reveals on
+   hover/focus. Underlying element is a non-button so it doesn't
+   accidentally become a focus trap or trigger form submits. */
+.add-series__info {
+  position: absolute;
+  top: var(--s-3);
+  right: var(--s-3);
+  width: 22px;
+  height: 22px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  font-family: var(--font-display);
+  font-size: 0.75rem;
+  font-style: italic;
+  font-weight: var(--w-display);
+  color: var(--text-subtle);
+  background: transparent;
+  cursor: help;
+  user-select: none;
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+  z-index: 1;
+}
+.add-series__info:hover,
+.add-series__info:focus-visible {
+  color: var(--emerald);
+  border-color: var(--emerald);
+  outline: none;
+}
+
+.add-series__info::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: calc(100% + var(--s-2));
+  right: 0;
+  white-space: nowrap;
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text);
+  background: #14181c;
+  border: 1px solid var(--emerald);
+  border-radius: var(--r-md);
+  padding: var(--s-2) var(--s-3);
+  box-shadow: 0 12px 24px -16px var(--ink);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+.add-series__info:hover::after,
+.add-series__info:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 @keyframes add-in {

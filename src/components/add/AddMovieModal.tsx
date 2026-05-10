@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { radarr, type MovieSearchResult } from '../../lib/api/radarr'
 import { useRadarrProfiles, useRadarrRootFolders } from '../../lib/hooks/useRadarrLibrary'
 import { useAuth } from '../../lib/auth'
+import { useLimits } from '../../lib/hooks/useLimits'
 import './AddSeriesModal.css'
 
 // Pick "Choose Me" by name when present; otherwise fall back to whatever
@@ -28,6 +29,8 @@ export function AddMovieModal({ movie, onClose, onAdded }: Props) {
   const folders = useRadarrRootFolders()
   const qc = useQueryClient()
   const { isAdmin } = useAuth()
+  const limits = useLimits()
+  const maxGb = limits.data?.maxMovieGb ?? 10
 
   // Derive defaults at render rather than syncing via effect (see TV modal).
   const [profileChoice, setProfileChoice] = useState<number | null>(null)
@@ -89,6 +92,14 @@ export function AddMovieModal({ movie, onClose, onAdded }: Props) {
       onClose={onClose}
     >
       <div className="add-series__panel">
+        <span
+          className="add-series__info"
+          tabIndex={0}
+          aria-label={`Movies are forced below the ${maxGb} GB threshold`}
+          data-tooltip={`Movies are forced below the ${maxGb} GB threshold`}
+        >
+          i
+        </span>
         <header className="add-series__header">
           <p className="add-series__eyebrow">[ Add to library ]</p>
           <h2 className="add-series__title">

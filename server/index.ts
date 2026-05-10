@@ -44,6 +44,16 @@ if (env.allowedOrigins.length > 0) {
 
 app.get('/api/health', (c) => c.json({ ok: true }))
 
+// Public-ish (auth-free) endpoint exposing the configured limits so the
+// SPA can surface them in tooltips without each modal having to know
+// the env. Numeric values only — no secrets.
+app.get('/api/limits', (c) =>
+  c.json({
+    minFreeGb: env.minFreeBytes / (1024 * 1024 * 1024),
+    maxMovieGb: env.maxMovieGb,
+  }),
+)
+
 app.route('/api/auth', auth)
 app.route('/api/me', me)
 app.route('/api/sonarr', sonarr)

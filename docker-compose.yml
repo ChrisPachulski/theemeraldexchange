@@ -32,6 +32,7 @@ services:
       SAB_API_KEY: "${SAB_API_KEY}"
       TMDB_API_KEY: "${TMDB_API_KEY:-}"
       MIN_FREE_GB: "${MIN_FREE_GB:-100}"
+      MAX_MOVIE_SIZE_GB: "${MAX_MOVIE_SIZE_GB:-10}"
 
   cloudflared:
     image: cloudflare/cloudflared:latest

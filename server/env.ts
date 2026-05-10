@@ -71,6 +71,13 @@ export const env = {
   // — the user explicitly wanted everyone (including admins) gated.
   minFreeBytes: Number(process.env.MIN_FREE_GB ?? 100) * GB,
 
+  // Hard cap on movie release size at add-time. The dashboard intercepts
+  // Radarr's auto-search, fetches available releases ourselves, and
+  // grabs the highest-quality one whose size is at or under this cap.
+  // Prevents accidental 50 GB 4K HDR rips when someone clicks Add.
+  maxMovieBytes: Number(process.env.MAX_MOVIE_SIZE_GB ?? 10) * GB,
+  maxMovieGb: Number(process.env.MAX_MOVIE_SIZE_GB ?? 10),
+
   // Optional TMDB v3 API key. When set, the detail modal fetches cast
   // for TV shows (via TVDB→TMDB find) and movies. Without it, the cast
   // section is hidden and the modal still shows everything Sonarr/Radarr
