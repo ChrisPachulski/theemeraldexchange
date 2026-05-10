@@ -12,7 +12,7 @@
 
 import { Hono } from 'hono'
 import { requireAdmin, type Env } from '../middleware/auth.js'
-import { getUser, listFriends } from '../plex.js'
+import { getUser, listInvitedUsers } from '../plex.js'
 import { env } from '../env.js'
 
 export const users = new Hono<Env>()
@@ -34,9 +34,9 @@ users.get('/', async (c) => {
   }
 
   try {
-    const [me, friends] = await Promise.all([
+    const [me, invited] = await Promise.all([
       getUser(session.plexAuthToken),
-      listFriends(session.plexAuthToken),
+      listInvitedUsers(session.plexAuthToken),
     ])
     const owner = {
       id: me.id,
@@ -47,15 +47,15 @@ users.get('/', async (c) => {
       role: roleFor(me.username),
       relation: 'owner' as const,
     }
-    const others = friends
-      .filter((f) => f.username && f.username !== me.username)
-      .map((f) => ({
-        id: f.id,
-        username: f.username,
-        title: f.title ?? f.username,
-        email: f.email ?? null,
-        thumb: f.thumb ?? null,
-        role: roleFor(f.username),
+    const others = invited
+      .filter((u) => u.id !== me.id && (u.username || u.title))
+      .map((u) => ({
+        id: u.id,
+        username: u.username,
+        title: u.title ?? u.username,
+        email: u.email ?? null,
+        thumb: u.thumb ?? null,
+        role: roleFor(u.username),
         relation: 'friend' as const,
       }))
     return c.json({ users: [owner, ...others] })
