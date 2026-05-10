@@ -22,17 +22,6 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
-  /* Hidden until the browser fires `canplay` (signalling at least one
-     frame is decoded). React adds the --ready class when that fires, so
-     the video fades in cleanly over the kraken instead of paint-flashing
-     a black HTML5-default video element. */
-  background: transparent;
-  opacity: 0;
-  transition: opacity 80ms ease;
-}
-
-.nav-transition__video--ready {
-  opacity: 1;
 }
 
 @keyframes nav-transition-in {
