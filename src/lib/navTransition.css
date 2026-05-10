@@ -17,17 +17,7 @@
   display: block;
   width: 100%;
   height: 100%;
-  /* Fill the viewport so the transition reads as the dominant moment
-     it's meant to be — with `contain` on widescreens the 1280×798
-     source becomes a small horizontal strip framed by huge letterbox
-     bars and visually disappears against the dark background. `cover`
-     scales the source until both dimensions fill, accepting symmetric
-     edge crop. `object-position: center 35%` biases the keep toward
-     the upper-middle of the frame where the eye reveal is centered
-     and the gem-on-spire sits — bottom-edge rocks/foam crop first
-     before the eye or the gem ever do. */
   object-fit: cover;
-  object-position: center 35%;
 }
 
 @keyframes nav-transition-in {
