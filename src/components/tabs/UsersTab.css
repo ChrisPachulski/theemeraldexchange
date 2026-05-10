@@ -1,0 +1,207 @@
+.users-tab {
+  padding: var(--hero-pad-top) 0 var(--s-7);
+  display: grid;
+  gap: var(--s-5);
+  max-width: var(--content-max);
+  margin: 0 auto;
+  width: 100%;
+}
+
+.users-tab__header,
+.users-tab__error {
+  margin: 0 var(--s-5);
+  padding: var(--s-4) var(--s-5);
+  background: #14181c;
+  border: 1px solid var(--emerald);
+  border-radius: var(--r-card, 12px);
+  box-shadow:
+    inset 0 1px 0 var(--frost-stronger),
+    0 0 0 4px oklch(0 0 0 / 0.45),
+    0 24px 48px -24px var(--ink);
+  display: grid;
+  gap: var(--s-2);
+}
+
+.users-tab__eyebrow {
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  margin: 0 0 var(--s-2);
+}
+
+.users-tab__title {
+  font-family: var(--font-display);
+  font-size: var(--t-xl);
+  font-weight: var(--w-display);
+  color: var(--text);
+  margin: 0;
+  letter-spacing: var(--tr-display);
+  line-height: 1.1;
+}
+
+.users-tab__hint {
+  margin: var(--s-2) 0 0;
+  font-size: var(--t-sm);
+  color: var(--text-muted);
+  line-height: 1.5;
+  max-width: 64ch;
+}
+
+.users-tab__hint code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: color-mix(in oklch, var(--surface) 70%, transparent);
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+.users-tab__list {
+  list-style: none;
+  margin: 0 var(--s-5);
+  padding: 0;
+  display: grid;
+  gap: var(--s-2);
+}
+
+.users-tab__row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: var(--s-4);
+  padding: var(--s-3) var(--s-4);
+  background: #14181c;
+  border: 1px solid var(--border);
+  border-radius: var(--r-card, 12px);
+  box-shadow: inset 0 1px 0 var(--frost);
+  transition: border-color var(--dur-fast) var(--ease);
+}
+
+.users-tab__row:hover {
+  border-color: var(--emerald);
+}
+
+.users-tab__avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: color-mix(in oklch, var(--surface) 80%, transparent);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.users-tab__avatar--fallback {
+  display: grid;
+  place-items: center;
+  font-family: var(--font-display);
+  font-weight: var(--w-display);
+  font-size: var(--t-md);
+  color: var(--text);
+}
+
+.users-tab__identity {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.users-tab__name {
+  font-family: var(--font-display);
+  font-size: var(--t-base);
+  font-weight: var(--w-display);
+  color: var(--text);
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.users-tab__handle {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--text-subtle);
+  margin: 0;
+}
+
+.users-tab__email {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--text-muted);
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.users-tab__badges {
+  display: inline-flex;
+  gap: var(--s-2);
+  flex-shrink: 0;
+}
+
+.users-tab__badge {
+  font-family: var(--font-display);
+  font-size: 0.625rem;
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  padding: 4px var(--s-2);
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in oklch, var(--surface) 80%, transparent);
+  color: var(--text-muted);
+}
+
+.users-tab__badge--admin {
+  color: var(--emerald);
+  border-color: var(--emerald);
+  background: color-mix(in oklch, var(--emerald) 12%, var(--surface));
+}
+
+.users-tab__badge--owner {
+  color: var(--text);
+  border-color: color-mix(in oklch, var(--emerald) 60%, var(--border));
+}
+
+.users-tab__error p {
+  margin: 0;
+  font-size: var(--t-sm);
+  color: var(--danger);
+}
+
+.users-tab__error-detail {
+  color: var(--text-subtle) !important;
+  font-family: var(--font-mono);
+  font-size: var(--t-xs) !important;
+}
+
+@media (max-width: 520px) {
+  .users-tab {
+    padding: var(--hero-pad-top) 0 var(--s-5);
+    gap: var(--s-4);
+  }
+  .users-tab__header,
+  .users-tab__error,
+  .users-tab__list {
+    margin: 0 var(--s-3);
+  }
+  .users-tab__header,
+  .users-tab__error {
+    padding: var(--s-3);
+  }
+  .users-tab__row {
+    padding: var(--s-2) var(--s-3);
+    gap: var(--s-3);
+  }
+  .users-tab__avatar {
+    width: 36px;
+    height: 36px;
+  }
+  .users-tab__email {
+    display: none;
+  }
+}

@@ -17,6 +17,13 @@ export type Session = {
   sub: string // plex user id (string for jwt sub claim)
   username: string
   role: Role
+  /** The user's Plex auth token, threaded through so admin-only routes
+   *  (e.g. /api/users) can call plex.tv on their behalf without us
+   *  storing a long-lived owner token in env. Optional for forward-
+   *  compatibility with existing sessions issued before this field
+   *  existed — those users will need to re-auth before token-using
+   *  endpoints work for them. */
+  plexAuthToken?: string
 }
 
 const secret = new TextEncoder().encode(env.sessionSecret)
@@ -36,7 +43,9 @@ export async function verifySession(token: string): Promise<Session | null> {
     if (typeof payload.username !== 'string') return null
     const role = payload.role
     if (role !== 'admin' && role !== 'user') return null
-    return { sub: payload.sub, username: payload.username, role }
+    const plexAuthToken =
+      typeof payload.plexAuthToken === 'string' ? payload.plexAuthToken : undefined
+    return { sub: payload.sub, username: payload.username, role, plexAuthToken }
   } catch {
     return null
   }

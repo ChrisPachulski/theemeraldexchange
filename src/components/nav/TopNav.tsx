@@ -1,6 +1,7 @@
 import { useRef } from 'react'
 import type { Route } from '../../lib/router'
 import { useNavTransition } from '../../lib/navTransition'
+import { useAuth } from '../../lib/auth'
 import { UserMenu } from '../auth/UserMenu'
 import './TopNav.css'
 
@@ -8,10 +9,13 @@ const PLEX_URL = 'http://theemeraldexchange.local:32400/web'
 
 type NavRoute = Exclude<Route, 'home'>
 
-const TABS: { route: NavRoute; label: string }[] = [
+type Tab = { route: NavRoute; label: string; adminOnly?: boolean }
+
+const TABS: Tab[] = [
   { route: 'tv', label: 'TV Shows' },
   { route: 'movies', label: 'Movies' },
   { route: 'downloads', label: 'Downloads' },
+  { route: 'users', label: 'Users', adminOnly: true },
 ]
 
 // Emerald-cut gem glyph for the Watch label. Filled with currentColor so the
@@ -44,11 +48,14 @@ type Props = {
 
 export function TopNav({ active }: Props) {
   const { transitionTo, navigate } = useNavTransition()
+  const { isAdmin } = useAuth()
   const tabRefs = useRef<Record<NavRoute, HTMLButtonElement | null>>({
     tv: null,
     movies: null,
     downloads: null,
+    users: null,
   })
+  const visibleTabs = TABS.filter((t) => (!t.adminOnly || isAdmin) && t.route !== active)
 
   return (
     <>
@@ -64,9 +71,9 @@ export function TopNav({ active }: Props) {
 
       <nav className="top-nav__tabs" role="tablist" aria-label="Primary">
         {/* Hide the current tab — sitting on TV Shows means the only
-            navigation actions are Movies / Downloads. The pill for the
-            page you're already on is wasted real-estate. */}
-        {TABS.filter((t) => t.route !== active).map((t) => (
+            navigation actions are Movies / Downloads / (Users for admins).
+            The pill for the page you're already on is wasted space. */}
+        {visibleTabs.map((t) => (
           <button
             key={t.route}
             ref={(node) => {
@@ -79,14 +86,13 @@ export function TopNav({ active }: Props) {
             onClick={() => transitionTo(t.route)}
             onKeyDown={(e) => {
               if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return
-              const visible = TABS.filter((x) => x.route !== active)
-              if (visible.length < 2) return
+              if (visibleTabs.length < 2) return
               e.preventDefault()
-              const i = visible.findIndex((x) => x.route === t.route)
+              const i = visibleTabs.findIndex((x) => x.route === t.route)
               const next =
                 e.key === 'ArrowRight'
-                  ? visible[(i + 1) % visible.length]
-                  : visible[(i - 1 + visible.length) % visible.length]
+                  ? visibleTabs[(i + 1) % visibleTabs.length]
+                  : visibleTabs[(i - 1 + visibleTabs.length) % visibleTabs.length]
               tabRefs.current[next.route]?.focus()
             }}
           >

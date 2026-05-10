@@ -87,6 +87,7 @@ auth.get('/plex/check', async (c) => {
     sub: String(user.id),
     username: user.username,
     role,
+    plexAuthToken: pin.authToken,
   })
 
   return c.json({

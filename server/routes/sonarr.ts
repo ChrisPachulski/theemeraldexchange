@@ -33,9 +33,18 @@ forwardRead('/api/v3/series/lookup')
 // passes when (size / episodeCount) ≤ maxTvBytesPerEpisode. We disable
 // Sonarr's built-in search-on-add so the only way a download starts is
 // through this filter — keeps 4K HDR season packs out by default.
+//
+// Important Sonarr quirks discovered while wiring this:
+//  - GET /api/v3/release?seriesId=X (no seasonNumber) returns
+//    RSS-cached recent results across the whole indexer — NOT a search
+//    for that series. To actually search, we have to scope per season.
+//  - Releases are usually flagged rejected:true because the Choose Me
+//    profile is restrictive; manual grab via POST /release overrides
+//    that, so we don't filter by `rejected` here. We let our size cap
+//    be the gate.
 async function grabTvUnderCap(seriesId: number, monitoredSeasons: number[]): Promise<void> {
   // Brief delay so Sonarr finishes wiring the new series record.
-  await new Promise((r) => setTimeout(r, 1500))
+  await new Promise((r) => setTimeout(r, 2000))
 
   type Release = {
     guid: string
@@ -49,42 +58,49 @@ async function grabTvUnderCap(seriesId: number, monitoredSeasons: number[]): Pro
     rejected?: boolean
   }
 
-  // Sonarr's series-scoped release endpoint triggers a search and
-  // returns the union of single-ep and season-pack releases for every
-  // monitored season.
-  const releaseRes = await sonarrFetch(`/api/v3/release?seriesId=${seriesId}`, {
-    method: 'GET',
-  })
-  if (!releaseRes.ok) {
-    console.error(`[tv-cap] release search ${releaseRes.status} for series ${seriesId}`)
-    return
-  }
-  const all = (await releaseRes.json()) as Release[]
-
-  // We need episode counts per season to evaluate full-season packs.
-  // Sonarr exposes episodeCount on the season-stats endpoint; cheaper
-  // path is /api/v3/episode?seriesId=X which we group locally.
-  const epRes = await sonarrFetch(`/api/v3/episode?seriesId=${seriesId}`, {
-    method: 'GET',
-  })
+  // Episode counts per season — used to evaluate full-season packs.
+  // Sonarr's /episode endpoint is populated lazily after series add;
+  // we poll briefly so we don't run with empty metadata.
   type Episode = { seasonNumber: number; episodeNumber: number; hasFile: boolean }
-  const eps = epRes.ok ? ((await epRes.json()) as Episode[]) : []
   const seasonEpCount = new Map<number, number>()
-  for (const e of eps) seasonEpCount.set(e.seasonNumber, (seasonEpCount.get(e.seasonNumber) ?? 0) + 1)
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const epRes = await sonarrFetch(`/api/v3/episode?seriesId=${seriesId}`, { method: 'GET' })
+    if (epRes.ok) {
+      const eps = (await epRes.json()) as Episode[]
+      seasonEpCount.clear()
+      for (const e of eps) seasonEpCount.set(e.seasonNumber, (seasonEpCount.get(e.seasonNumber) ?? 0) + 1)
+      if (seasonEpCount.size > 0) break
+    }
+    await new Promise((r) => setTimeout(r, 1500))
+  }
+
+  // For each monitored season, do a real interactive search.
+  const all: Release[] = []
+  for (const seasonNumber of monitoredSeasons) {
+    const url = `/api/v3/release?seriesId=${seriesId}&seasonNumber=${seasonNumber}`
+    const res = await sonarrFetch(url, { method: 'GET' })
+    if (!res.ok) {
+      console.error(`[tv-cap] release search ${res.status} S${seasonNumber} series=${seriesId}`)
+      continue
+    }
+    const chunk = (await res.json()) as Release[]
+    all.push(...chunk)
+  }
 
   function effectiveEpisodeCount(r: Release): number {
-    if (r.episodeNumbers && r.episodeNumbers.length > 0) return r.episodeNumbers.length
     if (r.fullSeason && r.seasonNumber !== undefined) {
-      return seasonEpCount.get(r.seasonNumber) ?? 1
+      // Optimistic fallback when episode metadata hasn't populated:
+      // assume 10 episodes (typical streaming season). Errs toward
+      // *letting* a season pack through rather than rejecting it.
+      return seasonEpCount.get(r.seasonNumber) ?? 10
     }
-    // Unknown shape — assume single episode so we err on the safe side
-    // (treats unknown as the strictest possible cap).
+    if (r.episodeNumbers && r.episodeNumbers.length > 0) return r.episodeNumbers.length
     return 1
   }
 
   const monitored = new Set(monitoredSeasons)
   const eligible = all
-    .filter((r) => !r.rejected && r.size > 0)
+    .filter((r) => r.size > 0)
     .filter((r) => r.seasonNumber === undefined || monitored.has(r.seasonNumber))
     .filter((r) => r.size / effectiveEpisodeCount(r) <= env.maxTvBytesPerEpisode)
 
@@ -105,7 +121,7 @@ async function grabTvUnderCap(seriesId: number, monitoredSeasons: number[]): Pro
   if (bestByChunk.size === 0) {
     console.log(
       `[tv-cap] no releases ≤ ${env.maxTvGbPerEpisode}GB/ep for series ${seriesId} ` +
-        `(${all.length} scanned)`,
+        `(${all.length} scanned across seasons ${[...monitored].join(',')})`,
     )
     return
   }
@@ -127,7 +143,7 @@ async function grabTvUnderCap(seriesId: number, monitoredSeasons: number[]): Pro
     })
     const ec = effectiveEpisodeCount(pick)
     console.log(
-      `[tv-cap] grab "${pick.title}" ${(pick.size / 1024 ** 3).toFixed(2)}GB ` +
+      `[tv-cap] grab "${pick.title.slice(0, 80)}" ${(pick.size / 1024 ** 3).toFixed(2)}GB ` +
         `(~${(pick.size / ec / 1024 ** 3).toFixed(2)}GB/ep, ${ec} ep) ` +
         `series=${seriesId} → ${grabRes.status}`,
     )

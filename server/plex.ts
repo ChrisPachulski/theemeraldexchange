@@ -83,6 +83,26 @@ export async function listResources(authToken: string): Promise<PlexResource[]> 
   return (await res.json()) as PlexResource[]
 }
 
+// People with shared access to the home Plex server, from the owner's
+// perspective. plex.tv's /v2/friends endpoint is a thin list of accounts
+// the token-holder is friends with on Plex; combined with the owner's
+// own profile this is what the dashboard surfaces on the Users page.
+export type PlexFriend = {
+  id: number
+  username: string
+  title?: string
+  email?: string | null
+  thumb?: string | null
+  status?: string
+}
+export async function listFriends(authToken: string): Promise<PlexFriend[]> {
+  const res = await fetch(`${PLEX_BASE}/friends`, {
+    headers: { ...baseHeaders(), 'X-Plex-Token': authToken },
+  })
+  if (!res.ok) throw new Error(`plex.listFriends failed: ${res.status}`)
+  return (await res.json()) as PlexFriend[]
+}
+
 // Build the URL the user's browser opens to authorize the PIN. The PIN
 // `code` (NOT the id) goes into the hash params.
 export function buildAuthUrl(pinCode: string): string {
