@@ -57,7 +57,11 @@
 .kraken__video--resting {
   z-index: 1;
   opacity: 0;
-  transition: opacity 250ms var(--ease, ease);
+  /* No transition — snap to fully visible the instant variant flips.
+     Previously this had a 250ms fade-in, which combined with the
+     overlay unmounting at the same moment produced a visible 250ms
+     window where the kraken (home) layer was peeking through under a
+     half-transparent resting layer. Snapping eliminates that window. */
 }
 
 .kraken--resting .kraken__video--resting {
