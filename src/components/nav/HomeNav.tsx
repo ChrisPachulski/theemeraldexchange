@@ -1,10 +1,11 @@
 import { useNavTransition } from '../../lib/navTransition'
+import { useAuth } from '../../lib/auth'
 import { UserMenu } from '../auth/UserMenu'
 import './HomeNav.css'
 
-// Minimal home-page chrome — no pill, no tab strip. Just the brand
-// hyperlinked top-left and the Watch link top-right, both at the same
-// top inset as the home entry buttons sit at the bottom inset.
+// Minimal home-page chrome — brand top-left, Watch/UserMenu top-right,
+// and an admin-only Users pill alongside Watch so admins can jump
+// straight to user management from the splash screen.
 
 const PLEX_URL = 'http://theemeraldexchange.local:32400/web'
 
@@ -30,7 +31,8 @@ function EmeraldGlyph() {
 }
 
 export function HomeNav() {
-  const { navigate } = useNavTransition()
+  const { navigate, transitionTo } = useNavTransition()
+  const { isAdmin } = useAuth()
 
   return (
     <>
@@ -45,6 +47,15 @@ export function HomeNav() {
       </button>
 
       <div className="home-nav__right">
+        {isAdmin && (
+          <button
+            type="button"
+            className="home-nav__pill"
+            onClick={() => transitionTo('users')}
+          >
+            Users
+          </button>
+        )}
         <a
           href={PLEX_URL}
           target="_blank"
