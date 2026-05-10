@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { sab } from '../../lib/api/sab'
 import { useDownloadQueue, useSonarrQueue } from '../../lib/hooks/useDownloadQueue'
+import { useSonarrLibrary } from '../../lib/hooks/useSonarrLibrary'
 import { useConfirm } from '../confirm/useConfirm'
 import { QueueRow } from '../queue/QueueRow'
 import { LoadingPulse } from '../feedback/LoadingPulse'
@@ -48,6 +49,7 @@ function fmtFreeSpace(gbRaw: string | undefined): string {
 export function DownloadsTab() {
   const queue = useDownloadQueue()
   const sonarrQueue = useSonarrQueue()
+  const series = useSonarrLibrary()
   const confirm = useConfirm()
   const qc = useQueryClient()
   const { isAdmin } = useAuth()
@@ -113,49 +115,89 @@ export function DownloadsTab() {
   const leftBytes = parseSabSize(sizeLeftRaw)
   const downloadedBytes = Math.max(0, totalBytes - leftBytes)
 
-  // Season-cluster detection. Sonarr emits one queue record per
-  // episode — for a season pack that's a single SAB slot bundling
-  // many records under the same downloadId; for a multi-grab fallback
-  // (what HotD does today after Eweka aborts the pack) it's many SAB
-  // slots, each with its own Sonarr record, all sharing the same
-  // (seriesId, seasonNumber). Either way, the user-facing story is
-  // "downloading a season" and Episode Size = total / count.
+  // Season-cluster math. We join three sources:
+  //   - SAB slots (per-NZB bytes + percent complete)
+  //   - Sonarr queue (per-episode records mapped to SAB via downloadId)
+  //   - Sonarr series library (per-season totalEpisodeCount and
+  //     sizeOnDisk for episodes already imported)
+  //
+  // The previous version only summed what was still in the SAB queue,
+  // which made "Season Size" shrink as episodes imported and made
+  // Downloaded (queue-wide) inconsistent with Episode/Season (cluster-
+  // scoped). With season stats joined in, Season Size is on-disk +
+  // in-flight, Episode Size is Season / episodeCount, and Downloaded
+  // counts the already-imported bytes plus the in-flight progress.
   const isTv = (activeSlot?.cat ?? '').toLowerCase() === 'tv'
   const sonarrRecords = sonarrQueue.data?.records ?? []
   const activeSonarrCtx = activeSlot
     ? sonarrRecords.find((r) => r.downloadId === activeSlot.nzo_id)
     : undefined
+  const seriesId = activeSonarrCtx?.seriesId
+  const seasonNumber = activeSonarrCtx?.seasonNumber
+  const activeSeries = seriesId !== undefined
+    ? series.data?.find((s) => s.id === seriesId)
+    : undefined
+  const activeSeasonStats = activeSeries?.seasons?.find(
+    (s) => s.seasonNumber === seasonNumber,
+  )?.statistics
+
   const clusterRecords =
-    activeSonarrCtx?.seriesId !== undefined && activeSonarrCtx.seasonNumber !== undefined
+    seriesId !== undefined && seasonNumber !== undefined
       ? sonarrRecords.filter(
-          (r) =>
-            r.seriesId === activeSonarrCtx.seriesId &&
-            r.seasonNumber === activeSonarrCtx.seasonNumber,
+          (r) => r.seriesId === seriesId && r.seasonNumber === seasonNumber,
         )
       : []
   const clusterDownloadIds = new Set(
     clusterRecords.map((r) => r.downloadId).filter((id): id is string => Boolean(id)),
   )
-  const clusterBytes = slots
-    .filter((s) => clusterDownloadIds.has(s.nzo_id))
-    .reduce((sum, s) => sum + parseSabSize(s.size), 0)
-  const isSeasonCluster = isTv && clusterRecords.length > 1 && clusterBytes > 0
-  const episodeCount = isSeasonCluster ? clusterRecords.length : 1
-  // Per-episode size: the cluster's total / its episode count, or for
-  // a single TV episode, just the active slot's own size.
-  const episodeBytes = isSeasonCluster
-    ? clusterBytes / episodeCount
+  const clusterSlots = slots.filter((s) => clusterDownloadIds.has(s.nzo_id))
+  const inFlightBytes = clusterSlots.reduce((sum, s) => sum + parseSabSize(s.size), 0)
+  const inFlightDownloadedBytes = clusterSlots.reduce(
+    (sum, s) => sum + parseSabSize(s.size) * ((parseFloat(s.percentage) || 0) / 100),
+    0,
+  )
+
+  // A season context is when there's a season with > 1 monitored
+  // episode behind this download — even if only 1 is currently in
+  // SAB's queue (the rest may already be on disk). That's the case
+  // when, e.g., 7 of 10 HotD episodes are imported and 3 are still
+  // being grabbed: cluster Records = 3, but the season is 10 eps.
+  const totalSeasonEps = Math.max(
+    activeSeasonStats?.totalEpisodeCount ?? 0,
+    clusterRecords.length,
+  )
+  const isSeasonContext = isTv && totalSeasonEps > 1
+
+  const seasonBytesOnDisk = activeSeasonStats?.sizeOnDisk ?? 0
+  const seasonBytes = seasonBytesOnDisk + inFlightBytes
+  const episodeBytes = isSeasonContext && totalSeasonEps > 0
+    ? seasonBytes / totalSeasonEps
     : activeSlot
       ? parseSabSize(activeSlot.size)
       : 0
-  // When we have a cluster, surface that as the headline total —
-  // otherwise fall back to the queue-wide sum that was already shown.
-  const totalDisplayBytes = isSeasonCluster ? clusterBytes : totalBytes
-  const totalLabel = isSeasonCluster ? 'Season size' : 'File size'
+
+  // Active-scope Downloaded: cluster-aware when in a season context,
+  // else the active slot's own progress. Falls back to queue-wide
+  // only as a last resort (and is masked by idle anyway).
+  const slotDownloadedBytes = activeSlot
+    ? parseSabSize(activeSlot.size) * ((parseFloat(activeSlot.percentage) || 0) / 100)
+    : 0
+  const downloadedDisplayBytes = isSeasonContext
+    ? seasonBytesOnDisk + inFlightDownloadedBytes
+    : activeSlot
+      ? slotDownloadedBytes
+      : downloadedBytes
+
+  const totalDisplayBytes = isSeasonContext
+    ? seasonBytes
+    : activeSlot
+      ? parseSabSize(activeSlot.size)
+      : totalBytes
+  const totalLabel = isSeasonContext ? 'Season size' : 'File size'
 
   const stats = [
     { label: 'Speed',       value: idle ? '—' : fmtSpeed(speedRaw) },
-    { label: 'Downloaded',  value: idle ? '—' : fmtSize(downloadedBytes) },
+    { label: 'Downloaded',  value: idle ? '—' : (downloadedDisplayBytes > 0 ? fmtSize(downloadedDisplayBytes) : '—') },
     ...(isTv && !idle
       ? [{ label: 'Episode size', value: episodeBytes > 0 ? fmtSize(episodeBytes) : '—' }]
       : []),

@@ -36,6 +36,14 @@ export type SystemStatus = {
   instanceName: string
 }
 
+export type SeasonStatistics = {
+  episodeCount?: number
+  episodeFileCount?: number
+  totalEpisodeCount?: number
+  sizeOnDisk?: number
+  percentOfEpisodes?: number
+}
+
 export type SeriesSearchResult = {
   tvdbId: number
   imdbId?: string
@@ -46,7 +54,7 @@ export type SeriesSearchResult = {
   status?: string
   remotePoster?: string
   images?: Array<{ coverType: string; remoteUrl?: string; url?: string }>
-  seasons?: Array<{ seasonNumber: number; monitored: boolean }>
+  seasons?: Array<{ seasonNumber: number; monitored: boolean; statistics?: SeasonStatistics }>
   // Additional fields Sonarr returns that we surface in the detail modal.
   genres?: string[]
   runtime?: number
