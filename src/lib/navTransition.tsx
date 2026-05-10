@@ -93,9 +93,12 @@ export function NavTransitionProvider({ children }: { children: ReactNode }) {
     const v = videoRef.current
     if (!v) return
     v.currentTime = 0
-    // Play the source clip at its native speed (5.7s @ 24fps). No JS
-    // acceleration — every speed-up turned it visually janky.
-    v.playbackRate = 1
+    // Play the full 4-scene source clip at 1.4x. Source is 5.7s wall-clock
+    // with stretched per-frame timing; 1.4x lands the transition at ~4.1s
+    // without amplifying the source's frame-pacing irregularities into
+    // visible judder (2x and 4x both did). All four scenes stay intact —
+    // do not chop the source to "fix" pacing.
+    v.playbackRate = 1.4
     const p = v.play()
     if (p && typeof (p as Promise<void>).catch === 'function') {
       ;(p as Promise<void>).catch(() => {
