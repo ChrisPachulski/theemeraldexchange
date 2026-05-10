@@ -93,6 +93,9 @@ export function NavTransitionProvider({ children }: { children: ReactNode }) {
     const v = videoRef.current
     if (!v) return
     v.currentTime = 0
+    // Source clip was rendered with slow-mo; play it at real-time so the
+    // transition is a snappy ~2.8s flourish instead of a 5.7s drag.
+    v.playbackRate = 2
     const p = v.play()
     if (p && typeof (p as Promise<void>).catch === 'function') {
       ;(p as Promise<void>).catch(() => {
