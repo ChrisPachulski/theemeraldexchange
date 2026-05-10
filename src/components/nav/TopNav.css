@@ -4,13 +4,21 @@
    The pill for whichever tab the user is *on* is hidden so the chrome
    only ever offers the navigation actions that change something. */
 
-/* Brand — same treatment as HomeNav so the home → tab transition is
-   visually continuous (no chrome jump). Click navigates back home. */
-.top-nav__brand {
+/* Brand stack pins to the top-left. Houses the EMERALD EXCHANGE button
+   plus a small "you are here" subtitle for the active tab. */
+.top-nav__brand-stack {
   position: fixed;
   top: var(--pod-inset, 16px);
   left: var(--pod-inset, 16px);
   z-index: var(--z-nav, 200);
+  display: grid;
+  gap: 2px;
+  justify-items: start;
+}
+
+/* Brand — same treatment as HomeNav so the home → tab transition is
+   visually continuous (no chrome jump). Click navigates back home. */
+.top-nav__brand {
   display: inline-flex;
   align-items: baseline;
   gap: var(--s-2);
@@ -25,6 +33,20 @@
   user-select: none;
   cursor: pointer;
   transition: opacity var(--dur-fast) var(--ease);
+}
+
+/* "You are here" subtitle. Indented to line up with the brand text
+   inside the button (which has var(--s-3) horizontal padding) and
+   styled quieter so it doesn't fight the brand. */
+.top-nav__here {
+  margin-left: var(--s-3);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  letter-spacing: var(--tr-hud);
+  text-transform: uppercase;
+  color: var(--emerald);
+  opacity: 0.85;
+  pointer-events: none;
 }
 
 .top-nav__brand:hover {

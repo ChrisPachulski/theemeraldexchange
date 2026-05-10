@@ -18,6 +18,13 @@ const TABS: Tab[] = [
   { route: 'users', label: 'Users', adminOnly: true },
 ]
 
+const ROUTE_LABEL: Record<NavRoute, string> = {
+  tv: 'TV Shows',
+  movies: 'Movies',
+  downloads: 'Downloads',
+  users: 'Users',
+}
+
 // Emerald-cut gem glyph for the Watch label. Filled with currentColor so the
 // CSS class chooses the hue. The two thin strokes are facet hints — at small
 // sizes they read as depth without becoming busy.
@@ -59,15 +66,23 @@ export function TopNav({ active }: Props) {
 
   return (
     <>
-      <button
-        type="button"
-        className="top-nav__brand"
-        aria-label="Emerald Exchange — home"
-        onClick={() => navigate('home')}
-      >
-        <span className="top-nav__brand-mark">EMERALD</span>
-        <span className="top-nav__brand-sub">EXCHANGE</span>
-      </button>
+      <div className="top-nav__brand-stack">
+        <button
+          type="button"
+          className="top-nav__brand"
+          aria-label="Emerald Exchange — home"
+          onClick={() => navigate('home')}
+        >
+          <span className="top-nav__brand-mark">EMERALD</span>
+          <span className="top-nav__brand-sub">EXCHANGE</span>
+        </button>
+        {/* Quiet "you are here" label so the active-tab pill can stay
+            removed without losing wayfinding. Sits under EXCHANGE so it
+            doesn't compete with the centered nav. */}
+        {active !== 'home' && (
+          <span className="top-nav__here">{ROUTE_LABEL[active as NavRoute]}</span>
+        )}
+      </div>
 
       <nav className="top-nav__tabs" role="tablist" aria-label="Primary">
         {/* Hide the current tab — sitting on TV Shows means the only

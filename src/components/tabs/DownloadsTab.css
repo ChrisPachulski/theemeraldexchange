@@ -104,6 +104,73 @@
   margin: var(--s-2) 0 0;
 }
 
+/* Eyebrow row — "DOWNLOADS" label on the left, category pill (Movies /
+   TV) on the right when something's downloading. The pill replaces the
+   QueueRow's redundant copy so the active item lives entirely in this
+   header card. */
+.downloads-tab__eyebrow-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+.downloads-tab__eyebrow-row .downloads-tab__eyebrow {
+  margin: 0;
+}
+
+.downloads-tab__category {
+  font-family: var(--font-display);
+  font-size: 0.625rem;
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--emerald);
+  border: 1px solid var(--emerald);
+  background: color-mix(in oklch, var(--emerald) 14%, var(--surface));
+  padding: 2px var(--s-2);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+/* Active progress bar inside the header. Same visual language as the
+   QueueRow bar for any non-active items below — keeps the family. */
+.downloads-tab__progress {
+  margin: var(--s-3) 0 0;
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--surface) 60%, transparent);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.downloads-tab__progress-fill {
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklch, var(--emerald) 80%, transparent),
+    var(--emerald)
+  );
+  box-shadow: 0 0 12px -2px oklch(0.62 0.180 158 / 0.55);
+  transition: width var(--dur-fast) var(--ease);
+}
+
+.downloads-tab__progress-meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+  margin: var(--s-2) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  font-feature-settings: 'tnum' 1;
+  color: var(--text-muted);
+}
+.downloads-tab__progress-percent {
+  color: var(--emerald);
+  letter-spacing: var(--tr-hud);
+}
+.downloads-tab__progress-eta {
+  color: var(--text-subtle);
+}
+
 /* Telemetry stat boxes — speed / downloaded / file size / available.
    Always rendered (em-dashes when idle) so layout doesn't reflow when a
    download kicks off. The 'available' box stays populated whenever SAB

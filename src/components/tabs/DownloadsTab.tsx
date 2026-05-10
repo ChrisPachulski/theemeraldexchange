@@ -95,6 +95,16 @@ export function DownloadsTab() {
   // instead of the generic placeholder.
   const activeSlot = slots.find((s) => s.status === 'Downloading') ?? slots[0]
   const headingText = idle ? 'Queue is Open.' : (activeSlot?.filename ?? 'Queue is Open.')
+  // Active progress + ETA so the header card can render its own bar
+  // without the QueueRow doppelganger underneath.
+  const activePercent = activeSlot ? Math.min(100, Math.max(0, parseFloat(activeSlot.percentage) || 0)) : 0
+  const activeTimeLeft =
+    activeSlot && activeSlot.timeleft && activeSlot.timeleft !== '0:00:00'
+      ? activeSlot.timeleft
+      : null
+  // Other items in the queue — everything except the slot already shown
+  // in the header. Those still get their own rows.
+  const queuedSlots = activeSlot ? slots.filter((s) => s.nzo_id !== activeSlot.nzo_id) : []
 
   // Stat-box values. When idle, speed/downloaded/size show '—'; available
   // disk space stays populated whenever the SAB host reports it.
@@ -112,13 +122,47 @@ export function DownloadsTab() {
     <section className="downloads-tab">
       <div className="downloads-tab__panel">
         <header className="downloads-tab__header">
-          <p className="downloads-tab__eyebrow">Downloads</p>
+          <div className="downloads-tab__eyebrow-row">
+            <p className="downloads-tab__eyebrow">Downloads</p>
+            {activeSlot?.cat && (
+              <span
+                className={`downloads-tab__category downloads-tab__category--${activeSlot.cat.toLowerCase()}`}
+              >
+                {activeSlot.cat}
+              </span>
+            )}
+          </div>
           <h2
             className={`downloads-tab__summary${idle ? '' : ' downloads-tab__summary--filename'}`}
             title={idle ? undefined : headingText}
           >
             {headingText}
           </h2>
+          {activeSlot && (
+            <>
+              <div
+                className="downloads-tab__progress"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(activePercent)}
+                aria-label={`Downloading ${activeSlot.filename}`}
+              >
+                <div
+                  className="downloads-tab__progress-fill"
+                  style={{ width: `${activePercent}%` }}
+                />
+              </div>
+              <p className="downloads-tab__progress-meta">
+                <span className="downloads-tab__progress-percent">
+                  [ {Math.round(activePercent)}% ]
+                </span>
+                {activeTimeLeft && (
+                  <span className="downloads-tab__progress-eta">{activeTimeLeft}</span>
+                )}
+              </p>
+            </>
+          )}
           {isPaused && <p className="downloads-tab__paused">Queue is paused.</p>}
 
           <ul className="downloads-tab__stats" aria-label="Download statistics">
@@ -131,9 +175,9 @@ export function DownloadsTab() {
           </ul>
         </header>
 
-        {slots.length > 0 && (
+        {queuedSlots.length > 0 && (
           <div className="downloads-tab__queue">
-            {slots.map((slot) => {
+            {queuedSlots.map((slot) => {
               const percent = parseFloat(slot.percentage) || 0
               const paused = slot.status === 'Paused'
               const busy =
