@@ -165,15 +165,32 @@ type PendingRecord = {
 }
 
 export async function listPendingInvites(authToken: string): Promise<PlexFriend[]> {
-  const res = await fetch(`${PLEX_BASE}/friends/requested`, {
-    headers: { ...baseHeaders(), 'X-Plex-Token': authToken },
-  })
+  // Hard timeout so a slow plex.tv response can't take the whole
+  // /api/users route down with it.
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 5000)
+  let res: Response
+  try {
+    res = await fetch(`${PLEX_BASE}/friends/requested`, {
+      headers: { ...baseHeaders(), 'X-Plex-Token': authToken },
+      signal: controller.signal,
+    })
+  } finally {
+    clearTimeout(timer)
+  }
   // Plex returns 404 when there are no pending invites on some accounts;
   // treat that as "empty list" rather than failing the whole route.
   if (res.status === 404) return []
   if (!res.ok) throw new Error(`plex.listPendingInvites failed: ${res.status}`)
-  const data = (await res.json().catch(() => [])) as PendingRecord[]
-  if (!Array.isArray(data)) return []
+  // Response can be either a raw array OR { friends: [...] } depending on
+  // account state. python-plexapi uses rtag='friends' which expects the
+  // wrapped form.
+  const raw = (await res.json().catch(() => null)) as unknown
+  const data: PendingRecord[] = Array.isArray(raw)
+    ? (raw as PendingRecord[])
+    : Array.isArray((raw as { friends?: unknown })?.friends)
+      ? ((raw as { friends: PendingRecord[] }).friends)
+      : []
   return data
     .map((r) => {
       const id =
