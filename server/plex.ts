@@ -137,7 +137,13 @@ function parseUserElements(xml: string): PlexFriend[] {
 export async function listAcceptedUsers(authToken: string): Promise<PlexFriend[]> {
   // Legacy XML endpoint on the bare plex.tv host, NOT under /api/v2 —
   // so we don't route through PLEX_BASE.
-  const res = await fetch('https://plex.tv/api/users', {
+  //
+  // python-plexapi puts the auth token in the URL as a query param
+  // (not a header) for this endpoint. The header form returns 200 but
+  // sometimes an empty MediaContainer; the query-param form is what
+  // actually returns the share list. Belt-and-suspenders: send both.
+  const url = `https://plex.tv/api/users?X-Plex-Token=${encodeURIComponent(authToken)}`
+  const res = await fetch(url, {
     headers: {
       'X-Plex-Product': 'The Emerald Exchange',
       'X-Plex-Client-Identifier': env.plexClientId,
