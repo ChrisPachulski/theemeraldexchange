@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import './Kraken.css'
 
 // Atmospheric background layer.
@@ -15,6 +16,27 @@ import './Kraken.css'
 type Props = { variant?: 'kraken' | 'resting' }
 
 export function Kraken({ variant = 'kraken' }: Props) {
+  const restingRef = useRef<HTMLVideoElement>(null)
+
+  // Sync resting.mp4 to frame 0 every time we transition INTO 'resting'.
+  // The transition video ends on resting's frame 0 (last 4 frames are
+  // pulled from resting.mp4), so by resetting the resting bg to the same
+  // point, the overlay-to-bg handoff shows IDENTICAL pixels on both
+  // sides of the cut — no green-to-blue eye flash, no epileptic blink.
+  useEffect(() => {
+    if (variant !== 'resting') return
+    const v = restingRef.current
+    if (!v) return
+    try {
+      v.currentTime = 0
+    } catch {
+      // currentTime can throw on some browsers before metadata loads;
+      // ignore — the video will play from wherever it is and the
+      // handoff will be slightly less perfect but still works.
+    }
+    v.play().catch(() => {})
+  }, [variant])
+
   return (
     <div className={`kraken kraken--${variant}`} aria-hidden="true">
       <video
@@ -30,6 +52,7 @@ export function Kraken({ variant = 'kraken' }: Props) {
         <source src="/kraken.mp4" type="video/mp4" />
       </video>
       <video
+        ref={restingRef}
         className="kraken__video kraken__video--resting"
         loop
         muted
