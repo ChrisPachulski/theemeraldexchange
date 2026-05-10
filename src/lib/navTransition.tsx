@@ -54,9 +54,7 @@ const NavTransitionContext = createContext<Ctx | null>(null)
 export function NavTransitionProvider({ children }: { children: ReactNode }) {
   const [route, navigate] = useRoute()
   const [active, setActive] = useState<Active | null>(null)
-  const [fadingOut, setFadingOut] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
-  const fadeTimeoutRef = useRef<number | null>(null)
 
   // Refreshing on the home route is the natural "reset" gesture — clear
   // the played gate so the next nav-button press replays the transition.
@@ -105,37 +103,15 @@ export function NavTransitionProvider({ children }: { children: ReactNode }) {
   }, [active, navigate])
 
   const finish = () => {
-    // Navigate first so the resting kraken layer activates underneath
-    // the overlay BEFORE we start fading it out. That way the resting
-    // bg is already painting the new scene as the transition overlay
-    // dissolves — closes the green-eyes-to-blue-eyes hard cut that
-    // makes the handoff feel jarring.
     if (active?.target) navigate(active.target)
-    setFadingOut(true)
-    if (fadeTimeoutRef.current !== null) {
-      window.clearTimeout(fadeTimeoutRef.current)
-    }
-    fadeTimeoutRef.current = window.setTimeout(() => {
-      setActive(null)
-      setFadingOut(false)
-      fadeTimeoutRef.current = null
-    }, 300)
+    setActive(null)
   }
-
-  useEffect(() => () => {
-    if (fadeTimeoutRef.current !== null) {
-      window.clearTimeout(fadeTimeoutRef.current)
-    }
-  }, [])
 
   return (
     <NavTransitionContext.Provider value={{ transitionTo, navigate, replay }}>
       {children}
       {active && (
-        <div
-          className={`nav-transition${fadingOut ? ' nav-transition--fading' : ''}`}
-          role="presentation"
-        >
+        <div className="nav-transition" role="presentation">
           <video
             ref={videoRef}
             className="nav-transition__video"
