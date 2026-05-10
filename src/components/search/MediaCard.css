@@ -1,15 +1,15 @@
 .media-card {
-  /* DIAGNOSTIC RED — temporary; if you see red cards, your browser is
-     finally loading the latest CSS. If you still see transparent/kraken,
-     there's a cache layer (browser, edge) holding old assets. */
+  /* Solid slate-grey panel, opaque, no kraken bleed-through. Lifted
+     above the fixed-position kraken layer via the stacking-context
+     fix on <main> (see global.css). */
   display: grid;
   grid-template-columns: 108px 1fr;
   gap: var(--s-4);
   text-align: left;
   padding: var(--s-3);
   border-radius: var(--r-lg);
-  background: #ff0066 !important;
-  border: 3px solid #ffff00 !important;
+  background: #14181c;
+  border: 1px solid var(--emerald);
   box-shadow:
     inset 0 1px 0 var(--frost-stronger),
     0 0 0 4px oklch(0 0 0 / 0.45),

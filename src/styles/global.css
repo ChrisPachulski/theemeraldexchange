@@ -54,6 +54,21 @@ body {
   z-index: 1;
 }
 
+/* Lift tab content above the kraken layer. The kraken is position:fixed
+   with z-index:0, which CSS paints at the "positioned descendant with
+   z-index:0" step — that step is AFTER non-positioned descendants like
+   <main>. Without a stacking context on <main>, the kraken video paints
+   ON TOP of cards (with its 72% opacity, making cards look translucent
+   even when they're rendered with solid backgrounds). Giving <main> its
+   own positioned stacking context with z-index:1 puts content above the
+   kraken so card backgrounds actually cover the video.
+   Used to work accidentally because MediaCard had backdrop-filter, which
+   itself creates a stacking context — but solid cards don't need blur. */
+main {
+  position: relative;
+  z-index: 1;
+}
+
 /* Constellation overlay — fixed behind content. Drifts slowly via transform.
    Pure decoration. Pointer-events disabled. Honors prefers-reduced-motion. */
 .constellation {
