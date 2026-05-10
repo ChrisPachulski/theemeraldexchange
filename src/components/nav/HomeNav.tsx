@@ -1,11 +1,11 @@
 import { useNavTransition } from '../../lib/navTransition'
-import { useAuth } from '../../lib/auth'
 import { UserMenu } from '../auth/UserMenu'
 import './HomeNav.css'
 
-// Minimal home-page chrome — brand top-left, Watch/UserMenu top-right,
-// and an admin-only Users pill alongside Watch so admins can jump
-// straight to user management from the splash screen.
+// Minimal home-page chrome — brand top-left, Watch/UserMenu top-right.
+// Section entries (including admin-only Users) live in HomeTab so they
+// sit at the bottom alongside the other entry buttons, mirroring the
+// floor row pattern.
 
 const PLEX_URL = 'http://theemeraldexchange.local:32400/web'
 
@@ -31,8 +31,7 @@ function EmeraldGlyph() {
 }
 
 export function HomeNav() {
-  const { navigate, transitionTo } = useNavTransition()
-  const { isAdmin } = useAuth()
+  const { navigate } = useNavTransition()
 
   return (
     <>
@@ -47,15 +46,6 @@ export function HomeNav() {
       </button>
 
       <div className="home-nav__right">
-        {isAdmin && (
-          <button
-            type="button"
-            className="home-nav__pill"
-            onClick={() => transitionTo('users')}
-          >
-            Users
-          </button>
-        )}
         <a
           href={PLEX_URL}
           target="_blank"

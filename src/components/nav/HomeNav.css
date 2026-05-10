@@ -47,32 +47,6 @@
   gap: var(--s-2);
 }
 
-.home-nav__pill {
-  flex-shrink: 0;
-  white-space: nowrap;
-  font-family: var(--font-display);
-  font-size: var(--t-xs);
-  font-weight: var(--w-ui);
-  letter-spacing: var(--tr-eyebrow);
-  text-transform: uppercase;
-  color: var(--text);
-  background: color-mix(in oklch, var(--surface) 60%, transparent);
-  border: 1px solid var(--border);
-  padding: var(--s-2) var(--s-3);
-  border-radius: var(--r-pod);
-  cursor: pointer;
-  transition:
-    background var(--dur-fast) var(--ease),
-    border-color var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease);
-}
-
-.home-nav__pill:hover {
-  background: color-mix(in oklch, var(--emerald) 8%, var(--surface));
-  border-color: var(--emerald);
-  color: var(--emerald);
-}
-
 .home-nav__watch {
   display: inline-flex;
   align-items: center;
