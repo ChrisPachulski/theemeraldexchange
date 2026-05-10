@@ -1,17 +1,19 @@
 .media-card {
-  /* Solid dark-teal panel. The kraken video shows through the gaps
-     between cards; inside each card the surface is fully opaque so
-     meta text reads cleanly without any kraken bleed-through. */
+  /* Slate-grey panel that visually separates from the kraken (which is
+     mostly dark teal/green). Pure cool grey reads as "UI surface", not
+     "more video". Solid emerald border + outer ring make the silhouette
+     unmistakable even when the kraken eye glow lights up the area. */
   display: grid;
   grid-template-columns: 108px 1fr;
   gap: var(--s-4);
   text-align: left;
   padding: var(--s-3);
   border-radius: var(--r-lg);
-  background: oklch(0.16 0.014 158);
-  border: 1px solid color-mix(in oklch, var(--emerald) 25%, var(--border));
+  background: #14181c;
+  border: 1px solid var(--emerald);
   box-shadow:
-    inset 0 1px 0 var(--frost),
+    inset 0 1px 0 var(--frost-stronger),
+    0 0 0 4px oklch(0 0 0 / 0.45),
     0 14px 30px -22px var(--ink);
   transition:
     background var(--dur-fast) var(--ease),
@@ -21,10 +23,11 @@
 }
 
 .media-card:hover {
-  background: oklch(0.20 0.018 158);
+  background: #1c2127;
   border-color: var(--emerald);
   box-shadow:
     inset 0 1px 0 var(--frost-stronger),
+    0 0 0 4px oklch(62% 0.18 158 / 0.35),
     0 18px 36px -22px var(--ink);
 }
 
@@ -136,7 +139,7 @@
 
 .media-card__overview {
   font-size: var(--t-sm);
-  color: var(--text-subtle);
+  color: var(--text-muted);
   margin: 0;
   line-height: 1.55;
   display: -webkit-box;
