@@ -2,16 +2,16 @@ import { useEffect, useRef, useState } from 'react'
 import { useAuth } from '../../lib/auth'
 import './UserMenu.css'
 
-// Compact user pill with a dropdown — username, role badge, sign out.
-// Admins also see:
-//   - View-as toggle to preview the app as a regular user (UI-only;
-//     server-side permissions are unchanged).
-//   - Direct links to Sonarr / Radarr / SAB on the LAN. Hidden when
-//     viewing as user. Links use the LAN hostname only — no IP — so the
-//     public Netlify bundle leaks nothing about the home network.
-//
-// The component is positioning-agnostic; the parent (HomeNav / TopNav)
-// places it in the top-right cluster.
+// Trigger pill in the top-right cluster + dropdown panel for the
+// authenticated user. The panel is structured into four sections separated
+// by hairlines:
+//   1. Header: who you're signed in as + role badge
+//   2. Toggle: admins can preview the app as a regular user (UI-only)
+//   3. Apps:   admin-only direct links to Sonarr / Radarr / SAB on the LAN
+//              (hidden when viewing-as-user). Links use the LAN hostname
+//              only — no IP — so the public bundle leaks nothing about
+//              the home network.
+//   4. Sign out
 
 const APP_LINKS = [
   { name: 'Sonarr', href: 'http://theemeraldexchange.local/tv' },
@@ -60,51 +60,70 @@ export function UserMenu() {
 
       {open && (
         <div className="user-menu__dropdown" role="menu">
-          <div className="user-menu__row">
-            <span className="user-menu__row-label">Role</span>
-            <span className={`user-menu__role user-menu__role--${effectiveRole}`}>
-              {previewing ? 'user (preview)' : effectiveRole}
-            </span>
-          </div>
+          <header className="user-menu__header">
+            <p className="user-menu__eyebrow">Signed in as</p>
+            <div className="user-menu__identity">
+              <span className="user-menu__username">{user.username}</span>
+              <span className={`user-menu__role user-menu__role--${effectiveRole}`}>
+                {previewing ? 'user (preview)' : effectiveRole}
+              </span>
+            </div>
+          </header>
 
           {isActualAdmin && (
-            <button
-              type="button"
-              className="user-menu__toggle"
-              onClick={() => setViewAs(previewing ? null : 'user')}
-              role="switch"
-              aria-checked={!previewing}
-            >
-              <span className="user-menu__toggle-label">View as user</span>
-              <span
-                className={
-                  previewing
-                    ? 'user-menu__toggle-track user-menu__toggle-track--on'
-                    : 'user-menu__toggle-track'
-                }
-                aria-hidden="true"
+            <>
+              <hr className="user-menu__divider" />
+              <button
+                type="button"
+                className="user-menu__toggle"
+                onClick={() => setViewAs(previewing ? null : 'user')}
+                role="switch"
+                aria-checked={previewing}
               >
-                <span className="user-menu__toggle-thumb" />
-              </span>
-            </button>
+                <span className="user-menu__toggle-label">View as user</span>
+                <span
+                  className={
+                    previewing
+                      ? 'user-menu__toggle-track user-menu__toggle-track--on'
+                      : 'user-menu__toggle-track'
+                  }
+                  aria-hidden="true"
+                >
+                  <span className="user-menu__toggle-thumb" />
+                </span>
+              </button>
+            </>
           )}
 
           {isAdmin && (
-            <div className="user-menu__apps" role="group" aria-label="Open service">
-              {APP_LINKS.map((app) => (
-                <a
-                  key={app.name}
-                  className="user-menu__app"
-                  href={app.href}
-                  target="_blank"
-                  rel="noreferrer noopener"
-                >
-                  {app.name}
-                </a>
-              ))}
-            </div>
+            <>
+              <hr className="user-menu__divider" />
+              <section
+                className="user-menu__apps"
+                role="group"
+                aria-label="Admin services"
+              >
+                <p className="user-menu__eyebrow">Admin apps</p>
+                <ul className="user-menu__app-list">
+                  {APP_LINKS.map((app) => (
+                    <li key={app.name}>
+                      <a
+                        className="user-menu__app"
+                        href={app.href}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                      >
+                        <span className="user-menu__app-name">{app.name}</span>
+                        <span className="user-menu__app-arrow" aria-hidden="true">→</span>
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            </>
           )}
 
+          <hr className="user-menu__divider" />
           <button
             type="button"
             className="user-menu__signout"
