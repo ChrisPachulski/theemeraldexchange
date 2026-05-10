@@ -83,24 +83,66 @@ export async function listResources(authToken: string): Promise<PlexResource[]> 
   return (await res.json()) as PlexResource[]
 }
 
-// People with shared access to the home Plex server, from the owner's
-// perspective. plex.tv's /v2/friends endpoint is a thin list of accounts
-// the token-holder is friends with on Plex; combined with the owner's
-// own profile this is what the dashboard surfaces on the Users page.
+// People the owner has invited to their Plex server (the "Manage Library
+// Access" list). The legacy XML endpoint at plex.tv/api/users is the
+// canonical source — it's what python-plexapi's MyPlexAccount.users()
+// uses and it includes every invitee regardless of accept-state, which
+// is what an admin actually wants to see on the Users page.
+//
+// We intentionally do NOT use /api/v2/friends — that's the Plex social
+// graph (mutual friend relationships), not server shares, and is often
+// empty even when the owner has shared with many users.
 export type PlexFriend = {
   id: number
   username: string
   title?: string
   email?: string | null
   thumb?: string | null
-  status?: string
 }
-export async function listFriends(authToken: string): Promise<PlexFriend[]> {
-  const res = await fetch(`${PLEX_BASE}/friends`, {
-    headers: { ...baseHeaders(), 'X-Plex-Token': authToken },
+
+function unescapeXml(s: string): string {
+  return s
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+}
+
+function parseUserElements(xml: string): PlexFriend[] {
+  const out: PlexFriend[] = []
+  for (const match of xml.matchAll(/<User\s+([^>]+?)\/?>/g)) {
+    const attrs: Record<string, string> = {}
+    for (const a of match[1].matchAll(/(\w+)="([^"]*)"/g)) {
+      attrs[a[1]] = unescapeXml(a[2])
+    }
+    const id = Number(attrs.id)
+    if (!Number.isFinite(id)) continue
+    out.push({
+      id,
+      username: attrs.username || attrs.title || '',
+      title: attrs.title || attrs.username || undefined,
+      email: attrs.email || null,
+      thumb: attrs.thumb || null,
+    })
+  }
+  return out
+}
+
+export async function listInvitedUsers(authToken: string): Promise<PlexFriend[]> {
+  // NOTE: this is the legacy XML endpoint on the bare plex.tv host, NOT
+  // the v2 JSON tree — so the URL doesn't go through PLEX_BASE.
+  const res = await fetch('https://plex.tv/api/users', {
+    headers: {
+      'X-Plex-Product': 'The Emerald Exchange',
+      'X-Plex-Client-Identifier': env.plexClientId,
+      'X-Plex-Token': authToken,
+      Accept: 'application/xml',
+    },
   })
-  if (!res.ok) throw new Error(`plex.listFriends failed: ${res.status}`)
-  return (await res.json()) as PlexFriend[]
+  if (!res.ok) throw new Error(`plex.listInvitedUsers failed: ${res.status}`)
+  const xml = await res.text()
+  return parseUserElements(xml)
 }
 
 // Build the URL the user's browser opens to authorize the PIN. The PIN
