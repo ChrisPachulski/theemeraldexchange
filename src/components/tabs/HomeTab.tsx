@@ -3,7 +3,7 @@ import { useNavTransition } from '../../lib/navTransition'
 import './HomeTab.css'
 
 const ENTRIES: { route: Route; label: string }[] = [
-  { route: 'tv', label: 'TV' },
+  { route: 'tv', label: 'TV Shows' },
   { route: 'movies', label: 'Movies' },
   { route: 'downloads', label: 'Downloader' },
 ]

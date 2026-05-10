@@ -9,7 +9,7 @@ const PLEX_URL = 'http://theemeraldexchange.local:32400/web'
 type NavRoute = Exclude<Route, 'home'>
 
 const TABS: { route: NavRoute; label: string }[] = [
-  { route: 'tv', label: 'TV' },
+  { route: 'tv', label: 'TV Shows' },
   { route: 'movies', label: 'Movies' },
   { route: 'downloads', label: 'Downloads' },
 ]
