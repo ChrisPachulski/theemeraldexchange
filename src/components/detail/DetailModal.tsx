@@ -182,54 +182,54 @@ export function DetailModal({
             </section>
           )}
 
-          {(castLoading || (cast && cast.length > 0)) && (
-            <details className="detail__section detail__cast-disclosure">
-              <summary className="detail__cast-summary">
-                <span className="detail__section-title detail__cast-summary-title">Cast</span>
-                {!castLoading && cast && cast.length > 0 && (
-                  <span className="detail__cast-count">{Math.min(cast.length, 12)}</span>
-                )}
-                <span className="detail__cast-chevron" aria-hidden="true">›</span>
-              </summary>
-              {castLoading ? (
-                <ul className="detail__cast" aria-busy="true">
-                  {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
-                    <li key={i} className="detail__cast-card detail__cast-card--skeleton">
-                      <div className="detail__cast-photo" />
-                      <div className="detail__cast-name detail__cast-name--skeleton" />
-                      <div className="detail__cast-role detail__cast-role--skeleton" />
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <ul className="detail__cast">
-                  {cast!.slice(0, 12).map((member) => {
-                    const role = castCharacter(member)
-                    return (
-                      <li key={member.id} className="detail__cast-card">
-                        {member.profile_path ? (
-                          <img
-                            className="detail__cast-photo"
-                            src={`${TMDB_IMAGE_BASE}${member.profile_path}`}
-                            alt=""
-                            loading="lazy"
-                            decoding="async"
-                            referrerPolicy="no-referrer"
-                          />
-                        ) : (
-                          <div className="detail__cast-photo detail__cast-photo--fallback" aria-hidden="true">
-                            {member.name.charAt(0)}
-                          </div>
-                        )}
-                        <p className="detail__cast-name">{member.name}</p>
-                        {role && <p className="detail__cast-role">{role}</p>}
-                      </li>
-                    )
-                  })}
-                </ul>
+          <details className="detail__section detail__cast-disclosure">
+            <summary className="detail__cast-summary">
+              <span className="detail__section-title detail__cast-summary-title">Cast</span>
+              {!castLoading && cast && cast.length > 0 && (
+                <span className="detail__cast-count">{Math.min(cast.length, 12)}</span>
               )}
-            </details>
-          )}
+              <span className="detail__cast-chevron" aria-hidden="true">›</span>
+            </summary>
+            {castLoading ? (
+              <ul className="detail__cast" aria-busy="true">
+                {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
+                  <li key={i} className="detail__cast-card detail__cast-card--skeleton">
+                    <div className="detail__cast-photo" />
+                    <div className="detail__cast-name detail__cast-name--skeleton" />
+                    <div className="detail__cast-role detail__cast-role--skeleton" />
+                  </li>
+                ))}
+              </ul>
+            ) : cast && cast.length > 0 ? (
+              <ul className="detail__cast">
+                {cast.slice(0, 12).map((member) => {
+                  const role = castCharacter(member)
+                  return (
+                    <li key={member.id} className="detail__cast-card">
+                      {member.profile_path ? (
+                        <img
+                          className="detail__cast-photo"
+                          src={`${TMDB_IMAGE_BASE}${member.profile_path}`}
+                          alt=""
+                          loading="lazy"
+                          decoding="async"
+                          referrerPolicy="no-referrer"
+                        />
+                      ) : (
+                        <div className="detail__cast-photo detail__cast-photo--fallback" aria-hidden="true">
+                          {member.name.charAt(0)}
+                        </div>
+                      )}
+                      <p className="detail__cast-name">{member.name}</p>
+                      {role && <p className="detail__cast-role">{role}</p>}
+                    </li>
+                  )
+                })}
+              </ul>
+            ) : (
+              <p className="detail__cast-empty">Cast information unavailable.</p>
+            )}
+          </details>
         </div>
 
         <footer className="detail__actions">

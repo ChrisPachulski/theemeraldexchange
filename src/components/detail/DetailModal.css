@@ -285,8 +285,16 @@
   color: var(--emerald);
 }
 
-.detail__cast-disclosure[open] .detail__cast {
+.detail__cast-disclosure[open] .detail__cast,
+.detail__cast-disclosure[open] .detail__cast-empty {
   margin-top: var(--s-3);
+}
+
+.detail__cast-empty {
+  font-size: var(--t-sm);
+  color: var(--text-subtle);
+  font-style: italic;
+  margin: var(--s-3) 0 0;
 }
 
 .detail__overview {
