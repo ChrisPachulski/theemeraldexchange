@@ -237,6 +237,58 @@
   margin: 0 0 var(--s-2);
 }
 
+/* Cast collapsible — uses native <details> so it's keyboard-accessible
+   without an aria dance. List sits outside the summary so it animates
+   into view on toggle. */
+.detail__cast-disclosure {
+  border-top: 1px solid var(--border);
+  padding-top: var(--s-4);
+}
+
+.detail__cast-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  padding: var(--s-1) 0;
+  transition: color var(--dur-fast) var(--ease);
+}
+.detail__cast-summary::-webkit-details-marker { display: none; }
+
+.detail__cast-summary-title {
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.detail__cast-count {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--text-subtle);
+  font-feature-settings: 'tnum' 1;
+}
+
+.detail__cast-chevron {
+  margin-left: auto;
+  font-size: var(--t-lg);
+  color: var(--text-subtle);
+  line-height: 1;
+  transition: transform var(--dur-fast) var(--ease);
+}
+.detail__cast-disclosure[open] .detail__cast-chevron {
+  transform: rotate(90deg);
+}
+
+.detail__cast-summary:hover .detail__cast-chevron,
+.detail__cast-summary:hover .detail__cast-count {
+  color: var(--emerald);
+}
+
+.detail__cast-disclosure[open] .detail__cast {
+  margin-top: var(--s-3);
+}
+
 .detail__overview {
   font-size: var(--t-base);
   line-height: 1.6;

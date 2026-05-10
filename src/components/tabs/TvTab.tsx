@@ -56,8 +56,6 @@ function buildSeriesMeta(item: SeriesSearchResult | Series): DetailMeta[] {
     const gb = stats.sizeOnDisk / (1024 ** 3)
     rows.push({ label: 'On disk', value: gb >= 1 ? `${gb.toFixed(1)} GB` : `${(stats.sizeOnDisk / (1024 ** 2)).toFixed(0)} MB` })
   }
-  if (item.imdbId) rows.push({ label: 'IMDb', value: item.imdbId })
-  rows.push({ label: 'TVDB', value: String(item.tvdbId) })
   return rows
 }
 

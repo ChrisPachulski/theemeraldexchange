@@ -168,9 +168,29 @@ export function DetailModal({
             </section>
           )}
 
-          {(castLoading || (cast && cast.length > 0)) && (
+          {meta.length > 0 && (
             <section className="detail__section">
-              <h3 className="detail__section-title">Cast</h3>
+              <h3 className="detail__section-title">Details</h3>
+              <dl className="detail__meta-list">
+                {meta.map((row) => (
+                  <div key={row.label} className="detail__meta-row">
+                    <dt className="detail__meta-key">{row.label}</dt>
+                    <dd className="detail__meta-val">{row.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            </section>
+          )}
+
+          {(castLoading || (cast && cast.length > 0)) && (
+            <details className="detail__section detail__cast-disclosure">
+              <summary className="detail__cast-summary">
+                <span className="detail__section-title detail__cast-summary-title">Cast</span>
+                {!castLoading && cast && cast.length > 0 && (
+                  <span className="detail__cast-count">{Math.min(cast.length, 12)}</span>
+                )}
+                <span className="detail__cast-chevron" aria-hidden="true">›</span>
+              </summary>
               {castLoading ? (
                 <ul className="detail__cast" aria-busy="true">
                   {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
@@ -208,21 +228,7 @@ export function DetailModal({
                   })}
                 </ul>
               )}
-            </section>
-          )}
-
-          {meta.length > 0 && (
-            <section className="detail__section">
-              <h3 className="detail__section-title">Details</h3>
-              <dl className="detail__meta-list">
-                {meta.map((row) => (
-                  <div key={row.label} className="detail__meta-row">
-                    <dt className="detail__meta-key">{row.label}</dt>
-                    <dd className="detail__meta-val">{row.value}</dd>
-                  </div>
-                ))}
-              </dl>
-            </section>
+            </details>
           )}
         </div>
 

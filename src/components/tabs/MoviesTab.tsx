@@ -64,8 +64,6 @@ function buildMovieMeta(item: MovieSearchResult | Movie): DetailMeta[] {
     }
   }
   if (item.collection?.title) rows.push({ label: 'Collection', value: item.collection.title })
-  if (item.imdbId) rows.push({ label: 'IMDb', value: item.imdbId })
-  rows.push({ label: 'TMDB', value: String(item.tmdbId) })
   return rows
 }
 
