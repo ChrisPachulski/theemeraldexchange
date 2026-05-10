@@ -121,19 +121,20 @@ export function DownloadsTab() {
   return (
     <section className="downloads-tab">
       <div className="downloads-tab__panel">
-        <header className="downloads-tab__header">
-          <div className="downloads-tab__eyebrow-row">
-            <p className="downloads-tab__eyebrow">Downloads</p>
-            {activeSlot?.cat && (
+        <header
+          className={`downloads-tab__header${idle ? ' downloads-tab__header--idle' : ''}`}
+        >
+          {!idle && activeSlot?.cat && (
+            <div className="downloads-tab__eyebrow-row">
               <span
                 className={`downloads-tab__category downloads-tab__category--${activeSlot.cat.toLowerCase()}`}
               >
                 {activeSlot.cat}
               </span>
-            )}
-          </div>
+            </div>
+          )}
           <h2
-            className={`downloads-tab__summary${idle ? '' : ' downloads-tab__summary--filename'}`}
+            className={`downloads-tab__summary${idle ? ' downloads-tab__summary--idle' : ' downloads-tab__summary--filename'}`}
             title={idle ? undefined : headingText}
           >
             {headingText}
