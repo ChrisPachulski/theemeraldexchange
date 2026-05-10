@@ -2,7 +2,19 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { radarr, type MovieSearchResult } from '../../lib/api/radarr'
 import { useRadarrProfiles, useRadarrRootFolders } from '../../lib/hooks/useRadarrLibrary'
+import { useAuth } from '../../lib/auth'
 import './AddSeriesModal.css'
+
+// Pick "Choose Me" by name when present; otherwise fall back to whatever
+// Radarr returns first. Lets the household run a curated default profile
+// without hardcoding numeric ids that drift between installs.
+function pickDefaultProfileId(
+  profiles: { id: number; name: string }[] | undefined,
+): number | null {
+  if (!profiles || profiles.length === 0) return null
+  const preferred = profiles.find((p) => p.name.toLowerCase() === 'choose me')
+  return (preferred ?? profiles[0]).id
+}
 
 type Props = {
   movie: MovieSearchResult | null
@@ -15,6 +27,7 @@ export function AddMovieModal({ movie, onClose, onAdded }: Props) {
   const profiles = useRadarrProfiles()
   const folders = useRadarrRootFolders()
   const qc = useQueryClient()
+  const { isAdmin } = useAuth()
 
   // Derive defaults at render rather than syncing via effect (see TV modal).
   const [profileChoice, setProfileChoice] = useState<number | null>(null)
@@ -22,7 +35,7 @@ export function AddMovieModal({ movie, onClose, onAdded }: Props) {
   const [searchOnAdd, setSearchOnAdd] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const profileId = profileChoice ?? profiles.data?.[0]?.id ?? null
+  const profileId = profileChoice ?? pickDefaultProfileId(profiles.data)
   const rootFolder = folderChoice ?? folders.data?.[0]?.path ?? null
 
   useEffect(() => {
@@ -85,33 +98,37 @@ export function AddMovieModal({ movie, onClose, onAdded }: Props) {
         </header>
 
         <div className="add-series__fields">
-          <label className="add-series__field">
-            <span className="add-series__label">Quality</span>
-            <select
-              className="add-series__select"
-              value={profileId ?? ''}
-              onChange={(e) => setProfileChoice(Number(e.target.value))}
-              disabled={!profiles.data}
-            >
-              {profiles.data?.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-          </label>
+          {isAdmin && (
+            <>
+              <label className="add-series__field">
+                <span className="add-series__label">Quality</span>
+                <select
+                  className="add-series__select"
+                  value={profileId ?? ''}
+                  onChange={(e) => setProfileChoice(Number(e.target.value))}
+                  disabled={!profiles.data}
+                >
+                  {profiles.data?.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </label>
 
-          <label className="add-series__field">
-            <span className="add-series__label">Folder</span>
-            <select
-              className="add-series__select"
-              value={rootFolder ?? ''}
-              onChange={(e) => setFolderChoice(e.target.value)}
-              disabled={!folders.data}
-            >
-              {folders.data?.map((f) => (
-                <option key={f.id} value={f.path}>{f.path}</option>
-              ))}
-            </select>
-          </label>
+              <label className="add-series__field">
+                <span className="add-series__label">Folder</span>
+                <select
+                  className="add-series__select"
+                  value={rootFolder ?? ''}
+                  onChange={(e) => setFolderChoice(e.target.value)}
+                  disabled={!folders.data}
+                >
+                  {folders.data?.map((f) => (
+                    <option key={f.id} value={f.path}>{f.path}</option>
+                  ))}
+                </select>
+              </label>
+            </>
+          )}
 
           <label className="add-series__field">
             <span className="add-series__label">Search</span>
