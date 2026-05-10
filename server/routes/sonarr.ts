@@ -38,10 +38,13 @@ forwardRead('/api/v3/series/lookup')
 //  - GET /api/v3/release?seriesId=X (no seasonNumber) returns
 //    RSS-cached recent results across the whole indexer — NOT a search
 //    for that series. To actually search, we have to scope per season.
-//  - Releases are usually flagged rejected:true because the Choose Me
-//    profile is restrictive; manual grab via POST /release overrides
-//    that, so we don't filter by `rejected` here. We let our size cap
-//    be the gate.
+//  - Releases get rejected:true for two reasons: profile-quality
+//    rejection (Choose Me doesn't allow 2160p, etc.) and indexer-level
+//    issues. We *prefer* non-rejected releases so we don't accidentally
+//    pick a 4K HDR pack the user's profile excludes — and so we stay
+//    inside the same release pool Sonarr's auto-retry walks. Fallback
+//    to the broader pool only when the profile rejects everything that
+//    fits the cap (rare, but possible for niche shows).
 async function grabTvUnderCap(seriesId: number, monitoredSeasons: number[]): Promise<void> {
   // Brief delay so Sonarr finishes wiring the new series record.
   await new Promise((r) => setTimeout(r, 2000))
@@ -56,6 +59,7 @@ async function grabTvUnderCap(seriesId: number, monitoredSeasons: number[]): Pro
     episodeNumbers?: number[]
     fullSeason?: boolean
     rejected?: boolean
+    temporarilyRejected?: boolean
   }
 
   // Episode counts per season — used to evaluate full-season packs.
@@ -99,13 +103,24 @@ async function grabTvUnderCap(seriesId: number, monitoredSeasons: number[]): Pro
   }
 
   const monitored = new Set(monitoredSeasons)
-  const eligible = all
+  const within = all
     .filter((r) => r.size > 0)
     .filter((r) => r.seasonNumber === undefined || monitored.has(r.seasonNumber))
     .filter((r) => r.size / effectiveEpisodeCount(r) <= env.maxTvBytesPerEpisode)
 
+  // Prefer releases that Sonarr's profile accepts (Choose Me is curated
+  // to match what the user's usenet provider can actually deliver) and
+  // that aren't temporarily rejected (blocklisted, age, etc.). Falling
+  // back to the broader pool keeps things working for niche shows where
+  // the profile rejects every cap-eligible release.
+  const accepted = within.filter((r) => !r.rejected && !r.temporarilyRejected)
+  const eligible = accepted.length > 0 ? accepted : within
+
   // Group by (seasonNumber, episodeKey) so we grab the single best
-  // release per chunk — not five copies of the same episode.
+  // release per chunk — not five copies of the same episode. Tie-break
+  // qualityWeight on smaller size: same tier on Eweka, the smaller
+  // release is more likely to have intact articles (the 50 GB 2160p
+  // release is the first to take a DMCA hit on HBO content).
   const bestByChunk = new Map<string, Release>()
   for (const r of eligible) {
     const key =
@@ -113,15 +128,17 @@ async function grabTvUnderCap(seriesId: number, monitoredSeasons: number[]): Pro
         ? `S${r.seasonNumber}-pack`
         : `S${r.seasonNumber}E${(r.episodeNumbers ?? []).join('-')}`
     const existing = bestByChunk.get(key)
-    if (!existing || r.qualityWeight > existing.qualityWeight) {
-      bestByChunk.set(key, r)
-    }
+    const better =
+      !existing ||
+      r.qualityWeight > existing.qualityWeight ||
+      (r.qualityWeight === existing.qualityWeight && r.size < existing.size)
+    if (better) bestByChunk.set(key, r)
   }
 
   if (bestByChunk.size === 0) {
     console.log(
       `[tv-cap] no releases ≤ ${env.maxTvGbPerEpisode}GB/ep for series ${seriesId} ` +
-        `(${all.length} scanned across seasons ${[...monitored].join(',')})`,
+        `(${all.length} scanned, ${within.length} cap-eligible, ${accepted.length} accepted)`,
     )
     return
   }
@@ -156,7 +173,11 @@ async function grabTvUnderCap(seriesId: number, monitoredSeasons: number[]): Pro
 sonarr.post('/api/v3/series', async (c) => {
   const body = (await c.req.json()) as {
     rootFolderPath?: string
-    addOptions?: { searchForMissingEpisodes?: boolean; searchForCutoffUnmetEpisodes?: boolean }
+    addOptions?: {
+      searchForMissingEpisodes?: boolean
+      searchForCutoffUnmetEpisodes?: boolean
+      monitor?: string
+    }
     seasons?: Array<{ seasonNumber: number; monitored: boolean }>
   }
   if (body.rootFolderPath) {
@@ -198,6 +219,7 @@ sonarr.post('/api/v3/series', async (c) => {
     try {
       const created = JSON.parse(out) as {
         id?: number
+        monitored?: boolean
         seasons?: Array<{ seasonNumber: number; monitored: boolean }>
       }
       const id = created.id
@@ -206,6 +228,42 @@ sonarr.post('/api/v3/series', async (c) => {
       const monitored = (body.seasons ?? created.seasons ?? [])
         .filter((s) => s.monitored)
         .map((s) => s.seasonNumber)
+
+      // The modal's single-season picker sends
+      // `addOptions.monitor: 'none'` plus an explicit seasons[] with
+      // only the chosen season monitored. Sonarr's add pipeline applies
+      // `addOptions.monitor` *after* the seasons[] array, so 'none'
+      // ends up wiping every season's monitored flag — even the one
+      // the user picked. Without this PUT-back, the series is silently
+      // dropped from Sonarr's RSS sweep: our initial cap grab fires
+      // once (because we use body.seasons below), but on failure
+      // there's nothing monitored to recover, and the user sees a
+      // permanently empty library entry. Detect the case and reconcile.
+      if (
+        id &&
+        monitored.length > 0 &&
+        body.addOptions?.monitor === 'none' &&
+        created.seasons
+      ) {
+        const desired = new Set(monitored)
+        const patched = {
+          ...created,
+          monitored: true,
+          seasons: created.seasons.map((s) => ({
+            ...s,
+            monitored: desired.has(s.seasonNumber),
+          })),
+        }
+        const putRes = await sonarrFetch(`/api/v3/series/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patched),
+        })
+        if (!putRes.ok) {
+          console.error(`[tv-monitor] PUT series ${id} failed: ${putRes.status}`)
+        }
+      }
+
       if (id && monitored.length > 0) {
         void grabTvUnderCap(id, monitored).catch((e) =>
           console.error('[tv-cap] grab failed:', e),
