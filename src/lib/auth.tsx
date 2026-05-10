@@ -9,6 +9,31 @@ import {
 } from 'react'
 import { apiUrl } from './api/base'
 
+// Persists the admin "view-as" preview across reloads so an admin who
+// chose to preview the dashboard as a regular user doesn't get bumped
+// back to admin chrome on every refresh. Server-side role is still
+// driven by the session cookie — this is UI-only.
+const VIEW_AS_KEY = 'eex.viewAs'
+
+function readStoredViewAs(): Role | null {
+  try {
+    const raw = localStorage.getItem(VIEW_AS_KEY)
+    return raw === 'admin' || raw === 'user' ? raw : null
+  } catch {
+    return null
+  }
+}
+
+function writeStoredViewAs(value: Role | null) {
+  try {
+    if (value === null) localStorage.removeItem(VIEW_AS_KEY)
+    else localStorage.setItem(VIEW_AS_KEY, value)
+  } catch {
+    // localStorage unavailable — preference just stays in memory for
+    // this tab.
+  }
+}
+
 // Auth state shared by the whole app. The session is server-side
 // (HttpOnly cookie); we only mirror identity + role here so the UI can
 // gate buttons and show the username. /api/me returns 401 when no
@@ -48,7 +73,11 @@ const AuthContext = createContext<AuthCtx | null>(null)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
   const [user, setUser] = useState<AuthUser | null>(null)
-  const [viewAs, setViewAs] = useState<Role | null>(null)
+  const [viewAs, setViewAsState] = useState<Role | null>(() => readStoredViewAs())
+  const setViewAs = useCallback((next: Role | null) => {
+    setViewAsState(next)
+    writeStoredViewAs(next)
+  }, [])
   const [signInState, setSignInState] = useState<SignInState>('idle')
   const [signInError, setSignInError] = useState<string | null>(null)
   const [discoveredServers, setDiscoveredServers] =
@@ -152,7 +181,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null)
     setViewAs(null)
     setDiscoveredServers(null)
-  }, [])
+  }, [setViewAs])
 
   const role = user?.role ?? null
   // Only admins can preview as user. Anyone else gets their actual role
