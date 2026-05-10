@@ -179,6 +179,64 @@
   font-size: var(--t-xs) !important;
 }
 
+.users-tab__stale {
+  margin: 0 var(--s-5);
+  padding: var(--s-5);
+  background: #14181c;
+  border: 1px solid var(--emerald);
+  border-radius: var(--r-card, 12px);
+  box-shadow:
+    inset 0 1px 0 var(--frost-stronger),
+    0 0 0 4px oklch(0 0 0 / 0.45),
+    0 24px 48px -24px var(--ink);
+  display: grid;
+  gap: var(--s-3);
+  max-width: 56ch;
+}
+
+.users-tab__stale-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--t-md);
+  font-weight: var(--w-display);
+  color: var(--text);
+  letter-spacing: var(--tr-display);
+}
+
+.users-tab__stale-body {
+  margin: 0;
+  font-size: var(--t-sm);
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.users-tab__stale-action {
+  justify-self: start;
+  margin-top: var(--s-2);
+  padding: var(--s-2) var(--s-4);
+  font-family: var(--font-display);
+  font-size: var(--t-sm);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  color: var(--ink);
+  background: var(--emerald);
+  border: 1px solid var(--emerald);
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+.users-tab__stale-action:hover {
+  background: color-mix(in oklch, var(--emerald) 80%, white);
+  transform: translateY(-1px);
+}
+
+.users-tab__stale-action:active {
+  transform: translateY(0);
+}
+
 @media (max-width: 520px) {
   .users-tab {
     padding: var(--hero-pad-top) 0 var(--s-5);
@@ -186,11 +244,13 @@
   }
   .users-tab__header,
   .users-tab__error,
+  .users-tab__stale,
   .users-tab__list {
     margin: 0 var(--s-3);
   }
   .users-tab__header,
-  .users-tab__error {
+  .users-tab__error,
+  .users-tab__stale {
     padding: var(--s-3);
   }
   .users-tab__row {
