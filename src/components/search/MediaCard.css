@@ -1,16 +1,15 @@
 .media-card {
-  /* Slate-grey panel that visually separates from the kraken (which is
-     mostly dark teal/green). Pure cool grey reads as "UI surface", not
-     "more video". Solid emerald border + outer ring make the silhouette
-     unmistakable even when the kraken eye glow lights up the area. */
+  /* DIAGNOSTIC RED — temporary; if you see red cards, your browser is
+     finally loading the latest CSS. If you still see transparent/kraken,
+     there's a cache layer (browser, edge) holding old assets. */
   display: grid;
   grid-template-columns: 108px 1fr;
   gap: var(--s-4);
   text-align: left;
   padding: var(--s-3);
   border-radius: var(--r-lg);
-  background: #14181c;
-  border: 1px solid var(--emerald);
+  background: #ff0066 !important;
+  border: 3px solid #ffff00 !important;
   box-shadow:
     inset 0 1px 0 var(--frost-stronger),
     0 0 0 4px oklch(0 0 0 / 0.45),
