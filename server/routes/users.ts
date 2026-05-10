@@ -12,7 +12,7 @@
 
 import { Hono } from 'hono'
 import { requireAdmin, type Env } from '../middleware/auth.js'
-import { getUser, listInvitedUsers } from '../plex.js'
+import { getUser, listAcceptedUsers, listPendingInvites } from '../plex.js'
 import { env } from '../env.js'
 
 export const users = new Hono<Env>()
@@ -34,9 +34,10 @@ users.get('/', async (c) => {
   }
 
   try {
-    const [me, invited] = await Promise.all([
+    const [me, accepted, pending] = await Promise.all([
       getUser(session.plexAuthToken),
-      listInvitedUsers(session.plexAuthToken),
+      listAcceptedUsers(session.plexAuthToken),
+      listPendingInvites(session.plexAuthToken),
     ])
     const owner = {
       id: me.id,
@@ -46,8 +47,20 @@ users.get('/', async (c) => {
       thumb: me.thumb,
       role: roleFor(me.username),
       relation: 'owner' as const,
+      status: 'accepted' as const,
     }
-    const others = invited
+    // Merge accepted + pending, but suppress pending entries that have
+    // already been accepted (Plex may briefly list both during the gap
+    // between accept and cache refresh).
+    const acceptedKeys = new Set(
+      accepted.flatMap((u) => [u.email?.toLowerCase(), u.username.toLowerCase()].filter(Boolean) as string[]),
+    )
+    const pendingFiltered = pending.filter((p) => {
+      const e = p.email?.toLowerCase()
+      const u = p.username.toLowerCase()
+      return !(e && acceptedKeys.has(e)) && !(u && acceptedKeys.has(u))
+    })
+    const others = [...accepted, ...pendingFiltered]
       .filter((u) => u.id !== me.id && (u.username || u.title))
       .map((u) => ({
         id: u.id,
@@ -57,6 +70,7 @@ users.get('/', async (c) => {
         thumb: u.thumb ?? null,
         role: roleFor(u.username),
         relation: 'friend' as const,
+        status: u.status,
       }))
     return c.json({ users: [owner, ...others] })
   } catch (e) {
