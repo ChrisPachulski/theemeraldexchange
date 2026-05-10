@@ -15,6 +15,16 @@
   place-items: center;
   pointer-events: auto; /* block clicks for the duration */
   animation: nav-transition-in 160ms var(--ease) both;
+  /* Default opacity 1; --fading lowers to 0 over 300ms when the video
+     ends so the overlay dissolves into the new route's resting bg
+     instead of hard-cutting. */
+  opacity: 1;
+  transition: opacity 300ms ease-out;
+}
+
+.nav-transition--fading {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .nav-transition__video {
