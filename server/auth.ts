@@ -75,7 +75,13 @@ auth.get('/plex/check', async (c) => {
       .map((r) => ({ name: r.name, id: r.clientIdentifier, owned: r.owned }))
   }
 
-  const role: Role = env.admins.includes(user.username) ? 'admin' : 'user'
+  // Case-insensitive comparison so ADMINS env doesn't have to match the
+  // exact Plex casing (which is sometimes uppercase, sometimes lowercase
+  // depending on how the account was created).
+  const usernameLower = user.username.toLowerCase()
+  const role: Role = env.admins.some((a) => a.toLowerCase() === usernameLower)
+    ? 'admin'
+    : 'user'
 
   await setSessionCookie(c, {
     sub: String(user.id),
