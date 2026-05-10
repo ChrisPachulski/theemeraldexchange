@@ -108,24 +108,35 @@ export function DownloadsTab() {
         </div>
       )}
 
-      {history.data && history.data.history.slots.length > 0 && (
-        <section className="downloads-tab__history">
-          <p className="downloads-tab__eyebrow">Recently finished</p>
-          <ul className="downloads-tab__history-list">
-            {history.data.history.slots.slice(0, 10).map((h) => (
-              <li key={h.nzo_id} className="downloads-tab__history-row">
-                <span className="downloads-tab__history-name">{h.name}</span>
-                <span className="downloads-tab__history-cat">{h.category}</span>
-                <span
-                  className={`downloads-tab__history-status downloads-tab__history-status--${h.status.toLowerCase()}`}
-                >
-                  {h.status}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      {history.data && history.data.history.slots.length > 0 && (() => {
+        // When nothing's in flight, the household just wants confirmation
+        // of the most recent finish — not a 10-row activity log. When the
+        // queue is active, the longer list is useful operator context.
+        const idle = slots.length === 0
+        const visible = idle
+          ? history.data.history.slots.slice(0, 1)
+          : history.data.history.slots.slice(0, 10)
+        return (
+          <section className="downloads-tab__history">
+            <p className="downloads-tab__eyebrow">
+              {idle ? 'Last downloaded' : 'Recently finished'}
+            </p>
+            <ul className="downloads-tab__history-list">
+              {visible.map((h) => (
+                <li key={h.nzo_id} className="downloads-tab__history-row">
+                  <span className="downloads-tab__history-name">{h.name}</span>
+                  <span className="downloads-tab__history-cat">{h.category}</span>
+                  <span
+                    className={`downloads-tab__history-status downloads-tab__history-status--${h.status.toLowerCase()}`}
+                  >
+                    {h.status}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )
+      })()}
     </section>
   )
 }
