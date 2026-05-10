@@ -95,6 +95,34 @@
   overflow: hidden;
 }
 
+/* Idle mode: render "Queue is Open." at eyebrow scale and let the box
+   collapse to a thin strip. The status copy is helper text, not the
+   focal point of the screen when nothing's downloading. */
+.downloads-tab__summary--idle {
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  line-height: 1.2;
+}
+
+.downloads-tab__header--idle {
+  padding: var(--s-3) var(--s-4);
+  gap: var(--s-2);
+}
+.downloads-tab__header--idle .downloads-tab__stats {
+  margin-top: var(--s-2);
+  gap: var(--s-2);
+}
+.downloads-tab__header--idle .downloads-tab__stat {
+  padding: var(--s-2) var(--s-3);
+}
+.downloads-tab__header--idle .downloads-tab__stat-value {
+  font-size: var(--t-sm);
+}
+
 .downloads-tab__paused {
   font-family: var(--font-mono);
   font-size: var(--t-xs);
@@ -104,18 +132,14 @@
   margin: var(--s-2) 0 0;
 }
 
-/* Eyebrow row — "DOWNLOADS" label on the left, category pill (Movies /
-   TV) on the right when something's downloading. The pill replaces the
-   QueueRow's redundant copy so the active item lives entirely in this
-   header card. */
+/* Eyebrow row — only renders when there's a category pill to show.
+   The top-left "you are here" subtitle already labels the tab as
+   DOWNLOADS, so the duplicate eyebrow text was redundant. */
 .downloads-tab__eyebrow-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: var(--s-3);
-}
-.downloads-tab__eyebrow-row .downloads-tab__eyebrow {
-  margin: 0;
 }
 
 .downloads-tab__category {
