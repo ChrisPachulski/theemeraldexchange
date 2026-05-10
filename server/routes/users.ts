@@ -2,10 +2,9 @@
 //
 // Sources:
 //   - The current admin's own Plex account (always listed first as Owner).
-//   - Their Plex friends list (`plex.tv/api/v2/friends`). Friends without
-//     this server shared to them won't be able to log in (PLEX_SERVER_ID
-//     gate), but listing them is still useful to see the full Plex
-//     social graph the dashboard could pull from.
+//   - Accepted share recipients via plex.tv/api/users (legacy XML).
+//   - Pending invitations via plex.tv/api/v2/friends/requested (best-effort
+//     — if this call fails we still return accepted users).
 // Each user is annotated with the role we'd assign on login: 'admin' if
 // their username matches an entry in env.admins (case-insensitive),
 // otherwise 'user'.
@@ -34,10 +33,16 @@ users.get('/', async (c) => {
   }
 
   try {
+    // Pending invites are best-effort: if the call fails (timeout, Plex
+    // returning a wrapper shape we don't recognize, etc.) the route
+    // still returns owner + accepted users so the tab keeps working.
     const [me, accepted, pending] = await Promise.all([
       getUser(session.plexAuthToken),
       listAcceptedUsers(session.plexAuthToken),
-      listPendingInvites(session.plexAuthToken),
+      listPendingInvites(session.plexAuthToken).catch((err) => {
+        console.warn('users: listPendingInvites failed, omitting:', err)
+        return []
+      }),
     ])
     const owner = {
       id: me.id,
