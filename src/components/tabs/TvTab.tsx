@@ -166,6 +166,17 @@ export function TvTab() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['sonarr', 'series'] }),
   })
 
+  const monitorSeasonMutation = useMutation({
+    mutationFn: ({ seriesId, seasonNumber }: { seriesId: number; seasonNumber: number }) =>
+      sonarr.monitorSeason(seriesId, seasonNumber),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ['sonarr', 'series'] })
+      const inFlight = viewing && 'id' in viewing ? viewing.title : 'series'
+      setToast(`Season ${vars.seasonNumber} of ${inFlight} queued`)
+    },
+    onError: (e) => setToast(e instanceof Error ? e.message : String(e)),
+  })
+
   // Card click in either mode now opens the detail modal first. The
   // modal's action footer fires the underlying add/remove flows.
   const handleSearchClick = (item: SeriesSearchResult) => {
@@ -288,6 +299,18 @@ export function TvTab() {
         castLoading={cast.isLoading}
         inLibrary={viewing !== null && 'id' in viewing}
         canRemove={isAdmin}
+        seasons={viewing && 'id' in viewing && viewing.seasons ? viewing.seasons.map((s) => ({
+          seasonNumber: s.seasonNumber,
+          monitored: s.monitored,
+          episodeCount: s.statistics?.episodeCount ?? 0,
+          totalEpisodeCount: s.statistics?.totalEpisodeCount ?? 0,
+          episodeFileCount: s.statistics?.episodeFileCount ?? 0,
+        })) : undefined}
+        onAddSeason={isAdmin && viewing && 'id' in viewing ? (seasonNumber) => {
+          const seriesId = (viewing as Series).id
+          monitorSeasonMutation.mutate({ seriesId, seasonNumber })
+        } : undefined}
+        addingSeason={monitorSeasonMutation.isPending ? monitorSeasonMutation.variables?.seasonNumber ?? null : null}
         onAdd={viewing && !('id' in viewing) ? () => {
           const item = viewing as SeriesSearchResult
           setViewing(null)

@@ -17,6 +17,17 @@ export type DetailMeta = {
   value: string
 }
 
+export type SeasonRow = {
+  seasonNumber: number
+  monitored: boolean
+  /** Aired episodes Sonarr knows about. */
+  episodeCount: number
+  /** Total scheduled episodes (some may not have aired yet). */
+  totalEpisodeCount: number
+  /** Episodes already in the library. */
+  episodeFileCount: number
+}
+
 type Props = {
   open: boolean
   onClose: () => void
@@ -50,6 +61,12 @@ type Props = {
   onAdd?: () => void
   /** Triggered when the user clicks 'Remove from library'. */
   onRemove?: () => void
+  /** TV-only: per-season rows for the library view. */
+  seasons?: SeasonRow[]
+  /** Click to opt-in to a currently-unmonitored season. Admin only. */
+  onAddSeason?: (seasonNumber: number) => void
+  /** seasonNumber currently in-flight (UI disables that row's button). */
+  addingSeason?: number | null
 }
 
 export function DetailModal({
@@ -71,6 +88,9 @@ export function DetailModal({
   canRemove,
   onAdd,
   onRemove,
+  seasons,
+  onAddSeason,
+  addingSeason,
 }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const closeBtnRef = useRef<HTMLButtonElement>(null)
@@ -179,6 +199,49 @@ export function DetailModal({
                   </div>
                 ))}
               </dl>
+            </section>
+          )}
+
+          {inLibrary && seasons && seasons.length > 0 && (
+            <section className="detail__section">
+              <h3 className="detail__section-title">Seasons</h3>
+              <ul className="detail__seasons">
+                {seasons
+                  .filter((s) => s.seasonNumber > 0)
+                  .sort((a, b) => a.seasonNumber - b.seasonNumber)
+                  .map((s) => {
+                    const aired = s.episodeCount > 0
+                    const complete =
+                      s.episodeCount > 0 && s.episodeFileCount >= s.episodeCount
+                    const canAdd =
+                      !s.monitored && aired && !complete && onAddSeason
+                    const isAdding = addingSeason === s.seasonNumber
+                    const status = s.monitored
+                      ? complete
+                        ? 'Complete'
+                        : `Monitored · ${s.episodeFileCount} of ${s.episodeCount}`
+                      : aired
+                        ? `Unmonitored · ${s.episodeCount} aired`
+                        : 'Upcoming'
+                    return (
+                      <li key={s.seasonNumber} className="detail__season-row">
+                        <span className="detail__season-num">Season {s.seasonNumber}</span>
+                        <span className="detail__season-status">{status}</span>
+                        {canAdd && (
+                          <button
+                            type="button"
+                            className="detail__season-add"
+                            onClick={() => onAddSeason(s.seasonNumber)}
+                            disabled={isAdding}
+                            aria-busy={isAdding}
+                          >
+                            {isAdding ? 'Adding…' : 'Add'}
+                          </button>
+                        )}
+                      </li>
+                    )
+                  })}
+              </ul>
             </section>
           )}
 

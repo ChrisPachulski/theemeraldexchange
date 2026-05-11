@@ -334,6 +334,71 @@
   font-feature-settings: 'tnum' 1;
 }
 
+/* Per-season rows — surfaces unmonitored seasons so admins can opt in
+   to newly-aired seasons of an existing series without round-tripping
+   to Sonarr's UI. */
+.detail__seasons {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s-2);
+}
+
+.detail__season-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-3);
+  background: color-mix(in oklch, var(--surface) 70%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card, 10px);
+}
+
+.detail__season-num {
+  font-family: var(--font-display);
+  font-weight: var(--w-display);
+  font-size: var(--t-sm);
+  color: var(--text);
+  letter-spacing: var(--tr-display);
+}
+
+.detail__season-status {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--text-muted);
+  font-feature-settings: 'tnum' 1;
+}
+
+.detail__season-add {
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--ink);
+  background: var(--emerald);
+  border: 1px solid var(--emerald);
+  border-radius: 999px;
+  padding: 4px var(--s-3);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+.detail__season-add:hover {
+  background: color-mix(in oklch, var(--emerald) 82%, white);
+  transform: translateY(-1px);
+}
+
+.detail__season-add:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
 /* Cast grid — small avatar + name + character. Horizontal layout that
    wraps to a new row on overflow rather than a horizontal scroller, so
    you can see the full ensemble at a glance. */

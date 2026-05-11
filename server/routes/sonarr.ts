@@ -284,6 +284,56 @@ sonarr.post('/api/v3/series', async (c) => {
   })
 })
 
+// Flip a single season on an existing series to monitored=true, then
+// auto-grab it under the per-episode size cap. Admin only.
+//
+// Why this exists: when Sonarr refreshes a series and discovers a new
+// season (e.g. S5 just aired but the series was added at S1-S4), the
+// new season is added to seasons[] but typically lands as
+// monitored:false. There's no way to ask Sonarr to "grab the new
+// season" from inside the dashboard without exposing the full series
+// edit surface. This route does the targeted thing: PUT the series
+// with that one season flipped, then kick the cap grab.
+sonarr.post('/api/v3/series/:id/seasons/:n/monitor', requireAdmin, async (c) => {
+  const id = Number(c.req.param('id'))
+  const n = Number(c.req.param('n'))
+  if (!Number.isFinite(id) || !Number.isFinite(n)) {
+    return c.json({ error: 'bad_params' }, 400)
+  }
+  const getRes = await sonarrFetch(`/api/v3/series/${id}`, { method: 'GET' })
+  if (!getRes.ok) {
+    return new Response(await getRes.text(), { status: getRes.status })
+  }
+  const series = (await getRes.json()) as {
+    seasons?: Array<{ seasonNumber: number; monitored: boolean }>
+  }
+  const seasons = series.seasons ?? []
+  if (!seasons.some((s) => s.seasonNumber === n)) {
+    return c.json({ error: 'season_not_found' }, 404)
+  }
+  const patched = {
+    ...series,
+    monitored: true,
+    seasons: seasons.map((s) =>
+      s.seasonNumber === n ? { ...s, monitored: true } : s,
+    ),
+  }
+  const putRes = await sonarrFetch(`/api/v3/series/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patched),
+  })
+  if (!putRes.ok) {
+    return new Response(await putRes.text(), { status: putRes.status })
+  }
+  // Fire the cap-enforced grab in the background — same path the add
+  // flow uses, so the new season comes in via the same size gate.
+  void grabTvUnderCap(id, [n]).catch((e) =>
+    console.error('[tv-monitor-season] grab failed:', e),
+  )
+  return c.json({ ok: true, seriesId: id, seasonNumber: n })
+})
+
 // Delete a series — admin only.
 sonarr.delete('/api/v3/series/:id', requireAdmin, async (c) => {
   const id = c.req.param('id')
