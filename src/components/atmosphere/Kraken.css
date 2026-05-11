@@ -19,23 +19,6 @@
   height: 100%;
   object-fit: cover;
   object-position: center center;
-
-  /* Soft viewport-edge fade so the rectangular video frame doesn't
-     read as a hard rectangle against the chrome at the corners. */
-  -webkit-mask-image:
-    radial-gradient(
-      ellipse 95% 95% at 50% 50%,
-      black 0%,
-      black 65%,
-      transparent 100%
-    );
-  mask-image:
-    radial-gradient(
-      ellipse 95% 95% at 50% 50%,
-      black 0%,
-      black 65%,
-      transparent 100%
-    );
 }
 
 /* The kraken (home) layer is the solid bedrock — always opacity 1, on
