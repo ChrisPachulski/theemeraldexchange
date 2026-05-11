@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { sab } from '../api/sab'
 import { sonarr } from '../api/sonarr'
+import { radarr } from '../api/radarr'
 import { useDocumentVisible } from './useVisibility'
 
 export function useDownloadQueue() {
@@ -22,6 +23,20 @@ export function useSonarrQueue() {
   return useQuery({
     queryKey: ['sonarr', 'queue'],
     queryFn: sonarr.queue,
+    refetchInterval: visible ? 3000 : false,
+    refetchIntervalInBackground: false,
+    staleTime: 1500,
+  })
+}
+
+// Same cadence as Sonarr queue — surfaces in-flight movie work
+// (delay/pending/queued states) while SAB has no active slot, so the
+// Downloads tab can show "indexer working" instead of "Queue is Open."
+export function useRadarrQueue() {
+  const visible = useDocumentVisible()
+  return useQuery({
+    queryKey: ['radarr', 'queue'],
+    queryFn: radarr.queue,
     refetchInterval: visible ? 3000 : false,
     refetchIntervalInBackground: false,
     staleTime: 1500,

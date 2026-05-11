@@ -1,6 +1,10 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { sab } from '../../lib/api/sab'
-import { useDownloadQueue, useSonarrQueue } from '../../lib/hooks/useDownloadQueue'
+import {
+  useDownloadQueue,
+  useRadarrQueue,
+  useSonarrQueue,
+} from '../../lib/hooks/useDownloadQueue'
 import { useSonarrLibrary } from '../../lib/hooks/useSonarrLibrary'
 import { useConfirm } from '../confirm/useConfirm'
 import { QueueRow } from '../queue/QueueRow'
@@ -49,6 +53,7 @@ function fmtFreeSpace(gbRaw: string | undefined): string {
 export function DownloadsTab() {
   const queue = useDownloadQueue()
   const sonarrQueue = useSonarrQueue()
+  const radarrQueue = useRadarrQueue()
   const series = useSonarrLibrary()
   const confirm = useConfirm()
   const qc = useQueryClient()
@@ -92,12 +97,32 @@ export function DownloadsTab() {
   const sizeLeftRaw = queue.data?.queue.sizeleft
   const isPaused = queue.data?.queue.paused ?? false
   const idle = slots.length === 0
+
+  // "Indexer is working" signal — SAB has no active slot, but Sonarr or
+  // Radarr have records in their queues (delay/pending/queued states
+  // before/between successful grabs). Without this the header flips to
+  // "Queue is Open." every time a release fails and gets retried,
+  // making the panel look frozen even though things are happening.
+  const sonarrPending = (sonarrQueue.data?.records ?? []).filter(
+    (r) => (r.status ?? '').toLowerCase() !== 'completed',
+  )
+  const radarrPending = (radarrQueue.data?.records ?? []).filter(
+    (r) => (r.status ?? '').toLowerCase() !== 'completed',
+  )
+  const pendingCount = sonarrPending.length + radarrPending.length
+  const indexerWorking = idle && pendingCount > 0
   // The "present" item: whatever SAB is actively downloading right now.
   // Falls back to the first slot when the queue is paused / nothing has
   // started yet so the heading still surfaces the next-up filename
   // instead of the generic placeholder.
   const activeSlot = slots.find((s) => s.status === 'Downloading') ?? slots[0]
-  const headingText = idle ? 'Queue is Open.' : (activeSlot?.filename ?? 'Queue is Open.')
+  const headingText = idle
+    ? indexerWorking
+      ? pendingCount === 1
+        ? 'Searching for a release…'
+        : `Searching for releases — ${pendingCount} in flight`
+      : 'Queue is Open.'
+    : (activeSlot?.filename ?? 'Queue is Open.')
   // Active progress + ETA so the header card can render its own bar
   // without the QueueRow doppelganger underneath.
   const activePercent = activeSlot ? Math.min(100, Math.max(0, parseFloat(activeSlot.percentage) || 0)) : 0
@@ -209,7 +234,7 @@ export function DownloadsTab() {
     <section className="downloads-tab">
       <div className="downloads-tab__panel">
         <header
-          className={`downloads-tab__header${idle ? ' downloads-tab__header--idle' : ''}`}
+          className={`downloads-tab__header${idle ? ' downloads-tab__header--idle' : ''}${indexerWorking ? ' downloads-tab__header--working' : ''}`}
         >
           {!idle && activeSlot?.cat && (
             <div className="downloads-tab__eyebrow-row">
@@ -250,6 +275,17 @@ export function DownloadsTab() {
                 )}
               </p>
             </>
+          )}
+          {indexerWorking && (
+            <div
+              className="downloads-tab__progress downloads-tab__progress--indeterminate"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-label="Indexer is searching for releases"
+            >
+              <div className="downloads-tab__progress-shuttle" />
+            </div>
           )}
           {isPaused && <p className="downloads-tab__paused">Queue is paused.</p>}
 

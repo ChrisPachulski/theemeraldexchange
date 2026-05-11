@@ -153,11 +153,7 @@ export async function listAcceptedUsers(authToken: string): Promise<PlexFriend[]
   })
   if (!res.ok) throw new Error(`plex.listAcceptedUsers failed: ${res.status}`)
   const xml = await res.text()
-  const parsed = parseUserElements(xml)
-  console.log(
-    `plex.listAcceptedUsers: status=${res.status} bytes=${xml.length} parsed=${parsed.length} preview=${JSON.stringify(xml.slice(0, 1500))}`,
-  )
-  return parsed
+  return parseUserElements(xml)
 }
 
 // Outgoing invites the owner has sent that haven't been accepted yet.
@@ -191,13 +187,7 @@ export async function listPendingInvites(authToken: string): Promise<PlexFriend[
   // Plex returns 404 when there are no pending invites on some accounts;
   // treat that as "empty list" rather than failing the whole route.
   if (res.status === 404) return []
-  if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    console.log(
-      `plex.listPendingInvites: status=${res.status} body=${JSON.stringify(body.slice(0, 400))}`,
-    )
-    throw new Error(`plex.listPendingInvites failed: ${res.status}`)
-  }
+  if (!res.ok) throw new Error(`plex.listPendingInvites failed: ${res.status}`)
   // Response can be either a raw array OR { friends: [...] } depending on
   // account state. python-plexapi uses rtag='friends' which expects the
   // wrapped form.
@@ -281,19 +271,9 @@ export async function listSharedServerInvitees(authToken: string): Promise<PlexF
     clearTimeout(timer)
   }
   if (res.status === 404) return []
-  if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    console.log(
-      `plex.listSharedServerInvitees: status=${res.status} body=${JSON.stringify(body.slice(0, 400))}`,
-    )
-    throw new Error(`plex.listSharedServerInvitees failed: ${res.status}`)
-  }
+  if (!res.ok) throw new Error(`plex.listSharedServerInvitees failed: ${res.status}`)
   const xml = await res.text()
-  const parsed = parseSharedServerElements(xml)
-  console.log(
-    `plex.listSharedServerInvitees: status=${res.status} bytes=${xml.length} parsed=${parsed.length} preview=${JSON.stringify(xml.slice(0, 1500))}`,
-  )
-  return parsed
+  return parseSharedServerElements(xml)
 }
 
 function stableHash(s: string): number {
@@ -353,19 +333,9 @@ export async function listLocalServerAccounts(authToken: string): Promise<PlexFr
     clearTimeout(timer)
   }
   if (res.status === 404) return []
-  if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    console.log(
-      `plex.listLocalServerAccounts: status=${res.status} body=${JSON.stringify(body.slice(0, 400))}`,
-    )
-    throw new Error(`plex.listLocalServerAccounts failed: ${res.status}`)
-  }
+  if (!res.ok) throw new Error(`plex.listLocalServerAccounts failed: ${res.status}`)
   const xml = await res.text()
-  const parsed = parseAccountElements(xml)
-  console.log(
-    `plex.listLocalServerAccounts: status=${res.status} bytes=${xml.length} parsed=${parsed.length} accounts=${JSON.stringify(parsed.map((u) => ({ id: u.id, name: u.username })))}`,
-  )
-  return parsed
+  return parseAccountElements(xml)
 }
 
 // Plex Home users — accounts under the owner's "Plex Home" household.
@@ -393,21 +363,11 @@ export async function listHomeUsers(authToken: string): Promise<PlexFriend[]> {
     clearTimeout(timer)
   }
   if (res.status === 404) return []
-  if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    console.log(
-      `plex.listHomeUsers: status=${res.status} body=${JSON.stringify(body.slice(0, 400))}`,
-    )
-    throw new Error(`plex.listHomeUsers failed: ${res.status}`)
-  }
+  if (!res.ok) throw new Error(`plex.listHomeUsers failed: ${res.status}`)
   const xml = await res.text()
   // Same <User .../> element shape as /api/users, so parseUserElements
   // works. Home users are always 'accepted' for our purposes.
-  const parsed = parseUserElements(xml)
-  console.log(
-    `plex.listHomeUsers: status=${res.status} bytes=${xml.length} parsed=${parsed.length} users=${JSON.stringify(parsed.map((u) => ({ id: u.id, username: u.username, title: u.title, email: u.email })))} xml=${JSON.stringify(xml)}`,
-  )
-  return parsed
+  return parseUserElements(xml)
 }
 
 // Build the URL the user's browser opens to authorize the PIN. The PIN
