@@ -345,15 +345,102 @@
   gap: var(--s-2);
 }
 
+.detail__season-item {
+  display: block;
+}
+
+.detail__season-details summary {
+  list-style: none;
+  cursor: pointer;
+}
+.detail__season-details summary::-webkit-details-marker {
+  display: none;
+}
+
 .detail__season-row {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto auto 1fr auto auto;
   align-items: center;
   gap: var(--s-3);
   padding: var(--s-2) var(--s-3);
   background: color-mix(in oklch, var(--surface) 70%, transparent);
   border: 1px solid var(--border);
   border-radius: var(--r-card, 10px);
+  transition: border-color var(--dur-fast) var(--ease);
+}
+
+.detail__season-details[open] > summary > .detail__season-row,
+.detail__season-row:hover {
+  border-color: color-mix(in oklch, var(--emerald) 60%, var(--border));
+}
+
+.detail__season-air {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--text-subtle);
+  font-feature-settings: 'tnum' 1;
+}
+
+.detail__season-chevron {
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  color: var(--text-subtle);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.detail__season-details[open] > summary .detail__season-chevron {
+  transform: rotate(90deg);
+}
+
+.detail__episodes {
+  list-style: none;
+  margin: var(--s-2) 0 var(--s-2) var(--s-4);
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.detail__episode {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: var(--s-3);
+  align-items: baseline;
+  padding: 4px var(--s-3);
+  border-left: 2px solid var(--border);
+  font-size: var(--t-sm);
+}
+
+.detail__episode--future {
+  color: var(--text-subtle);
+  border-left-color: color-mix(in oklch, var(--text-subtle) 50%, transparent);
+  font-style: italic;
+}
+
+.detail__episode--ready {
+  border-left-color: var(--emerald);
+}
+
+.detail__episode-num {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--emerald);
+  font-feature-settings: 'tnum' 1;
+}
+
+.detail__episode-title {
+  color: var(--text);
+}
+
+.detail__episode--future .detail__episode-title {
+  color: var(--text-subtle);
+}
+
+.detail__episode-air {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--text-subtle);
+  white-space: nowrap;
+  font-feature-settings: 'tnum' 1;
 }
 
 .detail__season-num {
@@ -415,6 +502,27 @@
   display: grid;
   gap: 4px;
   text-align: left;
+}
+
+.detail__cast-link {
+  display: grid;
+  gap: 4px;
+  color: inherit;
+  text-decoration: none;
+  outline-offset: 4px;
+  transition:
+    transform var(--dur-fast) var(--ease),
+    filter var(--dur-fast) var(--ease);
+}
+.detail__cast-link:hover {
+  transform: translateY(-1px);
+}
+.detail__cast-link:hover .detail__cast-photo {
+  border-color: var(--emerald);
+  filter: brightness(1.05);
+}
+.detail__cast-link:hover .detail__cast-name {
+  color: var(--emerald);
 }
 
 .detail__cast-photo {
