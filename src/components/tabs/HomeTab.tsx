@@ -42,7 +42,7 @@ const PANELS: Panel[] = [
       'Click a result. For a movie, hit Add to library. For a show, pick the season you want and add — Season 1 by default, or pick any later season individually.',
       'The Emerald Exchange finds the best release with no quality settings to fuss with, and hands it to the downloader in the background.',
       'Check the Downloads tab to watch progress live. Single episodes and movies usually finish in minutes; a full TV season can take half an hour to an hour.',
-      "When it's ready, hit Watch up top — your new addition is already in Plex, on every screen in the house.",
+      "When it's ready, hit Watch up top — or tell Plex on whichever device you're watching on to rescan — and the new addition is available on every screen in the house.",
     ],
   },
 ]
