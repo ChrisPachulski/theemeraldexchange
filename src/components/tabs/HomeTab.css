@@ -112,6 +112,44 @@
   margin: 0;
 }
 
+/* Numbered-step variant of the panel body — used by the "How it works"
+   panel where ordered actions read clearer than a single paragraph. */
+.home__panel-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s-3);
+  counter-reset: home-step;
+}
+
+.home__panel-step {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--s-3);
+  align-items: baseline;
+  font-family: var(--font-body);
+  font-size: var(--t-sm);
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+
+.home__panel-step-num {
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-display);
+  letter-spacing: var(--tr-eyebrow);
+  color: var(--emerald);
+  border: 1px solid var(--emerald);
+  border-radius: 999px;
+  width: 22px;
+  height: 22px;
+  display: inline-grid;
+  place-items: center;
+  background: color-mix(in oklch, var(--emerald) 12%, var(--surface));
+  font-feature-settings: 'tnum' 1;
+}
+
 /* Bottom safe-zone so the last panel never hides under the fixed entry
    pills at the end of the scroll. */
 .home__about-floor {
