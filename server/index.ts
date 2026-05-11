@@ -23,6 +23,7 @@ import { radarr } from './routes/radarr.js'
 import { sab } from './routes/sab.js'
 import { tmdb } from './routes/tmdb.js'
 import { users } from './routes/users.js'
+import { plexAdmin } from './routes/plex-admin.js'
 
 const app = new Hono()
 
@@ -63,6 +64,7 @@ app.route('/api/radarr', radarr)
 app.route('/api/sab', sab)
 app.route('/api/tmdb', tmdb)
 app.route('/api/users', users)
+app.route('/api/plex', plexAdmin)
 
 serve(
   { fetch: app.fetch, port: env.port },
