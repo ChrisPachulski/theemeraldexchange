@@ -53,19 +53,28 @@
   flex-direction: column;
 }
 
+/* Anchored top-right so the kraken stays the show — the panel sits in
+   the corner, video runs to its left and below it. Top padding clears
+   the HomeNav row (brand + Watch + UserMenu) so the card never collides
+   with chrome. */
 .home__panel {
   min-height: 92vh;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--s-9) var(--s-5);
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding:
+    calc(var(--pod-inset, 16px) + var(--pod-h, 56px) + var(--s-5))
+    var(--s-5)
+    var(--s-7);
 }
 
 .home__panel-inner {
   width: 100%;
-  max-width: 600px;
-  padding: var(--s-8) var(--s-7);
-  background: var(--surface);
+  max-width: 360px;
+  padding: var(--s-6) var(--s-6);
+  background: color-mix(in oklch, var(--surface) 92%, transparent);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
   border: 1px solid var(--border);
   border-radius: var(--r-xl);
   box-shadow:
@@ -88,17 +97,17 @@
 .home__panel-title {
   font-family: var(--font-display);
   font-weight: var(--w-display);
-  font-size: var(--t-xl);
+  font-size: var(--t-lg);
   letter-spacing: var(--tr-display);
   color: var(--text);
-  line-height: 1.08;
-  margin: 0 0 var(--s-5);
+  line-height: 1.15;
+  margin: 0 0 var(--s-4);
 }
 
 .home__panel-body {
   font-family: var(--font-body);
-  font-size: var(--t-md);
-  line-height: 1.65;
+  font-size: var(--t-sm);
+  line-height: 1.6;
   color: var(--text-muted);
   margin: 0;
 }
@@ -172,15 +181,20 @@
 
   .home__panel {
     min-height: auto;
-    padding: var(--s-8) var(--s-4);
+    justify-content: flex-end;
+    padding:
+      calc(var(--pod-inset, 16px) + var(--pod-h, 48px) + var(--s-4))
+      var(--s-4)
+      var(--s-6);
   }
 
   .home__panel-inner {
-    padding: var(--s-7) var(--s-5);
+    max-width: none;
+    padding: var(--s-5) var(--s-5);
   }
 
   .home__panel-title {
-    font-size: var(--t-lg);
+    font-size: var(--t-md);
   }
 
   .home__entry {
