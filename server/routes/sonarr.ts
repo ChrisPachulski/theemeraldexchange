@@ -28,6 +28,9 @@ forwardRead('/api/v3/qualityprofile')
 forwardRead('/api/v3/rootfolder')
 forwardRead('/api/v3/series')
 forwardRead('/api/v3/series/lookup')
+// Per-series episode list — used by DetailModal to show episode air
+// dates inside each season's disclosure. Takes ?seriesId=N.
+forwardRead('/api/v3/episode')
 // Read-only — used by DownloadsTab to detect season clusters
 // (multiple Sonarr queue entries against the same series/season) so
 // the active card can label totals as Season Size + Episode Size.

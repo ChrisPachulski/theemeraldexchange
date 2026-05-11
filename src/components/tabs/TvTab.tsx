@@ -14,6 +14,7 @@ import { useAuth } from '../../lib/auth'
 import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useSeriesSearch } from '../../lib/hooks/useSeriesSearch'
 import { useSonarrLibrary } from '../../lib/hooks/useSonarrLibrary'
+import { useSonarrEpisodes } from '../../lib/hooks/useSonarrEpisodes'
 import { useCast } from '../../lib/hooks/useCast'
 import { useConfirm } from '../confirm/useConfirm'
 import { sonarr, type Series, type SeriesSearchResult } from '../../lib/api/sonarr'
@@ -36,6 +37,8 @@ function pickFanart(item: SeriesSearchResult | Series): string | undefined {
 }
 
 // Build the Plex-style metadata rows shared by Discover + Library views.
+// Runtime is intentionally omitted — for TV the per-season air dates
+// in the disclosure carry more weight than a per-episode minute count.
 function buildSeriesMeta(item: SeriesSearchResult | Series): DetailMeta[] {
   const rows: DetailMeta[] = []
   if (item.network) rows.push({ label: 'Network', value: item.network })
@@ -44,7 +47,6 @@ function buildSeriesMeta(item: SeriesSearchResult | Series): DetailMeta[] {
     const d = new Date(item.firstAired)
     if (!isNaN(d.getTime())) rows.push({ label: 'First aired', value: d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) })
   }
-  if (item.runtime) rows.push({ label: 'Runtime', value: `${item.runtime} min` })
   if (item.certification) rows.push({ label: 'Rated', value: item.certification })
   const stats = item.statistics
   if (stats?.seasonCount) rows.push({ label: 'Seasons', value: String(stats.seasonCount) })
@@ -107,6 +109,27 @@ export function TvTab() {
     tvdbId: viewing?.tvdbId ?? 0,
     enabled: viewing !== null,
   })
+
+  // Episode list only useful for in-library shows (it powers the
+  // per-season disclosure inside DetailModal). Discover results don't
+  // have a Sonarr id yet.
+  const viewingId = viewing && 'id' in viewing ? viewing.id : null
+  const episodes = useSonarrEpisodes(viewingId)
+  const episodesBySeason = useMemo(() => {
+    const map = new Map<number, Array<{ episodeNumber: number; title: string; airDate?: string; hasFile?: boolean }>>()
+    if (!episodes.data) return map
+    for (const ep of episodes.data) {
+      const list = map.get(ep.seasonNumber) ?? []
+      list.push({
+        episodeNumber: ep.episodeNumber,
+        title: ep.title,
+        airDate: ep.airDate ?? ep.airDateUtc,
+        hasFile: ep.hasFile,
+      })
+      map.set(ep.seasonNumber, list)
+    }
+    return map
+  }, [episodes.data])
 
   const libraryByTvdb = useMemo(() => {
     const map = new Map<number, Series>()
@@ -288,7 +311,6 @@ export function TvTab() {
         metaStrip={viewing ? [
           viewing.network,
           viewing.status,
-          viewing.runtime ? `${viewing.runtime}m` : undefined,
           viewing.certification,
         ].filter((x): x is string => Boolean(x)) : []}
         genres={viewing?.genres}
@@ -299,13 +321,24 @@ export function TvTab() {
         castLoading={cast.isLoading}
         inLibrary={viewing !== null && 'id' in viewing}
         canRemove={isAdmin}
-        seasons={viewing && 'id' in viewing && viewing.seasons ? viewing.seasons.map((s) => ({
-          seasonNumber: s.seasonNumber,
-          monitored: s.monitored,
-          episodeCount: s.statistics?.episodeCount ?? 0,
-          totalEpisodeCount: s.statistics?.totalEpisodeCount ?? 0,
-          episodeFileCount: s.statistics?.episodeFileCount ?? 0,
-        })) : undefined}
+        seasons={viewing && 'id' in viewing && viewing.seasons ? viewing.seasons.map((s) => {
+          const eps = episodesBySeason.get(s.seasonNumber)
+          const firstAired = eps && eps.length > 0
+            ? eps
+                .map((e) => e.airDate)
+                .filter((d): d is string => Boolean(d))
+                .sort()[0]
+            : undefined
+          return {
+            seasonNumber: s.seasonNumber,
+            monitored: s.monitored,
+            episodeCount: s.statistics?.episodeCount ?? 0,
+            totalEpisodeCount: s.statistics?.totalEpisodeCount ?? 0,
+            episodeFileCount: s.statistics?.episodeFileCount ?? 0,
+            airDate: firstAired,
+            episodes: eps,
+          }
+        }) : undefined}
         onAddSeason={isAdmin && viewing && 'id' in viewing ? (seasonNumber) => {
           const seriesId = (viewing as Series).id
           monitorSeasonMutation.mutate({ seriesId, seasonNumber })

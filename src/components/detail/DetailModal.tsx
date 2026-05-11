@@ -17,6 +17,24 @@ export type DetailMeta = {
   value: string
 }
 
+function fmtAirDate(raw?: string): string | undefined {
+  if (!raw) return undefined
+  const d = new Date(raw)
+  if (isNaN(d.getTime())) return undefined
+  return d.toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  })
+}
+
+export type SeasonEpisode = {
+  episodeNumber: number
+  title: string
+  airDate?: string
+  hasFile?: boolean
+}
+
 export type SeasonRow = {
   seasonNumber: number
   monitored: boolean
@@ -26,6 +44,10 @@ export type SeasonRow = {
   totalEpisodeCount: number
   /** Episodes already in the library. */
   episodeFileCount: number
+  /** Premiere air date for the season (derived from earliest episode). */
+  airDate?: string
+  /** Per-episode list for the disclosure. */
+  episodes?: SeasonEpisode[]
 }
 
 type Props = {
@@ -203,8 +225,14 @@ export function DetailModal({
           )}
 
           {inLibrary && seasons && seasons.length > 0 && (
-            <section className="detail__section">
-              <h3 className="detail__section-title">Seasons</h3>
+            <details className="detail__section detail__seasons-disclosure">
+              <summary className="detail__cast-summary">
+                <span className="detail__section-title detail__cast-summary-title">Seasons</span>
+                <span className="detail__cast-count">
+                  {seasons.filter((s) => s.seasonNumber > 0).length}
+                </span>
+                <span className="detail__cast-chevron" aria-hidden="true">›</span>
+              </summary>
               <ul className="detail__seasons">
                 {seasons
                   .filter((s) => s.seasonNumber > 0)
@@ -224,25 +252,60 @@ export function DetailModal({
                         ? `Unmonitored · ${s.episodeCount} aired`
                         : 'Upcoming'
                     return (
-                      <li key={s.seasonNumber} className="detail__season-row">
-                        <span className="detail__season-num">Season {s.seasonNumber}</span>
-                        <span className="detail__season-status">{status}</span>
-                        {canAdd && (
-                          <button
-                            type="button"
-                            className="detail__season-add"
-                            onClick={() => onAddSeason(s.seasonNumber)}
-                            disabled={isAdding}
-                            aria-busy={isAdding}
-                          >
-                            {isAdding ? 'Adding…' : 'Add'}
-                          </button>
-                        )}
+                      <li key={s.seasonNumber} className="detail__season-item">
+                        <details className="detail__season-details">
+                          <summary className="detail__season-row">
+                            <span className="detail__season-num">Season {s.seasonNumber}</span>
+                            <span className="detail__season-air">{fmtAirDate(s.airDate)}</span>
+                            <span className="detail__season-status">{status}</span>
+                            {canAdd && (
+                              <button
+                                type="button"
+                                className="detail__season-add"
+                                onClick={(e) => {
+                                  e.preventDefault()
+                                  onAddSeason(s.seasonNumber)
+                                }}
+                                disabled={isAdding}
+                                aria-busy={isAdding}
+                              >
+                                {isAdding ? 'Adding…' : 'Add'}
+                              </button>
+                            )}
+                            <span className="detail__season-chevron" aria-hidden="true">›</span>
+                          </summary>
+                          {s.episodes && s.episodes.length > 0 && (
+                            <ol className="detail__episodes">
+                              {s.episodes
+                                .slice()
+                                .sort((a, b) => a.episodeNumber - b.episodeNumber)
+                                .map((ep) => {
+                                  const future = ep.airDate
+                                    ? new Date(ep.airDate).getTime() > Date.now()
+                                    : false
+                                  return (
+                                    <li
+                                      key={ep.episodeNumber}
+                                      className={`detail__episode${future ? ' detail__episode--future' : ''}${ep.hasFile ? ' detail__episode--ready' : ''}`}
+                                    >
+                                      <span className="detail__episode-num">
+                                        {String(ep.episodeNumber).padStart(2, '0')}
+                                      </span>
+                                      <span className="detail__episode-title">{ep.title}</span>
+                                      <span className="detail__episode-air">
+                                        {fmtAirDate(ep.airDate) ?? '—'}
+                                      </span>
+                                    </li>
+                                  )
+                                })}
+                            </ol>
+                          )}
+                        </details>
                       </li>
                     )
                   })}
               </ul>
-            </section>
+            </details>
           )}
 
           <details className="detail__section detail__cast-disclosure">
@@ -267,24 +330,33 @@ export function DetailModal({
               <ul className="detail__cast">
                 {cast.slice(0, 12).map((member) => {
                   const role = castCharacter(member)
+                  const href = `https://www.themoviedb.org/person/${member.id}`
                   return (
                     <li key={member.id} className="detail__cast-card">
-                      {member.profile_path ? (
-                        <img
-                          className="detail__cast-photo"
-                          src={`${TMDB_IMAGE_BASE}${member.profile_path}`}
-                          alt=""
-                          loading="lazy"
-                          decoding="async"
-                          referrerPolicy="no-referrer"
-                        />
-                      ) : (
-                        <div className="detail__cast-photo detail__cast-photo--fallback" aria-hidden="true">
-                          {member.name.charAt(0)}
-                        </div>
-                      )}
-                      <p className="detail__cast-name">{member.name}</p>
-                      {role && <p className="detail__cast-role">{role}</p>}
+                      <a
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="detail__cast-link"
+                        aria-label={`${member.name} on TMDB`}
+                      >
+                        {member.profile_path ? (
+                          <img
+                            className="detail__cast-photo"
+                            src={`${TMDB_IMAGE_BASE}${member.profile_path}`}
+                            alt=""
+                            loading="lazy"
+                            decoding="async"
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          <div className="detail__cast-photo detail__cast-photo--fallback" aria-hidden="true">
+                            {member.name.charAt(0)}
+                          </div>
+                        )}
+                        <p className="detail__cast-name">{member.name}</p>
+                        {role && <p className="detail__cast-role">{role}</p>}
+                      </a>
                     </li>
                   )
                 })}

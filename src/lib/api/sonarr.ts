@@ -82,6 +82,19 @@ export type Series = SeriesSearchResult & {
 export type QualityProfile = { id: number; name: string }
 export type RootFolder = { id: number; path: string; freeSpace?: number }
 
+export type Episode = {
+  id: number
+  seriesId: number
+  seasonNumber: number
+  episodeNumber: number
+  title: string
+  airDate?: string
+  airDateUtc?: string
+  overview?: string
+  hasFile: boolean
+  monitored: boolean
+}
+
 // Slim subset of Sonarr's queue record — just what the dashboard
 // needs to map SAB slots back to series/season for the active card.
 export type SonarrQueueRecord = {
@@ -116,6 +129,7 @@ export const sonarr = {
       `/series/${seriesId}/seasons/${seasonNumber}/monitor`,
       {},
     ),
+  episodes: (seriesId: number) => get<Episode[]>('/episode', { seriesId }),
   // Fetched with a large pageSize so a full HotD-style season cluster
   // (10+ records) is captured in one round-trip. We only need
   // downloadId + seriesId + seasonNumber, but Sonarr always returns
