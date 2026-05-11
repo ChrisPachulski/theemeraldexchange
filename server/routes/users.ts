@@ -103,9 +103,18 @@ users.get('/', async (c) => {
     const byKey = new Map<string, typeof accepted[number]>()
     const keyFor = (u: { id: number; email?: string | null; username: string }) =>
       u.id > 0 ? `id:${u.id}` : u.email ? `e:${u.email.toLowerCase()}` : `u:${u.username.toLowerCase()}`
+    // The owner appears in /api/home/users with a DIFFERENT id than
+    // /api/v2/user returns (Home uses its own account ids), so id alone
+    // can't dedupe — also match against username and email.
+    const meUsername = me.username.toLowerCase()
+    const meEmail = (me.email || '').toLowerCase()
+    const isOwner = (u: { id: number; username: string; email?: string | null }) =>
+      u.id === me.id ||
+      u.username.toLowerCase() === meUsername ||
+      (!!meEmail && (u.email || '').toLowerCase() === meEmail)
     const ingest = (list: typeof accepted) => {
       for (const u of list) {
-        if (u.id === me.id) continue
+        if (isOwner(u)) continue
         if (!u.username && !u.title) continue
         const k = keyFor(u)
         const existing = byKey.get(k)
