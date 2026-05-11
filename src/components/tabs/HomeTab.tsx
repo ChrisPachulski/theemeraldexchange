@@ -40,7 +40,7 @@ const PANELS: Panel[] = [
     steps: [
       'Open TV Shows or Movies and search by title.',
       'Click a result. For a movie, hit Add to library. For a show, pick the season you want and add — Season 1 by default, or pick any later season individually.',
-      'The dashboard finds the best release under the household size cap (10 GB per movie, 5 GB per episode), no quality settings to fuss with, and hands it to the downloader in the background.',
+      'The Emerald Exchange finds the best release under the household size cap (10 GB per movie, 5 GB per episode), no quality settings to fuss with, and hands it to the downloader in the background.',
       'Check the Downloads tab to watch progress live. Episodes usually finish in minutes; a film takes an hour or two depending on size.',
       "When it's ready, hit Watch up top — your new addition is already in Plex, on every screen in the house.",
     ],
