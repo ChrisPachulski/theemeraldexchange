@@ -10,7 +10,10 @@
 
 /* Scroll cue sits at the bottom of the first viewport — anchored to
    the top of home__about with a viewport-height offset so it scrolls
-   away naturally once the user has moved past the first panel. */
+   away naturally once the user has moved past the first panel.
+   Wrapped in a dark emerald-bordered pill so it pops against the
+   busy ocean texture behind it; the kraken can otherwise drown the
+   pure emerald text. */
 .home__scroll-hint {
   position: absolute;
   top: calc(100vh - var(--pod-inset, 16px) - 88px - var(--s-5));
@@ -21,19 +24,34 @@
   flex-direction: column;
   align-items: center;
   gap: var(--s-2);
+  padding: var(--s-3) var(--s-5);
   pointer-events: none;
   color: var(--emerald);
+  background: color-mix(in oklch, var(--surface) 88%, transparent);
+  backdrop-filter: blur(10px) saturate(140%);
+  -webkit-backdrop-filter: blur(10px) saturate(140%);
+  border: 1px solid var(--emerald);
+  border-radius: var(--r-pod, 999px);
   text-shadow:
-    0 0 12px oklch(0.62 0.180 158 / 0.7),
-    0 0 24px oklch(0.62 0.180 158 / 0.35);
-  filter: drop-shadow(0 0 10px oklch(0.62 0.180 158 / 0.55));
+    0 0 12px oklch(0.62 0.180 158 / 0.95),
+    0 0 28px oklch(0.62 0.180 158 / 0.55);
+  box-shadow:
+    0 0 28px -6px oklch(0.62 0.180 158 / 0.7),
+    0 0 0 1px oklch(0.62 0.180 158 / 0.35),
+    0 16px 32px -16px var(--ink);
+  filter: drop-shadow(0 0 14px oklch(0.62 0.180 158 / 0.65));
   animation: home-scroll-cue 2.6s var(--ease) infinite;
+}
+
+.home__scroll-hint svg {
+  color: var(--emerald);
+  filter: drop-shadow(0 0 6px oklch(0.62 0.180 158 / 0.8));
 }
 
 .home__scroll-label {
   font-family: var(--font-display);
   font-weight: var(--w-display);
-  font-size: var(--t-xs);
+  font-size: var(--t-sm);
   letter-spacing: var(--tr-eyebrow);
   text-transform: uppercase;
 }
