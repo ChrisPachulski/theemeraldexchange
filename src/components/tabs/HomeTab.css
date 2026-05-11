@@ -16,15 +16,15 @@
    pure emerald text. */
 .home__scroll-hint {
   position: absolute;
-  top: calc(100vh - var(--pod-inset, 16px) - 88px - var(--s-5));
+  top: calc(100vh - var(--pod-inset, 16px) - 88px - var(--s-4));
   left: 50%;
   transform: translateX(-50%);
   z-index: var(--z-nav, 200);
   display: inline-flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
   gap: var(--s-2);
-  padding: var(--s-3) var(--s-5);
+  padding: 6px var(--s-3);
   pointer-events: none;
   color: var(--emerald);
   background: color-mix(in oklch, var(--surface) 88%, transparent);
@@ -33,19 +33,19 @@
   border: 1px solid var(--emerald);
   border-radius: var(--r-pod, 999px);
   text-shadow:
-    0 0 12px oklch(0.62 0.180 158 / 0.95),
-    0 0 28px oklch(0.62 0.180 158 / 0.55);
+    0 0 8px oklch(0.62 0.180 158 / 0.9),
+    0 0 16px oklch(0.62 0.180 158 / 0.45);
   box-shadow:
-    0 0 28px -6px oklch(0.62 0.180 158 / 0.7),
-    0 0 0 1px oklch(0.62 0.180 158 / 0.35),
-    0 16px 32px -16px var(--ink);
-  filter: drop-shadow(0 0 14px oklch(0.62 0.180 158 / 0.65));
+    0 0 18px -8px oklch(0.62 0.180 158 / 0.55),
+    0 8px 20px -14px var(--ink);
   animation: home-scroll-cue 2.6s var(--ease) infinite;
 }
 
 .home__scroll-hint svg {
   color: var(--emerald);
-  filter: drop-shadow(0 0 6px oklch(0.62 0.180 158 / 0.8));
+  width: 14px;
+  height: 14px;
+  filter: drop-shadow(0 0 4px oklch(0.62 0.180 158 / 0.7));
 }
 
 .home__scroll-label {
