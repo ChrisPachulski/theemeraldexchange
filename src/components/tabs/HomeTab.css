@@ -25,7 +25,11 @@
   flex-direction: column;
   align-items: center;
   gap: var(--s-2);
-  color: var(--text-muted);
+  color: var(--emerald);
+  text-shadow:
+    0 0 12px oklch(0.62 0.180 158 / 0.7),
+    0 0 24px oklch(0.62 0.180 158 / 0.35);
+  filter: drop-shadow(0 0 10px oklch(0.62 0.180 158 / 0.55));
   animation: home-scroll-cue 2.6s var(--ease) infinite;
 }
 
