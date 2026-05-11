@@ -1,12 +1,18 @@
-/* Sign-in gate — centered card over the kraken atmosphere. */
+/* Sign-in gate — card anchored top-right over the kraken atmosphere,
+   mirroring the home page's about-panel placement so the kraken
+   carries the visual show and the auth surface is a tight corner card. */
 
 .login {
   position: fixed;
   inset: 0;
   z-index: 500;
-  display: grid;
-  place-items: center;
-  padding: var(--s-5);
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding:
+    calc(var(--pod-inset, 16px) + var(--pod-h, 56px) + var(--s-5))
+    var(--s-5)
+    var(--s-7);
   background: var(--scrim);
   backdrop-filter: blur(2px);
   -webkit-backdrop-filter: blur(2px);
@@ -166,9 +172,13 @@
    blow out the card width. */
 @media (max-width: 480px) {
   .login {
-    padding: var(--s-3);
+    padding:
+      calc(var(--pod-inset, 16px) + var(--pod-h, 48px) + var(--s-3))
+      var(--s-3)
+      var(--s-5);
   }
   .login__card {
+    max-width: none;
     padding: var(--s-4) var(--s-4) var(--s-5);
     gap: var(--s-2);
   }
