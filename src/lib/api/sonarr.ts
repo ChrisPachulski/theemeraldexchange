@@ -111,6 +111,11 @@ export const sonarr = {
   addSeries: (body: Record<string, unknown>) => post<Series, typeof body>('/series', body),
   removeSeries: (id: number, deleteFiles = false) =>
     del(`/series/${id}`, { deleteFiles, addImportListExclusion: false }),
+  monitorSeason: (seriesId: number, seasonNumber: number) =>
+    post<{ ok: boolean; seriesId: number; seasonNumber: number }, Record<string, never>>(
+      `/series/${seriesId}/seasons/${seasonNumber}/monitor`,
+      {},
+    ),
   // Fetched with a large pageSize so a full HotD-style season cluster
   // (10+ records) is captured in one round-trip. We only need
   // downloadId + seriesId + seasonNumber, but Sonarr always returns
