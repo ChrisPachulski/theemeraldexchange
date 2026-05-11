@@ -341,7 +341,7 @@ export async function listHomeUsers(authToken: string): Promise<PlexFriend[]> {
   // works. Home users are always 'accepted' for our purposes.
   const parsed = parseUserElements(xml)
   console.log(
-    `plex.listHomeUsers: status=${res.status} bytes=${xml.length} parsed=${parsed.length} preview=${JSON.stringify(xml.slice(0, 1500))}`,
+    `plex.listHomeUsers: status=${res.status} bytes=${xml.length} parsed=${parsed.length} users=${JSON.stringify(parsed.map((u) => ({ id: u.id, username: u.username, title: u.title, email: u.email })))} xml=${JSON.stringify(xml)}`,
   )
   return parsed
 }
