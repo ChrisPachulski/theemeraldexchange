@@ -155,7 +155,7 @@ export async function listAcceptedUsers(authToken: string): Promise<PlexFriend[]
   const xml = await res.text()
   const parsed = parseUserElements(xml)
   console.log(
-    `plex.listAcceptedUsers: status=${res.status} bytes=${xml.length} parsed=${parsed.length} preview=${JSON.stringify(xml.slice(0, 400))}`,
+    `plex.listAcceptedUsers: status=${res.status} bytes=${xml.length} parsed=${parsed.length} preview=${JSON.stringify(xml.slice(0, 1500))}`,
   )
   return parsed
 }
@@ -291,7 +291,7 @@ export async function listSharedServerInvitees(authToken: string): Promise<PlexF
   const xml = await res.text()
   const parsed = parseSharedServerElements(xml)
   console.log(
-    `plex.listSharedServerInvitees: status=${res.status} bytes=${xml.length} parsed=${parsed.length} preview=${JSON.stringify(xml.slice(0, 400))}`,
+    `plex.listSharedServerInvitees: status=${res.status} bytes=${xml.length} parsed=${parsed.length} preview=${JSON.stringify(xml.slice(0, 1500))}`,
   )
   return parsed
 }
@@ -341,7 +341,7 @@ export async function listHomeUsers(authToken: string): Promise<PlexFriend[]> {
   // works. Home users are always 'accepted' for our purposes.
   const parsed = parseUserElements(xml)
   console.log(
-    `plex.listHomeUsers: status=${res.status} bytes=${xml.length} parsed=${parsed.length} preview=${JSON.stringify(xml.slice(0, 400))}`,
+    `plex.listHomeUsers: status=${res.status} bytes=${xml.length} parsed=${parsed.length} preview=${JSON.stringify(xml.slice(0, 1500))}`,
   )
   return parsed
 }
