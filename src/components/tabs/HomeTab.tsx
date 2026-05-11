@@ -63,14 +63,11 @@ export function HomeTab() {
 
   return (
     <section className="home" aria-label="Emerald Exchange home">
-      <div className="home__hero" aria-hidden="true">
-        <div className="home__scroll-hint">
+      <div className="home__about" aria-label="About the Exchange">
+        <div className="home__scroll-hint" aria-hidden="true">
           <span className="home__scroll-label">Read on</span>
           <ChevronDown />
         </div>
-      </div>
-
-      <div className="home__about" aria-label="About the Exchange">
         {PANELS.map((p) => (
           <article key={p.eyebrow} className="home__panel">
             <div className="home__panel-inner">
