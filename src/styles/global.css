@@ -19,6 +19,11 @@ body {
 }
 
 body {
+  /* Kill iOS Safari / iPadOS Safari's default blue tap-highlight so
+     touches on a pill or card don't flash a system-blue rectangle out
+     of the brand palette. Per-element `:active` and `:focus-visible`
+     styles still carry tap feedback. */
+  -webkit-tap-highlight-color: transparent;
   /* The atmospheric backdrop: solid emerald-tinted near-black,
      plus a faint radial fog above and below the fold so depth
      reads even before any content paints. */

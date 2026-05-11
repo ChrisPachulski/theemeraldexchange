@@ -202,3 +202,39 @@
     padding: var(--s-3) var(--s-4);
   }
 }
+
+/* iPad portrait — give the about panels more presence than the phone
+   corner card without crowding the kraken. Restore the body to t-md so
+   the partner-in-the-kitchen scene from DESIGN.md reads at arm's length. */
+@media (min-width: 721px) {
+  .home__panel-inner {
+    max-width: 440px;
+    padding: var(--s-7) var(--s-7);
+  }
+
+  .home__panel-title {
+    font-size: var(--t-xl);
+  }
+
+  .home__panel-body {
+    font-size: var(--t-md);
+    line-height: 1.65;
+  }
+}
+
+/* iPad portrait specifically — the bottom entry pills are min-width 180
+   on desktop. With four pills (admin user) that's 756px of row in a
+   768px viewport. Drop to 140 so the row keeps breathing space. */
+@media (min-width: 721px) and (max-width: 1023px) {
+  .home__entry {
+    min-width: 140px;
+    padding: var(--s-4) var(--s-5);
+  }
+}
+
+/* iPad landscape and up — even more presence for the about panel. */
+@media (min-width: 1280px) {
+  .home__panel-inner {
+    max-width: 480px;
+  }
+}
