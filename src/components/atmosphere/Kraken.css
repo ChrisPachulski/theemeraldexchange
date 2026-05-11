@@ -27,19 +27,21 @@
 }
 
 /* The kraken (home) layer is the solid bedrock — always opacity 1, on
-   the bottom, with the emerald-grade filter. The resting layer sits on
-   top and is the only one that transitions opacity. That way on a route
-   change, kraken stays opaque the whole time and resting fades in/out
-   over it. There's never a moment where both layers are partially
-   transparent, so the user never sees "both frames at once". */
+   the bottom, with a *gentle* emerald-direction grade. The previous
+   filter (hue-rotate 95deg, contrast 1.18) pushed every pixel hard
+   green and crunched the midtones, making the home page feel
+   over-stylized vs the resting variant (which uses no filter and
+   relies on its source palette). Halving the hue rotation and easing
+   the contrast keeps the dark moody mood without scrubbing out the
+   source's warm tans and natural cloud-greys. */
 .kraken__video--kraken {
   z-index: 0;
   opacity: 1;
   filter:
-    saturate(0.7)
-    hue-rotate(95deg)
-    contrast(1.18)
-    brightness(0.78);
+    saturate(0.88)
+    hue-rotate(35deg)
+    contrast(1.06)
+    brightness(0.84);
 }
 
 .kraken__video--resting {
