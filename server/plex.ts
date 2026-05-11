@@ -304,6 +304,70 @@ function stableHash(s: string): number {
   return h
 }
 
+// Local PMS /accounts endpoint — lists every account that has ever
+// accessed THIS server, regardless of how (current share, revoked
+// share, Plex Home profile, managed user, etc.). This is the same
+// source Tautulli uses for "Top Users." Catches users that plex.tv's
+// cloud APIs no longer report (e.g. share revoked but historic
+// playback still attributed to them).
+function parseAccountElements(xml: string): PlexFriend[] {
+  const out: PlexFriend[] = []
+  for (const match of xml.matchAll(/<Account\s+([^>]+?)\/?>/g)) {
+    const attrs: Record<string, string> = {}
+    for (const a of match[1].matchAll(/(\w+)="([^"]*)"/g)) {
+      attrs[a[1]] = unescapeXml(a[2])
+    }
+    const id = Number(attrs.id)
+    if (!Number.isFinite(id)) continue
+    // The PMS /accounts/0 "Local" account represents anonymous/local
+    // playback; skip it.
+    if (id === 0) continue
+    const name = attrs.name || ''
+    if (!name) continue
+    out.push({
+      id,
+      username: name,
+      title: name,
+      email: null, // /accounts doesn't expose email
+      thumb: attrs.thumb || null,
+      status: 'accepted',
+    })
+  }
+  return out
+}
+
+export async function listLocalServerAccounts(authToken: string): Promise<PlexFriend[]> {
+  const url = `${env.plexServerUrl}/accounts?X-Plex-Token=${encodeURIComponent(authToken)}`
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 5000)
+  let res: Response
+  try {
+    res = await fetch(url, {
+      headers: {
+        'X-Plex-Token': authToken,
+        Accept: 'application/xml',
+      },
+      signal: controller.signal,
+    })
+  } finally {
+    clearTimeout(timer)
+  }
+  if (res.status === 404) return []
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    console.log(
+      `plex.listLocalServerAccounts: status=${res.status} body=${JSON.stringify(body.slice(0, 400))}`,
+    )
+    throw new Error(`plex.listLocalServerAccounts failed: ${res.status}`)
+  }
+  const xml = await res.text()
+  const parsed = parseAccountElements(xml)
+  console.log(
+    `plex.listLocalServerAccounts: status=${res.status} bytes=${xml.length} parsed=${parsed.length} accounts=${JSON.stringify(parsed.map((u) => ({ id: u.id, name: u.username })))}`,
+  )
+  return parsed
+}
+
 // Plex Home users — accounts under the owner's "Plex Home" household.
 // Distinct from share recipients: a Home user lives under the owner's
 // Plex account as a separate profile (kid account, partner, etc.) and

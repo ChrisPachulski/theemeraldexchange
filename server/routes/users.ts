@@ -15,6 +15,7 @@ import {
   getUser,
   listAcceptedUsers,
   listHomeUsers,
+  listLocalServerAccounts,
   listPendingInvites,
   listSharedServerInvitees,
 } from '../plex.js'
@@ -64,14 +65,16 @@ users.get('/', async (c) => {
   }
 
   try {
-    // Pull from four sources in parallel and merge:
-    //   - /api/users           — accepted share recipients
-    //   - server-scoped shares — same, via the per-server endpoint
-    //   - Plex Home users      — household profiles under the owner
+    // Pull from five sources in parallel and merge:
+    //   - /api/users           — accepted share recipients (plex.tv)
+    //   - server-scoped shares — same, via per-server endpoint
+    //   - Plex Home users      — household profiles under owner
+    //   - local PMS /accounts  — every account that's ever streamed
+    //     from this server, including revoked shares Plex.tv no longer
+    //     reports. Same source Tautulli uses for Top Users.
     //   - pending invites      — sent but not accepted
-    // All except /api/users are best-effort; failures log a warning
-    // and return [].
-    const [me, accepted, shared, home, pending] = await Promise.all([
+    // All except /api/users are best-effort.
+    const [me, accepted, shared, home, local, pending] = await Promise.all([
       getUser(session.plexAuthToken),
       listAcceptedUsers(session.plexAuthToken),
       listSharedServerInvitees(session.plexAuthToken).catch((err) => {
@@ -80,6 +83,10 @@ users.get('/', async (c) => {
       }),
       listHomeUsers(session.plexAuthToken).catch((err) => {
         console.warn('users: listHomeUsers failed, omitting:', err)
+        return []
+      }),
+      listLocalServerAccounts(session.plexAuthToken).catch((err) => {
+        console.warn('users: listLocalServerAccounts failed, omitting:', err)
         return []
       }),
       listPendingInvites(session.plexAuthToken).catch((err) => {
@@ -126,11 +133,13 @@ users.get('/', async (c) => {
       }
     }
     // Order matters: accepted (legacy XML) first, then modern shares,
-    // then Home users, then pending — earlier sources are kept and
-    // only upgraded from pending to accepted.
+    // then Home users, then local PMS accounts (catches revoked shares
+    // with historic playback), then pending. Earlier sources are kept
+    // and only upgraded from pending → accepted.
     ingest(accepted)
     ingest(shared)
     ingest(home)
+    ingest(local)
     ingest(pending)
     const others = [...byKey.values()].map((u) => ({
       id: u.id,

@@ -59,6 +59,12 @@ export const env = {
 
   // Backing services. URL defaults match the existing NAS deployment;
   // override per-environment via env vars.
+  // Local Plex Media Server. Used to enumerate every account that has
+  // ever accessed the server (via /accounts), which is the canonical
+  // list of "people who actually watch on this server" and what
+  // Tautulli's Top Users uses.
+  plexServerUrl: process.env.PLEX_SERVER_URL ?? `http://${NAS_HOST}:32400`,
+
   sonarrUrl: process.env.SONARR_URL ?? `http://${NAS_HOST}:8989/tv`,
   sonarrApiKey: required('SONARR_API_KEY'),
   radarrUrl: process.env.RADARR_URL ?? `http://${NAS_HOST}:7878/movies`,
