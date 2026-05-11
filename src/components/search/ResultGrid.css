@@ -1,6 +1,8 @@
 .result-grid {
-  /* Self-adjusting grid: one column on phones, two on small tablets,
-     three at desktop content width. Cards keep their internal asymmetry. */
+  /* Asymmetric poster-led cards (per DESIGN.md "no card-grid monotony")
+     stay two columns from small tablet through iPad landscape so the
+     body half of each card keeps room for title + meta + overview. The
+     prior 1080px rule was a dead duplicate of the 640px rule. */
   display: grid;
   grid-template-columns: 1fr;
   gap: var(--s-3);
@@ -10,13 +12,6 @@
 }
 
 @media (min-width: 640px) {
-  .result-grid {
-    grid-template-columns: repeat(2, 1fr);
-    gap: var(--s-4);
-  }
-}
-
-@media (min-width: 1080px) {
   .result-grid {
     grid-template-columns: repeat(2, 1fr);
     gap: var(--s-4);
