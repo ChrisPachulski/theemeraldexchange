@@ -17,21 +17,21 @@ type Panel = { eyebrow: string; title: string; body: string }
 const PANELS: Panel[] = [
   {
     eyebrow: 'What it is',
-    title: 'One bookmark for the household.',
+    title: 'A private streaming library, just for your circle.',
     body:
-      "A single quiet surface for finding a show, adding a movie, peeking at the queue, and stepping through to Plex. The stack of operator tools that powers it stays out of sight — useful when something needs operating, invisible when you're just here to watch.",
+      "The Emerald Exchange is an invitation-only movies-and-TV service for one household and the people they share with. Think of it as a personal Netflix that never drops titles — you decide what's in it, and Plex plays it on any screen in the house.",
   },
   {
-    eyebrow: 'What you do',
-    title: 'Search is the verb.',
+    eyebrow: 'How it works',
+    title: 'Find a title, click Add, watch it on Plex.',
     body:
-      "Open TV Shows or Movies, type the name, hit Add. Smart defaults pre-fill quality, folder, and what to monitor, so the happy path is one click. Size caps are enforced underneath — 10 GB for a movie, 5 GB per episode — so a careless add can't take down the library.",
+      "Search any movie or show by name. One click queues it up. The site fetches it, organizes it, and hands it off to Plex in the background — usually minutes for an episode, an hour or two for a film. No quality settings to wrestle with; sensible defaults are baked in.",
   },
   {
-    eyebrow: 'What you see',
-    title: 'The queue is always open.',
+    eyebrow: 'Getting in',
+    title: 'Sign in with Plex to start.',
     body:
-      "Downloads update live, so you can watch a release land, cancel one in flight, or just confirm tonight's episode is on the way. When it lands in Plex, Watch is the only button you need.",
+      "Access is by Plex invitation only — sign in with the account that's been shared with the household library. From there, Watch opens the Plex player, the Downloads tab shows what's on the way, and everything else stays out of your way.",
   },
 ]
 
