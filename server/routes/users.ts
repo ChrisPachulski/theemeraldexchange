@@ -14,6 +14,7 @@ import { requireAdmin, type Env } from '../middleware/auth.js'
 import {
   getUser,
   listAcceptedUsers,
+  listHomeUsers,
   listPendingInvites,
   listSharedServerInvitees,
 } from '../plex.js'
@@ -63,16 +64,22 @@ users.get('/', async (c) => {
   }
 
   try {
-    // Pull from three sources in parallel and merge. The legacy XML
-    // endpoint sometimes misses users added through Plex's newer share
-    // flow, so /api/v2/shared_servers backstops it. Pending invites
-    // come from a third endpoint. All three are best-effort: if any
-    // single source fails, the others still render.
-    const [me, accepted, shared, pending] = await Promise.all([
+    // Pull from four sources in parallel and merge:
+    //   - /api/users           — accepted share recipients
+    //   - server-scoped shares — same, via the per-server endpoint
+    //   - Plex Home users      — household profiles under the owner
+    //   - pending invites      — sent but not accepted
+    // All except /api/users are best-effort; failures log a warning
+    // and return [].
+    const [me, accepted, shared, home, pending] = await Promise.all([
       getUser(session.plexAuthToken),
       listAcceptedUsers(session.plexAuthToken),
       listSharedServerInvitees(session.plexAuthToken).catch((err) => {
         console.warn('users: listSharedServerInvitees failed, omitting:', err)
+        return []
+      }),
+      listHomeUsers(session.plexAuthToken).catch((err) => {
+        console.warn('users: listHomeUsers failed, omitting:', err)
         return []
       }),
       listPendingInvites(session.plexAuthToken).catch((err) => {
@@ -110,9 +117,11 @@ users.get('/', async (c) => {
       }
     }
     // Order matters: accepted (legacy XML) first, then modern shares,
-    // then pending — earlier sources are kept and only upgraded.
+    // then Home users, then pending — earlier sources are kept and
+    // only upgraded from pending to accepted.
     ingest(accepted)
     ingest(shared)
+    ingest(home)
     ingest(pending)
     const others = [...byKey.values()].map((u) => ({
       id: u.id,
