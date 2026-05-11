@@ -67,6 +67,24 @@ export type Movie = MovieSearchResult & {
 export type QualityProfile = { id: number; name: string }
 export type RootFolder = { id: number; path: string; freeSpace?: number }
 
+// Slim subset of Radarr's queue record — same shape pattern as
+// SonarrQueueRecord so the DownloadsTab can treat both uniformly.
+export type RadarrQueueRecord = {
+  id: number
+  movieId?: number
+  downloadId?: string
+  size?: number
+  title?: string
+  status?: string
+}
+
+export type RadarrQueuePage = {
+  page: number
+  pageSize: number
+  totalRecords: number
+  records: RadarrQueueRecord[]
+}
+
 export const radarr = {
   systemStatus: () => get<{ version: string; appName: string }>('/system/status'),
   qualityProfiles: () => get<QualityProfile[]>('/qualityprofile'),
@@ -76,4 +94,5 @@ export const radarr = {
   addMovie: (body: Record<string, unknown>) => post<Movie, typeof body>('/movie', body),
   removeMovie: (id: number, deleteFiles = false) =>
     del(`/movie/${id}`, { deleteFiles, addImportExclusion: false }),
+  queue: () => get<RadarrQueuePage>('/queue', { pageSize: 200 }),
 }
