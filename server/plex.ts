@@ -208,7 +208,7 @@ export async function listPendingInvites(authToken: string): Promise<PlexFriend[
       ? ((raw as { friends: PendingRecord[] }).friends)
       : []
   return data
-    .map((r) => {
+    .map((r): PlexFriend | null => {
       const id =
         typeof r.id === 'number' && Number.isFinite(r.id) ? r.id : undefined
       const email = r.email ?? r.invitedEmail ?? null
@@ -224,8 +224,8 @@ export async function listPendingInvites(authToken: string): Promise<PlexFriend[
         title,
         email,
         thumb: r.thumb ?? null,
-        status: 'pending' as const,
-      } satisfies PlexFriend
+        status: 'pending',
+      }
     })
     .filter((u): u is PlexFriend => u !== null)
 }
