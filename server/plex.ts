@@ -304,6 +304,48 @@ function stableHash(s: string): number {
   return h
 }
 
+// Plex Home users — accounts under the owner's "Plex Home" household.
+// Distinct from share recipients: a Home user lives under the owner's
+// Plex account as a separate profile (kid account, partner, etc.) and
+// shares the household's libraries by default, not because of a
+// per-server invite. They don't appear in /api/users or
+// /api/servers/{id}/shared_servers — they're under /api/home/users.
+export async function listHomeUsers(authToken: string): Promise<PlexFriend[]> {
+  const url = `https://plex.tv/api/home/users?X-Plex-Token=${encodeURIComponent(authToken)}`
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 5000)
+  let res: Response
+  try {
+    res = await fetch(url, {
+      headers: {
+        'X-Plex-Product': 'The Emerald Exchange',
+        'X-Plex-Client-Identifier': env.plexClientId,
+        'X-Plex-Token': authToken,
+        Accept: 'application/xml',
+      },
+      signal: controller.signal,
+    })
+  } finally {
+    clearTimeout(timer)
+  }
+  if (res.status === 404) return []
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    console.log(
+      `plex.listHomeUsers: status=${res.status} body=${JSON.stringify(body.slice(0, 400))}`,
+    )
+    throw new Error(`plex.listHomeUsers failed: ${res.status}`)
+  }
+  const xml = await res.text()
+  // Same <User .../> element shape as /api/users, so parseUserElements
+  // works. Home users are always 'accepted' for our purposes.
+  const parsed = parseUserElements(xml)
+  console.log(
+    `plex.listHomeUsers: status=${res.status} bytes=${xml.length} parsed=${parsed.length} preview=${JSON.stringify(xml.slice(0, 400))}`,
+  )
+  return parsed
+}
+
 // Build the URL the user's browser opens to authorize the PIN. The PIN
 // `code` (NOT the id) goes into the hash params.
 export function buildAuthUrl(pinCode: string): string {
