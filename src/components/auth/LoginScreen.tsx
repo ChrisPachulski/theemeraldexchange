@@ -15,11 +15,14 @@ export function LoginScreen() {
   return (
     <section className="login" role="dialog" aria-modal="true" aria-labelledby="login-title">
       <div className="login__card">
-        <p className="login__eyebrow">Emerald Exchange</p>
-        <h1 id="login-title" className="login__title">Sign in</h1>
+        <p className="login__eyebrow">Getting in</p>
+        <h1 id="login-title" className="login__title">Sign in with Plex to start.</h1>
         <p className="login__copy">
-          This dashboard is gated to members of the home Plex server.
-          Authenticate with your Plex account to continue.
+          Access is by Plex invitation only — sign in with the same Plex
+          account that's been shared the household library. After that,
+          the Exchange remembers you. Watch opens the Plex player,
+          Downloads shows what's on the way, and everything else stays
+          out of your way.
         </p>
 
         <button

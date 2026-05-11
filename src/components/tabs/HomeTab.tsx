@@ -23,12 +23,6 @@ type Panel = {
 
 const PANELS: Panel[] = [
   {
-    eyebrow: 'Getting in',
-    title: 'Sign in with Plex to start.',
-    body:
-      "Access is by Plex invitation only — sign in with the same Plex account that's been shared the household library. After that, the dashboard remembers you. Watch opens the Plex player, Downloads shows what's on the way, and everything else stays out of your way.",
-  },
-  {
     eyebrow: 'What it is',
     title: 'A private streaming library, just for your circle.',
     body:
