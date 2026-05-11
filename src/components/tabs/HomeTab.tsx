@@ -12,9 +12,22 @@ const ENTRIES: Entry[] = [
   { route: 'users', label: 'Users', adminOnly: true },
 ]
 
-type Panel = { eyebrow: string; title: string; body: string }
+type Panel = {
+  eyebrow: string
+  title: string
+  /** Single-paragraph copy. Mutually exclusive with `steps`. */
+  body?: string
+  /** Ordered list rendered as numbered steps. */
+  steps?: string[]
+}
 
 const PANELS: Panel[] = [
+  {
+    eyebrow: 'Getting in',
+    title: 'Sign in with Plex to start.',
+    body:
+      "Access is by Plex invitation only — sign in with the same Plex account that's been shared the household library. After that, the dashboard remembers you. Watch opens the Plex player, Downloads shows what's on the way, and everything else stays out of your way.",
+  },
   {
     eyebrow: 'What it is',
     title: 'A private streaming library, just for your circle.',
@@ -23,15 +36,14 @@ const PANELS: Panel[] = [
   },
   {
     eyebrow: 'How it works',
-    title: 'Find a title, click Add, watch it on Plex.',
-    body:
-      "Search any movie or show by name. One click queues it up. The site fetches it, organizes it, and hands it off to Plex in the background — usually minutes for an episode, an hour or two for a film. No quality settings to wrestle with; sensible defaults are baked in.",
-  },
-  {
-    eyebrow: 'Getting in',
-    title: 'Sign in with Plex to start.',
-    body:
-      "Access is by Plex invitation only — sign in with the account that's been shared with the household library. From there, Watch opens the Plex player, the Downloads tab shows what's on the way, and everything else stays out of your way.",
+    title: 'Search, add, then watch on Plex.',
+    steps: [
+      'Open TV Shows or Movies and search by title — anything on TMDB / TVDB will show up.',
+      'Click a result. For a movie, hit Add to library. For a show, pick the season you want and add — Season 1 by default, or pick any later season individually.',
+      'The dashboard finds the best release under the household size cap (10 GB per movie, 5 GB per episode), no quality settings to fuss with, and hands it to the downloader in the background.',
+      'Check the Downloads tab to watch progress live. Episodes usually finish in minutes; a film takes an hour or two depending on size.',
+      "When it's ready, hit Watch up top — your new addition is already in Plex, on every screen in the house.",
+    ],
   },
 ]
 
@@ -70,7 +82,17 @@ export function HomeTab() {
             <div className="home__panel-inner">
               <span className="home__panel-eyebrow">{p.eyebrow}</span>
               <h2 className="home__panel-title">{p.title}</h2>
-              <p className="home__panel-body">{p.body}</p>
+              {p.body && <p className="home__panel-body">{p.body}</p>}
+              {p.steps && (
+                <ol className="home__panel-steps">
+                  {p.steps.map((s, i) => (
+                    <li key={i} className="home__panel-step">
+                      <span className="home__panel-step-num">{i + 1}</span>
+                      <span className="home__panel-step-body">{s}</span>
+                    </li>
+                  ))}
+                </ol>
+              )}
             </div>
           </article>
         ))}
