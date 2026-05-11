@@ -18,7 +18,12 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
-  object-position: center center;
+  /* Source is 1920×1440 (4:3). On viewports wider than 4:3, cover
+     crops vertically; biasing toward the top keeps the kraken's head
+     and body in frame and only sacrifices the rocky foreground (which
+     reads as decorative beach). 35% gives the creature room to breathe
+     near the top edge without pinning it. */
+  object-position: center 35%;
 }
 
 /* The kraken (home) layer is the solid bedrock — always opacity 1, on
@@ -26,37 +31,15 @@
    top and is the only one that transitions opacity. That way on a route
    change, kraken stays opaque the whole time and resting fades in/out
    over it. There's never a moment where both layers are partially
-   transparent, so the user never sees "both frames at once".
-   The 0.5px blur softens scaling artifacts when the 1080p source is
-   stretched onto >1920-wide displays without making detail go away. */
+   transparent, so the user never sees "both frames at once". */
 .kraken__video--kraken {
   z-index: 0;
   opacity: 1;
   filter:
     saturate(0.7)
     hue-rotate(95deg)
-    contrast(1.08)
-    brightness(0.78)
-    blur(0.5px);
-}
-
-/* Edge gradient anchors the top/bottom of the frame at extreme aspect
-   ratios so the cropped horizontal strip on ultrawide displays reads
-   as deliberate composition rather than a letterboxed video. The
-   ::after sits above the video, pointer-events:none. */
-.kraken::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background:
-    linear-gradient(
-      to bottom,
-      oklch(0.16 0.012 158 / 0.55) 0%,
-      transparent 18%,
-      transparent 78%,
-      oklch(0.16 0.012 158 / 0.6) 100%
-    );
+    contrast(1.18)
+    brightness(0.78);
 }
 
 .kraken__video--resting {
