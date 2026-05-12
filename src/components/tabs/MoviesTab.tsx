@@ -124,6 +124,12 @@ export function MoviesTab() {
     enabled: viewing !== null,
   })
 
+  const libraryByTmdb = useMemo(() => {
+    const map = new Map<number, Movie>()
+    library.data?.forEach((m) => map.set(m.tmdbId, m))
+    return map
+  }, [library.data])
+
   const trending = useTrendingMovies()
   const [trendingPending, setTrendingPending] = useState<number | null>(null)
   // Strip already-in-library titles out of the trending row — no point
@@ -151,12 +157,6 @@ export function MoviesTab() {
       setTrendingPending(null)
     }
   }
-
-  const libraryByTmdb = useMemo(() => {
-    const map = new Map<number, Movie>()
-    library.data?.forEach((m) => map.set(m.tmdbId, m))
-    return map
-  }, [library.data])
 
   const textFilteredLibrary = useMemo(() => {
     if (!library.data) return []
