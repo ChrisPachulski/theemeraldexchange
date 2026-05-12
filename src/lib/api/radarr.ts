@@ -85,11 +85,6 @@ export type RadarrQueuePage = {
   records: RadarrQueueRecord[]
 }
 
-// Calendar item — Radarr returns the full Movie record, but the only
-// fields the Upcoming strip needs are identity, poster, and the three
-// release dates so the strip can show "earliest meaningful release".
-export type RadarrCalendarItem = Movie
-
 export const radarr = {
   systemStatus: () => get<{ version: string; appName: string }>('/system/status'),
   qualityProfiles: () => get<QualityProfile[]>('/qualityprofile'),
@@ -100,10 +95,6 @@ export const radarr = {
   removeMovie: (id: number, deleteFiles = false) =>
     del(`/movie/${id}`, { deleteFiles, addImportExclusion: false }),
   queue: () => get<RadarrQueuePage>('/queue', { pageSize: 200 }),
-  // start/end are ISO date strings. Radarr matches against any of
-  // inCinemas/physicalRelease/digitalRelease falling in the window.
-  calendar: (start: string, end: string) =>
-    get<RadarrCalendarItem[]>('/calendar', { start, end, unmonitored: false }),
   upgrade: (id: number) =>
     post<
       | { status: 'grabbing'; title: string; sizeGb: number; qualityWeight: number }

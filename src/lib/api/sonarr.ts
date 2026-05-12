@@ -116,19 +116,6 @@ export type SonarrQueuePage = {
   records: SonarrQueueRecord[]
 }
 
-// Calendar item — includes the embedded series record when fetched
-// with includeSeries=true so the Upcoming strip can show poster + title
-// without a second round-trip per episode.
-export type SonarrCalendarItem = Episode & {
-  series?: {
-    id: number
-    title: string
-    year?: number
-    network?: string
-    images?: Array<{ coverType: string; remoteUrl?: string; url?: string }>
-  }
-}
-
 export const sonarr = {
   systemStatus: () => get<SystemStatus>('/system/status'),
   qualityProfiles: () => get<QualityProfile[]>('/qualityprofile'),
@@ -149,8 +136,4 @@ export const sonarr = {
   // downloadId + seriesId + seasonNumber, but Sonarr always returns
   // the full record shape.
   queue: () => get<SonarrQueuePage>('/queue', { pageSize: 200 }),
-  // start/end are ISO date strings (YYYY-MM-DD or full ISO). Sonarr
-  // treats the window as [start, end) over airDateUtc.
-  calendar: (start: string, end: string) =>
-    get<SonarrCalendarItem[]>('/calendar', { start, end, includeSeries: true }),
 }
