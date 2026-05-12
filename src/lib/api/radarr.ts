@@ -95,4 +95,11 @@ export const radarr = {
   removeMovie: (id: number, deleteFiles = false) =>
     del(`/movie/${id}`, { deleteFiles, addImportExclusion: false }),
   queue: () => get<RadarrQueuePage>('/queue', { pageSize: 200 }),
+  upgrade: (id: number) =>
+    post<
+      | { status: 'grabbing'; title: string; sizeGb: number; qualityWeight: number }
+      | { status: 'no_upgrade_available'; scanned: number; capGb: number }
+      | { status: 'no_releases_found' },
+      Record<string, never>
+    >(`/movie/${id}/upgrade`, {}),
 }

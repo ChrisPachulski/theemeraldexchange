@@ -89,6 +89,10 @@ type Props = {
   onAddSeason?: (seasonNumber: number) => void
   /** seasonNumber currently in-flight (UI disables that row's button). */
   addingSeason?: number | null
+  /** Movie-only: trigger a manual upgrade search. Admin + in-library. */
+  onUpgrade?: () => void
+  /** Whether the upgrade mutation is in flight (disables the button). */
+  upgrading?: boolean
 }
 
 export function DetailModal({
@@ -113,6 +117,8 @@ export function DetailModal({
   seasons,
   onAddSeason,
   addingSeason,
+  onUpgrade,
+  upgrading,
 }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const closeBtnRef = useRef<HTMLButtonElement>(null)
@@ -382,6 +388,18 @@ export function DetailModal({
               onClick={onAdd}
             >
               Add to library
+            </button>
+          )}
+          {inLibrary && onUpgrade && (
+            <button
+              type="button"
+              className="detail__btn detail__btn--primary"
+              onClick={onUpgrade}
+              disabled={upgrading}
+              aria-busy={upgrading}
+              title="Search the indexer for a higher-quality release under the size cap and replace if found"
+            >
+              {upgrading ? 'Searching…' : 'Try for a better version'}
             </button>
           )}
           {inLibrary && canRemove && onRemove && (
