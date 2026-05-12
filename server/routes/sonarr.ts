@@ -35,6 +35,9 @@ forwardRead('/api/v3/episode')
 // (multiple Sonarr queue entries against the same series/season) so
 // the active card can label totals as Season Size + Episode Size.
 forwardRead('/api/v3/queue')
+// Episodes airing in a window (start/end as ISO dates). Drives the
+// Upcoming strip on the Downloads tab.
+forwardRead('/api/v3/calendar')
 
 // Per-episode size cap for TV grabs. Mirrors the movie cap. A release
 // passes when (size / episodeCount) ≤ maxTvBytesPerEpisode. We disable
