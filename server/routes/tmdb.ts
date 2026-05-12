@@ -66,3 +66,26 @@ tmdb.get('/credits', async (c) => {
 
   return c.json({ error: 'invalid_query' }, 400)
 })
+
+// Trending feed — surfaces TMDB's week-window list of the most-talked-
+// about titles for the requested type. Used by the Discover tab as a
+// landing row so users see something to browse before they search.
+//
+// Type param: 'movie' or 'tv'. We pin the window to 'week' (vs 'day')
+// because day-trending whipsaws on news cycles; week reads as "what's
+// hot right now" without being volatile.
+tmdb.get('/trending/:type', async (c) => {
+  if (!env.tmdbApiKey) {
+    return c.json({ error: 'tmdb_not_configured' }, 503)
+  }
+  const type = c.req.param('type')
+  if (type !== 'movie' && type !== 'tv') {
+    return c.json({ error: 'invalid_type' }, 400)
+  }
+  const res = await tmdbFetch(`/trending/${type}/week`)
+  if (!res || !res.ok) {
+    return c.json({ error: 'tmdb_trending_failed', status: res?.status }, 502)
+  }
+  const data = (await res.json()) as { results?: unknown[] }
+  return c.json(data)
+})
