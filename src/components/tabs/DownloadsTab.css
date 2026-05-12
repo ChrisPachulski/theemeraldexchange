@@ -450,3 +450,135 @@
     width: 108px;
   }
 }
+
+/* Upcoming strip — same horizontal layout as Recently-added but each
+   poster carries an overlaid emerald date pill ("Today", "Tomorrow",
+   "Thu 14"). Sits between the queue panel and the recently-added
+   strip so the visual order top→bottom is "now / next / just landed". */
+.downloads-tab__upcoming {
+  margin: var(--s-6) var(--s-5) 0;
+  display: grid;
+  gap: var(--s-3);
+}
+
+.downloads-tab__upcoming-label {
+  font-family: var(--font-display);
+  font-weight: var(--w-display);
+  font-size: var(--t-sm);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--emerald);
+  margin: 0;
+  text-shadow:
+    0 0 8px oklch(0.62 0.180 158 / 0.6),
+    0 0 16px oklch(0.62 0.180 158 / 0.3);
+}
+
+.downloads-tab__upcoming-row {
+  display: flex;
+  gap: var(--s-3);
+  overflow-x: auto;
+  padding-bottom: var(--s-2);
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.downloads-tab__upcoming-card {
+  flex: 0 0 auto;
+  width: 132px;
+  display: grid;
+  gap: var(--s-2);
+  padding: 0;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.downloads-tab__upcoming-card:hover {
+  transform: translateY(-2px);
+}
+.downloads-tab__upcoming-card:hover .downloads-tab__upcoming-poster {
+  border-color: var(--emerald);
+}
+
+/* Wrapping container lets the date pill ride on top of the poster
+   without breaking the card's grid flow. */
+.downloads-tab__upcoming-poster-wrap {
+  position: relative;
+  width: 132px;
+  aspect-ratio: 2 / 3;
+}
+
+.downloads-tab__upcoming-poster {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  display: block;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+
+.downloads-tab__upcoming-poster--fallback {
+  display: grid;
+  place-items: center;
+  font-family: var(--font-display);
+  font-size: var(--t-xl);
+  font-weight: var(--w-display);
+  color: var(--text-subtle);
+}
+
+.downloads-tab__upcoming-date {
+  position: absolute;
+  top: var(--s-2);
+  left: var(--s-2);
+  font-family: var(--font-display);
+  font-size: 0.625rem;
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--emerald);
+  background: color-mix(in oklch, #14181c 80%, transparent);
+  border: 1px solid var(--emerald);
+  padding: 2px var(--s-2);
+  border-radius: 999px;
+  white-space: nowrap;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 0 8px -2px oklch(0.62 0.180 158 / 0.55);
+}
+
+.downloads-tab__upcoming-caption {
+  display: grid;
+  gap: 2px;
+}
+
+.downloads-tab__upcoming-title {
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  color: var(--text);
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.downloads-tab__upcoming-meta {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--text-subtle);
+  font-feature-settings: 'tnum' 1;
+}
+
+@media (max-width: 720px) {
+  .downloads-tab__upcoming {
+    margin: var(--s-4) var(--s-3) 0;
+  }
+  .downloads-tab__upcoming-card,
+  .downloads-tab__upcoming-poster-wrap {
+    width: 108px;
+  }
+}
