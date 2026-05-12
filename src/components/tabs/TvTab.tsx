@@ -114,6 +114,20 @@ export function TvTab() {
 
   const trending = useTrendingTv()
   const [trendingPending, setTrendingPending] = useState<number | null>(null)
+  // Library set keyed by TMDB id — used to strip items the household
+  // already has from the trending suggestions. Sonarr's Series object
+  // carries tmdbId alongside tvdbId, so a direct match works.
+  const libraryByTmdbForTrending = useMemo(() => {
+    const set = new Set<number>()
+    library.data?.forEach((s) => {
+      if (typeof s.tmdbId === 'number' && s.tmdbId > 0) set.add(s.tmdbId)
+    })
+    return set
+  }, [library.data])
+  const trendingFiltered = useMemo(
+    () => (trending.data ?? []).filter((t) => !libraryByTmdbForTrending.has(t.id)),
+    [trending.data, libraryByTmdbForTrending],
+  )
   const handleTrendingPick = async (tmdbId: number) => {
     setTrendingPending(tmdbId)
     try {
@@ -264,7 +278,7 @@ export function TvTab() {
           {debouncedQuery.length < 2 && (
             <div className="tv-tab__trending-below-fold">
               <TrendingRow
-                items={trending.data ?? []}
+                items={trendingFiltered}
                 loading={trending.isPending}
                 onPick={handleTrendingPick}
                 pendingId={trendingPending}
