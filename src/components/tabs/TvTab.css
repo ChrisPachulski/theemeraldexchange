@@ -15,6 +15,13 @@
   width: 100%;
 }
 
+/* Trending row when the user hasn't typed anything yet — push it
+   below the initial fold so the discover surface still reads as a
+   search-first experience. User scrolls down to find suggestions. */
+.tv-tab__trending-below-fold {
+  margin-top: 55vh;
+}
+
 /* Discover/In-library toggle pinned bottom-left, sharing the chrome
    line with ReplayButton (bottom-right) and the home entry buttons
    (bottom-center). */
