@@ -112,6 +112,12 @@ export function TvTab() {
     enabled: viewing !== null,
   })
 
+  const libraryByTvdb = useMemo(() => {
+    const map = new Map<number, Series>()
+    library.data?.forEach((s) => map.set(s.tvdbId, s))
+    return map
+  }, [library.data])
+
   const trending = useTrendingTv()
   const [trendingPending, setTrendingPending] = useState<number | null>(null)
   // Library set keyed by TMDB id — used to strip items the household
@@ -166,12 +172,6 @@ export function TvTab() {
     }
     return map
   }, [episodes.data])
-
-  const libraryByTvdb = useMemo(() => {
-    const map = new Map<number, Series>()
-    library.data?.forEach((s) => map.set(s.tvdbId, s))
-    return map
-  }, [library.data])
 
   // Text + status filter, then sort. Article-stripped sort key is used
   // for title sorts (Plex behavior — "The Mandalorian" sorts under M).
