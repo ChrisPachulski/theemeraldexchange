@@ -16,10 +16,12 @@
 }
 
 /* Trending row when the user hasn't typed anything yet — push it
-   below the initial fold so the discover surface still reads as a
-   search-first experience. User scrolls down to find suggestions. */
+   fully below the initial fold so the discover surface stays
+   search-first. 100vh top margin ensures no part of the row peeks
+   above the visible viewport on initial load; user must scroll to
+   reach it. */
 .tv-tab__trending-below-fold {
-  margin-top: 55vh;
+  margin-top: 100vh;
 }
 
 /* Discover/In-library toggle pinned bottom-left, sharing the chrome
