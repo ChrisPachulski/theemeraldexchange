@@ -14,6 +14,8 @@ import { useAuth } from '../../lib/auth'
 import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useMovieSearch } from '../../lib/hooks/useMovieSearch'
 import { useRadarrLibrary } from '../../lib/hooks/useRadarrLibrary'
+import { useTrendingMovies } from '../../lib/hooks/useTrending'
+import { TrendingRow } from '../search/TrendingRow'
 import { useCast } from '../../lib/hooks/useCast'
 import { useConfirm } from '../confirm/useConfirm'
 import { radarr, type Movie, type MovieSearchResult } from '../../lib/api/radarr'
@@ -122,6 +124,28 @@ export function MoviesTab() {
     enabled: viewing !== null,
   })
 
+  const trending = useTrendingMovies()
+  const [trendingPending, setTrendingPending] = useState<number | null>(null)
+  // Trending shows TMDB items; clicking one resolves through Radarr's
+  // lookup (it accepts tmdb:NNN) so the same DetailModal flow handles
+  // it as a regular search result.
+  const handleTrendingPick = async (tmdbId: number) => {
+    setTrendingPending(tmdbId)
+    try {
+      const inLib = libraryByTmdb.get(tmdbId)
+      if (inLib) {
+        setViewing(inLib)
+        return
+      }
+      const results = await radarr.lookup(`tmdb:${tmdbId}`)
+      if (results[0]) setViewing(results[0])
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : String(e))
+    } finally {
+      setTrendingPending(null)
+    }
+  }
+
   const libraryByTmdb = useMemo(() => {
     const map = new Map<number, Movie>()
     library.data?.forEach((m) => map.set(m.tmdbId, m))
@@ -228,14 +252,25 @@ export function MoviesTab() {
   return (
     <section className="tv-tab">
       {mode === 'discover' ? (
-        <DiscoverResults
-          query={debouncedQuery}
-          loading={search.isPending && debouncedQuery.length >= 2}
-          error={search.error}
-          results={search.data ?? []}
-          libraryByTmdb={libraryByTmdb}
-          onCardClick={handleSearchClick}
-        />
+        <>
+          {debouncedQuery.length < 2 && (
+            <TrendingRow
+              items={trending.data ?? []}
+              loading={trending.isPending}
+              onPick={handleTrendingPick}
+              pendingId={trendingPending}
+              label="Trending movies this week"
+            />
+          )}
+          <DiscoverResults
+            query={debouncedQuery}
+            loading={search.isPending && debouncedQuery.length >= 2}
+            error={search.error}
+            results={search.data ?? []}
+            libraryByTmdb={libraryByTmdb}
+            onCardClick={handleSearchClick}
+          />
+        </>
       ) : (
         <>
           {!library.isPending && !library.error && (library.data?.length ?? 0) > 0 && (
