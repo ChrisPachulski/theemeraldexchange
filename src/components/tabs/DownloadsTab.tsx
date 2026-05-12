@@ -7,7 +7,6 @@ import {
 } from '../../lib/hooks/useDownloadQueue'
 import { useSonarrLibrary } from '../../lib/hooks/useSonarrLibrary'
 import { useRecentlyAdded } from '../../lib/hooks/useRecentlyAdded'
-import { useUpcoming } from '../../lib/hooks/useUpcoming'
 import { useNavTransition } from '../../lib/navTransition'
 import { useConfirm } from '../confirm/useConfirm'
 import { QueueRow } from '../queue/QueueRow'
@@ -53,27 +52,12 @@ function fmtFreeSpace(gbRaw: string | undefined): string {
   return fmtSize(v * UNITS.GB)
 }
 
-// Relative date label for the Upcoming strip. Same-day → "Today",
-// tomorrow → "Tomorrow", otherwise "Thu 14" (weekday + day-of-month).
-const DAY_MS = 24 * 60 * 60 * 1000
-function fmtUpcomingDate(iso: string): string {
-  const t = new Date(iso)
-  if (Number.isNaN(t.getTime())) return ''
-  const now = new Date()
-  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
-  const days = Math.round((startOfDay(t) - startOfDay(now)) / DAY_MS)
-  if (days <= 0) return 'Today'
-  if (days === 1) return 'Tomorrow'
-  return t.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' })
-}
-
 export function DownloadsTab() {
   const queue = useDownloadQueue()
   const sonarrQueue = useSonarrQueue()
   const radarrQueue = useRadarrQueue()
   const series = useSonarrLibrary()
   const recent = useRecentlyAdded(12)
-  const upcoming = useUpcoming(21, 16)
   const { transitionTo } = useNavTransition()
   const confirm = useConfirm()
   const qc = useQueryClient()
@@ -364,50 +348,6 @@ export function DownloadsTab() {
           </div>
         )}
       </div>
-
-      {upcoming.length > 0 && (
-        <section className="downloads-tab__upcoming" aria-label="Upcoming releases">
-          <h3 className="downloads-tab__upcoming-label">Upcoming</h3>
-          <div className="downloads-tab__upcoming-row">
-            {upcoming.map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                className="downloads-tab__upcoming-card"
-                onClick={() => transitionTo(item.route)}
-                title={`${item.title} · ${new Date(item.airAt).toLocaleString()}`}
-              >
-                <div className="downloads-tab__upcoming-poster-wrap">
-                  {item.poster ? (
-                    <img
-                      className="downloads-tab__upcoming-poster"
-                      src={item.poster}
-                      alt=""
-                      loading="lazy"
-                      decoding="async"
-                      referrerPolicy="no-referrer"
-                    />
-                  ) : (
-                    <div
-                      className="downloads-tab__upcoming-poster downloads-tab__upcoming-poster--fallback"
-                      aria-hidden="true"
-                    >
-                      {item.title.charAt(0)}
-                    </div>
-                  )}
-                  <span className="downloads-tab__upcoming-date">{fmtUpcomingDate(item.airAt)}</span>
-                </div>
-                <div className="downloads-tab__upcoming-caption">
-                  <span className="downloads-tab__upcoming-title">{item.title}</span>
-                  <span className="downloads-tab__upcoming-meta">
-                    {item.kind === 'tv' ? item.episodeLabel : item.releaseLabel}
-                  </span>
-                </div>
-              </button>
-            ))}
-          </div>
-        </section>
-      )}
 
       {recent.length > 0 && (
         <section className="downloads-tab__recent" aria-label="Recently added to the library">
