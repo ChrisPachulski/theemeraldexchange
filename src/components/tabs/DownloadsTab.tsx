@@ -6,6 +6,8 @@ import {
   useSonarrQueue,
 } from '../../lib/hooks/useDownloadQueue'
 import { useSonarrLibrary } from '../../lib/hooks/useSonarrLibrary'
+import { useRecentlyAdded } from '../../lib/hooks/useRecentlyAdded'
+import { useNavTransition } from '../../lib/navTransition'
 import { useConfirm } from '../confirm/useConfirm'
 import { QueueRow } from '../queue/QueueRow'
 import { LoadingPulse } from '../feedback/LoadingPulse'
@@ -55,6 +57,8 @@ export function DownloadsTab() {
   const sonarrQueue = useSonarrQueue()
   const radarrQueue = useRadarrQueue()
   const series = useSonarrLibrary()
+  const recent = useRecentlyAdded(12)
+  const { transitionTo } = useNavTransition()
   const confirm = useConfirm()
   const qc = useQueryClient()
   const { isAdmin } = useAuth()
@@ -344,6 +348,48 @@ export function DownloadsTab() {
           </div>
         )}
       </div>
+
+      {recent.length > 0 && (
+        <section className="downloads-tab__recent" aria-label="Recently added to the library">
+          <h3 className="downloads-tab__recent-label">Recently added</h3>
+          <div className="downloads-tab__recent-row">
+            {recent.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                className="downloads-tab__recent-card"
+                onClick={() => transitionTo(item.route)}
+                title={`${item.title}${item.year ? ` (${item.year})` : ''}`}
+              >
+                {item.poster ? (
+                  <img
+                    className="downloads-tab__recent-poster"
+                    src={item.poster}
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <div
+                    className="downloads-tab__recent-poster downloads-tab__recent-poster--fallback"
+                    aria-hidden="true"
+                  >
+                    {item.title.charAt(0)}
+                  </div>
+                )}
+                <div className="downloads-tab__recent-caption">
+                  <span className="downloads-tab__recent-title">{item.title}</span>
+                  <span className="downloads-tab__recent-kind">
+                    {item.kind === 'tv' ? 'TV Show' : 'Movie'}
+                    {item.year ? ` · ${item.year}` : ''}
+                  </span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
     </section>
   )
 }
