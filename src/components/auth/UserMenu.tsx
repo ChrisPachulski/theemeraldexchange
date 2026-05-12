@@ -1,17 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAuth } from '../../lib/auth'
+import { DiscordNotifications } from './DiscordNotifications'
 import './UserMenu.css'
 
 // Trigger pill in the top-right cluster + dropdown panel for the
-// authenticated user. The panel is structured into four sections separated
-// by hairlines:
+// authenticated user. The panel is structured into five sections
+// separated by hairlines:
 //   1. Header: who you're signed in as + role badge
 //   2. Toggle: admins can preview the app as a regular user (UI-only)
 //   3. Apps:   admin-only direct links to Sonarr / Radarr / SAB on the LAN
 //              (hidden when viewing-as-user). Links use the LAN hostname
 //              only — no IP — so the public bundle leaks nothing about
 //              the home network.
-//   4. Sign out
+//   4. Discord notifications: admin-only webhook config that drives
+//              Sonarr + Radarr's Discord notification connections.
+//   5. Sign out
 
 const APP_LINKS = [
   { name: 'Sonarr', href: 'https://sonarr.theemeraldexchange.com' },
@@ -120,6 +123,9 @@ export function UserMenu() {
                   ))}
                 </ul>
               </section>
+
+              <hr className="user-menu__divider" />
+              <DiscordNotifications onClose={() => setOpen(false)} />
             </>
           )}
 

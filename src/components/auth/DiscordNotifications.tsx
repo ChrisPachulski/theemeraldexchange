@@ -1,0 +1,163 @@
+import { useEffect, useState } from 'react'
+import { apiUrl } from '../../lib/api/base'
+
+// Discord-webhook configuration card inside the admin UserMenu.
+// Fetches current state once on mount, lets the admin paste a webhook
+// URL, fires a test ping, or remove the integration. Wraps the small
+// /api/notifications/discord set of routes.
+
+type Status = { sonarr: boolean; radarr: boolean; configured: boolean }
+
+type Props = { onClose: () => void }
+
+export function DiscordNotifications({ onClose }: Props) {
+  const [status, setStatus] = useState<Status | null>(null)
+  const [url, setUrl] = useState('')
+  const [busy, setBusy] = useState<'save' | 'test' | 'remove' | null>(null)
+  const [message, setMessage] = useState<string | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    fetch(apiUrl('/api/notifications/discord'), { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((s: Status | null) => {
+        if (alive) setStatus(s)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const save = async () => {
+    setBusy('save')
+    setMessage(null)
+    try {
+      const res = await fetch(apiUrl('/api/notifications/discord'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ webhookUrl: url.trim() }),
+      })
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(body.error ?? `save failed ${res.status}`)
+      }
+      setStatus({ sonarr: true, radarr: true, configured: true })
+      setUrl('')
+      setMessage('Saved. Sonarr + Radarr will ping Discord on grab, download, and manual-interaction events.')
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const test = async () => {
+    setBusy('test')
+    setMessage(null)
+    try {
+      const res = await fetch(apiUrl('/api/notifications/discord/test'), {
+        method: 'POST',
+        credentials: 'include',
+      })
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(body.error ?? `test failed ${res.status}`)
+      }
+      setMessage('Test ping sent — check your Discord channel.')
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const remove = async () => {
+    setBusy('remove')
+    setMessage(null)
+    try {
+      const res = await fetch(apiUrl('/api/notifications/discord'), {
+        method: 'DELETE',
+        credentials: 'include',
+      })
+      if (!res.ok) throw new Error(`remove failed ${res.status}`)
+      setStatus({ sonarr: false, radarr: false, configured: false })
+      setMessage('Removed. Sonarr + Radarr will stop pinging Discord.')
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const configured = status?.configured ?? false
+
+  return (
+    <section
+      className="user-menu__apps user-menu__discord"
+      role="group"
+      aria-label="Discord notifications"
+    >
+      <p className="user-menu__eyebrow">Discord notifications</p>
+      <p className="user-menu__discord-status">
+        {status === null
+          ? 'Checking…'
+          : configured
+            ? 'Configured · firing on grab / download / failure'
+            : 'Not configured'}
+      </p>
+      {!configured && (
+        <>
+          <input
+            type="url"
+            className="user-menu__discord-input"
+            placeholder="https://discord.com/api/webhooks/..."
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            disabled={busy !== null}
+            spellCheck={false}
+            autoComplete="off"
+          />
+          <button
+            type="button"
+            className="user-menu__discord-action"
+            onClick={save}
+            disabled={busy !== null || url.trim().length === 0}
+          >
+            {busy === 'save' ? 'Saving…' : 'Save webhook'}
+          </button>
+        </>
+      )}
+      {configured && (
+        <div className="user-menu__discord-actions">
+          <button
+            type="button"
+            className="user-menu__discord-action"
+            onClick={test}
+            disabled={busy !== null}
+          >
+            {busy === 'test' ? 'Sending…' : 'Send test ping'}
+          </button>
+          <button
+            type="button"
+            className="user-menu__discord-action user-menu__discord-action--danger"
+            onClick={() => {
+              if (window.confirm('Remove Discord notifications from Sonarr + Radarr?')) {
+                void remove().then(() => onClose())
+              }
+            }}
+            disabled={busy !== null}
+          >
+            {busy === 'remove' ? 'Removing…' : 'Remove'}
+          </button>
+        </div>
+      )}
+      {message && (
+        <p className="user-menu__discord-message" role="status">
+          {message}
+        </p>
+      )}
+    </section>
+  )
+}
