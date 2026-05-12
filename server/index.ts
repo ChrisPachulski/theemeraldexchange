@@ -24,6 +24,7 @@ import { sab } from './routes/sab.js'
 import { tmdb } from './routes/tmdb.js'
 import { users } from './routes/users.js'
 import { plexAdmin } from './routes/plex-admin.js'
+import { notifications } from './routes/notifications.js'
 
 const app = new Hono()
 
@@ -65,6 +66,7 @@ app.route('/api/sab', sab)
 app.route('/api/tmdb', tmdb)
 app.route('/api/users', users)
 app.route('/api/plex', plexAdmin)
+app.route('/api/notifications', notifications)
 
 serve(
   { fetch: app.fetch, port: env.port },

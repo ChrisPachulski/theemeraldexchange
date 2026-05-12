@@ -313,3 +313,85 @@
     min-width: 240px;
   }
 }
+
+/* Discord notification config card inside the admin section. Same
+   structural rules as the apps list — eyebrow + body — with input
+   and action buttons tuned for inline editing. */
+.user-menu__discord {
+  display: grid;
+  gap: var(--s-2);
+}
+
+.user-menu__discord-status {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--text-subtle);
+  margin: 0;
+}
+
+.user-menu__discord-input {
+  width: 100%;
+  padding: var(--s-2) var(--s-3);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--text);
+  background: color-mix(in oklch, var(--surface) 80%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  outline: none;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+
+.user-menu__discord-input:focus {
+  border-color: var(--emerald);
+}
+
+.user-menu__discord-actions {
+  display: flex;
+  gap: var(--s-2);
+}
+
+.user-menu__discord-action {
+  flex: 1 1 auto;
+  padding: var(--s-2) var(--s-3);
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text);
+  background: color-mix(in oklch, var(--emerald) 12%, var(--surface));
+  border: 1px solid var(--emerald);
+  border-radius: var(--r-pod, 999px);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.user-menu__discord-action:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--emerald) 30%, var(--surface));
+  color: var(--text);
+}
+
+.user-menu__discord-action:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.user-menu__discord-action--danger {
+  border-color: var(--danger);
+  background: color-mix(in oklch, var(--danger) 12%, var(--surface));
+}
+
+.user-menu__discord-action--danger:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--danger) 25%, var(--surface));
+}
+
+.user-menu__discord-message {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--text-muted);
+  margin: 0;
+  line-height: 1.4;
+}
