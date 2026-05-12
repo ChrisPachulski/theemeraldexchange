@@ -253,15 +253,6 @@ export function MoviesTab() {
     <section className="tv-tab">
       {mode === 'discover' ? (
         <>
-          {debouncedQuery.length < 2 && (
-            <TrendingRow
-              items={trending.data ?? []}
-              loading={trending.isPending}
-              onPick={handleTrendingPick}
-              pendingId={trendingPending}
-              label="Trending movies this week"
-            />
-          )}
           <DiscoverResults
             query={debouncedQuery}
             loading={search.isPending && debouncedQuery.length >= 2}
@@ -270,6 +261,17 @@ export function MoviesTab() {
             libraryByTmdb={libraryByTmdb}
             onCardClick={handleSearchClick}
           />
+          {debouncedQuery.length < 2 && (
+            <div className="tv-tab__trending-below-fold">
+              <TrendingRow
+                items={trending.data ?? []}
+                loading={trending.isPending}
+                onPick={handleTrendingPick}
+                pendingId={trendingPending}
+                label="Trending movies this week"
+              />
+            </div>
+          )}
         </>
       ) : (
         <>
