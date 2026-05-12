@@ -247,8 +247,17 @@ export function DetailModal({
                     const aired = s.episodeCount > 0
                     const complete =
                       s.episodeCount > 0 && s.episodeFileCount >= s.episodeCount
-                    const canAdd =
-                      !s.monitored && aired && !complete && onAddSeason
+                    // Two cases warrant an action button:
+                    //   1) Season not yet monitored but has aired episodes
+                    //      → 'Add this season' (opt in + grab)
+                    //   2) Season already monitored but missing episodes
+                    //      that have aired → 'Get missing' (re-trigger the
+                    //      cap-aware search for that season). Same backend
+                    //      route handles both — the monitor flip is a
+                    //      no-op when already monitored.
+                    const canTrigger =
+                      aired && !complete && onAddSeason
+                    const triggerLabel = s.monitored ? 'Get missing' : 'Add'
                     const isAdding = addingSeason === s.seasonNumber
                     const status = s.monitored
                       ? complete
@@ -264,7 +273,7 @@ export function DetailModal({
                             <span className="detail__season-num">Season {s.seasonNumber}</span>
                             <span className="detail__season-air">{fmtAirDate(s.airDate)}</span>
                             <span className="detail__season-status">{status}</span>
-                            {canAdd && (
+                            {canTrigger && (
                               <button
                                 type="button"
                                 className="detail__season-add"
@@ -275,7 +284,7 @@ export function DetailModal({
                                 disabled={isAdding}
                                 aria-busy={isAdding}
                               >
-                                {isAdding ? 'Adding…' : 'Add'}
+                                {isAdding ? 'Searching…' : triggerLabel}
                               </button>
                             )}
                             <span className="detail__season-chevron" aria-hidden="true">›</span>
