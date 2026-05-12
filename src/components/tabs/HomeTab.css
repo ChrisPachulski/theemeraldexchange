@@ -203,6 +203,104 @@
   font-feature-settings: 'tnum' 1;
 }
 
+/* Recently-added strip — sits below the last about panel so it
+   surfaces after the household has read the readme. Horizontal
+   scroll, dense posters, clicks jump to the right tab. */
+.home__recent {
+  margin: var(--s-7) var(--s-5);
+  display: grid;
+  gap: var(--s-3);
+  max-width: 880px;
+  width: calc(100% - var(--s-5) * 2);
+  margin-left: auto;
+  margin-right: var(--s-5);
+}
+
+.home__recent-label {
+  font-family: var(--font-display);
+  font-weight: var(--w-display);
+  font-size: var(--t-sm);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--emerald);
+  margin: 0;
+  text-shadow:
+    0 0 8px oklch(0.62 0.180 158 / 0.6),
+    0 0 16px oklch(0.62 0.180 158 / 0.3);
+}
+
+.home__recent-row {
+  display: flex;
+  gap: var(--s-3);
+  overflow-x: auto;
+  padding-bottom: var(--s-2);
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.home__recent-card {
+  flex: 0 0 auto;
+  width: 132px;
+  display: grid;
+  gap: var(--s-2);
+  padding: 0;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.home__recent-card:hover {
+  transform: translateY(-2px);
+}
+.home__recent-card:hover .home__recent-poster {
+  border-color: var(--emerald);
+}
+
+.home__recent-poster {
+  width: 132px;
+  aspect-ratio: 2 / 3;
+  object-fit: cover;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  display: block;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+
+.home__recent-poster--fallback {
+  display: grid;
+  place-items: center;
+  font-family: var(--font-display);
+  font-size: var(--t-xl);
+  font-weight: var(--w-display);
+  color: var(--text-subtle);
+}
+
+.home__recent-caption {
+  display: grid;
+  gap: 2px;
+}
+
+.home__recent-title {
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  color: var(--text);
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.home__recent-kind {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--text-subtle);
+  font-feature-settings: 'tnum' 1;
+}
+
 /* Bottom safe-zone so the last panel never hides under the fixed entry
    pills at the end of the scroll. */
 .home__about-floor {
