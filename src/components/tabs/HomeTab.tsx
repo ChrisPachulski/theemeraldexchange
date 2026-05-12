@@ -1,7 +1,6 @@
 import type { Route } from '../../lib/router'
 import { useNavTransition } from '../../lib/navTransition'
 import { useAuth } from '../../lib/auth'
-import { useRecentlyAdded } from '../../lib/hooks/useRecentlyAdded'
 import './HomeTab.css'
 
 type Entry = { route: Route; label: string; adminOnly?: boolean }
@@ -61,7 +60,6 @@ export function HomeTab() {
   const { transitionTo } = useNavTransition()
   const { isAdmin } = useAuth()
   const entries = ENTRIES.filter((e) => !e.adminOnly || isAdmin)
-  const recent = useRecentlyAdded(12)
 
   return (
     <section className="home" aria-label="Emerald Exchange home">
@@ -89,47 +87,6 @@ export function HomeTab() {
             </div>
           </article>
         ))}
-        {recent.length > 0 && (
-          <section className="home__recent" aria-label="Recently added to the library">
-            <h3 className="home__recent-label">Recently added</h3>
-            <div className="home__recent-row">
-              {recent.map((item) => (
-                <button
-                  key={item.key}
-                  type="button"
-                  className="home__recent-card"
-                  onClick={() => transitionTo(item.route)}
-                  title={`${item.title}${item.year ? ` (${item.year})` : ''}`}
-                >
-                  {item.poster ? (
-                    <img
-                      className="home__recent-poster"
-                      src={item.poster}
-                      alt=""
-                      loading="lazy"
-                      decoding="async"
-                      referrerPolicy="no-referrer"
-                    />
-                  ) : (
-                    <div
-                      className="home__recent-poster home__recent-poster--fallback"
-                      aria-hidden="true"
-                    >
-                      {item.title.charAt(0)}
-                    </div>
-                  )}
-                  <div className="home__recent-caption">
-                    <span className="home__recent-title">{item.title}</span>
-                    <span className="home__recent-kind">
-                      {item.kind === 'tv' ? 'TV Show' : 'Movie'}
-                      {item.year ? ` · ${item.year}` : ''}
-                    </span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </section>
-        )}
         <div className="home__about-floor" aria-hidden="true" />
       </div>
 
