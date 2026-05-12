@@ -25,9 +25,6 @@ forwardRead('/api/v3/qualityprofile')
 forwardRead('/api/v3/rootfolder')
 forwardRead('/api/v3/movie')
 forwardRead('/api/v3/movie/lookup')
-// Movies releasing in a window (start/end as ISO dates). Drives the
-// Upcoming strip on the Downloads tab.
-forwardRead('/api/v3/calendar')
 
 // Hard size cap. Radarr's auto-search can grab whatever wins its profile
 // scoring — that includes 50 GB 4K HDR rips. Instead we force
