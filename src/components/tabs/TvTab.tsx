@@ -15,6 +15,8 @@ import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useSeriesSearch } from '../../lib/hooks/useSeriesSearch'
 import { useSonarrLibrary } from '../../lib/hooks/useSonarrLibrary'
 import { useSonarrEpisodes } from '../../lib/hooks/useSonarrEpisodes'
+import { useTrendingTv } from '../../lib/hooks/useTrending'
+import { TrendingRow } from '../search/TrendingRow'
 import { useCast } from '../../lib/hooks/useCast'
 import { useConfirm } from '../confirm/useConfirm'
 import { sonarr, type Series, type SeriesSearchResult } from '../../lib/api/sonarr'
@@ -109,6 +111,26 @@ export function TvTab() {
     tvdbId: viewing?.tvdbId ?? 0,
     enabled: viewing !== null,
   })
+
+  const trending = useTrendingTv()
+  const [trendingPending, setTrendingPending] = useState<number | null>(null)
+  const handleTrendingPick = async (tmdbId: number) => {
+    setTrendingPending(tmdbId)
+    try {
+      const results = await sonarr.lookup(`tmdb:${tmdbId}`)
+      const hit = results[0]
+      if (!hit) {
+        setToast("Couldn't find that show on TVDB")
+        return
+      }
+      const inLib = libraryByTvdb.get(hit.tvdbId)
+      setViewing(inLib ?? hit)
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : String(e))
+    } finally {
+      setTrendingPending(null)
+    }
+  }
 
   // Episode list only useful for in-library shows (it powers the
   // per-season disclosure inside DetailModal). Discover results don't
@@ -230,14 +252,25 @@ export function TvTab() {
   return (
     <section className="tv-tab">
       {mode === 'discover' ? (
-        <DiscoverResults
-          query={debouncedQuery}
-          loading={search.isPending && debouncedQuery.length >= 2}
-          error={search.error}
-          results={search.data ?? []}
-          libraryByTvdb={libraryByTvdb}
-          onCardClick={handleSearchClick}
-        />
+        <>
+          {debouncedQuery.length < 2 && (
+            <TrendingRow
+              items={trending.data ?? []}
+              loading={trending.isPending}
+              onPick={handleTrendingPick}
+              pendingId={trendingPending}
+              label="Trending shows this week"
+            />
+          )}
+          <DiscoverResults
+            query={debouncedQuery}
+            loading={search.isPending && debouncedQuery.length >= 2}
+            error={search.error}
+            results={search.data ?? []}
+            libraryByTvdb={libraryByTvdb}
+            onCardClick={handleSearchClick}
+          />
+        </>
       ) : (
         <>
           {!library.isPending && !library.error && (library.data?.length ?? 0) > 0 && (
