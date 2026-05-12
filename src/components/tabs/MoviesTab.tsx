@@ -183,6 +183,23 @@ export function MoviesTab() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['radarr', 'movie'] }),
   })
 
+  const upgradeMutation = useMutation({
+    mutationFn: (id: number) => radarr.upgrade(id),
+    onSuccess: (result) => {
+      qc.invalidateQueries({ queryKey: ['radarr', 'movie'] })
+      if (result.status === 'grabbing') {
+        setToast(
+          `Upgrade grabbed: ${result.title} (${result.sizeGb.toFixed(2)} GB)`,
+        )
+      } else if (result.status === 'no_upgrade_available') {
+        setToast(`No better release found under ${result.capGb} GB cap`)
+      } else {
+        setToast('Indexer returned no releases')
+      }
+    },
+    onError: (e) => setToast(e instanceof Error ? e.message : String(e)),
+  })
+
   const handleSearchClick = (item: MovieSearchResult) => {
     const inLib = libraryByTmdb.get(item.tmdbId)
     setViewing(inLib ?? item)
@@ -308,6 +325,11 @@ export function MoviesTab() {
           setViewing(null)
           setAdding(item)
         } : undefined}
+        onUpgrade={isAdmin && viewing && 'id' in viewing ? () => {
+          const m = viewing as Movie
+          upgradeMutation.mutate(m.id)
+        } : undefined}
+        upgrading={upgradeMutation.isPending}
         onRemove={viewing && 'id' in viewing ? () => {
           const m = viewing as Movie
           setViewing(null)

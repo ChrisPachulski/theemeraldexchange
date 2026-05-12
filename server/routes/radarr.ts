@@ -133,6 +133,70 @@ radarr.post('/api/v3/movie', async (c) => {
   })
 })
 
+// Manually trigger an upgrade pass on an existing movie. Radarr's
+// release search returns releases with `rejected: true` when they're
+// equal-or-worse than the current file, so reusing the same filter
+// chain as grabBestUnderCap naturally excludes non-upgrades. If the
+// best non-rejected release fits the cap, grab it; Radarr's import
+// logic then decides whether to replace the existing file.
+//
+// Returns:
+//   { status: 'grabbing', ...best }  on success
+//   { status: 'no_upgrade_available' } when nothing non-rejected was
+//                                       found under the cap
+//   { status: 'no_releases_found' }   when the indexer returned nothing
+radarr.post('/api/v3/movie/:id/upgrade', requireAdmin, async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isFinite(id)) return c.json({ error: 'bad_id' }, 400)
+  const releaseRes = await radarrFetch(`/api/v3/release?movieId=${id}`, {
+    method: 'GET',
+  })
+  if (!releaseRes.ok) {
+    return c.json({ error: 'release_search_failed', status: releaseRes.status }, 502)
+  }
+  type Release = {
+    guid: string
+    indexerId: number
+    size: number
+    qualityWeight: number
+    title: string
+    rejected?: boolean
+  }
+  const all = (await releaseRes.json()) as Release[]
+  if (all.length === 0) {
+    return c.json({ status: 'no_releases_found' })
+  }
+  const eligible = all
+    .filter((r) => !r.rejected && r.size > 0 && r.size <= env.maxMovieBytes)
+    .sort((a, b) => b.qualityWeight - a.qualityWeight)
+  if (eligible.length === 0) {
+    return c.json({
+      status: 'no_upgrade_available',
+      scanned: all.length,
+      capGb: env.maxMovieGb,
+    })
+  }
+  const best = eligible[0]
+  const grabRes = await radarrFetch('/api/v3/release', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ guid: best.guid, indexerId: best.indexerId }),
+  })
+  if (!grabRes.ok) {
+    return c.json({ error: 'grab_failed', status: grabRes.status }, 502)
+  }
+  console.log(
+    `[movie-upgrade] grabbed "${best.title}" ${(best.size / 1024 ** 3).toFixed(2)}GB ` +
+      `for movie ${id}`,
+  )
+  return c.json({
+    status: 'grabbing',
+    title: best.title,
+    sizeGb: Number((best.size / 1024 ** 3).toFixed(2)),
+    qualityWeight: best.qualityWeight,
+  })
+})
+
 radarr.delete('/api/v3/movie/:id', requireAdmin, async (c) => {
   const id = c.req.param('id')
   const search = new URL(c.req.url).searchParams
