@@ -126,6 +126,12 @@ export function MoviesTab() {
 
   const trending = useTrendingMovies()
   const [trendingPending, setTrendingPending] = useState<number | null>(null)
+  // Strip already-in-library titles out of the trending row — no point
+  // suggesting things the household already has.
+  const trendingFiltered = useMemo(
+    () => (trending.data ?? []).filter((t) => !libraryByTmdb.has(t.id)),
+    [trending.data, libraryByTmdb],
+  )
   // Trending shows TMDB items; clicking one resolves through Radarr's
   // lookup (it accepts tmdb:NNN) so the same DetailModal flow handles
   // it as a regular search result.
@@ -264,7 +270,7 @@ export function MoviesTab() {
           {debouncedQuery.length < 2 && (
             <div className="tv-tab__trending-below-fold">
               <TrendingRow
-                items={trending.data ?? []}
+                items={trendingFiltered}
                 loading={trending.isPending}
                 onPick={handleTrendingPick}
                 pendingId={trendingPending}

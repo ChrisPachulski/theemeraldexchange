@@ -46,6 +46,7 @@ export type SeasonStatistics = {
 
 export type SeriesSearchResult = {
   tvdbId: number
+  tmdbId?: number
   imdbId?: string
   title: string
   year: number
