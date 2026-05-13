@@ -73,10 +73,14 @@ rsync -av "$LOCAL_ENV" "${NAS_USER}@${NAS_HOST}:${APPDATA}/.env"
 ssh "${NAS_USER}@${NAS_HOST}" "chmod 600 ${APPDATA}/.env"
 
 echo "→ Building and starting containers"
-ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && docker compose up -d --build"
+# Unraid sometimes loses the docker compose plugin during system
+# updates while keeping the standalone docker-compose binary. Try the
+# plugin form first; fall back to the hyphenated standalone if that
+# fails. Both accept the same up -d --build / logs flags.
+ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && (docker compose up -d --build || docker-compose up -d --build)"
 
 echo "→ Tail logs for 5s to confirm healthy boot"
-ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && timeout 5 docker compose logs --tail=20 -f || true"
+ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && (timeout 5 docker compose logs --tail=20 -f || timeout 5 docker-compose logs --tail=20 -f || true)"
 
 echo
 echo "✓ Deployed. The cloudflared container may take ~30s to register"
