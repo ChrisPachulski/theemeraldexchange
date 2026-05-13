@@ -1,0 +1,225 @@
+/* Admin-only diagnostic disclosure. Sits at the bottom of the Downloads
+   tab and is collapsed by default — it's a tool the admin reaches for
+   when something's wrong, not a daily-driver widget. Table-style rows
+   (not posters) to keep visual weight low and signal that this is
+   plumbing, not browsing. */
+
+.grab-activity {
+  margin: var(--s-6) var(--s-5) 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: color-mix(in oklch, var(--surface) 80%, transparent);
+}
+
+.grab-activity[open] {
+  border-color: var(--emerald);
+}
+
+.grab-activity__summary {
+  list-style: none;
+  cursor: pointer;
+  padding: var(--s-3) var(--s-4);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-family: var(--font-display);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  font-size: var(--t-xs);
+}
+
+.grab-activity__summary::-webkit-details-marker {
+  display: none;
+}
+
+.grab-activity__title {
+  color: var(--emerald);
+  font-weight: var(--w-display);
+}
+
+.grab-activity__count {
+  font-family: var(--font-mono);
+  font-feature-settings: 'tnum' 1;
+  font-size: 0.625rem;
+}
+
+.grab-activity__body {
+  padding: 0 var(--s-3) var(--s-3);
+}
+
+.grab-activity__empty,
+.grab-activity__error {
+  margin: var(--s-2) var(--s-3);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--text-subtle);
+}
+
+.grab-activity__error {
+  color: var(--danger);
+}
+
+.grab-activity__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.grab-activity__row {
+  display: contents;
+}
+
+.grab-activity__row-button {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto auto;
+  align-items: baseline;
+  gap: var(--s-3);
+  width: 100%;
+  padding: var(--s-2) var(--s-3);
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm, 6px);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  font-feature-settings: 'tnum' 1;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.grab-activity__row-button:hover,
+.grab-activity__row-button[aria-expanded='true'] {
+  background: color-mix(in oklch, var(--emerald) 8%, transparent);
+}
+
+.grab-activity__time {
+  color: var(--text-subtle);
+  letter-spacing: var(--tr-hud);
+}
+
+.grab-activity__app {
+  font-family: var(--font-display);
+  font-size: 0.625rem;
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  padding: 1px var(--s-2);
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-subtle);
+  min-width: 32px;
+  text-align: center;
+}
+
+.grab-activity__app--sonarr {
+  color: oklch(0.78 0.12 220);
+  border-color: oklch(0.78 0.12 220 / 0.4);
+}
+
+.grab-activity__app--radarr {
+  color: oklch(0.82 0.14 80);
+  border-color: oklch(0.82 0.14 80 / 0.4);
+}
+
+.grab-activity__title-cell {
+  color: var(--text);
+  font-family: var(--font-display);
+  font-weight: var(--w-body);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.grab-activity__pill {
+  font-family: var(--font-display);
+  font-size: 0.625rem;
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  padding: 1px var(--s-2);
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+
+.grab-activity__pill--ok {
+  color: var(--emerald);
+  background: color-mix(in oklch, var(--emerald) 12%, transparent);
+}
+
+.grab-activity__pill--err {
+  color: var(--danger);
+  background: color-mix(in oklch, var(--danger) 12%, transparent);
+}
+
+.grab-activity__pill--warn {
+  color: oklch(0.82 0.14 80);
+  background: color-mix(in oklch, oklch(0.82 0.14 80) 12%, transparent);
+}
+
+.grab-activity__pill--info {
+  color: var(--text-subtle);
+  background: color-mix(in oklch, var(--text-subtle) 10%, transparent);
+}
+
+.grab-activity__detail {
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+  min-width: 0;
+}
+
+.grab-activity__json {
+  margin: 0;
+  padding: var(--s-3);
+  background: var(--surface-2);
+  border-radius: var(--r-sm, 6px);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
+@media (max-width: 720px) {
+  .grab-activity {
+    margin: var(--s-4) var(--s-3) 0;
+  }
+  .grab-activity__row-button {
+    grid-template-columns: auto 1fr auto;
+    grid-template-rows: auto auto;
+    row-gap: 2px;
+  }
+  /* On small screens, stack: time + pill on row 1, title row 2, detail row 3 */
+  .grab-activity__app {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .grab-activity__time {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .grab-activity__pill {
+    grid-column: 3;
+    grid-row: 1;
+  }
+  .grab-activity__title-cell {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .grab-activity__detail {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    text-align: left;
+    color: var(--text-subtle);
+  }
+}

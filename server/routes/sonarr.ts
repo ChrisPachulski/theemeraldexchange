@@ -5,6 +5,7 @@
 import { Hono } from 'hono'
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { sonarrFetch, sonarrRootFolders } from '../services/sonarr.js'
+import { appendGrabEvent } from '../services/grabLog.js'
 import { env } from '../env.js'
 
 export const sonarr = new Hono<Env>()
@@ -52,7 +53,14 @@ forwardRead('/api/v3/queue')
 //    inside the same release pool Sonarr's auto-retry walks. Fallback
 //    to the broader pool only when the profile rejects everything that
 //    fits the cap (rare, but possible for niche shows).
-async function grabTvUnderCap(seriesId: number, monitoredSeasons: number[]): Promise<void> {
+async function grabTvUnderCap(
+  seriesId: number,
+  monitoredSeasons: number[],
+  title?: string,
+): Promise<void> {
+  const base = { app: 'sonarr' as const, itemId: seriesId, title, capGb: env.maxTvGbPerEpisode }
+  await appendGrabEvent({ ...base, type: 'grab_started' })
+
   // Brief delay so Sonarr finishes wiring the new series record.
   await new Promise((r) => setTimeout(r, 2000))
 
@@ -92,6 +100,7 @@ async function grabTvUnderCap(seriesId: number, monitoredSeasons: number[]): Pro
     const res = await sonarrFetch(url, { method: 'GET' })
     if (!res.ok) {
       console.error(`[tv-cap] release search ${res.status} S${seasonNumber} series=${seriesId}`)
+      await appendGrabEvent({ ...base, type: 'search_failed', status: res.status })
       continue
     }
     const chunk = (await res.json()) as Release[]
@@ -122,6 +131,18 @@ async function grabTvUnderCap(seriesId: number, monitoredSeasons: number[]): Pro
   // the profile rejects every cap-eligible release.
   const accepted = within.filter((r) => !r.rejected && !r.temporarilyRejected)
   const eligible = accepted.length > 0 ? accepted : within
+  if (within.length > 0 && accepted.length === 0) {
+    // Informational: every cap-eligible release was profile-rejected.
+    // Pipeline still continues against the broader pool so niche shows
+    // don't get stuck — log this so the admin can spot a misconfigured
+    // profile (e.g. Choose Me with no available quality tier).
+    await appendGrabEvent({
+      ...base,
+      type: 'all_rejected_by_profile',
+      scanned: all.length,
+      eligible: within.length,
+    })
+  }
 
   // Group by (seasonNumber, episodeKey) so we grab the single best
   // release per chunk — not five copies of the same episode. Tie-break
@@ -147,6 +168,12 @@ async function grabTvUnderCap(seriesId: number, monitoredSeasons: number[]): Pro
       `[tv-cap] no releases ≤ ${env.maxTvGbPerEpisode}GB/ep for series ${seriesId} ` +
         `(${all.length} scanned, ${within.length} cap-eligible, ${accepted.length} accepted)`,
     )
+    await appendGrabEvent({
+      ...base,
+      type: all.length === 0 ? 'no_releases' : 'all_rejected_by_cap',
+      scanned: all.length,
+      eligible: within.length,
+    })
     return
   }
 
@@ -171,6 +198,17 @@ async function grabTvUnderCap(seriesId: number, monitoredSeasons: number[]): Pro
         `(~${(pick.size / ec / 1024 ** 3).toFixed(2)}GB/ep, ${ec} ep) ` +
         `series=${seriesId} → ${grabRes.status}`,
     )
+    await appendGrabEvent({
+      ...base,
+      type: grabRes.ok ? 'grab_succeeded' : 'grab_failed',
+      status: grabRes.status,
+      release: {
+        title: pick.title,
+        sizeBytes: pick.size,
+        qualityWeight: pick.qualityWeight,
+        seasonNumber: pick.seasonNumber,
+      },
+    })
   }
 }
 
@@ -272,9 +310,18 @@ sonarr.post('/api/v3/series', async (c) => {
       }
 
       if (id && monitored.length > 0) {
-        void grabTvUnderCap(id, monitored).catch((e) =>
-          console.error('[tv-cap] grab failed:', e),
-        )
+        const itemId = id
+        const itemTitle = (created as { title?: string }).title
+        void grabTvUnderCap(itemId, monitored, itemTitle).catch((e) => {
+          console.error('[tv-cap] grab failed:', e)
+          void appendGrabEvent({
+            app: 'sonarr',
+            itemId,
+            title: itemTitle,
+            type: 'grab_failed',
+            error: e instanceof Error ? e.message : String(e),
+          })
+        })
       }
     } catch {
       // Pass through; series was added if r.ok.
@@ -308,6 +355,7 @@ sonarr.post('/api/v3/series/:id/seasons/:n/monitor', requireAdmin, async (c) => 
     return new Response(await getRes.text(), { status: getRes.status })
   }
   const series = (await getRes.json()) as {
+    title?: string
     seasons?: Array<{ seasonNumber: number; monitored: boolean }>
   }
   const seasons = series.seasons ?? []
@@ -331,9 +379,16 @@ sonarr.post('/api/v3/series/:id/seasons/:n/monitor', requireAdmin, async (c) => 
   }
   // Fire the cap-enforced grab in the background — same path the add
   // flow uses, so the new season comes in via the same size gate.
-  void grabTvUnderCap(id, [n]).catch((e) =>
-    console.error('[tv-monitor-season] grab failed:', e),
-  )
+  void grabTvUnderCap(id, [n], series.title).catch((e) => {
+    console.error('[tv-monitor-season] grab failed:', e)
+    void appendGrabEvent({
+      app: 'sonarr',
+      itemId: id,
+      title: series.title,
+      type: 'grab_failed',
+      error: e instanceof Error ? e.message : String(e),
+    })
+  })
   return c.json({ ok: true, seriesId: id, seasonNumber: n })
 })
 
