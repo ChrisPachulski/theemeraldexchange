@@ -240,6 +240,12 @@ suggestions.get('/:type', async (c) => {
     return c.json({ error: 'invalid_type' }, 400)
   }
 
+  // ?force=trending — client opts out of the Claude call to avoid
+  // burning tokens (e.g., the household-level AI toggle is off).
+  // Same downstream shape as the cold-start path so the SPA renders
+  // identically.
+  const force = c.req.query('force')
+
   // Library + rejections in parallel.
   const [library, rejections] = await Promise.all([
     type === 'movie' ? fetchRadarrLibrary() : fetchSonarrLibrary(),
@@ -250,6 +256,13 @@ suggestions.get('/:type', async (c) => {
   const libraryTmdbIds = new Set(
     library.map((l) => l.tmdbId).filter((id): id is number => typeof id === 'number'),
   )
+
+  if (force === 'trending') {
+    const trending = (await tmdbTrending(type)).filter(
+      (i) => !rejected.has(i.id) && !libraryTmdbIds.has(i.id),
+    )
+    return c.json({ source: 'trending', items: trending.slice(0, TARGET_COUNT) })
+  }
 
   // Cold start: library too small for meaningful taste signal.
   if (library.length < COLD_START_THRESHOLD) {

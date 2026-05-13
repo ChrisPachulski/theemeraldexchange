@@ -4,6 +4,14 @@
   gap: var(--s-3);
 }
 
+/* Bottom-right anchor for the AI on/off toggle — diagonally opposite
+   the section label. Right-align via justify-self end. */
+.trending__footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--s-2);
+}
+
 .trending__label {
   font-family: var(--font-display);
   font-weight: var(--w-display);
