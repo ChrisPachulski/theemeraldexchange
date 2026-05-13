@@ -143,16 +143,85 @@
   font-feature-settings: 'tnum' 1;
 }
 
+/* Skeleton card during the Claude call (~15s). The card itself takes
+   the poster's dimensions so the row has visible weight while we
+   wait — without these explicit sizes the empty div collapses to 0
+   and the loading state appears as blank space. */
 .trending__card--skeleton {
   pointer-events: none;
-}
-.trending__card--skeleton .trending__poster {
-  animation: trending-skeleton 1.6s ease-in-out infinite;
+  width: 132px;
+  height: 198px;
+  aspect-ratio: 2 / 3;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: linear-gradient(
+    90deg,
+    var(--surface-2),
+    color-mix(in oklch, var(--emerald) 8%, var(--surface-2)),
+    var(--surface-2)
+  );
+  background-size: 200% 100%;
+  animation: trending-skeleton-shimmer 2.2s ease-in-out infinite;
 }
 
-@keyframes trending-skeleton {
-  0%, 100% { opacity: 0.5; }
-  50%      { opacity: 0.85; }
+@keyframes trending-skeleton-shimmer {
+  0%   { background-position: 200% 0; opacity: 0.55; }
+  50%  { opacity: 0.9; }
+  100% { background-position: -200% 0; opacity: 0.55; }
+}
+
+/* Loading-state label — emerald wash + a pulsing dot so it reads as
+   active rather than missing. The hint communicates the latency cost
+   so users don't think nothing is happening during the Claude call. */
+.trending__label--loading {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  color: var(--emerald);
+  text-shadow: 0 0 8px oklch(0.62 0.180 158 / 0.4);
+}
+
+.trending__loading-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--emerald);
+  box-shadow: 0 0 10px -1px oklch(0.62 0.180 158 / 0.8);
+  animation: trending-loading-dot 1.2s ease-in-out infinite;
+}
+
+@keyframes trending-loading-dot {
+  0%, 100% { transform: scale(0.7); opacity: 0.5; }
+  50%      { transform: scale(1.1); opacity: 1; }
+}
+
+.trending__loading-hint {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-weight: var(--w-body);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-subtle);
+  text-shadow: none;
+  margin-left: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trending__card--skeleton,
+  .trending__loading-dot {
+    animation: none;
+  }
+  .trending__card--skeleton {
+    opacity: 0.55;
+  }
+}
+
+@media (max-width: 720px) {
+  .trending__card--skeleton {
+    width: 108px;
+    height: 162px;
+  }
 }
 
 @media (max-width: 720px) {
