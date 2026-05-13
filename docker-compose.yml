@@ -16,9 +16,14 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:3001:3001"
+    volumes:
+      # Grab-event log lives here so it survives container rebuilds and
+      # admin can tail it directly on the NAS if the dashboard is down.
+      - "/mnt/user/appdata/exchange-backend/data:/app/data"
     environment:
       NODE_ENV: production
       PORT: "3001"
+      GRAB_LOG_PATH: "/app/data/grabs.jsonl"
       PLEX_CLIENT_ID: "${PLEX_CLIENT_ID}"
       SESSION_SECRET: "${SESSION_SECRET}"
       ADMINS: "${ADMINS:-}"

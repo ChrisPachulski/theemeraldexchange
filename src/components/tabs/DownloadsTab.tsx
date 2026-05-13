@@ -7,6 +7,7 @@ import {
 } from '../../lib/hooks/useDownloadQueue'
 import { useSonarrLibrary } from '../../lib/hooks/useSonarrLibrary'
 import { useRecentlyAdded } from '../../lib/hooks/useRecentlyAdded'
+import { GrabActivityPanel } from '../downloads/GrabActivityPanel'
 import { useNavTransition } from '../../lib/navTransition'
 import { useConfirm } from '../confirm/useConfirm'
 import { QueueRow } from '../queue/QueueRow'
@@ -348,6 +349,8 @@ export function DownloadsTab() {
           </div>
         )}
       </div>
+
+      {isAdmin && <GrabActivityPanel />}
 
       {recent.length > 0 && (
         <section className="downloads-tab__recent" aria-label="Recently added to the library">
