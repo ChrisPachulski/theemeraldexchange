@@ -36,3 +36,6 @@ scripts/_*
 
 # Vitest coverage output
 coverage
+
+# Local grab-event log (production lives on the NAS bind-mount)
+data/

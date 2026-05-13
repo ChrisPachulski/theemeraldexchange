@@ -3,6 +3,7 @@
 import { Hono } from 'hono'
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { radarrFetch, radarrRootFolders } from '../services/radarr.js'
+import { appendGrabEvent } from '../services/grabLog.js'
 import { env } from '../env.js'
 
 export const radarr = new Hono<Env>()
@@ -32,7 +33,10 @@ forwardRead('/api/v3/movie/lookup')
 // and filter to releases under env.maxMovieBytes before grabbing.
 // Fallback: if no release fits the cap, the movie stays monitored and
 // Radarr's RSS sync keeps trying.
-async function grabBestUnderCap(movieId: number): Promise<void> {
+async function grabBestUnderCap(movieId: number, title?: string): Promise<void> {
+  const base = { app: 'radarr' as const, itemId: movieId, title, capGb: env.maxMovieGb }
+  await appendGrabEvent({ ...base, type: 'grab_started' })
+
   // Brief delay so Radarr finishes wiring the new movie record before
   // we hit the release endpoint.
   await new Promise((r) => setTimeout(r, 1500))
@@ -41,6 +45,7 @@ async function grabBestUnderCap(movieId: number): Promise<void> {
   })
   if (!releaseRes.ok) {
     console.error(`[movie-cap] release search ${releaseRes.status} for movie ${movieId}`)
+    await appendGrabEvent({ ...base, type: 'search_failed', status: releaseRes.status })
     return
   }
   type Release = {
@@ -60,6 +65,12 @@ async function grabBestUnderCap(movieId: number): Promise<void> {
       `[movie-cap] no releases ≤ ${env.maxMovieGb}GB for movie ${movieId} ` +
         `(${all.length} scanned)`,
     )
+    await appendGrabEvent({
+      ...base,
+      type: all.length === 0 ? 'no_releases' : 'all_rejected_by_cap',
+      scanned: all.length,
+      eligible: 0,
+    })
     return
   }
   const best = eligible[0]
@@ -72,6 +83,18 @@ async function grabBestUnderCap(movieId: number): Promise<void> {
     `[movie-cap] grab "${best.title}" ${(best.size / 1024 ** 3).toFixed(2)}GB ` +
       `for movie ${movieId} → ${grabRes.status}`,
   )
+  await appendGrabEvent({
+    ...base,
+    type: grabRes.ok ? 'grab_succeeded' : 'grab_failed',
+    status: grabRes.status,
+    scanned: all.length,
+    eligible: eligible.length,
+    release: {
+      title: best.title,
+      sizeBytes: best.size,
+      qualityWeight: best.qualityWeight,
+    },
+  })
 }
 
 radarr.post('/api/v3/movie', async (c) => {
@@ -115,11 +138,20 @@ radarr.post('/api/v3/movie', async (c) => {
   // slow; we don't want to block the modal close.
   if (r.ok && wantedSearch) {
     try {
-      const created = JSON.parse(out) as { id?: number }
+      const created = JSON.parse(out) as { id?: number; title?: string }
       if (created.id) {
-        void grabBestUnderCap(created.id).catch((e) =>
-          console.error('[movie-cap] grab failed:', e),
-        )
+        const itemId = created.id
+        const itemTitle = created.title
+        void grabBestUnderCap(itemId, itemTitle).catch((e) => {
+          console.error('[movie-cap] grab failed:', e)
+          void appendGrabEvent({
+            app: 'radarr',
+            itemId,
+            title: itemTitle,
+            type: 'grab_failed',
+            error: e instanceof Error ? e.message : String(e),
+          })
+        })
       }
     } catch {
       // Radarr returned an unexpected body shape; pass through. The

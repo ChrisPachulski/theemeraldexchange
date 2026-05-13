@@ -92,6 +92,12 @@ export const env = {
   maxTvBytesPerEpisode: Number(process.env.MAX_TV_GB_PER_EPISODE ?? 5) * GB,
   maxTvGbPerEpisode: Number(process.env.MAX_TV_GB_PER_EPISODE ?? 5),
 
+  // Path to the grab-event JSONL log. In production this is bind-mounted
+  // from /mnt/user/appdata/exchange-backend/data on the NAS so events
+  // survive container restarts. In dev defaults to ./data/grabs.jsonl
+  // (gitignored). The grabLog service auto-creates the parent directory.
+  grabLogPath: process.env.GRAB_LOG_PATH ?? './data/grabs.jsonl',
+
   // Optional TMDB v3 API key. When set, the detail modal fetches cast
   // for TV shows (via TVDB→TMDB find) and movies. Without it, the cast
   // section is hidden and the modal still shows everything Sonarr/Radarr
