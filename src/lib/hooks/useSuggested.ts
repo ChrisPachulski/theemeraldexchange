@@ -29,8 +29,16 @@ export type SuggestionResult = {
   source: SuggestionSource | null
 }
 
-async function fetchSuggested(kind: 'movie' | 'tv'): Promise<SuggestionResult> {
-  const r = await fetch(apiUrl(`/api/suggestions/${kind}`), { credentials: 'include' })
+async function fetchSuggested(
+  kind: 'movie' | 'tv',
+  aiEnabled: boolean,
+): Promise<SuggestionResult> {
+  // When AI is off, append ?force=trending so the backend skips the
+  // Claude call and returns TMDB trending instead — free + instant.
+  const url = aiEnabled
+    ? apiUrl(`/api/suggestions/${kind}`)
+    : apiUrl(`/api/suggestions/${kind}`, { force: 'trending' })
+  const r = await fetch(url, { credentials: 'include' })
   if (!r.ok) return { items: [], source: null }
   const data = (await r.json()) as SuggestionsResponse
   return {
@@ -45,19 +53,19 @@ async function fetchSuggested(kind: 'movie' | 'tv'): Promise<SuggestionResult> {
   }
 }
 
-export function useSuggestedMovies() {
+export function useSuggestedMovies(aiEnabled: boolean) {
   return useQuery({
-    queryKey: ['suggestions', 'movie'],
-    queryFn: () => fetchSuggested('movie'),
+    queryKey: ['suggestions', 'movie', aiEnabled ? 'ai' : 'trending'],
+    queryFn: () => fetchSuggested('movie', aiEnabled),
     staleTime: 0,
     refetchOnMount: 'always',
   })
 }
 
-export function useSuggestedTv() {
+export function useSuggestedTv(aiEnabled: boolean) {
   return useQuery({
-    queryKey: ['suggestions', 'tv'],
-    queryFn: () => fetchSuggested('tv'),
+    queryKey: ['suggestions', 'tv', aiEnabled ? 'ai' : 'trending'],
+    queryFn: () => fetchSuggested('tv', aiEnabled),
     staleTime: 0,
     refetchOnMount: 'always',
   })
@@ -79,20 +87,33 @@ export function useDismissSuggestion(kind: 'movie' | 'tv') {
       if (!r.ok) throw new Error(`rejection ${r.status}`)
     },
     onMutate: async (tmdbId) => {
-      const key = ['suggestions', kind]
-      await qc.cancelQueries({ queryKey: key })
-      const prev = qc.getQueryData<SuggestionResult>(key)
-      if (prev) {
-        qc.setQueryData<SuggestionResult>(key, {
-          ...prev,
-          items: prev.items.filter((i) => i.id !== tmdbId),
-        })
+      // Prefix cancel — covers both ['suggestions', kind, 'ai'] and
+      // ['suggestions', kind, 'trending'] cache entries since toggling
+      // the AI switch swaps between them.
+      await qc.cancelQueries({ queryKey: ['suggestions', kind] })
+      const variants = [
+        ['suggestions', kind, 'ai'] as const,
+        ['suggestions', kind, 'trending'] as const,
+      ]
+      const snapshot = variants.map((key) => ({
+        key,
+        prev: qc.getQueryData<SuggestionResult>(key),
+      }))
+      for (const { key, prev } of snapshot) {
+        if (prev) {
+          qc.setQueryData<SuggestionResult>(key, {
+            ...prev,
+            items: prev.items.filter((i) => i.id !== tmdbId),
+          })
+        }
       }
-      return { prev }
+      return { snapshot }
     },
     onError: (_e, _id, ctx) => {
-      // Roll back the optimistic removal if the network call failed.
-      if (ctx?.prev) qc.setQueryData(['suggestions', kind], ctx.prev)
+      // Roll back optimistic removal across both cache slots.
+      for (const { key, prev } of ctx?.snapshot ?? []) {
+        if (prev) qc.setQueryData(key, prev)
+      }
     },
   })
 }

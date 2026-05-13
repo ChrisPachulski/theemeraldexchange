@@ -15,6 +15,7 @@ import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useMovieSearch } from '../../lib/hooks/useMovieSearch'
 import { useRadarrLibrary } from '../../lib/hooks/useRadarrLibrary'
 import { useSuggestedMovies, useDismissSuggestion } from '../../lib/hooks/useSuggested'
+import { useAiSuggestionsEnabled } from '../../lib/hooks/useAiSuggestionsEnabled'
 import { TrendingRow } from '../search/TrendingRow'
 import { useCast } from '../../lib/hooks/useCast'
 import { useConfirm } from '../confirm/useConfirm'
@@ -130,7 +131,8 @@ export function MoviesTab() {
     return map
   }, [library.data])
 
-  const suggested = useSuggestedMovies()
+  const ai = useAiSuggestionsEnabled()
+  const suggested = useSuggestedMovies(ai.enabled)
   const dismiss = useDismissSuggestion('movie')
   const [trendingPending, setTrendingPending] = useState<number | null>(null)
   // Defense in depth — backend already filters by library/rejections,
@@ -283,6 +285,7 @@ export function MoviesTab() {
                 pendingId={trendingPending}
                 label={trendingLabel}
                 onDismiss={(id) => dismiss.mutate(id)}
+                ai={{ enabled: ai.enabled, onToggle: ai.toggle }}
               />
             </div>
           )}
