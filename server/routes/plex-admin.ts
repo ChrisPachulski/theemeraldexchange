@@ -37,7 +37,10 @@ plexAdmin.get('/remote-access', async (c) => {
   }
   if (!res.ok) {
     const body = await res.text().catch(() => '')
-    return c.json({ error: 'prefs_failed', status: res.status, body: body.slice(0, 400) }, res.status)
+    // 502 (Bad Gateway): we're the gateway, the upstream PMS failed.
+    // Hono's c.json expects a known status literal, so we can't pass
+    // res.status directly — the upstream status is in the body.
+    return c.json({ error: 'prefs_failed', status: res.status, body: body.slice(0, 400) }, 502)
   }
   const xml = await res.text()
 
