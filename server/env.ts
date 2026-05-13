@@ -92,6 +92,19 @@ export const env = {
   maxTvBytesPerEpisode: Number(process.env.MAX_TV_GB_PER_EPISODE ?? 5) * GB,
   maxTvGbPerEpisode: Number(process.env.MAX_TV_GB_PER_EPISODE ?? 5),
 
+  // Anthropic API key. Required for personalized library suggestions
+  // on the Movies and TV Discover surfaces — the suggestions route
+  // calls Claude with the library + reject list and returns ranked
+  // picks. Without the key set, the route 503s and the SPA falls back
+  // to TMDB trending. Cost is bounded by prompt caching (system +
+  // library cached) — typical household traffic is sub-dollar per day.
+  anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? null,
+
+  // Path to the persistent rejection list. Same bind-mount as the grab
+  // log so the household's "never suggest this again" decisions survive
+  // container restarts.
+  rejectionsPath: process.env.REJECTIONS_PATH ?? './data/rejections.json',
+
   // Path to the grab-event JSONL log. In production this is bind-mounted
   // from /mnt/user/appdata/exchange-backend/data on the NAS so events
   // survive container restarts. In dev defaults to ./data/grabs.jsonl

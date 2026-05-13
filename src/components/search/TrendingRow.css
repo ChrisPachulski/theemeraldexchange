@@ -33,9 +33,50 @@
   border: 0;
   cursor: pointer;
   text-align: left;
+  position: relative;
   transition:
     transform var(--dur-fast) var(--ease),
     filter var(--dur-fast) var(--ease);
+}
+
+/* Dismiss affordance on personalized suggestions. Hover-revealed so
+   it doesn't visually clutter the row at rest. Sits over the poster's
+   top-right corner; click stops propagation so the underlying card
+   onClick (search-then-open) doesn't also fire. */
+.trending__dismiss {
+  position: absolute;
+  top: var(--s-2);
+  right: var(--s-2);
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: color-mix(in oklch, #14181c 80%, transparent);
+  border: 1px solid var(--emerald);
+  color: var(--emerald);
+  font-family: var(--font-display);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+  backdrop-filter: blur(4px);
+  user-select: none;
+}
+
+.trending__card:hover .trending__dismiss,
+.trending__dismiss:focus-visible {
+  opacity: 1;
+}
+
+.trending__dismiss:hover {
+  background: var(--emerald);
+  color: #14181c;
+  transform: scale(1.08);
 }
 
 .trending__card:hover:not(:disabled) {

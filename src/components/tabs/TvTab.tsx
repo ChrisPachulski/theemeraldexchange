@@ -15,7 +15,7 @@ import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useSeriesSearch } from '../../lib/hooks/useSeriesSearch'
 import { useSonarrLibrary } from '../../lib/hooks/useSonarrLibrary'
 import { useSonarrEpisodes } from '../../lib/hooks/useSonarrEpisodes'
-import { useTrendingTv } from '../../lib/hooks/useTrending'
+import { useSuggestedTv, useDismissSuggestion } from '../../lib/hooks/useSuggested'
 import { TrendingRow } from '../search/TrendingRow'
 import { useCast } from '../../lib/hooks/useCast'
 import { useConfirm } from '../confirm/useConfirm'
@@ -118,11 +118,12 @@ export function TvTab() {
     return map
   }, [library.data])
 
-  const trending = useTrendingTv()
+  const suggested = useSuggestedTv()
+  const dismiss = useDismissSuggestion('tv')
   const [trendingPending, setTrendingPending] = useState<number | null>(null)
   // Library set keyed by TMDB id — used to strip items the household
-  // already has from the trending suggestions. Sonarr's Series object
-  // carries tmdbId alongside tvdbId, so a direct match works.
+  // already has from suggestions (backend filters too; this is defense
+  // in depth against races where a title was just added).
   const libraryByTmdbForTrending = useMemo(() => {
     const set = new Set<number>()
     library.data?.forEach((s) => {
@@ -131,9 +132,13 @@ export function TvTab() {
     return set
   }, [library.data])
   const trendingFiltered = useMemo(
-    () => (trending.data ?? []).filter((t) => !libraryByTmdbForTrending.has(t.id)),
-    [trending.data, libraryByTmdbForTrending],
+    () => (suggested.data?.items ?? []).filter((t) => !libraryByTmdbForTrending.has(t.id)),
+    [suggested.data, libraryByTmdbForTrending],
   )
+  const trendingLabel =
+    suggested.data?.source === 'personalized'
+      ? 'Picked for you'
+      : 'Trending this week'
   const handleTrendingPick = async (tmdbId: number) => {
     setTrendingPending(tmdbId)
     try {
@@ -279,10 +284,11 @@ export function TvTab() {
             <div className="tv-tab__trending-below-fold">
               <TrendingRow
                 items={trendingFiltered}
-                loading={trending.isPending}
+                loading={suggested.isPending}
                 onPick={handleTrendingPick}
                 pendingId={trendingPending}
-                label="Trending shows this week"
+                label={trendingLabel}
+                onDismiss={(id) => dismiss.mutate(id)}
               />
             </div>
           )}

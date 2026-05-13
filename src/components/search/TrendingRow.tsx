@@ -16,9 +16,16 @@ type Props = {
   /** True while a card's lookup-then-open flow is mid-flight. */
   pendingId?: number | null
   label?: string
+  /**
+   * When set, each card renders a small ✕ in the corner. Clicking it
+   * fires onDismiss(id) and stops propagation (does not trigger onPick).
+   * Used for personalized suggestions where the household can permanently
+   * remove a title from future recommendations.
+   */
+  onDismiss?: (id: number) => void
 }
 
-export function TrendingRow({ items, loading, onPick, pendingId, label }: Props) {
+export function TrendingRow({ items, loading, onPick, pendingId, label, onDismiss }: Props) {
   if (loading) {
     return (
       <section className="trending" aria-busy="true">
@@ -61,6 +68,31 @@ export function TrendingRow({ items, loading, onPick, pendingId, label }: Props)
                 <div className="trending__poster trending__poster--fallback" aria-hidden="true">
                   {item.title.charAt(0)}
                 </div>
+              )}
+              {onDismiss && (
+                // Nested clickable: prevent the outer card's onClick from
+                // firing when the ✕ is pressed. <button> inside <button>
+                // is invalid HTML, so this is a <span> with role+keyboard.
+                <span
+                  role="button"
+                  tabIndex={0}
+                  className="trending__dismiss"
+                  aria-label={`Don't suggest ${item.title} again`}
+                  title="Don't suggest again"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onDismiss(item.id)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      onDismiss(item.id)
+                    }
+                  }}
+                >
+                  ×
+                </span>
               )}
               <div className="trending__caption">
                 <span className="trending__title">{item.title}</span>

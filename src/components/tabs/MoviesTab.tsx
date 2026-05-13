@@ -14,7 +14,7 @@ import { useAuth } from '../../lib/auth'
 import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useMovieSearch } from '../../lib/hooks/useMovieSearch'
 import { useRadarrLibrary } from '../../lib/hooks/useRadarrLibrary'
-import { useTrendingMovies } from '../../lib/hooks/useTrending'
+import { useSuggestedMovies, useDismissSuggestion } from '../../lib/hooks/useSuggested'
 import { TrendingRow } from '../search/TrendingRow'
 import { useCast } from '../../lib/hooks/useCast'
 import { useConfirm } from '../confirm/useConfirm'
@@ -130,14 +130,21 @@ export function MoviesTab() {
     return map
   }, [library.data])
 
-  const trending = useTrendingMovies()
+  const suggested = useSuggestedMovies()
+  const dismiss = useDismissSuggestion('movie')
   const [trendingPending, setTrendingPending] = useState<number | null>(null)
-  // Strip already-in-library titles out of the trending row — no point
-  // suggesting things the household already has.
+  // Defense in depth — backend already filters by library/rejections,
+  // but client-side filter catches any race (just-added title, etc.).
   const trendingFiltered = useMemo(
-    () => (trending.data ?? []).filter((t) => !libraryByTmdb.has(t.id)),
-    [trending.data, libraryByTmdb],
+    () => (suggested.data?.items ?? []).filter((t) => !libraryByTmdb.has(t.id)),
+    [suggested.data, libraryByTmdb],
   )
+  // Label adjusts based on whether the backend served personalized
+  // recs or fell back to TMDB trending (cold start or no API key).
+  const trendingLabel =
+    suggested.data?.source === 'personalized'
+      ? 'Picked for you'
+      : 'Trending movies this week'
   // Trending shows TMDB items; clicking one resolves through Radarr's
   // lookup (it accepts tmdb:NNN) so the same DetailModal flow handles
   // it as a regular search result.
@@ -271,10 +278,11 @@ export function MoviesTab() {
             <div className="tv-tab__trending-below-fold">
               <TrendingRow
                 items={trendingFiltered}
-                loading={trending.isPending}
+                loading={suggested.isPending}
                 onPick={handleTrendingPick}
                 pendingId={trendingPending}
-                label="Trending movies this week"
+                label={trendingLabel}
+                onDismiss={(id) => dismiss.mutate(id)}
               />
             </div>
           )}

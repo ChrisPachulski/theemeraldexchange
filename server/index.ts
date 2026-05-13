@@ -26,6 +26,8 @@ import { users } from './routes/users.js'
 import { plexAdmin } from './routes/plex-admin.js'
 import { notifications } from './routes/notifications.js'
 import { grabs } from './routes/grabs.js'
+import { rejections } from './routes/rejections.js'
+import { suggestions } from './routes/suggestions.js'
 
 const app = new Hono()
 
@@ -69,6 +71,8 @@ app.route('/api/users', users)
 app.route('/api/plex', plexAdmin)
 app.route('/api/notifications', notifications)
 app.route('/api/grabs', grabs)
+app.route('/api/rejections', rejections)
+app.route('/api/suggestions', suggestions)
 
 serve(
   { fetch: app.fetch, port: env.port },
