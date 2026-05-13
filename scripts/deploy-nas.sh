@@ -73,14 +73,36 @@ rsync -av "$LOCAL_ENV" "${NAS_USER}@${NAS_HOST}:${APPDATA}/.env"
 ssh "${NAS_USER}@${NAS_HOST}" "chmod 600 ${APPDATA}/.env"
 
 echo "→ Building and starting containers"
-# Unraid sometimes loses the docker compose plugin during system
-# updates while keeping the standalone docker-compose binary. Try the
-# plugin form first; fall back to the hyphenated standalone if that
-# fails. Both accept the same up -d --build / logs flags.
-ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && (docker compose up -d --build || docker-compose up -d --build)"
+# Unraid occasionally loses both docker compose forms (plugin + standalone)
+# after system updates. To keep deploys working without manual NAS
+# intervention, we try them in order and fall back to a direct docker
+# build + run that mirrors the docker-compose.yml. Only the backend
+# service is recreated this way — cloudflared keeps running across the
+# rebuild since its config is in the container, not on the host.
+ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && \
+  if docker compose version >/dev/null 2>&1; then \
+    docker compose up -d --build; \
+  elif command -v docker-compose >/dev/null 2>&1; then \
+    docker-compose up -d --build; \
+  else \
+    echo '[deploy] compose unavailable — rebuilding backend directly'; \
+    docker build -t theemeraldexchange-backend:latest . && \
+    docker stop exchange-backend 2>/dev/null || true; \
+    docker rm exchange-backend 2>/dev/null || true; \
+    docker run -d \
+      --name exchange-backend \
+      --restart unless-stopped \
+      -p 127.0.0.1:3001:3001 \
+      -v ${APPDATA}/data:/app/data \
+      --env-file ${APPDATA}/.env \
+      -e NODE_ENV=production \
+      -e PORT=3001 \
+      -e GRAB_LOG_PATH=/app/data/grabs.jsonl \
+      theemeraldexchange-backend:latest; \
+  fi"
 
 echo "→ Tail logs for 5s to confirm healthy boot"
-ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && (timeout 5 docker compose logs --tail=20 -f || timeout 5 docker-compose logs --tail=20 -f || true)"
+ssh "${NAS_USER}@${NAS_HOST}" "timeout 5 docker logs --tail=20 -f exchange-backend || true"
 
 echo
 echo "✓ Deployed. The cloudflared container may take ~30s to register"
