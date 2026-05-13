@@ -16,6 +16,7 @@ import { useSeriesSearch } from '../../lib/hooks/useSeriesSearch'
 import { useSonarrLibrary } from '../../lib/hooks/useSonarrLibrary'
 import { useSonarrEpisodes } from '../../lib/hooks/useSonarrEpisodes'
 import { useSuggestedTv, useDismissSuggestion } from '../../lib/hooks/useSuggested'
+import { useAiSuggestionsEnabled } from '../../lib/hooks/useAiSuggestionsEnabled'
 import { TrendingRow } from '../search/TrendingRow'
 import { useCast } from '../../lib/hooks/useCast'
 import { useConfirm } from '../confirm/useConfirm'
@@ -118,7 +119,8 @@ export function TvTab() {
     return map
   }, [library.data])
 
-  const suggested = useSuggestedTv()
+  const ai = useAiSuggestionsEnabled()
+  const suggested = useSuggestedTv(ai.enabled)
   const dismiss = useDismissSuggestion('tv')
   const [trendingPending, setTrendingPending] = useState<number | null>(null)
   // Library set keyed by TMDB id — used to strip items the household
@@ -289,6 +291,7 @@ export function TvTab() {
                 pendingId={trendingPending}
                 label={trendingLabel}
                 onDismiss={(id) => dismiss.mutate(id)}
+                ai={{ enabled: ai.enabled, onToggle: ai.toggle }}
               />
             </div>
           )}

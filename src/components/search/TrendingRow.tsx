@@ -1,4 +1,5 @@
 import type { TrendingItem } from '../../lib/hooks/useTrending'
+import { AiToggle } from './AiToggle'
 import './TrendingRow.css'
 
 // Trending-this-week strip rendered above search results on the
@@ -23,26 +24,53 @@ type Props = {
    * remove a title from future recommendations.
    */
   onDismiss?: (id: number) => void
+  /**
+   * Optional AI on/off toggle anchored to the bottom-right of the
+   * section. When provided, the household can switch between Claude-
+   * backed personalization and free TMDB trending without leaving
+   * the surface.
+   */
+  ai?: { enabled: boolean; onToggle: () => void }
 }
 
-export function TrendingRow({ items, loading, onPick, pendingId, label, onDismiss }: Props) {
+export function TrendingRow({ items, loading, onPick, pendingId, label, onDismiss, ai }: Props) {
   if (loading) {
     return (
       <section className="trending" aria-busy="true">
         <h3 className="trending__label trending__label--loading">
-          Finding picks for you
+          {ai?.enabled ? 'Finding picks for you' : 'Loading trending'}
           <span className="trending__loading-dot" aria-hidden="true" />
-          <span className="trending__loading-hint">takes a few seconds…</span>
+          {ai?.enabled && (
+            <span className="trending__loading-hint">takes a few seconds…</span>
+          )}
         </h3>
         <div className="trending__row">
           {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
             <div key={i} className="trending__card trending__card--skeleton" />
           ))}
         </div>
+        {ai && (
+          <div className="trending__footer">
+            <AiToggle enabled={ai.enabled} onToggle={ai.onToggle} />
+          </div>
+        )}
       </section>
     )
   }
-  if (items.length === 0) return null
+  if (items.length === 0) {
+    // No items — but still render the toggle so the household can
+    // switch on AI even when the trending fallback returned nothing
+    // (e.g. TMDB hiccup, or every trending title is already in library).
+    if (!ai) return null
+    return (
+      <section className="trending">
+        <h3 className="trending__label">{label ?? 'Trending this week'}</h3>
+        <div className="trending__footer">
+          <AiToggle enabled={ai.enabled} onToggle={ai.onToggle} />
+        </div>
+      </section>
+    )
+  }
 
   return (
     <section className="trending">
@@ -106,6 +134,11 @@ export function TrendingRow({ items, loading, onPick, pendingId, label, onDismis
           )
         })}
       </div>
+      {ai && (
+        <div className="trending__footer">
+          <AiToggle enabled={ai.enabled} onToggle={ai.onToggle} />
+        </div>
+      )}
     </section>
   )
 }
