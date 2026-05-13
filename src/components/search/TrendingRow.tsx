@@ -29,7 +29,11 @@ export function TrendingRow({ items, loading, onPick, pendingId, label, onDismis
   if (loading) {
     return (
       <section className="trending" aria-busy="true">
-        <h3 className="trending__label">{label ?? 'Trending this week'}</h3>
+        <h3 className="trending__label trending__label--loading">
+          Finding picks for you
+          <span className="trending__loading-dot" aria-hidden="true" />
+          <span className="trending__loading-hint">takes a few seconds…</span>
+        </h3>
         <div className="trending__row">
           {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
             <div key={i} className="trending__card trending__card--skeleton" />
