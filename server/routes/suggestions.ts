@@ -105,17 +105,48 @@ Output is consumed by code — return JSON only, no commentary.`
 
 // Normalize a title for cross-source matching. Sonarr/Radarr's title
 // and TMDB's title sometimes disagree on punctuation, articles, or
-// suffixes (e.g. "The Office" vs "Office, The"; "Marvel's Daredevil"
-// vs "Daredevil"). Lowercase, strip leading articles, collapse
-// whitespace, drop non-alphanumeric. Used as a *secondary* library
-// match alongside the tmdbId set so Sonarr/Radarr entries that lack
-// a tmdbId still get caught.
+// suffixes. Lowercase, strip leading articles, drop non-alphanumeric.
 function normalizeTitle(t: string): string {
   return t
     .toLowerCase()
     .replace(/^(the|a|an)\s+/i, '')
     .replace(/[^a-z0-9]+/g, '')
     .trim()
+}
+
+// Base title — everything before the first subtitle separator
+// (`:`, em-dash, en-dash, ` - `). Catches the very common case where
+// Sonarr stores "A Knight of the Seven Kingdoms: The Hedge Knight"
+// but TMDB / Claude refer to it as "A Knight of the Seven Kingdoms"
+// (or vice versa). Empty when the title has no subtitle.
+function normalizeTitleBase(t: string): string {
+  const cut = t.split(/[:—–]|\s-\s/)[0]
+  if (!cut || cut === t) return ''
+  return normalizeTitle(cut)
+}
+
+// Build the matchable-title set from a library list. Includes both
+// the full normalized title and the base (pre-subtitle) form when
+// the title has a subtitle. Empty strings filtered out.
+function titleSetFrom(entries: Array<{ title: string }>): Set<string> {
+  const out = new Set<string>()
+  for (const e of entries) {
+    if (!e.title) continue
+    out.add(normalizeTitle(e.title))
+    const base = normalizeTitleBase(e.title)
+    if (base) out.add(base)
+  }
+  return out
+}
+
+// Does a pick title match anything in the set? Checks the pick's
+// full and base forms against the set.
+function titleMatches(pick: string, set: Set<string>): boolean {
+  if (set.size === 0) return false
+  if (set.has(normalizeTitle(pick))) return true
+  const base = normalizeTitleBase(pick)
+  if (base && set.has(base)) return true
+  return false
 }
 
 // Render a list of {id, title} entries as prompt bullets. Untitled
@@ -475,18 +506,11 @@ suggestions.get('/:type', async (c) => {
     library.map((l) => l.tmdbId).filter((id): id is number => typeof id === 'number'),
   )
   // Secondary library guard: Sonarr/Radarr entries without a tmdbId
-  // wouldn't match the id set, so Claude's pick (which always has a
-  // tmdbId after TMDB lookup) would slip through and the user sees a
-  // duplicate of a show they already have. Match by normalized title
-  // too — catches "The Office" vs "Office, The", franchise renames,
-  // etc.
-  const libraryTitles = new Set(library.map((l) => normalizeTitle(l.title)))
-  // Same secondary guard for rejections: legacy rejection rows without
-  // a usable id (or with a TMDB-mismatched id) still get caught by
-  // title once we have one.
-  const rejectedTitles = new Set(
-    kindRejections.filter((r) => r.title).map((r) => normalizeTitle(r.title)),
-  )
+  // wouldn't match the id set, and titles often disagree across
+  // sources on subtitles ("X: The Y" vs "X"). titleSetFrom() includes
+  // both the full normalized title and the pre-subtitle base form.
+  const libraryTitles = titleSetFrom(library)
+  const rejectedTitles = titleSetFrom(kindRejections)
 
   if (force === 'trending') {
     const trending = (await tmdbTrending(type)).filter(
@@ -579,9 +603,8 @@ suggestions.get('/:type', async (c) => {
   for (const r of lookups) {
     if (!r) { lookupNulls++; continue }
     if (seen.has(r.id)) { droppedAsDedupe++; continue }
-    const norm = normalizeTitle(r.title)
-    if (rejected.has(r.id) || rejectedTitles.has(norm)) { droppedAsRejected++; continue }
-    if (libraryTmdbIds.has(r.id) || libraryTitles.has(norm)) { droppedAsLibrary++; continue }
+    if (rejected.has(r.id) || titleMatches(r.title, rejectedTitles)) { droppedAsRejected++; continue }
+    if (libraryTmdbIds.has(r.id) || titleMatches(r.title, libraryTitles)) { droppedAsLibrary++; continue }
     seen.add(r.id)
     items.push(r)
     if (items.length >= TARGET_COUNT) break
