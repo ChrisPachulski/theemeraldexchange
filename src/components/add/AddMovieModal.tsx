@@ -53,7 +53,13 @@ export function AddMovieModal({ movie, onClose, onAdded }: Props) {
 
   const mutation = useMutation({
     mutationFn: (body: Record<string, unknown>) => radarr.addMovie(body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['radarr', 'movie'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['radarr', 'movie'] })
+      // Library changed — recompute Discover so the just-added movie
+      // doesn't reappear there and Claude's next prompt reflects the
+      // new library state.
+      qc.invalidateQueries({ queryKey: ['suggestions', 'movie'] })
+    },
   })
 
   if (!movie) return null
