@@ -39,12 +39,20 @@ function fmtCost(cents: number): string {
 export function ApiKeySettings() {
   const { key, hasKey, setKey, clearKey } = useUserApiKey()
   const [draft, setDraft] = useState('')
-  const [revealed, setRevealed] = useState(false)
+  // Show-on-type only — once a key is saved we never expose it again.
+  // If the user forgot the key, they retrieve it from
+  // console.anthropic.com, not from this UI. Eliminates a class of
+  // shoulder-surf / screenshare leak vectors that "Show saved key"
+  // buttons reliably produce.
+  const [typeReveal, setTypeReveal] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   // Reset the draft when the underlying key changes (e.g. set on
   // another tab, cleared by the user).
-  useEffect(() => setDraft(''), [key])
+  useEffect(() => {
+    setDraft('')
+    setTypeReveal(false)
+  }, [key])
 
   const usage = useQuery({
     queryKey: ['usage', 'me'],
@@ -84,23 +92,18 @@ export function ApiKeySettings() {
       {hasKey ? (
         <div className="api-key-settings__live">
           <div className="api-key-settings__current">
-            <span className="api-key-settings__masked" aria-label="Saved key">
-              {revealed ? key : `${key?.slice(0, 8)}…${key?.slice(-4)}`}
+            {/* Last 4 chars only, no prefix. The key is fully opaque
+                from this UI once saved; "lost key" path is the
+                Anthropic console, not a reveal button. */}
+            <span className="api-key-settings__masked" aria-label="Key saved on this device">
+              <span aria-hidden="true">••••••••••••</span>
+              <span className="api-key-settings__masked-tail">{key?.slice(-4)}</span>
+              <span className="api-key-settings__masked-tag">saved on this device</span>
             </span>
             <button
               type="button"
-              className="api-key-settings__small-btn"
-              onClick={() => setRevealed((v) => !v)}
-            >
-              {revealed ? 'Hide' : 'Show'}
-            </button>
-            <button
-              type="button"
               className="api-key-settings__small-btn api-key-settings__small-btn--danger"
-              onClick={() => {
-                clearKey()
-                setRevealed(false)
-              }}
+              onClick={clearKey}
             >
               Clear
             </button>
@@ -129,7 +132,7 @@ export function ApiKeySettings() {
           <div className="api-key-settings__row">
             <input
               id="api-key-input"
-              type={revealed ? 'text' : 'password'}
+              type={typeReveal ? 'text' : 'password'}
               className="api-key-settings__input"
               value={draft}
               onChange={(e) => {
@@ -138,14 +141,24 @@ export function ApiKeySettings() {
               }}
               placeholder="sk-ant-…"
               autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
               spellCheck={false}
+              // Hint to password managers + Safari that this is a
+              // credential field even though we're using type=text
+              // when revealed.
+              data-1p-ignore="false"
             />
+            {/* Reveal is only for the typing flow — verify your paste
+                before you hit Save. Disappears the moment the key is
+                saved (see hasKey branch above). */}
             <button
               type="button"
               className="api-key-settings__small-btn"
-              onClick={() => setRevealed((v) => !v)}
+              onClick={() => setTypeReveal((v) => !v)}
+              aria-pressed={typeReveal}
             >
-              {revealed ? 'Hide' : 'Show'}
+              {typeReveal ? 'Hide' : 'Show'}
             </button>
             <button
               type="button"
