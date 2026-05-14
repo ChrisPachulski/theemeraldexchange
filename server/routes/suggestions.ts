@@ -154,48 +154,66 @@ function buildUserLikesBlock(liked: Array<{ id: number; title: string }>): strin
 // titled entries. Returns null when the key is missing, the id is
 // dead, or TMDB rate-limited us — caller falls back to `[TMDB id N]`
 // bullets in the prompt.
+// Backfill knobs. With hundreds of legacy bare-id rows on the NAS,
+// a one-shot Promise.all firing 500+ simultaneous TMDB requests blows
+// past TMDB's rate limit AND can hang for minutes if any single call
+// times out. Cap how many we resolve per call so the route stays
+// responsive — the rest get fallback bullets this turn and upgrade
+// across subsequent refreshes.
+const BACKFILL_MAX_PER_CALL = 30
+const TMDB_TIMEOUT_MS = 2500
+
 async function tmdbTitleById(kind: 'movie' | 'tv', id: number): Promise<string | null> {
   if (!_tmdbKey) return null
   const url = new URL(`${TMDB_BASE}/${kind}/${id}`)
   url.searchParams.set('api_key', _tmdbKey)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), TMDB_TIMEOUT_MS)
   try {
-    const r = await fetch(url, { headers: { Accept: 'application/json' } })
+    const r = await fetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal })
     if (!r.ok) return null
     const data = (await r.json()) as { title?: string; name?: string }
     return data.title || data.name || null
   } catch {
     return null
+  } finally {
+    clearTimeout(timer)
   }
 }
 
-// Opportunistic title backfill for a household-rejection list.
-// Entries with an empty title get a TMDB id-lookup; resolved titles
-// are persisted via addRejection() (which upgrades in place) so
-// subsequent calls skip the lookup entirely. Returns the (possibly
-// upgraded) entry list for prompt construction.
+// Resolve at most BACKFILL_MAX_PER_CALL untitled ids per request.
+// In-flight requests are bounded by the slice size; each has a hard
+// 2.5s timeout. Total worst-case backfill cost ≈ 2.5s regardless of
+// how many legacy rows are sitting on disk.
+async function resolveTitles(
+  kind: 'movie' | 'tv',
+  needed: Array<{ id: number; title: string }>,
+): Promise<Map<number, string>> {
+  const slice = needed.slice(0, BACKFILL_MAX_PER_CALL)
+  const titles = await Promise.all(slice.map((e) => tmdbTitleById(kind, e.id)))
+  const out = new Map<number, string>()
+  for (let i = 0; i < slice.length; i++) {
+    const t = titles[i]
+    if (t) out.set(slice[i].id, t)
+  }
+  return out
+}
+
 async function backfillRejectionTitles(
   kind: 'movie' | 'tv',
   entries: Array<{ id: number; title: string }>,
 ): Promise<Array<{ id: number; title: string }>> {
   const needed = entries.filter((e) => !e.title)
   if (needed.length === 0) return entries
-  const titles = await Promise.all(needed.map((e) => tmdbTitleById(kind, e.id)))
-  const updates = new Map<number, string>()
-  for (let i = 0; i < needed.length; i++) {
-    const t = titles[i]
-    if (t) updates.set(needed[i].id, t)
-  }
-  // Persist new titles in parallel — addRejection is queue-serialized
-  // internally so concurrent calls are safe.
+  const updates = await resolveTitles(kind, needed)
+  if (updates.size === 0) return entries
+  // Persist in parallel — addRejection is queue-serialized internally.
   await Promise.all(
     Array.from(updates, ([id, title]) => addRejection(kind, id, title)),
   )
   return entries.map((e) => (updates.has(e.id) ? { ...e, title: updates.get(e.id)! } : e))
 }
 
-// Mirror of the rejection backfill but for per-user likes. Liked
-// entries with no title get upgraded in place via setLike (which
-// preserves the signal). Smaller list in practice but same shape.
 async function backfillLikedTitles(
   sub: string,
   kind: 'movie' | 'tv',
@@ -203,12 +221,8 @@ async function backfillLikedTitles(
 ): Promise<Array<{ id: number; title: string }>> {
   const needed = entries.filter((e) => !e.title)
   if (needed.length === 0) return entries
-  const titles = await Promise.all(needed.map((e) => tmdbTitleById(kind, e.id)))
-  const updates = new Map<number, string>()
-  for (let i = 0; i < needed.length; i++) {
-    const t = titles[i]
-    if (t) updates.set(needed[i].id, t)
-  }
+  const updates = await resolveTitles(kind, needed)
+  if (updates.size === 0) return entries
   await Promise.all(
     Array.from(updates, ([id, title]) => setLike(sub, kind, id, title)),
   )
@@ -227,7 +241,16 @@ async function tmdbLookup(
   if (year) {
     url.searchParams.set(kind === 'movie' ? 'primary_release_year' : 'first_air_date_year', String(year))
   }
-  const r = await fetch(url, { headers: { Accept: 'application/json' } })
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), TMDB_TIMEOUT_MS)
+  let r: Response
+  try {
+    r = await fetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal })
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
   if (!r.ok) return null
   const data = (await r.json()) as {
     results?: Array<{
