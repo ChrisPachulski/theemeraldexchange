@@ -217,7 +217,7 @@ describe('suggestions route — prompt shape', () => {
 
   })
 
-  it('logs an error when picks come back but all get dropped post-filter', async () => {
+  it('falls back to trending and logs when all picks get dropped post-filter', async () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     vi.stubGlobal(
@@ -261,13 +261,13 @@ describe('suggestions route — prompt shape', () => {
       },
     })
     expect(r.status).toBe(200)
-    const body = (await r.json()) as { items: unknown[] }
-    expect(body.items).toEqual([])
-    const call = errSpy.mock.calls.find((c) => String(c[0]).includes('All Claude picks dropped'))
+    const body = (await r.json()) as { source: string; items: unknown[] }
+    expect(body.source).toBe('personalized_empty_trending_fallback')
+    expect(body.items).toEqual([]) // TMDB trending stub returns []
+    const call = errSpy.mock.calls.find((c) => String(c[0]).includes('Personalized strip would be empty'))
     expect(call).toBeDefined()
     expect(call?.[1]).toMatchObject({ droppedAsLibrary: 1, picksReturned: 1 })
 
-    delete process.env.TMDB_API_KEY
     errSpy.mockRestore()
   })
 
