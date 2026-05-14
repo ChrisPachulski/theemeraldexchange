@@ -40,7 +40,14 @@ function writeStoredViewAs(value: Role | null) {
 // session — that's our "show login screen" signal.
 
 export type Role = 'admin' | 'user'
-export type AuthUser = { username: string; role: Role }
+export type AuthUser = {
+  /** Stable Plex user id. Used by the SPA to scope per-user
+   *  localStorage (BYO API key, etc.) so a shared device that's been
+   *  signed in as different family members reads the right state. */
+  sub: string
+  username: string
+  role: Role
+}
 
 type SignInState = 'idle' | 'opening' | 'pending' | 'denied' | 'error'
 

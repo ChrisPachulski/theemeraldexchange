@@ -92,7 +92,13 @@ auth.get('/plex/check', async (c) => {
 
   return c.json({
     status: 'authorized',
-    user: { username: user.username, email: user.email, thumb: user.thumb, role },
+    user: {
+      sub: String(user.id),
+      username: user.username,
+      email: user.email,
+      thumb: user.thumb,
+      role,
+    },
     // Only present when PLEX_SERVER_ID is unset — discovery aid.
     discoveredServers: servers.length > 0 ? servers : undefined,
   })
@@ -109,6 +115,10 @@ me.get('/', async (c) => {
   const session = await readSession(c)
   if (!session) return c.json({ error: 'unauthenticated' }, 401)
   return c.json({
-    user: { username: session.username, role: session.role },
+    // sub is the stable Plex user id — used by the SPA to scope
+    // per-user localStorage (e.g. the BYO Anthropic API key) so a
+    // shared AppleTV signed in as different family members reads the
+    // right key for each one.
+    user: { sub: session.sub, username: session.username, role: session.role },
   })
 })

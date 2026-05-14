@@ -1,12 +1,16 @@
 import type { TrendingItem } from '../../lib/hooks/useTrending'
 import { AiToggle } from './AiToggle'
+import { FeedbackDots, type DotState } from './FeedbackDots'
 import './TrendingRow.css'
 
-// Trending-this-week strip rendered above search results on the
-// Discover surface. Horizontal scroll, dense poster cards.
+// Suggestion strip rendered on Movies + TV Discover surfaces. Sources:
+//   - personalized: Claude-backed recommendations (when the user has
+//     their AI key set and the toggle is on)
+//   - trending:     TMDB trending feed (cold-start, AI off, or no key)
 //
-// Posters come from TMDB. We size them at w342 — wide enough for
-// retina while keeping the row light.
+// Each card has a pair of feedback dots below the caption — red for
+// "don't suggest again" (per-user dislike, household-wide veto), green
+// for "show me more like this" (per-user positive signal to Claude).
 
 const TMDB_POSTER_BASE = 'https://image.tmdb.org/t/p/w342'
 
@@ -18,22 +22,32 @@ type Props = {
   pendingId?: number | null
   label?: string
   /**
-   * When set, each card renders a small ✕ in the corner. Clicking it
-   * fires onDismiss(id) and stops propagation (does not trigger onPick).
-   * Used for personalized suggestions where the household can permanently
-   * remove a title from future recommendations.
+   * Per-card feedback state lookup. When provided, the dots row
+   * renders under each card; clicking fires onLike/onDislike.
    */
-  onDismiss?: (id: number) => void
+  feedback?: {
+    stateFor: (id: number) => DotState
+    onLike: (id: number) => void
+    onDislike: (id: number) => void
+  }
   /**
    * Optional AI on/off toggle anchored to the bottom-right of the
    * section. When provided, the household can switch between Claude-
    * backed personalization and free TMDB trending without leaving
-   * the surface.
+   * the surface. Hide entirely when the caller has no API key set.
    */
   ai?: { enabled: boolean; onToggle: () => void }
 }
 
-export function TrendingRow({ items, loading, onPick, pendingId, label, onDismiss, ai }: Props) {
+export function TrendingRow({
+  items,
+  loading,
+  onPick,
+  pendingId,
+  label,
+  feedback,
+  ai,
+}: Props) {
   if (loading) {
     return (
       <section className="trending" aria-busy="true">
@@ -57,10 +71,8 @@ export function TrendingRow({ items, loading, onPick, pendingId, label, onDismis
       </section>
     )
   }
+
   if (items.length === 0) {
-    // No items — but still render the toggle so the household can
-    // switch on AI even when the trending fallback returned nothing
-    // (e.g. TMDB hiccup, or every trending title is already in library).
     if (!ai) return null
     return (
       <section className="trending">
@@ -79,58 +91,42 @@ export function TrendingRow({ items, loading, onPick, pendingId, label, onDismis
         {items.slice(0, 16).map((item) => {
           const isPending = pendingId === item.id
           return (
-            <button
-              key={item.id}
-              type="button"
-              className={`trending__card${isPending ? ' trending__card--pending' : ''}`}
-              onClick={() => onPick(item.id)}
-              disabled={isPending}
-              title={item.title}
-            >
-              {item.posterPath ? (
-                <img
-                  className="trending__poster"
-                  src={`${TMDB_POSTER_BASE}${item.posterPath}`}
-                  alt=""
-                  loading="lazy"
-                  decoding="async"
-                  referrerPolicy="no-referrer"
-                />
-              ) : (
-                <div className="trending__poster trending__poster--fallback" aria-hidden="true">
-                  {item.title.charAt(0)}
+            <div key={item.id} className="trending__card-wrap">
+              <button
+                type="button"
+                className={`trending__card${isPending ? ' trending__card--pending' : ''}`}
+                onClick={() => onPick(item.id)}
+                disabled={isPending}
+                title={item.title}
+              >
+                {item.posterPath ? (
+                  <img
+                    className="trending__poster"
+                    src={`${TMDB_POSTER_BASE}${item.posterPath}`}
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <div className="trending__poster trending__poster--fallback" aria-hidden="true">
+                    {item.title.charAt(0)}
+                  </div>
+                )}
+                <div className="trending__caption">
+                  <span className="trending__title">{item.title}</span>
+                  {item.year && <span className="trending__year">{item.year}</span>}
                 </div>
+              </button>
+              {feedback && (
+                <FeedbackDots
+                  state={feedback.stateFor(item.id)}
+                  onLike={() => feedback.onLike(item.id)}
+                  onDislike={() => feedback.onDislike(item.id)}
+                  title={item.title}
+                />
               )}
-              {onDismiss && (
-                // Nested clickable: prevent the outer card's onClick from
-                // firing when the ✕ is pressed. <button> inside <button>
-                // is invalid HTML, so this is a <span> with role+keyboard.
-                <span
-                  role="button"
-                  tabIndex={0}
-                  className="trending__dismiss"
-                  aria-label={`Don't suggest ${item.title} again`}
-                  title="Don't suggest again"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onDismiss(item.id)
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault()
-                      e.stopPropagation()
-                      onDismiss(item.id)
-                    }
-                  }}
-                >
-                  ×
-                </span>
-              )}
-              <div className="trending__caption">
-                <span className="trending__title">{item.title}</span>
-                {item.year && <span className="trending__year">{item.year}</span>}
-              </div>
-            </button>
+            </div>
           )
         })}
       </div>
