@@ -96,28 +96,39 @@ Output is consumed by code — return JSON only, no commentary.`
 function buildLibraryBlock(
   kind: 'movie' | 'tv',
   library: Array<{ title: string; year?: number; genres?: string[] }>,
+  rejections: Array<{ id: number; title: string }>,
 ): string {
-  // The rejection list is NOT sent to Claude. Two reasons:
-  //   1. Claude has no embedded TMDB id → title map, so a list of
-  //      bare ids is unactionable signal — wasted tokens.
-  //   2. The route post-filters Claude's response against the full
-  //      household rejection list before returning, so rejected
-  //      titles can't slip through regardless of what Claude returns.
-  // Net: removing the ids cuts O(n) tokens from the cached prefix
-  // without losing any actual behavior.
+  // Library + household rejections share a cache key — both are
+  // household-shared and stable across users. Rejection entries
+  // without a title (legacy bare-id rows on disk) are still in the
+  // post-filter set but omitted from the bullets here — they upgrade
+  // the next time a member re-clicks the dot.
   const header = kind === 'movie' ? 'MOVIES' : 'TV SHOWS'
   const libLines = library.map(formatLibraryItem).join('\n')
-  return `Household ${header} library (${library.length} titles):\n${libLines}`
+  const titledRejects = rejections.filter((r) => r.title.length > 0)
+  if (titledRejects.length === 0) {
+    return `Household ${header} library (${library.length} titles):\n${libLines}`
+  }
+  const rejectLines = titledRejects.map((r) => `- ${r.title}`).join('\n')
+  return (
+    `Household ${header} library (${library.length} titles):\n${libLines}\n\n` +
+    `NEVER SUGGEST — the household has explicitly rejected these, ` +
+    `and you should also avoid stylistically near matches:\n${rejectLines}`
+  )
 }
 
-// Per-user "likes" block. Like the rejection list, raw TMDB ids
-// aren't actionable signal for Claude (no embedded id → title map).
-// We keep it stubbed out until the feedback store is upgraded to
-// persist titles alongside ids — at that point we can send titles
-// and Claude gets a real positive taste signal. Until then it's
-// honest to ship nothing rather than waste tokens on noise.
-function buildUserLikesBlock(_likedIds: number[]): string {
-  return ''
+// Per-user "liked" block. Sent after the cached prefix so it can vary
+// per caller without invalidating the household library cache.
+// Entries without a title (legacy bare-id rows) are omitted — they
+// upgrade on the next dot click.
+function buildUserLikesBlock(liked: Array<{ id: number; title: string }>): string {
+  const titled = liked.filter((e) => e.title.length > 0)
+  if (titled.length === 0) return ''
+  const lines = titled.map((e) => `- ${e.title}`).join('\n')
+  return (
+    `This user has explicitly LIKED — recommend more in this vein ` +
+    `(positive taste signal):\n${lines}`
+  )
 }
 
 async function tmdbLookup(
@@ -267,7 +278,7 @@ async function callClaude(
     messages: [
       {
         role: 'user',
-        content: `Recommend ${CLAUDE_OVERFETCH} ${kind === 'movie' ? 'movies' : 'TV shows'} for this household. Mirror the library's genre distribution — return a proportional mix across drama, comedy, action, animation, documentary, etc., based on what they actually have. Weight toward the user's liked TMDB ids when present. Don't over-fit to a single tag.`,
+        content: `Recommend ${CLAUDE_OVERFETCH} ${kind === 'movie' ? 'movies' : 'TV shows'} for this household. Mirror the library's genre distribution — return a proportional mix across drama, comedy, action, animation, documentary, etc., based on what they actually have. Weight toward the user's explicitly LIKED titles when present, and strictly avoid the household's NEVER SUGGEST list (and stylistically near matches). Don't over-fit to a single tag.`,
       },
     ],
     output_config: {
@@ -310,7 +321,8 @@ suggestions.get('/:type', async (c) => {
     getRejections(),
   ])
 
-  const rejected = new Set(type === 'movie' ? rejections.movie : rejections.tv)
+  const kindRejections = type === 'movie' ? rejections.movie : rejections.tv
+  const rejected = new Set(kindRejections.map((r) => r.id))
   const libraryTmdbIds = new Set(
     library.map((l) => l.tmdbId).filter((id): id is number => typeof id === 'number'),
   )
@@ -342,11 +354,11 @@ suggestions.get('/:type', async (c) => {
 
   const session = c.get('session')
   const userFeedback = await getUserFeedback(session.sub)
-  const likedIds = type === 'movie' ? userFeedback.movie.liked : userFeedback.tv.liked
+  const liked = type === 'movie' ? userFeedback.movie.liked : userFeedback.tv.liked
 
   const client = new Anthropic({ apiKey: userKey })
-  const libraryBlock = buildLibraryBlock(type, library)
-  const userLikesBlock = buildUserLikesBlock(likedIds)
+  const libraryBlock = buildLibraryBlock(type, library, kindRejections)
+  const userLikesBlock = buildUserLikesBlock(liked)
 
   let result: ClaudeCallResult
   try {

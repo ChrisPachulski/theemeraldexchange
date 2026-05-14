@@ -27,8 +27,8 @@ type Props = {
    */
   feedback?: {
     stateFor: (id: number) => DotState
-    onLike: (id: number) => void
-    onDislike: (id: number) => void
+    onLike: (id: number, title: string) => void
+    onDislike: (id: number, title: string) => void
   }
   /**
    * Optional AI on/off toggle anchored to the bottom-right of the
@@ -121,8 +121,8 @@ export function TrendingRow({
               {feedback && (
                 <FeedbackDots
                   state={feedback.stateFor(item.id)}
-                  onLike={() => feedback.onLike(item.id)}
-                  onDislike={() => feedback.onDislike(item.id)}
+                  onLike={() => feedback.onLike(item.id, item.title)}
+                  onDislike={() => feedback.onDislike(item.id, item.title)}
                   title={item.title}
                 />
               )}
