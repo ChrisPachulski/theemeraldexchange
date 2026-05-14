@@ -84,9 +84,10 @@ const SYSTEM_PROMPT = `You are a media taste-matching agent for a household medi
 
 Rules:
 - Recommend titles NOT in the household's library and NOT on the rejection list.
-- Prefer titles the household is statistically likely to enjoy based on what they already chose to add.
-- Mix obvious adjacent picks with one or two non-obvious deeper cuts each call.
-- Vary your selections across calls — do not return the same list every time. Pull from the long tail.
+- Mirror the genre distribution of the library. If 60% of the library is live-action drama, ~60% of your recommendations should be live-action drama. Do NOT over-index on any single genre cluster (e.g. don't return all-Animation or all-Anime just because those tags are present; they're a slice, not the whole picture).
+- Each recommendation should have a clear analog in the library — name the closest matches in your reasoning, even if you don't return the reason field.
+- Prefer well-regarded, mainstream-adjacent titles. Critical reception and audience love are signals; obscurity for its own sake is not.
+- Modest variety across calls is fine, but recommendations should land in the "obvious yes" zone for someone who already loves what's in the library.
 - Real, released titles only. No imaginary or future-dated releases.
 - Be exact with titles and years so they can be looked up in TMDB.
 
@@ -240,7 +241,12 @@ async function callClaude(
   const response = await client.messages.create({
     model: MODEL,
     max_tokens: 4096,
-    temperature: 0.8,
+    // 0.4 keeps Claude near the high-probability "obvious adjacent
+    // picks" the system prompt asks for. Earlier 0.8 combined with
+    // long-tail framing pushed the model into obscure-genre territory
+    // (heavily anime against a 75-Animation-tagged but otherwise
+    // wide-ranging library — see PR #63).
+    temperature: 0.4,
     system: [
       // System prompt — frozen, always cacheable.
       { type: 'text', text: SYSTEM_PROMPT },
@@ -258,7 +264,7 @@ async function callClaude(
     messages: [
       {
         role: 'user',
-        content: `Recommend ${CLAUDE_OVERFETCH} ${kind === 'movie' ? 'movies' : 'TV shows'} for this household. Pull from the long tail — do not just return the same well-known titles every call. Mix safe adjacent picks with a couple of deeper cuts. Weight toward the user's liked TMDB ids when present.`,
+        content: `Recommend ${CLAUDE_OVERFETCH} ${kind === 'movie' ? 'movies' : 'TV shows'} for this household. Mirror the library's genre distribution — return a proportional mix across drama, comedy, action, animation, documentary, etc., based on what they actually have. Weight toward the user's liked TMDB ids when present. Don't over-fit to a single tag.`,
       },
     ],
     output_config: {
