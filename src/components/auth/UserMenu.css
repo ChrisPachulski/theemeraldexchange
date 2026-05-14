@@ -395,3 +395,54 @@
   margin: 0;
   line-height: 1.4;
 }
+
+/* Collapsible card wrapper used by the Discord and API-key sections.
+   Default closed to keep the user menu short; expands inline when the
+   admin needs the controls. Mirrors the disclosure styling used by the
+   GrabActivityPanel + UsageDashboard on the Downloads tab. */
+.user-menu__disclosure {
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: color-mix(in oklch, var(--surface) 80%, transparent);
+}
+.user-menu__disclosure[open] {
+  border-color: var(--emerald);
+}
+
+.user-menu__disclosure-summary {
+  list-style: none;
+  cursor: pointer;
+  padding: var(--s-3) var(--s-4);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+.user-menu__disclosure-summary::-webkit-details-marker {
+  display: none;
+}
+
+.user-menu__disclosure[open] .user-menu__disclosure-summary {
+  padding-bottom: var(--s-2);
+}
+
+.user-menu__disclosure-status {
+  font-family: var(--font-mono);
+  font-feature-settings: 'tnum' 1;
+  font-size: 0.625rem;
+  color: var(--text-subtle);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* Children of the disclosure (the existing card markup) keep their own
+   padding via the body wrapper below. The shared style here gives the
+   space-between summary and a consistent open-state ring. */
+.user-menu__disclosure > *:not(summary) {
+  padding-left: var(--s-4);
+  padding-right: var(--s-4);
+}
+.user-menu__disclosure > *:last-child {
+  padding-bottom: var(--s-3);
+}
