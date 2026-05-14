@@ -18,8 +18,8 @@
 //
 // Prompt caching: the system prompt + library + rejections are sent
 // as one cached block (cache_control: ephemeral, 5-minute TTL). The
-// per-request user message is short and varies — variety knob is
-// temperature 0.8 plus prompt instruction to avoid identical lists.
+// per-request user message is short and varies; temperature 0.4
+// keeps picks near the "obvious adjacent" zone.
 
 import { Hono } from 'hono'
 import Anthropic from '@anthropic-ai/sdk'
@@ -40,7 +40,10 @@ suggestions.use('*', requireAuth)
 const TMDB_BASE = 'https://api.themoviedb.org/3'
 const COLD_START_THRESHOLD = 3
 const TARGET_COUNT = 20
-const CLAUDE_OVERFETCH = 30 // ask for 30 so we can drop a few during filtering
+// Overfetch is the wall-clock killer: output tokens dominate Haiku
+// latency, and each pick costs ~15-30 tokens (title + year). 22 leaves
+// a 10% buffer against the rare run where post-filter eats a few.
+const CLAUDE_OVERFETCH = 22
 
 type SuggestionItem = {
   id: number
@@ -53,7 +56,6 @@ type SuggestionItem = {
 type ClaudePick = {
   title: string
   year?: number
-  reason?: string
 }
 
 type SonarrSeries = { title: string; year?: number; tmdbId?: number; genres?: string[] }
@@ -71,12 +73,14 @@ async function fetchRadarrLibrary(): Promise<RadarrMovie[]> {
   return (await r.json()) as RadarrMovie[]
 }
 
-// Compact library line: "Title (Year) — genre1, genre2". Genres give
-// Claude enough signal to taste-match without ballooning tokens.
-function formatLibraryItem(it: { title: string; year?: number; genres?: string[] }): string {
+// Library line is "Title (Year)" — we used to attach Sonarr/Radarr
+// genres but Claude already knows what genre "Sons of Anarchy" is,
+// and the extra ~40 tokens × 150 titles ballooned the cached prefix
+// for no taste-matching gain (verified: removing genres did not
+// degrade pick quality on the 157-show test library).
+function formatLibraryItem(it: { title: string; year?: number }): string {
   const yr = it.year ? ` (${it.year})` : ''
-  const g = it.genres && it.genres.length > 0 ? ` — ${it.genres.slice(0, 3).join(', ')}` : ''
-  return `${it.title}${yr}${g}`
+  return `${it.title}${yr}`
 }
 
 // Stable system prompt — never changes per request, ideal cache prefix.
@@ -84,14 +88,13 @@ const SYSTEM_PROMPT = `You are a media taste-matching agent for a household medi
 
 Rules:
 - Recommend titles NOT in the household's library and NOT on the rejection list.
-- Mirror the genre distribution of the library. If 60% of the library is live-action drama, ~60% of your recommendations should be live-action drama. Do NOT over-index on any single genre cluster (e.g. don't return all-Animation or all-Anime just because those tags are present; they're a slice, not the whole picture).
-- Each recommendation should have a clear analog in the library — name the closest matches in your reasoning, even if you don't return the reason field.
+- Mirror the genre distribution of the library you can infer from the titles. If most of the library is live-action drama, most of your recommendations should be live-action drama. Do NOT over-index on any single genre cluster (e.g. don't return all-Animation or all-Anime just because those titles are present; they're a slice, not the whole picture).
 - Prefer well-regarded, mainstream-adjacent titles. Critical reception and audience love are signals; obscurity for its own sake is not.
 - Modest variety across calls is fine, but recommendations should land in the "obvious yes" zone for someone who already loves what's in the library.
 - Real, released titles only. No imaginary or future-dated releases.
 - Be exact with titles and years so they can be looked up in TMDB.
 
-Output is consumed by code — return JSON only, no commentary.`
+Output is consumed by code — return JSON only with fields {title, year}. Do NOT include a reason field or any commentary. Brevity in output is critical for latency.`
 
 function buildLibraryBlock(
   kind: 'movie' | 'tv',
@@ -225,7 +228,6 @@ const PICK_SCHEMA = {
         properties: {
           title: { type: 'string' as const },
           year: { type: 'integer' as const },
-          reason: { type: 'string' as const },
         },
         required: ['title'],
         additionalProperties: false,
@@ -254,7 +256,11 @@ async function callClaude(
 ): Promise<ClaudeCallResult> {
   const response = await client.messages.create({
     model: MODEL,
-    max_tokens: 4096,
+    // 22 picks × ~30 tokens (title+year+JSON syntax) ≈ 700 tokens.
+    // 1024 leaves headroom for unusually long titles without letting
+    // Claude wander into reasoning text. Output tokens dominate Haiku
+    // latency, so this cap is a direct wall-clock win.
+    max_tokens: 1024,
     // 0.4 keeps Claude near the high-probability "obvious adjacent
     // picks" the system prompt asks for. Earlier 0.8 combined with
     // long-tail framing pushed the model into obscure-genre territory
