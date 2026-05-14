@@ -26,12 +26,21 @@ import Anthropic from '@anthropic-ai/sdk'
 import { requireAuth, type Env } from '../middleware/auth.js'
 import { sonarrFetch } from '../services/sonarr.js'
 import { radarrFetch } from '../services/radarr.js'
-import { getRejections } from '../services/rejections.js'
-import { getUserFeedback } from '../services/userFeedback.js'
+import { getRejections, addRejection } from '../services/rejections.js'
+import { getUserFeedback, setLike } from '../services/userFeedback.js'
 import { appendUsageEvent, computeCostCents } from '../services/usageLog.js'
 import { env } from '../env.js'
 
 const MODEL = 'claude-haiku-4-5'
+
+// TMDB key snapshot read at module load. Mutable so tests can flip
+// it without rebuilding the whole env. Production code reads through
+// this indirection so tmdbLookup/tmdbTrending/tmdbTitleById all
+// observe the same value.
+let _tmdbKey: string | null = env.tmdbApiKey
+export function _setTmdbApiKeyForTests(k: string | null): void {
+  _tmdbKey = k
+}
 
 export const suggestions = new Hono<Env>()
 
@@ -93,42 +102,117 @@ Rules:
 
 Output is consumed by code — return JSON only, no commentary.`
 
+// Render a list of {id, title} entries as prompt bullets. Untitled
+// entries (legacy bare-id rows the backfill couldn't resolve — e.g.
+// TMDB key missing or the id was retired) still appear so Claude
+// knows the household has rejected/liked something with that id;
+// they just can't taste-match without the name. Better honest signal
+// than silent omission.
+function renderEntryBullets(entries: Array<{ id: number; title: string }>): string {
+  return entries
+    .map((e) => (e.title ? `- ${e.title}` : `- [TMDB id ${e.id}]`))
+    .join('\n')
+}
+
 function buildLibraryBlock(
   kind: 'movie' | 'tv',
   library: Array<{ title: string; year?: number; genres?: string[] }>,
   rejections: Array<{ id: number; title: string }>,
 ): string {
   // Library + household rejections share a cache key — both are
-  // household-shared and stable across users. Rejection entries
-  // without a title (legacy bare-id rows on disk) are still in the
-  // post-filter set but omitted from the bullets here — they upgrade
-  // the next time a member re-clicks the dot.
+  // household-shared and stable across users. All rejection rows
+  // are rendered; legacy untitled rows fall back to `[TMDB id N]`
+  // so Claude sees the full reject set, not a silently-trimmed
+  // subset that lets the post-filter become load-bearing.
   const header = kind === 'movie' ? 'MOVIES' : 'TV SHOWS'
   const libLines = library.map(formatLibraryItem).join('\n')
-  const titledRejects = rejections.filter((r) => r.title.length > 0)
-  if (titledRejects.length === 0) {
+  if (rejections.length === 0) {
     return `Household ${header} library (${library.length} titles):\n${libLines}`
   }
-  const rejectLines = titledRejects.map((r) => `- ${r.title}`).join('\n')
   return (
     `Household ${header} library (${library.length} titles):\n${libLines}\n\n` +
-    `NEVER SUGGEST — the household has explicitly rejected these, ` +
-    `and you should also avoid stylistically near matches:\n${rejectLines}`
+    `NEVER SUGGEST — the household has explicitly rejected these (${rejections.length} total), ` +
+    `and you should also avoid stylistically near matches:\n${renderEntryBullets(rejections)}`
   )
 }
 
 // Per-user "liked" block. Sent after the cached prefix so it can vary
-// per caller without invalidating the household library cache.
-// Entries without a title (legacy bare-id rows) are omitted — they
-// upgrade on the next dot click.
+// per caller without invalidating the household library cache. Same
+// fallback rule as rejections — every liked id appears, untitled ones
+// render as `[TMDB id N]`.
 function buildUserLikesBlock(liked: Array<{ id: number; title: string }>): string {
-  const titled = liked.filter((e) => e.title.length > 0)
-  if (titled.length === 0) return ''
-  const lines = titled.map((e) => `- ${e.title}`).join('\n')
+  if (liked.length === 0) return ''
   return (
     `This user has explicitly LIKED — recommend more in this vein ` +
-    `(positive taste signal):\n${lines}`
+    `(positive taste signal):\n${renderEntryBullets(liked)}`
   )
+}
+
+// Resolve a TMDB id → canonical title via the direct /{kind}/{id}
+// endpoint (no search, single round-trip). Used to backfill legacy
+// rejection / liked rows that were saved before PR #65 introduced
+// titled entries. Returns null when the key is missing, the id is
+// dead, or TMDB rate-limited us — caller falls back to `[TMDB id N]`
+// bullets in the prompt.
+async function tmdbTitleById(kind: 'movie' | 'tv', id: number): Promise<string | null> {
+  if (!_tmdbKey) return null
+  const url = new URL(`${TMDB_BASE}/${kind}/${id}`)
+  url.searchParams.set('api_key', _tmdbKey)
+  try {
+    const r = await fetch(url, { headers: { Accept: 'application/json' } })
+    if (!r.ok) return null
+    const data = (await r.json()) as { title?: string; name?: string }
+    return data.title || data.name || null
+  } catch {
+    return null
+  }
+}
+
+// Opportunistic title backfill for a household-rejection list.
+// Entries with an empty title get a TMDB id-lookup; resolved titles
+// are persisted via addRejection() (which upgrades in place) so
+// subsequent calls skip the lookup entirely. Returns the (possibly
+// upgraded) entry list for prompt construction.
+async function backfillRejectionTitles(
+  kind: 'movie' | 'tv',
+  entries: Array<{ id: number; title: string }>,
+): Promise<Array<{ id: number; title: string }>> {
+  const needed = entries.filter((e) => !e.title)
+  if (needed.length === 0) return entries
+  const titles = await Promise.all(needed.map((e) => tmdbTitleById(kind, e.id)))
+  const updates = new Map<number, string>()
+  for (let i = 0; i < needed.length; i++) {
+    const t = titles[i]
+    if (t) updates.set(needed[i].id, t)
+  }
+  // Persist new titles in parallel — addRejection is queue-serialized
+  // internally so concurrent calls are safe.
+  await Promise.all(
+    Array.from(updates, ([id, title]) => addRejection(kind, id, title)),
+  )
+  return entries.map((e) => (updates.has(e.id) ? { ...e, title: updates.get(e.id)! } : e))
+}
+
+// Mirror of the rejection backfill but for per-user likes. Liked
+// entries with no title get upgraded in place via setLike (which
+// preserves the signal). Smaller list in practice but same shape.
+async function backfillLikedTitles(
+  sub: string,
+  kind: 'movie' | 'tv',
+  entries: Array<{ id: number; title: string }>,
+): Promise<Array<{ id: number; title: string }>> {
+  const needed = entries.filter((e) => !e.title)
+  if (needed.length === 0) return entries
+  const titles = await Promise.all(needed.map((e) => tmdbTitleById(kind, e.id)))
+  const updates = new Map<number, string>()
+  for (let i = 0; i < needed.length; i++) {
+    const t = titles[i]
+    if (t) updates.set(needed[i].id, t)
+  }
+  await Promise.all(
+    Array.from(updates, ([id, title]) => setLike(sub, kind, id, title)),
+  )
+  return entries.map((e) => (updates.has(e.id) ? { ...e, title: updates.get(e.id)! } : e))
 }
 
 async function tmdbLookup(
@@ -136,9 +220,9 @@ async function tmdbLookup(
   title: string,
   year: number | undefined,
 ): Promise<SuggestionItem | null> {
-  if (!env.tmdbApiKey) return null
+  if (!_tmdbKey) return null
   const url = new URL(`${TMDB_BASE}/search/${kind}`)
-  url.searchParams.set('api_key', env.tmdbApiKey)
+  url.searchParams.set('api_key', _tmdbKey)
   url.searchParams.set('query', title)
   if (year) {
     url.searchParams.set(kind === 'movie' ? 'primary_release_year' : 'first_air_date_year', String(year))
@@ -179,7 +263,7 @@ async function tmdbLookup(
 const TRENDING_MAX_PAGES = 5
 
 async function tmdbTrending(kind: 'movie' | 'tv'): Promise<SuggestionItem[]> {
-  if (!env.tmdbApiKey) return []
+  if (!_tmdbKey) return []
   type TmdbRow = {
     id: number
     title?: string
@@ -192,7 +276,7 @@ async function tmdbTrending(kind: 'movie' | 'tv'): Promise<SuggestionItem[]> {
   const all: TmdbRow[] = []
   for (let page = 1; page <= TRENDING_MAX_PAGES; page++) {
     const url = new URL(`${TMDB_BASE}/trending/${kind}/week`)
-    url.searchParams.set('api_key', env.tmdbApiKey)
+    url.searchParams.set('api_key', _tmdbKey)
     url.searchParams.set('page', String(page))
     const r = await fetch(url, { headers: { Accept: 'application/json' } })
     if (!r.ok) break
@@ -294,11 +378,23 @@ async function callClaude(
   }
 
   const block = response.content.find((b) => b.type === 'text')
-  if (!block || block.type !== 'text') return { picks: [], usage }
+  if (!block || block.type !== 'text') {
+    console.error(
+      '[suggestions] Claude returned no text block; content types:',
+      response.content.map((b) => b.type).join(','),
+    )
+    return { picks: [], usage }
+  }
   try {
     const parsed = JSON.parse(block.text) as { picks?: ClaudePick[] }
     return { picks: Array.isArray(parsed.picks) ? parsed.picks : [], usage }
-  } catch {
+  } catch (e) {
+    console.error(
+      '[suggestions] Claude returned unparseable JSON:',
+      e instanceof Error ? e.message : String(e),
+      '\n  body head:',
+      block.text.slice(0, 200),
+    )
     return { picks: [], usage }
   }
 }
@@ -354,10 +450,20 @@ suggestions.get('/:type', async (c) => {
 
   const session = c.get('session')
   const userFeedback = await getUserFeedback(session.sub)
-  const liked = type === 'movie' ? userFeedback.movie.liked : userFeedback.tv.liked
+  const likedRaw = type === 'movie' ? userFeedback.movie.liked : userFeedback.tv.liked
+
+  // Backfill missing titles on legacy entries so the Claude prompt
+  // carries the *entire* rejection + likes context, not a silently
+  // trimmed subset. Resolved titles are persisted so this cost is
+  // one-time per entry. Backfill failures fall through to
+  // `[TMDB id N]` bullets — Claude still sees the id is gated.
+  const [kindRejectionsTitled, liked] = await Promise.all([
+    backfillRejectionTitles(type, kindRejections),
+    backfillLikedTitles(session.sub, type, likedRaw),
+  ])
 
   const client = new Anthropic({ apiKey: userKey })
-  const libraryBlock = buildLibraryBlock(type, library, kindRejections)
+  const libraryBlock = buildLibraryBlock(type, library, kindRejectionsTitled)
   const userLikesBlock = buildUserLikesBlock(liked)
 
   let result: ClaudeCallResult
@@ -392,20 +498,42 @@ suggestions.get('/:type', async (c) => {
   const picks = result.picks
 
   // Look each pick up in TMDB. Run in parallel, dedupe by id, filter
-  // anything already-library or already-rejected.
+  // anything already-library or already-rejected. With the rejection
+  // list now fully titled in the prompt, post-filter drops should be
+  // near zero on the happy path — when they aren't, log loudly so
+  // the imbalance shows up in docker logs.
   const lookups = await Promise.all(
     picks.map((p) => tmdbLookup(type, p.title, p.year).catch(() => null)),
   )
+  let lookupNulls = 0
+  let droppedAsDedupe = 0
+  let droppedAsRejected = 0
+  let droppedAsLibrary = 0
   const seen = new Set<number>()
   const items: SuggestionItem[] = []
   for (const r of lookups) {
-    if (!r) continue
-    if (seen.has(r.id)) continue
-    if (rejected.has(r.id)) continue
-    if (libraryTmdbIds.has(r.id)) continue
+    if (!r) { lookupNulls++; continue }
+    if (seen.has(r.id)) { droppedAsDedupe++; continue }
+    if (rejected.has(r.id)) { droppedAsRejected++; continue }
+    if (libraryTmdbIds.has(r.id)) { droppedAsLibrary++; continue }
     seen.add(r.id)
     items.push(r)
     if (items.length >= TARGET_COUNT) break
+  }
+
+  if (picks.length > 0 && items.length === 0) {
+    console.error('[suggestions] All Claude picks dropped — Claude not respecting in-prompt constraints?', {
+      kind: type,
+      sub: session.sub,
+      libraryCount: library.length,
+      rejectionCount: kindRejectionsTitled.length,
+      titledRejections: kindRejectionsTitled.filter((r) => r.title).length,
+      picksReturned: picks.length,
+      lookupNulls,
+      droppedAsDedupe,
+      droppedAsRejected,
+      droppedAsLibrary,
+    })
   }
 
   return c.json({ source: 'personalized', items })
