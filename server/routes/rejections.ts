@@ -15,7 +15,7 @@ rejections.get('/', async (c) => {
 
 rejections.post('/', async (c) => {
   const body = (await c.req.json().catch(() => null)) as
-    | { type?: string; tmdbId?: number }
+    | { type?: string; tmdbId?: number; title?: string }
     | null
   if (!body) return c.json({ error: 'invalid_body' }, 400)
   if (body.type !== 'movie' && body.type !== 'tv') {
@@ -24,7 +24,8 @@ rejections.post('/', async (c) => {
   if (!Number.isFinite(body.tmdbId) || (body.tmdbId as number) <= 0) {
     return c.json({ error: 'invalid_tmdbId' }, 400)
   }
-  await addRejection(body.type as RejectionsKind, body.tmdbId as number)
+  const title = typeof body.title === 'string' ? body.title : ''
+  await addRejection(body.type as RejectionsKind, body.tmdbId as number, title)
   return c.json({ ok: true })
 })
 

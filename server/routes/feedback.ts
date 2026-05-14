@@ -45,7 +45,7 @@ feedback.get('/', async (c) => {
 feedback.post('/', async (c) => {
   const session = c.get('session')
   const body = (await c.req.json().catch(() => null)) as
-    | { type?: unknown; tmdbId?: unknown; signal?: unknown }
+    | { type?: unknown; tmdbId?: unknown; signal?: unknown; title?: unknown }
     | null
   if (!body) return c.json({ error: 'invalid_body' }, 400)
   if (!isKind(body.type)) return c.json({ error: 'invalid_type' }, 400)
@@ -54,13 +54,14 @@ feedback.post('/', async (c) => {
   if (!Number.isFinite(tmdbId) || tmdbId <= 0) {
     return c.json({ error: 'invalid_tmdbId' }, 400)
   }
+  const title = typeof body.title === 'string' ? body.title : ''
 
   if (body.signal === 'dislike') {
-    await setDislike(session.sub, body.type, tmdbId)
+    await setDislike(session.sub, body.type, tmdbId, title)
     // Roll into the household veto so nobody re-sees the title.
-    await addRejection(body.type, tmdbId)
+    await addRejection(body.type, tmdbId, title)
   } else {
-    await setLike(session.sub, body.type, tmdbId)
+    await setLike(session.sub, body.type, tmdbId, title)
   }
   return c.json({ ok: true })
 })

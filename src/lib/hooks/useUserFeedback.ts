@@ -8,20 +8,25 @@ import { apiUrl } from '../api/base'
 //
 // The hook tracks which dot is set for each TMDB id so the dots
 // component can render the current state and toggle correctly.
+// Entries carry titles alongside ids so the suggestions route can
+// render "you liked <Title>" / "never suggest <Title>" blocks for
+// Claude — bare ids are unactionable signal for the model.
 
 export type FeedbackKind = 'movie' | 'tv'
 export type FeedbackSignal = 'like' | 'dislike'
+export type FeedbackEntry = { id: number; title: string }
 
-type FeedbackResponse = {
-  movie: { liked: number[]; disliked: number[] }
-  tv: { liked: number[]; disliked: number[] }
+type KindBucket = { liked: FeedbackEntry[]; disliked: FeedbackEntry[] }
+type FeedbackResponse = { movie: KindBucket; tv: KindBucket }
+
+const EMPTY: FeedbackResponse = {
+  movie: { liked: [], disliked: [] },
+  tv: { liked: [], disliked: [] },
 }
 
 async function fetchFeedback(): Promise<FeedbackResponse> {
   const r = await fetch(apiUrl('/api/feedback'), { credentials: 'include' })
-  if (!r.ok) {
-    return { movie: { liked: [], disliked: [] }, tv: { liked: [], disliked: [] } }
-  }
+  if (!r.ok) return EMPTY
   return (await r.json()) as FeedbackResponse
 }
 
@@ -42,14 +47,14 @@ export function useSetFeedback(kind: FeedbackKind) {
   const qc = useQueryClient()
 
   return useMutation({
-    mutationFn: async (vars: { tmdbId: number; signal: FeedbackSignal | null }) => {
+    mutationFn: async (vars: { tmdbId: number; title: string; signal: FeedbackSignal | null }) => {
       if (vars.signal === null) {
         // Clearing — need to know which signal was set so the URL is
         // correct. The cached feedback tells us; default to dislike
         // (the more important one to clean up since it also affects
         // the household rejection list).
         const fb = qc.getQueryData<FeedbackResponse>(['feedback'])
-        const liked = fb?.[kind].liked.includes(vars.tmdbId)
+        const liked = fb?.[kind].liked.some((e) => e.id === vars.tmdbId) ?? false
         const signal: FeedbackSignal = liked ? 'like' : 'dislike'
         const r = await fetch(
           apiUrl(`/api/feedback/${kind}/${vars.tmdbId}/${signal}`),
@@ -62,19 +67,24 @@ export function useSetFeedback(kind: FeedbackKind) {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: kind, tmdbId: vars.tmdbId, signal: vars.signal }),
+        body: JSON.stringify({
+          type: kind,
+          tmdbId: vars.tmdbId,
+          title: vars.title,
+          signal: vars.signal,
+        }),
       })
       if (!r.ok) throw new Error(`set failed: ${r.status}`)
     },
-    onMutate: async ({ tmdbId, signal }) => {
+    onMutate: async ({ tmdbId, title, signal }) => {
       await qc.cancelQueries({ queryKey: ['feedback'] })
       const prev = qc.getQueryData<FeedbackResponse>(['feedback'])
       if (prev) {
         const bucket = prev[kind]
-        const liked = bucket.liked.filter((id) => id !== tmdbId)
-        const disliked = bucket.disliked.filter((id) => id !== tmdbId)
-        if (signal === 'like') liked.push(tmdbId)
-        if (signal === 'dislike') disliked.push(tmdbId)
+        const liked = bucket.liked.filter((e) => e.id !== tmdbId)
+        const disliked = bucket.disliked.filter((e) => e.id !== tmdbId)
+        if (signal === 'like') liked.push({ id: tmdbId, title })
+        if (signal === 'dislike') disliked.push({ id: tmdbId, title })
         qc.setQueryData<FeedbackResponse>(['feedback'], {
           ...prev,
           [kind]: { liked, disliked },

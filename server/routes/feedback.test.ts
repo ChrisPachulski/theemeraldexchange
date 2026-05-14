@@ -69,35 +69,50 @@ describe('feedback route — POST /', () => {
     expect((await bad({ type: 'movie', tmdbId: -1, signal: 'like' })).status).toBe(400)
   })
 
-  it('like writes only to user feedback, not household rejections', async () => {
+  it('like writes title to user feedback only, not household rejections', async () => {
     const app = appUnderTest()
     const cookie = await cookieFor('alice')
     const r = await app.request('/', {
       method: 'POST',
       headers: { Cookie: cookie, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'movie', tmdbId: 42, signal: 'like' }),
+      body: JSON.stringify({ type: 'movie', tmdbId: 42, title: 'Sinners', signal: 'like' }),
     })
     expect(r.status).toBe(200)
     const fb = (await (await app.request('/', { headers: { Cookie: cookie } })).json()) as {
-      movie: { liked: number[] }
+      movie: { liked: Array<{ id: number; title: string }> }
     }
-    expect(fb.movie.liked).toContain(42)
-    expect((await getRejections()).movie).not.toContain(42)
+    expect(fb.movie.liked).toContainEqual({ id: 42, title: 'Sinners' })
+    expect((await getRejections()).movie.find((e) => e.id === 42)).toBeUndefined()
   })
 
-  it('dislike writes to BOTH user feedback and household rejections', async () => {
+  it('dislike writes title to BOTH user feedback and household rejections', async () => {
     const app = appUnderTest()
     const cookie = await cookieFor('alice')
     await app.request('/', {
       method: 'POST',
       headers: { Cookie: cookie, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'tv', tmdbId: 99, signal: 'dislike' }),
+      body: JSON.stringify({ type: 'tv', tmdbId: 99, title: 'Pokémon', signal: 'dislike' }),
     })
     const fb = (await (await app.request('/', { headers: { Cookie: cookie } })).json()) as {
-      tv: { disliked: number[] }
+      tv: { disliked: Array<{ id: number; title: string }> }
     }
-    expect(fb.tv.disliked).toContain(99)
-    expect((await getRejections()).tv).toContain(99)
+    expect(fb.tv.disliked).toContainEqual({ id: 99, title: 'Pokémon' })
+    expect((await getRejections()).tv).toContainEqual({ id: 99, title: 'Pokémon' })
+  })
+
+  it('POST without title defaults to empty string in both stores', async () => {
+    const app = appUnderTest()
+    const cookie = await cookieFor('alice')
+    await app.request('/', {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'movie', tmdbId: 12, signal: 'dislike' }),
+    })
+    const fb = (await (await app.request('/', { headers: { Cookie: cookie } })).json()) as {
+      movie: { disliked: Array<{ id: number; title: string }> }
+    }
+    expect(fb.movie.disliked).toContainEqual({ id: 12, title: '' })
+    expect((await getRejections()).movie).toContainEqual({ id: 12, title: '' })
   })
 })
 
@@ -108,7 +123,7 @@ describe('feedback route — DELETE', () => {
     await app.request('/', {
       method: 'POST',
       headers: { Cookie: cookie, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'movie', tmdbId: 5, signal: 'like' }),
+      body: JSON.stringify({ type: 'movie', tmdbId: 5, title: 'X', signal: 'like' }),
     })
     const r = await app.request('/movie/5/like', {
       method: 'DELETE',
@@ -116,9 +131,9 @@ describe('feedback route — DELETE', () => {
     })
     expect(r.status).toBe(200)
     const fb = (await (await app.request('/', { headers: { Cookie: cookie } })).json()) as {
-      movie: { liked: number[] }
+      movie: { liked: Array<{ id: number; title: string }> }
     }
-    expect(fb.movie.liked).not.toContain(5)
+    expect(fb.movie.liked.find((e) => e.id === 5)).toBeUndefined()
   })
 
   it('removing a dislike also clears household rejection when no one else dissents', async () => {
@@ -127,15 +142,15 @@ describe('feedback route — DELETE', () => {
     await app.request('/', {
       method: 'POST',
       headers: { Cookie: aliceCookie, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'movie', tmdbId: 7, signal: 'dislike' }),
+      body: JSON.stringify({ type: 'movie', tmdbId: 7, title: 'X', signal: 'dislike' }),
     })
-    expect((await getRejections()).movie).toContain(7)
+    expect((await getRejections()).movie.find((e) => e.id === 7)).toBeDefined()
 
     await app.request('/movie/7/dislike', {
       method: 'DELETE',
       headers: { Cookie: aliceCookie },
     })
-    expect((await getRejections()).movie).not.toContain(7)
+    expect((await getRejections()).movie.find((e) => e.id === 7)).toBeUndefined()
   })
 
   it('removing a dislike preserves household rejection when another user still dislikes', async () => {
@@ -146,19 +161,19 @@ describe('feedback route — DELETE', () => {
     await app.request('/', {
       method: 'POST',
       headers: { Cookie: aliceCookie, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'movie', tmdbId: 8, signal: 'dislike' }),
+      body: JSON.stringify({ type: 'movie', tmdbId: 8, title: 'X', signal: 'dislike' }),
     })
     await app.request('/', {
       method: 'POST',
       headers: { Cookie: bobCookie, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'movie', tmdbId: 8, signal: 'dislike' }),
+      body: JSON.stringify({ type: 'movie', tmdbId: 8, title: 'X', signal: 'dislike' }),
     })
-    expect((await getRejections()).movie).toContain(8)
+    expect((await getRejections()).movie.find((e) => e.id === 8)).toBeDefined()
 
     await app.request('/movie/8/dislike', {
       method: 'DELETE',
       headers: { Cookie: aliceCookie },
     })
-    expect((await getRejections()).movie).toContain(8) // bob still dissents
+    expect((await getRejections()).movie.find((e) => e.id === 8)).toBeDefined() // bob still dissents
   })
 })

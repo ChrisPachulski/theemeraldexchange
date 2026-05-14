@@ -142,8 +142,8 @@ export function MoviesTab() {
   const stateFor = (id: number): DotState => {
     const fb = feedback.data?.movie
     if (!fb) return 'unset'
-    if (fb.liked.includes(id)) return 'liked'
-    if (fb.disliked.includes(id)) return 'disliked'
+    if (fb.liked.some((e) => e.id === id)) return 'liked'
+    if (fb.disliked.some((e) => e.id === id)) return 'disliked'
     return 'unset'
   }
   const [trendingPending, setTrendingPending] = useState<number | null>(null)
@@ -298,13 +298,13 @@ export function MoviesTab() {
                 label={trendingLabel}
                 feedback={{
                   stateFor,
-                  onLike: (id) => {
+                  onLike: (id, title) => {
                     const current = stateFor(id)
-                    setFeedback.mutate({ tmdbId: id, signal: current === 'liked' ? null : 'like' })
+                    setFeedback.mutate({ tmdbId: id, title, signal: current === 'liked' ? null : 'like' })
                   },
-                  onDislike: (id) => {
+                  onDislike: (id, title) => {
                     const current = stateFor(id)
-                    setFeedback.mutate({ tmdbId: id, signal: current === 'disliked' ? null : 'dislike' })
+                    setFeedback.mutate({ tmdbId: id, title, signal: current === 'disliked' ? null : 'dislike' })
                   },
                 }}
                 ai={userKey.hasKey ? { enabled: ai.enabled, onToggle: ai.toggle } : undefined}
