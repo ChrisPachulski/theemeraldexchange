@@ -154,24 +154,39 @@ async function tmdbLookup(
   }
 }
 
+// TMDB returns 20 items per page on /trending/{type}/week. We paginate
+// up to TRENDING_MAX_PAGES so that once a household has rejected the
+// obvious choices, deeper-tail trending titles still surface instead
+// of the strip going empty. The route still filters + slices to
+// TARGET_COUNT at the end; this just gives the filter more raw fuel
+// to work with. ~100 items is enough headroom in practice — TMDB's
+// trending tail thins out quickly past page 5 anyway.
+const TRENDING_MAX_PAGES = 5
+
 async function tmdbTrending(kind: 'movie' | 'tv'): Promise<SuggestionItem[]> {
   if (!env.tmdbApiKey) return []
-  const url = new URL(`${TMDB_BASE}/trending/${kind}/week`)
-  url.searchParams.set('api_key', env.tmdbApiKey)
-  const r = await fetch(url, { headers: { Accept: 'application/json' } })
-  if (!r.ok) return []
-  const data = (await r.json()) as {
-    results?: Array<{
-      id: number
-      title?: string
-      name?: string
-      poster_path: string | null
-      overview?: string
-      release_date?: string
-      first_air_date?: string
-    }>
+  type TmdbRow = {
+    id: number
+    title?: string
+    name?: string
+    poster_path: string | null
+    overview?: string
+    release_date?: string
+    first_air_date?: string
   }
-  return (data.results ?? []).slice(0, TARGET_COUNT).map((r) => {
+  const all: TmdbRow[] = []
+  for (let page = 1; page <= TRENDING_MAX_PAGES; page++) {
+    const url = new URL(`${TMDB_BASE}/trending/${kind}/week`)
+    url.searchParams.set('api_key', env.tmdbApiKey)
+    url.searchParams.set('page', String(page))
+    const r = await fetch(url, { headers: { Accept: 'application/json' } })
+    if (!r.ok) break
+    const data = (await r.json()) as { results?: TmdbRow[] }
+    const rows = data.results ?? []
+    all.push(...rows)
+    if (rows.length < 20) break // TMDB returned a short page, no more to fetch
+  }
+  return all.map((r) => {
     const date = r.release_date || r.first_air_date || ''
     const y = date ? Number(date.slice(0, 4)) : undefined
     return {
