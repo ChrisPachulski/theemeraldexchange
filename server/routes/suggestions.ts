@@ -96,25 +96,28 @@ Output is consumed by code — return JSON only, no commentary.`
 function buildLibraryBlock(
   kind: 'movie' | 'tv',
   library: Array<{ title: string; year?: number; genres?: string[] }>,
-  rejections: number[],
 ): string {
+  // The rejection list is NOT sent to Claude. Two reasons:
+  //   1. Claude has no embedded TMDB id → title map, so a list of
+  //      bare ids is unactionable signal — wasted tokens.
+  //   2. The route post-filters Claude's response against the full
+  //      household rejection list before returning, so rejected
+  //      titles can't slip through regardless of what Claude returns.
+  // Net: removing the ids cuts O(n) tokens from the cached prefix
+  // without losing any actual behavior.
   const header = kind === 'movie' ? 'MOVIES' : 'TV SHOWS'
   const libLines = library.map(formatLibraryItem).join('\n')
-  const rejLine =
-    rejections.length > 0
-      ? `\n\nNEVER SUGGEST (TMDB ids, already explicitly rejected by the household): ${rejections.join(', ')}`
-      : ''
-  return `Household ${header} library (${library.length} titles):\n${libLines}${rejLine}`
+  return `Household ${header} library (${library.length} titles):\n${libLines}`
 }
 
-// Per-user block — stays SHORT and goes after the cached library so it
-// can vary per caller without invalidating the cached prefix. We pass
-// TMDB ids because looking them back up in the library context above
-// is something Claude can do; sending titles would double the tokens
-// and obscure the matchback.
-function buildUserLikesBlock(likedIds: number[]): string {
-  if (likedIds.length === 0) return ''
-  return `\n\nThis user has explicitly LIKED the following TMDB ids (positive signal — recommend more in this vein): ${likedIds.join(', ')}`
+// Per-user "likes" block. Like the rejection list, raw TMDB ids
+// aren't actionable signal for Claude (no embedded id → title map).
+// We keep it stubbed out until the feedback store is upgraded to
+// persist titles alongside ids — at that point we can send titles
+// and Claude gets a real positive taste signal. Until then it's
+// honest to ship nothing rather than waste tokens on noise.
+function buildUserLikesBlock(_likedIds: number[]): string {
+  return ''
 }
 
 async function tmdbLookup(
@@ -342,7 +345,7 @@ suggestions.get('/:type', async (c) => {
   const likedIds = type === 'movie' ? userFeedback.movie.liked : userFeedback.tv.liked
 
   const client = new Anthropic({ apiKey: userKey })
-  const libraryBlock = buildLibraryBlock(type, library, type === 'movie' ? rejections.movie : rejections.tv)
+  const libraryBlock = buildLibraryBlock(type, library)
   const userLikesBlock = buildUserLikesBlock(likedIds)
 
   let result: ClaudeCallResult
