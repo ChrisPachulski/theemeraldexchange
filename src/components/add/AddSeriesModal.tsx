@@ -78,6 +78,10 @@ export function AddSeriesModal({ series, onClose, onAdded }: Props) {
     mutationFn: (body: Record<string, unknown>) => sonarr.addSeries(body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['sonarr', 'series'] })
+      // Library changed — recompute Discover so the just-added show
+      // doesn't reappear there and Claude's next prompt reflects the
+      // new library state.
+      qc.invalidateQueries({ queryKey: ['suggestions', 'tv'] })
     },
   })
 
