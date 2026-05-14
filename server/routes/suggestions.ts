@@ -114,25 +114,38 @@ function renderEntryBullets(entries: Array<{ id: number; title: string }>): stri
     .join('\n')
 }
 
+// Hard cap on how many rejection bullets we send to Claude. Beyond
+// this, the model starts treating the "NEVER SUGGEST" list as the
+// dominant signal (and recommends weird obscure titles to dodge it,
+// or worse, recommends library titles thinking they're safe). The
+// id-set post-filter still defends against older rejections that
+// don't make the cut. Prefer titled rows (most useful to the model);
+// fall back to recent untitled rows.
+const REJECTION_PROMPT_CAP = 75
+
 function buildLibraryBlock(
   kind: 'movie' | 'tv',
   library: Array<{ title: string; year?: number; genres?: string[] }>,
   rejections: Array<{ id: number; title: string }>,
 ): string {
-  // Library + household rejections share a cache key — both are
-  // household-shared and stable across users. All rejection rows
-  // are rendered; legacy untitled rows fall back to `[TMDB id N]`
-  // so Claude sees the full reject set, not a silently-trimmed
-  // subset that lets the post-filter become load-bearing.
   const header = kind === 'movie' ? 'MOVIES' : 'TV SHOWS'
   const libLines = library.map(formatLibraryItem).join('\n')
   if (rejections.length === 0) {
     return `Household ${header} library (${library.length} titles):\n${libLines}`
   }
+  // Show titled rows first (most useful taste signal), then fill the
+  // remaining cap with untitled rows. The post-filter id-set covers
+  // anything we don't bullet here.
+  const titled = rejections.filter((r) => r.title)
+  const untitled = rejections.filter((r) => !r.title)
+  const promptRejections =
+    titled.length >= REJECTION_PROMPT_CAP
+      ? titled.slice(-REJECTION_PROMPT_CAP)
+      : [...titled, ...untitled.slice(0, REJECTION_PROMPT_CAP - titled.length)]
   return (
     `Household ${header} library (${library.length} titles):\n${libLines}\n\n` +
-    `NEVER SUGGEST — the household has explicitly rejected these (${rejections.length} total), ` +
-    `and you should also avoid stylistically near matches:\n${renderEntryBullets(rejections)}`
+    `NEVER SUGGEST — the household has explicitly rejected these (${promptRejections.length} of ${rejections.length} shown), ` +
+    `and you should also avoid stylistically near matches:\n${renderEntryBullets(promptRejections)}`
   )
 }
 
@@ -544,8 +557,8 @@ suggestions.get('/:type', async (c) => {
     if (items.length >= TARGET_COUNT) break
   }
 
-  if (picks.length > 0 && items.length === 0) {
-    console.error('[suggestions] All Claude picks dropped — Claude not respecting in-prompt constraints?', {
+  if (items.length === 0) {
+    console.error('[suggestions] Personalized strip would be empty — falling back to TMDB trending', {
       kind: type,
       sub: session.sub,
       libraryCount: library.length,
@@ -556,6 +569,16 @@ suggestions.get('/:type', async (c) => {
       droppedAsDedupe,
       droppedAsRejected,
       droppedAsLibrary,
+    })
+    const trending = (await tmdbTrending(type)).filter(
+      (i) => !rejected.has(i.id) && !libraryTmdbIds.has(i.id),
+    )
+    // Source label flags this so future diagnosis (and the SPA, if we
+    // ever want to surface "we billed but Claude gave us nothing") can
+    // distinguish it from a normal cold-start trending response.
+    return c.json({
+      source: 'personalized_empty_trending_fallback',
+      items: trending.slice(0, TARGET_COUNT),
     })
   }
 
