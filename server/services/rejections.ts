@@ -4,9 +4,12 @@
 // household member clicks the ✕ on a suggestion card.
 //
 // Storage: one JSON file at env.rejectionsPath, structure:
-//   { movie: number[], tv: number[] }
-// We keep arrays (not Sets) so the file is human-readable / greppable
-// on the NAS. In memory we hydrate to Set<number> for O(1) lookup.
+//   { movie: Array<{id, title}>, tv: Array<{id, title}> }
+// Titles ride alongside ids so the suggestions route can show Claude
+// "never suggest <Title (Year)>" — bare ids are unactionable signal
+// for the model. Legacy files containing bare `number[]` arrays load
+// without crash: numbers normalize to `{id, title: ''}` and upgrade
+// in place on the next dot click.
 //
 // Writes are serialized through a single in-flight promise so two
 // near-simultaneous dismisses can't clobber each other.
@@ -16,13 +19,12 @@ import { dirname } from 'path'
 import { env } from '../env.js'
 
 export type RejectionsKind = 'movie' | 'tv'
+export type RejectionEntry = { id: number; title: string }
 
 type RejectionsFile = {
-  movie: number[]
-  tv: number[]
+  movie: RejectionEntry[]
+  tv: RejectionEntry[]
 }
-
-const EMPTY: RejectionsFile = { movie: [], tv: [] }
 
 let filePath = env.rejectionsPath
 
@@ -31,23 +33,47 @@ export function _setRejectionsPathForTests(p: string): void {
   cached = null
 }
 
-// In-memory cache + dirty flag. Hydrated on first read; written
-// through on each mutation. Tests reset via _setRejectionsPathForTests.
 let cached: RejectionsFile | null = null
 let writeQueue: Promise<void> = Promise.resolve()
+
+function normalizeEntry(raw: unknown): RejectionEntry | null {
+  if (typeof raw === 'number' && Number.isInteger(raw) && raw > 0) {
+    return { id: raw, title: '' }
+  }
+  if (raw && typeof raw === 'object') {
+    const o = raw as { id?: unknown; title?: unknown }
+    if (typeof o.id === 'number' && Number.isInteger(o.id) && o.id > 0) {
+      return { id: o.id, title: typeof o.title === 'string' ? o.title : '' }
+    }
+  }
+  return null
+}
+
+function normalizeList(raw: unknown): RejectionEntry[] {
+  if (!Array.isArray(raw)) return []
+  const out: RejectionEntry[] = []
+  const seen = new Set<number>()
+  for (const r of raw) {
+    const e = normalizeEntry(r)
+    if (e && !seen.has(e.id)) {
+      seen.add(e.id)
+      out.push(e)
+    }
+  }
+  return out
+}
 
 async function load(): Promise<RejectionsFile> {
   if (cached) return cached
   try {
     const raw = await fs.readFile(filePath, 'utf8')
-    const parsed = JSON.parse(raw) as Partial<RejectionsFile>
+    const parsed = JSON.parse(raw) as Partial<{ movie: unknown; tv: unknown }>
     cached = {
-      movie: Array.isArray(parsed.movie) ? parsed.movie.filter((n): n is number => Number.isInteger(n) && n > 0) : [],
-      tv: Array.isArray(parsed.tv) ? parsed.tv.filter((n): n is number => Number.isInteger(n) && n > 0) : [],
+      movie: normalizeList(parsed.movie),
+      tv: normalizeList(parsed.tv),
     }
   } catch {
-    // Missing file or malformed JSON — start fresh.
-    cached = { ...EMPTY, movie: [], tv: [] }
+    cached = { movie: [], tv: [] }
   }
   return cached
 }
@@ -61,14 +87,35 @@ async function persist(): Promise<void> {
 
 export async function getRejections(): Promise<RejectionsFile> {
   const file = await load()
-  return { movie: [...file.movie], tv: [...file.tv] }
+  return {
+    movie: file.movie.map((e) => ({ ...e })),
+    tv: file.tv.map((e) => ({ ...e })),
+  }
 }
 
-export async function addRejection(kind: RejectionsKind, tmdbId: number): Promise<void> {
+// Id-only view for the post-filter. The suggestions route only needs
+// the id set to drop matches from Claude's response — keeping the
+// filter cheap and decoupled from title presence.
+export async function getRejectionIds(kind: RejectionsKind): Promise<Set<number>> {
+  const file = await load()
+  return new Set(file[kind].map((e) => e.id))
+}
+
+export async function addRejection(
+  kind: RejectionsKind,
+  tmdbId: number,
+  title: string,
+): Promise<void> {
   writeQueue = writeQueue.then(async () => {
     const file = await load()
-    if (!file[kind].includes(tmdbId)) {
-      file[kind].push(tmdbId)
+    const existing = file[kind].find((e) => e.id === tmdbId)
+    if (!existing) {
+      file[kind].push({ id: tmdbId, title })
+      await persist()
+    } else if (title && existing.title !== title) {
+      // Upgrade legacy / stale entries in place when a fresh title
+      // arrives. Empty incoming title never overwrites a known one.
+      existing.title = title
       await persist()
     }
   })
@@ -79,7 +126,7 @@ export async function removeRejection(kind: RejectionsKind, tmdbId: number): Pro
   writeQueue = writeQueue.then(async () => {
     const file = await load()
     const before = file[kind].length
-    file[kind] = file[kind].filter((id) => id !== tmdbId)
+    file[kind] = file[kind].filter((e) => e.id !== tmdbId)
     if (file[kind].length !== before) await persist()
   })
   await writeQueue

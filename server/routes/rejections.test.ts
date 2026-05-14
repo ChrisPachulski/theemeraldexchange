@@ -42,18 +42,32 @@ describe('rejections route', () => {
     expect(await r.json()).toEqual({ movie: [], tv: [] })
   })
 
-  it('POST adds, GET reflects', async () => {
+  it('POST adds with title, GET reflects', async () => {
     const app = appUnderTest()
     const cookie = await userCookie()
     const r1 = await app.request('/', {
       method: 'POST',
       headers: { Cookie: cookie, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'movie', tmdbId: 12345 }),
+      body: JSON.stringify({ type: 'movie', tmdbId: 12345, title: 'Some Movie' }),
     })
     expect(r1.status).toBe(200)
     const r2 = await app.request('/', { headers: { Cookie: cookie } })
-    const body = (await r2.json()) as { movie: number[] }
-    expect(body.movie).toContain(12345)
+    const body = (await r2.json()) as { movie: Array<{ id: number; title: string }> }
+    expect(body.movie).toContainEqual({ id: 12345, title: 'Some Movie' })
+  })
+
+  it('POST without title still adds (empty title)', async () => {
+    const app = appUnderTest()
+    const cookie = await userCookie()
+    await app.request('/', {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'movie', tmdbId: 7777 }),
+    })
+    const body = (await (await app.request('/', { headers: { Cookie: cookie } })).json()) as {
+      movie: Array<{ id: number; title: string }>
+    }
+    expect(body.movie).toContainEqual({ id: 7777, title: '' })
   })
 
   it('POST rejects invalid type', async () => {
@@ -80,11 +94,13 @@ describe('rejections route', () => {
     await app.request('/', {
       method: 'POST',
       headers: { Cookie: cookie, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'tv', tmdbId: 99 }),
+      body: JSON.stringify({ type: 'tv', tmdbId: 99, title: 'X' }),
     })
     const r = await app.request('/tv/99', { method: 'DELETE', headers: { Cookie: cookie } })
     expect(r.status).toBe(200)
-    const after = (await (await app.request('/', { headers: { Cookie: cookie } })).json()) as { tv: number[] }
-    expect(after.tv).not.toContain(99)
+    const after = (await (await app.request('/', { headers: { Cookie: cookie } })).json()) as {
+      tv: Array<{ id: number; title: string }>
+    }
+    expect(after.tv.find((e) => e.id === 99)).toBeUndefined()
   })
 })
