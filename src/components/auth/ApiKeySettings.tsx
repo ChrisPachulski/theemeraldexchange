@@ -65,9 +65,16 @@ export function ApiKeySettings() {
     setDraft('')
   }
 
+  const summaryStatus = hasKey
+    ? `Set · ${usage.data?.calls ?? 0} calls · ${fmtCost(usage.data?.costCents ?? 0)}`
+    : 'Not set'
+
   return (
-    <section className="api-key-settings">
-      <h4 className="api-key-settings__heading">Your AI key</h4>
+    <details className="api-key-settings user-menu__disclosure">
+      <summary className="user-menu__disclosure-summary">
+        <span className="user-menu__eyebrow">Your AI key</span>
+        <span className="user-menu__disclosure-status">{summaryStatus}</span>
+      </summary>
       <p className="api-key-settings__hint">
         Personalized picks call the Anthropic API on each refresh. You bring
         your own key so you only pay for what you use. The key stays on this
@@ -162,6 +169,6 @@ export function ApiKeySettings() {
           </p>
         </div>
       )}
-    </section>
+    </details>
   )
 }
