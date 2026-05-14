@@ -92,7 +92,8 @@ function formatLibraryItem(it: { title: string; year?: number; genres?: string[]
 const SYSTEM_PROMPT = `You are a media taste-matching agent for a household media server. Given the household's library and an explicit "never suggest" list, return ranked recommendations that match their existing taste — same era, tone, genre clusters, directorial sensibilities, and adjacent recommendations from beloved titles.
 
 Rules:
-- Recommend titles NOT in the household's library and NOT on the rejection list.
+- HARD RULE: Never recommend a title that appears in the household's library — not the same title, not a spinoff under the same name, not the same show with a different year. If you find yourself about to return a library title, stop and choose a different one. Duplicates render as broken UI for the user.
+- HARD RULE: Never recommend a title that appears in the NEVER SUGGEST list, including stylistically near-identical entries.
 - Mirror the genre distribution of the library. If 60% of the library is live-action drama, ~60% of your recommendations should be live-action drama. Do NOT over-index on any single genre cluster (e.g. don't return all-Animation or all-Anime just because those tags are present; they're a slice, not the whole picture).
 - Each recommendation should have a clear analog in the library — name the closest matches in your reasoning, even if you don't return the reason field.
 - Prefer well-regarded, mainstream-adjacent titles. Critical reception and audience love are signals; obscurity for its own sake is not.
@@ -101,6 +102,21 @@ Rules:
 - Be exact with titles and years so they can be looked up in TMDB.
 
 Output is consumed by code — return JSON only, no commentary.`
+
+// Normalize a title for cross-source matching. Sonarr/Radarr's title
+// and TMDB's title sometimes disagree on punctuation, articles, or
+// suffixes (e.g. "The Office" vs "Office, The"; "Marvel's Daredevil"
+// vs "Daredevil"). Lowercase, strip leading articles, collapse
+// whitespace, drop non-alphanumeric. Used as a *secondary* library
+// match alongside the tmdbId set so Sonarr/Radarr entries that lack
+// a tmdbId still get caught.
+function normalizeTitle(t: string): string {
+  return t
+    .toLowerCase()
+    .replace(/^(the|a|an)\s+/i, '')
+    .replace(/[^a-z0-9]+/g, '')
+    .trim()
+}
 
 // Render a list of {id, title} entries as prompt bullets. Untitled
 // entries (legacy bare-id rows the backfill couldn't resolve — e.g.
@@ -458,6 +474,19 @@ suggestions.get('/:type', async (c) => {
   const libraryTmdbIds = new Set(
     library.map((l) => l.tmdbId).filter((id): id is number => typeof id === 'number'),
   )
+  // Secondary library guard: Sonarr/Radarr entries without a tmdbId
+  // wouldn't match the id set, so Claude's pick (which always has a
+  // tmdbId after TMDB lookup) would slip through and the user sees a
+  // duplicate of a show they already have. Match by normalized title
+  // too — catches "The Office" vs "Office, The", franchise renames,
+  // etc.
+  const libraryTitles = new Set(library.map((l) => normalizeTitle(l.title)))
+  // Same secondary guard for rejections: legacy rejection rows without
+  // a usable id (or with a TMDB-mismatched id) still get caught by
+  // title once we have one.
+  const rejectedTitles = new Set(
+    kindRejections.filter((r) => r.title).map((r) => normalizeTitle(r.title)),
+  )
 
   if (force === 'trending') {
     const trending = (await tmdbTrending(type)).filter(
@@ -550,8 +579,9 @@ suggestions.get('/:type', async (c) => {
   for (const r of lookups) {
     if (!r) { lookupNulls++; continue }
     if (seen.has(r.id)) { droppedAsDedupe++; continue }
-    if (rejected.has(r.id)) { droppedAsRejected++; continue }
-    if (libraryTmdbIds.has(r.id)) { droppedAsLibrary++; continue }
+    const norm = normalizeTitle(r.title)
+    if (rejected.has(r.id) || rejectedTitles.has(norm)) { droppedAsRejected++; continue }
+    if (libraryTmdbIds.has(r.id) || libraryTitles.has(norm)) { droppedAsLibrary++; continue }
     seen.add(r.id)
     items.push(r)
     if (items.length >= TARGET_COUNT) break
