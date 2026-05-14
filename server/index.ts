@@ -28,6 +28,8 @@ import { notifications } from './routes/notifications.js'
 import { grabs } from './routes/grabs.js'
 import { rejections } from './routes/rejections.js'
 import { suggestions } from './routes/suggestions.js'
+import { feedback } from './routes/feedback.js'
+import { usage } from './routes/usage.js'
 
 const app = new Hono()
 
@@ -73,6 +75,8 @@ app.route('/api/notifications', notifications)
 app.route('/api/grabs', grabs)
 app.route('/api/rejections', rejections)
 app.route('/api/suggestions', suggestions)
+app.route('/api/feedback', feedback)
+app.route('/api/usage', usage)
 
 serve(
   { fetch: app.fetch, port: env.port },

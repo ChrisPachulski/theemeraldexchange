@@ -14,8 +14,11 @@ import { useAuth } from '../../lib/auth'
 import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useMovieSearch } from '../../lib/hooks/useMovieSearch'
 import { useRadarrLibrary } from '../../lib/hooks/useRadarrLibrary'
-import { useSuggestedMovies, useDismissSuggestion } from '../../lib/hooks/useSuggested'
+import { useSuggestedMovies } from '../../lib/hooks/useSuggested'
 import { useAiSuggestionsEnabled } from '../../lib/hooks/useAiSuggestionsEnabled'
+import { useUserApiKey } from '../../lib/hooks/useUserApiKey'
+import { useFeedback, useSetFeedback } from '../../lib/hooks/useUserFeedback'
+import type { DotState } from '../search/FeedbackDots'
 import { TrendingRow } from '../search/TrendingRow'
 import { useCast } from '../../lib/hooks/useCast'
 import { useConfirm } from '../confirm/useConfirm'
@@ -132,8 +135,17 @@ export function MoviesTab() {
   }, [library.data])
 
   const ai = useAiSuggestionsEnabled()
-  const suggested = useSuggestedMovies(ai.enabled)
-  const dismiss = useDismissSuggestion('movie')
+  const userKey = useUserApiKey()
+  const suggested = useSuggestedMovies(ai.enabled, userKey.key)
+  const feedback = useFeedback()
+  const setFeedback = useSetFeedback('movie')
+  const stateFor = (id: number): DotState => {
+    const fb = feedback.data?.movie
+    if (!fb) return 'unset'
+    if (fb.liked.includes(id)) return 'liked'
+    if (fb.disliked.includes(id)) return 'disliked'
+    return 'unset'
+  }
   const [trendingPending, setTrendingPending] = useState<number | null>(null)
   // Defense in depth — backend already filters by library/rejections,
   // but client-side filter catches any race (just-added title, etc.).
@@ -284,8 +296,18 @@ export function MoviesTab() {
                 onPick={handleTrendingPick}
                 pendingId={trendingPending}
                 label={trendingLabel}
-                onDismiss={(id) => dismiss.mutate(id)}
-                ai={{ enabled: ai.enabled, onToggle: ai.toggle }}
+                feedback={{
+                  stateFor,
+                  onLike: (id) => {
+                    const current = stateFor(id)
+                    setFeedback.mutate({ tmdbId: id, signal: current === 'liked' ? null : 'like' })
+                  },
+                  onDislike: (id) => {
+                    const current = stateFor(id)
+                    setFeedback.mutate({ tmdbId: id, signal: current === 'disliked' ? null : 'dislike' })
+                  },
+                }}
+                ai={userKey.hasKey ? { enabled: ai.enabled, onToggle: ai.toggle } : undefined}
               />
             </div>
           )}

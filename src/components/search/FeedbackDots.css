@@ -1,0 +1,73 @@
+/* Pair of small circles below each suggestion card's caption.
+   Red sits on the left (don't suggest), green on the right (like).
+   Hidden weight at rest so the row doesn't look noisy; full opacity
+   on hover and whenever a signal is set on the card. */
+
+.feedback-dots {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+  justify-content: flex-start;
+  /* The dots fade up when the parent card is hovered. .trending__card
+     handles the hover state; we just opt this row into the cascade. */
+  opacity: 0.55;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.trending__card:hover .feedback-dots,
+.feedback-dots:has(.feedback-dot--set),
+.feedback-dots:focus-within {
+  opacity: 1;
+}
+
+.feedback-dot {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1.5px solid currentColor;
+  background: transparent;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+
+.feedback-dot:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.feedback-dot--red {
+  color: var(--danger, oklch(0.65 0.22 25));
+}
+
+.feedback-dot--green {
+  color: var(--emerald);
+}
+
+.feedback-dot:hover {
+  background: color-mix(in oklch, currentColor 50%, transparent);
+  transform: scale(1.15);
+}
+
+.feedback-dot--set {
+  background: currentColor;
+  box-shadow: 0 0 8px -1px currentColor;
+}
+
+.feedback-dot--set:hover {
+  /* Don't grow further when already set; signal a clear-on-click via
+     a subtle ring instead. */
+  transform: scale(1.05);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .feedback-dot {
+    transition: none;
+  }
+  .feedback-dot:hover {
+    transform: none;
+  }
+}
