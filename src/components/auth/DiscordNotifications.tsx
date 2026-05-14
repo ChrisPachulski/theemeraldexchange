@@ -93,13 +93,18 @@ export function DiscordNotifications({ onClose }: Props) {
 
   const configured = status?.configured ?? false
 
+  const summaryStatus =
+    status === null ? 'Checking…' : configured ? 'Configured' : 'Not set'
+
   return (
-    <section
-      className="user-menu__apps user-menu__discord"
-      role="group"
+    <details
+      className="user-menu__apps user-menu__discord user-menu__disclosure"
       aria-label="Discord notifications"
     >
-      <p className="user-menu__eyebrow">Discord notifications</p>
+      <summary className="user-menu__disclosure-summary">
+        <span className="user-menu__eyebrow">Discord notifications</span>
+        <span className="user-menu__disclosure-status">{summaryStatus}</span>
+      </summary>
       <p className="user-menu__discord-status">
         {status === null
           ? 'Checking…'
@@ -158,6 +163,6 @@ export function DiscordNotifications({ onClose }: Props) {
           {message}
         </p>
       )}
-    </section>
+    </details>
   )
 }
