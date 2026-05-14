@@ -118,6 +118,14 @@ export function useSetFeedback(kind: FeedbackKind) {
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ['feedback'] })
+      // Critical: also invalidate the suggestions cache so Claude (or
+      // TMDB trending) is re-asked with the updated reject/like state.
+      // Without this, dots just optimistically shrink the local list
+      // forever and the user can't tell the signal landed — the model
+      // never gets the chance to react. Triggers a fresh ~15s Claude
+      // call if AI is on; that's the right tradeoff — the alternative
+      // is the strip slowly running dry as more items are dismissed.
+      qc.invalidateQueries({ queryKey: ['suggestions', kind] })
     },
   })
 }
