@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { apiUrl } from '../api/base'
 import type { TrendingItem } from './useTrending'
 
@@ -32,13 +32,18 @@ export type SuggestionResult = {
 async function fetchSuggested(
   kind: 'movie' | 'tv',
   aiEnabled: boolean,
+  apiKey: string | null,
 ): Promise<SuggestionResult> {
-  // When AI is off, append ?force=trending so the backend skips the
-  // Claude call and returns TMDB trending instead — free + instant.
-  const url = aiEnabled
+  // AI only flips on when both the toggle says yes AND the user has
+  // an API key. Without a key, force ?force=trending so the backend
+  // skips the (now-required) BYO key check and returns TMDB trending.
+  const useAi = aiEnabled && !!apiKey
+  const url = useAi
     ? apiUrl(`/api/suggestions/${kind}`)
     : apiUrl(`/api/suggestions/${kind}`, { force: 'trending' })
-  const r = await fetch(url, { credentials: 'include' })
+  const headers: Record<string, string> = {}
+  if (useAi && apiKey) headers['X-Anthropic-Api-Key'] = apiKey
+  const r = await fetch(url, { credentials: 'include', headers })
   if (!r.ok) return { items: [], source: null }
   const data = (await r.json()) as SuggestionsResponse
   return {
@@ -53,67 +58,25 @@ async function fetchSuggested(
   }
 }
 
-export function useSuggestedMovies(aiEnabled: boolean) {
+export function useSuggestedMovies(aiEnabled: boolean, apiKey: string | null) {
   return useQuery({
-    queryKey: ['suggestions', 'movie', aiEnabled ? 'ai' : 'trending'],
-    queryFn: () => fetchSuggested('movie', aiEnabled),
+    queryKey: ['suggestions', 'movie', aiEnabled && apiKey ? 'ai' : 'trending'],
+    queryFn: () => fetchSuggested('movie', aiEnabled, apiKey),
     staleTime: 0,
     refetchOnMount: 'always',
   })
 }
 
-export function useSuggestedTv(aiEnabled: boolean) {
+export function useSuggestedTv(aiEnabled: boolean, apiKey: string | null) {
   return useQuery({
-    queryKey: ['suggestions', 'tv', aiEnabled ? 'ai' : 'trending'],
-    queryFn: () => fetchSuggested('tv', aiEnabled),
+    queryKey: ['suggestions', 'tv', aiEnabled && apiKey ? 'ai' : 'trending'],
+    queryFn: () => fetchSuggested('tv', aiEnabled, apiKey),
     staleTime: 0,
     refetchOnMount: 'always',
   })
 }
 
-// Dismiss a suggestion forever. Optimistically removes the item from
-// the in-memory query result so the card disappears immediately, then
-// POSTs to /api/rejections so future refreshes never resurrect it.
-export function useDismissSuggestion(kind: 'movie' | 'tv') {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: async (tmdbId: number) => {
-      const r = await fetch(apiUrl('/api/rejections'), {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: kind, tmdbId }),
-      })
-      if (!r.ok) throw new Error(`rejection ${r.status}`)
-    },
-    onMutate: async (tmdbId) => {
-      // Prefix cancel — covers both ['suggestions', kind, 'ai'] and
-      // ['suggestions', kind, 'trending'] cache entries since toggling
-      // the AI switch swaps between them.
-      await qc.cancelQueries({ queryKey: ['suggestions', kind] })
-      const variants = [
-        ['suggestions', kind, 'ai'] as const,
-        ['suggestions', kind, 'trending'] as const,
-      ]
-      const snapshot = variants.map((key) => ({
-        key,
-        prev: qc.getQueryData<SuggestionResult>(key),
-      }))
-      for (const { key, prev } of snapshot) {
-        if (prev) {
-          qc.setQueryData<SuggestionResult>(key, {
-            ...prev,
-            items: prev.items.filter((i) => i.id !== tmdbId),
-          })
-        }
-      }
-      return { snapshot }
-    },
-    onError: (_e, _id, ctx) => {
-      // Roll back optimistic removal across both cache slots.
-      for (const { key, prev } of ctx?.snapshot ?? []) {
-        if (prev) qc.setQueryData(key, prev)
-      }
-    },
-  })
-}
+// useDismissSuggestion is superseded by useSetFeedback in
+// useUserFeedback.ts. The dot-click flow there handles the same
+// "hide this card forever" path via the per-user dislike signal,
+// which the backend also rolls into the household rejection list.

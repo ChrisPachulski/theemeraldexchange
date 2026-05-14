@@ -27,7 +27,11 @@ import { requireAuth, type Env } from '../middleware/auth.js'
 import { sonarrFetch } from '../services/sonarr.js'
 import { radarrFetch } from '../services/radarr.js'
 import { getRejections } from '../services/rejections.js'
+import { getUserFeedback } from '../services/userFeedback.js'
+import { appendUsageEvent, computeCostCents } from '../services/usageLog.js'
 import { env } from '../env.js'
+
+const MODEL = 'claude-haiku-4-5'
 
 export const suggestions = new Hono<Env>()
 
@@ -97,9 +101,19 @@ function buildLibraryBlock(
   const libLines = library.map(formatLibraryItem).join('\n')
   const rejLine =
     rejections.length > 0
-      ? `\n\nNEVER SUGGEST (TMDB ids, already explicitly rejected): ${rejections.join(', ')}`
+      ? `\n\nNEVER SUGGEST (TMDB ids, already explicitly rejected by the household): ${rejections.join(', ')}`
       : ''
   return `Household ${header} library (${library.length} titles):\n${libLines}${rejLine}`
+}
+
+// Per-user block — stays SHORT and goes after the cached library so it
+// can vary per caller without invalidating the cached prefix. We pass
+// TMDB ids because looking them back up in the library context above
+// is something Claude can do; sending titles would double the tokens
+// and obscure the matchback.
+function buildUserLikesBlock(likedIds: number[]): string {
+  if (likedIds.length === 0) return ''
+  return `\n\nThis user has explicitly LIKED the following TMDB ids (positive signal — recommend more in this vein): ${likedIds.join(', ')}`
 }
 
 async function tmdbLookup(
@@ -192,45 +206,65 @@ const PICK_SCHEMA = {
   additionalProperties: false,
 }
 
+type ClaudeCallResult = {
+  picks: ClaudePick[]
+  usage: {
+    inputTokens?: number
+    outputTokens?: number
+    cacheCreationInputTokens?: number
+    cacheReadInputTokens?: number
+  }
+}
+
 async function callClaude(
   client: Anthropic,
   kind: 'movie' | 'tv',
   libraryBlock: string,
-): Promise<ClaudePick[]> {
+  userLikesBlock: string,
+): Promise<ClaudeCallResult> {
   const response = await client.messages.create({
-    model: 'claude-haiku-4-5',
+    model: MODEL,
     max_tokens: 4096,
     temperature: 0.8,
     system: [
-      {
-        type: 'text',
-        text: SYSTEM_PROMPT,
-      },
+      // System prompt — frozen, always cacheable.
+      { type: 'text', text: SYSTEM_PROMPT },
+      // Library + household rejections — same for all household
+      // members, cached once per ~5min TTL window.
       {
         type: 'text',
         text: libraryBlock,
         cache_control: { type: 'ephemeral' },
       },
+      // Per-user likes — small, varies per caller, sits AFTER the
+      // cached prefix so it doesn't invalidate the library cache.
+      ...(userLikesBlock ? [{ type: 'text' as const, text: userLikesBlock }] : []),
     ],
     messages: [
       {
         role: 'user',
-        content: `Recommend ${CLAUDE_OVERFETCH} ${kind === 'movie' ? 'movies' : 'TV shows'} for this household. Pull from the long tail — do not just return the same well-known titles every call. Mix safe adjacent picks with a couple of deeper cuts.`,
+        content: `Recommend ${CLAUDE_OVERFETCH} ${kind === 'movie' ? 'movies' : 'TV shows'} for this household. Pull from the long tail — do not just return the same well-known titles every call. Mix safe adjacent picks with a couple of deeper cuts. Weight toward the user's liked TMDB ids when present.`,
       },
     ],
-    // Constrain to a typed JSON shape so the response is parseable.
     output_config: {
       format: { type: 'json_schema', schema: PICK_SCHEMA },
     },
   })
 
+  const usage = {
+    inputTokens: response.usage?.input_tokens,
+    outputTokens: response.usage?.output_tokens,
+    cacheCreationInputTokens: response.usage?.cache_creation_input_tokens ?? undefined,
+    cacheReadInputTokens: response.usage?.cache_read_input_tokens ?? undefined,
+  }
+
   const block = response.content.find((b) => b.type === 'text')
-  if (!block || block.type !== 'text') return []
+  if (!block || block.type !== 'text') return { picks: [], usage }
   try {
     const parsed = JSON.parse(block.text) as { picks?: ClaudePick[] }
-    return Array.isArray(parsed.picks) ? parsed.picks : []
+    return { picks: Array.isArray(parsed.picks) ? parsed.picks : [], usage }
   } catch {
-    return []
+    return { picks: [], usage }
   }
 }
 
@@ -272,28 +306,54 @@ suggestions.get('/:type', async (c) => {
     return c.json({ source: 'trending', items: trending.slice(0, TARGET_COUNT) })
   }
 
-  // No Anthropic key configured — fall back to trending so the surface
-  // still functions, just without personalization.
-  if (!env.anthropicApiKey) {
-    const trending = (await tmdbTrending(type)).filter(
-      (i) => !rejected.has(i.id) && !libraryTmdbIds.has(i.id),
-    )
-    return c.json({ source: 'trending_fallback', items: trending.slice(0, TARGET_COUNT) })
+  // BYO key model — caller must supply their Anthropic key in the
+  // request header. 402 is the semantically correct response: "you
+  // need to provide credentials/funds yourself before this resource
+  // is available." Distinguishes from auth failure (401) and upstream
+  // breakage (5xx).
+  const userKey = (c.req.header('x-anthropic-api-key') ?? '').trim()
+  if (!userKey || !userKey.startsWith('sk-ant-')) {
+    return c.json({ error: 'api_key_required', hint: 'set your key in the user menu' }, 402)
   }
 
-  const client = new Anthropic({ apiKey: env.anthropicApiKey })
-  const libraryBlock = buildLibraryBlock(type, library, type === 'movie' ? rejections.movie : rejections.tv)
+  const session = c.get('session')
+  const userFeedback = await getUserFeedback(session.sub)
+  const likedIds = type === 'movie' ? userFeedback.movie.liked : userFeedback.tv.liked
 
-  let picks: ClaudePick[] = []
+  const client = new Anthropic({ apiKey: userKey })
+  const libraryBlock = buildLibraryBlock(type, library, type === 'movie' ? rejections.movie : rejections.tv)
+  const userLikesBlock = buildUserLikesBlock(likedIds)
+
+  let result: ClaudeCallResult
   try {
-    picks = await callClaude(client, type, libraryBlock)
+    result = await callClaude(client, type, libraryBlock, userLikesBlock)
+    // Successful call (whether or not the model returned picks) —
+    // record token spend against the caller.
+    await appendUsageEvent({
+      sub: session.sub,
+      username: session.username,
+      type: 'claude_call',
+      model: MODEL,
+      kind: type,
+      ...result.usage,
+      costCents: computeCostCents(result.usage),
+    })
   } catch (e) {
     console.error('[suggestions] Claude call failed:', e)
+    await appendUsageEvent({
+      sub: session.sub,
+      username: session.username,
+      type: 'claude_error',
+      model: MODEL,
+      kind: type,
+      error: e instanceof Error ? e.message : String(e),
+    })
     const trending = (await tmdbTrending(type)).filter(
       (i) => !rejected.has(i.id) && !libraryTmdbIds.has(i.id),
     )
     return c.json({ source: 'trending_fallback', items: trending.slice(0, TARGET_COUNT) })
   }
+  const picks = result.picks
 
   // Look each pick up in TMDB. Run in parallel, dedupe by id, filter
   // anything already-library or already-rejected.

@@ -15,8 +15,11 @@ import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useSeriesSearch } from '../../lib/hooks/useSeriesSearch'
 import { useSonarrLibrary } from '../../lib/hooks/useSonarrLibrary'
 import { useSonarrEpisodes } from '../../lib/hooks/useSonarrEpisodes'
-import { useSuggestedTv, useDismissSuggestion } from '../../lib/hooks/useSuggested'
+import { useSuggestedTv } from '../../lib/hooks/useSuggested'
 import { useAiSuggestionsEnabled } from '../../lib/hooks/useAiSuggestionsEnabled'
+import { useUserApiKey } from '../../lib/hooks/useUserApiKey'
+import { useFeedback, useSetFeedback } from '../../lib/hooks/useUserFeedback'
+import type { DotState } from '../search/FeedbackDots'
 import { TrendingRow } from '../search/TrendingRow'
 import { useCast } from '../../lib/hooks/useCast'
 import { useConfirm } from '../confirm/useConfirm'
@@ -120,8 +123,17 @@ export function TvTab() {
   }, [library.data])
 
   const ai = useAiSuggestionsEnabled()
-  const suggested = useSuggestedTv(ai.enabled)
-  const dismiss = useDismissSuggestion('tv')
+  const userKey = useUserApiKey()
+  const suggested = useSuggestedTv(ai.enabled, userKey.key)
+  const feedback = useFeedback()
+  const setFeedback = useSetFeedback('tv')
+  const stateFor = (id: number): DotState => {
+    const fb = feedback.data?.tv
+    if (!fb) return 'unset'
+    if (fb.liked.includes(id)) return 'liked'
+    if (fb.disliked.includes(id)) return 'disliked'
+    return 'unset'
+  }
   const [trendingPending, setTrendingPending] = useState<number | null>(null)
   // Library set keyed by TMDB id — used to strip items the household
   // already has from suggestions (backend filters too; this is defense
@@ -290,8 +302,18 @@ export function TvTab() {
                 onPick={handleTrendingPick}
                 pendingId={trendingPending}
                 label={trendingLabel}
-                onDismiss={(id) => dismiss.mutate(id)}
-                ai={{ enabled: ai.enabled, onToggle: ai.toggle }}
+                feedback={{
+                  stateFor,
+                  onLike: (id) => {
+                    const current = stateFor(id)
+                    setFeedback.mutate({ tmdbId: id, signal: current === 'liked' ? null : 'like' })
+                  },
+                  onDislike: (id) => {
+                    const current = stateFor(id)
+                    setFeedback.mutate({ tmdbId: id, signal: current === 'disliked' ? null : 'dislike' })
+                  },
+                }}
+                ai={userKey.hasKey ? { enabled: ai.enabled, onToggle: ai.toggle } : undefined}
               />
             </div>
           )}

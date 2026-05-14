@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAuth } from '../../lib/auth'
 import { DiscordNotifications } from './DiscordNotifications'
+import { ApiKeySettings } from './ApiKeySettings'
 import './UserMenu.css'
 
 // Trigger pill in the top-right cluster + dropdown panel for the
@@ -128,6 +129,9 @@ export function UserMenu() {
               <DiscordNotifications onClose={() => setOpen(false)} />
             </>
           )}
+
+          <hr className="user-menu__divider" />
+          <ApiKeySettings />
 
           <hr className="user-menu__divider" />
           <button
