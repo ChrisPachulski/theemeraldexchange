@@ -219,14 +219,21 @@
   font-weight: var(--w-body);
   letter-spacing: 0;
   text-transform: none;
-  color: var(--text-subtle);
-  text-shadow: none;
+  color: var(--emerald);
+  text-shadow: 0 0 8px oklch(0.62 0.180 158 / 0.4);
   margin-left: auto;
+  animation: trending-loading-hint 1.6s ease-in-out infinite;
+}
+
+@keyframes trending-loading-hint {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .trending__card--skeleton,
-  .trending__loading-dot {
+  .trending__loading-dot,
+  .trending__loading-hint {
     animation: none;
   }
   .trending__card--skeleton {
