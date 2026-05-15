@@ -23,7 +23,9 @@ vi.mock('@anthropic-ai/sdk', () => {
         lastCreateArgs.value = args
         if (fakeResponse.value) return fakeResponse.value
         return {
-          content: [{ type: 'text', text: JSON.stringify({ picks: [] }) }],
+          content: [
+            { type: 'tool_use', id: 'tu_default', name: 'submit_recommendations', input: { picks: [] } },
+          ],
           usage: { input_tokens: 1, output_tokens: 1 },
         }
       },
@@ -217,9 +219,10 @@ describe('suggestions route — prompt shape', () => {
 
   })
 
-  it('falls back to trending and logs when all picks get dropped post-filter', async () => {
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+  it('falls back to trending when every Claude pick is filtered out (after retry)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
+    let claudeCallCount = 0
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: unknown) => {
@@ -233,7 +236,7 @@ describe('suggestions route — prompt shape', () => {
           return new Response(JSON.stringify(sonarrSeries), { status: 200 })
         }
         if (url.includes('themoviedb.org/3/search/tv')) {
-          // Resolve Claude's pick to a library-overlapping id (1001 = Sons of Anarchy in fixture)
+          // Always resolve to a library-overlap id so every pick fails validation.
           return new Response(
             JSON.stringify({
               results: [
@@ -247,9 +250,16 @@ describe('suggestions route — prompt shape', () => {
       }),
     )
     _setTmdbApiKeyForTests('test-key')
+    // Both initial + retry return a single pick that resolves to a
+    // library duplicate, so the route falls through to trending (also empty in this stub).
     fakeResponse.value = {
       content: [
-        { type: 'text', text: JSON.stringify({ picks: [{ title: 'Sons of Anarchy', year: 2008 }] }) },
+        {
+          type: 'tool_use',
+          id: 'tu_' + ++claudeCallCount,
+          name: 'submit_recommendations',
+          input: { picks: [{ title: 'Sons of Anarchy', year: 2008 }] },
+        },
       ],
       usage: { input_tokens: 1, output_tokens: 1 },
     }
@@ -264,18 +274,21 @@ describe('suggestions route — prompt shape', () => {
     const body = (await r.json()) as { source: string; items: unknown[] }
     expect(body.source).toBe('personalized_empty_trending_fallback')
     expect(body.items).toEqual([]) // TMDB trending stub returns []
-    const call = errSpy.mock.calls.find((c) => String(c[0]).includes('Personalized strip would be empty'))
+    const call = warnSpy.mock.calls.find((c) =>
+      String(c[0]).includes('Personalized picks short of target'),
+    )
     expect(call).toBeDefined()
-    expect(call?.[1]).toMatchObject({ droppedAsLibrary: 1, picksReturned: 1 })
+    expect(call?.[1]).toMatchObject({ accepted: 0, retryAttempted: true })
 
-    errSpy.mockRestore()
+    warnSpy.mockRestore()
   })
 
-  it('logs an error and returns empty picks on unparseable JSON', async () => {
+  it('logs an error and falls back to trending when Claude returns no tool_use', async () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     stubFetchForSonarr()
+    // No tool_use block — should hit the readToolUse error path and treat picks as empty.
     fakeResponse.value = {
-      content: [{ type: 'text', text: 'this is not json {' }],
+      content: [{ type: 'text', text: 'whoops, no tool here' }],
       usage: { input_tokens: 1, output_tokens: 1 },
     }
 
@@ -286,11 +299,29 @@ describe('suggestions route — prompt shape', () => {
       },
     })
     expect(r.status).toBe(200)
-    const body = (await r.json()) as { items: unknown[] }
+    const body = (await r.json()) as { source: string; items: unknown[] }
+    expect(body.source).toBe('personalized_empty_trending_fallback')
     expect(body.items).toEqual([])
-    const call = errSpy.mock.calls.find((c) => String(c[0]).includes('unparseable JSON'))
+    const call = errSpy.mock.calls.find((c) => String(c[0]).includes('no tool_use block'))
     expect(call).toBeDefined()
     errSpy.mockRestore()
+  })
+
+  it('uses tool_choice to force submit_recommendations', async () => {
+    stubFetchForSonarr()
+    const r = await appUnderTest().request('/tv', {
+      headers: {
+        Cookie: await userCookie(),
+        'X-Anthropic-Api-Key': 'sk-ant-test-fakekey',
+      },
+    })
+    expect(r.status).toBe(200)
+    const args = lastCreateArgs.value as {
+      tools?: Array<{ name: string }>
+      tool_choice?: { type: string; name: string }
+    }
+    expect(args.tools?.[0]?.name).toBe('submit_recommendations')
+    expect(args.tool_choice).toEqual({ type: 'tool', name: 'submit_recommendations' })
   })
 
   it('emits user-likes block after the cached prefix when titles are present', async () => {

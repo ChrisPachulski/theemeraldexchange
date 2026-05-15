@@ -381,104 +381,173 @@ async function tmdbTrending(kind: 'movie' | 'tv'): Promise<SuggestionItem[]> {
   })
 }
 
-const PICK_SCHEMA = {
-  type: 'object' as const,
-  properties: {
-    picks: {
-      type: 'array' as const,
-      description: 'Ordered list of recommendations, most-likely-loved first.',
-      items: {
-        type: 'object' as const,
-        properties: {
-          title: { type: 'string' as const },
-          year: { type: 'integer' as const },
-          reason: { type: 'string' as const },
+// Tool-use enforced output. Claude is forced to call this tool, which
+// owns the exact shape of valid output. The tool definition is also
+// where the model is reminded what NOT to submit — duplicate guidance
+// to the system prompt because the tool's `description` is rendered
+// in close proximity to the call site at inference time.
+const SUBMIT_TOOL = {
+  name: 'submit_recommendations',
+  description:
+    'Submit the ranked list of recommended titles. Each entry MUST be a real, released title that is NOT in the household library and NOT on the NEVER SUGGEST list. Do not include reasoning. Title + year only.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      picks: {
+        type: 'array' as const,
+        description: 'Ordered list, most-likely-loved first.',
+        items: {
+          type: 'object' as const,
+          properties: {
+            title: { type: 'string' as const },
+            year: { type: 'integer' as const },
+          },
+          required: ['title'],
+          additionalProperties: false,
         },
-        required: ['title'],
-        additionalProperties: false,
       },
     },
+    required: ['picks'],
+    additionalProperties: false,
   },
-  required: ['picks'],
-  additionalProperties: false,
 }
 
-type ClaudeCallResult = {
+type UsageBlock = {
+  inputTokens?: number
+  outputTokens?: number
+  cacheCreationInputTokens?: number
+  cacheReadInputTokens?: number
+}
+
+type ToolUseBlock = {
+  type: 'tool_use'
+  id: string
+  name: string
+  input: { picks?: ClaudePick[] }
+}
+
+type ClaudeResponse = {
+  toolUse: ToolUseBlock | null
   picks: ClaudePick[]
-  usage: {
-    inputTokens?: number
-    outputTokens?: number
-    cacheCreationInputTokens?: number
-    cacheReadInputTokens?: number
+  usage: UsageBlock
+}
+
+function extractUsage(usage: Anthropic.Messages.Usage | undefined): UsageBlock {
+  return {
+    inputTokens: usage?.input_tokens,
+    outputTokens: usage?.output_tokens,
+    cacheCreationInputTokens: usage?.cache_creation_input_tokens ?? undefined,
+    cacheReadInputTokens: usage?.cache_read_input_tokens ?? undefined,
   }
 }
 
-async function callClaude(
+function readToolUse(response: Anthropic.Messages.Message): ClaudeResponse {
+  const usage = extractUsage(response.usage)
+  const tu = response.content.find(
+    (b): b is Anthropic.Messages.ToolUseBlock => b.type === 'tool_use',
+  )
+  if (!tu) {
+    console.error(
+      '[suggestions] Claude returned no tool_use block; content types:',
+      response.content.map((b) => b.type).join(','),
+    )
+    return { toolUse: null, picks: [], usage }
+  }
+  const input = tu.input as { picks?: ClaudePick[] }
+  const picks = Array.isArray(input.picks) ? input.picks : []
+  return {
+    toolUse: { type: 'tool_use', id: tu.id, name: tu.name, input },
+    picks,
+    usage,
+  }
+}
+
+// System message stack shared between initial call and retry. Library
+// + rejections live in the cached prefix; user-likes vary per caller.
+function systemStack(libraryBlock: string, userLikesBlock: string): Array<{
+  type: 'text'
+  text: string
+  cache_control?: { type: 'ephemeral' }
+}> {
+  return [
+    { type: 'text', text: SYSTEM_PROMPT },
+    { type: 'text', text: libraryBlock, cache_control: { type: 'ephemeral' } },
+    ...(userLikesBlock ? [{ type: 'text' as const, text: userLikesBlock }] : []),
+  ]
+}
+
+function userAsk(kind: 'movie' | 'tv', n: number): string {
+  return `Recommend ${n} ${kind === 'movie' ? 'movies' : 'TV shows'} for this household by calling submit_recommendations. Mirror the library's genre distribution — return a proportional mix across drama, comedy, action, animation, documentary, etc. Weight toward the user's explicitly LIKED titles when present. Strictly avoid the household's NEVER SUGGEST list and stylistically near matches.`
+}
+
+async function callClaudeInitial(
   client: Anthropic,
   kind: 'movie' | 'tv',
   libraryBlock: string,
   userLikesBlock: string,
-): Promise<ClaudeCallResult> {
+): Promise<ClaudeResponse> {
   const response = await client.messages.create({
     model: MODEL,
-    max_tokens: 4096,
-    // 0.4 keeps Claude near the high-probability "obvious adjacent
-    // picks" the system prompt asks for. Earlier 0.8 combined with
-    // long-tail framing pushed the model into obscure-genre territory
-    // (heavily anime against a 75-Animation-tagged but otherwise
-    // wide-ranging library — see PR #63).
+    max_tokens: 1024,
     temperature: 0.4,
-    system: [
-      // System prompt — frozen, always cacheable.
-      { type: 'text', text: SYSTEM_PROMPT },
-      // Library + household rejections — same for all household
-      // members, cached once per ~5min TTL window.
-      {
-        type: 'text',
-        text: libraryBlock,
-        cache_control: { type: 'ephemeral' },
-      },
-      // Per-user likes — small, varies per caller, sits AFTER the
-      // cached prefix so it doesn't invalidate the library cache.
-      ...(userLikesBlock ? [{ type: 'text' as const, text: userLikesBlock }] : []),
-    ],
+    system: systemStack(libraryBlock, userLikesBlock),
+    tools: [SUBMIT_TOOL],
+    tool_choice: { type: 'tool', name: SUBMIT_TOOL.name },
+    messages: [{ role: 'user', content: userAsk(kind, CLAUDE_OVERFETCH) }],
+  })
+  return readToolUse(response)
+}
+
+async function callClaudeRetry(
+  client: Anthropic,
+  kind: 'movie' | 'tv',
+  libraryBlock: string,
+  userLikesBlock: string,
+  prior: ToolUseBlock,
+  rejectedPicks: Array<{ title: string; reason: string }>,
+  nNeeded: number,
+): Promise<ClaudeResponse> {
+  const rejectedSummary = rejectedPicks
+    .slice(0, 15)
+    .map((r) => `  - "${r.title}" — ${r.reason}`)
+    .join('\n')
+  const toolResultText =
+    `${rejectedPicks.length} of your picks were rejected by the household-safety validator:\n${rejectedSummary}\n\n` +
+    `Call submit_recommendations again with ${nNeeded} REPLACEMENT picks that don't conflict.`
+  const response = await client.messages.create({
+    model: MODEL,
+    max_tokens: 1024,
+    temperature: 0.4,
+    system: systemStack(libraryBlock, userLikesBlock),
+    tools: [SUBMIT_TOOL],
+    tool_choice: { type: 'tool', name: SUBMIT_TOOL.name },
     messages: [
+      { role: 'user', content: userAsk(kind, CLAUDE_OVERFETCH) },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: prior.id, name: prior.name, input: prior.input },
+        ],
+      },
       {
         role: 'user',
-        content: `Recommend ${CLAUDE_OVERFETCH} ${kind === 'movie' ? 'movies' : 'TV shows'} for this household. Mirror the library's genre distribution — return a proportional mix across drama, comedy, action, animation, documentary, etc., based on what they actually have. Weight toward the user's explicitly LIKED titles when present, and strictly avoid the household's NEVER SUGGEST list (and stylistically near matches). Don't over-fit to a single tag.`,
+        content: [
+          { type: 'tool_result', tool_use_id: prior.id, content: toolResultText },
+        ],
       },
     ],
-    output_config: {
-      format: { type: 'json_schema', schema: PICK_SCHEMA },
-    },
   })
+  return readToolUse(response)
+}
 
-  const usage = {
-    inputTokens: response.usage?.input_tokens,
-    outputTokens: response.usage?.output_tokens,
-    cacheCreationInputTokens: response.usage?.cache_creation_input_tokens ?? undefined,
-    cacheReadInputTokens: response.usage?.cache_read_input_tokens ?? undefined,
-  }
-
-  const block = response.content.find((b) => b.type === 'text')
-  if (!block || block.type !== 'text') {
-    console.error(
-      '[suggestions] Claude returned no text block; content types:',
-      response.content.map((b) => b.type).join(','),
-    )
-    return { picks: [], usage }
-  }
-  try {
-    const parsed = JSON.parse(block.text) as { picks?: ClaudePick[] }
-    return { picks: Array.isArray(parsed.picks) ? parsed.picks : [], usage }
-  } catch (e) {
-    console.error(
-      '[suggestions] Claude returned unparseable JSON:',
-      e instanceof Error ? e.message : String(e),
-      '\n  body head:',
-      block.text.slice(0, 200),
-    )
-    return { picks: [], usage }
+function mergeUsage(a: UsageBlock, b: UsageBlock): UsageBlock {
+  return {
+    inputTokens: (a.inputTokens ?? 0) + (b.inputTokens ?? 0),
+    outputTokens: (a.outputTokens ?? 0) + (b.outputTokens ?? 0),
+    cacheCreationInputTokens:
+      (a.cacheCreationInputTokens ?? 0) + (b.cacheCreationInputTokens ?? 0) || undefined,
+    cacheReadInputTokens:
+      (a.cacheReadInputTokens ?? 0) + (b.cacheReadInputTokens ?? 0) || undefined,
   }
 }
 
@@ -567,20 +636,76 @@ suggestions.get('/:type', async (c) => {
   const libraryBlock = buildLibraryBlock(type, library, kindRejectionsTitled)
   const userLikesBlock = buildUserLikesBlock(liked)
 
-  let result: ClaudeCallResult
+  // Tool-use enforced pipeline:
+  //   1. Claude is forced to call submit_recommendations with N picks
+  //   2. We TMDB-resolve + validate each pick (id + title against
+  //      library and rejections)
+  //   3. If we don't have TARGET_COUNT survivors, re-prompt Claude
+  //      with a tool_result describing exactly which picks were
+  //      rejected and why — single retry, bounded cost
+  //   4. If still short, fill from TMDB trending (also filtered)
+  //
+  // The id-set post-filter remains as defense-in-depth but is no
+  // longer load-bearing; Claude is told exactly what failed and
+  // self-corrects on the retry pass.
+
+  const validate = async (
+    picks: ClaudePick[],
+  ): Promise<{
+    accepted: SuggestionItem[]
+    rejectedForRetry: Array<{ title: string; reason: string }>
+    counters: { lookupNulls: number; droppedAsDedupe: number; droppedAsRejected: number; droppedAsLibrary: number }
+  }> => {
+    const lookups = await Promise.all(
+      picks.map((p) => tmdbLookup(type, p.title, p.year).catch(() => null)),
+    )
+    const accepted: SuggestionItem[] = []
+    const rejectedForRetry: Array<{ title: string; reason: string }> = []
+    const counters = { lookupNulls: 0, droppedAsDedupe: 0, droppedAsRejected: 0, droppedAsLibrary: 0 }
+    const seen = new Set<number>()
+    for (let i = 0; i < lookups.length; i++) {
+      const r = lookups[i]
+      const original = picks[i].title
+      if (!r) {
+        counters.lookupNulls++
+        rejectedForRetry.push({ title: original, reason: 'TMDB lookup failed — title may be misspelled' })
+        continue
+      }
+      if (seen.has(r.id)) {
+        counters.droppedAsDedupe++
+        rejectedForRetry.push({ title: original, reason: 'duplicate of an earlier pick in this batch' })
+        continue
+      }
+      if (rejected.has(r.id) || titleMatches(r.title, rejectedTitles)) {
+        counters.droppedAsRejected++
+        rejectedForRetry.push({ title: original, reason: 'on the household NEVER SUGGEST list' })
+        continue
+      }
+      if (libraryTmdbIds.has(r.id) || titleMatches(r.title, libraryTitles)) {
+        counters.droppedAsLibrary++
+        rejectedForRetry.push({ title: original, reason: 'already in the household library' })
+        console.warn('[suggestions] library duplicate dropped:', {
+          kind: type,
+          pickId: r.id,
+          pickTitle: r.title,
+          normalized: { full: normalizeTitle(r.title), base: normalizeTitleBase(r.title) },
+          matchedById: libraryTmdbIds.has(r.id),
+          matchedByTitle: titleMatches(r.title, libraryTitles),
+        })
+        continue
+      }
+      seen.add(r.id)
+      accepted.push(r)
+      if (accepted.length >= TARGET_COUNT) break
+    }
+    return { accepted, rejectedForRetry, counters }
+  }
+
+  let totalUsage: UsageBlock = {}
+  let r1: ClaudeResponse
   try {
-    result = await callClaude(client, type, libraryBlock, userLikesBlock)
-    // Successful call (whether or not the model returned picks) —
-    // record token spend against the caller.
-    await appendUsageEvent({
-      sub: session.sub,
-      username: session.username,
-      type: 'claude_call',
-      model: MODEL,
-      kind: type,
-      ...result.usage,
-      costCents: computeCostCents(result.usage),
-    })
+    r1 = await callClaudeInitial(client, type, libraryBlock, userLikesBlock)
+    totalUsage = mergeUsage(totalUsage, r1.usage)
   } catch (e) {
     console.error('[suggestions] Claude call failed:', e)
     await appendUsageEvent({
@@ -594,65 +719,80 @@ suggestions.get('/:type', async (c) => {
     const trending = filterHouseholdSafe(await tmdbTrending(type))
     return c.json({ source: 'trending_fallback', items: trending.slice(0, TARGET_COUNT) })
   }
-  const picks = result.picks
 
-  // Look each pick up in TMDB. Run in parallel, dedupe by id, filter
-  // anything already-library or already-rejected. With the rejection
-  // list now fully titled in the prompt, post-filter drops should be
-  // near zero on the happy path — when they aren't, log loudly so
-  // the imbalance shows up in docker logs.
-  const lookups = await Promise.all(
-    picks.map((p) => tmdbLookup(type, p.title, p.year).catch(() => null)),
-  )
-  let lookupNulls = 0
-  let droppedAsDedupe = 0
-  let droppedAsRejected = 0
-  let droppedAsLibrary = 0
-  const seen = new Set<number>()
-  const items: SuggestionItem[] = []
-  for (const r of lookups) {
-    if (!r) { lookupNulls++; continue }
-    if (seen.has(r.id)) { droppedAsDedupe++; continue }
-    if (rejected.has(r.id) || titleMatches(r.title, rejectedTitles)) { droppedAsRejected++; continue }
-    if (libraryTmdbIds.has(r.id) || titleMatches(r.title, libraryTitles)) {
-      droppedAsLibrary++
-      console.warn('[suggestions] library duplicate dropped:', {
-        kind: type,
-        pickId: r.id,
-        pickTitle: r.title,
-        normalized: { full: normalizeTitle(r.title), base: normalizeTitleBase(r.title) },
-        matchedById: libraryTmdbIds.has(r.id),
-        matchedByTitle: titleMatches(r.title, libraryTitles),
-      })
-      continue
+  const v1 = await validate(r1.picks)
+  let accepted = v1.accepted
+  let lastCounters = v1.counters
+  let triedRetry = false
+
+  // Retry once if Claude returned a tool_use but the survivors fell
+  // short of the target. Skip the retry when accepted is healthy — no
+  // point burning another call.
+  if (r1.toolUse && accepted.length < TARGET_COUNT && v1.rejectedForRetry.length > 0) {
+    triedRetry = true
+    const nNeeded = Math.min(CLAUDE_OVERFETCH, TARGET_COUNT - accepted.length + 4)
+    try {
+      const r2 = await callClaudeRetry(
+        client,
+        type,
+        libraryBlock,
+        userLikesBlock,
+        r1.toolUse,
+        v1.rejectedForRetry,
+        nNeeded,
+      )
+      totalUsage = mergeUsage(totalUsage, r2.usage)
+      const v2 = await validate(r2.picks)
+      lastCounters = v2.counters
+      const acceptedIds = new Set(accepted.map((a) => a.id))
+      for (const item of v2.accepted) {
+        if (!acceptedIds.has(item.id)) {
+          accepted.push(item)
+          acceptedIds.add(item.id)
+          if (accepted.length >= TARGET_COUNT) break
+        }
+      }
+    } catch (e) {
+      console.error('[suggestions] Claude retry failed:', e)
+      // Fall through with whatever we accepted from r1.
     }
-    seen.add(r.id)
-    items.push(r)
-    if (items.length >= TARGET_COUNT) break
   }
 
-  if (items.length === 0) {
-    console.error('[suggestions] Personalized strip would be empty — falling back to TMDB trending', {
+  await appendUsageEvent({
+    sub: session.sub,
+    username: session.username,
+    type: 'claude_call',
+    model: MODEL,
+    kind: type,
+    ...totalUsage,
+    costCents: computeCostCents(totalUsage),
+  })
+
+  // Still short of target after the retry — fill from trending so the
+  // user always sees a full strip. Don't dedupe-overlap with accepted
+  // (different ids by construction); only overlap-check via the
+  // household-safe filter.
+  if (accepted.length < TARGET_COUNT) {
+    console.warn('[suggestions] Personalized picks short of target — filling from trending', {
       kind: type,
       sub: session.sub,
       libraryCount: library.length,
       rejectionCount: kindRejectionsTitled.length,
       titledRejections: kindRejectionsTitled.filter((r) => r.title).length,
-      picksReturned: picks.length,
-      lookupNulls,
-      droppedAsDedupe,
-      droppedAsRejected,
-      droppedAsLibrary,
+      accepted: accepted.length,
+      retryAttempted: triedRetry,
+      lastCounters,
     })
-    const trending = filterHouseholdSafe(await tmdbTrending(type))
-    // Source label flags this so future diagnosis (and the SPA, if we
-    // ever want to surface "we billed but Claude gave us nothing") can
-    // distinguish it from a normal cold-start trending response.
-    return c.json({
-      source: 'personalized_empty_trending_fallback',
-      items: trending.slice(0, TARGET_COUNT),
-    })
+    const fillIds = new Set(accepted.map((a) => a.id))
+    const trending = filterHouseholdSafe(await tmdbTrending(type)).filter(
+      (t) => !fillIds.has(t.id),
+    )
+    const filled = [...accepted, ...trending].slice(0, TARGET_COUNT)
+    if (accepted.length === 0) {
+      return c.json({ source: 'personalized_empty_trending_fallback', items: filled })
+    }
+    return c.json({ source: 'personalized_filled', items: filled })
   }
 
-  return c.json({ source: 'personalized', items })
+  return c.json({ source: 'personalized', items: accepted.slice(0, TARGET_COUNT) })
 })
