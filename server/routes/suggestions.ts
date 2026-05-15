@@ -69,15 +69,43 @@ type SonarrSeries = { title: string; year?: number; tmdbId?: number; genres?: st
 type RadarrMovie = { title: string; year?: number; tmdbId?: number; genres?: string[] }
 
 async function fetchSonarrLibrary(): Promise<SonarrSeries[]> {
-  const r = await sonarrFetch('/api/v3/series', { method: 'GET' })
-  if (!r.ok) return []
-  return (await r.json()) as SonarrSeries[]
+  try {
+    const r = await sonarrFetch('/api/v3/series', { method: 'GET' })
+    if (!r.ok) {
+      const body = await r.text().catch(() => '')
+      console.error('[suggestions] Sonarr /api/v3/series returned non-ok:', r.status, body.slice(0, 200))
+      return []
+    }
+    const data = (await r.json()) as SonarrSeries[]
+    if (!Array.isArray(data)) {
+      console.error('[suggestions] Sonarr /api/v3/series returned non-array')
+      return []
+    }
+    return data
+  } catch (e) {
+    console.error('[suggestions] Sonarr fetch threw:', e instanceof Error ? e.message : String(e))
+    return []
+  }
 }
 
 async function fetchRadarrLibrary(): Promise<RadarrMovie[]> {
-  const r = await radarrFetch('/api/v3/movie', { method: 'GET' })
-  if (!r.ok) return []
-  return (await r.json()) as RadarrMovie[]
+  try {
+    const r = await radarrFetch('/api/v3/movie', { method: 'GET' })
+    if (!r.ok) {
+      const body = await r.text().catch(() => '')
+      console.error('[suggestions] Radarr /api/v3/movie returned non-ok:', r.status, body.slice(0, 200))
+      return []
+    }
+    const data = (await r.json()) as RadarrMovie[]
+    if (!Array.isArray(data)) {
+      console.error('[suggestions] Radarr /api/v3/movie returned non-array')
+      return []
+    }
+    return data
+  } catch (e) {
+    console.error('[suggestions] Radarr fetch threw:', e instanceof Error ? e.message : String(e))
+    return []
+  }
 }
 
 // Compact library line: "Title (Year) — genre1, genre2". Genres give
@@ -597,15 +625,26 @@ suggestions.get('/:type', async (c) => {
     )
   }
 
+  const diag = (extra: Record<string, unknown> = {}) => ({
+    libraryCount: library.length,
+    rejectionCount: kindRejections.length,
+    ...extra,
+  })
+
   if (force === 'trending') {
     const trending = filterHouseholdSafe(await tmdbTrending(type))
-    return c.json({ source: 'trending', items: trending.slice(0, TARGET_COUNT) })
+    return c.json({ source: 'trending', items: trending.slice(0, TARGET_COUNT), _diag: diag() })
   }
 
   // Cold start: library too small for meaningful taste signal.
   if (library.length < COLD_START_THRESHOLD) {
+    console.warn('[suggestions] Cold-start path: library too small to filter', diag())
     const trending = filterHouseholdSafe(await tmdbTrending(type))
-    return c.json({ source: 'trending', items: trending.slice(0, TARGET_COUNT) })
+    return c.json({
+      source: 'trending',
+      items: trending.slice(0, TARGET_COUNT),
+      _diag: diag({ reason: 'library_below_threshold' }),
+    })
   }
 
   // BYO key model — caller must supply their Anthropic key in the
@@ -717,7 +756,11 @@ suggestions.get('/:type', async (c) => {
       error: e instanceof Error ? e.message : String(e),
     })
     const trending = filterHouseholdSafe(await tmdbTrending(type))
-    return c.json({ source: 'trending_fallback', items: trending.slice(0, TARGET_COUNT) })
+    return c.json({
+      source: 'trending_fallback',
+      items: trending.slice(0, TARGET_COUNT),
+      _diag: diag({ reason: 'claude_threw' }),
+    })
   }
 
   const v1 = await validate(r1.picks)
@@ -789,10 +832,22 @@ suggestions.get('/:type', async (c) => {
     )
     const filled = [...accepted, ...trending].slice(0, TARGET_COUNT)
     if (accepted.length === 0) {
-      return c.json({ source: 'personalized_empty_trending_fallback', items: filled })
+      return c.json({
+        source: 'personalized_empty_trending_fallback',
+        items: filled,
+        _diag: diag({ accepted: 0, retryAttempted: triedRetry, lastCounters }),
+      })
     }
-    return c.json({ source: 'personalized_filled', items: filled })
+    return c.json({
+      source: 'personalized_filled',
+      items: filled,
+      _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, lastCounters }),
+    })
   }
 
-  return c.json({ source: 'personalized', items: accepted.slice(0, TARGET_COUNT) })
+  return c.json({
+    source: 'personalized',
+    items: accepted.slice(0, TARGET_COUNT),
+    _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry }),
+  })
 })

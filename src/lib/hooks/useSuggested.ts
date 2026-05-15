@@ -11,7 +11,12 @@ import type { TrendingItem } from './useTrending'
 // per the product spec. Variety comes from temperature on the backend
 // plus a prompt instruction not to return identical lists.
 
-type SuggestionSource = 'personalized' | 'trending' | 'trending_fallback'
+type SuggestionSource =
+  | 'personalized'
+  | 'personalized_filled'
+  | 'personalized_empty_trending_fallback'
+  | 'trending'
+  | 'trending_fallback'
 
 type SuggestionsResponse = {
   source: SuggestionSource

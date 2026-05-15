@@ -149,10 +149,9 @@ export function TvTab() {
     () => (suggested.data?.items ?? []).filter((t) => !libraryByTmdbForTrending.has(t.id)),
     [suggested.data, libraryByTmdbForTrending],
   )
-  const trendingLabel =
-    suggested.data?.source === 'personalized'
-      ? 'Picked for you'
-      : 'Trending this week'
+  const trendingLabel = suggested.data?.source?.startsWith('personalized')
+    ? 'Picked for you'
+    : 'Trending this week'
   const handleTrendingPick = async (tmdbId: number) => {
     setTrendingPending(tmdbId)
     try {
