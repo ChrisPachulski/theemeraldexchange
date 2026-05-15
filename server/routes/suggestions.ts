@@ -512,18 +512,30 @@ suggestions.get('/:type', async (c) => {
   const libraryTitles = titleSetFrom(library)
   const rejectedTitles = titleSetFrom(kindRejections)
 
-  if (force === 'trending') {
-    const trending = (await tmdbTrending(type)).filter(
-      (i) => !rejected.has(i.id) && !libraryTmdbIds.has(i.id),
+  // Single household-aware filter used by EVERY return path —
+  // personalized picks, cold-start trending, force=trending, claude-
+  // error fallback, and the auto-fallback when picks all dropped.
+  // Without this, trending-source paths used id-only filtering and
+  // any library entry lacking a tmdbId slipped through as a
+  // duplicate (e.g. A Knight of the Seven Kingdoms).
+  function filterHouseholdSafe(items: SuggestionItem[]): SuggestionItem[] {
+    return items.filter(
+      (i) =>
+        !rejected.has(i.id) &&
+        !libraryTmdbIds.has(i.id) &&
+        !titleMatches(i.title, rejectedTitles) &&
+        !titleMatches(i.title, libraryTitles),
     )
+  }
+
+  if (force === 'trending') {
+    const trending = filterHouseholdSafe(await tmdbTrending(type))
     return c.json({ source: 'trending', items: trending.slice(0, TARGET_COUNT) })
   }
 
   // Cold start: library too small for meaningful taste signal.
   if (library.length < COLD_START_THRESHOLD) {
-    const trending = (await tmdbTrending(type)).filter(
-      (i) => !rejected.has(i.id) && !libraryTmdbIds.has(i.id),
-    )
+    const trending = filterHouseholdSafe(await tmdbTrending(type))
     return c.json({ source: 'trending', items: trending.slice(0, TARGET_COUNT) })
   }
 
@@ -579,9 +591,7 @@ suggestions.get('/:type', async (c) => {
       kind: type,
       error: e instanceof Error ? e.message : String(e),
     })
-    const trending = (await tmdbTrending(type)).filter(
-      (i) => !rejected.has(i.id) && !libraryTmdbIds.has(i.id),
-    )
+    const trending = filterHouseholdSafe(await tmdbTrending(type))
     return c.json({ source: 'trending_fallback', items: trending.slice(0, TARGET_COUNT) })
   }
   const picks = result.picks
@@ -604,7 +614,18 @@ suggestions.get('/:type', async (c) => {
     if (!r) { lookupNulls++; continue }
     if (seen.has(r.id)) { droppedAsDedupe++; continue }
     if (rejected.has(r.id) || titleMatches(r.title, rejectedTitles)) { droppedAsRejected++; continue }
-    if (libraryTmdbIds.has(r.id) || titleMatches(r.title, libraryTitles)) { droppedAsLibrary++; continue }
+    if (libraryTmdbIds.has(r.id) || titleMatches(r.title, libraryTitles)) {
+      droppedAsLibrary++
+      console.warn('[suggestions] library duplicate dropped:', {
+        kind: type,
+        pickId: r.id,
+        pickTitle: r.title,
+        normalized: { full: normalizeTitle(r.title), base: normalizeTitleBase(r.title) },
+        matchedById: libraryTmdbIds.has(r.id),
+        matchedByTitle: titleMatches(r.title, libraryTitles),
+      })
+      continue
+    }
     seen.add(r.id)
     items.push(r)
     if (items.length >= TARGET_COUNT) break
@@ -623,9 +644,7 @@ suggestions.get('/:type', async (c) => {
       droppedAsRejected,
       droppedAsLibrary,
     })
-    const trending = (await tmdbTrending(type)).filter(
-      (i) => !rejected.has(i.id) && !libraryTmdbIds.has(i.id),
-    )
+    const trending = filterHouseholdSafe(await tmdbTrending(type))
     // Source label flags this so future diagnosis (and the SPA, if we
     // ever want to surface "we billed but Claude gave us nothing") can
     // distinguish it from a normal cold-start trending response.
