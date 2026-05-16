@@ -248,8 +248,14 @@ function buildUserLikesBlock(liked: Array<{ id: number; title: string }>): strin
 // times out. Cap how many we resolve per call so the route stays
 // responsive — the rest get fallback bullets this turn and upgrade
 // across subsequent refreshes.
-const BACKFILL_MAX_PER_CALL = 30
+//
+// TMDB rate limit is ~40 req / 10s on the free tier. Each suggestions
+// call also burns ~22 pick-lookups, so backfill needs to leave room
+// or call 2 (cache cold for lookups) gets 429-throttled and returns
+// 1–4 items instead of 20. 10 backfill + 22 lookups = 32, fits.
+const BACKFILL_MAX_PER_CALL = 10
 const TMDB_TIMEOUT_MS = 2500
+const TRENDING_CACHE_TTL_MS = 60_000
 
 async function tmdbTitleById(kind: 'movie' | 'tv', id: number): Promise<string | null> {
   if (!_tmdbKey) return null
@@ -259,7 +265,12 @@ async function tmdbTitleById(kind: 'movie' | 'tv', id: number): Promise<string |
   const timer = setTimeout(() => controller.abort(), TMDB_TIMEOUT_MS)
   try {
     const r = await fetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal })
-    if (!r.ok) return null
+    if (!r.ok) {
+      if (r.status === 429) {
+        console.error('[suggestions] TMDB rate-limited on titleById; retry-after:', r.headers.get('retry-after'))
+      }
+      return null
+    }
     const data = (await r.json()) as { title?: string; name?: string }
     return data.title || data.name || null
   } catch {
@@ -339,7 +350,12 @@ async function tmdbLookup(
   } finally {
     clearTimeout(timer)
   }
-  if (!r.ok) return null
+  if (!r.ok) {
+    if (r.status === 429) {
+      console.error('[suggestions] TMDB rate-limited on /search; retry-after:', r.headers.get('retry-after'))
+    }
+    return null
+  }
   const data = (await r.json()) as {
     results?: Array<{
       id: number
@@ -373,8 +389,18 @@ async function tmdbLookup(
 // trending tail thins out quickly past page 5 anyway.
 const TRENDING_MAX_PAGES = 5
 
+// Short-lived in-memory cache for the TMDB trending response. "Trending
+// this week" doesn't churn second-to-second, and refetching ~100 rows
+// on every refresh contributes to the TMDB rate-limit problem. 60s
+// TTL is well under the time it takes the trending feed to meaningfully
+// shift, and is reset for tests by _setTmdbApiKeyForTests().
+const trendingCache: { [K in 'movie' | 'tv']?: { items: SuggestionItem[]; expiresAt: number } } = {}
+
 async function tmdbTrending(kind: 'movie' | 'tv'): Promise<SuggestionItem[]> {
   if (!_tmdbKey) return []
+  const now = Date.now()
+  const cached = trendingCache[kind]
+  if (cached && cached.expiresAt > now) return cached.items.slice()
   type TmdbRow = {
     id: number
     title?: string
@@ -390,13 +416,20 @@ async function tmdbTrending(kind: 'movie' | 'tv'): Promise<SuggestionItem[]> {
     url.searchParams.set('api_key', _tmdbKey)
     url.searchParams.set('page', String(page))
     const r = await fetch(url, { headers: { Accept: 'application/json' } })
-    if (!r.ok) break
+    if (!r.ok) {
+      if (r.status === 429) {
+        console.error('[suggestions] TMDB rate-limited on /trending; retry-after:', r.headers.get('retry-after'))
+      } else {
+        console.error('[suggestions] TMDB /trending non-ok:', r.status)
+      }
+      break
+    }
     const data = (await r.json()) as { results?: TmdbRow[] }
     const rows = data.results ?? []
     all.push(...rows)
     if (rows.length < 20) break // TMDB returned a short page, no more to fetch
   }
-  return all.map((r) => {
+  const items: SuggestionItem[] = all.map((r) => {
     const date = r.release_date || r.first_air_date || ''
     const y = date ? Number(date.slice(0, 4)) : undefined
     return {
@@ -407,6 +440,8 @@ async function tmdbTrending(kind: 'movie' | 'tv'): Promise<SuggestionItem[]> {
       year: Number.isFinite(y) ? y : undefined,
     }
   })
+  trendingCache[kind] = { items, expiresAt: now + TRENDING_CACHE_TTL_MS }
+  return items.slice()
 }
 
 // Tool-use enforced output. Claude is forced to call this tool, which
@@ -695,16 +730,38 @@ suggestions.get('/:type', async (c) => {
     rejectedForRetry: Array<{ title: string; reason: string }>
     counters: { lookupNulls: number; droppedAsDedupe: number; droppedAsRejected: number; droppedAsLibrary: number }
   }> => {
-    const lookups = await Promise.all(
-      picks.map((p) => tmdbLookup(type, p.title, p.year).catch(() => null)),
-    )
     const accepted: SuggestionItem[] = []
     const rejectedForRetry: Array<{ title: string; reason: string }> = []
     const counters = { lookupNulls: 0, droppedAsDedupe: 0, droppedAsRejected: 0, droppedAsLibrary: 0 }
+
+    // Pre-validate by title BEFORE the TMDB lookup. If Claude's pick
+    // title already matches a library or rejection title, we don't
+    // need to burn a TMDB lookup just to reject it. This is the
+    // single biggest TMDB load reduction — the call-2 rate-limit
+    // failure mode that caused only 1–4 items to render.
+    const survivors: Array<{ pick: ClaudePick; preChecked: true }> = []
+    for (const p of picks) {
+      if (!p.title) continue
+      if (titleMatches(p.title, rejectedTitles)) {
+        counters.droppedAsRejected++
+        rejectedForRetry.push({ title: p.title, reason: 'on the household NEVER SUGGEST list (matched by title)' })
+        continue
+      }
+      if (titleMatches(p.title, libraryTitles)) {
+        counters.droppedAsLibrary++
+        rejectedForRetry.push({ title: p.title, reason: 'already in the household library (matched by title)' })
+        continue
+      }
+      survivors.push({ pick: p, preChecked: true })
+    }
+
+    const lookups = await Promise.all(
+      survivors.map(({ pick }) => tmdbLookup(type, pick.title, pick.year).catch(() => null)),
+    )
     const seen = new Set<number>()
     for (let i = 0; i < lookups.length; i++) {
       const r = lookups[i]
-      const original = picks[i].title
+      const original = survivors[i].pick.title
       if (!r) {
         counters.lookupNulls++
         rejectedForRetry.push({ title: original, reason: 'TMDB lookup failed — title may be misspelled' })
