@@ -1,166 +1,30 @@
 import { useEffect, useRef, useState } from 'react'
 import { Kraken } from '../atmosphere/Kraken'
+import { Beacon } from '../atmosphere/Beacon'
+import { TrendingRow } from '../search/TrendingRow'
+import type { TrendingItem } from '../../lib/hooks/useTrending'
+import type { DotState } from '../search/FeedbackDots'
 import { useAuth } from '../../lib/auth'
 import './Walkthrough.css'
 
-// Default unauthenticated landing for theemeraldexchange. Uninvited
-// visitors see the showcase first; invited users sign in via the Plex
-// CTA in the hero (or the duplicate CTA in the footer for after-scroll
-// conversion). The showcase IS the pre-auth experience — there's no
-// separate LoginScreen.
-//
-// Voice follows PRODUCT.md: considered, quiet confidence, no
-// marketing exclamations. Long-scroll blog format; each section is
-// a frosted card over the kraken atmosphere with one idea per pane.
+// Default unauthenticated landing for theemeraldexchange. The
+// walkthrough is the tour: real video assets, real components, mock
+// data. Copy is captions, not paragraphs — the page IS the demo.
 
-type Section = {
-  id: string
-  eyebrow: string
-  title: string
-  body: string
-  detail?: { label: string; value: string }[]
-  aside?: string
-}
-
-const SECTIONS: Section[] = [
-  {
-    id: 'philosophy',
-    eyebrow: 'Tone',
-    title: 'Considered, not loud.',
-    body:
-      'The Exchange replaces the operator UIs of the *arr stack and SAB with one private surface — a dashboard that could pass for a members’ page rather than a homelab launcher. No tile grids, no marketing chrome, no "trending now" rails competing with what the household already owns. Search is the verb.',
-    detail: [
-      { label: 'Anti-references', value: 'Sonarr/Radarr add-series chrome, Plex web upsell tiles, Homepage/Homarr tile grids.' },
-      { label: 'House style', value: 'Emerald on tinted-neutral, OKLCH palette, Space Grotesk display, frost-on-ink surfaces.' },
-    ],
-  },
-  {
-    id: 'atmosphere',
-    eyebrow: 'Atmosphere',
-    title: 'The kraken keeps the room dark.',
-    body:
-      'The video behind every word on this page is the home-screen background — a slow, looping current under everything else. Routes don’t remount the video; they cross-fade between a kraken variant and a resting variant in 250ms so the brand is never absent. Frosted surfaces bleed the current through deliberately, never opaquely.',
-    aside: 'You’re looking at it.',
-  },
-  {
-    id: 'search',
-    eyebrow: 'Search',
-    title: 'Find a show. Add it. Done.',
-    body:
-      'TV and Movies are search-first surfaces, not browse surfaces. Type a title, get a single confident result with poster + year + overview, accept the smart defaults (quality profile, root folder, monitor strategy — inherited from the underlying service’s existing config), and the request lands. No advanced-settings expanders by default. "Severance — added to library." No exclamation.',
-    detail: [
-      { label: 'Smart defaults', value: 'Pre-populated from Sonarr/Radarr’s own configured profiles — the choosers stay visible but rarely need touching.' },
-      { label: 'Recoverable', value: 'Every pause / delete / remove surfaces a confirmation modal. Cancel is default; Enter does not submit.' },
-    ],
-  },
-  {
-    id: 'recs',
-    eyebrow: 'Discover',
-    title: 'Recommendations that read the room.',
-    body:
-      'Claude (Haiku 4.5) sees the household’s actual library, the explicit rejection list, the user’s liked titles, and the last ∼60 things this user was just shown — and returns picks calibrated to all of it. Genre mix is computed from the library and fed to the model as concrete percentages ("Drama 38%, Crime 22%, …"), so suggestions mirror taste instead of guessing at it.',
-    detail: [
-      { label: 'Validate-and-retry', value: 'Picks are TMDB-validated for id, title, and year proximity; mismatches feed a single retry loop with explicit per-pick failure reasons.' },
-      { label: 'Library-aware fallback', value: 'If picks fall short, fill comes from TMDB /discover sorted by the household’s top genres — not generic "trending this week."' },
-      { label: 'Rotation', value: 'A per-user recently-shown buffer is injected as a volatile prompt suffix so refreshes produce meaningfully different picks instead of near-identical lists.' },
-    ],
-  },
-  {
-    id: 'live',
-    eyebrow: 'Live where it matters',
-    title: 'The queue breathes.',
-    body:
-      'Downloads polls every 3 seconds while the tab is visible — size, ETA, speed, per-season cluster rollups. Everything else is request-driven. When the tab is hidden, polling pauses; when it returns, the next tick is immediate so the user never sees stale state.',
-    aside: 'Live state pays its own rent. Static state shouldn’t pretend.',
-  },
-  {
-    id: 'engineering',
-    eyebrow: 'Underneath',
-    title: 'Engineered like the back end of a SaaS.',
-    body:
-      'The hot AI path is the showpiece: speculative prefetch of TMDB caches in parallel with the Claude call, single-flight coalescing on every TMDB GET, 30-second library cache so concurrent household members share one Sonarr/Radarr fetch, library-block memoization on a content fingerprint, fully parallel route prologue, and a Server-Timing response header so every phase’s latency renders as a stacked bar in DevTools.',
-    detail: [
-      { label: 'Prompt caching', value: 'System + library + rejection list ride in the cached prefix (5-minute ephemeral TTL). User likes + recently-shown sit in the volatile suffix so they vary without breaking the cache.' },
-      { label: 'Tool-use enforcement', value: 'Claude is forced to call submit_recommendations. Schema lives in the tool definition; output is validated, not parsed.' },
-      { label: 'Observability', value: 'Server-Timing on every /api/suggestions response: prologue, claudeInitial, validate1, claudeRetry, validate2, fill, trending.' },
-    ],
-  },
-  {
-    id: 'auth',
-    eyebrow: 'Getting in',
-    title: 'By Plex invitation only.',
-    body:
-      'Access is gated on the same Plex account that’s been shared the household library — no separate username, no second password to forget. Inside, every household member has their own private likes / dislikes that influence their own discover surface. Dislikes also roll into a household-wide veto so nobody re-sees a title someone else has rejected.',
-    aside: 'Same surface for everyone. Capability is gated by confirmation, never hidden modes.',
-  },
+// Curated mock strip — real TMDB ids and poster paths pulled from the
+// public CDN so the demo looks like the live strip without burning a
+// TMDB key. Ordering matches what a Drama-leaning household would
+// actually see surface.
+const DEMO_STRIP: TrendingItem[] = [
+  { id: 95396, title: 'Severance', posterPath: '/lFf6LLrQjYldcZItzOkGmMMigP7.jpg', year: 2022 },
+  { id: 84958, title: 'Loki', posterPath: '/voHUmluYmKyleFkTu3lOXQG702u.jpg', year: 2021 },
+  { id: 71912, title: 'The Witcher', posterPath: '/cZ0d3rtvXPVvuiX22sP79K3Hmjz.jpg', year: 2019 },
+  { id: 1399, title: 'Game of Thrones', posterPath: '/1XS1oqL89opfnbLl8WnZY1O1uJx.jpg', year: 2011 },
+  { id: 60625, title: 'Rick and Morty', posterPath: '/gdIrmf2DdY5mgN6ycVP0XlzKzbE.jpg', year: 2013 },
+  { id: 60059, title: 'Better Call Saul', posterPath: '/fC2HDm5t0kHl7mTm7jxMR31b7by.jpg', year: 2015 },
+  { id: 94605, title: 'Arcane', posterPath: '/abf8tHznhSvl9BAElD2cQeRr7do.jpg', year: 2021 },
+  { id: 76479, title: 'The Boys', posterPath: '/2zmTngn1tYC1AvfnrFLhxeD82hz.jpg', year: 2019 },
 ]
-
-// Sections animate IN on scroll as polish, but they must be visible
-// by default — link-unfurl screenshots, no-JS visitors, accessibility
-// tooling, and any environment where IntersectionObserver doesn't
-// fire promptly must still see the content. JS only adds the entrance
-// animation; the absence of JS leaves content fully rendered.
-function useReveal<T extends HTMLElement>() {
-  const ref = useRef<T | null>(null)
-  const [animating, setAnimating] = useState(false)
-  useEffect(() => {
-    const node = ref.current
-    if (!node) return
-    // If the section is already in view at mount (above-the-fold),
-    // skip the animation — it's already visible.
-    const rect = node.getBoundingClientRect()
-    if (rect.top < window.innerHeight * 0.9) {
-      setAnimating(true)
-      return
-    }
-    const obs = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) {
-          if (e.isIntersecting) {
-            setAnimating(true)
-            obs.disconnect()
-            return
-          }
-        }
-      },
-      { rootMargin: '0px 0px -10% 0px', threshold: 0.15 },
-    )
-    obs.observe(node)
-    return () => obs.disconnect()
-  }, [])
-  return { ref, animating }
-}
-
-function WalkthroughSection({ section }: { section: Section }) {
-  const { ref, animating } = useReveal<HTMLElement>()
-  return (
-    <section
-      ref={ref}
-      id={section.id}
-      className={`walkthrough__section${animating ? ' walkthrough__section--in' : ''}`}
-      aria-labelledby={`${section.id}-title`}
-    >
-      <div className="walkthrough__card">
-        <p className="walkthrough__eyebrow">{section.eyebrow}</p>
-        <h2 id={`${section.id}-title`} className="walkthrough__title">
-          {section.title}
-        </h2>
-        <p className="walkthrough__body">{section.body}</p>
-        {section.detail && section.detail.length > 0 && (
-          <dl className="walkthrough__details">
-            {section.detail.map((d) => (
-              <div key={d.label} className="walkthrough__detail">
-                <dt>{d.label}</dt>
-                <dd>{d.value}</dd>
-              </div>
-            ))}
-          </dl>
-        )}
-        {section.aside && <p className="walkthrough__aside">{section.aside}</p>}
-      </div>
-    </section>
-  )
-}
 
 function SignInBlock({ placement }: { placement: 'hero' | 'foot' }) {
   const { signIn, signInState, signInError, discoveredServers } = useAuth()
@@ -176,8 +40,8 @@ function SignInBlock({ placement }: { placement: 'hero' | 'foot' }) {
         {pending ? 'Waiting for Plex…' : 'Sign in with Plex'}
       </button>
       <p className="walkthrough__signin-hint">
-        Access is by Plex invitation only — sign in with the same Plex
-        account that’s been shared the household library.
+        Invitation-only. Sign in with the Plex account the library was
+        shared to.
       </p>
       {signInError && (
         <p className="walkthrough__signin-error" role="alert">{signInError}</p>
@@ -202,39 +66,234 @@ function SignInBlock({ placement }: { placement: 'hero' | 'foot' }) {
   )
 }
 
+// The nav-transition splice. Click to play; play again button after
+// it finishes. The same MP4 the real app uses at /nav-transition.mp4.
+function TransitionDemo() {
+  const ref = useRef<HTMLVideoElement>(null)
+  const [state, setState] = useState<'idle' | 'playing' | 'done'>('idle')
+  const play = () => {
+    const v = ref.current
+    if (!v) return
+    v.currentTime = 0
+    setState('playing')
+    v.play().catch(() => setState('done'))
+  }
+  return (
+    <div className="walkthrough__demo walkthrough__demo--transition">
+      <button
+        type="button"
+        className={`walkthrough__transition-stage walkthrough__transition-stage--${state}`}
+        onClick={play}
+        aria-label={state === 'idle' ? 'Play the nav transition' : 'Replay the nav transition'}
+      >
+        <video
+          ref={ref}
+          className="walkthrough__transition-video"
+          playsInline
+          muted
+          preload="auto"
+          onEnded={() => setState('done')}
+          onError={() => setState('done')}
+        >
+          <source src="/nav-transition.mp4" type="video/mp4" />
+        </video>
+        {state !== 'playing' && (
+          <span className="walkthrough__transition-cta">
+            {state === 'idle' ? '▶  Play' : '↻  Replay'}
+          </span>
+        )}
+      </button>
+    </div>
+  )
+}
+
+// Two atmospheres side by side. Each panel mounts the actual video
+// asset — the same ones the live app plays as the fixed background.
+function AtmospherePair() {
+  return (
+    <div className="walkthrough__demo walkthrough__demo--pair">
+      <figure className="walkthrough__atmos-panel">
+        <video
+          className="walkthrough__atmos-video walkthrough__atmos-video--kraken"
+          loop
+          muted
+          playsInline
+          autoPlay
+          preload="auto"
+          poster="/kraken-poster.jpg"
+        >
+          <source src="/kraken.webm" type="video/webm" />
+          <source src="/kraken.mp4" type="video/mp4" />
+        </video>
+        <figcaption className="walkthrough__atmos-caption">
+          <span className="walkthrough__eyebrow">Home</span>
+          <span>kraken — graded toward emerald</span>
+        </figcaption>
+      </figure>
+      <figure className="walkthrough__atmos-panel">
+        <video
+          className="walkthrough__atmos-video walkthrough__atmos-video--resting"
+          loop
+          muted
+          playsInline
+          autoPlay
+          preload="auto"
+        >
+          <source src="/resting.webm" type="video/webm" />
+          <source src="/resting.mp4" type="video/mp4" />
+        </video>
+        <figcaption className="walkthrough__atmos-caption">
+          <span className="walkthrough__eyebrow">Anywhere else</span>
+          <span>resting — emerald grade baked in</span>
+        </figcaption>
+      </figure>
+    </div>
+  )
+}
+
+// Live TrendingRow with mock data. Dots + AI toggle are local state
+// so visitors can click around without an account.
+function StripDemo() {
+  const [feedback, setFeedback] = useState<Map<number, DotState>>(new Map())
+  const [aiEnabled, setAiEnabled] = useState(true)
+  const stateFor = (id: number): DotState => feedback.get(id) ?? 'unset'
+  const apply = (id: number, next: DotState) => {
+    setFeedback((m) => {
+      const n = new Map(m)
+      const cur = n.get(id) ?? 'unset'
+      if (cur === next) n.delete(id)
+      else n.set(id, next)
+      return n
+    })
+  }
+  return (
+    <div className="walkthrough__demo walkthrough__demo--strip">
+      <TrendingRow
+        items={DEMO_STRIP}
+        loading={false}
+        onPick={() => {}}
+        label={aiEnabled ? 'Picked for you' : 'Trending this week'}
+        feedback={{
+          stateFor,
+          onLike: (id) => apply(id, 'liked'),
+          onDislike: (id) => apply(id, 'disliked'),
+        }}
+        ai={{ enabled: aiEnabled, onToggle: () => setAiEnabled((v) => !v) }}
+      />
+    </div>
+  )
+}
+
+// Beacon (the gem) on its own. Lives in a stage so the rotating
+// silhouette has room to breathe — in the real app it's pinned to a
+// HUD corner; here it's centerpiece.
+function BeaconStage() {
+  return (
+    <div className="walkthrough__demo walkthrough__demo--beacon">
+      <Beacon />
+    </div>
+  )
+}
+
+// IntersectionObserver mostly to autoplay the transition demo when it
+// scrolls into view — not used for hide/reveal.
+function useInView<T extends HTMLElement>(onEnter: () => void) {
+  const ref = useRef<T | null>(null)
+  useEffect(() => {
+    const node = ref.current
+    if (!node) return
+    const obs = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          if (e.isIntersecting) {
+            onEnter()
+            obs.disconnect()
+            return
+          }
+        }
+      },
+      { rootMargin: '0px 0px -10% 0px', threshold: 0.4 },
+    )
+    obs.observe(node)
+    return () => obs.disconnect()
+  }, [onEnter])
+  return ref
+}
+
+type Section = {
+  id: string
+  eyebrow: string
+  title: string
+  caption: string
+  render: () => React.ReactElement
+}
+
 export function Walkthrough() {
+  const stripRef = useInView<HTMLElement>(() => {})
+
+  const sections: Section[] = [
+    {
+      id: 'transition',
+      eyebrow: 'First nav',
+      title: 'The splice plays once, then gets out of the way.',
+      caption: 'Every browser sees this once on its first nav. Tap the stage to play it now.',
+      render: () => <TransitionDemo />,
+    },
+    {
+      id: 'atmosphere',
+      eyebrow: 'Atmosphere',
+      title: 'Two layers. 250ms cross-fade. The brand is never absent.',
+      caption: 'The kraken is the home layer. Every other route fades to resting and back.',
+      render: () => <AtmospherePair />,
+    },
+    {
+      id: 'strip',
+      eyebrow: 'Discover',
+      title: 'Click the dots. Toggle the AI. It’s the real strip.',
+      caption: 'Mock posters, real component. Red hides the title forever; green tells the model.',
+      render: () => <StripDemo />,
+    },
+    {
+      id: 'beacon',
+      eyebrow: 'The gem',
+      title: 'A rotating silhouette pinned to the HUD.',
+      caption: 'Real VP9 alpha-channel video — no rectangular frame, no blend-mode trick.',
+      render: () => <BeaconStage />,
+    },
+  ]
+
   return (
     <>
       <Kraken variant="kraken" />
       <main className="walkthrough" role="main">
         <header className="walkthrough__hero" aria-labelledby="hero-title">
-          <div className="walkthrough__card walkthrough__card--hero">
+          <div className="walkthrough__hero-card">
             <p className="walkthrough__eyebrow">The Emerald Exchange</p>
             <h1 id="hero-title" className="walkthrough__hero-title">
               A private members’ page<br />for a household media library.
             </h1>
-            <p className="walkthrough__lede">
-              One bookmark. Find a show, find a movie, see what’s downloading,
-              open Plex. The operator UIs of Sonarr, Radarr, and SAB are not
-              promoted, linked, or visible from inside it. If you’re invited,
-              sign in below. If you’re not, scroll — the rest of the page is
-              a tour.
-            </p>
             <SignInBlock placement="hero" />
-            <nav className="walkthrough__toc" aria-label="Sections">
-              {SECTIONS.map((s) => (
-                <a key={s.id} href={`#${s.id}`} className="walkthrough__toc-link">
-                  {s.eyebrow}
-                </a>
-              ))}
-            </nav>
+            <p className="walkthrough__hero-scroll">↓ scroll for the tour</p>
           </div>
         </header>
-        {SECTIONS.map((s) => (
-          <WalkthroughSection key={s.id} section={s} />
+        {sections.map((s) => (
+          <section
+            key={s.id}
+            id={s.id}
+            className="walkthrough__section"
+            aria-labelledby={`${s.id}-title`}
+            ref={s.id === 'strip' ? stripRef : undefined}
+          >
+            <header className="walkthrough__section-head">
+              <p className="walkthrough__eyebrow">{s.eyebrow}</p>
+              <h2 id={`${s.id}-title`} className="walkthrough__title">{s.title}</h2>
+              <p className="walkthrough__caption">{s.caption}</p>
+            </header>
+            {s.render()}
+          </section>
         ))}
         <section
-          className="walkthrough__section walkthrough__section--in"
+          className="walkthrough__section"
           aria-labelledby="signin-foot-title"
         >
           <div className="walkthrough__card">
@@ -242,17 +301,12 @@ export function Walkthrough() {
             <h2 id="signin-foot-title" className="walkthrough__title">
               Invited? Pick up where you left off.
             </h2>
-            <p className="walkthrough__body">
-              The Exchange remembers you after the first Plex sign-in.
-              No second password, no household-only username.
-            </p>
             <SignInBlock placement="foot" />
           </div>
         </section>
         <footer className="walkthrough__foot">
           <p className="walkthrough__foot-line">
-            Built by the household, for the household. Source &amp; design notes
-            on request.
+            Built by the household, for the household.
           </p>
         </footer>
       </main>

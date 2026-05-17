@@ -1,27 +1,103 @@
-/* Walkthrough — public showcase at /my_site.
-   Long-scroll blog format over the kraken atmosphere. Surfaces use the
-   same frost + ink shadow vocabulary as LoginScreen so the page feels
-   continuous with the gated app behind it. */
+/* Walkthrough — the public product tour at theemeraldexchange's
+   unauthenticated root. Hero is a full-viewport stage over the kraken
+   background; every section below it embeds real video or real
+   components so the page IS the demo, not a description of it. */
 
 .walkthrough {
   position: relative;
   z-index: 1;
-  max-width: 880px;
-  margin: 0 auto;
-  padding: var(--s-7) var(--s-5) var(--s-9);
   display: grid;
-  gap: var(--s-8);
+  gap: 0;
+  /* No max-width here — sections control their own width so the hero
+     and video stages can run edge-to-edge. */
+}
+
+/* ── Hero: full viewport, brand + sign-in over the kraken ─────────── */
+
+.walkthrough__hero {
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  padding: var(--s-7) var(--s-5);
+}
+
+.walkthrough__hero-card {
+  width: 100%;
+  max-width: 720px;
+  padding: var(--s-8) var(--s-7);
+  display: grid;
+  gap: var(--s-4);
+  background: color-mix(in oklch, var(--surface) 88%, transparent);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow:
+    inset 0 1px 0 var(--frost),
+    0 40px 80px -32px var(--ink);
+  text-align: left;
+}
+
+.walkthrough__hero-title {
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 5vw, var(--t-2xl));
+  font-weight: var(--w-display);
+  letter-spacing: var(--tr-display);
+  line-height: 1.02;
+  color: var(--text);
+  margin: 0;
+}
+
+.walkthrough__hero-scroll {
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  margin: var(--s-3) 0 0;
+  text-align: center;
+  animation: walkthrough-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes walkthrough-pulse {
+  0%, 100% { opacity: 0.4; transform: translateY(0); }
+  50%      { opacity: 1;   transform: translateY(4px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .walkthrough__hero-scroll { animation: none; opacity: 0.7; }
+}
+
+/* ── Sections: each one centers itself; demos pick their own width ── */
+
+.walkthrough__section {
+  padding: var(--s-8) var(--s-5);
+  display: grid;
+  gap: var(--s-5);
+  justify-items: center;
 }
 
 @media (max-width: 720px) {
-  .walkthrough {
-    padding: var(--s-6) var(--s-4) var(--s-8);
-    gap: var(--s-7);
+  .walkthrough__section {
+    padding: var(--s-7) var(--s-4);
+    gap: var(--s-4);
   }
 }
 
-/* Frosted card vocabulary, shared by hero + every section. */
+.walkthrough__section-head {
+  width: 100%;
+  max-width: 760px;
+  display: grid;
+  gap: var(--s-2);
+  text-align: center;
+  justify-items: center;
+}
+
+/* Standard frosted card — used by the Sign-in foot block. Demos
+   render in their own stages and don't need this wrapper. */
 .walkthrough__card {
+  width: 100%;
+  max-width: 760px;
   padding: var(--s-7) var(--s-6);
   background: color-mix(in oklch, var(--surface) 90%, transparent);
   backdrop-filter: blur(16px) saturate(140%);
@@ -33,110 +109,6 @@
     0 36px 70px -30px var(--ink);
   display: grid;
   gap: var(--s-3);
-}
-
-@media (max-width: 720px) {
-  .walkthrough__card {
-    padding: var(--s-6) var(--s-5);
-  }
-}
-
-.walkthrough__card--hero {
-  padding: var(--s-8) var(--s-7);
-  gap: var(--s-4);
-}
-
-@media (max-width: 720px) {
-  .walkthrough__card--hero {
-    padding: var(--s-7) var(--s-5);
-  }
-}
-
-/* Hero block — first viewport. */
-.walkthrough__hero {
-  padding-top: var(--s-8);
-}
-
-.walkthrough__hero-title {
-  font-family: var(--font-display);
-  font-size: var(--t-2xl);
-  font-weight: var(--w-display);
-  letter-spacing: var(--tr-display);
-  line-height: 1.02;
-  color: var(--text);
-  margin: 0;
-}
-
-.walkthrough__lede {
-  font-size: var(--t-md);
-  line-height: 1.55;
-  color: var(--text-muted);
-  margin: 0;
-  max-width: 60ch;
-}
-
-/* Inline anchor jump-nav under the hero — quiet, single-row pills. */
-.walkthrough__toc {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--s-2);
-  margin-top: var(--s-4);
-}
-
-.walkthrough__toc-link {
-  font-family: var(--font-display);
-  font-size: var(--t-xs);
-  font-weight: var(--w-ui);
-  letter-spacing: var(--tr-eyebrow);
-  text-transform: uppercase;
-  color: var(--text-muted);
-  text-decoration: none;
-  padding: var(--s-2) var(--s-3);
-  border: 1px solid var(--border);
-  border-radius: var(--r-pod);
-  background: var(--frost);
-  transition:
-    color var(--dur-fast) var(--ease),
-    border-color var(--dur-fast) var(--ease),
-    background var(--dur-fast) var(--ease);
-}
-
-.walkthrough__toc-link:hover,
-.walkthrough__toc-link:focus-visible {
-  color: var(--emerald);
-  border-color: var(--emerald-dim);
-  background: var(--frost-stronger);
-  outline: none;
-}
-
-/* Sections — visible by default. The --in modifier replays a subtle
-   slide-up as a one-shot entrance polish when IntersectionObserver
-   marks the section as crossing into view. No JS / no IO / static
-   screenshot → sections still render at full visibility. */
-.walkthrough__section {
-  opacity: 1;
-  transform: none;
-}
-
-.walkthrough__section--in {
-  animation: walkthrough-rise var(--dur-slow) var(--ease) both;
-}
-
-@keyframes walkthrough-rise {
-  from {
-    opacity: 0.4;
-    transform: translateY(16px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .walkthrough__section--in {
-    animation: none;
-  }
 }
 
 .walkthrough__eyebrow {
@@ -151,79 +123,199 @@
 
 .walkthrough__title {
   font-family: var(--font-display);
-  font-size: var(--t-xl);
+  font-size: clamp(1.5rem, 3vw, var(--t-xl));
   font-weight: var(--w-display);
   letter-spacing: var(--tr-display);
-  line-height: 1.05;
+  line-height: 1.08;
   color: var(--text);
   margin: 0;
+  max-width: 22ch;
 }
 
-.walkthrough__body {
-  font-size: var(--t-base);
-  line-height: 1.6;
+.walkthrough__caption {
+  font-size: var(--t-sm);
+  line-height: 1.55;
   color: var(--text-muted);
   margin: 0;
-  max-width: 65ch;
+  max-width: 60ch;
 }
 
-/* Detail rows — definition list inside a card. Each entry is a label
-   in eyebrow style + a single-line value in body voice. */
-.walkthrough__details {
-  margin: var(--s-3) 0 0;
-  padding: var(--s-4) 0 0;
-  border-top: 1px solid var(--border);
-  display: grid;
-  gap: var(--s-3);
+/* ── Demo stages ──────────────────────────────────────────────────── */
+
+/* Demo wrapper — full-width by default, each demo variant picks its
+   own display + max-width. The parent .walkthrough__section already
+   centers items, so don't impose justify-items here (it collapses
+   grid-cell children that have no intrinsic width, e.g. the absolutely-
+   positioned videos inside the atmosphere figures). */
+.walkthrough__demo {
+  width: 100%;
+  max-width: 1100px;
 }
 
-.walkthrough__detail {
+/* Transition demo — 16:9 stage, click to play */
+.walkthrough__demo--transition {
+  max-width: 900px;
+}
+
+.walkthrough__transition-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  overflow: hidden;
+  cursor: pointer;
+  padding: 0;
+  box-shadow:
+    inset 0 1px 0 var(--frost),
+    0 30px 60px -28px var(--ink);
+  transition:
+    transform var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.walkthrough__transition-stage:hover,
+.walkthrough__transition-stage:focus-visible {
+  border-color: var(--emerald-dim);
+  transform: translateY(-1px);
+  outline: none;
+}
+
+.walkthrough__transition-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: var(--bg);
+}
+
+.walkthrough__transition-cta {
+  position: absolute;
+  inset: 0;
   display: grid;
-  grid-template-columns: minmax(140px, 180px) 1fr;
+  place-items: center;
+  font-family: var(--font-display);
+  font-size: var(--t-lg);
+  font-weight: var(--w-display);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text);
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklch, var(--bg) 30%, transparent) 0%,
+    color-mix(in oklch, var(--bg) 70%, transparent) 100%
+  );
+  pointer-events: none;
+  transition: opacity var(--dur-mid) var(--ease);
+}
+
+.walkthrough__transition-stage--playing .walkthrough__transition-cta {
+  opacity: 0;
+}
+
+/* Two-atmosphere side-by-side */
+.walkthrough__demo--pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: var(--s-4);
-  align-items: baseline;
+  max-width: 1100px;
 }
 
-@media (max-width: 600px) {
-  .walkthrough__detail {
+@media (max-width: 720px) {
+  .walkthrough__demo--pair {
     grid-template-columns: 1fr;
-    gap: var(--s-1);
   }
 }
 
-.walkthrough__detail dt {
-  font-family: var(--font-display);
+.walkthrough__atmos-panel {
+  position: relative;
+  margin: 0;
+  aspect-ratio: 4 / 3;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  overflow: hidden;
+  background: var(--bg);
+  box-shadow:
+    inset 0 1px 0 var(--frost),
+    0 30px 60px -28px var(--ink);
+}
+
+.walkthrough__atmos-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Match the live grade on the home page kraken. */
+.walkthrough__atmos-video--kraken {
+  filter: saturate(0.88) hue-rotate(35deg) contrast(1.06) brightness(0.84);
+}
+
+.walkthrough__atmos-caption {
+  position: absolute;
+  left: var(--s-3);
+  bottom: var(--s-3);
+  display: grid;
+  gap: var(--s-1);
+  padding: var(--s-2) var(--s-3);
+  background: color-mix(in oklch, var(--bg) 70%, transparent);
+  backdrop-filter: blur(10px) saturate(140%);
+  -webkit-backdrop-filter: blur(10px) saturate(140%);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
   font-size: var(--t-xs);
-  font-weight: var(--w-ui);
-  letter-spacing: var(--tr-eyebrow);
-  text-transform: uppercase;
-  color: var(--text-subtle);
-  margin: 0;
-}
-
-.walkthrough__detail dd {
-  font-size: var(--t-sm);
-  line-height: 1.5;
   color: var(--text);
-  margin: 0;
 }
 
-/* Aside — a single pulled line at the bottom of a section, set in
-   display face at body size to read like a quiet caption. */
-.walkthrough__aside {
-  font-family: var(--font-display);
-  font-size: var(--t-sm);
-  font-weight: var(--w-ui);
-  letter-spacing: var(--tr-tight);
-  color: var(--emerald);
-  margin: var(--s-3) 0 0;
-  padding-top: var(--s-3);
-  border-top: 1px solid var(--border);
+/* Strip demo — let TrendingRow render at its natural width. */
+.walkthrough__demo--strip {
+  max-width: 1200px;
 }
 
-/* Sign-in block — appears in the hero AND footer. Same emerald-rim
-   pill button as the old LoginScreen; ported here so the auth path
-   stays usable without a separate LoginScreen surface. */
+/* Beacon stage — give the gem room to rotate. The Beacon component
+   absolutely-positions to a HUD corner in the live app, so wrap it
+   in a relative stage that owns the layout here. */
+.walkthrough__demo--beacon {
+  position: relative;
+  width: 100%;
+  max-width: 480px;
+  aspect-ratio: 1 / 1;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  overflow: hidden;
+  background:
+    radial-gradient(
+      circle at 50% 50%,
+      var(--emerald-bg) 0%,
+      var(--bg) 70%
+    );
+  box-shadow:
+    inset 0 1px 0 var(--frost),
+    0 30px 60px -28px var(--ink);
+}
+
+/* Force the Beacon's absolute positioning to use THIS stage as origin
+   rather than the viewport, and center it. The component sets its own
+   inset/top/right values; we override with a centered transform. */
+.walkthrough__demo--beacon .beacon {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+.walkthrough__demo--beacon .beacon__video {
+  position: static;
+  width: 80%;
+  height: 80%;
+}
+
+/* ── Sign-in block — same emerald-pill button as the old LoginScreen */
+
 .walkthrough__signin {
   display: grid;
   gap: var(--s-2);
@@ -231,7 +323,7 @@
 }
 
 .walkthrough__signin--foot {
-  margin-top: var(--s-4);
+  margin-top: var(--s-3);
 }
 
 .walkthrough__signin-button {
@@ -249,7 +341,6 @@
   cursor: pointer;
   transition:
     background var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease),
     transform var(--dur-fast) var(--ease);
 }
 
@@ -282,7 +373,7 @@
   color: var(--danger);
 }
 
-/* First-run server-discovery rows. Rare path, but the only way the
+/* First-run server discovery list — rare path, but the only way the
    operator sees discoveredServers when PLEX_SERVER_ID is unset. */
 .walkthrough__discovery {
   margin-top: var(--s-2);
@@ -323,9 +414,7 @@
   font-size: var(--t-xs);
 }
 
-.walkthrough__discovery-name {
-  color: var(--text);
-}
+.walkthrough__discovery-name { color: var(--text); }
 
 .walkthrough__discovery-tag {
   font-family: var(--font-mono);
@@ -358,9 +447,9 @@
   .walkthrough__discovery-id { grid-area: id; }
 }
 
-/* Footer — discrete, low-emphasis. */
+/* Footer */
 .walkthrough__foot {
-  padding: var(--s-5) 0;
+  padding: var(--s-5) 0 var(--s-7);
   text-align: center;
 }
 
