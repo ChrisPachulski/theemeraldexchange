@@ -149,10 +149,17 @@ export function MoviesTab() {
   const [trendingPending, setTrendingPending] = useState<number | null>(null)
   // Defense in depth — backend already filters by library/rejections,
   // but client-side filter catches any race (just-added title, etc.).
-  const trendingFiltered = useMemo(
-    () => (suggested.data?.items ?? []).filter((t) => !libraryByTmdb.has(t.id)),
-    [suggested.data, libraryByTmdb],
-  )
+  // Also dedupe by id: TrendingRow keys on item.id, so a duplicate
+  // would render twice and emit a React warning.
+  const trendingFiltered = useMemo(() => {
+    const seen = new Set<number>()
+    return (suggested.data?.items ?? []).filter((t) => {
+      if (libraryByTmdb.has(t.id)) return false
+      if (seen.has(t.id)) return false
+      seen.add(t.id)
+      return true
+    })
+  }, [suggested.data, libraryByTmdb])
   // Label adjusts based on whether the backend served personalized
   // recs or fell back to TMDB trending (cold start or no API key).
   const trendingLabel = suggested.data?.source?.startsWith('personalized')

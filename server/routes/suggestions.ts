@@ -40,6 +40,13 @@ const MODEL = 'claude-haiku-4-5'
 let _tmdbKey: string | null = env.tmdbApiKey
 export function _setTmdbApiKeyForTests(k: string | null): void {
   _tmdbKey = k
+  // Caches are module-scoped — without flushing them, a test that
+  // populates the cache leaks state into the next test (the
+  // subsequent route call sees a cache hit and never fires fetch,
+  // making "did the route call /trending or /discover?" assertions
+  // unreliable).
+  for (const k of Object.keys(trendingCache)) delete trendingCache[k as 'movie' | 'tv']
+  for (const k of Object.keys(discoverCache)) delete discoverCache[k as 'movie' | 'tv']
 }
 
 export const suggestions = new Hono<Env>()
@@ -67,8 +74,27 @@ type ClaudePick = {
 
 type SonarrSeries = { title: string; year?: number; tmdbId?: number; genres?: string[] }
 type RadarrMovie = { title: string; year?: number; tmdbId?: number; genres?: string[] }
+type LibraryItem = SonarrSeries | RadarrMovie
 
-async function fetchSonarrLibrary(): Promise<SonarrSeries[]> {
+// Sonarr/Radarr full-library fetches dominate the network cost of the
+// suggestions route — a household with 500 entries downloads ~1MB on
+// every refresh, every user. Cache for LIBRARY_CACHE_TTL_MS so the
+// upstream is hit at most once per kind per window. In-flight promises
+// are also memoized so a concurrent burst (e.g. a household member
+// hitting refresh on both Movies and TV at the same time, or two
+// users mounting simultaneously) collapses to a single upstream call.
+const LIBRARY_CACHE_TTL_MS = 30_000
+const libraryCache: { [k in 'movie' | 'tv']?: { items: LibraryItem[]; expiresAt: number } } = {}
+const libraryInFlight: { [k in 'movie' | 'tv']?: Promise<LibraryItem[]> } = {}
+
+export function _resetLibraryCacheForTests(): void {
+  delete libraryCache.movie
+  delete libraryCache.tv
+  delete libraryInFlight.movie
+  delete libraryInFlight.tv
+}
+
+async function fetchSonarrLibraryRaw(): Promise<SonarrSeries[]> {
   try {
     const r = await sonarrFetch('/api/v3/series', { method: 'GET' })
     if (!r.ok) {
@@ -88,7 +114,7 @@ async function fetchSonarrLibrary(): Promise<SonarrSeries[]> {
   }
 }
 
-async function fetchRadarrLibrary(): Promise<RadarrMovie[]> {
+async function fetchRadarrLibraryRaw(): Promise<RadarrMovie[]> {
   try {
     const r = await radarrFetch('/api/v3/movie', { method: 'GET' })
     if (!r.ok) {
@@ -106,6 +132,36 @@ async function fetchRadarrLibrary(): Promise<RadarrMovie[]> {
     console.error('[suggestions] Radarr fetch threw:', e instanceof Error ? e.message : String(e))
     return []
   }
+}
+
+async function fetchLibraryCached(kind: 'movie' | 'tv'): Promise<LibraryItem[]> {
+  const now = Date.now()
+  const cached = libraryCache[kind]
+  if (cached && cached.expiresAt > now) return cached.items
+  const inFlight = libraryInFlight[kind]
+  if (inFlight) return inFlight
+  const promise = (kind === 'movie' ? fetchRadarrLibraryRaw() : fetchSonarrLibraryRaw())
+    .then((items) => {
+      // Only cache non-empty results — a transient upstream error
+      // (returns []) shouldn't poison the cache for the next 30s.
+      if (items.length > 0) {
+        libraryCache[kind] = { items, expiresAt: Date.now() + LIBRARY_CACHE_TTL_MS }
+      }
+      return items
+    })
+    .finally(() => {
+      delete libraryInFlight[kind]
+    })
+  libraryInFlight[kind] = promise
+  return promise
+}
+
+async function fetchSonarrLibrary(): Promise<SonarrSeries[]> {
+  return (await fetchLibraryCached('tv')) as SonarrSeries[]
+}
+
+async function fetchRadarrLibrary(): Promise<RadarrMovie[]> {
+  return (await fetchLibraryCached('movie')) as RadarrMovie[]
 }
 
 // Compact library line: "Title (Year) — genre1, genre2". Genres give
@@ -198,15 +254,74 @@ function renderEntryBullets(entries: Array<{ id: number; title: string }>): stri
 // fall back to recent untitled rows.
 const REJECTION_PROMPT_CAP = 75
 
-function buildLibraryBlock(
+// Compute the top-N genre distribution from a library. Returned as
+// `["Drama 38%", "Action 22%", …]` strings so it can be dropped
+// straight into the prompt. Genres are denominator-weighted by total
+// genre tags (not titles), so a title tagged Drama+Crime contributes
+// to both buckets — that matches how taste actually works (you don't
+// have to pick one).
+function computeGenreDistribution(
+  library: Array<{ genres?: string[] }>,
+  topN: number,
+): string[] {
+  const counts = new Map<string, number>()
+  let total = 0
+  for (const item of library) {
+    if (!item.genres) continue
+    for (const g of item.genres) {
+      if (!g) continue
+      counts.set(g, (counts.get(g) ?? 0) + 1)
+      total++
+    }
+  }
+  if (total === 0) return []
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, topN)
+    .map(([g, n]) => `${g} ${Math.round((n / total) * 100)}%`)
+}
+
+// Cheap content fingerprint for the (kind, library, rejections) tuple
+// that uniquely determines the libraryBlock string. Non-cryptographic;
+// just stable across identical inputs and cheap to compute. Length +
+// first/last titles + count + last rejection id catches every
+// realistic mutation (add/remove series, dismiss a card) without
+// materializing the full content into the key.
+function libraryBlockFingerprint(
+  kind: 'movie' | 'tv',
+  library: Array<{ title: string }>,
+  rejections: Array<{ id: number; title: string }>,
+): string {
+  const firstTitle = library[0]?.title ?? ''
+  const lastTitle = library[library.length - 1]?.title ?? ''
+  const lastRej = rejections[rejections.length - 1]
+  return `${kind}|${library.length}|${firstTitle}|${lastTitle}|${rejections.length}|${lastRej?.id ?? 0}|${lastRej?.title ?? ''}`
+}
+
+const libraryBlockCache = new Map<string, string>()
+const LIBRARY_BLOCK_CACHE_MAX = 8 // 4 households x 2 kinds is plenty
+
+export function _resetLibraryBlockCacheForTests(): void {
+  libraryBlockCache.clear()
+}
+
+function buildLibraryBlockUncached(
   kind: 'movie' | 'tv',
   library: Array<{ title: string; year?: number; genres?: string[] }>,
   rejections: Array<{ id: number; title: string }>,
 ): string {
   const header = kind === 'movie' ? 'MOVIES' : 'TV SHOWS'
   const libLines = library.map(formatLibraryItem).join('\n')
+  // Concrete distribution beats abstract "mirror the genres". Sent
+  // alongside the library so Claude has both the raw signal and the
+  // pre-computed shape to match against.
+  const distribution = computeGenreDistribution(library, 6)
+  const distLine =
+    distribution.length > 0
+      ? `\n\nTARGET GENRE MIX (match these proportions across your picks): ${distribution.join(', ')}`
+      : ''
   if (rejections.length === 0) {
-    return `Household ${header} library (${library.length} titles):\n${libLines}`
+    return `Household ${header} library (${library.length} titles):\n${libLines}${distLine}`
   }
   // Show titled rows first (most useful taste signal), then fill the
   // remaining cap with untitled rows. The post-filter id-set covers
@@ -218,10 +333,30 @@ function buildLibraryBlock(
       ? titled.slice(-REJECTION_PROMPT_CAP)
       : [...titled, ...untitled.slice(0, REJECTION_PROMPT_CAP - titled.length)]
   return (
-    `Household ${header} library (${library.length} titles):\n${libLines}\n\n` +
+    `Household ${header} library (${library.length} titles):\n${libLines}${distLine}\n\n` +
     `NEVER SUGGEST — the household has explicitly rejected these (${promptRejections.length} of ${rejections.length} shown), ` +
     `and you should also avoid stylistically near matches:\n${renderEntryBullets(promptRejections)}`
   )
+}
+
+function buildLibraryBlock(
+  kind: 'movie' | 'tv',
+  library: Array<{ title: string; year?: number; genres?: string[] }>,
+  rejections: Array<{ id: number; title: string }>,
+): string {
+  const fp = libraryBlockFingerprint(kind, library, rejections)
+  const cached = libraryBlockCache.get(fp)
+  if (cached) return cached
+  const built = buildLibraryBlockUncached(kind, library, rejections)
+  // Bounded LRU-ish: when full, evict the oldest insertion (Map
+  // preserves insertion order). 8 entries comfortably covers a few
+  // households × 2 kinds without unbounded growth.
+  if (libraryBlockCache.size >= LIBRARY_BLOCK_CACHE_MAX) {
+    const firstKey = libraryBlockCache.keys().next().value
+    if (firstKey !== undefined) libraryBlockCache.delete(firstKey)
+  }
+  libraryBlockCache.set(fp, built)
+  return built
 }
 
 // Per-user "liked" block. Sent after the cached prefix so it can vary
@@ -233,6 +368,70 @@ function buildUserLikesBlock(liked: Array<{ id: number; title: string }>): strin
   return (
     `This user has explicitly LIKED — recommend more in this vein ` +
     `(positive taste signal):\n${renderEntryBullets(liked)}`
+  )
+}
+
+// Per-user rolling buffer of recently-served titles. The Claude prompt
+// prefix (system + library + rejections) is cached, and at temperature
+// 0.4–0.7 a deterministic prefix produces near-identical pick lists
+// across refreshes — refreshes look like nothing changed, dot-clicks
+// look unreactive, the strip "feels stuck." This buffer is injected
+// as a volatile RECENTLY SHOWN block so the model rotates picks
+// between calls without the household-cache prefix being invalidated.
+//
+// In-memory only — soft signal, not load-bearing. Resets on restart.
+// Capped at RECENTLY_SHOWN_CAP per (sub, kind); newest items pushed
+// to the front, older items LRU'd off the tail. Untitled items are
+// dropped (a bare-id row is no signal to the model).
+const RECENTLY_SHOWN_CAP = 60
+const recentlyShown = new Map<string, Array<{ id: number; title: string }>>()
+
+function recentKey(sub: string, kind: 'movie' | 'tv'): string {
+  return `${sub}:${kind}`
+}
+
+export function _resetRecentlyShownForTests(): void {
+  recentlyShown.clear()
+}
+
+function getRecentlyShown(sub: string, kind: 'movie' | 'tv'): Array<{ id: number; title: string }> {
+  return recentlyShown.get(recentKey(sub, kind)) ?? []
+}
+
+function recordShown(
+  sub: string,
+  kind: 'movie' | 'tv',
+  items: Array<{ id: number; title: string }>,
+): void {
+  const key = recentKey(sub, kind)
+  const prev = recentlyShown.get(key) ?? []
+  const merged: Array<{ id: number; title: string }> = []
+  const seen = new Set<number>()
+  for (const item of items) {
+    if (item.title && !seen.has(item.id)) {
+      seen.add(item.id)
+      merged.push({ id: item.id, title: item.title })
+    }
+  }
+  for (const item of prev) {
+    if (!seen.has(item.id)) {
+      seen.add(item.id)
+      merged.push(item)
+      if (merged.length >= RECENTLY_SHOWN_CAP) break
+    }
+  }
+  recentlyShown.set(key, merged.slice(0, RECENTLY_SHOWN_CAP))
+}
+
+// The "rotate, don't repeat" instruction goes in the volatile portion
+// of the system stack so it doesn't break the cache prefix. Empty
+// when the user has no history yet (first call after restart).
+function buildRecentlyShownBlock(items: Array<{ id: number; title: string }>): string {
+  if (items.length === 0) return ''
+  const bullets = items.map((i) => `- ${i.title}`).join('\n')
+  return (
+    `RECENTLY SHOWN to this user across the last few refreshes — please rotate. ` +
+    `Prefer fresh adjacents over re-listing these; only repeat if absolutely no comparable alternative exists:\n${bullets}`
   )
 }
 
@@ -255,29 +454,56 @@ function buildUserLikesBlock(liked: Array<{ id: number; title: string }>): strin
 // 1–4 items instead of 20. 10 backfill + 22 lookups = 32, fits.
 const BACKFILL_MAX_PER_CALL = 10
 const TMDB_TIMEOUT_MS = 2500
-const TRENDING_CACHE_TTL_MS = 60_000
+// Trending and discover surfaces don't churn second-to-second; 5 min
+// TTL slashes background TMDB volume by 5x without measurable user-
+// facing freshness loss. The single-flight lookup coalescing covers
+// the brief moments after expiry when concurrent calls would race.
+const TRENDING_CACHE_TTL_MS = 300_000
+
+// In-flight coalescing maps for TMDB GETs. Two parallel suggestions
+// calls (movie + tv mounting at once, household members refreshing,
+// retry path racing the prefetch) frequently ask TMDB for the same
+// id or title. Coalesce to one fetch, return the same promise to
+// every concurrent caller. The map clears on settlement, so this is
+// strictly an in-flight dedupe — not a result cache.
+const titleByIdInFlight = new Map<string, Promise<string | null>>()
+const lookupInFlight = new Map<string, Promise<SuggestionItem | null>>()
+
+export function _resetTmdbInFlightForTests(): void {
+  titleByIdInFlight.clear()
+  lookupInFlight.clear()
+}
 
 async function tmdbTitleById(kind: 'movie' | 'tv', id: number): Promise<string | null> {
   if (!_tmdbKey) return null
-  const url = new URL(`${TMDB_BASE}/${kind}/${id}`)
-  url.searchParams.set('api_key', _tmdbKey)
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), TMDB_TIMEOUT_MS)
-  try {
-    const r = await fetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal })
-    if (!r.ok) {
-      if (r.status === 429) {
-        console.error('[suggestions] TMDB rate-limited on titleById; retry-after:', r.headers.get('retry-after'))
+  const key = `${kind}:${id}`
+  const existing = titleByIdInFlight.get(key)
+  if (existing) return existing
+  const promise = (async () => {
+    const url = new URL(`${TMDB_BASE}/${kind}/${id}`)
+    url.searchParams.set('api_key', _tmdbKey!)
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), TMDB_TIMEOUT_MS)
+    try {
+      const r = await fetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal })
+      if (!r.ok) {
+        if (r.status === 429) {
+          console.error('[suggestions] TMDB rate-limited on titleById; retry-after:', r.headers.get('retry-after'))
+        }
+        return null
       }
+      const data = (await r.json()) as { title?: string; name?: string }
+      return data.title || data.name || null
+    } catch {
       return null
+    } finally {
+      clearTimeout(timer)
     }
-    const data = (await r.json()) as { title?: string; name?: string }
-    return data.title || data.name || null
-  } catch {
-    return null
-  } finally {
-    clearTimeout(timer)
-  }
+  })().finally(() => {
+    titleByIdInFlight.delete(key)
+  })
+  titleByIdInFlight.set(key, promise)
+  return promise
 }
 
 // Resolve at most BACKFILL_MAX_PER_CALL untitled ids per request.
@@ -334,50 +560,59 @@ async function tmdbLookup(
   year: number | undefined,
 ): Promise<SuggestionItem | null> {
   if (!_tmdbKey) return null
-  const url = new URL(`${TMDB_BASE}/search/${kind}`)
-  url.searchParams.set('api_key', _tmdbKey)
-  url.searchParams.set('query', title)
-  if (year) {
-    url.searchParams.set(kind === 'movie' ? 'primary_release_year' : 'first_air_date_year', String(year))
-  }
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), TMDB_TIMEOUT_MS)
-  let r: Response
-  try {
-    r = await fetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal })
-  } catch {
-    return null
-  } finally {
-    clearTimeout(timer)
-  }
-  if (!r.ok) {
-    if (r.status === 429) {
-      console.error('[suggestions] TMDB rate-limited on /search; retry-after:', r.headers.get('retry-after'))
+  const key = `${kind}:${title.toLowerCase()}:${year ?? ''}`
+  const existing = lookupInFlight.get(key)
+  if (existing) return existing
+  const promise = (async (): Promise<SuggestionItem | null> => {
+    const url = new URL(`${TMDB_BASE}/search/${kind}`)
+    url.searchParams.set('api_key', _tmdbKey!)
+    url.searchParams.set('query', title)
+    if (year) {
+      url.searchParams.set(kind === 'movie' ? 'primary_release_year' : 'first_air_date_year', String(year))
     }
-    return null
-  }
-  const data = (await r.json()) as {
-    results?: Array<{
-      id: number
-      title?: string
-      name?: string
-      poster_path: string | null
-      overview?: string
-      release_date?: string
-      first_air_date?: string
-    }>
-  }
-  const top = data.results?.[0]
-  if (!top) return null
-  const date = top.release_date || top.first_air_date || ''
-  const parsedYear = date ? Number(date.slice(0, 4)) : undefined
-  return {
-    id: top.id,
-    title: top.title || top.name || title,
-    posterPath: top.poster_path,
-    overview: top.overview,
-    year: Number.isFinite(parsedYear) ? parsedYear : undefined,
-  }
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), TMDB_TIMEOUT_MS)
+    let r: Response
+    try {
+      r = await fetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal })
+    } catch {
+      return null
+    } finally {
+      clearTimeout(timer)
+    }
+    if (!r.ok) {
+      if (r.status === 429) {
+        console.error('[suggestions] TMDB rate-limited on /search; retry-after:', r.headers.get('retry-after'))
+      }
+      return null
+    }
+    const data = (await r.json()) as {
+      results?: Array<{
+        id: number
+        title?: string
+        name?: string
+        poster_path: string | null
+        overview?: string
+        release_date?: string
+        first_air_date?: string
+      }>
+    }
+    const top = data.results?.[0]
+    if (!top) return null
+    const date = top.release_date || top.first_air_date || ''
+    const parsedYear = date ? Number(date.slice(0, 4)) : undefined
+    return {
+      id: top.id,
+      title: top.title || top.name || title,
+      posterPath: top.poster_path,
+      overview: top.overview,
+      year: Number.isFinite(parsedYear) ? parsedYear : undefined,
+    }
+  })().finally(() => {
+    lookupInFlight.delete(key)
+  })
+  lookupInFlight.set(key, promise)
+  return promise
 }
 
 // TMDB returns 20 items per page on /trending/{type}/week. We paginate
@@ -396,6 +631,169 @@ const TRENDING_MAX_PAGES = 5
 // shift, and is reset for tests by _setTmdbApiKeyForTests().
 const trendingCache: { [K in 'movie' | 'tv']?: { items: SuggestionItem[]; expiresAt: number } } = {}
 
+// TMDB genre-name → genre-id mapping per kind. Sonarr/Radarr return
+// genre *names*; TMDB /discover takes ids. Lowercased keys, with
+// common aliases so e.g. Sonarr's "Action" doesn't lose its TV match
+// against "Action & Adventure". Unknown names quietly drop.
+const TMDB_GENRE_IDS: { movie: Record<string, number>; tv: Record<string, number> } = {
+  movie: {
+    action: 28,
+    adventure: 12,
+    animation: 16,
+    comedy: 35,
+    crime: 80,
+    documentary: 99,
+    drama: 18,
+    family: 10751,
+    fantasy: 14,
+    history: 36,
+    horror: 27,
+    music: 10402,
+    musical: 10402,
+    mystery: 9648,
+    romance: 10749,
+    'science fiction': 878,
+    'sci-fi': 878,
+    'sci-fi & fantasy': 878,
+    thriller: 53,
+    war: 10752,
+    western: 37,
+    biography: 36,
+    sport: 99,
+  },
+  tv: {
+    action: 10759,
+    adventure: 10759,
+    'action & adventure': 10759,
+    animation: 16,
+    anime: 16,
+    comedy: 35,
+    crime: 80,
+    documentary: 99,
+    drama: 18,
+    family: 10751,
+    fantasy: 10765,
+    history: 18,
+    horror: 9648,
+    kids: 10762,
+    mystery: 9648,
+    news: 10763,
+    reality: 10764,
+    'science fiction': 10765,
+    'sci-fi': 10765,
+    'sci-fi & fantasy': 10765,
+    'soap': 10766,
+    talk: 10767,
+    thriller: 9648,
+    war: 10768,
+    'war & politics': 10768,
+    western: 37,
+    romance: 10749,
+  },
+}
+
+function genreNamesToTmdbIds(kind: 'movie' | 'tv', names: string[]): number[] {
+  const table = TMDB_GENRE_IDS[kind]
+  const ids = new Set<number>()
+  for (const n of names) {
+    const id = table[n.toLowerCase().trim()]
+    if (id) ids.add(id)
+  }
+  return Array.from(ids)
+}
+
+// Pick the top-N genres from a library for discover-based fill. Same
+// counting as computeGenreDistribution but returns names so they can
+// be id-mapped per kind.
+function topGenreNames(library: Array<{ genres?: string[] }>, n: number): string[] {
+  const counts = new Map<string, number>()
+  for (const item of library) {
+    if (!item.genres) continue
+    for (const g of item.genres) {
+      if (!g) continue
+      counts.set(g, (counts.get(g) ?? 0) + 1)
+    }
+  }
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, n)
+    .map(([g]) => g)
+}
+
+// Discover-based, library-aware fill source. Pulls TMDB's most-popular
+// titles in the household's top genres. Used in place of trending when
+// personalized picks fall short — taste-aware fallback rather than
+// generic "what's hot this week." Returns up to ~60 rows; the route
+// filter trims further. Falls back to empty on any TMDB hiccup;
+// callers chain with trending as a last resort.
+const DISCOVER_MAX_PAGES = 3
+const discoverCache: { [k in 'movie' | 'tv']?: { key: string; items: SuggestionItem[]; expiresAt: number } } = {}
+
+async function tmdbDiscoverByGenres(
+  kind: 'movie' | 'tv',
+  genreIds: number[],
+): Promise<SuggestionItem[]> {
+  if (!_tmdbKey || genreIds.length === 0) return []
+  const key = genreIds.slice().sort((a, b) => a - b).join(',')
+  const now = Date.now()
+  const cached = discoverCache[kind]
+  if (cached && cached.key === key && cached.expiresAt > now) return cached.items.slice()
+  type TmdbRow = {
+    id: number
+    title?: string
+    name?: string
+    poster_path: string | null
+    overview?: string
+    release_date?: string
+    first_air_date?: string
+  }
+  const pages = await Promise.all(
+    Array.from({ length: DISCOVER_MAX_PAGES }, async (_, i) => {
+      const url = new URL(`${TMDB_BASE}/discover/${kind}`)
+      url.searchParams.set('api_key', _tmdbKey!)
+      url.searchParams.set('page', String(i + 1))
+      url.searchParams.set('sort_by', 'popularity.desc')
+      url.searchParams.set('vote_count.gte', '50')
+      url.searchParams.set('with_genres', key)
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), TMDB_TIMEOUT_MS)
+      try {
+        const r = await fetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal })
+        if (!r.ok) {
+          if (r.status === 429) {
+            console.error('[suggestions] TMDB rate-limited on /discover; retry-after:', r.headers.get('retry-after'))
+          } else {
+            console.error('[suggestions] TMDB /discover non-ok:', r.status, 'page', i + 1)
+          }
+          return null
+        }
+        const data = (await r.json()) as { results?: TmdbRow[] }
+        return data.results ?? []
+      } catch (e) {
+        console.error('[suggestions] TMDB /discover threw on page', i + 1, e instanceof Error ? e.message : String(e))
+        return null
+      } finally {
+        clearTimeout(timer)
+      }
+    }),
+  )
+  const all: TmdbRow[] = []
+  for (const rows of pages) if (rows && rows.length > 0) all.push(...rows)
+  const items: SuggestionItem[] = all.map((r) => {
+    const date = r.release_date || r.first_air_date || ''
+    const y = date ? Number(date.slice(0, 4)) : undefined
+    return {
+      id: r.id,
+      title: r.title || r.name || '',
+      posterPath: r.poster_path,
+      overview: r.overview,
+      year: Number.isFinite(y) ? y : undefined,
+    }
+  })
+  discoverCache[kind] = { key, items, expiresAt: now + TRENDING_CACHE_TTL_MS }
+  return items.slice()
+}
+
 async function tmdbTrending(kind: 'movie' | 'tv'): Promise<SuggestionItem[]> {
   if (!_tmdbKey) return []
   const now = Date.now()
@@ -410,24 +808,37 @@ async function tmdbTrending(kind: 'movie' | 'tv'): Promise<SuggestionItem[]> {
     release_date?: string
     first_air_date?: string
   }
-  const all: TmdbRow[] = []
-  for (let page = 1; page <= TRENDING_MAX_PAGES; page++) {
-    const url = new URL(`${TMDB_BASE}/trending/${kind}/week`)
-    url.searchParams.set('api_key', _tmdbKey)
-    url.searchParams.set('page', String(page))
-    const r = await fetch(url, { headers: { Accept: 'application/json' } })
-    if (!r.ok) {
-      if (r.status === 429) {
-        console.error('[suggestions] TMDB rate-limited on /trending; retry-after:', r.headers.get('retry-after'))
-      } else {
-        console.error('[suggestions] TMDB /trending non-ok:', r.status)
+  // Fire all pages in parallel. The TMDB free tier (~40 req / 10s)
+  // comfortably absorbs 5 concurrent /trending calls, and parallel
+  // pagination cuts cold-start + fill latency from ~5x serial to ~1x.
+  // Short-page early-exit becomes a hole filler (drop nulls), not a
+  // sequential break.
+  const pages = await Promise.all(
+    Array.from({ length: TRENDING_MAX_PAGES }, async (_, i) => {
+      const url = new URL(`${TMDB_BASE}/trending/${kind}/week`)
+      url.searchParams.set('api_key', _tmdbKey!)
+      url.searchParams.set('page', String(i + 1))
+      try {
+        const r = await fetch(url, { headers: { Accept: 'application/json' } })
+        if (!r.ok) {
+          if (r.status === 429) {
+            console.error('[suggestions] TMDB rate-limited on /trending; retry-after:', r.headers.get('retry-after'))
+          } else {
+            console.error('[suggestions] TMDB /trending non-ok:', r.status, 'page', i + 1)
+          }
+          return null
+        }
+        const data = (await r.json()) as { results?: TmdbRow[] }
+        return data.results ?? []
+      } catch (e) {
+        console.error('[suggestions] TMDB /trending fetch threw on page', i + 1, e instanceof Error ? e.message : String(e))
+        return null
       }
-      break
-    }
-    const data = (await r.json()) as { results?: TmdbRow[] }
-    const rows = data.results ?? []
-    all.push(...rows)
-    if (rows.length < 20) break // TMDB returned a short page, no more to fetch
+    }),
+  )
+  const all: TmdbRow[] = []
+  for (const rows of pages) {
+    if (rows && rows.length > 0) all.push(...rows)
   }
   const items: SuggestionItem[] = all.map((r) => {
     const date = r.release_date || r.first_air_date || ''
@@ -526,8 +937,14 @@ function readToolUse(response: Anthropic.Messages.Message): ClaudeResponse {
 }
 
 // System message stack shared between initial call and retry. Library
-// + rejections live in the cached prefix; user-likes vary per caller.
-function systemStack(libraryBlock: string, userLikesBlock: string): Array<{
+// + rejections live in the cached prefix; user-likes and recently-
+// shown vary per caller and stay outside the cache so they can change
+// freely without invalidating the household library cache.
+function systemStack(
+  libraryBlock: string,
+  userLikesBlock: string,
+  recentlyShownBlock: string,
+): Array<{
   type: 'text'
   text: string
   cache_control?: { type: 'ephemeral' }
@@ -536,6 +953,7 @@ function systemStack(libraryBlock: string, userLikesBlock: string): Array<{
     { type: 'text', text: SYSTEM_PROMPT },
     { type: 'text', text: libraryBlock, cache_control: { type: 'ephemeral' } },
     ...(userLikesBlock ? [{ type: 'text' as const, text: userLikesBlock }] : []),
+    ...(recentlyShownBlock ? [{ type: 'text' as const, text: recentlyShownBlock }] : []),
   ]
 }
 
@@ -543,17 +961,24 @@ function userAsk(kind: 'movie' | 'tv', n: number): string {
   return `Recommend ${n} ${kind === 'movie' ? 'movies' : 'TV shows'} for this household by calling submit_recommendations. Mirror the library's genre distribution — return a proportional mix across drama, comedy, action, animation, documentary, etc. Weight toward the user's explicitly LIKED titles when present. Strictly avoid the household's NEVER SUGGEST list and stylistically near matches.`
 }
 
+// Higher temperature drives meaningfully different picks across
+// refreshes (the cached prompt prefix would otherwise produce near-
+// identical lists at low temp). 0.7 still keeps Claude in the
+// "obvious yes" zone the system prompt asks for.
+const CLAUDE_TEMPERATURE = 0.7
+
 async function callClaudeInitial(
   client: Anthropic,
   kind: 'movie' | 'tv',
   libraryBlock: string,
   userLikesBlock: string,
+  recentlyShownBlock: string,
 ): Promise<ClaudeResponse> {
   const response = await client.messages.create({
     model: MODEL,
     max_tokens: 1024,
-    temperature: 0.4,
-    system: systemStack(libraryBlock, userLikesBlock),
+    temperature: CLAUDE_TEMPERATURE,
+    system: systemStack(libraryBlock, userLikesBlock, recentlyShownBlock),
     tools: [SUBMIT_TOOL],
     tool_choice: { type: 'tool', name: SUBMIT_TOOL.name },
     messages: [{ role: 'user', content: userAsk(kind, CLAUDE_OVERFETCH) }],
@@ -566,6 +991,7 @@ async function callClaudeRetry(
   kind: 'movie' | 'tv',
   libraryBlock: string,
   userLikesBlock: string,
+  recentlyShownBlock: string,
   prior: ToolUseBlock,
   rejectedPicks: Array<{ title: string; reason: string }>,
   nNeeded: number,
@@ -580,8 +1006,8 @@ async function callClaudeRetry(
   const response = await client.messages.create({
     model: MODEL,
     max_tokens: 1024,
-    temperature: 0.4,
-    system: systemStack(libraryBlock, userLikesBlock),
+    temperature: CLAUDE_TEMPERATURE,
+    system: systemStack(libraryBlock, userLikesBlock, recentlyShownBlock),
     tools: [SUBMIT_TOOL],
     tool_choice: { type: 'tool', name: SUBMIT_TOOL.name },
     messages: [
@@ -614,10 +1040,36 @@ function mergeUsage(a: UsageBlock, b: UsageBlock): UsageBlock {
   }
 }
 
+// Tiny timing collector — emits a Server-Timing response header so
+// the browser devtools Network tab shows the per-phase breakdown.
+// Names follow the Server-Timing spec (RFC 8673) so DevTools renders
+// them as a stacked bar.
+function makeTiming(): {
+  mark: (name: string) => () => void
+  header: () => string
+} {
+  const entries: Array<{ name: string; ms: number }> = []
+  return {
+    mark(name) {
+      const start = performance.now()
+      return () => entries.push({ name, ms: performance.now() - start })
+    },
+    header() {
+      return entries.map((e) => `${e.name};dur=${e.ms.toFixed(1)}`).join(', ')
+    },
+  }
+}
+
 suggestions.get('/:type', async (c) => {
   const type = c.req.param('type')
   if (type !== 'movie' && type !== 'tv') {
     return c.json({ error: 'invalid_type' }, 400)
+  }
+
+  const timing = makeTiming()
+  const setTimingHeader = () => {
+    const h = timing.header()
+    if (h) c.header('Server-Timing', h)
   }
 
   // ?force=trending — client opts out of the Claude call to avoid
@@ -626,11 +1078,22 @@ suggestions.get('/:type', async (c) => {
   // identically.
   const force = c.req.query('force')
 
-  // Library + rejections in parallel.
+  // Fully parallel prologue. The session is set by the auth middleware
+  // before this handler runs, so feedback can race library/rejections.
+  // Cost is bounded — feedback is a JSON read with module cache; even
+  // when the request short-circuits to cold-start or trending, the
+  // unawaited fetch settles harmlessly off the hot path.
+  const session = c.get('session')
+  const userFeedbackPromise = getUserFeedback(session.sub).catch(() => ({
+    movie: { liked: [], disliked: [] },
+    tv: { liked: [], disliked: [] },
+  }))
+  const endPrologue = timing.mark('prologue')
   const [library, rejections] = await Promise.all([
     type === 'movie' ? fetchRadarrLibrary() : fetchSonarrLibrary(),
     getRejections(),
   ])
+  endPrologue()
 
   const kindRejections = type === 'movie' ? rejections.movie : rejections.tv
   const rejected = new Set(kindRejections.map((r) => r.id))
@@ -667,14 +1130,20 @@ suggestions.get('/:type', async (c) => {
   })
 
   if (force === 'trending') {
+    const endTrending = timing.mark('trending')
     const trending = filterHouseholdSafe(await tmdbTrending(type))
+    endTrending()
+    setTimingHeader()
     return c.json({ source: 'trending', items: trending.slice(0, TARGET_COUNT), _diag: diag() })
   }
 
   // Cold start: library too small for meaningful taste signal.
   if (library.length < COLD_START_THRESHOLD) {
     console.warn('[suggestions] Cold-start path: library too small to filter', diag())
+    const endTrending = timing.mark('trending')
     const trending = filterHouseholdSafe(await tmdbTrending(type))
+    endTrending()
+    setTimingHeader()
     return c.json({
       source: 'trending',
       items: trending.slice(0, TARGET_COUNT),
@@ -692,8 +1161,8 @@ suggestions.get('/:type', async (c) => {
     return c.json({ error: 'api_key_required', hint: 'set your key in the user menu' }, 402)
   }
 
-  const session = c.get('session')
-  const userFeedback = await getUserFeedback(session.sub)
+  // Already in flight from the prologue — just await the resolution.
+  const userFeedback = await userFeedbackPromise
   const likedRaw = type === 'movie' ? userFeedback.movie.liked : userFeedback.tv.liked
 
   // Backfill missing titles on legacy entries so the Claude prompt
@@ -709,6 +1178,7 @@ suggestions.get('/:type', async (c) => {
   const client = new Anthropic({ apiKey: userKey })
   const libraryBlock = buildLibraryBlock(type, library, kindRejectionsTitled)
   const userLikesBlock = buildUserLikesBlock(liked)
+  const recentlyShownBlock = buildRecentlyShownBlock(getRecentlyShown(session.sub, type))
 
   // Tool-use enforced pipeline:
   //   1. Claude is forced to call submit_recommendations with N picks
@@ -728,11 +1198,11 @@ suggestions.get('/:type', async (c) => {
   ): Promise<{
     accepted: SuggestionItem[]
     rejectedForRetry: Array<{ title: string; reason: string }>
-    counters: { lookupNulls: number; droppedAsDedupe: number; droppedAsRejected: number; droppedAsLibrary: number }
+    counters: { lookupNulls: number; droppedAsDedupe: number; droppedAsRejected: number; droppedAsLibrary: number; droppedAsYearMismatch: number }
   }> => {
     const accepted: SuggestionItem[] = []
     const rejectedForRetry: Array<{ title: string; reason: string }> = []
-    const counters = { lookupNulls: 0, droppedAsDedupe: 0, droppedAsRejected: 0, droppedAsLibrary: 0 }
+    const counters = { lookupNulls: 0, droppedAsDedupe: 0, droppedAsRejected: 0, droppedAsLibrary: 0, droppedAsYearMismatch: 0 }
 
     // Pre-validate by title BEFORE the TMDB lookup. If Claude's pick
     // title already matches a library or rejection title, we don't
@@ -761,10 +1231,24 @@ suggestions.get('/:type', async (c) => {
     const seen = new Set<number>()
     for (let i = 0; i < lookups.length; i++) {
       const r = lookups[i]
-      const original = survivors[i].pick.title
+      const pick = survivors[i].pick
+      const original = pick.title
       if (!r) {
         counters.lookupNulls++
         rejectedForRetry.push({ title: original, reason: 'TMDB lookup failed — title may be misspelled' })
+        continue
+      }
+      // Year-proximity guard. When Claude provided a year and TMDB's
+      // top result is off by more than 2, the search likely matched a
+      // remake / spin-off / unrelated show with overlapping keywords.
+      // Better to drop and let the retry produce a fresh pick than to
+      // surface the wrong title under Claude's intent.
+      if (pick.year && r.year && Math.abs(r.year - pick.year) > 2) {
+        counters.droppedAsYearMismatch++
+        rejectedForRetry.push({
+          title: original,
+          reason: `TMDB top match was "${r.title}" (${r.year}), but you asked for ${pick.year} — likely a different work; pick a closer title or use the exact year`,
+        })
         continue
       }
       if (seen.has(r.id)) {
@@ -797,12 +1281,27 @@ suggestions.get('/:type', async (c) => {
     return { accepted, rejectedForRetry, counters }
   }
 
+  // Speculatively warm the trending + discover caches in parallel
+  // with the Claude call. If accepted falls short and we need fill,
+  // both are already in cache (60s TTL) so the fill path is a memory
+  // read, not a 5-page TMDB roundtrip. If accepted is healthy, the
+  // prefetched data simply expires unused — the discover/trending
+  // caches dedupe across users in the same minute window. Errors are
+  // swallowed: prefetch is opportunistic, not load-bearing.
+  const topGenreIdsForPrefetch = genreNamesToTmdbIds(type, topGenreNames(library, 3))
+  void tmdbTrending(type).catch(() => {})
+  if (topGenreIdsForPrefetch.length > 0) {
+    void tmdbDiscoverByGenres(type, topGenreIdsForPrefetch).catch(() => {})
+  }
+
   let totalUsage: UsageBlock = {}
   let r1: ClaudeResponse
+  const endClaudeInitial = timing.mark('claudeInitial')
   try {
-    r1 = await callClaudeInitial(client, type, libraryBlock, userLikesBlock)
+    r1 = await callClaudeInitial(client, type, libraryBlock, userLikesBlock, recentlyShownBlock)
     totalUsage = mergeUsage(totalUsage, r1.usage)
   } catch (e) {
+    endClaudeInitial()
     console.error('[suggestions] Claude call failed:', e)
     await appendUsageEvent({
       sub: session.sub,
@@ -813,14 +1312,18 @@ suggestions.get('/:type', async (c) => {
       error: e instanceof Error ? e.message : String(e),
     })
     const trending = filterHouseholdSafe(await tmdbTrending(type))
+    setTimingHeader()
     return c.json({
       source: 'trending_fallback',
       items: trending.slice(0, TARGET_COUNT),
       _diag: diag({ reason: 'claude_threw' }),
     })
   }
+  endClaudeInitial()
 
+  const endValidate1 = timing.mark('validate1')
   const v1 = await validate(r1.picks)
+  endValidate1()
   let accepted = v1.accepted
   let lastCounters = v1.counters
   let triedRetry = false
@@ -831,18 +1334,23 @@ suggestions.get('/:type', async (c) => {
   if (r1.toolUse && accepted.length < TARGET_COUNT && v1.rejectedForRetry.length > 0) {
     triedRetry = true
     const nNeeded = Math.min(CLAUDE_OVERFETCH, TARGET_COUNT - accepted.length + 4)
+    const endClaudeRetry = timing.mark('claudeRetry')
     try {
       const r2 = await callClaudeRetry(
         client,
         type,
         libraryBlock,
         userLikesBlock,
+        recentlyShownBlock,
         r1.toolUse,
         v1.rejectedForRetry,
         nNeeded,
       )
       totalUsage = mergeUsage(totalUsage, r2.usage)
+      endClaudeRetry()
+      const endValidate2 = timing.mark('validate2')
       const v2 = await validate(r2.picks)
+      endValidate2()
       lastCounters = v2.counters
       const acceptedIds = new Set(accepted.map((a) => a.id))
       for (const item of v2.accepted) {
@@ -868,12 +1376,40 @@ suggestions.get('/:type', async (c) => {
     costCents: computeCostCents(totalUsage),
   })
 
-  // Still short of target after the retry — fill from trending so the
-  // user always sees a full strip. Don't dedupe-overlap with accepted
-  // (different ids by construction); only overlap-check via the
-  // household-safe filter.
+  // Still short of target after the retry — fill so the user always
+  // sees a full strip. Prefer library-aware discover (TMDB popularity
+  // sorted by the household's top genres) over generic trending; fall
+  // back to trending when no genres map. Source labels stay stable so
+  // the SPA's typed switch keeps working — fillSource diagnostic
+  // surfaces which path actually fired.
   if (accepted.length < TARGET_COUNT) {
-    console.warn('[suggestions] Personalized picks short of target — filling from trending', {
+    const endFill = timing.mark('fill')
+    const fillIds = new Set(accepted.map((a) => a.id))
+    const topGenreIds = genreNamesToTmdbIds(type, topGenreNames(library, 3))
+    let fillSource: 'discover' | 'trending' | 'discover+trending' = 'trending'
+    let fill: SuggestionItem[] = []
+    if (topGenreIds.length > 0) {
+      const discover = filterHouseholdSafe(await tmdbDiscoverByGenres(type, topGenreIds)).filter(
+        (t) => !fillIds.has(t.id),
+      )
+      if (discover.length > 0) {
+        fill = discover
+        fillSource = 'discover'
+      }
+    }
+    // If discover didn't return enough, top up with trending so the
+    // strip still fills.
+    if (accepted.length + fill.length < TARGET_COUNT) {
+      const fillIdsAfter = new Set([...fillIds, ...fill.map((f) => f.id)])
+      const trending = filterHouseholdSafe(await tmdbTrending(type)).filter(
+        (t) => !fillIdsAfter.has(t.id),
+      )
+      fill = [...fill, ...trending]
+      fillSource = fillSource === 'discover' ? 'discover+trending' : 'trending'
+    }
+    const filled = [...accepted, ...fill].slice(0, TARGET_COUNT)
+    endFill()
+    console.warn('[suggestions] Personalized picks short of target — filling', {
       kind: type,
       sub: session.sub,
       libraryCount: library.length,
@@ -881,30 +1417,31 @@ suggestions.get('/:type', async (c) => {
       titledRejections: kindRejectionsTitled.filter((r) => r.title).length,
       accepted: accepted.length,
       retryAttempted: triedRetry,
+      fillSource,
       lastCounters,
     })
-    const fillIds = new Set(accepted.map((a) => a.id))
-    const trending = filterHouseholdSafe(await tmdbTrending(type)).filter(
-      (t) => !fillIds.has(t.id),
-    )
-    const filled = [...accepted, ...trending].slice(0, TARGET_COUNT)
+    recordShown(session.sub, type, filled)
+    setTimingHeader()
     if (accepted.length === 0) {
       return c.json({
         source: 'personalized_empty_trending_fallback',
         items: filled,
-        _diag: diag({ accepted: 0, retryAttempted: triedRetry, lastCounters }),
+        _diag: diag({ accepted: 0, retryAttempted: triedRetry, fillSource, lastCounters }),
       })
     }
     return c.json({
       source: 'personalized_filled',
       items: filled,
-      _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, lastCounters }),
+      _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, fillSource, lastCounters }),
     })
   }
 
+  const finalAccepted = accepted.slice(0, TARGET_COUNT)
+  recordShown(session.sub, type, finalAccepted)
+  setTimingHeader()
   return c.json({
     source: 'personalized',
-    items: accepted.slice(0, TARGET_COUNT),
+    items: finalAccepted,
     _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry }),
   })
 })
