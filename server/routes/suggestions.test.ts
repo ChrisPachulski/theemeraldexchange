@@ -3,7 +3,14 @@ import { promises as fs } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { Hono } from 'hono'
-import { suggestions, _setTmdbApiKeyForTests } from './suggestions.js'
+import {
+  suggestions,
+  _setTmdbApiKeyForTests,
+  _resetRecentlyShownForTests,
+  _resetLibraryCacheForTests,
+  _resetTmdbInFlightForTests,
+  _resetLibraryBlockCacheForTests,
+} from './suggestions.js'
 import { createSession } from '../session.js'
 import { _setRejectionsPathForTests, addRejection } from '../services/rejections.js'
 import { _setUserFeedbackPathForTests, setLike } from '../services/userFeedback.js'
@@ -55,6 +62,10 @@ beforeEach(async () => {
   lastCreateArgs.value = null
   fakeResponse.value = null
   _setTmdbApiKeyForTests(null)
+  _resetRecentlyShownForTests()
+  _resetLibraryCacheForTests()
+  _resetTmdbInFlightForTests()
+  _resetLibraryBlockCacheForTests()
 })
 
 afterEach(async () => {
@@ -359,5 +370,298 @@ describe('suggestions route — prompt shape', () => {
     }
     const found = args.system.find((s) => s.text.includes('explicitly LIKED'))
     expect(found).toBeUndefined()
+  })
+
+  it('includes a TARGET GENRE MIX line with computed percentages', async () => {
+    stubFetchForSonarr()
+    const r = await appUnderTest().request('/tv', {
+      headers: {
+        Cookie: await userCookie(),
+        'X-Anthropic-Api-Key': 'sk-ant-test-fakekey',
+      },
+    })
+    expect(r.status).toBe(200)
+    const args = lastCreateArgs.value as {
+      system: Array<{ text: string }>
+    }
+    const blocks = args.system.map((s) => s.text).join('\n')
+    expect(blocks).toContain('TARGET GENRE MIX')
+    // Library is 3 dramas + 1 crime + 1 fantasy + 1 history.
+    // Drama appears in all 3 (3/6 = 50%).
+    expect(blocks).toMatch(/Drama 50%/)
+  })
+})
+
+describe('suggestions route — TMDB validation', () => {
+  const sonarrSeries = [
+    { title: 'Sons of Anarchy', year: 2008, tmdbId: 1001, genres: ['Crime', 'Drama'] },
+    { title: 'House of the Dragon', year: 2022, tmdbId: 1002, genres: ['Drama', 'Fantasy'] },
+    { title: 'The Crown', year: 2016, tmdbId: 1003, genres: ['Drama', 'History'] },
+  ]
+
+  it('drops picks whose TMDB top-match year is far from the requested year', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let claudeCalls = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(JSON.stringify(sonarrSeries), { status: 200 })
+        }
+        if (url.includes('themoviedb.org/3/search/tv')) {
+          // Return a 1990 result for a pick that asked for 2020 — far outside the 2-yr window.
+          return new Response(
+            JSON.stringify({
+              results: [
+                { id: 7777, name: 'Different Show With Same Words', poster_path: null, first_air_date: '1990-01-01' },
+              ],
+            }),
+            { status: 200 },
+          )
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    _setTmdbApiKeyForTests('test-key')
+    fakeResponse.value = {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu_' + ++claudeCalls,
+          name: 'submit_recommendations',
+          input: { picks: [{ title: 'Brand New Show', year: 2020 }] },
+        },
+      ],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }
+
+    const r = await appUnderTest().request('/tv', {
+      headers: {
+        Cookie: await userCookie(),
+        'X-Anthropic-Api-Key': 'sk-ant-test-fakekey',
+      },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { source: string; items: unknown[] }
+    // Pick was dropped — no personalized survivors → empty trending fallback.
+    expect(body.source).toBe('personalized_empty_trending_fallback')
+    expect(body.items).toEqual([])
+    warnSpy.mockRestore()
+  })
+
+  it('caches Sonarr library across two consecutive calls (single upstream fetch)', async () => {
+    const sonarrSeriesLocal = [
+      { title: 'Sons of Anarchy', year: 2008, tmdbId: 1001, genres: ['Crime', 'Drama'] },
+      { title: 'House of the Dragon', year: 2022, tmdbId: 1002, genres: ['Drama', 'Fantasy'] },
+      { title: 'The Crown', year: 2016, tmdbId: 1003, genres: ['Drama', 'History'] },
+    ]
+    let sonarrFetches = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          sonarrFetches++
+          return new Response(JSON.stringify(sonarrSeriesLocal), { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    _setTmdbApiKeyForTests('test-key')
+    fakeResponse.value = {
+      content: [
+        { type: 'tool_use', id: 'tu_a', name: 'submit_recommendations', input: { picks: [] } },
+      ],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }
+
+    const app = appUnderTest()
+    const cookie = await userCookie()
+    const r1 = await app.request('/tv', {
+      headers: { Cookie: cookie, 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r1.status).toBe(200)
+    const r2 = await app.request('/tv', {
+      headers: { Cookie: cookie, 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r2.status).toBe(200)
+    // Single Sonarr fetch despite two route invocations.
+    expect(sonarrFetches).toBe(1)
+  })
+
+  it('emits a Server-Timing response header with phase durations', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(JSON.stringify([]), { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/tv', {
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r.status).toBe(200)
+    const st = r.headers.get('Server-Timing') ?? ''
+    // Cold-start path runs prologue + trending.
+    expect(st).toMatch(/prologue;dur=[\d.]+/)
+    expect(st).toMatch(/trending;dur=[\d.]+/)
+  })
+
+  it('omits RECENTLY SHOWN block on the first call but injects it on the second (call-to-call variety)', async () => {
+    const sonarrSeriesLocal = [
+      { title: 'Sons of Anarchy', year: 2008, tmdbId: 1001, genres: ['Crime', 'Drama'] },
+      { title: 'House of the Dragon', year: 2022, tmdbId: 1002, genres: ['Drama', 'Fantasy'] },
+      { title: 'The Crown', year: 2016, tmdbId: 1003, genres: ['Drama', 'History'] },
+    ]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(JSON.stringify(sonarrSeriesLocal), { status: 200 })
+        }
+        if (url.includes('themoviedb.org/3/search/tv')) {
+          return new Response(
+            JSON.stringify({
+              results: [{ id: 9001, name: 'Severance', poster_path: '/p.jpg', first_air_date: '2022-02-18' }],
+            }),
+            { status: 200 },
+          )
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    _setTmdbApiKeyForTests('test-key')
+    fakeResponse.value = {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu_first',
+          name: 'submit_recommendations',
+          input: { picks: [{ title: 'Severance', year: 2022 }] },
+        },
+      ],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }
+
+    const app = appUnderTest()
+    const cookie = await userCookie()
+
+    // First call — no history yet.
+    const r1 = await app.request('/tv', {
+      headers: { Cookie: cookie, 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r1.status).toBe(200)
+    const args1 = lastCreateArgs.value as {
+      system: Array<{ text: string; cache_control?: unknown }>
+    }
+    expect(args1.system.find((s) => s.text.includes('RECENTLY SHOWN'))).toBeUndefined()
+
+    // Second call — recorded items from r1 should now appear in
+    // RECENTLY SHOWN, in the volatile (non-cached) portion of the stack.
+    lastCreateArgs.value = null
+    const r2 = await app.request('/tv', {
+      headers: { Cookie: cookie, 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r2.status).toBe(200)
+    const args2 = lastCreateArgs.value as {
+      system: Array<{ text: string; cache_control?: unknown }>
+    }
+    const recentBlock = args2.system.find((s) => s.text.includes('RECENTLY SHOWN'))
+    expect(recentBlock).toBeDefined()
+    expect(recentBlock?.text).toContain('- Severance')
+    // Volatile block — must NOT carry cache_control or it would
+    // invalidate the household library cache prefix on every call.
+    expect(recentBlock?.cache_control).toBeUndefined()
+  })
+
+  it('uses TMDB discover with library top genres when personalized picks short, before falling back to trending', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const fetchedUrls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        fetchedUrls.push(url)
+        if (url.includes('/api/v3/series')) {
+          return new Response(JSON.stringify(sonarrSeries), { status: 200 })
+        }
+        if (url.includes('themoviedb.org/3/discover/tv')) {
+          return new Response(
+            JSON.stringify({
+              results: [
+                { id: 5555, name: 'Discover Drama Pick', poster_path: '/p.jpg', first_air_date: '2021-05-01' },
+              ],
+            }),
+            { status: 200 },
+          )
+        }
+        if (url.includes('themoviedb.org/3/search/tv')) {
+          // Claude's pick can't be looked up — forces the fill path.
+          return new Response(JSON.stringify({ results: [] }), { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    _setTmdbApiKeyForTests('test-key')
+    fakeResponse.value = {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu_zero',
+          name: 'submit_recommendations',
+          input: { picks: [{ title: 'Some Title That Won’t Resolve', year: 2024 }] },
+        },
+      ],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }
+
+    const r = await appUnderTest().request('/tv', {
+      headers: {
+        Cookie: await userCookie(),
+        'X-Anthropic-Api-Key': 'sk-ant-test-fakekey',
+      },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as {
+      source: string
+      items: Array<{ id: number; title: string }>
+      _diag?: { fillSource?: string }
+    }
+    expect(body.source).toBe('personalized_empty_trending_fallback')
+    // Discover fired (either from prefetch or the fill path itself).
+    expect(fetchedUrls.some((u) => u.includes('themoviedb.org/3/discover/tv'))).toBe(true)
+    expect(body.items.find((i) => i.id === 5555)).toBeDefined()
+    expect(body._diag?.fillSource).toMatch(/^discover/)
+    warnSpy.mockRestore()
   })
 })

@@ -145,10 +145,17 @@ export function TvTab() {
     })
     return set
   }, [library.data])
-  const trendingFiltered = useMemo(
-    () => (suggested.data?.items ?? []).filter((t) => !libraryByTmdbForTrending.has(t.id)),
-    [suggested.data, libraryByTmdbForTrending],
-  )
+  // Filter out library overlap and dedupe by id (TrendingRow keys on
+  // item.id; a duplicate would render twice and emit a React warning).
+  const trendingFiltered = useMemo(() => {
+    const seen = new Set<number>()
+    return (suggested.data?.items ?? []).filter((t) => {
+      if (libraryByTmdbForTrending.has(t.id)) return false
+      if (seen.has(t.id)) return false
+      seen.add(t.id)
+      return true
+    })
+  }, [suggested.data, libraryByTmdbForTrending])
   const trendingLabel = suggested.data?.source?.startsWith('personalized')
     ? 'Picked for you'
     : 'Trending this week'
