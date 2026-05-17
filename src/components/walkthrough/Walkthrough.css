@@ -221,6 +221,143 @@
   border-top: 1px solid var(--border);
 }
 
+/* Sign-in block — appears in the hero AND footer. Same emerald-rim
+   pill button as the old LoginScreen; ported here so the auth path
+   stays usable without a separate LoginScreen surface. */
+.walkthrough__signin {
+  display: grid;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+}
+
+.walkthrough__signin--foot {
+  margin-top: var(--s-4);
+}
+
+.walkthrough__signin-button {
+  justify-self: start;
+  padding: var(--s-3) var(--s-5);
+  font-family: var(--font-display);
+  font-weight: var(--w-display);
+  font-size: var(--t-sm);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text);
+  background: var(--emerald-bg);
+  border: 1px solid var(--emerald);
+  border-radius: var(--r-pod);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+.walkthrough__signin-button:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--emerald) 30%, var(--surface));
+  transform: translateY(-1px);
+}
+
+.walkthrough__signin-button:focus-visible {
+  outline: 2px solid var(--emerald);
+  outline-offset: 2px;
+}
+
+.walkthrough__signin-button:disabled {
+  opacity: 0.65;
+  cursor: progress;
+}
+
+.walkthrough__signin-hint {
+  margin: 0;
+  font-size: var(--t-sm);
+  color: var(--text-muted);
+  line-height: 1.5;
+  max-width: 60ch;
+}
+
+.walkthrough__signin-error {
+  margin: 0;
+  font-size: var(--t-sm);
+  color: var(--danger);
+}
+
+/* First-run server-discovery rows. Rare path, but the only way the
+   operator sees discoveredServers when PLEX_SERVER_ID is unset. */
+.walkthrough__discovery {
+  margin-top: var(--s-2);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: var(--s-2);
+}
+
+.walkthrough__discovery-title {
+  font-size: var(--t-xs);
+  color: var(--text-subtle);
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: var(--tr-eyebrow);
+  font-family: var(--font-display);
+}
+
+.walkthrough__discovery-title code,
+.walkthrough__discovery-id {
+  font-family: var(--font-mono);
+  color: var(--emerald);
+}
+
+.walkthrough__discovery-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s-2);
+}
+
+.walkthrough__discovery-list li {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: var(--s-2);
+  align-items: center;
+  font-size: var(--t-xs);
+}
+
+.walkthrough__discovery-name {
+  color: var(--text);
+}
+
+.walkthrough__discovery-tag {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: var(--tr-hud);
+  color: var(--emerald);
+  background: var(--emerald-bg);
+  padding: 2px 6px;
+  border-radius: var(--r-pod);
+}
+
+.walkthrough__discovery-id {
+  font-size: var(--t-xs);
+  color: var(--text-subtle);
+  user-select: all;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  .walkthrough__discovery-list li {
+    grid-template-columns: 1fr auto;
+    grid-template-areas: 'name tag' 'id id';
+    gap: var(--s-1) var(--s-2);
+  }
+  .walkthrough__discovery-name { grid-area: name; }
+  .walkthrough__discovery-tag { grid-area: tag; }
+  .walkthrough__discovery-id { grid-area: id; }
+}
+
 /* Footer — discrete, low-emphasis. */
 .walkthrough__foot {
   padding: var(--s-5) 0;

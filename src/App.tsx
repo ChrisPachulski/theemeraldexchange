@@ -11,7 +11,6 @@ import { useRoute, type Route } from './lib/router'
 import { NavTransitionProvider } from './lib/navTransition'
 import { ReplayButton } from './components/nav/ReplayButton'
 import { AuthProvider, useAuth } from './lib/auth'
-import { LoginScreen } from './components/auth/LoginScreen'
 import { Walkthrough } from './components/walkthrough/Walkthrough'
 
 const TABS: Record<Route, () => React.ReactElement> = {
@@ -47,21 +46,17 @@ function Shell() {
   )
 }
 
-// Gate the whole dashboard behind a Plex session. The kraken atmosphere
-// keeps playing under the login screen so the brand is present from the
-// first paint. While /api/me is in flight we render nothing — short
-// (one-RTT) flash, avoids a login screen pop-in for already-authed users.
+// Gate the whole dashboard behind a Plex session. Unauthenticated
+// visitors land on the public Walkthrough — the showcase IS the
+// pre-auth experience, with Plex sign-in CTAs embedded in the hero
+// and footer. The kraken atmosphere keeps playing under both states
+// so the brand is present from first paint. While /api/me is in
+// flight we render nothing — short (one-RTT) flash, avoids any
+// pop-in for already-authed users.
 function AuthGate() {
   const { loading, user } = useAuth()
   if (loading) return null
-  if (!user) {
-    return (
-      <>
-        <Kraken variant="kraken" />
-        <LoginScreen />
-      </>
-    )
-  }
+  if (!user) return <Walkthrough />
   return (
     <NavTransitionProvider>
       <Shell />
@@ -69,19 +64,7 @@ function AuthGate() {
   )
 }
 
-// Pathname /my_site (and any sub-path) renders the public walkthrough
-// without ever mounting AuthProvider — uninvited visitors can see the
-// showcase, and we don't burn a /api/me roundtrip serving it. Nginx
-// and Netlify already fall back unknown paths to index.html, so this
-// works the same on prod and dev.
-function isWalkthroughPath(): boolean {
-  if (typeof window === 'undefined') return false
-  return window.location.pathname.replace(/\/+$/, '') === '/my_site' ||
-    window.location.pathname.startsWith('/my_site/')
-}
-
 function App() {
-  if (isWalkthroughPath()) return <Walkthrough />
   return (
     <AuthProvider>
       <AuthGate />
