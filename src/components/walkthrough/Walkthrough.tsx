@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { Kraken } from '../atmosphere/Kraken'
+import { useAuth } from '../../lib/auth'
 import './Walkthrough.css'
 
-// Public showcase page mounted at pathname /my_site. Sits OUTSIDE the
-// AuthProvider — anyone arriving at the URL can see it without an
-// invitation. The owner shares this link to demo the site externally.
+// Default unauthenticated landing for theemeraldexchange. Uninvited
+// visitors see the showcase first; invited users sign in via the Plex
+// CTA in the hero (or the duplicate CTA in the footer for after-scroll
+// conversion). The showcase IS the pre-auth experience — there's no
+// separate LoginScreen.
 //
 // Voice follows PRODUCT.md: considered, quiet confidence, no
 // marketing exclamations. Long-scroll blog format; each section is
@@ -159,6 +162,46 @@ function WalkthroughSection({ section }: { section: Section }) {
   )
 }
 
+function SignInBlock({ placement }: { placement: 'hero' | 'foot' }) {
+  const { signIn, signInState, signInError, discoveredServers } = useAuth()
+  const pending = signInState === 'pending' || signInState === 'opening'
+  return (
+    <div className={`walkthrough__signin walkthrough__signin--${placement}`}>
+      <button
+        type="button"
+        className="walkthrough__signin-button"
+        onClick={signIn}
+        disabled={pending}
+      >
+        {pending ? 'Waiting for Plex…' : 'Sign in with Plex'}
+      </button>
+      <p className="walkthrough__signin-hint">
+        Access is by Plex invitation only — sign in with the same Plex
+        account that’s been shared the household library.
+      </p>
+      {signInError && (
+        <p className="walkthrough__signin-error" role="alert">{signInError}</p>
+      )}
+      {discoveredServers && discoveredServers.length > 0 && (
+        <div className="walkthrough__discovery">
+          <p className="walkthrough__discovery-title">
+            First-run setup — set <code>PLEX_SERVER_ID</code> to lock this down:
+          </p>
+          <ul className="walkthrough__discovery-list">
+            {discoveredServers.map((s) => (
+              <li key={s.id}>
+                <span className="walkthrough__discovery-name">{s.name}</span>
+                {s.owned && <span className="walkthrough__discovery-tag">owned</span>}
+                <code className="walkthrough__discovery-id">{s.id}</code>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function Walkthrough() {
   return (
     <>
@@ -173,9 +216,11 @@ export function Walkthrough() {
             <p className="walkthrough__lede">
               One bookmark. Find a show, find a movie, see what’s downloading,
               open Plex. The operator UIs of Sonarr, Radarr, and SAB are not
-              promoted, linked, or visible from inside it. This page is a
-              walkthrough — the real thing lives behind a Plex invitation.
+              promoted, linked, or visible from inside it. If you’re invited,
+              sign in below. If you’re not, scroll — the rest of the page is
+              a tour.
             </p>
+            <SignInBlock placement="hero" />
             <nav className="walkthrough__toc" aria-label="Sections">
               {SECTIONS.map((s) => (
                 <a key={s.id} href={`#${s.id}`} className="walkthrough__toc-link">
@@ -188,6 +233,22 @@ export function Walkthrough() {
         {SECTIONS.map((s) => (
           <WalkthroughSection key={s.id} section={s} />
         ))}
+        <section
+          className="walkthrough__section walkthrough__section--in"
+          aria-labelledby="signin-foot-title"
+        >
+          <div className="walkthrough__card">
+            <p className="walkthrough__eyebrow">Sign in</p>
+            <h2 id="signin-foot-title" className="walkthrough__title">
+              Invited? Pick up where you left off.
+            </h2>
+            <p className="walkthrough__body">
+              The Exchange remembers you after the first Plex sign-in.
+              No second password, no household-only username.
+            </p>
+            <SignInBlock placement="foot" />
+          </div>
+        </section>
         <footer className="walkthrough__foot">
           <p className="walkthrough__foot-line">
             Built by the household, for the household. Source &amp; design notes
