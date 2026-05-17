@@ -12,6 +12,7 @@ import { NavTransitionProvider } from './lib/navTransition'
 import { ReplayButton } from './components/nav/ReplayButton'
 import { AuthProvider, useAuth } from './lib/auth'
 import { LoginScreen } from './components/auth/LoginScreen'
+import { Walkthrough } from './components/walkthrough/Walkthrough'
 
 const TABS: Record<Route, () => React.ReactElement> = {
   home: HomeTab,
@@ -68,7 +69,19 @@ function AuthGate() {
   )
 }
 
+// Pathname /my_site (and any sub-path) renders the public walkthrough
+// without ever mounting AuthProvider — uninvited visitors can see the
+// showcase, and we don't burn a /api/me roundtrip serving it. Nginx
+// and Netlify already fall back unknown paths to index.html, so this
+// works the same on prod and dev.
+function isWalkthroughPath(): boolean {
+  if (typeof window === 'undefined') return false
+  return window.location.pathname.replace(/\/+$/, '') === '/my_site' ||
+    window.location.pathname.startsWith('/my_site/')
+}
+
 function App() {
+  if (isWalkthroughPath()) return <Walkthrough />
   return (
     <AuthProvider>
       <AuthGate />

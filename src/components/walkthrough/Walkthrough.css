@@ -1,0 +1,234 @@
+/* Walkthrough — public showcase at /my_site.
+   Long-scroll blog format over the kraken atmosphere. Surfaces use the
+   same frost + ink shadow vocabulary as LoginScreen so the page feels
+   continuous with the gated app behind it. */
+
+.walkthrough {
+  position: relative;
+  z-index: 1;
+  max-width: 880px;
+  margin: 0 auto;
+  padding: var(--s-7) var(--s-5) var(--s-9);
+  display: grid;
+  gap: var(--s-8);
+}
+
+@media (max-width: 720px) {
+  .walkthrough {
+    padding: var(--s-6) var(--s-4) var(--s-8);
+    gap: var(--s-7);
+  }
+}
+
+/* Frosted card vocabulary, shared by hero + every section. */
+.walkthrough__card {
+  padding: var(--s-7) var(--s-6);
+  background: color-mix(in oklch, var(--surface) 90%, transparent);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow:
+    inset 0 1px 0 var(--frost),
+    0 36px 70px -30px var(--ink);
+  display: grid;
+  gap: var(--s-3);
+}
+
+@media (max-width: 720px) {
+  .walkthrough__card {
+    padding: var(--s-6) var(--s-5);
+  }
+}
+
+.walkthrough__card--hero {
+  padding: var(--s-8) var(--s-7);
+  gap: var(--s-4);
+}
+
+@media (max-width: 720px) {
+  .walkthrough__card--hero {
+    padding: var(--s-7) var(--s-5);
+  }
+}
+
+/* Hero block — first viewport. */
+.walkthrough__hero {
+  padding-top: var(--s-8);
+}
+
+.walkthrough__hero-title {
+  font-family: var(--font-display);
+  font-size: var(--t-2xl);
+  font-weight: var(--w-display);
+  letter-spacing: var(--tr-display);
+  line-height: 1.02;
+  color: var(--text);
+  margin: 0;
+}
+
+.walkthrough__lede {
+  font-size: var(--t-md);
+  line-height: 1.55;
+  color: var(--text-muted);
+  margin: 0;
+  max-width: 60ch;
+}
+
+/* Inline anchor jump-nav under the hero — quiet, single-row pills. */
+.walkthrough__toc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin-top: var(--s-4);
+}
+
+.walkthrough__toc-link {
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  text-decoration: none;
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pod);
+  background: var(--frost);
+  transition:
+    color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+
+.walkthrough__toc-link:hover,
+.walkthrough__toc-link:focus-visible {
+  color: var(--emerald);
+  border-color: var(--emerald-dim);
+  background: var(--frost-stronger);
+  outline: none;
+}
+
+/* Sections — visible by default. The --in modifier replays a subtle
+   slide-up as a one-shot entrance polish when IntersectionObserver
+   marks the section as crossing into view. No JS / no IO / static
+   screenshot → sections still render at full visibility. */
+.walkthrough__section {
+  opacity: 1;
+  transform: none;
+}
+
+.walkthrough__section--in {
+  animation: walkthrough-rise var(--dur-slow) var(--ease) both;
+}
+
+@keyframes walkthrough-rise {
+  from {
+    opacity: 0.4;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .walkthrough__section--in {
+    animation: none;
+  }
+}
+
+.walkthrough__eyebrow {
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--emerald);
+  margin: 0;
+}
+
+.walkthrough__title {
+  font-family: var(--font-display);
+  font-size: var(--t-xl);
+  font-weight: var(--w-display);
+  letter-spacing: var(--tr-display);
+  line-height: 1.05;
+  color: var(--text);
+  margin: 0;
+}
+
+.walkthrough__body {
+  font-size: var(--t-base);
+  line-height: 1.6;
+  color: var(--text-muted);
+  margin: 0;
+  max-width: 65ch;
+}
+
+/* Detail rows — definition list inside a card. Each entry is a label
+   in eyebrow style + a single-line value in body voice. */
+.walkthrough__details {
+  margin: var(--s-3) 0 0;
+  padding: var(--s-4) 0 0;
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: var(--s-3);
+}
+
+.walkthrough__detail {
+  display: grid;
+  grid-template-columns: minmax(140px, 180px) 1fr;
+  gap: var(--s-4);
+  align-items: baseline;
+}
+
+@media (max-width: 600px) {
+  .walkthrough__detail {
+    grid-template-columns: 1fr;
+    gap: var(--s-1);
+  }
+}
+
+.walkthrough__detail dt {
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  margin: 0;
+}
+
+.walkthrough__detail dd {
+  font-size: var(--t-sm);
+  line-height: 1.5;
+  color: var(--text);
+  margin: 0;
+}
+
+/* Aside — a single pulled line at the bottom of a section, set in
+   display face at body size to read like a quiet caption. */
+.walkthrough__aside {
+  font-family: var(--font-display);
+  font-size: var(--t-sm);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-tight);
+  color: var(--emerald);
+  margin: var(--s-3) 0 0;
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--border);
+}
+
+/* Footer — discrete, low-emphasis. */
+.walkthrough__foot {
+  padding: var(--s-5) 0;
+  text-align: center;
+}
+
+.walkthrough__foot-line {
+  font-size: var(--t-sm);
+  color: var(--text-subtle);
+  margin: 0;
+}
