@@ -37,6 +37,45 @@ type Props = {
    * the surface. Hide entirely when the caller has no API key set.
    */
   ai?: { enabled: boolean; onToggle: () => void }
+  /** Fetch error from the suggestions query, if any. Surfaces 4xx/5xx
+   * to the user instead of rendering an indistinguishable blank strip. */
+  error?: unknown
+  /** Response `source` for the current items — used to show "trending
+   * fallback (Claude unreachable)" hints so silent degradations are
+   * visible. */
+  source?: string | null
+}
+
+function describeError(error: unknown): { headline: string; hint: string } {
+  const e = error as { status?: number; body?: string; message?: string } | undefined
+  const status = e?.status
+  if (status === 401 || status === 403) {
+    return { headline: 'Session expired', hint: 'Try signing out and back in.' }
+  }
+  if (status === 402) {
+    return {
+      headline: 'AI key needed for personalized picks',
+      hint: 'Open the user menu and paste your Anthropic API key (starts with sk-ant-…).',
+    }
+  }
+  if (status === 429) {
+    return { headline: 'Rate limited', hint: 'Too many requests — try again in a minute.' }
+  }
+  if (typeof status === 'number' && status >= 500) {
+    return { headline: 'Suggestions service errored', hint: 'Check the server logs and refresh.' }
+  }
+  return {
+    headline: 'Couldn’t load suggestions',
+    hint: e?.message ?? 'Network or backend error — refresh to retry.',
+  }
+}
+
+function describeEmptySource(source?: string | null): string | null {
+  if (source === 'trending_fallback') return 'Claude was unreachable — showing trending instead.'
+  if (source === 'personalized_empty_trending_fallback')
+    return 'No new personalized picks (everything was already in your library or rejected). Try clearing a few red dots.'
+  if (source === 'trending') return null
+  return null
 }
 
 export function TrendingRow({
@@ -47,7 +86,27 @@ export function TrendingRow({
   label,
   feedback,
   ai,
+  error,
+  source,
 }: Props) {
+  if (error) {
+    const { headline, hint } = describeError(error)
+    return (
+      <section className="trending">
+        <h3 className="trending__label">{label ?? 'Trending this week'}</h3>
+        <div className="trending__empty">
+          <p className="trending__empty-headline">{headline}</p>
+          <p className="trending__empty-hint">{hint}</p>
+        </div>
+        {ai && (
+          <div className="trending__footer">
+            <AiToggle enabled={ai.enabled} onToggle={ai.onToggle} />
+          </div>
+        )}
+      </section>
+    )
+  }
+
   if (loading) {
     return (
       <section className="trending" aria-busy="true">
@@ -73,20 +132,42 @@ export function TrendingRow({
   }
 
   if (items.length === 0) {
-    if (!ai) return null
+    const emptyHint = describeEmptySource(source)
+    if (!ai && !emptyHint) return null
     return (
       <section className="trending">
         <h3 className="trending__label">{label ?? 'Trending this week'}</h3>
-        <div className="trending__footer">
-          <AiToggle enabled={ai.enabled} onToggle={ai.onToggle} />
-        </div>
+        {emptyHint && (
+          <div className="trending__empty">
+            <p className="trending__empty-hint">{emptyHint}</p>
+          </div>
+        )}
+        {ai && (
+          <div className="trending__footer">
+            <AiToggle enabled={ai.enabled} onToggle={ai.onToggle} />
+          </div>
+        )}
       </section>
     )
   }
 
+  // Subtle hint when items are present but came from a degraded source
+  // (e.g. Claude failed, falling back to trending). The strip still
+  // renders normally; the hint just tells the user why their picks
+  // don't look personalized.
+  const sourceHint =
+    source === 'trending_fallback'
+      ? 'AI was unreachable — showing trending.'
+      : source === 'personalized_filled' || source === 'personalized_empty_trending_fallback'
+        ? 'A few picks are from trending — not enough personalized matches this round.'
+        : null
+
   return (
     <section className="trending">
-      <h3 className="trending__label">{label ?? 'Trending this week'}</h3>
+      <h3 className="trending__label">
+        {label ?? 'Trending this week'}
+        {sourceHint && <span className="trending__source-hint"> · {sourceHint}</span>}
+      </h3>
       <div className="trending__row">
         {items.slice(0, 16).map((item) => {
           const isPending = pendingId === item.id

@@ -34,6 +34,16 @@ export type SuggestionResult = {
   source: SuggestionSource | null
 }
 
+export class SuggestionsError extends Error {
+  status: number
+  body: string
+  constructor(status: number, body: string) {
+    super(`suggestions ${status}: ${body.slice(0, 200)}`)
+    this.status = status
+    this.body = body
+  }
+}
+
 async function fetchSuggested(
   kind: 'movie' | 'tv',
   aiEnabled: boolean,
@@ -49,7 +59,14 @@ async function fetchSuggested(
   const headers: Record<string, string> = {}
   if (useAi && apiKey) headers['X-Anthropic-Api-Key'] = apiKey
   const r = await fetch(url, { credentials: 'include', headers })
-  if (!r.ok) return { items: [], source: null }
+  if (!r.ok) {
+    // Throw instead of returning empty so React Query surfaces
+    // suggested.isError / suggested.error to the UI. Silently
+    // collapsing 401/402/429/5xx into "no results" hid every backend
+    // failure mode behind an indistinguishable blank strip.
+    const body = await r.text().catch(() => '')
+    throw new SuggestionsError(r.status, body)
+  }
   const data = (await r.json()) as SuggestionsResponse
   return {
     items: (data.items ?? []).map((row) => ({
@@ -69,6 +86,12 @@ export function useSuggestedMovies(aiEnabled: boolean, apiKey: string | null) {
     queryFn: () => fetchSuggested('movie', aiEnabled, apiKey),
     staleTime: 0,
     refetchOnMount: 'always',
+    retry: (failureCount, err) => {
+      // Don't retry 4xx — the user needs to fix their key / re-auth,
+      // not wait for a network blip.
+      if (err instanceof SuggestionsError && err.status >= 400 && err.status < 500) return false
+      return failureCount < 1
+    },
   })
 }
 
@@ -78,6 +101,10 @@ export function useSuggestedTv(aiEnabled: boolean, apiKey: string | null) {
     queryFn: () => fetchSuggested('tv', aiEnabled, apiKey),
     staleTime: 0,
     refetchOnMount: 'always',
+    retry: (failureCount, err) => {
+      if (err instanceof SuggestionsError && err.status >= 400 && err.status < 500) return false
+      return failureCount < 1
+    },
   })
 }
 
