@@ -182,8 +182,8 @@ function formatLibraryItem(it: { title: string; year?: number; genres?: string[]
 const SYSTEM_PROMPT = `You are a media taste-matching agent for a household media server. Given the household's library and an explicit "never suggest" list, return ranked recommendations that match their existing taste — same era, tone, genre clusters, directorial sensibilities, and adjacent recommendations from beloved titles.
 
 Rules:
-- HARD RULE: Never recommend a title that appears in the household's library — not the same title, not a spinoff under the same name, not the same show with a different year. If you find yourself about to return a library title, stop and choose a different one. Duplicates render as broken UI for the user.
-- HARD RULE: Never recommend a title that appears in the NEVER SUGGEST list, including stylistically near-identical entries.
+- HARD RULE: Never recommend a title in the household's library. Library titles are listed in full below — every one of them. A server-side validator filters library matches by id and by normalized title (including subtitle base form) before the user sees the response, so recommending a library title costs the household one slot of the count contract AND one paid output token for nothing. Reach further into your knowledge instead.
+- HARD RULE: Never recommend a title in the NEVER SUGGEST list. The complete list is shipped below — not a sample. Same cost as library overlap: the validator drops it, the user sees a shorter strip, and the household paid for tokens that produced no value. Avoid stylistically-near matches too (close remakes, alternate-name re-releases, the "season 2 of an existing rejected show").
 - Mirror the genre distribution of the library. If 60% of the library is live-action drama, ~60% of your recommendations should be live-action drama. Do NOT over-index on any single genre cluster (e.g. don't return all-Animation or all-Anime just because those tags are present; they're a slice, not the whole picture).
 - Each recommendation should have a clear analog in the library — name the closest matches in your reasoning, even if you don't return the reason field.
 - Prefer well-regarded, mainstream-adjacent titles. Critical reception and audience love are signals; obscurity for its own sake is not.
@@ -259,14 +259,14 @@ function renderEntryBullets(entries: Array<{ id: number; title: string }>): stri
     .join('\n')
 }
 
-// Hard cap on how many rejection bullets we send to Claude. Beyond
-// this, the model starts treating the "NEVER SUGGEST" list as the
-// dominant signal (and recommends weird obscure titles to dodge it,
-// or worse, recommends library titles thinking they're safe). The
-// id-set post-filter still defends against older rejections that
-// don't make the cut. Prefer titled rows (most useful to the model);
-// fall back to recent untitled rows.
-const REJECTION_PROMPT_CAP = 75
+// Ship the full rejection set in the cached prefix. The old 75-cap
+// existed so the model wouldn't anchor on a long NEVER list — but in
+// practice, hiding rejections from the model means it keeps proposing
+// them, the post-filter drops them, the retry fires with the same
+// blind spot, and the user pays Claude $ for picks that were always
+// going to be filtered. Cached at 0.1x base rate this is essentially
+// free; counter-anchoring is handled in the prompt language instead.
+const REJECTION_PROMPT_CAP = Infinity
 
 // Compute the top-N genre distribution from a library. Returned as
 // `["Drama 38%", "Action 22%", …]` strings so it can be dropped
@@ -337,19 +337,21 @@ function buildLibraryBlockUncached(
   if (rejections.length === 0) {
     return `Household ${header} library (${library.length} titles):\n${libLines}${distLine}`
   }
-  // Show titled rows first (most useful taste signal), then fill the
-  // remaining cap with untitled rows. The post-filter id-set covers
-  // anything we don't bullet here.
+  // Ship every rejection. Titled rows first so the most useful
+  // taste-signal bullets dominate the start of the block, untitled
+  // rows after as `[TMDB id N]` fallbacks.
   const titled = rejections.filter((r) => r.title)
   const untitled = rejections.filter((r) => !r.title)
-  const promptRejections =
-    titled.length >= REJECTION_PROMPT_CAP
+  const promptRejections = Number.isFinite(REJECTION_PROMPT_CAP)
+    ? titled.length >= REJECTION_PROMPT_CAP
       ? titled.slice(-REJECTION_PROMPT_CAP)
       : [...titled, ...untitled.slice(0, REJECTION_PROMPT_CAP - titled.length)]
+    : [...titled, ...untitled]
   return (
     `Household ${header} library (${library.length} titles):\n${libLines}${distLine}\n\n` +
-    `NEVER SUGGEST — the household has explicitly rejected these (${promptRejections.length} of ${rejections.length} shown), ` +
-    `and you should also avoid stylistically near matches:\n${renderEntryBullets(promptRejections)}`
+    `NEVER SUGGEST — the household has explicitly rejected every title below (${promptRejections.length} total). ` +
+    `A server-side validator filters these and stylistically-near matches before the user sees them, so recommending any of them WASTES a slot and a token. ` +
+    `Reach deeper into your knowledge to fill the count; never repeat from this list:\n${renderEntryBullets(promptRejections)}`
   )
 }
 
@@ -397,11 +399,12 @@ function buildUserLikesBlock(liked: Array<{ id: number; title: string }>): strin
 // Capped at RECENTLY_SHOWN_CAP per (sub, kind); newest items pushed
 // to the front, older items LRU'd off the tail. Untitled items are
 // dropped (a bare-id row is no signal to the model).
-// 20 is enough to encourage rotation without telling Claude "avoid
-// these 60 titles" — which the model reads as a near-hard NEVER and
-// stacks on top of library + rejections, collapsing the candidate
-// pool.
-const RECENTLY_SHOWN_CAP = 20
+// Ship the full recently-shown buffer so Claude actually rotates
+// instead of cycling through the same picks the user just saw. The
+// language in buildRecentlyShownBlock keeps this a soft preference,
+// not a hard NEVER — the previous 20-cap meant a 30-pick refresh
+// could re-include the last batch the user just dismissed.
+const RECENTLY_SHOWN_CAP = 150
 const recentlyShown = new Map<string, Array<{ id: number; title: string }>>()
 
 function recentKey(sub: string, kind: 'movie' | 'tv'): string {
