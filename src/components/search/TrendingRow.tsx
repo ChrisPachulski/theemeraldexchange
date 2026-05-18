@@ -115,8 +115,18 @@ function describeEmptySource(
   diag: SuggestionDiag | null | undefined,
 ): string | null {
   if (source === 'trending_fallback') {
-    if (diag?.reason === 'claude_threw')
-      return 'Claude errored (check the server log or your AI key) — showing trending instead.'
+    if (diag?.reason === 'claude_threw') {
+      const status = diag.claudeStatus
+      const msg = diag.claudeError
+      const prefix =
+        status === 401 ? 'AI key rejected (401)'
+        : status === 402 ? 'AI account out of credit (402)'
+        : status === 429 ? 'Anthropic rate-limited (429)'
+        : status === 413 ? 'Prompt too large (413)'
+        : typeof status === 'number' && status >= 500 ? `Anthropic outage (${status})`
+        : 'Claude errored'
+      return msg ? `${prefix}: ${msg.slice(0, 200)} — showing trending.` : `${prefix} — showing trending.`
+    }
     return 'Claude was unreachable — showing trending instead.'
   }
   if (source === 'personalized_empty_trending_fallback') {
