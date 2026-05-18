@@ -223,16 +223,29 @@ function normalizeTitleBase(t: string): string {
   return normalized
 }
 
-// Build the matchable-title set from a library list. Includes both
-// the full normalized title and the base (pre-subtitle) form when
-// the title has a subtitle. Empty strings filtered out.
-function titleSetFrom(entries: Array<{ title: string }>): Set<string> {
+// Build the matchable-title set from a list of entries. By default
+// includes both the full normalized title and the base (pre-subtitle)
+// form when the title has a subtitle — appropriate for the library
+// (a different cut of an owned title is still a dupe).
+//
+// For the rejection set, pass {includeBase: false}. Rejecting one
+// franchise entry ("Avatar: The Last Airbender") should NOT blanket-
+// ban every other work sharing the franchise root ("Avatar: The Way
+// of Water" is an unrelated film). The id-set check still catches
+// exact-id rejections; only the title surface narrows here.
+function titleSetFrom(
+  entries: Array<{ title: string }>,
+  opts: { includeBase?: boolean } = {},
+): Set<string> {
+  const includeBase = opts.includeBase ?? true
   const out = new Set<string>()
   for (const e of entries) {
     if (!e.title) continue
     out.add(normalizeTitle(e.title))
-    const base = normalizeTitleBase(e.title)
-    if (base) out.add(base)
+    if (includeBase) {
+      const base = normalizeTitleBase(e.title)
+      if (base) out.add(base)
+    }
   }
   return out
 }
@@ -1168,7 +1181,10 @@ suggestions.get('/:type', async (c) => {
   // sources on subtitles ("X: The Y" vs "X"). titleSetFrom() includes
   // both the full normalized title and the pre-subtitle base form.
   const libraryTitles = titleSetFrom(library)
-  const rejectedTitles = titleSetFrom(kindRejections)
+  // Rejections are exact-title only (no base form) — a "no" on
+  // "Avatar: The Last Airbender" shouldn't blanket-ban every other
+  // work in the Avatar franchise.
+  const rejectedTitles = titleSetFrom(kindRejections, { includeBase: false })
 
   // Single household-aware filter used by EVERY return path —
   // personalized picks, cold-start trending, force=trending, claude-
