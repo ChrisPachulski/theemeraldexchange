@@ -583,40 +583,53 @@ async function tmdbLookup(
   const existing = lookupInFlight.get(key)
   if (existing) return existing
   const promise = (async (): Promise<SuggestionItem | null> => {
-    const url = new URL(`${TMDB_BASE}/search/${kind}`)
-    url.searchParams.set('api_key', _tmdbKey!)
-    url.searchParams.set('query', title)
-    if (year) {
-      url.searchParams.set(kind === 'movie' ? 'primary_release_year' : 'first_air_date_year', String(year))
-    }
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), TMDB_TIMEOUT_MS)
-    let r: Response
-    try {
-      r = await fetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal })
-    } catch {
-      return null
-    } finally {
-      clearTimeout(timer)
-    }
-    if (!r.ok) {
-      if (r.status === 429) {
-        console.error('[suggestions] TMDB rate-limited on /search; retry-after:', r.headers.get('retry-after'))
+    const runSearch = async (withYear: boolean) => {
+      const url = new URL(`${TMDB_BASE}/search/${kind}`)
+      url.searchParams.set('api_key', _tmdbKey!)
+      url.searchParams.set('query', title)
+      if (withYear && year) {
+        url.searchParams.set(kind === 'movie' ? 'primary_release_year' : 'first_air_date_year', String(year))
       }
-      return null
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), TMDB_TIMEOUT_MS)
+      let r: Response
+      try {
+        r = await fetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal })
+      } catch {
+        return null
+      } finally {
+        clearTimeout(timer)
+      }
+      if (!r.ok) {
+        if (r.status === 429) {
+          console.error('[suggestions] TMDB rate-limited on /search; retry-after:', r.headers.get('retry-after'))
+        }
+        return null
+      }
+      const data = (await r.json()) as {
+        results?: Array<{
+          id: number
+          title?: string
+          name?: string
+          poster_path: string | null
+          overview?: string
+          release_date?: string
+          first_air_date?: string
+        }>
+      }
+      return data.results?.[0] ?? null
     }
-    const data = (await r.json()) as {
-      results?: Array<{
-        id: number
-        title?: string
-        name?: string
-        poster_path: string | null
-        overview?: string
-        release_date?: string
-        first_air_date?: string
-      }>
+    // Try with the year hint first (disambiguates ambiguous titles like
+    // "Heat" or "Pinocchio"). If that returns nothing, retry without
+    // the year — TMDB's first_air_date_year filter is strict and
+    // Claude routinely gives the latest-season year for TV shows
+    // (e.g. "Severance (2025)" for season 2) when TMDB indexes the
+    // series-premiere year (2022). The post-lookup year-proximity
+    // guard (±5) still catches genuinely-wrong matches.
+    let top = await runSearch(true)
+    if (!top && year) {
+      top = await runSearch(false)
     }
-    const top = data.results?.[0]
     if (!top) return null
     const date = top.release_date || top.first_air_date || ''
     const parsedYear = date ? Number(date.slice(0, 4)) : undefined
@@ -1278,14 +1291,15 @@ suggestions.get('/:type', async (c) => {
         rejectedForRetry.push({ title: original, reason: 'TMDB lookup failed — title may be misspelled' })
         continue
       }
-      // Year-proximity guard. When Claude provided a year and TMDB's
-      // top result is off by more than 5, the search likely matched a
-      // remake / spin-off / unrelated show with overlapping keywords.
-      // ±5 (was ±2) tolerates Claude conflating series-start year vs
-      // season-N year, original release vs anniversary re-release, etc.
-      // — those off-by-3-or-4 cases were the same valid title, just
-      // a fuzzy year. ±5 still catches remakes (typically decade+ gaps).
-      if (pick.year && r.year && Math.abs(r.year - pick.year) > 5) {
+      // Year-proximity guard, movies only. TV has too many legitimate
+      // year-mismatch cases (Claude giving the latest-season year vs
+      // TMDB's series-premiere year; long-running shows; reboots that
+      // share a name with originals) — the post-lookup library and
+      // rejection re-checks already defend against genuinely-wrong
+      // matches, and the in-lookup year-then-no-year retry handles
+      // the disambiguation. For movies the guard still catches
+      // remake confusion ("Heat" 1995 vs 1986).
+      if (type === 'movie' && pick.year && r.year && Math.abs(r.year - pick.year) > 5) {
         counters.droppedAsYearMismatch++
         rejectedForRetry.push({
           title: original,

@@ -405,7 +405,15 @@ describe('suggestions route — TMDB validation', () => {
     { title: 'The Crown', year: 2016, tmdbId: 1003, genres: ['Drama', 'History'] },
   ]
 
-  it('drops picks whose TMDB top-match year is far from the requested year', async () => {
+  it('drops movie picks whose TMDB top-match year is far from the requested year', async () => {
+    // Year guard is movie-only — TV picks routinely hit legitimate
+    // year mismatches (series-premiere vs latest-season year) so the
+    // guard does more harm than good there.
+    const radarrLibrary = [
+      { title: 'The Dark Knight', year: 2008, tmdbId: 2001, genres: ['Action', 'Crime'] },
+      { title: 'Inception', year: 2010, tmdbId: 2002, genres: ['Action', 'Sci-Fi'] },
+      { title: 'Interstellar', year: 2014, tmdbId: 2003, genres: ['Sci-Fi', 'Drama'] },
+    ]
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let claudeCalls = 0
     vi.stubGlobal(
@@ -417,15 +425,15 @@ describe('suggestions route — TMDB validation', () => {
             : input instanceof URL
               ? input.toString()
               : (input as { url: string }).url
-        if (url.includes('/api/v3/series')) {
-          return new Response(JSON.stringify(sonarrSeries), { status: 200 })
+        if (url.includes('/api/v3/movie')) {
+          return new Response(JSON.stringify(radarrLibrary), { status: 200 })
         }
-        if (url.includes('themoviedb.org/3/search/tv')) {
-          // Return a 1990 result for a pick that asked for 2020 — far outside the 2-yr window.
+        if (url.includes('themoviedb.org/3/search/movie')) {
+          // Return a 1990 result for a pick that asked for 2020 — far outside the ±5 window.
           return new Response(
             JSON.stringify({
               results: [
-                { id: 7777, name: 'Different Show With Same Words', poster_path: null, first_air_date: '1990-01-01' },
+                { id: 7777, title: 'Different Movie With Same Words', poster_path: null, release_date: '1990-01-01' },
               ],
             }),
             { status: 200 },
@@ -441,13 +449,13 @@ describe('suggestions route — TMDB validation', () => {
           type: 'tool_use',
           id: 'tu_' + ++claudeCalls,
           name: 'submit_recommendations',
-          input: { picks: [{ title: 'Brand New Show', year: 2020 }] },
+          input: { picks: [{ title: 'Brand New Movie', year: 2020 }] },
         },
       ],
       usage: { input_tokens: 1, output_tokens: 1 },
     }
 
-    const r = await appUnderTest().request('/tv', {
+    const r = await appUnderTest().request('/movie', {
       headers: {
         Cookie: await userCookie(),
         'X-Anthropic-Api-Key': 'sk-ant-test-fakekey',
