@@ -347,8 +347,10 @@ function buildLibraryBlockUncached(
     distribution.length > 0
       ? `\n\nTARGET GENRE MIX (match these proportions across your picks): ${distribution.join(', ')}`
       : ''
+  const libraryAndGenres =
+    `Household ${header} library (${library.length} titles, do NOT suggest any of these):\n${libLines}${distLine}`
   if (rejections.length === 0) {
-    return `Household ${header} library (${library.length} titles):\n${libLines}${distLine}`
+    return libraryAndGenres
   }
   // Ship every rejection. Titled rows first so the most useful
   // taste-signal bullets dominate the start of the block, untitled
@@ -360,11 +362,15 @@ function buildLibraryBlockUncached(
       ? titled.slice(-REJECTION_PROMPT_CAP)
       : [...titled, ...untitled.slice(0, REJECTION_PROMPT_CAP - titled.length)]
     : [...titled, ...untitled]
+  // Rejections FIRST in the block — the most attended-to position
+  // after the system prompt. Library follows as taste signal. Putting
+  // rejections in their own labeled section (NEVER SUGGEST) ahead of
+  // the library list makes the constraint structurally unmissable.
   return (
-    `Household ${header} library (${library.length} titles):\n${libLines}${distLine}\n\n` +
     `NEVER SUGGEST — the household has explicitly rejected every title below (${promptRejections.length} total). ` +
-    `A server-side validator filters these and stylistically-near matches before the user sees them, so recommending any of them WASTES a slot and a token. ` +
-    `Reach deeper into your knowledge to fill the count; never repeat from this list:\n${renderEntryBullets(promptRejections)}`
+    `This is a hard contract: any recommendation matching this list will be silently dropped, the user will see a shorter strip, and the household's API budget will have paid for nothing. Every pick you submit MUST NOT appear here. Audit each pick against this list before calling the tool.\n` +
+    `${renderEntryBullets(promptRejections)}\n\n` +
+    libraryAndGenres
   )
 }
 
@@ -1024,7 +1030,13 @@ function systemStack(
 }
 
 function userAsk(kind: 'movie' | 'tv', n: number): string {
-  return `Recommend exactly ${n} ${kind === 'movie' ? 'movies' : 'TV shows'} for this household by calling submit_recommendations. Use the household's library and likes as taste signal; treat the NEVER SUGGEST list and recently-shown list as guidance the downstream validator also enforces. Aim for a proportional mix across the library's genres, weighted toward explicitly liked titles. Return ${n} picks — never an empty array or a short list; if perfect matches are scarce, include your best adjacent picks and let the validator filter them.`
+  return (
+    `Recommend exactly ${n} ${kind === 'movie' ? 'movies' : 'TV shows'} for this household by calling submit_recommendations. ` +
+    `Use the household's library and likes as taste signal; aim for a proportional mix across the library's genres, weighted toward explicitly liked titles. ` +
+    `\n\n` +
+    `Before you submit, audit every pick: any title in the household library or the NEVER SUGGEST list must be replaced. A pick that matches either list is a wasted recommendation — the user pays for the token and sees a shorter strip. ` +
+    `Return ${n} picks, never fewer; if obvious matches are exhausted, reach into deeper-cut adjacent recommendations rather than repeating from those lists.`
+  )
 }
 
 // Higher temperature drives meaningfully different picks across
