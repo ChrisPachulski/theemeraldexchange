@@ -1,4 +1,5 @@
 import type { TrendingItem } from '../../lib/hooks/useTrending'
+import type { SuggestionDiag } from '../../lib/hooks/useSuggested'
 import { AiToggle } from './AiToggle'
 import { FeedbackDots, type DotState } from './FeedbackDots'
 import './TrendingRow.css'
@@ -44,6 +45,9 @@ type Props = {
    * fallback (Claude unreachable)" hints so silent degradations are
    * visible. */
   source?: string | null
+  /** Response `_diag` payload for the current items. Drives the
+   * specific "why is this empty" hint when accepted=0. */
+  diag?: SuggestionDiag | null
 }
 
 function describeError(error: unknown): { headline: string; hint: string } {
@@ -70,11 +74,57 @@ function describeError(error: unknown): { headline: string; hint: string } {
   }
 }
 
-function describeEmptySource(source?: string | null): string | null {
-  if (source === 'trending_fallback') return 'Claude was unreachable — showing trending instead.'
-  if (source === 'personalized_empty_trending_fallback')
-    return 'No new personalized picks (everything was already in your library or rejected). Try clearing a few red dots.'
-  if (source === 'trending') return null
+// Pick the dominant reason from the per-pick drop counters so the
+// empty-strip hint reflects what actually killed the request, not a
+// generic catch-all. Returns null when the diag is missing or the
+// counters don't strongly point at one cause.
+function dominantDropReason(
+  counters: NonNullable<SuggestionDiag['lastCounters']> | undefined,
+): string | null {
+  if (!counters) return null
+  const entries: Array<[string, number]> = [
+    ['library', counters.droppedAsLibrary ?? 0],
+    ['rejected', counters.droppedAsRejected ?? 0],
+    ['lookup', counters.lookupNulls ?? 0],
+    ['year', counters.droppedAsYearMismatch ?? 0],
+    ['dedupe', counters.droppedAsDedupe ?? 0],
+  ]
+  const total = entries.reduce((s, [, n]) => s + n, 0)
+  if (total === 0) return null
+  const [top, topN] = entries.sort((a, b) => b[1] - a[1])[0]
+  // Only call out a dominant cause when it's the clear majority.
+  if (topN / total < 0.5) return null
+  switch (top) {
+    case 'library':
+      return 'Most picks were already in your library — try a wider library or be patient as Claude rotates.'
+    case 'rejected':
+      return 'Most picks were on your NEVER list — try clearing a few red dots.'
+    case 'lookup':
+      return 'Most picks didn’t resolve on TMDB (rate-limit or unknown title). Try again in a moment.'
+    case 'year':
+      return 'Most picks were dropped on year mismatch — likely a Claude/TMDB year disagreement.'
+    case 'dedupe':
+      return 'Most picks were duplicates of each other. Refresh to get a new batch.'
+    default:
+      return null
+  }
+}
+
+function describeEmptySource(
+  source: string | null | undefined,
+  diag: SuggestionDiag | null | undefined,
+): string | null {
+  if (source === 'trending_fallback') {
+    if (diag?.reason === 'claude_threw')
+      return 'Claude errored (check the server log or your AI key) — showing trending instead.'
+    return 'Claude was unreachable — showing trending instead.'
+  }
+  if (source === 'personalized_empty_trending_fallback') {
+    const specific = dominantDropReason(diag?.lastCounters)
+    if (specific) return specific
+    // No clear majority — Claude likely returned an empty/short list.
+    return 'Claude returned no usable picks this round. Refresh to try again, or check the server log.'
+  }
   return null
 }
 
@@ -88,6 +138,7 @@ export function TrendingRow({
   ai,
   error,
   source,
+  diag,
 }: Props) {
   if (error) {
     const { headline, hint } = describeError(error)
@@ -132,7 +183,7 @@ export function TrendingRow({
   }
 
   if (items.length === 0) {
-    const emptyHint = describeEmptySource(source)
+    const emptyHint = describeEmptySource(source, diag)
     if (!ai && !emptyHint) return null
     return (
       <section className="trending">
