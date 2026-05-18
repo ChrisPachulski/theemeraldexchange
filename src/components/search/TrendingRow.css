@@ -22,6 +22,45 @@
   margin: 0;
 }
 
+/* Tiny inline hint appended to the label when items came from a
+   degraded source (e.g. trending fallback because Claude failed). */
+.trending__source-hint {
+  font-weight: var(--w-body, 400);
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-faint, var(--text-subtle));
+  opacity: 0.75;
+  font-size: var(--t-xs, 0.85em);
+  margin-left: 0.4em;
+}
+
+/* Empty / error state body — used when items.length === 0 (with a
+   meaningful source hint) or when the fetch errored. Sits where the
+   card row would have been so the section retains visual presence. */
+.trending__empty {
+  display: grid;
+  gap: var(--s-1);
+  padding: var(--s-3);
+  border: 1px dashed var(--border-faint, rgba(255, 255, 255, 0.08));
+  border-radius: var(--radius-md, 8px);
+  background: var(--bg-faint, rgba(255, 255, 255, 0.02));
+}
+
+.trending__empty-headline {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: var(--w-display);
+  font-size: var(--t-md, 0.95rem);
+  color: var(--text-primary, var(--text-subtle));
+}
+
+.trending__empty-hint {
+  margin: 0;
+  font-size: var(--t-sm);
+  color: var(--text-subtle);
+  line-height: 1.4;
+}
+
 .trending__row {
   display: flex;
   gap: var(--s-3);

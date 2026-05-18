@@ -56,7 +56,10 @@ suggestions.use('*', requireAuth)
 const TMDB_BASE = 'https://api.themoviedb.org/3'
 const COLD_START_THRESHOLD = 3
 const TARGET_COUNT = 20
-const CLAUDE_OVERFETCH = 30 // ask for 30 so we can drop a few during filtering
+// Smaller overfetch so the tool_use JSON fits comfortably in max_tokens
+// (30 picks at ~30 tokens each routinely truncated the input array,
+// which the SDK then surfaces as picks: [] — silent zero output).
+const CLAUDE_OVERFETCH = 20
 
 type SuggestionItem = {
   id: number
@@ -184,6 +187,7 @@ Rules:
 - Modest variety across calls is fine, but recommendations should land in the "obvious yes" zone for someone who already loves what's in the library.
 - Real, released titles only. No imaginary or future-dated releases.
 - Be exact with titles and years so they can be looked up in TMDB.
+- COUNT CONTRACT: always fill the requested number of picks. A short list or empty array is a system failure; if you can't find perfect matches, return your best attempts. A downstream validator filters overlaps with the library/never-list, so borderline picks are welcome — never return fewer than asked.
 
 Output is consumed by code — return JSON only, no commentary.`
 
@@ -206,7 +210,14 @@ function normalizeTitle(t: string): string {
 function normalizeTitleBase(t: string): string {
   const cut = t.split(/[:—–]|\s-\s/)[0]
   if (!cut || cut === t) return ''
-  return normalizeTitle(cut)
+  const normalized = normalizeTitle(cut)
+  // Short bases (≤4 chars) collide with too many unrelated titles:
+  // "It: Chapter Two" → "it" blocked every "It" anything; "Up:
+  // Special Edition" → "up" blocked every two-letter pick. Long
+  // enough to be a meaningful franchise root, short enough to still
+  // catch real subtitle dedupes like "starwars" or "missionimpossible".
+  if (normalized.length < 5) return ''
+  return normalized
 }
 
 // Build the matchable-title set from a library list. Includes both
@@ -383,7 +394,11 @@ function buildUserLikesBlock(liked: Array<{ id: number; title: string }>): strin
 // Capped at RECENTLY_SHOWN_CAP per (sub, kind); newest items pushed
 // to the front, older items LRU'd off the tail. Untitled items are
 // dropped (a bare-id row is no signal to the model).
-const RECENTLY_SHOWN_CAP = 60
+// 20 is enough to encourage rotation without telling Claude "avoid
+// these 60 titles" — which the model reads as a near-hard NEVER and
+// stacks on top of library + rejections, collapsing the candidate
+// pool.
+const RECENTLY_SHOWN_CAP = 20
 const recentlyShown = new Map<string, Array<{ id: number; title: string }>>()
 
 function recentKey(sub: string, kind: 'movie' | 'tv'): string {
@@ -429,9 +444,13 @@ function recordShown(
 function buildRecentlyShownBlock(items: Array<{ id: number; title: string }>): string {
   if (items.length === 0) return ''
   const bullets = items.map((i) => `- ${i.title}`).join('\n')
+  // Soft preference, not a NEVER. The earlier wording ("only repeat
+  // if absolutely no comparable alternative exists") read to the
+  // model as a hard exclusion and collapsed candidate pools after a
+  // few refreshes.
   return (
-    `RECENTLY SHOWN to this user across the last few refreshes — please rotate. ` +
-    `Prefer fresh adjacents over re-listing these; only repeat if absolutely no comparable alternative exists:\n${bullets}`
+    `RECENTLY SHOWN to this user (mild preference for fresh adjacents, ` +
+    `but repeating one or two from this list is fine if they're the best fit):\n${bullets}`
   )
 }
 
@@ -924,8 +943,19 @@ function readToolUse(response: Anthropic.Messages.Message): ClaudeResponse {
     console.error(
       '[suggestions] Claude returned no tool_use block; content types:',
       response.content.map((b) => b.type).join(','),
+      'stop_reason:',
+      response.stop_reason,
     )
     return { toolUse: null, picks: [], usage }
+  }
+  // When max_tokens cuts off mid-tool-use, the SDK still returns the
+  // block but the JSON `input` is truncated — picks parses to an empty
+  // array and the route silently returns nothing. Log loudly so the
+  // failure is visible.
+  if (response.stop_reason === 'max_tokens') {
+    console.error(
+      '[suggestions] tool_use truncated by max_tokens — picks list will be incomplete or empty; raise max_tokens or shrink CLAUDE_OVERFETCH',
+    )
   }
   const input = tu.input as { picks?: ClaudePick[] }
   const picks = Array.isArray(input.picks) ? input.picks : []
@@ -958,7 +988,7 @@ function systemStack(
 }
 
 function userAsk(kind: 'movie' | 'tv', n: number): string {
-  return `Recommend ${n} ${kind === 'movie' ? 'movies' : 'TV shows'} for this household by calling submit_recommendations. Mirror the library's genre distribution — return a proportional mix across drama, comedy, action, animation, documentary, etc. Weight toward the user's explicitly LIKED titles when present. Strictly avoid the household's NEVER SUGGEST list and stylistically near matches.`
+  return `Recommend exactly ${n} ${kind === 'movie' ? 'movies' : 'TV shows'} for this household by calling submit_recommendations. Use the household's library and likes as taste signal; treat the NEVER SUGGEST list and recently-shown list as guidance the downstream validator also enforces. Aim for a proportional mix across the library's genres, weighted toward explicitly liked titles. Return ${n} picks — never an empty array or a short list; if perfect matches are scarce, include your best adjacent picks and let the validator filter them.`
 }
 
 // Higher temperature drives meaningfully different picks across
@@ -976,11 +1006,14 @@ async function callClaudeInitial(
 ): Promise<ClaudeResponse> {
   const response = await client.messages.create({
     model: MODEL,
-    max_tokens: 1024,
+    // 2048 leaves headroom for CLAUDE_OVERFETCH (20) picks serialized
+    // as tool_use JSON; the prior 1024 ceiling truncated mid-array
+    // for any non-trivial title list.
+    max_tokens: 2048,
     temperature: CLAUDE_TEMPERATURE,
     system: systemStack(libraryBlock, userLikesBlock, recentlyShownBlock),
     tools: [SUBMIT_TOOL],
-    tool_choice: { type: 'tool', name: SUBMIT_TOOL.name },
+    tool_choice: { type: 'tool', name: SUBMIT_TOOL.name, disable_parallel_tool_use: true },
     messages: [{ role: 'user', content: userAsk(kind, CLAUDE_OVERFETCH) }],
   })
   return readToolUse(response)
@@ -1003,13 +1036,20 @@ async function callClaudeRetry(
   const toolResultText =
     `${rejectedPicks.length} of your picks were rejected by the household-safety validator:\n${rejectedSummary}\n\n` +
     `Call submit_recommendations again with ${nNeeded} REPLACEMENT picks that don't conflict.`
+  // Retry intentionally drops the recently-shown block from the system
+  // stack: the retry is exactly when Claude needs more candidate
+  // freedom, not the same rotation blocklist that just constrained the
+  // initial call. We pass it through the function signature only so
+  // the call-site remains symmetric; if a caller really wants it,
+  // they can pass a non-empty string.
+  void recentlyShownBlock
   const response = await client.messages.create({
     model: MODEL,
-    max_tokens: 1024,
+    max_tokens: 2048,
     temperature: CLAUDE_TEMPERATURE,
-    system: systemStack(libraryBlock, userLikesBlock, recentlyShownBlock),
+    system: systemStack(libraryBlock, userLikesBlock, ''),
     tools: [SUBMIT_TOOL],
-    tool_choice: { type: 'tool', name: SUBMIT_TOOL.name },
+    tool_choice: { type: 'tool', name: SUBMIT_TOOL.name, disable_parallel_tool_use: true },
     messages: [
       { role: 'user', content: userAsk(kind, CLAUDE_OVERFETCH) },
       {
@@ -1239,11 +1279,13 @@ suggestions.get('/:type', async (c) => {
         continue
       }
       // Year-proximity guard. When Claude provided a year and TMDB's
-      // top result is off by more than 2, the search likely matched a
+      // top result is off by more than 5, the search likely matched a
       // remake / spin-off / unrelated show with overlapping keywords.
-      // Better to drop and let the retry produce a fresh pick than to
-      // surface the wrong title under Claude's intent.
-      if (pick.year && r.year && Math.abs(r.year - pick.year) > 2) {
+      // ±5 (was ±2) tolerates Claude conflating series-start year vs
+      // season-N year, original release vs anniversary re-release, etc.
+      // — those off-by-3-or-4 cases were the same valid title, just
+      // a fuzzy year. ±5 still catches remakes (typically decade+ gaps).
+      if (pick.year && r.year && Math.abs(r.year - pick.year) > 5) {
         counters.droppedAsYearMismatch++
         rejectedForRetry.push({
           title: original,
@@ -1281,18 +1323,11 @@ suggestions.get('/:type', async (c) => {
     return { accepted, rejectedForRetry, counters }
   }
 
-  // Speculatively warm the trending + discover caches in parallel
-  // with the Claude call. If accepted falls short and we need fill,
-  // both are already in cache (60s TTL) so the fill path is a memory
-  // read, not a 5-page TMDB roundtrip. If accepted is healthy, the
-  // prefetched data simply expires unused — the discover/trending
-  // caches dedupe across users in the same minute window. Errors are
-  // swallowed: prefetch is opportunistic, not load-bearing.
-  const topGenreIdsForPrefetch = genreNamesToTmdbIds(type, topGenreNames(library, 3))
-  void tmdbTrending(type).catch(() => {})
-  if (topGenreIdsForPrefetch.length > 0) {
-    void tmdbDiscoverByGenres(type, topGenreIdsForPrefetch).catch(() => {})
-  }
+  // Prefetch removed: a 30-pick lookup fan-out plus 5-page trending +
+  // 3-page discover prefetch was 38 concurrent TMDB calls per
+  // suggestions request, blowing past TMDB's ~40/10s free-tier budget
+  // and cascading 429s through every pick lookup. The fill path will
+  // populate the cache lazily on first miss.
 
   let totalUsage: UsageBlock = {}
   let r1: ClaudeResponse
@@ -1328,10 +1363,21 @@ suggestions.get('/:type', async (c) => {
   let lastCounters = v1.counters
   let triedRetry = false
 
-  // Retry once if Claude returned a tool_use but the survivors fell
-  // short of the target. Skip the retry when accepted is healthy — no
-  // point burning another call.
-  if (r1.toolUse && accepted.length < TARGET_COUNT && v1.rejectedForRetry.length > 0) {
+  // Retry once when there's actionable feedback for Claude:
+  //   - rejectedForRetry > 0 → tell Claude which picks were dropped
+  //     and why, so it can produce different picks
+  //   - picks.length === 0 → Claude returned an empty array (likely
+  //     hit max_tokens truncation or saw the constraints as
+  //     unsatisfiable). Re-prompt; the explicit count contract in the
+  //     user message should land harder on the second pass.
+  // Skip retry when picks resolved cleanly but happened to fall short
+  // — re-asking the same prompt without rejection feedback would just
+  // produce the same list.
+  if (
+    r1.toolUse &&
+    accepted.length < TARGET_COUNT &&
+    (v1.rejectedForRetry.length > 0 || r1.picks.length === 0)
+  ) {
     triedRetry = true
     const nNeeded = Math.min(CLAUDE_OVERFETCH, TARGET_COUNT - accepted.length + 4)
     const endClaudeRetry = timing.mark('claudeRetry')

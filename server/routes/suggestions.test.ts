@@ -14,6 +14,7 @@ import {
 import { createSession } from '../session.js'
 import { _setRejectionsPathForTests, addRejection } from '../services/rejections.js'
 import { _setUserFeedbackPathForTests, setLike } from '../services/userFeedback.js'
+import { _setUsageLogPathForTests } from '../services/usageLog.js'
 import type { Env } from '../middleware/auth.js'
 
 // Capture the most recent Anthropic messages.create() args from the
@@ -59,6 +60,7 @@ beforeEach(async () => {
   tmpRoot = await fs.mkdtemp(join(tmpdir(), 'sugg-route-'))
   _setRejectionsPathForTests(join(tmpRoot, 'rejections.json'))
   _setUserFeedbackPathForTests(join(tmpRoot, 'feedback.json'))
+  _setUsageLogPathForTests(join(tmpRoot, 'usage.jsonl'))
   lastCreateArgs.value = null
   fakeResponse.value = null
   _setTmdbApiKeyForTests(null)
@@ -329,10 +331,14 @@ describe('suggestions route — prompt shape', () => {
     expect(r.status).toBe(200)
     const args = lastCreateArgs.value as {
       tools?: Array<{ name: string }>
-      tool_choice?: { type: string; name: string }
+      tool_choice?: { type: string; name: string; disable_parallel_tool_use?: boolean }
     }
     expect(args.tools?.[0]?.name).toBe('submit_recommendations')
-    expect(args.tool_choice).toEqual({ type: 'tool', name: 'submit_recommendations' })
+    expect(args.tool_choice).toEqual({
+      type: 'tool',
+      name: 'submit_recommendations',
+      disable_parallel_tool_use: true,
+    })
   })
 
   it('emits user-likes block after the cached prefix when titles are present', async () => {

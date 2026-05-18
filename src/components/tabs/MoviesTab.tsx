@@ -299,6 +299,8 @@ export function MoviesTab() {
               <TrendingRow
                 items={trendingFiltered}
                 loading={suggested.isPending}
+                error={suggested.error}
+                source={suggested.data?.source ?? null}
                 onPick={handleTrendingPick}
                 pendingId={trendingPending}
                 label={trendingLabel}
