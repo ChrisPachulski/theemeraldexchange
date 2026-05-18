@@ -25,6 +25,10 @@ export type SuggestionDiag = {
   retryAttempted?: boolean
   fillSource?: string
   reason?: string
+  /** Anthropic error message when reason === 'claude_threw'. */
+  claudeError?: string
+  /** Anthropic HTTP status when reason === 'claude_threw'. */
+  claudeStatus?: number
   lastCounters?: {
     lookupNulls?: number
     droppedAsDedupe?: number

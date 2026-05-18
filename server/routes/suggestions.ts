@@ -1361,21 +1361,30 @@ suggestions.get('/:type', async (c) => {
     totalUsage = mergeUsage(totalUsage, r1.usage)
   } catch (e) {
     endClaudeInitial()
-    console.error('[suggestions] Claude call failed:', e)
+    const errorMsg = e instanceof Error ? e.message : String(e)
+    // Pull the API status off Anthropic SDK errors so the SPA can
+    // distinguish 401 (bad key) from 429 (rate limit) from 5xx (their
+    // outage) from 4xx (our prompt). The SDK exposes .status on
+    // APIError subclasses.
+    const errorStatus =
+      typeof (e as { status?: unknown }).status === 'number'
+        ? ((e as { status: number }).status)
+        : undefined
+    console.error('[suggestions] Claude call failed:', errorMsg, errorStatus ?? '')
     await appendUsageEvent({
       sub: session.sub,
       username: session.username,
       type: 'claude_error',
       model: MODEL,
       kind: type,
-      error: e instanceof Error ? e.message : String(e),
+      error: errorMsg,
     })
     const trending = filterHouseholdSafe(await tmdbTrending(type))
     setTimingHeader()
     return c.json({
       source: 'trending_fallback',
       items: trending.slice(0, TARGET_COUNT),
-      _diag: diag({ reason: 'claude_threw' }),
+      _diag: diag({ reason: 'claude_threw', claudeError: errorMsg, claudeStatus: errorStatus }),
     })
   }
   endClaudeInitial()
