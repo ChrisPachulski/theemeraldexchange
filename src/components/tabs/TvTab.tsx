@@ -307,6 +307,7 @@ export function TvTab() {
                 loading={suggested.isPending}
                 error={suggested.error}
                 source={suggested.data?.source ?? null}
+                diag={suggested.data?.diag ?? null}
                 onPick={handleTrendingPick}
                 pendingId={trendingPending}
                 label={trendingLabel}

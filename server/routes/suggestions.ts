@@ -766,7 +766,11 @@ async function tmdbDiscoverByGenres(
   genreIds: number[],
 ): Promise<SuggestionItem[]> {
   if (!_tmdbKey || genreIds.length === 0) return []
-  const key = genreIds.slice().sort((a, b) => a - b).join(',')
+  // Pipe = OR; comma = AND. We want titles matching ANY of the
+  // household's top genres, not the (often empty) intersection of
+  // all three. Drama AND Comedy AND Adventure barely exists; Drama
+  // OR Comedy OR Adventure is the right fill set.
+  const key = genreIds.slice().sort((a, b) => a - b).join('|')
   const now = Date.now()
   const cached = discoverCache[kind]
   if (cached && cached.key === key && cached.expiresAt > now) return cached.items.slice()

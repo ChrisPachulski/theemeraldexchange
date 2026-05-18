@@ -18,6 +18,22 @@ type SuggestionSource =
   | 'trending'
   | 'trending_fallback'
 
+export type SuggestionDiag = {
+  libraryCount?: number
+  rejectionCount?: number
+  accepted?: number
+  retryAttempted?: boolean
+  fillSource?: string
+  reason?: string
+  lastCounters?: {
+    lookupNulls?: number
+    droppedAsDedupe?: number
+    droppedAsRejected?: number
+    droppedAsLibrary?: number
+    droppedAsYearMismatch?: number
+  }
+}
+
 type SuggestionsResponse = {
   source: SuggestionSource
   items: Array<{
@@ -27,11 +43,13 @@ type SuggestionsResponse = {
     overview?: string
     year?: number
   }>
+  _diag?: SuggestionDiag
 }
 
 export type SuggestionResult = {
   items: TrendingItem[]
   source: SuggestionSource | null
+  diag: SuggestionDiag | null
 }
 
 export class SuggestionsError extends Error {
@@ -77,6 +95,7 @@ async function fetchSuggested(
       year: row.year,
     })),
     source: data.source ?? null,
+    diag: data._diag ?? null,
   }
 }
 
