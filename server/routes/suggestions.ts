@@ -56,10 +56,13 @@ suggestions.use('*', requireAuth)
 const TMDB_BASE = 'https://api.themoviedb.org/3'
 const COLD_START_THRESHOLD = 3
 const TARGET_COUNT = 20
-// Smaller overfetch so the tool_use JSON fits comfortably in max_tokens
-// (30 picks at ~30 tokens each routinely truncated the input array,
-// which the SDK then surfaces as picks: [] — silent zero output).
-const CLAUDE_OVERFETCH = 20
+// Headroom for post-validation drops. With TARGET_COUNT=20 we need
+// enough surplus that the routine library/lookup/dedupe shedding still
+// leaves a full strip. 30 fits comfortably under max_tokens=2048 (a
+// {title, year} pick is ~25-40 tokens; 30 picks ≈ 750-1200 + envelope).
+// Previously 20, which gave zero headroom and reliably under-filled
+// for users with large libraries.
+const CLAUDE_OVERFETCH = 30
 
 type SuggestionItem = {
   id: number
