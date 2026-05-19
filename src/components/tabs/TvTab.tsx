@@ -10,6 +10,7 @@ import { DetailModal, type DetailMeta } from '../detail/DetailModal'
 import { AddSeriesModal } from '../add/AddSeriesModal'
 import { Toast } from '../toast/Toast'
 import { LoadingPulse } from '../feedback/LoadingPulse'
+import { EmeraldMark } from '../atmosphere/EmeraldMark'
 import { useAuth } from '../../lib/auth'
 import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useSeriesSearch } from '../../lib/hooks/useSeriesSearch'
@@ -521,7 +522,12 @@ function LibraryResults({ query, letter, loading, error, items, onCardClick }: L
       : letter !== 'all'
         ? `Nothing under ${letter}.`
         : 'Your library is empty. Add something from Discover.'
-    return <p className="tv-tab__hint">{emptyMsg}</p>
+    return (
+      <div className="tv-tab__empty">
+        <EmeraldMark width={56} variant="single" />
+        <p className="tv-tab__hint">{emptyMsg}</p>
+      </div>
+    )
   }
 
   return (
