@@ -6,8 +6,8 @@
 
 import * as THREE from 'three'
 
-const GEM_COLOR = 0x1f9e7a
-const ATTEN_COLOR = 0x0e6c4d
+const GEM_COLOR = 0x26c891       // matches site --emerald oklch(0.62 0.180 158)
+const ATTEN_COLOR = 0x1ab07a    // brighter than body so internal refraction glows
 
 function buildGemGeometry(): THREE.BufferGeometry {
   const N = 8
@@ -177,14 +177,19 @@ export class GemScene {
       color: GEM_COLOR,
       metalness: 0,
       roughness: 0.05,
-      transmission: 0.72,
-      thickness: 0.65,
+      transmission: 0.82,
+      thickness: 0.55,
       ior: 1.58,
       attenuationColor: new THREE.Color(ATTEN_COLOR),
-      attenuationDistance: 0.9,
+      attenuationDistance: 1.6,
       clearcoat: 1.0,
       clearcoatRoughness: 0.03,
-      envMapIntensity: 1.6,
+      envMapIntensity: 2.1,
+      // Small emissive: the gem reads as self-lit rather than dependent on
+      // the studio lights. This is what gives it a glow that blends with the
+      // emerald-graded kraken/resting videos in the background.
+      emissive: new THREE.Color(0x0d6e4d),
+      emissiveIntensity: 0.55,
       side: THREE.DoubleSide,
     })
 
