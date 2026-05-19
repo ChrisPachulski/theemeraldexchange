@@ -263,12 +263,12 @@ export class GemScene {
       this.gems[i].rotation.y = tSeconds * omega + (single ? 0 : i * ((Math.PI * 2) / 3))
       this.gems[i].rotation.x = Math.sin(tSeconds * 0.4 + i) * (single ? 0.025 : 0.04)
     }
-    // Breath pulse on a 2.4s cycle. The gem body lerps between the bright
+    // Breath pulse on a slow 6s cycle. The gem body lerps between the bright
     // site-emerald and a deep forest emerald, while the emissive intensity
     // tracks the same wave so the glow rises with the colour. All EmeraldMark
     // instances share performance.now() as their clock, so every gem on the
     // page breathes in sync.
-    const pulse = 0.5 + 0.5 * Math.sin(tSeconds * 2.618) // 2π / 2.4s
+    const pulse = 0.5 + 0.5 * Math.sin(tSeconds * 1.047) // 2π / 6s
     this.mat.color.lerpColors(this.colorDeep, this.colorBright, pulse)
     this.mat.attenuationColor.lerpColors(this.attenDeep, this.attenBright, pulse)
     this.mat.emissiveIntensity = 0.20 + 0.65 * pulse
