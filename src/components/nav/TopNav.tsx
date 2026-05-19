@@ -51,6 +51,7 @@ export function TopNav({ active }: Props) {
           aria-label="Emerald Exchange — home"
           onClick={() => navigate('home')}
         >
+          <EmeraldMark width={26} variant="single" className="top-nav__brand-gems" />
           <span className="top-nav__brand-mark">EMERALD</span>
           <span className="top-nav__brand-sub">EXCHANGE</span>
         </button>

@@ -72,6 +72,23 @@
   }
 }
 
+/* Wrapper for the "your library is empty" state — gem above the
+   existing glass-pill hint, both centred. The pill retains its own
+   vertical centring so the layout below is unchanged for non-empty
+   states. */
+.tv-tab__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-3);
+  margin: calc((100vh - var(--hero-pad-top) - var(--dock-pad-bottom, 280px)) / 2 - 64px) auto;
+}
+
+.tv-tab__empty .tv-tab__hint {
+  /* Cancel the pill's own centering offset — the wrapper owns it now. */
+  margin: 0;
+}
+
 /* Hint sits centered in the result band, glass-pill so the text reads
    against the kraken video without painting a full-width card. */
 .tv-tab__hint {

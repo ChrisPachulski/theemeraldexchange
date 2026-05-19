@@ -53,6 +53,11 @@
   opacity: 0.85;
 }
 
+.top-nav__brand-gems {
+  flex-shrink: 0;
+  transform: translateY(2px);
+}
+
 .top-nav__brand-mark {
   color: var(--emerald);
 }
