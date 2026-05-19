@@ -1,5 +1,6 @@
 import { useNavTransition } from '../../lib/navTransition'
 import { UserMenu } from '../auth/UserMenu'
+import { EmeraldMark } from '../atmosphere/EmeraldMark'
 import './HomeNav.css'
 
 // Minimal home-page chrome — brand top-left, Watch/UserMenu top-right.
@@ -41,6 +42,7 @@ export function HomeNav() {
         aria-label="Emerald Exchange — home"
         onClick={() => navigate('home')}
       >
+        <EmeraldMark width={64} variant="wide" className="home-nav__brand-gems" />
         <span className="home-nav__brand-mark">EMERALD</span>
         <span className="home-nav__brand-sub">EXCHANGE</span>
       </button>
