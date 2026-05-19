@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Kraken } from '../atmosphere/Kraken'
 import { Beacon } from '../atmosphere/Beacon'
+import { EmeraldMark } from '../atmosphere/EmeraldMark'
 import { TrendingRow } from '../search/TrendingRow'
 import type { TrendingItem } from '../../lib/hooks/useTrending'
 import type { DotState } from '../search/FeedbackDots'
@@ -268,6 +269,7 @@ export function Walkthrough() {
       <main className="walkthrough" role="main">
         <header className="walkthrough__hero" aria-labelledby="hero-title">
           <div className="walkthrough__hero-card">
+            <EmeraldMark width={260} variant="wide" className="walkthrough__brand-mark" />
             <p className="walkthrough__eyebrow">The Emerald Exchange</p>
             <h1 id="hero-title" className="walkthrough__hero-title">
               A private members’ page<br />for a household media library.

@@ -121,6 +121,10 @@
   margin: 0;
 }
 
+.walkthrough__brand-mark {
+  margin: 0 0 var(--s-lg) calc(-1 * var(--s-xs));
+}
+
 .walkthrough__title {
   font-family: var(--font-display);
   font-size: clamp(1.5rem, 3vw, var(--t-xl));

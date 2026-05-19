@@ -1,0 +1,4 @@
+.emerald-mark {
+  display: block;
+  filter: drop-shadow(0 4px 24px oklch(0.55 0.180 158 / 0.45));
+}
