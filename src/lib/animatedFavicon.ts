@@ -63,33 +63,27 @@ export function mountAnimatedFavicon(): void {
   if ((window as unknown as { __teeFaviconMounted?: boolean }).__teeFaviconMounted) return
   ;(window as unknown as { __teeFaviconMounted?: boolean }).__teeFaviconMounted = true
 
-  // WebGL canvas — kept off-DOM and rendered at 3:1 so the three gems all fit.
-  // We crop the centre band into a square favicon below.
+  // Square WebGL canvas — single gem framed centre. Matches the inline glyph
+  // used next to "Watch" in the nav, just rendered in 3D instead of as a flat
+  // SVG path so it sparkles in the tab strip.
   const renderCanvas = document.createElement('canvas')
-  const renderW = 384
-  const renderH = 128
-  renderCanvas.width = renderW
-  renderCanvas.height = renderH
+  const renderSize = 192
+  renderCanvas.width = renderSize
+  renderCanvas.height = renderSize
 
   let scene: GemScene
   try {
     scene = new GemScene({
       canvas: renderCanvas,
-      width: renderW,
-      height: renderH,
-      pixelRatio: 1, // favicon is tiny — extra DPI here is wasted
-      fov: 35,       // wider FOV + closer camera so the 3 gems fill the
-                     // favicon frame instead of sitting 70% wide with margin
+      width: renderSize,
+      height: renderSize,
+      pixelRatio: 1,
+      gemCount: 1,
+      fov: 32,
     })
-    // Camera much closer than the hero default (5.2). At 2.6 the gems span
-    // ~98% of the width with the camera dipped slightly to show more of the
-    // crown — at 16x16 they're at least distinguishable instead of three
-    // indistinct green dots.
-    scene.camera.position.set(0, 0.25, 2.6)
-    scene.camera.lookAt(0, -0.05, 0)
-    // Crank exposure heavily so the highlights survive the 6x downsample
-    // browsers do when rendering at 16x16. The result looks "too bright" at
-    // 64x64 but reads correctly at favicon scale.
+    // Crank exposure so the highlights survive the 12x downsample browsers
+    // do when rendering at 16x16. Looks "too bright" at 64x64 but reads
+    // correctly at favicon scale.
     scene.renderer.toneMappingExposure = 1.85
   } catch (err) {
     // WebGL unavailable (headless, old hardware, blocked) — leave the static
@@ -123,13 +117,11 @@ export function mountAnimatedFavicon(): void {
       const t = (now - startedAt) / 1000
       scene.renderAt(t)
 
-      // Blit centre-cropped band of the 3:1 WebGL canvas into the square favicon
-      // with a rounded dark backdrop.
+      // Composite the square WebGL canvas onto the favicon canvas with a
+      // rounded emerald-tinted backdrop.
       fctx.clearRect(0, 0, FAVICON_SIZE, FAVICON_SIZE)
       paintRoundedBackdrop(fctx, FAVICON_SIZE)
-      const bandH = Math.round(FAVICON_SIZE / 3)
-      const bandY = Math.round((FAVICON_SIZE - bandH) / 2)
-      fctx.drawImage(renderCanvas, 0, 0, renderW, renderH, 0, bandY, FAVICON_SIZE, bandH)
+      fctx.drawImage(renderCanvas, 0, 0, FAVICON_SIZE, FAVICON_SIZE)
 
       link.href = faviconCanvas.toDataURL('image/png')
       lastTick = now

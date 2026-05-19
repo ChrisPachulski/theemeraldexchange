@@ -5,18 +5,24 @@ import './EmeraldMark.css'
 interface EmeraldMarkProps {
   /** rendered CSS width in px; height auto-derives from aspect ratio. */
   width?: number
-  /** 'wide' = 3:1 row of three gems. 'square' = single centre gem (favicon-style framing). */
-  variant?: 'wide' | 'square'
+  /**
+   * 'single' = one centred 3D gem (square aspect). Matches the existing
+   *            inline-SVG glyph used next to "Watch" — the universal brand
+   *            mark wherever a small emerald belongs.
+   * 'row'    = three gems in a row (3:1). Kept for the rare layout where a
+   *            horizontal brand mark is wanted; not used in current UI.
+   */
+  variant?: 'single' | 'row'
   className?: string
 }
 
-// Live three-emerald brand mark. Boots a Three.js scene on a canvas the size
-// of the requested CSS box, runs the same GemScene as the favicon, and tears
-// itself down on unmount. Aim is one canvas per placement — if you need many
-// instances on one page, factor the renderer into a shared singleton.
-export function EmeraldMark({ width = 240, variant = 'wide', className }: EmeraldMarkProps) {
+// Live brand mark. Boots a Three.js GemScene on a canvas the size of the
+// requested CSS box, animates a slow rotation, and tears itself down on
+// unmount. One canvas per placement — if many instances appear on one page,
+// factor the renderer into a shared singleton later.
+export function EmeraldMark({ width = 64, variant = 'single', className }: EmeraldMarkProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const aspect = variant === 'wide' ? 3 : 1
+  const aspect = variant === 'row' ? 3 : 1
   const height = Math.round(width / aspect)
 
   useEffect(() => {
@@ -28,12 +34,9 @@ export function EmeraldMark({ width = 240, variant = 'wide', className }: Emeral
         canvas,
         width,
         height,
-        fov: variant === 'wide' ? 22 : 35,
+        gemCount: variant === 'single' ? 1 : 3,
+        fov: variant === 'single' ? 30 : 22,
       })
-      if (variant === 'square') {
-        scene.camera.position.set(0, 0.1, 3.0)
-        scene.camera.lookAt(0, 0, 0)
-      }
     } catch (err) {
       console.warn('[EmeraldMark] WebGL init failed', err)
       return

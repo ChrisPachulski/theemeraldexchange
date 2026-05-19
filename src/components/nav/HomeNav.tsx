@@ -42,7 +42,7 @@ export function HomeNav() {
         aria-label="Emerald Exchange — home"
         onClick={() => navigate('home')}
       >
-        <EmeraldMark width={64} variant="wide" className="home-nav__brand-gems" />
+        <EmeraldMark width={28} variant="single" className="home-nav__brand-gems" />
         <span className="home-nav__brand-mark">EMERALD</span>
         <span className="home-nav__brand-sub">EXCHANGE</span>
       </button>
