@@ -124,6 +124,7 @@ export interface GemSceneOptions {
   height: number      // render-buffer height
   pixelRatio?: number // defaults to min(devicePixelRatio, 2)
   fov?: number        // camera FOV; default 22
+  gemCount?: 1 | 3    // single gem (square placements / favicon) or full row (default 3)
 }
 
 export class GemScene {
@@ -189,12 +190,24 @@ export class GemScene {
 
     this.geom = buildGemGeometry()
     this.gems = []
-    const xs = [-1.55, 0, 1.55]
-    for (let i = 0; i < 3; i++) {
+    const count = opts.gemCount ?? 3
+    if (count === 1) {
+      // Single centred gem — camera moves in tighter to frame just it.
       const g = new THREE.Mesh(this.geom, this.mat)
-      g.position.set(xs[i], 0.05, 0)
+      g.position.set(0, 0.05, 0)
       this.scene.add(g)
       this.gems.push(g)
+      this.camera.position.set(0, 0.15, 2.6)
+      this.camera.fov = opts.fov ?? 30
+      this.camera.updateProjectionMatrix()
+    } else {
+      const xs = [-1.55, 0, 1.55]
+      for (let i = 0; i < 3; i++) {
+        const g = new THREE.Mesh(this.geom, this.mat)
+        g.position.set(xs[i], 0.05, 0)
+        this.scene.add(g)
+        this.gems.push(g)
+      }
     }
   }
 
@@ -221,9 +234,10 @@ export class GemScene {
    *  on its own clock instead of tying to requestAnimationFrame. */
   renderAt(tSeconds: number) {
     const omega = 0.55
+    const single = this.gems.length === 1
     for (let i = 0; i < this.gems.length; i++) {
-      this.gems[i].rotation.y = tSeconds * omega + i * ((Math.PI * 2) / 3)
-      this.gems[i].rotation.x = Math.sin(tSeconds * 0.4 + i) * 0.04
+      this.gems[i].rotation.y = tSeconds * omega + (single ? 0 : i * ((Math.PI * 2) / 3))
+      this.gems[i].rotation.x = Math.sin(tSeconds * 0.4 + i) * (single ? 0.025 : 0.04)
     }
     this.renderer.render(this.scene, this.camera)
   }

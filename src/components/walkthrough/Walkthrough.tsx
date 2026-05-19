@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import { Kraken } from '../atmosphere/Kraken'
-import { Beacon } from '../atmosphere/Beacon'
 import { EmeraldMark } from '../atmosphere/EmeraldMark'
 import { TrendingRow } from '../search/TrendingRow'
 import type { TrendingItem } from '../../lib/hooks/useTrending'
@@ -185,13 +184,13 @@ function StripDemo() {
   )
 }
 
-// Beacon (the gem) on its own. Lives in a stage so the rotating
-// silhouette has room to breathe — in the real app it's pinned to a
-// HUD corner; here it's centerpiece.
+// The brand gem on its own. Lives in a stage so the rotating silhouette
+// has room to breathe — in the real app it's the tiny glyph next to
+// "Watch" and the favicon; here it's centerpiece, same 3D scene scaled up.
 function BeaconStage() {
   return (
     <div className="walkthrough__demo walkthrough__demo--beacon">
-      <Beacon />
+      <EmeraldMark width={360} variant="single" />
     </div>
   )
 }
@@ -257,8 +256,8 @@ export function Walkthrough() {
     {
       id: 'beacon',
       eyebrow: 'The gem',
-      title: 'A rotating silhouette pinned to the HUD.',
-      caption: 'Real VP9 alpha-channel video — no rectangular frame, no blend-mode trick.',
+      title: 'A rotating brilliant cut pinned to the HUD.',
+      caption: 'The same WebGL gem you see in the corner glyph and the favicon — same shader, same scene, scaled up.',
       render: () => <BeaconStage />,
     },
   ]
@@ -269,7 +268,7 @@ export function Walkthrough() {
       <main className="walkthrough" role="main">
         <header className="walkthrough__hero" aria-labelledby="hero-title">
           <div className="walkthrough__hero-card">
-            <EmeraldMark width={260} variant="wide" className="walkthrough__brand-mark" />
+            <EmeraldMark width={120} variant="single" className="walkthrough__brand-mark" />
             <p className="walkthrough__eyebrow">The Emerald Exchange</p>
             <h1 id="hero-title" className="walkthrough__hero-title">
               A private members’ page<br />for a household media library.
