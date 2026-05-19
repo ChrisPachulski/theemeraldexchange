@@ -248,6 +248,12 @@ export class GemScene {
       this.gems[i].rotation.y = tSeconds * omega + (single ? 0 : i * ((Math.PI * 2) / 3))
       this.gems[i].rotation.x = Math.sin(tSeconds * 0.4 + i) * (single ? 0.025 : 0.04)
     }
+    // Pulse the emissive intensity on a 2.4s breath cycle. Range 0.25..0.85,
+    // centred on the static 0.55 we landed on. All EmeraldMark instances share
+    // performance.now() as the clock, so every gem on the page breathes in
+    // sync — favicon, hero card, watch buttons, loading pulse.
+    const pulse = 0.5 + 0.5 * Math.sin(tSeconds * 2.618) // 2π / 2.4s
+    this.mat.emissiveIntensity = 0.25 + 0.60 * pulse
     this.renderer.render(this.scene, this.camera)
   }
 
