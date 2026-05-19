@@ -192,13 +192,17 @@ export class GemScene {
     this.gems = []
     const count = opts.gemCount ?? 3
     if (count === 1) {
-      // Single centred gem — camera moves in tighter to frame just it.
+      // Single centred gem. Gem geometry runs from culet y=-0.92 to table
+      // y=+0.32 (height 1.24), so lifting the mesh by +0.30 centres its
+      // vertical extent on the origin. Camera frames tightly: ~85% fill,
+      // margin enough that the X-nod rotation never clips an edge.
       const g = new THREE.Mesh(this.geom, this.mat)
-      g.position.set(0, 0.05, 0)
+      g.position.set(0, 0.30, 0)
       this.scene.add(g)
       this.gems.push(g)
-      this.camera.position.set(0, 0.15, 2.6)
-      this.camera.fov = opts.fov ?? 30
+      this.camera.position.set(0, 0, 3.0)
+      this.camera.lookAt(0, 0, 0)
+      this.camera.fov = opts.fov ?? 26
       this.camera.updateProjectionMatrix()
     } else {
       const xs = [-1.55, 0, 1.55]
