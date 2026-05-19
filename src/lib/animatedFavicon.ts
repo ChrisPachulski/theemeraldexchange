@@ -11,7 +11,6 @@ import { GemScene } from './gemScene'
 
 const FAVICON_SIZE = 64
 const FPS = 14
-const BG = '#0a1612'
 
 function getFaviconLink(): HTMLLinkElement {
   let link = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
@@ -21,38 +20,6 @@ function getFaviconLink(): HTMLLinkElement {
     document.head.appendChild(link)
   }
   return link
-}
-
-function paintRoundedBackdrop(ctx: CanvasRenderingContext2D, size: number) {
-  const r = Math.round(size * 0.17)
-  // Build the rounded-square path once, used for fill and clip.
-  const path = () => {
-    ctx.beginPath()
-    ctx.moveTo(r, 0)
-    ctx.lineTo(size - r, 0)
-    ctx.quadraticCurveTo(size, 0, size, r)
-    ctx.lineTo(size, size - r)
-    ctx.quadraticCurveTo(size, size, size - r, size)
-    ctx.lineTo(r, size)
-    ctx.quadraticCurveTo(0, size, 0, size - r)
-    ctx.lineTo(0, r)
-    ctx.quadraticCurveTo(0, 0, r, 0)
-    ctx.closePath()
-  }
-  // Base dark fill
-  path()
-  ctx.fillStyle = BG
-  ctx.fill()
-  // Emerald halo behind the gems — pushes a green tint into the corners so
-  // even after the browser's 16x16 downsample, the favicon reads as "green
-  // glow", not "dark square with imperceptible specks".
-  path()
-  const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size * 0.55)
-  grad.addColorStop(0, 'rgba(31,158,122,0.55)')
-  grad.addColorStop(0.7, 'rgba(20,80,60,0.25)')
-  grad.addColorStop(1, 'rgba(10,22,18,0)')
-  ctx.fillStyle = grad
-  ctx.fill()
 }
 
 /**
@@ -117,10 +84,9 @@ export function mountAnimatedFavicon(): void {
       const t = (now - startedAt) / 1000
       scene.renderAt(t)
 
-      // Composite the square WebGL canvas onto the favicon canvas with a
-      // rounded emerald-tinted backdrop.
+      // Just the gem on transparent. Browser tab strips composite over their
+      // own background — no rounded plate.
       fctx.clearRect(0, 0, FAVICON_SIZE, FAVICON_SIZE)
-      paintRoundedBackdrop(fctx, FAVICON_SIZE)
       fctx.drawImage(renderCanvas, 0, 0, FAVICON_SIZE, FAVICON_SIZE)
 
       link.href = faviconCanvas.toDataURL('image/png')
