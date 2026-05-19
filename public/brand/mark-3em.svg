@@ -1,0 +1,132 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 64" width="192" height="64" role="img" aria-label="The Emerald Exchange">
+  <defs>
+    <!-- ───────── outer halo ───────── -->
+    <radialGradient id="halo" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"  stop-color="#4fffb5" stop-opacity="0.55"/>
+      <stop offset="55%" stop-color="#26c891" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#26c891" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- ───────── crown facet gradients ───────── -->
+    <!-- Table: brightest, near-white highlight at upper-left -->
+    <linearGradient id="g-table" x1="20%" y1="0%" x2="80%" y2="100%">
+      <stop offset="0%"  stop-color="#eaffef"/>
+      <stop offset="35%" stop-color="#7dffc4"/>
+      <stop offset="100%" stop-color="#1a8a6f"/>
+    </linearGradient>
+    <!-- Left upper bezel: lit hardest -->
+    <linearGradient id="g-lu" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"  stop-color="#7fffc5"/>
+      <stop offset="100%" stop-color="#0e5e45"/>
+    </linearGradient>
+    <!-- Left lower bezel: girdle catches some bounce -->
+    <linearGradient id="g-ll" x1="20%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"  stop-color="#3fd99c"/>
+      <stop offset="100%" stop-color="#062b20"/>
+    </linearGradient>
+    <!-- Right upper bezel: away from light -->
+    <linearGradient id="g-ru" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"  stop-color="#3fcf95"/>
+      <stop offset="100%" stop-color="#0a5040"/>
+    </linearGradient>
+    <!-- Right lower bezel: deepest shadow -->
+    <linearGradient id="g-rl" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"  stop-color="#1a8a6f"/>
+      <stop offset="100%" stop-color="#04231a"/>
+    </linearGradient>
+
+    <!-- ───────── pavilion facet gradients ───────── -->
+    <linearGradient id="g-p-l-outer" x1="0%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%"  stop-color="#3fcf95"/>
+      <stop offset="100%" stop-color="#04231a"/>
+    </linearGradient>
+    <linearGradient id="g-p-l-inner" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%"  stop-color="#62e0a5"/>
+      <stop offset="100%" stop-color="#072d22"/>
+    </linearGradient>
+    <linearGradient id="g-p-r-inner" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%"  stop-color="#48cf9a"/>
+      <stop offset="100%" stop-color="#062b20"/>
+    </linearGradient>
+    <linearGradient id="g-p-r-outer" x1="100%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%"  stop-color="#22a87a"/>
+      <stop offset="100%" stop-color="#04221a"/>
+    </linearGradient>
+
+    <!-- Caustic spark on the table -->
+    <radialGradient id="caustic" cx="35%" cy="30%" r="32%">
+      <stop offset="0%"  stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="55%" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Shimmer sweep: a moving white highlight band across the full row.
+         gradientUnits=userSpaceOnUse means x1/x2 are in viewBox coords, so we
+         can sweep from -50 (off-left) to 250 (off-right) and clip-path it to
+         the union of all 3 gem silhouettes so it only paints emerald. -->
+    <linearGradient id="shimmer" gradientUnits="userSpaceOnUse" x1="-50" y1="0" x2="0" y2="0">
+      <stop offset="0%"   stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="50%"  stop-color="#ffffff" stop-opacity="0.65"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+      <animate attributeName="x1" values="-60;240" dur="3.6s" repeatCount="indefinite" calcMode="linear"/>
+      <animate attributeName="x2" values="-10;290" dur="3.6s" repeatCount="indefinite" calcMode="linear"/>
+    </linearGradient>
+
+    <!-- ───────── one gem ─────────
+         5 crown facets (table + 2 left bezels + 2 right bezels) and
+         4 pavilion facets sharing a culet point at (32,58). -->
+    <g id="gem">
+      <!-- halo glow behind -->
+      <circle cx="32" cy="32" r="30" fill="url(#halo)"/>
+
+      <!-- crown -->
+      <path d="M20 12 L22 22 L14 20 Z"            fill="url(#g-lu)"/>
+      <path d="M14 20 L22 22 L 8 28 Z"            fill="url(#g-ll)"/>
+      <path d="M20 12 L44 12 L42 22 L22 22 Z"      fill="url(#g-table)"/>
+      <path d="M44 12 L50 20 L42 22 Z"            fill="url(#g-ru)"/>
+      <path d="M50 20 L56 28 L42 22 Z"            fill="url(#g-rl)"/>
+
+      <!-- pavilion -->
+      <path d="M 8 28 L20 28 L32 58 Z"  fill="url(#g-p-l-outer)"/>
+      <path d="M20 28 L32 28 L32 58 Z"  fill="url(#g-p-l-inner)"/>
+      <path d="M32 28 L44 28 L32 58 Z"  fill="url(#g-p-r-inner)"/>
+      <path d="M44 28 L56 28 L32 58 Z"  fill="url(#g-p-r-outer)"/>
+
+      <!-- caustic spark on table -->
+      <ellipse cx="28" cy="17" rx="6.5" ry="2.2" fill="url(#caustic)"/>
+
+      <!-- crisp facet edges -->
+      <g stroke="#04120c" stroke-width="0.4" stroke-opacity="0.55" fill="none" stroke-linejoin="miter">
+        <path d="M20 12 L44 12 L56 28 L32 58 L8 28 Z"/>
+        <path d="M8 28 L56 28"/>
+        <path d="M20 12 L22 22 L14 20"/>
+        <path d="M22 22 L8 28"/>
+        <path d="M22 22 L42 22"/>
+        <path d="M42 22 L50 20 L44 12"/>
+        <path d="M50 20 L56 28"/>
+        <path d="M20 28 L32 58"/>
+        <path d="M32 28 L32 58"/>
+        <path d="M44 28 L32 58"/>
+      </g>
+
+      <!-- bright rim highlight along the lit edge -->
+      <path d="M20 12 L 8 28" stroke="#b9ffdb" stroke-width="0.7" stroke-opacity="0.8" fill="none" stroke-linecap="round"/>
+      <path d="M20 12 L44 12" stroke="#dfffee" stroke-width="0.5" stroke-opacity="0.6" fill="none" stroke-linecap="round"/>
+    </g>
+
+    <!-- Union clipPath of all three gem silhouettes for the shimmer overlay -->
+    <clipPath id="all-gems">
+      <path d="M20 12 L44 12 L56 28 L32 58 L 8 28 Z"/>
+      <path d="M84 12 L108 12 L120 28 L96 58 L72 28 Z"/>
+      <path d="M148 12 L172 12 L184 28 L160 58 L136 28 Z"/>
+    </clipPath>
+  </defs>
+
+  <!-- three gems -->
+  <use href="#gem" x="0"/>
+  <use href="#gem" x="64"/>
+  <use href="#gem" x="128"/>
+
+  <!-- animated shimmer overlay, clipped to gem silhouettes -->
+  <rect x="-60" y="0" width="350" height="64" fill="url(#shimmer)" clip-path="url(#all-gems)"/>
+</svg>
