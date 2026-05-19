@@ -3,6 +3,7 @@ import type { Route } from '../../lib/router'
 import { useNavTransition } from '../../lib/navTransition'
 import { useAuth } from '../../lib/auth'
 import { UserMenu } from '../auth/UserMenu'
+import { EmeraldMark } from '../atmosphere/EmeraldMark'
 import './TopNav.css'
 
 const PLEX_URL = 'http://theemeraldexchange.local:32400/web'
@@ -25,29 +26,6 @@ const ROUTE_LABEL: Record<NavRoute, string> = {
   users: 'Users',
 }
 
-// Emerald-cut gem glyph for the Watch label. Filled with currentColor so the
-// CSS class chooses the hue. The two thin strokes are facet hints — at small
-// sizes they read as depth without becoming busy.
-function EmeraldGlyph() {
-  return (
-    <svg
-      className="top-nav__watch-glyph"
-      viewBox="0 0 16 16"
-      width="14"
-      height="14"
-      aria-hidden="true"
-    >
-      <path d="M5 2 L11 2 L14 5 L11 14 L5 14 L2 5 Z" fill="currentColor" />
-      <path
-        d="M2 5 L14 5 M5 2 L8 5 L11 2 M8 5 L8 14"
-        stroke="rgba(0,0,0,0.32)"
-        strokeWidth="0.5"
-        fill="none"
-        strokeLinecap="round"
-      />
-    </svg>
-  )
-}
 
 type Props = {
   active: Route
@@ -124,7 +102,7 @@ export function TopNav({ active }: Props) {
           className="top-nav__watch"
           aria-label="Open Plex in a new tab"
         >
-          <EmeraldGlyph />
+          <EmeraldMark width={18} variant="single" className="top-nav__watch-glyph" />
           <span className="top-nav__watch-label">Watch</span>
           <span className="top-nav__watch-arrow" aria-hidden="true">{'->'}</span>
         </a>
