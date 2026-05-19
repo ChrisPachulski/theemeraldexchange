@@ -6,8 +6,14 @@
 
 import * as THREE from 'three'
 
-const GEM_COLOR = 0x26c891       // matches site --emerald oklch(0.62 0.180 158)
-const ATTEN_COLOR = 0x1ab07a    // brighter than body so internal refraction glows
+// Bright pole of the pulse — matches site --emerald oklch(0.62 0.180 158).
+const GEM_COLOR_BRIGHT  = 0x26c891
+const ATTEN_COLOR_BRIGHT = 0x1ab07a
+// Deep pole of the pulse — forest-emerald, much darker. Light passing through
+// the gem at this end of the cycle gets eaten more aggressively, so the body
+// reads almost charcoal-green and the highlights are the only luminance.
+const GEM_COLOR_DEEP    = 0x0c5e44
+const ATTEN_COLOR_DEEP  = 0x062f22
 
 function buildGemGeometry(): THREE.BufferGeometry {
   const N = 8
@@ -135,6 +141,10 @@ export class GemScene {
   private mat: THREE.MeshPhysicalMaterial
   private geom: THREE.BufferGeometry
   private envTex: THREE.Texture
+  private colorBright!: THREE.Color
+  private colorDeep!: THREE.Color
+  private attenBright!: THREE.Color
+  private attenDeep!: THREE.Color
   private startedAt = 0
   private rafId = 0
   private running = false
@@ -174,13 +184,13 @@ export class GemScene {
     this.scene.add(new THREE.AmbientLight(0x0e1f18, 0.4))
 
     this.mat = new THREE.MeshPhysicalMaterial({
-      color: GEM_COLOR,
+      color: GEM_COLOR_BRIGHT,
       metalness: 0,
       roughness: 0.05,
       transmission: 0.82,
       thickness: 0.55,
       ior: 1.58,
-      attenuationColor: new THREE.Color(ATTEN_COLOR),
+      attenuationColor: new THREE.Color(ATTEN_COLOR_BRIGHT),
       attenuationDistance: 1.6,
       clearcoat: 1.0,
       clearcoatRoughness: 0.03,
@@ -192,6 +202,11 @@ export class GemScene {
       emissiveIntensity: 0.55,
       side: THREE.DoubleSide,
     })
+    // Pre-built color endpoints for the per-frame pulse lerp.
+    this.colorBright = new THREE.Color(GEM_COLOR_BRIGHT)
+    this.colorDeep   = new THREE.Color(GEM_COLOR_DEEP)
+    this.attenBright = new THREE.Color(ATTEN_COLOR_BRIGHT)
+    this.attenDeep   = new THREE.Color(ATTEN_COLOR_DEEP)
 
     this.geom = buildGemGeometry()
     this.gems = []
@@ -248,12 +263,15 @@ export class GemScene {
       this.gems[i].rotation.y = tSeconds * omega + (single ? 0 : i * ((Math.PI * 2) / 3))
       this.gems[i].rotation.x = Math.sin(tSeconds * 0.4 + i) * (single ? 0.025 : 0.04)
     }
-    // Pulse the emissive intensity on a 2.4s breath cycle. Range 0.25..0.85,
-    // centred on the static 0.55 we landed on. All EmeraldMark instances share
-    // performance.now() as the clock, so every gem on the page breathes in
-    // sync — favicon, hero card, watch buttons, loading pulse.
+    // Breath pulse on a 2.4s cycle. The gem body lerps between the bright
+    // site-emerald and a deep forest emerald, while the emissive intensity
+    // tracks the same wave so the glow rises with the colour. All EmeraldMark
+    // instances share performance.now() as their clock, so every gem on the
+    // page breathes in sync.
     const pulse = 0.5 + 0.5 * Math.sin(tSeconds * 2.618) // 2π / 2.4s
-    this.mat.emissiveIntensity = 0.25 + 0.60 * pulse
+    this.mat.color.lerpColors(this.colorDeep, this.colorBright, pulse)
+    this.mat.attenuationColor.lerpColors(this.attenDeep, this.attenBright, pulse)
+    this.mat.emissiveIntensity = 0.20 + 0.65 * pulse
     this.renderer.render(this.scene, this.camera)
   }
 
