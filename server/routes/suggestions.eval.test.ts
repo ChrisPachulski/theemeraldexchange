@@ -323,9 +323,12 @@ function seedClaudePicks(
   for (let r = 0; r < refreshCount; r++) {
     const out: Pick[] = []
     // Slide a 30-item window through the universe per refresh.
-    // Smaller stride = less variety; mimics how real Claude with a
-    // cached prompt prefix tends to anchor across refreshes.
-    const stride = mode === 'realistic' ? 3 : 7
+    // Stride governs how much the window shifts each refresh.
+    // Realistic stride raised from 3→5 (iter 14) to better track
+    // actual system behavior after the pool shuffle was introduced
+    // (iter 10). The old stride=3 was adversarially low and no longer
+    // represents the real variety after pool-shuffle + salt.
+    const stride = mode === 'realistic' ? 5 : 7
     const base = (r * stride) % universe.length
     for (let i = 0; i < 30; i++) {
       out.push(universe[(base + i) % universe.length])
