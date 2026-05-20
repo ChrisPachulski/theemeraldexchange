@@ -54,7 +54,14 @@ export const suggestions = new Hono<Env>()
 suggestions.use('*', requireAuth)
 
 const TMDB_BASE = 'https://api.themoviedb.org/3'
-const COLD_START_THRESHOLD = 3
+// Minimum library size for a meaningful taste signal. Below this, the
+// genre distribution is statistically noise (3 shows can be all Drama
+// for genre-unrelated reasons). At 10, the household has at least a
+// 2-3 genre cluster + enough titles to fill the PRIORITY TASTE block
+// partially. Below 10 → trending fill (correct UX: new server, cold
+// library). Raised from 3 (Agent C #5) — the prior threshold allowed
+// near-empty libraries to burn API budget on low-quality suggestions.
+const COLD_START_THRESHOLD = 10
 const TARGET_COUNT = 20
 // Headroom for post-validation drops. With TARGET_COUNT=20 we need
 // enough surplus that the routine library/lookup/dedupe shedding still
@@ -1425,7 +1432,12 @@ suggestions.get('/:type', async (c) => {
     return c.json({
       source: 'trending',
       items: trending.slice(0, TARGET_COUNT),
-      _diag: diag({ reason: 'library_below_threshold' }),
+      _diag: diag({
+        reason: 'library_below_threshold',
+        libraryCount: library.length,
+        threshold: COLD_START_THRESHOLD,
+        hint: `Add at least ${COLD_START_THRESHOLD - library.length} more title(s) to get personalized recommendations`,
+      }),
     })
   }
 
