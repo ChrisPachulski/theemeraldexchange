@@ -1252,6 +1252,40 @@ function userAsk(kind: 'movie' | 'tv', n: number, salt: string): string {
 // "obvious yes" zone the system prompt asks for.
 const CLAUDE_TEMPERATURE = 0.7
 
+// Anthropic overload / service-error retry wrapper.
+// HTTP 529 (Overloaded) and 503 (Service Unavailable) are documented
+// Anthropic transient states — a single retry after a short fixed
+// delay clears most of them without burning a second token budget.
+// The Anthropic SDK throws `APIStatusError` with .status for these;
+// other errors propagate immediately (401 bad key, 400 bad prompt, etc.).
+// Max 2 attempts (1 retry), 3 s wait — bounded cost: worst case adds
+// 3 s to a refresh that was already failing.
+const ANTHROPIC_RETRY_STATUSES = new Set([529, 503])
+const ANTHROPIC_RETRY_DELAY_MS = 3_000
+const ANTHROPIC_RETRY_MAX = 2 // total attempts including the first
+
+async function withAnthropicRetry<T>(fn: () => Promise<T>): Promise<T> {
+  let lastErr: unknown
+  for (let attempt = 0; attempt < ANTHROPIC_RETRY_MAX; attempt++) {
+    try {
+      return await fn()
+    } catch (e) {
+      lastErr = e
+      const status =
+        typeof (e as { status?: unknown }).status === 'number'
+          ? (e as { status: number }).status
+          : undefined
+      if (status !== undefined && ANTHROPIC_RETRY_STATUSES.has(status) && attempt < ANTHROPIC_RETRY_MAX - 1) {
+        console.warn('[suggestions] Anthropic transient error', status, '— retrying after', ANTHROPIC_RETRY_DELAY_MS, 'ms')
+        await new Promise((res) => setTimeout(res, ANTHROPIC_RETRY_DELAY_MS))
+        continue
+      }
+      throw e
+    }
+  }
+  throw lastErr
+}
+
 async function callClaudeInitial(
   client: Anthropic,
   kind: 'movie' | 'tv',
@@ -1262,18 +1296,20 @@ async function callClaudeInitial(
   candidatePoolBlock: string,
   salt: string,
 ): Promise<ClaudeResponse> {
-  const response = await client.messages.create({
-    model: MODEL,
-    // 2048 leaves headroom for CLAUDE_OVERFETCH (20) picks serialized
-    // as tool_use JSON; the prior 1024 ceiling truncated mid-array
-    // for any non-trivial title list.
-    max_tokens: 2048,
-    temperature: CLAUDE_TEMPERATURE,
-    system: systemStack(libraryBlock, priorityTasteBlock, userLikesBlock, recentlyShownBlock, candidatePoolBlock),
-    tools: [SUBMIT_TOOL],
-    tool_choice: { type: 'tool', name: SUBMIT_TOOL.name, disable_parallel_tool_use: true },
-    messages: [{ role: 'user', content: userAsk(kind, CLAUDE_OVERFETCH, salt) }],
-  })
+  const response = await withAnthropicRetry(() =>
+    client.messages.create({
+      model: MODEL,
+      // 2048 leaves headroom for CLAUDE_OVERFETCH (20) picks serialized
+      // as tool_use JSON; the prior 1024 ceiling truncated mid-array
+      // for any non-trivial title list.
+      max_tokens: 2048,
+      temperature: CLAUDE_TEMPERATURE,
+      system: systemStack(libraryBlock, priorityTasteBlock, userLikesBlock, recentlyShownBlock, candidatePoolBlock),
+      tools: [SUBMIT_TOOL],
+      tool_choice: { type: 'tool', name: SUBMIT_TOOL.name, disable_parallel_tool_use: true },
+      messages: [{ role: 'user', content: userAsk(kind, CLAUDE_OVERFETCH, salt) }],
+    }),
+  )
   return readToolUse(response)
 }
 
@@ -1304,29 +1340,31 @@ async function callClaudeRetry(
   // the call-site remains symmetric; if a caller really wants it,
   // they can pass a non-empty string.
   void recentlyShownBlock
-  const response = await client.messages.create({
-    model: MODEL,
-    max_tokens: 2048,
-    temperature: CLAUDE_TEMPERATURE,
-    system: systemStack(libraryBlock, priorityTasteBlock, userLikesBlock, '', candidatePoolBlock),
-    tools: [SUBMIT_TOOL],
-    tool_choice: { type: 'tool', name: SUBMIT_TOOL.name, disable_parallel_tool_use: true },
-    messages: [
-      { role: 'user', content: userAsk(kind, CLAUDE_OVERFETCH, salt) },
-      {
-        role: 'assistant',
-        content: [
-          { type: 'tool_use', id: prior.id, name: prior.name, input: prior.input },
-        ],
-      },
-      {
-        role: 'user',
-        content: [
-          { type: 'tool_result', tool_use_id: prior.id, content: toolResultText },
-        ],
-      },
-    ],
-  })
+  const response = await withAnthropicRetry(() =>
+    client.messages.create({
+      model: MODEL,
+      max_tokens: 2048,
+      temperature: CLAUDE_TEMPERATURE,
+      system: systemStack(libraryBlock, priorityTasteBlock, userLikesBlock, '', candidatePoolBlock),
+      tools: [SUBMIT_TOOL],
+      tool_choice: { type: 'tool', name: SUBMIT_TOOL.name, disable_parallel_tool_use: true },
+      messages: [
+        { role: 'user', content: userAsk(kind, CLAUDE_OVERFETCH, salt) },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: prior.id, name: prior.name, input: prior.input },
+          ],
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: prior.id, content: toolResultText },
+          ],
+        },
+      ],
+    }),
+  )
   return readToolUse(response)
 }
 
