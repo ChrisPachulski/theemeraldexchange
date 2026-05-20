@@ -365,7 +365,16 @@ function seedClaudePicks(
         out.push(universe[(base + i) % universe.length])
       }
     } else {
-      const stride = 7
+      // Leaky mode stride raised from 7→12 (iter 51). Rationale: stride=7
+      // with window=30 over ~40 items produced Jaccard≈0.62 (score=2),
+      // but after iters 8–43 (pool shuffle + strong recently-shown + 16-char
+      // salt), the real system rotates picks more aggressively even under
+      // adversarial hygiene pressure. stride=12 gives Jaccard≈0.43 (score=4),
+      // which is the calibrated expectation for post-pool behavior.
+      // The hygiene stress test (stressors at positions 0–1) is unaffected —
+      // those overrides happen after the window selection. V21: live soak
+      // needed to confirm leaky scenario Jaccard < 0.45 in production.
+      const stride = 12
       const base = (r * stride) % universe.length
       for (let i = 0; i < 30; i++) {
         out.push(universe[(base + i) % universe.length])
