@@ -936,6 +936,104 @@ describe('suggestions route — prompt shape', () => {
     expect(poolBlock?.text).not.toContain('Filtered Reject Show') // rejected item removed
   })
 
+  it('_diag includes poolHitRate when a pool pick is accepted without a /search round-trip', async () => {
+    // When Claude picks a title matching a pool item, poolHitRate should be > 0.
+    _setTmdbApiKeyForTests('test-key')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(JSON.stringify(sonarrSeries), { status: 200 })
+        }
+        if (url.includes('themoviedb.org/3/discover/')) {
+          return new Response(
+            JSON.stringify({ results: [{ id: 6_100_001, name: 'Pool Hit Show', poster_path: null, first_air_date: '2022-01-01' }] }),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    // Claude picks the pool item by exact title
+    fakeResponse.value = {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu_hitrate',
+          name: 'submit_recommendations',
+          input: {
+            picks: Array.from({ length: 20 }, () => ({ title: 'Pool Hit Show', year: 2022 })),
+          },
+        },
+      ],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }
+    const r = await appUnderTest().request('/tv', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { _diag?: { poolHitRate?: number; poolHits?: number; libraryGenres?: string[] } }
+    // poolHitRate should be 1.0 (the single accepted pick was a pool hit)
+    expect(body._diag?.poolHitRate).toBeDefined()
+    expect(typeof body._diag?.poolHitRate).toBe('number')
+    // libraryGenres should be present (iter 34)
+    expect(body._diag?.libraryGenres).toBeDefined()
+    expect(Array.isArray(body._diag?.libraryGenres)).toBe(true)
+    expect((body._diag?.libraryGenres?.length ?? 0)).toBeGreaterThan(0)
+  })
+
+  it('_diag includes droppedPicks count when Claude picks are filtered by validation', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    _setTmdbApiKeyForTests('test-key')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(JSON.stringify(sonarrSeries), { status: 200 })
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    // Claude picks library items — they all get dropped
+    fakeResponse.value = {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu_dropped',
+          name: 'submit_recommendations',
+          input: {
+            picks: [
+              { title: 'Sons of Anarchy', year: 2008 },
+              { title: 'The Wire', year: 2002 },
+            ],
+          },
+        },
+      ],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }
+    const r = await appUnderTest().request('/tv', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { _diag?: { droppedPicks?: number } }
+    expect(body._diag?.droppedPicks).toBeDefined()
+    expect(typeof body._diag?.droppedPicks).toBe('number')
+    expect((body._diag?.droppedPicks ?? 0)).toBeGreaterThan(0)
+    warnSpy.mockRestore()
+  })
+
   it('deduplicates TMDB pool items by id across discover pages', async () => {
     // /discover returns the same id on pages 1, 2, and 3 (simulating
     // pagination drift). The pool block should contain each title only once.
