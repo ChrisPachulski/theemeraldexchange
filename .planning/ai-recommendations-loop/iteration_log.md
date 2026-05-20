@@ -377,3 +377,55 @@ Real-world trustScaffolding moves 1 → 3 because the schema and rendering exist
 - V5 (iter 8): Quality-sorted pool produces better personalization signal than popularity-sorted — needs live compare (not feasible without A/B test; accepted as INFERRED).
 
 **Next action (iter 9)**: VARIANT SKEPTIC per schedule. Argue AGAINST the candidate-pool change. Then: likes recency weighting (Agent C #3) if skeptic clears. Target dimension: refresh variety (real=3 INFERRED) or latency (real=2→3 INFERRED).
+
+---
+
+## Iteration 9 — VARIANT SKEPTIC on candidate pool + Likes recency weighting (Agent C #3)
+
+**Date**: 2026-05-20
+**Target dimension**: Personalization signal (real=4 INFERRED). Variant skeptic fires per schedule (iter 3/6/9/12/18...).
+
+**VARIANT SKEPTIC — Argue AGAINST the candidate pool:**
+1. "Pool adds 3 TMDB /discover calls on the hot path — 429 exposure increases."
+   COUNTER: All 3 pool pages are parallel (Promise.all). Budget: 3 pool + up to 20 lookups = 23 total. Pre-iter 8: 30 lookups (no pool). With pool fast-path, typical request fires 3 pool + ~5 non-pool lookups = 8 total. TMDB load is LOWER not higher. Skeptic WRONG.
+2. "Claude may still pick outside the pool (prompt says 'PRIMARILY' not 'ONLY')."
+   COUNTER: Correct and intentional. The fallback to /search handles non-pool picks. 'ONLY' would be a stronger constraint but risks empty responses when the pool doesn't cover a sub-genre niche. 'PRIMARILY' is the right trade-off. Acknowledged residual.
+3. "quality-sorted pool biases toward art-house, not prestige-mainstream."
+   COUNTER: `vote_count.gte=100` filters out genuine obscurities. vote_average.desc among well-reviewed titles in the household's own genres is actually the ideal target. If the household already owns all the best-rated films in those genres, the pool will thin quickly and Claude will venture outside — the fallback path handles that.
+4. "fill and pool share the cache, so fill behavior changed silently."
+   COUNTER: True. Fill now uses quality-sorted instead of popularity-sorted. This is DESIRABLE (quality > popularity for fill). Documenting as intentional. RESOLVED.
+VERDICT: Candidate pool change PASSES the variant skeptic on all four challenges.
+
+**Likes recency weighting (Agent C #3):**
+Hypothesis: `setLike` uses `.push()` so oldest likes are first in the array. `buildUserLikesBlock` preserves this order, putting the most recent taste signal at the END of the prompt block (lowest attention). Reversing the array puts the most recently liked title first — highest attention after the block label. This is a prompt-shaping change (no storage format change).
+
+**Changes made**:
+- `server/routes/suggestions.ts`:
+  - `buildUserLikesBlock()` — reverses the `liked` array before rendering bullets. Label updated to "items listed first are the MOST RECENTLY liked." [VERIFIED via new test]
+- `server/routes/suggestions.test.ts`:
+  - "orders liked titles most-recently-liked first in the likes block" — seeds 3 likes in order, verifies newest (Gamma) appears before oldest (Alpha) in the block. [VERIFIED — 157 tests pass]
+
+**Verification results**:
+- `npm test` → 157 passed (was 156 + 1 new), 630ms. [VERIFIED]
+- `npm run eval:recs` → 4 passed, scores unchanged (mock doesn't exercise likes recency). [VERIFIED]
+- `npm run build` — skipped this iter (no client changes; server changes are prompt-only).
+
+**Skeptic response**:
+- a. Target improved? Personalization signal: more recent taste signal is now highest-attention. INFERRED until live soak.
+- b. Other regressions? 157 tests pass. No regression.
+- c. INFERRED items? "Recency ordering improves personalization signal in production" — INFERRED, gated on live soak. Logged as V6.
+- d. Citation spot-check: `setLike` push semantics confirmed by reading `server/services/userFeedback.ts`. [SOURCE: file read 2026-05-20]
+- e. Tests green: ✓
+
+**Rubric scores after iter 9** (real | mocked):
+| # | Dim | Iter 8 (real) | Iter 9 (real) | Iter 9 (mocked) |
+|---|-----|---------------|---------------|-----------------|
+| 1 | Personalized fill | 4 INFERRED | 4 INFERRED | 5 |
+| 2 | Hygiene | 4 | 4 | 5 |
+| 3 | Personalization signal | 4 INFERRED | 4 INFERRED | 4 |
+| 4 | Refresh variety | 3 INFERRED | 3 INFERRED | 2.33 |
+| 5 | Latency | 3 INFERRED | 3 INFERRED | 5 |
+| 6 | Honest degradation | 3 | 3 | 5 |
+| 7 | Trust scaffolding | 3 | 3 | 3 |
+
+**Next action (iter 10)**: Discover novelty filter (Agent C #4). Current discover fill sorts by `vote_average.desc` but returns the same ~60 items every refresh. Introduce a band-based rotation: for households with `rejection_count > 50`, draw from pages 2+3 of the discover result (page 1 = most acclaimed = most likely already owned/rejected by a heavy user). Improves refresh variety (real=3) for power users.
