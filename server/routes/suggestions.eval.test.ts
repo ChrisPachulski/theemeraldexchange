@@ -540,11 +540,19 @@ function scorePersonalizationSignal(results: RefreshResult[]): number {
 
 function scoreRefreshVariety(results: RefreshResult[]): number {
   if (results.length < 2) return 1
+  // All-pairs Jaccard: measures variety across every pair of refreshes,
+  // not just adjacent pairs. This catches the case where refreshes cycle
+  // through the same pool with high adjacent-pair overlap that alternates
+  // (R0≈R2≈R4 but R0≠R1). Adjacent-only scoring would rate that as 4
+  // while all-pairs would correctly penalize the overall low diversity.
+  // Iter 60: refactored from adjacent-only to all-pairs per brief.
   let total = 0
   let count = 0
-  for (let i = 1; i < results.length; i++) {
-    total += jaccard(results[i - 1].itemIds, results[i].itemIds)
-    count++
+  for (let i = 0; i < results.length - 1; i++) {
+    for (let j = i + 1; j < results.length; j++) {
+      total += jaccard(results[i].itemIds, results[j].itemIds)
+      count++
+    }
   }
   const avgJaccard = total / count
   // <0.3 → 5, 0.3..0.45 → 4, 0.45..0.6 → 3, 0.6..0.8 → 2, >0.8 → 1
