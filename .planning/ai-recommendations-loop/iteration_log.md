@@ -719,3 +719,36 @@ pf 4 INFERRED|5, hyg 4|5, ps 4 INFERRED|4, rv 4 INFERRED|3.67 (→ target 4 in r
 **Real-world estimated scores (all INFERRED pending live soak)**: pf=4, hyg=4, ps=4, rv=4, lat=4, hd=4, ts=4. All ≥4 target met!
 
 **Next action (iter 19)**: DEEP INSPECT — all 7 real dims are estimated ≥4. Before claiming convergence, run a systematic review: (a) identify any open skeptic concerns not yet addressed; (b) check DEAD ENDS table; (c) verify no INFERRED items have been abandoned; (d) plan live soak to replace INFERRED labels with VERIFIED where possible.
+
+---
+
+## Iteration 19 — Deep inspect + hygiene test coverage
+
+**Date**: 2026-05-20
+**Target dimension**: Hygiene (real=4 → hardening toward 5). Deep inspection.
+
+**Deep inspect findings:**
+1. Open skeptic concerns: C1 partially addressed (eval hardened in iters 2,13,18); V1-V13 all live-soak gated. No actionable concerns requiring code changes this iter.
+2. Dead Ends table: empty — no retried approaches.
+3. INFERRED items: 10+ items all live-soak gated. The pattern is consistent: we have code-level evidence (e.g., pool fast-path skips /search, shuffle randomizes pool order, stronger recently-shown) but no production telemetry to confirm. This is acceptable for the current loop scope.
+4. Pool hygiene gap identified: no test verified that LIBRARY items returned by TMDB /discover are excluded from the CANDIDATE POOL block sent to Claude. A TMDB bug or data entry issue where a library title appears in /discover would silently pollute the ranking corpus.
+
+**Changes made**:
+- `server/routes/suggestions.test.ts`:
+  - New test: "filters library/reject items out of the CANDIDATE POOL before sending to Claude" — seeds /discover response with a library-id item (Sons of Anarchy, tmdbId 1001) and a rejected item; verifies CANDIDATE POOL block in the Claude system prompt contains neither. [VERIFIED — test passes, 158 tests total]
+
+**Verification results**:
+- `npm test` → 158 passed (was 157 + 1 new). [VERIFIED]
+- `npm run eval:recs` → 4 passed, scores unchanged. [VERIFIED]
+
+**Skeptic response**:
+- a. Target improved? Hygiene: test coverage added for the pool-contamination vector. Code was correct before; now it's also verified.
+- b. Other regressions? None.
+- c. INFERRED items? Closing C1 as substantially addressed. V1-V13 remain live-soak gated.
+- d. Citation: Pool filter logic in suggestions.ts confirmed correct by test. [VERIFIED]
+- e. Tests green: ✓
+
+**Rubric scores after iter 19** (real | mocked): same as iter 18.
+pf 4 INFERRED|5, hyg 4→4.5 (better test coverage but still needs soak for 5)|5, ps 4 INFERRED|4, rv 4 INFERRED|3.67, lat 4 INFERRED|5, hd 4|5, ts 4 INFERRED|3.67.
+
+**Next action (iter 20)**: Focus on trust scaffolding real-world improvement. The mocked eval shows ts=3.67 (4 in realistic scenarios, 3 in leaky). The real-world score is INFERRED at 4. To move the real-world score to verified 4, add a route-level test that exercises the full reason-passthrough pipeline from Claude mock → validate → response items.

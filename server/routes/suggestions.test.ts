@@ -598,6 +598,48 @@ describe('suggestions route — prompt shape', () => {
     // No /search call fired — pool fast-path skipped it.
     expect(searchCalls).toBe(0)
   })
+
+  it('filters library/reject items out of the CANDIDATE POOL before sending to Claude (hygiene defense in pool)', async () => {
+    // Pool returns an item with the same tmdbId as a library entry AND
+    // one with the same title as a rejection. Both must be absent from
+    // the CANDIDATE POOL block in the Claude system prompt.
+    _setTmdbApiKeyForTests('test-key')
+    // Add a rejection so we can check it's filtered from the pool.
+    const { addRejection: addR } = await import('../services/rejections.js')
+    await addR('tv', 9_800_005, 'Filtered Reject Show')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(JSON.stringify(sonarrSeries), { status: 200 })
+        }
+        if (url.includes('themoviedb.org/3/discover/')) {
+          const rows = [
+            { id: 9_800_000, name: 'Safe Pool Show', poster_path: null, first_air_date: '2022-01-01' },
+            { id: 1001, name: 'Sons of Anarchy', poster_path: null, first_air_date: '2008-09-03' }, // library id
+            { id: 9_800_005, name: 'Filtered Reject Show', poster_path: null, first_air_date: '2021-01-01' }, // rejected
+          ]
+          return new Response(JSON.stringify({ results: rows }), { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/tv', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    const args = lastCreateArgs.value as { system: Array<{ text: string }> }
+    const poolBlock = args.system.find((s) => s.text.includes('CANDIDATE POOL'))
+    expect(poolBlock?.text).toContain('Safe Pool Show') // safe item kept
+    expect(poolBlock?.text).not.toContain('Sons of Anarchy') // library item removed
+    expect(poolBlock?.text).not.toContain('Filtered Reject Show') // rejected item removed
+  })
 })
 
 describe('suggestions route — TMDB validation', () => {
