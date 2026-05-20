@@ -463,6 +463,56 @@ describe('suggestions route — Anthropic transient error retry', () => {
   }, 10_000 /* 10s timeout — covers the 3s retry delay */)
 })
 
+describe('suggestions route — library cache and in-flight coalescing', () => {
+  it('two concurrent requests share one Sonarr fetch (in-flight coalescing)', async () => {
+    // Two simultaneous requests for the same library kind should result in
+    // only ONE Sonarr fetch call, not two. The in-flight promise coalescing
+    // (libraryInFlight map) handles this. Both requests resolve from the
+    // same promise.
+    let sonarrCallCount = 0
+    const library = [
+      { title: 'Show A', year: 2010, tmdbId: 8101, genres: ['Drama'] },
+      { title: 'Show B', year: 2011, tmdbId: 8102, genres: ['Drama'] },
+      { title: 'Show C', year: 2012, tmdbId: 8103, genres: ['Crime'] },
+      { title: 'Show D', year: 2013, tmdbId: 8104, genres: ['Drama'] },
+      { title: 'Show E', year: 2014, tmdbId: 8105, genres: ['Crime'] },
+      { title: 'Show F', year: 2015, tmdbId: 8106, genres: ['Drama'] },
+      { title: 'Show G', year: 2016, tmdbId: 8107, genres: ['Thriller'] },
+      { title: 'Show H', year: 2017, tmdbId: 8108, genres: ['Drama'] },
+      { title: 'Show I', year: 2018, tmdbId: 8109, genres: ['Crime'] },
+      { title: 'Show J', year: 2019, tmdbId: 8110, genres: ['Drama'] },
+    ]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          sonarrCallCount++
+          return new Response(JSON.stringify(library), { status: 200 })
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    const cookie = await userCookie()
+    // Fire two concurrent requests
+    const [r1, r2] = await Promise.all([
+      appUnderTest().request('/tv', { headers: { Cookie: cookie } }),
+      appUnderTest().request('/tv', { headers: { Cookie: cookie } }),
+    ])
+    // Status doesn't matter for this test — we're testing the Sonarr call count.
+    // Both requests may get 402 (no API key) but the Sonarr fetch should fire once.
+    expect([200, 402].includes(r1.status)).toBe(true)
+    expect([200, 402].includes(r2.status)).toBe(true)
+    // Only one Sonarr fetch should have occurred (in-flight coalescing)
+    expect(sonarrCallCount).toBe(1)
+  })
+})
+
 describe('suggestions route — genre distribution in prompt', () => {
   it('libraryGenres in _diag matches expected format and proportions', async () => {
     // Library with known genre distribution: 8 Drama, 4 Crime, 2 Fantasy out of
