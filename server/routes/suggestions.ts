@@ -71,6 +71,11 @@ const TARGET_COUNT = 20
 // wrapper ~100 tokens = ~2500 total — right at the old 2048 ceiling).
 // Raised to 4096 (iter 39) so reasons never cause truncation.
 const CLAUDE_OVERFETCH = 30
+// Hard ceiling on Claude API calls per request. Currently: 1 initial + 1
+// retry = 2 maximum. If the retry-loop logic is ever extended, this
+// constant makes the intent explicit and prevents unbounded spend on a
+// single user refresh. Exposed in _diag.callCount for observability.
+const MAX_CLAUDE_CALLS_PER_REQUEST = 2
 
 // Provenance — WHERE this card actually came from. Lets the UI render
 // a personalized pick differently from a trending fill, and lets the
@@ -1806,6 +1811,7 @@ suggestions.get('/:type', async (c) => {
   let totalUsage: UsageBlock = {}
   let r1: ClaudeResponse
   let claudeTruncated = false
+  let claudeCallCount = 0
   // One salt per request — shared by initial + retry. Refresh variety
   // hangs on this: the cached library prefix makes deterministic Claude
   // calls otherwise. Salt rides outside the cache (in the user msg).
@@ -1813,6 +1819,7 @@ suggestions.get('/:type', async (c) => {
   const endClaudeInitial = timing.mark('claudeInitial')
   try {
     r1 = await callClaudeInitial(client, type, libraryBlock, priorityTasteBlock, userLikesBlock, recentlyShownBlock, candidatePoolBlock, salt)
+    claudeCallCount++
     totalUsage = mergeUsage(totalUsage, r1.usage)
     claudeTruncated = r1.truncated ?? false
   } catch (e) {
@@ -1888,6 +1895,7 @@ suggestions.get('/:type', async (c) => {
         nNeeded,
         salt,
       )
+      claudeCallCount++
       totalUsage = mergeUsage(totalUsage, r2.usage)
       endClaudeRetry()
       const endValidate2 = timing.mark('validate2')
@@ -1984,13 +1992,13 @@ suggestions.get('/:type', async (c) => {
       return c.json({
         source: 'personalized_empty_trending_fallback',
         items: filled,
-        _diag: diag({ accepted: 0, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, poolHitRate: 0, droppedPicks: droppedTotal, costCents: refreshCostCents, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
+        _diag: diag({ accepted: 0, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, poolHitRate: 0, droppedPicks: droppedTotal, costCents: refreshCostCents, callCount: claudeCallCount, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
       })
     }
     return c.json({
       source: 'personalized_filled',
       items: filled,
-      _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, poolHits: lastCounters.poolHits, poolHitRate: filledPoolHitRate, droppedPicks: droppedTotal, costCents: refreshCostCents, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
+      _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, poolHits: lastCounters.poolHits, poolHitRate: filledPoolHitRate, droppedPicks: droppedTotal, costCents: refreshCostCents, callCount: claudeCallCount, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
     })
   }
 
@@ -2013,6 +2021,6 @@ suggestions.get('/:type', async (c) => {
   return c.json({
     source: 'personalized',
     items: finalAccepted,
-    _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, poolSize: safePool.length, poolHits: poolHitsTotal, poolHitRate, droppedPicks: droppedTotal, costCents: refreshCostCents, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
+    _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, poolSize: safePool.length, poolHits: poolHitsTotal, poolHitRate, droppedPicks: droppedTotal, costCents: refreshCostCents, callCount: claudeCallCount, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
   })
 })
