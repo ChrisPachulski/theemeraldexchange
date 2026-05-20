@@ -1367,6 +1367,61 @@ describe('suggestions route — prompt shape', () => {
     warnSpy.mockRestore()
   })
 
+  it('_diag.recentlyShownCount reflects items in recently-shown buffer (iter 65)', async () => {
+    // recentlyShownCount=0 on the first request (empty buffer), increases after.
+    _setTmdbApiKeyForTests('test-key')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(JSON.stringify(sonarrSeries), { status: 200 })
+        }
+        if (url.includes('themoviedb.org/3/search/tv')) {
+          return new Response(
+            JSON.stringify({ results: [{ id: 6_600_001, name: 'Fresh Show', poster_path: null, first_air_date: '2022-01-01' }] }),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    fakeResponse.value = {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu_recent_count',
+          name: 'submit_recommendations',
+          input: { picks: [{ title: 'Fresh Show', year: 2022, reason: 'crime cluster' }] },
+        },
+      ],
+      stop_reason: 'tool_use',
+      usage: { input_tokens: 50, output_tokens: 20 },
+    }
+    const cookie = await userCookie()
+    // First request: no recently-shown history → recentlyShownCount=0
+    const r1 = await appUnderTest().request('/tv', {
+      headers: { Cookie: cookie, 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r1.status).toBe(200)
+    const body1 = (await r1.json()) as { _diag?: { recentlyShownCount?: number } }
+    expect(typeof body1._diag?.recentlyShownCount).toBe('number')
+    expect(body1._diag!.recentlyShownCount!).toBe(0)
+    // Second request: Fresh Show was shown → recentlyShownCount ≥ 1
+    _resetLibraryCacheForTests()
+    const r2 = await appUnderTest().request('/tv', {
+      headers: { Cookie: cookie, 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r2.status).toBe(200)
+    const body2 = (await r2.json()) as { _diag?: { recentlyShownCount?: number } }
+    expect((body2._diag?.recentlyShownCount ?? 0)).toBeGreaterThanOrEqual(1)
+  })
+
   it('accumulates droppedPicks across both validation passes (iter 59 bug fix)', async () => {
     // Before iter 59, lastCounters was replaced by v2.counters so drops from
     // the initial pass were invisible. Now they're merged. This test verifies:
