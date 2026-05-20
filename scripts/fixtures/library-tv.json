@@ -1,0 +1,22 @@
+[
+  { "title": "Severance", "year": 2022, "tmdbId": 95396, "genres": ["Drama", "Mystery", "Sci-Fi & Fantasy"] },
+  { "title": "Andor", "year": 2022, "tmdbId": 83867, "genres": ["Drama", "Sci-Fi & Fantasy"] },
+  { "title": "The Last of Us", "year": 2023, "tmdbId": 100088, "genres": ["Drama", "Sci-Fi & Fantasy", "Action & Adventure"] },
+  { "title": "Succession", "year": 2018, "tmdbId": 76331, "genres": ["Drama"] },
+  { "title": "Better Call Saul", "year": 2015, "tmdbId": 60059, "genres": ["Drama", "Crime"] },
+  { "title": "Breaking Bad", "year": 2008, "tmdbId": 1396, "genres": ["Drama", "Crime"] },
+  { "title": "Chernobyl", "year": 2019, "tmdbId": 87108, "genres": ["Drama", "History"] },
+  { "title": "Mr. Robot", "year": 2015, "tmdbId": 62560, "genres": ["Drama", "Crime"] },
+  { "title": "Fargo", "year": 2014, "tmdbId": 60622, "genres": ["Drama", "Crime"] },
+  { "title": "True Detective", "year": 2014, "tmdbId": 46648, "genres": ["Drama", "Crime", "Mystery"] },
+  { "title": "Sherlock", "year": 2010, "tmdbId": 19885, "genres": ["Drama", "Crime", "Mystery"] },
+  { "title": "Sharp Objects", "year": 2018, "tmdbId": 67410, "genres": ["Drama", "Mystery"] },
+  { "title": "Mindhunter", "year": 2017, "tmdbId": 67744, "genres": ["Drama", "Crime"] },
+  { "title": "Ozark", "year": 2017, "tmdbId": 69740, "genres": ["Drama", "Crime"] },
+  { "title": "House of Cards", "year": 2013, "tmdbId": 1425, "genres": ["Drama"] },
+  { "title": "The Wire", "year": 2002, "tmdbId": 1438, "genres": ["Drama", "Crime"] },
+  { "title": "The Sopranos", "year": 1999, "tmdbId": 1398, "genres": ["Drama", "Crime"] },
+  { "title": "Game of Thrones", "year": 2011, "tmdbId": 1399, "genres": ["Drama", "Sci-Fi & Fantasy", "Action & Adventure"] },
+  { "title": "House of the Dragon", "year": 2022, "tmdbId": 94997, "genres": ["Drama", "Sci-Fi & Fantasy"] },
+  { "title": "Westworld", "year": 2016, "tmdbId": 63247, "genres": ["Drama", "Sci-Fi & Fantasy"] }
+]
