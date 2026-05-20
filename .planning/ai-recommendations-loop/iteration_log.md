@@ -429,3 +429,37 @@ Hypothesis: `setLike` uses `.push()` so oldest likes are first in the array. `bu
 | 7 | Trust scaffolding | 3 | 3 | 3 |
 
 **Next action (iter 10)**: Discover novelty filter (Agent C #4). Current discover fill sorts by `vote_average.desc` but returns the same ~60 items every refresh. Introduce a band-based rotation: for households with `rejection_count > 50`, draw from pages 2+3 of the discover result (page 1 = most acclaimed = most likely already owned/rejected by a heavy user). Improves refresh variety (real=3) for power users.
+
+---
+
+## Iteration 10 — Pool shuffle for per-refresh variety (Agent C #4 variant)
+
+**Date**: 2026-05-20
+**Target dimension**: Refresh variety (real=3 INFERRED). The TMDB /discover cache returns the same ~60 items per TTL window; within that window, consecutive refreshes see the same pool → Claude gets the same ranked corpus → similar picks.
+
+**Hypothesis**: Shuffling the safe pool (per-request Fisher-Yates before building the pool block) gives Claude a differently-ordered numbered list each refresh. Same 60 candidates, different ordinal positions → different ranking decisions → measurably different top-20. This is the per-refresh variety knob without extra TMDB calls. Combined with the existing refresh salt, this should move variety from 3 → 4.
+
+Note on Agent C #4 (rejection_count > 50 page-shifting): the existing `filterHouseholdSafe` already removes rejected items from the pool before Claude sees it, so heavy users naturally see a thinner but cleaner pool. The page-shifting complexity (different TMDB calls per rejection band) is deferred — the shuffle achieves most of the benefit without the branching.
+
+**Changes made**:
+- `server/routes/suggestions.ts`:
+  - `shuffleInPlace<T>(arr)` — new Fisher-Yates shuffle helper. Mutates and returns the array. [SYNTAX-CHECKED via build]
+  - Route handler: `safePool = shuffleInPlace(filterHouseholdSafe(rawPool))` — shuffle happens AFTER the household filter (so rejected/library items are gone before shuffling). `poolByTitle` map is order-independent and works correctly. [SYNTAX-CHECKED]
+
+**Verification results**:
+- `npm test` → 157 passed (unchanged, 1.65s). [VERIFIED]
+- `npm run build` → clean. [VERIFIED]
+- `npm run eval:recs` → 4 passed, scores unchanged (mock Claude picks from PICK_UNIVERSE, not the shuffled pool). [VERIFIED]
+- Refresh variety in eval: unchanged at 2.33 mocked (mock doesn't exercise pool shuffling). Real-world improvement is INFERRED until live soak.
+
+**Skeptic response**:
+- a. Target improved? Pool shuffle per refresh changes the input distribution to Claude. INFERRED in real world; observable only via live soak. Mocked eval unchanged as expected.
+- b. Other regressions? No — 157 tests, build clean, eval 4 passing.
+- c. INFERRED items? "Shuffle increases real-world refresh variety" — INFERRED. Logged as V7.
+- d. Citation: Fisher-Yates shuffle is correct-by-inspection. TRAINING-stable; no external citation needed.
+- e. Tests green: ✓
+
+**Rubric scores after iter 10** (real | mocked):
+pf 4 INFERRED|5, hyg 4|5, ps 4 INFERRED|4, rv 3→4 INFERRED (shuffle)||2.33, lat 3 INFERRED|5, hd 3|5, ts 3|3.
+
+**Next action (iter 11)**: Cold-start threshold raise 3→10 + new diag reason (Agent C #5). Currently 3 library items is enough for the Claude path; in practice, 3 items provide almost no genre signal. Raising to 10 means the route doesn't burn API budget on near-empty libraries (which always produce bad recommendations anyway).
