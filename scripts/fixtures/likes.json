@@ -1,0 +1,10 @@
+{
+  "movie": [
+    { "id": 27205, "title": "Inception" },
+    { "id": 329865, "title": "Arrival" }
+  ],
+  "tv": [
+    { "id": 95396, "title": "Severance" },
+    { "id": 100088, "title": "The Last of Us" }
+  ]
+}
