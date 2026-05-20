@@ -1136,10 +1136,14 @@ type ToolUseBlock = {
   input: { picks?: ClaudePick[] }
 }
 
+// Track whether the last Claude call was truncated by max_tokens.
+// Threaded through ClaudeResponse so the route handler can surface it
+// in _diag without coupling readToolUse to the diag builder.
 type ClaudeResponse = {
   toolUse: ToolUseBlock | null
   picks: ClaudePick[]
   usage: UsageBlock
+  truncated?: boolean
 }
 
 function extractUsage(usage: Anthropic.Messages.Usage | undefined): UsageBlock {
@@ -1167,19 +1171,40 @@ function readToolUse(response: Anthropic.Messages.Message): ClaudeResponse {
   }
   // When max_tokens cuts off mid-tool-use, the SDK still returns the
   // block but the JSON `input` is truncated — picks parses to an empty
-  // array and the route silently returns nothing. Log loudly so the
-  // failure is visible.
-  if (response.stop_reason === 'max_tokens') {
+  // array and the route silently returns nothing. Log loudly and surface
+  // the truncated flag so _diag exposes it to the UI.
+  const truncated = response.stop_reason === 'max_tokens'
+  if (truncated) {
     console.error(
       '[suggestions] tool_use truncated by max_tokens — picks list will be incomplete or empty; raise max_tokens or shrink CLAUDE_OVERFETCH',
     )
   }
-  const input = tu.input as { picks?: ClaudePick[] }
-  const picks = Array.isArray(input.picks) ? input.picks : []
+  const input = tu.input as { picks?: unknown }
+  // Guard against malformed tool_use input: picks must be a non-null array
+  // of objects with at least a string title field. Any other shape is treated
+  // as an empty list so the retry/fill chain handles the shortage gracefully
+  // rather than crashing on undefined pick.title access downstream.
+  const rawPicks = Array.isArray(input.picks) ? input.picks : []
+  const picks: ClaudePick[] = rawPicks
+    .filter(
+      (p): p is ClaudePick =>
+        p !== null &&
+        typeof p === 'object' &&
+        typeof (p as { title?: unknown }).title === 'string' &&
+        (p as ClaudePick).title.trim().length > 0,
+    )
+  if (rawPicks.length > 0 && picks.length < rawPicks.length) {
+    console.warn(
+      '[suggestions] readToolUse: filtered',
+      rawPicks.length - picks.length,
+      'malformed picks (missing/non-string title)',
+    )
+  }
   return {
-    toolUse: { type: 'tool_use', id: tu.id, name: tu.name, input },
+    toolUse: { type: 'tool_use', id: tu.id, name: tu.name, input: input as { picks?: ClaudePick[] } },
     picks,
     usage,
+    truncated,
   }
 }
 
@@ -1720,6 +1745,7 @@ suggestions.get('/:type', async (c) => {
 
   let totalUsage: UsageBlock = {}
   let r1: ClaudeResponse
+  let claudeTruncated = false
   // One salt per request — shared by initial + retry. Refresh variety
   // hangs on this: the cached library prefix makes deterministic Claude
   // calls otherwise. Salt rides outside the cache (in the user msg).
@@ -1728,6 +1754,7 @@ suggestions.get('/:type', async (c) => {
   try {
     r1 = await callClaudeInitial(client, type, libraryBlock, priorityTasteBlock, userLikesBlock, recentlyShownBlock, candidatePoolBlock, salt)
     totalUsage = mergeUsage(totalUsage, r1.usage)
+    claudeTruncated = r1.truncated ?? false
   } catch (e) {
     endClaudeInitial()
     const errorMsg = e instanceof Error ? e.message : String(e)
@@ -1893,13 +1920,13 @@ suggestions.get('/:type', async (c) => {
       return c.json({
         source: 'personalized_empty_trending_fallback',
         items: filled,
-        _diag: diag({ accepted: 0, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, droppedPicks: droppedTotal }),
+        _diag: diag({ accepted: 0, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, droppedPicks: droppedTotal, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
       })
     }
     return c.json({
       source: 'personalized_filled',
       items: filled,
-      _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, poolHits: lastCounters.poolHits, droppedPicks: droppedTotal }),
+      _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, poolHits: lastCounters.poolHits, droppedPicks: droppedTotal, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
     })
   }
 
@@ -1915,6 +1942,6 @@ suggestions.get('/:type', async (c) => {
   return c.json({
     source: 'personalized',
     items: finalAccepted,
-    _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, poolSize: safePool.length, poolHits: v1.counters.poolHits, droppedPicks: droppedTotal }),
+    _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, poolSize: safePool.length, poolHits: v1.counters.poolHits, droppedPicks: droppedTotal, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
   })
 })

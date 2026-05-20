@@ -107,6 +107,117 @@ describe('suggestions route — gating', () => {
   })
 })
 
+describe('suggestions route — malformed tool_use input hardening', () => {
+  const sonarrLibrary = Array.from({ length: 10 }, (_, i) => ({
+    title: `Series ${i}`,
+    year: 2010 + i,
+    tmdbId: 3000 + i,
+    genres: ['Drama'],
+  }))
+
+  it('filters malformed picks (null title, number title, missing title) from Claude output', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(JSON.stringify(sonarrLibrary), { status: 200 })
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    _setTmdbApiKeyForTests('test-key')
+    // Mix of valid + malformed picks
+    fakeResponse.value = {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu_malformed',
+          name: 'submit_recommendations',
+          input: {
+            picks: [
+              { title: 'Good Pick', year: 2021 },
+              { title: null, year: 2020 },         // null title — should be filtered
+              { year: 2019 },                        // missing title — should be filtered
+              { title: 123, year: 2018 },            // numeric title — should be filtered
+              { title: '', year: 2017 },             // empty string title — should be filtered
+              { title: '  ', year: 2016 },           // whitespace-only — should be filtered
+            ],
+          },
+        },
+      ],
+      stop_reason: 'tool_use',
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }
+
+    const r = await appUnderTest().request('/tv', {
+      headers: {
+        Cookie: await userCookie(),
+        'X-Anthropic-Api-Key': 'sk-ant-test-fakekey',
+      },
+    })
+    expect(r.status).toBe(200)
+    // The warn log should fire because 5 of 6 picks were malformed.
+    // readToolUse logs: console.warn('[suggestions] readToolUse: filtered', N, 'malformed picks ...')
+    // so c[0] is the prefix, c[2] contains "malformed picks"
+    const warned = warnSpy.mock.calls.some((c) =>
+      c.some((arg) => String(arg).includes('malformed picks')),
+    )
+    expect(warned).toBe(true)
+    warnSpy.mockRestore()
+  })
+
+  it('surfaces claudeTruncated:true in _diag when stop_reason is max_tokens', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/tv') || url.includes('/api/v3/series')) {
+          return new Response(JSON.stringify(sonarrLibrary), { status: 200 })
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    _setTmdbApiKeyForTests('test-key')
+    // Simulate max_tokens truncation: stop_reason = 'max_tokens', picks is empty
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    fakeResponse.value = {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu_truncated',
+          name: 'submit_recommendations',
+          input: { picks: [] },
+        },
+      ],
+      stop_reason: 'max_tokens',
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }
+
+    const r = await appUnderTest().request('/tv', {
+      headers: {
+        Cookie: await userCookie(),
+        'X-Anthropic-Api-Key': 'sk-ant-test-fakekey',
+      },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { _diag?: { claudeTruncated?: boolean } }
+    expect(body._diag?.claudeTruncated).toBe(true)
+    errSpy.mockRestore()
+  })
+})
+
 describe('suggestions route — Anthropic transient error retry', () => {
   // withAnthropicRetry is a module-internal function — we test it by
   // verifying that a 529 error thrown by the mock does NOT propagate to
