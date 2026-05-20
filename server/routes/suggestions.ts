@@ -1313,12 +1313,28 @@ function refreshSalt(): string {
   return hi + lo
 }
 
-function userAsk(kind: 'movie' | 'tv', n: number, salt: string): string {
+function userAsk(
+  kind: 'movie' | 'tv',
+  n: number,
+  salt: string,
+  genreHint?: string,
+): string {
   // Salt is placed at the BEGINNING of the user message so it's in the
   // highest-attention position — the model attends more to the start of
   // user content. This maximises the per-call entropy signal that breaks
   // cache-prefix determinism. (Iter 43: moved from end to start; length
   // raised from 8 to 16 hex chars for stronger entropy.)
+  //
+  // genreHint (iter 55): the top-2 genres from the library with percentages,
+  // repeated in the volatile user message for high-attention positioning.
+  // The same distribution already lives in the cached library block
+  // (TARGET GENRE MIX line), but the volatile repetition here ensures
+  // it's in the most recently attended context — the same intentional
+  // redundancy used by the PRIORITY TASTE block. Only emitted when the
+  // library has genre data (not cold-start).
+  const genreClause = genreHint
+    ? `\n\nGENRE FOCUS this call: ${genreHint}. The CANDIDATE POOL already reflects these genres; lean into them.`
+    : ''
   return (
     `[Request salt: ${salt}]\n\n` +
     `Recommend exactly ${n} ${kind === 'movie' ? 'movies' : 'TV shows'} for this household by calling submit_recommendations. ` +
@@ -1326,7 +1342,8 @@ function userAsk(kind: 'movie' | 'tv', n: number, salt: string): string {
     `\n\n` +
     `Before you submit, audit every pick: any title in the household library or the NEVER SUGGEST list must be replaced. A pick that matches either list is a wasted recommendation — the user pays for the token and sees a shorter strip. ` +
     `Return ${n} picks, never fewer; if obvious matches are exhausted, reach into deeper-cut adjacent recommendations rather than repeating from those lists.\n\n` +
-    `ROTATION QUOTA: at least 30% of your picks this round should be titles that did NOT appear in the RECENTLY SHOWN block (when one is present). The cached prefix tends to make refreshes look identical — rotation is the only way the household sees new faces.`
+    `ROTATION QUOTA: at least 30% of your picks this round should be titles that did NOT appear in the RECENTLY SHOWN block (when one is present). The cached prefix tends to make refreshes look identical — rotation is the only way the household sees new faces.` +
+    genreClause
   )
 }
 
@@ -1379,6 +1396,7 @@ async function callClaudeInitial(
   recentlyShownBlock: string,
   candidatePoolBlock: string,
   salt: string,
+  genreHint?: string,
 ): Promise<ClaudeResponse> {
   const response = await withAnthropicRetry(() =>
     client.messages.create({
@@ -1392,7 +1410,7 @@ async function callClaudeInitial(
       system: systemStack(libraryBlock, priorityTasteBlock, userLikesBlock, recentlyShownBlock, candidatePoolBlock),
       tools: [SUBMIT_TOOL],
       tool_choice: { type: 'tool', name: SUBMIT_TOOL.name, disable_parallel_tool_use: true },
-      messages: [{ role: 'user', content: userAsk(kind, CLAUDE_OVERFETCH, salt) }],
+      messages: [{ role: 'user', content: userAsk(kind, CLAUDE_OVERFETCH, salt, genreHint) }],
     }),
   )
   return readToolUse(response)
@@ -1410,6 +1428,7 @@ async function callClaudeRetry(
   rejectedPicks: Array<{ title: string; reason: string }>,
   nNeeded: number,
   salt: string,
+  genreHint?: string,
 ): Promise<ClaudeResponse> {
   const rejectedSummary = rejectedPicks
     .slice(0, 15)
@@ -1434,7 +1453,7 @@ async function callClaudeRetry(
       tools: [SUBMIT_TOOL],
       tool_choice: { type: 'tool', name: SUBMIT_TOOL.name, disable_parallel_tool_use: true },
       messages: [
-        { role: 'user', content: userAsk(kind, CLAUDE_OVERFETCH, salt) },
+        { role: 'user', content: userAsk(kind, CLAUDE_OVERFETCH, salt, genreHint) },
         {
           role: 'assistant',
           content: [
@@ -1816,9 +1835,17 @@ suggestions.get('/:type', async (c) => {
   // hangs on this: the cached library prefix makes deterministic Claude
   // calls otherwise. Salt rides outside the cache (in the user msg).
   const salt = refreshSalt()
+  // Genre hint: top-2 genres from the library with percentages, repeated
+  // in the volatile user message for high-attention positioning (iter 55).
+  // Complements the TARGET GENRE MIX line in the cached library block.
+  // Empty when the library has no genre data (uncommon; Sonarr/Radarr always
+  // populate genres for well-catalogued libraries).
+  const genreHint = libraryGenres.length > 0
+    ? libraryGenres.slice(0, 2).join(' and ')
+    : undefined
   const endClaudeInitial = timing.mark('claudeInitial')
   try {
-    r1 = await callClaudeInitial(client, type, libraryBlock, priorityTasteBlock, userLikesBlock, recentlyShownBlock, candidatePoolBlock, salt)
+    r1 = await callClaudeInitial(client, type, libraryBlock, priorityTasteBlock, userLikesBlock, recentlyShownBlock, candidatePoolBlock, salt, genreHint)
     claudeCallCount++
     totalUsage = mergeUsage(totalUsage, r1.usage)
     claudeTruncated = r1.truncated ?? false
@@ -1894,6 +1921,7 @@ suggestions.get('/:type', async (c) => {
         v1.rejectedForRetry,
         nNeeded,
         salt,
+        genreHint,
       )
       claudeCallCount++
       totalUsage = mergeUsage(totalUsage, r2.usage)
