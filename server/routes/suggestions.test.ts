@@ -935,6 +935,45 @@ describe('suggestions route — prompt shape', () => {
     expect(poolBlock?.text).not.toContain('Sons of Anarchy') // library item removed
     expect(poolBlock?.text).not.toContain('Filtered Reject Show') // rejected item removed
   })
+
+  it('deduplicates TMDB pool items by id across discover pages', async () => {
+    // /discover returns the same id on pages 1, 2, and 3 (simulating
+    // pagination drift). The pool block should contain each title only once.
+    _setTmdbApiKeyForTests('test-key')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(JSON.stringify(sonarrSeries), { status: 200 })
+        }
+        if (url.includes('themoviedb.org/3/discover/')) {
+          // Every page returns the same item — should only appear once in the pool
+          const rows = [
+            { id: 9_700_001, name: 'Dedup Show', poster_path: null, first_air_date: '2022-01-01' },
+          ]
+          return new Response(JSON.stringify({ results: rows }), { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/tv', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    const args = lastCreateArgs.value as { system: Array<{ text: string }> }
+    const poolBlock = args.system.find((s) => s.text.includes('CANDIDATE POOL'))
+    if (poolBlock) {
+      // Count occurrences of "Dedup Show" in the pool block
+      const occurrences = (poolBlock.text.match(/Dedup Show/g) ?? []).length
+      expect(occurrences).toBe(1) // deduplicated — only once
+    }
+  })
 })
 
 describe('suggestions route — TMDB validation', () => {
