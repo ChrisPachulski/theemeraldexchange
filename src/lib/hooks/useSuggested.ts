@@ -37,6 +37,8 @@ export type SuggestionDiag = {
   threshold?: number
   /** Cold-start: human-readable hint on how to unlock personalization. */
   hint?: string
+  /** Total Claude picks dropped by validation (library match + reject + lookup null + dedupe). Cost transparency. */
+  droppedPicks?: number
   lastCounters?: {
     lookupNulls?: number
     droppedAsDedupe?: number
