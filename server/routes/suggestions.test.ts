@@ -518,6 +518,88 @@ describe('suggestions route — liked-titles backfill', () => {
   })
 })
 
+describe('suggestions route — retryAttempted flag in _diag', () => {
+  it('retryAttempted=true when initial picks all rejected, false when no retry needed', async () => {
+    // Verify _diag.retryAttempted correctly reflects whether the retry path fired.
+    _setTmdbApiKeyForTests('test-key')
+    const tvLib = [
+      { title: 'RA Show A', year: 2010, tmdbId: 9501, genres: ['Drama'] },
+      { title: 'RA Show B', year: 2011, tmdbId: 9502, genres: ['Drama'] },
+      { title: 'RA Show C', year: 2012, tmdbId: 9503, genres: ['Crime'] },
+      { title: 'RA Show D', year: 2013, tmdbId: 9504, genres: ['Drama'] },
+      { title: 'RA Show E', year: 2014, tmdbId: 9505, genres: ['Crime'] },
+      { title: 'RA Show F', year: 2015, tmdbId: 9506, genres: ['Drama'] },
+      { title: 'RA Show G', year: 2016, tmdbId: 9507, genres: ['Thriller'] },
+      { title: 'RA Show H', year: 2017, tmdbId: 9508, genres: ['Drama'] },
+      { title: 'RA Show I', year: 2018, tmdbId: 9509, genres: ['Crime'] },
+      { title: 'RA Show J', year: 2019, tmdbId: 9510, genres: ['Drama'] },
+    ]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(JSON.stringify(tvLib), { status: 200 })
+        }
+        if (url.includes('themoviedb.org/3/search/tv')) {
+          return new Response(
+            JSON.stringify({ results: [{ id: 5_600_001, name: 'Clean External Show', poster_path: null, first_air_date: '2022-01-01' }] }),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const cookie = await userCookie()
+    // Case 1: All picks are library matches → rejectedForRetry non-empty → retry fires
+    fakeResponse.value = {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu_retry_true',
+          name: 'submit_recommendations',
+          input: { picks: tvLib.map((r) => ({ title: r.title, year: r.year })) },
+        },
+      ],
+      stop_reason: 'tool_use',
+      usage: { input_tokens: 50, output_tokens: 30 },
+    }
+    const r1 = await appUnderTest().request('/tv', {
+      headers: { Cookie: cookie, 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r1.status).toBe(200)
+    const body1 = (await r1.json()) as { _diag?: { retryAttempted?: boolean } }
+    expect(body1._diag?.retryAttempted).toBe(true)
+    // Case 2: Clean pick → no retry
+    _resetLibraryCacheForTests()
+    fakeResponse.value = {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu_retry_false',
+          name: 'submit_recommendations',
+          input: { picks: [{ title: 'Clean External Show', year: 2022, reason: 'crime cluster' }] },
+        },
+      ],
+      stop_reason: 'tool_use',
+      usage: { input_tokens: 50, output_tokens: 20 },
+    }
+    const r2 = await appUnderTest().request('/tv', {
+      headers: { Cookie: cookie, 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r2.status).toBe(200)
+    const body2 = (await r2.json()) as { _diag?: { retryAttempted?: boolean } }
+    expect(body2._diag?.retryAttempted).toBe(false)
+    warnSpy.mockRestore()
+  })
+})
+
 describe('suggestions route — personalized_empty path returns lastCounters for dominantDropReason', () => {
   it('lastCounters in _diag identifies dominant drop cause when all picks fail', async () => {
     // When Claude returns all-library picks AND the retry also fails,
