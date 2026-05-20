@@ -463,3 +463,36 @@ Note on Agent C #4 (rejection_count > 50 page-shifting): the existing `filterHou
 pf 4 INFERRED|5, hyg 4|5, ps 4 INFERRED|4, rv 3→4 INFERRED (shuffle)||2.33, lat 3 INFERRED|5, hd 3|5, ts 3|3.
 
 **Next action (iter 11)**: Cold-start threshold raise 3→10 + new diag reason (Agent C #5). Currently 3 library items is enough for the Claude path; in practice, 3 items provide almost no genre signal. Raising to 10 means the route doesn't burn API budget on near-empty libraries (which always produce bad recommendations anyway).
+
+---
+
+## Iteration 11 — Cold-start threshold raise 3→10 + richer diag (Agent C #5)
+
+**Date**: 2026-05-20
+**Target dimension**: Personalized fill (real=4 INFERRED) + Honest degradation (real=3). Two changes in one: (1) raise the cold-start threshold so the route only burns API budget when there's meaningful taste signal; (2) enrich the cold-start _diag with `libraryCount`, `threshold`, and `hint` for honest degradation.
+
+**Hypothesis**: At 3 items, genre distribution is statistically noise (3 shows can all be Drama for genre-unrelated reasons). At 10 items, the household has at least 2-3 genre clusters. Raising the threshold stops the route from spending the household's API budget on recommendations that are essentially random — improving both honest degradation (the user sees WHY trending is showing) and fill quality for borderline cases.
+
+**Changes made**:
+- `server/routes/suggestions.ts`:
+  - `COLD_START_THRESHOLD`: 3 → 10, with explanatory comment. [SYNTAX-CHECKED]
+  - Cold-start diag: adds `libraryCount`, `threshold`, `hint` fields — "Add at least N more title(s) to get personalized recommendations." [SYNTAX-CHECKED]
+- `server/routes/suggestions.test.ts`:
+  - All 3-item and below-threshold test libraries expanded to 10 items to clear the new threshold. [VERIFIED — 157 tests pass]
+
+**Verification results**:
+- `npm test` → 157 passed (157 existing; library expansions don't change pass counts since tests use stubFetch). [VERIFIED]
+- `npm run eval:recs` → 4 passed, scores unchanged (eval fixture libraries have 20+ items, well above threshold). [VERIFIED]
+- `npm run build` → skipped (no client changes).
+
+**Skeptic response**:
+- a. Target improved? Honest degradation: cold-start diag now tells the user exactly how many titles they need to add. pf: no more API budget wasted on 3–9 item libraries. Both INFERRED in real world.
+- b. Other regressions? 157 tests green. The prompt-shape test library also grows from 3→10, which means the tests are now exercising a more realistic library.
+- c. INFERRED items? "Threshold=10 is the right balance" — INFERRED. Could be 5 or 15 depending on genre distribution. 10 is a reasonable default that matches what a new user would add in their first session. Logged as V8.
+- d. Citation: Agent C #5 from iter 5 log. [SOURCE: iteration_log.md]
+- e. Tests green: ✓
+
+**Rubric scores after iter 11** (real | mocked):
+pf 4 INFERRED|5, hyg 4|5, ps 4 INFERRED|4, rv 4 INFERRED (shuffle)|2.33, lat 3 INFERRED|5, hd 3→4 INFERRED (richer diag)|5, ts 3|3.
+
+**Next action (iter 12)**: VARIANT SKEPTIC fires per schedule (iter 12). Then: Target latency (real=3 INFERRED → goal 4). The latency dimension is the only real-world score still at 2 (INFERRED bump to 3 from pool fast-path). Add a parallel discover prefetch at the same time as the Anthropic call — currently the candidate pool fetch is serial (await before Claude call). If the pool fetch and the Claude call fire concurrently, the pool is ready by the time validation needs it.

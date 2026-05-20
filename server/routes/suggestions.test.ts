@@ -108,12 +108,19 @@ describe('suggestions route — gating', () => {
 })
 
 describe('suggestions route — prompt shape', () => {
-  // Library big enough to clear COLD_START_THRESHOLD (3) so the route
+  // Library big enough to clear COLD_START_THRESHOLD (10) so the route
   // takes the Claude path.
   const sonarrSeries = [
     { title: 'Sons of Anarchy', year: 2008, tmdbId: 1001, genres: ['Crime', 'Drama'] },
     { title: 'House of the Dragon', year: 2022, tmdbId: 1002, genres: ['Drama', 'Fantasy'] },
     { title: 'The Crown', year: 2016, tmdbId: 1003, genres: ['Drama', 'History'] },
+    { title: 'Succession', year: 2018, tmdbId: 1004, genres: ['Drama'] },
+    { title: 'Better Call Saul', year: 2015, tmdbId: 1005, genres: ['Crime', 'Drama'] },
+    { title: 'Mindhunter', year: 2017, tmdbId: 1006, genres: ['Crime', 'Drama'] },
+    { title: 'Halt and Catch Fire', year: 2014, tmdbId: 1007, genres: ['Drama'] },
+    { title: 'Ozark', year: 2017, tmdbId: 1008, genres: ['Crime', 'Drama', 'Thriller'] },
+    { title: 'The Wire', year: 2002, tmdbId: 1009, genres: ['Crime', 'Drama'] },
+    { title: 'The Americans', year: 2013, tmdbId: 1010, genres: ['Crime', 'Drama', 'Thriller'] },
   ]
 
   function stubFetchForSonarr() {
@@ -360,7 +367,7 @@ describe('suggestions route — prompt shape', () => {
   })
 
   it('does NOT inject the priority-taste block for small libraries (full library already fits in the attended zone)', async () => {
-    stubFetchForSonarr() // 3-item library, well below trigger
+    stubFetchForSonarr() // 10-item library, well below the 60-item trigger
     const r = await appUnderTest().request('/tv', {
       headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
     })
@@ -598,6 +605,13 @@ describe('suggestions route — TMDB validation', () => {
     { title: 'Sons of Anarchy', year: 2008, tmdbId: 1001, genres: ['Crime', 'Drama'] },
     { title: 'House of the Dragon', year: 2022, tmdbId: 1002, genres: ['Drama', 'Fantasy'] },
     { title: 'The Crown', year: 2016, tmdbId: 1003, genres: ['Drama', 'History'] },
+    { title: 'Succession', year: 2018, tmdbId: 1004, genres: ['Drama'] },
+    { title: 'Better Call Saul', year: 2015, tmdbId: 1005, genres: ['Crime', 'Drama'] },
+    { title: 'Mindhunter', year: 2017, tmdbId: 1006, genres: ['Crime', 'Drama'] },
+    { title: 'Halt and Catch Fire', year: 2014, tmdbId: 1007, genres: ['Drama'] },
+    { title: 'Ozark', year: 2017, tmdbId: 1008, genres: ['Crime', 'Drama'] },
+    { title: 'The Wire', year: 2002, tmdbId: 1009, genres: ['Crime', 'Drama'] },
+    { title: 'The Americans', year: 2013, tmdbId: 1010, genres: ['Crime', 'Drama'] },
   ]
 
   it('drops movie picks whose TMDB top-match year is far from the requested year', async () => {
@@ -608,6 +622,13 @@ describe('suggestions route — TMDB validation', () => {
       { title: 'The Dark Knight', year: 2008, tmdbId: 2001, genres: ['Action', 'Crime'] },
       { title: 'Inception', year: 2010, tmdbId: 2002, genres: ['Action', 'Sci-Fi'] },
       { title: 'Interstellar', year: 2014, tmdbId: 2003, genres: ['Sci-Fi', 'Drama'] },
+      { title: 'Heat', year: 1995, tmdbId: 2004, genres: ['Action', 'Crime', 'Drama'] },
+      { title: 'No Country for Old Men', year: 2007, tmdbId: 2005, genres: ['Crime', 'Drama', 'Thriller'] },
+      { title: 'There Will Be Blood', year: 2007, tmdbId: 2006, genres: ['Drama'] },
+      { title: 'The Departed', year: 2006, tmdbId: 2007, genres: ['Crime', 'Drama', 'Thriller'] },
+      { title: 'Zodiac', year: 2007, tmdbId: 2008, genres: ['Crime', 'Drama', 'Mystery'] },
+      { title: 'Prisoners', year: 2013, tmdbId: 2009, genres: ['Crime', 'Drama', 'Mystery', 'Thriller'] },
+      { title: 'Sicario', year: 2015, tmdbId: 2010, genres: ['Action', 'Crime', 'Drama', 'Thriller'] },
     ]
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let claudeCalls = 0
@@ -669,6 +690,13 @@ describe('suggestions route — TMDB validation', () => {
       { title: 'Sons of Anarchy', year: 2008, tmdbId: 1001, genres: ['Crime', 'Drama'] },
       { title: 'House of the Dragon', year: 2022, tmdbId: 1002, genres: ['Drama', 'Fantasy'] },
       { title: 'The Crown', year: 2016, tmdbId: 1003, genres: ['Drama', 'History'] },
+      { title: 'Succession', year: 2018, tmdbId: 1004, genres: ['Drama'] },
+      { title: 'Better Call Saul', year: 2015, tmdbId: 1005, genres: ['Crime', 'Drama'] },
+      { title: 'Mindhunter', year: 2017, tmdbId: 1006, genres: ['Crime', 'Drama'] },
+      { title: 'Halt and Catch Fire', year: 2014, tmdbId: 1007, genres: ['Drama'] },
+      { title: 'Ozark', year: 2017, tmdbId: 1008, genres: ['Crime', 'Drama'] },
+      { title: 'The Wire', year: 2002, tmdbId: 1009, genres: ['Crime', 'Drama'] },
+      { title: 'The Americans', year: 2013, tmdbId: 1010, genres: ['Crime', 'Drama'] },
     ]
     let sonarrFetches = 0
     vi.stubGlobal(
@@ -740,6 +768,13 @@ describe('suggestions route — TMDB validation', () => {
       { title: 'Sons of Anarchy', year: 2008, tmdbId: 1001, genres: ['Crime', 'Drama'] },
       { title: 'House of the Dragon', year: 2022, tmdbId: 1002, genres: ['Drama', 'Fantasy'] },
       { title: 'The Crown', year: 2016, tmdbId: 1003, genres: ['Drama', 'History'] },
+      { title: 'Succession', year: 2018, tmdbId: 1004, genres: ['Drama'] },
+      { title: 'Better Call Saul', year: 2015, tmdbId: 1005, genres: ['Crime', 'Drama'] },
+      { title: 'Mindhunter', year: 2017, tmdbId: 1006, genres: ['Crime', 'Drama'] },
+      { title: 'Halt and Catch Fire', year: 2014, tmdbId: 1007, genres: ['Drama'] },
+      { title: 'Ozark', year: 2017, tmdbId: 1008, genres: ['Crime', 'Drama'] },
+      { title: 'The Wire', year: 2002, tmdbId: 1009, genres: ['Crime', 'Drama'] },
+      { title: 'The Americans', year: 2013, tmdbId: 1010, genres: ['Crime', 'Drama'] },
     ]
     vi.stubGlobal(
       'fetch',
