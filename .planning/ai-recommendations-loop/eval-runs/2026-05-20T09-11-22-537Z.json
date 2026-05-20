@@ -1,0 +1,90 @@
+{
+  "timestamp": "2026-05-20T09-11-22-537Z",
+  "scenarios": [
+    {
+      "scenario": "realistic-5x",
+      "kind": "movie",
+      "scores": {
+        "personalizedFill": 5,
+        "hygiene": 5,
+        "personalizationSignal": 4.5,
+        "refreshVariety": 4,
+        "latency": 5,
+        "honestDegradation": 5,
+        "trustScaffolding": 4
+      },
+      "sampleSources": [
+        "personalized",
+        "personalized",
+        "personalized",
+        "personalized",
+        "personalized"
+      ]
+    },
+    {
+      "scenario": "realistic-5x",
+      "kind": "tv",
+      "scores": {
+        "personalizedFill": 5,
+        "hygiene": 5,
+        "personalizationSignal": 4.5,
+        "refreshVariety": 4,
+        "latency": 5,
+        "honestDegradation": 5,
+        "trustScaffolding": 4
+      },
+      "sampleSources": [
+        "personalized",
+        "personalized",
+        "personalized",
+        "personalized",
+        "personalized"
+      ]
+    },
+    {
+      "scenario": "leaky-3x",
+      "kind": "movie",
+      "scores": {
+        "personalizedFill": 5,
+        "hygiene": 5,
+        "personalizationSignal": 4.5,
+        "refreshVariety": 3,
+        "latency": 5,
+        "honestDegradation": 5,
+        "trustScaffolding": 4
+      },
+      "sampleSources": [
+        "personalized",
+        "personalized",
+        "personalized"
+      ]
+    },
+    {
+      "scenario": "cold-start-3x",
+      "kind": "movie",
+      "scores": {
+        "personalizedFill": 1,
+        "hygiene": 5,
+        "personalizationSignal": 1.5,
+        "refreshVariety": 1,
+        "latency": 5,
+        "honestDegradation": 5,
+        "trustScaffolding": 3
+      },
+      "sampleSources": [
+        "trending",
+        "trending",
+        "trending"
+      ]
+    }
+  ],
+  "overall": {
+    "personalizedFill": 4,
+    "hygiene": 5,
+    "personalizationSignal": 3.75,
+    "refreshVariety": 3,
+    "latency": 5,
+    "honestDegradation": 5,
+    "trustScaffolding": 3.75
+  }
+}
