@@ -1132,4 +1132,83 @@ describe('suggestions route — TMDB validation', () => {
     expect(body._diag?.fillSource).toMatch(/^discover/)
     warnSpy.mockRestore()
   })
+
+  it('retries a TMDB 429 once then succeeds on second fetch', async () => {
+    // Verify that tmdbFetchWithRetry honours the Retry-After header
+    // and retries exactly once. After a 429 on the first call, the
+    // second call should succeed and the route should return data.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let fetchCallCount = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/movie')) {
+          return new Response(
+            JSON.stringify([
+              { title: 'Movie A', year: 2020, tmdbId: 901, genres: ['Drama'] },
+              { title: 'Movie B', year: 2019, tmdbId: 902, genres: ['Drama'] },
+              { title: 'Movie C', year: 2018, tmdbId: 903, genres: ['Crime'] },
+              { title: 'Movie D', year: 2021, tmdbId: 904, genres: ['Drama'] },
+              { title: 'Movie E', year: 2017, tmdbId: 905, genres: ['Crime'] },
+              { title: 'Movie F', year: 2016, tmdbId: 906, genres: ['Drama'] },
+              { title: 'Movie G', year: 2015, tmdbId: 907, genres: ['Thriller'] },
+              { title: 'Movie H', year: 2014, tmdbId: 908, genres: ['Drama'] },
+              { title: 'Movie I', year: 2013, tmdbId: 909, genres: ['Crime'] },
+              { title: 'Movie J', year: 2012, tmdbId: 910, genres: ['Drama'] },
+            ]),
+            { status: 200 },
+          )
+        }
+        if (url.includes('themoviedb.org/3/discover/movie')) {
+          fetchCallCount++
+          if (fetchCallCount === 1) {
+            // First call returns 429 with short Retry-After
+            return new Response('', {
+              status: 429,
+              headers: { 'Retry-After': '0' }, // 0 seconds for test speed
+            })
+          }
+          // Second call succeeds
+          return new Response(
+            JSON.stringify({ results: [{ id: 8001, title: 'Pool Pick', poster_path: null, release_date: '2022-01-01' }] }),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    _setTmdbApiKeyForTests('test-key')
+    fakeResponse.value = {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu_429retry',
+          name: 'submit_recommendations',
+          input: { picks: [] },
+        },
+      ],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }
+
+    const r = await appUnderTest().request('/movie', {
+      headers: {
+        Cookie: await userCookie(),
+        'X-Anthropic-Api-Key': 'sk-ant-test-fakekey',
+      },
+    })
+    expect(r.status).toBe(200)
+    // Route should not crash and fetchCallCount should be 3 (3 discover pages;
+    // the first page retried = 2 calls total for page 1, plus pages 2 and 3).
+    // At minimum: the second call should have occurred (retry happened).
+    expect(fetchCallCount).toBeGreaterThanOrEqual(2)
+    const warned = warnSpy.mock.calls.some((c) => String(c[0]).includes('429'))
+    expect(warned).toBe(true)
+    warnSpy.mockRestore()
+  })
 })

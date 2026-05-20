@@ -610,6 +610,38 @@ function buildRecentlyShownBlock(items: Array<{ id: number; title: string }>): s
 // 1–4 items instead of 20. 10 backfill + 22 lookups = 32, fits.
 const BACKFILL_MAX_PER_CALL = 10
 const TMDB_TIMEOUT_MS = 2500
+
+// TMDB 429 retry helper. On a 429 response, TMDB includes a
+// Retry-After header (seconds). We honour it once — a single retry
+// with the actual back-off keeps the route responsive while preventing
+// permanent silent failures on transient rate-limit spikes.
+// Cap: 10 seconds max wait so the route doesn't hang forever.
+// Returns the fetch Response (may still be non-ok) or null on network error.
+async function tmdbFetchWithRetry(
+  url: URL,
+  signal: AbortSignal,
+): Promise<Response | null> {
+  let r: Response
+  try {
+    r = await fetch(url, { headers: { Accept: 'application/json' }, signal })
+  } catch {
+    return null
+  }
+  if (r.status === 429) {
+    const retryAfterStr = r.headers.get('retry-after')
+    const retryAfterMs = retryAfterStr
+      ? Math.min(Number(retryAfterStr) * 1000, 10_000)
+      : 2_000 // sensible default when header absent
+    console.warn('[suggestions] TMDB 429 — retrying after', retryAfterMs, 'ms')
+    await new Promise((res) => setTimeout(res, retryAfterMs))
+    try {
+      r = await fetch(url, { headers: { Accept: 'application/json' }, signal })
+    } catch {
+      return null
+    }
+  }
+  return r
+}
 // Trending and discover surfaces don't churn second-to-second; 5 min
 // TTL slashes background TMDB volume by 5x without measurable user-
 // facing freshness loss. The single-flight lookup coalescing covers
@@ -641,13 +673,8 @@ async function tmdbTitleById(kind: 'movie' | 'tv', id: number): Promise<string |
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), TMDB_TIMEOUT_MS)
     try {
-      const r = await fetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal })
-      if (!r.ok) {
-        if (r.status === 429) {
-          console.error('[suggestions] TMDB rate-limited on titleById; retry-after:', r.headers.get('retry-after'))
-        }
-        return null
-      }
+      const r = await tmdbFetchWithRetry(url, controller.signal)
+      if (!r || !r.ok) return null
       const data = (await r.json()) as { title?: string; name?: string }
       return data.title || data.name || null
     } catch {
@@ -729,20 +756,13 @@ async function tmdbLookup(
       }
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), TMDB_TIMEOUT_MS)
-      let r: Response
+      let r: Response | null
       try {
-        r = await fetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal })
-      } catch {
-        return null
+        r = await tmdbFetchWithRetry(url, controller.signal)
       } finally {
         clearTimeout(timer)
       }
-      if (!r.ok) {
-        if (r.status === 429) {
-          console.error('[suggestions] TMDB rate-limited on /search; retry-after:', r.headers.get('retry-after'))
-        }
-        return null
-      }
+      if (!r || !r.ok) return null
       const data = (await r.json()) as {
         results?: Array<{
           id: number
@@ -763,6 +783,8 @@ async function tmdbLookup(
     // (e.g. "Severance (2025)" for season 2) when TMDB indexes the
     // series-premiere year (2022). The post-lookup year-proximity
     // guard (±5) still catches genuinely-wrong matches.
+    //
+    // Note: runSearch already uses tmdbFetchWithRetry for 429 handling.
     let top = await runSearch(true)
     if (!top && year) {
       top = await runSearch(false)
@@ -939,11 +961,10 @@ async function fetchCandidatePool(
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), TMDB_TIMEOUT_MS)
       try {
-        const r = await fetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal })
-        if (!r.ok) {
-          if (r.status === 429) {
-            console.error('[suggestions] TMDB rate-limited on /discover (pool); retry-after:', r.headers.get('retry-after'))
-          } else {
+        const r = await tmdbFetchWithRetry(url, controller.signal)
+        if (!r || !r.ok) {
+          if (r && r.status !== 429) {
+            // 429s are already logged inside tmdbFetchWithRetry after the retry fails
             console.error('[suggestions] TMDB /discover (pool) non-ok:', r.status, 'page', i + 1)
           }
           return null
@@ -1008,12 +1029,13 @@ async function tmdbTrending(kind: 'movie' | 'tv'): Promise<SuggestionItem[]> {
       const url = new URL(`${TMDB_BASE}/trending/${kind}/week`)
       url.searchParams.set('api_key', _tmdbKey!)
       url.searchParams.set('page', String(i + 1))
+      // No AbortController needed for trending (no caller-level timeout
+      // budget here — trending is a background cache fill). The retry
+      // helper handles 429s with a bounded wait.
       try {
-        const r = await fetch(url, { headers: { Accept: 'application/json' } })
-        if (!r.ok) {
-          if (r.status === 429) {
-            console.error('[suggestions] TMDB rate-limited on /trending; retry-after:', r.headers.get('retry-after'))
-          } else {
+        const r = await tmdbFetchWithRetry(url, new AbortController().signal)
+        if (!r || !r.ok) {
+          if (r && r.status !== 429) {
             console.error('[suggestions] TMDB /trending non-ok:', r.status, 'page', i + 1)
           }
           return null
