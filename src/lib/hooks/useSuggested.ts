@@ -21,6 +21,8 @@ type SuggestionSource =
 export type SuggestionDiag = {
   libraryCount?: number
   rejectionCount?: number
+  /** Top-5 genre distribution of the library — e.g. ["Drama 42%", "Crime 28%"]. Mirrors the TARGET GENRE MIX Claude was instructed to follow. */
+  libraryGenres?: string[]
   accepted?: number
   retryAttempted?: boolean
   fillSource?: string
@@ -29,14 +31,42 @@ export type SuggestionDiag = {
   claudeError?: string
   /** Anthropic HTTP status when reason === 'claude_threw'. */
   claudeStatus?: number
+  /** Number of items in the pre-fetched TMDB candidate pool (iter 8). */
+  poolSize?: number
+  /** Number of Claude picks that matched a pool item (bypassed TMDB /search). */
+  poolHits?: number
+  /** Fraction of accepted picks that were pool hits (0.0–1.0). 1.0 = all picks from pool; 0.0 = pool didn't help. */
+  poolHitRate?: number
+  /** Cold-start: minimum library size required for personalized recs. */
+  threshold?: number
+  /** Cold-start: human-readable hint on how to unlock personalization. */
+  hint?: string
+  /** Total Claude picks dropped by validation (library match + reject + lookup null + dedupe). Cost transparency. */
+  droppedPicks?: number
+  /** Estimated cost of this refresh in cents (Haiku 4.5 rates). Helps household monitor API spend. */
+  costCents?: number
+  /** True when Claude stopped generating early due to max_tokens — picks may be incomplete. */
+  claudeTruncated?: boolean
+  /** Number of Claude API calls made for this request (1 = initial only, 2 = initial + retry). Max is MAX_CLAUDE_CALLS_PER_REQUEST=2. */
+  callCount?: number
+  /** Anthropic prompt cache hit rate (0.0–1.0). 1.0 = library block fully cached (10x cheaper); 0.0 = no cache hit (first call of day or library changed). */
+  cacheHitRate?: number
+  /** Number of items in the recently-shown buffer (after pool-size cap). Helps diagnose whether the cap is preventing power-user saturation (iter 65). */
+  recentlyShownCount?: number
   lastCounters?: {
     lookupNulls?: number
     droppedAsDedupe?: number
     droppedAsRejected?: number
     droppedAsLibrary?: number
     droppedAsYearMismatch?: number
+    poolHits?: number
   }
 }
+
+// Where this card actually came from. Mirrors the server-side
+// SuggestionProvenance type. Lets the UI render personalized picks
+// differently from discover/trending fills.
+export type SuggestionProvenance = 'personalized' | 'discover' | 'trending'
 
 type SuggestionsResponse = {
   source: SuggestionSource
@@ -46,6 +76,8 @@ type SuggestionsResponse = {
     posterPath: string | null
     overview?: string
     year?: number
+    provenance?: SuggestionProvenance
+    reason?: string | null
   }>
   _diag?: SuggestionDiag
 }
@@ -97,6 +129,8 @@ async function fetchSuggested(
       posterPath: row.posterPath,
       overview: row.overview,
       year: row.year,
+      provenance: row.provenance,
+      reason: row.reason ?? null,
     })),
     source: data.source ?? null,
     diag: data._diag ?? null,

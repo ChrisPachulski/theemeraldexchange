@@ -1,0 +1,72 @@
+{
+  "timestamp": "2026-05-20T08-22-22-467Z",
+  "scenarios": [
+    {
+      "scenario": "realistic-5x",
+      "kind": "movie",
+      "scores": {
+        "personalizedFill": 5,
+        "hygiene": 5,
+        "personalizationSignal": 4,
+        "refreshVariety": 2,
+        "latency": 5,
+        "honestDegradation": 5,
+        "trustScaffolding": 3
+      },
+      "sampleSources": [
+        "personalized",
+        "personalized",
+        "personalized",
+        "personalized",
+        "personalized"
+      ]
+    },
+    {
+      "scenario": "realistic-5x",
+      "kind": "tv",
+      "scores": {
+        "personalizedFill": 5,
+        "hygiene": 5,
+        "personalizationSignal": 4,
+        "refreshVariety": 2,
+        "latency": 5,
+        "honestDegradation": 5,
+        "trustScaffolding": 3
+      },
+      "sampleSources": [
+        "personalized",
+        "personalized",
+        "personalized",
+        "personalized",
+        "personalized"
+      ]
+    },
+    {
+      "scenario": "leaky-3x",
+      "kind": "movie",
+      "scores": {
+        "personalizedFill": 5,
+        "hygiene": 5,
+        "personalizationSignal": 4,
+        "refreshVariety": 3,
+        "latency": 5,
+        "honestDegradation": 5,
+        "trustScaffolding": 3
+      },
+      "sampleSources": [
+        "personalized",
+        "personalized",
+        "personalized"
+      ]
+    }
+  ],
+  "overall": {
+    "personalizedFill": 5,
+    "hygiene": 5,
+    "personalizationSignal": 4,
+    "refreshVariety": 2.33,
+    "latency": 5,
+    "honestDegradation": 5,
+    "trustScaffolding": 3
+  }
+}
