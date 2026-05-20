@@ -879,3 +879,32 @@ pf 4 INFERRED|5, hyg 4|5, ps 4 INFERRED|4, rv 4 INFERRED|3.67, lat 4 INFERRED|5,
 pf 4 INFERRED|5, hyg 4|5, ps 4 INFERRED|4, rv 4 INFERRED|3.67, lat 4 INFERRED|5, hd 4 CONFIRMED|5, ts 4 VERIFIED|4.
 
 **Next action (iter 24)**: Add an eval scenario for the cold-start path to verify that the `library_below_threshold` hint appears correctly in the response. Also verify the recently-shown block correctly omits items from a prior refresh.
+
+---
+
+## Iteration 24 — Cold-start eval scenario + recently-shown cap test
+
+**Date**: 2026-05-20
+**Target dimension**: Honest degradation (confirmed 4) + Refresh variety (iter 23 cap verified).
+
+**Changes made**:
+- `server/routes/suggestions.eval.test.ts`:
+  - New scenario: "movie · cold-start household · honest degradation check" — library with 3 items (< COLD_START_THRESHOLD=10). Verifies source=trending AND diag.reason='library_below_threshold' AND diag.hint truthy for all 3 refreshes. [VERIFIED — 5 eval tests pass]
+- `server/routes/suggestions.test.ts`:
+  - New test: "caps recently-shown to 80% of pool size when pool is non-empty" — builds up a buffer of 60 shown items (3×20), then verifies the RECENTLY SHOWN block is capped at ≤30 (pool=5, cap=max(4,30)=30). [VERIFIED — 161 tests pass]
+
+**Verification results**:
+- `npm run eval:recs` → 5 passed (4→5 tests, new cold-start scenario). Overall scores (4 non-cold-start scenarios): pf=5, hyg=5, ps=4, rv=4, lat=5, hd=5, ts=4 for realistic; 3.67 for rv/ts in leaky. [VERIFIED]
+- `npm test` → 161 passed (+1 new test). [VERIFIED]
+
+**Skeptic response**:
+- a. Target improved? Honest degradation: cold-start path now has eval coverage, not just unit test coverage. ✓
+- b. Other regressions? None.
+- c. INFERRED items? Cold-start eval passes confirm honest degradation for the library_below_threshold path. V15 added: "recently-shown cap actually prevents power-user saturation" — INFERRED in real world (unit test covers the mechanism, not production behavior).
+- d. Citation: Code read directly.
+- e. Tests green: ✓
+
+**Rubric scores after iter 24** (real | mocked):
+pf 4 INFERRED|5, hyg 4|5, ps 4 INFERRED|4, rv 4 INFERRED|3.67, lat 4 INFERRED|5, hd 4 CONFIRMED|5, ts 4 VERIFIED|4.
+
+**Next action (iter 25)**: Final iteration. Summary pass: update Current State table, close V10, verify all dims remain ≥4, add final skeptic pass, and confirm the 18-iteration run is complete with all 18 commits on the branch.

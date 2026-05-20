@@ -696,6 +696,32 @@ describe('AI recommendation section — eval scenarios', () => {
     expect(results.every((r) => r.status === 200)).toBe(true)
   })
 
+  it('movie · cold-start household · honest degradation check', async () => {
+    // Cold-start: library has < COLD_START_THRESHOLD (10) items.
+    // Should return source=trending with a library_below_threshold reason in _diag.
+    // Tests honest degradation for the cold-start path.
+    const smallLib: LibraryEntry[] = [
+      { title: 'The Dark Knight', year: 2008, tmdbId: 2001, genres: ['Action', 'Crime'] },
+      { title: 'Inception', year: 2010, tmdbId: 2002, genres: ['Action', 'Sci-Fi'] },
+      { title: 'Interstellar', year: 2014, tmdbId: 2003, genres: ['Sci-Fi', 'Drama'] },
+    ]
+    vi.stubGlobal('fetch', makeFetchShim('movie', smallLib))
+    const results: RefreshResult[] = []
+    for (let i = 0; i < 3; i++) {
+      _resetLibraryCacheForTests()
+      results.push(await runRefresh('movie'))
+    }
+    // Cold-start: all results should have source=trending and a diag hint.
+    for (const r of results) {
+      expect(r.source).toBe('trending')
+      expect(r.diag?.reason).toBe('library_below_threshold')
+      expect(r.diag?.hint).toBeTruthy()
+    }
+    const scores = aggregate(results, smallLib, [])
+    REPORT.push({ scenario: 'cold-start-3x', kind: 'movie', scores, sampleSources: results.map((r) => r.source) })
+    expect(results.every((r) => r.status === 200)).toBe(true)
+  })
+
   it('writes consolidated report to .planning/ai-recommendations-loop/eval-runs/', async () => {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
     const outDir = resolve(__dirname, '../../.planning/ai-recommendations-loop/eval-runs')
