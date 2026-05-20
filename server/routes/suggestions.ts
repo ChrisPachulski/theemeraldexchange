@@ -1917,6 +1917,19 @@ suggestions.get('/:type', async (c) => {
   }
 
   const refreshCostCents = computeCostCents(totalUsage)
+  // Prompt cache hit rate: cacheRead / (input + cacheRead + cacheCreation).
+  // 1.0 = library block always came from cache (best case — 10x cheaper);
+  // 0.0 = no cache hits (first call of the day or library changed).
+  // Surfaced in _diag so the household can see whether prompt caching is
+  // working. A persistently 0.0 rate suggests the library fingerprint is
+  // thrashing (library changing too frequently or TTL too short).
+  const totalInputTokens =
+    (totalUsage.inputTokens ?? 0) +
+    (totalUsage.cacheReadInputTokens ?? 0) +
+    (totalUsage.cacheCreationInputTokens ?? 0)
+  const cacheHitRate = totalInputTokens > 0
+    ? Math.round(((totalUsage.cacheReadInputTokens ?? 0) / totalInputTokens) * 100) / 100
+    : 0
   await appendUsageEvent({
     sub: session.sub,
     username: session.username,
@@ -1992,13 +2005,13 @@ suggestions.get('/:type', async (c) => {
       return c.json({
         source: 'personalized_empty_trending_fallback',
         items: filled,
-        _diag: diag({ accepted: 0, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, poolHitRate: 0, droppedPicks: droppedTotal, costCents: refreshCostCents, callCount: claudeCallCount, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
+        _diag: diag({ accepted: 0, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, poolHitRate: 0, droppedPicks: droppedTotal, costCents: refreshCostCents, cacheHitRate, callCount: claudeCallCount, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
       })
     }
     return c.json({
       source: 'personalized_filled',
       items: filled,
-      _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, poolHits: lastCounters.poolHits, poolHitRate: filledPoolHitRate, droppedPicks: droppedTotal, costCents: refreshCostCents, callCount: claudeCallCount, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
+      _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, poolHits: lastCounters.poolHits, poolHitRate: filledPoolHitRate, droppedPicks: droppedTotal, costCents: refreshCostCents, cacheHitRate, callCount: claudeCallCount, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
     })
   }
 
@@ -2021,6 +2034,6 @@ suggestions.get('/:type', async (c) => {
   return c.json({
     source: 'personalized',
     items: finalAccepted,
-    _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, poolSize: safePool.length, poolHits: poolHitsTotal, poolHitRate, droppedPicks: droppedTotal, costCents: refreshCostCents, callCount: claudeCallCount, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
+    _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, poolSize: safePool.length, poolHits: poolHitsTotal, poolHitRate, droppedPicks: droppedTotal, costCents: refreshCostCents, cacheHitRate, callCount: claudeCallCount, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
   })
 })
