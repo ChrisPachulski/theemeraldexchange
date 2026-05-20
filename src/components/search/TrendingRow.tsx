@@ -232,14 +232,26 @@ export function TrendingRow({
       <div className="trending__row">
         {items.slice(0, 16).map((item) => {
           const isPending = pendingId === item.id
+          // Trust scaffolding: card carries a provenance modifier class
+          // so the styling can differentiate a Claude pick from a
+          // discover/trending fill (the actual visual contract lives in
+          // TrendingRow.css). Reason — when present — populates the
+          // browser tooltip alongside the title, AND renders as a small
+          // ground-line below the title on hover/focus. Quiet by
+          // default; visible when the user looks for it.
+          const provClass = item.provenance ? ` trending__card--${item.provenance}` : ''
+          const tipParts = [item.title]
+          if (item.reason) tipParts.push(item.reason)
+          const tooltip = tipParts.join(' — ')
           return (
             <div key={item.id} className="trending__card-wrap">
               <button
                 type="button"
-                className={`trending__card${isPending ? ' trending__card--pending' : ''}`}
+                className={`trending__card${isPending ? ' trending__card--pending' : ''}${provClass}`}
                 onClick={() => onPick(item.id)}
                 disabled={isPending}
-                title={item.title}
+                title={tooltip}
+                data-provenance={item.provenance ?? undefined}
               >
                 {item.posterPath ? (
                   <img
@@ -259,6 +271,11 @@ export function TrendingRow({
                   <span className="trending__title">{item.title}</span>
                   {item.year && <span className="trending__year">{item.year}</span>}
                 </div>
+                {item.reason && (
+                  <p className="trending__reason" aria-label={`Why: ${item.reason}`}>
+                    {item.reason}
+                  </p>
+                )}
               </button>
               {feedback && (
                 <FeedbackDots

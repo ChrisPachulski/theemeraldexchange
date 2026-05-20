@@ -199,6 +199,47 @@
   font-feature-settings: 'tnum' 1;
 }
 
+/* Per-pick reason — Claude's one-clause grounding ("neighbor of
+   Severance", "for fans of Heat"). Hidden by default; revealed on
+   hover/focus so the card stays calm in the resting state but the
+   provenance is one glance away when the user looks. Trust scaffolding
+   surface, not visual chrome. */
+.trending__reason {
+  margin: 4px 0 0;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  line-height: 1.35;
+  color: var(--text-faint, var(--text-subtle));
+  opacity: 0;
+  max-height: 0;
+  overflow: hidden;
+  transition: opacity 140ms ease-out, max-height 200ms ease-out;
+  /* Two-line clamp keeps a chatty model's output from blowing up the
+     card height when the schema's ≤90-char guidance is ignored. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.trending__card:hover .trending__reason,
+.trending__card:focus-visible .trending__reason {
+  opacity: 0.85;
+  max-height: 3em;
+}
+
+/* Provenance modifiers — subtle, only visible on hover so the card
+   row stays uniform at rest. Personalized picks get a faint emerald
+   trace; discover/trending picks remain neutral. */
+.trending__card--personalized:hover:not(:disabled) {
+  box-shadow: inset 0 0 0 1px rgba(64, 224, 160, 0.18);
+}
+.trending__card--discover:hover:not(:disabled) {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+.trending__card--trending:hover:not(:disabled) {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
 /* Skeleton card during the Claude call (~15s). The card itself takes
    the poster's dimensions so the row has visible weight while we
    wait — without these explicit sizes the empty div collapses to 0

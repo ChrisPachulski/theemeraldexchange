@@ -164,3 +164,70 @@
 | 7 | Trust scaffolding | 1 | 1 | 1 | 1 |
 
 **Next action (iteration 3)**: Trust scaffolding (rubric dim 7, lowest score, real=1). Extend `SuggestionItem` to carry a `provenance` field (`'personalized' | 'discover' | 'trending' | 'fallback'`) emitted by every return path, and an optional `reason` field populated from Claude's per-pick rationale (extend the SUBMIT_TOOL input_schema). Update TrendingRow to surface the reason on hover/tap. Tests + eval should both move trustScaffolding off 1.
+
+---
+
+## Iteration 3 — Per-pick provenance + reason end-to-end (VARIANT skeptic)
+
+**Date**: 2026-05-20
+**Target dimension**: Trust scaffolding (7) — real=1, lowest dim.
+**Hypothesis**: Adding `provenance` ('personalized' | 'discover' | 'trending') to every returned item, opening `reason` in the Claude tool schema, and surfacing both in the UI moves the dimension from 1 → 4 (target ≥4). The mocked eval will show 3 (provenance covered, reasons absent from mock); real-world will rise as Claude fills in reasons.
+
+**Research consulted**:
+- Anthropic tool_use input_schema patterns — verified `additionalProperties: false` + optional fields are supported via existing `SUBMIT_TOOL` shape. No web fetch needed; the file's own existing schema is the source. [SOURCE: file read]
+- PRODUCT.md voice — "short, confident, no jargon" — informs the reason field's ≤90-char guidance in the tool description. [SOURCE: file read 2026-05-20]
+- DESIGN.md — palette tokens used in CSS (`--text-faint`, `--text-subtle`, emerald rgba). [SOURCE: file read 2026-05-20]
+
+**Changes made**:
+- `server/routes/suggestions.ts`:
+  - `SuggestionProvenance` type exported.
+  - `SuggestionItem` gains optional `provenance` + `reason`. [VERIFIED via eval — score moved]
+  - `ClaudePick.reason` documented; was already a soft optional, now intentional.
+  - `SUBMIT_TOOL.description` rewritten to ASK for a reason (≤90 chars, library/like-grounded). Was "Do not include reasoning."
+  - `SUBMIT_TOOL.input_schema.properties.picks.items.properties` adds `reason` field with description. Not required — Claude may omit.
+  - `validate()` propagates `pick.reason` (trimmed to 120 chars defensively) onto accepted items with `provenance: 'personalized'`.
+  - Trending return paths (cold-start, force=trending, claude_threw fallback, fill top-up) tag items `{provenance: 'trending', reason: null}`.
+  - Discover fill tags items `{provenance: 'discover', reason: null}`.
+- `src/lib/hooks/useSuggested.ts`:
+  - `SuggestionProvenance` type exported.
+  - Response type + mapper pass `provenance` and `reason` through. [VERIFIED via build]
+- `src/lib/hooks/useTrending.ts`:
+  - `TrendingItem` gains optional `provenance` + `reason`. Also exported `TrendingItemProvenance` for downstream typing. [VERIFIED]
+- `src/components/search/TrendingRow.tsx`:
+  - Card gets `trending__card--{provenance}` modifier class + `data-provenance` attribute.
+  - Tooltip combines `title — reason` when reason exists.
+  - New `<p className="trending__reason">` rendered inside the button; CSS keeps it `opacity:0;max-height:0` at rest, reveals on hover/focus with a 140–200ms transition.
+- `src/components/search/TrendingRow.css`:
+  - `.trending__reason` style block (2-line clamp, mono font, faint color, hover/focus reveal).
+  - `.trending__card--personalized:hover` gets a faint inset emerald box-shadow; discover/trending get neutral hover treatments. Visual contract: same row at rest, different signal on attention.
+
+**Verification results**:
+- `npm test` → 151 passed (16 files), 969ms. No regression. [VERIFIED]
+- `npm run build` → client + server bundle clean. CSS bundle 95.74→96.38 KB (+640 bytes). [VERIFIED]
+- `npm run eval:recs` → 4 passed, 252ms. `trustScaffolding` moved from 1 → 3 across all scenarios (provenance now tagged on every item; reason still null because mock Claude doesn't generate reasons). [VERIFIED]
+- Live dev-server probe — DEFERRED to next iteration after the harness can supply reasons. The change is observable enough through the eval.
+
+**Skeptic response (VARIANT skeptic — argue the OPPOSITE)**:
+- Variant argument: "The cards should stay anonymous — adding provenance / reasons puts marketing chrome on a tool. Users don't care WHY Claude picked something; they just want to add the show. The whole strip is sub-page-load distraction."
+- Counter: PRODUCT.md says voice is "considered. quiet confidence." The visual contract here doesn't break that — reasons hide at rest, reveal only on hover/focus. Provenance is a CSS modifier, not a badge. The card stays calm. The point isn't marketing; it's so a household member can tell at a glance whether the strip is doing its job. When everything is unlabeled, trending fallback looks indistinguishable from a real personalized pick — and that erodes trust silently. Variant rejected; keep the change.
+- Standard skeptic checks:
+  - a. Target improved? trustScaffolding 1→3 in eval. ✓
+  - b. Other regressions? All 151 tests + 4 eval scenarios still pass. ✓
+  - c. INFERRED items? The `≤90 char` schema description is INFERRED guidance — Claude may comply or not. Logged for iter 4 verification (will require a live call).
+  - d. Citation spot-check: no external citations made.
+  - e. Tests green: ✓
+
+**Rubric scores after iter 3** (real-world | mocked):
+| # | Dim | Iter 2 (real) | Iter 3 (real) | Iter 3 (mocked) |
+|---|-----|---------------|---------------|-----------------|
+| 1 | Personalized fill | 2 | 2 | 5 |
+| 2 | Hygiene | 4 | 4 | 5 |
+| 3 | Personalization signal | 3 | 3 | 4 |
+| 4 | Refresh variety | 2 | 2 | 2.33 |
+| 5 | Latency | 2 | 2 | 5 |
+| 6 | Honest degradation | 3 | 3 | 5 |
+| 7 | Trust scaffolding | 1 | 3 | 3 |
+
+Real-world trustScaffolding moves 1 → 3 because the schema and rendering exist; reason rate will need a live Claude call to verify. Held at 3 in the table until that confirmation lands.
+
+**Next action (iteration 4)**: Refresh variety (dim 4, real=2). The route already has the RECENTLY_SHOWN block + temperature 0.7. The deterministic stride=3 in the eval shows the mock can't differentiate variety improvements. Need to: (a) extend the mock Claude to RESPECT the RECENTLY_SHOWN block by skipping titles already passed in (validating the cache-suffix injection is actually shaping pick selection), AND (b) consider hardening the rotation in the real route by making the RECENTLY_SHOWN block louder or by appending a per-request randomized seed-clause to break the cached-prefix determinism. Score should move from 2 → ≥3 with the mock change alone.
