@@ -29,12 +29,21 @@ export type SuggestionDiag = {
   claudeError?: string
   /** Anthropic HTTP status when reason === 'claude_threw'. */
   claudeStatus?: number
+  /** Number of items in the pre-fetched TMDB candidate pool (iter 8). */
+  poolSize?: number
+  /** Number of Claude picks that matched a pool item (bypassed TMDB /search). */
+  poolHits?: number
+  /** Cold-start: minimum library size required for personalized recs. */
+  threshold?: number
+  /** Cold-start: human-readable hint on how to unlock personalization. */
+  hint?: string
   lastCounters?: {
     lookupNulls?: number
     droppedAsDedupe?: number
     droppedAsRejected?: number
     droppedAsLibrary?: number
     droppedAsYearMismatch?: number
+    poolHits?: number
   }
 }
 

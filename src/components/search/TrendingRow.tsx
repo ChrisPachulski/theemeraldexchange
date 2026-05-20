@@ -114,6 +114,11 @@ function describeEmptySource(
   source: string | null | undefined,
   diag: SuggestionDiag | null | undefined,
 ): string | null {
+  // Cold-start path: library too small for meaningful taste signal.
+  // Surface the actionable hint so the user knows exactly what to do.
+  if (source === 'trending' && diag?.reason === 'library_below_threshold') {
+    return diag.hint ?? `Your library needs ${diag.threshold ?? 10}+ titles for personalized picks — showing trending for now.`
+  }
   if (source === 'trending_fallback') {
     if (diag?.reason === 'claude_threw') {
       const status = diag.claudeStatus
