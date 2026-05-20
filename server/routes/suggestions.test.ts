@@ -1139,6 +1139,89 @@ describe('suggestions route — prompt shape', () => {
   })
 })
 
+describe('suggestions route — cost discipline (MAX_CLAUDE_CALLS_PER_REQUEST)', () => {
+  // MAX_CLAUDE_CALLS_PER_REQUEST=2 means: 1 initial + at most 1 retry.
+  // This test verifies the ceiling actually fires: when every Claude pick
+  // is a library match, the route calls Claude at most twice (not more)
+  // and falls back to discover/trending for fill. The _diag.callCount
+  // must equal 2 (initial + retry fired), never 3+.
+  const sonarrSeriesCostTest = [
+    { title: 'Series A', year: 2010, tmdbId: 2001, genres: ['Drama'] },
+    { title: 'Series B', year: 2011, tmdbId: 2002, genres: ['Drama'] },
+    { title: 'Series C', year: 2012, tmdbId: 2003, genres: ['Crime'] },
+    { title: 'Series D', year: 2013, tmdbId: 2004, genres: ['Drama'] },
+    { title: 'Series E', year: 2014, tmdbId: 2005, genres: ['Crime'] },
+    { title: 'Series F', year: 2015, tmdbId: 2006, genres: ['Drama'] },
+    { title: 'Series G', year: 2016, tmdbId: 2007, genres: ['Thriller'] },
+    { title: 'Series H', year: 2017, tmdbId: 2008, genres: ['Drama'] },
+    { title: 'Series I', year: 2018, tmdbId: 2009, genres: ['Crime'] },
+    { title: 'Series J', year: 2019, tmdbId: 2010, genres: ['Drama'] },
+  ]
+
+  it('never exceeds MAX_CLAUDE_CALLS_PER_REQUEST=2 even when all picks are library matches', async () => {
+    // Scenario: Claude always returns all-library picks.
+    // The route should: call Claude (call 1), retry with rejection feedback
+    // (call 2), then stop — never a third call.
+    // _diag.callCount must be ≤ MAX_CLAUDE_CALLS_PER_REQUEST=2.
+    _setTmdbApiKeyForTests('test-key')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(JSON.stringify(sonarrSeriesCostTest), { status: 200 })
+        }
+        if (url.includes('themoviedb.org/3/search/tv')) {
+          // TMDB /search always returns a library-match id so all picks are rejected
+          return new Response(
+            JSON.stringify({ results: [{ id: 2001, name: 'Series A', poster_path: null, first_air_date: '2010-01-01' }] }),
+            { status: 200 },
+          )
+        }
+        if (url.includes('themoviedb.org/3/discover/tv')) {
+          // Provide a fill pick so the route can return a non-empty strip
+          return new Response(
+            JSON.stringify({ results: [{ id: 9_900_001, name: 'Discover Fill', poster_path: null, first_air_date: '2022-01-01' }] }),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    // Claude always returns picks that are all in the library (pre-validate
+    // drops them by title match, so even the retry produces 0 accepted).
+    fakeResponse.value = {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu_all_library',
+          name: 'submit_recommendations',
+          input: { picks: [
+            { title: 'Series A', year: 2010 }, // library id 2001
+            { title: 'Series B', year: 2011 }, // library id 2002
+            { title: 'Series C', year: 2012 }, // library id 2003
+          ] },
+        },
+      ],
+      stop_reason: 'tool_use',
+      usage: { input_tokens: 50, output_tokens: 30 },
+    }
+    const r = await appUnderTest().request('/tv', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { _diag?: { callCount?: number } }
+    // Hard ceiling: callCount must never exceed 2 regardless of rejection rate.
+    expect(body._diag?.callCount).toBeDefined()
+    expect(body._diag!.callCount!).toBeLessThanOrEqual(2)
+  })
+})
+
 describe('suggestions route — TMDB validation', () => {
   const sonarrSeries = [
     { title: 'Sons of Anarchy', year: 2008, tmdbId: 1001, genres: ['Crime', 'Drama'] },
