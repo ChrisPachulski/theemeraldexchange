@@ -1455,31 +1455,32 @@ suggestions.get('/:type', async (c) => {
   const userFeedback = await userFeedbackPromise
   const likedRaw = type === 'movie' ? userFeedback.movie.liked : userFeedback.tv.liked
 
+  // Start the candidate pool fetch in parallel with the backfill.
+  // topGenreIds only needs `library`, which is already resolved.
+  // Parallelizing the pool fetch with backfill saves the cold-cache
+  // pool latency (1–2 s) when backfill is also doing TMDB calls;
+  // on cache-hit the pool resolves in <1ms regardless.
+  const topGenreIds = genreNamesToTmdbIds(type, topGenreNames(library, 3))
+  const endPool = timing.mark('candidatePool')
+  const rawPoolPromise = topGenreIds.length > 0 ? fetchCandidatePool(type, topGenreIds) : Promise.resolve([] as SuggestionItem[])
+
   // Backfill missing titles on legacy entries so the Claude prompt
   // carries the *entire* rejection + likes context, not a silently
   // trimmed subset. Resolved titles are persisted so this cost is
   // one-time per entry. Backfill failures fall through to
   // `[TMDB id N]` bullets — Claude still sees the id is gated.
-  const [kindRejectionsTitled, liked] = await Promise.all([
+  const [kindRejectionsTitled, liked, rawPool] = await Promise.all([
     backfillRejectionTitles(type, kindRejections),
     backfillLikedTitles(session.sub, type, likedRaw),
+    rawPoolPromise,
   ])
+  endPool()
 
   const client = new Anthropic({ apiKey: userKey })
   const libraryBlock = buildLibraryBlock(type, library, kindRejectionsTitled)
   const priorityTasteBlock = buildPriorityTasteBlock(library)
   const userLikesBlock = buildUserLikesBlock(liked)
   const recentlyShownBlock = buildRecentlyShownBlock(getRecentlyShown(session.sub, type))
-
-  // Pre-fetch the candidate pool in parallel with block construction.
-  // The pool gives Claude a pre-vetted corpus to rank from instead of
-  // generating titles from its popularity prior. Pool items are
-  // household-safe (library + reject filtered) so TMDB lookups are
-  // skipped for exact pool matches — the id is already known.
-  const topGenreIds = genreNamesToTmdbIds(type, topGenreNames(library, 3))
-  const endPool = timing.mark('candidatePool')
-  const rawPool = topGenreIds.length > 0 ? await fetchCandidatePool(type, topGenreIds) : []
-  endPool()
   // Filter pool for household safety before showing it to Claude.
   // Pool items pass through filterHouseholdSafe to drop library entries
   // and rejects. Shuffle the pool before presenting it to Claude so
