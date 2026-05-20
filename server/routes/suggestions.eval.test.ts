@@ -776,7 +776,20 @@ describe('AI recommendation section — eval scenarios', () => {
       const vals = REPORT.map((r) => r.scores[d])
       overall[d] = vals.length === 0 ? 0 : Math.round((vals.reduce((s, v) => s + v, 0) / vals.length) * 100) / 100
     }
-    const payload = { timestamp: stamp, scenarios: REPORT, overall }
+    // Stuck indicator: compute scores for non-cold-start scenarios only.
+    // When ALL dims ≥ 4 in the realistic scenarios, the loop is nearing
+    // diminishing returns and iters 51-75 should focus on hardening + live soak.
+    const realisticScenarios = REPORT.filter((r) => !r.scenario.includes('cold-start'))
+    const realisticOverall: Partial<Record<keyof Scores, number>> = {}
+    for (const d of dims) {
+      const vals = realisticScenarios.map((r) => r.scores[d])
+      realisticOverall[d] = vals.length === 0 ? 0 : Math.round((vals.reduce((s, v) => s + v, 0) / vals.length) * 100) / 100
+    }
+    const allRealisticAboveFloor = dims.every((d) => (realisticOverall[d] ?? 0) >= 4)
+    const stuckIndicator = allRealisticAboveFloor
+      ? 'STUCK_INDICATOR: all realistic dims ≥ 4 — loop is approaching diminishing returns'
+      : `NOT_STUCK: dims below 4 in realistic: ${dims.filter((d) => (realisticOverall[d] ?? 0) < 4).join(', ')}`
+    const payload = { timestamp: stamp, scenarios: REPORT, overall, realisticOverall, stuckIndicator }
     await fs.writeFile(outPath, JSON.stringify(payload, null, 2))
     // Human-readable stdout for the loop's iteration log.
     /* eslint-disable no-console */
@@ -787,6 +800,8 @@ describe('AI recommendation section — eval scenarios', () => {
       console.log(`  ${row.kind}/${row.scenario}:`, JSON.stringify(row.scores), 'sources=', row.sampleSources.join(','))
     }
     console.log('Overall (mean across scenarios):', JSON.stringify(overall))
+    console.log('Realistic scenarios only:', JSON.stringify(realisticOverall))
+    console.log(stuckIndicator)
     /* eslint-enable no-console */
     expect(REPORT.length).toBeGreaterThan(0)
   })
