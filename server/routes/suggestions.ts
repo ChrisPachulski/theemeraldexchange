@@ -1490,8 +1490,9 @@ suggestions.get('/:type', async (c) => {
   const libraryBlock = buildLibraryBlock(type, library, kindRejectionsTitled)
   const priorityTasteBlock = buildPriorityTasteBlock(library)
   const userLikesBlock = buildUserLikesBlock(liked)
-  const recentlyShownBlock = buildRecentlyShownBlock(getRecentlyShown(session.sub, type))
-  // Filter pool for household safety before showing it to Claude.
+
+  // Filter pool BEFORE building the recently-shown block so we know
+  // the pool size to cap the recently-shown list proportionally.
   // Pool items pass through filterHouseholdSafe to drop library entries
   // and rejects. Shuffle the pool before presenting it to Claude so
   // each refresh sees a different ordering of the numbered list — this
@@ -1501,6 +1502,18 @@ suggestions.get('/:type', async (c) => {
   // shuffled numbered list. The poolByTitle map is order-independent so
   // the fast-path lookup works regardless of shuffle order.
   const safePool = shuffleInPlace(filterHouseholdSafe(rawPool))
+
+  // Cap recently-shown proportionally to pool size. With a 60-item pool
+  // and a 150-item recently-shown list, Claude would have almost no fresh
+  // candidates. Cap at 80% of pool size (min 30) so at least 20% of the
+  // pool is "uncontested" fresh territory every refresh. When the pool
+  // is empty, fall back to the full recently-shown buffer.
+  const recentlyShownCap = safePool.length > 0
+    ? Math.max(Math.floor(safePool.length * 0.8), 30)
+    : RECENTLY_SHOWN_CAP
+  const recentlyShownAll = getRecentlyShown(session.sub, type)
+  const recentlyShownTrimmed = recentlyShownAll.slice(0, recentlyShownCap)
+  const recentlyShownBlock = buildRecentlyShownBlock(recentlyShownTrimmed)
   const poolByTitle = new Map<string, SuggestionItem>(
     safePool.map((it) => [normalizeTitle(it.title), it]),
   )
