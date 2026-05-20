@@ -94,6 +94,71 @@ describe('suggestions route — gating', () => {
     expect(r.status).toBe(401)
   })
 
+  it('?force=trending returns trending source without calling Claude or requiring API key', async () => {
+    // The ?force=trending path is the client-side "AI off" toggle path.
+    // It should: return source=trending, apply filterHouseholdSafe, include
+    // libraryGenres in _diag, and NOT require an Anthropic API key.
+    _setTmdbApiKeyForTests('test-key')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/movie')) {
+          return new Response(
+            JSON.stringify([
+              { title: 'Force Trending Lib', year: 2020, tmdbId: 5001, genres: ['Drama'] },
+              { title: 'Drama Movie B', year: 2019, tmdbId: 5002, genres: ['Drama'] },
+              { title: 'Drama Movie C', year: 2018, tmdbId: 5003, genres: ['Drama'] },
+              { title: 'Drama Movie D', year: 2017, tmdbId: 5004, genres: ['Drama'] },
+              { title: 'Drama Movie E', year: 2016, tmdbId: 5005, genres: ['Drama'] },
+              { title: 'Drama Movie F', year: 2015, tmdbId: 5006, genres: ['Drama'] },
+              { title: 'Drama Movie G', year: 2014, tmdbId: 5007, genres: ['Drama'] },
+              { title: 'Drama Movie H', year: 2013, tmdbId: 5008, genres: ['Drama'] },
+              { title: 'Drama Movie I', year: 2012, tmdbId: 5009, genres: ['Drama'] },
+              { title: 'Drama Movie J', year: 2011, tmdbId: 5010, genres: ['Drama'] },
+            ]),
+            { status: 200 },
+          )
+        }
+        if (url.includes('themoviedb.org/3/trending/movie')) {
+          // Return one item that's in the library (should be filtered) and one clean item
+          return new Response(
+            JSON.stringify({
+              results: [
+                { id: 5001, title: 'Force Trending Lib', poster_path: null, release_date: '2020-01-01' }, // in library
+                { id: 5999, title: 'Clean Trending Item', poster_path: null, release_date: '2025-01-01' }, // not in library
+              ],
+            }),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    // No Anthropic API key header — force=trending must not require it
+    const r = await appUnderTest().request('/movie?force=trending', {
+      headers: { Cookie: await userCookie() },
+      // Intentionally no X-Anthropic-Api-Key header
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { source: string; items: Array<{ id: number }>; _diag?: { libraryGenres?: string[] } }
+    expect(body.source).toBe('trending')
+    // Library item (id=5001) should be filtered out
+    expect(body.items.some((i) => i.id === 5001)).toBe(false)
+    // Clean trending item should be present
+    expect(body.items.some((i) => i.id === 5999)).toBe(true)
+    // Claude was NOT called (fakeResponse unchanged, no lastCreateArgs)
+    expect(lastCreateArgs.value).toBeNull()
+    // libraryGenres should be present in _diag
+    expect(Array.isArray(body._diag?.libraryGenres)).toBe(true)
+    expect((body._diag?.libraryGenres?.length ?? 0)).toBeGreaterThan(0)
+  })
+
   it('400 on invalid type', async () => {
     const r = await appUnderTest().request('/books', {
       headers: { Cookie: await userCookie() },
