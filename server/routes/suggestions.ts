@@ -64,17 +64,38 @@ const TARGET_COUNT = 20
 // for users with large libraries.
 const CLAUDE_OVERFETCH = 30
 
+// Provenance — WHERE this card actually came from. Lets the UI render
+// a personalized pick differently from a trending fill, and lets the
+// household member tell at a glance whether the strip is doing its job
+// or quietly degrading. Trust scaffolding (rubric dim 7).
+//   'personalized' — Claude submitted it, validator accepted it
+//   'discover'     — TMDB /discover library-genre fill (taste-aware fallback)
+//   'trending'     — TMDB /trending fill (last resort)
+export type SuggestionProvenance = 'personalized' | 'discover' | 'trending'
+
 type SuggestionItem = {
   id: number
   title: string
   posterPath: string | null
   overview?: string
   year?: number
+  // Per-pick provenance + reason. Populated on every return path so
+  // the UI can render an honest signal even when the response source
+  // is a mix (e.g. `personalized_filled`). `reason` is a tight, ≤120-char
+  // string when present — populated for personalized picks from
+  // Claude's own short rationale; null for fills.
+  provenance?: SuggestionProvenance
+  reason?: string | null
 }
 
 type ClaudePick = {
   title: string
   year?: number
+  // Optional: a single tight clause Claude returns when it can ground
+  // the pick in a library neighbor or like signal. Surfaced verbatim
+  // as the per-card reason — voice constraint enforced by the tool
+  // schema's description, NOT by post-trimming, because Claude tends
+  // to comply better when the field is described as "short" up-front.
   reason?: string
 }
 
@@ -924,7 +945,7 @@ async function tmdbTrending(kind: 'movie' | 'tv'): Promise<SuggestionItem[]> {
 const SUBMIT_TOOL = {
   name: 'submit_recommendations',
   description:
-    'Submit the ranked list of recommended titles. Each entry MUST be a real, released title that is NOT in the household library and NOT on the NEVER SUGGEST list. Do not include reasoning. Title + year only.',
+    'Submit the ranked list of recommended titles. Each entry MUST be a real, released title that is NOT in the household library and NOT on the NEVER SUGGEST list. For each pick, include a `reason`: a single short clause (≤90 chars) grounded in the household library or likes — e.g. "neighbor of Severance", "for fans of Heat", "their prestige-crime cluster". Omit the reason only when no honest grounding exists. No marketing language, no plot summaries.',
   input_schema: {
     type: 'object' as const,
     properties: {
@@ -936,6 +957,11 @@ const SUBMIT_TOOL = {
           properties: {
             title: { type: 'string' as const },
             year: { type: 'integer' as const },
+            reason: {
+              type: 'string' as const,
+              description:
+                'Optional one-clause grounding (≤90 chars) explaining the pick — typically references a specific library title or like signal. Omit if no honest grounding fits.',
+            },
           },
           required: ['title'],
           additionalProperties: false,
@@ -1222,7 +1248,11 @@ suggestions.get('/:type', async (c) => {
 
   if (force === 'trending') {
     const endTrending = timing.mark('trending')
-    const trending = filterHouseholdSafe(await tmdbTrending(type))
+    const trending = filterHouseholdSafe(await tmdbTrending(type)).map((it) => ({
+      ...it,
+      provenance: 'trending' as const,
+      reason: null,
+    }))
     endTrending()
     setTimingHeader()
     return c.json({ source: 'trending', items: trending.slice(0, TARGET_COUNT), _diag: diag() })
@@ -1232,7 +1262,11 @@ suggestions.get('/:type', async (c) => {
   if (library.length < COLD_START_THRESHOLD) {
     console.warn('[suggestions] Cold-start path: library too small to filter', diag())
     const endTrending = timing.mark('trending')
-    const trending = filterHouseholdSafe(await tmdbTrending(type))
+    const trending = filterHouseholdSafe(await tmdbTrending(type)).map((it) => ({
+      ...it,
+      provenance: 'trending' as const,
+      reason: null,
+    }))
     endTrending()
     setTimingHeader()
     return c.json({
@@ -1369,7 +1403,13 @@ suggestions.get('/:type', async (c) => {
         continue
       }
       seen.add(r.id)
-      accepted.push(r)
+      // Tag personalized provenance + carry Claude's reason through
+      // validation. Trim to 120 chars defensively so a chatty model
+      // can't blow up the response payload; the schema asks for ≤90.
+      const reason = typeof pick.reason === 'string' && pick.reason.trim().length > 0
+        ? pick.reason.trim().slice(0, 120)
+        : null
+      accepted.push({ ...r, provenance: 'personalized', reason })
       if (accepted.length >= TARGET_COUNT) break
     }
     return { accepted, rejectedForRetry, counters }
@@ -1407,7 +1447,11 @@ suggestions.get('/:type', async (c) => {
       kind: type,
       error: errorMsg,
     })
-    const trending = filterHouseholdSafe(await tmdbTrending(type))
+    const trending = filterHouseholdSafe(await tmdbTrending(type)).map((it) => ({
+      ...it,
+      provenance: 'trending' as const,
+      reason: null,
+    }))
     setTimingHeader()
     return c.json({
       source: 'trending_fallback',
@@ -1496,9 +1540,9 @@ suggestions.get('/:type', async (c) => {
     let fillSource: 'discover' | 'trending' | 'discover+trending' = 'trending'
     let fill: SuggestionItem[] = []
     if (topGenreIds.length > 0) {
-      const discover = filterHouseholdSafe(await tmdbDiscoverByGenres(type, topGenreIds)).filter(
-        (t) => !fillIds.has(t.id),
-      )
+      const discover = filterHouseholdSafe(await tmdbDiscoverByGenres(type, topGenreIds))
+        .filter((t) => !fillIds.has(t.id))
+        .map((it) => ({ ...it, provenance: 'discover' as const, reason: null }))
       if (discover.length > 0) {
         fill = discover
         fillSource = 'discover'
@@ -1508,7 +1552,11 @@ suggestions.get('/:type', async (c) => {
     // strip still fills.
     if (accepted.length + fill.length < TARGET_COUNT) {
       const fillIdsAfter = new Set([...fillIds, ...fill.map((f) => f.id)])
-      const trending = filterHouseholdSafe(await tmdbTrending(type)).filter(
+      const trending = filterHouseholdSafe(await tmdbTrending(type)).map((it) => ({
+      ...it,
+      provenance: 'trending' as const,
+      reason: null,
+    })).filter(
         (t) => !fillIdsAfter.has(t.id),
       )
       fill = [...fill, ...trending]
