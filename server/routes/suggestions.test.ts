@@ -463,6 +463,61 @@ describe('suggestions route — Anthropic transient error retry', () => {
   }, 10_000 /* 10s timeout — covers the 3s retry delay */)
 })
 
+describe('suggestions route — genre distribution in prompt', () => {
+  it('libraryGenres in _diag matches expected format and proportions', async () => {
+    // Library with known genre distribution: 8 Drama, 4 Crime, 2 Fantasy out of
+    // 14 total genre tags (Drama=8/14=57%, Crime=4/14=29%, Fantasy=2/14=14%).
+    // computeGenreDistribution(library, 5) should return strings like ["Drama 57%", "Crime 29%", "Fantasy 14%"].
+    _setTmdbApiKeyForTests('test-key')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(
+            JSON.stringify([
+              { title: 'Show A', year: 2010, tmdbId: 7001, genres: ['Drama', 'Crime'] },
+              { title: 'Show B', year: 2011, tmdbId: 7002, genres: ['Drama', 'Crime'] },
+              { title: 'Show C', year: 2012, tmdbId: 7003, genres: ['Drama', 'Fantasy'] },
+              { title: 'Show D', year: 2013, tmdbId: 7004, genres: ['Drama'] },
+              { title: 'Show E', year: 2014, tmdbId: 7005, genres: ['Drama'] },
+              { title: 'Show F', year: 2015, tmdbId: 7006, genres: ['Drama', 'Crime'] },
+              { title: 'Show G', year: 2016, tmdbId: 7007, genres: ['Drama'] },
+              { title: 'Show H', year: 2017, tmdbId: 7008, genres: ['Drama', 'Fantasy'] },
+              { title: 'Show I', year: 2018, tmdbId: 7009, genres: ['Crime'] },
+              { title: 'Show J', year: 2019, tmdbId: 7010, genres: ['Drama'] },
+            ]),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/tv', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { _diag?: { libraryGenres?: string[] } }
+    expect(Array.isArray(body._diag?.libraryGenres)).toBe(true)
+    const genres = body._diag!.libraryGenres!
+    // Should be strings in "Genre XX%" format
+    expect(genres.every((g) => /^\w[\w\s]+ \d+%$/.test(g))).toBe(true)
+    // Drama should be first (most common genre)
+    expect(genres[0]).toMatch(/Drama/)
+    // Crime should be second
+    expect(genres[1]).toMatch(/Crime/)
+    // Drama should be >50% (8 out of 14 tags = 57%)
+    const dramaStr = genres.find((g) => g.includes('Drama'))!
+    const dramaPercent = parseInt(dramaStr.match(/(\d+)%/)![1])
+    expect(dramaPercent).toBeGreaterThan(50)
+  })
+})
+
 describe('suggestions route — prompt shape', () => {
   // Library big enough to clear COLD_START_THRESHOLD (10) so the route
   // takes the Claude path.
