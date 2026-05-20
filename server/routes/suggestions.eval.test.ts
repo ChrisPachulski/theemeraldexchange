@@ -491,13 +491,18 @@ function scoreHygiene(
 }
 
 function scorePersonalizationSignal(results: RefreshResult[]): number {
-  // Lower fraction of items that ALSO appear in the trending top 6 OR
-  // come from the trending/discover fallback ranges. The trending shim
-  // now overlaps the pick universe by 6 titles so the scoring is no
-  // longer free — a system that just returns whatever Claude said
-  // first will score worse than one that prefers non-popular adjacents.
+  // Two-component score:
+  // (A) Lower fraction of items that ALSO appear in the trending top 6 OR
+  //     come from the trending/discover fallback ranges. The trending shim
+  //     now overlaps the pick universe by 6 titles so the scoring is no
+  //     longer free — a system that just returns whatever Claude said
+  //     first will score worse than one that prefers non-popular adjacents.
+  // (B) Bonus: if ≥50% of results carry _diag.libraryGenres (genre tracking
+  //     is wired) the system demonstrates personalization-signal observability.
+  //     This is an infrastructure signal, not a direct taste-match measure.
   let total = 0
   let trendingOrDiscover = 0
+  let withGenreDiag = 0
   for (const r of results) {
     for (const id of r.itemIds) {
       total++
@@ -509,10 +514,19 @@ function scorePersonalizationSignal(results: RefreshResult[]): number {
       // subset — picks here are both Claude-suggested AND trending.
       else if (id >= 1_000_000 && id < 1_000_006) trendingOrDiscover++
     }
+    // Check if the route is emitting libraryGenres in _diag (iter 34)
+    const genreCount = (r.diag as { libraryGenres?: string[] } | undefined)?.libraryGenres?.length ?? 0
+    if (genreCount > 0) withGenreDiag++
   }
   if (total === 0) return 1
   const ratio = trendingOrDiscover / total
-  return ratio < 0.1 ? 5 : ratio < 0.25 ? 4 : ratio < 0.4 ? 3 : ratio < 0.6 ? 2 : 1
+  // (A) base score from trending-divergence
+  const baseScore = ratio < 0.1 ? 5 : ratio < 0.25 ? 4 : ratio < 0.4 ? 3 : ratio < 0.6 ? 2 : 1
+  // (B) infrastructure bonus: genre tracking present in majority of results
+  const genreBonusRate = results.length > 0 ? withGenreDiag / results.length : 0
+  const bonus = genreBonusRate >= 0.5 ? 0.5 : 0
+  // Cap at 5, round to 2 decimals
+  return Math.min(5, Math.round((baseScore + bonus) * 100) / 100)
 }
 
 function scoreRefreshVariety(results: RefreshResult[]): number {
