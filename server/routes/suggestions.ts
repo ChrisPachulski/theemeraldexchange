@@ -1465,7 +1465,12 @@ suggestions.get('/:type', async (c) => {
   // Parallelizing the pool fetch with backfill saves the cold-cache
   // pool latency (1–2 s) when backfill is also doing TMDB calls;
   // on cache-hit the pool resolves in <1ms regardless.
-  const topGenreIds = genreNamesToTmdbIds(type, topGenreNames(library, 3))
+  // Use top-5 genres instead of top-3 (iter 16). More genre coverage
+  // gives Claude a richer pool, especially for households with 4-5
+  // distinct clusters (e.g. Crime + Drama + Sci-Fi + Thriller + History).
+  // Top-3 was fine for a 20-item "Fill" but for the pool we want
+  // broader coverage to avoid the pool being dominated by a single genre.
+  const topGenreIds = genreNamesToTmdbIds(type, topGenreNames(library, 5))
   const endPool = timing.mark('candidatePool')
   const rawPoolPromise = topGenreIds.length > 0 ? fetchCandidatePool(type, topGenreIds) : Promise.resolve([] as SuggestionItem[])
 

@@ -627,3 +627,32 @@ pf 4 INFERRED|5, hyg 4|5, ps 4 INFERRED|4, rv 4 INFERRED|3, lat 4 INFERRED|5, hd
 pf 4 INFERRED|5, hyg 4|5, ps 4 INFERRED|4, rv 4 INFERRED|3, lat 4 INFERRED|5, hd 4 CONFIRMED (cold-start path now has full UI surface)|5, ts 4 INFERRED|3.67.
 
 **Next action (iter 16)**: Personalization signal hardening — the mocked eval has ps=4 but the score is based on avoiding the trending/discover id ranges. Improve the personalization signal by making Claude's picks reflect MORE of the library's genre distribution. Current system prompt says "mirror genres" but doesn't measure compliance. Add a per-pick genre tag from the TMDB pool item to the output so the eval can score genre mirroring more precisely.
+
+---
+
+## Iteration 16 — Personalization signal: top-5 genres for pool seeding (vs top-3)
+
+**Date**: 2026-05-20
+**Target dimension**: Personalization signal (real=4 INFERRED → maintain/improve). Broader genre coverage in the pool.
+
+**Hypothesis**: Using top-3 genres for pool seeding means the pool is dominated by the 1-2 most common genres in the library. A household with a Drama-heavy library + meaningful Crime + Sci-Fi minorities gets a Drama-saturated pool. Top-5 gives Claude richer cross-genre candidates to rank from, better reflecting the minority-genre titles the household genuinely likes.
+
+**Changes made**:
+- `server/routes/suggestions.ts`:
+  - `topGenreNames(library, 3)` → `topGenreNames(library, 5)` for pool seeding. [SYNTAX-CHECKED]
+
+**Verification results**:
+- `npm test` → 157 passed. [VERIFIED]
+- `npm run eval:recs` → 4 passed, scores unchanged (pool genre change doesn't affect mock). [VERIFIED]
+
+**Skeptic response**:
+- a. Target improved? INFERRED. Wider genre pool should produce more diverse, better-personalized candidates for Claude to rank. Real-world verification requires live soak. V12.
+- b. Other regressions? 157 tests green. The fill path also uses `topGenreIds` for its discover call — both now use 5 genres consistently.
+- c. INFERRED items? V12: "5 genres produces better pool diversity than 3."
+- d. Citation: Iter 5 Agent C #2 noted truncation to 30 relevant titles. Extending to 5 genres is the same spirit — broader signal, better coverage.
+- e. Tests green: ✓
+
+**Rubric scores after iter 16** (real | mocked): same as iter 15 — no mocked change.
+pf 4 INFERRED|5, hyg 4|5, ps 4 INFERRED|4, rv 4 INFERRED|3, lat 4 INFERRED|5, hd 4|5, ts 4 INFERRED|3.67.
+
+**Next action (iter 17)**: Honest degradation — surface poolSize and poolHits in the source-hint UI so the household can see how well the pool architecture is working (e.g., "16 of 20 picks came from your genre pool" vs "0 pool hits — Claude went off-script"). This doesn't require code changes beyond the existing diag fields — it requires the UI to RENDER poolHits when present.
