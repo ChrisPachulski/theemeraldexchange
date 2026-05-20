@@ -582,6 +582,41 @@ describe('suggestions route — prompt shape', () => {
     expect(body._diag!.cacheHitRate!).toBeLessThanOrEqual(1)
   })
 
+  it('injects genre hint into user message when library has genre data (iter 55)', async () => {
+    // The userAsk function now accepts a genreHint parameter derived from
+    // the library's top-2 genre distribution. Verify it appears in the user
+    // message when the library has genres (sonarrSeries has Crime + Drama).
+    // Need TMDB key so the route proceeds past the pool-fetch path without error.
+    _setTmdbApiKeyForTests('test-key')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(JSON.stringify(sonarrSeries), { status: 200 })
+        }
+        // All other calls (TMDB) return empty results
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/tv', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    const args = lastCreateArgs.value as { messages: Array<{ content: string }> }
+    const userMsg = args.messages[0].content
+    // Genre hint is "GENRE FOCUS this call: <genre1 XX%> and <genre2 YY%>."
+    // The sonarrSeries library is heavy on Drama and Crime.
+    expect(userMsg).toContain('GENRE FOCUS')
+    // The hint should mention at least one of Drama or Crime
+    expect(userMsg.toLowerCase()).toMatch(/drama|crime/)
+  })
+
   it('sets max_tokens ≥ 4096 on Claude calls to avoid truncation with 30-pick reasons', async () => {
     // 30 picks × ~80 tokens each ≈ 2400 output tokens + envelope.
     // The prior 2048 ceiling caused truncation when reasons were present.
