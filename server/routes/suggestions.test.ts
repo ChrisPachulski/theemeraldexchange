@@ -518,6 +518,75 @@ describe('suggestions route — liked-titles backfill', () => {
   })
 })
 
+describe('suggestions route — retry fires for pre-validate title failures (pf defense)', () => {
+  it('retry fires when all initial picks fail title pre-validation (rejectedForRetry populated)', async () => {
+    // Variant skeptic concern (iter 72): does retry fire when picks fail
+    // pre-validate (title matches)? YES: pre-validate adds to rejectedForRetry.
+    // This test verifies: all-library-title picks on initial call → retry fires
+    // (callCount=2), confirming rejectedForRetry is populated by pre-validate.
+    _setTmdbApiKeyForTests('test-key')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(
+            JSON.stringify([
+              { title: 'Prestige Show', year: 2010, tmdbId: 9301, genres: ['Drama'] },
+              { title: 'Crime Show', year: 2011, tmdbId: 9302, genres: ['Crime'] },
+              { title: 'Drama Show C', year: 2012, tmdbId: 9303, genres: ['Drama'] },
+              { title: 'Drama Show D', year: 2013, tmdbId: 9304, genres: ['Drama'] },
+              { title: 'Drama Show E', year: 2014, tmdbId: 9305, genres: ['Drama'] },
+              { title: 'Drama Show F', year: 2015, tmdbId: 9306, genres: ['Drama'] },
+              { title: 'Drama Show G', year: 2016, tmdbId: 9307, genres: ['Drama'] },
+              { title: 'Drama Show H', year: 2017, tmdbId: 9308, genres: ['Drama'] },
+              { title: 'Drama Show I', year: 2018, tmdbId: 9309, genres: ['Crime'] },
+              { title: 'Drama Show J', year: 2019, tmdbId: 9310, genres: ['Drama'] },
+            ]),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // Initial call: picks that match library titles → pre-validate drops them
+    // → rejectedForRetry is populated → retry fires
+    // Retry: also returns library picks (same fakeResponse) → still 0 accepted
+    // → fill from discover/trending (empty in this test) → personalized_empty_trending_fallback
+    fakeResponse.value = {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu_prevalidate',
+          name: 'submit_recommendations',
+          input: {
+            picks: [
+              { title: 'Prestige Show', year: 2010 }, // library match by title
+              { title: 'Crime Show', year: 2011 },     // library match by title
+            ],
+          },
+        },
+      ],
+      stop_reason: 'tool_use',
+      usage: { input_tokens: 50, output_tokens: 20 },
+    }
+    const r = await appUnderTest().request('/tv', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { _diag?: { callCount?: number } }
+    // callCount=2: retry fired because pre-validate populated rejectedForRetry
+    expect(body._diag?.callCount).toBe(2)
+    warnSpy.mockRestore()
+  })
+})
+
 describe('suggestions route — library cache and in-flight coalescing', () => {
   it('two concurrent requests share one Sonarr fetch (in-flight coalescing)', async () => {
     // Two simultaneous requests for the same library kind should result in
