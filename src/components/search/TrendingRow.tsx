@@ -276,6 +276,17 @@ export function TrendingRow({
                 title={tooltip}
                 data-provenance={item.provenance ?? undefined}
               >
+                {/* Provenance pip — faint dot in the top-left corner for
+                    personalized/discover picks. Quiet at rest, brighter on
+                    hover. Trending cards get no pip (no taste signal to
+                    signal). aria-hidden because it's purely decorative. */}
+                {(item.provenance === 'personalized' || item.provenance === 'discover') && (
+                  <span
+                    className="trending__pip"
+                    aria-hidden="true"
+                    title={item.provenance === 'personalized' ? 'Personalized for you' : 'From your genre picks'}
+                  />
+                )}
                 {item.posterPath ? (
                   <img
                     className="trending__poster"
