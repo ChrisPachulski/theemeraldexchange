@@ -228,15 +228,22 @@ export function TrendingRow({
     (diag?.droppedPicks ?? 0) > 10
       ? ` (${diag!.droppedPicks} picks filtered — some API credit was used on invalid suggestions)`
       : ''
+  // When Claude hit max_tokens the JSON was truncated and the strip may
+  // be shorter than expected. Surface an honest hint so the user isn't
+  // confused by a partial strip.
+  const truncatedHint =
+    diag?.claudeTruncated
+      ? ' (AI response was cut short — refresh for a full strip)'
+      : ''
   const sourceHint =
     source === 'trending_fallback'
       ? 'AI was unreachable — showing trending.'
       : source === 'trending' && diag?.reason === 'library_below_threshold'
         ? (diag.hint ?? 'Library too small for personalized picks — showing trending.')
         : source === 'personalized_filled' || source === 'personalized_empty_trending_fallback'
-          ? `A few picks are from trending — not enough personalized matches this round.${droppedWarning}`
-          : source === 'personalized' && droppedWarning
-            ? droppedWarning.trim()
+          ? `A few picks are from trending — not enough personalized matches this round.${droppedWarning}${truncatedHint}`
+          : source === 'personalized' && (droppedWarning || truncatedHint)
+            ? `${droppedWarning}${truncatedHint}`.trim()
             : null
 
   return (
