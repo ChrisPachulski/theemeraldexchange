@@ -313,7 +313,6 @@ function renderEntryBullets(entries: Array<{ id: number; title: string }>): stri
 // blind spot, and the user pays Claude $ for picks that were always
 // going to be filtered. Cached at 0.1x base rate this is essentially
 // free; counter-anchoring is handled in the prompt language instead.
-const REJECTION_PROMPT_CAP = Infinity
 
 // Compute the top-N genre distribution from a library. Returned as
 // `["Drama 38%", "Action 22%", …]` strings so it can be dropped
@@ -391,11 +390,7 @@ function buildLibraryBlockUncached(
   // rows after as `[TMDB id N]` fallbacks.
   const titled = rejections.filter((r) => r.title)
   const untitled = rejections.filter((r) => !r.title)
-  const promptRejections = Number.isFinite(REJECTION_PROMPT_CAP)
-    ? titled.length >= REJECTION_PROMPT_CAP
-      ? titled.slice(-REJECTION_PROMPT_CAP)
-      : [...titled, ...untitled.slice(0, REJECTION_PROMPT_CAP - titled.length)]
-    : [...titled, ...untitled]
+  const promptRejections = [...titled, ...untitled]
   // Rejections FIRST in the block — the most attended-to position
   // after the system prompt. Library follows as taste signal. Putting
   // rejections in their own labeled section (NEVER SUGGEST) ahead of
