@@ -580,9 +580,14 @@ function buildRecentlyShownBlock(items: Array<{ id: number; title: string }>): s
   // if absolutely no comparable alternative exists") read to the
   // model as a hard exclusion and collapsed candidate pools after a
   // few refreshes.
+  // Strengthened from "mild preference" to "strong preference" now
+  // that the CANDIDATE POOL gives Claude 60 fresh candidates to choose
+  // from — no risk of collapsing the candidate space. The pool ensures
+  // there's always an alternative, so the repeated-if-best-fit escape
+  // hatch is no longer needed as a guard.
   return (
-    `RECENTLY SHOWN to this user (mild preference for fresh adjacents, ` +
-    `but repeating one or two from this list is fine if they're the best fit):\n${bullets}`
+    `RECENTLY SHOWN to this user (strong preference for fresh picks — avoid these titles; ` +
+    `with the CANDIDATE POOL available there is always an alternative):\n${bullets}`
   )
 }
 
