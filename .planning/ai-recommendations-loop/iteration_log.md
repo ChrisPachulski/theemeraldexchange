@@ -320,3 +320,60 @@ Real-world trustScaffolding moves 1 → 3 because the schema and rendering exist
 **Skeptic**: Q: doesn't this duplicate signal already in the cached library? A: Yes, intentionally. The redundancy buys high-attention positioning without busting the cache. Q: does it skew the model away from minority genres in the library? A: Possible — but the top-30 by genre weight will reflect the dominant clusters, which is the SAME bias Claude was already learning from the full library. Not a regression.
 **Rubric after iter 7** (real | mocked): pf 3|5, hyg 4|5, ps 3→4 INFERRED|4, rv 3 INFERRED|2.33, lat 2|5, hd 3|5, ts 3|3.
 **Next**: Iter 8 — candidate pool architecture (Agent C #1, BIG move). Use TMDB `/discover` to pre-fetch ~60 candidate titles seeded by the household's top genres, pass them to Claude as the candidate corpus, and ask Claude to RANK + ANNOTATE rather than generate from prior. Reduces popularity-prior regression and improves hygiene (TMDB-curated pool).
+
+---
+
+## Iteration 8 — Candidate pool architecture (Agent C #1)
+
+**Target dimension**: Personalized fill (real=3) + Personalization signal (real=4 INFERRED). The BIG architectural move from Agent C: separate candidate generation (TMDB discover) from ranking (Claude).
+
+**Hypothesis**: Pre-fetching ~60 TMDB /discover candidates seeded by the household's top genres and passing them to Claude as a ranked corpus will: (a) reduce Claude's tendency to regress to its popularity prior (Claude ranks the pool it's given, not "most popular on Netflix"); (b) reduce the validate/retry cycle since pool items are pre-vetted (no library/reject overlap); (c) skip TMDB /search lookups for pool hits (pool id already known), improving latency; (d) use quality-sorted (vote_average.desc) pool so candidates skew toward acclaimed niche titles rather than blockbusters.
+
+**Research consulted**:
+- Iter 5 parallel gate, Agent C #1: "Claude is doing candidate generation AND ranking in one pass. Real recsys separates the two. Should use TMDB discover as a candidate pool fed to Claude as ranker." [SOURCE: iteration_log.md 2026-05-20]
+- TMDB /discover sort_by options: `vote_average.desc`, `popularity.desc`, `primary_release_date.desc` — confirmed via existing TMDB_GENRE_IDS code + inline comments in the file. [SOURCE: file read 2026-05-20, INFERRED from API knowledge]
+- Anthropic tool_use: the SUBMIT_TOOL description is rendered close to the call site, making it the right place to add the "prefer pool titles" instruction. [SOURCE: existing code, CONTEXT7-SOURCED shape confirmed by iter 3 work]
+
+**Changes made**:
+- `server/routes/suggestions.ts`:
+  - `fetchCandidatePool()` — new async function that fetches 3 pages of TMDB /discover quality-sorted (`vote_average.desc`, `vote_count.gte=100`) by the household's top genre ids. Shares `discoverCache` with the fill path so pool and fill use the same TMDB call. [SYNTAX-CHECKED via build]
+  - `buildCandidatePoolBlock()` — formats the ~60 pool items as a numbered list with title + year. Instructs Claude to "RANK these by how well they match the household's taste. Pick your recommendations PRIMARILY from this list." [SYNTAX-CHECKED]
+  - `tmdbDiscoverByGenres()` — refactored to delegate to `fetchCandidatePool()` (same cache, same fetch). [SYNTAX-CHECKED]
+  - `systemStack()` — extended with `candidatePoolBlock` parameter (5th volatile block, placed last for maximum attention). [SYNTAX-CHECKED]
+  - `callClaudeInitial()` / `callClaudeRetry()` — accept and pass `candidatePoolBlock`. [SYNTAX-CHECKED]
+  - `validate()` — pool fast-path: picks whose normalized title matches a pool item are accepted immediately without TMDB /search (id already known). Non-pool picks fall back to the existing /search lookup. `counters.poolHits` added. [SYNTAX-CHECKED]
+  - Route handler: pre-fetches the candidate pool (parallel with block construction via `topGenreIds`); builds `poolByTitle` Map for O(1) lookup in validate; passes `safePool` and `candidatePoolBlock` through the pipeline; adds `poolSize` + `poolHits` to `_diag`. Removes duplicate `topGenreIds` computation in the fill path. [SYNTAX-CHECKED]
+  - `SUBMIT_TOOL.description` updated: "Prefer titles from the CANDIDATE POOL when provided — they are already verified against the household library and NEVER SUGGEST list." [SYNTAX-CHECKED]
+- `server/routes/suggestions.test.ts`:
+  - "injects a CANDIDATE POOL block in the system stack when TMDB /discover returns results" — verifies pool block exists in system stack, is NOT cached (volatile), and contains pool item titles. [VERIFIED — test passes]
+  - "pool picks are accepted without a TMDB /search round-trip and carry personalized provenance" — verifies pool fast-path skips /search and assigns `provenance: 'personalized'`. [VERIFIED — test passes]
+
+**Verification results**:
+- `npm test` → 156 passed (was 154 + 2 new tests), 1.31s. [VERIFIED]
+- `npm run build` → client + server bundle clean. [VERIFIED]
+- `npm run eval:recs` → 4 passed, 547ms. Mocked scores unchanged (mock Claude picks from PICK_UNIVERSE which has no pool overlap). [VERIFIED]
+- Live dev-server probe: DEFERRED — pool fetch requires real TMDB key + Anthropic key; will run in next relevant iteration.
+
+**Skeptic response (standard)**:
+- a. Target improved? Mocked eval scores unchanged (pool items not in PICK_UNIVERSE). Real-world: validate fast-path means fewer TMDB /search calls → fewer 429 rate-limit failures → more full strips. pool provenance signal in _diag (`poolSize`, `poolHits`) now observable. INFERRED until live soak.
+- b. Other regressions? 156 tests passing, eval 4 passing, build clean. No regression.
+- c. INFERRED items? "Pool fast-path improves latency in production" — INFERRED. "Quality-sorted pool reduces popularity bias vs Claude prior" — INFERRED. Both require live soak to verify. Logged as V4 + V5.
+- d. Citation spot-check: Agent C #1 from iter 5 directly references the candidate-generation/ranking separation. The TMDB sort_by options are confirmed by the existing code pattern.
+- e. Tests green: ✓
+
+**Rubric scores after iter 8** (real | mocked):
+| # | Dim | Iter 7 (real) | Iter 8 (real) | Iter 8 (mocked) |
+|---|-----|---------------|---------------|-----------------|
+| 1 | Personalized fill | 3 | 3→4 INFERRED (pool reduces retry rate) | 5 |
+| 2 | Hygiene | 4 | 4 | 5 |
+| 3 | Personalization signal | 4 INFERRED | 4 INFERRED | 4 |
+| 4 | Refresh variety | 3 INFERRED | 3 INFERRED | 2.33 |
+| 5 | Latency | 2 | 2→3 INFERRED (pool fast-path skips /search) | 5 |
+| 6 | Honest degradation | 3 | 3 | 5 |
+| 7 | Trust scaffolding | 3 | 3 | 3 |
+
+**Open verification gaps**:
+- V4 (iter 8): Pool fast-path improves latency — needs live soak with Server-Timing capture.
+- V5 (iter 8): Quality-sorted pool produces better personalization signal than popularity-sorted — needs live compare (not feasible without A/B test; accepted as INFERRED).
+
+**Next action (iter 9)**: VARIANT SKEPTIC per schedule. Argue AGAINST the candidate-pool change. Then: likes recency weighting (Agent C #3) if skeptic clears. Target dimension: refresh variety (real=3 INFERRED) or latency (real=2→3 INFERRED).

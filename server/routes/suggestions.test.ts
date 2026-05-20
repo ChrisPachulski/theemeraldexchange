@@ -469,6 +469,106 @@ describe('suggestions route — prompt shape', () => {
     // Drama appears in all 3 (3/6 = 50%).
     expect(blocks).toMatch(/Drama 50%/)
   })
+
+  it('injects a CANDIDATE POOL block in the system stack when TMDB /discover returns results', async () => {
+    // Verify that the candidate-pool block appears after the cached
+    // library block and is NOT itself cached (it must be volatile so
+    // the pool can vary each request).
+    _setTmdbApiKeyForTests('test-key')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(JSON.stringify(sonarrSeries), { status: 200 })
+        }
+        if (url.includes('themoviedb.org/3/discover/')) {
+          const rows = Array.from({ length: 5 }, (_, i) => ({
+            id: 9_800_000 + i,
+            name: `Pool Show ${i + 1}`,
+            poster_path: null,
+            first_air_date: '2023-01-01',
+          }))
+          return new Response(JSON.stringify({ results: rows }), { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/tv', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    const args = lastCreateArgs.value as {
+      system: Array<{ type: string; text: string; cache_control?: unknown }>
+    }
+    const poolBlock = args.system.find((s) => s.text.includes('CANDIDATE POOL'))
+    expect(poolBlock).toBeDefined()
+    expect(poolBlock?.cache_control).toBeUndefined() // must be volatile
+    expect(poolBlock?.text).toContain('Pool Show 1')
+  })
+
+  it('pool picks are accepted without a TMDB /search round-trip and carry personalized provenance', async () => {
+    // Pool item title exactly matches a Claude pick → validate fast-path
+    // skips the TMDB /search call and returns the pool item's id.
+    _setTmdbApiKeyForTests('test-key')
+    let searchCalls = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(JSON.stringify(sonarrSeries), { status: 200 })
+        }
+        if (url.includes('themoviedb.org/3/discover/')) {
+          const rows = [{ id: 9_900_001, name: 'Pool Pick A', poster_path: null, first_air_date: '2022-01-01' }]
+          return new Response(JSON.stringify({ results: rows }), { status: 200 })
+        }
+        if (url.includes('themoviedb.org/3/search/')) {
+          searchCalls++
+          return new Response(JSON.stringify({ results: [] }), { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    // Claude picks the pool item by exact title.
+    fakeResponse.value = {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu_pool',
+          name: 'submit_recommendations',
+          input: {
+            picks: Array.from({ length: 20 }, () => ({
+              title: 'Pool Pick A',
+              year: 2022,
+              reason: 'matches crime cluster',
+            })),
+          },
+        },
+      ],
+      usage: { input_tokens: 50, output_tokens: 30 },
+    }
+    const r = await appUnderTest().request('/tv', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { source: string; items: Array<{ id: number; provenance: string; reason: string | null }> }
+    // First accepted item should come from the pool (id matches discover row).
+    expect(body.items[0]?.id).toBe(9_900_001)
+    expect(body.items[0]?.provenance).toBe('personalized')
+    // No /search call fired — pool fast-path skipped it.
+    expect(searchCalls).toBe(0)
+  })
 })
 
 describe('suggestions route — TMDB validation', () => {
