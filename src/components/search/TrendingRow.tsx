@@ -114,6 +114,11 @@ function describeEmptySource(
   source: string | null | undefined,
   diag: SuggestionDiag | null | undefined,
 ): string | null {
+  // Cold-start path: library too small for meaningful taste signal.
+  // Surface the actionable hint so the user knows exactly what to do.
+  if (source === 'trending' && diag?.reason === 'library_below_threshold') {
+    return diag.hint ?? `Your library needs ${diag.threshold ?? 10}+ titles for personalized picks — showing trending for now.`
+  }
   if (source === 'trending_fallback') {
     if (diag?.reason === 'claude_threw') {
       const status = diag.claudeStatus
@@ -215,13 +220,40 @@ export function TrendingRow({
   // Subtle hint when items are present but came from a degraded source
   // (e.g. Claude failed, falling back to trending). The strip still
   // renders normally; the hint just tells the user why their picks
-  // don't look personalized.
+  // don't look personalized. Also surfaces cold-start context.
+  // Note: droppedPicks > 10 means significant API budget was wasted on
+  // picks that were filtered post-generation. Surfacing this to the user
+  // when it happens motivates them to check their library/rejection lists.
+  const droppedWarning =
+    (diag?.droppedPicks ?? 0) > 10
+      ? ` (${diag!.droppedPicks} picks filtered — some API credit was used on invalid suggestions)`
+      : ''
+  // When Claude hit max_tokens the JSON was truncated and the strip may
+  // be shorter than expected. Surface an honest hint so the user isn't
+  // confused by a partial strip.
+  const truncatedHint =
+    diag?.claudeTruncated
+      ? ' (AI response was cut short — refresh for a full strip)'
+      : ''
+  // When source=trending and no AI context is shown (no toggle rendered),
+  // the strip is operating in no-key or AI-off mode. Show a quiet nudge
+  // so new users understand they can unlock personalized picks.
+  const noAiNudge =
+    source === 'trending' && !diag?.reason && !ai
+      ? 'Add an Anthropic key to unlock picks tailored to your library.'
+      : null
   const sourceHint =
     source === 'trending_fallback'
       ? 'AI was unreachable — showing trending.'
-      : source === 'personalized_filled' || source === 'personalized_empty_trending_fallback'
-        ? 'A few picks are from trending — not enough personalized matches this round.'
-        : null
+      : source === 'trending' && diag?.reason === 'library_below_threshold'
+        ? (diag.hint ?? 'Library too small for personalized picks — showing trending.')
+        : noAiNudge
+          ? noAiNudge
+          : source === 'personalized_filled' || source === 'personalized_empty_trending_fallback'
+            ? `A few picks are from trending — not enough personalized matches this round.${droppedWarning}${truncatedHint}`
+            : source === 'personalized' && (droppedWarning || truncatedHint)
+              ? `${droppedWarning}${truncatedHint}`.trim()
+              : null
 
   return (
     <section className="trending">
@@ -232,15 +264,38 @@ export function TrendingRow({
       <div className="trending__row">
         {items.slice(0, 16).map((item) => {
           const isPending = pendingId === item.id
+          // Trust scaffolding: card carries a provenance modifier class
+          // so the styling can differentiate a Claude pick from a
+          // discover/trending fill (the actual visual contract lives in
+          // TrendingRow.css). Reason — when present — populates the
+          // browser tooltip alongside the title, AND renders as a small
+          // ground-line below the title on hover/focus. Quiet by
+          // default; visible when the user looks for it.
+          const provClass = item.provenance ? ` trending__card--${item.provenance}` : ''
+          const tipParts = [item.title]
+          if (item.reason) tipParts.push(item.reason)
+          const tooltip = tipParts.join(' — ')
           return (
             <div key={item.id} className="trending__card-wrap">
               <button
                 type="button"
-                className={`trending__card${isPending ? ' trending__card--pending' : ''}`}
+                className={`trending__card${isPending ? ' trending__card--pending' : ''}${provClass}`}
                 onClick={() => onPick(item.id)}
                 disabled={isPending}
-                title={item.title}
+                title={tooltip}
+                data-provenance={item.provenance ?? undefined}
               >
+                {/* Provenance pip — faint dot in the top-left corner for
+                    personalized/discover picks. Quiet at rest, brighter on
+                    hover. Trending cards get no pip (no taste signal to
+                    signal). aria-hidden because it's purely decorative. */}
+                {(item.provenance === 'personalized' || item.provenance === 'discover') && (
+                  <span
+                    className="trending__pip"
+                    aria-hidden="true"
+                    title={item.provenance === 'personalized' ? 'Personalized for you' : 'From your genre picks'}
+                  />
+                )}
                 {item.posterPath ? (
                   <img
                     className="trending__poster"
@@ -259,6 +314,11 @@ export function TrendingRow({
                   <span className="trending__title">{item.title}</span>
                   {item.year && <span className="trending__year">{item.year}</span>}
                 </div>
+                {item.reason && (
+                  <p className="trending__reason" aria-label={`Why: ${item.reason}`}>
+                    {item.reason}
+                  </p>
+                )}
               </button>
               {feedback && (
                 <FeedbackDots
