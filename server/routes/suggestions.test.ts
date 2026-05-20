@@ -1135,6 +1135,69 @@ describe('suggestions route — prompt shape', () => {
     expect(searchCalls).toBe(0)
   })
 
+  it('poolHitRate = poolHits / accepted.length with correct formula (iter 63 VERIFIED)', async () => {
+    // Set up: 2 pool items. Claude picks BOTH from the pool. poolHitRate should = 1.0.
+    // poolHitsTotal = v1.counters.poolHits = 2; accepted.length = 2; rate = 2/2 = 1.0
+    _setTmdbApiKeyForTests('test-key')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(JSON.stringify(sonarrSeries), { status: 200 })
+        }
+        if (url.includes('themoviedb.org/3/discover/tv')) {
+          return new Response(
+            JSON.stringify({
+              results: [
+                { id: 8_100_001, name: 'Pool Show Alpha', poster_path: null, first_air_date: '2022-01-01' },
+                { id: 8_100_002, name: 'Pool Show Beta', poster_path: null, first_air_date: '2021-01-01' },
+              ],
+            }),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    // Claude picks exactly the 2 pool items
+    fakeResponse.value = {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu_poolhitrate',
+          name: 'submit_recommendations',
+          input: {
+            picks: [
+              { title: 'Pool Show Alpha', year: 2022, reason: 'similar to Sons of Anarchy' },
+              { title: 'Pool Show Beta', year: 2021, reason: 'crime cluster match' },
+            ],
+          },
+        },
+      ],
+      stop_reason: 'tool_use',
+      usage: { input_tokens: 50, output_tokens: 20 },
+    }
+    const r = await appUnderTest().request('/tv', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as {
+      source: string
+      _diag?: { poolHits?: number; poolHitRate?: number; poolSize?: number }
+    }
+    // Both picks came from the pool
+    expect(body._diag?.poolHits).toBe(2)
+    expect(body._diag?.poolSize).toBeGreaterThanOrEqual(2)
+    // poolHitRate = 2/2 = 1.0 (both accepted picks were pool hits)
+    expect(body._diag?.poolHitRate).toBe(1)
+  })
+
   it('filters library/reject items out of the CANDIDATE POOL before sending to Claude (hygiene defense in pool)', async () => {
     // Pool returns an item with the same tmdbId as a library entry AND
     // one with the same title as a rejection. Both must be absent from
