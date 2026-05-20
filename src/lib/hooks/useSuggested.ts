@@ -33,6 +33,8 @@ export type SuggestionDiag = {
   poolSize?: number
   /** Number of Claude picks that matched a pool item (bypassed TMDB /search). */
   poolHits?: number
+  /** Fraction of accepted picks that were pool hits (0.0–1.0). 1.0 = all picks from pool; 0.0 = pool didn't help. */
+  poolHitRate?: number
   /** Cold-start: minimum library size required for personalized recs. */
   threshold?: number
   /** Cold-start: human-readable hint on how to unlock personalization. */

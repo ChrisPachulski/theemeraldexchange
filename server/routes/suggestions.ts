@@ -1925,17 +1925,20 @@ suggestions.get('/:type', async (c) => {
       (lastCounters.lookupNulls ?? 0) +
       (lastCounters.droppedAsYearMismatch ?? 0) +
       (lastCounters.droppedAsDedupe ?? 0)
+    const filledPoolHitRate = accepted.length > 0
+      ? Math.round((lastCounters.poolHits / accepted.length) * 100) / 100
+      : 0
     if (accepted.length === 0) {
       return c.json({
         source: 'personalized_empty_trending_fallback',
         items: filled,
-        _diag: diag({ accepted: 0, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, droppedPicks: droppedTotal, costCents: refreshCostCents, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
+        _diag: diag({ accepted: 0, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, poolHitRate: 0, droppedPicks: droppedTotal, costCents: refreshCostCents, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
       })
     }
     return c.json({
       source: 'personalized_filled',
       items: filled,
-      _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, poolHits: lastCounters.poolHits, droppedPicks: droppedTotal, costCents: refreshCostCents, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
+      _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, poolHits: lastCounters.poolHits, poolHitRate: filledPoolHitRate, droppedPicks: droppedTotal, costCents: refreshCostCents, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
     })
   }
 
@@ -1946,11 +1949,18 @@ suggestions.get('/:type', async (c) => {
     (lastCounters.droppedAsYearMismatch ?? 0) +
     (lastCounters.droppedAsDedupe ?? 0)
   const finalAccepted = accepted.slice(0, TARGET_COUNT)
+  // Pool hit rate: fraction of accepted personalized picks that came from
+  // the pool (vs needing a full TMDB /search round-trip). 1.0 = ideal
+  // (every pick pre-vetted), 0.0 = pool didn't help. Observable in devtools.
+  const poolHitsTotal = v1.counters.poolHits
+  const poolHitRate = finalAccepted.length > 0
+    ? Math.round((poolHitsTotal / finalAccepted.length) * 100) / 100
+    : 0
   recordShown(session.sub, type, finalAccepted)
   setTimingHeader()
   return c.json({
     source: 'personalized',
     items: finalAccepted,
-    _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, poolSize: safePool.length, poolHits: v1.counters.poolHits, droppedPicks: droppedTotal, costCents: refreshCostCents, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
+    _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, poolSize: safePool.length, poolHits: poolHitsTotal, poolHitRate, droppedPicks: droppedTotal, costCents: refreshCostCents, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
   })
 })
