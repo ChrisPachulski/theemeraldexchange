@@ -205,6 +205,25 @@ describe('suggestions route — gating', () => {
     expect((body._diag?.libraryGenres?.length ?? 0)).toBeGreaterThan(0)
   })
 
+  it('cold-start with no TMDB key returns empty items (graceful degradation)', async () => {
+    // No TMDB key → tmdbTrending returns [] → strip is empty.
+    // The route should NOT crash; it returns source=trending with items=[].
+    // _setTmdbApiKeyForTests(null) is already set in beforeEach.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('[]', { status: 200 })),
+    )
+    const r = await appUnderTest().request('/movie', {
+      headers: { Cookie: await userCookie() },
+    })
+    // Without key the route returns either trending (empty) or cold-start trending.
+    // Either way it must be 200 (no crash).
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { source: string; items: unknown[] }
+    expect(body.source).toBe('trending')
+    expect(Array.isArray(body.items)).toBe(true)
+  })
+
   it('400 on invalid type', async () => {
     const r = await appUnderTest().request('/books', {
       headers: { Cookie: await userCookie() },
