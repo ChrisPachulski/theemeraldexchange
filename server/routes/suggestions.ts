@@ -1498,9 +1498,14 @@ suggestions.get('/:type', async (c) => {
     )
   }
 
+  // Include top genre distribution in every diag response so the
+  // personalization signal is observable: callers can compare what
+  // Claude was instructed to mirror against what actually rendered.
+  const libraryGenres = computeGenreDistribution(library, 5)
   const diag = (extra: Record<string, unknown> = {}) => ({
     libraryCount: library.length,
     rejectionCount: kindRejections.length,
+    libraryGenres: libraryGenres.length > 0 ? libraryGenres : undefined,
     ...extra,
   })
 

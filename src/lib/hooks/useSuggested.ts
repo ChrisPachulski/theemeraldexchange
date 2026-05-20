@@ -21,6 +21,8 @@ type SuggestionSource =
 export type SuggestionDiag = {
   libraryCount?: number
   rejectionCount?: number
+  /** Top-5 genre distribution of the library — e.g. ["Drama 42%", "Crime 28%"]. Mirrors the TARGET GENRE MIX Claude was instructed to follow. */
+  libraryGenres?: string[]
   accepted?: number
   retryAttempted?: boolean
   fillSource?: string
