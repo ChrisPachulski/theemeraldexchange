@@ -644,15 +644,18 @@ describe('suggestions route — prompt shape', () => {
     })
     expect(r.status).toBe(200)
     const body = (await r.json()) as { _diag?: { callCount?: number; cacheHitRate?: number } }
-    // callCount should be present
-    expect(body._diag?.callCount).toBeDefined()
-    expect(typeof body._diag?.callCount).toBe('number')
-    // cacheHitRate should be present (mocked cache_read_input_tokens=80)
+    // callCount should be 1 (single accepted pick, no retry needed)
+    expect(body._diag?.callCount).toBe(1)
+    // cacheHitRate formula: cacheRead / (input + output + cacheRead + cacheCreation)
+    // With the mocked usage: input=100, output=50, cache_read=80, cacheCreation=0
+    // total = 100 + 80 + 0 = 180 (output tokens not counted in denominator per route code)
+    // rate = 80 / 180 ≈ 0.44
+    // The route uses: total = inputTokens + cacheReadTokens + cacheCreationTokens
+    // = 100 + 80 + 0 = 180; rate = 80 / 180 = 0.44 (rounded to 2 decimals)
     expect(body._diag?.cacheHitRate).toBeDefined()
     expect(typeof body._diag?.cacheHitRate).toBe('number')
-    // With cache_read=80, total=(100+50+80)=230, rate=80/230≈0.35
-    expect(body._diag!.cacheHitRate!).toBeGreaterThan(0)
-    expect(body._diag!.cacheHitRate!).toBeLessThanOrEqual(1)
+    // Exact value: Math.round((80/180) * 100) / 100 = Math.round(44.44) / 100 = 44/100 = 0.44
+    expect(body._diag!.cacheHitRate!).toBe(0.44)
   })
 
   it('injects genre hint into user message when library has genre data (iter 55)', async () => {
