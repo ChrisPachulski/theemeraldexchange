@@ -235,16 +235,25 @@ export function TrendingRow({
     diag?.claudeTruncated
       ? ' (AI response was cut short — refresh for a full strip)'
       : ''
+  // When source=trending and no AI context is shown (no toggle rendered),
+  // the strip is operating in no-key or AI-off mode. Show a quiet nudge
+  // so new users understand they can unlock personalized picks.
+  const noAiNudge =
+    source === 'trending' && !diag?.reason && !ai
+      ? 'Add an Anthropic key to unlock picks tailored to your library.'
+      : null
   const sourceHint =
     source === 'trending_fallback'
       ? 'AI was unreachable — showing trending.'
       : source === 'trending' && diag?.reason === 'library_below_threshold'
         ? (diag.hint ?? 'Library too small for personalized picks — showing trending.')
-        : source === 'personalized_filled' || source === 'personalized_empty_trending_fallback'
-          ? `A few picks are from trending — not enough personalized matches this round.${droppedWarning}${truncatedHint}`
-          : source === 'personalized' && (droppedWarning || truncatedHint)
-            ? `${droppedWarning}${truncatedHint}`.trim()
-            : null
+        : noAiNudge
+          ? noAiNudge
+          : source === 'personalized_filled' || source === 'personalized_empty_trending_fallback'
+            ? `A few picks are from trending — not enough personalized matches this round.${droppedWarning}${truncatedHint}`
+            : source === 'personalized' && (droppedWarning || truncatedHint)
+              ? `${droppedWarning}${truncatedHint}`.trim()
+              : null
 
   return (
     <section className="trending">
