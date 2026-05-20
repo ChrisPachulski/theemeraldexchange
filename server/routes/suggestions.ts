@@ -1295,25 +1295,33 @@ function systemStack(
 // meaning, just entropy. Refresh variety (rubric dim 4).
 function refreshSalt(): string {
   // crypto.randomUUID is available on Node 20+ and modern browsers.
-  // The eval mock + production both hit this path. The salt is short
-  // (8 hex chars) so it doesn't bloat the prompt.
-  // Math.random fallback keeps it harness-safe.
+  // 16 hex chars (64 bits) — enough entropy to ensure each request
+  // looks unique to the model's attention. Math.random fallback for
+  // test environments without crypto.
   const g = globalThis as { crypto?: { randomUUID?: () => string } }
   if (g.crypto && typeof g.crypto.randomUUID === 'function') {
-    return g.crypto.randomUUID().slice(0, 8)
+    // Two UUIDs sliced and concatenated give 16 unique hex chars.
+    return g.crypto.randomUUID().replace(/-/g, '').slice(0, 16)
   }
-  return Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0')
+  const hi = Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0')
+  const lo = Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0')
+  return hi + lo
 }
 
 function userAsk(kind: 'movie' | 'tv', n: number, salt: string): string {
+  // Salt is placed at the BEGINNING of the user message so it's in the
+  // highest-attention position — the model attends more to the start of
+  // user content. This maximises the per-call entropy signal that breaks
+  // cache-prefix determinism. (Iter 43: moved from end to start; length
+  // raised from 8 to 16 hex chars for stronger entropy.)
   return (
+    `[Request salt: ${salt}]\n\n` +
     `Recommend exactly ${n} ${kind === 'movie' ? 'movies' : 'TV shows'} for this household by calling submit_recommendations. ` +
     `Use the household's library and likes as taste signal; aim for a proportional mix across the library's genres, weighted toward explicitly liked titles. ` +
     `\n\n` +
     `Before you submit, audit every pick: any title in the household library or the NEVER SUGGEST list must be replaced. A pick that matches either list is a wasted recommendation — the user pays for the token and sees a shorter strip. ` +
     `Return ${n} picks, never fewer; if obvious matches are exhausted, reach into deeper-cut adjacent recommendations rather than repeating from those lists.\n\n` +
-    `ROTATION QUOTA: at least 30% of your picks this round should be titles that did NOT appear in the RECENTLY SHOWN block (when one is present). The cached prefix tends to make refreshes look identical — rotation is the only way the household sees new faces.\n\n` +
-    `Request salt (ignore semantically; treat as a tie-breaker for ordering decisions): ${salt}`
+    `ROTATION QUOTA: at least 30% of your picks this round should be titles that did NOT appear in the RECENTLY SHOWN block (when one is present). The cached prefix tends to make refreshes look identical — rotation is the only way the household sees new faces.`
   )
 }
 
