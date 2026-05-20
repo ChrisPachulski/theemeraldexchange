@@ -220,13 +220,15 @@ export function TrendingRow({
   // Subtle hint when items are present but came from a degraded source
   // (e.g. Claude failed, falling back to trending). The strip still
   // renders normally; the hint just tells the user why their picks
-  // don't look personalized.
+  // don't look personalized. Also surfaces cold-start context.
   const sourceHint =
     source === 'trending_fallback'
       ? 'AI was unreachable — showing trending.'
-      : source === 'personalized_filled' || source === 'personalized_empty_trending_fallback'
-        ? 'A few picks are from trending — not enough personalized matches this round.'
-        : null
+      : source === 'trending' && diag?.reason === 'library_below_threshold'
+        ? (diag.hint ?? 'Library too small for personalized picks — showing trending.')
+        : source === 'personalized_filled' || source === 'personalized_empty_trending_fallback'
+          ? 'A few picks are from trending — not enough personalized matches this round.'
+          : null
 
   return (
     <section className="trending">
