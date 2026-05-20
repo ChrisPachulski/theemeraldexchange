@@ -551,8 +551,9 @@ describe('suggestions route — prompt shape', () => {
     const args1 = lastCreateArgs.value as { messages: Array<{ content: string }> }
     const user1 = args1.messages[0].content
     expect(user1).toContain('ROTATION QUOTA')
-    expect(user1).toMatch(/Request salt[^:]*:\s*([0-9a-f]{8})/)
-    const m1 = user1.match(/Request salt[^:]*:\s*([0-9a-f]{8})/)!
+    // Salt is now 16 hex chars (iter 43, raised from 8) at start of message
+    expect(user1).toMatch(/\[Request salt:\s*([0-9a-f]{16})\]/)
+    const m1 = user1.match(/\[Request salt:\s*([0-9a-f]{16})\]/)!
     // Second request — fresh salt, must differ
     lastCreateArgs.value = null
     const r2 = await appUnderTest().request('/tv', {
@@ -561,7 +562,7 @@ describe('suggestions route — prompt shape', () => {
     expect(r2.status).toBe(200)
     const args2 = lastCreateArgs.value as { messages: Array<{ content: string }> }
     const user2 = args2.messages[0].content
-    const m2 = user2.match(/Request salt[^:]*:\s*([0-9a-f]{8})/)!
+    const m2 = user2.match(/\[Request salt:\s*([0-9a-f]{16})\]/)!
     expect(m1[1]).not.toBe(m2[1])
   })
 
