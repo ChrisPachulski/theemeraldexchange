@@ -552,28 +552,48 @@ function scoreLatency(results: RefreshResult[]): number {
 }
 
 function scoreHonestDegradation(results: RefreshResult[]): number {
-  // Every result must carry a `source` field; every non-`personalized`
-  // source must carry _diag with at least one explanatory key. This
-  // measures the contract surface; later iterations can add to it.
+  // Two-component score:
+  // (A) Every result must carry a `source` field; every non-`personalized`
+  //     source must carry _diag with at least one explanatory key.
+  // (B) For Claude-backed results (source starts with 'personalized'),
+  //     check that new observability fields (costCents, callCount, libraryGenres)
+  //     are present — these are the "never silent" cost/call transparency fields.
   let total = 0
   let honest = 0
+  let withCostTransparency = 0
+  let claudeBacked = 0
   for (const r of results) {
     total++
     if (!r.source || r.source === 'unknown') continue
+    const isClaudeBacked = r.source.startsWith('personalized')
     if (r.source === 'personalized') {
       honest++
-      continue
+    } else {
+      const diag = r.diag ?? {}
+      const hasExplain =
+        'reason' in diag ||
+        'fillSource' in diag ||
+        'claudeError' in diag ||
+        'lastCounters' in diag
+      if (hasExplain) honest++
     }
-    const diag = r.diag ?? {}
-    const hasExplain =
-      'reason' in diag ||
-      'fillSource' in diag ||
-      'claudeError' in diag ||
-      'lastCounters' in diag
-    if (hasExplain) honest++
+    // (B) Cost transparency check for Claude-backed calls
+    if (isClaudeBacked) {
+      claudeBacked++
+      const diag = r.diag as Record<string, unknown> ?? {}
+      const hasCost = typeof diag['costCents'] === 'number'
+      const hasCall = typeof diag['callCount'] === 'number'
+      const hasGenres = Array.isArray(diag['libraryGenres'])
+      if (hasCost && hasCall && hasGenres) withCostTransparency++
+    }
   }
-  const rate = total === 0 ? 0 : honest / total
-  return rate >= 0.95 ? 5 : rate >= 0.8 ? 4 : rate >= 0.6 ? 3 : rate >= 0.4 ? 2 : 1
+  const honestRate = total === 0 ? 0 : honest / total
+  const costTransparencyRate = claudeBacked === 0 ? 1 : withCostTransparency / claudeBacked
+  // (A) base score
+  const baseScore = honestRate >= 0.95 ? 5 : honestRate >= 0.8 ? 4 : honestRate >= 0.6 ? 3 : honestRate >= 0.4 ? 2 : 1
+  // (B) bonus: 0.5 when cost transparency is fully present
+  const bonus = costTransparencyRate >= 1.0 ? 0.5 : 0
+  return Math.min(5, Math.round((baseScore + bonus) * 100) / 100)
 }
 
 function scoreTrustScaffolding(results: RefreshResult[]): number {
