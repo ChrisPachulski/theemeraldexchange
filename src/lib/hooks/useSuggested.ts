@@ -38,6 +38,11 @@ export type SuggestionDiag = {
   }
 }
 
+// Where this card actually came from. Mirrors the server-side
+// SuggestionProvenance type. Lets the UI render personalized picks
+// differently from discover/trending fills.
+export type SuggestionProvenance = 'personalized' | 'discover' | 'trending'
+
 type SuggestionsResponse = {
   source: SuggestionSource
   items: Array<{
@@ -46,6 +51,8 @@ type SuggestionsResponse = {
     posterPath: string | null
     overview?: string
     year?: number
+    provenance?: SuggestionProvenance
+    reason?: string | null
   }>
   _diag?: SuggestionDiag
 }
@@ -97,6 +104,8 @@ async function fetchSuggested(
       posterPath: row.posterPath,
       overview: row.overview,
       year: row.year,
+      provenance: row.provenance,
+      reason: row.reason ?? null,
     })),
     source: data.source ?? null,
     diag: data._diag ?? null,
