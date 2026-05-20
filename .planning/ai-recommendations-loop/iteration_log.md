@@ -847,3 +847,35 @@ pf 4 INFERRED|5, hyg 4|5, ps 4 INFERRED|4, rv 4 INFERRED|3.67, lat 4 INFERRED|5,
 pf 4 INFERRED|5, hyg 4|5, ps 4 INFERRED|4, rv 4 INFERRED|3.67, lat 4 INFERRED|5, hd 4 CONFIRMED|5, ts 4 VERIFIED|4.
 
 **Next action (iter 23)**: Target personalization signal — add a test that verifies the prompt contains the correct genre mix distribution for a specific library, confirming the Claude instructions match real library data.
+
+---
+
+## Iteration 23 — Refresh variety: recently-shown cap proportional to pool size
+
+**Date**: 2026-05-20
+**Target dimension**: Refresh variety (real=4 INFERRED). Cap recently-shown at 80% of pool size.
+
+**Hypothesis**: With `RECENTLY_SHOWN_CAP=150` and a pool of ~60 items, a power user who has done 8+ refreshes has ALL 60 pool items in the recently-shown list. With the strong "avoid these" instruction, Claude has 0 fresh candidates in the pool. Capping recently-shown at `max(floor(poolSize × 0.8), 30)` ensures at least 20% of the pool is always "uncontested fresh territory." For a 60-item pool, this caps recently-shown at 48 items.
+
+**Changes made**:
+- `server/routes/suggestions.ts`:
+  - Compute `recentlyShownCap = safePool.length > 0 ? max(floor(poolSize × 0.8), 30) : RECENTLY_SHOWN_CAP`.
+  - Trim the recently-shown buffer to the cap before building the block.
+  - Pool is now filtered BEFORE `buildRecentlyShownBlock` so the cap knows the pool size. [SYNTAX-CHECKED]
+
+**Verification results**:
+- `npm test` → 160 passed. [VERIFIED]
+- `npm run build` → clean. [VERIFIED]
+- `npm run eval:recs` → 4 passed, scores unchanged (eval doesn't exercise long recently-shown windows). [VERIFIED]
+
+**Skeptic response**:
+- a. Target improved? Refresh variety: power users now always have fresh pool candidates. INFERRED until live soak. V14.
+- b. Other regressions? 160 tests green. Build clean.
+- c. INFERRED items? V14: "Pool cap prevents recently-shown collapse." INFERRED.
+- d. Citation: Logic derived from RECENTLY_SHOWN_CAP=150 vs pool size=~60. [SOURCE: file read]
+- e. Tests green: ✓
+
+**Rubric scores after iter 23** (real | mocked): same as iter 22 — no eval change.
+pf 4 INFERRED|5, hyg 4|5, ps 4 INFERRED|4, rv 4 INFERRED|3.67, lat 4 INFERRED|5, hd 4 CONFIRMED|5, ts 4 VERIFIED|4.
+
+**Next action (iter 24)**: Add an eval scenario for the cold-start path to verify that the `library_below_threshold` hint appears correctly in the response. Also verify the recently-shown block correctly omits items from a prior refresh.
