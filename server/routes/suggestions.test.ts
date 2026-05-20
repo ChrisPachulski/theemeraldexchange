@@ -517,6 +517,42 @@ describe('suggestions route — prompt shape', () => {
     expect(gammaPos).toBeLessThan(alphaPos)
   })
 
+  it('omits CANDIDATE POOL block and still calls Claude when pool fetch returns empty (graceful pool degradation)', async () => {
+    // When TMDB /discover returns 0 items (e.g., error or no genre matches),
+    // the system should still call Claude without a pool block — no crash,
+    // no empty response.
+    _setTmdbApiKeyForTests('test-key')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(JSON.stringify(sonarrSeries), { status: 200 })
+        }
+        // /discover returns empty — pool will be empty
+        if (url.includes('themoviedb.org/3/discover/')) {
+          return new Response(JSON.stringify({ results: [] }), { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/tv', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    // Claude was still called (empty pool falls through to prior-based generation).
+    expect(lastCreateArgs.value).not.toBeNull()
+    const args = lastCreateArgs.value as { system: Array<{ text: string }> }
+    // No CANDIDATE POOL block — pool was empty.
+    const poolBlock = args.system.find((s) => s.text.includes('CANDIDATE POOL'))
+    expect(poolBlock).toBeUndefined()
+  })
+
   it('skips user-likes block entirely when no titled likes exist', async () => {
     stubFetchForSonarr()
     const r = await appUnderTest().request('/tv', {

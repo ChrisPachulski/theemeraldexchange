@@ -818,3 +818,32 @@ pf 4 INFERRED|5, hyg 4|5, ps 4 INFERRED|4, rv 4 INFERRED|3.67, lat 4 INFERRED|5,
 pf 4 INFERRED|5, hyg 4|5, ps 4 INFERRED|4, rv 4 INFERRED|3.67, lat 4 INFERRED|5, hd 4 CONFIRMED|5, ts 4 VERIFIED|4.
 
 **Next action (iter 22)**: Improve mocked refresh variety from 3.67 → 4. The leaky scenario has rv=3. Add reasons to leaky refreshes and adjust the leaky window size to get Jaccard < 0.45 in the leaky scenario too.
+
+---
+
+## Iteration 22 — Pool empty-path test (hygiene/honest degradation) + refresh variety assessment
+
+**Date**: 2026-05-20
+**Target dimension**: Hygiene (real=4) + Honest degradation (real=4 confirmed). Pool graceful degradation test.
+
+**Assessment on refresh variety**: The leaky scenario rv=3 is intentional — leaky tests hygiene, not variety. The stride/window for leaky mode purposely stresses overlap to observe hygiene defense under repeated similar picks. Changing leaky stride to match realistic would compromise the hygiene stress value. Accept rv=3.67 overall (4 in realistic) as the correct measurement.
+
+**Changes made**:
+- `server/routes/suggestions.test.ts`:
+  - New test: "omits CANDIDATE POOL block when pool fetch returns empty" — verifies graceful pool degradation: no crash, Claude still called, pool block absent. [VERIFIED — 160 tests pass]
+
+**Verification results**:
+- `npm test` → 160 passed (+1 new). [VERIFIED]
+- `npm run eval:recs` → 4 passed, scores unchanged. [VERIFIED]
+
+**Skeptic response**:
+- a. Target improved? Hygiene + hd: pool empty path is now tested. Coverage of an untested failure mode.
+- b. Other regressions? None.
+- c. INFERRED items? None — pure test coverage.
+- d. Citation: Route code reviewed — `buildCandidatePoolBlock` returns '' when empty; `systemStack` omits empty strings. Both confirmed correct.
+- e. Tests green: ✓
+
+**Rubric scores after iter 22** (real | mocked): same as iter 21.
+pf 4 INFERRED|5, hyg 4|5, ps 4 INFERRED|4, rv 4 INFERRED|3.67, lat 4 INFERRED|5, hd 4 CONFIRMED|5, ts 4 VERIFIED|4.
+
+**Next action (iter 23)**: Target personalization signal — add a test that verifies the prompt contains the correct genre mix distribution for a specific library, confirming the Claude instructions match real library data.
