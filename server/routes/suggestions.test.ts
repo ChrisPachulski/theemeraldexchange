@@ -518,6 +518,70 @@ describe('suggestions route — liked-titles backfill', () => {
   })
 })
 
+describe('suggestions route — personalized_empty path returns lastCounters for dominantDropReason', () => {
+  it('lastCounters in _diag identifies dominant drop cause when all picks fail', async () => {
+    // When Claude returns all-library picks AND the retry also fails,
+    // _diag.lastCounters should reflect the drop breakdown so the UI
+    // can compute the dominantDropReason hint for the empty strip.
+    const radarrLibrary = [
+      { title: 'Empty Path A', year: 2010, tmdbId: 9401, genres: ['Drama'] },
+      { title: 'Empty Path B', year: 2011, tmdbId: 9402, genres: ['Drama'] },
+      { title: 'Empty Path C', year: 2012, tmdbId: 9403, genres: ['Crime'] },
+      { title: 'Empty Path D', year: 2013, tmdbId: 9404, genres: ['Drama'] },
+      { title: 'Empty Path E', year: 2014, tmdbId: 9405, genres: ['Crime'] },
+      { title: 'Empty Path F', year: 2015, tmdbId: 9406, genres: ['Drama'] },
+      { title: 'Empty Path G', year: 2016, tmdbId: 9407, genres: ['Thriller'] },
+      { title: 'Empty Path H', year: 2017, tmdbId: 9408, genres: ['Drama'] },
+      { title: 'Empty Path I', year: 2018, tmdbId: 9409, genres: ['Crime'] },
+      { title: 'Empty Path J', year: 2019, tmdbId: 9410, genres: ['Drama'] },
+    ]
+    _setTmdbApiKeyForTests('test-key')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/movie')) {
+          return new Response(JSON.stringify(radarrLibrary), { status: 200 })
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // All picks are library title matches → droppedAsLibrary count > 0
+    fakeResponse.value = {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu_empty_path',
+          name: 'submit_recommendations',
+          input: {
+            picks: radarrLibrary.map((r) => ({ title: r.title, year: r.year })),
+          },
+        },
+      ],
+      stop_reason: 'tool_use',
+      usage: { input_tokens: 50, output_tokens: 30 },
+    }
+    const r = await appUnderTest().request('/movie', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as {
+      source: string
+      _diag?: { lastCounters?: { droppedAsLibrary?: number } }
+    }
+    expect(body.source).toBe('personalized_empty_trending_fallback')
+    // lastCounters.droppedAsLibrary reflects library drops (for dominantDropReason UI hint)
+    expect((body._diag?.lastCounters?.droppedAsLibrary ?? 0)).toBeGreaterThan(0)
+    warnSpy.mockRestore()
+  })
+})
+
 describe('suggestions route — retry fires for pre-validate title failures (pf defense)', () => {
   it('retry fires when all initial picks fail title pre-validation (rejectedForRetry populated)', async () => {
     // Variant skeptic concern (iter 72): does retry fire when picks fail
