@@ -1145,7 +1145,7 @@ function buildCandidatePoolBlock(candidates: SuggestionItem[]): string {
 const SUBMIT_TOOL = {
   name: 'submit_recommendations',
   description:
-    'Submit the ranked list of recommended titles. Prefer titles from the CANDIDATE POOL when provided — they are already verified against the household library and NEVER SUGGEST list. Each entry MUST be a real, released title that is NOT in the household library and NOT on the NEVER SUGGEST list. For each pick, include a `reason`: a single short clause (≤90 chars) grounded in the household library or likes — e.g. "neighbor of Severance", "for fans of Heat", "their prestige-crime cluster". Omit the reason only when no honest grounding exists. No marketing language, no plot summaries.',
+    'Submit the ranked list of recommended titles. Prefer titles from the CANDIDATE POOL when provided — they are already verified against the household library and NEVER SUGGEST list. Each entry MUST be a real, released title that is NOT in the household library and NOT on the NEVER SUGGEST list. For each pick, ALWAYS include a `reason`: a single short clause (≤90 chars) naming a specific library title or genre cluster — e.g. "neighbor of Severance", "for fans of Heat", "same prestige-crime tone as The Wire". The reason MUST reference something concrete in the household library or likes, NOT marketing copy. A reason is required for every pick that has a clear library analog (which is almost all of them — if you cannot ground a pick in the library, reconsider the pick).',
   input_schema: {
     type: 'object' as const,
     properties: {
@@ -1160,7 +1160,7 @@ const SUBMIT_TOOL = {
             reason: {
               type: 'string' as const,
               description:
-                'Optional one-clause grounding (≤90 chars) explaining the pick — typically references a specific library title or like signal. Omit if no honest grounding fits.',
+                'Required one-clause grounding (≤90 chars) naming a specific library title or cluster — e.g. "neighbor of Breaking Bad" or "same director as their Heat". This is what makes the recommendation trustworthy and personalised rather than generic. Only omit if the pick has zero connection to the library (rare).',
             },
           },
           required: ['title'],
