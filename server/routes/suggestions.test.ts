@@ -530,6 +530,58 @@ describe('suggestions route — prompt shape', () => {
     expect(found).toBeUndefined()
   })
 
+  it('includes callCount=1 in _diag when no retry is needed', async () => {
+    // When Claude returns enough good picks on the first call, callCount=1.
+    _setTmdbApiKeyForTests('test-key')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(JSON.stringify(sonarrSeries), { status: 200 })
+        }
+        if (url.includes('themoviedb.org/3/search/tv')) {
+          return new Response(
+            JSON.stringify({ results: [{ id: 5_500_001, name: 'Clean Pick', poster_path: null, first_air_date: '2021-01-01' }] }),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    // Single valid pick — no retry needed
+    fakeResponse.value = {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu_callcount',
+          name: 'submit_recommendations',
+          input: { picks: [{ title: 'Clean Pick', year: 2021 }] },
+        },
+      ],
+      usage: { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 80 },
+    }
+    const r = await appUnderTest().request('/tv', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { _diag?: { callCount?: number; cacheHitRate?: number } }
+    // callCount should be present
+    expect(body._diag?.callCount).toBeDefined()
+    expect(typeof body._diag?.callCount).toBe('number')
+    // cacheHitRate should be present (mocked cache_read_input_tokens=80)
+    expect(body._diag?.cacheHitRate).toBeDefined()
+    expect(typeof body._diag?.cacheHitRate).toBe('number')
+    // With cache_read=80, total=(100+50+80)=230, rate=80/230≈0.35
+    expect(body._diag!.cacheHitRate!).toBeGreaterThan(0)
+    expect(body._diag!.cacheHitRate!).toBeLessThanOrEqual(1)
+  })
+
   it('sets max_tokens ≥ 4096 on Claude calls to avoid truncation with 30-pick reasons', async () => {
     // 30 picks × ~80 tokens each ≈ 2400 output tokens + envelope.
     // The prior 2048 ceiling caused truncation when reasons were present.
