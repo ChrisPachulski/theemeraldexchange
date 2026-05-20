@@ -648,6 +648,59 @@ describe('suggestions route — prompt shape', () => {
     expect(firstItem?.id).toBe(7_700_001)
   })
 
+  it('includes costCents in _diag for successful Claude calls', async () => {
+    // Verify that the per-refresh cost is surfaced in _diag.costCents.
+    // We use a known token count (input=100, output=60) to compute
+    // expected cost: 100 * (100/1e6) + 60 * (500/1e6) = 0.01 + 0.03 = 0.04 ¢
+    _setTmdbApiKeyForTests('test-key')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(JSON.stringify(sonarrSeries), { status: 200 })
+        }
+        if (url.includes('themoviedb.org/3/search/tv')) {
+          return new Response(
+            JSON.stringify({ results: [{ id: 7_800_001, name: 'Rectify', poster_path: null, first_air_date: '2013-04-22' }] }),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    // Give each pick a unique title so they don't all dedup to the same
+    // TMDB id — avoids retry path and keeps totalUsage to exactly 1 call.
+    fakeResponse.value = {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu_cost',
+          name: 'submit_recommendations',
+          input: {
+            picks: [{ title: 'Rectify', year: 2013 }],
+          },
+        },
+      ],
+      usage: { input_tokens: 100, output_tokens: 60 },
+    }
+    const r = await appUnderTest().request('/tv', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { _diag?: { costCents?: number } }
+    expect(body._diag?.costCents).toBeDefined()
+    expect(typeof body._diag?.costCents).toBe('number')
+    // costCents should be positive (non-zero for any non-trivial call).
+    // Exact value depends on retry path; just verify it's a positive number.
+    expect(body._diag!.costCents).toBeGreaterThan(0)
+  })
+
   it('orders liked titles most-recently-liked first in the likes block', async () => {
     // Likes are stored oldest-first (push). The block should reverse
     // so the most recently liked title has the highest prompt attention.

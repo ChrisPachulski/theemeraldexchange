@@ -39,6 +39,10 @@ export type SuggestionDiag = {
   hint?: string
   /** Total Claude picks dropped by validation (library match + reject + lookup null + dedupe). Cost transparency. */
   droppedPicks?: number
+  /** Estimated cost of this refresh in cents (Haiku 4.5 rates). Helps household monitor API spend. */
+  costCents?: number
+  /** True when Claude stopped generating early due to max_tokens — picks may be incomplete. */
+  claudeTruncated?: boolean
   lastCounters?: {
     lookupNulls?: number
     droppedAsDedupe?: number
