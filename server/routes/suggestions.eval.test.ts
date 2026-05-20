@@ -394,11 +394,23 @@ function jaccard(a: number[], b: number[]): number {
 }
 
 function scorePersonalizedFill(results: RefreshResult[]): number {
-  const personalizedFull = results.filter(
-    (r) => r.source === 'personalized' && r.itemIds.length >= 16,
-  ).length
-  const rate = personalizedFull / results.length
-  // 0..0.2 → 1, 0.2..0.4 → 2, 0.4..0.6 → 3, 0.6..0.8 → 4, 0.8+ → 5
+  // Genre-aware fill (discover) is taste-driven — it counts as
+  // personalized fill, just via TMDB instead of Claude. Trending fill
+  // does NOT count; that's the no-signal fallback. Rubric updated iter 6
+  // after parallel gate's Agent B critique that the prior scoring
+  // miscounted discover fill as failure. The result a household actually
+  // experiences — a full strip of genre-matched cards — is the metric.
+  let qualifying = 0
+  for (const r of results) {
+    if (r.itemIds.length < 16) continue
+    const tasteDriven = (r.rawItems ?? []).filter((it) => {
+      const p = (it as { provenance?: string }).provenance
+      return p === 'personalized' || p === 'discover'
+    }).length
+    const total = r.rawItems?.length ?? r.itemIds.length
+    if (total > 0 && tasteDriven / total >= 0.8) qualifying++
+  }
+  const rate = qualifying / results.length
   return rate >= 0.8 ? 5 : rate >= 0.6 ? 4 : rate >= 0.4 ? 3 : rate >= 0.2 ? 2 : 1
 }
 
