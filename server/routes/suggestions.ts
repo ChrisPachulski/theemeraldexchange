@@ -491,6 +491,21 @@ function buildPriorityTasteBlock(
   )
 }
 
+// Fisher-Yates shuffle — mutates and returns the array. Used to
+// randomize the candidate pool order per refresh so Claude sees a
+// different numbered list each call even when the TMDB cache is warm.
+// The pool is a per-request copy (filterHouseholdSafe returns a new
+// array), so mutating it is safe.
+function shuffleInPlace<T>(arr: T[]): T[] {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    const tmp = arr[i]
+    arr[i] = arr[j]!
+    arr[j] = tmp!
+  }
+  return arr
+}
+
 // Per-user rolling buffer of recently-served titles. The Claude prompt
 // prefix (system + library + rejections) is cached, and at temperature
 // 0.4–0.7 a deterministic prefix produces near-identical pick lists
@@ -1455,9 +1470,14 @@ suggestions.get('/:type', async (c) => {
   endPool()
   // Filter pool for household safety before showing it to Claude.
   // Pool items pass through filterHouseholdSafe to drop library entries
-  // and rejects. Build a lookup map by normalised title for fast
-  // match in the validate step.
-  const safePool = filterHouseholdSafe(rawPool)
+  // and rejects. Shuffle the pool before presenting it to Claude so
+  // each refresh sees a different ordering of the numbered list — this
+  // is the per-refresh pool variety knob. The TMDB /discover cache still
+  // serves the same 60 items per TTL window, but Claude's pick
+  // distribution changes across refreshes because it sees a freshly
+  // shuffled numbered list. The poolByTitle map is order-independent so
+  // the fast-path lookup works regardless of shuffle order.
+  const safePool = shuffleInPlace(filterHouseholdSafe(rawPool))
   const poolByTitle = new Map<string, SuggestionItem>(
     safePool.map((it) => [normalizeTitle(it.title), it]),
   )
