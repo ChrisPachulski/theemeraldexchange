@@ -309,3 +309,14 @@ Real-world trustScaffolding moves 1 → 3 because the schema and rendering exist
 **Skeptic**: Q: doesn't this just inflate the score by changing the measuring stick? A: Yes, AND the prior stick was demonstrably wrong (Agent B's analysis). The new measure tracks user-felt outcome. Trending fallback still fails — the no-signal path is the actual failure mode.
 **Rubric after iter 6** (real | mocked): pf 2→3 (real, scoring fix) | 5, hyg 4|5, ps 3|4, rv 2→3 INFERRED|2.33, lat 2|5, hd 3|5, ts 3|3.
 **Next**: Iter 7 — library truncation by relevance (Agent C #2). The current prompt dumps the entire library (often 100s of titles); the positional underweighting means much of the taste signal goes unattended.
+
+---
+
+## Iteration 7 — Priority Taste Signal volatile block (Agent C #2)
+
+**Target**: Personalization signal (real=3). The cached library block can be 100s of titles long; LLM positional underweighting buries the taste signal mid-prompt.
+**Change**: New `buildPriorityTasteBlock(library)` that picks the top-30 most-genre-typical titles (scored by `1/(genre_rank+1)` summed across each title's genre tags). Fires when `library.length >= 60` (smaller libraries already fit in the attended zone). Block lives AFTER the cached library — volatile, high-attention position. Cache prefix unchanged → cache hit rate preserved.
+**Verification**: `npm test` 154 passed (2 new tests: block fires at lib≥60, doesn't fire at lib<60). The block's bullets stay between 20-30. [VERIFIED]
+**Skeptic**: Q: doesn't this duplicate signal already in the cached library? A: Yes, intentionally. The redundancy buys high-attention positioning without busting the cache. Q: does it skew the model away from minority genres in the library? A: Possible — but the top-30 by genre weight will reflect the dominant clusters, which is the SAME bias Claude was already learning from the full library. Not a regression.
+**Rubric after iter 7** (real | mocked): pf 3|5, hyg 4|5, ps 3→4 INFERRED|4, rv 3 INFERRED|2.33, lat 2|5, hd 3|5, ts 3|3.
+**Next**: Iter 8 — candidate pool architecture (Agent C #1, BIG move). Use TMDB `/discover` to pre-fetch ~60 candidate titles seeded by the household's top genres, pass them to Claude as the candidate corpus, and ask Claude to RANK + ANNOTATE rather than generate from prior. Reduces popularity-prior regression and improves hygiene (TMDB-curated pool).
