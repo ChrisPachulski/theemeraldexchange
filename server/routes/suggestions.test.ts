@@ -1137,6 +1137,67 @@ describe('suggestions route — prompt shape', () => {
       expect(occurrences).toBe(1) // deduplicated — only once
     }
   })
+
+  it('shuffles the candidate pool order differently on consecutive calls (V7 VERIFIED)', async () => {
+    // The Fisher-Yates shuffle fires per-request on safePool. Two consecutive
+    // requests with the same TMDB cache should produce CANDIDATE POOL blocks
+    // with different item ordering in at least some calls. Because random, we
+    // run 5 times and assert that not ALL orderings are identical — the
+    // probability of 5 identical random shuffles of 5 items is (1/5!)^4 ≈ 10^-10.
+    _setTmdbApiKeyForTests('test-key')
+    // 5 distinct pool items so there's meaningful ordering variance
+    const poolItems = [
+      { id: 8_900_001, name: 'Alpha Show', poster_path: null, first_air_date: '2021-01-01' },
+      { id: 8_900_002, name: 'Beta Show', poster_path: null, first_air_date: '2020-01-01' },
+      { id: 8_900_003, name: 'Gamma Show', poster_path: null, first_air_date: '2019-01-01' },
+      { id: 8_900_004, name: 'Delta Show', poster_path: null, first_air_date: '2018-01-01' },
+      { id: 8_900_005, name: 'Epsilon Show', poster_path: null, first_air_date: '2017-01-01' },
+    ]
+    const poolOrders: string[] = []
+    const cookie = await userCookie()
+    for (let i = 0; i < 5; i++) {
+      _resetLibraryCacheForTests()
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: unknown) => {
+          const url =
+            typeof input === 'string'
+              ? input
+              : input instanceof URL
+                ? input.toString()
+                : (input as { url: string }).url
+          if (url.includes('/api/v3/series')) {
+            return new Response(JSON.stringify(sonarrSeries), { status: 200 })
+          }
+          if (url.includes('themoviedb.org/3/discover/')) {
+            return new Response(JSON.stringify({ results: poolItems }), { status: 200 })
+          }
+          return new Response(JSON.stringify({ results: [] }), { status: 200 })
+        }),
+      )
+      await appUnderTest().request('/tv', {
+        headers: { Cookie: cookie, 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+      })
+      const args = lastCreateArgs.value as { system: Array<{ text: string }> }
+      const poolBlock = args.system.find((s) => s.text.includes('CANDIDATE POOL'))
+      if (poolBlock) {
+        // Extract the ordered list of pool item names from the block text
+        const names = ['Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon'].filter(
+          (n) => poolBlock.text.includes(n),
+        )
+        // Sort by their line numbers in the pool block
+        const order = names
+          .map((n) => ({ name: n, pos: poolBlock.text.indexOf(n) }))
+          .sort((a, b) => a.pos - b.pos)
+          .map((e) => e.name)
+        poolOrders.push(order.join(','))
+      }
+    }
+    // With 5 items and Fisher-Yates, at least 2 of the 5 orderings should differ.
+    // If all 5 are identical, the shuffle isn't firing (regression).
+    const uniqueOrders = new Set(poolOrders)
+    expect(uniqueOrders.size).toBeGreaterThan(1)
+  })
 })
 
 describe('suggestions route — cost discipline (MAX_CLAUDE_CALLS_PER_REQUEST)', () => {
