@@ -963,8 +963,13 @@ async function fetchCandidatePool(
       url.searchParams.set('page', String(i + 1))
       // Quality-sorted so the pool skews toward acclaimed niche titles
       // in the household's genres, not pure popularity blockbusters.
+      // vote_count.gte raised from 100→200 (iter 66 deep skeptic): 100 is
+      // permissive enough to include obscure films with minimal signal.
+      // 200 is still accessible for niche genres while filtering genuine noise.
+      // Novelty lane retains the lower ≥30 threshold (newer films haven't
+      // accumulated votes yet — the recency filter already handles novelty).
       url.searchParams.set('sort_by', 'vote_average.desc')
-      url.searchParams.set('vote_count.gte', '100')
+      url.searchParams.set('vote_count.gte', '200')
       url.searchParams.set('with_genres', key)
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), TMDB_TIMEOUT_MS)
