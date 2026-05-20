@@ -530,6 +530,18 @@ describe('suggestions route — prompt shape', () => {
     expect(found).toBeUndefined()
   })
 
+  it('sets max_tokens ≥ 4096 on Claude calls to avoid truncation with 30-pick reasons', async () => {
+    // 30 picks × ~80 tokens each ≈ 2400 output tokens + envelope.
+    // The prior 2048 ceiling caused truncation when reasons were present.
+    stubFetchForSonarr()
+    const r = await appUnderTest().request('/tv', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    const args = lastCreateArgs.value as { max_tokens: number }
+    expect(args.max_tokens).toBeGreaterThanOrEqual(4096)
+  })
+
   it('injects a per-request salt + rotation quota in the user message so refreshes vary', async () => {
     stubFetchForSonarr()
     const r1 = await appUnderTest().request('/tv', {
