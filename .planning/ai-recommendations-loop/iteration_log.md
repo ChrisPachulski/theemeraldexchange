@@ -231,3 +231,36 @@
 Real-world trustScaffolding moves 1 → 3 because the schema and rendering exist; reason rate will need a live Claude call to verify. Held at 3 in the table until that confirmation lands.
 
 **Next action (iteration 4)**: Refresh variety (dim 4, real=2). The route already has the RECENTLY_SHOWN block + temperature 0.7. The deterministic stride=3 in the eval shows the mock can't differentiate variety improvements. Need to: (a) extend the mock Claude to RESPECT the RECENTLY_SHOWN block by skipping titles already passed in (validating the cache-suffix injection is actually shaping pick selection), AND (b) consider hardening the rotation in the real route by making the RECENTLY_SHOWN block louder or by appending a per-request randomized seed-clause to break the cached-prefix determinism. Score should move from 2 → ≥3 with the mock change alone.
+
+---
+
+## Iteration 4 — Per-request entropy salt + rotation quota in user message
+
+**Date**: 2026-05-20
+**Target**: Refresh variety (dim 4, real=2). The cached library prefix + low-variance temperature make refreshes look stuck.
+**Hypothesis**: A fresh per-request salt + an explicit ROTATION QUOTA clause in the user message (outside the cache) gives Claude an attention-grabbing per-call signal to vary the picks; the salt has no semantic meaning but it perturbs the model's deterministic generation path. Real-world refresh variety moves 2 → 3 (mocked eval unchanged because mock is deterministic per call index — variance bound to mock harness, not real behavior).
+
+**Changes**:
+- `server/routes/suggestions.ts`:
+  - New `refreshSalt()` helper — `crypto.randomUUID().slice(0,8)` with `Math.random` fallback.
+  - `userAsk(kind, n, salt)` — new param. Adds ROTATION QUOTA clause ("≥30% of picks NOT in RECENTLY SHOWN") and trailing `Request salt: <hex>` line outside the cached prefix.
+  - `callClaudeInitial` and `callClaudeRetry` both take a salt; initial-and-retry share the same salt so the retry doesn't re-anchor.
+  - Route mints one salt per request before the initial call.
+- `server/routes/suggestions.test.ts`:
+  - New test "injects a per-request salt + rotation quota" — verifies the message contains `ROTATION QUOTA`, contains a salt matching `[0-9a-f]{8}`, and that two consecutive calls produce different salts.
+
+**Verification**:
+- `npm test` → 152 passed (was 151 + 1 new). [VERIFIED]
+- `npm run eval:recs` → 4 passed; scores unchanged (mocked stride=3 dominates; salt has no effect on mock). Real-world variance is the actual target; eval will need a LIVE mode to confirm. [SYNTAX-CHECKED]
+- `npm run build` → not re-run this iter; no client changes.
+
+**Skeptic**:
+- a. Target improved? In mocked: no. In real-world: the test proves the prompt structurally varies per call, which forces Claude's KV cache to attend to a different suffix — temperature alone is no longer the only entropy source. INFERRED until live soak: real refresh variety improves.
+- b. Other regressions? 152 tests green, no behavior regressions.
+- c. INFERRED items? "Salt actually improves refresh variety in production" — gated on live soak. Logged as V3.
+- d. Citation: `crypto.randomUUID` confirmed via Node docs — standard since Node 14.17 / browsers since 2022. [WEB — Node API, training-stable]
+- e. Tests green: ✓
+
+**Rubric after iter 4** (real | mocked): pf 2|5, hyg 4|5, ps 3|4, rv 2→3 (real, INFERRED until soak)|2.33, lat 2|5, hd 3|5, ts 3|3.
+
+**Next**: Iter 5 — PARALLEL GATE per skill schedule. Spawn 3 parallel skeptic agents on the LOWEST-real-score dimension (now: latency=2 OR personalizedFill=2 — tied). Plan: parallel gate on personalizedFill since latency is harder to test offline.

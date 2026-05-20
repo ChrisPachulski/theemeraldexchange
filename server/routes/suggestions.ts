@@ -1055,13 +1055,34 @@ function systemStack(
   ]
 }
 
-function userAsk(kind: 'movie' | 'tv', n: number): string {
+// Per-request entropy seed. The system prefix is cached (cache_control:
+// ephemeral on the library block) so temperature alone barely shifts
+// the pick distribution across refreshes — the cached prefix dominates.
+// Injecting an unguessable, per-call salt in the USER message (outside
+// the cache) gives Claude something to pivot on, so refresh variety
+// stops being a function of temperature alone. The salt has no semantic
+// meaning, just entropy. Refresh variety (rubric dim 4).
+function refreshSalt(): string {
+  // crypto.randomUUID is available on Node 20+ and modern browsers.
+  // The eval mock + production both hit this path. The salt is short
+  // (8 hex chars) so it doesn't bloat the prompt.
+  // Math.random fallback keeps it harness-safe.
+  const g = globalThis as { crypto?: { randomUUID?: () => string } }
+  if (g.crypto && typeof g.crypto.randomUUID === 'function') {
+    return g.crypto.randomUUID().slice(0, 8)
+  }
+  return Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0')
+}
+
+function userAsk(kind: 'movie' | 'tv', n: number, salt: string): string {
   return (
     `Recommend exactly ${n} ${kind === 'movie' ? 'movies' : 'TV shows'} for this household by calling submit_recommendations. ` +
     `Use the household's library and likes as taste signal; aim for a proportional mix across the library's genres, weighted toward explicitly liked titles. ` +
     `\n\n` +
     `Before you submit, audit every pick: any title in the household library or the NEVER SUGGEST list must be replaced. A pick that matches either list is a wasted recommendation — the user pays for the token and sees a shorter strip. ` +
-    `Return ${n} picks, never fewer; if obvious matches are exhausted, reach into deeper-cut adjacent recommendations rather than repeating from those lists.`
+    `Return ${n} picks, never fewer; if obvious matches are exhausted, reach into deeper-cut adjacent recommendations rather than repeating from those lists.\n\n` +
+    `ROTATION QUOTA: at least 30% of your picks this round should be titles that did NOT appear in the RECENTLY SHOWN block (when one is present). The cached prefix tends to make refreshes look identical — rotation is the only way the household sees new faces.\n\n` +
+    `Request salt (ignore semantically; treat as a tie-breaker for ordering decisions): ${salt}`
   )
 }
 
@@ -1077,6 +1098,7 @@ async function callClaudeInitial(
   libraryBlock: string,
   userLikesBlock: string,
   recentlyShownBlock: string,
+  salt: string,
 ): Promise<ClaudeResponse> {
   const response = await client.messages.create({
     model: MODEL,
@@ -1088,7 +1110,7 @@ async function callClaudeInitial(
     system: systemStack(libraryBlock, userLikesBlock, recentlyShownBlock),
     tools: [SUBMIT_TOOL],
     tool_choice: { type: 'tool', name: SUBMIT_TOOL.name, disable_parallel_tool_use: true },
-    messages: [{ role: 'user', content: userAsk(kind, CLAUDE_OVERFETCH) }],
+    messages: [{ role: 'user', content: userAsk(kind, CLAUDE_OVERFETCH, salt) }],
   })
   return readToolUse(response)
 }
@@ -1102,6 +1124,7 @@ async function callClaudeRetry(
   prior: ToolUseBlock,
   rejectedPicks: Array<{ title: string; reason: string }>,
   nNeeded: number,
+  salt: string,
 ): Promise<ClaudeResponse> {
   const rejectedSummary = rejectedPicks
     .slice(0, 15)
@@ -1125,7 +1148,7 @@ async function callClaudeRetry(
     tools: [SUBMIT_TOOL],
     tool_choice: { type: 'tool', name: SUBMIT_TOOL.name, disable_parallel_tool_use: true },
     messages: [
-      { role: 'user', content: userAsk(kind, CLAUDE_OVERFETCH) },
+      { role: 'user', content: userAsk(kind, CLAUDE_OVERFETCH, salt) },
       {
         role: 'assistant',
         content: [
@@ -1423,9 +1446,13 @@ suggestions.get('/:type', async (c) => {
 
   let totalUsage: UsageBlock = {}
   let r1: ClaudeResponse
+  // One salt per request — shared by initial + retry. Refresh variety
+  // hangs on this: the cached library prefix makes deterministic Claude
+  // calls otherwise. Salt rides outside the cache (in the user msg).
+  const salt = refreshSalt()
   const endClaudeInitial = timing.mark('claudeInitial')
   try {
-    r1 = await callClaudeInitial(client, type, libraryBlock, userLikesBlock, recentlyShownBlock)
+    r1 = await callClaudeInitial(client, type, libraryBlock, userLikesBlock, recentlyShownBlock, salt)
     totalUsage = mergeUsage(totalUsage, r1.usage)
   } catch (e) {
     endClaudeInitial()
@@ -1496,6 +1523,7 @@ suggestions.get('/:type', async (c) => {
         r1.toolUse,
         v1.rejectedForRetry,
         nNeeded,
+        salt,
       )
       totalUsage = mergeUsage(totalUsage, r2.usage)
       endClaudeRetry()
