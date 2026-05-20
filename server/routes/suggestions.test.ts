@@ -1567,3 +1567,131 @@ describe('suggestions route — TMDB validation', () => {
     warnSpy.mockRestore()
   })
 })
+
+describe('suggestions route — title hygiene edge cases', () => {
+  // These tests exercise the normalizeTitleBase and titleMatches logic
+  // via the route's validation behavior, verifying franchise/subtitle
+  // hygiene contracts.
+
+  const radarrLibrary = [
+    // Long franchise title: base = "starwars" (8 chars, will block subtitles)
+    { title: 'Star Wars: A New Hope', year: 1977, tmdbId: 11, genres: ['Action', 'Adventure'] },
+    // Short title with subtitle (base "it" = 2 chars, will NOT block by base)
+    { title: 'It: Chapter Two', year: 2019, tmdbId: 459151, genres: ['Horror'] },
+    { title: 'Heat', year: 1995, tmdbId: 949, genres: ['Crime', 'Drama'] },
+    { title: 'Zodiac', year: 2007, tmdbId: 1451, genres: ['Crime', 'Drama'] },
+    { title: 'Fargo', year: 1996, tmdbId: 275, genres: ['Crime', 'Drama'] },
+    { title: 'Prisoners', year: 2013, tmdbId: 146233, genres: ['Crime', 'Drama'] },
+    { title: 'Sicario', year: 2015, tmdbId: 274479, genres: ['Crime', 'Drama'] },
+    { title: 'No Country for Old Men', year: 2007, tmdbId: 6977, genres: ['Crime', 'Drama'] },
+    { title: 'There Will Be Blood', year: 2007, tmdbId: 4944, genres: ['Drama'] },
+    { title: 'The Big Short', year: 2015, tmdbId: 318846, genres: ['Drama'] },
+  ]
+
+  it('blocks a Claude pick that matches a library title via base-form franchise dedup', async () => {
+    // "Star Wars: The Force Awakens" has base "starwars" (8 chars ≥ 5).
+    // Library contains "Star Wars: A New Hope" which also normalizes to base "starwars".
+    // The pick should be dropped as a library match even though the full title differs.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    _setTmdbApiKeyForTests('test-key')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/movie')) {
+          return new Response(JSON.stringify(radarrLibrary), { status: 200 })
+        }
+        if (url.includes('themoviedb.org/3/search/movie')) {
+          // Return a Star Wars sequel that is NOT id=11 (which is in library)
+          return new Response(
+            JSON.stringify({ results: [{ id: 181808, title: 'Star Wars: The Force Awakens', poster_path: null, release_date: '2015-12-14' }] }),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    fakeResponse.value = {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu_franchise',
+          name: 'submit_recommendations',
+          input: {
+            picks: [{ title: 'Star Wars: The Force Awakens', year: 2015 }],
+          },
+        },
+      ],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }
+    const r = await appUnderTest().request('/movie', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { items: Array<{ id: number; title: string }> }
+    // The Star Wars sequel should NOT be in the results (blocked by franchise base)
+    const hasStarWars = body.items.some((i) => i.title.toLowerCase().includes('star wars'))
+    expect(hasStarWars).toBe(false)
+    warnSpy.mockRestore()
+  })
+
+  it('does NOT block a short-title franchise sequel when base is too short (≤4 chars)', async () => {
+    // "It: Chapter Two" is in library (base "it" = 2 chars → excluded from blocking).
+    // "It Comes at Night" has title that doesn't share the franchise base.
+    // "It" (standalone) — title normalization: "it" — does NOT match "it chapter two"
+    // This test verifies the guard prevents over-blocking.
+    _setTmdbApiKeyForTests('test-key')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/movie')) {
+          return new Response(JSON.stringify(radarrLibrary), { status: 200 })
+        }
+        if (url.includes('themoviedb.org/3/search/movie')) {
+          // Return "It Comes at Night" — different film, should NOT be blocked
+          return new Response(
+            JSON.stringify({ results: [{ id: 406997, title: 'It Comes at Night', poster_path: null, release_date: '2017-06-09' }] }),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    fakeResponse.value = {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu_shortbase',
+          name: 'submit_recommendations',
+          input: {
+            picks: Array.from({ length: 20 }, (_, i) =>
+              i === 0
+                ? { title: 'It Comes at Night', year: 2017 }
+                : { title: `Filler ${i}`, year: 2010 + i },
+            ),
+          },
+        },
+      ],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }
+    const r = await appUnderTest().request('/movie', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { items: Array<{ id: number; title: string }> }
+    // "It Comes at Night" (id=406997) should be accepted — it's a distinct film
+    const accepted = body.items.some((i) => i.id === 406997)
+    expect(accepted).toBe(true)
+  })
+})
