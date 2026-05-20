@@ -207,10 +207,24 @@ function makeFetchShim(kind: 'movie' | 'tv', library: LibraryEntry[]) {
     if (url.match(/themoviedb\.org\/3\/(movie|tv)\/\d+/)) {
       return new Response(JSON.stringify({ title: 'Unknown', name: 'Unknown' }), { status: 200 })
     }
-    // TMDB trending (returns a deterministic block so trending-overlap
-    // can be measured against personalized picks)
+    // TMDB trending — when our PICK_UNIVERSE overlaps with trending,
+    // a "personalization signal" failure surfaces because the picks
+    // also happen to be popular. Inject ~6 real titles from the
+    // universe into trending so personalization-signal scoring is no
+    // longer free.
     if (url.includes('themoviedb.org/3/trending')) {
-      const rows = Array.from({ length: 20 }, (_, i) => ({
+      const trendingOverlapTitles = (PICK_UNIVERSE[kind] as Pick[])
+        .slice(0, 6)
+        .map((p, i) => ({
+          id: syntheticIdFor(p.title), // share the synthetic id with /search
+          title: kind === 'movie' ? p.title : undefined,
+          name: kind === 'tv' ? p.title : undefined,
+          poster_path: null,
+          release_date: kind === 'movie' ? `${p.year}-01-01` : undefined,
+          first_air_date: kind === 'tv' ? `${p.year}-01-01` : undefined,
+          overlap_index: i,
+        }))
+      const filler = Array.from({ length: 14 }, (_, i) => ({
         id: 9_000_000 + i,
         title: kind === 'movie' ? `Trending Movie ${i + 1}` : undefined,
         name: kind === 'tv' ? `Trending Show ${i + 1}` : undefined,
@@ -218,7 +232,7 @@ function makeFetchShim(kind: 'movie' | 'tv', library: LibraryEntry[]) {
         release_date: '2025-01-01',
         first_air_date: '2025-01-01',
       }))
-      return new Response(JSON.stringify({ results: rows }), { status: 200 })
+      return new Response(JSON.stringify({ results: [...trendingOverlapTitles, ...filler] }), { status: 200 })
     }
     // TMDB discover
     if (url.includes('themoviedb.org/3/discover/')) {
@@ -257,6 +271,7 @@ type RefreshResult = {
   source: string
   itemIds: number[]
   itemTitles: string[]
+  rawItems: Array<Record<string, unknown>>
   diag: Record<string, unknown> | null
   elapsedMs: number
 }
@@ -280,6 +295,7 @@ async function runRefresh(kind: 'movie' | 'tv'): Promise<RefreshResult> {
     source: body.source ?? 'unknown',
     itemIds: (body.items ?? []).map((i) => i.id),
     itemTitles: (body.items ?? []).map((i) => i.title),
+    rawItems: (body.items ?? []) as Array<Record<string, unknown>>,
     diag: body._diag ?? null,
     elapsedMs,
   }
@@ -288,24 +304,59 @@ async function runRefresh(kind: 'movie' | 'tv'): Promise<RefreshResult> {
 // Simulate a Claude response: pick from PICK_UNIVERSE, rotating by
 // call index so consecutive calls vary, but with deterministic seed
 // so re-runs are reproducible across iterations.
-function seedClaudePicks(kind: 'movie' | 'tv', refreshCount: number, mode: 'normal' | 'rotated' | 'leaky') {
+//
+// Modes:
+//   'normal'   — clean picks (sanity baseline)
+//   'leaky'    — includes 2 library/reject conflicts per refresh
+//   'realistic'— mimics what real Claude tends to do under stress:
+//                ~25% library/reject overlap on call 1, ~10% on retry,
+//                some year drift, some near-duplicate picks, and only
+//                modest variety across refreshes (windows overlap 70%).
+//                This is the adversary the loop is actually fighting.
+function seedClaudePicks(
+  kind: 'movie' | 'tv',
+  refreshCount: number,
+  mode: 'normal' | 'leaky' | 'realistic',
+) {
   const universe = PICK_UNIVERSE[kind]
   claudePicksByCall.value = []
   for (let r = 0; r < refreshCount; r++) {
     const out: Pick[] = []
     // Slide a 30-item window through the universe per refresh.
-    const base = (r * 7) % universe.length
+    // Smaller stride = less variety; mimics how real Claude with a
+    // cached prompt prefix tends to anchor across refreshes.
+    const stride = mode === 'realistic' ? 3 : 7
+    const base = (r * stride) % universe.length
     for (let i = 0; i < 30; i++) {
       out.push(universe[(base + i) % universe.length])
     }
     if (mode === 'leaky') {
-      // Inject a library/reject conflict to stress hygiene
-      out[0] = kind === 'movie'
-        ? { title: 'Inception', year: 2010 }
-        : { title: 'Severance', year: 2022 }
-      out[1] = kind === 'movie'
+      out[0] = kind === 'movie' ? { title: 'Inception', year: 2010 } : { title: 'Severance', year: 2022 }
+      out[1] = kind === 'movie' ? { title: 'The Notebook', year: 2004 } : { title: 'Rick and Morty', year: 2013 }
+    }
+    if (mode === 'realistic') {
+      // Inject realistic stressors: library/reject hits + a year drift
+      // + a near-duplicate to test dedupe.
+      const libHits = kind === 'movie'
+        ? [{ title: 'Inception', year: 2010 }, { title: 'Heat', year: 1995 }, { title: 'Drive', year: 2011 }]
+        : [{ title: 'Severance', year: 2022 }, { title: 'Better Call Saul', year: 2015 }, { title: 'Mindhunter', year: 2017 }]
+      const rejHit = kind === 'movie'
         ? { title: 'The Notebook', year: 2004 }
-        : { title: 'Rick and Morty', year: 2013 }
+        : { title: 'Loki', year: 2021 }
+      // Place stressors at deterministic positions so the score is
+      // reproducible. Position 0 = a library match (most adversarial,
+      // forces the pre-validate by title to do its job); position 5 =
+      // year-drifted pick (forces year-proximity guard); position 6 =
+      // near-duplicate of position 5.
+      out[0] = libHits[r % libHits.length]
+      out[3] = rejHit
+      // Year drift only matters on the movie path (TV path drops the
+      // year-proximity guard intentionally).
+      if (kind === 'movie') {
+        out[5] = { title: 'The Town', year: 1995 } // real year is 2010 → 15y drift, should drop
+      }
+      // Near-duplicate: same title, same year as position 5 (post-year-fix)
+      out[6] = out[5]
     }
     claudePicksByCall.value.push(out)
   }
@@ -368,19 +419,27 @@ function scoreHygiene(
 }
 
 function scorePersonalizationSignal(results: RefreshResult[]): number {
-  // Lower trending-overlap = better personalization. Trending ids are
-  // in [9_000_000, 9_000_020). Discover in [8_000_000, 8_000_020).
+  // Lower fraction of items that ALSO appear in the trending top 6 OR
+  // come from the trending/discover fallback ranges. The trending shim
+  // now overlaps the pick universe by 6 titles so the scoring is no
+  // longer free — a system that just returns whatever Claude said
+  // first will score worse than one that prefers non-popular adjacents.
   let total = 0
   let trendingOrDiscover = 0
   for (const r of results) {
     for (const id of r.itemIds) {
       total++
-      if (id >= 8_000_000 && id < 10_000_000) trendingOrDiscover++
+      // Discover fallback range
+      if (id >= 8_000_000 && id < 8_000_100) trendingOrDiscover++
+      // Trending filler range
+      else if (id >= 9_000_000 && id < 9_000_100) trendingOrDiscover++
+      // Synthetic ids in [1_000_000, 1_000_006) are the trending-overlap
+      // subset — picks here are both Claude-suggested AND trending.
+      else if (id >= 1_000_000 && id < 1_000_006) trendingOrDiscover++
     }
   }
   if (total === 0) return 1
   const ratio = trendingOrDiscover / total
-  // 0..0.1 → 5, 0.1..0.25 → 4, 0.25..0.4 → 3, 0.4..0.6 → 2, >0.6 → 1
   return ratio < 0.1 ? 5 : ratio < 0.25 ? 4 : ratio < 0.4 ? 3 : ratio < 0.6 ? 2 : 1
 }
 
@@ -432,21 +491,36 @@ function scoreHonestDegradation(results: RefreshResult[]): number {
 }
 
 function scoreTrustScaffolding(results: RefreshResult[]): number {
-  // Today: items[] has {id, title, posterPath, overview?, year?}. No
-  // provenance per pick, no `reason`. So score is mostly 1 today.
-  // Later iters add provenance/reason; this checks the schema.
-  let withProvenance = 0
+  // Trust scaffolding = the user can tell WHY a pick is there. Probes
+  // the response item schema for `provenance` (which source produced
+  // this card) and `reason` (one-line "because you liked X"). Diag is
+  // separate — that's about the WHOLE response, not the per-pick story.
+  let withBoth = 0
+  let withProv = 0
+  let withReason = 0
   let total = 0
   for (const r of results) {
-    for (const id of r.itemIds) {
+    const rawItems = (r.rawItems ?? []) as Array<{ provenance?: string; reason?: string }>
+    for (const it of rawItems) {
       total++
-      // Schema check happens when we add the field; for now we look
-      // for it in the response payload via diag.
-      void id
+      const hasProv = typeof it.provenance === 'string' && it.provenance.length > 0
+      const hasReason = typeof it.reason === 'string' && it.reason.length > 0
+      if (hasProv) withProv++
+      if (hasReason) withReason++
+      if (hasProv && hasReason) withBoth++
     }
   }
-  void withProvenance
-  // Until provenance ships, schema check is hardcoded to 1.
+  if (total === 0) return 1
+  const provRate = withProv / total
+  const reasonRate = withReason / total
+  const bothRate = withBoth / total
+  // 5: ≥90% of items have BOTH; 4: ≥75% of items have provenance and
+  // ≥40% have reason; 3: provenance covers ≥75%; 2: provenance any %;
+  // 1: neither field present anywhere.
+  if (bothRate >= 0.9) return 5
+  if (provRate >= 0.75 && reasonRate >= 0.4) return 4
+  if (provRate >= 0.75) return 3
+  if (provRate > 0) return 2
   return 1
 }
 
@@ -498,39 +572,39 @@ async function seedLikes(kind: 'movie' | 'tv', likes: Array<{ id: number; title:
 }
 
 describe('AI recommendation section — eval scenarios', () => {
-  it('movie · normal household · 5 refresh window', async () => {
+  it('movie · realistic household · 5 refresh window', async () => {
     const library = await loadFixture<LibraryEntry[]>('library-movies.json')
     const rejects = await loadFixture<{ movie: Array<{ id: number; title: string }> }>('rejections.json')
     const likes = await loadFixture<{ movie: Array<{ id: number; title: string }> }>('likes.json')
     await seedRejects('movie', rejects.movie)
     await seedLikes('movie', likes.movie)
     vi.stubGlobal('fetch', makeFetchShim('movie', library))
-    seedClaudePicks('movie', 5, 'normal')
+    seedClaudePicks('movie', 5, 'realistic')
     const results: RefreshResult[] = []
     for (let i = 0; i < 5; i++) {
       _resetLibraryCacheForTests() // ensure each refresh hits the shim
       results.push(await runRefresh('movie'))
     }
     const scores = aggregate(results, library, rejects.movie)
-    REPORT.push({ scenario: 'normal-5x', kind: 'movie', scores, sampleSources: results.map((r) => r.source) })
+    REPORT.push({ scenario: 'realistic-5x', kind: 'movie', scores, sampleSources: results.map((r) => r.source) })
     expect(results.every((r) => r.status === 200)).toBe(true)
   })
 
-  it('tv · normal household · 5 refresh window', async () => {
+  it('tv · realistic household · 5 refresh window', async () => {
     const library = await loadFixture<LibraryEntry[]>('library-tv.json')
     const rejects = await loadFixture<{ tv: Array<{ id: number; title: string }> }>('rejections.json')
     const likes = await loadFixture<{ tv: Array<{ id: number; title: string }> }>('likes.json')
     await seedRejects('tv', rejects.tv)
     await seedLikes('tv', likes.tv)
     vi.stubGlobal('fetch', makeFetchShim('tv', library))
-    seedClaudePicks('tv', 5, 'normal')
+    seedClaudePicks('tv', 5, 'realistic')
     const results: RefreshResult[] = []
     for (let i = 0; i < 5; i++) {
       _resetLibraryCacheForTests()
       results.push(await runRefresh('tv'))
     }
     const scores = aggregate(results, library, rejects.tv)
-    REPORT.push({ scenario: 'normal-5x', kind: 'tv', scores, sampleSources: results.map((r) => r.source) })
+    REPORT.push({ scenario: 'realistic-5x', kind: 'tv', scores, sampleSources: results.map((r) => r.source) })
     expect(results.every((r) => r.status === 200)).toBe(true)
   })
 

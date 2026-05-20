@@ -115,3 +115,52 @@
 **Rubric scores after iter 1**: same as baseline (real-world) — 2/4/3/2/2/3/1 — because the route itself was not modified. The harness gives us mocked numbers that are inflated; the iteration log carries both columns to keep this honest.
 
 **Next action (iteration 2)**: Harden the eval harness — (a) seed the mock Claude with adversarial picks that include library matches by id AND title, year mismatches, dedupe collisions, and lookup nulls; (b) align the mocked TMDB trending block so personalization signal scoring can stress real overlap; (c) make trust scaffolding score check the response item schema for `provenance` and `reason` fields so future schema work raises the score automatically.
+
+---
+
+## Iteration 2 — Harden the eval adversary
+
+**Date**: 2026-05-20
+**Target dimension**: meta — addressing skeptic concerns C1, V1, V2 from iter 1. Closes the "scores are inflated" gap.
+**Hypothesis**: A more adversarial mock Claude + trending overlap + schema-based trust score will produce numbers that move when the system changes, instead of plateauing at 5 for free.
+
+**Research consulted**:
+- Reread of `server/routes/suggestions.ts` — confirmed the year-proximity guard at line 1340 is movies-only (TV drops it intentionally), and confirmed validate-and-retry happens once with rejected picks fed back. [SOURCE: file read 2026-05-20]
+- Commit history on suggestions.ts — git log shows "Personalized picks short of target — filling" warnings are tied to real production runs (commit `b3963b2`, `486208c` etc. all tweak the prompt to reduce fall-through). [SOURCE: `git log` 2026-05-20]
+
+**Changes made**:
+- `server/routes/suggestions.eval.test.ts`:
+  - Added `'realistic'` mode to `seedClaudePicks` — injects 1 library hit at pos 0, 1 reject at pos 3, a 15-year drift at pos 5 (movies only), a near-duplicate at pos 6. Uses stride=3 across refreshes (was 7) to mimic cache-anchored repetition. [VERIFIED via run]
+  - TMDB trending shim now overlaps the pick universe by 6 titles (shares synthetic ids via `syntheticIdFor`). Personalization signal scoring now can't get a free 5. [VERIFIED]
+  - `scoreTrustScaffolding` rewritten to inspect each item's `provenance` and `reason` fields. Today: response items don't carry these → score=1 (matches the real-world score). When iter 3 adds the schema, this score will move. [VERIFIED — score still 1 because nothing changed in the route]
+  - `RefreshResult.rawItems` added so the scorer can inspect the full per-item payload, not just ids/titles.
+  - Renamed scenarios: `normal-5x` → `realistic-5x` (since the realistic mode is the default adversary now).
+- Removed the now-unused `'rotated'` mode parameter.
+
+**Verification results**:
+- `npm run eval:recs` — 4 passed (1 file), 250ms. New report at `2026-05-20T08-02-35-323Z.json`. Overall scores: `personalizedFill:5, hygiene:5, personalizationSignal:4, refreshVariety:2.33, latency:5, honestDegradation:5, trustScaffolding:1`. [VERIFIED]
+- `npm test` — 151 passed (16 files), 880ms. No regression. [VERIFIED]
+- Refresh variety dropped from 3 → 2.33 (matches reality better — stride=3 means refreshes share most of the universe window).
+- Personalization signal dropped from 5 → 4 (trending overlap now penalizes mainstream picks).
+
+**Skeptic response**:
+- Standard skeptic (iter 2):
+  - a. Did the change improve the target? Yes — eval is no longer trivially saturated; scores now have room to move.
+  - b. Regression? No (main suite + eval suite both green).
+  - c. INFERRED items? `realistic` mode's stressor positions (pos 0/3/5/6) are not derived from any external research — they're plausible but assumed. Logged as INFERRED.
+  - d. Citation spot-check: commits cited (b3963b2 etc.) — verified via local git log; all real commits.
+  - e. Tests green: ✓
+- VARIANT skeptic note (iter 2 prep for iter 3): "Argue the eval doesn't need to be this harsh — maybe real Claude is already cleaner than the mock." Counter-evidence: commits explicitly fight library matches in the retry path. Production traces in the commit messages reference this failure mode. Variant rejected — keep the hardening.
+
+**Rubric scores after iter 2** (real-world | mocked):
+| # | Dim | Baseline (real) | Iter 1 (real) | Iter 2 (real) | Iter 2 (mocked) |
+|---|-----|-----------------|---------------|---------------|-----------------|
+| 1 | Personalized fill | 2 | 2 | 2 | 5 |
+| 2 | Hygiene | 4 | 4 | 4 | 5 |
+| 3 | Personalization signal | 3 | 3 | 3 | 4 |
+| 4 | Refresh variety | 2 | 2 | 2 | 2.33 |
+| 5 | Latency | 2 | 2 | 2 | 5 |
+| 6 | Honest degradation | 3 | 3 | 3 | 5 |
+| 7 | Trust scaffolding | 1 | 1 | 1 | 1 |
+
+**Next action (iteration 3)**: Trust scaffolding (rubric dim 7, lowest score, real=1). Extend `SuggestionItem` to carry a `provenance` field (`'personalized' | 'discover' | 'trending' | 'fallback'`) emitted by every return path, and an optional `reason` field populated from Claude's per-pick rationale (extend the SUBMIT_TOOL input_schema). Update TrendingRow to surface the reason on hover/tap. Tests + eval should both move trustScaffolding off 1.
