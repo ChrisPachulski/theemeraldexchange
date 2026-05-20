@@ -1,0 +1,38 @@
+LIVE PROBE — 2026-05-20
+
+Configuration:
+- Server: localhost:4001 (npm dev:server via tsx)
+- SONARR_URL/RADARR_URL: Tailscale (100.120.186.17) overriding .env.production's 10.0.0.52
+- TMDB_API_KEY: from .env.production
+- Anthropic key: passed in X-Anthropic-Api-Key header per BYO model
+- Session: minted via createSession() with .env.local SESSION_SECRET
+
+Probe 1 — /api/suggestions/movie:
+  HTTP 200, wall 11693ms
+  server-timing: prologue=1194.9ms (Radarr+Sonarr cold), candidatePool=495.2ms, claudeInitial=9691.4ms, validate1=0.3ms
+  source: "personalized"
+  items: 20/20 all provenance="personalized", 20/20 with reason
+  diag: libraryCount=766, accepted=20, retryAttempted=false, poolSize=51, poolHits=20,
+        droppedPicks=0, costCents=1.13, callCount=1, cacheHitRate=0.86,
+        libraryGenres=[Comedy 14%, Adventure 13%, Action 13%, Family 10%, Drama 9%],
+        recentlyShownCount=20
+  Reasons verified library-grounded — referenced Heat, The Pianist, Kung Fu Panda 4,
+    Schindler's List, The Holdovers, Secondhand Lions.
+
+Probe 2 — /api/suggestions/tv:
+  HTTP 200
+  server-timing: claudeInitial=10405.8ms
+  source: "personalized"
+  items: 20/20 all provenance="personalized", 20/20 with reason
+  diag: libraryCount=250, poolSize=61, poolHits=20, droppedPicks=0,
+        costCents=1.56, callCount=1
+  Reasons referenced Fullmetal Alchemist: Brotherhood, Attack on Titan, Arcane.
+
+Probe 3 — refresh variety (3 consecutive movie calls):
+  Refresh 1: 20/20 personalized, cacheHit=0.87, cost=1.09¢
+  Refresh 2: 20/20 personalized, cacheHit=0.86, cost=1.09¢
+  Refresh 3: 20/20 personalized, cacheHit=0.82, cost=2.27¢
+  Jaccard 1↔2: 0.026  (target ≤0.5)
+  Jaccard 2↔3: 0.026
+  Jaccard 1↔3: 0.481
+  45 unique titles across 60 slots — 75% novelty across the 3-call window.

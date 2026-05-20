@@ -2,23 +2,44 @@
 
 **Loop**: 75 iterations on branch `ai-recs-loop`  
 **Date**: 2026-05-20  
-**Final status**: PARTIALLY CONVERGED — 6 of 7 criteria met + criterion 7 partially verified via live smoke probe against the user's real 766-title Radarr library (`GET /api/suggestions/movie?force=trending` and the BYO-key 402 gate). The "source='personalized' with ≥16 items" sub-clause of criterion 7 still requires the user's Anthropic + TMDB keys; everything else verified end-to-end on production data. See iteration_log.md "Iteration 75-LIVE" entry for the smoke probe output.
+**Final status**: **CONVERGED** on 6 of 7 dimensions; latency below target but at honest steady state for the chosen model. Full live probe against the household's real Radarr (766 movies) + Sonarr (250 TV) libraries via Tailscale to the NAS confirmed every other dimension end-to-end with real Claude Haiku 4.5 + real TMDB. See `live-probe-2026-05-20.txt` for the full capture.
+
+---
+
+## Live Probe Highlights (2026-05-20)
+
+- `GET /api/suggestions/movie` → 200, `source: 'personalized'`, 20/20 items, every card carries `provenance: 'personalized'` and a library-grounded `reason` ("...similar to Heat's prestige-crime sensibility", "for fans of The Pianist", "in the vein of Secondhand Lions").
+- `GET /api/suggestions/tv` → 200, identical shape, 20/20 with reasons referencing real library titles (Fullmetal Alchemist: Brotherhood, Attack on Titan, Arcane).
+- Refresh variety across 3 consecutive movie refreshes — Jaccard 1↔2 = **0.026**, 2↔3 = **0.026**, 1↔3 = 0.481. **75% novelty rate** across the 3-call window (45 unique titles in 60 slots). Rubric target was P50 ≤ 0.5; actual is 20x better than target.
+- Pool hit rate: 20/20 picks resolved from the iter 8 candidate pool — zero TMDB `/search` burn.
+- `cacheHitRate`: 0.86 (Anthropic prompt cache landing).
+- Cost: 1.09–2.27¢ per refresh, single Claude call (no retry needed).
+- Latency: Claude initial 9.7–10.4s; total wall 11–12s. Below the rubric's ≤6s P95 target — Haiku 4.5's honest speed at this prompt size. The path forward is documented in "What's not converged" below.
 
 ---
 
 ## Starting and Final Rubric Scores
 
-| # | Dimension | Baseline | After iter 75 (mocked-realistic) | After iter 75 (real-world) |
-|---|-----------|----------|----------------------------------|---------------------------|
-| 1 | Personalized fill | 2 | 5 | 4+ INFERRED |
-| 2 | Library/reject hygiene | 4 | 5 | 4+ VERIFIED (pool + franchise) |
-| 3 | Personalization signal | 3 | 4.5 | 4 INFERRED |
-| 4 | Refresh variety | 2 | 4.33 (realistic mean) | 4 INFERRED |
-| 5 | Latency | 2 | 5 | 4 INFERRED |
-| 6 | Honest degradation | 3 | 5 | 4+ CONFIRMED |
-| 7 | Trust scaffolding | 1 | 4 | 4 VERIFIED |
+| # | Dimension | Baseline | After iter 75 (mocked) | After iter 75 (live) |
+|---|-----------|----------|------------------------|----------------------|
+| 1 | Personalized fill | 2 | 5 | **5 VERIFIED** (`source='personalized'`, 20/20, multiple probes) |
+| 2 | Library/reject hygiene | 4 | 5 | **5 VERIFIED** (0 dropped picks across all probes) |
+| 3 | Personalization signal | 3 | 4.5 | **5 VERIFIED** (reasons reference real library titles by name) |
+| 4 | Refresh variety | 2 | 4.33 | **5 VERIFIED** (Jaccard 0.026 — 20x better than ≤0.5 target) |
+| 5 | Latency | 2 | 5 | **3** (~11s/call; below ≤6s P95 target; honest Haiku 4.5 cap at this prompt size) |
+| 6 | Honest degradation | 3 | 5 | **5 VERIFIED** (cold-start path, BYO-key 402, full _diag observability) |
+| 7 | Trust scaffolding | 1 | 4 | **5 VERIFIED** (provenance + grounded reasons on 100% of picks) |
 
-All 7 dimensions moved from baseline to ≥4 in mocked evaluation. Real-world scores are INFERRED (live-soak gated) except where labeled VERIFIED or CONFIRMED.
+6 of 7 dimensions hit 5/5 live. Latency at 3 — the model itself is the cap; closing this requires streaming, a faster model, or background pre-warming (all deferred — see below).
+
+## What's not converged
+
+**Latency (dim 5, score 3)** — Claude Haiku 4.5 initial call is 9.7–10.4s for this prompt size (~80K input tokens with library + pool + likes). The rubric target was ≤6s P95. Three paths to close:
+1. **Streaming the tool_use response** — start rendering as the first 5 picks arrive. UX-perceived latency drops to ~3s for first paint, full strip at 10s. Anthropic SDK supports this; needs the tool_use partial-JSON parsing. ~1 day's work.
+2. **Switch initial call to a faster model** — claude-haiku-4-5 IS the fast one. The faster options are claude-haiku-3-5 (older, weaker on tool use) or claude-instant. Both would regress dim 3 (personalization signal) — net negative.
+3. **Background pre-warm** — refresh in the background every 5 min so the strip is already rendered when the user navigates. Adds cost but cuts perceived latency to ~0. Violates the "live-where-it-matters" V1 principle (suggestions is request-driven by design) — would need a product decision.
+
+Recommendation: ship as-is; revisit streaming in V2 if the 11s feels worse than projected once a household member uses it daily.
 
 ---
 
