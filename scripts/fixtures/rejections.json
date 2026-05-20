@@ -1,0 +1,10 @@
+{
+  "movie": [
+    { "id": 11036, "title": "The Notebook" },
+    { "id": 11423, "title": "Dear John" }
+  ],
+  "tv": [
+    { "id": 60625, "title": "Rick and Morty" },
+    { "id": 84958, "title": "Loki" }
+  ]
+}

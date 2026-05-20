@@ -13,6 +13,13 @@ export default defineConfig({
       'src/**/*.test.ts',
       'src/**/*.test.tsx',
     ],
+    // The recommendation eval harness has its own config (vitest.eval.config.ts)
+    // and writes to disk — keep it out of the normal `npm test` run.
+    exclude: [
+      '**/node_modules/**',
+      '**/dist/**',
+      'server/routes/suggestions.eval.test.ts',
+    ],
     env: {
       // Required by server/env.ts. Tests don't actually call plex.tv
       // or Sonarr — those are mocked — but the validator runs at
