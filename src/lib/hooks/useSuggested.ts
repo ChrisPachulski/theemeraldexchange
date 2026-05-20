@@ -47,6 +47,8 @@ export type SuggestionDiag = {
   costCents?: number
   /** True when Claude stopped generating early due to max_tokens — picks may be incomplete. */
   claudeTruncated?: boolean
+  /** Number of Claude API calls made for this request (1 = initial only, 2 = initial + retry). Max is MAX_CLAUDE_CALLS_PER_REQUEST=2. */
+  callCount?: number
   lastCounters?: {
     lookupNulls?: number
     droppedAsDedupe?: number
