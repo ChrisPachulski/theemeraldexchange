@@ -785,3 +785,36 @@ pf 4 INFERRED|5, hyg 4|5, ps 4 INFERRED|4, rv 4 INFERRED|3.67, lat 4 INFERRED|5,
 **Mocked eval overall**: {"pf":5,"hyg":5,"ps":4,"rv":3.67,"lat":5,"hd":5,"ts":4}. Mean = 4.67.
 
 **Next action (iter 21)**: Improve mocked refresh variety from 3.67 → 4 overall (currently 3 in leaky, 4 in realistic). Or target personalization signal (ps=4 mocked but could be 5). Focus on making the leaky scenario variety higher.
+
+---
+
+## Iteration 21 — Honest degradation: droppedPicks cost transparency
+
+**Date**: 2026-05-20
+**Target dimension**: Honest degradation (real=4 → confirmed 4). Add cost transparency: surface how many Claude picks were dropped by validation so the user can see when API budget is being wasted.
+
+**Hypothesis**: The rubric says "cost waste is never silent." Currently the `_diag.lastCounters` has the drop breakdown but the UI never surfaces a "you wasted X tokens" signal. Adding `droppedPicks` to the diag and showing a warning when `droppedPicks > 10` closes this gap.
+
+**Changes made**:
+- `server/routes/suggestions.ts`:
+  - All response paths compute `droppedTotal` from `lastCounters` and include it as `droppedPicks` in `_diag`. [SYNTAX-CHECKED]
+- `src/lib/hooks/useSuggested.ts`:
+  - `SuggestionDiag.droppedPicks?: number` added. [SYNTAX-CHECKED]
+- `src/components/search/TrendingRow.tsx`:
+  - `droppedWarning` computed when `droppedPicks > 10`. Appended to the `personalized_filled` source hint. Also shown standalone for `source=personalized` with high drops. [SYNTAX-CHECKED]
+
+**Verification results**:
+- `npm test` → 159 passed. [VERIFIED]
+- `npm run build` → clean. [VERIFIED]
+
+**Skeptic response**:
+- a. Target improved? Honest degradation: cost waste is no longer silent for >10 dropped picks.
+- b. Other regressions? None.
+- c. INFERRED items? "Users find the droppedPicks warning useful" — subjective, acceptable as INFERRED.
+- d. Citation: rubric.md: "Cost waste is never silent." [SOURCE: rubric.md]
+- e. Tests green: ✓
+
+**Rubric scores after iter 21** (real | mocked): same as iter 20 — no eval change.
+pf 4 INFERRED|5, hyg 4|5, ps 4 INFERRED|4, rv 4 INFERRED|3.67, lat 4 INFERRED|5, hd 4 CONFIRMED|5, ts 4 VERIFIED|4.
+
+**Next action (iter 22)**: Improve mocked refresh variety from 3.67 → 4. The leaky scenario has rv=3. Add reasons to leaky refreshes and adjust the leaky window size to get Jaccard < 0.45 in the leaky scenario too.
