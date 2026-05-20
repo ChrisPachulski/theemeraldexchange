@@ -29,7 +29,19 @@ vi.mock('@anthropic-ai/sdk', () => {
     messages = {
       create: async (args: unknown) => {
         lastCreateArgs.value = args
-        if (fakeResponse.value) return fakeResponse.value
+        // Support sequence mode: if fakeResponse.value is an array, dequeue
+        // responses one by one. Each element can be a Response object or an
+        // Error-like object with a .status field (to simulate API errors).
+        if (Array.isArray(fakeResponse.value)) {
+          const seq = fakeResponse.value as unknown[]
+          const next = seq.shift()
+          if (next instanceof Error || (next && typeof (next as { status?: unknown }).status === 'number' && (next as { __throw?: boolean }).__throw)) {
+            throw next
+          }
+          if (next !== undefined) return next
+        } else if (fakeResponse.value) {
+          return fakeResponse.value
+        }
         return {
           content: [
             { type: 'tool_use', id: 'tu_default', name: 'submit_recommendations', input: { picks: [] } },
@@ -258,6 +270,67 @@ describe('suggestions route — Anthropic transient error retry', () => {
     // If we get 402 the route correctly reached the key-check point.
     expect([200, 402].includes(r.status)).toBe(true)
   })
+
+  it('withAnthropicRetry recovers from a 529 on the first call (V16 VERIFIED)', async () => {
+    // Sequence mode: call 1 throws a 529-shaped error; call 2 succeeds.
+    // Verifies the retry path is exercised: route returns 200 (not 500/trending),
+    // and the console.warn fires with the 529 message.
+    // Note: ANTHROPIC_RETRY_DELAY_MS=3000 — this test takes ~3s. Acceptable
+    // because it verifies a real production resilience path (V16).
+    _setTmdbApiKeyForTests('test-key')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(
+            JSON.stringify([
+              { title: 'Drama Show A', year: 2010, tmdbId: 4001, genres: ['Drama'] },
+              { title: 'Drama Show B', year: 2011, tmdbId: 4002, genres: ['Drama'] },
+              { title: 'Drama Show C', year: 2012, tmdbId: 4003, genres: ['Drama'] },
+              { title: 'Drama Show D', year: 2013, tmdbId: 4004, genres: ['Drama'] },
+              { title: 'Drama Show E', year: 2014, tmdbId: 4005, genres: ['Drama'] },
+              { title: 'Drama Show F', year: 2015, tmdbId: 4006, genres: ['Drama'] },
+              { title: 'Drama Show G', year: 2016, tmdbId: 4007, genres: ['Drama'] },
+              { title: 'Drama Show H', year: 2017, tmdbId: 4008, genres: ['Drama'] },
+              { title: 'Drama Show I', year: 2018, tmdbId: 4009, genres: ['Drama'] },
+              { title: 'Drama Show J', year: 2019, tmdbId: 4010, genres: ['Drama'] },
+            ]),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    // Sequence: first call throws 529, second call succeeds with empty picks
+    // (empty picks → route fills from discover/trending → still returns 200)
+    const overloadErr = Object.assign(new Error('Anthropic overloaded'), { status: 529, __throw: true })
+    const successResp = {
+      content: [
+        { type: 'tool_use', id: 'tu_retry_ok', name: 'submit_recommendations', input: { picks: [] } },
+      ],
+      stop_reason: 'tool_use',
+      usage: { input_tokens: 50, output_tokens: 5 },
+    }
+    fakeResponse.value = [overloadErr, successResp] as unknown[]
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const r = await appUnderTest().request('/tv', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    // Route must have recovered (not thrown → not 500)
+    expect(r.status).toBe(200)
+    // The warn log should record the 529 retry attempt.
+    // console.warn is called with multiple args: ('prefix', status, 'message', delay, 'ms')
+    // Join all args per call to get the full message for matching.
+    const warnCalls = warnSpy.mock.calls.map((c) => c.map(String).join(' '))
+    expect(warnCalls.some((msg) => msg.includes('Anthropic transient error') && msg.includes('529'))).toBe(true)
+    warnSpy.mockRestore()
+  }, 10_000 /* 10s timeout — covers the 3s retry delay */)
 })
 
 describe('suggestions route — prompt shape', () => {
