@@ -419,11 +419,19 @@ function buildLibraryBlock(
 // per caller without invalidating the household library cache. Same
 // fallback rule as rejections — every liked id appears, untitled ones
 // render as `[TMDB id N]`.
+//
+// Recency weighting (Agent C #3): liked entries are stored oldest-first
+// (push semantics). Reversing the array puts the most-recently-liked
+// title at the top of the block — the highest-attention position after
+// the label. Claude should up-weight the first bullets because they
+// represent the user's freshest taste signal.
 function buildUserLikesBlock(liked: Array<{ id: number; title: string }>): string {
   if (liked.length === 0) return ''
+  // Reverse so newest likes appear first (highest prompt attention).
+  const recencyOrdered = [...liked].reverse()
   return (
-    `This user has explicitly LIKED — recommend more in this vein ` +
-    `(positive taste signal):\n${renderEntryBullets(liked)}`
+    `This user has explicitly LIKED the following — recommend more in this vein ` +
+    `(strongest positive taste signal; items listed first are the MOST RECENTLY liked):\n${renderEntryBullets(recencyOrdered)}`
   )
 }
 

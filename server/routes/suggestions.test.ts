@@ -435,6 +435,28 @@ describe('suggestions route — prompt shape', () => {
     expect(likes?.text).toContain('- Sons of Anarchy')
   })
 
+  it('orders liked titles most-recently-liked first in the likes block', async () => {
+    // Likes are stored oldest-first (push). The block should reverse
+    // so the most recently liked title has the highest prompt attention.
+    await setLike('1', 'tv', 9001, 'Show Alpha') // liked first → oldest
+    await setLike('1', 'tv', 9002, 'Show Beta')  // liked second
+    await setLike('1', 'tv', 9003, 'Show Gamma') // liked last → newest, should appear first
+    stubFetchForSonarr()
+
+    const r = await appUnderTest().request('/tv', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    const args = lastCreateArgs.value as { system: Array<{ text: string }> }
+    const likes = args.system.find((s) => s.text.includes('explicitly LIKED'))!
+    const gammaPos = likes.text.indexOf('Show Gamma')
+    const alphaPos = likes.text.indexOf('Show Alpha')
+    // Gamma (newest) should appear BEFORE Alpha (oldest).
+    expect(gammaPos).toBeGreaterThanOrEqual(0)
+    expect(alphaPos).toBeGreaterThanOrEqual(0)
+    expect(gammaPos).toBeLessThan(alphaPos)
+  })
+
   it('skips user-likes block entirely when no titled likes exist', async () => {
     stubFetchForSonarr()
     const r = await appUnderTest().request('/tv', {
