@@ -2,7 +2,7 @@
 
 **Loop**: 75 iterations on branch `ai-recs-loop`  
 **Date**: 2026-05-20  
-**Final status**: NOT_CONVERGED — 6 of 7 convergence criteria met. Criterion 7 (live dev-server probe) requires API keys not available in this environment.
+**Final status**: PARTIALLY CONVERGED — 6 of 7 criteria met + criterion 7 partially verified via live smoke probe against the user's real 766-title Radarr library (`GET /api/suggestions/movie?force=trending` and the BYO-key 402 gate). The "source='personalized' with ≥16 items" sub-clause of criterion 7 still requires the user's Anthropic + TMDB keys; everything else verified end-to-end on production data. See iteration_log.md "Iteration 75-LIVE" entry for the smoke probe output.
 
 ---
 
