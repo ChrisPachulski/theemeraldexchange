@@ -1210,6 +1210,84 @@ describe('suggestions route — prompt shape', () => {
     warnSpy.mockRestore()
   })
 
+  it('accumulates droppedPicks across both validation passes (iter 59 bug fix)', async () => {
+    // Before iter 59, lastCounters was replaced by v2.counters so drops from
+    // the initial pass were invisible. Now they're merged. This test verifies:
+    // 3 drops in pass 1 + 2 drops in pass 2 → droppedPicks=5 in _diag.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    _setTmdbApiKeyForTests('test-key')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(JSON.stringify(sonarrSeries), { status: 200 })
+        }
+        // TMDB search: always return a library-match id (Sons of Anarchy = 1001)
+        if (url.includes('themoviedb.org/3/search/tv')) {
+          return new Response(
+            JSON.stringify({ results: [{ id: 1001, name: 'Sons of Anarchy', poster_path: null, first_air_date: '2008-01-01' }] }),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    // Pass 1: 3 library-title picks → all dropped (by pre-validate title check)
+    // Pass 2: 2 more library picks → dropped (by pre-validate title check)
+    const pass1 = {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu_pass1',
+          name: 'submit_recommendations',
+          input: {
+            picks: [
+              { title: 'Sons of Anarchy', year: 2008 }, // library (id 1001)
+              { title: 'House of the Dragon', year: 2022 }, // library (id 1002)
+              { title: 'The Crown', year: 2016 }, // library (id 1003)
+            ],
+          },
+        },
+      ],
+      stop_reason: 'tool_use',
+      usage: { input_tokens: 50, output_tokens: 30 },
+    }
+    const pass2 = {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu_pass2',
+          name: 'submit_recommendations',
+          input: {
+            picks: [
+              { title: 'Succession', year: 2018 }, // library (id 1004)
+              { title: 'Better Call Saul', year: 2015 }, // library (id 1005)
+            ],
+          },
+        },
+      ],
+      stop_reason: 'tool_use',
+      usage: { input_tokens: 50, output_tokens: 20 },
+    }
+    fakeResponse.value = [pass1, pass2] as unknown[]
+    const r = await appUnderTest().request('/tv', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { _diag?: { droppedPicks?: number } }
+    // Total drops: 3 from pass 1 + 2 from pass 2 = 5 minimum
+    // (pre-validate catches title matches before TMDB lookup)
+    expect(body._diag?.droppedPicks).toBeDefined()
+    expect((body._diag?.droppedPicks ?? 0)).toBeGreaterThanOrEqual(5)
+    warnSpy.mockRestore()
+  })
+
   it('includes novelty-lane items (recent releases) in the candidate pool block (V18 VERIFIED)', async () => {
     // The pool fetch fires quality pages (vote_average.desc) AND one novelty
     // page (primary_release_date.desc / first_air_date.desc). This test
