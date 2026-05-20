@@ -320,6 +320,56 @@ describe('suggestions route — prompt shape', () => {
     errSpy.mockRestore()
   })
 
+  it('injects a PRIORITY TASTE SIGNAL volatile block after the cached library when library size exceeds the trigger', async () => {
+    // Library big enough to trip the priority-taste trigger (>=60 items).
+    const bigLib = Array.from({ length: 70 }, (_, i) => ({
+      title: `Show ${i}`,
+      year: 2010 + (i % 14),
+      tmdbId: 7000 + i,
+      genres: i % 3 === 0 ? ['Drama', 'Crime'] : i % 3 === 1 ? ['Drama'] : ['Sci-Fi & Fantasy', 'Action & Adventure'],
+    }))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(JSON.stringify(bigLib), { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/tv', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    const args = lastCreateArgs.value as {
+      system: Array<{ type: string; text: string; cache_control?: unknown }>
+    }
+    const priority = args.system.find((s) => s.text.includes('PRIORITY TASTE SIGNAL'))
+    expect(priority).toBeDefined()
+    expect(priority?.cache_control).toBeUndefined() // volatile, not cached
+    // Should pull at most PRIORITY_TASTE_CAP titles into the block.
+    const bulletCount = (priority?.text.match(/^- /gm) ?? []).length
+    expect(bulletCount).toBeLessThanOrEqual(30)
+    expect(bulletCount).toBeGreaterThanOrEqual(20)
+  })
+
+  it('does NOT inject the priority-taste block for small libraries (full library already fits in the attended zone)', async () => {
+    stubFetchForSonarr() // 3-item library, well below trigger
+    const r = await appUnderTest().request('/tv', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    const args = lastCreateArgs.value as { system: Array<{ text: string }> }
+    const found = args.system.find((s) => s.text.includes('PRIORITY TASTE SIGNAL'))
+    expect(found).toBeUndefined()
+  })
+
   it('injects a per-request salt + rotation quota in the user message so refreshes vary', async () => {
     stubFetchForSonarr()
     const r1 = await appUnderTest().request('/tv', {

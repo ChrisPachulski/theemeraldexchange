@@ -427,6 +427,62 @@ function buildUserLikesBlock(liked: Array<{ id: number; title: string }>): strin
   )
 }
 
+// Volatile "priority taste signal" block — the top-N library titles
+// most representative of the household's taste cluster, hoisted to a
+// high-attention position right before the user message.
+//
+// Why this exists: the cached library block can be hundreds of titles
+// long. LLM positional underweighting (well-documented in long-context
+// settings) means titles deep in that list contribute little signal.
+// By extracting the most-genre-typical titles into a short volatile
+// block AFTER the cache, we give Claude a high-salience taste anchor
+// that doesn't invalidate the cache (volatile block stays outside the
+// cache_control region).
+//
+// Relevance score = sum of (1 / rank of each genre in the top distribution)
+// per matched genre tag. Titles with multiple top-genre matches surface
+// first. A title with one top-1 genre beats a title with three top-7
+// genres. Limited to PRIORITY_TASTE_CAP titles; only fires when the
+// library is larger than the cap (otherwise the cached block already
+// fits in the attended zone).
+const PRIORITY_TASTE_CAP = 30
+const PRIORITY_TASTE_TRIGGER = 60 // below this size, full library fits — skip block
+
+function buildPriorityTasteBlock(
+  library: Array<{ title: string; year?: number; genres?: string[] }>,
+): string {
+  if (library.length < PRIORITY_TASTE_TRIGGER) return ''
+  // Compute genre rank (most-common = rank 1).
+  const counts = new Map<string, number>()
+  for (const item of library) {
+    if (!item.genres) continue
+    for (const g of item.genres) {
+      if (!g) continue
+      counts.set(g, (counts.get(g) ?? 0) + 1)
+    }
+  }
+  const rankedGenres = Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([g], i) => [g, 1 / (i + 1)] as [string, number])
+  const genreRank = new Map(rankedGenres)
+  // Score each title by sum of genre weights.
+  const scored = library.map((it) => {
+    let score = 0
+    for (const g of it.genres ?? []) {
+      score += genreRank.get(g) ?? 0
+    }
+    return { item: it, score }
+  })
+  scored.sort((a, b) => b.score - a.score)
+  const top = scored.slice(0, PRIORITY_TASTE_CAP).map(({ item }) => item)
+  if (top.length === 0) return ''
+  const lines = top.map((it) => `- ${formatLibraryItem(it)}`).join('\n')
+  return (
+    `PRIORITY TASTE SIGNAL — the ${top.length} library titles that most strongly anchor the household's taste cluster ` +
+    `(of ${library.length} total). Weight your recommendations toward titles a viewer of these would obviously want next:\n${lines}`
+  )
+}
+
 // Per-user rolling buffer of recently-served titles. The Claude prompt
 // prefix (system + library + rejections) is cached, and at temperature
 // 0.4–0.7 a deterministic prefix produces near-identical pick lists
@@ -1040,6 +1096,7 @@ function readToolUse(response: Anthropic.Messages.Message): ClaudeResponse {
 // freely without invalidating the household library cache.
 function systemStack(
   libraryBlock: string,
+  priorityTasteBlock: string,
   userLikesBlock: string,
   recentlyShownBlock: string,
 ): Array<{
@@ -1050,6 +1107,10 @@ function systemStack(
   return [
     { type: 'text', text: SYSTEM_PROMPT },
     { type: 'text', text: libraryBlock, cache_control: { type: 'ephemeral' } },
+    // Volatile blocks AFTER the cache — high-attention position.
+    // Priority taste signal first (the strongest positive signal),
+    // then explicit likes, then recently-shown rotation.
+    ...(priorityTasteBlock ? [{ type: 'text' as const, text: priorityTasteBlock }] : []),
     ...(userLikesBlock ? [{ type: 'text' as const, text: userLikesBlock }] : []),
     ...(recentlyShownBlock ? [{ type: 'text' as const, text: recentlyShownBlock }] : []),
   ]
@@ -1096,6 +1157,7 @@ async function callClaudeInitial(
   client: Anthropic,
   kind: 'movie' | 'tv',
   libraryBlock: string,
+  priorityTasteBlock: string,
   userLikesBlock: string,
   recentlyShownBlock: string,
   salt: string,
@@ -1107,7 +1169,7 @@ async function callClaudeInitial(
     // for any non-trivial title list.
     max_tokens: 2048,
     temperature: CLAUDE_TEMPERATURE,
-    system: systemStack(libraryBlock, userLikesBlock, recentlyShownBlock),
+    system: systemStack(libraryBlock, priorityTasteBlock, userLikesBlock, recentlyShownBlock),
     tools: [SUBMIT_TOOL],
     tool_choice: { type: 'tool', name: SUBMIT_TOOL.name, disable_parallel_tool_use: true },
     messages: [{ role: 'user', content: userAsk(kind, CLAUDE_OVERFETCH, salt) }],
@@ -1119,6 +1181,7 @@ async function callClaudeRetry(
   client: Anthropic,
   kind: 'movie' | 'tv',
   libraryBlock: string,
+  priorityTasteBlock: string,
   userLikesBlock: string,
   recentlyShownBlock: string,
   prior: ToolUseBlock,
@@ -1144,7 +1207,7 @@ async function callClaudeRetry(
     model: MODEL,
     max_tokens: 2048,
     temperature: CLAUDE_TEMPERATURE,
-    system: systemStack(libraryBlock, userLikesBlock, ''),
+    system: systemStack(libraryBlock, priorityTasteBlock, userLikesBlock, ''),
     tools: [SUBMIT_TOOL],
     tool_choice: { type: 'tool', name: SUBMIT_TOOL.name, disable_parallel_tool_use: true },
     messages: [
@@ -1325,6 +1388,7 @@ suggestions.get('/:type', async (c) => {
 
   const client = new Anthropic({ apiKey: userKey })
   const libraryBlock = buildLibraryBlock(type, library, kindRejectionsTitled)
+  const priorityTasteBlock = buildPriorityTasteBlock(library)
   const userLikesBlock = buildUserLikesBlock(liked)
   const recentlyShownBlock = buildRecentlyShownBlock(getRecentlyShown(session.sub, type))
 
@@ -1452,7 +1516,7 @@ suggestions.get('/:type', async (c) => {
   const salt = refreshSalt()
   const endClaudeInitial = timing.mark('claudeInitial')
   try {
-    r1 = await callClaudeInitial(client, type, libraryBlock, userLikesBlock, recentlyShownBlock, salt)
+    r1 = await callClaudeInitial(client, type, libraryBlock, priorityTasteBlock, userLikesBlock, recentlyShownBlock, salt)
     totalUsage = mergeUsage(totalUsage, r1.usage)
   } catch (e) {
     endClaudeInitial()
@@ -1518,6 +1582,7 @@ suggestions.get('/:type', async (c) => {
         client,
         type,
         libraryBlock,
+        priorityTasteBlock,
         userLikesBlock,
         recentlyShownBlock,
         r1.toolUse,
