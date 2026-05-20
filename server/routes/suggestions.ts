@@ -1848,6 +1848,7 @@ suggestions.get('/:type', async (c) => {
     }
   }
 
+  const refreshCostCents = computeCostCents(totalUsage)
   await appendUsageEvent({
     sub: session.sub,
     username: session.username,
@@ -1855,7 +1856,7 @@ suggestions.get('/:type', async (c) => {
     model: MODEL,
     kind: type,
     ...totalUsage,
-    costCents: computeCostCents(totalUsage),
+    costCents: refreshCostCents,
   })
 
   // Still short of target after the retry — fill so the user always
@@ -1920,13 +1921,13 @@ suggestions.get('/:type', async (c) => {
       return c.json({
         source: 'personalized_empty_trending_fallback',
         items: filled,
-        _diag: diag({ accepted: 0, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, droppedPicks: droppedTotal, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
+        _diag: diag({ accepted: 0, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, droppedPicks: droppedTotal, costCents: refreshCostCents, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
       })
     }
     return c.json({
       source: 'personalized_filled',
       items: filled,
-      _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, poolHits: lastCounters.poolHits, droppedPicks: droppedTotal, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
+      _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, poolHits: lastCounters.poolHits, droppedPicks: droppedTotal, costCents: refreshCostCents, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
     })
   }
 
@@ -1942,6 +1943,6 @@ suggestions.get('/:type', async (c) => {
   return c.json({
     source: 'personalized',
     items: finalAccepted,
-    _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, poolSize: safePool.length, poolHits: v1.counters.poolHits, droppedPicks: droppedTotal, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
+    _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, poolSize: safePool.length, poolHits: v1.counters.poolHits, droppedPicks: droppedTotal, costCents: refreshCostCents, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
   })
 })
