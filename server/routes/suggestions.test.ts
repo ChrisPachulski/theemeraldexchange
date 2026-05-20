@@ -463,6 +463,61 @@ describe('suggestions route — Anthropic transient error retry', () => {
   }, 10_000 /* 10s timeout — covers the 3s retry delay */)
 })
 
+describe('suggestions route — liked-titles backfill', () => {
+  it('backfills liked titles via TMDB id-lookup and includes them in the user-likes block', async () => {
+    // Seed a liked entry without a title (legacy bare-id row).
+    // The route should call TMDB to resolve the title, persist it, and include
+    // it in the likes block sent to Claude.
+    _setTmdbApiKeyForTests('test-key')
+    await setLike('1', 'tv', 9501, '') // bare-id like with no title
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(
+            JSON.stringify([
+              { title: 'Show A', year: 2010, tmdbId: 8201, genres: ['Drama'] },
+              { title: 'Show B', year: 2011, tmdbId: 8202, genres: ['Drama'] },
+              { title: 'Show C', year: 2012, tmdbId: 8203, genres: ['Crime'] },
+              { title: 'Show D', year: 2013, tmdbId: 8204, genres: ['Drama'] },
+              { title: 'Show E', year: 2014, tmdbId: 8205, genres: ['Crime'] },
+              { title: 'Show F', year: 2015, tmdbId: 8206, genres: ['Drama'] },
+              { title: 'Show G', year: 2016, tmdbId: 8207, genres: ['Thriller'] },
+              { title: 'Show H', year: 2017, tmdbId: 8208, genres: ['Drama'] },
+              { title: 'Show I', year: 2018, tmdbId: 8209, genres: ['Crime'] },
+              { title: 'Show J', year: 2019, tmdbId: 8210, genres: ['Drama'] },
+            ]),
+            { status: 200 },
+          )
+        }
+        // TMDB /tv/9501 — resolves the liked title
+        if (url.includes('themoviedb.org/3/tv/9501')) {
+          return new Response(
+            JSON.stringify({ name: 'The Loved Show', title: null }),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/tv', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    // The likes block should contain 'The Loved Show' (resolved from bare-id)
+    const args = lastCreateArgs.value as { system: Array<{ text: string }> }
+    const likesBlock = args.system.find((s) => s.text.includes('LIKED'))
+    expect(likesBlock).toBeDefined()
+    expect(likesBlock!.text).toContain('The Loved Show')
+  })
+})
+
 describe('suggestions route — library cache and in-flight coalescing', () => {
   it('two concurrent requests share one Sonarr fetch (in-flight coalescing)', async () => {
     // Two simultaneous requests for the same library kind should result in
