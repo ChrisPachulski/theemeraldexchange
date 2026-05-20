@@ -854,28 +854,34 @@ function topGenreNames(library: Array<{ genres?: string[] }>, n: number): string
     .map(([g]) => g)
 }
 
-// Discover-based, library-aware fill source. Pulls TMDB's most-popular
-// titles in the household's top genres. Used in place of trending when
-// personalized picks fall short — taste-aware fallback rather than
-// generic "what's hot this week." Returns up to ~60 rows; the route
-// filter trims further. Falls back to empty on any TMDB hiccup;
-// callers chain with trending as a last resort.
-const DISCOVER_MAX_PAGES = 3
+// --- Candidate pool + discover fill (share cache) --------------------
+//
+// Architecture: Claude ranks from a pre-fetched TMDB pool rather than
+// generating titles from its popularity prior. The pool is fetched via
+// /discover seeded by the household's top genres, quality-sorted
+// (vote_average.desc) so it skews toward acclaimed niche titles rather
+// than blockbusters. The same pool doubles as the fill source when
+// Claude picks fall short of TARGET_COUNT.
+//
+// Shared cache: both the pool (pre-Claude) and the fill (post-Claude)
+// call the same fetch function, so a single TMDB /discover request
+// serves both uses per refresh cycle.
+const CANDIDATE_POOL_PAGES = 3
 const discoverCache: { [k in 'movie' | 'tv']?: { key: string; items: SuggestionItem[]; expiresAt: number } } = {}
 
-async function tmdbDiscoverByGenres(
+async function fetchCandidatePool(
   kind: 'movie' | 'tv',
   genreIds: number[],
 ): Promise<SuggestionItem[]> {
   if (!_tmdbKey || genreIds.length === 0) return []
-  // Pipe = OR; comma = AND. We want titles matching ANY of the
-  // household's top genres, not the (often empty) intersection of
-  // all three. Drama AND Comedy AND Adventure barely exists; Drama
-  // OR Comedy OR Adventure is the right fill set.
+  // Pipe = OR so we get titles matching ANY of the household's top
+  // genres (Drama OR Crime OR Sci-Fi), not the near-empty intersection.
   const key = genreIds.slice().sort((a, b) => a - b).join('|')
   const now = Date.now()
   const cached = discoverCache[kind]
-  if (cached && cached.key === key && cached.expiresAt > now) return cached.items.slice()
+  if (cached && cached.key === key && cached.expiresAt > now) {
+    return cached.items.slice()
+  }
   type TmdbRow = {
     id: number
     title?: string
@@ -886,12 +892,14 @@ async function tmdbDiscoverByGenres(
     first_air_date?: string
   }
   const pages = await Promise.all(
-    Array.from({ length: DISCOVER_MAX_PAGES }, async (_, i) => {
+    Array.from({ length: CANDIDATE_POOL_PAGES }, async (_, i) => {
       const url = new URL(`${TMDB_BASE}/discover/${kind}`)
       url.searchParams.set('api_key', _tmdbKey!)
       url.searchParams.set('page', String(i + 1))
-      url.searchParams.set('sort_by', 'popularity.desc')
-      url.searchParams.set('vote_count.gte', '50')
+      // Quality-sorted so the pool skews toward acclaimed niche titles
+      // in the household's genres, not pure popularity blockbusters.
+      url.searchParams.set('sort_by', 'vote_average.desc')
+      url.searchParams.set('vote_count.gte', '100')
       url.searchParams.set('with_genres', key)
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), TMDB_TIMEOUT_MS)
@@ -899,16 +907,16 @@ async function tmdbDiscoverByGenres(
         const r = await fetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal })
         if (!r.ok) {
           if (r.status === 429) {
-            console.error('[suggestions] TMDB rate-limited on /discover; retry-after:', r.headers.get('retry-after'))
+            console.error('[suggestions] TMDB rate-limited on /discover (pool); retry-after:', r.headers.get('retry-after'))
           } else {
-            console.error('[suggestions] TMDB /discover non-ok:', r.status, 'page', i + 1)
+            console.error('[suggestions] TMDB /discover (pool) non-ok:', r.status, 'page', i + 1)
           }
           return null
         }
         const data = (await r.json()) as { results?: TmdbRow[] }
         return data.results ?? []
       } catch (e) {
-        console.error('[suggestions] TMDB /discover threw on page', i + 1, e instanceof Error ? e.message : String(e))
+        console.error('[suggestions] TMDB /discover (pool) threw on page', i + 1, e instanceof Error ? e.message : String(e))
         return null
       } finally {
         clearTimeout(timer)
@@ -930,6 +938,15 @@ async function tmdbDiscoverByGenres(
   })
   discoverCache[kind] = { key, items, expiresAt: now + TRENDING_CACHE_TTL_MS }
   return items.slice()
+}
+
+// Discover-based fill source — delegates to fetchCandidatePool so
+// pool and fill share the same cache and TMDB call.
+async function tmdbDiscoverByGenres(
+  kind: 'movie' | 'tv',
+  genreIds: number[],
+): Promise<SuggestionItem[]> {
+  return fetchCandidatePool(kind, genreIds)
 }
 
 async function tmdbTrending(kind: 'movie' | 'tv'): Promise<SuggestionItem[]> {
@@ -993,6 +1010,25 @@ async function tmdbTrending(kind: 'movie' | 'tv'): Promise<SuggestionItem[]> {
   return items.slice()
 }
 
+// Format the candidate pool for the prompt. Numbered list so Claude
+// can reference items by number if it wants; title + year so it can
+// match back exactly. Description deliberately says "from this list"
+// to make the constraint explicit.
+function buildCandidatePoolBlock(candidates: SuggestionItem[]): string {
+  if (candidates.length === 0) return ''
+  const lines = candidates
+    .map((c, i) => {
+      const yr = c.year ? ` (${c.year})` : ''
+      return `${i + 1}. ${c.title}${yr}`
+    })
+    .join('\n')
+  return (
+    `CANDIDATE POOL — ${candidates.length} pre-vetted titles from your household's top genres (already screened: none are in your library or NEVER SUGGEST list). ` +
+    `RANK these by how well they match the household's taste. Pick your recommendations PRIMARILY from this list — only reach outside it when the pool lacks good adjacents for a specific sub-genre the household clearly loves.\n\n` +
+    lines
+  )
+}
+
 // Tool-use enforced output. Claude is forced to call this tool, which
 // owns the exact shape of valid output. The tool definition is also
 // where the model is reminded what NOT to submit — duplicate guidance
@@ -1001,7 +1037,7 @@ async function tmdbTrending(kind: 'movie' | 'tv'): Promise<SuggestionItem[]> {
 const SUBMIT_TOOL = {
   name: 'submit_recommendations',
   description:
-    'Submit the ranked list of recommended titles. Each entry MUST be a real, released title that is NOT in the household library and NOT on the NEVER SUGGEST list. For each pick, include a `reason`: a single short clause (≤90 chars) grounded in the household library or likes — e.g. "neighbor of Severance", "for fans of Heat", "their prestige-crime cluster". Omit the reason only when no honest grounding exists. No marketing language, no plot summaries.',
+    'Submit the ranked list of recommended titles. Prefer titles from the CANDIDATE POOL when provided — they are already verified against the household library and NEVER SUGGEST list. Each entry MUST be a real, released title that is NOT in the household library and NOT on the NEVER SUGGEST list. For each pick, include a `reason`: a single short clause (≤90 chars) grounded in the household library or likes — e.g. "neighbor of Severance", "for fans of Heat", "their prestige-crime cluster". Omit the reason only when no honest grounding exists. No marketing language, no plot summaries.',
   input_schema: {
     type: 'object' as const,
     properties: {
@@ -1091,14 +1127,17 @@ function readToolUse(response: Anthropic.Messages.Message): ClaudeResponse {
 }
 
 // System message stack shared between initial call and retry. Library
-// + rejections live in the cached prefix; user-likes and recently-
-// shown vary per caller and stay outside the cache so they can change
-// freely without invalidating the household library cache.
+// + rejections live in the cached prefix; user-likes, recently-shown,
+// and the candidate pool vary per caller and stay outside the cache.
+// The candidate pool is placed last (highest attention) because it is
+// the most immediately actionable context — Claude should read it right
+// before being asked to pick.
 function systemStack(
   libraryBlock: string,
   priorityTasteBlock: string,
   userLikesBlock: string,
   recentlyShownBlock: string,
+  candidatePoolBlock: string,
 ): Array<{
   type: 'text'
   text: string
@@ -1109,10 +1148,13 @@ function systemStack(
     { type: 'text', text: libraryBlock, cache_control: { type: 'ephemeral' } },
     // Volatile blocks AFTER the cache — high-attention position.
     // Priority taste signal first (the strongest positive signal),
-    // then explicit likes, then recently-shown rotation.
+    // then explicit likes, then recently-shown rotation, then the
+    // candidate pool so Claude's final context before generating is
+    // a numbered ranked-pool invitation.
     ...(priorityTasteBlock ? [{ type: 'text' as const, text: priorityTasteBlock }] : []),
     ...(userLikesBlock ? [{ type: 'text' as const, text: userLikesBlock }] : []),
     ...(recentlyShownBlock ? [{ type: 'text' as const, text: recentlyShownBlock }] : []),
+    ...(candidatePoolBlock ? [{ type: 'text' as const, text: candidatePoolBlock }] : []),
   ]
 }
 
@@ -1160,6 +1202,7 @@ async function callClaudeInitial(
   priorityTasteBlock: string,
   userLikesBlock: string,
   recentlyShownBlock: string,
+  candidatePoolBlock: string,
   salt: string,
 ): Promise<ClaudeResponse> {
   const response = await client.messages.create({
@@ -1169,7 +1212,7 @@ async function callClaudeInitial(
     // for any non-trivial title list.
     max_tokens: 2048,
     temperature: CLAUDE_TEMPERATURE,
-    system: systemStack(libraryBlock, priorityTasteBlock, userLikesBlock, recentlyShownBlock),
+    system: systemStack(libraryBlock, priorityTasteBlock, userLikesBlock, recentlyShownBlock, candidatePoolBlock),
     tools: [SUBMIT_TOOL],
     tool_choice: { type: 'tool', name: SUBMIT_TOOL.name, disable_parallel_tool_use: true },
     messages: [{ role: 'user', content: userAsk(kind, CLAUDE_OVERFETCH, salt) }],
@@ -1184,6 +1227,7 @@ async function callClaudeRetry(
   priorityTasteBlock: string,
   userLikesBlock: string,
   recentlyShownBlock: string,
+  candidatePoolBlock: string,
   prior: ToolUseBlock,
   rejectedPicks: Array<{ title: string; reason: string }>,
   nNeeded: number,
@@ -1207,7 +1251,7 @@ async function callClaudeRetry(
     model: MODEL,
     max_tokens: 2048,
     temperature: CLAUDE_TEMPERATURE,
-    system: systemStack(libraryBlock, priorityTasteBlock, userLikesBlock, ''),
+    system: systemStack(libraryBlock, priorityTasteBlock, userLikesBlock, '', candidatePoolBlock),
     tools: [SUBMIT_TOOL],
     tool_choice: { type: 'tool', name: SUBMIT_TOOL.name, disable_parallel_tool_use: true },
     messages: [
@@ -1392,36 +1436,64 @@ suggestions.get('/:type', async (c) => {
   const userLikesBlock = buildUserLikesBlock(liked)
   const recentlyShownBlock = buildRecentlyShownBlock(getRecentlyShown(session.sub, type))
 
+  // Pre-fetch the candidate pool in parallel with block construction.
+  // The pool gives Claude a pre-vetted corpus to rank from instead of
+  // generating titles from its popularity prior. Pool items are
+  // household-safe (library + reject filtered) so TMDB lookups are
+  // skipped for exact pool matches — the id is already known.
+  const topGenreIds = genreNamesToTmdbIds(type, topGenreNames(library, 3))
+  const endPool = timing.mark('candidatePool')
+  const rawPool = topGenreIds.length > 0 ? await fetchCandidatePool(type, topGenreIds) : []
+  endPool()
+  // Filter pool for household safety before showing it to Claude.
+  // Pool items pass through filterHouseholdSafe to drop library entries
+  // and rejects. Build a lookup map by normalised title for fast
+  // match in the validate step.
+  const safePool = filterHouseholdSafe(rawPool)
+  const poolByTitle = new Map<string, SuggestionItem>(
+    safePool.map((it) => [normalizeTitle(it.title), it]),
+  )
+  const candidatePoolBlock = buildCandidatePoolBlock(safePool)
+
   // Tool-use enforced pipeline:
-  //   1. Claude is forced to call submit_recommendations with N picks
-  //   2. We TMDB-resolve + validate each pick (id + title against
-  //      library and rejections)
-  //   3. If we don't have TARGET_COUNT survivors, re-prompt Claude
+  //   1. Pre-fetch a candidate pool from TMDB /discover (genre-seeded,
+  //      quality-sorted). Claude ranks from this pool instead of
+  //      generating from its popularity prior.
+  //   2. Claude is forced to call submit_recommendations with N picks
+  //   3. We validate each pick — pool hits skip the TMDB lookup (id
+  //      already known), non-pool picks fall back to /search lookup
+  //   4. If we don't have TARGET_COUNT survivors, re-prompt Claude
   //      with a tool_result describing exactly which picks were
   //      rejected and why — single retry, bounded cost
-  //   4. If still short, fill from TMDB trending (also filtered)
+  //   5. If still short, fill from pool remainder → trending
   //
   // The id-set post-filter remains as defense-in-depth but is no
   // longer load-bearing; Claude is told exactly what failed and
-  // self-corrects on the retry pass.
+  // self-corrects on the retry pass. Pool picks skip /search lookup
+  // entirely — the TMDB id is already resolved, so the validation
+  // path is a cheap in-memory check instead of a network round-trip.
 
   const validate = async (
     picks: ClaudePick[],
   ): Promise<{
     accepted: SuggestionItem[]
     rejectedForRetry: Array<{ title: string; reason: string }>
-    counters: { lookupNulls: number; droppedAsDedupe: number; droppedAsRejected: number; droppedAsLibrary: number; droppedAsYearMismatch: number }
+    counters: { lookupNulls: number; droppedAsDedupe: number; droppedAsRejected: number; droppedAsLibrary: number; droppedAsYearMismatch: number; poolHits: number }
   }> => {
     const accepted: SuggestionItem[] = []
     const rejectedForRetry: Array<{ title: string; reason: string }> = []
-    const counters = { lookupNulls: 0, droppedAsDedupe: 0, droppedAsRejected: 0, droppedAsLibrary: 0, droppedAsYearMismatch: 0 }
+    const counters = { lookupNulls: 0, droppedAsDedupe: 0, droppedAsRejected: 0, droppedAsLibrary: 0, droppedAsYearMismatch: 0, poolHits: 0 }
 
     // Pre-validate by title BEFORE the TMDB lookup. If Claude's pick
     // title already matches a library or rejection title, we don't
     // need to burn a TMDB lookup just to reject it. This is the
     // single biggest TMDB load reduction — the call-2 rate-limit
     // failure mode that caused only 1–4 items to render.
-    const survivors: Array<{ pick: ClaudePick; preChecked: true }> = []
+    //
+    // Also check the pool: if the pick title exactly matches a pool
+    // item, we already have the TMDB id and metadata — skip the lookup.
+    const survivors: Array<{ pick: ClaudePick; poolItem: SuggestionItem | null }> = []
+    const seen = new Set<number>()
     for (const p of picks) {
       if (!p.title) continue
       if (titleMatches(p.title, rejectedTitles)) {
@@ -1434,79 +1506,93 @@ suggestions.get('/:type', async (c) => {
         rejectedForRetry.push({ title: p.title, reason: 'already in the household library (matched by title)' })
         continue
       }
-      survivors.push({ pick: p, preChecked: true })
+      // Pool fast-path: if the pick title matches a pool item, accept
+      // it immediately without a TMDB /search round-trip.
+      const poolItem = poolByTitle.get(normalizeTitle(p.title)) ?? null
+      if (poolItem) {
+        if (seen.has(poolItem.id)) {
+          counters.droppedAsDedupe++
+          rejectedForRetry.push({ title: p.title, reason: 'duplicate of an earlier pick in this batch' })
+          continue
+        }
+        counters.poolHits++
+        seen.add(poolItem.id)
+        const reason = typeof p.reason === 'string' && p.reason.trim().length > 0
+          ? p.reason.trim().slice(0, 120)
+          : null
+        accepted.push({ ...poolItem, provenance: 'personalized', reason })
+        if (accepted.length >= TARGET_COUNT) break
+        continue
+      }
+      survivors.push({ pick: p, poolItem: null })
     }
 
-    const lookups = await Promise.all(
-      survivors.map(({ pick }) => tmdbLookup(type, pick.title, pick.year).catch(() => null)),
-    )
-    const seen = new Set<number>()
-    for (let i = 0; i < lookups.length; i++) {
-      const r = lookups[i]
-      const pick = survivors[i].pick
-      const original = pick.title
-      if (!r) {
-        counters.lookupNulls++
-        rejectedForRetry.push({ title: original, reason: 'TMDB lookup failed — title may be misspelled' })
-        continue
+    // Non-pool picks fall back to TMDB /search lookup.
+    if (accepted.length < TARGET_COUNT) {
+      const lookups = await Promise.all(
+        survivors.map(({ pick }) => tmdbLookup(type, pick.title, pick.year).catch(() => null)),
+      )
+      for (let i = 0; i < lookups.length; i++) {
+        if (accepted.length >= TARGET_COUNT) break
+        const r = lookups[i]
+        const pick = survivors[i].pick
+        const original = pick.title
+        if (!r) {
+          counters.lookupNulls++
+          rejectedForRetry.push({ title: original, reason: 'TMDB lookup failed — title may be misspelled' })
+          continue
+        }
+        // Year-proximity guard, movies only. TV has too many legitimate
+        // year-mismatch cases (Claude giving the latest-season year vs
+        // TMDB's series-premiere year; long-running shows; reboots that
+        // share a name with originals) — the post-lookup library and
+        // rejection re-checks already defend against genuinely-wrong
+        // matches, and the in-lookup year-then-no-year retry handles
+        // the disambiguation. For movies the guard still catches
+        // remake confusion ("Heat" 1995 vs 1986).
+        if (type === 'movie' && pick.year && r.year && Math.abs(r.year - pick.year) > 5) {
+          counters.droppedAsYearMismatch++
+          rejectedForRetry.push({
+            title: original,
+            reason: `TMDB top match was "${r.title}" (${r.year}), but you asked for ${pick.year} — likely a different work; pick a closer title or use the exact year`,
+          })
+          continue
+        }
+        if (seen.has(r.id)) {
+          counters.droppedAsDedupe++
+          rejectedForRetry.push({ title: original, reason: 'duplicate of an earlier pick in this batch' })
+          continue
+        }
+        if (rejected.has(r.id) || titleMatches(r.title, rejectedTitles)) {
+          counters.droppedAsRejected++
+          rejectedForRetry.push({ title: original, reason: 'on the household NEVER SUGGEST list' })
+          continue
+        }
+        if (libraryTmdbIds.has(r.id) || titleMatches(r.title, libraryTitles)) {
+          counters.droppedAsLibrary++
+          rejectedForRetry.push({ title: original, reason: 'already in the household library' })
+          console.warn('[suggestions] library duplicate dropped:', {
+            kind: type,
+            pickId: r.id,
+            pickTitle: r.title,
+            normalized: { full: normalizeTitle(r.title), base: normalizeTitleBase(r.title) },
+            matchedById: libraryTmdbIds.has(r.id),
+            matchedByTitle: titleMatches(r.title, libraryTitles),
+          })
+          continue
+        }
+        seen.add(r.id)
+        // Tag personalized provenance + carry Claude's reason through
+        // validation. Trim to 120 chars defensively so a chatty model
+        // can't blow up the response payload; the schema asks for ≤90.
+        const reason = typeof pick.reason === 'string' && pick.reason.trim().length > 0
+          ? pick.reason.trim().slice(0, 120)
+          : null
+        accepted.push({ ...r, provenance: 'personalized', reason })
       }
-      // Year-proximity guard, movies only. TV has too many legitimate
-      // year-mismatch cases (Claude giving the latest-season year vs
-      // TMDB's series-premiere year; long-running shows; reboots that
-      // share a name with originals) — the post-lookup library and
-      // rejection re-checks already defend against genuinely-wrong
-      // matches, and the in-lookup year-then-no-year retry handles
-      // the disambiguation. For movies the guard still catches
-      // remake confusion ("Heat" 1995 vs 1986).
-      if (type === 'movie' && pick.year && r.year && Math.abs(r.year - pick.year) > 5) {
-        counters.droppedAsYearMismatch++
-        rejectedForRetry.push({
-          title: original,
-          reason: `TMDB top match was "${r.title}" (${r.year}), but you asked for ${pick.year} — likely a different work; pick a closer title or use the exact year`,
-        })
-        continue
-      }
-      if (seen.has(r.id)) {
-        counters.droppedAsDedupe++
-        rejectedForRetry.push({ title: original, reason: 'duplicate of an earlier pick in this batch' })
-        continue
-      }
-      if (rejected.has(r.id) || titleMatches(r.title, rejectedTitles)) {
-        counters.droppedAsRejected++
-        rejectedForRetry.push({ title: original, reason: 'on the household NEVER SUGGEST list' })
-        continue
-      }
-      if (libraryTmdbIds.has(r.id) || titleMatches(r.title, libraryTitles)) {
-        counters.droppedAsLibrary++
-        rejectedForRetry.push({ title: original, reason: 'already in the household library' })
-        console.warn('[suggestions] library duplicate dropped:', {
-          kind: type,
-          pickId: r.id,
-          pickTitle: r.title,
-          normalized: { full: normalizeTitle(r.title), base: normalizeTitleBase(r.title) },
-          matchedById: libraryTmdbIds.has(r.id),
-          matchedByTitle: titleMatches(r.title, libraryTitles),
-        })
-        continue
-      }
-      seen.add(r.id)
-      // Tag personalized provenance + carry Claude's reason through
-      // validation. Trim to 120 chars defensively so a chatty model
-      // can't blow up the response payload; the schema asks for ≤90.
-      const reason = typeof pick.reason === 'string' && pick.reason.trim().length > 0
-        ? pick.reason.trim().slice(0, 120)
-        : null
-      accepted.push({ ...r, provenance: 'personalized', reason })
-      if (accepted.length >= TARGET_COUNT) break
     }
     return { accepted, rejectedForRetry, counters }
   }
-
-  // Prefetch removed: a 30-pick lookup fan-out plus 5-page trending +
-  // 3-page discover prefetch was 38 concurrent TMDB calls per
-  // suggestions request, blowing past TMDB's ~40/10s free-tier budget
-  // and cascading 429s through every pick lookup. The fill path will
-  // populate the cache lazily on first miss.
 
   let totalUsage: UsageBlock = {}
   let r1: ClaudeResponse
@@ -1516,7 +1602,7 @@ suggestions.get('/:type', async (c) => {
   const salt = refreshSalt()
   const endClaudeInitial = timing.mark('claudeInitial')
   try {
-    r1 = await callClaudeInitial(client, type, libraryBlock, priorityTasteBlock, userLikesBlock, recentlyShownBlock, salt)
+    r1 = await callClaudeInitial(client, type, libraryBlock, priorityTasteBlock, userLikesBlock, recentlyShownBlock, candidatePoolBlock, salt)
     totalUsage = mergeUsage(totalUsage, r1.usage)
   } catch (e) {
     endClaudeInitial()
@@ -1585,6 +1671,7 @@ suggestions.get('/:type', async (c) => {
         priorityTasteBlock,
         userLikesBlock,
         recentlyShownBlock,
+        candidatePoolBlock,
         r1.toolUse,
         v1.rejectedForRetry,
         nNeeded,
@@ -1629,7 +1716,8 @@ suggestions.get('/:type', async (c) => {
   if (accepted.length < TARGET_COUNT) {
     const endFill = timing.mark('fill')
     const fillIds = new Set(accepted.map((a) => a.id))
-    const topGenreIds = genreNamesToTmdbIds(type, topGenreNames(library, 3))
+    // topGenreIds already computed above for the candidate pool —
+    // reuse it so the fill path shares the same cached discover call.
     let fillSource: 'discover' | 'trending' | 'discover+trending' = 'trending'
     let fill: SuggestionItem[] = []
     if (topGenreIds.length > 0) {
@@ -1674,13 +1762,13 @@ suggestions.get('/:type', async (c) => {
       return c.json({
         source: 'personalized_empty_trending_fallback',
         items: filled,
-        _diag: diag({ accepted: 0, retryAttempted: triedRetry, fillSource, lastCounters }),
+        _diag: diag({ accepted: 0, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length }),
       })
     }
     return c.json({
       source: 'personalized_filled',
       items: filled,
-      _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, fillSource, lastCounters }),
+      _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, poolHits: lastCounters.poolHits }),
     })
   }
 
@@ -1690,6 +1778,6 @@ suggestions.get('/:type', async (c) => {
   return c.json({
     source: 'personalized',
     items: finalAccepted,
-    _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry }),
+    _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, poolSize: safePool.length, poolHits: v1.counters.poolHits }),
   })
 })
