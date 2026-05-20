@@ -94,6 +94,52 @@ describe('suggestions route — gating', () => {
     expect(r.status).toBe(401)
   })
 
+  it('_diag.libraryCount and rejectionCount reflect actual library and rejection sizes', async () => {
+    // Verifies that _diag carries accurate observability data.
+    _setTmdbApiKeyForTests('test-key')
+    // 2 rejections
+    await addRejection('movie', 8801, 'Movie To Reject A')
+    await addRejection('movie', 8802, 'Movie To Reject B')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/movie')) {
+          // 11 movies (above cold-start threshold of 10)
+          return new Response(
+            JSON.stringify([
+              { title: 'M1', year: 2010, tmdbId: 6001, genres: ['Drama'] },
+              { title: 'M2', year: 2011, tmdbId: 6002, genres: ['Drama'] },
+              { title: 'M3', year: 2012, tmdbId: 6003, genres: ['Crime'] },
+              { title: 'M4', year: 2013, tmdbId: 6004, genres: ['Drama'] },
+              { title: 'M5', year: 2014, tmdbId: 6005, genres: ['Crime'] },
+              { title: 'M6', year: 2015, tmdbId: 6006, genres: ['Drama'] },
+              { title: 'M7', year: 2016, tmdbId: 6007, genres: ['Thriller'] },
+              { title: 'M8', year: 2017, tmdbId: 6008, genres: ['Drama'] },
+              { title: 'M9', year: 2018, tmdbId: 6009, genres: ['Crime'] },
+              { title: 'M10', year: 2019, tmdbId: 6010, genres: ['Drama'] },
+              { title: 'M11', year: 2020, tmdbId: 6011, genres: ['Drama'] },
+            ]),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/movie', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { _diag?: { libraryCount?: number; rejectionCount?: number } }
+    expect(body._diag?.libraryCount).toBe(11) // 11 movies in library
+    expect(body._diag?.rejectionCount).toBe(2) // 2 rejections added
+  })
+
   it('?force=trending returns trending source without calling Claude or requiring API key', async () => {
     // The ?force=trending path is the client-side "AI off" toggle path.
     // It should: return source=trending, apply filterHouseholdSafe, include
