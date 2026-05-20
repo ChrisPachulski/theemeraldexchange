@@ -442,6 +442,59 @@ describe('suggestions route — prompt shape', () => {
     expect(likes?.text).toContain('- Sons of Anarchy')
   })
 
+  it('passes Claude reason strings through to the response items (trust scaffolding)', async () => {
+    // Claude returns a pick with a reason; route should propagate it to
+    // the response items as `reason` and tag with provenance='personalized'.
+    _setTmdbApiKeyForTests('test-key')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(JSON.stringify(sonarrSeries), { status: 200 })
+        }
+        if (url.includes('themoviedb.org/3/search/tv')) {
+          return new Response(
+            JSON.stringify({ results: [{ id: 7_700_001, name: 'Rectify', poster_path: null, first_air_date: '2013-04-22' }] }),
+            { status: 200 },
+          )
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    fakeResponse.value = {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu_reason',
+          name: 'submit_recommendations',
+          input: {
+            picks: Array.from({ length: 20 }, () => ({
+              title: 'Rectify',
+              year: 2013,
+              reason: 'neighbor of Sons of Anarchy — same prestige crime tone',
+            })),
+          },
+        },
+      ],
+      usage: { input_tokens: 50, output_tokens: 30 },
+    }
+    const r = await appUnderTest().request('/tv', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { source: string; items: Array<{ id: number; provenance?: string; reason?: string | null }> }
+    const firstItem = body.items[0]
+    expect(firstItem?.provenance).toBe('personalized')
+    expect(firstItem?.reason).toBe('neighbor of Sons of Anarchy — same prestige crime tone')
+    expect(firstItem?.id).toBe(7_700_001)
+  })
+
   it('orders liked titles most-recently-liked first in the likes block', async () => {
     // Likes are stored oldest-first (push). The block should reverse
     // so the most recently liked title has the highest prompt attention.

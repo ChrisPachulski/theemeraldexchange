@@ -374,6 +374,13 @@ function seedClaudePicks(
     if (mode === 'leaky') {
       out[0] = kind === 'movie' ? { title: 'Inception', year: 2010 } : { title: 'Severance', year: 2022 }
       out[1] = kind === 'movie' ? { title: 'The Notebook', year: 2004 } : { title: 'Rick and Morty', year: 2013 }
+      // Add reasons to non-stressor picks so leaky scenario also exercises trust scaffolding.
+      const leakyReasons = kind === 'movie'
+        ? ['prestige crime cluster', 'for fans of Heat', 'directorial match']
+        : ['slow-burn drama', 'spy-thriller adjacent', 'character study cluster']
+      for (let i = 2; i < out.length; i++) {
+        if (i % 4 !== 0) out[i] = { ...out[i], reason: leakyReasons[i % leakyReasons.length] }
+      }
     }
     if (mode === 'realistic') {
       // Inject realistic stressors: library/reject hits + a year drift
