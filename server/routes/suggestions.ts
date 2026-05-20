@@ -65,10 +65,11 @@ const COLD_START_THRESHOLD = 10
 const TARGET_COUNT = 20
 // Headroom for post-validation drops. With TARGET_COUNT=20 we need
 // enough surplus that the routine library/lookup/dedupe shedding still
-// leaves a full strip. 30 fits comfortably under max_tokens=2048 (a
-// {title, year} pick is ~25-40 tokens; 30 picks ≈ 750-1200 + envelope).
-// Previously 20, which gave zero headroom and reliably under-filled
-// for users with large libraries.
+// leaves a full strip. 30 fits comfortably under max_tokens=4096.
+// Previously 2048 which could truncate a 30-pick response with reasons
+// (30 picks × ~80 tokens/pick = ~2400 output tokens, plus tool_use
+// wrapper ~100 tokens = ~2500 total — right at the old 2048 ceiling).
+// Raised to 4096 (iter 39) so reasons never cause truncation.
 const CLAUDE_OVERFETCH = 30
 
 // Provenance — WHERE this card actually came from. Lets the UI render
@@ -1332,10 +1333,11 @@ async function callClaudeInitial(
   const response = await withAnthropicRetry(() =>
     client.messages.create({
       model: MODEL,
-      // 2048 leaves headroom for CLAUDE_OVERFETCH (20) picks serialized
-      // as tool_use JSON; the prior 1024 ceiling truncated mid-array
-      // for any non-trivial title list.
-      max_tokens: 2048,
+      // 4096 gives full headroom for 30 picks with per-pick reasons.
+      // 30 picks × ~80 tokens each = ~2400 output tokens + envelope;
+      // the prior 2048 ceiling could truncate mid-JSON when reasons
+      // were present. Haiku 4.5 max_output is 8192; 4096 is safe.
+      max_tokens: 4096,
       temperature: CLAUDE_TEMPERATURE,
       system: systemStack(libraryBlock, priorityTasteBlock, userLikesBlock, recentlyShownBlock, candidatePoolBlock),
       tools: [SUBMIT_TOOL],
@@ -1376,7 +1378,7 @@ async function callClaudeRetry(
   const response = await withAnthropicRetry(() =>
     client.messages.create({
       model: MODEL,
-      max_tokens: 2048,
+      max_tokens: 4096,
       temperature: CLAUDE_TEMPERATURE,
       system: systemStack(libraryBlock, priorityTasteBlock, userLikesBlock, '', candidatePoolBlock),
       tools: [SUBMIT_TOOL],
