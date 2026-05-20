@@ -1207,6 +1207,64 @@ describe('suggestions route — prompt shape', () => {
     warnSpy.mockRestore()
   })
 
+  it('includes novelty-lane items (recent releases) in the candidate pool block (V18 VERIFIED)', async () => {
+    // The pool fetch fires quality pages (vote_average.desc) AND one novelty
+    // page (primary_release_date.desc / first_air_date.desc). This test
+    // distinguishes quality vs novelty items by giving them different id ranges
+    // and verifies both appear in the CANDIDATE POOL block sent to Claude.
+    _setTmdbApiKeyForTests('test-key')
+    let qualityHits = 0
+    let noveltyHits = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(JSON.stringify(sonarrSeries), { status: 200 })
+        }
+        if (url.includes('themoviedb.org/3/discover/tv')) {
+          // Distinguish quality pages (sort_by=vote_average.desc) from novelty page
+          // (sort_by=first_air_date.desc). Return different ids so both show up.
+          const u = new URL(url)
+          const sortBy = u.searchParams.get('sort_by') ?? ''
+          if (sortBy.includes('first_air_date') || sortBy.includes('primary_release_date')) {
+            noveltyHits++
+            return new Response(
+              JSON.stringify({ results: [{ id: 7_800_001, name: 'Recent Novelty Show', poster_path: null, first_air_date: '2025-01-01' }] }),
+              { status: 200 },
+            )
+          }
+          qualityHits++
+          return new Response(
+            JSON.stringify({ results: [{ id: 7_800_002, name: 'Quality Acclaimed Show', poster_path: null, first_air_date: '2019-01-01' }] }),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/tv', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    // Both quality and novelty pages were fetched
+    expect(qualityHits).toBeGreaterThan(0)
+    expect(noveltyHits).toBeGreaterThan(0)
+    // Both item types appear in the CANDIDATE POOL block
+    const args = lastCreateArgs.value as { system: Array<{ text: string }> }
+    const poolBlock = args.system.find((s) => s.text.includes('CANDIDATE POOL'))
+    expect(poolBlock).toBeDefined()
+    expect(poolBlock!.text).toContain('Recent Novelty Show')
+    expect(poolBlock!.text).toContain('Quality Acclaimed Show')
+    void qualityHits
+    void noveltyHits
+  })
+
   it('deduplicates TMDB pool items by id across discover pages', async () => {
     // /discover returns the same id on pages 1, 2, and 3 (simulating
     // pagination drift). The pool block should contain each title only once.
