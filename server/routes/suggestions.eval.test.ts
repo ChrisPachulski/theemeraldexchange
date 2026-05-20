@@ -29,7 +29,7 @@ import type { Env } from '../middleware/auth.js'
 // --- shared mock state -----------------------------------------------
 
 type LibraryEntry = { title: string; year: number; tmdbId: number; genres: string[] }
-type Pick = { title: string; year?: number }
+type Pick = { title: string; year?: number; reason?: string }
 
 const lastCreateArgs: { value: unknown } = { value: null }
 const claudePicksByCall: { value: Pick[][] } = { value: [] }
@@ -357,6 +357,18 @@ function seedClaudePicks(
       }
       // Near-duplicate: same title, same year as position 5 (post-year-fix)
       out[6] = out[5]
+      // Add reason strings for ~60% of picks so the trust-scaffolding
+      // scorer can measure provenance+reason coverage. Reasons are
+      // grounded in the library to mimic what real Claude returns.
+      const sampleReasons = kind === 'movie'
+        ? ['neighbor of Inception', 'for fans of Heat', 'prestige crime cluster', 'tonal match to The Dark Knight']
+        : ['similar tone to Severance', 'neighbor of Better Call Saul', 'slow-burn drama like Mindhunter', 'spy-thriller cluster']
+      for (let i = 0; i < out.length; i++) {
+        // ~60% coverage, deterministic by position so score is reproducible
+        if (i % 5 !== 0) {
+          out[i] = { ...out[i], reason: sampleReasons[i % sampleReasons.length] }
+        }
+      }
     }
     claudePicksByCall.value.push(out)
   }
