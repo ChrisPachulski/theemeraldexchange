@@ -51,6 +51,8 @@ export type SuggestionDiag = {
   callCount?: number
   /** Anthropic prompt cache hit rate (0.0–1.0). 1.0 = library block fully cached (10x cheaper); 0.0 = no cache hit (first call of day or library changed). */
   cacheHitRate?: number
+  /** Number of items in the recently-shown buffer (after pool-size cap). Helps diagnose whether the cap is preventing power-user saturation (iter 65). */
+  recentlyShownCount?: number
   lastCounters?: {
     lookupNulls?: number
     droppedAsDedupe?: number
