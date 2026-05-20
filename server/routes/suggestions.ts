@@ -981,17 +981,25 @@ async function fetchCandidatePool(
   )
   const all: TmdbRow[] = []
   for (const rows of pages) if (rows && rows.length > 0) all.push(...rows)
-  const items: SuggestionItem[] = all.map((r) => {
+  // Deduplicate by TMDB id — /discover pages can return the same title
+  // on multiple pages when genres overlap or pagination has off-by-one
+  // drift. Dedup ensures the pool's numbered list sent to Claude is
+  // clean and the poolByTitle map has no id collisions.
+  const seenIds = new Set<number>()
+  const items: SuggestionItem[] = []
+  for (const r of all) {
+    if (!r.id || seenIds.has(r.id)) continue
+    seenIds.add(r.id)
     const date = r.release_date || r.first_air_date || ''
     const y = date ? Number(date.slice(0, 4)) : undefined
-    return {
+    items.push({
       id: r.id,
       title: r.title || r.name || '',
       posterPath: r.poster_path,
       overview: r.overview,
       year: Number.isFinite(y) ? y : undefined,
-    }
-  })
+    })
+  }
   discoverCache[kind] = { key, items, expiresAt: now + TRENDING_CACHE_TTL_MS }
   return items.slice()
 }
