@@ -1809,26 +1809,39 @@ suggestions.get('/:type', async (c) => {
     })
     recordShown(session.sub, type, filled)
     setTimingHeader()
+    // Compute total dropped picks across all validation passes for cost transparency.
+    const droppedTotal =
+      (lastCounters.droppedAsLibrary ?? 0) +
+      (lastCounters.droppedAsRejected ?? 0) +
+      (lastCounters.lookupNulls ?? 0) +
+      (lastCounters.droppedAsYearMismatch ?? 0) +
+      (lastCounters.droppedAsDedupe ?? 0)
     if (accepted.length === 0) {
       return c.json({
         source: 'personalized_empty_trending_fallback',
         items: filled,
-        _diag: diag({ accepted: 0, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length }),
+        _diag: diag({ accepted: 0, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, droppedPicks: droppedTotal }),
       })
     }
     return c.json({
       source: 'personalized_filled',
       items: filled,
-      _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, poolHits: lastCounters.poolHits }),
+      _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, poolHits: lastCounters.poolHits, droppedPicks: droppedTotal }),
     })
   }
 
+  const droppedTotal =
+    (lastCounters.droppedAsLibrary ?? 0) +
+    (lastCounters.droppedAsRejected ?? 0) +
+    (lastCounters.lookupNulls ?? 0) +
+    (lastCounters.droppedAsYearMismatch ?? 0) +
+    (lastCounters.droppedAsDedupe ?? 0)
   const finalAccepted = accepted.slice(0, TARGET_COUNT)
   recordShown(session.sub, type, finalAccepted)
   setTimingHeader()
   return c.json({
     source: 'personalized',
     items: finalAccepted,
-    _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, poolSize: safePool.length, poolHits: v1.counters.poolHits }),
+    _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, poolSize: safePool.length, poolHits: v1.counters.poolHits, droppedPicks: droppedTotal }),
   })
 })
