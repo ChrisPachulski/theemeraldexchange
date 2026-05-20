@@ -1929,7 +1929,23 @@ suggestions.get('/:type', async (c) => {
       const endValidate2 = timing.mark('validate2')
       const v2 = await validate(r2.picks)
       endValidate2()
-      lastCounters = v2.counters
+      // Accumulate drop counts across both validation passes so the
+      // reported droppedPicks reflects the TOTAL cost of dropped picks
+      // (both initial and retry), not just the retry pass's drops.
+      // Before iter 59, lastCounters was replaced (not merged), meaning
+      // a request that dropped 10 picks in call 1 + 8 in call 2 showed
+      // only 8 in _diag — understating the waste. Merged now so the
+      // >10 droppedPicks UI warning fires correctly for multi-pass waste.
+      const c1 = lastCounters
+      const c2 = v2.counters
+      lastCounters = {
+        lookupNulls: (c1.lookupNulls ?? 0) + (c2.lookupNulls ?? 0),
+        droppedAsDedupe: (c1.droppedAsDedupe ?? 0) + (c2.droppedAsDedupe ?? 0),
+        droppedAsRejected: (c1.droppedAsRejected ?? 0) + (c2.droppedAsRejected ?? 0),
+        droppedAsLibrary: (c1.droppedAsLibrary ?? 0) + (c2.droppedAsLibrary ?? 0),
+        droppedAsYearMismatch: (c1.droppedAsYearMismatch ?? 0) + (c2.droppedAsYearMismatch ?? 0),
+        poolHits: c2.poolHits, // retry's pool hits are the relevant count
+      }
       const acceptedIds = new Set(accepted.map((a) => a.id))
       for (const item of v2.accepted) {
         if (!acceptedIds.has(item.id)) {
