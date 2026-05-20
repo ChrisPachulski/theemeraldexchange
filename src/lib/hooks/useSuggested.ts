@@ -49,6 +49,8 @@ export type SuggestionDiag = {
   claudeTruncated?: boolean
   /** Number of Claude API calls made for this request (1 = initial only, 2 = initial + retry). Max is MAX_CLAUDE_CALLS_PER_REQUEST=2. */
   callCount?: number
+  /** Anthropic prompt cache hit rate (0.0–1.0). 1.0 = library block fully cached (10x cheaper); 0.0 = no cache hit (first call of day or library changed). */
+  cacheHitRate?: number
   lastCounters?: {
     lookupNulls?: number
     droppedAsDedupe?: number
