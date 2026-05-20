@@ -925,6 +925,12 @@ function topGenreNames(library: Array<{ genres?: string[] }>, n: number): string
 // call the same fetch function, so a single TMDB /discover request
 // serves both uses per refresh cycle.
 const CANDIDATE_POOL_PAGES = 3
+// Novelty lane: one extra page sorted by recency (primary_release_date.desc
+// for movies, first_air_date.desc for TV). Appended to the quality-sorted
+// pool as ~20% of items to break the "same acclaimed classics every refresh"
+// pattern. Quality filter still applied (vote_count.gte=30 — lower threshold
+// for recent titles which haven't accumulated many votes yet). Iter 40.
+const CANDIDATE_POOL_NOVELTY_PAGES = 1
 const discoverCache: { [k in 'movie' | 'tv']?: { key: string; items: SuggestionItem[]; expiresAt: number } } = {}
 
 async function fetchCandidatePool(
@@ -949,7 +955,8 @@ async function fetchCandidatePool(
     release_date?: string
     first_air_date?: string
   }
-  const pages = await Promise.all(
+  // Quality-sorted pages (acclaimed niche titles, vote_count≥100)
+  const qualityPages = await Promise.all(
     Array.from({ length: CANDIDATE_POOL_PAGES }, async (_, i) => {
       const url = new URL(`${TMDB_BASE}/discover/${kind}`)
       url.searchParams.set('api_key', _tmdbKey!)
@@ -980,8 +987,38 @@ async function fetchCandidatePool(
       }
     }),
   )
+  // Novelty lane: recent releases in the same genres. Lower vote_count
+  // threshold so newer titles that haven't accumulated many votes yet
+  // are still eligible. Runs in parallel with quality pages.
+  const noveltyPagesPromise = Promise.all(
+    Array.from({ length: CANDIDATE_POOL_NOVELTY_PAGES }, async (_, i) => {
+      const url = new URL(`${TMDB_BASE}/discover/${kind}`)
+      url.searchParams.set('api_key', _tmdbKey!)
+      url.searchParams.set('page', String(i + 1))
+      url.searchParams.set('sort_by', kind === 'movie' ? 'primary_release_date.desc' : 'first_air_date.desc')
+      url.searchParams.set('vote_count.gte', '30')
+      url.searchParams.set('with_genres', key)
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), TMDB_TIMEOUT_MS)
+      try {
+        const r = await tmdbFetchWithRetry(url, controller.signal)
+        if (!r || !r.ok) return null
+        const data = (await r.json()) as { results?: TmdbRow[] }
+        return data.results ?? []
+      } catch {
+        return null
+      } finally {
+        clearTimeout(timer)
+      }
+    }),
+  )
+  const [noveltyPages] = await Promise.all([noveltyPagesPromise])
+  // Collect all rows: quality first, then novelty (novelty appended so
+  // Claude's numbered list leads with quality picks — novelty items appear
+  // at the end where they serve as "freshness anchors" without dominating).
   const all: TmdbRow[] = []
-  for (const rows of pages) if (rows && rows.length > 0) all.push(...rows)
+  for (const rows of qualityPages) if (rows && rows.length > 0) all.push(...rows)
+  for (const rows of noveltyPages) if (rows && rows.length > 0) all.push(...rows)
   // Deduplicate by TMDB id — /discover pages can return the same title
   // on multiple pages when genres overlap or pagination has off-by-one
   // drift. Dedup ensures the pool's numbered list sent to Claude is
