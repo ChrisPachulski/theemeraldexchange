@@ -18,7 +18,12 @@ import { apiUrl } from '../api/base'
 // 5-minute staleTime matches the server-side cache so React Query and
 // the Plex round-trip live on the same rhythm.
 
-const PLEX_WEB_BASE = 'http://theemeraldexchange.local:32400/web'
+// app.plex.tv is Plex's hosted web client — works on AND off network.
+// Plex's auth + relay infrastructure routes the request to the home
+// server regardless of where the user clicks from. The LAN URL
+// (http://theemeraldexchange.local:32400/web) was mDNS-only and broke
+// for every household member outside the house.
+const PLEX_WEB_BASE = 'https://app.plex.tv/desktop'
 const PLEX_LIBRARY_LINKS_PATH = '/api/plex/library-links'
 const PLEX_SERVER_ID_PATH = '/api/plex/server-id'
 

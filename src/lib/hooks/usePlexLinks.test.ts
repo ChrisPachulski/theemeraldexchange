@@ -17,13 +17,13 @@ describe('buildPlexDeepLink', () => {
   it('builds the metadata-page deep link with a URL-encoded key', () => {
     const url = buildPlexDeepLink('abc123', '42')
     expect(url).toBe(
-      'http://theemeraldexchange.local:32400/web/index.html#!/server/abc123/details?key=%2Flibrary%2Fmetadata%2F42',
+      'https://app.plex.tv/desktop/index.html#!/server/abc123/details?key=%2Flibrary%2Fmetadata%2F42',
     )
   })
 
   it('falls back to the Plex root URL when serverId is null (PLEX_SERVER_ID unset)', () => {
     const url = buildPlexDeepLink(null, '42')
-    expect(url).toBe('http://theemeraldexchange.local:32400/web')
+    expect(url).toBe('https://app.plex.tv/desktop')
   })
 
   it('handles ratingKeys with non-ASCII characters (Plex theoretically returns string ids)', () => {
@@ -41,7 +41,7 @@ describe('buildPlexDeepLink', () => {
 describe('buildPlexSearchLink', () => {
   it('URL-encodes the query into Plex web search hash route', () => {
     expect(buildPlexSearchLink('The 100')).toBe(
-      'http://theemeraldexchange.local:32400/web/index.html#!/search?query=The%20100',
+      'https://app.plex.tv/desktop/index.html#!/search?query=The%20100',
     )
   })
 
@@ -91,7 +91,7 @@ describe('resolvePlexLink — id fallback chain', () => {
   it('falls back to Plex search when no id resolves but title is given', () => {
     const url = resolvePlexLink(EMPTY_MAP, 'srv', 'tv', { tmdbId: 1, title: 'Unmatched Show' })
     expect(url).toBe(
-      'http://theemeraldexchange.local:32400/web/index.html#!/search?query=Unmatched%20Show',
+      'https://app.plex.tv/desktop/index.html#!/search?query=Unmatched%20Show',
     )
   })
 
