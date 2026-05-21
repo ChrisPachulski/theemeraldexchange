@@ -280,14 +280,18 @@
   max-width: 1200px;
 }
 
-/* Beacon stage — give the gem room to rotate. The Beacon component
-   absolutely-positions to a HUD corner in the live app, so wrap it
-   in a relative stage that owns the layout here. */
+/* Beacon stage — give the gem room to rotate. The EmeraldMark canvas
+   is a bare block element; center it with grid place-items so it
+   sits dead-center regardless of its rendered size. The dead .beacon
+   selector overrides that lived here were left over from a prior
+   video-element-based mark — removed. */
 .walkthrough__demo--beacon {
   position: relative;
   width: 100%;
   max-width: 480px;
   aspect-ratio: 1 / 1;
+  display: grid;
+  place-items: center;
   border: 1px solid var(--border);
   border-radius: var(--r-xl);
   overflow: hidden;
@@ -300,22 +304,6 @@
   box-shadow:
     inset 0 1px 0 var(--frost),
     0 30px 60px -28px var(--ink);
-}
-
-/* Force the Beacon's absolute positioning to use THIS stage as origin
-   rather than the viewport, and center it. The component sets its own
-   inset/top/right values; we override with a centered transform. */
-.walkthrough__demo--beacon .beacon {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-}
-
-.walkthrough__demo--beacon .beacon__video {
-  position: static;
-  width: 80%;
-  height: 80%;
 }
 
 /* ── Sign-in block — same emerald-pill button as the old LoginScreen */
