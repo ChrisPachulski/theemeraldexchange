@@ -52,7 +52,7 @@
      roughly (87% from left, 22% from bottom) on a 1920×1080 viewport;
      vw/vh keep that proportional as the viewport scales. */
   right: 11vw;
-  bottom: 32vh;
+  bottom: 38vh;
   display: grid;
   place-items: center;
   pointer-events: none;
