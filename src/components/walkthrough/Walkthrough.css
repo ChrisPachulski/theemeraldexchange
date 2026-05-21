@@ -51,8 +51,8 @@
      bottom-right of the kraken composition. The spire's peak lives at
      roughly (87% from left, 22% from bottom) on a 1920×1080 viewport;
      vw/vh keep that proportional as the viewport scales. */
-  right: 11.5vw;
-  bottom: 42.75vh;
+  right: 11.45vw;
+  bottom: 42.85vh;
   display: grid;
   place-items: center;
   pointer-events: none;
