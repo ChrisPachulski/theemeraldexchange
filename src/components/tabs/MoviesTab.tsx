@@ -19,6 +19,7 @@ import { useSuggestedMovies } from '../../lib/hooks/useSuggested'
 import { useAiSuggestionsEnabled } from '../../lib/hooks/useAiSuggestionsEnabled'
 import { useUserApiKey } from '../../lib/hooks/useUserApiKey'
 import { useFeedback, useSetFeedback } from '../../lib/hooks/useUserFeedback'
+import { usePlexLinks } from '../../lib/hooks/usePlexLinks'
 import type { DotState } from '../search/FeedbackDots'
 import { TrendingRow } from '../search/TrendingRow'
 import { useCast } from '../../lib/hooks/useCast'
@@ -118,6 +119,7 @@ export function MoviesTab() {
   const confirm = useConfirm()
   const qc = useQueryClient()
   const { isAdmin } = useAuth()
+  const { linkFor: plexLinkFor } = usePlexLinks()
 
   const [adding, setAdding] = useState<MovieSearchResult | null>(null)
   const [viewing, setViewing] = useState<MovieSearchResult | Movie | null>(null)
@@ -293,6 +295,7 @@ export function MoviesTab() {
             error={search.error}
             results={search.data ?? []}
             libraryByTmdb={libraryByTmdb}
+            plexLinkFor={plexLinkFor}
             onCardClick={handleSearchClick}
           />
           {debouncedQuery.length < 2 && (
@@ -351,6 +354,7 @@ export function MoviesTab() {
             loading={library.isPending}
             error={library.error}
             items={filteredLibrary}
+            plexLinkFor={plexLinkFor}
             onCardClick={handleLibraryClick}
           />
         </>
@@ -406,6 +410,7 @@ export function MoviesTab() {
         castLoading={cast.isLoading}
         inLibrary={viewing !== null && 'id' in viewing}
         canRemove={isAdmin}
+        playUrl={viewing && 'id' in viewing ? plexLinkFor('movie', viewing.tmdbId) : null}
         onAdd={viewing && !('id' in viewing) ? () => {
           const item = viewing as MovieSearchResult
           setViewing(null)
@@ -434,10 +439,11 @@ type DiscoverProps = {
   error: unknown
   results: MovieSearchResult[]
   libraryByTmdb: Map<number, Movie>
+  plexLinkFor: (kind: 'movie' | 'tv', tmdbId: number) => string | null
   onCardClick: (m: MovieSearchResult) => void
 }
 
-function DiscoverResults({ query, loading, error, results, libraryByTmdb, onCardClick }: DiscoverProps) {
+function DiscoverResults({ query, loading, error, results, libraryByTmdb, plexLinkFor, onCardClick }: DiscoverProps) {
   if (query.length < 2) return null
   if (loading) return <LoadingPulse>Searching</LoadingPulse>
   if (error) {
@@ -466,6 +472,7 @@ function DiscoverResults({ query, loading, error, results, libraryByTmdb, onCard
             meta={meta || undefined}
             overview={item.overview}
             inLibrary={inLib}
+            playUrl={inLib ? plexLinkFor('movie', item.tmdbId) : null}
             onClick={() => onCardClick(item)}
           />
         )
@@ -480,10 +487,11 @@ type LibraryProps = {
   loading: boolean
   error: unknown
   items: Movie[]
+  plexLinkFor: (kind: 'movie' | 'tv', tmdbId: number) => string | null
   onCardClick: (m: Movie) => void
 }
 
-function LibraryResults({ query, letter, loading, error, items, onCardClick }: LibraryProps) {
+function LibraryResults({ query, letter, loading, error, items, plexLinkFor, onCardClick }: LibraryProps) {
   if (loading) return <LoadingPulse>Loading library</LoadingPulse>
   if (error) {
     return (
@@ -521,6 +529,8 @@ function LibraryResults({ query, letter, loading, error, items, onCardClick }: L
             year={m.year}
             meta={meta || undefined}
             overview={m.overview}
+            inLibrary
+            playUrl={plexLinkFor('movie', m.tmdbId)}
             onClick={() => onCardClick(m)}
           />
         )

@@ -62,6 +62,58 @@
   color: var(--text-subtle);
 }
 
+/* Play-in-Plex overlay — centered on the poster of in-library cards.
+   Quiet at rest (low-opacity ring), opaque on hover/focus. Same emerald
+   palette as the rest of the system. The icon is a CSS triangle so we
+   don't pull in an icon font; the ::after pseudo carries the wedge. */
+.media-card__play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 56px;
+  height: 56px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  border: 1.5px solid var(--emerald);
+  background: oklch(0 0 0 / 0.55);
+  backdrop-filter: blur(4px);
+  opacity: 0.7;
+  cursor: pointer;
+  text-decoration: none;
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+  z-index: 2; /* above the poster image, below the badge if they ever overlap */
+}
+
+.media-card:hover .media-card__play,
+.media-card__play:focus-visible {
+  opacity: 1;
+  background: oklch(0 0 0 / 0.7);
+  box-shadow: 0 4px 14px -2px oklch(0.62 0.180 158 / 0.45);
+}
+
+.media-card__play:hover,
+.media-card__play:focus-visible {
+  transform: translate(-50%, -50%) scale(1.06);
+}
+
+.media-card__play-icon {
+  /* Right-pointing wedge. Slight right-offset (margin-left) so it
+     visually centers inside the circle — a triangle's optical center
+     sits left of its geometric center. */
+  width: 0;
+  height: 0;
+  border-top: 10px solid transparent;
+  border-bottom: 10px solid transparent;
+  border-left: 16px solid var(--emerald);
+  margin-left: 4px;
+}
+
 .media-card__badge {
   /* Pill (Active Theory's signature 500px radius) breaking the poster corner.
      Wide uppercase tracking, dot-prefixed for a HUD/telemetry feel. */
