@@ -267,8 +267,14 @@ export function Walkthrough() {
       <Kraken variant="kraken" />
       <main className="walkthrough" role="main">
         <header className="walkthrough__hero" aria-labelledby="hero-title">
+          {/* Brand gem sits on the bottom-right rock spire so the
+              emerald reads as treasure-on-stone instead of floating
+              midair over the kraken's face. Aria-hidden because the
+              eyebrow already carries the brand name for screen readers. */}
+          <div className="walkthrough__hero-gem" aria-hidden="true">
+            <EmeraldMark width={104} variant="single" className="walkthrough__brand-mark" />
+          </div>
           <div className="walkthrough__hero-card">
-            <EmeraldMark width={120} variant="single" className="walkthrough__brand-mark" />
             <p className="walkthrough__eyebrow">The Emerald Exchange</p>
             <h1 id="hero-title" className="walkthrough__hero-title">
               A private members’ page<br />for a household media library.
