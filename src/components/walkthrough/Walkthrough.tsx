@@ -272,7 +272,7 @@ export function Walkthrough() {
               midair over the kraken's face. Aria-hidden because the
               eyebrow already carries the brand name for screen readers. */}
           <div className="walkthrough__hero-gem" aria-hidden="true">
-            <EmeraldMark width={104} variant="single" className="walkthrough__brand-mark" />
+            <EmeraldMark width={84} variant="single" className="walkthrough__brand-mark" />
           </div>
           <div className="walkthrough__hero-card">
             <p className="walkthrough__eyebrow">The Emerald Exchange</p>
