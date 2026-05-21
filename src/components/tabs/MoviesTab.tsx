@@ -410,7 +410,15 @@ export function MoviesTab() {
         castLoading={cast.isLoading}
         inLibrary={viewing !== null && 'id' in viewing}
         canRemove={isAdmin}
-        playUrl={viewing && 'id' in viewing ? plexLinkFor('movie', viewing.tmdbId) : null}
+        playUrl={
+          viewing
+            ? plexLinkFor('movie', {
+                tmdbId: viewing.tmdbId,
+                imdbId: viewing.imdbId ?? null,
+                title: viewing.title,
+              })
+            : null
+        }
         onAdd={viewing && !('id' in viewing) ? () => {
           const item = viewing as MovieSearchResult
           setViewing(null)
@@ -439,7 +447,7 @@ type DiscoverProps = {
   error: unknown
   results: MovieSearchResult[]
   libraryByTmdb: Map<number, Movie>
-  plexLinkFor: (kind: 'movie' | 'tv', tmdbId: number) => string | null
+  plexLinkFor: ReturnType<typeof usePlexLinks>['linkFor']
   onCardClick: (m: MovieSearchResult) => void
 }
 
@@ -472,7 +480,15 @@ function DiscoverResults({ query, loading, error, results, libraryByTmdb, plexLi
             meta={meta || undefined}
             overview={item.overview}
             inLibrary={inLib}
-            playUrl={inLib ? plexLinkFor('movie', item.tmdbId) : null}
+            playUrl={
+              inLib
+                ? plexLinkFor('movie', {
+                    tmdbId: item.tmdbId,
+                    imdbId: item.imdbId ?? null,
+                    title: item.title,
+                  })
+                : null
+            }
             onClick={() => onCardClick(item)}
           />
         )
@@ -487,7 +503,7 @@ type LibraryProps = {
   loading: boolean
   error: unknown
   items: Movie[]
-  plexLinkFor: (kind: 'movie' | 'tv', tmdbId: number) => string | null
+  plexLinkFor: ReturnType<typeof usePlexLinks>['linkFor']
   onCardClick: (m: Movie) => void
 }
 
@@ -530,7 +546,11 @@ function LibraryResults({ query, letter, loading, error, items, plexLinkFor, onC
             meta={meta || undefined}
             overview={m.overview}
             inLibrary
-            playUrl={plexLinkFor('movie', m.tmdbId)}
+            playUrl={plexLinkFor('movie', {
+              tmdbId: m.tmdbId,
+              imdbId: m.imdbId ?? null,
+              title: m.title,
+            })}
             onClick={() => onCardClick(m)}
           />
         )

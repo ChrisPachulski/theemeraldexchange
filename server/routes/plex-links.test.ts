@@ -91,7 +91,10 @@ describe('plex-links — resolver', () => {
     })
   }
 
-  it('parses tmdb:// GUIDs into { movie, tv } maps with ratingKeys', async () => {
+  type Kind = { byTmdb: Record<string, string>; byTvdb: Record<string, string>; byImdb: Record<string, string> }
+  type Body = { movie: Kind; tv: Kind }
+
+  it('indexes items by every external id Plex attaches (tmdb / tvdb / imdb)', async () => {
     vi.stubGlobal(
       'fetch',
       stubPlex({
@@ -99,46 +102,54 @@ describe('plex-links — resolver', () => {
           '1': [
             { ratingKey: '101', title: 'Inception', Guid: [{ id: 'tmdb://27205' }, { id: 'imdb://tt1375666' }] },
             { ratingKey: '102', title: 'Arrival', Guid: [{ id: 'tmdb://329865' }] },
-            { ratingKey: '103', title: 'Unmatched', Guid: [{ id: 'imdb://tt9999999' }] }, // no tmdb GUID
+            { ratingKey: '103', title: 'Imdb-only', Guid: [{ id: 'imdb://tt9999999' }] },
           ],
           '2': [
-            { ratingKey: '201', title: 'Severance', Guid: [{ id: 'tmdb://95396' }] },
+            // Critical: legacy Plex TV Series agent emits ONLY tvdb://.
+            // Pre-fix this row produced no map entry and the icon never
+            // rendered for households still on the old agent.
+            { ratingKey: '201', title: 'The 100', Guid: [{ id: 'tvdb://121361' }] },
+            { ratingKey: '202', title: 'Severance', Guid: [{ id: 'tmdb://95396' }, { id: 'tvdb://371980' }] },
           ],
         },
       }),
     )
     const r = await appUnderTest().request('/library-links', { headers: { Cookie: await userCookie() } })
     expect(r.status).toBe(200)
-    const body = (await r.json()) as { movie: Record<string, string>; tv: Record<string, string> }
-    expect(body.movie['27205']).toBe('101')
-    expect(body.movie['329865']).toBe('102')
-    expect(body.movie['103']).toBeUndefined()
-    expect(body.tv['95396']).toBe('201')
+    const body = (await r.json()) as Body
+    expect(body.movie.byTmdb['27205']).toBe('101')
+    expect(body.movie.byImdb['tt1375666']).toBe('101')
+    expect(body.movie.byTmdb['329865']).toBe('102')
+    expect(body.movie.byImdb['tt9999999']).toBe('103')
+    // tvdb-only TV item resolves via byTvdb (regression guard).
+    expect(body.tv.byTvdb['121361']).toBe('201')
+    expect(body.tv.byTmdb['95396']).toBe('202')
+    expect(body.tv.byTvdb['371980']).toBe('202')
   })
 
-  it('strips query suffixes from tmdb GUIDs (Plex sometimes appends `?lang=…`)', async () => {
+  it('strips query suffixes from GUIDs (Plex sometimes appends `?lang=…`)', async () => {
     vi.stubGlobal(
       'fetch',
       stubPlex({
         metadataByKey: {
-          '1': [
-            { ratingKey: '999', title: 'Edge case', Guid: [{ id: 'tmdb://12345?lang=en' }] },
-          ],
+          '1': [{ ratingKey: '999', Guid: [{ id: 'tmdb://12345?lang=en' }] }],
+          '2': [{ ratingKey: '888', Guid: [{ id: 'tvdb://77777?lang=en' }] }],
         },
       }),
     )
     const r = await appUnderTest().request('/library-links', { headers: { Cookie: await userCookie() } })
-    const body = (await r.json()) as { movie: Record<string, string>; tv: Record<string, string> }
-    expect(body.movie['12345']).toBe('999')
+    const body = (await r.json()) as Body
+    expect(body.movie.byTmdb['12345']).toBe('999')
+    expect(body.tv.byTvdb['77777']).toBe('888')
   })
 
-  it('returns an empty map when Plex has no Movie or Show sections', async () => {
+  it('returns empty kind maps when Plex has no Movie or Show sections', async () => {
     vi.stubGlobal('fetch', stubPlex({ sections: [{ key: '3', type: 'artist', title: 'Music' }] }))
     const r = await appUnderTest().request('/library-links', { headers: { Cookie: await userCookie() } })
     expect(r.status).toBe(200)
-    const body = (await r.json()) as { movie: Record<string, string>; tv: Record<string, string> }
-    expect(body.movie).toEqual({})
-    expect(body.tv).toEqual({})
+    const body = (await r.json()) as Body
+    expect(body.movie).toEqual({ byTmdb: {}, byTvdb: {}, byImdb: {} })
+    expect(body.tv).toEqual({ byTmdb: {}, byTvdb: {}, byImdb: {} })
   })
 
   it('502 plex_unreachable when /library/sections errors', async () => {
@@ -188,9 +199,9 @@ describe('plex-links — resolver', () => {
     )
     const r = await appUnderTest().request('/library-links', { headers: { Cookie: await userCookie() } })
     expect(r.status).toBe(200)
-    const body = (await r.json()) as { movie: Record<string, string>; tv: Record<string, string> }
-    expect(body.movie).toEqual({}) // movie section failed
-    expect(body.tv['95396']).toBe('201') // show section succeeded
+    const body = (await r.json()) as Body
+    expect(body.movie).toEqual({ byTmdb: {}, byTvdb: {}, byImdb: {} }) // movie section failed
+    expect(body.tv.byTmdb['95396']).toBe('201') // show section succeeded
     expect(calls).toBe(1)
   })
 

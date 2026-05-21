@@ -3,9 +3,17 @@ import { apiUrl } from '../api/base'
 
 // Deep-link resolver for in-library titles. The server route
 // /api/plex/library-links walks every Plex library section and emits
-// a flat `{ movie: { tmdbId: ratingKey }, tv: { tmdbId: ratingKey } }`
-// map. Combined with the household's PLEX_SERVER_ID it produces a URL
-// that opens the title's page in Plex web (PLAY is one tap away).
+// a map indexed by tmdb / tvdb / imdb so the SPA can resolve a ratingKey
+// regardless of which Plex agent built the library. Combined with the
+// household's PLEX_SERVER_ID this produces a URL that opens the title's
+// page in Plex web (PLAY is one tap away).
+//
+// When no id matches (item not in Plex's GUID set yet, or Plex hasn't
+// indexed it), linkFor falls back to a Plex search URL so the overlay
+// still does something useful — the user lands on Plex's search results
+// for the title and one more tap gets them watching. The icon is only
+// suppressed when both the id lookup AND the title fallback have nothing
+// to work with.
 //
 // 5-minute staleTime matches the server-side cache so React Query and
 // the Plex round-trip live on the same rhythm.
@@ -14,21 +22,26 @@ const PLEX_WEB_BASE = 'http://theemeraldexchange.local:32400/web'
 const PLEX_LIBRARY_LINKS_PATH = '/api/plex/library-links'
 const PLEX_SERVER_ID_PATH = '/api/plex/server-id'
 
-type LinkMap = {
-  movie: Record<string, string>
-  tv: Record<string, string>
+export type KindMap = {
+  byTmdb: Record<string, string>
+  byTvdb: Record<string, string>
+  byImdb: Record<string, string>
 }
 
+export type LinkMap = { movie: KindMap; tv: KindMap }
 type ServerIdResponse = { serverId: string | null }
+
+function emptyKindMap(): KindMap {
+  return { byTmdb: {}, byTvdb: {}, byImdb: {} }
+}
 
 async function fetchLinks(): Promise<LinkMap> {
   const r = await fetch(apiUrl(PLEX_LIBRARY_LINKS_PATH), { credentials: 'include' })
   if (!r.ok) {
     // 409 (no_plex_token) and 502 (plex_unreachable) both yield an
-    // empty map — the UI simply doesn't render the play overlay, and
-    // the existing card behavior is preserved. We don't toast or
-    // surface this to the user; the absence of the icon is the signal.
-    return { movie: {}, tv: {} }
+    // empty map — linkFor still falls back to the search URL when a
+    // title is supplied, so the overlay can render in degraded mode.
+    return { movie: emptyKindMap(), tv: emptyKindMap() }
   }
   return (await r.json()) as LinkMap
 }
@@ -40,19 +53,60 @@ async function fetchServerId(): Promise<string | null> {
   return body.serverId ?? null
 }
 
-// Builds the Plex web deep-link URL. When serverId is missing (e.g.
-// PLEX_SERVER_ID env var not set), falls back to the Plex root URL —
-// better than nothing; the household member can still navigate.
-// Exported so the URL contract can be unit-tested without standing up
-// React Query in jsdom.
+// Builds the Plex web deep-link URL given a ratingKey. When serverId
+// is missing (PLEX_SERVER_ID env var unset), falls back to the Plex
+// root URL.
 export function buildPlexDeepLink(serverId: string | null, ratingKey: string): string {
   if (!serverId) return PLEX_WEB_BASE
   const key = encodeURIComponent(`/library/metadata/${ratingKey}`)
   return `${PLEX_WEB_BASE}/index.html#!/server/${serverId}/details?key=${key}`
 }
 
+// Plex search URL — lands the user on Plex web's search results for
+// the title. Used when the GUID lookup misses (e.g. Plex hasn't matched
+// the item, or the library was built with an agent that doesn't emit
+// any of the three external ids we index by).
+export function buildPlexSearchLink(title: string): string {
+  return `${PLEX_WEB_BASE}/index.html#!/search?query=${encodeURIComponent(title)}`
+}
+
+export type LinkLookup = {
+  tmdbId?: number | string | null
+  tvdbId?: number | string | null
+  imdbId?: string | null
+  title?: string | null
+}
+
+// Pure resolver — exported so the fallback chain (tmdb → tvdb → imdb →
+// search-by-title) can be unit-tested without standing up React Query.
+// Returns null only when no external id matches AND no title is given.
+export function resolvePlexLink(
+  map: LinkMap | null | undefined,
+  serverId: string | null,
+  kind: 'movie' | 'tv',
+  lookup: LinkLookup,
+): string | null {
+  const kindMap = map?.[kind] ?? { byTmdb: {}, byTvdb: {}, byImdb: {} }
+  const tmdb = lookup.tmdbId != null ? String(lookup.tmdbId) : null
+  const tvdb = lookup.tvdbId != null ? String(lookup.tvdbId) : null
+  const imdb = lookup.imdbId ?? null
+
+  const ratingKey =
+    (tmdb && kindMap.byTmdb[tmdb]) ||
+    (tvdb && kindMap.byTvdb[tvdb]) ||
+    (imdb && kindMap.byImdb[imdb]) ||
+    null
+
+  if (ratingKey) return buildPlexDeepLink(serverId, ratingKey)
+
+  const title = lookup.title?.trim()
+  if (title) return buildPlexSearchLink(title)
+
+  return null
+}
+
 export function usePlexLinks(): {
-  linkFor: (kind: 'movie' | 'tv', tmdbId: number) => string | null
+  linkFor: (kind: 'movie' | 'tv', lookup: LinkLookup) => string | null
   isLoading: boolean
 } {
   const links = useQuery({
@@ -68,13 +122,8 @@ export function usePlexLinks(): {
     staleTime: Infinity,
   })
 
-  const linkFor = (kind: 'movie' | 'tv', tmdbId: number): string | null => {
-    const map = links.data
-    if (!map) return null
-    const ratingKey = map[kind][String(tmdbId)]
-    if (!ratingKey) return null
-    return buildPlexDeepLink(serverId.data ?? null, ratingKey)
-  }
+  const linkFor = (kind: 'movie' | 'tv', lookup: LinkLookup): string | null =>
+    resolvePlexLink(links.data ?? null, serverId.data ?? null, kind, lookup)
 
   return {
     linkFor,
