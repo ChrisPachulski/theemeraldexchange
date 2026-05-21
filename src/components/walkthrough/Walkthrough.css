@@ -47,8 +47,12 @@
    illusion of light catching the gem against the stone. */
 .walkthrough__hero-gem {
   position: absolute;
-  right: 5vw;
-  bottom: 14vh;
+  /* Anchored so the gem's base sits on the tallest rock spire in the
+     bottom-right of the kraken composition. The spire's peak lives at
+     roughly (87% from left, 22% from bottom) on a 1920×1080 viewport;
+     vw/vh keep that proportional as the viewport scales. */
+  right: 11vw;
+  bottom: 22vh;
   display: grid;
   place-items: center;
   pointer-events: none;
