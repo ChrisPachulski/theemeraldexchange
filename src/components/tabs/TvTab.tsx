@@ -415,7 +415,16 @@ export function TvTab() {
         castLoading={cast.isLoading}
         inLibrary={viewing !== null && 'id' in viewing}
         canRemove={isAdmin}
-        playUrl={viewing && 'id' in viewing && viewing.tmdbId ? plexLinkFor('tv', viewing.tmdbId) : null}
+        playUrl={
+          viewing
+            ? plexLinkFor('tv', {
+                tmdbId: viewing.tmdbId ?? null,
+                tvdbId: viewing.tvdbId,
+                imdbId: viewing.imdbId ?? null,
+                title: viewing.title,
+              })
+            : null
+        }
         seasons={viewing && 'id' in viewing && viewing.seasons ? viewing.seasons.map((s) => {
           const eps = episodesBySeason.get(s.seasonNumber)
           const firstAired = eps && eps.length > 0
@@ -462,7 +471,7 @@ type DiscoverProps = {
   error: unknown
   results: SeriesSearchResult[]
   libraryByTvdb: Map<number, Series>
-  plexLinkFor: (kind: 'movie' | 'tv', tmdbId: number) => string | null
+  plexLinkFor: ReturnType<typeof usePlexLinks>['linkFor']
   onCardClick: (s: SeriesSearchResult) => void
 }
 
@@ -495,7 +504,16 @@ function DiscoverResults({ query, loading, error, results, libraryByTvdb, plexLi
             meta={meta || undefined}
             overview={item.overview}
             inLibrary={inLib}
-            playUrl={inLib && item.tmdbId ? plexLinkFor('tv', item.tmdbId) : null}
+            playUrl={
+              inLib
+                ? plexLinkFor('tv', {
+                    tmdbId: item.tmdbId ?? null,
+                    tvdbId: item.tvdbId,
+                    imdbId: item.imdbId ?? null,
+                    title: item.title,
+                  })
+                : null
+            }
             onClick={() => onCardClick(item)}
           />
         )
@@ -510,7 +528,7 @@ type LibraryProps = {
   loading: boolean
   error: unknown
   items: Series[]
-  plexLinkFor: (kind: 'movie' | 'tv', tmdbId: number) => string | null
+  plexLinkFor: ReturnType<typeof usePlexLinks>['linkFor']
   onCardClick: (s: Series) => void
 }
 
@@ -553,7 +571,12 @@ function LibraryResults({ query, letter, loading, error, items, plexLinkFor, onC
             meta={meta || undefined}
             overview={s.overview}
             inLibrary
-            playUrl={s.tmdbId ? plexLinkFor('tv', s.tmdbId) : null}
+            playUrl={plexLinkFor('tv', {
+              tmdbId: s.tmdbId ?? null,
+              tvdbId: s.tvdbId,
+              imdbId: s.imdbId ?? null,
+              title: s.title,
+            })}
             onClick={() => onCardClick(s)}
           />
         )

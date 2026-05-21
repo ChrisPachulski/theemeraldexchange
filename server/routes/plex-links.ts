@@ -1,13 +1,16 @@
-// /api/plex/library-links — resolves tmdb ids to Plex ratingKeys for
-// every item the household has in Plex. The SPA uses this to render a
-// "Play in Plex" overlay on in-library cards that deep-links straight
-// to the title's metadata page in Plex web (where PLAY is one tap).
+// /api/plex/library-links — resolves external ids (tmdb / tvdb / imdb)
+// to Plex ratingKeys for every item the household has in Plex. The SPA
+// uses this to render a "Play in Plex" overlay on in-library cards that
+// deep-links straight to the title's metadata page in Plex web (where
+// PLAY is one tap).
 //
-// Why a resolver: Sonarr/Radarr carry tmdbId; Plex web URLs need
-// `ratingKey` (Plex's internal id) + `PLEX_SERVER_ID` (the server's
-// machine identifier). This route walks every Plex library section,
-// parses each item's GUIDs, and emits a flat
-// `{ movie: { tmdbId: ratingKey }, tv: { tmdbId: ratingKey } }` map.
+// Why a multi-id resolver: Sonarr/Radarr carry tmdbId AND tvdbId/imdbId.
+// Plex's GUID set depends on the agent the library was built with —
+// libraries built with the legacy "Plex TV Series (TVDB)" agent emit
+// only tvdb:// GUIDs, so a tmdb-only resolver returns an empty TV map
+// and the overlay never renders for TV. Walking every GUID and indexing
+// by all three id systems makes the overlay bulletproof regardless of
+// which agent populated the library.
 //
 // Cost: one Plex `/library/sections` + N section walks per cache miss.
 // On a 1000-item library this is ~200–500ms end-to-end. Cached for
@@ -22,14 +25,17 @@ import { env } from '../env.js'
 export const plexLinks = new Hono<Env>()
 plexLinks.use('*', requireAuth)
 
-export type LinkMap = {
-  movie: Record<string, string>
-  tv: Record<string, string>
+type KindMap = {
+  byTmdb: Record<string, string>
+  byTvdb: Record<string, string>
+  byImdb: Record<string, string>
 }
 
-// 5-minute TTL — matches the LIBRARY_CACHE_TTL_MS rhythm in the
-// suggestions route; the Plex library doesn't churn faster than that
-// in practice (new items take longer than 5 min to land + scan anyway).
+export type LinkMap = {
+  movie: KindMap
+  tv: KindMap
+}
+
 const PLEX_LINKS_TTL_MS = 5 * 60_000
 
 type CacheEntry = { value: LinkMap; expiresAt: number }
@@ -55,23 +61,29 @@ type PlexMetadata = {
   Guid?: PlexGuid[]
 }
 
-// Extracts the numeric tmdb id from a Plex GUID array. Plex stores
-// each external id as a separate entry like { id: "tmdb://12345" }.
-// Returns null when no tmdb GUID is attached (some library items
-// haven't matched yet; the SPA falls back to a Plex title search for
-// those).
-function tmdbIdFromGuids(guids: PlexGuid[] | undefined): string | null {
-  if (!guids) return null
+type ExternalIds = { tmdb: string | null; tvdb: string | null; imdb: string | null }
+
+function stripQuery(id: string): string {
+  const qIx = id.indexOf('?')
+  return qIx >= 0 ? id.slice(0, qIx) : id
+}
+
+// Extracts every external id Plex attaches to an item. Plex stores
+// each external id as a separate entry like { id: "tmdb://12345" } —
+// `tvdb://`, `imdb://`, and `tmdb://` are the three we care about. Some
+// libraries only emit one of the three depending on which Plex agent
+// scanned them; indexing by all three guarantees a match regardless of
+// agent.
+function externalIdsFromGuids(guids: PlexGuid[] | undefined): ExternalIds {
+  const out: ExternalIds = { tmdb: null, tvdb: null, imdb: null }
+  if (!guids) return out
   for (const g of guids) {
     if (!g.id) continue
-    if (g.id.startsWith('tmdb://')) {
-      const id = g.id.slice('tmdb://'.length)
-      // Plex sometimes appends a `?lang=…`; strip it.
-      const qIx = id.indexOf('?')
-      return qIx >= 0 ? id.slice(0, qIx) : id
-    }
+    if (g.id.startsWith('tmdb://')) out.tmdb = stripQuery(g.id.slice('tmdb://'.length))
+    else if (g.id.startsWith('tvdb://')) out.tvdb = stripQuery(g.id.slice('tvdb://'.length))
+    else if (g.id.startsWith('imdb://')) out.imdb = stripQuery(g.id.slice('imdb://'.length))
   }
-  return null
+  return out
 }
 
 async function plexJson<T>(
@@ -92,29 +104,21 @@ async function plexJson<T>(
   return (await res.json()) as T
 }
 
+function emptyKindMap(): KindMap {
+  return { byTmdb: {}, byTvdb: {}, byImdb: {} }
+}
+
 async function buildMap(token: string): Promise<LinkMap> {
-  type SectionsResponse = {
-    MediaContainer: {
-      Directory?: PlexSection[]
-    }
-  }
-  type AllResponse = {
-    MediaContainer: {
-      Metadata?: PlexMetadata[]
-    }
-  }
+  type SectionsResponse = { MediaContainer: { Directory?: PlexSection[] } }
+  type AllResponse = { MediaContainer: { Metadata?: PlexMetadata[] } }
 
   const sectionsBody = await plexJson<SectionsResponse>('/library/sections', token)
   const sections = sectionsBody.MediaContainer.Directory ?? []
   const movieSections = sections.filter((s) => s.type === 'movie')
   const tvSections = sections.filter((s) => s.type === 'show')
 
-  const map: LinkMap = { movie: {}, tv: {} }
+  const map: LinkMap = { movie: emptyKindMap(), tv: emptyKindMap() }
 
-  // Fetch every section's `/all?includeGuids=1`. Parallel across
-  // sections; serial inside a section (one Plex call returns the
-  // whole section's metadata). Most households have 1 of each — this
-  // is effectively two parallel calls.
   const movieResults = await Promise.all(
     movieSections.map((s) =>
       plexJson<AllResponse>(`/library/sections/${s.key}/all?includeGuids=1`, token).catch(
@@ -132,14 +136,18 @@ async function buildMap(token: string): Promise<LinkMap> {
 
   for (const r of movieResults) {
     for (const item of r.MediaContainer.Metadata ?? []) {
-      const tmdb = tmdbIdFromGuids(item.Guid)
-      if (tmdb) map.movie[tmdb] = item.ratingKey
+      const ids = externalIdsFromGuids(item.Guid)
+      if (ids.tmdb) map.movie.byTmdb[ids.tmdb] = item.ratingKey
+      if (ids.tvdb) map.movie.byTvdb[ids.tvdb] = item.ratingKey
+      if (ids.imdb) map.movie.byImdb[ids.imdb] = item.ratingKey
     }
   }
   for (const r of tvResults) {
     for (const item of r.MediaContainer.Metadata ?? []) {
-      const tmdb = tmdbIdFromGuids(item.Guid)
-      if (tmdb) map.tv[tmdb] = item.ratingKey
+      const ids = externalIdsFromGuids(item.Guid)
+      if (ids.tmdb) map.tv.byTmdb[ids.tmdb] = item.ratingKey
+      if (ids.tvdb) map.tv.byTvdb[ids.tvdb] = item.ratingKey
+      if (ids.imdb) map.tv.byImdb[ids.imdb] = item.ratingKey
     }
   }
   return map
@@ -174,9 +182,6 @@ plexLinks.get('/library-links', async (c) => {
   }
 })
 
-// /server-id surfaces the configured PLEX_SERVER_ID so the SPA can
-// build deep links without needing a Vite-time env variable. Returned
-// as `null` when unset — the SPA falls back to the Plex root URL.
 plexLinks.get('/server-id', async (c) => {
   return c.json({ serverId: env.plexServerId })
 })
