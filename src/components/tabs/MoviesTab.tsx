@@ -295,7 +295,6 @@ export function MoviesTab() {
             error={search.error}
             results={search.data ?? []}
             libraryByTmdb={libraryByTmdb}
-            plexLinkFor={plexLinkFor}
             onCardClick={handleSearchClick}
           />
           {debouncedQuery.length < 2 && (
@@ -354,7 +353,6 @@ export function MoviesTab() {
             loading={library.isPending}
             error={library.error}
             items={filteredLibrary}
-            plexLinkFor={plexLinkFor}
             onCardClick={handleLibraryClick}
           />
         </>
@@ -447,11 +445,10 @@ type DiscoverProps = {
   error: unknown
   results: MovieSearchResult[]
   libraryByTmdb: Map<number, Movie>
-  plexLinkFor: ReturnType<typeof usePlexLinks>['linkFor']
   onCardClick: (m: MovieSearchResult) => void
 }
 
-function DiscoverResults({ query, loading, error, results, libraryByTmdb, plexLinkFor, onCardClick }: DiscoverProps) {
+function DiscoverResults({ query, loading, error, results, libraryByTmdb, onCardClick }: DiscoverProps) {
   if (query.length < 2) return null
   if (loading) return <LoadingPulse>Searching</LoadingPulse>
   if (error) {
@@ -480,15 +477,6 @@ function DiscoverResults({ query, loading, error, results, libraryByTmdb, plexLi
             meta={meta || undefined}
             overview={item.overview}
             inLibrary={inLib}
-            playUrl={
-              inLib
-                ? plexLinkFor('movie', {
-                    tmdbId: item.tmdbId,
-                    imdbId: item.imdbId ?? null,
-                    title: item.title,
-                  })
-                : null
-            }
             onClick={() => onCardClick(item)}
           />
         )
@@ -503,11 +491,10 @@ type LibraryProps = {
   loading: boolean
   error: unknown
   items: Movie[]
-  plexLinkFor: ReturnType<typeof usePlexLinks>['linkFor']
   onCardClick: (m: Movie) => void
 }
 
-function LibraryResults({ query, letter, loading, error, items, plexLinkFor, onCardClick }: LibraryProps) {
+function LibraryResults({ query, letter, loading, error, items, onCardClick }: LibraryProps) {
   if (loading) return <LoadingPulse>Loading library</LoadingPulse>
   if (error) {
     return (
@@ -546,11 +533,6 @@ function LibraryResults({ query, letter, loading, error, items, plexLinkFor, onC
             meta={meta || undefined}
             overview={m.overview}
             inLibrary
-            playUrl={plexLinkFor('movie', {
-              tmdbId: m.tmdbId,
-              imdbId: m.imdbId ?? null,
-              title: m.title,
-            })}
             onClick={() => onCardClick(m)}
           />
         )
