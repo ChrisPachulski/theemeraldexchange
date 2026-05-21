@@ -15,28 +15,62 @@
 /* ── Hero: full viewport, brand + sign-in over the kraken ─────────── */
 
 .walkthrough__hero {
+  position: relative;
   min-height: 100svh;
-  display: grid;
-  place-items: center;
   padding: var(--s-7) var(--s-5);
 }
 
-/* Hero copy block — no surface, no blur, no border. The kraken video
-   (rendered by <Kraken/> a layer below) is the backdrop. The block
-   keeps its layout grid + max-width + padding so the gem, eyebrow,
-   title, and sign-in still breathe and don't bleed to the viewport
-   edges; everything else that used to live here was glass chrome
-   that hid the cthulhu. */
+/* Hero copy block anchored top-right. The kraken's silhouette dominates
+   the left and bottom of the frame; the open sky/storm is on the right,
+   so the copy reads cleanly there without fighting the creature. Pulled
+   in from the edge with padding so the text doesn't kiss the viewport
+   border. */
 .walkthrough__hero-card {
-  width: 100%;
-  max-width: 720px;
-  padding: var(--s-8) var(--s-7);
+  position: absolute;
+  top: var(--s-6);
+  right: var(--s-6);
+  max-width: 560px;
+  padding: var(--s-5) var(--s-5) var(--s-6);
   display: grid;
   gap: var(--s-4);
   background: transparent;
   border: 0;
   box-shadow: none;
   text-align: left;
+  justify-items: start;
+}
+
+/* The brand gem sits on the rock spire in the bottom-right of the
+   kraken composition — treasure-on-stone reading. Anchor in viewport
+   units so the gem holds its position relative to the rock as the
+   kraken video re-flows with the viewport. Drop-shadow gives the
+   illusion of light catching the gem against the stone. */
+.walkthrough__hero-gem {
+  position: absolute;
+  right: 5vw;
+  bottom: 14vh;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  filter:
+    drop-shadow(0 6px 14px oklch(0 0 0 / 0.55))
+    drop-shadow(0 0 22px oklch(0.62 0.180 158 / 0.35));
+}
+
+/* Mobile: the kraken video switches to object-fit:contain so the rock
+   spires move; recenter the gem above the copy block. */
+@media (max-width: 720px) {
+  .walkthrough__hero-card {
+    position: static;
+    max-width: 100%;
+    padding: var(--s-6) var(--s-4) var(--s-5);
+  }
+  .walkthrough__hero-gem {
+    position: relative;
+    right: auto;
+    bottom: auto;
+    margin: 0 auto var(--s-3);
+  }
 }
 
 .walkthrough__hero-title {
