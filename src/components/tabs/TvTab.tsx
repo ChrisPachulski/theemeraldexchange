@@ -20,6 +20,7 @@ import { useSuggestedTv } from '../../lib/hooks/useSuggested'
 import { useAiSuggestionsEnabled } from '../../lib/hooks/useAiSuggestionsEnabled'
 import { useUserApiKey } from '../../lib/hooks/useUserApiKey'
 import { useFeedback, useSetFeedback } from '../../lib/hooks/useUserFeedback'
+import { usePlexLinks } from '../../lib/hooks/usePlexLinks'
 import type { DotState } from '../search/FeedbackDots'
 import { TrendingRow } from '../search/TrendingRow'
 import { useCast } from '../../lib/hooks/useCast'
@@ -106,6 +107,7 @@ export function TvTab() {
   const confirm = useConfirm()
   const qc = useQueryClient()
   const { isAdmin } = useAuth()
+  const { linkFor: plexLinkFor } = usePlexLinks()
 
   const [adding, setAdding] = useState<SeriesSearchResult | null>(null)
   const [viewing, setViewing] = useState<SeriesSearchResult | Series | null>(null)
@@ -299,6 +301,7 @@ export function TvTab() {
             error={search.error}
             results={search.data ?? []}
             libraryByTvdb={libraryByTvdb}
+            plexLinkFor={plexLinkFor}
             onCardClick={handleSearchClick}
           />
           {debouncedQuery.length < 2 && (
@@ -357,6 +360,7 @@ export function TvTab() {
             loading={library.isPending}
             error={library.error}
             items={filteredLibrary}
+            plexLinkFor={plexLinkFor}
             onCardClick={handleLibraryClick}
           />
         </>
@@ -411,6 +415,7 @@ export function TvTab() {
         castLoading={cast.isLoading}
         inLibrary={viewing !== null && 'id' in viewing}
         canRemove={isAdmin}
+        playUrl={viewing && 'id' in viewing && viewing.tmdbId ? plexLinkFor('tv', viewing.tmdbId) : null}
         seasons={viewing && 'id' in viewing && viewing.seasons ? viewing.seasons.map((s) => {
           const eps = episodesBySeason.get(s.seasonNumber)
           const firstAired = eps && eps.length > 0
@@ -457,10 +462,11 @@ type DiscoverProps = {
   error: unknown
   results: SeriesSearchResult[]
   libraryByTvdb: Map<number, Series>
+  plexLinkFor: (kind: 'movie' | 'tv', tmdbId: number) => string | null
   onCardClick: (s: SeriesSearchResult) => void
 }
 
-function DiscoverResults({ query, loading, error, results, libraryByTvdb, onCardClick }: DiscoverProps) {
+function DiscoverResults({ query, loading, error, results, libraryByTvdb, plexLinkFor, onCardClick }: DiscoverProps) {
   if (query.length < 2) return null
   if (loading) return <LoadingPulse>Searching</LoadingPulse>
   if (error) {
@@ -489,6 +495,7 @@ function DiscoverResults({ query, loading, error, results, libraryByTvdb, onCard
             meta={meta || undefined}
             overview={item.overview}
             inLibrary={inLib}
+            playUrl={inLib && item.tmdbId ? plexLinkFor('tv', item.tmdbId) : null}
             onClick={() => onCardClick(item)}
           />
         )
@@ -503,10 +510,11 @@ type LibraryProps = {
   loading: boolean
   error: unknown
   items: Series[]
+  plexLinkFor: (kind: 'movie' | 'tv', tmdbId: number) => string | null
   onCardClick: (s: Series) => void
 }
 
-function LibraryResults({ query, letter, loading, error, items, onCardClick }: LibraryProps) {
+function LibraryResults({ query, letter, loading, error, items, plexLinkFor, onCardClick }: LibraryProps) {
   if (loading) return <LoadingPulse>Loading library</LoadingPulse>
   if (error) {
     return (
@@ -544,6 +552,8 @@ function LibraryResults({ query, letter, loading, error, items, onCardClick }: L
             year={s.year}
             meta={meta || undefined}
             overview={s.overview}
+            inLibrary
+            playUrl={s.tmdbId ? plexLinkFor('tv', s.tmdbId) : null}
             onClick={() => onCardClick(s)}
           />
         )

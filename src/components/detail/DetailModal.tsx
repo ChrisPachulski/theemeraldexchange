@@ -93,6 +93,10 @@ type Props = {
   onUpgrade?: () => void
   /** Whether the upgrade mutation is in flight (disables the button). */
   upgrading?: boolean
+  /** Deep link into Plex web for an in-library title. When present
+   *  alongside inLibrary=true, the action footer gains a primary
+   *  "Play in Plex →" button. Opens in a new tab. */
+  playUrl?: string | null
 }
 
 export function DetailModal({
@@ -119,6 +123,7 @@ export function DetailModal({
   addingSeason,
   onUpgrade,
   upgrading,
+  playUrl,
 }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const closeBtnRef = useRef<HTMLButtonElement>(null)
@@ -398,6 +403,16 @@ export function DetailModal({
             >
               Add to library
             </button>
+          )}
+          {inLibrary && playUrl && (
+            <a
+              className="detail__btn detail__btn--primary"
+              href={playUrl}
+              target="_blank"
+              rel="noopener"
+            >
+              Play in Plex →
+            </a>
           )}
           {inLibrary && onUpgrade && (
             <button
