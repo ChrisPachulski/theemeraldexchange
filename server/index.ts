@@ -24,6 +24,7 @@ import { sab } from './routes/sab.js'
 import { tmdb } from './routes/tmdb.js'
 import { users } from './routes/users.js'
 import { plexAdmin } from './routes/plex-admin.js'
+import { plexLinks } from './routes/plex-links.js'
 import { notifications } from './routes/notifications.js'
 import { grabs } from './routes/grabs.js'
 import { rejections } from './routes/rejections.js'
@@ -70,6 +71,11 @@ app.route('/api/radarr', radarr)
 app.route('/api/sab', sab)
 app.route('/api/tmdb', tmdb)
 app.route('/api/users', users)
+// Order matters: plexLinks (auth-only) is mounted BEFORE plexAdmin
+// (admin-only). Hono's first-match-wins routing means the admin
+// middleware on plexAdmin would otherwise leak onto /library-links and
+// /server-id and 403 every household member.
+app.route('/api/plex', plexLinks)
 app.route('/api/plex', plexAdmin)
 app.route('/api/notifications', notifications)
 app.route('/api/grabs', grabs)

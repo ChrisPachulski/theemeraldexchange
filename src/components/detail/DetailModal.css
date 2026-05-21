@@ -671,6 +671,20 @@
   outline-offset: 2px;
 }
 
+/* Anchor-as-button — `.detail__btn` is used on both <button> and <a>
+   (the "Play in Plex →" link). Anchors carry default text-decoration
+   and inline display from the browser; normalize them here so they
+   match the button siblings without disturbing native focus/click. */
+a.detail__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  /* Match the button's vertical centering — buttons have user-agent
+     line-height: normal which the anchor doesn't inherit by default. */
+  line-height: 1;
+}
+
 @media (max-width: 720px) {
   .detail__panel {
     width: 100vw;
