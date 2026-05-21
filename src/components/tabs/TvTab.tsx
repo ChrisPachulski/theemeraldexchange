@@ -301,7 +301,6 @@ export function TvTab() {
             error={search.error}
             results={search.data ?? []}
             libraryByTvdb={libraryByTvdb}
-            plexLinkFor={plexLinkFor}
             onCardClick={handleSearchClick}
           />
           {debouncedQuery.length < 2 && (
@@ -360,7 +359,6 @@ export function TvTab() {
             loading={library.isPending}
             error={library.error}
             items={filteredLibrary}
-            plexLinkFor={plexLinkFor}
             onCardClick={handleLibraryClick}
           />
         </>
@@ -471,11 +469,10 @@ type DiscoverProps = {
   error: unknown
   results: SeriesSearchResult[]
   libraryByTvdb: Map<number, Series>
-  plexLinkFor: ReturnType<typeof usePlexLinks>['linkFor']
   onCardClick: (s: SeriesSearchResult) => void
 }
 
-function DiscoverResults({ query, loading, error, results, libraryByTvdb, plexLinkFor, onCardClick }: DiscoverProps) {
+function DiscoverResults({ query, loading, error, results, libraryByTvdb, onCardClick }: DiscoverProps) {
   if (query.length < 2) return null
   if (loading) return <LoadingPulse>Searching</LoadingPulse>
   if (error) {
@@ -504,16 +501,6 @@ function DiscoverResults({ query, loading, error, results, libraryByTvdb, plexLi
             meta={meta || undefined}
             overview={item.overview}
             inLibrary={inLib}
-            playUrl={
-              inLib
-                ? plexLinkFor('tv', {
-                    tmdbId: item.tmdbId ?? null,
-                    tvdbId: item.tvdbId,
-                    imdbId: item.imdbId ?? null,
-                    title: item.title,
-                  })
-                : null
-            }
             onClick={() => onCardClick(item)}
           />
         )
@@ -528,11 +515,10 @@ type LibraryProps = {
   loading: boolean
   error: unknown
   items: Series[]
-  plexLinkFor: ReturnType<typeof usePlexLinks>['linkFor']
   onCardClick: (s: Series) => void
 }
 
-function LibraryResults({ query, letter, loading, error, items, plexLinkFor, onCardClick }: LibraryProps) {
+function LibraryResults({ query, letter, loading, error, items, onCardClick }: LibraryProps) {
   if (loading) return <LoadingPulse>Loading library</LoadingPulse>
   if (error) {
     return (
@@ -571,12 +557,6 @@ function LibraryResults({ query, letter, loading, error, items, plexLinkFor, onC
             meta={meta || undefined}
             overview={s.overview}
             inLibrary
-            playUrl={plexLinkFor('tv', {
-              tmdbId: s.tmdbId ?? null,
-              tvdbId: s.tvdbId,
-              imdbId: s.imdbId ?? null,
-              title: s.title,
-            })}
             onClick={() => onCardClick(s)}
           />
         )
