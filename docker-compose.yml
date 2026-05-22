@@ -62,8 +62,9 @@ services:
       - "127.0.0.1:8001:8000"
     volumes:
       # SQLite DB + sentence-transformer cache live here so the catalog
-      # survives rebuilds. Bind-mount path mirrors the backend's pattern.
-      - "/mnt/user/appdata/exchange-backend/recommender:/data"
+      # survives rebuilds. Kept separate from /mnt/user/appdata/exchange-
+      # backend/recommender/ which is the rsync source dir for `build:`.
+      - "/mnt/user/appdata/exchange-backend/recommender-db:/data"
     environment:
       RECOMMENDER_DB_PATH: "/data/exchange.db"
       RECOMMENDER_HOST: "0.0.0.0"
