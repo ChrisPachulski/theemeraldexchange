@@ -9,6 +9,8 @@ api.theemeraldexchange.com       ──▶ Cloudflare Tunnel
                                   ──▶ 127.0.0.1:3001
                                   ──▶ exchange-backend (Hono)
                                   ──▶ Sonarr / Radarr / SAB on the LAN
+                                  ──▶ exchange-recommender (Python+FastAPI, internal net only)
+                                       └─ SQLite at /mnt/user/appdata/exchange-backend/recommender/exchange.db
 ```
 
 The legacy **V1 nginx-static container** (`exchange-dashboard` on port 8085) and its DEPLOY.md recipe are superseded. Tear it down once V2 is verified working.
@@ -132,6 +134,83 @@ That frees host port 8085. The `nginx/` directory in the repo is dead code at th
 | `/api/*` returns 401 | Session cookie not present | Confirm browser is sending cookies to `api.theemeraldexchange.com`; check DevTools Network tab → Request Headers → Cookie. If missing, the browser blocked it (third-party cookie blocking on Safari is the usual culprit). |
 | Tunnel shows "Inactive" in CF dashboard | cloudflared can't authenticate | Wrong `TUNNEL_TOKEN`. Re-copy from the CF dashboard, update `.env.production`, redeploy. |
 | Disk-space gate firing for everyone | `MIN_FREE_GB` too high or actually no space | `df -h /mnt/user` on the NAS. The gate applies to admins too — by design. |
+
+---
+
+## Local recommender (replaces per-request Claude)
+
+`recommender/` is a Python + FastAPI sibling container in
+`docker-compose.yml`. It owns a SQLite DB (sqlite-vec) at
+`/mnt/user/appdata/exchange-backend/recommender/exchange.db` and serves
+ranked picks to the Hono backend on the internal Docker network.
+
+### Roles
+
+* **Per-request scoring** — `POST /score` on every `/api/suggestions/:type`
+  refresh. No Claude call, no per-request cost.
+* **Optimizer (offline)** — `make optimize` runs nightly via `crontab` on
+  the NAS. One Claude call per run reviews the day's outcomes and proposes
+  config patches. Auto-promotes only if the patch beats the held-out eval
+  set; weight changes clamped to ±20% per night.
+
+### Bootstrap (one-time, multi-hour)
+
+```bash
+ssh root@theemeraldexchange.local '
+  cd /mnt/user/appdata/exchange-backend
+  docker compose up -d recommender
+  docker compose exec recommender python -m app.db --migrate
+  docker compose exec recommender python -m workers.tmdb_ingest --mode bootstrap
+  docker compose exec recommender python -m workers.featurize
+'
+```
+
+Resumable: if the ingest is killed mid-run, re-run the `bootstrap` command
+and it picks up from `ingest_queue` where it left off. Expect ~120k titles
+ingested at ~4 req/s = ~8 hours wall-clock.
+
+### Flip the flag
+
+After verifying `curl http://127.0.0.1:8001/health` on the NAS reports
+non-zero `titles` and `title_vectors`, edit `.env.production`:
+
+```
+USE_LOCAL_RECOMMENDER=1
+ANTHROPIC_OPTIMIZER_KEY=sk-ant-...
+```
+
+then redeploy with `scripts/deploy-nas.sh`. The backend will now skip
+Claude on every refresh and call the recommender instead.
+
+### Nightly optimizer cron
+
+On the NAS:
+
+```cron
+30 3 * * *  cd /mnt/user/appdata/exchange-backend && docker compose exec -T recommender python -m workers.optimizer >> /var/log/exchange-optimizer.log 2>&1
+0 4 * * *   cd /mnt/user/appdata/exchange-backend && docker compose exec -T recommender python -m workers.tmdb_ingest --mode changes >> /var/log/exchange-ingest.log 2>&1
+```
+
+### Rolling back
+
+```bash
+# .env.production
+USE_LOCAL_RECOMMENDER=0
+```
+
+then `scripts/deploy-nas.sh`. Backend returns to the original Claude path
+on the next refresh. The recommender container stays running (cheap, idle)
+so you can flip back without a fresh bootstrap.
+
+### Health check
+
+```bash
+# Backend → recommender connectivity
+ssh root@theemeraldexchange.local 'docker exec exchange-backend curl -s http://recommender:8000/health'
+
+# Recommender directly (from NAS loopback)
+curl -s http://127.0.0.1:8001/health
+```
 
 ---
 

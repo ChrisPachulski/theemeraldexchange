@@ -7,6 +7,11 @@
 # The backend binds 127.0.0.1:3001 only (LAN-invisible). cloudflared
 # runs in host network mode so it can dial that loopback port directly,
 # which keeps the tunnel's "URL: localhost:3001" config straightforward.
+#
+# The recommender service runs only inside the Docker network — the
+# backend reaches it via `http://recommender:8000`. It is never exposed
+# through the Cloudflare Tunnel. Port 8001 on loopback is for admin
+# debugging only.
 
 services:
   backend:
@@ -40,6 +45,36 @@ services:
       MIN_FREE_GB: "${MIN_FREE_GB:-100}"
       MAX_MOVIE_SIZE_GB: "${MAX_MOVIE_SIZE_GB:-10}"
       MAX_TV_GB_PER_EPISODE: "${MAX_TV_GB_PER_EPISODE:-5}"
+      # Local recommender wiring. Flip USE_LOCAL_RECOMMENDER=1 once the
+      # recommender container is healthy and its DB has been bootstrapped.
+      USE_LOCAL_RECOMMENDER: "${USE_LOCAL_RECOMMENDER:-0}"
+      RECOMMENDER_URL: "${RECOMMENDER_URL:-http://recommender:8000}"
+    depends_on:
+      recommender:
+        condition: service_started
+
+  recommender:
+    build: ./recommender
+    image: theemeraldexchange-recommender:latest
+    container_name: exchange-recommender
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8001:8000"
+    volumes:
+      # SQLite DB + sentence-transformer cache live here so the catalog
+      # survives rebuilds. Bind-mount path mirrors the backend's pattern.
+      - "/mnt/user/appdata/exchange-backend/recommender:/data"
+    environment:
+      RECOMMENDER_DB_PATH: "/data/exchange.db"
+      RECOMMENDER_HOST: "0.0.0.0"
+      RECOMMENDER_PORT: "8000"
+      RECOMMENDER_DEFAULT_RECIPE: "${RECOMMENDER_DEFAULT_RECIPE:-mmr_diverse}"
+      RECOMMENDER_COLD_START_THRESHOLD: "${RECOMMENDER_COLD_START_THRESHOLD:-10}"
+      RECOMMENDER_OPTIMIZER_MAX_DRIFT_PCT: "${RECOMMENDER_OPTIMIZER_MAX_DRIFT_PCT:-0.20}"
+      TMDB_API_KEY: "${TMDB_API_KEY:-}"
+      # The optimizer is the only place Claude runs server-side. Per-user
+      # suggestion calls never see this key — they go to the local model.
+      ANTHROPIC_API_KEY: "${ANTHROPIC_OPTIMIZER_KEY:-}"
 
   cloudflared:
     image: cloudflare/cloudflared:latest
