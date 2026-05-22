@@ -121,4 +121,12 @@ export const env = {
   // a free key, then add TMDB_API_KEY=... to .env.local (dev) or
   // .env.production (prod) and redeploy.
   tmdbApiKey: process.env.TMDB_API_KEY ?? null,
+
+  // Local recommender sidecar. When USE_LOCAL_RECOMMENDER=1, /api/suggestions
+  // skips Claude entirely and asks the recommender service (Python +
+  // sqlite-vec, running in the same compose stack) for ranked picks.
+  // Defaults to the docker-compose service hostname in prod; falls back
+  // to localhost in dev for hand-run testing.
+  useLocalRecommender: process.env.USE_LOCAL_RECOMMENDER === '1',
+  recommenderUrl: process.env.RECOMMENDER_URL ?? 'http://recommender:8000',
 } as const

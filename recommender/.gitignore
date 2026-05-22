@@ -1,0 +1,20 @@
+# Local Python venv
+.venv/
+__pycache__/
+*.pyc
+
+# Local SQLite + WAL
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Eval set is environment-specific; generated from rec_log
+eval/holdout.jsonl
+
+# Tool caches
+.ruff_cache/
+.pytest_cache/
+
+# Sentence-transformers model cache (when running locally)
+.cache/

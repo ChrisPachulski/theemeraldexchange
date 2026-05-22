@@ -23,6 +23,8 @@ import {
   type FeedbackSignal,
 } from '../services/userFeedback.js'
 import { addRejection, removeRejection } from '../services/rejections.js'
+import { postFeedback, postRejection } from '../services/recommender.js'
+import { env } from '../env.js'
 
 export const feedback = new Hono<Env>()
 
@@ -62,6 +64,13 @@ feedback.post('/', async (c) => {
     await addRejection(body.type, tmdbId, title)
   } else {
     await setLike(session.sub, body.type, tmdbId, title)
+  }
+  // Mirror to the recommender so the optimizer learns from outcomes.
+  if (env.useLocalRecommender) {
+    void postFeedback({ sub: session.sub, kind: body.type, tmdb_id: tmdbId, signal: body.signal })
+    if (body.signal === 'dislike') {
+      void postRejection({ kind: body.type, tmdb_id: tmdbId })
+    }
   }
   return c.json({ ok: true })
 })
