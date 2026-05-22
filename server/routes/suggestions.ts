@@ -29,6 +29,7 @@ import { radarrFetch } from '../services/radarr.js'
 import { getRejections, addRejection } from '../services/rejections.js'
 import { getUserFeedback, setLike } from '../services/userFeedback.js'
 import { appendUsageEvent, computeCostCents } from '../services/usageLog.js'
+import { scoreOnce, type RecommenderScoredItem } from '../services/recommender.js'
 import { env } from '../env.js'
 
 const MODEL = 'claude-haiku-4-5'
@@ -1611,6 +1612,98 @@ suggestions.get('/:type', async (c) => {
         libraryCount: library.length,
         threshold: COLD_START_THRESHOLD,
         hint: `Add at least ${COLD_START_THRESHOLD - library.length} more title(s) to get personalized recommendations`,
+      }),
+    })
+  }
+
+  // Local-recommender fast path. When USE_LOCAL_RECOMMENDER=1, the
+  // Python sidecar in the same compose stack does retrieval + ranking;
+  // Claude is not on the request path. On any error we fall through to
+  // TMDB trending (NOT the Claude path) so the user never sees a 5xx
+  // and the recommender outage stays invisible.
+  if (env.useLocalRecommender) {
+    const userFeedback = await userFeedbackPromise
+    const likedRaw = type === 'movie' ? userFeedback.movie.liked : userFeedback.tv.liked
+    const dislikedRaw =
+      type === 'movie' ? userFeedback.movie.disliked : userFeedback.tv.disliked
+
+    const recItems: RecommenderScoredItem[] = []
+    const endRec = timing.mark('recommender')
+    let modelVersion = 'unknown'
+    let recipe = 'unknown'
+    let recDiag: Record<string, unknown> = {}
+    try {
+      const resp = await scoreOnce({
+        sub: session.sub,
+        kind: type,
+        n: TARGET_COUNT,
+        exclude_recently_shown: true,
+        library: library
+          .map((it) => ({
+            tmdb_id: typeof it.tmdbId === 'number' ? it.tmdbId : -1,
+            title: it.title,
+            source: type === 'movie' ? ('radarr' as const) : ('sonarr' as const),
+          }))
+          .filter((it) => it.tmdb_id > 0),
+        feedback: [
+          ...likedRaw.map((e) => ({ tmdb_id: e.id, signal: 'like' as const })),
+          ...dislikedRaw.map((e) => ({ tmdb_id: e.id, signal: 'dislike' as const })),
+        ],
+        household_rejections: kindRejections.map((r) => r.id),
+      })
+      recItems.push(...resp.items)
+      modelVersion = resp.model_version
+      recipe = resp.recipe
+      recDiag = resp.diag
+    } catch (e) {
+      console.warn(
+        '[suggestions] recommender call failed, falling back to trending:',
+        e instanceof Error ? e.message : String(e),
+      )
+    }
+    endRec()
+
+    const mapped: SuggestionItem[] = recItems.map((it) => ({
+      id: it.tmdb_id,
+      title: it.title ?? '?',
+      posterPath: it.poster_path,
+      overview: it.overview ?? undefined,
+      year: it.year ?? undefined,
+      provenance: it.provenance,
+      reason: it.reason,
+    }))
+    const safe = filterHouseholdSafe(mapped)
+
+    if (safe.length === 0) {
+      // Recommender returned nothing usable (down, empty catalog, or all
+      // filtered). Degrade to TMDB trending so the strip is never empty.
+      const trending = filterHouseholdSafe(await tmdbTrending(type)).map((it) => ({
+        ...it,
+        provenance: 'trending' as const,
+        reason: null,
+      }))
+      setTimingHeader()
+      return c.json({
+        source: 'trending',
+        items: trending.slice(0, TARGET_COUNT),
+        _diag: diag({
+          path: 'recommender_fallback_trending',
+          modelVersion,
+          recipe,
+          rec: recDiag,
+        }),
+      })
+    }
+
+    setTimingHeader()
+    return c.json({
+      source: 'recommender',
+      items: safe.slice(0, TARGET_COUNT),
+      _diag: diag({
+        modelVersion,
+        recipe,
+        rec: recDiag,
+        costCents: 0,
       }),
     })
   }
