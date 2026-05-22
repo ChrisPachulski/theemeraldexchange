@@ -10,7 +10,7 @@ api.theemeraldexchange.com       ──▶ Cloudflare Tunnel
                                   ──▶ exchange-backend (Hono)
                                   ──▶ Sonarr / Radarr / SAB on the LAN
                                   ──▶ exchange-recommender (Python+FastAPI, internal net only)
-                                       └─ SQLite at /mnt/user/appdata/exchange-backend/recommender/exchange.db
+                                       └─ SQLite at /mnt/user/appdata/exchange-backend/recommender-db/exchange.db
 ```
 
 The legacy **V1 nginx-static container** (`exchange-dashboard` on port 8085) and its DEPLOY.md recipe are superseded. Tear it down once V2 is verified working.
@@ -141,8 +141,11 @@ That frees host port 8085. The `nginx/` directory in the repo is dead code at th
 
 `recommender/` is a Python + FastAPI sibling container in
 `docker-compose.yml`. It owns a SQLite DB (sqlite-vec) at
-`/mnt/user/appdata/exchange-backend/recommender/exchange.db` and serves
-ranked picks to the Hono backend on the internal Docker network.
+`/mnt/user/appdata/exchange-backend/recommender-db/exchange.db` and serves
+ranked picks to the Hono backend on the internal Docker network. The
+`recommender/` *source* dir on the NAS (synced by `deploy-nas.sh`) is
+the `build:` context for the image; the DB lives in `recommender-db/`
+so the two never collide.
 
 ### Roles
 
@@ -184,11 +187,27 @@ Claude on every refresh and call the recommender instead.
 
 ### Nightly optimizer cron
 
-On the NAS:
+On the NAS, drop into `/etc/cron.d/exchange-recommender`:
 
 ```cron
-30 3 * * *  cd /mnt/user/appdata/exchange-backend && docker compose exec -T recommender python -m workers.optimizer >> /var/log/exchange-optimizer.log 2>&1
-0 4 * * *   cd /mnt/user/appdata/exchange-backend && docker compose exec -T recommender python -m workers.tmdb_ingest --mode changes >> /var/log/exchange-ingest.log 2>&1
+SHELL=/bin/bash
+PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/bin
+0 4 * * *  root docker exec exchange-recommender python -m workers.tmdb_ingest --mode changes >> /var/log/exchange-ingest.log 2>&1
+30 3 * * * root docker exec exchange-recommender python -m workers.optimizer >> /var/log/exchange-optimizer.log 2>&1
+```
+
+Unraid wipes `/etc/cron.d/` on every reboot, so also drop a copy on the
+USB persistence (`/boot/config/`) and have `/boot/config/go` reinstall
+it at boot:
+
+```bash
+cp /etc/cron.d/exchange-recommender /boot/config/exchange-recommender.cron
+cat >> /boot/config/go <<'EOF'
+if [ -f /boot/config/exchange-recommender.cron ]; then
+  cp /boot/config/exchange-recommender.cron /etc/cron.d/exchange-recommender
+  chmod 644 /etc/cron.d/exchange-recommender
+fi
+EOF
 ```
 
 ### Rolling back

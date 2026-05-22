@@ -68,6 +68,17 @@ rsync -av --delete \
   --exclude 'middleware/*.test.ts' \
   server/ "${NAS_USER}@${NAS_HOST}:${APPDATA}/server/"
 
+echo "→ Syncing recommender/"
+rsync -av --delete \
+  --exclude '.venv' \
+  --exclude '__pycache__' \
+  --exclude '*.pyc' \
+  --exclude 'data' \
+  --exclude '.ruff_cache' \
+  --exclude '.pytest_cache' \
+  --exclude 'eval/holdout.jsonl' \
+  recommender/ "${NAS_USER}@${NAS_HOST}:${APPDATA}/recommender/"
+
 echo "→ Shipping env"
 rsync -av "$LOCAL_ENV" "${NAS_USER}@${NAS_HOST}:${APPDATA}/.env"
 ssh "${NAS_USER}@${NAS_HOST}" "chmod 600 ${APPDATA}/.env"
