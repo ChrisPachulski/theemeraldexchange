@@ -94,19 +94,23 @@ export function useSetFeedback(kind: FeedbackKind) {
       // When the user dislikes something, hide it from the suggestion
       // strip immediately (server will also bake it into household
       // rejections so next refetch wouldn't return it anyway).
+      //
+      // Query keys are ['suggestions', kind, mode, keyFingerprint] —
+      // we discover all live entries via the prefix match rather than
+      // hardcoding the fingerprint (which would couple this mutation
+      // to useUserApiKey and miss any stale entries left over from a
+      // previous key). This patches every matching cache entry so the
+      // optimistic update applies regardless of which key is active.
       let suggestionsSnapshot: Array<{
-        key: readonly [string, FeedbackKind, string]
+        key: readonly unknown[]
         prev: unknown
       }> = []
       if (signal === 'dislike') {
         await qc.cancelQueries({ queryKey: ['suggestions', kind] })
-        const variants = [
-          ['suggestions', kind, 'ai'] as const,
-          ['suggestions', kind, 'trending'] as const,
-        ]
-        suggestionsSnapshot = variants.map((key) => ({
-          key,
-          prev: qc.getQueryData(key),
+        const entries = qc.getQueryCache().findAll({ queryKey: ['suggestions', kind] })
+        suggestionsSnapshot = entries.map((entry) => ({
+          key: entry.queryKey,
+          prev: entry.state.data,
         }))
         for (const { key, prev } of suggestionsSnapshot) {
           const snap = prev as { items?: Array<{ id: number }> } | undefined

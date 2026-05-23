@@ -19,6 +19,17 @@ function readScoped(sub: string | undefined): string | null {
   return localStorage.getItem(SCOPED_PREFIX + sub)
 }
 
+// Non-secret fingerprint of an API key, suitable for use inside a
+// TanStack Query key. The full key MUST never appear in a query key
+// (the cache is in-memory but query keys are easy to log/dump).
+// Last-4 mirrors the masked-tail pattern in ApiKeySettings — low
+// entropy but enough to disambiguate different keys in practice, and
+// it changes whenever the user rotates their key (the only thing this
+// fingerprint exists to detect).
+export function keyFingerprint(key: string | null): string {
+  return key ? key.slice(-4) : 'none'
+}
+
 export function useUserApiKey(): {
   key: string | null
   hasKey: boolean
