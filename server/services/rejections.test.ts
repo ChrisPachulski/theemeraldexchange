@@ -76,13 +76,33 @@ describe('rejections store', () => {
     expect(got.movie).not.toContainEqual({ id: 99, title: 'Bad Movie' })
   })
 
-  it('survives malformed file by starting fresh', async () => {
+  it('fails closed on a corrupted file — does NOT silently start fresh', async () => {
+    // Prior behavior wiped the file and treated it as empty, which
+    // meant a torn write from a crash could erase every household veto
+    // on the next call. We now throw on parse failure so the operator
+    // is forced to inspect/restore instead of compounding the loss.
     await fs.writeFile(path, 'not json at all')
     _setRejectionsPathForTests(path)
+    await expect(getRejections()).rejects.toThrow(/cannot parse/)
+  })
+
+  it('first run (no file) still starts empty cleanly', async () => {
+    // The fail-closed behavior is scoped to "file exists but is
+    // garbled." A missing file is a legit first-run and should not
+    // throw — distinguish ENOENT from parse error.
     expect(await getRejections()).toEqual({ movie: [], tv: [] })
-    // Subsequent writes succeed
     await addRejection('tv', 1, 'Pilot')
     expect((await getRejections()).tv).toContainEqual({ id: 1, title: 'Pilot' })
+  })
+
+  it('atomic write — readers never see a partial file', async () => {
+    // Atomicity guarantee comes from temp-write + rename(2). After
+    // writeFile resolves, the live file is fully written: no .tmp-*
+    // staging file should remain (rename moved it onto the target).
+    await addRejection('movie', 42, 'X')
+    const dir = await fs.readdir(tmpRoot)
+    expect(dir.some((n) => n.startsWith('rejections.json.tmp-'))).toBe(false)
+    expect(dir.includes('rejections.json')).toBe(true)
   })
 
   it('loads legacy bare-number files and normalizes to titled entries', async () => {
