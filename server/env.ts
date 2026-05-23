@@ -2,13 +2,22 @@
 // keys, and exposes a strongly-typed `env` object the rest of the
 // server consumes.
 //
-// Required:
+// Required (always):
 //   PLEX_CLIENT_ID    — stable UUID identifying this app to plex.tv.
 //                       Generate once with `crypto.randomUUID()` and keep
 //                       it constant. Plex uses it to disambiguate
 //                       sessions; rotating it logs everyone out.
-//   SESSION_SECRET    — random 32+ byte string used to HMAC-sign session
-//                       cookies. Rotating invalidates all sessions.
+//   SESSION_SECRET    — arbitrary-length string fed through SHA-256 to
+//                       derive the 32-byte AES-GCM key used to encrypt
+//                       session cookies (JWE). Rotating invalidates
+//                       every existing session.
+//
+// Required in production (NODE_ENV=production):
+//   ALLOWED_ORIGINS   — comma-separated SPA origins. Used for CORS AND
+//                       the Origin-header CSRF gate. Required in prod
+//                       because session cookies are SameSite=None for
+//                       the Netlify ↔ NAS split — without an allowlist,
+//                       the CSRF middleware would fail open.
 //
 // Optional:
 //   ADMINS            — comma-separated Plex usernames that get the
@@ -21,10 +30,8 @@
 //                       discover your server ID via /api/me).
 //   PORT              — backend listen port (default 3001).
 //   NODE_ENV          — 'production' switches cookies to SameSite=None;
-//                       Secure for cross-origin Netlify ↔ NAS use.
-//   ALLOWED_ORIGINS   — comma-separated origins for CORS in production.
-//                       Default '*' is fine in dev (Vite proxy makes it
-//                       same-origin anyway).
+//                       Secure for cross-origin Netlify ↔ NAS use, and
+//                       enforces ALLOWED_ORIGINS.
 
 import { config as dotenvConfig } from 'dotenv'
 
@@ -45,17 +52,41 @@ function csv(name: string): string[] {
   return v.split(',').map((s) => s.trim()).filter(Boolean)
 }
 
+// docker-compose's ${VAR:-} expansion produces empty strings for unset
+// vars rather than dropping them. The default-with-`??` operator only
+// triggers on null/undefined, so an empty env var would shadow the
+// NAS fallbacks below. Treat empty as missing.
+function opt(name: string): string | undefined {
+  const v = process.env[name]
+  if (v === undefined) return undefined
+  const trimmed = v.trim()
+  return trimmed === '' ? undefined : trimmed
+}
+
 const NAS_HOST = 'theemeraldexchange.local'
 const GB = 1024 * 1024 * 1024
+
+const isProd = process.env.NODE_ENV === 'production'
+const allowedOrigins = csv('ALLOWED_ORIGINS')
+// In prod, session cookies are SameSite=None for the Netlify ↔ NAS
+// split, which means the CSRF middleware relies on the Origin header
+// matching this list to distinguish trusted SPA tabs from attacker
+// pages. An empty list would fail open, so require it explicitly.
+if (isProd && allowedOrigins.length === 0) {
+  throw new Error(
+    'Missing required env var in production: ALLOWED_ORIGINS ' +
+      '(comma-separated SPA origins, needed for CSRF defense with SameSite=None cookies)',
+  )
+}
 
 export const env = {
   plexClientId: required('PLEX_CLIENT_ID'),
   sessionSecret: required('SESSION_SECRET'),
   admins: csv('ADMINS'),
-  plexServerId: process.env.PLEX_SERVER_ID ?? null,
-  port: Number(process.env.PORT ?? 3001),
-  isProd: process.env.NODE_ENV === 'production',
-  allowedOrigins: csv('ALLOWED_ORIGINS'),
+  plexServerId: opt('PLEX_SERVER_ID') ?? null,
+  port: Number(opt('PORT') ?? 3001),
+  isProd,
+  allowedOrigins,
 
   // Backing services. URL defaults match the existing NAS deployment;
   // override per-environment via env vars.
@@ -63,13 +94,13 @@ export const env = {
   // ever accessed the server (via /accounts), which is the canonical
   // list of "people who actually watch on this server" and what
   // Tautulli's Top Users uses.
-  plexServerUrl: process.env.PLEX_SERVER_URL ?? `http://${NAS_HOST}:32400`,
+  plexServerUrl: opt('PLEX_SERVER_URL') ?? `http://${NAS_HOST}:32400`,
 
-  sonarrUrl: process.env.SONARR_URL ?? `http://${NAS_HOST}:8989/tv`,
+  sonarrUrl: opt('SONARR_URL') ?? `http://${NAS_HOST}:8989/tv`,
   sonarrApiKey: required('SONARR_API_KEY'),
-  radarrUrl: process.env.RADARR_URL ?? `http://${NAS_HOST}:7878/movies`,
+  radarrUrl: opt('RADARR_URL') ?? `http://${NAS_HOST}:7878/movies`,
   radarrApiKey: required('RADARR_API_KEY'),
-  sabUrl: process.env.SAB_URL ?? `http://${NAS_HOST}:8080`,
+  sabUrl: opt('SAB_URL') ?? `http://${NAS_HOST}:8080`,
   sabApiKey: required('SAB_API_KEY'),
 
   // Minimum free space (bytes) on a Sonarr/Radarr root folder before
