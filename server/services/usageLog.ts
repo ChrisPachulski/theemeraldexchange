@@ -108,6 +108,70 @@ function parseEvents(lines: string[]): UsageEvent[] {
   return out
 }
 
+// Read JSONL events from the tail of `path`, parsing newest-first, and
+// stop as soon as we see an event with ts < cutoffMs. The hard cap
+// bounds memory in case something has corrupted the time order. Used
+// by summarizeUsage to get exact accounting inside a time window
+// without an arbitrary line-count cap.
+async function readTailUntilCutoff(
+  path: string,
+  cutoffMs: number,
+  hardLimit: number,
+): Promise<UsageEvent[]> {
+  let fd
+  try {
+    fd = await fs.open(path, 'r')
+  } catch {
+    return []
+  }
+  try {
+    const stat = await fd.stat()
+    let pos = stat.size
+    let leftover = ''
+    const events: UsageEvent[] = []
+    let stop = false
+    while (pos > 0 && events.length < hardLimit && !stop) {
+      const readSize = Math.min(CHUNK_SIZE, pos)
+      pos -= readSize
+      const buf = Buffer.alloc(readSize)
+      await fd.read(buf, 0, readSize, pos)
+      const combined = buf.toString('utf8') + leftover
+      const pieces = combined.split('\n')
+      leftover = pieces[0]
+      // Iterate from newest line in this chunk to oldest. As soon as
+      // any line is older than the cutoff, set stop — every subsequent
+      // line (and every line in older chunks) is also older.
+      for (let i = pieces.length - 1; i >= 1; i--) {
+        const piece = pieces[i]
+        if (!piece) continue
+        try {
+          const ev = JSON.parse(piece) as UsageEvent
+          if (new Date(ev.ts).getTime() < cutoffMs) {
+            stop = true
+            break
+          }
+          events.push(ev)
+          if (events.length >= hardLimit) break
+        } catch {
+          // malformed line — skip silently
+        }
+      }
+    }
+    // Final leftover at pos === 0 is the very first line of the file.
+    if (!stop && pos === 0 && leftover && events.length < hardLimit) {
+      try {
+        const ev = JSON.parse(leftover) as UsageEvent
+        if (new Date(ev.ts).getTime() >= cutoffMs) events.push(ev)
+      } catch {
+        // skip
+      }
+    }
+    return events
+  } finally {
+    await fd.close()
+  }
+}
+
 export async function readRecentUsageEvents(limit: number): Promise<UsageEvent[]> {
   await writeQueue
   const primary = parseEvents(await readTail(logPath, limit))
@@ -139,17 +203,28 @@ export type UsageSummary = {
   costCents: number
 }
 
+// Defensive memory bound for summary scans. At ~300 B/event this is
+// ~30 MB resident — plenty of headroom for household-scale 30-day
+// windows. Caps how many in-window events we'll ever hold in memory
+// in case something pathological (e.g. a clock-jumped log) makes the
+// cutoff unreachable.
+const SUMMARY_HARD_CAP = 100_000
+
 export async function summarizeUsage(sinceMs: number): Promise<UsageSummary[]> {
   await writeQueue
-  // Read a generous window — at household scale (<100 calls/day) this
-  // is plenty for a 30-day summary. Spans the rotated log too: a 5 MB
-  // rotation can easily happen inside the 30-day window, and reading
-  // only the primary file would silently undercount calls / costs.
-  // Mirrors the same primary+rotated pattern as readRecentUsageEvents.
-  const primary = parseEvents(await readTail(logPath, 10_000))
-  const remaining = Math.max(0, 10_000 - primary.length)
+  // Scan-until-cutoff: read newest-first, stop when we encounter an
+  // event with ts < sinceMs (and everything older is by definition
+  // also out of window). The previous 10k-line cap silently
+  // undercounted at higher volume; this gives exact accounting up to
+  // SUMMARY_HARD_CAP events, then degrades to "as many as fit."
+  // Spans the rotated log too if the in-window range crosses a
+  // rotation boundary.
+  const primary = await readTailUntilCutoff(logPath, sinceMs, SUMMARY_HARD_CAP)
+  const remaining = Math.max(0, SUMMARY_HARD_CAP - primary.length)
   const rotated =
-    remaining > 0 ? parseEvents(await readTail(logPath + '.1', remaining)) : []
+    remaining > 0
+      ? await readTailUntilCutoff(logPath + '.1', sinceMs, remaining)
+      : []
   const events = [...primary, ...rotated]
   const byUser = new Map<string, UsageSummary>()
   for (const e of events) {
