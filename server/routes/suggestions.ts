@@ -1583,7 +1583,20 @@ suggestions.get('/:type', async (c) => {
   // in round 12 — should surface as a 500 instead of silently
   // serving generic suggestions while real likes/dislikes are
   // unreachable.
+  //
+  // Several branches below early-return (force=trending, cold-start,
+  // missing BYO key) WITHOUT awaiting this promise. Attach a no-op
+  // handler so a rejection on those paths doesn't trigger Node's
+  // unhandledRejection (which crashes the process under default
+  // settings). Branches that actually consume the value still await
+  // the original promise and re-throw — attaching a separate .catch
+  // chain doesn't suppress that re-throw, it only marks the rejection
+  // as "handled" for the unhandled-rejection bookkeeping.
   const userFeedbackPromise = getUserFeedback(session.sub)
+  userFeedbackPromise.catch(() => {
+    // intentional: handler exists so unhandledRejection won't fire on
+    // early-return paths; consumption-side await still re-throws.
+  })
   const endPrologue = timing.mark('prologue')
   const [library, rejections] = await Promise.all([
     type === 'movie' ? fetchRadarrLibrary() : fetchSonarrLibrary(),
