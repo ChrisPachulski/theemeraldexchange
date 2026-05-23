@@ -23,7 +23,12 @@ import {
   type FeedbackSignal,
 } from '../services/userFeedback.js'
 import { addRejection, getRejectionIds, removeRejection } from '../services/rejections.js'
-import { postFeedback, postRejection } from '../services/recommender.js'
+import {
+  postFeedback,
+  postRejection,
+  postClearFeedback,
+  postClearRejection,
+} from '../services/recommender.js'
 import { env } from '../env.js'
 
 export const feedback = new Hono<Env>()
@@ -106,50 +111,50 @@ feedback.post('/', async (c) => {
 feedback.delete('/:type/:tmdbId/:signal', async (c) => {
   const session = c.get('session')
   const type = c.req.param('type')
-  const signal = c.req.param('signal')
+  const signalParam = c.req.param('signal')
   const tmdbId = Number(c.req.param('tmdbId'))
   if (!isKind(type)) return c.json({ error: 'invalid_type' }, 400)
-  if (!isSignal(signal)) return c.json({ error: 'invalid_signal' }, 400)
+  if (!isSignal(signalParam)) return c.json({ error: 'invalid_signal' }, 400)
   if (!Number.isFinite(tmdbId) || tmdbId <= 0) {
     return c.json({ error: 'invalid_tmdbId' }, 400)
   }
 
-  // For the dislike-delete path: snapshot the caller's prior signal
-  // so we can restore it if the household-rejection step fails.
-  // Without this, a failed removeRejection would leave the user with
-  // no personal dot but the title still hidden from suggestions.
-  let priorSignal: 'like' | 'dislike' | null = null
-  let priorTitle = ''
-  if (signal === 'dislike') {
-    const f = await getUserFeedback(session.sub)
-    const d = f[type].disliked.find((e) => e.id === tmdbId)
-    const l = f[type].liked.find((e) => e.id === tmdbId)
-    if (d) {
-      priorSignal = 'dislike'
-      priorTitle = d.title
-    } else if (l) {
-      priorSignal = 'like'
-      priorTitle = l.title
-    }
-  }
+  // URL :signal is a client hint that may be stale (rapid double-click,
+  // cross-tab signal change). Server-side truth determines whether to
+  // clean up the household rejection: only when the caller's ACTUAL
+  // prior signal was a dislike. If the URL said 'dislike' but the
+  // stored signal was 'like', a naive cleanup would either be a no-op
+  // (id not in household) or — worse — race with another user.
+  const f = await getUserFeedback(session.sub)
+  const priorDislike = f[type].disliked.find((e) => e.id === tmdbId)
+  const priorLike = f[type].liked.find((e) => e.id === tmdbId)
+  const actualPrior: 'like' | 'dislike' | null = priorDislike
+    ? 'dislike'
+    : priorLike
+      ? 'like'
+      : null
+  const priorTitle = priorDislike?.title ?? priorLike?.title ?? ''
 
   await clearFeedback(session.sub, type, tmdbId)
-  if (signal === 'dislike') {
+
+  // Track whether removeRejection actually fired so the recommender
+  // mirror below knows to send the rejection-clear too.
+  let rejectionWasRemoved = false
+  if (actualPrior === 'dislike') {
     try {
       // Only drop from household rejections if no other user still has
       // it disliked — otherwise we'd unblock a title against another
       // member's wishes.
       const stillDissenting = await anotherUserDislikes(session.sub, type, tmdbId)
-      if (!stillDissenting) await removeRejection(type, tmdbId)
+      if (!stillDissenting) {
+        await removeRejection(type, tmdbId)
+        rejectionWasRemoved = true
+      }
     } catch (err) {
       // Restore the prior signal so the user isn't left with cleared
       // personal feedback while the household veto still applies.
       try {
-        if (priorSignal === 'dislike') {
-          await setDislike(session.sub, type, tmdbId, priorTitle)
-        } else if (priorSignal === 'like') {
-          await setLike(session.sub, type, tmdbId, priorTitle)
-        }
+        await setDislike(session.sub, type, tmdbId, priorTitle)
       } catch (rbErr) {
         console.error(
           '[feedback] dislike-delete rollback failed — split-brain (personal cleared, household veto kept):',
@@ -157,6 +162,18 @@ feedback.delete('/:type/:tmdbId/:signal', async (c) => {
         )
       }
       throw err
+    }
+  }
+
+  // Mirror to recommender so its tables converge with Hono's truth.
+  // Always send a clear event — the recommender INSERTs by
+  // (sub, kind, tmdb_id, signal) so without an explicit clear a
+  // toggle leaves stale opposite-signal rows that load_user_context
+  // unions back in.
+  if (env.useLocalRecommender) {
+    void postClearFeedback({ sub: session.sub, kind: type, tmdb_id: tmdbId })
+    if (rejectionWasRemoved) {
+      void postClearRejection({ kind: type, tmdb_id: tmdbId })
     }
   }
   return c.json({ ok: true })

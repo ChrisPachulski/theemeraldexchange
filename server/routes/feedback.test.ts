@@ -167,6 +167,62 @@ describe('feedback route — DELETE', () => {
     expect((await getRejections()).movie.find((e) => e.id === 7)).toBeUndefined()
   })
 
+  it('DELETE branches on server-side actual signal, not URL :signal', async () => {
+    // Stale client could send DELETE /movie/X/dislike when the stored
+    // signal is actually 'like' (e.g. rapid double-click that flipped
+    // the dot, or cross-tab signal change). The cleanup of household
+    // rejection MUST be gated on the server's actual prior signal.
+    const app = appUnderTest()
+    const cookie = await cookieFor('alice')
+
+    // Set up: alice LIKES tmdbId 33 (no household rejection should exist).
+    await app.request('/', {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'movie', tmdbId: 33, title: 'L', signal: 'like' }),
+    })
+    expect((await getRejections()).movie.find((e) => e.id === 33)).toBeUndefined()
+
+    // Stale client sends DELETE /movie/33/dislike. The URL :signal is
+    // wrong; server should derive 'like' from store and skip the
+    // (would-be no-op anyway) rejection cleanup branch.
+    const r = await app.request('/movie/33/dislike', {
+      method: 'DELETE',
+      headers: { Cookie: cookie },
+    })
+    expect(r.status).toBe(200)
+    // Personal feedback cleared.
+    expect(
+      (await getUserFeedback('alice')).movie.liked.find((e) => e.id === 33),
+    ).toBeUndefined()
+    // Household state unchanged (no rejection existed; none added).
+    expect((await getRejections()).movie.find((e) => e.id === 33)).toBeUndefined()
+  })
+
+  it('DELETE /like when stored signal is dislike clears personal AND drops household rejection', async () => {
+    // The mirror of the previous case: URL says 'like' but the
+    // actual stored signal was 'dislike'. Server-derived signal
+    // should drive the household-rejection cleanup, NOT the URL.
+    const app = appUnderTest()
+    const cookie = await cookieFor('alice')
+
+    await app.request('/', {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'movie', tmdbId: 44, title: 'D', signal: 'dislike' }),
+    })
+    expect((await getRejections()).movie.find((e) => e.id === 44)).toBeDefined()
+
+    // Stale client says /like; server sees actual=dislike and DOES
+    // run the household cleanup.
+    const r = await app.request('/movie/44/like', {
+      method: 'DELETE',
+      headers: { Cookie: cookie },
+    })
+    expect(r.status).toBe(200)
+    expect((await getRejections()).movie.find((e) => e.id === 44)).toBeUndefined()
+  })
+
   it('removing a dislike preserves household rejection when another user still dislikes', async () => {
     const app = appUnderTest()
     const aliceCookie = await cookieFor('alice')
