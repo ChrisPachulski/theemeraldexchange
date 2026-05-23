@@ -12,7 +12,13 @@
 // in place on the next dot click.
 //
 // Writes are serialized through a single in-flight promise so two
-// near-simultaneous dismisses can't clobber each other.
+// near-simultaneous dismisses can't clobber each other. Two refs to
+// the chain: `op` is the raw operation returned to the caller (so
+// route handlers see real persistence failures and can return 500);
+// `writeQueue` is the recovery branch with `.catch` attached so a
+// single failure can't poison the next call's chain. The caller
+// `await`s `op` — if persist fails, the user-facing route surfaces
+// the failure instead of lying with `{ ok: true }`.
 
 import { promises as fs } from 'fs'
 import { dirname } from 'path'
@@ -106,36 +112,37 @@ export function addRejection(
   tmdbId: number,
   title: string,
 ): Promise<void> {
-  writeQueue = writeQueue
-    .then(async () => {
-      const file = await load()
-      const existing = file[kind].find((e) => e.id === tmdbId)
-      if (!existing) {
-        file[kind].push({ id: tmdbId, title })
-        await persist()
-      } else if (title && existing.title !== title) {
-        // Upgrade legacy / stale entries in place when a fresh title
-        // arrives. Empty incoming title never overwrites a known one.
-        existing.title = title
-        await persist()
-      }
-    })
-    .catch((err) => {
-      console.error('[rejections] write failed:', err)
-    })
-  return writeQueue
+  const op = writeQueue.then(async () => {
+    const file = await load()
+    const existing = file[kind].find((e) => e.id === tmdbId)
+    if (!existing) {
+      file[kind].push({ id: tmdbId, title })
+      await persist()
+    } else if (title && existing.title !== title) {
+      // Upgrade legacy / stale entries in place when a fresh title
+      // arrives. Empty incoming title never overwrites a known one.
+      existing.title = title
+      await persist()
+    }
+  })
+  // Recovery branch: keep the chain alive for the next caller even if
+  // this op rejects. Do NOT return this — return `op` below so the
+  // caller's `await` sees real failures.
+  writeQueue = op.catch((err) => {
+    console.error('[rejections] write failed:', err)
+  })
+  return op
 }
 
 export function removeRejection(kind: RejectionsKind, tmdbId: number): Promise<void> {
-  writeQueue = writeQueue
-    .then(async () => {
-      const file = await load()
-      const before = file[kind].length
-      file[kind] = file[kind].filter((e) => e.id !== tmdbId)
-      if (file[kind].length !== before) await persist()
-    })
-    .catch((err) => {
-      console.error('[rejections] write failed:', err)
-    })
-  return writeQueue
+  const op = writeQueue.then(async () => {
+    const file = await load()
+    const before = file[kind].length
+    file[kind] = file[kind].filter((e) => e.id !== tmdbId)
+    if (file[kind].length !== before) await persist()
+  })
+  writeQueue = op.catch((err) => {
+    console.error('[rejections] write failed:', err)
+  })
+  return op
 }

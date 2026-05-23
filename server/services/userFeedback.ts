@@ -13,7 +13,13 @@
 // upgrade in place on the next dot click.
 //
 // Writes serialize through a single in-flight promise so two
-// near-simultaneous mutations don't clobber each other.
+// near-simultaneous mutations don't clobber each other. Two refs to
+// the chain: `op` is the raw operation returned to the caller (so
+// route handlers see real persistence failures and can return 500);
+// `writeQueue` is the recovery branch with `.catch` attached so a
+// single failure can't poison the next call's chain. The caller
+// `await`s `op` — if persist fails, the user-facing route surfaces
+// the failure instead of lying with `{ ok: true }`.
 
 import { promises as fs } from 'fs'
 import { dirname } from 'path'
@@ -132,24 +138,26 @@ function mutate(
   title: string,
   next: FeedbackSignal | null,
 ): Promise<void> {
-  writeQueue = writeQueue
-    .then(async () => {
-      const file = await load()
-      const bucket = ensure(file, sub)[kind]
-      const existing =
-        bucket.liked.find((e) => e.id === tmdbId) ??
-        bucket.disliked.find((e) => e.id === tmdbId)
-      const carryTitle = title || existing?.title || ''
-      bucket.liked = bucket.liked.filter((e) => e.id !== tmdbId)
-      bucket.disliked = bucket.disliked.filter((e) => e.id !== tmdbId)
-      if (next === 'like') bucket.liked.push({ id: tmdbId, title: carryTitle })
-      if (next === 'dislike') bucket.disliked.push({ id: tmdbId, title: carryTitle })
-      await persist()
-    })
-    .catch((err) => {
-      console.error('[userFeedback] write failed:', err)
-    })
-  return writeQueue
+  const op = writeQueue.then(async () => {
+    const file = await load()
+    const bucket = ensure(file, sub)[kind]
+    const existing =
+      bucket.liked.find((e) => e.id === tmdbId) ??
+      bucket.disliked.find((e) => e.id === tmdbId)
+    const carryTitle = title || existing?.title || ''
+    bucket.liked = bucket.liked.filter((e) => e.id !== tmdbId)
+    bucket.disliked = bucket.disliked.filter((e) => e.id !== tmdbId)
+    if (next === 'like') bucket.liked.push({ id: tmdbId, title: carryTitle })
+    if (next === 'dislike') bucket.disliked.push({ id: tmdbId, title: carryTitle })
+    await persist()
+  })
+  // Recovery branch: keep the chain alive for the next caller even if
+  // this op rejects. Do NOT return this — return `op` below so the
+  // caller's `await` sees real failures.
+  writeQueue = op.catch((err) => {
+    console.error('[userFeedback] write failed:', err)
+  })
+  return op
 }
 
 export function setLike(
