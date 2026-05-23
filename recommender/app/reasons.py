@@ -61,12 +61,16 @@ def neighbors_for(cand: Candidate, ctx: UserContext, k: int = 2) -> list[TitleRo
     pool_ids: list[int] = []
     pool_embs: list[np.ndarray] = []
 
+    # Use the embedding-aligned id lists, NOT sorted(ids). The matrix
+    # skips ids without an embedding; sorting the raw id set and zipping
+    # would mis-align every row after the first missing one and cite
+    # the wrong neighbor in the "matches X, Y" pill.
     if ctx.library_embeddings is not None:
-        for tid, emb in zip(sorted(ctx.library_ids), ctx.library_embeddings, strict=False):
+        for tid, emb in zip(ctx.library_embedding_ids, ctx.library_embeddings, strict=True):
             pool_ids.append(tid)
             pool_embs.append(emb)
     if ctx.liked_embeddings is not None:
-        for tid, emb in zip(sorted(ctx.liked_ids), ctx.liked_embeddings, strict=False):
+        for tid, emb in zip(ctx.liked_embedding_ids, ctx.liked_embeddings, strict=True):
             pool_ids.append(tid)
             pool_embs.append(emb)
 

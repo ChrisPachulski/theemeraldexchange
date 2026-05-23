@@ -47,11 +47,18 @@ class UserContext:
     kind: Kind
     library_ids: set[int]
     library_embeddings: np.ndarray | None  # shape (n_lib, dim) or None
+    # tmdb_ids aligned 1:1 with the rows of library_embeddings. Use this
+    # for any matrix-vs-id zip — sorting library_ids and zipping
+    # produces misalignment whenever some ids lack embeddings (the
+    # matrix is shorter than the set in that case).
+    library_embedding_ids: list[int]
     library_titles: dict[int, TitleRow]
     liked_ids: set[int]
     liked_embeddings: np.ndarray | None
+    liked_embedding_ids: list[int]
     disliked_ids: set[int]
     disliked_embeddings: np.ndarray | None
+    disliked_embedding_ids: list[int]
     rejected_ids: set[int]
     recently_shown_ids: set[int]
     diag: dict[str, object] = field(default_factory=dict)
@@ -120,15 +127,28 @@ def _load_title_rows(conn: sqlite3.Connection, kind: Kind, ids: list[int]) -> di
     return out
 
 
-def _stack_embeddings(conn: sqlite3.Connection, kind: Kind, ids: set[int]) -> np.ndarray | None:
+def _stack_embeddings(
+    conn: sqlite3.Connection, kind: Kind, ids: set[int]
+) -> tuple[np.ndarray, list[int]] | None:
+    """Stack embeddings + return the id list aligned 1:1 to matrix rows.
+
+    Iterates ``sorted(ids)`` for deterministic order, skipping ids
+    without an embedding. The id list is the source of truth for which
+    matrix row represents which title — callers MUST NOT independently
+    sort ``ids`` and zip against the matrix, because skipped ids would
+    misalign the zip from that point on (`reasons.neighbors_for` used
+    to do exactly this and would cite the wrong neighbor).
+    """
     vecs = []
-    for tid in ids:
+    out_ids: list[int] = []
+    for tid in sorted(ids):
         v = _embedding_for(conn, kind, tid)
         if v is not None:
             vecs.append(v)
+            out_ids.append(tid)
     if not vecs:
         return None
-    return np.vstack(vecs)
+    return np.vstack(vecs), out_ids
 
 
 def load_user_context(conn: sqlite3.Connection, req: ScoreRequest) -> UserContext:
@@ -166,40 +186,68 @@ def load_user_context(conn: sqlite3.Connection, req: ScoreRequest) -> UserContex
         }
 
     library_titles = _load_title_rows(conn, kind, list(library_ids))
-    library_embeddings = _stack_embeddings(conn, kind, library_ids)
+    lib_pair = _stack_embeddings(conn, kind, library_ids)
+    library_embeddings, library_embedding_ids = (
+        (lib_pair[0], lib_pair[1]) if lib_pair is not None else (None, [])
+    )
 
     # ----- per-user signals
-    fb_rows = conn.execute(
-        """SELECT tmdb_id, signal FROM user_feedback
-           WHERE sub = ? AND kind = ?""",
-        (req.sub, kind),
-    ).fetchall()
-
-    inline_likes: set[int] = set()
-    inline_dislikes: set[int] = set()
-    inline_rejects: set[int] = set()
+    # Hono is the source of truth for user feedback. When req.feedback is
+    # present, treat it as AUTHORITATIVE — do NOT union with persisted
+    # user_feedback rows. The mirror from Hono to this sidecar is
+    # fire-and-forget (clear events can be dropped on transient errors),
+    # so unioning would let stale rows resurrect cleared signals and
+    # bias future scores.
     if req.feedback is not None:
+        inline_likes: set[int] = set()
+        inline_dislikes: set[int] = set()
+        inline_rejects: set[int] = set()
         for fb in req.feedback:
-            (inline_likes if fb.signal == "like" else inline_dislikes if fb.signal == "dislike" else inline_rejects).add(
-                fb.tmdb_id
+            target = (
+                inline_likes
+                if fb.signal == "like"
+                else inline_dislikes
+                if fb.signal == "dislike"
+                else inline_rejects
             )
-
-    liked_ids = inline_likes | {r["tmdb_id"] for r in fb_rows if r["signal"] == "like"}
-    disliked_ids = inline_dislikes | {r["tmdb_id"] for r in fb_rows if r["signal"] == "dislike"}
+            target.add(fb.tmdb_id)
+        liked_ids = inline_likes
+        disliked_ids = inline_dislikes
+        reject_from_feedback = inline_rejects
+    else:
+        fb_rows = conn.execute(
+            """SELECT tmdb_id, signal FROM user_feedback
+               WHERE sub = ? AND kind = ?""",
+            (req.sub, kind),
+        ).fetchall()
+        liked_ids = {r["tmdb_id"] for r in fb_rows if r["signal"] == "like"}
+        disliked_ids = {r["tmdb_id"] for r in fb_rows if r["signal"] == "dislike"}
+        reject_from_feedback = {r["tmdb_id"] for r in fb_rows if r["signal"] == "reject"}
 
     # ----- household rejections
-    rejected_ids = (
-        set(req.household_rejections)
-        if req.household_rejections is not None
-        else {r["tmdb_id"] for r in conn.execute(
-            "SELECT tmdb_id FROM household_rejections WHERE kind = ?", (kind,)
-        ).fetchall()}
-    )
-    rejected_ids |= inline_rejects
-    rejected_ids |= {r["tmdb_id"] for r in fb_rows if r["signal"] == "reject"}
+    # Same precedence rule: if Hono passed household_rejections inline,
+    # that's the truth — don't union with stored rows. The
+    # reject-signal entries from the feedback block always apply
+    # (they're per-user "hide this from me forever" signals).
+    if req.household_rejections is not None:
+        rejected_ids = set(req.household_rejections)
+    else:
+        rejected_ids = {
+            r["tmdb_id"]
+            for r in conn.execute(
+                "SELECT tmdb_id FROM household_rejections WHERE kind = ?", (kind,)
+            ).fetchall()
+        }
+    rejected_ids |= reject_from_feedback
 
-    liked_embeddings = _stack_embeddings(conn, kind, liked_ids)
-    disliked_embeddings = _stack_embeddings(conn, kind, disliked_ids)
+    liked_pair = _stack_embeddings(conn, kind, liked_ids)
+    liked_embeddings, liked_embedding_ids = (
+        (liked_pair[0], liked_pair[1]) if liked_pair is not None else (None, [])
+    )
+    disliked_pair = _stack_embeddings(conn, kind, disliked_ids)
+    disliked_embeddings, disliked_embedding_ids = (
+        (disliked_pair[0], disliked_pair[1]) if disliked_pair is not None else (None, [])
+    )
 
     # ----- recently shown
     recently_shown_ids: set[int] = set()
@@ -219,11 +267,14 @@ def load_user_context(conn: sqlite3.Connection, req: ScoreRequest) -> UserContex
         kind=kind,
         library_ids=library_ids,
         library_embeddings=library_embeddings,
+        library_embedding_ids=library_embedding_ids,
         library_titles=library_titles,
         liked_ids=liked_ids,
         liked_embeddings=liked_embeddings,
+        liked_embedding_ids=liked_embedding_ids,
         disliked_ids=disliked_ids,
         disliked_embeddings=disliked_embeddings,
+        disliked_embedding_ids=disliked_embedding_ids,
         rejected_ids=rejected_ids,
         recently_shown_ids=recently_shown_ids,
         diag={
