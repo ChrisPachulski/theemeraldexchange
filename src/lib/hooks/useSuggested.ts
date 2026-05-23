@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { apiUrl } from '../api/base'
+import { keyFingerprint } from './useUserApiKey'
 import type { TrendingItem } from './useTrending'
 
 // Library-aware personalized suggestions for the Discover surface. The
@@ -138,8 +139,15 @@ async function fetchSuggested(
 }
 
 export function useSuggestedMovies(aiEnabled: boolean, apiKey: string | null) {
+  // Fourth segment is a non-secret fingerprint of the API key. When
+  // the key changes (same tab via setKey, or cross-tab via the
+  // `storage` event in useUserApiKey), the query key changes, so
+  // TanStack Query treats it as a different query and refetches —
+  // closing the cross-tab cache-staleness gap. The 'ai' | 'trending'
+  // mode is kept as a separate segment so the cache shape stays
+  // intuitive; the fingerprint only disambiguates within 'ai'.
   return useQuery({
-    queryKey: ['suggestions', 'movie', aiEnabled && apiKey ? 'ai' : 'trending'],
+    queryKey: ['suggestions', 'movie', aiEnabled && apiKey ? 'ai' : 'trending', keyFingerprint(apiKey)],
     queryFn: () => fetchSuggested('movie', aiEnabled, apiKey),
     staleTime: 0,
     refetchOnMount: 'always',
@@ -153,8 +161,9 @@ export function useSuggestedMovies(aiEnabled: boolean, apiKey: string | null) {
 }
 
 export function useSuggestedTv(aiEnabled: boolean, apiKey: string | null) {
+  // See useSuggestedMovies for the fingerprint rationale.
   return useQuery({
-    queryKey: ['suggestions', 'tv', aiEnabled && apiKey ? 'ai' : 'trending'],
+    queryKey: ['suggestions', 'tv', aiEnabled && apiKey ? 'ai' : 'trending', keyFingerprint(apiKey)],
     queryFn: () => fetchSuggested('tv', aiEnabled, apiKey),
     staleTime: 0,
     refetchOnMount: 'always',
