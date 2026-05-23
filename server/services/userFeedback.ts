@@ -226,6 +226,39 @@ export function clearFeedback(sub: string, kind: FeedbackKind, tmdbId: number): 
   return mutate(sub, kind, tmdbId, '', null)
 }
 
+// Title-only backfill. Updates the title on an EXISTING `liked` row;
+// never adds a missing row and never touches the `disliked` list.
+// Used by suggestions.ts to fill in TMDB titles on legacy (bare-id)
+// likes without racing /api/feedback — if the user cleared or flipped
+// the signal while TMDB was resolving, the row is gone (or now in
+// `disliked`), and setLike would happily re-add the like, undoing the
+// caller's action. This helper short-circuits to a no-op instead.
+export function updateLikedTitleIfPresent(
+  sub: string,
+  kind: FeedbackKind,
+  tmdbId: number,
+  title: string,
+): Promise<void> {
+  const op = writeQueue.then(async () => {
+    if (!title) return
+    const file = await load()
+    const bucket = file[sub]?.[kind]
+    const existing = bucket?.liked.find((e) => e.id === tmdbId)
+    if (!existing) return // cleared or flipped by a concurrent op
+    if (existing.title === title) return // already current
+    const updatedUser = cloneUserBucket(file[sub])
+    const target = updatedUser[kind].liked.find((e) => e.id === tmdbId)!
+    target.title = title
+    const snapshot: FeedbackFile = { ...file, [sub]: updatedUser }
+    await persistSnapshot(snapshot)
+    cached = snapshot
+  })
+  writeQueue = op.catch((err) => {
+    console.error('[userFeedback] title-only update failed:', err)
+  })
+  return op
+}
+
 // True when at least one *other* user (sub !== caller) has this title
 // disliked. Used by the route layer to decide whether removing a
 // dislike from the caller should also remove the title from the
