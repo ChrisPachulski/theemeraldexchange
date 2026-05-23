@@ -99,6 +99,62 @@ describe('summarizeUsage', () => {
     expect(await summarizeUsage(inOneHour)).toEqual([])
   })
 
+  it('stops scanning once it hits an event older than the cutoff', async () => {
+    // Write three events: two inside the 1-hour window, one well outside.
+    // The summary must include the two recent ones and the helper must
+    // stop traversing past the old one (exposed indirectly: the old
+    // event's claims are NOT in the output).
+    const recentTs = new Date().toISOString()
+    const oldTs = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString()
+    // Order in file (top = oldest, bottom = newest, JSONL append order):
+    await fs.writeFile(
+      path,
+      [
+        JSON.stringify({ ts: oldTs, sub: 'ghost', username: 'ghost', type: 'claude_call', model: 'm', kind: 'movie', costCents: 99 }),
+        JSON.stringify({ ts: recentTs, sub: 'alice', username: 'alice', type: 'claude_call', model: 'm', kind: 'movie', costCents: 0.1 }),
+        JSON.stringify({ ts: recentTs, sub: 'alice', username: 'alice', type: 'claude_call', model: 'm', kind: 'movie', costCents: 0.2 }),
+        '',
+      ].join('\n'),
+    )
+
+    const oneHourAgo = Date.now() - 60 * 60 * 1000
+    const summary = await summarizeUsage(oneHourAgo)
+    const alice = summary.find((r) => r.sub === 'alice')
+    expect(alice?.calls).toBe(2)
+    expect(alice?.costCents).toBeCloseTo(0.3, 2)
+    expect(summary.find((r) => r.sub === 'ghost')).toBeUndefined()
+  })
+
+  it('handles >10k events in window without the old 10k truncation', async () => {
+    // Simulates the higher-volume case the previous cap silently
+    // undercounted. Writes 12k events, all inside the window. The
+    // exact-accounting promise requires all 12k to show up in the
+    // alice summary.
+    const lines: string[] = []
+    const now = Date.now()
+    for (let i = 0; i < 12_000; i++) {
+      lines.push(
+        JSON.stringify({
+          ts: new Date(now - i * 1000).toISOString(),
+          sub: 'alice',
+          username: 'alice',
+          type: 'claude_call',
+          model: 'm',
+          kind: 'movie',
+          costCents: 0.01,
+        }),
+      )
+    }
+    // Reverse so newest is at the bottom (matches append order).
+    lines.reverse()
+    await fs.writeFile(path, lines.join('\n') + '\n')
+
+    const summary = await summarizeUsage(0)
+    const alice = summary.find((r) => r.sub === 'alice')
+    expect(alice?.calls).toBe(12_000)
+    expect(alice?.costCents).toBeCloseTo(120, 1)
+  })
+
   it('spans the rotated log so 30-day summaries don\'t undercount after rotation', async () => {
     // Simulate post-rotation state: primary holds the newer events,
     // .1 holds the older ones. Both are inside the summary window.
