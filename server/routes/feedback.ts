@@ -35,6 +35,41 @@ export const feedback = new Hono<Env>()
 
 feedback.use('*', requireAuth)
 
+// Per-item mutex around the two-store (userFeedback + rejections)
+// mutations. Each store has its own internal write queue, but there's
+// no coordination BETWEEN them — so a red-to-green flow ("check
+// anotherUserDislikes false → removeRejection → setLike") can
+// interleave with a concurrent dislike on the same title and leave a
+// dislike WITHOUT the matching household veto. Serializing on
+// (kind, tmdbId) keeps unrelated titles parallel while preventing
+// the cross-file race on the same one.
+const itemLocks = new Map<string, Promise<void>>()
+
+async function withItemLock<T>(
+  kind: FeedbackKind,
+  tmdbId: number,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const key = `${kind}:${tmdbId}`
+  const prev = itemLocks.get(key) ?? Promise.resolve()
+  // Wait for the prior holder either way (fulfilled or rejected) — a
+  // failed prior op is its caller's problem; we still get our turn.
+  const op = prev.then(fn, fn)
+  // Tail tracker: never rejects, signals "I'm done" to the next
+  // awaiter so prev.then(fn, fn) wakes up cleanly.
+  const tail = op.then(
+    () => undefined,
+    () => undefined,
+  )
+  itemLocks.set(key, tail)
+  // GC: when this op settles, if no later caller has overwritten the
+  // entry, remove it so the map doesn't grow per distinct title.
+  tail.then(() => {
+    if (itemLocks.get(key) === tail) itemLocks.delete(key)
+  })
+  return op
+}
+
 function isKind(v: unknown): v is FeedbackKind {
   return v === 'movie' || v === 'tv'
 }
@@ -62,12 +97,15 @@ feedback.post('/', async (c) => {
     return c.json({ error: 'invalid_tmdbId' }, 400)
   }
   const title = typeof body.title === 'string' ? body.title : ''
+  const type: FeedbackKind = body.type
+  const signal: FeedbackSignal = body.signal
 
+  return withItemLock(type, tmdbId, async () => {
   // Tracks whether the like branch dropped a household veto so the
   // recommender mirror below knows to send the matching rejection-clear.
   let rejectionClearedByLike = false
 
-  if (body.signal === 'dislike') {
+  if (signal === 'dislike') {
     // Two-step write with rollback. We do the household rejection
     // FIRST because:
     //   - its rollback is simple (removeRejection, conditional on no
@@ -77,19 +115,19 @@ feedback.post('/', async (c) => {
     // After it succeeds, attempt the personal dislike. If THAT fails,
     // undo the household rejection — but only when our call was the
     // one that added it (otherwise we'd erase another user's dissent).
-    const wasAlreadyRejected = (await getRejectionIds(body.type)).has(tmdbId)
-    await addRejection(body.type, tmdbId, title)
+    const wasAlreadyRejected = (await getRejectionIds(type)).has(tmdbId)
+    await addRejection(type, tmdbId, title)
     try {
-      await setDislike(session.sub, body.type, tmdbId, title)
+      await setDislike(session.sub, type, tmdbId, title)
     } catch (err) {
       if (!wasAlreadyRejected) {
         const stillDissenting = await anotherUserDislikes(
           session.sub,
-          body.type,
+          type,
           tmdbId,
         ).catch(() => true)
         if (!stillDissenting) {
-          await removeRejection(body.type, tmdbId).catch((rbErr) => {
+          await removeRejection(type, tmdbId).catch((rbErr) => {
             console.error(
               '[feedback] dislike rollback failed — split-brain (rejection persisted, personal write failed):',
               { setErr: err, rbErr },
@@ -111,24 +149,24 @@ feedback.post('/', async (c) => {
     // failure we restore the rejection so we don't leave the title
     // visible to other users.
     const f = await getUserFeedback(session.sub)
-    const priorDislike = f[body.type].disliked.find((e) => e.id === tmdbId)
+    const priorDislike = f[type].disliked.find((e) => e.id === tmdbId)
     if (priorDislike) {
       const stillDissenting = await anotherUserDislikes(
         session.sub,
-        body.type,
+        type,
         tmdbId,
       )
       if (!stillDissenting) {
-        await removeRejection(body.type, tmdbId)
+        await removeRejection(type, tmdbId)
         rejectionClearedByLike = true
       }
     }
     try {
-      await setLike(session.sub, body.type, tmdbId, title)
+      await setLike(session.sub, type, tmdbId, title)
     } catch (err) {
       if (rejectionClearedByLike) {
         await addRejection(
-          body.type,
+          type,
           tmdbId,
           priorDislike?.title ?? title,
         ).catch((rbErr) => {
@@ -143,29 +181,32 @@ feedback.post('/', async (c) => {
   }
   // Mirror to the recommender so the optimizer learns from outcomes.
   if (env.useLocalRecommender) {
-    void postFeedback({ sub: session.sub, kind: body.type, tmdb_id: tmdbId, signal: body.signal })
-    if (body.signal === 'dislike') {
-      void postRejection({ kind: body.type, tmdb_id: tmdbId })
+    void postFeedback({ sub: session.sub, kind: type, tmdb_id: tmdbId, signal: signal })
+    if (signal === 'dislike') {
+      void postRejection({ kind: type, tmdb_id: tmdbId })
     } else if (rejectionClearedByLike) {
       // Mirror the household-veto removal triggered by red→green so
       // the recommender's household_rejections stays in sync.
-      void postClearRejection({ kind: body.type, tmdb_id: tmdbId })
+      void postClearRejection({ kind: type, tmdb_id: tmdbId })
     }
   }
   return c.json({ ok: true })
+  })
 })
 
 feedback.delete('/:type/:tmdbId/:signal', async (c) => {
   const session = c.get('session')
-  const type = c.req.param('type')
+  const typeParam = c.req.param('type')
   const signalParam = c.req.param('signal')
   const tmdbId = Number(c.req.param('tmdbId'))
-  if (!isKind(type)) return c.json({ error: 'invalid_type' }, 400)
+  if (!isKind(typeParam)) return c.json({ error: 'invalid_type' }, 400)
   if (!isSignal(signalParam)) return c.json({ error: 'invalid_signal' }, 400)
   if (!Number.isFinite(tmdbId) || tmdbId <= 0) {
     return c.json({ error: 'invalid_tmdbId' }, 400)
   }
+  const type = typeParam
 
+  return withItemLock(type, tmdbId, async () => {
   // URL :signal is a client hint that may be stale (rapid double-click,
   // cross-tab signal change). Server-side truth determines whether to
   // clean up the household rejection: only when the caller's ACTUAL
@@ -224,4 +265,5 @@ feedback.delete('/:type/:tmdbId/:signal', async (c) => {
     }
   }
   return c.json({ ok: true })
+  })
 })

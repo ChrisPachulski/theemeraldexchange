@@ -142,6 +142,59 @@ describe('feedback route — POST /', () => {
     ).toBe('X')
   })
 
+  it('concurrent same-item ops serialize via the per-item mutex', async () => {
+    // The two stores (userFeedback + rejections) each have their own
+    // write queue but no cross-store coordination. Without the
+    // per-(kind, tmdbId) mutex, this interleaving was possible:
+    //   T1 red-to-green: anotherUserDislikes(X) → false
+    //   T2 fresh dislike:  addRejection(X) + setDislike(X)
+    //   T1: removeRejection(X)            ← wipes T2's just-added veto
+    //   T1: setLike(X)
+    // Result: T2 user has a dislike but no household veto.
+    //
+    // Fire alice's red-to-green and bob's dislike concurrently on the
+    // SAME tmdb_id. Whichever order they serialize in, the invariant
+    // we check is: if bob ends up disliked, the household rejection
+    // for that id MUST be present.
+    const app = appUnderTest()
+    const aliceCookie = await cookieFor('alice')
+    const bobCookie = await cookieFor('bob')
+
+    // Seed: alice disliked first so the red-to-green branch fires.
+    await app.request('/', {
+      method: 'POST',
+      headers: { Cookie: aliceCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'movie', tmdbId: 700, title: 'X', signal: 'dislike' }),
+    })
+
+    // Fire concurrently.
+    const [aliceFlip, bobDislike] = await Promise.all([
+      app.request('/', {
+        method: 'POST',
+        headers: { Cookie: aliceCookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'movie', tmdbId: 700, title: 'X', signal: 'like' }),
+      }),
+      app.request('/', {
+        method: 'POST',
+        headers: { Cookie: bobCookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'movie', tmdbId: 700, title: 'X', signal: 'dislike' }),
+      }),
+    ])
+    expect(aliceFlip.status).toBe(200)
+    expect(bobDislike.status).toBe(200)
+
+    const bobFb = await getUserFeedback('bob')
+    const hasBobDislike = bobFb.movie.disliked.some((e) => e.id === 700)
+    const householdHasVeto = (await getRejections()).movie.some((e) => e.id === 700)
+    // The invariant: bob's dislike state and the household veto state
+    // must be consistent. If bob has it disliked, the veto MUST exist
+    // (otherwise other users could see a title bob explicitly
+    // dissented from).
+    if (hasBobDislike) {
+      expect(householdHasVeto).toBe(true)
+    }
+  })
+
   it('red-to-green preserves household veto when another user still dislikes', async () => {
     // Alice and Bob both disliked. Alice flips to like. The veto must
     // STAY because Bob still dissents — otherwise we'd unblock a title
