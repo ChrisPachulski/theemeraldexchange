@@ -19,14 +19,18 @@ export type FeedbackEntry = { id: number; title: string }
 type KindBucket = { liked: FeedbackEntry[]; disliked: FeedbackEntry[] }
 type FeedbackResponse = { movie: KindBucket; tv: KindBucket }
 
-const EMPTY: FeedbackResponse = {
-  movie: { liked: [], disliked: [] },
-  tv: { liked: [], disliked: [] },
-}
-
 async function fetchFeedback(): Promise<FeedbackResponse> {
   const r = await fetch(apiUrl('/api/feedback'), { credentials: 'include' })
-  if (!r.ok) return EMPTY
+  if (!r.ok) {
+    // Throw so React Query exposes isError/error to the caller. Used
+    // to return EMPTY, which hid backend 500s (e.g. the fail-closed
+    // corrupted-store path) as "no dots set" — operators couldn't
+    // tell the difference between a fresh user and a broken store.
+    // Consumers that don't care about errors fall back to `data ??`
+    // and render no dots, same UX as before.
+    const body = await r.text().catch(() => '')
+    throw new Error(`feedback ${r.status}: ${body.slice(0, 200)}`)
+  }
   return (await r.json()) as FeedbackResponse
 }
 
