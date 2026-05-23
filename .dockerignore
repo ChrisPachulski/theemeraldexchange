@@ -91,3 +91,12 @@ scripts
 Dockerfile.*
 docker-compose.override.yml
 .dockerignore
+
+# ---- Runtime bind-mount sources (NAS-side) ----------------------------------
+# Runtime bind-mount sources under the build root on the NAS.
+# docker-compose.yml mounts ${APPDATA}/data → backend:/app/data and
+# ${APPDATA}/recommender-db → recommender:/data. They grow large
+# (grab logs, sqlite + sentence-transformer cache) and have no
+# business in the image build context.
+data/
+recommender-db/
