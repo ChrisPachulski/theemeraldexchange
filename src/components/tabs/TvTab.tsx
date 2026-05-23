@@ -159,9 +159,13 @@ export function TvTab() {
       return true
     })
   }, [suggested.data, libraryByTmdbForTrending])
-  const trendingLabel = suggested.data?.source?.startsWith('personalized')
-    ? 'Picked for you'
-    : 'Trending this week'
+  // 'recommender' is the local-model source — also a personalized
+  // pick, just from the on-NAS model rather than Claude.
+  const src = suggested.data?.source
+  const trendingLabel =
+    src && (src.startsWith('personalized') || src === 'recommender')
+      ? 'Picked for you'
+      : 'Trending this week'
   const handleTrendingPick = async (tmdbId: number) => {
     setTrendingPending(tmdbId)
     try {
