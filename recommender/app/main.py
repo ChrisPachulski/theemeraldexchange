@@ -209,14 +209,39 @@ def post_library_sync(
     items = payload.get("items") or []
     if kind not in ("movie", "tv"):
         raise HTTPException(status_code=400, detail="invalid kind")
+
+    # Validate + build the insert tuples BEFORE touching the DB. If the
+    # payload is malformed we want to 400 out cleanly, not leave a
+    # half-deleted mirror behind. Filtering here also lets us count
+    # accurately for the response.
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    conn.execute("DELETE FROM library_items WHERE kind = ?", (kind,))
-    conn.executemany(
-        """INSERT INTO library_items(kind, tmdb_id, source, added_at)
-           VALUES (?, ?, ?, ?)""",
-        [(kind, int(it["tmdb_id"]), it.get("source"), now) for it in items if it.get("tmdb_id")],
-    )
-    return {"count": len(items)}
+    rows: list[tuple] = []
+    for it in items:
+        tid = it.get("tmdb_id")
+        if not isinstance(tid, int):
+            continue
+        rows.append((kind, tid, it.get("source"), now))
+
+    # Atomic swap: connections are autocommit (isolation_level=None in
+    # db.connect), so explicit BEGIN IMMEDIATE/COMMIT keeps the
+    # delete + bulk insert in a single transaction. A crash or
+    # constraint failure mid-flight rolls everything back instead of
+    # leaving an empty library_items mirror that would degrade /score
+    # output until the next sync.
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("DELETE FROM library_items WHERE kind = ?", (kind,))
+        if rows:
+            conn.executemany(
+                """INSERT INTO library_items(kind, tmdb_id, source, added_at)
+                   VALUES (?, ?, ?, ?)""",
+                rows,
+            )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return {"count": len(rows)}
 
 
 @app.post("/events/rejection")
