@@ -16,6 +16,7 @@ type SuggestionSource =
   | 'personalized'
   | 'personalized_filled'
   | 'personalized_empty_trending_fallback'
+  | 'recommender'
   | 'trending'
   | 'trending_fallback'
 
