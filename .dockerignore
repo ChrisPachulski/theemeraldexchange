@@ -1,0 +1,93 @@
+# Root .dockerignore for The Emerald Exchange
+#
+# Build context = repo root (see docker-compose.yml: `build: .`). The backend
+# Dockerfile only COPYs package*.json, server/, and tsconfig.json. Everything
+# else is dead weight in the daemon's build context, and anything containing
+# secrets (.env*) is an outright leak risk if a future COPY . slips in.
+#
+# Patterns are gitignore-style globs. `!path` re-includes a previously
+# excluded path. Order matters for negations.
+
+# ---- Secrets / env files -----------------------------------------------------
+.env
+.env.*
+!.env.example
+!.env.production.example
+
+# ---- Dependencies / build output --------------------------------------------
+node_modules
+**/node_modules
+dist
+dist-ssr
+coverage
+test-results
+playwright-report
+
+# ---- Agent / local tooling ---------------------------------------------------
+.claude/
+.planning/
+.dev_notes/
+
+# ---- Git ---------------------------------------------------------------------
+.git
+.gitignore
+.gitattributes
+.github
+
+# ---- Tests (not needed in the production image) -----------------------------
+tests
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/*.spec.tsx
+vitest.config.ts
+vitest.eval.config.ts
+playwright.config.ts
+
+# ---- Editor / OS junk --------------------------------------------------------
+.vscode
+.idea
+*.swp
+*.swo
+*.sw?
+.DS_Store
+Thumbs.db
+
+# ---- Docs / misc (not needed at runtime) ------------------------------------
+README.md
+CHANGELOG.md
+DEPLOY.md
+DESIGN.md
+PRODUCT.md
+docs
+*.log
+tmp
+.cache
+
+# ---- Frontend sources (backend image doesn't need them) ---------------------
+# The root Dockerfile only builds the Node backend. The SPA is built by
+# Netlify, not Docker. Keeping these out of the daemon context shaves
+# noticeable upload time on the laptop->NAS rsync path.
+src
+public
+index.html
+vite.config.ts
+eslint.config.js
+netlify.toml
+nginx
+tsconfig.app.json
+tsconfig.node.json
+
+# ---- Recommender (separate build context — recommender/Dockerfile) ----------
+# The root backend image does not pull anything from recommender/. The
+# recommender service has its own `build: ./recommender` in docker-compose,
+# so excluding it here just keeps the backend build context lean.
+recommender
+
+# ---- Deploy scripts (not run inside the image) ------------------------------
+scripts
+
+# ---- Misc Docker artifacts ---------------------------------------------------
+Dockerfile.*
+docker-compose.override.yml
+.dockerignore
