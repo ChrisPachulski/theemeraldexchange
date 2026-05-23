@@ -66,11 +66,14 @@ async function setupRadarrMocks(page: import('@playwright/test').Page) {
 async function openAddMovieModal(page: import('@playwright/test').Page) {
   await page.goto('/#/movies')
 
-  // Type into the SearchInput. Placeholder copy is the load-bearing
-  // hook here ("Dune, The Substance, Past Lives") since the input
-  // has no label.
-  const search = page.getByPlaceholder(/Dune.*Substance.*Past Lives/)
-  await expect(search).toBeVisible()
+  // MoviesTab is lazy-loaded; first-paint after navigation can wait
+  // on the dynamic-import chunk. The aria-labelled search input is the
+  // stable marker that the chunk has mounted (mirrors the downloads
+  // E2E pattern that waits on a tab-specific marker w/ explicit
+  // timeout). The input is <input type="search"> so its implicit ARIA
+  // role is "searchbox", not "textbox".
+  const search = page.getByRole('searchbox', { name: /search movies/i })
+  await expect(search).toBeVisible({ timeout: 15000 })
   await search.fill('Test')
 
   // Discover grid renders one MediaCard for FAKE_MOVIE. The card is
