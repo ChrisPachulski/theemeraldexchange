@@ -369,6 +369,7 @@ export function TvTab() {
           value={query}
           onChange={setQuery}
           placeholder={placeholder}
+          ariaLabel="Search TV shows"
           autoFocus
         />
       </div>

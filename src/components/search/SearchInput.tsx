@@ -7,9 +7,10 @@ type Props = {
   placeholder?: string
   prompt?: string
   autoFocus?: boolean
+  ariaLabel?: string
 }
 
-export function SearchInput({ value, onChange, placeholder, prompt, autoFocus }: Props) {
+export function SearchInput({ value, onChange, placeholder, prompt, autoFocus, ariaLabel }: Props) {
   const ref = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -32,6 +33,7 @@ export function SearchInput({ value, onChange, placeholder, prompt, autoFocus }:
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder ?? 'Search'}
+          aria-label={ariaLabel ?? placeholder ?? 'Search'}
           autoComplete="off"
           autoCorrect="off"
           spellCheck={false}

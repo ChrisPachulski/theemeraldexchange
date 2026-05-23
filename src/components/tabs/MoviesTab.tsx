@@ -363,6 +363,7 @@ export function MoviesTab() {
           value={query}
           onChange={setQuery}
           placeholder={placeholder}
+          ariaLabel="Search movies"
           autoFocus
         />
       </div>
