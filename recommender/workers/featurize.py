@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 import numpy as np
 
 from app.config import CONFIG
-from app.db import connect, serialize_f32
+from app.db import connect, encode_vec_rowid, serialize_f32
 
 log = logging.getLogger("featurize")
 
@@ -133,9 +133,10 @@ def run(*, limit: int | None = None) -> int:
         })
         blob = serialize_f32(vec)
         feature_rows.append((row["tmdb_id"], row["kind"], feature_json, blob, dim, now))
-        # vec0 is partitioned by `kind` — rowid only has to be unique within
-        # each partition, so tmdb_id alone is sufficient.
-        vec_rows.append((int(row["tmdb_id"]), row["kind"], blob))
+        # vec0's rowid is globally unique despite the PARTITION KEY, so
+        # encode kind into the rowid to avoid movie/TV id collisions
+        # (TMDB ids are not unique across namespaces).
+        vec_rows.append((encode_vec_rowid(row["kind"], int(row["tmdb_id"])), row["kind"], blob))
 
     with conn:
         conn.executemany(
@@ -149,7 +150,8 @@ def run(*, limit: int | None = None) -> int:
             feature_rows,
         )
         # vec0 doesn't honor INSERT OR REPLACE cleanly with a partition key;
-        # do DELETE-then-INSERT in a single transaction instead.
+        # do DELETE-then-INSERT in a single transaction instead. rowid is
+        # already kind-encoded so the DELETE matches at most one row.
         conn.executemany(
             "DELETE FROM title_vec WHERE rowid = ? AND kind = ?",
             [(rowid, kind) for rowid, kind, _ in vec_rows],

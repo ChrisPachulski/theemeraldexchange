@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .context import Candidate, TitleRow, UserContext
-from .db import deserialize_f32, serialize_f32
+from .db import decode_vec_rowid, deserialize_f32, serialize_f32
 from .schemas import Kind
 
 
@@ -42,7 +42,7 @@ def retrieve_candidates(
     overfetch = max(pool_size * 3, pool_size + len(excluded), 200)
 
     rows = conn.execute(
-        """SELECT v.rowid AS tmdb_id, v.distance AS distance
+        """SELECT v.rowid AS vec_rowid, v.distance AS distance
            FROM title_vec v
            WHERE v.kind = ? AND v.embedding MATCH ? AND k = ?
            ORDER BY v.distance""",
@@ -52,8 +52,11 @@ def retrieve_candidates(
     if not rows:
         return CandidateBatch(candidates=[], distances=[], diag={"raw": 0, "kept": 0})
 
-    keep_ids = [r["tmdb_id"] for r in rows if r["tmdb_id"] not in excluded]
-    keep_distances = {r["tmdb_id"]: r["distance"] for r in rows}
+    # Decode kind-encoded rowids back to tmdb_ids. Every row has the
+    # queried kind (WHERE v.kind = ?) so we just strip the encoding.
+    decoded = [(decode_vec_rowid(r["vec_rowid"])[1], r["distance"]) for r in rows]
+    keep_ids = [tid for tid, _ in decoded if tid not in excluded]
+    keep_distances = {tid: dist for tid, dist in decoded}
 
     if not keep_ids:
         return CandidateBatch(candidates=[], distances=[], diag={"raw": len(rows), "kept": 0})
@@ -74,9 +77,20 @@ def retrieve_candidates(
         (kind, *keep_ids, min_vote_count),
     ).fetchall()
 
+    # SQLite returns IN(...) rows in arbitrary order, which would discard
+    # the KNN distance ordering we paid for above. Build a lookup map
+    # and iterate keep_ids (already in distance order) so closer matches
+    # win the pool_size truncation.
+    by_id = {r["tmdb_id"]: r for r in title_rows}
+
     candidates: list[Candidate] = []
     distances: list[float] = []
-    for r in title_rows:
+    for tid in keep_ids:
+        r = by_id.get(tid)
+        if r is None:
+            # Filtered out by vote_count or join miss — skip silently,
+            # the next-closer keep_id takes its slot.
+            continue
         gids = tuple(int(g) for g in r["genres"].split(",")) if r["genres"] else ()
         title = TitleRow(
             tmdb_id=r["tmdb_id"],
@@ -91,7 +105,7 @@ def retrieve_candidates(
         )
         emb = deserialize_f32(r["embedding"], dim=r["dim"])
         candidates.append(Candidate(title=title, embedding=emb))
-        distances.append(float(keep_distances[r["tmdb_id"]]))
+        distances.append(float(keep_distances[tid]))
         if len(candidates) >= pool_size:
             break
 
