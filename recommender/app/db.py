@@ -71,6 +71,31 @@ def cursor(conn: sqlite3.Connection) -> Iterator[sqlite3.Cursor]:
         cur.close()
 
 
+# sqlite-vec PARTITION KEY routes queries by partition but the rowid is
+# still a globally-unique INTEGER PRIMARY KEY (it's the underlying
+# vec0_chunks key). Using the raw tmdb_id as rowid collides across
+# kinds — a movie and a TV show can both have id 1399, and the second
+# insert violates the primary key constraint. Encode kind into bit 32
+# so movie rows keep their natural id and TV rows live above the
+# bit-32 boundary. TMDB ids fit in ~25 bits in practice, so bit 32+ is
+# safely unused.
+_KIND_BIT = 1 << 32
+
+
+def encode_vec_rowid(kind: str, tmdb_id: int) -> int:
+    if kind == "movie":
+        return tmdb_id
+    if kind == "tv":
+        return tmdb_id | _KIND_BIT
+    raise ValueError(f"unknown kind: {kind!r}")
+
+
+def decode_vec_rowid(rowid: int) -> tuple[str, int]:
+    if rowid & _KIND_BIT:
+        return ("tv", rowid & ~_KIND_BIT)
+    return ("movie", rowid)
+
+
 def serialize_f32(vec: np.ndarray) -> bytes:
     if vec.dtype != np.float32:
         vec = vec.astype(np.float32)
@@ -104,6 +129,28 @@ def migrate(*, db_path: Path | None = None) -> list[str]:
                 (f.name,),
             )
             applied.append(f.name)
+
+        # One-shot migration: the vec rowid scheme changed from "tmdb_id
+        # alone" to "kind-encoded" (see encode_vec_rowid). Detect legacy
+        # rows by looking for TV rows with a rowid below _KIND_BIT and,
+        # if any exist, wipe title_vec + title_features so the featurize
+        # worker rebuilds under the new scheme. Re-ingest is cheap on
+        # the typical NAS catalog (< 30 minutes).
+        try:
+            legacy = cur.execute(
+                "SELECT 1 FROM title_vec WHERE kind = 'tv' AND rowid < ? LIMIT 1",
+                (_KIND_BIT,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            # Table doesn't exist yet — first boot, nothing to migrate.
+            legacy = None
+        if legacy is not None:
+            log.warning(
+                "wiping title_vec/title_features to migrate to kind-encoded rowids",
+            )
+            cur.execute("DROP TABLE title_vec")
+            cur.execute("DELETE FROM title_features")
+            applied.append("(internal) vec_rowid_migration")
 
         # vec0 virtual table; depends on the loaded extension.
         cur.execute(VEC_TABLE_DDL.format(dim=CONFIG.embed_dim))
