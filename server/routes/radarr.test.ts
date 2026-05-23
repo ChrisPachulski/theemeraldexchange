@@ -209,3 +209,141 @@ describe('radarr — add body rewrite (cap + monitor policy)', () => {
     expect(forwarded.addOptions?.searchForMovie).toBe(false)
   })
 })
+
+// POST /api/v3/movie/:id/upgrade — admin-only manual upgrade trigger.
+// Reuses the same cap-filter chain as the add flow (so it can't
+// download a 50 GB rip even though it's logically an upgrade request)
+// and surfaces structured statuses instead of 200/error.
+describe('radarr POST /movie/:id/upgrade — admin gate + bad id', () => {
+  it('rejects user role with 403, does NOT touch Radarr', async () => {
+    const r = await appUnderTest().request('/api/v3/movie/42/upgrade', {
+      method: 'POST',
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r.status).toBe(403)
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  it('rejects unauthenticated with 401', async () => {
+    const r = await appUnderTest().request('/api/v3/movie/42/upgrade', {
+      method: 'POST',
+    })
+    expect(r.status).toBe(401)
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  it('400 bad_id for a non-numeric param', async () => {
+    const r = await appUnderTest().request('/api/v3/movie/not-a-number/upgrade', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'bad_id' })
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+})
+
+describe('radarr POST /movie/:id/upgrade — release-search failure modes', () => {
+  it('release search returns 502 → 502 release_search_failed with status', async () => {
+    stub('/api/v3/release?movieId=42', { error: 'down' }, 502)
+    const r = await appUnderTest().request('/api/v3/movie/42/upgrade', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(502)
+    const body = (await r.json()) as { error: string; status: number }
+    expect(body.error).toBe('release_search_failed')
+    expect(body.status).toBe(502)
+  })
+
+  it('release search returns empty array → 200 no_releases_found (no grab)', async () => {
+    stub('/api/v3/release?movieId=42', [])
+    const r = await appUnderTest().request('/api/v3/movie/42/upgrade', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual({ status: 'no_releases_found' })
+  })
+
+  it('all releases over cap → 200 no_upgrade_available with scanned count', async () => {
+    // env.maxMovieBytes is 10 GB by default; a 50 GB 2160p rip is over.
+    const over = 50 * 1024 ** 3
+    stub('/api/v3/release?movieId=42', [
+      { guid: 'g1', indexerId: 1, size: over, qualityWeight: 100, title: '4K HDR' },
+      { guid: 'g2', indexerId: 1, size: over, qualityWeight: 90, title: '4K HDR alt' },
+    ])
+    const r = await appUnderTest().request('/api/v3/movie/42/upgrade', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { status: string; scanned: number; capGb: number }
+    expect(body.status).toBe('no_upgrade_available')
+    expect(body.scanned).toBe(2)
+    expect(typeof body.capGb).toBe('number')
+  })
+
+  it('rejected:true releases are excluded from eligibility', async () => {
+    // Two releases under the cap, but both are rejected by Radarr's
+    // profile/quality scorer — the route should treat the eligible set
+    // as empty and return no_upgrade_available rather than grabbing.
+    const under = 2 * 1024 ** 3
+    stub('/api/v3/release?movieId=42', [
+      { guid: 'g1', indexerId: 1, size: under, qualityWeight: 100, title: '1080p', rejected: true },
+      { guid: 'g2', indexerId: 1, size: under, qualityWeight: 90, title: '720p', rejected: true },
+    ])
+    const r = await appUnderTest().request('/api/v3/movie/42/upgrade', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { status: string }
+    expect(body.status).toBe('no_upgrade_available')
+  })
+})
+
+describe('radarr POST /movie/:id/upgrade — grab path', () => {
+  it('Radarr returns 502 on the grab POST → 502 grab_failed', async () => {
+    const under = 2 * 1024 ** 3
+    stub('/api/v3/release?movieId=42', [
+      { guid: 'g1', indexerId: 1, size: under, qualityWeight: 100, title: '1080p good' },
+    ])
+    // POST /api/v3/release fails. The endsWith/includes matcher in the
+    // stub helper picks the more-specific GET suffix first; the bare
+    // path matches the POST.
+    stub('/api/v3/release', { error: 'indexer 502' }, 502)
+    const r = await appUnderTest().request('/api/v3/movie/42/upgrade', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(502)
+    const body = (await r.json()) as { error: string; status: number }
+    expect(body.error).toBe('grab_failed')
+    expect(body.status).toBe(502)
+  })
+
+  it('happy path: best release is grabbed and "grabbing" status returned', async () => {
+    const sizeBytes = 3 * 1024 ** 3 // 3 GB
+    stub('/api/v3/release?movieId=42', [
+      { guid: 'a', indexerId: 1, size: sizeBytes, qualityWeight: 80, title: '1080p okay' },
+      { guid: 'b', indexerId: 1, size: sizeBytes, qualityWeight: 120, title: '1080p best' },
+    ])
+    stub('/api/v3/release', { id: 1 }, 201)
+    const r = await appUnderTest().request('/api/v3/movie/42/upgrade', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as {
+      status: string
+      title: string
+      sizeGb: number
+      qualityWeight: number
+    }
+    expect(body.status).toBe('grabbing')
+    expect(body.title).toBe('1080p best') // highest qualityWeight wins
+    expect(body.qualityWeight).toBe(120)
+    expect(body.sizeGb).toBeCloseTo(3, 1)
+  })
+})
