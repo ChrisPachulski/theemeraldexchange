@@ -110,6 +110,33 @@ export async function postRejection(ev: { kind: RecommenderKind; tmdb_id: number
   }).catch(() => {/* fire-and-forget */})
 }
 
+// Recommender INSERTs feedback by (sub, kind, tmdb_id, signal), so a
+// toggle (dislike → like) without an explicit clear leaves both rows;
+// load_user_context unions them. These cancel rows so the recommender
+// converges to Hono's source-of-truth state.
+export async function postClearFeedback(ev: {
+  sub: string
+  kind: RecommenderKind
+  tmdb_id: number
+}): Promise<void> {
+  await fetch(`${env.recommenderUrl}/events/feedback/clear`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(ev),
+  }).catch(() => {/* fire-and-forget */})
+}
+
+export async function postClearRejection(ev: {
+  kind: RecommenderKind
+  tmdb_id: number
+}): Promise<void> {
+  await fetch(`${env.recommenderUrl}/events/rejection/clear`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(ev),
+  }).catch(() => {/* fire-and-forget */})
+}
+
 export async function postLibrarySync(
   kind: RecommenderKind,
   items: RecommenderLibraryItem[],

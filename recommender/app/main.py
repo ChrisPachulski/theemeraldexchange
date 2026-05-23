@@ -146,6 +146,22 @@ def post_feedback(
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, bool]:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    # Like and dislike are mutually exclusive. Without this cleanup,
+    # toggling (dislike -> like) would INSERT the like row while
+    # leaving the dislike row in user_feedback. load_user_context
+    # unions both, so the user ends up "both liking and disliking"
+    # the same title — which then drifts the recommender's
+    # liked_embeddings / disliked_embeddings.
+    if ev.signal == "like":
+        conn.execute(
+            "DELETE FROM user_feedback WHERE sub=? AND kind=? AND tmdb_id=? AND signal='dislike'",
+            (ev.sub, ev.kind, ev.tmdb_id),
+        )
+    elif ev.signal == "dislike":
+        conn.execute(
+            "DELETE FROM user_feedback WHERE sub=? AND kind=? AND tmdb_id=? AND signal='like'",
+            (ev.sub, ev.kind, ev.tmdb_id),
+        )
     conn.execute(
         """INSERT INTO user_feedback(sub, kind, tmdb_id, signal, ts)
            VALUES (?, ?, ?, ?, ?)
@@ -215,6 +231,52 @@ def post_rejection(
     conn.execute(
         """INSERT INTO household_rejections(kind, tmdb_id, ts) VALUES (?, ?, datetime('now'))
            ON CONFLICT(kind, tmdb_id) DO NOTHING""",
+        (kind, tmdb_id),
+    )
+    return {"ok": True}
+
+
+@app.post("/events/feedback/clear")
+def clear_feedback(
+    payload: dict,
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, bool]:
+    # Drop every signal row for one (sub, kind, tmdb_id). Hono calls
+    # this when the user clears a dot in the SPA so the recommender's
+    # user_feedback table converges with Hono's truth — otherwise the
+    # cleared signal would keep influencing scores via
+    # load_user_context.
+    sub = payload.get("sub")
+    kind = payload.get("kind")
+    tmdb_id = payload.get("tmdb_id")
+    if (
+        not isinstance(sub, str)
+        or kind not in ("movie", "tv")
+        or not isinstance(tmdb_id, int)
+    ):
+        raise HTTPException(status_code=400, detail="invalid payload")
+    conn.execute(
+        "DELETE FROM user_feedback WHERE sub=? AND kind=? AND tmdb_id=?",
+        (sub, kind, tmdb_id),
+    )
+    return {"ok": True}
+
+
+@app.post("/events/rejection/clear")
+def clear_rejection(
+    payload: dict,
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, bool]:
+    # Mirror of /events/rejection but removing instead of inserting.
+    # Hono only calls this after confirming no other household member
+    # still dislikes the title, so a household_rejections row here
+    # genuinely shouldn't survive.
+    kind = payload.get("kind")
+    tmdb_id = payload.get("tmdb_id")
+    if kind not in ("movie", "tv") or not isinstance(tmdb_id, int):
+        raise HTTPException(status_code=400, detail="invalid payload")
+    conn.execute(
+        "DELETE FROM household_rejections WHERE kind=? AND tmdb_id=?",
         (kind, tmdb_id),
     )
     return {"ok": True}
