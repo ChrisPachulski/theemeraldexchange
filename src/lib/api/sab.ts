@@ -3,10 +3,19 @@ import { apiUrl } from './base'
 
 const BASE = '/api/sab/api'
 
-async function call<T>(mode: string, extra?: Record<string, string>): Promise<T> {
+async function get<T>(mode: string, extra?: Record<string, string>): Promise<T> {
   const params: Record<string, string> = { mode, output: 'json', ...(extra ?? {}) }
   const res = await fetch(apiUrl(BASE, params), { credentials: 'include' })
   if (!res.ok) await throwApiError(res, `SAB ${mode}`)
+  return res.json() as Promise<T>
+}
+
+async function mutate<T>(method: 'POST' | 'DELETE', path: string, label: string): Promise<T> {
+  const res = await fetch(apiUrl(`${BASE}${path}`), {
+    method,
+    credentials: 'include',
+  })
+  if (!res.ok) await throwApiError(res, label)
   return res.json() as Promise<T>
 }
 
@@ -68,10 +77,12 @@ export type HistoryResponse = {
 }
 
 export const sab = {
-  queue: () => call<QueueResponse>('queue'),
-  history: (limit = 10) => call<HistoryResponse>('history', { limit: String(limit) }),
-  pauseItem: (nzoId: string) => call<{ status: boolean }>('queue', { name: 'pause', value: nzoId }),
-  resumeItem: (nzoId: string) => call<{ status: boolean }>('queue', { name: 'resume', value: nzoId }),
+  queue: () => get<QueueResponse>('queue'),
+  history: (limit = 10) => get<HistoryResponse>('history', { limit: String(limit) }),
+  pauseItem: (nzoId: string) =>
+    mutate<{ status: boolean }>('POST', `/queue/${encodeURIComponent(nzoId)}/pause`, 'SAB pause'),
+  resumeItem: (nzoId: string) =>
+    mutate<{ status: boolean }>('POST', `/queue/${encodeURIComponent(nzoId)}/resume`, 'SAB resume'),
   deleteItem: (nzoId: string) =>
-    call<{ status: boolean }>('queue', { name: 'delete', value: nzoId, del_files: '1' }),
+    mutate<{ status: boolean }>('DELETE', `/queue/${encodeURIComponent(nzoId)}`, 'SAB delete'),
 }
