@@ -72,12 +72,6 @@ const TARGET_COUNT = 20
 // wrapper ~100 tokens = ~2500 total — right at the old 2048 ceiling).
 // Raised to 4096 (iter 39) so reasons never cause truncation.
 const CLAUDE_OVERFETCH = 30
-// Hard ceiling on Claude API calls per request. Currently: 1 initial + 1
-// retry = 2 maximum. If the retry-loop logic is ever extended, this
-// constant makes the intent explicit and prevents unbounded spend on a
-// single user refresh. Exposed in _diag.callCount for observability.
-const MAX_CLAUDE_CALLS_PER_REQUEST = 2
-
 // Provenance — WHERE this card actually came from. Lets the UI render
 // a personalized pick differently from a trending fill, and lets the
 // household member tell at a glance whether the strip is doing its job
@@ -1922,7 +1916,7 @@ suggestions.get('/:type', async (c) => {
 
   let totalUsage: UsageBlock = {}
   let r1: ClaudeResponse
-  let claudeTruncated = false
+  let claudeTruncated: boolean
   let claudeCallCount = 0
   // One salt per request — shared by initial + retry. Refresh variety
   // hangs on this: the cached library prefix makes deterministic Claude
@@ -1979,7 +1973,7 @@ suggestions.get('/:type', async (c) => {
   const endValidate1 = timing.mark('validate1')
   const v1 = await validate(r1.picks)
   endValidate1()
-  let accepted = v1.accepted
+  const accepted = v1.accepted
   let lastCounters = v1.counters
   let triedRetry = false
 

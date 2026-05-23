@@ -13,6 +13,9 @@ const ALPHABET = ['A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P
 
 // Strip leading English articles before bucketing — Plex behavior, so
 // "The Mandalorian" lives under M and "An American Werewolf" under A.
+// Co-located with the component because it shares the alphabet shape;
+// fast-refresh HMR degrades a touch but the colocation pays for it.
+// eslint-disable-next-line react-refresh/only-export-components
 export function libraryBucket(title: string): Exclude<LibraryLetter, 'all'> {
   const stripped = title.replace(/^(the|a|an)\s+/i, '').trim()
   // Normalize accents so "Émile" reads as starting with E, not #.

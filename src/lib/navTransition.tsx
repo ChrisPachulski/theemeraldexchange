@@ -139,6 +139,8 @@ export function NavTransitionProvider({ children }: { children: ReactNode }) {
   )
 }
 
+// Co-located with NavTransitionProvider — standard context+hook idiom.
+// eslint-disable-next-line react-refresh/only-export-components
 export function useNavTransition() {
   const ctx = useContext(NavTransitionContext)
   if (!ctx) throw new Error('useNavTransition must be used within NavTransitionProvider')

@@ -48,8 +48,12 @@ export function ApiKeySettings() {
   const [error, setError] = useState<string | null>(null)
 
   // Reset the draft when the underlying key changes (e.g. set on
-  // another tab, cleared by the user).
+  // another tab, cleared by the user). The setState-in-effect lint
+  // rule flags cascading renders; here we're synchronizing local UI
+  // state to an external source (cross-tab localStorage), which is
+  // the exception the rule's docs explicitly allow.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDraft('')
     setTypeReveal(false)
   }, [key])

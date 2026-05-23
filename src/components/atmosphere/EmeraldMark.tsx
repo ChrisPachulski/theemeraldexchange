@@ -42,7 +42,10 @@ export function EmeraldMark({ width = 64, variant = 'single', className }: Emera
       return
     }
     scene.start()
-    const onVis = () => { document.hidden ? scene.stop() : scene.start() }
+    const onVis = () => {
+      if (document.hidden) scene.stop()
+      else scene.start()
+    }
     document.addEventListener('visibilitychange', onVis)
     return () => {
       document.removeEventListener('visibilitychange', onVis)
