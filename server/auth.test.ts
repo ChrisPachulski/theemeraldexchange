@@ -102,27 +102,27 @@ describe('POST /auth/plex/pin', () => {
   })
 })
 
-describe('GET /auth/plex/check', () => {
+describe('POST /auth/plex/check', () => {
   it('returns pending while plex.tv hasn\'t set authToken yet', async () => {
     stubPlex({ authToken: null })
-    const r = await app().request('/auth/plex/check?pinId=12345')
+    const r = await app().request('/auth/plex/check?pinId=12345', { method: 'POST' })
     expect(r.status).toBe(200)
     expect(await r.json()).toEqual({ status: 'pending' })
   })
 
   it('400s a missing pinId', async () => {
-    const r = await app().request('/auth/plex/check')
+    const r = await app().request('/auth/plex/check', { method: 'POST' })
     expect(r.status).toBe(400)
   })
 
   it('400s a non-numeric pinId', async () => {
-    const r = await app().request('/auth/plex/check?pinId=foo')
+    const r = await app().request('/auth/plex/check?pinId=foo', { method: 'POST' })
     expect(r.status).toBe(400)
   })
 
   it('promotes ADMINS-listed username to admin role', async () => {
     stubPlex({ authToken: 'real-token', username: 'admin-user' })
-    const r = await app().request('/auth/plex/check?pinId=12345')
+    const r = await app().request('/auth/plex/check?pinId=12345', { method: 'POST' })
     expect(r.status).toBe(200)
     const body = (await r.json()) as {
       status?: string
@@ -137,7 +137,7 @@ describe('GET /auth/plex/check', () => {
 
   it('assigns user role to non-listed usernames', async () => {
     stubPlex({ authToken: 'real-token', username: 'random-guest' })
-    const r = await app().request('/auth/plex/check?pinId=12345')
+    const r = await app().request('/auth/plex/check?pinId=12345', { method: 'POST' })
     const body = (await r.json()) as {
       status?: string
       reason?: string
@@ -162,7 +162,7 @@ describe('GET /auth/plex/check', () => {
         },
       ],
     })
-    const r = await app().request('/auth/plex/check?pinId=12345')
+    const r = await app().request('/auth/plex/check?pinId=12345', { method: 'POST' })
     expect(r.status).toBe(403)
     expect(await r.json()).toEqual({ status: 'denied', reason: 'not_a_server_member' })
   })
@@ -181,7 +181,7 @@ describe('GET /auth/plex/check', () => {
         },
       ],
     })
-    const r = await app().request('/auth/plex/check?pinId=12345')
+    const r = await app().request('/auth/plex/check?pinId=12345', { method: 'POST' })
     expect(r.status).toBe(200)
     const body = (await r.json()) as {
       status?: string
@@ -204,7 +204,7 @@ describe('GET /auth/plex/check', () => {
         { name: 'Some Player', clientIdentifier: 'player-id', owned: false, provides: 'player' },
       ],
     })
-    const r = await app().request('/auth/plex/check?pinId=12345')
+    const r = await app().request('/auth/plex/check?pinId=12345', { method: 'POST' })
     expect(r.status).toBe(200)
     const body = (await r.json()) as {
       status?: string
@@ -227,7 +227,7 @@ describe('GET /me + POST /auth/logout', () => {
 
   it('returns the user after a successful pin check (round-trip)', async () => {
     stubPlex({ authToken: 'real-token', username: 'admin-user' })
-    const r1 = await app().request('/auth/plex/check?pinId=12345')
+    const r1 = await app().request('/auth/plex/check?pinId=12345', { method: 'POST' })
     const cookie = r1.headers.get('set-cookie')!
     const sessionCookie = cookie.split(';')[0]
 

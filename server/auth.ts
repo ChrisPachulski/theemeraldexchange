@@ -2,14 +2,20 @@
 //
 //   POST /api/auth/plex/pin     — create a Plex PIN, return id + authUrl.
 //                                  SPA opens authUrl in a popup.
-//   GET  /api/auth/plex/check   — poll the PIN. When the user has
+//   POST /api/auth/plex/check   — poll the PIN. When the user has
 //                                  authorized in the popup, plex.tv
 //                                  attaches an authToken; we exchange it
 //                                  for the user's identity, verify
 //                                  server membership (if PLEX_SERVER_ID
 //                                  is configured), assign a role, set
 //                                  the session cookie, and return the
-//                                  authenticated user.
+//                                  authenticated user. POST (not GET)
+//                                  so requireSafeOrigin gates it —
+//                                  otherwise a hostile page could trigger
+//                                  a cross-site GET with an attacker-
+//                                  authorized pinId and overwrite the
+//                                  victim's session cookie (session
+//                                  fixation).
 //   POST /api/auth/logout       — clear the session cookie.
 //   GET  /api/me                — current user, or 401.
 
@@ -40,8 +46,12 @@ auth.post('/plex/pin', async (c) => {
   })
 })
 
-auth.get('/plex/check', async (c) => {
-  const pinIdRaw = c.req.query('pinId')
+auth.post('/plex/check', async (c) => {
+  // pinId can come from the query string OR a JSON body. The body
+  // path is what the SPA uses now (POST + CSRF-gated); query-string
+  // is retained so existing test fixtures keep working.
+  const body = await c.req.json().catch(() => null) as { pinId?: unknown } | null
+  const pinIdRaw = c.req.query('pinId') ?? (typeof body?.pinId === 'string' || typeof body?.pinId === 'number' ? String(body.pinId) : undefined)
   if (!pinIdRaw) return c.json({ error: 'missing pinId' }, 400)
   const pinId = Number(pinIdRaw)
   if (!Number.isInteger(pinId)) return c.json({ error: 'bad pinId' }, 400)
