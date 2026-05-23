@@ -6,9 +6,10 @@
 //   - local PMS /accounts (XML)
 //   - plex.tv /api/v2/friends/requested  (pending)
 //
-// Tests cover gating, the no_plex_token branch, debug=1 raw dump, the
-// happy merge, and the failure paths (owner /user blowing up → 502;
-// best-effort sources erroring → still returns owner + accepted).
+// Tests cover gating, the no_plex_token branch, the happy merge, and
+// the failure paths (owner /user blowing up → 502; best-effort sources
+// erroring → still returns owner + accepted). An old ?debug=1 raw-dump
+// branch was removed for leaking upstream Plex account metadata.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Hono } from 'hono'
@@ -128,21 +129,25 @@ describe('users — gates', () => {
   })
 })
 
-describe('users — debug=1', () => {
-  it('returns raw responses from each plex.tv source', async () => {
-    stubXml('plex.tv/api/users', '<MediaContainer>raw-users</MediaContainer>')
-    stubJson('plex.tv/api/v2/friends/requested', { friends: ['raw-req'] })
-    stubJson('plex.tv/api/v2/shared_servers', { items: ['raw-shared'] })
+describe('users — ?debug=1 no longer exposes a raw dump', () => {
+  it('returns the normal merged shape, not a { sources } dump', async () => {
+    // The old debug branch leaked raw upstream Plex responses (emails,
+    // ids, share permissions). It was removed — the query param should
+    // now be inert and return the same shape as `/`.
+    stubAllHappy()
     const r = await appUnderTest().request('/?debug=1', {
       headers: { Cookie: await adminCookie() },
     })
     expect(r.status).toBe(200)
-    const body = (await r.json()) as {
-      sources: Record<string, string>
+    const body = (await r.json()) as Record<string, unknown> & {
+      users?: Array<{ username: string; relation: string }>
     }
-    expect(body.sources['GET /api/users (XML)']).toContain('raw-users')
-    expect(body.sources['GET /api/v2/friends/requested']).toContain('raw-req')
-    expect(body.sources['GET /api/v2/shared_servers']).toContain('raw-shared')
+    expect(body).not.toHaveProperty('sources')
+    expect(Array.isArray(body.users)).toBe(true)
+    expect(body.users?.[0]).toMatchObject({
+      username: 'admin-user',
+      relation: 'owner',
+    })
   })
 })
 
