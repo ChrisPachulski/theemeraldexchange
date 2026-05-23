@@ -9,80 +9,12 @@
 // Prod: deployed in the NAS container; SPA on Netlify hits this via
 //       https://api.<domain>/ through a Cloudflare Tunnel.
 //
-// Anything that calls plex.tv blocks for a network round trip; Hono on
-// node serves these on the libuv event loop just fine for our load.
+// App wiring lives in ./app.ts so tests can mount the full router
+// without binding a port. This file only constructs the listener.
 
-import { Hono } from 'hono'
-import { cors } from 'hono/cors'
-import { logger } from 'hono/logger'
 import { serve } from '@hono/node-server'
 import { env } from './env.js'
-import { auth, me } from './auth.js'
-import { sonarr } from './routes/sonarr.js'
-import { radarr } from './routes/radarr.js'
-import { sab } from './routes/sab.js'
-import { tmdb } from './routes/tmdb.js'
-import { users } from './routes/users.js'
-import { plexAdmin } from './routes/plex-admin.js'
-import { plexLinks } from './routes/plex-links.js'
-import { notifications } from './routes/notifications.js'
-import { grabs } from './routes/grabs.js'
-import { rejections } from './routes/rejections.js'
-import { suggestions } from './routes/suggestions.js'
-import { feedback } from './routes/feedback.js'
-import { usage } from './routes/usage.js'
-
-const app = new Hono()
-
-app.use('*', logger())
-
-// CORS — only matters in prod, where SPA is on a different origin.
-// In dev, Vite proxies /api/* so requests are same-origin and CORS
-// preflight is skipped entirely.
-if (env.allowedOrigins.length > 0) {
-  app.use(
-    '*',
-    cors({
-      origin: env.allowedOrigins,
-      credentials: true,
-      allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-      allowHeaders: ['Content-Type', 'X-Anthropic-Api-Key'],
-    }),
-  )
-}
-
-app.get('/api/health', (c) => c.json({ ok: true }))
-
-// Public-ish (auth-free) endpoint exposing the configured limits so the
-// SPA can surface them in tooltips without each modal having to know
-// the env. Numeric values only — no secrets.
-app.get('/api/limits', (c) =>
-  c.json({
-    minFreeGb: env.minFreeBytes / (1024 * 1024 * 1024),
-    maxMovieGb: env.maxMovieGb,
-    maxTvGbPerEpisode: env.maxTvGbPerEpisode,
-  }),
-)
-
-app.route('/api/auth', auth)
-app.route('/api/me', me)
-app.route('/api/sonarr', sonarr)
-app.route('/api/radarr', radarr)
-app.route('/api/sab', sab)
-app.route('/api/tmdb', tmdb)
-app.route('/api/users', users)
-// Order matters: plexLinks (auth-only) is mounted BEFORE plexAdmin
-// (admin-only). Hono's first-match-wins routing means the admin
-// middleware on plexAdmin would otherwise leak onto /library-links and
-// /server-id and 403 every household member.
-app.route('/api/plex', plexLinks)
-app.route('/api/plex', plexAdmin)
-app.route('/api/notifications', notifications)
-app.route('/api/grabs', grabs)
-app.route('/api/rejections', rejections)
-app.route('/api/suggestions', suggestions)
-app.route('/api/feedback', feedback)
-app.route('/api/usage', usage)
+import { app } from './app.js'
 
 serve(
   { fetch: app.fetch, port: env.port },
