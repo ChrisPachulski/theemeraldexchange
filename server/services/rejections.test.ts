@@ -159,11 +159,11 @@ describe('rejections store', () => {
     // Reload from disk to confirm the second write actually persisted.
     _setRejectionsPathForTests(path)
     const got = await getRejections()
-    // id 1's persist failed, but id 1 was already mutated into the
-    // in-memory cache BEFORE persist ran. When id 2's persist
-    // succeeded, it wrote the cumulative {1, 2}. The load-bearing
-    // claim: id 2 is on disk, proving the queue wasn't poisoned.
-    expect(got.movie.map((e) => e.id).sort()).toEqual([1, 2])
+    // id 1's persist failed; snapshot-then-swap means the cache was
+    // never mutated for id 1, so it leaves no ghost. Only id 2 made
+    // it to disk. This is the upgrade from the previous
+    // "cache-mutated-before-persist" pattern.
+    expect(got.movie.map((e) => e.id).sort()).toEqual([2])
   })
 
   it('concurrent writes — failed ones reject, others succeed', async () => {
@@ -203,12 +203,10 @@ describe('rejections store', () => {
     _setRejectionsPathForTests(path)
     const got = await getRejections()
     const ids = got.movie.map((e) => e.id).sort()
-    // The 2nd persist rejected, but id 2's cache mutation happened
-    // BEFORE persist (cache mutation order: load → push → persist).
-    // Later writes serialize cumulative cache, so all 5 ids end up on
-    // disk. This in-memory-cache-vs-persist ordering is a known
-    // subtlety — the awaited op correctly rejected, but the cache was
-    // already dirty.
-    expect(ids).toEqual([1, 2, 3, 4, 5])
+    // The 2nd persist rejected; snapshot-then-swap means the cache
+    // was never updated for id 2, so it leaves no ghost. The other
+    // four ops each cloned-then-persisted-then-swapped on top of
+    // clean state. Final disk = {1, 3, 4, 5}.
+    expect(ids).toEqual([1, 3, 4, 5])
   })
 })

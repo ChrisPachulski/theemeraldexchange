@@ -20,6 +20,11 @@
 // single failure can't poison the next call's chain. The caller
 // `await`s `op` — if persist fails, the user-facing route surfaces
 // the failure instead of lying with `{ ok: true }`.
+//
+// Snapshot-then-swap: each mutation clones the touched user's bucket
+// into a `next` snapshot, persists it, then assigns `cached = next`
+// only after the write succeeds. A failed persist leaves no ghost
+// entry behind for a later successful write to accidentally adopt.
 
 import { promises as fs } from 'fs'
 import { dirname } from 'path'
@@ -102,19 +107,21 @@ async function load(): Promise<FeedbackFile> {
   return cached
 }
 
-async function persist(): Promise<void> {
-  if (!cached) return
+async function persistSnapshot(file: FeedbackFile): Promise<void> {
   await fs.mkdir(dirname(filePath), { recursive: true })
-  await fs.writeFile(filePath, JSON.stringify(cached, null, 2) + '\n', 'utf8')
-}
-
-function ensure(file: FeedbackFile, sub: string): UserBucket {
-  if (!file[sub]) file[sub] = emptyBucket()
-  return file[sub]
+  await fs.writeFile(filePath, JSON.stringify(file, null, 2) + '\n', 'utf8')
 }
 
 function cloneList(list: FeedbackEntry[]): FeedbackEntry[] {
   return list.map((e) => ({ ...e }))
+}
+
+function cloneUserBucket(b: UserBucket | undefined): UserBucket {
+  if (!b) return emptyBucket()
+  return {
+    movie: { liked: cloneList(b.movie.liked), disliked: cloneList(b.movie.disliked) },
+    tv: { liked: cloneList(b.tv.liked), disliked: cloneList(b.tv.disliked) },
+  }
 }
 
 export async function getUserFeedback(sub: string): Promise<UserBucket> {
@@ -140,7 +147,8 @@ function mutate(
 ): Promise<void> {
   const op = writeQueue.then(async () => {
     const file = await load()
-    const bucket = ensure(file, sub)[kind]
+    const updatedUser = cloneUserBucket(file[sub])
+    const bucket = updatedUser[kind]
     const existing =
       bucket.liked.find((e) => e.id === tmdbId) ??
       bucket.disliked.find((e) => e.id === tmdbId)
@@ -149,7 +157,12 @@ function mutate(
     bucket.disliked = bucket.disliked.filter((e) => e.id !== tmdbId)
     if (next === 'like') bucket.liked.push({ id: tmdbId, title: carryTitle })
     if (next === 'dislike') bucket.disliked.push({ id: tmdbId, title: carryTitle })
-    await persist()
+    // Shallow spread of `file` preserves other users by reference —
+    // safe because mutate() never touches anything outside
+    // `updatedUser`.
+    const snapshot: FeedbackFile = { ...file, [sub]: updatedUser }
+    await persistSnapshot(snapshot)
+    cached = snapshot
   })
   // Recovery branch: keep the chain alive for the next caller even if
   // this op rejects. Do NOT return this — return `op` below so the
