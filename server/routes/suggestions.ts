@@ -611,8 +611,17 @@ const TMDB_TIMEOUT_MS = 2500
 // Retry-After header (seconds). We honour it once — a single retry
 // with the actual back-off keeps the route responsive while preventing
 // permanent silent failures on transient rate-limit spikes.
-// Cap: 10 seconds max wait so the route doesn't hang forever.
+//
+// The retry wait is bounded by both the caller's AbortSignal AND a
+// hard 2 s ceiling: callers set the abort timer to TMDB_TIMEOUT_MS
+// (2.5 s), so a longer Retry-After would just put us to sleep past the
+// abort and retry with an already-aborted signal — a wasted second
+// network round-trip. Bailing early on a long Retry-After is
+// indistinguishable from a normal 429 to the caller (returns the 429
+// Response), and the caller's fallback path handles it.
 // Returns the fetch Response (may still be non-ok) or null on network error.
+const TMDB_MAX_RETRY_WAIT_MS = 2_000
+
 async function tmdbFetchWithRetry(
   url: URL,
   signal: AbortSignal,
@@ -625,11 +634,28 @@ async function tmdbFetchWithRetry(
   }
   if (r.status === 429) {
     const retryAfterStr = r.headers.get('retry-after')
-    const retryAfterMs = retryAfterStr
-      ? Math.min(Number(retryAfterStr) * 1000, 10_000)
-      : 2_000 // sensible default when header absent
-    console.warn('[suggestions] TMDB 429 — retrying after', retryAfterMs, 'ms')
-    await new Promise((res) => setTimeout(res, retryAfterMs))
+    const requestedMs = retryAfterStr ? Number(retryAfterStr) * 1000 : 2_000
+    if (!Number.isFinite(requestedMs) || requestedMs > TMDB_MAX_RETRY_WAIT_MS) {
+      console.warn(
+        '[suggestions] TMDB 429 — Retry-After',
+        retryAfterStr,
+        'exceeds budget; surfacing 429 to caller',
+      )
+      return r
+    }
+    console.warn('[suggestions] TMDB 429 — retrying after', requestedMs, 'ms')
+    const aborted = await new Promise<boolean>((res) => {
+      const t = setTimeout(() => res(false), requestedMs)
+      signal.addEventListener(
+        'abort',
+        () => {
+          clearTimeout(t)
+          res(true)
+        },
+        { once: true },
+      )
+    })
+    if (aborted) return r
     try {
       r = await fetch(url, { headers: { Accept: 'application/json' }, signal })
     } catch {
