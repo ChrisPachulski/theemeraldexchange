@@ -125,27 +125,31 @@ export async function getUserFeedback(sub: string): Promise<UserBucket> {
 // exclusive (setting 'like' clears any existing 'dislike' and vice
 // versa). Empty incoming title never overwrites a known one — preserves
 // legacy entry titles while still upgrading bare-id rows.
-async function mutate(
+function mutate(
   sub: string,
   kind: FeedbackKind,
   tmdbId: number,
   title: string,
   next: FeedbackSignal | null,
 ): Promise<void> {
-  writeQueue = writeQueue.then(async () => {
-    const file = await load()
-    const bucket = ensure(file, sub)[kind]
-    const existing =
-      bucket.liked.find((e) => e.id === tmdbId) ??
-      bucket.disliked.find((e) => e.id === tmdbId)
-    const carryTitle = title || existing?.title || ''
-    bucket.liked = bucket.liked.filter((e) => e.id !== tmdbId)
-    bucket.disliked = bucket.disliked.filter((e) => e.id !== tmdbId)
-    if (next === 'like') bucket.liked.push({ id: tmdbId, title: carryTitle })
-    if (next === 'dislike') bucket.disliked.push({ id: tmdbId, title: carryTitle })
-    await persist()
-  })
-  await writeQueue
+  writeQueue = writeQueue
+    .then(async () => {
+      const file = await load()
+      const bucket = ensure(file, sub)[kind]
+      const existing =
+        bucket.liked.find((e) => e.id === tmdbId) ??
+        bucket.disliked.find((e) => e.id === tmdbId)
+      const carryTitle = title || existing?.title || ''
+      bucket.liked = bucket.liked.filter((e) => e.id !== tmdbId)
+      bucket.disliked = bucket.disliked.filter((e) => e.id !== tmdbId)
+      if (next === 'like') bucket.liked.push({ id: tmdbId, title: carryTitle })
+      if (next === 'dislike') bucket.disliked.push({ id: tmdbId, title: carryTitle })
+      await persist()
+    })
+    .catch((err) => {
+      console.error('[userFeedback] write failed:', err)
+    })
+  return writeQueue
 }
 
 export function setLike(
