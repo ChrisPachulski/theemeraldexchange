@@ -134,6 +134,19 @@ describe('app CSRF — safe GETs pass through', () => {
 describe('app CSRF — state-changing routes reject bad Origin', () => {
   const cases: Array<{ label: string; method: string; path: string; body?: string }> = [
     { label: 'POST /api/auth/logout', method: 'POST', path: '/api/auth/logout' },
+    // The PIN-check route sets the session cookie once Plex authorizes
+    // the PIN. Before it was a POST it sat outside the CSRF gate as a
+    // GET — a hostile page could trigger a cross-site request with an
+    // attacker-authorized pinId and overwrite the victim's cookie
+    // (session fixation). Prove app-level CSRF coverage so future
+    // refactors can't accidentally regress it back to a safe-method
+    // surface.
+    {
+      label: 'POST /api/auth/plex/check',
+      method: 'POST',
+      path: '/api/auth/plex/check',
+      body: JSON.stringify({ pinId: 12345 }),
+    },
     { label: 'POST /api/sab/api/queue/foo/pause', method: 'POST', path: '/api/sab/api/queue/foo/pause' },
     { label: 'POST /api/sab/api/queue/foo/resume', method: 'POST', path: '/api/sab/api/queue/foo/resume' },
     { label: 'DELETE /api/sab/api/queue/foo', method: 'DELETE', path: '/api/sab/api/queue/foo' },
