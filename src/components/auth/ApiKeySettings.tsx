@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useUserApiKey } from '../../lib/hooks/useUserApiKey'
 import { apiUrl } from '../../lib/api/base'
 import './ApiKeySettings.css'
@@ -38,6 +38,7 @@ function fmtCost(cents: number): string {
 
 export function ApiKeySettings() {
   const { key, hasKey, setKey, clearKey } = useUserApiKey()
+  const qc = useQueryClient()
   const [draft, setDraft] = useState('')
   // Show-on-type only — once a key is saved we never expose it again.
   // If the user forgot the key, they retrieve it from
@@ -75,6 +76,19 @@ export function ApiKeySettings() {
     setError(null)
     setKey(trimmed)
     setDraft('')
+    // The suggestions queries cache by ai/trending mode but not by
+    // which key was used, so a key change otherwise leaves stale
+    // personalized picks (or api_key_required errors) on screen until
+    // a hard refresh. Wildcard-invalidate covers movie+tv, ai+trending.
+    qc.invalidateQueries({ queryKey: ['suggestions'] })
+  }
+
+  const onClear = () => {
+    clearKey()
+    // Same staleness path on clear: without this the Discover strip
+    // keeps showing AI picks that the backend will now reject for
+    // missing key.
+    qc.invalidateQueries({ queryKey: ['suggestions'] })
   }
 
   const summaryStatus = hasKey
@@ -107,7 +121,7 @@ export function ApiKeySettings() {
             <button
               type="button"
               className="api-key-settings__small-btn api-key-settings__small-btn--danger"
-              onClick={clearKey}
+              onClick={onClear}
             >
               Clear
             </button>
