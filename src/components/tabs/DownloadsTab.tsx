@@ -279,6 +279,53 @@ export function DownloadsTab() {
                 {activeTimeLeft && (
                   <span className="downloads-tab__progress-eta">{activeTimeLeft}</span>
                 )}
+                {isAdmin && (() => {
+                  const slotPaused = activeSlot.status === 'Paused'
+                  const slotBusy =
+                    pause.variables === activeSlot.nzo_id ||
+                    resume.variables === activeSlot.nzo_id ||
+                    cancel.variables === activeSlot.nzo_id
+                  return (
+                    <span className="downloads-tab__active-actions">
+                      {slotPaused ? (
+                        <button
+                          type="button"
+                          className="downloads-tab__btn"
+                          onClick={() => resume.mutate(activeSlot.nzo_id)}
+                          disabled={slotBusy}
+                        >
+                          Resume
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="downloads-tab__btn"
+                          onClick={() => pause.mutate(activeSlot.nzo_id)}
+                          disabled={slotBusy}
+                        >
+                          Pause
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="downloads-tab__btn downloads-tab__btn--danger"
+                        onClick={() =>
+                          confirm({
+                            title: `Cancel ${activeSlot.filename}?`,
+                            body: 'This stops the active download and removes the partial file. The library entry stays.',
+                            confirmLabel: 'Cancel download',
+                            onConfirm: async () => {
+                              await cancel.mutateAsync(activeSlot.nzo_id)
+                            },
+                          })
+                        }
+                        disabled={slotBusy}
+                      >
+                        Cancel
+                      </button>
+                    </span>
+                  )
+                })()}
               </p>
             </>
           )}
