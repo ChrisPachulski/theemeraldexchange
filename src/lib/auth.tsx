@@ -145,10 +145,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       stopPolling()
       pollRef.current = window.setInterval(async () => {
         try {
-          const r = await fetch(
-            apiUrl('/api/auth/plex/check', { pinId: String(pinId) }),
-            { credentials: 'include' },
-          )
+          // POST (not GET) so the CSRF middleware gates the cookie-
+          // setting branch. Otherwise an attacker page could trigger a
+          // cross-site GET with their own pinId and overwrite the
+          // victim's session.
+          const r = await fetch(apiUrl('/api/auth/plex/check'), {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pinId }),
+          })
           if (r.status === 403) {
             const data = await r.json().catch(() => ({}))
             stopPolling()
