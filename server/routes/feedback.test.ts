@@ -1,11 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { Hono } from 'hono'
 import { feedback } from './feedback.js'
 import { createSession } from '../session.js'
-import { _setUserFeedbackPathForTests } from '../services/userFeedback.js'
+import {
+  _setUserFeedbackPathForTests,
+  getUserFeedback,
+} from '../services/userFeedback.js'
 import { _setRejectionsPathForTests, getRejections } from '../services/rejections.js'
 import type { Env } from '../middleware/auth.js'
 
@@ -21,16 +24,27 @@ async function cookieFor(sub: string) {
 }
 
 let tmpRoot: string
+let feedbackPath: string
+let rejectionsPath: string
 
 beforeEach(async () => {
   tmpRoot = await fs.mkdtemp(join(tmpdir(), 'feedback-route-'))
-  _setUserFeedbackPathForTests(join(tmpRoot, 'feedback.json'))
-  _setRejectionsPathForTests(join(tmpRoot, 'rejections.json'))
+  feedbackPath = join(tmpRoot, 'feedback.json')
+  rejectionsPath = join(tmpRoot, 'rejections.json')
+  _setUserFeedbackPathForTests(feedbackPath)
+  _setRejectionsPathForTests(rejectionsPath)
 })
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   await fs.rm(tmpRoot, { recursive: true, force: true })
 })
+
+// Capture the real writeFile ONCE before any test installs a spy. Used
+// inside selective-failure mocks so writes that should pass actually
+// hit disk (otherwise the second step in the rollback test can't
+// observe the rejections file state).
+const realWriteFile = fs.writeFile
 
 describe('feedback route — gating', () => {
   it('rejects unauthenticated', async () => {
@@ -175,5 +189,109 @@ describe('feedback route — DELETE', () => {
       headers: { Cookie: aliceCookie },
     })
     expect((await getRejections()).movie.find((e) => e.id === 8)).toBeDefined() // bob still dissents
+  })
+})
+
+// Split-brain rollback coverage. Both the dislike POST and dislike DELETE
+// touch two stores in sequence; if the second write fails, the first
+// must be undone (or the route returns 500 with a self-consistent state).
+describe('feedback route — rollback on partial-failure', () => {
+  function failWrites(targetPath: string) {
+    // Make any writeFile to the targeted JSON file reject. Other paths
+    // pass through to the real implementation. Lets us simulate a
+    // second-step disk failure while letting the first step land.
+    vi.spyOn(fs, 'writeFile').mockImplementation(((
+      ...args: Parameters<typeof realWriteFile>
+    ) => {
+      if (typeof args[0] === 'string' && args[0] === targetPath) {
+        return Promise.reject(new Error('ENOSPC')) as ReturnType<typeof realWriteFile>
+      }
+      return realWriteFile(...args)
+    }) as typeof fs.writeFile)
+  }
+
+  it('POST dislike: setDislike fails → addRejection is rolled back, route 500s', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const app = appUnderTest()
+    const cookie = await cookieFor('alice')
+
+    // Fail writes to feedback.json only. addRejection (writes rejections.json)
+    // lands, then setDislike (writes feedback.json) rejects, then rollback
+    // (removeRejection → rejections.json) must succeed.
+    failWrites(feedbackPath)
+
+    const r = await app.request('/', {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'movie', tmdbId: 77, title: 'F', signal: 'dislike' }),
+    })
+    expect(r.status).toBe(500)
+
+    // Rejection was rolled back — household state is clean.
+    expect((await getRejections()).movie.find((e) => e.id === 77)).toBeUndefined()
+    // Personal state never landed.
+    expect(
+      (await getUserFeedback('alice')).movie.disliked.find((e) => e.id === 77),
+    ).toBeUndefined()
+  })
+
+  it('POST dislike: setDislike fails and id was ALREADY rejected → rejection is NOT rolled back', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const app = appUnderTest()
+    const aliceCookie = await cookieFor('alice')
+    const bobCookie = await cookieFor('bob')
+
+    // Bob disliked first — household rejection exists with bob's title.
+    const r0 = await app.request('/', {
+      method: 'POST',
+      headers: { Cookie: bobCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'movie', tmdbId: 88, title: 'Pre', signal: 'dislike' }),
+    })
+    expect(r0.status).toBe(200)
+
+    // Now alice tries to dislike, but her personal write will fail.
+    // Rollback must NOT remove bob's rejection — that's the explicit
+    // wasAlreadyRejected guard.
+    failWrites(feedbackPath)
+    const r = await app.request('/', {
+      method: 'POST',
+      headers: { Cookie: aliceCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'movie', tmdbId: 88, title: 'NewTitle', signal: 'dislike' }),
+    })
+    expect(r.status).toBe(500)
+    expect((await getRejections()).movie.find((e) => e.id === 88)).toBeDefined()
+  })
+
+  it('DELETE dislike: removeRejection fails → personal dislike is restored, route 500s', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const app = appUnderTest()
+    const cookie = await cookieFor('alice')
+
+    // Establish a dislike: writes BOTH stores. Done before installing
+    // the spy so this succeeds.
+    const setup = await app.request('/', {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'movie', tmdbId: 55, title: 'X', signal: 'dislike' }),
+    })
+    expect(setup.status).toBe(200)
+
+    // Now fail writes to rejections.json only. clearFeedback lands,
+    // removeRejection rejects, rollback (setDislike → feedback.json)
+    // must succeed.
+    failWrites(rejectionsPath)
+
+    const r = await app.request('/movie/55/dislike', {
+      method: 'DELETE',
+      headers: { Cookie: cookie },
+    })
+    expect(r.status).toBe(500)
+
+    // Personal dislike restored — user still sees the red dot.
+    expect(
+      (await getUserFeedback('alice')).movie.disliked.find((e) => e.id === 55)?.title,
+    ).toBe('X')
+    // Household rejection still present (removeRejection rejected).
+    expect((await getRejections()).movie.find((e) => e.id === 55)).toBeDefined()
   })
 })
