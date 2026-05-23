@@ -16,6 +16,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
     "eval:recs": "vitest run --config vitest.eval.config.ts"
   },
   "dependencies": {
@@ -32,6 +33,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.60.0",
     "@runwayml/sdk": "^3.21.0",
     "@types/node": "^24.12.2",
     "@types/react": "^19.2.14",
