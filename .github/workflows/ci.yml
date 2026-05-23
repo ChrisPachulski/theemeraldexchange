@@ -33,6 +33,9 @@ jobs:
       - name: Type-check (server)
         run: npx tsc -p server/tsconfig.json
 
+      - name: Lint
+        run: npm run lint
+
       # vitest run --coverage runs the suite once and produces an HTML
       # coverage report. No separate `npm test` step — would just rerun.
       - name: Test + coverage
@@ -56,3 +59,20 @@ jobs:
           name: dist
           path: dist/
           retention-days: 7
+
+  recommender:
+    # Python sidecar has no test suite yet — at minimum keep it from
+    # silently developing a syntax error. compileall is a 1-second
+    # parse-only sweep over both packages.
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Syntax check (recommender)
+        run: python3 -m compileall -q recommender/app recommender/workers
