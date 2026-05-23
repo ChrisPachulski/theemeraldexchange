@@ -165,9 +165,13 @@ export function MoviesTab() {
   }, [suggested.data, libraryByTmdb])
   // Label adjusts based on whether the backend served personalized
   // recs or fell back to TMDB trending (cold start or no API key).
-  const trendingLabel = suggested.data?.source?.startsWith('personalized')
-    ? 'Picked for you'
-    : 'Trending movies this week'
+  // 'recommender' is the local-model source — also a personalized
+  // pick, just from the on-NAS model rather than Claude.
+  const src = suggested.data?.source
+  const trendingLabel =
+    src && (src.startsWith('personalized') || src === 'recommender')
+      ? 'Picked for you'
+      : 'Trending movies this week'
   // Trending shows TMDB items; clicking one resolves through Radarr's
   // lookup (it accepts tmdb:NNN) so the same DetailModal flow handles
   // it as a regular search result.
