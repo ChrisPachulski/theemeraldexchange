@@ -63,6 +63,10 @@ feedback.post('/', async (c) => {
   }
   const title = typeof body.title === 'string' ? body.title : ''
 
+  // Tracks whether the like branch dropped a household veto so the
+  // recommender mirror below knows to send the matching rejection-clear.
+  let rejectionClearedByLike = false
+
   if (body.signal === 'dislike') {
     // Two-step write with rollback. We do the household rejection
     // FIRST because:
@@ -96,13 +100,56 @@ feedback.post('/', async (c) => {
       throw err
     }
   } else {
-    await setLike(session.sub, body.type, tmdbId, title)
+    // Like branch. Red-to-green toggle: if the caller's PRIOR signal
+    // was dislike, that dislike was rolled into the household veto.
+    // Switching to a like means we must also drop the veto (assuming
+    // nobody else still dislikes), otherwise the title stays in
+    // kindRejections and is silently filtered out of every suggestion
+    // call — the user sees their green dot but their like has no
+    // effect. removeRejection FIRST keeps failure modes clean (its
+    // failure is a clean 500 with no personal mutation). On setLike
+    // failure we restore the rejection so we don't leave the title
+    // visible to other users.
+    const f = await getUserFeedback(session.sub)
+    const priorDislike = f[body.type].disliked.find((e) => e.id === tmdbId)
+    if (priorDislike) {
+      const stillDissenting = await anotherUserDislikes(
+        session.sub,
+        body.type,
+        tmdbId,
+      )
+      if (!stillDissenting) {
+        await removeRejection(body.type, tmdbId)
+        rejectionClearedByLike = true
+      }
+    }
+    try {
+      await setLike(session.sub, body.type, tmdbId, title)
+    } catch (err) {
+      if (rejectionClearedByLike) {
+        await addRejection(
+          body.type,
+          tmdbId,
+          priorDislike?.title ?? title,
+        ).catch((rbErr) => {
+          console.error(
+            '[feedback] red-to-green rollback failed — split-brain (rejection cleared, like write failed):',
+            { setErr: err, rbErr },
+          )
+        })
+      }
+      throw err
+    }
   }
   // Mirror to the recommender so the optimizer learns from outcomes.
   if (env.useLocalRecommender) {
     void postFeedback({ sub: session.sub, kind: body.type, tmdb_id: tmdbId, signal: body.signal })
     if (body.signal === 'dislike') {
       void postRejection({ kind: body.type, tmdb_id: tmdbId })
+    } else if (rejectionClearedByLike) {
+      // Mirror the household-veto removal triggered by red→green so
+      // the recommender's household_rejections stays in sync.
+      void postClearRejection({ kind: body.type, tmdb_id: tmdbId })
     }
   }
   return c.json({ ok: true })

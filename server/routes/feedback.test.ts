@@ -114,6 +114,60 @@ describe('feedback route — POST /', () => {
     expect((await getRejections()).tv).toContainEqual({ id: 99, title: 'Pokémon' })
   })
 
+  it('red-to-green: switching dislike → like drops the household rejection', async () => {
+    // The UI toggle path: user clicks the green dot on a card they
+    // previously disliked. SPA sends { signal: 'like' }. The server's
+    // like branch must also drop the household veto installed by the
+    // earlier dislike — otherwise the title stays in kindRejections
+    // and the user's like has no effect on future suggestions.
+    const app = appUnderTest()
+    const cookie = await cookieFor('alice')
+
+    await app.request('/', {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'movie', tmdbId: 200, title: 'X', signal: 'dislike' }),
+    })
+    expect((await getRejections()).movie.find((e) => e.id === 200)).toBeDefined()
+
+    const r = await app.request('/', {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'movie', tmdbId: 200, title: 'X', signal: 'like' }),
+    })
+    expect(r.status).toBe(200)
+    expect((await getRejections()).movie.find((e) => e.id === 200)).toBeUndefined()
+    expect(
+      (await getUserFeedback('alice')).movie.liked.find((e) => e.id === 200)?.title,
+    ).toBe('X')
+  })
+
+  it('red-to-green preserves household veto when another user still dislikes', async () => {
+    // Alice and Bob both disliked. Alice flips to like. The veto must
+    // STAY because Bob still dissents — otherwise we'd unblock a title
+    // against his wishes.
+    const app = appUnderTest()
+    const aliceCookie = await cookieFor('alice')
+    const bobCookie = await cookieFor('bob')
+
+    for (const c of [aliceCookie, bobCookie]) {
+      await app.request('/', {
+        method: 'POST',
+        headers: { Cookie: c, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'movie', tmdbId: 201, title: 'X', signal: 'dislike' }),
+      })
+    }
+    expect((await getRejections()).movie.find((e) => e.id === 201)).toBeDefined()
+
+    await app.request('/', {
+      method: 'POST',
+      headers: { Cookie: aliceCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'movie', tmdbId: 201, title: 'X', signal: 'like' }),
+    })
+    // Bob still dissents → household veto stays.
+    expect((await getRejections()).movie.find((e) => e.id === 201)).toBeDefined()
+  })
+
   it('POST without title defaults to empty string in both stores', async () => {
     const app = appUnderTest()
     const cookie = await cookieFor('alice')
@@ -256,10 +310,18 @@ describe('feedback route — rollback on partial-failure', () => {
     // Make any writeFile to the targeted JSON file reject. Other paths
     // pass through to the real implementation. Lets us simulate a
     // second-step disk failure while letting the first step land.
+    //
+    // The store now writes atomically via "writeFile to .tmp + rename",
+    // so we also match the staged temp path (any sibling whose name
+    // starts with the target's name + ".tmp-"). Without this, the spy
+    // would let the staged write succeed and the rename would land,
+    // leaving the test thinking persist worked when it should have
+    // failed.
     vi.spyOn(fs, 'writeFile').mockImplementation(((
       ...args: Parameters<typeof realWriteFile>
     ) => {
-      if (typeof args[0] === 'string' && args[0] === targetPath) {
+      const p = args[0]
+      if (typeof p === 'string' && (p === targetPath || p.startsWith(targetPath + '.tmp-'))) {
         return Promise.reject(new Error('ENOSPC')) as ReturnType<typeof realWriteFile>
       }
       return realWriteFile(...args)
