@@ -145,7 +145,8 @@ describe('plex-admin /remote-access — happy path', () => {
       headers: { Cookie: await adminCookie() },
     })
     expect(spy).toHaveBeenCalledOnce()
-    const calledUrl = String(spy.mock.calls[0][0])
+    const firstCall = (spy.mock.calls as unknown as unknown[][])[0] ?? []
+    const calledUrl = String(firstCall[0])
     expect(calledUrl).toContain('/:/prefs')
     expect(calledUrl).toContain('X-Plex-Token=plex-admin-token')
   })
