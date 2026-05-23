@@ -39,8 +39,17 @@ forwardRead('/api/v3/queue')
 
 // Per-episode size cap for TV grabs. Mirrors the movie cap. A release
 // passes when (size / episodeCount) ≤ maxTvBytesPerEpisode. We disable
-// Sonarr's built-in search-on-add so the only way a download starts is
-// through this filter — keeps 4K HDR season packs out by default.
+// Sonarr's built-in search-on-add so the initial grab is forced through
+// this filter — keeps 4K HDR season packs out by default.
+//
+// SCOPE OF THE CAP: it applies to the initial add-time grab and to the
+// manual /api/v3/series/:id/seasons/:n/monitor route. It does NOT
+// apply to Sonarr's ongoing RSS sweep for new episodes of monitored
+// series, because hard-unmonitoring would break the airing-season
+// auto-download that's a primary reason to use Sonarr. Defense in
+// depth for the RSS path lives in the quality profile (the curated
+// "Choose Me" profile excludes 2160p tiers); if you swap profiles,
+// configure that profile's size restrictions accordingly.
 //
 // Important Sonarr quirks discovered while wiring this:
 //  - GET /api/v3/release?seriesId=X (no seasonNumber) returns
