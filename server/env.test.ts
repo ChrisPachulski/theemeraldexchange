@@ -25,6 +25,10 @@ const PRESERVED_KEYS = [
   'PLEX_SERVER_URL',
   'PLEX_SERVER_ID',
   'ALLOWED_ORIGINS',
+  'MIN_FREE_GB',
+  'MAX_MOVIE_SIZE_GB',
+  'MAX_TV_GB_PER_EPISODE',
+  'PORT',
 ] as const
 
 let snapshot: Record<string, string | undefined> = {}
@@ -165,5 +169,69 @@ describe('env — production gating on ALLOWED_ORIGINS', () => {
     const env = await loadEnv()
     expect(env.isProd).toBe(false)
     expect(env.allowedOrigins).toEqual([])
+  })
+})
+
+describe('env — numeric env validation', () => {
+  // The disk-space safety gate compares folder.freeSpace against
+  // env.minFreeBytes. A typo like MIN_FREE_GB="abc" used to produce
+  // NaN, and `freeSpace < NaN` is always false — silently disabling
+  // the gate. Fail closed at boot so the typo is loud.
+  it('non-numeric MIN_FREE_GB throws at boot', async () => {
+    setBaselineEnv()
+    process.env.MIN_FREE_GB = 'abc'
+    await expect(loadEnv()).rejects.toThrow(/MIN_FREE_GB/)
+  })
+
+  it('zero MIN_FREE_GB throws (would also disable the gate)', async () => {
+    setBaselineEnv()
+    process.env.MIN_FREE_GB = '0'
+    await expect(loadEnv()).rejects.toThrow(/MIN_FREE_GB/)
+  })
+
+  it('negative MIN_FREE_GB throws', async () => {
+    setBaselineEnv()
+    process.env.MIN_FREE_GB = '-50'
+    await expect(loadEnv()).rejects.toThrow(/MIN_FREE_GB/)
+  })
+
+  it('non-numeric MAX_MOVIE_SIZE_GB throws', async () => {
+    setBaselineEnv()
+    process.env.MAX_MOVIE_SIZE_GB = 'big'
+    await expect(loadEnv()).rejects.toThrow(/MAX_MOVIE_SIZE_GB/)
+  })
+
+  it('non-numeric MAX_TV_GB_PER_EPISODE throws', async () => {
+    setBaselineEnv()
+    process.env.MAX_TV_GB_PER_EPISODE = ''
+    // blank → uses default 5, no throw
+    const env = await loadEnv()
+    expect(env.maxTvGbPerEpisode).toBe(5)
+  })
+
+  it('non-integer PORT throws', async () => {
+    setBaselineEnv()
+    process.env.PORT = '3001.5'
+    await expect(loadEnv()).rejects.toThrow(/PORT/)
+  })
+
+  it('non-numeric PORT throws', async () => {
+    setBaselineEnv()
+    process.env.PORT = 'http'
+    await expect(loadEnv()).rejects.toThrow(/PORT/)
+  })
+
+  it('valid numerics pass through', async () => {
+    setBaselineEnv()
+    process.env.MIN_FREE_GB = '200'
+    process.env.MAX_MOVIE_SIZE_GB = '15'
+    process.env.MAX_TV_GB_PER_EPISODE = '7'
+    process.env.PORT = '3002'
+    const env = await loadEnv()
+    const GB = 1024 * 1024 * 1024
+    expect(env.minFreeBytes).toBe(200 * GB)
+    expect(env.maxMovieGb).toBe(15)
+    expect(env.maxTvGbPerEpisode).toBe(7)
+    expect(env.port).toBe(3002)
   })
 })

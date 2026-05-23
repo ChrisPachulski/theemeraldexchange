@@ -63,6 +63,32 @@ function opt(name: string): string | undefined {
   return trimmed === '' ? undefined : trimmed
 }
 
+// Parse an optional positive-number env var. Fail closed at boot on a
+// typo (e.g. MIN_FREE_GB="abc") rather than letting Number(...) return
+// NaN — `freeSpace < NaN` is always false, which would silently disable
+// the disk-space safety gate in the Sonarr/Radarr add paths.
+function positiveNumber(name: string, defaultValue: number): number {
+  const raw = opt(name)
+  if (raw === undefined) return defaultValue
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new Error(
+      `Invalid env var ${name}: expected a positive finite number, got ${JSON.stringify(raw)}`,
+    )
+  }
+  return n
+}
+
+function positiveInt(name: string, defaultValue: number): number {
+  const n = positiveNumber(name, defaultValue)
+  if (!Number.isInteger(n)) {
+    throw new Error(
+      `Invalid env var ${name}: expected a positive integer, got ${JSON.stringify(process.env[name])}`,
+    )
+  }
+  return n
+}
+
 const NAS_HOST = 'theemeraldexchange.local'
 const GB = 1024 * 1024 * 1024
 
@@ -84,7 +110,7 @@ export const env = {
   sessionSecret: required('SESSION_SECRET'),
   admins: csv('ADMINS'),
   plexServerId: opt('PLEX_SERVER_ID') ?? null,
-  port: Number(opt('PORT') ?? 3001),
+  port: positiveInt('PORT', 3001),
   isProd,
   allowedOrigins,
 
@@ -106,22 +132,25 @@ export const env = {
   // Minimum free space (bytes) on a Sonarr/Radarr root folder before
   // we'll allow an `add`. Below this, both admins and users get a 507
   // — the user explicitly wanted everyone (including admins) gated.
-  minFreeBytes: Number(process.env.MIN_FREE_GB ?? 100) * GB,
+  // positiveNumber throws at boot on a typo instead of producing NaN,
+  // which would make `freeSpace < env.minFreeBytes` always false and
+  // silently disable the gate.
+  minFreeBytes: positiveNumber('MIN_FREE_GB', 100) * GB,
 
   // Hard cap on movie release size at add-time. The dashboard intercepts
   // Radarr's auto-search, fetches available releases ourselves, and
   // grabs the highest-quality one whose size is at or under this cap.
   // Prevents accidental 50 GB 4K HDR rips when someone clicks Add.
-  maxMovieBytes: Number(process.env.MAX_MOVIE_SIZE_GB ?? 10) * GB,
-  maxMovieGb: Number(process.env.MAX_MOVIE_SIZE_GB ?? 10),
+  maxMovieBytes: positiveNumber('MAX_MOVIE_SIZE_GB', 10) * GB,
+  maxMovieGb: positiveNumber('MAX_MOVIE_SIZE_GB', 10),
 
   // Hard cap on TV release size, expressed per episode. A release passes
   // when (size / episodeCount) ≤ this value. Single-episode caps at the
   // full per-episode value; a 10-episode season pack caps at 10× the
   // value. 5 GB/episode blocks 4K HDR while letting 1080p Bluray rips
   // through, matching the curated "Choose Me" profile we run.
-  maxTvBytesPerEpisode: Number(process.env.MAX_TV_GB_PER_EPISODE ?? 5) * GB,
-  maxTvGbPerEpisode: Number(process.env.MAX_TV_GB_PER_EPISODE ?? 5),
+  maxTvBytesPerEpisode: positiveNumber('MAX_TV_GB_PER_EPISODE', 5) * GB,
+  maxTvGbPerEpisode: positiveNumber('MAX_TV_GB_PER_EPISODE', 5),
 
   // Path to the persistent rejection list. Same bind-mount as the grab
   // log so the household's "never suggest this again" decisions survive
