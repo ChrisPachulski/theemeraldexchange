@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { apiUrl } from './api/base'
 
 // Persists the admin "view-as" preview across reloads so an admin who
@@ -78,8 +79,28 @@ type AuthCtx = {
 const AuthContext = createContext<AuthCtx | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const qc = useQueryClient()
   const [loading, setLoading] = useState(true)
   const [user, setUser] = useState<AuthUser | null>(null)
+  // Per-user data (feedback dots, usage totals, BYO-key-scoped
+  // suggestions) lives in the React Query cache. Without a reset on
+  // identity change, a shared device leaks state across users — sign
+  // out as Alice on the AppleTV, sign in as Bob, and Bob sees Alice's
+  // dots until each query refetches.
+  //
+  // The fingerprint segment on suggestions/feedback keys helps but
+  // isn't exhaustive: feedback's key is just ['feedback'], usage's
+  // ['usage', ...] isn't sub-scoped, and a per-key audit grows brittle
+  // as new hooks land. Cache-clear on identity transition is the
+  // belt-and-suspenders fix — synchronous so the first re-render
+  // under the new identity already sees an empty cache.
+  const applyUser = useCallback(
+    (next: AuthUser | null) => {
+      qc.clear()
+      setUser(next)
+    },
+    [qc],
+  )
   const [viewAs, setViewAsState] = useState<Role | null>(() => readStoredViewAs())
   const setViewAs = useCallback((next: Role | null) => {
     setViewAsState(next)
@@ -99,10 +120,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .then(async (r) => {
         if (!alive) return
         if (r.status === 401) {
-          setUser(null)
+          applyUser(null)
         } else if (r.ok) {
           const { user } = (await r.json()) as { user: AuthUser }
-          setUser(user)
+          applyUser(user)
         }
       })
       .catch(() => {})
@@ -110,7 +131,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       alive = false
     }
-  }, [])
+  }, [applyUser])
 
   const stopPolling = useCallback(() => {
     if (pollRef.current !== null) {
@@ -172,7 +193,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (data.status === 'authorized') {
             stopPolling()
             popupRef.current?.close()
-            setUser(data.user as AuthUser)
+            applyUser(data.user as AuthUser)
             setDiscoveredServers(data.discoveredServers ?? null)
             setSignInState('idle')
           }
@@ -184,17 +205,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSignInState('error')
       setSignInError(e instanceof Error ? e.message : String(e))
     }
-  }, [stopPolling])
+  }, [applyUser, stopPolling])
 
   const signOut = useCallback(async () => {
     await fetch(apiUrl('/api/auth/logout'), {
       method: 'POST',
       credentials: 'include',
     }).catch(() => {})
-    setUser(null)
+    applyUser(null)
     setViewAs(null)
     setDiscoveredServers(null)
-  }, [setViewAs])
+  }, [applyUser, setViewAs])
 
   const role = user?.role ?? null
   // Only admins can preview as user. Anyone else gets their actual role
