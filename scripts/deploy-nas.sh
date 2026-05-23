@@ -59,7 +59,7 @@ ssh "${NAS_USER}@${NAS_HOST}" "mkdir -p ${APPDATA}"
 
 echo "→ Syncing build context"
 rsync -av \
-  Dockerfile docker-compose.yml package.json package-lock.json tsconfig.json \
+  Dockerfile docker-compose.yml .dockerignore package.json package-lock.json tsconfig.json \
   "${NAS_USER}@${NAS_HOST}:${APPDATA}/"
 
 echo "→ Syncing server/"
@@ -82,6 +82,8 @@ rsync -av --delete \
 echo "→ Shipping env"
 rsync -av "$LOCAL_ENV" "${NAS_USER}@${NAS_HOST}:${APPDATA}/.env"
 ssh "${NAS_USER}@${NAS_HOST}" "chmod 600 ${APPDATA}/.env"
+
+ssh "${NAS_USER}@${NAS_HOST}" "test -f ${APPDATA}/.dockerignore || echo '[deploy] WARN: .dockerignore not present in build context — context will include .env, data/, recommender-db/'"
 
 echo "→ Building and starting containers"
 # Unraid occasionally loses both docker compose forms (plugin + standalone)
