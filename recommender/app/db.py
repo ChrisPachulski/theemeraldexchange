@@ -112,6 +112,16 @@ def deserialize_f32(blob: bytes, dim: int | None = None) -> np.ndarray:
 def migrate(*, db_path: Path | None = None) -> list[str]:
     """Apply any unapplied migrations in order; return the list applied."""
     conn = connect(db_path=db_path)
+    try:
+        return _migrate(conn)
+    finally:
+        # Startup-only function, but leaking a connection across reloads
+        # (e.g. test runs that import-and-reimport the module) holds the
+        # WAL open and shows up as a dangling reader in sqlite3 stats.
+        conn.close()
+
+
+def _migrate(conn: sqlite3.Connection) -> list[str]:
     applied: list[str] = []
     with cursor(conn) as cur:
         cur.execute(SCHEMA_VERSION_DDL)
