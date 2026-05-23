@@ -22,7 +22,7 @@ import {
   type FeedbackKind,
   type FeedbackSignal,
 } from '../services/userFeedback.js'
-import { addRejection, removeRejection } from '../services/rejections.js'
+import { addRejection, getRejectionIds, removeRejection } from '../services/rejections.js'
 import { postFeedback, postRejection } from '../services/recommender.js'
 import { env } from '../env.js'
 
@@ -59,9 +59,37 @@ feedback.post('/', async (c) => {
   const title = typeof body.title === 'string' ? body.title : ''
 
   if (body.signal === 'dislike') {
-    await setDislike(session.sub, body.type, tmdbId, title)
-    // Roll into the household veto so nobody re-sees the title.
+    // Two-step write with rollback. We do the household rejection
+    // FIRST because:
+    //   - its rollback is simple (removeRejection, conditional on no
+    //     other dissent), no prior-state reconstruction needed;
+    //   - if it fails, no personal state has changed yet → clean
+    //     500 with no split-brain.
+    // After it succeeds, attempt the personal dislike. If THAT fails,
+    // undo the household rejection — but only when our call was the
+    // one that added it (otherwise we'd erase another user's dissent).
+    const wasAlreadyRejected = (await getRejectionIds(body.type)).has(tmdbId)
     await addRejection(body.type, tmdbId, title)
+    try {
+      await setDislike(session.sub, body.type, tmdbId, title)
+    } catch (err) {
+      if (!wasAlreadyRejected) {
+        const stillDissenting = await anotherUserDislikes(
+          session.sub,
+          body.type,
+          tmdbId,
+        ).catch(() => true)
+        if (!stillDissenting) {
+          await removeRejection(body.type, tmdbId).catch((rbErr) => {
+            console.error(
+              '[feedback] dislike rollback failed — split-brain (rejection persisted, personal write failed):',
+              { setErr: err, rbErr },
+            )
+          })
+        }
+      }
+      throw err
+    }
   } else {
     await setLike(session.sub, body.type, tmdbId, title)
   }
@@ -86,13 +114,50 @@ feedback.delete('/:type/:tmdbId/:signal', async (c) => {
     return c.json({ error: 'invalid_tmdbId' }, 400)
   }
 
+  // For the dislike-delete path: snapshot the caller's prior signal
+  // so we can restore it if the household-rejection step fails.
+  // Without this, a failed removeRejection would leave the user with
+  // no personal dot but the title still hidden from suggestions.
+  let priorSignal: 'like' | 'dislike' | null = null
+  let priorTitle = ''
+  if (signal === 'dislike') {
+    const f = await getUserFeedback(session.sub)
+    const d = f[type].disliked.find((e) => e.id === tmdbId)
+    const l = f[type].liked.find((e) => e.id === tmdbId)
+    if (d) {
+      priorSignal = 'dislike'
+      priorTitle = d.title
+    } else if (l) {
+      priorSignal = 'like'
+      priorTitle = l.title
+    }
+  }
+
   await clearFeedback(session.sub, type, tmdbId)
   if (signal === 'dislike') {
-    // Only drop from household rejections if no other user still has
-    // it disliked — otherwise we'd unblock a title against another
-    // member's wishes.
-    const stillDissenting = await anotherUserDislikes(session.sub, type, tmdbId)
-    if (!stillDissenting) await removeRejection(type, tmdbId)
+    try {
+      // Only drop from household rejections if no other user still has
+      // it disliked — otherwise we'd unblock a title against another
+      // member's wishes.
+      const stillDissenting = await anotherUserDislikes(session.sub, type, tmdbId)
+      if (!stillDissenting) await removeRejection(type, tmdbId)
+    } catch (err) {
+      // Restore the prior signal so the user isn't left with cleared
+      // personal feedback while the household veto still applies.
+      try {
+        if (priorSignal === 'dislike') {
+          await setDislike(session.sub, type, tmdbId, priorTitle)
+        } else if (priorSignal === 'like') {
+          await setLike(session.sub, type, tmdbId, priorTitle)
+        }
+      } catch (rbErr) {
+        console.error(
+          '[feedback] dislike-delete rollback failed — split-brain (personal cleared, household veto kept):',
+          { remErr: err, rbErr },
+        )
+      }
+      throw err
+    }
   }
   return c.json({ ok: true })
 })
