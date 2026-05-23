@@ -142,9 +142,15 @@ export type UsageSummary = {
 export async function summarizeUsage(sinceMs: number): Promise<UsageSummary[]> {
   await writeQueue
   // Read a generous window — at household scale (<100 calls/day) this
-  // is plenty for a 30-day summary. If the log grows larger we'll
-  // page through rotated files.
-  const events = parseEvents(await readTail(logPath, 10_000))
+  // is plenty for a 30-day summary. Spans the rotated log too: a 5 MB
+  // rotation can easily happen inside the 30-day window, and reading
+  // only the primary file would silently undercount calls / costs.
+  // Mirrors the same primary+rotated pattern as readRecentUsageEvents.
+  const primary = parseEvents(await readTail(logPath, 10_000))
+  const remaining = Math.max(0, 10_000 - primary.length)
+  const rotated =
+    remaining > 0 ? parseEvents(await readTail(logPath + '.1', remaining)) : []
+  const events = [...primary, ...rotated]
   const byUser = new Map<string, UsageSummary>()
   for (const e of events) {
     if (new Date(e.ts).getTime() < sinceMs) continue
