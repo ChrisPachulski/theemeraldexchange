@@ -26,8 +26,8 @@ import Anthropic from '@anthropic-ai/sdk'
 import { requireAuth, type Env } from '../middleware/auth.js'
 import { sonarrFetch } from '../services/sonarr.js'
 import { radarrFetch } from '../services/radarr.js'
-import { getRejections, addRejection } from '../services/rejections.js'
-import { getUserFeedback, setLike } from '../services/userFeedback.js'
+import { getRejections, updateRejectionTitleIfPresent } from '../services/rejections.js'
+import { getUserFeedback, updateLikedTitleIfPresent } from '../services/userFeedback.js'
 import { appendUsageEvent, computeCostCents } from '../services/usageLog.js'
 import { scoreOnce, type RecommenderScoredItem } from '../services/recommender.js'
 import { env } from '../env.js'
@@ -737,16 +737,24 @@ async function backfillRejectionTitles(
   if (needed.length === 0) return entries
   const updates = await resolveTitles(kind, needed)
   if (updates.size === 0) return entries
-  // Persist in parallel — addRejection is queue-serialized internally.
-  // allSettled (not all): the title backfill is non-critical UX polish.
-  // A disk failure here must NOT kill the user's whole suggestions
-  // request — the prompt still has the (id, title) pairs in memory.
+  // Persist in parallel via the title-only helper. Critically NOT
+  // addRejection: TMDB resolution can take seconds, during which the
+  // user might clear or flip the signal via /api/feedback. addRejection
+  // would happily recreate a row that was just cleared (resurrecting
+  // a household veto the user removed). updateRejectionTitleIfPresent
+  // short-circuits to a no-op when the row is gone.
+  //
+  // allSettled (not all): backfill is non-critical UX polish; a disk
+  // failure here must NOT kill the user's suggestions request — the
+  // prompt still has the (id, title) pairs in memory.
   const writes = await Promise.allSettled(
-    Array.from(updates, ([id, title]) => addRejection(kind, id, title)),
+    Array.from(updates, ([id, title]) =>
+      updateRejectionTitleIfPresent(kind, id, title),
+    ),
   )
   for (const r of writes) {
     if (r.status === 'rejected') {
-      console.error('[suggestions] addRejection title backfill failed:', r.reason)
+      console.error('[suggestions] rejection title backfill failed:', r.reason)
     }
   }
   return entries.map((e) => (updates.has(e.id) ? { ...e, title: updates.get(e.id)! } : e))
@@ -761,14 +769,20 @@ async function backfillLikedTitles(
   if (needed.length === 0) return entries
   const updates = await resolveTitles(kind, needed)
   if (updates.size === 0) return entries
-  // See backfillRejectionTitles — allSettled so disk errors here don't
-  // fail the suggestions request.
+  // Same race protection as backfillRejectionTitles — never use setLike
+  // here. setLike routes through mutate(), which clears the opposite
+  // signal and pushes a like, so a backfill firing after the user
+  // cleared/flipped would silently restore an old like. The title-only
+  // helper updates the row in place if it still exists and is no-op
+  // otherwise.
   const writes = await Promise.allSettled(
-    Array.from(updates, ([id, title]) => setLike(sub, kind, id, title)),
+    Array.from(updates, ([id, title]) =>
+      updateLikedTitleIfPresent(sub, kind, id, title),
+    ),
   )
   for (const r of writes) {
     if (r.status === 'rejected') {
-      console.error('[suggestions] setLike title backfill failed:', r.reason)
+      console.error('[suggestions] liked title backfill failed:', r.reason)
     }
   }
   return entries.map((e) => (updates.has(e.id) ? { ...e, title: updates.get(e.id)! } : e))
@@ -1563,10 +1577,13 @@ suggestions.get('/:type', async (c) => {
   // when the request short-circuits to cold-start or trending, the
   // unawaited fetch settles harmlessly off the hot path.
   const session = c.get('session')
-  const userFeedbackPromise = getUserFeedback(session.sub).catch(() => ({
-    movie: { liked: [], disliked: [] },
-    tv: { liked: [], disliked: [] },
-  }))
+  // Don't swallow errors here. getUserFeedback already returns an empty
+  // bucket cleanly on ENOENT (first run / unknown sub). Any other
+  // failure — IO error, or the fail-closed parse-corruption path added
+  // in round 12 — should surface as a 500 instead of silently
+  // serving generic suggestions while real likes/dislikes are
+  // unreachable.
+  const userFeedbackPromise = getUserFeedback(session.sub)
   const endPrologue = timing.mark('prologue')
   const [library, rejections] = await Promise.all([
     type === 'movie' ? fetchRadarrLibrary() : fetchSonarrLibrary(),
