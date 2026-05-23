@@ -228,3 +228,172 @@ describe('sonarr POST /api/v3/series disk-space gate', () => {
     expect(r.status).toBe(400)
   })
 })
+
+// POST /api/v3/series — background grab pipeline interactions.
+// `grabTvUnderCap` runs via `void` after the add response is written,
+// so the HTTP test surface is narrower than for synchronous endpoints:
+// we can assert what fetch calls happen *before* the response goes
+// back (rootfolder check, the add itself) but the background grab uses
+// real setTimeouts (2 s + repeated 1.5 s polls) we don't want to wait
+// on. We force `searchForMissingEpisodes: false` to skip spawning the
+// grab entirely, then verify nothing past `/api/v3/series` is called.
+describe('sonarr POST /api/v3/series — wantedSearch flag', () => {
+  it('searchForMissingEpisodes:false skips the background grab path', async () => {
+    stub('/api/v3/rootfolder', [
+      { id: 1, path: '/data/tv', freeSpace: 500 * 1024 ** 3 },
+    ])
+    stub('/api/v3/series', { id: 99, title: 'Foo', monitored: true, seasons: [] }, 201)
+    const r = await appUnderTest().request('/api/v3/series', {
+      method: 'POST',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        rootFolderPath: '/data/tv',
+        title: 'Foo',
+        addOptions: {
+          searchForMissingEpisodes: false,
+          searchForCutoffUnmetEpisodes: false,
+        },
+      }),
+    })
+    expect(r.status).toBe(201)
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.map(([u]) =>
+      String(u),
+    )
+    // No release or episode endpoint should have been touched — the
+    // size-capped grab was opted out.
+    expect(calls.some((u) => u.includes('/api/v3/release'))).toBe(false)
+    expect(calls.some((u) => u.includes('/api/v3/episode'))).toBe(false)
+  })
+
+  it('Sonarr add fails (non-OK) → no background grab spawned', async () => {
+    stub('/api/v3/rootfolder', [
+      { id: 1, path: '/data/tv', freeSpace: 500 * 1024 ** 3 },
+    ])
+    // Add returns 400; route forwards verbatim and never enters the
+    // grab pipeline because r.ok is false.
+    stub('/api/v3/series', { error: 'sonarr says no' }, 400)
+    const r = await appUnderTest().request('/api/v3/series', {
+      method: 'POST',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        rootFolderPath: '/data/tv',
+        title: 'Foo',
+        addOptions: { searchForMissingEpisodes: true },
+        seasons: [{ seasonNumber: 1, monitored: true }],
+      }),
+    })
+    expect(r.status).toBe(400)
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.map(([u]) =>
+      String(u),
+    )
+    expect(calls.some((u) => u.includes('/api/v3/release'))).toBe(false)
+    expect(calls.some((u) => u.includes('/api/v3/episode'))).toBe(false)
+  })
+
+  it('wantedSearch true but monitored.length === 0 skips the background grab', async () => {
+    // No seasons monitored = nothing to fetch for. Route should not
+    // spawn grabTvUnderCap (which would loop over an empty array).
+    stub('/api/v3/rootfolder', [
+      { id: 1, path: '/data/tv', freeSpace: 500 * 1024 ** 3 },
+    ])
+    stub('/api/v3/series', {
+      id: 99,
+      title: 'Foo',
+      monitored: true,
+      seasons: [{ seasonNumber: 1, monitored: false }],
+    }, 201)
+    const r = await appUnderTest().request('/api/v3/series', {
+      method: 'POST',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        rootFolderPath: '/data/tv',
+        title: 'Foo',
+        addOptions: { searchForMissingEpisodes: true },
+        seasons: [{ seasonNumber: 1, monitored: false }],
+      }),
+    })
+    expect(r.status).toBe(201)
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.map(([u]) =>
+      String(u),
+    )
+    expect(calls.some((u) => u.includes('/api/v3/release'))).toBe(false)
+  })
+
+  it('forces searchForMissingEpisodes:false on the body sent to Sonarr regardless of caller intent', async () => {
+    stub('/api/v3/rootfolder', [
+      { id: 1, path: '/data/tv', freeSpace: 500 * 1024 ** 3 },
+    ])
+    stub('/api/v3/series', { id: 99, title: 'Foo', monitored: true, seasons: [] }, 201)
+    await appUnderTest().request('/api/v3/series', {
+      method: 'POST',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        rootFolderPath: '/data/tv',
+        title: 'Foo',
+        addOptions: { searchForMissingEpisodes: true, searchForCutoffUnmetEpisodes: true },
+      }),
+    })
+    const fetchSpy = globalThis.fetch as ReturnType<typeof vi.fn>
+    // Find the add call (POST /api/v3/series, NOT /rootfolder)
+    const addCall = fetchSpy.mock.calls.find(
+      ([u, init]) =>
+        String(u).includes('/api/v3/series') &&
+        !String(u).includes('rootfolder') &&
+        (init as RequestInit | undefined)?.method === 'POST',
+    )
+    expect(addCall).toBeDefined()
+    const bodyJson = JSON.parse((addCall![1] as RequestInit).body as string)
+    expect(bodyJson.addOptions.searchForMissingEpisodes).toBe(false)
+    expect(bodyJson.addOptions.searchForCutoffUnmetEpisodes).toBe(false)
+  })
+})
+
+// POST /api/v3/series/:id/seasons/:n/monitor — admin-only single-season
+// toggle. Has its own param validation, GET-existing, then PUT, then
+// background grab. The PUT failure mode is a forwarded-body response,
+// not a structured error; record that here so a future refactor that
+// adds a structured shape doesn't quietly change the contract.
+describe('sonarr POST /series/:id/seasons/:n/monitor', () => {
+  it('rejects user role with 403', async () => {
+    const r = await appUnderTest().request('/api/v3/series/1/seasons/2/monitor', {
+      method: 'POST',
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r.status).toBe(403)
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  it('400 bad_params for non-numeric id or season', async () => {
+    const r1 = await appUnderTest().request('/api/v3/series/abc/seasons/2/monitor', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r1.status).toBe(400)
+    expect(await r1.json()).toEqual({ error: 'bad_params' })
+
+    const r2 = await appUnderTest().request('/api/v3/series/1/seasons/xx/monitor', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r2.status).toBe(400)
+  })
+
+  it('404 season_not_found when the season does not exist on the series', async () => {
+    stub('/api/v3/series/1', { id: 1, title: 'Foo', seasons: [{ seasonNumber: 1, monitored: true }] })
+    const r = await appUnderTest().request('/api/v3/series/1/seasons/9/monitor', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(404)
+    expect(await r.json()).toEqual({ error: 'season_not_found' })
+  })
+
+  it('GET series upstream non-OK is forwarded with its status', async () => {
+    stub('/api/v3/series/1', { error: 'no such series' }, 404)
+    const r = await appUnderTest().request('/api/v3/series/1/seasons/2/monitor', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(404)
+  })
+})
