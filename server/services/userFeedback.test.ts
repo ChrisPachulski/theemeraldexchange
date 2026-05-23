@@ -97,9 +97,18 @@ describe('user feedback store', () => {
     expect(await anotherUserDislikes('bob', 'movie', 100)).toBe(true)
   })
 
-  it('survives malformed file by starting fresh', async () => {
+  it('fails closed on a corrupted file — does NOT silently start fresh', async () => {
+    // Prior behavior wiped every household member's likes on parse
+    // failure. Now we throw so a torn write from a crash can be
+    // inspected/restored before the next mutation overwrites real
+    // data with empty state.
     await fs.writeFile(path, 'definitely not json')
     _setUserFeedbackPathForTests(path)
+    await expect(getUserFeedback('alice')).rejects.toThrow(/cannot parse/)
+  })
+
+  it('first run (no file) returns the empty bucket cleanly', async () => {
+    // ENOENT is the legit first-run case — distinct from parse failure.
     expect(await getUserFeedback('alice')).toEqual({
       movie: { liked: [], disliked: [] },
       tv: { liked: [], disliked: [] },

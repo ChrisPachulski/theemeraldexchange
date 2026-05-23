@@ -76,15 +76,37 @@ function normalizeList(raw: unknown): RejectionEntry[] {
 
 async function load(): Promise<RejectionsFile> {
   if (cached) return cached
+  let raw: string
   try {
-    const raw = await fs.readFile(filePath, 'utf8')
+    raw = await fs.readFile(filePath, 'utf8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      // Legit first run — start empty. Any subsequent persistSnapshot
+      // creates the file atomically.
+      cached = { movie: [], tv: [] }
+      return cached
+    }
+    // Permission denied, EIO, EISDIR — surface so the route returns 500
+    // instead of silently overwriting the file with empty state.
+    throw err
+  }
+  try {
     const parsed = JSON.parse(raw) as Partial<{ movie: unknown; tv: unknown }>
     cached = {
       movie: normalizeList(parsed.movie),
       tv: normalizeList(parsed.tv),
     }
-  } catch {
-    cached = { movie: [], tv: [] }
+  } catch (parseErr) {
+    // File exists but doesn't parse — likely a torn write from a prior
+    // crash. Fail closed: refuse to load so the next mutation can't
+    // overwrite real data with the empty defaults. Operator must
+    // inspect / restore the file.
+    throw new Error(
+      `[rejections] cannot parse ${filePath} (corrupted?): ${
+        (parseErr as Error).message
+      }`,
+      { cause: parseErr },
+    )
   }
   return cached
 }
@@ -92,7 +114,20 @@ async function load(): Promise<RejectionsFile> {
 async function persistSnapshot(file: RejectionsFile): Promise<void> {
   const serialized = JSON.stringify(file, null, 2)
   await fs.mkdir(dirname(filePath), { recursive: true })
-  await fs.writeFile(filePath, serialized + '\n', 'utf8')
+  // Atomic write: stage to a temp sibling and rename onto the target.
+  // rename(2) is atomic within a filesystem, so readers either see the
+  // old file (full) or the new file (full) — never a half-written one.
+  // Prevents the previous failure mode where a crash mid-writeFile left
+  // a truncated JSON that load() would then read as empty and the
+  // next mutation would persist as truth.
+  const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}`
+  try {
+    await fs.writeFile(tmp, serialized + '\n', 'utf8')
+    await fs.rename(tmp, filePath)
+  } catch (err) {
+    await fs.unlink(tmp).catch(() => {})
+    throw err
+  }
 }
 
 function cloneFile(file: RejectionsFile): RejectionsFile {

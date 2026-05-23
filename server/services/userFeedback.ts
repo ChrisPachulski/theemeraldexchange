@@ -93,23 +93,54 @@ function sanitizeUser(raw: unknown): UserBucket {
 
 async function load(): Promise<FeedbackFile> {
   if (cached) return cached
+  let raw: string
   try {
-    const raw = await fs.readFile(filePath, 'utf8')
+    raw = await fs.readFile(filePath, 'utf8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      // Legit first run.
+      cached = {}
+      return cached
+    }
+    // Surface other IO failures (permission, EIO) so the route returns
+    // 500 instead of overwriting with empty state.
+    throw err
+  }
+  try {
     const parsed = JSON.parse(raw) as Record<string, unknown>
     const out: FeedbackFile = {}
     for (const [sub, bucket] of Object.entries(parsed)) {
       if (typeof sub === 'string' && sub.length > 0) out[sub] = sanitizeUser(bucket)
     }
     cached = out
-  } catch {
-    cached = {}
+  } catch (parseErr) {
+    // Corrupted file (torn write, manual edit error). Fail closed
+    // rather than silently wiping every household member's likes.
+    throw new Error(
+      `[userFeedback] cannot parse ${filePath} (corrupted?): ${
+        (parseErr as Error).message
+      }`,
+      { cause: parseErr },
+    )
   }
   return cached
 }
 
 async function persistSnapshot(file: FeedbackFile): Promise<void> {
   await fs.mkdir(dirname(filePath), { recursive: true })
-  await fs.writeFile(filePath, JSON.stringify(file, null, 2) + '\n', 'utf8')
+  // Atomic write: stage to a temp sibling, then rename(2) onto the
+  // target. A crash between the writeFile and the rename leaves the
+  // prior file intact — readers never see a half-written JSON that
+  // would parse as garbage and trigger the "fail closed on corruption"
+  // path on next boot.
+  const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}`
+  try {
+    await fs.writeFile(tmp, JSON.stringify(file, null, 2) + '\n', 'utf8')
+    await fs.rename(tmp, filePath)
+  } catch (err) {
+    await fs.unlink(tmp).catch(() => {})
+    throw err
+  }
 }
 
 function cloneList(list: FeedbackEntry[]): FeedbackEntry[] {
