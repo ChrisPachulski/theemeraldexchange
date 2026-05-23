@@ -92,13 +92,27 @@ echo "→ Building and starting containers"
 # build + run that mirrors the docker-compose.yml. Only the backend
 # service is recreated this way — cloudflared keeps running across the
 # rebuild since its config is in the container, not on the host.
+#
+# The fallback CANNOT recreate the compose network where
+# `http://recommender:8000` resolves, so it would silently downgrade
+# USE_LOCAL_RECOMMENDER=1 to trending. When that env is set, refuse
+# to fall back: hard-fail so the operator installs docker compose
+# instead of shipping a broken-but-running deploy.
 ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && \
   if docker compose version >/dev/null 2>&1; then \
     docker compose up -d --build; \
   elif command -v docker-compose >/dev/null 2>&1; then \
     docker-compose up -d --build; \
+  elif grep -qE '^USE_LOCAL_RECOMMENDER=1' .env 2>/dev/null; then \
+    echo >&2; \
+    echo '[deploy] FATAL: docker compose is unavailable AND USE_LOCAL_RECOMMENDER=1.' >&2; \
+    echo '         The direct-docker fallback cannot wire the backend↔recommender' >&2; \
+    echo '         network — suggestions would silently degrade to trending.' >&2; \
+    echo '         Install docker compose on the NAS, then re-run.' >&2; \
+    exit 1; \
   else \
     echo '[deploy] compose unavailable — rebuilding backend directly'; \
+    echo '         (recommender disabled by env, so single-container is OK)'; \
     docker build -t theemeraldexchange-backend:latest . && \
     docker stop exchange-backend 2>/dev/null || true; \
     docker rm exchange-backend 2>/dev/null || true; \
