@@ -281,10 +281,14 @@ export function DownloadsTab() {
                 )}
                 {isAdmin && (() => {
                   const slotPaused = activeSlot.status === 'Paused'
+                  // Gate "busy" on isPending too — TanStack keeps
+                  // `variables` populated after success/error, so just
+                  // checking `pause.variables === id` left the buttons
+                  // disabled until the next remount.
                   const slotBusy =
-                    pause.variables === activeSlot.nzo_id ||
-                    resume.variables === activeSlot.nzo_id ||
-                    cancel.variables === activeSlot.nzo_id
+                    (pause.isPending && pause.variables === activeSlot.nzo_id) ||
+                    (resume.isPending && resume.variables === activeSlot.nzo_id) ||
+                    (cancel.isPending && cancel.variables === activeSlot.nzo_id)
                   return (
                     <span className="downloads-tab__active-actions">
                       {slotPaused ? (
@@ -360,10 +364,12 @@ export function DownloadsTab() {
             {queuedSlots.map((slot) => {
               const percent = parseFloat(slot.percentage) || 0
               const paused = slot.status === 'Paused'
+              // See header path — isPending guard prevents the row's
+              // buttons from staying disabled after the mutation settles.
               const busy =
-                pause.variables === slot.nzo_id ||
-                resume.variables === slot.nzo_id ||
-                cancel.variables === slot.nzo_id
+                (pause.isPending && pause.variables === slot.nzo_id) ||
+                (resume.isPending && resume.variables === slot.nzo_id) ||
+                (cancel.isPending && cancel.variables === slot.nzo_id)
 
               return (
                 <QueueRow
