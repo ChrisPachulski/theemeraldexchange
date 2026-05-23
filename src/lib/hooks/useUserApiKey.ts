@@ -21,13 +21,20 @@ function readScoped(sub: string | undefined): string | null {
 
 // Non-secret fingerprint of an API key, suitable for use inside a
 // TanStack Query key. The full key MUST never appear in a query key
-// (the cache is in-memory but query keys are easy to log/dump).
-// Last-4 mirrors the masked-tail pattern in ApiKeySettings — low
-// entropy but enough to disambiguate different keys in practice, and
-// it changes whenever the user rotates their key (the only thing this
-// fingerprint exists to detect).
+// (the cache is in-memory but query keys are easy to log/dump). djb2
+// over the full key, base36-encoded — deterministic per key value,
+// one-way at this width (32-bit truncation hides the source), and
+// collision-resistant across the small set of keys a single household
+// uses. Previous last-4-characters approach was non-deterministic:
+// two different keys sharing a trailing slice would collide and let
+// the new key read the old key's cached suggestions.
 export function keyFingerprint(key: string | null): string {
-  return key ? key.slice(-4) : 'none'
+  if (!key) return 'none'
+  let h = 5381
+  for (let i = 0; i < key.length; i++) {
+    h = ((h << 5) + h) ^ key.charCodeAt(i)
+  }
+  return (h >>> 0).toString(36)
 }
 
 export function useUserApiKey(): {
