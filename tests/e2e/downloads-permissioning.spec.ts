@@ -72,7 +72,7 @@ const queueHistoryHandlers = {
 } satisfies Parameters<typeof sabHandler>[0]
 
 test.describe('downloads permissioning', () => {
-  test('user role sees no admin controls on queue rows', async ({ page }) => {
+  test('user role sees no admin controls on queue rows OR active slot', async ({ page }) => {
     await installBackgroundMocks(page)
     await mockMe(page, REGULAR_USER)
     await page.route(/\/api\/sab\/api\?/, sabHandler(queueHistoryHandlers))
@@ -85,8 +85,11 @@ test.describe('downloads permissioning', () => {
     await expect(page.getByText('Queued.Item.mkv')).toBeVisible({ timeout: 15000 })
 
     // DownloadsTab passes onPause/onResume/onDelete only when isAdmin.
-    // QueueRow hides the entire actions cluster when none are supplied,
-    // so for a user the Pause/Resume/Cancel buttons should be absent.
+    // QueueRow hides the entire actions cluster when none are supplied;
+    // the header's active-slot cluster is also gated on isAdmin. So a
+    // non-admin should see ZERO instances of any of these buttons —
+    // both the queued row (Queued.Item.mkv) and the header (Active.Item.mkv)
+    // surfaces are covered.
     await expect(page.getByRole('button', { name: 'Pause' })).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Resume' })).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Cancel' })).toHaveCount(0)
@@ -122,11 +125,55 @@ test.describe('downloads permissioning', () => {
     // DownloadsTab is lazy-loaded; first-paint after navigation can
     // wait on the dynamic-import chunk + SAB queue fetch.
     await expect(page.getByText('Queued.Item.mkv')).toBeVisible({ timeout: 15000 })
-    const pauseBtn = page.getByRole('button', { name: 'Pause' })
+    // Two Pause buttons render: one in the header for the active slot,
+    // one inside the QueueRow for queued-1. Scope to QueueRow's action
+    // cluster so the assertion targets the queued-item button.
+    const pauseBtn = page.locator('.queue-row__actions').getByRole('button', { name: 'Pause' })
     await expect(pauseBtn).toBeVisible()
     await pauseBtn.click()
 
     await expect.poll(() => captured.method, { timeout: 5000 }).toBe('POST')
     expect(captured.path).toMatch(/\/api\/sab\/api\/queue\/queued-1\/pause$/)
+  })
+
+  test('admin can pause the ACTIVE slot from the header', async ({ page }) => {
+    // The active (Downloading) slot is promoted into the panel header
+    // by DownloadsTab and removed from the queued list. Before the
+    // round-9 fix, the header had no buttons — so an admin literally
+    // could not pause the one thing actually downloading. This spec
+    // locks the active-slot Pause button in place.
+    await installBackgroundMocks(page)
+    await mockMe(page, ADMIN_USER)
+    await page.route(/\/api\/sab\/api\?/, sabHandler(queueHistoryHandlers))
+
+    const captured: { method: string | null; path: string | null } = {
+      method: null,
+      path: null,
+    }
+    await page.route('**/api/sab/api/queue/**', (route) => {
+      captured.method = route.request().method()
+      captured.path = new URL(route.request().url()).pathname
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ status: true }),
+      })
+    })
+
+    await page.goto('/#/downloads')
+
+    // Active filename lands in the header heading.
+    await expect(page.getByText('Active.Item.mkv')).toBeVisible({ timeout: 15000 })
+
+    // Two Pause buttons render now (one in header for active slot,
+    // one in the QueueRow for queued-1). Target the active-slot one
+    // by scoping to the .downloads-tab__active-actions container.
+    const headerActions = page.locator('.downloads-tab__active-actions')
+    const headerPause = headerActions.getByRole('button', { name: 'Pause' })
+    await expect(headerPause).toBeVisible()
+    await headerPause.click()
+
+    await expect.poll(() => captured.method, { timeout: 5000 }).toBe('POST')
+    expect(captured.path).toMatch(/\/api\/sab\/api\/queue\/active-1\/pause$/)
   })
 })
