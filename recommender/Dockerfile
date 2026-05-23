@@ -11,12 +11,15 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl \
  && rm -rf /var/lib/apt/lists/*
 
+# Copy package source before `pip install .` so hatchling's
+# wheel build (which packages `app` and `workers` per pyproject) can
+# find the directories it needs. Otherwise the build fails on a fresh
+# image with "directory not found".
 COPY pyproject.toml ./
-RUN pip install --upgrade pip && pip install .
-
 COPY app ./app
 COPY workers ./workers
 COPY migrations ./migrations
+RUN pip install --upgrade pip && pip install .
 
 ENV RECOMMENDER_DB_PATH=/data/exchange.db \
     RECOMMENDER_HOST=0.0.0.0 \

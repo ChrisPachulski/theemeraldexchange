@@ -9,10 +9,11 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time
+from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 
 from .config import CONFIG
 from .context import get_active_model_config, load_user_context
@@ -29,28 +30,36 @@ log = logging.getLogger("recommender")
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_app: FastAPI):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     log.info("recommender starting; db=%s", CONFIG.db_path)
     applied = migrate()
     if applied:
         log.info("applied migrations: %s", applied)
-    conn = connect()
-    app.state.db = conn
     yield
-    conn.close()
 
 
 app = FastAPI(title="exchange-recommender", lifespan=lifespan)
 
 
-def _db(app: FastAPI) -> sqlite3.Connection:
-    return app.state.db
+def get_db() -> Iterator[sqlite3.Connection]:
+    """Per-request SQLite connection.
+
+    FastAPI runs sync handlers in a worker threadpool, so a single shared
+    connection across concurrent requests would race on cursor state and
+    implicit transactions. SQLite open is cheap (microseconds) and WAL
+    mode lets multiple readers + one writer overlap, so a fresh
+    connection per request is the simplest correct shape here.
+    """
+    conn = connect()
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 @app.get("/health", response_model=HealthResponse)
-def health() -> HealthResponse:
-    conn = _db(app)
+def health(conn: sqlite3.Connection = Depends(get_db)) -> HealthResponse:
     titles = conn.execute("SELECT COUNT(*) AS c FROM titles").fetchone()["c"]
     vecs = conn.execute("SELECT COUNT(*) AS c FROM title_vec").fetchone()["c"]
     cfg_row = conn.execute(
@@ -66,9 +75,11 @@ def health() -> HealthResponse:
 
 
 @app.post("/score", response_model=ScoreResponse)
-def score(req: ScoreRequest) -> ScoreResponse:
+def score(
+    req: ScoreRequest,
+    conn: sqlite3.Connection = Depends(get_db),
+) -> ScoreResponse:
     t0 = time.perf_counter()
-    conn = _db(app)
     ctx = load_user_context(conn, req)
 
     # Cold-start orchestration: choose the cold_start_trending recipe when the
@@ -130,8 +141,10 @@ def score(req: ScoreRequest) -> ScoreResponse:
 
 
 @app.post("/events/feedback")
-def post_feedback(ev: FeedbackEventRequest) -> dict[str, bool]:
-    conn = _db(app)
+def post_feedback(
+    ev: FeedbackEventRequest,
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, bool]:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     conn.execute(
         """INSERT INTO user_feedback(sub, kind, tmdb_id, signal, ts)
@@ -167,7 +180,10 @@ def post_feedback(ev: FeedbackEventRequest) -> dict[str, bool]:
 
 
 @app.post("/events/library/sync")
-def post_library_sync(payload: dict) -> dict[str, int]:
+def post_library_sync(
+    payload: dict,
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, int]:
     """Bulk-replace the library snapshot for one kind.
 
     Hono is the source of truth via Sonarr/Radarr. We mirror it here for
@@ -177,7 +193,6 @@ def post_library_sync(payload: dict) -> dict[str, int]:
     items = payload.get("items") or []
     if kind not in ("movie", "tv"):
         raise HTTPException(status_code=400, detail="invalid kind")
-    conn = _db(app)
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     conn.execute("DELETE FROM library_items WHERE kind = ?", (kind,))
     conn.executemany(
@@ -189,12 +204,14 @@ def post_library_sync(payload: dict) -> dict[str, int]:
 
 
 @app.post("/events/rejection")
-def post_rejection(payload: dict) -> dict[str, bool]:
+def post_rejection(
+    payload: dict,
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, bool]:
     kind = payload.get("kind")
     tmdb_id = payload.get("tmdb_id")
     if kind not in ("movie", "tv") or not isinstance(tmdb_id, int):
         raise HTTPException(status_code=400, detail="invalid payload")
-    conn = _db(app)
     conn.execute(
         """INSERT INTO household_rejections(kind, tmdb_id, ts) VALUES (?, ?, datetime('now'))
            ON CONFLICT(kind, tmdb_id) DO NOTHING""",
