@@ -98,6 +98,31 @@ describe('summarizeUsage', () => {
     const inOneHour = Date.now() + 60 * 60 * 1000
     expect(await summarizeUsage(inOneHour)).toEqual([])
   })
+
+  it('spans the rotated log so 30-day summaries don\'t undercount after rotation', async () => {
+    // Simulate post-rotation state: primary holds the newer events,
+    // .1 holds the older ones. Both are inside the summary window.
+    // Before the fix, summarizeUsage read only the primary and would
+    // miss the rotated calls entirely.
+    const old = JSON.stringify({
+      ts: new Date().toISOString(),
+      sub: 'alice', username: 'alice', type: 'claude_call',
+      model: 'm', kind: 'movie',
+      inputTokens: 100, outputTokens: 50, costCents: 0.10,
+    })
+    await fs.writeFile(path + '.1', old + '\n')
+    await appendUsageEvent({
+      sub: 'alice', username: 'alice', type: 'claude_call',
+      model: 'm', kind: 'movie',
+      inputTokens: 200, outputTokens: 100, costCents: 0.20,
+    })
+
+    const summary = await summarizeUsage(0)
+    const alice = summary.find((r) => r.sub === 'alice')
+    expect(alice?.calls).toBe(2) // 1 primary + 1 rotated
+    expect(alice?.inputTokens).toBe(300)
+    expect(alice?.costCents).toBeCloseTo(0.30, 2)
+  })
 })
 
 describe('computeCostCents', () => {
