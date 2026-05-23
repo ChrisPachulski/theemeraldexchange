@@ -185,6 +185,37 @@ export function addRejection(
   return op
 }
 
+// Title-only backfill. Updates the title of an EXISTING row only;
+// never adds a missing row. Used by suggestions.ts to backfill TMDB
+// titles on legacy (bare-id) rejections without racing against a
+// concurrent /api/feedback DELETE — if the user cleared the rejection
+// while TMDB was resolving the title, the row is gone by the time the
+// backfill runs, and we MUST NOT recreate it. addRejection would
+// happily restore the cleared row; this helper short-circuits to a
+// no-op instead.
+export function updateRejectionTitleIfPresent(
+  kind: RejectionsKind,
+  tmdbId: number,
+  title: string,
+): Promise<void> {
+  const op = writeQueue.then(async () => {
+    if (!title) return
+    const file = await load()
+    const existing = file[kind].find((e) => e.id === tmdbId)
+    if (!existing) return // cleared by a concurrent op — leave it cleared
+    if (existing.title === title) return // already up to date
+    const next = cloneFile(file)
+    const target = next[kind].find((e) => e.id === tmdbId)!
+    target.title = title
+    await persistSnapshot(next)
+    cached = next
+  })
+  writeQueue = op.catch((err) => {
+    console.error('[rejections] title-only update failed:', err)
+  })
+  return op
+}
+
 export function removeRejection(kind: RejectionsKind, tmdbId: number): Promise<void> {
   const op = writeQueue.then(async () => {
     const file = await load()

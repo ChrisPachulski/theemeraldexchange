@@ -7,6 +7,7 @@ import {
   getRejectionIds,
   addRejection,
   removeRejection,
+  updateRejectionTitleIfPresent,
   _setRejectionsPathForTests,
 } from './rejections.js'
 
@@ -93,6 +94,41 @@ describe('rejections store', () => {
     expect(await getRejections()).toEqual({ movie: [], tv: [] })
     await addRejection('tv', 1, 'Pilot')
     expect((await getRejections()).tv).toContainEqual({ id: 1, title: 'Pilot' })
+  })
+
+  describe('updateRejectionTitleIfPresent (backfill race protection)', () => {
+    it('updates an existing legacy entry in place', async () => {
+      await fs.writeFile(path, JSON.stringify({ movie: [10], tv: [] }))
+      _setRejectionsPathForTests(path)
+      await updateRejectionTitleIfPresent('movie', 10, 'Megalopolis')
+      expect((await getRejections()).movie).toEqual([{ id: 10, title: 'Megalopolis' }])
+    })
+
+    it('no-op when the row was cleared concurrently — does NOT recreate', async () => {
+      // The race we're guarding against: suggestions captured a stale
+      // snapshot showing id=42 disliked, kicked off TMDB lookup, and
+      // /api/feedback DELETE cleared the dislike before the lookup
+      // resolved. Backfill MUST NOT bring it back from the dead.
+      const got = await getRejections()
+      expect(got.movie.find((e) => e.id === 42)).toBeUndefined()
+      await updateRejectionTitleIfPresent('movie', 42, 'Resurrected!')
+      expect((await getRejections()).movie.find((e) => e.id === 42)).toBeUndefined()
+    })
+
+    it('no-op when title is already current (no unnecessary persist)', async () => {
+      await addRejection('movie', 7, 'Already Set')
+      // Snapshot mtime to confirm no re-write.
+      const beforeMtime = (await fs.stat(path)).mtimeMs
+      await new Promise((r) => setTimeout(r, 5))
+      await updateRejectionTitleIfPresent('movie', 7, 'Already Set')
+      expect((await fs.stat(path)).mtimeMs).toBe(beforeMtime)
+    })
+
+    it('no-op when title is empty (does not blank a known title)', async () => {
+      await addRejection('movie', 8, 'Knowable')
+      await updateRejectionTitleIfPresent('movie', 8, '')
+      expect((await getRejections()).movie).toEqual([{ id: 8, title: 'Knowable' }])
+    })
   })
 
   it('atomic write — readers never see a partial file', async () => {
