@@ -19,6 +19,11 @@
 // single failure can't poison the next call's chain. The caller
 // `await`s `op` — if persist fails, the user-facing route surfaces
 // the failure instead of lying with `{ ok: true }`.
+//
+// Snapshot-then-swap: each mutation clones `cached` into a `next`
+// object, persists the snapshot, and only assigns `cached = next`
+// after the write succeeds. A failed persist leaves no ghost
+// entry behind for a later successful write to accidentally adopt.
 
 import { promises as fs } from 'fs'
 import { dirname } from 'path'
@@ -84,11 +89,17 @@ async function load(): Promise<RejectionsFile> {
   return cached
 }
 
-async function persist(): Promise<void> {
-  if (!cached) return
-  const snapshot = JSON.stringify(cached, null, 2)
+async function persistSnapshot(file: RejectionsFile): Promise<void> {
+  const serialized = JSON.stringify(file, null, 2)
   await fs.mkdir(dirname(filePath), { recursive: true })
-  await fs.writeFile(filePath, snapshot + '\n', 'utf8')
+  await fs.writeFile(filePath, serialized + '\n', 'utf8')
+}
+
+function cloneFile(file: RejectionsFile): RejectionsFile {
+  return {
+    movie: file.movie.map((e) => ({ ...e })),
+    tv: file.tv.map((e) => ({ ...e })),
+  }
 }
 
 export async function getRejections(): Promise<RejectionsFile> {
@@ -115,15 +126,20 @@ export function addRejection(
   const op = writeQueue.then(async () => {
     const file = await load()
     const existing = file[kind].find((e) => e.id === tmdbId)
+    // No-op fast paths — no persist, no cache swap.
+    if (existing && (!title || existing.title === title)) return
+    const next = cloneFile(file)
     if (!existing) {
-      file[kind].push({ id: tmdbId, title })
-      await persist()
-    } else if (title && existing.title !== title) {
+      next[kind].push({ id: tmdbId, title })
+    } else {
       // Upgrade legacy / stale entries in place when a fresh title
-      // arrives. Empty incoming title never overwrites a known one.
-      existing.title = title
-      await persist()
+      // arrives. Empty incoming title never overwrites a known one
+      // (filtered by the fast-path above).
+      const target = next[kind].find((e) => e.id === tmdbId)!
+      target.title = title
     }
+    await persistSnapshot(next)
+    cached = next
   })
   // Recovery branch: keep the chain alive for the next caller even if
   // this op rejects. Do NOT return this — return `op` below so the
@@ -137,9 +153,11 @@ export function addRejection(
 export function removeRejection(kind: RejectionsKind, tmdbId: number): Promise<void> {
   const op = writeQueue.then(async () => {
     const file = await load()
-    const before = file[kind].length
-    file[kind] = file[kind].filter((e) => e.id !== tmdbId)
-    if (file[kind].length !== before) await persist()
+    if (!file[kind].some((e) => e.id === tmdbId)) return // no-op
+    const next = cloneFile(file)
+    next[kind] = next[kind].filter((e) => e.id !== tmdbId)
+    await persistSnapshot(next)
+    cached = next
   })
   writeQueue = op.catch((err) => {
     console.error('[rejections] write failed:', err)

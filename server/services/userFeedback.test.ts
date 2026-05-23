@@ -182,11 +182,10 @@ describe('user feedback store', () => {
     // Reload from disk to confirm the second write actually persisted.
     _setUserFeedbackPathForTests(path)
     const f = await getUserFeedback('alice')
-    // id 1's persist failed, but id 1 was mutated into the in-memory
-    // cache before persist ran — so when id 2's persist succeeded, it
-    // wrote the cumulative {1, 2}. The load point: id 2 reached disk
-    // at all, proving the queue wasn't poisoned.
-    expect(f.movie.liked.map((e) => e.id).sort()).toEqual([1, 2])
+    // id 1's persist failed; snapshot-then-swap means the cache was
+    // never mutated for id 1, so it leaves no ghost. Only id 2 made
+    // it to disk.
+    expect(f.movie.liked.map((e) => e.id).sort()).toEqual([2])
   })
 
   it('concurrent writes — failed ones reject, others succeed', async () => {
@@ -225,11 +224,10 @@ describe('user feedback store', () => {
     _setUserFeedbackPathForTests(path)
     const f = await getUserFeedback('alice')
     const ids = f.movie.liked.map((e) => e.id).sort()
-    // All 5 ids end up on disk: the cache was mutated before persist
-    // failed, and the next successful persist wrote the cumulative
-    // cache. This in-memory-cache-vs-persist ordering is a known
-    // subtlety — the awaited op correctly rejected, but the cache was
-    // already dirty.
-    expect(ids).toEqual([1, 2, 3, 4, 5])
+    // The 2nd persist rejected; snapshot-then-swap means the cache
+    // was never updated for id 2, so it leaves no ghost. The other
+    // four ops each cloned-then-persisted-then-swapped on top of
+    // clean state. Final disk = {1, 3, 4, 5}.
+    expect(ids).toEqual([1, 3, 4, 5])
   })
 })
