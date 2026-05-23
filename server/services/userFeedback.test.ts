@@ -8,6 +8,7 @@ import {
   setDislike,
   clearFeedback,
   anotherUserDislikes,
+  updateLikedTitleIfPresent,
   _setUserFeedbackPathForTests,
 } from './userFeedback.js'
 
@@ -95,6 +96,63 @@ describe('user feedback store', () => {
     await setDislike('bob', 'movie', 100, 'X')
     expect(await anotherUserDislikes('alice', 'movie', 100)).toBe(true)
     expect(await anotherUserDislikes('bob', 'movie', 100)).toBe(true)
+  })
+
+  describe('updateLikedTitleIfPresent (backfill race protection)', () => {
+    it('updates the title of an existing legacy like in place', async () => {
+      await fs.writeFile(
+        path,
+        JSON.stringify({
+          alice: {
+            movie: { liked: [10], disliked: [] },
+            tv: { liked: [], disliked: [] },
+          },
+        }),
+      )
+      _setUserFeedbackPathForTests(path)
+      await updateLikedTitleIfPresent('alice', 'movie', 10, 'Heat')
+      expect((await getUserFeedback('alice')).movie.liked).toEqual([
+        { id: 10, title: 'Heat' },
+      ])
+    })
+
+    it('no-op when alice cleared the like concurrently — does NOT recreate', async () => {
+      // Race: suggestions captured alice liking id=20, kicked off TMDB
+      // lookup, alice cleared the like before the lookup returned.
+      // Backfill must not restore it.
+      expect(
+        (await getUserFeedback('alice')).movie.liked.find((e) => e.id === 20),
+      ).toBeUndefined()
+      await updateLikedTitleIfPresent('alice', 'movie', 20, 'Should Not Exist')
+      expect(
+        (await getUserFeedback('alice')).movie.liked.find((e) => e.id === 20),
+      ).toBeUndefined()
+    })
+
+    it('no-op when alice flipped to dislike — does NOT clobber the dislike', async () => {
+      // Race: alice liked id=30, suggestions captured that, alice
+      // flipped to dislike. setLike would have cleared the dislike and
+      // re-added the like. The title-only helper does neither.
+      await setDislike('alice', 'movie', 30, 'Knowable')
+      await updateLikedTitleIfPresent('alice', 'movie', 30, 'Should Not Touch')
+      const f = await getUserFeedback('alice')
+      expect(f.movie.liked.find((e) => e.id === 30)).toBeUndefined()
+      expect(f.movie.disliked.find((e) => e.id === 30)?.title).toBe('Knowable')
+    })
+
+    it('scoped to one user — does not touch another user with the same id', async () => {
+      await setLike('alice', 'movie', 40, '')
+      await setLike('bob', 'movie', 40, 'Bob-known')
+      await updateLikedTitleIfPresent('alice', 'movie', 40, 'Alice-known')
+      expect((await getUserFeedback('alice')).movie.liked[0]?.title).toBe('Alice-known')
+      expect((await getUserFeedback('bob')).movie.liked[0]?.title).toBe('Bob-known')
+    })
+
+    it('no-op when title is empty', async () => {
+      await setLike('alice', 'movie', 50, 'Knowable')
+      await updateLikedTitleIfPresent('alice', 'movie', 50, '')
+      expect((await getUserFeedback('alice')).movie.liked[0]?.title).toBe('Knowable')
+    })
   })
 
   it('fails closed on a corrupted file — does NOT silently start fresh', async () => {
