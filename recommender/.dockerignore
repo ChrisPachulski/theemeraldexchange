@@ -1,12 +1,71 @@
+# recommender/.dockerignore
+#
+# Build context = ./recommender (see docker-compose.yml: `build: ./recommender`).
+# The Dockerfile only COPYs pyproject.toml, app/, workers/, migrations/.
+# Everything else (eval/, scripts/, Makefile, README) is build-context noise.
+#
+# Keep this aligned with scripts/deploy-nas.sh's rsync excludes so the NAS
+# context and the docker build context agree on what's in vs. out.
+
+# ---- Secrets / env files -----------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# ---- Python bytecode / caches ------------------------------------------------
 __pycache__
+**/__pycache__
 *.pyc
+*.pyo
+*.pyd
+
+# ---- Virtualenvs -------------------------------------------------------------
 .venv
+venv
+env
+
+# ---- Tool caches -------------------------------------------------------------
 .pytest_cache
 .ruff_cache
+.mypy_cache
+.cache
+
+# ---- Local SQLite + WAL files (prod DB lives on the NAS bind-mount) ---------
+data
 *.db
 *.db-shm
 *.db-wal
-data/
+*.sqlite
+*.sqlite3
+*.sqlite3-journal
+
+# ---- Eval set (environment-specific; generated from rec_log) ----------------
+# Also excluded by scripts/deploy-nas.sh rsync — keep consistent.
 eval/holdout.jsonl
-.env
-.env.*
+
+# ---- Tests (not needed in the runtime image) --------------------------------
+tests
+**/*_test.py
+**/test_*.py
+
+# ---- Git ---------------------------------------------------------------------
+.git
+.gitignore
+.gitattributes
+
+# ---- Editor / OS junk --------------------------------------------------------
+.vscode
+.idea
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ---- Docs / Makefile / scripts not needed at runtime ------------------------
+README.md
+Makefile
+scripts
+
+# ---- Misc Docker artifacts ---------------------------------------------------
+Dockerfile.*
+.dockerignore
