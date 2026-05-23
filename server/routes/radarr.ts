@@ -27,12 +27,21 @@ forwardRead('/api/v3/rootfolder')
 forwardRead('/api/v3/movie')
 forwardRead('/api/v3/movie/lookup')
 
-// Hard size cap. Radarr's auto-search can grab whatever wins its profile
-// scoring — that includes 50 GB 4K HDR rips. Instead we force
+// Hard size cap. Radarr's auto-search and RSS sync can grab whatever
+// wins profile scoring — that includes 50 GB 4K HDR rips. We force
 // searchForMovie:false on the add, then drive our own release search
 // and filter to releases under env.maxMovieBytes before grabbing.
-// Fallback: if no release fits the cap, the movie stays monitored and
-// Radarr's RSS sync keeps trying.
+//
+// Monitor policy mirrors the user's "Search" choice:
+//   - "Start search now" (default) → searchForMovie:true incoming →
+//     we run the cap-enforced grab AND set monitored:false on the add,
+//     so Radarr's RSS sync can't bypass the cap with an oversized
+//     release later. Future upgrades go through the explicit
+//     /api/v3/movie/:id/upgrade endpoint (also cap-enforced).
+//   - "Just monitor" → searchForMovie:false incoming → we skip the
+//     cap-aware grab and leave monitored:true. The user explicitly
+//     asked for RSS-driven monitoring; the eventual auto-grab is
+//     gated by Radarr's quality profile, NOT env.maxMovieBytes.
 async function grabBestUnderCap(movieId: number, title?: string): Promise<void> {
   const base = { app: 'radarr' as const, itemId: movieId, title, capGb: env.maxMovieGb }
   await appendGrabEvent({ ...base, type: 'grab_started' })
@@ -119,11 +128,18 @@ radarr.post('/api/v3/movie', async (c) => {
   }
 
   // Capture the user's intent then disable Radarr's built-in search.
-  // The only way a download starts is via grabBestUnderCap below, so
-  // the size cap is unconditional.
+  // When the user chose "Start search now" we also unmonitor so the
+  // cap-aware grab below is the ONLY way a download starts; RSS sync
+  // against monitored items would otherwise route through Radarr's
+  // profile scorer with no size ceiling and defeat the cap.
+  // When the user chose "Just monitor" (searchForMovie:false) we
+  // respect that intent and leave monitored:true — they've explicitly
+  // asked for RSS-driven monitoring, accepting that profile-side
+  // rules (not env.maxMovieBytes) gate any eventual auto-grab.
   const wantedSearch = body.addOptions?.searchForMovie !== false
   const cappedBody = {
     ...body,
+    ...(wantedSearch ? { monitored: false } : {}),
     addOptions: { ...(body.addOptions ?? {}), searchForMovie: false },
   }
 

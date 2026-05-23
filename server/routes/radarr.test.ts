@@ -123,3 +123,89 @@ describe('radarr — allow-list and gates', () => {
     expect(r.status).toBe(201)
   })
 })
+
+// Capture the body that the backend forwards to Radarr's POST
+// /api/v3/movie so we can assert the cap+monitor rewrite is applied
+// correctly per the user's "Search" choice.
+async function captureForwardedAdd(
+  reqBody: unknown,
+): Promise<{ monitored?: boolean; addOptions?: { searchForMovie?: boolean } }> {
+  let captured: {
+    monitored?: boolean
+    addOptions?: { searchForMovie?: boolean }
+  } = {}
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url =
+        typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (url.includes('/api/v3/rootfolder')) {
+        return new Response(
+          JSON.stringify([{ id: 1, path: '/data/movies', freeSpace: 500 * 1024 ** 3 }]),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )
+      }
+      if (url.endsWith('/api/v3/movie') && init?.method === 'POST') {
+        captured = JSON.parse(String(init.body))
+        // id:0 + no addOptions in upstream response → we won't kick the
+        // background grab path (id check guards it).
+        return new Response(JSON.stringify({ id: 0, title: 'Foo' }), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      return new Response('not stubbed: ' + url, { status: 599 })
+    }),
+  )
+  await appUnderTest().request('/api/v3/movie', {
+    method: 'POST',
+    headers: {
+      Cookie: await adminCookie(),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(reqBody),
+  })
+  return captured
+}
+
+describe('radarr — add body rewrite (cap + monitor policy)', () => {
+  it('"Start search now" (searchForMovie:true) forwards monitored:false + searchForMovie:false', async () => {
+    // Default search path: we capped-grab in the background, and the
+    // movie is left unmonitored so Radarr's RSS sweep can't bypass
+    // the size cap with an oversized release later.
+    const forwarded = await captureForwardedAdd({
+      rootFolderPath: '/data/movies',
+      title: 'Foo',
+      monitored: true,
+      addOptions: { searchForMovie: true },
+    })
+    expect(forwarded.monitored).toBe(false)
+    expect(forwarded.addOptions?.searchForMovie).toBe(false)
+  })
+
+  it('"Just monitor" (searchForMovie:false) keeps monitored:true', async () => {
+    // The user explicitly chose RSS-driven monitoring without an
+    // immediate grab. The cap-aware grab path is skipped; we respect
+    // monitored:true so Radarr can sweep for releases later.
+    const forwarded = await captureForwardedAdd({
+      rootFolderPath: '/data/movies',
+      title: 'Foo',
+      monitored: true,
+      addOptions: { searchForMovie: false },
+    })
+    expect(forwarded.monitored).toBe(true)
+    expect(forwarded.addOptions?.searchForMovie).toBe(false)
+  })
+
+  it('add without addOptions defaults to search → monitored:false', async () => {
+    // Defensive: a client that omits addOptions entirely should still
+    // get the search-path semantics (searchForMovie defaults to true
+    // in Radarr), so we apply the cap+unmonitor rewrite.
+    const forwarded = await captureForwardedAdd({
+      rootFolderPath: '/data/movies',
+      title: 'Foo',
+    })
+    expect(forwarded.monitored).toBe(false)
+    expect(forwarded.addOptions?.searchForMovie).toBe(false)
+  })
+})
