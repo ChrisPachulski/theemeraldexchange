@@ -738,9 +738,17 @@ async function backfillRejectionTitles(
   const updates = await resolveTitles(kind, needed)
   if (updates.size === 0) return entries
   // Persist in parallel — addRejection is queue-serialized internally.
-  await Promise.all(
+  // allSettled (not all): the title backfill is non-critical UX polish.
+  // A disk failure here must NOT kill the user's whole suggestions
+  // request — the prompt still has the (id, title) pairs in memory.
+  const writes = await Promise.allSettled(
     Array.from(updates, ([id, title]) => addRejection(kind, id, title)),
   )
+  for (const r of writes) {
+    if (r.status === 'rejected') {
+      console.error('[suggestions] addRejection title backfill failed:', r.reason)
+    }
+  }
   return entries.map((e) => (updates.has(e.id) ? { ...e, title: updates.get(e.id)! } : e))
 }
 
@@ -753,9 +761,16 @@ async function backfillLikedTitles(
   if (needed.length === 0) return entries
   const updates = await resolveTitles(kind, needed)
   if (updates.size === 0) return entries
-  await Promise.all(
+  // See backfillRejectionTitles — allSettled so disk errors here don't
+  // fail the suggestions request.
+  const writes = await Promise.allSettled(
     Array.from(updates, ([id, title]) => setLike(sub, kind, id, title)),
   )
+  for (const r of writes) {
+    if (r.status === 'rejected') {
+      console.error('[suggestions] setLike title backfill failed:', r.reason)
+    }
+  }
   return entries.map((e) => (updates.has(e.id) ? { ...e, title: updates.get(e.id)! } : e))
 }
 
@@ -2057,7 +2072,12 @@ suggestions.get('/:type', async (c) => {
         droppedAsRejected: (c1.droppedAsRejected ?? 0) + (c2.droppedAsRejected ?? 0),
         droppedAsLibrary: (c1.droppedAsLibrary ?? 0) + (c2.droppedAsLibrary ?? 0),
         droppedAsYearMismatch: (c1.droppedAsYearMismatch ?? 0) + (c2.droppedAsYearMismatch ?? 0),
-        poolHits: c2.poolHits, // retry's pool hits are the relevant count
+        // Sum pool hits across both passes — pool hits in the initial
+        // pass still count toward "this refresh used the pre-vetted
+        // pool." Previously we replaced with retry-only, which under-
+        // reported poolHits/poolHitRate in _diag whenever the retry
+        // contributed fewer pool-matched picks than the initial pass.
+        poolHits: (c1.poolHits ?? 0) + (c2.poolHits ?? 0),
       }
       const acceptedIds = new Set(accepted.map((a) => a.id))
       for (const item of v2.accepted) {
@@ -2187,7 +2207,9 @@ suggestions.get('/:type', async (c) => {
   // Pool hit rate: fraction of accepted personalized picks that came from
   // the pool (vs needing a full TMDB /search round-trip). 1.0 = ideal
   // (every pick pre-vetted), 0.0 = pool didn't help. Observable in devtools.
-  const poolHitsTotal = v1.counters.poolHits
+  // Use lastCounters (accumulated across initial + retry, per iter 59)
+  // not v1.counters — previously we under-reported on the retry path.
+  const poolHitsTotal = lastCounters.poolHits ?? 0
   const poolHitRate = finalAccepted.length > 0
     ? Math.round((poolHitsTotal / finalAccepted.length) * 100) / 100
     : 0
