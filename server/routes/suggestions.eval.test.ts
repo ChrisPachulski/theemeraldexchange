@@ -809,7 +809,6 @@ describe('AI recommendation section — eval scenarios', () => {
     const payload = { timestamp: stamp, scenarios: REPORT, overall, realisticOverall, stuckIndicator }
     await fs.writeFile(outPath, JSON.stringify(payload, null, 2))
     // Human-readable stdout for the loop's iteration log.
-    /* eslint-disable no-console */
     console.log('\n=== AI Recommendation Section — Eval Report ===')
     console.log('Path:', outPath)
     console.log('Per-scenario:')
@@ -819,7 +818,6 @@ describe('AI recommendation section — eval scenarios', () => {
     console.log('Overall (mean across scenarios):', JSON.stringify(overall))
     console.log('Realistic scenarios only:', JSON.stringify(realisticOverall))
     console.log(stuckIndicator)
-    /* eslint-enable no-console */
     expect(REPORT.length).toBeGreaterThan(0)
   })
 })
@@ -858,7 +856,9 @@ describe('AI recommendations — LIVE EVAL (RECS_EVAL_LIVE=1)', () => {
       // This test requires real network access and a valid Anthropic key.
       // It verifies V4 (pool latency), V7 (shuffle variety), V11 (recently-shown).
       const { default: Anthropic } = await import('@anthropic-ai/sdk')
-      const client = new Anthropic({ apiKey: LIVE_ANTHROPIC_KEY })
+      // Instantiated so an invalid LIVE_ANTHROPIC_KEY surfaces here rather
+      // than inside the request loop. Currently unused beyond construction.
+      void new Anthropic({ apiKey: LIVE_ANTHROPIC_KEY })
       // Minimal real fixture: a 15-item library to clear cold-start.
       const library = [
         { title: 'Heat', year: 1995, tmdbId: 949, genres: ['Crime', 'Drama', 'Thriller'] },
