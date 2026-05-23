@@ -1,14 +1,14 @@
-// SAB is the trickiest router because permissioning is per-query-param
-// (mode + name). Specifically:
-//  - mode=queue, no name      → read, both roles
-//  - mode=history             → read, both roles
-//  - mode=queue, name=pause   → admin only
-//  - mode=queue, name=resume  → admin only
-//  - mode=queue, name=delete  → admin only
-//  - anything else            → 404
+// SAB router permissioning + CSRF-safe method shape.
+//   GET  /api?mode=queue                       - read, both roles
+//   GET  /api?mode=history                     - read, both roles
+//   POST /api/queue/:nzoId/pause               - admin only
+//   POST /api/queue/:nzoId/resume              - admin only
+//   DELETE /api/queue/:nzoId                   - admin only
 //
-// A regression in the dispatch logic (e.g. allowing name=foo through)
-// would mean undeclared SAB actions could be triggered by users.
+// Reads stay on GET so the SPA can poll without preflight. Mutations
+// moved to POST/DELETE so an attacker page can't forge them via
+// cross-origin <img>/link tags (browsers won't issue POST/DELETE
+// cross-origin without a preflight that our CORS gate blocks).
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Hono } from 'hono'
@@ -66,42 +66,45 @@ describe('sab reads (any authed role)', () => {
 })
 
 describe('sab mutations (admin only)', () => {
-  it.each(['pause', 'resume', 'delete'])(
-    'rejects user role for name=%s with 403 admin_only',
-    async (name) => {
-      const r = await appUnderTest().request(`/api?mode=queue&name=${name}&value=foo`, {
-        headers: { Cookie: await userCookie() },
-      })
-      expect(r.status).toBe(403)
-      expect(await r.json()).toEqual({
-        error: 'forbidden',
-        reason: 'admin_only',
-      })
-      // Critically: never reached SAB
-      expect(globalThis.fetch).not.toHaveBeenCalled()
-    },
-  )
+  const mutations: Array<{ name: string; method: 'POST' | 'DELETE'; path: string }> = [
+    { name: 'pause', method: 'POST', path: '/api/queue/foo/pause' },
+    { name: 'resume', method: 'POST', path: '/api/queue/foo/resume' },
+    { name: 'delete', method: 'DELETE', path: '/api/queue/foo' },
+  ]
 
-  it.each(['pause', 'resume', 'delete'])(
-    'allows admin role for name=%s',
-    async (name) => {
-      const r = await appUnderTest().request(`/api?mode=queue&name=${name}&value=foo`, {
-        headers: { Cookie: await adminCookie() },
-      })
-      expect(r.status).toBe(200)
-    },
-  )
+  it.each(mutations)('rejects user role for $name with 403 admin_only', async ({ method, path }) => {
+    const r = await appUnderTest().request(path, {
+      method,
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r.status).toBe(403)
+    expect(await r.json()).toEqual({
+      error: 'forbidden',
+      reason: 'admin_only',
+    })
+    // Critically: never reached SAB
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
 
-  it('rejects mode=queue+name=delete without value with 400', async () => {
-    const r = await appUnderTest().request(`/api?mode=queue&name=delete`, {
+  it.each(mutations)('allows admin role for $name', async ({ method, path }) => {
+    const r = await appUnderTest().request(path, {
+      method,
       headers: { Cookie: await adminCookie() },
     })
-    expect(r.status).toBe(400)
+    expect(r.status).toBe(200)
+  })
+
+  it('rejects GET on a mutation path (read-only method on mutation route)', async () => {
+    const r = await appUnderTest().request('/api/queue/foo/pause', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(404)
+    expect(globalThis.fetch).not.toHaveBeenCalled()
   })
 })
 
 describe('sab undeclared modes / names', () => {
-  it('returns 404 for an unknown mode', async () => {
+  it('returns 404 for an unknown read mode', async () => {
     const r = await appUnderTest().request(`/api?mode=shutdown`, {
       headers: { Cookie: await adminCookie() },
     })
@@ -109,10 +112,11 @@ describe('sab undeclared modes / names', () => {
     expect(globalThis.fetch).not.toHaveBeenCalled()
   })
 
-  it('returns 404 for an unknown name on mode=queue', async () => {
-    // This is the exact attack vector we're testing — does name=foo
-    // sneak through into a forwarded SAB call?
-    const r = await appUnderTest().request(`/api?mode=queue&name=foo&value=x`, {
+  it('rejects the legacy GET-mutation surface (mode=queue&name=pause)', async () => {
+    // This is the exact attack vector — pre-fix, an admin who clicked
+    // an attacker's <img src="...?mode=queue&name=pause"> would pause
+    // their own queue. Now: mutations require POST/DELETE only.
+    const r = await appUnderTest().request(`/api?mode=queue&name=pause&value=x`, {
       headers: { Cookie: await adminCookie() },
     })
     expect(r.status).toBe(404)
