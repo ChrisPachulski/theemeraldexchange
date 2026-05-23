@@ -159,13 +159,6 @@ describe('app CSRF — state-changing routes reject bad Origin', () => {
       body: JSON.stringify({ type: 'movie', tmdbId: 1, signal: 'like' }),
     },
     { label: 'DELETE /api/feedback/movie/1/like', method: 'DELETE', path: '/api/feedback/movie/1/like' },
-    {
-      label: 'POST /api/rejections',
-      method: 'POST',
-      path: '/api/rejections',
-      body: JSON.stringify({ type: 'movie', tmdbId: 1 }),
-    },
-    { label: 'DELETE /api/rejections/movie/1', method: 'DELETE', path: '/api/rejections/movie/1' },
   ]
 
   it.each(cases)('$label rejects HOSTILE Origin with 403 bad_origin', async ({ method, path, body }) => {

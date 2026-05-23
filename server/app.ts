@@ -18,7 +18,6 @@ import { plexAdmin } from './routes/plex-admin.js'
 import { plexLinks } from './routes/plex-links.js'
 import { notifications } from './routes/notifications.js'
 import { grabs } from './routes/grabs.js'
-import { rejections } from './routes/rejections.js'
 import { suggestions } from './routes/suggestions.js'
 import { feedback } from './routes/feedback.js'
 import { usage } from './routes/usage.js'
@@ -76,7 +75,12 @@ app.route('/api/plex', plexLinks)
 app.route('/api/plex', plexAdmin)
 app.route('/api/notifications', notifications)
 app.route('/api/grabs', grabs)
-app.route('/api/rejections', rejections)
+// /api/rejections is retired (round 13). Direct CRUD bypassed the
+// anotherUserDislikes guard in /api/feedback and skipped recommender
+// mirroring, so a caller could unblock a household veto while
+// another member still had the title disliked. The household
+// rejection list is now mutated exclusively through /api/feedback,
+// which applies the per-user-signal guards.
 app.route('/api/suggestions', suggestions)
 app.route('/api/feedback', feedback)
 app.route('/api/usage', usage)
