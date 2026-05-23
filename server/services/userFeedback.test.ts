@@ -152,17 +152,30 @@ describe('user feedback store', () => {
     ).toEqual([1, 2, 3])
   })
 
-  it('a writeFile failure does NOT poison the queue', async () => {
+  it('writeFile failure rejects the awaited result (no UI lie)', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(fs, 'writeFile').mockImplementationOnce(() =>
       Promise.reject(new Error('ENOSPC')),
     )
 
-    // First write's persist fails internally — queue must stay healthy.
-    // The .catch in the service swallows the rejection so this resolves.
-    await expect(setLike('alice', 'movie', 1, 'A')).resolves.toBeUndefined()
+    // First write's persist fails — the caller's `await` MUST see the
+    // rejection so the route can return 500 instead of `{ ok: true }`.
+    // This is the regression fix: previously the .catch swallowed it
+    // and the route lied to the UI about success.
+    await expect(setLike('alice', 'movie', 1, 'A')).rejects.toThrow('ENOSPC')
+  })
 
-    // Second write must still resolve — the queue is not poisoned.
+  it('queue stays alive after a failed write (recovery branch)', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(fs, 'writeFile').mockImplementationOnce(() =>
+      Promise.reject(new Error('ENOSPC')),
+    )
+
+    // First write rejects (real failure surfaces to caller).
+    await expect(setLike('alice', 'movie', 1, 'A')).rejects.toThrow('ENOSPC')
+
+    // Second write must still resolve — the recovery branch
+    // (`writeQueue = op.catch(...)`) kept the chain alive.
     // (No mock for this call, so the real writeFile runs.)
     await expect(setLike('alice', 'movie', 2, 'B')).resolves.toBeUndefined()
 
@@ -172,11 +185,11 @@ describe('user feedback store', () => {
     // id 1's persist failed, but id 1 was mutated into the in-memory
     // cache before persist ran — so when id 2's persist succeeded, it
     // wrote the cumulative {1, 2}. The load point: id 2 reached disk
-    // at all, which proves the queue wasn't poisoned.
+    // at all, proving the queue wasn't poisoned.
     expect(f.movie.liked.map((e) => e.id).sort()).toEqual([1, 2])
   })
 
-  it('concurrent writes still serialize after a failure', async () => {
+  it('concurrent writes — failed ones reject, others succeed', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     let call = 0
     vi.spyOn(fs, 'writeFile').mockImplementation(((
@@ -187,26 +200,36 @@ describe('user feedback store', () => {
       return realWriteFile(...args)
     }) as typeof fs.writeFile)
 
-    // Five concurrent writes; the 2nd persist rejects. None of the
-    // post-failure setLike promises should reject (queue is not
-    // poisoned) — Promise.all would throw if any did.
-    await expect(
-      Promise.all([
-        setLike('alice', 'movie', 1, 'A'),
-        setLike('alice', 'movie', 2, 'B'),
-        setLike('alice', 'movie', 3, 'C'),
-        setLike('alice', 'movie', 4, 'D'),
-        setLike('alice', 'movie', 5, 'E'),
-      ]),
-    ).resolves.toBeDefined()
+    // Five concurrent writes; the 2nd persist rejects. Use allSettled
+    // so we can inspect each promise individually — the 2nd op MUST
+    // reject (surfacing the failure to its caller), the other four
+    // MUST fulfill (recovery branch kept the chain alive).
+    const results = await Promise.allSettled([
+      setLike('alice', 'movie', 1, 'A'),
+      setLike('alice', 'movie', 2, 'B'),
+      setLike('alice', 'movie', 3, 'C'),
+      setLike('alice', 'movie', 4, 'D'),
+      setLike('alice', 'movie', 5, 'E'),
+    ])
+    expect(results.map((r) => r.status)).toEqual([
+      'fulfilled',
+      'rejected',
+      'fulfilled',
+      'fulfilled',
+      'fulfilled',
+    ])
+    expect((results[1] as PromiseRejectedResult).reason).toMatchObject({
+      message: 'transient EIO',
+    })
 
     _setUserFeedbackPathForTests(path)
     const f = await getUserFeedback('alice')
     const ids = f.movie.liked.map((e) => e.id).sort()
-    // All 5 ids end up on disk because the cache was already mutated
-    // before persist failed, and the next successful persist wrote the
-    // cumulative cache. The critical claim is that the post-failure
-    // writes were NOT rejected.
+    // All 5 ids end up on disk: the cache was mutated before persist
+    // failed, and the next successful persist wrote the cumulative
+    // cache. This in-memory-cache-vs-persist ordering is a known
+    // subtlety — the awaited op correctly rejected, but the cache was
+    // already dirty.
     expect(ids).toEqual([1, 2, 3, 4, 5])
   })
 })
