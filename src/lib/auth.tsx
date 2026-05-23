@@ -218,6 +218,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   )
 }
 
+// Co-located with AuthProvider — standard context+hook idiom. The
+// fast-refresh rule prefers splitting, but the two are coupled by the
+// private AuthContext and shouldn't be moved apart.
+// eslint-disable-next-line react-refresh/only-export-components
 export function useAuth() {
   const ctx = useContext(AuthContext)
   if (!ctx) throw new Error('useAuth must be used within AuthProvider')

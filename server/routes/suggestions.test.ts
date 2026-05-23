@@ -973,7 +973,6 @@ describe('suggestions route — prompt shape', () => {
   it('falls back to trending when every Claude pick is filtered out (after retry)', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    let claudeCallCount = 0
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: unknown) => {
@@ -1007,7 +1006,7 @@ describe('suggestions route — prompt shape', () => {
       content: [
         {
           type: 'tool_use',
-          id: 'tu_' + ++claudeCallCount,
+          id: 'tu_1',
           name: 'submit_recommendations',
           input: { picks: [{ title: 'Sons of Anarchy', year: 2008 }] },
         },
@@ -2213,7 +2212,6 @@ describe('suggestions route — TMDB validation', () => {
       { title: 'Sicario', year: 2015, tmdbId: 2010, genres: ['Action', 'Crime', 'Drama', 'Thriller'] },
     ]
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    let claudeCalls = 0
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: unknown) => {
@@ -2245,7 +2243,7 @@ describe('suggestions route — TMDB validation', () => {
       content: [
         {
           type: 'tool_use',
-          id: 'tu_' + ++claudeCalls,
+          id: 'tu_1',
           name: 'submit_recommendations',
           input: { picks: [{ title: 'Brand New Movie', year: 2020 }] },
         },
@@ -2816,7 +2814,7 @@ describe('suggestions route — recently-shown buffer across retry', () => {
     // Request 2: The RECENTLY SHOWN block in the prompt should include 'Clean Show A'
     //            from the previous request — proving recordShown captured the right items.
     _setTmdbApiKeyForTests('test-key')
-    let callIndex = 0
+    const callIndex = 0
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: unknown) => {

@@ -31,9 +31,12 @@ export function useUserApiKey(): {
 
   // Re-read whenever sub changes (login / sign-out / user switch).
   // Also handle the one-time legacy migration so a user who set the
-  // key before this PR doesn't lose it.
+  // key before this PR doesn't lose it. Syncing local state to
+  // localStorage (an external source) is the intended exception to
+  // the setState-in-effect rule.
   useEffect(() => {
     if (!sub || typeof localStorage === 'undefined') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setKeyState(null)
       return
     }
