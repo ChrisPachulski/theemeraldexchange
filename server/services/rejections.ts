@@ -101,33 +101,41 @@ export async function getRejectionIds(kind: RejectionsKind): Promise<Set<number>
   return new Set(file[kind].map((e) => e.id))
 }
 
-export async function addRejection(
+export function addRejection(
   kind: RejectionsKind,
   tmdbId: number,
   title: string,
 ): Promise<void> {
-  writeQueue = writeQueue.then(async () => {
-    const file = await load()
-    const existing = file[kind].find((e) => e.id === tmdbId)
-    if (!existing) {
-      file[kind].push({ id: tmdbId, title })
-      await persist()
-    } else if (title && existing.title !== title) {
-      // Upgrade legacy / stale entries in place when a fresh title
-      // arrives. Empty incoming title never overwrites a known one.
-      existing.title = title
-      await persist()
-    }
-  })
-  await writeQueue
+  writeQueue = writeQueue
+    .then(async () => {
+      const file = await load()
+      const existing = file[kind].find((e) => e.id === tmdbId)
+      if (!existing) {
+        file[kind].push({ id: tmdbId, title })
+        await persist()
+      } else if (title && existing.title !== title) {
+        // Upgrade legacy / stale entries in place when a fresh title
+        // arrives. Empty incoming title never overwrites a known one.
+        existing.title = title
+        await persist()
+      }
+    })
+    .catch((err) => {
+      console.error('[rejections] write failed:', err)
+    })
+  return writeQueue
 }
 
-export async function removeRejection(kind: RejectionsKind, tmdbId: number): Promise<void> {
-  writeQueue = writeQueue.then(async () => {
-    const file = await load()
-    const before = file[kind].length
-    file[kind] = file[kind].filter((e) => e.id !== tmdbId)
-    if (file[kind].length !== before) await persist()
-  })
-  await writeQueue
+export function removeRejection(kind: RejectionsKind, tmdbId: number): Promise<void> {
+  writeQueue = writeQueue
+    .then(async () => {
+      const file = await load()
+      const before = file[kind].length
+      file[kind] = file[kind].filter((e) => e.id !== tmdbId)
+      if (file[kind].length !== before) await persist()
+    })
+    .catch((err) => {
+      console.error('[rejections] write failed:', err)
+    })
+  return writeQueue
 }

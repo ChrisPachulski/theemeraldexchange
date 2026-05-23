@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -13,6 +13,11 @@ import {
 let tmpRoot: string
 let path: string
 
+// Capture the real fs.writeFile ONCE before any test spies on it, so
+// the write-failure tests can forward to a known-good implementation
+// even if a stale spy reference somehow survives between tests.
+const realWriteFile = fs.writeFile
+
 beforeEach(async () => {
   tmpRoot = await fs.mkdtemp(join(tmpdir(), 'rejections-'))
   path = join(tmpRoot, 'rejections.json')
@@ -20,6 +25,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   await fs.rm(tmpRoot, { recursive: true, force: true })
 })
 
@@ -120,5 +126,66 @@ describe('rejections store', () => {
     ])
     const got = await getRejections()
     expect(got.movie.map((e) => e.id).sort()).toEqual([1, 2, 3, 4])
+  })
+
+  it('a writeFile failure does NOT poison the queue', async () => {
+    // Swallow the "[rejections] write failed" log so it doesn't
+    // pollute test output.
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(fs, 'writeFile').mockImplementationOnce(() =>
+      Promise.reject(new Error('ENOSPC')),
+    )
+
+    // First write's persist fails internally — the queue's .catch must
+    // swallow it so subsequent writes don't reject from a poisoned
+    // chain. The public API still resolves cleanly.
+    await expect(addRejection('movie', 1, 'A')).resolves.toBeUndefined()
+
+    // Second write must still resolve: queue is healthy.
+    await expect(addRejection('movie', 2, 'B')).resolves.toBeUndefined()
+
+    // Reload from disk to confirm the second write actually persisted.
+    _setRejectionsPathForTests(path)
+    const got = await getRejections()
+    // id 1's persist rejected, but id 1 was mutated into the in-memory
+    // cache before persist ran. When id 2's persist succeeded, it
+    // wrote the cumulative {1, 2}. The load-bearing claim: id 2 is on
+    // disk at all, proving the queue wasn't poisoned.
+    expect(got.movie.map((e) => e.id).sort()).toEqual([1, 2])
+  })
+
+  it('concurrent writes still serialize after a failure', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    let call = 0
+    vi.spyOn(fs, 'writeFile').mockImplementation(((
+      ...args: Parameters<typeof realWriteFile>
+    ) => {
+      call += 1
+      if (call === 2) return Promise.reject(new Error('transient EIO'))
+      return realWriteFile(...args)
+    }) as typeof fs.writeFile)
+
+    // Fire five concurrent writes; the 2nd persist will fail. None of
+    // the post-failure addRejection promises should reject — Promise.all
+    // would throw if any did.
+    await expect(
+      Promise.all([
+        addRejection('movie', 1, 'A'),
+        addRejection('movie', 2, 'B'),
+        addRejection('movie', 3, 'C'),
+        addRejection('movie', 4, 'D'),
+        addRejection('movie', 5, 'E'),
+      ]),
+    ).resolves.toBeDefined()
+
+    // Reload from disk so we don't read the cache.
+    _setRejectionsPathForTests(path)
+    const got = await getRejections()
+    const ids = got.movie.map((e) => e.id).sort()
+    // The 2nd persist rejected, but the cache mutation already
+    // happened before persist. Later writes persist the cumulative
+    // cache, so all 5 ids end up on disk. The critical claim is that
+    // post-failure writes were NOT rejected by a poisoned queue.
+    expect(ids).toEqual([1, 2, 3, 4, 5])
   })
 })
