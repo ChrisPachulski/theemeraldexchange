@@ -55,6 +55,29 @@ describe('POST /event — happy path', () => {
     })
     expect(r.status).toBe(200)
   })
+
+  it('skips the sidecar mirror when USE_LOCAL_RECOMMENDER=0 (default test env)', async () => {
+    // Round 27 added the env.useLocalRecommender gate. The default
+    // test env doesn't set USE_LOCAL_RECOMMENDER, so the mirror
+    // MUST stay silent — otherwise direct-backend deployments
+    // would burn a 3s timeout + log line per click against an
+    // unreachable sidecar. Lock in the off-branch here so a
+    // regression that drops the gate is caught at test time.
+    const fetchSpy = globalThis.fetch as ReturnType<typeof vi.fn>
+    const r = await appUnderTest().request('/event', {
+      method: 'POST',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'movie', tmdbId: 12345, signal: 'clicked' }),
+    })
+    expect(r.status).toBe(200)
+    // The sidecar fetch must NOT have happened. Without the gate,
+    // the unconditional postFeedback call would land an /events/feedback
+    // POST against recommenderUrl.
+    const mirrorCalls = fetchSpy.mock.calls.filter(([url]) =>
+      String(url).includes('/events/feedback'),
+    )
+    expect(mirrorCalls).toEqual([])
+  })
 })
 
 describe('POST /event — validation', () => {
