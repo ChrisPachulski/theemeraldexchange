@@ -55,7 +55,14 @@ function normalizeEntry(raw: unknown): RejectionEntry | null {
   if (raw && typeof raw === 'object') {
     const o = raw as { id?: unknown; title?: unknown }
     if (typeof o.id === 'number' && Number.isInteger(o.id) && o.id > 0) {
-      return { id: o.id, title: typeof o.title === 'string' ? o.title : '' }
+      // Sanitize on read, not only on write. Defends against rows that
+      // were persisted before sanitizeTitle was introduced or wrote
+      // through a path we hadn't covered — those raw newlines / control
+      // chars would otherwise reach Claude's prompt verbatim the next
+      // time suggestions.ts renders them into a bullet list. Cheap
+      // (string-only) and idempotent, so re-sanitizing fresh-write data
+      // is harmless.
+      return { id: o.id, title: sanitizeTitle(o.title) }
     }
   }
   return null
