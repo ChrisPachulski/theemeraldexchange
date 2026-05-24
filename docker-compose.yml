@@ -64,9 +64,6 @@ services:
       USE_LOCAL_RECOMMENDER: "${USE_LOCAL_RECOMMENDER:-0}"
       RECOMMENDER_URL: "${RECOMMENDER_URL:-http://recommender:8000}"
       RECOMMENDER_EVENT_SECRET: "${RECOMMENDER_EVENT_SECRET:-}"
-    depends_on:
-      recommender:
-        condition: service_healthy
 
   recommender:
     build: ./recommender

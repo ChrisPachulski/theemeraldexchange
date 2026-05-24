@@ -51,11 +51,8 @@ auth.post('/plex/pin', async (c) => {
 })
 
 auth.post('/plex/check', async (c) => {
-  // pinId can come from the query string OR a JSON body. The body
-  // path is what the SPA uses now (POST + CSRF-gated); query-string
-  // is retained so existing test fixtures keep working.
   const body = await c.req.json().catch(() => null) as { pinId?: unknown } | null
-  const pinIdRaw = c.req.query('pinId') ?? (typeof body?.pinId === 'string' || typeof body?.pinId === 'number' ? String(body.pinId) : undefined)
+  const pinIdRaw = typeof body?.pinId === 'string' || typeof body?.pinId === 'number' ? String(body.pinId) : undefined
   if (!pinIdRaw) return c.json({ error: 'missing pinId' }, 400)
   const pinId = Number(pinIdRaw)
   if (!Number.isInteger(pinId)) return c.json({ error: 'bad pinId' }, 400)

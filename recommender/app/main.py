@@ -176,12 +176,6 @@ def post_feedback(
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, bool]:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    # Like and dislike are mutually exclusive. Without this cleanup,
-    # toggling (dislike -> like) would INSERT the like row while
-    # leaving the dislike row in user_feedback. load_user_context
-    # unions both, so the user ends up "both liking and disliking"
-    # the same title — which then drifts the recommender's
-    # liked_embeddings / disliked_embeddings.
     with transaction(conn):
         if ev.signal == "like":
             conn.execute(
@@ -193,6 +187,29 @@ def post_feedback(
                 "DELETE FROM user_feedback WHERE sub=? AND kind=? AND tmdb_id=? AND signal='like'",
                 (ev.sub, ev.kind, ev.tmdb_id),
             )
+        elif ev.signal == "reject":
+            conn.execute(
+                """DELETE FROM user_feedback
+                   WHERE sub=? AND kind=? AND tmdb_id=?
+                     AND signal IN ('like', 'dislike', 'shown', 'clicked', 'added')""",
+                (ev.sub, ev.kind, ev.tmdb_id),
+            )
+        elif ev.signal == "shown":
+            conn.execute(
+                "DELETE FROM user_feedback WHERE sub=? AND kind=? AND tmdb_id=? AND signal='shown'",
+                (ev.sub, ev.kind, ev.tmdb_id),
+            )
+            conn.execute(
+                """INSERT INTO recently_shown(sub, kind, tmdb_id, ts)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(sub, kind, tmdb_id) DO UPDATE SET ts = excluded.ts""",
+                (ev.sub, ev.kind, ev.tmdb_id, now),
+            )
+            conn.execute(
+                "DELETE FROM recently_shown WHERE datetime(ts) < datetime('now', ?)",
+                (f"-{RECENTLY_SHOWN_RETENTION_DAYS} days",),
+            )
+            return {"ok": True}
         conn.execute(
             """INSERT INTO user_feedback(sub, kind, tmdb_id, signal, ts)
                VALUES (?, ?, ?, ?, ?)
@@ -245,7 +262,8 @@ def post_library_sync(
         )
 
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    rows = [(payload.kind, it.tmdb_id, it.source, now) for it in payload.items]
+    by_tmdb_id = {it.tmdb_id: it.source for it in payload.items}
+    rows = [(payload.kind, tmdb_id, source, now) for tmdb_id, source in by_tmdb_id.items()]
 
     with transaction(conn):
         conn.execute("DELETE FROM library_items WHERE kind = ?", (payload.kind,))
