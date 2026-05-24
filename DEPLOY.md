@@ -218,6 +218,27 @@ fi
 EOF
 ```
 
+### Wiring up the optimizer's eval gate
+
+The optimizer's auto-promotion path is gated by an evaluation set —
+without it, every nightly run records the candidate model as an
+inactive proposal and the active model stays put. The set is one
+JSON object per line (see `recommender/eval/README.md` for the
+schema) and lives at `RECOMMENDER_HOLDOUT_PATH` inside the container,
+defaulting to `/data/holdout.jsonl`.
+
+```bash
+# On the NAS, with the /data volume mount already in place:
+scp recommender/eval/holdout.example.jsonl \
+  root@theemeraldexchange.local:/mnt/user/appdata/exchange-backend/recommender-db/holdout.jsonl
+```
+
+The Dockerfile intentionally does NOT bake the holdout into the image
+and `scripts/deploy-nas.sh` excludes it from rsync — it's operator-
+curated history, not source code. Keep updating it from real user
+sessions over time (or rebuild from `rec_log` + `rec_outcomes`); the
+optimizer's evaluation only gets sharper as the set grows.
+
 ### Rolling back
 
 ```bash
