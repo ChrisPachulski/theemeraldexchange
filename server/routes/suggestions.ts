@@ -1727,6 +1727,13 @@ suggestions.get('/:type', async (c) => {
     let modelVersion = 'unknown'
     let recipe = 'unknown'
     let recDiag: Record<string, unknown> = {}
+    // Distinguish "sidecar healthy but returned nothing usable" from
+    // "sidecar threw". Both collapse to safe.length === 0 below, but
+    // only the former should mirror the trending fallback back to the
+    // sidecar via postShown — posting /events/shown to a sidecar that
+    // just failed /score is doomed to fail too, and the bounded timeout
+    // produces a second log line per refresh during an outage.
+    let recSucceeded = false
     try {
       const resp = await scoreOnce({
         sub: session.sub,
@@ -1750,6 +1757,7 @@ suggestions.get('/:type', async (c) => {
       modelVersion = resp.model_version
       recipe = resp.recipe
       recDiag = resp.diag
+      recSucceeded = true
     } catch (e) {
       console.warn(
         '[suggestions] recommender call failed, falling back to trending:',
@@ -1783,8 +1791,12 @@ suggestions.get('/:type', async (c) => {
       // this, a sidecar that's healthy but returns empty/all-filtered
       // for this household replays the same trending cards every poll.
       // Mirrors the partial-fill postShown below; fire-and-forget,
-      // bounded by services/recommender.ts timeout.
-      if (shown.length > 0) {
+      // bounded by services/recommender.ts timeout. Skip on
+      // recSucceeded=false — posting to /events/shown when /score just
+      // failed costs a second 3s timeout + log line per refresh
+      // during an outage, with zero benefit (the sidecar isn't
+      // going to record anything either way).
+      if (shown.length > 0 && recSucceeded) {
         void postShown(session.sub, type, shown.map((it) => it.id))
       }
       setTimingHeader()
