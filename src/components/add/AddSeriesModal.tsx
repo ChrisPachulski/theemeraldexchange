@@ -87,11 +87,41 @@ export function AddSeriesModal({ series, onClose, onAdded }: Props) {
 
   if (!series) return null
 
-  const canAdd = profileId !== null && rootFolder !== null && !mutation.isPending
+  // Admins wait on the profile + folder dropdowns to populate before
+  // Add enables. Non-admins don't see those controls — the server
+  // fills in policy from upstream defaults — so just gate on the
+  // pending mutation instead of leaving the button mysteriously
+  // disabled while hidden dropdowns load.
+  const canAdd = isAdmin
+    ? profileId !== null && rootFolder !== null && !mutation.isPending
+    : !mutation.isPending
 
   const handleAdd = () => {
     if (!canAdd) return
     setError(null)
+
+    // Non-admins can't configure quality / folder / monitor / seasons —
+    // the server materializes those from upstream defaults + the
+    // curated Choose Me profile (see materializeNonAdminSeriesBody).
+    // Send only identifying fields so the modal payload visibly
+    // matches the server contract; admin path still passes the full
+    // policy body through verbatim.
+    if (!isAdmin) {
+      mutation.mutate(
+        {
+          tvdbId: series.tvdbId,
+          title: series.title,
+        },
+        {
+          onSuccess: () => {
+            onAdded?.(series.title)
+            onClose()
+          },
+          onError: (e) => setError(e instanceof Error ? e.message : String(e)),
+        },
+      )
+      return
+    }
 
     // Translate the dropdown value into Sonarr's add-series shape:
     //   "all"        → addOptions.monitor:'all', leave seasons[] alone.
@@ -190,25 +220,27 @@ export function AddSeriesModal({ series, onClose, onAdded }: Props) {
             </>
           )}
 
-          <label className="add-series__field">
-            <span className="add-series__label">Monitor</span>
-            <select
-              className="add-series__select"
-              value={monitor}
-              onChange={(e) => setMonitorChoice(e.target.value)}
-            >
-              {/* All Seasons stays pinned at the top so it's always
-                  visible in the menu, regardless of how many seasons
-                  the show has. The default-selected option is Season 1
-                  (or the lowest-numbered season if there is no S1). */}
-              <option value="all">All seasons</option>
-              {showSeasons.map((n) => (
-                <option key={n} value={`season:${n}`}>
-                  Season {n}
-                </option>
-              ))}
-            </select>
-          </label>
+          {isAdmin && (
+            <label className="add-series__field">
+              <span className="add-series__label">Monitor</span>
+              <select
+                className="add-series__select"
+                value={monitor}
+                onChange={(e) => setMonitorChoice(e.target.value)}
+              >
+                {/* All Seasons stays pinned at the top so it's always
+                    visible in the menu, regardless of how many seasons
+                    the show has. The default-selected option is Season 1
+                    (or the lowest-numbered season if there is no S1). */}
+                <option value="all">All seasons</option>
+                {showSeasons.map((n) => (
+                  <option key={n} value={`season:${n}`}>
+                    Season {n}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
         </div>
 
         {error && <p className="add-series__error" role="alert">{error}</p>}
