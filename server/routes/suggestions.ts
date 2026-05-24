@@ -129,45 +129,53 @@ export function _resetLibraryCacheForTests(): void {
   delete libraryInFlight.tv
 }
 
-async function fetchSonarrLibraryRaw(): Promise<SonarrSeries[]> {
-  try {
-    const r = await sonarrFetch('/api/v3/series', { method: 'GET' })
-    if (!r.ok) {
-      const body = await r.text().catch(() => '')
-      console.error('[suggestions] Sonarr /api/v3/series returned non-ok:', r.status, body.slice(0, 200))
-      return []
-    }
-    const data = (await r.json()) as SonarrSeries[]
-    if (!Array.isArray(data)) {
-      console.error('[suggestions] Sonarr /api/v3/series returned non-array')
-      return []
-    }
-    return data
-  } catch (e) {
-    console.error('[suggestions] Sonarr fetch threw:', e instanceof Error ? e.message : String(e))
-    return []
+// Thrown when a Sonarr/Radarr fetch failed AND there's no prior
+// snapshot to fall back to. The handler converts this into a 502 so
+// the SPA can surface "library unavailable" instead of receiving
+// generic trending picks that would silently leak owned titles back
+// into the strip (cold-start path treats an empty library as "user
+// has nothing, just show trending").
+class LibraryUnavailableError extends Error {
+  constructor(kind: 'movie' | 'tv', cause: unknown) {
+    super(`upstream library fetch failed for ${kind}`, { cause })
+    this.name = 'LibraryUnavailableError'
   }
 }
 
-async function fetchRadarrLibraryRaw(): Promise<RadarrMovie[]> {
-  try {
-    const r = await radarrFetch('/api/v3/movie', { method: 'GET' })
-    if (!r.ok) {
-      const body = await r.text().catch(() => '')
-      console.error('[suggestions] Radarr /api/v3/movie returned non-ok:', r.status, body.slice(0, 200))
-      return []
-    }
-    const data = (await r.json()) as RadarrMovie[]
-    if (!Array.isArray(data)) {
-      console.error('[suggestions] Radarr /api/v3/movie returned non-array')
-      return []
-    }
-    return data
-  } catch (e) {
-    console.error('[suggestions] Radarr fetch threw:', e instanceof Error ? e.message : String(e))
-    return []
+async function fetchSonarrLibraryRaw(): Promise<SonarrSeries[]> {
+  const r = await sonarrFetch('/api/v3/series', { method: 'GET' })
+  if (!r.ok) {
+    const body = await r.text().catch(() => '')
+    throw new Error(`Sonarr /api/v3/series returned ${r.status}: ${body.slice(0, 200)}`)
   }
+  const data = (await r.json()) as SonarrSeries[]
+  if (!Array.isArray(data)) {
+    throw new Error('Sonarr /api/v3/series returned a non-array body')
+  }
+  return data
 }
+
+async function fetchRadarrLibraryRaw(): Promise<RadarrMovie[]> {
+  const r = await radarrFetch('/api/v3/movie', { method: 'GET' })
+  if (!r.ok) {
+    const body = await r.text().catch(() => '')
+    throw new Error(`Radarr /api/v3/movie returned ${r.status}: ${body.slice(0, 200)}`)
+  }
+  const data = (await r.json()) as RadarrMovie[]
+  if (!Array.isArray(data)) {
+    throw new Error('Radarr /api/v3/movie returned a non-array body')
+  }
+  return data
+}
+
+// Last-known successful library. Held indefinitely (no expiresAt) so
+// that a transient upstream outage during a refresh-driven request
+// falls back to the prior snapshot — even a few hours stale is far
+// better than treating "library is unreachable" as "library has zero
+// items" and routing into cold-start, which would silently leak
+// already-owned titles into the strip. Replaced only on a fresh
+// successful fetch.
+const libraryStaleFallback: { [k in 'movie' | 'tv']?: LibraryItem[] } = {}
 
 async function fetchLibraryCached(kind: 'movie' | 'tv'): Promise<LibraryItem[]> {
   const now = Date.now()
@@ -176,19 +184,49 @@ async function fetchLibraryCached(kind: 'movie' | 'tv'): Promise<LibraryItem[]> 
   const inFlight = libraryInFlight[kind]
   if (inFlight) return inFlight
   const promise = (kind === 'movie' ? fetchRadarrLibraryRaw() : fetchSonarrLibraryRaw())
-    .then((items) => {
-      // Only cache non-empty results — a transient upstream error
-      // (returns []) shouldn't poison the cache for the next 30s.
-      if (items.length > 0) {
-        libraryCache[kind] = { items, expiresAt: Date.now() + LIBRARY_CACHE_TTL_MS }
-      }
+    .then((items): LibraryItem[] => {
+      // Only the TTL cache requires non-empty (a real empty library is
+      // possible on fresh installs; pinning it is fine). The stale
+      // fallback is updated either way so the next failure has the
+      // freshest snapshot to fall back to.
+      libraryCache[kind] = { items, expiresAt: Date.now() + LIBRARY_CACHE_TTL_MS }
+      libraryStaleFallback[kind] = items
       return items
+    })
+    .catch((err): LibraryItem[] => {
+      // Upstream went sideways. Prefer the stale snapshot over routing
+      // into cold-start with no real library — household-safe filtering
+      // is what makes the strip useful. If we've never had a successful
+      // fetch, surface a 502 so the SPA shows "library unavailable"
+      // instead of pretending the household is empty.
+      const stale = libraryStaleFallback[kind]
+      if (stale) {
+        console.warn(
+          `[suggestions] ${kind} library fetch failed, serving stale snapshot of ${stale.length} items:`,
+          err instanceof Error ? err.message : String(err),
+        )
+        return stale
+      }
+      console.error(
+        `[suggestions] ${kind} library fetch failed and no stale snapshot — failing closed:`,
+        err instanceof Error ? err.message : String(err),
+      )
+      throw new LibraryUnavailableError(kind, err)
     })
     .finally(() => {
       delete libraryInFlight[kind]
     })
   libraryInFlight[kind] = promise
   return promise
+}
+
+// Test-only reset of the stale fallback; the existing
+// _resetLibraryCacheForTests already clears libraryCache + inFlight
+// but the stale snapshot is intentionally process-lifetime, so tests
+// reach in here to clear it between cases.
+export function _resetLibraryStaleFallbackForTests(): void {
+  delete libraryStaleFallback.movie
+  delete libraryStaleFallback.tv
 }
 
 async function fetchSonarrLibrary(): Promise<SonarrSeries[]> {
@@ -1579,10 +1617,29 @@ suggestions.get('/:type', async (c) => {
     // early-return paths; consumption-side await still re-throws.
   })
   const endPrologue = timing.mark('prologue')
-  const [library, rejections] = await Promise.all([
-    type === 'movie' ? fetchRadarrLibrary() : fetchSonarrLibrary(),
-    getRejections(),
-  ])
+  let library: LibraryItem[]
+  let rejections: Awaited<ReturnType<typeof getRejections>>
+  try {
+    ;[library, rejections] = await Promise.all([
+      type === 'movie' ? fetchRadarrLibrary() : fetchSonarrLibrary(),
+      getRejections(),
+    ])
+  } catch (err) {
+    endPrologue()
+    setTimingHeader()
+    // Without a real library, "show trending" silently leaks
+    // already-owned titles back into the strip — the cold-start path
+    // treats an empty library as "user has nothing." Surface the
+    // failure instead so the SPA can show "library unavailable" and
+    // retry on the next refresh.
+    if (err instanceof LibraryUnavailableError) {
+      return c.json(
+        { error: 'library_unavailable', kind: type },
+        502,
+      )
+    }
+    throw err
+  }
   endPrologue()
 
   const kindRejections = type === 'movie' ? rejections.movie : rejections.tv
