@@ -139,6 +139,31 @@ describe('app CSRF — safe GETs pass through', () => {
   })
 })
 
+// /api/suggestions/:type is a GET but writes rec_log + recently_shown
+// via the local recommender — it opts back in to the Origin check via
+// requireTrustedOrigin. Without this gate, a hostile origin could fire
+// a credentialed GET (SameSite=None cookies) and poison a victim's
+// recommendation rotation.
+describe('app CSRF — suggestions GET is Origin-gated despite being a read', () => {
+  it.each(['movie', 'tv'])('GET /api/suggestions/%s rejects HOSTILE Origin with 403 bad_origin', async (type) => {
+    const r = await app.request(`/api/suggestions/${type}`, {
+      headers: { Cookie: await sessionCookie('user'), Origin: HOSTILE },
+    })
+    expect(r.status).toBe(403)
+    const json = (await r.json()) as { reason?: string }
+    expect(json.reason).toBe('bad_origin')
+  })
+
+  it('GET /api/suggestions/movie rejects MISSING Origin with 403 bad_origin', async () => {
+    const r = await app.request('/api/suggestions/movie', {
+      headers: { Cookie: await sessionCookie('user') },
+    })
+    expect(r.status).toBe(403)
+    const json = (await r.json()) as { reason?: string }
+    expect(json.reason).toBe('bad_origin')
+  })
+})
+
 // --- State-changing routes with bad Origin should ALL be rejected ----
 
 describe('app CSRF — state-changing routes reject bad Origin', () => {

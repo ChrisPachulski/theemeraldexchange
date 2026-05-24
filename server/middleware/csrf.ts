@@ -13,34 +13,57 @@
 // non-same-origin POSTs, so an empty Origin in prod => not from a
 // trusted SPA tab => reject.
 //
-// Reads (GET/HEAD) are not gated — they're idempotent and serving them
-// to a forged origin leaks nothing the user couldn't already see by
-// visiting the SPA directly.
+// Reads (GET/HEAD) are not gated by the global middleware — they're
+// idempotent and serving them to a forged origin leaks nothing the
+// user couldn't already see by visiting the SPA directly. The
+// exception is a small number of GET routes that DO have side effects
+// (e.g. /api/suggestions/:type writes rec_log and recently_shown via
+// the local recommender) — those mount requireTrustedOrigin below to
+// opt back in to the Origin check regardless of method.
 
 import type { MiddlewareHandler } from 'hono'
 import { env } from '../env.js'
 
 const STATE_CHANGING = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 
-export const requireSafeOrigin: MiddlewareHandler = async (c, next) => {
-  if (!STATE_CHANGING.has(c.req.method)) {
-    await next()
-    return
-  }
+function checkOrigin(origin: string | undefined): { ok: true } | { ok: false; reason: string } {
   if (env.allowedOrigins.length === 0) {
     // Dev / unconfigured: same-origin via Vite proxy. In prod env.ts
     // refuses to boot without ALLOWED_ORIGINS set, so reaching this
     // branch means NODE_ENV !== 'production'. Belt-and-suspenders:
     // also fail closed on prod here in case env.ts is bypassed.
     if (env.isProd) {
-      return c.json({ error: 'forbidden', reason: 'csrf_misconfigured' }, 403)
+      return { ok: false, reason: 'csrf_misconfigured' }
     }
+    return { ok: true }
+  }
+  if (!origin || !env.allowedOrigins.includes(origin)) {
+    return { ok: false, reason: 'bad_origin' }
+  }
+  return { ok: true }
+}
+
+export const requireSafeOrigin: MiddlewareHandler = async (c, next) => {
+  if (!STATE_CHANGING.has(c.req.method)) {
     await next()
     return
   }
-  const origin = c.req.header('origin')
-  if (!origin || !env.allowedOrigins.includes(origin)) {
-    return c.json({ error: 'forbidden', reason: 'bad_origin' }, 403)
+  const verdict = checkOrigin(c.req.header('origin'))
+  if (!verdict.ok) {
+    return c.json({ error: 'forbidden', reason: verdict.reason }, 403)
+  }
+  await next()
+}
+
+// Sibling of requireSafeOrigin that does NOT bypass GET/HEAD. Use on
+// any route whose handler mutates server state despite being a read
+// method — without this, a hostile origin can fire a credentialed GET
+// (cookies are SameSite=None in prod) and poison server-side state
+// like the recommender's recently_shown rotation.
+export const requireTrustedOrigin: MiddlewareHandler = async (c, next) => {
+  const verdict = checkOrigin(c.req.header('origin'))
+  if (!verdict.ok) {
+    return c.json({ error: 'forbidden', reason: verdict.reason }, 403)
   }
   await next()
 }
