@@ -430,6 +430,115 @@ describe('sonarr POST /api/v3/series — non-admin add policy', () => {
     expect(body.error).toBe('admin_must_configure_upstream')
   })
 
+  it('race-tolerant: empty created.seasons from POST triggers a GET re-read so the cap-aware grab still fires', async () => {
+    // Sonarr's add pipeline applies addOptions.monitor after the response
+    // body is built. For shows whose metadata is still being fetched at
+    // POST-response time, created.seasons can be empty even though
+    // 'firstSeason' will land S1 monitored a moment later. Without the
+    // re-read, monitored.length === 0 from the POST response and
+    // grabTvUnderCap is silently skipped — the bug Round 24 finding 1
+    // flagged. Assert the GET re-read happens and that the route
+    // dispatches the background grab from the canonical season list.
+    const calls: Array<{ url: string; method: string }> = []
+    let releasePolled = false
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        calls.push({ url, method })
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(JSON.stringify([
+            { id: 1, path: '/data/tv', freeSpace: 500 * 1024 ** 3 },
+          ]), { status: 200 })
+        }
+        if (url.includes('/api/v3/qualityprofile')) {
+          return new Response(JSON.stringify([{ id: 1, name: 'Choose Me' }]), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/series') && method === 'POST') {
+          // Empty seasons — the race the fix is meant to handle.
+          return new Response(JSON.stringify({ id: 42, title: 'X', monitored: true, seasons: [] }), { status: 201 })
+        }
+        if (url.includes('/api/v3/series/42') && method === 'GET') {
+          // Canonical state once Sonarr finishes applying firstSeason.
+          return new Response(JSON.stringify({
+            id: 42,
+            title: 'X',
+            seasons: [
+              { seasonNumber: 0, monitored: false },
+              { seasonNumber: 1, monitored: true },
+              { seasonNumber: 2, monitored: false },
+            ],
+          }), { status: 200 })
+        }
+        if (url.includes('/api/v3/release')) {
+          releasePolled = true
+          return new Response(JSON.stringify([]), { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/series', {
+      method: 'POST',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'X', tvdbId: 1 }),
+    })
+    expect(r.status).toBe(201)
+    // The GET re-read MUST have happened — that's the property we're locking in.
+    const reread = calls.find((c) => c.method === 'GET' && c.url.endsWith('/api/v3/series/42'))
+    expect(reread, 'expected a GET /api/v3/series/42 re-read after the POST returned empty seasons').toBeDefined()
+    // grabTvUnderCap is spawned via void with a 2s setTimeout before
+    // /api/v3/release; we can't reliably observe it inside the request
+    // tick without fake timers. The GET re-read alone proves the
+    // race-tolerant path ran; the downstream grab is exercised by
+    // existing tests with non-empty created.seasons. Silence the
+    // unused-binding lint while keeping the variable for future
+    // fake-timer expansion.
+    void releasePolled
+  })
+
+  it('race-tolerant re-read skipped when the response already lists monitored seasons (no extra GET on the happy path)', async () => {
+    // Make sure the happy path doesn't waste a round-trip — if
+    // created.seasons already has monitored entries, the re-read MUST
+    // NOT fire. Otherwise every non-admin add costs an extra GET.
+    const getsToSpecificSeries: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(JSON.stringify([
+            { id: 1, path: '/data/tv', freeSpace: 500 * 1024 ** 3 },
+          ]), { status: 200 })
+        }
+        if (url.includes('/api/v3/qualityprofile')) {
+          return new Response(JSON.stringify([{ id: 1, name: 'Choose Me' }]), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/series') && method === 'POST') {
+          return new Response(JSON.stringify({
+            id: 42,
+            title: 'X',
+            monitored: true,
+            seasons: [{ seasonNumber: 1, monitored: true }],
+          }), { status: 201 })
+        }
+        if (url.includes('/api/v3/series/42') && method === 'GET') {
+          getsToSpecificSeries.push(url)
+          return new Response(JSON.stringify({ id: 42, seasons: [] }), { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/series', {
+      method: 'POST',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'X', tvdbId: 1 }),
+    })
+    expect(r.status).toBe(201)
+    expect(getsToSpecificSeries).toEqual([])
+  })
+
   it("forces addOptions.monitor:'firstSeason' so a completed show actually grabs season 1", async () => {
     // Prior behavior was monitor:'future', which left zero historical
     // seasons monitored on a completed show — grabTvUnderCap is gated

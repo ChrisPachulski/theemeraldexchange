@@ -406,9 +406,45 @@ sonarr.post('/api/v3/series', async (c) => {
       const id = created.id
       // Use the seasons in the request body (pre-add intent) when
       // available — Sonarr's response sometimes lags monitor flags.
-      const monitored = (body.seasons ?? created.seasons ?? [])
+      let monitored = (body.seasons ?? created.seasons ?? [])
         .filter((s) => s.monitored)
         .map((s) => s.seasonNumber)
+
+      // Race-tolerant re-read for the non-admin / 'monitor': 'firstSeason'
+      // path. The non-admin body has no explicit seasons[] — we rely on
+      // created.seasons to know what Sonarr actually monitored after the
+      // add pipeline applied addOptions.monitor. For shows whose metadata
+      // is still being fetched at POST-response time (especially brand-new
+      // series), Sonarr can echo an empty or pre-monitor seasons array,
+      // leaving monitored.length === 0 even though firstSeason will land
+      // S1 monitored a moment later. Without this re-read, grabTvUnderCap
+      // is silently skipped and the user gets an apparently-successful
+      // add with no download — exactly the regression Round 23's fix
+      // was meant to close.
+      //
+      // Guard: only re-read when body.seasons is undefined (no explicit
+      // admin intent) AND monitored.length is 0 (we have nothing to act
+      // on yet). Single GET, no retry loop — if Sonarr still hasn't
+      // resolved metadata, skipping the grab is the safer outcome than
+      // looping in the request handler.
+      if (id && monitored.length === 0 && !body.seasons) {
+        try {
+          const fresh = await sonarrFetch(`/api/v3/series/${id}`, { method: 'GET' })
+          if (fresh.ok) {
+            const refreshed = (await fresh.json()) as {
+              seasons?: Array<{ seasonNumber: number; monitored: boolean }>
+            }
+            monitored = (refreshed.seasons ?? [])
+              .filter((s) => s.monitored)
+              .map((s) => s.seasonNumber)
+          }
+        } catch (e) {
+          console.warn(
+            `[tv-monitor] re-read series ${id} for monitored seasons failed: ` +
+              (e instanceof Error ? e.message : String(e)),
+          )
+        }
+      }
 
       // The modal's single-season picker sends
       // `addOptions.monitor: 'none'` plus an explicit seasons[] with
