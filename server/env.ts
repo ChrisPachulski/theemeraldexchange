@@ -205,9 +205,15 @@ export const env = {
   // AddSeriesModal); mirror that on the server so non-admin direct-
   // POSTs land on the same curated profile rather than profiles[0]
   // (which could be the more permissive default Sonarr/Radarr ships).
-  // Lowercased exact-match. Override per-deploy if the household
-  // curates under a different name.
-  defaultProfileName: opt('DEFAULT_PROFILE_NAME') ?? 'choose me',
+  //
+  // The downstream comparison is `p.name?.toLowerCase() === this`, so
+  // we MUST lowercase the env value here too. The published example
+  // sets DEFAULT_PROFILE_NAME=Choose Me (capitalized), and without
+  // this normalization the comparison would silently fail and fall
+  // back to profiles[0] — re-opening the very gap the env var exists
+  // to close. Override per-deploy if the household curates under a
+  // different name; case doesn't matter.
+  defaultProfileName: (opt('DEFAULT_PROFILE_NAME') ?? 'choose me').toLowerCase(),
 
   // Minimum free space (bytes) on a Sonarr/Radarr root folder before
   // we'll allow an `add`. Below this, both admins and users get a 507

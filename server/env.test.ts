@@ -30,6 +30,7 @@ const PRESERVED_KEYS = [
   'MAX_TV_GB_PER_EPISODE',
   'PORT',
   'ALLOW_UNSCOPED_PLEX_LOGIN',
+  'DEFAULT_PROFILE_NAME',
 ] as const
 
 let snapshot: Record<string, string | undefined> = {}
@@ -353,5 +354,34 @@ describe('env — numeric env validation', () => {
     expect(env.maxMovieGb).toBe(15)
     expect(env.maxTvGbPerEpisode).toBe(7)
     expect(env.port).toBe(3002)
+  })
+})
+
+describe('env — DEFAULT_PROFILE_NAME case folding', () => {
+  // Downstream code compares against p.name?.toLowerCase(), so we must
+  // lowercase here at load. The published .env.production.example sets
+  // DEFAULT_PROFILE_NAME=Choose Me (capitalized) — without normalization
+  // the comparison silently fails and non-admin adds drift back onto
+  // profiles[0] (Sonarr/Radarr's permissive "Any"). Lock the symmetry
+  // in.
+  it('unset → "choose me" default', async () => {
+    setBaselineEnv()
+    delete process.env.DEFAULT_PROFILE_NAME
+    const env = await loadEnv()
+    expect(env.defaultProfileName).toBe('choose me')
+  })
+
+  it('capitalized value is lowercased so the toLowerCase comparison matches', async () => {
+    setBaselineEnv()
+    process.env.DEFAULT_PROFILE_NAME = 'Choose Me'
+    const env = await loadEnv()
+    expect(env.defaultProfileName).toBe('choose me')
+  })
+
+  it('all-uppercase value is lowercased', async () => {
+    setBaselineEnv()
+    process.env.DEFAULT_PROFILE_NAME = 'HIGH QUALITY'
+    const env = await loadEnv()
+    expect(env.defaultProfileName).toBe('high quality')
   })
 })
