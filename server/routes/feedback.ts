@@ -93,7 +93,11 @@ feedback.post('/', async (c) => {
   if (!isKind(body.type)) return c.json({ error: 'invalid_type' }, 400)
   if (!isSignal(body.signal)) return c.json({ error: 'invalid_signal' }, 400)
   const tmdbId = Number(body.tmdbId)
-  if (!Number.isFinite(tmdbId) || tmdbId <= 0) {
+  // Stores normalize to positive integer ids on read (see
+  // services/rejections.ts and services/userFeedback.ts); accepting
+  // 1.5 or 1e20 here would persist a row the next load() would
+  // silently drop, leaving the route looking like it succeeded.
+  if (!Number.isSafeInteger(tmdbId) || tmdbId <= 0) {
     return c.json({ error: 'invalid_tmdbId' }, 400)
   }
   const title = typeof body.title === 'string' ? body.title : ''
@@ -201,7 +205,9 @@ feedback.delete('/:type/:tmdbId/:signal', async (c) => {
   const tmdbId = Number(c.req.param('tmdbId'))
   if (!isKind(typeParam)) return c.json({ error: 'invalid_type' }, 400)
   if (!isSignal(signalParam)) return c.json({ error: 'invalid_signal' }, 400)
-  if (!Number.isFinite(tmdbId) || tmdbId <= 0) {
+  // Same safe-integer constraint as POST — keep DELETE in sync so a
+  // malformed id can't make it past the route guard.
+  if (!Number.isSafeInteger(tmdbId) || tmdbId <= 0) {
     return c.json({ error: 'invalid_tmdbId' }, 400)
   }
   const type = typeParam
