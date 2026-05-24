@@ -6,14 +6,20 @@ import { useAuth } from '../../lib/auth'
 import { useLimits } from '../../lib/hooks/useLimits'
 import './AddSeriesModal.css'
 
-// Pick "Choose Me" by name when present; otherwise fall back to whatever
-// Radarr returns first. Lets the household run a curated default profile
-// without hardcoding numeric ids that drift between installs.
+// Pick the household's curated profile by name (case-insensitive)
+// when present; otherwise fall back to whatever Radarr returns first.
+// The name comes from /api/limits.defaultProfileName so the admin
+// modal default agrees with what the server enforces for non-admin
+// direct-POSTs (materializeNonAdminMovieBody). Pre-fix this was
+// hard-coded to "choose me" client-side, which silently disagreed
+// with the server whenever the operator set DEFAULT_PROFILE_NAME to
+// something else.
 function pickDefaultProfileId(
   profiles: { id: number; name: string }[] | undefined,
+  preferredName: string,
 ): number | null {
   if (!profiles || profiles.length === 0) return null
-  const preferred = profiles.find((p) => p.name.toLowerCase() === 'choose me')
+  const preferred = profiles.find((p) => p.name.toLowerCase() === preferredName)
   return (preferred ?? profiles[0]).id
 }
 
@@ -38,7 +44,9 @@ export function AddMovieModal({ movie, onClose, onAdded }: Props) {
   const [searchOnAdd, setSearchOnAdd] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const profileId = profileChoice ?? pickDefaultProfileId(profiles.data)
+  const profileId =
+    profileChoice ??
+    pickDefaultProfileId(profiles.data, (limits.data?.defaultProfileName ?? 'choose me').toLowerCase())
   const rootFolder = folderChoice ?? folders.data?.[0]?.path ?? null
 
   useEffect(() => {

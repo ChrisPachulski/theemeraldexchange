@@ -6,14 +6,18 @@ import { useAuth } from '../../lib/auth'
 import { useLimits } from '../../lib/hooks/useLimits'
 import './AddSeriesModal.css'
 
-// Pick "Choose Me" by name when present; otherwise fall back to whatever
-// Sonarr returns first. Mirrors the AddMovieModal default so a household
-// running curated profiles doesn't get the alphabetical first one.
+// Pick the household's curated profile by name (case-insensitive)
+// when present; otherwise fall back to whatever Sonarr returns first.
+// The name comes from /api/limits.defaultProfileName — see
+// AddMovieModal for the full rationale. Hardcoding "choose me" used
+// to silently disagree with the server whenever the operator set
+// DEFAULT_PROFILE_NAME to something else.
 function pickDefaultProfileId(
   profiles: { id: number; name: string }[] | undefined,
+  preferredName: string,
 ): number | null {
   if (!profiles || profiles.length === 0) return null
-  const preferred = profiles.find((p) => p.name.toLowerCase() === 'choose me')
+  const preferred = profiles.find((p) => p.name.toLowerCase() === preferredName)
   return (preferred ?? profiles[0]).id
 }
 
@@ -61,7 +65,9 @@ export function AddSeriesModal({ series, onClose, onAdded }: Props) {
       : 'all'
   const monitor = monitorChoice ?? defaultMonitor
 
-  const profileId = profileChoice ?? pickDefaultProfileId(profiles.data)
+  const profileId =
+    profileChoice ??
+    pickDefaultProfileId(profiles.data, (limits.data?.defaultProfileName ?? 'choose me').toLowerCase())
   const rootFolder = folderChoice ?? folders.data?.[0]?.path ?? null
 
   useEffect(() => {
