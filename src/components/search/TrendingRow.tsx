@@ -30,6 +30,11 @@ type Props = {
     stateFor: (id: number) => DotState
     onLike: (id: number, title: string) => void
     onDislike: (id: number, title: string) => void
+    /** True when the feedback store is unreachable. Dots render
+     *  disabled with a "feedback unavailable" tooltip and the label
+     *  carries an inline hint so the user can tell the difference
+     *  between "I haven't set any dots" and "dots can't load." */
+    unavailable?: boolean
   }
   /**
    * Optional AI on/off toggle anchored to the bottom-right of the
@@ -260,6 +265,12 @@ export function TrendingRow({
       <h3 className="trending__label">
         {label ?? 'Trending this week'}
         {sourceHint && <span className="trending__source-hint"> · {sourceHint}</span>}
+        {feedback?.unavailable && (
+          <span className="trending__source-hint" role="status">
+            {' '}
+            · Feedback unavailable
+          </span>
+        )}
       </h3>
       <div className="trending__row">
         {items.slice(0, 16).map((item) => {
@@ -326,6 +337,11 @@ export function TrendingRow({
                   onLike={() => feedback.onLike(item.id, item.title)}
                   onDislike={() => feedback.onDislike(item.id, item.title)}
                   title={item.title}
+                  disabledReason={
+                    feedback.unavailable
+                      ? "Feedback unavailable — couldn't reach the server"
+                      : undefined
+                  }
                 />
               )}
             </div>

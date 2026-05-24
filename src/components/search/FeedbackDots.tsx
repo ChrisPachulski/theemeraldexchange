@@ -16,11 +16,17 @@ type Props = {
   onDislike: () => void
   /** Card title for screen readers. */
   title: string
+  /** When set, both dots are disabled and the tooltip surfaces the
+   *  reason. Used when the feedback store is unreachable (backend
+   *  500 / fail-closed corrupted-store path) so the user can tell
+   *  the difference between "no dots set" and "dots can't load". */
+  disabledReason?: string
 }
 
-export function FeedbackDots({ state, onLike, onDislike, title }: Props) {
+export function FeedbackDots({ state, onLike, onDislike, title, disabledReason }: Props) {
   const liked = state === 'liked'
   const disliked = state === 'disliked'
+  const disabled = !!disabledReason
 
   return (
     <div className="feedback-dots" role="group" aria-label={`Feedback for ${title}`}>
@@ -29,7 +35,8 @@ export function FeedbackDots({ state, onLike, onDislike, title }: Props) {
         className={`feedback-dot feedback-dot--red${disliked ? ' feedback-dot--set' : ''}`}
         aria-pressed={disliked}
         aria-label={disliked ? `Undo: don't suggest ${title} again` : `Don't suggest ${title} again`}
-        title={disliked ? 'Disliked — click to undo' : "Don't suggest again"}
+        title={disabled ? disabledReason : disliked ? 'Disliked — click to undo' : "Don't suggest again"}
+        disabled={disabled}
         onClick={(e) => {
           e.stopPropagation()
           onDislike()
@@ -40,7 +47,8 @@ export function FeedbackDots({ state, onLike, onDislike, title }: Props) {
         className={`feedback-dot feedback-dot--green${liked ? ' feedback-dot--set' : ''}`}
         aria-pressed={liked}
         aria-label={liked ? `Undo: liked ${title}` : `Show me more like ${title}`}
-        title={liked ? 'Liked — click to undo' : 'Show me more like this'}
+        title={disabled ? disabledReason : liked ? 'Liked — click to undo' : 'Show me more like this'}
+        disabled={disabled}
         onClick={(e) => {
           e.stopPropagation()
           onLike()
