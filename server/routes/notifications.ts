@@ -161,6 +161,13 @@ notifications.post('/discord', async (c) => {
 })
 
 notifications.delete('/discord', async (c) => {
+  // Attempt both deletes before returning so a failure on Sonarr
+  // doesn't strand Radarr's connector (or vice versa). If any DELETE
+  // refused, surface 502 with the per-app status — the prior version
+  // returned {ok:true, removed:0} even when both refused, so the SPA
+  // showed "Removed" while connectors stayed active and the household
+  // kept getting double-pings on the next grab.
+  const failures: Array<{ app: 'sonarr' | 'radarr'; status: number }> = []
   let removed = 0
   for (const app of ['sonarr', 'radarr'] as const) {
     let id: number | null
@@ -176,6 +183,19 @@ notifications.delete('/discord', async (c) => {
     const fetcher = app === 'sonarr' ? sonarrFetch : radarrFetch
     const res = await fetcher(`/api/v3/notification/${id}`, { method: 'DELETE' })
     if (res.ok) removed++
+    else failures.push({ app, status: res.status })
+  }
+  if (failures.length > 0) {
+    return c.json(
+      {
+        error: 'partial_delete_failed',
+        removed,
+        failures,
+        message:
+          'one or more upstream notification deletes failed; the connector may still be active',
+      },
+      502,
+    )
   }
   return c.json({ ok: true, removed })
 })
