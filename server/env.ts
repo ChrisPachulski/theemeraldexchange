@@ -105,11 +105,34 @@ if (isProd && allowedOrigins.length === 0) {
   )
 }
 
+// PLEX_SERVER_ID is the machineIdentifier of the home Plex server.
+// When set, only members of that server can sign in. When unset, the
+// auth flow accepts any authenticated Plex user — that's the
+// first-time-bootstrap mode so the operator can discover the server id
+// via /api/me's discoveredServers payload. In production, leaving it
+// blank silently turns the invitation-only app into "any Plex user can
+// sign in," so we hard-fail unless the operator explicitly opts in
+// via ALLOW_UNSCOPED_PLEX_LOGIN=1 (intended only for the brief
+// first-deploy window).
+const plexServerId = opt('PLEX_SERVER_ID') ?? null
+const allowUnscopedPlexLogin = process.env.ALLOW_UNSCOPED_PLEX_LOGIN === '1'
+if (isProd && !plexServerId && !allowUnscopedPlexLogin) {
+  throw new Error(
+    'Missing required env var in production: PLEX_SERVER_ID ' +
+      '(your home Plex server\'s machineIdentifier — required to scope ' +
+      'sign-ins to your household). Set it now, or set ' +
+      'ALLOW_UNSCOPED_PLEX_LOGIN=1 explicitly to opt into the ' +
+      'first-deploy bootstrap mode that accepts ANY Plex user. ' +
+      'Discover the id via the SPA\'s first login (discoveredServers) ' +
+      'and remove the escape hatch immediately.',
+  )
+}
+
 export const env = {
   plexClientId: required('PLEX_CLIENT_ID'),
   sessionSecret: required('SESSION_SECRET'),
   admins: csv('ADMINS'),
-  plexServerId: opt('PLEX_SERVER_ID') ?? null,
+  plexServerId,
   port: positiveInt('PORT', 3001),
   isProd,
   allowedOrigins,
