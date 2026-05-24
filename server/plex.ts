@@ -63,14 +63,16 @@ export async function createPin(): Promise<Pin> {
     throw new Error(`plex.createPin failed: ${res.status}`)
   }
   const data = (await res.json()) as Pin
-  // One-line log per pin issued. Confirms our clientID + the pin id/code
-  // pair plex.tv minted — without this, a downstream "checkPin returns
-  // pending forever" failure is opaque (we don't know if the id is
-  // correct, if the code in the popup matches, or if plex.tv even
-  // accepted the create). authToken is null at this stage by definition.
-  console.info(
-    `[plex.createPin] ok id=${data.id} code=${data.code} clientID=${env.plexClientId}`,
-  )
+  // One-line log per pin issued. Confirms our clientID + the pin id
+  // plex.tv minted — without this, a downstream "checkPin returns
+  // pending forever" failure is opaque. The PIN code itself is a live,
+  // short-lived auth artifact: anyone with log access during the 60 s
+  // window can claim the PIN at https://www.plex.tv/link and the
+  // attacker's session — not the legitimate user's — receives the
+  // authToken. Log only the id (sufficient for diagnosis when paired
+  // with checkPin's id-keyed line); the code stays out of default logs.
+  // authToken is null at this stage by definition.
+  console.info(`[plex.createPin] ok id=${data.id} clientID=${env.plexClientId}`)
   return data
 }
 
