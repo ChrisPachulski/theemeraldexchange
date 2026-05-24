@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .context import Candidate, TitleRow, UserContext
+from .context import IN_BATCH_SIZE, Candidate, TitleRow, UserContext
 from .db import decode_vec_rowid, deserialize_f32, serialize_f32
 from .schemas import Kind
 
@@ -61,21 +61,26 @@ def retrieve_candidates(
     if not keep_ids:
         return CandidateBatch(candidates=[], distances=[], diag={"raw": len(rows), "kept": 0})
 
-    placeholders = ",".join("?" for _ in keep_ids)
-    title_rows = conn.execute(
-        f"""SELECT t.tmdb_id, t.kind, t.title, t.year, t.poster_path, t.overview,
-                  COALESCE(t.popularity, 0) AS popularity, t.vote_average,
-                  COALESCE(t.vote_count, 0) AS vote_count,
-                  (SELECT GROUP_CONCAT(g.genre_id) FROM title_genres g
-                   WHERE g.kind = t.kind AND g.tmdb_id = t.tmdb_id) AS genres,
-                  f.embedding AS embedding, f.dim AS dim
-           FROM titles t
-           JOIN title_features f ON f.kind = t.kind AND f.tmdb_id = t.tmdb_id
-           WHERE t.kind = ?
-             AND t.tmdb_id IN ({placeholders})
-             AND COALESCE(t.vote_count, 0) >= ?""",
-        (kind, *keep_ids, min_vote_count),
-    ).fetchall()
+    title_rows: list[sqlite3.Row] = []
+    for i in range(0, len(keep_ids), IN_BATCH_SIZE):
+        batch = keep_ids[i : i + IN_BATCH_SIZE]
+        placeholders = ",".join("?" for _ in batch)
+        title_rows.extend(
+            conn.execute(
+                f"""SELECT t.tmdb_id, t.kind, t.title, t.year, t.poster_path, t.overview,
+                          COALESCE(t.popularity, 0) AS popularity, t.vote_average,
+                          COALESCE(t.vote_count, 0) AS vote_count,
+                          (SELECT GROUP_CONCAT(g.genre_id) FROM title_genres g
+                           WHERE g.kind = t.kind AND g.tmdb_id = t.tmdb_id) AS genres,
+                          f.embedding AS embedding, f.dim AS dim
+                   FROM titles t
+                   JOIN title_features f ON f.kind = t.kind AND f.tmdb_id = t.tmdb_id
+                   WHERE t.kind = ?
+                     AND t.tmdb_id IN ({placeholders})
+                     AND COALESCE(t.vote_count, 0) >= ?""",
+                (kind, *batch, min_vote_count),
+            ).fetchall()
+        )
 
     # SQLite returns IN(...) rows in arbitrary order, which would discard
     # the KNN distance ordering we paid for above. Build a lookup map

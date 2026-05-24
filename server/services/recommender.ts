@@ -66,21 +66,34 @@ const REQUEST_TIMEOUT_MS = 5_000
 // drop the event — the next interaction will resend converging state.
 const MIRROR_TIMEOUT_MS = 3_000
 
+function recommenderHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' }
+  if (env.recommenderEventSecret) {
+    headers['x-recommender-secret'] = env.recommenderEventSecret
+  }
+  return headers
+}
+
 async function mirrorPost(path: string, body: unknown, label: string): Promise<void> {
-  // fetchWithTimeout already swallows aborts and network throws into a
-  // synthesized 504 Response, so we only need to ignore that Response
-  // shape here. No catch needed — but we don't await the body either,
-  // so the caller can void-fire without leaking a pending socket.
-  await fetchWithTimeout(
+  const res = await fetchWithTimeout(
     `${env.recommenderUrl}${path}`,
     {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: recommenderHeaders(),
       body: JSON.stringify(body),
     },
     MIRROR_TIMEOUT_MS,
     label,
   )
+  const responseBody = await res.text().catch(() => '')
+  if (!res.ok) {
+    console.warn('[recommender] mirror POST failed', {
+      label,
+      path,
+      status: res.status,
+      body: responseBody.slice(0, 200),
+    })
+  }
 }
 
 export class RecommenderError extends Error {
@@ -97,7 +110,7 @@ export async function scoreOnce(req: RecommenderScoreRequest): Promise<Recommend
   try {
     const r = await fetch(url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: recommenderHeaders(),
       body: JSON.stringify(req),
       signal: controller.signal,
     })

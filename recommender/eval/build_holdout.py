@@ -67,7 +67,7 @@ def main() -> int:
           o.outcome
         FROM rec_log r
         JOIN rec_outcomes o ON o.rec_id = r.id
-        WHERE r.ts >= datetime('now', '-{LOOKBACK_DAYS} days')
+        WHERE datetime(r.ts) >= datetime('now', '-{LOOKBACK_DAYS} days')
         """
     )
 

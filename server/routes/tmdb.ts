@@ -3,8 +3,9 @@
 // (identified by TVDB id) or a Radarr-tracked movie (TMDB id).
 //
 // Sonarr/Radarr don't expose cast in their v3 APIs, so the detail modal
-// reaches here for cast data. If TMDB_API_KEY isn't set, this route
-// returns 503 and the frontend gracefully omits the cast section.
+// reaches here for cast data. If neither TMDB_READ_ACCESS_TOKEN nor
+// TMDB_API_KEY is set, this route returns 503 and the frontend gracefully
+// omits the cast section.
 
 import { Hono } from 'hono'
 import { requireAuth, type Env } from '../middleware/auth.js'
@@ -18,22 +19,22 @@ tmdb.use('*', requireAuth)
 const TMDB_BASE = 'https://api.themoviedb.org/3'
 
 async function tmdbFetch(path: string, params: Record<string, string> = {}) {
-  if (!env.tmdbApiKey) {
+  const token = env.tmdbReadAccessToken ?? env.tmdbApiKey
+  if (!token) {
     return null
   }
   const url = new URL(`${TMDB_BASE}${path}`)
-  url.searchParams.set('api_key', env.tmdbApiKey)
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v)
   return fetchWithTimeout(
     url,
-    { headers: { Accept: 'application/json' } },
+    { headers: { Accept: 'application/json', Authorization: `Bearer ${token}` } },
     WAN_TIMEOUT_MS,
     `tmdb${path}`,
   )
 }
 
 tmdb.get('/credits', async (c) => {
-  if (!env.tmdbApiKey) {
+  if (!(env.tmdbReadAccessToken ?? env.tmdbApiKey)) {
     return c.json({ error: 'tmdb_not_configured' }, 503)
   }
 
@@ -81,7 +82,7 @@ tmdb.get('/credits', async (c) => {
 // because day-trending whipsaws on news cycles; week reads as "what's
 // hot right now" without being volatile.
 tmdb.get('/trending/:type', async (c) => {
-  if (!env.tmdbApiKey) {
+  if (!(env.tmdbReadAccessToken ?? env.tmdbApiKey)) {
     return c.json({ error: 'tmdb_not_configured' }, 503)
   }
   const type = c.req.param('type')

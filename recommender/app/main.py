@@ -6,6 +6,7 @@ configured for this service. All requests are inside the Docker network.
 
 from __future__ import annotations
 
+import hmac
 import logging
 import sqlite3
 import time
@@ -13,20 +14,26 @@ from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 
 from .config import CONFIG
 from .context import get_active_model_config, load_user_context
 from .db import connect, migrate, transaction
 from . import recipes
 from .schemas import (
+    ClearFeedbackRequest,
     FeedbackEventRequest,
     HealthResponse,
+    LibrarySyncRequest,
+    RejectionEventRequest,
     ScoreRequest,
     ScoreResponse,
+    ShownEventRequest,
 )
 
 log = logging.getLogger("recommender")
+RECENTLY_SHOWN_RETENTION_DAYS = 30
+FEEDBACK_ATTRIBUTION_DAYS = 14
 
 
 @asynccontextmanager
@@ -58,6 +65,16 @@ def get_db() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def require_event_secret(
+    x_recommender_secret: str | None = Header(default=None),
+) -> None:
+    expected = CONFIG.event_secret
+    if not expected:
+        raise HTTPException(status_code=503, detail="event secret is not configured")
+    if x_recommender_secret is None or not hmac.compare_digest(x_recommender_secret, expected):
+        raise HTTPException(status_code=401, detail="invalid event secret")
+
+
 @app.get("/health", response_model=HealthResponse)
 def health(conn: sqlite3.Connection = Depends(get_db)) -> HealthResponse:
     titles = conn.execute("SELECT COUNT(*) AS c FROM titles").fetchone()["c"]
@@ -77,6 +94,7 @@ def health(conn: sqlite3.Connection = Depends(get_db)) -> HealthResponse:
 @app.post("/score", response_model=ScoreResponse)
 def score(
     req: ScoreRequest,
+    _auth: None = Depends(require_event_secret),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> ScoreResponse:
     t0 = time.perf_counter()
@@ -126,6 +144,16 @@ def score(
                    ON CONFLICT(sub, kind, tmdb_id) DO UPDATE SET ts = excluded.ts""",
                 [(req.sub, req.kind, it.tmdb_id, now) for it in items],
             )
+            conn.execute(
+                """DELETE FROM rec_log
+                   WHERE datetime(ts) < datetime('now', ?)
+                     AND id NOT IN (SELECT rec_id FROM rec_outcomes)""",
+                (f"-{CONFIG.rec_log_retention_days} days",),
+            )
+            conn.execute(
+                "DELETE FROM recently_shown WHERE datetime(ts) < datetime('now', ?)",
+                (f"-{RECENTLY_SHOWN_RETENTION_DAYS} days",),
+            )
 
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
     diag = {
@@ -144,6 +172,7 @@ def score(
 @app.post("/events/feedback")
 def post_feedback(
     ev: FeedbackEventRequest,
+    _auth: None = Depends(require_event_secret),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, bool]:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -185,8 +214,9 @@ def post_feedback(
             rec = conn.execute(
                 """SELECT id FROM rec_log
                    WHERE sub = ? AND kind = ? AND tmdb_id = ?
+                     AND datetime(ts) >= datetime('now', ?)
                    ORDER BY ts DESC LIMIT 1""",
-                (ev.sub, ev.kind, ev.tmdb_id),
+                (ev.sub, ev.kind, ev.tmdb_id, f"-{FEEDBACK_ATTRIBUTION_DAYS} days"),
             ).fetchone()
             if rec is not None:
                 conn.execute(
@@ -199,7 +229,8 @@ def post_feedback(
 
 @app.post("/events/library/sync")
 def post_library_sync(
-    payload: dict,
+    payload: LibrarySyncRequest,
+    _auth: None = Depends(require_event_secret),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, int]:
     """Bulk-replace the library snapshot for one kind.
@@ -207,32 +238,17 @@ def post_library_sync(
     Hono is the source of truth via Sonarr/Radarr. We mirror it here for
     recipes that only get a ``sub`` (e.g. the optimizer's offline replays).
     """
-    kind = payload.get("kind")
-    items = payload.get("items") or []
-    if kind not in ("movie", "tv"):
-        raise HTTPException(status_code=400, detail="invalid kind")
-    if not isinstance(items, list):
-        raise HTTPException(status_code=400, detail="items must be a list")
+    if not payload.items and not (payload.force and payload.confirm_purge):
+        raise HTTPException(
+            status_code=400,
+            detail="empty library sync requires force=true and confirm_purge=true",
+        )
 
-    # Validate + build the insert tuples BEFORE touching the DB. If the
-    # payload is malformed we want to 400 out cleanly, not leave a
-    # half-deleted mirror behind. Filtering here also lets us count
-    # accurately for the response.
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    rows: list[tuple] = []
-    for it in items:
-        if not isinstance(it, dict):
-            continue
-        tid = it.get("tmdb_id")
-        if not isinstance(tid, int):
-            continue
-        rows.append((kind, tid, it.get("source"), now))
-
-    if not rows and payload.get("force") is not True:
-        raise HTTPException(status_code=400, detail="empty or invalid library sync requires force=true")
+    rows = [(payload.kind, it.tmdb_id, it.source, now) for it in payload.items]
 
     with transaction(conn):
-        conn.execute("DELETE FROM library_items WHERE kind = ?", (kind,))
+        conn.execute("DELETE FROM library_items WHERE kind = ?", (payload.kind,))
         if rows:
             conn.executemany(
                 """INSERT INTO library_items(kind, tmdb_id, source, added_at)
@@ -244,7 +260,8 @@ def post_library_sync(
 
 @app.post("/events/shown")
 def post_shown(
-    payload: dict,
+    payload: ShownEventRequest,
+    _auth: None = Depends(require_event_secret),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, int]:
     """Bulk-record items as 'recently shown' for a user.
@@ -262,44 +279,42 @@ def post_shown(
     rec_log — attributing a click to a "recommendation" that was
     really a fallback would poison the optimizer's training signal.
     """
-    sub = payload.get("sub")
-    kind = payload.get("kind")
-    tmdb_ids = payload.get("tmdb_ids") or []
-    if not isinstance(sub, str) or kind not in ("movie", "tv"):
-        raise HTTPException(status_code=400, detail="invalid payload")
-    valid_ids = [tid for tid in tmdb_ids if isinstance(tid, int)]
-    if not valid_ids:
+    if not payload.tmdb_ids:
         return {"count": 0}
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    conn.executemany(
-        """INSERT INTO recently_shown(sub, kind, tmdb_id, ts)
-           VALUES (?, ?, ?, ?)
-           ON CONFLICT(sub, kind, tmdb_id) DO UPDATE SET ts = excluded.ts""",
-        [(sub, kind, tid, now) for tid in valid_ids],
-    )
-    return {"count": len(valid_ids)}
+    with transaction(conn):
+        conn.executemany(
+            """INSERT INTO recently_shown(sub, kind, tmdb_id, ts)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(sub, kind, tmdb_id) DO UPDATE SET ts = excluded.ts""",
+            [(payload.sub, payload.kind, tid, now) for tid in payload.tmdb_ids],
+        )
+        conn.execute(
+            "DELETE FROM recently_shown WHERE datetime(ts) < datetime('now', ?)",
+            (f"-{RECENTLY_SHOWN_RETENTION_DAYS} days",),
+        )
+    return {"count": len(payload.tmdb_ids)}
 
 
 @app.post("/events/rejection")
 def post_rejection(
-    payload: dict,
+    payload: RejectionEventRequest,
+    _auth: None = Depends(require_event_secret),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, bool]:
-    kind = payload.get("kind")
-    tmdb_id = payload.get("tmdb_id")
-    if kind not in ("movie", "tv") or not isinstance(tmdb_id, int):
-        raise HTTPException(status_code=400, detail="invalid payload")
-    conn.execute(
-        """INSERT INTO household_rejections(kind, tmdb_id, ts) VALUES (?, ?, datetime('now'))
-           ON CONFLICT(kind, tmdb_id) DO NOTHING""",
-        (kind, tmdb_id),
-    )
+    with transaction(conn):
+        conn.execute(
+            """INSERT INTO household_rejections(kind, tmdb_id, ts) VALUES (?, ?, datetime('now'))
+               ON CONFLICT(kind, tmdb_id) DO NOTHING""",
+            (payload.kind, payload.tmdb_id),
+        )
     return {"ok": True}
 
 
 @app.post("/events/feedback/clear")
 def clear_feedback(
-    payload: dict,
+    payload: ClearFeedbackRequest,
+    _auth: None = Depends(require_event_secret),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, bool]:
     # Drop every signal row for one (sub, kind, tmdb_id). Hono calls
@@ -307,19 +322,10 @@ def clear_feedback(
     # user_feedback table converges with Hono's truth — otherwise the
     # cleared signal would keep influencing scores via
     # load_user_context.
-    sub = payload.get("sub")
-    kind = payload.get("kind")
-    tmdb_id = payload.get("tmdb_id")
-    if (
-        not isinstance(sub, str)
-        or kind not in ("movie", "tv")
-        or not isinstance(tmdb_id, int)
-    ):
-        raise HTTPException(status_code=400, detail="invalid payload")
     with transaction(conn):
         conn.execute(
             "DELETE FROM user_feedback WHERE sub=? AND kind=? AND tmdb_id=?",
-            (sub, kind, tmdb_id),
+            (payload.sub, payload.kind, payload.tmdb_id),
         )
         conn.execute(
             """DELETE FROM rec_outcomes
@@ -327,26 +333,24 @@ def clear_feedback(
                  AND rec_id IN (
                    SELECT id FROM rec_log WHERE sub=? AND kind=? AND tmdb_id=?
                  )""",
-            (sub, kind, tmdb_id),
+            (payload.sub, payload.kind, payload.tmdb_id),
         )
     return {"ok": True}
 
 
 @app.post("/events/rejection/clear")
 def clear_rejection(
-    payload: dict,
+    payload: RejectionEventRequest,
+    _auth: None = Depends(require_event_secret),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, bool]:
     # Mirror of /events/rejection but removing instead of inserting.
     # Hono only calls this after confirming no other household member
     # still dislikes the title, so a household_rejections row here
     # genuinely shouldn't survive.
-    kind = payload.get("kind")
-    tmdb_id = payload.get("tmdb_id")
-    if kind not in ("movie", "tv") or not isinstance(tmdb_id, int):
-        raise HTTPException(status_code=400, detail="invalid payload")
-    conn.execute(
-        "DELETE FROM household_rejections WHERE kind=? AND tmdb_id=?",
-        (kind, tmdb_id),
-    )
+    with transaction(conn):
+        conn.execute(
+            "DELETE FROM household_rejections WHERE kind=? AND tmdb_id=?",
+            (payload.kind, payload.tmdb_id),
+        )
     return {"ok": True}

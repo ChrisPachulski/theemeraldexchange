@@ -14,6 +14,7 @@ class Config:
 
     tmdb_api_key: str | None
     anthropic_api_key: str | None
+    event_secret: str | None
 
     embed_model: str
     embed_dim: int
@@ -23,6 +24,7 @@ class Config:
 
     optimizer_max_drift_pct: float
     optimizer_max_tokens: int
+    rec_log_retention_days: int
 
 
 def _path(env_name: str, default: str) -> Path:
@@ -37,12 +39,14 @@ def load() -> Config:
         port=int(os.environ.get("RECOMMENDER_PORT", "8000")),
         tmdb_api_key=os.environ.get("TMDB_API_KEY") or None,
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY") or None,
+        event_secret=os.environ.get("RECOMMENDER_EVENT_SECRET") or None,
         embed_model=os.environ.get("RECOMMENDER_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2"),
         embed_dim=int(os.environ.get("RECOMMENDER_EMBED_DIM", "384")),
         cold_start_threshold=int(os.environ.get("RECOMMENDER_COLD_START_THRESHOLD", "10")),
         default_recipe=os.environ.get("RECOMMENDER_DEFAULT_RECIPE", "mmr_diverse"),
         optimizer_max_drift_pct=float(os.environ.get("RECOMMENDER_OPTIMIZER_MAX_DRIFT_PCT", "0.20")),
         optimizer_max_tokens=int(os.environ.get("RECOMMENDER_OPTIMIZER_MAX_TOKENS", "8000")),
+        rec_log_retention_days=int(os.environ.get("RECOMMENDER_REC_LOG_RETENTION_DAYS", "90")),
     )
 
 

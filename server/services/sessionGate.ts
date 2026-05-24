@@ -28,11 +28,22 @@ import type { Role, Session } from '../session.js'
 
 const REVALIDATE_TTL_MS = 15 * 60 * 1000
 const REVALIDATE_TIMEOUT_MS = 5_000
+const MAX_CACHE_ENTRIES = 1000
 
 type Status = 'member' | 'not_member'
 
 type Cached = { status: Status; checkedAt: number }
 const cache = new Map<string, Cached>()
+
+function setCached(sub: string, cached: Cached): void {
+  if (cache.has(sub)) cache.delete(sub)
+  cache.set(sub, cached)
+  while (cache.size > MAX_CACHE_ENTRIES) {
+    const oldest = cache.keys().next()
+    if (oldest.done) break
+    cache.delete(oldest.value)
+  }
+}
 
 export function _resetSessionGateCacheForTests(): void {
   cache.clear()
@@ -42,7 +53,7 @@ export function _resetSessionGateCacheForTests(): void {
 // request doesn't re-hit plex.tv. The login path already verified
 // membership, so any seed here is fresh.
 export function _primeSessionGateCache(sub: string, status: Status = 'member'): void {
-  cache.set(sub, { status, checkedAt: Date.now() })
+  setCached(sub, { status, checkedAt: Date.now() })
 }
 
 export function roleFor(username: string): Role {
@@ -100,7 +111,7 @@ export async function reconcileSession(session: Session): Promise<Session | null
     return { ...session, role }
   }
 
-  cache.set(session.sub, { status, checkedAt: now })
+  setCached(session.sub, { status, checkedAt: now })
   if (status === 'not_member') return null
   return { ...session, role }
 }

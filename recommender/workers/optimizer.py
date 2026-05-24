@@ -37,8 +37,10 @@ from app.db import connect, transaction
 from app.schemas import ScoreRequest
 
 log = logging.getLogger("optimizer")
+MIN_ZERO_BASE_STEP = 1e-6
+MAX_INACTIVE_MODEL_CONFIGS = 30
 
-CLAUDE_MODEL = os.environ.get("RECOMMENDER_OPTIMIZER_MODEL", "claude-haiku-4-5")
+CLAUDE_MODEL = os.environ.get("RECOMMENDER_OPTIMIZER_MODEL", "claude-haiku-4-5-20251001")
 EVAL_EPSILON = 0.005  # require >0.5% improvement to promote
 
 
@@ -57,14 +59,14 @@ class OutcomeStats:
 
 def _aggregate(conn: sqlite3.Connection) -> OutcomeStats:
     total = conn.execute(
-        "SELECT COUNT(*) AS c FROM rec_log WHERE ts >= datetime('now','-1 day')"
+        "SELECT COUNT(*) AS c FROM rec_log WHERE datetime(ts) >= datetime('now','-1 day')"
     ).fetchone()["c"]
 
     by_outcome_rows = conn.execute(
         """SELECT o.outcome, COUNT(*) AS c
            FROM rec_outcomes o
            JOIN rec_log r ON r.id = o.rec_id
-           WHERE r.ts >= datetime('now','-1 day')
+           WHERE datetime(o.ts) >= datetime('now','-1 day')
            GROUP BY o.outcome"""
     ).fetchall()
     by_outcome = {r["outcome"]: r["c"] for r in by_outcome_rows}
@@ -74,7 +76,7 @@ def _aggregate(conn: sqlite3.Connection) -> OutcomeStats:
            FROM rec_log r
            JOIN rec_outcomes o ON o.rec_id = r.id
            LEFT JOIN titles t ON t.kind = r.kind AND t.tmdb_id = r.tmdb_id
-           WHERE r.ts >= datetime('now','-1 day') AND o.outcome IN ('rejected','disliked')
+           WHERE datetime(o.ts) >= datetime('now','-1 day') AND o.outcome IN ('rejected','disliked')
            ORDER BY r.score DESC LIMIT 8"""
     ).fetchall()
     pleasant = conn.execute(
@@ -82,7 +84,7 @@ def _aggregate(conn: sqlite3.Connection) -> OutcomeStats:
            FROM rec_log r
            JOIN rec_outcomes o ON o.rec_id = r.id
            LEFT JOIN titles t ON t.kind = r.kind AND t.tmdb_id = r.tmdb_id
-           WHERE r.ts >= datetime('now','-1 day') AND o.outcome IN ('liked','added','clicked')
+           WHERE datetime(o.ts) >= datetime('now','-1 day') AND o.outcome IN ('liked','added','clicked')
            ORDER BY r.score ASC LIMIT 8"""
     ).fetchall()
 
@@ -155,13 +157,17 @@ def call_claude(
         },
         indent=2,
     )
-    msg = client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=min(CONFIG.optimizer_max_tokens, 4096),
-        temperature=0.2,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_block}],
-    )
+    try:
+        msg = client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=CONFIG.optimizer_max_tokens,
+            temperature=0.2,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_block}],
+        )
+    except anthropic.APIError as e:
+        log.warning("optimizer: claude request failed; skipping optimizer: %s", e)
+        return None
     raw = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text").strip()
     try:
         parsed = json.loads(raw)
@@ -178,22 +184,83 @@ def call_claude(
 
 def clamp_patch(active: dict, proposed: dict, *, drift: float) -> dict:
     """Numeric params clamped to [active*(1-drift), active*(1+drift)]."""
-    out: dict[str, Any] = {}
+    out: dict[str, Any] = dict(active)
     for k, new in proposed.items():
-        cur = active.get(k)
-        if isinstance(cur, (int, float)) and isinstance(new, (int, float)) and cur != 0:
-            lo, hi = sorted((cur * (1 - drift), cur * (1 + drift)))
-            clamped = max(lo, min(hi, float(new)))
+        if k not in active:
+            log.warning("optimizer proposed unknown param %r; ignoring", k)
+            continue
+        cur = active[k]
+        if not isinstance(cur, (int, float)) or not isinstance(new, (int, float)):
+            log.warning("optimizer proposed non-numeric change for %r; ignoring", k)
+            continue
+        if cur == 0:
+            if new == 0:
+                out[k] = 0
+                continue
             if isinstance(cur, int):
-                clamped = round(clamped)
-            out[k] = clamped
-        else:
-            # non-numeric or new param: pass through but flag
-            out[k] = new
-    # Carry forward any active params Claude omitted
-    for k, v in active.items():
-        out.setdefault(k, v)
+                out[k] = 1 if new > 0 else -1
+                continue
+            limit = max(float(drift), MIN_ZERO_BASE_STEP)
+            out[k] = max(-limit, min(limit, float(new)))
+            continue
+        lo, hi = sorted((cur * (1 - drift), cur * (1 + drift)))
+        clamped = max(lo, min(hi, float(new)))
+        if isinstance(cur, int):
+            clamped = round(clamped)
+        out[k] = clamped
     return out
+
+
+def validate_proposal(proposed: Any, active_recipe: str, active_params: dict) -> tuple[str, dict, str] | None:
+    if not isinstance(proposed, dict):
+        log.warning("optimizer returned %s instead of object; keeping active config", type(proposed).__name__)
+        return None
+
+    candidate_recipe = proposed.get("recipe") or active_recipe
+    if not isinstance(candidate_recipe, str) or candidate_recipe not in recipes.REGISTRY:
+        log.warning("optimizer proposed unknown recipe %r; keeping active config", candidate_recipe)
+        return None
+
+    raw_params = proposed.get("params", {})
+    if not isinstance(raw_params, dict):
+        log.warning("optimizer proposed params as %s; keeping active config", type(raw_params).__name__)
+        return None
+
+    defaults = recipes.get(candidate_recipe).DEFAULTS
+    numeric_defaults = {
+        k: v
+        for k, v in defaults.items()
+        if isinstance(v, (int, float)) and not isinstance(v, bool)
+    }
+    if candidate_recipe == active_recipe:
+        base_params = {
+            k: active_params[k]
+            if isinstance(active_params.get(k), (int, float)) and not isinstance(active_params.get(k), bool)
+            else default
+            for k, default in numeric_defaults.items()
+        }
+    else:
+        base_params = dict(numeric_defaults)
+
+    clean_params: dict[str, int | float] = {}
+    for key, value in raw_params.items():
+        if key not in numeric_defaults:
+            log.warning("optimizer proposed unknown param %r; ignoring", key)
+            continue
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            log.warning("optimizer proposed non-numeric value for %r; ignoring", key)
+            continue
+        clean_params[key] = value
+
+    notes = proposed.get("notes") or ""
+    if not isinstance(notes, str):
+        notes = ""
+    candidate_params = clamp_patch(
+        base_params,
+        clean_params,
+        drift=CONFIG.optimizer_max_drift_pct,
+    )
+    return candidate_recipe, candidate_params, notes[:200]
 
 
 def load_holdout() -> list[dict]:
@@ -317,33 +384,56 @@ def evaluate(conn: sqlite3.Connection, recipe_name: str, params: dict, holdout: 
     recipe_mod = recipes.get(recipe_name)
     scores: list[float] = []
     for entry in holdout:
-        req = ScoreRequest(
-            sub=entry["sub"],
-            kind=entry["kind"],
-            n=20,
-            exclude_recently_shown=False,
-            library=[{"tmdb_id": t} for t in entry.get("library", [])],
-            feedback=None,
-            household_rejections=[],
-        )
-        # persist_library=False is load-bearing here: eval reads the
-        # same DB as production and must not write holdout tmdb_ids into
-        # the live library_items table.
-        ctx = load_user_context(conn, req, persist_library=False)
-        result = recipe_mod.score(ctx, conn, n=20, params=params)
-        picks = {it.tmdb_id for it in result.items}
-        positives = set(entry.get("positives") or [])
-        negatives = set(entry.get("negatives") or [])
-        recall = len(picks & positives) / max(len(positives), 1)
-        fp = len(picks & negatives) / max(len(negatives), 1)
-        scores.append(recall - 0.5 * fp)
+        try:
+            req = ScoreRequest(
+                sub=entry["sub"],
+                kind=entry["kind"],
+                n=20,
+                exclude_recently_shown=False,
+                library=[{"tmdb_id": t} for t in entry.get("library", [])],
+                feedback=None,
+                household_rejections=[],
+            )
+            # persist_library=False is load-bearing here: eval reads the
+            # same DB as production and must not write holdout tmdb_ids into
+            # the live library_items table.
+            ctx = load_user_context(conn, req, persist_library=False)
+            result = recipe_mod.score(ctx, conn, n=20, params=params)
+            picks = {it.tmdb_id for it in result.items}
+            positives = set(entry.get("positives") or [])
+            negatives = set(entry.get("negatives") or [])
+            recall = len(picks & positives) / max(len(positives), 1)
+            fp = len(picks & negatives) / max(len(negatives), 1)
+            scores.append(recall - 0.5 * fp)
+        except Exception:
+            log.exception(
+                "optimizer: holdout entry skipped during eval sub=%r kind=%r",
+                entry.get("sub"),
+                entry.get("kind"),
+            )
 
+    if not scores:
+        return 0.0
     return sum(scores) / len(scores)
 
 
 # =========================================================================
 # Promotion
 # =========================================================================
+
+
+def _prune_inactive_model_configs(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """DELETE FROM model_config
+           WHERE active = 0
+             AND id NOT IN (
+               SELECT id FROM model_config
+               WHERE active = 0
+               ORDER BY id DESC
+               LIMIT ?
+             )""",
+        (MAX_INACTIVE_MODEL_CONFIGS,),
+    )
 
 
 def promote(conn: sqlite3.Connection, *, recipe: str, params: dict, notes: str) -> str:
@@ -355,6 +445,7 @@ def promote(conn: sqlite3.Connection, *, recipe: str, params: dict, notes: str) 
                VALUES (?, ?, ?, 1, datetime('now'), ?)""",
             (new_version, recipe, json.dumps(params), notes),
         )
+        _prune_inactive_model_configs(conn)
     active = conn.execute(
         "SELECT version FROM model_config WHERE active = 1"
     ).fetchall()
@@ -370,96 +461,92 @@ def promote(conn: sqlite3.Connection, *, recipe: str, params: dict, notes: str) 
 
 def run(*, dry_run: bool = False) -> int:
     conn = connect()
+    try:
+        # Active config or default
+        active = conn.execute(
+            "SELECT version, recipe, params_json FROM model_config WHERE active = 1 LIMIT 1"
+        ).fetchone()
+        if active:
+            active_version = active["version"]
+            active_recipe = active["recipe"]
+            active_params = json.loads(active["params_json"])
+        else:
+            active_version = "v0"
+            active_recipe = CONFIG.default_recipe
+            # Materialize the recipe defaults from the module
+            active_params = dict(recipes.get(active_recipe).DEFAULTS)
+            promote(conn, recipe=active_recipe, params=active_params, notes="initial defaults")
+            log.info("seeded initial model_config from %s defaults", active_recipe)
 
-    # Active config or default
-    active = conn.execute(
-        "SELECT version, recipe, params_json FROM model_config WHERE active = 1 LIMIT 1"
-    ).fetchone()
-    if active:
-        active_version = active["version"]
-        active_recipe = active["recipe"]
-        active_params = json.loads(active["params_json"])
-    else:
-        active_version = "v0"
-        active_recipe = CONFIG.default_recipe
-        # Materialize the recipe defaults from the module
-        active_params = dict(recipes.get(active_recipe).DEFAULTS)
-        promote(conn, recipe=active_recipe, params=active_params, notes="initial defaults")
-        log.info("seeded initial model_config from %s defaults", active_recipe)
+        stats = _aggregate(conn)
+        if stats.total_recs < 50:
+            log.info("only %d rec_log rows in last 24h — skipping optimizer", stats.total_recs)
+            return 0
 
-    stats = _aggregate(conn)
-    if stats.total_recs < 50:
-        log.info("only %d rec_log rows in last 24h — skipping optimizer", stats.total_recs)
-        return 0
+        proposed = call_claude(
+            active_recipe=active_recipe,
+            active_params=active_params,
+            stats=stats,
+            registry=list(recipes.REGISTRY.keys()),
+        )
+        if proposed is None:
+            return 0
 
-    proposed = call_claude(
-        active_recipe=active_recipe,
-        active_params=active_params,
-        stats=stats,
-        registry=list(recipes.REGISTRY.keys()),
-    )
-    if proposed is None:
-        return 0
+        validated = validate_proposal(proposed, active_recipe, active_params)
+        if validated is None:
+            return 0
+        candidate_recipe, candidate_params, notes = validated
 
-    candidate_recipe = proposed.get("recipe") or active_recipe
-    if candidate_recipe not in recipes.REGISTRY:
-        log.warning("optimizer proposed unknown recipe %r; falling back to active", candidate_recipe)
-        candidate_recipe = active_recipe
+        holdout = load_holdout()
+        baseline_score = evaluate(conn, active_recipe, active_params, holdout) if holdout else 0.0
+        candidate_score = evaluate(conn, candidate_recipe, candidate_params, holdout) if holdout else 0.0
 
-    candidate_params = clamp_patch(
-        active_params,
-        proposed.get("params") or {},
-        drift=CONFIG.optimizer_max_drift_pct,
-    )
-    notes = (proposed.get("notes") or "")[:200]
+        log.info(
+            "eval baseline=%.4f candidate=%.4f notes=%r",
+            baseline_score,
+            candidate_score,
+            notes,
+        )
 
-    holdout = load_holdout()
-    baseline_score = evaluate(conn, active_recipe, active_params, holdout) if holdout else 0.0
-    candidate_score = evaluate(conn, candidate_recipe, candidate_params, holdout) if holdout else 0.0
+        same = candidate_recipe == active_recipe and candidate_params == active_params
+        improved = candidate_score >= baseline_score + EVAL_EPSILON
 
-    log.info(
-        "eval baseline=%.4f candidate=%.4f notes=%r",
-        baseline_score,
-        candidate_score,
-        notes,
-    )
+        if dry_run:
+            log.info("dry-run only — not promoting")
+            return 0
+        if same:
+            log.info("no change proposed; keeping %s", active_version)
+            return 0
+        if not holdout:
+            log.info("no holdout set yet; recording proposal only (active stays %s)", active_version)
+            # Insert proposal as inactive row so we can review later.
+            with transaction(conn):
+                conn.execute(
+                    """INSERT INTO model_config(version, recipe, params_json, active, created_at, notes)
+                       VALUES (?, ?, ?, 0, datetime('now'), ?)""",
+                    (
+                        f"proposed-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}",
+                        candidate_recipe,
+                        json.dumps(candidate_params),
+                        f"proposal (no holdout yet): {notes}",
+                    ),
+                )
+                _prune_inactive_model_configs(conn)
+            return 0
+        if not improved:
+            log.info("candidate did not beat baseline; staying on %s", active_version)
+            return 0
 
-    same = candidate_recipe == active_recipe and candidate_params == active_params
-    improved = candidate_score >= baseline_score + EVAL_EPSILON
-
-    if dry_run:
-        log.info("dry-run only — not promoting")
-        return 0
-    if same:
-        log.info("no change proposed; keeping %s", active_version)
-        return 0
-    if not holdout:
-        log.info("no holdout set yet; recording proposal only (active stays %s)", active_version)
-        # Insert proposal as inactive row so we can review later.
-        with transaction(conn):
-            conn.execute(
-                """INSERT INTO model_config(version, recipe, params_json, active, created_at, notes)
-                   VALUES (?, ?, ?, 0, datetime('now'), ?)""",
-                (
-                    f"proposed-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}",
-                    candidate_recipe,
-                    json.dumps(candidate_params),
-                    f"proposal (no holdout yet): {notes}",
-                ),
-            )
-        return 0
-    if not improved:
-        log.info("candidate did not beat baseline; staying on %s", active_version)
-        return 0
-
-    new_version = promote(
-        conn,
-        recipe=candidate_recipe,
-        params=candidate_params,
-        notes=f"auto-promote score={candidate_score:.4f} vs {baseline_score:.4f}: {notes}",
-    )
-    log.info("promoted %s -> %s", active_version, new_version)
-    return 1
+        new_version = promote(
+            conn,
+            recipe=candidate_recipe,
+            params=candidate_params,
+            notes=f"auto-promote score={candidate_score:.4f} vs {baseline_score:.4f}: {notes}",
+        )
+        log.info("promoted %s -> %s", active_version, new_version)
+        return 1
+    finally:
+        conn.close()
 
 
 def _cli() -> None:

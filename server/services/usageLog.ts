@@ -243,8 +243,6 @@ export async function summarizeUsage(sinceMs: number): Promise<UsageSummary[]> {
       }
       byUser.set(e.sub, row)
     }
-    // Keep the latest username we see (in case it changed since older events).
-    row.username = e.username
     if (e.type === 'claude_call') row.calls += 1
     if (e.type === 'claude_error') row.errors += 1
     row.inputTokens += e.inputTokens ?? 0
