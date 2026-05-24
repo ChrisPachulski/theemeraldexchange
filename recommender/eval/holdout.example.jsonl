@@ -1,0 +1,3 @@
+{"sub": "plex-1", "kind": "movie", "library": [27205, 603, 11, 13, 24428], "positives": [157336, 1726, 414906], "negatives": [603534]}
+{"sub": "plex-1", "kind": "tv", "library": [95396, 1399, 76479], "positives": [94997, 71912], "negatives": [44217]}
+{"sub": "plex-2", "kind": "movie", "library": [550, 680, 274, 13], "positives": [299536, 24428, 49026], "negatives": []}

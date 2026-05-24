@@ -1,7 +1,10 @@
 # Eval holdout
 
-`holdout.jsonl` — one JSON object per line. The optimizer evaluates
-candidate model configs against these examples before promoting.
+`holdout.jsonl` — **one JSON object per line** (JSONL, not JSON
+array). The optimizer evaluates candidate model configs against
+these examples before promoting; without a populated file every
+optimizer run records its candidate as an inactive proposal and
+auto-promotion stays off (see `workers/optimizer.py:load_holdout`).
 
 Each line:
 
@@ -15,31 +18,37 @@ Each line:
 }
 ```
 
-* `library` — TMDB ids the user already has (the model treats these as the
-  positive centroid).
-* `positives` — TMDB ids the user later liked/added/clicked. The scorer
-  rewards recall against these.
-* `negatives` — ids the user later rejected/disliked. The scorer penalizes
-  false positives against these.
+* `library` — TMDB ids the household has indexed (household-scoped;
+  the model treats them as the positive centroid).
+* `positives` — TMDB ids this user later liked / added / clicked.
+  Scorer rewards recall against these.
+* `negatives` — ids the user later rejected / disliked. Scorer
+  penalizes false positives against these.
 
-This file is gitignored — generate it from a snapshot of `rec_log` +
-`rec_outcomes` after a few weeks of usage:
+`holdout.example.jsonl` ships in this directory as a syntactically
+valid template (3 rows). It is NOT real user data — don't copy it
+into production; use the generator script below to build a real
+file from your own database.
 
-```sql
--- example seed:
-.mode json
-SELECT
-  r.sub,
-  r.kind,
-  (SELECT json_group_array(tmdb_id) FROM library_items WHERE kind = r.kind) AS library,
-  json_group_array(DISTINCT r.tmdb_id) FILTER (
-    WHERE o.outcome IN ('liked','added','clicked')
-  ) AS positives,
-  json_group_array(DISTINCT r.tmdb_id) FILTER (
-    WHERE o.outcome IN ('rejected','disliked')
-  ) AS negatives
-FROM rec_log r
-LEFT JOIN rec_outcomes o ON o.rec_id = r.id
-WHERE r.ts >= datetime('now', '-30 days')
-GROUP BY r.sub, r.kind;
+This file is gitignored. Build it from a recommender DB snapshot:
+
+```bash
+# Inside the recommender container (default DB path /data/recommender.db):
+docker exec exchange-recommender python -m eval.build_holdout > /data/holdout.jsonl
+
+# From the host, against a copied snapshot:
+RECOMMENDER_DB_PATH=./snapshot.db \
+  python recommender/eval/build_holdout.py > recommender/eval/holdout.jsonl
 ```
+
+The generator filters to (sub, kind) pairs that have at least one
+positive outcome AND a library of at least three titles in the
+last 30 days (`HOLDOUT_LOOKBACK_DAYS` env to override). Anything
+under those floors is too noisy to score against, so it gets
+dropped at build time rather than polluting the eval signal.
+
+**Why not just `sqlite3 -mode json`?** That mode emits a single
+JSON array, not JSONL. `workers/optimizer.py` reads line-by-line
+(`json.loads(line)` per line) — a JSON-array file silently parses
+as zero usable rows and the auto-promotion gate stays off without
+any visible error.

@@ -247,16 +247,29 @@ schema) and lives at `RECOMMENDER_HOLDOUT_PATH` inside the container,
 defaulting to `/data/holdout.jsonl`.
 
 ```bash
-# On the NAS, with the /data volume mount already in place:
+# Quick start: ship the syntactically-valid example to prove the
+# wiring (file shape, env var, mount path), THEN replace it with a
+# real generated holdout before relying on auto-promotion. The
+# example is 3 synthetic rows — enough to satisfy load_holdout() but
+# NOT enough to make a meaningful eval signal.
 scp recommender/eval/holdout.example.jsonl \
+  root@theemeraldexchange.local:/mnt/user/appdata/exchange-backend/recommender-db/holdout.jsonl
+
+# Real holdout: generate from the running recommender DB. The
+# generator filters to (sub, kind) pairs with at least one positive
+# outcome AND a library of at least 3 titles in the last 30 days.
+ssh root@theemeraldexchange.local \
+  'docker exec exchange-recommender python -m eval.build_holdout' \
+  > /tmp/holdout.jsonl
+scp /tmp/holdout.jsonl \
   root@theemeraldexchange.local:/mnt/user/appdata/exchange-backend/recommender-db/holdout.jsonl
 ```
 
 The Dockerfile intentionally does NOT bake the holdout into the image
 and `scripts/deploy-nas.sh` excludes it from rsync — it's operator-
-curated history, not source code. Keep updating it from real user
-sessions over time (or rebuild from `rec_log` + `rec_outcomes`); the
-optimizer's evaluation only gets sharper as the set grows.
+curated history, not source code. Re-run the generator periodically
+as `rec_log` + `rec_outcomes` accumulate; the optimizer's evaluation
+only gets sharper as the set grows.
 
 ### Rolling back
 
