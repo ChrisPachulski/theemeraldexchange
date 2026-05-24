@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 import numpy as np
 
 from app.config import CONFIG
-from app.db import connect, encode_vec_rowid, serialize_f32
+from app.db import connect, encode_vec_rowid, serialize_f32, transaction
 
 log = logging.getLogger("featurize")
 
@@ -92,6 +92,7 @@ def _load_pending(conn: sqlite3.Connection, limit: int | None) -> list[sqlite3.R
         LEFT JOIN title_features f ON f.kind = t.kind AND f.tmdb_id = t.tmdb_id
         WHERE f.tmdb_id IS NULL
            OR f.computed_at < t.fetched_at
+        ORDER BY t.fetched_at ASC, t.kind, t.tmdb_id
     """
     if limit:
         q += f" LIMIT {int(limit)}"
@@ -152,7 +153,7 @@ def run(*, limit: int | None = None) -> int:
         # (TMDB ids are not unique across namespaces).
         vec_rows.append((encode_vec_rowid(row["kind"], int(row["tmdb_id"])), row["kind"], blob))
 
-    with conn:
+    with transaction(conn):
         conn.executemany(
             """INSERT INTO title_features(tmdb_id, kind, feature_json, embedding, dim, computed_at)
                VALUES (?, ?, ?, ?, ?, ?)

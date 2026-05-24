@@ -27,7 +27,7 @@ class ScoreRequest(BaseModel):
     # Allow callers to push the source-of-truth library + feedback in-line so
     # we don't have to keep two stores in sync. When absent, we use what the
     # recommender already has in its tables.
-    library: list[LibraryItem] | None = None
+    library: list[LibraryItem] | None = Field(default=None, max_length=5000)
     feedback: list[FeedbackEntry] | None = None
     household_rejections: list[int] | None = None
 
