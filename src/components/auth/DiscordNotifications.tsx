@@ -73,7 +73,13 @@ export function DiscordNotifications({ onClose }: Props) {
     }
   }
 
-  const remove = async () => {
+  // Returns true on success, false on any error. The caller uses this
+  // to decide whether to close the menu — without it, the click
+  // handler's `.then(() => onClose())` ran whether the DELETE succeeded
+  // or not, hiding the partial-failure message the backend now
+  // surfaces (a connector might still be live). Keep the menu open on
+  // failure so the user sees what happened.
+  const remove = async (): Promise<boolean> => {
     setBusy('remove')
     setMessage(null)
     try {
@@ -81,11 +87,26 @@ export function DiscordNotifications({ onClose }: Props) {
         method: 'DELETE',
         credentials: 'include',
       })
-      if (!res.ok) throw new Error(`remove failed ${res.status}`)
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as {
+          error?: string
+          failures?: Array<{ app: string; status: number }>
+          message?: string
+        }
+        const failedApps = body.failures?.map((f) => f.app).join(' + ')
+        throw new Error(
+          body.message ??
+            (failedApps
+              ? `remove failed for ${failedApps} (${res.status})`
+              : (body.error ?? `remove failed ${res.status}`)),
+        )
+      }
       setStatus({ sonarr: false, radarr: false, configured: false })
       setMessage('Removed. Sonarr + Radarr will stop pinging Discord.')
+      return true
     } catch (e) {
       setMessage(e instanceof Error ? e.message : String(e))
+      return false
     } finally {
       setBusy(null)
     }
@@ -149,7 +170,15 @@ export function DiscordNotifications({ onClose }: Props) {
             className="user-menu__discord-action user-menu__discord-action--danger"
             onClick={() => {
               if (window.confirm('Remove Discord notifications from Sonarr + Radarr?')) {
-                void remove().then(() => onClose())
+                void remove().then((ok) => {
+                  // Only close on success. On failure the menu stays
+                  // open so the user can read the error and retry —
+                  // closing would hide the message the backend went
+                  // through the trouble of returning (partial-delete
+                  // failures, in particular, mean a connector may
+                  // still be active).
+                  if (ok) onClose()
+                })
               }
             }}
             disabled={busy !== null}
