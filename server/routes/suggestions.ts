@@ -336,31 +336,7 @@ function computeGenreDistribution(
     .map(([g, n]) => `${g} ${Math.round((n / total) * 100)}%`)
 }
 
-// Cheap content fingerprint for the (kind, library, rejections) tuple
-// that uniquely determines the libraryBlock string. Non-cryptographic;
-// just stable across identical inputs and cheap to compute. Length +
-// first/last titles + count + last rejection id catches every
-// realistic mutation (add/remove series, dismiss a card) without
-// materializing the full content into the key.
-function libraryBlockFingerprint(
-  kind: 'movie' | 'tv',
-  library: Array<{ title: string }>,
-  rejections: Array<{ id: number; title: string }>,
-): string {
-  const firstTitle = library[0]?.title ?? ''
-  const lastTitle = library[library.length - 1]?.title ?? ''
-  const lastRej = rejections[rejections.length - 1]
-  return `${kind}|${library.length}|${firstTitle}|${lastTitle}|${rejections.length}|${lastRej?.id ?? 0}|${lastRej?.title ?? ''}`
-}
-
-const libraryBlockCache = new Map<string, string>()
-const LIBRARY_BLOCK_CACHE_MAX = 8 // 4 households x 2 kinds is plenty
-
-export function _resetLibraryBlockCacheForTests(): void {
-  libraryBlockCache.clear()
-}
-
-function buildLibraryBlockUncached(
+function buildLibraryBlock(
   kind: 'movie' | 'tv',
   library: Array<{ title: string; year?: number; genres?: string[] }>,
   rejections: Array<{ id: number; title: string }>,
@@ -398,25 +374,6 @@ function buildLibraryBlockUncached(
   )
 }
 
-function buildLibraryBlock(
-  kind: 'movie' | 'tv',
-  library: Array<{ title: string; year?: number; genres?: string[] }>,
-  rejections: Array<{ id: number; title: string }>,
-): string {
-  const fp = libraryBlockFingerprint(kind, library, rejections)
-  const cached = libraryBlockCache.get(fp)
-  if (cached) return cached
-  const built = buildLibraryBlockUncached(kind, library, rejections)
-  // Bounded LRU-ish: when full, evict the oldest insertion (Map
-  // preserves insertion order). 8 entries comfortably covers a few
-  // households × 2 kinds without unbounded growth.
-  if (libraryBlockCache.size >= LIBRARY_BLOCK_CACHE_MAX) {
-    const firstKey = libraryBlockCache.keys().next().value
-    if (firstKey !== undefined) libraryBlockCache.delete(firstKey)
-  }
-  libraryBlockCache.set(fp, built)
-  return built
-}
 
 // Per-user "liked" block. Sent after the cached prefix so it can vary
 // per caller without invalidating the household library cache. Same
