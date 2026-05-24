@@ -141,7 +141,11 @@ describe('notifications GET /discord', () => {
     expect(await r.json()).toEqual({ sonarr: false, radarr: false, configured: false })
   })
 
-  it('list endpoint failure (500) → treated as no entries (configured=false)', async () => {
+  it('list endpoint failure (500) → 502 sonarr_list_failed (no false-empty answer)', async () => {
+    // The prior code returned configured:false on a list error, which
+    // the POST handler then read as "no existing entries" and stacked
+    // a duplicate webhook on every retry. Failures must surface as a
+    // hard error so the SPA + mutation paths fail closed instead.
     handlers.push({
       match: (_u, m) => m === 'GET',
       handler: () => jsonResponse({ error: 'boom' }, 500),
@@ -149,8 +153,44 @@ describe('notifications GET /discord', () => {
     const r = await appUnderTest().request('/discord', {
       headers: { Cookie: await adminCookie() },
     })
-    expect(r.status).toBe(200)
-    expect(await r.json()).toEqual({ sonarr: false, radarr: false, configured: false })
+    expect(r.status).toBe(502)
+    const body = (await r.json()) as { error: string; status: number }
+    expect(body.error).toMatch(/_list_failed$/)
+    expect(body.status).toBe(500)
+  })
+
+  it('POST refuses to mutate when the list endpoint is failing (no duplicate webhooks)', async () => {
+    // Regression: previously, a 500 from listNotifications surfaced as
+    // [] from the helper, which the POST handler interpreted as "no
+    // existing connector" → POST a new one. On the next retry while
+    // the upstream was still flapping, ANOTHER new one. The fix makes
+    // POST refuse to write without a fresh list, so a transient
+    // outage can't stack duplicates.
+    handlers.push({
+      match: (_u, m) => m === 'GET',
+      handler: () => jsonResponse({ error: 'boom' }, 500),
+    })
+    let postAttempts = 0
+    handlers.push({
+      match: (_u, m) => m === 'POST',
+      handler: () => {
+        postAttempts++
+        return jsonResponse({ id: 1 }, 201)
+      },
+    })
+    const r = await appUnderTest().request('/discord', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        webhookUrl: 'https://discord.com/api/webhooks/123/abc',
+      }),
+    })
+    expect(r.status).toBe(502)
+    const body = (await r.json()) as { error: string }
+    expect(body.error).toMatch(/_list_failed$/)
+    // CRITICAL: no notification POST issued at all — would otherwise
+    // start the duplicate-on-retry stacking pattern.
+    expect(postAttempts).toBe(0)
   })
 })
 
