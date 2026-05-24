@@ -192,7 +192,15 @@ On the NAS, drop into `/etc/cron.d/exchange-recommender`:
 ```cron
 SHELL=/bin/bash
 PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/bin
+# Phase A: pull TMDB changes for the day and update the titles rows.
 0 4 * * *  root docker exec exchange-recommender python -m workers.tmdb_ingest --mode changes >> /var/log/exchange-ingest.log 2>&1
+# Phase B: rebuild embeddings for new + UPDATED rows. featurize picks
+# up both never-featurized rows and rows whose titles.fetched_at is
+# newer than title_features.computed_at — so changes-mode updates to
+# overview/genres/keywords actually flow into retrieval. Without this
+# step the changes cron updates the titles table but the embeddings
+# stay frozen against pre-revision content.
+15 4 * * * root docker exec exchange-recommender python -m workers.featurize >> /var/log/exchange-featurize.log 2>&1
 30 3 * * * root docker exec exchange-recommender python -m workers.optimizer >> /var/log/exchange-optimizer.log 2>&1
 ```
 

@@ -69,6 +69,19 @@ def _keyword_perturbation(dim: int, keyword_ids: list[int]) -> np.ndarray:
 
 
 def _load_pending(conn: sqlite3.Connection, limit: int | None) -> list[sqlite3.Row]:
+    # Pick rows in two states:
+    #   1. Never featurized: f.tmdb_id IS NULL — initial bootstrap path.
+    #   2. STALE: f.computed_at < t.fetched_at — the row exists, but the
+    #      titles record was re-fetched (typically by tmdb_ingest --mode
+    #      changes overwriting via ON CONFLICT DO UPDATE) more recently
+    #      than the features were computed. Without the stale check, the
+    #      nightly /changes job updates plot/genres/keywords on the
+    #      titles row but the embedding stays anchored to the OLD
+    #      overview text — retrieval keeps recommending against pre-
+    #      revision content and learning loops can't see the new signal.
+    #
+    # The titles.fetched_at < title_features.computed_at case is
+    # implicit-OK: features are newer than the source row, so no rework.
     q = """
         SELECT t.tmdb_id, t.kind, t.title, t.overview,
                (SELECT GROUP_CONCAT(g.genre_id) FROM title_genres g
@@ -78,6 +91,7 @@ def _load_pending(conn: sqlite3.Connection, limit: int | None) -> list[sqlite3.R
         FROM titles t
         LEFT JOIN title_features f ON f.kind = t.kind AND f.tmdb_id = t.tmdb_id
         WHERE f.tmdb_id IS NULL
+           OR f.computed_at < t.fetched_at
     """
     if limit:
         q += f" LIMIT {int(limit)}"
