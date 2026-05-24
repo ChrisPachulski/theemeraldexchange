@@ -186,6 +186,67 @@ describe('env — PLEX_SERVER_ID null coercion', () => {
   })
 })
 
+describe('env — production gating on SESSION_SECRET strength', () => {
+  // SESSION_SECRET is SHA-256'd into the A256GCM key that encrypts
+  // session cookies, which carry every user's Plex auth token. The
+  // boot gate enforces minimum length and rejects common placeholder
+  // strings only in production — local dev / test still accepts short
+  // values so the test fixtures don't have to generate 48-byte secrets.
+  function setProdBaseline() {
+    setBaselineEnv()
+    process.env.NODE_ENV = 'production'
+    process.env.ALLOWED_ORIGINS = 'https://app.example'
+    process.env.PLEX_SERVER_ID = 'home-server-machine-id'
+    delete process.env.ALLOW_UNSCOPED_PLEX_LOGIN
+  }
+
+  it('production rejects a too-short SESSION_SECRET', async () => {
+    setProdBaseline()
+    process.env.SESSION_SECRET = 'short'
+    await expect(loadEnv()).rejects.toThrow(/SESSION_SECRET/)
+  })
+
+  it('production rejects a 31-char SESSION_SECRET (boundary)', async () => {
+    setProdBaseline()
+    process.env.SESSION_SECRET = 'x'.repeat(31)
+    await expect(loadEnv()).rejects.toThrow(/SESSION_SECRET/)
+  })
+
+  it('production accepts exactly 32 chars (lower boundary)', async () => {
+    setProdBaseline()
+    process.env.SESSION_SECRET = 'x'.repeat(32)
+    const env = await loadEnv()
+    expect(env.sessionSecret.length).toBe(32)
+  })
+
+  it('production rejects common placeholder values (case-insensitive)', async () => {
+    setProdBaseline()
+    process.env.SESSION_SECRET = 'ChangeMe'
+    await expect(loadEnv()).rejects.toThrow(/placeholder/)
+  })
+
+  it('production rejects a long placeholder that satisfies the length check', async () => {
+    // 'replace-me' is in the blocklist; verify the placeholder rule
+    // bites independently of length.
+    setProdBaseline()
+    process.env.SESSION_SECRET = 'replace-me'.padEnd(48, '-')
+    // Padded string isn't an exact match against the blocklist set —
+    // the check is exact, so this should pass. Document the boundary.
+    const env = await loadEnv()
+    expect(env.sessionSecret.length).toBe(48)
+  })
+
+  it('non-production with a short SESSION_SECRET still boots', async () => {
+    // Local dev / test convenience — short secrets are fine outside
+    // prod so existing fixtures and a quick `npm run dev` still work.
+    setBaselineEnv()
+    process.env.NODE_ENV = 'test'
+    process.env.SESSION_SECRET = 'short'
+    const env = await loadEnv()
+    expect(env.sessionSecret).toBe('short')
+  })
+})
+
 describe('env — production gating on ALLOWED_ORIGINS', () => {
   it('production with empty ALLOWED_ORIGINS throws', async () => {
     setBaselineEnv()

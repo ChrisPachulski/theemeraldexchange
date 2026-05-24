@@ -128,6 +128,54 @@ if (isProd && !plexServerId && !allowUnscopedPlexLogin) {
   )
 }
 
+// SESSION_SECRET is fed through SHA-256 to derive the A256GCM key that
+// encrypts session cookies, which carry the user's Plex auth token. A
+// short or guessable secret turns the cookie's confidentiality into a
+// game of "can the attacker brute-force the prod key." `required` only
+// rejects empty, so in prod a value like `changeme` boots happily.
+// Enforce the same minimum the operator docs already prescribe (≥32
+// bytes — "openssl rand -base64 48") and reject the common placeholder
+// strings.
+const SESSION_SECRET_MIN_LEN = 32
+const SESSION_SECRET_PLACEHOLDERS = new Set([
+  'changeme',
+  'change-me',
+  'change_me',
+  'placeholder',
+  'secret',
+  'password',
+  'test',
+  'test-secret',
+  'replaceme',
+  'replace-me',
+  'replace_me',
+  'your-secret-here',
+  'session-secret',
+])
+const rawSessionSecret = process.env.SESSION_SECRET ?? ''
+if (isProd && rawSessionSecret) {
+  // Placeholder check first so `changeme` (8 chars) is rejected for
+  // BEING a placeholder, not just for being short — a clearer error
+  // message and the only way the rule catches its target.
+  if (SESSION_SECRET_PLACEHOLDERS.has(rawSessionSecret.toLowerCase())) {
+    throw new Error(
+      'SESSION_SECRET looks like a placeholder value. ' +
+        'Generate a real secret with `openssl rand -base64 48` and ' +
+        'redeploy — leaving the placeholder in prod is equivalent to ' +
+        'publishing the AES key in the repo.',
+    )
+  }
+  if (rawSessionSecret.length < SESSION_SECRET_MIN_LEN) {
+    throw new Error(
+      `SESSION_SECRET is too short for production (${rawSessionSecret.length} chars). ` +
+        `Use at least ${SESSION_SECRET_MIN_LEN} bytes — generate one with ` +
+        `\`openssl rand -base64 48\`. The value is fed through SHA-256 to ` +
+        `derive the A256GCM key that encrypts session cookies; a weak ` +
+        `secret puts every user's Plex auth token at risk.`,
+    )
+  }
+}
+
 export const env = {
   plexClientId: required('PLEX_CLIENT_ID'),
   sessionSecret: required('SESSION_SECRET'),
