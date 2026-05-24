@@ -251,7 +251,18 @@ radarr.post('/api/v3/movie/:id/upgrade', requireAdmin, async (c) => {
 })
 
 radarr.delete('/api/v3/movie/:id', requireAdmin, async (c) => {
-  const id = c.req.param('id')
+  // The :id param is URL-decoded by Hono BEFORE we use it, so an
+  // attacker who passes `..%2Frootfolder%2F1` ends up with the literal
+  // string `../rootfolder/1`. Once that hits the `new URL(base + path)`
+  // construction in radarrFetch, the WHATWG URL parser normalizes the
+  // `..` segment and the DELETE silently retargets a different Radarr
+  // endpoint (e.g. /api/v3/rootfolder/1). Constraining :id to a
+  // positive safe integer kills the traversal and matches how Radarr
+  // actually models movie ids.
+  const id = Number(c.req.param('id'))
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    return c.json({ error: 'bad_id' }, 400)
+  }
   const search = new URL(c.req.url).searchParams
   const r = await radarrFetch(`/api/v3/movie/${id}`, { method: 'DELETE' }, search)
   return new Response(null, { status: r.status })

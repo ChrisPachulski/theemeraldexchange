@@ -90,6 +90,31 @@ describe('radarr — allow-list and gates', () => {
     expect(r.status).toBe(200)
   })
 
+  it('admin DELETE with encoded-slash traversal returns 400, does not reach upstream', async () => {
+    // Hono URL-decodes :id BEFORE we read it. Without validation, an
+    // attacker who passes `..%2Frootfolder%2F1` (which Hono decodes
+    // back to `../rootfolder/1`) flows through `new URL(base + path)`,
+    // where the WHATWG URL parser normalizes the `..` segment, and the
+    // DELETE silently retargets `/api/v3/rootfolder/1` upstream. The
+    // route now requires a positive safe integer; the upstream stub
+    // must NEVER be touched.
+    const r = await appUnderTest().request(
+      '/api/v3/movie/..%2Frootfolder%2F1',
+      { method: 'DELETE', headers: { Cookie: await adminCookie() } },
+    )
+    expect(r.status).toBe(400)
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  it('admin DELETE with a non-integer :id returns 400', async () => {
+    const r = await appUnderTest().request('/api/v3/movie/abc', {
+      method: 'DELETE',
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(400)
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
   it('blocks add with 507 when freeSpace below threshold', async () => {
     stub('/api/v3/rootfolder', [
       { id: 1, path: '/data/movies', freeSpace: 25 * 1024 ** 3 },

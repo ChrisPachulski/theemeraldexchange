@@ -148,6 +148,31 @@ describe('sonarr DELETE /api/v3/series/:id (admin only)', () => {
     const [, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]
     expect(init.method).toBe('DELETE')
   })
+
+  it('admin DELETE with encoded-slash traversal returns 400, does not reach upstream', async () => {
+    // Hono URL-decodes :id BEFORE we read it. Without validation,
+    // `..%2Frootfolder%2F1` decodes to `../rootfolder/1`, the
+    // `new URL(base + path)` builder normalizes the `..`, and the
+    // DELETE silently retargets a different Sonarr endpoint. Route
+    // now requires a positive safe integer.
+    const app = appUnderTest()
+    const r = await app.request(
+      '/api/v3/series/..%2Frootfolder%2F1',
+      { method: 'DELETE', headers: { Cookie: await adminCookie() } },
+    )
+    expect(r.status).toBe(400)
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  it('admin DELETE with a non-integer :id returns 400', async () => {
+    const app = appUnderTest()
+    const r = await app.request('/api/v3/series/abc', {
+      method: 'DELETE',
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(400)
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
 })
 
 describe('sonarr POST /api/v3/series disk-space gate', () => {

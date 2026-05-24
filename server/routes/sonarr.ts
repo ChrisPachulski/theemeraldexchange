@@ -412,7 +412,16 @@ sonarr.post('/api/v3/series/:id/seasons/:n/monitor', requireAdmin, async (c) => 
 
 // Delete a series — admin only.
 sonarr.delete('/api/v3/series/:id', requireAdmin, async (c) => {
-  const id = c.req.param('id')
+  // Same encoded-slash defense as radarr's DELETE: Hono URL-decodes
+  // :id before we read it, so `..%2Frootfolder%2F1` produces the
+  // literal `../rootfolder/1`. Once that flows through the
+  // `new URL(base + path)` builder in sonarrFetch, the WHATWG parser
+  // normalizes the `..` and the DELETE retargets a different Sonarr
+  // endpoint. Positive safe-integer ids only.
+  const id = Number(c.req.param('id'))
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    return c.json({ error: 'bad_id' }, 400)
+  }
   const search = new URL(c.req.url).searchParams
   const r = await sonarrFetch(`/api/v3/series/${id}`, { method: 'DELETE' }, search)
   return new Response(null, { status: r.status })
