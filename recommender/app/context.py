@@ -151,7 +151,12 @@ def _stack_embeddings(
     return np.vstack(vecs), out_ids
 
 
-def load_user_context(conn: sqlite3.Connection, req: ScoreRequest) -> UserContext:
+def load_user_context(
+    conn: sqlite3.Connection,
+    req: ScoreRequest,
+    *,
+    persist_library: bool = True,
+) -> UserContext:
     """Build a UserContext for this scoring request.
 
     Source-of-truth rules:
@@ -160,23 +165,31 @@ def load_user_context(conn: sqlite3.Connection, req: ScoreRequest) -> UserContex
         the recommender's library_items / household_rejections tables.
       * per-user feedback + recently_shown: always from the recommender DB,
         since the recommender owns those tables.
+
+    ``persist_library`` (default True): when True and a request library is
+    supplied, the library is upserted into ``library_items`` so the DB
+    stays warm for any later call that lands without an explicit library
+    payload. Eval callers (workers/optimizer.evaluate) MUST pass False —
+    sqlite is in autocommit mode (db.connect: isolation_level=None), and
+    upserting the holdout's synthetic / historical tmdb_ids into the
+    live ``library_items`` table both pollutes the table and overwrites
+    existing rows' ``source`` with NULL via the ON CONFLICT clause.
     """
     kind = req.kind
 
     # ----- library
     if req.library is not None:
         library_ids = {item.tmdb_id for item in req.library}
-        # Optionally upsert into library_items so the recommender's DB stays
-        # warm even if the next call comes without an explicit library payload.
-        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        for item in req.library:
-            conn.execute(
-                """INSERT INTO library_items(kind, tmdb_id, source, added_at)
-                   VALUES (?, ?, ?, ?)
-                   ON CONFLICT(kind, tmdb_id) DO UPDATE SET
-                     source = excluded.source""",
-                (kind, item.tmdb_id, item.source, now),
-            )
+        if persist_library:
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            for item in req.library:
+                conn.execute(
+                    """INSERT INTO library_items(kind, tmdb_id, source, added_at)
+                       VALUES (?, ?, ?, ?)
+                       ON CONFLICT(kind, tmdb_id) DO UPDATE SET
+                         source = excluded.source""",
+                    (kind, item.tmdb_id, item.source, now),
+                )
     else:
         library_ids = {
             r["tmdb_id"]
