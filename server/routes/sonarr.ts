@@ -266,6 +266,13 @@ type SonarrAddBody = {
 async function materializeNonAdminSeriesBody(raw: SonarrAddBody): Promise<
   { ok: true; body: SonarrAddBody } | { ok: false; reason: string }
 > {
+  // Profile selection prefers env.defaultProfileName (defaults to
+  // "choose me" to mirror the frontend modal). For TV this matters
+  // even more than for movies — Sonarr's ongoing RSS sweep against
+  // monitored series is gated by the quality profile, NOT by our
+  // per-episode size cap (defense in depth lives in the profile's
+  // own size restrictions). Landing on Sonarr's default Any profile
+  // would silently let 4K HDR packs through on RSS auto-grabs.
   const [folders, profileRes] = await Promise.all([
     sonarrRootFolders(),
     sonarrFetch('/api/v3/qualityprofile', { method: 'GET' }),
@@ -273,9 +280,10 @@ async function materializeNonAdminSeriesBody(raw: SonarrAddBody): Promise<
   if (!profileRes.ok) {
     return { ok: false, reason: 'qualityprofile_unreachable' }
   }
-  const profiles = (await profileRes.json()) as Array<{ id: number }>
+  const profiles = (await profileRes.json()) as Array<{ id: number; name?: string }>
   const folder = folders[0]
-  const profile = profiles[0]
+  const profile =
+    profiles.find((p) => p.name?.toLowerCase() === env.defaultProfileName) ?? profiles[0]
   if (!folder || !profile) {
     return { ok: false, reason: 'admin_must_configure_upstream' }
   }

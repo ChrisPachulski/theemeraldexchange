@@ -200,6 +200,15 @@ export const env = {
   sabUrl: opt('SAB_URL') ?? `http://${NAS_HOST}:8080`,
   sabApiKey: required('SAB_API_KEY'),
 
+  // Preferred quality-profile name for non-admin adds. The frontend
+  // already prefers "Choose Me" by name (AddMovieModal /
+  // AddSeriesModal); mirror that on the server so non-admin direct-
+  // POSTs land on the same curated profile rather than profiles[0]
+  // (which could be the more permissive default Sonarr/Radarr ships).
+  // Lowercased exact-match. Override per-deploy if the household
+  // curates under a different name.
+  defaultProfileName: opt('DEFAULT_PROFILE_NAME') ?? 'choose me',
+
   // Minimum free space (bytes) on a Sonarr/Radarr root folder before
   // we'll allow an `add`. Below this, both admins and users get a 507
   // — the user explicitly wanted everyone (including admins) gated.
