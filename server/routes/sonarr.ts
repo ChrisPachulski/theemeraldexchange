@@ -234,20 +234,41 @@ sonarr.post('/api/v3/series', async (c) => {
     }
     seasons?: Array<{ seasonNumber: number; monitored: boolean }>
   }
-  if (body.rootFolderPath) {
-    const folders = await sonarrRootFolders()
-    const folder = folders.find((f) => f.path === body.rootFolderPath)
-    if (folder?.freeSpace !== undefined && folder.freeSpace < env.minFreeBytes) {
-      return c.json(
-        {
-          error: 'insufficient_disk_space',
-          free_bytes: folder.freeSpace,
-          threshold_bytes: env.minFreeBytes,
-          path: folder.path,
-        },
-        507,
-      )
-    }
+  // Hard disk-space gate. Fail closed on every "we couldn't actually
+  // measure free space" case — the prior implementation only blocked
+  // when rootFolderPath was supplied AND the folder matched AND
+  // freeSpace was a number, so a missing path, an unknown path, or a
+  // Sonarr response without freeSpace all silently bypassed the cap.
+  if (!body.rootFolderPath) {
+    return c.json(
+      { error: 'rootFolderPath_required' },
+      400,
+    )
+  }
+  const folders = await sonarrRootFolders()
+  const folder = folders.find((f) => f.path === body.rootFolderPath)
+  if (!folder) {
+    return c.json(
+      { error: 'unknown_root_folder', path: body.rootFolderPath },
+      400,
+    )
+  }
+  if (typeof folder.freeSpace !== 'number' || !Number.isFinite(folder.freeSpace)) {
+    return c.json(
+      { error: 'free_space_unknown', path: folder.path },
+      507,
+    )
+  }
+  if (folder.freeSpace < env.minFreeBytes) {
+    return c.json(
+      {
+        error: 'insufficient_disk_space',
+        free_bytes: folder.freeSpace,
+        threshold_bytes: env.minFreeBytes,
+        path: folder.path,
+      },
+      507,
+    )
   }
 
   const wantedSearch =

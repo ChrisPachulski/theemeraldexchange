@@ -236,11 +236,12 @@ describe('sonarr POST /api/v3/series disk-space gate', () => {
     expect(r.status).toBe(201)
   })
 
-  it('skips the disk check when no rootFolderPath is in the body', async () => {
-    // Edge case: malformed add request without rootFolderPath. We
-    // forward to Sonarr and let it return 400 — we don't synthesize a
-    // disk error from missing data.
-    stub('/api/v3/series', { error: 'bad request' }, 400)
+  it('400 rootFolderPath_required when the body omits rootFolderPath (fail closed)', async () => {
+    // Without a root folder path we can't measure free space, and the
+    // previous "forward and let Sonarr decide" path bypassed the disk
+    // gate entirely — an attacker who direct-POSTed without
+    // rootFolderPath could add when the host was below threshold. The
+    // gate now rejects at the route boundary BEFORE any upstream call.
     const app = appUnderTest()
     const r = await app.request('/api/v3/series', {
       method: 'POST',
@@ -251,6 +252,49 @@ describe('sonarr POST /api/v3/series disk-space gate', () => {
       body: JSON.stringify({ title: 'No root folder' }),
     })
     expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'rootFolderPath_required' })
+    // CRITICAL: never forwarded to Sonarr.
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  it('400 unknown_root_folder when rootFolderPath does not match any Sonarr folder', async () => {
+    stub('/api/v3/rootfolder', [
+      { id: 1, path: '/data/tv', freeSpace: 500 * 1024 ** 3 },
+    ])
+    const app = appUnderTest()
+    const r = await app.request('/api/v3/series', {
+      method: 'POST',
+      headers: {
+        Cookie: await userCookie(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ title: 'X', rootFolderPath: '/data/different' }),
+    })
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'unknown_root_folder', path: '/data/different' })
+  })
+
+  it('507 free_space_unknown when the matched root folder has no freeSpace field', async () => {
+    // Sonarr/Radarr sometimes omit freeSpace on transient backend
+    // issues. Treating "unknown" as "fine" silently disables the gate;
+    // fail closed instead so the add only proceeds when we positively
+    // verified the threshold.
+    stub('/api/v3/rootfolder', [
+      // No freeSpace field — simulate the upstream omitting it.
+      { id: 1, path: '/data/tv' },
+    ])
+    const app = appUnderTest()
+    const r = await app.request('/api/v3/series', {
+      method: 'POST',
+      headers: {
+        Cookie: await userCookie(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ title: 'X', rootFolderPath: '/data/tv' }),
+    })
+    expect(r.status).toBe(507)
+    const body = (await r.json()) as { error: string }
+    expect(body.error).toBe('free_space_unknown')
   })
 })
 
