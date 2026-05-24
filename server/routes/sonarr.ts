@@ -295,15 +295,30 @@ async function materializeNonAdminSeriesBody(raw: SonarrAddBody): Promise<
   safe.qualityProfileId = profile.id
   safe.monitored = true
   safe.seasonFolder = true
-  // monitor: 'future' = only new episodes get auto-grabbed by Sonarr's
-  // RSS sweep. The non-admin flow doesn't expose the season picker, so
-  // we explicitly opt OUT of marking historical seasons monitored at
-  // add-time. The cap-aware grab below still runs against whatever
-  // Sonarr returns as monitored after the add.
+  // monitor: 'firstSeason' = Sonarr marks only season 1 monitored at
+  // add-time (or, for shows without a season 1, the lowest-numbered
+  // season — Sonarr's own resolution). Two reasons over the prior
+  // 'future':
+  //
+  // 1. 'future' leaves zero historical seasons monitored, which means
+  //    grabTvUnderCap (the cap-aware downloader gated on
+  //    `monitored.length > 0`) never fires for a completed show. The
+  //    user gets an apparently-successful add with nothing
+  //    downloaded — silent failure.
+  //
+  // 2. The HomeTab copy and the AddSeriesModal default both promise
+  //    "Season 1 by default." Non-admins don't see the picker, so
+  //    the server-materialized default IS the user-facing default.
+  //    'firstSeason' makes the docs match reality.
+  //
+  // Sonarr's RSS sweep against monitored seasons still respects the
+  // quality profile (load-bearing — that's why we mirrored Choose Me
+  // above), so this doesn't open a 4K HDR sluice; it just makes the
+  // first season actually get fetched.
   safe.addOptions = {
     searchForMissingEpisodes: true,
     searchForCutoffUnmetEpisodes: false,
-    monitor: 'future',
+    monitor: 'firstSeason',
   }
   safe.tags = []
   return { ok: true, body: safe }
