@@ -30,7 +30,17 @@ export async function fetchWithTimeout(
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    return await fetch(url, { ...init, signal: controller.signal })
+    const response = await fetch(url, { ...init, signal: controller.signal })
+    const body = await response.arrayBuffer()
+    const replayBody =
+      body.byteLength === 0 || [101, 204, 205, 304].includes(response.status)
+        ? null
+        : body
+    return new Response(replayBody, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    })
   } catch (err) {
     // AbortError → bounded timeout fired. Network/DNS errors also land
     // here. Map both to a synthesized 504 so the route's existing

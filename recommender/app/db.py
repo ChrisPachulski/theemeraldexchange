@@ -110,10 +110,13 @@ def encode_vec_rowid(kind: str, tmdb_id: int) -> int:
     raise ValueError(f"unknown kind: {kind!r}")
 
 
-def decode_vec_rowid(rowid: int) -> tuple[str, int]:
-    if rowid & _KIND_BIT:
-        return ("tv", rowid & ~_KIND_BIT)
-    return ("movie", rowid)
+def decode_vec_rowid(rowid: int, expected_kind: str | None = None) -> tuple[str, int]:
+    kind = "tv" if rowid & _KIND_BIT else "movie"
+    if expected_kind is not None and kind != expected_kind:
+        raise ValueError(
+            f"vec rowid kind mismatch: rowid={rowid} encodes {kind}, expected {expected_kind}"
+        )
+    return (kind, rowid & ~_KIND_BIT if kind == "tv" else rowid)
 
 
 def serialize_f32(vec: np.ndarray) -> bytes:

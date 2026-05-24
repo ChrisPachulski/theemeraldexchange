@@ -77,9 +77,26 @@ users.get('/', async (c) => {
     // Merge sources, deduping by user id (preferred) then by email or
     // username (lowercased). Status precedence: accepted > pending —
     // so if a user appears as accepted in any source, they're accepted.
-    const byKey = new Map<string, typeof accepted[number]>()
-    const keyFor = (u: { id: number; email?: string | null; username: string }) =>
-      u.id > 0 ? `id:${u.id}` : u.email ? `e:${u.email.toLowerCase()}` : `u:${u.username.toLowerCase()}`
+    type MergedUser = typeof accepted[number]
+    const rows: MergedUser[] = []
+    const keyToIndex = new Map<string, number>()
+    const keysFor = (u: { id: number; email?: string | null; username: string }) => {
+      const keys: string[] = []
+      if (u.id > 0) keys.push(`id:${u.id}`)
+      const email = u.email?.trim().toLowerCase()
+      if (email) keys.push(`e:${email}`)
+      const username = u.username.trim().toLowerCase()
+      if (username) keys.push(`u:${username}`)
+      return keys
+    }
+    const mergeUser = (existing: MergedUser, incoming: MergedUser): MergedUser => ({
+      id: existing.id > 0 ? existing.id : incoming.id,
+      username: existing.username || incoming.username,
+      title: existing.title || incoming.title,
+      email: existing.email ?? incoming.email ?? null,
+      thumb: existing.thumb ?? incoming.thumb ?? null,
+      status: existing.status === 'accepted' || incoming.status === 'accepted' ? 'accepted' : 'pending',
+    })
     // The owner appears in /api/home/users with a DIFFERENT id than
     // /api/v2/user returns (Home uses its own account ids), so id alone
     // can't dedupe — also match against username and email.
@@ -93,12 +110,16 @@ users.get('/', async (c) => {
       for (const u of list) {
         if (isOwner(u)) continue
         if (!u.username && !u.title) continue
-        const k = keyFor(u)
-        const existing = byKey.get(k)
-        if (!existing) {
-          byKey.set(k, u)
-        } else if (existing.status === 'pending' && u.status === 'accepted') {
-          byKey.set(k, { ...existing, ...u, status: 'accepted' })
+        const keys = keysFor(u)
+        const existingIndex = keys.map((k) => keyToIndex.get(k)).find((idx) => idx !== undefined)
+        if (existingIndex === undefined) {
+          const index = rows.length
+          rows.push(u)
+          for (const k of keys) keyToIndex.set(k, index)
+        } else {
+          const merged = mergeUser(rows[existingIndex], u)
+          rows[existingIndex] = merged
+          for (const k of [...keysFor(rows[existingIndex]), ...keys]) keyToIndex.set(k, existingIndex)
         }
       }
     }
@@ -111,7 +132,7 @@ users.get('/', async (c) => {
     ingest(home)
     ingest(local)
     ingest(pending)
-    const others = [...byKey.values()].map((u) => ({
+    const others = rows.map((u) => ({
       id: u.id,
       username: u.username,
       title: u.title ?? u.username,

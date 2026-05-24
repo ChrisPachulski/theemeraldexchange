@@ -151,10 +151,10 @@ async function materializeNonAdminMovieBody(raw: RadarrAddBody): Promise<
   // the canonical "what the admin already curates" defaults. Profile
   // selection prefers env.defaultProfileName (case-insensitive exact
   // match — defaults to "choose me" to mirror the frontend modals)
-  // and falls back to profiles[0]. Without this preference, Radarr's
-  // default Any profile is sometimes id 1 and a non-admin direct-POST
-  // would land on the most permissive setting instead of the curated
-  // one.
+  // and fails closed if that profile is missing. Without this
+  // preference, Radarr's default Any profile is sometimes id 1 and a
+  // non-admin direct-POST would land on the most permissive setting
+  // instead of the curated one.
   const [folders, profileRes] = await Promise.all([
     radarrRootFolders(),
     radarrFetch('/api/v3/qualityprofile', { method: 'GET' }),
@@ -163,11 +163,18 @@ async function materializeNonAdminMovieBody(raw: RadarrAddBody): Promise<
     return { ok: false, reason: 'qualityprofile_unreachable' }
   }
   const profiles = (await profileRes.json()) as Array<{ id: number; name?: string }>
-  const folder = folders[0]
-  const profile =
-    profiles.find((p) => p.name?.toLowerCase() === env.defaultProfileName) ?? profiles[0]
-  if (!folder || !profile) {
-    return { ok: false, reason: 'admin_must_configure_upstream' }
+  const folder = env.defaultRadarrRootFolderPath
+    ? folders.find((f) => f.path === env.defaultRadarrRootFolderPath)
+    : folders[0]
+  const profile = profiles.find((p) => p.name?.toLowerCase() === env.defaultProfileName)
+  if (!folder) {
+    return {
+      ok: false,
+      reason: env.defaultRadarrRootFolderPath ? 'default_root_folder_missing' : 'admin_must_configure_upstream',
+    }
+  }
+  if (!profile) {
+    return { ok: false, reason: 'default_quality_profile_missing' }
   }
   const safe: RadarrAddBody = {}
   for (const key of NON_ADMIN_RADARR_ALLOW) {

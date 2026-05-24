@@ -31,19 +31,24 @@ async function userCookie() {
 
 type Resp = { status: number; body: unknown }
 const responses = new Map<string, Resp>()
+const requests: Array<{ url: string; headers: Headers }> = []
 
 // env.tmdbApiKey is declared `as const` but `as const` is a TS-only
 // constraint; the runtime object is plain and mutable. We save the
 // original value so we don't leak state between tests.
 const originalTmdbKey = env.tmdbApiKey
+const originalTmdbReadAccessToken = env.tmdbReadAccessToken
 
 beforeEach(() => {
   responses.clear()
+  requests.length = 0
+  ;(env as { tmdbReadAccessToken: string | null }).tmdbReadAccessToken = null
   ;(env as { tmdbApiKey: string | null }).tmdbApiKey = 'test-tmdb-key'
   vi.stubGlobal(
     'fetch',
-    vi.fn(async (input: string | URL | Request) => {
+    vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      requests.push({ url, headers: new Headers(init?.headers) })
       for (const [needle, response] of responses) {
         if (url.includes(needle)) {
           return new Response(JSON.stringify(response.body), {
@@ -60,6 +65,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals()
   ;(env as { tmdbApiKey: string | null }).tmdbApiKey = originalTmdbKey
+  ;(env as { tmdbReadAccessToken: string | null }).tmdbReadAccessToken = originalTmdbReadAccessToken
 })
 
 function stub(needle: string, body: unknown, status = 200) {
@@ -103,6 +109,28 @@ describe('tmdb — not_configured', () => {
 })
 
 describe('tmdb — /credits movie', () => {
+  it('uses TMDB_API_KEY as an api_key query parameter', async () => {
+    stub('/movie/550/credits', { cast: [], crew: [] })
+    const r = await appUnderTest().request('/credits?type=movie&tmdbId=550', {
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r.status).toBe(200)
+    expect(requests[0].url).toContain('api_key=test-tmdb-key')
+    expect(requests[0].headers.get('authorization')).toBeNull()
+  })
+
+  it('uses TMDB_READ_ACCESS_TOKEN as a bearer token', async () => {
+    ;(env as { tmdbReadAccessToken: string | null }).tmdbReadAccessToken = 'read-token'
+    ;(env as { tmdbApiKey: string | null }).tmdbApiKey = 'fallback-key'
+    stub('/movie/550/credits', { cast: [], crew: [] })
+    const r = await appUnderTest().request('/credits?type=movie&tmdbId=550', {
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r.status).toBe(200)
+    expect(requests[0].url).not.toContain('api_key=')
+    expect(requests[0].headers.get('authorization')).toBe('Bearer read-token')
+  })
+
   it('happy path: user gets cast/crew forwarded from TMDB', async () => {
     stub('/movie/550/credits', { cast: [{ name: 'Edward Norton' }], crew: [] })
     const r = await appUnderTest().request('/credits?type=movie&tmdbId=550', {

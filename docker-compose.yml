@@ -59,6 +59,9 @@ services:
       # name, silently wrong otherwise. env.ts lowercases on load so the
       # comparison is symmetric.
       DEFAULT_PROFILE_NAME: "${DEFAULT_PROFILE_NAME:-Choose Me}"
+      DEFAULT_ROOT_FOLDER_PATH: "${DEFAULT_ROOT_FOLDER_PATH:-}"
+      DEFAULT_SONARR_ROOT_FOLDER_PATH: "${DEFAULT_SONARR_ROOT_FOLDER_PATH:-}"
+      DEFAULT_RADARR_ROOT_FOLDER_PATH: "${DEFAULT_RADARR_ROOT_FOLDER_PATH:-}"
       # Local recommender wiring. Flip USE_LOCAL_RECOMMENDER=1 once the
       # recommender container is healthy and its DB has been bootstrapped.
       USE_LOCAL_RECOMMENDER: "${USE_LOCAL_RECOMMENDER:-0}"
@@ -78,6 +81,7 @@ services:
       # backend/recommender/ which is the rsync source dir for `build:`.
       - "/mnt/user/appdata/exchange-backend/recommender-db:/data"
     environment:
+      NODE_ENV: production
       RECOMMENDER_DB_PATH: "/data/exchange.db"
       RECOMMENDER_HOST: "0.0.0.0"
       RECOMMENDER_PORT: "8000"

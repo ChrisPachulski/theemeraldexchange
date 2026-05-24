@@ -232,7 +232,7 @@ describe('radarr POST /api/v3/movie — non-admin add policy', () => {
           ]), { status: 200 })
         }
         if (url.includes('/api/v3/qualityprofile')) {
-          return new Response(JSON.stringify([{ id: 7 }, { id: 8 }]), { status: 200 })
+          return new Response(JSON.stringify([{ id: 7, name: 'Choose Me' }, { id: 8, name: 'Any' }]), { status: 200 })
         }
         if (url.endsWith('/api/v3/movie') && init?.method === 'POST') {
           capturedAddBody = JSON.parse(init.body as string)
