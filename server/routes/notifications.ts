@@ -121,10 +121,8 @@ notifications.post('/discord', async (c) => {
     return c.json({ error: 'invalid_discord_webhook' }, 400)
   }
 
-  // Replace any prior Emerald-created notification so a re-paste of a
-  // new URL takes effect instead of stacking duplicates. We MUST
-  // resolve existing-or-not from a successful list before issuing any
-  // mutation — if listNotifications throws, treating that as "none
+  // Resolve existing-or-not from a successful list before issuing any
+  // mutation. If listNotifications throws, treating that as "none
   // exists" and creating a new one would stack a duplicate on every
   // retry until Sonarr/Radarr came back. Fail closed on list error.
   for (const app of ['sonarr', 'radarr'] as const) {
@@ -142,27 +140,24 @@ notifications.post('/discord', async (c) => {
     }
     const fetcher = app === 'sonarr' ? sonarrFetch : radarrFetch
     if (existing !== null) {
-      // Fail closed on a failed DELETE. Pre-fix behavior ignored
-      // res.ok and unconditionally POSTed the new connector — a
-      // transient Sonarr/Radarr 5xx left the OLD webhook active AND
-      // added a NEW one, so every subsequent grab would fire two
-      // identical Discord pings until an operator noticed and manually
-      // pruned the upstream notifications list. Surface the failure so
-      // the SPA can retry instead.
-      const delRes = await fetcher(`/api/v3/notification/${existing}`, { method: 'DELETE' })
-      if (!delRes.ok) {
-        const text = await delRes.text().catch(() => '')
+      const res = await fetcher(`/api/v3/notification/${existing}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...discordNotificationBody(url, app), id: existing }),
+      })
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
         return c.json(
           {
-            error: `${app}_delete_failed`,
-            status: delRes.status,
+            error: `${app}_update_failed`,
+            status: res.status,
             detail: text.slice(0, 400),
-            message:
-              'refusing to create a replacement connector while the old one is still active; retry, or remove and re-add from the menu',
+            message: 'existing connector was left unchanged; retry, or remove and re-add from the menu',
           },
           502,
         )
       }
+      continue
     }
     const res = await fetcher('/api/v3/notification', {
       method: 'POST',

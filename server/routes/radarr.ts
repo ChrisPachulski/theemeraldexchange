@@ -187,7 +187,11 @@ async function materializeNonAdminMovieBody(raw: RadarrAddBody): Promise<
 
 radarr.post('/api/v3/movie', async (c) => {
   const session = c.get('session')
-  const rawBody = (await c.req.json()) as RadarrAddBody
+  const parsedBody = await c.req.json().catch(() => null)
+  if (!parsedBody || typeof parsedBody !== 'object' || Array.isArray(parsedBody)) {
+    return c.json({ error: 'invalid_body' }, 400)
+  }
+  const rawBody = parsedBody as RadarrAddBody
   let body: RadarrAddBody
   if (session.role === 'admin') {
     body = rawBody
