@@ -409,7 +409,14 @@ describe('notifications DELETE /discord', () => {
     expect(await r.json()).toEqual({ ok: true, removed: 0 })
   })
 
-  it('DELETE upstream failure does not blow up the route; removed only counts successes', async () => {
+  it('DELETE upstream partial failure surfaces 502 with the failing app and the success count', async () => {
+    // Previously this returned 200 {ok:true, removed:1} — the SPA said
+    // "Removed. Sonarr + Radarr will stop pinging Discord." while
+    // Radarr's connector was still active and the household kept
+    // getting Radarr pings on the next grab. Both deletes are still
+    // attempted (Sonarr's succeeds and removed:1 reflects that), but
+    // the route now reports the failure honestly so the user knows to
+    // retry or investigate.
     handlers.push({
       match: (u, m) => m === 'GET' && u.endsWith('/api/v3/notification'),
       handler: (u) =>
@@ -417,9 +424,13 @@ describe('notifications DELETE /discord', () => {
           { id: u.includes(sonarrHost()) ? 7 : 8, name: EMERALD, implementation: 'Discord' },
         ]),
     })
+    let sonarrDeleted = false
     handlers.push({
       match: (u, m) => m === 'DELETE' && u.includes(sonarrHost()),
-      handler: () => jsonResponse({}, 200),
+      handler: () => {
+        sonarrDeleted = true
+        return jsonResponse({}, 200)
+      },
     })
     handlers.push({
       match: (u, m) => m === 'DELETE' && u.includes(radarrHost()),
@@ -429,8 +440,43 @@ describe('notifications DELETE /discord', () => {
       method: 'DELETE',
       headers: { Cookie: await adminCookie() },
     })
-    expect(r.status).toBe(200)
-    expect(await r.json()).toEqual({ ok: true, removed: 1 })
+    expect(r.status).toBe(502)
+    const body = (await r.json()) as {
+      error: string
+      removed: number
+      failures: Array<{ app: string; status: number }>
+    }
+    expect(body.error).toBe('partial_delete_failed')
+    expect(body.removed).toBe(1)
+    expect(body.failures).toEqual([{ app: 'radarr', status: 500 }])
+    // Sonarr is still attempted first — partial cleanup matters even
+    // when the radarr leg fails.
+    expect(sonarrDeleted).toBe(true)
+  })
+
+  it('DELETE upstream total failure surfaces 502 with both apps listed', async () => {
+    handlers.push({
+      match: (u, m) => m === 'GET' && u.endsWith('/api/v3/notification'),
+      handler: (u) =>
+        jsonResponse([
+          { id: u.includes(sonarrHost()) ? 7 : 8, name: EMERALD, implementation: 'Discord' },
+        ]),
+    })
+    handlers.push({
+      match: (_u, m) => m === 'DELETE',
+      handler: () => new Response('boom', { status: 500 }),
+    })
+    const r = await appUnderTest().request('/discord', {
+      method: 'DELETE',
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(502)
+    const body = (await r.json()) as {
+      removed: number
+      failures: Array<{ app: string; status: number }>
+    }
+    expect(body.removed).toBe(0)
+    expect(body.failures.map((f) => f.app).sort()).toEqual(['radarr', 'sonarr'])
   })
 })
 
