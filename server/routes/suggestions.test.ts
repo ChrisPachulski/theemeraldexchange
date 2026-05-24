@@ -271,6 +271,81 @@ describe('suggestions route — gating', () => {
     expect(body.items.length).toBeGreaterThan(0)
   })
 
+  it('does NOT cache an empty trending result so a transient outage clears on retry', async () => {
+    // Regression: tmdbTrending used to write trendingCache[kind] = { items: [], ... }
+    // even when every page failed. A single TMDB outage / rate-limit
+    // window then pinned an empty strip for the full TRENDING_CACHE_TTL_MS
+    // long after TMDB had recovered. The fix only caches non-empty
+    // results, so the next call after an outage refetches. Library is
+    // stubbed >COLD_START_THRESHOLD so we exit the cold-start branch
+    // and hit the personalized path's trending fallback exercises.
+    _setTmdbApiKeyForTests('test-key')
+    let trendingCalls = 0
+    let trendingMode: 'fail' | 'ok' = 'fail'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/movie')) {
+          return new Response(
+            JSON.stringify([
+              { title: 'Lib A', year: 2020, tmdbId: 9001, genres: ['Drama'] },
+              { title: 'Lib B', year: 2019, tmdbId: 9002, genres: ['Drama'] },
+              { title: 'Lib C', year: 2018, tmdbId: 9003, genres: ['Drama'] },
+            ]),
+            { status: 200 },
+          )
+        }
+        if (url.includes('themoviedb.org/3/trending/movie')) {
+          trendingCalls++
+          if (trendingMode === 'fail') {
+            return new Response('Service Unavailable', { status: 503 })
+          }
+          return new Response(
+            JSON.stringify({
+              results: [
+                {
+                  id: 9999,
+                  title: 'Recovered Pick',
+                  poster_path: null,
+                  release_date: '2025-01-01',
+                },
+              ],
+            }),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+
+    // First call: every TMDB /trending page returns 503. Items empty
+    // (but no crash). If empty results were cached, the second call
+    // would hit the cache and never re-call TMDB.
+    const r1 = await appUnderTest().request('/movie?force=trending', {
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r1.status).toBe(200)
+    const callsAfterFail = trendingCalls
+    expect(callsAfterFail).toBeGreaterThan(0)
+
+    // TMDB recovers. Second call MUST re-hit TMDB (proves the empty
+    // result didn't poison the cache) and surface the recovered pick.
+    trendingMode = 'ok'
+    const r2 = await appUnderTest().request('/movie?force=trending', {
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r2.status).toBe(200)
+    expect(trendingCalls).toBeGreaterThan(callsAfterFail)
+    const body2 = (await r2.json()) as { items: Array<{ id: number }> }
+    expect(body2.items.some((i) => i.id === 9999)).toBe(true)
+  })
+
   it('cold-start with no TMDB key returns empty items (graceful degradation)', async () => {
     // No TMDB key → tmdbTrending returns [] → strip is empty.
     // The route should NOT crash; it returns source=trending with items=[].

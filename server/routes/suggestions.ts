@@ -1050,7 +1050,14 @@ async function fetchCandidatePool(
       year: Number.isFinite(y) ? y : undefined,
     })
   }
-  discoverCache[kind] = { key, items, expiresAt: now + TRENDING_CACHE_TTL_MS }
+  // Only cache successful, non-empty pools. A TMDB outage / rate-limit
+  // burst that fails every page would otherwise pin an empty result
+  // here for the full TTL, blanking the recommender-down + Claude-error
+  // fallback pools long after TMDB is healthy again. Leaving the cache
+  // entry untouched on empty lets the next call retry immediately.
+  if (items.length > 0) {
+    discoverCache[kind] = { key, items, expiresAt: now + TRENDING_CACHE_TTL_MS }
+  }
   return items.slice()
 }
 
@@ -1130,7 +1137,15 @@ async function tmdbTrending(kind: 'movie' | 'tv'): Promise<SuggestionItem[]> {
       year: Number.isFinite(y) ? y : undefined,
     }
   })
-  trendingCache[kind] = { items, expiresAt: now + TRENDING_CACHE_TTL_MS }
+  // Don't cache empty results. If every /trending page failed (TMDB
+  // outage, rate-limit storm, network partition), pinning [] for the
+  // full TTL keeps the trending strip blank for cold-start, force=
+  // trending, recommender-down fallback, and Claude-error fallback
+  // long after TMDB has recovered. Letting the entry stay missing
+  // makes the next call retry.
+  if (items.length > 0) {
+    trendingCache[kind] = { items, expiresAt: now + TRENDING_CACHE_TTL_MS }
+  }
   return items.slice()
 }
 
