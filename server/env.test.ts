@@ -31,6 +31,7 @@ const PRESERVED_KEYS = [
   'PORT',
   'ALLOW_UNSCOPED_PLEX_LOGIN',
   'DEFAULT_PROFILE_NAME',
+  'RECOMMENDER_URL',
 ] as const
 
 let snapshot: Record<string, string | undefined> = {}
@@ -354,6 +355,42 @@ describe('env — numeric env validation', () => {
     expect(env.maxMovieGb).toBe(15)
     expect(env.maxTvGbPerEpisode).toBe(7)
     expect(env.port).toBe(3002)
+  })
+})
+
+describe('env — RECOMMENDER_URL default per environment', () => {
+  // The recommender sidecar is only reachable as the docker-compose
+  // service hostname "recommender" from inside the production
+  // container network. In dev / test, the developer runs the sidecar
+  // on localhost per recommender/README.md. The default has to switch
+  // accordingly — a wrong default just produces failed DNS lookups
+  // and silent fallthrough to TMDB trending.
+  it('non-production → http://localhost:8000 (matches the readme quickstart)', async () => {
+    setBaselineEnv()
+    process.env.NODE_ENV = 'test'
+    delete process.env.RECOMMENDER_URL
+    const env = await loadEnv()
+    expect(env.recommenderUrl).toBe('http://localhost:8000')
+  })
+
+  it('production → http://recommender:8000 (docker-compose service hostname)', async () => {
+    setBaselineEnv()
+    process.env.NODE_ENV = 'production'
+    process.env.ALLOWED_ORIGINS = 'https://app.example'
+    process.env.PLEX_SERVER_ID = 'home-server-machine-id'
+    delete process.env.RECOMMENDER_URL
+    const env = await loadEnv()
+    expect(env.recommenderUrl).toBe('http://recommender:8000')
+  })
+
+  it('explicit RECOMMENDER_URL wins regardless of NODE_ENV', async () => {
+    setBaselineEnv()
+    process.env.NODE_ENV = 'production'
+    process.env.ALLOWED_ORIGINS = 'https://app.example'
+    process.env.PLEX_SERVER_ID = 'home-server-machine-id'
+    process.env.RECOMMENDER_URL = 'http://10.0.0.99:9100'
+    const env = await loadEnv()
+    expect(env.recommenderUrl).toBe('http://10.0.0.99:9100')
   })
 })
 
