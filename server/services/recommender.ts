@@ -2,9 +2,12 @@
 //
 // The recommender lives in the same docker-compose stack (service name
 // `recommender`, port 8000) and is reachable only inside the Docker
-// network. In dev (`npm run dev`), it defaults to localhost:8000 if a
-// developer has started it themselves; otherwise the call fails fast
-// and the route handler falls back to TMDB trending.
+// network. env.ts switches the default URL on NODE_ENV:
+//   - production → http://recommender:8000 (compose hostname)
+//   - dev / test → http://localhost:8000 (matches the readme quickstart
+//     for hand-running the sidecar with `uvicorn app.main:app`)
+// In dev the call fails fast if the developer hasn't started the
+// sidecar, and the route handler falls back to TMDB trending.
 //
 // Schema mirrors recommender/app/schemas.py: keep them in sync.
 
