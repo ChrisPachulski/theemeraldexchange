@@ -177,7 +177,16 @@ if (isProd && rawSessionSecret) {
 }
 
 export const env = {
-  plexClientId: required('PLEX_CLIENT_ID'),
+  // .trim() is load-bearing for the plex.tv PIN flow: this value flows
+  // into BOTH the X-Plex-Client-Identifier header (server → plex.tv)
+  // AND the clientID URL param on the popup auth URL (browser →
+  // plex.tv). plex.tv matches them as exact strings when reconciling
+  // the authorized PIN; a stray trailing newline (common when copying
+  // from a generator into .env) makes the header carry "\n" and the
+  // URLSearchParams version carry "%0A", which plex.tv treats as two
+  // different clients — the user authorizes one, the server polls the
+  // other, and check returns {authToken: null} forever.
+  plexClientId: required('PLEX_CLIENT_ID').trim(),
   sessionSecret: required('SESSION_SECRET'),
   admins: csv('ADMINS'),
   plexServerId,
