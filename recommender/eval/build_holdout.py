@@ -32,7 +32,14 @@ import sqlite3
 import sys
 from pathlib import Path
 
-DB_PATH = os.environ.get("RECOMMENDER_DB_PATH", "/data/recommender.db")
+# Default mirrors the Dockerfile's RECOMMENDER_DB_PATH env so a
+# manual `python -m eval.build_holdout` without RECOMMENDER_DB_PATH
+# set still hits the right file inside the container. Compose +
+# Dockerfile both write to /data/exchange.db; previously this
+# defaulted to /data/recommender.db, which only existed during
+# pre-deployment dev and silently failed-open against an empty
+# (missing) DB on first prod run.
+DB_PATH = os.environ.get("RECOMMENDER_DB_PATH", "/data/exchange.db")
 LOOKBACK_DAYS = int(os.environ.get("HOLDOUT_LOOKBACK_DAYS", "30"))
 MIN_LIBRARY = 3
 MIN_POSITIVES = 1
