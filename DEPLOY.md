@@ -218,6 +218,25 @@ fi
 EOF
 ```
 
+### Recovering ingest rows stuck at `status='error'`
+
+Transient TMDB failures (5xx, rate-limit, brief network outage) mark
+the row as `status='error'` and the regular drain only selects
+`status='pending'` — so stranded rows stay invisible to bootstrap and
+changes re-runs (`ON CONFLICT DO NOTHING` is a no-op for existing
+rows). To recover:
+
+```bash
+# Reset every error row to pending, then drain. Capped to attempts<5
+# so permanently-broken titles (removed from TMDB, etc.) don't churn.
+docker exec exchange-recommender python -m workers.tmdb_ingest \
+  --mode retry-errors --max-attempts 5
+```
+
+`--retry-errors` is also available on `--mode bootstrap` and
+`--mode changes` if you want the recovery sweep to happen as part of
+the regular nightly cron.
+
 ### Wiring up the optimizer's eval gate
 
 The optimizer's auto-promotion path is gated by an evaluation set —
