@@ -17,7 +17,7 @@ from fastapi import Depends, FastAPI, HTTPException
 
 from .config import CONFIG
 from .context import get_active_model_config, load_user_context
-from .db import connect, migrate
+from .db import connect, migrate, transaction
 from . import recipes
 from .schemas import (
     FeedbackEventRequest,
@@ -80,7 +80,7 @@ def score(
     conn: sqlite3.Connection = Depends(get_db),
 ) -> ScoreResponse:
     t0 = time.perf_counter()
-    ctx = load_user_context(conn, req)
+    ctx = load_user_context(conn, req, persist_library=False)
 
     # Cold-start orchestration: choose the cold_start_trending recipe when the
     # library is too small for a meaningful taste signal. Independent of which
@@ -102,29 +102,30 @@ def score(
 
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     if items:
-        conn.executemany(
-            """INSERT INTO rec_log(sub, kind, tmdb_id, rank, score, provenance, model_version, ts)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            [
-                (
-                    req.sub,
-                    req.kind,
-                    it.tmdb_id,
-                    rank,
-                    it.score,
-                    it.provenance,
-                    model_version,
-                    now,
-                )
-                for rank, it in enumerate(items)
-            ],
-        )
-        conn.executemany(
-            """INSERT INTO recently_shown(sub, kind, tmdb_id, ts)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(sub, kind, tmdb_id) DO UPDATE SET ts = excluded.ts""",
-            [(req.sub, req.kind, it.tmdb_id, now) for it in items],
-        )
+        with transaction(conn):
+            conn.executemany(
+                """INSERT INTO rec_log(sub, kind, tmdb_id, rank, score, provenance, model_version, ts)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    (
+                        req.sub,
+                        req.kind,
+                        it.tmdb_id,
+                        rank,
+                        it.score,
+                        it.provenance,
+                        model_version,
+                        now,
+                    )
+                    for rank, it in enumerate(items)
+                ],
+            )
+            conn.executemany(
+                """INSERT INTO recently_shown(sub, kind, tmdb_id, ts)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(sub, kind, tmdb_id) DO UPDATE SET ts = excluded.ts""",
+                [(req.sub, req.kind, it.tmdb_id, now) for it in items],
+            )
 
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
     diag = {
@@ -152,46 +153,47 @@ def post_feedback(
     # unions both, so the user ends up "both liking and disliking"
     # the same title — which then drifts the recommender's
     # liked_embeddings / disliked_embeddings.
-    if ev.signal == "like":
-        conn.execute(
-            "DELETE FROM user_feedback WHERE sub=? AND kind=? AND tmdb_id=? AND signal='dislike'",
-            (ev.sub, ev.kind, ev.tmdb_id),
-        )
-    elif ev.signal == "dislike":
-        conn.execute(
-            "DELETE FROM user_feedback WHERE sub=? AND kind=? AND tmdb_id=? AND signal='like'",
-            (ev.sub, ev.kind, ev.tmdb_id),
-        )
-    conn.execute(
-        """INSERT INTO user_feedback(sub, kind, tmdb_id, signal, ts)
-           VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT(sub, kind, tmdb_id, signal) DO UPDATE SET ts = excluded.ts""",
-        (ev.sub, ev.kind, ev.tmdb_id, ev.signal, now),
-    )
-    # Outcome attribution: tie this event back to the most recent rec_log row
-    # for the same (sub, kind, tmdb_id) so the optimizer can learn from it.
-    # Map present-tense signals to past-tense outcomes (the rec_outcomes
-    # constraint enforces past tense).
-    signal_to_outcome = {
-        "like": "liked",
-        "dislike": "disliked",
-        "reject": "rejected",
-        "clicked": "clicked",
-        "added": "added",
-    }
-    if ev.signal in signal_to_outcome:
-        rec = conn.execute(
-            """SELECT id FROM rec_log
-               WHERE sub = ? AND kind = ? AND tmdb_id = ?
-               ORDER BY ts DESC LIMIT 1""",
-            (ev.sub, ev.kind, ev.tmdb_id),
-        ).fetchone()
-        if rec is not None:
+    with transaction(conn):
+        if ev.signal == "like":
             conn.execute(
-                """INSERT INTO rec_outcomes(rec_id, outcome, ts) VALUES (?, ?, ?)
-                   ON CONFLICT(rec_id, outcome) DO UPDATE SET ts = excluded.ts""",
-                (rec["id"], signal_to_outcome[ev.signal], now),
+                "DELETE FROM user_feedback WHERE sub=? AND kind=? AND tmdb_id=? AND signal='dislike'",
+                (ev.sub, ev.kind, ev.tmdb_id),
             )
+        elif ev.signal == "dislike":
+            conn.execute(
+                "DELETE FROM user_feedback WHERE sub=? AND kind=? AND tmdb_id=? AND signal='like'",
+                (ev.sub, ev.kind, ev.tmdb_id),
+            )
+        conn.execute(
+            """INSERT INTO user_feedback(sub, kind, tmdb_id, signal, ts)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(sub, kind, tmdb_id, signal) DO UPDATE SET ts = excluded.ts""",
+            (ev.sub, ev.kind, ev.tmdb_id, ev.signal, now),
+        )
+        # Outcome attribution: tie this event back to the most recent rec_log row
+        # for the same (sub, kind, tmdb_id) so the optimizer can learn from it.
+        # Map present-tense signals to past-tense outcomes (the rec_outcomes
+        # constraint enforces past tense).
+        signal_to_outcome = {
+            "like": "liked",
+            "dislike": "disliked",
+            "reject": "rejected",
+            "clicked": "clicked",
+            "added": "added",
+        }
+        if ev.signal in signal_to_outcome:
+            rec = conn.execute(
+                """SELECT id FROM rec_log
+                   WHERE sub = ? AND kind = ? AND tmdb_id = ?
+                   ORDER BY ts DESC LIMIT 1""",
+                (ev.sub, ev.kind, ev.tmdb_id),
+            ).fetchone()
+            if rec is not None:
+                conn.execute(
+                    """INSERT INTO rec_outcomes(rec_id, outcome, ts) VALUES (?, ?, ?)
+                       ON CONFLICT(rec_id, outcome) DO UPDATE SET ts = excluded.ts""",
+                    (rec["id"], signal_to_outcome[ev.signal], now),
+                )
     return {"ok": True}
 
 
@@ -209,6 +211,8 @@ def post_library_sync(
     items = payload.get("items") or []
     if kind not in ("movie", "tv"):
         raise HTTPException(status_code=400, detail="invalid kind")
+    if not isinstance(items, list):
+        raise HTTPException(status_code=400, detail="items must be a list")
 
     # Validate + build the insert tuples BEFORE touching the DB. If the
     # payload is malformed we want to 400 out cleanly, not leave a
@@ -217,19 +221,17 @@ def post_library_sync(
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     rows: list[tuple] = []
     for it in items:
+        if not isinstance(it, dict):
+            continue
         tid = it.get("tmdb_id")
         if not isinstance(tid, int):
             continue
         rows.append((kind, tid, it.get("source"), now))
 
-    # Atomic swap: connections are autocommit (isolation_level=None in
-    # db.connect), so explicit BEGIN IMMEDIATE/COMMIT keeps the
-    # delete + bulk insert in a single transaction. A crash or
-    # constraint failure mid-flight rolls everything back instead of
-    # leaving an empty library_items mirror that would degrade /score
-    # output until the next sync.
-    try:
-        conn.execute("BEGIN IMMEDIATE")
+    if not rows and payload.get("force") is not True:
+        raise HTTPException(status_code=400, detail="empty or invalid library sync requires force=true")
+
+    with transaction(conn):
         conn.execute("DELETE FROM library_items WHERE kind = ?", (kind,))
         if rows:
             conn.executemany(
@@ -237,10 +239,6 @@ def post_library_sync(
                    VALUES (?, ?, ?, ?)""",
                 rows,
             )
-        conn.execute("COMMIT")
-    except Exception:
-        conn.execute("ROLLBACK")
-        raise
     return {"count": len(rows)}
 
 
@@ -318,10 +316,19 @@ def clear_feedback(
         or not isinstance(tmdb_id, int)
     ):
         raise HTTPException(status_code=400, detail="invalid payload")
-    conn.execute(
-        "DELETE FROM user_feedback WHERE sub=? AND kind=? AND tmdb_id=?",
-        (sub, kind, tmdb_id),
-    )
+    with transaction(conn):
+        conn.execute(
+            "DELETE FROM user_feedback WHERE sub=? AND kind=? AND tmdb_id=?",
+            (sub, kind, tmdb_id),
+        )
+        conn.execute(
+            """DELETE FROM rec_outcomes
+               WHERE outcome IN ('liked', 'disliked', 'rejected', 'clicked', 'added')
+                 AND rec_id IN (
+                   SELECT id FROM rec_log WHERE sub=? AND kind=? AND tmdb_id=?
+                 )""",
+            (sub, kind, tmdb_id),
+        )
     return {"ok": True}
 
 

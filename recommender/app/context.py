@@ -16,10 +16,11 @@ from datetime import datetime, timezone
 
 import numpy as np
 
-from .db import deserialize_f32
+from .db import deserialize_f32, transaction
 from .schemas import Kind, ScoreRequest
 
 log = logging.getLogger(__name__)
+IN_BATCH_SIZE = 500
 
 
 @dataclass
@@ -85,45 +86,61 @@ class UserContext:
         return centroid / norm if norm > 0 else centroid
 
 
-def _embedding_for(conn: sqlite3.Connection, kind: Kind, tmdb_id: int) -> np.ndarray | None:
-    row = conn.execute(
-        "SELECT embedding, dim FROM title_features WHERE kind = ? AND tmdb_id = ?",
-        (kind, tmdb_id),
-    ).fetchone()
-    if row is None:
-        return None
-    return deserialize_f32(row["embedding"], dim=row["dim"])
+def _chunks(ids: list[int], size: int = IN_BATCH_SIZE):
+    for i in range(0, len(ids), size):
+        yield ids[i : i + size]
 
 
 def _load_title_rows(conn: sqlite3.Connection, kind: Kind, ids: list[int]) -> dict[int, TitleRow]:
     if not ids:
         return {}
-    placeholders = ",".join("?" for _ in ids)
-    rows = conn.execute(
-        f"""SELECT t.tmdb_id, t.kind, t.title, t.year, t.poster_path, t.overview,
-                  COALESCE(t.popularity, 0) AS popularity, t.vote_average,
-                  (SELECT GROUP_CONCAT(g.genre_id) FROM title_genres g
-                   WHERE g.kind = t.kind AND g.tmdb_id = t.tmdb_id) AS genres
-           FROM titles t
-           WHERE t.kind = ? AND t.tmdb_id IN ({placeholders})""",
-        (kind, *ids),
-    ).fetchall()
     out: dict[int, TitleRow] = {}
-    for r in rows:
-        gids = (
-            tuple(int(g) for g in r["genres"].split(",")) if r["genres"] else ()
-        )
-        out[r["tmdb_id"]] = TitleRow(
-            tmdb_id=r["tmdb_id"],
-            kind=kind,
-            title=r["title"],
-            year=r["year"],
-            poster_path=r["poster_path"],
-            overview=r["overview"],
-            popularity=r["popularity"] or 0.0,
-            vote_average=r["vote_average"],
-            genre_ids=gids,
-        )
+    for batch in _chunks(sorted(set(ids))):
+        placeholders = ",".join("?" for _ in batch)
+        rows = conn.execute(
+            f"""SELECT t.tmdb_id, t.kind, t.title, t.year, t.poster_path, t.overview,
+                      COALESCE(t.popularity, 0) AS popularity, t.vote_average,
+                      (SELECT GROUP_CONCAT(g.genre_id) FROM title_genres g
+                       WHERE g.kind = t.kind AND g.tmdb_id = t.tmdb_id) AS genres
+               FROM titles t
+               WHERE t.kind = ? AND t.tmdb_id IN ({placeholders})""",
+            (kind, *batch),
+        ).fetchall()
+        for r in rows:
+            gids = (
+                tuple(int(g) for g in r["genres"].split(",")) if r["genres"] else ()
+            )
+            out[r["tmdb_id"]] = TitleRow(
+                tmdb_id=r["tmdb_id"],
+                kind=kind,
+                title=r["title"],
+                year=r["year"],
+                poster_path=r["poster_path"],
+                overview=r["overview"],
+                popularity=r["popularity"] or 0.0,
+                vote_average=r["vote_average"],
+                genre_ids=gids,
+            )
+    return out
+
+
+def _load_embeddings(
+    conn: sqlite3.Connection,
+    kind: Kind,
+    ids: set[int],
+) -> dict[int, np.ndarray]:
+    out: dict[int, np.ndarray] = {}
+    ordered = sorted(ids)
+    for batch in _chunks(ordered):
+        placeholders = ",".join("?" for _ in batch)
+        rows = conn.execute(
+            f"""SELECT tmdb_id, embedding, dim
+                FROM title_features
+                WHERE kind = ? AND tmdb_id IN ({placeholders})""",
+            (kind, *batch),
+        ).fetchall()
+        for row in rows:
+            out[row["tmdb_id"]] = deserialize_f32(row["embedding"], dim=row["dim"])
     return out
 
 
@@ -141,8 +158,9 @@ def _stack_embeddings(
     """
     vecs = []
     out_ids: list[int] = []
+    embeddings = _load_embeddings(conn, kind, ids)
     for tid in sorted(ids):
-        v = _embedding_for(conn, kind, tid)
+        v = embeddings.get(tid)
         if v is not None:
             vecs.append(v)
             out_ids.append(tid)
@@ -155,7 +173,7 @@ def load_user_context(
     conn: sqlite3.Connection,
     req: ScoreRequest,
     *,
-    persist_library: bool = True,
+    persist_library: bool = False,
 ) -> UserContext:
     """Build a UserContext for this scoring request.
 
@@ -166,14 +184,11 @@ def load_user_context(
       * per-user feedback + recently_shown: always from the recommender DB,
         since the recommender owns those tables.
 
-    ``persist_library`` (default True): when True and a request library is
+    ``persist_library`` (default False): when True and a request library is
     supplied, the library is upserted into ``library_items`` so the DB
-    stays warm for any later call that lands without an explicit library
-    payload. Eval callers (workers/optimizer.evaluate) MUST pass False —
-    sqlite is in autocommit mode (db.connect: isolation_level=None), and
-    upserting the holdout's synthetic / historical tmdb_ids into the
-    live ``library_items`` table both pollutes the table and overwrites
-    existing rows' ``source`` with NULL via the ON CONFLICT clause.
+    stays warm for any later call that lands without an explicit library.
+    Production score calls keep this False; /events/library/sync is the
+    authoritative persistence path.
     """
     kind = req.kind
 
@@ -182,13 +197,14 @@ def load_user_context(
         library_ids = {item.tmdb_id for item in req.library}
         if persist_library:
             now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            for item in req.library:
-                conn.execute(
+            with transaction(conn):
+                conn.executemany(
                     """INSERT INTO library_items(kind, tmdb_id, source, added_at)
                        VALUES (?, ?, ?, ?)
                        ON CONFLICT(kind, tmdb_id) DO UPDATE SET
-                         source = excluded.source""",
-                    (kind, item.tmdb_id, item.source, now),
+                         source = COALESCE(excluded.source, library_items.source),
+                         added_at = excluded.added_at""",
+                    [(kind, item.tmdb_id, item.source, now) for item in req.library],
                 )
     else:
         library_ids = {

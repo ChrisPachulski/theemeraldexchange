@@ -33,7 +33,7 @@ import anthropic
 from app import recipes
 from app.config import CONFIG
 from app.context import load_user_context
-from app.db import connect
+from app.db import connect, transaction
 from app.schemas import ScoreRequest
 
 log = logging.getLogger("optimizer")
@@ -182,8 +182,7 @@ def clamp_patch(active: dict, proposed: dict, *, drift: float) -> dict:
     for k, new in proposed.items():
         cur = active.get(k)
         if isinstance(cur, (int, float)) and isinstance(new, (int, float)) and cur != 0:
-            lo = cur * (1 - drift)
-            hi = cur * (1 + drift)
+            lo, hi = sorted((cur * (1 - drift), cur * (1 + drift)))
             clamped = max(lo, min(hi, float(new)))
             if isinstance(cur, int):
                 clamped = round(clamped)
@@ -327,18 +326,16 @@ def evaluate(conn: sqlite3.Connection, recipe_name: str, params: dict, holdout: 
             feedback=None,
             household_rejections=[],
         )
-        # persist_library=False is load-bearing here: the DB connection
-        # runs in autocommit mode, so a True call would insert every
-        # holdout tmdb_id into the live library_items table and clobber
-        # existing rows' `source` with NULL via ON CONFLICT. Eval reads
-        # the same DB as production; it must not write to it.
+        # persist_library=False is load-bearing here: eval reads the
+        # same DB as production and must not write holdout tmdb_ids into
+        # the live library_items table.
         ctx = load_user_context(conn, req, persist_library=False)
         result = recipe_mod.score(ctx, conn, n=20, params=params)
         picks = {it.tmdb_id for it in result.items}
         positives = set(entry.get("positives") or [])
         negatives = set(entry.get("negatives") or [])
         recall = len(picks & positives) / max(len(positives), 1)
-        fp = len(picks & negatives) / max(len(picks), 1)
+        fp = len(picks & negatives) / max(len(negatives), 1)
         scores.append(recall - 0.5 * fp)
 
     return sum(scores) / len(scores)
@@ -351,13 +348,18 @@ def evaluate(conn: sqlite3.Connection, recipe_name: str, params: dict, holdout: 
 
 def promote(conn: sqlite3.Connection, *, recipe: str, params: dict, notes: str) -> str:
     new_version = f"v-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
-    with conn:
+    with transaction(conn):
         conn.execute("UPDATE model_config SET active = 0 WHERE active = 1")
         conn.execute(
             """INSERT INTO model_config(version, recipe, params_json, active, created_at, notes)
                VALUES (?, ?, ?, 1, datetime('now'), ?)""",
             (new_version, recipe, json.dumps(params), notes),
         )
+    active = conn.execute(
+        "SELECT version FROM model_config WHERE active = 1"
+    ).fetchall()
+    if len(active) != 1 or active[0]["version"] != new_version:
+        raise RuntimeError("model_config promotion left an invalid active model state")
     return new_version
 
 
@@ -434,7 +436,7 @@ def run(*, dry_run: bool = False) -> int:
     if not holdout:
         log.info("no holdout set yet; recording proposal only (active stays %s)", active_version)
         # Insert proposal as inactive row so we can review later.
-        with conn:
+        with transaction(conn):
             conn.execute(
                 """INSERT INTO model_config(version, recipe, params_json, active, created_at, notes)
                    VALUES (?, ?, ?, 0, datetime('now'), ?)""",

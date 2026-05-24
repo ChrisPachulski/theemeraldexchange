@@ -27,6 +27,8 @@ DEFAULTS: dict[str, float | int | str] = {
     "mmr_input_k": 200,
 }
 
+EMBED_EPS = 1e-9
+
 
 def _normalize(v: np.ndarray) -> np.ndarray:
     n = np.linalg.norm(v)
@@ -44,10 +46,15 @@ def _mmr(
     if not cands:
         return []
     embs = np.vstack([c.embedding for c in cands])
-    embs = embs / np.linalg.norm(embs, axis=1, keepdims=True).clip(min=1e-9)
-    rel = np.array(relevance, dtype=np.float32)
+    norms = np.linalg.norm(embs, axis=1)
+    valid = np.isfinite(embs).all(axis=1) & np.isfinite(norms) & (norms > EMBED_EPS)
+    if not valid.any():
+        return []
+    valid_indices = np.flatnonzero(valid)
+    embs = embs[valid] / norms[valid, None]
+    rel = np.array(relevance, dtype=np.float32)[valid]
     selected: list[int] = []
-    remaining = list(range(len(cands)))
+    remaining = list(range(len(valid_indices)))
 
     while remaining and len(selected) < n:
         if not selected:
@@ -63,7 +70,7 @@ def _mmr(
         best = remaining[best_local]
         selected.append(best)
         remaining.pop(best_local)
-    return selected
+    return [int(valid_indices[i]) for i in selected]
 
 
 def score(ctx: UserContext, conn: sqlite3.Connection, *, n: int, params: dict) -> RecipeResult:

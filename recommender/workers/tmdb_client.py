@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import logging
 import os
 import time
@@ -11,7 +13,7 @@ from typing import Any
 import httpx
 from tenacity import (
     AsyncRetrying,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential,
 )
@@ -19,6 +21,33 @@ from tenacity import (
 log = logging.getLogger(__name__)
 
 TMDB_BASE = "https://api.themoviedb.org/3"
+MAX_RETRY_AFTER_S = 30.0
+DEFAULT_RETRY_AFTER_S = 1.0
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    if isinstance(exc, httpx.RequestError):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        return status == 429 or status >= 500
+    return False
+
+
+def _retry_after_seconds(value: str | None) -> float:
+    if not value:
+        return DEFAULT_RETRY_AFTER_S
+    try:
+        retry_after = float(value)
+    except (TypeError, ValueError):
+        try:
+            retry_at = parsedate_to_datetime(value)
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=timezone.utc)
+            retry_after = (retry_at - datetime.now(timezone.utc)).total_seconds()
+        except (TypeError, ValueError, IndexError, OverflowError):
+            retry_after = DEFAULT_RETRY_AFTER_S
+    return min(max(retry_after, 0.0), MAX_RETRY_AFTER_S)
 
 
 class RateLimit:
@@ -46,32 +75,31 @@ class RateLimit:
 class TmdbClient:
     def __init__(
         self,
-        api_key: str,
+        read_access_token: str,
         *,
         rate_capacity: int = 40,
         rate_window_s: float = 10.0,
         timeout: float = 15.0,
     ):
-        self.api_key = api_key
         self.limiter = RateLimit(rate_capacity, rate_window_s)
         self._client = httpx.AsyncClient(
             base_url=TMDB_BASE,
             timeout=timeout,
-            headers={"Accept": "application/json"},
+            headers={
+                "Accept": "application/json",
+                "Authorization": f"Bearer {read_access_token}",
+            },
         )
 
     async def aclose(self) -> None:
         await self._client.aclose()
 
     async def get(self, path: str, **params: Any) -> dict:
-        params = {"api_key": self.api_key, **params}
-
         async def _do() -> dict:
             await self.limiter.acquire()
             r = await self._client.get(path, params=params)
             if r.status_code == 429:
-                retry_after = float(r.headers.get("Retry-After", "1"))
-                await asyncio.sleep(retry_after)
+                await asyncio.sleep(_retry_after_seconds(r.headers.get("Retry-After")))
                 raise httpx.HTTPStatusError("429", request=r.request, response=r)
             r.raise_for_status()
             return r.json()
@@ -79,7 +107,7 @@ class TmdbClient:
         async for attempt in AsyncRetrying(
             stop=stop_after_attempt(5),
             wait=wait_exponential(multiplier=0.5, max=8.0),
-            retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.RequestError)),
+            retry=retry_if_exception(_is_retryable),
             reraise=True,
         ):
             with attempt:
@@ -127,7 +155,7 @@ class TmdbClient:
 
 
 def from_env() -> TmdbClient:
-    key = os.environ.get("TMDB_API_KEY")
-    if not key:
-        raise RuntimeError("TMDB_API_KEY is required")
-    return TmdbClient(key)
+    token = os.environ.get("TMDB_READ_ACCESS_TOKEN") or os.environ.get("TMDB_API_KEY")
+    if not token:
+        raise RuntimeError("TMDB_READ_ACCESS_TOKEN is required")
+    return TmdbClient(token)
