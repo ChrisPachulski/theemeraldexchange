@@ -253,6 +253,52 @@ def load_holdout() -> list[dict]:
                     parsed.get("kind"),
                 )
                 continue
+            # library/positives/negatives must be int arrays. evaluate()
+            # passes library through ScoreRequest validation
+            # ({"tmdb_id": t} — a non-int t triggers a Pydantic error
+            # mid-eval) and collapses positives/negatives into Python
+            # sets — a non-hashable element (dict, list) crashes set()
+            # with TypeError. A single bad row would take out every
+            # remaining holdout entry. Bound the blast radius to the
+            # row itself by validating here.
+            bad = False
+            for field in ("library", "positives", "negatives"):
+                value = parsed.get(field, [])
+                if not isinstance(value, list):
+                    log.warning(
+                        "holdout %s:%d skipped (%s must be a list, got %s)",
+                        p,
+                        lineno,
+                        field,
+                        type(value).__name__,
+                    )
+                    bad = True
+                    break
+                # bool is a subclass of int — reject explicitly so
+                # `[True, False]` doesn't sneak through as a "valid"
+                # tmdb_id list.
+                if any(not isinstance(v, int) or isinstance(v, bool) for v in value):
+                    log.warning(
+                        "holdout %s:%d skipped (%s must contain only ints)",
+                        p,
+                        lineno,
+                        field,
+                    )
+                    bad = True
+                    break
+            if bad:
+                continue
+            # An entry with zero positives contributes 0/1 = 0 recall
+            # and just drags the average down without any learning
+            # signal. Skip with a hint so the operator can prune it
+            # from the generator output.
+            if not parsed.get("positives"):
+                log.warning(
+                    "holdout %s:%d skipped (positives list is empty — no recall signal)",
+                    p,
+                    lineno,
+                )
+                continue
             out.append(parsed)
     return out
 
