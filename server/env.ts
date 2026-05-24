@@ -271,8 +271,21 @@ export const env = {
   // Local recommender sidecar. When USE_LOCAL_RECOMMENDER=1, /api/suggestions
   // skips Claude entirely and asks the recommender service (Python +
   // sqlite-vec, running in the same compose stack) for ranked picks.
-  // Defaults to the docker-compose service hostname in prod; falls back
-  // to localhost in dev for hand-run testing.
+  //
+  // Default URL is environment-conditional:
+  //   - prod (NODE_ENV=production): "http://recommender:8000" — the
+  //     docker-compose service hostname. The compose file passes
+  //     RECOMMENDER_URL explicitly so this default is belt-and-suspenders
+  //     for direct `node dist/server.js` boots that bypass compose.
+  //   - dev/test: "http://localhost:8000" — matches recommender/README.md
+  //     quickstart instructions for hand-running the sidecar. The prior
+  //     unconditional "http://recommender:8000" silently called an
+  //     unresolvable Docker hostname unless the developer remembered
+  //     to set RECOMMENDER_URL.
   useLocalRecommender: process.env.USE_LOCAL_RECOMMENDER === '1',
-  recommenderUrl: process.env.RECOMMENDER_URL ?? 'http://recommender:8000',
+  recommenderUrl:
+    process.env.RECOMMENDER_URL ??
+    (process.env.NODE_ENV === 'production'
+      ? 'http://recommender:8000'
+      : 'http://localhost:8000'),
 } as const
