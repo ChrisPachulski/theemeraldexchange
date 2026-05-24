@@ -1777,10 +1777,20 @@ suggestions.get('/:type', async (c) => {
         provenance: 'trending' as const,
         reason: null,
       }))
+      const shown = trending.slice(0, TARGET_COUNT)
+      // Tell the sidecar these fallback items were shown so the next
+      // refresh's exclude_recently_shown filter sees them. Without
+      // this, a sidecar that's healthy but returns empty/all-filtered
+      // for this household replays the same trending cards every poll.
+      // Mirrors the partial-fill postShown below; fire-and-forget,
+      // bounded by services/recommender.ts timeout.
+      if (shown.length > 0) {
+        void postShown(session.sub, type, shown.map((it) => it.id))
+      }
       setTimingHeader()
       return c.json({
         source: 'trending',
-        items: trending.slice(0, TARGET_COUNT),
+        items: shown,
         _diag: diag({
           path: 'recommender_fallback_trending',
           modelVersion,
