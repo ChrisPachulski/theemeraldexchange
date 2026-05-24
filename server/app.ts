@@ -63,6 +63,14 @@ app.get('/api/limits', (c) =>
     // of leaving a fake setting that does nothing. Public boolean —
     // no secret leakage.
     useLocalRecommender: env.useLocalRecommender,
+    // Curated quality-profile name (case-insensitive match) that the
+    // server prefers for non-admin adds — see materializeNonAdmin{Movie,
+    // Series}Body in routes/{radarr,sonarr}.ts. Surfaced so the admin
+    // add modals can prefer the same name on the picker default
+    // instead of hardcoding "choose me" client-side and silently
+    // disagreeing with the server when the household curates under a
+    // different label.
+    defaultProfileName: env.defaultProfileName,
   }),
 )
 
