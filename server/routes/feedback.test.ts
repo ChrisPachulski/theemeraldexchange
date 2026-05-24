@@ -81,6 +81,25 @@ describe('feedback route — POST /', () => {
     expect((await bad({ type: 'foo', tmdbId: 1, signal: 'like' })).status).toBe(400)
     expect((await bad({ type: 'movie', tmdbId: 1, signal: 'meh' })).status).toBe(400)
     expect((await bad({ type: 'movie', tmdbId: -1, signal: 'like' })).status).toBe(400)
+    // Stores normalize to positive integer ids on read; a decimal id
+    // would persist and then silently vanish on the next load. Reject
+    // it at the route boundary instead.
+    expect((await bad({ type: 'movie', tmdbId: 1.5, signal: 'like' })).status).toBe(400)
+    expect((await bad({ type: 'movie', tmdbId: 0, signal: 'like' })).status).toBe(400)
+    expect(
+      (await bad({ type: 'movie', tmdbId: Number.MAX_SAFE_INTEGER + 10, signal: 'like' }))
+        .status,
+    ).toBe(400)
+  })
+
+  it('DELETE rejects non-integer / non-positive tmdbId', async () => {
+    const app = appUnderTest()
+    const cookie = await cookieFor('alice')
+    const del = (path: string) => app.request(path, { method: 'DELETE', headers: { Cookie: cookie } })
+
+    expect((await del('/movie/1.5/like')).status).toBe(400)
+    expect((await del('/movie/0/like')).status).toBe(400)
+    expect((await del('/movie/-3/like')).status).toBe(400)
   })
 
   it('like writes title to user feedback only, not household rejections', async () => {

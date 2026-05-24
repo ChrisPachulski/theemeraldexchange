@@ -195,7 +195,12 @@ radarr.post('/api/v3/movie', async (c) => {
 //   { status: 'no_releases_found' }   when the indexer returned nothing
 radarr.post('/api/v3/movie/:id/upgrade', requireAdmin, async (c) => {
   const id = Number(c.req.param('id'))
-  if (!Number.isFinite(id)) return c.json({ error: 'bad_id' }, 400)
+  // Radarr movie ids are positive integers; rejecting decimals /
+  // negatives / unsafe-large numbers up front avoids a wasted Radarr
+  // round-trip on a junk path.
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    return c.json({ error: 'bad_id' }, 400)
+  }
   const releaseRes = await radarrFetch(`/api/v3/release?movieId=${id}`, {
     method: 'GET',
   })
