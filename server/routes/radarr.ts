@@ -4,6 +4,7 @@ import { Hono } from 'hono'
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { radarrFetch, radarrRootFolders } from '../services/radarr.js'
 import { appendGrabEvent } from '../services/grabLog.js'
+import { postFeedback } from '../services/recommender.js'
 import { env } from '../env.js'
 
 export const radarr = new Hono<Env>()
@@ -260,6 +261,27 @@ radarr.post('/api/v3/movie', async (c) => {
     body: JSON.stringify(cappedBody),
   })
   const out = await r.text()
+
+  // Mirror the successful add to the recommender as a strong positive
+  // signal — the user converted a suggestion into a real library
+  // entry. The sidecar maps signal:'added' to outcome:'added' and ties
+  // it back to the most recent rec_log row for the same (sub, kind,
+  // tmdb_id), so the optimizer learns from real conversions, not just
+  // the dot-feedback subset. tmdbId comes from the incoming body —
+  // for non-admin adds the materialize step strips most fields but
+  // preserves tmdbId per NON_ADMIN_RADARR_ALLOW. Fire-and-forget; the
+  // mirror has its own bounded timeout in services/recommender.ts.
+  if (r.ok) {
+    const tmdbId = typeof body.tmdbId === 'number' ? body.tmdbId : undefined
+    if (tmdbId !== undefined) {
+      void postFeedback({
+        sub: session.sub,
+        kind: 'movie',
+        tmdb_id: tmdbId,
+        signal: 'added',
+      })
+    }
+  }
 
   // Fire the size-capped grab in the background. Indexer search can be
   // slow; we don't want to block the modal close.
