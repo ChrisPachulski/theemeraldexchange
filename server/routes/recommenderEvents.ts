@@ -21,6 +21,7 @@
 import { Hono } from 'hono'
 import { requireAuth, type Env } from '../middleware/auth.js'
 import { postFeedback } from '../services/recommender.js'
+import { env } from '../env.js'
 
 export const recommenderEvents = new Hono<Env>()
 
@@ -55,11 +56,18 @@ recommenderEvents.post('/event', async (c) => {
     return c.json({ error: 'invalid_signal' }, 400)
   }
 
-  void postFeedback({
-    sub: session.sub,
-    kind,
-    tmdb_id: raw.tmdbId,
-    signal: 'clicked',
-  })
+  // Gate the mirror on env.useLocalRecommender so disabled deployments
+  // don't generate sidecar traffic or timeout log noise. The route
+  // still 200s — the SPA's fire-and-forget contract is the same in
+  // either mode, and validation has already run. Mirrors the gate at
+  // /api/feedback.
+  if (env.useLocalRecommender) {
+    void postFeedback({
+      sub: session.sub,
+      kind,
+      tmdb_id: raw.tmdbId,
+      signal: 'clicked',
+    })
+  }
   return c.json({ ok: true })
 })
