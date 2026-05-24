@@ -26,6 +26,12 @@ forwardRead('/api/v3/qualityprofile')
 forwardRead('/api/v3/rootfolder')
 forwardRead('/api/v3/movie')
 forwardRead('/api/v3/movie/lookup')
+// Read-only — mirrors the Sonarr queue forwarder. The DownloadsTab
+// uses Radarr's queue to surface movie "indexer working" / pending
+// states while SAB has no active slot. Without this in the allow-list
+// the SPA polled /api/radarr/api/v3/queue every few seconds and
+// silently 404'd in prod, leaving movie pending states invisible.
+forwardRead('/api/v3/queue')
 
 // Hard size cap. Radarr's auto-search and RSS sync can grab whatever
 // wins profile scoring — that includes 50 GB 4K HDR rips. We force
