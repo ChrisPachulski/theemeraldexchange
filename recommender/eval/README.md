@@ -33,7 +33,7 @@ file from your own database.
 This file is gitignored. Build it from a recommender DB snapshot:
 
 ```bash
-# Inside the recommender container (default DB path /data/recommender.db):
+# Inside the recommender container (default DB path /data/exchange.db):
 docker exec exchange-recommender python -m eval.build_holdout > /data/holdout.jsonl
 
 # From the host, against a copied snapshot:
