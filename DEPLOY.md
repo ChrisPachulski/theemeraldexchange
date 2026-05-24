@@ -47,7 +47,7 @@ Open it and fill in:
 | `PLEX_CLIENT_ID` | Same value as in your `.env.local` (or generate fresh: `node -e 'console.log(crypto.randomUUID())'`). |
 | `SESSION_SECRET` | Generate fresh: `openssl rand -base64 48`. **Different from dev** so the two environments can't share sessions. |
 | `ADMINS` | `ChrisPachulski` (or whatever Plex usernames). |
-| `PLEX_SERVER_ID` | Discoverable via the SPA's first prod login (in the `discoveredServers` payload). Or query plex.tv directly. Optional but recommended. |
+| `PLEX_SERVER_ID` | **Required in production** — your home Plex server's machineIdentifier. Without it, any authenticated Plex user can sign in. Discoverable via the SPA's first prod login (in the `discoveredServers` payload). Or query plex.tv directly. For the brief first-deploy bootstrap window before you know the id, set `ALLOW_UNSCOPED_PLEX_LOGIN=1` instead — but remove that opt-in as soon as you copy the id into `PLEX_SERVER_ID`. |
 | `ALLOWED_ORIGINS` | `https://theemeraldexchange.com` |
 | `SONARR_URL`, `SONARR_API_KEY` | Existing Sonarr install. |
 | `RADARR_URL`, `RADARR_API_KEY` | Existing Radarr install. |

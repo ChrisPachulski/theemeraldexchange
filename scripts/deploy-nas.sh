@@ -54,6 +54,28 @@ for key in "${required[@]}"; do
   fi
 done
 
+# PLEX_SERVER_ID gates sign-in to members of the household's Plex
+# server. A blank value turns the app into "any Plex user can sign
+# in," so the backend hard-fails at boot in prod unless the operator
+# explicitly opted into bootstrap mode. Mirror that check here so
+# deploy fails fast with a clearer message than a container crash
+# loop.
+if grep -qE "^PLEX_SERVER_ID=.+" "$LOCAL_ENV"; then
+  : # populated — good
+elif grep -qE "^ALLOW_UNSCOPED_PLEX_LOGIN=1[[:space:]]*$" "$LOCAL_ENV"; then
+  echo "[deploy] WARN: PLEX_SERVER_ID is blank and ALLOW_UNSCOPED_PLEX_LOGIN=1 is set." >&2
+  echo "         This means ANY Plex account can sign in. Use only for the brief" >&2
+  echo "         first-deploy window — discover your machineIdentifier via the SPA's" >&2
+  echo "         /api/me discoveredServers payload, set PLEX_SERVER_ID, and remove the" >&2
+  echo "         escape hatch immediately." >&2
+else
+  echo "ERROR: production env needs PLEX_SERVER_ID (your home Plex server's" >&2
+  echo "       machineIdentifier) so sign-in is scoped to household members." >&2
+  echo "       For the first-deploy bootstrap window, set ALLOW_UNSCOPED_PLEX_LOGIN=1" >&2
+  echo "       explicitly to opt into the open mode. See DEPLOY.md." >&2
+  exit 1
+fi
+
 echo "→ Ensuring ${APPDATA} exists on ${NAS_HOST}"
 ssh "${NAS_USER}@${NAS_HOST}" "mkdir -p ${APPDATA}"
 

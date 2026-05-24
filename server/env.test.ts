@@ -29,6 +29,7 @@ const PRESERVED_KEYS = [
   'MAX_MOVIE_SIZE_GB',
   'MAX_TV_GB_PER_EPISODE',
   'PORT',
+  'ALLOW_UNSCOPED_PLEX_LOGIN',
 ] as const
 
 let snapshot: Record<string, string | undefined> = {}
@@ -108,6 +109,60 @@ describe('env — blank URL fallbacks', () => {
   })
 })
 
+describe('env — production gating on PLEX_SERVER_ID (auth scope)', () => {
+  // Without PLEX_SERVER_ID set, server/auth.ts accepts ANY authenticated
+  // Plex user. In prod, blank PLEX_SERVER_ID would silently turn the
+  // invitation-only app into "any Plex user can sign in." Hard-fail
+  // unless the operator explicitly opted into bootstrap mode.
+  it('production with unset PLEX_SERVER_ID throws', async () => {
+    setBaselineEnv()
+    process.env.NODE_ENV = 'production'
+    process.env.ALLOWED_ORIGINS = 'https://app.example'
+    delete process.env.PLEX_SERVER_ID
+    delete process.env.ALLOW_UNSCOPED_PLEX_LOGIN
+    await expect(loadEnv()).rejects.toThrow(/PLEX_SERVER_ID/)
+  })
+
+  it('production with empty PLEX_SERVER_ID throws (compose ${VAR:-} hazard)', async () => {
+    setBaselineEnv()
+    process.env.NODE_ENV = 'production'
+    process.env.ALLOWED_ORIGINS = 'https://app.example'
+    process.env.PLEX_SERVER_ID = ''
+    delete process.env.ALLOW_UNSCOPED_PLEX_LOGIN
+    await expect(loadEnv()).rejects.toThrow(/PLEX_SERVER_ID/)
+  })
+
+  it('production with explicit ALLOW_UNSCOPED_PLEX_LOGIN=1 boots open (bootstrap)', async () => {
+    setBaselineEnv()
+    process.env.NODE_ENV = 'production'
+    process.env.ALLOWED_ORIGINS = 'https://app.example'
+    delete process.env.PLEX_SERVER_ID
+    process.env.ALLOW_UNSCOPED_PLEX_LOGIN = '1'
+    const env = await loadEnv()
+    expect(env.plexServerId).toBeNull()
+    expect(env.isProd).toBe(true)
+  })
+
+  it('production with PLEX_SERVER_ID set boots normally', async () => {
+    setBaselineEnv()
+    process.env.NODE_ENV = 'production'
+    process.env.ALLOWED_ORIGINS = 'https://app.example'
+    process.env.PLEX_SERVER_ID = 'home-server-machine-id'
+    delete process.env.ALLOW_UNSCOPED_PLEX_LOGIN
+    const env = await loadEnv()
+    expect(env.plexServerId).toBe('home-server-machine-id')
+  })
+
+  it('non-production with unset PLEX_SERVER_ID still boots open', async () => {
+    setBaselineEnv()
+    process.env.NODE_ENV = 'test'
+    delete process.env.PLEX_SERVER_ID
+    delete process.env.ALLOW_UNSCOPED_PLEX_LOGIN
+    const env = await loadEnv()
+    expect(env.plexServerId).toBeNull()
+  })
+})
+
 describe('env — PLEX_SERVER_ID null coercion', () => {
   it('unset → null', async () => {
     setBaselineEnv()
@@ -157,6 +212,10 @@ describe('env — production gating on ALLOWED_ORIGINS', () => {
     setBaselineEnv()
     process.env.NODE_ENV = 'production'
     process.env.ALLOWED_ORIGINS = 'https://app.example,https://staging.example'
+    // PLEX_SERVER_ID is now also required in prod (round 16 boot
+    // gate). Set it so this test stays focused on the ALLOWED_ORIGINS
+    // branch instead of tripping the new check.
+    process.env.PLEX_SERVER_ID = 'home-server-machine-id'
     const env = await loadEnv()
     expect(env.isProd).toBe(true)
     expect(env.allowedOrigins).toEqual(['https://app.example', 'https://staging.example'])
