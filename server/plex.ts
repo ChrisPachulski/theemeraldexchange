@@ -83,6 +83,35 @@ export async function listResources(authToken: string): Promise<PlexResource[]> 
   return (await res.json()) as PlexResource[]
 }
 
+// Bounded variant used by the sessionGate revalidation loop. The plain
+// listResources throws on every non-2xx, which loses the auth-vs-
+// outage distinction the gate needs:
+//   - 401 / 403 → token revoked, user should be signed out
+//   - 5xx / network error / timeout → plex.tv hiccup, fail open
+// Returns the typed result on success, the HTTP status on a non-ok
+// HTTP response, or 'network_error' for fetch throws / timeouts.
+export type ListResourcesProbe =
+  | { kind: 'ok'; resources: PlexResource[] }
+  | { kind: 'http_error'; status: number }
+  | { kind: 'network_error' }
+
+export async function probeResources(
+  authToken: string,
+  signal?: AbortSignal,
+): Promise<ListResourcesProbe> {
+  try {
+    const res = await fetch(`${PLEX_BASE}/resources?includeHttps=1`, {
+      headers: { ...baseHeaders(), 'X-Plex-Token': authToken },
+      signal,
+    })
+    if (!res.ok) return { kind: 'http_error', status: res.status }
+    const resources = (await res.json()) as PlexResource[]
+    return { kind: 'ok', resources }
+  } catch {
+    return { kind: 'network_error' }
+  }
+}
+
 // People the owner has shared their Plex server with. Two states matter
 // to the Users tab:
 //   - ACCEPTED: the invitee accepted and can stream right now. Comes

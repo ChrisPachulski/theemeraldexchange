@@ -32,7 +32,11 @@ beforeAll(async () => {
     env: {
       plexClientId: 'test-client',
       sessionSecret: process.env.SESSION_SECRET ?? 'test-secret',
-      admins: [],
+      // requireAdmin reconciles the cookie role against env.admins per
+      // request; for the admin-only routes (Sonarr/Radarr DELETE,
+      // notifications POST, etc.) to clear the gate, the admin
+      // sessionCookie's username 'admin-user' must be in this list.
+      admins: ['admin-user'],
       plexServerId: null,
       port: 3001,
       isProd: true,
@@ -87,8 +91,14 @@ afterEach(() => {
 
 async function sessionCookie(role: 'admin' | 'user' = 'admin') {
   // Use the real createSession so the cookie format matches prod.
+  // Username MUST match the vitest test-env ADMINS list when role is
+  // admin — the auth middleware reconciles the cookie role against
+  // env.admins on every protected request, so an admin cookie issued
+  // for a username not in ADMINS gets demoted to user and the admin-
+  // only DELETE/POST handlers return 403.
   const { createSession } = await import('./session.js')
-  const token = await createSession({ sub: '1', username: 'user', role })
+  const username = role === 'admin' ? 'admin-user' : 'user'
+  const token = await createSession({ sub: '1', username, role })
   return `eex.session=${token}`
 }
 
