@@ -146,16 +146,19 @@ describe('reconcileSession — membership revalidation', () => {
     expect(calls).toBe(1)
   })
 
-  it('skips membership check entirely when the session has no plexAuthToken', async () => {
-    // Legacy sessions issued before the token field existed — we can
-    // still recompute the role but can't revalidate. Pass through.
+  it('forces re-auth on legacy sessions without plexAuthToken when the gate is configured', async () => {
+    // A configured PLEX_SERVER_ID can ONLY be enforced against a
+    // session that still carries the Plex token. Without it there is
+    // no way to verify the user remains a member — trusting the cookie
+    // alone would re-open the revocation window the gate exists to
+    // close. Force a re-auth instead.
     let calls = 0
     probeImpl.fn = async () => {
       calls++
       return { kind: 'network_error' }
     }
     const r = await reconcileSession({ ...baseSession, plexAuthToken: undefined })
-    expect(r).not.toBeNull()
+    expect(r).toBeNull()
     expect(calls).toBe(0)
   })
 })
