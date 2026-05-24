@@ -312,6 +312,36 @@ async def changes_since(client: TmdbClient, conn: sqlite3.Connection, kind: str)
 # =========================================================================
 
 
+def _requeue_errors(conn: sqlite3.Connection, max_attempts: int | None) -> int:
+    """Reset error rows to pending so they get another hydration pass.
+
+    Without this, transient TMDB failures (5xx, rate-limit, network
+    blip) strand rows at status='error' permanently — the drain loop's
+    SELECT only picks status='pending', and re-running bootstrap
+    enqueues new rows via ON CONFLICT DO NOTHING, which is a no-op for
+    existing error rows. Operators previously needed manual SQL to
+    recover.
+
+    `max_attempts` caps how many times a single row can be retried so
+    a row that's stuck on a permanent failure (e.g. removed from TMDB)
+    doesn't churn the queue forever. None = unbounded.
+    """
+    if max_attempts is None:
+        with conn:
+            n = conn.execute(
+                "UPDATE ingest_queue SET status='pending', last_error=NULL, "
+                "updated_at=datetime('now') WHERE status='error'"
+            ).rowcount
+    else:
+        with conn:
+            n = conn.execute(
+                "UPDATE ingest_queue SET status='pending', last_error=NULL, "
+                "updated_at=datetime('now') WHERE status='error' AND attempts < ?",
+                (max_attempts,),
+            ).rowcount
+    return n
+
+
 async def _run(args: argparse.Namespace) -> None:
     client = from_env()
     conn = connect()
@@ -321,14 +351,25 @@ async def _run(args: argparse.Namespace) -> None:
                 for kind in ("movie", "tv"):
                     n = await enumerate_kind(client, conn, kind)
                     log.info("enumerate %s: %d added/seen", kind, n)
+            if args.retry_errors:
+                n = _requeue_errors(conn, args.max_attempts)
+                log.info("retry-errors: requeued %d error rows", n)
             done, skipped = await _hydrate_loop(client, conn, concurrency=args.concurrency, limit=args.limit)
             log.info("bootstrap done: done=%d skipped=%d", done, skipped)
         elif args.mode == "changes":
             for kind in ("movie", "tv"):
                 n = await changes_since(client, conn, kind)
                 log.info("changes enqueued %s: %d", kind, n)
+            if args.retry_errors:
+                n = _requeue_errors(conn, args.max_attempts)
+                log.info("retry-errors: requeued %d error rows", n)
             done, skipped = await _hydrate_loop(client, conn, concurrency=args.concurrency, limit=args.limit)
             log.info("changes hydrate: done=%d skipped=%d", done, skipped)
+        elif args.mode == "retry-errors":
+            n = _requeue_errors(conn, args.max_attempts)
+            log.info("retry-errors: requeued %d error rows", n)
+            done, skipped = await _hydrate_loop(client, conn, concurrency=args.concurrency, limit=args.limit)
+            log.info("retry-errors done: done=%d skipped=%d", done, skipped)
         else:
             raise SystemExit(f"unknown mode: {args.mode}")
     finally:
@@ -338,10 +379,21 @@ async def _run(args: argparse.Namespace) -> None:
 
 def _cli() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", choices=["bootstrap", "changes"], required=True)
+    ap.add_argument("--mode", choices=["bootstrap", "changes", "retry-errors"], required=True)
     ap.add_argument("--concurrency", type=int, default=CONCURRENCY)
     ap.add_argument("--limit", type=int, default=None, help="stop after N hydrations (debug)")
     ap.add_argument("--skip-enumerate", action="store_true", help="bootstrap: hydrate-only, skip /discover")
+    ap.add_argument(
+        "--retry-errors",
+        action="store_true",
+        help="bootstrap/changes: also requeue status='error' rows before the hydrate pass",
+    )
+    ap.add_argument(
+        "--max-attempts",
+        type=int,
+        default=None,
+        help="cap retries per row so a permanently-broken row doesn't churn the queue (default: unbounded)",
+    )
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     asyncio.run(_run(args))
