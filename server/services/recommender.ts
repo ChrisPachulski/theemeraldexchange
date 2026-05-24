@@ -9,6 +9,7 @@
 // Schema mirrors recommender/app/schemas.py: keep them in sync.
 
 import { env } from '../env.js'
+import { fetchWithTimeout } from './upstream.js'
 
 export type RecommenderKind = 'movie' | 'tv'
 
@@ -55,6 +56,30 @@ export type RecommenderScoreResponse = {
 
 const REQUEST_TIMEOUT_MS = 5_000
 
+// Fire-and-forget mirror posts to the recommender sidecar still have
+// to be bounded so a hung sidecar doesn't leak sockets every time the
+// user clicks a dot. 3 s is more than enough for the recommender's
+// event endpoints (SQLite INSERT + return); anything past that, just
+// drop the event — the next interaction will resend converging state.
+const MIRROR_TIMEOUT_MS = 3_000
+
+async function mirrorPost(path: string, body: unknown, label: string): Promise<void> {
+  // fetchWithTimeout already swallows aborts and network throws into a
+  // synthesized 504 Response, so we only need to ignore that Response
+  // shape here. No catch needed — but we don't await the body either,
+  // so the caller can void-fire without leaking a pending socket.
+  await fetchWithTimeout(
+    `${env.recommenderUrl}${path}`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+    MIRROR_TIMEOUT_MS,
+    label,
+  )
+}
+
 export class RecommenderError extends Error {
   constructor(message: string, public status?: number) {
     super(message)
@@ -95,19 +120,11 @@ export async function postFeedback(ev: {
   tmdb_id: number
   signal: 'like' | 'dislike' | 'reject' | 'shown' | 'clicked' | 'added'
 }): Promise<void> {
-  await fetch(`${env.recommenderUrl}/events/feedback`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(ev),
-  }).catch(() => {/* fire-and-forget */})
+  await mirrorPost('/events/feedback', ev, 'recommender.postFeedback')
 }
 
 export async function postRejection(ev: { kind: RecommenderKind; tmdb_id: number }): Promise<void> {
-  await fetch(`${env.recommenderUrl}/events/rejection`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(ev),
-  }).catch(() => {/* fire-and-forget */})
+  await mirrorPost('/events/rejection', ev, 'recommender.postRejection')
 }
 
 // Recommender INSERTs feedback by (sub, kind, tmdb_id, signal), so a
@@ -119,31 +136,19 @@ export async function postClearFeedback(ev: {
   kind: RecommenderKind
   tmdb_id: number
 }): Promise<void> {
-  await fetch(`${env.recommenderUrl}/events/feedback/clear`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(ev),
-  }).catch(() => {/* fire-and-forget */})
+  await mirrorPost('/events/feedback/clear', ev, 'recommender.postClearFeedback')
 }
 
 export async function postClearRejection(ev: {
   kind: RecommenderKind
   tmdb_id: number
 }): Promise<void> {
-  await fetch(`${env.recommenderUrl}/events/rejection/clear`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(ev),
-  }).catch(() => {/* fire-and-forget */})
+  await mirrorPost('/events/rejection/clear', ev, 'recommender.postClearRejection')
 }
 
 export async function postLibrarySync(
   kind: RecommenderKind,
   items: RecommenderLibraryItem[],
 ): Promise<void> {
-  await fetch(`${env.recommenderUrl}/events/library/sync`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ kind, items }),
-  }).catch(() => {/* fire-and-forget */})
+  await mirrorPost('/events/library/sync', { kind, items }, 'recommender.postLibrarySync')
 }
