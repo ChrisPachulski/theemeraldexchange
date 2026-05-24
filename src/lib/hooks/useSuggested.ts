@@ -55,6 +55,12 @@ export type SuggestionDiag = {
   cacheHitRate?: number
   /** Number of items in the recently-shown buffer (after pool-size cap). Helps diagnose whether the cap is preventing power-user saturation (iter 65). */
   recentlyShownCount?: number
+  /** Server-side path tag — e.g. 'recommender_fallback_trending' when
+   *  the local recommender returned nothing usable and the route
+   *  degraded to TMDB trending. Used by the SPA to surface the right
+   *  hint (a recommender outage is NOT a missing-Anthropic-key
+   *  problem). */
+  path?: string
   lastCounters?: {
     lookupNulls?: number
     droppedAsDedupe?: number

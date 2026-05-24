@@ -242,23 +242,31 @@ export function TrendingRow({
       : ''
   // When source=trending and no AI context is shown (no toggle rendered),
   // the strip is operating in no-key or AI-off mode. Show a quiet nudge
-  // so new users understand they can unlock personalized picks.
+  // so new users understand they can unlock personalized picks. But
+  // suppress it when the server tagged the path as a local-recommender
+  // fallback (`recommender_fallback_trending`) — in that mode Anthropic
+  // is irrelevant; the household runs the free local sidecar and the
+  // trending strip is a transient outage indicator, not a "you need a
+  // key" prompt.
+  const isRecommenderFallback = diag?.path === 'recommender_fallback_trending'
   const noAiNudge =
-    source === 'trending' && !diag?.reason && !ai
+    source === 'trending' && !diag?.reason && !ai && !isRecommenderFallback
       ? 'Add an Anthropic key to unlock picks tailored to your library.'
       : null
   const sourceHint =
     source === 'trending_fallback'
       ? 'AI was unreachable — showing trending.'
-      : source === 'trending' && diag?.reason === 'library_below_threshold'
-        ? (diag.hint ?? 'Library too small for personalized picks — showing trending.')
-        : noAiNudge
-          ? noAiNudge
-          : source === 'personalized_filled' || source === 'personalized_empty_trending_fallback'
-            ? `A few picks are from trending — not enough personalized matches this round.${droppedWarning}${truncatedHint}`
-            : source === 'personalized' && (droppedWarning || truncatedHint)
-              ? `${droppedWarning}${truncatedHint}`.trim()
-              : null
+      : isRecommenderFallback
+        ? 'Recommender is catching its breath — showing trending while it recovers.'
+        : source === 'trending' && diag?.reason === 'library_below_threshold'
+          ? (diag.hint ?? 'Library too small for personalized picks — showing trending.')
+          : noAiNudge
+            ? noAiNudge
+            : source === 'personalized_filled' || source === 'personalized_empty_trending_fallback'
+              ? `A few picks are from trending — not enough personalized matches this round.${droppedWarning}${truncatedHint}`
+              : source === 'personalized' && (droppedWarning || truncatedHint)
+                ? `${droppedWarning}${truncatedHint}`.trim()
+                : null
 
   return (
     <section className="trending">
