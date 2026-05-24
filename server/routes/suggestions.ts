@@ -1080,18 +1080,21 @@ async function tmdbTrending(kind: 'movie' | 'tv'): Promise<SuggestionItem[]> {
   // Fire all pages in parallel. The TMDB free tier (~40 req / 10s)
   // comfortably absorbs 5 concurrent /trending calls, and parallel
   // pagination cuts cold-start + fill latency from ~5x serial to ~1x.
-  // Short-page early-exit becomes a hole filler (drop nulls), not a
-  // sequential break.
-  const pages = await Promise.all(
+  // Each page has its own bounded timeout — without it, one stuck TMDB
+  // connection would keep the Promise.all pending forever and stall
+  // every trending-dependent code path (force=trending, cold start,
+  // recommender-down fallback, Claude-error fallback). allSettled
+  // hardens that further: even if a per-page handler throws past its
+  // own try/catch, the remaining pages still resolve.
+  const settled = await Promise.allSettled(
     Array.from({ length: TRENDING_MAX_PAGES }, async (_, i) => {
       const url = new URL(`${TMDB_BASE}/trending/${kind}/week`)
       url.searchParams.set('api_key', _tmdbKey!)
       url.searchParams.set('page', String(i + 1))
-      // No AbortController needed for trending (no caller-level timeout
-      // budget here — trending is a background cache fill). The retry
-      // helper handles 429s with a bounded wait.
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), TMDB_TIMEOUT_MS)
       try {
-        const r = await tmdbFetchWithRetry(url, new AbortController().signal)
+        const r = await tmdbFetchWithRetry(url, controller.signal)
         if (!r || !r.ok) {
           if (r && r.status !== 429) {
             console.error('[suggestions] TMDB /trending non-ok:', r.status, 'page', i + 1)
@@ -1103,12 +1106,18 @@ async function tmdbTrending(kind: 'movie' | 'tv'): Promise<SuggestionItem[]> {
       } catch (e) {
         console.error('[suggestions] TMDB /trending fetch threw on page', i + 1, e instanceof Error ? e.message : String(e))
         return null
+      } finally {
+        clearTimeout(timer)
       }
     }),
   )
   const all: TmdbRow[] = []
-  for (const rows of pages) {
+  for (const p of settled) {
+    const rows = p.status === 'fulfilled' ? p.value : null
     if (rows && rows.length > 0) all.push(...rows)
+    else if (p.status === 'rejected') {
+      console.error('[suggestions] TMDB /trending page settled rejected:', p.reason instanceof Error ? p.reason.message : String(p.reason))
+    }
   }
   const items: SuggestionItem[] = all.map((r) => {
     const date = r.release_date || r.first_air_date || ''
