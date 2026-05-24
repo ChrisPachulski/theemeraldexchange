@@ -12,12 +12,15 @@ function appUnderTest() {
   return app
 }
 
-async function userCookie(opts: { withPlexToken?: boolean } = {}): Promise<string> {
+async function userCookie(
+  opts: { withPlexToken?: boolean; sub?: string; plexAuthToken?: string } = {},
+): Promise<string> {
   const t = await createSession({
-    sub: '1',
+    sub: opts.sub ?? '1',
     username: 'guest',
     role: 'user',
-    plexAuthToken: opts.withPlexToken === false ? undefined : 'plex-test-token',
+    plexAuthToken:
+      opts.withPlexToken === false ? undefined : (opts.plexAuthToken ?? 'plex-test-token'),
   })
   return `eex.session=${t}`
 }
@@ -255,6 +258,88 @@ describe('plex-links — resolver', () => {
       return s.endsWith('/library/sections')
     })
     expect(sectionsCalls.length).toBe(1)
+  })
+
+  it('scopes the cache per session.sub so two users do not share each other\'s map', async () => {
+    // Plex Home profiles, managed users, and parental controls can
+    // give household members DIFFERENT library visibility. A global
+    // cache returned whoever-built-it's map to every other caller for
+    // up to PLEX_LINKS_TTL_MS. Per-sub scoping prevents the leak.
+    const seenTokens: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown, init?: RequestInit) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        const headers = (init?.headers ?? {}) as Record<string, string>
+        const token = headers['X-Plex-Token']
+        if (url.endsWith('/library/sections')) {
+          if (token) seenTokens.push(token)
+          // Two different views: user A's library has section 1
+          // (movies), user B's view has section 2 (TV only). The
+          // metadata response differs so we can prove the two callers
+          // got their own map, not a shared one.
+          if (token === 'token-A') {
+            return new Response(
+              JSON.stringify({
+                MediaContainer: { Directory: [{ key: '1', type: 'movie' }] },
+              }),
+              { status: 200 },
+            )
+          }
+          return new Response(
+            JSON.stringify({
+              MediaContainer: { Directory: [{ key: '2', type: 'show' }] },
+            }),
+            { status: 200 },
+          )
+        }
+        if (url.includes('/library/sections/1/')) {
+          return new Response(
+            JSON.stringify({
+              MediaContainer: {
+                Metadata: [{ ratingKey: '101', Guid: [{ id: 'tmdb://27205' }] }],
+              },
+            }),
+            { status: 200 },
+          )
+        }
+        if (url.includes('/library/sections/2/')) {
+          return new Response(
+            JSON.stringify({
+              MediaContainer: {
+                Metadata: [{ ratingKey: '201', Guid: [{ id: 'tmdb://95396' }] }],
+              },
+            }),
+            { status: 200 },
+          )
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const cookieA = await userCookie({ sub: 'A', plexAuthToken: 'token-A' })
+    const cookieB = await userCookie({ sub: 'B', plexAuthToken: 'token-B' })
+
+    // A builds the cache first.
+    const rA = await appUnderTest().request('/library-links', { headers: { Cookie: cookieA } })
+    const bodyA = (await rA.json()) as Body
+    expect(bodyA.movie.byTmdb['27205']).toBe('101')
+    expect(bodyA.tv.byTmdb).toEqual({})
+
+    // B's request MUST trigger a fresh upstream build using B's token,
+    // not return A's cached map.
+    const rB = await appUnderTest().request('/library-links', { headers: { Cookie: cookieB } })
+    const bodyB = (await rB.json()) as Body
+    expect(bodyB.tv.byTmdb['95396']).toBe('201')
+    expect(bodyB.movie.byTmdb).toEqual({})
+
+    // Both tokens reached the upstream — proves no cross-sub leakage.
+    expect(seenTokens).toContain('token-A')
+    expect(seenTokens).toContain('token-B')
   })
 
   it('clears inFlight when the PMS fetch fails so the next request retries', async () => {
