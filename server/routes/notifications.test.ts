@@ -318,6 +318,46 @@ describe('notifications POST /discord — create flow', () => {
     expect(seen).toContain('POST radarr')
   })
 
+  it('delete of existing webhook fails → 502 abort, NO new connector POSTed (avoids duplicate ping)', async () => {
+    // Pre-fix behavior ignored the DELETE's res.ok and unconditionally
+    // POSTed the new connector. On a transient Sonarr 5xx the OLD
+    // webhook stayed live AND a NEW one was added, so every grab
+    // pinged Discord twice until an operator pruned upstream by hand.
+    // Now: abort with 502 and don't issue any POST so the SPA can
+    // retry safely.
+    let createPosted = false
+    handlers.push({
+      match: (u, m) => m === 'GET' && u.endsWith('/api/v3/notification'),
+      handler: (u) =>
+        jsonResponse([
+          { id: u.includes(sonarrHost()) ? 100 : 200, name: EMERALD, implementation: 'Discord' },
+        ]),
+    })
+    handlers.push({
+      match: (u, m) => m === 'DELETE' && u.includes(sonarrHost()) && u.includes('/api/v3/notification/'),
+      handler: () => new Response('sonarr-down', { status: 500 }),
+    })
+    handlers.push({
+      match: (_u, m) => m === 'POST',
+      handler: () => {
+        createPosted = true
+        return jsonResponse({ id: 999 }, 201)
+      },
+    })
+    const r = await appUnderTest().request('/discord', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ webhookUrl: GOOD_WEBHOOK }),
+    })
+    expect(r.status).toBe(502)
+    const body = (await r.json()) as { error: string; status: number }
+    expect(body.error).toBe('sonarr_delete_failed')
+    expect(body.status).toBe(500)
+    // The most important assertion: no replacement POST was issued,
+    // so the household isn't going to get double-pings.
+    expect(createPosted).toBe(false)
+  })
+
   it('sonarr create returns 500 → 502 sonarr_create_failed with status', async () => {
     handlers.push({
       match: (u, m) => m === 'GET' && u.endsWith('/api/v3/notification'),
