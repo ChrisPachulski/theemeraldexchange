@@ -48,13 +48,25 @@ const PLEX_LINKS_TTL_MS = 5 * 60_000
 // the fetch.
 const PLEX_LINKS_FETCH_TIMEOUT_MS = 10_000
 
+// Cache and in-flight coalescer are keyed by session.sub instead of
+// being process-wide. Plex Home profiles, managed users, and parental
+// controls can give two members of the same household DIFFERENT
+// library visibility (e.g. a kid profile can't see the unrated cut
+// of a movie that the owner has). A single global cache was returning
+// whoever-built-it's map for up to PLEX_LINKS_TTL_MS to every other
+// caller — leaking item presence one direction or another depending
+// on whose request won the race.
+//
+// Per-sub scoping keeps multi-tab/multi-device coalescing (the common
+// case) cheap while preventing the cross-user leakage. Memory cost is
+// O(household members), bounded by the share count.
 type CacheEntry = { value: LinkMap; expiresAt: number }
-let cache: CacheEntry | null = null
-let inFlight: Promise<LinkMap> | null = null
+const cacheBySub = new Map<string, CacheEntry>()
+const inFlightBySub = new Map<string, Promise<LinkMap>>()
 
 export function _resetPlexLinksCacheForTests(): void {
-  cache = null
-  inFlight = null
+  cacheBySub.clear()
+  inFlightBySub.clear()
 }
 
 type PlexSection = {
@@ -170,19 +182,24 @@ async function buildMap(token: string): Promise<LinkMap> {
   return map
 }
 
-async function getMap(token: string): Promise<LinkMap> {
+async function getMap(sub: string, token: string): Promise<LinkMap> {
   const now = Date.now()
-  if (cache && cache.expiresAt > now) return cache.value
-  if (inFlight) return inFlight
-  inFlight = buildMap(token)
+  const cached = cacheBySub.get(sub)
+  if (cached && cached.expiresAt > now) return cached.value
+  const existing = inFlightBySub.get(sub)
+  if (existing) return existing
+  const fresh = buildMap(token)
     .then((value) => {
-      cache = { value, expiresAt: Date.now() + PLEX_LINKS_TTL_MS }
+      cacheBySub.set(sub, { value, expiresAt: Date.now() + PLEX_LINKS_TTL_MS })
       return value
     })
     .finally(() => {
-      inFlight = null
+      // Only clear if our entry is still the active one — a parallel
+      // call could have already replaced it after a transient failure.
+      if (inFlightBySub.get(sub) === fresh) inFlightBySub.delete(sub)
     })
-  return inFlight
+  inFlightBySub.set(sub, fresh)
+  return fresh
 }
 
 plexLinks.get('/library-links', async (c) => {
@@ -191,7 +208,7 @@ plexLinks.get('/library-links', async (c) => {
     return c.json({ error: 'no_plex_token' }, 409)
   }
   try {
-    const map = await getMap(session.plexAuthToken)
+    const map = await getMap(session.sub, session.plexAuthToken)
     return c.json(map)
   } catch (e) {
     console.error('[plex-links] resolver failed:', e instanceof Error ? e.message : String(e))
