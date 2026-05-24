@@ -224,15 +224,98 @@ async function grabTvUnderCap(
 // Add a series — both roles, but gated by free disk space on the
 // chosen rootFolderPath. Search-on-add is forced off so our cap filter
 // is the only path that starts a download.
+// Identifying-metadata allowlist for non-admin add requests. Anything
+// outside this list (qualityProfileId, rootFolderPath, monitored,
+// seasonFolder, languageProfileId, seriesType, seasons[].monitored,
+// tags, addOptions.*) is discarded and the server fills in policy
+// fields from upstream defaults — see materializeNonAdminSeriesBody.
+const NON_ADMIN_SONARR_ALLOW: ReadonlyArray<string> = [
+  'title',
+  'year',
+  'tvdbId',
+  'imdbId',
+  'tmdbId',
+  'images',
+  'titleSlug',
+  'overview',
+  'genres',
+  'runtime',
+  'status',
+  'originalLanguage',
+]
+
+type SonarrAddBody = {
+  rootFolderPath?: string
+  qualityProfileId?: number
+  monitored?: boolean
+  seasonFolder?: boolean
+  seriesType?: string
+  languageProfileId?: number
+  tags?: number[]
+  addOptions?: {
+    searchForMissingEpisodes?: boolean
+    searchForCutoffUnmetEpisodes?: boolean
+    monitor?: string
+    ignoreEpisodesWithFiles?: boolean
+    ignoreEpisodesWithoutFiles?: boolean
+  }
+  seasons?: Array<{ seasonNumber: number; monitored: boolean }>
+  [key: string]: unknown
+}
+
+async function materializeNonAdminSeriesBody(raw: SonarrAddBody): Promise<
+  { ok: true; body: SonarrAddBody } | { ok: false; reason: string }
+> {
+  const [folders, profileRes] = await Promise.all([
+    sonarrRootFolders(),
+    sonarrFetch('/api/v3/qualityprofile', { method: 'GET' }),
+  ])
+  if (!profileRes.ok) {
+    return { ok: false, reason: 'qualityprofile_unreachable' }
+  }
+  const profiles = (await profileRes.json()) as Array<{ id: number }>
+  const folder = folders[0]
+  const profile = profiles[0]
+  if (!folder || !profile) {
+    return { ok: false, reason: 'admin_must_configure_upstream' }
+  }
+  const safe: SonarrAddBody = {}
+  for (const key of NON_ADMIN_SONARR_ALLOW) {
+    if (raw[key] !== undefined) safe[key] = raw[key]
+  }
+  safe.rootFolderPath = folder.path
+  safe.qualityProfileId = profile.id
+  safe.monitored = true
+  safe.seasonFolder = true
+  // monitor: 'future' = only new episodes get auto-grabbed by Sonarr's
+  // RSS sweep. The non-admin flow doesn't expose the season picker, so
+  // we explicitly opt OUT of marking historical seasons monitored at
+  // add-time. The cap-aware grab below still runs against whatever
+  // Sonarr returns as monitored after the add.
+  safe.addOptions = {
+    searchForMissingEpisodes: true,
+    searchForCutoffUnmetEpisodes: false,
+    monitor: 'future',
+  }
+  safe.tags = []
+  return { ok: true, body: safe }
+}
+
 sonarr.post('/api/v3/series', async (c) => {
-  const body = (await c.req.json()) as {
-    rootFolderPath?: string
-    addOptions?: {
-      searchForMissingEpisodes?: boolean
-      searchForCutoffUnmetEpisodes?: boolean
-      monitor?: string
+  const session = c.get('session')
+  const rawBody = (await c.req.json()) as SonarrAddBody
+  let body: SonarrAddBody
+  if (session.role === 'admin') {
+    body = rawBody
+  } else {
+    // Non-admins can't dictate policy. Replace policy fields with
+    // server-derived defaults so a direct-POST can't bypass the
+    // curated quality profile, root folder, or monitor mode.
+    const materialized = await materializeNonAdminSeriesBody(rawBody)
+    if (!materialized.ok) {
+      return c.json({ error: materialized.reason }, 503)
     }
-    seasons?: Array<{ seasonNumber: number; monitored: boolean }>
+    body = materialized.body
   }
   // Hard disk-space gate. Fail closed on every "we couldn't actually
   // measure free space" case — the prior implementation only blocked

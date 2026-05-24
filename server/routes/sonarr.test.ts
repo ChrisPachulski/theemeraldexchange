@@ -176,6 +176,10 @@ describe('sonarr DELETE /api/v3/series/:id (admin only)', () => {
 })
 
 describe('sonarr POST /api/v3/series disk-space gate', () => {
+  // These tests exercise the admin pass-through body path. Non-admin
+  // bodies now go through materializeNonAdminSeriesBody which forces
+  // server-derived rootFolderPath / qualityProfileId — covered in the
+  // dedicated "non-admin add policy" describe below.
   it('blocks add with 507 when freeSpace < threshold', async () => {
     // 50 GB free, threshold is 100 GB
     stub('/api/v3/rootfolder', [
@@ -185,7 +189,7 @@ describe('sonarr POST /api/v3/series disk-space gate', () => {
     const r = await app.request('/api/v3/series', {
       method: 'POST',
       headers: {
-        Cookie: await userCookie(),
+        Cookie: await adminCookie(),
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ rootFolderPath: '/data/tv', title: 'Foo' }),
@@ -228,7 +232,7 @@ describe('sonarr POST /api/v3/series disk-space gate', () => {
     const r = await app.request('/api/v3/series', {
       method: 'POST',
       headers: {
-        Cookie: await userCookie(),
+        Cookie: await adminCookie(),
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ rootFolderPath: '/data/tv', title: 'Foo' }),
@@ -239,14 +243,13 @@ describe('sonarr POST /api/v3/series disk-space gate', () => {
   it('400 rootFolderPath_required when the body omits rootFolderPath (fail closed)', async () => {
     // Without a root folder path we can't measure free space, and the
     // previous "forward and let Sonarr decide" path bypassed the disk
-    // gate entirely — an attacker who direct-POSTed without
-    // rootFolderPath could add when the host was below threshold. The
-    // gate now rejects at the route boundary BEFORE any upstream call.
+    // gate entirely. The gate now rejects at the route boundary BEFORE
+    // any upstream call.
     const app = appUnderTest()
     const r = await app.request('/api/v3/series', {
       method: 'POST',
       headers: {
-        Cookie: await userCookie(),
+        Cookie: await adminCookie(),
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ title: 'No root folder' }),
@@ -265,7 +268,7 @@ describe('sonarr POST /api/v3/series disk-space gate', () => {
     const r = await app.request('/api/v3/series', {
       method: 'POST',
       headers: {
-        Cookie: await userCookie(),
+        Cookie: await adminCookie(),
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ title: 'X', rootFolderPath: '/data/different' }),
@@ -287,7 +290,7 @@ describe('sonarr POST /api/v3/series disk-space gate', () => {
     const r = await app.request('/api/v3/series', {
       method: 'POST',
       headers: {
-        Cookie: await userCookie(),
+        Cookie: await adminCookie(),
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ title: 'X', rootFolderPath: '/data/tv' }),
@@ -295,6 +298,95 @@ describe('sonarr POST /api/v3/series disk-space gate', () => {
     expect(r.status).toBe(507)
     const body = (await r.json()) as { error: string }
     expect(body.error).toBe('free_space_unknown')
+  })
+})
+
+describe('sonarr POST /api/v3/series — non-admin add policy', () => {
+  // Non-admin add requests can't dictate qualityProfileId, rootFolderPath,
+  // monitored, tags, seasons[].monitored, seasonFolder, monitor mode, etc.
+  // The server materializes those from upstream defaults so a direct-POST
+  // can't bypass the admin's curated profile or pin a different folder.
+  it('replaces a malicious rootFolderPath / qualityProfileId with server defaults', async () => {
+    stub('/api/v3/rootfolder', [
+      { id: 1, path: '/data/tv', freeSpace: 500 * 1024 ** 3 },
+      { id: 2, path: '/data/tv-mirror', freeSpace: 500 * 1024 ** 3 },
+    ])
+    stub('/api/v3/qualityprofile', [{ id: 11 }, { id: 22 }])
+    let capturedAddBody: Record<string, unknown> | null = null
+    const fetchSpy = globalThis.fetch as ReturnType<typeof vi.fn>
+    fetchSpy.mockImplementation(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (url.includes('/api/v3/rootfolder')) {
+        return new Response(JSON.stringify([
+          { id: 1, path: '/data/tv', freeSpace: 500 * 1024 ** 3 },
+          { id: 2, path: '/data/tv-mirror', freeSpace: 500 * 1024 ** 3 },
+        ]), { status: 200 })
+      }
+      if (url.includes('/api/v3/qualityprofile')) {
+        return new Response(JSON.stringify([{ id: 11 }, { id: 22 }]), { status: 200 })
+      }
+      if (url.endsWith('/api/v3/series') && init?.method === 'POST') {
+        capturedAddBody = JSON.parse(init.body as string)
+        return new Response(JSON.stringify({ id: 999, title: 'Hostile', seasons: [] }), { status: 201 })
+      }
+      return new Response('[]', { status: 200 })
+    })
+    const app = appUnderTest()
+    const r = await app.request('/api/v3/series', {
+      method: 'POST',
+      headers: {
+        Cookie: await userCookie(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        title: 'Hostile',
+        tvdbId: 42,
+        // Caller tries to pin admin-policy fields — all must be ignored.
+        rootFolderPath: '/data/tv-mirror',
+        qualityProfileId: 22,
+        monitored: false,
+        seasonFolder: false,
+        languageProfileId: 9,
+        tags: [99],
+        addOptions: {
+          monitor: 'all',
+          searchForCutoffUnmetEpisodes: true,
+        },
+        seasons: [{ seasonNumber: 1, monitored: true }],
+      }),
+    })
+    expect(r.status).toBe(201)
+    expect(capturedAddBody).not.toBeNull()
+    const fwd = capturedAddBody as unknown as Record<string, unknown>
+    // Server-derived from FIRST upstream entries, not caller-supplied.
+    expect(fwd.rootFolderPath).toBe('/data/tv')
+    expect(fwd.qualityProfileId).toBe(11)
+    expect(fwd.tags).toEqual([])
+    expect(fwd.monitored).toBe(true)
+    expect(fwd.seasonFolder).toBe(true)
+    // Caller-supplied admin fields scrubbed entirely (not just overridden).
+    expect(fwd.languageProfileId).toBeUndefined()
+    expect(fwd.seasons).toBeUndefined()
+    // Identifying metadata preserved.
+    expect(fwd.title).toBe('Hostile')
+    expect(fwd.tvdbId).toBe(42)
+  })
+
+  it('503 when upstream qualityprofile / rootfolder are not configured', async () => {
+    stub('/api/v3/rootfolder', [])
+    stub('/api/v3/qualityprofile', [])
+    const app = appUnderTest()
+    const r = await app.request('/api/v3/series', {
+      method: 'POST',
+      headers: {
+        Cookie: await userCookie(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ title: 'X', tvdbId: 1 }),
+    })
+    expect(r.status).toBe(503)
+    const body = (await r.json()) as { error: string }
+    expect(body.error).toBe('admin_must_configure_upstream')
   })
 })
 
@@ -314,7 +406,7 @@ describe('sonarr POST /api/v3/series — wantedSearch flag', () => {
     stub('/api/v3/series', { id: 99, title: 'Foo', monitored: true, seasons: [] }, 201)
     const r = await appUnderTest().request('/api/v3/series', {
       method: 'POST',
-      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
       body: JSON.stringify({
         rootFolderPath: '/data/tv',
         title: 'Foo',
@@ -343,7 +435,7 @@ describe('sonarr POST /api/v3/series — wantedSearch flag', () => {
     stub('/api/v3/series', { error: 'sonarr says no' }, 400)
     const r = await appUnderTest().request('/api/v3/series', {
       method: 'POST',
-      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
       body: JSON.stringify({
         rootFolderPath: '/data/tv',
         title: 'Foo',
@@ -373,7 +465,7 @@ describe('sonarr POST /api/v3/series — wantedSearch flag', () => {
     }, 201)
     const r = await appUnderTest().request('/api/v3/series', {
       method: 'POST',
-      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
       body: JSON.stringify({
         rootFolderPath: '/data/tv',
         title: 'Foo',
@@ -395,7 +487,7 @@ describe('sonarr POST /api/v3/series — wantedSearch flag', () => {
     stub('/api/v3/series', { id: 99, title: 'Foo', monitored: true, seasons: [] }, 201)
     await appUnderTest().request('/api/v3/series', {
       method: 'POST',
-      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
       body: JSON.stringify({
         rootFolderPath: '/data/tv',
         title: 'Foo',

@@ -106,10 +106,90 @@ async function grabBestUnderCap(movieId: number, title?: string): Promise<void> 
   })
 }
 
+// Identifying fields a non-admin add request may carry over to
+// upstream. Anything outside this allowlist gets discarded and the
+// server fills in policy fields from upstream defaults — see
+// materializeNonAdminMovieBody. The list is descriptive metadata only
+// (no qualityProfileId, no rootFolderPath, no monitored flag), so a
+// direct-POST can't pin the household to a more permissive policy.
+const NON_ADMIN_RADARR_ALLOW: ReadonlyArray<string> = [
+  'title',
+  'year',
+  'tmdbId',
+  'imdbId',
+  'images',
+  'titleSlug',
+  'overview',
+  'genres',
+  'runtime',
+  'status',
+  'originalTitle',
+  'originalLanguage',
+]
+
+type RadarrAddBody = {
+  rootFolderPath?: string
+  qualityProfileId?: number
+  monitored?: boolean
+  tags?: number[]
+  minimumAvailability?: string
+  addOptions?: { searchForMovie?: boolean; monitor?: string }
+  [key: string]: unknown
+}
+
+async function materializeNonAdminMovieBody(raw: RadarrAddBody): Promise<
+  { ok: true; body: RadarrAddBody } | { ok: false; reason: string }
+> {
+  // Pull the upstream's first qualityprofile + first rootfolder as the
+  // canonical "what the admin already curates" defaults. Sonarr/Radarr
+  // return them in stable id order; the admin can choose which is
+  // "first" by configuring the curated profile / preferred folder at
+  // id 1 upstream.
+  const [folders, profileRes] = await Promise.all([
+    radarrRootFolders(),
+    radarrFetch('/api/v3/qualityprofile', { method: 'GET' }),
+  ])
+  if (!profileRes.ok) {
+    return { ok: false, reason: 'qualityprofile_unreachable' }
+  }
+  const profiles = (await profileRes.json()) as Array<{ id: number }>
+  const folder = folders[0]
+  const profile = profiles[0]
+  if (!folder || !profile) {
+    return { ok: false, reason: 'admin_must_configure_upstream' }
+  }
+  const safe: RadarrAddBody = {}
+  for (const key of NON_ADMIN_RADARR_ALLOW) {
+    if (raw[key] !== undefined) safe[key] = raw[key]
+  }
+  safe.rootFolderPath = folder.path
+  safe.qualityProfileId = profile.id
+  safe.monitored = true
+  // searchForMovie:true gates the cap-aware grab below for non-admins
+  // who'd otherwise just want "add and start." The existing cap
+  // rewrite still forces searchForMovie:false on the actual upstream
+  // call so the grab path is the only download trigger.
+  safe.addOptions = { searchForMovie: true }
+  safe.tags = []
+  return { ok: true, body: safe }
+}
+
 radarr.post('/api/v3/movie', async (c) => {
-  const body = (await c.req.json()) as {
-    rootFolderPath?: string
-    addOptions?: { searchForMovie?: boolean }
+  const session = c.get('session')
+  const rawBody = (await c.req.json()) as RadarrAddBody
+  let body: RadarrAddBody
+  if (session.role === 'admin') {
+    body = rawBody
+  } else {
+    // Non-admins can't dictate quality / folder / monitor / tag /
+    // searchForMovie policy — those are admin-curated. Replace the
+    // policy fields with server-derived defaults so a direct-POST
+    // can't bypass the curated profile or pin a different root folder.
+    const materialized = await materializeNonAdminMovieBody(rawBody)
+    if (!materialized.ok) {
+      return c.json({ error: materialized.reason }, 503)
+    }
+    body = materialized.body
   }
   // Hard disk-space gate. Fail closed on every "we couldn't actually
   // measure free space" case — the prior implementation only blocked
