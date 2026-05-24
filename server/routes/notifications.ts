@@ -68,11 +68,24 @@ function discordNotificationBody(webhookUrl: string, app: 'sonarr' | 'radarr') {
   }
 }
 
+// Thrown by listNotifications when the upstream returned non-ok. The
+// caller MUST surface this as a hard failure rather than coalescing
+// it with the "no existing connector" branch — otherwise a transient
+// Sonarr/Radarr error during the POST handler causes the existing
+// Emerald-created webhook to look absent, and we'd POST a duplicate
+// every retry.
+class NotificationListError extends Error {
+  constructor(public app: 'sonarr' | 'radarr', public status: number) {
+    super(`${app} /api/v3/notification list returned ${status}`)
+    this.name = 'NotificationListError'
+  }
+}
+
 async function listNotifications(app: 'sonarr' | 'radarr'): Promise<Array<{ id: number; name: string; implementation: string }>> {
   const path = app === 'sonarr' ? '/api/v3/notification' : '/api/v3/notification'
   const fetcher = app === 'sonarr' ? sonarrFetch : radarrFetch
   const r = await fetcher(path, { method: 'GET' })
-  if (!r.ok) return []
+  if (!r.ok) throw new NotificationListError(app, r.status)
   return (await r.json()) as Array<{ id: number; name: string; implementation: string }>
 }
 
@@ -85,12 +98,19 @@ async function findEmerald(app: 'sonarr' | 'radarr'): Promise<number | null> {
 }
 
 notifications.get('/discord', async (c) => {
-  const [sonarr, radarr] = await Promise.all([findEmerald('sonarr'), findEmerald('radarr')])
-  return c.json({
-    sonarr: sonarr !== null,
-    radarr: radarr !== null,
-    configured: sonarr !== null && radarr !== null,
-  })
+  try {
+    const [sonarr, radarr] = await Promise.all([findEmerald('sonarr'), findEmerald('radarr')])
+    return c.json({
+      sonarr: sonarr !== null,
+      radarr: radarr !== null,
+      configured: sonarr !== null && radarr !== null,
+    })
+  } catch (err) {
+    if (err instanceof NotificationListError) {
+      return c.json({ error: `${err.app}_list_failed`, status: err.status }, 502)
+    }
+    throw err
+  }
 })
 
 notifications.post('/discord', async (c) => {
@@ -102,9 +122,24 @@ notifications.post('/discord', async (c) => {
   }
 
   // Replace any prior Emerald-created notification so a re-paste of a
-  // new URL takes effect instead of stacking duplicates.
+  // new URL takes effect instead of stacking duplicates. We MUST
+  // resolve existing-or-not from a successful list before issuing any
+  // mutation — if listNotifications throws, treating that as "none
+  // exists" and creating a new one would stack a duplicate on every
+  // retry until Sonarr/Radarr came back. Fail closed on list error.
   for (const app of ['sonarr', 'radarr'] as const) {
-    const existing = await findEmerald(app)
+    let existing: number | null
+    try {
+      existing = await findEmerald(app)
+    } catch (err) {
+      if (err instanceof NotificationListError) {
+        return c.json(
+          { error: `${err.app}_list_failed`, status: err.status, message: 'refusing to mutate notifications without a fresh list' },
+          502,
+        )
+      }
+      throw err
+    }
     const fetcher = app === 'sonarr' ? sonarrFetch : radarrFetch
     if (existing !== null) {
       await fetcher(`/api/v3/notification/${existing}`, { method: 'DELETE' })
@@ -128,7 +163,15 @@ notifications.post('/discord', async (c) => {
 notifications.delete('/discord', async (c) => {
   let removed = 0
   for (const app of ['sonarr', 'radarr'] as const) {
-    const id = await findEmerald(app)
+    let id: number | null
+    try {
+      id = await findEmerald(app)
+    } catch (err) {
+      if (err instanceof NotificationListError) {
+        return c.json({ error: `${err.app}_list_failed`, status: err.status }, 502)
+      }
+      throw err
+    }
     if (id === null) continue
     const fetcher = app === 'sonarr' ? sonarrFetch : radarrFetch
     const res = await fetcher(`/api/v3/notification/${id}`, { method: 'DELETE' })
@@ -142,7 +185,15 @@ notifications.delete('/discord', async (c) => {
 // will produce). Lets the household verify the channel is reachable
 // without waiting for a real download to complete.
 notifications.post('/discord/test', async (c) => {
-  const id = await findEmerald('sonarr')
+  let id: number | null
+  try {
+    id = await findEmerald('sonarr')
+  } catch (err) {
+    if (err instanceof NotificationListError) {
+      return c.json({ error: `${err.app}_list_failed`, status: err.status }, 502)
+    }
+    throw err
+  }
   if (id === null) return c.json({ error: 'not_configured' }, 409)
   const res = await sonarrFetch(`/api/v3/notification/${id}/test`, {
     method: 'POST',
