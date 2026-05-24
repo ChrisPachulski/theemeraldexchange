@@ -33,6 +33,12 @@ services:
       SESSION_SECRET: "${SESSION_SECRET}"
       ADMINS: "${ADMINS:-}"
       PLEX_SERVER_ID: "${PLEX_SERVER_ID:-}"
+      # Bootstrap escape hatch for the brief first-deploy window before
+      # PLEX_SERVER_ID is known. Without this passthrough, env.ts's
+      # production gate sees an unset value inside the container and
+      # crashes the boot — even when the host-side deploy script
+      # accepted the same opt-in. Default 0 keeps the gate locked.
+      ALLOW_UNSCOPED_PLEX_LOGIN: "${ALLOW_UNSCOPED_PLEX_LOGIN:-0}"
       PLEX_SERVER_URL: "${PLEX_SERVER_URL:-}"
       ALLOWED_ORIGINS: "${ALLOWED_ORIGINS}"
       SONARR_URL: "${SONARR_URL:-}"
