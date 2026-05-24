@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 
 def connect(*, db_path: Path | None = None, readonly: bool = False) -> sqlite3.Connection:
     target = db_path or CONFIG.db_path
-    target.parent.mkdir(parents=True, exist_ok=True)
+    if not readonly:
+        target.parent.mkdir(parents=True, exist_ok=True)
     uri = f"file:{target}?mode={'ro' if readonly else 'rwc'}"
     conn = sqlite3.connect(uri, uri=True, check_same_thread=False, isolation_level=None)
     conn.row_factory = sqlite3.Row
@@ -55,6 +56,7 @@ def connect(*, db_path: Path | None = None, readonly: bool = False) -> sqlite3.C
     sqlite_vec.load(conn)
     conn.enable_load_extension(False)
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA mmap_size=268435456")  # 256 MiB
@@ -98,8 +100,12 @@ _KIND_BIT = 1 << 32
 
 def encode_vec_rowid(kind: str, tmdb_id: int) -> int:
     if kind == "movie":
+        if tmdb_id >= _KIND_BIT:
+            raise ValueError(f"tmdb_id too large for vec rowid encoding: {tmdb_id}")
         return tmdb_id
     if kind == "tv":
+        if tmdb_id >= _KIND_BIT:
+            raise ValueError(f"tmdb_id too large for vec rowid encoding: {tmdb_id}")
         return tmdb_id | _KIND_BIT
     raise ValueError(f"unknown kind: {kind!r}")
 
@@ -135,6 +141,22 @@ def migrate(*, db_path: Path | None = None) -> list[str]:
         conn.close()
 
 
+def _migration_statements(sql: str) -> list[str]:
+    statements: list[str] = []
+    pending: list[str] = []
+    for line in sql.splitlines():
+        pending.append(line)
+        candidate = "\n".join(pending).strip()
+        if candidate and sqlite3.complete_statement(candidate):
+            statements.append(candidate)
+            pending = []
+
+    trailing = "\n".join(pending).strip()
+    if trailing:
+        raise sqlite3.OperationalError("incomplete SQL migration statement")
+    return statements
+
+
 def _migrate(conn: sqlite3.Connection) -> list[str]:
     applied: list[str] = []
     with cursor(conn) as cur:
@@ -147,19 +169,20 @@ def _migrate(conn: sqlite3.Connection) -> list[str]:
             if f.name in seen:
                 continue
             log.info("applying migration %s", f.name)
-            cur.executescript(f.read_text())
-            cur.execute(
-                "INSERT INTO schema_migrations(filename, applied_at) VALUES (?, datetime('now'))",
-                (f.name,),
-            )
+            with transaction(conn):
+                for statement in _migration_statements(f.read_text()):
+                    cur.execute(statement)
+                cur.execute(
+                    "INSERT INTO schema_migrations(filename, applied_at) VALUES (?, datetime('now'))",
+                    (f.name,),
+                )
             applied.append(f.name)
 
         # One-shot migration: the vec rowid scheme changed from "tmdb_id
         # alone" to "kind-encoded" (see encode_vec_rowid). Detect legacy
         # rows by looking for TV rows with a rowid below _KIND_BIT and,
-        # if any exist, wipe title_vec + title_features so the featurize
-        # worker rebuilds under the new scheme. Re-ingest is cheap on
-        # the typical NAS catalog (< 30 minutes).
+        # if any exist, rebuild title_vec from the preserved feature blobs
+        # under the new kind-encoded rowid scheme.
         try:
             legacy = cur.execute(
                 "SELECT 1 FROM title_vec WHERE kind = 'tv' AND rowid < ? LIMIT 1",
@@ -170,10 +193,23 @@ def _migrate(conn: sqlite3.Connection) -> list[str]:
             legacy = None
         if legacy is not None:
             log.warning(
-                "wiping title_vec/title_features to migrate to kind-encoded rowids",
+                "rebuilding title_vec to migrate to kind-encoded rowids",
             )
-            cur.execute("DROP TABLE title_vec")
-            cur.execute("DELETE FROM title_features")
+            with transaction(conn):
+                cur.execute("DROP TABLE title_vec")
+                cur.execute(VEC_TABLE_DDL.format(dim=CONFIG.embed_dim))
+                cur.execute(
+                    """INSERT INTO title_vec(rowid, kind, embedding)
+                       SELECT CASE kind
+                                WHEN 'tv' THEN (tmdb_id | ?)
+                                ELSE tmdb_id
+                              END,
+                              kind,
+                              embedding
+                       FROM title_features
+                       WHERE kind IN ('movie', 'tv') AND dim = ?""",
+                    (_KIND_BIT, CONFIG.embed_dim),
+                )
             applied.append("(internal) vec_rowid_migration")
 
         # vec0 virtual table; depends on the loaded extension.

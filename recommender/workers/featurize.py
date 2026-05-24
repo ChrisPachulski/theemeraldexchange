@@ -36,6 +36,7 @@ log = logging.getLogger("featurize")
 
 GENRE_WEIGHT = 0.30
 KEYWORD_WEIGHT = 0.15
+COMMIT_CHUNK_SIZE = 256
 
 
 def _normalize(v: np.ndarray) -> np.ndarray:
@@ -84,9 +85,9 @@ def _load_pending(conn: sqlite3.Connection, limit: int | None) -> list[sqlite3.R
     # implicit-OK: features are newer than the source row, so no rework.
     q = """
         SELECT t.tmdb_id, t.kind, t.title, t.overview,
-               (SELECT GROUP_CONCAT(g.genre_id) FROM title_genres g
+               (SELECT GROUP_CONCAT(g.genre_id ORDER BY g.genre_id) FROM title_genres g
                 WHERE g.kind = t.kind AND g.tmdb_id = t.tmdb_id) AS genres,
-               (SELECT GROUP_CONCAT(k.keyword_id) FROM title_keywords k
+               (SELECT GROUP_CONCAT(k.keyword_id ORDER BY k.keyword_id) FROM title_keywords k
                 WHERE k.kind = t.kind AND k.tmdb_id = t.tmdb_id) AS keywords
         FROM titles t
         LEFT JOIN title_features f ON f.kind = t.kind AND f.tmdb_id = t.tmdb_id
@@ -118,66 +119,70 @@ def run(*, limit: int | None = None) -> int:
         return 0
     log.info("featurizing %d titles with %s (dim=%d)", len(pending), CONFIG.embed_model, dim)
 
-    texts = [
-        " — ".join(
-            x for x in (r["title"], r["overview"] or "") if x
-        )
-        for r in pending
-    ]
-    text_embs = model.encode(
-        texts,
-        batch_size=64,
-        convert_to_numpy=True,
-        normalize_embeddings=True,
-        show_progress_bar=True,
-    ).astype(np.float32)
-
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    feature_rows: list[tuple] = []
-    vec_rows: list[tuple] = []
-    for row, txt_emb in zip(pending, text_embs, strict=True):
-        genre_ids = _ids_csv(row["genres"])
-        keyword_ids = _ids_csv(row["keywords"])
-        g_pert = GENRE_WEIGHT * _genre_perturbation(dim, genre_ids)
-        k_pert = KEYWORD_WEIGHT * _keyword_perturbation(dim, keyword_ids)
-        vec = _normalize(txt_emb + g_pert + k_pert)
-        feature_json = json.dumps({
-            "genres": genre_ids,
-            "keywords": keyword_ids,
-            "text_norm": float(np.linalg.norm(txt_emb)),
-        })
-        blob = serialize_f32(vec)
-        feature_rows.append((row["tmdb_id"], row["kind"], feature_json, blob, dim, now))
-        # vec0's rowid is globally unique despite the PARTITION KEY, so
-        # encode kind into the rowid to avoid movie/TV id collisions
-        # (TMDB ids are not unique across namespaces).
-        vec_rows.append((encode_vec_rowid(row["kind"], int(row["tmdb_id"])), row["kind"], blob))
+    total = 0
+    for offset in range(0, len(pending), COMMIT_CHUNK_SIZE):
+        chunk = pending[offset : offset + COMMIT_CHUNK_SIZE]
+        texts = [
+            " — ".join(
+                x for x in (r["title"], r["overview"] or "") if x
+            )
+            for r in chunk
+        ]
+        text_embs = model.encode(
+            texts,
+            batch_size=64,
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+            show_progress_bar=True,
+        ).astype(np.float32)
 
-    with transaction(conn):
-        conn.executemany(
-            """INSERT INTO title_features(tmdb_id, kind, feature_json, embedding, dim, computed_at)
-               VALUES (?, ?, ?, ?, ?, ?)
-               ON CONFLICT(tmdb_id, kind) DO UPDATE SET
-                 feature_json=excluded.feature_json,
-                 embedding=excluded.embedding,
-                 dim=excluded.dim,
-                 computed_at=excluded.computed_at""",
-            feature_rows,
-        )
-        # vec0 doesn't honor INSERT OR REPLACE cleanly with a partition key;
-        # do DELETE-then-INSERT in a single transaction instead. rowid is
-        # already kind-encoded so the DELETE matches at most one row.
-        conn.executemany(
-            "DELETE FROM title_vec WHERE rowid = ? AND kind = ?",
-            [(rowid, kind) for rowid, kind, _ in vec_rows],
-        )
-        conn.executemany(
-            "INSERT INTO title_vec(rowid, kind, embedding) VALUES (?, ?, ?)",
-            vec_rows,
-        )
+        feature_rows: list[tuple] = []
+        vec_rows: list[tuple] = []
+        for row, txt_emb in zip(chunk, text_embs, strict=True):
+            genre_ids = _ids_csv(row["genres"])
+            keyword_ids = _ids_csv(row["keywords"])
+            g_pert = GENRE_WEIGHT * _genre_perturbation(dim, genre_ids)
+            k_pert = KEYWORD_WEIGHT * _keyword_perturbation(dim, keyword_ids)
+            vec = _normalize(txt_emb + g_pert + k_pert)
+            feature_json = json.dumps({
+                "genres": genre_ids,
+                "keywords": keyword_ids,
+                "text_norm": float(np.linalg.norm(txt_emb)),
+            })
+            blob = serialize_f32(vec)
+            feature_rows.append((row["tmdb_id"], row["kind"], feature_json, blob, dim, now))
+            # vec0's rowid is globally unique despite the PARTITION KEY, so
+            # encode kind into the rowid to avoid movie/TV id collisions
+            # (TMDB ids are not unique across namespaces).
+            vec_rows.append((encode_vec_rowid(row["kind"], int(row["tmdb_id"])), row["kind"], blob))
 
-    log.info("featurized %d titles", len(feature_rows))
-    return len(feature_rows)
+        with transaction(conn):
+            conn.executemany(
+                """INSERT INTO title_features(tmdb_id, kind, feature_json, embedding, dim, computed_at)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(tmdb_id, kind) DO UPDATE SET
+                     feature_json=excluded.feature_json,
+                     embedding=excluded.embedding,
+                     dim=excluded.dim,
+                     computed_at=excluded.computed_at""",
+                feature_rows,
+            )
+            # vec0 doesn't honor INSERT OR REPLACE cleanly with a partition key;
+            # do DELETE-then-INSERT in a single transaction instead. rowid is
+            # already kind-encoded so the DELETE matches at most one row.
+            conn.executemany(
+                "DELETE FROM title_vec WHERE rowid = ? AND kind = ?",
+                [(rowid, kind) for rowid, kind, _ in vec_rows],
+            )
+            conn.executemany(
+                "INSERT INTO title_vec(rowid, kind, embedding) VALUES (?, ?, ?)",
+                vec_rows,
+            )
+        total += len(feature_rows)
+        log.info("featurized %d/%d titles", total, len(pending))
+
+    return total
 
 
 def _cli() -> None:

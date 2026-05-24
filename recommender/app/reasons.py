@@ -85,7 +85,7 @@ def neighbors_for(cand: Candidate, ctx: UserContext, k: int = 2) -> list[TitleRo
     out: list[TitleRow] = []
     for idx in top:
         tid = pool_ids[idx]
-        tr = ctx.library_titles.get(tid)
+        tr = ctx.library_titles.get(tid) or ctx.liked_titles.get(tid)
         if tr is not None:
             out.append(tr)
     return out

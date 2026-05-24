@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -21,6 +22,16 @@ from .schemas import Kind, ScoreRequest
 
 log = logging.getLogger(__name__)
 IN_BATCH_SIZE = 500
+POSITIVE_FEEDBACK_SIGNALS = {"like", "clicked", "added"}
+MODEL_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
+    "pool_size": (1, 5000),
+    "mmr_input_k": (1, 1000),
+    "min_vote_count": (0, 100000),
+    "negative_weight": (0.0, 5.0),
+    "popularity_weight": (0.0, 5.0),
+    "personalized_threshold": (-1.0, 1.0),
+    "mmr_lambda": (0.0, 1.0),
+}
 
 
 @dataclass
@@ -55,6 +66,7 @@ class UserContext:
     library_embedding_ids: list[int]
     library_titles: dict[int, TitleRow]
     liked_ids: set[int]
+    liked_titles: dict[int, TitleRow]
     liked_embeddings: np.ndarray | None
     liked_embedding_ids: list[int]
     disliked_ids: set[int]
@@ -234,7 +246,7 @@ def load_user_context(
         for fb in req.feedback:
             target = (
                 inline_likes
-                if fb.signal == "like"
+                if fb.signal in POSITIVE_FEEDBACK_SIGNALS
                 else inline_dislikes
                 if fb.signal == "dislike"
                 else inline_rejects
@@ -249,7 +261,11 @@ def load_user_context(
                WHERE sub = ? AND kind = ?""",
             (req.sub, kind),
         ).fetchall()
-        liked_ids = {r["tmdb_id"] for r in fb_rows if r["signal"] == "like"}
+        liked_ids = {
+            r["tmdb_id"]
+            for r in fb_rows
+            if r["signal"] in POSITIVE_FEEDBACK_SIGNALS
+        }
         disliked_ids = {r["tmdb_id"] for r in fb_rows if r["signal"] == "dislike"}
         reject_from_feedback = {r["tmdb_id"] for r in fb_rows if r["signal"] == "reject"}
 
@@ -273,6 +289,7 @@ def load_user_context(
     liked_embeddings, liked_embedding_ids = (
         (liked_pair[0], liked_pair[1]) if liked_pair is not None else (None, [])
     )
+    liked_titles = _load_title_rows(conn, kind, list(liked_ids))
     disliked_pair = _stack_embeddings(conn, kind, disliked_ids)
     disliked_embeddings, disliked_embedding_ids = (
         (disliked_pair[0], disliked_pair[1]) if disliked_pair is not None else (None, [])
@@ -299,6 +316,7 @@ def load_user_context(
         library_embedding_ids=library_embedding_ids,
         library_titles=library_titles,
         liked_ids=liked_ids,
+        liked_titles=liked_titles,
         liked_embeddings=liked_embeddings,
         liked_embedding_ids=liked_embedding_ids,
         disliked_ids=disliked_ids,
@@ -326,4 +344,67 @@ def get_active_model_config(conn: sqlite3.Connection) -> tuple[str, str, dict]:
         from .config import CONFIG
 
         return ("v0", CONFIG.default_recipe, {})
-    return (row["version"], row["recipe"], json.loads(row["params_json"]))
+    from . import recipes
+    from .config import CONFIG
+
+    try:
+        recipe_mod = recipes.get(row["recipe"])
+    except KeyError:
+        log.error(
+            "active model_config %s has unknown recipe %r; using default recipe",
+            row["version"],
+            row["recipe"],
+        )
+        return ("v0", CONFIG.default_recipe, {})
+    try:
+        params = json.loads(row["params_json"])
+    except json.JSONDecodeError:
+        log.error(
+            "active model_config %s has invalid params_json; using default recipe",
+            row["version"],
+        )
+        return ("v0", CONFIG.default_recipe, {})
+    if not isinstance(params, dict):
+        log.error(
+            "active model_config %s params_json is %s; using default recipe",
+            row["version"],
+            type(params).__name__,
+        )
+        return ("v0", CONFIG.default_recipe, {})
+    defaults = recipe_mod.DEFAULTS
+    if not isinstance(defaults, dict):
+        log.error(
+            "active model_config %s recipe defaults are invalid; using default recipe",
+            row["version"],
+        )
+        return ("v0", CONFIG.default_recipe, {})
+    clean_params: dict[str, int | float | str] = {}
+    for key, default in defaults.items():
+        if key not in params:
+            continue
+        value = params[key]
+        if isinstance(default, bool) or isinstance(value, bool):
+            continue
+        if isinstance(default, int):
+            if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                log.error(
+                    "active model_config %s has invalid param %r; ignoring",
+                    row["version"],
+                    key,
+                )
+                continue
+            lo, hi = MODEL_PARAM_BOUNDS.get(key, (1, 100000))
+            clean_params[key] = int(max(lo, min(hi, round(float(value)))))
+        elif isinstance(default, float):
+            if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                log.error(
+                    "active model_config %s has invalid param %r; ignoring",
+                    row["version"],
+                    key,
+                )
+                continue
+            lo, hi = MODEL_PARAM_BOUNDS.get(key, (-1.0e6, 1.0e6))
+            clean_params[key] = max(lo, min(hi, float(value)))
+        elif isinstance(default, str) and isinstance(value, str):
+            clean_params[key] = value
+    return (row["version"], row["recipe"], clean_params)

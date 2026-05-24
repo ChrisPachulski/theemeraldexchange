@@ -132,7 +132,7 @@ describe('plex-admin /remote-access — happy path', () => {
     expect(body.interpretation.portMapping).toContain('32400')
   })
 
-  it('threads the session plex token into the URL', async () => {
+  it('threads the session plex token into the header', async () => {
     const spy = vi.fn(
       async () =>
         new Response(PREFS_XML_HAPPY, {
@@ -147,8 +147,10 @@ describe('plex-admin /remote-access — happy path', () => {
     expect(spy).toHaveBeenCalledOnce()
     const firstCall = (spy.mock.calls as unknown as unknown[][])[0] ?? []
     const calledUrl = String(firstCall[0])
+    const calledInit = firstCall[1] as { headers?: Record<string, string> } | undefined
     expect(calledUrl).toContain('/:/prefs')
-    expect(calledUrl).toContain('X-Plex-Token=plex-admin-token')
+    expect(calledUrl).not.toContain('X-Plex-Token')
+    expect(calledInit?.headers?.['X-Plex-Token']).toBe('plex-admin-token')
   })
 
   it('missing PublishServerOnPlexOnlineKey → remoteAccessEnabled=false and the off-message interpretation', async () => {

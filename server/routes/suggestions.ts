@@ -31,6 +31,7 @@ import { getRejections, updateRejectionTitleIfPresent } from '../services/reject
 import { getUserFeedback, updateLikedTitleIfPresent } from '../services/userFeedback.js'
 import { appendUsageEvent, computeCostCents } from '../services/usageLog.js'
 import { scoreOnce, postShown, type RecommenderScoredItem } from '../services/recommender.js'
+import { sanitizeTitle } from '../services/sanitize.js'
 import { env } from '../env.js'
 
 const MODEL = 'claude-haiku-4-5'
@@ -39,7 +40,7 @@ const MODEL = 'claude-haiku-4-5'
 // it without rebuilding the whole env. Production code reads through
 // this indirection so tmdbLookup/tmdbTrending/tmdbTitleById all
 // observe the same value.
-let _tmdbKey: string | null = env.tmdbApiKey
+let _tmdbKey: string | null = env.tmdbReadAccessToken ?? env.tmdbApiKey
 export function _setTmdbApiKeyForTests(k: string | null): void {
   _tmdbKey = k
   // Caches are module-scoped — without flushing them, a test that
@@ -251,8 +252,10 @@ async function fetchRadarrLibrary(): Promise<RadarrMovie[]> {
 // Claude enough signal to taste-match without ballooning tokens.
 function formatLibraryItem(it: { title: string; year?: number; genres?: string[] }): string {
   const yr = it.year ? ` (${it.year})` : ''
-  const g = it.genres && it.genres.length > 0 ? ` — ${it.genres.slice(0, 3).join(', ')}` : ''
-  return `${it.title}${yr}${g}`
+  const title = sanitizeTitle(it.title)
+  const genres = it.genres?.map((g) => sanitizeTitle(g)).filter(Boolean).slice(0, 3) ?? []
+  const g = genres.length > 0 ? ` — ${genres.join(', ')}` : ''
+  return `${title}${yr}${g}`
 }
 
 // Stable system prompt — never changes per request, ideal cache prefix.
@@ -631,9 +634,13 @@ async function tmdbFetchWithRetry(
   url: URL,
   signal: AbortSignal,
 ): Promise<Response | null> {
+  const headers = {
+    Accept: 'application/json',
+    ...(_tmdbKey ? { Authorization: `Bearer ${_tmdbKey}` } : {}),
+  }
   let r: Response
   try {
-    r = await fetch(url, { headers: { Accept: 'application/json' }, signal })
+    r = await fetch(url, { headers, signal })
   } catch {
     return null
   }
@@ -662,7 +669,7 @@ async function tmdbFetchWithRetry(
     })
     if (aborted) return r
     try {
-      r = await fetch(url, { headers: { Accept: 'application/json' }, signal })
+      r = await fetch(url, { headers, signal })
     } catch {
       return null
     }
@@ -696,7 +703,6 @@ async function tmdbTitleById(kind: 'movie' | 'tv', id: number): Promise<string |
   if (existing) return existing
   const promise = (async () => {
     const url = new URL(`${TMDB_BASE}/${kind}/${id}`)
-    url.searchParams.set('api_key', _tmdbKey!)
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), TMDB_TIMEOUT_MS)
     try {
@@ -805,7 +811,6 @@ async function tmdbLookup(
   const promise = (async (): Promise<SuggestionItem | null> => {
     const runSearch = async (withYear: boolean) => {
       const url = new URL(`${TMDB_BASE}/search/${kind}`)
-      url.searchParams.set('api_key', _tmdbKey!)
       url.searchParams.set('query', title)
       if (withYear && year) {
         url.searchParams.set(kind === 'movie' ? 'primary_release_year' : 'first_air_date_year', String(year))
@@ -1014,7 +1019,6 @@ async function fetchCandidatePool(
   const qualityPages = await Promise.all(
     Array.from({ length: CANDIDATE_POOL_PAGES }, async (_, i) => {
       const url = new URL(`${TMDB_BASE}/discover/${kind}`)
-      url.searchParams.set('api_key', _tmdbKey!)
       url.searchParams.set('page', String(i + 1))
       // Quality-sorted so the pool skews toward acclaimed niche titles
       // in the household's genres, not pure popularity blockbusters.
@@ -1053,7 +1057,6 @@ async function fetchCandidatePool(
   const noveltyPagesPromise = Promise.all(
     Array.from({ length: CANDIDATE_POOL_NOVELTY_PAGES }, async (_, i) => {
       const url = new URL(`${TMDB_BASE}/discover/${kind}`)
-      url.searchParams.set('api_key', _tmdbKey!)
       url.searchParams.set('page', String(i + 1))
       url.searchParams.set('sort_by', kind === 'movie' ? 'primary_release_date.desc' : 'first_air_date.desc')
       url.searchParams.set('vote_count.gte', '30')
@@ -1144,7 +1147,6 @@ async function tmdbTrending(kind: 'movie' | 'tv'): Promise<SuggestionItem[]> {
   const settled = await Promise.allSettled(
     Array.from({ length: TRENDING_MAX_PAGES }, async (_, i) => {
       const url = new URL(`${TMDB_BASE}/trending/${kind}/week`)
-      url.searchParams.set('api_key', _tmdbKey!)
       url.searchParams.set('page', String(i + 1))
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), TMDB_TIMEOUT_MS)

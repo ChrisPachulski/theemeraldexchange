@@ -128,6 +128,14 @@ if (isProd && !plexServerId && !allowUnscopedPlexLogin) {
   )
 }
 
+const useLocalRecommender = process.env.USE_LOCAL_RECOMMENDER === '1'
+const recommenderEventSecret = opt('RECOMMENDER_EVENT_SECRET') ?? null
+if (useLocalRecommender && !recommenderEventSecret) {
+  throw new Error(
+    'Missing required env var when USE_LOCAL_RECOMMENDER=1: RECOMMENDER_EVENT_SECRET',
+  )
+}
+
 // SESSION_SECRET is fed through SHA-256 to derive the A256GCM key that
 // encrypts session cookies, which carry the user's Plex auth token. A
 // short or guessable secret turns the cookie's confidentiality into a
@@ -269,13 +277,13 @@ export const env = {
   // (gitignored). The grabLog service auto-creates the parent directory.
   grabLogPath: process.env.GRAB_LOG_PATH ?? './data/grabs.jsonl',
 
-  // Optional TMDB v3 API key. When set, the detail modal fetches cast
+  // Optional TMDB read token. When set, the detail modal fetches cast
   // for TV shows (via TVDB→TMDB find) and movies. Without it, the cast
   // section is hidden and the modal still shows everything Sonarr/Radarr
-  // expose. Sign up at https://www.themoviedb.org/settings/api to get
-  // a free key, then add TMDB_API_KEY=... to .env.local (dev) or
-  // .env.production (prod) and redeploy.
-  tmdbApiKey: process.env.TMDB_API_KEY ?? null,
+  // expose. Prefer TMDB_READ_ACCESS_TOKEN so server-side calls can use
+  // the Authorization header instead of putting secrets in URLs.
+  tmdbReadAccessToken: opt('TMDB_READ_ACCESS_TOKEN') ?? null,
+  tmdbApiKey: opt('TMDB_API_KEY') ?? null,
 
   // Local recommender sidecar. When USE_LOCAL_RECOMMENDER=1, /api/suggestions
   // skips Claude entirely and asks the recommender service (Python +
@@ -291,10 +299,11 @@ export const env = {
   //     unconditional "http://recommender:8000" silently called an
   //     unresolvable Docker hostname unless the developer remembered
   //     to set RECOMMENDER_URL.
-  useLocalRecommender: process.env.USE_LOCAL_RECOMMENDER === '1',
+  useLocalRecommender,
   recommenderUrl:
     process.env.RECOMMENDER_URL ??
     (process.env.NODE_ENV === 'production'
       ? 'http://recommender:8000'
       : 'http://localhost:8000'),
+  recommenderEventSecret,
 } as const

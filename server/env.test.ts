@@ -32,6 +32,8 @@ const PRESERVED_KEYS = [
   'ALLOW_UNSCOPED_PLEX_LOGIN',
   'DEFAULT_PROFILE_NAME',
   'RECOMMENDER_URL',
+  'RECOMMENDER_EVENT_SECRET',
+  'USE_LOCAL_RECOMMENDER',
 ] as const
 
 let snapshot: Record<string, string | undefined> = {}
@@ -56,6 +58,8 @@ function setBaselineEnv() {
   process.env.SONARR_API_KEY = 'k'
   process.env.RADARR_API_KEY = 'k'
   process.env.SAB_API_KEY = 'k'
+  delete process.env.USE_LOCAL_RECOMMENDER
+  delete process.env.RECOMMENDER_EVENT_SECRET
 }
 
 async function loadEnv(): Promise<typeof import('./env.js')['env']> {
@@ -391,6 +395,31 @@ describe('env — RECOMMENDER_URL default per environment', () => {
     process.env.RECOMMENDER_URL = 'http://10.0.0.99:9100'
     const env = await loadEnv()
     expect(env.recommenderUrl).toBe('http://10.0.0.99:9100')
+  })
+})
+
+describe('env — local recommender secret gate', () => {
+  it('USE_LOCAL_RECOMMENDER=1 without RECOMMENDER_EVENT_SECRET throws at boot', async () => {
+    setBaselineEnv()
+    process.env.USE_LOCAL_RECOMMENDER = '1'
+    delete process.env.RECOMMENDER_EVENT_SECRET
+    await expect(loadEnv()).rejects.toThrow(/RECOMMENDER_EVENT_SECRET/)
+  })
+
+  it('USE_LOCAL_RECOMMENDER=1 with blank RECOMMENDER_EVENT_SECRET throws at boot', async () => {
+    setBaselineEnv()
+    process.env.USE_LOCAL_RECOMMENDER = '1'
+    process.env.RECOMMENDER_EVENT_SECRET = '   '
+    await expect(loadEnv()).rejects.toThrow(/RECOMMENDER_EVENT_SECRET/)
+  })
+
+  it('USE_LOCAL_RECOMMENDER=1 with RECOMMENDER_EVENT_SECRET boots', async () => {
+    setBaselineEnv()
+    process.env.USE_LOCAL_RECOMMENDER = '1'
+    process.env.RECOMMENDER_EVENT_SECRET = 'shared-secret'
+    const env = await loadEnv()
+    expect(env.useLocalRecommender).toBe(true)
+    expect(env.recommenderEventSecret).toBe('shared-secret')
   })
 })
 
