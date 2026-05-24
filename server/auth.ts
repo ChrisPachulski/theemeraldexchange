@@ -33,7 +33,11 @@ import {
   clearSessionCookie,
   readSession,
 } from './session.js'
-import { _primeSessionGateCache, roleFor } from './services/sessionGate.js'
+import {
+  _primeSessionGateCache,
+  reconcileSession,
+  roleFor,
+} from './services/sessionGate.js'
 
 export const auth = new Hono()
 
@@ -126,8 +130,20 @@ auth.post('/logout', async (c) => {
 export const me = new Hono()
 
 me.get('/', async (c) => {
-  const session = await readSession(c)
-  if (!session) return c.json({ error: 'unauthenticated' }, 401)
+  // /api/me drives the SPA's "am I signed in / am I admin?" view, so
+  // it MUST reflect the same reconciled state every protected route
+  // already enforces. Reading the raw cookie here would leave the SPA
+  // showing a revoked user as still signed in (and a demoted admin
+  // still wearing the admin chrome) until they tried a protected
+  // action and got 401'd. Run the same reconcile + cookie-clear
+  // pipeline as requireAuth.
+  const decoded = await readSession(c)
+  if (!decoded) return c.json({ error: 'unauthenticated' }, 401)
+  const session = await reconcileSession(decoded)
+  if (!session) {
+    clearSessionCookie(c)
+    return c.json({ error: 'unauthenticated', reason: 'access_revoked' }, 401)
+  }
   return c.json({
     // sub is the stable Plex user id — used by the SPA to scope
     // per-user localStorage (e.g. the BYO Anthropic API key) so a
