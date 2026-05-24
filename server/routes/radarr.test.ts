@@ -200,6 +200,89 @@ describe('radarr — allow-list and gates', () => {
   })
 })
 
+describe('radarr POST /api/v3/movie — non-admin add policy', () => {
+  // Non-admin add requests cannot dictate qualityProfileId,
+  // rootFolderPath, monitored, tags, addOptions, etc. The server
+  // materializes those from upstream defaults — a direct-POST can't
+  // bypass the admin's curated profile or pin a different folder.
+  it('replaces a malicious rootFolderPath / qualityProfileId with server defaults', async () => {
+    let capturedAddBody: Record<string, unknown> | null = null
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(JSON.stringify([
+            { id: 1, path: '/data/movies', freeSpace: 500 * 1024 ** 3 },
+            { id: 2, path: '/data/movies-mirror', freeSpace: 500 * 1024 ** 3 },
+          ]), { status: 200 })
+        }
+        if (url.includes('/api/v3/qualityprofile')) {
+          return new Response(JSON.stringify([{ id: 7 }, { id: 8 }]), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/movie') && init?.method === 'POST') {
+          capturedAddBody = JSON.parse(init.body as string)
+          return new Response(JSON.stringify({ id: 999, title: 'Hostile' }), { status: 201 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/movie', {
+      method: 'POST',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: 'Hostile',
+        tmdbId: 42,
+        // Caller-supplied admin-policy fields — must all be ignored.
+        rootFolderPath: '/data/movies-mirror',
+        qualityProfileId: 8,
+        monitored: false,
+        tags: [99],
+        minimumAvailability: 'tba',
+        addOptions: { searchForMovie: true, monitor: 'movieOnly' },
+      }),
+    })
+    expect(r.status).toBe(201)
+    expect(capturedAddBody).not.toBeNull()
+    const fwd = capturedAddBody as unknown as Record<string, unknown>
+    expect(fwd.rootFolderPath).toBe('/data/movies')
+    expect(fwd.qualityProfileId).toBe(7)
+    expect(fwd.tags).toEqual([])
+    // After the cap rewrite: monitored:false (searchForMovie:true was
+    // server-supplied, so the existing cap path unmonitors and runs
+    // the cap-aware grab as the only download trigger).
+    expect(fwd.monitored).toBe(false)
+    expect(fwd.minimumAvailability).toBeUndefined()
+    // Identifying metadata preserved.
+    expect(fwd.title).toBe('Hostile')
+    expect(fwd.tmdbId).toBe(42)
+  })
+
+  it('503 when upstream qualityprofile / rootfolder are not configured', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response('[]', { status: 200 })
+        }
+        if (url.includes('/api/v3/qualityprofile')) {
+          return new Response('[]', { status: 200 })
+        }
+        return new Response('not stubbed', { status: 599 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/movie', {
+      method: 'POST',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'X', tmdbId: 1 }),
+    })
+    expect(r.status).toBe(503)
+    const body = (await r.json()) as { error: string }
+    expect(body.error).toBe('admin_must_configure_upstream')
+  })
+})
+
 // Capture the body that the backend forwards to Radarr's POST
 // /api/v3/movie so we can assert the cap+monitor rewrite is applied
 // correctly per the user's "Search" choice.
