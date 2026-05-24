@@ -218,14 +218,42 @@ def load_holdout() -> list[dict]:
         return []
     out: list[dict] = []
     with p.open() as f:
-        for line in f:
+        for lineno, line in enumerate(f, 1):
             line = line.strip()
             if not line:
                 continue
             try:
-                out.append(json.loads(line))
-            except json.JSONDecodeError:
+                parsed = json.loads(line)
+            except json.JSONDecodeError as e:
+                log.warning("holdout %s:%d skipped (invalid JSON): %s", p, lineno, e)
                 continue
+            # evaluate() reaches into entry["sub"] / entry["kind"] and
+            # iterates entry.get("library"|"positives"|"negatives"). A
+            # syntactically valid JSON line that's an array, scalar, or
+            # dict missing the required keys would crash evaluate()
+            # mid-eval — losing every entry after the bad one and
+            # leaving the optimizer with a useless score. Validate
+            # here so a malformed line is contained to its own row.
+            if not isinstance(parsed, dict):
+                log.warning(
+                    "holdout %s:%d skipped (expected JSON object, got %s)",
+                    p,
+                    lineno,
+                    type(parsed).__name__,
+                )
+                continue
+            if not isinstance(parsed.get("sub"), str) or not parsed["sub"]:
+                log.warning("holdout %s:%d skipped (missing/empty sub)", p, lineno)
+                continue
+            if parsed.get("kind") not in ("movie", "tv"):
+                log.warning(
+                    "holdout %s:%d skipped (kind not in {movie,tv}: %r)",
+                    p,
+                    lineno,
+                    parsed.get("kind"),
+                )
+                continue
+            out.append(parsed)
     return out
 
 
