@@ -54,6 +54,30 @@ for key in "${required[@]}"; do
   fi
 done
 
+# SESSION_SECRET protects every user's encrypted Plex auth token. The
+# backend SHA-256s this value to derive the A256GCM key, so a short or
+# placeholder secret is equivalent to publishing the AES key. Mirror
+# env.ts's prod gate here so deploy fails fast with a clearer message
+# than a container crash loop.
+session_secret_line=$(grep -E "^SESSION_SECRET=" "$LOCAL_ENV" | head -n 1)
+session_secret_value="${session_secret_line#SESSION_SECRET=}"
+# Strip surrounding double quotes if the operator used the quoted form.
+session_secret_value="${session_secret_value%\"}"
+session_secret_value="${session_secret_value#\"}"
+if [ "${#session_secret_value}" -lt 32 ]; then
+  echo "ERROR: SESSION_SECRET in $LOCAL_ENV must be at least 32 bytes (${#session_secret_value} found)." >&2
+  echo "       Generate one with: openssl rand -base64 48" >&2
+  exit 1
+fi
+session_secret_lower=$(printf '%s' "$session_secret_value" | tr '[:upper:]' '[:lower:]')
+case "$session_secret_lower" in
+  changeme|change-me|change_me|placeholder|secret|password|test|test-secret|replaceme|replace-me|replace_me|your-secret-here|session-secret)
+    echo "ERROR: SESSION_SECRET in $LOCAL_ENV is a placeholder value." >&2
+    echo "       Generate a real secret with: openssl rand -base64 48" >&2
+    exit 1
+    ;;
+esac
+
 # PLEX_SERVER_ID gates sign-in to members of the household's Plex
 # server. A blank value turns the app into "any Plex user can sign
 # in," so the backend hard-fails at boot in prod unless the operator
