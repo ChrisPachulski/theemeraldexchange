@@ -19,6 +19,7 @@ import { useSonarrEpisodes } from '../../lib/hooks/useSonarrEpisodes'
 import { useSuggestedTv } from '../../lib/hooks/useSuggested'
 import { useAiSuggestionsEnabled } from '../../lib/hooks/useAiSuggestionsEnabled'
 import { useUserApiKey } from '../../lib/hooks/useUserApiKey'
+import { useLimits } from '../../lib/hooks/useLimits'
 import { useFeedback, useSetFeedback } from '../../lib/hooks/useUserFeedback'
 import { usePlexLinks } from '../../lib/hooks/usePlexLinks'
 import type { DotState } from '../search/FeedbackDots'
@@ -127,6 +128,11 @@ export function TvTab() {
 
   const ai = useAiSuggestionsEnabled()
   const userKey = useUserApiKey()
+  const limits = useLimits()
+  // See MoviesTab — when the server is configured to use the local
+  // recommender, the AI toggle does nothing (every refresh routes
+  // through the sidecar). Hide it.
+  const localRecommender = limits.data?.useLocalRecommender === true
   const suggested = useSuggestedTv(ai.enabled, userKey.key)
   const feedback = useFeedback()
   const setFeedback = useSetFeedback('tv')
@@ -333,7 +339,7 @@ export function TvTab() {
                   // looking like a clean first-run.
                   unavailable: !!feedback.error,
                 }}
-                ai={userKey.hasKey ? { enabled: ai.enabled, onToggle: ai.toggle } : undefined}
+                ai={userKey.hasKey && !localRecommender ? { enabled: ai.enabled, onToggle: ai.toggle } : undefined}
               />
             </div>
           )}

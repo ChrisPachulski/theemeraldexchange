@@ -18,6 +18,7 @@ import { useRadarrLibrary } from '../../lib/hooks/useRadarrLibrary'
 import { useSuggestedMovies } from '../../lib/hooks/useSuggested'
 import { useAiSuggestionsEnabled } from '../../lib/hooks/useAiSuggestionsEnabled'
 import { useUserApiKey } from '../../lib/hooks/useUserApiKey'
+import { useLimits } from '../../lib/hooks/useLimits'
 import { useFeedback, useSetFeedback } from '../../lib/hooks/useUserFeedback'
 import { usePlexLinks } from '../../lib/hooks/usePlexLinks'
 import type { DotState } from '../search/FeedbackDots'
@@ -139,6 +140,11 @@ export function MoviesTab() {
 
   const ai = useAiSuggestionsEnabled()
   const userKey = useUserApiKey()
+  const limits = useLimits()
+  // Local recommender takes precedence on the server; the AI toggle is
+  // inert when it's on. Hide the toggle so we don't show users a
+  // setting that does nothing.
+  const localRecommender = limits.data?.useLocalRecommender === true
   const suggested = useSuggestedMovies(ai.enabled, userKey.key)
   const feedback = useFeedback()
   const setFeedback = useSetFeedback('movie')
@@ -328,7 +334,7 @@ export function MoviesTab() {
                   // from a clean first-run.
                   unavailable: !!feedback.error,
                 }}
-                ai={userKey.hasKey ? { enabled: ai.enabled, onToggle: ai.toggle } : undefined}
+                ai={userKey.hasKey && !localRecommender ? { enabled: ai.enabled, onToggle: ai.toggle } : undefined}
               />
             </div>
           )}

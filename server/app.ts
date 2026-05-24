@@ -57,6 +57,12 @@ app.get('/api/limits', (c) =>
     minFreeGb: env.minFreeBytes / (1024 * 1024 * 1024),
     maxMovieGb: env.maxMovieGb,
     maxTvGbPerEpisode: env.maxTvGbPerEpisode,
+    // Whether the local recommender is the active personalization
+    // engine. When true the SPA's "AI" toggle is inert (every refresh
+    // routes through the sidecar regardless), so we hide it instead
+    // of leaving a fake setting that does nothing. Public boolean —
+    // no secret leakage.
+    useLocalRecommender: env.useLocalRecommender,
   }),
 )
 
