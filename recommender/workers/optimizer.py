@@ -198,7 +198,22 @@ def clamp_patch(active: dict, proposed: dict, *, drift: float) -> dict:
 
 
 def load_holdout() -> list[dict]:
-    p = Path(__file__).resolve().parent.parent / "eval" / "holdout.jsonl"
+    # Path resolution prefers the operator-supplied env var so the
+    # holdout can live on the persistent /data volume that's already
+    # mounted into the recommender container — the Dockerfile does NOT
+    # COPY eval/ and the deploy script excludes holdout.jsonl by
+    # design (the holdout is operator-curated history, not source).
+    # Before this env var existed, the optimizer always read from the
+    # repo-relative path, which doesn't exist inside the container,
+    # so load_holdout() always returned [] and the auto-promotion gate
+    # silently degraded to "record candidate as inactive proposal" on
+    # every run (see line ~340 below). Falls back to the repo path so
+    # local pytest / a hand-run on the dev box still works.
+    env_path = os.environ.get("RECOMMENDER_HOLDOUT_PATH")
+    if env_path:
+        p = Path(env_path)
+    else:
+        p = Path(__file__).resolve().parent.parent / "eval" / "holdout.jsonl"
     if not p.exists():
         return []
     out: list[dict] = []
