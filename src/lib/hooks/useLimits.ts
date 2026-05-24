@@ -7,9 +7,19 @@ export type Limits = {
   minFreeGb: number
   maxMovieGb: number
   maxTvGbPerEpisode: number
+  /** When true, the server routes every personalized request through
+   *  the local recommender sidecar — the SPA's "AI" toggle becomes
+   *  inert (toggling it can't switch the path off) and should be
+   *  hidden. Optional for forward-compat with older backends. */
+  useLocalRecommender?: boolean
 }
 
-const DEFAULT_LIMITS: Limits = { minFreeGb: 100, maxMovieGb: 10, maxTvGbPerEpisode: 5 }
+const DEFAULT_LIMITS: Limits = {
+  minFreeGb: 100,
+  maxMovieGb: 10,
+  maxTvGbPerEpisode: 5,
+  useLocalRecommender: false,
+}
 
 export function useLimits() {
   return useQuery({

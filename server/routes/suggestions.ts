@@ -1694,46 +1694,28 @@ suggestions.get('/:type', async (c) => {
     ...extra,
   })
 
-  if (force === 'trending') {
-    const endTrending = timing.mark('trending')
-    const trending = filterHouseholdSafe(await tmdbTrending(type)).map((it) => ({
-      ...it,
-      provenance: 'trending' as const,
-      reason: null,
-    }))
-    endTrending()
-    setTimingHeader()
-    return c.json({ source: 'trending', items: trending.slice(0, TARGET_COUNT), _diag: diag() })
-  }
-
-  // Cold start: library too small for meaningful taste signal.
-  if (library.length < COLD_START_THRESHOLD) {
-    console.warn('[suggestions] Cold-start path: library too small to filter', diag())
-    const endTrending = timing.mark('trending')
-    const trending = filterHouseholdSafe(await tmdbTrending(type)).map((it) => ({
-      ...it,
-      provenance: 'trending' as const,
-      reason: null,
-    }))
-    endTrending()
-    setTimingHeader()
-    return c.json({
-      source: 'trending',
-      items: trending.slice(0, TARGET_COUNT),
-      _diag: diag({
-        reason: 'library_below_threshold',
-        libraryCount: library.length,
-        threshold: COLD_START_THRESHOLD,
-        hint: `Add at least ${COLD_START_THRESHOLD - library.length} more title(s) to get personalized recommendations`,
-      }),
-    })
-  }
-
   // Local-recommender fast path. When USE_LOCAL_RECOMMENDER=1, the
-  // Python sidecar in the same compose stack does retrieval + ranking;
-  // Claude is not on the request path. On any error we fall through to
-  // TMDB trending (NOT the Claude path) so the user never sees a 5xx
-  // and the recommender outage stays invisible.
+  // Python sidecar in the same compose stack does retrieval + ranking
+  // for FREE — no Claude tokens, no BYO key, no household-cost concern.
+  // It takes precedence over BOTH force=trending and the server-side
+  // cold-start short-circuit:
+  //
+  //   - force=trending was a token-cost escape hatch from when Claude
+  //     was the only personalization path. With a free local model the
+  //     SPA still sends ?force=trending for no-key users (so the BYO-
+  //     key gate below doesn't 402 them), but pure trending is the
+  //     WRONG default when personalized output is available at zero
+  //     cost. Override.
+  //
+  //   - Cold-start: the sidecar's own cold_start_trending recipe
+  //     handles small libraries internally (see recommender/app/main.py)
+  //     and produces a comparable shape. Running BOTH cold-start checks
+  //     would either short-circuit before the recommender could try,
+  //     or leak the inconsistency between the two libraries (server
+  //     reads Sonarr/Radarr live; sidecar reads its own DB).
+  //
+  // BYO-key Claude branch below still fires when USE_LOCAL_RECOMMENDER
+  // is OFF — legacy path for deployments without the sidecar.
   if (env.useLocalRecommender) {
     const userFeedback = await userFeedbackPromise
     const likedRaw = type === 'movie' ? userFeedback.movie.liked : userFeedback.tv.liked
@@ -1817,6 +1799,45 @@ suggestions.get('/:type', async (c) => {
         recipe,
         rec: recDiag,
         costCents: 0,
+      }),
+    })
+  }
+
+  // Legacy (non-recommender) trending short-circuits. Only reachable
+  // when USE_LOCAL_RECOMMENDER is OFF — when it's on, the block above
+  // returns first and these never fire (intentional: a free local
+  // model beats hard-coded trending fallback in every case).
+  if (force === 'trending') {
+    const endTrending = timing.mark('trending')
+    const trending = filterHouseholdSafe(await tmdbTrending(type)).map((it) => ({
+      ...it,
+      provenance: 'trending' as const,
+      reason: null,
+    }))
+    endTrending()
+    setTimingHeader()
+    return c.json({ source: 'trending', items: trending.slice(0, TARGET_COUNT), _diag: diag() })
+  }
+
+  // Cold start: library too small for meaningful taste signal.
+  if (library.length < COLD_START_THRESHOLD) {
+    console.warn('[suggestions] Cold-start path: library too small to filter', diag())
+    const endTrending = timing.mark('trending')
+    const trending = filterHouseholdSafe(await tmdbTrending(type)).map((it) => ({
+      ...it,
+      provenance: 'trending' as const,
+      reason: null,
+    }))
+    endTrending()
+    setTimingHeader()
+    return c.json({
+      source: 'trending',
+      items: trending.slice(0, TARGET_COUNT),
+      _diag: diag({
+        reason: 'library_below_threshold',
+        libraryCount: library.length,
+        threshold: COLD_START_THRESHOLD,
+        hint: `Add at least ${COLD_START_THRESHOLD - library.length} more title(s) to get personalized recommendations`,
       }),
     })
   }
