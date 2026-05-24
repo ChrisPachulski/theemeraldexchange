@@ -475,8 +475,11 @@ def run(*, dry_run: bool = False) -> int:
             active_recipe = CONFIG.default_recipe
             # Materialize the recipe defaults from the module
             active_params = dict(recipes.get(active_recipe).DEFAULTS)
-            promote(conn, recipe=active_recipe, params=active_params, notes="initial defaults")
-            log.info("seeded initial model_config from %s defaults", active_recipe)
+            if dry_run:
+                log.info("using unpersisted %s defaults for dry-run", active_recipe)
+            else:
+                promote(conn, recipe=active_recipe, params=active_params, notes="initial defaults")
+                log.info("seeded initial model_config from %s defaults", active_recipe)
 
         stats = _aggregate(conn)
         if stats.total_recs < 50:

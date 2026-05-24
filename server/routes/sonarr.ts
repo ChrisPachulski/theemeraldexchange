@@ -330,7 +330,11 @@ async function materializeNonAdminSeriesBody(raw: SonarrAddBody): Promise<
 
 sonarr.post('/api/v3/series', async (c) => {
   const session = c.get('session')
-  const rawBody = (await c.req.json()) as SonarrAddBody
+  const parsedBody = await c.req.json().catch(() => null)
+  if (!parsedBody || typeof parsedBody !== 'object' || Array.isArray(parsedBody)) {
+    return c.json({ error: 'invalid_body' }, 400)
+  }
+  const rawBody = parsedBody as SonarrAddBody
   let body: SonarrAddBody
   if (session.role === 'admin') {
     body = rawBody

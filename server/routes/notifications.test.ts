@@ -1,9 +1,10 @@
 // /api/notifications/discord — admin-only configuration of the
 // "Emerald Exchange Discord" notification connector on BOTH Sonarr and
-// Radarr. The route does a list → match by name → delete-then-create
+// Radarr. The route does a list → match by name → update-or-create
 // dance on each upstream, so the fetch stub has to recognize:
 //   GET  /api/v3/notification           → list
 //   POST /api/v3/notification           → create
+//   PUT  /api/v3/notification/:id       → update
 //   DELETE /api/v3/notification/:id     → remove
 //   POST /api/v3/notification/:id/test  → test
 // The matcher just slices the URL by upstream host to know whether
@@ -281,7 +282,7 @@ describe('notifications POST /discord — create flow', () => {
     expect(deletes).toBe(0)
   })
 
-  it('deletes existing Emerald entry before creating new one', async () => {
+  it('updates existing Emerald entries in place', async () => {
     const seen: string[] = []
     handlers.push({
       match: (u, m) => m === 'GET' && u.endsWith('/api/v3/notification'),
@@ -293,9 +294,9 @@ describe('notifications POST /discord — create flow', () => {
       },
     })
     handlers.push({
-      match: (u, m) => m === 'DELETE' && u.includes('/api/v3/notification/'),
+      match: (u, m) => m === 'PUT' && u.includes('/api/v3/notification/'),
       handler: (u) => {
-        seen.push('DELETE ' + u.split('/api/v3/notification/')[1])
+        seen.push('PUT ' + u.split('/api/v3/notification/')[1])
         return jsonResponse({}, 200)
       },
     })
@@ -312,19 +313,13 @@ describe('notifications POST /discord — create flow', () => {
       body: JSON.stringify({ webhookUrl: GOOD_WEBHOOK }),
     })
     expect(r.status).toBe(200)
-    expect(seen).toContain('DELETE 100')
-    expect(seen).toContain('DELETE 200')
-    expect(seen).toContain('POST sonarr')
-    expect(seen).toContain('POST radarr')
+    expect(seen).toContain('PUT 100')
+    expect(seen).toContain('PUT 200')
+    expect(seen).not.toContain('POST sonarr')
+    expect(seen).not.toContain('POST radarr')
   })
 
-  it('delete of existing webhook fails → 502 abort, NO new connector POSTed (avoids duplicate ping)', async () => {
-    // Pre-fix behavior ignored the DELETE's res.ok and unconditionally
-    // POSTed the new connector. On a transient Sonarr 5xx the OLD
-    // webhook stayed live AND a NEW one was added, so every grab
-    // pinged Discord twice until an operator pruned upstream by hand.
-    // Now: abort with 502 and don't issue any POST so the SPA can
-    // retry safely.
+  it('update of existing webhook fails → 502 abort, NO new connector POSTed', async () => {
     let createPosted = false
     handlers.push({
       match: (u, m) => m === 'GET' && u.endsWith('/api/v3/notification'),
@@ -334,7 +329,7 @@ describe('notifications POST /discord — create flow', () => {
         ]),
     })
     handlers.push({
-      match: (u, m) => m === 'DELETE' && u.includes(sonarrHost()) && u.includes('/api/v3/notification/'),
+      match: (u, m) => m === 'PUT' && u.includes(sonarrHost()) && u.includes('/api/v3/notification/'),
       handler: () => new Response('sonarr-down', { status: 500 }),
     })
     handlers.push({
@@ -351,10 +346,8 @@ describe('notifications POST /discord — create flow', () => {
     })
     expect(r.status).toBe(502)
     const body = (await r.json()) as { error: string; status: number }
-    expect(body.error).toBe('sonarr_delete_failed')
+    expect(body.error).toBe('sonarr_update_failed')
     expect(body.status).toBe(500)
-    // The most important assertion: no replacement POST was issued,
-    // so the household isn't going to get double-pings.
     expect(createPosted).toBe(false)
   })
 

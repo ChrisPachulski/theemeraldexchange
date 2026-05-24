@@ -72,10 +72,12 @@ class TmdbClient:
         timeout: float = 15.0,
     ):
         self.limiter = RateLimit(rate_capacity, rate_window_s)
-        if auth_mode != "bearer":
+        if auth_mode not in {"bearer", "query"}:
             raise ValueError(f"unsupported TMDB auth mode: {auth_mode!r}")
         headers = {"Accept": "application/json"}
-        headers["Authorization"] = f"Bearer {credential}"
+        self._api_key = credential if auth_mode == "query" else None
+        if auth_mode == "bearer":
+            headers["Authorization"] = f"Bearer {credential}"
         self._client = httpx.AsyncClient(
             base_url=TMDB_BASE,
             timeout=timeout,
@@ -88,7 +90,10 @@ class TmdbClient:
     async def get(self, path: str, **params: Any) -> dict:
         async def _do() -> dict:
             await self.limiter.acquire()
-            r = await self._client.get(path, params=params)
+            request_params = dict(params)
+            if self._api_key is not None:
+                request_params["api_key"] = self._api_key
+            r = await self._client.get(path, params=request_params)
             r.raise_for_status()
             return r.json()
 
@@ -146,7 +151,10 @@ class TmdbClient:
 
 
 def from_env() -> TmdbClient:
-    token = os.environ.get("TMDB_READ_ACCESS_TOKEN") or os.environ.get("TMDB_API_KEY")
-    if not token:
-        raise RuntimeError("TMDB_READ_ACCESS_TOKEN or TMDB_API_KEY is required")
-    return TmdbClient(token, auth_mode="bearer")
+    token = os.environ.get("TMDB_READ_ACCESS_TOKEN")
+    if token:
+        return TmdbClient(token, auth_mode="bearer")
+    api_key = os.environ.get("TMDB_API_KEY")
+    if api_key:
+        return TmdbClient(api_key, auth_mode="query")
+    raise RuntimeError("TMDB_READ_ACCESS_TOKEN or TMDB_API_KEY is required")

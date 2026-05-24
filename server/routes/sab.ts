@@ -18,6 +18,8 @@ import { requireAuth, type Env } from '../middleware/auth.js'
 import { sabCall } from '../services/sab.js'
 
 export const sab = new Hono<Env>()
+const DEFAULT_HISTORY_LIMIT = 10
+const MAX_HISTORY_LIMIT = 100
 
 sab.use('*', requireAuth)
 
@@ -36,12 +38,19 @@ sab.get('/api', async (c) => {
     return forward(r)
   }
   if (mode === 'history') {
-    const limit = url.searchParams.get('limit') ?? '10'
+    const limit = parseHistoryLimit(url.searchParams.get('limit'))
     const r = await sabCall('history', { limit })
     return forward(r)
   }
   return c.json({ error: 'not_found' }, 404)
 })
+
+function parseHistoryLimit(raw: string | null): string {
+  if (raw === null) return String(DEFAULT_HISTORY_LIMIT)
+  const value = Number(raw)
+  if (!Number.isInteger(value) || value < 1) return String(DEFAULT_HISTORY_LIMIT)
+  return String(Math.min(value, MAX_HISTORY_LIMIT))
+}
 
 // Mutations — admin only, method-distinguished so browser GET CSRF
 // vectors can't trigger them. Cookies are SameSite=None in prod, so
