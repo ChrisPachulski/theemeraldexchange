@@ -8,6 +8,7 @@ import {
   _setTmdbApiKeyForTests,
   _resetRecentlyShownForTests,
   _resetLibraryCacheForTests,
+  _resetLibraryStaleFallbackForTests,
   _resetTmdbInFlightForTests,
 } from './suggestions.js'
 import { createSession } from '../session.js'
@@ -77,6 +78,7 @@ beforeEach(async () => {
   _setTmdbApiKeyForTests(null)
   _resetRecentlyShownForTests()
   _resetLibraryCacheForTests()
+  _resetLibraryStaleFallbackForTests()
   _resetTmdbInFlightForTests()
 })
 
@@ -346,6 +348,110 @@ describe('suggestions route — gating', () => {
     expect(body2.items.some((i) => i.id === 9999)).toBe(true)
   })
 
+  it('returns 502 library_unavailable when Sonarr/Radarr fails and there is no stale snapshot', async () => {
+    // Regression: a transient Radarr/Sonarr 5xx used to silently coerce
+    // into an empty library, which the cold-start path would treat as
+    // "user has nothing — show trending." Trending picks then leaked
+    // already-owned titles back into the strip. The route now surfaces
+    // a 502 library_unavailable so the SPA can show a real error and
+    // retry instead of silently degrading.
+    _setTmdbApiKeyForTests('test-key')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/movie')) {
+          return new Response('boom', { status: 503 })
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/movie', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(502)
+    const body = (await r.json()) as { error: string; kind: string }
+    expect(body.error).toBe('library_unavailable')
+    expect(body.kind).toBe('movie')
+  })
+
+  it('falls back to the prior stale library snapshot when a refresh fetch fails', async () => {
+    // After a successful first fetch, a subsequent upstream failure
+    // should serve the stale snapshot rather than fail closed. This
+    // keeps the dashboard usable through a brief Radarr/Sonarr blip.
+    _setTmdbApiKeyForTests('test-key')
+    let radarrMode: 'ok' | 'fail' = 'ok'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/movie')) {
+          if (radarrMode === 'fail') return new Response('boom', { status: 502 })
+          return new Response(
+            JSON.stringify([
+              { title: 'Snapshot Lib', year: 2020, tmdbId: 4001, genres: ['Drama'] },
+            ]),
+            { status: 200 },
+          )
+        }
+        if (url.includes('themoviedb.org/3/trending/movie')) {
+          return new Response(
+            JSON.stringify({
+              results: [
+                {
+                  id: 4001, // matches the library item, should be filtered out
+                  title: 'Snapshot Lib',
+                  poster_path: null,
+                  release_date: '2020-01-01',
+                },
+                {
+                  id: 4999,
+                  title: 'Clean Trending',
+                  poster_path: null,
+                  release_date: '2025-01-01',
+                },
+              ],
+            }),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+
+    // First call primes the stale snapshot.
+    const r1 = await appUnderTest().request('/movie?force=trending', {
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r1.status).toBe(200)
+
+    // Radarr fails on the next call, but the cached snapshot is still
+    // in libraryCache (TTL 30s). Reset the TTL cache to force a refetch
+    // attempt — the in-process stale fallback should kick in instead
+    // of failing closed.
+    radarrMode = 'fail'
+    _resetLibraryCacheForTests()
+
+    const r2 = await appUnderTest().request('/movie?force=trending', {
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r2.status).toBe(200)
+    const body2 = (await r2.json()) as { items: Array<{ id: number }> }
+    // Stale library still filters the owned title out of trending.
+    expect(body2.items.some((i) => i.id === 4001)).toBe(false)
+    expect(body2.items.some((i) => i.id === 4999)).toBe(true)
+  })
+
   it('cold-start with no TMDB key returns empty items (graceful degradation)', async () => {
     // No TMDB key → tmdbTrending returns [] → strip is empty.
     // The route should NOT crash; it returns source=trending with items=[].
@@ -523,7 +629,21 @@ describe('suggestions route — Anthropic transient error retry', () => {
     // Claude calls is robust without needing to inject a real 529.
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => new Response(JSON.stringify({ results: [] }), { status: 200 })),
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        // Radarr returns a raw array, not { results }. Use the right
+        // shape so the route's library fetch succeeds (round-20 hardened
+        // the failure path; a non-array response is now a 502).
+        if (url.includes('/api/v3/movie') && !url.includes('themoviedb.org')) {
+          return new Response('[]', { status: 200 })
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
     )
     _setTmdbApiKeyForTests(null)
     // fakeResponse with no tool_use block → Claude path returns 0 picks
