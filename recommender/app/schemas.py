@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 Kind = Literal["movie", "tv"]
 Provenance = Literal["personalized", "discover", "trending"]
+PositiveStrictInt = Annotated[int, Field(strict=True, gt=0)]
 
 
 class LibraryItem(BaseModel):
@@ -15,8 +16,8 @@ class LibraryItem(BaseModel):
 
 
 class FeedbackEntry(BaseModel):
-    tmdb_id: int
-    signal: Literal["like", "dislike", "reject"]
+    tmdb_id: PositiveStrictInt
+    signal: Literal["like", "dislike", "reject", "clicked", "added"]
 
 
 class ScoreRequest(BaseModel):
@@ -28,8 +29,16 @@ class ScoreRequest(BaseModel):
     # we don't have to keep two stores in sync. When absent, we use what the
     # recommender already has in its tables.
     library: list[LibraryItem] | None = Field(default=None, max_length=5000)
-    feedback: list[FeedbackEntry] | None = None
-    household_rejections: list[int] | None = None
+    feedback: list[FeedbackEntry] | None = Field(
+        default=None,
+        max_length=5000,
+        description="Omit to use stored feedback; pass a list, including [], as authoritative.",
+    )
+    household_rejections: list[PositiveStrictInt] | None = Field(
+        default=None,
+        max_length=5000,
+        description="Omit to use stored rejections; pass a list, including [], as authoritative.",
+    )
 
 
 class ScoredItem(BaseModel):
@@ -55,6 +64,35 @@ class FeedbackEventRequest(BaseModel):
     kind: Kind
     tmdb_id: int
     signal: Literal["like", "dislike", "reject", "shown", "clicked", "added"]
+
+
+class ClearFeedbackRequest(BaseModel):
+    sub: str
+    kind: Kind
+    tmdb_id: StrictInt
+
+
+class LibrarySyncItem(BaseModel):
+    tmdb_id: StrictInt
+    source: str | None = None
+
+
+class LibrarySyncRequest(BaseModel):
+    kind: Kind
+    items: list[LibrarySyncItem] = Field(default_factory=list, max_length=5000)
+    force: bool = False
+    confirm_purge: bool = False
+
+
+class ShownEventRequest(BaseModel):
+    sub: str
+    kind: Kind
+    tmdb_ids: list[StrictInt] = Field(default_factory=list, max_length=5000)
+
+
+class RejectionEventRequest(BaseModel):
+    kind: Kind
+    tmdb_id: StrictInt
 
 
 class HealthResponse(BaseModel):

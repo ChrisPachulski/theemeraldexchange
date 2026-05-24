@@ -117,12 +117,9 @@ async function grabTvUnderCap(
     all.push(...chunk)
   }
 
-  function effectiveEpisodeCount(r: Release): number {
+  function effectiveEpisodeCount(r: Release): number | null {
     if (r.fullSeason && r.seasonNumber !== undefined) {
-      // Optimistic fallback when episode metadata hasn't populated:
-      // assume 10 episodes (typical streaming season). Errs toward
-      // *letting* a season pack through rather than rejecting it.
-      return seasonEpCount.get(r.seasonNumber) ?? 10
+      return seasonEpCount.get(r.seasonNumber) ?? null
     }
     if (r.episodeNumbers && r.episodeNumbers.length > 0) return r.episodeNumbers.length
     return 1
@@ -132,7 +129,10 @@ async function grabTvUnderCap(
   const within = all
     .filter((r) => r.size > 0)
     .filter((r) => r.seasonNumber === undefined || monitored.has(r.seasonNumber))
-    .filter((r) => r.size / effectiveEpisodeCount(r) <= env.maxTvBytesPerEpisode)
+    .filter((r) => {
+      const episodeCount = effectiveEpisodeCount(r)
+      return episodeCount !== null && r.size / episodeCount <= env.maxTvBytesPerEpisode
+    })
 
   // Prefer releases that Sonarr's profile accepts (Choose Me is curated
   // to match what the user's usenet provider can actually deliver) and
@@ -202,7 +202,7 @@ async function grabTvUnderCap(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ guid: pick.guid, indexerId: pick.indexerId }),
     })
-    const ec = effectiveEpisodeCount(pick)
+    const ec = effectiveEpisodeCount(pick) ?? 1
     console.log(
       `[tv-cap] grab "${pick.title.slice(0, 80)}" ${(pick.size / 1024 ** 3).toFixed(2)}GB ` +
         `(~${(pick.size / ec / 1024 ** 3).toFixed(2)}GB/ep, ${ec} ep) ` +
@@ -283,10 +283,14 @@ async function materializeNonAdminSeriesBody(raw: SonarrAddBody): Promise<
   }
   const profiles = (await profileRes.json()) as Array<{ id: number; name?: string }>
   const folder = folders[0]
+  const namedProfile = profiles.find((p) => p.name?.toLowerCase() === env.defaultProfileName)
   const profile =
-    profiles.find((p) => p.name?.toLowerCase() === env.defaultProfileName) ?? profiles[0]
-  if (!folder || !profile) {
+    namedProfile ?? (profiles.every((p) => !p.name) ? profiles[0] : undefined)
+  if (!folder) {
     return { ok: false, reason: 'admin_must_configure_upstream' }
+  }
+  if (!profile) {
+    return { ok: false, reason: 'default_quality_profile_missing' }
   }
   const safe: SonarrAddBody = {}
   for (const key of NON_ADMIN_SONARR_ALLOW) {

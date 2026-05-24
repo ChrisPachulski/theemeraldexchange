@@ -218,12 +218,7 @@ function parseUserElements(xml: string): PlexFriend[] {
 export async function listAcceptedUsers(authToken: string): Promise<PlexFriend[]> {
   // Legacy XML endpoint on the bare plex.tv host, NOT under /api/v2 —
   // so we don't route through PLEX_BASE.
-  //
-  // python-plexapi puts the auth token in the URL as a query param
-  // (not a header) for this endpoint. The header form returns 200 but
-  // sometimes an empty MediaContainer; the query-param form is what
-  // actually returns the share list. Belt-and-suspenders: send both.
-  const url = `https://plex.tv/api/users?X-Plex-Token=${encodeURIComponent(authToken)}`
+  const url = 'https://plex.tv/api/users'
   const res = await fetchWithTimeout(
     url,
     {
@@ -339,7 +334,7 @@ function parseSharedServerElements(xml: string): PlexFriend[] {
 
 export async function listSharedServerInvitees(authToken: string): Promise<PlexFriend[]> {
   if (!env.plexServerId) return []
-  const url = `https://plex.tv/api/servers/${encodeURIComponent(env.plexServerId)}/shared_servers?X-Plex-Token=${encodeURIComponent(authToken)}`
+  const url = `https://plex.tv/api/servers/${encodeURIComponent(env.plexServerId)}/shared_servers`
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 5000)
   let res: Response
@@ -403,7 +398,7 @@ function parseAccountElements(xml: string): PlexFriend[] {
 }
 
 export async function listLocalServerAccounts(authToken: string): Promise<PlexFriend[]> {
-  const url = `${env.plexServerUrl}/accounts?X-Plex-Token=${encodeURIComponent(authToken)}`
+  const url = `${env.plexServerUrl}/accounts`
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 5000)
   let res: Response
@@ -431,7 +426,7 @@ export async function listLocalServerAccounts(authToken: string): Promise<PlexFr
 // per-server invite. They don't appear in /api/users or
 // /api/servers/{id}/shared_servers — they're under /api/home/users.
 export async function listHomeUsers(authToken: string): Promise<PlexFriend[]> {
-  const url = `https://plex.tv/api/home/users?X-Plex-Token=${encodeURIComponent(authToken)}`
+  const url = 'https://plex.tv/api/home/users'
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 5000)
   let res: Response

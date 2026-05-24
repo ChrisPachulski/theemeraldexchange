@@ -29,7 +29,7 @@ plexAdmin.get('/remote-access', async (c) => {
   if (!session.plexAuthToken) {
     return c.json({ error: 'no_plex_token' }, 409)
   }
-  const url = `${env.plexServerUrl}/:/prefs?X-Plex-Token=${encodeURIComponent(session.plexAuthToken)}`
+  const url = `${env.plexServerUrl}/:/prefs`
   // PMS is LAN-local but can wedge on a stuck transcoder lock. Bound
   // the fetch with the shared LAN budget so a hung PMS doesn't pin
   // the request handler. fetchWithTimeout synthesizes a 504 Response
@@ -37,7 +37,7 @@ plexAdmin.get('/remote-access', async (c) => {
   // the existing 502 surface.
   const res = await fetchWithTimeout(
     url,
-    { headers: { Accept: 'application/xml' } },
+    { headers: { Accept: 'application/xml', 'X-Plex-Token': session.plexAuthToken } },
     LAN_TIMEOUT_MS,
     'plex.remoteAccess',
   )

@@ -47,6 +47,7 @@ services:
       RADARR_API_KEY: "${RADARR_API_KEY}"
       SAB_URL: "${SAB_URL:-}"
       SAB_API_KEY: "${SAB_API_KEY}"
+      TMDB_READ_ACCESS_TOKEN: "${TMDB_READ_ACCESS_TOKEN:-}"
       TMDB_API_KEY: "${TMDB_API_KEY:-}"
       MIN_FREE_GB: "${MIN_FREE_GB:-100}"
       MAX_MOVIE_SIZE_GB: "${MAX_MOVIE_SIZE_GB:-10}"
@@ -62,9 +63,10 @@ services:
       # recommender container is healthy and its DB has been bootstrapped.
       USE_LOCAL_RECOMMENDER: "${USE_LOCAL_RECOMMENDER:-0}"
       RECOMMENDER_URL: "${RECOMMENDER_URL:-http://recommender:8000}"
+      RECOMMENDER_EVENT_SECRET: "${RECOMMENDER_EVENT_SECRET:-}"
     depends_on:
       recommender:
-        condition: service_started
+        condition: service_healthy
 
   recommender:
     build: ./recommender
@@ -95,6 +97,8 @@ services:
       RECOMMENDER_DEFAULT_RECIPE: "${RECOMMENDER_DEFAULT_RECIPE:-mmr_diverse}"
       RECOMMENDER_COLD_START_THRESHOLD: "${RECOMMENDER_COLD_START_THRESHOLD:-10}"
       RECOMMENDER_OPTIMIZER_MAX_DRIFT_PCT: "${RECOMMENDER_OPTIMIZER_MAX_DRIFT_PCT:-0.20}"
+      RECOMMENDER_EVENT_SECRET: "${RECOMMENDER_EVENT_SECRET:-}"
+      TMDB_READ_ACCESS_TOKEN: "${TMDB_READ_ACCESS_TOKEN:-}"
       TMDB_API_KEY: "${TMDB_API_KEY:-}"
       # The optimizer is the only place Claude runs server-side. Per-user
       # suggestion calls never see this key — they go to the local model.
