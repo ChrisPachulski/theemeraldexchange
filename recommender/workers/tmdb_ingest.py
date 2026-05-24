@@ -25,7 +25,7 @@ import logging
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 
-from app.db import connect
+from app.db import connect, encode_vec_rowid, transaction
 
 from .tmdb_client import TmdbClient, from_env
 
@@ -73,7 +73,7 @@ async def enumerate_kind(client: TmdbClient, conn: sqlite3.Connection, kind: str
                 for r in results
                 if r.get("id") and not r.get("adult", False)
             ]
-            with conn:
+            with transaction(conn):
                 conn.executemany(
                     """INSERT INTO ingest_queue(tmdb_id, kind, status, attempts, updated_at)
                        VALUES (?, ?, ?, ?, ?)
@@ -104,15 +104,32 @@ def _flatten_year(release_date: str | None) -> int | None:
         return None
 
 
+def _delete_title(conn: sqlite3.Connection, kind: str, tmdb_id: int) -> None:
+    conn.execute(
+        "DELETE FROM title_vec WHERE rowid = ? AND kind = ?",
+        (encode_vec_rowid(kind, tmdb_id), kind),
+    )
+    conn.execute("DELETE FROM title_features WHERE kind = ? AND tmdb_id = ?", (kind, tmdb_id))
+    conn.execute("DELETE FROM title_genres WHERE kind = ? AND tmdb_id = ?", (kind, tmdb_id))
+    conn.execute("DELETE FROM title_keywords WHERE kind = ? AND tmdb_id = ?", (kind, tmdb_id))
+    conn.execute("DELETE FROM title_cast WHERE kind = ? AND tmdb_id = ?", (kind, tmdb_id))
+    conn.execute("DELETE FROM title_crew WHERE kind = ? AND tmdb_id = ?", (kind, tmdb_id))
+    conn.execute("DELETE FROM titles WHERE kind = ? AND tmdb_id = ?", (kind, tmdb_id))
+
+
 def _persist_detail(conn: sqlite3.Connection, kind: str, payload: dict) -> bool:
     """Write payload into titles + related tables. Returns False if filtered out."""
+    tmdb_id = int(payload["id"])
     if payload.get("adult", False):
+        with transaction(conn):
+            _delete_title(conn, kind, tmdb_id)
         return False
     vote_count = int(payload.get("vote_count") or 0)
     if vote_count < MIN_VOTE_COUNT:
+        with transaction(conn):
+            _delete_title(conn, kind, tmdb_id)
         return False
 
-    tmdb_id = int(payload["id"])
     title = payload.get("title") or payload.get("name") or "?"
     original_title = payload.get("original_title") or payload.get("original_name")
     release = payload.get("release_date") or payload.get("first_air_date")
@@ -127,7 +144,7 @@ def _persist_detail(conn: sqlite3.Connection, kind: str, payload: dict) -> bool:
 
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
-    with conn:
+    with transaction(conn):
         conn.execute(
             """INSERT INTO titles(
                 tmdb_id, kind, title, original_title, year, release_date, overview,
@@ -216,22 +233,41 @@ async def _hydrate_loop(
             try:
                 detail = await client.detail(kind, tmdb_id)
             except Exception as e:
-                with conn:
-                    conn.execute(
-                        """UPDATE ingest_queue SET status='error', attempts=attempts+1,
-                           last_error=?, updated_at=datetime('now')
-                           WHERE tmdb_id=? AND kind=?""",
-                        (str(e)[:300], tmdb_id, kind),
-                    )
+                worker_conn = connect()
+                try:
+                    with transaction(worker_conn):
+                        worker_conn.execute(
+                            """UPDATE ingest_queue SET status='error', attempts=attempts+1,
+                               last_error=?, updated_at=datetime('now')
+                               WHERE tmdb_id=? AND kind=?""",
+                            (str(e)[:300], tmdb_id, kind),
+                        )
+                finally:
+                    worker_conn.close()
                 return
-            kept = _persist_detail(conn, kind, detail)
-            with conn:
-                conn.execute(
-                    """UPDATE ingest_queue SET status=?, attempts=attempts+1,
-                       last_error=NULL, updated_at=datetime('now')
-                       WHERE tmdb_id=? AND kind=?""",
-                    ("done" if kept else "skipped", tmdb_id, kind),
-                )
+            worker_conn = connect()
+            try:
+                try:
+                    kept = _persist_detail(worker_conn, kind, detail)
+                    with transaction(worker_conn):
+                        worker_conn.execute(
+                            """UPDATE ingest_queue SET status=?, attempts=attempts+1,
+                               last_error=NULL, updated_at=datetime('now')
+                               WHERE tmdb_id=? AND kind=?""",
+                            ("done" if kept else "skipped", tmdb_id, kind),
+                        )
+                except Exception as e:
+                    log.warning("hydrate %s %s persist failed: %s", kind, tmdb_id, e)
+                    with transaction(worker_conn):
+                        worker_conn.execute(
+                            """UPDATE ingest_queue SET status='error', attempts=attempts+1,
+                               last_error=?, updated_at=datetime('now')
+                               WHERE tmdb_id=? AND kind=?""",
+                            (str(e)[:300], tmdb_id, kind),
+                        )
+                    return
+            finally:
+                worker_conn.close()
             if kept:
                 done += 1
             else:
@@ -284,8 +320,12 @@ async def changes_since(client: TmdbClient, conn: sqlite3.Connection, kind: str)
     while True:
         data = await client.changes(kind, start_date=start, end_date=end, page=page)
         for row in data.get("results") or []:
-            tid = int(row.get("id"))
-            with conn:
+            try:
+                tid = int(row.get("id"))
+            except (TypeError, ValueError):
+                log.warning("skipping %s changes row without valid id: %r", kind, row)
+                continue
+            with transaction(conn):
                 conn.execute(
                     """INSERT INTO ingest_queue(tmdb_id, kind, status, attempts, updated_at)
                        VALUES (?, ?, 'pending', 0, datetime('now'))
@@ -298,7 +338,7 @@ async def changes_since(client: TmdbClient, conn: sqlite3.Connection, kind: str)
             break
         page += 1
 
-    with conn:
+    with transaction(conn):
         conn.execute(
             """INSERT INTO ingest_state(key, value, ts) VALUES (?, ?, datetime('now'))
                ON CONFLICT(key) DO UPDATE SET value=excluded.value, ts=excluded.ts""",
@@ -327,13 +367,13 @@ def _requeue_errors(conn: sqlite3.Connection, max_attempts: int | None) -> int:
     doesn't churn the queue forever. None = unbounded.
     """
     if max_attempts is None:
-        with conn:
+        with transaction(conn):
             n = conn.execute(
                 "UPDATE ingest_queue SET status='pending', last_error=NULL, "
                 "updated_at=datetime('now') WHERE status='error'"
             ).rowcount
     else:
-        with conn:
+        with transaction(conn):
             n = conn.execute(
                 "UPDATE ingest_queue SET status='pending', last_error=NULL, "
                 "updated_at=datetime('now') WHERE status='error' AND attempts < ?",

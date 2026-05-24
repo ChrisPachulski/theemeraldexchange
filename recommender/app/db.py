@@ -63,6 +63,20 @@ def connect(*, db_path: Path | None = None, readonly: bool = False) -> sqlite3.C
 
 
 @contextmanager
+def transaction(conn: sqlite3.Connection, *, mode: str = "IMMEDIATE") -> Iterator[None]:
+    if mode not in {"DEFERRED", "IMMEDIATE", "EXCLUSIVE"}:
+        raise ValueError(f"unsupported transaction mode: {mode!r}")
+    conn.execute(f"BEGIN {mode}")
+    try:
+        yield
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    else:
+        conn.execute("COMMIT")
+
+
+@contextmanager
 def cursor(conn: sqlite3.Connection) -> Iterator[sqlite3.Cursor]:
     cur = conn.cursor()
     try:

@@ -126,6 +126,7 @@ def cold_start_pool(
 ) -> list[TitleRow]:
     """Popularity-ordered pool when we have no taste signal yet."""
     excluded = user.library_ids | user.rejected_ids | user.recently_shown_ids | user.disliked_ids
+    fetch_limit = max(pool_size * 3, pool_size + len(excluded))
     rows = conn.execute(
         """SELECT t.tmdb_id, t.title, t.year, t.poster_path, t.overview,
                   COALESCE(t.popularity, 0) AS popularity, t.vote_average,
@@ -135,7 +136,7 @@ def cold_start_pool(
            WHERE t.kind = ? AND COALESCE(t.vote_count, 0) >= ?
            ORDER BY popularity DESC
            LIMIT ?""",
-        (kind, min_vote_count, pool_size * 3),
+        (kind, min_vote_count, fetch_limit),
     ).fetchall()
 
     out: list[TitleRow] = []
