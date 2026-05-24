@@ -258,6 +258,49 @@ describe('radarr POST /api/v3/movie — non-admin add policy', () => {
     expect(fwd.tmdbId).toBe(42)
   })
 
+  it('prefers a "Choose Me" profile over profiles[0] for non-admin adds', async () => {
+    // Regression: prior to this round the non-admin materialize picked
+    // profiles[0], which on a fresh Radarr install is the permissive
+    // Any profile. The frontend deliberately prefers the curated
+    // "Choose Me" profile by name; the server now mirrors that so
+    // direct-POSTs and modal-driven adds land on the same profile.
+    let capturedAddBody: Record<string, unknown> | null = null
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(JSON.stringify([
+            { id: 1, path: '/data/movies', freeSpace: 500 * 1024 ** 3 },
+          ]), { status: 200 })
+        }
+        if (url.includes('/api/v3/qualityprofile')) {
+          // "Any" is first (most permissive), "Choose Me" is second —
+          // server must still pick the curated one by name.
+          return new Response(JSON.stringify([
+            { id: 1, name: 'Any' },
+            { id: 7, name: 'Choose Me' },
+            { id: 8, name: 'HD - 1080p' },
+          ]), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/movie') && init?.method === 'POST') {
+          capturedAddBody = JSON.parse(init.body as string)
+          return new Response(JSON.stringify({ id: 999 }), { status: 201 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/movie', {
+      method: 'POST',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'X', tmdbId: 1 }),
+    })
+    expect(r.status).toBe(201)
+    expect(capturedAddBody).not.toBeNull()
+    const fwd = capturedAddBody as unknown as Record<string, unknown>
+    expect(fwd.qualityProfileId).toBe(7) // Choose Me — not Any (id 1)
+  })
+
   it('503 when upstream qualityprofile / rootfolder are not configured', async () => {
     vi.stubGlobal(
       'fetch',
