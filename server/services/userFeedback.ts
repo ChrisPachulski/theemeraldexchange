@@ -29,6 +29,7 @@
 import { promises as fs } from 'fs'
 import { dirname } from 'path'
 import { env } from '../env.js'
+import { sanitizeTitle } from './sanitize.js'
 
 export type FeedbackKind = 'movie' | 'tv'
 export type FeedbackSignal = 'like' | 'dislike'
@@ -176,6 +177,7 @@ function mutate(
   title: string,
   next: FeedbackSignal | null,
 ): Promise<void> {
+  const safeTitle = sanitizeTitle(title)
   const op = writeQueue.then(async () => {
     const file = await load()
     const updatedUser = cloneUserBucket(file[sub])
@@ -183,7 +185,7 @@ function mutate(
     const existing =
       bucket.liked.find((e) => e.id === tmdbId) ??
       bucket.disliked.find((e) => e.id === tmdbId)
-    const carryTitle = title || existing?.title || ''
+    const carryTitle = safeTitle || existing?.title || ''
     bucket.liked = bucket.liked.filter((e) => e.id !== tmdbId)
     bucket.disliked = bucket.disliked.filter((e) => e.id !== tmdbId)
     if (next === 'like') bucket.liked.push({ id: tmdbId, title: carryTitle })
@@ -239,16 +241,17 @@ export function updateLikedTitleIfPresent(
   tmdbId: number,
   title: string,
 ): Promise<void> {
+  const safeTitle = sanitizeTitle(title)
   const op = writeQueue.then(async () => {
-    if (!title) return
+    if (!safeTitle) return
     const file = await load()
     const bucket = file[sub]?.[kind]
     const existing = bucket?.liked.find((e) => e.id === tmdbId)
     if (!existing) return // cleared or flipped by a concurrent op
-    if (existing.title === title) return // already current
+    if (existing.title === safeTitle) return // already current
     const updatedUser = cloneUserBucket(file[sub])
     const target = updatedUser[kind].liked.find((e) => e.id === tmdbId)!
-    target.title = title
+    target.title = safeTitle
     const snapshot: FeedbackFile = { ...file, [sub]: updatedUser }
     await persistSnapshot(snapshot)
     cached = snapshot
