@@ -65,6 +65,20 @@ describe('radarr — allow-list and gates', () => {
     expect(r.status).toBe(200)
   })
 
+  it('user can read the queue (DownloadsTab polls this for movie pending states)', async () => {
+    // Without this in the allow-list, the SPA's radarr.queue() poll
+    // 404s in prod and movie "indexer working" / pending states
+    // disappear from the dashboard. Sonarr has the matching forwarder;
+    // Radarr was missing it.
+    stub('/api/v3/queue', { page: 1, pageSize: 200, totalRecords: 0, records: [] })
+    const r = await appUnderTest().request('/api/v3/queue?pageSize=200', {
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { records: unknown[] }
+    expect(body.records).toEqual([])
+  })
+
   it('returns 404 for an undeclared path', async () => {
     const r = await appUnderTest().request('/api/v3/some-undeclared-path', {
       headers: { Cookie: await adminCookie() },
