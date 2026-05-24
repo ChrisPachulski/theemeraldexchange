@@ -67,12 +67,21 @@ export function roleFor(username: string): Role {
 export async function reconcileSession(session: Session): Promise<Session | null> {
   const role = roleFor(session.username)
 
-  // Without a Plex token in the cookie (legacy sessions issued before
-  // the token field existed) OR without a configured server gate
-  // (bootstrap mode), there is nothing to revalidate against. Recompute
-  // the role and pass through.
-  if (!session.plexAuthToken || !env.plexServerId) {
+  // Bootstrap mode (no PLEX_SERVER_ID configured): nothing to revalidate
+  // against. Recompute role only.
+  if (!env.plexServerId) {
     return { ...session, role }
+  }
+
+  // A configured gate REQUIRES a Plex token in the cookie. Legacy
+  // sessions issued before the token field existed can still be decoded
+  // (the session type leaves the field optional for that reason), but
+  // they can't be authorized — without the token we have no way to
+  // verify the user is still in PLEX_SERVER_ID, and trusting the
+  // cookie alone would re-open exactly the revocation window this
+  // module exists to close. Force re-auth.
+  if (!session.plexAuthToken) {
+    return null
   }
 
   const now = Date.now()
