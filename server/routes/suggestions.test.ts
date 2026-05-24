@@ -203,6 +203,74 @@ describe('suggestions route — gating', () => {
     expect((body._diag?.libraryGenres?.length ?? 0)).toBeGreaterThan(0)
   })
 
+  it('?force=trending tolerates a per-page failure (allSettled isolation)', async () => {
+    // Regression: tmdbTrending used to call Promise.all with a fresh
+    // AbortController().signal that had no timeout wired up. One stalled
+    // /trending page would keep Promise.all pending forever and stall
+    // every caller (force=trending, cold start, recommender-down
+    // fallback, Claude-error fallback). The fix added a bounded
+    // TMDB_TIMEOUT_MS abort timer per page and switched to allSettled
+    // so a single rejected page can't drag the others down. Simulate
+    // by failing one page; the route must still return successfully
+    // from the remaining pages.
+    _setTmdbApiKeyForTests('test-key')
+    let trendingPageCount = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/movie')) {
+          return new Response(
+            JSON.stringify([
+              { title: 'Lib Drama A', year: 2020, tmdbId: 7001, genres: ['Drama'] },
+              { title: 'Lib Drama B', year: 2019, tmdbId: 7002, genres: ['Drama'] },
+              { title: 'Lib Drama C', year: 2018, tmdbId: 7003, genres: ['Drama'] },
+            ]),
+            { status: 200 },
+          )
+        }
+        if (url.includes('themoviedb.org/3/trending/movie')) {
+          trendingPageCount++
+          // Fail page 3 outright; surviving pages should still feed the
+          // strip. The catch + null pattern AND allSettled both protect
+          // against this — assert that the route still returns 200 with
+          // items from the other pages.
+          if (trendingPageCount === 3) {
+            throw new Error('simulated page-3 fetch failure')
+          }
+          return new Response(
+            JSON.stringify({
+              results: [
+                {
+                  id: 8000 + trendingPageCount,
+                  title: `Trending Pick P${trendingPageCount}`,
+                  poster_path: null,
+                  release_date: '2025-01-01',
+                },
+              ],
+            }),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/movie?force=trending', {
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { source: string; items: Array<{ id: number }> }
+    expect(body.source).toBe('trending')
+    // At least one surviving page's pick must reach the response — the
+    // failed page must not have nuked the trending strip.
+    expect(body.items.length).toBeGreaterThan(0)
+  })
+
   it('cold-start with no TMDB key returns empty items (graceful degradation)', async () => {
     // No TMDB key → tmdbTrending returns [] → strip is empty.
     // The route should NOT crash; it returns source=trending with items=[].
