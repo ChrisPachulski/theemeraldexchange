@@ -33,7 +33,7 @@ import {
   clearSessionCookie,
   readSession,
 } from './session.js'
-import type { Role } from './session.js'
+import { _primeSessionGateCache, roleFor } from './services/sessionGate.js'
 
 export const auth = new Hono()
 
@@ -87,11 +87,9 @@ auth.post('/plex/check', async (c) => {
 
   // Case-insensitive comparison so ADMINS env doesn't have to match the
   // exact Plex casing (which is sometimes uppercase, sometimes lowercase
-  // depending on how the account was created).
-  const usernameLower = user.username.toLowerCase()
-  const role: Role = env.admins.some((a) => a.toLowerCase() === usernameLower)
-    ? 'admin'
-    : 'user'
+  // depending on how the account was created). roleFor lives in
+  // sessionGate so the per-request reconcile uses the same definition.
+  const role = roleFor(user.username)
 
   await setSessionCookie(c, {
     sub: String(user.id),
@@ -99,6 +97,12 @@ auth.post('/plex/check', async (c) => {
     role,
     plexAuthToken: pin.authToken,
   })
+
+  // Prime the membership cache so the very next protected request
+  // doesn't re-hit plex.tv — the membership check we just performed
+  // (or the bootstrap "no PLEX_SERVER_ID" path) IS the freshest possible
+  // evidence we'll get.
+  _primeSessionGateCache(String(user.id), 'member')
 
   return c.json({
     status: 'authorized',
