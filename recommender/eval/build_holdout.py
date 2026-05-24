@@ -75,14 +75,31 @@ def main() -> int:
 
     emitted = 0
     for (sub, kind), bucket in sorted(by_user.items()):
-        library = library_by_kind.get(kind, [])
-        if len(library) < MIN_LIBRARY or len(bucket["positives"]) < MIN_POSITIVES:
+        full_library = library_by_kind.get(kind, [])
+        # The eval scorer (workers/optimizer.evaluate) passes `library`
+        # into ScoreRequest, and retrieval.fetch_candidates excludes
+        # `library_ids` from candidates. If we leave the current
+        # library unchanged, every "added" positive — by definition
+        # now present in library_items — is excluded from candidate
+        # retrieval and therefore impossible to recall. Recall@N
+        # collapses toward zero and the optimizer can't distinguish
+        # a working candidate config from a broken one.
+        #
+        # Approximate the pre-outcome state by subtracting positives
+        # from the library before emitting. A more faithful version
+        # would replay timestamped library_items at the moment each
+        # positive landed, but we don't keep historical library
+        # state today; subtracting current positives is the
+        # cheapest fix that restores the recall signal.
+        positives_set = bucket["positives"]
+        library = [t for t in full_library if t not in positives_set]
+        if len(library) < MIN_LIBRARY or len(positives_set) < MIN_POSITIVES:
             continue
         entry = {
             "sub": sub,
             "kind": kind,
             "library": library,
-            "positives": sorted(bucket["positives"]),
+            "positives": sorted(positives_set),
             "negatives": sorted(bucket["negatives"]),
         }
         print(json.dumps(entry))
