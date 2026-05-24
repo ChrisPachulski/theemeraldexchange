@@ -244,6 +244,44 @@ def post_library_sync(
     return {"count": len(rows)}
 
 
+@app.post("/events/shown")
+def post_shown(
+    payload: dict,
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, int]:
+    """Bulk-record items as 'recently shown' for a user.
+
+    The /score endpoint already inserts into recently_shown for items
+    IT picked. But Hono's suggestions route can ALSO append trending-
+    fill items when the recommender returns fewer than TARGET_COUNT
+    (see server/routes/suggestions.ts) — those fill items are visible
+    to the user but invisible to recently_shown, so they can repeat on
+    the next refresh. Callers post the fill tmdb_ids here so the
+    rotation list converges with what the user actually saw.
+
+    Only recently_shown is written. Fill items aren't recommendations
+    (no model produced them), so they intentionally don't appear in
+    rec_log — attributing a click to a "recommendation" that was
+    really a fallback would poison the optimizer's training signal.
+    """
+    sub = payload.get("sub")
+    kind = payload.get("kind")
+    tmdb_ids = payload.get("tmdb_ids") or []
+    if not isinstance(sub, str) or kind not in ("movie", "tv"):
+        raise HTTPException(status_code=400, detail="invalid payload")
+    valid_ids = [tid for tid in tmdb_ids if isinstance(tid, int)]
+    if not valid_ids:
+        return {"count": 0}
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    conn.executemany(
+        """INSERT INTO recently_shown(sub, kind, tmdb_id, ts)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(sub, kind, tmdb_id) DO UPDATE SET ts = excluded.ts""",
+        [(sub, kind, tid, now) for tid in valid_ids],
+    )
+    return {"count": len(valid_ids)}
+
+
 @app.post("/events/rejection")
 def post_rejection(
     payload: dict,
