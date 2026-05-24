@@ -27,6 +27,7 @@ import { TrendingRow } from '../search/TrendingRow'
 import { useCast } from '../../lib/hooks/useCast'
 import { useConfirm } from '../confirm/useConfirm'
 import { sonarr, type Series, type SeriesSearchResult } from '../../lib/api/sonarr'
+import { postClickEvent } from '../../lib/api/recommenderEvents'
 import './TvTab.css'
 
 function pickSearchPoster(item: SeriesSearchResult): string | undefined {
@@ -173,6 +174,11 @@ export function TvTab() {
       ? 'Picked for you'
       : 'Trending this week'
   const handleTrendingPick = async (tmdbId: number) => {
+    // See MoviesTab.handleTrendingPick — mirror the click to the
+    // recommender so the optimizer sees real engagement, not just dot
+    // feedback. Pure-trending picks with no matching rec_log row are
+    // silently dropped sidecar-side.
+    postClickEvent('tv', tmdbId)
     setTrendingPending(tmdbId)
     try {
       const results = await sonarr.lookup(`tmdb:${tmdbId}`)

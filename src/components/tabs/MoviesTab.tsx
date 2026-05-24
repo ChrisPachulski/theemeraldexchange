@@ -26,6 +26,7 @@ import { TrendingRow } from '../search/TrendingRow'
 import { useCast } from '../../lib/hooks/useCast'
 import { useConfirm } from '../confirm/useConfirm'
 import { radarr, type Movie, type MovieSearchResult } from '../../lib/api/radarr'
+import { postClickEvent } from '../../lib/api/recommenderEvents'
 import './TvTab.css'
 
 function pickSearchPoster(item: MovieSearchResult): string | undefined {
@@ -182,6 +183,15 @@ export function MoviesTab() {
   // lookup (it accepts tmdb:NNN) so the same DetailModal flow handles
   // it as a regular search result.
   const handleTrendingPick = async (tmdbId: number) => {
+    // Mirror the click to the recommender as a conversion signal.
+    // Outcome attribution in the sidecar ties it back to the most
+    // recent rec_log row for the same (sub, kind, tmdb_id) — so for
+    // suggestion-strip clicks the optimizer sees real engagement
+    // (not just dot feedback). For pure-trending strips the rec_log
+    // lookup misses and the event is silently dropped sidecar-side,
+    // which is the correct behavior (we don't want to attribute a
+    // click to a recommendation that was never made).
+    postClickEvent('movie', tmdbId)
     setTrendingPending(tmdbId)
     try {
       const inLib = libraryByTmdb.get(tmdbId)

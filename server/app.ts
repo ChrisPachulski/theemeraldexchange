@@ -21,6 +21,7 @@ import { grabs } from './routes/grabs.js'
 import { suggestions } from './routes/suggestions.js'
 import { feedback } from './routes/feedback.js'
 import { usage } from './routes/usage.js'
+import { recommenderEvents } from './routes/recommenderEvents.js'
 
 export const app = new Hono()
 
@@ -98,3 +99,7 @@ app.route('/api/grabs', grabs)
 app.route('/api/suggestions', suggestions)
 app.route('/api/feedback', feedback)
 app.route('/api/usage', usage)
+// Narrow pass-through for client-side conversion signals (currently
+// 'clicked' only) that the SPA fires when a user interacts with a
+// suggestion. Added/like/dislike/reject have their own paths above.
+app.route('/api/recommender', recommenderEvents)

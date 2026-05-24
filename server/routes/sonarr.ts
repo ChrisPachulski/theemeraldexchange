@@ -6,6 +6,7 @@ import { Hono } from 'hono'
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { sonarrFetch, sonarrRootFolders } from '../services/sonarr.js'
 import { appendGrabEvent } from '../services/grabLog.js'
+import { postFeedback } from '../services/recommender.js'
 import { env } from '../env.js'
 
 export const sonarr = new Hono<Env>()
@@ -395,6 +396,25 @@ sonarr.post('/api/v3/series', async (c) => {
     body: JSON.stringify(cappedBody),
   })
   const out = await r.text()
+
+  // Mirror successful adds to the recommender as a strong positive
+  // signal so the optimizer learns from real conversions, not just
+  // dot-feedback. Sonarr lookups carry tmdbId as secondary metadata
+  // (primary id is tvdbId for TV), and tmdbId is what the
+  // recommender's catalog is keyed on. Skip the mirror if tmdbId is
+  // absent — better silence than an attributed event against the
+  // wrong id. Fire-and-forget; bounded timeout in services/recommender.ts.
+  if (r.ok) {
+    const tmdbId = typeof body.tmdbId === 'number' ? body.tmdbId : undefined
+    if (tmdbId !== undefined) {
+      void postFeedback({
+        sub: session.sub,
+        kind: 'tv',
+        tmdb_id: tmdbId,
+        signal: 'added',
+      })
+    }
+  }
 
   if (r.ok && wantedSearch) {
     try {
