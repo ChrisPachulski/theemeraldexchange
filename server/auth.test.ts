@@ -9,6 +9,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Hono } from 'hono'
 import { auth, me } from './auth.js'
 import { env } from './env.js'
+import { createSession } from './session.js'
+import {
+  _primeSessionGateCache,
+  _resetSessionGateCacheForTests,
+} from './services/sessionGate.js'
 
 function app() {
   const a = new Hono()
@@ -22,6 +27,10 @@ beforeEach(() => {
   // by mutating env directly. (We mutate the const-asserted object via
   // a cast — fine for tests, ugly in prod.)
   ;(env as Record<string, unknown>).plexServerId = null
+  // sessionGate's membership cache is module-scoped — clear between
+  // tests so the revoked-access tests below don't carry primed state
+  // into the next case.
+  _resetSessionGateCacheForTests()
 })
 
 afterEach(() => {
@@ -246,5 +255,60 @@ describe('GET /me + POST /auth/logout', () => {
     const setCookie = r.headers.get('set-cookie') ?? ''
     // deleteCookie sets Max-Age=0
     expect(setCookie.toLowerCase()).toMatch(/max-age=0|expires=/)
+  })
+
+  it('/me 401s + clears the cookie when membership has been revoked', async () => {
+    // Reads of /api/me used to bypass the reconcile pipeline that every
+    // protected route already runs through, so a revoked user could
+    // keep the SPA in a signed-in state until they tried a protected
+    // action. Now /me runs the same reconcileSession + clearSessionCookie
+    // path and surfaces the revoke immediately. Set up: a configured
+    // Plex gate, a session whose membership cache says not_member,
+    // confirms /me returns 401 with access_revoked AND drops the cookie.
+    ;(env as Record<string, unknown>).plexServerId = 'home-machine-id'
+    const token = await createSession({
+      sub: '777',
+      username: 'admin-user',
+      role: 'admin',
+      plexAuthToken: 'still-valid-but-no-longer-a-member',
+    })
+    _primeSessionGateCache('777', 'not_member')
+    const r = await app().request('/me', {
+      headers: { Cookie: `eex.session=${token}` },
+    })
+    expect(r.status).toBe(401)
+    expect(await r.json()).toEqual({
+      error: 'unauthenticated',
+      reason: 'access_revoked',
+    })
+    const setCookie = (r.headers.get('set-cookie') ?? '').toLowerCase()
+    expect(setCookie).toMatch(/eex\.session=/)
+    expect(setCookie).toMatch(/max-age=0|expires=/)
+  })
+
+  it('/me reflects the recomputed role on the next call after an ADMINS demotion', async () => {
+    // Cookie says 'admin' (issued when the user was in ADMINS), then
+    // the operator edits ADMINS to drop them. /me must reflect the
+    // recomputed 'user' role on the next call rather than echoing the
+    // stale role from the cookie.
+    const token = await createSession({
+      sub: '555',
+      username: 'admin-user',
+      role: 'admin',
+      plexAuthToken: 'token-555',
+    })
+    // Snapshot, demote, restore at end of test.
+    const adminsBefore = env.admins
+    ;(env as Record<string, unknown>).admins = []
+    try {
+      const r = await app().request('/me', {
+        headers: { Cookie: `eex.session=${token}` },
+      })
+      expect(r.status).toBe(200)
+      const body = (await r.json()) as { user: { role: string } }
+      expect(body.user.role).toBe('user')
+    } finally {
+      ;(env as Record<string, unknown>).admins = adminsBefore
+    }
   })
 })
