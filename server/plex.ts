@@ -4,6 +4,7 @@
 // /api/v2 endpoints we use.
 
 import { env } from './env.js'
+import { fetchWithTimeout, WAN_TIMEOUT_MS } from './services/upstream.js'
 
 const PLEX_BASE = 'https://plex.tv/api/v2'
 const AUTH_PAGE = 'https://app.plex.tv/auth#'
@@ -43,10 +44,12 @@ export type PlexResource = {
 // page URL; the user authenticates there; we then poll the PIN until it
 // has an `authToken`.
 export async function createPin(): Promise<Pin> {
-  const res = await fetch(`${PLEX_BASE}/pins?strong=true`, {
-    method: 'POST',
-    headers: baseHeaders(),
-  })
+  const res = await fetchWithTimeout(
+    `${PLEX_BASE}/pins?strong=true`,
+    { method: 'POST', headers: baseHeaders() },
+    WAN_TIMEOUT_MS,
+    'plex.createPin',
+  )
   if (!res.ok) throw new Error(`plex.createPin failed: ${res.status}`)
   const data = (await res.json()) as Pin
   return data
@@ -54,18 +57,24 @@ export async function createPin(): Promise<Pin> {
 
 // Step 2: poll until the PIN carries an authToken (user authorized).
 export async function checkPin(pinId: number): Promise<Pin> {
-  const res = await fetch(`${PLEX_BASE}/pins/${pinId}`, {
-    headers: baseHeaders(),
-  })
+  const res = await fetchWithTimeout(
+    `${PLEX_BASE}/pins/${pinId}`,
+    { headers: baseHeaders() },
+    WAN_TIMEOUT_MS,
+    'plex.checkPin',
+  )
   if (!res.ok) throw new Error(`plex.checkPin failed: ${res.status}`)
   return (await res.json()) as Pin
 }
 
 // Step 3: identify the user behind the authToken.
 export async function getUser(authToken: string): Promise<PlexUser> {
-  const res = await fetch(`${PLEX_BASE}/user`, {
-    headers: { ...baseHeaders(), 'X-Plex-Token': authToken },
-  })
+  const res = await fetchWithTimeout(
+    `${PLEX_BASE}/user`,
+    { headers: { ...baseHeaders(), 'X-Plex-Token': authToken } },
+    WAN_TIMEOUT_MS,
+    'plex.getUser',
+  )
   if (!res.ok) throw new Error(`plex.getUser failed: ${res.status}`)
   return (await res.json()) as PlexUser
 }
@@ -76,9 +85,12 @@ export async function getUser(authToken: string): Promise<PlexUser> {
 // A "member of our server" is anyone for whom that server's
 // machineIdentifier appears in their resource list.
 export async function listResources(authToken: string): Promise<PlexResource[]> {
-  const res = await fetch(`${PLEX_BASE}/resources?includeHttps=1`, {
-    headers: { ...baseHeaders(), 'X-Plex-Token': authToken },
-  })
+  const res = await fetchWithTimeout(
+    `${PLEX_BASE}/resources?includeHttps=1`,
+    { headers: { ...baseHeaders(), 'X-Plex-Token': authToken } },
+    WAN_TIMEOUT_MS,
+    'plex.listResources',
+  )
   if (!res.ok) throw new Error(`plex.listResources failed: ${res.status}`)
   return (await res.json()) as PlexResource[]
 }
@@ -172,14 +184,19 @@ export async function listAcceptedUsers(authToken: string): Promise<PlexFriend[]
   // sometimes an empty MediaContainer; the query-param form is what
   // actually returns the share list. Belt-and-suspenders: send both.
   const url = `https://plex.tv/api/users?X-Plex-Token=${encodeURIComponent(authToken)}`
-  const res = await fetch(url, {
-    headers: {
-      'X-Plex-Product': 'The Emerald Exchange',
-      'X-Plex-Client-Identifier': env.plexClientId,
-      'X-Plex-Token': authToken,
-      Accept: 'application/xml',
+  const res = await fetchWithTimeout(
+    url,
+    {
+      headers: {
+        'X-Plex-Product': 'The Emerald Exchange',
+        'X-Plex-Client-Identifier': env.plexClientId,
+        'X-Plex-Token': authToken,
+        Accept: 'application/xml',
+      },
     },
-  })
+    WAN_TIMEOUT_MS,
+    'plex.listAcceptedUsers',
+  )
   if (!res.ok) throw new Error(`plex.listAcceptedUsers failed: ${res.status}`)
   const xml = await res.text()
   return parseUserElements(xml)

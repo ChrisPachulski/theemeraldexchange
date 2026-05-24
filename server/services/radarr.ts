@@ -2,6 +2,7 @@
 // this process only.
 
 import { env } from '../env.js'
+import { fetchWithTimeout, LAN_TIMEOUT_MS } from './upstream.js'
 
 export type RootFolder = {
   id: number
@@ -19,14 +20,19 @@ export async function radarrFetch(
   if (query) {
     for (const [k, v] of query.entries()) url.searchParams.set(k, v)
   }
-  return fetch(url.toString(), {
-    ...init,
-    headers: {
-      ...(init.headers ?? {}),
-      'X-Api-Key': env.radarrApiKey,
-      Accept: 'application/json',
+  return fetchWithTimeout(
+    url.toString(),
+    {
+      ...init,
+      headers: {
+        ...(init.headers ?? {}),
+        'X-Api-Key': env.radarrApiKey,
+        Accept: 'application/json',
+      },
     },
-  })
+    LAN_TIMEOUT_MS,
+    'radarr',
+  )
 }
 
 export async function radarrRootFolders(): Promise<RootFolder[]> {
