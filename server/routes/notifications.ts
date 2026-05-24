@@ -142,7 +142,27 @@ notifications.post('/discord', async (c) => {
     }
     const fetcher = app === 'sonarr' ? sonarrFetch : radarrFetch
     if (existing !== null) {
-      await fetcher(`/api/v3/notification/${existing}`, { method: 'DELETE' })
+      // Fail closed on a failed DELETE. Pre-fix behavior ignored
+      // res.ok and unconditionally POSTed the new connector — a
+      // transient Sonarr/Radarr 5xx left the OLD webhook active AND
+      // added a NEW one, so every subsequent grab would fire two
+      // identical Discord pings until an operator noticed and manually
+      // pruned the upstream notifications list. Surface the failure so
+      // the SPA can retry instead.
+      const delRes = await fetcher(`/api/v3/notification/${existing}`, { method: 'DELETE' })
+      if (!delRes.ok) {
+        const text = await delRes.text().catch(() => '')
+        return c.json(
+          {
+            error: `${app}_delete_failed`,
+            status: delRes.status,
+            detail: text.slice(0, 400),
+            message:
+              'refusing to create a replacement connector while the old one is still active; retry, or remove and re-add from the menu',
+          },
+          502,
+        )
+      }
     }
     const res = await fetcher('/api/v3/notification', {
       method: 'POST',
