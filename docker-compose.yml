@@ -82,6 +82,16 @@ services:
       RECOMMENDER_DB_PATH: "/data/exchange.db"
       RECOMMENDER_HOST: "0.0.0.0"
       RECOMMENDER_PORT: "8000"
+      # Optimizer's eval gate reads this JSONL of frozen past sessions.
+      # The Dockerfile intentionally does NOT bake the holdout into the
+      # image (it's operator-curated history, not source) and the deploy
+      # rsync excludes it. Place the file at this path on the host's
+      # /mnt/user/appdata/exchange-backend/recommender-db/ — mounted as
+      # /data inside the container — and the optimizer will promote
+      # candidate models that beat baseline on this set. With no
+      # holdout present, every optimizer run records the candidate as
+      # an inactive proposal and active stays put.
+      RECOMMENDER_HOLDOUT_PATH: "${RECOMMENDER_HOLDOUT_PATH:-/data/holdout.jsonl}"
       RECOMMENDER_DEFAULT_RECIPE: "${RECOMMENDER_DEFAULT_RECIPE:-mmr_diverse}"
       RECOMMENDER_COLD_START_THRESHOLD: "${RECOMMENDER_COLD_START_THRESHOLD:-10}"
       RECOMMENDER_OPTIMIZER_MAX_DRIFT_PCT: "${RECOMMENDER_OPTIMIZER_MAX_DRIFT_PCT:-0.20}"
