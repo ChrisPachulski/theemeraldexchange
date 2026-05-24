@@ -1,0 +1,129 @@
+// Per-request session reconciliation. The session cookie is JWE-
+// encrypted and HttpOnly so the client can't tamper with it, but the
+// claims inside are still a 30-day snapshot of facts that can change:
+//
+//   - role        — env.admins can be edited in production without
+//                   invalidating any session cookie. A demoted admin
+//                   would otherwise keep admin until cookie expiry.
+//   - membership  — the user can be removed from PLEX_SERVER_ID (or
+//                   sign out from plex.tv) and the cookie wouldn't
+//                   notice; they'd retain access until expiry or
+//                   SESSION_SECRET rotation.
+//
+// This module rolls a "reconcile on every protected request" layer in
+// front of the raw cookie:
+//   - role is recomputed cheaply from env.admins on every call.
+//   - membership is re-checked against plex.tv at most once per
+//     REVALIDATE_TTL_MS per sub, using the user's stored Plex token.
+//     A definitive non-membership signal (200 with no matching server
+//     resource, OR a 401/403 from plex.tv meaning the token was
+//     revoked) returns null so the middleware can clear the cookie.
+//     Network errors / 5xx / timeout keep the user signed in and the
+//     prior cached status — a plex.tv outage shouldn't lock everyone
+//     out of the dashboard.
+
+import { env } from '../env.js'
+import { probeResources } from '../plex.js'
+import type { Role, Session } from '../session.js'
+
+const REVALIDATE_TTL_MS = 15 * 60 * 1000
+const REVALIDATE_TIMEOUT_MS = 5_000
+
+type Status = 'member' | 'not_member'
+
+type Cached = { status: Status; checkedAt: number }
+const cache = new Map<string, Cached>()
+
+export function _resetSessionGateCacheForTests(): void {
+  cache.clear()
+}
+
+// Seed the cache after a successful PIN check so the first protected
+// request doesn't re-hit plex.tv. The login path already verified
+// membership, so any seed here is fresh.
+export function _primeSessionGateCache(sub: string, status: Status = 'member'): void {
+  cache.set(sub, { status, checkedAt: Date.now() })
+}
+
+export function roleFor(username: string): Role {
+  const lower = username.toLowerCase()
+  return env.admins.some((a) => a.toLowerCase() === lower) ? 'admin' : 'user'
+}
+
+/**
+ * Reconcile a decoded session against current env + Plex state.
+ *
+ *   - role is always recomputed from env.admins (cheap, in-process,
+ *     so demotions take effect on the next request).
+ *   - membership is revalidated at most once per REVALIDATE_TTL_MS per
+ *     sub. A definitive non-member signal returns null so the
+ *     middleware can clear the cookie and 401. Network errors leave
+ *     the cached status intact and pass the request through.
+ *
+ * Returns the (possibly role-corrected) session or null if the user
+ * should be signed out. The cookie itself is not re-signed — the
+ * override applies for the lifetime of this request only.
+ */
+export async function reconcileSession(session: Session): Promise<Session | null> {
+  const role = roleFor(session.username)
+
+  // Without a Plex token in the cookie (legacy sessions issued before
+  // the token field existed) OR without a configured server gate
+  // (bootstrap mode), there is nothing to revalidate against. Recompute
+  // the role and pass through.
+  if (!session.plexAuthToken || !env.plexServerId) {
+    return { ...session, role }
+  }
+
+  const now = Date.now()
+  const cached = cache.get(session.sub)
+  if (cached && now - cached.checkedAt < REVALIDATE_TTL_MS) {
+    if (cached.status === 'not_member') return null
+    return { ...session, role }
+  }
+
+  const status = await checkMembership(session.plexAuthToken)
+  if (status === 'unknown') {
+    // plex.tv hiccup. Fall back to the prior cached answer if any —
+    // if we've never had a definitive answer for this sub, allow the
+    // request rather than locking everyone out.
+    if (cached) return cached.status === 'not_member' ? null : { ...session, role }
+    return { ...session, role }
+  }
+
+  cache.set(session.sub, { status, checkedAt: now })
+  if (status === 'not_member') return null
+  return { ...session, role }
+}
+
+async function checkMembership(token: string): Promise<Status | 'unknown'> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), REVALIDATE_TIMEOUT_MS)
+  try {
+    const probe = await probeResources(token, controller.signal)
+    if (probe.kind === 'ok') {
+      const isMember = probe.resources.some(
+        (r) => r.provides.includes('server') && r.clientIdentifier === env.plexServerId,
+      )
+      return isMember ? 'member' : 'not_member'
+    }
+    if (probe.kind === 'http_error') {
+      // 401 / 403 = token revoked. Definitive sign-out signal.
+      if (probe.status === 401 || probe.status === 403) return 'not_member'
+      // 4xx other than auth, or 5xx — treat as transient. Don't lock
+      // the user out on a plex.tv hiccup; we'll re-check next TTL.
+      console.warn('[sessionGate] plex membership probe HTTP', probe.status)
+      return 'unknown'
+    }
+    // network_error
+    return 'unknown'
+  } catch (e) {
+    console.error(
+      '[sessionGate] plex membership probe threw:',
+      e instanceof Error ? e.message : String(e),
+    )
+    return 'unknown'
+  } finally {
+    clearTimeout(timer)
+  }
+}

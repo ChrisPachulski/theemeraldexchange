@@ -19,16 +19,11 @@ import {
   listPendingInvites,
   listSharedServerInvitees,
 } from '../plex.js'
-import { env } from '../env.js'
+import { roleFor } from '../services/sessionGate.js'
 
 export const users = new Hono<Env>()
 
 users.use('*', requireAdmin)
-
-function roleFor(username: string): 'admin' | 'user' {
-  const lower = username.toLowerCase()
-  return env.admins.some((a) => a.toLowerCase() === lower) ? 'admin' : 'user'
-}
 
 users.get('/', async (c) => {
   const session = c.get('session')

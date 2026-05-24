@@ -19,7 +19,11 @@ async function userCookie(sub = '1') {
   return `eex.session=${t}`
 }
 async function adminCookie() {
-  const t = await createSession({ sub: '99', username: 'admin', role: 'admin' })
+  // Username MUST match the vitest test-env ADMINS list — the auth
+  // middleware now reconciles the cookie role against env.admins on
+  // every request, so a fake admin cookie issued for a non-listed
+  // username gets demoted to 'user' and the route returns 403.
+  const t = await createSession({ sub: '99', username: 'admin-user', role: 'admin' })
   return `eex.session=${t}`
 }
 
