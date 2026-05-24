@@ -116,6 +116,14 @@ export function AddSeriesModal({ series, onClose, onAdded }: Props) {
       mutation.mutate(
         {
           tvdbId: series.tvdbId,
+          // tmdbId is the recommender's catalog key — without it the
+          // server-side conversion mirror (sonarr.ts → postFeedback
+          // signal:'added') drops every TV add on the floor, leaving
+          // the optimizer to learn from dot-feedback alone. Sonarr's
+          // own add API uses tvdbId as primary; tmdbId is along for
+          // the recommender ride. NON_ADMIN_SONARR_ALLOW lets it
+          // through the materialize step.
+          ...(series.tmdbId !== undefined ? { tmdbId: series.tmdbId } : {}),
           title: series.title,
         },
         {
@@ -146,6 +154,10 @@ export function AddSeriesModal({ series, onClose, onAdded }: Props) {
 
     const body = {
       tvdbId: series.tvdbId,
+      // See non-admin branch above — tmdbId is the recommender's
+      // catalog key; without it the conversion mirror is silently
+      // dropped. Sonarr's add API ignores it.
+      ...(series.tmdbId !== undefined ? { tmdbId: series.tmdbId } : {}),
       title: series.title,
       qualityProfileId: profileId,
       rootFolderPath: rootFolder,
