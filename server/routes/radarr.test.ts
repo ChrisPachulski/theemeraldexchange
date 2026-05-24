@@ -147,6 +147,57 @@ describe('radarr — allow-list and gates', () => {
     })
     expect(r.status).toBe(201)
   })
+
+  it('400 rootFolderPath_required when body omits rootFolderPath (fail closed)', async () => {
+    // Without a rootFolderPath the disk-space gate has nothing to
+    // measure; the prior implementation silently forwarded the add.
+    // Fail closed at the route boundary.
+    const r = await appUnderTest().request('/api/v3/movie', {
+      method: 'POST',
+      headers: {
+        Cookie: await adminCookie(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ title: 'No root folder' }),
+    })
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'rootFolderPath_required' })
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  it('400 unknown_root_folder when rootFolderPath does not match any Radarr folder', async () => {
+    stub('/api/v3/rootfolder', [
+      { id: 1, path: '/data/movies', freeSpace: 500 * 1024 ** 3 },
+    ])
+    const r = await appUnderTest().request('/api/v3/movie', {
+      method: 'POST',
+      headers: {
+        Cookie: await adminCookie(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ title: 'X', rootFolderPath: '/data/different' }),
+    })
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'unknown_root_folder', path: '/data/different' })
+  })
+
+  it('507 free_space_unknown when the matched root folder omits freeSpace', async () => {
+    // Radarr can omit freeSpace on transient issues. Old code treated
+    // missing/non-finite freeSpace as "fine" — silently disabling the
+    // gate. Fail closed.
+    stub('/api/v3/rootfolder', [{ id: 1, path: '/data/movies' }])
+    const r = await appUnderTest().request('/api/v3/movie', {
+      method: 'POST',
+      headers: {
+        Cookie: await adminCookie(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ title: 'X', rootFolderPath: '/data/movies' }),
+    })
+    expect(r.status).toBe(507)
+    const body = (await r.json()) as { error: string }
+    expect(body.error).toBe('free_space_unknown')
+  })
 })
 
 // Capture the body that the backend forwards to Radarr's POST
