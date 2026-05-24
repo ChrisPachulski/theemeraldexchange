@@ -19,6 +19,14 @@ COPY pyproject.toml ./
 COPY app ./app
 COPY workers ./workers
 COPY migrations ./migrations
+# eval/ ships the holdout generator (build_holdout.py) and the
+# example holdout. pyproject.toml intentionally does NOT include
+# eval in the wheel — it's an operator utility, not part of the
+# runtime service surface — but the documented production recipe
+# (DEPLOY.md: docker exec exchange-recommender python -m eval.build_holdout)
+# expects to import it from CWD=/srv, so the directory must still
+# land in the image.
+COPY eval ./eval
 RUN pip install --upgrade pip && pip install .
 
 ENV RECOMMENDER_DB_PATH=/data/exchange.db \
