@@ -9,7 +9,6 @@ import {
   _resetRecentlyShownForTests,
   _resetLibraryCacheForTests,
   _resetTmdbInFlightForTests,
-  _resetLibraryBlockCacheForTests,
 } from './suggestions.js'
 import { createSession } from '../session.js'
 import { _setRejectionsPathForTests, addRejection } from '../services/rejections.js'
@@ -79,7 +78,6 @@ beforeEach(async () => {
   _resetRecentlyShownForTests()
   _resetLibraryCacheForTests()
   _resetTmdbInFlightForTests()
-  _resetLibraryBlockCacheForTests()
 })
 
 afterEach(async () => {
@@ -1197,23 +1195,25 @@ describe('suggestions route — prompt shape', () => {
     expect(userMsg.toLowerCase()).toMatch(/drama|crime/)
   })
 
-  it('library block cache returns identical block on second request (cache hit)', async () => {
-    // Two consecutive requests with the same library should produce identical
-    // library block content (second call hits the libraryBlockCache). The
-    // cache key is the fingerprint; same library = same fingerprint = same block.
+  it('library block is deterministic for identical library + rejection inputs', async () => {
+    // The library block is rebuilt fresh every call now (the prior
+    // in-memory fingerprint cache was removed because Anthropic prompt
+    // caching is the meaningful cost saver and the fingerprint missed
+    // middle-row mutations). What still must hold: two requests with
+    // identical inputs produce identical block text, so Anthropic's
+    // prompt cache key keeps matching.
     stubFetchForSonarr()
     const r1 = await appUnderTest().request('/tv', {
       headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
     })
     expect(r1.status).toBe(200)
     const args1 = lastCreateArgs.value as { system: Array<{ text: string }> }
-    // The cached library block has cache_control set
     const libBlock1 = args1.system.find((s) => s.text?.includes('Household TV SHOWS library'))
     expect(libBlock1).toBeDefined()
     const blockText1 = libBlock1!.text
-    // Second request — same library, cache should hit and return identical block
+
     lastCreateArgs.value = null
-    _resetLibraryCacheForTests() // reset Sonarr/Radarr cache so library is re-fetched
+    _resetLibraryCacheForTests()
     const r2 = await appUnderTest().request('/tv', {
       headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
     })
@@ -1221,9 +1221,7 @@ describe('suggestions route — prompt shape', () => {
     const args2 = lastCreateArgs.value as { system: Array<{ text: string }> }
     const libBlock2 = args2.system.find((s) => s.text?.includes('Household TV SHOWS library'))
     expect(libBlock2).toBeDefined()
-    const blockText2 = libBlock2!.text
-    // Same library fingerprint → cache hit → identical block content
-    expect(blockText1).toBe(blockText2)
+    expect(libBlock2!.text).toBe(blockText1)
   })
 
   it('sets max_tokens ≥ 4096 on Claude calls to avoid truncation with 30-pick reasons', async () => {

@@ -18,7 +18,6 @@ import {
   _resetRecentlyShownForTests,
   _resetLibraryCacheForTests,
   _resetTmdbInFlightForTests,
-  _resetLibraryBlockCacheForTests,
 } from './suggestions.js'
 import { createSession } from '../session.js'
 import { _setRejectionsPathForTests, addRejection } from '../services/rejections.js'
@@ -675,7 +674,6 @@ beforeEach(async () => {
   _resetRecentlyShownForTests()
   _resetLibraryCacheForTests()
   _resetTmdbInFlightForTests()
-  _resetLibraryBlockCacheForTests()
 })
 
 afterEach(async () => {
