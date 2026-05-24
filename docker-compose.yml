@@ -51,6 +51,13 @@ services:
       MIN_FREE_GB: "${MIN_FREE_GB:-100}"
       MAX_MOVIE_SIZE_GB: "${MAX_MOVIE_SIZE_GB:-10}"
       MAX_TV_GB_PER_EPISODE: "${MAX_TV_GB_PER_EPISODE:-5}"
+      # Quality-profile name (case-insensitive) the server picks for
+      # non-admin adds. Without this passthrough the .env.production
+      # value never reaches the backend container and the server falls
+      # back to "choose me" — fine if the household happens to use that
+      # name, silently wrong otherwise. env.ts lowercases on load so the
+      # comparison is symmetric.
+      DEFAULT_PROFILE_NAME: "${DEFAULT_PROFILE_NAME:-Choose Me}"
       # Local recommender wiring. Flip USE_LOCAL_RECOMMENDER=1 once the
       # recommender container is healthy and its DB has been bootstrapped.
       USE_LOCAL_RECOMMENDER: "${USE_LOCAL_RECOMMENDER:-0}"
