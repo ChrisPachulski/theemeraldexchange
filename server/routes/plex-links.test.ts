@@ -256,6 +256,39 @@ describe('plex-links — resolver', () => {
     })
     expect(sectionsCalls.length).toBe(1)
   })
+
+  it('clears inFlight when the PMS fetch fails so the next request retries', async () => {
+    // Regression: getMap used to share a single inFlight promise. The
+    // resolver lived inside that promise; if the underlying PMS fetch
+    // never resolved (PMS process stuck, network drop with no RST),
+    // the promise wedged forever, every later /library-links caller
+    // joined that dead promise, and the resolver was effectively
+    // bricked until process restart. The fix bounds plexJson with an
+    // AbortController timeout so the fetch eventually rejects, AND
+    // relies on the getMap .finally to null out inFlight so the NEXT
+    // call retries with a fresh fetch instead of awaiting the dead
+    // shared promise. Simulate the bounded-timeout outcome by throwing
+    // AbortError synchronously from fetch (no real timing required).
+    let calls = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        calls++
+        const err = new Error('aborted')
+        err.name = 'AbortError'
+        throw err
+      }),
+    )
+    const cookie = await userCookie()
+    const r1 = await appUnderTest().request('/library-links', { headers: { Cookie: cookie } })
+    expect(r1.status).toBe(502)
+    const callsAfterFirst = calls
+    // Second call must trigger a fresh fetch attempt — proves inFlight
+    // didn't wedge on the dead promise.
+    const r2 = await appUnderTest().request('/library-links', { headers: { Cookie: cookie } })
+    expect(r2.status).toBe(502)
+    expect(calls).toBeGreaterThan(callsAfterFirst)
+  })
 })
 
 describe('plex-links — /server-id', () => {

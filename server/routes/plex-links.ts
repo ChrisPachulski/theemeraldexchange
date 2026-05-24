@@ -38,6 +38,16 @@ export type LinkMap = {
 
 const PLEX_LINKS_TTL_MS = 5 * 60_000
 
+// Bound every PMS fetch the link resolver makes. Without a timeout, a
+// hung PMS would leave buildMap's promise unresolved forever; that
+// unresolved promise is what getMap shares as `inFlight`, so every
+// later /api/plex/library-links caller piles onto the same dead
+// promise and the resolver wedges until the process restarts. The
+// finally clause inside getMap only fires once buildMap settles, so
+// the timeout MUST live inside plexJson where it can actually abort
+// the fetch.
+const PLEX_LINKS_FETCH_TIMEOUT_MS = 10_000
+
 type CacheEntry = { value: LinkMap; expiresAt: number }
 let cache: CacheEntry | null = null
 let inFlight: Promise<LinkMap> | null = null
@@ -91,17 +101,24 @@ async function plexJson<T>(
   token: string,
 ): Promise<T> {
   const url = `${env.plexServerUrl}${pathAndQuery}`
-  const res = await fetch(url, {
-    headers: {
-      Accept: 'application/json',
-      'X-Plex-Token': token,
-    },
-  })
-  if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    throw new Error(`plex ${res.status}: ${body.slice(0, 200)}`)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), PLEX_LINKS_FETCH_TIMEOUT_MS)
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Accept: 'application/json',
+        'X-Plex-Token': token,
+      },
+      signal: controller.signal,
+    })
+    if (!res.ok) {
+      const body = await res.text().catch(() => '')
+      throw new Error(`plex ${res.status}: ${body.slice(0, 200)}`)
+    }
+    return (await res.json()) as T
+  } finally {
+    clearTimeout(timer)
   }
-  return (await res.json()) as T
 }
 
 function emptyKindMap(): KindMap {
