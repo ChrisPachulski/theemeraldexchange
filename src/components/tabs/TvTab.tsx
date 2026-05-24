@@ -328,6 +328,10 @@ export function TvTab() {
                     const current = stateFor(id)
                     setFeedback.mutate({ tmdbId: id, title, signal: current === 'disliked' ? null : 'dislike' })
                   },
+                  // See MoviesTab — dots render disabled when the
+                  // feedback store is unreachable instead of silently
+                  // looking like a clean first-run.
+                  unavailable: !!feedback.error,
                 }}
                 ai={userKey.hasKey ? { enabled: ai.enabled, onToggle: ai.toggle } : undefined}
               />
