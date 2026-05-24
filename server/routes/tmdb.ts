@@ -9,6 +9,7 @@
 import { Hono } from 'hono'
 import { requireAuth, type Env } from '../middleware/auth.js'
 import { env } from '../env.js'
+import { fetchWithTimeout, WAN_TIMEOUT_MS } from '../services/upstream.js'
 
 export const tmdb = new Hono<Env>()
 
@@ -23,7 +24,12 @@ async function tmdbFetch(path: string, params: Record<string, string> = {}) {
   const url = new URL(`${TMDB_BASE}${path}`)
   url.searchParams.set('api_key', env.tmdbApiKey)
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v)
-  return fetch(url, { headers: { Accept: 'application/json' } })
+  return fetchWithTimeout(
+    url,
+    { headers: { Accept: 'application/json' } },
+    WAN_TIMEOUT_MS,
+    `tmdb${path}`,
+  )
 }
 
 tmdb.get('/credits', async (c) => {
