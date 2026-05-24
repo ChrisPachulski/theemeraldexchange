@@ -356,7 +356,16 @@ sonarr.post('/api/v3/series', async (c) => {
 sonarr.post('/api/v3/series/:id/seasons/:n/monitor', requireAdmin, async (c) => {
   const id = Number(c.req.param('id'))
   const n = Number(c.req.param('n'))
-  if (!Number.isFinite(id) || !Number.isFinite(n)) {
+  // Sonarr series ids are positive integers; season numbers are
+  // non-negative integers (season 0 == "Specials"). Reject decimals,
+  // negatives, and unsafe-large numbers up front so we don't issue a
+  // PUT against a junk seasonNumber.
+  if (
+    !Number.isSafeInteger(id) ||
+    id <= 0 ||
+    !Number.isSafeInteger(n) ||
+    n < 0
+  ) {
     return c.json({ error: 'bad_params' }, 400)
   }
   const getRes = await sonarrFetch(`/api/v3/series/${id}`, { method: 'GET' })

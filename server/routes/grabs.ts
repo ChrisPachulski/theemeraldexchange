@@ -35,7 +35,11 @@ grabs.get('/by-item', async (c) => {
     return c.json({ error: 'invalid_app' }, 400)
   }
   const itemId = Number(itemIdRaw)
-  if (!Number.isFinite(itemId) || itemId <= 0) {
+  // Sonarr/Radarr expose integer primary keys; rejecting decimals or
+  // unsafe-large numbers here mirrors what the upstream APIs would
+  // reject anyway, and prevents a downstream readEventsForItem scan
+  // against a junk value.
+  if (!Number.isSafeInteger(itemId) || itemId <= 0) {
     return c.json({ error: 'invalid_itemId' }, 400)
   }
   const limit = parseLimit(c.req.query('limit'), 20, 100)
