@@ -50,8 +50,27 @@ export async function createPin(): Promise<Pin> {
     WAN_TIMEOUT_MS,
     'plex.createPin',
   )
-  if (!res.ok) throw new Error(`plex.createPin failed: ${res.status}`)
+  if (!res.ok) {
+    // Log the plex.tv response body so a 4xx surfaces the reason. plex.tv
+    // returns text/plain or JSON depending on the error; capture both
+    // safely. The clientID is a public app identifier (no secret), so
+    // logging it here is fine and makes mismatched-deploy diagnosis
+    // trivial.
+    const body = await res.text().catch(() => '<read failed>')
+    console.error(
+      `[plex.createPin] FAILED status=${res.status} clientID=${env.plexClientId} body=${body.slice(0, 300)}`,
+    )
+    throw new Error(`plex.createPin failed: ${res.status}`)
+  }
   const data = (await res.json()) as Pin
+  // One-line log per pin issued. Confirms our clientID + the pin id/code
+  // pair plex.tv minted — without this, a downstream "checkPin returns
+  // pending forever" failure is opaque (we don't know if the id is
+  // correct, if the code in the popup matches, or if plex.tv even
+  // accepted the create). authToken is null at this stage by definition.
+  console.info(
+    `[plex.createPin] ok id=${data.id} code=${data.code} clientID=${env.plexClientId}`,
+  )
   return data
 }
 
@@ -63,8 +82,27 @@ export async function checkPin(pinId: number): Promise<Pin> {
     WAN_TIMEOUT_MS,
     'plex.checkPin',
   )
-  if (!res.ok) throw new Error(`plex.checkPin failed: ${res.status}`)
-  return (await res.json()) as Pin
+  if (!res.ok) {
+    const body = await res.text().catch(() => '<read failed>')
+    console.error(
+      `[plex.checkPin] FAILED status=${res.status} pinId=${pinId} clientID=${env.plexClientId} body=${body.slice(0, 300)}`,
+    )
+    throw new Error(`plex.checkPin failed: ${res.status}`)
+  }
+  const data = (await res.json()) as Pin
+  // Log the polled state without leaking the authToken value. A
+  // {status:'pending'} loop in production now produces evidence:
+  //   - "tokenPresent=false" forever → plex.tv has not attached a token
+  //     (popup not authorized, or clientID mismatch between create/auth/
+  //     check; the most common cause is PLEX_CLIENT_ID drift between the
+  //     server boot and the popup auth URL the SPA opened)
+  //   - "tokenPresent=true" then the rest of the route runs as normal
+  // Logged at info on every poll — at 1.5s cadence that's ~40 lines/min
+  // per signing-in user, low enough to leave on permanently.
+  console.info(
+    `[plex.checkPin] ok pinId=${pinId} tokenPresent=${Boolean(data.authToken)} clientID=${env.plexClientId}`,
+  )
+  return data
 }
 
 // Step 3: identify the user behind the authToken.
