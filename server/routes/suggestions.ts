@@ -24,6 +24,7 @@
 import { Hono } from 'hono'
 import Anthropic from '@anthropic-ai/sdk'
 import { requireAuth, type Env } from '../middleware/auth.js'
+import { requireTrustedOrigin } from '../middleware/csrf.js'
 import { sonarrFetch } from '../services/sonarr.js'
 import { radarrFetch } from '../services/radarr.js'
 import { getRejections, updateRejectionTitleIfPresent } from '../services/rejections.js'
@@ -53,6 +54,15 @@ export function _setTmdbApiKeyForTests(k: string | null): void {
 export const suggestions = new Hono<Env>()
 
 suggestions.use('*', requireAuth)
+
+// /:type below is a GET, but with USE_LOCAL_RECOMMENDER=1 it writes
+// rec_log and recently_shown via the sidecar's /score endpoint. The
+// global CSRF gate skips GETs, so without an explicit Origin check
+// here a hostile page could fire a credentialed GET (cookies are
+// SameSite=None in prod) and poison a victim's recommendation
+// rotation. requireTrustedOrigin opts back in to the same Origin
+// allowlist the state-changing routes use.
+suggestions.use('*', requireTrustedOrigin)
 
 const TMDB_BASE = 'https://api.themoviedb.org/3'
 // Minimum library size for a meaningful taste signal. Below this, the

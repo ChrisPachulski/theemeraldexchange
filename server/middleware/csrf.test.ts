@@ -21,14 +21,15 @@ import { Hono } from 'hono'
 async function buildApp(opts: {
   allowedOrigins: string[]
   isProd: boolean
+  middleware?: 'safe' | 'trusted'
 }) {
   vi.resetModules()
   vi.doMock('../env.js', () => ({
     env: { allowedOrigins: opts.allowedOrigins, isProd: opts.isProd },
   }))
-  const { requireSafeOrigin } = await import('./csrf.js')
+  const { requireSafeOrigin, requireTrustedOrigin } = await import('./csrf.js')
   const app = new Hono()
-  app.use('*', requireSafeOrigin)
+  app.use('*', opts.middleware === 'trusted' ? requireTrustedOrigin : requireSafeOrigin)
   app.all('/echo', (c) => c.json({ ok: true }))
   return app
 }
@@ -111,6 +112,71 @@ describe('requireSafeOrigin — allowlist enforcement', () => {
       method: 'POST',
       headers: { Origin: 'https://staging.example' },
     })
+    expect(r.status).toBe(200)
+  })
+})
+
+// requireTrustedOrigin is the sibling that does NOT bypass GET/HEAD —
+// used on the small set of read endpoints with server-side
+// side-effects (e.g. the suggestions GET writes recently_shown via
+// the local recommender). Without this, a hostile origin could fire
+// a credentialed GET and poison a victim's recommendation rotation.
+describe('requireTrustedOrigin — gates reads too', () => {
+  it.each(['GET', 'HEAD', 'POST'])(
+    'rejects %s with hostile Origin (403 bad_origin)',
+    async (method) => {
+      const app = await buildApp({
+        allowedOrigins: ['https://app.example'],
+        isProd: true,
+        middleware: 'trusted',
+      })
+      const r = await app.request('/echo', {
+        method,
+        headers: { Origin: 'https://attacker.example' },
+      })
+      expect(r.status).toBe(403)
+      // HEAD strips the body by spec — only assert reason on methods that
+      // return one. The 403 alone proves the gate fired.
+      if (method !== 'HEAD') {
+        const json = (await r.json()) as { reason?: string }
+        expect(json.reason).toBe('bad_origin')
+      }
+    },
+  )
+
+  it('rejects GET with no Origin header at all', async () => {
+    const app = await buildApp({
+      allowedOrigins: ['https://app.example'],
+      isProd: true,
+      middleware: 'trusted',
+    })
+    const r = await app.request('/echo', { method: 'GET' })
+    expect(r.status).toBe(403)
+  })
+
+  it('allows GET when Origin matches the allowlist', async () => {
+    const app = await buildApp({
+      allowedOrigins: ['https://app.example'],
+      isProd: true,
+      middleware: 'trusted',
+    })
+    const r = await app.request('/echo', {
+      method: 'GET',
+      headers: { Origin: 'https://app.example' },
+    })
+    expect(r.status).toBe(200)
+  })
+
+  it('dev (isProd:false) with empty allowlist passes GETs through (same as requireSafeOrigin)', async () => {
+    // Without this, the Vite dev proxy (same-origin, empty
+    // ALLOWED_ORIGINS) would refuse local SPA reads of any
+    // requireTrustedOrigin-protected route.
+    const app = await buildApp({
+      allowedOrigins: [],
+      isProd: false,
+      middleware: 'trusted',
+    })
+    const r = await app.request('/echo', { method: 'GET' })
     expect(r.status).toBe(200)
   })
 })
