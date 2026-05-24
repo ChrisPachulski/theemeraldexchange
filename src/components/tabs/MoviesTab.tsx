@@ -322,6 +322,11 @@ export function MoviesTab() {
                     const current = stateFor(id)
                     setFeedback.mutate({ tmdbId: id, title, signal: current === 'disliked' ? null : 'dislike' })
                   },
+                  // Feedback store unreachable → dots render disabled
+                  // with a tooltip + inline label hint. Otherwise
+                  // dots silently appear "unset," indistinguishable
+                  // from a clean first-run.
+                  unavailable: !!feedback.error,
                 }}
                 ai={userKey.hasKey ? { enabled: ai.enabled, onToggle: ai.toggle } : undefined}
               />
