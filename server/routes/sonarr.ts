@@ -284,8 +284,7 @@ async function materializeNonAdminSeriesBody(raw: SonarrAddBody): Promise<
   const profiles = (await profileRes.json()) as Array<{ id: number; name?: string }>
   const folder = folders[0]
   const namedProfile = profiles.find((p) => p.name?.toLowerCase() === env.defaultProfileName)
-  const profile =
-    namedProfile ?? (profiles.every((p) => !p.name) ? profiles[0] : undefined)
+  const profile = namedProfile ?? profiles[0]
   if (!folder) {
     return { ok: false, reason: 'admin_must_configure_upstream' }
   }
