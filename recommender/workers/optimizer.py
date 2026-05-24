@@ -281,7 +281,12 @@ def evaluate(conn: sqlite3.Connection, recipe_name: str, params: dict, holdout: 
             feedback=None,
             household_rejections=[],
         )
-        ctx = load_user_context(conn, req)
+        # persist_library=False is load-bearing here: the DB connection
+        # runs in autocommit mode, so a True call would insert every
+        # holdout tmdb_id into the live library_items table and clobber
+        # existing rows' `source` with NULL via ON CONFLICT. Eval reads
+        # the same DB as production; it must not write to it.
+        ctx = load_user_context(conn, req, persist_library=False)
         result = recipe_mod.score(ctx, conn, n=20, params=params)
         picks = {it.tmdb_id for it in result.items}
         positives = set(entry.get("positives") or [])
