@@ -372,6 +372,47 @@ describe('sonarr POST /api/v3/series — non-admin add policy', () => {
     expect(fwd.tvdbId).toBe(42)
   })
 
+  it('prefers a "Choose Me" profile over profiles[0] for non-admin adds', async () => {
+    // For TV, profile selection matters even more than for movies:
+    // Sonarr's ongoing RSS sweep against monitored series is gated by
+    // the quality profile (not our per-episode cap). Landing on Any
+    // would let 4K HDR packs through on auto-grab. Mirror the
+    // frontend's Choose Me preference server-side.
+    let capturedAddBody: Record<string, unknown> | null = null
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(JSON.stringify([
+            { id: 1, path: '/data/tv', freeSpace: 500 * 1024 ** 3 },
+          ]), { status: 200 })
+        }
+        if (url.includes('/api/v3/qualityprofile')) {
+          return new Response(JSON.stringify([
+            { id: 1, name: 'Any' },
+            { id: 5, name: 'Choose Me' },
+            { id: 8, name: 'HD - 1080p' },
+          ]), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/series') && init?.method === 'POST') {
+          capturedAddBody = JSON.parse(init.body as string)
+          return new Response(JSON.stringify({ id: 999, title: 'X', seasons: [] }), { status: 201 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/series', {
+      method: 'POST',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'X', tvdbId: 1 }),
+    })
+    expect(r.status).toBe(201)
+    expect(capturedAddBody).not.toBeNull()
+    const fwd = capturedAddBody as unknown as Record<string, unknown>
+    expect(fwd.qualityProfileId).toBe(5) // Choose Me — not Any (id 1)
+  })
+
   it('503 when upstream qualityprofile / rootfolder are not configured', async () => {
     stub('/api/v3/rootfolder', [])
     stub('/api/v3/qualityprofile', [])
