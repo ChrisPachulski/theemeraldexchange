@@ -30,7 +30,7 @@ import { radarrFetch } from '../services/radarr.js'
 import { getRejections, updateRejectionTitleIfPresent } from '../services/rejections.js'
 import { getUserFeedback, updateLikedTitleIfPresent } from '../services/userFeedback.js'
 import { appendUsageEvent, computeCostCents } from '../services/usageLog.js'
-import { scoreOnce, type RecommenderScoredItem } from '../services/recommender.js'
+import { scoreOnce, postShown, type RecommenderScoredItem } from '../services/recommender.js'
 import { env } from '../env.js'
 
 const MODEL = 'claude-haiku-4-5'
@@ -1815,6 +1815,15 @@ suggestions.get('/:type', async (c) => {
       const fill = trending.slice(0, need)
       fillCount = fill.length
       items = [...items, ...fill]
+      // Tell the sidecar these fill items were shown so the next
+      // refresh's exclude_recently_shown filter sees them. Without
+      // this, a household with a tight taste cluster (where fill
+      // fires every refresh) would see the SAME trending cards
+      // every poll until they aged out of TMDB's trending window.
+      // Fire-and-forget; bounded by services/recommender.ts timeout.
+      if (fill.length > 0) {
+        void postShown(session.sub, type, fill.map((it) => it.id))
+      }
     }
 
     setTimingHeader()

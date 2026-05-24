@@ -155,3 +155,17 @@ export async function postLibrarySync(
 ): Promise<void> {
   await mirrorPost('/events/library/sync', { kind, items }, 'recommender.postLibrarySync')
 }
+
+// Server-appended trending-fill items aren't picked by the sidecar's
+// /score, so they don't land in recently_shown automatically. Mirror
+// them here so the next refresh's exclude_recently_shown filter sees
+// them and the fill rotates instead of repeating the same trending
+// cards every poll.
+export async function postShown(
+  sub: string,
+  kind: RecommenderKind,
+  tmdbIds: number[],
+): Promise<void> {
+  if (tmdbIds.length === 0) return
+  await mirrorPost('/events/shown', { sub, kind, tmdb_ids: tmdbIds }, 'recommender.postShown')
+}
