@@ -429,6 +429,43 @@ describe('sonarr POST /api/v3/series — non-admin add policy', () => {
     const body = (await r.json()) as { error: string }
     expect(body.error).toBe('admin_must_configure_upstream')
   })
+
+  it("forces addOptions.monitor:'firstSeason' so a completed show actually grabs season 1", async () => {
+    // Prior behavior was monitor:'future', which left zero historical
+    // seasons monitored on a completed show — grabTvUnderCap is gated
+    // on monitored.length > 0, so the add silently downloaded nothing.
+    // 'firstSeason' mirrors both the modal default and the home copy.
+    let capturedAddBody: Record<string, unknown> | null = null
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(JSON.stringify([
+            { id: 1, path: '/data/tv', freeSpace: 500 * 1024 ** 3 },
+          ]), { status: 200 })
+        }
+        if (url.includes('/api/v3/qualityprofile')) {
+          return new Response(JSON.stringify([{ id: 1, name: 'Choose Me' }]), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/series') && init?.method === 'POST') {
+          capturedAddBody = JSON.parse(init.body as string)
+          return new Response(JSON.stringify({ id: 1, title: 'X', seasons: [] }), { status: 201 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/series', {
+      method: 'POST',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'X', tvdbId: 1 }),
+    })
+    expect(r.status).toBe(201)
+    expect(capturedAddBody).not.toBeNull()
+    const fwd = capturedAddBody as unknown as Record<string, unknown>
+    const addOptions = fwd.addOptions as { monitor?: string }
+    expect(addOptions.monitor).toBe('firstSeason')
+  })
 })
 
 // POST /api/v3/series — background grab pipeline interactions.
