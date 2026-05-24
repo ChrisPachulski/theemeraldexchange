@@ -64,20 +64,39 @@ export function AddMovieModal({ movie, onClose, onAdded }: Props) {
 
   if (!movie) return null
 
-  const canAdd = profileId !== null && rootFolder !== null && !mutation.isPending
+  // Admins wait on the profile + folder dropdowns to populate before
+  // Add enables (those are the inputs they're choosing from). Non-
+  // admins don't see those controls, so gating on them would leave
+  // the button mysteriously disabled — the server fills in policy
+  // either way, so just gate on the pending mutation.
+  const canAdd = isAdmin
+    ? profileId !== null && rootFolder !== null && !mutation.isPending
+    : !mutation.isPending
 
   const handleAdd = () => {
     if (!canAdd) return
     setError(null)
-    const body = {
-      tmdbId: movie.tmdbId,
-      title: movie.title,
-      year: movie.year,
-      qualityProfileId: profileId,
-      rootFolderPath: rootFolder,
-      monitored: true,
-      addOptions: { searchForMovie: searchOnAdd },
-    }
+    // Non-admins can't configure quality / folder / monitor / search
+    // mode — the server materializes those from upstream defaults +
+    // the curated Choose Me profile (see materializeNonAdminMovieBody).
+    // Send only identifying fields so the modal payload visibly
+    // matches the server contract; admin path still passes the full
+    // policy body through verbatim.
+    const body = isAdmin
+      ? {
+          tmdbId: movie.tmdbId,
+          title: movie.title,
+          year: movie.year,
+          qualityProfileId: profileId,
+          rootFolderPath: rootFolder,
+          monitored: true,
+          addOptions: { searchForMovie: searchOnAdd },
+        }
+      : {
+          tmdbId: movie.tmdbId,
+          title: movie.title,
+          year: movie.year,
+        }
     mutation.mutate(body, {
       onSuccess: () => {
         onAdded?.(movie.title)
@@ -147,17 +166,19 @@ export function AddMovieModal({ movie, onClose, onAdded }: Props) {
             </>
           )}
 
-          <label className="add-series__field">
-            <span className="add-series__label">Search</span>
-            <select
-              className="add-series__select"
-              value={searchOnAdd ? 'now' : 'later'}
-              onChange={(e) => setSearchOnAdd(e.target.value === 'now')}
-            >
-              <option value="now">Start search now</option>
-              <option value="later">Just monitor</option>
-            </select>
-          </label>
+          {isAdmin && (
+            <label className="add-series__field">
+              <span className="add-series__label">Search</span>
+              <select
+                className="add-series__select"
+                value={searchOnAdd ? 'now' : 'later'}
+                onChange={(e) => setSearchOnAdd(e.target.value === 'now')}
+              >
+                <option value="now">Start search now</option>
+                <option value="later">Just monitor</option>
+              </select>
+            </label>
+          )}
         </div>
 
         {error && <p className="add-series__error" role="alert">{error}</p>}
