@@ -4,6 +4,7 @@
 // rejected and SAB returned its HTML error page.
 
 import { env } from '../env.js'
+import { fetchWithTimeout, LAN_TIMEOUT_MS } from './upstream.js'
 
 export async function sabCall(
   mode: string,
@@ -14,5 +15,5 @@ export async function sabCall(
   url.searchParams.set('output', 'json')
   url.searchParams.set('apikey', env.sabApiKey)
   if (extra) for (const [k, v] of Object.entries(extra)) url.searchParams.set(k, v)
-  return fetch(url.toString())
+  return fetchWithTimeout(url.toString(), {}, LAN_TIMEOUT_MS, 'sab')
 }

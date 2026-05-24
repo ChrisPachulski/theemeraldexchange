@@ -2,6 +2,7 @@
 // the X-Api-Key — it never leaves this process.
 
 import { env } from '../env.js'
+import { fetchWithTimeout, LAN_TIMEOUT_MS } from './upstream.js'
 
 export type RootFolder = {
   id: number
@@ -19,14 +20,19 @@ export async function sonarrFetch(
   if (query) {
     for (const [k, v] of query.entries()) url.searchParams.set(k, v)
   }
-  return fetch(url.toString(), {
-    ...init,
-    headers: {
-      ...(init.headers ?? {}),
-      'X-Api-Key': env.sonarrApiKey,
-      Accept: 'application/json',
+  return fetchWithTimeout(
+    url.toString(),
+    {
+      ...init,
+      headers: {
+        ...(init.headers ?? {}),
+        'X-Api-Key': env.sonarrApiKey,
+        Accept: 'application/json',
+      },
     },
-  })
+    LAN_TIMEOUT_MS,
+    'sonarr',
+  )
 }
 
 export async function sonarrRootFolders(): Promise<RootFolder[]> {
