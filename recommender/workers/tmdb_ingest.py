@@ -41,6 +41,10 @@ TMDB_MAX_PAGES = 500
 CONCURRENCY = 8
 
 
+def _is_database_locked(exc: sqlite3.OperationalError) -> bool:
+    return "database is locked" in str(exc).lower()
+
+
 # =========================================================================
 # Enumeration: paginate /discover by year bucket
 # =========================================================================
@@ -235,13 +239,19 @@ async def _hydrate_loop(
             except Exception as e:
                 worker_conn = connect()
                 try:
-                    with transaction(worker_conn):
-                        worker_conn.execute(
-                            """UPDATE ingest_queue SET status='error', attempts=attempts+1,
-                               last_error=?, updated_at=datetime('now')
-                               WHERE tmdb_id=? AND kind=?""",
-                            (str(e)[:300], tmdb_id, kind),
-                        )
+                    try:
+                        with transaction(worker_conn):
+                            worker_conn.execute(
+                                """UPDATE ingest_queue SET status='error', attempts=attempts+1,
+                                   last_error=?, updated_at=datetime('now')
+                                   WHERE tmdb_id=? AND kind=?""",
+                                (str(e)[:300], tmdb_id, kind),
+                            )
+                    except sqlite3.OperationalError as db_exc:
+                        if _is_database_locked(db_exc):
+                            log.warning("hydrate %s %s queue update locked; leaving pending", kind, tmdb_id)
+                            return
+                        raise
                 finally:
                     worker_conn.close()
                 return
@@ -256,6 +266,19 @@ async def _hydrate_loop(
                                WHERE tmdb_id=? AND kind=?""",
                             ("done" if kept else "skipped", tmdb_id, kind),
                         )
+                except sqlite3.OperationalError as e:
+                    if _is_database_locked(e):
+                        log.warning("hydrate %s %s persist locked; leaving pending", kind, tmdb_id)
+                        return
+                    log.warning("hydrate %s %s persist failed: %s", kind, tmdb_id, e)
+                    with transaction(worker_conn):
+                        worker_conn.execute(
+                            """UPDATE ingest_queue SET status='error', attempts=attempts+1,
+                               last_error=?, updated_at=datetime('now')
+                               WHERE tmdb_id=? AND kind=?""",
+                            (str(e)[:300], tmdb_id, kind),
+                        )
+                    return
                 except Exception as e:
                     log.warning("hydrate %s %s persist failed: %s", kind, tmdb_id, e)
                     with transaction(worker_conn):

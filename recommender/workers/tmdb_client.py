@@ -21,6 +21,21 @@ log = logging.getLogger(__name__)
 TMDB_BASE = "https://api.themoviedb.org/3"
 
 
+def _redacted_url(url: httpx.URL) -> str:
+    if "api_key" not in url.params:
+        return str(url)
+    return str(url.copy_set_param("api_key", "<redacted>"))
+
+
+def _sanitize_http_status_error(exc: httpx.HTTPStatusError) -> httpx.HTTPStatusError:
+    response = exc.response
+    message = (
+        f"HTTP {response.status_code} {response.reason_phrase} for "
+        f"{response.request.method} {_redacted_url(response.request.url)}"
+    )
+    return httpx.HTTPStatusError(message, request=exc.request, response=response)
+
+
 def _validate_kind(kind: str) -> None:
     if kind not in {"movie", "tv"}:
         raise ValueError(f"unsupported TMDB kind: {kind!r}")
@@ -94,7 +109,10 @@ class TmdbClient:
             if self._api_key is not None:
                 request_params["api_key"] = self._api_key
             r = await self._client.get(path, params=request_params)
-            r.raise_for_status()
+            try:
+                r.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise _sanitize_http_status_error(exc) from exc
             return r.json()
 
         async for attempt in AsyncRetrying(
@@ -138,6 +156,8 @@ class TmdbClient:
 
     async def detail(self, kind: str, tmdb_id: int) -> dict:
         _validate_kind(kind)
+        if type(tmdb_id) is not int or tmdb_id <= 0:
+            raise ValueError(f"unsupported TMDB id: {tmdb_id!r}")
         return await self.get(
             f"/{kind}/{tmdb_id}",
             append_to_response="keywords,credits",

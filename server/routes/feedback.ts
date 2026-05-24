@@ -260,12 +260,15 @@ feedback.delete('/:type/:tmdbId/:signal', async (c) => {
   }
 
   // Mirror to recommender so its tables converge with Hono's truth.
-  // Always send a clear event — the recommender INSERTs by
-  // (sub, kind, tmdb_id, signal) so without an explicit clear a
-  // toggle leaves stale opposite-signal rows that load_user_context
-  // unions back in.
+  // Always send a clear event for dot signals so stale mirrored like/dislike
+  // rows don't survive a toggle or clear.
   if (env.useLocalRecommender) {
-    void postClearFeedback({ sub: session.sub, kind: type, tmdb_id: tmdbId })
+    void postClearFeedback({
+      sub: session.sub,
+      kind: type,
+      tmdb_id: tmdbId,
+      signal: actualPrior ?? undefined,
+    })
     if (rejectionWasRemoved) {
       void postClearRejection({ kind: type, tmdb_id: tmdbId })
     }

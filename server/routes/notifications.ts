@@ -21,6 +21,21 @@ export const notifications = new Hono<Env>()
 notifications.use('*', requireAdmin)
 
 const EMERALD_NAME = 'Emerald Exchange Discord'
+let discordMutationTail = Promise.resolve()
+
+async function withDiscordMutationLock<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = discordMutationTail
+  let release: () => void = () => {}
+  discordMutationTail = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  await previous
+  try {
+    return await fn()
+  } finally {
+    release()
+  }
+}
 
 function discordNotificationBody(webhookUrl: string, app: 'sonarr' | 'radarr') {
   // grabFields / importFields / manualInteractionFields are bitmask
@@ -121,58 +136,60 @@ notifications.post('/discord', async (c) => {
     return c.json({ error: 'invalid_discord_webhook' }, 400)
   }
 
-  // Resolve existing-or-not from a successful list before issuing any
-  // mutation. If listNotifications throws, treating that as "none
-  // exists" and creating a new one would stack a duplicate on every
-  // retry until Sonarr/Radarr came back. Fail closed on list error.
-  for (const app of ['sonarr', 'radarr'] as const) {
-    let existing: number | null
-    try {
-      existing = await findEmerald(app)
-    } catch (err) {
-      if (err instanceof NotificationListError) {
-        return c.json(
-          { error: `${err.app}_list_failed`, status: err.status, message: 'refusing to mutate notifications without a fresh list' },
-          502,
-        )
+  return withDiscordMutationLock(async () => {
+    // Resolve existing-or-not from a successful list before issuing any
+    // mutation. If listNotifications throws, treating that as "none
+    // exists" and creating a new one would stack a duplicate on every
+    // retry until Sonarr/Radarr came back. Fail closed on list error.
+    for (const app of ['sonarr', 'radarr'] as const) {
+      let existing: number | null
+      try {
+        existing = await findEmerald(app)
+      } catch (err) {
+        if (err instanceof NotificationListError) {
+          return c.json(
+            { error: `${err.app}_list_failed`, status: err.status, message: 'refusing to mutate notifications without a fresh list' },
+            502,
+          )
+        }
+        throw err
       }
-      throw err
-    }
-    const fetcher = app === 'sonarr' ? sonarrFetch : radarrFetch
-    if (existing !== null) {
-      const res = await fetcher(`/api/v3/notification/${existing}`, {
-        method: 'PUT',
+      const fetcher = app === 'sonarr' ? sonarrFetch : radarrFetch
+      if (existing !== null) {
+        const res = await fetcher(`/api/v3/notification/${existing}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...discordNotificationBody(url, app), id: existing }),
+        })
+        if (!res.ok) {
+          const text = await res.text().catch(() => '')
+          return c.json(
+            {
+              error: `${app}_update_failed`,
+              status: res.status,
+              detail: text.slice(0, 400),
+              message: 'existing connector was left unchanged; retry, or remove and re-add from the menu',
+            },
+            502,
+          )
+        }
+        continue
+      }
+      const res = await fetcher('/api/v3/notification', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...discordNotificationBody(url, app), id: existing }),
+        body: JSON.stringify(discordNotificationBody(url, app)),
       })
       if (!res.ok) {
         const text = await res.text().catch(() => '')
         return c.json(
-          {
-            error: `${app}_update_failed`,
-            status: res.status,
-            detail: text.slice(0, 400),
-            message: 'existing connector was left unchanged; retry, or remove and re-add from the menu',
-          },
+          { error: `${app}_create_failed`, status: res.status, detail: text.slice(0, 400) },
           502,
         )
       }
-      continue
     }
-    const res = await fetcher('/api/v3/notification', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(discordNotificationBody(url, app)),
-    })
-    if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      return c.json(
-        { error: `${app}_create_failed`, status: res.status, detail: text.slice(0, 400) },
-        502,
-      )
-    }
-  }
-  return c.json({ ok: true, configured: true })
+    return c.json({ ok: true, configured: true })
+  })
 })
 
 notifications.delete('/discord', async (c) => {

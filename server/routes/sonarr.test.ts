@@ -323,7 +323,7 @@ describe('sonarr POST /api/v3/series — non-admin add policy', () => {
         ]), { status: 200 })
       }
       if (url.includes('/api/v3/qualityprofile')) {
-        return new Response(JSON.stringify([{ id: 11 }, { id: 22 }]), { status: 200 })
+        return new Response(JSON.stringify([{ id: 11, name: 'Choose Me' }, { id: 22, name: 'Any' }]), { status: 200 })
       }
       if (url.endsWith('/api/v3/series') && init?.method === 'POST') {
         capturedAddBody = JSON.parse(init.body as string)

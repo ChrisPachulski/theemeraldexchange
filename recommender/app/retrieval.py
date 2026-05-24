@@ -8,6 +8,7 @@ requested kind, anti-joined against library / rejections / recently-shown.
 from __future__ import annotations
 
 import sqlite3
+import logging
 from dataclasses import dataclass
 
 import numpy as np
@@ -15,6 +16,8 @@ import numpy as np
 from .context import IN_BATCH_SIZE, Candidate, TitleRow, UserContext
 from .db import decode_vec_rowid, deserialize_f32, serialize_f32
 from .schemas import Kind
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -52,9 +55,12 @@ def retrieve_candidates(
     if not rows:
         return CandidateBatch(candidates=[], distances=[], diag={"raw": 0, "kept": 0})
 
-    # Decode kind-encoded rowids back to tmdb_ids. Every row has the
-    # queried kind (WHERE v.kind = ?) so we just strip the encoding.
-    decoded = [(decode_vec_rowid(r["vec_rowid"])[1], r["distance"]) for r in rows]
+    decoded: list[tuple[int, float]] = []
+    for r in rows:
+        try:
+            decoded.append((decode_vec_rowid(r["vec_rowid"], kind)[1], r["distance"]))
+        except ValueError:
+            log.warning("skipping title_vec row with inconsistent kind encoding: rowid=%s kind=%s", r["vec_rowid"], kind)
     keep_ids = [tid for tid, _ in decoded if tid not in excluded]
     keep_distances = {tid: dist for tid, dist in decoded}
 

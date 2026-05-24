@@ -151,6 +151,7 @@ export async function postClearFeedback(ev: {
   sub: string
   kind: RecommenderKind
   tmdb_id: number
+  signal?: 'like' | 'dislike' | 'reject'
 }): Promise<void> {
   await mirrorPost('/events/feedback/clear', ev, 'recommender.postClearFeedback')
 }

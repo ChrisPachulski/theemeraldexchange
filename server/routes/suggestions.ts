@@ -36,13 +36,21 @@ import { env } from '../env.js'
 
 const MODEL = 'claude-haiku-4-5'
 
-// TMDB key snapshot read at module load. Mutable so tests can flip
-// it without rebuilding the whole env. Production code reads through
-// this indirection so tmdbLookup/tmdbTrending/tmdbTitleById all
-// observe the same value.
+type TmdbAuthMode = 'bearer' | 'query'
+
+// TMDB credential snapshot read at module load. Mutable so tests can
+// flip it without rebuilding the whole env. Production code reads
+// through this indirection so tmdbLookup/tmdbTrending/tmdbTitleById
+// all observe the same value and auth mode.
 let _tmdbKey: string | null = env.tmdbReadAccessToken ?? env.tmdbApiKey
-export function _setTmdbApiKeyForTests(k: string | null): void {
+let _tmdbAuthMode: TmdbAuthMode | null = env.tmdbReadAccessToken
+  ? 'bearer'
+  : env.tmdbApiKey
+    ? 'query'
+    : null
+export function _setTmdbApiKeyForTests(k: string | null, authMode: TmdbAuthMode = 'query'): void {
   _tmdbKey = k
+  _tmdbAuthMode = k ? authMode : null
   // Caches are module-scoped — without flushing them, a test that
   // populates the cache leaks state into the next test (the
   // subsequent route call sees a cache hit and never fires fetch,
@@ -636,11 +644,15 @@ async function tmdbFetchWithRetry(
 ): Promise<Response | null> {
   const headers = {
     Accept: 'application/json',
-    ...(_tmdbKey ? { Authorization: `Bearer ${_tmdbKey}` } : {}),
+    ...(_tmdbKey && _tmdbAuthMode === 'bearer' ? { Authorization: `Bearer ${_tmdbKey}` } : {}),
+  }
+  const requestUrl = new URL(url)
+  if (_tmdbKey && _tmdbAuthMode === 'query') {
+    requestUrl.searchParams.set('api_key', _tmdbKey)
   }
   let r: Response
   try {
-    r = await fetch(url, { headers, signal })
+    r = await fetch(requestUrl, { headers, signal })
   } catch {
     return null
   }
@@ -669,7 +681,7 @@ async function tmdbFetchWithRetry(
     })
     if (aborted) return r
     try {
-      r = await fetch(url, { headers, signal })
+      r = await fetch(requestUrl, { headers, signal })
     } catch {
       return null
     }
@@ -1002,6 +1014,7 @@ async function fetchCandidatePool(
   // genres (Drama OR Crime OR Sci-Fi), not the near-empty intersection.
   const key = genreIds.slice().sort((a, b) => a - b).join('|')
   const now = Date.now()
+  const today = new Date().toISOString().slice(0, 10)
   const cached = discoverCache[kind]
   if (cached && cached.key === key && cached.expiresAt > now) {
     return cached.items.slice()
@@ -1030,6 +1043,7 @@ async function fetchCandidatePool(
       url.searchParams.set('sort_by', 'vote_average.desc')
       url.searchParams.set('vote_count.gte', '200')
       url.searchParams.set('with_genres', key)
+      url.searchParams.set(kind === 'movie' ? 'primary_release_date.lte' : 'first_air_date.lte', today)
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), TMDB_TIMEOUT_MS)
       try {
@@ -1061,6 +1075,7 @@ async function fetchCandidatePool(
       url.searchParams.set('sort_by', kind === 'movie' ? 'primary_release_date.desc' : 'first_air_date.desc')
       url.searchParams.set('vote_count.gte', '30')
       url.searchParams.set('with_genres', key)
+      url.searchParams.set(kind === 'movie' ? 'primary_release_date.lte' : 'first_air_date.lte', today)
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), TMDB_TIMEOUT_MS)
       try {
@@ -1092,6 +1107,7 @@ async function fetchCandidatePool(
     if (!r.id || seenIds.has(r.id)) continue
     seenIds.add(r.id)
     const date = r.release_date || r.first_air_date || ''
+    if (date && date > today) continue
     const y = date ? Number(date.slice(0, 4)) : undefined
     items.push({
       id: r.id,
