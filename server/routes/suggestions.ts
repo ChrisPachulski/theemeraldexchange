@@ -1790,15 +1790,47 @@ suggestions.get('/:type', async (c) => {
       })
     }
 
+    // Partial-fill: the recommender can legitimately return fewer than
+    // TARGET_COUNT after KNN + recently-shown exclusion + household
+    // rejection filtering (a household that's seen most of the
+    // catalog, or a tight taste cluster that doesn't have N viable
+    // neighbors yet). Pre-fill commit: returning the short list as-is
+    // gave users 1-19 item strips even though TMDB trending had clean
+    // fallbacks available. Top up with trending, dedupe against the
+    // recommender's picks, mark provenance='trending' so the SPA can
+    // render the join visibly. Source stays 'recommender' since the
+    // primary engine succeeded — only the tail is fill.
+    let items = safe.slice(0, TARGET_COUNT)
+    let fillCount = 0
+    if (items.length < TARGET_COUNT) {
+      const have = new Set(items.map((it) => it.id))
+      const trending = filterHouseholdSafe(await tmdbTrending(type))
+        .filter((it) => !have.has(it.id))
+        .map((it) => ({
+          ...it,
+          provenance: 'trending' as const,
+          reason: null,
+        }))
+      const need = TARGET_COUNT - items.length
+      const fill = trending.slice(0, need)
+      fillCount = fill.length
+      items = [...items, ...fill]
+    }
+
     setTimingHeader()
     return c.json({
       source: 'recommender',
-      items: safe.slice(0, TARGET_COUNT),
+      items,
       _diag: diag({
         modelVersion,
         recipe,
         rec: recDiag,
         costCents: 0,
+        // Visible in diag so a household seeing a lot of trending fill
+        // can tell us "recommender returned N, trending filled M" —
+        // helps diagnose taste-cluster saturation vs catalog gaps.
+        recommenderReturned: safe.length,
+        fillCount,
       }),
     })
   }
