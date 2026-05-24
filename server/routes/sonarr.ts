@@ -404,7 +404,10 @@ sonarr.post('/api/v3/series', async (c) => {
   // recommender's catalog is keyed on. Skip the mirror if tmdbId is
   // absent — better silence than an attributed event against the
   // wrong id. Fire-and-forget; bounded timeout in services/recommender.ts.
-  if (r.ok) {
+  // Gated on env.useLocalRecommender so disabled/direct-backend
+  // deployments don't generate sidecar traffic or timeout log noise —
+  // mirrors the gate at /api/feedback.
+  if (r.ok && env.useLocalRecommender) {
     const tmdbId = typeof body.tmdbId === 'number' ? body.tmdbId : undefined
     if (tmdbId !== undefined) {
       void postFeedback({

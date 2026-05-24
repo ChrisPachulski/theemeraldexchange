@@ -271,7 +271,10 @@ radarr.post('/api/v3/movie', async (c) => {
   // for non-admin adds the materialize step strips most fields but
   // preserves tmdbId per NON_ADMIN_RADARR_ALLOW. Fire-and-forget; the
   // mirror has its own bounded timeout in services/recommender.ts.
-  if (r.ok) {
+  // Gated on env.useLocalRecommender so disabled/direct-backend
+  // deployments don't generate sidecar traffic or timeout log noise —
+  // mirrors the gate at /api/feedback.
+  if (r.ok && env.useLocalRecommender) {
     const tmdbId = typeof body.tmdbId === 'number' ? body.tmdbId : undefined
     if (tmdbId !== undefined) {
       void postFeedback({
