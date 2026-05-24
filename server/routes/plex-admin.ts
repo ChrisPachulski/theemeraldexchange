@@ -13,6 +13,7 @@
 import { Hono } from 'hono'
 import { requireAdmin, type Env } from '../middleware/auth.js'
 import { env } from '../env.js'
+import { fetchWithTimeout, LAN_TIMEOUT_MS } from '../services/upstream.js'
 
 export const plexAdmin = new Hono<Env>()
 
@@ -29,12 +30,17 @@ plexAdmin.get('/remote-access', async (c) => {
     return c.json({ error: 'no_plex_token' }, 409)
   }
   const url = `${env.plexServerUrl}/:/prefs?X-Plex-Token=${encodeURIComponent(session.plexAuthToken)}`
-  let res: Response
-  try {
-    res = await fetch(url, { headers: { Accept: 'application/xml' } })
-  } catch (e) {
-    return c.json({ error: 'unreachable', detail: String(e) }, 502)
-  }
+  // PMS is LAN-local but can wedge on a stuck transcoder lock. Bound
+  // the fetch with the shared LAN budget so a hung PMS doesn't pin
+  // the request handler. fetchWithTimeout synthesizes a 504 Response
+  // on abort or network error which the non-ok branch below maps to
+  // the existing 502 surface.
+  const res = await fetchWithTimeout(
+    url,
+    { headers: { Accept: 'application/xml' } },
+    LAN_TIMEOUT_MS,
+    'plex.remoteAccess',
+  )
   if (!res.ok) {
     const body = await res.text().catch(() => '')
     // 502 (Bad Gateway): we're the gateway, the upstream PMS failed.

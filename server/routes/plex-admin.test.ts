@@ -195,7 +195,14 @@ describe('plex-admin /remote-access — upstream failures', () => {
     expect(body.body).toContain('boom')
   })
 
-  it('fetch throws → 502 unreachable with detail', async () => {
+  it('fetch throws → 502 with the synthesized upstream error surfaced', async () => {
+    // After the shared timeout wrapper rolled in, a thrown fetch no
+    // longer reaches the route layer as an exception — fetchWithTimeout
+    // catches the network error and returns a synthesized 504 Response.
+    // The route's existing non-ok branch maps that to its standard
+    // prefs_failed shape (still 502 to the SPA), with the synthesized
+    // status visible in the body so the operator can distinguish a
+    // genuine PMS 500 from a network-unreachable.
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => {
@@ -206,8 +213,8 @@ describe('plex-admin /remote-access — upstream failures', () => {
       headers: { Cookie: await adminCookie() },
     })
     expect(r.status).toBe(502)
-    const body = (await r.json()) as { error: string; detail: string }
-    expect(body.error).toBe('unreachable')
-    expect(body.detail).toContain('ECONNREFUSED')
+    const body = (await r.json()) as { error: string; status: number; body?: string }
+    expect(body.error).toBe('prefs_failed')
+    expect(body.status).toBe(504)
   })
 })
