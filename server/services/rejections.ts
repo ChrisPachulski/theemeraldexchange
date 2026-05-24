@@ -28,6 +28,7 @@
 import { promises as fs } from 'fs'
 import { dirname } from 'path'
 import { env } from '../env.js'
+import { sanitizeTitle } from './sanitize.js'
 
 export type RejectionsKind = 'movie' | 'tv'
 export type RejectionEntry = { id: number; title: string }
@@ -158,20 +159,21 @@ export function addRejection(
   tmdbId: number,
   title: string,
 ): Promise<void> {
+  const safeTitle = sanitizeTitle(title)
   const op = writeQueue.then(async () => {
     const file = await load()
     const existing = file[kind].find((e) => e.id === tmdbId)
     // No-op fast paths — no persist, no cache swap.
-    if (existing && (!title || existing.title === title)) return
+    if (existing && (!safeTitle || existing.title === safeTitle)) return
     const next = cloneFile(file)
     if (!existing) {
-      next[kind].push({ id: tmdbId, title })
+      next[kind].push({ id: tmdbId, title: safeTitle })
     } else {
       // Upgrade legacy / stale entries in place when a fresh title
       // arrives. Empty incoming title never overwrites a known one
       // (filtered by the fast-path above).
       const target = next[kind].find((e) => e.id === tmdbId)!
-      target.title = title
+      target.title = safeTitle
     }
     await persistSnapshot(next)
     cached = next
@@ -198,15 +200,16 @@ export function updateRejectionTitleIfPresent(
   tmdbId: number,
   title: string,
 ): Promise<void> {
+  const safeTitle = sanitizeTitle(title)
   const op = writeQueue.then(async () => {
-    if (!title) return
+    if (!safeTitle) return
     const file = await load()
     const existing = file[kind].find((e) => e.id === tmdbId)
     if (!existing) return // cleared by a concurrent op — leave it cleared
-    if (existing.title === title) return // already up to date
+    if (existing.title === safeTitle) return // already up to date
     const next = cloneFile(file)
     const target = next[kind].find((e) => e.id === tmdbId)!
-    target.title = title
+    target.title = safeTitle
     await persistSnapshot(next)
     cached = next
   })
