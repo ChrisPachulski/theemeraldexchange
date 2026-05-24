@@ -32,7 +32,7 @@ import anthropic
 
 from app import recipes
 from app.config import CONFIG
-from app.context import load_user_context
+from app.context import load_user_context, select_model_config_for_context
 from app.db import connect, transaction
 from app.schemas import ScoreRequest
 
@@ -66,31 +66,31 @@ def _aggregate(conn: sqlite3.Connection) -> OutcomeStats:
         """SELECT o.outcome, COUNT(*) AS c
            FROM rec_outcomes o
            JOIN rec_log r ON r.id = o.rec_id
-           WHERE datetime(o.ts) >= datetime('now','-1 day')
+           WHERE datetime(r.ts) >= datetime('now','-1 day')
            GROUP BY o.outcome"""
     ).fetchall()
     by_outcome = {r["outcome"]: r["c"] for r in by_outcome_rows}
 
     worst = conn.execute(
-        """SELECT r.kind, r.tmdb_id, r.score, r.provenance, r.rank, t.title
+        """SELECT r.kind, r.tmdb_id, r.score, r.provenance, r.rank, r.ts, t.title
            FROM rec_log r
            JOIN rec_outcomes o ON o.rec_id = r.id
            LEFT JOIN titles t ON t.kind = r.kind AND t.tmdb_id = r.tmdb_id
-           WHERE datetime(o.ts) >= datetime('now','-1 day') AND o.outcome IN ('rejected','disliked')
+           WHERE datetime(r.ts) >= datetime('now','-1 day') AND o.outcome IN ('rejected','disliked')
            ORDER BY r.score DESC LIMIT 8"""
     ).fetchall()
     pleasant = conn.execute(
-        """SELECT r.kind, r.tmdb_id, r.score, r.provenance, r.rank, t.title
+        """SELECT r.kind, r.tmdb_id, r.score, r.provenance, r.rank, r.ts, t.title
            FROM rec_log r
            JOIN rec_outcomes o ON o.rec_id = r.id
            LEFT JOIN titles t ON t.kind = r.kind AND t.tmdb_id = r.tmdb_id
-           WHERE datetime(o.ts) >= datetime('now','-1 day') AND o.outcome IN ('liked','added','clicked')
+           WHERE datetime(r.ts) >= datetime('now','-1 day') AND o.outcome IN ('liked','added','clicked')
            ORDER BY r.score ASC LIMIT 8"""
     ).fetchall()
 
     def _ser(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
         return [
-            {"kind": r["kind"], "tmdb_id": r["tmdb_id"], "title": r["title"], "score": r["score"], "provenance": r["provenance"], "rank": r["rank"]}
+            {"kind": r["kind"], "tmdb_id": r["tmdb_id"], "title": r["title"], "score": r["score"], "provenance": r["provenance"], "rank": r["rank"], "rec_ts": r["ts"]}
             for r in rows
         ]
 
@@ -369,8 +369,13 @@ def load_holdout() -> list[dict]:
     return out
 
 
-def evaluate(conn: sqlite3.Connection, recipe_name: str, params: dict, holdout: list[dict]) -> float:
-    """Run candidate config against the holdout and return a 0..1 score.
+def _evaluate_entries(
+    conn: sqlite3.Connection,
+    recipe_name: str,
+    params: dict,
+    holdout: list[dict],
+) -> dict[int, float]:
+    """Run candidate config against the holdout and return entry-indexed scores.
 
     Each holdout entry is:
       { "sub": str, "kind": "movie"|"tv", "library": [tmdb_id, ...],
@@ -378,12 +383,8 @@ def evaluate(conn: sqlite3.Connection, recipe_name: str, params: dict, holdout: 
 
     Score = recall@N(positives) − 0.5 × false-positive-rate(negatives).
     """
-    if not holdout:
-        return 0.0
-
-    recipe_mod = recipes.get(recipe_name)
-    scores: list[float] = []
-    for entry in holdout:
+    scores: dict[int, float] = {}
+    for index, entry in enumerate(holdout):
         try:
             req = ScoreRequest(
                 sub=entry["sub"],
@@ -391,30 +392,75 @@ def evaluate(conn: sqlite3.Connection, recipe_name: str, params: dict, holdout: 
                 n=20,
                 exclude_recently_shown=False,
                 library=[{"tmdb_id": t} for t in entry.get("library", [])],
-                feedback=None,
+                feedback=[],
                 household_rejections=[],
             )
             # persist_library=False is load-bearing here: eval reads the
             # same DB as production and must not write holdout tmdb_ids into
             # the live library_items table.
             ctx = load_user_context(conn, req, persist_library=False)
-            result = recipe_mod.score(ctx, conn, n=20, params=params)
+            _, selected_recipe, selected_params = select_model_config_for_context(
+                conn,
+                ctx,
+                model_config=("eval", recipe_name, params),
+            )
+            recipe_mod = recipes.get(selected_recipe)
+            result = recipe_mod.score(ctx, conn, n=20, params=selected_params)
             picks = {it.tmdb_id for it in result.items}
             positives = set(entry.get("positives") or [])
             negatives = set(entry.get("negatives") or [])
             recall = len(picks & positives) / max(len(positives), 1)
             fp = len(picks & negatives) / max(len(negatives), 1)
-            scores.append(recall - 0.5 * fp)
+            scores[index] = recall - 0.5 * fp
         except Exception:
             log.exception(
                 "optimizer: holdout entry skipped during eval sub=%r kind=%r",
                 entry.get("sub"),
                 entry.get("kind"),
             )
+    return scores
 
-    if not scores:
+
+def evaluate(conn: sqlite3.Connection, recipe_name: str, params: dict, holdout: list[dict]) -> float:
+    """Run candidate config against the holdout and return a 0..1 score."""
+    if not holdout:
         return 0.0
-    return sum(scores) / len(scores)
+    scores = _evaluate_entries(conn, recipe_name, params, holdout)
+    if len(scores) != len(holdout):
+        return float("-inf")
+    return sum(scores.values()) / len(scores)
+
+
+def evaluate_pair(
+    conn: sqlite3.Connection,
+    baseline_recipe: str,
+    baseline_params: dict,
+    candidate_recipe: str,
+    candidate_params: dict,
+    holdout: list[dict],
+) -> tuple[float, float, bool]:
+    baseline_scores = _evaluate_entries(conn, baseline_recipe, baseline_params, holdout)
+    candidate_scores = _evaluate_entries(conn, candidate_recipe, candidate_params, holdout)
+    shared_indices = sorted(set(baseline_scores) & set(candidate_scores))
+    if not shared_indices:
+        log.warning("optimizer: no shared successful holdout entries; refusing promotion")
+        return 0.0, 0.0, False
+    failures = len(holdout) - len(shared_indices)
+    ok_to_promote = failures == 0
+    if not ok_to_promote:
+        log.warning(
+            "optimizer: %d holdout entries failed evaluation; refusing promotion",
+            failures,
+        )
+    baseline_score = sum(baseline_scores[i] for i in shared_indices) / len(shared_indices)
+    candidate_score = sum(candidate_scores[i] for i in shared_indices) / len(shared_indices)
+    if len(shared_indices) != len(holdout):
+        log.info(
+            "optimizer: evaluated %d/%d shared holdout entries",
+            len(shared_indices),
+            len(holdout),
+        )
+    return baseline_score, candidate_score, ok_to_promote
 
 
 # =========================================================================
@@ -501,8 +547,17 @@ def run(*, dry_run: bool = False) -> int:
         candidate_recipe, candidate_params, notes = validated
 
         holdout = load_holdout()
-        baseline_score = evaluate(conn, active_recipe, active_params, holdout) if holdout else 0.0
-        candidate_score = evaluate(conn, candidate_recipe, candidate_params, holdout) if holdout else 0.0
+        if holdout:
+            baseline_score, candidate_score, eval_ok = evaluate_pair(
+                conn,
+                active_recipe,
+                active_params,
+                candidate_recipe,
+                candidate_params,
+                holdout,
+            )
+        else:
+            baseline_score, candidate_score, eval_ok = 0.0, 0.0, True
 
         log.info(
             "eval baseline=%.4f candidate=%.4f notes=%r",
@@ -512,7 +567,7 @@ def run(*, dry_run: bool = False) -> int:
         )
 
         same = candidate_recipe == active_recipe and candidate_params == active_params
-        improved = candidate_score >= baseline_score + EVAL_EPSILON
+        improved = eval_ok and candidate_score >= baseline_score + EVAL_EPSILON
 
         if dry_run:
             log.info("dry-run only — not promoting")

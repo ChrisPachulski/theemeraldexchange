@@ -10,7 +10,7 @@ PositiveStrictInt = Annotated[int, Field(strict=True, gt=0)]
 
 
 class LibraryItem(BaseModel):
-    tmdb_id: int
+    tmdb_id: PositiveStrictInt
     title: str | None = None
     source: str | None = None
 
@@ -70,6 +70,7 @@ class ClearFeedbackRequest(BaseModel):
     sub: str
     kind: Kind
     tmdb_id: StrictInt
+    signal: Literal["like", "dislike", "reject"] | None = None
 
 
 class LibrarySyncItem(BaseModel):
@@ -87,7 +88,7 @@ class LibrarySyncRequest(BaseModel):
 class ShownEventRequest(BaseModel):
     sub: str
     kind: Kind
-    tmdb_ids: list[StrictInt] = Field(default_factory=list, max_length=5000)
+    tmdb_ids: list[StrictInt] = Field(default_factory=list, max_length=200)
 
 
 class RejectionEventRequest(BaseModel):

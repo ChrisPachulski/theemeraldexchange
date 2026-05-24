@@ -31,6 +31,9 @@ const PRESERVED_KEYS = [
   'PORT',
   'ALLOW_UNSCOPED_PLEX_LOGIN',
   'DEFAULT_PROFILE_NAME',
+  'DEFAULT_ROOT_FOLDER_PATH',
+  'DEFAULT_SONARR_ROOT_FOLDER_PATH',
+  'DEFAULT_RADARR_ROOT_FOLDER_PATH',
   'RECOMMENDER_URL',
   'RECOMMENDER_EVENT_SECRET',
   'USE_LOCAL_RECOMMENDER',
@@ -58,6 +61,9 @@ function setBaselineEnv() {
   process.env.SONARR_API_KEY = 'k'
   process.env.RADARR_API_KEY = 'k'
   process.env.SAB_API_KEY = 'k'
+  process.env.DEFAULT_ROOT_FOLDER_PATH = '/data/media'
+  delete process.env.DEFAULT_SONARR_ROOT_FOLDER_PATH
+  delete process.env.DEFAULT_RADARR_ROOT_FOLDER_PATH
   delete process.env.USE_LOCAL_RECOMMENDER
   delete process.env.RECOMMENDER_EVENT_SECRET
 }

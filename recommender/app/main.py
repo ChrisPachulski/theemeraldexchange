@@ -6,18 +6,20 @@ configured for this service. All requests are inside the Docker network.
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
 import sqlite3
 import time
+from threading import Lock
 from collections.abc import Iterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 
 from .config import CONFIG
-from .context import get_active_model_config, load_user_context
+from .context import load_user_context, select_model_config_for_context
 from .db import connect, migrate, transaction
 from . import recipes
 from .schemas import (
@@ -34,6 +36,81 @@ from .schemas import (
 log = logging.getLogger("recommender")
 RECENTLY_SHOWN_RETENTION_DAYS = 30
 FEEDBACK_ATTRIBUTION_DAYS = 14
+RETENTION_SWEEP_INTERVAL_SECONDS = 3600
+SCORE_CACHE_TTL_SECONDS = 1.0
+SCORE_CACHE_MAX_ENTRIES = 256
+_score_cache_lock = Lock()
+_score_cache: dict[tuple[object, ...], tuple[float, ScoreResponse]] = {}
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+
+
+def _score_cache_key(req: ScoreRequest) -> tuple[object, ...]:
+    library = tuple(sorted(item.tmdb_id for item in req.library or []))
+    feedback = tuple(sorted((item.tmdb_id, item.signal) for item in req.feedback or []))
+    rejections = tuple(sorted(req.household_rejections or []))
+    return (
+        req.sub,
+        req.kind,
+        req.n,
+        req.exclude_recently_shown,
+        req.library is not None,
+        library,
+        req.feedback is not None,
+        feedback,
+        req.household_rejections is not None,
+        rejections,
+    )
+
+
+def _get_cached_score(key: tuple[object, ...]) -> ScoreResponse | None:
+    now = time.monotonic()
+    with _score_cache_lock:
+        cached = _score_cache.get(key)
+        if cached is None:
+            return None
+        cached_at, response = cached
+        if now - cached_at >= SCORE_CACHE_TTL_SECONDS:
+            _score_cache.pop(key, None)
+            return None
+        return response
+
+
+def _put_cached_score(key: tuple[object, ...], response: ScoreResponse) -> None:
+    with _score_cache_lock:
+        _score_cache[key] = (time.monotonic(), response)
+        while len(_score_cache) > SCORE_CACHE_MAX_ENTRIES:
+            oldest = next(iter(_score_cache))
+            _score_cache.pop(oldest, None)
+
+
+def sweep_retention_once() -> None:
+    conn = connect()
+    try:
+        with transaction(conn):
+            conn.execute(
+                """DELETE FROM rec_log
+                   WHERE datetime(ts) < datetime('now', ?)
+                     AND id NOT IN (SELECT rec_id FROM rec_outcomes)""",
+                (f"-{CONFIG.rec_log_retention_days} days",),
+            )
+            conn.execute(
+                "DELETE FROM recently_shown WHERE datetime(ts) < datetime('now', ?)",
+                (f"-{RECENTLY_SHOWN_RETENTION_DAYS} days",),
+            )
+    finally:
+        conn.close()
+
+
+async def retention_sweeper() -> None:
+    while True:
+        try:
+            await asyncio.to_thread(sweep_retention_once)
+        except Exception:
+            log.exception("retention sweep failed")
+        await asyncio.sleep(RETENTION_SWEEP_INTERVAL_SECONDS)
 
 
 @asynccontextmanager
@@ -43,7 +120,13 @@ async def lifespan(_app: FastAPI):
     applied = migrate()
     if applied:
         log.info("applied migrations: %s", applied)
-    yield
+    sweep_task = asyncio.create_task(retention_sweeper())
+    try:
+        yield
+    finally:
+        sweep_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await sweep_task
 
 
 app = FastAPI(title="exchange-recommender", lifespan=lifespan)
@@ -97,18 +180,15 @@ def score(
     _auth: None = Depends(require_event_secret),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> ScoreResponse:
+    cache_key = _score_cache_key(req)
+    cached = _get_cached_score(cache_key)
+    if cached is not None:
+        return cached
+
     t0 = time.perf_counter()
     ctx = load_user_context(conn, req, persist_library=False)
 
-    # Cold-start orchestration: choose the cold_start_trending recipe when the
-    # library is too small for a meaningful taste signal. Independent of which
-    # recipe is "active" — the optimizer can't override common sense here.
-    if len(ctx.library_ids) < CONFIG.cold_start_threshold and not ctx.liked_ids:
-        recipe_name = "cold_start_trending"
-        params: dict = {}
-        model_version = "cold-start"
-    else:
-        model_version, recipe_name, params = get_active_model_config(conn)
+    model_version, recipe_name, params = select_model_config_for_context(conn, ctx)
 
     try:
         recipe = recipes.get(recipe_name)
@@ -118,7 +198,7 @@ def score(
     result = recipe.score(ctx, conn, n=req.n, params=params)
     items = result.items[: req.n]
 
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    now = _utc_now_iso()
     if items:
         with transaction(conn):
             conn.executemany(
@@ -144,16 +224,6 @@ def score(
                    ON CONFLICT(sub, kind, tmdb_id) DO UPDATE SET ts = excluded.ts""",
                 [(req.sub, req.kind, it.tmdb_id, now) for it in items],
             )
-            conn.execute(
-                """DELETE FROM rec_log
-                   WHERE datetime(ts) < datetime('now', ?)
-                     AND id NOT IN (SELECT rec_id FROM rec_outcomes)""",
-                (f"-{CONFIG.rec_log_retention_days} days",),
-            )
-            conn.execute(
-                "DELETE FROM recently_shown WHERE datetime(ts) < datetime('now', ?)",
-                (f"-{RECENTLY_SHOWN_RETENTION_DAYS} days",),
-            )
 
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
     diag = {
@@ -161,12 +231,14 @@ def score(
         "user": ctx.diag,
         **result.diag,
     }
-    return ScoreResponse(
+    response = ScoreResponse(
         items=items,
         model_version=model_version,
         recipe=recipe_name,
         diag=diag,
     )
+    _put_cached_score(cache_key, response)
+    return response
 
 
 @app.post("/events/feedback")
@@ -175,7 +247,7 @@ def post_feedback(
     _auth: None = Depends(require_event_secret),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, bool]:
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    now = _utc_now_iso()
     with transaction(conn):
         if ev.signal == "like":
             conn.execute(
@@ -232,10 +304,19 @@ def post_feedback(
                 """SELECT id FROM rec_log
                    WHERE sub = ? AND kind = ? AND tmdb_id = ?
                      AND datetime(ts) >= datetime('now', ?)
-                   ORDER BY ts DESC LIMIT 1""",
+                   ORDER BY datetime(ts) DESC, id DESC LIMIT 1""",
                 (ev.sub, ev.kind, ev.tmdb_id, f"-{FEEDBACK_ATTRIBUTION_DAYS} days"),
             ).fetchone()
             if rec is not None:
+                if ev.signal in {"like", "dislike", "reject"}:
+                    conn.execute(
+                        """DELETE FROM rec_outcomes
+                           WHERE outcome IN ('liked', 'disliked', 'rejected')
+                             AND rec_id IN (
+                               SELECT id FROM rec_log WHERE sub=? AND kind=? AND tmdb_id=?
+                             )""",
+                        (ev.sub, ev.kind, ev.tmdb_id),
+                    )
                 conn.execute(
                     """INSERT INTO rec_outcomes(rec_id, outcome, ts) VALUES (?, ?, ?)
                        ON CONFLICT(rec_id, outcome) DO UPDATE SET ts = excluded.ts""",
@@ -255,13 +336,10 @@ def post_library_sync(
     Hono is the source of truth via Sonarr/Radarr. We mirror it here for
     recipes that only get a ``sub`` (e.g. the optimizer's offline replays).
     """
-    if not payload.items and not (payload.force and payload.confirm_purge):
-        raise HTTPException(
-            status_code=400,
-            detail="empty library sync requires force=true and confirm_purge=true",
-        )
+    if not payload.items and payload.force and payload.confirm_purge:
+        log.warning("empty library sync with force+confirm_purge for kind=%s", payload.kind)
 
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    now = _utc_now_iso()
     by_tmdb_id = {it.tmdb_id: it.source for it in payload.items}
     rows = [(payload.kind, tmdb_id, source, now) for tmdb_id, source in by_tmdb_id.items()]
 
@@ -297,9 +375,11 @@ def post_shown(
     rec_log — attributing a click to a "recommendation" that was
     really a fallback would poison the optimizer's training signal.
     """
+    if len(payload.tmdb_ids) > 200:
+        raise HTTPException(status_code=413, detail="shown event batch too large")
     if not payload.tmdb_ids:
         return {"count": 0}
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    now = _utc_now_iso()
     with transaction(conn):
         conn.executemany(
             """INSERT INTO recently_shown(sub, kind, tmdb_id, ts)
@@ -335,23 +415,28 @@ def clear_feedback(
     _auth: None = Depends(require_event_secret),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, bool]:
-    # Drop every signal row for one (sub, kind, tmdb_id). Hono calls
-    # this when the user clears a dot in the SPA so the recommender's
-    # user_feedback table converges with Hono's truth — otherwise the
-    # cleared signal would keep influencing scores via
-    # load_user_context.
+    signal_to_outcome = {
+        "like": "liked",
+        "dislike": "disliked",
+        "reject": "rejected",
+    }
+    signals = [payload.signal] if payload.signal else ["like", "dislike", "reject"]
+    outcomes = [signal_to_outcome[s] for s in signals]
+    signal_placeholders = ",".join("?" for _ in signals)
+    outcome_placeholders = ",".join("?" for _ in outcomes)
     with transaction(conn):
         conn.execute(
-            "DELETE FROM user_feedback WHERE sub=? AND kind=? AND tmdb_id=?",
-            (payload.sub, payload.kind, payload.tmdb_id),
+            f"""DELETE FROM user_feedback
+                WHERE sub=? AND kind=? AND tmdb_id=? AND signal IN ({signal_placeholders})""",
+            (payload.sub, payload.kind, payload.tmdb_id, *signals),
         )
         conn.execute(
-            """DELETE FROM rec_outcomes
-               WHERE outcome IN ('liked', 'disliked', 'rejected', 'clicked', 'added')
+            f"""DELETE FROM rec_outcomes
+               WHERE outcome IN ({outcome_placeholders})
                  AND rec_id IN (
                    SELECT id FROM rec_log WHERE sub=? AND kind=? AND tmdb_id=?
                  )""",
-            (payload.sub, payload.kind, payload.tmdb_id),
+            (*outcomes, payload.sub, payload.kind, payload.tmdb_id),
         )
     return {"ok": True}
 

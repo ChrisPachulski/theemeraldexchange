@@ -56,13 +56,10 @@ forwardRead('/api/v3/queue')
 //  - GET /api/v3/release?seriesId=X (no seasonNumber) returns
 //    RSS-cached recent results across the whole indexer — NOT a search
 //    for that series. To actually search, we have to scope per season.
-//  - Releases get rejected:true for two reasons: profile-quality
-//    rejection (Choose Me doesn't allow 2160p, etc.) and indexer-level
-//    issues. We *prefer* non-rejected releases so we don't accidentally
-//    pick a 4K HDR pack the user's profile excludes — and so we stay
-//    inside the same release pool Sonarr's auto-retry walks. Fallback
-//    to the broader pool only when the profile rejects everything that
-//    fits the cap (rare, but possible for niche shows).
+//  - Releases get rejected:true for profile-quality rejection
+//    (Choose Me doesn't allow 2160p, etc.) and indexer-level issues.
+//    Automatic grabs only use non-rejected releases so we stay inside
+//    the same safety decisions Sonarr made upstream.
 async function grabTvUnderCap(
   seriesId: number,
   monitoredSeasons: number[],
@@ -136,22 +133,16 @@ async function grabTvUnderCap(
 
   // Prefer releases that Sonarr's profile accepts (Choose Me is curated
   // to match what the user's usenet provider can actually deliver) and
-  // that aren't temporarily rejected (blocklisted, age, etc.). Falling
-  // back to the broader pool keeps things working for niche shows where
-  // the profile rejects every cap-eligible release.
+  // that aren't temporarily rejected (blocklisted, age, etc.).
   const accepted = within.filter((r) => !r.rejected && !r.temporarilyRejected)
-  const eligible = accepted.length > 0 ? accepted : within
   if (within.length > 0 && accepted.length === 0) {
-    // Informational: every cap-eligible release was profile-rejected.
-    // Pipeline still continues against the broader pool so niche shows
-    // don't get stuck — log this so the admin can spot a misconfigured
-    // profile (e.g. Choose Me with no available quality tier).
     await appendGrabEvent({
       ...base,
       type: 'all_rejected_by_profile',
       scanned: all.length,
       eligible: within.length,
     })
+    return
   }
 
   // Group by (seasonNumber, episodeKey) so we grab the single best
@@ -160,7 +151,7 @@ async function grabTvUnderCap(
   // release is more likely to have intact articles (the 50 GB 2160p
   // release is the first to take a DMCA hit on HBO content).
   const bestByChunk = new Map<string, Release>()
-  for (const r of eligible) {
+  for (const r of accepted) {
     const key =
       r.fullSeason && r.seasonNumber !== undefined
         ? `S${r.seasonNumber}-pack`
@@ -282,13 +273,17 @@ async function materializeNonAdminSeriesBody(raw: SonarrAddBody): Promise<
     return { ok: false, reason: 'qualityprofile_unreachable' }
   }
   const profiles = (await profileRes.json()) as Array<{ id: number; name?: string }>
-  const folder = folders[0]
+  const folder = env.defaultSonarrRootFolderPath
+    ? folders.find((f) => f.path === env.defaultSonarrRootFolderPath)
+    : folders[0]
   const namedProfile = profiles.find((p) => p.name?.toLowerCase() === env.defaultProfileName)
-  const profile = namedProfile ?? profiles[0]
   if (!folder) {
-    return { ok: false, reason: 'admin_must_configure_upstream' }
+    return {
+      ok: false,
+      reason: env.defaultSonarrRootFolderPath ? 'default_root_folder_missing' : 'admin_must_configure_upstream',
+    }
   }
-  if (!profile) {
+  if (!namedProfile) {
     return { ok: false, reason: 'default_quality_profile_missing' }
   }
   const safe: SonarrAddBody = {}
@@ -296,7 +291,7 @@ async function materializeNonAdminSeriesBody(raw: SonarrAddBody): Promise<
     if (raw[key] !== undefined) safe[key] = raw[key]
   }
   safe.rootFolderPath = folder.path
-  safe.qualityProfileId = profile.id
+  safe.qualityProfileId = namedProfile.id
   safe.monitored = true
   safe.seasonFolder = true
   // monitor: 'firstSeason' = Sonarr marks only season 1 monitored at

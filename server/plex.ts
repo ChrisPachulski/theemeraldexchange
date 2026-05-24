@@ -3,6 +3,7 @@
 // `Accept: application/json` header switches it to JSON across the
 // /api/v2 endpoints we use.
 
+import { createHash } from 'node:crypto'
 import { env } from './env.js'
 import { fetchWithTimeout, WAN_TIMEOUT_MS } from './services/upstream.js'
 
@@ -164,6 +165,18 @@ export async function probeResources(
   }
 }
 
+export async function signOut(authToken: string): Promise<void> {
+  const res = await fetchWithTimeout(
+    `${PLEX_BASE}/signout`,
+    { method: 'POST', headers: { ...baseHeaders(), 'X-Plex-Token': authToken } },
+    WAN_TIMEOUT_MS,
+    'plex.signOut',
+  )
+  if (!res.ok) {
+    throw new Error(`plex.signOut failed: ${res.status}`)
+  }
+}
+
 // People the owner has shared their Plex server with. Two states matter
 // to the Users tab:
 //   - ACCEPTED: the invitee accepted and can stream right now. Comes
@@ -290,7 +303,7 @@ export async function listPendingInvites(authToken: string): Promise<PlexFriend[
         // Synthesize a stable-ish key when Plex hasn't assigned an
         // account id yet (email-only invites). Negative sentinel to
         // avoid collisions with real ids.
-        id: id ?? -(stableHash(email || title || username) >>> 0),
+        id: id ?? -stableHash(email || title || username),
         username,
         title,
         email,
@@ -358,11 +371,9 @@ export async function listSharedServerInvitees(authToken: string): Promise<PlexF
 }
 
 function stableHash(s: string): number {
-  let h = 0
-  for (let i = 0; i < s.length; i++) {
-    h = (h * 31 + s.charCodeAt(i)) | 0
-  }
-  return h
+  const maxSafe = BigInt(Number.MAX_SAFE_INTEGER)
+  const digest = createHash('sha256').update(s, 'utf8').digest()
+  return Number(digest.readBigUInt64BE(0) % maxSafe) + 1
 }
 
 // Local PMS /accounts endpoint — lists every account that has ever

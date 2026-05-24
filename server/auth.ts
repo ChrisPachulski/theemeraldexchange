@@ -27,6 +27,7 @@ import {
   getUser,
   listResources,
   buildAuthUrl,
+  signOut as signOutPlex,
 } from './plex.js'
 import {
   setSessionCookie,
@@ -120,6 +121,14 @@ auth.post('/plex/check', async (c) => {
 })
 
 auth.post('/logout', async (c) => {
+  const session = await readSession(c)
+  if (session?.plexAuthToken) {
+    try {
+      await signOutPlex(session.plexAuthToken)
+    } catch (err) {
+      console.warn('[auth.logout] plex signout failed:', err instanceof Error ? err.message : String(err))
+    }
+  }
   clearSessionCookie(c)
   return c.json({ ok: true })
 })

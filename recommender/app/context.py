@@ -408,3 +408,16 @@ def get_active_model_config(conn: sqlite3.Connection) -> tuple[str, str, dict]:
         elif isinstance(default, str) and isinstance(value, str):
             clean_params[key] = value
     return (row["version"], row["recipe"], clean_params)
+
+
+def select_model_config_for_context(
+    conn: sqlite3.Connection,
+    ctx: UserContext,
+    *,
+    model_config: tuple[str, str, dict] | None = None,
+) -> tuple[str, str, dict]:
+    from .config import CONFIG
+
+    if len(ctx.library_ids) < CONFIG.cold_start_threshold and not ctx.liked_ids:
+        return ("cold-start", "cold_start_trending", {})
+    return model_config if model_config is not None else get_active_model_config(conn)

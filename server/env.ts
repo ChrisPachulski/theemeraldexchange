@@ -135,6 +135,15 @@ if (useLocalRecommender && !recommenderEventSecret) {
     'Missing required env var when USE_LOCAL_RECOMMENDER=1: RECOMMENDER_EVENT_SECRET',
   )
 }
+const defaultRootFolderPath = opt('DEFAULT_ROOT_FOLDER_PATH') ?? null
+const defaultSonarrRootFolderPath = opt('DEFAULT_SONARR_ROOT_FOLDER_PATH') ?? defaultRootFolderPath
+const defaultRadarrRootFolderPath = opt('DEFAULT_RADARR_ROOT_FOLDER_PATH') ?? defaultRootFolderPath
+if (isProd && (!defaultSonarrRootFolderPath || !defaultRadarrRootFolderPath)) {
+  throw new Error(
+    'Missing required env var in production: DEFAULT_SONARR_ROOT_FOLDER_PATH ' +
+      'and/or DEFAULT_RADARR_ROOT_FOLDER_PATH (exact upstream root folder paths for non-admin adds)',
+  )
+}
 
 // SESSION_SECRET is fed through SHA-256 to derive the A256GCM key that
 // encrypts session cookies, which carry the user's Plex auth token. A
@@ -180,6 +189,22 @@ if (isProd && rawSessionSecret) {
         `\`openssl rand -base64 48\`. The value is fed through SHA-256 to ` +
         `derive the A256GCM key that encrypts session cookies; a weak ` +
         `secret puts every user's Plex auth token at risk.`,
+    )
+  }
+}
+if (isProd && recommenderEventSecret) {
+  const lower = recommenderEventSecret.toLowerCase()
+  if (SESSION_SECRET_PLACEHOLDERS.has(lower)) {
+    throw new Error(
+      'RECOMMENDER_EVENT_SECRET looks like a placeholder value. ' +
+        'Generate a real secret with `openssl rand -base64 48` and redeploy.',
+    )
+  }
+  if (recommenderEventSecret.length < SESSION_SECRET_MIN_LEN) {
+    throw new Error(
+      `RECOMMENDER_EVENT_SECRET is too short for production (${recommenderEventSecret.length} chars). ` +
+        `Use at least ${SESSION_SECRET_MIN_LEN} bytes — generate one with ` +
+        '`openssl rand -base64 48`.',
     )
   }
 }
@@ -231,6 +256,8 @@ export const env = {
   // to close. Override per-deploy if the household curates under a
   // different name; case doesn't matter.
   defaultProfileName: (opt('DEFAULT_PROFILE_NAME') ?? 'choose me').toLowerCase(),
+  defaultSonarrRootFolderPath,
+  defaultRadarrRootFolderPath,
 
   // Minimum free space (bytes) on a Sonarr/Radarr root folder before
   // we'll allow an `add`. Below this, both admins and users get a 507

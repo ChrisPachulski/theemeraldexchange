@@ -19,15 +19,20 @@ tmdb.use('*', requireAuth)
 const TMDB_BASE = 'https://api.themoviedb.org/3'
 
 async function tmdbFetch(path: string, params: Record<string, string> = {}) {
-  const token = env.tmdbReadAccessToken ?? env.tmdbApiKey
-  if (!token) {
+  if (!(env.tmdbReadAccessToken ?? env.tmdbApiKey)) {
     return null
   }
   const url = new URL(`${TMDB_BASE}${path}`)
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v)
+  const headers: Record<string, string> = { Accept: 'application/json' }
+  if (env.tmdbReadAccessToken) {
+    headers.Authorization = `Bearer ${env.tmdbReadAccessToken}`
+  } else if (env.tmdbApiKey) {
+    url.searchParams.set('api_key', env.tmdbApiKey)
+  }
   return fetchWithTimeout(
     url,
-    { headers: { Accept: 'application/json', Authorization: `Bearer ${token}` } },
+    { headers },
     WAN_TIMEOUT_MS,
     `tmdb${path}`,
   )
