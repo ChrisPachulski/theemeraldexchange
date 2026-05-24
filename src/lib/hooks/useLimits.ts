@@ -12,6 +12,12 @@ export type Limits = {
    *  inert (toggling it can't switch the path off) and should be
    *  hidden. Optional for forward-compat with older backends. */
   useLocalRecommender?: boolean
+  /** Curated quality-profile name (lowercase) the server prefers for
+   *  non-admin adds. The admin Add modals read this so their
+   *  client-side picker default agrees with the server's
+   *  materializeNonAdmin path instead of silently hardcoding
+   *  "choose me." Optional for forward-compat. */
+  defaultProfileName?: string
 }
 
 const DEFAULT_LIMITS: Limits = {
@@ -19,6 +25,7 @@ const DEFAULT_LIMITS: Limits = {
   maxMovieGb: 10,
   maxTvGbPerEpisode: 5,
   useLocalRecommender: false,
+  defaultProfileName: 'choose me',
 }
 
 export function useLimits() {
