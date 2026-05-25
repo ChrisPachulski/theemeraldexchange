@@ -60,6 +60,32 @@ describe('usageLog append + tail', () => {
     const events = await readRecentUsageEvents(10)
     expect(events).toHaveLength(2)
   })
+
+  it('rejects append failures without poisoning later appends', async () => {
+    const notDirectory = join(tmpRoot, 'not-a-directory')
+    await fs.writeFile(notDirectory, 'x')
+    _setUsageLogPathForTests(join(notDirectory, 'usage.jsonl'))
+
+    await expect(
+      appendUsageEvent({
+        sub: 'alice',
+        username: 'alice',
+        type: 'claude_call',
+        model: 'm',
+        kind: 'movie',
+      }),
+    ).rejects.toThrow()
+
+    _setUsageLogPathForTests(path)
+    await appendUsageEvent({
+      sub: 'bob',
+      username: 'bob',
+      type: 'claude_call',
+      model: 'm',
+      kind: 'tv',
+    })
+    expect((await readRecentUsageEvents(10)).map((e) => e.sub)).toEqual(['bob'])
+  })
 })
 
 describe('summarizeUsage', () => {

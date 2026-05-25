@@ -42,10 +42,11 @@ let writeQueue: Promise<void> = Promise.resolve()
 export function appendUsageEvent(e: Omit<UsageEvent, 'ts'>): Promise<void> {
   const event: UsageEvent = { ts: new Date().toISOString(), ...e }
   const line = JSON.stringify(event) + '\n'
-  writeQueue = writeQueue.then(() => writeLine(line)).catch((err) => {
+  const op = writeQueue.then(() => writeLine(line))
+  writeQueue = op.catch((err) => {
     console.error('[usageLog] append failed:', err)
   })
-  return writeQueue
+  return op
 }
 
 async function writeLine(line: string): Promise<void> {

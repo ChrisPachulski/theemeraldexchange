@@ -98,7 +98,7 @@ def main() -> int:
         # positive landed, but we don't keep historical library
         # state today; subtracting current positives is the
         # cheapest fix that restores the recall signal.
-        positives_set = bucket["positives"]
+        positives_set = bucket["positives"] - bucket["negatives"]
         library = [t for t in full_library if t not in positives_set]
         if len(library) < MIN_LIBRARY or len(positives_set) < MIN_POSITIVES:
             continue
