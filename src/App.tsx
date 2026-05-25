@@ -26,6 +26,9 @@ const DownloadsTab = lazy(() =>
 const UsersTab = lazy(() =>
   import('./components/tabs/UsersTab').then((m) => ({ default: m.UsersTab })),
 )
+const LiveTab = lazy(() => import('./components/tabs/LiveTab'))
+const VodTab = lazy(() => import('./components/tabs/VodTab'))
+const IptvSeriesTab = lazy(() => import('./components/tabs/IptvSeriesTab'))
 
 // Walkthrough is the unauthed landing experience. Authed users (the hot
 // path) never see it, so keep it out of the initial chunk. Unauthed users
@@ -41,6 +44,9 @@ const TABS: Record<Route, React.ComponentType> = {
   movies: MoviesTab,
   downloads: DownloadsTab,
   users: UsersTab,
+  live: LiveTab,
+  'iptv-vod': VodTab,
+  'iptv-series': IptvSeriesTab,
 }
 
 function Shell() {
