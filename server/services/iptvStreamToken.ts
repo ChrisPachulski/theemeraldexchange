@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 
-export type StreamKind = 'live' | 'vod' | 'series' | 'catchup' | 'segment' | 'remux'
+export type StreamKind = 'live' | 'vod' | 'series' | 'catchup' | 'segment' | 'remux' | 'playlist'
 
 export interface StreamClaims {
   kind: StreamKind
