@@ -57,6 +57,7 @@ const AUTH_GLOBAL_RATE_LIMITS: Record<AuthRateLimitKind, { limit: number; window
 const AUTH_CHECK_PIN_RATE_LIMIT = { limit: 90, windowMs: 60_000 }
 const AUTH_RATE_LIMIT_MAX_BUCKETS = 256
 const AUTH_RATE_LIMIT_SWEEP_MS = 60_000
+const AUTH_CHECK_MAX_BODY_BYTES = 1024
 const authRateLimitBuckets = new Map<string, AuthRateLimitBucket>()
 let authRateLimitLastSweep = 0
 
@@ -142,6 +143,65 @@ function enforceAuthRateLimit(c: Context, kind: AuthRateLimitKind, pinId?: numbe
   return null
 }
 
+function enforceAuthCheckPinRateLimit(c: Context, pinId: number): Response | null {
+  const now = Date.now()
+  sweepAuthRateLimitBuckets(now)
+  const rule: AuthRateLimitRule = {
+    key: `check:pin:${pinId}`,
+    limit: AUTH_CHECK_PIN_RATE_LIMIT.limit,
+    windowMs: AUTH_CHECK_PIN_RATE_LIMIT.windowMs,
+  }
+  const current = authRateLimitBuckets.get(rule.key)
+  const bucket = current && current.resetAt > now ? current : { count: 0, resetAt: now + rule.windowMs }
+  if (bucket.count >= rule.limit) {
+    c.header('Retry-After', String(Math.ceil((bucket.resetAt - now) / 1000)))
+    authRateLimitBuckets.set(rule.key, bucket)
+    return c.json({ error: 'rate_limited' }, 429)
+  }
+  bucket.count += 1
+  authRateLimitBuckets.set(rule.key, bucket)
+  return null
+}
+
+async function parseLimitedJson(c: Context, maxBytes: number): Promise<{ tooLarge: boolean; body: unknown | null }> {
+  const contentLength = c.req.header('content-length')
+  if (contentLength) {
+    const n = Number(contentLength)
+    if (Number.isFinite(n) && n > maxBytes) return { tooLarge: true, body: null }
+  }
+  const stream = c.req.raw.body
+  if (!stream) return { tooLarge: false, body: null }
+  const reader = stream.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value) continue
+      total += value.byteLength
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => undefined)
+        return { tooLarge: true, body: null }
+      }
+      chunks.push(value)
+    }
+  } catch {
+    return { tooLarge: false, body: null }
+  }
+  const bytes = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  try {
+    return { tooLarge: false, body: JSON.parse(new TextDecoder().decode(bytes)) }
+  } catch {
+    return { tooLarge: false, body: null }
+  }
+}
+
 auth.post('/plex/pin', async (c) => {
   const limited = enforceAuthRateLimit(c, 'pin')
   if (limited) return limited
@@ -154,12 +214,16 @@ auth.post('/plex/pin', async (c) => {
 })
 
 auth.post('/plex/check', async (c) => {
-  const body = await c.req.json().catch(() => null) as { pinId?: unknown } | null
+  const preLimit = enforceAuthRateLimit(c, 'check')
+  if (preLimit) return preLimit
+  const parsed = await parseLimitedJson(c, AUTH_CHECK_MAX_BODY_BYTES)
+  if (parsed.tooLarge) return c.json({ error: 'body_too_large' }, 413)
+  const body = parsed.body as { pinId?: unknown } | null
   const pinIdRaw = typeof body?.pinId === 'string' || typeof body?.pinId === 'number' ? String(body.pinId) : undefined
   if (!pinIdRaw) return c.json({ error: 'missing pinId' }, 400)
   const pinId = Number(pinIdRaw)
   if (!Number.isInteger(pinId)) return c.json({ error: 'bad pinId' }, 400)
-  const limited = enforceAuthRateLimit(c, 'check', pinId)
+  const limited = enforceAuthCheckPinRateLimit(c, pinId)
   if (limited) return limited
 
   const pin = await checkPin(pinId)

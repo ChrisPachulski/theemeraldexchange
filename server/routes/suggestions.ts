@@ -2109,6 +2109,10 @@ suggestions.get('/:type', async (c) => {
     else poolByTitle.set(key, [it])
   }
   const candidatePoolBlock = buildCandidatePoolBlock(safePool)
+  const isAcceptedPoolHit = (item: SuggestionItem): boolean =>
+    (poolByTitle.get(normalizeTitle(item.title)) ?? []).some((poolItem) => poolItem.id === item.id)
+  const countAcceptedPoolHits = (items: SuggestionItem[]): number =>
+    items.reduce((count, item) => count + (isAcceptedPoolHit(item) ? 1 : 0), 0)
 
   // Tool-use enforced pipeline:
   //   1. Pre-fetch a candidate pool from TMDB /discover (genre-seeded,
@@ -2256,6 +2260,15 @@ suggestions.get('/:type', async (c) => {
   let r1: ClaudeResponse
   let claudeTruncated: boolean
   let claudeCallCount = 0
+  let usageLogFailed = false
+  const recordUsageEvent = async (event: Parameters<typeof appendUsageEvent>[0]): Promise<void> => {
+    try {
+      await appendUsageEvent(event)
+    } catch (err) {
+      usageLogFailed = true
+      console.error('[suggestions] usage log append failed:', err)
+    }
+  }
   // One salt per request — shared by initial + retry. Refresh variety
   // hangs on this: the cached library prefix makes deterministic Claude
   // calls otherwise. Salt rides outside the cache (in the user msg).
@@ -2286,7 +2299,7 @@ suggestions.get('/:type', async (c) => {
         ? ((e as { status: number }).status)
         : undefined
     console.error('[suggestions] Claude call failed:', errorMsg, errorStatus ?? '')
-    await appendUsageEvent({
+    await recordUsageEvent({
       sub: session.sub,
       username: session.username,
       type: 'claude_error',
@@ -2303,7 +2316,7 @@ suggestions.get('/:type', async (c) => {
     return c.json({
       source: 'trending_fallback',
       items: trending.slice(0, TARGET_COUNT),
-      _diag: diag({ reason: 'claude_threw', claudeError: errorMsg, claudeStatus: errorStatus }),
+      _diag: diag({ reason: 'claude_threw', claudeError: errorMsg, claudeStatus: errorStatus, ...(usageLogFailed ? { usageLogFailed: true } : {}) }),
     })
   }
   endClaudeInitial()
@@ -2404,7 +2417,7 @@ suggestions.get('/:type', async (c) => {
   const cacheHitRate = totalInputTokens > 0
     ? Math.round(((totalUsage.cacheReadInputTokens ?? 0) / totalInputTokens) * 100) / 100
     : 0
-  await appendUsageEvent({
+  await recordUsageEvent({
     sub: session.sub,
     username: session.username,
     type: 'claude_call',
@@ -2472,8 +2485,10 @@ suggestions.get('/:type', async (c) => {
       (lastCounters.lookupNulls ?? 0) +
       (lastCounters.droppedAsYearMismatch ?? 0) +
       (lastCounters.droppedAsDedupe ?? 0)
+    const filledPoolHits = countAcceptedPoolHits(accepted)
+    const filledCounters = { ...lastCounters, poolHits: filledPoolHits }
     const filledPoolHitRate = accepted.length > 0
-      ? Math.round((lastCounters.poolHits / accepted.length) * 100) / 100
+      ? Math.round((filledPoolHits / accepted.length) * 100) / 100
       : 0
     // recentlyShownCount: how many titles are in the active recently-shown
     // buffer for this request (after cap). Helps the household observe
@@ -2484,13 +2499,13 @@ suggestions.get('/:type', async (c) => {
       return c.json({
         source: 'personalized_empty_trending_fallback',
         items: filled,
-        _diag: diag({ accepted: 0, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, poolHitRate: 0, droppedPicks: droppedTotal, costCents: refreshCostCents, cacheHitRate, callCount: claudeCallCount, recentlyShownCount, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
+        _diag: diag({ accepted: 0, retryAttempted: triedRetry, fillSource, lastCounters: filledCounters, poolSize: safePool.length, poolHitRate: 0, droppedPicks: droppedTotal, costCents: refreshCostCents, cacheHitRate, callCount: claudeCallCount, recentlyShownCount, ...(claudeTruncated ? { claudeTruncated: true } : {}), ...(usageLogFailed ? { usageLogFailed: true } : {}) }),
       })
     }
     return c.json({
       source: 'personalized_filled',
       items: filled,
-      _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, fillSource, lastCounters, poolSize: safePool.length, poolHits: lastCounters.poolHits, poolHitRate: filledPoolHitRate, droppedPicks: droppedTotal, costCents: refreshCostCents, cacheHitRate, callCount: claudeCallCount, recentlyShownCount, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
+      _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, fillSource, lastCounters: filledCounters, poolSize: safePool.length, poolHits: filledPoolHits, poolHitRate: filledPoolHitRate, droppedPicks: droppedTotal, costCents: refreshCostCents, cacheHitRate, callCount: claudeCallCount, recentlyShownCount, ...(claudeTruncated ? { claudeTruncated: true } : {}), ...(usageLogFailed ? { usageLogFailed: true } : {}) }),
     })
   }
 
@@ -2506,7 +2521,8 @@ suggestions.get('/:type', async (c) => {
   // (every pick pre-vetted), 0.0 = pool didn't help. Observable in devtools.
   // Use lastCounters (accumulated across initial + retry, per iter 59)
   // not v1.counters — previously we under-reported on the retry path.
-  const poolHitsTotal = lastCounters.poolHits ?? 0
+  const poolHitsTotal = countAcceptedPoolHits(finalAccepted)
+  const finalCounters = { ...lastCounters, poolHits: poolHitsTotal }
   const poolHitRate = finalAccepted.length > 0
     ? Math.round((poolHitsTotal / finalAccepted.length) * 100) / 100
     : 0
@@ -2515,6 +2531,6 @@ suggestions.get('/:type', async (c) => {
   return c.json({
     source: 'personalized',
     items: finalAccepted,
-    _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, poolSize: safePool.length, poolHits: poolHitsTotal, poolHitRate, droppedPicks: droppedTotal, costCents: refreshCostCents, cacheHitRate, callCount: claudeCallCount, recentlyShownCount: recentlyShownTrimmed.length, ...(claudeTruncated ? { claudeTruncated: true } : {}) }),
+    _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, poolSize: safePool.length, poolHits: poolHitsTotal, poolHitRate, lastCounters: finalCounters, droppedPicks: droppedTotal, costCents: refreshCostCents, cacheHitRate, callCount: claudeCallCount, recentlyShownCount: recentlyShownTrimmed.length, ...(claudeTruncated ? { claudeTruncated: true } : {}), ...(usageLogFailed ? { usageLogFailed: true } : {}) }),
   })
 })
