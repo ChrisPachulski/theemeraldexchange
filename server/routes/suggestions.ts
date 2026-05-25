@@ -58,6 +58,7 @@ export function _setTmdbApiKeyForTests(k: string | null, authMode: TmdbAuthMode 
   // unreliable).
   for (const k of Object.keys(trendingCache)) delete trendingCache[k as 'movie' | 'tv']
   for (const k of Object.keys(discoverCache)) delete discoverCache[k as 'movie' | 'tv']
+  lookupResultCache.clear()
 }
 
 export const suggestions = new Hono<Env>()
@@ -138,6 +139,7 @@ type LibraryItem = SonarrSeries | RadarrMovie
 // hitting refresh on both Movies and TV at the same time, or two
 // users mounting simultaneously) collapses to a single upstream call.
 const LIBRARY_CACHE_TTL_MS = 30_000
+const LIBRARY_STALE_FALLBACK_MAX_AGE_MS = 24 * 60 * 60 * 1000
 const libraryCache: { [k in 'movie' | 'tv']?: { items: LibraryItem[]; expiresAt: number } } = {}
 const libraryInFlight: { [k in 'movie' | 'tv']?: Promise<LibraryItem[]> } = {}
 
@@ -187,14 +189,16 @@ async function fetchRadarrLibraryRaw(): Promise<RadarrMovie[]> {
   return data
 }
 
-// Last-known successful library. Held indefinitely (no expiresAt) so
-// that a transient upstream outage during a refresh-driven request
-// falls back to the prior snapshot — even a few hours stale is far
-// better than treating "library is unreachable" as "library has zero
-// items" and routing into cold-start, which would silently leak
-// already-owned titles into the strip. Replaced only on a fresh
-// successful fetch.
-const libraryStaleFallback: { [k in 'movie' | 'tv']?: LibraryItem[] } = {}
+// Last-known successful library. Kept across cache windows so a transient
+// upstream outage can still filter already-owned titles, but expired after
+// a day so a prolonged Sonarr/Radarr outage fails closed instead of serving
+// a stale household snapshot as authoritative.
+const libraryStaleFallback: { [k in 'movie' | 'tv']?: { items: LibraryItem[]; fetchedAt: number } } = {}
+
+function librarySnapshotAgeMs(kind: 'movie' | 'tv'): number | undefined {
+  const fetchedAt = libraryStaleFallback[kind]?.fetchedAt
+  return fetchedAt === undefined ? undefined : Math.max(0, Date.now() - fetchedAt)
+}
 
 async function fetchLibraryCached(kind: 'movie' | 'tv'): Promise<LibraryItem[]> {
   const now = Date.now()
@@ -208,8 +212,9 @@ async function fetchLibraryCached(kind: 'movie' | 'tv'): Promise<LibraryItem[]> 
       // possible on fresh installs; pinning it is fine). The stale
       // fallback is updated either way so the next failure has the
       // freshest snapshot to fall back to.
-      libraryCache[kind] = { items, expiresAt: Date.now() + LIBRARY_CACHE_TTL_MS }
-      libraryStaleFallback[kind] = items
+      const fetchedAt = Date.now()
+      libraryCache[kind] = { items, expiresAt: fetchedAt + LIBRARY_CACHE_TTL_MS }
+      libraryStaleFallback[kind] = { items, fetchedAt }
       return items
     })
     .catch((err): LibraryItem[] => {
@@ -220,11 +225,19 @@ async function fetchLibraryCached(kind: 'movie' | 'tv'): Promise<LibraryItem[]> 
       // instead of pretending the household is empty.
       const stale = libraryStaleFallback[kind]
       if (stale) {
+        const ageMs = Date.now() - stale.fetchedAt
+        if (ageMs > LIBRARY_STALE_FALLBACK_MAX_AGE_MS) {
+          console.error(
+            `[suggestions] ${kind} library fetch failed and stale snapshot is expired (${Math.round(ageMs / 3_600_000)}h old) — failing closed:`,
+            err instanceof Error ? err.message : String(err),
+          )
+          throw new LibraryUnavailableError(kind, err)
+        }
         console.warn(
-          `[suggestions] ${kind} library fetch failed, serving stale snapshot of ${stale.length} items:`,
+          `[suggestions] ${kind} library fetch failed, serving stale snapshot of ${stale.items.length} items (${Math.round(ageMs / 3_600_000)}h old):`,
           err instanceof Error ? err.message : String(err),
         )
-        return stale
+        return stale.items
       }
       console.error(
         `[suggestions] ${kind} library fetch failed and no stale snapshot — failing closed:`,
@@ -543,6 +556,7 @@ function shuffleInPlace<T>(arr: T[]): T[] {
 // not a hard NEVER — the previous 20-cap meant a 30-pick refresh
 // could re-include the last batch the user just dismissed.
 const RECENTLY_SHOWN_CAP = 150
+const RECENTLY_SHOWN_MAX_KEYS = 200
 const recentlyShown = new Map<string, Array<{ id: number; title: string }>>()
 
 function recentKey(sub: string, kind: 'movie' | 'tv'): string {
@@ -554,7 +568,12 @@ export function _resetRecentlyShownForTests(): void {
 }
 
 function getRecentlyShown(sub: string, kind: 'movie' | 'tv'): Array<{ id: number; title: string }> {
-  return recentlyShown.get(recentKey(sub, kind)) ?? []
+  const key = recentKey(sub, kind)
+  const items = recentlyShown.get(key)
+  if (!items) return []
+  recentlyShown.delete(key)
+  recentlyShown.set(key, items)
+  return items
 }
 
 function recordShown(
@@ -580,6 +599,11 @@ function recordShown(
     }
   }
   recentlyShown.set(key, merged.slice(0, RECENTLY_SHOWN_CAP))
+  while (recentlyShown.size > RECENTLY_SHOWN_MAX_KEYS) {
+    const oldest = recentlyShown.keys().next().value
+    if (!oldest) break
+    recentlyShown.delete(oldest)
+  }
 }
 
 // The "rotate, don't repeat" instruction goes in the volatile portion
@@ -693,19 +717,23 @@ async function tmdbFetchWithRetry(
 // facing freshness loss. The single-flight lookup coalescing covers
 // the brief moments after expiry when concurrent calls would race.
 const TRENDING_CACHE_TTL_MS = 300_000
+const LOOKUP_RESULT_CACHE_TTL_MS = 10_000
+const LOOKUP_RESULT_CACHE_MAX_KEYS = 500
 
 // In-flight coalescing maps for TMDB GETs. Two parallel suggestions
 // calls (movie + tv mounting at once, household members refreshing,
 // retry path racing the prefetch) frequently ask TMDB for the same
 // id or title. Coalesce to one fetch, return the same promise to
-// every concurrent caller. The map clears on settlement, so this is
-// strictly an in-flight dedupe — not a result cache.
+// every concurrent caller. Title search also keeps a short settled
+// result cache to cover sequential retry/refresh bursts.
 const titleByIdInFlight = new Map<string, Promise<string | null>>()
 const lookupInFlight = new Map<string, Promise<SuggestionItem | null>>()
+const lookupResultCache = new Map<string, { item: SuggestionItem | null; expiresAt: number }>()
 
 export function _resetTmdbInFlightForTests(): void {
   titleByIdInFlight.clear()
   lookupInFlight.clear()
+  lookupResultCache.clear()
 }
 
 async function tmdbTitleById(kind: 'movie' | 'tv', id: number): Promise<string | null> {
@@ -818,6 +846,12 @@ async function tmdbLookup(
 ): Promise<SuggestionItem | null> {
   if (!_tmdbKey) return null
   const key = `${kind}:${title.toLowerCase()}:${year ?? ''}`
+  const now = Date.now()
+  const cached = lookupResultCache.get(key)
+  if (cached && cached.expiresAt > now) {
+    return cached.item ? { ...cached.item } : null
+  }
+  if (cached) lookupResultCache.delete(key)
   const existing = lookupInFlight.get(key)
   if (existing) return existing
   const promise = (async (): Promise<SuggestionItem | null> => {
@@ -872,7 +906,18 @@ async function tmdbLookup(
       overview: top.overview,
       year: Number.isFinite(parsedYear) ? parsedYear : undefined,
     }
-  })().finally(() => {
+  })().then((item) => {
+    lookupResultCache.set(key, {
+      item: item ? { ...item } : null,
+      expiresAt: Date.now() + LOOKUP_RESULT_CACHE_TTL_MS,
+    })
+    while (lookupResultCache.size > LOOKUP_RESULT_CACHE_MAX_KEYS) {
+      const oldest = lookupResultCache.keys().next().value
+      if (!oldest) break
+      lookupResultCache.delete(oldest)
+    }
+    return item
+  }).finally(() => {
     lookupInFlight.delete(key)
   })
   lookupInFlight.set(key, promise)
@@ -1012,9 +1057,10 @@ async function fetchCandidatePool(
   if (!_tmdbKey || genreIds.length === 0) return []
   // Pipe = OR so we get titles matching ANY of the household's top
   // genres (Drama OR Crime OR Sci-Fi), not the near-empty intersection.
-  const key = genreIds.slice().sort((a, b) => a - b).join('|')
   const now = Date.now()
   const today = new Date().toISOString().slice(0, 10)
+  const genreKey = genreIds.slice().sort((a, b) => a - b).join('|')
+  const key = `${today}:${genreKey}`
   const cached = discoverCache[kind]
   if (cached && cached.key === key && cached.expiresAt > now) {
     return cached.items.slice()
@@ -1029,7 +1075,7 @@ async function fetchCandidatePool(
     first_air_date?: string
   }
   // Quality-sorted pages (acclaimed niche titles, vote_count≥100)
-  const qualityPages = await Promise.all(
+  const qualityPagesPromise = Promise.all(
     Array.from({ length: CANDIDATE_POOL_PAGES }, async (_, i) => {
       const url = new URL(`${TMDB_BASE}/discover/${kind}`)
       url.searchParams.set('page', String(i + 1))
@@ -1042,7 +1088,7 @@ async function fetchCandidatePool(
       // accumulated votes yet — the recency filter already handles novelty).
       url.searchParams.set('sort_by', 'vote_average.desc')
       url.searchParams.set('vote_count.gte', '200')
-      url.searchParams.set('with_genres', key)
+      url.searchParams.set('with_genres', genreKey)
       url.searchParams.set(kind === 'movie' ? 'primary_release_date.lte' : 'first_air_date.lte', today)
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), TMDB_TIMEOUT_MS)
@@ -1074,7 +1120,7 @@ async function fetchCandidatePool(
       url.searchParams.set('page', String(i + 1))
       url.searchParams.set('sort_by', kind === 'movie' ? 'primary_release_date.desc' : 'first_air_date.desc')
       url.searchParams.set('vote_count.gte', '30')
-      url.searchParams.set('with_genres', key)
+      url.searchParams.set('with_genres', genreKey)
       url.searchParams.set(kind === 'movie' ? 'primary_release_date.lte' : 'first_air_date.lte', today)
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), TMDB_TIMEOUT_MS)
@@ -1090,7 +1136,7 @@ async function fetchCandidatePool(
       }
     }),
   )
-  const [noveltyPages] = await Promise.all([noveltyPagesPromise])
+  const [qualityPages, noveltyPages] = await Promise.all([qualityPagesPromise, noveltyPagesPromise])
   // Collect all rows: quality first, then novelty (novelty appended so
   // Claude's numbered list leads with quality picks — novelty items appear
   // at the end where they serve as "freshness anchors" without dominating).
@@ -1705,10 +1751,13 @@ suggestions.get('/:type', async (c) => {
   // personalization signal is observable: callers can compare what
   // Claude was instructed to mirror against what actually rendered.
   const libraryGenres = computeGenreDistribution(library, 5)
+  const snapshotAgeMs = librarySnapshotAgeMs(type)
   const diag = (extra: Record<string, unknown> = {}) => ({
     libraryCount: library.length,
     rejectionCount: kindRejections.length,
     libraryGenres: libraryGenres.length > 0 ? libraryGenres : undefined,
+    librarySnapshotAgeHours:
+      snapshotAgeMs === undefined ? undefined : Number((snapshotAgeMs / 3_600_000).toFixed(2)),
     ...extra,
   })
 

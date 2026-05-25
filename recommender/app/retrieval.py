@@ -76,8 +76,11 @@ def retrieve_candidates(
                 f"""SELECT t.tmdb_id, t.kind, t.title, t.year, t.poster_path, t.overview,
                           COALESCE(t.popularity, 0) AS popularity, t.vote_average,
                           COALESCE(t.vote_count, 0) AS vote_count,
-                          (SELECT GROUP_CONCAT(g.genre_id) FROM title_genres g
-                           WHERE g.kind = t.kind AND g.tmdb_id = t.tmdb_id) AS genres,
+                          (SELECT GROUP_CONCAT(genre_id) FROM (
+                             SELECT g.genre_id FROM title_genres g
+                             WHERE g.kind = t.kind AND g.tmdb_id = t.tmdb_id
+                             ORDER BY g.genre_id
+                           )) AS genres,
                           f.embedding AS embedding, f.dim AS dim
                    FROM titles t
                    JOIN title_features f ON f.kind = t.kind AND f.tmdb_id = t.tmdb_id
@@ -141,8 +144,11 @@ def cold_start_pool(
     rows = conn.execute(
         """SELECT t.tmdb_id, t.title, t.year, t.poster_path, t.overview,
                   COALESCE(t.popularity, 0) AS popularity, t.vote_average,
-                  (SELECT GROUP_CONCAT(g.genre_id) FROM title_genres g
-                   WHERE g.kind = t.kind AND g.tmdb_id = t.tmdb_id) AS genres
+                  (SELECT GROUP_CONCAT(genre_id) FROM (
+                     SELECT g.genre_id FROM title_genres g
+                     WHERE g.kind = t.kind AND g.tmdb_id = t.tmdb_id
+                     ORDER BY g.genre_id
+                   )) AS genres
            FROM titles t
            WHERE t.kind = ? AND COALESCE(t.vote_count, 0) >= ?
            ORDER BY popularity DESC
