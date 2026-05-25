@@ -183,3 +183,18 @@ export async function postShown(
   if (tmdbIds.length === 0) return
   await mirrorPost('/events/shown', { sub, kind, tmdb_ids: tmdbIds }, 'recommender.postShown')
 }
+
+export async function postImpressions(
+  sub: string,
+  kind: RecommenderKind,
+  items: Array<{
+    tmdb_id: number
+    rank: number
+    score: number
+    provenance: RecommenderProvenance
+    model_version: string
+  }>,
+): Promise<void> {
+  if (items.length === 0) return
+  await mirrorPost('/events/impressions', { sub, kind, items }, 'recommender.postImpressions')
+}

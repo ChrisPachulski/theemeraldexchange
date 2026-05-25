@@ -32,6 +32,7 @@ const baseSession: Session = {
   username: 'someone',
   role: 'user',
   plexAuthToken: 'token-xyz',
+  verifiedPlexServerId: 'home-machine-id',
 }
 
 beforeEach(() => {

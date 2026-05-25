@@ -206,6 +206,22 @@ type RadarrAddBody = {
   [key: string]: unknown
 }
 
+type CreatedRadarrMovie = RadarrAddBody & { id?: number; title?: string }
+
+async function restoreMovieMonitoring(movie: CreatedRadarrMovie): Promise<{ ok: true } | { ok: false; status: number }> {
+  if (!movie.id) return { ok: false, status: 0 }
+  const res = await radarrFetch(`/api/v3/movie/${movie.id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...movie, monitored: true }),
+  })
+  if (!res.ok) {
+    console.error(`[movie-cap] failed to restore monitoring for movie ${movie.id}: ${res.status}`)
+    return { ok: false, status: res.status }
+  }
+  return { ok: true }
+}
+
 async function materializeNonAdminMovieBody(raw: RadarrAddBody): Promise<
   { ok: true; body: RadarrAddBody } | { ok: false; reason: string }
 > {
@@ -217,14 +233,23 @@ async function materializeNonAdminMovieBody(raw: RadarrAddBody): Promise<
   // preference, Radarr's default Any profile is sometimes id 1 and a
   // non-admin direct-POST would land on the most permissive setting
   // instead of the curated one.
-  const [folders, profileRes] = await Promise.all([
-    radarrRootFolders(),
+  const [folderResult, profileRes] = await Promise.all([
+    radarrRootFolders()
+      .then((folders) => ({ ok: true as const, folders }))
+      .catch((err) => {
+        console.error('[radarr] rootfolder lookup failed:', err)
+        return { ok: false as const }
+      }),
     radarrFetch('/api/v3/qualityprofile', { method: 'GET' }),
   ])
+  if (!folderResult.ok) {
+    return { ok: false, reason: 'rootfolder_unreachable' }
+  }
   if (!profileRes.ok) {
     return { ok: false, reason: 'qualityprofile_unreachable' }
   }
   const profiles = (await profileRes.json()) as Array<{ id: number; name?: string }>
+  const folders = folderResult.folders
   const folder = env.defaultRadarrRootFolderPath
     ? folders.find((f) => f.path === env.defaultRadarrRootFolderPath)
     : folders[0]
@@ -338,7 +363,7 @@ radarr.post('/api/v3/movie', async (c) => {
   if (r.ok && wantedSearch) {
     const created = (() => {
       try {
-        return JSON.parse(out) as { id?: number; title?: string }
+        return JSON.parse(out) as CreatedRadarrMovie
       } catch {
         return null
       }
@@ -354,6 +379,25 @@ radarr.post('/api/v3/movie', async (c) => {
               error: 'capped_grab_failed',
               status: grab.upstreamStatus,
               phase: grab.status === 'search_failed' ? 'search' : 'grab',
+              movie: created,
+            },
+            424,
+          )
+        }
+        if (grab.status === 'no_releases' || grab.status === 'all_rejected_by_cap') {
+          const restore = await restoreMovieMonitoring(created)
+          if (restore.ok) {
+            return new Response(out, {
+              status: r.status,
+              headers: { 'Content-Type': r.headers.get('Content-Type') ?? 'application/json' },
+            })
+          }
+          return c.json(
+            {
+              error: 'capped_grab_not_started',
+              phase: grab.status,
+              scanned: grab.scanned,
+              restoreStatus: restore.status || undefined,
               movie: created,
             },
             424,

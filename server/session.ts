@@ -33,6 +33,7 @@ export type Session = {
    *  existed — those users will need to re-auth before token-using
    *  endpoints work for them. */
   plexAuthToken?: string
+  verifiedPlexServerId?: string
 }
 
 // A256GCM requires a 32-byte key. SESSION_SECRET is arbitrary-length
@@ -56,7 +57,15 @@ export async function verifySession(token: string): Promise<Session | null> {
     if (role !== 'admin' && role !== 'user') return null
     const plexAuthToken =
       typeof payload.plexAuthToken === 'string' ? payload.plexAuthToken : undefined
-    return { sub: payload.sub, username: payload.username, role, plexAuthToken }
+    const verifiedPlexServerId =
+      typeof payload.verifiedPlexServerId === 'string' ? payload.verifiedPlexServerId : undefined
+    return {
+      sub: payload.sub,
+      username: payload.username,
+      role,
+      ...(plexAuthToken ? { plexAuthToken } : {}),
+      ...(verifiedPlexServerId ? { verifiedPlexServerId } : {}),
+    }
   } catch {
     return null
   }

@@ -25,6 +25,7 @@ from .schemas import (
     ClearFeedbackRequest,
     FeedbackEventRequest,
     HealthResponse,
+    ImpressionEventRequest,
     LibrarySyncRequest,
     RejectionEventRequest,
     ScoreRequest,
@@ -148,33 +149,6 @@ def score(
 
     result = recipe.score(ctx, conn, n=req.n, params=params)
     items = result.items[: req.n]
-
-    now = _utc_now_iso()
-    if items:
-        with transaction(conn):
-            conn.executemany(
-                """INSERT INTO rec_log(sub, kind, tmdb_id, rank, score, provenance, model_version, ts)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                [
-                    (
-                        req.sub,
-                        req.kind,
-                        it.tmdb_id,
-                        rank,
-                        it.score,
-                        it.provenance,
-                        model_version,
-                        now,
-                    )
-                    for rank, it in enumerate(items)
-                ],
-            )
-            conn.executemany(
-                """INSERT INTO recently_shown(sub, kind, tmdb_id, ts)
-                   VALUES (?, ?, ?, ?)
-                   ON CONFLICT(sub, kind, tmdb_id) DO UPDATE SET ts = excluded.ts""",
-                [(req.sub, req.kind, it.tmdb_id, now) for it in items],
-            )
 
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
     diag = {
@@ -327,13 +301,12 @@ def post_shown(
 ) -> dict[str, int]:
     """Bulk-record items as 'recently shown' for a user.
 
-    The /score endpoint already inserts into recently_shown for items
-    IT picked. But Hono's suggestions route can ALSO append trending-
-    fill items when the recommender returns fewer than TARGET_COUNT
-    (see server/routes/suggestions.ts) — those fill items are visible
-    to the user but invisible to recently_shown, so they can repeat on
-    the next refresh. Callers post the fill tmdb_ids here so the
-    rotation list converges with what the user actually saw.
+    The /events/impressions endpoint records recommender-picked items
+    after Hono has applied final filtering. Hono's suggestions route can
+    also append trending-fill items when the recommender returns fewer
+    than TARGET_COUNT (see server/routes/suggestions.ts). Those fill
+    items are visible to the user but are not recommender impressions, so
+    callers post the fill tmdb_ids here to keep rotation in sync.
 
     Only recently_shown is written. Fill items aren't recommendations
     (no model produced them), so they intentionally don't appear in
@@ -357,6 +330,48 @@ def post_shown(
             (f"-{RECENTLY_SHOWN_RETENTION_DAYS} days",),
         )
     return {"count": len(payload.tmdb_ids)}
+
+
+@app.post("/events/impressions")
+def post_impressions(
+    payload: ImpressionEventRequest,
+    _auth: None = Depends(require_event_secret),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, int]:
+    if len(payload.items) > 200:
+        raise HTTPException(status_code=413, detail="impression event batch too large")
+    if not payload.items:
+        return {"count": 0}
+    now = _utc_now_iso()
+    with transaction(conn):
+        conn.executemany(
+            """INSERT INTO rec_log(sub, kind, tmdb_id, rank, score, provenance, model_version, ts)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                (
+                    payload.sub,
+                    payload.kind,
+                    it.tmdb_id,
+                    it.rank,
+                    it.score,
+                    it.provenance,
+                    it.model_version,
+                    now,
+                )
+                for it in payload.items
+            ],
+        )
+        conn.executemany(
+            """INSERT INTO recently_shown(sub, kind, tmdb_id, ts)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(sub, kind, tmdb_id) DO UPDATE SET ts = excluded.ts""",
+            [(payload.sub, payload.kind, it.tmdb_id, now) for it in payload.items],
+        )
+        conn.execute(
+            "DELETE FROM recently_shown WHERE datetime(ts) < datetime('now', ?)",
+            (f"-{RECENTLY_SHOWN_RETENTION_DAYS} days",),
+        )
+    return {"count": len(payload.items)}
 
 
 @app.post("/events/rejection")
