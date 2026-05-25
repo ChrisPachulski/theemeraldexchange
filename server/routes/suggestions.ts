@@ -1540,6 +1540,30 @@ const CLAUDE_TEMPERATURE = 0.7
 const ANTHROPIC_RETRY_STATUSES = new Set([529, 503])
 const ANTHROPIC_RETRY_DELAY_MS = 3_000
 const ANTHROPIC_RETRY_MAX = 2 // total attempts including the first
+const CLAUDE_TIMEOUT_MS = 20_000
+
+class ClaudeTimeoutError extends Error {
+  constructor() {
+    super(`Claude request exceeded ${CLAUDE_TIMEOUT_MS}ms`)
+    this.name = 'ClaudeTimeoutError'
+  }
+}
+
+async function withClaudeDeadline<T>(fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort()
+      reject(new ClaudeTimeoutError())
+    }, CLAUDE_TIMEOUT_MS)
+  })
+  try {
+    return await Promise.race([fn(controller.signal), timeout])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
 
 async function withAnthropicRetry<T>(fn: () => Promise<T>): Promise<T> {
   let lastErr: unknown
@@ -1575,19 +1599,21 @@ async function callClaudeInitial(
   genreHint?: string,
 ): Promise<ClaudeResponse> {
   const response = await withAnthropicRetry(() =>
-    client.messages.create({
-      model: MODEL,
-      // 4096 gives full headroom for 30 picks with per-pick reasons.
-      // 30 picks × ~80 tokens each = ~2400 output tokens + envelope;
-      // the prior 2048 ceiling could truncate mid-JSON when reasons
-      // were present. Haiku 4.5 max_output is 8192; 4096 is safe.
-      max_tokens: 4096,
-      temperature: CLAUDE_TEMPERATURE,
-      system: systemStack(libraryBlock, priorityTasteBlock, userLikesBlock, recentlyShownBlock, candidatePoolBlock),
-      tools: [SUBMIT_TOOL],
-      tool_choice: { type: 'tool', name: SUBMIT_TOOL.name, disable_parallel_tool_use: true },
-      messages: [{ role: 'user', content: userAsk(kind, CLAUDE_OVERFETCH, salt, genreHint) }],
-    }),
+    withClaudeDeadline((signal) =>
+      client.messages.create({
+        model: MODEL,
+        // 4096 gives full headroom for 30 picks with per-pick reasons.
+        // 30 picks × ~80 tokens each = ~2400 output tokens + envelope;
+        // the prior 2048 ceiling could truncate mid-JSON when reasons
+        // were present. Haiku 4.5 max_output is 8192; 4096 is safe.
+        max_tokens: 4096,
+        temperature: CLAUDE_TEMPERATURE,
+        system: systemStack(libraryBlock, priorityTasteBlock, userLikesBlock, recentlyShownBlock, candidatePoolBlock),
+        tools: [SUBMIT_TOOL],
+        tool_choice: { type: 'tool', name: SUBMIT_TOOL.name, disable_parallel_tool_use: true },
+        messages: [{ role: 'user', content: userAsk(kind, CLAUDE_OVERFETCH, salt, genreHint) }],
+      }, { timeout: CLAUDE_TIMEOUT_MS, signal }),
+    ),
   )
   return readToolUse(response)
 }
@@ -1621,29 +1647,31 @@ async function callClaudeRetry(
   // they can pass a non-empty string.
   void recentlyShownBlock
   const response = await withAnthropicRetry(() =>
-    client.messages.create({
-      model: MODEL,
-      max_tokens: 4096,
-      temperature: CLAUDE_TEMPERATURE,
-      system: systemStack(libraryBlock, priorityTasteBlock, userLikesBlock, '', candidatePoolBlock),
-      tools: [SUBMIT_TOOL],
-      tool_choice: { type: 'tool', name: SUBMIT_TOOL.name, disable_parallel_tool_use: true },
-      messages: [
-        { role: 'user', content: userAsk(kind, CLAUDE_OVERFETCH, salt, genreHint) },
-        {
-          role: 'assistant',
-          content: [
-            { type: 'tool_use', id: prior.id, name: prior.name, input: prior.input },
-          ],
-        },
-        {
-          role: 'user',
-          content: [
-            { type: 'tool_result', tool_use_id: prior.id, content: toolResultText },
-          ],
-        },
-      ],
-    }),
+    withClaudeDeadline((signal) =>
+      client.messages.create({
+        model: MODEL,
+        max_tokens: 4096,
+        temperature: CLAUDE_TEMPERATURE,
+        system: systemStack(libraryBlock, priorityTasteBlock, userLikesBlock, '', candidatePoolBlock),
+        tools: [SUBMIT_TOOL],
+        tool_choice: { type: 'tool', name: SUBMIT_TOOL.name, disable_parallel_tool_use: true },
+        messages: [
+          { role: 'user', content: userAsk(kind, CLAUDE_OVERFETCH, salt, genreHint) },
+          {
+            role: 'assistant',
+            content: [
+              { type: 'tool_use', id: prior.id, name: prior.name, input: prior.input },
+            ],
+          },
+          {
+            role: 'user',
+            content: [
+              { type: 'tool_result', tool_use_id: prior.id, content: toolResultText },
+            ],
+          },
+        ],
+      }, { timeout: CLAUDE_TIMEOUT_MS, signal }),
+    ),
   )
   return readToolUse(response)
 }

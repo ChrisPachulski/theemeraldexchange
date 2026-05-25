@@ -34,7 +34,7 @@ This file is gitignored. Build it from a recommender DB snapshot:
 
 ```bash
 # Inside the recommender container (default DB path /data/exchange.db):
-docker exec exchange-recommender python -m eval.build_holdout > /data/holdout.jsonl
+docker exec exchange-recommender sh -c 'python -m eval.build_holdout > /data/holdout.jsonl'
 
 # From the host, against a copied snapshot:
 RECOMMENDER_DB_PATH=./snapshot.db \

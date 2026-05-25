@@ -22,7 +22,8 @@ from .schemas import Kind, ScoreRequest
 
 log = logging.getLogger(__name__)
 IN_BATCH_SIZE = 500
-POSITIVE_FEEDBACK_SIGNALS = {"like", "clicked", "added"}
+ENGAGEMENT_FEEDBACK_SIGNALS = {"clicked", "added"}
+POSITIVE_FEEDBACK_SIGNALS = {"like", *ENGAGEMENT_FEEDBACK_SIGNALS}
 MODEL_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
     "pool_size": (1, 5000),
     "mmr_input_k": (1, 1000),
@@ -236,12 +237,11 @@ def load_user_context(
     )
 
     # ----- per-user signals
-    # Hono is the source of truth for user feedback. When req.feedback is
-    # present, treat it as AUTHORITATIVE — do NOT union with persisted
-    # user_feedback rows. The mirror from Hono to this sidecar is
-    # fire-and-forget (clear events can be dropped on transient errors),
-    # so unioning would let stale rows resurrect cleared signals and
-    # bias future scores.
+    # Hono is the source of truth for dot feedback. When req.feedback is
+    # present, treat like/dislike/reject as authoritative so stale mirrored
+    # rows cannot resurrect cleared dots. Engagement signals (clicked/added)
+    # are recorded only in this sidecar, so merge those stored positives
+    # into the inline branch without overriding explicit negative feedback.
     if req.feedback is not None:
         inline_likes: set[int] = set()
         inline_dislikes: set[int] = set()
@@ -255,7 +255,19 @@ def load_user_context(
                 else inline_rejects
             )
             target.add(fb.tmdb_id)
-        liked_ids = inline_likes
+        fb_rows = conn.execute(
+            """SELECT tmdb_id, signal FROM user_feedback
+               WHERE sub = ? AND kind = ?""",
+            (req.sub, kind),
+        ).fetchall()
+        explicit_negatives = inline_dislikes | inline_rejects
+        engagement_likes = {
+            r["tmdb_id"]
+            for r in fb_rows
+            if r["signal"] in ENGAGEMENT_FEEDBACK_SIGNALS
+            and r["tmdb_id"] not in explicit_negatives
+        }
+        liked_ids = inline_likes | engagement_likes
         disliked_ids = inline_dislikes
         reject_from_feedback = inline_rejects
     else:

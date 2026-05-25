@@ -49,21 +49,43 @@ const AUTH_RATE_LIMITS: Record<AuthRateLimitKind, { limit: number; windowMs: num
   pin: { limit: 10, windowMs: 60_000 },
   check: { limit: 60, windowMs: 60_000 },
 }
+const AUTH_RATE_LIMIT_MAX_BUCKETS = 256
+const AUTH_RATE_LIMIT_SWEEP_MS = 60_000
 const authRateLimitBuckets = new Map<string, AuthRateLimitBucket>()
+let authRateLimitLastSweep = 0
 
 export function _resetAuthRateLimitsForTests(): void {
   authRateLimitBuckets.clear()
+  authRateLimitLastSweep = 0
 }
 
 function authClientKey(c: Context, kind: AuthRateLimitKind): string {
-  const forwarded = c.req.header('x-forwarded-for')?.split(',')[0]?.trim()
-  const ip = c.req.header('cf-connecting-ip') ?? c.req.header('x-real-ip') ?? forwarded ?? 'unknown'
-  return `${kind}:${ip}`
+  void c
+  return `${kind}:global`
+}
+
+function sweepAuthRateLimitBuckets(now: number): void {
+  if (
+    authRateLimitBuckets.size <= AUTH_RATE_LIMIT_MAX_BUCKETS &&
+    now - authRateLimitLastSweep < AUTH_RATE_LIMIT_SWEEP_MS
+  ) {
+    return
+  }
+  authRateLimitLastSweep = now
+  for (const [key, bucket] of authRateLimitBuckets) {
+    if (bucket.resetAt <= now) authRateLimitBuckets.delete(key)
+  }
+  while (authRateLimitBuckets.size > AUTH_RATE_LIMIT_MAX_BUCKETS) {
+    const oldest = authRateLimitBuckets.keys().next().value
+    if (oldest === undefined) break
+    authRateLimitBuckets.delete(oldest)
+  }
 }
 
 function enforceAuthRateLimit(c: Context, kind: AuthRateLimitKind): Response | null {
   const cfg = AUTH_RATE_LIMITS[kind]
   const now = Date.now()
+  sweepAuthRateLimitBuckets(now)
   const key = authClientKey(c, kind)
   const current = authRateLimitBuckets.get(key)
   const bucket = current && current.resetAt > now ? current : { count: 0, resetAt: now + cfg.windowMs }
