@@ -19,6 +19,7 @@ import {
 } from '../services/iptvCatalog.js'
 import { signStreamToken, verifyStreamToken } from '../services/iptvStreamToken.js'
 import { streamConcurrency } from '../services/iptvConcurrency.js'
+import { rewriteManifest } from '../services/iptvHlsRewrite.js'
 import { env } from '../env.js'
 import { randomUUID } from 'node:crypto'
 
@@ -152,7 +153,24 @@ async function proxyRangeable(c: Context, upstreamUrl: string, mime: string): Pr
 }
 
 async function rewriteHlsPlaylist(c: Context, upstreamUrl: string): Promise<Response> {
-  return c.json({ error: 'hls_rewrite_not_implemented' }, 501)
+  const upstream = await fetch(upstreamUrl)
+  if (!upstream.ok) return c.json({ error: `upstream_${upstream.status}` }, 502)
+
+  const text = await upstream.text()
+  const { sub } = userOf(c)
+  const sign = (url: string) =>
+    signStreamToken(env.sessionSecret, {
+      kind: 'segment', resourceId: url, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
+    })
+  const rewritten = rewriteManifest(text, upstreamUrl, sign, '/api/iptv/stream/segment')
+
+  return new Response(rewritten, {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/vnd.apple.mpegurl',
+      'Cache-Control': 'no-store',
+    },
+  })
 }
 
 iptv.get('/stream/live/:streamId.ts', async (c) => {
@@ -263,6 +281,46 @@ iptv.get('/stream/series/:episodeId/:ext', async (c) => {
   return await proxyRangeable(c, upstreamUrl, mime)
 })
 
+iptv.get('/stream/segment', async (c) => {
+  const t = c.req.query('u') ?? ''
+  let claims: ReturnType<typeof verifyStreamToken>
+  try {
+    claims = verifyStreamToken(env.sessionSecret, t)
+    if (claims.kind !== 'segment') throw new Error('kind_mismatch')
+  } catch (err) {
+    return c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401)
+  }
+
+  const upstream = claims.resourceId
+  const allowedHost = new URL(credsFromEnv().host).host
+  let url: URL
+  try {
+    url = new URL(upstream)
+  } catch {
+    return c.json({ error: 'bad_upstream' }, 400)
+  }
+  void allowedHost
+
+  if (url.pathname.toLowerCase().endsWith('.m3u8')) {
+    return await rewriteHlsPlaylist(c, upstream)
+  }
+
+  const controller = new AbortController()
+  c.req.raw.signal.addEventListener('abort', () => controller.abort(), { once: true })
+  const range = c.req.header('range')
+  const upstreamRes = await fetch(upstream, { signal: controller.signal, headers: range ? { Range: range } : {} })
+  if (!upstreamRes.ok || !upstreamRes.body) return c.json({ error: `upstream_${upstreamRes.status}` }, 502)
+
+  const headers = new Headers()
+  headers.set('Content-Type', upstreamRes.headers.get('content-type') ?? 'application/octet-stream')
+  for (const h of ['content-length', 'content-range', 'accept-ranges']) {
+    const v = upstreamRes.headers.get(h)
+    if (v) headers.set(h, v)
+  }
+  headers.set('Cache-Control', 'no-store')
+
+  return new Response(upstreamRes.body, { status: upstreamRes.status, headers })
+})
 
 type Job = {
   id: string
