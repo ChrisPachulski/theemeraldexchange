@@ -344,6 +344,7 @@ export const env = {
   XTREAM_USERNAME: process.env.XTREAM_USERNAME ?? '',
   XTREAM_PASSWORD: process.env.XTREAM_PASSWORD ?? '',
   IPTV_DB_PATH: process.env.IPTV_DB_PATH ?? './data/iptv.db',
+  IPTV_EPG_PATH: opt('IPTV_EPG_PATH') ?? '/xmltv.php',
   IPTV_MAX_CONCURRENT_STREAMS: positiveInt('IPTV_MAX_CONCURRENT_STREAMS', 4),
   IPTV_STREAM_TOKEN_TTL_SECS: positiveInt('IPTV_STREAM_TOKEN_TTL_SECS', 300),
   IPTV_LIST_TIMEOUT_MS: positiveInt('IPTV_LIST_TIMEOUT_MS', 30_000),

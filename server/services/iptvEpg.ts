@@ -113,7 +113,8 @@ export async function fetchAndStreamEpg(
   const host = (hostOverride?.host ?? env.XTREAM_HOST).replace(/\/+$/, '')
   const user = hostOverride?.username ?? env.XTREAM_USERNAME
   const pass = hostOverride?.password ?? env.XTREAM_PASSWORD
-  const url = `${host}/xmltv.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}`
+  const epgPath = (env.IPTV_EPG_PATH ?? '/xmltv.php').replace(/^([^/])/, '/$1')
+  const url = `${host}${epgPath}?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}`
   const res = await fetch(url)
   if (!res.ok || !res.body) throw new Error(`xtream.xmltv_${res.status}`)
   const nodeStream = Readable.fromWeb(res.body as unknown as ReadableStream<Uint8Array>)
