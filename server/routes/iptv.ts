@@ -21,6 +21,7 @@ import {
   getVodDetail,
   getSeriesDetail,
 } from '../services/iptvCatalog.js'
+import { epgChannelWindow, epgGrid, epgNow } from '../services/iptvEpgQuery.js'
 import { signStreamToken, verifyStreamToken } from '../services/iptvStreamToken.js'
 import { streamConcurrency } from '../services/iptvConcurrency.js'
 import { rewriteManifest } from '../services/iptvHlsRewrite.js'
@@ -73,6 +74,34 @@ function parseListOpts(c: Context<Env>): { categoryId?: number; q?: string; limi
 iptv.get('/live', (c) => c.json(listLive(iptvDb(), parseListOpts(c))))
 iptv.get('/vod', (c) => c.json(listVod(iptvDb(), parseListOpts(c))))
 iptv.get('/series', (c) => c.json(listSeries(iptvDb(), parseListOpts(c))))
+
+iptv.get('/epg/now', (c) => {
+  const ids = (c.req.query('channelIds') ?? '')
+    .split(',')
+    .map((id) => Number(id))
+    .filter((id) => Number.isInteger(id) && id > 0)
+  return c.json(epgNow(iptvDb(), ids))
+})
+
+iptv.get('/epg/channel/:channelId', (c) => {
+  const channelId = Number(c.req.param('channelId'))
+  if (!Number.isInteger(channelId) || channelId <= 0) return c.json({ error: 'invalid_id' }, 400)
+
+  const from = c.req.query('from') ?? new Date().toISOString()
+  const to = c.req.query('to') ?? new Date(Date.now() + 24 * 3600_000).toISOString()
+  return c.json(epgChannelWindow(iptvDb(), channelId, from, to))
+})
+
+iptv.get('/epg/grid', (c) => {
+  const from = c.req.query('from') ?? new Date().toISOString()
+  const to = c.req.query('to') ?? new Date(Date.now() + 4 * 3600_000).toISOString()
+  const rawCategoryId = c.req.query('categoryId')
+  const categoryId = rawCategoryId != null && rawCategoryId !== '' ? Number(rawCategoryId) : undefined
+  if (categoryId != null && (!Number.isInteger(categoryId) || categoryId <= 0)) {
+    return c.json({ error: 'invalid_category' }, 400)
+  }
+  return c.json(epgGrid(iptvDb(), from, to, categoryId))
+})
 
 iptv.get('/vod/:streamId', (c) => {
   const id = Number(c.req.param('streamId'))
@@ -172,6 +201,20 @@ function clientWantsAvplayer(c: Context<Env>): boolean {
   return c.req.query('client') === 'avplayer'
 }
 
+export function formatXtreamTimeshiftStart(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) throw new Error('invalid_start')
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}:${pad(d.getUTCHours())}-${pad(d.getUTCMinutes())}`
+}
+
+function parsePositiveInt(value: string | undefined): number | null {
+  if (!value || !/^\d+$/.test(value)) return null
+  const parsed = Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) return null
+  return parsed
+}
+
 iptv.post('/stream/live/:streamId/grant', (c) => {
   const streamId = c.req.param('streamId')
   if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
@@ -196,6 +239,46 @@ iptv.post('/stream/live/:streamId/grant', (c) => {
   return c.json({
     url: `/api/iptv/stream/live/${streamId}.ts?t=${token}`,
     delivery: 'mpegts', sessionId,
+  })
+})
+
+iptv.post('/stream/catchup/:streamId/grant', (c) => {
+  const streamId = c.req.param('streamId')
+  if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
+
+  const startUtc = c.req.query('startUtc') ?? ''
+  const durationMin = parsePositiveInt(c.req.query('durationMin') ?? '')
+  const startDate = new Date(startUtc)
+  if (!startUtc || Number.isNaN(startDate.getTime()) || durationMin == null) {
+    return c.json({ error: 'invalid_params' }, 400)
+  }
+
+  const channel = iptvDb().raw
+    .prepare(`SELECT tv_archive, tv_archive_duration FROM channels WHERE stream_id = ?`)
+    .get(Number(streamId)) as { tv_archive: number; tv_archive_duration: number | null } | undefined
+  if (!channel) return c.json({ error: 'not_found' }, 404)
+  if (channel.tv_archive !== 1) return c.json({ error: 'catchup_unavailable' }, 400)
+
+  const archiveCutoff = Date.now() - (channel.tv_archive_duration ?? 7) * 24 * 3600_000
+  if (startDate.getTime() < archiveCutoff) return c.json({ error: 'beyond_archive_window' }, 400)
+
+  const { sub } = userOf(c)
+  const sessionId = `catchup:${streamId}:${startUtc}:${sub}:${Date.now()}`
+  const acquired = streamConcurrency().tryAcquire({ sub, sessionId })
+  if (!acquired.ok) return c.json(acquired, 429)
+
+  const resourceId = `${streamId}|${startUtc}|${durationMin}`
+  const token = signStreamToken(env.sessionSecret, {
+    kind: 'catchup',
+    resourceId,
+    sub,
+    ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
+  })
+
+  return c.json({
+    url: `/api/iptv/stream/catchup/${streamId}/${encodeURIComponent(startUtc)}/${durationMin}.ts?t=${token}`,
+    delivery: 'mpegts',
+    sessionId,
   })
 })
 
@@ -408,6 +491,45 @@ iptv.get('/stream/live/:streamId/remux/seg', (c) => {
   heartbeatRemuxSession(entry.sessionId)
   const stream = fs.createReadStream(filePath)
   return new Response(Readable.toWeb(stream) as unknown as ReadableStream, {
+    status: 200,
+    headers: {
+      'Content-Type': 'video/mp2t',
+      'Cache-Control': 'no-store',
+    },
+  })
+})
+
+iptv.get('/stream/catchup/:streamId/:startUtc/:durationMin.ts', async (c) => {
+  const streamId = c.req.param('streamId')
+  if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
+
+  const startUtc = decodeURIComponent(c.req.param('startUtc'))
+  const rawDurationMin = (c.req.param('durationMin') ??
+    (c.req.param() as Record<string, string | undefined>)['durationMin.ts'])?.replace(/\.ts$/, '')
+  const durationMin = parsePositiveInt(rawDurationMin)
+  if (durationMin == null) return c.json({ error: 'invalid_params' }, 400)
+
+  let xtreamStart: string
+  try {
+    xtreamStart = formatXtreamTimeshiftStart(startUtc)
+  } catch {
+    return c.json({ error: 'invalid_params' }, 400)
+  }
+
+  const v = checkToken(c, 'catchup', `${streamId}|${startUtc}|${durationMin}`)
+  if (!v.ok) return v.resp
+
+  const creds = credsFromEnv()
+  const upstreamUrl =
+    `${creds.host}/streaming/timeshift.php?username=${encodeURIComponent(creds.username)}` +
+    `&password=${encodeURIComponent(creds.password)}&stream=${streamId}&start=${xtreamStart}&duration=${durationMin}`
+
+  const controller = new AbortController()
+  c.req.raw.signal.addEventListener('abort', () => controller.abort(), { once: true })
+  const upstream = await fetch(upstreamUrl, { signal: controller.signal })
+  if (!upstream.ok || !upstream.body) return c.json({ error: `upstream_${upstream.status}` }, 502)
+
+  return new Response(upstream.body, {
     status: 200,
     headers: {
       'Content-Type': 'video/mp2t',
