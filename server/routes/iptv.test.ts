@@ -29,9 +29,18 @@ vi.mock('../services/xtream.js', () => ({
 }))
 
 vi.mock('../services/iptvStreamToken.js', () => ({
-  signStreamToken: vi.fn(() => 'fake.token'),
+  signStreamToken: vi.fn((_secret: string, opts: { kind: string; resourceId: string }) =>
+    `fake.${opts.kind}.${Buffer.from(opts.resourceId, 'utf-8').toString('base64url')}`),
   verifyStreamToken: vi.fn((_secret: string, t: string) => {
-    if (t === 'fake.token') return { kind: 'live', resourceId: '10', sub: 'plex:test', exp: Date.now() / 1000 + 60 }
+    const match = /^fake\.([^.]+)\.(.+)$/.exec(t)
+    if (match) {
+      return {
+        kind: match[1],
+        resourceId: Buffer.from(match[2], 'base64url').toString('utf-8'),
+        sub: 'plex:test',
+        exp: Date.now() / 1000 + 60,
+      }
+    }
     throw new Error('invalid_signature')
   }),
 }))
@@ -45,6 +54,10 @@ vi.mock('../services/iptvConcurrency.js', () => ({
     size: vi.fn(() => 0),
   })),
 }))
+
+function fakeToken(kind: string, resourceId: string): string {
+  return `fake.${kind}.${Buffer.from(resourceId, 'utf-8').toString('base64url')}`
+}
 
 describe('GET /api/iptv/health', () => {
   it('returns account info shape', async () => {
@@ -69,7 +82,7 @@ describe('live stream grant + proxy', () => {
     const res = await app.request('/api/iptv/stream/live/10/grant', { method: 'POST' })
     expect(res.status).toBe(200)
     const body = (await res.json()) as { url: string; delivery: string }
-    expect(body.url).toContain('/api/iptv/stream/live/10.ts?t=fake.token')
+    expect(body.url).toContain('/api/iptv/stream/live/10.ts?t=fake.live.MTA')
     expect(body.delivery).toBe('mpegts')
   })
 
@@ -86,7 +99,18 @@ vi.mock('../services/iptvSync.js', () => ({
   })),
 }))
 vi.mock('../services/iptvDbSingleton.js', () => ({
-  iptvDb: () => ({ raw: { prepare: () => ({ all: () => [], get: () => undefined, run: () => undefined }) }, stmts: {} }),
+  iptvDb: () => ({
+    raw: {
+      prepare: (sql: string) => ({
+        all: () => [],
+        get: (id?: string) => (sql.includes('series_episodes') && id === 'ep-1'
+          ? { container_extension: 'mkv' }
+          : undefined),
+        run: () => undefined,
+      }),
+    },
+    stmts: {},
+  }),
   closeIptvDb: () => undefined,
 }))
 
@@ -95,9 +119,58 @@ vi.mock('../services/iptvCatalog.js', () => ({
   listLive: vi.fn(() => ({ items: [{ stream_id: 10, num: 1, name: 'CNN' }], total: 1, limit: 50, offset: 0 })),
   listVod: vi.fn(() => ({ items: [{ stream_id: 20, name: 'Matrix' }], total: 1, limit: 50, offset: 0 })),
   listSeries: vi.fn(() => ({ items: [{ series_id: 30, name: 'GoT' }], total: 1, limit: 50, offset: 0 })),
-  getVodDetail: vi.fn(() => ({ stream_id: 20, name: 'Matrix' })),
+  getVodDetail: vi.fn(() => ({ stream_id: 20, name: 'Matrix', container_extension: 'mp4' })),
   getSeriesDetail: vi.fn(() => ({ series_id: 30, name: 'GoT', seasons: [{ season: 1, episodes: [] }] })),
 }))
+
+describe('vod stream grant + proxy', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+
+  it('issues a tokenized URL with detected ext', async () => {
+    const res = await app.request('/api/iptv/stream/vod/20/grant', { method: 'POST' })
+    expect(res.status).toBe(200)
+    const body = await res.json() as { url: string; delivery: string; mime: string }
+    expect(body.url).toContain('/api/iptv/stream/vod/20/mp4?t=fake.vod.MjA')
+    expect(body.delivery).toBe('progressive')
+    expect(body.mime).toBe('video/mp4')
+  })
+
+  it('proxies Range requests upstream', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('abc', {
+      status: 206,
+      headers: {
+        'content-length': '3',
+        'content-range': 'bytes 0-2/10',
+        'accept-ranges': 'bytes',
+      },
+    }))
+
+    const res = await app.request('/api/iptv/stream/vod/20/mp4?t=fake.vod.MjA', {
+      headers: { Range: 'bytes=0-2' },
+    })
+
+    expect(res.status).toBe(206)
+    expect(res.headers.get('content-range')).toBe('bytes 0-2/10')
+    expect(fetchSpy).toHaveBeenCalledWith('https://panel/movie/u/p/20.mp4', expect.objectContaining({
+      headers: { Range: 'bytes=0-2' },
+    }))
+    fetchSpy.mockRestore()
+  })
+
+})
+
+describe('series stream grant', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+
+  it('issues a tokenized URL with detected episode ext', async () => {
+    const res = await app.request('/api/iptv/stream/series/ep-1/grant', { method: 'POST' })
+    expect(res.status).toBe(200)
+    const body = await res.json() as { url: string; delivery: string; mime: string }
+    expect(body.url).toContain('/api/iptv/stream/series/ep-1/mkv?t=fake.series.ZXAtMQ')
+    expect(body.delivery).toBe('progressive')
+    expect(body.mime).toBe('video/x-matroska')
+  })
+})
 
 describe('POST /api/iptv/admin/sync', () => {
   it('returns a job id and final stats', async () => {

@@ -127,6 +127,34 @@ function checkToken(c: any, expectKind: string, resourceId: string): { ok: true;
   }
 }
 
+async function proxyRangeable(c: Context, upstreamUrl: string, mime: string): Promise<Response> {
+  const controller = new AbortController()
+  c.req.raw.signal.addEventListener('abort', () => controller.abort(), { once: true })
+  const headers: Record<string, string> = {}
+  const range = c.req.header('range')
+  if (range) headers.Range = range
+
+  const upstream = await fetch(upstreamUrl, { signal: controller.signal, headers })
+  if (!upstream.ok || !upstream.body) return c.json({ error: `upstream_${upstream.status}` }, 502)
+
+  const responseHeaders = new Headers({
+    'Content-Type': mime,
+    'Cache-Control': 'no-store',
+  })
+  const contentLength = upstream.headers.get('content-length')
+  if (contentLength) responseHeaders.set('Content-Length', contentLength)
+  const contentRange = upstream.headers.get('content-range')
+  if (contentRange) responseHeaders.set('Content-Range', contentRange)
+  const acceptRanges = upstream.headers.get('accept-ranges')
+  if (acceptRanges) responseHeaders.set('Accept-Ranges', acceptRanges)
+
+  return new Response(upstream.body, { status: upstream.status, headers: responseHeaders })
+}
+
+async function rewriteHlsPlaylist(c: Context, upstreamUrl: string): Promise<Response> {
+  return c.json({ error: 'hls_rewrite_not_implemented' }, 501)
+}
+
 iptv.get('/stream/live/:streamId.ts', async (c) => {
   const rawStreamId = c.req.param('streamId') ?? (c.req.param() as Record<string, string | undefined>)['streamId.ts']?.replace(/\.ts$/, '')
   const streamId = rawStreamId
@@ -154,6 +182,87 @@ iptv.get('/stream/live/:streamId.ts', async (c) => {
     },
   })
 })
+
+iptv.post('/stream/vod/:streamId/grant', (c) => {
+  const streamId = c.req.param('streamId')
+  if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
+  const { sub } = userOf(c)
+  const detail = getVodDetail(iptvDb(), Number(streamId))
+  if (!detail) return c.json({ error: 'not_found' }, 404)
+
+  const ext = (detail.container_extension ?? 'mp4').toLowerCase()
+  const sessionId = `vod:${streamId}:${sub}:${Date.now()}`
+  const acquired = streamConcurrency().tryAcquire({ sub, sessionId })
+  if (!acquired.ok) return c.json(acquired, 429)
+
+  const token = signStreamToken(env.sessionSecret, {
+    kind: 'vod', resourceId: streamId, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
+  })
+  const delivery: 'hls' | 'progressive' = ext === 'm3u8' ? 'hls' : 'progressive'
+
+  return c.json({
+    url: `/api/iptv/stream/vod/${streamId}/${ext}?t=${token}`,
+    delivery,
+    mime: delivery === 'hls' ? 'application/vnd.apple.mpegurl' : (ext === 'mkv' ? 'video/x-matroska' : 'video/mp4'),
+    sessionId,
+  })
+})
+
+iptv.get('/stream/vod/:streamId/:ext', async (c) => {
+  const streamId = c.req.param('streamId')
+  const ext = c.req.param('ext').toLowerCase()
+  const v = checkToken(c, 'vod', streamId)
+  if (!v.ok) return v.resp
+
+  const creds = credsFromEnv()
+  const upstreamUrl = `${creds.host}/movie/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${streamId}.${ext}`
+  if (ext === 'm3u8') return await rewriteHlsPlaylist(c, upstreamUrl)
+
+  const mime = ext === 'mkv' ? 'video/x-matroska' : 'video/mp4'
+  return await proxyRangeable(c, upstreamUrl, mime)
+})
+
+iptv.post('/stream/series/:episodeId/grant', (c) => {
+  const episodeId = c.req.param('episodeId')
+  if (!/^[\w-]+$/.test(episodeId)) return c.json({ error: 'invalid_id' }, 400)
+  const { sub } = userOf(c)
+  const row = iptvDb().raw
+    .prepare('SELECT container_extension FROM series_episodes WHERE episode_id = ?')
+    .get(episodeId) as { container_extension: string | null } | undefined
+  if (!row) return c.json({ error: 'not_found' }, 404)
+
+  const ext = (row.container_extension ?? 'mp4').toLowerCase()
+  const sessionId = `series:${episodeId}:${sub}:${Date.now()}`
+  const acquired = streamConcurrency().tryAcquire({ sub, sessionId })
+  if (!acquired.ok) return c.json(acquired, 429)
+
+  const token = signStreamToken(env.sessionSecret, {
+    kind: 'series', resourceId: episodeId, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
+  })
+  const delivery: 'hls' | 'progressive' = ext === 'm3u8' ? 'hls' : 'progressive'
+
+  return c.json({
+    url: `/api/iptv/stream/series/${episodeId}/${ext}?t=${token}`,
+    delivery,
+    mime: delivery === 'hls' ? 'application/vnd.apple.mpegurl' : (ext === 'mkv' ? 'video/x-matroska' : 'video/mp4'),
+    sessionId,
+  })
+})
+
+iptv.get('/stream/series/:episodeId/:ext', async (c) => {
+  const episodeId = c.req.param('episodeId')
+  const ext = c.req.param('ext').toLowerCase()
+  const v = checkToken(c, 'series', episodeId)
+  if (!v.ok) return v.resp
+
+  const creds = credsFromEnv()
+  const upstreamUrl = `${creds.host}/series/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${episodeId}.${ext}`
+  if (ext === 'm3u8') return await rewriteHlsPlaylist(c, upstreamUrl)
+
+  const mime = ext === 'mkv' ? 'video/x-matroska' : 'video/mp4'
+  return await proxyRangeable(c, upstreamUrl, mime)
+})
+
 
 type Job = {
   id: string
