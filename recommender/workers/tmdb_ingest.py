@@ -40,6 +40,7 @@ MIN_VOTE_COUNT = 50
 TMDB_MAX_PAGES = 500
 CONCURRENCY = 8
 DEFAULT_MAX_REQUEUE_ATTEMPTS = 8
+MAX_LOCKED_NO_PROGRESS_BATCHES = 3
 
 
 def _is_database_locked(exc: sqlite3.OperationalError) -> bool:
@@ -232,7 +233,7 @@ async def _hydrate_loop(
     done = 0
     skipped = 0
 
-    async def worker(tmdb_id: int, kind: str) -> None:
+    async def worker(tmdb_id: int, kind: str) -> str:
         nonlocal done, skipped
         async with sem:
             try:
@@ -242,7 +243,7 @@ async def _hydrate_loop(
                     worker_conn = connect()
                 except sqlite3.OperationalError as db_exc:
                     log.warning("hydrate %s %s queue update open-db failed; leaving pending: %s", kind, tmdb_id, db_exc)
-                    return
+                    return "locked" if _is_database_locked(db_exc) else "deferred"
                 try:
                     try:
                         with transaction(worker_conn):
@@ -255,16 +256,16 @@ async def _hydrate_loop(
                     except sqlite3.OperationalError as db_exc:
                         if _is_database_locked(db_exc):
                             log.warning("hydrate %s %s queue update locked; leaving pending", kind, tmdb_id)
-                            return
+                            return "locked"
                         raise
                 finally:
                     worker_conn.close()
-                return
+                return "error"
             try:
                 worker_conn = connect()
             except sqlite3.OperationalError as db_exc:
                 log.warning("hydrate %s %s persist open-db failed; leaving pending: %s", kind, tmdb_id, db_exc)
-                return
+                return "locked" if _is_database_locked(db_exc) else "deferred"
             try:
                 try:
                     kept = _persist_detail(worker_conn, kind, detail)
@@ -278,7 +279,7 @@ async def _hydrate_loop(
                 except sqlite3.OperationalError as e:
                     if _is_database_locked(e):
                         log.warning("hydrate %s %s persist locked; leaving pending", kind, tmdb_id)
-                        return
+                        return "locked"
                     log.warning("hydrate %s %s persist failed: %s", kind, tmdb_id, e)
                     with transaction(worker_conn):
                         worker_conn.execute(
@@ -287,7 +288,7 @@ async def _hydrate_loop(
                                WHERE tmdb_id=? AND kind=?""",
                             (str(e)[:300], tmdb_id, kind),
                         )
-                    return
+                    return "error"
                 except Exception as e:
                     log.warning("hydrate %s %s persist failed: %s", kind, tmdb_id, e)
                     with transaction(worker_conn):
@@ -297,15 +298,18 @@ async def _hydrate_loop(
                                WHERE tmdb_id=? AND kind=?""",
                             (str(e)[:300], tmdb_id, kind),
                         )
-                    return
+                    return "error"
             finally:
                 worker_conn.close()
             if kept:
                 done += 1
+                return "done"
             else:
                 skipped += 1
+                return "skipped"
 
     batch_size = max(concurrency * 4, 64)
+    locked_no_progress_batches = 0
     while True:
         rows = conn.execute(
             """SELECT tmdb_id, kind FROM ingest_queue
@@ -327,6 +331,23 @@ async def _hydrate_loop(
                     result,
                     exc_info=(type(result), result, result.__traceback__),
                 )
+        progress_count = sum(1 for result in results if result in {"done", "skipped", "error"})
+        locked_count = sum(1 for result in results if result == "locked")
+        if progress_count == 0 and locked_count > 0:
+            locked_no_progress_batches += 1
+            if locked_no_progress_batches >= MAX_LOCKED_NO_PROGRESS_BATCHES:
+                raise RuntimeError(
+                    f"hydrate made no SQLite progress for {locked_no_progress_batches} consecutive locked batches"
+                )
+            delay = min(2 ** locked_no_progress_batches, 30)
+            log.warning(
+                "hydrate batch made no SQLite progress (%d locked rows); backing off %.1fs",
+                locked_count,
+                delay,
+            )
+            await asyncio.sleep(delay)
+        elif progress_count > 0:
+            locked_no_progress_batches = 0
         if limit is not None and (done + skipped) >= limit:
             break
         log.info("hydrate progress: done=%d skipped=%d", done, skipped)

@@ -34,6 +34,7 @@ usage.get('/me', async (c) => {
     errors: 0,
     inputTokens: 0,
     outputTokens: 0,
+    cacheCreationInputTokens: 0,
     cacheReadInputTokens: 0,
     costCents: 0,
   }

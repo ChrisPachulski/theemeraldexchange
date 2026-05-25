@@ -1724,10 +1724,6 @@ suggestions.get('/:type', async (c) => {
   // Same downstream shape as the cold-start path so the SPA renders
   // identically.
   const force = c.req.query('force')
-  if (!_tmdbKey) {
-    setTimingHeader()
-    return c.json({ error: 'tmdb_not_configured' }, 503)
-  }
 
   // Fully parallel prologue. The session is set by the auth middleware
   // before this handler runs, so feedback can race library/rejections.
@@ -1874,11 +1870,11 @@ suggestions.get('/:type', async (c) => {
         exclude_recently_shown: true,
         library: library
           .map((it) => ({
-            tmdb_id: typeof it.tmdbId === 'number' ? it.tmdbId : -1,
+            ...(typeof it.tmdbId === 'number' ? { tmdb_id: it.tmdbId } : {}),
             title: it.title,
             source: type === 'movie' ? ('radarr' as const) : ('sonarr' as const),
           }))
-          .filter((it) => it.tmdb_id > 0),
+          .filter((it) => it.tmdb_id !== undefined || it.title),
         feedback: [
           ...likedRaw.map((e) => ({ tmdb_id: e.id, signal: 'like' as const })),
           ...dislikedRaw.map((e) => ({ tmdb_id: e.id, signal: 'dislike' as const })),
@@ -1912,6 +1908,19 @@ suggestions.get('/:type', async (c) => {
     if (safe.length === 0) {
       // Recommender returned nothing usable (down, empty catalog, or all
       // filtered). Degrade to TMDB trending so the strip is never empty.
+      if (!_tmdbKey) {
+        setTimingHeader()
+        return c.json({
+          source: 'recommender',
+          items: [],
+          _diag: diag({
+            path: 'recommender_empty_no_tmdb_fallback',
+            modelVersion,
+            recipe,
+            rec: recDiag,
+          }),
+        })
+      }
       const trending = filterHouseholdSafe(await tmdbTrending(type)).map((it) => ({
         ...it,
         provenance: 'trending' as const,
@@ -1956,7 +1965,7 @@ suggestions.get('/:type', async (c) => {
     // primary engine succeeded — only the tail is fill.
     let items = safe.slice(0, TARGET_COUNT)
     let fillCount = 0
-    if (items.length < TARGET_COUNT) {
+    if (items.length < TARGET_COUNT && _tmdbKey) {
       const have = new Set(items.map((it) => it.id))
       const trending = filterHouseholdSafe(await tmdbTrending(type))
         .filter((it) => !have.has(it.id))
@@ -2002,6 +2011,11 @@ suggestions.get('/:type', async (c) => {
   // when USE_LOCAL_RECOMMENDER is OFF — when it's on, the block above
   // returns first and these never fire (intentional: a free local
   // model beats hard-coded trending fallback in every case).
+  if (!_tmdbKey) {
+    setTimingHeader()
+    return c.json({ error: 'tmdb_not_configured' }, 503)
+  }
+
   if (force === 'trending') {
     const endTrending = timing.mark('trending')
     const trending = filterHouseholdSafe(await tmdbTrending(type)).map((it) => ({
@@ -2427,6 +2441,7 @@ suggestions.get('/:type', async (c) => {
     type: 'claude_call',
     model: MODEL,
     kind: type,
+    callCount: claudeCallCount,
     ...totalUsage,
     costCents: refreshCostCents,
   })
