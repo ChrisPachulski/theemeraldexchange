@@ -95,6 +95,11 @@ export default function LiveTab() {
             <option key={c.category_id} value={c.category_id}>{c.name}</option>
           ))}
         </select>
+        <button type="button" onClick={async () => {
+          const { url, expiresAt } = await iptvApi.generatePlaylist()
+          await navigator.clipboard.writeText(url).catch(() => undefined)
+          alert(`M3U URL copied. Expires ${new Date(expiresAt).toLocaleString()}.\n\n${url}`)
+        }}>Export M3U</button>
       </header>
 
       {list.isLoading && <p className="iptv-tab__status">Loading…</p>}
