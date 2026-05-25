@@ -67,6 +67,20 @@ services:
       USE_LOCAL_RECOMMENDER: "${USE_LOCAL_RECOMMENDER:-0}"
       RECOMMENDER_URL: "${RECOMMENDER_URL:-http://recommender:8000}"
       RECOMMENDER_EVENT_SECRET: "${RECOMMENDER_EVENT_SECRET:-}"
+      # mybunny.tv / Xtream Codes — see server/services/xtream.ts and
+      # server/services/iptvSync.ts. With XTREAM_HOST blank, the scheduler
+      # self-skips at boot so non-iptv deploys still work unchanged.
+      XTREAM_HOST: "${XTREAM_HOST:-}"
+      XTREAM_USERNAME: "${XTREAM_USERNAME:-}"
+      XTREAM_PASSWORD: "${XTREAM_PASSWORD:-}"
+      IPTV_DB_PATH: "${IPTV_DB_PATH:-/app/data/iptv.db}"
+      IPTV_MAX_CONCURRENT_STREAMS: "${IPTV_MAX_CONCURRENT_STREAMS:-4}"
+      IPTV_STREAM_TOKEN_TTL_SECS: "${IPTV_STREAM_TOKEN_TTL_SECS:-300}"
+      IPTV_LIST_TIMEOUT_MS: "${IPTV_LIST_TIMEOUT_MS:-30000}"
+      IPTV_SYNC_CRON: "${IPTV_SYNC_CRON:-0 */6 * * *}"
+      IPTV_RECOMMENDER_EXPORT_SECRET: "${IPTV_RECOMMENDER_EXPORT_SECRET:-}"
+      IPTV_REMUX_TMP_DIR: "${IPTV_REMUX_TMP_DIR:-/tmp/iptv-remux}"
+      IPTV_EPG_PATH: "${IPTV_EPG_PATH:-/xmltv.php}"
 
   recommender:
     build: ./recommender
