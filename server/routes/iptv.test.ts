@@ -157,6 +157,24 @@ describe('vod stream grant + proxy', () => {
     fetchSpy.mockRestore()
   })
 
+  it('rewrites HLS playlists to signed segment proxy URLs', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response([
+      '#EXTM3U',
+      '#EXTINF:6.0,',
+      'seg-001.ts',
+    ].join('\n'), {
+      status: 200,
+      headers: { 'content-type': 'application/vnd.apple.mpegurl' },
+    }))
+
+    const res = await app.request(`/api/iptv/stream/vod/20/m3u8?t=${fakeToken('vod', '20')}`)
+    const text = await res.text()
+
+    expect(res.status).toBe(200)
+    expect(fetchSpy).toHaveBeenCalledWith('https://panel/movie/u/p/20.m3u8')
+    expect(text).toContain(`/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', 'https://panel/movie/u/p/seg-001.ts'))}`)
+    fetchSpy.mockRestore()
+  })
 })
 
 describe('series stream grant', () => {
@@ -169,6 +187,52 @@ describe('series stream grant', () => {
     expect(body.url).toContain('/api/iptv/stream/series/ep-1/mkv?t=fake.series.ZXAtMQ')
     expect(body.delivery).toBe('progressive')
     expect(body.mime).toBe('video/x-matroska')
+  })
+})
+
+describe('segment proxy', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+
+  it('passes through signed segments with Range', async () => {
+    const upstreamUrl = 'https://cdn.example/foo/seg.ts'
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('seg', {
+      status: 206,
+      headers: {
+        'content-type': 'video/mp2t',
+        'content-length': '3',
+        'content-range': 'bytes 0-2/12',
+        'accept-ranges': 'bytes',
+      },
+    }))
+
+    const res = await app.request(`/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', upstreamUrl))}`, {
+      headers: { Range: 'bytes=0-2' },
+    })
+
+    expect(res.status).toBe(206)
+    expect(res.headers.get('content-type')).toBe('video/mp2t')
+    expect(res.headers.get('content-range')).toBe('bytes 0-2/12')
+    expect(fetchSpy).toHaveBeenCalledWith(upstreamUrl, expect.objectContaining({
+      headers: { Range: 'bytes=0-2' },
+    }))
+    fetchSpy.mockRestore()
+  })
+
+  it('recursively rewrites signed sub-playlists', async () => {
+    const upstreamUrl = 'https://cdn.example/foo/level1.m3u8'
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response([
+      '#EXTM3U',
+      '#EXTINF:6.0,',
+      'seg.ts',
+    ].join('\n'), { status: 200 }))
+
+    const res = await app.request(`/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', upstreamUrl))}`)
+    const text = await res.text()
+
+    expect(res.status).toBe(200)
+    expect(fetchSpy).toHaveBeenCalledWith(upstreamUrl)
+    expect(text).toContain(`/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', 'https://cdn.example/foo/seg.ts'))}`)
+    fetchSpy.mockRestore()
   })
 })
 
