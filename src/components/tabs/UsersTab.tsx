@@ -73,7 +73,7 @@ export function UsersTab() {
               type="button"
               className="users-tab__stale-action"
               onClick={() => {
-                void signOut()
+                void signOut().catch(() => {})
               }}
             >
               Sign out &amp; re-authenticate

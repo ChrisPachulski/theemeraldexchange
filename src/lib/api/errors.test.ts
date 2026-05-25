@@ -39,41 +39,33 @@ describe('throwApiError', () => {
 
   it('translates admin_only forbidden into "admin-only" message', async () => {
     const r = jsonResponse({ error: 'forbidden', reason: 'admin_only' }, 403)
-    try {
-      await throwApiError(r, 'SAB queue')
-    } catch (e) {
-      expect((e as ApiError).status).toBe(403)
-      expect((e as ApiError).code).toBe('forbidden')
-      expect((e as Error).message).toMatch(/admin-only/i)
-    }
+    await expect(throwApiError(r, 'SAB queue')).rejects.toMatchObject({
+      status: 403,
+      code: 'forbidden',
+      message: expect.stringMatching(/admin-only/i),
+    })
   })
 
   it('handles 401 unauthenticated explicitly', async () => {
     const r = jsonResponse({ error: 'unauthenticated' }, 401)
-    try {
-      await throwApiError(r, 'Sonarr /series')
-    } catch (e) {
-      expect((e as Error).message).toMatch(/sign in again/i)
-    }
+    await expect(throwApiError(r, 'Sonarr /series')).rejects.toMatchObject({
+      message: expect.stringMatching(/sign in again/i),
+    })
   })
 
   it('falls back to status text when the body is not JSON', async () => {
     const r = new Response('<html>oops</html>', { status: 502, statusText: 'Bad Gateway' })
-    try {
-      await throwApiError(r, 'Sonarr /series')
-    } catch (e) {
-      expect((e as ApiError).status).toBe(502)
-      expect((e as Error).message).toContain('502')
-    }
+    await expect(throwApiError(r, 'Sonarr /series')).rejects.toMatchObject({
+      status: 502,
+      message: expect.stringContaining('502'),
+    })
   })
 
   it('uses data.message when the backend returns one', async () => {
     const r = jsonResponse({ message: 'Custom backend message' }, 500)
-    try {
-      await throwApiError(r, 'Sonarr /series')
-    } catch (e) {
-      expect((e as Error).message).toBe('Custom backend message')
-    }
+    await expect(throwApiError(r, 'Sonarr /series')).rejects.toMatchObject({
+      message: 'Custom backend message',
+    })
   })
 })
 

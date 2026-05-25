@@ -70,6 +70,7 @@ type AuthCtx = {
   setViewAs: (role: Role | null) => void
   signInState: SignInState
   signInError: string | null
+  signOutError: string | null
   /** Discovered Plex servers, only present when PLEX_SERVER_ID isn't set yet. */
   discoveredServers: { name: string; id: string; owned: boolean }[] | null
   signIn: () => Promise<void>
@@ -108,10 +109,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
   const [signInState, setSignInState] = useState<SignInState>('idle')
   const [signInError, setSignInError] = useState<string | null>(null)
+  const [signOutError, setSignOutError] = useState<string | null>(null)
   const [discoveredServers, setDiscoveredServers] =
     useState<AuthCtx['discoveredServers']>(null)
   const pollRef = useRef<number | null>(null)
   const popupRef = useRef<Window | null>(null)
+  const signInInFlightRef = useRef(false)
 
   // Initial session probe.
   useEffect(() => {
@@ -133,9 +136,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [applyUser])
 
-  const stopPolling = useCallback(() => {
-    if (pollRef.current !== null) {
-      window.clearInterval(pollRef.current)
+  const stopPolling = useCallback((intervalId?: number | null) => {
+    const id = intervalId === undefined ? pollRef.current : intervalId
+    if (id !== null && id !== undefined) {
+      window.clearInterval(id)
+    }
+    if (intervalId === undefined || pollRef.current === intervalId) {
       pollRef.current = null
     }
   }, [])
@@ -143,7 +149,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => () => stopPolling(), [stopPolling])
 
   const signIn = useCallback(async () => {
+    if (signInInFlightRef.current) return
+    signInInFlightRef.current = true
     setSignInError(null)
+    setSignOutError(null)
     stopPolling()
     popupRef.current?.close()
     setSignInState('opening')
@@ -153,11 +162,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       'width=520,height=720,menubar=no,toolbar=no',
     )
     if (!popup) {
+      signInInFlightRef.current = false
       setSignInState('error')
       setSignInError('Popup blocked. Allow popups for this site and try again.')
       return
     }
     popupRef.current = popup
+    let intervalId: number | null = null
+    const stopCurrentPoll = () => {
+      stopPolling(intervalId)
+      intervalId = null
+      signInInFlightRef.current = false
+    }
     try {
       const res = await fetch(apiUrl('/api/auth/plex/pin'), {
         method: 'POST',
@@ -173,19 +189,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSignInState('pending')
 
       const deadline = Date.now() + 5 * 60 * 1000
-      pollRef.current = window.setInterval(async () => {
+      intervalId = window.setInterval(async () => {
         if (popup.closed) {
-          stopPolling()
-          popupRef.current = null
+          stopCurrentPoll()
+          if (popupRef.current === popup) popupRef.current = null
           setSignInState('error')
           setSignInError('Plex sign-in window was closed before authorization finished.')
           return
         }
         if (Date.now() > deadline) {
-          stopPolling()
+          stopCurrentPoll()
           popup.close()
-          setSignInState('error')
+          if (popupRef.current === popup) popupRef.current = null
           setSignInError('Plex sign-in expired. Try again.')
+          setSignInState('error')
           return
         }
         try {
@@ -201,9 +218,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           })
           if (r.status === 403) {
             const data = await r.json().catch(() => ({}))
-            stopPolling()
+            stopCurrentPoll()
             popup.close()
-            popupRef.current = null
+            if (popupRef.current === popup) popupRef.current = null
             setSignInState('denied')
             setSignInError(
               data?.reason === 'not_a_server_member'
@@ -215,9 +232,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (!r.ok) {
             if (r.status >= 400 && r.status < 500) {
               const data = await r.json().catch(() => ({}))
-              stopPolling()
+              stopCurrentPoll()
               popup.close()
-              popupRef.current = null
+              if (popupRef.current === popup) popupRef.current = null
               setSignInState('error')
               setSignInError(
                 typeof data?.error === 'string'
@@ -229,9 +246,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
           const data = await r.json()
           if (data.status === 'authorized') {
-            stopPolling()
+            stopCurrentPoll()
             popup.close()
-            popupRef.current = null
+            if (popupRef.current === popup) popupRef.current = null
             applyUser(data.user as AuthUser)
             setDiscoveredServers(data.discoveredServers ?? null)
             setSignInState('idle')
@@ -240,19 +257,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // poll again
         }
       }, 1500)
+      pollRef.current = intervalId
     } catch (e) {
+      signInInFlightRef.current = false
       popup.close()
-      popupRef.current = null
+      if (popupRef.current === popup) popupRef.current = null
       setSignInState('error')
       setSignInError(e instanceof Error ? e.message : String(e))
     }
   }, [applyUser, stopPolling])
 
   const signOut = useCallback(async () => {
-    await fetch(apiUrl('/api/auth/logout'), {
-      method: 'POST',
-      credentials: 'include',
-    }).catch(() => {})
+    setSignOutError(null)
+    let response: Response
+    try {
+      response = await fetch(apiUrl('/api/auth/logout'), {
+        method: 'POST',
+        credentials: 'include',
+      })
+    } catch (err) {
+      setSignOutError('Sign-out failed. Check your connection and try again.')
+      throw err
+    }
+    if (!response.ok) {
+      const error = new Error(`logout failed: ${response.status}`)
+      setSignOutError('Sign-out failed. Try again.')
+      throw error
+    }
     applyUser(null)
     setViewAs(null)
     setDiscoveredServers(null)
@@ -276,6 +307,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setViewAs,
         signInState,
         signInError,
+        signOutError,
         discoveredServers,
         signIn,
         signOut,
