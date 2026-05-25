@@ -1,6 +1,11 @@
-import { describe, it, expect, vi } from 'vitest'
+import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest'
 import { Hono, type MiddlewareHandler } from 'hono'
+import { openIptvDb, type IptvDb } from '../services/iptvDb.js'
 import { iptv } from './iptv.js'
+
+const dbState = vi.hoisted(() => ({
+  testDb: null as IptvDb | null,
+}))
 
 type TestAuthEnv = {
   Variables: {
@@ -99,19 +104,14 @@ vi.mock('../services/iptvSync.js', () => ({
   })),
 }))
 vi.mock('../services/iptvDbSingleton.js', () => ({
-  iptvDb: () => ({
-    raw: {
-      prepare: (sql: string) => ({
-        all: () => [],
-        get: (id?: string) => (sql.includes('series_episodes') && id === 'ep-1'
-          ? { container_extension: 'mkv' }
-          : undefined),
-        run: () => undefined,
-      }),
-    },
-    stmts: {},
-  }),
-  closeIptvDb: () => undefined,
+  iptvDb: () => {
+    if (!dbState.testDb) throw new Error('test iptv db not initialized')
+    return dbState.testDb
+  },
+  closeIptvDb: () => {
+    dbState.testDb?.close()
+    dbState.testDb = null
+  },
 }))
 
 vi.mock('../services/iptvCatalog.js', () => ({
@@ -122,6 +122,37 @@ vi.mock('../services/iptvCatalog.js', () => ({
   getVodDetail: vi.fn(() => ({ stream_id: 20, name: 'Matrix', container_extension: 'mp4' })),
   getSeriesDetail: vi.fn(() => ({ series_id: 30, name: 'GoT', seasons: [{ season: 1, episodes: [] }] })),
 }))
+
+beforeAll(() => {
+  dbState.testDb = openIptvDb(':memory:')
+  dbState.testDb.stmts.upsertSeries.run({
+    series_id: 30,
+    name: 'GoT',
+    cover: null,
+    plot: null,
+    rating: null,
+    category_id: null,
+    tmdb_id: null,
+    last_modified: null,
+    fetched_at: '2026-05-24T00:00:00Z',
+  })
+  dbState.testDb.stmts.upsertEpisode.run({
+    episode_id: 'ep-1',
+    series_id: 30,
+    season: 1,
+    episode_num: 1,
+    title: 'Pilot',
+    container_extension: 'mkv',
+    added_ts: null,
+    plot: null,
+    duration_secs: null,
+  })
+})
+
+afterAll(() => {
+  dbState.testDb?.close()
+  dbState.testDb = null
+})
 
 describe('vod stream grant + proxy', () => {
   const app = new Hono().route('/api/iptv', iptv)
@@ -283,5 +314,53 @@ describe('catalog read routes', () => {
     const res = await app.request('/api/iptv/series/30')
     const body = (await res.json()) as { name: string }
     expect(body.name).toBe('GoT')
+  })
+})
+
+describe('favorites + history', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+
+  it('adds a favorite and lists it', async () => {
+    const add = await app.request('/api/iptv/favorites', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'live', itemId: '10' }),
+    })
+
+    expect(add.status).toBe(201)
+    const after = await (await app.request('/api/iptv/favorites')).json() as Array<{ kind: string; item_id: string }>
+    expect(after).toContainEqual(expect.objectContaining({ kind: 'live', item_id: '10' }))
+    await app.request('/api/iptv/favorites/live/10', { method: 'DELETE' })
+  })
+
+  it('removes a favorite and excludes it from the list', async () => {
+    await app.request('/api/iptv/favorites', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'live', itemId: '10' }),
+    })
+
+    const del = await app.request('/api/iptv/favorites/live/10', { method: 'DELETE' })
+    expect(del.status).toBe(204)
+
+    const empty = await (await app.request('/api/iptv/favorites')).json()
+    expect(empty).toEqual([])
+  })
+
+  it('records and reads history with the reported position', async () => {
+    const put = await app.request('/api/iptv/history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'vod', itemId: '20', positionSecs: 90, durationSecs: 7200, completed: false }),
+    })
+
+    expect(put.status).toBe(201)
+    const hist = await (await app.request('/api/iptv/history?limit=10')).json() as Array<{
+      kind: string
+      item_id: string
+      position_secs: number
+      completed: number
+    }>
+    expect(hist[0]).toMatchObject({ kind: 'vod', item_id: '20', position_secs: 90, completed: 0 })
   })
 })
