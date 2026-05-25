@@ -1724,6 +1724,10 @@ suggestions.get('/:type', async (c) => {
   // Same downstream shape as the cold-start path so the SPA renders
   // identically.
   const force = c.req.query('force')
+  if (!_tmdbKey) {
+    setTimingHeader()
+    return c.json({ error: 'tmdb_not_configured' }, 503)
+  }
 
   // Fully parallel prologue. The session is set by the auth middleware
   // before this handler runs, so feedback can race library/rejections.

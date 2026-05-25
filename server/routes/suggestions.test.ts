@@ -452,9 +452,7 @@ describe('suggestions route — gating', () => {
     expect(body2.items.some((i) => i.id === 4999)).toBe(true)
   })
 
-  it('cold-start with no TMDB key returns empty items (graceful degradation)', async () => {
-    // No TMDB key → tmdbTrending returns [] → strip is empty.
-    // The route should NOT crash; it returns source=trending with items=[].
+  it('returns 503 when TMDB is not configured', async () => {
     // _setTmdbApiKeyForTests(null) is already set in beforeEach.
     vi.stubGlobal(
       'fetch',
@@ -463,12 +461,8 @@ describe('suggestions route — gating', () => {
     const r = await appUnderTest().request('/movie', {
       headers: { Cookie: await userCookie() },
     })
-    // Without key the route returns either trending (empty) or cold-start trending.
-    // Either way it must be 200 (no crash).
-    expect(r.status).toBe(200)
-    const body = (await r.json()) as { source: string; items: unknown[] }
-    expect(body.source).toBe('trending')
-    expect(Array.isArray(body.items)).toBe(true)
+    expect(r.status).toBe(503)
+    expect(await r.json()).toEqual({ error: 'tmdb_not_configured' })
   })
 
   it('400 on invalid type', async () => {
@@ -652,14 +646,11 @@ describe('suggestions route — Anthropic transient error retry', () => {
       stop_reason: 'end_turn',
       usage: { input_tokens: 1, output_tokens: 1 },
     }
-    // With no TMDB key the route hits the BYO-key guard before Claude
-    // so we confirm the code is at least reachable.
     const r = await appUnderTest().request('/movie', {
       headers: { Cookie: await userCookie() },
     })
-    // Without key: 402 (expected — library check passes, then key check fails).
-    // If we get 402 the route correctly reached the key-check point.
-    expect([200, 402].includes(r.status)).toBe(true)
+    expect(r.status).toBe(503)
+    expect(await r.json()).toEqual({ error: 'tmdb_not_configured' })
   })
 
   it('withAnthropicRetry recovers from a 529 on the first call (V16 VERIFIED)', async () => {

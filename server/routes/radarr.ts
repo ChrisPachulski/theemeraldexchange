@@ -12,11 +12,52 @@ export const radarr = new Hono<Env>()
 radarr.use('*', requireAuth)
 
 type RadarrGrabEvent = Parameters<typeof appendGrabEvent>[0]
+type RadarrSpaceGateFailure = {
+  status: 400 | 502 | 507
+  body: Record<string, unknown>
+}
 
 async function recordRadarrGrabEvent(event: RadarrGrabEvent): Promise<void> {
   await appendGrabEvent(event).catch((err) => {
     console.error('[radarr] grab log write failed:', err)
   })
+}
+
+async function validateRadarrRootFolderSpace(rootFolderPath?: string): Promise<
+  { ok: true } | { ok: false; failure: RadarrSpaceGateFailure }
+> {
+  if (!rootFolderPath) {
+    return { ok: false, failure: { status: 400, body: { error: 'rootFolderPath_required' } } }
+  }
+  let folders: Awaited<ReturnType<typeof radarrRootFolders>>
+  try {
+    folders = await radarrRootFolders()
+  } catch (err) {
+    console.error('[radarr] rootfolder lookup failed:', err)
+    return { ok: false, failure: { status: 502, body: { error: 'rootfolder_unreachable' } } }
+  }
+  const folder = folders.find((f) => f.path === rootFolderPath)
+  if (!folder) {
+    return { ok: false, failure: { status: 400, body: { error: 'unknown_root_folder', path: rootFolderPath } } }
+  }
+  if (typeof folder.freeSpace !== 'number' || !Number.isFinite(folder.freeSpace)) {
+    return { ok: false, failure: { status: 507, body: { error: 'free_space_unknown', path: folder.path } } }
+  }
+  if (folder.freeSpace < env.minFreeBytes) {
+    return {
+      ok: false,
+      failure: {
+        status: 507,
+        body: {
+          error: 'insufficient_disk_space',
+          free_bytes: folder.freeSpace,
+          threshold_bytes: env.minFreeBytes,
+          path: folder.path,
+        },
+      },
+    }
+  }
+  return { ok: true }
 }
 
 const forwardRead = (path: string) =>
@@ -226,36 +267,9 @@ radarr.post('/api/v3/movie', async (c) => {
   // when rootFolderPath was supplied AND the folder matched AND
   // freeSpace was a number, so a missing path, an unknown path, or a
   // Radarr response without freeSpace all silently bypassed the cap.
-  if (!body.rootFolderPath) {
-    return c.json(
-      { error: 'rootFolderPath_required' },
-      400,
-    )
-  }
-  const folders = await radarrRootFolders()
-  const folder = folders.find((f) => f.path === body.rootFolderPath)
-  if (!folder) {
-    return c.json(
-      { error: 'unknown_root_folder', path: body.rootFolderPath },
-      400,
-    )
-  }
-  if (typeof folder.freeSpace !== 'number' || !Number.isFinite(folder.freeSpace)) {
-    return c.json(
-      { error: 'free_space_unknown', path: folder.path },
-      507,
-    )
-  }
-  if (folder.freeSpace < env.minFreeBytes) {
-    return c.json(
-      {
-        error: 'insufficient_disk_space',
-        free_bytes: folder.freeSpace,
-        threshold_bytes: env.minFreeBytes,
-        path: folder.path,
-      },
-      507,
-    )
+  const spaceGate = await validateRadarrRootFolderSpace(body.rootFolderPath)
+  if (!spaceGate.ok) {
+    return c.json(spaceGate.failure.body, spaceGate.failure.status)
   }
 
   // Capture the user's intent then disable Radarr's built-in search.
@@ -355,6 +369,18 @@ radarr.post('/api/v3/movie/:id/upgrade', requireAdmin, async (c) => {
   // round-trip on a junk path.
   if (!Number.isSafeInteger(id) || id <= 0) {
     return c.json({ error: 'bad_id' }, 400)
+  }
+  const movieRes = await radarrFetch(`/api/v3/movie/${id}`, {
+    method: 'GET',
+  })
+  if (!movieRes.ok) {
+    return c.json({ error: 'movie_lookup_failed', status: movieRes.status }, 502)
+  }
+  const movie = (await movieRes.json()) as { rootFolderPath?: unknown }
+  const rootFolderPath = typeof movie.rootFolderPath === 'string' ? movie.rootFolderPath : undefined
+  const spaceGate = await validateRadarrRootFolderSpace(rootFolderPath)
+  if (!spaceGate.ok) {
+    return c.json(spaceGate.failure.body, spaceGate.failure.status)
   }
   const releaseRes = await radarrFetch(`/api/v3/release?movieId=${id}`, {
     method: 'GET',

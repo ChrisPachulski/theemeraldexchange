@@ -293,14 +293,18 @@ async function materializeNonAdminSeriesBody(raw: SonarrAddBody): Promise<
   // per-episode size cap (defense in depth lives in the profile's
   // own size restrictions). Landing on Sonarr's default Any profile
   // would silently let 4K HDR packs through on RSS auto-grabs.
-  const [folders, profileRes] = await Promise.all([
-    sonarrRootFolders(),
+  const [foldersResult, profileRes] = await Promise.all([
+    loadSonarrRootFolders(),
     sonarrFetch('/api/v3/qualityprofile', { method: 'GET' }),
   ])
+  if (!foldersResult.ok) {
+    return { ok: false, reason: 'rootfolder_unreachable' }
+  }
   if (!profileRes.ok) {
     return { ok: false, reason: 'qualityprofile_unreachable' }
   }
   const profiles = (await profileRes.json()) as Array<{ id: number; name?: string }>
+  const folders = foldersResult.folders
   const folder = env.defaultSonarrRootFolderPath
     ? folders.find((f) => f.path === env.defaultSonarrRootFolderPath)
     : folders[0]

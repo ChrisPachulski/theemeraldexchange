@@ -51,6 +51,11 @@ function stub(suffix: string, body: unknown, status = 200) {
   responses.set(suffix, { status, body })
 }
 
+function stubUpgradeSpaceOk(path = '/data/movies') {
+  stub('/api/v3/movie/42', { id: 42, rootFolderPath: path })
+  stub('/api/v3/rootfolder', [{ id: 1, path, freeSpace: 500 * 1024 ** 3 }])
+}
+
 describe('radarr — allow-list and gates', () => {
   it('rejects unauthenticated', async () => {
     const r = await appUnderTest().request('/api/v3/movie')
@@ -461,6 +466,7 @@ describe('radarr POST /movie/:id/upgrade — admin gate + bad id', () => {
 
 describe('radarr POST /movie/:id/upgrade — release-search failure modes', () => {
   it('release search returns 502 → 502 release_search_failed with status', async () => {
+    stubUpgradeSpaceOk()
     stub('/api/v3/release?movieId=42', { error: 'down' }, 502)
     const r = await appUnderTest().request('/api/v3/movie/42/upgrade', {
       method: 'POST',
@@ -472,7 +478,20 @@ describe('radarr POST /movie/:id/upgrade — release-search failure modes', () =
     expect(body.status).toBe(502)
   })
 
+  it('blocks upgrade with 507 when the movie root folder is below threshold', async () => {
+    stub('/api/v3/movie/42', { id: 42, rootFolderPath: '/data/movies' })
+    stub('/api/v3/rootfolder', [{ id: 1, path: '/data/movies', freeSpace: 25 * 1024 ** 3 }])
+    const r = await appUnderTest().request('/api/v3/movie/42/upgrade', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(507)
+    const body = (await r.json()) as { error: string }
+    expect(body.error).toBe('insufficient_disk_space')
+  })
+
   it('release search returns empty array → 200 no_releases_found (no grab)', async () => {
+    stubUpgradeSpaceOk()
     stub('/api/v3/release?movieId=42', [])
     const r = await appUnderTest().request('/api/v3/movie/42/upgrade', {
       method: 'POST',
@@ -484,6 +503,7 @@ describe('radarr POST /movie/:id/upgrade — release-search failure modes', () =
 
   it('all releases over cap → 200 no_upgrade_available with scanned count', async () => {
     // env.maxMovieBytes is 10 GB by default; a 50 GB 2160p rip is over.
+    stubUpgradeSpaceOk()
     const over = 50 * 1024 ** 3
     stub('/api/v3/release?movieId=42', [
       { guid: 'g1', indexerId: 1, size: over, qualityWeight: 100, title: '4K HDR' },
@@ -504,6 +524,7 @@ describe('radarr POST /movie/:id/upgrade — release-search failure modes', () =
     // Two releases under the cap, but both are rejected by Radarr's
     // profile/quality scorer — the route should treat the eligible set
     // as empty and return no_upgrade_available rather than grabbing.
+    stubUpgradeSpaceOk()
     const under = 2 * 1024 ** 3
     stub('/api/v3/release?movieId=42', [
       { guid: 'g1', indexerId: 1, size: under, qualityWeight: 100, title: '1080p', rejected: true },
@@ -521,6 +542,7 @@ describe('radarr POST /movie/:id/upgrade — release-search failure modes', () =
 
 describe('radarr POST /movie/:id/upgrade — grab path', () => {
   it('Radarr returns 502 on the grab POST → 502 grab_failed', async () => {
+    stubUpgradeSpaceOk()
     const under = 2 * 1024 ** 3
     stub('/api/v3/release?movieId=42', [
       { guid: 'g1', indexerId: 1, size: under, qualityWeight: 100, title: '1080p good' },
@@ -540,6 +562,7 @@ describe('radarr POST /movie/:id/upgrade — grab path', () => {
   })
 
   it('happy path: best release is grabbed and "grabbing" status returned', async () => {
+    stubUpgradeSpaceOk()
     const sizeBytes = 3 * 1024 ** 3 // 3 GB
     stub('/api/v3/release?movieId=42', [
       { guid: 'a', indexerId: 1, size: sizeBytes, qualityWeight: 80, title: '1080p okay' },

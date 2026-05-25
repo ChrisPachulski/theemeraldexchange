@@ -194,19 +194,21 @@ notifications.post('/discord', async (c) => {
     // exists" and creating a new one would stack a duplicate on every
     // retry until Sonarr/Radarr came back. Fail closed on list error.
     const mutations: SuccessfulMutation[] = []
-    for (const app of ['sonarr', 'radarr'] as const) {
-      let existingIds: number[]
-      try {
-        existingIds = await findEmeraldIds(app)
-      } catch (err) {
-        if (err instanceof NotificationListError) {
-          return c.json(
-            { error: `${err.app}_list_failed`, status: err.status, message: 'refusing to mutate notifications without a fresh list' },
-            502,
-          )
-        }
-        throw err
+    let existingByApp: Record<NotificationApp, number[]>
+    try {
+      const [sonarrIds, radarrIds] = await Promise.all([findEmeraldIds('sonarr'), findEmeraldIds('radarr')])
+      existingByApp = { sonarr: sonarrIds, radarr: radarrIds }
+    } catch (err) {
+      if (err instanceof NotificationListError) {
+        return c.json(
+          { error: `${err.app}_list_failed`, status: err.status, message: 'refusing to mutate notifications without a fresh list' },
+          502,
+        )
       }
+      throw err
+    }
+    for (const app of ['sonarr', 'radarr'] as const) {
+      const existingIds = existingByApp[app]
       const fetcher = notificationFetcher(app)
       if (existingIds.length > 0) {
         const existing = existingIds[0]
@@ -274,17 +276,18 @@ notifications.delete('/discord', async (c) => {
   // kept getting double-pings on the next grab.
   const failures: NotificationDeleteFailure[] = []
   let removed = 0
-  for (const app of ['sonarr', 'radarr'] as const) {
-    let ids: number[]
-    try {
-      ids = await findEmeraldIds(app)
-    } catch (err) {
-      if (err instanceof NotificationListError) {
-        return c.json({ error: `${err.app}_list_failed`, status: err.status }, 502)
-      }
-      throw err
+  let existingByApp: Record<NotificationApp, number[]>
+  try {
+    const [sonarrIds, radarrIds] = await Promise.all([findEmeraldIds('sonarr'), findEmeraldIds('radarr')])
+    existingByApp = { sonarr: sonarrIds, radarr: radarrIds }
+  } catch (err) {
+    if (err instanceof NotificationListError) {
+      return c.json({ error: `${err.app}_list_failed`, status: err.status }, 502)
     }
-    const result = await deleteNotifications(app, ids)
+    throw err
+  }
+  for (const app of ['sonarr', 'radarr'] as const) {
+    const result = await deleteNotifications(app, existingByApp[app])
     removed += result.removed
     failures.push(...result.failures)
   }
