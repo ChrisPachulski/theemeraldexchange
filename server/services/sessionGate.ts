@@ -16,8 +16,9 @@
 //   - membership is re-checked against plex.tv at most once per
 //     REVALIDATE_TTL_MS per sub, using the user's stored Plex token.
 //     A definitive non-membership signal (200 with no matching server
-//     resource, OR a 401/403 from plex.tv meaning the token was
-//     revoked) returns null so the middleware can clear the cookie.
+//     resource) is cached per sub. A 401/403 from plex.tv means the
+//     specific token was revoked, so that request returns null without
+//     poisoning valid sibling sessions for the same sub.
 //     Network errors / 5xx / timeout keep the user signed in and the
 //     prior cached status — a plex.tv outage shouldn't lock everyone
 //     out of the dashboard.
@@ -31,6 +32,7 @@ const REVALIDATE_TIMEOUT_MS = 5_000
 const MAX_CACHE_ENTRIES = 1000
 
 type Status = 'member' | 'not_member'
+type CheckStatus = Status | 'auth_revoked' | 'unknown'
 
 type Cached = { status: Status; checkedAt: number }
 const cache = new Map<string, Cached>()
@@ -111,12 +113,14 @@ export async function reconcileSession(session: Session): Promise<Session | null
     return { ...session, role }
   }
 
+  if (status === 'auth_revoked') return null
+
   setCached(session.sub, { status, checkedAt: now })
   if (status === 'not_member') return null
   return { ...session, role }
 }
 
-async function checkMembership(token: string): Promise<Status | 'unknown'> {
+async function checkMembership(token: string): Promise<CheckStatus> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REVALIDATE_TIMEOUT_MS)
   try {
@@ -129,7 +133,7 @@ async function checkMembership(token: string): Promise<Status | 'unknown'> {
     }
     if (probe.kind === 'http_error') {
       // 401 / 403 = token revoked. Definitive sign-out signal.
-      if (probe.status === 401 || probe.status === 403) return 'not_member'
+      if (probe.status === 401 || probe.status === 403) return 'auth_revoked'
       // 4xx other than auth, or 5xx — treat as transient. Don't lock
       // the user out on a plex.tv hiccup; we'll re-check next TTL.
       console.warn('[sessionGate] plex membership probe HTTP', probe.status)
