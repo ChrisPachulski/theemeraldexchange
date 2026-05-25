@@ -15,6 +15,7 @@
 import { serve } from '@hono/node-server'
 import { env } from './env.js'
 import { app } from './app.js'
+import { registerIptvSchedule } from './services/iptvScheduler.js'
 
 serve(
   { fetch: app.fetch, port: env.port },
@@ -22,3 +23,10 @@ serve(
     console.log(`backend listening on http://localhost:${info.port}`)
   },
 )
+
+// IPTV sync is opt-in: only register the cron when all three Xtream creds
+// are configured. Keeps the dev server working without mybunny.tv creds
+// and prevents the bootstrap sync from spamming /player_api.php on boot.
+if (env.XTREAM_HOST && env.XTREAM_USERNAME && env.XTREAM_PASSWORD) {
+  void registerIptvSchedule(env.IPTV_SYNC_CRON)
+}
