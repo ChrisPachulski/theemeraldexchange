@@ -28,6 +28,24 @@ vi.mock('../services/xtream.js', () => ({
   credsFromEnv: vi.fn(() => ({ host: 'https://panel', username: 'u', password: 'p' })),
 }))
 
+vi.mock('../services/iptvStreamToken.js', () => ({
+  signStreamToken: vi.fn(() => 'fake.token'),
+  verifyStreamToken: vi.fn((_secret: string, t: string) => {
+    if (t === 'fake.token') return { kind: 'live', resourceId: '10', sub: 'plex:test', exp: Date.now() / 1000 + 60 }
+    throw new Error('invalid_signature')
+  }),
+}))
+
+vi.mock('../services/iptvConcurrency.js', () => ({
+  streamConcurrency: vi.fn(() => ({
+    tryAcquire: vi.fn(({ sessionId }: { sessionId: string }) => ({ ok: true, sessionId })),
+    heartbeat: vi.fn(),
+    release: vi.fn(),
+    sweep: vi.fn(),
+    size: vi.fn(() => 0),
+  })),
+}))
+
 describe('GET /api/iptv/health', () => {
   it('returns account info shape', async () => {
     const app = new Hono().route('/api/iptv', iptv)
@@ -41,6 +59,23 @@ describe('GET /api/iptv/health', () => {
     expect(body.maxConnections).toBe(4)
     expect(body.status).toBe('Active')
     expect(typeof body.expiresAt).toBe('string')
+  })
+})
+
+describe('live stream grant + proxy', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+
+  it('issues a tokenized URL on POST /stream/live/:id/grant', async () => {
+    const res = await app.request('/api/iptv/stream/live/10/grant', { method: 'POST' })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { url: string; delivery: string }
+    expect(body.url).toContain('/api/iptv/stream/live/10.ts?t=fake.token')
+    expect(body.delivery).toBe('mpegts')
+  })
+
+  it('rejects bad tokens on the .ts endpoint', async () => {
+    const res = await app.request('/api/iptv/stream/live/10.ts?t=bogus')
+    expect(res.status).toBe(401)
   })
 })
 
