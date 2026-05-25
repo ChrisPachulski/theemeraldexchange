@@ -5,6 +5,10 @@
 // tries to start a stream.
 
 import { Hono, type Context } from 'hono'
+import { randomUUID } from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
+import { Readable } from 'node:stream'
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { getAccountInfo, credsFromEnv } from '../services/xtream.js'
 import { syncOnce, type SyncResult } from '../services/iptvSync.js'
@@ -20,8 +24,13 @@ import {
 import { signStreamToken, verifyStreamToken } from '../services/iptvStreamToken.js'
 import { streamConcurrency } from '../services/iptvConcurrency.js'
 import { rewriteManifest } from '../services/iptvHlsRewrite.js'
+import {
+  heartbeatRemuxSession,
+  listRemuxSessions,
+  startRemuxSession,
+  stopRemuxSession,
+} from '../services/iptvRemux.js'
 import { env } from '../env.js'
-import { randomUUID } from 'node:crypto'
 
 export const iptv = new Hono<Env>()
 
@@ -128,6 +137,53 @@ function checkToken(c: any, expectKind: string, resourceId: string): { ok: true;
   }
 }
 
+type LiveRemuxEntry = { sessionId: string; dir: string; manifestPath: string }
+const liveRemuxIndex = new Map<string, LiveRemuxEntry>()
+
+function remuxKey(streamId: string, sub: string): string {
+  return `${streamId}:${sub}`
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function isRemuxSessionActive(sessionId: string): boolean {
+  return listRemuxSessions().some((s) => s.sessionId === sessionId)
+}
+
+function forgetRemuxSession(key: string, sessionId: string): void {
+  liveRemuxIndex.delete(key)
+  stopRemuxSession(sessionId)
+}
+
+function rewriteRemuxManifest(text: string, streamId: string, sessionId: string, sub: string): string {
+  return text
+    .split(/\r?\n/)
+    .map((line) => {
+      if (!line || line.startsWith('#')) return line
+      const segFile = path.basename(line.trim())
+      if (!/^seg_\d{5}\.ts$/.test(segFile)) return line
+      const token = signStreamToken(env.sessionSecret, {
+        kind: 'remux',
+        resourceId: `${sessionId}/${segFile}`,
+        sub,
+        ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
+      })
+      return `/api/iptv/stream/live/${streamId}/remux/seg?t=${encodeURIComponent(token)}`
+    })
+    .join('\n')
+}
+
+function remuxSegmentResource(resourceId: string): { sessionId: string; segFile: string } | null {
+  const slash = resourceId.lastIndexOf('/')
+  if (slash <= 0 || slash === resourceId.length - 1) return null
+  const sessionId = resourceId.slice(0, slash)
+  const segFile = resourceId.slice(slash + 1)
+  if (!/^seg_\d{5}\.ts$/.test(segFile)) return null
+  return { sessionId, segFile }
+}
+
 async function proxyRangeable(c: Context, upstreamUrl: string, mime: string): Promise<Response> {
   const controller = new AbortController()
   c.req.raw.signal.addEventListener('abort', () => controller.abort(), { once: true })
@@ -193,6 +249,90 @@ iptv.get('/stream/live/:streamId.ts', async (c) => {
     return c.json({ error: `upstream_${upstream.status}` }, 502)
   }
   return new Response(upstream.body, {
+    status: 200,
+    headers: {
+      'Content-Type': 'video/mp2t',
+      'Cache-Control': 'no-store',
+    },
+  })
+})
+
+iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
+  const streamId = c.req.param('streamId')
+  if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
+  const v = checkToken(c, 'remux', streamId)
+  if (!v.ok) return v.resp
+
+  const key = remuxKey(streamId, v.sub)
+  let entry = liveRemuxIndex.get(key)
+  if (entry && !isRemuxSessionActive(entry.sessionId)) {
+    liveRemuxIndex.delete(key)
+    entry = undefined
+  }
+  if (!entry) {
+    const creds = credsFromEnv()
+    const upstreamUrl = `${creds.host}/live/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${streamId}.ts`
+    const session = startRemuxSession({ streamId, sub: v.sub, upstreamUrl })
+    entry = { sessionId: session.sessionId, dir: session.dir, manifestPath: session.manifestPath }
+    liveRemuxIndex.set(key, entry)
+  }
+
+  heartbeatRemuxSession(entry.sessionId)
+  const deadline = Date.now() + 8_000
+  while (!fs.existsSync(entry.manifestPath) && Date.now() < deadline) {
+    await sleep(200)
+    heartbeatRemuxSession(entry.sessionId)
+  }
+  if (!fs.existsSync(entry.manifestPath)) {
+    forgetRemuxSession(key, entry.sessionId)
+    return c.json({ error: 'remux_manifest_timeout' }, 504)
+  }
+
+  const rewritten = rewriteRemuxManifest(
+    fs.readFileSync(entry.manifestPath, 'utf-8'),
+    streamId,
+    entry.sessionId,
+    v.sub,
+  )
+  return new Response(rewritten, {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/vnd.apple.mpegurl',
+      'Cache-Control': 'no-store',
+    },
+  })
+})
+
+iptv.get('/stream/live/:streamId/remux/seg', (c) => {
+  const streamId = c.req.param('streamId')
+  if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
+
+  const t = c.req.query('t') ?? ''
+  let claims: ReturnType<typeof verifyStreamToken>
+  try {
+    claims = verifyStreamToken(env.sessionSecret, t)
+    if (claims.kind !== 'remux') throw new Error('kind_mismatch')
+  } catch (err) {
+    return c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401)
+  }
+
+  const resource = remuxSegmentResource(claims.resourceId)
+  if (!resource) return c.json({ error: 'bad_resource' }, 400)
+
+  const key = remuxKey(streamId, claims.sub)
+  const entry = liveRemuxIndex.get(key)
+  if (!entry || entry.sessionId !== resource.sessionId) return c.json({ error: 'session_gone' }, 410)
+  if (!isRemuxSessionActive(entry.sessionId)) {
+    liveRemuxIndex.delete(key)
+    return c.json({ error: 'session_gone' }, 410)
+  }
+
+  const filePath = path.join(entry.dir, resource.segFile)
+  if (!fs.existsSync(filePath)) return c.json({ error: 'segment_gone' }, 404)
+
+  heartbeatRemuxSession(entry.sessionId)
+  const stream = fs.createReadStream(filePath)
+  return new Response(Readable.toWeb(stream) as unknown as ReadableStream, {
     status: 200,
     headers: {
       'Content-Type': 'video/mp2t',
