@@ -44,3 +44,6 @@ test-results/
 # Local grab-event log (production lives on the NAS bind-mount)
 data/
 .dev_notes/
+
+# iptv sqlite + remux tmpdirs
+/tmp/iptv-remux/
