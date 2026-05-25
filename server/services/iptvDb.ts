@@ -18,7 +18,9 @@ export interface IptvDb {
     upsertEpg: Database.Statement
     addFavorite: Database.Statement
     removeFavorite: Database.Statement
+    getFavorites: Database.Statement
     putHistory: Database.Statement
+    getHistory: Database.Statement
     putSyncState: Database.Statement
     getSyncState: Database.Statement
   }
@@ -123,12 +125,25 @@ export function openIptvDb(filePath: string): IptvDb {
     removeFavorite: raw.prepare(`
       DELETE FROM iptv_favorites WHERE sub=@sub AND kind=@kind AND item_id=@item_id
     `),
+    getFavorites: raw.prepare(`
+      SELECT sub, kind, item_id, added_ts
+      FROM iptv_favorites
+      WHERE sub = ?
+      ORDER BY added_ts DESC
+    `),
     putHistory: raw.prepare(`
       INSERT INTO iptv_watch_history (sub, kind, item_id, position_secs, duration_secs, watched_at, completed)
       VALUES (@sub, @kind, @item_id, @position_secs, @duration_secs, @watched_at, @completed)
       ON CONFLICT(sub, kind, item_id) DO UPDATE SET
         position_secs=excluded.position_secs, duration_secs=excluded.duration_secs,
         watched_at=excluded.watched_at, completed=excluded.completed
+    `),
+    getHistory: raw.prepare(`
+      SELECT sub, kind, item_id, position_secs, duration_secs, watched_at, completed
+      FROM iptv_watch_history
+      WHERE sub = ?
+      ORDER BY watched_at DESC
+      LIMIT ?
     `),
     putSyncState: raw.prepare(`
       INSERT INTO iptv_sync_state (key, value, ts) VALUES (@key, @value, @ts)
