@@ -4,11 +4,19 @@
 // warn when the panel is dead or the line is exhausted before the user
 // tries to start a stream.
 
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { getAccountInfo } from '../services/xtream.js'
 import { syncOnce, type SyncResult } from '../services/iptvSync.js'
 import { iptvDb } from '../services/iptvDbSingleton.js'
+import {
+  listCategories,
+  listLive,
+  listVod,
+  listSeries,
+  getVodDetail,
+  getSeriesDetail,
+} from '../services/iptvCatalog.js'
 import { randomUUID } from 'node:crypto'
 
 export const iptv = new Hono<Env>()
@@ -27,6 +35,42 @@ iptv.get('/health', async (c) => {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: 'iptv_health_failed', detail: message }, 502)
   }
+})
+
+const KINDS = new Set(['live', 'vod', 'series'])
+
+iptv.get('/categories', (c) => {
+  const kind = c.req.query('kind') ?? ''
+  if (!KINDS.has(kind)) return c.json({ error: 'invalid_kind' }, 400)
+  return c.json(listCategories(iptvDb(), kind as 'live' | 'vod' | 'series'))
+})
+
+function parseListOpts(c: Context<Env>): { categoryId?: number; q?: string; limit?: number; offset?: number } {
+  const cat = c.req.query('categoryId')
+  return {
+    categoryId: cat != null && cat !== '' ? Number(cat) : undefined,
+    q: c.req.query('q') ?? undefined,
+    limit: c.req.query('limit') != null ? Number(c.req.query('limit')) : undefined,
+    offset: c.req.query('offset') != null ? Number(c.req.query('offset')) : undefined,
+  }
+}
+
+iptv.get('/live', (c) => c.json(listLive(iptvDb(), parseListOpts(c))))
+iptv.get('/vod', (c) => c.json(listVod(iptvDb(), parseListOpts(c))))
+iptv.get('/series', (c) => c.json(listSeries(iptvDb(), parseListOpts(c))))
+
+iptv.get('/vod/:streamId', (c) => {
+  const id = Number(c.req.param('streamId'))
+  if (!Number.isFinite(id)) return c.json({ error: 'invalid_id' }, 400)
+  const detail = getVodDetail(iptvDb(), id)
+  return detail ? c.json(detail) : c.json({ error: 'not_found' }, 404)
+})
+
+iptv.get('/series/:seriesId', (c) => {
+  const id = Number(c.req.param('seriesId'))
+  if (!Number.isFinite(id)) return c.json({ error: 'invalid_id' }, 400)
+  const detail = getSeriesDetail(iptvDb(), id)
+  return detail ? c.json(detail) : c.json({ error: 'not_found' }, 404)
 })
 
 type Job = {

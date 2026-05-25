@@ -31,7 +31,8 @@ export async function syncOnce(db: IptvDb): Promise<SyncResult> {
   running = true
   const startedAt = new Date()
   const fetchedAt = startedAt.toISOString()
-  let channels = 0, vod = 0, series = 0, episodes = 0, epg = 0, categories = 0
+  let channels: number, vod: number, series: number, categories: number
+  let episodes = 0, epg = 0
 
   try {
     const creds = credsFromEnv()

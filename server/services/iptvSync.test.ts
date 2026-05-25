@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { openIptvDb } from './iptvDb.js'
+import type { EpgProgrammeRow } from './iptvEpg.js'
 
 vi.mock('./xtream.js', () => ({
   credsFromEnv: vi.fn(() => ({ host: 'https://p', username: 'u', password: 'p' })),
@@ -41,7 +42,7 @@ vi.mock('../env.js', () => ({
   },
 }))
 vi.mock('./iptvEpg.js', () => ({
-  fetchAndStreamEpg: vi.fn(async (onRow: (r: any) => void) => {
+  fetchAndStreamEpg: vi.fn(async (onRow: (r: EpgProgrammeRow) => void) => {
     onRow({ channel_id: 'c.1', start_utc: '2026-05-24T10:00:00.000Z', stop_utc: '2026-05-24T10:30:00.000Z', title: 'P1', description: null })
     onRow({ channel_id: 'c.1', start_utc: '2026-05-24T10:30:00.000Z', stop_utc: '2026-05-24T11:00:00.000Z', title: 'P2', description: null })
   }),
