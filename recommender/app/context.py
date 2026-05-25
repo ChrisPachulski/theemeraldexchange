@@ -386,13 +386,27 @@ def get_active_model_config(conn: sqlite3.Connection) -> tuple[str, str, dict]:
             type(params).__name__,
         )
         return ("v0", CONFIG.default_recipe, {})
-    defaults = recipe_mod.DEFAULTS
-    if not isinstance(defaults, dict):
+    if not isinstance(recipe_mod.DEFAULTS, dict):
         log.error(
             "active model_config %s recipe defaults are invalid; using default recipe",
             row["version"],
         )
         return ("v0", CONFIG.default_recipe, {})
+    return (row["version"], row["recipe"], sanitize_model_params(row["recipe"], params, version=row["version"]))
+
+
+def sanitize_model_params(recipe_name: str, params: dict, *, version: str) -> dict[str, int | float | str]:
+    from . import recipes
+
+    recipe_mod = recipes.get(recipe_name)
+    defaults = recipe_mod.DEFAULTS
+    if not isinstance(params, dict):
+        log.error(
+            "active model_config %s params_json is %s; ignoring params",
+            version,
+            type(params).__name__,
+        )
+        return {}
     clean_params: dict[str, int | float | str] = {}
     for key, default in defaults.items():
         if key not in params:
@@ -404,7 +418,7 @@ def get_active_model_config(conn: sqlite3.Connection) -> tuple[str, str, dict]:
             if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
                 log.error(
                     "active model_config %s has invalid param %r; ignoring",
-                    row["version"],
+                    version,
                     key,
                 )
                 continue
@@ -414,7 +428,7 @@ def get_active_model_config(conn: sqlite3.Connection) -> tuple[str, str, dict]:
             if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
                 log.error(
                     "active model_config %s has invalid param %r; ignoring",
-                    row["version"],
+                    version,
                     key,
                 )
                 continue

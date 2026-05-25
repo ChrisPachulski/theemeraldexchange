@@ -44,11 +44,17 @@ export const auth = new Hono()
 
 type AuthRateLimitKind = 'pin' | 'check'
 type AuthRateLimitBucket = { count: number; resetAt: number }
+type AuthRateLimitRule = { key: string; limit: number; windowMs: number }
 
-const AUTH_RATE_LIMITS: Record<AuthRateLimitKind, { limit: number; windowMs: number }> = {
+const AUTH_CLIENT_RATE_LIMITS: Record<AuthRateLimitKind, { limit: number; windowMs: number }> = {
   pin: { limit: 10, windowMs: 60_000 },
   check: { limit: 60, windowMs: 60_000 },
 }
+const AUTH_GLOBAL_RATE_LIMITS: Record<AuthRateLimitKind, { limit: number; windowMs: number }> = {
+  pin: { limit: 120, windowMs: 60_000 },
+  check: { limit: 600, windowMs: 60_000 },
+}
+const AUTH_CHECK_PIN_RATE_LIMIT = { limit: 90, windowMs: 60_000 }
 const AUTH_RATE_LIMIT_MAX_BUCKETS = 256
 const AUTH_RATE_LIMIT_SWEEP_MS = 60_000
 const authRateLimitBuckets = new Map<string, AuthRateLimitBucket>()
@@ -59,9 +65,36 @@ export function _resetAuthRateLimitsForTests(): void {
   authRateLimitLastSweep = 0
 }
 
-function authClientKey(c: Context, kind: AuthRateLimitKind): string {
-  void c
-  return `${kind}:global`
+function trustedAuthClientIdentity(c: Context): string | null {
+  const cfConnectingIp = c.req.header('cf-connecting-ip')?.trim()
+  if (cfConnectingIp) return `cf:${cfConnectingIp}`
+  const trueClientIp = c.req.header('true-client-ip')?.trim()
+  if (trueClientIp) return `true-client:${trueClientIp}`
+  return null
+}
+
+function authRateLimitRules(c: Context, kind: AuthRateLimitKind, pinId?: number): AuthRateLimitRule[] {
+  const globalCfg = AUTH_GLOBAL_RATE_LIMITS[kind]
+  const rules: AuthRateLimitRule[] = [
+    { key: `${kind}:global`, limit: globalCfg.limit, windowMs: globalCfg.windowMs },
+  ]
+  const clientIdentity = trustedAuthClientIdentity(c)
+  if (clientIdentity) {
+    const clientCfg = AUTH_CLIENT_RATE_LIMITS[kind]
+    rules.push({
+      key: `${kind}:client:${clientIdentity}`,
+      limit: clientCfg.limit,
+      windowMs: clientCfg.windowMs,
+    })
+  }
+  if (kind === 'check' && pinId !== undefined) {
+    rules.push({
+      key: `${kind}:pin:${pinId}`,
+      limit: AUTH_CHECK_PIN_RATE_LIMIT.limit,
+      windowMs: AUTH_CHECK_PIN_RATE_LIMIT.windowMs,
+    })
+  }
+  return rules
 }
 
 function sweepAuthRateLimitBuckets(now: number): void {
@@ -76,26 +109,36 @@ function sweepAuthRateLimitBuckets(now: number): void {
     if (bucket.resetAt <= now) authRateLimitBuckets.delete(key)
   }
   while (authRateLimitBuckets.size > AUTH_RATE_LIMIT_MAX_BUCKETS) {
-    const oldest = authRateLimitBuckets.keys().next().value
-    if (oldest === undefined) break
-    authRateLimitBuckets.delete(oldest)
+    let deleted = false
+    for (const key of authRateLimitBuckets.keys()) {
+      if (key.endsWith(':global')) continue
+      authRateLimitBuckets.delete(key)
+      deleted = true
+      break
+    }
+    if (!deleted) break
   }
 }
 
-function enforceAuthRateLimit(c: Context, kind: AuthRateLimitKind): Response | null {
-  const cfg = AUTH_RATE_LIMITS[kind]
+function enforceAuthRateLimit(c: Context, kind: AuthRateLimitKind, pinId?: number): Response | null {
   const now = Date.now()
   sweepAuthRateLimitBuckets(now)
-  const key = authClientKey(c, kind)
-  const current = authRateLimitBuckets.get(key)
-  const bucket = current && current.resetAt > now ? current : { count: 0, resetAt: now + cfg.windowMs }
-  if (bucket.count >= cfg.limit) {
-    c.header('Retry-After', String(Math.ceil((bucket.resetAt - now) / 1000)))
-    authRateLimitBuckets.set(key, bucket)
+  const rules = authRateLimitRules(c, kind, pinId)
+  const buckets = rules.map((rule) => {
+    const current = authRateLimitBuckets.get(rule.key)
+    const bucket = current && current.resetAt > now ? current : { count: 0, resetAt: now + rule.windowMs }
+    return { rule, bucket }
+  })
+  const limited = buckets.find(({ rule, bucket }) => bucket.count >= rule.limit)
+  if (limited) {
+    c.header('Retry-After', String(Math.ceil((limited.bucket.resetAt - now) / 1000)))
+    authRateLimitBuckets.set(limited.rule.key, limited.bucket)
     return c.json({ error: 'rate_limited' }, 429)
   }
-  bucket.count += 1
-  authRateLimitBuckets.set(key, bucket)
+  for (const { rule, bucket } of buckets) {
+    bucket.count += 1
+    authRateLimitBuckets.set(rule.key, bucket)
+  }
   return null
 }
 
@@ -111,13 +154,13 @@ auth.post('/plex/pin', async (c) => {
 })
 
 auth.post('/plex/check', async (c) => {
-  const limited = enforceAuthRateLimit(c, 'check')
-  if (limited) return limited
   const body = await c.req.json().catch(() => null) as { pinId?: unknown } | null
   const pinIdRaw = typeof body?.pinId === 'string' || typeof body?.pinId === 'number' ? String(body.pinId) : undefined
   if (!pinIdRaw) return c.json({ error: 'missing pinId' }, 400)
   const pinId = Number(pinIdRaw)
   if (!Number.isInteger(pinId)) return c.json({ error: 'bad pinId' }, 400)
+  const limited = enforceAuthRateLimit(c, 'check', pinId)
+  if (limited) return limited
 
   const pin = await checkPin(pinId)
   if (!pin.authToken) return c.json({ status: 'pending' })
