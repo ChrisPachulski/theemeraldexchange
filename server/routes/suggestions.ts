@@ -1273,17 +1273,21 @@ async function tmdbTrending(kind: 'movie' | 'tv'): Promise<SuggestionItem[]> {
       console.error('[suggestions] TMDB /trending page settled rejected:', p.reason instanceof Error ? p.reason.message : String(p.reason))
     }
   }
-  const items: SuggestionItem[] = all.map((r) => {
+  const seenIds = new Set<number>()
+  const items: SuggestionItem[] = []
+  for (const r of all) {
+    if (!r.id || seenIds.has(r.id)) continue
+    seenIds.add(r.id)
     const date = r.release_date || r.first_air_date || ''
     const y = date ? Number(date.slice(0, 4)) : undefined
-    return {
+    items.push({
       id: r.id,
       title: r.title || r.name || '',
       posterPath: r.poster_path,
       overview: r.overview,
       year: Number.isFinite(y) ? y : undefined,
-    }
-  })
+    })
+  }
   // Don't cache empty results. If every /trending page failed (TMDB
   // outage, rate-limit storm, network partition), pinning [] for the
   // full TTL keeps the trending strip blank for cold-start, force=

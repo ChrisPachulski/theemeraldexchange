@@ -63,31 +63,56 @@ def _aggregate(conn: sqlite3.Connection) -> OutcomeStats:
         "SELECT COUNT(*) AS c FROM rec_log WHERE datetime(ts) >= datetime('now','-1 day')"
     ).fetchone()["c"]
 
+    latest_outcomes_cte = """
+        WITH latest_outcomes AS (
+          SELECT *
+          FROM (
+            SELECT
+              o.outcome,
+              o.ts AS outcome_ts,
+              r.sub,
+              r.kind,
+              r.tmdb_id,
+              r.score,
+              r.provenance,
+              r.rank,
+              r.ts AS rec_ts,
+              t.title,
+              ROW_NUMBER() OVER (
+                PARTITION BY r.sub, r.kind, r.tmdb_id
+                ORDER BY datetime(o.ts) DESC, o.ts DESC, r.id DESC
+              ) AS rn
+            FROM rec_outcomes o
+            JOIN rec_log r ON r.id = o.rec_id
+            LEFT JOIN titles t ON t.kind = r.kind AND t.tmdb_id = r.tmdb_id
+            WHERE datetime(o.ts) >= datetime('now','-1 day')
+          )
+          WHERE rn = 1
+        )
+    """
+
     by_outcome_rows = conn.execute(
-        """SELECT o.outcome, COUNT(*) AS c
-           FROM rec_outcomes o
-           JOIN rec_log r ON r.id = o.rec_id
-           WHERE datetime(o.ts) >= datetime('now','-1 day')
-           GROUP BY o.outcome"""
+        latest_outcomes_cte
+        + """SELECT outcome, COUNT(*) AS c
+             FROM latest_outcomes
+             GROUP BY outcome"""
     ).fetchall()
     by_outcome = {r["outcome"]: r["c"] for r in by_outcome_rows}
     total_outcomes = sum(c for outcome, c in by_outcome.items() if outcome != "ignored")
 
     worst = conn.execute(
-        """SELECT r.kind, r.tmdb_id, r.score, r.provenance, r.rank, r.ts, t.title
-           FROM rec_log r
-           JOIN rec_outcomes o ON o.rec_id = r.id
-           LEFT JOIN titles t ON t.kind = r.kind AND t.tmdb_id = r.tmdb_id
-           WHERE datetime(o.ts) >= datetime('now','-1 day') AND o.outcome IN ('rejected','disliked')
-           ORDER BY r.score DESC LIMIT 8"""
+        latest_outcomes_cte
+        + """SELECT kind, tmdb_id, score, provenance, rank, rec_ts AS ts, title
+             FROM latest_outcomes
+             WHERE outcome IN ('rejected','disliked')
+             ORDER BY score DESC LIMIT 8"""
     ).fetchall()
     pleasant = conn.execute(
-        """SELECT r.kind, r.tmdb_id, r.score, r.provenance, r.rank, r.ts, t.title
-           FROM rec_log r
-           JOIN rec_outcomes o ON o.rec_id = r.id
-           LEFT JOIN titles t ON t.kind = r.kind AND t.tmdb_id = r.tmdb_id
-           WHERE datetime(o.ts) >= datetime('now','-1 day') AND o.outcome IN ('liked','added','clicked')
-           ORDER BY r.score ASC LIMIT 8"""
+        latest_outcomes_cte
+        + """SELECT kind, tmdb_id, score, provenance, rank, rec_ts AS ts, title
+             FROM latest_outcomes
+             WHERE outcome IN ('liked','added','clicked')
+             ORDER BY score ASC LIMIT 8"""
     ).fetchall()
 
     def _ser(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
