@@ -32,7 +32,7 @@ import anthropic
 
 from app import recipes
 from app.config import CONFIG
-from app.context import load_user_context, select_model_config_for_context
+from app.context import load_user_context, sanitize_model_params, select_model_config_for_context
 from app.db import connect, transaction
 from app.schemas import ScoreRequest
 
@@ -266,6 +266,11 @@ def validate_proposal(proposed: Any, active_recipe: str, active_params: dict) ->
         base_params,
         clean_params,
         drift=CONFIG.optimizer_max_drift_pct,
+    )
+    candidate_params = sanitize_model_params(
+        candidate_recipe,
+        candidate_params,
+        version="optimizer candidate",
     )
     return candidate_recipe, candidate_params, notes[:200]
 
@@ -527,7 +532,11 @@ def run(*, dry_run: bool = False) -> int:
         if active:
             active_version = active["version"]
             active_recipe = active["recipe"]
-            active_params = json.loads(active["params_json"])
+            active_params = sanitize_model_params(
+                active_recipe,
+                json.loads(active["params_json"]),
+                version=active_version,
+            )
         else:
             active_version = "v0"
             active_recipe = CONFIG.default_recipe
