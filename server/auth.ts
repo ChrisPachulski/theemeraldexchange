@@ -19,7 +19,7 @@
 //   POST /api/auth/logout       — clear the session cookie.
 //   GET  /api/me                — current user, or 401.
 
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { env } from './env.js'
 import {
   createPin,
@@ -42,7 +42,44 @@ import {
 
 export const auth = new Hono()
 
+type AuthRateLimitKind = 'pin' | 'check'
+type AuthRateLimitBucket = { count: number; resetAt: number }
+
+const AUTH_RATE_LIMITS: Record<AuthRateLimitKind, { limit: number; windowMs: number }> = {
+  pin: { limit: 10, windowMs: 60_000 },
+  check: { limit: 60, windowMs: 60_000 },
+}
+const authRateLimitBuckets = new Map<string, AuthRateLimitBucket>()
+
+export function _resetAuthRateLimitsForTests(): void {
+  authRateLimitBuckets.clear()
+}
+
+function authClientKey(c: Context, kind: AuthRateLimitKind): string {
+  const forwarded = c.req.header('x-forwarded-for')?.split(',')[0]?.trim()
+  const ip = c.req.header('cf-connecting-ip') ?? c.req.header('x-real-ip') ?? forwarded ?? 'unknown'
+  return `${kind}:${ip}`
+}
+
+function enforceAuthRateLimit(c: Context, kind: AuthRateLimitKind): Response | null {
+  const cfg = AUTH_RATE_LIMITS[kind]
+  const now = Date.now()
+  const key = authClientKey(c, kind)
+  const current = authRateLimitBuckets.get(key)
+  const bucket = current && current.resetAt > now ? current : { count: 0, resetAt: now + cfg.windowMs }
+  if (bucket.count >= cfg.limit) {
+    c.header('Retry-After', String(Math.ceil((bucket.resetAt - now) / 1000)))
+    authRateLimitBuckets.set(key, bucket)
+    return c.json({ error: 'rate_limited' }, 429)
+  }
+  bucket.count += 1
+  authRateLimitBuckets.set(key, bucket)
+  return null
+}
+
 auth.post('/plex/pin', async (c) => {
+  const limited = enforceAuthRateLimit(c, 'pin')
+  if (limited) return limited
   const pin = await createPin()
   return c.json({
     pinId: pin.id,
@@ -52,6 +89,8 @@ auth.post('/plex/pin', async (c) => {
 })
 
 auth.post('/plex/check', async (c) => {
+  const limited = enforceAuthRateLimit(c, 'check')
+  if (limited) return limited
   const body = await c.req.json().catch(() => null) as { pinId?: unknown } | null
   const pinIdRaw = typeof body?.pinId === 'string' || typeof body?.pinId === 'number' ? String(body.pinId) : undefined
   if (!pinIdRaw) return c.json({ error: 'missing pinId' }, 400)

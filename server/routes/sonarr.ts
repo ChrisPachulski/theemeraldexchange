@@ -562,11 +562,43 @@ sonarr.post('/api/v3/series/:id/seasons/:n/monitor', requireAdmin, async (c) => 
   }
   const series = (await getRes.json()) as {
     title?: string
+    rootFolderPath?: string
     seasons?: Array<{ seasonNumber: number; monitored: boolean }>
   }
   const seasons = series.seasons ?? []
   if (!seasons.some((s) => s.seasonNumber === n)) {
     return c.json({ error: 'season_not_found' }, 404)
+  }
+  if (!series.rootFolderPath) {
+    return c.json(
+      { error: 'rootFolderPath_required' },
+      400,
+    )
+  }
+  const folders = await sonarrRootFolders()
+  const folder = folders.find((f) => f.path === series.rootFolderPath)
+  if (!folder) {
+    return c.json(
+      { error: 'unknown_root_folder', path: series.rootFolderPath },
+      400,
+    )
+  }
+  if (typeof folder.freeSpace !== 'number' || !Number.isFinite(folder.freeSpace)) {
+    return c.json(
+      { error: 'free_space_unknown', path: folder.path },
+      507,
+    )
+  }
+  if (folder.freeSpace < env.minFreeBytes) {
+    return c.json(
+      {
+        error: 'insufficient_disk_space',
+        free_bytes: folder.freeSpace,
+        threshold_bytes: env.minFreeBytes,
+        path: folder.path,
+      },
+      507,
+    )
   }
   const patched = {
     ...series,

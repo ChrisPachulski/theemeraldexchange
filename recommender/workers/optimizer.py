@@ -233,12 +233,16 @@ def validate_proposal(proposed: Any, active_recipe: str, active_params: dict) ->
         if isinstance(v, (int, float)) and not isinstance(v, bool)
     }
     if candidate_recipe == active_recipe:
-        base_params = {
-            k: active_params[k]
-            if isinstance(active_params.get(k), (int, float)) and not isinstance(active_params.get(k), bool)
-            else default
-            for k, default in numeric_defaults.items()
-        }
+        base_params = {}
+        for k in numeric_defaults:
+            if isinstance(active_params.get(k), (int, float)) and not isinstance(active_params.get(k), bool):
+                base_params[k] = active_params[k]
+            else:
+                log.warning(
+                    "active %s params missing numeric key %r; ignoring proposed change for this run",
+                    active_recipe,
+                    k,
+                )
     else:
         base_params = dict(numeric_defaults)
 
@@ -246,6 +250,9 @@ def validate_proposal(proposed: Any, active_recipe: str, active_params: dict) ->
     for key, value in raw_params.items():
         if key not in numeric_defaults:
             log.warning("optimizer proposed unknown param %r; ignoring", key)
+            continue
+        if candidate_recipe == active_recipe and key not in base_params:
+            log.warning("optimizer proposed %r but active config lacks it; ignoring", key)
             continue
         if not isinstance(value, (int, float)) or isinstance(value, bool):
             log.warning("optimizer proposed non-numeric value for %r; ignoring", key)
@@ -446,11 +453,16 @@ def evaluate_pair(
         log.warning("optimizer: no shared successful holdout entries; refusing promotion")
         return 0.0, 0.0, False
     failures = len(holdout) - len(shared_indices)
-    ok_to_promote = failures == 0
+    failure_rate = failures / len(holdout)
+    ok_to_promote = failure_rate <= 0.10
     if not ok_to_promote:
+        failed_indices = sorted(set(range(len(holdout))) - set(shared_indices))
         log.warning(
-            "optimizer: %d holdout entries failed evaluation; refusing promotion",
+            "optimizer: %d/%d holdout entries failed evaluation (%.1f%%); refusing promotion; failed_indices=%s",
             failures,
+            len(holdout),
+            failure_rate * 100,
+            failed_indices[:20],
         )
     baseline_score = sum(baseline_scores[i] for i in shared_indices) / len(shared_indices)
     candidate_score = sum(candidate_scores[i] for i in shared_indices) / len(shared_indices)
