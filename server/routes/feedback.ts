@@ -106,96 +106,111 @@ feedback.post('/', async (c) => {
   const signal: FeedbackSignal = body.signal
 
   return withItemLock(type, tmdbId, async () => {
-  // Tracks whether the like branch dropped a household veto so the
-  // recommender mirror below knows to send the matching rejection-clear.
-  let rejectionClearedByLike = false
+    // Tracks whether the like branch dropped a household veto so the
+    // recommender mirror below knows to send the matching rejection-clear.
+    let rejectionClearedByLike = false
+    let oppositeSignalToClear: FeedbackSignal | null = null
 
-  if (signal === 'dislike') {
-    // Two-step write with rollback. We do the household rejection
-    // FIRST because:
-    //   - its rollback is simple (removeRejection, conditional on no
-    //     other dissent), no prior-state reconstruction needed;
-    //   - if it fails, no personal state has changed yet → clean
-    //     500 with no split-brain.
-    // After it succeeds, attempt the personal dislike. If THAT fails,
-    // undo the household rejection — but only when our call was the
-    // one that added it (otherwise we'd erase another user's dissent).
-    const wasAlreadyRejected = (await getRejectionIds(type)).has(tmdbId)
-    await addRejection(type, tmdbId, title)
-    try {
-      await setDislike(session.sub, type, tmdbId, title)
-    } catch (err) {
-      if (!wasAlreadyRejected) {
+    if (signal === 'dislike') {
+      // Two-step write with rollback. We do the household rejection
+      // FIRST because:
+      //   - its rollback is simple (removeRejection, conditional on no
+      //     other dissent), no prior-state reconstruction needed;
+      //   - if it fails, no personal state has changed yet → clean
+      //     500 with no split-brain.
+      // After it succeeds, attempt the personal dislike. If THAT fails,
+      // undo the household rejection — but only when our call was the
+      // one that added it (otherwise we'd erase another user's dissent).
+      const f = await getUserFeedback(session.sub)
+      if (f[type].liked.some((e) => e.id === tmdbId)) {
+        oppositeSignalToClear = 'like'
+      }
+      const wasAlreadyRejected = (await getRejectionIds(type)).has(tmdbId)
+      await addRejection(type, tmdbId, title)
+      try {
+        await setDislike(session.sub, type, tmdbId, title)
+      } catch (err) {
+        if (!wasAlreadyRejected) {
+          const stillDissenting = await anotherUserDislikes(
+            session.sub,
+            type,
+            tmdbId,
+          ).catch(() => true)
+          if (!stillDissenting) {
+            await removeRejection(type, tmdbId).catch((rbErr) => {
+              console.error(
+                '[feedback] dislike rollback failed — split-brain (rejection persisted, personal write failed):',
+                { setErr: err, rbErr },
+              )
+            })
+          }
+        }
+        throw err
+      }
+    } else {
+      // Like branch. Red-to-green toggle: if the caller's PRIOR signal
+      // was dislike, that dislike was rolled into the household veto.
+      // Switching to a like means we must also drop the veto (assuming
+      // nobody else still dislikes), otherwise the title stays in
+      // kindRejections and is silently filtered out of every suggestion
+      // call — the user sees their green dot but their like has no
+      // effect. removeRejection FIRST keeps failure modes clean (its
+      // failure is a clean 500 with no personal mutation). On setLike
+      // failure we restore the rejection so we don't leave the title
+      // visible to other users.
+      const f = await getUserFeedback(session.sub)
+      const priorDislike = f[type].disliked.find((e) => e.id === tmdbId)
+      if (priorDislike) {
+        oppositeSignalToClear = 'dislike'
         const stillDissenting = await anotherUserDislikes(
           session.sub,
           type,
           tmdbId,
-        ).catch(() => true)
+        )
         if (!stillDissenting) {
-          await removeRejection(type, tmdbId).catch((rbErr) => {
+          await removeRejection(type, tmdbId)
+          rejectionClearedByLike = true
+        }
+      }
+      try {
+        await setLike(session.sub, type, tmdbId, title)
+      } catch (err) {
+        if (rejectionClearedByLike) {
+          await addRejection(
+            type,
+            tmdbId,
+            priorDislike?.title ?? title,
+          ).catch((rbErr) => {
             console.error(
-              '[feedback] dislike rollback failed — split-brain (rejection persisted, personal write failed):',
+              '[feedback] red-to-green rollback failed — split-brain (rejection cleared, like write failed):',
               { setErr: err, rbErr },
             )
           })
         }
-      }
-      throw err
-    }
-  } else {
-    // Like branch. Red-to-green toggle: if the caller's PRIOR signal
-    // was dislike, that dislike was rolled into the household veto.
-    // Switching to a like means we must also drop the veto (assuming
-    // nobody else still dislikes), otherwise the title stays in
-    // kindRejections and is silently filtered out of every suggestion
-    // call — the user sees their green dot but their like has no
-    // effect. removeRejection FIRST keeps failure modes clean (its
-    // failure is a clean 500 with no personal mutation). On setLike
-    // failure we restore the rejection so we don't leave the title
-    // visible to other users.
-    const f = await getUserFeedback(session.sub)
-    const priorDislike = f[type].disliked.find((e) => e.id === tmdbId)
-    if (priorDislike) {
-      const stillDissenting = await anotherUserDislikes(
-        session.sub,
-        type,
-        tmdbId,
-      )
-      if (!stillDissenting) {
-        await removeRejection(type, tmdbId)
-        rejectionClearedByLike = true
+        throw err
       }
     }
-    try {
-      await setLike(session.sub, type, tmdbId, title)
-    } catch (err) {
-      if (rejectionClearedByLike) {
-        await addRejection(
-          type,
-          tmdbId,
-          priorDislike?.title ?? title,
-        ).catch((rbErr) => {
-          console.error(
-            '[feedback] red-to-green rollback failed — split-brain (rejection cleared, like write failed):',
-            { setErr: err, rbErr },
-          )
+
+    // Mirror to the recommender so the optimizer learns from outcomes.
+    if (env.useLocalRecommender) {
+      if (oppositeSignalToClear) {
+        void postClearFeedback({
+          sub: session.sub,
+          kind: type,
+          tmdb_id: tmdbId,
+          signal: oppositeSignalToClear,
         })
       }
-      throw err
+      void postFeedback({ sub: session.sub, kind: type, tmdb_id: tmdbId, signal })
+      if (signal === 'dislike') {
+        void postRejection({ kind: type, tmdb_id: tmdbId })
+      } else if (rejectionClearedByLike) {
+        // Mirror the household-veto removal triggered by red→green so
+        // the recommender's household_rejections stays in sync.
+        void postClearRejection({ kind: type, tmdb_id: tmdbId })
+      }
     }
-  }
-  // Mirror to the recommender so the optimizer learns from outcomes.
-  if (env.useLocalRecommender) {
-    void postFeedback({ sub: session.sub, kind: type, tmdb_id: tmdbId, signal: signal })
-    if (signal === 'dislike') {
-      void postRejection({ kind: type, tmdb_id: tmdbId })
-    } else if (rejectionClearedByLike) {
-      // Mirror the household-veto removal triggered by red→green so
-      // the recommender's household_rejections stays in sync.
-      void postClearRejection({ kind: type, tmdb_id: tmdbId })
-    }
-  }
-  return c.json({ ok: true })
+    return c.json({ ok: true })
   }).catch((err) => {
     if (err instanceof FeedbackQuotaError) {
       return c.json({ error: 'feedback_quota_exceeded', signal: err.signal, limit: err.limit }, 409)
