@@ -86,14 +86,18 @@ iptv.get('/series/:seriesId', (c) => {
   return detail ? c.json(detail) : c.json({ error: 'not_found' }, 404)
 })
 
-function userOf(c: any): { sub: string } {
-  // sessionGate sets `user` in the request context — read it.
-  const u = c.get('user') as { sub: string } | undefined
-  if (!u) throw new Error('missing_user')
-  return u
+function userOf(c: Context<Env>): { sub: string } {
+  const session = c.get('session')
+  if (session) return { sub: session.sub }
+
+  const user = (c.var as Record<string, unknown>).user
+  if (typeof user === 'object' && user != null && 'sub' in user && typeof user.sub === 'string') {
+    return { sub: user.sub }
+  }
+  throw new Error('missing_user')
 }
 
-function clientWantsAvplayer(c: any): boolean {
+function clientWantsAvplayer(c: Context<Env>): boolean {
   return c.req.query('client') === 'avplayer'
 }
 
@@ -124,7 +128,7 @@ iptv.post('/stream/live/:streamId/grant', (c) => {
   })
 })
 
-function checkToken(c: any, expectKind: string, resourceId: string): { ok: true; sub: string } | { ok: false; resp: Response } {
+function checkToken(c: Context<Env>, expectKind: string, resourceId: string): { ok: true; sub: string } | { ok: false; resp: Response } {
   const t = c.req.query('t') ?? ''
   try {
     const claims = verifyStreamToken(env.sessionSecret, t)

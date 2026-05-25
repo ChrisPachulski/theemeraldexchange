@@ -27,3 +27,12 @@
 .iptv-poster-card__img--placeholder { background: #333; }
 .iptv-poster-card__name { font-size: .9rem; line-height: 1.2; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .iptv-poster-card__year { font-size: .8rem; color: var(--text-dim, #888); }
+.iptv-channel-card[role="button"], .iptv-poster-card[role="button"], .iptv-series-detail__episode[role="button"] { cursor: pointer; }
+.iptv-channel-card[role="button"]:focus-visible, .iptv-poster-card[role="button"]:focus-visible, .iptv-series-detail__episode[role="button"]:focus-visible { outline: 2px solid #79d7ff; outline-offset: 2px; }
+.iptv-player-modal { position:fixed; inset:0; z-index:1000; background:rgba(0,0,0,.85); display:flex; flex-direction:column; align-items:center; justify-content:center; }
+.iptv-player-modal__header { width:100%; max-width:960px; display:flex; justify-content:space-between; align-items:center; padding:.5rem 1rem; color:#fff; }
+.iptv-player-modal__close { background:none; border:none; color:#fff; font-size:1.5rem; cursor:pointer; }
+.iptv-series-detail { width:min(100%,960px); max-height:72vh; overflow:auto; color:#fff; padding:0 1rem 1rem; }
+.iptv-series-detail__season { margin-bottom:1rem; }
+.iptv-series-detail__episodes { list-style:none; padding:0; margin:0; display:grid; gap:.4rem; }
+.iptv-series-detail__episode { display:grid; grid-template-columns:3rem 1fr; gap:.75rem; align-items:center; background:var(--card-bg,#181818); border-radius:6px; padding:.6rem .75rem; }
