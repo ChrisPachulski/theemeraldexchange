@@ -361,7 +361,10 @@ export function TvTab() {
                 statusLabel="Status"
                 statusOptions={TV_STATUS_OPTIONS}
                 statusValue={status}
-                onStatusChange={setStatus}
+                onStatusChange={(next) => {
+                  setStatus(next)
+                  setLetter('all')
+                }}
               />
               {textFilteredLibrary.length > 0 && (
                 <LibraryAlphabet
@@ -387,7 +390,10 @@ export function TvTab() {
       <div className="tv-tab__dock">
         <SearchInput
           value={query}
-          onChange={setQuery}
+          onChange={(next) => {
+            setQuery(next)
+            setLetter('all')
+          }}
           placeholder={placeholder}
           ariaLabel="Search TV shows"
           autoFocus

@@ -158,7 +158,7 @@ Two flavors because live MPEG-TS and VOD HLS/MP4 behave differently. Every playa
 POST /api/iptv/stream/live/:streamId/grant         → { url: '/api/iptv/stream/live/:streamId.ts?t=<token>', delivery: 'mpegts' }
 GET  /api/iptv/stream/live/:streamId.ts?t=<token>  → 200 video/mp2t (streamed)
 ```
-Token = HMAC(SESSION_SECRET, `live|streamId|sub|exp`), 5-min TTL. Upstream `https://${HOST}/live/${USER}/${PASS}/${streamId}.ts` streamed pass-through; **do NOT use `fetchWithTimeout`** here (it buffers) — raw `fetch` with a separate `AbortController` tied to the request lifecycle. Response: `c.body(stream)` with `Content-Type: video/mp2t`.
+Token = `base64url(JSON.stringify({kind:'live', id:streamId, sub, exp, nonce})).base64url(HMAC(SESSION_SECRET, payload))`, 5-min TTL. The GET handler verifies the signature, decodes `sub` and `exp`, rejects expired tokens, and revokes/rejects reused nonces as needed for concurrency accounting. Upstream `https://${HOST}/live/${USER}/${PASS}/${streamId}.ts` streamed pass-through; **do NOT use `fetchWithTimeout`** here (it buffers) — raw `fetch` with a separate `AbortController` tied to the request lifecycle. Response: `c.body(stream)` with `Content-Type: video/mp2t`.
 
 **VOD / series-episode proxy:**
 ```
@@ -168,6 +168,8 @@ GET  /api/iptv/stream/segment?u=<signed>           → HLS sub-segment proxy
 ```
 Forward `Range` header upstream; pass through 206. For `.m3u8`, parse playlist and rewrite segment URIs to `/api/iptv/stream/segment?u=<signed-upstream-segment-url>`.
 
+VOD, catchup, series episode, and segment proxy tokens use the same structured payload shape with `kind`, `id`/URL, `sub`, `exp`, and `nonce` fields so every unauthenticated media GET can validate the user, expiry, media target, and replay policy from the URL alone.
+
 **Catchup TV:**
 ```
 POST /api/iptv/stream/catchup/:streamId/grant?startUtc=&durationMin=
@@ -175,7 +177,7 @@ GET  /api/iptv/stream/catchup/:streamId/:startUtc/:durationMin.ts?t=<token>
 ```
 Upstream `https://${HOST}/streaming/timeshift.php?…&stream=&start=YYYY-MM-DD:HH-MM&duration=<min>`. Gated on `channels.tv_archive=1` AND `start_utc >= now() - tv_archive_duration days`.
 
-**Concurrency:** in-memory session count per `sub` AND globally; reject grant with HTTP 429 + `{reason:'iptv_concurrency_limit', limit, current}` when global count would exceed `IPTV_MAX_CONCURRENT_STREAMS` (env, default 4). Sessions auto-expire after 30s without heartbeat.
+**Concurrency:** in-memory session count per `sub` AND globally; reject grant with HTTP 429 + `{reason:'iptv_concurrency_limit', limit, current}` when global count would exceed `IPTV_MAX_CONCURRENT_STREAMS` (env, default 4). Every grant response includes `sessionId` plus `heartbeatUrl` and `stopUrl`; clients call `POST /api/iptv/stream/session/:sessionId/heartbeat` every 15s while playback is active and `POST /api/iptv/stream/session/:sessionId/stop` on pause/end/unload. Proxy-backed playback also keeps the session alive while bytes are flowing and releases it when the proxy request, remux process, or upstream stream closes. Sessions auto-expire only after 30s without heartbeat or active proxy I/O.
 
 ### 1.4 EPG storage & query
 

@@ -33,7 +33,7 @@ def test_explicit_negative_removes_prior_engagement_positive(
         )
         conn.executemany(
             "INSERT INTO library_items(kind, tmdb_id) VALUES ('movie', ?)",
-            [(10,), (11,), (12,)],
+            [(10,), (11,), (12,), (13,), (14,), (15,), (16,), (17,), (18,), (19,)],
         )
         conn.executemany(
             """INSERT INTO rec_log(id, sub, kind, tmdb_id, ts)

@@ -47,9 +47,32 @@ required=(
   RADARR_API_KEY
   SAB_API_KEY
 )
+env_value() {
+  local key="$1"
+  local line value
+  line=$(grep -E "^[[:space:]]*${key}=" "$LOCAL_ENV" | tail -n 1 || true)
+  if [[ -z "$line" ]]; then
+    return 1
+  fi
+  value="${line#*=}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+    value="${value:1:${#value}-2}"
+  elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
+    value="${value:1:${#value}-2}"
+  fi
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
 for key in "${required[@]}"; do
-  if ! grep -q "^${key}=" "$LOCAL_ENV"; then
+  if ! value=$(env_value "$key"); then
     echo "ERROR: ${key} missing from $LOCAL_ENV" >&2
+    exit 1
+  fi
+  if [[ -z "$value" ]]; then
+    echo "ERROR: ${key} in $LOCAL_ENV must not be empty." >&2
     exit 1
   fi
 done
@@ -59,11 +82,7 @@ done
 # placeholder secret is equivalent to publishing the AES key. Mirror
 # env.ts's prod gate here so deploy fails fast with a clearer message
 # than a container crash loop.
-session_secret_line=$(grep -E "^SESSION_SECRET=" "$LOCAL_ENV" | head -n 1)
-session_secret_value="${session_secret_line#SESSION_SECRET=}"
-# Strip surrounding double quotes if the operator used the quoted form.
-session_secret_value="${session_secret_value%\"}"
-session_secret_value="${session_secret_value#\"}"
+session_secret_value=$(env_value SESSION_SECRET)
 if [ "${#session_secret_value}" -lt 32 ]; then
   echo "ERROR: SESSION_SECRET in $LOCAL_ENV must be at least 32 bytes (${#session_secret_value} found)." >&2
   echo "       Generate one with: openssl rand -base64 48" >&2
@@ -84,9 +103,11 @@ esac
 # explicitly opted into bootstrap mode. Mirror that check here so
 # deploy fails fast with a clearer message than a container crash
 # loop.
-if grep -qE "^PLEX_SERVER_ID=.+" "$LOCAL_ENV"; then
+plex_server_id_value=$(env_value PLEX_SERVER_ID || true)
+allow_unscoped_plex_login_value=$(env_value ALLOW_UNSCOPED_PLEX_LOGIN || true)
+if [[ -n "$plex_server_id_value" ]]; then
   : # populated — good
-elif grep -qE "^ALLOW_UNSCOPED_PLEX_LOGIN=1[[:space:]]*$" "$LOCAL_ENV"; then
+elif [[ "$allow_unscoped_plex_login_value" == "1" ]]; then
   echo "[deploy] WARN: PLEX_SERVER_ID is blank and ALLOW_UNSCOPED_PLEX_LOGIN=1 is set." >&2
   echo "         This means ANY Plex account can sign in. Use only for the brief" >&2
   echo "         first-deploy window — discover your machineIdentifier via the SPA's" >&2

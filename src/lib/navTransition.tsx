@@ -41,6 +41,11 @@ function markPlayed() {
   }
 }
 
+function prefersReducedMotion(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
 type Mode = 'transition' | 'replay'
 type Active = { mode: Mode; target: Route | null }
 
@@ -81,7 +86,7 @@ export function NavTransitionProvider({ children }: { children: ReactNode }) {
     // tabs frequently for ops work and the wait gets in the way.
     // Still mark it played so a non-admin signing in afterward
     // doesn't get an unexpected first-play.
-    if (isAdmin) {
+    if (isAdmin || prefersReducedMotion()) {
       markPlayed()
       navigate(next)
       return
@@ -96,6 +101,7 @@ export function NavTransitionProvider({ children }: { children: ReactNode }) {
 
   const replay = () => {
     if (active !== null) return
+    if (prefersReducedMotion()) return
     setActive({ mode: 'replay', target: null })
   }
 

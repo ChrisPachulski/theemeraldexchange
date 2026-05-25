@@ -75,6 +75,7 @@ IPTV_LIST_TIMEOUT_MS: Number(process.env.IPTV_LIST_TIMEOUT_MS ?? 30_000),
 IPTV_SYNC_CRON: process.env.IPTV_SYNC_CRON ?? '0 */6 * * *',
 IPTV_RECOMMENDER_EXPORT_SECRET: process.env.IPTV_RECOMMENDER_EXPORT_SECRET ?? '',
 IPTV_REMUX_TMP_DIR: process.env.IPTV_REMUX_TMP_DIR ?? '/tmp/iptv-remux',
+IPTV_PUBLIC_API_BASE_URL: process.env.IPTV_PUBLIC_API_BASE_URL ?? 'https://api.theemeraldexchange.com',
 ```
 
 - [ ] **Step 3: Document in .env.example**
@@ -93,6 +94,7 @@ IPTV_LIST_TIMEOUT_MS=30000
 IPTV_SYNC_CRON=0 */6 * * *
 IPTV_RECOMMENDER_EXPORT_SECRET=
 IPTV_REMUX_TMP_DIR=/tmp/iptv-remux
+IPTV_PUBLIC_API_BASE_URL=https://api.theemeraldexchange.com
 ```
 
 - [ ] **Step 4: Type-check**
@@ -2681,6 +2683,8 @@ export interface StreamClaims {
   resourceId: string
   sub: string
   exp: number
+  sessionId?: string
+  accessVersion?: number
 }
 
 const b64url = (b: Buffer): string => b.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
@@ -2696,13 +2700,15 @@ function sign(secret: string, body: string): string {
 
 export function signStreamToken(
   secret: string,
-  opts: { kind: StreamKind; resourceId: string; sub: string; ttlSecs: number },
+  opts: { kind: StreamKind; resourceId: string; sub: string; ttlSecs: number; sessionId?: string; accessVersion?: number },
 ): string {
   const claims: StreamClaims = {
     kind: opts.kind,
     resourceId: opts.resourceId,
     sub: opts.sub,
     exp: Math.floor(Date.now() / 1000) + opts.ttlSecs,
+    sessionId: opts.sessionId,
+    accessVersion: opts.accessVersion,
   }
   const body = payload(claims)
   const sig = sign(secret, body)
@@ -2738,6 +2744,39 @@ Expected: PASS.
 git add server/services/iptvStreamToken.ts server/services/iptvStreamToken.test.ts
 git commit -m "iptv: HMAC stream token util (sign+verify with TTL)"
 ```
+
+---
+
+### Task 4.1b: IPTV access-version revocation guard
+
+**Files:**
+- Create: `server/services/iptvAccessVersion.ts`
+
+- [ ] **Step 1: Add per-user access-version helpers**
+
+```typescript
+const versions = new Map<string, number>()
+
+export function currentIptvAccessVersion(sub: string): number {
+  return versions.get(sub) ?? 1
+}
+
+export function bumpIptvAccessVersion(sub: string): number {
+  const next = currentIptvAccessVersion(sub) + 1
+  versions.set(sub, next)
+  return next
+}
+
+export function assertIptvAccessVersion(sub: string, tokenVersion?: number): void {
+  if (tokenVersion == null || tokenVersion !== currentIptvAccessVersion(sub)) {
+    throw new Error('access_revoked')
+  }
+}
+```
+
+- [ ] **Step 2: Wire revocation points**
+
+Call `bumpIptvAccessVersion(sub)` whenever `/api/me` or the auth gate discovers that a Plex user lost household/app access. Every token-authenticated stream route must call `assertIptvAccessVersion` after HMAC verification and before opening upstream.
 
 ---
 
@@ -2921,6 +2960,7 @@ Append to `server/routes/iptv.ts`:
 ```typescript
 import { signStreamToken, verifyStreamToken } from '../services/iptvStreamToken.js'
 import { streamConcurrency } from '../services/iptvConcurrency.js'
+import { assertIptvAccessVersion, currentIptvAccessVersion } from '../services/iptvAccessVersion.js'
 import { credsFromEnv } from '../services/xtream.js'
 import { env } from '../env.js'
 
@@ -2939,13 +2979,14 @@ iptv.post('/stream/live/:streamId/grant', (c) => {
   const streamId = c.req.param('streamId')
   if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
   const { sub } = userOf(c)
+  const accessVersion = currentIptvAccessVersion(sub)
   const sessionId = `live:${streamId}:${sub}:${Date.now()}`
   const acquired = streamConcurrency().tryAcquire({ sub, sessionId })
   if (!acquired.ok) return c.json(acquired, 429)
 
   if (clientWantsAvplayer(c)) {
     const token = signStreamToken(env.SESSION_SECRET, {
-      kind: 'remux', resourceId: streamId, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
+      kind: 'remux', resourceId: streamId, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS, sessionId, accessVersion,
     })
     return c.json({
       url: `/api/iptv/stream/live/${streamId}/remux/index.m3u8?t=${token}`,
@@ -2954,7 +2995,7 @@ iptv.post('/stream/live/:streamId/grant', (c) => {
   }
 
   const token = signStreamToken(env.SESSION_SECRET, {
-    kind: 'live', resourceId: streamId, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
+    kind: 'live', resourceId: streamId, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS, sessionId, accessVersion,
   })
   return c.json({
     url: `/api/iptv/stream/live/${streamId}.ts?t=${token}`,
@@ -2962,37 +3003,59 @@ iptv.post('/stream/live/:streamId/grant', (c) => {
   })
 })
 
-function checkToken(c: any, expectKind: string, resourceId: string): { ok: true; sub: string } | { ok: false; resp: Response } {
+function checkToken(c: any, expectKind: string, resourceId: string): { ok: true; sub: string; sessionId?: string; accessVersion?: number } | { ok: false; resp: Response } {
   const t = c.req.query('t') ?? ''
   try {
     const claims = verifyStreamToken(env.SESSION_SECRET, t)
     if (claims.kind !== expectKind || claims.resourceId !== resourceId) {
       return { ok: false, resp: c.json({ error: 'token_mismatch' }, 401) }
     }
-    return { ok: true, sub: claims.sub }
+    assertTokenSubjectStillAllowed(claims.sub, claims.accessVersion)
+    return { ok: true, sub: claims.sub, sessionId: claims.sessionId, accessVersion: claims.accessVersion }
   } catch (err) {
     return { ok: false, resp: c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401) }
   }
+}
+
+function assertTokenSubjectStillAllowed(sub: string, accessVersion?: number): void {
+  assertIptvAccessVersion(sub, accessVersion)
 }
 
 iptv.get('/stream/live/:streamId.ts', async (c) => {
   const streamId = c.req.param('streamId')
   const v = checkToken(c, 'live', streamId)
   if (!v.ok) return v.resp
+  if (!v.sessionId) return c.json({ error: 'missing_session' }, 401)
+  const acquired = streamConcurrency().tryAcquire({ sub: v.sub, sessionId: v.sessionId })
+  if (!acquired.ok) return c.json(acquired, 429)
   const creds = credsFromEnv()
   const upstreamUrl = `${creds.host}/live/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${streamId}.ts`
 
   const controller = new AbortController()
   c.req.raw.signal.addEventListener('abort', () => controller.abort(), { once: true })
 
+  const heartbeat = setInterval(() => streamConcurrency().heartbeat(v.sessionId!), 15_000)
+  const release = () => {
+    clearInterval(heartbeat)
+    streamConcurrency().release(v.sessionId!)
+  }
+  c.req.raw.signal.addEventListener('abort', release, { once: true })
   const upstream = await fetch(upstreamUrl, {
     signal: controller.signal,
     headers: { 'User-Agent': 'IPTVSmarters' },
   })
   if (!upstream.ok || !upstream.body) {
+    release()
     return c.json({ error: `upstream_${upstream.status}` }, 502)
   }
-  return new Response(upstream.body, {
+  const body = upstream.body.pipeThrough(new TransformStream({
+    transform(chunk, controller) {
+      streamConcurrency().heartbeat(v.sessionId!)
+      controller.enqueue(chunk)
+    },
+    flush: release,
+  }))
+  return new Response(body, {
     status: 200,
     headers: {
       'Content-Type': 'video/mp2t',
@@ -3059,10 +3122,11 @@ iptv.post('/stream/vod/:streamId/grant', (c) => {
   const detail = getVodDetail(iptvDb(), Number(streamId))
   if (!detail) return c.json({ error: 'not_found' }, 404)
   const ext = (detail.container_extension ?? 'mp4').toLowerCase()
+  const accessVersion = currentIptvAccessVersion(sub)
   const acquired = streamConcurrency().tryAcquire({ sub, sessionId: `vod:${streamId}:${sub}:${Date.now()}` })
   if (!acquired.ok) return c.json(acquired, 429)
   const token = signStreamToken(env.SESSION_SECRET, {
-    kind: 'vod', resourceId: streamId, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
+    kind: 'vod', resourceId: streamId, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS, sessionId: acquired.sessionId, accessVersion,
   })
   const delivery: 'hls' | 'progressive' = ext === 'm3u8' ? 'hls' : 'progressive'
   return c.json({
@@ -3114,10 +3178,11 @@ iptv.post('/stream/series/:episodeId/grant', (c) => {
     .get(episodeId) as { container_extension: string | null } | undefined
   if (!row) return c.json({ error: 'not_found' }, 404)
   const ext = (row.container_extension ?? 'mp4').toLowerCase()
+  const accessVersion = currentIptvAccessVersion(sub)
   const acquired = streamConcurrency().tryAcquire({ sub, sessionId: `series:${episodeId}:${sub}:${Date.now()}` })
   if (!acquired.ok) return c.json(acquired, 429)
   const token = signStreamToken(env.SESSION_SECRET, {
-    kind: 'series', resourceId: episodeId, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
+    kind: 'series', resourceId: episodeId, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS, sessionId: acquired.sessionId, accessVersion,
   })
   const delivery: 'hls' | 'progressive' = ext === 'm3u8' ? 'hls' : 'progressive'
   return c.json({
@@ -3256,16 +3321,53 @@ Replace the stub `rewriteHlsPlaylist` in `server/routes/iptv.ts` with:
 ```typescript
 import { rewriteManifest } from '../services/iptvHlsRewrite.js'
 
+function allowedStreamUrl(raw: string): URL | null {
+  let url: URL
+  try { url = new URL(raw) } catch { return null }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
+
+  const host = url.hostname.toLowerCase()
+  const configuredHost = new URL(credsFromEnv().host).host
+  const allowed = new Set([
+    configuredHost,
+    ...env.IPTV_STREAM_ALLOWED_HOSTS,
+  ])
+  if (!allowed.has(url.host)) return null
+
+  const privateHost =
+    host === 'localhost' ||
+    host === '0.0.0.0' ||
+    host === '::1' ||
+    host.startsWith('127.') ||
+    host.startsWith('169.254.') ||
+    host.startsWith('10.') ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
+    host.startsWith('192.168.')
+  if (privateHost && url.host !== configuredHost) return null
+
+  return url
+}
+
 async function rewriteHlsPlaylist(c: any, upstreamUrl: string): Promise<Response> {
-  const upstream = await fetch(upstreamUrl)
+  const playlistUrl = allowedStreamUrl(upstreamUrl)
+  if (!playlistUrl) return c.json({ error: 'upstream_not_allowed' }, 403)
+  const upstream = await fetch(playlistUrl)
   if (!upstream.ok) return c.json({ error: `upstream_${upstream.status}` }, 502)
   const text = await upstream.text()
   const { sub } = userOf(c)
-  const sign = (url: string) =>
-    signStreamToken(env.SESSION_SECRET, {
-      kind: 'segment', resourceId: url, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
+  const sign = (url: string) => {
+    const mediaUrl = allowedStreamUrl(url)
+    if (!mediaUrl) throw new Error('upstream_not_allowed')
+    return signStreamToken(env.SESSION_SECRET, {
+      kind: 'segment', resourceId: mediaUrl.toString(), sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
     })
-  const rewritten = rewriteManifest(text, upstreamUrl, sign, '/api/iptv/stream/segment')
+  }
+  let rewritten: string
+  try {
+    rewritten = rewriteManifest(text, playlistUrl.toString(), sign, '/api/iptv/stream/segment')
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : 'manifest_rewrite_failed' }, 403)
+  }
   return new Response(rewritten, {
     status: 200,
     headers: {
@@ -3285,22 +3387,17 @@ iptv.get('/stream/segment', async (c) => {
     return c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401)
   }
   const upstream = claims.resourceId
-  // Whitelist upstream host = the configured Xtream host (or its CDN host if the panel uses one).
-  const allowedHost = new URL(credsFromEnv().host).host
-  let url: URL
-  try { url = new URL(upstream) } catch { return c.json({ error: 'bad_upstream' }, 400) }
-  // Allow same host OR any sub-segment served from upstream (panels often use CDN subdomains).
-  // We accept anything since the URL is HMAC-signed by us — the signature is the trust anchor.
-  void allowedHost
+  const url = allowedStreamUrl(upstream)
+  if (!url) return c.json({ error: 'upstream_not_allowed' }, 403)
   // Sub-playlists need rewriting too; segments are pass-through.
   if (url.pathname.endsWith('.m3u8')) {
-    return await rewriteHlsPlaylist(c, upstream)
+    return await rewriteHlsPlaylist(c, url.toString())
   }
   // Bytestream pass-through with optional Range.
   const controller = new AbortController()
   c.req.raw.signal.addEventListener('abort', () => controller.abort(), { once: true })
   const range = c.req.header('range')
-  const upstreamRes = await fetch(upstream, { signal: controller.signal, headers: range ? { Range: range } : {} })
+  const upstreamRes = await fetch(url, { signal: controller.signal, headers: range ? { Range: range } : {} })
   if (!upstreamRes.ok || !upstreamRes.body) return c.json({ error: `upstream_${upstreamRes.status}` }, 502)
   const headers = new Headers()
   const ct = upstreamRes.headers.get('content-type') ?? 'application/octet-stream'
@@ -5021,12 +5118,14 @@ Append to `server/routes/iptv.ts`:
 ```typescript
 iptv.post('/playlist/token', (c) => {
   const { sub } = userOf(c)
-  // 30-day TTL — long enough to drop in an external player and forget, short enough that revoking access via /api/me eventually bites.
-  const ttl = 30 * 24 * 3600
+  const accessVersion = currentIptvAccessVersion(sub)
+  // 12-hour TTL keeps external-player handoff usable while bounding leaked or already-exported URLs.
+  // Bump the per-user access version whenever Plex membership or app access changes.
+  const ttl = 12 * 3600
   const token = signStreamToken(env.SESSION_SECRET, {
-    kind: 'playlist', resourceId: 'all', sub, ttlSecs: ttl,
+    kind: 'playlist', resourceId: 'all', sub, ttlSecs: ttl, accessVersion,
   })
-  const baseUrl = c.req.header('origin') ?? ''
+  const baseUrl = env.IPTV_PUBLIC_API_BASE_URL.replace(/\/+$/, '')
   return c.json({
     url: `${baseUrl}/api/iptv/playlist.m3u?t=${token}`,
     expiresAt: new Date(Date.now() + ttl * 1000).toISOString(),
@@ -5039,6 +5138,7 @@ iptv.get('/playlist.m3u', (c) => {
   try {
     claims = verifyStreamToken(env.SESSION_SECRET, t)
     if (claims.kind !== 'playlist') throw new Error('kind_mismatch')
+    assertTokenSubjectStillAllowed(claims.sub, claims.accessVersion)
   } catch (err) {
     return c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401)
   }
@@ -5051,14 +5151,12 @@ iptv.get('/playlist.m3u', (c) => {
     catNames.set(row.category_id, row.name)
   }
 
-  // Per-channel HMAC tokens with a long TTL too — external players cache the M3U and re-resolve URLs lazily.
-  // Re-use the playlist sub for each token so revocation cascades.
-  const baseUrl = `${c.req.header('host') ? `${new URL(c.req.url).protocol}//${c.req.header('host')}` : ''}`
-  const chTtl = 30 * 24 * 3600
+  const baseUrl = env.IPTV_PUBLIC_API_BASE_URL.replace(/\/+$/, '')
+  const chTtl = 15 * 60
   const lines: string[] = ['#EXTM3U']
   for (const ch of channels) {
     const chToken = signStreamToken(env.SESSION_SECRET, {
-      kind: 'live', resourceId: String(ch.stream_id), sub: claims.sub, ttlSecs: chTtl,
+      kind: 'live', resourceId: String(ch.stream_id), sub: claims.sub, ttlSecs: chTtl, accessVersion: claims.accessVersion,
     })
     const url = `${baseUrl}/api/iptv/stream/live/${ch.stream_id}.ts?t=${chToken}`
     const groupTitle = ch.category_id != null ? (catNames.get(ch.category_id) ?? 'Other') : 'Other'
@@ -5714,11 +5812,3 @@ Plan complete and saved to `docs/superpowers/plans/2026-05-24-mybunny-viewer-m1.
 **2. Inline Execution** — Execute tasks in this session using `superpowers:executing-plans`, batch execution with checkpoints for review.
 
 **Which approach?**
-
-
-
-
-
-
-
-

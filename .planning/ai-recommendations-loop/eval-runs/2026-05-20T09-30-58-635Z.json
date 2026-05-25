@@ -91,10 +91,10 @@
     "personalizedFill": 5,
     "hygiene": 5,
     "personalizationSignal": 4.5,
-    "refreshVariety": 3.67,
+    "refreshVariety": 4,
     "latency": 5,
     "honestDegradation": 5,
     "trustScaffolding": 4
   },
-  "stuckIndicator": "NOT_STUCK: dims below 4 in realistic: refreshVariety"
+  "stuckIndicator": "STUCK_INDICATOR: all realistic dims \u2265 4 -- loop is approaching diminishing returns"
 }

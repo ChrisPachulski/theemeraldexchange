@@ -61,3 +61,29 @@ export async function fetchWithTimeout(
     clearTimeout(timer)
   }
 }
+
+export async function fetchJsonWithTimeout(
+  url: string | URL,
+  init: RequestInit,
+  timeoutMs: number,
+  label: string,
+): Promise<unknown> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal })
+    if (!response.ok) throw new Error(`${label}_${response.status}`)
+    return response.json()
+  } catch (err) {
+    const name = (err as { name?: string }).name
+    const message = err instanceof Error ? err.message : String(err)
+    if (name !== 'AbortError' && message.startsWith(`${label}_`)) {
+      throw err
+    }
+    const reason = name === 'AbortError' ? 'upstream_timeout' : 'upstream_unreachable'
+    console.error(`[upstream] ${label} ${reason}: ${message}`)
+    throw new Error(`${label}_${reason}`)
+  } finally {
+    clearTimeout(timer)
+  }
+}

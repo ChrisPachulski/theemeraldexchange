@@ -16,6 +16,7 @@ import { serve } from '@hono/node-server'
 import { env } from './env.js'
 import { app } from './app.js'
 import { registerIptvSchedule } from './services/iptvScheduler.js'
+import { closeIptvDb } from './services/iptvDbSingleton.js'
 
 serve(
   { fetch: app.fetch, port: env.port },
@@ -30,3 +31,11 @@ serve(
 if (env.XTREAM_HOST && env.XTREAM_USERNAME && env.XTREAM_PASSWORD) {
   void registerIptvSchedule(env.IPTV_SYNC_CRON)
 }
+
+function shutdown(signal: NodeJS.Signals): void {
+  closeIptvDb()
+  process.exit(signal === 'SIGINT' ? 130 : 143)
+}
+
+process.once('SIGINT', shutdown)
+process.once('SIGTERM', shutdown)
