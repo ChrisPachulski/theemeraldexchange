@@ -19,6 +19,7 @@ import {
   setDislike,
   clearFeedback,
   anotherUserDislikes,
+  FeedbackQuotaError,
   type FeedbackKind,
   type FeedbackSignal,
 } from '../services/userFeedback.js'
@@ -195,6 +196,11 @@ feedback.post('/', async (c) => {
     }
   }
   return c.json({ ok: true })
+  }).catch((err) => {
+    if (err instanceof FeedbackQuotaError) {
+      return c.json({ error: 'feedback_quota_exceeded', signal: err.signal, limit: err.limit }, 409)
+    }
+    throw err
   })
 })
 

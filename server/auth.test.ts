@@ -111,14 +111,17 @@ describe('POST /auth/plex/pin', () => {
     expect(body.authUrl).toContain('code=abc')
   })
 
-  it('rate-limits excessive PIN creation by client IP', async () => {
+  it('rate-limits excessive PIN creation without trusting spoofable forwarding headers', async () => {
     stubPlex({})
-    const headers = { 'x-forwarded-for': '203.0.113.10' }
     for (let i = 0; i < 10; i++) {
+      const headers = { 'x-forwarded-for': `203.0.113.${i}` }
       const r = await app().request('/auth/plex/pin', { method: 'POST', headers })
       expect(r.status).toBe(200)
     }
-    const r = await app().request('/auth/plex/pin', { method: 'POST', headers })
+    const r = await app().request('/auth/plex/pin', {
+      method: 'POST',
+      headers: { 'x-forwarded-for': '203.0.113.200' },
+    })
     expect(r.status).toBe(429)
     expect(await r.json()).toEqual({ error: 'rate_limited' })
   })
@@ -136,10 +139,10 @@ describe('POST /auth/plex/check', () => {
     expect(await r.json()).toEqual({ status: 'pending' })
   })
 
-  it('allows normal polling but rate-limits excessive PIN checks by client IP', async () => {
+  it('allows normal polling but does not let rotated forwarding headers bypass PIN-check limits', async () => {
     stubPlex({ authToken: null })
-    const headers = { 'Content-Type': 'application/json', 'x-forwarded-for': '203.0.113.11' }
     for (let i = 0; i < 60; i++) {
+      const headers = { 'Content-Type': 'application/json', 'x-forwarded-for': `203.0.113.${i}` }
       const r = await app().request('/auth/plex/check', {
         method: 'POST',
         headers,
@@ -149,7 +152,7 @@ describe('POST /auth/plex/check', () => {
     }
     const r = await app().request('/auth/plex/check', {
       method: 'POST',
-      headers,
+      headers: { 'Content-Type': 'application/json', 'x-forwarded-for': '203.0.113.200' },
       body: JSON.stringify({ pinId: 12345 }),
     })
     expect(r.status).toBe(429)
