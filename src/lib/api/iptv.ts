@@ -75,6 +75,30 @@ export type ChannelDto = {
   tv_archive_duration: number | null
 }
 
+export type EpgProgrammeDto = {
+  channel_id: string
+  start_utc: string
+  stop_utc: string
+  title: string | null
+  description: string | null
+}
+
+export type EpgNowRow = {
+  channel_stream_id: number
+  current: EpgProgrammeDto | null
+  next: EpgProgrammeDto | null
+}
+
+export type EpgGridDto = {
+  stream_id: number
+  num: number
+  name: string
+  epg_channel_id: string | null
+  tv_archive: number
+  tv_archive_duration: number | null
+  programmes: EpgProgrammeDto[]
+}
+
 export type VodDto = {
   stream_id: number
   name: string
@@ -180,6 +204,13 @@ export const iptvApi = Object.assign({
   history: (limit = 50) => get<HistoryRow[]>('/history', { limit }),
   putHistory: (input: PutHistoryInput) => post<void>('/history', input),
 }, {
+  epgNow: (channelIds: number[]) => get<EpgNowRow[]>('/epg/now', {
+    channelIds: channelIds.join(','),
+  }),
+  epgChannel: (channelId: number, fromIso: string, toIso: string) =>
+    get<EpgProgrammeDto[]>(`/epg/channel/${channelId}`, { from: fromIso, to: toIso }),
+  epgGrid: (fromIso: string, toIso: string, categoryId?: number) =>
+    get<EpgGridDto[]>('/epg/grid', { from: fromIso, to: toIso, categoryId }),
   grantLive: (streamId: string, opts?: { avplayer?: boolean }) => {
     const avplayer = opts?.avplayer ?? preferAvplayer()
     const suffix = avplayer ? '?client=avplayer' : ''
@@ -187,4 +218,6 @@ export const iptvApi = Object.assign({
   },
   grantVod: (streamId: string) => post<StreamGrant>(`/stream/vod/${streamId}/grant`),
   grantSeries: (episodeId: string) => post<StreamGrant>(`/stream/series/${episodeId}/grant`),
+  grantCatchup: (streamId: number, startUtc: string, durationMin: number) =>
+    post<StreamGrant>(`/stream/catchup/${streamId}/grant?startUtc=${encodeURIComponent(startUtc)}&durationMin=${durationMin}`),
 })
