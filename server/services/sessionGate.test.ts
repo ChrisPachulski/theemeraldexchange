@@ -58,14 +58,14 @@ describe('reconcileSession — role recompute', () => {
   it('downgrades a cookie-claimed admin whose username is not in ADMINS', async () => {
     // The cookie can outlive an ADMINS edit; the reconcile must trust
     // env.admins over the stored role claim.
-    _primeSessionGateCache(baseSession.sub, 'member')
+    _primeSessionGateCache(baseSession.sub, 'member', baseSession.plexAuthToken)
     const r = await reconcileSession({ ...baseSession, role: 'admin' })
     expect(r).not.toBeNull()
     expect(r!.role).toBe('user')
   })
 
   it('upgrades a cookie-claimed user whose username IS in ADMINS', async () => {
-    _primeSessionGateCache(baseSession.sub, 'member')
+    _primeSessionGateCache(baseSession.sub, 'member', baseSession.plexAuthToken)
     const r = await reconcileSession({
       ...baseSession,
       username: 'admin-user',
@@ -157,6 +157,21 @@ describe('reconcileSession — membership revalidation', () => {
     await reconcileSession(baseSession)
     await reconcileSession(baseSession)
     await reconcileSession(baseSession)
+    expect(calls).toBe(1)
+  })
+
+  it('does not authorize a different revoked token from a member cache hit', async () => {
+    let calls = 0
+    _primeSessionGateCache(baseSession.sub, 'member', 'valid-token')
+    probeImpl.fn = async (token: string) => {
+      calls++
+      if (token === 'revoked-token') return { kind: 'http_error', status: 401 }
+      return { kind: 'network_error' }
+    }
+
+    const r = await reconcileSession({ ...baseSession, plexAuthToken: 'revoked-token' })
+
+    expect(r).toBeNull()
     expect(calls).toBe(1)
   })
 

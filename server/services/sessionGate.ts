@@ -23,6 +23,7 @@
 //     prior cached status — a plex.tv outage shouldn't lock everyone
 //     out of the dashboard.
 
+import { createHash } from 'crypto'
 import { env } from '../env.js'
 import { probeResources } from '../plex.js'
 import type { Role, Session } from '../session.js'
@@ -34,8 +35,12 @@ const MAX_CACHE_ENTRIES = 1000
 type Status = 'member' | 'not_member'
 type CheckStatus = Status | 'auth_revoked' | 'unknown'
 
-type Cached = { status: Status; checkedAt: number }
+type Cached = { status: Status; checkedAt: number; tokenFingerprint?: string }
 const cache = new Map<string, Cached>()
+
+function fingerprintToken(token: string): string {
+  return createHash('sha256').update(token).digest('base64url')
+}
 
 function setCached(sub: string, cached: Cached): void {
   if (cache.has(sub)) cache.delete(sub)
@@ -54,8 +59,18 @@ export function _resetSessionGateCacheForTests(): void {
 // Seed the cache after a successful PIN check so the first protected
 // request doesn't re-hit plex.tv. The login path already verified
 // membership, so any seed here is fresh.
-export function _primeSessionGateCache(sub: string, status: Status = 'member'): void {
-  setCached(sub, { status, checkedAt: Date.now() })
+export function _primeSessionGateCache(
+  sub: string,
+  status: Status = 'member',
+  plexAuthToken?: string,
+): void {
+  setCached(sub, {
+    status,
+    checkedAt: Date.now(),
+    tokenFingerprint: status === 'member' && plexAuthToken
+      ? fingerprintToken(plexAuthToken)
+      : undefined,
+  })
 }
 
 export function roleFor(username: string): Role {
@@ -98,10 +113,11 @@ export async function reconcileSession(session: Session): Promise<Session | null
   }
 
   const now = Date.now()
+  const tokenFingerprint = fingerprintToken(session.plexAuthToken)
   const cached = cache.get(session.sub)
   if (cached && now - cached.checkedAt < REVALIDATE_TTL_MS) {
     if (cached.status === 'not_member') return null
-    return { ...session, role }
+    if (cached.tokenFingerprint === tokenFingerprint) return { ...session, role }
   }
 
   const status = await checkMembership(session.plexAuthToken)
@@ -109,13 +125,20 @@ export async function reconcileSession(session: Session): Promise<Session | null
     // plex.tv hiccup. Fall back to the prior cached answer if any —
     // if we've never had a definitive answer for this sub, allow the
     // request rather than locking everyone out.
-    if (cached) return cached.status === 'not_member' ? null : { ...session, role }
+    if (cached) {
+      if (cached.status === 'not_member') return null
+      if (cached.tokenFingerprint === tokenFingerprint) return { ...session, role }
+    }
     return { ...session, role }
   }
 
   if (status === 'auth_revoked') return null
 
-  setCached(session.sub, { status, checkedAt: now })
+  setCached(session.sub, {
+    status,
+    checkedAt: now,
+    tokenFingerprint: status === 'member' ? tokenFingerprint : undefined,
+  })
   if (status === 'not_member') return null
   return { ...session, role }
 }

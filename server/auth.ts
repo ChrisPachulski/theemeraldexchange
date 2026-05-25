@@ -208,7 +208,7 @@ auth.post('/plex/check', async (c) => {
   // doesn't re-hit plex.tv — the membership check we just performed
   // (or the bootstrap "no PLEX_SERVER_ID" path) IS the freshest possible
   // evidence we'll get.
-  _primeSessionGateCache(String(user.id), 'member')
+  _primeSessionGateCache(String(user.id), 'member', pin.authToken)
 
   return c.json({
     status: 'authorized',
