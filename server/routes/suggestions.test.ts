@@ -475,6 +475,7 @@ describe('suggestions route — gating', () => {
   it('200 on valid type with cold-start library (no Claude call)', async () => {
     // Stub upstreams to empty so the route exits cleanly via the
     // cold-start branch without touching real APIs.
+    _setTmdbApiKeyForTests('test-key')
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => new Response('[]', { status: 200, headers: { 'Content-Type': 'application/json' } })),
@@ -987,6 +988,7 @@ describe('suggestions route — retry fires for pre-validate title failures (pf 
 
 describe('suggestions route — library cache and in-flight coalescing', () => {
   it('two concurrent requests share one Sonarr fetch (in-flight coalescing)', async () => {
+    _setTmdbApiKeyForTests('test-key')
     // Two simultaneous requests for the same library kind should result in
     // only ONE Sonarr fetch call, not two. The in-flight promise coalescing
     // (libraryInFlight map) handles this. Both requests resolve from the
@@ -1107,6 +1109,7 @@ describe('suggestions route — prompt shape', () => {
   ]
 
   function stubFetchForSonarr() {
+    _setTmdbApiKeyForTests('test-key')
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: unknown) => {
@@ -1350,6 +1353,7 @@ describe('suggestions route — prompt shape', () => {
   })
 
   it('injects a PRIORITY TASTE SIGNAL volatile block after the cached library when library size exceeds the trigger', async () => {
+    _setTmdbApiKeyForTests('test-key')
     // Library big enough to trip the priority-taste trigger (>=60 items).
     const bigLib = Array.from({ length: 70 }, (_, i) => ({
       title: `Show ${i}`,
@@ -2683,6 +2687,7 @@ describe('suggestions route — TMDB validation', () => {
   })
 
   it('emits a Server-Timing response header with phase durations', async () => {
+    _setTmdbApiKeyForTests('test-key')
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: unknown) => {
