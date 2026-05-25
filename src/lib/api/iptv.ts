@@ -220,4 +220,5 @@ export const iptvApi = Object.assign({
   grantSeries: (episodeId: string) => post<StreamGrant>(`/stream/series/${episodeId}/grant`),
   grantCatchup: (streamId: number, startUtc: string, durationMin: number) =>
     post<StreamGrant>(`/stream/catchup/${streamId}/grant?startUtc=${encodeURIComponent(startUtc)}&durationMin=${durationMin}`),
+  generatePlaylist: () => post<{ url: string; expiresAt: string }>('/playlist/token'),
 })
