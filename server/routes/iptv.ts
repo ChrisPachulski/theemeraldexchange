@@ -51,6 +51,8 @@ iptv.get('/health', async (c) => {
 })
 
 const KINDS = new Set(['live', 'vod', 'series'])
+const FAV_KINDS = new Set(['live', 'vod', 'series'])
+const HIST_KINDS = new Set(['live', 'vod', 'series_episode'])
 
 iptv.get('/categories', (c) => {
   const kind = c.req.query('kind') ?? ''
@@ -96,6 +98,75 @@ function userOf(c: Context<Env>): { sub: string } {
   }
   throw new Error('missing_user')
 }
+
+iptv.get('/favorites', (c) => {
+  const { sub } = userOf(c)
+  const rows = iptvDb().stmts.getFavorites.all(sub)
+  return c.json(rows)
+})
+
+iptv.post('/favorites', async (c) => {
+  const { sub } = userOf(c)
+  const body = await c.req.json().catch(() => ({})) as { kind?: unknown; itemId?: unknown }
+  if (typeof body.kind !== 'string' || !FAV_KINDS.has(body.kind)) return c.json({ error: 'invalid_kind' }, 400)
+  if (typeof body.itemId !== 'string' || body.itemId.length === 0) return c.json({ error: 'invalid_item' }, 400)
+
+  iptvDb().stmts.addFavorite.run({
+    sub,
+    kind: body.kind,
+    item_id: body.itemId,
+    added_ts: new Date().toISOString(),
+  })
+  return c.body(null, 201)
+})
+
+iptv.delete('/favorites/:kind/:itemId', (c) => {
+  const { sub } = userOf(c)
+  const kind = c.req.param('kind')
+  const itemId = c.req.param('itemId')
+  if (!FAV_KINDS.has(kind)) return c.json({ error: 'invalid_kind' }, 400)
+  iptvDb().stmts.removeFavorite.run({ sub, kind, item_id: itemId })
+  return c.body(null, 204)
+})
+
+function parseHistoryLimit(rawLimit: string | undefined): number {
+  if (rawLimit == null || rawLimit === '') return 50
+  const parsed = Number(rawLimit)
+  if (!Number.isFinite(parsed)) return 50
+  return Math.min(100, Math.max(1, Math.floor(parsed)))
+}
+
+iptv.get('/history', (c) => {
+  const { sub } = userOf(c)
+  const rows = iptvDb().stmts.getHistory.all(sub, parseHistoryLimit(c.req.query('limit')))
+  return c.json(rows)
+})
+
+iptv.post('/history', async (c) => {
+  const { sub } = userOf(c)
+  const body = await c.req.json().catch(() => ({})) as {
+    kind?: unknown
+    itemId?: unknown
+    positionSecs?: unknown
+    durationSecs?: unknown
+    completed?: unknown
+  }
+  if (typeof body.kind !== 'string' || !HIST_KINDS.has(body.kind)) return c.json({ error: 'invalid_kind' }, 400)
+  if (typeof body.itemId !== 'string' || body.itemId.length === 0) return c.json({ error: 'invalid_item' }, 400)
+
+  const positionSecs = Number(body.positionSecs ?? 0)
+  const durationSecs = body.durationSecs == null ? null : Number(body.durationSecs)
+  iptvDb().stmts.putHistory.run({
+    sub,
+    kind: body.kind,
+    item_id: body.itemId,
+    position_secs: Number.isFinite(positionSecs) ? Math.max(0, Math.floor(positionSecs)) : 0,
+    duration_secs: durationSecs != null && Number.isFinite(durationSecs) ? Math.max(0, Math.floor(durationSecs)) : null,
+    watched_at: new Date().toISOString(),
+    completed: body.completed ? 1 : 0,
+  })
+  return c.body(null, 201)
+})
 
 function clientWantsAvplayer(c: Context<Env>): boolean {
   return c.req.query('client') === 'avplayer'
