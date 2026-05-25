@@ -24,6 +24,7 @@ export type GrabEventType =
   | 'no_releases'
   | 'all_rejected_by_cap'
   | 'all_rejected_by_profile'
+  | 'planned_size_exceeds_free_space'
   | 'grab_succeeded'
   | 'grab_failed'
 
@@ -37,6 +38,9 @@ export type GrabEvent = {
   status?: number
   scanned?: number
   eligible?: number
+  plannedBytes?: number
+  freeBytes?: number
+  thresholdBytes?: number
   release?: {
     title: string
     sizeBytes: number

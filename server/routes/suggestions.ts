@@ -30,7 +30,7 @@ import { radarrFetch } from '../services/radarr.js'
 import { getRejections, updateRejectionTitleIfPresent } from '../services/rejections.js'
 import { getUserFeedback, updateLikedTitleIfPresent } from '../services/userFeedback.js'
 import { appendUsageEvent, computeCostCents } from '../services/usageLog.js'
-import { scoreOnce, postShown, type RecommenderScoredItem } from '../services/recommender.js'
+import { scoreOnce, postShown, postImpressions, type RecommenderScoredItem } from '../services/recommender.js'
 import { sanitizeTitle } from '../services/sanitize.js'
 import { env } from '../env.js'
 
@@ -67,7 +67,7 @@ export const suggestions = new Hono<Env>()
 suggestions.use('*', requireAuth)
 
 // /:type below is a GET, but with USE_LOCAL_RECOMMENDER=1 it writes
-// rec_log and recently_shown via the sidecar's /score endpoint. The
+// rec_log and recently_shown via the sidecar impression endpoint. The
 // global CSRF gate skips GETs, so without an explicit Origin check
 // here a hostile page could fire a credentialed GET (cookies are
 // SameSite=None in prod) and poison a victim's recommendation
@@ -140,6 +140,7 @@ type LibraryItem = SonarrSeries | RadarrMovie
 // hitting refresh on both Movies and TV at the same time, or two
 // users mounting simultaneously) collapses to a single upstream call.
 const LIBRARY_CACHE_TTL_MS = 30_000
+const LIBRARY_FAILURE_CACHE_TTL_MS = 15_000
 const LIBRARY_STALE_FALLBACK_MAX_AGE_MS = 24 * 60 * 60 * 1000
 const libraryCache: { [k in 'movie' | 'tv']?: { items: LibraryItem[]; expiresAt: number } } = {}
 const libraryInFlight: { [k in 'movie' | 'tv']?: Promise<LibraryItem[]> } = {}
@@ -238,6 +239,7 @@ async function fetchLibraryCached(kind: 'movie' | 'tv'): Promise<LibraryItem[]> 
           `[suggestions] ${kind} library fetch failed, serving stale snapshot of ${stale.items.length} items (${Math.round(ageMs / 3_600_000)}h old):`,
           err instanceof Error ? err.message : String(err),
         )
+        libraryCache[kind] = { items: stale.items, expiresAt: Date.now() + LIBRARY_FAILURE_CACHE_TTL_MS }
         return stale.items
       }
       console.error(
@@ -1987,6 +1989,20 @@ suggestions.get('/:type', async (c) => {
       if (fill.length > 0) {
         void postShown(session.sub, type, fill.map((it) => it.id))
       }
+    }
+    const recById = new Map(recItems.map((it) => [it.tmdb_id, it]))
+    const renderedRecImpressions = items
+      .map((it, rank) => ({ item: recById.get(it.id), rank }))
+      .filter((entry): entry is { item: RecommenderScoredItem; rank: number } => entry.item !== undefined)
+      .map(({ item, rank }) => ({
+        tmdb_id: item.tmdb_id,
+        rank,
+        score: item.score,
+        provenance: item.provenance,
+        model_version: modelVersion,
+      }))
+    if (renderedRecImpressions.length > 0) {
+      void postImpressions(session.sub, type, renderedRecImpressions)
     }
 
     setTimingHeader()

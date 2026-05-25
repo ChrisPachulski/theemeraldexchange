@@ -64,21 +64,28 @@ def main() -> int:
           r.sub,
           r.kind,
           r.tmdb_id,
-          o.outcome
+          o.outcome,
+          o.ts
         FROM rec_log r
         JOIN rec_outcomes o ON o.rec_id = r.id
         WHERE datetime(r.ts) >= datetime('now', '-{LOOKBACK_DAYS} days')
+        ORDER BY datetime(o.ts) ASC, r.id ASC
         """
     )
 
-    by_user: dict[tuple[str, str], dict[str, set[int]]] = {}
+    latest_by_title: dict[tuple[str, str, int], tuple[str, str]] = {}
     for r in rows:
-        key = (r["sub"], r["kind"])
+        key = (r["sub"], r["kind"], r["tmdb_id"])
+        latest_by_title[key] = (r["outcome"], r["ts"])
+
+    by_user: dict[tuple[str, str], dict[str, set[int]]] = {}
+    for (sub, kind, tmdb_id), (outcome, _ts) in latest_by_title.items():
+        key = (sub, kind)
         bucket = by_user.setdefault(key, {"positives": set(), "negatives": set()})
-        if r["outcome"] in ("liked", "added", "clicked"):
-            bucket["positives"].add(r["tmdb_id"])
-        elif r["outcome"] in ("rejected", "disliked"):
-            bucket["negatives"].add(r["tmdb_id"])
+        if outcome in ("liked", "added", "clicked"):
+            bucket["positives"].add(tmdb_id)
+        elif outcome in ("rejected", "disliked"):
+            bucket["negatives"].add(tmdb_id)
 
     emitted = 0
     for (sub, kind), bucket in sorted(by_user.items()):
@@ -98,7 +105,7 @@ def main() -> int:
         # positive landed, but we don't keep historical library
         # state today; subtracting current positives is the
         # cheapest fix that restores the recall signal.
-        positives_set = bucket["positives"] - bucket["negatives"]
+        positives_set = bucket["positives"]
         library = [t for t in full_library if t not in positives_set]
         if len(library) < MIN_LIBRARY or len(positives_set) < MIN_POSITIVES:
             continue

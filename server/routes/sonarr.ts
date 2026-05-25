@@ -15,6 +15,7 @@ export const sonarr = new Hono<Env>()
 sonarr.use('*', requireAuth)
 
 type SonarrGrabEvent = Parameters<typeof appendGrabEvent>[0]
+type RootFolderSpaceSnapshot = { path: string; freeSpace?: number }
 
 async function recordSonarrGrabEvent(event: SonarrGrabEvent): Promise<void> {
   await appendGrabEvent(event).catch((err) => {
@@ -92,6 +93,7 @@ async function grabTvUnderCap(
   seriesId: number,
   monitoredSeasons: number[],
   title?: string,
+  rootFolder?: RootFolderSpaceSnapshot,
 ): Promise<void> {
   const base = { app: 'sonarr' as const, itemId: seriesId, title, capGb: env.maxTvGbPerEpisode }
   await recordSonarrGrabEvent({ ...base, type: 'grab_started' })
@@ -214,6 +216,25 @@ async function grabTvUnderCap(
     ...packs,
     ...[...bestByChunk.values()].filter((r) => !r.fullSeason && !packSeasons.has(r.seasonNumber)),
   ]
+  const plannedBytes = finalPicks.reduce((sum, pick) => sum + pick.size, 0)
+  if (
+    rootFolder &&
+    typeof rootFolder.freeSpace === 'number' &&
+    Number.isFinite(rootFolder.freeSpace) &&
+    rootFolder.freeSpace - plannedBytes < env.minFreeBytes
+  ) {
+    await recordSonarrGrabEvent({
+      ...base,
+      type: 'planned_size_exceeds_free_space',
+      scanned: all.length,
+      eligible: accepted.length,
+      plannedBytes,
+      freeBytes: rootFolder.freeSpace,
+      thresholdBytes: env.minFreeBytes,
+      error: `planned TV grab would leave ${rootFolder.path} below minimum free-space reserve`,
+    })
+    return
+  }
 
   for (const pick of finalPicks) {
     const grabRes = await sonarrFetch('/api/v3/release', {
@@ -564,7 +585,7 @@ sonarr.post('/api/v3/series', async (c) => {
       if (id && monitored.length > 0) {
         const itemId = id
         const itemTitle = created.title
-        void grabTvUnderCap(itemId, monitored, itemTitle).catch((e) => {
+        void grabTvUnderCap(itemId, monitored, itemTitle, folder).catch((e) => {
           console.error('[tv-cap] grab failed:', e)
           void recordSonarrGrabEvent({
             app: 'sonarr',
@@ -674,7 +695,7 @@ sonarr.post('/api/v3/series/:id/seasons/:n/monitor', requireAdmin, async (c) => 
   }
   // Fire the cap-enforced grab in the background — same path the add
   // flow uses, so the new season comes in via the same size gate.
-  void grabTvUnderCap(id, [n], series.title).catch((e) => {
+  void grabTvUnderCap(id, [n], series.title, folder).catch((e) => {
     console.error('[tv-monitor-season] grab failed:', e)
     void recordSonarrGrabEvent({
       app: 'sonarr',

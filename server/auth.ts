@@ -266,6 +266,7 @@ auth.post('/plex/check', async (c) => {
     username: user.username,
     role,
     plexAuthToken: pin.authToken,
+    ...(env.plexServerId ? { verifiedPlexServerId: env.plexServerId } : {}),
   })
 
   // Prime the membership cache so the very next protected request
