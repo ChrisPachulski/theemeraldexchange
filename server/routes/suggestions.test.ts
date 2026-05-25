@@ -1904,6 +1904,79 @@ describe('suggestions route — prompt shape', () => {
     expect(searchCalls).toBe(0)
   })
 
+  it('falls back to TMDB search when duplicate pool titles do not match the requested movie year', async () => {
+    _setTmdbApiKeyForTests('test-key')
+    const radarrLibrary = [
+      { title: 'The Dark Knight', year: 2008, tmdbId: 2001, genres: ['Action', 'Crime'] },
+      { title: 'Inception', year: 2010, tmdbId: 2002, genres: ['Action', 'Sci-Fi'] },
+      { title: 'Interstellar', year: 2014, tmdbId: 2003, genres: ['Sci-Fi', 'Drama'] },
+      { title: 'No Country for Old Men', year: 2007, tmdbId: 2004, genres: ['Crime', 'Drama'] },
+      { title: 'There Will Be Blood', year: 2007, tmdbId: 2005, genres: ['Drama'] },
+      { title: 'The Departed', year: 2006, tmdbId: 2006, genres: ['Crime', 'Drama'] },
+      { title: 'Zodiac', year: 2007, tmdbId: 2007, genres: ['Crime', 'Drama'] },
+      { title: 'Prisoners', year: 2013, tmdbId: 2008, genres: ['Crime', 'Drama'] },
+      { title: 'Sicario', year: 2015, tmdbId: 2009, genres: ['Crime', 'Drama'] },
+      { title: 'Arrival', year: 2016, tmdbId: 2010, genres: ['Sci-Fi', 'Drama'] },
+    ]
+    let searchCalls = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/movie')) {
+          return new Response(JSON.stringify(radarrLibrary), { status: 200 })
+        }
+        if (url.includes('themoviedb.org/3/discover/movie')) {
+          return new Response(
+            JSON.stringify({
+              results: [
+                { id: 9_910_001, title: 'Duplicate Title', poster_path: null, release_date: '1986-01-01' },
+                { id: 9_910_002, title: 'Duplicate Title', poster_path: null, release_date: '2002-01-01' },
+              ],
+            }),
+            { status: 200 },
+          )
+        }
+        if (url.includes('themoviedb.org/3/search/movie')) {
+          searchCalls++
+          return new Response(
+            JSON.stringify({
+              results: [
+                { id: 9_910_003, title: 'Duplicate Title', poster_path: null, release_date: '1995-01-01' },
+              ],
+            }),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+    fakeResponse.value = {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu_duplicate_pool_title',
+          name: 'submit_recommendations',
+          input: { picks: [{ title: 'Duplicate Title', year: 1995 }] },
+        },
+      ],
+      usage: { input_tokens: 50, output_tokens: 30 },
+    }
+
+    const r = await appUnderTest().request('/movie', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { items: Array<{ id: number }> }
+    expect(searchCalls).toBeGreaterThan(0)
+    expect(body.items[0]?.id).toBe(9_910_003)
+  })
+
   it('poolHitRate = poolHits / accepted.length with correct formula (iter 63 VERIFIED)', async () => {
     // Set up: 2 pool items. Claude picks BOTH from the pool. poolHitRate should = 1.0.
     // poolHitsTotal = v1.counters.poolHits = 2; accepted.length = 2; rate = 2/2 = 1.0

@@ -2101,9 +2101,13 @@ suggestions.get('/:type', async (c) => {
   const recentlyShownAll = getRecentlyShown(session.sub, type)
   const recentlyShownTrimmed = recentlyShownAll.slice(0, recentlyShownCap)
   const recentlyShownBlock = buildRecentlyShownBlock(recentlyShownTrimmed)
-  const poolByTitle = new Map<string, SuggestionItem>(
-    safePool.map((it) => [normalizeTitle(it.title), it]),
-  )
+  const poolByTitle = new Map<string, SuggestionItem[]>()
+  for (const it of safePool) {
+    const key = normalizeTitle(it.title)
+    const existing = poolByTitle.get(key)
+    if (existing) existing.push(it)
+    else poolByTitle.set(key, [it])
+  }
   const candidatePoolBlock = buildCandidatePoolBlock(safePool)
 
   // Tool-use enforced pipeline:
@@ -2157,9 +2161,12 @@ suggestions.get('/:type', async (c) => {
         rejectedForRetry.push({ title: p.title, reason: 'already in the household library (matched by title)' })
         continue
       }
-      // Pool fast-path: if the pick title matches a pool item, accept
-      // it immediately without a TMDB /search round-trip.
-      const poolItem = poolByTitle.get(normalizeTitle(p.title)) ?? null
+      // Pool fast-path: if the pick title unambiguously matches a pool
+      // item, accept it immediately without a TMDB /search round-trip.
+      const poolMatches = poolByTitle.get(normalizeTitle(p.title)) ?? []
+      const poolItem = p.year
+        ? poolMatches.find((it) => it.year === p.year) ?? null
+        : poolMatches.length === 1 ? poolMatches[0] : null
       if (poolItem) {
         if (seen.has(poolItem.id)) {
           counters.droppedAsDedupe++
