@@ -144,7 +144,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signIn = useCallback(async () => {
     setSignInError(null)
+    stopPolling()
+    popupRef.current?.close()
     setSignInState('opening')
+    const popup = window.open(
+      '',
+      'plex-auth',
+      'width=520,height=720,menubar=no,toolbar=no',
+    )
+    if (!popup) {
+      setSignInState('error')
+      setSignInError('Popup blocked. Allow popups for this site and try again.')
+      return
+    }
+    popupRef.current = popup
     try {
       const res = await fetch(apiUrl('/api/auth/plex/pin'), {
         method: 'POST',
@@ -156,15 +169,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         authUrl: string
       }
 
-      popupRef.current = window.open(
-        authUrl,
-        'plex-auth',
-        'width=520,height=720,menubar=no,toolbar=no',
-      )
+      popup.location.href = authUrl
       setSignInState('pending')
 
-      stopPolling()
+      const deadline = Date.now() + 5 * 60 * 1000
       pollRef.current = window.setInterval(async () => {
+        if (popup.closed) {
+          stopPolling()
+          popupRef.current = null
+          setSignInState('error')
+          setSignInError('Plex sign-in window was closed before authorization finished.')
+          return
+        }
+        if (Date.now() > deadline) {
+          stopPolling()
+          popup.close()
+          setSignInState('error')
+          setSignInError('Plex sign-in expired. Try again.')
+          return
+        }
         try {
           // POST (not GET) so the CSRF middleware gates the cookie-
           // setting branch. Otherwise an attacker page could trigger a
@@ -179,7 +202,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (r.status === 403) {
             const data = await r.json().catch(() => ({}))
             stopPolling()
-            popupRef.current?.close()
+            popup.close()
+            popupRef.current = null
             setSignInState('denied')
             setSignInError(
               data?.reason === 'not_a_server_member'
@@ -188,11 +212,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             )
             return
           }
-          if (!r.ok) return // network blip — keep polling
+          if (!r.ok) {
+            if (r.status >= 400 && r.status < 500) {
+              const data = await r.json().catch(() => ({}))
+              stopPolling()
+              popup.close()
+              popupRef.current = null
+              setSignInState('error')
+              setSignInError(
+                typeof data?.error === 'string'
+                  ? `Plex sign-in failed: ${data.error}`
+                  : 'Plex sign-in expired. Try again.',
+              )
+            }
+            return
+          }
           const data = await r.json()
           if (data.status === 'authorized') {
             stopPolling()
-            popupRef.current?.close()
+            popup.close()
+            popupRef.current = null
             applyUser(data.user as AuthUser)
             setDiscoveredServers(data.discoveredServers ?? null)
             setSignInState('idle')
@@ -202,6 +241,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }, 1500)
     } catch (e) {
+      popup.close()
+      popupRef.current = null
       setSignInState('error')
       setSignInError(e instanceof Error ? e.message : String(e))
     }

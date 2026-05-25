@@ -2,7 +2,7 @@
 
 import { Hono } from 'hono'
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
-import { radarrFetch, radarrRootFolders } from '../services/radarr.js'
+import { radarrFetch, radarrRootFolders, type RootFolder } from '../services/radarr.js'
 import { appendGrabEvent } from '../services/grabLog.js'
 import { postFeedback } from '../services/recommender.js'
 import { env } from '../env.js'
@@ -16,6 +16,7 @@ type RadarrSpaceGateFailure = {
   status: 400 | 502 | 507
   body: Record<string, unknown>
 }
+type RadarrFolderWithFreeSpace = RootFolder & { freeSpace: number }
 type CappedGrabResult =
   | { status: 'grab_succeeded' }
   | { status: 'search_failed'; upstreamStatus: number }
@@ -30,7 +31,7 @@ async function recordRadarrGrabEvent(event: RadarrGrabEvent): Promise<void> {
 }
 
 async function validateRadarrRootFolderSpace(rootFolderPath?: string): Promise<
-  { ok: true } | { ok: false; failure: RadarrSpaceGateFailure }
+  { ok: true; folder: RadarrFolderWithFreeSpace } | { ok: false; failure: RadarrSpaceGateFailure }
 > {
   if (!rootFolderPath) {
     return { ok: false, failure: { status: 400, body: { error: 'rootFolderPath_required' } } }
@@ -63,7 +64,7 @@ async function validateRadarrRootFolderSpace(rootFolderPath?: string): Promise<
       },
     }
   }
-  return { ok: true }
+  return { ok: true, folder: folder as RadarrFolderWithFreeSpace }
 }
 
 const forwardRead = (path: string) =>
@@ -104,7 +105,11 @@ forwardRead('/api/v3/queue')
 //     cap-aware grab and leave monitored:true. The user explicitly
 //     asked for RSS-driven monitoring; the eventual auto-grab is
 //     gated by Radarr's quality profile, NOT env.maxMovieBytes.
-async function grabBestUnderCap(movieId: number, title?: string): Promise<CappedGrabResult> {
+async function grabBestUnderCap(
+  movieId: number,
+  rootFolder: RadarrFolderWithFreeSpace,
+  title?: string,
+): Promise<CappedGrabResult> {
   const base = { app: 'radarr' as const, itemId: movieId, title, capGb: env.maxMovieGb }
   await recordRadarrGrabEvent({ ...base, type: 'grab_started' })
 
@@ -130,7 +135,13 @@ async function grabBestUnderCap(movieId: number, title?: string): Promise<Capped
   }
   const all = (await releaseRes.json()) as Release[]
   const eligible = all
-    .filter((r) => !r.rejected && !r.temporarilyRejected && r.size > 0 && r.size <= env.maxMovieBytes)
+    .filter((r) =>
+      !r.rejected &&
+      !r.temporarilyRejected &&
+      r.size > 0 &&
+      r.size <= env.maxMovieBytes &&
+      rootFolder.freeSpace - r.size >= env.minFreeBytes
+    )
     .sort((a, b) => b.qualityWeight - a.qualityWeight)
   if (eligible.length === 0) {
     console.log(
@@ -369,7 +380,7 @@ radarr.post('/api/v3/movie', async (c) => {
       const itemId = created.id
       const itemTitle = created.title
       try {
-        const grab = await grabBestUnderCap(itemId, itemTitle)
+        const grab = await grabBestUnderCap(itemId, spaceGate.folder, itemTitle)
         if (grab.status === 'search_failed' || grab.status === 'grab_failed') {
           const rollback = await deleteCreatedMovie(created)
           return c.json(
@@ -384,11 +395,13 @@ radarr.post('/api/v3/movie', async (c) => {
           )
         }
         if (grab.status === 'no_releases' || grab.status === 'all_rejected_by_cap') {
+          const rollback = await deleteCreatedMovie(created)
           return c.json(
             {
               error: 'capped_grab_not_started',
               phase: grab.status,
               scanned: grab.scanned,
+              rollbackStatus: rollback.ok ? undefined : rollback.status || undefined,
               movie: created,
             },
             424,
@@ -475,7 +488,13 @@ radarr.post('/api/v3/movie/:id/upgrade', requireAdmin, async (c) => {
     return c.json({ status: 'no_releases_found' })
   }
   const eligible = all
-    .filter((r) => !r.rejected && !r.temporarilyRejected && r.size > 0 && r.size <= env.maxMovieBytes)
+    .filter((r) =>
+      !r.rejected &&
+      !r.temporarilyRejected &&
+      r.size > 0 &&
+      r.size <= env.maxMovieBytes &&
+      spaceGate.folder.freeSpace - r.size >= env.minFreeBytes
+    )
     .sort((a, b) => b.qualityWeight - a.qualityWeight)
   if (eligible.length === 0) {
     return c.json({

@@ -19,7 +19,7 @@ Or, from the host, against a snapshot copy:
 The query joins rec_log → rec_outcomes for one row per (sub, kind)
 in the last 30 days, then unions in the household library at write
 time so library size matches the model's view of the user. A user
-must have at least one positive AND at least three library items
+must have at least one positive AND at least ten library items
 to make it into the holdout — otherwise the eval signal is too
 noisy to be worth scoring against.
 """
@@ -41,7 +41,7 @@ from pathlib import Path
 # (missing) DB on first prod run.
 DB_PATH = os.environ.get("RECOMMENDER_DB_PATH", "/data/exchange.db")
 LOOKBACK_DAYS = int(os.environ.get("HOLDOUT_LOOKBACK_DAYS", "30"))
-MIN_LIBRARY = 3
+MIN_LIBRARY = int(os.environ.get("RECOMMENDER_COLD_START_THRESHOLD", "10"))
 MIN_POSITIVES = 1
 
 

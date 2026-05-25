@@ -20,6 +20,36 @@ export interface SyncResult {
 
 let running = false
 
+function pruneCategories(db: IptvDb, kind: 'live' | 'vod' | 'series', ids: number[]): void {
+  if (ids.length === 0) {
+    db.raw.prepare(`DELETE FROM categories WHERE kind = ?`).run(kind)
+    return
+  }
+  const placeholders = ids.map(() => '?').join(',')
+  db.raw.prepare(`DELETE FROM categories WHERE kind = ? AND category_id NOT IN (${placeholders})`).run(kind, ...ids)
+}
+
+function reconcileCatalog(
+  db: IptvDb,
+  fetchedAt: string,
+  categoryIds: { live: number[]; vod: number[]; series: number[] },
+): void {
+  db.raw.prepare(`DELETE FROM channels WHERE fetched_at != ?`).run(fetchedAt)
+  db.raw.prepare(`DELETE FROM vod WHERE fetched_at != ?`).run(fetchedAt)
+  db.raw.prepare(`DELETE FROM series WHERE fetched_at != ?`).run(fetchedAt)
+  db.raw.prepare(`
+    DELETE FROM iptv_title_link
+    WHERE iptv_kind = 'vod' AND iptv_id NOT IN (SELECT stream_id FROM vod)
+  `).run()
+  db.raw.prepare(`
+    DELETE FROM iptv_title_link
+    WHERE iptv_kind = 'series' AND iptv_id NOT IN (SELECT series_id FROM series)
+  `).run()
+  pruneCategories(db, 'live', categoryIds.live)
+  pruneCategories(db, 'vod', categoryIds.vod)
+  pruneCategories(db, 'series', categoryIds.series)
+}
+
 export async function syncOnce(db: IptvDb): Promise<SyncResult> {
   if (running) {
     return {
@@ -42,12 +72,6 @@ export async function syncOnce(db: IptvDb): Promise<SyncResult> {
       fetchCategories('vod', creds),
       fetchCategories('series', creds),
     ])
-    const writeCats = db.raw.transaction(() => {
-      for (const c of liveCats) db.stmts.upsertCategory.run({ ...c, kind: 'live' })
-      for (const c of vodCats) db.stmts.upsertCategory.run({ ...c, kind: 'vod' })
-      for (const c of seriesCats) db.stmts.upsertCategory.run({ ...c, kind: 'series' })
-    })
-    writeCats()
     categories = liveCats.length + vodCats.length + seriesCats.length
 
     const [liveRows, vodRows, seriesRows] = await Promise.all([
@@ -56,47 +80,43 @@ export async function syncOnce(db: IptvDb): Promise<SyncResult> {
       fetchSeriesList(fetchedAt, creds),
     ])
 
-    const writeChannels = db.raw.transaction((rows: typeof liveRows) => {
-      for (const r of rows) db.stmts.upsertChannel.run(r)
-    })
-    writeChannels(liveRows)
     channels = liveRows.length
-
-    const writeVod = db.raw.transaction((rows: typeof vodRows) => {
-      for (const r of rows) db.stmts.upsertVod.run(r)
-    })
-    writeVod(vodRows)
     vod = vodRows.length
-
-    const writeSeries = db.raw.transaction((rows: typeof seriesRows) => {
-      for (const r of rows) db.stmts.upsertSeries.run(r)
-    })
-    writeSeries(seriesRows)
     series = seriesRows.length
 
     // Episode expansion — small concurrency cap to spare upstream.
     const CONCURRENCY = 4
     let cursor = 0
+    const episodeRows: Awaited<ReturnType<typeof fetchSeriesInfo>> = []
     async function worker(): Promise<void> {
       while (cursor < seriesRows.length) {
         const i = cursor++
         const s = seriesRows[i]
         try {
           const eps = await fetchSeriesInfo(s.series_id, creds)
-          const writeEps = db.raw.transaction((rows: typeof eps) => {
-            for (const r of rows) db.stmts.upsertEpisode.run(r)
-          })
-          writeEps(eps)
-          episodes += eps.length
+          episodeRows.push(...eps)
         } catch (err) {
           console.error(`[iptv-sync] series_info ${s.series_id} failed:`, err)
         }
       }
     }
     await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()))
+    episodes = episodeRows.length
 
     // Populate the iptv_title_link table for the recommender integration.
     db.raw.transaction(() => {
+      for (const c of liveCats) db.stmts.upsertCategory.run({ ...c, kind: 'live' })
+      for (const c of vodCats) db.stmts.upsertCategory.run({ ...c, kind: 'vod' })
+      for (const c of seriesCats) db.stmts.upsertCategory.run({ ...c, kind: 'series' })
+      for (const r of liveRows) db.stmts.upsertChannel.run(r)
+      for (const r of vodRows) db.stmts.upsertVod.run(r)
+      for (const r of seriesRows) db.stmts.upsertSeries.run(r)
+      for (const r of episodeRows) db.stmts.upsertEpisode.run(r)
+      reconcileCatalog(db, fetchedAt, {
+        live: liveCats.map((c) => c.category_id),
+        vod: vodCats.map((c) => c.category_id),
+        series: seriesCats.map((c) => c.category_id),
+      })
       db.raw.prepare(`
         INSERT INTO iptv_title_link (iptv_kind, iptv_id, tmdb_kind, tmdb_id)
         SELECT 'vod', stream_id, 'movie', tmdb_id FROM vod WHERE tmdb_id IS NOT NULL

@@ -9,6 +9,8 @@ import cron from 'node-cron'
 import { syncOnce } from './iptvSync.js'
 import { iptvDb } from './iptvDbSingleton.js'
 
+const DEFAULT_IPTV_SYNC_CRON = '0 */6 * * *'
+
 export async function registerIptvSchedule(cronExpr: string): Promise<void> {
   const db = iptvDb()
   const last = db.stmts.getSyncState.get('last_sync') as { value: string; ts: string } | undefined
@@ -17,7 +19,12 @@ export async function registerIptvSchedule(cronExpr: string): Promise<void> {
     void syncOnce(db).catch((err) => console.error('[iptv] bootstrap sync failed:', err))
   }
 
-  cron.schedule(cronExpr, () => {
+  const scheduleExpr = cron.validate(cronExpr) ? cronExpr : DEFAULT_IPTV_SYNC_CRON
+  if (scheduleExpr !== cronExpr) {
+    console.error(`[iptv] invalid IPTV_SYNC_CRON ${JSON.stringify(cronExpr)}; using ${DEFAULT_IPTV_SYNC_CRON}`)
+  }
+
+  cron.schedule(scheduleExpr, () => {
     void syncOnce(db).catch((err) => console.error('[iptv] scheduled sync failed:', err))
   })
 }

@@ -23,7 +23,7 @@ type UsageRow = {
 
 async function fetchAdminUsage(): Promise<UsageRow[]> {
   const r = await fetch(apiUrl('/api/usage/admin'), { credentials: 'include' })
-  if (!r.ok) return []
+  if (!r.ok) throw new Error(`usage admin failed: ${r.status}`)
   return (await r.json()) as UsageRow[]
 }
 
