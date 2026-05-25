@@ -91,6 +91,20 @@ class ShownEventRequest(BaseModel):
     tmdb_ids: list[StrictInt] = Field(default_factory=list, max_length=200)
 
 
+class ImpressionItem(BaseModel):
+    tmdb_id: StrictInt
+    rank: int = Field(..., ge=0)
+    score: float
+    provenance: Provenance
+    model_version: str
+
+
+class ImpressionEventRequest(BaseModel):
+    sub: str
+    kind: Kind
+    items: list[ImpressionItem] = Field(default_factory=list, max_length=200)
+
+
 class RejectionEventRequest(BaseModel):
     kind: Kind
     tmdb_id: StrictInt

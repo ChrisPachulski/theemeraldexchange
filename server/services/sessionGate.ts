@@ -35,7 +35,7 @@ const MAX_CACHE_ENTRIES = 1000
 type Status = 'member' | 'not_member'
 type CheckStatus = Status | 'auth_revoked' | 'unknown'
 
-type Cached = { status: Status; checkedAt: number; tokenFingerprint?: string }
+type Cached = { status: Status; checkedAt: number; tokenFingerprint?: string; plexServerId?: string }
 const cache = new Map<string, Cached>()
 
 function fingerprintToken(token: string): string {
@@ -70,6 +70,7 @@ export function _primeSessionGateCache(
     tokenFingerprint: status === 'member' && plexAuthToken
       ? fingerprintToken(plexAuthToken)
       : undefined,
+    plexServerId: status === 'member' && env.plexServerId ? env.plexServerId : undefined,
   })
 }
 
@@ -117,19 +118,24 @@ export async function reconcileSession(session: Session): Promise<Session | null
   const cached = cache.get(session.sub)
   if (cached && now - cached.checkedAt < REVALIDATE_TTL_MS) {
     if (cached.status === 'not_member') return null
-    if (cached.tokenFingerprint === tokenFingerprint) return { ...session, role }
+    if (cached.tokenFingerprint === tokenFingerprint && cached.plexServerId === env.plexServerId) {
+      return { ...session, role }
+    }
   }
 
   const status = await checkMembership(session.plexAuthToken)
   if (status === 'unknown') {
-    // plex.tv hiccup. Fall back to the prior cached answer if any —
-    // if we've never had a definitive answer for this sub, allow the
-    // request rather than locking everyone out.
+    // plex.tv hiccup. Fall back only to proof scoped to the currently
+    // configured server; legacy/bootstrap cookies were never verified
+    // against this machine identifier and must re-auth.
     if (cached) {
       if (cached.status === 'not_member') return null
-      if (cached.tokenFingerprint === tokenFingerprint) return { ...session, role }
+      if (cached.tokenFingerprint === tokenFingerprint && cached.plexServerId === env.plexServerId) {
+        return { ...session, role }
+      }
     }
-    return { ...session, role }
+    if (session.verifiedPlexServerId === env.plexServerId) return { ...session, role }
+    return null
   }
 
   if (status === 'auth_revoked') return null
@@ -138,6 +144,7 @@ export async function reconcileSession(session: Session): Promise<Session | null
     status,
     checkedAt: now,
     tokenFingerprint: status === 'member' ? tokenFingerprint : undefined,
+    plexServerId: status === 'member' ? env.plexServerId : undefined,
   })
   if (status === 'not_member') return null
   return { ...session, role }

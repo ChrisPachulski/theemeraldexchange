@@ -23,7 +23,10 @@ notifications.use('*', requireAdmin)
 const EMERALD_NAME = 'Emerald Exchange Discord'
 let discordMutationTail = Promise.resolve()
 type NotificationApp = 'sonarr' | 'radarr'
-type SuccessfulMutation = { app: NotificationApp; action: 'create' | 'update'; id: number }
+type NotificationConfig = Record<string, unknown> & { id: number; name: string; implementation: string }
+type SuccessfulMutation =
+  | { app: NotificationApp; action: 'create'; id: number }
+  | { app: NotificationApp; action: 'update'; id: number; previous: NotificationConfig }
 type NotificationDeleteFailure = { app: NotificationApp; id: number; status: number }
 
 async function withDiscordMutationLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -90,14 +93,20 @@ function notificationFetcher(app: NotificationApp) {
   return app === 'sonarr' ? sonarrFetch : radarrFetch
 }
 
-async function rollbackCreatedNotifications(mutations: SuccessfulMutation[]) {
+async function rollbackNotifications(mutations: SuccessfulMutation[]) {
   const failures: Array<{ app: NotificationApp; id: number; status: number; detail: string }> = []
   for (const mutation of [...mutations].reverse()) {
-    if (mutation.action !== 'create') continue
     try {
-      const res = await notificationFetcher(mutation.app)(`/api/v3/notification/${mutation.id}`, {
-        method: 'DELETE',
-      })
+      const res =
+        mutation.action === 'create'
+          ? await notificationFetcher(mutation.app)(`/api/v3/notification/${mutation.id}`, {
+              method: 'DELETE',
+            })
+          : await notificationFetcher(mutation.app)(`/api/v3/notification/${mutation.id}`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(mutation.previous),
+            })
       if (!res.ok) {
         const detail = await res.text().catch(() => '')
         failures.push({ app: mutation.app, id: mutation.id, status: res.status, detail: detail.slice(0, 400) })
@@ -122,19 +131,24 @@ class NotificationListError extends Error {
   }
 }
 
-async function listNotifications(app: 'sonarr' | 'radarr'): Promise<Array<{ id: number; name: string; implementation: string }>> {
+async function listNotifications(app: 'sonarr' | 'radarr'): Promise<NotificationConfig[]> {
   const path = app === 'sonarr' ? '/api/v3/notification' : '/api/v3/notification'
   const fetcher = app === 'sonarr' ? sonarrFetch : radarrFetch
   const r = await fetcher(path, { method: 'GET' })
   if (!r.ok) throw new NotificationListError(app, r.status)
-  return (await r.json()) as Array<{ id: number; name: string; implementation: string }>
+  return (await r.json()) as NotificationConfig[]
 }
 
-async function findEmeraldIds(app: 'sonarr' | 'radarr'): Promise<number[]> {
+async function findEmeraldNotifications(app: 'sonarr' | 'radarr'): Promise<NotificationConfig[]> {
   const list = await listNotifications(app)
   return list
     .filter((n) => n.name === EMERALD_NAME && n.implementation === 'Discord')
-    .map((n) => n.id)
+    .filter((n) => typeof n.id === 'number')
+}
+
+async function findEmeraldIds(app: 'sonarr' | 'radarr'): Promise<number[]> {
+  const list = await findEmeraldNotifications(app)
+  return list.map((n) => n.id)
 }
 
 async function deleteNotifications(app: NotificationApp, ids: number[]) {
@@ -194,10 +208,13 @@ notifications.post('/discord', async (c) => {
     // exists" and creating a new one would stack a duplicate on every
     // retry until Sonarr/Radarr came back. Fail closed on list error.
     const mutations: SuccessfulMutation[] = []
-    let existingByApp: Record<NotificationApp, number[]>
+    let existingByApp: Record<NotificationApp, NotificationConfig[]>
     try {
-      const [sonarrIds, radarrIds] = await Promise.all([findEmeraldIds('sonarr'), findEmeraldIds('radarr')])
-      existingByApp = { sonarr: sonarrIds, radarr: radarrIds }
+      const [sonarrExisting, radarrExisting] = await Promise.all([
+        findEmeraldNotifications('sonarr'),
+        findEmeraldNotifications('radarr'),
+      ])
+      existingByApp = { sonarr: sonarrExisting, radarr: radarrExisting }
     } catch (err) {
       if (err instanceof NotificationListError) {
         return c.json(
@@ -208,11 +225,12 @@ notifications.post('/discord', async (c) => {
       throw err
     }
     for (const app of ['sonarr', 'radarr'] as const) {
-      const existingIds = existingByApp[app]
+      const existingNotifications = existingByApp[app]
       const fetcher = notificationFetcher(app)
-      if (existingIds.length > 0) {
-        const existing = existingIds[0]
-        const extras = existingIds.slice(1)
+      if (existingNotifications.length > 0) {
+        const previous = existingNotifications[0]
+        const existing = previous.id
+        const extras = existingNotifications.slice(1).map((n) => n.id)
         const res = await fetcher(`/api/v3/notification/${existing}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -220,7 +238,7 @@ notifications.post('/discord', async (c) => {
         })
         if (!res.ok) {
           const text = await res.text().catch(() => '')
-          const cleanupFailures = await rollbackCreatedNotifications(mutations)
+          const cleanupFailures = await rollbackNotifications(mutations)
           return c.json(
             {
               error: `${app}_update_failed`,
@@ -236,11 +254,12 @@ notifications.post('/discord', async (c) => {
             502,
           )
         }
-        mutations.push({ app, action: 'update', id: existing })
+        mutations.push({ app, action: 'update', id: existing, previous })
         if (extras.length > 0) {
           const cleanup = await deleteNotifications(app, extras)
           if (cleanup.failures.length > 0) {
-            return c.json(partialDeletePayload(cleanup.removed, cleanup.failures), 502)
+            const cleanupFailures = await rollbackNotifications(mutations)
+            return c.json({ ...partialDeletePayload(cleanup.removed, cleanup.failures), cleanupFailures }, 502)
           }
         }
         continue
@@ -252,7 +271,7 @@ notifications.post('/discord', async (c) => {
       })
       if (!res.ok) {
         const text = await res.text().catch(() => '')
-        const cleanupFailures = await rollbackCreatedNotifications(mutations)
+        const cleanupFailures = await rollbackNotifications(mutations)
         return c.json(
           { error: `${app}_create_failed`, status: res.status, detail: text.slice(0, 400), mutations, cleanupFailures },
           502,
