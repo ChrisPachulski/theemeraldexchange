@@ -25,4 +25,5 @@ export type TrendingItem = {
   /** Short ≤120-char grounding from Claude when the pick is personalized.
    * Null for fills (discover/trending). */
   reason?: string | null
+  available_on?: string[]
 }
