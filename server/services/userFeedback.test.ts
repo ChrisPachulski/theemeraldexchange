@@ -249,7 +249,7 @@ describe('user feedback store', () => {
     ).toEqual([1, 2, 3])
   })
 
-  it('caps likes to the most recent entries and lets duplicate updates survive', async () => {
+  it('rejects new likes at the per-user cap but preserves duplicate updates', async () => {
     await fs.writeFile(
       path,
       JSON.stringify({
@@ -266,12 +266,15 @@ describe('user feedback store', () => {
       }),
     )
     _setUserFeedbackPathForTests(path)
-    await setLike('alice', 'movie', MAX_FEEDBACK_ENTRIES_PER_SIGNAL + 1, 'Overflow')
-    await setLike('alice', 'movie', 2, 'Updated 2')
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await expect(setLike('alice', 'movie', MAX_FEEDBACK_ENTRIES_PER_SIGNAL + 1, 'Overflow'))
+      .rejects.toBeInstanceOf(FeedbackQuotaError)
+    await expect(setLike('alice', 'movie', 2, 'Updated 2')).resolves.toBeUndefined()
 
     const likes = (await getUserFeedback('alice')).movie.liked
     expect(likes).toHaveLength(MAX_FEEDBACK_ENTRIES_PER_SIGNAL)
-    expect(likes.some((e) => e.id === 1)).toBe(false)
+    expect(likes.some((e) => e.id === MAX_FEEDBACK_ENTRIES_PER_SIGNAL + 1)).toBe(false)
     expect(likes.at(-1)).toEqual({ id: 2, title: 'Updated 2' })
   })
 
