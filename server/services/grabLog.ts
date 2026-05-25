@@ -62,10 +62,11 @@ let writeQueue: Promise<void> = Promise.resolve()
 export function appendGrabEvent(e: Omit<GrabEvent, 'ts'>): Promise<void> {
   const event: GrabEvent = { ts: new Date().toISOString(), ...e }
   const line = JSON.stringify(event) + '\n'
-  writeQueue = writeQueue.then(() => writeLine(line)).catch((err) => {
+  const op = writeQueue.then(() => writeLine(line))
+  writeQueue = op.catch((err) => {
     console.error('[grabLog] append failed:', err)
   })
-  return writeQueue
+  return op
 }
 
 async function writeLine(line: string): Promise<void> {

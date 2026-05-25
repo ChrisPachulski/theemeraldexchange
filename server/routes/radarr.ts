@@ -11,6 +11,14 @@ export const radarr = new Hono<Env>()
 
 radarr.use('*', requireAuth)
 
+type RadarrGrabEvent = Parameters<typeof appendGrabEvent>[0]
+
+async function recordRadarrGrabEvent(event: RadarrGrabEvent): Promise<void> {
+  await appendGrabEvent(event).catch((err) => {
+    console.error('[radarr] grab log write failed:', err)
+  })
+}
+
 const forwardRead = (path: string) =>
   radarr.get(path, async (c) => {
     const search = new URL(c.req.url).searchParams
@@ -51,7 +59,7 @@ forwardRead('/api/v3/queue')
 //     gated by Radarr's quality profile, NOT env.maxMovieBytes.
 async function grabBestUnderCap(movieId: number, title?: string): Promise<void> {
   const base = { app: 'radarr' as const, itemId: movieId, title, capGb: env.maxMovieGb }
-  await appendGrabEvent({ ...base, type: 'grab_started' })
+  await recordRadarrGrabEvent({ ...base, type: 'grab_started' })
 
   // Brief delay so Radarr finishes wiring the new movie record before
   // we hit the release endpoint.
@@ -61,7 +69,7 @@ async function grabBestUnderCap(movieId: number, title?: string): Promise<void> 
   })
   if (!releaseRes.ok) {
     console.error(`[movie-cap] release search ${releaseRes.status} for movie ${movieId}`)
-    await appendGrabEvent({ ...base, type: 'search_failed', status: releaseRes.status })
+    await recordRadarrGrabEvent({ ...base, type: 'search_failed', status: releaseRes.status })
     return
   }
   type Release = {
@@ -81,7 +89,7 @@ async function grabBestUnderCap(movieId: number, title?: string): Promise<void> 
       `[movie-cap] no releases ≤ ${env.maxMovieGb}GB for movie ${movieId} ` +
         `(${all.length} scanned)`,
     )
-    await appendGrabEvent({
+    await recordRadarrGrabEvent({
       ...base,
       type: all.length === 0 ? 'no_releases' : 'all_rejected_by_cap',
       scanned: all.length,
@@ -99,7 +107,7 @@ async function grabBestUnderCap(movieId: number, title?: string): Promise<void> 
     `[movie-cap] grab "${best.title}" ${(best.size / 1024 ** 3).toFixed(2)}GB ` +
       `for movie ${movieId} → ${grabRes.status}`,
   )
-  await appendGrabEvent({
+  await recordRadarrGrabEvent({
     ...base,
     type: grabRes.ok ? 'grab_succeeded' : 'grab_failed',
     status: grabRes.status,
@@ -307,7 +315,7 @@ radarr.post('/api/v3/movie', async (c) => {
         const itemTitle = created.title
         void grabBestUnderCap(itemId, itemTitle).catch((e) => {
           console.error('[movie-cap] grab failed:', e)
-          void appendGrabEvent({
+          void recordRadarrGrabEvent({
             app: 'radarr',
             itemId,
             title: itemTitle,

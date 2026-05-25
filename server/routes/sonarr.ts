@@ -14,6 +14,34 @@ export const sonarr = new Hono<Env>()
 // Reads — both roles
 sonarr.use('*', requireAuth)
 
+type SonarrGrabEvent = Parameters<typeof appendGrabEvent>[0]
+
+async function recordSonarrGrabEvent(event: SonarrGrabEvent): Promise<void> {
+  await appendGrabEvent(event).catch((err) => {
+    console.error('[sonarr] grab log write failed:', err)
+  })
+}
+
+async function loadSonarrRootFolders(): Promise<
+  | { ok: true; folders: Awaited<ReturnType<typeof sonarrRootFolders>> }
+  | { ok: false; response: Response }
+> {
+  try {
+    return { ok: true, folders: await sonarrRootFolders() }
+  } catch (err) {
+    console.error('[sonarr] rootfolder lookup failed:', err)
+    const message = err instanceof Error ? err.message : String(err)
+    const status = /\b50[34]\b/.test(message) ? 503 : 502
+    return {
+      ok: false,
+      response: new Response(JSON.stringify({ error: 'rootfolder_unreachable' }), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    }
+  }
+}
+
 const forwardRead = (path: string) =>
   sonarr.get(path, async (c) => {
     const search = new URL(c.req.url).searchParams
@@ -66,7 +94,7 @@ async function grabTvUnderCap(
   title?: string,
 ): Promise<void> {
   const base = { app: 'sonarr' as const, itemId: seriesId, title, capGb: env.maxTvGbPerEpisode }
-  await appendGrabEvent({ ...base, type: 'grab_started' })
+  await recordSonarrGrabEvent({ ...base, type: 'grab_started' })
 
   // Brief delay so Sonarr finishes wiring the new series record.
   await new Promise((r) => setTimeout(r, 2000))
@@ -107,7 +135,7 @@ async function grabTvUnderCap(
     const res = await sonarrFetch(url, { method: 'GET' })
     if (!res.ok) {
       console.error(`[tv-cap] release search ${res.status} S${seasonNumber} series=${seriesId}`)
-      await appendGrabEvent({ ...base, type: 'search_failed', status: res.status })
+      await recordSonarrGrabEvent({ ...base, type: 'search_failed', status: res.status })
       continue
     }
     const chunk = (await res.json()) as Release[]
@@ -136,7 +164,7 @@ async function grabTvUnderCap(
   // that aren't temporarily rejected (blocklisted, age, etc.).
   const accepted = within.filter((r) => !r.rejected && !r.temporarilyRejected)
   if (within.length > 0 && accepted.length === 0) {
-    await appendGrabEvent({
+    await recordSonarrGrabEvent({
       ...base,
       type: 'all_rejected_by_profile',
       scanned: all.length,
@@ -169,7 +197,7 @@ async function grabTvUnderCap(
       `[tv-cap] no releases ≤ ${env.maxTvGbPerEpisode}GB/ep for series ${seriesId} ` +
         `(${all.length} scanned, ${within.length} cap-eligible, ${accepted.length} accepted)`,
     )
-    await appendGrabEvent({
+    await recordSonarrGrabEvent({
       ...base,
       type: all.length === 0 ? 'no_releases' : 'all_rejected_by_cap',
       scanned: all.length,
@@ -199,7 +227,7 @@ async function grabTvUnderCap(
         `(~${(pick.size / ec / 1024 ** 3).toFixed(2)}GB/ep, ${ec} ep) ` +
         `series=${seriesId} → ${grabRes.status}`,
     )
-    await appendGrabEvent({
+    await recordSonarrGrabEvent({
       ...base,
       type: grabRes.ok ? 'grab_succeeded' : 'grab_failed',
       status: grabRes.status,
@@ -354,7 +382,9 @@ sonarr.post('/api/v3/series', async (c) => {
       400,
     )
   }
-  const folders = await sonarrRootFolders()
+  const rootFolders = await loadSonarrRootFolders()
+  if (!rootFolders.ok) return rootFolders.response
+  const folders = rootFolders.folders
   const folder = folders.find((f) => f.path === body.rootFolderPath)
   if (!folder) {
     return c.json(
@@ -511,7 +541,7 @@ sonarr.post('/api/v3/series', async (c) => {
         const itemTitle = (created as { title?: string }).title
         void grabTvUnderCap(itemId, monitored, itemTitle).catch((e) => {
           console.error('[tv-cap] grab failed:', e)
-          void appendGrabEvent({
+          void recordSonarrGrabEvent({
             app: 'sonarr',
             itemId,
             title: itemTitle,
@@ -575,7 +605,9 @@ sonarr.post('/api/v3/series/:id/seasons/:n/monitor', requireAdmin, async (c) => 
       400,
     )
   }
-  const folders = await sonarrRootFolders()
+  const rootFolders = await loadSonarrRootFolders()
+  if (!rootFolders.ok) return rootFolders.response
+  const folders = rootFolders.folders
   const folder = folders.find((f) => f.path === series.rootFolderPath)
   if (!folder) {
     return c.json(
@@ -619,7 +651,7 @@ sonarr.post('/api/v3/series/:id/seasons/:n/monitor', requireAdmin, async (c) => 
   // flow uses, so the new season comes in via the same size gate.
   void grabTvUnderCap(id, [n], series.title).catch((e) => {
     console.error('[tv-monitor-season] grab failed:', e)
-    void appendGrabEvent({
+    void recordSonarrGrabEvent({
       app: 'sonarr',
       itemId: id,
       title: series.title,

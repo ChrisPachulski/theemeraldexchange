@@ -208,7 +208,15 @@ function mutate(
     const existing =
       bucket.liked.find((e) => e.id === tmdbId) ??
       bucket.disliked.find((e) => e.id === tmdbId)
+    const existingLike = bucket.liked.some((e) => e.id === tmdbId)
     const existingDislike = bucket.disliked.some((e) => e.id === tmdbId)
+    if (
+      next === 'like' &&
+      !existingLike &&
+      bucket.liked.length >= MAX_FEEDBACK_ENTRIES_PER_SIGNAL
+    ) {
+      throw new FeedbackQuotaError('like')
+    }
     if (
       next === 'dislike' &&
       !existingDislike &&
@@ -221,7 +229,6 @@ function mutate(
     bucket.disliked = bucket.disliked.filter((e) => e.id !== tmdbId)
     if (next === 'like') {
       bucket.liked.push({ id: tmdbId, title: carryTitle })
-      bucket.liked = bucket.liked.slice(-MAX_FEEDBACK_ENTRIES_PER_SIGNAL)
     }
     if (next === 'dislike') bucket.disliked.push({ id: tmdbId, title: carryTitle })
     // Shallow spread of `file` preserves other users by reference —

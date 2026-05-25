@@ -454,17 +454,15 @@ def evaluate_pair(
     candidate_params: dict,
     holdout: list[dict],
 ) -> tuple[float, float, bool]:
+    if not holdout:
+        return 0.0, 0.0, False
     baseline_scores = _evaluate_entries(conn, baseline_recipe, baseline_params, holdout)
     candidate_scores = _evaluate_entries(conn, candidate_recipe, candidate_params, holdout)
-    shared_indices = sorted(set(baseline_scores) & set(candidate_scores))
-    if not shared_indices:
-        log.warning("optimizer: no shared successful holdout entries; refusing promotion")
-        return 0.0, 0.0, False
-    failures = len(holdout) - len(shared_indices)
+    failed_indices = sorted(set(range(len(holdout))) - (set(baseline_scores) & set(candidate_scores)))
+    failures = len(failed_indices)
     failure_rate = failures / len(holdout)
     ok_to_promote = failure_rate <= 0.10
     if not ok_to_promote:
-        failed_indices = sorted(set(range(len(holdout))) - set(shared_indices))
         log.warning(
             "optimizer: %d/%d holdout entries failed evaluation (%.1f%%); refusing promotion; failed_indices=%s",
             failures,
@@ -472,12 +470,12 @@ def evaluate_pair(
             failure_rate * 100,
             failed_indices[:20],
         )
-    baseline_score = sum(baseline_scores[i] for i in shared_indices) / len(shared_indices)
-    candidate_score = sum(candidate_scores[i] for i in shared_indices) / len(shared_indices)
-    if len(shared_indices) != len(holdout):
+    baseline_score = sum(baseline_scores.get(i, 0.0) for i in range(len(holdout))) / len(holdout)
+    candidate_score = sum(candidate_scores.get(i, 0.0) for i in range(len(holdout))) / len(holdout)
+    if failures:
         log.info(
-            "optimizer: evaluated %d/%d shared holdout entries",
-            len(shared_indices),
+            "optimizer: scored %d/%d holdout entries with per-config failure penalties",
+            len(holdout) - failures,
             len(holdout),
         )
     return baseline_score, candidate_score, ok_to_promote
