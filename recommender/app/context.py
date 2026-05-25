@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -22,6 +23,7 @@ from .schemas import Kind, ScoreRequest
 
 log = logging.getLogger(__name__)
 IN_BATCH_SIZE = 500
+RECENTLY_SHOWN_RETENTION_DAYS = 30
 ENGAGEMENT_FEEDBACK_SIGNALS = {"clicked", "added"}
 POSITIVE_FEEDBACK_SIGNALS = {"like", *ENGAGEMENT_FEEDBACK_SIGNALS}
 MODEL_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
@@ -59,6 +61,7 @@ class UserContext:
     sub: str
     kind: Kind
     library_ids: set[int]
+    library_title_keys: set[str]
     library_embeddings: np.ndarray | None  # shape (n_lib, dim) or None
     # tmdb_ids aligned 1:1 with the rows of library_embeddings. Use this
     # for any matrix-vs-id zip — sorting library_ids and zipping
@@ -97,6 +100,26 @@ class UserContext:
         centroid = self.disliked_embeddings.mean(axis=0)
         norm = np.linalg.norm(centroid)
         return centroid / norm if norm > 0 else centroid
+
+
+def normalize_title_key(title: str | None) -> str | None:
+    if not title:
+        return None
+    normalized = re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
+    return re.sub(r"\s+", " ", normalized) or None
+
+
+def title_key_variants(title: str | None) -> set[str]:
+    key = normalize_title_key(title)
+    if key is None:
+        return set()
+    out = {key}
+    for sep in (" - ", ": "):
+        if sep in title:
+            base = normalize_title_key(title.split(sep, 1)[0])
+            if base:
+                out.add(base)
+    return out
 
 
 def _chunks(ids: list[int], size: int = IN_BATCH_SIZE):
@@ -210,7 +233,8 @@ def load_user_context(
 
     # ----- library
     if req.library is not None:
-        library_ids = {item.tmdb_id for item in req.library}
+        library_ids = {item.tmdb_id for item in req.library if item.tmdb_id is not None}
+        library_title_keys = set().union(*(title_key_variants(item.title) for item in req.library))
         if persist_library:
             now = datetime.now(timezone.utc).isoformat(timespec="seconds")
             with transaction(conn):
@@ -220,7 +244,11 @@ def load_user_context(
                        ON CONFLICT(kind, tmdb_id) DO UPDATE SET
                          source = COALESCE(excluded.source, library_items.source),
                          added_at = excluded.added_at""",
-                    [(kind, item.tmdb_id, item.source, now) for item in req.library],
+                    [
+                        (kind, item.tmdb_id, item.source, now)
+                        for item in req.library
+                        if item.tmdb_id is not None
+                    ],
                 )
     else:
         library_ids = {
@@ -229,8 +257,11 @@ def load_user_context(
                 "SELECT tmdb_id FROM library_items WHERE kind = ?", (kind,)
             ).fetchall()
         }
+        library_title_keys = set()
 
     library_titles = _load_title_rows(conn, kind, list(library_ids))
+    for title in library_titles.values():
+        library_title_keys.update(title_key_variants(title.title))
     lib_pair = _stack_embeddings(conn, kind, library_ids)
     library_embeddings, library_embedding_ids = (
         (lib_pair[0], lib_pair[1]) if lib_pair is not None else (None, [])
@@ -318,8 +349,9 @@ def load_user_context(
             for r in conn.execute(
                 """SELECT tmdb_id FROM recently_shown
                    WHERE sub = ? AND kind = ?
-                   ORDER BY ts DESC LIMIT 200""",
-                (req.sub, kind),
+                     AND datetime(ts) >= datetime('now', ?)
+                   ORDER BY ts DESC""",
+                (req.sub, kind, f"-{RECENTLY_SHOWN_RETENTION_DAYS} days"),
             ).fetchall()
         }
 
@@ -327,6 +359,7 @@ def load_user_context(
         sub=req.sub,
         kind=kind,
         library_ids=library_ids,
+        library_title_keys=library_title_keys,
         library_embeddings=library_embeddings,
         library_embedding_ids=library_embedding_ids,
         library_titles=library_titles,

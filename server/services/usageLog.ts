@@ -20,6 +20,7 @@ export type UsageEvent = {
   type: UsageEventType
   model: string
   kind: 'movie' | 'tv'
+  callCount?: number
   inputTokens?: number
   outputTokens?: number
   cacheCreationInputTokens?: number
@@ -200,6 +201,7 @@ export type UsageSummary = {
   errors: number
   inputTokens: number
   outputTokens: number
+  cacheCreationInputTokens: number
   cacheReadInputTokens: number
   costCents: number
 }
@@ -239,15 +241,17 @@ export async function summarizeUsage(sinceMs: number): Promise<UsageSummary[]> {
         errors: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheCreationInputTokens: 0,
         cacheReadInputTokens: 0,
         costCents: 0,
       }
       byUser.set(e.sub, row)
     }
-    if (e.type === 'claude_call') row.calls += 1
+    if (e.type === 'claude_call') row.calls += e.callCount ?? 1
     if (e.type === 'claude_error') row.errors += 1
     row.inputTokens += e.inputTokens ?? 0
     row.outputTokens += e.outputTokens ?? 0
+    row.cacheCreationInputTokens += e.cacheCreationInputTokens ?? 0
     row.cacheReadInputTokens += e.cacheReadInputTokens ?? 0
     row.costCents += e.costCents ?? 0
   }

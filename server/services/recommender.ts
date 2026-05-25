@@ -19,7 +19,7 @@ export type RecommenderKind = 'movie' | 'tv'
 export type RecommenderProvenance = 'personalized' | 'discover' | 'trending'
 
 export type RecommenderLibraryItem = {
-  tmdb_id: number
+  tmdb_id?: number
   title?: string
   source?: 'sonarr' | 'radarr'
 }
