@@ -39,3 +39,36 @@ describe('GET /api/iptv/health', () => {
     expect(typeof body.expiresAt).toBe('string')
   })
 })
+
+vi.mock('../services/iptvSync.js', () => ({
+  syncOnce: vi.fn(async () => ({
+    busy: false, channels: 10, vod: 20, series: 5, episodes: 50, epg: 100, categories: 6,
+    startedAt: '2026-05-24T00:00:00Z', finishedAt: '2026-05-24T00:00:30Z', durationMs: 30000,
+  })),
+}))
+vi.mock('../services/iptvDbSingleton.js', () => ({
+  iptvDb: () => ({ raw: { prepare: () => ({ all: () => [], get: () => undefined, run: () => undefined }) }, stmts: {} }),
+  closeIptvDb: () => undefined,
+}))
+
+describe('POST /api/iptv/admin/sync', () => {
+  it('returns a job id and final stats', async () => {
+    const app = new Hono().route('/api/iptv', iptv)
+    const res = await app.request('/api/iptv/admin/sync', { method: 'POST' })
+    expect(res.status).toBe(202)
+    const body = await res.json() as { jobId: string }
+    expect(typeof body.jobId).toBe('string')
+  })
+
+  it('GET /admin/sync/:id reports completed stats', async () => {
+    const app = new Hono().route('/api/iptv', iptv)
+    const start = await app.request('/api/iptv/admin/sync', { method: 'POST' })
+    const { jobId } = await start.json() as { jobId: string }
+    await new Promise(r => setTimeout(r, 30))
+    const status = await app.request(`/api/iptv/admin/sync/${jobId}`)
+    expect(status.status).toBe(200)
+    const body = await status.json() as { state: string; result?: { channels: number } }
+    expect(body.state).toBe('done')
+    expect(body.result?.channels).toBe(10)
+  })
+})
