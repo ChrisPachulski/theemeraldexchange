@@ -86,6 +86,7 @@ type SuggestionsResponse = {
     year?: number
     provenance?: SuggestionProvenance
     reason?: string | null
+    available_on?: string[]
   }>
   _diag?: SuggestionDiag
 }
@@ -139,6 +140,7 @@ async function fetchSuggested(
       year: row.year,
       provenance: row.provenance,
       reason: row.reason ?? null,
+      available_on: row.available_on,
     })),
     source: data.source ?? null,
     diag: data._diag ?? null,

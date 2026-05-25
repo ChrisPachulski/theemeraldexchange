@@ -32,6 +32,7 @@ import { getUserFeedback, updateLikedTitleIfPresent } from '../services/userFeed
 import { appendUsageEvent, computeCostCents } from '../services/usageLog.js'
 import { scoreOnce, postShown, postImpressions, type RecommenderScoredItem } from '../services/recommender.js'
 import { sanitizeTitle } from '../services/sanitize.js'
+import { iptvDb } from '../services/iptvDbSingleton.js'
 import { env } from '../env.js'
 
 const MODEL = 'claude-haiku-4-5'
@@ -115,6 +116,7 @@ type SuggestionItem = {
   // Claude's own short rationale; null for fills.
   provenance?: SuggestionProvenance
   reason?: string | null
+  available_on?: string[]
 }
 
 type ClaudePick = {
@@ -1713,6 +1715,32 @@ function makeTiming(): {
   }
 }
 
+function tagIptvAvailability(items: SuggestionItem[]): SuggestionItem[] {
+  const ids = Array.from(new Set(items.map((item) => item.id).filter((id) => Number.isInteger(id))))
+  if (ids.length === 0) return items
+
+  try {
+    const placeholders = ids.map(() => '?').join(',')
+    const rows = iptvDb().raw.prepare(`
+      SELECT DISTINCT tmdb_id
+      FROM iptv_title_link
+      WHERE tmdb_id IN (${placeholders})
+    `).all(...ids) as Array<{ tmdb_id: number }>
+    const linked = new Set(rows.map((row) => row.tmdb_id))
+    if (linked.size === 0) return items
+
+    return items.map((item) => {
+      if (!linked.has(item.id)) return item
+      const available = item.available_on ? [...item.available_on] : []
+      if (!available.includes('iptv')) available.push('iptv')
+      return { ...item, available_on: available }
+    })
+  } catch (err) {
+    console.warn('[suggestions] iptv availability lookup failed:', err instanceof Error ? err.message : String(err))
+    return items
+  }
+}
+
 suggestions.get('/:type', async (c) => {
   const type = c.req.param('type')
   if (type !== 'movie' && type !== 'tv') {
@@ -1949,7 +1977,7 @@ suggestions.get('/:type', async (c) => {
       setTimingHeader()
       return c.json({
         source: 'trending',
-        items: shown,
+        items: tagIptvAvailability(shown),
         _diag: diag({
           path: 'recommender_fallback_trending',
           modelVersion,
@@ -2012,7 +2040,7 @@ suggestions.get('/:type', async (c) => {
     setTimingHeader()
     return c.json({
       source: 'recommender',
-      items,
+      items: tagIptvAvailability(items),
       _diag: diag({
         modelVersion,
         recipe,
@@ -2045,7 +2073,7 @@ suggestions.get('/:type', async (c) => {
     }))
     endTrending()
     setTimingHeader()
-    return c.json({ source: 'trending', items: trending.slice(0, TARGET_COUNT), _diag: diag() })
+    return c.json({ source: 'trending', items: tagIptvAvailability(trending.slice(0, TARGET_COUNT)), _diag: diag() })
   }
 
   // Cold start: library too small for meaningful taste signal.
@@ -2061,7 +2089,7 @@ suggestions.get('/:type', async (c) => {
     setTimingHeader()
     return c.json({
       source: 'trending',
-      items: trending.slice(0, TARGET_COUNT),
+      items: tagIptvAvailability(trending.slice(0, TARGET_COUNT)),
       _diag: diag({
         reason: 'library_below_threshold',
         libraryCount: library.length,
@@ -2353,7 +2381,7 @@ suggestions.get('/:type', async (c) => {
     setTimingHeader()
     return c.json({
       source: 'trending_fallback',
-      items: trending.slice(0, TARGET_COUNT),
+      items: tagIptvAvailability(trending.slice(0, TARGET_COUNT)),
       _diag: diag({ reason: 'claude_threw', claudeError: errorMsg, claudeStatus: errorStatus, ...(usageLogFailed ? { usageLogFailed: true } : {}) }),
     })
   }
@@ -2537,13 +2565,13 @@ suggestions.get('/:type', async (c) => {
     if (accepted.length === 0) {
       return c.json({
         source: 'personalized_empty_trending_fallback',
-        items: filled,
+        items: tagIptvAvailability(filled),
         _diag: diag({ accepted: 0, retryAttempted: triedRetry, fillSource, lastCounters: filledCounters, poolSize: safePool.length, poolHitRate: 0, droppedPicks: droppedTotal, costCents: refreshCostCents, cacheHitRate, callCount: claudeCallCount, recentlyShownCount, ...(claudeTruncated ? { claudeTruncated: true } : {}), ...(usageLogFailed ? { usageLogFailed: true } : {}) }),
       })
     }
     return c.json({
       source: 'personalized_filled',
-      items: filled,
+      items: tagIptvAvailability(filled),
       _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, fillSource, lastCounters: filledCounters, poolSize: safePool.length, poolHits: filledPoolHits, poolHitRate: filledPoolHitRate, droppedPicks: droppedTotal, costCents: refreshCostCents, cacheHitRate, callCount: claudeCallCount, recentlyShownCount, ...(claudeTruncated ? { claudeTruncated: true } : {}), ...(usageLogFailed ? { usageLogFailed: true } : {}) }),
     })
   }
@@ -2569,7 +2597,7 @@ suggestions.get('/:type', async (c) => {
   setTimingHeader()
   return c.json({
     source: 'personalized',
-    items: finalAccepted,
+    items: tagIptvAvailability(finalAccepted),
     _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, poolSize: safePool.length, poolHits: poolHitsTotal, poolHitRate, lastCounters: finalCounters, droppedPicks: droppedTotal, costCents: refreshCostCents, cacheHitRate, callCount: claudeCallCount, recentlyShownCount: recentlyShownTrimmed.length, ...(claudeTruncated ? { claudeTruncated: true } : {}), ...(usageLogFailed ? { usageLogFailed: true } : {}) }),
   })
 })

@@ -1,21 +1,71 @@
 // src/components/tabs/VodTab.tsx
-import { useState } from 'react'
+import { type KeyboardEvent, useState } from 'react'
+import IptvPlayer from '../player/IptvPlayer'
+import { iptvApi, type StreamGrant, type VodDto } from '../../lib/api/iptv'
 import { useIptvCategories } from '../../lib/hooks/useIptvCategories'
 import { useIptvVod } from '../../lib/hooks/useIptvVod'
+import { useIptvFavoriteSet, useToggleIptvFavorite } from '../../lib/hooks/useIptvFavorites'
+import { useIptvHistoryIndex, useReportPosition } from '../../lib/hooks/useIptvHistory'
 import { useDebounced } from '../../lib/hooks/useDebounced'
+
+type ResumeRow = {
+  position_secs: number
+  duration_secs: number | null
+  completed: number
+}
+
+function resumePercent(row: ResumeRow | undefined): number | null {
+  if (!row || row.completed) return null
+  if (!row.duration_secs || row.duration_secs <= 0) return 0
+  return Math.min(100, Math.max(0, (row.position_secs / row.duration_secs) * 100))
+}
+
+function resumePosition(row: ResumeRow | undefined): number | undefined {
+  if (!row || row.completed || row.position_secs <= 0) return undefined
+  return row.position_secs
+}
 
 export default function VodTab() {
   const [q, setQ] = useState('')
   const [categoryId, setCategoryId] = useState<number | undefined>(undefined)
   const [offset, setOffset] = useState(0)
+  const [playing, setPlaying] = useState<{
+    grant: StreamGrant
+    title: string
+    itemId: string
+    startPositionSecs?: number
+  } | null>(null)
   const debounced = useDebounced(q, 250)
   const cats = useIptvCategories('vod')
   const limit = 100
   const list = useIptvVod({ q: debounced, categoryId, limit, offset })
+  const favs = useIptvFavoriteSet()
+  const toggleFavorite = useToggleIptvFavorite()
+  const history = useIptvHistoryIndex()
+  const reportPosition = useReportPosition('vod', playing?.itemId ?? '')
+
   const count = list.data?.items.length ?? 0
   const total = list.data?.total ?? 0
   const pageStart = total > 0 ? offset + 1 : 0
   const pageEnd = Math.min(offset + count, total)
+
+  const playVod = async (vod: VodDto) => {
+    const itemId = vod.stream_id.toString()
+    const grant = await iptvApi.grantVod(itemId)
+    setPlaying({
+      grant,
+      title: vod.name,
+      itemId,
+      startPositionSecs: resumePosition(history.get(`vod:${itemId}`)),
+    })
+  }
+
+  const handleCardKeyDown = (event: KeyboardEvent, vod: VodDto) => {
+    if (event.target !== event.currentTarget) return
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    void playVod(vod)
+  }
 
   return (
     <section className="iptv-tab">
@@ -44,15 +94,41 @@ export default function VodTab() {
       {list.isLoading && <p className="iptv-tab__status">Loading…</p>}
       {list.error && <p className="iptv-tab__status iptv-tab__status--error">Failed to load movies.</p>}
       <ul className="iptv-poster-grid">
-        {(list.data?.items ?? []).map((v) => (
-          <li key={v.stream_id} className="iptv-poster-card">
-            {v.stream_icon
-              ? <img src={v.stream_icon} alt="" className="iptv-poster-card__img" loading="lazy" />
-              : <div className="iptv-poster-card__img iptv-poster-card__img--placeholder" aria-hidden />}
-            <div className="iptv-poster-card__name" title={v.name}>{v.name}</div>
-            {v.year ? <div className="iptv-poster-card__year">{v.year}</div> : null}
-          </li>
-        ))}
+        {(list.data?.items ?? []).map((v) => {
+          const itemId = v.stream_id.toString()
+          const favKey = `vod:${itemId}`
+          const isFav = favs.has(favKey)
+          const pct = resumePercent(history.get(favKey))
+
+          return (
+            <li
+              key={v.stream_id}
+              className="iptv-poster-card"
+              role="button"
+              tabIndex={0}
+              onClick={() => void playVod(v)}
+              onKeyDown={(event) => handleCardKeyDown(event, v)}
+            >
+              <button
+                className={`iptv-fav-toggle ${isFav ? 'iptv-fav-toggle--on' : ''}`}
+                type="button"
+                aria-label={isFav ? 'Unfavorite' : 'Favorite'}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  toggleFavorite.mutate({ kind: 'vod', itemId, currentlyFav: isFav })
+                }}
+              >
+                {isFav ? '★' : '☆'}
+              </button>
+              {v.stream_icon
+                ? <img src={v.stream_icon} alt="" className="iptv-poster-card__img" loading="lazy" />
+                : <div className="iptv-poster-card__img iptv-poster-card__img--placeholder" aria-hidden />}
+              {pct != null && <div className="iptv-resume-bar" style={{ width: `${pct}%` }} />}
+              <div className="iptv-poster-card__name" title={v.name}>{v.name}</div>
+              {v.year ? <div className="iptv-poster-card__year">{v.year}</div> : null}
+            </li>
+          )
+        })}
       </ul>
       {total > limit && (
         <nav className="iptv-tab__pager" aria-label="VOD pages">
@@ -66,6 +142,26 @@ export default function VodTab() {
             Next
           </button>
         </nav>
+      )}
+
+      {playing && (
+        <div className="iptv-player-modal" role="dialog" aria-modal="true" aria-label={playing.title}>
+          <div className="iptv-player-modal__header">
+            <h2>{playing.title}</h2>
+            <button className="iptv-player-modal__close" type="button" onClick={() => setPlaying(null)} aria-label="Close player">
+              ×
+            </button>
+          </div>
+          <IptvPlayer
+            grant={playing.grant}
+            autoPlay
+            startPositionSecs={playing.startPositionSecs}
+            onPositionUpdate={(positionSecs, durationSecs) => {
+              const completed = durationSecs != null && positionSecs >= Math.max(0, durationSecs - 30)
+              reportPosition(positionSecs, durationSecs, completed)
+            }}
+          />
+        </div>
       )}
     </section>
   )

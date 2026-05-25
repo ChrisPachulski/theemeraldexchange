@@ -331,6 +331,9 @@ export function TrendingRow({
                 )}
                 <div className="trending__caption">
                   <span className="trending__title">{item.title}</span>
+                  {item.available_on?.includes('iptv') && (
+                    <span className="suggestion-badge suggestion-badge--iptv" title="Available via IPTV">IPTV</span>
+                  )}
                   {item.year && <span className="trending__year">{item.year}</span>}
                 </div>
                 {item.reason && (
