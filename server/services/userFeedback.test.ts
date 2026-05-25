@@ -9,6 +9,8 @@ import {
   clearFeedback,
   anotherUserDislikes,
   updateLikedTitleIfPresent,
+  FeedbackQuotaError,
+  MAX_FEEDBACK_ENTRIES_PER_SIGNAL,
   _setUserFeedbackPathForTests,
 } from './userFeedback.js'
 
@@ -245,6 +247,59 @@ describe('user feedback store', () => {
     expect(
       (await getUserFeedback('alice')).movie.liked.map((e) => e.id).sort(),
     ).toEqual([1, 2, 3])
+  })
+
+  it('caps likes to the most recent entries and lets duplicate updates survive', async () => {
+    await fs.writeFile(
+      path,
+      JSON.stringify({
+        alice: {
+          movie: {
+            liked: Array.from({ length: MAX_FEEDBACK_ENTRIES_PER_SIGNAL }, (_, i) => ({
+              id: i + 1,
+              title: `Title ${i + 1}`,
+            })),
+            disliked: [],
+          },
+          tv: { liked: [], disliked: [] },
+        },
+      }),
+    )
+    _setUserFeedbackPathForTests(path)
+    await setLike('alice', 'movie', MAX_FEEDBACK_ENTRIES_PER_SIGNAL + 1, 'Overflow')
+    await setLike('alice', 'movie', 2, 'Updated 2')
+
+    const likes = (await getUserFeedback('alice')).movie.liked
+    expect(likes).toHaveLength(MAX_FEEDBACK_ENTRIES_PER_SIGNAL)
+    expect(likes.some((e) => e.id === 1)).toBe(false)
+    expect(likes.at(-1)).toEqual({ id: 2, title: 'Updated 2' })
+  })
+
+  it('rejects new dislikes at the per-user cap but preserves duplicate updates', async () => {
+    await fs.writeFile(
+      path,
+      JSON.stringify({
+        alice: {
+          movie: {
+            liked: [],
+            disliked: Array.from({ length: MAX_FEEDBACK_ENTRIES_PER_SIGNAL }, (_, i) => ({
+              id: i + 1,
+              title: `Title ${i + 1}`,
+            })),
+          },
+          tv: { liked: [], disliked: [] },
+        },
+      }),
+    )
+    _setUserFeedbackPathForTests(path)
+
+    await expect(setDislike('alice', 'movie', MAX_FEEDBACK_ENTRIES_PER_SIGNAL + 1, 'Overflow'))
+      .rejects.toBeInstanceOf(FeedbackQuotaError)
+    await expect(setDislike('alice', 'movie', 1, 'Updated 1')).resolves.toBeUndefined()
+
+    const dislikes = (await getUserFeedback('alice')).movie.disliked
+    expect(dislikes).toHaveLength(MAX_FEEDBACK_ENTRIES_PER_SIGNAL)
+    expect(dislikes.at(-1)).toEqual({ id: 1, title: 'Updated 1' })
   })
 
   it('writeFile failure rejects the awaited result (no UI lie)', async () => {

@@ -39,6 +39,20 @@ type KindBucket = { liked: FeedbackEntry[]; disliked: FeedbackEntry[] }
 type UserBucket = { movie: KindBucket; tv: KindBucket }
 type FeedbackFile = Record<string, UserBucket>
 
+export const MAX_FEEDBACK_ENTRIES_PER_SIGNAL = 500
+
+export class FeedbackQuotaError extends Error {
+  signal: FeedbackSignal
+  limit: number
+
+  constructor(signal: FeedbackSignal, limit = MAX_FEEDBACK_ENTRIES_PER_SIGNAL) {
+    super(`feedback_${signal}_quota_exceeded`)
+    this.name = 'FeedbackQuotaError'
+    this.signal = signal
+    this.limit = limit
+  }
+}
+
 function emptyBucket(): UserBucket {
   return {
     movie: { liked: [], disliked: [] },
@@ -90,7 +104,10 @@ function normalizeList(raw: unknown): FeedbackEntry[] {
 
 function sanitizeBucket(raw: unknown): KindBucket {
   const r = (raw ?? {}) as Partial<{ liked: unknown; disliked: unknown }>
-  return { liked: normalizeList(r.liked), disliked: normalizeList(r.disliked) }
+  return {
+    liked: normalizeList(r.liked).slice(-MAX_FEEDBACK_ENTRIES_PER_SIGNAL),
+    disliked: normalizeList(r.disliked),
+  }
 }
 
 function sanitizeUser(raw: unknown): UserBucket {
@@ -191,10 +208,21 @@ function mutate(
     const existing =
       bucket.liked.find((e) => e.id === tmdbId) ??
       bucket.disliked.find((e) => e.id === tmdbId)
+    const existingDislike = bucket.disliked.some((e) => e.id === tmdbId)
+    if (
+      next === 'dislike' &&
+      !existingDislike &&
+      bucket.disliked.length >= MAX_FEEDBACK_ENTRIES_PER_SIGNAL
+    ) {
+      throw new FeedbackQuotaError('dislike')
+    }
     const carryTitle = safeTitle || existing?.title || ''
     bucket.liked = bucket.liked.filter((e) => e.id !== tmdbId)
     bucket.disliked = bucket.disliked.filter((e) => e.id !== tmdbId)
-    if (next === 'like') bucket.liked.push({ id: tmdbId, title: carryTitle })
+    if (next === 'like') {
+      bucket.liked.push({ id: tmdbId, title: carryTitle })
+      bucket.liked = bucket.liked.slice(-MAX_FEEDBACK_ENTRIES_PER_SIGNAL)
+    }
     if (next === 'dislike') bucket.disliked.push({ id: tmdbId, title: carryTitle })
     // Shallow spread of `file` preserves other users by reference —
     // safe because mutate() never touches anything outside
