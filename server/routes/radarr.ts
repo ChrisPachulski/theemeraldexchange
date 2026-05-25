@@ -209,20 +209,6 @@ type RadarrAddBody = {
 
 type CreatedRadarrMovie = RadarrAddBody & { id?: number; title?: string }
 
-async function restoreMovieMonitoring(movie: CreatedRadarrMovie): Promise<{ ok: true } | { ok: false; status: number }> {
-  if (!movie.id) return { ok: false, status: 0 }
-  const res = await radarrFetch(`/api/v3/movie/${movie.id}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...movie, monitored: true }),
-  })
-  if (!res.ok) {
-    console.error(`[movie-cap] failed to restore monitoring for movie ${movie.id}: ${res.status}`)
-    return { ok: false, status: res.status }
-  }
-  return { ok: true }
-}
-
 async function deleteCreatedMovie(movie: CreatedRadarrMovie): Promise<{ ok: true } | { ok: false; status: number }> {
   if (!movie.id) return { ok: false, status: 0 }
   const res = await radarrFetch(`/api/v3/movie/${movie.id}`, { method: 'DELETE' })
@@ -398,19 +384,11 @@ radarr.post('/api/v3/movie', async (c) => {
           )
         }
         if (grab.status === 'no_releases' || grab.status === 'all_rejected_by_cap') {
-          const restore = await restoreMovieMonitoring(created)
-          if (restore.ok) {
-            return new Response(out, {
-              status: r.status,
-              headers: { 'Content-Type': r.headers.get('Content-Type') ?? 'application/json' },
-            })
-          }
           return c.json(
             {
               error: 'capped_grab_not_started',
               phase: grab.status,
               scanned: grab.scanned,
-              restoreStatus: restore.status || undefined,
               movie: created,
             },
             424,
