@@ -381,38 +381,55 @@ async def changes_since(client: TmdbClient, conn: sqlite3.Connection, kind: str)
     cursor = conn.execute(
         "SELECT value FROM ingest_state WHERE key = ?", (f"changes_{kind}_cursor",)
     ).fetchone()
-    start = (date.today() - timedelta(days=2)).isoformat() if cursor is None else cursor["value"]
-    end = date.today().isoformat()
+    today = date.today()
+    if cursor is None:
+        start_day = today - timedelta(days=2)
+    else:
+        try:
+            start_day = date.fromisoformat(cursor["value"])
+        except (TypeError, ValueError):
+            log.warning("invalid %s changes cursor %r; using two-day overlap", kind, cursor["value"])
+            start_day = today - timedelta(days=2)
+    if start_day > today:
+        start_day = today
 
+    window_start = start_day
     enqueued = 0
-    page = 1
-    while True:
-        data = await client.changes(kind, start_date=start, end_date=end, page=page)
-        for row in data.get("results") or []:
-            try:
-                tid = int(row.get("id"))
-            except (TypeError, ValueError):
-                log.warning("skipping %s changes row without valid id: %r", kind, row)
-                continue
-            with transaction(conn):
-                conn.execute(
-                    """INSERT INTO ingest_queue(tmdb_id, kind, status, attempts, updated_at)
-                       VALUES (?, ?, 'pending', 0, datetime('now'))
-                       ON CONFLICT(tmdb_id, kind) DO UPDATE SET status='pending',
-                         attempts=0, updated_at=datetime('now')""",
-                    (tid, kind),
-                )
-            enqueued += 1
-        if page >= int(data.get("total_pages") or 1):
-            break
-        page += 1
+    while window_start <= today:
+        window_end = min(window_start + timedelta(days=13), today)
+        start = window_start.isoformat()
+        end = window_end.isoformat()
+        page = 1
+        while True:
+            data = await client.changes(kind, start_date=start, end_date=end, page=page)
+            for row in data.get("results") or []:
+                try:
+                    tid = int(row.get("id"))
+                except (TypeError, ValueError):
+                    log.warning("skipping %s changes row without valid id: %r", kind, row)
+                    continue
+                with transaction(conn):
+                    conn.execute(
+                        """INSERT INTO ingest_queue(tmdb_id, kind, status, attempts, updated_at)
+                           VALUES (?, ?, 'pending', 0, datetime('now'))
+                           ON CONFLICT(tmdb_id, kind) DO UPDATE SET status='pending',
+                             attempts=0, updated_at=datetime('now')""",
+                        (tid, kind),
+                    )
+                enqueued += 1
+            if page >= int(data.get("total_pages") or 1):
+                break
+            page += 1
 
-    with transaction(conn):
-        conn.execute(
-            """INSERT INTO ingest_state(key, value, ts) VALUES (?, ?, datetime('now'))
-               ON CONFLICT(key) DO UPDATE SET value=excluded.value, ts=excluded.ts""",
-            (f"changes_{kind}_cursor", end),
-        )
+        with transaction(conn):
+            conn.execute(
+                """INSERT INTO ingest_state(key, value, ts) VALUES (?, ?, datetime('now'))
+                   ON CONFLICT(key) DO UPDATE SET value=excluded.value, ts=excluded.ts""",
+                (f"changes_{kind}_cursor", end),
+            )
+        if window_end >= today:
+            break
+        window_start = window_end
     return enqueued
 
 

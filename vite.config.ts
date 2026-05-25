@@ -6,6 +6,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
 
   const backendTarget = `http://localhost:${env.PORT || '3001'}`
+  const analyze = env.ANALYZE === '1' || env.ANALYZE === 'true'
 
   // Every /api/* path goes through the Hono backend now. The backend
   // allow-lists each Sonarr/Radarr/SAB endpoint with role + disk-space
@@ -16,14 +17,15 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       react(),
-      // Writes dist/stats.html on every build so we can audit bundle
-      // composition without having to remember a separate flag. Cheap;
-      // does not affect the emitted bundle.
-      visualizer({
-        filename: 'dist/stats.html',
-        gzipSize: true,
-        brotliSize: true,
-      }),
+      ...(analyze
+        ? [
+            visualizer({
+              filename: 'dist/stats.html',
+              gzipSize: true,
+              brotliSize: true,
+            }),
+          ]
+        : []),
     ],
     server: {
       proxy: {

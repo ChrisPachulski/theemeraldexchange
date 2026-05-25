@@ -5,6 +5,7 @@ import { setImmediate as yieldEventLoop } from 'node:timers/promises'
 import { env } from '../env.js'
 
 const EPG_FETCH_TIMEOUT_MS = 5 * 60_000
+const EPG_WALL_TIMEOUT_MS = 30 * 60_000
 
 export interface EpgProgrammeRow {
   channel_id: string
@@ -32,13 +33,19 @@ export function parseXmltvProgramme(_unused: never): EpgProgrammeRow {
   throw new Error('use streamXmltv')
 }
 
-async function waitForReadable(input: Readable): Promise<'readable' | 'end'> {
+function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason ?? 'aborted'))
+}
+
+async function waitForReadable(input: Readable, signal?: AbortSignal): Promise<'readable' | 'end'> {
   if (input.readableEnded) return 'end'
+  if (signal?.aborted) throw abortReason(signal)
   return new Promise((resolve, reject) => {
     const cleanup = () => {
       input.off('readable', onReadable)
       input.off('end', onEnd)
       input.off('error', onError)
+      signal?.removeEventListener('abort', onAbort)
     }
     const onReadable = () => {
       cleanup()
@@ -52,15 +59,21 @@ async function waitForReadable(input: Readable): Promise<'readable' | 'end'> {
       cleanup()
       reject(err)
     }
+    const onAbort = () => {
+      cleanup()
+      reject(abortReason(signal as AbortSignal))
+    }
     input.once('readable', onReadable)
     input.once('end', onEnd)
     input.once('error', onError)
+    signal?.addEventListener('abort', onAbort, { once: true })
   })
 }
 
 export async function streamXmltv(
   input: Readable,
   onProgramme: (row: EpgProgrammeRow) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   // Auto-detect gzip by reading the first two bytes.
   const headChunks: Buffer[] = []
@@ -73,7 +86,7 @@ export async function streamXmltv(
       total += buf.length
       continue
     }
-    if (await waitForReadable(input) === 'end') break
+    if (await waitForReadable(input, signal) === 'end') break
   }
   const head = Buffer.concat(headChunks, total)
   const isGzip = head[0] === 0x1f && head[1] === 0x8b
@@ -125,9 +138,36 @@ export async function streamXmltv(
   })
 
   await new Promise<void>((resolve, reject) => {
-    parser.on('error', reject)
-    parser.on('end', () => resolve())
-    xmlStream.on('error', reject)
+    let settled = false
+    const cleanup = () => {
+      parser.off('error', fail)
+      parser.off('end', done)
+      xmlStream.off('error', fail)
+      signal?.removeEventListener('abort', onAbort)
+    }
+    const fail = (err: Error) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      input.destroy(err)
+      xmlStream.destroy(err)
+      reject(err)
+    }
+    const done = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve()
+    }
+    const onAbort = () => fail(abortReason(signal as AbortSignal))
+    if (signal?.aborted) {
+      fail(abortReason(signal))
+      return
+    }
+    parser.on('error', fail)
+    parser.on('end', done)
+    xmlStream.on('error', fail)
+    signal?.addEventListener('abort', onAbort, { once: true })
     xmlStream.pipe(parser)
   })
 }
@@ -142,13 +182,33 @@ export async function fetchAndStreamEpg(
   const epgPath = (env.IPTV_EPG_PATH ?? '/xmltv.php').replace(/^([^/])/, '/$1')
   const url = `${host}${epgPath}?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}`
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), Math.max(env.IPTV_LIST_TIMEOUT_MS, EPG_FETCH_TIMEOUT_MS))
+  const idleMs = Math.max(env.IPTV_LIST_TIMEOUT_MS, EPG_FETCH_TIMEOUT_MS)
+  const abortWith = (label: 'epg_idle_timeout' | 'epg_wall_timeout') => {
+    if (!controller.signal.aborted) controller.abort(new Error(label))
+  }
+  const wallTimer = setTimeout(() => abortWith('epg_wall_timeout'), EPG_WALL_TIMEOUT_MS)
+  let idleTimer: ReturnType<typeof setTimeout> | null = null
+  const resetIdleTimer = () => {
+    if (idleTimer) clearTimeout(idleTimer)
+    idleTimer = setTimeout(() => abortWith('epg_idle_timeout'), idleMs)
+  }
   try {
+    resetIdleTimer()
     const res = await fetch(url, { signal: controller.signal })
     if (!res.ok || !res.body) throw new Error(`xtream.xmltv_${res.status}`)
-    const nodeStream = Readable.fromWeb(res.body as unknown as ReadableStream<Uint8Array>)
-    await streamXmltv(nodeStream, onProgramme)
+    const source = Readable.fromWeb(res.body as unknown as ReadableStream<Uint8Array>)
+    const nodeStream = Readable.from((async function* () {
+      for await (const chunk of source) {
+        resetIdleTimer()
+        yield chunk
+      }
+    })())
+    await streamXmltv(nodeStream, onProgramme, controller.signal)
+  } catch (err) {
+    if (controller.signal.aborted) throw abortReason(controller.signal)
+    throw err
   } finally {
-    clearTimeout(timer)
+    clearTimeout(wallTimer)
+    if (idleTimer) clearTimeout(idleTimer)
   }
 }

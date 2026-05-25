@@ -15,7 +15,28 @@ export const sonarr = new Hono<Env>()
 sonarr.use('*', requireAuth)
 
 type SonarrGrabEvent = Parameters<typeof appendGrabEvent>[0]
-type RootFolderSpaceSnapshot = { path: string; freeSpace?: number }
+type RootFolderSpaceSnapshot = { path: string; freeSpace: number }
+
+const pendingRootFolderReservations = new Map<string, number>()
+
+function availableRootFolderBytes(folder: RootFolderSpaceSnapshot): number {
+  return folder.freeSpace - (pendingRootFolderReservations.get(folder.path) ?? 0)
+}
+
+function reserveRootFolderBytes(folder: RootFolderSpaceSnapshot, bytes: number): boolean {
+  if (!Number.isFinite(bytes) || bytes <= 0) return false
+  const reserved = pendingRootFolderReservations.get(folder.path) ?? 0
+  if (folder.freeSpace - reserved - bytes < env.minFreeBytes) return false
+  pendingRootFolderReservations.set(folder.path, reserved + bytes)
+  return true
+}
+
+function releaseRootFolderReservation(folder: RootFolderSpaceSnapshot, bytes: number): void {
+  const reserved = pendingRootFolderReservations.get(folder.path) ?? 0
+  const next = Math.max(0, reserved - bytes)
+  if (next === 0) pendingRootFolderReservations.delete(folder.path)
+  else pendingRootFolderReservations.set(folder.path, next)
+}
 
 async function recordSonarrGrabEvent(event: SonarrGrabEvent): Promise<void> {
   await appendGrabEvent(event).catch((err) => {
@@ -233,31 +254,47 @@ async function grabTvUnderCap(
     coveredEpisodes.set(seasonNumber, covered)
   }
   const plannedBytes = finalPicks.reduce((sum, pick) => sum + pick.size, 0)
-  if (
-    rootFolder &&
-    typeof rootFolder.freeSpace === 'number' &&
-    Number.isFinite(rootFolder.freeSpace) &&
-    rootFolder.freeSpace - plannedBytes < env.minFreeBytes
-  ) {
+  if (rootFolder && availableRootFolderBytes(rootFolder) - plannedBytes < env.minFreeBytes) {
     await recordSonarrGrabEvent({
       ...base,
       type: 'planned_size_exceeds_free_space',
       scanned: all.length,
       eligible: accepted.length,
       plannedBytes,
-      freeBytes: rootFolder.freeSpace,
+      freeBytes: availableRootFolderBytes(rootFolder),
       thresholdBytes: env.minFreeBytes,
       error: `planned TV grab would leave ${rootFolder.path} below minimum free-space reserve`,
     })
     return
   }
-
-  for (const pick of finalPicks) {
-    const grabRes = await sonarrFetch('/api/v3/release', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ guid: pick.guid, indexerId: pick.indexerId }),
+  if (rootFolder && !reserveRootFolderBytes(rootFolder, plannedBytes)) {
+    await recordSonarrGrabEvent({
+      ...base,
+      type: 'planned_size_exceeds_free_space',
+      scanned: all.length,
+      eligible: accepted.length,
+      plannedBytes,
+      freeBytes: availableRootFolderBytes(rootFolder),
+      thresholdBytes: env.minFreeBytes,
+      error: `planned TV grab would overcommit pending reservations for ${rootFolder.path}`,
     })
+    return
+  }
+
+  let grabbedBytes = 0
+  for (const pick of finalPicks) {
+    let grabRes: Awaited<ReturnType<typeof sonarrFetch>>
+    try {
+      grabRes = await sonarrFetch('/api/v3/release', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ guid: pick.guid, indexerId: pick.indexerId }),
+      })
+    } catch (err) {
+      if (rootFolder) releaseRootFolderReservation(rootFolder, plannedBytes - grabbedBytes)
+      throw err
+    }
+    if (grabRes.ok) grabbedBytes += pick.size
     const ec = effectiveEpisodeCount(pick) ?? 1
     console.log(
       `[tv-cap] grab "${pick.title.slice(0, 80)}" ${(pick.size / 1024 ** 3).toFixed(2)}GB ` +
@@ -275,6 +312,9 @@ async function grabTvUnderCap(
         seasonNumber: pick.seasonNumber,
       },
     })
+  }
+  if (rootFolder && grabbedBytes < plannedBytes) {
+    releaseRootFolderReservation(rootFolder, plannedBytes - grabbedBytes)
   }
 }
 
