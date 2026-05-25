@@ -52,6 +52,7 @@ EVAL_EPSILON = 0.005  # require >0.5% improvement to promote
 @dataclass
 class OutcomeStats:
     total_recs: int
+    total_outcomes: int
     by_outcome: dict[str, int]
     worst_offenders: list[dict[str, Any]]   # high-score, rejected
     pleasant_surprises: list[dict[str, Any]]  # low-score, liked
@@ -66,17 +67,18 @@ def _aggregate(conn: sqlite3.Connection) -> OutcomeStats:
         """SELECT o.outcome, COUNT(*) AS c
            FROM rec_outcomes o
            JOIN rec_log r ON r.id = o.rec_id
-           WHERE datetime(r.ts) >= datetime('now','-1 day')
+           WHERE datetime(o.ts) >= datetime('now','-1 day')
            GROUP BY o.outcome"""
     ).fetchall()
     by_outcome = {r["outcome"]: r["c"] for r in by_outcome_rows}
+    total_outcomes = sum(c for outcome, c in by_outcome.items() if outcome != "ignored")
 
     worst = conn.execute(
         """SELECT r.kind, r.tmdb_id, r.score, r.provenance, r.rank, r.ts, t.title
            FROM rec_log r
            JOIN rec_outcomes o ON o.rec_id = r.id
            LEFT JOIN titles t ON t.kind = r.kind AND t.tmdb_id = r.tmdb_id
-           WHERE datetime(r.ts) >= datetime('now','-1 day') AND o.outcome IN ('rejected','disliked')
+           WHERE datetime(o.ts) >= datetime('now','-1 day') AND o.outcome IN ('rejected','disliked')
            ORDER BY r.score DESC LIMIT 8"""
     ).fetchall()
     pleasant = conn.execute(
@@ -84,7 +86,7 @@ def _aggregate(conn: sqlite3.Connection) -> OutcomeStats:
            FROM rec_log r
            JOIN rec_outcomes o ON o.rec_id = r.id
            LEFT JOIN titles t ON t.kind = r.kind AND t.tmdb_id = r.tmdb_id
-           WHERE datetime(r.ts) >= datetime('now','-1 day') AND o.outcome IN ('liked','added','clicked')
+           WHERE datetime(o.ts) >= datetime('now','-1 day') AND o.outcome IN ('liked','added','clicked')
            ORDER BY r.score ASC LIMIT 8"""
     ).fetchall()
 
@@ -96,6 +98,7 @@ def _aggregate(conn: sqlite3.Connection) -> OutcomeStats:
 
     return OutcomeStats(
         total_recs=total,
+        total_outcomes=total_outcomes,
         by_outcome=by_outcome,
         worst_offenders=_ser(worst),
         pleasant_surprises=_ser(pleasant),
@@ -485,30 +488,34 @@ def evaluate_pair(
 # =========================================================================
 
 
-def _prune_inactive_model_configs(conn: sqlite3.Connection) -> None:
+def _prune_inactive_model_configs(conn: sqlite3.Connection, *, preserve_id: int | None = None) -> None:
     conn.execute(
         """DELETE FROM model_config
            WHERE active = 0
+             AND (? IS NULL OR id != ?)
              AND id NOT IN (
                SELECT id FROM model_config
                WHERE active = 0
+                 AND (? IS NULL OR id != ?)
                ORDER BY id DESC
                LIMIT ?
              )""",
-        (MAX_INACTIVE_MODEL_CONFIGS,),
+        (preserve_id, preserve_id, preserve_id, preserve_id, MAX_INACTIVE_MODEL_CONFIGS),
     )
 
 
 def promote(conn: sqlite3.Connection, *, recipe: str, params: dict, notes: str) -> str:
     new_version = f"v-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
     with transaction(conn):
+        previous_active = conn.execute("SELECT id FROM model_config WHERE active = 1 LIMIT 1").fetchone()
+        preserve_id = previous_active["id"] if previous_active else None
         conn.execute("UPDATE model_config SET active = 0 WHERE active = 1")
         conn.execute(
             """INSERT INTO model_config(version, recipe, params_json, active, created_at, notes)
                VALUES (?, ?, ?, 1, datetime('now'), ?)""",
             (new_version, recipe, json.dumps(params), notes),
         )
-        _prune_inactive_model_configs(conn)
+        _prune_inactive_model_configs(conn, preserve_id=preserve_id)
     active = conn.execute(
         "SELECT version FROM model_config WHERE active = 1"
     ).fetchall()
@@ -549,8 +556,12 @@ def run(*, dry_run: bool = False) -> int:
                 log.info("seeded initial model_config from %s defaults", active_recipe)
 
         stats = _aggregate(conn)
-        if stats.total_recs < 50:
-            log.info("only %d rec_log rows in last 24h — skipping optimizer", stats.total_recs)
+        if stats.total_outcomes < 50:
+            log.info(
+                "only %d rec_outcomes rows in last 24h (%d rec_log rows) — skipping optimizer",
+                stats.total_outcomes,
+                stats.total_recs,
+            )
             return 0
 
         proposed = call_claude(
