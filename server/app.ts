@@ -13,6 +13,7 @@ import { sonarr } from './routes/sonarr.js'
 import { radarr } from './routes/radarr.js'
 import { sab } from './routes/sab.js'
 import { tmdb } from './routes/tmdb.js'
+import { iptv } from './routes/iptv.js'
 import { users } from './routes/users.js'
 import { plexAdmin } from './routes/plex-admin.js'
 import { plexLinks } from './routes/plex-links.js'
@@ -81,6 +82,7 @@ app.route('/api/sonarr', sonarr)
 app.route('/api/radarr', radarr)
 app.route('/api/sab', sab)
 app.route('/api/tmdb', tmdb)
+app.route('/api/iptv', iptv)
 app.route('/api/users', users)
 // Order matters: plexLinks (auth-only) is mounted BEFORE plexAdmin
 // (admin-only). Hono's first-match-wins routing means the admin
