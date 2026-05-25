@@ -35,9 +35,7 @@ import { env } from '../env.js'
 
 export const iptv = new Hono<Env>()
 
-iptv.use('*', requireAuth)
-
-iptv.get('/health', async (c) => {
+iptv.get('/health', requireAuth, async (c) => {
   try {
     const info = await getAccountInfo()
     return c.json({
@@ -55,7 +53,7 @@ const KINDS = new Set(['live', 'vod', 'series'])
 const FAV_KINDS = new Set(['live', 'vod', 'series'])
 const HIST_KINDS = new Set(['live', 'vod', 'series_episode'])
 
-iptv.get('/categories', (c) => {
+iptv.get('/categories', requireAuth, (c) => {
   const kind = c.req.query('kind') ?? ''
   if (!KINDS.has(kind)) return c.json({ error: 'invalid_kind' }, 400)
   return c.json(listCategories(iptvDb(), kind as 'live' | 'vod' | 'series'))
@@ -71,11 +69,11 @@ function parseListOpts(c: Context<Env>): { categoryId?: number; q?: string; limi
   }
 }
 
-iptv.get('/live', (c) => c.json(listLive(iptvDb(), parseListOpts(c))))
-iptv.get('/vod', (c) => c.json(listVod(iptvDb(), parseListOpts(c))))
-iptv.get('/series', (c) => c.json(listSeries(iptvDb(), parseListOpts(c))))
+iptv.get('/live', requireAuth, (c) => c.json(listLive(iptvDb(), parseListOpts(c))))
+iptv.get('/vod', requireAuth, (c) => c.json(listVod(iptvDb(), parseListOpts(c))))
+iptv.get('/series', requireAuth, (c) => c.json(listSeries(iptvDb(), parseListOpts(c))))
 
-iptv.get('/epg/now', (c) => {
+iptv.get('/epg/now', requireAuth, (c) => {
   const ids = (c.req.query('channelIds') ?? '')
     .split(',')
     .map((id) => Number(id))
@@ -83,7 +81,7 @@ iptv.get('/epg/now', (c) => {
   return c.json(epgNow(iptvDb(), ids))
 })
 
-iptv.get('/epg/channel/:channelId', (c) => {
+iptv.get('/epg/channel/:channelId', requireAuth, (c) => {
   const channelId = Number(c.req.param('channelId'))
   if (!Number.isInteger(channelId) || channelId <= 0) return c.json({ error: 'invalid_id' }, 400)
 
@@ -92,7 +90,7 @@ iptv.get('/epg/channel/:channelId', (c) => {
   return c.json(epgChannelWindow(iptvDb(), channelId, from, to))
 })
 
-iptv.get('/epg/grid', (c) => {
+iptv.get('/epg/grid', requireAuth, (c) => {
   const from = c.req.query('from') ?? new Date().toISOString()
   const to = c.req.query('to') ?? new Date(Date.now() + 4 * 3600_000).toISOString()
   const rawCategoryId = c.req.query('categoryId')
@@ -103,14 +101,14 @@ iptv.get('/epg/grid', (c) => {
   return c.json(epgGrid(iptvDb(), from, to, categoryId))
 })
 
-iptv.get('/vod/:streamId', (c) => {
+iptv.get('/vod/:streamId', requireAuth, (c) => {
   const id = Number(c.req.param('streamId'))
   if (!Number.isFinite(id)) return c.json({ error: 'invalid_id' }, 400)
   const detail = getVodDetail(iptvDb(), id)
   return detail ? c.json(detail) : c.json({ error: 'not_found' }, 404)
 })
 
-iptv.get('/series/:seriesId', (c) => {
+iptv.get('/series/:seriesId', requireAuth, (c) => {
   const id = Number(c.req.param('seriesId'))
   if (!Number.isFinite(id)) return c.json({ error: 'invalid_id' }, 400)
   const detail = getSeriesDetail(iptvDb(), id)
@@ -132,7 +130,7 @@ function escapeM3uAttr(value: string): string {
   return value.replace(/"/g, '\'')
 }
 
-iptv.post('/playlist/token', (c) => {
+iptv.post('/playlist/token', requireAuth, (c) => {
   const { sub } = userOf(c)
   // 30-day TTL — long enough to drop in an external player and forget, short enough that revoking access via /api/me eventually bites.
   const ttl = 30 * 24 * 3600
@@ -148,7 +146,7 @@ iptv.post('/playlist/token', (c) => {
   })
 })
 
-iptv.get('/playlist.m3u', (c) => {
+iptv.get('/playlist.m3u', requireAuth, (c) => {
   const t = c.req.query('t') ?? ''
   let claims: ReturnType<typeof verifyStreamToken>
   try {
@@ -194,13 +192,13 @@ iptv.get('/playlist.m3u', (c) => {
   })
 })
 
-iptv.get('/favorites', (c) => {
+iptv.get('/favorites', requireAuth, (c) => {
   const { sub } = userOf(c)
   const rows = iptvDb().stmts.getFavorites.all(sub)
   return c.json(rows)
 })
 
-iptv.post('/favorites', async (c) => {
+iptv.post('/favorites', requireAuth, async (c) => {
   const { sub } = userOf(c)
   const body = await c.req.json().catch(() => ({})) as { kind?: unknown; itemId?: unknown }
   if (typeof body.kind !== 'string' || !FAV_KINDS.has(body.kind)) return c.json({ error: 'invalid_kind' }, 400)
@@ -215,7 +213,7 @@ iptv.post('/favorites', async (c) => {
   return c.body(null, 201)
 })
 
-iptv.delete('/favorites/:kind/:itemId', (c) => {
+iptv.delete('/favorites/:kind/:itemId', requireAuth, (c) => {
   const { sub } = userOf(c)
   const kind = c.req.param('kind')
   const itemId = c.req.param('itemId')
@@ -231,13 +229,13 @@ function parseHistoryLimit(rawLimit: string | undefined): number {
   return Math.min(100, Math.max(1, Math.floor(parsed)))
 }
 
-iptv.get('/history', (c) => {
+iptv.get('/history', requireAuth, (c) => {
   const { sub } = userOf(c)
   const rows = iptvDb().stmts.getHistory.all(sub, parseHistoryLimit(c.req.query('limit')))
   return c.json(rows)
 })
 
-iptv.post('/history', async (c) => {
+iptv.post('/history', requireAuth, async (c) => {
   const { sub } = userOf(c)
   const body = await c.req.json().catch(() => ({})) as {
     kind?: unknown
@@ -281,7 +279,7 @@ function parsePositiveInt(value: string | undefined): number | null {
   return parsed
 }
 
-iptv.post('/stream/live/:streamId/grant', (c) => {
+iptv.post('/stream/live/:streamId/grant', requireAuth, (c) => {
   const streamId = c.req.param('streamId')
   if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
   const { sub } = userOf(c)
@@ -308,7 +306,7 @@ iptv.post('/stream/live/:streamId/grant', (c) => {
   })
 })
 
-iptv.post('/stream/catchup/:streamId/grant', (c) => {
+iptv.post('/stream/catchup/:streamId/grant', requireAuth, (c) => {
   const streamId = c.req.param('streamId')
   if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
 
@@ -453,7 +451,7 @@ async function rewriteHlsPlaylist(c: Context, upstreamUrl: string): Promise<Resp
   })
 }
 
-iptv.get('/stream/live/:streamId.ts', async (c) => {
+iptv.get('/stream/live/:streamId.ts', requireAuth, async (c) => {
   const rawStreamId = c.req.param('streamId') ?? (c.req.param() as Record<string, string | undefined>)['streamId.ts']?.replace(/\.ts$/, '')
   const streamId = rawStreamId
   if (!streamId) return c.json({ error: 'invalid_id' }, 400)
@@ -481,7 +479,7 @@ iptv.get('/stream/live/:streamId.ts', async (c) => {
   })
 })
 
-iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
+iptv.get('/stream/live/:streamId/remux/index.m3u8', requireAuth, async (c) => {
   const streamId = c.req.param('streamId')
   if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
   const v = checkToken(c, 'remux', streamId)
@@ -527,7 +525,7 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
   })
 })
 
-iptv.get('/stream/live/:streamId/remux/seg', (c) => {
+iptv.get('/stream/live/:streamId/remux/seg', requireAuth, (c) => {
   const streamId = c.req.param('streamId')
   if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
 
@@ -565,7 +563,7 @@ iptv.get('/stream/live/:streamId/remux/seg', (c) => {
   })
 })
 
-iptv.get('/stream/catchup/:streamId/:startUtc/:durationMin.ts', async (c) => {
+iptv.get('/stream/catchup/:streamId/:startUtc/:durationMin.ts', requireAuth, async (c) => {
   const streamId = c.req.param('streamId')
   if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
 
@@ -604,7 +602,7 @@ iptv.get('/stream/catchup/:streamId/:startUtc/:durationMin.ts', async (c) => {
   })
 })
 
-iptv.post('/stream/vod/:streamId/grant', (c) => {
+iptv.post('/stream/vod/:streamId/grant', requireAuth, (c) => {
   const streamId = c.req.param('streamId')
   if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
   const { sub } = userOf(c)
@@ -629,7 +627,7 @@ iptv.post('/stream/vod/:streamId/grant', (c) => {
   })
 })
 
-iptv.get('/stream/vod/:streamId/:ext', async (c) => {
+iptv.get('/stream/vod/:streamId/:ext', requireAuth, async (c) => {
   const streamId = c.req.param('streamId')
   const ext = c.req.param('ext').toLowerCase()
   const v = checkToken(c, 'vod', streamId)
@@ -643,7 +641,7 @@ iptv.get('/stream/vod/:streamId/:ext', async (c) => {
   return await proxyRangeable(c, upstreamUrl, mime)
 })
 
-iptv.post('/stream/series/:episodeId/grant', (c) => {
+iptv.post('/stream/series/:episodeId/grant', requireAuth, (c) => {
   const episodeId = c.req.param('episodeId')
   if (!/^[\w-]+$/.test(episodeId)) return c.json({ error: 'invalid_id' }, 400)
   const { sub } = userOf(c)
@@ -670,7 +668,7 @@ iptv.post('/stream/series/:episodeId/grant', (c) => {
   })
 })
 
-iptv.get('/stream/series/:episodeId/:ext', async (c) => {
+iptv.get('/stream/series/:episodeId/:ext', requireAuth, async (c) => {
   const episodeId = c.req.param('episodeId')
   const ext = c.req.param('ext').toLowerCase()
   const v = checkToken(c, 'series', episodeId)
@@ -684,7 +682,7 @@ iptv.get('/stream/series/:episodeId/:ext', async (c) => {
   return await proxyRangeable(c, upstreamUrl, mime)
 })
 
-iptv.get('/stream/segment', async (c) => {
+iptv.get('/stream/segment', requireAuth, async (c) => {
   const t = c.req.query('u') ?? ''
   let claims: ReturnType<typeof verifyStreamToken>
   try {
@@ -742,7 +740,39 @@ function rememberJob(job: Job): void {
   }
 }
 
-iptv.post('/admin/sync', requireAdmin, async (c) => {
+iptv.get('/export/recommender', (c) => {
+  const secret = c.req.header('x-iptv-export-secret') ?? ''
+  if (!env.IPTV_RECOMMENDER_EXPORT_SECRET || secret !== env.IPTV_RECOMMENDER_EXPORT_SECRET) {
+    return c.json({ error: 'forbidden' }, 403)
+  }
+
+  const db = iptvDb()
+  const vod = db.raw.prepare(`
+    SELECT stream_id AS id,
+           name AS title,
+           year,
+           plot AS overview,
+           director,
+           cast_csv AS cast,
+           tmdb_id,
+           rating,
+           stream_icon AS poster_path
+    FROM vod
+  `).all()
+  const series = db.raw.prepare(`
+    SELECT series_id AS id,
+           name AS title,
+           plot AS overview,
+           cover AS poster_path,
+           tmdb_id,
+           rating
+    FROM series
+  `).all()
+
+  return c.json({ vod, series })
+})
+
+iptv.post('/admin/sync', requireAuth, requireAdmin, async (c) => {
   const id = randomUUID()
   const job: Job = { id, state: 'running', startedAt: new Date().toISOString() }
   rememberJob(job)
@@ -761,7 +791,7 @@ iptv.post('/admin/sync', requireAdmin, async (c) => {
   return c.json({ jobId: id }, 202)
 })
 
-iptv.get('/admin/sync/:id', requireAdmin, (c) => {
+iptv.get('/admin/sync/:id', requireAuth, requireAdmin, (c) => {
   const id = c.req.param('id')
   const job = jobs.get(id)
   if (!job) return c.json({ error: 'not_found' }, 404)
