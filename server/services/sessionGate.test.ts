@@ -97,6 +97,33 @@ describe('reconcileSession — membership revalidation', () => {
     expect(r).toBeNull()
   })
 
+  it('does not cache a revoked token as user-wide non-membership', async () => {
+    let calls = 0
+    probeImpl.fn = async (token: string) => {
+      calls++
+      if (token === 'revoked-token') return { kind: 'http_error', status: 401 }
+      return {
+        kind: 'ok',
+        resources: [
+          {
+            name: 'Home',
+            clientIdentifier: 'home-machine-id',
+            owned: true,
+            home: false,
+            provides: 'server',
+          },
+        ],
+      }
+    }
+
+    expect(await reconcileSession({ ...baseSession, plexAuthToken: 'revoked-token' })).toBeNull()
+    const valid = await reconcileSession({ ...baseSession, plexAuthToken: 'fresh-token' })
+
+    expect(valid).not.toBeNull()
+    expect(valid!.sub).toBe(baseSession.sub)
+    expect(calls).toBe(2)
+  })
+
   it('keeps the user signed in on a plex.tv 5xx (fail open)', async () => {
     probeImpl.fn = async () => ({ kind: 'http_error', status: 503 })
     const r = await reconcileSession(baseSession)

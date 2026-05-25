@@ -59,6 +59,7 @@ export function _setTmdbApiKeyForTests(k: string | null, authMode: TmdbAuthMode 
   for (const k of Object.keys(trendingCache)) delete trendingCache[k as 'movie' | 'tv']
   for (const k of Object.keys(discoverCache)) delete discoverCache[k as 'movie' | 'tv']
   lookupResultCache.clear()
+  titleByIdNullCache.clear()
 }
 
 export const suggestions = new Hono<Env>()
@@ -729,16 +730,39 @@ const LOOKUP_RESULT_CACHE_MAX_KEYS = 500
 const titleByIdInFlight = new Map<string, Promise<string | null>>()
 const lookupInFlight = new Map<string, Promise<SuggestionItem | null>>()
 const lookupResultCache = new Map<string, { item: SuggestionItem | null; expiresAt: number }>()
+const TITLE_BY_ID_NULL_CACHE_TTL_MS = 5 * 60 * 1000
+const TITLE_BY_ID_NULL_CACHE_MAX_KEYS = 1000
+const titleByIdNullCache = new Map<string, number>()
 
 export function _resetTmdbInFlightForTests(): void {
   titleByIdInFlight.clear()
   lookupInFlight.clear()
   lookupResultCache.clear()
+  titleByIdNullCache.clear()
+}
+
+function titleByIdNullCached(key: string, now = Date.now()): boolean {
+  const expiresAt = titleByIdNullCache.get(key)
+  if (expiresAt === undefined) return false
+  if (expiresAt > now) return true
+  titleByIdNullCache.delete(key)
+  return false
+}
+
+function cacheNullTitleById(key: string): void {
+  titleByIdNullCache.delete(key)
+  titleByIdNullCache.set(key, Date.now() + TITLE_BY_ID_NULL_CACHE_TTL_MS)
+  while (titleByIdNullCache.size > TITLE_BY_ID_NULL_CACHE_MAX_KEYS) {
+    const oldest = titleByIdNullCache.keys().next()
+    if (oldest.done) break
+    titleByIdNullCache.delete(oldest.value)
+  }
 }
 
 async function tmdbTitleById(kind: 'movie' | 'tv', id: number): Promise<string | null> {
   if (!_tmdbKey) return null
   const key = `${kind}:${id}`
+  if (titleByIdNullCached(key)) return null
   const existing = titleByIdInFlight.get(key)
   if (existing) return existing
   const promise = (async () => {
@@ -755,9 +779,15 @@ async function tmdbTitleById(kind: 'movie' | 'tv', id: number): Promise<string |
     } finally {
       clearTimeout(timer)
     }
-  })().finally(() => {
-    titleByIdInFlight.delete(key)
-  })
+  })()
+    .then((title) => {
+      if (title) titleByIdNullCache.delete(key)
+      else cacheNullTitleById(key)
+      return title
+    })
+    .finally(() => {
+      titleByIdInFlight.delete(key)
+    })
   titleByIdInFlight.set(key, promise)
   return promise
 }
@@ -770,7 +800,10 @@ async function resolveTitles(
   kind: 'movie' | 'tv',
   needed: Array<{ id: number; title: string }>,
 ): Promise<Map<number, string>> {
-  const slice = needed.slice(0, BACKFILL_MAX_PER_CALL)
+  const now = Date.now()
+  const slice = needed
+    .filter((e) => !titleByIdNullCached(`${kind}:${e.id}`, now))
+    .slice(0, BACKFILL_MAX_PER_CALL)
   const titles = await Promise.all(slice.map((e) => tmdbTitleById(kind, e.id)))
   const out = new Map<number, string>()
   for (let i = 0; i < slice.length; i++) {

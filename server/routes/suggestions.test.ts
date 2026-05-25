@@ -1228,7 +1228,47 @@ describe('suggestions route — prompt shape', () => {
     const { getRejections } = await import('../services/rejections.js')
     const after = await getRejections()
     expect(after.tv).toContainEqual({ id: 8005, title: 'Squid Game' })
+  })
 
+  it('advances legacy title backfill past unresolved TMDB ids on the next refresh', async () => {
+    _setTmdbApiKeyForTests('test-key')
+    for (let i = 0; i < 10; i++) {
+      await addRejection('tv', 8100 + i, '')
+    }
+    await addRejection('tv', 8110, '')
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/series')) {
+          return new Response(JSON.stringify(sonarrSeries), { status: 200 })
+        }
+        if (url.includes('themoviedb.org/3/tv/8110')) {
+          return new Response(JSON.stringify({ name: 'Later Resolvable Show' }), { status: 200 })
+        }
+        if (url.includes('themoviedb.org/3/tv/81')) {
+          return new Response('{}', { status: 404 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+
+    const headers = {
+      Cookie: await userCookie(),
+      'X-Anthropic-Api-Key': 'sk-ant-test-fakekey',
+    }
+    expect((await appUnderTest().request('/tv', { headers })).status).toBe(200)
+    expect((await appUnderTest().request('/tv', { headers })).status).toBe(200)
+
+    const { getRejections } = await import('../services/rejections.js')
+    const after = await getRejections()
+    expect(after.tv).toContainEqual({ id: 8110, title: 'Later Resolvable Show' })
   })
 
   it('falls back to trending when every Claude pick is filtered out (after retry)', async () => {
