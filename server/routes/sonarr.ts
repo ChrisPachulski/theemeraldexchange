@@ -208,14 +208,30 @@ async function grabTvUnderCap(
     return
   }
 
-  // Prefer season packs over individual episodes for the same season —
-  // fewer NZBs through SAB, faster post-processing.
-  const packs = [...bestByChunk.values()].filter((r) => r.fullSeason)
+  const ranked = [...bestByChunk.values()].sort((a, b) => {
+    if (a.fullSeason !== b.fullSeason) return a.fullSeason ? -1 : 1
+    return b.qualityWeight - a.qualityWeight || a.size - b.size
+  })
+  // Prefer season packs over individual episodes for the same season,
+  // then avoid overlapping partial packs and single-episode releases.
+  const packs = ranked.filter((r) => r.fullSeason)
   const packSeasons = new Set(packs.map((r) => r.seasonNumber))
-  const finalPicks = [
-    ...packs,
-    ...[...bestByChunk.values()].filter((r) => !r.fullSeason && !packSeasons.has(r.seasonNumber)),
-  ]
+  const coveredEpisodes = new Map<number, Set<number>>()
+  const finalPicks: Release[] = [...packs]
+  for (const r of ranked) {
+    if (r.fullSeason || packSeasons.has(r.seasonNumber)) continue
+    const seasonNumber = r.seasonNumber
+    const episodeNumbers = r.episodeNumbers ?? []
+    if (seasonNumber === undefined || episodeNumbers.length === 0) {
+      finalPicks.push(r)
+      continue
+    }
+    const covered = coveredEpisodes.get(seasonNumber) ?? new Set<number>()
+    if (episodeNumbers.some((episodeNumber) => covered.has(episodeNumber))) continue
+    finalPicks.push(r)
+    for (const episodeNumber of episodeNumbers) covered.add(episodeNumber)
+    coveredEpisodes.set(seasonNumber, covered)
+  }
   const plannedBytes = finalPicks.reduce((sum, pick) => sum + pick.size, 0)
   if (
     rootFolder &&
@@ -487,11 +503,12 @@ sonarr.post('/api/v3/series', async (c) => {
       }
       const created = JSON.parse(out) as CreatedSeries
       const id = created.id
-      // Use the seasons in the request body (pre-add intent) when
-      // available — Sonarr's response sometimes lags monitor flags.
-      let monitored = (body.seasons ?? created.seasons ?? [])
-        .filter((s) => s.monitored)
-        .map((s) => s.seasonNumber)
+      let monitored =
+        body.addOptions?.monitor === 'all' && body.seasons
+          ? body.seasons.map((s) => s.seasonNumber)
+          : (body.seasons ?? created.seasons ?? [])
+              .filter((s) => s.monitored)
+              .map((s) => s.seasonNumber)
 
       // Race-tolerant re-read for the non-admin / 'monitor': 'firstSeason'
       // path. The non-admin body has no explicit seasons[] — we rely on

@@ -174,7 +174,9 @@ def post_feedback(
     with transaction(conn):
         if ev.signal in {"like", "clicked", "added"}:
             conn.execute(
-                "DELETE FROM user_feedback WHERE sub=? AND kind=? AND tmdb_id=? AND signal='dislike'",
+                """DELETE FROM user_feedback
+                   WHERE sub=? AND kind=? AND tmdb_id=?
+                     AND signal IN ('dislike', 'reject')""",
                 (ev.sub, ev.kind, ev.tmdb_id),
             )
         elif ev.signal == "dislike":
