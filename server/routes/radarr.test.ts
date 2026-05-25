@@ -243,6 +243,20 @@ describe('radarr POST /api/v3/movie — non-admin add policy', () => {
           capturedAddBody = JSON.parse(init.body as string)
           return new Response(JSON.stringify({ id: 999, title: 'Hostile' }), { status: 201 })
         }
+        if (url.includes('/api/v3/release?movieId=999')) {
+          return new Response(JSON.stringify([
+            {
+              guid: 'release-999',
+              indexerId: 1,
+              size: 2 * 1024 ** 3,
+              qualityWeight: 100,
+              title: 'Hostile 1080p',
+            },
+          ]), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/release') && init?.method === 'POST') {
+          return new Response(JSON.stringify({ ok: true }), { status: 200 })
+        }
         return new Response('[]', { status: 200 })
       }),
     )
