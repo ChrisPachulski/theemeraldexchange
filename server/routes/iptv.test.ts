@@ -1,17 +1,21 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { Hono } from 'hono'
+import { describe, it, expect, vi } from 'vitest'
+import { Hono, type MiddlewareHandler } from 'hono'
 import { iptv } from './iptv.js'
 
+type TestAuthEnv = {
+  Variables: {
+    user: { sub: string; role: string; displayName: string }
+  }
+}
+
 vi.mock('../middleware/auth.js', async () => {
+  const requireTestAuth: MiddlewareHandler<TestAuthEnv> = async (c, next) => {
+    c.set('user', { sub: 'plex:test', role: 'admin', displayName: 'Test' })
+    await next()
+  }
   return {
-    requireAuth: async (c: any, next: any) => {
-      c.set('user', { sub: 'plex:test', role: 'admin', displayName: 'Test' })
-      await next()
-    },
-    requireAdmin: async (c: any, next: any) => {
-      c.set('user', { sub: 'plex:test', role: 'admin', displayName: 'Test' })
-      await next()
-    },
+    requireAuth: requireTestAuth,
+    requireAdmin: requireTestAuth,
   }
 })
 
@@ -51,6 +55,15 @@ vi.mock('../services/iptvDbSingleton.js', () => ({
   closeIptvDb: () => undefined,
 }))
 
+vi.mock('../services/iptvCatalog.js', () => ({
+  listCategories: vi.fn(() => [{ category_id: 1, name: 'News', parent_id: 0 }]),
+  listLive: vi.fn(() => ({ items: [{ stream_id: 10, num: 1, name: 'CNN' }], total: 1, limit: 50, offset: 0 })),
+  listVod: vi.fn(() => ({ items: [{ stream_id: 20, name: 'Matrix' }], total: 1, limit: 50, offset: 0 })),
+  listSeries: vi.fn(() => ({ items: [{ series_id: 30, name: 'GoT' }], total: 1, limit: 50, offset: 0 })),
+  getVodDetail: vi.fn(() => ({ stream_id: 20, name: 'Matrix' })),
+  getSeriesDetail: vi.fn(() => ({ series_id: 30, name: 'GoT', seasons: [{ season: 1, episodes: [] }] })),
+}))
+
 describe('POST /api/iptv/admin/sync', () => {
   it('returns a job id and final stats', async () => {
     const app = new Hono().route('/api/iptv', iptv)
@@ -70,5 +83,33 @@ describe('POST /api/iptv/admin/sync', () => {
     const body = await status.json() as { state: string; result?: { channels: number } }
     expect(body.state).toBe('done')
     expect(body.result?.channels).toBe(10)
+  })
+})
+
+describe('catalog read routes', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+  it('lists categories by kind', async () => {
+    const res = await app.request('/api/iptv/categories?kind=live')
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Array<{ name: string }>
+    expect(body[0].name).toBe('News')
+  })
+  it('rejects unknown kind', async () => {
+    const res = await app.request('/api/iptv/categories?kind=music')
+    expect(res.status).toBe(400)
+  })
+  it('lists live channels with query params', async () => {
+    const res = await app.request('/api/iptv/live?q=cnn&limit=10')
+    const body = (await res.json()) as { total: number }
+    expect(body.total).toBe(1)
+  })
+  it('returns vod detail or 404', async () => {
+    const res = await app.request('/api/iptv/vod/20')
+    expect(res.status).toBe(200)
+  })
+  it('returns series detail', async () => {
+    const res = await app.request('/api/iptv/series/30')
+    const body = (await res.json()) as { name: string }
+    expect(body.name).toBe('GoT')
   })
 })
