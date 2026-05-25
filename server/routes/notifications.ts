@@ -22,6 +22,8 @@ notifications.use('*', requireAdmin)
 
 const EMERALD_NAME = 'Emerald Exchange Discord'
 let discordMutationTail = Promise.resolve()
+type NotificationApp = 'sonarr' | 'radarr'
+type SuccessfulMutation = { app: NotificationApp; action: 'create' | 'update'; id: number }
 
 async function withDiscordMutationLock<T>(fn: () => Promise<T>): Promise<T> {
   const previous = discordMutationTail
@@ -83,6 +85,29 @@ function discordNotificationBody(webhookUrl: string, app: 'sonarr' | 'radarr') {
   }
 }
 
+function notificationFetcher(app: NotificationApp) {
+  return app === 'sonarr' ? sonarrFetch : radarrFetch
+}
+
+async function rollbackCreatedNotifications(mutations: SuccessfulMutation[]) {
+  const failures: Array<{ app: NotificationApp; id: number; status: number; detail: string }> = []
+  for (const mutation of [...mutations].reverse()) {
+    if (mutation.action !== 'create') continue
+    try {
+      const res = await notificationFetcher(mutation.app)(`/api/v3/notification/${mutation.id}`, {
+        method: 'DELETE',
+      })
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '')
+        failures.push({ app: mutation.app, id: mutation.id, status: res.status, detail: detail.slice(0, 400) })
+      }
+    } catch (err) {
+      failures.push({ app: mutation.app, id: mutation.id, status: 0, detail: err instanceof Error ? err.message : String(err) })
+    }
+  }
+  return failures
+}
+
 // Thrown by listNotifications when the upstream returned non-ok. The
 // caller MUST surface this as a hard failure rather than coalescing
 // it with the "no existing connector" branch — otherwise a transient
@@ -141,6 +166,7 @@ notifications.post('/discord', async (c) => {
     // mutation. If listNotifications throws, treating that as "none
     // exists" and creating a new one would stack a duplicate on every
     // retry until Sonarr/Radarr came back. Fail closed on list error.
+    const mutations: SuccessfulMutation[] = []
     for (const app of ['sonarr', 'radarr'] as const) {
       let existing: number | null
       try {
@@ -154,7 +180,7 @@ notifications.post('/discord', async (c) => {
         }
         throw err
       }
-      const fetcher = app === 'sonarr' ? sonarrFetch : radarrFetch
+      const fetcher = notificationFetcher(app)
       if (existing !== null) {
         const res = await fetcher(`/api/v3/notification/${existing}`, {
           method: 'PUT',
@@ -163,16 +189,23 @@ notifications.post('/discord', async (c) => {
         })
         if (!res.ok) {
           const text = await res.text().catch(() => '')
+          const cleanupFailures = await rollbackCreatedNotifications(mutations)
           return c.json(
             {
               error: `${app}_update_failed`,
               status: res.status,
               detail: text.slice(0, 400),
-              message: 'existing connector was left unchanged; retry, or remove and re-add from the menu',
+              mutations,
+              cleanupFailures,
+              message:
+                mutations.length > 0
+                  ? 'one or more earlier notification mutations succeeded before this update failed'
+                  : 'existing connector was left unchanged; retry, or remove and re-add from the menu',
             },
             502,
           )
         }
+        mutations.push({ app, action: 'update', id: existing })
         continue
       }
       const res = await fetcher('/api/v3/notification', {
@@ -182,11 +215,16 @@ notifications.post('/discord', async (c) => {
       })
       if (!res.ok) {
         const text = await res.text().catch(() => '')
+        const cleanupFailures = await rollbackCreatedNotifications(mutations)
         return c.json(
-          { error: `${app}_create_failed`, status: res.status, detail: text.slice(0, 400) },
+          { error: `${app}_create_failed`, status: res.status, detail: text.slice(0, 400), mutations, cleanupFailures },
           502,
         )
       }
+      const created = (await res.json().catch(() => null)) as { id?: unknown } | null
+      let id = typeof created?.id === 'number' ? created.id : null
+      if (id === null) id = await findEmerald(app).catch(() => null)
+      if (id !== null) mutations.push({ app, action: 'create', id })
     }
     return c.json({ ok: true, configured: true })
   })
