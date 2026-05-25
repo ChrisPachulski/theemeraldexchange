@@ -15,7 +15,7 @@ describe('registerIptvSchedule', () => {
     const calls: string[] = []
     vi.spyOn(cron, 'schedule').mockImplementation((expr: string) => {
       calls.push(expr)
-      return { stop: () => undefined, start: () => undefined } as any
+      return { stop: () => undefined, start: () => undefined } as ReturnType<typeof cron.schedule>
     })
     await registerIptvSchedule('*/5 * * * *')
     expect(calls).toContain('*/5 * * * *')
