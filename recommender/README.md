@@ -39,10 +39,17 @@ make install
 make migrate                 # creates ./data/exchange.db
 TMDB_API_KEY=... make ingest-bootstrap
 make featurize
-make serve
+RECOMMENDER_EVENT_SECRET=local-dev-secret make serve
 ```
 
-Then `curl -XPOST localhost:8000/score -d '{"sub":"u1","kind":"tv","n":20}'`.
+Then:
+
+```bash
+curl -XPOST localhost:8000/score \
+  -H 'content-type: application/json' \
+  -H 'x-recommender-secret: local-dev-secret' \
+  -d '{"sub":"u1","kind":"tv","n":20}'
+```
 
 ## Production
 

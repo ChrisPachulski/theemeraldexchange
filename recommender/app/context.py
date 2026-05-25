@@ -112,8 +112,11 @@ def _load_title_rows(conn: sqlite3.Connection, kind: Kind, ids: list[int]) -> di
         rows = conn.execute(
             f"""SELECT t.tmdb_id, t.kind, t.title, t.year, t.poster_path, t.overview,
                       COALESCE(t.popularity, 0) AS popularity, t.vote_average,
-                      (SELECT GROUP_CONCAT(g.genre_id) FROM title_genres g
-                       WHERE g.kind = t.kind AND g.tmdb_id = t.tmdb_id) AS genres
+                      (SELECT GROUP_CONCAT(genre_id) FROM (
+                         SELECT g.genre_id FROM title_genres g
+                         WHERE g.kind = t.kind AND g.tmdb_id = t.tmdb_id
+                         ORDER BY g.genre_id
+                       )) AS genres
                FROM titles t
                WHERE t.kind = ? AND t.tmdb_id IN ({placeholders})""",
             (kind, *batch),

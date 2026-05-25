@@ -34,7 +34,7 @@ from .schemas import (
 
 log = logging.getLogger("recommender")
 RECENTLY_SHOWN_RETENTION_DAYS = 30
-FEEDBACK_ATTRIBUTION_DAYS = 14
+FEEDBACK_ATTRIBUTION_MINUTES = 10
 RETENTION_SWEEP_INTERVAL_SECONDS = 3600
 
 
@@ -198,14 +198,16 @@ def post_feedback(
 ) -> dict[str, bool]:
     now = _utc_now_iso()
     with transaction(conn):
-        if ev.signal == "like":
+        if ev.signal in {"like", "clicked", "added"}:
             conn.execute(
                 "DELETE FROM user_feedback WHERE sub=? AND kind=? AND tmdb_id=? AND signal='dislike'",
                 (ev.sub, ev.kind, ev.tmdb_id),
             )
         elif ev.signal == "dislike":
             conn.execute(
-                "DELETE FROM user_feedback WHERE sub=? AND kind=? AND tmdb_id=? AND signal='like'",
+                """DELETE FROM user_feedback
+                   WHERE sub=? AND kind=? AND tmdb_id=?
+                     AND signal IN ('like', 'clicked', 'added')""",
                 (ev.sub, ev.kind, ev.tmdb_id),
             )
         elif ev.signal == "reject":
@@ -254,7 +256,7 @@ def post_feedback(
                    WHERE sub = ? AND kind = ? AND tmdb_id = ?
                      AND datetime(ts) >= datetime('now', ?)
                    ORDER BY datetime(ts) DESC, id DESC LIMIT 1""",
-                (ev.sub, ev.kind, ev.tmdb_id, f"-{FEEDBACK_ATTRIBUTION_DAYS} days"),
+                (ev.sub, ev.kind, ev.tmdb_id, f"-{FEEDBACK_ATTRIBUTION_MINUTES} minutes"),
             ).fetchone()
             if rec is not None:
                 if ev.signal in {"like", "dislike", "reject"}:
@@ -270,6 +272,15 @@ def post_feedback(
                     """INSERT INTO rec_outcomes(rec_id, outcome, ts) VALUES (?, ?, ?)
                        ON CONFLICT(rec_id, outcome) DO UPDATE SET ts = excluded.ts""",
                     (rec["id"], signal_to_outcome[ev.signal], now),
+                )
+            else:
+                log.warning(
+                    "feedback attribution skipped: no in-session rec_log row sub=%r kind=%s tmdb_id=%s signal=%s window=%dm",
+                    ev.sub,
+                    ev.kind,
+                    ev.tmdb_id,
+                    ev.signal,
+                    FEEDBACK_ATTRIBUTION_MINUTES,
                 )
     return {"ok": True}
 

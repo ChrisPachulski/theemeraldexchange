@@ -112,7 +112,7 @@ class TmdbClient:
             try:
                 r.raise_for_status()
             except httpx.HTTPStatusError as exc:
-                raise _sanitize_http_status_error(exc) from exc
+                raise _sanitize_http_status_error(exc) from None
             return r.json()
 
         async for attempt in AsyncRetrying(

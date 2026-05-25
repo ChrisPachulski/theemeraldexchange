@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Hono } from 'hono'
-import { auth, me } from './auth.js'
+import { auth, me, _resetAuthRateLimitsForTests } from './auth.js'
 import { env } from './env.js'
 import { createSession } from './session.js'
 import {
@@ -31,6 +31,7 @@ beforeEach(() => {
   // tests so the revoked-access tests below don't carry primed state
   // into the next case.
   _resetSessionGateCacheForTests()
+  _resetAuthRateLimitsForTests()
 })
 
 afterEach(() => {
@@ -109,6 +110,18 @@ describe('POST /auth/plex/pin', () => {
     expect(body.authUrl).toContain('clientID=' + env.plexClientId)
     expect(body.authUrl).toContain('code=abc')
   })
+
+  it('rate-limits excessive PIN creation by client IP', async () => {
+    stubPlex({})
+    const headers = { 'x-forwarded-for': '203.0.113.10' }
+    for (let i = 0; i < 10; i++) {
+      const r = await app().request('/auth/plex/pin', { method: 'POST', headers })
+      expect(r.status).toBe(200)
+    }
+    const r = await app().request('/auth/plex/pin', { method: 'POST', headers })
+    expect(r.status).toBe(429)
+    expect(await r.json()).toEqual({ error: 'rate_limited' })
+  })
 })
 
 describe('POST /auth/plex/check', () => {
@@ -121,6 +134,26 @@ describe('POST /auth/plex/check', () => {
     })
     expect(r.status).toBe(200)
     expect(await r.json()).toEqual({ status: 'pending' })
+  })
+
+  it('allows normal polling but rate-limits excessive PIN checks by client IP', async () => {
+    stubPlex({ authToken: null })
+    const headers = { 'Content-Type': 'application/json', 'x-forwarded-for': '203.0.113.11' }
+    for (let i = 0; i < 60; i++) {
+      const r = await app().request('/auth/plex/check', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ pinId: 12345 }),
+      })
+      expect(r.status).toBe(200)
+    }
+    const r = await app().request('/auth/plex/check', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ pinId: 12345 }),
+    })
+    expect(r.status).toBe(429)
+    expect(await r.json()).toEqual({ error: 'rate_limited' })
   })
 
   it('400s a missing pinId', async () => {

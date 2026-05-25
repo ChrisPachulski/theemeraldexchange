@@ -39,6 +39,7 @@ YEAR_BUCKETS = [
 MIN_VOTE_COUNT = 50
 TMDB_MAX_PAGES = 500
 CONCURRENCY = 8
+DEFAULT_MAX_REQUEUE_ATTEMPTS = 8
 
 
 def _is_database_locked(exc: sqlite3.OperationalError) -> bool:
@@ -237,7 +238,11 @@ async def _hydrate_loop(
             try:
                 detail = await client.detail(kind, tmdb_id)
             except Exception as e:
-                worker_conn = connect()
+                try:
+                    worker_conn = connect()
+                except sqlite3.OperationalError as db_exc:
+                    log.warning("hydrate %s %s queue update open-db failed; leaving pending: %s", kind, tmdb_id, db_exc)
+                    return
                 try:
                     try:
                         with transaction(worker_conn):
@@ -255,7 +260,11 @@ async def _hydrate_loop(
                 finally:
                     worker_conn.close()
                 return
-            worker_conn = connect()
+            try:
+                worker_conn = connect()
+            except sqlite3.OperationalError as db_exc:
+                log.warning("hydrate %s %s persist open-db failed; leaving pending: %s", kind, tmdb_id, db_exc)
+                return
             try:
                 try:
                     kept = _persist_detail(worker_conn, kind, detail)
@@ -307,7 +316,17 @@ async def _hydrate_loop(
         ).fetchall()
         if not rows:
             break
-        await asyncio.gather(*(worker(r["tmdb_id"], r["kind"]) for r in rows))
+        results = await asyncio.gather(
+            *(worker(r["tmdb_id"], r["kind"]) for r in rows),
+            return_exceptions=True,
+        )
+        for result in results:
+            if isinstance(result, BaseException):
+                log.error(
+                    "hydrate worker failed unexpectedly: %s",
+                    result,
+                    exc_info=(type(result), result, result.__traceback__),
+                )
         if limit is not None and (done + skipped) >= limit:
             break
         log.info("hydrate progress: done=%d skipped=%d", done, skipped)
@@ -375,7 +394,7 @@ async def changes_since(client: TmdbClient, conn: sqlite3.Connection, kind: str)
 # =========================================================================
 
 
-def _requeue_errors(conn: sqlite3.Connection, max_attempts: int | None) -> int:
+def _requeue_errors(conn: sqlite3.Connection, max_attempts: int | None) -> tuple[int, int]:
     """Reset error rows to pending so they get another hydration pass.
 
     Without this, transient TMDB failures (5xx, rate-limit, network
@@ -389,12 +408,15 @@ def _requeue_errors(conn: sqlite3.Connection, max_attempts: int | None) -> int:
     a row that's stuck on a permanent failure (e.g. removed from TMDB)
     doesn't churn the queue forever. None = unbounded.
     """
+    if max_attempts is not None and max_attempts <= 0:
+        max_attempts = None
     if max_attempts is None:
         with transaction(conn):
             n = conn.execute(
                 "UPDATE ingest_queue SET status='pending', last_error=NULL, "
                 "updated_at=datetime('now') WHERE status='error'"
             ).rowcount
+        capped = 0
     else:
         with transaction(conn):
             n = conn.execute(
@@ -402,7 +424,16 @@ def _requeue_errors(conn: sqlite3.Connection, max_attempts: int | None) -> int:
                 "updated_at=datetime('now') WHERE status='error' AND attempts < ?",
                 (max_attempts,),
             ).rowcount
-    return n
+            capped = conn.execute(
+                "SELECT COUNT(*) AS c FROM ingest_queue WHERE status='error' AND attempts >= ?",
+                (max_attempts,),
+            ).fetchone()["c"]
+    log.info(
+        "retry-errors: %d rows requeued, %d rows at attempts >= max_attempts left at error",
+        n,
+        capped,
+    )
+    return n, capped
 
 
 async def _run(args: argparse.Namespace) -> None:
@@ -415,8 +446,7 @@ async def _run(args: argparse.Namespace) -> None:
                     n = await enumerate_kind(client, conn, kind)
                     log.info("enumerate %s: %d added/seen", kind, n)
             if args.retry_errors:
-                n = _requeue_errors(conn, args.max_attempts)
-                log.info("retry-errors: requeued %d error rows", n)
+                _requeue_errors(conn, args.max_attempts)
             done, skipped = await _hydrate_loop(client, conn, concurrency=args.concurrency, limit=args.limit)
             log.info("bootstrap done: done=%d skipped=%d", done, skipped)
         elif args.mode == "changes":
@@ -424,13 +454,11 @@ async def _run(args: argparse.Namespace) -> None:
                 n = await changes_since(client, conn, kind)
                 log.info("changes enqueued %s: %d", kind, n)
             if args.retry_errors:
-                n = _requeue_errors(conn, args.max_attempts)
-                log.info("retry-errors: requeued %d error rows", n)
+                _requeue_errors(conn, args.max_attempts)
             done, skipped = await _hydrate_loop(client, conn, concurrency=args.concurrency, limit=args.limit)
             log.info("changes hydrate: done=%d skipped=%d", done, skipped)
         elif args.mode == "retry-errors":
-            n = _requeue_errors(conn, args.max_attempts)
-            log.info("retry-errors: requeued %d error rows", n)
+            _requeue_errors(conn, args.max_attempts)
             done, skipped = await _hydrate_loop(client, conn, concurrency=args.concurrency, limit=args.limit)
             log.info("retry-errors done: done=%d skipped=%d", done, skipped)
         else:
@@ -454,8 +482,8 @@ def _cli() -> None:
     ap.add_argument(
         "--max-attempts",
         type=int,
-        default=None,
-        help="cap retries per row so a permanently-broken row doesn't churn the queue (default: unbounded)",
+        default=DEFAULT_MAX_REQUEUE_ATTEMPTS,
+        help="cap retries per row so a permanently-broken row doesn't churn the queue (default: 8; <=0 means unbounded)",
     )
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
