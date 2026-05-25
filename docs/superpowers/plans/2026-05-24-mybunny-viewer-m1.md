@@ -5597,7 +5597,7 @@ Edit `docker-compose.yml` recommender service:
 ```yaml
 recommender:
   environment:
-    - HONO_HOST=http://app:3001
+    - HONO_HOST=http://backend:3001
     - IPTV_RECOMMENDER_EXPORT_SECRET=${IPTV_RECOMMENDER_EXPORT_SECRET}
 ```
 

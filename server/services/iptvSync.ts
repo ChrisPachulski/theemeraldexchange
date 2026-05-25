@@ -5,18 +5,31 @@ import {
 import { fetchAndStreamEpg } from './iptvEpg.js'
 import type { IptvDb } from './iptvDb.js'
 
-export interface SyncResult {
-  busy?: boolean
-  channels: number
-  vod: number
-  series: number
-  episodes: number
-  epg: number
-  categories: number
-  durationMs: number
-  startedAt: string
-  finishedAt: string
-}
+export type SyncResult =
+  | {
+      busy: true
+      channels?: never
+      vod?: never
+      series?: never
+      episodes?: never
+      epg?: never
+      categories?: never
+      durationMs?: never
+      startedAt?: never
+      finishedAt?: never
+    }
+  | {
+      busy?: false
+      channels: number
+      vod: number
+      series: number
+      episodes: number
+      epg: number
+      categories: number
+      durationMs: number
+      startedAt: string
+      finishedAt: string
+    }
 
 let running = false
 
@@ -50,13 +63,29 @@ function reconcileCatalog(
   pruneCategories(db, 'series', categoryIds.series)
 }
 
+function assertSyncSawCatalog(args: {
+  liveCats: unknown[]
+  vodCats: unknown[]
+  seriesCats: unknown[]
+  liveRows: unknown[]
+  vodRows: unknown[]
+  seriesRows: unknown[]
+}): void {
+  if (
+    args.liveCats.length === 0 &&
+    args.vodCats.length === 0 &&
+    args.seriesCats.length === 0 &&
+    args.liveRows.length === 0 &&
+    args.vodRows.length === 0 &&
+    args.seriesRows.length === 0
+  ) {
+    throw new Error('xtream_empty_response')
+  }
+}
+
 export async function syncOnce(db: IptvDb): Promise<SyncResult> {
   if (running) {
-    return {
-      busy: true,
-      channels: 0, vod: 0, series: 0, episodes: 0, epg: 0, categories: 0,
-      durationMs: 0, startedAt: '', finishedAt: '',
-    }
+    return { busy: true }
   }
   running = true
   const startedAt = new Date()
@@ -83,6 +112,7 @@ export async function syncOnce(db: IptvDb): Promise<SyncResult> {
     channels = liveRows.length
     vod = vodRows.length
     series = seriesRows.length
+    assertSyncSawCatalog({ liveCats, vodCats, seriesCats, liveRows, vodRows, seriesRows })
 
     // Episode expansion — small concurrency cap to spare upstream.
     const CONCURRENCY = 4
@@ -138,16 +168,30 @@ export async function syncOnce(db: IptvDb): Promise<SyncResult> {
     const flushBatch = db.raw.transaction((rows: typeof batch) => {
       for (const r of rows) db.stmts.upsertEpg.run(r)
     })
+    let flushError: unknown = null
     await fetchAndStreamEpg((row) => {
+      if (flushError) return
       if (row.stop_utc > horizon) return
       batch.push(row)
       epg += 1
       if (batch.length >= 1_000) {
-        flushBatch(batch)
+        try {
+          flushBatch(batch)
+        } catch (err) {
+          flushError = err
+        }
         batch = []
       }
     })
-    if (batch.length) flushBatch(batch)
+    if (flushError) throw flushError
+    if (batch.length) {
+      try {
+        flushBatch(batch)
+      } catch (err) {
+        flushError = err
+      }
+    }
+    if (flushError) throw flushError
 
     const finishedAt = new Date()
     db.stmts.putSyncState.run({ key: 'last_sync', value: 'ok', ts: finishedAt.toISOString() })

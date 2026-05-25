@@ -298,6 +298,14 @@
   background: color-mix(in oklch, var(--danger) 12%, transparent);
 }
 
+.user-menu__signout-error {
+  margin: var(--s-2) var(--s-1) 0;
+  color: var(--danger);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  line-height: 1.35;
+}
+
 /* ── Mobile ───────────────────────────────────────────────────────── */
 
 @media (max-width: 720px) {

@@ -24,7 +24,7 @@ const APP_LINKS = [
 ] as const
 
 export function UserMenu() {
-  const { user, role, effectiveRole, isAdmin, setViewAs, signOut } = useAuth()
+  const { user, role, effectiveRole, isAdmin, setViewAs, signOut, signOutError } = useAuth()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -138,12 +138,16 @@ export function UserMenu() {
             type="button"
             className="user-menu__signout"
             onClick={() => {
-              setOpen(false)
               void signOut()
+                .then(() => setOpen(false))
+                .catch(() => {})
             }}
           >
             Sign out
           </button>
+          {signOutError && (
+            <p className="user-menu__signout-error" role="alert">{signOutError}</p>
+          )}
         </div>
       )}
     </div>

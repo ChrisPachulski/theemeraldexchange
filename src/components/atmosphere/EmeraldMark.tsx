@@ -41,14 +41,23 @@ export function EmeraldMark({ width = 64, variant = 'single', className }: Emera
       console.warn('[EmeraldMark] WebGL init failed', err)
       return
     }
-    scene.start()
-    const onVis = () => {
-      if (document.hidden) scene.stop()
-      else scene.start()
+    const reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const syncMotion = () => {
+      if (reducedMotionQuery.matches) {
+        scene.stop()
+        scene.renderAt(0)
+      } else if (document.hidden) {
+        scene.stop()
+      } else {
+        scene.start()
+      }
     }
-    document.addEventListener('visibilitychange', onVis)
+    syncMotion()
+    document.addEventListener('visibilitychange', syncMotion)
+    reducedMotionQuery.addEventListener('change', syncMotion)
     return () => {
-      document.removeEventListener('visibilitychange', onVis)
+      document.removeEventListener('visibilitychange', syncMotion)
+      reducedMotionQuery.removeEventListener('change', syncMotion)
       scene.dispose()
     }
   }, [width, height, variant])

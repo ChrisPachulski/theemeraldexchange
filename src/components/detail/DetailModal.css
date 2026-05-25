@@ -613,7 +613,9 @@
   position: relative;
   z-index: 1;
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
+  align-items: center;
   gap: var(--s-2);
   padding: var(--s-4) var(--s-6);
   border-top: 1px solid var(--border);
@@ -627,6 +629,7 @@
   letter-spacing: var(--tr-eyebrow);
   text-transform: uppercase;
   padding: var(--s-3) var(--s-5);
+  min-width: 0;
   border-radius: var(--r-pod);
   cursor: pointer;
   border: 1px solid transparent;
@@ -718,7 +721,13 @@ a.detail__btn {
   }
 
   .detail__actions {
+    justify-content: stretch;
     padding: var(--s-3) var(--s-4);
+  }
+
+  .detail__btn {
+    flex: 1 1 11rem;
+    white-space: normal;
   }
 }
 
@@ -730,5 +739,9 @@ a.detail__btn {
   .detail__poster {
     width: 100px;
     justify-self: start;
+  }
+
+  .detail__btn {
+    flex-basis: 100%;
   }
 }

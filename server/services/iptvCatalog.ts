@@ -69,7 +69,9 @@ const clampOffset = (n: number | undefined) => {
   const v = Number.isFinite(n) ? Math.floor(n as number) : 0
   return Math.max(0, v)
 }
-const likeOrAny = (q: string | undefined) => (q && q.trim() ? `%${q.trim().toLowerCase()}%` : null)
+const likeOrAny = (q: string | undefined) => (
+  q && q.trim() ? `%${q.trim().toLowerCase().replace(/[\\%_]/g, '\\$&')}%` : null
+)
 
 export function listCategories(db: IptvDb, kind: Kind): CategoryItem[] {
   return db.raw
@@ -84,7 +86,7 @@ export function listLive(db: IptvDb, opts: ListOpts): ListResult<LiveItem> {
   const where: string[] = []
   const params: Record<string, unknown> = {}
   if (opts.categoryId != null) { where.push('category_id = @categoryId'); params.categoryId = opts.categoryId }
-  if (like) { where.push('LOWER(name) LIKE @like'); params.like = like }
+  if (like) { where.push("LOWER(name) LIKE @like ESCAPE '\\'"); params.like = like }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
   const total = (db.raw.prepare(`SELECT COUNT(*) AS n FROM channels ${whereSql}`).get(params) as CountRow).n
   const items = db.raw.prepare(`
@@ -103,7 +105,7 @@ export function listVod(db: IptvDb, opts: ListOpts): ListResult<VodItem> {
   const where: string[] = []
   const params: Record<string, unknown> = {}
   if (opts.categoryId != null) { where.push('category_id = @categoryId'); params.categoryId = opts.categoryId }
-  if (like) { where.push('LOWER(name) LIKE @like'); params.like = like }
+  if (like) { where.push("LOWER(name) LIKE @like ESCAPE '\\'"); params.like = like }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
   const total = (db.raw.prepare(`SELECT COUNT(*) AS n FROM vod ${whereSql}`).get(params) as CountRow).n
   const items = db.raw.prepare(`
@@ -130,7 +132,7 @@ export function listSeries(db: IptvDb, opts: ListOpts): ListResult<SeriesItem> {
   const where: string[] = []
   const params: Record<string, unknown> = {}
   if (opts.categoryId != null) { where.push('category_id = @categoryId'); params.categoryId = opts.categoryId }
-  if (like) { where.push('LOWER(name) LIKE @like'); params.like = like }
+  if (like) { where.push("LOWER(name) LIKE @like ESCAPE '\\'"); params.like = like }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
   const total = (db.raw.prepare(`SELECT COUNT(*) AS n FROM series ${whereSql}`).get(params) as CountRow).n
   const items = db.raw.prepare(`
