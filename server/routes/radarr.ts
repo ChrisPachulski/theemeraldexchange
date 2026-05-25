@@ -16,6 +16,12 @@ type RadarrSpaceGateFailure = {
   status: 400 | 502 | 507
   body: Record<string, unknown>
 }
+type CappedGrabResult =
+  | { status: 'grab_succeeded' }
+  | { status: 'search_failed'; upstreamStatus: number }
+  | { status: 'no_releases'; scanned: number }
+  | { status: 'all_rejected_by_cap'; scanned: number }
+  | { status: 'grab_failed'; upstreamStatus: number }
 
 async function recordRadarrGrabEvent(event: RadarrGrabEvent): Promise<void> {
   await appendGrabEvent(event).catch((err) => {
@@ -98,7 +104,7 @@ forwardRead('/api/v3/queue')
 //     cap-aware grab and leave monitored:true. The user explicitly
 //     asked for RSS-driven monitoring; the eventual auto-grab is
 //     gated by Radarr's quality profile, NOT env.maxMovieBytes.
-async function grabBestUnderCap(movieId: number, title?: string): Promise<void> {
+async function grabBestUnderCap(movieId: number, title?: string): Promise<CappedGrabResult> {
   const base = { app: 'radarr' as const, itemId: movieId, title, capGb: env.maxMovieGb }
   await recordRadarrGrabEvent({ ...base, type: 'grab_started' })
 
@@ -111,7 +117,7 @@ async function grabBestUnderCap(movieId: number, title?: string): Promise<void> 
   if (!releaseRes.ok) {
     console.error(`[movie-cap] release search ${releaseRes.status} for movie ${movieId}`)
     await recordRadarrGrabEvent({ ...base, type: 'search_failed', status: releaseRes.status })
-    return
+    return { status: 'search_failed', upstreamStatus: releaseRes.status }
   }
   type Release = {
     guid: string
@@ -136,7 +142,10 @@ async function grabBestUnderCap(movieId: number, title?: string): Promise<void> 
       scanned: all.length,
       eligible: 0,
     })
-    return
+    return {
+      status: all.length === 0 ? 'no_releases' : 'all_rejected_by_cap',
+      scanned: all.length,
+    }
   }
   const best = eligible[0]
   const grabRes = await radarrFetch('/api/v3/release', {
@@ -160,6 +169,10 @@ async function grabBestUnderCap(movieId: number, title?: string): Promise<void> 
       qualityWeight: best.qualityWeight,
     },
   })
+  if (!grabRes.ok) {
+    return { status: 'grab_failed', upstreamStatus: grabRes.status }
+  }
+  return { status: 'grab_succeeded' }
 }
 
 // Identifying fields a non-admin add request may carry over to
@@ -319,28 +332,51 @@ radarr.post('/api/v3/movie', async (c) => {
     }
   }
 
-  // Fire the size-capped grab in the background. Indexer search can be
-  // slow; we don't want to block the modal close.
+  // Wait for the size-capped grab before returning ordinary success.
+  // The movie is intentionally added unmonitored on this path, so a failed
+  // capped search has no Radarr retry safety net unless we surface it here.
   if (r.ok && wantedSearch) {
-    try {
-      const created = JSON.parse(out) as { id?: number; title?: string }
-      if (created.id) {
-        const itemId = created.id
-        const itemTitle = created.title
-        void grabBestUnderCap(itemId, itemTitle).catch((e) => {
-          console.error('[movie-cap] grab failed:', e)
-          void recordRadarrGrabEvent({
-            app: 'radarr',
-            itemId,
-            title: itemTitle,
-            type: 'grab_failed',
-            error: e instanceof Error ? e.message : String(e),
-          })
-        })
+    const created = (() => {
+      try {
+        return JSON.parse(out) as { id?: number; title?: string }
+      } catch {
+        return null
       }
-    } catch {
-      // Radarr returned an unexpected body shape; pass through. The
-      // movie was still added if r.ok was true.
+    })()
+    if (created?.id && typeof created.title === 'string' && created.title.trim().length > 0) {
+      const itemId = created.id
+      const itemTitle = created.title
+      try {
+        const grab = await grabBestUnderCap(itemId, itemTitle)
+        if (grab.status === 'search_failed' || grab.status === 'grab_failed') {
+          return c.json(
+            {
+              error: 'capped_grab_failed',
+              status: grab.upstreamStatus,
+              phase: grab.status === 'search_failed' ? 'search' : 'grab',
+              movie: created,
+            },
+            424,
+          )
+        }
+      } catch (e) {
+        console.error('[movie-cap] grab failed:', e)
+        await recordRadarrGrabEvent({
+          app: 'radarr',
+          itemId,
+          title: itemTitle,
+          type: 'grab_failed',
+          error: e instanceof Error ? e.message : String(e),
+        })
+        return c.json(
+          {
+            error: 'capped_grab_failed',
+            phase: 'exception',
+            message: e instanceof Error ? e.message : String(e),
+          },
+          424,
+        )
+      }
     }
   }
 

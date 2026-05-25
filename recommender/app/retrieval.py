@@ -13,11 +13,14 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .context import IN_BATCH_SIZE, Candidate, TitleRow, UserContext
+from .context import IN_BATCH_SIZE, Candidate, TitleRow, UserContext, title_key_variants
 from .db import decode_vec_rowid, deserialize_f32, serialize_f32
 from .schemas import Kind
 
 log = logging.getLogger(__name__)
+
+AVAILABLE_TITLE_PREDICATE = """(t.release_date IS NULL OR t.release_date = '' OR date(t.release_date) <= date('now'))
+                     AND (t.status IS NULL OR lower(t.status) IN ('released', 'returning series', 'ended', 'canceled'))"""
 
 
 @dataclass
@@ -86,7 +89,8 @@ def retrieve_candidates(
                    JOIN title_features f ON f.kind = t.kind AND f.tmdb_id = t.tmdb_id
                    WHERE t.kind = ?
                      AND t.tmdb_id IN ({placeholders})
-                     AND COALESCE(t.vote_count, 0) >= ?""",
+                     AND COALESCE(t.vote_count, 0) >= ?
+                     AND {AVAILABLE_TITLE_PREDICATE}""",
                 (kind, *batch, min_vote_count),
             ).fetchall()
         )
@@ -102,8 +106,9 @@ def retrieve_candidates(
     for tid in keep_ids:
         r = by_id.get(tid)
         if r is None:
-            # Filtered out by vote_count or join miss — skip silently,
-            # the next-closer keep_id takes its slot.
+            # Filtered out by vote_count, availability, or join miss.
+            continue
+        if user.library_title_keys and title_key_variants(r["title"]) & user.library_title_keys:
             continue
         gids = tuple(int(g) for g in r["genres"].split(",")) if r["genres"] else ()
         title = TitleRow(
@@ -142,7 +147,7 @@ def cold_start_pool(
     excluded = user.library_ids | user.rejected_ids | user.recently_shown_ids | user.disliked_ids
     fetch_limit = max(pool_size * 3, pool_size + len(excluded))
     rows = conn.execute(
-        """SELECT t.tmdb_id, t.title, t.year, t.poster_path, t.overview,
+        f"""SELECT t.tmdb_id, t.title, t.year, t.poster_path, t.overview,
                   COALESCE(t.popularity, 0) AS popularity, t.vote_average,
                   (SELECT GROUP_CONCAT(genre_id) FROM (
                      SELECT g.genre_id FROM title_genres g
@@ -150,7 +155,9 @@ def cold_start_pool(
                      ORDER BY g.genre_id
                    )) AS genres
            FROM titles t
-           WHERE t.kind = ? AND COALESCE(t.vote_count, 0) >= ?
+           WHERE t.kind = ?
+             AND COALESCE(t.vote_count, 0) >= ?
+             AND {AVAILABLE_TITLE_PREDICATE}
            ORDER BY popularity DESC
            LIMIT ?""",
         (kind, min_vote_count, fetch_limit),
@@ -159,6 +166,8 @@ def cold_start_pool(
     out: list[TitleRow] = []
     for r in rows:
         if r["tmdb_id"] in excluded:
+            continue
+        if user.library_title_keys and title_key_variants(r["title"]) & user.library_title_keys:
             continue
         gids = tuple(int(g) for g in r["genres"].split(",")) if r["genres"] else ()
         out.append(

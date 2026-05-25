@@ -10,7 +10,7 @@ PositiveStrictInt = Annotated[int, Field(strict=True, gt=0)]
 
 
 class LibraryItem(BaseModel):
-    tmdb_id: PositiveStrictInt
+    tmdb_id: PositiveStrictInt | None = None
     title: str | None = None
     source: str | None = None
 
