@@ -128,6 +128,72 @@ function userOf(c: Context<Env>): { sub: string } {
   throw new Error('missing_user')
 }
 
+function escapeM3uAttr(value: string): string {
+  return value.replace(/"/g, '\'')
+}
+
+iptv.post('/playlist/token', (c) => {
+  const { sub } = userOf(c)
+  // 30-day TTL — long enough to drop in an external player and forget, short enough that revoking access via /api/me eventually bites.
+  const ttl = 30 * 24 * 3600
+  const token = signStreamToken(env.sessionSecret, {
+    kind: 'playlist', resourceId: 'all', sub, ttlSecs: ttl,
+  })
+  const requestUrl = new URL(c.req.url)
+  const host = c.req.header('host') ?? requestUrl.host
+  const baseUrl = `${requestUrl.protocol}//${host}`
+  return c.json({
+    url: `${baseUrl}/api/iptv/playlist.m3u?t=${token}`,
+    expiresAt: new Date(Date.now() + ttl * 1000).toISOString(),
+  })
+})
+
+iptv.get('/playlist.m3u', (c) => {
+  const t = c.req.query('t') ?? ''
+  let claims: ReturnType<typeof verifyStreamToken>
+  try {
+    claims = verifyStreamToken(env.sessionSecret, t)
+    if (claims.kind !== 'playlist') throw new Error('kind_mismatch')
+  } catch (err) {
+    return c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401)
+  }
+
+  const channels = iptvDb().raw
+    .prepare(`SELECT stream_id, num, name, stream_icon, epg_channel_id, category_id FROM channels ORDER BY num, name`)
+    .all() as Array<{ stream_id: number; num: number; name: string; stream_icon: string | null; epg_channel_id: string | null; category_id: number | null }>
+  const catNames = new Map<number, string>()
+  for (const row of iptvDb().raw.prepare(`SELECT category_id, name FROM categories WHERE kind='live'`).all() as Array<{ category_id: number; name: string }>) {
+    catNames.set(row.category_id, row.name)
+  }
+
+  // Per-channel HMAC tokens with a long TTL too — external players cache the M3U and re-resolve URLs lazily.
+  // Re-use the playlist sub for each token so revocation cascades.
+  const requestUrl = new URL(c.req.url)
+  const host = c.req.header('host') ?? requestUrl.host
+  const baseUrl = `${requestUrl.protocol}//${host}`
+  const chTtl = 30 * 24 * 3600
+  const lines: string[] = ['#EXTM3U']
+  for (const ch of channels) {
+    const chToken = signStreamToken(env.sessionSecret, {
+      kind: 'live', resourceId: String(ch.stream_id), sub: claims.sub, ttlSecs: chTtl,
+    })
+    const url = `${baseUrl}/api/iptv/stream/live/${ch.stream_id}.ts?t=${chToken}`
+    const groupTitle = ch.category_id != null ? (catNames.get(ch.category_id) ?? 'Other') : 'Other'
+    const tvgId = ch.epg_channel_id ?? ''
+    const tvgLogo = ch.stream_icon ?? ''
+    lines.push(`#EXTINF:-1 tvg-id="${tvgId}" tvg-name="${escapeM3uAttr(ch.name)}" tvg-logo="${tvgLogo}" group-title="${escapeM3uAttr(groupTitle)}",${ch.name}`)
+    lines.push(url)
+  }
+  return new Response(lines.join('\n') + '\n', {
+    status: 200,
+    headers: {
+      'Content-Type': 'audio/x-mpegurl',
+      'Content-Disposition': 'attachment; filename="theemeraldexchange.m3u"',
+      'Cache-Control': 'no-store',
+    },
+  })
+})
+
 iptv.get('/favorites', (c) => {
   const { sub } = userOf(c)
   const rows = iptvDb().stmts.getFavorites.all(sub)
