@@ -311,12 +311,18 @@ async def _hydrate_loop(
     batch_size = max(concurrency * 4, 64)
     locked_no_progress_batches = 0
     while True:
+        batch_limit = batch_size
+        if limit is not None:
+            remaining = limit - done - skipped
+            if remaining <= 0:
+                break
+            batch_limit = min(batch_size, remaining)
         rows = conn.execute(
             """SELECT tmdb_id, kind FROM ingest_queue
                WHERE status='pending'
                ORDER BY attempts ASC, kind, tmdb_id
                LIMIT ?""",
-            (batch_size,),
+            (batch_limit,),
         ).fetchall()
         if not rows:
             break

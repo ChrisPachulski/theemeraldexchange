@@ -126,10 +126,11 @@ async function grabBestUnderCap(movieId: number, title?: string): Promise<Capped
     qualityWeight: number
     title: string
     rejected?: boolean
+    temporarilyRejected?: boolean
   }
   const all = (await releaseRes.json()) as Release[]
   const eligible = all
-    .filter((r) => !r.rejected && r.size > 0 && r.size <= env.maxMovieBytes)
+    .filter((r) => !r.rejected && !r.temporarilyRejected && r.size > 0 && r.size <= env.maxMovieBytes)
     .sort((a, b) => b.qualityWeight - a.qualityWeight)
   if (eligible.length === 0) {
     console.log(
@@ -217,6 +218,16 @@ async function restoreMovieMonitoring(movie: CreatedRadarrMovie): Promise<{ ok: 
   })
   if (!res.ok) {
     console.error(`[movie-cap] failed to restore monitoring for movie ${movie.id}: ${res.status}`)
+    return { ok: false, status: res.status }
+  }
+  return { ok: true }
+}
+
+async function deleteCreatedMovie(movie: CreatedRadarrMovie): Promise<{ ok: true } | { ok: false; status: number }> {
+  if (!movie.id) return { ok: false, status: 0 }
+  const res = await radarrFetch(`/api/v3/movie/${movie.id}`, { method: 'DELETE' })
+  if (!res.ok) {
+    console.error(`[movie-cap] failed to roll back movie ${movie.id}: ${res.status}`)
     return { ok: false, status: res.status }
   }
   return { ok: true }
@@ -374,11 +385,13 @@ radarr.post('/api/v3/movie', async (c) => {
       try {
         const grab = await grabBestUnderCap(itemId, itemTitle)
         if (grab.status === 'search_failed' || grab.status === 'grab_failed') {
+          const rollback = await deleteCreatedMovie(created)
           return c.json(
             {
               error: 'capped_grab_failed',
               status: grab.upstreamStatus,
               phase: grab.status === 'search_failed' ? 'search' : 'grab',
+              rollbackStatus: rollback.ok ? undefined : rollback.status || undefined,
               movie: created,
             },
             424,
@@ -412,11 +425,13 @@ radarr.post('/api/v3/movie', async (c) => {
           type: 'grab_failed',
           error: e instanceof Error ? e.message : String(e),
         })
+        const rollback = await deleteCreatedMovie(created)
         return c.json(
           {
             error: 'capped_grab_failed',
             phase: 'exception',
             message: e instanceof Error ? e.message : String(e),
+            rollbackStatus: rollback.ok ? undefined : rollback.status || undefined,
           },
           424,
         )
@@ -475,13 +490,14 @@ radarr.post('/api/v3/movie/:id/upgrade', requireAdmin, async (c) => {
     qualityWeight: number
     title: string
     rejected?: boolean
+    temporarilyRejected?: boolean
   }
   const all = (await releaseRes.json()) as Release[]
   if (all.length === 0) {
     return c.json({ status: 'no_releases_found' })
   }
   const eligible = all
-    .filter((r) => !r.rejected && r.size > 0 && r.size <= env.maxMovieBytes)
+    .filter((r) => !r.rejected && !r.temporarilyRejected && r.size > 0 && r.size <= env.maxMovieBytes)
     .sort((a, b) => b.qualityWeight - a.qualityWeight)
   if (eligible.length === 0) {
     return c.json({

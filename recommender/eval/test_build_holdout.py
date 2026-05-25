@@ -26,7 +26,8 @@ def test_explicit_negative_removes_prior_engagement_positive(
             );
             CREATE TABLE rec_outcomes(
               rec_id INTEGER NOT NULL,
-              outcome TEXT NOT NULL
+              outcome TEXT NOT NULL,
+              ts TEXT NOT NULL
             );
             """
         )
@@ -40,8 +41,12 @@ def test_explicit_negative_removes_prior_engagement_positive(
             [(1, 42), (2, 99)],
         )
         conn.executemany(
-            "INSERT INTO rec_outcomes(rec_id, outcome) VALUES (?, ?)",
-            [(1, "clicked"), (2, "clicked"), (2, "disliked")],
+            "INSERT INTO rec_outcomes(rec_id, outcome, ts) VALUES (?, ?, ?)",
+            [
+                (1, "clicked", "2026-01-01T00:00:00Z"),
+                (2, "clicked", "2026-01-01T00:01:00Z"),
+                (2, "disliked", "2026-01-01T00:02:00Z"),
+            ],
         )
         conn.commit()
     finally:
