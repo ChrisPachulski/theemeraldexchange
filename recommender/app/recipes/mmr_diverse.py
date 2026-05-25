@@ -81,7 +81,7 @@ def score(ctx: UserContext, conn: sqlite3.Connection, *, n: int, params: dict) -
     min_votes = int(p["min_vote_count"])
     tau = float(p["personalized_threshold"])
     lam = float(p["mmr_lambda"])
-    mmr_k = int(p["mmr_input_k"])
+    mmr_k = max(n, int(p["mmr_input_k"]))
 
     pos = ctx.positive_centroid()
     if pos is None:
