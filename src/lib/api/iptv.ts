@@ -22,7 +22,31 @@ async function get<T>(path: string, params?: QueryParams): Promise<T> {
   return res.json() as Promise<T>
 }
 
+async function post<T>(path: string, body?: unknown): Promise<T> {
+  const init: RequestInit = {
+    method: 'POST',
+    credentials: 'include',
+  }
+  if (body !== undefined) {
+    init.headers = { 'Content-Type': 'application/json' }
+    init.body = JSON.stringify(body)
+  }
+
+  const res = await fetch(apiUrl(`${BASE}${path}`), init)
+  if (!res.ok) await throwApiError(res, `IPTV ${path}`)
+  return res.json() as Promise<T>
+}
+
 export type IptvKind = 'live' | 'vod' | 'series'
+
+export type StreamDelivery = 'mpegts' | 'hls' | 'progressive'
+
+export type StreamGrant = {
+  url: string
+  delivery: StreamDelivery
+  sessionId?: string
+  mime?: string
+}
 
 export type CategoryDto = {
   category_id: number
@@ -95,7 +119,18 @@ export type ListParams = {
   offset?: number
 }
 
-export const iptvApi = {
+export function preferAvplayer(): boolean {
+  if (typeof navigator === 'undefined') return false
+
+  const ua = navigator.userAgent
+  const platform = navigator.platform
+  const maxTouchPoints = navigator.maxTouchPoints ?? 0
+  const isiOS = /iPad|iPhone|iPod/i.test(ua) || (platform === 'MacIntel' && maxTouchPoints > 1)
+  const isSafari = /Safari/i.test(ua) && !/Chrome|Chromium|CriOS|FxiOS|Edg|OPR|Android/i.test(ua)
+  return isiOS || isSafari
+}
+
+export const iptvApi = Object.assign({
   health: () => get<{ expiresAt: string | null; maxConnections: number; status: string }>('/health'),
   categories: (kind: IptvKind) => get<CategoryDto[]>('/categories', { kind }),
   listLive: (params: ListParams = {}) => get<PagedDto<ChannelDto>>('/live', params),
@@ -103,4 +138,12 @@ export const iptvApi = {
   listSeries: (params: ListParams = {}) => get<PagedDto<SeriesDto>>('/series', params),
   vodDetail: (id: number) => get<VodDetailDto>(`/vod/${id}`),
   seriesDetail: (id: number) => get<SeriesDetailDto>(`/series/${id}`),
-}
+}, {
+  grantLive: (streamId: string, opts?: { avplayer?: boolean }) => {
+    const avplayer = opts?.avplayer ?? preferAvplayer()
+    const suffix = avplayer ? '?client=avplayer' : ''
+    return post<StreamGrant>(`/stream/live/${streamId}/grant${suffix}`)
+  },
+  grantVod: (streamId: string) => post<StreamGrant>(`/stream/vod/${streamId}/grant`),
+  grantSeries: (episodeId: string) => post<StreamGrant>(`/stream/series/${episodeId}/grant`),
+})
