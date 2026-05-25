@@ -15,6 +15,7 @@ from collections.abc import Iterator
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import Depends, FastAPI, Header, HTTPException
 
 from .config import CONFIG
@@ -32,6 +33,7 @@ from .schemas import (
     ScoreResponse,
     ShownEventRequest,
 )
+from workers.iptv_ingest import main as iptv_ingest_main
 
 log = logging.getLogger("recommender")
 RECENTLY_SHOWN_RETENTION_DAYS = 30
@@ -77,10 +79,21 @@ async def lifespan(_app: FastAPI):
     applied = migrate()
     if applied:
         log.info("applied migrations: %s", applied)
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(
+        iptv_ingest_main,
+        trigger="cron",
+        hour=3,
+        minute=30,
+        id="iptv_ingest",
+        replace_existing=True,
+    )
+    scheduler.start()
     sweep_task = asyncio.create_task(retention_sweeper())
     try:
         yield
     finally:
+        scheduler.shutdown(wait=False)
         sweep_task.cancel()
         with suppress(asyncio.CancelledError):
             await sweep_task
