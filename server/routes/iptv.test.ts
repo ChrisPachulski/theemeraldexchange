@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest'
 import { Hono, type MiddlewareHandler } from 'hono'
 import { openIptvDb, type IptvDb } from '../services/iptvDb.js'
 import { iptv } from './iptv.js'
+import { env } from '../env.js'
 
 const dbState = vi.hoisted(() => ({
   testDb: null as IptvDb | null,
@@ -171,6 +172,21 @@ beforeAll(() => {
     tv_archive: 1,
     tv_archive_duration: 7,
     added_ts: null,
+    fetched_at: '2026-05-24T00:00:00Z',
+  })
+  dbState.testDb.stmts.upsertVod.run({
+    stream_id: 20,
+    name: 'Matrix',
+    stream_icon: null,
+    rating: 8.7,
+    category_id: null,
+    container_extension: 'mp4',
+    added_ts: null,
+    tmdb_id: 603,
+    year: 1999,
+    plot: 'Neo',
+    director: 'Lana Wachowski, Lilly Wachowski',
+    cast_csv: 'Keanu Reeves, Carrie-Anne Moss',
     fetched_at: '2026-05-24T00:00:00Z',
   })
   dbState.testDb.stmts.upsertSeries.run({
@@ -362,6 +378,53 @@ describe('catalog read routes', () => {
     const res = await app.request('/api/iptv/series/30')
     const body = (await res.json()) as { name: string }
     expect(body.name).toBe('GoT')
+  })
+})
+
+describe('GET /api/iptv/export/recommender', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+  const previousSecret = env.IPTV_RECOMMENDER_EXPORT_SECRET
+  const setExportSecret = (value: string) => {
+    (env as unknown as { IPTV_RECOMMENDER_EXPORT_SECRET: string }).IPTV_RECOMMENDER_EXPORT_SECRET = value
+  }
+
+  afterAll(() => {
+    setExportSecret(previousSecret)
+  })
+
+  it('rejects missing, mismatched, or empty secrets', async () => {
+    setExportSecret('shh')
+    expect((await app.request('/api/iptv/export/recommender')).status).toBe(403)
+    expect((await app.request('/api/iptv/export/recommender', {
+      headers: { 'x-iptv-export-secret': 'wrong' },
+    })).status).toBe(403)
+
+    setExportSecret('')
+    expect((await app.request('/api/iptv/export/recommender', {
+      headers: { 'x-iptv-export-secret': 'shh' },
+    })).status).toBe(403)
+  })
+
+  it('exports vod and series rows with the recommender shape', async () => {
+    setExportSecret('shh')
+    const res = await app.request('/api/iptv/export/recommender', {
+      headers: { 'x-iptv-export-secret': 'shh' },
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      vod: Array<{ id: number; title: string; tmdb_id: number | null; cast: string | null }>
+      series: Array<{ id: number; title: string }>
+    }
+    expect(body.vod).toContainEqual(expect.objectContaining({
+      id: 20,
+      title: 'Matrix',
+      tmdb_id: 603,
+      cast: 'Keanu Reeves, Carrie-Anne Moss',
+    }))
+    expect(body.series).toContainEqual(expect.objectContaining({
+      id: 30,
+      title: 'GoT',
+    }))
   })
 })
 
