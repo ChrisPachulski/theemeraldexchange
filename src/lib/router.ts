@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 
-export type Route = 'home' | 'tv' | 'movies' | 'downloads' | 'users'
+export type Route = 'home' | 'tv' | 'movies' | 'downloads' | 'users' | 'live' | 'iptv-vod' | 'iptv-series'
 
-const ROUTES: Route[] = ['home', 'tv', 'movies', 'downloads', 'users']
+const ROUTES: Route[] = ['home', 'tv', 'movies', 'live', 'iptv-vod', 'iptv-series', 'downloads', 'users']
 const DEFAULT_ROUTE: Route = 'home'
 
 function parseHash(): Route {

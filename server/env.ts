@@ -333,4 +333,22 @@ export const env = {
       ? 'http://recommender:8000'
       : 'http://localhost:8000'),
   recommenderEventSecret,
+
+  // mybunny.tv / Xtream Codes IPTV integration. Reserved at PF-2;
+  // consumed by the IPTV modules added in later PF phases (Xtream client,
+  // EPG sync cron, stream-token proxy, recommender export). Empty
+  // defaults keep boot working without IPTV configured — downstream
+  // modules guard on XTREAM_HOST being set before attempting any
+  // upstream calls.
+  XTREAM_HOST: process.env.XTREAM_HOST ?? '',
+  XTREAM_USERNAME: process.env.XTREAM_USERNAME ?? '',
+  XTREAM_PASSWORD: process.env.XTREAM_PASSWORD ?? '',
+  IPTV_DB_PATH: process.env.IPTV_DB_PATH ?? './data/iptv.db',
+  IPTV_EPG_PATH: opt('IPTV_EPG_PATH') ?? '/xmltv.php',
+  IPTV_MAX_CONCURRENT_STREAMS: positiveInt('IPTV_MAX_CONCURRENT_STREAMS', 4),
+  IPTV_STREAM_TOKEN_TTL_SECS: positiveInt('IPTV_STREAM_TOKEN_TTL_SECS', 300),
+  IPTV_LIST_TIMEOUT_MS: positiveInt('IPTV_LIST_TIMEOUT_MS', 30_000),
+  IPTV_SYNC_CRON: process.env.IPTV_SYNC_CRON ?? '0 */6 * * *',
+  IPTV_RECOMMENDER_EXPORT_SECRET: process.env.IPTV_RECOMMENDER_EXPORT_SECRET ?? '',
+  IPTV_REMUX_TMP_DIR: process.env.IPTV_REMUX_TMP_DIR ?? '/tmp/iptv-remux',
 } as const
