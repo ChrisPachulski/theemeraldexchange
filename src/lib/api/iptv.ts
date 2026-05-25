@@ -34,10 +34,20 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
 
   const res = await fetch(apiUrl(`${BASE}${path}`), init)
   if (!res.ok) await throwApiError(res, `IPTV ${path}`)
-  return res.json() as Promise<T>
+  const text = await res.text()
+  return (text ? JSON.parse(text) : undefined) as T
+}
+
+async function del(path: string): Promise<void> {
+  const res = await fetch(apiUrl(`${BASE}${path}`), {
+    method: 'DELETE',
+    credentials: 'include',
+  })
+  if (!res.ok) await throwApiError(res, `IPTV ${path}`)
 }
 
 export type IptvKind = 'live' | 'vod' | 'series'
+export type IptvHistoryKind = 'live' | 'vod' | 'series_episode'
 
 export type StreamDelivery = 'mpegts' | 'hls' | 'progressive'
 
@@ -112,6 +122,31 @@ export type PagedDto<T> = {
   offset: number
 }
 
+export type FavoriteRow = {
+  sub: string
+  kind: IptvKind
+  item_id: string
+  added_ts: string
+}
+
+export type HistoryRow = {
+  sub: string
+  kind: IptvHistoryKind
+  item_id: string
+  position_secs: number
+  duration_secs: number | null
+  watched_at: string
+  completed: number
+}
+
+export type PutHistoryInput = {
+  kind: IptvHistoryKind
+  itemId: string
+  positionSecs: number
+  durationSecs?: number | null
+  completed?: boolean
+}
+
 export type ListParams = {
   categoryId?: number
   q?: string
@@ -138,6 +173,12 @@ export const iptvApi = Object.assign({
   listSeries: (params: ListParams = {}) => get<PagedDto<SeriesDto>>('/series', params),
   vodDetail: (id: number) => get<VodDetailDto>(`/vod/${id}`),
   seriesDetail: (id: number) => get<SeriesDetailDto>(`/series/${id}`),
+  favorites: () => get<FavoriteRow[]>('/favorites'),
+  addFavorite: (kind: FavoriteRow['kind'], itemId: string) => post<void>('/favorites', { kind, itemId }),
+  removeFavorite: (kind: FavoriteRow['kind'], itemId: string) =>
+    del(`/favorites/${kind}/${encodeURIComponent(itemId)}`),
+  history: (limit = 50) => get<HistoryRow[]>('/history', { limit }),
+  putHistory: (input: PutHistoryInput) => post<void>('/history', input),
 }, {
   grantLive: (streamId: string, opts?: { avplayer?: boolean }) => {
     const avplayer = opts?.avplayer ?? preferAvplayer()
