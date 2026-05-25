@@ -24,6 +24,7 @@ const EMERALD_NAME = 'Emerald Exchange Discord'
 let discordMutationTail = Promise.resolve()
 type NotificationApp = 'sonarr' | 'radarr'
 type SuccessfulMutation = { app: NotificationApp; action: 'create' | 'update'; id: number }
+type NotificationDeleteFailure = { app: NotificationApp; id: number; status: number }
 
 async function withDiscordMutationLock<T>(fn: () => Promise<T>): Promise<T> {
   const previous = discordMutationTail
@@ -129,12 +130,38 @@ async function listNotifications(app: 'sonarr' | 'radarr'): Promise<Array<{ id: 
   return (await r.json()) as Array<{ id: number; name: string; implementation: string }>
 }
 
-async function findEmerald(app: 'sonarr' | 'radarr'): Promise<number | null> {
+async function findEmeraldIds(app: 'sonarr' | 'radarr'): Promise<number[]> {
   const list = await listNotifications(app)
-  const hit = list.find(
-    (n) => n.name === EMERALD_NAME && n.implementation === 'Discord',
-  )
-  return hit?.id ?? null
+  return list
+    .filter((n) => n.name === EMERALD_NAME && n.implementation === 'Discord')
+    .map((n) => n.id)
+}
+
+async function deleteNotifications(app: NotificationApp, ids: number[]) {
+  const fetcher = notificationFetcher(app)
+  const failures: NotificationDeleteFailure[] = []
+  let removed = 0
+  for (const id of ids) {
+    const res = await fetcher(`/api/v3/notification/${id}`, { method: 'DELETE' })
+    if (res.ok) removed++
+    else failures.push({ app, id, status: res.status })
+  }
+  return { removed, failures }
+}
+
+async function findEmerald(app: 'sonarr' | 'radarr'): Promise<number | null> {
+  const ids = await findEmeraldIds(app)
+  return ids[0] ?? null
+}
+
+function partialDeletePayload(removed: number, failures: NotificationDeleteFailure[]) {
+  return {
+    error: 'partial_delete_failed',
+    removed,
+    failures,
+    message:
+      'one or more upstream notification deletes failed; the connector may still be active',
+  }
 }
 
 notifications.get('/discord', async (c) => {
@@ -168,9 +195,9 @@ notifications.post('/discord', async (c) => {
     // retry until Sonarr/Radarr came back. Fail closed on list error.
     const mutations: SuccessfulMutation[] = []
     for (const app of ['sonarr', 'radarr'] as const) {
-      let existing: number | null
+      let existingIds: number[]
       try {
-        existing = await findEmerald(app)
+        existingIds = await findEmeraldIds(app)
       } catch (err) {
         if (err instanceof NotificationListError) {
           return c.json(
@@ -181,7 +208,9 @@ notifications.post('/discord', async (c) => {
         throw err
       }
       const fetcher = notificationFetcher(app)
-      if (existing !== null) {
+      if (existingIds.length > 0) {
+        const existing = existingIds[0]
+        const extras = existingIds.slice(1)
         const res = await fetcher(`/api/v3/notification/${existing}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -206,6 +235,12 @@ notifications.post('/discord', async (c) => {
           )
         }
         mutations.push({ app, action: 'update', id: existing })
+        if (extras.length > 0) {
+          const cleanup = await deleteNotifications(app, extras)
+          if (cleanup.failures.length > 0) {
+            return c.json(partialDeletePayload(cleanup.removed, cleanup.failures), 502)
+          }
+        }
         continue
       }
       const res = await fetcher('/api/v3/notification', {
@@ -237,35 +272,24 @@ notifications.delete('/discord', async (c) => {
   // returned {ok:true, removed:0} even when both refused, so the SPA
   // showed "Removed" while connectors stayed active and the household
   // kept getting double-pings on the next grab.
-  const failures: Array<{ app: 'sonarr' | 'radarr'; status: number }> = []
+  const failures: NotificationDeleteFailure[] = []
   let removed = 0
   for (const app of ['sonarr', 'radarr'] as const) {
-    let id: number | null
+    let ids: number[]
     try {
-      id = await findEmerald(app)
+      ids = await findEmeraldIds(app)
     } catch (err) {
       if (err instanceof NotificationListError) {
         return c.json({ error: `${err.app}_list_failed`, status: err.status }, 502)
       }
       throw err
     }
-    if (id === null) continue
-    const fetcher = app === 'sonarr' ? sonarrFetch : radarrFetch
-    const res = await fetcher(`/api/v3/notification/${id}`, { method: 'DELETE' })
-    if (res.ok) removed++
-    else failures.push({ app, status: res.status })
+    const result = await deleteNotifications(app, ids)
+    removed += result.removed
+    failures.push(...result.failures)
   }
   if (failures.length > 0) {
-    return c.json(
-      {
-        error: 'partial_delete_failed',
-        removed,
-        failures,
-        message:
-          'one or more upstream notification deletes failed; the connector may still be active',
-      },
-      502,
-    )
+    return c.json(partialDeletePayload(removed, failures), 502)
   }
   return c.json({ ok: true, removed })
 })

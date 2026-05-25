@@ -477,11 +477,11 @@ describe('notifications DELETE /discord', () => {
     const body = (await r.json()) as {
       error: string
       removed: number
-      failures: Array<{ app: string; status: number }>
+      failures: Array<{ app: string; id: number; status: number }>
     }
     expect(body.error).toBe('partial_delete_failed')
     expect(body.removed).toBe(1)
-    expect(body.failures).toEqual([{ app: 'radarr', status: 500 }])
+    expect(body.failures).toEqual([{ app: 'radarr', id: 8, status: 500 }])
     // Sonarr is still attempted first — partial cleanup matters even
     // when the radarr leg fails.
     expect(sonarrDeleted).toBe(true)
@@ -506,7 +506,7 @@ describe('notifications DELETE /discord', () => {
     expect(r.status).toBe(502)
     const body = (await r.json()) as {
       removed: number
-      failures: Array<{ app: string; status: number }>
+      failures: Array<{ app: string; id: number; status: number }>
     }
     expect(body.removed).toBe(0)
     expect(body.failures.map((f) => f.app).sort()).toEqual(['radarr', 'sonarr'])
