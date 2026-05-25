@@ -436,7 +436,7 @@ def sanitize_model_params(recipe_name: str, params: dict, *, version: str) -> di
             clean_params[key] = max(lo, min(hi, float(value)))
         elif isinstance(default, str) and isinstance(value, str):
             clean_params[key] = value
-    return (row["version"], row["recipe"], clean_params)
+    return clean_params
 
 
 def select_model_config_for_context(
