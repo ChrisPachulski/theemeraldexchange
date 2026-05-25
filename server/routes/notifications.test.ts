@@ -372,6 +372,34 @@ describe('notifications POST /discord — create flow', () => {
     expect(body.detail).toContain('upstream boom')
   })
 
+  it('radarr list failure before create leaves Sonarr unchanged', async () => {
+    handlers.push({
+      match: (u, m) => u.includes(sonarrHost()) && m === 'GET' && u.endsWith('/api/v3/notification'),
+      handler: () => jsonResponse([]),
+    })
+    handlers.push({
+      match: (u, m) => u.includes(radarrHost()) && m === 'GET' && u.endsWith('/api/v3/notification'),
+      handler: () => jsonResponse({ error: 'radarr down' }, 500),
+    })
+    let postAttempts = 0
+    handlers.push({
+      match: (_u, m) => m === 'POST',
+      handler: () => {
+        postAttempts++
+        return jsonResponse({ id: 1 }, 201)
+      },
+    })
+    const r = await appUnderTest().request('/discord', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ webhookUrl: GOOD_WEBHOOK }),
+    })
+    expect(r.status).toBe(502)
+    const body = (await r.json()) as { error: string }
+    expect(body.error).toBe('radarr_list_failed')
+    expect(postAttempts).toBe(0)
+  })
+
   it('radarr create returns 502 → outer 502 radarr_create_failed (sonarr succeeded first)', async () => {
     handlers.push({
       match: (u, m) => m === 'GET' && u.endsWith('/api/v3/notification'),
@@ -440,6 +468,33 @@ describe('notifications DELETE /discord', () => {
     })
     expect(r.status).toBe(200)
     expect(await r.json()).toEqual({ ok: true, removed: 0 })
+  })
+
+  it('radarr list failure before delete leaves Sonarr unchanged', async () => {
+    handlers.push({
+      match: (u, m) => u.includes(sonarrHost()) && m === 'GET' && u.endsWith('/api/v3/notification'),
+      handler: () => jsonResponse([{ id: 7, name: EMERALD, implementation: 'Discord' }]),
+    })
+    handlers.push({
+      match: (u, m) => u.includes(radarrHost()) && m === 'GET' && u.endsWith('/api/v3/notification'),
+      handler: () => jsonResponse({ error: 'radarr down' }, 500),
+    })
+    let deletes = 0
+    handlers.push({
+      match: (_u, m) => m === 'DELETE',
+      handler: () => {
+        deletes++
+        return jsonResponse({}, 200)
+      },
+    })
+    const r = await appUnderTest().request('/discord', {
+      method: 'DELETE',
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(502)
+    const body = (await r.json()) as { error: string }
+    expect(body.error).toBe('radarr_list_failed')
+    expect(deletes).toBe(0)
   })
 
   it('DELETE upstream partial failure surfaces 502 with the failing app and the success count', async () => {
