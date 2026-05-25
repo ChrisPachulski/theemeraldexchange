@@ -97,6 +97,41 @@ describe('live stream grant + proxy', () => {
   })
 })
 
+describe('catchup stream grant + proxy', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+
+  it('issues a tokenized catchup URL for an archived channel', async () => {
+    const startUtc = new Date(Date.now() - 60 * 60_000).toISOString()
+    const res = await app.request(
+      `/api/iptv/stream/catchup/10/grant?startUtc=${encodeURIComponent(startUtc)}&durationMin=30`,
+      { method: 'POST' },
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as { url: string; delivery: string }
+    expect(body.delivery).toBe('mpegts')
+    expect(body.url).toContain(`/api/iptv/stream/catchup/10/${encodeURIComponent(startUtc)}/30.ts?t=`)
+    expect(body.url).toContain(fakeToken('catchup', `10|${startUtc}|30`))
+  })
+
+  it('proxies catchup through the Xtream timeshift endpoint', async () => {
+    const startUtc = '2026-05-24T12:00:00Z'
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('ts', { status: 200 }))
+
+    const res = await app.request(
+      `/api/iptv/stream/catchup/10/${encodeURIComponent(startUtc)}/30.ts?t=${fakeToken('catchup', `10|${startUtc}|30`)}`,
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('video/mp2t')
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://panel/streaming/timeshift.php?username=u&password=p&stream=10&start=2026-05-24:12-00&duration=30',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
+    fetchSpy.mockRestore()
+  })
+})
+
 vi.mock('../services/iptvSync.js', () => ({
   syncOnce: vi.fn(async () => ({
     busy: false, channels: 10, vod: 20, series: 5, episodes: 50, epg: 100, categories: 6,
@@ -125,6 +160,19 @@ vi.mock('../services/iptvCatalog.js', () => ({
 
 beforeAll(() => {
   dbState.testDb = openIptvDb(':memory:')
+  dbState.testDb.stmts.upsertChannel.run({
+    stream_id: 10,
+    num: 1,
+    name: 'CNN',
+    stream_icon: null,
+    epg_channel_id: 'cnn.us',
+    category_id: 1,
+    is_adult: 0,
+    tv_archive: 1,
+    tv_archive_duration: 7,
+    added_ts: null,
+    fetched_at: '2026-05-24T00:00:00Z',
+  })
   dbState.testDb.stmts.upsertSeries.run({
     series_id: 30,
     name: 'GoT',
