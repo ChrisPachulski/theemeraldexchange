@@ -453,11 +453,14 @@ sonarr.post('/api/v3/series', async (c) => {
 
   if (r.ok && wantedSearch) {
     try {
-      const created = JSON.parse(out) as {
+      type CreatedSeries = {
         id?: number
         monitored?: boolean
         seasons?: Array<{ seasonNumber: number; monitored: boolean }>
+        title?: string
+        [key: string]: unknown
       }
+      const created = JSON.parse(out) as CreatedSeries
       const id = created.id
       // Use the seasons in the request body (pre-add intent) when
       // available — Sonarr's response sometimes lags monitor flags.
@@ -514,31 +517,49 @@ sonarr.post('/api/v3/series', async (c) => {
       if (
         id &&
         monitored.length > 0 &&
-        body.addOptions?.monitor === 'none' &&
-        created.seasons
+        body.addOptions?.monitor === 'none'
       ) {
-        const desired = new Set(monitored)
-        const patched = {
-          ...created,
-          monitored: true,
-          seasons: created.seasons.map((s) => ({
-            ...s,
-            monitored: desired.has(s.seasonNumber),
-          })),
+        let seriesForPatch = created
+        if (!seriesForPatch.seasons || seriesForPatch.seasons.length === 0) {
+          try {
+            const fresh = await sonarrFetch(`/api/v3/series/${id}`, { method: 'GET' })
+            if (fresh.ok) {
+              const refreshed = (await fresh.json()) as CreatedSeries
+              if (refreshed.seasons && refreshed.seasons.length > 0) {
+                seriesForPatch = refreshed
+              }
+            }
+          } catch (e) {
+            console.warn(
+              `[tv-monitor] re-read series ${id} for season reconciliation failed: ` +
+                (e instanceof Error ? e.message : String(e)),
+            )
+          }
         }
-        const putRes = await sonarrFetch(`/api/v3/series/${id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(patched),
-        })
-        if (!putRes.ok) {
-          console.error(`[tv-monitor] PUT series ${id} failed: ${putRes.status}`)
+        if (seriesForPatch.seasons && seriesForPatch.seasons.length > 0) {
+          const desired = new Set(monitored)
+          const patched = {
+            ...seriesForPatch,
+            monitored: true,
+            seasons: seriesForPatch.seasons.map((s) => ({
+              ...s,
+              monitored: desired.has(s.seasonNumber),
+            })),
+          }
+          const putRes = await sonarrFetch(`/api/v3/series/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(patched),
+          })
+          if (!putRes.ok) {
+            console.error(`[tv-monitor] PUT series ${id} failed: ${putRes.status}`)
+          }
         }
       }
 
       if (id && monitored.length > 0) {
         const itemId = id
-        const itemTitle = (created as { title?: string }).title
+        const itemTitle = created.title
         void grabTvUnderCap(itemId, monitored, itemTitle).catch((e) => {
           console.error('[tv-cap] grab failed:', e)
           void recordSonarrGrabEvent({
