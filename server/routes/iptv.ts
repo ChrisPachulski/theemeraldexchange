@@ -45,13 +45,18 @@ iptv.get('/categories', (c) => {
   return c.json(listCategories(iptvDb(), kind as 'live' | 'vod' | 'series'))
 })
 
+function intOrUndef(s: string | undefined): number | undefined {
+  if (s == null || s === '') return undefined
+  const n = Number(s)
+  return Number.isFinite(n) ? Math.trunc(n) : undefined
+}
+
 function parseListOpts(c: Context<Env>): { categoryId?: number; q?: string; limit?: number; offset?: number } {
-  const cat = c.req.query('categoryId')
   return {
-    categoryId: cat != null && cat !== '' ? Number(cat) : undefined,
+    categoryId: intOrUndef(c.req.query('categoryId')),
     q: c.req.query('q') ?? undefined,
-    limit: c.req.query('limit') != null ? Number(c.req.query('limit')) : undefined,
-    offset: c.req.query('offset') != null ? Number(c.req.query('offset')) : undefined,
+    limit: intOrUndef(c.req.query('limit')),
+    offset: intOrUndef(c.req.query('offset')),
   }
 }
 

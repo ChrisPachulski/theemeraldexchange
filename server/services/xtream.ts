@@ -1,5 +1,5 @@
 import { env } from '../env.js'
-import { fetchWithTimeout } from './upstream.js'
+import { fetchJsonWithTimeout, fetchWithTimeout } from './upstream.js'
 
 export interface XtreamCreds {
   host: string
@@ -43,9 +43,7 @@ export function buildPlayerApiUrl(
 export function parseAccountInfo(payload: unknown): AccountInfo {
   const root = (payload as { user_info?: Record<string, unknown> })?.user_info ?? {}
   const rawExp = root.exp_date
-  const expNum =
-    typeof rawExp === 'number' ? rawExp : typeof rawExp === 'string' ? Number(rawExp) : NaN
-  const expiresAt = Number.isFinite(expNum) ? new Date(expNum * 1000) : null
+  const expiresAt = safeEpochDate(rawExp)
   const maxConnections =
     typeof root.max_connections === 'number'
       ? root.max_connections
@@ -76,6 +74,15 @@ const numOrNull = (v: unknown): number | null => {
   return Number.isFinite(n) ? n : null
 }
 const str = (v: unknown): string | null => (typeof v === 'string' ? v : v == null ? null : String(v))
+
+const safeEpochDate = (v: unknown): Date | null => {
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN
+  if (!Number.isFinite(n) || n <= 0) return null
+  const d = new Date(n * 1000)
+  return Number.isFinite(d.getTime()) ? d : null
+}
+
+const safeEpochIso = (v: unknown): string | null => safeEpochDate(v)?.toISOString() ?? null
 
 export interface CategoryRow { category_id: number; name: string; parent_id: number }
 export function parseCategoriesPayload(raw: unknown): CategoryRow[] {
@@ -111,7 +118,7 @@ export function parseLiveStreams(raw: unknown, fetchedAt: string): ChannelRow[] 
       is_adult: num(o.is_adult) ? 1 : 0,
       tv_archive: num(o.tv_archive) ? 1 : 0,
       tv_archive_duration: numOrNull(o.tv_archive_duration),
-      added_ts: addedSecs ? new Date(addedSecs * 1000).toISOString() : null,
+      added_ts: safeEpochIso(addedSecs),
       fetched_at: fetchedAt,
     }
   })
@@ -136,7 +143,7 @@ export function parseVodStreams(raw: unknown, fetchedAt: string): VodRow[] {
       rating: numOrNull(o.rating),
       category_id: numOrNull(o.category_id),
       container_extension: str(o.container_extension),
-      added_ts: addedSecs ? new Date(addedSecs * 1000).toISOString() : null,
+      added_ts: safeEpochIso(addedSecs),
       tmdb_id: numOrNull(o.tmdb ?? o.tmdb_id),
       year: numOrNull(o.year),
       plot: str(o.plot),
@@ -171,9 +178,7 @@ export function parseSeriesList(raw: unknown, fetchedAt: string): SeriesRow[] {
 }
 
 async function getJson(url: string, label: string): Promise<unknown> {
-  const res = await fetchWithTimeout(url, {}, env.IPTV_LIST_TIMEOUT_MS, label)
-  if (!res.ok) throw new Error(`${label}_${res.status}`)
-  return res.json()
+  return fetchJsonWithTimeout(url, {}, env.IPTV_LIST_TIMEOUT_MS, label)
 }
 
 export async function fetchCategories(
@@ -217,7 +222,7 @@ export async function fetchSeriesInfo(seriesId: number, creds: XtreamCreds = cre
         episode_num: num(o.episode_num),
         title: str(o.title),
         container_extension: str(o.container_extension),
-        added_ts: addedSecs ? new Date(addedSecs * 1000).toISOString() : null,
+        added_ts: safeEpochIso(addedSecs),
         plot: str(info.plot ?? info.description),
         duration_secs: numOrNull(info.duration_secs),
       })

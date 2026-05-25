@@ -61,8 +61,14 @@ export interface SeriesDetail extends SeriesItem {
 type CountRow = { n: number }
 type EpisodeRow = SeriesEpisode & { season: number }
 
-const clampLimit = (n: number | undefined) => Math.max(1, Math.min(200, Math.floor(n ?? 50)))
-const clampOffset = (n: number | undefined) => Math.max(0, Math.floor(n ?? 0))
+const clampLimit = (n: number | undefined) => {
+  const v = Number.isFinite(n) ? Math.floor(n as number) : 50
+  return Math.max(1, Math.min(200, v))
+}
+const clampOffset = (n: number | undefined) => {
+  const v = Number.isFinite(n) ? Math.floor(n as number) : 0
+  return Math.max(0, v)
+}
 const likeOrAny = (q: string | undefined) => (q && q.trim() ? `%${q.trim().toLowerCase()}%` : null)
 
 export function listCategories(db: IptvDb, kind: Kind): CategoryItem[] {

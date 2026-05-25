@@ -288,8 +288,17 @@
     font-size: var(--t-md);
   }
 
+  .home__entries {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 104px), 1fr));
+    left: var(--s-4);
+    right: var(--s-4);
+    transform: none;
+    width: auto;
+  }
+
   .home__entry {
-    min-width: 120px;
+    min-width: 0;
     padding: var(--s-3) var(--s-4);
   }
 }

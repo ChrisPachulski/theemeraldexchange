@@ -4,6 +4,8 @@ import { createGunzip } from 'node:zlib'
 import { setImmediate as yieldEventLoop } from 'node:timers/promises'
 import { env } from '../env.js'
 
+const EPG_FETCH_TIMEOUT_MS = 5 * 60_000
+
 export interface EpgProgrammeRow {
   channel_id: string
   start_utc: string
@@ -30,32 +32,56 @@ export function parseXmltvProgramme(_unused: never): EpgProgrammeRow {
   throw new Error('use streamXmltv')
 }
 
+async function waitForReadable(input: Readable): Promise<'readable' | 'end'> {
+  if (input.readableEnded) return 'end'
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      input.off('readable', onReadable)
+      input.off('end', onEnd)
+      input.off('error', onError)
+    }
+    const onReadable = () => {
+      cleanup()
+      resolve('readable')
+    }
+    const onEnd = () => {
+      cleanup()
+      resolve('end')
+    }
+    const onError = (err: Error) => {
+      cleanup()
+      reject(err)
+    }
+    input.once('readable', onReadable)
+    input.once('end', onEnd)
+    input.once('error', onError)
+  })
+}
+
 export async function streamXmltv(
   input: Readable,
   onProgramme: (row: EpgProgrammeRow) => void,
 ): Promise<void> {
   // Auto-detect gzip by reading the first two bytes.
-  const head: Buffer = await new Promise((resolve, reject) => {
-    const chunks: Buffer[] = []
-    let total = 0
-    input.on('error', reject)
-    input.on('data', (chunk: Buffer) => {
-      chunks.push(chunk)
-      total += chunk.length
-      if (total >= 2) {
-        input.pause()
-        resolve(Buffer.concat(chunks, total))
-      }
-    })
-    input.on('end', () => resolve(Buffer.concat(chunks, total)))
-  })
+  const headChunks: Buffer[] = []
+  let total = 0
+  while (total < 2) {
+    const chunk = input.read() as Buffer | Uint8Array | string | null
+    if (chunk !== null) {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      headChunks.push(buf)
+      total += buf.length
+      continue
+    }
+    if (await waitForReadable(input) === 'end') break
+  }
+  const head = Buffer.concat(headChunks, total)
   const isGzip = head[0] === 0x1f && head[1] === 0x8b
-  const merged = Readable.from((async function* () {
-    yield head
-    input.resume()
-    for await (const c of input) yield c as Buffer
+  const stream = Readable.from((async function* () {
+    for (const chunk of headChunks) yield chunk
+    for await (const chunk of input) yield chunk as Buffer
   })())
-  const xmlStream: Readable = isGzip ? (merged.pipe(createGunzip()) as unknown as Readable) : merged
+  const xmlStream: Readable = isGzip ? (stream.pipe(createGunzip()) as unknown as Readable) : stream
 
   const parser = sax.createStream(true, { trim: true, normalize: true })
   let cur: Partial<EpgProgrammeRow> | null = null
@@ -115,8 +141,14 @@ export async function fetchAndStreamEpg(
   const pass = hostOverride?.password ?? env.XTREAM_PASSWORD
   const epgPath = (env.IPTV_EPG_PATH ?? '/xmltv.php').replace(/^([^/])/, '/$1')
   const url = `${host}${epgPath}?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}`
-  const res = await fetch(url)
-  if (!res.ok || !res.body) throw new Error(`xtream.xmltv_${res.status}`)
-  const nodeStream = Readable.fromWeb(res.body as unknown as ReadableStream<Uint8Array>)
-  await streamXmltv(nodeStream, onProgramme)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), Math.max(env.IPTV_LIST_TIMEOUT_MS, EPG_FETCH_TIMEOUT_MS))
+  try {
+    const res = await fetch(url, { signal: controller.signal })
+    if (!res.ok || !res.body) throw new Error(`xtream.xmltv_${res.status}`)
+    const nodeStream = Readable.fromWeb(res.body as unknown as ReadableStream<Uint8Array>)
+    await streamXmltv(nodeStream, onProgramme)
+  } finally {
+    clearTimeout(timer)
+  }
 }

@@ -45,7 +45,7 @@ export function AddSeriesModal({ series, onClose, onAdded }: Props) {
   // Monitor selector value: "all" or "season:<n>". We use a string union
   // rather than a discriminated union here because <select> values are
   // stringly-typed anyway, and the parse on submit is trivial.
-  const [monitorChoice, setMonitorChoice] = useState<string | null>(null)
+  const [monitorChoice, setMonitorChoice] = useState<{ seriesId: number; value: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   // Specials (seasonNumber 0) are intentionally excluded from the
@@ -63,7 +63,19 @@ export function AddSeriesModal({ series, onClose, onAdded }: Props) {
     : showSeasons.length > 0
       ? `season:${showSeasons[0]}`
       : 'all'
-  const monitor = monitorChoice ?? defaultMonitor
+  const currentMonitorChoice = monitorChoice
+  const monitorChoiceValue =
+    currentMonitorChoice && currentMonitorChoice.seriesId === series?.tvdbId
+      ? currentMonitorChoice.value
+      : null
+  const chosenSeason = monitorChoiceValue?.startsWith('season:')
+    ? Number(monitorChoiceValue.slice('season:'.length))
+    : null
+  const validMonitorChoice =
+    monitorChoiceValue === 'all' || (chosenSeason !== null && showSeasons.includes(chosenSeason))
+      ? monitorChoiceValue
+      : null
+  const monitor = validMonitorChoice ?? defaultMonitor
 
   const profileId =
     profileChoice ??
@@ -244,7 +256,7 @@ export function AddSeriesModal({ series, onClose, onAdded }: Props) {
               <select
                 className="add-series__select"
                 value={monitor}
-                onChange={(e) => setMonitorChoice(e.target.value)}
+                onChange={(e) => setMonitorChoice({ seriesId: series.tvdbId, value: e.target.value })}
               >
                 {/* All Seasons stays pinned at the top so it's always
                     visible in the menu, regardless of how many seasons

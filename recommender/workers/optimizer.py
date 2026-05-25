@@ -42,6 +42,10 @@ MAX_INACTIVE_MODEL_CONFIGS = 30
 
 CLAUDE_MODEL = os.environ.get("RECOMMENDER_OPTIMIZER_MODEL", "claude-haiku-4-5-20251001")
 EVAL_EPSILON = 0.005  # require >0.5% improvement to promote
+ORCHESTRATION_ONLY_RECIPES = {"cold_start_trending"}
+OPTIMIZER_ELIGIBLE_RECIPES = tuple(
+    recipe for recipe in recipes.REGISTRY if recipe not in ORCHESTRATION_ONLY_RECIPES
+)
 
 
 # =========================================================================
@@ -245,7 +249,7 @@ def validate_proposal(proposed: Any, active_recipe: str, active_params: dict) ->
         return None
 
     candidate_recipe = proposed.get("recipe") or active_recipe
-    if not isinstance(candidate_recipe, str) or candidate_recipe not in recipes.REGISTRY:
+    if not isinstance(candidate_recipe, str) or candidate_recipe not in OPTIMIZER_ELIGIBLE_RECIPES:
         log.warning("optimizer proposed unknown recipe %r; keeping active config", candidate_recipe)
         return None
 
@@ -591,7 +595,7 @@ def run(*, dry_run: bool = False) -> int:
             active_recipe=active_recipe,
             active_params=active_params,
             stats=stats,
-            registry=list(recipes.REGISTRY.keys()),
+            registry=list(OPTIMIZER_ELIGIBLE_RECIPES),
         )
         if proposed is None:
             return 0

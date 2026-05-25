@@ -8,6 +8,11 @@
 .iptv-tab__category { padding: .5rem; }
 .iptv-tab__status { color: var(--text-dim, #888); padding: 1rem; }
 .iptv-tab__status--error { color: var(--text-error, #c33); }
+.iptv-tab__pager {
+  display: flex; gap: .5rem; align-items: center; justify-content: flex-end; margin-top: 1rem;
+}
+.iptv-tab__pager button { padding: .5rem .75rem; }
+.iptv-tab__page-count { color: var(--text-dim, #888); font-size: .9rem; margin-right: auto; }
 .iptv-channel-grid, .iptv-poster-grid {
   display: grid; gap: .75rem; list-style: none; padding: 0; margin: 0;
 }

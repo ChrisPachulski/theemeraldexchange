@@ -12,7 +12,7 @@ Each line:
 {
   "sub": "plex-user-sub",
   "kind": "movie",
-  "library": [603, 27205, 11],
+  "library": [603, 27205, 11, 13, 550, 680, 274, 122, 155, 120],
   "positives": [157336, 1726],
   "negatives": [603534]
 }
@@ -42,10 +42,11 @@ RECOMMENDER_DB_PATH=./snapshot.db \
 ```
 
 The generator filters to (sub, kind) pairs that have at least one
-positive outcome AND a library of at least three titles in the
-last 30 days (`HOLDOUT_LOOKBACK_DAYS` env to override). Anything
-under those floors is too noisy to score against, so it gets
-dropped at build time rather than polluting the eval signal.
+positive outcome AND a library at or above the recommender cold-start
+threshold (`RECOMMENDER_COLD_START_THRESHOLD`, default 10) in the last
+30 days (`HOLDOUT_LOOKBACK_DAYS` env to override). Anything under those
+floors is routed through cold-start behavior at runtime, so it gets
+dropped at build time rather than polluting the personalized eval signal.
 
 **Why not just `sqlite3 -mode json`?** That mode emits a single
 JSON array, not JSONL. `workers/optimizer.py` reads line-by-line
