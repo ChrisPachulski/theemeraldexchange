@@ -43,7 +43,8 @@ type MpegtsPlayer = {
 export type IptvPlayerProps = {
   grant: StreamGrant
   autoPlay?: boolean
-  onPositionUpdate?: (pos: number) => void
+  startPositionSecs?: number
+  onPositionUpdate?: (pos: number, durationSecs: number | null) => void
   onEnded?: () => void
 }
 
@@ -104,7 +105,13 @@ function setNativeSubtitleTrack(video: HTMLVideoElement, trackId: number): void 
   }
 }
 
-export default function IptvPlayer({ grant, autoPlay = false, onPositionUpdate, onEnded }: IptvPlayerProps) {
+export default function IptvPlayer({
+  grant,
+  autoPlay = false,
+  startPositionSecs,
+  onPositionUpdate,
+  onEnded,
+}: IptvPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const hlsRef = useRef<HlsPlayer | null>(null)
   const [audioTracks, setAudioTracks] = useState<TrackOption[]>([])
@@ -125,18 +132,27 @@ export default function IptvPlayer({ grant, autoPlay = false, onPositionUpdate, 
       setSelectedSubtitle(selectedSubtitleFromVideo(video))
     }
 
-    const onTimeUpdate = () => onPositionUpdate?.(video.currentTime)
+    const onLoadedMetadata = () => {
+      updateNativeTracks()
+      if (startPositionSecs && Number.isFinite(startPositionSecs) && startPositionSecs > 0) {
+        video.currentTime = startPositionSecs
+      }
+    }
+    const onTimeUpdate = () => {
+      const durationSecs = Number.isFinite(video.duration) ? video.duration : null
+      onPositionUpdate?.(video.currentTime, durationSecs)
+    }
     const onVideoEnded = () => onEnded?.()
     video.addEventListener('timeupdate', onTimeUpdate)
     video.addEventListener('ended', onVideoEnded)
-    video.addEventListener('loadedmetadata', updateNativeTracks)
+    video.addEventListener('loadedmetadata', onLoadedMetadata)
 
     return () => {
       video.removeEventListener('timeupdate', onTimeUpdate)
       video.removeEventListener('ended', onVideoEnded)
-      video.removeEventListener('loadedmetadata', updateNativeTracks)
+      video.removeEventListener('loadedmetadata', onLoadedMetadata)
     }
-  }, [onEnded, onPositionUpdate])
+  }, [onEnded, onPositionUpdate, startPositionSecs])
 
   useEffect(() => {
     const videoElement = videoRef.current
