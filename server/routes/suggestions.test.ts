@@ -23,6 +23,21 @@ import type { Env } from '../middleware/auth.js'
 // Per-test response override via fakeResponse — defaults to empty picks.
 const lastCreateArgs: { value: unknown } = { value: null }
 const fakeResponse: { value: unknown } = { value: null }
+const iptvAvailability = vi.hoisted(() => ({
+  linkedTmdbIds: new Set<number>(),
+}))
+
+vi.mock('../services/iptvDbSingleton.js', () => ({
+  iptvDb: () => ({
+    raw: {
+      prepare: () => ({
+        all: (...ids: number[]) => ids
+          .filter((id) => iptvAvailability.linkedTmdbIds.has(Number(id)))
+          .map((tmdb_id) => ({ tmdb_id })),
+      }),
+    },
+  }),
+}))
 
 vi.mock('@anthropic-ai/sdk', () => {
   class FakeAnthropic {
@@ -80,6 +95,7 @@ beforeEach(async () => {
   _resetLibraryCacheForTests()
   _resetLibraryStaleFallbackForTests()
   _resetTmdbInFlightForTests()
+  iptvAvailability.linkedTmdbIds.clear()
 })
 
 afterEach(async () => {
@@ -203,6 +219,43 @@ describe('suggestions route — gating', () => {
     // libraryGenres should be present in _diag
     expect(Array.isArray(body._diag?.libraryGenres)).toBe(true)
     expect((body._diag?.libraryGenres?.length ?? 0)).toBeGreaterThan(0)
+  })
+
+  it('tags suggestions available through IPTV by tmdb id', async () => {
+    _setTmdbApiKeyForTests('test-key')
+    iptvAvailability.linkedTmdbIds.add(5999)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : (input as { url: string }).url
+        if (url.includes('/api/v3/movie')) {
+          return new Response(JSON.stringify([]), { status: 200 })
+        }
+        if (url.includes('themoviedb.org/3/trending/movie')) {
+          return new Response(
+            JSON.stringify({
+              results: [
+                { id: 5999, title: 'IPTV Linked Pick', poster_path: null, release_date: '2025-01-01' },
+              ],
+            }),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      }),
+    )
+
+    const r = await appUnderTest().request('/movie?force=trending', {
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { items: Array<{ id: number; available_on?: string[] }> }
+    expect(body.items[0]).toMatchObject({ id: 5999, available_on: ['iptv'] })
   })
 
   it('?force=trending tolerates a per-page failure (allSettled isolation)', async () => {
