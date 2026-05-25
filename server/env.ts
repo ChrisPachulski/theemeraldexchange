@@ -328,7 +328,7 @@ export const env = {
   //     to set RECOMMENDER_URL.
   useLocalRecommender,
   recommenderUrl:
-    process.env.RECOMMENDER_URL ??
+    opt('RECOMMENDER_URL') ??
     (process.env.NODE_ENV === 'production'
       ? 'http://recommender:8000'
       : 'http://localhost:8000'),

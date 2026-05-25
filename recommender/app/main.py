@@ -11,7 +11,6 @@ import hmac
 import logging
 import sqlite3
 import time
-from threading import Lock
 from collections.abc import Iterator
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
@@ -37,53 +36,10 @@ log = logging.getLogger("recommender")
 RECENTLY_SHOWN_RETENTION_DAYS = 30
 FEEDBACK_ATTRIBUTION_DAYS = 14
 RETENTION_SWEEP_INTERVAL_SECONDS = 3600
-SCORE_CACHE_TTL_SECONDS = 1.0
-SCORE_CACHE_MAX_ENTRIES = 256
-_score_cache_lock = Lock()
-_score_cache: dict[tuple[object, ...], tuple[float, ScoreResponse]] = {}
 
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
-
-
-def _score_cache_key(req: ScoreRequest) -> tuple[object, ...]:
-    library = tuple(sorted(item.tmdb_id for item in req.library or []))
-    feedback = tuple(sorted((item.tmdb_id, item.signal) for item in req.feedback or []))
-    rejections = tuple(sorted(req.household_rejections or []))
-    return (
-        req.sub,
-        req.kind,
-        req.n,
-        req.exclude_recently_shown,
-        req.library is not None,
-        library,
-        req.feedback is not None,
-        feedback,
-        req.household_rejections is not None,
-        rejections,
-    )
-
-
-def _get_cached_score(key: tuple[object, ...]) -> ScoreResponse | None:
-    now = time.monotonic()
-    with _score_cache_lock:
-        cached = _score_cache.get(key)
-        if cached is None:
-            return None
-        cached_at, response = cached
-        if now - cached_at >= SCORE_CACHE_TTL_SECONDS:
-            _score_cache.pop(key, None)
-            return None
-        return response
-
-
-def _put_cached_score(key: tuple[object, ...], response: ScoreResponse) -> None:
-    with _score_cache_lock:
-        _score_cache[key] = (time.monotonic(), response)
-        while len(_score_cache) > SCORE_CACHE_MAX_ENTRIES:
-            oldest = next(iter(_score_cache))
-            _score_cache.pop(oldest, None)
 
 
 def sweep_retention_once() -> None:
@@ -180,11 +136,6 @@ def score(
     _auth: None = Depends(require_event_secret),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> ScoreResponse:
-    cache_key = _score_cache_key(req)
-    cached = _get_cached_score(cache_key)
-    if cached is not None:
-        return cached
-
     t0 = time.perf_counter()
     ctx = load_user_context(conn, req, persist_library=False)
 
@@ -231,14 +182,12 @@ def score(
         "user": ctx.diag,
         **result.diag,
     }
-    response = ScoreResponse(
+    return ScoreResponse(
         items=items,
         model_version=model_version,
         recipe=recipe_name,
         diag=diag,
     )
-    _put_cached_score(cache_key, response)
-    return response
 
 
 @app.post("/events/feedback")
@@ -336,7 +285,12 @@ def post_library_sync(
     Hono is the source of truth via Sonarr/Radarr. We mirror it here for
     recipes that only get a ``sub`` (e.g. the optimizer's offline replays).
     """
-    if not payload.items and payload.force and payload.confirm_purge:
+    if not payload.items:
+        if not (payload.force and payload.confirm_purge):
+            raise HTTPException(
+                status_code=400,
+                detail="empty library sync requires force and confirm_purge",
+            )
         log.warning("empty library sync with force+confirm_purge for kind=%s", payload.kind)
 
     now = _utc_now_iso()
