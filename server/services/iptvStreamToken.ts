@@ -1,5 +1,17 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 
+/**
+ * StreamKind — the `kind` claim embedded in every stream token (§5.3).
+ *
+ * `'remux'` is a DUAL-MEMBERSHIP kind: it appears here (token kind) AND in
+ * SessionKind (concurrency-tracker kind) in iptvConcurrency.ts. An AVPlayer
+ * HLS remux session emits `kind: 'remux'` tokens for both the manifest URL and
+ * per-segment proxy URLs, and simultaneously holds a `SessionKind = 'remux'`
+ * concurrency slot. Both enums must keep `'remux'`; removing it from either
+ * enum independently breaks AVPlayer segment playback — an earlier contract
+ * draft proposed stripping it from StreamKind, which was incorrect. See §5.3
+ * for the full dual-membership mapping and the rationale for keeping it here.
+ */
 export type StreamKind = 'live' | 'vod' | 'series' | 'catchup' | 'segment' | 'remux' | 'playlist'
 
 // V1 canonical claim shape (§5.2). Short key names to save bytes in URL query params.
