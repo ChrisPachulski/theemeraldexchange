@@ -240,11 +240,17 @@ describe('sonarr POST /api/v3/series disk-space gate', () => {
     expect(r.status).toBe(201)
   })
 
-  it('400 rootFolderPath_required when the body omits rootFolderPath (fail closed)', async () => {
-    // Without a root folder path we can't measure free space, and the
-    // previous "forward and let Sonarr decide" path bypassed the disk
-    // gate entirely. The gate now rejects at the route boundary BEFORE
-    // any upstream call.
+  it('admin omitting rootFolderPath routes through materialize (no silent forward, no 400)', async () => {
+    // History: the route originally 400'd rootFolderPath_required on any
+    // missing path "to fail closed." But AddSeriesModal's viewAs-aware
+    // isAdmin sends the slim user-shape body when an admin previews-as-
+    // user; the session is still admin, so the request 400'd in 2 ms.
+    // The route now routes admin-slim-body adds through materialize so
+    // curated defaults are backfilled; the disk-space gate is still
+    // enforced (just one step later). The upstream-unreachable failure
+    // shape proves we did NOT silently forward the add: we attempted
+    // to materialize, hit the unstubbed rootfolder lookup, and bailed
+    // with 503 BEFORE any add was forwarded to Sonarr.
     const app = appUnderTest()
     const r = await app.request('/api/v3/series', {
       method: 'POST',
@@ -254,10 +260,8 @@ describe('sonarr POST /api/v3/series disk-space gate', () => {
       },
       body: JSON.stringify({ title: 'No root folder' }),
     })
-    expect(r.status).toBe(400)
-    expect(await r.json()).toEqual({ error: 'rootFolderPath_required' })
-    // CRITICAL: never forwarded to Sonarr.
-    expect(globalThis.fetch).not.toHaveBeenCalled()
+    expect(r.status).toBe(503)
+    expect(await r.json()).toEqual({ error: 'rootfolder_unreachable' })
   })
 
   it('400 unknown_root_folder when rootFolderPath does not match any Sonarr folder', async () => {
@@ -428,6 +432,45 @@ describe('sonarr POST /api/v3/series — non-admin add policy', () => {
     expect(r.status).toBe(503)
     const body = (await r.json()) as { error: string }
     expect(body.error).toBe('admin_must_configure_upstream')
+  })
+
+  it('admin sending a slim body (no rootFolderPath) materializes defaults instead of 400ing', async () => {
+    // Regression: AddSeriesModal uses auth.tsx's viewAs-aware isAdmin to
+    // pick body shape. When an admin previews-as-user, the modal sends
+    // a slim user-shape body { tvdbId, tmdbId?, title } and the server's
+    // session.role stays 'admin' from the cookie, so the admin
+    // passthrough branch fired and rootFolderPath_required tripped in
+    // 2 ms — surfacing as the cryptic "Sonarr /series: 400" toast for
+    // every admin-in-preview add.
+    let capturedAddBody: Record<string, unknown> | null = null
+    const fetchSpy = globalThis.fetch as ReturnType<typeof vi.fn>
+    fetchSpy.mockImplementation(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (url.includes('/api/v3/rootfolder')) {
+        return new Response(JSON.stringify([
+          { id: 1, path: '/data/tv', freeSpace: 500 * 1024 ** 3 },
+        ]), { status: 200 })
+      }
+      if (url.includes('/api/v3/qualityprofile')) {
+        return new Response(JSON.stringify([{ id: 11, name: 'Choose Me' }]), { status: 200 })
+      }
+      if (url.endsWith('/api/v3/series') && init?.method === 'POST') {
+        capturedAddBody = JSON.parse(init.body as string)
+        return new Response(JSON.stringify({ id: 1234, title: 'House', seasons: [] }), { status: 201 })
+      }
+      return new Response('[]', { status: 200 })
+    })
+    const r = await appUnderTest().request('/api/v3/series', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tvdbId: 73255, tmdbId: 1408, title: 'House' }),
+    })
+    expect(r.status).toBe(201)
+    const fwd = capturedAddBody as unknown as Record<string, unknown>
+    expect(fwd.rootFolderPath).toBe('/data/tv')
+    expect(fwd.qualityProfileId).toBe(11)
+    expect(fwd.tvdbId).toBe(73255)
+    expect(fwd.title).toBe('House')
   })
 
   it('race-tolerant: empty created.seasons from POST triggers a GET re-read so the cap-aware grab still fires', async () => {

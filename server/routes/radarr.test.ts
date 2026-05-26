@@ -167,10 +167,18 @@ describe('radarr — allow-list and gates', () => {
     expect(r.status).toBe(201)
   })
 
-  it('400 rootFolderPath_required when body omits rootFolderPath (fail closed)', async () => {
-    // Without a rootFolderPath the disk-space gate has nothing to
-    // measure; the prior implementation silently forwarded the add.
-    // Fail closed at the route boundary.
+  it('admin omitting rootFolderPath routes through materialize (no silent forward, no 400)', async () => {
+    // History: the route originally 400'd rootFolderPath_required on any
+    // missing path "to fail closed." But AddMovieModal's viewAs-aware
+    // isAdmin sends the slim user-shape body when an admin previews-as-
+    // user; the session is still admin, so the request 400'd in 2 ms and
+    // surfaced as the cryptic "Radarr /movie: 400" toast. The route now
+    // routes admin-slim-body adds through the same materialize step the
+    // non-admin branch uses — curated defaults are backfilled and the
+    // disk-space gate is still enforced (just one step later). The
+    // upstream-unreachable failure shape proves we did NOT silently
+    // forward the add: we attempted to materialize, hit the unstubbed
+    // qualityprofile lookup, and bailed with 503.
     const r = await appUnderTest().request('/api/v3/movie', {
       method: 'POST',
       headers: {
@@ -179,9 +187,8 @@ describe('radarr — allow-list and gates', () => {
       },
       body: JSON.stringify({ title: 'No root folder' }),
     })
-    expect(r.status).toBe(400)
-    expect(await r.json()).toEqual({ error: 'rootFolderPath_required' })
-    expect(globalThis.fetch).not.toHaveBeenCalled()
+    expect(r.status).toBe(503)
+    expect(await r.json()).toEqual({ error: 'rootfolder_unreachable' })
   })
 
   it('400 unknown_root_folder when rootFolderPath does not match any Radarr folder', async () => {
@@ -356,6 +363,55 @@ describe('radarr POST /api/v3/movie — non-admin add policy', () => {
     expect(r.status).toBe(503)
     const body = (await r.json()) as { error: string }
     expect(body.error).toBe('admin_must_configure_upstream')
+  })
+
+  it('admin sending a slim body (no rootFolderPath) materializes defaults instead of 400ing', async () => {
+    // Regression: AddMovieModal uses auth.tsx's viewAs-aware isAdmin to
+    // pick body shape. When an admin previews-as-user, the modal sends
+    // the slim user-shape body { tmdbId, title, year }. The server's
+    // session.role stays 'admin' (cookie, not viewAs), so the admin
+    // passthrough branch fired and validateRadarrRootFolderSpace
+    // tripped rootFolderPath_required in 2 ms — surfacing as the
+    // cryptic "Radarr /movie: 400" toast for every admin-in-preview add.
+    let capturedAddBody: Record<string, unknown> | null = null
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(JSON.stringify([
+            { id: 1, path: '/data/movies', freeSpace: 500 * 1024 ** 3 },
+          ]), { status: 200 })
+        }
+        if (url.includes('/api/v3/qualityprofile')) {
+          return new Response(JSON.stringify([{ id: 7, name: 'Choose Me' }]), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/movie') && init?.method === 'POST') {
+          capturedAddBody = JSON.parse(init.body as string)
+          return new Response(JSON.stringify({ id: 1234, title: 'Jurassic World' }), { status: 201 })
+        }
+        if (url.includes('/api/v3/release?movieId=1234')) {
+          return new Response(JSON.stringify([
+            { guid: 'rel-1234', indexerId: 1, size: 2 * 1024 ** 3, qualityWeight: 100, title: 'Jurassic World 1080p' },
+          ]), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/release') && init?.method === 'POST') {
+          return new Response(JSON.stringify({ ok: true }), { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/movie', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tmdbId: 135397, title: 'Jurassic World', year: 2015 }),
+    })
+    expect(r.status).toBe(201)
+    const fwd = capturedAddBody as unknown as Record<string, unknown>
+    expect(fwd.rootFolderPath).toBe('/data/movies')
+    expect(fwd.qualityProfileId).toBe(7)
+    expect(fwd.tmdbId).toBe(135397)
+    expect(fwd.title).toBe('Jurassic World')
   })
 })
 
