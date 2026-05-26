@@ -28,6 +28,12 @@ export interface IptvDb {
     getHistory: Database.Statement
     putSyncState: Database.Statement
     getSyncState: Database.Statement
+    // playlist token persistence (D12 / §6.2)
+    insertPlaylistToken: Database.Statement
+    getPlaylistToken: Database.Statement
+    revokePlaylistToken: Database.Statement
+    listPlaylistTokensBySub: Database.Statement
+    listAllPlaylistTokens: Database.Statement
   }
   close: () => void
 }
@@ -137,6 +143,26 @@ export function openIptvDb(filePath: string, serverDb?: Database.Database): Iptv
       ON CONFLICT(key) DO UPDATE SET value=excluded.value, ts=excluded.ts
     `),
     getSyncState: raw.prepare(`SELECT value, ts FROM iptv_sync_state WHERE key = ?`),
+    // playlist token persistence (D12 / §6.2)
+    insertPlaylistToken: raw.prepare(`
+      INSERT INTO iptv_playlist_tokens (jti, sub, device_name, issued_at, expires_at, revoked_at)
+      VALUES (@jti, @sub, @device_name, @issued_at, @expires_at, NULL)
+    `),
+    getPlaylistToken: raw.prepare(`
+      SELECT jti, sub, device_name, issued_at, expires_at, revoked_at
+      FROM iptv_playlist_tokens WHERE jti = ?
+    `),
+    revokePlaylistToken: raw.prepare(`
+      UPDATE iptv_playlist_tokens SET revoked_at = ? WHERE jti = ? AND revoked_at IS NULL
+    `),
+    listPlaylistTokensBySub: raw.prepare(`
+      SELECT jti, sub, device_name, issued_at, expires_at, revoked_at
+      FROM iptv_playlist_tokens WHERE sub = ? ORDER BY issued_at DESC
+    `),
+    listAllPlaylistTokens: raw.prepare(`
+      SELECT jti, sub, device_name, issued_at, expires_at, revoked_at
+      FROM iptv_playlist_tokens ORDER BY issued_at DESC
+    `),
   }
 
   return { raw, applyMigrations, stmts, close: () => raw.close() }
