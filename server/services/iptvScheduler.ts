@@ -10,6 +10,8 @@ import { syncOnce } from './iptvSync.js'
 import { iptvDb } from './iptvDbSingleton.js'
 
 const DEFAULT_IPTV_SYNC_CRON = '0 */6 * * *'
+// Hard-delete tombstoned link rows older than 14 days at 03:00 local time.
+const TOMBSTONE_SWEEP_CRON = '0 3 * * *'
 
 export async function registerIptvSchedule(cronExpr: string): Promise<void> {
   const db = iptvDb()
@@ -26,5 +28,19 @@ export async function registerIptvSchedule(cronExpr: string): Promise<void> {
 
   cron.schedule(scheduleExpr, () => {
     void syncOnce(db).catch((err) => console.error('[iptv] scheduled sync failed:', err))
+  })
+
+  // Nightly sweep: hard-delete link tombstones older than 14 days.
+  cron.schedule(TOMBSTONE_SWEEP_CRON, () => {
+    try {
+      const result = db.raw.prepare(
+        `DELETE FROM iptv_title_link WHERE removed_at < datetime('now', '-14 days')`,
+      ).run()
+      if (result.changes > 0) {
+        console.log(`[iptv] tombstone sweep: removed ${result.changes} stale link row(s)`)
+      }
+    } catch (err) {
+      console.error('[iptv] tombstone sweep failed:', err instanceof Error ? err.message : String(err))
+    }
   })
 }
