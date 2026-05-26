@@ -16,7 +16,7 @@ async function userCookie(
   opts: { withPlexToken?: boolean; sub?: string; plexAuthToken?: string } = {},
 ): Promise<string> {
   const t = await createSession({
-    sub: opts.sub ?? '1',
+    sub: opts.sub ?? 'plex:1',
     username: 'guest',
     role: 'user',
     plexAuthToken:
@@ -321,8 +321,8 @@ describe('plex-links — resolver', () => {
         return new Response('[]', { status: 200 })
       }),
     )
-    const cookieA = await userCookie({ sub: 'A', plexAuthToken: 'token-A' })
-    const cookieB = await userCookie({ sub: 'B', plexAuthToken: 'token-B' })
+    const cookieA = await userCookie({ sub: 'plex:100', plexAuthToken: 'token-A' })
+    const cookieB = await userCookie({ sub: 'plex:200', plexAuthToken: 'token-B' })
 
     // A builds the cache first.
     const rA = await appUnderTest().request('/library-links', { headers: { Cookie: cookieA } })

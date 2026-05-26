@@ -31,6 +31,7 @@ export default defineConfig({
       SAB_API_KEY: 'test-sab-key',
       ADMINS: 'admin-user',
       MIN_FREE_GB: '100',
+      STREAM_TOKEN_SECRET: 'stream-token-secret-test-placeholder-xxxxxxxxx',
     },
     coverage: {
       provider: 'v8',

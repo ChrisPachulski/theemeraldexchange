@@ -7,7 +7,5 @@
 -- The WHERE guard (`sub NOT LIKE '%:%'`) makes this idempotent: already-
 -- prefixed rows from new logins post-D7 are left untouched.
 
-BEGIN;
 UPDATE iptv_favorites     SET sub = 'plex:' || sub WHERE sub NOT LIKE '%:%';
 UPDATE iptv_watch_history SET sub = 'plex:' || sub WHERE sub NOT LIKE '%:%';
-COMMIT;

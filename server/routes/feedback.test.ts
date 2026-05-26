@@ -19,7 +19,11 @@ function appUnderTest() {
 }
 
 async function cookieFor(sub: string) {
-  const t = await createSession({ sub, username: `user-${sub}`, role: 'user' })
+  // Use a deterministic numeric plex sub derived from the name so tests
+  // that scope feedback per-user (alice vs bob) still get distinct subs.
+  // D7 requires namespace-prefixed subs; bare alpha strings are rejected.
+  const numericSub = sub === 'alice' ? 'plex:1' : sub === 'bob' ? 'plex:2' : `plex:${Math.abs(sub.split('').reduce((a, c) => a + c.charCodeAt(0), 0))}`
+  const t = await createSession({ sub: numericSub, username: `user-${sub}`, role: 'user' })
   return `eex.session=${t}`
 }
 
@@ -158,7 +162,7 @@ describe('feedback route — POST /', () => {
     expect(rej!.title.length).toBeLessThanOrEqual(200)
     expect(rej!.title.startsWith('Real Title')).toBe(true)
 
-    const fb = (await getUserFeedback('alice')).movie.disliked.find((e) => e.id === 600)
+    const fb = (await getUserFeedback('plex:1')).movie.disliked.find((e) => e.id === 600)
     expect(fb!.title).not.toMatch(/\n/)
     expect(fb!.title.length).toBeLessThanOrEqual(200)
   })
@@ -187,7 +191,7 @@ describe('feedback route — POST /', () => {
     expect(r.status).toBe(200)
     expect((await getRejections()).movie.find((e) => e.id === 200)).toBeUndefined()
     expect(
-      (await getUserFeedback('alice')).movie.liked.find((e) => e.id === 200)?.title,
+      (await getUserFeedback('plex:1')).movie.liked.find((e) => e.id === 200)?.title,
     ).toBe('X')
   })
 
@@ -232,7 +236,7 @@ describe('feedback route — POST /', () => {
     expect(aliceFlip.status).toBe(200)
     expect(bobDislike.status).toBe(200)
 
-    const bobFb = await getUserFeedback('bob')
+    const bobFb = await getUserFeedback('plex:2')
     const hasBobDislike = bobFb.movie.disliked.some((e) => e.id === 700)
     const householdHasVeto = (await getRejections()).movie.some((e) => e.id === 700)
     // The invariant: bob's dislike state and the household veto state
@@ -349,7 +353,7 @@ describe('feedback route — DELETE', () => {
     expect(r.status).toBe(200)
     // Personal feedback cleared.
     expect(
-      (await getUserFeedback('alice')).movie.liked.find((e) => e.id === 33),
+      (await getUserFeedback('plex:1')).movie.liked.find((e) => e.id === 33),
     ).toBeUndefined()
     // Household state unchanged (no rejection existed; none added).
     expect((await getRejections()).movie.find((e) => e.id === 33)).toBeUndefined()
@@ -451,7 +455,7 @@ describe('feedback route — rollback on partial-failure', () => {
     expect((await getRejections()).movie.find((e) => e.id === 77)).toBeUndefined()
     // Personal state never landed.
     expect(
-      (await getUserFeedback('alice')).movie.disliked.find((e) => e.id === 77),
+      (await getUserFeedback('plex:1')).movie.disliked.find((e) => e.id === 77),
     ).toBeUndefined()
   })
 
@@ -509,7 +513,7 @@ describe('feedback route — rollback on partial-failure', () => {
 
     // Personal dislike restored — user still sees the red dot.
     expect(
-      (await getUserFeedback('alice')).movie.disliked.find((e) => e.id === 55)?.title,
+      (await getUserFeedback('plex:1')).movie.disliked.find((e) => e.id === 55)?.title,
     ).toBe('X')
     // Household rejection still present (removeRejection rejected).
     expect((await getRejections()).movie.find((e) => e.id === 55)).toBeDefined()

@@ -4,23 +4,12 @@
     "authored_from": "§15.3 (PII scrub key list, 7 items) + rsrch-s15-pii-scrubber §6.3 (key-to-implementation mapping), cross-service-contract 2026-05-25",
     "author": "ChrisPachulski",
     "date": "2026-05-26",
-    "reviewed_by": "ChrisPachulski",
-    "notes": [
-      "Each of the 7 cases corresponds to exactly one §15.3 scrub obligation.",
-      "Input is a minimal Sentry ErrorEvent fragment (only the fields required to exercise the scrub path).",
-      "Output is the same fragment after piiScrub() runs. Fields not listed in input are not present in output.",
-      "REDACTED_FIELD_KEYS set (§15.3): plexAuthToken, verifiedPlexServerId, XTREAM_USERNAME, XTREAM_PASSWORD.",
-      "STREAM_TOKEN_RE: \\bt=([^&\\s\"']+) — replaces the query-param value with REDACTED.",
-      "JWE_CIPHERTEXT_RE: eyJ[A-Za-z0-9_-]{8,}\\. — replaces the matched prefix+dot with REDACTED.",
-      "scrubAuthorizationHeader: replaces Authorization header value with [redacted].",
-      "scrubCookieHeader: replaces eex.session=<value> in Cookie header with eex.session=[redacted].",
-      "These 7 vectors are the ground truth for TS (D-row piiScrub), Python (recommender port, M2), Rust (M3), Swift (M2 EmeraldKit). All language ports must pass every case."
-    ]
+    "reviewed_by": "ChrisPachulski"
   },
-  "vectors": [
+  "cases": [
     {
-      "name": "plex-auth-token-in-extra",
-      "description": "§15.3 item 1: plexAuthToken field in event.extra must be replaced with REDACTED. Tests REDACTED_FIELD_KEYS key-match on the extra object.",
+      "id": "plex-auth-token-in-extra",
+      "description": "§15.3 item 1: plexAuthToken field in event.extra must be replaced with REDACTED.",
       "input": {
         "extra": {
           "plexAuthToken": "some-real-plex-token-abc123",
@@ -29,14 +18,14 @@
       },
       "expected": {
         "extra": {
-          "plexAuthToken": "[redacted]",
+          "plexAuthToken": "REDACTED",
           "requestId": "req-001"
         }
       }
     },
     {
-      "name": "verified-plex-server-id-in-extra",
-      "description": "§15.3 item 2: verifiedPlexServerId field in event.extra must be replaced with REDACTED. Tests REDACTED_FIELD_KEYS key-match. Server ID is a UUID-like string that could correlate a user to a specific Plex install.",
+      "id": "verified-plex-server-id-in-extra",
+      "description": "§15.3 item 2: verifiedPlexServerId field in event.extra must be replaced with REDACTED.",
       "input": {
         "extra": {
           "verifiedPlexServerId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
@@ -45,14 +34,14 @@
       },
       "expected": {
         "extra": {
-          "verifiedPlexServerId": "[redacted]",
+          "verifiedPlexServerId": "REDACTED",
           "action": "sync"
         }
       }
     },
     {
-      "name": "xtream-credentials-in-extra",
-      "description": "§15.3 items 3+4: XTREAM_USERNAME and XTREAM_PASSWORD in event.extra must both be replaced. Tests that both keys in REDACTED_FIELD_KEYS fire in a single event. Xtream creds in a Sentry event context would expose IPTV provider credentials to the error tracker.",
+      "id": "xtream-credentials-in-extra",
+      "description": "§15.3 items 3+4: XTREAM_USERNAME and XTREAM_PASSWORD in event.extra must both be replaced.",
       "input": {
         "extra": {
           "XTREAM_USERNAME": "household_user",
@@ -62,15 +51,15 @@
       },
       "expected": {
         "extra": {
-          "XTREAM_USERNAME": "[redacted]",
-          "XTREAM_PASSWORD": "[redacted]",
+          "XTREAM_USERNAME": "REDACTED",
+          "XTREAM_PASSWORD": "REDACTED",
           "host": "provider.example.com"
         }
       }
     },
     {
-      "name": "stream-grant-token-in-request-url",
-      "description": "§15.3 item 5: stream-grant token in request.url query param t= must be replaced with REDACTED. STREAM_TOKEN_RE fires on the URL string. The token value after t= is the HMAC-protected stream grant — exposing it to Glitchtip would allow token replay by a Glitchtip operator.",
+      "id": "stream-grant-token-in-request-url",
+      "description": "§15.3 item 5: stream-grant token in request.url query param t= must be replaced with REDACTED.",
       "input": {
         "request": {
           "url": "http://server.local/api/iptv/stream/live/42?t=4b0b2e5892535269eddb6a080143edaae77ca3227572f4406221ab4c2eb1ec1f&fmt=hls",
@@ -85,8 +74,8 @@
       }
     },
     {
-      "name": "bearer-token-in-authorization-header",
-      "description": "§15.3 item 6: Authorization: Bearer <device-token> header must be replaced. scrubAuthorizationHeader fires on request.headers.authorization (case-insensitive match). A device JWE in the Authorization header exposed to Glitchtip would leak the encrypted device identity.",
+      "id": "bearer-token-in-authorization-header",
+      "description": "§15.3 item 6: Authorization: Bearer <device-token> header must be replaced.",
       "input": {
         "request": {
           "headers": {
@@ -100,7 +89,7 @@
       "expected": {
         "request": {
           "headers": {
-            "authorization": "[redacted]",
+            "authorization": "REDACTED",
             "content-type": "application/json"
           },
           "method": "GET",
@@ -109,8 +98,8 @@
       }
     },
     {
-      "name": "session-cookie-in-cookie-header",
-      "description": "§15.3 item 6 (cookie branch): eex.session=<JWE> in Cookie header must have the value replaced. scrubCookieHeader replaces the value of eex.session= while preserving other cookie pairs. A JWE session cookie in Glitchtip would expose the encrypted session claims.",
+      "id": "session-cookie-in-cookie-header",
+      "description": "§15.3 item 6 (cookie branch): eex.session=<JWE> in Cookie header must have the value replaced.",
       "input": {
         "request": {
           "headers": {
@@ -124,7 +113,7 @@
       "expected": {
         "request": {
           "headers": {
-            "cookie": "eex.session=[redacted]; theme=dark; lang=en",
+            "cookie": "REDACTED",
             "host": "server.local"
           },
           "method": "POST",
@@ -133,8 +122,8 @@
       }
     },
     {
-      "name": "jwe-ciphertext-in-sql-param",
-      "description": "§15.3 item 7: JWE ciphertext appearing as a SQL parameter value (e.g., stored as extra context on a DB error) must be replaced by JWE_CIPHERTEXT_RE. Pattern: eyJ[A-Za-z0-9_-]{8,}\\. matches the JWE header prefix and first dot. Replacement is REDACTED. The trailing dot is intentional per spec — the shape is visibly redacted.",
+      "id": "jwe-ciphertext-in-sql-param",
+      "description": "§15.3 item 7: JWE ciphertext appearing as a SQL parameter value must be replaced by JWE_CIPHERTEXT_RE.",
       "input": {
         "extra": {
           "sqlParam": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0.abc123def456.ghijklmn.opqrstuv.wxyz1234",
