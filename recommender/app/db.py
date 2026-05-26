@@ -9,15 +9,32 @@ Two connection flavors:
 
 The vec0 virtual table (``title_vec``) lives here rather than in the .sql
 migrations because it requires the extension to be loaded first.
+
+Migration table shape (canonical per §7.1):
+
+    schema_migrations(
+      version    INTEGER NOT NULL PRIMARY KEY,
+      applied_at TEXT,
+      checksum   TEXT NOT NULL   -- sha256 of LF-normalised .sql at apply time
+    )
+
+Legacy detection: if the DB contains the old ``schema_migrations(filename TEXT
+PRIMARY KEY)`` shape the migrator performs a table-rebuild (CREATE NEW / INSERT
+SELECT / DROP / RENAME) before any migration runs, backfilling ``version`` from
+the filename prefix and ``checksum`` from the current file content.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import logging
+import re
 import sqlite3
 import struct
+import time
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
@@ -37,12 +54,194 @@ CREATE VIRTUAL TABLE IF NOT EXISTS title_vec USING vec0(
 );
 """
 
-SCHEMA_VERSION_DDL = """
-CREATE TABLE IF NOT EXISTS schema_migrations (
-  filename   TEXT PRIMARY KEY,
-  applied_at TEXT NOT NULL
-);
-"""
+# How long a single migration may run before we emit a warning (seconds).
+_SLOW_MIGRATION_THRESHOLD_S = 30
+
+# How recent the last backup must be to permit a DESTRUCTIVE migration (seconds).
+_BACKUP_MAX_AGE_S = 600  # 10 minutes
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _lf_normalize(text: str) -> str:
+    """Return *text* with CRLF sequences replaced by LF."""
+    return text.replace("\r\n", "\n")
+
+
+def _sha256(text: str) -> str:
+    """SHA-256 hex digest of *text* after LF normalisation."""
+    return hashlib.sha256(_lf_normalize(text).encode()).hexdigest()
+
+
+def _bootstrap_schema_migrations(
+    conn: sqlite3.Connection,
+    migrations_dir: Path,
+) -> None:
+    """Ensure schema_migrations is in the canonical shape.
+
+    Idempotent: if the canonical table already exists this is a fast no-op.
+    If the legacy ``filename TEXT PRIMARY KEY`` shape is found the table is
+    rebuilt in-place via CREATE/INSERT/DROP/RENAME, backfilling ``version``
+    from the filename prefix and ``checksum`` from the current file content.
+    """
+    rows = conn.execute("PRAGMA table_info(schema_migrations)").fetchall()
+
+    if rows:
+        first_col = rows[0][1] if isinstance(rows[0], (list, tuple)) else rows[0]["name"]
+        if first_col == "version":
+            # Already canonical — nothing to do.
+            return
+        if first_col != "filename":
+            log.warning(
+                "schema_migrations has unexpected first column %r; skipping reshape",
+                first_col,
+            )
+            return
+
+        # Legacy shape detected: schema_migrations(filename TEXT PRIMARY KEY, applied_at TEXT).
+        log.info("schema_migrations: reshaping legacy filename-keyed table to canonical shape")
+
+        # Read existing rows so we can backfill checksums.
+        legacy_rows = conn.execute(
+            "SELECT filename, applied_at FROM schema_migrations"
+        ).fetchall()
+
+        # Compute checksums from current file content where available.
+        def _backfill_checksum(filename: str) -> str:
+            f = migrations_dir / filename
+            if f.exists():
+                return _sha256(f.read_text(encoding="utf-8"))
+            log.warning(
+                "schema_migrations bootstrap: migration file %s not found on disk; "
+                "storing empty-string checksum",
+                filename,
+            )
+            return ""
+
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(
+                """
+                CREATE TABLE schema_migrations_new (
+                  version    INTEGER NOT NULL PRIMARY KEY,
+                  applied_at TEXT,
+                  checksum   TEXT    NOT NULL
+                )
+                """
+            )
+            for row in legacy_rows:
+                filename = row[0] if isinstance(row, (list, tuple)) else row["filename"]
+                applied_at = row[1] if isinstance(row, (list, tuple)) else row["applied_at"]
+                version = int(filename[:4])
+                checksum = _backfill_checksum(filename)
+                conn.execute(
+                    "INSERT INTO schema_migrations_new(version, applied_at, checksum) VALUES (?, ?, ?)",
+                    (version, applied_at, checksum),
+                )
+            conn.execute("DROP TABLE schema_migrations")
+            conn.execute(
+                "ALTER TABLE schema_migrations_new RENAME TO schema_migrations"
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+    else:
+        # Table does not exist yet — create the canonical shape.
+        conn.execute(
+            """
+            CREATE TABLE schema_migrations (
+              version    INTEGER NOT NULL PRIMARY KEY,
+              applied_at TEXT,
+              checksum   TEXT    NOT NULL
+            )
+            """
+        )
+
+
+def _last_backup_at(db_path: Path) -> datetime | None:
+    """Return the ``last_backup_at`` timestamp from the sibling server.db, or None."""
+    server_db = db_path.parent / "server.db"
+    if not server_db.exists():
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{server_db}?mode=ro", uri=True)
+        try:
+            row = conn.execute(
+                "SELECT value FROM server_state WHERE key = 'last_backup_at'"
+            ).fetchone()
+            if row is None:
+                return None
+            return datetime.fromisoformat(row[0]).replace(tzinfo=timezone.utc)
+        finally:
+            conn.close()
+    except (sqlite3.OperationalError, ValueError):
+        return None
+
+
+def _check_backup_gate(db_path: Path, migration_name: str) -> None:
+    """Abort (raise) if ``-- DESTRUCTIVE`` migration cannot satisfy the backup gate.
+
+    Raises ``RuntimeError`` with a descriptive message if:
+    - The sibling ``server.db`` does not exist at the expected path, or
+    - No ``last_backup_at`` row is present in ``server_state``, or
+    - The backup timestamp is older than ``_BACKUP_MAX_AGE_S`` seconds.
+
+    The sibling-path check mirrors the D8b (Hono) guard: we assert the path
+    exists rather than silently treating a missing ``server.db`` as "no backup".
+    This catches non-standard deployment layouts at startup rather than
+    producing a misleading "no backup found" message.
+    """
+    server_db = db_path.parent / "server.db"
+    if not server_db.exists():
+        raise RuntimeError(
+            f"[migration] ABORT: {migration_name} is marked -- DESTRUCTIVE but "
+            f"the sibling server.db was not found at {server_db}. "
+            "Verify the deployment layout (exchange.db and server.db must be "
+            "co-located) and run POST /api/admin/backup before retrying."
+        )
+    backup_at = _last_backup_at(db_path)
+    if backup_at is None:
+        raise RuntimeError(
+            f"[migration] ABORT: {migration_name} is marked -- DESTRUCTIVE but no "
+            "backup timestamp found in server_state.last_backup_at. "
+            "Run POST /api/admin/backup before applying destructive migrations."
+        )
+    age_s = (datetime.now(tz=timezone.utc) - backup_at).total_seconds()
+    if age_s > _BACKUP_MAX_AGE_S:
+        raise RuntimeError(
+            f"[migration] ABORT: {migration_name} is marked -- DESTRUCTIVE but the "
+            f"last backup is {age_s:.0f}s old (limit {_BACKUP_MAX_AGE_S}s). "
+            "Run POST /api/admin/backup and retry."
+        )
+
+
+def _has_drop_table(sql: str) -> bool:
+    """Return True if *sql* contains a ``DROP TABLE`` statement.
+
+    Handles both single-line and multi-line forms (``DROP\\nTABLE foo``).
+    The check collapses all whitespace runs to a single space before scanning
+    so that a keyword split across a line-break is still detected.
+    """
+    collapsed = re.sub(r"\s+", " ", sql.upper())
+    return "DROP TABLE" in collapsed
+
+
+def _has_destructive_annotation(sql: str) -> bool:
+    """Return True if *sql* contains the ``-- DESTRUCTIVE`` annotation on its own line."""
+    for line in sql.splitlines():
+        if line.strip() == "-- DESTRUCTIVE":
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Public connect/transaction/cursor
+# ---------------------------------------------------------------------------
 
 
 def connect(*, db_path: Path | None = None, readonly: bool = False) -> sqlite3.Connection:
@@ -86,6 +285,10 @@ def cursor(conn: sqlite3.Connection) -> Iterator[sqlite3.Cursor]:
     finally:
         cur.close()
 
+
+# ---------------------------------------------------------------------------
+# Vec rowid encoding
+# ---------------------------------------------------------------------------
 
 # sqlite-vec PARTITION KEY routes queries by partition but the rowid is
 # still a globally-unique INTEGER PRIMARY KEY (it's the underlying
@@ -132,11 +335,16 @@ def deserialize_f32(blob: bytes, dim: int | None = None) -> np.ndarray:
     return arr
 
 
+# ---------------------------------------------------------------------------
+# Migration
+# ---------------------------------------------------------------------------
+
+
 def migrate(*, db_path: Path | None = None) -> list[str]:
     """Apply any unapplied migrations in order; return the list applied."""
     conn = connect(db_path=db_path)
     try:
-        return _migrate(conn)
+        return _migrate(conn, db_path=db_path or CONFIG.db_path)
     finally:
         # Startup-only function, but leaking a connection across reloads
         # (e.g. test runs that import-and-reimport the module) holds the
@@ -160,32 +368,82 @@ def _migration_statements(sql: str) -> list[str]:
     return statements
 
 
-def _migrate(conn: sqlite3.Connection) -> list[str]:
+def _migrate(conn: sqlite3.Connection, *, db_path: Path) -> list[str]:
     applied: list[str] = []
+
+    # ------------------------------------------------------------------ #
+    # Bootstrap: ensure schema_migrations is in the canonical shape.      #
+    # This runs on every boot; it is a no-op if already canonical.        #
+    # ------------------------------------------------------------------ #
+    _bootstrap_schema_migrations(conn, CONFIG.migrations_dir)
+
     with cursor(conn) as cur:
-        cur.execute(SCHEMA_VERSION_DDL)
-        cur.execute("SELECT filename FROM schema_migrations")
-        seen = {row["filename"] for row in cur.fetchall()}
+        seen: dict[int, str] = {}  # version → checksum
+        for row in cur.execute(
+            "SELECT version, checksum FROM schema_migrations"
+        ).fetchall():
+            v = row[0] if isinstance(row, (list, tuple)) else row["version"]
+            c = row[1] if isinstance(row, (list, tuple)) else row["checksum"]
+            seen[v] = c
 
         files = sorted(p for p in CONFIG.migrations_dir.glob("*.sql"))
         for f in files:
-            if f.name in seen:
+            version = int(f.name[:4])
+            raw_text = f.read_text(encoding="utf-8")
+            lf_text = _lf_normalize(raw_text)
+            checksum = _sha256(raw_text)
+
+            if version in seen:
+                # Already applied — verify checksum.
+                if checksum != seen[version]:
+                    log.warning(
+                        "[migration] checksum mismatch on %d: file may have been edited",
+                        version,
+                    )
                 continue
-            log.info("applying migration %s", f.name)
+
+            # ---------------------------------------------------------- #
+            # DESTRUCTIVE guard (§7.4)                                    #
+            # ---------------------------------------------------------- #
+            if _has_drop_table(lf_text):
+                if not _has_destructive_annotation(lf_text):
+                    raise RuntimeError(
+                        f"[migration] ABORT: {f.name} contains DROP TABLE but is not "
+                        "annotated with '-- DESTRUCTIVE' on its own line. "
+                        "Add the annotation and ensure a recent backup exists before retrying."
+                    )
+                # Annotation present — verify backup freshness.
+                _check_backup_gate(db_path, f.name)
+
+            log.info("[migration] applying %s", f.name)
+            t0 = time.monotonic()
+
             with transaction(conn):
-                for statement in _migration_statements(f.read_text()):
+                for statement in _migration_statements(lf_text):
                     cur.execute(statement)
                 cur.execute(
-                    "INSERT INTO schema_migrations(filename, applied_at) VALUES (?, datetime('now'))",
-                    (f.name,),
+                    "INSERT INTO schema_migrations(version, applied_at, checksum) "
+                    "VALUES (?, datetime('now'), ?)",
+                    (version, checksum),
                 )
+
+            elapsed_s = time.monotonic() - t0
+            if elapsed_s > _SLOW_MIGRATION_THRESHOLD_S:
+                log.warning(
+                    "[migration] applying %s took %.1fs, this may take several minutes",
+                    f.name,
+                    elapsed_s,
+                )
+
             applied.append(f.name)
 
-        # One-shot migration: the vec rowid scheme changed from "tmdb_id
-        # alone" to "kind-encoded" (see encode_vec_rowid). Detect legacy
-        # rows by looking for TV rows with a rowid below _KIND_BIT and,
-        # if any exist, rebuild title_vec from the preserved feature blobs
-        # under the new kind-encoded rowid scheme.
+        # -------------------------------------------------------------- #
+        # One-shot migration: the vec rowid scheme changed from "tmdb_id  #
+        # alone" to "kind-encoded" (see encode_vec_rowid). Detect legacy  #
+        # rows by looking for TV rows with a rowid below _KIND_BIT and,   #
+        # if any exist, rebuild title_vec from the preserved feature blobs #
+        # under the new kind-encoded rowid scheme.                        #
+        # -------------------------------------------------------------- #
         try:
             legacy = cur.execute(
                 "SELECT 1 FROM title_vec WHERE kind = 'tv' AND rowid < ? LIMIT 1",
