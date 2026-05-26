@@ -384,8 +384,8 @@ describe('catalog read routes', () => {
 describe('GET /api/iptv/export/recommender', () => {
   const app = new Hono().route('/api/iptv', iptv)
   const previousSecret = env.IPTV_RECOMMENDER_EXPORT_SECRET
-  const setExportSecret = (value: string) => {
-    (env as unknown as { IPTV_RECOMMENDER_EXPORT_SECRET: string }).IPTV_RECOMMENDER_EXPORT_SECRET = value
+  const setExportSecret = (value: string | null) => {
+    (env as unknown as { IPTV_RECOMMENDER_EXPORT_SECRET: string | null }).IPTV_RECOMMENDER_EXPORT_SECRET = value
   }
 
   afterAll(() => {
