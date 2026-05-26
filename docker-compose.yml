@@ -131,3 +131,83 @@ services:
       TUNNEL_TOKEN: "${TUNNEL_TOKEN}"
     depends_on:
       - backend
+
+  # ── Glitchtip telemetry stack ─────────────────────────────────────────────
+  # MANDATORY: EEX does not support a telemetry-disabled build. Every
+  # self-hosted deployment runs its own Glitchtip instance so crash data
+  # remains a per-operator island — no third-party processor, no data
+  # leaves the self-hoster's infrastructure. See docs/operations/glitchtip-setup.md.
+  #
+  # The admin UI binds 127.0.0.1:8100 only (LAN-invisible). Route it
+  # through Tailscale or Caddy — see the setup guide for details. Do not
+  # port-forward 8100 to the public internet.
+  glitchtip:
+    # Pin to a specific minor version. `latest` silently auto-upgrades through
+    # breaking changes — v6.0 introduced TRUSTED_PROXIES, django-vtasks, and
+    # Granian with no forward-compat shims for operators on `latest`.
+    # To upgrade: bump this tag, docker compose pull, docker compose up -d.
+    image: glitchtip/glitchtip:v6.1
+    container_name: exchange-glitchtip
+    restart: unless-stopped
+    ports:
+      # Port changed from 8080 → 8000 in v6.0 (Granian replaces Gunicorn).
+      - "127.0.0.1:8100:8000"
+    environment:
+      SECRET_KEY: "${GLITCHTIP_SECRET_KEY}"
+      DATABASE_URL: "postgres://glitchtip:${GLITCHTIP_DB_PASSWORD}@glitchtip-db:5432/glitchtip"
+      EMAIL_URL: "${GLITCHTIP_EMAIL_URL:-consolemail://}"
+      GLITCHTIP_DOMAIN: "${GLITCHTIP_DOMAIN}"
+      DEFAULT_FROM_EMAIL: "noreply@${GLITCHTIP_DOMAIN}"
+      # TRUSTED_PROXIES: required in v6.0+ when Glitchtip sits behind a
+      # reverse proxy (Caddy, nginx, tailscale serve). Without this, Granian
+      # cannot resolve real client IPs from X-Forwarded-For headers.
+      # Covers common LAN private ranges + Tailscale CGNAT (100.64.0.0/10).
+      # Operators behind a different proxy subnet should extend this list.
+      TRUSTED_PROXIES: "${GLITCHTIP_TRUSTED_PROXIES:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10}"
+    depends_on:
+      - glitchtip-db
+      - glitchtip-redis
+
+  glitchtip-db:
+    image: postgres:15
+    container_name: exchange-glitchtip-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: glitchtip
+      POSTGRES_PASSWORD: "${GLITCHTIP_DB_PASSWORD}"
+      POSTGRES_DB: glitchtip
+    volumes:
+      - glitchtip-postgres:/var/lib/postgresql/data
+
+  glitchtip-redis:
+    image: redis:7-alpine
+    container_name: exchange-glitchtip-redis
+    restart: unless-stopped
+
+  # Background task worker for retention sweeps and async event processing.
+  # v6.0+ uses django-vtasks (not Celery). The worker image is the same as the
+  # web image; SERVER_ROLE=worker isolates task consumption from the web process.
+  # run-celery-with-beat.sh was removed in v6.0 — ./bin/start.sh reads
+  # SERVER_ROLE and branches accordingly.
+  glitchtip-worker:
+    image: glitchtip/glitchtip:v6.1
+    container_name: exchange-glitchtip-worker
+    command: ./bin/start.sh
+    restart: unless-stopped
+    environment:
+      SERVER_ROLE: worker
+      SECRET_KEY: "${GLITCHTIP_SECRET_KEY}"
+      DATABASE_URL: "postgres://glitchtip:${GLITCHTIP_DB_PASSWORD}@glitchtip-db:5432/glitchtip"
+      EMAIL_URL: "${GLITCHTIP_EMAIL_URL:-consolemail://}"
+      GLITCHTIP_DOMAIN: "${GLITCHTIP_DOMAIN}"
+      DEFAULT_FROM_EMAIL: "noreply@${GLITCHTIP_DOMAIN}"
+      # CELERY_WORKER_AUTOSCALE was removed in v6.0 (Celery replaced by
+      # django-vtasks). It is intentionally absent here — setting it would
+      # be silently ignored at best or break worker startup at worst.
+      TRUSTED_PROXIES: "${GLITCHTIP_TRUSTED_PROXIES:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10}"
+    depends_on:
+      - glitchtip-db
+      - glitchtip-redis
+
+volumes:
+  glitchtip-postgres:
