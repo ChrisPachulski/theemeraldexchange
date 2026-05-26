@@ -22,7 +22,8 @@ import {
   getSeriesDetail,
 } from '../services/iptvCatalog.js'
 import { epgChannelWindow, epgGrid, epgNow } from '../services/iptvEpgQuery.js'
-import { signStreamToken, verifyStreamToken } from '../services/iptvStreamToken.js'
+import { signStreamToken, verifyStreamToken, type StreamKind } from '../services/iptvStreamToken.js'
+import { checkReplay } from '../services/tokenReplayCache.js'
 import { streamConcurrency, type SessionView, type SessionKind } from '../services/iptvConcurrency.js'
 import { rewriteManifest } from '../services/iptvHlsRewrite.js'
 import {
@@ -482,12 +483,20 @@ iptv.post('/stream/catchup/:streamId/grant', requireAuth, (c) => {
   })
 })
 
-function checkToken(c: Context<Env>, expectKind: string, resourceId: string): { ok: true; sub: string } | { ok: false; resp: Response } {
+function checkToken(c: Context<Env>, expectKind: StreamKind, resourceId: string): { ok: true; sub: string } | { ok: false; resp: Response } {
   const t = c.req.query('t') ?? ''
   try {
     const claims = verifyStreamToken(env.sessionSecret, t)
     if (claims.k !== expectKind || claims.rid !== resourceId) {
       return { ok: false, resp: c.json({ error: 'token_mismatch' }, 401) }
+    }
+    // Per-kind replay enforcement. 'playlist' tokens are not routed through
+    // checkToken (they have their own inline path) so the cast is always safe.
+    if (claims.k !== 'playlist') {
+      const replay = checkReplay(claims.jti, claims.exp, claims.k)
+      if (!replay.allowed) {
+        return { ok: false, resp: c.json({ error: replay.reason }, 401) }
+      }
     }
     return { ok: true, sub: claims.sub }
   } catch (err) {
@@ -688,6 +697,9 @@ iptv.get('/stream/live/:streamId/remux/seg', (c) => {
   } catch (err) {
     return c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401)
   }
+  const remuxReplay = checkReplay(claims.jti, claims.exp, 'remux')
+  if (!remuxReplay.allowed) return c.json({ error: remuxReplay.reason }, 401)
+
 
   const resource = remuxSegmentResource(claims.rid)
   if (!resource) return c.json({ error: 'bad_resource' }, 400)
@@ -860,6 +872,9 @@ iptv.get('/stream/segment', async (c) => {
   } catch (err) {
     return c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401)
   }
+  // Segment tokens are strict single-use; replay here is a security violation.
+  const segReplay = checkReplay(claims.jti, claims.exp, 'segment')
+  if (!segReplay.allowed) return c.json({ error: segReplay.reason }, 401)
 
   const upstream = claims.rid
   const allowedHost = new URL(credsFromEnv().host).host
