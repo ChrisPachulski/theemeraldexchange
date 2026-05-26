@@ -139,13 +139,13 @@ function hmac(secret: string, data: Uint8Array): Buffer {
 
 export function signStreamToken(
   secret: string,
-  opts: { kind: StreamKind; resourceId: string; sub: string; ttlSecs: number },
+  opts: { kind: StreamKind; resourceId: string; sub: string; ttlSecs: number; jti?: string },
 ): string {
   const now = Math.floor(Date.now() / 1000)
   const claims: StreamClaims = {
     exp: now + opts.ttlSecs,
     iat: now,
-    jti: generateUlid(),
+    jti: opts.jti ?? generateUlid(),
     k: opts.kind,
     nbf: now,
     rid: opts.resourceId,
