@@ -304,3 +304,129 @@ If only ten things get done before M2 kickoff:
 **Source documents reviewed:**
 - `docs/superpowers/specs/2026-05-25-apple-multiplatform-and-rust-pivot.md`
 - `docs/superpowers/specs/2026-05-24-mybunny-and-plex-replacement-design.md`
+
+---
+
+## Tier 7 — Codex independent review (added 2026-05-25, post-absorption)
+
+After the strategy doc absorbed the five-agent edits (commit 4590559),
+codex was run as a second-opinion pass against both the updated strategy
+doc and this findings doc. Codex confirmed most of the Tier-1 corrections
+were correctly absorbed and surfaced new blind spots that the five Claude
+agents had each missed because they were looking at single slices.
+
+### Codex's specific factual corrections (applied to the strategy doc)
+
+| # | Finding | Source | Status |
+|---|---|---|---|
+| 7.1 | Apple SIWA-relaxation date in the strategy doc was `2026-01-26`. The actual Apple Developer News item is dated **2024-01-25**. App Review Guideline 4.8 says "another login service" with privacy features, not specifically SIWA. | <https://developer.apple.com/news/?id=7j1f99yf> | ✅ Corrected in §2 |
+| 7.2 | "Static-link ffmpeg = GPL contamination" was framed too absolutely. The real rule: linking GPL/nonfree components like x264/x265 creates obligations; an LGPL-only build is legal but ships without best encoders and still has build complexity. | ffmpeg licensing docs | ✅ Softened in §7a |
+
+### Codex's substantive disagreements (kept on file, not yet applied)
+
+| # | Finding | Disposition |
+|---|---|---|
+| 7.3 | "Offline downloads are table-stakes" is overstated for v1. A direct-play Apple-native self-hosted client can ship honestly without offline if the App Store copy doesn't imply Plex parity. | The doc's own MVP fallback already accepts this (M2+M3 direct-play-only is shippable). No edit needed. |
+| 7.4 | App Store approval percentages (70-75% initial / 45-55% 12-month) are expert risk bands, not modeled outputs. The strategy doc presents them as if certain. | Reasonable critique. Strategy doc could add a "directional estimate, not measured" hedge but the numbers are useful as-is. Low priority. |
+
+### Codex's new blind-spot findings — major
+
+These are the architectural concerns the five Claude agents missed
+because they each pressure-tested a single slice (App Store, Rust,
+Apple native, competitive, gaps). Codex looked at the system end-to-end
+and surfaced cross-cutting gaps.
+
+**7.5 Token architecture is underspecified across languages.**
+The strategy doc says native apps get a `deviceToken` (JWE, `aud='device'`,
+1-year TTL). Current M1 code uses JOSE `dir` + `A256GCM` with a SHA-256-
+derived `SESSION_SECRET`. Technically portable to Rust, but the strategy
+doesn't specify: JOSE headers, key IDs, key rotation policy, claim
+versioning, `server_id` claim, `auth_mode` claim, `jti` for replay,
+revocation method for local-auth. A 1-year stateless token is painful to
+migrate once shipped to Keychain on millions of devices.
+
+**7.6 Stream-grant HMAC format is not a stable cross-language contract.**
+The old roadmap describes `base64url(JSON.stringify(...)).base64url(HMAC)`
+with a nonce. Current code uses `kind/resourceId/sub/exp` and no nonce.
+JSON-stringify is not canonical across languages without enforcing key
+ordering. TS sign + Rust verify must produce byte-identical output.
+
+**7.7 Long-lived bearer tokens in URLs are unsafe.**
+The old roadmap proposes `/api/iptv/playlist.m3u?t=<deviceToken-issued>`.
+Bearer tokens in URLs leak via server logs, reverse-proxy access logs,
+support bundles, and crash reports. Replace with a separate playlist-
+scoped token kind that is path-restricted, short-lived, and revocable.
+
+**7.8 Internal auth boundary is undefined.**
+Rust media-core, transcoder, and Python recommender should not
+independently decrypt user JWEs unless absolutely required. Recommendation:
+Hono validates all external auth and passes short-lived internal principal
+assertions to localhost Rust services. The current doc says "Hono at
+`/api/*` is the only surface" but doesn't define what trust crosses the
+internal boundary.
+
+**7.9 Three-DB migration contract is missing.**
+M3 changes the writer language from TS/better-sqlite3 to Rust/sqlx. The
+doc has no shared migration-table convention, schema-version API,
+rollback policy, or coalesced "missed 4 migrations" path. Identity
+namespacing (`sub` from Plex vs local vs multi-server) can collide
+without prefixes from day one.
+
+**7.10 Recommender data-model contradiction.**
+The cross-cutting section in the roadmap says "for Xtream rows with
+`tmdb_id`, don't duplicate the TMDB-keyed title — add `iptv_title_link`."
+M1 phase 8 actually ships `iptv_ingest.py` upserting VOD/series into
+`titles` under `iptv_vod`/`iptv_series` kinds — a different data model.
+The `available_on` badge feature depends on which one is canonical.
+
+**7.11 Availability-badge breaks for orphan content.**
+The `available_on` join only works for TMDB-normalized titles. Live
+channels are explicitly excluded. IPTV/local items without a TMDB
+match disappear. Deleted upstream items need tombstones + per-source
+last-seen timestamps, or the recommender advertises stale availability.
+
+**7.12 Solo-dev productivity tax is context-switching, not language-
+learning.** The doc accepts "2-3 weeks of Rust frustration." The real
+ongoing tax is maintaining TypeScript/Hono + Rust/axum + Python/FastAPI
++ Swift/tvOS+iOS simultaneously, with security fixes, migrations,
+release tooling, and debugging across all of them.
+
+**7.13 CI/release pipeline underspecified.** Named tools (GitHub Actions,
+`cargo-dist`, TestFlight, Homebrew, MSI, notarization) but no:
+- Contract tests proving Swift Codable DTOs match Hono/Rust JSON
+- DB migration tests across skipped versions
+- Reproducible personal-media-only build (App Store insurance) gated
+  on every commit
+- ffmpeg sidecar version validation
+- Server/app version-compat tests
+
+**7.14 IPTV stream reality is broader than latency.**
+Real-world Xtream streams have: bad timestamps, missing/changed PMT
+metadata, unsupported audio profiles, redirects, no reliable HTTP Range
+on VOD, panel-local catchup time semantics (start time interpreted in
+the panel's local timezone, not UTC), and external M3U clients that
+never call stop. The plan acknowledges discontinuities and codec
+changes (5% expected) but treats most remux as straightforward. In
+practice this needs a per-channel quarantine/diagnostics model with
+"this channel has been failing for N tries — investigate" surfacing,
+not just ffmpeg flags.
+
+### Codex's bottom-line judgment
+
+> "Not sound enough to act on as-is.
+>
+> The one thing to change first: add a cross-service compatibility
+> contract before M2 starts. It should freeze the external auth token
+> format, internal service auth model, stream-grant token format, DB
+> migration/version rules, `/api/version` behavior, recommender
+> availability semantics, and CI gates that prove Swift/TypeScript/
+> Rust/Python still agree. Once that contract exists, M2 can proceed
+> without baking migration debt into Keychain tokens and App Store
+> clients."
+
+**Disposition:** The strategy doc has been amended to include a new
+"Cross-service compatibility contract" section (pre-M2 prerequisite)
+that captures *what the contract must specify*. A separate
+`2026-MM-DD-cross-service-contract.md` will be drafted before M2
+kickoff to capture the *contract itself*. M1.5 has been added to
+the sequencing table (1-2 weeks).

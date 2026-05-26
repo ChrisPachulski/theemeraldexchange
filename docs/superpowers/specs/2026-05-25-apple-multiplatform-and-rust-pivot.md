@@ -88,12 +88,15 @@ some users won't have one either.
   Plex membership for household gating.
 - `both`: user picks at first launch. Reasonable default once we ship.
 
-**Apple Sign-In is NOT mandatory.** Apple relaxed the "must offer SIWA"
-rule on 2026-01-26: apps can offer SIWA *or* another privacy-respecting
-login that doesn't harvest email / track. Plex PIN OAuth alone is plausibly
-compliant. Only add SIWA if we later add a tracking-prone third-party login
-(Google, Facebook). Source: Apple Developer News 2026-01-26, 9to5Mac
-coverage same date.
+**Apple Sign-In is NOT mandatory.** Apple relaxed the SIWA requirement
+on 2024-01-25: per current App Review Guideline 4.8, apps that offer
+third-party sign-in must offer *another* equivalent privacy-focused
+option (no email harvesting, no tracking) — SIWA is one option, not
+the only one. Plex PIN OAuth alone is plausibly compliant. Only add
+SIWA if we later add a tracking-prone third-party login (Google,
+Facebook). Sources: Apple Developer News 2024-01-25
+(<https://developer.apple.com/news/?id=7j1f99yf>), App Review
+Guideline 4.8.
 
 ### 3. Player layer
 
@@ -291,10 +294,13 @@ to fight the borrow checker hard for that.
 
 Three reasons:
 
-1. **Static-linking ffmpeg is a GPL contamination risk.** ffmpeg has GPL
-   components (x264, x265, libfdk-aac when built `--enable-nonfree`). A
-   binary that statically links them is itself GPL-derived. LGPL-only
-   builds drop the best encoders and still introduce build complexity.
+1. **Static-linking ffmpeg is a license trap.** ffmpeg-the-project is LGPL,
+   but the encoders the operator actually wants — x264 (GPL-2.0+), x265
+   (GPL-2.0+), libfdk-aac (nonfree) — are not. A binary that statically
+   links a GPL-built ffmpeg inherits those obligations. LGPL-only builds
+   are technically legal but ship without the best encoders and still
+   carry build complexity. Treating ffmpeg as a runtime dependency
+   sidesteps the entire license surface.
 2. **Same pattern Plex and Jellyfin use.** Jellyfin maintains a fork
    (`jellyfin-ffmpeg`) precisely because upstream FFmpeg's
    hardware-encode behavior has too many edge cases for a media server to
@@ -359,6 +365,7 @@ seek-behavior are each multi-week problems. Plan for `2×` initial estimates.
 
 | Phase | Scope | Output | Solo-dev estimate |
 |---|---|---|---|
+| M1.5 | Cross-service compatibility contract: device-token format frozen, stream-grant token format frozen, identity namespace prefixes adopted, recommender data-model contradiction resolved, DB migration convention adopted, server/app version-compat endpoints. | `2026-MM-DD-cross-service-contract.md` doc + Rust test-vectors crate + M1 code changes to match. Required before M2 — see "Cross-service compatibility contract" section. | 1-2 weeks |
 | M2 | Swift SDK + EmeraldTV + EmeraldMobile, IPTV catalog as first content source, TestFlight pipeline | TestFlight build distributed to household | ~2 months |
 | M3 | Rust media-core (scanner, library APIs, watch state) | Single binary; initial library scan reliable; TMDB matching for movies + English-language TV at minimum | **3-4 months** |
 | M4 | Rust transcoder + capability matching | Direct-play and transcode both work; stress-tested; subtitle pipeline solid | **6-9 months** |
@@ -384,6 +391,53 @@ narrower Apple-only client scope is plausible at the 18-month outer edge.
 - Recommender in Python with `iptv_ingest` worker
 - Cloudflare Tunnel deployment for the IPTV side
 - Existing intel structure (`.planning/intel/`)
+
+## Cross-service compatibility contract (pre-M2 prerequisite)
+
+The strategy now spans four languages and runtimes — TypeScript/Hono (M1),
+Rust/axum (M3 + M4), Python/FastAPI (recommender), Swift (M2 + M5). Before
+any native client work begins, the **wire-level contracts** these services
+share must be frozen. Otherwise migrations bake into Keychain tokens and
+App Store binaries that are painful to reverse.
+
+This section captures *what the contract must specify*, not the contract
+itself. The contract gets its own document (`2026-MM-DD-cross-service-
+contract.md`) drafted before M2 kickoff.
+
+### What the contract must freeze
+
+| Concern | Why |
+|---|---|
+| **External auth token format** (device JWE: algorithm, headers, claim names, key ID, rotation policy, `jti`, `server_id` claim, `auth_mode` claim, revocation method for local-auth) | Once an iPhone has a 1-year `deviceToken` in Keychain, you can't change the format without forcing every user to re-pair. |
+| **Internal auth boundary** | Decision: does Hono validate all external auth and pass short-lived internal principal assertions to Rust services on localhost, OR do Rust services independently decrypt user JWEs? First is simpler and safer; second is more decoupled. Pick one and document. |
+| **Stream-grant HMAC token format** (canonical byte ordering, claim names: kind/resourceId/sub/exp/jti, nonce policy, clock-skew tolerance, key separation from session secret, replay-prevention model, max TTL) | Token format must round-trip identically between TS sign and Rust verify. JSON-stringify across languages is not canonical without enforcing key ordering. |
+| **Long-lived bearer tokens in URLs** | The old roadmap proposes `/api/iptv/playlist.m3u?t=<deviceToken-issued>`. **Don't.** Bearer tokens leak via logs, proxies, support bundles, server-side error reports. Replace with a separate playlist-scoped token kind that is path-restricted, short-lived, and revocable. |
+| **DB migration contract across services** | Each of `iptv.db`, `exchange.db`, `media.db` needs a shared migration-table convention, a `schema_version` API endpoint, a "haven't updated in 8 months" coalesced migration path, and a rollback policy. M3 changes the writer language from TS to Rust; sqlx vs better-sqlite3 must produce byte-identical schema. |
+| **Identity namespace** | `sub` from Plex (`plex:12345`), local auth users, and future multi-server identities can collide unless prefixed. Decision: namespace from day one (`plex:`, `local:`, `apple:`). |
+| **Recommender data-model contradiction** | The cross-cutting section says "don't duplicate the TMDB title — add `iptv_title_link`." M1's `iptv_ingest.py` upserts VOD/series into `titles` under `iptv_vod`/`iptv_series`. These are different models. The `available_on` badge feature depends on which one is canonical. **Pick: canonical TMDB titles + availability links, OR per-source title rows.** |
+| **Availability-badge semantics for orphans** | What does `available_on` mean for an IPTV item with no TMDB match? For a live channel (currently excluded)? For an item that disappeared upstream? Need tombstones + per-source last-seen timestamps; otherwise the recommender advertises stale availability. |
+| **Server/app version compatibility gates** | `/api/version` semantics, app-side min-server-version check, server-side max-client-version 426 response. Required before any App Store submission. |
+| **CI contract gates** | Tests proving Swift Codable DTOs match the Hono/Rust JSON shapes; DB migration tests that exercise skipped-version upgrades; reproducible personal-media-only build (the App Store insurance build) on every commit; ffmpeg sidecar version validation; server/app version-skew tests. |
+
+### How to draft the contract
+
+1. Inventory current behavior of `signStreamToken` / `verifyStreamToken` in
+   `server/services/iptvStreamToken.ts` — that is the de-facto contract today.
+2. Identify breaking deltas needed before M2 (nonce policy, jti, server_id
+   claim, namespace prefix on sub) and apply them while M1 is still the
+   only consumer — cheap to change now, expensive once Apps speak it.
+3. Write the Rust equivalents (in a sibling crate `emerald-contracts`)
+   that produce/verify the same bytes from the same inputs as the TS
+   side. Round-trip vectors as test fixtures shared by both stacks.
+4. Lock the device-token format BEFORE shipping any TestFlight build —
+   forcing re-pairs across the household is acceptable now, not later.
+
+### What this means for sequencing
+
+M2 cannot start until the contract is drafted and the device-token format
+is locked. Realistic timeline: **1-2 weeks for the contract spec + Rust
+test vectors + M1 code changes to match.** Add explicitly as M1.5 in the
+sequencing table.
 
 ## Operational concerns
 
