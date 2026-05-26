@@ -1725,6 +1725,7 @@ function tagIptvAvailability(items: SuggestionItem[]): SuggestionItem[] {
       SELECT DISTINCT tmdb_id
       FROM iptv_title_link
       WHERE tmdb_id IN (${placeholders})
+        AND removed_at IS NULL
     `).all(...ids) as Array<{ tmdb_id: number }>
     const linked = new Set(rows.map((row) => row.tmdb_id))
     if (linked.size === 0) return items
