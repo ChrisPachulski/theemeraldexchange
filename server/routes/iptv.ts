@@ -242,19 +242,38 @@ function escapeM3uAttr(value: string): string {
   return value.replace(/"/g, '\'')
 }
 
-iptv.post('/playlist/token', requireAuth, (c) => {
+iptv.post('/playlist/token', requireAuth, async (c) => {
   const { sub } = userOf(c)
-  // 30-day TTL — long enough to drop in an external player and forget, short enough that revoking access via /api/me eventually bites.
-  const ttl = 30 * 24 * 3600
+  // Optional device label — free-form string, max 120 chars. Returned in the
+  // response so the admin list can show "iPhone 15 (kitchen)" next to the jti.
+  const body = await c.req.json().catch(() => ({})) as { deviceName?: unknown }
+  const deviceName = typeof body.deviceName === 'string'
+    ? body.deviceName.trim().slice(0, 120)
+    : undefined
+  // 90-day TTL per §5.6 / D12. M1 used 30 days; updated to contract value.
+  const ttl = 90 * 24 * 3600
+  const jti = randomUUID()
+  const now = new Date()
+  const expiresAt = new Date(now.getTime() + ttl * 1000)
   const token = signStreamToken(env.sessionSecret, {
-    kind: 'playlist', resourceId: 'all', sub, ttlSecs: ttl,
+    kind: 'playlist', resourceId: 'iptv-channels-all', sub, ttlSecs: ttl, jti,
+  })
+  // Persist the token row so the verifier can check revocation (§6.2).
+  iptvDb().stmts.insertPlaylistToken.run({
+    jti,
+    sub,
+    device_name: deviceName ?? null,
+    issued_at: now.toISOString(),
+    expires_at: expiresAt.toISOString(),
   })
   const requestUrl = new URL(c.req.url)
   const host = c.req.header('host') ?? requestUrl.host
   const baseUrl = `${requestUrl.protocol}//${host}`
   return c.json({
+    jti,
+    deviceName: deviceName ?? null,
     url: `${baseUrl}/api/iptv/playlist.m3u?t=${token}`,
-    expiresAt: new Date(Date.now() + ttl * 1000).toISOString(),
+    expiresAt: expiresAt.toISOString(),
   })
 })
 
@@ -266,8 +285,32 @@ iptv.get('/playlist.m3u', (c) => {
   try {
     claims = verifyStreamToken(env.sessionSecret, t)
     if (claims.k !== 'playlist') throw new Error('kind_mismatch')
+    // §16 D-row: canonical rid is 'iptv-channels-all'. M1-era tokens
+    // carry 'all'. Both are accepted during the D2a secret-migration window
+    // (90-day expiry window). Once all M1 tokens have expired naturally this
+    // fallback can be dropped.
+    if (claims.rid !== 'iptv-channels-all' && claims.rid !== 'all') {
+      throw new Error('resource_mismatch')
+    }
   } catch (err) {
     return c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401)
+  }
+
+  // Persistent revocation check (§6.2 / D12). Tokens issued by D12+ carry a
+  // jti claim that maps to a row in iptv_playlist_tokens. A revoked_at IS NOT
+  // NULL row is a hard reject regardless of the HMAC signature being valid.
+  // M1-era tokens without jti bypass this check (they will expire naturally;
+  // D2b removes the fallback path once the 90-day window closes).
+  if (claims.jti != null) {
+    const row = iptvDb().stmts.getPlaylistToken.get(claims.jti) as
+      | { jti: string; sub: string; issued_at: string; expires_at: string; revoked_at: string | null }
+      | undefined
+    if (!row) {
+      return c.json({ error: 'token_not_found' }, 401)
+    }
+    if (row.revoked_at != null) {
+      return c.json({ error: 'token_revoked' }, 401)
+    }
   }
 
   const channels = iptvDb().raw
@@ -278,12 +321,14 @@ iptv.get('/playlist.m3u', (c) => {
     catNames.set(row.category_id, row.name)
   }
 
-  // Per-channel HMAC tokens with a long TTL too — external players cache the M3U and re-resolve URLs lazily.
-  // Re-use the playlist sub for each token so revocation cascades.
+  // Per-channel segment grants: 300-second TTL per §5.6 / D12.
+  // M1 used 30 days here; that was wrong — external players re-fetch the M3U
+  // frequently enough that 300 s is fine, and shorter TTL limits credential
+  // exposure if the M3U body leaks.
   const requestUrl = new URL(c.req.url)
   const host = c.req.header('host') ?? requestUrl.host
   const baseUrl = `${requestUrl.protocol}//${host}`
-  const chTtl = 30 * 24 * 3600
+  const chTtl = 300
   const lines: string[] = ['#EXTM3U']
   for (const ch of channels) {
     const chToken = signStreamToken(env.sessionSecret, {
