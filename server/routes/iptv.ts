@@ -263,7 +263,7 @@ iptv.get('/playlist.m3u', (c) => {
   let claims: ReturnType<typeof verifyStreamToken>
   try {
     claims = verifyStreamToken(env.sessionSecret, t)
-    if (claims.kind !== 'playlist') throw new Error('kind_mismatch')
+    if (claims.k !== 'playlist') throw new Error('kind_mismatch')
   } catch (err) {
     return c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401)
   }
@@ -437,6 +437,12 @@ iptv.post('/stream/catchup/:streamId/grant', requireAuth, (c) => {
   if (!startUtc || Number.isNaN(startDate.getTime()) || durationMin == null) {
     return c.json({ error: 'invalid_params' }, 400)
   }
+  // The catchup rid is pipe-delimited: streamId|startUtc|durationMin.
+  // A startUtc containing '|' would inject extra segments, corrupting the
+  // rid parse in sessionTitle and any verifier that splits on '|'.
+  if (startUtc.includes('|')) {
+    return c.json({ error: 'rid_invalid' }, 400)
+  }
 
   const channel = iptvDb().raw
     .prepare(`SELECT tv_archive, tv_archive_duration FROM channels WHERE stream_id = ?`)
@@ -480,7 +486,7 @@ function checkToken(c: Context<Env>, expectKind: string, resourceId: string): { 
   const t = c.req.query('t') ?? ''
   try {
     const claims = verifyStreamToken(env.sessionSecret, t)
-    if (claims.kind !== expectKind || claims.resourceId !== resourceId) {
+    if (claims.k !== expectKind || claims.rid !== resourceId) {
       return { ok: false, resp: c.json({ error: 'token_mismatch' }, 401) }
     }
     return { ok: true, sub: claims.sub }
@@ -678,12 +684,12 @@ iptv.get('/stream/live/:streamId/remux/seg', (c) => {
   let claims: ReturnType<typeof verifyStreamToken>
   try {
     claims = verifyStreamToken(env.sessionSecret, t)
-    if (claims.kind !== 'remux') throw new Error('kind_mismatch')
+    if (claims.k !== 'remux') throw new Error('kind_mismatch')
   } catch (err) {
     return c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401)
   }
 
-  const resource = remuxSegmentResource(claims.resourceId)
+  const resource = remuxSegmentResource(claims.rid)
   if (!resource) return c.json({ error: 'bad_resource' }, 400)
 
   const key = remuxKey(streamId, claims.sub)
@@ -850,12 +856,12 @@ iptv.get('/stream/segment', async (c) => {
   let claims: ReturnType<typeof verifyStreamToken>
   try {
     claims = verifyStreamToken(env.sessionSecret, t)
-    if (claims.kind !== 'segment') throw new Error('kind_mismatch')
+    if (claims.k !== 'segment') throw new Error('kind_mismatch')
   } catch (err) {
     return c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401)
   }
 
-  const upstream = claims.resourceId
+  const upstream = claims.rid
   const allowedHost = new URL(credsFromEnv().host).host
   let url: URL
   try {
