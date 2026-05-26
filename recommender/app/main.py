@@ -33,8 +33,6 @@ from .schemas import (
     ScoreResponse,
     ShownEventRequest,
 )
-from workers.iptv_ingest import main as iptv_ingest_main
-
 log = logging.getLogger("recommender")
 RECENTLY_SHOWN_RETENTION_DAYS = 30
 FEEDBACK_ATTRIBUTION_MINUTES = 10
@@ -80,14 +78,6 @@ async def lifespan(_app: FastAPI):
     if applied:
         log.info("applied migrations: %s", applied)
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(
-        iptv_ingest_main,
-        trigger="cron",
-        hour=3,
-        minute=30,
-        id="iptv_ingest",
-        replace_existing=True,
-    )
     scheduler.start()
     sweep_task = asyncio.create_task(retention_sweeper())
     try:
