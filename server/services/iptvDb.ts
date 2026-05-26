@@ -2,13 +2,18 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { applyMigrations as runMigrations } from './migrator.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const MIGRATIONS_DIR = path.resolve(__dirname, '..', 'migrations', 'iptv')
 
 export interface IptvDb {
   raw: Database.Database
-  applyMigrations: () => void
+  /**
+   * Re-run the migrator. Safe to call multiple times (idempotent).
+   * Pass an open server.db handle to enable DESTRUCTIVE migration enforcement.
+   */
+  applyMigrations: (serverDb?: Database.Database) => void
   stmts: {
     upsertChannel: Database.Statement
     upsertVod: Database.Statement
@@ -27,36 +32,18 @@ export interface IptvDb {
   close: () => void
 }
 
-export function openIptvDb(filePath: string): IptvDb {
+export function openIptvDb(filePath: string, serverDb?: Database.Database): IptvDb {
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
   const raw = new Database(filePath)
   raw.pragma('journal_mode = WAL')
   raw.pragma('foreign_keys = ON')
 
-  const ensureMigrationsTable = (): void => {
-    raw.exec(`CREATE TABLE IF NOT EXISTS _migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`)
-  }
-
-  const applyMigrations = (): void => {
-    ensureMigrationsTable()
-    const applied = new Set(
-      (raw.prepare(`SELECT id FROM _migrations`).all() as Array<{ id: string }>).map(r => r.id),
-    )
-    const files = fs.readdirSync(MIGRATIONS_DIR).filter(f => f.endsWith('.sql')).sort()
-    const insert = raw.prepare(`INSERT INTO _migrations (id, applied_at) VALUES (?, ?)`)
-    for (const file of files) {
-      if (applied.has(file)) continue
-      const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf-8')
-      raw.exec('BEGIN')
-      try {
-        raw.exec(sql)
-        insert.run(file, new Date().toISOString())
-        raw.exec('COMMIT')
-      } catch (err) {
-        raw.exec('ROLLBACK')
-        throw err
-      }
-    }
+  const applyMigrations = (overrideServerDb?: Database.Database): void => {
+    runMigrations({
+      migrationsDir: MIGRATIONS_DIR,
+      db: raw,
+      serverDb: overrideServerDb ?? serverDb,
+    })
   }
 
   // Apply at construction so callers can prepare statements immediately.

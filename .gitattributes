@@ -1,0 +1,6 @@
+# Normalize SQL line endings to LF in the repository.
+# This guards against the CRLF/LF checksum-mismatch class of bugs (sqlx issue #2659,
+# Codex Desktop incident 2025) where Windows checkouts produce CRLF-hashed migration
+# state that diverges from LF-hashed binaries after an app update.
+# The CRLF→LF normalization in migrator.ts is a runtime backstop; this is the source gate.
+*.sql text eol=lf
