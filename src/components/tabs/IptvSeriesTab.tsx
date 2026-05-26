@@ -84,28 +84,6 @@ export default function IptvSeriesTab() {
 
   return (
     <section className="iptv-tab">
-      <header className="iptv-tab__toolbar">
-        <input
-          className="iptv-tab__search"
-          placeholder="Search series…"
-          value={q}
-          onChange={(e) => {
-            setQ(e.target.value)
-            setOffset(0)
-          }}
-        />
-        <select
-          className="iptv-tab__category"
-          value={categoryId ?? ''}
-          onChange={(e) => {
-            setCategoryId(e.target.value ? Number(e.target.value) : undefined)
-            setOffset(0)
-          }}
-        >
-          <option value="">All categories</option>
-          {(cats.data ?? []).map((c) => <option key={c.category_id} value={c.category_id}>{c.name}</option>)}
-        </select>
-      </header>
       {list.isLoading && <p className="iptv-tab__status">Loading…</p>}
       {list.error && <p className="iptv-tab__status iptv-tab__status--error">Failed to load series.</p>}
       <ul className="iptv-poster-grid">
@@ -156,6 +134,29 @@ export default function IptvSeriesTab() {
           </button>
         </nav>
       )}
+
+      <footer className="iptv-tab__toolbar">
+        <input
+          className="iptv-tab__search"
+          placeholder="Search series…"
+          value={q}
+          onChange={(e) => {
+            setQ(e.target.value)
+            setOffset(0)
+          }}
+        />
+        <select
+          className="iptv-tab__category"
+          value={categoryId ?? ''}
+          onChange={(e) => {
+            setCategoryId(e.target.value ? Number(e.target.value) : undefined)
+            setOffset(0)
+          }}
+        >
+          <option value="">All categories</option>
+          {(cats.data ?? []).map((c) => <option key={c.category_id} value={c.category_id}>{c.name}</option>)}
+        </select>
+      </footer>
 
       {selectedSeriesId != null && (
         <div className="iptv-player-modal" role="dialog" aria-modal="true" aria-label={selectedSeriesTitle}>

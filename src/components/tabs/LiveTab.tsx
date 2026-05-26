@@ -84,36 +84,6 @@ export default function LiveTab() {
 
   return (
     <section className="iptv-tab">
-      <header className="iptv-tab__toolbar">
-        <input
-          className="iptv-tab__search"
-          placeholder="Search channels…"
-          value={q}
-          onChange={(e) => {
-            setQ(e.target.value)
-            setOffset(0)
-          }}
-        />
-        <select
-          className="iptv-tab__category"
-          value={categoryId ?? ''}
-          onChange={(e) => {
-            setCategoryId(e.target.value ? Number(e.target.value) : undefined)
-            setOffset(0)
-          }}
-        >
-          <option value="">All categories</option>
-          {sortedCats.map((c) => (
-            <option key={c.category_id} value={c.category_id}>{c.name}</option>
-          ))}
-        </select>
-        <button type="button" onClick={async () => {
-          const { url, expiresAt } = await iptvApi.generatePlaylist()
-          await navigator.clipboard.writeText(url).catch(() => undefined)
-          alert(`M3U URL copied. Expires ${new Date(expiresAt).toLocaleString()}.\n\n${url}`)
-        }}>Export M3U</button>
-      </header>
-
       {list.isLoading && <p className="iptv-tab__status">Loading…</p>}
       {list.error && <p className="iptv-tab__status iptv-tab__status--error">Failed to load channels.</p>}
 
@@ -191,6 +161,36 @@ export default function LiveTab() {
           </button>
         </nav>
       )}
+
+      <footer className="iptv-tab__toolbar">
+        <input
+          className="iptv-tab__search"
+          placeholder="Search channels…"
+          value={q}
+          onChange={(e) => {
+            setQ(e.target.value)
+            setOffset(0)
+          }}
+        />
+        <select
+          className="iptv-tab__category"
+          value={categoryId ?? ''}
+          onChange={(e) => {
+            setCategoryId(e.target.value ? Number(e.target.value) : undefined)
+            setOffset(0)
+          }}
+        >
+          <option value="">All categories</option>
+          {sortedCats.map((c) => (
+            <option key={c.category_id} value={c.category_id}>{c.name}</option>
+          ))}
+        </select>
+        <button type="button" onClick={async () => {
+          const { url, expiresAt } = await iptvApi.generatePlaylist()
+          await navigator.clipboard.writeText(url).catch(() => undefined)
+          alert(`M3U URL copied. Expires ${new Date(expiresAt).toLocaleString()}.\n\n${url}`)
+        }}>Export M3U</button>
+      </footer>
 
       {guideFor && (
         <ChannelGuide
