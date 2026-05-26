@@ -38,6 +38,7 @@ type MpegtsPlayer = {
   unload: () => void
   play: () => Promise<void> | void
   destroy: () => void
+  on: (event: string, handler: (...args: unknown[]) => void) => void
 }
 
 export type IptvPlayerProps = {
@@ -232,14 +233,81 @@ export default function IptvPlayer({
         return
       }
 
-      const mpegts = (await import('mpegts.js')).default
+      const mpegtsModule = (await import('mpegts.js')) as unknown as {
+        default: {
+          isSupported: () => boolean
+          createPlayer: (mds: object, config?: object) => MpegtsPlayer
+          Events: Record<string, string>
+          ErrorTypes: Record<string, string>
+        }
+      }
+      const mpegts = mpegtsModule.default
       if (cancelled) return
       if (!mpegts.isSupported()) {
         setError('MPEG-TS playback is not supported in this browser.')
         return
       }
 
-      const player: MpegtsPlayer = mpegts.createPlayer({ type: 'mpegts', url: grant.url })
+      // Live MPEG-TS over the open internet stalls under mpegts.js's
+      // defaults (those target on-demand FLV). These knobs trade a bit
+      // of startup latency for sustained buffering:
+      //   - isLive + liveBufferLatencyChasing: keep playhead near the
+      //     live edge; without this, every network jitter pushes us
+      //     further behind until the buffer underruns.
+      //   - enableWorker: demux off the main thread → no decode pauses
+      //     blocking React renders or the video element.
+      //   - enableStashBuffer:false + small stashInitialSize: don't
+      //     pre-buffer a giant chunk before first frame; live streams
+      //     don't benefit from it and it adds 1-3s of spin-up.
+      //   - autoCleanupSourceBuffer: trim the MSE source buffer as we
+      //     go so long sessions don't bloat memory and slow the GC.
+      //   - fixAudioTimestampGap: mybunny streams have occasional TS
+      //     gaps; without this, a single discontinuity stalls audio
+      //     and the player stops.
+      const player: MpegtsPlayer = mpegts.createPlayer(
+        { type: 'mpegts', isLive: true, url: grant.url },
+        {
+          enableWorker: true,
+          enableStashBuffer: false,
+          stashInitialSize: 128,
+          lazyLoad: false,
+          lazyLoadMaxDuration: 0,
+          deferLoadAfterSourceOpen: false,
+          liveBufferLatencyChasing: true,
+          liveBufferLatencyMaxLatency: 2.0,
+          liveBufferLatencyMinRemain: 0.5,
+          autoCleanupSourceBuffer: true,
+          autoCleanupMaxBackwardDuration: 30,
+          autoCleanupMinBackwardDuration: 10,
+          fixAudioTimestampGap: true,
+          reuseRedirectedURL: true,
+        },
+      )
+
+      // Network errors are common on live IPTV (CDN hiccups, upstream
+      // segment drops). Try to recover automatically — re-issuing
+      // load() resumes from the live edge so the user just sees a
+      // brief stutter rather than a permanent stall.
+      let recoveries = 0
+      player.on(mpegts.Events.ERROR, (...args: unknown[]) => {
+        const [errType] = args as [string]
+        if (cancelled) return
+        const isNetwork = errType === mpegts.ErrorTypes.NETWORK_ERROR
+        const isMedia = errType === mpegts.ErrorTypes.MEDIA_ERROR
+        if ((isNetwork || isMedia) && recoveries < 5) {
+          recoveries += 1
+          try {
+            player.unload()
+            player.load()
+            void player.play()
+          } catch {
+            /* fall through to error message */
+          }
+          return
+        }
+        setError('Live stream interrupted. Close and re-open the channel to retry.')
+      })
+
       player.attachMediaElement(video)
       player.load()
       cleanupEngine = () => {

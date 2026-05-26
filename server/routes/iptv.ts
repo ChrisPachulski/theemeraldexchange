@@ -483,11 +483,20 @@ iptv.get('/stream/live/:streamId.ts', async (c) => {
   if (!upstream.ok || !upstream.body) {
     return c.json({ error: `upstream_${upstream.status}` }, 502)
   }
+  // X-Accel-Buffering: no tells nginx-class reverse proxies not to
+  // buffer the response. Cloudflare honors it on the tunnel path,
+  // which keeps stream chunks flowing client-ward instead of waiting
+  // to fill an edge buffer before delivering — exactly what live
+  // playback can't tolerate. Cache-Control: no-store + no-transform
+  // additionally prevents any intermediary from rewriting (compressing,
+  // segmenting) the MPEG-TS bytes.
   return new Response(upstream.body, {
     status: 200,
     headers: {
       'Content-Type': 'video/mp2t',
-      'Cache-Control': 'no-store',
+      'Cache-Control': 'no-store, no-transform',
+      'X-Accel-Buffering': 'no',
+      'Connection': 'keep-alive',
     },
   })
 })
