@@ -22,7 +22,7 @@ import {
   getSeriesDetail,
 } from '../services/iptvCatalog.js'
 import { epgChannelWindow, epgGrid, epgNow } from '../services/iptvEpgQuery.js'
-import { signStreamToken, verifyStreamToken, type StreamKind } from '../services/iptvStreamToken.js'
+import { signStreamToken, verifyStreamToken, verifyStreamTokenDualKey, type StreamKind } from '../services/iptvStreamToken.js'
 import { checkReplay } from '../services/tokenReplayCache.js'
 import { tryNormaliseLegacySub } from '../services/sub.js'
 import { resolveSourcePrecedence } from '../services/sourcePrecedence.js'
@@ -256,7 +256,7 @@ iptv.post('/playlist/token', requireAuth, async (c) => {
   const jti = randomUUID()
   const now = new Date()
   const expiresAt = new Date(now.getTime() + ttl * 1000)
-  const token = signStreamToken(env.sessionSecret, {
+  const token = signStreamToken(env.streamTokenSecret, {
     kind: 'playlist', resourceId: 'iptv-channels-all', sub, ttlSecs: ttl, jti,
   })
   // Persist the token row so the verifier can check revocation (§6.2).
@@ -284,7 +284,7 @@ iptv.get('/playlist.m3u', (c) => {
   const t = c.req.query('t') ?? ''
   let claims: ReturnType<typeof verifyStreamToken>
   try {
-    claims = verifyStreamToken(env.sessionSecret, t)
+    claims = verifyStreamTokenDualKey(env.streamTokenSecret, env.sessionSecret, t)
     if (claims.k !== 'playlist') throw new Error('kind_mismatch')
     // §16 D-row: canonical rid is 'iptv-channels-all'. M1-era tokens
     // carry 'all'. Both are accepted during the D2a secret-migration window
@@ -332,7 +332,7 @@ iptv.get('/playlist.m3u', (c) => {
   const chTtl = 300
   const lines: string[] = ['#EXTM3U']
   for (const ch of channels) {
-    const chToken = signStreamToken(env.sessionSecret, {
+    const chToken = signStreamToken(env.streamTokenSecret, {
       kind: 'live', resourceId: String(ch.stream_id), sub: claims.sub, ttlSecs: chTtl,
     })
     const url = `${baseUrl}/api/iptv/stream/live/${ch.stream_id}.ts?t=${chToken}`
@@ -476,7 +476,7 @@ iptv.post('/stream/live/:streamId/grant', requireAuth, async (c) => {
   }
 
   if (clientWantsAvplayer(c)) {
-    const token = signStreamToken(env.sessionSecret, {
+    const token = signStreamToken(env.streamTokenSecret, {
       kind: 'remux', resourceId: streamId, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
     })
     return c.json({
@@ -485,7 +485,7 @@ iptv.post('/stream/live/:streamId/grant', requireAuth, async (c) => {
     })
   }
 
-  const token = signStreamToken(env.sessionSecret, {
+  const token = signStreamToken(env.streamTokenSecret, {
     kind: 'live', resourceId: streamId, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
   })
   return c.json({
@@ -494,7 +494,7 @@ iptv.post('/stream/live/:streamId/grant', requireAuth, async (c) => {
   })
 })
 
-iptv.post('/stream/catchup/:streamId/grant', requireAuth, (c) => {
+iptv.post('/stream/catchup/:streamId/grant', requireAuth, async (c) => {
   const streamId = c.req.param('streamId')
   if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
 
@@ -520,6 +520,15 @@ iptv.post('/stream/catchup/:streamId/grant', requireAuth, (c) => {
   const archiveCutoff = Date.now() - (channel.tv_archive_duration ?? 7) * 24 * 3600_000
   if (startDate.getTime() < archiveCutoff) return c.json({ error: 'beyond_archive_window' }, 400)
 
+  // §9 Resolution A: probe sources before acquiring a concurrency slot.
+  const precedence = await resolveSourcePrecedence({ kind: 'catchup', id: streamId })
+  if (!precedence.resolved) {
+    return c.json(
+      { ok: false, reason: 'source_unavailable', available_alternatives: precedence.alternatives },
+      503,
+    )
+  }
+
   const { sub } = userOf(c)
   const sessionId = `catchup:${streamId}:${startUtc}:${sub}:${Date.now()}`
   const resourceId = `${streamId}|${startUtc}|${durationMin}`
@@ -535,7 +544,7 @@ iptv.post('/stream/catchup/:streamId/grant', requireAuth, (c) => {
     return c.json({ ...acquired, sessions: enrichSessions(acquired.sessions) }, 429)
   }
 
-  const token = signStreamToken(env.sessionSecret, {
+  const token = signStreamToken(env.streamTokenSecret, {
     kind: 'catchup',
     resourceId,
     sub,
@@ -552,7 +561,7 @@ iptv.post('/stream/catchup/:streamId/grant', requireAuth, (c) => {
 function checkToken(c: Context<Env>, expectKind: StreamKind, resourceId: string): { ok: true; sub: string } | { ok: false; resp: Response } {
   const t = c.req.query('t') ?? ''
   try {
-    const claims = verifyStreamToken(env.sessionSecret, t)
+    const claims = verifyStreamTokenDualKey(env.streamTokenSecret, env.sessionSecret, t)
     if (claims.k !== expectKind || claims.rid !== resourceId) {
       return { ok: false, resp: c.json({ error: 'token_mismatch' }, 401) }
     }
@@ -607,7 +616,7 @@ function rewriteRemuxManifest(text: string, streamId: string, sessionId: string,
       if (!line || line.startsWith('#')) return line
       const segFile = path.basename(line.trim())
       if (!/^seg_\d{5}\.ts$/.test(segFile)) return line
-      const token = signStreamToken(env.sessionSecret, {
+      const token = signStreamToken(env.streamTokenSecret, {
         kind: 'remux',
         resourceId: `${sessionId}/${segFile}`,
         sub,
@@ -657,7 +666,7 @@ async function rewriteHlsPlaylist(c: Context, upstreamUrl: string, sub: string):
 
   const text = await upstream.text()
   const sign = (url: string) =>
-    signStreamToken(env.sessionSecret, {
+    signStreamToken(env.streamTokenSecret, {
       kind: 'segment', resourceId: url, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
     })
   const rewritten = rewriteManifest(text, upstreamUrl, sign, '/api/iptv/stream/segment')
@@ -768,7 +777,7 @@ iptv.get('/stream/live/:streamId/remux/seg', (c) => {
   const t = c.req.query('t') ?? ''
   let claims: ReturnType<typeof verifyStreamToken>
   try {
-    claims = verifyStreamToken(env.sessionSecret, t)
+    claims = verifyStreamTokenDualKey(env.streamTokenSecret, env.sessionSecret, t)
     if (claims.k !== 'remux') throw new Error('kind_mismatch')
   } catch (err) {
     return c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401)
@@ -841,12 +850,21 @@ iptv.get('/stream/catchup/:streamId/:startUtc/:durationMin.ts', async (c) => {
   })
 })
 
-iptv.post('/stream/vod/:streamId/grant', requireAuth, (c) => {
+iptv.post('/stream/vod/:streamId/grant', requireAuth, async (c) => {
   const streamId = c.req.param('streamId')
   if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
   const { sub } = userOf(c)
   const detail = getVodDetail(iptvDb(), Number(streamId))
   if (!detail) return c.json({ error: 'not_found' }, 404)
+
+  // §9 Resolution A: probe sources before acquiring a concurrency slot.
+  const precedence = await resolveSourcePrecedence({ kind: 'vod', id: streamId })
+  if (!precedence.resolved) {
+    return c.json(
+      { ok: false, reason: 'source_unavailable', available_alternatives: precedence.alternatives },
+      503,
+    )
+  }
 
   const ext = (detail.container_extension ?? 'mp4').toLowerCase()
   const sessionId = `vod:${streamId}:${sub}:${Date.now()}`
@@ -862,7 +880,7 @@ iptv.post('/stream/vod/:streamId/grant', requireAuth, (c) => {
     return c.json({ ...acquired, sessions: enrichSessions(acquired.sessions) }, 429)
   }
 
-  const token = signStreamToken(env.sessionSecret, {
+  const token = signStreamToken(env.streamTokenSecret, {
     kind: 'vod', resourceId: streamId, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
   })
   const delivery: 'hls' | 'progressive' = ext === 'm3u8' ? 'hls' : 'progressive'
@@ -889,7 +907,7 @@ iptv.get('/stream/vod/:streamId/:ext', async (c) => {
   return await proxyRangeable(c, upstreamUrl, mime)
 })
 
-iptv.post('/stream/series/:episodeId/grant', requireAuth, (c) => {
+iptv.post('/stream/series/:episodeId/grant', requireAuth, async (c) => {
   const episodeId = c.req.param('episodeId')
   if (!/^[\w-]+$/.test(episodeId)) return c.json({ error: 'invalid_id' }, 400)
   const { sub } = userOf(c)
@@ -897,6 +915,15 @@ iptv.post('/stream/series/:episodeId/grant', requireAuth, (c) => {
     .prepare('SELECT container_extension FROM series_episodes WHERE episode_id = ?')
     .get(episodeId) as { container_extension: string | null } | undefined
   if (!row) return c.json({ error: 'not_found' }, 404)
+
+  // §9 Resolution A: probe sources before acquiring a concurrency slot.
+  const precedence = await resolveSourcePrecedence({ kind: 'series', id: episodeId })
+  if (!precedence.resolved) {
+    return c.json(
+      { ok: false, reason: 'source_unavailable', available_alternatives: precedence.alternatives },
+      503,
+    )
+  }
 
   const ext = (row.container_extension ?? 'mp4').toLowerCase()
   const sessionId = `series:${episodeId}:${sub}:${Date.now()}`
@@ -912,7 +939,7 @@ iptv.post('/stream/series/:episodeId/grant', requireAuth, (c) => {
     return c.json({ ...acquired, sessions: enrichSessions(acquired.sessions) }, 429)
   }
 
-  const token = signStreamToken(env.sessionSecret, {
+  const token = signStreamToken(env.streamTokenSecret, {
     kind: 'series', resourceId: episodeId, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
   })
   const delivery: 'hls' | 'progressive' = ext === 'm3u8' ? 'hls' : 'progressive'
@@ -943,7 +970,7 @@ iptv.get('/stream/segment', async (c) => {
   const t = c.req.query('u') ?? ''
   let claims: ReturnType<typeof verifyStreamToken>
   try {
-    claims = verifyStreamToken(env.sessionSecret, t)
+    claims = verifyStreamTokenDualKey(env.streamTokenSecret, env.sessionSecret, t)
     if (claims.k !== 'segment') throw new Error('kind_mismatch')
   } catch (err) {
     return c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401)

@@ -163,32 +163,16 @@ export function signStreamToken(
 const NBF_SKEW_SECS = 30
 const EXP_SKEW_SECS = 5
 
-export function verifyStreamToken(secret: string, token: string): StreamClaims {
-  const dot = token.indexOf('.')
-  if (dot <= 0 || dot === token.length - 1) throw new Error('invalid_token')
-  const body = token.slice(0, dot)
-  const sig = token.slice(dot + 1)
-
-  const payloadBytes = b64urlDecode(body)
-
-  // Verify HMAC over the raw canonical bytes (not re-serialised from parsed struct)
-  const expected = b64url(hmac(secret, payloadBytes))
-  const aBuf = Buffer.from(sig)
-  const bBuf = Buffer.from(expected)
-  if (aBuf.length !== bBuf.length || !timingSafeEqual(aBuf, bBuf)) throw new Error('invalid_signature')
-
+function decodeClaims(payloadBytes: Buffer): StreamClaims {
   let raw: Record<string, unknown>
   try {
     raw = JSON.parse(payloadBytes.toString('utf-8')) as Record<string, unknown>
   } catch {
     throw new Error('invalid_payload')
   }
-
-  // Version check per §5.2
   if (raw['v'] == null || typeof raw['v'] !== 'number' || raw['v'] !== 1) {
     throw new Error('token_version_unsupported')
   }
-
   const claims: StreamClaims = {
     exp: raw['exp'] as number,
     iat: raw['iat'] as number,
@@ -199,10 +183,61 @@ export function verifyStreamToken(secret: string, token: string): StreamClaims {
     sub: raw['sub'] as string,
     v: 1,
   }
-
   const now = Math.floor(Date.now() / 1000)
   if (now > claims.exp + EXP_SKEW_SECS) throw new Error('expired_token')
   if (now < claims.nbf - NBF_SKEW_SECS) throw new Error('token_not_yet_valid')
-
   return claims
+}
+
+function splitToken(token: string): { sig: string; payloadBytes: Buffer } {
+  const dot = token.indexOf('.')
+  if (dot <= 0 || dot === token.length - 1) throw new Error('invalid_token')
+  return {
+    sig: token.slice(dot + 1),
+    payloadBytes: b64urlDecode(token.slice(0, dot)),
+  }
+}
+
+function constantTimeEq(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a)
+  const bBuf = Buffer.from(b)
+  if (aBuf.length !== bBuf.length) return false
+  return timingSafeEqual(aBuf, bBuf)
+}
+
+export function verifyStreamToken(secret: string, token: string): StreamClaims {
+  const { sig, payloadBytes } = splitToken(token)
+  const expected = b64url(hmac(secret, payloadBytes))
+  if (!constantTimeEq(sig, expected)) throw new Error('invalid_signature')
+  return decodeClaims(payloadBytes)
+}
+
+/**
+ * Verify a stream token against TWO secrets — the canonical (primary) and a
+ * fallback (legacy / pre-rotation). Both HMACs are computed unconditionally so
+ * a timing-side-channel cannot reveal which key matched (§5.4).
+ *
+ * Used during the STREAM_TOKEN_SECRET rotation window: tokens minted before
+ * rotation were signed with the previous secret (during M1, env.sessionSecret).
+ * After rotation, the verifier accepts either while the 90-day stream-token
+ * TTL window drains. Mint paths always use the primary secret.
+ *
+ * Behaviour:
+ *   - both HMACs computed regardless of which (if any) matches
+ *   - signature comparison uses timingSafeEqual on equal-length buffers
+ *   - branch only on the resulting booleans, never on the HMAC bytes
+ *   - on success the claims payload is decoded once after the branch
+ */
+export function verifyStreamTokenDualKey(
+  primarySecret: string,
+  fallbackSecret: string,
+  token: string,
+): StreamClaims {
+  const { sig, payloadBytes } = splitToken(token)
+  const expectedPrimary = b64url(hmac(primarySecret, payloadBytes))
+  const expectedFallback = b64url(hmac(fallbackSecret, payloadBytes))
+  const primaryOk = constantTimeEq(sig, expectedPrimary)
+  const fallbackOk = constantTimeEq(sig, expectedFallback)
+  if (!primaryOk && !fallbackOk) throw new Error('invalid_signature')
+  return decodeClaims(payloadBytes)
 }
