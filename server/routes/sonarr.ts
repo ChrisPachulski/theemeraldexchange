@@ -479,13 +479,14 @@ sonarr.post('/api/v3/series', async (c) => {
       507,
     )
   }
-  if (folder.freeSpace < env.minFreeBytes) {
+  const folderSnapshot: RootFolderSpaceSnapshot = { path: folder.path, freeSpace: folder.freeSpace }
+  if (folderSnapshot.freeSpace < env.minFreeBytes) {
     return c.json(
       {
         error: 'insufficient_disk_space',
-        free_bytes: folder.freeSpace,
+        free_bytes: folderSnapshot.freeSpace,
         threshold_bytes: env.minFreeBytes,
-        path: folder.path,
+        path: folderSnapshot.path,
       },
       507,
     )
@@ -642,7 +643,7 @@ sonarr.post('/api/v3/series', async (c) => {
       if (id && monitored.length > 0) {
         const itemId = id
         const itemTitle = created.title
-        void grabTvUnderCap(itemId, monitored, itemTitle, folder).catch((e) => {
+        void grabTvUnderCap(itemId, monitored, itemTitle, folderSnapshot).catch((e) => {
           console.error('[tv-cap] grab failed:', e)
           void recordSonarrGrabEvent({
             app: 'sonarr',
@@ -724,13 +725,14 @@ sonarr.post('/api/v3/series/:id/seasons/:n/monitor', requireAdmin, async (c) => 
       507,
     )
   }
-  if (folder.freeSpace < env.minFreeBytes) {
+  const folderSnapshot: RootFolderSpaceSnapshot = { path: folder.path, freeSpace: folder.freeSpace }
+  if (folderSnapshot.freeSpace < env.minFreeBytes) {
     return c.json(
       {
         error: 'insufficient_disk_space',
-        free_bytes: folder.freeSpace,
+        free_bytes: folderSnapshot.freeSpace,
         threshold_bytes: env.minFreeBytes,
-        path: folder.path,
+        path: folderSnapshot.path,
       },
       507,
     )
@@ -752,7 +754,7 @@ sonarr.post('/api/v3/series/:id/seasons/:n/monitor', requireAdmin, async (c) => 
   }
   // Fire the cap-enforced grab in the background — same path the add
   // flow uses, so the new season comes in via the same size gate.
-  void grabTvUnderCap(id, [n], series.title, folder).catch((e) => {
+  void grabTvUnderCap(id, [n], series.title, folderSnapshot).catch((e) => {
     console.error('[tv-monitor-season] grab failed:', e)
     void recordSonarrGrabEvent({
       app: 'sonarr',

@@ -8,6 +8,9 @@ type Entry = { route: Route; label: string; adminOnly?: boolean }
 const ENTRIES: Entry[] = [
   { route: 'tv', label: 'TV Shows' },
   { route: 'movies', label: 'Movies' },
+  { route: 'live', label: 'Live' },
+  { route: 'iptv-vod', label: 'IPTV Movies' },
+  { route: 'iptv-series', label: 'IPTV Series' },
   { route: 'downloads', label: 'Downloader' },
   { route: 'users', label: 'Users', adminOnly: true },
 ]
