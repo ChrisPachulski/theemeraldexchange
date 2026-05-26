@@ -16,7 +16,7 @@ type TestAuthEnv = {
 
 vi.mock('../middleware/auth.js', async () => {
   const requireTestAuth: MiddlewareHandler<TestAuthEnv> = async (c, next) => {
-    c.set('user', { sub: 'plex:test', role: 'admin', displayName: 'Test' })
+    c.set('user', { sub: 'plex:42', role: 'admin', displayName: 'Test' })
     await next()
   }
   return {
@@ -48,7 +48,7 @@ vi.mock('../services/iptvStreamToken.js', () => ({
         k: match[1],
         nbf: now,
         rid: Buffer.from(match[2], 'base64url').toString('utf-8'),
-        sub: 'plex:test',
+        sub: 'plex:42',
         v: 1,
       }
     }
@@ -64,6 +64,21 @@ vi.mock('../services/iptvConcurrency.js', () => ({
     sweep: vi.fn(),
     size: vi.fn(() => 0),
   })),
+}))
+
+// S9: mock sourcePrecedence so grant endpoints resolve without probing real upstreams
+vi.mock('../services/sourcePrecedence.js', () => ({
+  resolveSourcePrecedence: vi.fn(async ({ kind, id }: { kind: string; id: string }) => ({
+    resolved: { source: 'iptv', kind, id },
+  })),
+}))
+
+// D3: mock tokenReplayCache so tests don't cross-contaminate via the singleton cache
+vi.mock('../services/tokenReplayCache.js', () => ({
+  checkReplay: vi.fn(() => ({ allowed: true })),
+  startGcSweep: vi.fn(),
+  stopGcSweep: vi.fn(),
+  clearReplayCache: vi.fn(),
 }))
 
 function fakeToken(kind: string, resourceId: string): string {

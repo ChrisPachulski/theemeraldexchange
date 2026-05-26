@@ -14,7 +14,7 @@ function appUnderTest() {
   return app
 }
 
-async function userCookie(sub = '1') {
+async function userCookie(sub = 'plex:1') {
   const t = await createSession({ sub, username: `user-${sub}`, role: 'user' })
   return `eex.session=${t}`
 }
@@ -23,7 +23,7 @@ async function adminCookie() {
   // middleware now reconciles the cookie role against env.admins on
   // every request, so a fake admin cookie issued for a non-listed
   // username gets demoted to 'user' and the route returns 403.
-  const t = await createSession({ sub: '99', username: 'admin-user', role: 'admin' })
+  const t = await createSession({ sub: 'plex:99', username: 'admin-user', role: 'admin' })
   return `eex.session=${t}`
 }
 
@@ -61,28 +61,28 @@ describe('usage route — auth gates', () => {
 describe('usage route — /me', () => {
   it('returns zeros for a user with no events', async () => {
     const r = await appUnderTest().request('/me', {
-      headers: { Cookie: await userCookie('alice') },
+      headers: { Cookie: await userCookie('plex:100') },
     })
     const body = (await r.json()) as { sub: string; calls: number; costCents: number }
-    expect(body.sub).toBe('alice')
+    expect(body.sub).toBe('plex:100')
     expect(body.calls).toBe(0)
     expect(body.costCents).toBe(0)
   })
 
   it('scopes to the caller, not other users', async () => {
     await appendUsageEvent({
-      sub: 'alice', username: 'alice', type: 'claude_call',
+      sub: 'plex:100', username: 'alice', type: 'claude_call',
       model: 'claude-haiku-4-5', kind: 'movie', costCents: 1.5,
     })
     await appendUsageEvent({
-      sub: 'bob', username: 'bob', type: 'claude_call',
+      sub: 'plex:200', username: 'bob', type: 'claude_call',
       model: 'claude-haiku-4-5', kind: 'movie', costCents: 99,
     })
     const r = await appUnderTest().request('/me', {
-      headers: { Cookie: await userCookie('alice') },
+      headers: { Cookie: await userCookie('plex:100') },
     })
     const body = (await r.json()) as { sub: string; calls: number; costCents: number }
-    expect(body.sub).toBe('alice')
+    expect(body.sub).toBe('plex:100')
     expect(body.calls).toBe(1)
     expect(body.costCents).toBeCloseTo(1.5, 2)
   })
@@ -90,26 +90,26 @@ describe('usage route — /me', () => {
 
 describe('usage route — /admin', () => {
   it('returns all users for admin', async () => {
-    await appendUsageEvent({ sub: 'alice', username: 'alice', type: 'claude_call', model: 'm', kind: 'movie' })
-    await appendUsageEvent({ sub: 'bob', username: 'bob', type: 'claude_call', model: 'm', kind: 'tv' })
+    await appendUsageEvent({ sub: 'plex:100', username: 'alice', type: 'claude_call', model: 'm', kind: 'movie' })
+    await appendUsageEvent({ sub: 'plex:200', username: 'bob', type: 'claude_call', model: 'm', kind: 'tv' })
     const r = await appUnderTest().request('/admin', {
       headers: { Cookie: await adminCookie() },
     })
     expect(r.status).toBe(200)
     const rows = (await r.json()) as Array<{ sub: string }>
-    expect(rows.map((r) => r.sub).sort()).toEqual(['alice', 'bob'])
+    expect(rows.map((r) => r.sub).sort()).toEqual(['plex:100', 'plex:200'])
   })
 })
 
 describe('usage route — /log', () => {
   it('returns recent events newest-first for admin', async () => {
-    await appendUsageEvent({ sub: 'a', username: 'a', type: 'claude_call', model: 'm', kind: 'movie' })
-    await appendUsageEvent({ sub: 'b', username: 'b', type: 'claude_error', model: 'm', kind: 'tv', error: 'boom' })
+    await appendUsageEvent({ sub: 'plex:1', username: 'a', type: 'claude_call', model: 'm', kind: 'movie' })
+    await appendUsageEvent({ sub: 'plex:2', username: 'b', type: 'claude_error', model: 'm', kind: 'tv', error: 'boom' })
     const r = await appUnderTest().request('/log', {
       headers: { Cookie: await adminCookie() },
     })
     const rows = (await r.json()) as Array<{ sub: string; type: string }>
     expect(rows).toHaveLength(2)
-    expect(rows[0].sub).toBe('b') // newest first
+    expect(rows[0].sub).toBe('plex:2') // newest first
   })
 })

@@ -65,7 +65,7 @@ afterAll(() => {
 })
 
 async function userCookie() {
-  const t = await createSessionFn({ sub: '42', username: 'guest', role: 'user' })
+  const t = await createSessionFn({ sub: 'plex:42', username: 'guest', role: 'user' })
   return `eex.session=${t}`
 }
 
@@ -104,7 +104,7 @@ describe('POST /event — USE_LOCAL_RECOMMENDER=1', () => {
     expect((init as RequestInit).method).toBe('POST')
     const body = JSON.parse((init as RequestInit).body as string)
     expect(body).toEqual({
-      sub: '42',
+      sub: 'plex:42',
       kind: 'movie',
       tmdb_id: 12345,
       signal: 'clicked',
