@@ -1,5 +1,12 @@
 import { env } from '../env.js'
 
+/**
+ * Concurrency-tracker session kinds. Note that `'remux'` has dual membership: it is a valid
+ * kind for the concurrency tracker (used when acquiring/releasing sessions for AVPlayer remux
+ * playback) AND a valid stream token kind in `StreamKind`. Both enums retain `'remux'` — an
+ * earlier draft incorrectly proposed removing it from `StreamKind`, which would have broken
+ * segment token validation on the same remux session. See §5.3 of the M1.5 contract.
+ */
 export type SessionKind = 'live' | 'vod' | 'series' | 'catchup' | 'remux'
 
 export interface AcquireOpts {
