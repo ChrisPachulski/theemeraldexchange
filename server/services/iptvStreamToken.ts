@@ -1,5 +1,13 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
+import { ulid } from 'ulid'
 
+/**
+ * Valid stream token kinds. Note that `'remux'` has dual membership: it is a valid kind
+ * for stream tokens (used in `rewriteRemuxManifest` to mint per-segment tokens, and by
+ * `checkToken` to validate them) AND a valid concurrency-tracker kind in `SessionKind`.
+ * An earlier draft incorrectly proposed removing `'remux'` from this enum; that would have
+ * broken AVPlayer segment playback on the same remux session. See §5.3 of the M1.5 contract.
+ */
 export type StreamKind = 'live' | 'vod' | 'series' | 'catchup' | 'segment' | 'remux' | 'playlist'
 
 export interface StreamClaims {
@@ -7,6 +15,8 @@ export interface StreamClaims {
   resourceId: string
   sub: string
   exp: number
+  /** Unique token ID (26-char ULID). Used for replay defence per §5.5 of the M1.5 contract. */
+  jti: string
 }
 
 const b64url = (b: Buffer): string =>
@@ -27,11 +37,13 @@ export function signStreamToken(
   secret: string,
   opts: { kind: StreamKind; resourceId: string; sub: string; ttlSecs: number },
 ): string {
+  const now = Math.floor(Date.now() / 1000)
   const claims: StreamClaims = {
     kind: opts.kind,
     resourceId: opts.resourceId,
     sub: opts.sub,
-    exp: Math.floor(Date.now() / 1000) + opts.ttlSecs,
+    exp: now + opts.ttlSecs,
+    jti: ulid(),
   }
   const body = payload(claims)
   const sig = sign(secret, body)
