@@ -2,6 +2,7 @@ import { useState } from 'react'
 import LiveTab from './LiveTab'
 import VodTab from './VodTab'
 import IptvSeriesTab from './IptvSeriesTab'
+import { ConnectionsWidget } from '../iptv/ConnectionsWidget'
 
 type Sub = 'channels' | 'movies' | 'series'
 
@@ -29,6 +30,7 @@ export default function IptvTab() {
             {s.label}
           </button>
         ))}
+        <ConnectionsWidget />
       </nav>
       {sub === 'channels' && <LiveTab />}
       {sub === 'movies' && <VodTab />}

@@ -7,6 +7,11 @@ import { useIptvSeries, useIptvSeriesDetail } from '../../lib/hooks/useIptvSerie
 import { useIptvFavoriteSet, useToggleIptvFavorite } from '../../lib/hooks/useIptvFavorites'
 import { useIptvHistoryIndex, useReportPosition } from '../../lib/hooks/useIptvHistory'
 import { useDebounced } from '../../lib/hooks/useDebounced'
+import {
+  ConcurrencyLimitModal,
+  concurrencyPayloadFromError,
+  type ConcurrencyLimitPayload,
+} from '../iptv/ConcurrencyLimitModal'
 
 type ResumeRow = {
   position_secs: number
@@ -37,6 +42,8 @@ export default function IptvSeriesTab() {
     itemId: string
     startPositionSecs?: number
   } | null>(null)
+  const [concurrencyError, setConcurrencyError] = useState<ConcurrencyLimitPayload | null>(null)
+  const [pendingPlay, setPendingPlay] = useState<(() => Promise<void>) | null>(null)
   const debounced = useDebounced(q, 250)
   const cats = useIptvCategories('series')
   const limit = 100
@@ -66,13 +73,26 @@ export default function IptvSeriesTab() {
 
   const playEpisode = async (episode: SeriesEpisodeDto) => {
     const itemId = episode.episode_id.toString()
-    const grant = await iptvApi.grantSeries(itemId)
-    setPlaying({
-      grant,
-      title: episode.title || `Episode ${episode.episode_num}`,
-      itemId,
-      startPositionSecs: resumePosition(history.get(`series_episode:${itemId}`)),
-    })
+    const attempt = async () => {
+      const grant = await iptvApi.grantSeries(itemId)
+      setPlaying({
+        grant,
+        title: episode.title || `Episode ${episode.episode_num}`,
+        itemId,
+        startPositionSecs: resumePosition(history.get(`series_episode:${itemId}`)),
+      })
+    }
+    try {
+      await attempt()
+    } catch (err) {
+      const payload = concurrencyPayloadFromError(err)
+      if (payload) {
+        setConcurrencyError(payload)
+        setPendingPlay(() => attempt)
+        return
+      }
+      throw err
+    }
   }
 
   const handleEpisodeKeyDown = (event: KeyboardEvent, episode: SeriesEpisodeDto) => {
@@ -222,6 +242,22 @@ export default function IptvSeriesTab() {
             }}
           />
         </div>
+      )}
+
+      {concurrencyError && (
+        <ConcurrencyLimitModal
+          payload={concurrencyError}
+          onClose={() => {
+            setConcurrencyError(null)
+            setPendingPlay(null)
+          }}
+          onAfterKick={() => {
+            const retry = pendingPlay
+            setConcurrencyError(null)
+            setPendingPlay(null)
+            if (retry) void retry().catch(() => undefined)
+          }}
+        />
       )}
     </section>
   )

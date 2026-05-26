@@ -1,11 +1,31 @@
 import { env } from '../env.js'
 
-export interface AcquireOpts { sub: string; sessionId: string }
+export type SessionKind = 'live' | 'vod' | 'series' | 'catchup' | 'remux'
+
+export interface AcquireOpts {
+  sub: string
+  sessionId: string
+  kind: SessionKind
+  resourceId: string
+  ip?: string | null
+  title?: string | null
+}
 export type AcquireResult =
   | { ok: true; sessionId: string }
-  | { ok: false; reason: 'iptv_concurrency_limit'; limit: number; current: number }
+  | { ok: false; reason: 'iptv_concurrency_limit'; limit: number; current: number; sessions: SessionView[] }
 
-interface Session { sub: string; sessionId: string; lastSeen: number }
+export interface SessionView {
+  sessionId: string
+  sub: string
+  kind: SessionKind
+  resourceId: string
+  title: string | null
+  ip: string | null
+  startedAt: number
+  lastSeen: number
+}
+
+interface Session extends SessionView {}
 
 export interface ConcurrencyTracker {
   tryAcquire: (opts: AcquireOpts) => AcquireResult
@@ -13,6 +33,7 @@ export interface ConcurrencyTracker {
   release: (sessionId: string) => void
   sweep: () => void
   size: () => number
+  list: () => SessionView[]
 }
 
 export function createConcurrencyTracker(opts: { cap: number; idleMs: number }): ConcurrencyTracker {
@@ -25,16 +46,38 @@ export function createConcurrencyTracker(opts: { cap: number; idleMs: number }):
     }
   }
 
-  function tryAcquire({ sub, sessionId }: AcquireOpts): AcquireResult {
+  function list(): SessionView[] {
     sweep()
-    if (sessions.has(sessionId)) {
-      sessions.get(sessionId)!.lastSeen = Date.now()
+    return Array.from(sessions.values()).sort((a, b) => b.startedAt - a.startedAt)
+  }
+
+  function tryAcquire({ sub, sessionId, kind, resourceId, ip, title }: AcquireOpts): AcquireResult {
+    sweep()
+    const existing = sessions.get(sessionId)
+    if (existing) {
+      existing.lastSeen = Date.now()
       return { ok: true, sessionId }
     }
     if (sessions.size >= opts.cap) {
-      return { ok: false, reason: 'iptv_concurrency_limit', limit: opts.cap, current: sessions.size }
+      return {
+        ok: false,
+        reason: 'iptv_concurrency_limit',
+        limit: opts.cap,
+        current: sessions.size,
+        sessions: Array.from(sessions.values()).sort((a, b) => b.startedAt - a.startedAt),
+      }
     }
-    sessions.set(sessionId, { sub, sessionId, lastSeen: Date.now() })
+    const now = Date.now()
+    sessions.set(sessionId, {
+      sub,
+      sessionId,
+      kind,
+      resourceId,
+      title: title ?? null,
+      ip: ip ?? null,
+      startedAt: now,
+      lastSeen: now,
+    })
     return { ok: true, sessionId }
   }
 
@@ -47,7 +90,7 @@ export function createConcurrencyTracker(opts: { cap: number; idleMs: number }):
     sessions.delete(sessionId)
   }
 
-  return { tryAcquire, heartbeat, release, sweep, size: () => sessions.size }
+  return { tryAcquire, heartbeat, release, sweep, size: () => sessions.size, list }
 }
 
 let singleton: ConcurrencyTracker | null = null

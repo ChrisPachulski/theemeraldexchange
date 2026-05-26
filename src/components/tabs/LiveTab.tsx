@@ -8,6 +8,11 @@ import { useIptvLive } from '../../lib/hooks/useIptvLive'
 import { useIptvFavoriteSet, useToggleIptvFavorite } from '../../lib/hooks/useIptvFavorites'
 import { useReportPosition } from '../../lib/hooks/useIptvHistory'
 import { useDebounced } from '../../lib/hooks/useDebounced'
+import {
+  ConcurrencyLimitModal,
+  concurrencyPayloadFromError,
+  type ConcurrencyLimitPayload,
+} from '../iptv/ConcurrencyLimitModal'
 
 type GuideChannel = {
   id: number
@@ -43,6 +48,8 @@ export default function LiveTab() {
   const [offset, setOffset] = useState(0)
   const [playing, setPlaying] = useState<{ grant: StreamGrant; title: string; itemId: string } | null>(null)
   const [guideFor, setGuideFor] = useState<GuideChannel | null>(null)
+  const [concurrencyError, setConcurrencyError] = useState<ConcurrencyLimitPayload | null>(null)
+  const [pendingPlay, setPendingPlay] = useState<(() => Promise<void>) | null>(null)
   const debounced = useDebounced(q, 250)
   const cats = useIptvCategories('live')
   const limit = 100
@@ -71,8 +78,22 @@ export default function LiveTab() {
   }, [nowEpg.data])
 
   const playChannel = async (stream: ChannelDto) => {
-    const grant = await iptvApi.grantLive(stream.stream_id.toString())
-    setPlaying({ grant, title: stream.name, itemId: stream.stream_id.toString() })
+    const attempt = async () => {
+      const grant = await iptvApi.grantLive(stream.stream_id.toString())
+      setPlaying({ grant, title: stream.name, itemId: stream.stream_id.toString() })
+    }
+    try {
+      await attempt()
+    } catch (err) {
+      const payload = concurrencyPayloadFromError(err)
+      if (payload) {
+        setConcurrencyError(payload)
+        // Stash the attempt so once the user kicks a session, we retry.
+        setPendingPlay(() => attempt)
+        return
+      }
+      throw err
+    }
   }
 
   const handleCardKeyDown = (event: KeyboardEvent, stream: ChannelDto) => {
@@ -226,6 +247,22 @@ export default function LiveTab() {
             onPositionUpdate={(positionSecs, durationSecs) => reportPosition(positionSecs, durationSecs, false)}
           />
         </div>
+      )}
+
+      {concurrencyError && (
+        <ConcurrencyLimitModal
+          payload={concurrencyError}
+          onClose={() => {
+            setConcurrencyError(null)
+            setPendingPlay(null)
+          }}
+          onAfterKick={() => {
+            const retry = pendingPlay
+            setConcurrencyError(null)
+            setPendingPlay(null)
+            if (retry) void retry().catch(() => undefined)
+          }}
+        />
       )}
     </section>
   )
