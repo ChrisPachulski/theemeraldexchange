@@ -31,6 +31,98 @@
   border-color: transparent;
 }
 
+/* Connections pill — lives in the IPTV shell sub-nav. Red when at cap so
+   the user notices before clicking a channel that's about to 429. */
+.iptv-conn-pill {
+  display: inline-flex; align-items: center; gap: .4rem;
+  margin-left: auto;
+  background: rgba(255, 255, 255, .06);
+  color: var(--text, #f5f5f5);
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 999px;
+  padding: .4rem .9rem;
+  font-size: .8rem;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.iptv-conn-pill:hover { background: rgba(255, 255, 255, .12); }
+.iptv-conn-pill__dot {
+  width: .5rem; height: .5rem; border-radius: 50%;
+  background: var(--emerald, #1a7a4a);
+}
+.iptv-conn-pill--full { border-color: rgba(255, 99, 99, .55); }
+.iptv-conn-pill--full .iptv-conn-pill__dot { background: #ff6363; }
+
+/* Shared modal shell for connections list + concurrency-limit error. */
+.iptv-conn-modal {
+  position: fixed; inset: 0; z-index: 1100;
+  background: rgba(0, 0, 0, .86);
+  display: flex; align-items: center; justify-content: center;
+  padding: 1rem;
+}
+.iptv-conn-modal__panel {
+  width: min(100%, 640px);
+  max-height: calc(100vh - 2rem);
+  background: #101010;
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 8px;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.iptv-conn-modal__header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: .75rem 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, .08);
+}
+.iptv-conn-modal__header h2 { margin: 0; font-size: 1rem; }
+.iptv-conn-modal__header--alert { background: rgba(255, 99, 99, .14); }
+.iptv-conn-modal__close {
+  background: none; border: 0; color: #fff; font-size: 1.4rem; line-height: 1;
+  cursor: pointer;
+}
+.iptv-conn-modal__summary {
+  margin: 0; padding: 1rem; color: var(--text-dim, #bbb); font-size: .9rem;
+}
+.iptv-conn-modal__empty {
+  margin: 0; padding: 0 1rem 1rem; color: var(--text-dim, #888); font-size: .85rem;
+}
+.iptv-conn-modal__list {
+  list-style: none; margin: 0; padding: 0 0 1rem; overflow: auto;
+}
+.iptv-conn-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: .25rem .75rem;
+  align-items: center;
+  padding: .75rem 1rem;
+  border-top: 1px solid rgba(255, 255, 255, .06);
+}
+.iptv-conn-row__main {
+  display: flex; gap: .5rem; align-items: baseline; min-width: 0;
+}
+.iptv-conn-row__kind {
+  font-size: .7rem; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-dim, #888); flex-shrink: 0;
+}
+.iptv-conn-row__title {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-weight: 600;
+}
+.iptv-conn-row__meta {
+  grid-column: 1 / 2;
+  display: flex; flex-wrap: wrap; gap: .4rem .8rem;
+  color: var(--text-dim, #888); font-size: .78rem;
+}
+.iptv-conn-row__kick {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  padding: .4rem .8rem;
+  background: #b03a3a; color: #fff; border: 0; border-radius: 4px;
+  font-size: .82rem; cursor: pointer;
+}
+.iptv-conn-row__kick:hover { background: #c84747; }
+.iptv-conn-row__kick:disabled { opacity: .6; cursor: wait; }
+
 /* ── IPTV Tab shared styles ─────────────────────────────────────────── */
 /* Padding-bottom leaves room for the sticky toolbar so the last grid
    row isn't permanently hidden behind it. Top padding is owned by the

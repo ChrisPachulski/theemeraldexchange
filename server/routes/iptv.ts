@@ -23,7 +23,7 @@ import {
 } from '../services/iptvCatalog.js'
 import { epgChannelWindow, epgGrid, epgNow } from '../services/iptvEpgQuery.js'
 import { signStreamToken, verifyStreamToken } from '../services/iptvStreamToken.js'
-import { streamConcurrency } from '../services/iptvConcurrency.js'
+import { streamConcurrency, type SessionView, type SessionKind } from '../services/iptvConcurrency.js'
 import { rewriteManifest } from '../services/iptvHlsRewrite.js'
 import {
   heartbeatRemuxSession,
@@ -41,12 +41,117 @@ iptv.get('/health', requireAuth, async (c) => {
     return c.json({
       expiresAt: info.expiresAt ? info.expiresAt.toISOString() : null,
       maxConnections: info.maxConnections,
+      activeConnections: info.activeConnections,
       status: info.status,
     })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: 'iptv_health_failed', detail: message }, 502)
   }
+})
+
+// Best-effort client IP. Cloudflare Tunnel terminates TLS at the edge
+// and forwards the original visitor IP in CF-Connecting-IP. X-Forwarded-For
+// is the fallback for non-CF deploys. Used to label active sessions so the
+// user can tell "the browser I'm sitting at" from "that phone in the
+// kitchen" when deciding which slot to free.
+function clientIp(c: Context<Env>): string | null {
+  return (
+    c.req.header('cf-connecting-ip') ??
+    c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ??
+    null
+  )
+}
+
+// Title resolver for the sessions widget. Called only when listing — keeps
+// the tracker itself ignorant of catalog schema. Tolerant of missing rows
+// (cleaned catalog, deleted item) by returning null so the UI just shows
+// the resourceId.
+function sessionTitle(kind: SessionKind, resourceId: string): string | null {
+  const db = iptvDb().raw
+  try {
+    if (kind === 'live' || kind === 'remux') {
+      const row = db
+        .prepare('SELECT name FROM channels WHERE stream_id = ?')
+        .get(Number(resourceId)) as { name: string } | undefined
+      return row?.name ?? null
+    }
+    if (kind === 'vod') {
+      const row = db
+        .prepare('SELECT name FROM vod WHERE stream_id = ?')
+        .get(Number(resourceId)) as { name: string } | undefined
+      return row?.name ?? null
+    }
+    if (kind === 'series') {
+      const row = db
+        .prepare('SELECT title, series_id FROM series_episodes WHERE episode_id = ?')
+        .get(resourceId) as { title: string | null; series_id: number } | undefined
+      if (!row) return null
+      const series = db
+        .prepare('SELECT name FROM series WHERE series_id = ?')
+        .get(row.series_id) as { name: string } | undefined
+      return series ? `${series.name}${row.title ? ` — ${row.title}` : ''}` : row.title
+    }
+    if (kind === 'catchup') {
+      // catchup resourceId encoded as streamId|startUtc|durationMin
+      const sid = Number(resourceId.split('|')[0])
+      const row = db
+        .prepare('SELECT name FROM channels WHERE stream_id = ?')
+        .get(sid) as { name: string } | undefined
+      return row?.name ?? null
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
+function enrichSessions(list: SessionView[]): Array<SessionView & { resolvedTitle: string | null }> {
+  return list.map((s) => ({ ...s, resolvedTitle: s.title ?? sessionTitle(s.kind, s.resourceId) }))
+}
+
+// Connection diagnostics: surface our concurrency tracker + the upstream's
+// own active_cons/max_connections counters so the SPA can show "1 of 2
+// slots in use" and let the user kick whichever of OUR sessions is holding
+// a slot. Doesn't (and can't) kick sessions from other IPTV apps using the
+// same mybunny credentials directly — those are invisible to us. UI should
+// explain that distinction.
+iptv.get('/sessions', requireAuth, async (c) => {
+  const { sub } = userOf(c)
+  const ours = enrichSessions(streamConcurrency().list())
+  let upstream: { activeConnections: number; maxConnections: number; status: string } | null = null
+  try {
+    const info = await getAccountInfo()
+    upstream = {
+      activeConnections: info.activeConnections,
+      maxConnections: info.maxConnections,
+      status: info.status,
+    }
+  } catch {
+    // Upstream probe failures shouldn't block the local sessions list —
+    // they're the more interesting half anyway.
+    upstream = null
+  }
+  return c.json({
+    self: sub,
+    upstream,
+    ours,
+  })
+})
+
+// Force-release. Admins can release any session; everyone else only their
+// own. We trust sessionId to be opaque, so no admin can stomp anonymous
+// sessions by guessing IDs — the session must exist.
+iptv.delete('/sessions/:sessionId', requireAuth, (c) => {
+  const sessionId = c.req.param('sessionId')
+  const { sub } = userOf(c)
+  const isAdmin = ((c.var as Record<string, unknown>).user as { role?: string } | undefined)?.role === 'admin'
+  const all = streamConcurrency().list()
+  const target = all.find((s) => s.sessionId === sessionId)
+  if (!target) return c.json({ error: 'not_found' }, 404)
+  if (!isAdmin && target.sub !== sub) return c.json({ error: 'forbidden' }, 403)
+  streamConcurrency().release(sessionId)
+  return c.json({ ok: true, released: sessionId })
 })
 
 const KINDS = new Set(['live', 'vod', 'series'])
@@ -291,8 +396,17 @@ iptv.post('/stream/live/:streamId/grant', requireAuth, (c) => {
   if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
   const { sub } = userOf(c)
   const sessionId = `live:${streamId}:${sub}:${Date.now()}`
-  const acquired = streamConcurrency().tryAcquire({ sub, sessionId })
-  if (!acquired.ok) return c.json(acquired, 429)
+  const acquired = streamConcurrency().tryAcquire({
+    sub,
+    sessionId,
+    kind: clientWantsAvplayer(c) ? 'remux' : 'live',
+    resourceId: streamId,
+    ip: clientIp(c),
+    title: sessionTitle('live', streamId),
+  })
+  if (!acquired.ok) {
+    return c.json({ ...acquired, sessions: enrichSessions(acquired.sessions) }, 429)
+  }
 
   if (clientWantsAvplayer(c)) {
     const token = signStreamToken(env.sessionSecret, {
@@ -335,10 +449,19 @@ iptv.post('/stream/catchup/:streamId/grant', requireAuth, (c) => {
 
   const { sub } = userOf(c)
   const sessionId = `catchup:${streamId}:${startUtc}:${sub}:${Date.now()}`
-  const acquired = streamConcurrency().tryAcquire({ sub, sessionId })
-  if (!acquired.ok) return c.json(acquired, 429)
-
   const resourceId = `${streamId}|${startUtc}|${durationMin}`
+  const acquired = streamConcurrency().tryAcquire({
+    sub,
+    sessionId,
+    kind: 'catchup',
+    resourceId,
+    ip: clientIp(c),
+    title: sessionTitle('catchup', resourceId),
+  })
+  if (!acquired.ok) {
+    return c.json({ ...acquired, sessions: enrichSessions(acquired.sessions) }, 429)
+  }
+
   const token = signStreamToken(env.sessionSecret, {
     kind: 'catchup',
     resourceId,
@@ -633,8 +756,17 @@ iptv.post('/stream/vod/:streamId/grant', requireAuth, (c) => {
 
   const ext = (detail.container_extension ?? 'mp4').toLowerCase()
   const sessionId = `vod:${streamId}:${sub}:${Date.now()}`
-  const acquired = streamConcurrency().tryAcquire({ sub, sessionId })
-  if (!acquired.ok) return c.json(acquired, 429)
+  const acquired = streamConcurrency().tryAcquire({
+    sub,
+    sessionId,
+    kind: 'vod',
+    resourceId: streamId,
+    ip: clientIp(c),
+    title: detail.name,
+  })
+  if (!acquired.ok) {
+    return c.json({ ...acquired, sessions: enrichSessions(acquired.sessions) }, 429)
+  }
 
   const token = signStreamToken(env.sessionSecret, {
     kind: 'vod', resourceId: streamId, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
@@ -674,8 +806,17 @@ iptv.post('/stream/series/:episodeId/grant', requireAuth, (c) => {
 
   const ext = (row.container_extension ?? 'mp4').toLowerCase()
   const sessionId = `series:${episodeId}:${sub}:${Date.now()}`
-  const acquired = streamConcurrency().tryAcquire({ sub, sessionId })
-  if (!acquired.ok) return c.json(acquired, 429)
+  const acquired = streamConcurrency().tryAcquire({
+    sub,
+    sessionId,
+    kind: 'series',
+    resourceId: episodeId,
+    ip: clientIp(c),
+    title: sessionTitle('series', episodeId),
+  })
+  if (!acquired.ok) {
+    return c.json({ ...acquired, sessions: enrichSessions(acquired.sessions) }, 429)
+  }
 
   const token = signStreamToken(env.sessionSecret, {
     kind: 'series', resourceId: episodeId, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,

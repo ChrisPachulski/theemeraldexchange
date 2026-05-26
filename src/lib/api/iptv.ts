@@ -75,6 +75,33 @@ export type StreamGrant = {
   mime?: string
 }
 
+export type SessionKind = 'live' | 'vod' | 'series' | 'catchup' | 'remux'
+
+export type SessionRow = {
+  sessionId: string
+  sub: string
+  kind: SessionKind
+  resourceId: string
+  title: string | null
+  resolvedTitle: string | null
+  ip: string | null
+  startedAt: number
+  lastSeen: number
+}
+
+export type SessionsResponse = {
+  self: string
+  upstream: { activeConnections: number; maxConnections: number; status: string } | null
+  ours: SessionRow[]
+}
+
+export type ConcurrencyLimitError = {
+  reason: 'iptv_concurrency_limit'
+  limit: number
+  current: number
+  sessions: SessionRow[]
+}
+
 export type CategoryDto = {
   category_id: number
   name: string
@@ -241,4 +268,6 @@ export const iptvApi = Object.assign({
     const r = await post<{ url: string; expiresAt: string }>('/playlist/token')
     return { ...r, url: absolutize(r.url) }
   },
+  listSessions: () => get<SessionsResponse>('/sessions'),
+  killSession: (sessionId: string) => del(`/sessions/${encodeURIComponent(sessionId)}`),
 })

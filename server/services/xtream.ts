@@ -10,6 +10,7 @@ export interface XtreamCreds {
 export interface AccountInfo {
   expiresAt: Date | null
   maxConnections: number
+  activeConnections: number
   status: string
 }
 
@@ -48,8 +49,15 @@ export function parseAccountInfo(payload: unknown): AccountInfo {
     typeof root.max_connections === 'number'
       ? root.max_connections
       : Number(root.max_connections ?? 0) || 0
+  // Xtream Codes panels return active_cons as a string or number; some
+  // resellers also expose `active_connections` instead. Read both.
+  const rawActive = root.active_cons ?? (root as Record<string, unknown>).active_connections
+  const activeConnections =
+    typeof rawActive === 'number'
+      ? rawActive
+      : Number(rawActive ?? 0) || 0
   const status = typeof root.status === 'string' ? root.status : ''
-  return { expiresAt, maxConnections, status }
+  return { expiresAt, maxConnections, activeConnections, status }
 }
 
 export async function getAccountInfo(creds: XtreamCreds = credsFromEnv()): Promise<AccountInfo> {
