@@ -655,7 +655,7 @@ Rationale:
 
 Implementation cost: 27h baseline (D) + ~5–10h to wire N-API/PyO3 bindings to `emerald-contracts` = **~33–37h total**. The `emerald-contracts` crate itself is already in §16 D17.
 
-Subtle hazard to mitigate: **AES-GCM nonce reuse is catastrophic** — if a developer hand-rolls the encryption path, the HMAC signing key becomes recoverable. Mitigation: use `josekit` (Rust) and `jose` (Node/TS) library defaults; do not implement AES-GCM directly. CI test vector at `tests/vectors/internal-principal.json` covers the round-trip and nonce-uniqueness assertions.
+Subtle hazard to mitigate: **AES-GCM nonce reuse is catastrophic** — if a developer hand-rolls the encryption path, the HMAC signing key becomes recoverable. Mitigation: use `aes-gcm 0.10.3` (RustCrypto, NCC-audited) + `jsonwebtoken` directly for the Rust path; use `jose` (Node/TS) for the Hono/TS path. **Do NOT pull in `josekit`** — it has OpenSSL/ring transitive deps, no formal audit, and is explicitly prohibited per §17. Use `OsRng` per encryption call for nonce uniqueness; never hand-roll nonce counters or timestamps. CI test vector at `tests/vectors/internal-principal.json` covers the round-trip and nonce-uniqueness assertions.
 
 > **This is a one-way door.** Reversing the decision means rewriting
 > media-core's auth layer mid-stream. Pick was locked 2026-05-25.
@@ -890,9 +890,7 @@ Rust verifies the HMAC signature and decrypts the payload. A network
 adversary who forges a valid signature cannot read or forge the encrypted
 payload without the symmetric key.
 
-- Adds ~0.1ms per request at A256GCM. Adds the `josekit` or `aes-gcm`
-  crate to Rust. Not materially different from Option B's JWE cost for
-  this path.
+- Adds ~0.1ms per request at A256GCM. Adds `aes-gcm 0.10.3` (RustCrypto, NCC-audited) to Rust — **not** `josekit` (prohibited per §17). Not materially different from Option B's JWE cost for this path.
 - The decrypted payload is still the internal principal, not the raw
   user JWE — Rust never sees `plexAuthToken`.
 - Marginal benefit on a same-host network path; meaningful benefit
@@ -942,6 +940,9 @@ Rules:
   `\uXXXX` for control characters below U+0020. No other escaping.
 - No whitespace anywhere in the byte string.
 - Output encoding: UTF-8.
+- **`rid` and `sub` MUST have JSON escaping applied unconditionally.** The contract's prior language that these fields are "safe without escaping" in the locked patterns is wrong. `rid` carries opaque upstream stream IDs that may contain backslash, double-quote, or control characters. `sub` SIWA values contain dots but future provider IDs are unspecified. The fixed-template function MUST apply the minimal JSON escape set listed above to `rid` and `sub` on every call — not only when the field contains known-problematic characters. The test vector set MUST include at least one fixture with a `rid` containing a double-quote and backslash to confirm the escape path is exercised.
+
+**`streamId` pipe-character validation (grant endpoint):** The grant endpoint MUST reject any `streamId` that contains a `|` (U+007C pipe) character with `400 { "error": "rid_invalid", "detail": "streamId must not contain pipe character" }`. The pipe is the sub-field separator in the catchup `rid` encoding (`streamId|startUtc|durationMin`). A `streamId` containing a literal `|` produces an ambiguous `rid` that cannot be reliably parsed by the verifier, creating a potential token-confusion attack surface. This validation fires at grant time, before the token is signed.
 
 Rationale for fixed-template over JCS: the claim struct has exactly 8 keys, all fixed, all
 present, no optional or nested fields. RFC 8785 JCS is the right tool when you need a general
@@ -1058,6 +1059,13 @@ Rationale: the M1 `checkToken` function in `server/routes/iptv.ts` is hardcoded 
 `env.sessionSecret` for both signing and verification. The D2a migration must update both sign
 and verify paths simultaneously. A sign-only migration would break all tokens already in the
 field.
+
+**D2a verifier constant-time + unconditional HMAC mandate (security-critical):** The D2a verifier MUST:
+1. **Compute BOTH HMACs unconditionally** — compute `HMAC(STREAM_TOKEN_SECRET, payload)` and `HMAC(SESSION_SECRET, payload)` on every verification call, regardless of whether the first comparison passes. A branch that skips the second computation on first-match leaks which key matched via timing side-channel.
+2. **Use constant-time comparison** for every HMAC check — TypeScript: `crypto.timingSafeEqual(a, b)`; Rust: `hmac::Mac::verify_slice` or `subtle::ConstantTimeEq`. Never use `===` or `==` for HMAC comparison.
+3. **Branch only on the boolean result** of the constant-time comparison, not on intermediate values.
+
+This is a direct counter-measure to GHSA-q7pg-9pr4-mrp2 (`httpsig-rs`, 2025), which was exactly this class of timing-oracle vulnerability in HMAC key-fallback logic. The naïve "try new key, on mismatch try old key" pattern leaks (a) which key matched via branch timing and (b) a per-byte HMAC oracle via non-constant comparison.
 
 ### 5.5 Decision: replay defence
 
@@ -1579,9 +1587,15 @@ Tombstone design:
 
 - `iptv_title_link` gains `removed_at TEXT NULL` column (migration `0003_link_tombstones.sql`).
 - `iptvSync.ts` no longer hard-deletes link rows when the underlying `vod`/`series` row disappears upstream. Instead: `UPDATE iptv_title_link SET removed_at = <now> WHERE ...`.
-- `tagIptvAvailability` adds `AND removed_at IS NULL` to its filter. **A new partial index is required for performance**: `CREATE INDEX iptv_link_active_by_tmdb ON iptv_title_link(tmdb_kind, tmdb_id) WHERE removed_at IS NULL`. Without the partial index, query plans degrade as tombstones accumulate — the existing `iptv_link_by_tmdb` index covers `(tmdb_kind, tmdb_id)` but does not include `removed_at`, so SQLite cannot use it to satisfy the `removed_at IS NULL` filter efficiently.
+- `tagIptvAvailability` adds `AND removed_at IS NULL` to its filter. **A new partial index is required for performance**: `CREATE INDEX iptv_link_active_by_tmdb ON iptv_title_link(tmdb_kind, tmdb_id) WHERE removed_at IS NULL`. Without the partial index, query plans degrade as tombstones accumulate — the existing `iptv_link_by_tmdb` index covers `(tmdb_kind, tmdb_id)` but does not include `removed_at`, so SQLite cannot use it to satisfy the `removed_at IS NULL` filter efficiently. **The index name is `iptv_link_active_by_tmdb` — this is locked.** Any implementation using a different name (e.g., `iptv_title_link_active`) is non-conforming; the EXPLAIN QUERY PLAN output and monitoring dashboards will show the wrong index name.
 - Hard delete after **14 days** of `removed_at IS NOT NULL` (revised down from the draft's 30 days). Justification: badge continuity only needs to cover typical re-catalog windows (provider re-uploads a series within days, not weeks). At ~1%/day upstream churn on a 20k-item catalog, 30 days means up to 30% of the link table is tombstones at steady state; 14 days holds tombstones to ~14% of the index pressure.
 - **The contract's previous claim that tombstones protect watch history is removed.** `iptv_watch_history` has no FK to `vod` or `series` (confirmed against `server/migrations/iptv/0001_init.sql` lines 90–99: `item_id` is plain TEXT, no REFERENCES clause) and is unaffected by `vod`/`series` deletion; it already survives catalog deletes independently. The real value of tombstones is **badge continuity** — preventing a "now you see it, now you don't, now you see it again" UX flicker when an upstream item temporarily disappears and reappears in the next sync window.
+- **Migration `0003_link_tombstones.sql` MUST include `ANALYZE iptv_title_link;` as its final statement.** SQLite's query planner does not automatically use a partial index (`WHERE removed_at IS NULL`) until statistics are present. Without `ANALYZE`, the partial index silently adds write overhead on every INSERT/UPDATE while providing zero read benefit on the hot path — the query planner cannot see the index selectivity. This is a confirmed SQLite behavior per the SQLite mailing list (Richard Hipp). The `ANALYZE` statement is idempotent and safe to run in a migration. The complete final lines of `0003_link_tombstones.sql` must be:
+
+  ```sql
+  CREATE INDEX iptv_link_active_by_tmdb ON iptv_title_link(tmdb_kind, tmdb_id) WHERE removed_at IS NULL;
+  ANALYZE iptv_title_link;
+  ```
 
 Implementation note for `iptvSync.ts`: the M1 sync deletes `vod`/`series` rows by `fetched_at` mismatch **before** pruning link rows. After M1.5, tombstoned link rows point at already-deleted parent rows — they carry no navigable metadata beyond `tmdb_id`. Any future UI reading tombstoned rows (e.g., an admin "recently removed" view) must reconstruct metadata from `exchange.db.titles` via `tmdb_id`, not from the (gone) `vod`/`series` row.
 
@@ -1704,8 +1718,30 @@ Test vectors live at **`<repo-root>/tests/vectors/`** (locked). Hono reads relat
 - `tests/vectors/device-token-claims.json` — JWE plaintexts for sample claim shapes, all 3 `auth_mode` (`plex` | `local` | `apple`) × 3 representative `platform` values (`tvos` | `ios` | `ipados`).
 - `tests/vectors/sub-namespace.json` — at least 13 entries: 4 valid (plex/local/apple with realistic IDs including SIWA dot-separated subjects), 9 invalid (whitespace, full-width unicode, empty id, missing colon, wrong colon position, control chars, oversize, mixed case ULIDs, leading-zero plex id e.g. `plex:007` — see §8.1 round-trip rationale).
 - `tests/vectors/error-reasons.json` — every locked value in the §12.4 closed `reason` enum.
+- `tests/vectors/telemetry-pii-scrub.json` — validates the §15.3 PII scrubber (`beforeSend` + `beforeBreadcrumb`). Each entry: `{input_event, expected_output_event}`. Must cover: stream-grant token in URL query param, plexAuthToken in event data, JWE ciphertext in SQL log, Authorization header, eex.session Cookie header, stream-grant token in breadcrumb `data.url`. Also validates `beforeBreadcrumb` path — the test runner must exercise both hooks independently and together.
+- `tests/vectors/device-token-kid-rotation.json` — validates the `kid`-dispatch verifier pattern from §3.6. Must include: (a) a token minted under `kid: 'device-v1'` that decrypts correctly with the `device-v1` key; (b) a token minted under `kid: 'device-v2'` (using a distinct test key) that decrypts correctly with the `device-v2` key; (c) a token with an unknown `kid` that is rejected with a clear error; (d) a token with no `kid` field that is rejected.
 
-**Authoring discipline**: every vector file has a `_meta` block with `{authored_from: '<RFC or contract section>', author: '<name>', date}`. PR review checklist requires a human to confirm the byte-level fields were typed by hand or derived from a spec, not pasted from a passing test run.
+**This vector inventory is canonical.** §15.3, §15.7, §3.6, and §4 reference additional vector files (`internal-principal.json`, etc.). All required vector files must be listed here in §13.1 — if a section references a vector file not listed in this section, it is a contract gap. The list above is the authoritative inventory.
+
+**Authoring discipline**: every vector file MUST have a `_meta` block with the following mandatory fields:
+
+```json
+{
+  "_meta": {
+    "format_version": 1,
+    "authored_from": "<RFC number or contract section, e.g. '§5.1 fixed-template canonical JSON'>",
+    "test_key_hex": "<hex-encoded test key used for HMAC/JWE in this vector file>",
+    "reviewed_by": "<name of human who confirmed byte-level fields were hand-derived>",
+    "date": "<ISO 8601 date, e.g. 2026-05-25>"
+  }
+}
+```
+
+- `format_version: 1` is required and must be the integer `1` (not a string). Bump to `2` only when the vector file schema itself changes.
+- `test_key_hex` embeds the test key inline in the vector file (the Wycheproof/NIST KAT pattern) — do NOT distribute the test key out-of-band. Use a fixed, well-known test key (e.g., 32 bytes of `0xde 0xad 0xbe...`) for HMAC/JWE vectors, never a real production key.
+- `reviewed_by` and `date` are mandatory for the PR review gate. The MLDSA KAT incident (NIST PQC forum, 2024) established that generated-from-implementation vectors silently pass through bugs in the generator. The `reviewed_by` field is the load-bearing human check.
+
+PR review checklist requires a human to confirm the byte-level fields were typed by hand or derived from a spec, not pasted from a passing test run. Swift consumption: vector files are test-target bundle resources only — do NOT include them in the app target bundle.
 
 ### 13.2 Migration tests
 
@@ -1820,6 +1856,13 @@ The Sentry-compatible DSN is server-provided, not app-baked. App boot sequence:
 
 This pattern means **ONE App Store binary** can serve every self-hoster. No per-self-hoster app build. The DSN is not a secret — it's an ingestion endpoint, and Glitchtip's auth model is that the DSN's project key authorizes writes to that project only.
 
+**`autoSessionTracking` is mandatory off in every SDK init.** Glitchtip does not implement Sentry's session API — session envelopes are silently accepted then discarded. Omitting this flag wastes SDK bandwidth and produces phantom "sessions" in logs that never appear in Glitchtip. Set on every language integration:
+- TypeScript/Node.js: `autoSessionTracking: false`
+- Python: `auto_session_tracking=False`
+- Swift: `enableAutoSessionTracking = false`
+
+**`Sentry.setUser()` is prohibited with persistent identifiers.** Never pass a persistent `user.id` or `user.username` to Sentry. Doing so makes crash data "linked to user" under App Store privacy rules, invalidating the `Linked to user: No` labels in §15.4. The `beforeSend` hook MUST verify that any `user` object in the event has no `id` or `username` fields (or that they are anonymous/null) and strip them if present.
+
 ### 15.3 PII scrubbing (mandatory)
 
 All four SDK integrations MUST install a `beforeSend` hook that scrubs:
@@ -1833,6 +1876,8 @@ All four SDK integrations MUST install a `beforeSend` hook that scrubs:
 
 The scrub list lives in `emerald-contracts::telemetry::pii_scrub_keys()` (single source of truth, mirrored to each SDK via the contracts crate's language ports). CI test vector at `tests/vectors/telemetry-pii-scrub.json` validates the scrubber.
 
+**`beforeBreadcrumb` hook is also required** in addition to `beforeSend`. XHR and navigation breadcrumbs carry request URLs in `data.url` — stream-grant tokens in `?t=<token>` query params appear there and bypass `beforeSend`-only scrubbing entirely. The same URL-token redaction regex applied in `beforeSend` MUST also be installed as a `beforeBreadcrumb` hook. Export a `piiBreadcrumbScrub` function alongside `piiScrub` from `emerald-contracts::telemetry`. **Never set `sendDefaultPii: true`** — CVE GHSA-6465-jgvq-jhgp (Jan 2025) demonstrated that this flag leaks Authorization and Cookie headers via span data.
+
 ### 15.4 App Store privacy nutrition labels
 
 Committed at first App Store submission:
@@ -1844,10 +1889,12 @@ This labeling is honest under the architecture above: crash data never reaches S
 
 ### 15.5 docker-compose addition
 
+> **v1.1 patch:** Pinned to `glitchtip:v6.1` (do NOT use `:latest` — v6.0 introduced breaking env var changes and `:latest` auto-upgrades silently). Removed `CELERY_WORKER_AUTOSCALE` (dead env var in v6.0+, Celery replaced by django-vtasks). Added `TRUSTED_PROXIES` (required in v6.0+ when running behind a reverse proxy; omitting it causes incorrect IP attribution and broken rate limits). Added explicit retention env vars.
+
 ```yaml
 services:
   glitchtip:
-    image: glitchtip/glitchtip:latest
+    image: glitchtip/glitchtip:v6.1
     restart: unless-stopped
     environment:
       SECRET_KEY: ${GLITCHTIP_SECRET_KEY}
@@ -1855,7 +1902,9 @@ services:
       EMAIL_URL: ${GLITCHTIP_EMAIL_URL:-consolemail://}
       GLITCHTIP_DOMAIN: ${GLITCHTIP_DOMAIN}
       DEFAULT_FROM_EMAIL: noreply@${GLITCHTIP_DOMAIN}
-      CELERY_WORKER_AUTOSCALE: "1,3"
+      TRUSTED_PROXIES: ${GLITCHTIP_TRUSTED_PROXIES:-172.16.0.0/12}
+      GLITCHTIP_RETENTION_DAYS: "90"
+      GLITCHTIP_EVENT_HOT_DAYS: "30"
     depends_on:
       - glitchtip-db
       - glitchtip-redis
@@ -1875,11 +1924,19 @@ services:
     restart: unless-stopped
 
   glitchtip-worker:
-    image: glitchtip/glitchtip:latest
-    command: ./bin/run-celery-with-beat.sh
+    image: glitchtip/glitchtip:v6.1
+    command: ./bin/run-worker.sh
     restart: unless-stopped
     environment:
-      # (same env block as glitchtip service)
+      # (same env block as glitchtip service above — must stay in sync)
+      SECRET_KEY: ${GLITCHTIP_SECRET_KEY}
+      DATABASE_URL: postgres://glitchtip:${GLITCHTIP_DB_PASSWORD}@glitchtip-db:5432/glitchtip
+      EMAIL_URL: ${GLITCHTIP_EMAIL_URL:-consolemail://}
+      GLITCHTIP_DOMAIN: ${GLITCHTIP_DOMAIN}
+      DEFAULT_FROM_EMAIL: noreply@${GLITCHTIP_DOMAIN}
+      TRUSTED_PROXIES: ${GLITCHTIP_TRUSTED_PROXIES:-172.16.0.0/12}
+      GLITCHTIP_RETENTION_DAYS: "90"
+      GLITCHTIP_EVENT_HOT_DAYS: "30"
     depends_on:
       - glitchtip-db
       - glitchtip-redis
@@ -1887,6 +1944,8 @@ services:
 volumes:
   glitchtip-postgres:
 ```
+
+**Upgrade runbook (v5 → v6.1):** Stop containers. Back up Postgres. Pull `v6.1`. Remove any `CELERY_WORKER_AUTOSCALE` env vars. Add `TRUSTED_PROXIES`. Start. The worker image command changed from `./bin/run-celery-with-beat.sh` to `./bin/run-worker.sh` in v6.0 — update both `glitchtip-worker` command and image tag together.
 
 ### 15.6 Self-hoster onboarding
 
@@ -1898,19 +1957,27 @@ The install guide MUST include:
 
 ### 15.7 Implementation cost
 
-Estimated **~35–40h M1.5 slice**:
+Estimated **~37–43h M1.5 slice** (revised from 35–40h to account for `PrivacyInfo.xcprivacy` and `beforeBreadcrumb` additions):
 - docker-compose additions + setup script (3h)
 - `GET /api/telemetry/config` endpoint + admin gate (2h)
-- Hono SDK init + `beforeSend` hook (3h)
+- Hono SDK init + `beforeSend` + `beforeBreadcrumb` hooks (4h)
 - Python recommender SDK init + scrubber (2h)
 - Rust SDK init via `sentry` crate (2h, part of M3 work)
 - EmeraldKit SDK init + DSN-from-server bootstrap (3h)
-- PII scrubber implementation in `emerald-contracts::telemetry` + 3 language ports (5h)
+- PII scrubber implementation in `emerald-contracts::telemetry` + 3 language ports, including `piiBreadcrumbScrub` (6h)
 - CI test vectors (`telemetry-pii-scrub.json`) + integration test that crashes flow end-to-end (4h)
 - Self-hoster install documentation (3h)
-- App Store nutrition label copy + privacy policy draft (1h)
+- App Store privacy deliverables (2h — see below)
 - Reverse-proxy guide + Tailscale docs (2h)
 - Buffer for ops surprises (Postgres tuning, retention policy, disk-fill prevention) (5h)
+
+**`PrivacyInfo.xcprivacy` is a required deliverable (May 2024 App Store requirement).** Apple has required a privacy manifest file (`PrivacyInfo.xcprivacy`) in every app since May 1, 2024. Apps without this file are **rejected at upload time** (automated tooling, before human review). The previous "1h for nutrition label copy" estimate is undersized — it must now cover:
+1. `PrivacyInfo.xcprivacy` file authored for EmeraldKit target declaring accessed API categories (NSPrivacyAccessedAPITypes), collected data types, and data use. Reference: [Apple Privacy Manifest docs](https://developer.apple.com/documentation/bundleresources/privacy_manifest_files).
+2. Sentry Apple SDK must be `≥ 8.20` — first version that ships a bundled `PrivacyInfo.xcprivacy` manifest for the SDK itself (required for third-party SDK manifests since May 2024).
+3. App Store Connect nutrition label entries (Crash Data + Diagnostic Data, `linked=No`).
+4. Privacy policy draft (URL required by App Store Connect at submission).
+
+**Performance Data caveat:** if `tracesSampleRate > 0` is set in EmeraldKit Sentry init, "Performance Data" must also be declared in the nutrition label. Either set `tracesSampleRate = 0` (recommended for M2 given the self-hosted Glitchtip focus) or add the Performance Data entry. Do not leave this implicit — App Review will reject if the label understates what the SDK collects.
 
 ### 15.8 Why not the other two
 
@@ -1966,7 +2033,22 @@ review cycles.
 | D15 | Implement `POST /api/admin/backup` per §7.4. `VACUUM INTO` each DB file to a temp path, tar both into a single archive, stream as the response with a JSON manifest (list of DB files, row counts, `schema_migrations` versions). Update `server_state.last_backup_at` on success — this field is consumed by D8b's `-- DESTRUCTIVE` migration enforcement, so D15 must land before any destructive migration can be applied in production. Protect behind admin-role check. | new `server/routes/adminBackup.ts`, mount in `server/app.ts`, admin UI trigger button | 4–5h |
 | D16 | ffmpeg boot validation. New `server/services/ffmpeg.ts` per §13.4: run `ffprobe -version` synchronously at boot. If ffmpeg is absent or below version 6.0, refuse to boot with a clear error message (`[boot] ffmpeg ≥6.0 required; found: <version or missing>`). Used by `test:ffmpeg-boot` CI gate in D10. | new `server/services/ffmpeg.ts`, `server/index.ts` boot sequence | 2h |
 | D17 | `auth_mode` plumbing. Add `auth_mode: 'plex' \| 'local'` field to the device-token mint path. Server determines the value from the session that triggers minting: Plex-authenticated session → `'plex'`; local session → `'local'`. Remove `'both'` from the value space (handled by §3.2 simplification — clients branch on the presence of each mode independently). The `auth_mode` claim informs the "Sign in with…" UI on re-auth. | `server/session.ts`, `server/env.ts` (expose whether Plex is configured), device-mint endpoint | 2h |
-| D18 | Replace plain SHA-256 key derivation with HKDF-Extract (RFC 5869). Session cookie key: `HKDF(SESSION_SECRET, info='eex/session/v1')`; device-token key: `HKDF(DEVICE_TOKEN_SECRET, info='eex/device-token/v1')`; stream-token key: `HKDF(STREAM_TOKEN_SECRET, info='eex/stream-token/v1')`. Verifier on the session-cookie path: accept both old (raw SHA-256) and new (HKDF) derivations for a 30-day window (one cookie TTL), then drop the legacy path. Stream-token and device-token paths do not need a grace window because those secrets are being introduced fresh in D2a/D13. | `server/session.ts`, new `server/services/keyDerivation.ts` | 4h |
+| D18 | Replace plain SHA-256 key derivation with HKDF-Extract+Expand (RFC 5869). Session cookie key: `HKDF(SESSION_SECRET, info='eex/session/v1')`; device-token key: `HKDF(DEVICE_TOKEN_SECRET, info='eex/device-token/v1')`; stream-token key: `HKDF(STREAM_TOKEN_SECRET, info='eex/stream-token/v1')`. Verifier on the session-cookie path: accept both old (raw SHA-256) and new (HKDF) derivations for a 30-day window (one cookie TTL), then drop the legacy path. Stream-token and device-token paths do not need a grace window because those secrets are being introduced fresh in D2a/D13. Note: use full HKDF (Extract+Expand), not Extract-only — Extract-only without Expand loses domain separation via the `info` parameter. The info strings `eex/session/v1`, `eex/device-token/v1`, `eex/stream-token/v1` are frozen wire values; do not rename post-ship without a verifier grace window. | `server/session.ts`, new `server/services/keyDerivation.ts` | 4h |
+
+#### v1.1 Additional D-rows (from research synthesis 2026-05-25)
+
+The following D-rows were identified by the M1.5 research pass and were absent from the original D1–D18 inventory. They are added here as the definitive implementation sequencing for the items the research surfaced.
+
+| # | Delta | File(s) | Effort |
+|---|---|---|---|
+| D2a-tsafe | **D2a constant-time HMAC verify** — §5.4 mandates (a) compute both HMACs unconditionally, (b) `crypto.timingSafeEqual` / `subtle::ConstantTimeEq` for comparison, (c) branch only on boolean results. This is not optional; see §5.4 timing-oracle rationale (GHSA-q7pg-9pr4-mrp2 reference). | `server/services/iptvStreamToken.ts` (D2a verifier path) | 1h |
+| D3-cache-wire | **Wire `tokenReplayCache` into verifier** — D3 ships the cache but does not wire it into `server/middleware/auth.ts` or the stream-token verify path. From a security perspective, D3 ships dead code until this wiring lands behind `STREAM_TOKEN_SECRET`. Document the sequencing: D3 + D2a must land together before the replay cache is live. | `server/middleware/auth.ts`, `server/services/tokenReplayCache.ts` | 1h. **Blocked on D2a.** |
+| D5-busy-timeout | **Add `busy_timeout = 5000` to `openDb`** — Neither `openIptvDb` nor the planned `openDb` factory sets `busy_timeout`. Default 0ms throws `SQLITE_BUSY` immediately on any concurrent write attempt — a test reliability issue today, a production correctness issue once background jobs (nightly sweeps, cron) run alongside request handlers. Single `PRAGMA busy_timeout = 5000;` in the shared factory. | `server/services/db.ts` | 0.25h. **Part of D5.** |
+| D11-analyze | **`ANALYZE iptv_title_link;` after `0003_link_tombstones.sql`** — Required for the partial index to be picked by the SQLite query planner on the `WHERE removed_at IS NULL` filter. Already mandated in §11.1; this D-row ensures it is tracked in the implementation sequencing. | `server/migrations/iptv/0003_link_tombstones.sql` (final line) | 0.25h. **Part of D11.** |
+| D12-full | **D12 is migration + verifier rewrite + admin endpoints, not just a TTL flip** — The §16 D12 estimate of 6h is an undercount. Full scope: new `iptv_playlist_tokens` migration, outer 90d/inner 300s TTL, `rid` rename from `'all'` to `'iptv-channels-all'`, 3-step verifier (HMAC + expiry, row exists, `revoked_at IS NULL`), D2a fallback compat (accept `rid:'all'` during 90-day window), `POST /api/iptv/playlist/token` request/response shape changes (add `device_name` to request body, persist), admin Revoke endpoint, admin list endpoint, admin 'Revoke all' endpoint. Revised effort: **6–8h**. | (D12 files as listed above) | 6–8h |
+| D13-gc | **`device_token_revocations` GC sweep** — Nightly `DELETE FROM device_token_revocations WHERE jti IN (SELECT jti FROM device_tokens WHERE expires_at < datetime('now'))` plus orphan cleanup (revocations with no matching device_tokens row). Keeps the in-process `Set<string>` bounded. Omitting this means the revocation set grows forever at household scale — not a correctness issue but a memory and startup-time issue over multi-year installs. | `server/services/deviceTokenGc.ts` (new), `server/index.ts` (register cron job) | 1h. **Blocked on D13.** |
+| D14-probe-share | **Extract shared `probeMembership(sub, plexAuthToken)` helper** — Both `reconcileSession` and `reconcileDeviceToken` must consult the same Plex membership endpoint. Currently the probe is a private function inside `sessionGate.ts`. Needs to become an exported helper so `reconcileDeviceToken.ts` (D14) can reuse it without duplicating the HTTP call and 15-min TTL cache. | `server/services/sessionGate.ts` (extract + export), `server/services/reconcileDeviceToken.ts` (consume) | 2h. **Part of D14.** |
+| S15-beforeBreadcrumb | **Export `piiBreadcrumbScrub` + install as `beforeBreadcrumb`** — Stream-grant tokens in XHR/navigation breadcrumb `data.url` currently bypass `beforeSend`-only scrubbing. Already mandated in §15.3; this D-row ensures it is tracked in the implementation sequencing alongside the `piiScrub` D-row. | `emerald-contracts::telemetry` (Rust), language port in TS SDK init | 1h |
 
 ---
 
@@ -1974,23 +2056,24 @@ review cycles.
 
 | Group | Items | Net effort |
 |---|---|---|
-| Token shape and key separation | D1, D2a, D2b, D3, D4 | ~12h |
-| Server infrastructure | D5, D6, D15, D16 | ~15–16h |
+| Token shape and key separation | D1, D2a, D2a-tsafe, D2b, D3, D3-cache-wire, D4 | ~15h |
+| Server infrastructure | D5, D5-busy-timeout, D6, D15, D16 | ~16–17h |
 | Identity namespace | D7 | ~6–8h |
 | Schema migrations | D8a, D8b, D8c | ~8.5h |
 | Recommender resolution | D9 | ~4–16h (varies) |
 | CI gates | D10 | ~16–24h |
-| Tombstones (conditional) | D11 | ~3h |
-| Playlist token persistence | D12 | ~6h |
-| Device tokens | D13, D14 | ~11–15h |
+| Tombstones (conditional) | D11, D11-analyze | ~3.25h |
+| Playlist token persistence | D12, D12-full | ~6–8h |
+| Device tokens | D13, D13-gc, D14, D14-probe-share | ~14–19h |
 | Auth plumbing | D17, D18 | ~6h |
-| **Total** | **D1–D18** | **~88–117h ≈ 12–15 days** |
+| Telemetry | S15-beforeBreadcrumb | ~1h |
+| **Total** | **D1–D18 + v1.1 additions** | **~96–124h ≈ 12–16 days** |
 
 **Revised from the original draft's "~1 week" estimate.** The 1-week
 figure was computed against D1–D8 only (19–20 hours of mechanical work).
-Six entirely missing deltas (D12–D17) and the D8 → D8a/D8b/D8c split
-account for the difference. The 12–15 day range is net coding time;
-add sprint overhead for a real-world estimate.
+Six entirely missing deltas (D12–D17) and the D8 → D8a/D8b/D8c split,
+plus the v1.1 research additions, account for the difference. The 12–16 day
+range is net coding time; add sprint overhead for a real-world estimate.
 
 ---
 
@@ -2059,10 +2142,13 @@ To be created when M2 kickoff is imminent (not now). Spec it here so M2 doesn't 
 |---|---|---|
 | `stream_token` | Required (test-vector CI only; Hono is live verifier) | Required (test-vector CI + live verification) |
 | `device_token` | NOT NEEDED | Required |
+| `internal_principal` | Required (§4=Hybrid D: JWE mint + verify for the internal principal token; `aes-gcm 0.10.3` + `jsonwebtoken`, NOT `josekit`) | Required |
 | `sub` | Required (shared DTO) | Required |
 | `version` | Required (shared DTO) | Required |
 | `error_reasons` | Required (shared DTO) | Required |
 | test fixtures | Required (canonical JSON CI) | Required |
+
+**`internal_principal` module detail (§4=Hybrid D, PICKED):** Implements the JWE mint and verify for the `X-Internal-Principal` header token described in §4. Uses `aes-gcm 0.10.3` (RustCrypto, NCC Group audited 2020) + `jsonwebtoken` for the inner HMAC. **Explicitly does NOT use `josekit`** (OpenSSL transitive dep, no formal audit, prohibited by this contract — do not add it as a transitive dep for any reason). Nonce uniqueness is enforced by `OsRng` per-call. The `tests/vectors/internal-principal.json` vector covers both the round-trip and the nonce-non-reuse assertion.
 
 **License**: dual-license **Apache-2.0 OR MIT**, regardless of the user's §14 LICENSE decision for the rest of the project. Dual-licensing is standard Rust practice; it lets the crate be consumed by GPL projects (M3+M4 may inherit the user's chosen LICENSE) without the crate itself forcing copyleft on every downstream consumer of `emerald-contracts`. The §14 decision affects the M3 transcoder and media-core binaries, not this contract crate.
 
@@ -2102,7 +2188,7 @@ To be created when M2 kickoff is imminent (not now). Spec it here so M2 doesn't 
 ## 19. Open items in this draft (review checklist)
 
 Decisions:
-- [x] §4: Hybrid D (signed-and-encrypted internal token) PICKED 2026-05-25. Canonical crypto implementation in Rust (`emerald-contracts` crate per §17); Hono binds via N-API, Python via PyO3. Cost ~33–37h. Subtle hazard: AES-GCM nonce reuse — use `josekit`/`jose` defaults, no hand-rolled crypto.
+- [x] §4: Hybrid D (signed-and-encrypted internal token) PICKED 2026-05-25. Canonical crypto implementation in Rust (`emerald-contracts` crate per §17); Hono binds via N-API, Python via PyO3. Cost ~33–37h. Subtle hazard: AES-GCM nonce reuse — use `aes-gcm 0.10.3` + `jsonwebtoken` (Rust) and `jose` (TS); do NOT use `josekit` (prohibited per §17; v1.1 patch).
 - [x] §9: Resolution A PICKED 2026-05-25. Drop per-source rows, keep `iptv_title_link` join. Local-first source-precedence resolved at the grant endpoint: media-core (M3+) > Plex > IPTV. Auto-fallback on rank-1 unavailability; explicit user action on mid-session source failure (new `'source_unavailable'` reason code in §12.4 enum).
 - [x] §14: LICENSE DEFERRED to first binary-distribution event (M2 TestFlight). Repo stays private; no public registry uploads; no outside PRs merged. Realistic shortlist at M2: All Rights Reserved or custom proprietary EULA.
 - [x] §15: Self-hosted Glitchtip PICKED 2026-05-25, MANDATORY in the EEX stack (no telemetry-disabled build). Per-self-hoster crash-data islands; DSN distributed server→app at boot; PII scrubber in `emerald-contracts::telemetry`; App Store labels: "Crash Data" + "Diagnostic Data", no third-party processor. ~35–40h M1.5 slice.
@@ -2132,4 +2218,32 @@ Ratifications:
 Once all decisions are made and all ratifications checked, this doc becomes the locked contract and M1.5 implementation starts.
 
 **Ratified 2026-05-25.** All 4 decisions PICKED/DEFERRED, all 21 ratification items checked. Contract is LOCKED. M1.5 implementation kickoff dispatched immediately after.
+
+---
+
+## 19.1 v1.1 Patch Ratifications (2026-05-25 research synthesis)
+
+This section records the 11 contract patches applied in the v1.1 pass, sourced from the M1.5 implementation research synthesis (`SYNTHESIS.md`). These patches do NOT change any architectural decision — they tighten spec language, close implementation gaps, and add missing security constraints identified after the contract was ratified.
+
+- [ ] **Patch 1 — §4 josekit contradiction resolved**: §4 Hybrid D nonce-reuse mitigation language updated to use `aes-gcm 0.10.3` (RustCrypto, NCC-audited) + `jsonwebtoken` directly. `josekit` removed from §4 text and §19 decision summary. Consistent with §17 prohibition. Hybrid D description in options text also updated. (Sources: rsrch-s4-aes-gcm-nonce, rsrch-emerald-contracts-rust)
+
+- [ ] **Patch 2 — §15.2 `autoSessionTracking: false` mandate**: Added explicit requirement that all SDK inits set `autoSessionTracking: false` (TS), `auto_session_tracking=False` (Python), `enableAutoSessionTracking = false` (Swift). Glitchtip silently drops session envelopes. Added `Sentry.setUser()` prohibition with persistent IDs. Added `beforeBreadcrumb` hook mandate and `sendDefaultPii: true` prohibition (CVE GHSA-6465-jgvq-jhgp reference). (Sources: rsrch-s15-glitchtip-selfhost, rsrch-s15-pii-scrubber)
+
+- [ ] **Patch 3 — §15.5 docker-compose for Glitchtip 6.x**: Pinned `glitchtip/glitchtip:v6.1` (was `:latest`). Removed `CELERY_WORKER_AUTOSCALE` (dead env var in v6.0+). Added `TRUSTED_PROXIES` (required in v6.0+). Added `GLITCHTIP_RETENTION_DAYS` and `GLITCHTIP_EVENT_HOT_DAYS`. Updated worker command from `run-celery-with-beat.sh` to `run-worker.sh`. Added upgrade runbook note. (Source: rsrch-s15-glitchtip-selfhost)
+
+- [ ] **Patch 4 — §15.7 `PrivacyInfo.xcprivacy` deliverable**: Added `PrivacyInfo.xcprivacy` as an explicit required deliverable for first App Store submission (May 2024 mandatory requirement; apps without it are rejected at automated upload check). Updated effort estimate from 1h to 2h for the App Store privacy work. Added Sentry Apple SDK minimum version `≥ 8.20` (first version with bundled privacy manifest). Added `tracesSampleRate` Performance Data caveat. (Source: rsrch-app-store-labels)
+
+- [ ] **Patch 5 — §5.4 D2a constant-time + unconditional HMAC mandate**: Added explicit mandate that D2a verifier must (a) compute both HMACs unconditionally, (b) use `crypto.timingSafeEqual` / `subtle::ConstantTimeEq`, (c) branch only on boolean results. References GHSA-q7pg-9pr4-mrp2 (`httpsig-rs`, 2025) as the canonical failure mode for this class. (Source: rsrch-d2a-key-separation)
+
+- [ ] **Patch 6 — §17 `internal_principal` module row**: Added `internal_principal` module to the §4-conditional scope table with `§4=Hybrid D: Required` annotation. Added `internal_principal` module detail block specifying `aes-gcm 0.10.3` + `jsonwebtoken`, explicit `josekit` prohibition, `OsRng` per-call for nonce uniqueness. (Sources: rsrch-s4-aes-gcm-nonce, rsrch-emerald-contracts-rust)
+
+- [ ] **Patch 7 — §13.1 vector inventory**: Added `telemetry-pii-scrub.json` and `device-token-kid-rotation.json` to the required vector files list with full authoring requirements. Added canonical-inventory note (§13.1 is authoritative; cross-section references must be consistent with it). (Sources: rsrch-vectors-hygiene, rsrch-s15-pii-scrubber)
+
+- [ ] **Patch 8 — §5.1 `rid` escaping + pipe-ambiguity 400**: Added mandatory unconditional JSON escaping of `rid` and `sub` fields in the fixed-template serializer. Added grant-endpoint validation rejecting `streamId` containing `|` with `400 rid_invalid`. (Sources: rsrch-d1-canonical-json, rsrch-d3-ulid-vs-uuidv7)
+
+- [ ] **Patch 9 — §13.1 `_meta` block spec**: Expanded `_meta` block requirement to mandate `format_version: 1`, `test_key_hex` (inline test key in Wycheproof/NIST pattern), `reviewed_by`, and ISO 8601 `date`. Added MLDSA KAT incident (NIST PQC forum, 2024) as rationale. Added Swift consumption note (test-target bundle only). (Sources: rsrch-vectors-hygiene, rsrch-d1-canonical-json)
+
+- [ ] **Patch 10 — §11.1 `ANALYZE` + index name lock**: Added `ANALYZE iptv_title_link;` as the mandatory final statement of migration `0003_link_tombstones.sql` with SQLite query-planner rationale. Locked index name as `iptv_link_active_by_tmdb` with non-conformance note for alternate names. (Source: rsrch-d11-tombstones)
+
+- [ ] **Patch 11 — §16 v1.1 D-rows**: Added 7 new D-rows to §16 delta table: D2a-tsafe, D3-cache-wire, D5-busy-timeout, D11-analyze, D12-full (scope expansion), D13-gc, D14-probe-share, S15-beforeBreadcrumb. Updated effort totals. (Sources: rsrch-d2a-key-separation, rsrch-d3-ulid-vs-uuidv7, rsrch-d5-multi-db-sqlite, rsrch-d11-tombstones, rsrch-d12-playlist-tokens, rsrch-d13-device-tokens, rsrch-d14-reconcile-cascade, rsrch-s15-pii-scrubber)
 
