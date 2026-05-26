@@ -24,6 +24,7 @@ import {
 import { epgChannelWindow, epgGrid, epgNow } from '../services/iptvEpgQuery.js'
 import { signStreamToken, verifyStreamToken, type StreamKind } from '../services/iptvStreamToken.js'
 import { checkReplay } from '../services/tokenReplayCache.js'
+import { tryNormaliseLegacySub } from '../services/sub.js'
 import { streamConcurrency, type SessionView, type SessionKind } from '../services/iptvConcurrency.js'
 import { rewriteManifest } from '../services/iptvHlsRewrite.js'
 import {
@@ -498,7 +499,17 @@ function checkToken(c: Context<Env>, expectKind: StreamKind, resourceId: string)
         return { ok: false, resp: c.json({ error: replay.reason }, 401) }
       }
     }
-    return { ok: true, sub: claims.sub }
+    // Stream-token grace path (§8.2): M1 HMAC tokens may carry an
+    // unprefixed `sub`. Normalise bare numeric ids to `plex:<id>` during
+    // the 30-day grace window. Any sub written from this normalised
+    // value (e.g. into watch history on heartbeat) uses the prefixed
+    // form. Drop this block one cookie-TTL post-D7 alongside the
+    // verifySession grace path.
+    const parsed = tryNormaliseLegacySub(claims.sub)
+    if (!parsed) {
+      return { ok: false, resp: c.json({ error: 'invalid_token', detail: 'sub_invalid_format' }, 401) }
+    }
+    return { ok: true, sub: parsed.raw }
   } catch (err) {
     return { ok: false, resp: c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401) }
   }

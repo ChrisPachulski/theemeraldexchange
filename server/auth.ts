@@ -261,8 +261,12 @@ auth.post('/plex/check', async (c) => {
   // sessionGate so the per-request reconcile uses the same definition.
   const role = roleFor(user.username)
 
+  // Namespace-prefix the sub from day one (§8.2 D). New logins always
+  // receive a namespaced sub so that M2 device tokens minted from this
+  // session carry the prefixed form without needing the grace window.
+  const namespacedSub = `plex:${String(user.id)}`
   await setSessionCookie(c, {
-    sub: String(user.id),
+    sub: namespacedSub,
     username: user.username,
     role,
     auth_mode: 'plex',
@@ -274,12 +278,12 @@ auth.post('/plex/check', async (c) => {
   // doesn't re-hit plex.tv — the membership check we just performed
   // (or the bootstrap "no PLEX_SERVER_ID" path) IS the freshest possible
   // evidence we'll get.
-  _primeSessionGateCache(String(user.id), 'member', pin.authToken)
+  _primeSessionGateCache(namespacedSub, 'member', pin.authToken)
 
   return c.json({
     status: 'authorized',
     user: {
-      sub: String(user.id),
+      sub: namespacedSub,
       username: user.username,
       email: user.email,
       thumb: user.thumb,

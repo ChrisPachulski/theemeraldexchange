@@ -115,6 +115,50 @@ function sanitizeUser(raw: unknown): UserBucket {
   return { movie: sanitizeBucket(r.movie), tv: sanitizeBucket(r.tv) }
 }
 
+// Backfill C (§8.2): one-time key-rename for legacy M1 feedback.json
+// files. M1 stored feedback keyed by bare Plex user id (numeric string,
+// e.g. "12345"). D7 migrates those keys to the namespaced form
+// ("plex:12345"). Runs at load time; idempotent — keys that already
+// contain a colon, or keys that do not look like a Plex numeric id,
+// are left untouched. Persists immediately so a subsequent crash or
+// restart does not re-run the rename against the same file.
+//
+// Only numeric bare keys (matching the §8.1 plex id pattern) are
+// prefixed. Non-numeric bare keys are M1-era test fixtures or future
+// provider ids — leave them alone until they can be explicitly migrated
+// with the right prefix.
+const BARE_PLEX_ID = /^(0|[1-9][0-9]*)$/
+
+async function migrateNamespaceKeys(file: FeedbackFile): Promise<FeedbackFile> {
+  const legacyKeys = Object.keys(file).filter(
+    (k) => !k.includes(':') && BARE_PLEX_ID.test(k),
+  )
+  if (legacyKeys.length === 0) return file
+
+  const migrated: FeedbackFile = { ...file }
+  for (const key of legacyKeys) {
+    const prefixed = `plex:${key}`
+    // Prefer any existing prefixed entry to avoid clobbering a user
+    // who already has a prefixed record (shouldn't happen in M1 data,
+    // but defensive).
+    if (!migrated[prefixed]) {
+      migrated[prefixed] = migrated[key]
+    }
+    delete migrated[key]
+  }
+
+  try {
+    await persistSnapshot(migrated)
+    console.info('[userFeedback] migrated %d legacy sub key(s) to namespaced form', legacyKeys.length)
+  } catch (err) {
+    // Non-fatal: the in-memory state is correct; the next successful
+    // write will persist the namespaced keys.
+    console.warn('[userFeedback] namespace migration persist failed (will retry on next write):', err)
+  }
+
+  return migrated
+}
+
 async function load(): Promise<FeedbackFile> {
   if (cached) return cached
   let raw: string
@@ -136,7 +180,8 @@ async function load(): Promise<FeedbackFile> {
     for (const [sub, bucket] of Object.entries(parsed)) {
       if (typeof sub === 'string' && sub.length > 0) out[sub] = sanitizeUser(bucket)
     }
-    cached = out
+    // Apply namespace migration for any M1 bare-id keys.
+    cached = await migrateNamespaceKeys(out)
   } catch (parseErr) {
     // Corrupted file (torn write, manual edit error). Fail closed
     // rather than silently wiping every household member's likes.
