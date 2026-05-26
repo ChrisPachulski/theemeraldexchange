@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { signStreamToken, verifyStreamToken, canonicalBytes, generateUlid, type StreamClaims } from './iptvStreamToken.js'
+import { signStreamToken, verifyStreamToken, verifyStreamTokenDualKey, canonicalBytes, generateUlid, type StreamClaims } from './iptvStreamToken.js'
 
 const SECRET = '0123456789abcdef0123456789abcdef'
 
@@ -344,5 +344,73 @@ describe('stream-token-canonical.json vectors (§13.1)', () => {
         .digest('hex')
       expect(gotHmac, `vector[${i}] hmac_hex_with_test_key mismatch`).toBe(v.hmac_hex_with_test_key)
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Dual-key verification (§5.4 STREAM_TOKEN_SECRET rotation window)
+// ---------------------------------------------------------------------------
+
+describe('verifyStreamTokenDualKey', () => {
+  const PRIMARY = '0123456789abcdef0123456789abcdef-primary'
+  const FALLBACK = '0123456789abcdef0123456789abcdef-fallback'
+
+  it('accepts a token signed with the primary secret', () => {
+    const token = signStreamToken(PRIMARY, {
+      kind: 'live', resourceId: '10', sub: 'plex:42', ttlSecs: 60,
+    })
+    const claims = verifyStreamTokenDualKey(PRIMARY, FALLBACK, token)
+    expect(claims.k).toBe('live')
+    expect(claims.rid).toBe('10')
+  })
+
+  it('accepts a token signed with the fallback secret (grace-window rotation)', () => {
+    // Simulates a token minted before rotation, when env.sessionSecret was
+    // the active stream-token signer (M1 → D2a migration). After rotation
+    // the primary is the new STREAM_TOKEN_SECRET; the legacy token still
+    // verifies through the fallback path while its 90-day TTL window drains.
+    const token = signStreamToken(FALLBACK, {
+      kind: 'playlist', resourceId: 'iptv-channels-all', sub: 'plex:7', ttlSecs: 60,
+    })
+    const claims = verifyStreamTokenDualKey(PRIMARY, FALLBACK, token)
+    expect(claims.k).toBe('playlist')
+    expect(claims.sub).toBe('plex:7')
+  })
+
+  it('rejects a token signed with neither secret', () => {
+    const token = signStreamToken('a-different-secret-not-in-rotation', {
+      kind: 'vod', resourceId: '5', sub: 'plex:1', ttlSecs: 60,
+    })
+    expect(() => verifyStreamTokenDualKey(PRIMARY, FALLBACK, token))
+      .toThrow(/invalid_signature/)
+  })
+
+  it('rejects a tampered token even if structurally well-formed', () => {
+    const token = signStreamToken(PRIMARY, {
+      kind: 'live', resourceId: '10', sub: 'plex:1', ttlSecs: 60,
+    })
+    const tampered = token.replace(/.$/, (c) => (c === 'A' ? 'B' : 'A'))
+    expect(() => verifyStreamTokenDualKey(PRIMARY, FALLBACK, tampered))
+      .toThrow(/invalid_signature/)
+  })
+
+  it('rejects an expired token even when signed with the primary secret', () => {
+    const token = signStreamToken(PRIMARY, {
+      kind: 'live', resourceId: '10', sub: 'plex:1', ttlSecs: -100,
+    })
+    expect(() => verifyStreamTokenDualKey(PRIMARY, FALLBACK, token))
+      .toThrow(/expired/i)
+  })
+
+  it('still constant-time-rejects when primary and fallback are identical', () => {
+    // Defense-in-depth: if rotation accidentally lands with primary === fallback,
+    // the verifier must still behave correctly (both HMACs computed, single
+    // signature check). assertSecretsDistinct will normally prevent this at
+    // boot time, but the verifier should not blow up if it slips through.
+    const token = signStreamToken(PRIMARY, {
+      kind: 'live', resourceId: '10', sub: 'plex:1', ttlSecs: 60,
+    })
+    const claims = verifyStreamTokenDualKey(PRIMARY, PRIMARY, token)
+    expect(claims.rid).toBe('10')
   })
 })

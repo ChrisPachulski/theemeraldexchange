@@ -12,6 +12,8 @@ vi.mock('node:child_process', () => ({
 vi.mock('../env.js', () => ({
   env: {
     IPTV_REMUX_TMP_DIR: remuxTmpDir,
+    XTREAM_USERNAME: 'testuser',
+    XTREAM_PASSWORD: 'secret123',
   },
 }))
 
@@ -20,6 +22,7 @@ import {
   heartbeatRemuxSession,
   stopRemuxSession,
   listRemuxSessions,
+  scrubXtreamCreds,
 } from './iptvRemux.js'
 
 type FakeProcess = EventEmitter & {
@@ -93,5 +96,41 @@ describe('iptv remux session', () => {
     proc.emit('exit', 0, null)
 
     expect(listRemuxSessions().some((x) => x.sessionId === s.sessionId)).toBe(false)
+  })
+})
+
+describe('scrubXtreamCreds', () => {
+  it('redacts the literal password from a path-style ffmpeg error URL', () => {
+    const line = 'https://iptv.example.com/live/testuser/secret123/1234.ts: Connection refused'
+    const scrubbed = scrubXtreamCreds(line)
+    expect(scrubbed).not.toContain('secret123')
+    expect(scrubbed).not.toContain('testuser')
+    expect(scrubbed).toContain('REDACTED')
+    expect(scrubbed).toContain('iptv.example.com')
+    expect(scrubbed).toContain('1234.ts')
+    expect(scrubbed).toContain('Connection refused')
+  })
+
+  it('redacts query-style username/password parameters', () => {
+    const line = 'GET https://iptv.example.com/player_api.php?username=testuser&password=secret123&action=get_live_streams failed'
+    const scrubbed = scrubXtreamCreds(line)
+    expect(scrubbed).not.toContain('secret123')
+    expect(scrubbed).not.toContain('testuser')
+    expect(scrubbed).toContain('username=REDACTED')
+    expect(scrubbed).toContain('password=REDACTED')
+    expect(scrubbed).toContain('action=get_live_streams')
+  })
+
+  it('leaves lines with no credentials unchanged', () => {
+    const line = '[rtsp @ 0x7f] Retrying with TCP'
+    expect(scrubXtreamCreds(line)).toBe(line)
+  })
+
+  it('handles generic path-style URL even when env credentials do not match', () => {
+    const line = 'https://other.host.com/live/someuser/somepass/99.ts: Timeout'
+    const scrubbed = scrubXtreamCreds(line)
+    expect(scrubbed).toContain('/REDACTED/REDACTED/')
+    expect(scrubbed).not.toContain('someuser')
+    expect(scrubbed).not.toContain('somepass')
   })
 })

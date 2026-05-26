@@ -3,6 +3,21 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { env } from '../env.js'
 
+export function scrubXtreamCreds(line: string): string {
+  let result = line
+  const u = env.XTREAM_USERNAME
+  const p = env.XTREAM_PASSWORD
+  if (u) result = result.replaceAll(u, 'REDACTED')
+  if (p) result = result.replaceAll(p, 'REDACTED')
+  result = result.replace(
+    /(https?:\/\/[^/\s]+\/[^/\s]+\/)([^/\s]+)\/([^/\s]+)\//g,
+    '$1REDACTED/REDACTED/',
+  )
+  result = result.replace(/([?&])username=[^&\s]*/g, '$1username=REDACTED')
+  result = result.replace(/([?&])password=[^&\s]*/g, '$1password=REDACTED')
+  return result
+}
+
 interface RemuxSession {
   sessionId: string
   streamId: string
@@ -119,11 +134,11 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult {
   const proc = spawn('ffmpeg', args, { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] })
 
   proc.stderr?.on('data', (chunk: Buffer) => {
-    const line = chunk.toString().trim()
+    const line = scrubXtreamCreds(chunk.toString().trim())
     if (line) console.warn(`[iptv-remux ${sessionId}] ${line}`)
   })
   proc.on('error', (err) => {
-    console.warn(`[iptv-remux ${sessionId}] ffmpeg error: ${err.message}`)
+    console.warn(`[iptv-remux ${sessionId}] ffmpeg error: ${scrubXtreamCreds(err.message)}`)
     sessions.delete(sessionId)
     removeDir(dir)
   })
