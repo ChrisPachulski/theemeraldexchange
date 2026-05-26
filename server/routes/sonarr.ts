@@ -440,12 +440,19 @@ sonarr.post('/api/v3/series', async (c) => {
   }
   const rawBody = parsedBody as SonarrAddBody
   let body: SonarrAddBody
-  if (session.role === 'admin') {
+  // Pass through full admin policy only when the client actually sent
+  // policy fields. An admin previewing-as-user (auth.tsx makes isAdmin
+  // viewAs-aware) sends the slim user-shape body through AddSeriesModal
+  // — without this branch that body would skip materialize and trip the
+  // rootFolderPath_required gate below in 2ms, surfacing as the cryptic
+  // "Sonarr /series: 400" toast.
+  const adminSuppliedPolicy = session.role === 'admin' && rawBody.rootFolderPath !== undefined
+  if (adminSuppliedPolicy) {
     body = rawBody
   } else {
-    // Non-admins can't dictate policy. Replace policy fields with
-    // server-derived defaults so a direct-POST can't bypass the
-    // curated quality profile, root folder, or monitor mode.
+    // Non-admins (and admins-in-preview) can't dictate policy. Replace
+    // policy fields with server-derived defaults so a direct-POST can't
+    // bypass the curated quality profile, root folder, or monitor mode.
     const materialized = await materializeNonAdminSeriesBody(rawBody)
     if (!materialized.ok) {
       return c.json({ error: materialized.reason }, 503)
