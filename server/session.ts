@@ -38,6 +38,7 @@ import type { Context } from 'hono'
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie'
 import { env } from './env.js'
 import { deriveKey, INFO_SESSION } from './services/keyDerivation.js'
+import { tryNormaliseLegacySub } from './services/sub.js'
 
 const COOKIE_NAME = 'eex.session'
 const SESSION_TTL_DAYS = 30
@@ -214,8 +215,18 @@ async function tryDecrypt(token: string, key: Uint8Array): Promise<Session | nul
       rawAuthMode === 'plex' || rawAuthMode === 'local' || rawAuthMode === 'apple'
         ? rawAuthMode
         : 'plex'
+
+    // Grace-window normalisation (§8.2 D): M1 cookies carry an unprefixed
+    // Plex user id as `sub`. Normalise bare numeric ids to `plex:<id>` in
+    // memory for the 30-day grace period post-D7. The cookie on disk is NOT
+    // re-encrypted — the rewrite re-applies on every request until the
+    // cookie expires or the user re-authenticates. Drop this block one
+    // cookie-TTL (30 days) after D7 ships.
+    const parsed = tryNormaliseLegacySub(payload.sub)
+    if (!parsed) return null
+
     return {
-      sub: payload.sub,
+      sub: parsed.raw,
       username: payload.username,
       role,
       auth_mode,

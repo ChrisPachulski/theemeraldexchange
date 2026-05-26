@@ -48,6 +48,16 @@ describe('session — round trip', () => {
     const out = await verifySession(token)
     expect(out).toEqual(withToken)
   })
+
+  it('normalises a legacy bare-numeric sub to plex: during the grace window (§8.2 D)', async () => {
+    // Simulate an M1 cookie that carries sub: '42' (no namespace prefix).
+    const legacySession: Session = { sub: '42', username: 'someone', role: 'user', auth_mode: 'plex' }
+    const token = await createSession(legacySession)
+    const out = await verifySession(token)
+    // verifySession normalises in-memory; cookie on disk is not re-encrypted.
+    expect(out).not.toBeNull()
+    expect(out!.sub).toBe('plex:42')
+  })
 })
 
 describe('session — token confidentiality', () => {
