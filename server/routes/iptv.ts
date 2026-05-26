@@ -25,6 +25,7 @@ import { epgChannelWindow, epgGrid, epgNow } from '../services/iptvEpgQuery.js'
 import { signStreamToken, verifyStreamToken, type StreamKind } from '../services/iptvStreamToken.js'
 import { checkReplay } from '../services/tokenReplayCache.js'
 import { tryNormaliseLegacySub } from '../services/sub.js'
+import { resolveSourcePrecedence } from '../services/sourcePrecedence.js'
 import { streamConcurrency, type SessionView, type SessionKind } from '../services/iptvConcurrency.js'
 import { rewriteManifest } from '../services/iptvHlsRewrite.js'
 import {
@@ -438,9 +439,22 @@ function parsePositiveInt(value: string | undefined): number | null {
   return parsed
 }
 
-iptv.post('/stream/live/:streamId/grant', requireAuth, (c) => {
+iptv.post('/stream/live/:streamId/grant', requireAuth, async (c) => {
   const streamId = c.req.param('streamId')
   if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
+
+  // §9 Resolution A: probe sources in precedence order before acquiring a
+  // concurrency slot. If no source is reachable, surface source_unavailable
+  // so the client can prompt the user for an explicit action rather than
+  // silently failing mid-stream.
+  const precedence = await resolveSourcePrecedence({ kind: 'live', id: streamId })
+  if (!precedence.resolved) {
+    return c.json(
+      { ok: false, reason: 'source_unavailable', available_alternatives: precedence.alternatives },
+      503,
+    )
+  }
+
   const { sub } = userOf(c)
   const sessionId = `live:${streamId}:${sub}:${Date.now()}`
   const acquired = streamConcurrency().tryAcquire({
@@ -452,6 +466,12 @@ iptv.post('/stream/live/:streamId/grant', requireAuth, (c) => {
     title: sessionTitle('live', streamId),
   })
   if (!acquired.ok) {
+    // source_unavailable (503) is handled above by resolveSourcePrecedence before
+    // tryAcquire is called. The only reason tryAcquire returns ok=false is
+    // iptv_concurrency_limit, which is 429 (rate-limited, not upstream-down).
+    if (acquired.reason !== 'iptv_concurrency_limit') {
+      return c.json({ ok: false, reason: acquired.reason }, 503)
+    }
     return c.json({ ...acquired, sessions: enrichSessions(acquired.sessions) }, 429)
   }
 
