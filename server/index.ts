@@ -17,6 +17,12 @@ import { env } from './env.js'
 import { app } from './app.js'
 import { registerIptvSchedule } from './services/iptvScheduler.js'
 import { closeIptvDb } from './services/iptvDbSingleton.js'
+import { ensureServerId, closeServerDb } from './services/serverDb.js'
+
+// Boot sequence: open server.db, run migrations, generate server_id on
+// first boot (INSERT OR IGNORE — safe to call on every subsequent boot).
+const serverId = ensureServerId()
+console.log(`[boot] server_id: ${serverId}`)
 
 serve(
   { fetch: app.fetch, port: env.port },
@@ -33,7 +39,10 @@ if (env.XTREAM_HOST && env.XTREAM_USERNAME && env.XTREAM_PASSWORD) {
 }
 
 function shutdown(signal: NodeJS.Signals): void {
+  // Close dependent DBs before the root server.db they depend on.
+  // Boot order is server.db first (§7.4); shutdown order is the reverse.
   closeIptvDb()
+  closeServerDb()
   process.exit(signal === 'SIGINT' ? 130 : 143)
 }
 
