@@ -11,10 +11,10 @@
 import { describe, it, expect } from 'vitest'
 import { EncryptJWT, SignJWT } from 'jose'
 import { createHash, randomUUID } from 'node:crypto'
-import { createSession, verifySession } from './session.js'
+import { createSession, verifySession, authModeFromSession } from './session.js'
 import type { Session } from './session.js'
 
-const valid: Session = { sub: '42', username: 'someone', role: 'user' }
+const valid: Session = { sub: '42', username: 'someone', role: 'user', auth_mode: 'plex' }
 
 // Replicate session.ts's key derivation: SHA-256(SESSION_SECRET).
 // Mirrors the production code; if the derivation changes there, this
@@ -69,6 +69,57 @@ describe('session — token confidentiality', () => {
         // non-utf8 segment (the ciphertext) — that's fine.
       }
     }
+  })
+})
+
+describe('session — auth_mode backward compat', () => {
+  it('defaults missing auth_mode to plex (pre-D17 cookies)', async () => {
+    // Simulate a cookie issued before D17: no auth_mode field in the payload.
+    const token = await mintJwe({ sub: '42', username: 'someone', role: 'user' })
+    const out = await verifySession(token)
+    expect(out).not.toBeNull()
+    expect(out!.auth_mode).toBe('plex')
+  })
+
+  it('round-trips auth_mode local', async () => {
+    const local: Session = { sub: 'local:99', username: 'localuser', role: 'user', auth_mode: 'local' }
+    const token = await createSession(local)
+    const out = await verifySession(token)
+    expect(out!.auth_mode).toBe('local')
+  })
+
+  it('round-trips auth_mode apple', async () => {
+    const apple: Session = { sub: 'apple:abc123', username: 'appleuser', role: 'user', auth_mode: 'apple' }
+    const token = await createSession(apple)
+    const out = await verifySession(token)
+    expect(out!.auth_mode).toBe('apple')
+  })
+
+  it('defaults unknown auth_mode value to plex (future-compat)', async () => {
+    // A token from a future server version with an auth_mode we do not
+    // recognize should fall back to 'plex' rather than letting bad data
+    // through unchecked.
+    const token = await mintJwe({ sub: '42', username: 'someone', role: 'user', auth_mode: 'webauthn' })
+    const out = await verifySession(token)
+    expect(out!.auth_mode).toBe('plex')
+  })
+})
+
+describe('session — authModeFromSession', () => {
+  it('returns plex for bare (M1) plex ids', () => {
+    expect(authModeFromSession({ sub: '12345' })).toBe('plex')
+  })
+
+  it('returns plex for plex: prefixed ids', () => {
+    expect(authModeFromSession({ sub: 'plex:12345' })).toBe('plex')
+  })
+
+  it('returns local for local: prefixed ids', () => {
+    expect(authModeFromSession({ sub: 'local:abc' })).toBe('local')
+  })
+
+  it('returns apple for apple: prefixed ids', () => {
+    expect(authModeFromSession({ sub: 'apple:xyz' })).toBe('apple')
   })
 })
 

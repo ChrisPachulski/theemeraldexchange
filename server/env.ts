@@ -209,6 +209,21 @@ if (isProd && recommenderEventSecret) {
   }
 }
 
+/** True when Plex OAuth is configured for this installation.
+ *
+ *  PLEX_CLIENT_ID is required for boot (validated by `required()` below),
+ *  so if the server started, Plex is configured. This helper exists so the
+ *  device-token mint path and /api/version can expose which auth providers
+ *  are active without re-reading process.env at call time.
+ *
+ *  Future local-auth support will expose an analogous `isLocalAuthConfigured()`
+ *  gated on LOCAL_AUTH_SECRET (or similar) once that deliverable lands.
+ */
+export function isPlexConfigured(): boolean {
+  // PLEX_CLIENT_ID is required — if we booted, it is set and non-empty.
+  return true
+}
+
 export const env = {
   // .trim() is load-bearing for the plex.tv PIN flow: this value flows
   // into BOTH the X-Plex-Client-Identifier header (server → plex.tv)

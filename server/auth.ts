@@ -265,6 +265,7 @@ auth.post('/plex/check', async (c) => {
     sub: String(user.id),
     username: user.username,
     role,
+    auth_mode: 'plex',
     plexAuthToken: pin.authToken,
     ...(env.plexServerId ? { verifiedPlexServerId: env.plexServerId } : {}),
   })
