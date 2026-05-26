@@ -295,12 +295,19 @@ radarr.post('/api/v3/movie', async (c) => {
   }
   const rawBody = parsedBody as RadarrAddBody
   let body: RadarrAddBody
-  if (session.role === 'admin') {
+  // Pass through full admin policy only when the client actually sent
+  // policy fields. An admin previewing-as-user (auth.tsx makes isAdmin
+  // viewAs-aware) sends the slim user-shape body { tmdbId, title, year }
+  // through AddMovieModal — without this branch that body would skip
+  // materialize and trip the rootFolderPath_required gate below in 2ms,
+  // surfacing as the cryptic "Radarr /movie: 400" toast.
+  const adminSuppliedPolicy = session.role === 'admin' && rawBody.rootFolderPath !== undefined
+  if (adminSuppliedPolicy) {
     body = rawBody
   } else {
-    // Non-admins can't dictate quality / folder / monitor / tag /
-    // searchForMovie policy — those are admin-curated. Replace the
-    // policy fields with server-derived defaults so a direct-POST
+    // Non-admins (and admins-in-preview) can't dictate quality / folder /
+    // monitor / tag / searchForMovie policy — those are admin-curated.
+    // Replace policy fields with server-derived defaults so a direct-POST
     // can't bypass the curated profile or pin a different root folder.
     const materialized = await materializeNonAdminMovieBody(rawBody)
     if (!materialized.ok) {
