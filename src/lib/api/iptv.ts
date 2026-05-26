@@ -46,6 +46,23 @@ async function del(path: string): Promise<void> {
   if (!res.ok) await throwApiError(res, `IPTV ${path}`)
 }
 
+// Grant endpoints return URLs as relative paths like `/api/iptv/stream/…`
+// because the backend doesn't know its own public hostname. The SPA is
+// hosted on theemeraldexchange.com (Netlify) while the backend lives on
+// api.theemeraldexchange.com; if we hand the player a relative URL, the
+// browser resolves it against window.location and Netlify's catch-all
+// rewrite returns the SPA shell HTML instead of the stream bytes. Run
+// the URL through apiUrl() so it points at the backend the same way every
+// other API call does.
+function absolutize(url: string): string {
+  return url.startsWith('/') ? apiUrl(url) : url
+}
+
+async function grant(path: string): Promise<StreamGrant> {
+  const g = await post<StreamGrant>(path)
+  return { ...g, url: absolutize(g.url) }
+}
+
 export type IptvKind = 'live' | 'vod' | 'series'
 export type IptvHistoryKind = 'live' | 'vod' | 'series_episode'
 
@@ -214,11 +231,14 @@ export const iptvApi = Object.assign({
   grantLive: (streamId: string, opts?: { avplayer?: boolean }) => {
     const avplayer = opts?.avplayer ?? preferAvplayer()
     const suffix = avplayer ? '?client=avplayer' : ''
-    return post<StreamGrant>(`/stream/live/${streamId}/grant${suffix}`)
+    return grant(`/stream/live/${streamId}/grant${suffix}`)
   },
-  grantVod: (streamId: string) => post<StreamGrant>(`/stream/vod/${streamId}/grant`),
-  grantSeries: (episodeId: string) => post<StreamGrant>(`/stream/series/${episodeId}/grant`),
+  grantVod: (streamId: string) => grant(`/stream/vod/${streamId}/grant`),
+  grantSeries: (episodeId: string) => grant(`/stream/series/${episodeId}/grant`),
   grantCatchup: (streamId: number, startUtc: string, durationMin: number) =>
-    post<StreamGrant>(`/stream/catchup/${streamId}/grant?startUtc=${encodeURIComponent(startUtc)}&durationMin=${durationMin}`),
-  generatePlaylist: () => post<{ url: string; expiresAt: string }>('/playlist/token'),
+    grant(`/stream/catchup/${streamId}/grant?startUtc=${encodeURIComponent(startUtc)}&durationMin=${durationMin}`),
+  generatePlaylist: async () => {
+    const r = await post<{ url: string; expiresAt: string }>('/playlist/token')
+    return { ...r, url: absolutize(r.url) }
+  },
 })
