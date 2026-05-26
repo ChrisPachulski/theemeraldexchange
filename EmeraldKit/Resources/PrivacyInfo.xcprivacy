@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  EmeraldKit PrivacyInfo.xcprivacy
+  ================================
+  Required by Apple since May 1, 2024: apps missing this file are rejected
+  at App Store Connect upload (before human review). Reference:
+    https://developer.apple.com/documentation/bundleresources/privacy-manifest-files
+
+  This manifest covers data collected by EmeraldKit's Sentry/Glitchtip
+  integration (§15.4). The Sentry SDK ships its own bundled manifest;
+  Xcode merges app-level and SDK-level manifests automatically. Declaring
+  the same types in both manifests with identical attributes is correct —
+  the aggregated privacy report will show each type once.
+
+  Data types declared here match the §15.4 App Store nutrition label:
+    - Crash Data:          not linked to identity, not for tracking,
+                           purpose = App Functionality
+    - Other Diagnostic Data: same posture (covers non-crash Sentry events)
+
+  Performance Data: NOT declared here because EEX disables Sentry performance
+  tracing (tracesSampleRate is not set → no performance envelopes). If
+  performance tracing is ever enabled, add NSPrivacyCollectedDataTypePerformanceData
+  with the same linked=false / tracking=false / App Functionality posture.
+
+  NSPrivacyTracking = false: self-hosted Glitchtip is first-party crash
+  infrastructure; it does not access the IDFA and does not link data across
+  apps or with third parties. ATT consent is NOT required (§15.4, §rsrch-app-store-labels).
+
+  NSPrivacyTrackingDomains: intentionally empty. The Glitchtip DSN is
+  fetched at runtime from GET /api/telemetry/config and is never compiled in.
+  Do NOT add the self-hoster's Glitchtip domain here — doing so would cause
+  iOS 17+ to block crash ingestion for users who have not granted ATT consent.
+
+  Required-reason APIs used by EmeraldKit must be declared in this file.
+  Consult Apple's Required Reasons API list and add entries as needed when
+  EmeraldKit reaches M2 implementation:
+    https://developer.apple.com/documentation/bundleresources/privacy-manifest-files/describing-use-of-required-reason-api
+  The Sentry SDK already covers its own Required Reason API usage in its
+  bundled manifest; only EmeraldKit-specific API calls require entries here.
+
+  TODO (M2): Review this manifest once EmeraldKit's Swift target is wired
+  into the Xcode project and all system API usage is known. Run `xcodebuild
+  -generatePrivacyReport` to verify the aggregated report matches the
+  App Store Connect form entries.
+-->
+<plist version="1.0">
+<dict>
+  <!-- Tracking: false — no IDFA access, no cross-app data linkage -->
+  <key>NSPrivacyTracking</key>
+  <false/>
+
+  <!-- Tracking domains: empty — Glitchtip DSN is runtime-fetched, not compiled in -->
+  <key>NSPrivacyTrackingDomains</key>
+  <array/>
+
+  <!-- Collected data types — must match App Store Connect nutrition label entries -->
+  <key>NSPrivacyCollectedDataTypes</key>
+  <array>
+    <!-- Crash Data (§15.4) -->
+    <dict>
+      <key>NSPrivacyCollectedDataType</key>
+      <string>NSPrivacyCollectedDataTypeCrashData</string>
+      <key>NSPrivacyCollectedDataTypeLinked</key>
+      <false/>
+      <key>NSPrivacyCollectedDataTypeTracking</key>
+      <false/>
+      <key>NSPrivacyCollectedDataTypePurposes</key>
+      <array>
+        <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+      </array>
+    </dict>
+    <!-- Other Diagnostic Data (§15.4 "Diagnostic Data") -->
+    <dict>
+      <key>NSPrivacyCollectedDataType</key>
+      <string>NSPrivacyCollectedDataTypeOtherDiagnosticData</string>
+      <key>NSPrivacyCollectedDataTypeLinked</key>
+      <false/>
+      <key>NSPrivacyCollectedDataTypeTracking</key>
+      <false/>
+      <key>NSPrivacyCollectedDataTypePurposes</key>
+      <array>
+        <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+      </array>
+    </dict>
+  </array>
+
+  <!--
+    Required Reason APIs — add entries below as EmeraldKit implementation
+    reveals system API usage. See Apple's list of required-reason APIs.
+    Leave empty array until M2 implementation audit identifies actual usage.
+  -->
+  <key>NSPrivacyAccessedAPITypes</key>
+  <array/>
+</dict>
+</plist>

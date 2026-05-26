@@ -229,6 +229,20 @@ assertSecretsDistinct({
   DEVICE_TOKEN_SECRET: process.env.DEVICE_TOKEN_SECRET || null,
 })
 
+// EEX_TELEMETRY_DSN — Sentry-compatible DSN for the self-hoster's Glitchtip
+// instance. Required in production (telemetry is mandatory per §15.1).
+// Optional in dev: if absent a warning is logged at startup but the server
+// boots so developers without a local Glitchtip don't get blocked.
+const telemetryDsn = opt('EEX_TELEMETRY_DSN') ?? null
+if (isProd && !telemetryDsn) {
+  throw new Error(
+    'Missing required env var in production: EEX_TELEMETRY_DSN ' +
+      '(Sentry-compatible DSN for your self-hosted Glitchtip project). ' +
+      'Telemetry is mandatory in the EEX stack (§15.1). Create an EEX ' +
+      'project in Glitchtip, copy the DSN, and set EEX_TELEMETRY_DSN.',
+  )
+}
+
 /** True when Plex OAuth is configured for this installation.
  *
  *  PLEX_CLIENT_ID is required for boot (validated by `required()` below),
@@ -392,4 +406,14 @@ export const env = {
   IPTV_SYNC_CRON: process.env.IPTV_SYNC_CRON ?? '0 */6 * * *',
   IPTV_RECOMMENDER_EXPORT_SECRET: opt('IPTV_RECOMMENDER_EXPORT_SECRET') ?? null,
   IPTV_REMUX_TMP_DIR: process.env.IPTV_REMUX_TMP_DIR ?? '/tmp/iptv-remux',
+
+  // §15 Telemetry. EEX_TELEMETRY_DSN is the Sentry-compatible DSN for the
+  // self-hoster's Glitchtip project. Distributed to clients at boot via
+  // GET /api/telemetry/config so crash reports land in the right project.
+  EEX_TELEMETRY_DSN: telemetryDsn,
+
+  // Semantic version or git SHA injected at image build time by the
+  // container build (docker build --build-arg EEX_RELEASE=$(git describe)).
+  // Surfaced in /api/telemetry/config so Glitchtip can group crashes by release.
+  EEX_RELEASE: opt('EEX_RELEASE') ?? 'dev',
 } as const
