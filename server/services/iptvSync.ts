@@ -50,13 +50,19 @@ function reconcileCatalog(
   db.raw.prepare(`DELETE FROM channels WHERE fetched_at != ?`).run(fetchedAt)
   db.raw.prepare(`DELETE FROM vod WHERE fetched_at != ?`).run(fetchedAt)
   db.raw.prepare(`DELETE FROM series WHERE fetched_at != ?`).run(fetchedAt)
+  // Soft-delete link rows whose parent vod/series was de-listed this sync.
+  // Hard deletes are deferred to the nightly sweep (14-day window).
   db.raw.prepare(`
-    DELETE FROM iptv_title_link
-    WHERE iptv_kind = 'vod' AND iptv_id NOT IN (SELECT stream_id FROM vod)
+    UPDATE iptv_title_link SET removed_at = datetime('now')
+    WHERE removed_at IS NULL
+      AND iptv_kind = 'vod'
+      AND iptv_id NOT IN (SELECT stream_id FROM vod)
   `).run()
   db.raw.prepare(`
-    DELETE FROM iptv_title_link
-    WHERE iptv_kind = 'series' AND iptv_id NOT IN (SELECT series_id FROM series)
+    UPDATE iptv_title_link SET removed_at = datetime('now')
+    WHERE removed_at IS NULL
+      AND iptv_kind = 'series'
+      AND iptv_id NOT IN (SELECT series_id FROM series)
   `).run()
   pruneCategories(db, 'live', categoryIds.live)
   pruneCategories(db, 'vod', categoryIds.vod)
@@ -147,15 +153,23 @@ export async function syncOnce(db: IptvDb): Promise<SyncResult> {
         vod: vodCats.map((c) => c.category_id),
         series: seriesCats.map((c) => c.category_id),
       })
+      // Insert/re-activate link rows for all vod present in this sync.
+      // removed_at is cleared on conflict so re-listed items resume badge visibility.
       db.raw.prepare(`
         INSERT INTO iptv_title_link (iptv_kind, iptv_id, tmdb_kind, tmdb_id)
         SELECT 'vod', stream_id, 'movie', tmdb_id FROM vod WHERE tmdb_id IS NOT NULL
-        ON CONFLICT(iptv_kind, iptv_id) DO UPDATE SET tmdb_id = excluded.tmdb_id, tmdb_kind = excluded.tmdb_kind
+        ON CONFLICT(iptv_kind, iptv_id) DO UPDATE
+          SET tmdb_id = excluded.tmdb_id,
+              tmdb_kind = excluded.tmdb_kind,
+              removed_at = NULL
       `).run()
       db.raw.prepare(`
         INSERT INTO iptv_title_link (iptv_kind, iptv_id, tmdb_kind, tmdb_id)
         SELECT 'series', series_id, 'tv', tmdb_id FROM series WHERE tmdb_id IS NOT NULL
-        ON CONFLICT(iptv_kind, iptv_id) DO UPDATE SET tmdb_id = excluded.tmdb_id, tmdb_kind = excluded.tmdb_kind
+        ON CONFLICT(iptv_kind, iptv_id) DO UPDATE
+          SET tmdb_id = excluded.tmdb_id,
+              tmdb_kind = excluded.tmdb_kind,
+              removed_at = NULL
       `).run()
     })()
 
