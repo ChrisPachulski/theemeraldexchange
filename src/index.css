@@ -4,11 +4,38 @@
 .suggestion-badge { display: inline-block; font-size: 0.65rem; font-weight: 700; border-radius: 3px; padding: 1px 5px; margin-left: 4px; vertical-align: middle; }
 .suggestion-badge--iptv { background: #1a7a4a; color: #fff; }
 
+/* ── IPTV Shell ─────────────────────────────────────────────────────── */
+/* The shell owns top spacing (clears the fixed TopNav brand band) and
+   the sub-nav strip. The inner LiveTab / VodTab / IptvSeriesTab views
+   render below, with no top padding of their own. */
+.iptv-shell { padding-top: 4rem; }
+.iptv-shell__subnav {
+  display: flex; gap: .5rem; justify-content: center;
+  padding: .5rem 1rem 1rem;
+}
+.iptv-shell__subtab {
+  background: rgba(255,255,255,.06);
+  color: var(--text, #f5f5f5);
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 999px;
+  padding: .4rem 1.1rem;
+  font-size: .85rem;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease;
+}
+.iptv-shell__subtab:hover { background: rgba(255,255,255,.12); }
+.iptv-shell__subtab--active {
+  background: var(--emerald, #1a7a4a);
+  border-color: transparent;
+}
+
 /* ── IPTV Tab shared styles ─────────────────────────────────────────── */
-/* Padding-top clears the fixed TopNav brand band; padding-bottom leaves
-   room for the sticky toolbar at the bottom so the last grid row isn't
-   permanently hidden behind it. */
-.iptv-tab { padding: 4rem 1rem 5rem; }
+/* Padding-bottom leaves room for the sticky toolbar so the last grid
+   row isn't permanently hidden behind it. Top padding is owned by the
+   shell above; no need to clear TopNav twice. */
+.iptv-tab { padding: 0 1rem 5rem; }
 /* Toolbar is sticky to the viewport bottom so search + category + the
    m3u export button stay reachable while the channel grid scrolls. */
 .iptv-tab__toolbar {

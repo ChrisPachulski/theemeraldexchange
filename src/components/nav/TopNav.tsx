@@ -16,8 +16,6 @@ const TABS: Tab[] = [
   { route: 'tv', label: 'TV Shows' },
   { route: 'movies', label: 'Movies' },
   { route: 'live', label: 'Live' },
-  { route: 'iptv-vod', label: 'IPTV Movies' },
-  { route: 'iptv-series', label: 'IPTV Series' },
   { route: 'downloads', label: 'Downloads' },
   { route: 'users', label: 'Users', adminOnly: true },
 ]
@@ -26,8 +24,6 @@ const ROUTE_LABEL: Record<NavRoute, string> = {
   tv: 'TV Shows',
   movies: 'Movies',
   live: 'Live',
-  'iptv-vod': 'IPTV Movies',
-  'iptv-series': 'IPTV Series',
   downloads: 'Downloads',
   users: 'Users',
 }
@@ -44,8 +40,6 @@ export function TopNav({ active }: Props) {
     tv: null,
     movies: null,
     live: null,
-    'iptv-vod': null,
-    'iptv-series': null,
     downloads: null,
     users: null,
   })

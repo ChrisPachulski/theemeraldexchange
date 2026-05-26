@@ -151,7 +151,9 @@ iptv.post('/playlist/token', requireAuth, (c) => {
   })
 })
 
-iptv.get('/playlist.m3u', requireAuth, (c) => {
+// Hit by external players (VLC, iPlayTV, TiviMate) that have no session
+// cookie. Token-in-URL is the auth; see comment on /stream/live/:id.ts.
+iptv.get('/playlist.m3u', (c) => {
   const t = c.req.query('t') ?? ''
   let claims: ReturnType<typeof verifyStreamToken>
   try {
@@ -435,12 +437,11 @@ async function proxyRangeable(c: Context, upstreamUrl: string, mime: string): Pr
   return new Response(upstream.body, { status: upstream.status, headers: responseHeaders })
 }
 
-async function rewriteHlsPlaylist(c: Context, upstreamUrl: string): Promise<Response> {
+async function rewriteHlsPlaylist(c: Context, upstreamUrl: string, sub: string): Promise<Response> {
   const upstream = await fetch(upstreamUrl)
   if (!upstream.ok) return c.json({ error: `upstream_${upstream.status}` }, 502)
 
   const text = await upstream.text()
-  const { sub } = userOf(c)
   const sign = (url: string) =>
     signStreamToken(env.sessionSecret, {
       kind: 'segment', resourceId: url, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
@@ -456,7 +457,14 @@ async function rewriteHlsPlaylist(c: Context, upstreamUrl: string): Promise<Resp
   })
 }
 
-iptv.get('/stream/live/:streamId.ts', requireAuth, async (c) => {
+// Stream-bytes endpoints are token-authed via the URL-signed HMAC, not
+// cookie-authed. The grant POSTs above still require session auth so
+// only a signed-in user can mint a token, but the actual <video> /
+// hls.js / mpegts.js fetch is cross-origin from the SPA (theemerald
+// exchange.com → api.theemeraldexchange.com) and the browser does NOT
+// attach cookies on those requests. requireAuth here would 401 every
+// playback attempt before checkToken ever runs.
+iptv.get('/stream/live/:streamId.ts', async (c) => {
   const rawStreamId = c.req.param('streamId') ?? (c.req.param() as Record<string, string | undefined>)['streamId.ts']?.replace(/\.ts$/, '')
   const streamId = rawStreamId
   if (!streamId) return c.json({ error: 'invalid_id' }, 400)
@@ -484,7 +492,7 @@ iptv.get('/stream/live/:streamId.ts', requireAuth, async (c) => {
   })
 })
 
-iptv.get('/stream/live/:streamId/remux/index.m3u8', requireAuth, async (c) => {
+iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
   const streamId = c.req.param('streamId')
   if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
   const v = checkToken(c, 'remux', streamId)
@@ -530,7 +538,7 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', requireAuth, async (c) => {
   })
 })
 
-iptv.get('/stream/live/:streamId/remux/seg', requireAuth, (c) => {
+iptv.get('/stream/live/:streamId/remux/seg', (c) => {
   const streamId = c.req.param('streamId')
   if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
 
@@ -568,7 +576,7 @@ iptv.get('/stream/live/:streamId/remux/seg', requireAuth, (c) => {
   })
 })
 
-iptv.get('/stream/catchup/:streamId/:startUtc/:durationMin.ts', requireAuth, async (c) => {
+iptv.get('/stream/catchup/:streamId/:startUtc/:durationMin.ts', async (c) => {
   const streamId = c.req.param('streamId')
   if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
 
@@ -632,7 +640,7 @@ iptv.post('/stream/vod/:streamId/grant', requireAuth, (c) => {
   })
 })
 
-iptv.get('/stream/vod/:streamId/:ext', requireAuth, async (c) => {
+iptv.get('/stream/vod/:streamId/:ext', async (c) => {
   const streamId = c.req.param('streamId')
   const ext = c.req.param('ext').toLowerCase()
   const v = checkToken(c, 'vod', streamId)
@@ -640,7 +648,7 @@ iptv.get('/stream/vod/:streamId/:ext', requireAuth, async (c) => {
 
   const creds = credsFromEnv()
   const upstreamUrl = `${creds.host}/movie/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${streamId}.${ext}`
-  if (ext === 'm3u8') return await rewriteHlsPlaylist(c, upstreamUrl)
+  if (ext === 'm3u8') return await rewriteHlsPlaylist(c, upstreamUrl, v.sub)
 
   const mime = ext === 'mkv' ? 'video/x-matroska' : 'video/mp4'
   return await proxyRangeable(c, upstreamUrl, mime)
@@ -673,7 +681,7 @@ iptv.post('/stream/series/:episodeId/grant', requireAuth, (c) => {
   })
 })
 
-iptv.get('/stream/series/:episodeId/:ext', requireAuth, async (c) => {
+iptv.get('/stream/series/:episodeId/:ext', async (c) => {
   const episodeId = c.req.param('episodeId')
   const ext = c.req.param('ext').toLowerCase()
   const v = checkToken(c, 'series', episodeId)
@@ -681,13 +689,13 @@ iptv.get('/stream/series/:episodeId/:ext', requireAuth, async (c) => {
 
   const creds = credsFromEnv()
   const upstreamUrl = `${creds.host}/series/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${episodeId}.${ext}`
-  if (ext === 'm3u8') return await rewriteHlsPlaylist(c, upstreamUrl)
+  if (ext === 'm3u8') return await rewriteHlsPlaylist(c, upstreamUrl, v.sub)
 
   const mime = ext === 'mkv' ? 'video/x-matroska' : 'video/mp4'
   return await proxyRangeable(c, upstreamUrl, mime)
 })
 
-iptv.get('/stream/segment', requireAuth, async (c) => {
+iptv.get('/stream/segment', async (c) => {
   const t = c.req.query('u') ?? ''
   let claims: ReturnType<typeof verifyStreamToken>
   try {
@@ -708,7 +716,7 @@ iptv.get('/stream/segment', requireAuth, async (c) => {
   void allowedHost
 
   if (url.pathname.toLowerCase().endsWith('.m3u8')) {
-    return await rewriteHlsPlaylist(c, upstream)
+    return await rewriteHlsPlaylist(c, upstream, claims.sub)
   }
 
   const controller = new AbortController()
