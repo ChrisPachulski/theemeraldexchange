@@ -102,6 +102,21 @@ export type ConcurrencyLimitError = {
   sessions: SessionRow[]
 }
 
+// Payload for the 'source_unavailable' reason code (§9 / §12.4).
+// Surfaced when the rank-1 source (Plex / media-core) goes offline
+// mid-session. The client MUST present this as an explicit user action
+// rather than seamlessly downgrading — codec, quality, and progress-
+// attribution change when sources switch.
+export type SourceUnavailableError = {
+  reason: 'source_unavailable'
+  available_alternatives: Array<{
+    source: 'plex' | 'iptv' | 'local'
+    displayName: string
+    kind: string
+    id: string
+  }>
+}
+
 export type CategoryDto = {
   category_id: number
   name: string
