@@ -1,4 +1,5 @@
 import { env } from '../env.js'
+import type { SourceUnavailablePayload } from './sourcePrecedence.js'
 
 /**
  * Concurrency-tracker session kinds. Note that `'remux'` has dual membership: it is a valid
@@ -17,9 +18,18 @@ export interface AcquireOpts {
   ip?: string | null
   title?: string | null
 }
+// Closed `reason` enum values for grant-endpoint denials (§12.4).
+// Extend only with a contract bump — Swift Decodable switch-exhausts on
+// this enum; adding a value without a client release is a crash vector.
+//
+//   'iptv_concurrency_limit'  — too many concurrent IPTV streams.
+//   'source_unavailable'      — rank-1 source offline mid-session; client
+//                               must surface explicit user action with the
+//                               available_alternatives payload (§9 / §12.4).
 export type AcquireResult =
   | { ok: true; sessionId: string }
   | { ok: false; reason: 'iptv_concurrency_limit'; limit: number; current: number; sessions: SessionView[] }
+  | { ok: false; reason: 'source_unavailable'; available_alternatives: SourceUnavailablePayload['available_alternatives'] }
 
 export interface SessionView {
   sessionId: string
