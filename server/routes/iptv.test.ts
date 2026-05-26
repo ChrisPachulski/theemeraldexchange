@@ -34,27 +34,31 @@ vi.mock('../services/xtream.js', () => ({
   credsFromEnv: vi.fn(() => ({ host: 'https://panel', username: 'u', password: 'p' })),
 }))
 
-vi.mock('../services/iptvStreamToken.js', () => ({
-  signStreamToken: vi.fn((_secret: string, opts: { kind: string; resourceId: string }) =>
-    `fake.${opts.kind}.${Buffer.from(opts.resourceId, 'utf-8').toString('base64url')}`),
-  verifyStreamToken: vi.fn((_secret: string, t: string) => {
+vi.mock('../services/iptvStreamToken.js', () => {
+  const decodeFake = (t: string) => {
     const match = /^fake\.([^.]+)\.(.+)$/.exec(t)
-    if (match) {
-      const now = Math.floor(Date.now() / 1000)
-      return {
-        exp: now + 60,
-        iat: now,
-        jti: '01J0000000000000000000000X',
-        k: match[1],
-        nbf: now,
-        rid: Buffer.from(match[2], 'base64url').toString('utf-8'),
-        sub: 'plex:42',
-        v: 1,
-      }
+    if (!match) throw new Error('invalid_signature')
+    const now = Math.floor(Date.now() / 1000)
+    return {
+      exp: now + 60,
+      iat: now,
+      jti: '01J0000000000000000000000X',
+      k: match[1],
+      nbf: now,
+      rid: Buffer.from(match[2], 'base64url').toString('utf-8'),
+      sub: 'plex:42',
+      v: 1,
     }
-    throw new Error('invalid_signature')
-  }),
-}))
+  }
+  return {
+    signStreamToken: vi.fn((_secret: string, opts: { kind: string; resourceId: string }) =>
+      `fake.${opts.kind}.${Buffer.from(opts.resourceId, 'utf-8').toString('base64url')}`),
+    verifyStreamToken: vi.fn((_secret: string, t: string) => decodeFake(t)),
+    verifyStreamTokenDualKey: vi.fn(
+      (_primary: string, _fallback: string, t: string) => decodeFake(t),
+    ),
+  }
+})
 
 vi.mock('../services/iptvConcurrency.js', () => ({
   streamConcurrency: vi.fn(() => ({
@@ -493,5 +497,53 @@ describe('favorites + history', () => {
       completed: number
     }>
     expect(hist[0]).toMatchObject({ kind: 'vod', item_id: '20', position_secs: 90, completed: 0 })
+  })
+})
+
+describe('§9 source_unavailable propagation on grant endpoints', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+
+  it('returns 503 source_unavailable on live grant when no source is reachable', async () => {
+    const { resolveSourcePrecedence } = await import('../services/sourcePrecedence.js')
+    vi.mocked(resolveSourcePrecedence).mockResolvedValueOnce({ resolved: null, alternatives: [] })
+
+    const res = await app.request('/api/iptv/stream/live/10/grant', { method: 'POST' })
+    expect(res.status).toBe(503)
+    const body = (await res.json()) as { ok: boolean; reason: string }
+    expect(body.reason).toBe('source_unavailable')
+  })
+
+  it('returns 503 source_unavailable on catchup grant when no source is reachable', async () => {
+    const { resolveSourcePrecedence } = await import('../services/sourcePrecedence.js')
+    vi.mocked(resolveSourcePrecedence).mockResolvedValueOnce({ resolved: null, alternatives: [] })
+
+    const startUtc = new Date(Date.now() - 60 * 60_000).toISOString()
+    const res = await app.request(
+      `/api/iptv/stream/catchup/10/grant?startUtc=${encodeURIComponent(startUtc)}&durationMin=30`,
+      { method: 'POST' },
+    )
+    expect(res.status).toBe(503)
+    const body = (await res.json()) as { reason: string }
+    expect(body.reason).toBe('source_unavailable')
+  })
+
+  it('returns 503 source_unavailable on vod grant when no source is reachable', async () => {
+    const { resolveSourcePrecedence } = await import('../services/sourcePrecedence.js')
+    vi.mocked(resolveSourcePrecedence).mockResolvedValueOnce({ resolved: null, alternatives: [] })
+
+    const res = await app.request('/api/iptv/stream/vod/20/grant', { method: 'POST' })
+    expect(res.status).toBe(503)
+    const body = (await res.json()) as { reason: string }
+    expect(body.reason).toBe('source_unavailable')
+  })
+
+  it('returns 503 source_unavailable on series grant when no source is reachable', async () => {
+    const { resolveSourcePrecedence } = await import('../services/sourcePrecedence.js')
+    vi.mocked(resolveSourcePrecedence).mockResolvedValueOnce({ resolved: null, alternatives: [] })
+
+    const res = await app.request('/api/iptv/stream/series/ep-1/grant', { method: 'POST' })
+    expect(res.status).toBe(503)
+    const body = (await res.json()) as { reason: string }
+    expect(body.reason).toBe('source_unavailable')
   })
 })
