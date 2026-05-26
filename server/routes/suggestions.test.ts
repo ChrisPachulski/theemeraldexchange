@@ -77,7 +77,7 @@ function appUnderTest() {
 }
 
 async function userCookie() {
-  const t = await createSession({ sub: '1', username: 'guest', role: 'user' })
+  const t = await createSession({ sub: 'plex:1', username: 'guest', role: 'user' })
   return `eex.session=${t}`
 }
 
@@ -775,7 +775,7 @@ describe('suggestions route — liked-titles backfill', () => {
     // The route should call TMDB to resolve the title, persist it, and include
     // it in the likes block sent to Claude.
     _setTmdbApiKeyForTests('test-key')
-    await setLike('1', 'tv', 9501, '') // bare-id like with no title
+    await setLike('plex:1', 'tv', 9501, '') // bare-id like with no title
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: unknown) => {
@@ -1633,7 +1633,7 @@ describe('suggestions route — prompt shape', () => {
   })
 
   it('emits user-likes block after the cached prefix when titles are present', async () => {
-    await setLike('1', 'tv', 9001, 'Sons of Anarchy')
+    await setLike('plex:1', 'tv', 9001, 'Sons of Anarchy')
     stubFetchForSonarr()
 
     const r = await appUnderTest().request('/tv', {
@@ -1762,9 +1762,9 @@ describe('suggestions route — prompt shape', () => {
   it('orders liked titles most-recently-liked first in the likes block', async () => {
     // Likes are stored oldest-first (push). The block should reverse
     // so the most recently liked title has the highest prompt attention.
-    await setLike('1', 'tv', 9001, 'Show Alpha') // liked first → oldest
-    await setLike('1', 'tv', 9002, 'Show Beta')  // liked second
-    await setLike('1', 'tv', 9003, 'Show Gamma') // liked last → newest, should appear first
+    await setLike('plex:1', 'tv', 9001, 'Show Alpha') // liked first → oldest
+    await setLike('plex:1', 'tv', 9002, 'Show Beta')  // liked second
+    await setLike('plex:1', 'tv', 9003, 'Show Gamma') // liked last → newest, should appear first
     stubFetchForSonarr()
 
     const r = await appUnderTest().request('/tv', {

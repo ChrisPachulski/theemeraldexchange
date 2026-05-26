@@ -79,7 +79,7 @@ afterEach(async () => {
 })
 
 async function userCookie() {
-  const t = await createSessionFn({ sub: '42', username: 'guest', role: 'user' })
+  const t = await createSessionFn({ sub: 'plex:42', username: 'guest', role: 'user' })
   return `eex.session=${t}`
 }
 
@@ -107,13 +107,13 @@ describe('feedback route — USE_LOCAL_RECOMMENDER=1', () => {
     expect((await postFeedback('dislike')).status).toBe(200)
 
     expect(await mirrorBodies('/events/feedback/clear')).toContainEqual({
-      sub: '42',
+      sub: 'plex:42',
       kind: 'movie',
       tmdb_id: 12345,
       signal: 'like',
     })
     expect(await mirrorBodies('/events/feedback')).toContainEqual({
-      sub: '42',
+      sub: 'plex:42',
       kind: 'movie',
       tmdb_id: 12345,
       signal: 'dislike',
@@ -127,13 +127,13 @@ describe('feedback route — USE_LOCAL_RECOMMENDER=1', () => {
     expect((await postFeedback('like')).status).toBe(200)
 
     expect(await mirrorBodies('/events/feedback/clear')).toContainEqual({
-      sub: '42',
+      sub: 'plex:42',
       kind: 'movie',
       tmdb_id: 12345,
       signal: 'dislike',
     })
     expect(await mirrorBodies('/events/feedback')).toContainEqual({
-      sub: '42',
+      sub: 'plex:42',
       kind: 'movie',
       tmdb_id: 12345,
       signal: 'like',

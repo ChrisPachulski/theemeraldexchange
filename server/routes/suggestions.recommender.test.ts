@@ -72,7 +72,7 @@ afterAll(() => {
 })
 
 async function userCookie() {
-  const t = await createSessionFn({ sub: 'sub-1', username: 'guest', role: 'user' })
+  const t = await createSessionFn({ sub: 'plex:1', username: 'guest', role: 'user' })
   return `eex.session=${t}`
 }
 

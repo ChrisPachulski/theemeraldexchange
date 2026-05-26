@@ -1,115 +1,84 @@
-{
-  "_meta": {
-    "format_version": 1,
-    "authored_from": "§8.3 (provider-dispatching parseSub) + §8.1 (per-provider patterns) + §13.1 (vector requirements), cross-service-contract 2026-05-25",
-    "author": "ChrisPachulski",
-    "date": "2026-05-25",
-    "reviewed_by": "ChrisPachulski",
-    "notes": [
-      "Patterns per §8.1:",
-      "  plex:   plex:(0|[1-9][0-9]*) — no leading zeros; plex:0 is valid (single zero); plex:007 is INVALID.",
-      "  local:  local:[0-9A-HJKMNP-TV-Z]{26} — Crockford Base32 ULID, exactly 26 chars, uppercase only.",
-      "  apple:  apple:[0-9]{6}\\.[0-9a-f]{32}\\.[0-9]{4} — SIWA dot-separated subject.",
-      "parseSub is provider-dispatching (not a single regex) per §8.3 pseudocode.",
-      "parseSub trims leading/trailing whitespace before validation and throws sub_invalid_format if trimming was required (not silent pass-through).",
-      "These 13 vectors are the ground truth for TS parseSub (D7), Rust emerald-contracts::sub::parse_sub (M2+), and Swift EmeraldKit/Sub.parseSub (M2+)."
-    ]
+[
+  {
+    "name": "valid-plex-zero",
+    "input": "plex:0",
+    "valid": true,
+    "provider": "plex",
+    "id": "0"
   },
-  "vectors": [
-    {
-      "name": "valid-plex-zero",
-      "input": "plex:0",
-      "valid": true,
-      "expectedProvider": "plex",
-      "expectedId": "0",
-      "note": "Single zero is the only valid single-digit plex id. Pattern plex:(0|[1-9][0-9]*) explicitly allows this."
-    },
-    {
-      "name": "valid-plex-integer",
-      "input": "plex:12345",
-      "valid": true,
-      "expectedProvider": "plex",
-      "expectedId": "12345",
-      "note": "Standard positive plex id, no leading zeros."
-    },
-    {
-      "name": "valid-local-ulid",
-      "input": "local:01HABCDEFGHJKMNPQRSTVWXYZ0",
-      "valid": true,
-      "expectedProvider": "local",
-      "expectedId": "01HABCDEFGHJKMNPQRSTVWXYZ0",
-      "note": "26-char Crockford Base32 ULID. Contains 0 and adjacent chars to confirm O is excluded (the charset has no O). All uppercase as required by §8.1."
-    },
-    {
-      "name": "valid-apple-siwa",
-      "input": "apple:001126.d3c6971f4faa4ccd80027e3654fa404a.1616",
-      "valid": true,
-      "expectedProvider": "apple",
-      "expectedId": "001126.d3c6971f4faa4ccd80027e3654fa404a.1616",
-      "note": "Real-world SIWA sub shape per §8.3: [0-9]{6}.[0-9a-f]{32}.[0-9]{4}. Dot chars in sub are not JSON special chars per §5.1 note."
-    },
-    {
-      "name": "invalid-plex-leading-zero",
-      "input": "plex:007",
-      "valid": false,
-      "expectedError": "sub_invalid_format",
-      "note": "§8.1 MANDATES rejection of leading zeros: plex:(0|[1-9][0-9]*). plex:007 does not match — 007 starts with 0 but is not a single 0. Rust Sub::Plex(u64) cannot round-trip leading-zero forms through the §5.1 canonical serializer."
-    },
-    {
-      "name": "invalid-plex-alpha-id",
-      "input": "plex:abc",
-      "valid": false,
-      "expectedError": "sub_invalid_format",
-      "note": "Plex id must be numeric. 'abc' does not match (0|[1-9][0-9]*)."
-    },
-    {
-      "name": "invalid-plex-empty-id",
-      "input": "plex:",
-      "valid": false,
-      "expectedError": "sub_invalid_format",
-      "note": "Empty id after colon. Pattern requires at least one digit: (0|[1-9][0-9]*) cannot match empty string."
-    },
-    {
-      "name": "invalid-local-lowercase",
-      "input": "local:lowercase01HABCDEFGHJKMNPQR",
-      "valid": false,
-      "expectedError": "sub_invalid_format",
-      "note": "§8.1: local ULIDs are stored and compared uppercase. Lowercase chars are outside [0-9A-HJKMNP-TV-Z]. This input is also 33 chars (too long), compounding the invalidity."
-    },
-    {
-      "name": "invalid-local-too-short",
-      "input": "local:01HABC",
-      "valid": false,
-      "expectedError": "sub_invalid_format",
-      "note": "ULID must be exactly 26 chars. '01HABC' is 6 chars — far too short. [0-9A-HJKMNP-TV-Z]{26} requires exactly 26."
-    },
-    {
-      "name": "invalid-apple-bad-format",
-      "input": "apple:bad-format",
-      "valid": false,
-      "expectedError": "sub_invalid_format",
-      "note": "Does not match [0-9]{6}.[0-9a-f]{32}.[0-9]{4}. No dots, no hex segment, wrong length."
-    },
-    {
-      "name": "invalid-no-provider",
-      "input": "noprovider",
-      "valid": false,
-      "expectedError": "sub_missing_namespace",
-      "note": "No colon present. parseSub returns indexOf(':') == -1 and throws sub_missing_namespace per §8.3 pseudocode."
-    },
-    {
-      "name": "invalid-empty-prefix",
-      "input": ":emptyprefix",
-      "valid": false,
-      "expectedError": "sub_invalid_format",
-      "note": "Colon is present but provider prefix is empty string. provider = s.slice(0, 0) = ''. None of the three provider branches match, so throws sub_invalid_format."
-    },
-    {
-      "name": "invalid-extra-colons",
-      "input": "plex:0:extra:colons",
-      "valid": false,
-      "expectedError": "sub_invalid_format",
-      "note": "Provider-dispatching parser uses indexOf(':') to split at the FIRST colon only. provider='plex', id='0:extra:colons'. id does not match (0|[1-9][0-9]*) because of the embedded colons, so throws sub_invalid_format."
-    }
-  ]
-}
+  {
+    "name": "valid-plex-integer",
+    "input": "plex:12345",
+    "valid": true,
+    "provider": "plex",
+    "id": "12345"
+  },
+  {
+    "name": "valid-local-ulid",
+    "input": "local:01HABCDEFGHJKMNPQRSTVWXYZ0",
+    "valid": true,
+    "provider": "local",
+    "id": "01HABCDEFGHJKMNPQRSTVWXYZ0"
+  },
+  {
+    "name": "valid-apple-siwa",
+    "input": "apple:001126.d3c6971f4faa4ccd80027e3654fa404a.1616",
+    "valid": true,
+    "provider": "apple",
+    "id": "001126.d3c6971f4faa4ccd80027e3654fa404a.1616"
+  },
+  {
+    "name": "invalid-plex-leading-zero",
+    "input": "plex:007",
+    "valid": false,
+    "error": "sub_invalid_format"
+  },
+  {
+    "name": "invalid-plex-alpha-id",
+    "input": "plex:abc",
+    "valid": false,
+    "error": "sub_invalid_format"
+  },
+  {
+    "name": "invalid-plex-empty-id",
+    "input": "plex:",
+    "valid": false,
+    "error": "sub_invalid_format"
+  },
+  {
+    "name": "invalid-local-lowercase",
+    "input": "local:lowercase01HABCDEFGHJKMNPQR",
+    "valid": false,
+    "error": "sub_invalid_format"
+  },
+  {
+    "name": "invalid-local-too-short",
+    "input": "local:01HABC",
+    "valid": false,
+    "error": "sub_invalid_format"
+  },
+  {
+    "name": "invalid-apple-bad-format",
+    "input": "apple:bad-format",
+    "valid": false,
+    "error": "sub_invalid_format"
+  },
+  {
+    "name": "invalid-no-provider",
+    "input": "noprovider",
+    "valid": false,
+    "error": "sub_missing_namespace"
+  },
+  {
+    "name": "invalid-empty-prefix",
+    "input": ":emptyprefix",
+    "valid": false,
+    "error": "sub_invalid_format"
+  },
+  {
+    "name": "invalid-extra-colons",
+    "input": "plex:0:extra:colons",
+    "valid": false,
+    "error": "sub_invalid_format"
+  }
+]

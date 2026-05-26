@@ -12,15 +12,26 @@ import { describe, it, expect } from 'vitest'
 import { EncryptJWT, SignJWT } from 'jose'
 import { createHash, randomUUID } from 'node:crypto'
 import { createSession, verifySession, authModeFromSession } from './session.js'
+import { deriveKey, INFO_SESSION } from './services/keyDerivation.js'
 import type { Session } from './session.js'
 
-const valid: Session = { sub: '42', username: 'someone', role: 'user', auth_mode: 'plex' }
+// Post-D7: subs must be namespace-prefixed (§8.1). Use a valid plex sub
+// for new-session round-trip tests. The normalizer in verifySession will
+// convert bare '42' to 'plex:42', so round-trip tests must use the
+// pre-normalized form here.
+const valid: Session = { sub: 'plex:42', username: 'someone', role: 'user', auth_mode: 'plex' }
 
-// Replicate session.ts's key derivation: SHA-256(SESSION_SECRET).
+// Replicate session.ts's key derivation: HKDF(SESSION_SECRET, INFO_SESSION) per D18.
 // Mirrors the production code; if the derivation changes there, this
 // must change here too — and these tests catch divergence by failing
 // the round-trip case below.
+// The legacy SHA-256 key is retained for negative test cases that exercise
+// the grace-window fallback path.
 function key(): Buffer {
+  return deriveKey(process.env.SESSION_SECRET!, INFO_SESSION)
+}
+
+function legacyKey(): Buffer {
   return createHash('sha256').update(process.env.SESSION_SECRET!, 'utf8').digest()
 }
 
@@ -92,14 +103,16 @@ describe('session — auth_mode backward compat', () => {
   })
 
   it('round-trips auth_mode local', async () => {
-    const local: Session = { sub: 'local:99', username: 'localuser', role: 'user', auth_mode: 'local' }
+    // local sub must be a 26-char Crockford Base32 ULID per §8.1
+    const local: Session = { sub: 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV', username: 'localuser', role: 'user', auth_mode: 'local' }
     const token = await createSession(local)
     const out = await verifySession(token)
     expect(out!.auth_mode).toBe('local')
   })
 
   it('round-trips auth_mode apple', async () => {
-    const apple: Session = { sub: 'apple:abc123', username: 'appleuser', role: 'user', auth_mode: 'apple' }
+    // apple sub must match {6digits}.{32hexchars}.{4digits} per §8.1
+    const apple: Session = { sub: 'apple:000001.0000000000000000000000000000abcd.0001', username: 'appleuser', role: 'user', auth_mode: 'apple' }
     const token = await createSession(apple)
     const out = await verifySession(token)
     expect(out!.auth_mode).toBe('apple')

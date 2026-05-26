@@ -37,6 +37,8 @@ const PRESERVED_KEYS = [
   'RECOMMENDER_URL',
   'RECOMMENDER_EVENT_SECRET',
   'USE_LOCAL_RECOMMENDER',
+  'EEX_TELEMETRY_DSN',
+  'STREAM_TOKEN_SECRET',
 ] as const
 
 let snapshot: Record<string, string | undefined> = {}
@@ -148,6 +150,7 @@ describe('env — production gating on PLEX_SERVER_ID (auth scope)', () => {
     setBaselineEnv()
     process.env.NODE_ENV = 'production'
     process.env.ALLOWED_ORIGINS = 'https://app.example'
+    process.env.EEX_TELEMETRY_DSN = 'https://test@glitchtip.example.com/1'
     delete process.env.PLEX_SERVER_ID
     process.env.ALLOW_UNSCOPED_PLEX_LOGIN = '1'
     const env = await loadEnv()
@@ -160,6 +163,7 @@ describe('env — production gating on PLEX_SERVER_ID (auth scope)', () => {
     process.env.NODE_ENV = 'production'
     process.env.ALLOWED_ORIGINS = 'https://app.example'
     process.env.PLEX_SERVER_ID = 'home-server-machine-id'
+    process.env.EEX_TELEMETRY_DSN = 'https://test@glitchtip.example.com/1'
     delete process.env.ALLOW_UNSCOPED_PLEX_LOGIN
     const env = await loadEnv()
     expect(env.plexServerId).toBe('home-server-machine-id')
@@ -209,6 +213,7 @@ describe('env — production gating on SESSION_SECRET strength', () => {
     process.env.NODE_ENV = 'production'
     process.env.ALLOWED_ORIGINS = 'https://app.example'
     process.env.PLEX_SERVER_ID = 'home-server-machine-id'
+    process.env.EEX_TELEMETRY_DSN = 'https://test@glitchtip.example.com/1'
     delete process.env.ALLOW_UNSCOPED_PLEX_LOGIN
   }
 
@@ -289,6 +294,7 @@ describe('env — production gating on ALLOWED_ORIGINS', () => {
     // gate). Set it so this test stays focused on the ALLOWED_ORIGINS
     // branch instead of tripping the new check.
     process.env.PLEX_SERVER_ID = 'home-server-machine-id'
+    process.env.EEX_TELEMETRY_DSN = 'https://test@glitchtip.example.com/1'
     const env = await loadEnv()
     expect(env.isProd).toBe(true)
     expect(env.allowedOrigins).toEqual(['https://app.example', 'https://staging.example'])
@@ -388,6 +394,7 @@ describe('env — RECOMMENDER_URL default per environment', () => {
     process.env.NODE_ENV = 'production'
     process.env.ALLOWED_ORIGINS = 'https://app.example'
     process.env.PLEX_SERVER_ID = 'home-server-machine-id'
+    process.env.EEX_TELEMETRY_DSN = 'https://test@glitchtip.example.com/1'
     delete process.env.RECOMMENDER_URL
     const env = await loadEnv()
     expect(env.recommenderUrl).toBe('http://recommender:8000')
@@ -398,6 +405,7 @@ describe('env — RECOMMENDER_URL default per environment', () => {
     process.env.NODE_ENV = 'production'
     process.env.ALLOWED_ORIGINS = 'https://app.example'
     process.env.PLEX_SERVER_ID = 'home-server-machine-id'
+    process.env.EEX_TELEMETRY_DSN = 'https://test@glitchtip.example.com/1'
     process.env.RECOMMENDER_URL = 'http://10.0.0.99:9100'
     const env = await loadEnv()
     expect(env.recommenderUrl).toBe('http://10.0.0.99:9100')
