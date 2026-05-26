@@ -34,6 +34,7 @@
 //                       enforces ALLOWED_ORIGINS.
 
 import { config as dotenvConfig } from 'dotenv'
+import { validateSecretStrength, assertSecretsDistinct } from './services/secrets.js'
 
 dotenvConfig({ path: '.env.local' })
 dotenvConfig({ path: '.env' })
@@ -209,6 +210,25 @@ if (isProd && recommenderEventSecret) {
   }
 }
 
+// STREAM_TOKEN_SECRET is the dedicated signing secret for IPTV stream
+// tokens (§5.4).  Kept separate from SESSION_SECRET so a stream-token
+// compromise does not expose session cookies, and so key rotation is
+// scoped to the affected token class.  D2a: signer always uses this
+// key; verifier tries it first and falls back to SESSION_SECRET for
+// tokens issued before this deploy (see iptvStreamToken.ts).
+const rawStreamTokenSecret = required('STREAM_TOKEN_SECRET')
+validateSecretStrength('STREAM_TOKEN_SECRET', rawStreamTokenSecret, isProd)
+
+// Boot-time pairwise distinctness check (contract §3.1 / §5.4).
+// Runs in all environments — not just prod — so a copy-paste mistake
+// is caught before it reaches CI.  DEVICE_TOKEN_SECRET is introduced
+// in D13; the helper skips the pair when it is absent.
+assertSecretsDistinct({
+  SESSION_SECRET: rawSessionSecret,
+  STREAM_TOKEN_SECRET: rawStreamTokenSecret,
+  DEVICE_TOKEN_SECRET: process.env.DEVICE_TOKEN_SECRET || null,
+})
+
 /** True when Plex OAuth is configured for this installation.
  *
  *  PLEX_CLIENT_ID is required for boot (validated by `required()` below),
@@ -236,6 +256,7 @@ export const env = {
   // other, and check returns {authToken: null} forever.
   plexClientId: required('PLEX_CLIENT_ID').trim(),
   sessionSecret: required('SESSION_SECRET'),
+  streamTokenSecret: rawStreamTokenSecret,
   admins: csv('ADMINS'),
   plexServerId,
   port: positiveInt('PORT', 3001),
