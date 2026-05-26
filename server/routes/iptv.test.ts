@@ -40,11 +40,16 @@ vi.mock('../services/iptvStreamToken.js', () => ({
   verifyStreamToken: vi.fn((_secret: string, t: string) => {
     const match = /^fake\.([^.]+)\.(.+)$/.exec(t)
     if (match) {
+      const now = Math.floor(Date.now() / 1000)
       return {
-        kind: match[1],
-        resourceId: Buffer.from(match[2], 'base64url').toString('utf-8'),
+        exp: now + 60,
+        iat: now,
+        jti: '01J0000000000000000000000X',
+        k: match[1],
+        nbf: now,
+        rid: Buffer.from(match[2], 'base64url').toString('utf-8'),
         sub: 'plex:test',
-        exp: Date.now() / 1000 + 60,
+        v: 1,
       }
     }
     throw new Error('invalid_signature')
