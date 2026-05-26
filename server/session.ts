@@ -1,5 +1,5 @@
 // Encrypted-cookie session. The session payload is a JWE (A256GCM
-// content-encrypted with a SHA-256-derived key from SESSION_SECRET)
+// content-encrypted with an HKDF-derived key from SESSION_SECRET)
 // that lives in the `eex.session` HttpOnly cookie. Stateless — no
 // server-side store. Rotating SESSION_SECRET invalidates every existing
 // session, which is the right behavior for a forced sign-out.
@@ -10,12 +10,34 @@
 // logged cookie would expose the Plex token to anyone holding it.
 // JWE encrypts the payload end-to-end so the cookie is opaque even if
 // captured.
+//
+// Key derivation (D18, RFC 5869):
+//   New key  — HKDF(SESSION_SECRET, info='eex/session/v1')
+//   Legacy   — SHA-256(SESSION_SECRET)  [grace-window only; see below]
+//
+// Grace-window (session-cookie path only):
+//   Session cookies have a 30-day TTL. Switching key derivation
+//   immediately would silently log out every active user whose cookie
+//   was minted under the old SHA-256 key. To avoid that, verifySession
+//   tries the new HKDF key first; on decryption failure it retries with
+//   the legacy SHA-256 key and emits a WARN log so the operator can
+//   monitor the tail-off. The legacy path is scheduled for removal after
+//   one full cookie TTL (30 days) from the D18 deploy date.
+//
+//   createSession always uses the new HKDF key — new cookies are
+//   immediately on the new derivation. Only the verifier carries the
+//   dual path.
+//
+//   Stream-token and device-token keys are introduced fresh in D2a/D13
+//   and carry NO grace window in their respective owners
+//   (iptvStreamToken.ts / deviceToken.ts).
 
 import { EncryptJWT, jwtDecrypt } from 'jose'
 import { createHash } from 'node:crypto'
 import type { Context } from 'hono'
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie'
 import { env } from './env.js'
+import { deriveKey, INFO_SESSION } from './services/keyDerivation.js'
 
 const COOKIE_NAME = 'eex.session'
 const SESSION_TTL_DAYS = 30
@@ -132,19 +154,47 @@ export async function mintDeviceToken(_input: DeviceTokenInput): Promise<string>
   )
 }
 
-// A256GCM requires a 32-byte key. SESSION_SECRET is arbitrary-length
-// user input, so derive a fixed-size key with SHA-256.
-const key = createHash('sha256').update(env.sessionSecret, 'utf8').digest()
+// New derivation (D18): HKDF-Extract+Expand, info = INFO_SESSION.
+// This is the canonical signing key for all cookies issued from D18 onward.
+const hkdfKey = deriveKey(env.sessionSecret, INFO_SESSION)
+
+// Legacy derivation: plain SHA-256. Used ONLY in the verifier grace window
+// so users with cookies minted before the D18 deploy are not silently
+// logged out. The signer (createSession) never uses this key.
+// TODO: Remove after 2026-06-25 (30 days post-D18 deploy — one cookie TTL).
+const legacyKey = createHash('sha256').update(env.sessionSecret, 'utf8').digest()
 
 export async function createSession(payload: Session): Promise<string> {
   return await new EncryptJWT({ ...payload })
+    // No `kid` in this header: v1 has a single active session key, so there
+    // is no ambiguity about which key to use. At v2 key rotation, add a
+    // `kid` here (and in verifySession) before deploying two concurrent keys;
+    // without it the verifier would need to brute-force both keys per token.
     .setProtectedHeader({ alg: 'dir', enc: 'A256GCM' })
     .setIssuedAt()
     .setExpirationTime(`${SESSION_TTL_DAYS}d`)
-    .encrypt(key)
+    .encrypt(hkdfKey)
 }
 
 export async function verifySession(token: string): Promise<Session | null> {
+  // Try the current HKDF-derived key first.
+  const result = await tryDecrypt(token, hkdfKey)
+  if (result !== null) return result
+
+  // Grace-window fallback: attempt the legacy SHA-256 key. A cookie
+  // that decrypts here was minted before D18. Emit a WARN so the
+  // operator can see the tail-off and remove this path after
+  // 2026-06-25.
+  const legacy = await tryDecrypt(token, legacyKey)
+  if (legacy !== null) {
+    console.warn('[session] legacy-sha256-key accepted — user needs re-auth before grace window expires')
+    return legacy
+  }
+
+  return null
+}
+
+async function tryDecrypt(token: string, key: Uint8Array): Promise<Session | null> {
   try {
     const { payload } = await jwtDecrypt(token, key)
     if (typeof payload.sub !== 'string') return null
