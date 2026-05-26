@@ -15,9 +15,18 @@
 import { serve } from '@hono/node-server'
 import { env } from './env.js'
 import { app } from './app.js'
+import { validateFfmpegOrExit } from './services/ffmpeg.js'
 import { registerIptvSchedule } from './services/iptvScheduler.js'
 import { closeIptvDb } from './services/iptvDbSingleton.js'
 import { ensureServerId, closeServerDb } from './services/serverDb.js'
+
+// Abort immediately if ffmpeg is absent or below the required minimum version.
+// §13.4: silent ENOENT at runtime is unacceptable; fail fast at boot instead.
+try {
+  validateFfmpegOrExit()
+} catch {
+  process.exit(1)
+}
 
 // Boot sequence: open server.db, run migrations, generate server_id on
 // first boot (INSERT OR IGNORE — safe to call on every subsequent boot).
