@@ -1,0 +1,828 @@
+# Cross-service compatibility contract (M1.5)
+
+> **Status:** DRAFT for review. This document is the M1.5 deliverable. It
+> freezes the wire-level shapes shared by Hono (M1), Rust services (M3+M4),
+> the recommender (Python/FastAPI), and Apple clients (M2+M5). Nothing in
+> M2 starts until this is locked.
+>
+> **Read first:**
+> - `2026-05-25-apple-multiplatform-and-rust-pivot.md` § Cross-service
+>   compatibility contract (the inventory that triggered this doc).
+> - `2026-05-25-review-findings.md` Tier 7 (codex's blind-spot list — the
+>   ones flagged as one-way doors live here).
+>
+> **Pending user call** (decisions deliberately left open in this draft):
+> LICENSE, internal auth boundary, recommender data-model contradiction,
+> telemetry posture. Each is captured in §4 / §8 / §11 / §15 with the
+> trade-offs and what flips downstream depending on the answer.
+
+## 1. Why this doc exists
+
+After M2 ships a TestFlight build, **every wire shape the app encodes
+becomes effectively immutable**. A 1-year `deviceToken` lives in
+Keychain. An HMAC stream-grant token format is baked into both the
+TypeScript signer and the Rust verifier. A `sub` claim with no prefix
+gets persisted into watch-state rows that an Apple Silicon Rust
+`media-core` will be reading in M3.
+
+Changing any of those after distribution forces re-pairs, schema
+migrations, or breaking server/app version gates. Cheap to change now
+while M1 is the only consumer; expensive to change once Apps speak it.
+
+This contract is the freeze. M1 code changes to match (§16) are
+expected — that's the "1-2 weeks of work" line item in the
+sequencing table.
+
+## 2. M1 as-shipped baseline (the de-facto contract today)
+
+Anything in this section is **what currently exists in `main`**. The
+contract decisions below either ratify these shapes or call out
+breaking deltas that must apply before M2.
+
+### 2.1 Session cookie (browser, M1)
+
+- File: `server/session.ts`.
+- Format: JWE, `{alg: 'dir', enc: 'A256GCM'}`, key = `SHA-256(SESSION_SECRET)`.
+- Cookie name: `eex.session`. HttpOnly, Secure in prod, SameSite=None in
+  prod / Lax in dev.
+- TTL: 30 days. Stateless — rotating `SESSION_SECRET` invalidates every
+  live session.
+- Payload: `{sub: string, username, role: 'admin'|'user', plexAuthToken?, verifiedPlexServerId?}`.
+- `sub` value: Plex user ID as string (e.g., `"12345"`). **No namespace prefix.**
+
+### 2.2 Stream-grant HMAC token (any client, M1)
+
+- File: `server/services/iptvStreamToken.ts`.
+- Format: `b64url(JSON.stringify({kind, resourceId, sub, exp})) + "." + b64url(HMAC-SHA256(secret, body))`.
+- `kind`: `'live' | 'vod' | 'series' | 'catchup' | 'segment' | 'remux' | 'playlist'`.
+- `resourceId`: stringly typed. For catchup, encodes `streamId|startUtc|durationMin`.
+- `sub`: Plex user ID string. No prefix.
+- `exp`: Unix seconds.
+- **Signing key**: `env.sessionSecret` — the same secret as JWE session
+  derivation. (See §6: this is a contract violation we want to fix in M1.5.)
+- **No `jti`, no nonce, no `iss`, no `server_id`.**
+- `JSON.stringify` byte ordering is the V8 insertion order of the literal
+  in `signStreamToken`: `{kind, resourceId, sub, exp}` — luck, not contract.
+
+### 2.3 Concurrency session record (M1)
+
+- File: `server/services/iptvConcurrency.ts`.
+- `SessionKind` (the *tracker* kind, not the *token* kind): `'live' | 'vod' | 'series' | 'catchup' | 'remux'`.
+- **Drift alert:** the stream-token has `'segment'` and `'playlist'` in
+  its `StreamKind` enum that the concurrency tracker doesn't know about,
+  and `'remux'` is a tracker-only kind never emitted as a token kind.
+  M1.5 normalises this (§5.3).
+
+### 2.4 Migrations on disk
+
+- `iptv.db`: `server/migrations/iptv/0001_init.sql`. One file. Migrator
+  applies in order, tracks applied versions in (TBD — needs explicit
+  schema, see §9).
+- `exchange.db` (recommender): `recommender/migrations/000N_*.sql`,
+  five files through `0005_iptv_kinds.sql`. Migrator: Python.
+
+### 2.5 Identity at the edges
+
+- Plex PIN OAuth → `sub = <plex_user_id_as_string>` everywhere.
+- `iptv_favorites.sub`, `iptv_watch_history.sub`, JWE `sub`, HMAC token
+  `sub` — all the same string, all unprefixed.
+
+### 2.6 Recommender ↔ iptv data flow
+
+Two independent paths today, both in production:
+
+1. **Cross-DB join** (the only path `available_on` badges actually use):
+   `server/migrations/iptv/0001_init.sql` defines `iptv_title_link
+   (iptv_kind, iptv_id, tmdb_kind, tmdb_id)`. `server/services/iptvSync.ts`
+   populates it on every catalog sync. `server/routes/suggestions.ts`
+   `tagIptvAvailability` reads it to add `'iptv'` to `available_on[]`.
+2. **Per-source title rows**: `recommender/workers/iptv_ingest.py`
+   pulls `GET /api/iptv/export/recommender`, upserts mybunny VOD/series
+   into `exchange.db.titles` under kinds `iptv_vod` / `iptv_series` via
+   migration `0005_iptv_kinds.sql`. **These rows are not currently consumed
+   by `available_on` badge logic.** They sit in the table for use by the
+   ranker via `kind`-aware retrieval, but nothing reads them as IPTV
+   specifically.
+
+This is the contradiction codex flagged. See §11.
+
+### 2.7 Health / version surface
+
+- `GET /api/health` → `{ok: true}`. No version. No schema state.
+- `GET /api/iptv/health` → `{expiresAt, maxConnections, activeConnections, status}` (Xtream upstream status only).
+- **No `/api/version` exists today.** Required before M2 ships (§13).
+
+---
+
+## 3. External auth token (device JWE for M2+ apps)
+
+The M2 apps need a long-lived bearer token that survives in iOS/tvOS
+Keychain. M1 cookie sessions don't apply.
+
+### 3.1 Decision: format
+
+| Option | Pros | Cons |
+|---|---|---|
+| Re-use the JWE shape from §2.1 with `aud: 'device'` | Lowest blast-radius change. One verifier path in Hono. | Same secret protects both 30-day cookies and 1-year device tokens. Compromise scope inflates. |
+| New JWE with separate signing secret (`DEVICE_TOKEN_SECRET`) | Key separation. Independent rotation. Device-token revocation = rotate one secret without forcing browser re-auth. | Two secrets to operate. Two verifier paths. |
+
+**Recommendation: separate secret.** Keychain-resident 1-year tokens are
+a meaningfully different threat surface than a 30-day cookie. Single
+secret would mean rotating it because a phone got compromised would log
+out every browser too — operationally painful, so it won't happen, so
+rotation becomes theoretical.
+
+### 3.2 Decision: claims
+
+Locked claims:
+
+```
+{
+  "sub": "plex:<plexUserId>" | "local:<localUserId>" | "apple:<appleSubject>",
+  "aud": "device",
+  "iss": "eex",
+  "jti": "<ulid>",
+  "server_id": "<server uuid v4, stable per install>",
+  "auth_mode": "plex" | "local" | "both",
+  "device": {
+    "id": "<client-generated ulid, stored in Keychain>",
+    "platform": "tvos" | "ios" | "ipados" | "macos",
+    "app_version": "<semver>",
+    "name": "<user-set, e.g. 'Living Room TV'>"
+  },
+  "iat": <unix>,
+  "exp": <unix>      // iat + 365 days, hard cap
+}
+```
+
+- `sub`: namespace-prefixed per §10. Locked.
+- `aud: 'device'`: lets the verifier reject cookie-shaped tokens used as
+  bearer (and vice versa). Locked.
+- `iss: 'eex'`: locked.
+- `jti`: ULID. Used for revocation (§3.4). Locked.
+- `server_id`: the self-hosted server's stable UUID, generated on first
+  boot (§13.3), stored in `server_state` table. Lets a single Apple app
+  in the future address multiple servers in the household without
+  ambiguity. **Locked from day one even though v1 is single-server.**
+- `auth_mode`: announces which auth providers this token was minted
+  under. Lets the app render the right "sign in with…" buttons on
+  re-auth without an extra round trip. Locked.
+- `device.*`: app-side metadata. Server stores `device.id` in revocation
+  table; the rest is for the operator's "Devices" admin view.
+
+### 3.3 Decision: algorithm
+
+- `alg: 'dir'`, `enc: 'A256GCM'`. Same as cookie. Symmetric, key derived
+  via `SHA-256(DEVICE_TOKEN_SECRET)`.
+- **Reject asymmetric (`RSA-OAEP` / `ECDH-ES`)**: rotation gets harder,
+  not easier, when there's only one issuer (this server). Asymmetric
+  pays off when you have N issuers and want public verification — not
+  our shape.
+
+### 3.4 Decision: revocation
+
+- Server table `device_token_revocations (jti TEXT PRIMARY KEY, revoked_at TEXT, reason TEXT)`.
+- Middleware checks `jti` against this table on every device-token
+  request. Bloom-filter cache (in-memory) avoids the lookup on the
+  happy path — sub-microsecond per request, rebuilt on table change.
+- Operator UI surface: "Devices" tab listing live `device.id`/`name`
+  pairs with a Revoke button → inserts into the revocations table.
+- **Cascade with Plex revocation**: `reconcileSession` already exists
+  for cookies; the device-bearer code path runs the same reconciler.
+  If `auth_mode='plex'` and Plex says the user is no longer a member,
+  the device token gets auto-revoked.
+
+### 3.5 Decision: rotation policy
+
+- Tokens are immutable. Rotation = revoke + re-pair via the PIN flow.
+- Hard cap 365 days. **No silent extension**, no refresh tokens.
+- App-side: at 30 days before exp, prompt user to re-pair during normal
+  use; fall back to forced re-pair at exp.
+
+### 3.6 Decision: key ID
+
+- `kid` header on the JWE: `"device-v1"`. Locked.
+- Future rotation: introduce `device-v2` with a new secret; verifier
+  accepts both for the overlap window, rejects `device-v1` post-cutover.
+
+---
+
+## 4. Internal auth boundary [USER'S CALL]
+
+When the Rust media-core (M3) and transcoder (M4) are receiving
+requests from Hono on `localhost`, two architectures are possible.
+
+### Option A — Hono is the only authenticator
+
+- Hono validates the device-token / session cookie at the edge.
+- Hono mints a short-lived (60s) internal principal assertion JWT signed
+  with `INTERNAL_PRINCIPAL_SECRET`, claims `{sub, role, server_id, exp}`,
+  passes it as `X-Internal-Principal` header to Rust services on
+  localhost.
+- Rust services validate signature only — no JWE decryption, no Plex
+  reconciliation.
+
+**Trade-offs:** Simplest to implement. Only one path that touches Plex.
+Rust services are dumb proxies of authorization. Downside: if anyone
+can reach Rust services on localhost (containerised correctly: nobody),
+they can forge internal principal headers — so this depends on the
+network model being airtight.
+
+### Option B — Rust services independently decrypt user JWEs
+
+- Hono passes the raw user device-token / cookie to Rust.
+- Rust services run the same JWE decryption, same Plex reconciliation.
+- Requires shipping the JWE crypto + Plex client in Rust (port from TS).
+
+**Trade-offs:** Defence in depth. Rust services usable without Hono
+(future M3 dev mode). Downside: doubles the attack surface for token
+verification bugs; two implementations of Plex reconciliation that can
+drift.
+
+### Why this is your call
+
+- It's a **one-way door** for the M3 codebase. Reversing means
+  rewriting media-core's auth layer mid-stream.
+- It affects the LICENSE decision (§14): Option A is friendlier to
+  closed/proprietary because the auth surface stays inside Hono;
+  Option B exposes the JWE crypto in two open-source crates.
+- It affects telemetry (§15): Option A means Rust never sees raw user
+  identity claims, only opaque internal principals — a privacy win.
+
+**Recommendation (non-binding):** Option A. The defence-in-depth value
+of B is real but the operational cost of two reconcilers is the worst
+kind of cost — only visible when they disagree under load. Pick A
+unless you specifically want Rust services to be portable to non-Hono
+deployments later.
+
+**Decision impact downstream:** drives §5 (whether Rust verifies
+stream-tokens at all, or only Hono does), §6 (playlist token model),
+§13 (whether `/api/version` is exposed by Rust services).
+
+---
+
+## 5. Stream-grant HMAC token
+
+The M1 token from §2.2 has four problems for M2: shared secret,
+non-canonical bytes, no replay defence, and an enum that drifts from
+the concurrency tracker.
+
+### 5.1 Decision: byte canonicalisation
+
+Replace V8-insertion-order JSON with **canonical JSON** (RFC 8785
+JCS-style: sorted keys, no whitespace). This is the deal-breaker for
+Rust round-tripping — `serde_json::to_string` does not preserve TS
+insertion order, and the HMAC bytes diverge.
+
+Implementation:
+- TS side: hand-write a canonicalising serialiser for the claim struct
+  (10 lines, four keys — no library needed).
+- Rust side: hand-write the matching serialiser in `emerald-contracts`.
+- **Test vector**: ship `tests/vectors/stream-token-canonical.json`
+  with input claims + the exact expected byte string. Both stacks read
+  it; both must produce identical bytes.
+
+### 5.2 Decision: claim shape
+
+Locked:
+
+```
+{
+  "v":   1,                                  // contract version, bumped on breaking changes
+  "k":   "<kind>",                           // see §5.3 enum
+  "rid": "<resourceId>",
+  "sub": "plex:<id>" | "local:<id>",         // namespace-prefixed per §10
+  "jti": "<ulid>",
+  "iat": <unix>,
+  "exp": <unix>,
+  "nbf": <unix>                              // == iat; explicit for clock-skew gate
+}
+```
+
+- Strict key order: `v, k, rid, sub, jti, iat, exp, nbf`. Canonical JSON
+  sorts alphabetically: `exp, iat, jti, k, nbf, rid, sub, v`.
+  **The contract uses alphabetical** — RFC 8785.
+- Drop `kind`, `resourceId` long-form names: bytes-on-wire savings on a
+  token that ends up in URLs.
+- Add `v`: lets future tokens be detected and rejected by old verifiers.
+
+### 5.3 Decision: kind enum normalisation
+
+Stream-token `k` claim:
+
+```
+'live' | 'vod' | 'series' | 'catchup' | 'segment' | 'playlist'
+```
+
+Concurrency `SessionKind`:
+
+```
+'live' | 'vod' | 'series' | 'catchup' | 'remux'
+```
+
+Resolve:
+- `'remux'` is a **server-side internal kind** for tracker bookkeeping,
+  not a token kind. It exists because AVPlayer-bound remux sessions
+  consume a slot too. Keep it tracker-only.
+- `'segment'` and `'playlist'` are token-only kinds that don't consume
+  concurrency slots. Keep them token-only.
+- `'live'` token + `'remux'` tracker entry happen on the same playback
+  for AVPlayer clients. Document the mapping in `iptvConcurrency.ts`
+  comments.
+
+### 5.4 Decision: key separation
+
+- New env: `STREAM_TOKEN_SECRET`. Required, distinct from `SESSION_SECRET`
+  and `DEVICE_TOKEN_SECRET`.
+- Migration plan: in M1.5, switch `signStreamToken` to read
+  `STREAM_TOKEN_SECRET`, default-fallback to `SESSION_SECRET` for one
+  release with a warn log, then drop the fallback before M2 ships.
+- **Why:** the M1 cookie-secret = stream-token-secret is a real risk:
+  a compromised stream-token replay sample today doesn't give an
+  attacker a cookie forgery (different payload shape), but the same
+  HMAC key being used for two purposes is a textbook
+  separate-the-keys-by-purpose violation.
+
+### 5.5 Decision: replay prevention
+
+- `jti` ULID + server-side seen-token bloom cache, TTL = 2× token TTL.
+- 5xx-safe: if cache is unavailable, allow (token TTL is already short).
+- **Why not strict single-use:** HLS playlists need many segment
+  fetches with the same token; switching the token mid-playlist breaks
+  AVPlayer. The bloom cache catches *replay across sessions*, not
+  *re-use within one session*.
+
+### 5.6 Decision: TTL caps
+
+| Kind | TTL | Rationale |
+|---|---|---|
+| `live` | 300s | Re-issued on heartbeat. |
+| `vod` | 3600s | Long enough for a movie; client re-grants on resume. |
+| `series` | 3600s | Same. |
+| `catchup` | 3600s | Same. |
+| `segment` | 60s | Hot path; constantly refreshed by playlist proxy. |
+| `playlist` | 90 days | See §6 — this is the long-lived bearer-in-URL case. |
+
+### 5.7 Decision: clock-skew tolerance
+
+- Verifier accepts tokens with `nbf - 30s <= now <= exp + 5s`.
+- Server-side time is authoritative; client clock is untrusted.
+
+### 5.8 Decision: who verifies
+
+- If §4 = Option A: only Hono verifies stream-tokens. Rust services
+  receive an internal principal assertion + a resource handle.
+- If §4 = Option B: Rust services verify stream-tokens independently.
+  `emerald-contracts` crate becomes load-bearing.
+
+---
+
+## 6. Playlist tokens (long-lived bearer in URL)
+
+The M1 strategy doc proposed `/api/iptv/playlist.m3u?t=<deviceToken-issued>`.
+**That's a bad shape:** device tokens leak via logs, support bundles,
+proxy access logs, error reports. Putting a 1-year bearer in a URL is
+exactly the failure mode the device-token model is meant to avoid.
+
+### 6.1 Decision: separate playlist token kind
+
+- `k: 'playlist'` stream-token from §5, with 90-day TTL.
+- Bound to a single resource: `rid: 'iptv-channels-all'` (or similar).
+  Cannot grant access to `live`/`vod`/`series` streams directly — it
+  can only be presented to `GET /api/iptv/playlist.m3u`.
+- The M3U body contains short-lived (300s) per-channel `live` tokens
+  generated server-side on each playlist GET. So even if the playlist
+  URL leaks, the live-channel URLs inside expire in 5 minutes.
+
+### 6.2 Decision: playlist token issuance
+
+- New endpoint: `POST /api/iptv/playlist/token` (cookie or device-token
+  auth) → `{url: "/api/iptv/playlist.m3u?t=...", expiresAt}`.
+- Operator UI surface: "External player M3U" panel, "Generate" button,
+  "Revoke" button per active token.
+- Storage: `iptv_playlist_tokens (jti, sub, issued_at, expires_at, revoked_at)`
+  in `iptv.db`. Same revocation model as device tokens.
+
+### 6.3 Decision: rotation guidance
+
+- Documented as "rotate every 90 days" in the operator UI.
+- Auto-rotation: app-side, when accessed by a known device, the server
+  silently issues a fresh playlist token and reflects the new URL in
+  the response. Manual users in VLC/TiviMate paste the URL once per
+  90 days.
+
+---
+
+## 7. DB migration contract
+
+Three databases (`iptv.db`, `exchange.db`, `media.db`), three writer
+languages by M3 (TS via better-sqlite3, Python via stdlib sqlite3, Rust
+via sqlx). Shared discipline is mandatory.
+
+### 7.1 Decision: shared migration table convention
+
+Every DB has a `schema_migrations` table:
+
+```sql
+CREATE TABLE schema_migrations (
+  version    INTEGER NOT NULL PRIMARY KEY,
+  applied_at TEXT    NOT NULL,
+  checksum   TEXT    NOT NULL    -- sha256 of the .sql file at apply time
+);
+```
+
+- `checksum` lets a future migrator detect "this version was applied,
+  but the file has been edited since" — a noisy bug class in
+  long-lived projects.
+- File naming: `NNNN_short_snake_case.sql`, where NNNN is zero-padded.
+  Already matches `0001_init.sql` / `0005_iptv_kinds.sql`.
+
+### 7.2 Decision: schema-version API
+
+- `GET /api/version` (§13) returns per-DB schema versions:
+
+```
+{
+  "server": { "version": "0.5.0", "build": "<sha>", "api_versions": ["v1"] },
+  "schemas": {
+    "iptv":     { "current": 1, "applied_at": "..." },
+    "exchange": { "current": 5, "applied_at": "..." },
+    "media":    { "current": 0 }    // present even before M3
+  },
+  "server_id": "<uuid>"
+}
+```
+
+- The app uses this to refuse incompatible servers gracefully (§13).
+
+### 7.3 Decision: skipped-version migration path
+
+- Migrator applies all unapplied migrations in version order on every
+  boot. Already true today. **No coalesced fast path needed**: a user
+  who hasn't updated in 8 months runs every intervening migration
+  sequentially. Acceptable for a self-hosted product with <10k row
+  tables in practice.
+- **Exception**: if any migration takes >30s on a representative DB,
+  emit a `[migration] applying NNNN, this may take several minutes`
+  log line and (later) surface it in the admin UI. Not built in M1.5,
+  documented as M2-era.
+
+### 7.4 Decision: rollback policy
+
+- **No automatic rollback.** SQLite + linear forward-only migrations.
+- Recovery model: backup (§13.4 of strategy doc — `POST /api/admin/backup`
+  before any destructive migration) → restore on failure.
+- Down-migrations explicitly out of scope. Single-operator self-host
+  doesn't need them; the operational cost of authoring `down.sql` for
+  every forward migration is real and the value is theoretical.
+
+### 7.5 Decision: TS ↔ Rust schema parity
+
+- `iptv.db` schema is owned by Hono today. **Stays Hono-owned in M3+**.
+  Rust media-core writes to `media.db`; never touches `iptv.db` or
+  `exchange.db`.
+- Rust reads `iptv.db` via sqlx read-only pool. Schema parity becomes
+  "Rust must understand the schema Hono wrote" — easier than "two
+  writers must produce identical schemas".
+- **Test vector**: `tests/vectors/iptv-db-schema.sql` in
+  `emerald-contracts`. Rust integration tests apply the migration set
+  to a temp DB and run typed queries; failure means Rust drifted.
+
+---
+
+## 8. Identity namespace
+
+### 8.1 Decision: prefix from day one
+
+- `sub` values everywhere become `<provider>:<provider_id>`:
+  - `plex:12345`  (Plex user id)
+  - `local:<ulid>` (local-auth user)
+  - `apple:<sub_from_SIWA>` (Sign in with Apple)
+- Locked across: JWE session cookie, device JWE, HMAC stream token,
+  `iptv_favorites.sub`, `iptv_watch_history.sub`, future `media_watch_state.sub`.
+
+### 8.2 Decision: M1 backfill
+
+- `server/migrations/iptv/0002_namespace_sub.sql`:
+  - `UPDATE iptv_favorites SET sub = 'plex:' || sub WHERE sub NOT LIKE '%:%';`
+  - Same for `iptv_watch_history`.
+- Hono session creation prefixes `sub` on every new login (existing
+  cookies have unprefixed `sub`; the migration's `WHERE NOT LIKE` makes
+  this idempotent and re-runnable).
+- `verifySession` rewrites legacy unprefixed `sub` → `plex:` on read for
+  backward compat across the rollout window. Drop the rewrite after a
+  30-day grace period (one cookie TTL).
+
+### 8.3 Decision: parser/sanity guard
+
+- Helper `parseSub(s: string): {provider, id}` with strict validation
+  (`^(plex|local|apple):[A-Za-z0-9_-]+$`). Used everywhere a `sub` is
+  written or read. Rejects unprefixed `sub` after grace period.
+
+---
+
+## 9. Recommender data-model contradiction [USER'S CALL]
+
+### 9.1 The actual situation today
+
+This deserves more nuance than the strategy doc gave it. **Both
+data paths are wired in, but only the cross-DB join is consumed.**
+
+- `iptv_title_link (iptv_kind, iptv_id, tmdb_kind, tmdb_id)` table:
+  populated by `iptvSync.ts` on every 6h sync. Queried by
+  `suggestions.ts` (`tagIptvAvailability`) to add `'iptv'` to
+  `available_on[]`. **This is the path the badge feature actually uses.**
+- `iptv_vod` / `iptv_series` rows in `exchange.db.titles`: populated by
+  `iptv_ingest.py`. Sitting there. **Not currently read by any badge
+  logic.** Ostensibly available to the ranker — but the ranker doesn't
+  treat them specially today.
+
+So the contradiction is real but lopsided: the join is the load-bearing
+path; the per-source rows are inert.
+
+### 9.2 Three resolutions
+
+| Resolution | What changes | Cost | Risk |
+|---|---|---|---|
+| **A. Keep the join, drop the per-source rows** | Delete `iptv_ingest.py` worker, drop `iptv_vod`/`iptv_series` rows. Migration `0006_drop_iptv_kinds.sql` removes the kinds from the CHECK. | ~1 day. Single load-bearing path remains. | Loses the optionality of letting the recommender rank IPTV items directly. If the ranker ever wants IPTV-only suggestions, you have to re-add. |
+| **B. Keep the per-source rows, drop the join** | Delete `iptv_title_link` and `tagIptvAvailability`. Move `available_on` logic to query `exchange.db.titles WHERE kind LIKE 'iptv_%' AND tmdb_id IN (...)`. | ~2 days. Crosses a service boundary (suggestions in Hono, titles in recommender). Adds latency. | Hono now depends on `exchange.db` for IPTV availability — extra cross-DB read on every suggestion render. |
+| **C. Document both as canonical, draw a line** | `iptv_title_link` for **availability badges**. `iptv_vod`/`iptv_series` for **ranker input**. Build an integration test that asserts the two stay in sync. | Smallest immediate code change. Largest doc + test burden. | Drift is inevitable. The two paths run on different schedules (6h Xtream sync vs nightly recommender ingest). Stale-data window of up to 24h. |
+
+### 9.3 What flips downstream depending on the answer
+
+- **M3 media-core**: if the answer is **A**, media-core inherits the
+  pattern: `media_title_link (file_id, tmdb_kind, tmdb_id)` in `media.db`,
+  Hono fans out joins. If **B**, media-core writes `kind='local_*'`
+  rows directly into `exchange.db.titles`. Locking now prevents a
+  third pattern from emerging in M3.
+- **Orphan handling (§12)**: A makes orphans (IPTV-only items with no
+  TMDB id) trivially "no badge, no recommendation"; B requires explicit
+  tombstone schema in `titles`.
+- **Recommender Python ↔ Rust port** (post-M5): A means the iptv ingest
+  worker stays Python forever. B means it eventually ports to Rust.
+
+### 9.4 Recommendation (non-binding)
+
+**Resolution A** — keep the join, drop the inert per-source rows.
+Rationale: there's no current consumer of the per-source rows. Schrödinger's
+data model is technical debt. The optionality argument ("the ranker
+might want it later") is exactly the kind of speculative future
+requirement the project rules say to avoid (CLAUDE.md: "Don't design
+for hypothetical future requirements"). If/when the ranker wants IPTV-
+specific input, re-add it at that point with a real use case.
+
+But this is one-way for M3's data-model shape. Your call.
+
+---
+
+## 10. (intentionally renumbered — combined into §8) Identity namespace
+
+*Combined into §8 above.*
+
+---
+
+## 11. Availability-badge semantics for orphans
+
+Depends on §9. Assuming Resolution A (the join model):
+
+### 11.1 Decision: tombstones
+
+- `iptv_title_link` gains `removed_at TEXT NULL` column (migration
+  `0003_link_tombstones.sql`).
+- `iptvSync.ts` no longer deletes link rows for missing upstream items.
+  Instead, sets `removed_at = <now>`.
+- `tagIptvAvailability` filters `WHERE removed_at IS NULL`.
+- Hard delete after 30 days of `removed_at IS NOT NULL` — gives the
+  upstream catalog time to re-add an item without losing watch history
+  via the cascade.
+
+### 11.2 Decision: live channels in `available_on`
+
+- **Excluded.** Live channels don't map to TMDB titles cleanly (a "TNT"
+  channel doesn't have a single TMDB id). The recommender returns
+  TMDB-keyed items; live channels would clutter the badge with
+  meaningless entries.
+- **Exception future-work**: if M6 introduces "this movie is airing on
+  channel X at 8pm" via EPG matching, that's a new badge kind
+  (`available_on: ['iptv-live']` or a separate `airing_soon` field) —
+  not a stretching of the current badge.
+
+### 11.3 Decision: orphans with no TMDB match
+
+- IPTV VOD/series without `tmdb_id`: they have no rows in
+  `iptv_title_link` and no rows in any `titles` table. They are
+  invisible to the recommender. **Visible only in the IPTV tab's own
+  browse views.** That's correct behaviour; no badge work needed.
+
+---
+
+## 12. Server / app version compatibility gates
+
+Required before any TestFlight build. Locked.
+
+### 12.1 Decision: `/api/version` endpoint
+
+Shape per §7.2 above. Public (no auth). Stable contract from day one.
+
+### 12.2 Decision: app-side gates
+
+- App first-connect:
+  - If `server.api_versions` does not include the app's required version:
+    show "Please update your server" screen.
+  - If server returns `426 Upgrade Required`: show "Please update via
+    App Store" screen.
+- Min-server-version constant in EmeraldKit, bumped per app release.
+- Min-client-version constant in Hono `env.ts` (`MIN_CLIENT_VERSION`),
+  defaults to "0.0.0".
+
+### 12.3 Decision: `server_id` introduction
+
+- Generated on first boot: `INSERT INTO server_state(key, value) VALUES('server_id', <uuid_v4>)`.
+- Returned by `/api/version`.
+- Embedded in device tokens (§3.2). On token validation, server checks
+  `token.server_id == own server_id` → rejects tokens from another
+  server. (Edge case: user restored a backup from a different server
+  install. Honest 401, app re-pairs.)
+
+### 12.4 Decision: response when too old
+
+- Server too old for app: `426 { "required_version": "<min app version>", "current_version": "<server version>", "reason": "server_too_old_for_client" }`.
+- App too old for server: `426 { "required_version": "<min server version>", "current_version": "<app version>", "reason": "client_too_old_for_server" }`.
+
+---
+
+## 13. CI contract gates
+
+Required to ship before M2 starts.
+
+### 13.1 Test vectors
+
+- `tests/vectors/stream-token-canonical.json`: list of {claims_input,
+  canonical_bytes_hex, hmac_hex_with_test_key}. Asserted by Hono test
+  suite **and** Rust `emerald-contracts` integration test.
+- `tests/vectors/device-token-claims.json`: list of {claims, expected
+  shape conformance}. Asserted by Hono + Swift EmeraldKit test target
+  (when M2 starts).
+- `tests/vectors/sub-namespace.json`: list of {input, expected
+  parse output | rejection reason}. Asserted by Hono + Rust + Swift.
+
+### 13.2 Migration tests
+
+- Hono: existing migrator boot smoke test, extended to assert
+  `schema_migrations` table populated and checksums match.
+- Recommender: same for `exchange.db`.
+- **Skip-version test**: spin up empty DB, apply migrations 1→N
+  sequentially, assert schema matches a golden snapshot.
+  `tests/golden/iptv-schema-v<N>.sql` + `tests/golden/exchange-schema-v<N>.sql`.
+
+### 13.3 Reproducible no-IPTV build
+
+The "App Store insurance" build (strategy doc § App Store hardening)
+must build green from CI on every commit, not just at release time.
+- New `IPTV_DISABLED` compile flag in Hono (M1.5 work).
+- New CI job `build:no-iptv` that builds Hono with the flag, runs the
+  test suite, asserts no `/api/iptv/*` routes are mounted.
+- For M2 onward: Xcode build setting `IPTV_DISABLED=YES` strips the
+  IPTV browse tabs; same CI gate.
+
+### 13.4 ffmpeg sidecar version validation
+
+- `server/services/ffmpeg.ts` (M1.5 placeholder — does not exist yet)
+  exposes a `ffprobe -version` check at boot.
+- Boots fail loud if ffmpeg < 6.0 (HLS LL features) or missing entirely.
+- M4 transcoder boot extends this with encoder enumeration.
+
+### 13.5 Version-skew tests
+
+- Hono integration test: server vN, client claims vN+1 → 426.
+- Hono integration test: server vN, client claims vN-1 (compatible) → 200.
+- Run on every commit.
+
+---
+
+## 14. License decision [USER'S CALL]
+
+Captured here for the audit trail only. See
+`project_license_decision_pending` memory file for full trade-offs.
+
+**Status: undecided.** Must be made before any binary ships beyond the
+user's NAS. This contract document does not prescribe.
+
+**Decision impact downstream:**
+- §4 (internal auth boundary): A favours proprietary, B favours
+  open-source.
+- §13.3 (no-IPTV insurance build): only matters if you're distributing
+  binaries — License decision dictates that distribution model.
+
+---
+
+## 15. Telemetry posture [USER'S CALL]
+
+Strategy doc §11 proposed self-hosted Glitchtip as the default. This
+contract doc defers.
+
+**Decision needed:**
+- **Sentry SaaS**: best UX, $26/mo for Team plan; commits user metadata
+  to Sentry's privacy policy. Requires App Store privacy nutrition
+  labels listing "Crash Data" + "Diagnostics" + the Sentry processor.
+- **Self-hosted Glitchtip**: privacy-clean (data stays on the NAS), more
+  ops cost. Same App Store labels (still "Crash Data" + "Diagnostics"),
+  but the data processor disclosure is "us, the developer".
+- **Local-only**: log to file, no upload. Privacy-cleanest. Useless
+  for debugging crashes from users who can't share log bundles. App
+  Store labels: "Data Not Collected".
+
+**Decision impact downstream:**
+- Determines App Store privacy nutrition label content — required at
+  submission, not amendable per release without re-review.
+- Determines whether `emerald-contracts` exposes a `tracing` integration
+  shape.
+- Determines `/api/admin/diagnostics` (strategy doc §11) endpoint scope.
+
+---
+
+## 16. M1 deltas to apply before M2
+
+These are the breaking changes the contract requires, applied while M1
+is still the only consumer. Each is a small PR.
+
+| # | Delta | File(s) | Effort |
+|---|---|---|---|
+| D1 | Switch `signStreamToken` to canonical JSON (alphabetical-sorted keys, `v: 1`, renamed `k`/`rid`/short claims) | `server/services/iptvStreamToken.ts`, all call sites in `server/routes/iptv.ts` | 2-3h |
+| D2 | Introduce `STREAM_TOKEN_SECRET` env, fallback to `SESSION_SECRET` with warn log | `server/env.ts`, `iptvStreamToken.ts` | 1h |
+| D3 | Add `jti` to stream tokens + bloom-cache replay defence | `iptvStreamToken.ts`, new `server/services/tokenReplayCache.ts` | 4h |
+| D4 | Normalise `SessionKind` vs `StreamKind` enums; document mapping | `iptvConcurrency.ts`, `iptvStreamToken.ts` | 1h |
+| D5 | Add `server_id` generation at boot, store in `server_state` table | `server/migrations/0001_*.sql` (new general migration outside iptv), `server/index.ts` | 2h |
+| D6 | Implement `GET /api/version` per §7.2 / §12 | new `server/routes/version.ts` | 2h |
+| D7 | Identity namespace prefix migration + parser guard | new `server/migrations/iptv/0002_namespace_sub.sql`, `server/session.ts`, `server/middleware/auth.ts`, all sub-using code | 4h |
+| D8 | Add `schema_migrations` table convention everywhere it isn't (verify recommender + iptv migrators populate it) | `server/services/migrator.ts`, `recommender/app/db.py` (or wherever the Python migrator lives) | 3h |
+| D9 | Resolve recommender data-model contradiction per §9 user decision | varies | 1-3 days |
+| D10 | Add CI contract gates per §13 | `.github/workflows/*.yml`, new test files | 1 day |
+| D11 | Tombstone columns on `iptv_title_link` per §11.1 (only if §9 = A) | new migration, `iptvSync.ts`, `suggestions.ts` | 3h |
+
+**Total estimate:** ~1 week of work for D1–D8, +1-3 days for D9, +1 day
+for D10. The strategy doc's 1-2 week estimate holds.
+
+D1 + D2 + D7 are the deltas that **must** apply before any TestFlight
+build mints a device token. After that point, changing them forces
+re-pairs.
+
+---
+
+## 17. Rust `emerald-contracts` crate scope
+
+To be created when M2 kickoff is imminent (not now). Spec it here so
+M2 doesn't reinvent.
+
+**Contents:**
+- `stream_token` module: sign + verify with canonical-JSON serialiser
+  matching D1 byte-for-byte.
+- `device_token` module: only if §4 = Option B. JWE A256GCM via
+  `josekit` or `aes-gcm` crate.
+- `sub` module: `parse_sub`, `Sub` enum with `Plex(u64)` / `Local(Ulid)` /
+  `Apple(String)` variants. Same validation regex as TS.
+- `version` module: `/api/version` response DTO, `ApiVersion`,
+  `SchemaVersions` structs.
+- Test fixtures consumed by both Rust integration tests **and** Hono
+  via `tests/vectors/*.json` checked in alongside the crate.
+
+**Not in scope:**
+- ffmpeg invocations (lives in M4 transcoder crate).
+- HTTP routing (each service owns its own routing).
+- Database access (each service owns its own pool).
+
+---
+
+## 18. Sequencing summary
+
+1. User decides §4 (internal auth boundary), §9 (recommender data
+   model), §14 (LICENSE), §15 (telemetry). These four flip downstream
+   implementation choices.
+2. Apply D1–D8 (small, mechanical PRs).
+3. Apply D9 (data-model resolution).
+4. Apply D10 (CI gates) and D11 (tombstones, if §9 = A).
+5. M2 kickoff: spin up `theemeraldexchange-apple/` repo, scaffold
+   EmeraldKit, write Swift sides of test vectors before any production
+   code lands.
+
+**Done = green CI on contract gates, all four user decisions
+documented in this file, M1 still passing all M1 tests after deltas
+applied.**
+
+---
+
+## 19. Open items in this draft (review checklist)
+
+- [ ] §4: pick A or B. Annotate decision below this checklist.
+- [ ] §9: pick A, B, or C. Annotate below.
+- [ ] §14: LICENSE pick (GPL-3.0 / MIT / proprietary). Add `LICENSE` file in same PR.
+- [ ] §15: telemetry pick (Sentry / Glitchtip / local-only).
+- [ ] §3.2: ratify the device-token claim shape, or flag fields you'd cut.
+- [ ] §5.2: ratify the stream-token claim shape (especially the renamed
+      short keys — `k`, `rid` save bytes but reduce readability).
+- [ ] §5.6: ratify TTLs.
+- [ ] §6: ratify the playlist-token shape.
+- [ ] §16: ratify delta scope and ordering.
+
+Once all 8 are checked, this doc becomes the locked contract and M1.5
+implementation work starts.
