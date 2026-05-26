@@ -1,14 +1,19 @@
 import Database from 'better-sqlite3'
+import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { openDb } from './db.js'
+import { applyMigrations as runMigrations } from './migrator.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const MIGRATIONS_DIR = path.resolve(__dirname, '..', 'migrations', 'iptv')
 
 export interface IptvDb {
   raw: Database.Database
-  applyMigrations: () => void
+  /**
+   * Re-run the migrator. Safe to call multiple times (idempotent).
+   * Pass an open server.db handle to enable DESTRUCTIVE migration enforcement.
+   */
+  applyMigrations: (serverDb?: Database.Database) => void
   stmts: {
     upsertChannel: Database.Statement
     upsertVod: Database.Statement
@@ -27,8 +32,22 @@ export interface IptvDb {
   close: () => void
 }
 
-export function openIptvDb(filePath: string): IptvDb {
-  const { raw, applyMigrations, close } = openDb(MIGRATIONS_DIR, filePath, 'iptv')
+export function openIptvDb(filePath: string, serverDb?: Database.Database): IptvDb {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  const raw = new Database(filePath)
+  raw.pragma('journal_mode = WAL')
+  raw.pragma('foreign_keys = ON')
+
+  const applyMigrations = (overrideServerDb?: Database.Database): void => {
+    runMigrations({
+      migrationsDir: MIGRATIONS_DIR,
+      db: raw,
+      serverDb: overrideServerDb ?? serverDb,
+    })
+  }
+
+  // Apply at construction so callers can prepare statements immediately.
+  applyMigrations()
 
   const stmts = {
     upsertChannel: raw.prepare(`
@@ -120,5 +139,5 @@ export function openIptvDb(filePath: string): IptvDb {
     getSyncState: raw.prepare(`SELECT value, ts FROM iptv_sync_state WHERE key = ?`),
   }
 
-  return { raw, applyMigrations, stmts, close }
+  return { raw, applyMigrations, stmts, close: () => raw.close() }
 }
