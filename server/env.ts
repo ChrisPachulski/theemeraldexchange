@@ -343,6 +343,11 @@ export const env = {
   XTREAM_HOST: process.env.XTREAM_HOST ?? '',
   XTREAM_USERNAME: process.env.XTREAM_USERNAME ?? '',
   XTREAM_PASSWORD: process.env.XTREAM_PASSWORD ?? '',
+  // Path to the server identity / cross-cutting state DB. Must be
+  // bind-mounted in Docker — losing this on a container restart generates
+  // a new server_id and silently revokes all device tokens. Default
+  // matches the NAS data bind-mount used by iptv.db and other data files.
+  SERVER_DB_PATH: process.env.SERVER_DB_PATH ?? './data/server.db',
   IPTV_DB_PATH: process.env.IPTV_DB_PATH ?? './data/iptv.db',
   IPTV_EPG_PATH: opt('IPTV_EPG_PATH') ?? '/xmltv.php',
   IPTV_MAX_CONCURRENT_STREAMS: positiveInt('IPTV_MAX_CONCURRENT_STREAMS', 4),
