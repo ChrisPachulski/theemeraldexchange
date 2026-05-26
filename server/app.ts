@@ -23,6 +23,7 @@ import { suggestions } from './routes/suggestions.js'
 import { feedback } from './routes/feedback.js'
 import { usage } from './routes/usage.js'
 import { recommenderEvents } from './routes/recommenderEvents.js'
+import { telemetry } from './routes/telemetry.js'
 
 export const app = new Hono()
 
@@ -105,3 +106,7 @@ app.route('/api/usage', usage)
 // 'clicked' only) that the SPA fires when a user interacts with a
 // suggestion. Added/like/dislike/reject have their own paths above.
 app.route('/api/recommender', recommenderEvents)
+
+// §15 telemetry: DSN distribution endpoint. Apps fetch this at boot to
+// discover the self-hoster's Glitchtip DSN and initialize their Sentry SDK.
+app.route('/api/telemetry', telemetry)

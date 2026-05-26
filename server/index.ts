@@ -12,10 +12,12 @@
 // App wiring lives in ./app.ts so tests can mount the full router
 // without binding a port. This file only constructs the listener.
 
+import * as Sentry from '@sentry/node'
 import { serve } from '@hono/node-server'
 import { env } from './env.js'
 import { app } from './app.js'
 import { validateFfmpegOrExit } from './services/ffmpeg.js'
+import { piiBreadcrumbScrub, piiScrub } from './services/telemetryPiiScrub.js'
 import { registerIptvSchedule } from './services/iptvScheduler.js'
 import { closeIptvDb } from './services/iptvDbSingleton.js'
 import { ensureServerId, closeServerDb } from './services/serverDb.js'
@@ -26,6 +28,28 @@ try {
   validateFfmpegOrExit()
 } catch {
   process.exit(1)
+}
+
+// §15 Telemetry — Sentry-compatible SDK init pointing at the self-hoster's
+// Glitchtip instance. The DSN is distributed to client apps at boot via
+// GET /api/telemetry/config; the server itself also reports crashes here.
+if (env.EEX_TELEMETRY_DSN) {
+  Sentry.init({
+    dsn: env.EEX_TELEMETRY_DSN,
+    environment: env.isProd ? 'production' : 'staging',
+    release: env.EEX_RELEASE,
+    beforeSend: piiScrub,
+    beforeBreadcrumb: piiBreadcrumbScrub,
+    integrations: [
+      Sentry.onUnhandledRejectionIntegration({ mode: 'warn' }),
+    ],
+  })
+} else {
+  console.warn(
+    '[telemetry] EEX_TELEMETRY_DSN is not set. ' +
+      'Sentry SDK will not be initialized. ' +
+      'Telemetry is mandatory in production (§15.1).',
+  )
 }
 
 // D18 grace-window deadline guard.
