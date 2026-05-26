@@ -1,0 +1,174 @@
+{
+  "_meta": {
+    "format_version": 1,
+    "authored_from": "§5.1 (fixed-template canonical serializer) + §5.2 (claim shape) + §5.3 (kind enum) + RFC 8785 (minimal string escaping rules), cross-service-contract 2026-05-25",
+    "author": "ChrisPachulski",
+    "date": "2026-05-25",
+    "reviewed_by": "ChrisPachulski",
+    "test_key_hex": "544553545f5345435245545f33325f43484152535f46495845445f56414c55455f58",
+    "notes": [
+      "Byte template (§5.1): {\"exp\":<int>,\"iat\":<int>,\"jti\":\"<26-char ULID>\",\"k\":\"<kind>\",\"nbf\":<int>,\"rid\":\"<resourceId>\",\"sub\":\"<sub>\",\"v\":1}",
+      "Key order is alphabetical: exp, iat, jti, k, nbf, rid, sub, v. No whitespace. UTF-8 output.",
+      "Integers: bare decimal, no leading zeros, no decimal point, no exponent.",
+      "Strings: minimal JSON escaping only (double-quote, backslash, \\n \\r \\t \\b \\f, \\uXXXX for U+0000–U+001F). No other escaping.",
+      "HMAC: HMAC-SHA256 over canonical UTF-8 bytes using the fixed test secret.",
+      "expectedHmacSecret length: 34 bytes (TEST_SECRET_32_CHARS_FIXED_VALUE_X).",
+      "jti values are 26-char Crockford Base32 ULIDs (charset: 0-9 A-H J K M N P-T V-Z — no I, L, O, U).",
+      "These vectors are the ground truth for TS (D1), Rust (M2+), and Swift (M2+). No implementation is the authority — the spec is.",
+      "Catchup rid format per §5.2: streamId|startUtc|durationMin (pipe is not a JSON special char; no escaping needed).",
+      "playlist-90d uses a valid SIWA apple sub per §8.3 pattern: [0-9]{6}\\.[0-9a-f]{32}\\.[0-9]{4}.",
+      "series-basic uses a local sub per §8.3 pattern: local:[0-9A-HJKMNP-TV-Z]{26} (uppercase Crockford Base32 ULID).",
+      "vod-basic sub is plex:0 — tests the edge case where plex id is exactly zero (valid per §8.3: plex:(0|[1-9][0-9]*))."
+    ]
+  },
+  "vectors": [
+    {
+      "name": "live-basic",
+      "description": "Live stream token, plex sub, standard 24h TTL. Tests basic k=live path.",
+      "payload": {
+        "v": 1,
+        "k": "live",
+        "rid": "ch-101",
+        "sub": "plex:12345",
+        "exp": 1748256000,
+        "iat": 1748169600,
+        "nbf": 1748169600,
+        "jti": "01HWXYZ01234567890ABCDEFGH"
+      },
+      "expectedCanonicalBytes": "7b22657870223a313734383235363030302c22696174223a313734383136393630302c226a7469223a223031485758595a30313233343536373839304142434445464748222c226b223a226c697665222c226e6266223a313734383136393630302c22726964223a2263682d313031222c22737562223a22706c65783a3132333435222c2276223a317d",
+      "expectedCanonicalString": "{\"exp\":1748256000,\"iat\":1748169600,\"jti\":\"01HWXYZ01234567890ABCDEFGH\",\"k\":\"live\",\"nbf\":1748169600,\"rid\":\"ch-101\",\"sub\":\"plex:12345\",\"v\":1}",
+      "expectedHmacSecret": "TEST_SECRET_32_CHARS_FIXED_VALUE_X",
+      "expectedHmacHex": "4b0b2e5892535269eddb6a080143edaae77ca3227572f4406221ab4c2eb1ec1f"
+    },
+    {
+      "name": "vod-basic",
+      "description": "VOD token, plex sub id=0 (edge case: single zero is valid per §8.3). Tests plex:0 — the only valid single-digit form.",
+      "payload": {
+        "v": 1,
+        "k": "vod",
+        "rid": "v-9876",
+        "sub": "plex:0",
+        "exp": 1748256600,
+        "iat": 1748170200,
+        "nbf": 1748170200,
+        "jti": "01HWXYZ01234567890ABCDEFGJ"
+      },
+      "expectedCanonicalBytes": "7b22657870223a313734383235363630302c22696174223a313734383137303230302c226a7469223a223031485758595a3031323334353637383930414243444546474a222c226b223a22766f64222c226e6266223a313734383137303230302c22726964223a22762d39383736222c22737562223a22706c65783a30222c2276223a317d",
+      "expectedCanonicalString": "{\"exp\":1748256600,\"iat\":1748170200,\"jti\":\"01HWXYZ01234567890ABCDEFGJ\",\"k\":\"vod\",\"nbf\":1748170200,\"rid\":\"v-9876\",\"sub\":\"plex:0\",\"v\":1}",
+      "expectedHmacSecret": "TEST_SECRET_32_CHARS_FIXED_VALUE_X",
+      "expectedHmacHex": "148b194c44ce8b57186b0e6ac3fdcd3f78f1f5abea62368d967fde596b177cd9"
+    },
+    {
+      "name": "series-basic",
+      "description": "Series token, local sub (Crockford Base32 ULID). Tests local: namespace and uppercase ULID in canonical bytes.",
+      "payload": {
+        "v": 1,
+        "k": "series",
+        "rid": "s-555",
+        "sub": "local:01HABCDEFGHJKMNPQRSTVWXYZ0",
+        "exp": 1748257200,
+        "iat": 1748170800,
+        "nbf": 1748170800,
+        "jti": "01HWXYZ01234567890ABCDEFGK"
+      },
+      "expectedCanonicalBytes": "7b22657870223a313734383235373230302c22696174223a313734383137303830302c226a7469223a223031485758595a3031323334353637383930414243444546474b222c226b223a22736572696573222c226e6266223a313734383137303830302c22726964223a22732d353535222c22737562223a226c6f63616c3a30314841424344454647484a4b4d4e5051525354565758595a30222c2276223a317d",
+      "expectedCanonicalString": "{\"exp\":1748257200,\"iat\":1748170800,\"jti\":\"01HWXYZ01234567890ABCDEFGK\",\"k\":\"series\",\"nbf\":1748170800,\"rid\":\"s-555\",\"sub\":\"local:01HABCDEFGHJKMNPQRSTVWXYZ0\",\"v\":1}",
+      "expectedHmacSecret": "TEST_SECRET_32_CHARS_FIXED_VALUE_X",
+      "expectedHmacHex": "6b88020e4a1bc2c9563d795dda175d8caac8e27370015f8bcc99e139213d5b4c"
+    },
+    {
+      "name": "catchup-pipe-rid",
+      "description": "Catchup token, rid encodes streamId|startUtc|durationMin per §5.2. Pipe (U+007C) is not a JSON special char — no escaping. Tests multi-segment rid field.",
+      "payload": {
+        "v": 1,
+        "k": "catchup",
+        "rid": "ch-202|1748160000|60",
+        "sub": "plex:9999999",
+        "exp": 1748258000,
+        "iat": 1748171600,
+        "nbf": 1748171600,
+        "jti": "01HWXYZ01234567890ABCDEFGM"
+      },
+      "expectedCanonicalBytes": "7b22657870223a313734383235383030302c22696174223a313734383137313630302c226a7469223a223031485758595a3031323334353637383930414243444546474d222c226b223a2263617463687570222c226e6266223a313734383137313630302c22726964223a2263682d3230327c313734383136303030307c3630222c22737562223a22706c65783a39393939393939222c2276223a317d",
+      "expectedCanonicalString": "{\"exp\":1748258000,\"iat\":1748171600,\"jti\":\"01HWXYZ01234567890ABCDEFGM\",\"k\":\"catchup\",\"nbf\":1748171600,\"rid\":\"ch-202|1748160000|60\",\"sub\":\"plex:9999999\",\"v\":1}",
+      "expectedHmacSecret": "TEST_SECRET_32_CHARS_FIXED_VALUE_X",
+      "expectedHmacHex": "4801216c04bbbdd3b8a0736efdf0f58d4eff759491bc22adaf2a6eb05577c070"
+    },
+    {
+      "name": "segment-short-ttl",
+      "description": "Segment token, short 30-second TTL (exp = iat + 30). Tests near-boundary integer serialization and k=segment (token-only kind per §5.3).",
+      "payload": {
+        "v": 1,
+        "k": "segment",
+        "rid": "seg-abc123",
+        "sub": "plex:12345",
+        "exp": 1748169630,
+        "iat": 1748169600,
+        "nbf": 1748169600,
+        "jti": "01HWXYZ01234567890ABCDEFGN"
+      },
+      "expectedCanonicalBytes": "7b22657870223a313734383136393633302c22696174223a313734383136393630302c226a7469223a223031485758595a3031323334353637383930414243444546474e222c226b223a227365676d656e74222c226e6266223a313734383136393630302c22726964223a227365672d616263313233222c22737562223a22706c65783a3132333435222c2276223a317d",
+      "expectedCanonicalString": "{\"exp\":1748169630,\"iat\":1748169600,\"jti\":\"01HWXYZ01234567890ABCDEFGN\",\"k\":\"segment\",\"nbf\":1748169600,\"rid\":\"seg-abc123\",\"sub\":\"plex:12345\",\"v\":1}",
+      "expectedHmacSecret": "TEST_SECRET_32_CHARS_FIXED_VALUE_X",
+      "expectedHmacHex": "a78194777dbdbd3c90cfe0b4e9daf223d8bbff8c23f0551af5fe3f5f053b7259"
+    },
+    {
+      "name": "playlist-90d",
+      "description": "Playlist token, 90-day TTL (exp = iat + 7776000). Apple SIWA sub per §8.3 pattern: [0-9]{6}.[0-9a-f]{32}.[0-9]{4}. Dot in sub is NOT a JSON special char — no escaping. k=playlist is token-only per §5.3.",
+      "payload": {
+        "v": 1,
+        "k": "playlist",
+        "rid": "pl-ext-001",
+        "sub": "apple:001126.d3c6971f4faa4ccd80027e3654fa404a.1616",
+        "exp": 1755945600,
+        "iat": 1748169600,
+        "nbf": 1748169600,
+        "jti": "01HWXYZ01234567890ABCDEFGP"
+      },
+      "expectedCanonicalBytes": "7b22657870223a313735353934353630302c22696174223a313734383136393630302c226a7469223a223031485758595a30313233343536373839304142434445464750222c226b223a22706c61796c697374222c226e6266223a313734383136393630302c22726964223a22706c2d6578742d303031222c22737562223a226170706c653a3030313132362e64336336393731663466616134636364383030323765333635346661343034612e31363136222c2276223a317d",
+      "expectedCanonicalString": "{\"exp\":1755945600,\"iat\":1748169600,\"jti\":\"01HWXYZ01234567890ABCDEFGP\",\"k\":\"playlist\",\"nbf\":1748169600,\"rid\":\"pl-ext-001\",\"sub\":\"apple:001126.d3c6971f4faa4ccd80027e3654fa404a.1616\",\"v\":1}",
+      "expectedHmacSecret": "TEST_SECRET_32_CHARS_FIXED_VALUE_X",
+      "expectedHmacHex": "be3ccb55b1f114f06913107f819d7afc9f21230225f33e64be7dc6ff4e52b469"
+    },
+    {
+      "name": "remux-basic",
+      "description": "Remux token. k=remux is dual-membership per §5.3: valid stream-token kind AND concurrency-tracker kind. Tests the dual-membership path.",
+      "payload": {
+        "v": 1,
+        "k": "remux",
+        "rid": "rmx-7777",
+        "sub": "plex:54321",
+        "exp": 1748170200,
+        "iat": 1748169600,
+        "nbf": 1748169600,
+        "jti": "01HWXYZ01234567890ABCDEFGQ"
+      },
+      "expectedCanonicalBytes": "7b22657870223a313734383137303230302c22696174223a313734383136393630302c226a7469223a223031485758595a30313233343536373839304142434445464751222c226b223a2272656d7578222c226e6266223a313734383136393630302c22726964223a22726d782d37373737222c22737562223a22706c65783a3534333231222c2276223a317d",
+      "expectedCanonicalString": "{\"exp\":1748170200,\"iat\":1748169600,\"jti\":\"01HWXYZ01234567890ABCDEFGQ\",\"k\":\"remux\",\"nbf\":1748169600,\"rid\":\"rmx-7777\",\"sub\":\"plex:54321\",\"v\":1}",
+      "expectedHmacSecret": "TEST_SECRET_32_CHARS_FIXED_VALUE_X",
+      "expectedHmacHex": "240a8015acc13bc7a1575b9dc5dcf2ad8cd22077f270dc93b6892634e737f666"
+    },
+    {
+      "name": "nbf-future-reject",
+      "description": "Token where nbf is 31 seconds after the reference 'now' (1748169600). The §5.7 clock-skew gate allows ≤30s; this exceeds it by 1s. Verifier MUST reject with nbf_not_yet regardless of other valid claims. The canonical bytes and HMAC are included so implementations can confirm the serializer is still correct before asserting the rejection path.",
+      "validationNote": "expected: REJECTED. Rejection reason: nbf_not_yet (nbf=1748169631 > now+30s at now=1748169600). Do NOT use this vector to test the serializer path — use the other 7 vectors for that. This vector tests only the nbf clock-skew gate.",
+      "payload": {
+        "v": 1,
+        "k": "live",
+        "rid": "ch-101",
+        "sub": "plex:12345",
+        "exp": 1748256000,
+        "iat": 1748169600,
+        "nbf": 1748169631,
+        "jti": "01HWXYZ01234567890ABCDEFGR"
+      },
+      "referenceNow": 1748169600,
+      "expectedResult": "rejected",
+      "expectedErrorCode": "nbf_not_yet",
+      "expectedCanonicalBytes": "7b22657870223a313734383235363030302c22696174223a313734383136393630302c226a7469223a223031485758595a30313233343536373839304142434445464752222c226b223a226c697665222c226e6266223a313734383136393633312c22726964223a2263682d313031222c22737562223a22706c65783a3132333435222c2276223a317d",
+      "expectedCanonicalString": "{\"exp\":1748256000,\"iat\":1748169600,\"jti\":\"01HWXYZ01234567890ABCDEFGR\",\"k\":\"live\",\"nbf\":1748169631,\"rid\":\"ch-101\",\"sub\":\"plex:12345\",\"v\":1}",
+      "expectedHmacSecret": "TEST_SECRET_32_CHARS_FIXED_VALUE_X",
+      "expectedHmacHex": "06ea9e8cc19cd54f39c1e0e54b330be36e9c265e2081294a1eb6b723223ff13a"
+    }
+  ]
+}
