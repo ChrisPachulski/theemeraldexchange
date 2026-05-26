@@ -16,7 +16,7 @@ strategic choices about distribution, language, and what's web-only.
 
 | # | Decision | Why |
 |---|---|---|
-| A | **Two-product split.** "Personal Media Server" goes to public App Store; IPTV viewer stays TestFlight-only. | Apple App Store policy bars apps that stream gray-market IPTV. Self-hosted personal media (own files) passes review easily. |
+| A | **One product, one App Store submission.** A single unified app talks to the user's self-hosted server. IPTV is one of several content sources the *server* exposes — the app itself is a thin client that doesn't know or care what mybunny is. | Same shape as Plex's iOS app: user connects their own server, server happens to integrate with HDHomeRun / IPTV providers / personal files. Apps in that shape have passed Apple review (TiviMate, GSE Smart IPTV, Plex itself). |
 | B | **Rust beachhead at M3.** New services (M3 media-core, M4 transcoder) ship in Rust. M1 Hono backend stays in TypeScript. | Single static binary distribution. Memory safety for 24/7 home server. No throwaway rewrite of working IPTV code. |
 | C | **Self-hosted only.** Never multi-tenant SaaS. | Same model as Plex. Avoids licensing, hosting, scaling, and most legal exposure. |
 | D | **Web SPA is permanent second-class.** | Browser can't beat AVPlayer for media. That's a property of browsers, not our architecture. |
@@ -95,27 +95,50 @@ Native apps consume the same backend APIs the web does:
 
 ### 5. App Store policy hardening
 
-Required before any public submission:
+Required before submission:
 
-- **Apple Sign-In offered** when any third-party sign-in is offered. Required.
-- **Privacy nutrition labels** must declare what's collected. For self-hosted,
-  the answer is "nothing" — easy.
-- **App Tracking Transparency** prompt — only needed if we track for ads. We
-  don't, so skip.
-- **No IPTV / streaming-content features in the public build.** Build the
-  IPTV side behind a compile flag. Public build excludes it.
-- **Demo server for reviewer.** Apple reviewers need a working backend to test
-  against. Operate a small TestFlight-only NAS endpoint with sample content,
-  give reviewer credentials in the submission notes.
-- **Notarization** for any macOS server binary distributed outside the App Store.
+- **Apple Sign-In offered** if any third-party sign-in is offered. Required
+  by Apple policy since 2020.
+- **Privacy nutrition labels** must declare what's collected. For a thin
+  client talking to the user's own server, the answer is "nothing" — easy.
+- **App Tracking Transparency** prompt — only needed if we track for ads.
+  We don't, so skip.
+- **Demo server for reviewer.** Apple reviewers need a working backend to
+  test against. Operate a small reviewer-only endpoint pre-loaded with
+  Creative Commons or freely licensed content (Big Buck Bunny, Sintel,
+  some public-domain TV) — give reviewer credentials in the submission
+  notes. Do NOT point the reviewer at a server with mybunny channel
+  listings (see residual risk below).
+- **Marketing screenshots show personal library + features**, not branded
+  channel listings. Don't put "HBO", "ESPN", or any other rights-holder
+  logos in App Store screenshots.
+- **App description names features generically**: "play your media,
+  connect IPTV M3U / Xtream providers, transcode on the fly". Don't name
+  specific providers.
+- **Notarization** for any macOS server binary distributed outside the
+  App Store (Apple Gatekeeper requirement).
+
+**Residual risk to be honest about:**
+
+Apple's review of IPTV-capable apps has been inconsistent over the years.
+Some apps ship and stay (TiviMate, GSE Smart IPTV); some get pulled after
+launch (IPTV Smarters Pro was removed and reinstated multiple times). The
+delta is whether the app bundles channel lists vs accepts user-provided
+sources. We're squarely in the "user-provided" camp (credentials are on
+the user's server, not in the app), which is the safer position. But
+there's no guarantee — Apple could decide on review day to flag the IPTV
+feature regardless. **Mitigation**: have a v0 ready that builds without
+the IPTV route registered, so if rejection happens, we can resubmit the
+personal-media-only build the same day. The compile flag isn't a strategy
+shift — it's an insurance policy.
 
 ### 6. Distribution matrix
 
-| Audience | Channel | Build contents | Apple Dev fee |
+| Audience | Channel | What ships | Apple Dev fee |
 |---|---|---|---|
-| Household + invited testers | TestFlight (internal + external) | Full app: IPTV + Plex remote + future personal media | $99/yr |
-| Public end users | App Store | Personal media server companion only — no IPTV | $99/yr |
-| Self-hosted server (Rust binary) | Direct download (Github releases / your own site) | Single static binary per OS/arch | None |
+| Pre-launch household + invited testers | TestFlight (internal + external) | Unified app pointed at your NAS | $99/yr |
+| Public end users | App Store | Same unified app, points at user's own server | $99/yr |
+| Self-hosted server (Rust binary) | Direct download (Github releases / your own site) | Single static binary per OS / arch | None |
 
 ### 7. The Rust pivot: where, when, what
 
@@ -123,7 +146,7 @@ Required before any public submission:
 
 | Service | Language | Reason |
 |---|---|---|
-| Hono backend (M1, IPTV) | TypeScript | Working, IPTV is TestFlight-only anyway, don't rewrite |
+| Hono backend (M1, IPTV) | TypeScript | Working code; rewriting it in Rust adds zero user-visible value and burns 4-6 weeks |
 | Recommender | Python / FastAPI | ML ecosystem, sentence-transformers, etc. Stays Python. |
 | media-core (M3) | **Rust** | New service. Single static binary. axum + tokio + sqlx + notify + ffmpeg-next |
 | transcoder (M4) | **Rust** | Long-running 24/7 process, CPU-bound, perf-sensitive. tokio::process for ffmpeg subprocess management |
@@ -134,8 +157,11 @@ Required before any public submission:
 unless and until the value becomes obvious post-M5.
 
 **Why not rewrite M1?** Hono / Node IPTV server works. Rewriting it costs 4-6
-weeks for zero user-visible value. The IPTV side is TestFlight-only anyway, so
-the "single static binary for App Store distribution" argument doesn't apply.
+weeks for zero user-visible value. The single-binary argument applies to the
+server you ship to *end users for self-hosting* — and that's M3 + M4 (media
+library + transcoder). The IPTV plumbing keeps running on whatever host the
+operator already has Docker on; it doesn't need to be a single binary for the
+user to install.
 
 **Why Rust specifically and not Go?** Both ship single static binaries. Rust
 wins for:
@@ -168,11 +194,11 @@ Right-size `MAX_CONCURRENT_TRANSCODES` based on observed numbers, not estimates.
 
 | Phase | Scope | Output |
 |---|---|---|
-| M2 | Swift SDK + EmeraldTV + EmeraldMobile, IPTV-only feature set, TestFlight pipeline | TestFlight build distributed to household |
+| M2 | Swift SDK + EmeraldTV + EmeraldMobile, IPTV catalog as first content source, TestFlight pipeline | TestFlight build distributed to household |
 | M3 | Rust media-core (scanner, library APIs, watch state) | Single binary, dockerized for the NAS |
 | M4 | Rust transcoder + capability matching | Direct-play and transcode both work; stress-tested |
 | M5 | Native apps add Personal Media Server browse + playback | Native apps now self-sufficient (no Plex needed for personal media) |
-| M5.5 | App Store public submission of "Personal Media Server" build (IPTV excluded via compile flag) | First public app shipped |
+| M5.5 | App Store submission of the unified app | First public app shipped. IPTV compile-flag insurance build ready alongside in case review flags |
 | M6 | Plex-Pass features (DVR for IPTV, intro detection, music, photos) | Selected from the menu in the existing roadmap |
 
 **Hard sequencing constraints:**

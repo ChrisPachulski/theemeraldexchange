@@ -2,10 +2,11 @@
 
 > **Strategic update 2026-05-25** — see
 > [`2026-05-25-apple-multiplatform-and-rust-pivot.md`](./2026-05-25-apple-multiplatform-and-rust-pivot.md)
-> for refinements that **override** parts of this document: the two-product
-> split (IPTV TestFlight-only vs Personal Media Server on the App Store),
-> the Rust pivot for M3 + M4, and refined Apple multi-platform delivery
-> strategy. Read both. Where they disagree, the newer doc wins.
+> for refinements that **override** parts of this document:
+> one unified app published to the App Store (IPTV is one of several
+> server-side content sources, not a separate product), the Rust pivot
+> for M3 + M4, and refined Apple multi-platform delivery strategy.
+> Read both. Where they disagree, the newer doc wins.
 
 ## Context
 
