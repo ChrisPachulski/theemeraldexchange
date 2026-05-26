@@ -1,5 +1,12 @@
 # mybunny.tv Integration + Plex Replacement Roadmap
 
+> **Strategic update 2026-05-25** — see
+> [`2026-05-25-apple-multiplatform-and-rust-pivot.md`](./2026-05-25-apple-multiplatform-and-rust-pivot.md)
+> for refinements that **override** parts of this document: the two-product
+> split (IPTV TestFlight-only vs Personal Media Server on the App Store),
+> the Rust pivot for M3 + M4, and refined Apple multi-platform delivery
+> strategy. Read both. Where they disagree, the newer doc wins.
+
 ## Context
 
 mybunny.tv is the user's IPTV service — a reseller exposing the standard Xtream Codes API (~41k live channels, ~10k VOD, ~31k series with FHD/HD/SD streams + 7-day EPG). The user finds mybunny.tv's own web interface unusable. They want to "utterly replace" it by consuming mybunny's Xtream credentials inside `theemeraldexchange` (their existing self-hosted media dashboard) and, beyond that, replace Plex's *media server* (not its auth) with a self-hosted alternative.
