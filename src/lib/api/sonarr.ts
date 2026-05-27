@@ -12,14 +12,28 @@ async function get<T>(path: string, params?: Record<string, string | number | bo
 }
 
 async function post<T, B>(path: string, body: B): Promise<T> {
-  const res = await fetch(apiUrl(`${BASE}${path}`), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify(body),
-  })
-  if (!res.ok) await throwApiError(res, `Sonarr ${path}`)
-  return res.json() as Promise<T>
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 60_000)
+  try {
+    const res = await fetch(apiUrl(`${BASE}${path}`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    })
+    if (!res.ok) await throwApiError(res, `Sonarr ${path}`)
+    return res.json() as Promise<T>
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error(
+        `Sonarr ${path}: request timed out after 60s — the server is taking too long. Check Sonarr is reachable from the dashboard server.`,
+      )
+    }
+    throw err
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 async function del(path: string, params?: Record<string, string | number | boolean>): Promise<void> {

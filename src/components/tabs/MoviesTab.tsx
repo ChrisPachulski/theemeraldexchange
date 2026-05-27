@@ -414,6 +414,7 @@ export function MoviesTab() {
         movie={adding}
         onClose={() => setAdding(null)}
         onAdded={(title) => setToast(`${title} added to library`)}
+        onError={(msg) => setToast(msg)}
       />
 
       <DetailModal

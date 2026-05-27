@@ -360,9 +360,20 @@ type SonarrAddBody = {
   [key: string]: unknown
 }
 
+function normalizePath(p: string): string {
+  return p.replace(/[\\/]+$/, '').toLowerCase()
+}
+
 async function materializeNonAdminSeriesBody(raw: SonarrAddBody): Promise<
   | { ok: true; body: SonarrAddBody }
-  | { ok: false; reason: string; expected_name?: string; available_names?: string[] }
+  | {
+      ok: false
+      reason: string
+      expected_name?: string
+      available_names?: string[]
+      expected_path?: string
+      available_paths?: string[]
+    }
 > {
   // Profile selection prefers env.defaultProfileName (defaults to
   // "choose me" to mirror the frontend modal). For TV this matters
@@ -384,13 +395,15 @@ async function materializeNonAdminSeriesBody(raw: SonarrAddBody): Promise<
   const profiles = (await profileRes.json()) as Array<{ id: number; name?: string }>
   const folders = foldersResult.folders
   const folder = env.defaultSonarrRootFolderPath
-    ? folders.find((f) => f.path === env.defaultSonarrRootFolderPath)
+    ? folders.find((f) => normalizePath(f.path) === normalizePath(env.defaultSonarrRootFolderPath))
     : folders[0]
-  const namedProfile = profiles.find((p) => p.name?.toLowerCase() === env.defaultProfileName)
+  const namedProfile = profiles.find((p) => p.name?.trim().toLowerCase() === env.defaultProfileName)
   if (!folder) {
     return {
       ok: false,
       reason: env.defaultSonarrRootFolderPath ? 'default_root_folder_missing' : 'admin_must_configure_upstream',
+      expected_path: env.defaultSonarrRootFolderPath,
+      available_paths: folders.map((f) => f.path),
     }
   }
   if (!namedProfile) {
@@ -464,6 +477,8 @@ sonarr.post('/api/v3/series', async (c) => {
       const payload: Record<string, unknown> = { error: materialized.reason }
       if (materialized.expected_name) payload.expected_name = materialized.expected_name
       if (materialized.available_names) payload.available_names = materialized.available_names
+      if (materialized.expected_path) payload.expected_path = materialized.expected_path
+      if (materialized.available_paths) payload.available_paths = materialized.available_paths
       return c.json(payload, 503)
     }
     body = materialized.body

@@ -25,9 +25,10 @@ type Props = {
   series: SeriesSearchResult | null
   onClose: () => void
   onAdded?: (title: string) => void
+  onError?: (message: string) => void
 }
 
-export function AddSeriesModal({ series, onClose, onAdded }: Props) {
+export function AddSeriesModal({ series, onClose, onAdded, onError }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const profiles = useSonarrProfiles()
   const folders = useSonarrRootFolders()
@@ -143,7 +144,11 @@ export function AddSeriesModal({ series, onClose, onAdded }: Props) {
             onAdded?.(series.title)
             onClose()
           },
-          onError: (e) => setError(e instanceof Error ? e.message : String(e)),
+          onError: (e) => {
+            const msg = e instanceof Error ? e.message : String(e)
+            setError(msg)
+            onError?.(msg)
+          },
         },
       )
       return

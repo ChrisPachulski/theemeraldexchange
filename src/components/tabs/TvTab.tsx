@@ -415,6 +415,7 @@ export function TvTab() {
         series={adding}
         onClose={() => setAdding(null)}
         onAdded={(title) => setToast(`${title} added to library`)}
+        onError={(msg) => setToast(msg)}
       />
 
       <DetailModal
