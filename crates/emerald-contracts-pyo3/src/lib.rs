@@ -150,6 +150,55 @@ fn internal_principal_enforce_time_window(exp: i64, now_secs: i64) -> PyResult<(
     Ok(())
 }
 
+/// Encrypt a claim set into an internal-principal JWE. Mirrors the napi
+/// `internalPrincipalEncrypt` surface so PyO3-side tests can round-trip
+/// mint + verify; Hono is the only normal producer in prod.
+///
+/// `claims` is a dict with the same snake_case keys returned by
+/// `internal_principal_decrypt`: iss, sub, role, auth_mode, server_id,
+/// device_id (Optional[str], pass None or omit), req_id, iat, exp.
+#[pyfunction]
+fn internal_principal_encrypt(
+    key: &[u8],
+    kid: &str,
+    claims: &Bound<'_, PyDict>,
+) -> PyResult<String> {
+    let arr: [u8; 32] = key
+        .try_into()
+        .map_err(|_| PyValueError::new_err("internal-principal key must be 32 bytes"))?;
+
+    fn get_str(d: &Bound<'_, PyDict>, key: &str) -> PyResult<String> {
+        d.get_item(key)?
+            .ok_or_else(|| PyKeyError::new_err(format!("missing claim: {}", key)))?
+            .extract()
+    }
+    fn get_i64(d: &Bound<'_, PyDict>, key: &str) -> PyResult<i64> {
+        d.get_item(key)?
+            .ok_or_else(|| PyKeyError::new_err(format!("missing claim: {}", key)))?
+            .extract()
+    }
+    fn get_opt_str(d: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<String>> {
+        match d.get_item(key)? {
+            None => Ok(None),
+            Some(v) if v.is_none() => Ok(None),
+            Some(v) => Ok(Some(v.extract()?)),
+        }
+    }
+
+    let claims_rust = internal_principal::InternalClaims {
+        iss: get_str(claims, "iss")?,
+        sub: get_str(claims, "sub")?,
+        role: get_str(claims, "role")?,
+        auth_mode: get_str(claims, "auth_mode")?,
+        server_id: get_str(claims, "server_id")?,
+        device_id: get_opt_str(claims, "device_id")?,
+        req_id: get_str(claims, "req_id")?,
+        iat: get_i64(claims, "iat")?,
+        exp: get_i64(claims, "exp")?,
+    };
+    Ok(internal_principal::encrypt(&arr, kid, &claims_rust))
+}
+
 // ---------------------------------------------------------------------------
 // Module init
 // ---------------------------------------------------------------------------
@@ -162,6 +211,7 @@ fn emerald_contracts(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse_sub, m)?)?;
     m.add_function(wrap_pyfunction!(pii_scrub_keys, m)?)?;
     m.add_function(wrap_pyfunction!(pii_scrub_value, m)?)?;
+    m.add_function(wrap_pyfunction!(internal_principal_encrypt, m)?)?;
     m.add_function(wrap_pyfunction!(internal_principal_decrypt, m)?)?;
     m.add_function(wrap_pyfunction!(internal_principal_enforce_time_window, m)?)?;
     Ok(())

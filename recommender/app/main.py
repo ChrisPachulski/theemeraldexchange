@@ -22,6 +22,7 @@ from .config import CONFIG
 from .context import load_user_context, select_model_config_for_context
 from .db import connect, migrate, transaction
 from . import recipes
+from .internal_principal import InternalPrincipal, internal_principal_dep
 from .schemas import (
     ClearFeedbackRequest,
     FeedbackEventRequest,
@@ -138,6 +139,7 @@ def health(conn: sqlite3.Connection = Depends(get_db)) -> HealthResponse:
 def score(
     req: ScoreRequest,
     _auth: None = Depends(require_event_secret),
+    _principal: InternalPrincipal | None = Depends(internal_principal_dep),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> ScoreResponse:
     t0 = time.perf_counter()
@@ -171,6 +173,7 @@ def score(
 def post_feedback(
     ev: FeedbackEventRequest,
     _auth: None = Depends(require_event_secret),
+    _principal: InternalPrincipal | None = Depends(internal_principal_dep),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, bool]:
     now = _utc_now_iso()
@@ -268,6 +271,7 @@ def post_feedback(
 def post_library_sync(
     payload: LibrarySyncRequest,
     _auth: None = Depends(require_event_secret),
+    _principal: InternalPrincipal | None = Depends(internal_principal_dep),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, int]:
     """Bulk-replace the library snapshot for one kind.
@@ -302,6 +306,7 @@ def post_library_sync(
 def post_shown(
     payload: ShownEventRequest,
     _auth: None = Depends(require_event_secret),
+    _principal: InternalPrincipal | None = Depends(internal_principal_dep),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, int]:
     """Bulk-record items as 'recently shown' for a user.
@@ -341,6 +346,7 @@ def post_shown(
 def post_impressions(
     payload: ImpressionEventRequest,
     _auth: None = Depends(require_event_secret),
+    _principal: InternalPrincipal | None = Depends(internal_principal_dep),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, int]:
     if len(payload.items) > 200:
@@ -383,6 +389,7 @@ def post_impressions(
 def post_rejection(
     payload: RejectionEventRequest,
     _auth: None = Depends(require_event_secret),
+    _principal: InternalPrincipal | None = Depends(internal_principal_dep),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, bool]:
     with transaction(conn):
@@ -398,6 +405,7 @@ def post_rejection(
 def clear_feedback(
     payload: ClearFeedbackRequest,
     _auth: None = Depends(require_event_secret),
+    _principal: InternalPrincipal | None = Depends(internal_principal_dep),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, bool]:
     signal_to_outcome = {
@@ -430,6 +438,7 @@ def clear_feedback(
 def clear_rejection(
     payload: RejectionEventRequest,
     _auth: None = Depends(require_event_secret),
+    _principal: InternalPrincipal | None = Depends(internal_principal_dep),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, bool]:
     # Mirror of /events/rejection but removing instead of inserting.
