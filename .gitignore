@@ -47,3 +47,6 @@ data/
 
 # iptv sqlite + remux tmpdirs
 /tmp/iptv-remux/
+
+# Rust workspace build artifacts (emerald-contracts crate)
+/target/

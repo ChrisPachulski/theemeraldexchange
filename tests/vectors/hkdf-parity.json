@@ -1,0 +1,73 @@
+{
+  "_meta": {
+    "format_version": 1,
+    "authored_from": "§3.3 (HKDF-Extract+Expand per RFC 5869) + keyDerivation.ts INFO_* constants",
+    "author": "ChrisPachulski",
+    "date": "2026-05-27",
+    "reviewed_by": "ambitions-audit synthesis (Step 4: emerald-contracts crate)",
+    "purpose": "Cross-language byte-equality proof for HKDF-SHA256 with zero-length salt, 32-byte OKM. The single sentence in keyDerivation.ts claiming 'Rust b\"eex/session/v1\" produces identical bytes' is otherwise unverifiable; this vector locks the equivalence."
+  },
+  "algorithm": {
+    "name": "HKDF",
+    "hash": "SHA-256",
+    "salt": "",
+    "salt_note": "Zero-length salt per RFC 5869 §2.2. Node: hkdfSync('sha256', ikm, '', info, 32). Rust hkdf crate: Hkdf::<Sha256>::new(None, ikm). Swift CryptoKit: HKDF.deriveKey(inputKeyMaterial: ikm, salt: Data(), info: info, outputByteCount: 32).",
+    "okm_length_bytes": 32,
+    "info_strings": {
+      "session": "eex/session/v1",
+      "device_token": "eex/device-token/v1",
+      "internal_principal": "eex/internal-principal/v1",
+      "stream_token_reserved": "eex/stream-token/v1 (NOT used — stream tokens use raw env-var bytes per contract D18 amendment)"
+    }
+  },
+  "vectors": [
+    {
+      "name": "test-secret-34chars",
+      "ikm_utf8": "TEST_SECRET_32_CHARS_FIXED_VALUE_X",
+      "ikm_length_bytes": 34,
+      "derivations": {
+        "session": {
+          "info": "eex/session/v1",
+          "okm_hex": "1e6e3ed6f89f7a54aaa2efa77793d58e12b689d3bb03de8158c8fe8303e3f669"
+        },
+        "device_token": {
+          "info": "eex/device-token/v1",
+          "okm_hex": "c0c605f424e8a9fe11ffd80290a69469f4fbd8ed0555e79faf2a767c46ad1e47"
+        },
+        "internal_principal": {
+          "info": "eex/internal-principal/v1",
+          "okm_hex": "edd8db25499f544d7a73b781c3938b0fb023723bfb7521b2c01c30b83fe6c30e"
+        }
+      }
+    },
+    {
+      "name": "alternate-secret-33chars",
+      "ikm_utf8": "alternate-secret-32-chars-fixed-X",
+      "ikm_length_bytes": 33,
+      "derivations": {
+        "session": {
+          "info": "eex/session/v1",
+          "okm_hex": "63f28d0fb5e129faf45a28a46f6fe2ff7345ddd8050fefa78062ce033b36b9ba"
+        },
+        "device_token": {
+          "info": "eex/device-token/v1",
+          "okm_hex": "bf7ab075b53b1a89c58822ad4b6ec98a93fe614bc634061e118cde082d5be120"
+        },
+        "internal_principal": {
+          "info": "eex/internal-principal/v1",
+          "okm_hex": "e3fff3b338bdbe30a79fca806f6d015ed693216c0d876b53a5659a2fd42535f4"
+        }
+      }
+    }
+  ],
+  "negative_checks": [
+    {
+      "name": "different-info-produces-different-okm",
+      "assertion": "For the same IKM, derivations under different info strings MUST produce different OKM. This is what 'domain separation' means."
+    },
+    {
+      "name": "same-input-deterministic",
+      "assertion": "Two derivations of the same (IKM, info) pair MUST produce identical OKM bytes. HKDF is deterministic; any divergence indicates a bug in the underlying SHA-256 or HMAC implementation."
+    }
+  ]
+}

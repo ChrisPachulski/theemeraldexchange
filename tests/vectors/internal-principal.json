@@ -1,0 +1,79 @@
+{
+  "_meta": {
+    "format_version": 1,
+    "authored_from": "§4 Hybrid D (internal-principal JWE) + §3.6 (kid-aware multi-key dispatch)",
+    "author": "ChrisPachulski",
+    "date": "2026-05-27",
+    "reviewed_by": "ambitions-audit synthesis (Step 4: emerald-contracts crate)",
+    "purpose": "Cross-language correctness proof for the Hybrid D JWE. JWE compact bytes are NOT fixed (random nonce per encrypt is mandatory — counter-based nonces are PROHIBITED). Instead this vector pins claim shape, header shape, round-trip semantics, kid dispatch, AAD behavior, and the 60s TTL window.",
+    "key_derivation_note": "Verifier key = HKDF(INTERNAL_PRINCIPAL_SECRET, 'eex/internal-principal/v1', 32). See hkdf-parity.json for the IKM→OKM byte mapping."
+  },
+  "jwe_shape": {
+    "compact_form": "<b64u(header)>.<b64u('')>.<b64u(iv_12)>.<b64u(ciphertext)>.<b64u(tag_16)>",
+    "protected_header": {
+      "alg": "dir",
+      "enc": "A256GCM",
+      "kid": "internal-v1"
+    },
+    "header_constraints": [
+      "alg MUST be 'dir' — anything else (RSA-OAEP, A128KW, etc.) is a hard reject at decode_protected_header.",
+      "enc MUST be 'A256GCM' — anything else (A128GCM, A256CBC, etc.) is a hard reject.",
+      "kid MUST be present. Rotation flow: v2 mints under kid='internal-v2', verifier carries {'internal-v1': old_key, 'internal-v2': new_key} during grace window.",
+      "Unknown kid → 401 with body {error: 'unknown_kid', kid: <received>}. NEVER attempt all keys; that defeats the rotation control."
+    ],
+    "aad": "ASCII bytes of the encoded protected header (segment 1 of the compact form). NOT the decoded JSON. This is the JWE compact serialization spec per RFC 7516 §5.1."
+  },
+  "claims_shape": {
+    "iss": "eex",
+    "sub": "<provider>:<id> per §8.1",
+    "role": "'admin' | 'user' | 'guest'",
+    "auth_mode": "'plex' | 'local' | 'apple'",
+    "server_id": "stable UUID from server_state.server_id",
+    "device_id": "optional — present when the request originated from a device-bearer auth path; null/absent when from a cookie session",
+    "req_id": "ULID — per-request id for tracing across services",
+    "iat": "int64 Unix seconds at mint",
+    "exp": "int64 Unix seconds at mint + 60"
+  },
+  "ttl": {
+    "seconds": 60,
+    "enforcement": "exp must be > now at verify time. NO nbf skew applied — internal principal is for a single in-flight request and must be fresh."
+  },
+  "round_trip_vector": {
+    "claims_input": {
+      "iss": "eex",
+      "sub": "plex:12345",
+      "role": "user",
+      "auth_mode": "plex",
+      "server_id": "01HABCDEFGHJKMNPQRSTVWXYZ0",
+      "device_id": "01HXYZ01234567890ABCDEFGHJ",
+      "req_id": "01HXYZ01234567890ABCDEFGHK",
+      "iat": 1748169600,
+      "exp": 1748169660
+    },
+    "secret_hex_utf8": "TEST_SECRET_32_CHARS_FIXED_VALUE_X",
+    "derived_key_hex": "edd8db25499f544d7a73b781c3938b0fb023723bfb7521b2c01c30b83fe6c30e",
+    "verify": "encrypt(derived_key, kid='internal-v1', claims) → JWE compact string; decrypt(keys={internal-v1: derived_key}, token) → claims (exact field equality)."
+  },
+  "negative_checks": [
+    {
+      "name": "nonce-uniqueness",
+      "assertion": "Two encrypts of the same claim set with the same key MUST produce different JWE compact strings. The iv segment must differ (random 12-byte nonce per encrypt via OsRng or equivalent CSPRNG). Counter-based or timestamp-based nonces are PROHIBITED — nonce reuse with the same key in AES-GCM is catastrophic (recovers the GHASH key)."
+    },
+    {
+      "name": "expired-rejected",
+      "assertion": "Decrypt succeeds (the JWE is valid bytes); the verifier's enforce_time_window(claims, now) returns Expired when now > exp."
+    },
+    {
+      "name": "wrong-iss-rejected",
+      "assertion": "A token with iss != 'eex' decrypts to claims but the verifier MUST reject with UnsupportedIss (or equivalent error code) before granting the caller's identity."
+    },
+    {
+      "name": "tampered-aad-rejects",
+      "assertion": "Modifying the protected header (segment 1) of a valid token MUST cause decrypt to fail with DecryptFailed. AAD binds the header to the ciphertext — header tampering invalidates the tag."
+    },
+    {
+      "name": "unknown-kid-rejects",
+      "assertion": "decrypt(keys={'internal-v1': k1}, token_with_kid='internal-v99') MUST fail with UnknownKid. Verifier MUST NOT brute-force all keys in the map."
+    }
+  ]
+}
