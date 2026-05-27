@@ -8,7 +8,7 @@ members = [
 
 [workspace.package]
 edition = "2024"
-license = "(proprietary) All Rights Reserved — see LICENSE at first M2 binary distribution"
+license-file = "LICENSE"
 authors = ["ChrisPachulski"]
 rust-version = "1.85"
 

@@ -2,6 +2,7 @@
   "name": "theemeraldexchange",
   "private": true,
   "version": "0.0.0",
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "scripts": {
     "dev": "concurrently -n vite,api -c cyan,magenta \"npm:dev:vite\" \"npm:dev:server\"",

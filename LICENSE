@@ -1,0 +1,47 @@
+THE EMERALD EXCHANGE — PROPRIETARY SOFTWARE LICENSE
+
+Copyright (c) 2026 Chris Pachulski. All rights reserved.
+
+This software, including all source code, compiled binaries,
+configuration files, documentation, test vectors, and accompanying
+assets in this repository ("the Software"), is the proprietary work
+of Chris Pachulski and is not licensed for redistribution, public
+use, or derivative works.
+
+The Software is made available solely to:
+
+  (a) Chris Pachulski and authorized household members, for personal
+      self-hosted use of The Emerald Exchange media server stack on
+      hardware Chris Pachulski owns or controls;
+
+  (b) Apple Inc., for the limited purpose of evaluating the iOS and
+      tvOS client binaries submitted to TestFlight and the App Store
+      under Apple Developer Program agreement;
+
+  (c) Self-hosting operators who receive a compiled binary release
+      directly from Chris Pachulski under a separate written
+      agreement, subject to the terms of that agreement.
+
+No other rights are granted. Specifically, you may NOT:
+
+  - copy, modify, merge, publish, distribute, sublicense, or sell
+    copies of the Software or any portion thereof;
+  - reverse engineer, decompile, or disassemble compiled binaries
+    except to the extent expressly permitted by applicable law;
+  - remove or alter any proprietary notices, attributions, or
+    trademarks contained in the Software;
+  - use the name "The Emerald Exchange," "Emerald Exchange,"
+    "EmeraldKit," or any associated trademarks to endorse or promote
+    products derived from this Software without prior written
+    permission.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHOR OR COPYRIGHT HOLDER BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+For licensing inquiries, contact Chris Pachulski directly.
