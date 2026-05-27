@@ -27,6 +27,31 @@ import { createHash } from 'crypto'
 import { env } from '../env.js'
 import { probeResources } from '../plex.js'
 import type { Role, Session } from '../session.js'
+import { cascadeRevokeForSub } from './reconcileDeviceToken.js'
+
+// Cascade-revocation contract (§3.4): when Plex definitively denies the
+// cookie user (auth_revoked or not_member), ALSO revoke every paired
+// Apple device for that sub. Without this, a household member booted
+// from the Plex server keeps streaming via their paired tvOS/iOS app
+// until the 180-day device-token TTL expires. INSERT OR IGNORE makes
+// the cascade idempotent so re-firing on cached denials is safe.
+function cascadeOnDenial(sub: string, reason: string): void {
+  try {
+    const n = cascadeRevokeForSub(sub, reason)
+    if (n > 0) {
+      console.warn(
+        '[sessionGate] cascade-revoked %d device tokens for sub=%s reason=%s',
+        n,
+        sub,
+        reason,
+      )
+    }
+  } catch (e) {
+    // Don't let a cascade-revoke DB hiccup mask the underlying denial —
+    // the cookie path's null-return MUST still propagate. Log + swallow.
+    console.error('[sessionGate] cascade-revoke failed for sub=%s: %s', sub, e)
+  }
+}
 
 const REVALIDATE_TTL_MS = 15 * 60 * 1000
 const REVALIDATE_TIMEOUT_MS = 5_000
@@ -117,7 +142,10 @@ export async function reconcileSession(session: Session): Promise<Session | null
   const tokenFingerprint = fingerprintToken(session.plexAuthToken)
   const cached = cache.get(session.sub)
   if (cached && now - cached.checkedAt < REVALIDATE_TTL_MS) {
-    if (cached.status === 'not_member') return null
+    if (cached.status === 'not_member') {
+      cascadeOnDenial(session.sub, 'plex_not_member_cached')
+      return null
+    }
     if (cached.tokenFingerprint === tokenFingerprint && cached.plexServerId === env.plexServerId) {
       return { ...session, role }
     }
@@ -129,16 +157,26 @@ export async function reconcileSession(session: Session): Promise<Session | null
     // configured server; legacy/bootstrap cookies were never verified
     // against this machine identifier and must re-auth.
     if (cached) {
-      if (cached.status === 'not_member') return null
+      if (cached.status === 'not_member') {
+        cascadeOnDenial(session.sub, 'plex_not_member_cached')
+        return null
+      }
       if (cached.tokenFingerprint === tokenFingerprint && cached.plexServerId === env.plexServerId) {
         return { ...session, role }
       }
     }
     if (session.verifiedPlexServerId === env.plexServerId) return { ...session, role }
+    // Unknown-status + no fallback proof: NOT a definitive Plex denial,
+    // just "we can't verify right now." Force re-auth without cascading
+    // to devices — the next successful login will re-establish or
+    // legitimately deny.
     return null
   }
 
-  if (status === 'auth_revoked') return null
+  if (status === 'auth_revoked') {
+    cascadeOnDenial(session.sub, 'plex_auth_revoked')
+    return null
+  }
 
   setCached(session.sub, {
     status,
@@ -146,7 +184,10 @@ export async function reconcileSession(session: Session): Promise<Session | null
     tokenFingerprint: status === 'member' ? tokenFingerprint : undefined,
     plexServerId: status === 'member' ? env.plexServerId : undefined,
   })
-  if (status === 'not_member') return null
+  if (status === 'not_member') {
+    cascadeOnDenial(session.sub, 'plex_not_member')
+    return null
+  }
   return { ...session, role }
 }
 
