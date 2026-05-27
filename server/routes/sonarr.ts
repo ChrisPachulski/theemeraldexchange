@@ -426,15 +426,16 @@ async function materializeNonAdminSeriesBody(raw: SonarrAddBody): Promise<
   }
   const profiles = (await profileRes.json()) as Array<{ id: number; name?: string }>
   const folders = foldersResult.folders
-  const folder = env.defaultSonarrRootFolderPath
-    ? folders.find((f) => normalizePath(f.path) === normalizePath(env.defaultSonarrRootFolderPath))
+  const configuredFolder = env.defaultSonarrRootFolderPath
+  const folder = configuredFolder
+    ? folders.find((f) => normalizePath(f.path) === normalizePath(configuredFolder))
     : folders[0]
   const profile = pickProfile(profiles, env.defaultProfileName)
   if (!folder) {
     return {
       ok: false,
-      reason: env.defaultSonarrRootFolderPath ? 'default_root_folder_missing' : 'admin_must_configure_upstream',
-      expected_path: env.defaultSonarrRootFolderPath,
+      reason: configuredFolder ? 'default_root_folder_missing' : 'admin_must_configure_upstream',
+      expected_path: configuredFolder ?? undefined,
       available_paths: folders.map((f) => f.path),
     }
   }

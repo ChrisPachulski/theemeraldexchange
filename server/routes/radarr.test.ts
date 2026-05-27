@@ -695,7 +695,7 @@ describe('radarr non-admin add — path matching tolerance (burn-it-all fixes)',
     expect(captured).not.toBeNull()
     // The upstream's trailing-slash path is forwarded verbatim — no
     // normalization on write, only on comparison.
-    expect((captured as Record<string, unknown>).rootFolderPath).toBe('/data/media/movies/')
+    expect((captured as unknown as Record<string, unknown>).rootFolderPath).toBe('/data/media/movies/')
   })
 
   it('matches root folder ignoring case differences', async () => {
@@ -760,7 +760,7 @@ describe('radarr non-admin add — path matching tolerance (burn-it-all fixes)',
     })
     expect(r.status).toBe(201)
     expect(captured).not.toBeNull()
-    expect((captured as Record<string, unknown>).qualityProfileId).toBe(7)
+    expect((captured as unknown as Record<string, unknown>).qualityProfileId).toBe(7)
   })
 
   // Test for `default_root_folder_missing` payload (expected_path + available_paths)
