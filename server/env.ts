@@ -219,14 +219,26 @@ if (isProd && recommenderEventSecret) {
 const rawStreamTokenSecret = required('STREAM_TOKEN_SECRET')
 validateSecretStrength('STREAM_TOKEN_SECRET', rawStreamTokenSecret, isProd)
 
+// DEVICE_TOKEN_SECRET — IKM for HKDF(secret, 'eex/device-token/v1', 32)
+// → AES-256-GCM key for device-token JWE encryption (M2 Apple Bearer
+// auth). Required in production once D13 ships (now). Dev tolerates
+// absence so localhost development without Apple pairing still boots;
+// any code path that mints a device token re-checks and throws.
+const rawDeviceTokenSecret = isProd
+  ? required('DEVICE_TOKEN_SECRET')
+  : process.env.DEVICE_TOKEN_SECRET || ''
+if (rawDeviceTokenSecret) {
+  validateSecretStrength('DEVICE_TOKEN_SECRET', rawDeviceTokenSecret, isProd)
+}
+
 // Boot-time pairwise distinctness check (contract §3.1 / §5.4).
 // Runs in all environments — not just prod — so a copy-paste mistake
-// is caught before it reaches CI.  DEVICE_TOKEN_SECRET is introduced
-// in D13; the helper skips the pair when it is absent.
+// is caught before it reaches CI.  DEVICE_TOKEN_SECRET pair is checked
+// when present; in dev without Apple pairing it may be absent.
 assertSecretsDistinct({
   SESSION_SECRET: rawSessionSecret,
   STREAM_TOKEN_SECRET: rawStreamTokenSecret,
-  DEVICE_TOKEN_SECRET: process.env.DEVICE_TOKEN_SECRET || null,
+  DEVICE_TOKEN_SECRET: rawDeviceTokenSecret || null,
 })
 
 // EEX_TELEMETRY_DSN — Sentry-compatible DSN for the self-hoster's Glitchtip
@@ -271,6 +283,8 @@ export const env = {
   plexClientId: required('PLEX_CLIENT_ID').trim(),
   sessionSecret: required('SESSION_SECRET'),
   streamTokenSecret: rawStreamTokenSecret,
+  /** Empty string in dev when not configured; D13 mint paths assert non-empty. */
+  deviceTokenSecret: rawDeviceTokenSecret,
   admins: csv('ADMINS'),
   plexServerId,
   port: positiveInt('PORT', 3001),
