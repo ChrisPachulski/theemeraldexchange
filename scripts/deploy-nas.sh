@@ -146,6 +146,29 @@ rsync -av --delete \
   --exclude 'eval/holdout.jsonl' \
   recommender/ "${NAS_USER}@${NAS_HOST}:${APPDATA}/recommender/"
 
+# crates/ is required for the recommender image build — the multi-stage
+# Dockerfile compiles the emerald-contracts PyO3 wheel from these
+# sources. The Cargo workspace at the repo root references all three
+# members, so we ship the napi crate's manifest too (cargo refuses to
+# resolve a workspace with a missing member) even though we don't build
+# the napi .node here.
+echo "→ Syncing crates/"
+rsync -av --delete \
+  --exclude 'target' \
+  --exclude '**/target' \
+  --exclude '.venv' \
+  --exclude 'node_modules' \
+  --exclude '__pycache__' \
+  --exclude '*.pyc' \
+  --exclude '*.node' \
+  crates/ "${NAS_USER}@${NAS_HOST}:${APPDATA}/crates/"
+
+# Cargo.toml + Cargo.lock + LICENSE live at the repo root and are
+# required for `cargo build` inside the rust-builder stage. The earlier
+# rsync block ships Dockerfile/compose/package*.json but not these.
+echo "→ Syncing Cargo workspace manifest"
+rsync -av Cargo.toml Cargo.lock LICENSE "${NAS_USER}@${NAS_HOST}:${APPDATA}/"
+
 echo "→ Shipping env"
 rsync -av "$LOCAL_ENV" "${NAS_USER}@${NAS_HOST}:${APPDATA}/.env"
 ssh "${NAS_USER}@${NAS_HOST}" "chmod 600 ${APPDATA}/.env"

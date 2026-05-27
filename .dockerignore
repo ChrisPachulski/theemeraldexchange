@@ -78,11 +78,25 @@ nginx
 tsconfig.app.json
 tsconfig.node.json
 
-# ---- Recommender (separate build context — recommender/Dockerfile) ----------
-# The root backend image does not pull anything from recommender/. The
-# recommender service has its own `build: ./recommender` in docker-compose,
-# so excluding it here just keeps the backend build context lean.
-recommender
+# ---- Rust build artifacts (recommender stage-1 + napi build) ----------------
+# Local cargo target dirs are huge (~hundreds of MB) and the rust-builder
+# stage rebuilds from a clean cache. Excluding here keeps the build
+# context upload reasonable.
+target
+**/target
+crates/*/.venv
+crates/*/node_modules
+# Prebuilt napi binary committed for maintainer's mac — the rust-builder
+# stage produces a fresh linux-x64-gnu .node, so the darwin-arm64 binary
+# is dead weight inside the image context.
+**/*.node
+
+# NOTE: recommender/ is intentionally NOT excluded here. The recommender
+# build now uses repo root as context (see docker-compose.yml
+# recommender.build.context) so its Dockerfile can reach crates/.
+# The backend Dockerfile only COPYs package*.json, server/, and
+# tsconfig.json, so leaving recommender/ in context costs nothing for
+# the backend image and is required for the recommender image.
 
 # ---- Deploy scripts (not run inside the image) ------------------------------
 scripts
