@@ -541,6 +541,12 @@ iptv.post('/stream/catchup/:streamId/grant', requireAuth, async (c) => {
     title: sessionTitle('catchup', resourceId),
   })
   if (!acquired.ok) {
+    // tryAcquire only ever returns iptv_concurrency_limit on failure
+    // here — source_unavailable is produced by a different code path
+    // upstream. Narrow the union explicitly so TS can see `sessions`.
+    if (acquired.reason !== 'iptv_concurrency_limit') {
+      return c.json({ ok: false, reason: acquired.reason }, 503)
+    }
     return c.json({ ...acquired, sessions: enrichSessions(acquired.sessions) }, 429)
   }
 
@@ -877,6 +883,9 @@ iptv.post('/stream/vod/:streamId/grant', requireAuth, async (c) => {
     title: detail.name,
   })
   if (!acquired.ok) {
+    if (acquired.reason !== 'iptv_concurrency_limit') {
+      return c.json({ ok: false, reason: acquired.reason }, 503)
+    }
     return c.json({ ...acquired, sessions: enrichSessions(acquired.sessions) }, 429)
   }
 
@@ -936,6 +945,9 @@ iptv.post('/stream/series/:episodeId/grant', requireAuth, async (c) => {
     title: sessionTitle('series', episodeId),
   })
   if (!acquired.ok) {
+    if (acquired.reason !== 'iptv_concurrency_limit') {
+      return c.json({ ok: false, reason: acquired.reason }, 503)
+    }
     return c.json({ ...acquired, sessions: enrichSessions(acquired.sessions) }, 429)
   }
 

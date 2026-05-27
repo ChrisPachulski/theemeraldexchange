@@ -293,15 +293,16 @@ async function materializeNonAdminMovieBody(raw: RadarrAddBody): Promise<
   }
   const profiles = (await profileRes.json()) as Array<{ id: number; name?: string }>
   const folders = folderResult.folders
-  const folder = env.defaultRadarrRootFolderPath
-    ? folders.find((f) => normalizePath(f.path) === normalizePath(env.defaultRadarrRootFolderPath))
+  const configuredFolder = env.defaultRadarrRootFolderPath
+  const folder = configuredFolder
+    ? folders.find((f) => normalizePath(f.path) === normalizePath(configuredFolder))
     : folders[0]
   const profile = pickProfile(profiles, env.defaultProfileName)
   if (!folder) {
     return {
       ok: false,
-      reason: env.defaultRadarrRootFolderPath ? 'default_root_folder_missing' : 'admin_must_configure_upstream',
-      expected_path: env.defaultRadarrRootFolderPath,
+      reason: configuredFolder ? 'default_root_folder_missing' : 'admin_must_configure_upstream',
+      expected_path: configuredFolder ?? undefined,
       available_paths: folders.map((f) => f.path),
     }
   }

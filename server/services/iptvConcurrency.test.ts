@@ -20,12 +20,13 @@ describe('iptv concurrency tracker', () => {
     const c = t.tryAcquire(baseOpts('u3', 's3'))
     expect(a.ok && b.ok).toBe(true)
     expect(c.ok).toBe(false)
-    if (!c.ok) {
-      expect(c.reason).toBe('iptv_concurrency_limit')
+    if (!c.ok && c.reason === 'iptv_concurrency_limit') {
       // The 429 payload now includes the active sessions so the UI can
       // show them inline and let the user kick one.
       expect(c.sessions).toHaveLength(2)
       expect(c.sessions.map((s) => s.sessionId).sort()).toEqual(['s1', 's2'])
+    } else {
+      throw new Error('expected iptv_concurrency_limit')
     }
   })
 

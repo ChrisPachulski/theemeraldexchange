@@ -38,7 +38,7 @@ function makeMockDb(rows: LinkRow[]) {
 }
 
 // Use vi.fn() so tests can swap the return value via .mockImplementation().
-const mockIptvDb = vi.fn(() => makeMockDb([]))
+const mockIptvDb = vi.fn((..._args: unknown[]) => makeMockDb([]))
 
 vi.mock('./iptvDbSingleton.js', () => ({
   iptvDb: (...args: unknown[]) => mockIptvDb(...args),
@@ -92,10 +92,16 @@ describe('tombstone sweep', () => {
     mockIptvDb.mockImplementation(() => makeMockDb(rows))
 
     let sweepCallback: (() => void) | undefined
-    vi.spyOn(cron, 'schedule').mockImplementation((expr: string, fn: () => void) => {
-      if (expr === '0 3 * * *') sweepCallback = fn
+    vi.spyOn(cron, 'schedule').mockImplementation(((expr: string, fn: unknown) => {
+      // node-cron v4's `func` param is typed as
+      // `string | ((now: Date | 'manual' | 'init') => void)`; tests pass
+      // a zero-arg fn (`fn()`), so we extract via unknown to bypass the
+      // tighter prod signature.
+      if (expr === '0 3 * * *' && typeof fn === 'function') {
+        sweepCallback = fn as () => void
+      }
       return { stop: () => undefined, start: () => undefined } as ReturnType<typeof cron.schedule>
-    })
+    }) as typeof cron.schedule)
 
     await registerIptvSchedule('0 */6 * * *')
     expect(sweepCallback).toBeDefined()
@@ -119,10 +125,16 @@ describe('tombstone sweep', () => {
     }))
 
     let sweepCallback: (() => void) | undefined
-    vi.spyOn(cron, 'schedule').mockImplementation((expr: string, fn: () => void) => {
-      if (expr === '0 3 * * *') sweepCallback = fn
+    vi.spyOn(cron, 'schedule').mockImplementation(((expr: string, fn: unknown) => {
+      // node-cron v4's `func` param is typed as
+      // `string | ((now: Date | 'manual' | 'init') => void)`; tests pass
+      // a zero-arg fn (`fn()`), so we extract via unknown to bypass the
+      // tighter prod signature.
+      if (expr === '0 3 * * *' && typeof fn === 'function') {
+        sweepCallback = fn as () => void
+      }
       return { stop: () => undefined, start: () => undefined } as ReturnType<typeof cron.schedule>
-    })
+    }) as typeof cron.schedule)
 
     await registerIptvSchedule('0 */6 * * *')
     expect(sweepCallback).toBeDefined()

@@ -23,7 +23,7 @@ const SAMPLE: Parameters<typeof mintDeviceToken>[0] = {
   server_id: '01HXYZ01234567890ABCDEFGHJ',
 }
 
-function bearerHeaders(token: string): HeadersInit {
+function bearerHeaders(token: string): Record<string, string> {
   return {
     Authorization: `Bearer ${token}`,
     Origin: 'https://theemeraldexchange.com',
