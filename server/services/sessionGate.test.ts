@@ -27,6 +27,16 @@ vi.mock('../plex.js', () => ({
   probeResources: (token: string, _signal?: AbortSignal) => probeImpl.fn(token),
 }))
 
+// Mock cascadeRevokeForSub so the cascade tests can assert calls without
+// touching server.db. Default impl is a no-op returning 0 so the other
+// reconcileSession tests are unaffected.
+const cascadeSpy = vi.fn((_sub: string, _reason: string) => 0)
+vi.mock('./reconcileDeviceToken.js', () => ({
+  cascadeRevokeForSub: (sub: string, reason: string) => cascadeSpy(sub, reason),
+  reconcileDeviceToken: () => null,
+  roleFor: () => 'user',
+}))
+
 const baseSession: Session = {
   sub: '42',
   username: 'someone',
@@ -38,6 +48,7 @@ const baseSession: Session = {
 beforeEach(() => {
   _resetSessionGateCacheForTests()
   probeImpl.fn = async () => ({ kind: 'network_error' })
+  cascadeSpy.mockClear()
 })
 
 afterEach(() => {
@@ -203,5 +214,77 @@ describe('reconcileSession — membership revalidation', () => {
     const r = await reconcileSession({ ...baseSession, plexAuthToken: undefined })
     expect(r).toBeNull()
     expect(calls).toBe(0)
+  })
+})
+
+describe('reconcileSession — cascade device revocation', () => {
+  // When Plex definitively denies the cookie user, every paired Apple
+  // device for the same sub must also be revoked so the M2 Bearer path
+  // is locked out on its next request. Idempotent — re-firing on a
+  // cached denial is safe.
+
+  it('cascades on a fresh not_member verdict', async () => {
+    probeImpl.fn = async () => ({ kind: 'ok', resources: [] })
+    const r = await reconcileSession(baseSession)
+    expect(r).toBeNull()
+    expect(cascadeSpy).toHaveBeenCalledTimes(1)
+    expect(cascadeSpy).toHaveBeenCalledWith(baseSession.sub, 'plex_not_member')
+  })
+
+  it('cascades on a fresh auth_revoked verdict (401 from plex.tv)', async () => {
+    probeImpl.fn = async () => ({ kind: 'http_error', status: 401 })
+    const r = await reconcileSession(baseSession)
+    expect(r).toBeNull()
+    expect(cascadeSpy).toHaveBeenCalledTimes(1)
+    expect(cascadeSpy).toHaveBeenCalledWith(baseSession.sub, 'plex_auth_revoked')
+  })
+
+  it('cascades on a cached not_member hit (defensive backstop)', async () => {
+    // First call seeds the cache + cascades.
+    probeImpl.fn = async () => ({ kind: 'ok', resources: [] })
+    await reconcileSession(baseSession)
+    cascadeSpy.mockClear()
+    // Second call within TTL hits the cache; cascade fires again
+    // idempotently so a device paired between calls also gets revoked.
+    const r = await reconcileSession(baseSession)
+    expect(r).toBeNull()
+    expect(cascadeSpy).toHaveBeenCalledTimes(1)
+    expect(cascadeSpy).toHaveBeenCalledWith(baseSession.sub, 'plex_not_member_cached')
+  })
+
+  it('does NOT cascade on a transient network error (unknown status, no cached denial)', async () => {
+    probeImpl.fn = async () => ({ kind: 'network_error' })
+    // baseSession.verifiedPlexServerId matches env.plexServerId, so the
+    // user stays signed in — no denial = no cascade.
+    const r = await reconcileSession(baseSession)
+    expect(r).not.toBeNull()
+    expect(cascadeSpy).not.toHaveBeenCalled()
+  })
+
+  it('does NOT cascade on a legacy session without plexAuthToken', async () => {
+    // Force re-auth, not a Plex denial. Devices stay paired so the next
+    // successful login restores everything; cascading here would punish
+    // a household member for a cookie format upgrade.
+    const r = await reconcileSession({ ...baseSession, plexAuthToken: undefined })
+    expect(r).toBeNull()
+    expect(cascadeSpy).not.toHaveBeenCalled()
+  })
+
+  it('does NOT cascade on a successful member verdict', async () => {
+    probeImpl.fn = async () => ({
+      kind: 'ok',
+      resources: [
+        {
+          name: 'Home',
+          clientIdentifier: 'home-machine-id',
+          owned: true,
+          home: false,
+          provides: 'server',
+        },
+      ],
+    })
+    const r = await reconcileSession(baseSession)
+    expect(r).not.toBeNull()
+    expect(cascadeSpy).not.toHaveBeenCalled()
   })
 })
