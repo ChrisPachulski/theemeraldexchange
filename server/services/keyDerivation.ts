@@ -20,16 +20,22 @@
 // No new npm dependency: Node's built-in crypto.hkdfSync is used
 // throughout (available since Node 15.0.0 / LTS 16+).
 //
-// Handoff note (D2a):
-//   The stream-token HMAC key derivation belongs in iptvStreamToken.ts,
-//   which is owned by agents impl-d1, impl-d2a, and impl-d3. D18 exports
-//   deriveKey here so D2a's agent can call:
+// Stream-token derivation note (locked 2026-05-27, ambitions-audit):
+//   Stream tokens DO NOT use HKDF. `signStreamToken` / `verifyStreamToken`
+//   call `createHmac('sha256', env.streamTokenSecret)` with the raw env-var
+//   string as the HMAC key. INFO_STREAM_TOKEN below is reserved for a
+//   future migration but is NOT wired today.
 //
-//     import { deriveKey } from './keyDerivation.js'
-//     const streamKey = deriveKey(env.streamTokenSecret, 'eex/stream-token/v1')
+//   Why: STREAM_TOKEN_SECRET is already domain-separated from
+//   SESSION_SECRET / DEVICE_TOKEN_SECRET by the boot-time pairwise
+//   distinctness check (`assertSecretsDistinct`). HKDF would buy zero
+//   additional separation for stream tokens, and wiring it post-M1.5
+//   would either invalidate every 90-day playlist token in production
+//   or require a tri-key verifier (raw-old + HKDF-new + legacy-SESSION
+//   fallback) which is more complexity than the security gain warrants.
 //
-//   D18 does NOT edit iptvStreamToken.ts. The handoff boundary is this
-//   file. D2a wires it.
+//   Test vector: `tests/vectors/stream-token-canonical.json` `_meta.hmac_key_is`
+//   is `"raw_utf8_of_test_key"`. Rust port MUST match this — no HKDF.
 
 import { hkdfSync } from 'node:crypto'
 

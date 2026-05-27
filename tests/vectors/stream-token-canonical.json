@@ -3,7 +3,10 @@
     "format_version": 1,
     "authored_from": "§5.1 (fixed-template canonical serializer) + §5.2 (claim shape) + §5.3 (kind enum) + RFC 8785",
     "author": "ChrisPachulski",
-    "date": "2026-05-25"
+    "date": "2026-05-25",
+    "reviewed_by": "ambitions-audit synthesis (2026-05-27)",
+    "hmac_key_is": "raw_utf8_of_test_key",
+    "hmac_key_derivation_note": "Stream-token HMAC key = raw UTF-8 bytes of STREAM_TOKEN_SECRET. NO HKDF, NO domain-separation info-string applied. Locked 2026-05-27 per ambitions-audit (decision: keep raw to avoid tri-key verifier complexity and 90-day playlist-token invalidation). Rust crate MUST replicate exactly: HMAC-SHA256(key = secret.as_bytes(), data = canonical_bytes). Session-cookie and device-token keys DO use HKDF — stream tokens are the exception."
   },
   "test_key": "TEST_SECRET_32_CHARS_FIXED_VALUE_X",
   "vectors": [
