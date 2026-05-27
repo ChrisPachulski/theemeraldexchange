@@ -8,8 +8,11 @@
 use regex::Regex;
 use std::sync::OnceLock;
 
-/// `plex:` — positive integer, no leading zeros (Plex account IDs).
-pub const PLEX_REGEX: &str = r"^plex:[1-9][0-9]*$";
+/// `plex:` — non-negative integer, no leading zeros except for the literal
+/// `0` (which is itself valid — Plex's anonymous account ID). Matches
+/// `server/services/sub.ts` and `tests/vectors/sub-namespace.json`
+/// (`valid-plex-zero` case).
+pub const PLEX_REGEX: &str = r"^plex:(0|[1-9][0-9]*)$";
 
 /// `local:` — Crockford Base32 ULID, uppercase, 26 chars, no I/L/O/U.
 pub const LOCAL_REGEX: &str = r"^local:[0-9A-HJKMNP-TV-Z]{26}$";
@@ -105,7 +108,11 @@ mod tests {
     #[test]
     fn plex_no_leading_zero() {
         assert_eq!(parse_sub("plex:007").unwrap_err(), SubError::InvalidFormat);
-        assert_eq!(parse_sub("plex:0").unwrap_err(), SubError::InvalidFormat);
+        // `plex:0` is the documented exception (Plex's anonymous-account
+        // id). Per the canonical vector `valid-plex-zero`.
+        let s = parse_sub("plex:0").unwrap();
+        assert_eq!(s.provider, Provider::Plex);
+        assert_eq!(s.id, "0");
     }
 
     #[test]
