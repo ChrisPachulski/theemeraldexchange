@@ -1,0 +1,31 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/emerald-contracts",
+  "crates/emerald-contracts-napi",
+]
+
+[workspace.package]
+edition = "2024"
+license = "(proprietary) All Rights Reserved — see LICENSE at first M2 binary distribution"
+authors = ["ChrisPachulski"]
+rust-version = "1.85"
+
+[workspace.dependencies]
+aes-gcm = "0.10.3"
+base64 = "0.22"
+hkdf = "0.12"
+hmac = "0.12"
+sha2 = "0.10"
+subtle = "2"
+rand = "0.8"
+ulid = "1.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1.10"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

@@ -1,0 +1,70 @@
+{
+  "_meta": {
+    "format_version": 1,
+    "authored_from": "§7.5 (Rust read-only access to iptv.db / server.db via sqlx)",
+    "author": "ChrisPachulski",
+    "date": "2026-05-27",
+    "reviewed_by": "ambitions-audit synthesis (Step 4: emerald-contracts crate; foot-gun F8 ANALYZE; F12 orphan link rows)",
+    "purpose": "Lock the TEXT timestamp coercion and INTEGER 0/1 → bool coercion semantics for Rust sqlx readers of Hono-owned databases. Rust must round-trip these representations identically to better-sqlite3 + TS Date.toISOString()."
+  },
+  "scope": {
+    "owned_by": "Hono (writer)",
+    "consumers": "Rust media-core (M3) reads iptv.db and server.db read-only. Rust transcoder (M4) reads server.db read-only. Recommender (Python) reads exchange.db read-only.",
+    "rust_pool_config": "URI 'file:<path>?mode=ro'. NO PRAGMA writes. NEVER run sqlx::migrate! against these — Hono owns schema_migrations."
+  },
+  "type_coercions": [
+    {
+      "sql_column": "TEXT (ISO-8601 datetime with 'T' separator and 'Z' suffix)",
+      "examples": ["2026-05-27T08:49:42.124Z", "2026-05-27T08:49:42Z", "2026-05-27 08:49:42"],
+      "rust_target": "chrono::DateTime<chrono::Utc>",
+      "ts_target": "Date (Date.toISOString() round-trips byte-identical when the 'Z' suffix is present)",
+      "edge_cases": [
+        "Whitespace separator (SQLite datetime('now') default) MUST be accepted alongside the 'T' separator.",
+        "Fractional seconds (.124) MUST be accepted. Missing fractional seconds MUST be accepted.",
+        "'Z' suffix is canonical (UTC). Timezone-offset suffixes ('+00:00') are NOT used by Hono's writer; Rust readers SHOULD reject them rather than silently coerce."
+      ]
+    },
+    {
+      "sql_column": "INTEGER 0 or 1",
+      "examples": [0, 1],
+      "rust_target": "bool",
+      "ts_target": "boolean",
+      "edge_cases": [
+        "INTEGER > 1 MUST be rejected as malformed (no Python-truthy coercion).",
+        "NULL → None in Rust Option<bool>; in TS the column is nullable iff the schema allows."
+      ]
+    },
+    {
+      "sql_column": "INTEGER unix epoch seconds",
+      "examples": [1748169600],
+      "rust_target": "i64",
+      "ts_target": "number",
+      "edge_cases": [
+        "Always seconds — NEVER milliseconds for token-related fields. Hono always passes Math.floor(Date.now() / 1000); Rust SHOULD assert i64 is in a 'reasonable' range (e.g., > 1700000000 == 2023-11-15) when reading from columns named iat/nbf/exp."
+      ]
+    }
+  ],
+  "table_specific_invariants": [
+    {
+      "table": "iptv_title_link",
+      "invariant": "iptv_id has NO FK constraint to vod/series catalog tables. Rust MUST tolerate orphaned rows; query AND removed_at IS NULL alongside any tmdb_id lookup."
+    },
+    {
+      "table": "categories",
+      "invariant": "PK is (kind, category_id). category_id integer is NOT globally unique; channels/vod/series reference category_id with NO FK. Rust lookups MUST scope by kind."
+    },
+    {
+      "table": "schema_migrations",
+      "invariant": "applied_at TEXT NOT NULL in TS DDL; applied_at TEXT NULLABLE in Python DDL (divergence). Rust readers MUST tolerate NULL applied_at for backward compat. Rust-owned media.db schema_migrations DDL MUST lock applied_at TEXT NOT NULL."
+    },
+    {
+      "table": "title_vec",
+      "invariant": "rowid encoding: kind='movie' → rowid = tmdb_id; kind='tv' → rowid = tmdb_id | (1 << 32). This is in Python code only, not discoverable from DDL. Rust MUST replicate; document in code with `// matches recommender/app/db.py encode_vec_rowid`."
+    }
+  ],
+  "pragma_at_connect": {
+    "read_only": "Rust connects with URI '?mode=ro'. No pragma writes needed (WAL is set by Hono writer per-connection; readers inherit; foreign_keys not required for read-only).",
+    "busy_timeout_ms": 5000,
+    "busy_timeout_note": "Rust SHOULD set PRAGMA busy_timeout=5000 to match Python (db.py) default and to avoid SQLITE_BUSY under writer-side commits. TS (better-sqlite3) does not set this today — known divergence."
+  }
+}
