@@ -17,10 +17,12 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
-    "eval:recs": "vitest run --config vitest.eval.config.ts"
+    "eval:recs": "vitest run --config vitest.eval.config.ts",
+    "build:napi": "npm --prefix crates/emerald-contracts-napi run build"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.95.2",
+    "@emerald/contracts-napi": "file:./crates/emerald-contracts-napi",
     "@hono/node-server": "^2.0.2",
     "@sentry/node": "^9.47.1",
     "@tanstack/react-query": "^5.100.9",
