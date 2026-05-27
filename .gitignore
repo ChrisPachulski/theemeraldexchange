@@ -56,4 +56,11 @@ data/
 # checked in. The Planning agent's M2 deploy plan compiles these in the
 # Docker image build step.
 crates/emerald-contracts-napi/*.node
+
+# PyO3 binding: extension module + venv built by `maturin develop`. The
+# .so is host-triple-specific; the venv is a developer convenience only.
+crates/emerald-contracts-pyo3/.venv/
+crates/emerald-contracts-pyo3/*.so
+crates/emerald-contracts-pyo3/*.pyd
+
 .planning/burn-it-all/

@@ -1,0 +1,19 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "emerald-contracts"
+version = "0.1.0"
+description = "Canonical cross-language contracts (PyO3 binding). Recommender consumes parse_sub + telemetry PII scrub from here so Rust/TS/Python stay byte-identical."
+requires-python = ">=3.12"
+classifiers = [
+  "Programming Language :: Rust",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Private :: Do Not Upload",
+]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "emerald_contracts"
+strip = true
