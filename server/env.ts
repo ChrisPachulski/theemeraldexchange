@@ -231,14 +231,30 @@ if (rawDeviceTokenSecret) {
   validateSecretStrength('DEVICE_TOKEN_SECRET', rawDeviceTokenSecret, isProd)
 }
 
-// Boot-time pairwise distinctness check (contract §3.1 / §5.4).
+// INTERNAL_PRINCIPAL_SECRET — IKM for HKDF(secret, 'eex/internal-principal/v1', 32)
+// → AES-256-GCM key for the JWE the server attaches to every internal
+// service call (recommender, future M3 media-core, M4 transcoder). Per
+// §4 Hybrid D + Rust-canonical: Hono mints, the receiving service
+// verifies. 60-second TTL, no nbf skew. Required in production once any
+// internal service is wired; tolerated absent in dev so localhost work
+// without the sidecar can still boot — mint paths re-check and throw.
+const rawInternalPrincipalSecret = isProd
+  ? required('INTERNAL_PRINCIPAL_SECRET')
+  : process.env.INTERNAL_PRINCIPAL_SECRET || ''
+if (rawInternalPrincipalSecret) {
+  validateSecretStrength('INTERNAL_PRINCIPAL_SECRET', rawInternalPrincipalSecret, isProd)
+}
+
+// Boot-time pairwise distinctness check (contract §3.1 / §4.2 / §5.4).
 // Runs in all environments — not just prod — so a copy-paste mistake
-// is caught before it reaches CI.  DEVICE_TOKEN_SECRET pair is checked
-// when present; in dev without Apple pairing it may be absent.
+// is caught before it reaches CI.  DEVICE_TOKEN_SECRET and
+// INTERNAL_PRINCIPAL_SECRET are checked when present; in dev without
+// Apple pairing / sidecar wiring they may be absent.
 assertSecretsDistinct({
   SESSION_SECRET: rawSessionSecret,
   STREAM_TOKEN_SECRET: rawStreamTokenSecret,
   DEVICE_TOKEN_SECRET: rawDeviceTokenSecret || null,
+  INTERNAL_PRINCIPAL_SECRET: rawInternalPrincipalSecret || null,
 })
 
 // EEX_TELEMETRY_DSN — Sentry-compatible DSN for the self-hoster's Glitchtip
@@ -285,6 +301,8 @@ export const env = {
   streamTokenSecret: rawStreamTokenSecret,
   /** Empty string in dev when not configured; D13 mint paths assert non-empty. */
   deviceTokenSecret: rawDeviceTokenSecret,
+  /** Empty string in dev when not configured; mintInternalPrincipal asserts non-empty. */
+  internalPrincipalSecret: rawInternalPrincipalSecret,
   admins: csv('ADMINS'),
   plexServerId,
   port: positiveInt('PORT', 3001),

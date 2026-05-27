@@ -73,6 +73,7 @@ export function assertSecretsDistinct(secrets: {
   SESSION_SECRET: string
   STREAM_TOKEN_SECRET: string
   DEVICE_TOKEN_SECRET?: string | null
+  INTERNAL_PRINCIPAL_SECRET?: string | null
 }): void {
   const candidates: Array<[string, string]> = [
     ['SESSION_SECRET', secrets.SESSION_SECRET],
@@ -80,6 +81,9 @@ export function assertSecretsDistinct(secrets: {
   ]
   if (secrets.DEVICE_TOKEN_SECRET) {
     candidates.push(['DEVICE_TOKEN_SECRET', secrets.DEVICE_TOKEN_SECRET])
+  }
+  if (secrets.INTERNAL_PRINCIPAL_SECRET) {
+    candidates.push(['INTERNAL_PRINCIPAL_SECRET', secrets.INTERNAL_PRINCIPAL_SECRET])
   }
 
   for (let i = 0; i < candidates.length; i++) {
