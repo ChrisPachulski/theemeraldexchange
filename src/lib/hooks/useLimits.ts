@@ -18,6 +18,10 @@ export type Limits = {
    *  materializeNonAdmin path instead of silently hardcoding
    *  "choose me." Optional for forward-compat. */
   defaultProfileName?: string
+  /** False when the server was booted with IPTV_DISABLED=1 — Live, VOD,
+   *  and IPTV-Series tabs hide. Default true on older backends that
+   *  predate the flag. Reviewer-insurance per contract §13.3. */
+  iptvEnabled?: boolean
 }
 
 const DEFAULT_LIMITS: Limits = {
@@ -26,6 +30,7 @@ const DEFAULT_LIMITS: Limits = {
   maxTvGbPerEpisode: 5,
   useLocalRecommender: false,
   defaultProfileName: 'choose me',
+  iptvEnabled: true,
 }
 
 export function useLimits() {

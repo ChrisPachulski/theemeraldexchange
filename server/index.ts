@@ -77,9 +77,16 @@ serve(
 )
 
 // IPTV sync is opt-in: only register the cron when all three Xtream creds
-// are configured. Keeps the dev server working without mybunny.tv creds
-// and prevents the bootstrap sync from spamming /player_api.php on boot.
-if (env.XTREAM_HOST && env.XTREAM_USERNAME && env.XTREAM_PASSWORD) {
+// are configured AND the reviewer-insurance gate is not set. Keeps the
+// dev server working without mybunny.tv creds, prevents the bootstrap
+// sync from spamming /player_api.php on boot, and ensures IPTV_DISABLED
+// builds never make outbound IPTV traffic.
+if (
+  !env.IPTV_DISABLED &&
+  env.XTREAM_HOST &&
+  env.XTREAM_USERNAME &&
+  env.XTREAM_PASSWORD
+) {
   void registerIptvSchedule(env.IPTV_SYNC_CRON)
 }
 
