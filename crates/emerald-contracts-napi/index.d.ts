@@ -87,7 +87,9 @@ export interface InternalClaimsJs {
   role: string
   authMode: string
   serverId: string
-  deviceId?: string | null
+  /** Optional. Omit the property entirely when absent — passing
+   *  explicit `null` raises a napi conversion error in 2.16. */
+  deviceId?: string
   reqId: string
   iat: number
   exp: number
