@@ -21,6 +21,7 @@
 import { Hono } from 'hono'
 import { requireAuth, type Env } from '../middleware/auth.js'
 import { postFeedback } from '../services/recommender.js'
+import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
 import { env } from '../env.js'
 
 export const recommenderEvents = new Hono<Env>()
@@ -67,7 +68,7 @@ recommenderEvents.post('/event', async (c) => {
       kind,
       tmdb_id: raw.tmdbId,
       signal: 'clicked',
-    })
+    }, recommenderCallerFromSession(session))
   }
   return c.json({ ok: true })
 })

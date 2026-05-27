@@ -31,6 +31,7 @@ import { getRejections, updateRejectionTitleIfPresent } from '../services/reject
 import { getUserFeedback, updateLikedTitleIfPresent } from '../services/userFeedback.js'
 import { appendUsageEvent, computeCostCents } from '../services/usageLog.js'
 import { scoreOnce, postShown, postImpressions, type RecommenderScoredItem } from '../services/recommender.js'
+import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
 import { sanitizeTitle } from '../services/sanitize.js'
 import { iptvDb } from '../services/iptvDbSingleton.js'
 import { env } from '../env.js'
@@ -1880,6 +1881,7 @@ suggestions.get('/:type', async (c) => {
   // BYO-key Claude branch below still fires when USE_LOCAL_RECOMMENDER
   // is OFF — legacy path for deployments without the sidecar.
   if (env.useLocalRecommender) {
+    const caller = recommenderCallerFromSession(session)
     const userFeedback = await userFeedbackPromise
     const likedRaw = type === 'movie' ? userFeedback.movie.liked : userFeedback.tv.liked
     const dislikedRaw =
@@ -1915,7 +1917,7 @@ suggestions.get('/:type', async (c) => {
           ...dislikedRaw.map((e) => ({ tmdb_id: e.id, signal: 'dislike' as const })),
         ],
         household_rejections: kindRejections.map((r) => r.id),
-      })
+      }, caller)
       recItems.push(...resp.items)
       modelVersion = resp.model_version
       recipe = resp.recipe
@@ -1973,7 +1975,7 @@ suggestions.get('/:type', async (c) => {
       // during an outage, with zero benefit (the sidecar isn't
       // going to record anything either way).
       if (shown.length > 0 && recSucceeded) {
-        void postShown(session.sub, type, shown.map((it) => it.id))
+        void postShown(session.sub, type, shown.map((it) => it.id), caller)
       }
       setTimingHeader()
       return c.json({
@@ -2020,7 +2022,7 @@ suggestions.get('/:type', async (c) => {
       // every poll until they aged out of TMDB's trending window.
       // Fire-and-forget; bounded by services/recommender.ts timeout.
       if (fill.length > 0) {
-        void postShown(session.sub, type, fill.map((it) => it.id))
+        void postShown(session.sub, type, fill.map((it) => it.id), caller)
       }
     }
     const recById = new Map(recItems.map((it) => [it.tmdb_id, it]))
@@ -2035,7 +2037,7 @@ suggestions.get('/:type', async (c) => {
         model_version: modelVersion,
       }))
     if (renderedRecImpressions.length > 0) {
-      void postImpressions(session.sub, type, renderedRecImpressions)
+      void postImpressions(session.sub, type, renderedRecImpressions, caller)
     }
 
     setTimingHeader()
