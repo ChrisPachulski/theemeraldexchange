@@ -8,7 +8,10 @@ import './HomeNav.css'
 // sit at the bottom alongside the other entry buttons, mirroring the
 // floor row pattern.
 
-const PLEX_URL = 'http://theemeraldexchange.local:32400/web'
+// app.plex.tv is Plex's hosted web client — works on AND off network.
+// The LAN URL (http://theemeraldexchange.local:32400/web) was mDNS-only
+// and broke for every household member outside the house.
+const PLEX_URL = 'https://app.plex.tv/desktop'
 
 export function HomeNav() {
   const { navigate } = useNavTransition()
