@@ -25,6 +25,7 @@ import { usage } from './routes/usage.js'
 import { recommenderEvents } from './routes/recommenderEvents.js'
 import { telemetry } from './routes/telemetry.js'
 import { device } from './routes/device.js'
+import { devices, adminDevices } from './routes/devices.js'
 import { version } from './routes/version.js'
 
 export const app = new Hono()
@@ -96,6 +97,10 @@ app.route('/api/me', me)
 // /api/version is public — discovers server_id + auth_modes for Apple
 // PIN-pair (Keychain keying + UI gating). Mounted last under /api/v.
 app.route('/api/version', version)
+// Device management — self routes (auth) + admin routes. Self routes
+// scope to session.sub; admin routes cover every paired device.
+app.route('/api/devices', devices)
+app.route('/api/admin/devices', adminDevices)
 app.route('/api/sonarr', sonarr)
 app.route('/api/radarr', radarr)
 app.route('/api/sab', sab)
