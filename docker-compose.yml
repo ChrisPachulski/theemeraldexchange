@@ -83,7 +83,13 @@ services:
       IPTV_EPG_PATH: "${IPTV_EPG_PATH:-/xmltv.php}"
 
   recommender:
-    build: ./recommender
+    # Context is repo root (not ./recommender) so the Dockerfile can
+    # reach crates/emerald-contracts and crates/emerald-contracts-pyo3
+    # to build the PyO3 binding. See recommender/Dockerfile's stage-1
+    # header for the rationale.
+    build:
+      context: .
+      dockerfile: ./recommender/Dockerfile
     image: theemeraldexchange-recommender:latest
     container_name: exchange-recommender
     restart: unless-stopped
