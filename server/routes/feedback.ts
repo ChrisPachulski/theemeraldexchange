@@ -30,6 +30,7 @@ import {
   postClearFeedback,
   postClearRejection,
 } from '../services/recommender.js'
+import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
 import { env } from '../env.js'
 
 export const feedback = new Hono<Env>()
@@ -193,21 +194,22 @@ feedback.post('/', async (c) => {
 
     // Mirror to the recommender so the optimizer learns from outcomes.
     if (env.useLocalRecommender) {
+      const caller = recommenderCallerFromSession(session)
       if (oppositeSignalToClear) {
         void postClearFeedback({
           sub: session.sub,
           kind: type,
           tmdb_id: tmdbId,
           signal: oppositeSignalToClear,
-        })
+        }, caller)
       }
-      void postFeedback({ sub: session.sub, kind: type, tmdb_id: tmdbId, signal })
+      void postFeedback({ sub: session.sub, kind: type, tmdb_id: tmdbId, signal }, caller)
       if (signal === 'dislike') {
-        void postRejection({ kind: type, tmdb_id: tmdbId })
+        void postRejection({ kind: type, tmdb_id: tmdbId }, caller)
       } else if (rejectionClearedByLike) {
         // Mirror the household-veto removal triggered by red→green so
         // the recommender's household_rejections stays in sync.
-        void postClearRejection({ kind: type, tmdb_id: tmdbId })
+        void postClearRejection({ kind: type, tmdb_id: tmdbId }, caller)
       }
     }
     return c.json({ ok: true })
@@ -284,14 +286,15 @@ feedback.delete('/:type/:tmdbId/:signal', async (c) => {
   // Always send a clear event for dot signals so stale mirrored like/dislike
   // rows don't survive a toggle or clear.
   if (env.useLocalRecommender) {
+    const caller = recommenderCallerFromSession(session)
     void postClearFeedback({
       sub: session.sub,
       kind: type,
       tmdb_id: tmdbId,
       signal: actualPrior ?? undefined,
-    })
+    }, caller)
     if (rejectionWasRemoved) {
-      void postClearRejection({ kind: type, tmdb_id: tmdbId })
+      void postClearRejection({ kind: type, tmdb_id: tmdbId }, caller)
     }
   }
   return c.json({ ok: true })

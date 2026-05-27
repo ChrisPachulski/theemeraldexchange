@@ -5,6 +5,7 @@ import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { radarrFetch, radarrRootFolders, type RootFolder } from '../services/radarr.js'
 import { appendGrabEvent } from '../services/grabLog.js'
 import { postFeedback } from '../services/recommender.js'
+import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
 import { env } from '../env.js'
 
 export const radarr = new Hono<Env>()
@@ -416,7 +417,7 @@ radarr.post('/api/v3/movie', async (c) => {
         kind: 'movie',
         tmdb_id: tmdbId,
         signal: 'added',
-      })
+      }, recommenderCallerFromSession(session))
     }
   }
 

@@ -7,6 +7,7 @@ import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { sonarrFetch, sonarrRootFolders } from '../services/sonarr.js'
 import { appendGrabEvent } from '../services/grabLog.js'
 import { postFeedback } from '../services/recommender.js'
+import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
 import { env } from '../env.js'
 
 export const sonarr = new Hono<Env>()
@@ -593,7 +594,7 @@ sonarr.post('/api/v3/series', async (c) => {
         kind: 'tv',
         tmdb_id: tmdbId,
         signal: 'added',
-      })
+      }, recommenderCallerFromSession(session))
     }
   }
 
