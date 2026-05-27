@@ -33,6 +33,7 @@ export default defineConfig({
       MIN_FREE_GB: '100',
       STREAM_TOKEN_SECRET: 'stream-token-secret-test-placeholder-xxxxxxxxx',
       DEVICE_TOKEN_SECRET: 'device-token-secret-test-placeholder-yyyyyyyyy',
+      INTERNAL_PRINCIPAL_SECRET: 'internal-principal-secret-test-placeholder-zzz',
     },
     coverage: {
       provider: 'v8',

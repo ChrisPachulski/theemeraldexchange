@@ -39,6 +39,7 @@ const PRESERVED_KEYS = [
   'USE_LOCAL_RECOMMENDER',
   'EEX_TELEMETRY_DSN',
   'STREAM_TOKEN_SECRET',
+  'INTERNAL_PRINCIPAL_SECRET',
 ] as const
 
 let snapshot: Record<string, string | undefined> = {}

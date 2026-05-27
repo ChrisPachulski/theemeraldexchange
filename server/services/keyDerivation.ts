@@ -56,6 +56,10 @@ import { hkdfSync } from 'node:crypto'
 export const INFO_SESSION = 'eex/session/v1' as const
 export const INFO_DEVICE_TOKEN = 'eex/device-token/v1' as const
 export const INFO_STREAM_TOKEN = 'eex/stream-token/v1' as const
+/** Per contract §4 (Hybrid D + Rust-canonical). 60-second JWE attached
+ *  to every internal service call (recommender, M3 media-core, M4
+ *  transcoder). Pure ASCII for byte-equality across Rust/Swift. */
+export const INFO_INTERNAL_PRINCIPAL = 'eex/internal-principal/v1' as const
 
 /**
  * Derive a 32-byte AES-GCM / HMAC key from an arbitrary-length secret
