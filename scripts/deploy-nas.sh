@@ -146,12 +146,16 @@ rsync -av --delete \
   --exclude 'eval/holdout.jsonl' \
   recommender/ "${NAS_USER}@${NAS_HOST}:${APPDATA}/recommender/"
 
-# crates/ is required for the recommender image build — the multi-stage
-# Dockerfile compiles the emerald-contracts PyO3 wheel from these
-# sources. The Cargo workspace at the repo root references all three
-# members, so we ship the napi crate's manifest too (cargo refuses to
-# resolve a workspace with a missing member) even though we don't build
-# the napi .node here.
+# crates/ feeds two multi-stage image builds:
+#   - recommender/Dockerfile compiles the PyO3 wheel from
+#     crates/emerald-contracts + crates/emerald-contracts-pyo3.
+#   - Dockerfile (backend) compiles the @emerald/contracts-napi
+#     linux-x64-gnu .node from crates/emerald-contracts +
+#     crates/emerald-contracts-napi.
+# The Cargo workspace requires all three members present even when only
+# two are built per stage, so we ship every member's manifest. *.node
+# files are excluded because each image's builder stage produces a
+# fresh artifact for its target triple.
 echo "→ Syncing crates/"
 rsync -av --delete \
   --exclude 'target' \
