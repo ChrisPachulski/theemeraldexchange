@@ -32,15 +32,22 @@
 //   and carry NO grace window in their respective owners
 //   (iptvStreamToken.ts / deviceToken.ts).
 
-import { EncryptJWT, jwtDecrypt, decodeProtectedHeader } from 'jose'
+import { EncryptJWT, jwtDecrypt } from 'jose'
 import { createHash } from 'node:crypto'
 import type { Context } from 'hono'
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie'
+import * as contracts from '@emerald/contracts-napi'
 import { env } from './env.js'
 import { deriveKey, INFO_SESSION, INFO_DEVICE_TOKEN } from './services/keyDerivation.js'
 import { tryNormaliseLegacySub } from './services/sub.js'
 import { generateUlid } from './services/iptvStreamToken.js'
 import { serverDb, ensureServerId } from './services/serverDb.js'
+
+// Device-token JWE encrypt/decrypt is delegated to the Rust crate
+// (@emerald/contracts-napi) so wire bytes are produced by the same code
+// the cross-language vectors lock down. Session-cookie JWE stays on
+// `jose` for now — its grace-window code path is delicate and not on
+// the M2 critical path.
 
 const COOKIE_NAME = 'eex.session'
 const SESSION_TTL_DAYS = 30
@@ -186,22 +193,23 @@ export async function mintDeviceToken(input: DeviceTokenInput): Promise<string> 
   const exp = now + DEVICE_TOKEN_TTL_SECS
   const jti = generateUlid()
 
-  const token = await new EncryptJWT({
+  // Delegated to crates/emerald-contracts via N-API. The crate hard-codes
+  // the JWE protected header to {alg:'dir', enc:'A256GCM', kid} and the
+  // claim ordering — wire bytes are locked by the cross-language vectors.
+  const token = contracts.deviceTokenEncrypt(Buffer.from(key), DEVICE_TOKEN_KID, {
     aud: 'device',
     iss: 'eex',
     sub: input.sub,
     role: input.role,
-    auth_mode: input.auth_mode,
-    device_id: input.device_id,
-    device_platform: input.device_platform,
-    server_id: input.server_id,
+    authMode: input.auth_mode,
+    deviceId: input.device_id,
+    devicePlatform: input.device_platform,
+    serverId: input.server_id,
+    jti,
+    iat: now,
+    nbf: now,
+    exp,
   })
-    .setProtectedHeader({ alg: 'dir', enc: 'A256GCM', kid: DEVICE_TOKEN_KID })
-    .setJti(jti)
-    .setIssuedAt(now)
-    .setNotBefore(now)
-    .setExpirationTime(exp)
-    .encrypt(key)
 
   // §3.4: insert into device_tokens. Verifier later checks that the row
   // exists — catches restored-from-backup tokens after a data-dir wipe.
@@ -259,45 +267,27 @@ export type DeviceTokenClaims = {
  *  for logging should consult the rejection log written by this
  *  function (TODO: structured rejection logs). */
 export async function verifyDeviceToken(token: string): Promise<DeviceTokenClaims | null> {
-  let kid: string | undefined
-  try {
-    const header = decodeProtectedHeader(token)
-    kid = header.kid
-  } catch {
-    return null
-  }
-  // Multi-key dispatch: at v1 there's only one kid. v2+ adds a map.
-  if (kid !== DEVICE_TOKEN_KID) {
-    console.warn('[device-token] unknown kid: %s', kid)
-    return null
-  }
   const key = getDeviceKey()
 
-  let payload: Record<string, unknown>
+  // Crate handles kid dispatch internally — pass the active key map.
+  // At v1 there is only one kid; v2+ will add additional entries during
+  // the rotation grace window.
+  let claims: contracts.DeviceClaimsJs
   try {
-    const result = await jwtDecrypt(token, key)
-    payload = result.payload as Record<string, unknown>
+    claims = contracts.deviceTokenDecrypt(
+      [{ kid: DEVICE_TOKEN_KID, key: Buffer.from(key) }],
+      token,
+    )
   } catch {
     return null
   }
 
-  if (payload.aud !== 'device' || payload.iss !== 'eex') return null
-  if (typeof payload.sub !== 'string') return null
-  if (typeof payload.jti !== 'string') return null
-  if (typeof payload.device_id !== 'string') return null
-  if (typeof payload.device_platform !== 'string') return null
-  if (typeof payload.server_id !== 'string') return null
-  if (payload.role !== 'admin' && payload.role !== 'user' && payload.role !== 'guest') return null
+  if (claims.aud !== 'device' || claims.iss !== 'eex') return null
+  if (claims.role !== 'admin' && claims.role !== 'user' && claims.role !== 'guest') return null
   if (
-    payload.auth_mode !== 'plex' &&
-    payload.auth_mode !== 'local' &&
-    payload.auth_mode !== 'apple'
-  )
-    return null
-  if (
-    typeof payload.iat !== 'number' ||
-    typeof payload.nbf !== 'number' ||
-    typeof payload.exp !== 'number'
+    claims.authMode !== 'plex' &&
+    claims.authMode !== 'local' &&
+    claims.authMode !== 'apple'
   )
     return null
 
@@ -305,32 +295,32 @@ export async function verifyDeviceToken(token: string): Promise<DeviceTokenClaim
   const db = serverDb().raw
   const row = db
     .prepare(`SELECT jti FROM device_tokens WHERE jti = ? AND expires_at > datetime('now')`)
-    .get(payload.jti) as { jti: string } | undefined
+    .get(claims.jti) as { jti: string } | undefined
   if (!row) {
-    console.warn('[device-token] jti row missing or expired: %s', payload.jti)
+    console.warn('[device-token] jti row missing or expired: %s', claims.jti)
     return null
   }
   const revoked = db
     .prepare(`SELECT jti FROM device_token_revocations WHERE jti = ?`)
-    .get(payload.jti) as { jti: string } | undefined
+    .get(claims.jti) as { jti: string } | undefined
   if (revoked) {
-    console.warn('[device-token] jti revoked: %s', payload.jti)
+    console.warn('[device-token] jti revoked: %s', claims.jti)
     return null
   }
 
   return {
     aud: 'device',
     iss: 'eex',
-    sub: payload.sub,
-    role: payload.role as Role,
-    auth_mode: payload.auth_mode as AuthMode,
-    device_id: payload.device_id,
-    device_platform: payload.device_platform,
-    server_id: payload.server_id,
-    jti: payload.jti,
-    iat: payload.iat,
-    nbf: payload.nbf,
-    exp: payload.exp,
+    sub: claims.sub,
+    role: claims.role as Role,
+    auth_mode: claims.authMode as AuthMode,
+    device_id: claims.deviceId,
+    device_platform: claims.devicePlatform,
+    server_id: claims.serverId,
+    jti: claims.jti,
+    iat: claims.iat,
+    nbf: claims.nbf,
+    exp: claims.exp,
   }
 }
 

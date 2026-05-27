@@ -50,3 +50,10 @@ data/
 
 # Rust workspace build artifacts (emerald-contracts crate)
 /target/
+
+# napi-rs build artifacts — produced by `npm run build:napi` (or the napi
+# crate's `prepare` script). One .node per host triple; not portable, not
+# checked in. The Planning agent's M2 deploy plan compiles these in the
+# Docker image build step.
+crates/emerald-contracts-napi/*.node
+.planning/burn-it-all/
