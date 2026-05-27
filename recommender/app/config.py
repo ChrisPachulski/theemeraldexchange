@@ -23,6 +23,9 @@ EVENT_SECRET_PLACEHOLDERS = {
 }
 
 
+INTERNAL_PRINCIPAL_MODES = {"off", "log", "enforce"}
+
+
 @dataclass(frozen=True)
 class Config:
     db_path: Path
@@ -33,6 +36,14 @@ class Config:
     tmdb_api_key: str | None
     anthropic_api_key: str | None
     event_secret: str | None
+
+    # Internal-principal verification per contract §4. Hono attaches a
+    # JWE on every outbound call; this service verifies it via the PyO3
+    # binding. Mode is "off" by default so a deployment that hasn't yet
+    # provisioned the secret keeps working — operators flip to "log"
+    # during rollout, then "enforce" once every caller is observed.
+    internal_principal_secret: str | None
+    internal_principal_mode: str
 
     embed_model: str
     embed_dim: int
@@ -64,6 +75,31 @@ def _event_secret() -> str | None:
     return raw
 
 
+def _internal_principal_secret() -> str | None:
+    raw = os.environ.get("INTERNAL_PRINCIPAL_SECRET")
+    if raw is None or raw.strip() == "":
+        return None
+    if os.environ.get("NODE_ENV") != "production":
+        return raw
+    if raw.lower() in EVENT_SECRET_PLACEHOLDERS:
+        raise ValueError("INTERNAL_PRINCIPAL_SECRET looks like a placeholder value")
+    if len(raw) < EVENT_SECRET_MIN_LEN:
+        raise ValueError(
+            f"INTERNAL_PRINCIPAL_SECRET must be at least {EVENT_SECRET_MIN_LEN} characters"
+        )
+    return raw
+
+
+def _internal_principal_mode() -> str:
+    raw = os.environ.get("RECOMMENDER_INTERNAL_PRINCIPAL_MODE", "off").strip().lower()
+    if raw not in INTERNAL_PRINCIPAL_MODES:
+        raise ValueError(
+            f"RECOMMENDER_INTERNAL_PRINCIPAL_MODE={raw!r} must be one of "
+            f"{sorted(INTERNAL_PRINCIPAL_MODES)}"
+        )
+    return raw
+
+
 def load() -> Config:
     return Config(
         db_path=_path("RECOMMENDER_DB_PATH", "./data/exchange.db"),
@@ -73,6 +109,8 @@ def load() -> Config:
         tmdb_api_key=os.environ.get("TMDB_API_KEY") or None,
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY") or None,
         event_secret=_event_secret(),
+        internal_principal_secret=_internal_principal_secret(),
+        internal_principal_mode=_internal_principal_mode(),
         embed_model=os.environ.get("RECOMMENDER_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2"),
         embed_dim=int(os.environ.get("RECOMMENDER_EMBED_DIM", "384")),
         cold_start_threshold=int(os.environ.get("RECOMMENDER_COLD_START_THRESHOLD", "10")),

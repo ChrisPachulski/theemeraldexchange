@@ -145,7 +145,7 @@ jobs:
         run: python3 -m compileall -q recommender/app recommender/workers
 
       - name: Install maturin + pytest
-        run: pip install maturin pytest pydantic
+        run: pip install maturin pytest pydantic fastapi
 
       # Build the PyO3 extension into the active Python env so the
       # recommender's sub-validation module + parity tests can import
@@ -157,7 +157,7 @@ jobs:
 
       - name: Cross-language parity tests (recommender ↔ Rust ↔ TS)
         working-directory: recommender
-        run: pytest tests/test_emerald_contracts_parity.py tests/test_sub_validation.py -v
+        run: pytest tests/test_emerald_contracts_parity.py tests/test_sub_validation.py tests/test_internal_principal.py -v
 
   rust:
     # emerald-contracts crate: canonical cross-language source of truth
