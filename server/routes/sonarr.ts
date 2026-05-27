@@ -361,7 +361,8 @@ type SonarrAddBody = {
 }
 
 async function materializeNonAdminSeriesBody(raw: SonarrAddBody): Promise<
-  { ok: true; body: SonarrAddBody } | { ok: false; reason: string }
+  | { ok: true; body: SonarrAddBody }
+  | { ok: false; reason: string; expected_name?: string; available_names?: string[] }
 > {
   // Profile selection prefers env.defaultProfileName (defaults to
   // "choose me" to mirror the frontend modal). For TV this matters
@@ -393,7 +394,12 @@ async function materializeNonAdminSeriesBody(raw: SonarrAddBody): Promise<
     }
   }
   if (!namedProfile) {
-    return { ok: false, reason: 'default_quality_profile_missing' }
+    return {
+      ok: false,
+      reason: 'default_quality_profile_missing',
+      expected_name: env.defaultProfileName,
+      available_names: profiles.map((p) => p.name).filter((n): n is string => typeof n === 'string'),
+    }
   }
   const safe: SonarrAddBody = {}
   for (const key of NON_ADMIN_SONARR_ALLOW) {
@@ -455,7 +461,10 @@ sonarr.post('/api/v3/series', async (c) => {
     // bypass the curated quality profile, root folder, or monitor mode.
     const materialized = await materializeNonAdminSeriesBody(rawBody)
     if (!materialized.ok) {
-      return c.json({ error: materialized.reason }, 503)
+      const payload: Record<string, unknown> = { error: materialized.reason }
+      if (materialized.expected_name) payload.expected_name = materialized.expected_name
+      if (materialized.available_names) payload.available_names = materialized.available_names
+      return c.json(payload, 503)
     }
     body = materialized.body
   }
