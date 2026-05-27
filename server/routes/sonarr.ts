@@ -364,6 +364,38 @@ function normalizePath(p: string): string {
   return p.replace(/[\\/]+$/, '').toLowerCase()
 }
 
+/**
+ * Pick a quality profile by preference order:
+ *   1. exact name match against env.defaultProfileName (e.g. "Choose Me")
+ *   2. a profile whose name contains "1080p" (the typical curated default)
+ *   3. a profile whose name starts with "HD"
+ *   4. any profile other than "Any" (Any is uncapped — last-resort)
+ *   5. profiles[0] if literally only "Any" exists
+ *
+ * Returns undefined only if the profiles list is empty.
+ *
+ * The operator can pin a specific profile by setting DEFAULT_PROFILE_NAME
+ * to a name that exists upstream. Otherwise the fallback chain prefers a
+ * size-capped HD profile over the uncapped "Any" default, which keeps RSS
+ * auto-grabs sane without requiring a curated "Choose Me" profile.
+ */
+function pickProfile(
+  profiles: Array<{ id: number; name?: string }>,
+  defaultName: string,
+): { id: number; name?: string } | undefined {
+  if (profiles.length === 0) return undefined
+  const norm = (n?: string) => (n ?? '').trim().toLowerCase()
+  const named = profiles.find((p) => norm(p.name) === defaultName)
+  if (named) return named
+  const has1080p = profiles.find((p) => norm(p.name).includes('1080p'))
+  if (has1080p) return has1080p
+  const startsHd = profiles.find((p) => norm(p.name).startsWith('hd'))
+  if (startsHd) return startsHd
+  const notAny = profiles.find((p) => norm(p.name) !== 'any')
+  if (notAny) return notAny
+  return profiles[0]
+}
+
 async function materializeNonAdminSeriesBody(raw: SonarrAddBody): Promise<
   | { ok: true; body: SonarrAddBody }
   | {
@@ -397,7 +429,7 @@ async function materializeNonAdminSeriesBody(raw: SonarrAddBody): Promise<
   const folder = env.defaultSonarrRootFolderPath
     ? folders.find((f) => normalizePath(f.path) === normalizePath(env.defaultSonarrRootFolderPath))
     : folders[0]
-  const namedProfile = profiles.find((p) => p.name?.trim().toLowerCase() === env.defaultProfileName)
+  const profile = pickProfile(profiles, env.defaultProfileName)
   if (!folder) {
     return {
       ok: false,
@@ -406,7 +438,7 @@ async function materializeNonAdminSeriesBody(raw: SonarrAddBody): Promise<
       available_paths: folders.map((f) => f.path),
     }
   }
-  if (!namedProfile) {
+  if (!profile) {
     return {
       ok: false,
       reason: 'default_quality_profile_missing',
@@ -419,7 +451,7 @@ async function materializeNonAdminSeriesBody(raw: SonarrAddBody): Promise<
     if (raw[key] !== undefined) safe[key] = raw[key]
   }
   safe.rootFolderPath = folder.path
-  safe.qualityProfileId = namedProfile.id
+  safe.qualityProfileId = profile.id
   safe.monitored = true
   safe.seasonFolder = true
   // monitor: 'firstSeason' = Sonarr marks only season 1 monitored at

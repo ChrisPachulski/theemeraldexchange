@@ -234,6 +234,29 @@ function normalizePath(p: string): string {
   return p.replace(/[\\/]+$/, '').toLowerCase()
 }
 
+/**
+ * Pick a quality profile by preference order. See sonarr.ts pickProfile
+ * for the rationale — the Radarr version is identical so a curated
+ * household with one "Choose Me" or one "HD-1080p" profile lands on it
+ * automatically.
+ */
+function pickProfile(
+  profiles: Array<{ id: number; name?: string }>,
+  defaultName: string,
+): { id: number; name?: string } | undefined {
+  if (profiles.length === 0) return undefined
+  const norm = (n?: string) => (n ?? '').trim().toLowerCase()
+  const named = profiles.find((p) => norm(p.name) === defaultName)
+  if (named) return named
+  const has1080p = profiles.find((p) => norm(p.name).includes('1080p'))
+  if (has1080p) return has1080p
+  const startsHd = profiles.find((p) => norm(p.name).startsWith('hd'))
+  if (startsHd) return startsHd
+  const notAny = profiles.find((p) => norm(p.name) !== 'any')
+  if (notAny) return notAny
+  return profiles[0]
+}
+
 async function materializeNonAdminMovieBody(raw: RadarrAddBody): Promise<
   | { ok: true; body: RadarrAddBody }
   | {
@@ -273,7 +296,7 @@ async function materializeNonAdminMovieBody(raw: RadarrAddBody): Promise<
   const folder = env.defaultRadarrRootFolderPath
     ? folders.find((f) => normalizePath(f.path) === normalizePath(env.defaultRadarrRootFolderPath))
     : folders[0]
-  const profile = profiles.find((p) => p.name?.trim().toLowerCase() === env.defaultProfileName)
+  const profile = pickProfile(profiles, env.defaultProfileName)
   if (!folder) {
     return {
       ok: false,
