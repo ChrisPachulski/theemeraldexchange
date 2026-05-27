@@ -3,6 +3,7 @@ resolver = "2"
 members = [
   "crates/emerald-contracts",
   "crates/emerald-contracts-napi",
+  "crates/emerald-contracts-pyo3",
 ]
 
 [workspace.package]
