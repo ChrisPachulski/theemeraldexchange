@@ -44,8 +44,12 @@ COPY crates/emerald-contracts-pyo3 ./crates/emerald-contracts-pyo3
 # so it picks up package.json's napi block (binaryName, target list).
 # Output lands at
 # crates/emerald-contracts-napi/emerald-contracts-napi.linux-x64-gnu.node.
+#
+# `napi` is the binary name @napi-rs/cli exposes (not the package name);
+# `npx --yes @napi-rs/cli@3 build ...` errors with "could not determine
+# executable to run" because npx can't disambiguate. Use the bin name.
 WORKDIR /build/crates/emerald-contracts-napi
-RUN npx --yes @napi-rs/cli@3 build --platform --release
+RUN npx --yes napi build --platform --release
 
 # ---------------------------------------------------------------------------
 FROM node:24-slim AS base
