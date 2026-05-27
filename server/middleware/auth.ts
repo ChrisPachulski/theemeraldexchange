@@ -17,6 +17,7 @@ import type { MiddlewareHandler } from 'hono'
 import { clearSessionCookie, readSession } from '../session.js'
 import type { Session } from '../session.js'
 import { reconcileSession } from '../services/sessionGate.js'
+import { tryBearerAuth } from './deviceTokenAuth.js'
 
 export type Env = {
   Variables: {
@@ -24,10 +25,28 @@ export type Env = {
   }
 }
 
+/** Try Bearer first, fall back to cookie. The Bearer path is for M2
+ *  Apple-paired devices that send `Authorization: Bearer <JWE>` and no
+ *  cookie. Order matters: a request that has BOTH a cookie and a
+ *  Bearer header (developer testing artifact) authenticates via the
+ *  Bearer — explicit beats implicit.
+ *
+ *  When a Bearer header is present but invalid we DO NOT fall through
+ *  to the cookie. That would let an attacker who somehow obtained a
+ *  cookie bypass a freshly-revoked device token. */
 async function loadReconciledSession(c: Parameters<MiddlewareHandler<Env>>[0]): Promise<
   | { ok: true; session: Session }
-  | { ok: false; reason: 'unauthenticated' | 'access_revoked' }
+  | { ok: false; reason: 'unauthenticated' | 'access_revoked' | 'invalid_bearer' }
 > {
+  const bearer = await tryBearerAuth(c)
+  if (bearer) {
+    if (!bearer.ok) {
+      return { ok: false, reason: 'invalid_bearer' }
+    }
+    return { ok: true, session: bearer.session }
+  }
+
+  // No Bearer present — try cookie.
   const decoded = await readSession(c)
   if (!decoded) return { ok: false, reason: 'unauthenticated' }
   const reconciled = await reconcileSession(decoded)
@@ -45,7 +64,12 @@ export const requireAuth: MiddlewareHandler<Env> = async (c, next) => {
   const r = await loadReconciledSession(c)
   if (!r.ok) {
     return c.json(
-      { error: 'unauthenticated', ...(r.reason === 'access_revoked' ? { reason: r.reason } : {}) },
+      {
+        error: 'unauthenticated',
+        ...(r.reason === 'access_revoked' || r.reason === 'invalid_bearer'
+          ? { reason: r.reason }
+          : {}),
+      },
       401,
     )
   }
@@ -57,7 +81,12 @@ export const requireAdmin: MiddlewareHandler<Env> = async (c, next) => {
   const r = await loadReconciledSession(c)
   if (!r.ok) {
     return c.json(
-      { error: 'unauthenticated', ...(r.reason === 'access_revoked' ? { reason: r.reason } : {}) },
+      {
+        error: 'unauthenticated',
+        ...(r.reason === 'access_revoked' || r.reason === 'invalid_bearer'
+          ? { reason: r.reason }
+          : {}),
+      },
       401,
     )
   }

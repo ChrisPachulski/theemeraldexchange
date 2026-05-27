@@ -32,6 +32,7 @@ export default defineConfig({
       ADMINS: 'admin-user',
       MIN_FREE_GB: '100',
       STREAM_TOKEN_SECRET: 'stream-token-secret-test-placeholder-xxxxxxxxx',
+      DEVICE_TOKEN_SECRET: 'device-token-secret-test-placeholder-yyyyyyyyy',
     },
     coverage: {
       provider: 'v8',

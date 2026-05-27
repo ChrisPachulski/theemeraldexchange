@@ -32,13 +32,15 @@
 //   and carry NO grace window in their respective owners
 //   (iptvStreamToken.ts / deviceToken.ts).
 
-import { EncryptJWT, jwtDecrypt } from 'jose'
+import { EncryptJWT, jwtDecrypt, decodeProtectedHeader } from 'jose'
 import { createHash } from 'node:crypto'
 import type { Context } from 'hono'
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie'
 import { env } from './env.js'
-import { deriveKey, INFO_SESSION } from './services/keyDerivation.js'
+import { deriveKey, INFO_SESSION, INFO_DEVICE_TOKEN } from './services/keyDerivation.js'
 import { tryNormaliseLegacySub } from './services/sub.js'
+import { generateUlid } from './services/iptvStreamToken.js'
+import { serverDb, ensureServerId } from './services/serverDb.js'
 
 const COOKIE_NAME = 'eex.session'
 const SESSION_TTL_DAYS = 30
@@ -126,34 +128,225 @@ export type DeviceTokenInput = {
   /** Advisory platform string ('tvos' | 'ios' | 'ipados' | 'macos').
    *  Validators warn on unknown values but MUST NOT reject. */
   device_platform: string
+  /** Display name for this device — client-supplied at pairing time
+   *  (Apple device name) and stored in device_tokens.device_name.
+   *  Mutable via admin/self rename routes. NOT carried in the JWE. */
+  device_name: string
   /** Stable server UUID from server_state (§12.3). */
   server_id: string
 }
 
-/** Mint a device-token JWE (§3.2).
- *
- *  STUB — full body is D13's responsibility (requires D2a for
- *  DEVICE_TOKEN_SECRET and D5 for server.db where device_tokens rows
- *  are inserted). This signature is locked here by D17 so D13 has a
- *  typed target to implement and the device-mint endpoint can import
- *  and call it without a signature change.
- *
- *  When D13 implements the body:
- *  - Derive the A256GCM key via HKDF (see §3.3 / D18)
- *  - Set aud: 'device', iss: 'eex', jti: <new ULID>
- *  - Set nbf == iat, exp == iat + 180 days
- *  - Insert a row into device_tokens (§3.4)
- *
- *  @throws once D13 lands if DEVICE_TOKEN_SECRET is absent from env.
- */
-export async function mintDeviceToken(_input: DeviceTokenInput): Promise<string> {
-  // TODO(D13): implement JWE mint. The signature and DeviceTokenInput
-  // shape are locked; wire the body once D2a (DEVICE_TOKEN_SECRET) and
-  // D5 (server.db) are merged.
-  throw new Error(
-    'mintDeviceToken: not yet implemented. Implement in D13 (requires D2a + D5).',
-  )
+/** kid for the v1 device-token key. Bump (`device-v2`, etc.) when
+ *  rotating the underlying secret; the verifier's keymap stays
+ *  populated with both kids during the grace window. The locked
+ *  byte-level cross-language constant lives in
+ *  `crates/emerald-contracts/src/device_token.rs` (`DEFAULT_KID`). */
+export const DEVICE_TOKEN_KID = 'device-v1'
+
+/** 180-day TTL per contract §3.5. NOT 1 year despite design.md older
+ *  text — contract wins, locked 2026-05-25. */
+export const DEVICE_TOKEN_TTL_SECS = 180 * 24 * 60 * 60
+
+/** Cached device-token key. Lazy on first use rather than at module load
+ *  so dev environments without DEVICE_TOKEN_SECRET don't crash on import.
+ *  Resets to null on hot-reload. */
+let cachedDeviceKey: Uint8Array | null = null
+
+function getDeviceKey(): Uint8Array {
+  if (!env.deviceTokenSecret) {
+    throw new Error(
+      'mintDeviceToken/verifyDeviceToken called without DEVICE_TOKEN_SECRET configured. ' +
+        'Set DEVICE_TOKEN_SECRET in .env.local (and .env.production for prod). ' +
+        'M2 Apple PIN-pair flow cannot work without it.',
+    )
+  }
+  if (!cachedDeviceKey) {
+    cachedDeviceKey = deriveKey(env.deviceTokenSecret, INFO_DEVICE_TOKEN)
+  }
+  return cachedDeviceKey
 }
+
+/** Test-only: clear the cached device key after rotating the secret in tests. */
+export function _resetDeviceKeyForTests(): void {
+  cachedDeviceKey = null
+}
+
+/** Mint a device-token JWE (§3.2). HKDF-derived AES-256-GCM, kid
+ *  protected header for rotation, jti row inserted into
+ *  server.db/device_tokens for revocation-cache lookup at verify time.
+ *
+ *  Wire format matches `emerald-contracts::device_token` byte-for-byte
+ *  (cross-language gate via `tests/vectors/internal-principal.json`
+ *  shape spec — JWE compact bytes are non-deterministic due to nonce
+ *  but every other field is fixed).
+ */
+export async function mintDeviceToken(input: DeviceTokenInput): Promise<string> {
+  const key = getDeviceKey()
+  const now = Math.floor(Date.now() / 1000)
+  const exp = now + DEVICE_TOKEN_TTL_SECS
+  const jti = generateUlid()
+
+  const token = await new EncryptJWT({
+    aud: 'device',
+    iss: 'eex',
+    sub: input.sub,
+    role: input.role,
+    auth_mode: input.auth_mode,
+    device_id: input.device_id,
+    device_platform: input.device_platform,
+    server_id: input.server_id,
+  })
+    .setProtectedHeader({ alg: 'dir', enc: 'A256GCM', kid: DEVICE_TOKEN_KID })
+    .setJti(jti)
+    .setIssuedAt(now)
+    .setNotBefore(now)
+    .setExpirationTime(exp)
+    .encrypt(key)
+
+  // §3.4: insert into device_tokens. Verifier later checks that the row
+  // exists — catches restored-from-backup tokens after a data-dir wipe.
+  // Column name `platform` (not device_platform) and `device_name` per
+  // contract §3.4 — JWE claim names diverge from DB column names
+  // intentionally (device_name is mutable, JWE claims are immutable).
+  serverDb()
+    .raw.prepare(
+      `INSERT INTO device_tokens
+        (jti, sub, device_id, device_name, platform, server_id, kid, issued_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      jti,
+      input.sub,
+      input.device_id,
+      input.device_name,
+      input.device_platform,
+      input.server_id,
+      DEVICE_TOKEN_KID,
+      new Date(now * 1000).toISOString(),
+      new Date(exp * 1000).toISOString(),
+    )
+
+  return token
+}
+
+/** Decoded device-token claims (post-verify). All fields are required
+ *  in a valid token — verifyDeviceToken returns null on any shape
+ *  mismatch rather than partially-typed claims. */
+export type DeviceTokenClaims = {
+  aud: 'device'
+  iss: 'eex'
+  sub: string
+  role: Role
+  auth_mode: AuthMode
+  device_id: string
+  device_platform: string
+  server_id: string
+  jti: string
+  iat: number
+  nbf: number
+  exp: number
+}
+
+/** Verify a device-token JWE. Performs:
+ *  1. Read `kid` from the protected header without decrypting.
+ *  2. Look up the active key for that kid (only `device-v1` at v1).
+ *  3. Decrypt + parse claims.
+ *  4. Validate aud/iss claims.
+ *  5. Check that the jti row exists in `device_tokens`.
+ *  6. Check that the jti is NOT in `device_token_revocations`.
+ *
+ *  Returns null on any failure. Callers that need a specific reason
+ *  for logging should consult the rejection log written by this
+ *  function (TODO: structured rejection logs). */
+export async function verifyDeviceToken(token: string): Promise<DeviceTokenClaims | null> {
+  let kid: string | undefined
+  try {
+    const header = decodeProtectedHeader(token)
+    kid = header.kid
+  } catch {
+    return null
+  }
+  // Multi-key dispatch: at v1 there's only one kid. v2+ adds a map.
+  if (kid !== DEVICE_TOKEN_KID) {
+    console.warn('[device-token] unknown kid: %s', kid)
+    return null
+  }
+  const key = getDeviceKey()
+
+  let payload: Record<string, unknown>
+  try {
+    const result = await jwtDecrypt(token, key)
+    payload = result.payload as Record<string, unknown>
+  } catch {
+    return null
+  }
+
+  if (payload.aud !== 'device' || payload.iss !== 'eex') return null
+  if (typeof payload.sub !== 'string') return null
+  if (typeof payload.jti !== 'string') return null
+  if (typeof payload.device_id !== 'string') return null
+  if (typeof payload.device_platform !== 'string') return null
+  if (typeof payload.server_id !== 'string') return null
+  if (payload.role !== 'admin' && payload.role !== 'user' && payload.role !== 'guest') return null
+  if (
+    payload.auth_mode !== 'plex' &&
+    payload.auth_mode !== 'local' &&
+    payload.auth_mode !== 'apple'
+  )
+    return null
+  if (
+    typeof payload.iat !== 'number' ||
+    typeof payload.nbf !== 'number' ||
+    typeof payload.exp !== 'number'
+  )
+    return null
+
+  // §3.4 a-and-b checks: row exists AND not revoked.
+  const db = serverDb().raw
+  const row = db
+    .prepare(`SELECT jti FROM device_tokens WHERE jti = ? AND expires_at > datetime('now')`)
+    .get(payload.jti) as { jti: string } | undefined
+  if (!row) {
+    console.warn('[device-token] jti row missing or expired: %s', payload.jti)
+    return null
+  }
+  const revoked = db
+    .prepare(`SELECT jti FROM device_token_revocations WHERE jti = ?`)
+    .get(payload.jti) as { jti: string } | undefined
+  if (revoked) {
+    console.warn('[device-token] jti revoked: %s', payload.jti)
+    return null
+  }
+
+  return {
+    aud: 'device',
+    iss: 'eex',
+    sub: payload.sub,
+    role: payload.role as Role,
+    auth_mode: payload.auth_mode as AuthMode,
+    device_id: payload.device_id,
+    device_platform: payload.device_platform,
+    server_id: payload.server_id,
+    jti: payload.jti,
+    iat: payload.iat,
+    nbf: payload.nbf,
+    exp: payload.exp,
+  }
+}
+
+/** Mark a jti as revoked in `device_token_revocations`. Idempotent — a
+ *  second revoke on the same jti is a no-op. */
+export function revokeDeviceToken(jti: string, reason: string): void {
+  serverDb()
+    .raw.prepare(
+      `INSERT OR IGNORE INTO device_token_revocations (jti, revoked_at, reason)
+       VALUES (?, datetime('now'), ?)`,
+    )
+    .run(jti, reason)
+}
+
+/** Re-export so consumers can resolve server_id without an extra import. */
+export { ensureServerId }
 
 // New derivation (D18): HKDF-Extract+Expand, info = INFO_SESSION.
 // This is the canonical signing key for all cookies issued from D18 onward.

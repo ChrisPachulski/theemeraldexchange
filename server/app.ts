@@ -24,6 +24,8 @@ import { feedback } from './routes/feedback.js'
 import { usage } from './routes/usage.js'
 import { recommenderEvents } from './routes/recommenderEvents.js'
 import { telemetry } from './routes/telemetry.js'
+import { device } from './routes/device.js'
+import { version } from './routes/version.js'
 
 export const app = new Hono()
 
@@ -39,7 +41,16 @@ if (env.allowedOrigins.length > 0) {
       origin: env.allowedOrigins,
       credentials: true,
       allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-      allowHeaders: ['Content-Type', 'X-Anthropic-Api-Key'],
+      // `Authorization` is required for M2 Apple Bearer auth — preflight
+      // for any device-token request would 403 without it. `X-App-Version`
+      // lets device-authed clients self-report their build for the
+      // last_seen_version column on device_tokens (§3.4).
+      allowHeaders: [
+        'Content-Type',
+        'X-Anthropic-Api-Key',
+        'Authorization',
+        'X-App-Version',
+      ],
     }),
   )
 }
@@ -78,7 +89,13 @@ app.get('/api/limits', (c) =>
 )
 
 app.route('/api/auth', auth)
+// Apple device-pair flow lives under the same /api/auth tree as the
+// Plex cookie flow. M2 PIN-pair: POST /start → POST /poll → device JWE.
+app.route('/api/auth/device', device)
 app.route('/api/me', me)
+// /api/version is public — discovers server_id + auth_modes for Apple
+// PIN-pair (Keychain keying + UI gating). Mounted last under /api/v.
+app.route('/api/version', version)
 app.route('/api/sonarr', sonarr)
 app.route('/api/radarr', radarr)
 app.route('/api/sab', sab)
