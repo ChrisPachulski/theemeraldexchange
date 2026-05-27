@@ -231,7 +231,8 @@ async function deleteCreatedMovie(movie: CreatedRadarrMovie): Promise<{ ok: true
 }
 
 async function materializeNonAdminMovieBody(raw: RadarrAddBody): Promise<
-  { ok: true; body: RadarrAddBody } | { ok: false; reason: string }
+  | { ok: true; body: RadarrAddBody }
+  | { ok: false; reason: string; expected_name?: string; available_names?: string[] }
 > {
   // Pull the upstream's qualityprofile + rootfolder lists, then pick
   // the canonical "what the admin already curates" defaults. Profile
@@ -269,7 +270,12 @@ async function materializeNonAdminMovieBody(raw: RadarrAddBody): Promise<
     }
   }
   if (!profile) {
-    return { ok: false, reason: 'default_quality_profile_missing' }
+    return {
+      ok: false,
+      reason: 'default_quality_profile_missing',
+      expected_name: env.defaultProfileName,
+      available_names: profiles.map((p) => p.name).filter((n): n is string => typeof n === 'string'),
+    }
   }
   const safe: RadarrAddBody = {}
   for (const key of NON_ADMIN_RADARR_ALLOW) {
@@ -311,7 +317,10 @@ radarr.post('/api/v3/movie', async (c) => {
     // can't bypass the curated profile or pin a different root folder.
     const materialized = await materializeNonAdminMovieBody(rawBody)
     if (!materialized.ok) {
-      return c.json({ error: materialized.reason }, 503)
+      const payload: Record<string, unknown> = { error: materialized.reason }
+      if (materialized.expected_name) payload.expected_name = materialized.expected_name
+      if (materialized.available_names) payload.available_names = materialized.available_names
+      return c.json(payload, 503)
     }
     body = materialized.body
   }
