@@ -1,4 +1,11 @@
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
+import * as contracts from '@emerald/contracts-napi'
+
+// Sign / verify is delegated to the Rust crate (@emerald/contracts-napi).
+// The crate produces byte-identical output to the prior `node:crypto.createHmac`
+// path — locked by tests/vectors/stream-token-canonical.json. ULID generation
+// and canonicalBytes stay in JS (still exported for tests + as a parity
+// oracle against the crate).
 
 /**
  * StreamKind — the `kind` claim embedded in every stream token (§5.3).
@@ -130,11 +137,31 @@ const b64urlDecode = (s: string): Buffer =>
   Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64')
 
 // ---------------------------------------------------------------------------
-// Sign / Verify
+// Sign / Verify — delegated to @emerald/contracts-napi
 // ---------------------------------------------------------------------------
 
-function hmac(secret: string, data: Uint8Array): Buffer {
-  return createHmac('sha256', secret).update(data).digest()
+// Map crate error strings to the legacy `Error('invalid_signature')` /
+// `Error('expired_token')` / `Error('token_not_yet_valid')` shape callers
+// already match on. The crate emits `verify failed: <Variant>` or
+// `<Variant>` — extract and rename.
+function rethrowAsLegacy(e: unknown): never {
+  const msg = e instanceof Error ? e.message : String(e)
+  if (msg.includes('Expired') || msg.includes('expired_token')) throw new Error('expired_token')
+  if (msg.includes('NotYetValid') || msg.includes('token_not_yet_valid'))
+    throw new Error('token_not_yet_valid')
+  // Crate's strict-struct serde parse fails on missing `v`/`iat`/`nbf` with
+  // BadPayload before reaching UnsupportedVersion. Pre-crate JS reached the
+  // version check first; preserve that user-visible labeling so the
+  // "rejected token" classifier and tests stay stable.
+  if (
+    msg.includes('UnsupportedVersion') ||
+    msg.includes('BadPayload') ||
+    msg.includes('token_version_unsupported')
+  )
+    throw new Error('token_version_unsupported')
+  // Anything else (signature mismatch, base64 decode, malformed) maps to
+  // the legacy `invalid_signature` opaque error — callers branch on this.
+  throw new Error('invalid_signature')
 }
 
 export function signStreamToken(
@@ -152,92 +179,83 @@ export function signStreamToken(
     sub: opts.sub,
     v: 1,
   }
-  const canonical = canonicalBytes(claims)
-  const body = b64url(canonical)
-  const sig = b64url(hmac(secret, canonical))
-  return `${body}.${sig}`
-}
-
-// Clock-skew tolerance per §5.7:
-//   accept if  nbf - 30s  <=  now  <=  exp + 5s
-const NBF_SKEW_SECS = 30
-const EXP_SKEW_SECS = 5
-
-function decodeClaims(payloadBytes: Buffer): StreamClaims {
-  let raw: Record<string, unknown>
-  try {
-    raw = JSON.parse(payloadBytes.toString('utf-8')) as Record<string, unknown>
-  } catch {
-    throw new Error('invalid_payload')
-  }
-  if (raw['v'] == null || typeof raw['v'] !== 'number' || raw['v'] !== 1) {
-    throw new Error('token_version_unsupported')
-  }
-  const claims: StreamClaims = {
-    exp: raw['exp'] as number,
-    iat: raw['iat'] as number,
-    jti: raw['jti'] as string,
-    k: raw['k'] as StreamKind,
-    nbf: raw['nbf'] as number,
-    rid: raw['rid'] as string,
-    sub: raw['sub'] as string,
-    v: 1,
-  }
-  const now = Math.floor(Date.now() / 1000)
-  if (now > claims.exp + EXP_SKEW_SECS) throw new Error('expired_token')
-  if (now < claims.nbf - NBF_SKEW_SECS) throw new Error('token_not_yet_valid')
-  return claims
-}
-
-function splitToken(token: string): { sig: string; payloadBytes: Buffer } {
-  const dot = token.indexOf('.')
-  if (dot <= 0 || dot === token.length - 1) throw new Error('invalid_token')
-  return {
-    sig: token.slice(dot + 1),
-    payloadBytes: b64urlDecode(token.slice(0, dot)),
-  }
-}
-
-function constantTimeEq(a: string, b: string): boolean {
-  const aBuf = Buffer.from(a)
-  const bBuf = Buffer.from(b)
-  if (aBuf.length !== bBuf.length) return false
-  return timingSafeEqual(aBuf, bBuf)
+  // Crate accepts the canonical JSON-ordered shape directly; v is a u32.
+  return contracts.streamTokenSign(Buffer.from(secret, 'utf-8'), {
+    exp: claims.exp,
+    iat: claims.iat,
+    jti: claims.jti,
+    k: claims.k,
+    nbf: claims.nbf,
+    rid: claims.rid,
+    sub: claims.sub,
+    v: claims.v,
+  })
 }
 
 export function verifyStreamToken(secret: string, token: string): StreamClaims {
-  const { sig, payloadBytes } = splitToken(token)
-  const expected = b64url(hmac(secret, payloadBytes))
-  if (!constantTimeEq(sig, expected)) throw new Error('invalid_signature')
-  return decodeClaims(payloadBytes)
+  let c: contracts.StreamClaimsJs
+  try {
+    c = contracts.streamTokenVerify(Buffer.from(secret, 'utf-8'), token)
+  } catch (e) {
+    rethrowAsLegacy(e)
+  }
+  // Crate's enforce_time_window applies the ±30s/±5s skew.
+  try {
+    contracts.streamTokenEnforceTimeWindow(c, Math.floor(Date.now() / 1000))
+  } catch (e) {
+    rethrowAsLegacy(e)
+  }
+  return {
+    exp: c.exp,
+    iat: c.iat,
+    jti: c.jti,
+    k: c.k as StreamKind,
+    nbf: c.nbf,
+    rid: c.rid,
+    sub: c.sub,
+    v: 1,
+  }
 }
 
 /**
  * Verify a stream token against TWO secrets — the canonical (primary) and a
- * fallback (legacy / pre-rotation). Both HMACs are computed unconditionally so
- * a timing-side-channel cannot reveal which key matched (§5.4).
+ * fallback (legacy / pre-rotation). The crate's verify_dual_key computes both
+ * HMACs unconditionally so a timing-side-channel cannot reveal which key
+ * matched (§5.4).
  *
  * Used during the STREAM_TOKEN_SECRET rotation window: tokens minted before
- * rotation were signed with the previous secret (during M1, env.sessionSecret).
- * After rotation, the verifier accepts either while the 90-day stream-token
- * TTL window drains. Mint paths always use the primary secret.
- *
- * Behaviour:
- *   - both HMACs computed regardless of which (if any) matches
- *   - signature comparison uses timingSafeEqual on equal-length buffers
- *   - branch only on the resulting booleans, never on the HMAC bytes
- *   - on success the claims payload is decoded once after the branch
+ * rotation were signed with the previous secret. After rotation, the verifier
+ * accepts either while the 90-day stream-token TTL window drains. Mint paths
+ * always use the primary secret.
  */
 export function verifyStreamTokenDualKey(
   primarySecret: string,
   fallbackSecret: string,
   token: string,
 ): StreamClaims {
-  const { sig, payloadBytes } = splitToken(token)
-  const expectedPrimary = b64url(hmac(primarySecret, payloadBytes))
-  const expectedFallback = b64url(hmac(fallbackSecret, payloadBytes))
-  const primaryOk = constantTimeEq(sig, expectedPrimary)
-  const fallbackOk = constantTimeEq(sig, expectedFallback)
-  if (!primaryOk && !fallbackOk) throw new Error('invalid_signature')
-  return decodeClaims(payloadBytes)
+  let r: contracts.DualKeyVerifyResult
+  try {
+    r = contracts.streamTokenVerifyDualKey(
+      Buffer.from(primarySecret, 'utf-8'),
+      Buffer.from(fallbackSecret, 'utf-8'),
+      token,
+    )
+  } catch (e) {
+    rethrowAsLegacy(e)
+  }
+  try {
+    contracts.streamTokenEnforceTimeWindow(r.claims, Math.floor(Date.now() / 1000))
+  } catch (e) {
+    rethrowAsLegacy(e)
+  }
+  return {
+    exp: r.claims.exp,
+    iat: r.claims.iat,
+    jti: r.claims.jti,
+    k: r.claims.k as StreamKind,
+    nbf: r.claims.nbf,
+    rid: r.claims.rid,
+    sub: r.claims.sub,
+    v: 1,
+  }
 }
