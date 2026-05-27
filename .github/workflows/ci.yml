@@ -198,12 +198,17 @@ jobs:
         run: cargo clippy --all-targets --workspace -- -D warnings
         continue-on-error: true
 
-      - name: cargo build --workspace
-        run: cargo build --workspace --all-targets
+      # emerald-contracts-pyo3 uses pyo3's extension-module feature,
+      # which can't be linked by plain `cargo build` — it requires the
+      # Python interpreter that maturin sets up. The recommender CI
+      # job builds + tests it via maturin; exclude it here so this job
+      # stays focused on the pure-Rust crates.
+      - name: cargo build (workspace minus pyo3)
+        run: cargo build --workspace --exclude emerald-contracts-pyo3 --all-targets
 
       # Vector parity test gate — Rust crate produces byte-identical
       # output to TS for stream-token-canonical.json and hkdf-parity.json.
       # If this fails, Rust and TS have diverged on a wire-level format
       # and Apple/M3/M4 ports will silently break.
-      - name: cargo test --workspace
-        run: cargo test --workspace --all-targets
+      - name: cargo test (workspace minus pyo3)
+        run: cargo test --workspace --exclude emerald-contracts-pyo3 --all-targets
