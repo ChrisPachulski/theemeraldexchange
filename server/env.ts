@@ -420,6 +420,15 @@ export const env = {
   IPTV_SYNC_CRON: process.env.IPTV_SYNC_CRON ?? '0 */6 * * *',
   IPTV_RECOMMENDER_EXPORT_SECRET: opt('IPTV_RECOMMENDER_EXPORT_SECRET') ?? null,
   IPTV_REMUX_TMP_DIR: process.env.IPTV_REMUX_TMP_DIR ?? '/tmp/iptv-remux',
+  // Reviewer-insurance gate per contract §13. Set IPTV_DISABLED=1 (or
+  // 'true') to build an instance with no IPTV surface — the /api/iptv
+  // routes 404 and the IPTV sync cron never registers. The Apple-side
+  // equivalent is a Swift Active Compilation Condition (NOT this env);
+  // App Review judges the binary's capability, not its runtime config.
+  // Server-side default: enabled. Flip to disabled per deploy if the
+  // household never uses IPTV or as a fallback insurance build for the
+  // App Review submission.
+  IPTV_DISABLED: process.env.IPTV_DISABLED === '1' || process.env.IPTV_DISABLED === 'true',
 
   // §15 Telemetry. EEX_TELEMETRY_DSN is the Sentry-compatible DSN for the
   // self-hoster's Glitchtip project. Distributed to clients at boot via
