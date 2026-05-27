@@ -111,11 +111,12 @@ jobs:
         run: npm run build:spa
 
   recommender:
-    # Python sidecar has no test suite yet — at minimum keep it from
-    # silently developing a syntax error. compileall is a 1-second
-    # parse-only sweep over both packages.
+    # Python sidecar — syntax check + cross-language parity tests against
+    # the emerald-contracts PyO3 binding. The parity tests are the same
+    # tests/vectors/*.json the Rust and TS sides run; if recommender
+    # produces different bytes than Hono, this job fails.
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 8
 
     steps:
       - uses: actions/checkout@v4
@@ -124,8 +125,39 @@ jobs:
         with:
           python-version: '3.12'
 
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.90'
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-pyo3-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-pyo3-
+            ${{ runner.os }}-cargo-
+
       - name: Syntax check (recommender)
         run: python3 -m compileall -q recommender/app recommender/workers
+
+      - name: Install maturin + pytest
+        run: pip install maturin pytest pydantic
+
+      # Build the PyO3 extension into the active Python env so the
+      # recommender's sub-validation module + parity tests can import
+      # it. `maturin develop --release` is the supported in-place install
+      # workflow for editable PyO3 crates.
+      - name: Build emerald-contracts PyO3 extension
+        working-directory: crates/emerald-contracts-pyo3
+        run: maturin develop --release
+
+      - name: Cross-language parity tests (recommender ↔ Rust ↔ TS)
+        working-directory: recommender
+        run: pytest tests/test_emerald_contracts_parity.py tests/test_sub_validation.py -v
 
   rust:
     # emerald-contracts crate: canonical cross-language source of truth
