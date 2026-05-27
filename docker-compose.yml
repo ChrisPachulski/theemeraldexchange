@@ -119,6 +119,13 @@ services:
       RECOMMENDER_COLD_START_THRESHOLD: "${RECOMMENDER_COLD_START_THRESHOLD:-10}"
       RECOMMENDER_OPTIMIZER_MAX_DRIFT_PCT: "${RECOMMENDER_OPTIMIZER_MAX_DRIFT_PCT:-0.20}"
       RECOMMENDER_EVENT_SECRET: "${RECOMMENDER_EVENT_SECRET:-}"
+      # Receiver-side internal-principal verification per contract §4.
+      # Mode controls behavior: off (default, no-op), log (verify when
+      # present, never block — use to confirm Hono is supplying the
+      # header on every endpoint), enforce (verify always, 401 on
+      # missing/invalid). Secret must match Hono's INTERNAL_PRINCIPAL_SECRET.
+      INTERNAL_PRINCIPAL_SECRET: "${INTERNAL_PRINCIPAL_SECRET:-}"
+      RECOMMENDER_INTERNAL_PRINCIPAL_MODE: "${RECOMMENDER_INTERNAL_PRINCIPAL_MODE:-off}"
       HONO_HOST: "${HONO_HOST:-http://backend:3001}"
       IPTV_RECOMMENDER_EXPORT_SECRET: "${IPTV_RECOMMENDER_EXPORT_SECRET:-}"
       TMDB_READ_ACCESS_TOKEN: "${TMDB_READ_ACCESS_TOKEN:-}"
