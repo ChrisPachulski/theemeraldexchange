@@ -86,6 +86,10 @@ app.get('/api/limits', (c) =>
     // disagreeing with the server when the household curates under a
     // different label.
     defaultProfileName: env.defaultProfileName,
+    // Reviewer-insurance §13.3: SPA hides Live/VOD/Series tabs when
+    // the server has no /api/iptv surface mounted. Public boolean —
+    // no secret leakage (the same flag is implied by the 404 anyway).
+    iptvEnabled: !env.IPTV_DISABLED,
   }),
 )
 
@@ -105,7 +109,17 @@ app.route('/api/sonarr', sonarr)
 app.route('/api/radarr', radarr)
 app.route('/api/sab', sab)
 app.route('/api/tmdb', tmdb)
-app.route('/api/iptv', iptv)
+// Contract §13.3 reviewer-insurance flag: when IPTV_DISABLED is set the
+// /api/iptv tree is unmounted. The transitive iptv module imports still
+// load (Node ESM is eager), so the better-sqlite3 + node-cron deps are
+// not tree-shaken from the bundle — but a runtime request to any
+// /api/iptv/* path hits Hono's 404 fallback. App Review judges the
+// binary the user installs (the Apple app, gated via Swift compile
+// flag) — this env is the server-side counterpart for households that
+// never use IPTV.
+if (!env.IPTV_DISABLED) {
+  app.route('/api/iptv', iptv)
+}
 app.route('/api/users', users)
 // Order matters: plexLinks (auth-only) is mounted BEFORE plexAdmin
 // (admin-only). Hono's first-match-wins routing means the admin

@@ -2,6 +2,7 @@ import { useRef } from 'react'
 import type { Route } from '../../lib/router'
 import { useNavTransition } from '../../lib/navTransition'
 import { useAuth } from '../../lib/auth'
+import { useLimits } from '../../lib/hooks/useLimits'
 import { UserMenu } from '../auth/UserMenu'
 import { EmeraldMark } from '../atmosphere/EmeraldMark'
 import './TopNav.css'
@@ -13,12 +14,14 @@ const PLEX_URL = 'https://app.plex.tv/desktop'
 
 type NavRoute = Exclude<Route, 'home'>
 
-type Tab = { route: NavRoute; label: string; adminOnly?: boolean }
+type Tab = { route: NavRoute; label: string; adminOnly?: boolean; iptv?: boolean }
 
 const TABS: Tab[] = [
   { route: 'tv', label: 'TV Shows' },
   { route: 'movies', label: 'Movies' },
-  { route: 'live', label: 'Live' },
+  // `iptv: true` hides the tab when the server boots with IPTV_DISABLED=1
+  // (contract §13.3 reviewer-insurance gate).
+  { route: 'live', label: 'Live', iptv: true },
   { route: 'downloads', label: 'Downloads' },
   { route: 'users', label: 'Users', adminOnly: true },
 ]
@@ -39,6 +42,8 @@ type Props = {
 export function TopNav({ active }: Props) {
   const { transitionTo, navigate } = useNavTransition()
   const { isAdmin } = useAuth()
+  const limits = useLimits()
+  const iptvEnabled = limits.data?.iptvEnabled !== false // default true on older backends
   const tabRefs = useRef<Record<NavRoute, HTMLButtonElement | null>>({
     tv: null,
     movies: null,
@@ -46,7 +51,12 @@ export function TopNav({ active }: Props) {
     downloads: null,
     users: null,
   })
-  const visibleTabs = TABS.filter((t) => (!t.adminOnly || isAdmin) && t.route !== active)
+  const visibleTabs = TABS.filter(
+    (t) =>
+      (!t.adminOnly || isAdmin) &&
+      (!t.iptv || iptvEnabled) &&
+      t.route !== active,
+  )
 
   return (
     <>

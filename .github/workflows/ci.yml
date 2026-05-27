@@ -81,6 +81,35 @@ jobs:
           path: dist/
           retention-days: 7
 
+  test-no-iptv:
+    # Reviewer-insurance gate per contract §13.3 — boot with
+    # IPTV_DISABLED=1 and confirm the test suite still passes. The
+    # IPTV-disabled-specific test (server/app.iptv-disabled.test.ts)
+    # already runs in the main job; this matrix re-runs the WHOLE
+    # suite with the env set globally to catch any cross-feature
+    # surface that quietly depends on /api/iptv being mounted.
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      IPTV_DISABLED: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Vitest (IPTV_DISABLED=1)
+        run: npm test
+
+      - name: Build (Vite — confirms SPA still bundles without IPTV at runtime)
+        run: npm run build:spa
+
   recommender:
     # Python sidecar has no test suite yet — at minimum keep it from
     # silently developing a syntax error. compileall is a 1-second

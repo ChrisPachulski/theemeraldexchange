@@ -8,6 +8,7 @@ import { useRoute, type Route } from './lib/router'
 import { NavTransitionProvider } from './lib/navTransition'
 import { ReplayButton } from './components/nav/ReplayButton'
 import { AuthProvider, useAuth } from './lib/auth'
+import { useLimits } from './lib/hooks/useLimits'
 
 // Non-home tabs are lazy-loaded so the initial JS bundle ships only the
 // always-visible shell (Kraken atmosphere, nav, brand mark, HomeTab) plus
@@ -48,12 +49,19 @@ const TABS: Record<Route, React.ComponentType> = {
 function Shell() {
   const [route, navigate] = useRoute()
   const { isAdmin } = useAuth()
+  const limits = useLimits()
+  const iptvEnabled = limits.data?.iptvEnabled !== false
   // The Users tab is admin-only. Non-admins who land on /users via a
   // stale link get bounced home rather than seeing an error page.
+  // The Live tab is gated by IPTV_DISABLED — bounce on stale links too
+  // (the route still exists in the enum so old bookmarks don't 404 the
+  // SPA itself; they just round-trip to home).
   useEffect(() => {
     if (route === 'users' && !isAdmin) navigate('home')
-  }, [route, isAdmin, navigate])
-  const blocked = route === 'users' && !isAdmin
+    if (route === 'live' && !iptvEnabled) navigate('home')
+  }, [route, isAdmin, iptvEnabled, navigate])
+  const blocked =
+    (route === 'users' && !isAdmin) || (route === 'live' && !iptvEnabled)
   const effectiveRoute: Route = blocked ? 'home' : route
   const ActiveTab = TABS[effectiveRoute]
   const krakenVariant = effectiveRoute === 'home' ? 'kraken' : 'resting'
