@@ -8,7 +8,8 @@ PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS server_state (
   key   TEXT PRIMARY KEY,
-  value TEXT NOT NULL
+  value TEXT NOT NULL,
+  ts    TEXT NOT NULL
 );
 
 -- last_backup_at: ISO-8601 timestamp of the most recent successful POST /api/admin/backup.
