@@ -6,7 +6,10 @@ import { UserMenu } from '../auth/UserMenu'
 import { EmeraldMark } from '../atmosphere/EmeraldMark'
 import './TopNav.css'
 
-const PLEX_URL = 'http://theemeraldexchange.local:32400/web'
+// app.plex.tv is Plex's hosted web client — works on AND off network.
+// The LAN URL (http://theemeraldexchange.local:32400/web) was mDNS-only
+// and broke for every household member outside the house.
+const PLEX_URL = 'https://app.plex.tv/desktop'
 
 type NavRoute = Exclude<Route, 'home'>
 
