@@ -6,9 +6,10 @@
 -- invariant going forward.
 --
 -- The WHERE guards (`sub NOT LIKE '%:%'`) make each statement idempotent.
-
-BEGIN;
+--
+-- NOTE: No explicit BEGIN/COMMIT here — the migrator wraps each migration
+-- in BEGIN IMMEDIATE via `with transaction(conn)`. SQLite raises
+-- "cannot start a transaction within a transaction" if we open another.
 UPDATE user_feedback  SET sub = 'plex:' || sub WHERE sub NOT LIKE '%:%';
 UPDATE recently_shown SET sub = 'plex:' || sub WHERE sub NOT LIKE '%:%';
 UPDATE rec_log        SET sub = 'plex:' || sub WHERE sub NOT LIKE '%:%';
-COMMIT;
