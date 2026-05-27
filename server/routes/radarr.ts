@@ -230,9 +230,20 @@ async function deleteCreatedMovie(movie: CreatedRadarrMovie): Promise<{ ok: true
   return { ok: true }
 }
 
+function normalizePath(p: string): string {
+  return p.replace(/[\\/]+$/, '').toLowerCase()
+}
+
 async function materializeNonAdminMovieBody(raw: RadarrAddBody): Promise<
   | { ok: true; body: RadarrAddBody }
-  | { ok: false; reason: string; expected_name?: string; available_names?: string[] }
+  | {
+      ok: false
+      reason: string
+      expected_name?: string
+      available_names?: string[]
+      expected_path?: string
+      available_paths?: string[]
+    }
 > {
   // Pull the upstream's qualityprofile + rootfolder lists, then pick
   // the canonical "what the admin already curates" defaults. Profile
@@ -260,13 +271,15 @@ async function materializeNonAdminMovieBody(raw: RadarrAddBody): Promise<
   const profiles = (await profileRes.json()) as Array<{ id: number; name?: string }>
   const folders = folderResult.folders
   const folder = env.defaultRadarrRootFolderPath
-    ? folders.find((f) => f.path === env.defaultRadarrRootFolderPath)
+    ? folders.find((f) => normalizePath(f.path) === normalizePath(env.defaultRadarrRootFolderPath))
     : folders[0]
-  const profile = profiles.find((p) => p.name?.toLowerCase() === env.defaultProfileName)
+  const profile = profiles.find((p) => p.name?.trim().toLowerCase() === env.defaultProfileName)
   if (!folder) {
     return {
       ok: false,
       reason: env.defaultRadarrRootFolderPath ? 'default_root_folder_missing' : 'admin_must_configure_upstream',
+      expected_path: env.defaultRadarrRootFolderPath,
+      available_paths: folders.map((f) => f.path),
     }
   }
   if (!profile) {
@@ -320,6 +333,8 @@ radarr.post('/api/v3/movie', async (c) => {
       const payload: Record<string, unknown> = { error: materialized.reason }
       if (materialized.expected_name) payload.expected_name = materialized.expected_name
       if (materialized.available_names) payload.available_names = materialized.available_names
+      if (materialized.expected_path) payload.expected_path = materialized.expected_path
+      if (materialized.available_paths) payload.available_paths = materialized.available_paths
       return c.json(payload, 503)
     }
     body = materialized.body

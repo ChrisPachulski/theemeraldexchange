@@ -27,9 +27,10 @@ type Props = {
   movie: MovieSearchResult | null
   onClose: () => void
   onAdded?: (title: string) => void
+  onError?: (message: string) => void
 }
 
-export function AddMovieModal({ movie, onClose, onAdded }: Props) {
+export function AddMovieModal({ movie, onClose, onAdded, onError }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const profiles = useRadarrProfiles()
   const folders = useRadarrRootFolders()
@@ -110,7 +111,11 @@ export function AddMovieModal({ movie, onClose, onAdded }: Props) {
         onAdded?.(movie.title)
         onClose()
       },
-      onError: (e) => setError(e instanceof Error ? e.message : String(e)),
+      onError: (e) => {
+        const msg = e instanceof Error ? e.message : String(e)
+        setError(msg)
+        onError?.(msg)
+      },
     })
   }
 

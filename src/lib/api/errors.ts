@@ -49,13 +49,26 @@ export async function throwApiError(res: Response, scope: string): Promise<never
       `Set DEFAULT_PROFILE_NAME in your server env to one of the available names, ` +
       `or rename a profile in Sonarr/Radarr to match.`
   } else if (code === 'default_root_folder_missing') {
+    const expected = typeof data.expected_path === 'string' ? data.expected_path : ''
+    const avail = Array.isArray(data.available_paths) ? (data.available_paths as string[]) : []
+    const availText = avail.length > 0 ? ` Available paths: ${avail.join(', ')}.` : ''
+    const expectedText = expected ? ` Configured: "${expected}".` : ''
     message =
-      'The configured DEFAULT_*_ROOT_FOLDER_PATH does not exist in Sonarr/Radarr. ' +
-      'Update the env var to a path that the upstream service actually lists.'
+      `The configured DEFAULT_*_ROOT_FOLDER_PATH does not match any folder Sonarr/Radarr lists.${expectedText}${availText} ` +
+      `Update the env var to one of the available paths, or add the configured path inside Sonarr/Radarr.`
   } else if (code === 'admin_must_configure_upstream') {
     message = 'Sonarr/Radarr has no root folders configured. Set one up there first.'
   } else if (code === 'rootfolder_unreachable' || code === 'qualityprofile_unreachable') {
     message = 'Sonarr/Radarr is unreachable. Check the service is running and the API key is correct.'
+  } else if (code === 'free_space_unknown' || (res.status === 507 && code !== 'insufficient_disk_space')) {
+    const path = typeof data.path === 'string' ? data.path : 'the root folder'
+    message =
+      `Sonarr/Radarr cannot read the free-space value for ${path}. ` +
+      `This usually means the drive is unmounted, freshly added, or the disk probe has not run yet. ` +
+      `Wait a minute and retry, or check the mount on your NAS.`
+  } else if (code === 'unknown_root_folder') {
+    const path = typeof data.path === 'string' ? data.path : 'the requested path'
+    message = `Sonarr/Radarr does not list ${path} as a root folder. Pick a different folder or add it upstream.`
   } else if (typeof data.message === 'string') {
     message = data.message
   }
