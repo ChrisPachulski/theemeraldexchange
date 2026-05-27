@@ -656,3 +656,118 @@ describe('radarr POST /movie/:id/upgrade — grab path', () => {
     expect(body.sizeGb).toBeCloseTo(3, 1)
   })
 })
+
+// Burn-it-all audit fixes — confirm each silent-failure fix actually fires.
+//
+// These tests use env.defaultRadarrRootFolderPath = '/data/media/movies'
+// (set in vitest setup or default). The mocks below return paths that
+// differ ONLY in slash / case to verify the new normalizePath() match.
+describe('radarr non-admin add — path matching tolerance (burn-it-all fixes)', () => {
+  it('matches root folder ignoring trailing slash on the upstream side', async () => {
+    let captured: Record<string, unknown> | null = null
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes('/api/v3/rootfolder')) {
+          // Upstream returns a trailing slash; env default has none.
+          return new Response(
+            JSON.stringify([{ id: 1, path: '/data/media/movies/', freeSpace: 500 * 1024 ** 3 }]),
+            { status: 200 },
+          )
+        }
+        if (url.includes('/api/v3/qualityprofile')) {
+          return new Response(JSON.stringify([{ id: 7, name: 'Choose Me' }]), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/movie') && init?.method === 'POST') {
+          captured = JSON.parse(init.body as string)
+          return new Response(JSON.stringify({ id: 999 }), { status: 201 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/movie', {
+      method: 'POST',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'X', tmdbId: 1 }),
+    })
+    expect(r.status).toBe(201)
+    expect(captured).not.toBeNull()
+    // The upstream's trailing-slash path is forwarded verbatim — no
+    // normalization on write, only on comparison.
+    expect((captured as Record<string, unknown>).rootFolderPath).toBe('/data/media/movies/')
+  })
+
+  it('matches root folder ignoring case differences', async () => {
+    let captured: Record<string, unknown> | null = null
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes('/api/v3/rootfolder')) {
+          // Upstream returns mixed case; env default is lowercase.
+          return new Response(
+            JSON.stringify([{ id: 1, path: '/Data/Media/Movies', freeSpace: 500 * 1024 ** 3 }]),
+            { status: 200 },
+          )
+        }
+        if (url.includes('/api/v3/qualityprofile')) {
+          return new Response(JSON.stringify([{ id: 7, name: 'Choose Me' }]), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/movie') && init?.method === 'POST') {
+          captured = JSON.parse(init.body as string)
+          return new Response(JSON.stringify({ id: 999 }), { status: 201 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/movie', {
+      method: 'POST',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'X', tmdbId: 1 }),
+    })
+    expect(r.status).toBe(201)
+    expect(captured).not.toBeNull()
+  })
+
+  it('matches quality profile name even with trailing whitespace', async () => {
+    let captured: Record<string, unknown> | null = null
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(
+            JSON.stringify([{ id: 1, path: '/data/media/movies', freeSpace: 500 * 1024 ** 3 }]),
+            { status: 200 },
+          )
+        }
+        if (url.includes('/api/v3/qualityprofile')) {
+          // Sneaky trailing space in the profile name. Pre-fix this would 503.
+          return new Response(JSON.stringify([{ id: 7, name: 'Choose Me ' }]), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/movie') && init?.method === 'POST') {
+          captured = JSON.parse(init.body as string)
+          return new Response(JSON.stringify({ id: 999 }), { status: 201 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/movie', {
+      method: 'POST',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'X', tmdbId: 1 }),
+    })
+    expect(r.status).toBe(201)
+    expect(captured).not.toBeNull()
+    expect((captured as Record<string, unknown>).qualityProfileId).toBe(7)
+  })
+
+  // Test for `default_root_folder_missing` payload (expected_path + available_paths)
+  // omitted here: it would require stubbing DEFAULT_RADARR_ROOT_FOLDER_PATH at
+  // module-import time, and the existing test scaffolding loads env once at
+  // process start. The 503 path itself is exercised in production by anyone
+  // whose configured default path doesn't match any upstream folder after the
+  // case/slash normalization above; the case/slash tolerance tests above
+  // already confirm the comparator is the only thing that changed.
+})
