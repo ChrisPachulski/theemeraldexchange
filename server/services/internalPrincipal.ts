@@ -18,7 +18,7 @@
 // production. Tolerated absent in dev so localhost-without-sidecar
 // still boots; the mint helper throws on first call instead.
 
-import * as contracts from '@emerald/contracts-napi'
+import { contracts } from './contractsBinding.js'
 
 import { env } from '../env.js'
 import { generateUlid } from './iptvStreamToken.js'

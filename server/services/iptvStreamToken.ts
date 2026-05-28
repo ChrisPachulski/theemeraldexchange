@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import * as contracts from '@emerald/contracts-napi'
+import { contracts, type ContractsTypes } from './contractsBinding.js'
 
 // Sign / verify is delegated to the Rust crate (@emerald/contracts-napi).
 // The crate produces byte-identical output to the prior `node:crypto.createHmac`
@@ -183,7 +183,7 @@ export function signStreamToken(
 }
 
 export function verifyStreamToken(secret: string, token: string): StreamClaims {
-  let c: contracts.StreamClaimsJs
+  let c: ContractsTypes.StreamClaimsJs
   try {
     c = contracts.streamTokenVerify(Buffer.from(secret, 'utf-8'), token)
   } catch (e) {
@@ -223,7 +223,7 @@ export function verifyStreamTokenDualKey(
   fallbackSecret: string,
   token: string,
 ): StreamClaims {
-  let r: contracts.DualKeyVerifyResult
+  let r: ContractsTypes.DualKeyVerifyResult
   try {
     r = contracts.streamTokenVerifyDualKey(
       Buffer.from(primarySecret, 'utf-8'),
