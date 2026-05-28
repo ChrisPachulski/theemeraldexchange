@@ -25,6 +25,7 @@ import { usage } from './routes/usage.js'
 import { recommenderEvents } from './routes/recommenderEvents.js'
 import { telemetry } from './routes/telemetry.js'
 import { device } from './routes/device.js'
+import { media } from './routes/media.js'
 import { devices, adminDevices } from './routes/devices.js'
 import { version } from './routes/version.js'
 
@@ -146,3 +147,7 @@ app.route('/api/recommender', recommenderEvents)
 // §15 telemetry: DSN distribution endpoint. Apps fetch this at boot to
 // discover the self-hoster's Glitchtip DSN and initialize their Sentry SDK.
 app.route('/api/telemetry', telemetry)
+
+if (env.useMediaCore) {
+  app.route('/api/media', media)
+}

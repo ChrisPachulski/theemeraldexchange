@@ -22,6 +22,7 @@ impl PrincipalMode {
 
 #[derive(Debug, Clone)]
 pub struct Config {
+    pub host: String,
     pub port: u16,
     pub db_path: String,
     pub library_paths: Vec<PathBuf>,
@@ -33,6 +34,10 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Self {
+        // Defaults to loopback for dev safety; compose sets 0.0.0.0 so the
+        // backend container can reach it over the docker network while the
+        // published port stays bound to the NAS host's 127.0.0.1.
+        let host = std::env::var("MEDIA_CORE_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
         let port = std::env::var("MEDIA_CORE_PORT")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -58,6 +63,7 @@ impl Config {
         let tmdb_api_key = std::env::var("TMDB_API_KEY").ok().filter(|s| !s.is_empty());
 
         Config {
+            host,
             port,
             db_path,
             library_paths,
