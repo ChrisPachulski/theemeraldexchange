@@ -423,6 +423,13 @@ export const env = {
     (process.env.NODE_ENV === 'production'
       ? 'http://media-core:8002'
       : 'http://127.0.0.1:8002'),
+  // Path to media-core's library DB (media.db). The server opens this
+  // file READ-ONLY for availability tagging (recommender stamps
+  // available_on:['local'] for titles already on disk). media-core owns
+  // ALL writes; the server never migrates or mutates it. Default matches
+  // the NAS data bind-mount used by iptv.db. In Docker the library mount
+  // is read-only for media-core too — this is purely a read seam.
+  MEDIA_DB_PATH: process.env.MEDIA_DB_PATH ?? './data/media.db',
 
   // mybunny.tv / Xtream Codes IPTV integration. Reserved at PF-2;
   // consumed by the IPTV modules added in later PF phases (Xtream client,
