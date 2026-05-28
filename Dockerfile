@@ -65,6 +65,13 @@ FROM node:24-slim AS base
 
 WORKDIR /app
 
+# ffmpeg + ffprobe ≥6.0. server/services/ffmpeg.ts validates the version at
+# boot and exits the process if it is missing or <6.0 (the backend extracts
+# video frames). Debian bookworm's apt ships ffmpeg 5.1, which FAILS that gate,
+# so we COPY statically-linked 7.x binaries from a pinned, binaries-only image
+# instead. Static build → no glibc/runtime deps, runs as-is on node:24-slim.
+COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /ffprobe /usr/local/bin/
+
 # Pre-stage the napi crate's JS surface + the linux-x64-gnu .node so the
 # file: dep resolves and the prepare-script's existence check finds the
 # binary and short-circuits the rebuild. .dockerignore excludes
