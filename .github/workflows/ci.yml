@@ -147,13 +147,17 @@ jobs:
       - name: Install maturin + pytest
         run: pip install maturin pytest pydantic fastapi
 
-      # Build the PyO3 extension into the active Python env so the
-      # recommender's sub-validation module + parity tests can import
-      # it. `maturin develop --release` is the supported in-place install
-      # workflow for editable PyO3 crates.
-      - name: Build emerald-contracts PyO3 extension
+      # `maturin develop` requires an active virtualenv; the
+      # setup-python@v5 environment is bare system Python. Use
+      # `maturin build` + `pip install <wheel>` instead — same end
+      # result (extension importable from the active interpreter) with
+      # no venv setup ceremony.
+      - name: Build emerald-contracts wheel
         working-directory: crates/emerald-contracts-pyo3
-        run: maturin develop --release
+        run: maturin build --release --out wheels
+
+      - name: Install wheel into job's Python env
+        run: pip install crates/emerald-contracts-pyo3/wheels/*.whl
 
       - name: Cross-language parity tests (recommender ↔ Rust ↔ TS)
         working-directory: recommender
