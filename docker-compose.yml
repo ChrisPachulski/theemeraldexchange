@@ -31,6 +31,18 @@ services:
       GRAB_LOG_PATH: "/app/data/grabs.jsonl"
       PLEX_CLIENT_ID: "${PLEX_CLIENT_ID}"
       SESSION_SECRET: "${SESSION_SECRET}"
+      # Token-signing IKMs — each HKDF'd to a distinct AES-256-GCM key.
+      # env.ts requires all three in production and asserts they are
+      # pairwise distinct (and distinct from SESSION_SECRET). Without
+      # these passthroughs the backend container boots and immediately
+      # crashes on the env.ts production gate.
+      STREAM_TOKEN_SECRET: "${STREAM_TOKEN_SECRET}"
+      DEVICE_TOKEN_SECRET: "${DEVICE_TOKEN_SECRET}"
+      INTERNAL_PRINCIPAL_SECRET: "${INTERNAL_PRINCIPAL_SECRET}"
+      # Mandatory telemetry DSN (§15.1). env.ts hard-fails prod boot when
+      # absent; the value is provisioned from the self-hosted Glitchtip
+      # instance (see docs/operations/glitchtip-setup.md §4).
+      EEX_TELEMETRY_DSN: "${EEX_TELEMETRY_DSN}"
       ADMINS: "${ADMINS:-}"
       PLEX_SERVER_ID: "${PLEX_SERVER_ID:-}"
       # Bootstrap escape hatch for the brief first-deploy window before
