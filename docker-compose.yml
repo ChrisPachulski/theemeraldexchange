@@ -182,7 +182,10 @@ services:
       DATABASE_URL: "postgres://glitchtip:${GLITCHTIP_DB_PASSWORD}@glitchtip-db:5432/glitchtip"
       EMAIL_URL: "${GLITCHTIP_EMAIL_URL:-consolemail://}"
       GLITCHTIP_DOMAIN: "${GLITCHTIP_DOMAIN}"
-      DEFAULT_FROM_EMAIL: "noreply@${GLITCHTIP_DOMAIN}"
+      # NOT derived from GLITCHTIP_DOMAIN — that now carries an https://
+      # scheme (Glitchtip 6.x requires it), which would yield an invalid
+      # "noreply@https://host" address. Email is console-only by default.
+      DEFAULT_FROM_EMAIL: "${GLITCHTIP_FROM_EMAIL:-noreply@localhost}"
       # TRUSTED_PROXIES: required in v6.0+ when Glitchtip sits behind a
       # reverse proxy (Caddy, nginx, tailscale serve). Without this, Granian
       # cannot resolve real client IPs from X-Forwarded-For headers.
@@ -225,7 +228,10 @@ services:
       DATABASE_URL: "postgres://glitchtip:${GLITCHTIP_DB_PASSWORD}@glitchtip-db:5432/glitchtip"
       EMAIL_URL: "${GLITCHTIP_EMAIL_URL:-consolemail://}"
       GLITCHTIP_DOMAIN: "${GLITCHTIP_DOMAIN}"
-      DEFAULT_FROM_EMAIL: "noreply@${GLITCHTIP_DOMAIN}"
+      # NOT derived from GLITCHTIP_DOMAIN — that now carries an https://
+      # scheme (Glitchtip 6.x requires it), which would yield an invalid
+      # "noreply@https://host" address. Email is console-only by default.
+      DEFAULT_FROM_EMAIL: "${GLITCHTIP_FROM_EMAIL:-noreply@localhost}"
       # CELERY_WORKER_AUTOSCALE was removed in v6.0 (Celery replaced by
       # django-vtasks). It is intentionally absent here — setting it would
       # be silently ignored at best or break worker startup at worst.
