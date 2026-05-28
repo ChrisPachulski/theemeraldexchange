@@ -8,11 +8,11 @@ import { useIptvLive } from '../../lib/hooks/useIptvLive'
 import { useIptvFavoriteSet, useToggleIptvFavorite } from '../../lib/hooks/useIptvFavorites'
 import { useReportPosition } from '../../lib/hooks/useIptvHistory'
 import { useDebounced } from '../../lib/hooks/useDebounced'
+import { ConcurrencyLimitModal } from '../iptv/ConcurrencyLimitModal'
 import {
-  ConcurrencyLimitModal,
   concurrencyPayloadFromError,
   type ConcurrencyLimitPayload,
-} from '../iptv/ConcurrencyLimitModal'
+} from '../iptv/concurrencyLimit'
 
 type GuideChannel = {
   id: number

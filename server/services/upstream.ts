@@ -82,7 +82,7 @@ export async function fetchJsonWithTimeout(
     }
     const reason = name === 'AbortError' ? 'upstream_timeout' : 'upstream_unreachable'
     console.error(`[upstream] ${label} ${reason}: ${message}`)
-    throw new Error(`${label}_${reason}`)
+    throw new Error(`${label}_${reason}`, { cause: err })
   } finally {
     clearTimeout(timer)
   }

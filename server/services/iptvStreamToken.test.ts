@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { createHmac } from 'node:crypto'
 import { signStreamToken, verifyStreamToken, verifyStreamTokenDualKey, canonicalBytes, generateUlid, type StreamClaims } from './iptvStreamToken.js'
 
 const SECRET = '0123456789abcdef0123456789abcdef'
@@ -73,7 +74,6 @@ describe('iptv stream token — round trip', () => {
 
   it('rejects token with missing v field', () => {
     // Forge a token with no v claim by signing a hand-rolled payload
-    const { createHmac } = require('node:crypto')
     const payload = Buffer.from(JSON.stringify({ k: 'live', rid: '10', sub: 'plex:1', exp: Math.floor(Date.now()/1000) + 60 }))
     const body = payload.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
     const sig = createHmac('sha256', SECRET).update(payload).digest()
@@ -92,10 +92,9 @@ describe('iptv stream token — round trip', () => {
 // ---------------------------------------------------------------------------
 
 function mintToken(claims: StreamClaims, secret: string): string {
-  const { createHmac: _hmac } = require('node:crypto')
   const canonical = canonicalBytes(claims)
   const body = Buffer.from(canonical).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-  const sig = (_hmac as typeof import('node:crypto').createHmac)('sha256', secret)
+  const sig = createHmac('sha256', secret)
     .update(canonical).digest()
     .toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
   return `${body}.${sig}`
@@ -333,13 +332,11 @@ describe('stream-token-canonical.json vectors (§13.1)', () => {
     const testKey: string = raw.test_key ?? '0123456789abcdef0123456789abcdef'
     const vectors: Vector[] = raw.vectors ?? (raw as unknown as Vector[])
 
-    const { createHmac } = require('node:crypto')
-
     for (let i = 0; i < vectors.length; i++) {
       const v = vectors[i]
       const key = v.test_key ?? testKey
       const canonical = Buffer.from(v.canonical_bytes_hex, 'hex')
-      const gotHmac: string = (createHmac('sha256', key) as ReturnType<typeof createHmac>)
+      const gotHmac: string = createHmac('sha256', key)
         .update(canonical)
         .digest('hex')
       expect(gotHmac, `vector[${i}] hmac_hex_with_test_key mismatch`).toBe(v.hmac_hex_with_test_key)

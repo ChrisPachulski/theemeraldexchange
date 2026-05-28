@@ -31,7 +31,10 @@ function key(): Buffer {
   return deriveKey(process.env.SESSION_SECRET!, INFO_SESSION)
 }
 
-function legacyKey(): Buffer {
+// Retained for negative test cases that exercise the grace-window fallback
+// path; not currently called. Prefixed with `_` so the lint config's
+// unused-vars rule doesn't flag it.
+function _legacyKey(): Buffer {
   return createHash('sha256').update(process.env.SESSION_SECRET!, 'utf8').digest()
 }
 

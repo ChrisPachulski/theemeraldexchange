@@ -1,33 +1,15 @@
-import type { ApiError } from '../../lib/api/errors'
 import type { SessionRow } from '../../lib/api/iptv'
 import { useKillIptvSession } from '../../lib/hooks/useIptvSessions'
+import type { ConcurrencyLimitPayload } from './concurrencyLimit'
 
 // Shown when a stream grant 429s because the upstream's connection cap
 // is full. The 429 body now embeds the active sessions so we can render
 // "kick" buttons inline — no extra round trip to /api/iptv/sessions
 // needed before the user makes a decision.
-
-export type ConcurrencyLimitPayload = {
-  limit: number
-  current: number
-  sessions: SessionRow[]
-}
-
-export function concurrencyPayloadFromError(e: unknown): ConcurrencyLimitPayload | null {
-  if (!e || typeof e !== 'object') return null
-  const err = e as ApiError
-  if (err.status !== 429) return null
-  const d = err.details ?? {}
-  if ((d as { reason?: string }).reason !== 'iptv_concurrency_limit') return null
-  const sessions = Array.isArray((d as { sessions?: unknown }).sessions)
-    ? ((d as { sessions: SessionRow[] }).sessions)
-    : []
-  return {
-    limit: Number((d as { limit?: number }).limit ?? 0),
-    current: Number((d as { current?: number }).current ?? sessions.length),
-    sessions,
-  }
-}
+//
+// ConcurrencyLimitPayload + concurrencyPayloadFromError live in
+// ./concurrencyLimit.ts so this file is component-only (react-refresh
+// requirement).
 
 function relativeTime(ms: number): string {
   const diff = Date.now() - ms

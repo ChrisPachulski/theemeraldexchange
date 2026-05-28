@@ -28,6 +28,7 @@ async function post<T, B>(path: string, body: B): Promise<T> {
     if (err instanceof DOMException && err.name === 'AbortError') {
       throw new Error(
         `Sonarr ${path}: request timed out after 60s — the server is taking too long. Check Sonarr is reachable from the dashboard server.`,
+        { cause: err },
       )
     }
     throw err
