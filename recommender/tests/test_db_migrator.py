@@ -27,6 +27,7 @@ import pytest
 # tests running without a real exchange.db on disk.
 # ---------------------------------------------------------------------------
 from app.db import (
+    _auto_backup,
     _bootstrap_schema_migrations,
     _check_backup_gate,
     _has_drop_table,
@@ -314,31 +315,64 @@ def test_has_destructive_annotation_absent() -> None:
 
 
 # ---------------------------------------------------------------------------
-# (f) _check_backup_gate raises when server.db is absent
+# _check_backup_gate — auto-backup-first behavior (primary), with the legacy
+# sibling-server.db proof as the fallback when auto-backup cannot be written.
 # ---------------------------------------------------------------------------
 
 
-def test_check_backup_gate_raises_when_server_db_missing(tmp_path: Path) -> None:
-    """RuntimeError is raised when server.db does not exist at the sibling path."""
+def _make_real_db(path: Path) -> None:
+    """Create a minimal but valid SQLite db so _auto_backup can snapshot it."""
+    conn = sqlite3.connect(str(path))
+    conn.execute("CREATE TABLE t (x INTEGER)")
+    conn.commit()
+    conn.close()
+
+
+def _force_autobackup_failure(monkeypatch: "pytest.MonkeyPatch") -> None:
+    """Make _auto_backup raise so the gate exercises its fallback branch."""
+
+    def _boom(*_args, **_kwargs):
+        raise OSError("forced auto-backup failure (test)")
+
+    monkeypatch.setattr("app.db._auto_backup", _boom)
+
+
+def test_check_backup_gate_autobackup_success_passes(tmp_path: Path) -> None:
+    """Primary path: a consistent auto-backup is written and the gate passes
+    WITHOUT requiring a sibling server.db (the production volume layout)."""
     db = tmp_path / "exchange.db"
-    db.touch()
+    _make_real_db(db)
+
+    # No server.db present; auto-backup alone must satisfy the gate.
+    _check_backup_gate(db, "0099_drop_foo.sql")
+
+    backups = list(tmp_path.glob("exchange.db.pre0099-*.bak"))
+    assert backups, "expected an auto-backup file beside the db"
+
+
+def test_check_backup_gate_raises_when_server_db_missing(
+    tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+) -> None:
+    """Fallback path: when auto-backup fails AND no sibling server.db exists,
+    a -- DESTRUCTIVE migration is aborted."""
+    db = tmp_path / "exchange.db"
+    _make_real_db(db)
+    _force_autobackup_failure(monkeypatch)
 
     with pytest.raises(RuntimeError, match="server.db was not found"):
         _check_backup_gate(db, "0099_drop_foo.sql")
 
 
-# ---------------------------------------------------------------------------
-# (g) _check_backup_gate raises when backup is stale
-# ---------------------------------------------------------------------------
-
-
-def test_check_backup_gate_raises_when_backup_stale(tmp_path: Path) -> None:
-    """RuntimeError is raised when last_backup_at is older than _BACKUP_MAX_AGE_S."""
+def test_check_backup_gate_raises_when_backup_stale(
+    tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+) -> None:
+    """Fallback path: when auto-backup fails and the external backup timestamp
+    is older than _BACKUP_MAX_AGE_S, the migration is aborted."""
     db = tmp_path / "exchange.db"
-    db.touch()
+    _make_real_db(db)
     server_db = tmp_path / "server.db"
+    _force_autobackup_failure(monkeypatch)
 
-    # Write a server.db with a stale backup timestamp (25 minutes ago).
     stale_ts = (datetime.now(tz=timezone.utc) - timedelta(minutes=25)).isoformat()
     sconn = sqlite3.connect(str(server_db))
     sconn.execute("CREATE TABLE server_state (key TEXT PRIMARY KEY, value TEXT)")
@@ -353,11 +387,15 @@ def test_check_backup_gate_raises_when_backup_stale(tmp_path: Path) -> None:
         _check_backup_gate(db, "0099_drop_foo.sql")
 
 
-def test_check_backup_gate_passes_with_fresh_backup(tmp_path: Path) -> None:
-    """No exception when last_backup_at is within _BACKUP_MAX_AGE_S seconds."""
+def test_check_backup_gate_passes_with_fresh_backup(
+    tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+) -> None:
+    """Fallback path: when auto-backup fails but a FRESH external backup exists,
+    the gate passes."""
     db = tmp_path / "exchange.db"
-    db.touch()
+    _make_real_db(db)
     server_db = tmp_path / "server.db"
+    _force_autobackup_failure(monkeypatch)
 
     fresh_ts = datetime.now(tz=timezone.utc).isoformat()
     sconn = sqlite3.connect(str(server_db))
