@@ -174,12 +174,24 @@ services:
     image: glitchtip/glitchtip:6.1
     container_name: exchange-glitchtip
     restart: unless-stopped
+    # The image's default entrypoint runs migrations ONLY in Heroku or
+    # all_in_one mode (bin/start.sh). In a split web+worker deployment the
+    # plain `web` role serves without ever migrating, so a fresh Postgres
+    # volume boots with no schema ("relation users_user does not exist").
+    # Migrate (and create event partitions) before serving. Idempotent: a
+    # no-op once the schema is current. run-web.sh just execs granian.
+    command: sh -c "python manage.py migrate --no-input --skip-checks && python manage.py maintain_partitions && exec ./bin/run-web.sh"
     ports:
       # Port changed from 8080 → 8000 in v6.0 (Granian replaces Gunicorn).
       - "127.0.0.1:8100:8000"
     environment:
       SECRET_KEY: "${GLITCHTIP_SECRET_KEY}"
       DATABASE_URL: "postgres://glitchtip:${GLITCHTIP_DB_PASSWORD}@glitchtip-db:5432/glitchtip"
+      # Cache + task broker. GlitchTip reads VALKEY_URL (then REDIS_URL),
+      # else defaults to host "redis" — which does not resolve here and
+      # breaks every cache write ("Name or service not known"). Point it at
+      # the glitchtip-redis service. Valkey speaks the redis protocol.
+      VALKEY_URL: "redis://glitchtip-redis:6379/0"
       EMAIL_URL: "${GLITCHTIP_EMAIL_URL:-consolemail://}"
       GLITCHTIP_DOMAIN: "${GLITCHTIP_DOMAIN}"
       # NOT derived from GLITCHTIP_DOMAIN — that now carries an https://
@@ -205,7 +217,7 @@ services:
       POSTGRES_PASSWORD: "${GLITCHTIP_DB_PASSWORD}"
       POSTGRES_DB: glitchtip
     volumes:
-      - glitchtip-postgres:/var/lib/postgresql/data
+      - glitchtip-pgdata:/var/lib/postgresql/data
 
   glitchtip-redis:
     image: redis:7-alpine
@@ -226,6 +238,10 @@ services:
       SERVER_ROLE: worker
       SECRET_KEY: "${GLITCHTIP_SECRET_KEY}"
       DATABASE_URL: "postgres://glitchtip:${GLITCHTIP_DB_PASSWORD}@glitchtip-db:5432/glitchtip"
+      # Same Valkey instance as the web service — this is the task broker the
+      # worker consumes from. Without it the worker polls a non-existent
+      # default host and never processes ingest tasks (events never persist).
+      VALKEY_URL: "redis://glitchtip-redis:6379/0"
       EMAIL_URL: "${GLITCHTIP_EMAIL_URL:-consolemail://}"
       GLITCHTIP_DOMAIN: "${GLITCHTIP_DOMAIN}"
       # NOT derived from GLITCHTIP_DOMAIN — that now carries an https://
@@ -241,4 +257,8 @@ services:
       - glitchtip-redis
 
 volumes:
-  glitchtip-postgres:
+  # Renamed from glitchtip-postgres to force a clean re-init of the Postgres
+  # role after GLITCHTIP_DB_PASSWORD was rotated to a URL-safe value. The old
+  # volume held no application tables; it is left orphaned (harmless) rather
+  # than deleted. Safe for fresh deployments — the name is arbitrary.
+  glitchtip-pgdata:

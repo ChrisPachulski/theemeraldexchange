@@ -20,8 +20,11 @@ Glitchtip will start but its security model will be broken.
 # Secret key for Django (Glitchtip backend)
 openssl rand -base64 48
 
-# Postgres password for the glitchtip user
-openssl rand -base64 32
+# Postgres password for the glitchtip user.
+# Use hex, NOT base64: GLITCHTIP_DB_PASSWORD is interpolated raw into
+# DATABASE_URL (postgres://glitchtip:<pw>@...), and base64's '+', '/', '='
+# characters break URL parsing ("Port could not be cast to integer").
+openssl rand -hex 24
 ```
 
 Copy the outputs into your `.env.production` file:
