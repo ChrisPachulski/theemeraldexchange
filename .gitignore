@@ -64,3 +64,6 @@ crates/emerald-contracts-pyo3/*.so
 crates/emerald-contracts-pyo3/*.pyd
 
 .planning/burn-it-all/
+
+# Auto-generated session resume state (regenerated each Stop/PreCompact)
+.eex/
