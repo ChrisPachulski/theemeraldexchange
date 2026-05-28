@@ -12,7 +12,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    let config = Config::from_env();
+    let config = Config::from_env().map_err(|e| {
+        tracing::error!("media-core config error: {e}");
+        e
+    })?;
     tracing::info!(
         port = config.port,
         db = %config.db_path,
