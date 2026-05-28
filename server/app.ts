@@ -91,6 +91,11 @@ app.get('/api/limits', (c) =>
     // the server has no /api/iptv surface mounted. Public boolean —
     // no secret leakage (the same flag is implied by the 404 anyway).
     iptvEnabled: !env.IPTV_DISABLED,
+    // True when USE_MEDIA_CORE=1 mounted the /api/media proxy (below) —
+    // the SPA gates its Media Library tab on this the same way Live is
+    // gated on iptvEnabled. Public boolean — the same fact is implied by
+    // the /api/media 404 when the proxy is unmounted.
+    mediaEnabled: env.useMediaCore,
   }),
 )
 

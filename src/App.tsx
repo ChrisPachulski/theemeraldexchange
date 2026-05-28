@@ -28,6 +28,9 @@ const UsersTab = lazy(() =>
   import('./components/tabs/UsersTab').then((m) => ({ default: m.UsersTab })),
 )
 const IptvTab = lazy(() => import('./components/tabs/IptvTab'))
+const MediaTab = lazy(() =>
+  import('./components/tabs/MediaTab').then((m) => ({ default: m.MediaTab })),
+)
 
 // Walkthrough is the unauthed landing experience. Authed users (the hot
 // path) never see it, so keep it out of the initial chunk. Unauthed users
@@ -41,6 +44,7 @@ const TABS: Record<Route, React.ComponentType> = {
   home: HomeTab,
   tv: TvTab,
   movies: MoviesTab,
+  media: MediaTab,
   downloads: DownloadsTab,
   users: UsersTab,
   live: IptvTab,
@@ -51,6 +55,9 @@ function Shell() {
   const { isAdmin } = useAuth()
   const limits = useLimits()
   const iptvEnabled = limits.data?.iptvEnabled !== false
+  // Media Library tab is gated on the server having mounted the
+  // /api/media proxy (USE_MEDIA_CORE=1). Default-on for older backends.
+  const mediaEnabled = limits.data?.mediaEnabled !== false
   // The Users tab is admin-only. Non-admins who land on /users via a
   // stale link get bounced home rather than seeing an error page.
   // The Live tab is gated by IPTV_DISABLED — bounce on stale links too
@@ -59,9 +66,12 @@ function Shell() {
   useEffect(() => {
     if (route === 'users' && !isAdmin) navigate('home')
     if (route === 'live' && !iptvEnabled) navigate('home')
-  }, [route, isAdmin, iptvEnabled, navigate])
+    if (route === 'media' && !mediaEnabled) navigate('home')
+  }, [route, isAdmin, iptvEnabled, mediaEnabled, navigate])
   const blocked =
-    (route === 'users' && !isAdmin) || (route === 'live' && !iptvEnabled)
+    (route === 'users' && !isAdmin) ||
+    (route === 'live' && !iptvEnabled) ||
+    (route === 'media' && !mediaEnabled)
   const effectiveRoute: Route = blocked ? 'home' : route
   const ActiveTab = TABS[effectiveRoute]
   const krakenVariant = effectiveRoute === 'home' ? 'kraken' : 'resting'
