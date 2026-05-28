@@ -115,8 +115,16 @@ jobs:
     # the emerald-contracts PyO3 binding. The parity tests are the same
     # tests/vectors/*.json the Rust and TS sides run; if recommender
     # produces different bytes than Hono, this job fails.
+    #
+    # This job is also the home of the N-API↔PyO3 cross-binding gate
+    # (M13): it has BOTH toolchains (Python+Rust for the PyO3 wheel,
+    # Node for the napi addon), so it's the one place we can mint a JWE
+    # via N-API and decrypt it via PyO3 in the same run. The wheel is
+    # installed into recommender/.venv so the Node test's PYTHON_PATH
+    # resolves, and the Node test runs with CI_REQUIRE_CROSS_BINDING=1
+    # so a missing/drifted extension turns the gate red, not green.
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 12
 
     steps:
       - uses: actions/checkout@v4
@@ -124,6 +132,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -147,11 +160,10 @@ jobs:
       - name: Install maturin + pytest
         run: pip install maturin pytest pydantic fastapi
 
-      # `maturin develop` requires an active virtualenv; the
-      # setup-python@v5 environment is bare system Python. Use
-      # `maturin build` + `pip install <wheel>` instead — same end
-      # result (extension importable from the active interpreter) with
-      # no venv setup ceremony.
+      # Build once into a wheel, then install it into BOTH the bare job
+      # interpreter (for the pytest parity step) and a recommender/.venv
+      # (for the Node cross-binding gate, whose PYTHON_PATH resolves to
+      # recommender/.venv/bin/python). One wheel, two install targets.
       - name: Build emerald-contracts wheel
         working-directory: crates/emerald-contracts-pyo3
         run: maturin build --release --out wheels
@@ -159,9 +171,34 @@ jobs:
       - name: Install wheel into job's Python env
         run: pip install crates/emerald-contracts-pyo3/wheels/*.whl
 
+      # Provision the venv the Node cross-binding test expects and install
+      # the same wheel into it, so HAVE_PYTHON is true there.
+      - name: Provision recommender/.venv with PyO3 wheel (cross-binding gate)
+        run: |
+          python3 -m venv recommender/.venv
+          recommender/.venv/bin/python -m pip install --upgrade pip
+          recommender/.venv/bin/python -m pip install crates/emerald-contracts-pyo3/wheels/*.whl
+          recommender/.venv/bin/python -c "import emerald_contracts; print('emerald_contracts OK')"
+
       - name: Cross-language parity tests (recommender ↔ Rust ↔ TS)
         working-directory: recommender
         run: pytest tests/test_emerald_contracts_parity.py tests/test_sub_validation.py tests/test_internal_principal.py -v
+
+      # Node side of the gate: install JS deps + build the napi addon,
+      # then run the N-API→PyO3 cross-binding test with the require flag
+      # so a missing/drifted PyO3 extension fails the job instead of
+      # skipping. This is the M3-cutover wire-parity property exercised
+      # in CI for the first time.
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Build napi addon
+        run: npm run build:napi
+
+      - name: Cross-binding N-API↔PyO3 gate (Node)
+        env:
+          CI_REQUIRE_CROSS_BINDING: '1'
+        run: npx vitest run server/services/internalPrincipal.crossBinding.test.ts
 
   rust:
     # emerald-contracts crate: canonical cross-language source of truth
