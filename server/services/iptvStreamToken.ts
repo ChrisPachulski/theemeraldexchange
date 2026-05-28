@@ -127,16 +127,6 @@ export function canonicalBytes(claims: StreamClaims): Uint8Array {
 }
 
 // ---------------------------------------------------------------------------
-// Base64url helpers
-// ---------------------------------------------------------------------------
-
-const b64url = (b: Uint8Array): string =>
-  Buffer.from(b).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-
-const b64urlDecode = (s: string): Buffer =>
-  Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64')
-
-// ---------------------------------------------------------------------------
 // Sign / Verify — delegated to @emerald/contracts-napi
 // ---------------------------------------------------------------------------
 

@@ -42,7 +42,7 @@ export interface SessionView {
   lastSeen: number
 }
 
-interface Session extends SessionView {}
+type Session = SessionView
 
 export interface ConcurrencyTracker {
   tryAcquire: (opts: AcquireOpts) => AcquireResult

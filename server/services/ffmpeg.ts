@@ -134,13 +134,13 @@ export function validateFfmpegOrExit(): void {
     const spawnErr = err as NodeJS.ErrnoException & { stdout?: string; stderr?: string }
     if (spawnErr.code === 'ENOENT') {
       process.stderr.write('[boot] ffmpeg ≥6.0 required; found: missing\n')
-      throw new Error('ffmpeg not found')
+      throw new Error('ffmpeg not found', { cause: err })
     }
     // Combine whatever was captured; at least one channel should have the version line.
     const captured = (spawnErr.stdout ?? '') + (spawnErr.stderr ?? '')
     if (!captured.trim()) {
       process.stderr.write('[boot] ffmpeg ≥6.0 required; found: missing\n')
-      throw new Error('ffmpeg not found')
+      throw new Error('ffmpeg not found', { cause: err })
     }
     output = captured
   }
