@@ -79,7 +79,17 @@ COPY --from=napi-builder \
      ./crates/emerald-contracts-napi/
 
 COPY package.json package-lock.json ./
-RUN npm ci
+# better-sqlite3 has no prebuilt binary for node 24, so npm ci compiles
+# it from source via node-gyp — which needs python3 + a C++ toolchain.
+# node:24-slim ships none of these (CI's npm ci only works because the
+# GitHub runner has them preinstalled). Install the toolchain, build,
+# then purge it in the same layer so the runtime image stays slim — the
+# compiled .node persists and needs no toolchain at runtime.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 make g++ \
+ && npm ci \
+ && apt-get purge -y --auto-remove python3 make g++ \
+ && rm -rf /var/lib/apt/lists/*
 
 COPY server ./server
 COPY tsconfig.json ./
