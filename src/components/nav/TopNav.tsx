@@ -14,11 +14,20 @@ const PLEX_URL = 'https://app.plex.tv/desktop'
 
 type NavRoute = Exclude<Route, 'home'>
 
-type Tab = { route: NavRoute; label: string; adminOnly?: boolean; iptv?: boolean }
+type Tab = {
+  route: NavRoute
+  label: string
+  adminOnly?: boolean
+  iptv?: boolean
+  media?: boolean
+}
 
 const TABS: Tab[] = [
   { route: 'tv', label: 'TV Shows' },
   { route: 'movies', label: 'Movies' },
+  // `media: true` hides the tab unless the server mounted /api/media
+  // (USE_MEDIA_CORE=1).
+  { route: 'media', label: 'Media', media: true },
   // `iptv: true` hides the tab when the server boots with IPTV_DISABLED=1
   // (contract §13.3 reviewer-insurance gate).
   { route: 'live', label: 'Live', iptv: true },
@@ -29,6 +38,7 @@ const TABS: Tab[] = [
 const ROUTE_LABEL: Record<NavRoute, string> = {
   tv: 'TV Shows',
   movies: 'Movies',
+  media: 'Media',
   live: 'Live',
   downloads: 'Downloads',
   users: 'Users',
@@ -44,9 +54,11 @@ export function TopNav({ active }: Props) {
   const { isAdmin } = useAuth()
   const limits = useLimits()
   const iptvEnabled = limits.data?.iptvEnabled !== false // default true on older backends
+  const mediaEnabled = limits.data?.mediaEnabled !== false // default true on older backends
   const tabRefs = useRef<Record<NavRoute, HTMLButtonElement | null>>({
     tv: null,
     movies: null,
+    media: null,
     live: null,
     downloads: null,
     users: null,
@@ -55,6 +67,7 @@ export function TopNav({ active }: Props) {
     (t) =>
       (!t.adminOnly || isAdmin) &&
       (!t.iptv || iptvEnabled) &&
+      (!t.media || mediaEnabled) &&
       t.route !== active,
   )
 
