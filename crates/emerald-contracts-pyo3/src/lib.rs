@@ -17,10 +17,10 @@ use pyo3::types::{PyBytes, PyDict, PyList};
 use std::collections::HashMap;
 
 use ec::{
-    derive_key as ec_derive_key, internal_principal, parse_sub as ec_parse_sub,
+    INFO_DEVICE_TOKEN, INFO_INTERNAL_PRINCIPAL, INFO_SESSION, derive_key as ec_derive_key,
+    internal_principal, parse_sub as ec_parse_sub,
     sub::{Provider, SubError},
-    telemetry::{scrub_value, PII_KEYS},
-    INFO_DEVICE_TOKEN, INFO_INTERNAL_PRINCIPAL, INFO_SESSION,
+    telemetry::{PII_KEYS, scrub_value},
 };
 
 // ---------------------------------------------------------------------------

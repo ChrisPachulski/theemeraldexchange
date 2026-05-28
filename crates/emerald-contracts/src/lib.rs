@@ -19,8 +19,14 @@ pub mod sub;
 pub mod telemetry;
 
 // Top-level re-exports for ergonomic FFI binding code.
-pub use device_token::{DeviceClaims, DeviceTokenError, DEFAULT_KID as DEVICE_KID_DEFAULT, DEFAULT_TTL_SECS as DEVICE_TTL_DEFAULT};
-pub use hkdf::{derive_key, INFO_DEVICE_TOKEN, INFO_INTERNAL_PRINCIPAL, INFO_SESSION, INFO_STREAM_TOKEN_RESERVED};
+pub use device_token::{
+    DEFAULT_KID as DEVICE_KID_DEFAULT, DEFAULT_TTL_SECS as DEVICE_TTL_DEFAULT, DeviceClaims,
+    DeviceTokenError,
+};
+pub use hkdf::{
+    INFO_DEVICE_TOKEN, INFO_INTERNAL_PRINCIPAL, INFO_SESSION, INFO_STREAM_TOKEN_RESERVED,
+    derive_key,
+};
 pub use internal_principal::{InternalClaims, InternalPrincipalError};
-pub use stream_token::{StreamClaims, StreamKind, TokenError, EXP_SKEW_SECS, NBF_SKEW_SECS};
-pub use sub::{parse_sub, Provider, Sub, SubError};
+pub use stream_token::{EXP_SKEW_SECS, NBF_SKEW_SECS, StreamClaims, StreamKind, TokenError};
+pub use sub::{Provider, Sub, SubError, parse_sub};

@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::hkdf::{derive_key, INFO_DEVICE_TOKEN};
+use crate::hkdf::{INFO_DEVICE_TOKEN, derive_key};
 use crate::jwe::{self, JweError};
 
 /// Default kid for the v1 device-token key. Bump (`device-v2`, etc.)
@@ -82,7 +82,9 @@ pub fn decrypt(
     token: &str,
 ) -> Result<DeviceClaims, DeviceTokenError> {
     let (hdr, _) = jwe::decode_protected_header(token)?;
-    let key = keys.get(&hdr.kid).ok_or(DeviceTokenError::UnknownKid(hdr.kid.clone()))?;
+    let key = keys
+        .get(&hdr.kid)
+        .ok_or(DeviceTokenError::UnknownKid(hdr.kid.clone()))?;
     let plain = jwe::decrypt_with_key(key, token)?;
     let claims: DeviceClaims =
         serde_json::from_slice(&plain).map_err(|_| DeviceTokenError::BadPayload)?;
@@ -130,7 +132,10 @@ mod tests {
 
     #[test]
     fn roundtrip() {
-        let key = derive_key(b"test-secret-test-secret-test-secret-test-secret", INFO_DEVICE_TOKEN);
+        let key = derive_key(
+            b"test-secret-test-secret-test-secret-test-secret",
+            INFO_DEVICE_TOKEN,
+        );
         let mut keys = HashMap::new();
         keys.insert(DEFAULT_KID.to_string(), key);
         let token = encrypt(&key, DEFAULT_KID, &sample_claims());

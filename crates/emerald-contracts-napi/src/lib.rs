@@ -12,9 +12,9 @@ use napi_derive::napi;
 use std::collections::HashMap;
 
 use emerald_contracts::{
-    derive_key as ec_derive_key, device_token, internal_principal, parse_sub as ec_parse_sub,
-    stream_token, sub::Provider, telemetry::scrub_value, INFO_DEVICE_TOKEN, INFO_INTERNAL_PRINCIPAL,
-    INFO_SESSION,
+    INFO_DEVICE_TOKEN, INFO_INTERNAL_PRINCIPAL, INFO_SESSION, derive_key as ec_derive_key,
+    device_token, internal_principal, parse_sub as ec_parse_sub, stream_token, sub::Provider,
+    telemetry::scrub_value,
 };
 
 // ---------------------------------------------------------------------------
@@ -29,18 +29,26 @@ pub struct DerivedKey {
 
 #[napi]
 pub fn hkdf_session(secret: Buffer) -> DerivedKey {
-    DerivedKey { bytes: ec_derive_key(secret.as_ref(), INFO_SESSION).to_vec().into() }
+    DerivedKey {
+        bytes: ec_derive_key(secret.as_ref(), INFO_SESSION).to_vec().into(),
+    }
 }
 
 #[napi]
 pub fn hkdf_device_token(secret: Buffer) -> DerivedKey {
-    DerivedKey { bytes: ec_derive_key(secret.as_ref(), INFO_DEVICE_TOKEN).to_vec().into() }
+    DerivedKey {
+        bytes: ec_derive_key(secret.as_ref(), INFO_DEVICE_TOKEN)
+            .to_vec()
+            .into(),
+    }
 }
 
 #[napi]
 pub fn hkdf_internal_principal(secret: Buffer) -> DerivedKey {
     DerivedKey {
-        bytes: ec_derive_key(secret.as_ref(), INFO_INTERNAL_PRINCIPAL).to_vec().into(),
+        bytes: ec_derive_key(secret.as_ref(), INFO_INTERNAL_PRINCIPAL)
+            .to_vec()
+            .into(),
     }
 }
 
@@ -115,7 +123,10 @@ pub fn stream_token_verify_dual_key(
 ) -> Result<DualKeyVerifyResult> {
     let (c, used) = stream_token::verify_dual_key(primary.as_ref(), fallback.as_ref(), &token)
         .map_err(|e| Error::from_reason(format!("verify failed: {:?}", e)))?;
-    Ok(DualKeyVerifyResult { claims: claims_to_js(c), used_fallback: used })
+    Ok(DualKeyVerifyResult {
+        claims: claims_to_js(c),
+        used_fallback: used,
+    })
 }
 
 #[napi]
@@ -205,8 +216,8 @@ pub fn device_token_decrypt(keys: Vec<KidKey>, token: String) -> Result<DeviceCl
             .map_err(|_| Error::from_reason("each device key must be exactly 32 bytes"))?;
         map.insert(kk.kid, arr);
     }
-    let c = device_token::decrypt(&map, &token)
-        .map_err(|e| Error::from_reason(format!("{:?}", e)))?;
+    let c =
+        device_token::decrypt(&map, &token).map_err(|e| Error::from_reason(format!("{:?}", e)))?;
     Ok(dev_to_js(c))
 }
 
@@ -251,7 +262,11 @@ pub fn internal_principal_encrypt(
         .as_ref()
         .try_into()
         .map_err(|_| Error::from_reason("internal-principal key must be exactly 32 bytes"))?;
-    Ok(internal_principal::encrypt(&key_arr, &kid, &int_from_js(&claims)))
+    Ok(internal_principal::encrypt(
+        &key_arr,
+        &kid,
+        &int_from_js(&claims),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -273,7 +288,11 @@ pub fn parse_sub(s: String) -> Result<SubJs> {
         Provider::Local => "local",
         Provider::Apple => "apple",
     };
-    Ok(SubJs { provider: provider.to_string(), id: parsed.id, raw: parsed.raw })
+    Ok(SubJs {
+        provider: provider.to_string(),
+        id: parsed.id,
+        raw: parsed.raw,
+    })
 }
 
 // ---------------------------------------------------------------------------
