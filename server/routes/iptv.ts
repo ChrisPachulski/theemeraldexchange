@@ -122,7 +122,7 @@ function enrichSessions(list: SessionView[]): Array<SessionView & { resolvedTitl
 iptv.get('/sessions', requireAuth, async (c) => {
   const { sub } = userOf(c)
   const ours = enrichSessions(streamConcurrency().list())
-  let upstream: { activeConnections: number; maxConnections: number; status: string } | null = null
+  let upstream: { activeConnections: number; maxConnections: number; status: string } | null
   try {
     const info = await getAccountInfo()
     upstream = {

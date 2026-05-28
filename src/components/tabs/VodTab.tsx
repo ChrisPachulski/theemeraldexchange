@@ -7,11 +7,11 @@ import { useIptvVod } from '../../lib/hooks/useIptvVod'
 import { useIptvFavoriteSet, useToggleIptvFavorite } from '../../lib/hooks/useIptvFavorites'
 import { useIptvHistoryIndex, useReportPosition } from '../../lib/hooks/useIptvHistory'
 import { useDebounced } from '../../lib/hooks/useDebounced'
+import { ConcurrencyLimitModal } from '../iptv/ConcurrencyLimitModal'
 import {
-  ConcurrencyLimitModal,
   concurrencyPayloadFromError,
   type ConcurrencyLimitPayload,
-} from '../iptv/ConcurrencyLimitModal'
+} from '../iptv/concurrencyLimit'
 
 type ResumeRow = {
   position_secs: number
