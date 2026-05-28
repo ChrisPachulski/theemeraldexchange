@@ -70,21 +70,33 @@ pub fn parse_sub(s: &str) -> Result<Sub, SubError> {
     match prefix {
         "plex" => {
             if plex_re().is_match(s) {
-                Ok(Sub { provider: Provider::Plex, id: rest.to_string(), raw: s.to_string() })
+                Ok(Sub {
+                    provider: Provider::Plex,
+                    id: rest.to_string(),
+                    raw: s.to_string(),
+                })
             } else {
                 Err(SubError::InvalidFormat)
             }
         }
         "local" => {
             if local_re().is_match(s) {
-                Ok(Sub { provider: Provider::Local, id: rest.to_string(), raw: s.to_string() })
+                Ok(Sub {
+                    provider: Provider::Local,
+                    id: rest.to_string(),
+                    raw: s.to_string(),
+                })
             } else {
                 Err(SubError::InvalidFormat)
             }
         }
         "apple" => {
             if apple_re().is_match(s) {
-                Ok(Sub { provider: Provider::Apple, id: rest.to_string(), raw: s.to_string() })
+                Ok(Sub {
+                    provider: Provider::Apple,
+                    id: rest.to_string(),
+                    raw: s.to_string(),
+                })
             } else {
                 Err(SubError::InvalidFormat)
             }
@@ -142,6 +154,9 @@ mod tests {
 
     #[test]
     fn rejects_unknown_provider() {
-        assert_eq!(parse_sub("google:abc").unwrap_err(), SubError::UnknownProvider);
+        assert_eq!(
+            parse_sub("google:abc").unwrap_err(),
+            SubError::UnknownProvider
+        );
     }
 }

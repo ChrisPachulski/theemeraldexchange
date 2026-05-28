@@ -112,9 +112,15 @@ pub fn matches_pii_key(key: &str) -> bool {
 /// Apply value-regex redactions to a string.
 fn redact_string(s: &str) -> String {
     let mut out = s.to_string();
-    out = token_regex().replace_all(&out, "[Filtered:token]").into_owned();
-    out = bearer_regex().replace_all(&out, "[Filtered:bearer]").into_owned();
-    out = cookie_regex().replace_all(&out, "[Filtered:cookie]").into_owned();
+    out = token_regex()
+        .replace_all(&out, "[Filtered:token]")
+        .into_owned();
+    out = bearer_regex()
+        .replace_all(&out, "[Filtered:bearer]")
+        .into_owned();
+    out = cookie_regex()
+        .replace_all(&out, "[Filtered:cookie]")
+        .into_owned();
     out
 }
 
