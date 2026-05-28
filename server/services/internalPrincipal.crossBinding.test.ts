@@ -15,11 +15,16 @@
 // shim layer drifting (claim-name renames, optional-handling
 // differences, kid dispatch shape).
 //
-// Skipped automatically when `recommender/.venv/bin/python` isn't
-// present or doesn't have `emerald_contracts` installed. CI doesn't
-// run this today because the recommender Python job and the Node
-// test job are separate matrix entries with different toolchains;
-// local dev hits it on every `npm test`.
+// CI gate (M13): set CI_REQUIRE_CROSS_BINDING=1 and this test FAILS
+// (rather than silently skipping) when the recommender Python +
+// emerald_contracts extension is missing. The `recommender` job in
+// .github/workflows/ci.yml builds the PyO3 wheel into recommender/.venv
+// and runs the Node suite with that flag set, so a missing or drifted
+// extension turns the cross-binding gate red instead of green-by-skip.
+//
+// When the flag is NOT set (local dev without a built venv, or a Node
+// matrix entry that never provisions Python), the test skips so a bare
+// `npm test` on a fresh checkout stays green.
 
 import { describe, it, expect } from 'vitest'
 import { spawnSync, execFileSync } from 'node:child_process'
@@ -29,17 +34,116 @@ import * as contracts from '@emerald/contracts-napi'
 
 const PYTHON_PATH = path.resolve(__dirname, '..', '..', 'recommender', '.venv', 'bin', 'python')
 
-function pythonAvailable(): boolean {
-  if (!existsSync(PYTHON_PATH)) return false
-  const probe = spawnSync(PYTHON_PATH, ['-c', 'import emerald_contracts'], {
-    stdio: 'pipe',
-  })
-  return probe.status === 0
+// Child-process invocations shell out to a freshly-built Python; under
+// CI load the spawn was observed to flake (L5). Bound every call with an
+// explicit timeout and retry transient spawn failures so the gate is
+// deterministic rather than load-sensitive.
+const SPAWN_TIMEOUT_MS = 30_000
+const SPAWN_MAX_ATTEMPTS = 3
+
+// When set, a missing Python/extension is a hard failure (CI gate, M13)
+// rather than a skip. Anything truthy-but-not-"0"/"false" enables it.
+const REQUIRE_CROSS_BINDING = (() => {
+  const v = process.env.CI_REQUIRE_CROSS_BINDING
+  if (v === undefined) return false
+  const normalized = v.trim().toLowerCase()
+  return normalized !== '' && normalized !== '0' && normalized !== 'false'
+})()
+
+function probePython(): { ok: boolean; reason: string } {
+  if (!existsSync(PYTHON_PATH)) {
+    return { ok: false, reason: `recommender venv python not found at ${PYTHON_PATH}` }
+  }
+  // Retry the import probe — under CI load the first interpreter spawn
+  // can be killed by the scheduler before it reports.
+  let lastReason = 'unknown'
+  for (let attempt = 1; attempt <= SPAWN_MAX_ATTEMPTS; attempt++) {
+    const probe = spawnSync(PYTHON_PATH, ['-c', 'import emerald_contracts'], {
+      stdio: 'pipe',
+      timeout: SPAWN_TIMEOUT_MS,
+      encoding: 'utf-8',
+    })
+    if (probe.status === 0) return { ok: true, reason: '' }
+    const probeErr = probe.error as NodeJS.ErrnoException | undefined
+    if (probeErr?.code === 'ETIMEDOUT' || probe.signal !== null) {
+      lastReason = `import probe timed out / killed (attempt ${attempt}/${SPAWN_MAX_ATTEMPTS}, signal=${probe.signal ?? 'none'})`
+      continue
+    }
+    // Non-timeout failure (e.g. extension genuinely not installed) —
+    // no point retrying.
+    lastReason = `emerald_contracts not importable: ${(probe.stderr || '').trim() || `exit ${probe.status}`}`
+    break
+  }
+  return { ok: false, reason: lastReason }
 }
 
-const HAVE_PYTHON = pythonAvailable()
+const PROBE = probePython()
+const HAVE_PYTHON = PROBE.ok
 
-describe.skipIf(!HAVE_PYTHON)('cross-binding internal-principal (N-API → PyO3)', () => {
+// M13: turn a missing extension into a red gate when explicitly required.
+// This runs at module load so the failure is unambiguous even if every
+// `it` would otherwise be skipped.
+if (REQUIRE_CROSS_BINDING && !HAVE_PYTHON) {
+  console.error(
+    `[cross-binding] CI_REQUIRE_CROSS_BINDING is set but the PyO3 binding is unavailable: ${PROBE.reason}`,
+  )
+}
+
+// Run a short Python snippet against the recommender venv, retrying
+// transient spawn flakes (timeout / killed-by-signal) but surfacing real
+// errors immediately. Returns parsed stdout JSON.
+function runPython(scriptLines: string[], env: Record<string, string>): Record<string, unknown> {
+  const script = scriptLines.join('\n')
+  let lastErr: unknown
+  for (let attempt = 1; attempt <= SPAWN_MAX_ATTEMPTS; attempt++) {
+    try {
+      const out = execFileSync(PYTHON_PATH, ['-c', script], {
+        env: { ...process.env, ...env },
+        encoding: 'utf-8',
+        timeout: SPAWN_TIMEOUT_MS,
+      })
+      return JSON.parse(out) as Record<string, unknown>
+    } catch (err) {
+      lastErr = err
+      const e = err as NodeJS.ErrnoException & { signal?: string | null }
+      const transient = e.code === 'ETIMEDOUT' || (e.signal != null && e.signal !== '')
+      if (transient && attempt < SPAWN_MAX_ATTEMPTS) continue
+      throw err
+    }
+  }
+  // Unreachable in practice — the loop either returns or throws — but keep
+  // the type-checker happy and preserve the original error if it fires.
+  throw lastErr
+}
+
+const DECRYPT_SCRIPT = [
+  'import emerald_contracts as ec, json, os',
+  'key = bytes.fromhex(os.environ["EEX_KEY_HEX"])',
+  'token = os.environ["EEX_JWE"]',
+  'claims = ec.internal_principal_decrypt({"internal-v1": key}, token)',
+  'print(json.dumps(claims))',
+]
+
+describe('cross-binding internal-principal (N-API → PyO3)', () => {
+  if (REQUIRE_CROSS_BINDING && !HAVE_PYTHON) {
+    // Single, explicit red test so the CI gate is unmistakable. Without
+    // this, an all-skipped describe block would report green even under
+    // CI_REQUIRE_CROSS_BINDING.
+    it('requires the PyO3 cross-binding to be available (CI_REQUIRE_CROSS_BINDING=1)', () => {
+      throw new Error(
+        `Cross-binding gate required but PyO3 binding unavailable: ${PROBE.reason}. ` +
+          `Build the emerald-contracts wheel into recommender/.venv before running this job.`,
+      )
+    })
+    return
+  }
+
+  // Local dev / Node-only matrix entries without Python: skip cleanly.
+  if (!HAVE_PYTHON) {
+    it.skip(`skipped — PyO3 binding unavailable (${PROBE.reason})`, () => {})
+    return
+  }
+
   it('Hono-minted JWE decrypts cleanly under PyO3 with identical claims', () => {
     // Fixed secret produces a stable HKDF-derived key. Same vector as
     // tests/vectors/internal-principal.json secret_hex_utf8.
@@ -63,29 +167,10 @@ describe.skipIf(!HAVE_PYTHON)('cross-binding internal-principal (N-API → PyO3)
     // Spawn Python with the JWE + key passed via env. Avoids stdin
     // parsing and keeps the test hermetic. Python prints decoded
     // claims as JSON to stdout; we parse and compare.
-    const out = execFileSync(
-      PYTHON_PATH,
-      [
-        '-c',
-        [
-          'import emerald_contracts as ec, json, os',
-          'key = bytes.fromhex(os.environ["EEX_KEY_HEX"])',
-          'token = os.environ["EEX_JWE"]',
-          'claims = ec.internal_principal_decrypt({"internal-v1": key}, token)',
-          'print(json.dumps(claims))',
-        ].join('\n'),
-      ],
-      {
-        env: {
-          ...process.env,
-          EEX_KEY_HEX: Buffer.from(key).toString('hex'),
-          EEX_JWE: jwe,
-        },
-        encoding: 'utf-8',
-      },
-    )
-
-    const decoded = JSON.parse(out) as Record<string, unknown>
+    const decoded = runPython(DECRYPT_SCRIPT, {
+      EEX_KEY_HEX: Buffer.from(key).toString('hex'),
+      EEX_JWE: jwe,
+    })
 
     // PyO3 returns snake_case (matches the Rust struct's serde renames);
     // N-API took camelCase on input. Both bindings feed the same
@@ -124,29 +209,11 @@ describe.skipIf(!HAVE_PYTHON)('cross-binding internal-principal (N-API → PyO3)
 
     const jwe = contracts.internalPrincipalEncrypt(key, 'internal-v1', claims)
 
-    const out = execFileSync(
-      PYTHON_PATH,
-      [
-        '-c',
-        [
-          'import emerald_contracts as ec, json, os',
-          'key = bytes.fromhex(os.environ["EEX_KEY_HEX"])',
-          'token = os.environ["EEX_JWE"]',
-          'claims = ec.internal_principal_decrypt({"internal-v1": key}, token)',
-          'print(json.dumps(claims))',
-        ].join('\n'),
-      ],
-      {
-        env: {
-          ...process.env,
-          EEX_KEY_HEX: Buffer.from(key).toString('hex'),
-          EEX_JWE: jwe,
-        },
-        encoding: 'utf-8',
-      },
-    )
+    const decoded = runPython(DECRYPT_SCRIPT, {
+      EEX_KEY_HEX: Buffer.from(key).toString('hex'),
+      EEX_JWE: jwe,
+    })
 
-    const decoded = JSON.parse(out) as Record<string, unknown>
     expect(decoded.device_id).toBeNull()
     expect(decoded.sub).toBe(claims.sub)
     expect(decoded.role).toBe('admin')
@@ -178,30 +245,21 @@ describe.skipIf(!HAVE_PYTHON)('cross-binding internal-principal (N-API → PyO3)
       exp: 1748169660,
     }
 
-    const out = execFileSync(
-      PYTHON_PATH,
+    const decoded = runPython(
       [
-        '-c',
-        [
-          'import emerald_contracts as ec, json, os',
-          'key = bytes.fromhex(os.environ["EEX_KEY_HEX"])',
-          'claims = json.loads(os.environ["EEX_CLAIMS"])',
-          'token = ec.internal_principal_encrypt(key, "internal-v1", claims)',
-          'decoded = ec.internal_principal_decrypt({"internal-v1": key}, token)',
-          'print(json.dumps(decoded))',
-        ].join('\n'),
+        'import emerald_contracts as ec, json, os',
+        'key = bytes.fromhex(os.environ["EEX_KEY_HEX"])',
+        'claims = json.loads(os.environ["EEX_CLAIMS"])',
+        'token = ec.internal_principal_encrypt(key, "internal-v1", claims)',
+        'decoded = ec.internal_principal_decrypt({"internal-v1": key}, token)',
+        'print(json.dumps(decoded))',
       ],
       {
-        env: {
-          ...process.env,
-          EEX_KEY_HEX: Buffer.from(key).toString('hex'),
-          EEX_CLAIMS: JSON.stringify(claims),
-        },
-        encoding: 'utf-8',
+        EEX_KEY_HEX: Buffer.from(key).toString('hex'),
+        EEX_CLAIMS: JSON.stringify(claims),
       },
     )
 
-    const decoded = JSON.parse(out) as Record<string, unknown>
     for (const k of Object.keys(claims) as Array<keyof typeof claims>) {
       expect(decoded[k]).toBe(claims[k])
     }
