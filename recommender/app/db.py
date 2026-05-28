@@ -183,19 +183,55 @@ def _last_backup_at(db_path: Path) -> datetime | None:
         return None
 
 
-def _check_backup_gate(db_path: Path, migration_name: str) -> None:
-    """Abort (raise) if ``-- DESTRUCTIVE`` migration cannot satisfy the backup gate.
+def _auto_backup(db_path: Path, migration_name: str) -> Path:
+    """Write a consistent, timestamped backup of *db_path* beside it.
 
-    Raises ``RuntimeError`` with a descriptive message if:
-    - The sibling ``server.db`` does not exist at the expected path, or
-    - No ``last_backup_at`` row is present in ``server_state``, or
-    - The backup timestamp is older than ``_BACKUP_MAX_AGE_S`` seconds.
-
-    The sibling-path check mirrors the D8b (Hono) guard: we assert the path
-    exists rather than silently treating a missing ``server.db`` as "no backup".
-    This catches non-standard deployment layouts at startup rather than
-    producing a misleading "no backup found" message.
+    Uses SQLite's online-backup API so the snapshot is consistent even though
+    the migrator already holds a WAL-mode connection to the same database. The
+    page-level copy does not need the sqlite-vec extension loaded (vec0 shadow
+    tables are ordinary tables). Returns the backup path; raises on I/O failure
+    so the caller can fall back to the external-backup gate.
     """
+    stem = migration_name.split("_", 1)[0]
+    ts = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    backup_path = db_path.with_name(f"{db_path.name}.pre{stem}-{ts}.bak")
+    src = sqlite3.connect(str(db_path))
+    try:
+        dst = sqlite3.connect(str(backup_path))
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
+    return backup_path
+
+
+def _check_backup_gate(db_path: Path, migration_name: str) -> None:
+    """Abort (raise) unless a recent backup protects a ``-- DESTRUCTIVE`` migration.
+
+    Satisfied by either path:
+    1. An automatic, consistent backup of *db_path* taken here (primary). This
+       is the most direct expression of the gate's intent — a recoverable copy
+       must exist before a destructive change — and does not depend on a
+       co-located ``server.db``, which the production volume layout does not
+       provide (exchange.db and server.db live in separate Docker volumes).
+    2. The legacy sibling-``server.db`` backup proof (fallback), for callers
+       that manage an external backup and cannot write beside *db_path*.
+
+    Raises ``RuntimeError`` only if neither can be established.
+    """
+    try:
+        backup = _auto_backup(db_path, migration_name)
+        log.info("[migration] wrote pre-migration backup: %s", backup)
+        return
+    except (OSError, sqlite3.Error) as exc:
+        log.warning(
+            "[migration] automatic backup failed (%s); falling back to the "
+            "external server.db backup gate",
+            exc,
+        )
+
     server_db = db_path.parent / "server.db"
     if not server_db.exists():
         raise RuntimeError(
