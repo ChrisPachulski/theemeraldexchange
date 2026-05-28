@@ -22,6 +22,10 @@ export type Limits = {
    *  and IPTV-Series tabs hide. Default true on older backends that
    *  predate the flag. Reviewer-insurance per contract §13.3. */
   iptvEnabled?: boolean
+  /** True when the server booted with USE_MEDIA_CORE=1 and mounted the
+   *  /api/media proxy — the Media Library tab shows. Default true on
+   *  older backends that predate the flag (mirrors iptvEnabled). */
+  mediaEnabled?: boolean
 }
 
 const DEFAULT_LIMITS: Limits = {
@@ -31,6 +35,7 @@ const DEFAULT_LIMITS: Limits = {
   useLocalRecommender: false,
   defaultProfileName: 'choose me',
   iptvEnabled: true,
+  mediaEnabled: true,
 }
 
 export function useLimits() {
