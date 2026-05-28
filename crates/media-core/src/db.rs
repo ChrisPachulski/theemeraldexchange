@@ -26,7 +26,15 @@ impl Db {
     pub async fn connect(path: &str) -> Result<Self, sqlx::Error> {
         if let Some(parent) = std::path::Path::new(path).parent() {
             if !parent.as_os_str().is_empty() {
-                let _ = std::fs::create_dir_all(parent);
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    sqlx::Error::Configuration(
+                        format!(
+                            "failed to create parent directory {} for media database: {e}",
+                            parent.display()
+                        )
+                        .into(),
+                    )
+                })?;
             }
         }
         let opts = SqliteConnectOptions::new()
@@ -134,5 +142,34 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(n, 6);
+    }
+
+    #[tokio::test]
+    async fn connect_surfaces_directory_creation_failure() {
+        // Create a regular file, then ask to open a DB whose parent directory
+        // would have to be created *underneath* that file. `create_dir_all`
+        // cannot succeed, so the error must be attributed to directory
+        // creation rather than being swallowed and re-surfacing later as a
+        // confusing connect error.
+        let mut blocker = std::env::temp_dir();
+        blocker.push(format!("media_core_db_test_blocker_{}", std::process::id()));
+        std::fs::write(&blocker, b"not a directory").unwrap();
+
+        // <blocker>/subdir/media.db — the parent <blocker>/subdir cannot be
+        // created because <blocker> is a file.
+        let db_path = blocker.join("subdir").join("media.db");
+        let result = Db::connect(db_path.to_str().unwrap()).await;
+
+        std::fs::remove_file(&blocker).ok();
+
+        // `Db` is not `Debug`, so match on the Result rather than `expect_err`.
+        let msg = match result {
+            Ok(_) => panic!("connect should fail when the parent dir cannot be created"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("failed to create parent directory"),
+            "error should attribute the failure to directory creation, got: {msg}"
+        );
     }
 }
