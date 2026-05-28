@@ -2,6 +2,25 @@ use std::path::PathBuf;
 
 use crate::filename::RootKind;
 
+/// Default seconds between automatic background scans when
+/// `MEDIA_SCAN_INTERVAL_SECS` is unset or malformed (one hour).
+pub const DEFAULT_SCAN_INTERVAL_SECS: u64 = 3600;
+
+/// Parse a boolean-ish env var. Recognizes `1/true/yes/on` (true) and
+/// `0/false/no/off` (false), case-insensitively; an unset or unrecognized
+/// value falls back to `default`. Used for soft toggles where a typo should
+/// not fail boot.
+fn parse_bool_env(key: &str, default: bool) -> bool {
+    match std::env::var(key) {
+        Ok(v) => match v.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => true,
+            "0" | "false" | "no" | "off" => false,
+            _ => default,
+        },
+        Err(_) => default,
+    }
+}
+
 /// A configured library root plus its authoritative kind, inferred from the
 /// path's final component (`tv`/`shows`/`series` → Shows, `movies`/`films` →
 /// Movies, else Auto). The kind, not the filename, decides movie-vs-episode.
@@ -72,6 +91,14 @@ pub struct Config {
     pub principal_mode: PrincipalMode,
     pub server_id: String,
     pub tmdb_api_key: Option<String>,
+    /// Seconds between automatic background scans. `0` disables the periodic
+    /// scheduler entirely (manual `POST /scan` still works). Parsed from
+    /// `MEDIA_SCAN_INTERVAL_SECS`; defaults to one hour.
+    pub scan_interval_secs: u64,
+    /// Whether to run one scan on boot so a freshly deployed instance indexes
+    /// its library without an external poke. Parsed from `MEDIA_BOOT_SCAN`
+    /// (`0`/`false`/`no`/`off` → disabled); defaults to enabled.
+    pub boot_scan: bool,
 }
 
 impl Config {
@@ -105,6 +132,14 @@ impl Config {
         let principal_mode = PrincipalMode::parse(&mode_str)?;
         let server_id = std::env::var("SERVER_ID").unwrap_or_default();
         let tmdb_api_key = std::env::var("TMDB_API_KEY").ok().filter(|s| !s.is_empty());
+        // Scheduler knobs. A malformed interval falls back to the default
+        // rather than failing boot — scanning is best-effort and a typo here
+        // must not brick the service. `0` is an explicit "disable periodic".
+        let scan_interval_secs = std::env::var("MEDIA_SCAN_INTERVAL_SECS")
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .unwrap_or(DEFAULT_SCAN_INTERVAL_SECS);
+        let boot_scan = parse_bool_env("MEDIA_BOOT_SCAN", true);
 
         // Fail-fast safety gates (pure, unit-tested via `validate_posture`).
         validate_posture(&host, &principal_mode, internal_principal_secret.is_some())?;
@@ -118,6 +153,8 @@ impl Config {
             principal_mode,
             server_id,
             tmdb_api_key,
+            scan_interval_secs,
+            boot_scan,
         })
     }
 
@@ -263,6 +300,43 @@ mod tests {
             LibraryRoot::from_path(PathBuf::from("/media/misc")).kind,
             RootKind::Auto
         );
+    }
+
+    #[test]
+    fn parse_bool_env_recognizes_truthy_and_falsy() {
+        // Use a unique key to avoid cross-test env contamination.
+        let key = "MEDIA_TEST_BOOL_TOGGLE";
+        unsafe { std::env::remove_var(key) };
+        // Unset → default (both directions).
+        assert!(parse_bool_env(key, true));
+        assert!(!parse_bool_env(key, false));
+        for truthy in ["1", "true", "TRUE", " yes ", "On"] {
+            unsafe { std::env::set_var(key, truthy) };
+            assert!(parse_bool_env(key, false), "expected {truthy:?} → true");
+        }
+        for falsy in ["0", "false", "NO", " off "] {
+            unsafe { std::env::set_var(key, falsy) };
+            assert!(!parse_bool_env(key, true), "expected {falsy:?} → false");
+        }
+        // Garbage → default, never a silent flip.
+        unsafe { std::env::set_var(key, "maybe") };
+        assert!(parse_bool_env(key, true));
+        assert!(!parse_bool_env(key, false));
+        unsafe { std::env::remove_var(key) };
+    }
+
+    #[test]
+    fn scan_interval_default_and_zero_disable() {
+        // The default applies when unset or malformed; `0` is preserved as the
+        // explicit "disable periodic scheduler" sentinel.
+        let parse = |raw: Option<&str>| {
+            raw.and_then(|s| s.trim().parse::<u64>().ok())
+                .unwrap_or(DEFAULT_SCAN_INTERVAL_SECS)
+        };
+        assert_eq!(parse(None), DEFAULT_SCAN_INTERVAL_SECS);
+        assert_eq!(parse(Some("not-a-number")), DEFAULT_SCAN_INTERVAL_SECS);
+        assert_eq!(parse(Some("0")), 0);
+        assert_eq!(parse(Some(" 900 ")), 900);
     }
 
     #[test]

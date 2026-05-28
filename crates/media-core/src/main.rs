@@ -1,7 +1,9 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use media_core::{AppState, build_router, config::Config, db::Db, tmdb::TmdbClient};
+use media_core::{
+    AppState, build_router, config::Config, db::Db, spawn_scheduler, tmdb::TmdbClient,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -35,6 +37,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let host = state.config.host.clone();
+
+    // Boot + periodic library scanner. Reuses the shared `scanning` guard so a
+    // scheduled scan never overlaps a manual `POST /api/media/scan`. Without
+    // this a freshly deployed instance stays empty until externally poked.
+    let _scheduler = spawn_scheduler(state.clone());
+
     let app = build_router(state);
     let ip: std::net::IpAddr = host
         .parse()
