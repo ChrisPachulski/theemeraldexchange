@@ -6,7 +6,9 @@
 //!
 //! Uses `https://api.themoviedb.org/3/search/{movie,tv}` with the `api_key`
 //! query param for the title hit, then `/{movie,tv}/{id}/external_ids` to fill
-//! `imdb_id` (the search endpoints never return it). 5s timeout per request.
+//! `imdb_id`/`tvdb_id` (the search endpoints never return them), and
+//! `/tv/{id}/season/{s}/episode/{e}` for per-episode title/air_date. 5s timeout
+//! per request.
 
 use std::time::Duration;
 
@@ -18,8 +20,25 @@ pub struct TmdbMatch {
     pub title: String,
     pub year: Option<i64>,
     pub imdb_id: Option<String>,
+    pub tvdb_id: Option<i64>,
     pub overview: Option<String>,
     pub poster_path: Option<String>,
+}
+
+/// External ids pulled from a TMDB `/external_ids` response. Both fields are
+/// optional: a title may carry one, both, or neither.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExternalIds {
+    pub imdb_id: Option<String>,
+    pub tvdb_id: Option<i64>,
+}
+
+/// Per-episode metadata from `/tv/{id}/season/{s}/episode/{e}`. Both fields are
+/// optional so a partial response still enriches what it can.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct TmdbEpisode {
+    pub title: Option<String>,
+    pub air_date: Option<String>,
 }
 
 #[derive(Clone)]
@@ -81,17 +100,42 @@ fn parse_search_response(doc: &serde_json::Value, is_movie: bool) -> Option<Tmdb
         title: title.to_string(),
         year,
         imdb_id: None,
+        tvdb_id: None,
         overview,
         poster_path,
     })
 }
 
-/// Pure parser over an `/external_ids` response: pulls a non-empty `imdb_id`.
-fn parse_external_ids(doc: &serde_json::Value) -> Option<String> {
-    doc.get("imdb_id")
+/// Pure parser over an `/external_ids` response: pulls a non-empty `imdb_id`
+/// and (for tv) a `tvdb_id`. TMDB serializes `tvdb_id` as an integer.
+fn parse_external_ids(doc: &serde_json::Value) -> ExternalIds {
+    let imdb_id = doc
+        .get("imdb_id")
         .and_then(serde_json::Value::as_str)
         .filter(|s| !s.is_empty())
-        .map(str::to_string)
+        .map(str::to_string);
+    let tvdb_id = doc.get("tvdb_id").and_then(serde_json::Value::as_i64);
+    ExternalIds { imdb_id, tvdb_id }
+}
+
+/// Pure parser over a `/tv/{id}/season/{s}/episode/{e}` response: pulls the
+/// episode `name` and `air_date`. Returns `None` only when both are absent so
+/// callers do not bother binding an all-empty row.
+fn parse_episode_response(doc: &serde_json::Value) -> Option<TmdbEpisode> {
+    let title = doc
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let air_date = doc
+        .get("air_date")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    if title.is_none() && air_date.is_none() {
+        return None;
+    }
+    Some(TmdbEpisode { title, air_date })
 }
 
 impl TmdbClient {
@@ -148,20 +192,30 @@ impl TmdbClient {
         Ok(parse_search_response(&doc, is_movie))
     }
 
-    /// Fetch the IMDb id for a TMDB title via `/{movie|tv}/{id}/external_ids`.
-    /// Logs and returns `None` on any failure.
-    async fn external_ids(&self, kind: &str, id: i64) -> Option<String> {
-        let api_key = self.api_key.as_deref()?;
-        let client = reqwest::Client::builder()
+    /// Fetch external ids (`imdb_id`, `tvdb_id`) for a TMDB title via
+    /// `/{movie|tv}/{id}/external_ids`. Logs and returns an empty
+    /// [`ExternalIds`] on any failure so enrichment is best-effort.
+    async fn external_ids(&self, kind: &str, id: i64) -> ExternalIds {
+        let api_key = match self.api_key.as_deref() {
+            Some(k) => k,
+            None => return ExternalIds::default(),
+        };
+        let client = match reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
             .build()
-            .ok()?;
+        {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(target: "media_core::tmdb", "external_ids build client: {e}");
+                return ExternalIds::default();
+            }
+        };
         let url = format!("{API_BASE}/{kind}/{id}/external_ids");
         let resp = match client.get(&url).query(&[("api_key", api_key)]).send().await {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!(target: "media_core::tmdb", "external_ids send failed: {e}");
-                return None;
+                return ExternalIds::default();
             }
         };
         if !resp.status().is_success() {
@@ -170,12 +224,54 @@ impl TmdbClient {
                 "external_ids non-2xx: {}",
                 resp.status()
             );
-            return None;
+            return ExternalIds::default();
         }
         match resp.json::<serde_json::Value>().await {
             Ok(doc) => parse_external_ids(&doc),
             Err(e) => {
                 tracing::warn!(target: "media_core::tmdb", "external_ids json failed: {e}");
+                ExternalIds::default()
+            }
+        }
+    }
+
+    /// Fetch per-episode metadata (title, air_date) via
+    /// `/tv/{show_tmdb_id}/season/{season}/episode/{episode}`. Returns `None`
+    /// if no key, no match, or any error (logged) — never fails the scan.
+    pub async fn episode(
+        &self,
+        show_tmdb_id: i64,
+        season: i64,
+        episode: i64,
+    ) -> Option<TmdbEpisode> {
+        let api_key = self.api_key.as_deref()?;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .map_err(|e| {
+                tracing::warn!(target: "media_core::tmdb", "episode build client: {e}");
+            })
+            .ok()?;
+        let url = format!("{API_BASE}/tv/{show_tmdb_id}/season/{season}/episode/{episode}");
+        let resp = match client.get(&url).query(&[("api_key", api_key)]).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(target: "media_core::tmdb", "episode send failed: {e}");
+                return None;
+            }
+        };
+        if !resp.status().is_success() {
+            tracing::warn!(
+                target: "media_core::tmdb",
+                "episode non-2xx for tv {show_tmdb_id} S{season}E{episode}: {}",
+                resp.status()
+            );
+            return None;
+        }
+        match resp.json::<serde_json::Value>().await {
+            Ok(doc) => parse_episode_response(&doc),
+            Err(e) => {
+                tracing::warn!(target: "media_core::tmdb", "episode json failed: {e}");
                 None
             }
         }
@@ -213,7 +309,9 @@ impl TmdbClient {
                 return None;
             }
         };
-        found.imdb_id = self.external_ids(kind, found.tmdb_id).await;
+        let ext = self.external_ids(kind, found.tmdb_id).await;
+        found.imdb_id = ext.imdb_id;
+        found.tvdb_id = ext.tvdb_id;
         Some(found)
     }
 }
@@ -265,17 +363,48 @@ mod tests {
     }
 
     #[test]
-    fn external_ids_parses_imdb_id() {
+    fn external_ids_parses_imdb_and_tvdb() {
         let doc = json!({ "imdb_id": "tt0816692", "tvdb_id": 123 });
-        assert_eq!(parse_external_ids(&doc), Some("tt0816692".to_string()));
+        let ext = parse_external_ids(&doc);
+        assert_eq!(ext.imdb_id.as_deref(), Some("tt0816692"));
+        assert_eq!(ext.tvdb_id, Some(123));
     }
 
     #[test]
-    fn external_ids_empty_yields_none() {
-        let doc = json!({ "imdb_id": "" });
-        assert_eq!(parse_external_ids(&doc), None);
-        let doc2 = json!({ "tvdb_id": 1 });
-        assert_eq!(parse_external_ids(&doc2), None);
+    fn external_ids_empty_imdb_yields_none_but_keeps_tvdb() {
+        let doc = json!({ "imdb_id": "", "tvdb_id": 77 });
+        let ext = parse_external_ids(&doc);
+        assert_eq!(ext.imdb_id, None);
+        assert_eq!(ext.tvdb_id, Some(77));
+    }
+
+    #[test]
+    fn external_ids_missing_both_yields_default() {
+        let doc = json!({ "page": 1 });
+        assert_eq!(parse_external_ids(&doc), ExternalIds::default());
+    }
+
+    #[test]
+    fn episode_response_parses_name_and_air_date() {
+        let doc = json!({ "name": "Pilot", "air_date": "2008-01-20" });
+        let ep = parse_episode_response(&doc).expect("expected an episode");
+        assert_eq!(ep.title.as_deref(), Some("Pilot"));
+        assert_eq!(ep.air_date.as_deref(), Some("2008-01-20"));
+    }
+
+    #[test]
+    fn episode_response_partial_still_some() {
+        let doc = json!({ "name": "Only Title", "air_date": "" });
+        let ep = parse_episode_response(&doc).expect("expected an episode");
+        assert_eq!(ep.title.as_deref(), Some("Only Title"));
+        assert_eq!(ep.air_date, None);
+    }
+
+    #[test]
+    fn episode_response_empty_yields_none() {
+        let doc = json!({ "name": "", "air_date": "" });
+        assert_eq!(parse_episode_response(&doc), None);
+        assert_eq!(parse_episode_response(&json!({ "id": 1 })), None);
     }
 
     #[test]
