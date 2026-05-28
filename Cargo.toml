@@ -4,6 +4,7 @@ members = [
   "crates/emerald-contracts",
   "crates/emerald-contracts-napi",
   "crates/emerald-contracts-pyo3",
+  "crates/media-core",
 ]
 
 [workspace.package]
