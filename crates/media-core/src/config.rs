@@ -1,5 +1,39 @@
 use std::path::PathBuf;
 
+use crate::filename::RootKind;
+
+/// A configured library root plus its authoritative kind, inferred from the
+/// path's final component (`tv`/`shows`/`series` → Shows, `movies`/`films` →
+/// Movies, else Auto). The kind, not the filename, decides movie-vs-episode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LibraryRoot {
+    pub path: PathBuf,
+    pub kind: RootKind,
+}
+
+impl LibraryRoot {
+    /// Build a root from a path, inferring kind from its last component.
+    pub fn from_path(path: PathBuf) -> Self {
+        let kind = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(infer_root_kind)
+            .unwrap_or(RootKind::Auto);
+        LibraryRoot { path, kind }
+    }
+}
+
+/// Infer a [`RootKind`] from a directory's final component name.
+fn infer_root_kind(name: &str) -> RootKind {
+    let lower = name.to_ascii_lowercase();
+    let normalized = lower.replace(['_', '-', ' '], "");
+    match normalized.as_str() {
+        "tv" | "tvshows" | "shows" | "series" => RootKind::Shows,
+        "movies" | "films" | "film" => RootKind::Movies,
+        _ => RootKind::Auto,
+    }
+}
+
 /// Internal-principal enforcement posture, mirroring the recommender's
 /// off → log → enforce rollout. Defaults to `off` so a fresh media-core
 /// boots without the secret wired; flip to `enforce` after soak.
@@ -25,7 +59,7 @@ pub struct Config {
     pub host: String,
     pub port: u16,
     pub db_path: String,
-    pub library_paths: Vec<PathBuf>,
+    pub library_roots: Vec<LibraryRoot>,
     pub internal_principal_secret: Option<String>,
     pub principal_mode: PrincipalMode,
     pub server_id: String,
@@ -44,11 +78,11 @@ impl Config {
             .unwrap_or(8002);
         let db_path =
             std::env::var("MEDIA_DB_PATH").unwrap_or_else(|_| "./data/media.db".to_string());
-        let library_paths = std::env::var("MEDIA_LIBRARY_PATHS")
+        let library_roots = std::env::var("MEDIA_LIBRARY_PATHS")
             .unwrap_or_default()
             .split(':')
             .filter(|s| !s.is_empty())
-            .map(PathBuf::from)
+            .map(|s| LibraryRoot::from_path(PathBuf::from(s)))
             .collect();
         let internal_principal_secret = std::env::var("INTERNAL_PRINCIPAL_SECRET")
             .ok()
@@ -66,12 +100,17 @@ impl Config {
             host,
             port,
             db_path,
-            library_paths,
+            library_roots,
             internal_principal_secret,
             principal_mode,
             server_id,
             tmdb_api_key,
         }
+    }
+
+    /// The bare root paths, for call sites that only need locations.
+    pub fn library_paths(&self) -> Vec<PathBuf> {
+        self.library_roots.iter().map(|r| r.path.clone()).collect()
     }
 }
 
@@ -86,5 +125,46 @@ mod tests {
         assert_eq!(PrincipalMode::parse("off"), PrincipalMode::Off);
         assert_eq!(PrincipalMode::parse(""), PrincipalMode::Off);
         assert_eq!(PrincipalMode::parse("garbage"), PrincipalMode::Off);
+    }
+
+    #[test]
+    fn root_kind_inferred_from_final_component() {
+        assert_eq!(
+            LibraryRoot::from_path(PathBuf::from("/media/Movies")).kind,
+            RootKind::Movies
+        );
+        assert_eq!(
+            LibraryRoot::from_path(PathBuf::from("/media/films")).kind,
+            RootKind::Movies
+        );
+        assert_eq!(
+            LibraryRoot::from_path(PathBuf::from("/media/tv_shows")).kind,
+            RootKind::Shows
+        );
+        assert_eq!(
+            LibraryRoot::from_path(PathBuf::from("/media/Series")).kind,
+            RootKind::Shows
+        );
+        assert_eq!(
+            LibraryRoot::from_path(PathBuf::from("/media/tv")).kind,
+            RootKind::Shows
+        );
+        assert_eq!(
+            LibraryRoot::from_path(PathBuf::from("/media/misc")).kind,
+            RootKind::Auto
+        );
+    }
+
+    #[test]
+    fn parses_typed_roots_in_order() {
+        // MEDIA_LIBRARY_PATHS=/media/Movies:/media/tv_shows -> [Movies, Shows]
+        let roots: Vec<LibraryRoot> = "/media/Movies:/media/tv_shows"
+            .split(':')
+            .filter(|s| !s.is_empty())
+            .map(|s| LibraryRoot::from_path(PathBuf::from(s)))
+            .collect();
+        assert_eq!(roots.len(), 2);
+        assert_eq!(roots[0].kind, RootKind::Movies);
+        assert_eq!(roots[1].kind, RootKind::Shows);
     }
 }
