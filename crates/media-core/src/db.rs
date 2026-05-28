@@ -8,8 +8,14 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
 /// Embedded migrations, applied in ascending version order. Add a new file
 /// under `migrations/` and a row here in lockstep; bump `SCHEMA_VERSION`.
-const MIGRATIONS: &[(i64, &str, &str)] =
-    &[(1, "0001_init", include_str!("../migrations/0001_init.sql"))];
+const MIGRATIONS: &[(i64, &str, &str)] = &[
+    (1, "0001_init", include_str!("../migrations/0001_init.sql")),
+    (
+        2,
+        "0002_media_metadata",
+        include_str!("../migrations/0002_media_metadata.sql"),
+    ),
+];
 
 #[derive(Clone)]
 pub struct Db {
@@ -115,10 +121,10 @@ mod tests {
     #[tokio::test]
     async fn migrate_is_idempotent_and_sets_version() {
         let db = Db::connect_memory().await.unwrap();
-        assert_eq!(db.schema_version().await.unwrap(), 1);
+        assert_eq!(db.schema_version().await.unwrap(), 2);
         // Running again must not error or duplicate.
         db.migrate().await.unwrap();
-        assert_eq!(db.schema_version().await.unwrap(), 1);
+        assert_eq!(db.schema_version().await.unwrap(), 2);
         // Core tables exist.
         let n: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN \

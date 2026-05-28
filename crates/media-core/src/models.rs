@@ -70,6 +70,10 @@ pub struct MovieRow {
     pub year: Option<i64>,
     pub added_at: String,
     pub file_id: i64,
+    #[serde(default)]
+    pub overview: Option<String>,
+    #[serde(default)]
+    pub poster_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -80,6 +84,12 @@ pub struct ShowRow {
     pub title: String,
     pub year: Option<i64>,
     pub added_at: String,
+    #[serde(default)]
+    pub imdb_id: Option<String>,
+    #[serde(default)]
+    pub overview: Option<String>,
+    #[serde(default)]
+    pub poster_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
