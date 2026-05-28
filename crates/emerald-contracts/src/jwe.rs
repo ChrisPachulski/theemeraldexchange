@@ -12,8 +12,8 @@
 
 use aes_gcm::aead::{Aead, KeyInit, OsRng, Payload};
 use aes_gcm::{AeadCore, Aes256Gcm, Nonce};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,7 +45,11 @@ pub struct ProtectedHeaderOwned {
 /// reuse with the same key is catastrophic; counter-based nonces are
 /// PROHIBITED).
 pub fn encrypt(key: &[u8; 32], kid: &str, plaintext: &[u8]) -> String {
-    let header = ProtectedHeader { alg: "dir", enc: "A256GCM", kid };
+    let header = ProtectedHeader {
+        alg: "dir",
+        enc: "A256GCM",
+        kid,
+    };
     let header_json = serde_json::to_vec(&header).expect("static header serializes");
     let header_b64 = URL_SAFE_NO_PAD.encode(&header_json);
 
@@ -55,7 +59,13 @@ pub fn encrypt(key: &[u8; 32], kid: &str, plaintext: &[u8]) -> String {
     // AAD = the encoded protected header (ASCII bytes).
     let aad = header_b64.as_bytes();
     let combined = cipher
-        .encrypt(&nonce, Payload { msg: plaintext, aad })
+        .encrypt(
+            &nonce,
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
         .expect("aes-gcm encrypt with random nonce should not fail");
 
     // aes-gcm returns ciphertext || tag (tag is the last 16 bytes).
@@ -106,9 +116,15 @@ pub fn decrypt_with_key(key: &[u8; 32], token: &str) -> Result<Vec<u8>, JweError
         return Err(JweError::Malformed);
     }
 
-    let iv = URL_SAFE_NO_PAD.decode(iv_b64).map_err(|_| JweError::BadBase64)?;
-    let ct = URL_SAFE_NO_PAD.decode(ct_b64).map_err(|_| JweError::BadBase64)?;
-    let tag = URL_SAFE_NO_PAD.decode(tag_b64).map_err(|_| JweError::BadBase64)?;
+    let iv = URL_SAFE_NO_PAD
+        .decode(iv_b64)
+        .map_err(|_| JweError::BadBase64)?;
+    let ct = URL_SAFE_NO_PAD
+        .decode(ct_b64)
+        .map_err(|_| JweError::BadBase64)?;
+    let tag = URL_SAFE_NO_PAD
+        .decode(tag_b64)
+        .map_err(|_| JweError::BadBase64)?;
     if iv.len() != 12 || tag.len() != 16 {
         return Err(JweError::Malformed);
     }
@@ -120,7 +136,13 @@ pub fn decrypt_with_key(key: &[u8; 32], token: &str) -> Result<Vec<u8>, JweError
     let aad = header_b64.as_bytes();
     let nonce = Nonce::from_slice(&iv);
     cipher
-        .decrypt(nonce, Payload { msg: &combined, aad })
+        .decrypt(
+            nonce,
+            Payload {
+                msg: &combined,
+                aad,
+            },
+        )
         .map_err(|_| JweError::DecryptFailed)
 }
 
@@ -142,7 +164,10 @@ mod tests {
         let key = [42u8; 32];
         let wrong = [43u8; 32];
         let token = encrypt(&key, "test-v1", b"secret");
-        assert_eq!(decrypt_with_key(&wrong, &token).unwrap_err(), JweError::DecryptFailed);
+        assert_eq!(
+            decrypt_with_key(&wrong, &token).unwrap_err(),
+            JweError::DecryptFailed
+        );
     }
 
     #[test]
@@ -177,6 +202,9 @@ mod tests {
         let mut tampered = bad_header;
         tampered.push('.');
         tampered.push_str(&rest);
-        assert_eq!(decode_protected_header(&tampered).unwrap_err(), JweError::BadHeader);
+        assert_eq!(
+            decode_protected_header(&tampered).unwrap_err(),
+            JweError::BadHeader
+        );
     }
 }

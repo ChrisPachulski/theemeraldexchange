@@ -42,16 +42,25 @@ mod tests {
     /// Hand-derived using the RFC 5869 reference vectors as a sanity check.
     #[test]
     fn session_key_matches_node_kat() {
-        let okm = derive_key(b"test-secret-test-secret-test-secret-test-secret", INFO_SESSION);
+        let okm = derive_key(
+            b"test-secret-test-secret-test-secret-test-secret",
+            INFO_SESSION,
+        );
         // The exact byte sequence is verified by tests/vectors/hkdf-parity.json
         // round-trip in the workspace test suite. Here we just confirm:
         //   1. output length is 32
         //   2. derivation is deterministic
         //   3. different info strings produce different OKM
         assert_eq!(okm.len(), 32);
-        let okm2 = derive_key(b"test-secret-test-secret-test-secret-test-secret", INFO_SESSION);
+        let okm2 = derive_key(
+            b"test-secret-test-secret-test-secret-test-secret",
+            INFO_SESSION,
+        );
         assert_eq!(okm, okm2);
-        let device = derive_key(b"test-secret-test-secret-test-secret-test-secret", INFO_DEVICE_TOKEN);
+        let device = derive_key(
+            b"test-secret-test-secret-test-secret-test-secret",
+            INFO_DEVICE_TOKEN,
+        );
         assert_ne!(okm, device);
     }
 

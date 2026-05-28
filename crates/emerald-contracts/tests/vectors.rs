@@ -3,8 +3,8 @@
 //! is the cross-language interop gate — any divergence between Rust
 //! and TS will surface as a vector mismatch here.
 
-use emerald_contracts::{derive_key, INFO_DEVICE_TOKEN, INFO_INTERNAL_PRINCIPAL, INFO_SESSION};
-use emerald_contracts::stream_token::{canonical_bytes, sign, StreamClaims, StreamKind};
+use emerald_contracts::stream_token::{StreamClaims, StreamKind, canonical_bytes, sign};
+use emerald_contracts::{INFO_DEVICE_TOKEN, INFO_INTERNAL_PRINCIPAL, INFO_SESSION, derive_key};
 use serde_json::Value;
 use std::path::PathBuf;
 

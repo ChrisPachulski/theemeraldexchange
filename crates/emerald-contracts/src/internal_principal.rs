@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::hkdf::{derive_key, INFO_INTERNAL_PRINCIPAL};
+use crate::hkdf::{INFO_INTERNAL_PRINCIPAL, derive_key};
 use crate::jwe::{self, JweError};
 
 pub const DEFAULT_KID: &str = "internal-v1";
@@ -74,7 +74,10 @@ pub fn decrypt(
 
 /// Hard-enforce 60s TTL window. No `nbf` skew applied — internal
 /// principal is for a single in-flight request, must be fresh.
-pub fn enforce_time_window(claims: &InternalClaims, now: i64) -> Result<(), InternalPrincipalError> {
+pub fn enforce_time_window(
+    claims: &InternalClaims,
+    now: i64,
+) -> Result<(), InternalPrincipalError> {
     if now > claims.exp {
         return Err(InternalPrincipalError::Expired);
     }

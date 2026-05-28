@@ -5,8 +5,8 @@
 //! 2026-05-27 per contract D18 amendment. See
 //! `tests/vectors/stream-token-canonical.json` `_meta.hmac_key_is`.
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
@@ -232,8 +232,7 @@ fn parse_canonical(bytes: &[u8]) -> Result<StreamClaims, TokenError> {
     // Use serde_json for parsing only (not for HMAC input — parsing is
     // permissive about whitespace, which is irrelevant since the input
     // is the freshly-decoded canonical bytes).
-    let v: serde_json::Value =
-        serde_json::from_slice(bytes).map_err(|_| TokenError::BadPayload)?;
+    let v: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| TokenError::BadPayload)?;
     let obj = v.as_object().ok_or(TokenError::BadPayload)?;
 
     let version = obj
@@ -244,19 +243,31 @@ fn parse_canonical(bytes: &[u8]) -> Result<StreamClaims, TokenError> {
         return Err(TokenError::UnsupportedVersion);
     }
 
-    let kind_str = obj.get("k").and_then(|x| x.as_str()).ok_or(TokenError::BadPayload)?;
+    let kind_str = obj
+        .get("k")
+        .and_then(|x| x.as_str())
+        .ok_or(TokenError::BadPayload)?;
     let k = StreamKind::from_wire(kind_str).ok_or(TokenError::UnknownKind)?;
 
     Ok(StreamClaims {
-        exp: obj.get("exp").and_then(|x| x.as_i64()).ok_or(TokenError::BadPayload)?,
-        iat: obj.get("iat").and_then(|x| x.as_i64()).ok_or(TokenError::BadPayload)?,
+        exp: obj
+            .get("exp")
+            .and_then(|x| x.as_i64())
+            .ok_or(TokenError::BadPayload)?,
+        iat: obj
+            .get("iat")
+            .and_then(|x| x.as_i64())
+            .ok_or(TokenError::BadPayload)?,
         jti: obj
             .get("jti")
             .and_then(|x| x.as_str())
             .ok_or(TokenError::BadPayload)?
             .to_string(),
         k,
-        nbf: obj.get("nbf").and_then(|x| x.as_i64()).ok_or(TokenError::BadPayload)?,
+        nbf: obj
+            .get("nbf")
+            .and_then(|x| x.as_i64())
+            .ok_or(TokenError::BadPayload)?,
         rid: obj
             .get("rid")
             .and_then(|x| x.as_str())
@@ -332,7 +343,10 @@ mod tests {
         let last = chars.len() - 1;
         chars[last] = if chars[last] == 'A' { 'B' } else { 'A' };
         let tampered: String = chars.into_iter().collect();
-        assert_eq!(verify(key, &tampered).unwrap_err(), TokenError::BadSignature);
+        assert_eq!(
+            verify(key, &tampered).unwrap_err(),
+            TokenError::BadSignature
+        );
     }
 
     #[test]
