@@ -171,7 +171,7 @@ services:
     # breaking changes — v6.0 introduced TRUSTED_PROXIES, django-vtasks, and
     # Granian with no forward-compat shims for operators on `latest`.
     # To upgrade: bump this tag, docker compose pull, docker compose up -d.
-    image: glitchtip/glitchtip:v6.1
+    image: glitchtip/glitchtip:6.1
     container_name: exchange-glitchtip
     restart: unless-stopped
     ports:
@@ -215,7 +215,7 @@ services:
   # run-celery-with-beat.sh was removed in v6.0 — ./bin/start.sh reads
   # SERVER_ROLE and branches accordingly.
   glitchtip-worker:
-    image: glitchtip/glitchtip:v6.1
+    image: glitchtip/glitchtip:6.1
     container_name: exchange-glitchtip-worker
     command: ./bin/start.sh
     restart: unless-stopped

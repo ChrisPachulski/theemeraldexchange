@@ -204,9 +204,11 @@ Event Retention. Lower the value if disk is constrained.
 
 ## 7. Upgrading Glitchtip
 
-The docker-compose.yml pins both images to a specific tag (e.g., `v6.1`). **Do not
-switch to `latest` — Glitchtip has had breaking env var changes at every major
-version.** Check the Glitchtip release notes before bumping the tag.
+The docker-compose.yml pins both images to a specific tag (e.g., `6.1`). Note the
+6.x tags dropped the `v` prefix used by 5.x and earlier — `glitchtip/glitchtip:v6.1`
+does not exist on Docker Hub; the published tag is `6.1`. **Do not switch to
+`latest` — Glitchtip has had breaking env var changes at every major version.**
+Check the Glitchtip release notes before bumping the tag.
 
 To upgrade to a new version:
 
