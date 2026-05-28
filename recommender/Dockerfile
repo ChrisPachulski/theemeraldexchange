@@ -34,13 +34,14 @@ WORKDIR /build
 # LICENSE at build time.
 COPY Cargo.toml Cargo.lock LICENSE ./
 
-# All three workspace members must be present for cargo to resolve the
+# All workspace members must be present for cargo to resolve the
 # workspace — even though we only build the pyo3 crate here. Copying the
-# napi crate is cheap (~100 KB of Rust source) and avoids needing to
+# sibling crates is cheap (Rust source only) and avoids needing to
 # patch the workspace manifest at build time.
 COPY crates/emerald-contracts ./crates/emerald-contracts
 COPY crates/emerald-contracts-napi ./crates/emerald-contracts-napi
 COPY crates/emerald-contracts-pyo3 ./crates/emerald-contracts-pyo3
+COPY crates/media-core ./crates/media-core
 
 # `maturin build -m <crate>/Cargo.toml --release` produces an abi3 wheel
 # under crates/emerald-contracts-pyo3/target/wheels/. --out redirects the
