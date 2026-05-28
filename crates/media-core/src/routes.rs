@@ -709,6 +709,8 @@ mod tests {
             principal_mode: PrincipalMode::Enforce,
             server_id: "srv-test".into(),
             tmdb_api_key: None,
+            scan_interval_secs: 0,
+            boot_scan: false,
         });
         let tmdb = crate::tmdb::TmdbClient::new(None);
         AppState {
