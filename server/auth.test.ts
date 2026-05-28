@@ -113,19 +113,24 @@ describe('POST /auth/plex/pin', () => {
 
   it('rate-limits excessive PIN creation by trusted edge identity without trusting spoofable forwarding headers', async () => {
     stubPlex({})
+    // Build the app once and reuse it across the loop — each request
+    // exercises the IP-keyed rate limiter (module-scoped state, reset
+    // in beforeEach), so a single instance is correct and avoids
+    // rebuilding the Hono router on every iteration.
+    const a = app()
     for (let i = 0; i < 10; i++) {
       const headers = { 'cf-connecting-ip': '198.51.100.10', 'x-forwarded-for': `203.0.113.${i}` }
-      const r = await app().request('/auth/plex/pin', { method: 'POST', headers })
+      const r = await a.request('/auth/plex/pin', { method: 'POST', headers })
       expect(r.status).toBe(200)
     }
-    const r = await app().request('/auth/plex/pin', {
+    const r = await a.request('/auth/plex/pin', {
       method: 'POST',
       headers: { 'cf-connecting-ip': '198.51.100.10', 'x-forwarded-for': '203.0.113.200' },
     })
     expect(r.status).toBe(429)
     expect(await r.json()).toEqual({ error: 'rate_limited' })
 
-    const other = await app().request('/auth/plex/pin', {
+    const other = await a.request('/auth/plex/pin', {
       method: 'POST',
       headers: { 'cf-connecting-ip': '198.51.100.11' },
     })
@@ -147,16 +152,22 @@ describe('POST /auth/plex/check', () => {
 
   it('allows normal polling but does not let rotated forwarding headers bypass PIN-check limits', async () => {
     stubPlex({ authToken: null })
+    // 60 sequential requests through the rate limiter; reuse one app
+    // instance (state is module-scoped, reset in beforeEach) instead of
+    // rebuilding the Hono router 63×. The generous timeout covers a
+    // slow shared CI runner — the prior 5000ms default flaked at
+    // ~5.1s on GitHub's 2-core hosts under parallel job load.
+    const a = app()
     for (let i = 0; i < 60; i++) {
       const headers = { 'Content-Type': 'application/json', 'cf-connecting-ip': '198.51.100.20', 'x-forwarded-for': `203.0.113.${i}` }
-      const r = await app().request('/auth/plex/check', {
+      const r = await a.request('/auth/plex/check', {
         method: 'POST',
         headers,
         body: JSON.stringify({ pinId: 12345 }),
       })
       expect(r.status).toBe(200)
     }
-    const r = await app().request('/auth/plex/check', {
+    const r = await a.request('/auth/plex/check', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': '198.51.100.20', 'x-forwarded-for': '203.0.113.200' },
       body: JSON.stringify({ pinId: 12345 }),
@@ -164,13 +175,13 @@ describe('POST /auth/plex/check', () => {
     expect(r.status).toBe(429)
     expect(await r.json()).toEqual({ error: 'rate_limited' })
 
-    const other = await app().request('/auth/plex/check', {
+    const other = await a.request('/auth/plex/check', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': '198.51.100.21' },
       body: JSON.stringify({ pinId: 12346 }),
     })
     expect(other.status).toBe(200)
-  })
+  }, 15_000)
 
   it('400s a missing pinId', async () => {
     const r = await app().request('/auth/plex/check', { method: 'POST' })
