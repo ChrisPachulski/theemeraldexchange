@@ -79,6 +79,11 @@ services:
       USE_LOCAL_RECOMMENDER: "${USE_LOCAL_RECOMMENDER:-0}"
       RECOMMENDER_URL: "${RECOMMENDER_URL:-http://recommender:8000}"
       RECOMMENDER_EVENT_SECRET: "${RECOMMENDER_EVENT_SECRET:-}"
+      # Local media-core (M3) wiring. Flip USE_MEDIA_CORE=1 once the
+      # media-core container is healthy and a library path is configured;
+      # until then the backend never proxies to it (no behavior change).
+      USE_MEDIA_CORE: "${USE_MEDIA_CORE:-0}"
+      MEDIA_CORE_URL: "${MEDIA_CORE_URL:-http://media-core:8002}"
       # mybunny.tv / Xtream Codes — see server/services/xtream.ts and
       # server/services/iptvSync.ts. With XTREAM_HOST blank, the scheduler
       # self-skips at boot so non-iptv deploys still work unchanged.
@@ -145,6 +150,43 @@ services:
       # The optimizer is the only place Claude runs server-side. Per-user
       # suggestion calls never see this key — they go to the local model.
       ANTHROPIC_API_KEY: "${ANTHROPIC_OPTIMIZER_KEY:-}"
+
+  # ── media-core (M3) — Rust library server ─────────────────────────────────
+  # Scans a read-only media library, owns media.db, and serves /api/media/*
+  # to the backend over the docker network (never exposed publicly). The
+  # backend only proxies to it when USE_MEDIA_CORE=1, so this service can run
+  # idle until a library path is configured. Binds 0.0.0.0 inside the
+  # container; the published port is bound to the NAS host's loopback only.
+  media-core:
+    # Context is repo root so the Dockerfile can reach the full Rust
+    # workspace (media-core depends on crates/emerald-contracts).
+    build:
+      context: .
+      dockerfile: ./crates/media-core/Dockerfile
+    image: theemeraldexchange-media-core:latest
+    container_name: exchange-media-core
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8002:8002"
+    volumes:
+      # media.db + scan state survive rebuilds here.
+      - "/mnt/user/appdata/exchange-backend/media-core-db:/data"
+      # Media library, READ-ONLY. Point MEDIA_LIBRARY_HOST_PATH at the NAS
+      # share to scan; defaults to an empty test dir so the service boots
+      # healthy before a real library is wired.
+      - "${MEDIA_LIBRARY_HOST_PATH:-/mnt/user/appdata/exchange-backend/media-test}:/media:ro"
+    environment:
+      MEDIA_CORE_HOST: "0.0.0.0"
+      MEDIA_CORE_PORT: "8002"
+      MEDIA_DB_PATH: "/data/media.db"
+      MEDIA_LIBRARY_PATHS: "${MEDIA_LIBRARY_PATHS:-/media}"
+      # Internal-principal verification (contract §4), same posture knobs as
+      # the recommender. Secret MUST match the backend's INTERNAL_PRINCIPAL_SECRET.
+      INTERNAL_PRINCIPAL_SECRET: "${INTERNAL_PRINCIPAL_SECRET:-}"
+      MEDIA_INTERNAL_PRINCIPAL_MODE: "${MEDIA_INTERNAL_PRINCIPAL_MODE:-off}"
+      SERVER_ID: "${PLEX_SERVER_ID:-}"
+      TMDB_API_KEY: "${TMDB_API_KEY:-}"
+      RUST_LOG: "${MEDIA_CORE_LOG:-media_core=info}"
 
   cloudflared:
     image: cloudflare/cloudflared:latest

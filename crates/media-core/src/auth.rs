@@ -10,19 +10,15 @@ use axum::http::header::AUTHORIZATION;
 use axum::middleware::Next;
 use axum::response::Response;
 use emerald_contracts::derive_key;
-use emerald_contracts::internal_principal::{self, DEFAULT_KID, InternalClaims};
 use emerald_contracts::hkdf::INFO_INTERNAL_PRINCIPAL;
+use emerald_contracts::internal_principal::{self, DEFAULT_KID, InternalClaims};
 
 use crate::AppState;
 use crate::config::PrincipalMode;
 use crate::error::AppError;
 
 /// Verify a Bearer internal-principal token against the shared secret.
-pub fn verify_principal(
-    secret: &str,
-    token: &str,
-    now: i64,
-) -> Result<InternalClaims, String> {
+pub fn verify_principal(secret: &str, token: &str, now: i64) -> Result<InternalClaims, String> {
     let key = derive_key(secret.as_bytes(), INFO_INTERNAL_PRINCIPAL);
     let mut keys = HashMap::new();
     keys.insert(DEFAULT_KID.to_string(), key);

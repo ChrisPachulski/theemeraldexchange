@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use media_core::{build_router, config::Config, db::Db, AppState};
+use media_core::{AppState, build_router, config::Config, db::Db};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -27,8 +27,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config: Arc::new(config),
     };
 
+    let host = state.config.host.clone();
     let app = build_router(state);
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let ip: std::net::IpAddr = host
+        .parse()
+        .unwrap_or(std::net::IpAddr::from([127, 0, 0, 1]));
+    let addr = std::net::SocketAddr::new(ip, port);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("media-core listening on http://{addr}");
     axum::serve(listener, app)
