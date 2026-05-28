@@ -31,12 +31,14 @@ GLITCHTIP_SECRET_KEY=<output of first command>
 GLITCHTIP_DB_PASSWORD=<output of second command>
 ```
 
-Set `GLITCHTIP_DOMAIN` to the hostname through which Glitchtip will be reachable by
-the apps (no scheme, no trailing slash). Choose your access method first (§3) and then
+Set `GLITCHTIP_DOMAIN` to the URL through which Glitchtip will be reachable by
+the apps. **Glitchtip 6.x requires a scheme** (`http://` or `https://`) — a bare
+hostname fails boot with `ImproperlyConfigured: GLITCHTIP_DOMAIN must start with
+http or https`. No trailing slash. Choose your access method first (§3) and then
 come back to fill in this value. Example values:
 
-- Tailscale: `glitchtip.myserver.ts.net`
-- Public Caddy: `errors.yourdomain.com`
+- Tailscale: `https://glitchtip.myserver.ts.net`
+- Public Caddy: `https://errors.yourdomain.com`
 
 ---
 
