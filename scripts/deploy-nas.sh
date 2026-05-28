@@ -42,11 +42,19 @@ required=(
   TUNNEL_TOKEN
   PLEX_CLIENT_ID
   SESSION_SECRET
+  STREAM_TOKEN_SECRET
+  DEVICE_TOKEN_SECRET
+  INTERNAL_PRINCIPAL_SECRET
   ALLOWED_ORIGINS
   SONARR_API_KEY
   RADARR_API_KEY
   SAB_API_KEY
 )
+# NOTE: EEX_TELEMETRY_DSN is required by env.ts in prod but is deliberately
+# NOT gated here — glitchtip-setup.md §2 runs this deploy once to bring the
+# Glitchtip stack up *before* a DSN exists, then redeploys with it set. The
+# backend crash-loops in that bootstrap window by design; Glitchtip itself
+# has no such dependency and comes up fine.
 env_value() {
   local key="$1"
   local line value
