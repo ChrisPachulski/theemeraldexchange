@@ -19,16 +19,21 @@ pub mod scanner;
 pub mod tmdb;
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 /// Current `media.db` schema version. Bump in lockstep with a new file in
 /// `migrations/` and the `db::MIGRATIONS` table.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
-/// Shared application state, cheap to clone (pool + Arc'd config).
+/// Shared application state, cheap to clone (pool + Arc'd config). The
+/// `scanning` flag guards the background scan so a second `POST /scan`
+/// returns `409` while one is already in flight.
 #[derive(Clone)]
 pub struct AppState {
     pub db: db::Db,
     pub config: Arc<config::Config>,
+    pub tmdb: tmdb::TmdbClient,
+    pub scanning: Arc<AtomicBool>,
 }
 
 /// Build the full axum router (public `/health` + `/version`, authed

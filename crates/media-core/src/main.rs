@@ -1,6 +1,7 @@
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
-use media_core::{AppState, build_router, config::Config, db::Db};
+use media_core::{AppState, build_router, config::Config, db::Db, tmdb::TmdbClient};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -15,16 +16,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(
         port = config.port,
         db = %config.db_path,
-        roots = ?config.library_paths,
+        roots = ?config.library_roots,
         mode = ?config.principal_mode,
         "media-core starting"
     );
 
     let db = Db::connect(&config.db_path).await?;
     let port = config.port;
+    let tmdb = TmdbClient::new(config.tmdb_api_key.clone());
     let state = AppState {
         db,
         config: Arc::new(config),
+        tmdb,
+        scanning: Arc::new(AtomicBool::new(false)),
     };
 
     let host = state.config.host.clone();

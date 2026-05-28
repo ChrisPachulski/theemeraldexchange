@@ -10,17 +10,19 @@
 //! is best-effort and must never fail the scan. Return a [`ScanReport`].
 //! Target: a 100-file fixture library scans in < 5s (§ success criteria).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use walkdir::WalkDir;
 
+use crate::config::LibraryRoot;
 use crate::db::Db;
 use crate::error::AppError;
-use crate::filename::{ParsedName, parse_filename};
+use crate::filename::{self, ParsedName};
 use crate::models::FileProbe;
 use crate::probe;
+use crate::tmdb::{TmdbClient, TmdbMatch};
 
 #[derive(Debug, Default, Clone, serde::Serialize)]
 pub struct ScanReport {
@@ -29,19 +31,27 @@ pub struct ScanReport {
     pub files_updated: usize,
     pub movies: usize,
     pub episodes: usize,
+    pub enriched: usize,
     pub errors: usize,
 }
 
-/// Run one full scan pass over `roots`, mutating `db`.
-pub async fn scan_once(db: &Db, roots: &[PathBuf]) -> Result<ScanReport, AppError> {
+/// Run one full scan pass over `roots`, mutating `db`. The current root's
+/// [`RootKind`](crate::filename::RootKind) is authoritative for classification,
+/// and `tmdb` is consulted best-effort for enrichment (never fails the scan).
+pub async fn scan_once(
+    db: &Db,
+    roots: &[LibraryRoot],
+    tmdb: &TmdbClient,
+) -> Result<ScanReport, AppError> {
     let mut report = ScanReport::default();
 
     for root in roots {
-        for entry in WalkDir::new(root).follow_links(true) {
+        let root_kind = root.kind;
+        for entry in WalkDir::new(&root.path).follow_links(true) {
             let entry = match entry {
                 Ok(e) => e,
                 Err(e) => {
-                    tracing::warn!("walk error under {}: {e}", root.display());
+                    tracing::warn!("walk error under {}: {e}", root.path.display());
                     report.errors += 1;
                     continue;
                 }
@@ -98,13 +108,18 @@ pub async fn scan_once(db: &Db, roots: &[PathBuf]) -> Result<ScanReport, AppErro
                             continue;
                         }
                     };
-                    let parsed = parse_filename(name);
-                    match index_file(db, &path_str, size_bytes, &mtime, &probed, &parsed).await {
-                        Ok(()) => {
+                    let parsed = filename::classify(root_kind, entry_path, name);
+                    match index_file(db, &path_str, size_bytes, &mtime, &probed, &parsed, tmdb)
+                        .await
+                    {
+                        Ok(enriched) => {
                             if is_update {
                                 report.files_updated += 1;
                             } else {
                                 report.files_added += 1;
+                            }
+                            if enriched {
+                                report.enriched += 1;
                             }
                             match parsed {
                                 ParsedName::Movie { .. } => report.movies += 1,
@@ -161,7 +176,8 @@ async fn existing_stat(db: &Db, path: &str) -> Result<Option<(i64, String)>, App
     Ok(row)
 }
 
-/// Upsert one media file plus its `movies`/`shows`/`episodes` rows.
+/// Upsert one media file plus its `movies`/`shows`/`episodes` rows. Returns
+/// `true` when TMDB enrichment found a match for this file.
 ///
 /// `media_files` is keyed on the UNIQUE `path`; `INSERT OR REPLACE` keeps the
 /// row current. The resulting file id then drives the movie/episode upserts.
@@ -172,7 +188,8 @@ async fn index_file(
     mtime: &str,
     probe: &FileProbe,
     parsed: &ParsedName,
-) -> Result<(), AppError> {
+    tmdb: &TmdbClient,
+) -> Result<bool, AppError> {
     let audio_json = serde_json::to_string(&probe.audio_tracks)
         .map_err(|e| AppError::Internal(format!("serialize audio tracks: {e}")))?;
     let subtitle_json = serde_json::to_string(&probe.subtitle_tracks)
@@ -206,32 +223,48 @@ async fn index_file(
         .fetch_one(&db.pool)
         .await?;
 
-    match parsed {
+    let enriched = match parsed {
         ParsedName::Movie { title, year } => {
-            upsert_movie(db, title, *year, file_id, &scanned_at).await?;
+            // Best-effort TMDB enrichment: errors/None leave the
+            // filename-derived row intact and never fail the scan.
+            let m = tmdb.match_movie(title, *year).await;
+            upsert_movie(db, title, *year, file_id, &scanned_at, m.as_ref()).await?;
+            m.is_some()
         }
         ParsedName::Episode {
             show,
             season,
             episode,
         } => {
-            let show_id = upsert_show(db, show, &scanned_at).await?;
+            let m = tmdb.match_show(show, None).await;
+            let show_id = upsert_show(db, show, &scanned_at, m.as_ref()).await?;
             upsert_episode(db, show_id, *season, *episode, file_id).await?;
+            m.is_some()
         }
-        ParsedName::Unknown => {}
-    }
+        ParsedName::Unknown => false,
+    };
 
-    Ok(())
+    Ok(enriched)
 }
 
 /// Upsert a movie keyed on its backing `file_id` (one movie per media file).
+/// When a TMDB match is present, the canonical title/year are preferred and the
+/// metadata columns are populated.
 async fn upsert_movie(
     db: &Db,
     title: &str,
     year: Option<i64>,
     file_id: i64,
     added_at: &str,
+    tmdb: Option<&TmdbMatch>,
 ) -> Result<(), AppError> {
+    let final_title = tmdb.map(|m| m.title.as_str()).unwrap_or(title);
+    let final_year = tmdb.and_then(|m| m.year).or(year);
+    let tmdb_id = tmdb.map(|m| m.tmdb_id);
+    let imdb_id = tmdb.and_then(|m| m.imdb_id.clone());
+    let overview = tmdb.and_then(|m| m.overview.clone());
+    let poster_path = tmdb.and_then(|m| m.poster_path.clone());
+
     let existing: Option<i64> = sqlx::query_scalar("SELECT id FROM movies WHERE file_id = ?")
         .bind(file_id)
         .fetch_optional(&db.pool)
@@ -239,44 +272,102 @@ async fn upsert_movie(
 
     match existing {
         Some(id) => {
-            sqlx::query("UPDATE movies SET title = ?, year = ? WHERE id = ?")
-                .bind(title)
-                .bind(year)
-                .bind(id)
-                .execute(&db.pool)
-                .await?;
+            sqlx::query(
+                "UPDATE movies SET title = ?, year = ?, tmdb_id = COALESCE(?, tmdb_id), \
+                 imdb_id = COALESCE(?, imdb_id), overview = COALESCE(?, overview), \
+                 poster_path = COALESCE(?, poster_path) WHERE id = ?",
+            )
+            .bind(final_title)
+            .bind(final_year)
+            .bind(tmdb_id)
+            .bind(&imdb_id)
+            .bind(&overview)
+            .bind(&poster_path)
+            .bind(id)
+            .execute(&db.pool)
+            .await?;
         }
         None => {
-            sqlx::query("INSERT INTO movies (title, year, added_at, file_id) VALUES (?, ?, ?, ?)")
-                .bind(title)
-                .bind(year)
-                .bind(added_at)
-                .bind(file_id)
-                .execute(&db.pool)
-                .await?;
+            sqlx::query(
+                "INSERT INTO movies \
+                 (tmdb_id, imdb_id, title, year, overview, poster_path, added_at, file_id) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(tmdb_id)
+            .bind(&imdb_id)
+            .bind(final_title)
+            .bind(final_year)
+            .bind(&overview)
+            .bind(&poster_path)
+            .bind(added_at)
+            .bind(file_id)
+            .execute(&db.pool)
+            .await?;
         }
     }
     Ok(())
 }
 
-/// Get-or-create a show by title, returning its id.
-async fn upsert_show(db: &Db, title: &str, added_at: &str) -> Result<i64, AppError> {
-    if let Some(id) = sqlx::query_scalar::<_, i64>("SELECT id FROM shows WHERE title = ?")
-        .bind(title)
+/// Get-or-create a show by its NORMALIZED title, returning its id. Dedup keys
+/// on `norm_title` so `Adventure Time` / `Adventure Time 2008` collapse to one
+/// row. When a TMDB match is present, the metadata columns are populated.
+async fn upsert_show(
+    db: &Db,
+    display_title: &str,
+    added_at: &str,
+    tmdb: Option<&TmdbMatch>,
+) -> Result<i64, AppError> {
+    let key = filename::normalize_show_name(display_title);
+    let final_title = tmdb.map(|m| m.title.as_str()).unwrap_or(display_title);
+    let final_year = tmdb.and_then(|m| m.year);
+    let tmdb_id = tmdb.map(|m| m.tmdb_id);
+    let imdb_id = tmdb.and_then(|m| m.imdb_id.clone());
+    let overview = tmdb.and_then(|m| m.overview.clone());
+    let poster_path = tmdb.and_then(|m| m.poster_path.clone());
+
+    if let Some(id) = sqlx::query_scalar::<_, i64>("SELECT id FROM shows WHERE norm_title = ?")
+        .bind(&key)
         .fetch_optional(&db.pool)
         .await?
     {
+        // Backfill metadata onto the existing row when TMDB provided it.
+        if tmdb.is_some() {
+            sqlx::query(
+                "UPDATE shows SET tmdb_id = COALESCE(?, tmdb_id), \
+                 imdb_id = COALESCE(?, imdb_id), year = COALESCE(?, year), \
+                 overview = COALESCE(?, overview), poster_path = COALESCE(?, poster_path) \
+                 WHERE id = ?",
+            )
+            .bind(tmdb_id)
+            .bind(&imdb_id)
+            .bind(final_year)
+            .bind(&overview)
+            .bind(&poster_path)
+            .bind(id)
+            .execute(&db.pool)
+            .await?;
+        }
         return Ok(id);
     }
 
-    sqlx::query("INSERT INTO shows (title, added_at) VALUES (?, ?)")
-        .bind(title)
-        .bind(added_at)
-        .execute(&db.pool)
-        .await?;
+    sqlx::query(
+        "INSERT INTO shows \
+         (tmdb_id, imdb_id, title, norm_title, year, overview, poster_path, added_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(tmdb_id)
+    .bind(&imdb_id)
+    .bind(final_title)
+    .bind(&key)
+    .bind(final_year)
+    .bind(&overview)
+    .bind(&poster_path)
+    .bind(added_at)
+    .execute(&db.pool)
+    .await?;
 
-    let id: i64 = sqlx::query_scalar("SELECT id FROM shows WHERE title = ?")
-        .bind(title)
+    let id: i64 = sqlx::query_scalar("SELECT id FROM shows WHERE norm_title = ?")
+        .bind(&key)
         .fetch_one(&db.pool)
         .await?;
     Ok(id)
@@ -337,6 +428,12 @@ mod tests {
     use super::*;
     use crate::models::{AudioTrack, SubtitleTrack};
 
+    /// A TMDB client with no key never matches — exercises the
+    /// best-effort/no-enrichment path without network access.
+    fn no_tmdb() -> TmdbClient {
+        TmdbClient::new(None)
+    }
+
     fn sample_probe() -> FileProbe {
         FileProbe {
             container: Some("matroska".into()),
@@ -383,6 +480,7 @@ mod tests {
             "2024-01-01T00:00:00+00:00",
             &sample_probe(),
             &parsed,
+            &no_tmdb(),
         )
         .await
         .unwrap();
@@ -430,6 +528,7 @@ mod tests {
             "2024-02-02T00:00:00+00:00",
             &sample_probe(),
             &parsed,
+            &no_tmdb(),
         )
         .await
         .unwrap();
@@ -463,6 +562,7 @@ mod tests {
                 "2024-03-03T00:00:00+00:00",
                 &sample_probe(),
                 &parsed,
+                &no_tmdb(),
             )
             .await
             .unwrap();
@@ -484,16 +584,128 @@ mod tests {
             season: 1,
             episode: 2,
         };
-        index_file(&db, "/lib/Fargo S01E01.mkv", 1, "t1", &sample_probe(), &ep1)
-            .await
-            .unwrap();
-        index_file(&db, "/lib/Fargo S01E02.mkv", 2, "t2", &sample_probe(), &ep2)
-            .await
-            .unwrap();
+        index_file(
+            &db,
+            "/lib/Fargo S01E01.mkv",
+            1,
+            "t1",
+            &sample_probe(),
+            &ep1,
+            &no_tmdb(),
+        )
+        .await
+        .unwrap();
+        index_file(
+            &db,
+            "/lib/Fargo S01E02.mkv",
+            2,
+            "t2",
+            &sample_probe(),
+            &ep2,
+            &no_tmdb(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(count(&db, "shows").await, 1);
         assert_eq!(count(&db, "episodes").await, 2);
         assert_eq!(count(&db, "media_files").await, 2);
+    }
+
+    #[tokio::test]
+    async fn show_year_variants_collapse_to_one_row() {
+        let db = Db::connect_memory().await.unwrap();
+        let ep1 = ParsedName::Episode {
+            show: "Adventure Time".into(),
+            season: 1,
+            episode: 1,
+        };
+        let ep2 = ParsedName::Episode {
+            show: "Adventure Time 2008".into(),
+            season: 2,
+            episode: 3,
+        };
+        index_file(
+            &db,
+            "/lib/at_a.mkv",
+            1,
+            "t1",
+            &sample_probe(),
+            &ep1,
+            &no_tmdb(),
+        )
+        .await
+        .unwrap();
+        index_file(
+            &db,
+            "/lib/at_b.mkv",
+            2,
+            "t2",
+            &sample_probe(),
+            &ep2,
+            &no_tmdb(),
+        )
+        .await
+        .unwrap();
+
+        // Both variants normalize to one show; both episodes repointed to it.
+        assert_eq!(count(&db, "shows").await, 1);
+        assert_eq!(count(&db, "episodes").await, 2);
+        let norm: String = sqlx::query_scalar("SELECT norm_title FROM shows LIMIT 1")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(norm, "adventure time");
+    }
+
+    #[tokio::test]
+    async fn failing_tmdb_leaves_metadata_null_without_erroring() {
+        let db = Db::connect_memory().await.unwrap();
+        let parsed = ParsedName::Movie {
+            title: "Heat".into(),
+            year: Some(1995),
+        };
+        // No key → no match; the row still inserts with NULL tmdb_id.
+        let enriched = index_file(
+            &db,
+            "/lib/Heat (1995).mkv",
+            1,
+            "t1",
+            &sample_probe(),
+            &parsed,
+            &no_tmdb(),
+        )
+        .await
+        .unwrap();
+        assert!(!enriched);
+        let tmdb_id: Option<i64> = sqlx::query_scalar("SELECT tmdb_id FROM movies LIMIT 1")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(tmdb_id, None);
+    }
+
+    #[tokio::test]
+    async fn shows_root_unparseable_basename_yields_no_movie_row() {
+        // Invariant: no media file under a Shows root ever creates a movies row.
+        use crate::filename::{RootKind, classify};
+        use std::path::Path;
+        let db = Db::connect_memory().await.unwrap();
+        let path = Path::new("/media/tv_shows/Foo/random clip.mkv");
+        let parsed = classify(RootKind::Shows, path, "random clip.mkv");
+        assert!(!matches!(parsed, ParsedName::Movie { .. }));
+        index_file(
+            &db,
+            "/media/tv_shows/Foo/random clip.mkv",
+            1,
+            "t1",
+            &sample_probe(),
+            &parsed,
+            &no_tmdb(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(count(&db, "movies").await, 0);
     }
 
     #[test]

@@ -3,6 +3,7 @@
 
 use axum::Json;
 use axum::extract::{Path, Query, Request, State};
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Extension, Router, middleware};
@@ -26,11 +27,13 @@ pub fn router(state: AppState) -> Router {
         .route("/shows", get(list_shows))
         .route("/shows/{id}", get(get_show))
         .route("/shows/{id}/episodes", get(list_episodes))
+        .route("/episodes", get(list_episodes_all))
         .route("/episodes/{id}", get(get_episode))
         .route("/play/{kind}/{id}/grant", post(play_grant))
         .route("/stream/{kind}/{id}", get(stream_file))
         .route("/watch", get(get_watch).post(post_watch))
         .route("/scan", post(trigger_scan))
+        .route("/scan/status", get(scan_status))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             principal_layer,
@@ -61,7 +64,7 @@ async fn version(State(state): State<AppState>) -> impl IntoResponse {
         "service": "media-core",
         "schema": SCHEMA_VERSION,
         "server_id": state.config.server_id,
-        "library_roots": state.config.library_paths.len(),
+        "library_roots": state.config.library_roots.len(),
     }))
 }
 
@@ -92,7 +95,7 @@ async fn list_movies(
     let (rows, total) = match &q.q {
         Some(term) if !term.is_empty() => {
             let rows = sqlx::query_as::<_, MovieRow>(
-                "SELECT id, tmdb_id, imdb_id, title, year, added_at, file_id \
+                "SELECT id, tmdb_id, imdb_id, title, year, added_at, file_id, overview, poster_path \
                  FROM movies WHERE title LIKE '%' || ? || '%' \
                  ORDER BY title LIMIT ? OFFSET ?",
             )
@@ -110,7 +113,7 @@ async fn list_movies(
         }
         _ => {
             let rows = sqlx::query_as::<_, MovieRow>(
-                "SELECT id, tmdb_id, imdb_id, title, year, added_at, file_id \
+                "SELECT id, tmdb_id, imdb_id, title, year, added_at, file_id, overview, poster_path \
                  FROM movies ORDER BY title LIMIT ? OFFSET ?",
             )
             .bind(limit)
@@ -129,7 +132,8 @@ async fn list_movies(
 
 async fn get_movie(State(state): State<AppState>, Path(id): Path<i64>) -> AppResult<Json<Value>> {
     let row = sqlx::query_as::<_, MovieRow>(
-        "SELECT id, tmdb_id, imdb_id, title, year, added_at, file_id FROM movies WHERE id = ?",
+        "SELECT id, tmdb_id, imdb_id, title, year, added_at, file_id, overview, poster_path \
+         FROM movies WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(&state.db.pool)
@@ -147,7 +151,7 @@ async fn list_shows(
     let (rows, total) = match &q.q {
         Some(term) if !term.is_empty() => {
             let rows = sqlx::query_as::<_, ShowRow>(
-                "SELECT id, tmdb_id, tvdb_id, title, year, added_at \
+                "SELECT id, tmdb_id, tvdb_id, title, year, added_at, imdb_id, overview, poster_path \
                  FROM shows WHERE title LIKE '%' || ? || '%' \
                  ORDER BY title LIMIT ? OFFSET ?",
             )
@@ -165,7 +169,7 @@ async fn list_shows(
         }
         _ => {
             let rows = sqlx::query_as::<_, ShowRow>(
-                "SELECT id, tmdb_id, tvdb_id, title, year, added_at \
+                "SELECT id, tmdb_id, tvdb_id, title, year, added_at, imdb_id, overview, poster_path \
                  FROM shows ORDER BY title LIMIT ? OFFSET ?",
             )
             .bind(limit)
@@ -184,7 +188,8 @@ async fn list_shows(
 
 async fn get_show(State(state): State<AppState>, Path(id): Path<i64>) -> AppResult<Json<Value>> {
     let row = sqlx::query_as::<_, ShowRow>(
-        "SELECT id, tmdb_id, tvdb_id, title, year, added_at FROM shows WHERE id = ?",
+        "SELECT id, tmdb_id, tvdb_id, title, year, added_at, imdb_id, overview, poster_path \
+         FROM shows WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(&state.db.pool)
@@ -205,6 +210,54 @@ async fn list_episodes(
     .fetch_all(&state.db.pool)
     .await?;
     Ok(Json(json!({ "items": rows })))
+}
+
+/// Flat, paginated episodes feed (mirrors `list_movies`): returns
+/// `{items, total}` with optional `?q=` title filter and `?limit`/`?offset`.
+/// Fixes the empty-body `GET /api/media/episodes` (no collection route).
+async fn list_episodes_all(
+    State(state): State<AppState>,
+    Query(q): Query<ListQuery>,
+) -> AppResult<Json<Value>> {
+    let (limit, offset) = paginate(q.limit, q.offset);
+
+    let (rows, total) = match &q.q {
+        Some(term) if !term.is_empty() => {
+            let rows = sqlx::query_as::<_, EpisodeRow>(
+                "SELECT id, show_id, season, episode, title, air_date, file_id \
+                 FROM episodes WHERE title LIKE '%' || ? || '%' \
+                 ORDER BY show_id, season, episode LIMIT ? OFFSET ?",
+            )
+            .bind(term)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&state.db.pool)
+            .await?;
+            let total: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM episodes WHERE title LIKE '%' || ? || '%'",
+            )
+            .bind(term)
+            .fetch_one(&state.db.pool)
+            .await?;
+            (rows, total)
+        }
+        _ => {
+            let rows = sqlx::query_as::<_, EpisodeRow>(
+                "SELECT id, show_id, season, episode, title, air_date, file_id \
+                 FROM episodes ORDER BY show_id, season, episode LIMIT ? OFFSET ?",
+            )
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&state.db.pool)
+            .await?;
+            let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM episodes")
+                .fetch_one(&state.db.pool)
+                .await?;
+            (rows, total)
+        }
+    };
+
+    Ok(Json(json!({ "items": rows, "total": total })))
 }
 
 async fn get_episode(State(state): State<AppState>, Path(id): Path<i64>) -> AppResult<Json<Value>> {
@@ -372,9 +425,110 @@ async fn post_watch(
 
 // ── Scan trigger ────────────────────────────────────────────────────────
 
-async fn trigger_scan(State(state): State<AppState>) -> AppResult<Json<Value>> {
-    let report = scanner::scan_once(&state.db, &state.config.library_paths).await?;
-    Ok(Json(json!(report)))
+/// Upsert one `scan_state` (key, value, ts) row. Best-effort: logs on failure
+/// so the background task never panics on a transient DB error.
+async fn set_scan_state(db: &crate::db::Db, key: &str, value: &str) {
+    let ts = chrono::Utc::now().to_rfc3339();
+    if let Err(e) = sqlx::query(
+        "INSERT INTO scan_state (key, value, ts) VALUES (?, ?, ?) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, ts = excluded.ts",
+    )
+    .bind(key)
+    .bind(value)
+    .bind(&ts)
+    .execute(&db.pool)
+    .await
+    {
+        tracing::warn!("failed to persist scan_state {key}: {e}");
+    }
+}
+
+async fn get_scan_state(db: &crate::db::Db, key: &str) -> Option<String> {
+    sqlx::query_scalar::<_, String>("SELECT value FROM scan_state WHERE key = ?")
+        .bind(key)
+        .fetch_optional(&db.pool)
+        .await
+        .ok()
+        .flatten()
+}
+
+/// Kick off a background scan and return `202` immediately. A second request
+/// while a scan is in flight returns `409`. Progress + the final report land
+/// in the `scan_state` table, readable via `GET /scan/status`.
+async fn trigger_scan(State(state): State<AppState>) -> AppResult<impl IntoResponse> {
+    use std::sync::atomic::Ordering;
+
+    // Atomically claim the scan slot; bail with 409 if already running.
+    if state
+        .scanning
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Ok((
+            StatusCode::CONFLICT,
+            Json(
+                json!({ "status": "running", "job_id": get_scan_state(&state.db, "job_id").await }),
+            ),
+        ));
+    }
+
+    let job_id = chrono::Utc::now().timestamp_millis().to_string();
+    let started_at = chrono::Utc::now().to_rfc3339();
+    set_scan_state(&state.db, "state", "running").await;
+    set_scan_state(&state.db, "job_id", &job_id).await;
+    set_scan_state(&state.db, "started_at", &started_at).await;
+    set_scan_state(&state.db, "finished_at", "").await;
+
+    let bg = state.clone();
+    tokio::spawn(async move {
+        let result = scanner::scan_once(&bg.db, &bg.config.library_roots, &bg.tmdb).await;
+        match result {
+            Ok(report) => {
+                let json = serde_json::to_string(&report).unwrap_or_else(|_| "{}".into());
+                set_scan_state(&bg.db, "last_report", &json).await;
+            }
+            Err(e) => {
+                tracing::warn!("background scan failed: {e}");
+                set_scan_state(
+                    &bg.db,
+                    "last_report",
+                    &json!({ "error": e.to_string() }).to_string(),
+                )
+                .await;
+            }
+        }
+        set_scan_state(&bg.db, "finished_at", &chrono::Utc::now().to_rfc3339()).await;
+        set_scan_state(&bg.db, "state", "idle").await;
+        bg.scanning.store(false, Ordering::SeqCst);
+    });
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({ "status": "started", "job_id": job_id })),
+    ))
+}
+
+/// Report the current/last scan status from the `scan_state` table.
+async fn scan_status(State(state): State<AppState>) -> AppResult<Json<Value>> {
+    let st = get_scan_state(&state.db, "state").await.unwrap_or_default();
+    let state_str = if st.is_empty() {
+        "idle".to_string()
+    } else {
+        st
+    };
+    let last_report = get_scan_state(&state.db, "last_report")
+        .await
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok());
+    let started_at = get_scan_state(&state.db, "started_at").await;
+    let finished_at = get_scan_state(&state.db, "finished_at")
+        .await
+        .filter(|s| !s.is_empty());
+    Ok(Json(json!({
+        "state": state_str,
+        "last_report": last_report,
+        "started_at": started_at,
+        "finished_at": finished_at,
+    })))
 }
 
 #[cfg(test)]
@@ -382,7 +536,7 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use axum::body::Body;
-    use axum::http::{Request as HttpRequest, StatusCode};
+    use axum::http::Request as HttpRequest;
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -396,7 +550,13 @@ mod tests {
         }
         let db = crate::db::Db::connect_memory().await.unwrap();
         let config = Arc::new(Config::from_env());
-        AppState { db, config }
+        let tmdb = crate::tmdb::TmdbClient::new(None);
+        AppState {
+            db,
+            config,
+            tmdb,
+            scanning: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
     }
 
     async fn body_json(resp: axum::response::Response) -> Value {
@@ -575,5 +735,116 @@ mod tests {
         assert_eq!(items[0]["sub"], "plex:1");
         assert_eq!(items[0]["media_id"], 7);
         assert_eq!(items[0]["position_secs"], 120);
+    }
+
+    async fn seed_show_with_episodes(state: &AppState, n: i64) {
+        let show_id: i64 =
+            sqlx::query("INSERT INTO shows (title, norm_title, added_at) VALUES (?, ?, ?)")
+                .bind("Bar")
+                .bind("bar")
+                .bind("2026-01-01T00:00:00Z")
+                .execute(&state.db.pool)
+                .await
+                .unwrap()
+                .last_insert_rowid();
+        for i in 1..=n {
+            let f = seed_media_file(state, &format!("/lib/bar_s1e{i}.mp4")).await;
+            sqlx::query(
+                "INSERT INTO episodes (show_id, season, episode, title, file_id) \
+                 VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(show_id)
+            .bind(1_i64)
+            .bind(i)
+            .bind(format!("Ep{i}"))
+            .bind(f)
+            .execute(&state.db.pool)
+            .await
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn list_episodes_all_returns_items_and_total() {
+        let state = test_state().await;
+        seed_show_with_episodes(&state, 3).await;
+        let app = crate::build_router(state);
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/api/media/episodes")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["total"], 3);
+        assert_eq!(v["items"].as_array().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn list_episodes_all_honors_limit() {
+        let state = test_state().await;
+        seed_show_with_episodes(&state, 3).await;
+        let app = crate::build_router(state);
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/api/media/episodes?limit=1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["total"], 3);
+        assert_eq!(v["items"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn trigger_scan_returns_202_with_job_id_then_idle() {
+        let state = test_state().await;
+        let app = crate::build_router(state.clone());
+        let resp = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/media/scan")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        let v = body_json(resp).await;
+        assert_eq!(v["status"], "started");
+        assert!(v["job_id"].as_str().is_some());
+
+        // With empty library_roots the background scan completes ~instantly;
+        // poll scan/status until it reports idle (bounded).
+        let mut idle = false;
+        for _ in 0..50 {
+            let st = app
+                .clone()
+                .oneshot(
+                    HttpRequest::builder()
+                        .uri("/api/media/scan/status")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let sv = body_json(st).await;
+            if sv["state"] == "idle" {
+                idle = true;
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(idle, "scan/status never returned idle");
     }
 }
