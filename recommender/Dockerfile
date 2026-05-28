@@ -91,6 +91,13 @@ COPY recommender/migrations ./migrations
 # land in the image.
 COPY recommender/eval ./eval
 COPY recommender/docker-entrypoint.sh /usr/local/bin/recommender-entrypoint
+# sentence-transformers pulls torch, which from PyPI defaults to the CUDA
+# build — ~6GB of nvidia-* libraries (cublas, cudnn, triton, nccl, …).
+# The NAS has no GPU, so that payload is pure waste and it overran the
+# Docker build disk (ENOSPC). Install the CPU-only torch wheel first from
+# PyTorch's CPU index; `pip install .` below then sees torch already
+# satisfied and resolves sentence-transformers without the CUDA stack.
+RUN pip install --index-url https://download.pytorch.org/whl/cpu torch
 RUN pip install .
 RUN mkdir -p /data /data/hf-cache \
  && chown -R recommender:recommender /srv /data \
