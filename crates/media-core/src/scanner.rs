@@ -22,7 +22,7 @@ use crate::error::AppError;
 use crate::filename::{self, ParsedName};
 use crate::models::FileProbe;
 use crate::probe;
-use crate::tmdb::{TmdbClient, TmdbMatch};
+use crate::tmdb::{TmdbClient, TmdbEpisode, TmdbMatch};
 
 #[derive(Debug, Default, Clone, serde::Serialize)]
 pub struct ScanReport {
@@ -238,7 +238,13 @@ async fn index_file(
         } => {
             let m = tmdb.match_show(show, None).await;
             let show_id = upsert_show(db, show, &scanned_at, m.as_ref()).await?;
-            upsert_episode(db, show_id, *season, *episode, file_id).await?;
+            // Best-effort per-episode enrichment: only when the show resolved to
+            // a TMDB id. Errors/None leave title/air_date NULL and never fail.
+            let ep = match m.as_ref() {
+                Some(found) => tmdb.episode(found.tmdb_id, *season, *episode).await,
+                None => None,
+            };
+            upsert_episode(db, show_id, *season, *episode, file_id, ep.as_ref()).await?;
             m.is_some()
         }
         ParsedName::Unknown => false,
@@ -347,6 +353,7 @@ async fn upsert_show(
     let final_year = tmdb.and_then(|m| m.year);
     let tmdb_id = tmdb.map(|m| m.tmdb_id);
     let imdb_id = tmdb.and_then(|m| m.imdb_id.clone());
+    let tvdb_id = tmdb.and_then(|m| m.tvdb_id);
     let overview = tmdb.and_then(|m| m.overview.clone());
     let poster_path = tmdb.and_then(|m| m.poster_path.clone());
 
@@ -359,12 +366,13 @@ async fn upsert_show(
         if tmdb.is_some() {
             sqlx::query(
                 "UPDATE shows SET tmdb_id = COALESCE(?, tmdb_id), \
-                 imdb_id = COALESCE(?, imdb_id), year = COALESCE(?, year), \
-                 overview = COALESCE(?, overview), poster_path = COALESCE(?, poster_path) \
-                 WHERE id = ?",
+                 imdb_id = COALESCE(?, imdb_id), tvdb_id = COALESCE(?, tvdb_id), \
+                 year = COALESCE(?, year), overview = COALESCE(?, overview), \
+                 poster_path = COALESCE(?, poster_path) WHERE id = ?",
             )
             .bind(tmdb_id)
             .bind(&imdb_id)
+            .bind(tvdb_id)
             .bind(final_year)
             .bind(&overview)
             .bind(&poster_path)
@@ -377,11 +385,12 @@ async fn upsert_show(
 
     sqlx::query(
         "INSERT INTO shows \
-         (tmdb_id, imdb_id, title, norm_title, year, overview, poster_path, added_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+         (tmdb_id, imdb_id, tvdb_id, title, norm_title, year, overview, poster_path, added_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(tmdb_id)
     .bind(&imdb_id)
+    .bind(tvdb_id)
     .bind(final_title)
     .bind(&key)
     .bind(final_year)
@@ -398,14 +407,20 @@ async fn upsert_show(
     Ok(id)
 }
 
-/// Upsert an episode keyed on the UNIQUE `(show_id, season, episode)`.
+/// Upsert an episode keyed on the UNIQUE `(show_id, season, episode)`. When
+/// TMDB episode metadata is present, `title`/`air_date` are populated; missing
+/// fields are left untouched (COALESCE) so a later enriched scan can backfill.
 async fn upsert_episode(
     db: &Db,
     show_id: i64,
     season: i64,
     episode: i64,
     file_id: i64,
+    tmdb: Option<&TmdbEpisode>,
 ) -> Result<(), AppError> {
+    let title = tmdb.and_then(|e| e.title.clone());
+    let air_date = tmdb.and_then(|e| e.air_date.clone());
+
     let existing: Option<i64> = sqlx::query_scalar(
         "SELECT id FROM episodes WHERE show_id = ? AND season = ? AND episode = ?",
     )
@@ -417,19 +432,27 @@ async fn upsert_episode(
 
     match existing {
         Some(id) => {
-            sqlx::query("UPDATE episodes SET file_id = ? WHERE id = ?")
-                .bind(file_id)
-                .bind(id)
-                .execute(&db.pool)
-                .await?;
+            sqlx::query(
+                "UPDATE episodes SET file_id = ?, title = COALESCE(?, title), \
+                 air_date = COALESCE(?, air_date) WHERE id = ?",
+            )
+            .bind(file_id)
+            .bind(&title)
+            .bind(&air_date)
+            .bind(id)
+            .execute(&db.pool)
+            .await?;
         }
         None => {
             sqlx::query(
-                "INSERT INTO episodes (show_id, season, episode, file_id) VALUES (?, ?, ?, ?)",
+                "INSERT INTO episodes (show_id, season, episode, title, air_date, file_id) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
             )
             .bind(show_id)
             .bind(season)
             .bind(episode)
+            .bind(&title)
+            .bind(&air_date)
             .bind(file_id)
             .execute(&db.pool)
             .await?;
@@ -486,6 +509,27 @@ mod tests {
 
     async fn count(db: &Db, table: &str) -> i64 {
         sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+            .fetch_one(&db.pool)
+            .await
+            .unwrap()
+    }
+
+    /// Insert a minimal `media_files` row and return its id. `episodes.file_id`
+    /// is a foreign key into `media_files`, so episode upserts need a real id.
+    async fn seed_media_file(db: &Db, path: &str) -> i64 {
+        sqlx::query(
+            "INSERT INTO media_files \
+             (path, size_bytes, mtime, container, duration_secs, video_codec, \
+              video_height, video_profile, hdr_format, audio_tracks_json, \
+              subtitle_tracks_json, scanned_at) \
+             VALUES (?, 1, 't', 'mkv', 1, 'h264', 1080, NULL, NULL, '[]', '[]', 't')",
+        )
+        .bind(path)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        sqlx::query_scalar("SELECT id FROM media_files WHERE path = ?")
+            .bind(path)
             .fetch_one(&db.pool)
             .await
             .unwrap()
@@ -741,6 +785,7 @@ mod tests {
             title: "Aladdin".into(),
             year: Some(2019),
             imdb_id: Some("tt6139732".into()),
+            tvdb_id: None,
             overview: Some("A kindhearted street urchin...".into()),
             poster_path: Some("/poster.jpg".into()),
         };
@@ -788,6 +833,88 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(count(&db, "movies").await, 0);
+    }
+
+    #[tokio::test]
+    async fn upsert_episode_binds_title_and_air_date() {
+        // M8: episode title/air_date must be written when TMDB episode metadata
+        // is available, not left perpetually NULL.
+        let db = Db::connect_memory().await.unwrap();
+        let show_id = upsert_show(&db, "Breaking Bad", "t", None).await.unwrap();
+        let file_id = seed_media_file(&db, "/lib/Breaking Bad - S01E01.mkv").await;
+        let ep = TmdbEpisode {
+            title: Some("Pilot".into()),
+            air_date: Some("2008-01-20".into()),
+        };
+        upsert_episode(&db, show_id, 1, 1, file_id, Some(&ep))
+            .await
+            .unwrap();
+
+        let (title, air_date): (Option<String>, Option<String>) =
+            sqlx::query_as("SELECT title, air_date FROM episodes LIMIT 1")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(title.as_deref(), Some("Pilot"));
+        assert_eq!(air_date.as_deref(), Some("2008-01-20"));
+    }
+
+    #[tokio::test]
+    async fn upsert_episode_backfills_metadata_on_reindex() {
+        // A first pass with no episode metadata leaves title/air_date NULL; a
+        // later enriched pass must backfill them without clobbering on missing.
+        let db = Db::connect_memory().await.unwrap();
+        let show_id = upsert_show(&db, "Severance", "t", None).await.unwrap();
+        let file_id = seed_media_file(&db, "/lib/Severance - S01E01.mkv").await;
+
+        upsert_episode(&db, show_id, 1, 1, file_id, None)
+            .await
+            .unwrap();
+        let title: Option<String> = sqlx::query_scalar("SELECT title FROM episodes LIMIT 1")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(title, None);
+
+        let ep = TmdbEpisode {
+            title: Some("Good News About Hell".into()),
+            air_date: None,
+        };
+        upsert_episode(&db, show_id, 1, 1, file_id, Some(&ep))
+            .await
+            .unwrap();
+        // Still exactly one row (UNIQUE upsert), now with a title backfilled.
+        assert_eq!(count(&db, "episodes").await, 1);
+        let title: Option<String> = sqlx::query_scalar("SELECT title FROM episodes LIMIT 1")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(title.as_deref(), Some("Good News About Hell"));
+    }
+
+    #[tokio::test]
+    async fn upsert_show_binds_tvdb_id() {
+        // M8: shows.tvdb_id must be written when the TMDB external_ids response
+        // carries one, instead of being discarded.
+        let db = Db::connect_memory().await.unwrap();
+        let m = TmdbMatch {
+            tmdb_id: 1396,
+            title: "Breaking Bad".into(),
+            year: Some(2008),
+            imdb_id: Some("tt0903747".into()),
+            tvdb_id: Some(81189),
+            overview: Some("A chemistry teacher...".into()),
+            poster_path: Some("/bb.jpg".into()),
+        };
+        upsert_show(&db, "Breaking Bad", "t", Some(&m))
+            .await
+            .unwrap();
+
+        let tvdb_id: Option<i64> = sqlx::query_scalar("SELECT tvdb_id FROM shows LIMIT 1")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(tvdb_id, Some(81189));
     }
 
     #[test]
