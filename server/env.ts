@@ -130,6 +130,7 @@ if (isProd && !plexServerId && !allowUnscopedPlexLogin) {
 }
 
 const useLocalRecommender = process.env.USE_LOCAL_RECOMMENDER === '1'
+const useMediaCore = process.env.USE_MEDIA_CORE === '1'
 const recommenderEventSecret = opt('RECOMMENDER_EVENT_SECRET') ?? null
 if (useLocalRecommender && !recommenderEventSecret) {
   throw new Error(
@@ -415,6 +416,13 @@ export const env = {
       ? 'http://recommender:8000'
       : 'http://localhost:8000'),
   recommenderEventSecret,
+
+  useMediaCore,
+  mediaCoreUrl:
+    opt('MEDIA_CORE_URL') ??
+    (process.env.NODE_ENV === 'production'
+      ? 'http://media-core:8002'
+      : 'http://127.0.0.1:8002'),
 
   // mybunny.tv / Xtream Codes IPTV integration. Reserved at PF-2;
   // consumed by the IPTV modules added in later PF phases (Xtream client,
