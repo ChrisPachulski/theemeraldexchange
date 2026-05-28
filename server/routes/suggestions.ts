@@ -1743,6 +1743,106 @@ function tagIptvAvailability(items: SuggestionItem[]): SuggestionItem[] {
   }
 }
 
+// Stamp available_on:['local'] for suggestion items the household already
+// has on disk, cross-referencing media-core's read-only media.db. Pure:
+// returns a new array, never mutates the input. Composes with
+// tagIptvAvailability — an item can carry both 'iptv' and 'local'.
+//
+// Matching strategy (mirrors the M3 finding):
+//   PRIMARY  — tmdb_id JOIN. This is the durable seam: it lights up
+//              automatically once media-core's TMDB enrichment lands.
+//   FALLBACK — normalized title + EXACT year, for items not matched by
+//              id (today every media.db row has tmdb_id=NULL). The local
+//              `title` column is currently reversed/quality-token junk, so
+//              the fallback is deliberately strict: normalizeTitle() both
+//              sides, require an exact year match, and skip empty/<5-char
+//              normalized titles to suppress false positives. We query
+//              only movies/shows (never the ~21k episodes).
+function tagLocalAvailability(
+  items: SuggestionItem[],
+  kind: 'movie' | 'tv',
+): SuggestionItem[] {
+  // Gate: when media-core is not enabled there is no local library to tag.
+  if (!env.useMediaCore) return items
+  if (items.length === 0) return items
+
+  const db = mediaLibraryDb()
+  // Graceful degrade: missing/unopenable media.db → leave items untouched.
+  if (!db) return items
+
+  const table = kind === 'tv' ? 'shows' : 'movies'
+
+  try {
+    // --- PRIMARY: tmdb_id join -------------------------------------------
+    const ids = Array.from(
+      new Set(items.map((item) => item.id).filter((id) => Number.isInteger(id))),
+    )
+    const matchedById = new Set<number>()
+    if (ids.length > 0) {
+      const placeholders = ids.map(() => '?').join(',')
+      const rows = db.raw
+        .prepare(
+          `SELECT DISTINCT tmdb_id FROM ${table} WHERE tmdb_id IN (${placeholders})`,
+        )
+        .all(...ids) as Array<{ tmdb_id: number | null }>
+      for (const row of rows) {
+        if (row.tmdb_id != null) matchedById.add(row.tmdb_id)
+      }
+    }
+
+    // --- FALLBACK: normalized title + exact year -------------------------
+    // Only for items NOT already matched by id. Build a lookup of local
+    // (normalizedTitle|year) keys, then probe per unmatched item.
+    const unmatched = items.filter(
+      (item) => !matchedById.has(item.id) && typeof item.year === 'number',
+    )
+    const matchedByTitle = new Set<string>() // keyed by item.id|title to mark items
+    if (unmatched.length > 0) {
+      // Pull local rows (id-less or otherwise) once; movies/shows only,
+      // never episodes. Year must be present for an exact match.
+      const localRows = db.raw
+        .prepare(`SELECT title, year FROM ${table} WHERE year IS NOT NULL`)
+        .all() as Array<{ title: string | null; year: number | null }>
+      const localKeys = new Set<string>()
+      for (const row of localRows) {
+        if (!row.title || row.year == null) continue
+        const norm = normalizeTitle(row.title)
+        // Skip junk: empty or implausibly short normalized titles collide
+        // with too many unrelated rows once articles/punctuation are gone.
+        if (norm.length < 5) continue
+        localKeys.add(`${norm}|${row.year}`)
+      }
+      if (localKeys.size > 0) {
+        for (const item of unmatched) {
+          const norm = normalizeTitle(item.title)
+          if (norm.length < 5) continue
+          if (localKeys.has(`${norm}|${item.year}`)) {
+            matchedByTitle.add(`${item.id}::${item.title}::${item.year}`)
+          }
+        }
+      }
+    }
+
+    if (matchedById.size === 0 && matchedByTitle.size === 0) return items
+
+    return items.map((item) => {
+      const hit =
+        matchedById.has(item.id) ||
+        matchedByTitle.has(`${item.id}::${item.title}::${item.year}`)
+      if (!hit) return item
+      const available = item.available_on ? [...item.available_on] : []
+      if (!available.includes('local')) available.push('local')
+      return { ...item, available_on: available }
+    })
+  } catch (err) {
+    console.warn(
+      '[suggestions] local availability lookup failed:',
+      err instanceof Error ? err.message : String(err),
+    )
+    return items
+  }
+}
+
 suggestions.get('/:type', async (c) => {
   const type = c.req.param('type')
   if (type !== 'movie' && type !== 'tv') {
@@ -2043,7 +2143,7 @@ suggestions.get('/:type', async (c) => {
     setTimingHeader()
     return c.json({
       source: 'recommender',
-      items: tagIptvAvailability(items),
+      items: tagLocalAvailability(tagIptvAvailability(items), type),
       _diag: diag({
         modelVersion,
         recipe,
