@@ -45,11 +45,20 @@ COPY crates/emerald-contracts-pyo3 ./crates/emerald-contracts-pyo3
 # Output lands at
 # crates/emerald-contracts-napi/emerald-contracts-napi.linux-x64-gnu.node.
 #
-# `napi` is the binary name @napi-rs/cli exposes (not the package name);
-# `npx --yes @napi-rs/cli@3 build ...` errors with "could not determine
-# executable to run" because npx can't disambiguate. Use the bin name.
+# Invocation is fiddly in a clean image (no node_modules):
+#   - `npx --yes napi build`        → tries to install an npm package
+#                                     literally named `napi` (an empty
+#                                     placeholder) → ENOVERSIONS.
+#   - `npx --yes @napi-rs/cli@3 build` → "could not determine executable
+#                                     to run" (bin name ≠ package name).
+# The correct form names BOTH the package to fetch and the bin to run:
+#   npx --package <pkg> <bin> <args>
+# This works locally only because the root `npm ci` already has
+# @napi-rs/cli in node_modules; this stage has no such install, so we
+# fetch it explicitly. Output lands at
+# crates/emerald-contracts-napi/emerald-contracts-napi.linux-x64-gnu.node.
 WORKDIR /build/crates/emerald-contracts-napi
-RUN npx --yes napi build --platform --release
+RUN npx --yes --package @napi-rs/cli@3 napi build --platform --release
 
 # ---------------------------------------------------------------------------
 FROM node:24-slim AS base
