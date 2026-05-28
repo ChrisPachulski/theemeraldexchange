@@ -553,11 +553,46 @@ async fn get_scan_state(db: &crate::db::Db, key: &str) -> Option<String> {
         .flatten()
 }
 
+/// Authorize a scan trigger. A full library rescan is an expensive, DoS-prone
+/// operation, so outside `Off` mode (local/dev, no auth boundary) it is gated to
+/// admins: the caller must present a verified internal principal whose
+/// `role == "admin"`. This mirrors the Hono proxy's `requireAdmin` gate over
+/// `/scan` (403 `admin role required`). In `Off` mode there is no principal and
+/// no boundary, so the gate is skipped. Returns the rejection response on deny.
+fn authorize_scan(
+    claims: &Option<InternalClaims>,
+    mode: &PrincipalMode,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    if *mode == PrincipalMode::Off {
+        return Ok(());
+    }
+    let is_admin = claims.as_ref().map(|c| c.role == "admin").unwrap_or(false);
+    if is_admin {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "admin role required" })),
+        ))
+    }
+}
+
 /// Kick off a background scan and return `202` immediately. A second request
 /// while a scan is in flight returns `409`. Progress + the final report land
 /// in the `scan_state` table, readable via `GET /scan/status`.
-async fn trigger_scan(State(state): State<AppState>) -> AppResult<impl IntoResponse> {
+///
+/// Authorization: outside `Off` mode the caller must be a verified admin
+/// principal (see [`authorize_scan`]); a non-admin gets `403`.
+async fn trigger_scan(
+    State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
+) -> AppResult<impl IntoResponse> {
     use std::sync::atomic::Ordering;
+
+    let claims = claims.map(|Extension(c)| c);
+    if let Err(rejection) = authorize_scan(&claims, &state.config.principal_mode) {
+        return Ok(rejection);
+    }
 
     // Atomically claim the scan slot; bail with 409 if already running.
     if state
@@ -658,6 +693,56 @@ mod tests {
             tmdb,
             scanning: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
+    }
+
+    /// Enforce-mode state with a known principal secret wired in, so the
+    /// `principal_layer` actually verifies the signed Bearer internal-principal
+    /// token and the admin gate over `/scan` is live.
+    async fn test_state_enforce(secret: &str) -> AppState {
+        let db = crate::db::Db::connect_memory().await.unwrap();
+        let config = Arc::new(Config {
+            host: "127.0.0.1".into(),
+            port: 0,
+            db_path: ":memory:".into(),
+            library_roots: Vec::new(),
+            internal_principal_secret: Some(secret.to_string()),
+            principal_mode: PrincipalMode::Enforce,
+            server_id: "srv-test".into(),
+            tmdb_api_key: None,
+        });
+        let tmdb = crate::tmdb::TmdbClient::new(None);
+        AppState {
+            db,
+            config,
+            tmdb,
+            scanning: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// Mint a Bearer internal-principal token for `role`, signed the same way
+    /// the Hono proxy does (HKDF-derived key from the shared secret), so the
+    /// `principal_layer` accepts it and inserts the claims into request
+    /// extensions for the admin gate to inspect.
+    fn signed_principal(secret: &str, role: &str) -> String {
+        use emerald_contracts::derive_key;
+        use emerald_contracts::hkdf::INFO_INTERNAL_PRINCIPAL;
+        use emerald_contracts::internal_principal::{
+            DEFAULT_KID, DEFAULT_TTL_SECS, InternalClaims, encrypt,
+        };
+        let now = chrono::Utc::now().timestamp();
+        let claims = InternalClaims {
+            iss: "eex".into(),
+            sub: "plex:caller".into(),
+            role: role.into(),
+            auth_mode: "plex".into(),
+            server_id: "srv-test".into(),
+            device_id: None,
+            req_id: "scan-test".into(),
+            iat: now,
+            exp: now + DEFAULT_TTL_SECS,
+        };
+        let key = derive_key(secret.as_bytes(), INFO_INTERNAL_PRINCIPAL);
+        encrypt(&key, DEFAULT_KID, &claims)
     }
 
     async fn body_json(resp: axum::response::Response) -> Value {
@@ -1022,5 +1107,119 @@ mod tests {
             tokio::task::yield_now().await;
         }
         assert!(idle, "scan/status never returned idle");
+    }
+
+    #[test]
+    fn authorize_scan_admin_gate() {
+        use emerald_contracts::internal_principal::{DEFAULT_TTL_SECS, InternalClaims};
+
+        let now = 1_748_000_000;
+        let mk = |role: &str| {
+            Some(InternalClaims {
+                iss: "eex".into(),
+                sub: "plex:caller".into(),
+                role: role.into(),
+                auth_mode: "plex".into(),
+                server_id: "srv".into(),
+                device_id: None,
+                req_id: "r1".into(),
+                iat: now,
+                exp: now + DEFAULT_TTL_SECS,
+            })
+        };
+
+        // Off mode: no boundary, gate is skipped regardless of role/claims.
+        assert!(authorize_scan(&None, &PrincipalMode::Off).is_ok());
+        assert!(authorize_scan(&mk("user"), &PrincipalMode::Off).is_ok());
+
+        // Enforce/Log: admin allowed.
+        assert!(authorize_scan(&mk("admin"), &PrincipalMode::Enforce).is_ok());
+        assert!(authorize_scan(&mk("admin"), &PrincipalMode::Log).is_ok());
+
+        // Enforce/Log: non-admin and missing principal are rejected with 403.
+        for (claims, mode) in [
+            (mk("user"), PrincipalMode::Enforce),
+            (mk("user"), PrincipalMode::Log),
+            (None, PrincipalMode::Enforce),
+            (None, PrincipalMode::Log),
+        ] {
+            let err = authorize_scan(&claims, &mode).expect_err("should reject");
+            assert_eq!(err.0, StatusCode::FORBIDDEN);
+            assert_eq!(err.1.0["error"], "admin role required");
+        }
+    }
+
+    #[tokio::test]
+    async fn scan_rejects_non_admin_with_403() {
+        let secret = "test-scan-secret";
+        let state = test_state_enforce(secret).await;
+        let app = crate::build_router(state);
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/media/scan")
+                    .header(
+                        "authorization",
+                        format!("Bearer {}", signed_principal(secret, "user")),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let v = body_json(resp).await;
+        assert_eq!(v["error"], "admin role required");
+    }
+
+    #[tokio::test]
+    async fn scan_rejects_missing_principal_with_403() {
+        // Enforce mode requires a principal; a missing one is rejected by the
+        // principal_layer (401) before reaching the admin gate. Either way an
+        // unauthenticated caller cannot trigger a rescan.
+        let secret = "test-scan-secret";
+        let state = test_state_enforce(secret).await;
+        let app = crate::build_router(state);
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/media/scan")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status() == StatusCode::FORBIDDEN || resp.status() == StatusCode::UNAUTHORIZED,
+            "missing principal must not be allowed to scan; got {}",
+            resp.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn scan_allows_admin_with_202() {
+        let secret = "test-scan-secret";
+        let state = test_state_enforce(secret).await;
+        let app = crate::build_router(state);
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/media/scan")
+                    .header(
+                        "authorization",
+                        format!("Bearer {}", signed_principal(secret, "admin")),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        let v = body_json(resp).await;
+        assert_eq!(v["status"], "started");
+        assert!(v["job_id"].as_str().is_some());
     }
 }
