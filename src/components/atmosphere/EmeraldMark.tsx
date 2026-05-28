@@ -28,6 +28,14 @@ export function EmeraldMark({ width = 64, variant = 'single', className }: Emera
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
+    // Skip the WebGL boot under browser automation (Playwright sets
+    // navigator.webdriver). Headless Chromium on CI has no GPU and no
+    // software-WebGL fallback since Chromium 137, so every GemScene
+    // mount throws; the repeated failed context creations crash the
+    // GPU process and take the page down mid-test. Real users never
+    // have webdriver set, so production is unaffected — the canvas
+    // still renders with its aria-label as a graceful fallback.
+    if (typeof navigator !== 'undefined' && navigator.webdriver) return
     let scene: GemScene
     try {
       scene = new GemScene({

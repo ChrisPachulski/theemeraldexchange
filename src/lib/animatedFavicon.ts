@@ -27,6 +27,14 @@ function getFaviconLink(): HTMLLinkElement {
  */
 export function mountAnimatedFavicon(): void {
   if (typeof window === 'undefined') return
+  // Skip the WebGL boot under browser automation (Playwright sets
+  // navigator.webdriver). This runs at app startup on every page;
+  // headless CI Chromium has no GPU and no software-WebGL fallback
+  // since Chromium 137, so the GemScene boot throws and the repeated
+  // failed context creations crash the GPU process mid-test. Real
+  // users never have webdriver set — production keeps the animated
+  // favicon; the static SVG in index.html stays as the fallback.
+  if (typeof navigator !== 'undefined' && navigator.webdriver) return
   if ((window as unknown as { __teeFaviconMounted?: boolean }).__teeFaviconMounted) return
   ;(window as unknown as { __teeFaviconMounted?: boolean }).__teeFaviconMounted = true
 
