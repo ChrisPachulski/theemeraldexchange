@@ -15,6 +15,7 @@ use tower_http::services::ServeFile;
 
 use crate::auth::principal_layer;
 use crate::capability::{self, ClientCaps};
+use crate::config::PrincipalMode;
 use crate::error::{AppError, AppResult};
 use crate::models::{EpisodeRow, MediaFileRow, MovieRow, ShowRow, WatchStateRow};
 use crate::scanner;
@@ -328,12 +329,98 @@ async fn play_grant(
     })))
 }
 
+/// Defense-in-depth: a streamed path must resolve inside one of the configured
+/// library roots. The path is DB-sourced (not raw user input), but a buggy or
+/// poisoned scan could persist a path containing `..` or a symlink escaping the
+/// library; we must never serve such a file. Canonicalizes both sides so `..`
+/// and symlinks are resolved before the prefix check. With no roots configured
+/// (dev/tests), containment is skipped.
+fn path_within_roots(path: &std::path::Path, roots: &[crate::config::LibraryRoot]) -> bool {
+    if roots.is_empty() {
+        return true;
+    }
+    let Ok(canon) = std::fs::canonicalize(path) else {
+        return false;
+    };
+    roots.iter().any(|r| {
+        std::fs::canonicalize(&r.path)
+            .map(|root| canon.starts_with(&root))
+            .unwrap_or(false)
+    })
+}
+
+/// Optional client capabilities advertised on the stream request as query
+/// params, so a GET can carry the same direct-play contract that `play_grant`
+/// computes from a JSON body. All fields are optional; absent caps mean "no
+/// constraints advertised" and the file streams directly (back-compat).
+#[derive(Debug, Deserialize, Default)]
+struct StreamCapsQuery {
+    containers: Option<String>,
+    video_codecs: Option<String>,
+    max_height: Option<i64>,
+    #[serde(default)]
+    hdr: bool,
+}
+
+impl StreamCapsQuery {
+    /// True when the client advertised any capability constraint at all.
+    fn advertised(&self) -> bool {
+        self.containers.is_some()
+            || self.video_codecs.is_some()
+            || self.max_height.is_some()
+            || self.hdr
+    }
+
+    fn to_caps(&self) -> ClientCaps {
+        let split = |s: &Option<String>| {
+            s.as_deref()
+                .map(|v| {
+                    v.split(',')
+                        .map(str::trim)
+                        .filter(|t| !t.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        ClientCaps {
+            containers: split(&self.containers),
+            video_codecs: split(&self.video_codecs),
+            max_height: self.max_height,
+            hdr: self.hdr,
+            max_bitrate: None,
+        }
+    }
+}
+
 async fn stream_file(
     State(state): State<AppState>,
     Path((kind, id)): Path<(String, i64)>,
+    Query(caps_q): Query<StreamCapsQuery>,
     req: Request,
 ) -> Result<axum::response::Response, AppError> {
     let file = resolve_media_file(&state, &kind, id).await?;
+
+    // Containment: never serve a file outside the configured library roots.
+    if !path_within_roots(
+        std::path::Path::new(&file.path),
+        &state.config.library_roots,
+    ) {
+        tracing::warn!(path = %file.path, "refusing to stream file outside library roots");
+        return Err(AppError::NotFound);
+    }
+
+    // Honor the direct-play contract (§3.5): if the client advertised caps and
+    // the file can't direct-play, this M3-only deployment has no transcoder, so
+    // return 503 rather than shipping bytes the client can't decode.
+    if caps_q.advertised() {
+        let decision = capability::decide(&file, &caps_q.to_caps());
+        if !decision.direct_play {
+            tracing::info!(path = %file.path, reason = %decision.reason, "transcode required; refusing direct stream");
+            return Err(AppError::TranscoderRequired);
+        }
+    }
+
     let service = ServeFile::new(&file.path);
     let resp = service
         .oneshot(req)
@@ -360,11 +447,25 @@ pub struct WatchUpsert {
     pub completed: bool,
 }
 
-/// Resolve the acting `sub`: prefer the verified internal principal, else
-/// fall back to an explicit `?sub=` query param (off-mode), else error.
-fn acting_sub(claims: &Option<InternalClaims>, query_sub: Option<String>) -> AppResult<String> {
+/// Resolve the acting `sub`. A verified internal principal is always
+/// authoritative. The client-supplied `?sub=` fallback is honored **only** in
+/// `Off` mode (local/dev, no auth boundary). In `log`/`enforce` mode, trusting
+/// `?sub=` would be an IDOR: an authenticated caller — or, in `log` mode, one
+/// whose token simply failed to verify — could read or overwrite any other
+/// user's watch state by naming their `sub`. So outside `Off` mode the only
+/// accepted identity is the verified principal.
+fn acting_sub(
+    claims: &Option<InternalClaims>,
+    query_sub: Option<String>,
+    mode: &PrincipalMode,
+) -> AppResult<String> {
     if let Some(c) = claims {
         return Ok(c.sub.clone());
+    }
+    if *mode != PrincipalMode::Off {
+        return Err(AppError::Unauthorized(
+            "internal-principal required to resolve acting user".into(),
+        ));
     }
     match query_sub.filter(|s| !s.is_empty()) {
         Some(s) => Ok(s),
@@ -378,7 +479,7 @@ async fn get_watch(
     Query(q): Query<WatchQuery>,
 ) -> AppResult<Json<Value>> {
     let claims = claims.map(|Extension(c)| c);
-    let sub = acting_sub(&claims, q.sub)?;
+    let sub = acting_sub(&claims, q.sub, &state.config.principal_mode)?;
     let rows = sqlx::query_as::<_, WatchStateRow>(
         "SELECT sub, media_kind, media_id, position_secs, duration_secs, watched_at, completed \
          FROM media_watch_state WHERE sub = ? ORDER BY watched_at DESC",
@@ -396,7 +497,7 @@ async fn post_watch(
     Json(body): Json<WatchUpsert>,
 ) -> AppResult<Json<Value>> {
     let claims = claims.map(|Extension(c)| c);
-    let sub = acting_sub(&claims, q.sub)?;
+    let sub = acting_sub(&claims, q.sub, &state.config.principal_mode)?;
     let watched_at = chrono::Utc::now().to_rfc3339();
     let completed = i64::from(body.completed);
 
@@ -549,7 +650,7 @@ mod tests {
             std::env::remove_var("INTERNAL_PRINCIPAL_SECRET");
         }
         let db = crate::db::Db::connect_memory().await.unwrap();
-        let config = Arc::new(Config::from_env());
+        let config = Arc::new(Config::from_env().unwrap());
         let tmdb = crate::tmdb::TmdbClient::new(None);
         AppState {
             db,
@@ -802,6 +903,81 @@ mod tests {
         let v = body_json(resp).await;
         assert_eq!(v["total"], 3);
         assert_eq!(v["items"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn acting_sub_rejects_query_sub_outside_off_mode() {
+        use emerald_contracts::internal_principal::{DEFAULT_TTL_SECS, InternalClaims};
+        // Off mode: ?sub= is honored (local/dev).
+        assert_eq!(
+            acting_sub(&None, Some("plex:1".into()), &PrincipalMode::Off).unwrap(),
+            "plex:1"
+        );
+        // Log mode with no verified claims (e.g. a token that failed to
+        // verify): ?sub= must be REJECTED — this is the IDOR guard.
+        let err = acting_sub(&None, Some("plex:victim".into()), &PrincipalMode::Log);
+        assert!(matches!(err, Err(AppError::Unauthorized(_))));
+        // Enforce mode likewise rejects a bare ?sub=.
+        let err = acting_sub(&None, Some("plex:victim".into()), &PrincipalMode::Enforce);
+        assert!(matches!(err, Err(AppError::Unauthorized(_))));
+        // A verified principal is always authoritative and ignores ?sub=.
+        let now = 1_748_000_000;
+        let claims = Some(InternalClaims {
+            iss: "eex".into(),
+            sub: "plex:real".into(),
+            role: "user".into(),
+            auth_mode: "plex".into(),
+            server_id: "srv".into(),
+            device_id: None,
+            req_id: "r1".into(),
+            iat: now,
+            exp: now + DEFAULT_TTL_SECS,
+        });
+        assert_eq!(
+            acting_sub(
+                &claims,
+                Some("plex:attacker".into()),
+                &PrincipalMode::Enforce
+            )
+            .unwrap(),
+            "plex:real"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_refuses_when_client_caps_require_transcode() {
+        // A file the advertised client cannot direct-play must 503, not stream.
+        let state = test_state().await;
+        let file_id = seed_media_file(&state, "/lib/hevc.mkv").await;
+        // seed_media_file stores container=mp4, codec=h264, height=1080; ask
+        // for an mp4/av1 client so codec mismatch forces transcode.
+        sqlx::query("INSERT INTO movies (title, year, added_at, file_id) VALUES (?, ?, ?, ?)")
+            .bind("Needs Transcode")
+            .bind(2020_i64)
+            .bind("2026-01-01T00:00:00Z")
+            .bind(file_id)
+            .execute(&state.db.pool)
+            .await
+            .unwrap();
+        let movie_id: i64 = sqlx::query_scalar("SELECT id FROM movies WHERE file_id = ?")
+            .bind(file_id)
+            .fetch_one(&state.db.pool)
+            .await
+            .unwrap();
+
+        let app = crate::build_router(state);
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!(
+                        "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]
