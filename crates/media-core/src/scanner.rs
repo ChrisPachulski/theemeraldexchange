@@ -265,10 +265,35 @@ async fn upsert_movie(
     let overview = tmdb.and_then(|m| m.overview.clone());
     let poster_path = tmdb.and_then(|m| m.poster_path.clone());
 
-    let existing: Option<i64> = sqlx::query_scalar("SELECT id FROM movies WHERE file_id = ?")
-        .bind(file_id)
-        .fetch_optional(&db.pool)
-        .await?;
+    // Resolve the existing row to update. A movie is identified first by its
+    // TMDB id (so multiple files for one film — a 1080p and a 4K rip — collapse
+    // onto a single row instead of colliding on the UNIQUE tmdb_id), then by
+    // file_id (a re-scan of the same file, or a movie with no TMDB match where
+    // tmdb_id is NULL and so cannot dedup by id). Mirrors `upsert_show`'s
+    // norm_title dedup.
+    let existing: Option<i64> = match tmdb_id {
+        Some(tid) => {
+            match sqlx::query_scalar::<_, i64>("SELECT id FROM movies WHERE tmdb_id = ?")
+                .bind(tid)
+                .fetch_optional(&db.pool)
+                .await?
+            {
+                Some(id) => Some(id),
+                None => {
+                    sqlx::query_scalar("SELECT id FROM movies WHERE file_id = ?")
+                        .bind(file_id)
+                        .fetch_optional(&db.pool)
+                        .await?
+                }
+            }
+        }
+        None => {
+            sqlx::query_scalar("SELECT id FROM movies WHERE file_id = ?")
+                .bind(file_id)
+                .fetch_optional(&db.pool)
+                .await?
+        }
+    };
 
     match existing {
         Some(id) => {
@@ -683,6 +708,63 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(tmdb_id, None);
+    }
+
+    #[tokio::test]
+    async fn two_files_same_tmdb_id_collapse_to_one_movie() {
+        // A library with two files for one film (e.g. a 1080p and a 4K rip)
+        // resolves both to the same TMDB id. They must collapse onto a single
+        // movies row rather than collide on the UNIQUE tmdb_id constraint.
+        let db = Db::connect_memory().await.unwrap();
+
+        async fn seed_file(db: &Db, path: &str) -> i64 {
+            sqlx::query(
+                "INSERT INTO media_files \
+                 (path, size_bytes, mtime, container, duration_secs, video_codec, \
+                  video_height, video_profile, hdr_format, audio_tracks_json, \
+                  subtitle_tracks_json, scanned_at) \
+                 VALUES (?, 1, 't', 'mkv', 1, 'h264', 1080, NULL, NULL, '[]', '[]', 't')",
+            )
+            .bind(path)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+            sqlx::query_scalar("SELECT id FROM media_files WHERE path = ?")
+                .bind(path)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap()
+        }
+
+        let m = TmdbMatch {
+            tmdb_id: 812,
+            title: "Aladdin".into(),
+            year: Some(2019),
+            imdb_id: Some("tt6139732".into()),
+            overview: Some("A kindhearted street urchin...".into()),
+            poster_path: Some("/poster.jpg".into()),
+        };
+
+        let f1 = seed_file(&db, "/media/Movies/Aladdin (2019)/Aladdin.1080p.mkv").await;
+        let f2 = seed_file(&db, "/media/Movies/Aladdin (2019)/Aladdin.2160p.4K.mkv").await;
+
+        // Both files enrich to the same tmdb_id; the second must not error.
+        upsert_movie(&db, "Aladdin", Some(2019), f1, "t", Some(&m))
+            .await
+            .unwrap();
+        upsert_movie(&db, "Aladdin", Some(2019), f2, "t", Some(&m))
+            .await
+            .unwrap();
+
+        // One logical movie, not two; no UNIQUE collision.
+        assert_eq!(count(&db, "movies").await, 1);
+        let (tmdb_id, title): (Option<i64>, String) =
+            sqlx::query_as("SELECT tmdb_id, title FROM movies LIMIT 1")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(tmdb_id, Some(812));
+        assert_eq!(title, "Aladdin");
     }
 
     #[tokio::test]
