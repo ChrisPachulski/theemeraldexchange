@@ -36,7 +36,7 @@ import { EncryptJWT, jwtDecrypt } from 'jose'
 import { createHash } from 'node:crypto'
 import type { Context } from 'hono'
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie'
-import * as contracts from '@emerald/contracts-napi'
+import { contracts, type ContractsTypes } from './services/contractsBinding.js'
 import { env } from './env.js'
 import { deriveKey, INFO_SESSION, INFO_DEVICE_TOKEN } from './services/keyDerivation.js'
 import { tryNormaliseLegacySub } from './services/sub.js'
@@ -272,7 +272,7 @@ export async function verifyDeviceToken(token: string): Promise<DeviceTokenClaim
   // Crate handles kid dispatch internally — pass the active key map.
   // At v1 there is only one kid; v2+ will add additional entries during
   // the rotation grace window.
-  let claims: contracts.DeviceClaimsJs
+  let claims: ContractsTypes.DeviceClaimsJs
   try {
     claims = contracts.deviceTokenDecrypt(
       [{ kid: DEVICE_TOKEN_KID, key: Buffer.from(key) }],
