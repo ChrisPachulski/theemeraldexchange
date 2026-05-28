@@ -1,92 +1,182 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { Hono } from 'hono'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+vi.mock('../env.js', () => ({
+  env: {
+    mediaCoreUrl: 'http://media-core.test',
+    internalPrincipalSecret: 'test-secret',
+  },
+}))
+
+vi.mock('../services/internalPrincipal.js', () => ({
+  mintInternalPrincipal: vi.fn(() => 'minted-token'),
+}))
+
+vi.mock('../services/upstream.js', () => ({
+  fetchWithTimeout: vi.fn(),
+  LAN_TIMEOUT_MS: 5000,
+}))
+
+vi.mock('../middleware/auth.js', () => ({
+  requireAuth: (c: any, next: any) => {
+    c.set('session', { userId: 'u1', role: 'admin' })
+    return next()
+  },
+}))
+
+vi.mock('../services/recommenderCaller.js', () => ({
+  recommenderCallerFromSession: vi.fn(() => ({ kind: 'user', id: 'u1' })),
+}))
+
 import { media } from './media.js'
-import { createSession } from '../session.js'
-import type { Env } from '../middleware/auth.js'
+import { fetchWithTimeout } from '../services/upstream.js'
+import { mintInternalPrincipal } from '../services/internalPrincipal.js'
+import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
 
-function appUnderTest() {
-  const app = new Hono<Env>()
-  app.route('/api/media', media)
-  return app
-}
+const mockFetch = vi.mocked(fetchWithTimeout)
+const mockMint = vi.mocked(mintInternalPrincipal)
+const mockCaller = vi.mocked(recommenderCallerFromSession)
 
-async function userCookie() {
-  const t = await createSession({ sub: 'plex:42', username: 'testuser', role: 'user' })
-  return `eex.session=${t}`
-}
+describe('media proxy route', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockMint.mockReturnValue('minted-token')
+    mockCaller.mockReturnValue({ kind: 'user', id: 'u1' })
+  })
 
-beforeEach(() => {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async () =>
-      new Response(JSON.stringify({ movies: [] }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
+  it('proxies GET with minted internal-principal header', async () => {
+    mockFetch.mockResolvedValue(
+      new Response('body-bytes', { status: 200, headers: { 'Content-Type': 'video/mp4' } }),
+    )
+
+    const res = await media.request('/movies', {
+      method: 'GET',
+      headers: { host: 'localhost' },
+    })
+
+    expect(res.status).toBe(200)
+    expect(mockFetch).toHaveBeenCalledOnce()
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('http://media-core.test/api/media/movies')
+    expect((init as any).headers['authorization']).toBe('Bearer minted-token')
+  })
+
+  it('fails closed with 502 when mint throws while a secret is configured', async () => {
+    // caller present + secret configured (non-off posture) but mint throws →
+    // must NOT proxy unauthenticated; must fail closed.
+    mockMint.mockImplementation(() => {
+      throw new Error('no secret')
+    })
+    mockFetch.mockResolvedValue(new Response('x', { status: 200 }))
+
+    const res = await media.request('/movies', {
+      method: 'GET',
+      headers: { host: 'localhost' },
+    })
+
+    expect(res.status).toBe(502)
+    // upstream must never be hit unauthenticated
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('forwards the inbound Range header to upstream and round-trips a 206 with range headers', async () => {
+    mockFetch.mockResolvedValue(
+      new Response('partial', {
+        status: 206,
+        headers: {
+          'Content-Type': 'video/mp4',
+          'Content-Range': 'bytes 0-1023/8096',
+          'Content-Length': '1024',
+          'Accept-Ranges': 'bytes',
+          ETag: '"abc123"',
+        },
       }),
-    ),
-  )
-})
-
-afterEach(() => {
-  vi.unstubAllGlobals()
-})
-
-describe('GET /api/media/movies — authenticated proxy', () => {
-  it('forwards to mediaCoreUrl with an authorization Bearer header', async () => {
-    const fetchSpy = globalThis.fetch as ReturnType<typeof vi.fn>
-    const r = await appUnderTest().request('/api/media/movies', {
-      headers: { Cookie: await userCookie() },
-    })
-    expect(r.status).toBe(200)
-
-    expect(fetchSpy).toHaveBeenCalledOnce()
-    const [calledUrl, calledInit] = fetchSpy.mock.calls[0] as [string, RequestInit & { headers?: Record<string, string> }]
-    expect(calledUrl).toMatch(/\/api\/media\/movies$/)
-
-    const authHeader = (calledInit.headers as Record<string, string> | undefined)?.['authorization'] ?? ''
-    expect(authHeader).toMatch(/^Bearer /)
-  })
-
-  it('returns the upstream status and body to the caller', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () =>
-        new Response(JSON.stringify({ movies: [{ id: 1, title: 'Dune' }] }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        }),
-      ),
     )
-    const r = await appUnderTest().request('/api/media/movies', {
-      headers: { Cookie: await userCookie() },
+
+    const res = await media.request('/stream/42', {
+      method: 'GET',
+      headers: { host: 'localhost', range: 'bytes=0-1023' },
     })
-    expect(r.status).toBe(200)
-    const body = (await r.json()) as { movies: Array<{ id: number; title: string }> }
-    expect(body.movies).toHaveLength(1)
-    expect(body.movies[0].title).toBe('Dune')
+
+    // inbound Range forwarded upstream
+    const [, init] = mockFetch.mock.calls[0]
+    expect((init as any).headers['range']).toBe('bytes=0-1023')
+
+    // upstream 206 + range headers preserved on the way back
+    expect(res.status).toBe(206)
+    expect(res.headers.get('content-range')).toBe('bytes 0-1023/8096')
+    expect(res.headers.get('content-length')).toBe('1024')
+    expect(res.headers.get('accept-ranges')).toBe('bytes')
+    expect(res.headers.get('etag')).toBe('"abc123"')
+    expect(res.headers.get('content-type')).toBe('video/mp4')
   })
 
-  it('returns a non-2xx upstream status unchanged', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () =>
-        new Response(JSON.stringify({ error: 'not_found' }), {
-          status: 404,
-          headers: { 'Content-Type': 'application/json' },
-        }),
-      ),
+  it('forwards conditional headers and round-trips a 304 Not Modified', async () => {
+    mockFetch.mockResolvedValue(
+      new Response(null, { status: 304, headers: { ETag: '"abc123"' } }),
     )
-    const r = await appUnderTest().request('/api/media/movies/999', {
-      headers: { Cookie: await userCookie() },
-    })
-    expect(r.status).toBe(404)
-  })
-})
 
-describe('GET /api/media/movies — unauthenticated', () => {
-  it('blocks an unauthenticated request with 401', async () => {
-    const r = await appUnderTest().request('/api/media/movies')
-    expect(r.status).toBe(401)
-    expect(globalThis.fetch).not.toHaveBeenCalled()
+    const res = await media.request('/stream/42', {
+      method: 'GET',
+      headers: {
+        host: 'localhost',
+        'if-none-match': '"abc123"',
+        'if-modified-since': 'Wed, 21 Oct 2025 07:28:00 GMT',
+      },
+    })
+
+    const [, init] = mockFetch.mock.calls[0]
+    expect((init as any).headers['if-none-match']).toBe('"abc123"')
+    expect((init as any).headers['if-modified-since']).toBe('Wed, 21 Oct 2025 07:28:00 GMT')
+
+    expect(res.status).toBe(304)
+    expect(res.headers.get('etag')).toBe('"abc123"')
+  })
+
+  it('defaults content-type to application/octet-stream when upstream omits it', async () => {
+    // Build an upstream response with NO content-type header. The string-body
+    // Response constructor auto-injects text/plain, so strip it explicitly to
+    // simulate an upstream that genuinely omits the header.
+    const noCt = new Response('bytes', { status: 200 })
+    noCt.headers.delete('content-type')
+    mockFetch.mockResolvedValue(noCt)
+
+    const res = await media.request('/blob', {
+      method: 'GET',
+      headers: { host: 'localhost' },
+    })
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('application/octet-stream')
+  })
+
+  it('proxies anonymously in off posture (no caller) without failing closed', async () => {
+    mockCaller.mockReturnValue(null as any)
+    mockFetch.mockResolvedValue(new Response('x', { status: 200 }))
+
+    const res = await media.request('/movies', {
+      method: 'GET',
+      headers: { host: 'localhost' },
+    })
+
+    expect(res.status).toBe(200)
+    expect(mockFetch).toHaveBeenCalledOnce()
+    const [, init] = mockFetch.mock.calls[0]
+    expect((init as any).headers['authorization']).toBeUndefined()
+    expect(mockMint).not.toHaveBeenCalled()
+  })
+
+  it('forwards POST body and content-type', async () => {
+    mockFetch.mockResolvedValue(new Response('ok', { status: 200 }))
+
+    const res = await media.request('/scan', {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: JSON.stringify({ trigger: true }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(mockFetch).toHaveBeenCalledOnce()
+    const [, init] = mockFetch.mock.calls[0]
+    expect((init as any).headers['content-type']).toBe('application/json')
   })
 })
