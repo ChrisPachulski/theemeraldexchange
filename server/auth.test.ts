@@ -7,8 +7,68 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Hono } from 'hono'
+
+// ---------------------------------------------------------------------------
+// Mock the sibling-owned authZ + SIWA modules. The members allowlist
+// (membership.js) and the Apple JWKS verifier (appleAuth.js) are created
+// on parallel branches; here we mock their documented surfaces so the
+// route wiring can be tested in isolation.
+// ---------------------------------------------------------------------------
+type MemberStatus = 'allowed' | 'revoked' | 'not_member'
+const allowlist = new Map<string, MemberStatus>()
+const invites = new Map<string, { uses: number }>()
+const redeemSpy = vi.fn(
+  (
+    code: string,
+    sub: string,
+    _displayName: string | null,
+    _authMode: 'plex' | 'apple',
+  ): { ok: true; created: boolean } | { ok: false; reason: string } => {
+    const inv = invites.get(code)
+    if (!inv || inv.uses <= 0) return { ok: false, reason: 'invalid' }
+    inv.uses -= 1
+    allowlist.set(sub, 'allowed')
+    return { ok: true, created: true }
+  },
+)
+vi.mock('./services/membership.js', () => ({
+  memberStatus: (sub: string): MemberStatus => allowlist.get(sub) ?? 'not_member',
+  redeemInvite: (
+    code: string,
+    sub: string,
+    displayName: string | null,
+    authMode: 'plex' | 'apple',
+  ) => redeemSpy(code, sub, displayName, authMode),
+}))
+
+// Apple verifier: success keyed on a fixed valid-token sentinel; otherwise
+// returns a typed failure. The verified sub is a valid apple-pattern sub.
+const APPLE_SUB = 'apple:000000.0123456789abcdef0123456789abcdef.0000'
+const appleVerifyImpl: {
+  fn: (idToken: string, opts: { expectedNonce?: string }) => Promise<
+    | { ok: true; sub: { raw: string; provider: 'apple'; id: string }; email?: string; emailVerified?: boolean }
+    | { ok: false; error: string }
+  >
+} = {
+  fn: async (idToken) => {
+    if (idToken === 'valid-apple-token') {
+      return {
+        ok: true,
+        sub: { raw: APPLE_SUB, provider: 'apple', id: '000000.0123456789abcdef0123456789abcdef.0000' },
+        email: 'mom@example.com',
+        emailVerified: true,
+      }
+    }
+    return { ok: false, error: 'invalid_signature' }
+  },
+}
+vi.mock('./services/appleAuth.js', () => ({
+  verifyAppleIdentityToken: (idToken: string, opts: { expectedNonce?: string }) =>
+    appleVerifyImpl.fn(idToken, opts),
+}))
+
 import { auth, me, _resetAuthRateLimitsForTests } from './auth.js'
-import { env } from './env.js'
+import { env, isAppleConfigured } from './env.js'
 import { createSession } from './session.js'
 import {
   _primeSessionGateCache,
@@ -32,6 +92,21 @@ beforeEach(() => {
   // into the next case.
   _resetSessionGateCacheForTests()
   _resetAuthRateLimitsForTests()
+  // Reset the mocked allowlist / invites / SIWA verifier between tests.
+  allowlist.clear()
+  invites.clear()
+  redeemSpy.mockClear()
+  appleVerifyImpl.fn = async (idToken) => {
+    if (idToken === 'valid-apple-token') {
+      return {
+        ok: true,
+        sub: { raw: APPLE_SUB, provider: 'apple', id: '000000.0123456789abcdef0123456789abcdef.0000' },
+        email: 'mom@example.com',
+        emailVerified: true,
+      }
+    }
+    return { ok: false, error: 'invalid_signature' }
+  }
 })
 
 afterEach(() => {
@@ -203,6 +278,7 @@ describe('POST /auth/plex/check', () => {
   })
 
   it('promotes ADMINS-listed username to admin role', async () => {
+    allowlist.set('plex:999', 'allowed')
     stubPlex({ authToken: 'real-token', username: 'admin-user' })
     const r = await app().request('/auth/plex/check', {
       method: 'POST',
@@ -222,6 +298,7 @@ describe('POST /auth/plex/check', () => {
   })
 
   it('assigns user role to non-listed usernames', async () => {
+    allowlist.set('plex:999', 'allowed')
     stubPlex({ authToken: 'real-token', username: 'random-guest' })
     const r = await app().request('/auth/plex/check', {
       method: 'POST',
@@ -237,61 +314,62 @@ describe('POST /auth/plex/check', () => {
     expect(body.user.role).toBe('user')
   })
 
-  it('blocks non-members of PLEX_SERVER_ID with 403', async () => {
-    ;(env as Record<string, unknown>).plexServerId = 'home-server-machine-id'
-    stubPlex({
-      authToken: 'real-token',
-      username: 'random-guest',
-      resources: [
-        // Only some unrelated server, NOT the home server
-        {
-          name: 'Other Server',
-          clientIdentifier: 'some-other-machine-id',
-          owned: false,
-          provides: 'server',
-        },
-      ],
-    })
+  it('denies a Plex identity that is not a member and presents no invite (403 no_invite)', async () => {
+    // The Plex identity is valid, but authZ is now the invite/members
+    // allowlist — NOT the Plex machineId. With no member row and no
+    // invite, access is refused. This is the central invitation-only gate.
+    stubPlex({ authToken: 'real-token', username: 'random-guest' })
     const r = await app().request('/auth/plex/check', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pinId: 12345 }),
     })
     expect(r.status).toBe(403)
-    expect(await r.json()).toEqual({ status: 'denied', reason: 'not_a_server_member' })
+    expect(await r.json()).toEqual({ status: 'denied', reason: 'no_invite' })
   })
 
-  it('admits members of PLEX_SERVER_ID', async () => {
-    ;(env as Record<string, unknown>).plexServerId = 'home-server-machine-id'
-    stubPlex({
-      authToken: 'real-token',
-      username: 'random-guest',
-      resources: [
-        {
-          name: 'The Home Server',
-          clientIdentifier: 'home-server-machine-id',
-          owned: false,
-          provides: 'server',
-        },
-      ],
-    })
+  it('admits an existing Plex member (allowlist hit, no invite needed)', async () => {
+    allowlist.set('plex:999', 'allowed')
+    stubPlex({ authToken: 'real-token', username: 'random-guest' })
     const r = await app().request('/auth/plex/check', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pinId: 12345 }),
     })
     expect(r.status).toBe(200)
-    const body = (await r.json()) as {
-      status?: string
-      reason?: string
-      user: { username: string; role: string }
-      discoveredServers?: { name: string; id: string; owned: boolean }[]
-    }
+    const body = (await r.json()) as { status?: string }
     expect(body.status).toBe('authorized')
+    expect(redeemSpy).not.toHaveBeenCalled()
+  })
+
+  it('admits a new Plex identity that redeems a valid invite (mints membership)', async () => {
+    invites.set('GOODCODE', { uses: 1 })
+    stubPlex({ authToken: 'real-token', username: 'random-guest' })
+    const r = await app().request('/auth/plex/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinId: 12345, inviteCode: 'GOODCODE' }),
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { status?: string }
+    expect(body.status).toBe('authorized')
+    expect(redeemSpy).toHaveBeenCalledWith('GOODCODE', 'plex:999', 'random-guest', 'plex')
+  })
+
+  it('denies a new Plex identity with an invalid invite (403 no_invite)', async () => {
+    stubPlex({ authToken: 'real-token', username: 'random-guest' })
+    const r = await app().request('/auth/plex/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinId: 12345, inviteCode: 'WRONG' }),
+    })
+    expect(r.status).toBe(403)
+    expect(await r.json()).toEqual({ status: 'denied', reason: 'no_invite' })
   })
 
   it('returns discoveredServers when PLEX_SERVER_ID is unset (first-run aid)', async () => {
     ;(env as Record<string, unknown>).plexServerId = null
+    allowlist.set('plex:999', 'allowed')
     stubPlex({
       authToken: 'real-token',
       username: 'admin-user',
@@ -321,6 +399,129 @@ describe('POST /auth/plex/check', () => {
   })
 })
 
+describe('POST /auth/apple (Sign in with Apple)', () => {
+  // SIWA is gated on APPLE_CLIENT_ID; tests that exercise the verified
+  // path stub env.appleClientId so isAppleConfigured() is true.
+  async function withApple<T>(fn: () => Promise<T>): Promise<T> {
+    const before = (env as Record<string, unknown>).appleClientId
+    ;(env as Record<string, unknown>).appleClientId = 'com.example.eex'
+    try {
+      return await fn()
+    } finally {
+      ;(env as Record<string, unknown>).appleClientId = before
+    }
+  }
+
+  it('503s when SIWA is not configured', async () => {
+    expect(isAppleConfigured()).toBe(false)
+    const r = await app().request('/auth/apple', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identityToken: 'valid-apple-token' }),
+    })
+    expect(r.status).toBe(503)
+    expect(await r.json()).toEqual({ error: 'apple_not_configured' })
+  })
+
+  it('400s a missing identity token', async () => {
+    await withApple(async () => {
+      const r = await app().request('/auth/apple', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      expect(r.status).toBe(400)
+      expect(await r.json()).toEqual({ error: 'missing identity_token' })
+    })
+  })
+
+  it('401s an invalid identity token', async () => {
+    await withApple(async () => {
+      const r = await app().request('/auth/apple', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identityToken: 'forged' }),
+      })
+      expect(r.status).toBe(401)
+      const body = (await r.json()) as { error: string; reason: string }
+      expect(body.error).toBe('invalid_identity_token')
+      expect(body.reason).toBe('invalid_signature')
+    })
+  })
+
+  it('503s when Apple JWKS is unavailable (transient, not the user\'s fault)', async () => {
+    await withApple(async () => {
+      appleVerifyImpl.fn = async () => ({ ok: false, error: 'jwks_unavailable' })
+      const r = await app().request('/auth/apple', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identityToken: 'valid-apple-token' }),
+      })
+      expect(r.status).toBe(503)
+    })
+  })
+
+  it('verified Apple identity with a valid invite creates a member and mints a session', async () => {
+    await withApple(async () => {
+      invites.set('APPLECODE', { uses: 1 })
+      const r = await app().request('/auth/apple', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identityToken: 'valid-apple-token', inviteCode: 'APPLECODE' }),
+      })
+      expect(r.status).toBe(200)
+      const body = (await r.json()) as { status: string; user: { sub: string; email?: string } }
+      expect(body.status).toBe('authorized')
+      expect(body.user.sub).toBe(APPLE_SUB)
+      expect(body.user.email).toBe('mom@example.com')
+      expect(redeemSpy).toHaveBeenCalledWith('APPLECODE', APPLE_SUB, 'mom', 'apple')
+      expect(r.headers.get('set-cookie')).toContain('eex.session=')
+    })
+  })
+
+  it('verified Apple member re-login is allowed without an invite', async () => {
+    await withApple(async () => {
+      allowlist.set(APPLE_SUB, 'allowed')
+      const r = await app().request('/auth/apple', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identityToken: 'valid-apple-token' }),
+      })
+      expect(r.status).toBe(200)
+      expect(redeemSpy).not.toHaveBeenCalled()
+    })
+  })
+
+  it('verified Apple identity with no member row and no invite is denied (403 no_invite)', async () => {
+    await withApple(async () => {
+      const r = await app().request('/auth/apple', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identityToken: 'valid-apple-token' }),
+      })
+      expect(r.status).toBe(403)
+      expect(await r.json()).toEqual({ status: 'denied', reason: 'no_invite' })
+    })
+  })
+
+  it('mints an apple-mode session (no plexAuthToken) that /me reports as auth_mode apple', async () => {
+    await withApple(async () => {
+      allowlist.set(APPLE_SUB, 'allowed')
+      const r1 = await app().request('/auth/apple', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identityToken: 'valid-apple-token' }),
+      })
+      const cookie = r1.headers.get('set-cookie')!.split(';')[0]
+      const r2 = await app().request('/me', { headers: { Cookie: cookie } })
+      expect(r2.status).toBe(200)
+      const body = (await r2.json()) as { user: { sub: string; auth_mode: string } }
+      expect(body.user.sub).toBe(APPLE_SUB)
+      expect(body.user.auth_mode).toBe('apple')
+    })
+  })
+})
+
 describe('GET /me + POST /auth/logout', () => {
   it('returns 401 without a session', async () => {
     const r = await app().request('/me')
@@ -328,6 +529,7 @@ describe('GET /me + POST /auth/logout', () => {
   })
 
   it('returns the user after a successful pin check (round-trip)', async () => {
+    allowlist.set('plex:999', 'allowed')
     stubPlex({ authToken: 'real-token', username: 'admin-user' })
     const r1 = await app().request('/auth/plex/check', {
       method: 'POST',
@@ -388,6 +590,7 @@ describe('GET /me + POST /auth/logout', () => {
     // the operator edits ADMINS to drop them. /me must reflect the
     // recomputed 'user' role on the next call rather than echoing the
     // stale role from the cookie.
+    allowlist.set('plex:555', 'allowed')
     const token = await createSession({
       sub: '555',
       username: 'admin-user',

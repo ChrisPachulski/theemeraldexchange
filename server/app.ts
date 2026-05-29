@@ -27,6 +27,7 @@ import { telemetry } from './routes/telemetry.js'
 import { device } from './routes/device.js'
 import { media } from './routes/media.js'
 import { devices, adminDevices } from './routes/devices.js'
+import { adminInvites, adminMembers } from './routes/adminInvites.js'
 import { version } from './routes/version.js'
 
 export const app = new Hono()
@@ -111,6 +112,13 @@ app.route('/api/version', version)
 // scope to session.sub; admin routes cover every paired device.
 app.route('/api/devices', devices)
 app.route('/api/admin/devices', adminDevices)
+// Owner-issued invites + the members allowlist (authZ). Both routers are
+// gated by requireAdmin internally (mirroring adminDevices). The members
+// allowlist is the single shared authZ gate for BOTH the Plex and Apple
+// login paths; these endpoints let the owner mint/list/revoke invites
+// and list/add/revoke members.
+app.route('/api/admin/invites', adminInvites)
+app.route('/api/admin/members', adminMembers)
 app.route('/api/sonarr', sonarr)
 app.route('/api/radarr', radarr)
 app.route('/api/sab', sab)
