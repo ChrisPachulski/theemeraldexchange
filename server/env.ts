@@ -35,6 +35,7 @@
 
 import { config as dotenvConfig } from 'dotenv'
 import { validateSecretStrength, assertSecretsDistinct } from './services/secrets.js'
+import { parseSub } from './services/sub.js'
 
 dotenvConfig({ path: '.env.local' })
 dotenvConfig({ path: '.env' })
@@ -271,6 +272,49 @@ if (isProd && !telemetryDsn) {
   )
 }
 
+// APPLE_CLIENT_ID — the Apple Services ID / app bundle id used as the
+// `aud` claim when verifying a Sign in with Apple identity token against
+// Apple's JWKS (server/services/appleAuth.ts). SIWA needs no client
+// secret for identity-token verification (the JWKS is public), so this
+// is the only Apple config the verifier consumes — consistent with the
+// "no new credential store" constraint. Optional in dev so a Plex-only
+// deploy still boots; required in production only when SIWA is enabled
+// via ENABLE_APPLE_SIGN_IN=1 (mirrors the explicit-opt-in pattern used
+// for ALLOW_UNSCOPED_PLEX_LOGIN), so forcing it on every Plex-only NAS
+// is avoided. The verifier additionally fails closed if this is null.
+const appleClientId = opt('APPLE_CLIENT_ID') ?? null
+const enableAppleSignIn = process.env.ENABLE_APPLE_SIGN_IN === '1'
+if (isProd && enableAppleSignIn && !appleClientId) {
+  throw new Error(
+    'Missing required env var in production when ENABLE_APPLE_SIGN_IN=1: ' +
+      'APPLE_CLIENT_ID (the Apple Services ID / bundle id used as the ' +
+      'SIWA identity-token aud). Set it, or unset ENABLE_APPLE_SIGN_IN ' +
+      'to run Plex-only.',
+  )
+}
+
+// ADMIN_SUBS — comma-separated, namespaced subs (apple:<subject> |
+// plex:<id>) that are admins AND implicitly allowed without an invite.
+// This is the owner-bootstrap: the operator's own Apple/Plex sub goes
+// here so their very first login on a fresh install needs no invite and
+// lands them as admin even when their Plex username isn't in ADMINS
+// (apple: subs have no stable Plex username). Each entry is validated
+// with parseSub at boot so a malformed entry fails closed (throws)
+// rather than silently granting nothing. ADMINS (Plex usernames, legacy)
+// and ADMIN_SUBS coexist — roleFor keeps reading ADMINS for the cookie
+// username path; isAdminSub covers apple: subs.
+const adminSubs = csv('ADMIN_SUBS').map((s) => {
+  try {
+    return parseSub(s).raw
+  } catch {
+    throw new Error(
+      `Invalid entry in ADMIN_SUBS: ${JSON.stringify(s)}. Each entry must ` +
+        'be a namespaced sub like "plex:12345" or ' +
+        '"apple:000000.<32 hex>.0000".',
+    )
+  }
+})
+
 /** True when Plex OAuth is configured for this installation.
  *
  *  PLEX_CLIENT_ID is required for boot (validated by `required()` below),
@@ -284,6 +328,18 @@ if (isProd && !telemetryDsn) {
 export function isPlexConfigured(): boolean {
   // PLEX_CLIENT_ID is required — if we booted, it is set and non-empty.
   return true
+}
+
+/** True when Sign in with Apple is configured (APPLE_CLIENT_ID set).
+ *  Surfaced beside isPlexConfigured so /api/version can advertise both
+ *  auth_modes to clients, and so the /api/auth/apple route can fail
+ *  fast with a clear 503 when SIWA isn't configured rather than
+ *  verifying tokens against an empty aud. */
+export function isAppleConfigured(): boolean {
+  // Read through the exported env object (not the module-scoped const) so
+  // the check stays consistent if appleClientId is ever overridden, and
+  // so it is exercisable in tests the same way plexServerId is flipped.
+  return Boolean(env.appleClientId)
 }
 
 export const env = {
@@ -304,6 +360,11 @@ export const env = {
   /** Empty string in dev when not configured; mintInternalPrincipal asserts non-empty. */
   internalPrincipalSecret: rawInternalPrincipalSecret,
   admins: csv('ADMINS'),
+  /** Namespaced subs (apple:/plex:) that are admins + implicitly allowed
+   *  without an invite (owner bootstrap). parseSub-validated at boot. */
+  adminSubs,
+  /** SIWA `aud` — Apple Services ID / bundle id. null when unconfigured. */
+  appleClientId,
   plexServerId,
   port: positiveInt('PORT', 3001),
   isProd,
