@@ -1,0 +1,267 @@
+/* Owner-only invites + members management. Matches DevicesPanel's
+   disclosure vocabulary so the two admin panels in UserMenu read as a
+   set. */
+
+.invites-panel {
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: color-mix(in oklch, var(--surface) 80%, transparent);
+}
+
+.invites-panel__hint {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--text-subtle);
+  line-height: 1.4;
+}
+
+.invites-panel__loading,
+.invites-panel__empty {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--text-subtle);
+}
+
+/* ── Create ─────────────────────────────────────────────────────── */
+
+.invites-panel__create {
+  display: grid;
+  gap: var(--s-2);
+}
+
+.invites-panel__create-row {
+  display: flex;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.invites-panel__input {
+  flex: 1 1 12rem;
+  min-width: 0;
+  font-family: var(--font-body);
+  font-size: var(--t-sm);
+  padding: var(--s-1) var(--s-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.invites-panel__input:focus-visible {
+  outline: none;
+  border-color: var(--emerald);
+}
+
+.invites-panel__expiry {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--text-subtle);
+}
+
+.invites-panel__select {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  padding: var(--s-1) var(--s-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* ── One-time code reveal ───────────────────────────────────────── */
+
+.invites-panel__reveal {
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border: 1px solid var(--emerald);
+  border-radius: var(--r-sm);
+  background: var(--emerald-bg);
+}
+
+.invites-panel__reveal-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-display);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--emerald);
+}
+
+.invites-panel__reveal-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.invites-panel__code {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  color: var(--text);
+  padding: var(--s-1) var(--s-2);
+  background: color-mix(in oklch, var(--surface) 70%, transparent);
+  border-radius: var(--r-sm);
+  user-select: all;
+  word-break: break-all;
+}
+
+/* ── Lists ──────────────────────────────────────────────────────── */
+
+.invites-panel__section {
+  display: grid;
+  gap: var(--s-2);
+}
+
+.invites-panel__section-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.invites-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s-2);
+}
+
+.invites-panel__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklch, var(--surface) 60%, transparent);
+}
+
+.invites-panel__item-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.invites-panel__item-name {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  font-family: var(--font-body);
+  font-size: var(--t-sm);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.invites-panel__item-name code {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+
+.invites-panel__item-meta {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--text-subtle);
+}
+
+.invites-panel__badge {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: var(--tr-hud);
+  color: var(--emerald);
+  background: var(--emerald-bg);
+  padding: 1px 6px;
+  border-radius: var(--r-pod);
+  flex-shrink: 0;
+}
+
+.invites-panel__status {
+  text-transform: uppercase;
+  letter-spacing: var(--tr-hud);
+  font-size: 0.625rem;
+}
+
+.invites-panel__status--active {
+  color: var(--emerald);
+}
+
+.invites-panel__status--expired,
+.invites-panel__status--exhausted,
+.invites-panel__status--revoked {
+  color: var(--text-subtle);
+}
+
+/* ── Buttons (mirror DevicesPanel) ──────────────────────────────── */
+
+.invites-panel__btn {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  padding: var(--s-1) var(--s-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 120ms, color 120ms;
+}
+
+.invites-panel__btn:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--surface) 50%, var(--emerald) 10%);
+}
+
+.invites-panel__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.invites-panel__btn--primary {
+  justify-self: start;
+  color: var(--text);
+  background: var(--emerald-bg);
+  border-color: var(--emerald);
+}
+
+.invites-panel__btn--primary:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--emerald) 25%, var(--surface));
+}
+
+.invites-panel__btn--ghost {
+  background: transparent;
+  justify-self: start;
+}
+
+.invites-panel__btn--danger {
+  color: var(--danger, #d04949);
+  border-color: color-mix(in oklch, var(--danger, #d04949) 30%, var(--border));
+}
+
+.invites-panel__btn--danger:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--danger, #d04949) 12%, var(--surface));
+  color: var(--danger, #d04949);
+}
+
+.invites-panel__error {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--danger, #d04949);
+}

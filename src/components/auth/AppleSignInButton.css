@@ -1,0 +1,63 @@
+/* Sign in with Apple — sits beside the emerald Plex pill in the
+   walkthrough sign-in block. Apple's HIG wants a recognizable black
+   (or white) button with the Apple mark; we use the dark variant so it
+   reads against the kraken atmosphere, matched to the emerald button's
+   geometry (same pill radius, padding, and type scale) so the two
+   affordances feel like one control group rather than two themes. */
+
+.apple-signin {
+  display: grid;
+  gap: var(--s-2);
+}
+
+.apple-signin__button {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-5);
+  font-family: var(--font-display);
+  font-weight: var(--w-display);
+  font-size: var(--t-sm);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: #fff;
+  background: #000;
+  border: 1px solid color-mix(in oklch, #fff 22%, #000);
+  border-radius: var(--r-pod);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.apple-signin__button:hover:not(:disabled) {
+  background: #111;
+  border-color: color-mix(in oklch, #fff 40%, #000);
+  transform: translateY(-1px);
+}
+
+.apple-signin__button:focus-visible {
+  outline: 2px solid var(--emerald);
+  outline-offset: 2px;
+}
+
+.apple-signin__button:disabled {
+  opacity: 0.65;
+  cursor: progress;
+}
+
+.apple-signin__logo {
+  width: 1em;
+  height: 1em;
+  /* Optically center the mark against the uppercase cap height. */
+  margin-top: -0.12em;
+  flex: 0 0 auto;
+}
+
+.apple-signin__error {
+  margin: 0;
+  font-size: var(--t-sm);
+  color: var(--danger);
+}
