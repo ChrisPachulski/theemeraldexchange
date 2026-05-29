@@ -186,7 +186,59 @@ services:
       MEDIA_INTERNAL_PRINCIPAL_MODE: "${MEDIA_INTERNAL_PRINCIPAL_MODE:-off}"
       SERVER_ID: "${PLEX_SERVER_ID:-}"
       TMDB_API_KEY: "${TMDB_API_KEY:-}"
+      # M4 handoff (§4.x). When set, media-core proxies the transcode-required
+      # path to the transcoder (POST /api/transcode/grant) instead of returning
+      # 503 — its config.rs reads MEDIA_TRANSCODER_URL and falls back to the
+      # 503 "transcoder offline" semantics when this is unset. Points at the
+      # transcoder service over the docker network (never the host port).
+      MEDIA_TRANSCODER_URL: "${MEDIA_TRANSCODER_URL:-http://transcoder:8003}"
       RUST_LOG: "${MEDIA_CORE_LOG:-media_core=info}"
+
+  # ── transcoder (M4) — Rust HLS transcode service ──────────────────────────
+  # Fallback path when a client cannot direct-play a library file. media-core
+  # proxies POST /api/transcode/grant here (MEDIA_TRANSCODER_URL) and hands the
+  # client the returned HLS manifest URL. Spawns ffmpeg per session; segments
+  # live in the scratch tmpfs. Same read-only /media mount as media-core so
+  # ffmpeg can read source bytes by the path media-core reports. Never exposed
+  # publicly; binds 0.0.0.0 in-container, published to the NAS loopback only.
+  transcoder:
+    # Context is repo root so the Dockerfile can reach the full Rust workspace
+    # (transcoder depends on crates/media-core + crates/emerald-contracts).
+    build:
+      context: .
+      dockerfile: ./crates/transcoder/Dockerfile
+    image: theemeraldexchange-transcoder:latest
+    container_name: exchange-transcoder
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8003:8003"
+    volumes:
+      # Media library, READ-ONLY — SAME source as media-core so the input
+      # paths media-core reports resolve identically inside this container.
+      - "${MEDIA_LIBRARY_HOST_PATH:-/mnt/user/appdata/exchange-backend/media-test}:/media:ro"
+    # HLS segment scratch. tmpfs keeps churn off the array spindles and
+    # auto-clears on restart (segments are ephemeral, never persisted).
+    # Sized for concurrent sessions; raise if MAX_CONCURRENT_TRANSCODES grows.
+    # Sibling key to volumes:/environment: — not nested under volumes:.
+    tmpfs:
+      - /scratch:size=2g
+    environment:
+      TRANSCODER_HOST: "0.0.0.0"
+      TRANSCODER_PORT: "8003"
+      TRANSCODER_TMP_DIR: "/scratch"
+      TRANSCODER_FFMPEG_BIN: "/usr/local/bin/ffmpeg"
+      # CPU encode on the NAS (no GPU). Leave unset/"cpu" → libx264. Set to
+      # nvenc/qsv/vaapi/videotoolbox only with a HW-capable ffmpeg + device.
+      TRANSCODER_HW_ENCODER: "${TRANSCODER_HW_ENCODER:-cpu}"
+      # Concurrency caps (§4.4/§4.5). Defaults match concurrency.rs (4 / 1).
+      MAX_CONCURRENT_TRANSCODES: "${MAX_CONCURRENT_TRANSCODES:-4}"
+      MAX_CONCURRENT_CPU_TRANSCODES: "${MAX_CONCURRENT_CPU_TRANSCODES:-1}"
+      # Internal-principal verification (contract §4), SAME knobs as media-core.
+      # Secret MUST match the backend's INTERNAL_PRINCIPAL_SECRET. Enforce mode
+      # boot-fails without the secret, matching media-core's posture.
+      INTERNAL_PRINCIPAL_SECRET: "${INTERNAL_PRINCIPAL_SECRET:-}"
+      MEDIA_INTERNAL_PRINCIPAL_MODE: "${MEDIA_INTERNAL_PRINCIPAL_MODE:-off}"
+      RUST_LOG: "${TRANSCODER_LOG:-transcoder=info,tower_http=info}"
 
   cloudflared:
     image: cloudflare/cloudflared:latest
