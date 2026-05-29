@@ -366,6 +366,65 @@
   margin-top: var(--s-3);
 }
 
+/* Invite-code field — first-time redemption. Sits above the provider
+   buttons; returning members leave it blank. */
+.walkthrough__invite {
+  display: grid;
+  gap: var(--s-1);
+  max-width: 26rem;
+}
+
+.walkthrough__invite-label {
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  text-shadow: 0 1px 2px oklch(0 0 0 / 0.55);
+}
+
+.walkthrough__invite-optional {
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-subtle);
+}
+
+.walkthrough__invite-input {
+  width: 100%;
+  padding: var(--s-2) var(--s-3);
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  color: var(--text);
+  background: color-mix(in oklch, var(--surface) 88%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  transition: border-color var(--dur-fast) var(--ease);
+}
+
+.walkthrough__invite-input::placeholder {
+  color: var(--text-subtle);
+  font-family: var(--font-sans, inherit);
+}
+
+.walkthrough__invite-input:focus-visible {
+  outline: none;
+  border-color: var(--emerald);
+}
+
+.walkthrough__invite-input:disabled {
+  opacity: 0.6;
+}
+
+/* Provider buttons sit in a row that wraps on narrow viewports so the
+   Apple and Plex affordances read as a pair. */
+.walkthrough__signin-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  align-items: flex-start;
+}
+
 .walkthrough__signin-button {
   justify-self: start;
   padding: var(--s-3) var(--s-5);
