@@ -11,14 +11,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    let state = AppState::from_env().map_err(|e| {
-        tracing::error!("transcoder config error: {e}");
-        e
-    })?;
-
     // Boot-time hardware-encoder detection (§4.4). Honor TRANSCODER_HW_ENCODER
     // only if the configured encoder is actually built into this ffmpeg;
-    // otherwise fall back to libx264 and say so.
+    // otherwise fall back to libx264 and say so. This MUST run BEFORE we build
+    // AppState so the session manager launches ffmpeg with the RESOLVED encoder
+    // — otherwise a misconfigured HW family (e.g. nvenc on a binary without
+    // h264_nvenc) would crash-loop every session into a 503.
     let ffmpeg_bin = std::env::var("TRANSCODER_FFMPEG_BIN").unwrap_or_else(|_| "ffmpeg".into());
     let available = encoders::detect(&ffmpeg_bin).await;
     let preferred = HwEncoder::from_env();
@@ -30,6 +28,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     tracing::info!(?resolved, available = ?available, "transcoder encoder resolved");
+
+    let state = AppState::from_env_with_encoder(resolved).map_err(|e| {
+        tracing::error!("transcoder config error: {e}");
+        e
+    })?;
 
     // Idle-session sweeper (5s cadence; 30s no-heartbeat → reap).
     let _sweeper = state.sessions.spawn_sweeper();
