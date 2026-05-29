@@ -20,7 +20,7 @@
 //   GET  /api/me                — current user, or 401.
 
 import { Hono, type Context } from 'hono'
-import { env } from './env.js'
+import { env, isAppleConfigured } from './env.js'
 import {
   createPin,
   checkPin,
@@ -33,31 +33,44 @@ import {
   setSessionCookie,
   clearSessionCookie,
   readSession,
+  authModeFromSession,
 } from './session.js'
 import {
   _primeSessionGateCache,
   reconcileSession,
   roleFor,
 } from './services/sessionGate.js'
+import { memberStatus, redeemInvite } from './services/membership.js'
+import { verifyAppleIdentityToken } from './services/appleAuth.js'
 
 export const auth = new Hono()
 
-type AuthRateLimitKind = 'pin' | 'check'
+type AuthRateLimitKind = 'pin' | 'check' | 'apple'
 type AuthRateLimitBucket = { count: number; resetAt: number }
 type AuthRateLimitRule = { key: string; limit: number; windowMs: number }
 
 const AUTH_CLIENT_RATE_LIMITS: Record<AuthRateLimitKind, { limit: number; windowMs: number }> = {
   pin: { limit: 10, windowMs: 60_000 },
   check: { limit: 60, windowMs: 60_000 },
+  // SIWA login + invite-redeem. Tighter than `check` (no innocuous
+  // polling here — every apple request is a verify + an authZ decision)
+  // so a stolen-invite / token-replay flood is blunted on top of the
+  // 128-bit invite entropy and the Apple-JWKS signature requirement.
+  apple: { limit: 20, windowMs: 60_000 },
 }
 const AUTH_GLOBAL_RATE_LIMITS: Record<AuthRateLimitKind, { limit: number; windowMs: number }> = {
   pin: { limit: 120, windowMs: 60_000 },
   check: { limit: 600, windowMs: 60_000 },
+  apple: { limit: 200, windowMs: 60_000 },
 }
 const AUTH_CHECK_PIN_RATE_LIMIT = { limit: 90, windowMs: 60_000 }
 const AUTH_RATE_LIMIT_MAX_BUCKETS = 256
 const AUTH_RATE_LIMIT_SWEEP_MS = 60_000
 const AUTH_CHECK_MAX_BODY_BYTES = 1024
+// A SIWA identity token is a full RS256 JWT (~1KB+), so the 1KB cap used
+// for the Plex pinId body is too small. Allow 8KB for the apple route to
+// cover the token + nonce + inviteCode while still bounding the read.
+const AUTH_APPLE_MAX_BODY_BYTES = 8192
 const authRateLimitBuckets = new Map<string, AuthRateLimitBucket>()
 let authRateLimitLastSweep = 0
 
@@ -202,6 +215,33 @@ async function parseLimitedJson(c: Context, maxBytes: number): Promise<{ tooLarg
   }
 }
 
+// Shared authZ decision used by BOTH login paths (Plex + Apple) after
+// each has independently proven identity. Provider-agnostic: it answers
+// "is this verified sub allowed?" by consulting the members allowlist
+// and, when present, redeeming an invite to mint a new membership.
+//
+//   - Existing allowed member → admitted (no invite needed; idempotent
+//     re-login).
+//   - Not yet a member + a valid unredeemed invite → membership minted,
+//     admitted.
+//   - Otherwise → denied (caller returns 403 no_invite).
+//
+// The sub passed here MUST already be the signature/PIN-verified,
+// parseSub-validated namespaced form. authZ never trusts a client sub.
+function authorizeOrRedeem(
+  sub: string,
+  inviteCode: string | undefined,
+  displayName: string | null,
+  authMode: 'plex' | 'apple',
+): { allowed: boolean } {
+  if (memberStatus(sub) === 'allowed') return { allowed: true }
+  if (inviteCode) {
+    const r = redeemInvite(inviteCode, sub, displayName, authMode)
+    if (r.ok) return { allowed: true }
+  }
+  return { allowed: false }
+}
+
 auth.post('/plex/pin', async (c) => {
   const limited = enforceAuthRateLimit(c, 'pin')
   if (limited) return limited
@@ -218,42 +258,27 @@ auth.post('/plex/check', async (c) => {
   if (preLimit) return preLimit
   const parsed = await parseLimitedJson(c, AUTH_CHECK_MAX_BODY_BYTES)
   if (parsed.tooLarge) return c.json({ error: 'body_too_large' }, 413)
-  const body = parsed.body as { pinId?: unknown } | null
+  const body = parsed.body as { pinId?: unknown; inviteCode?: unknown } | null
   const pinIdRaw = typeof body?.pinId === 'string' || typeof body?.pinId === 'number' ? String(body.pinId) : undefined
   if (!pinIdRaw) return c.json({ error: 'missing pinId' }, 400)
   const pinId = Number(pinIdRaw)
   if (!Number.isInteger(pinId)) return c.json({ error: 'bad pinId' }, 400)
+  const inviteCode = typeof body?.inviteCode === 'string' ? body.inviteCode : undefined
   const limited = enforceAuthCheckPinRateLimit(c, pinId)
   if (limited) return limited
 
   const pin = await checkPin(pinId)
   if (!pin.authToken) return c.json({ status: 'pending' })
 
+  // authN: prove the Plex identity. This stays exactly as before — the
+  // PIN exchange + getUser is who-you-are. authZ is now decoupled: a
+  // valid Plex identity alone no longer grants access.
   const user = await getUser(pin.authToken)
 
-  // Server-membership gate. When PLEX_SERVER_ID is unset, we accept any
-  // authenticated Plex user — first-run-friendly so you can discover
-  // your own server's machineIdentifier via /api/me, then lock it down.
-  let servers: { name: string; id: string; owned: boolean }[] = []
-  if (env.plexServerId) {
-    const resources = await listResources(pin.authToken)
-    const isMember = resources.some(
-      (r) => r.provides.includes('server') && r.clientIdentifier === env.plexServerId,
-    )
-    if (!isMember) {
-      return c.json(
-        { status: 'denied', reason: 'not_a_server_member' },
-        403,
-      )
-    }
-  } else {
-    // No gate yet — surface the user's servers so the operator can
-    // discover the machineIdentifier to configure.
-    const resources = await listResources(pin.authToken)
-    servers = resources
-      .filter((r) => r.provides.includes('server'))
-      .map((r) => ({ name: r.name, id: r.clientIdentifier, owned: r.owned }))
-  }
+  // Namespace-prefix the sub from day one (§8.2 D). New logins always
+  // receive a namespaced sub so that M2 device tokens minted from this
+  // session carry the prefixed form without needing the grace window.
+  const namespacedSub = `plex:${String(user.id)}`
 
   // Case-insensitive comparison so ADMINS env doesn't have to match the
   // exact Plex casing (which is sometimes uppercase, sometimes lowercase
@@ -261,10 +286,33 @@ auth.post('/plex/check', async (c) => {
   // sessionGate so the per-request reconcile uses the same definition.
   const role = roleFor(user.username)
 
-  // Namespace-prefix the sub from day one (§8.2 D). New logins always
-  // receive a namespaced sub so that M2 device tokens minted from this
-  // session carry the prefixed form without needing the grace window.
-  const namespacedSub = `plex:${String(user.id)}`
+  // SHARED authZ gate (identical to /api/auth/apple): the invite/members
+  // allowlist — NOT the Plex machineId — decides access. An existing
+  // member is admitted; otherwise a valid unredeemed invite in the body
+  // mints a membership; otherwise 403. This is the behavior change that
+  // makes the app invitation-only by membership rather than by live
+  // Plex-server membership, and makes the Plex and Apple paths symmetric.
+  const authz = authorizeOrRedeem(namespacedSub, inviteCode, user.username, 'plex')
+  if (!authz.allowed) {
+    return c.json({ status: 'denied', reason: 'no_invite' }, 403)
+  }
+
+  // Discovery aid only (no longer an authZ gate): when PLEX_SERVER_ID is
+  // unset, surface the user's servers so the operator can find the
+  // machineIdentifier. Best-effort — a probe failure must not block a
+  // row-backed member, so swallow errors.
+  let servers: { name: string; id: string; owned: boolean }[] = []
+  if (!env.plexServerId) {
+    try {
+      const resources = await listResources(pin.authToken)
+      servers = resources
+        .filter((r) => r.provides.includes('server'))
+        .map((r) => ({ name: r.name, id: r.clientIdentifier, owned: r.owned }))
+    } catch {
+      servers = []
+    }
+  }
+
   await setSessionCookie(c, {
     sub: namespacedSub,
     username: user.username,
@@ -291,6 +339,83 @@ auth.post('/plex/check', async (c) => {
     },
     // Only present when PLEX_SERVER_ID is unset — discovery aid.
     discoveredServers: servers.length > 0 ? servers : undefined,
+  })
+})
+
+// POST /api/auth/apple — Sign in with Apple. The parallel of /plex/check:
+// it proves identity via the SIWA identity token (verified against
+// Apple's JWKS, never trusting a client-sent sub) and then converges on
+// the SAME invite/members authZ gate as Plex. POST-only so requireSafeOrigin
+// (mounted on '*') gates it — a cross-site GET can't mint a session
+// (the /plex/check session-fixation rationale applies verbatim).
+auth.post('/apple', async (c) => {
+  const preLimit = enforceAuthRateLimit(c, 'apple')
+  if (preLimit) return preLimit
+
+  // SIWA must be configured. Fail fast with 503 (server-side gap, not the
+  // client's fault) rather than verifying against an empty aud.
+  if (!isAppleConfigured()) {
+    return c.json({ error: 'apple_not_configured' }, 503)
+  }
+
+  const parsed = await parseLimitedJson(c, AUTH_APPLE_MAX_BODY_BYTES)
+  if (parsed.tooLarge) return c.json({ error: 'body_too_large' }, 413)
+  const body = parsed.body as
+    | { identityToken?: unknown; nonce?: unknown; inviteCode?: unknown }
+    | null
+  const identityToken = typeof body?.identityToken === 'string' ? body.identityToken : undefined
+  if (!identityToken) return c.json({ error: 'missing identity_token' }, 400)
+  const nonce = typeof body?.nonce === 'string' ? body.nonce : undefined
+  const inviteCode = typeof body?.inviteCode === 'string' ? body.inviteCode : undefined
+
+  // authN: verify the Apple identity token. The only sub we ever trust
+  // comes from the signature-verified payload (parseSub-validated apple
+  // pattern inside the verifier). nonce is compared constant-time when
+  // supplied.
+  const verified = await verifyAppleIdentityToken(identityToken, { expectedNonce: nonce })
+  if (!verified.ok) {
+    // jwks_unavailable is OUR problem (transient Apple outage) — surface
+    // 503 so a login isn't reported to the user as "your token is bad."
+    // Everything else is a client-side auth failure → 401.
+    const httpStatus = verified.error === 'jwks_unavailable' ? 503 : 401
+    return c.json({ error: 'invalid_identity_token', reason: verified.error }, httpStatus)
+  }
+
+  const namespacedSub = verified.sub.raw
+  // Apple usernames are unstable/absent; derive a best-effort display
+  // name from the email local-part for roleFor + the members row. The
+  // sub (apple:<x>) is the stable key; the username is advisory chrome.
+  const displayName = verified.email ? verified.email.split('@')[0] : namespacedSub
+  const role = roleFor(displayName)
+
+  // SHARED authZ gate (identical to /plex/check).
+  const authz = authorizeOrRedeem(namespacedSub, inviteCode, displayName, 'apple')
+  if (!authz.allowed) {
+    return c.json({ status: 'denied', reason: 'no_invite' }, 403)
+  }
+
+  // Mint the session. NO plexAuthToken / verifiedPlexServerId — Apple
+  // carries no Plex credential, and reconcileSession skips the plex.tv
+  // probe entirely for apple: subs.
+  await setSessionCookie(c, {
+    sub: namespacedSub,
+    username: displayName,
+    role,
+    auth_mode: 'apple',
+  })
+
+  // Prime the membership cache as 'member' so the next protected request
+  // skips re-work. No plexAuthToken/serverId fields for apple.
+  _primeSessionGateCache(namespacedSub, 'member')
+
+  return c.json({
+    status: 'authorized',
+    user: {
+      sub: namespacedSub,
+      username: displayName,
+      email: verified.email,
+      role,
+    },
   })
 })
 
@@ -325,10 +450,18 @@ me.get('/', async (c) => {
     return c.json({ error: 'unauthenticated', reason: 'access_revoked' }, 401)
   }
   return c.json({
-    // sub is the stable Plex user id — used by the SPA to scope
-    // per-user localStorage (e.g. the BYO Anthropic API key) so a
-    // shared AppleTV signed in as different family members reads the
-    // right key for each one.
-    user: { sub: session.sub, username: session.username, role: session.role },
+    // sub is the stable provider-namespaced id (plex:/apple:) — used by
+    // the SPA to scope per-user localStorage (e.g. the BYO Anthropic API
+    // key) so a shared AppleTV signed in as different family members
+    // reads the right key for each one. auth_mode lets the SPA render
+    // the right chrome ("Signed in with Apple" vs "with Plex") and gate
+    // Plex-only admin features; authModeFromSession is the pre-D17
+    // fallback for cookies minted before the field existed.
+    user: {
+      sub: session.sub,
+      username: session.username,
+      role: session.role,
+      auth_mode: session.auth_mode ?? authModeFromSession(session),
+    },
   })
 })

@@ -27,7 +27,9 @@ import { createHash } from 'crypto'
 import { env } from '../env.js'
 import { probeResources } from '../plex.js'
 import type { Role, Session } from '../session.js'
+import { authModeFromSession } from '../session.js'
 import { cascadeRevokeForSub } from './reconcileDeviceToken.js'
+import { memberStatus } from './membership.js'
 
 // Cascade-revocation contract (§3.4): when Plex definitively denies the
 // cookie user (auth_revoked or not_member), ALSO revoke every paired
@@ -121,72 +123,85 @@ export function roleFor(username: string): Role {
 export async function reconcileSession(session: Session): Promise<Session | null> {
   const role = roleFor(session.username)
 
-  // Bootstrap mode (no PLEX_SERVER_ID configured): nothing to revalidate
-  // against. Recompute role only.
-  if (!env.plexServerId) {
+  // AuthZ gate — the FIRST and AUTHORITATIVE decision, before any
+  // provider-specific work. With the invite/members model the per-request
+  // question is no longer "is this sub a live Plex member?" but "is this
+  // sub in the allowlist?" — provider-agnostic and identical for apple:
+  // and plex: subs. memberStatus short-circuits ADMIN_SUBS to 'allowed'
+  // (owner bootstrap) so the operator's own sub never needs an invite.
+  const status = memberStatus(session.sub)
+  if (status !== 'allowed') {
+    // Revoked or never-a-member. Deny and cascade so any paired Apple/
+    // tvOS device tokens for this sub are revoked on their next request
+    // rather than at the 180-day TTL.
+    cascadeOnDenial(session.sub, status === 'revoked' ? 'member_revoked' : 'not_member')
+    return null
+  }
+
+  const authMode = authModeFromSession(session)
+
+  // apple: subs NEVER probe plex.tv — Apple proved identity at login and
+  // the members allowlist is the live authZ. There is no Plex token to
+  // confirm and no plex.tv outage to couple to.
+  if (authMode !== 'plex') {
     return { ...session, role }
   }
 
-  // A configured gate REQUIRES a Plex token in the cookie. Legacy
-  // sessions issued before the token field existed can still be decoded
-  // (the session type leaves the field optional for that reason), but
-  // they can't be authorized — without the token we have no way to
-  // verify the user is still in PLEX_SERVER_ID, and trusting the
-  // cookie alone would re-open exactly the revocation window this
-  // module exists to close. Force re-auth.
-  if (!session.plexAuthToken) {
-    return null
+  // plex: subs — the allowlist above is authoritative. The plex.tv probe
+  // is demoted to an OPTIONAL token-liveness / defense-in-depth signal:
+  //   - it can ALSO drop the session when plex.tv definitively revokes
+  //     the token (the user signed out of plex.tv), and auto-revoke the
+  //     member row so state converges;
+  //   - but a plex.tv 'not_member' or outage must NEVER override a
+  //     present members row (fail-open on the probe, fail-closed on the
+  //     allowlist).
+  // When no Plex gate is configured or the cookie carries no Plex token
+  // (e.g. a member added by the owner who hasn't re-logged-in), there is
+  // nothing to probe — the allowlist decision stands.
+  if (!env.plexServerId || !session.plexAuthToken) {
+    return { ...session, role }
   }
 
   const now = Date.now()
   const tokenFingerprint = fingerprintToken(session.plexAuthToken)
   const cached = cache.get(session.sub)
   if (cached && now - cached.checkedAt < REVALIDATE_TTL_MS) {
-    if (cached.status === 'not_member') {
-      cascadeOnDenial(session.sub, 'plex_not_member_cached')
-      return null
-    }
-    if (cached.tokenFingerprint === tokenFingerprint && cached.plexServerId === env.plexServerId) {
+    if (
+      cached.status === 'member' &&
+      cached.tokenFingerprint === tokenFingerprint &&
+      cached.plexServerId === env.plexServerId
+    ) {
       return { ...session, role }
     }
+    // A cached not_member is advisory only now — the allowlist already
+    // said 'allowed', so we keep the member signed in and let an admin
+    // revoke explicitly if desired. Fall through to a fresh probe.
   }
 
-  const status = await checkMembership(session.plexAuthToken)
-  if (status === 'unknown') {
-    // plex.tv hiccup. Fall back only to proof scoped to the currently
-    // configured server; legacy/bootstrap cookies were never verified
-    // against this machine identifier and must re-auth.
-    if (cached) {
-      if (cached.status === 'not_member') {
-        cascadeOnDenial(session.sub, 'plex_not_member_cached')
-        return null
-      }
-      if (cached.tokenFingerprint === tokenFingerprint && cached.plexServerId === env.plexServerId) {
-        return { ...session, role }
-      }
-    }
-    if (session.verifiedPlexServerId === env.plexServerId) return { ...session, role }
-    // Unknown-status + no fallback proof: NOT a definitive Plex denial,
-    // just "we can't verify right now." Force re-auth without cascading
-    // to devices — the next successful login will re-establish or
-    // legitimately deny.
-    return null
-  }
-
-  if (status === 'auth_revoked') {
+  const probe = await checkMembership(session.plexAuthToken)
+  if (probe === 'auth_revoked') {
+    // Definitive plex.tv token revocation = the user signed out of
+    // plex.tv. Drop this session and cascade-revoke their devices.
     cascadeOnDenial(session.sub, 'plex_auth_revoked')
     return null
   }
-
-  setCached(session.sub, {
-    status,
-    checkedAt: now,
-    tokenFingerprint: status === 'member' ? tokenFingerprint : undefined,
-    plexServerId: status === 'member' ? env.plexServerId : undefined,
-  })
-  if (status === 'not_member') {
-    cascadeOnDenial(session.sub, 'plex_not_member')
-    return null
+  if (probe === 'member') {
+    setCached(session.sub, {
+      status: 'member',
+      checkedAt: now,
+      tokenFingerprint,
+      plexServerId: env.plexServerId,
+    })
+  } else {
+    // 'not_member' or 'unknown' — advisory only. The allowlist wins, so
+    // the row-backed member stays signed in. Cache the not_member signal
+    // so we don't probe again this TTL, but do NOT deny.
+    setCached(session.sub, {
+      status: probe === 'not_member' ? 'not_member' : 'member',
+      checkedAt: now,
+      tokenFingerprint: probe === 'not_member' ? undefined : tokenFingerprint,
+      plexServerId: probe === 'not_member' ? undefined : env.plexServerId,
+    })
   }
   return { ...session, role }
 }
