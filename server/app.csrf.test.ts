@@ -37,7 +37,10 @@ beforeAll(async () => {
       // notifications POST, etc.) to clear the gate, the admin
       // sessionCookie's username 'admin-user' must be in this list.
       admins: ['admin-user'],
+      adminSubs: [],
+      appleClientId: null,
       plexServerId: null,
+      SERVER_DB_PATH: process.env.SERVER_DB_PATH ?? './data/server.db',
       port: 3001,
       isProd: true,
       allowedOrigins: [ALLOWED],
