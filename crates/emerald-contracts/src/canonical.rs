@@ -25,6 +25,16 @@
 /// Code points > U+FFFF are emitted as their 4-byte UTF-8 sequences via
 /// Rust's `char` iteration — identical bytes to Node's `Buffer.from(s, 'utf-8')`
 /// path which encodes JS surrogate pairs as 4-byte UTF-8.
+///
+/// PRECONDITION (cross-language contract): `rid` and `sub` MUST be well-formed
+/// Unicode. A lone/unpaired UTF-16 surrogate is OUT OF CONTRACT. Rust `&str`
+/// cannot represent a lone surrogate at all (the type guarantees valid UTF-8),
+/// whereas the TS path replaces it with U+FFFD via `Buffer.from(s, 'utf-8')`.
+/// The two implementations would therefore diverge on malformed-UTF16 input.
+/// This is unreachable for server-minted tokens (rid/sub are constructed from
+/// well-formed sources) and is pinned negatively in
+/// `tests/vectors/stream-token-canonical.json` (`surrogate-pair-emoji` vector,
+/// a valid pair) — DO NOT feed lone surrogates through this function.
 pub fn json_escape_string(s: &str, out: &mut String) {
     out.push('"');
     for ch in s.chars() {

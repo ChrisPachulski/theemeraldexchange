@@ -6,7 +6,9 @@
     "date": "2026-05-25",
     "reviewed_by": "ambitions-audit synthesis (2026-05-27)",
     "hmac_key_is": "raw_utf8_of_test_key",
-    "hmac_key_derivation_note": "Stream-token HMAC key = raw UTF-8 bytes of STREAM_TOKEN_SECRET. NO HKDF, NO domain-separation info-string applied. Locked 2026-05-27 per ambitions-audit (decision: keep raw to avoid tri-key verifier complexity and 90-day playlist-token invalidation). Rust crate MUST replicate exactly: HMAC-SHA256(key = secret.as_bytes(), data = canonical_bytes). Session-cookie and device-token keys DO use HKDF — stream tokens are the exception."
+    "hmac_key_derivation_note": "Stream-token HMAC key = raw UTF-8 bytes of STREAM_TOKEN_SECRET. NO HKDF, NO domain-separation info-string applied. Locked 2026-05-27 per ambitions-audit (decision: keep raw to avoid tri-key verifier complexity and 90-day playlist-token invalidation). Rust crate MUST replicate exactly: HMAC-SHA256(key = secret.as_bytes(), data = canonical_bytes). Session-cookie and device-token keys DO use HKDF — stream tokens are the exception.",
+    "surrogate_precondition_note": "rid/sub MUST be well-formed Unicode. Lone/unpaired UTF-16 surrogates are OUT OF CONTRACT: Rust &str cannot represent one, while the TS path replaces it with U+FFFD, so the two would diverge. The surrogate-pair-emoji vector pins the valid (paired) case U+1F4FA; no lone-surrogate vector exists because such input is undefined behaviour by contract.",
+    "recording_kind_note": "k='recording' is M6-reserved (DVR). Both Rust (StreamKind::Recording) and TS (StreamKind union) accept it through canonicalization/verify so the reserved value round-trips identically; no current path mints it."
   },
   "test_key": "TEST_SECRET_32_CHARS_FIXED_VALUE_X",
   "vectors": [
@@ -114,6 +116,38 @@
       },
       "canonical_bytes_hex": "7b22657870223a313734383137303230302c22696174223a313734383136393630302c226a7469223a223031485758595a30313233343536373839304142434445464751222c226b223a2272656d7578222c226e6266223a313734383136393630302c22726964223a22726d782d37373737222c22737562223a22706c65783a3534333231222c2276223a317d",
       "hmac_hex_with_test_key": "240a8015acc13bc7a1575b9dc5dcf2ad8cd22077f270dc93b6892634e737f666"
+    },
+    {
+      "name": "recording-reserved-kind",
+      "_note": "M6-reserved DVR kind. Pins byte-identical canonicalization across Rust + TS for the reserved value so a 'recording' token verifies the same in both languages.",
+      "claims_input": {
+        "v": 1,
+        "k": "recording",
+        "rid": "rec-001",
+        "sub": "plex:12345",
+        "exp": 1748173200,
+        "iat": 1748169600,
+        "nbf": 1748169600,
+        "jti": "01HWXYZ01234567890ABCDEFGS"
+      },
+      "canonical_bytes_hex": "7b22657870223a313734383137333230302c22696174223a313734383136393630302c226a7469223a223031485758595a30313233343536373839304142434445464753222c226b223a227265636f7264696e67222c226e6266223a313734383136393630302c22726964223a227265632d303031222c22737562223a22706c65783a3132333435222c2276223a317d",
+      "hmac_hex_with_test_key": "1dae56f60570728bb273a389897526fc861f8ba14a761bec285da22fb95d8175"
+    },
+    {
+      "name": "surrogate-pair-emoji",
+      "_note": "rid carries U+1F4FA (TV emoji) as a valid surrogate pair (D83D DCFA in UTF-16). Pins that Rust char-iteration and TS codePointAt emit identical 4-byte UTF-8 (F0 9F 93 BA). Lone surrogates are out of contract (see _meta.surrogate_precondition_note).",
+      "claims_input": {
+        "v": 1,
+        "k": "segment",
+        "rid": "seg-📺-001.ts",
+        "sub": "plex:12345",
+        "exp": 1748169660,
+        "iat": 1748169600,
+        "nbf": 1748169600,
+        "jti": "01HWXYZ01234567890ABCDEFGR"
+      },
+      "canonical_bytes_hex": "7b22657870223a313734383136393636302c22696174223a313734383136393630302c226a7469223a223031485758595a30313233343536373839304142434445464752222c226b223a227365676d656e74222c226e6266223a313734383136393630302c22726964223a227365672df09f93ba2d3030312e7473222c22737562223a22706c65783a3132333435222c2276223a317d",
+      "hmac_hex_with_test_key": "fb047258974c85d5602c4cc309d03648b577d6d18af6b128a763da6f719e2e80"
     }
   ]
 }

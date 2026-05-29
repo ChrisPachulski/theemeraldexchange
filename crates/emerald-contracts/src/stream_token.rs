@@ -93,12 +93,24 @@ pub enum TokenError {
     Expired,
     /// `k` claim does not parse to a known StreamKind.
     UnknownKind,
+    /// `exp < nbf`, or the claimed lifetime (`exp - iat`) exceeds
+    /// `MAX_TTL_SECS`. Indicates a malformed or forged token rather than an
+    /// expiry condition, so it is reported distinctly from `Expired`.
+    BadTtl,
 }
 
 /// Clock-skew constants per §5.7. Frozen numeric values — Rust + TS +
 /// Swift MUST agree. Without lock here we get drift between languages.
 pub const NBF_SKEW_SECS: i64 = 30;
 pub const EXP_SKEW_SECS: i64 = 5;
+
+/// Hard upper bound on a stream token's lifetime (`exp - iat`). The longest
+/// legitimate stream token is the 90-day external-playlist token; anything
+/// claiming more than that is malformed or forged. This is a defense-in-depth
+/// safety net layered on top of the per-mint policy TTLs — the verifier never
+/// trusts an `exp` that implies a longer-than-possible window. One extra day
+/// of slack absorbs leap seconds / mint-time rounding.
+pub const MAX_TTL_SECS: i64 = 91 * 24 * 60 * 60;
 
 /// Produce the canonical byte representation used as HMAC input.
 ///
@@ -173,6 +185,13 @@ pub fn verify_dual_key(
 
 /// Enforce nbf ≤ now ≤ exp with skew constants per §5.7.
 pub fn enforce_time_window(claims: &StreamClaims, now: i64) -> Result<(), TokenError> {
+    // Upper-bound safety net: a token can never outlive the longest legitimate
+    // policy window. Checked before the skew comparisons so a forged long-lived
+    // exp is rejected as BadTtl regardless of the current clock. `exp < nbf` is
+    // a nonsensical window and is rejected on the same path.
+    if claims.exp < claims.nbf || claims.exp - claims.iat > MAX_TTL_SECS {
+        return Err(TokenError::BadTtl);
+    }
     if now + NBF_SKEW_SECS < claims.nbf {
         return Err(TokenError::NotYetValid);
     }
@@ -382,6 +401,37 @@ mod tests {
         );
         // Within exp skew
         assert!(enforce_time_window(&claims, 1748256000 + 5).is_ok());
+    }
+
+    #[test]
+    fn time_window_rejects_over_long_ttl() {
+        let mut claims = sample_claims();
+        // Forge a lifetime one second past the cap.
+        claims.exp = claims.iat + MAX_TTL_SECS + 1;
+        assert_eq!(
+            enforce_time_window(&claims, claims.iat).unwrap_err(),
+            TokenError::BadTtl,
+        );
+    }
+
+    #[test]
+    fn time_window_accepts_max_ttl() {
+        let mut claims = sample_claims();
+        // Exactly at the cap is allowed (covers the 90-day playlist token).
+        claims.exp = claims.iat + MAX_TTL_SECS;
+        claims.nbf = claims.iat;
+        assert!(enforce_time_window(&claims, claims.iat).is_ok());
+    }
+
+    #[test]
+    fn time_window_rejects_exp_before_nbf() {
+        let mut claims = sample_claims();
+        claims.nbf = claims.iat + 100;
+        claims.exp = claims.iat + 50;
+        assert_eq!(
+            enforce_time_window(&claims, claims.iat).unwrap_err(),
+            TokenError::BadTtl,
+        );
     }
 
     #[test]

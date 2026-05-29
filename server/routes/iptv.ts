@@ -5,7 +5,7 @@
 // tries to start a stream.
 
 import { Hono, type Context } from 'hono'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { Readable } from 'node:stream'
@@ -37,6 +37,17 @@ import {
 import { env } from '../env.js'
 
 export const iptv = new Hono<Env>()
+
+// Constant-time secret comparison. Both inputs are SHA-256-hashed first so the
+// timingSafeEqual operates on equal-length (32-byte) buffers regardless of the
+// raw secret lengths — a length difference would otherwise leak via an early
+// throw, and timingSafeEqual itself requires equal-length buffers. Hashing also
+// avoids leaking the secret length through the comparison path.
+function constantTimeEqual(a: string, b: string): boolean {
+  const ha = createHash('sha256').update(a, 'utf-8').digest()
+  const hb = createHash('sha256').update(b, 'utf-8').digest()
+  return timingSafeEqual(ha, hb)
+}
 
 iptv.get('/health', requireAuth, async (c) => {
   try {
@@ -666,7 +677,38 @@ async function proxyRangeable(c: Context, upstreamUrl: string, mime: string): Pr
   return new Response(upstream.body, { status: upstream.status, headers: responseHeaders })
 }
 
+// SSRF containment: the only host the segment proxy is ever allowed to fetch
+// is the configured upstream IPTV panel. Segment rids are derived from
+// provider-controlled HLS manifest lines, so an absolute off-host URL in a
+// manifest (or any redirect in the chain) must never become a server-side
+// fetch target. Both the manifest rewriter and the segment handler enforce
+// this same predicate. Comparison is host-only (host:port) and case-insensitive
+// per URL semantics; protocol must be https.
+function isAllowedUpstreamHost(rawUrl: string): boolean {
+  let allowedHost: string
+  try {
+    allowedHost = new URL(credsFromEnv().host).host
+  } catch {
+    return false
+  }
+  let url: URL
+  try {
+    url = new URL(rawUrl)
+  } catch {
+    return false
+  }
+  if (url.protocol !== 'https:') return false
+  return url.host === allowedHost
+}
+
 async function rewriteHlsPlaylist(c: Context, upstreamUrl: string, sub: string): Promise<Response> {
+  // Defense-in-depth: never fetch a manifest from a host outside the allowlist.
+  // upstreamUrl reaches here either as a server-constructed creds URL (safe) or
+  // as a previously-signed segment rid (already host-checked at sign time), but
+  // re-check so a future caller can't bypass the containment.
+  if (!isAllowedUpstreamHost(upstreamUrl)) {
+    return c.json({ error: 'bad_upstream' }, 400)
+  }
   const upstream = await fetch(upstreamUrl)
   if (!upstream.ok) return c.json({ error: `upstream_${upstream.status}` }, 502)
 
@@ -675,7 +717,13 @@ async function rewriteHlsPlaylist(c: Context, upstreamUrl: string, sub: string):
     signStreamToken(env.streamTokenSecret, {
       kind: 'segment', resourceId: url, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
     })
-  const rewritten = rewriteManifest(text, upstreamUrl, sign, '/api/iptv/stream/segment')
+  const rewritten = rewriteManifest(
+    text,
+    upstreamUrl,
+    sign,
+    '/api/iptv/stream/segment',
+    isAllowedUpstreamHost,
+  )
 
   return new Response(rewritten, {
     status: 200,
@@ -992,14 +1040,20 @@ iptv.get('/stream/segment', async (c) => {
   if (!segReplay.allowed) return c.json({ error: segReplay.reason }, 401)
 
   const upstream = claims.rid
-  const allowedHost = new URL(credsFromEnv().host).host
   let url: URL
   try {
     url = new URL(upstream)
   } catch {
     return c.json({ error: 'bad_upstream' }, 400)
   }
-  void allowedHost
+  // SSRF containment (confused-deputy): the rid is derived from
+  // provider-controlled manifest lines, so enforce the upstream-host allowlist
+  // before fetching. Rejects link-local / internal / off-panel hosts and any
+  // non-https scheme. This is the second layer; rewriteManifest already refuses
+  // to sign off-host URLs into a rid.
+  if (!isAllowedUpstreamHost(upstream)) {
+    return c.json({ error: 'bad_upstream' }, 400)
+  }
 
   if (url.pathname.toLowerCase().endsWith('.m3u8')) {
     return await rewriteHlsPlaylist(c, upstream, claims.sub)
@@ -1041,7 +1095,13 @@ function rememberJob(job: Job): void {
 
 iptv.get('/export/recommender', (c) => {
   const secret = c.req.header('x-iptv-export-secret') ?? ''
-  if (!env.IPTV_RECOMMENDER_EXPORT_SECRET || secret !== env.IPTV_RECOMMENDER_EXPORT_SECRET) {
+  // Reject before comparison when no secret is configured (endpoint disabled),
+  // then compare in constant time to avoid a timing side-channel on this
+  // catalog-exposing endpoint.
+  if (
+    !env.IPTV_RECOMMENDER_EXPORT_SECRET ||
+    !constantTimeEqual(secret, env.IPTV_RECOMMENDER_EXPORT_SECRET)
+  ) {
     return c.json({ error: 'forbidden' }, 403)
   }
 

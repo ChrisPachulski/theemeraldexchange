@@ -18,8 +18,23 @@ import { contracts, type ContractsTypes } from './contractsBinding.js'
  * enum independently breaks AVPlayer segment playback — an earlier contract
  * draft proposed stripping it from StreamKind, which was incorrect. See §5.3
  * for the full dual-membership mapping and the rationale for keeping it here.
+ *
+ * `'recording'` is M6-RESERVED (DVR). The Rust `StreamKind` enum already
+ * accepts it (`StreamKind::Recording`), so a token carrying `k:'recording'`
+ * verifies on the Rust side; this union must list it too or the TS verify path
+ * would silently pass through an off-contract value (`c.k as StreamKind`). No
+ * current mint path produces it — it round-trips byte-identically in both
+ * languages and is pinned by the `recording-reserved-kind` parity vector.
  */
-export type StreamKind = 'live' | 'vod' | 'series' | 'catchup' | 'segment' | 'remux' | 'playlist'
+export type StreamKind =
+  | 'live'
+  | 'vod'
+  | 'series'
+  | 'catchup'
+  | 'segment'
+  | 'remux'
+  | 'playlist'
+  | 'recording'
 
 // V1 canonical claim shape (§5.2). Short key names to save bytes in URL query params.
 // Alphabetical key order matches the fixed-template serializer below.
@@ -80,6 +95,15 @@ export function generateUlid(): string {
 // No whitespace. UTF-8 output.
 // ---------------------------------------------------------------------------
 
+// PRECONDITION (cross-language contract): rid/sub MUST be well-formed Unicode.
+// A lone/unpaired UTF-16 surrogate is OUT OF CONTRACT. On this TS path a lone
+// surrogate is collapsed to U+FFFD by Buffer.from(s, 'utf-8'); the Rust crate
+// (canonical::json_escape_string) iterates over `char` and cannot represent a
+// lone surrogate at all, so the two implementations would diverge on such
+// malformed input. Server-minted rid/sub are always well-formed, so this is
+// unreachable in practice — but callers must NOT feed lone surrogates here.
+// The valid (paired) high-code-point case is pinned by the surrogate-pair-emoji
+// vector in tests/vectors/stream-token-canonical.json.
 function jsonEscapeString(s: string): string {
   let out = ''
   for (let i = 0; i < s.length; ) {
