@@ -28,6 +28,7 @@ import { tryNormaliseLegacySub } from '../services/sub.js'
 import { resolveSourcePrecedence } from '../services/sourcePrecedence.js'
 import { streamConcurrency, type SessionView, type SessionKind } from '../services/iptvConcurrency.js'
 import { rewriteManifest } from '../services/iptvHlsRewrite.js'
+import { isPublicHttpsUpstream } from '../services/ssrfGuard.js'
 import {
   heartbeatRemuxSession,
   listRemuxSessions,
@@ -667,6 +668,17 @@ async function proxyRangeable(c: Context, upstreamUrl: string, mime: string): Pr
 }
 
 async function rewriteHlsPlaylist(c: Context, upstreamUrl: string, sub: string): Promise<Response> {
+  // Defense-in-depth: this is reached via the segment handler (which already
+  // SSRF-checks) but also fetches a sub-playlist URL directly, so re-validate
+  // before egress rather than trust the caller.
+  let parsed: URL
+  try {
+    parsed = new URL(upstreamUrl)
+  } catch {
+    return c.json({ error: 'bad_upstream' }, 400)
+  }
+  if (!isPublicHttpsUpstream(parsed)) return c.json({ error: 'bad_upstream' }, 400)
+
   const upstream = await fetch(upstreamUrl)
   if (!upstream.ok) return c.json({ error: `upstream_${upstream.status}` }, 502)
 
@@ -992,14 +1004,26 @@ iptv.get('/stream/segment', async (c) => {
   if (!segReplay.allowed) return c.json({ error: segReplay.reason }, 401)
 
   const upstream = claims.rid
-  const allowedHost = new URL(credsFromEnv().host).host
   let url: URL
   try {
     url = new URL(upstream)
   } catch {
     return c.json({ error: 'bad_upstream' }, 400)
   }
-  void allowedHost
+  // SSRF containment: a segment token's `rid` is derived from upstream-
+  // provider-controlled HLS manifest lines (rewriteManifest → resolveUrl,
+  // where an *absolute* URL in the manifest overrides our base). Without a
+  // guard, a malicious or compromised IPTV panel — or any redirect in the
+  // manifest chain — could point a segment at a link-local / internal host
+  // (e.g. 169.254.169.254 cloud-metadata, container-internal services like
+  // recommender:8000, the docker gateway) and we would proxy it straight
+  // back to the caller. We can't pin to a single host (legit providers serve
+  // segments from separate public CDNs), so we enforce the standard SSRF
+  // defense: https only, and reject any host that resolves to a private,
+  // loopback, link-local, or otherwise non-public address.
+  if (!isPublicHttpsUpstream(url)) {
+    return c.json({ error: 'bad_upstream' }, 400)
+  }
 
   if (url.pathname.toLowerCase().endsWith('.m3u8')) {
     return await rewriteHlsPlaylist(c, upstream, claims.sub)
