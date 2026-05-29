@@ -50,6 +50,23 @@ const SEARCH_MOVIE_URL: &str = "https://api.themoviedb.org/3/search/movie";
 const SEARCH_TV_URL: &str = "https://api.themoviedb.org/3/search/tv";
 const API_BASE: &str = "https://api.themoviedb.org/3";
 
+/// Hard cap on how long a single 429 back-off will sleep, so a hostile or
+/// misconfigured `Retry-After` can never wedge a scan for minutes.
+const MAX_RETRY_AFTER_SECS: u64 = 10;
+
+/// Parse a TMDB `Retry-After` header (delta-seconds form) into a capped
+/// `Duration`. TMDB sends an integer number of seconds; anything unparseable
+/// falls back to one second so a rate-limited request still backs off.
+fn retry_after_duration(headers: &reqwest::header::HeaderMap) -> Duration {
+    let secs = headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(1)
+        .clamp(1, MAX_RETRY_AFTER_SECS);
+    Duration::from_secs(secs)
+}
+
 /// Read the year (first four digits) from a TMDB date string like `2014-11-07`.
 fn year_from_date(date: &str) -> Option<i64> {
     let prefix: String = date.chars().take(4).collect();
@@ -182,6 +199,23 @@ impl TmdbClient {
             .send()
             .await
             .map_err(|e| format!("send: {e}"))?;
+        // Honour a single Retry-After back-off on 429 before surfacing failure.
+        let resp = if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let wait = retry_after_duration(resp.headers());
+            tracing::warn!(
+                target: "media_core::tmdb",
+                "search rate-limited (429), retrying in {:?}", wait
+            );
+            tokio::time::sleep(wait).await;
+            client
+                .get(url)
+                .query(&query)
+                .send()
+                .await
+                .map_err(|e| format!("retry send: {e}"))?
+        } else {
+            resp
+        };
         if !resp.status().is_success() {
             return Err(format!("non-2xx status: {}", resp.status()));
         }
@@ -253,12 +287,32 @@ impl TmdbClient {
             })
             .ok()?;
         let url = format!("{API_BASE}/tv/{show_tmdb_id}/season/{season}/episode/{episode}");
-        let resp = match client.get(&url).query(&[("api_key", api_key)]).send().await {
+        let send = || async { client.get(&url).query(&[("api_key", api_key)]).send().await };
+        let resp = match send().await {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!(target: "media_core::tmdb", "episode send failed: {e}");
                 return None;
             }
+        };
+        // On 429, honour Retry-After once before giving up so a fresh full scan
+        // does not lose every episode to a transient rate-limit burst.
+        let resp = if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let wait = retry_after_duration(resp.headers());
+            tracing::warn!(
+                target: "media_core::tmdb",
+                "episode rate-limited (429), retrying in {:?}", wait
+            );
+            tokio::time::sleep(wait).await;
+            match send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!(target: "media_core::tmdb", "episode retry send failed: {e}");
+                    return None;
+                }
+            }
+        } else {
+            resp
         };
         if !resp.status().is_success() {
             tracing::warn!(
@@ -444,5 +498,39 @@ mod tests {
         let doc = json!({ "results": [ { "id": 8, "title": "Short", "release_date": "20" } ] });
         let m = parse_search_response(&doc, true).expect("expected a match");
         assert_eq!(m.year, None);
+    }
+
+    #[test]
+    fn retry_after_parses_seconds_and_caps() {
+        use reqwest::header::{HeaderMap, HeaderValue, RETRY_AFTER};
+
+        let mut h = HeaderMap::new();
+        h.insert(RETRY_AFTER, HeaderValue::from_static("3"));
+        assert_eq!(retry_after_duration(&h), Duration::from_secs(3));
+
+        // Hostile/huge value is clamped to the hard cap.
+        let mut h = HeaderMap::new();
+        h.insert(RETRY_AFTER, HeaderValue::from_static("9999"));
+        assert_eq!(
+            retry_after_duration(&h),
+            Duration::from_secs(MAX_RETRY_AFTER_SECS)
+        );
+    }
+
+    #[test]
+    fn retry_after_missing_or_unparseable_falls_back_to_one_second() {
+        use reqwest::header::{HeaderMap, HeaderValue, RETRY_AFTER};
+
+        // Absent header → 1s default back-off.
+        let h = HeaderMap::new();
+        assert_eq!(retry_after_duration(&h), Duration::from_secs(1));
+
+        // HTTP-date form (not delta-seconds) is unparseable here → 1s default.
+        let mut h = HeaderMap::new();
+        h.insert(
+            RETRY_AFTER,
+            HeaderValue::from_static("Wed, 21 Oct 2015 07:28:00 GMT"),
+        );
+        assert_eq!(retry_after_duration(&h), Duration::from_secs(1));
     }
 }
