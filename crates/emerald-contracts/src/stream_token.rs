@@ -187,9 +187,18 @@ pub fn verify_dual_key(
 pub fn enforce_time_window(claims: &StreamClaims, now: i64) -> Result<(), TokenError> {
     // Upper-bound safety net: a token can never outlive the longest legitimate
     // policy window. Checked before the skew comparisons so a forged long-lived
-    // exp is rejected as BadTtl regardless of the current clock. `exp < nbf` is
-    // a nonsensical window and is rejected on the same path.
-    if claims.exp < claims.nbf || claims.exp - claims.iat > MAX_TTL_SECS {
+    // exp is rejected as BadTtl regardless of the current clock.
+    if claims.exp - claims.iat > MAX_TTL_SECS {
+        return Err(TokenError::BadTtl);
+    }
+    // Nonsensical window: not-before was forged FORWARD past both mint time
+    // (`iat`) and expiry (`exp`). Scoped to `nbf > iat` so a normally minted
+    // token that is simply expired (negative TTL → `exp < iat == nbf`) is NOT
+    // misclassified here — it falls through to the `Expired` check below and
+    // keeps the legacy `expired_token` user-facing error. A forged token with
+    // `nbf` pushed ahead of `exp` (e.g. `nbf = iat+100, exp = iat+50`) is still
+    // rejected as BadTtl.
+    if claims.nbf > claims.iat && claims.exp < claims.nbf {
         return Err(TokenError::BadTtl);
     }
     if now + NBF_SKEW_SECS < claims.nbf {
