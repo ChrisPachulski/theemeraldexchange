@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest'
 import { Hono, type MiddlewareHandler } from 'hono'
 import { openIptvDb, type IptvDb } from '../services/iptvDb.js'
-import { iptv } from './iptv.js'
+import { iptv, STREAM_PROTOCOL_VERSION } from './iptv.js'
 import { env } from '../env.js'
 
 const dbState = vi.hoisted(() => ({
@@ -111,9 +111,11 @@ describe('live stream grant + proxy', () => {
   it('issues a tokenized URL on POST /stream/live/:id/grant', async () => {
     const res = await app.request('/api/iptv/stream/live/10/grant', { method: 'POST' })
     expect(res.status).toBe(200)
-    const body = (await res.json()) as { url: string; delivery: string }
+    const body = (await res.json()) as { url: string; delivery: string; protocolVersion: number }
     expect(body.url).toContain('/api/iptv/stream/live/10.ts?t=fake.live.MTA')
     expect(body.delivery).toBe('mpegts')
+    // M2 Hono-side adjustment 2: grant responses carry protocolVersion.
+    expect(body.protocolVersion).toBe(STREAM_PROTOCOL_VERSION)
   })
 
   it('rejects bad tokens on the .ts endpoint', async () => {
@@ -133,10 +135,11 @@ describe('catchup stream grant + proxy', () => {
     )
 
     expect(res.status).toBe(200)
-    const body = await res.json() as { url: string; delivery: string }
+    const body = await res.json() as { url: string; delivery: string; protocolVersion: number }
     expect(body.delivery).toBe('mpegts')
     expect(body.url).toContain(`/api/iptv/stream/catchup/10/${encodeURIComponent(startUtc)}/30.ts?t=`)
     expect(body.url).toContain(fakeToken('catchup', `10|${startUtc}|30`))
+    expect(body.protocolVersion).toBe(STREAM_PROTOCOL_VERSION)
   })
 
   it('proxies catchup through the Xtream timeshift endpoint', async () => {
@@ -248,10 +251,11 @@ describe('vod stream grant + proxy', () => {
   it('issues a tokenized URL with detected ext', async () => {
     const res = await app.request('/api/iptv/stream/vod/20/grant', { method: 'POST' })
     expect(res.status).toBe(200)
-    const body = await res.json() as { url: string; delivery: string; mime: string }
+    const body = await res.json() as { url: string; delivery: string; mime: string; protocolVersion: number }
     expect(body.url).toContain('/api/iptv/stream/vod/20/mp4?t=fake.vod.MjA')
     expect(body.delivery).toBe('progressive')
     expect(body.mime).toBe('video/mp4')
+    expect(body.protocolVersion).toBe(STREAM_PROTOCOL_VERSION)
   })
 
   it('proxies Range requests upstream', async () => {
@@ -302,10 +306,11 @@ describe('series stream grant', () => {
   it('issues a tokenized URL with detected episode ext', async () => {
     const res = await app.request('/api/iptv/stream/series/ep-1/grant', { method: 'POST' })
     expect(res.status).toBe(200)
-    const body = await res.json() as { url: string; delivery: string; mime: string }
+    const body = await res.json() as { url: string; delivery: string; mime: string; protocolVersion: number }
     expect(body.url).toContain('/api/iptv/stream/series/ep-1/mkv?t=fake.series.ZXAtMQ')
     expect(body.delivery).toBe('progressive')
     expect(body.mime).toBe('video/x-matroska')
+    expect(body.protocolVersion).toBe(STREAM_PROTOCOL_VERSION)
   })
 })
 
