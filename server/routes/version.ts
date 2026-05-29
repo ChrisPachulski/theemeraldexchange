@@ -14,6 +14,24 @@ import { ensureServerId } from '../session.js'
 
 export const version = new Hono()
 
+// Comparable semantic version of the server, used by the Apple client's
+// min-server-version gate (cross-service contract §12.1/§12.2: plain-semver
+// comparison between `server.version` and the app-side MIN_SERVER_VERSION,
+// with a 503 { error: 'server_too_old', ... } when the server is too old).
+//
+// This is intentionally distinct from `release` (the CI build identifier from
+// EEX_RELEASE, which may be a git SHA and is NOT semver-comparable). The
+// version is sourced from EEX_VERSION at image build time and falls back to a
+// pinned default so the field is always a valid, comparable semver — never a
+// SHA or 'dev'. Bump in lockstep with the package release.
+const SERVER_VERSION = (() => {
+  const raw = (process.env.EEX_VERSION ?? '').trim()
+  // Guard: only accept a plain x.y.z semver core so the field stays
+  // semver-comparable for the app-side gate. Anything else (a SHA, 'dev',
+  // empty) falls back to the pinned default.
+  return /^\d+\.\d+\.\d+(?:[-+].*)?$/.test(raw) ? raw : '0.1.0'
+})()
+
 version.get('/', (c) => {
   const auth_modes: string[] = []
   // Plex is the only mode supported today; isPlexConfigured() always
@@ -24,7 +42,14 @@ version.get('/', (c) => {
 
   return c.json({
     server_id: ensureServerId(),
-    /** Build identifier from CI; falls back to 'dev'. */
+    /**
+     * Plain-semver server version for the contract §12 compatibility gate.
+     * `apiVersion` is an alias of `version`; both carry the same value so
+     * either field name the Apple client reads resolves the min-server check.
+     */
+    version: SERVER_VERSION,
+    apiVersion: SERVER_VERSION,
+    /** Build identifier from CI; falls back to 'dev'. NOT semver-comparable. */
     release: env.EEX_RELEASE,
     auth_modes,
     /** Mirrors contract §12.3 — apps gate "you may pair" on this. */

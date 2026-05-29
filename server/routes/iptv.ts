@@ -49,6 +49,13 @@ function constantTimeEqual(a: string, b: string): boolean {
   return timingSafeEqual(ha, hb)
 }
 
+// Stream-grant protocol version. Every grant response (live, catchup, vod,
+// series) carries this so Apple/M4 clients can branch on grant-shape changes
+// without a hard contract break — M2 Hono-side adjustment item 2, forward
+// compatibility for when the M4 grant shape evolves. Bump on any breaking
+// change to a grant response body.
+export const STREAM_PROTOCOL_VERSION = 1
+
 iptv.get('/health', requireAuth, async (c) => {
   try {
     const info = await getAccountInfo()
@@ -492,7 +499,7 @@ iptv.post('/stream/live/:streamId/grant', requireAuth, async (c) => {
     })
     return c.json({
       url: `/api/iptv/stream/live/${streamId}/remux/index.m3u8?t=${token}`,
-      delivery: 'hls', sessionId,
+      delivery: 'hls', sessionId, protocolVersion: STREAM_PROTOCOL_VERSION,
     })
   }
 
@@ -501,7 +508,7 @@ iptv.post('/stream/live/:streamId/grant', requireAuth, async (c) => {
   })
   return c.json({
     url: `/api/iptv/stream/live/${streamId}.ts?t=${token}`,
-    delivery: 'mpegts', sessionId,
+    delivery: 'mpegts', sessionId, protocolVersion: STREAM_PROTOCOL_VERSION,
   })
 })
 
@@ -572,6 +579,7 @@ iptv.post('/stream/catchup/:streamId/grant', requireAuth, async (c) => {
     url: `/api/iptv/stream/catchup/${streamId}/${encodeURIComponent(startUtc)}/${durationMin}.ts?t=${token}`,
     delivery: 'mpegts',
     sessionId,
+    protocolVersion: STREAM_PROTOCOL_VERSION,
   })
 })
 
@@ -947,6 +955,7 @@ iptv.post('/stream/vod/:streamId/grant', requireAuth, async (c) => {
     delivery,
     mime: delivery === 'hls' ? 'application/vnd.apple.mpegurl' : (ext === 'mkv' ? 'video/x-matroska' : 'video/mp4'),
     sessionId,
+    protocolVersion: STREAM_PROTOCOL_VERSION,
   })
 })
 
@@ -1009,6 +1018,7 @@ iptv.post('/stream/series/:episodeId/grant', requireAuth, async (c) => {
     delivery,
     mime: delivery === 'hls' ? 'application/vnd.apple.mpegurl' : (ext === 'mkv' ? 'video/x-matroska' : 'video/mp4'),
     sessionId,
+    protocolVersion: STREAM_PROTOCOL_VERSION,
   })
 })
 
