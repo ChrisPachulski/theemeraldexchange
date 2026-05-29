@@ -36,6 +36,11 @@ pub enum InternalPrincipalError {
     BadPayload,
     UnsupportedIss,
     Expired,
+    /// `exp - iat` exceeds `DEFAULT_TTL_SECS`, or `exp < iat`. A well-formed
+    /// minter always sets `exp = iat + DEFAULT_TTL_SECS`; a longer (or
+    /// inverted) window means a forged claim set and is rejected at decrypt
+    /// time so the documented "60s TTL enforced by verifier" is actually true.
+    BadTtl,
     UnknownKid(String),
 }
 
@@ -68,6 +73,14 @@ pub fn decrypt(
         serde_json::from_slice(&plain).map_err(|_| InternalPrincipalError::BadPayload)?;
     if claims.iss != "eex" {
         return Err(InternalPrincipalError::UnsupportedIss);
+    }
+    // Defense-in-depth: bound the lifetime claimed by the token. Under
+    // INTERNAL_PRINCIPAL_SECRET compromise an attacker could otherwise mint
+    // `exp = iat + 1 year` and replay it indefinitely. The contract states a
+    // hard 60s TTL "enforced by verifier" — enforce it here, against the
+    // token's own iat, so the bound holds regardless of the caller's clock.
+    if claims.exp < claims.iat || claims.exp - claims.iat > DEFAULT_TTL_SECS {
+        return Err(InternalPrincipalError::BadTtl);
     }
     Ok(claims)
 }
@@ -114,5 +127,45 @@ mod tests {
         let claims = sample_claims();
         assert!(enforce_time_window(&claims, claims.iat).is_ok());
         assert!(enforce_time_window(&claims, claims.exp + 1).is_err());
+    }
+
+    #[test]
+    fn decrypt_rejects_over_long_ttl() {
+        let key = derive_key(b"x-x-x-x-x-x-x-x-x-x-x-x-x-x-x-x", INFO_INTERNAL_PRINCIPAL);
+        let mut keys = HashMap::new();
+        keys.insert(DEFAULT_KID.to_string(), key);
+        // Forge a token whose exp is one year past iat — well over the 60s cap.
+        let mut forged = sample_claims();
+        forged.exp = forged.iat + 365 * 24 * 60 * 60;
+        let token = encrypt(&key, DEFAULT_KID, &forged);
+        assert!(matches!(
+            decrypt(&keys, &token),
+            Err(InternalPrincipalError::BadTtl)
+        ));
+    }
+
+    #[test]
+    fn decrypt_rejects_inverted_window() {
+        let key = derive_key(b"x-x-x-x-x-x-x-x-x-x-x-x-x-x-x-x", INFO_INTERNAL_PRINCIPAL);
+        let mut keys = HashMap::new();
+        keys.insert(DEFAULT_KID.to_string(), key);
+        // exp < iat is nonsensical and must be rejected.
+        let mut forged = sample_claims();
+        forged.exp = forged.iat - 1;
+        let token = encrypt(&key, DEFAULT_KID, &forged);
+        assert!(matches!(
+            decrypt(&keys, &token),
+            Err(InternalPrincipalError::BadTtl)
+        ));
+    }
+
+    #[test]
+    fn decrypt_accepts_exact_ttl() {
+        let key = derive_key(b"x-x-x-x-x-x-x-x-x-x-x-x-x-x-x-x", INFO_INTERNAL_PRINCIPAL);
+        let mut keys = HashMap::new();
+        keys.insert(DEFAULT_KID.to_string(), key);
+        // exp == iat + DEFAULT_TTL_SECS is the canonical minter shape.
+        let token = encrypt(&key, DEFAULT_KID, &sample_claims());
+        assert!(decrypt(&keys, &token).is_ok());
     }
 }

@@ -72,6 +72,23 @@ describe('iptv stream token — round trip', () => {
     expect(verifyStreamToken(SECRET, t).rid).toBe('https://x/y.ts')
   })
 
+  it('round-trips the M6-reserved "recording" kind (Rust↔TS parity)', () => {
+    // 'recording' is reserved (no mint path yet) but the Rust StreamKind enum
+    // accepts it, so the TS union + verify path must accept it too — otherwise
+    // a 'recording' token would verify on the Rust side and land as an
+    // off-contract value on the TS side. Pinned here so the divergence the
+    // audit flagged can't reappear.
+    const token = signStreamToken(SECRET, {
+      kind: 'recording',
+      resourceId: 'rec-001',
+      sub: 'plex:12345',
+      ttlSecs: 60,
+    })
+    const claims = verifyStreamToken(SECRET, token)
+    expect(claims.k).toBe('recording')
+    expect(claims.rid).toBe('rec-001')
+  })
+
   it('rejects token with missing v field', () => {
     // Forge a token with no v claim by signing a hand-rolled payload
     const payload = Buffer.from(JSON.stringify({ k: 'live', rid: '10', sub: 'plex:1', exp: Math.floor(Date.now()/1000) + 60 }))

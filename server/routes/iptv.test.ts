@@ -313,7 +313,9 @@ describe('segment proxy', () => {
   const app = new Hono().route('/api/iptv', iptv)
 
   it('passes through signed segments with Range', async () => {
-    const upstreamUrl = 'https://cdn.example/foo/seg.ts'
+    // Host MUST match the configured panel host (credsFromEnv -> https://panel)
+    // or the SSRF containment rejects the rid before fetching.
+    const upstreamUrl = 'https://panel/foo/seg.ts'
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('seg', {
       status: 206,
       headers: {
@@ -338,7 +340,7 @@ describe('segment proxy', () => {
   })
 
   it('recursively rewrites signed sub-playlists', async () => {
-    const upstreamUrl = 'https://cdn.example/foo/level1.m3u8'
+    const upstreamUrl = 'https://panel/foo/level1.m3u8'
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response([
       '#EXTM3U',
       '#EXTINF:6.0,',
@@ -350,7 +352,54 @@ describe('segment proxy', () => {
 
     expect(res.status).toBe(200)
     expect(fetchSpy).toHaveBeenCalledWith(upstreamUrl)
-    expect(text).toContain(`/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', 'https://cdn.example/foo/seg.ts'))}`)
+    expect(text).toContain(`/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', 'https://panel/foo/seg.ts'))}`)
+    fetchSpy.mockRestore()
+  })
+
+  it('rejects a segment rid whose host is not the panel host (SSRF containment)', async () => {
+    // A compromised/malicious manifest could try to point a segment rid at a
+    // link-local / internal host. The handler must refuse to fetch it.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    const off = 'http://169.254.169.254/latest/meta-data/'
+    const res = await app.request(`/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', off))}`)
+    expect(res.status).toBe(400)
+    const body = await res.json() as { error: string }
+    expect(body.error).toBe('bad_upstream')
+    // Crucially, no upstream fetch was attempted.
+    expect(fetchSpy).not.toHaveBeenCalled()
+    fetchSpy.mockRestore()
+  })
+
+  it('rejects a non-https segment rid even on the panel host', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    const res = await app.request(`/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', 'http://panel/foo/seg.ts'))}`)
+    expect(res.status).toBe(400)
+    expect(fetchSpy).not.toHaveBeenCalled()
+    fetchSpy.mockRestore()
+  })
+
+  it('does not sign off-host absolute URLs into segment rids when rewriting a sub-playlist', async () => {
+    // The sub-playlist itself is on the panel host, but it references an
+    // absolute off-host segment. That line must pass through UNREWRITTEN so it
+    // is never signed into a proxy URL.
+    const upstreamUrl = 'https://panel/foo/level1.m3u8'
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response([
+      '#EXTM3U',
+      '#EXTINF:6.0,',
+      'https://evil.example/internal/seg.ts',
+      '#EXTINF:6.0,',
+      'ok.ts',
+    ].join('\n'), { status: 200 }))
+
+    const res = await app.request(`/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', upstreamUrl))}`)
+    const text = await res.text()
+
+    expect(res.status).toBe(200)
+    // On-host relative segment is signed through the proxy.
+    expect(text).toContain(`/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', 'https://panel/foo/ok.ts'))}`)
+    // Off-host absolute segment is left as-is and never signed.
+    expect(text).toContain('https://evil.example/internal/seg.ts')
+    expect(text).not.toContain(encodeURIComponent(fakeToken('segment', 'https://evil.example/internal/seg.ts')))
     fetchSpy.mockRestore()
   })
 })
