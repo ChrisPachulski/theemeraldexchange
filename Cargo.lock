@@ -2128,6 +2128,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "transcoder"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "media-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

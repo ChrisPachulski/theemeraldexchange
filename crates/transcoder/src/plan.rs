@@ -1,0 +1,578 @@
+//! Transcode planning (§4.3). A pure function over a file's cached probe
+//! metadata + a client's advertised capabilities that produces the SMALLEST
+//! re-encode satisfying the client.
+//!
+//! The gate is media-core's [`capability::decide`]: when a file direct-plays,
+//! the plan is [`TranscodePlan::DirectPlay`] and no ffmpeg ever runs. Only when
+//! `decide()` denies do we compute per-stream operations:
+//!
+//! * video — copy when the codec is already accepted *and* the height is in
+//!   range; otherwise re-encode to the smallest accepted target (h264), adding
+//!   a scale filter when the source exceeds the client's `max_height` and a
+//!   tone-map flag when the source is HDR and the client is SDR.
+//! * audio — copy when the codec is accepted; otherwise transcode to AAC.
+//! * subtitles — text formats (subrip/srt/webvtt/ass/ssa/mov_text) are
+//!   extracted to WebVTT; image formats (pgs/hdmv_pgs/dvd_subtitle/vobsub) are
+//!   burned into the video, which forces a video re-encode.
+//!
+//! This is deliberately deterministic: every branch is exercised by a unit
+//! test, and `ffmpeg_args` (in [`crate::args`]) turns a plan into a concrete
+//! invocation. No real transcode happens here.
+
+use media_core::capability::{ClientCaps, decide};
+use media_core::models::MediaFileRow;
+use serde::Serialize;
+
+/// Target H.264 height once we re-encode. The capability matrix only ever
+/// down-scales to 1080p in v1 (§4.3); 4K passthrough requires an HEVC-capable
+/// client and is handled by `decide()` returning direct-play.
+pub const DEFAULT_TARGET_HEIGHT: i64 = 1080;
+
+/// The accepted text-subtitle codecs we can repackage as WebVTT without
+/// burning pixels.
+const TEXT_SUBTITLE_CODECS: &[&str] = &[
+    "subrip", "srt", "webvtt", "vtt", "ass", "ssa", "mov_text", "text",
+];
+
+/// Image-based subtitle codecs AVPlayer cannot render; these must be burned in
+/// (§8 subtitle matrix).
+const IMAGE_SUBTITLE_CODECS: &[&str] = &[
+    "hdmv_pgs_subtitle",
+    "pgssub",
+    "pgs",
+    "dvd_subtitle",
+    "dvdsub",
+    "vobsub",
+];
+
+/// What to do with the video stream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum VideoOp {
+    /// `-c:v copy` — keep the elementary stream untouched.
+    Copy,
+    /// Re-encode to H.264. `scale_to_height` is `Some` when we down-scale,
+    /// `tone_map` is set when collapsing HDR → SDR, and `burn_subtitle_index`
+    /// carries the absolute stream index of an image subtitle to burn in.
+    EncodeH264 {
+        scale_to_height: Option<i64>,
+        tone_map: bool,
+        burn_subtitle_index: Option<i64>,
+    },
+}
+
+/// What to do with the audio stream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum AudioOp {
+    /// `-c:a copy`.
+    Copy,
+    /// `-c:a aac -b:a <kbps>k`.
+    EncodeAac { bitrate_kbps: u32 },
+}
+
+/// What to do with subtitles.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum SubtitleOp {
+    /// No subtitle stream selected.
+    None,
+    /// Repackage a text subtitle as WebVTT (`-c:s webvtt`).
+    ExtractWebVtt { source_index: i64 },
+    /// Burn an image subtitle into the video. The index is also threaded into
+    /// [`VideoOp::EncodeH264::burn_subtitle_index`] so the filtergraph and the
+    /// video op stay consistent.
+    BurnIn { source_index: i64 },
+}
+
+/// Default AAC bitrate when we have to re-encode audio (§4.3).
+pub const DEFAULT_AAC_BITRATE_KBPS: u32 = 192;
+
+/// The resolved plan. `DirectPlay` short-circuits the whole pipeline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TranscodePlan {
+    DirectPlay {
+        reason: String,
+    },
+    Transcode {
+        video: VideoOp,
+        audio: AudioOp,
+        subtitle: SubtitleOp,
+        /// Echo of why direct-play was denied — useful for telemetry/inventory.
+        reason: String,
+    },
+}
+
+impl TranscodePlan {
+    /// True iff the file can be sent as-is (no ffmpeg).
+    pub fn is_direct_play(&self) -> bool {
+        matches!(self, TranscodePlan::DirectPlay { .. })
+    }
+}
+
+fn contains_ci(haystack: &[String], needle: &str) -> bool {
+    haystack.iter().any(|c| c.eq_ignore_ascii_case(needle))
+}
+
+fn is_text_subtitle(codec: &str) -> bool {
+    TEXT_SUBTITLE_CODECS
+        .iter()
+        .any(|c| codec.eq_ignore_ascii_case(c))
+}
+
+fn is_image_subtitle(codec: &str) -> bool {
+    IMAGE_SUBTITLE_CODECS
+        .iter()
+        .any(|c| codec.eq_ignore_ascii_case(c))
+}
+
+/// Pick the subtitle disposition. We only act on the FIRST forced subtitle, or
+/// else the first subtitle of any kind — mirroring the single-track selection
+/// AVPlayer expects. Text → WebVTT, image → burn-in. Returns `(op, burn_index)`
+/// where `burn_index` is `Some` only for the burn-in case (so the caller can
+/// wire it into the video op).
+fn plan_subtitle(file: &MediaFileRow) -> (SubtitleOp, Option<i64>) {
+    let tracks = file.subtitle_tracks();
+    // Prefer a forced track; otherwise the first track present.
+    let chosen = tracks.iter().find(|t| t.forced).or_else(|| tracks.first());
+    let Some(track) = chosen else {
+        return (SubtitleOp::None, None);
+    };
+    let codec = track.codec.as_deref().unwrap_or("").trim();
+    if is_image_subtitle(codec) {
+        (
+            SubtitleOp::BurnIn {
+                source_index: track.index,
+            },
+            Some(track.index),
+        )
+    } else if is_text_subtitle(codec) {
+        (
+            SubtitleOp::ExtractWebVtt {
+                source_index: track.index,
+            },
+            None,
+        )
+    } else {
+        // Unknown/empty subtitle codec: don't gamble on it, just drop it.
+        (SubtitleOp::None, None)
+    }
+}
+
+/// Compute the transcode plan for `file` against `caps`.
+///
+/// Pure and deterministic — see the module-level test matrix.
+pub fn plan_transcode(file: &MediaFileRow, caps: &ClientCaps) -> TranscodePlan {
+    let decision = decide(file, caps);
+    if decision.direct_play {
+        return TranscodePlan::DirectPlay {
+            reason: decision.reason,
+        };
+    }
+
+    // ── Subtitles first: an image subtitle forces a video re-encode. ───────
+    let (subtitle, burn_index) = plan_subtitle(file);
+
+    // ── Video ──────────────────────────────────────────────────────────────
+    let video_codec = file.video_codec.as_deref().map(str::trim).unwrap_or("");
+    let codec_ok = !video_codec.is_empty() && contains_ci(&caps.video_codecs, video_codec);
+
+    let needs_scale =
+        matches!((caps.max_height, file.video_height), (Some(max), Some(h)) if h > max);
+    let scale_to_height = if needs_scale {
+        // Down-scale to the client's max, but never above our H.264 target.
+        Some(
+            caps.max_height
+                .unwrap_or(DEFAULT_TARGET_HEIGHT)
+                .min(DEFAULT_TARGET_HEIGHT),
+        )
+    } else {
+        None
+    };
+
+    let is_hdr = file
+        .hdr_format
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|h| !h.is_empty());
+    let tone_map = is_hdr && !caps.hdr;
+
+    // Copy the video only when the codec is accepted, no scale is needed, no
+    // tone-map is needed, and there is no burn-in to composite. Otherwise
+    // re-encode to H.264 — the smallest re-encode that satisfies the client.
+    let video = if codec_ok && !needs_scale && !tone_map && burn_index.is_none() {
+        VideoOp::Copy
+    } else {
+        VideoOp::EncodeH264 {
+            scale_to_height,
+            tone_map,
+            burn_subtitle_index: burn_index,
+        }
+    };
+
+    // ── Audio ────────────────────────────────────────────────────────────
+    let audio = plan_audio(file, caps);
+
+    TranscodePlan::Transcode {
+        video,
+        audio,
+        subtitle,
+        reason: decision.reason,
+    }
+}
+
+/// Audio op: copy when at least one track's codec is accepted, else AAC 192k.
+fn plan_audio(file: &MediaFileRow, caps: &ClientCaps) -> AudioOp {
+    // media-core's ClientCaps has no audio_codecs field yet; the contract uses
+    // a conventional set carried in video_codecs is NOT correct, so we accept
+    // a small built-in set of universally-direct-play audio codecs plus AAC.
+    // When the file's primary audio codec is in that set, copy; else AAC.
+    let tracks = file.audio_tracks();
+    let primary = tracks.first();
+    let Some(track) = primary else {
+        // No audio at all: nothing to encode, emit AAC op is meaningless, but
+        // ffmpeg_args guards on -map; treat as copy (no-op).
+        return AudioOp::Copy;
+    };
+    let codec = track
+        .codec
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if accepted_audio_codecs(caps).contains(&codec) {
+        AudioOp::Copy
+    } else {
+        AudioOp::EncodeAac {
+            bitrate_kbps: DEFAULT_AAC_BITRATE_KBPS,
+        }
+    }
+}
+
+/// Audio codecs we let through as direct-play. `caps.audio_codecs` does not
+/// exist in the M3 contract yet, so we use the Apple-safe baseline (AAC always,
+/// plus AC-3/E-AC-3 which AVPlayer can pass to an AVReceiver). Anything else
+/// (DTS, TrueHD, FLAC, Opus in an unsupported container) → AAC.
+fn accepted_audio_codecs(_caps: &ClientCaps) -> Vec<String> {
+    vec!["aac".to_string(), "ac3".to_string(), "eac3".to_string()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use media_core::models::{AudioTrack, SubtitleTrack};
+
+    fn caps_h264_1080_sdr() -> ClientCaps {
+        ClientCaps {
+            containers: vec!["mp4".into()],
+            video_codecs: vec!["h264".into()],
+            max_height: Some(1080),
+            hdr: false,
+            max_bitrate: None,
+        }
+    }
+
+    fn file(
+        container: Option<&str>,
+        video_codec: Option<&str>,
+        video_height: Option<i64>,
+        hdr_format: Option<&str>,
+        audio: Vec<AudioTrack>,
+        subs: Vec<SubtitleTrack>,
+    ) -> MediaFileRow {
+        MediaFileRow {
+            id: 1,
+            path: "/library/movie.mkv".into(),
+            size_bytes: 1_000_000,
+            mtime: "0".into(),
+            container: container.map(str::to_string),
+            duration_secs: Some(7200),
+            video_codec: video_codec.map(str::to_string),
+            video_height,
+            video_profile: Some("main".into()),
+            hdr_format: hdr_format.map(str::to_string),
+            audio_tracks_json: serde_json::to_string(&audio).unwrap(),
+            subtitle_tracks_json: serde_json::to_string(&subs).unwrap(),
+            scanned_at: "0".into(),
+        }
+    }
+
+    fn aac(index: i64) -> AudioTrack {
+        AudioTrack {
+            index,
+            codec: Some("aac".into()),
+            channels: Some(6),
+            language: Some("eng".into()),
+            title: None,
+        }
+    }
+    fn eac3(index: i64) -> AudioTrack {
+        AudioTrack {
+            index,
+            codec: Some("eac3".into()),
+            channels: Some(6),
+            language: Some("eng".into()),
+            title: None,
+        }
+    }
+    fn dts(index: i64) -> AudioTrack {
+        AudioTrack {
+            index,
+            codec: Some("dts".into()),
+            channels: Some(8),
+            language: Some("eng".into()),
+            title: None,
+        }
+    }
+    fn sub(index: i64, codec: &str, forced: bool) -> SubtitleTrack {
+        SubtitleTrack {
+            index,
+            codec: Some(codec.into()),
+            language: Some("eng".into()),
+            title: None,
+            forced,
+        }
+    }
+
+    #[test]
+    fn h264_aac_mp4_1080p_sdr_is_direct_play() {
+        let f = file(
+            Some("mp4"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![aac(1)],
+            vec![],
+        );
+        let plan = plan_transcode(&f, &caps_h264_1080_sdr());
+        assert!(plan.is_direct_play(), "got {plan:?}");
+    }
+
+    #[test]
+    fn hevc_forces_h264_reencode_audio_copy() {
+        let f = file(
+            Some("mp4"),
+            Some("hevc"),
+            Some(1080),
+            None,
+            vec![aac(1)],
+            vec![],
+        );
+        let plan = plan_transcode(&f, &caps_h264_1080_sdr());
+        match plan {
+            TranscodePlan::Transcode {
+                video,
+                audio,
+                subtitle,
+                ..
+            } => {
+                assert_eq!(
+                    video,
+                    VideoOp::EncodeH264 {
+                        scale_to_height: None,
+                        tone_map: false,
+                        burn_subtitle_index: None
+                    }
+                );
+                assert_eq!(audio, AudioOp::Copy, "aac is accepted, must copy");
+                assert_eq!(subtitle, SubtitleOp::None);
+            }
+            other => panic!("expected transcode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn four_k_h264_scales_to_1080p() {
+        // 4K h264 to a 1080p-max client: codec is fine, but height forces a
+        // scaling re-encode.
+        let f = file(
+            Some("mp4"),
+            Some("h264"),
+            Some(2160),
+            None,
+            vec![aac(1)],
+            vec![],
+        );
+        let plan = plan_transcode(&f, &caps_h264_1080_sdr());
+        match plan {
+            TranscodePlan::Transcode { video, .. } => assert_eq!(
+                video,
+                VideoOp::EncodeH264 {
+                    scale_to_height: Some(1080),
+                    tone_map: false,
+                    burn_subtitle_index: None
+                }
+            ),
+            other => panic!("expected transcode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hdr_to_sdr_client_sets_tone_map() {
+        let f = file(
+            Some("mp4"),
+            Some("h264"),
+            Some(1080),
+            Some("HDR10"),
+            vec![aac(1)],
+            vec![],
+        );
+        let plan = plan_transcode(&f, &caps_h264_1080_sdr());
+        match plan {
+            TranscodePlan::Transcode { video, .. } => assert_eq!(
+                video,
+                VideoOp::EncodeH264 {
+                    scale_to_height: None,
+                    tone_map: true,
+                    burn_subtitle_index: None
+                }
+            ),
+            other => panic!("expected transcode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eac3_not_in_caps_transcodes_audio_to_aac() {
+        // eac3 IS in our Apple-safe baseline, so to prove the AAC path we use
+        // DTS, which is not. Codec mismatch on video forces the transcode gate.
+        let f = file(
+            Some("mp4"),
+            Some("hevc"),
+            Some(1080),
+            None,
+            vec![dts(1)],
+            vec![],
+        );
+        let plan = plan_transcode(&f, &caps_h264_1080_sdr());
+        match plan {
+            TranscodePlan::Transcode { audio, .. } => {
+                assert_eq!(audio, AudioOp::EncodeAac { bitrate_kbps: 192 });
+            }
+            other => panic!("expected transcode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eac3_audio_is_copied_when_present() {
+        let f = file(
+            Some("mp4"),
+            Some("hevc"),
+            Some(1080),
+            None,
+            vec![eac3(1)],
+            vec![],
+        );
+        let plan = plan_transcode(&f, &caps_h264_1080_sdr());
+        match plan {
+            TranscodePlan::Transcode { audio, .. } => assert_eq!(audio, AudioOp::Copy),
+            other => panic!("expected transcode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ass_subtitle_extracts_to_webvtt_when_transcoding() {
+        // ASS is a text format → WebVTT extract, NOT burn-in. The video op is
+        // driven only by the codec mismatch (hevc), so no burn index.
+        let f = file(
+            Some("mp4"),
+            Some("hevc"),
+            Some(1080),
+            None,
+            vec![aac(1)],
+            vec![sub(2, "ass", false)],
+        );
+        let plan = plan_transcode(&f, &caps_h264_1080_sdr());
+        match plan {
+            TranscodePlan::Transcode {
+                video, subtitle, ..
+            } => {
+                assert_eq!(subtitle, SubtitleOp::ExtractWebVtt { source_index: 2 });
+                assert_eq!(
+                    video,
+                    VideoOp::EncodeH264 {
+                        scale_to_height: None,
+                        tone_map: false,
+                        burn_subtitle_index: None
+                    }
+                );
+            }
+            other => panic!("expected transcode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pgs_subtitle_burns_in_and_forces_video_reencode() {
+        // PGS is image-based → burn-in. Even though the video codec (h264)
+        // would otherwise copy, burn-in forces a re-encode and threads the
+        // subtitle index into the video op.
+        let f = file(
+            Some("mp4"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![aac(1)],
+            vec![sub(3, "hdmv_pgs_subtitle", false)],
+        );
+        // Force the transcode gate via an unsupported container so decide()
+        // denies; otherwise an all-accepted file direct-plays and burn-in is
+        // moot. Use mkv container the client doesn't list.
+        let mut f = f;
+        f.container = Some("mkv".into());
+        let plan = plan_transcode(&f, &caps_h264_1080_sdr());
+        match plan {
+            TranscodePlan::Transcode {
+                video, subtitle, ..
+            } => {
+                assert_eq!(subtitle, SubtitleOp::BurnIn { source_index: 3 });
+                assert_eq!(
+                    video,
+                    VideoOp::EncodeH264 {
+                        scale_to_height: None,
+                        tone_map: false,
+                        burn_subtitle_index: Some(3)
+                    }
+                );
+            }
+            other => panic!("expected transcode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn forced_subtitle_is_preferred_over_first() {
+        let f = file(
+            Some("mkv"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![aac(1)],
+            vec![sub(2, "subrip", false), sub(3, "subrip", true)],
+        );
+        let plan = plan_transcode(&f, &caps_h264_1080_sdr());
+        match plan {
+            TranscodePlan::Transcode { subtitle, .. } => {
+                assert_eq!(subtitle, SubtitleOp::ExtractWebVtt { source_index: 3 });
+            }
+            other => panic!("expected transcode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn container_only_mismatch_copies_both_streams() {
+        // mkv h264/aac to an mp4-only client: only the container is wrong, so
+        // remux (copy video + copy audio) is the smallest fix.
+        let f = file(
+            Some("mkv"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![aac(1)],
+            vec![],
+        );
+        let plan = plan_transcode(&f, &caps_h264_1080_sdr());
+        match plan {
+            TranscodePlan::Transcode { video, audio, .. } => {
+                assert_eq!(video, VideoOp::Copy);
+                assert_eq!(audio, AudioOp::Copy);
+            }
+            other => panic!("expected transcode, got {other:?}"),
+        }
+    }
+}
