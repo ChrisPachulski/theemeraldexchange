@@ -31,7 +31,7 @@ vi.mock('../services/xtream.js', () => ({
     maxConnections: 4,
     status: 'Active',
   })),
-  credsFromEnv: vi.fn(() => ({ host: 'https://panel', username: 'u', password: 'p' })),
+  credsFromEnv: vi.fn(() => ({ host: 'https://panel.example.com', username: 'u', password: 'p' })),
 }))
 
 vi.mock('../services/iptvStreamToken.js', () => {
@@ -150,7 +150,7 @@ describe('catchup stream grant + proxy', () => {
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type')).toBe('video/mp2t')
     expect(fetchSpy).toHaveBeenCalledWith(
-      'https://panel/streaming/timeshift.php?username=u&password=p&stream=10&start=2026-05-24:12-00&duration=30',
+      'https://panel.example.com/streaming/timeshift.php?username=u&password=p&stream=10&start=2026-05-24:12-00&duration=30',
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     )
     fetchSpy.mockRestore()
@@ -270,7 +270,7 @@ describe('vod stream grant + proxy', () => {
 
     expect(res.status).toBe(206)
     expect(res.headers.get('content-range')).toBe('bytes 0-2/10')
-    expect(fetchSpy).toHaveBeenCalledWith('https://panel/movie/u/p/20.mp4', expect.objectContaining({
+    expect(fetchSpy).toHaveBeenCalledWith('https://panel.example.com/movie/u/p/20.mp4', expect.objectContaining({
       headers: { Range: 'bytes=0-2' },
     }))
     fetchSpy.mockRestore()
@@ -290,8 +290,8 @@ describe('vod stream grant + proxy', () => {
     const text = await res.text()
 
     expect(res.status).toBe(200)
-    expect(fetchSpy).toHaveBeenCalledWith('https://panel/movie/u/p/20.m3u8')
-    expect(text).toContain(`/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', 'https://panel/movie/u/p/seg-001.ts'))}`)
+    expect(fetchSpy).toHaveBeenCalledWith('https://panel.example.com/movie/u/p/20.m3u8')
+    expect(text).toContain(`/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', 'https://panel.example.com/movie/u/p/seg-001.ts'))}`)
     fetchSpy.mockRestore()
   })
 })
@@ -313,7 +313,7 @@ describe('segment proxy', () => {
   const app = new Hono().route('/api/iptv', iptv)
 
   it('passes through signed segments with Range', async () => {
-    const upstreamUrl = 'https://cdn.example/foo/seg.ts'
+    const upstreamUrl = 'https://cdn.example.com/foo/seg.ts'
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('seg', {
       status: 206,
       headers: {
@@ -337,8 +337,30 @@ describe('segment proxy', () => {
     fetchSpy.mockRestore()
   })
 
+  it('refuses to proxy a segment pointed at an internal host (SSRF)', async () => {
+    // A segment token whose rid resolves to cloud metadata / an internal
+    // service must be rejected before any fetch, even though the token's HMAC
+    // is valid (the rid comes from upstream-controlled manifest lines).
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    for (const evil of [
+      'https://169.254.169.254/latest/meta-data/iam/security-credentials/',
+      'https://10.0.0.1/seg.ts',
+      'https://recommender:8000/internal',
+      'http://cdn.example/seg.ts', // non-https
+    ]) {
+      const res = await app.request(
+        `/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', evil))}`,
+      )
+      expect(res.status).toBe(400)
+      const body = (await res.json()) as { error: string }
+      expect(body.error).toBe('bad_upstream')
+    }
+    expect(fetchSpy).not.toHaveBeenCalled()
+    fetchSpy.mockRestore()
+  })
+
   it('recursively rewrites signed sub-playlists', async () => {
-    const upstreamUrl = 'https://cdn.example/foo/level1.m3u8'
+    const upstreamUrl = 'https://cdn.example.com/foo/level1.m3u8'
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response([
       '#EXTM3U',
       '#EXTINF:6.0,',
@@ -350,7 +372,7 @@ describe('segment proxy', () => {
 
     expect(res.status).toBe(200)
     expect(fetchSpy).toHaveBeenCalledWith(upstreamUrl)
-    expect(text).toContain(`/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', 'https://cdn.example/foo/seg.ts'))}`)
+    expect(text).toContain(`/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', 'https://cdn.example.com/foo/seg.ts'))}`)
     fetchSpy.mockRestore()
   })
 })
