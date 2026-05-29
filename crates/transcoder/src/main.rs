@@ -1,0 +1,59 @@
+use transcoder::args::HwEncoder;
+use transcoder::encoders;
+use transcoder::{AppState, build_router};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "transcoder=info,tower_http=info".into()),
+        )
+        .init();
+
+    let state = AppState::from_env().map_err(|e| {
+        tracing::error!("transcoder config error: {e}");
+        e
+    })?;
+
+    // Boot-time hardware-encoder detection (§4.4). Honor TRANSCODER_HW_ENCODER
+    // only if the configured encoder is actually built into this ffmpeg;
+    // otherwise fall back to libx264 and say so.
+    let ffmpeg_bin = std::env::var("TRANSCODER_FFMPEG_BIN").unwrap_or_else(|_| "ffmpeg".into());
+    let available = encoders::detect(&ffmpeg_bin).await;
+    let preferred = HwEncoder::from_env();
+    let (resolved, fell_back) = available.resolve(preferred);
+    if fell_back {
+        tracing::warn!(
+            ?preferred,
+            "configured HW encoder unavailable; falling back to libx264 (CPU)"
+        );
+    }
+    tracing::info!(?resolved, available = ?available, "transcoder encoder resolved");
+
+    // Idle-session sweeper (5s cadence; 30s no-heartbeat → reap).
+    let _sweeper = state.sessions.spawn_sweeper();
+
+    let host = std::env::var("TRANSCODER_HOST").unwrap_or_else(|_| "127.0.0.1".into());
+    let port: u16 = std::env::var("TRANSCODER_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8090);
+
+    let app = build_router(state);
+    let ip: std::net::IpAddr = host
+        .parse()
+        .unwrap_or(std::net::IpAddr::from([127, 0, 0, 1]));
+    let addr = std::net::SocketAddr::new(ip, port);
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    tracing::info!("transcoder listening on http://{addr}");
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+    Ok(())
+}
+
+async fn shutdown_signal() {
+    let _ = tokio::signal::ctrl_c().await;
+    tracing::info!("shutdown signal received");
+}
