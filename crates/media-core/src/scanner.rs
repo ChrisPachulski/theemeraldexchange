@@ -32,6 +32,9 @@ pub struct ScanReport {
     pub movies: usize,
     pub episodes: usize,
     pub enriched: usize,
+    /// Unchanged files whose movie/episode row still lacked TMDB metadata and
+    /// was successfully backfilled this pass (no reprobe).
+    pub backfilled: usize,
     pub errors: usize,
 }
 
@@ -90,11 +93,26 @@ pub async fn scan_once(
                 }
             };
 
-            // Skip unchanged files — reprobing is the slow path.
+            // Skip reprobing unchanged files — probing is the slow path. But an
+            // unchanged file whose movie/episode row was indexed before TMDB
+            // enrichment existed still carries NULL metadata forever, since the
+            // old skip just `continue`d. Run a probe-free backfill: classify the
+            // name and, only when the row is missing metadata, hit TMDB and
+            // upsert against the already-stored file. Files that are already
+            // enriched do zero network work.
             match existing_stat(db, &path_str).await {
                 Ok(Some((prev_size, prev_mtime)))
                     if prev_size == size_bytes && prev_mtime == mtime =>
                 {
+                    let parsed = filename::classify(root_kind, entry_path, name);
+                    match backfill_metadata(db, &path_str, &parsed, tmdb).await {
+                        Ok(true) => report.backfilled += 1,
+                        Ok(false) => {}
+                        Err(e) => {
+                            tracing::warn!("backfill failed for {path_str}: {e}");
+                            report.errors += 1;
+                        }
+                    }
                     continue;
                 }
                 Ok(existing) => {
@@ -164,6 +182,17 @@ fn system_time_to_rfc3339(t: SystemTime) -> String {
 
 fn now_rfc3339() -> String {
     Utc::now().to_rfc3339()
+}
+
+/// The `video_height` recorded for a media file, if any. Used to pick the
+/// higher-resolution file when two rips back the same episode.
+async fn file_video_height(db: &Db, file_id: i64) -> Result<Option<i64>, AppError> {
+    let row: Option<Option<i64>> =
+        sqlx::query_scalar("SELECT video_height FROM media_files WHERE id = ?")
+            .bind(file_id)
+            .fetch_optional(&db.pool)
+            .await?;
+    Ok(row.flatten())
 }
 
 /// Current `(size_bytes, mtime)` stored for `path`, if any.
@@ -239,10 +268,28 @@ async fn index_file(
             let m = tmdb.match_show(show, None).await;
             let show_id = upsert_show(db, show, &scanned_at, m.as_ref()).await?;
             // Best-effort per-episode enrichment: only when the show resolved to
-            // a TMDB id. Errors/None leave title/air_date NULL and never fail.
-            let ep = match m.as_ref() {
-                Some(found) => tmdb.episode(found.tmdb_id, *season, *episode).await,
-                None => None,
+            // a TMDB id AND this episode is not already titled. Gating on a
+            // missing title keeps a rescan from re-issuing ~20k serial TMDB
+            // calls for episodes that are already enriched. Errors/None leave
+            // title/air_date NULL and never fail the scan.
+            let already_titled: Option<bool> = sqlx::query_scalar(
+                "SELECT title IS NOT NULL FROM episodes \
+                 WHERE show_id = ? AND season = ? AND episode = ?",
+            )
+            .bind(show_id)
+            .bind(*season)
+            .bind(*episode)
+            .fetch_optional(&db.pool)
+            .await?;
+            let ep = match (m.as_ref(), already_titled) {
+                (Some(found), Some(true)) => {
+                    // Show resolved but the episode is already enriched: skip
+                    // the per-episode round-trip, just keep the file pointer.
+                    let _ = found;
+                    None
+                }
+                (Some(found), _) => tmdb.episode(found.tmdb_id, *season, *episode).await,
+                (None, _) => None,
             };
             upsert_episode(db, show_id, *season, *episode, file_id, ep.as_ref()).await?;
             m.is_some()
@@ -251,6 +298,100 @@ async fn index_file(
     };
 
     Ok(enriched)
+}
+
+/// Probe-free metadata backfill for an UNCHANGED file. Looks up the already
+/// stored `media_files` id, and only when the corresponding movie/episode row
+/// is still missing TMDB metadata does it consult TMDB and upsert. Returns
+/// `true` when a row was actually backfilled (drives `ScanReport::backfilled`).
+///
+/// This is the path that repairs a library indexed before per-title/per-episode
+/// enrichment existed: the unchanged-file skip used to `continue` outright, so
+/// those rows would stay NULL forever. An already-enriched row short-circuits
+/// before any network call, so a steady-state rescan does no TMDB work.
+async fn backfill_metadata(
+    db: &Db,
+    path: &str,
+    parsed: &ParsedName,
+    tmdb: &TmdbClient,
+) -> Result<bool, AppError> {
+    let file_id: Option<i64> = sqlx::query_scalar("SELECT id FROM media_files WHERE path = ?")
+        .bind(path)
+        .fetch_optional(&db.pool)
+        .await?;
+    let file_id = match file_id {
+        Some(id) => id,
+        // No stored row to attach to (shouldn't happen for an unchanged file);
+        // nothing to backfill.
+        None => return Ok(false),
+    };
+    let scanned_at = now_rfc3339();
+
+    match parsed {
+        ParsedName::Movie { title, year } => {
+            // Already enriched? A non-NULL tmdb_id means TMDB already resolved
+            // this film; skip the network round-trip entirely.
+            let has_meta: Option<bool> =
+                sqlx::query_scalar("SELECT tmdb_id IS NOT NULL FROM movies WHERE file_id = ?")
+                    .bind(file_id)
+                    .fetch_optional(&db.pool)
+                    .await?;
+            if matches!(has_meta, Some(true)) {
+                return Ok(false);
+            }
+            let m = tmdb.match_movie(title, *year).await;
+            if m.is_none() {
+                return Ok(false);
+            }
+            upsert_movie(db, title, *year, file_id, &scanned_at, m.as_ref()).await?;
+            Ok(true)
+        }
+        ParsedName::Episode {
+            show,
+            season,
+            episode,
+        } => {
+            let m = tmdb.match_show(show, None).await;
+            let show_id = upsert_show(db, show, &scanned_at, m.as_ref()).await?;
+            // Already enriched? A non-NULL episode title means the per-episode
+            // fetch already landed; skip the network round-trip. (The show
+            // upsert above is cheap and idempotent and may have just backfilled
+            // the show's own metadata, so it always runs.)
+            let has_title: Option<bool> = sqlx::query_scalar(
+                "SELECT title IS NOT NULL FROM episodes \
+                 WHERE show_id = ? AND season = ? AND episode = ?",
+            )
+            .bind(show_id)
+            .bind(season)
+            .bind(episode)
+            .fetch_optional(&db.pool)
+            .await?;
+            if matches!(has_title, Some(true)) {
+                return Ok(false);
+            }
+            let ep = match m.as_ref() {
+                Some(found) => tmdb.episode(found.tmdb_id, *season, *episode).await,
+                None => None,
+            };
+            if ep.is_none() {
+                return Ok(false);
+            }
+            // The episode row already exists (unchanged file); reuse its file_id
+            // so the quality-preference logic in upsert_episode is a no-op tie.
+            let existing_file_id: Option<i64> = sqlx::query_scalar(
+                "SELECT file_id FROM episodes WHERE show_id = ? AND season = ? AND episode = ?",
+            )
+            .bind(show_id)
+            .bind(season)
+            .bind(episode)
+            .fetch_optional(&db.pool)
+            .await?;
+            let fid = existing_file_id.unwrap_or(file_id);
+            upsert_episode(db, show_id, *season, *episode, fid, ep.as_ref()).await?;
+            Ok(true)
+        }
+        ParsedName::Unknown => Ok(false),
+    }
 }
 
 /// Upsert a movie keyed on its backing `file_id` (one movie per media file).
@@ -339,9 +480,13 @@ async fn upsert_movie(
     Ok(())
 }
 
-/// Get-or-create a show by its NORMALIZED title, returning its id. Dedup keys
-/// on `norm_title` so `Adventure Time` / `Adventure Time 2008` collapse to one
-/// row. When a TMDB match is present, the metadata columns are populated.
+/// Get-or-create a show, returning its id. A show is identified first by its
+/// TMDB id (so two differently-spelled filename variants that resolve to the
+/// same series — e.g. `Adventure Time` vs `Adventure Time With Finn And Jake` —
+/// collapse onto a single row instead of colliding on the UNIQUE `tmdb_id`),
+/// then by its NORMALIZED title (so `Adventure Time` / `Adventure Time 2008`
+/// collapse even with no TMDB match). Mirrors `upsert_movie`'s tmdb_id-first
+/// dedup. When a TMDB match is present, the metadata columns are populated.
 async fn upsert_show(
     db: &Db,
     display_title: &str,
@@ -357,11 +502,35 @@ async fn upsert_show(
     let overview = tmdb.and_then(|m| m.overview.clone());
     let poster_path = tmdb.and_then(|m| m.poster_path.clone());
 
-    if let Some(id) = sqlx::query_scalar::<_, i64>("SELECT id FROM shows WHERE norm_title = ?")
-        .bind(&key)
-        .fetch_optional(&db.pool)
-        .await?
-    {
+    // Resolve the existing row to update: prefer the TMDB id (collapses
+    // descriptive-suffix aliases onto one row and avoids the UNIQUE tmdb_id
+    // collision that would otherwise surface as a scan error and silently drop
+    // the show), falling back to the norm_title dedup key.
+    let existing: Option<i64> = match tmdb_id {
+        Some(tid) => {
+            match sqlx::query_scalar::<_, i64>("SELECT id FROM shows WHERE tmdb_id = ?")
+                .bind(tid)
+                .fetch_optional(&db.pool)
+                .await?
+            {
+                Some(id) => Some(id),
+                None => {
+                    sqlx::query_scalar("SELECT id FROM shows WHERE norm_title = ?")
+                        .bind(&key)
+                        .fetch_optional(&db.pool)
+                        .await?
+                }
+            }
+        }
+        None => {
+            sqlx::query_scalar("SELECT id FROM shows WHERE norm_title = ?")
+                .bind(&key)
+                .fetch_optional(&db.pool)
+                .await?
+        }
+    };
+
+    if let Some(id) = existing {
         // Backfill metadata onto the existing row when TMDB provided it.
         if tmdb.is_some() {
             sqlx::query(
@@ -410,6 +579,13 @@ async fn upsert_show(
 /// Upsert an episode keyed on the UNIQUE `(show_id, season, episode)`. When
 /// TMDB episode metadata is present, `title`/`air_date` are populated; missing
 /// fields are left untouched (COALESCE) so a later enriched scan can backfill.
+///
+/// Dual-version handling: when an episode already has a backing file and a
+/// second file for the same `(show, season, episode)` arrives (e.g. a 1080p and
+/// a 2160p rip), the higher-resolution file wins deterministically — the
+/// incoming `file_id` only replaces the existing one when its `video_height` is
+/// strictly greater. Mirrors the quality preference movies get via tmdb_id
+/// dedup; without it, scan order alone (last-wins) decided which file streamed.
 async fn upsert_episode(
     db: &Db,
     show_id: i64,
@@ -421,8 +597,8 @@ async fn upsert_episode(
     let title = tmdb.and_then(|e| e.title.clone());
     let air_date = tmdb.and_then(|e| e.air_date.clone());
 
-    let existing: Option<i64> = sqlx::query_scalar(
-        "SELECT id FROM episodes WHERE show_id = ? AND season = ? AND episode = ?",
+    let existing: Option<(i64, i64)> = sqlx::query_as(
+        "SELECT id, file_id FROM episodes WHERE show_id = ? AND season = ? AND episode = ?",
     )
     .bind(show_id)
     .bind(season)
@@ -431,12 +607,29 @@ async fn upsert_episode(
     .await?;
 
     match existing {
-        Some(id) => {
+        Some((id, existing_file_id)) => {
+            // Decide whether the incoming file should back this episode. Keep
+            // the existing file unless the incoming one is higher-resolution
+            // (or the incoming row IS the existing one — a plain re-scan). A
+            // NULL height sorts below any known height so a probed file beats
+            // an unprobed one, and ties keep the incumbent (no churn).
+            let keep_incoming = if file_id == existing_file_id {
+                true
+            } else {
+                let incoming_h: Option<i64> = file_video_height(db, file_id).await?;
+                let existing_h: Option<i64> = file_video_height(db, existing_file_id).await?;
+                incoming_h.unwrap_or(0) > existing_h.unwrap_or(0)
+            };
+            let new_file_id = if keep_incoming {
+                file_id
+            } else {
+                existing_file_id
+            };
             sqlx::query(
                 "UPDATE episodes SET file_id = ?, title = COALESCE(?, title), \
                  air_date = COALESCE(?, air_date) WHERE id = ?",
             )
-            .bind(file_id)
+            .bind(new_file_id)
             .bind(&title)
             .bind(&air_date)
             .bind(id)
@@ -517,14 +710,21 @@ mod tests {
     /// Insert a minimal `media_files` row and return its id. `episodes.file_id`
     /// is a foreign key into `media_files`, so episode upserts need a real id.
     async fn seed_media_file(db: &Db, path: &str) -> i64 {
+        seed_media_file_h(db, path, 1080).await
+    }
+
+    /// Like [`seed_media_file`] but with an explicit `video_height`, for the
+    /// dual-version quality-preference tests.
+    async fn seed_media_file_h(db: &Db, path: &str, height: i64) -> i64 {
         sqlx::query(
             "INSERT INTO media_files \
              (path, size_bytes, mtime, container, duration_secs, video_codec, \
               video_height, video_profile, hdr_format, audio_tracks_json, \
               subtitle_tracks_json, scanned_at) \
-             VALUES (?, 1, 't', 'mkv', 1, 'h264', 1080, NULL, NULL, '[]', '[]', 't')",
+             VALUES (?, 1, 't', 'mkv', 1, 'h264', ?, NULL, NULL, '[]', '[]', 't')",
         )
         .bind(path)
+        .bind(height)
         .execute(&db.pool)
         .await
         .unwrap();
@@ -915,6 +1115,134 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(tvdb_id, Some(81189));
+    }
+
+    #[tokio::test]
+    async fn two_shows_same_tmdb_id_collapse_to_one_row() {
+        // Two filename variants that normalize differently ("Adventure Time" vs
+        // "Adventure Time With Finn And Jake") but resolve to the SAME TMDB id
+        // must collapse onto one shows row, not collide on the UNIQUE tmdb_id
+        // (which previously surfaced as a scan error and dropped the show).
+        let db = Db::connect_memory().await.unwrap();
+        let m = TmdbMatch {
+            tmdb_id: 15260,
+            title: "Adventure Time".into(),
+            year: Some(2010),
+            imdb_id: Some("tt1305826".into()),
+            tvdb_id: Some(152831),
+            overview: Some("Finn and Jake...".into()),
+            poster_path: Some("/at.jpg".into()),
+        };
+
+        let id1 = upsert_show(&db, "Adventure Time", "t", Some(&m))
+            .await
+            .unwrap();
+        // Different norm_title, same TMDB id — must reuse the first row.
+        let id2 = upsert_show(&db, "Adventure Time With Finn And Jake", "t", Some(&m))
+            .await
+            .unwrap();
+
+        assert_eq!(id1, id2, "same tmdb_id must collapse to one show id");
+        assert_eq!(count(&db, "shows").await, 1);
+    }
+
+    #[tokio::test]
+    async fn episodes_for_aliased_show_share_one_row_no_errors() {
+        // End-to-end of the alias collapse via index_file with a fake match is
+        // not possible without network, so exercise the upsert path directly:
+        // two episodes whose show resolves to the same tmdb_id land under one
+        // show with no UNIQUE collision.
+        let db = Db::connect_memory().await.unwrap();
+        let m = TmdbMatch {
+            tmdb_id: 15260,
+            title: "Adventure Time".into(),
+            year: Some(2010),
+            imdb_id: None,
+            tvdb_id: None,
+            overview: None,
+            poster_path: None,
+        };
+        let s1 = upsert_show(&db, "Adventure Time", "t", Some(&m))
+            .await
+            .unwrap();
+        let s2 = upsert_show(&db, "Adventure Time With Finn And Jake", "t", Some(&m))
+            .await
+            .unwrap();
+        assert_eq!(s1, s2);
+        let f1 = seed_media_file(&db, "/lib/at_s01e01.mkv").await;
+        let f2 = seed_media_file(&db, "/lib/at_s01e02.mkv").await;
+        upsert_episode(&db, s1, 1, 1, f1, None).await.unwrap();
+        upsert_episode(&db, s2, 1, 2, f2, None).await.unwrap();
+        assert_eq!(count(&db, "shows").await, 1);
+        assert_eq!(count(&db, "episodes").await, 2);
+    }
+
+    #[tokio::test]
+    async fn upsert_episode_keeps_higher_resolution_file() {
+        // Dual-version: a 1080p and a 2160p rip back the same episode. The
+        // higher-resolution file must win deterministically regardless of which
+        // arrives second, instead of plain last-wins.
+        let db = Db::connect_memory().await.unwrap();
+        let show_id = upsert_show(&db, "Dune", "t", None).await.unwrap();
+        let hd = seed_media_file_h(&db, "/lib/Dune S01E01 1080p.mkv", 1080).await;
+        let uhd = seed_media_file_h(&db, "/lib/Dune S01E01 2160p.mkv", 2160).await;
+
+        // 1080p first, then 2160p arrives → 2160p wins.
+        upsert_episode(&db, show_id, 1, 1, hd, None).await.unwrap();
+        upsert_episode(&db, show_id, 1, 1, uhd, None).await.unwrap();
+        let fid: i64 = sqlx::query_scalar("SELECT file_id FROM episodes LIMIT 1")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(fid, uhd, "higher-res file should back the episode");
+
+        // 1080p arrives again afterward → must NOT downgrade.
+        upsert_episode(&db, show_id, 1, 1, hd, None).await.unwrap();
+        let fid: i64 = sqlx::query_scalar("SELECT file_id FROM episodes LIMIT 1")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(fid, uhd, "a lower-res rescan must not downgrade the file");
+        assert_eq!(count(&db, "episodes").await, 1);
+    }
+
+    #[tokio::test]
+    async fn backfill_metadata_no_key_is_noop_without_error() {
+        // The backfill path for an unchanged file with no TMDB key must be a
+        // safe no-op: it never errors and reports nothing backfilled.
+        let db = Db::connect_memory().await.unwrap();
+        // Seed an unenriched movie (mirrors a pre-enrichment indexed row).
+        let file_id = seed_media_file(&db, "/lib/Heat (1995).mkv").await;
+        upsert_movie(&db, "Heat", Some(1995), file_id, "t", None)
+            .await
+            .unwrap();
+        let parsed = ParsedName::Movie {
+            title: "Heat".into(),
+            year: Some(1995),
+        };
+        let did = backfill_metadata(&db, "/lib/Heat (1995).mkv", &parsed, &no_tmdb())
+            .await
+            .unwrap();
+        assert!(!did, "no key → nothing backfilled");
+        // Row untouched.
+        assert_eq!(count(&db, "movies").await, 1);
+    }
+
+    #[tokio::test]
+    async fn backfill_metadata_unknown_path_is_noop() {
+        // An unchanged file with no stored media_files row (shouldn't happen,
+        // but must not panic or error) backfills nothing.
+        let db = Db::connect_memory().await.unwrap();
+        let parsed = ParsedName::Episode {
+            show: "Ghost".into(),
+            season: 1,
+            episode: 1,
+        };
+        let did = backfill_metadata(&db, "/lib/missing.mkv", &parsed, &no_tmdb())
+            .await
+            .unwrap();
+        assert!(!did);
+        assert_eq!(count(&db, "episodes").await, 0);
     }
 
     #[test]
