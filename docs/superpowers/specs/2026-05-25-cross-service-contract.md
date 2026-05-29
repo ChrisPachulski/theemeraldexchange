@@ -1,9 +1,11 @@
 # Cross-service compatibility contract (M1.5)
 
-> **Status:** DRAFT for review. This document is the M1.5 deliverable. It
-> freezes the wire-level shapes shared by Hono (M1), Rust services (M3+M4),
-> the recommender (Python/FastAPI), and Apple clients (M2+M5). Nothing in
-> M2 starts until this is locked.
+> **Status:** RATIFIED for M2 (2026-05-28). This document is the M1.5
+> deliverable. It freezes the wire-level shapes shared by Hono (M1), Rust
+> services (M3+M4), the recommender (Python/FastAPI), and Apple clients
+> (M2+M5). All four previously-open decisions are now resolved in-body and
+> the contract is locked for M2; the M3 internal-principal boundary it
+> defines is implemented and deployed.
 >
 > **Read first:**
 > - `2026-05-25-apple-multiplatform-and-rust-pivot.md` § Cross-service
@@ -11,10 +13,20 @@
 > - `2026-05-25-review-findings.md` Tier 7 (codex's blind-spot list — the
 >   ones flagged as one-way doors live here).
 >
-> **Pending user call** (decisions deliberately left open in this draft):
-> LICENSE, internal auth boundary, recommender data-model contradiction,
-> telemetry posture. Each is captured in §4 / §8 / §11 / §15 with the
-> trade-offs and what flips downstream depending on the answer.
+> **Decision status** (the four items this draft originally left open are
+> all resolved in-body — this header previously lagged the body and is now
+> reconciled):
+> - **Internal auth boundary (§4):** RESOLVED — Hybrid D, Rust-canonical
+>   crypto (`emerald-contracts`). Locked 2026-05-25; one-way door.
+>   *Implemented and deployed in M3 media-core (internal-principal JWE).*
+> - **Recommender data-model (§9):** PICKED — Resolution A (keep
+>   `iptv_title_link` join, drop inert per-source rows, local-first
+>   precedence at the grant endpoint).
+> - **Telemetry posture (§15):** PICKED — self-hosted Glitchtip, mandatory
+>   in the EEX stack; no telemetry-disabled build.
+> - **LICENSE (§14):** DEFERRED — intentionally, until the first
+>   binary-distribution event (M2 TestFlight). The private NAS deploy has
+>   no exposure surface, so this defer blocks nothing in M1.5/M3.
 
 ## 1. Why this doc exists
 
