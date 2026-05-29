@@ -99,6 +99,13 @@ pub struct Config {
     /// its library without an external poke. Parsed from `MEDIA_BOOT_SCAN`
     /// (`0`/`false`/`no`/`off` → disabled); defaults to enabled.
     pub boot_scan: bool,
+    /// Base URL of the M4 transcoder (e.g. `http://transcoder:8003`), read from
+    /// `MEDIA_TRANSCODER_URL`. When `Some`, a file that cannot direct-play is
+    /// handed off to the transcoder (`POST /api/transcode/grant`) instead of
+    /// returning `503`. When `None` (the M3-only posture), the transcode-required
+    /// path keeps returning `503 transcoder required` — so leaving the env unset
+    /// preserves the pre-M4 behavior exactly. An empty string is treated as unset.
+    pub transcoder_url: Option<String>,
 }
 
 impl Config {
@@ -140,6 +147,11 @@ impl Config {
             .and_then(|s| s.trim().parse::<u64>().ok())
             .unwrap_or(DEFAULT_SCAN_INTERVAL_SECS);
         let boot_scan = parse_bool_env("MEDIA_BOOT_SCAN", true);
+        // M4 handoff target. Unset/empty keeps the M3-only 503 path intact.
+        let transcoder_url = std::env::var("MEDIA_TRANSCODER_URL")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
 
         // Fail-fast safety gates (pure, unit-tested via `validate_posture`).
         validate_posture(&host, &principal_mode, internal_principal_secret.is_some())?;
@@ -155,6 +167,7 @@ impl Config {
             tmdb_api_key,
             scan_interval_secs,
             boot_scan,
+            transcoder_url,
         })
     }
 
