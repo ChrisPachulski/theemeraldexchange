@@ -5,6 +5,7 @@ import { TrendingRow } from '../search/TrendingRow'
 import type { TrendingItem } from '../../lib/hooks/useTrending'
 import type { DotState } from '../search/FeedbackDots'
 import { useAuth } from '../../lib/auth'
+import { AppleSignInButton } from '../auth/AppleSignInButton'
 import './Walkthrough.css'
 
 // Default unauthenticated landing for theemeraldexchange. The
@@ -28,20 +29,45 @@ const DEMO_STRIP: TrendingItem[] = [
 
 function SignInBlock({ placement }: { placement: 'hero' | 'foot' }) {
   const { signIn, signInState, signInError, discoveredServers } = useAuth()
+  const [inviteCode, setInviteCode] = useState('')
   const pending = signInState === 'pending' || signInState === 'opening'
+  const code = inviteCode.trim()
+  // A unique id per placement so the two SignInBlock instances on the
+  // page don't share an htmlFor target.
+  const inviteFieldId = `walkthrough-invite-${placement}`
   return (
     <div className={`walkthrough__signin walkthrough__signin--${placement}`}>
-      <button
-        type="button"
-        className="walkthrough__signin-button"
-        onClick={signIn}
-        disabled={pending}
-      >
-        {pending ? 'Waiting for Plex…' : 'Sign in with Plex'}
-      </button>
+      <div className="walkthrough__invite">
+        <label className="walkthrough__invite-label" htmlFor={inviteFieldId}>
+          Invite code <span className="walkthrough__invite-optional">(first time only)</span>
+        </label>
+        <input
+          id={inviteFieldId}
+          className="walkthrough__invite-input"
+          type="text"
+          value={inviteCode}
+          onChange={(e) => setInviteCode(e.target.value)}
+          placeholder="Paste the code the owner sent you"
+          autoComplete="one-time-code"
+          spellCheck={false}
+          disabled={pending}
+        />
+      </div>
+      <div className="walkthrough__signin-buttons">
+        <button
+          type="button"
+          className="walkthrough__signin-button"
+          onClick={() => void signIn(code || undefined)}
+          disabled={pending}
+        >
+          {pending ? 'Waiting for Plex…' : 'Sign in with Plex'}
+        </button>
+        <AppleSignInButton inviteCode={code || undefined} />
+      </div>
       <p className="walkthrough__signin-hint">
-        Invitation-only. Sign in with the Plex account the library was
-        shared to.
+        Invitation-only. Returning members can sign in with Apple or the
+        Plex account the library was shared to — no code needed. First-time
+        guests: paste your invite code above, then sign in.
       </p>
       {signInError && (
         <p className="walkthrough__signin-error" role="alert">{signInError}</p>
