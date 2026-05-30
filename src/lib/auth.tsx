@@ -46,6 +46,8 @@ export function deniedMessage(reason: unknown): string {
     case 'no_invite':
     case 'not_authorized':
       return 'Invitation-only. Ask the owner for an invite code, then sign in again.'
+    case 'access_revoked':
+      return 'Your access to this library has been revoked. Ask the owner to restore it.'
     case 'not_a_server_member':
       return "You aren't a member of this Plex server."
     default:
@@ -125,6 +127,21 @@ type AuthCtx = {
   appleSignIn: (
     args: { identityToken: string; nonce?: string; inviteCode?: string },
   ) => Promise<boolean>
+  /**
+   * Sign in with an EXISTING passkey (WebAuthn). Usernameless — the
+   * authenticator offers its discoverable resident keys, so no handle or
+   * code is needed. This is the cross-platform, Plex-independent login.
+   * Returns true on success (session minted), false otherwise (detail in
+   * signInError / signInState).
+   */
+  passkeyLogin: () => Promise<boolean>
+  /**
+   * Register a NEW passkey for a first-time member. Mints a self-owned
+   * `local:<ulid>` identity, so it needs a display handle and a valid
+   * invite code (the invite is what authorizes the new identity onto the
+   * members allowlist — same gate as Plex/Apple). Returns true on success.
+   */
+  passkeyRegister: (args: { handle: string; inviteCode?: string }) => Promise<boolean>
   signOut: () => Promise<void>
 }
 
@@ -382,6 +399,145 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [applyUser],
   )
 
+  const passkeyLogin = useCallback(async (): Promise<boolean> => {
+    if (signInInFlightRef.current) return false
+    signInInFlightRef.current = true
+    setSignInError(null)
+    setSignOutError(null)
+    setSignInState('pending')
+    try {
+      const optRes = await fetch(apiUrl('/api/auth/passkey/login/options'), {
+        method: 'POST',
+        credentials: 'include',
+      })
+      if (!optRes.ok) throw new Error(`passkey options failed: ${optRes.status}`)
+      const { options, challengeId } = (await optRes.json()) as {
+        options: unknown
+        challengeId: string
+      }
+      const { startAuthentication } = await import('@simplewebauthn/browser')
+      let assertion
+      try {
+        assertion = await startAuthentication({ optionsJSON: options as never })
+      } catch {
+        // User cancelled the OS prompt, no passkey for this site, or the
+        // authenticator errored. Not a server failure — soft message.
+        setSignInState('error')
+        setSignInError('Passkey sign-in was cancelled or no passkey was found on this device.')
+        return false
+      }
+      const verifyRes = await fetch(apiUrl('/api/auth/passkey/login/verify'), {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challengeId, response: assertion }),
+      })
+      if (verifyRes.status === 403) {
+        const data = await verifyRes.json().catch(() => ({}))
+        setSignInState('denied')
+        setSignInError(deniedMessage(data?.error))
+        return false
+      }
+      if (!verifyRes.ok) {
+        setSignInState('error')
+        setSignInError('Passkey sign-in failed. Try again.')
+        return false
+      }
+      const data = (await verifyRes.json()) as { ok?: boolean; user?: AuthUser }
+      if (data.ok && data.user) {
+        applyUser(data.user)
+        setDiscoveredServers(null)
+        setSignInState('idle')
+        return true
+      }
+      setSignInState('error')
+      setSignInError('Passkey sign-in returned an unexpected response.')
+      return false
+    } catch (e) {
+      setSignInState('error')
+      setSignInError(e instanceof Error ? e.message : String(e))
+      return false
+    } finally {
+      signInInFlightRef.current = false
+    }
+  }, [applyUser])
+
+  const passkeyRegister = useCallback(
+    async ({ handle, inviteCode }: { handle: string; inviteCode?: string }): Promise<boolean> => {
+      if (signInInFlightRef.current) return false
+      signInInFlightRef.current = true
+      setSignInError(null)
+      setSignOutError(null)
+      setSignInState('pending')
+      try {
+        const optRes = await fetch(apiUrl('/api/auth/passkey/register/options'), {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ handle }),
+        })
+        if (optRes.status === 400) {
+          setSignInState('error')
+          setSignInError('Enter a display name to create a passkey.')
+          return false
+        }
+        if (!optRes.ok) throw new Error(`passkey register options failed: ${optRes.status}`)
+        const { options, challengeId } = (await optRes.json()) as {
+          options: unknown
+          challengeId: string
+        }
+        const { startRegistration } = await import('@simplewebauthn/browser')
+        let attestation
+        try {
+          attestation = await startRegistration({ optionsJSON: options as never })
+        } catch {
+          setSignInState('error')
+          setSignInError('Passkey setup was cancelled.')
+          return false
+        }
+        const verifyRes = await fetch(apiUrl('/api/auth/passkey/register/verify'), {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            challengeId,
+            response: attestation,
+            inviteCode,
+            deviceLabel: handle,
+          }),
+        })
+        if (verifyRes.status === 403) {
+          const data = await verifyRes.json().catch(() => ({}))
+          setSignInState('denied')
+          setSignInError(deniedMessage(data?.error))
+          return false
+        }
+        if (!verifyRes.ok) {
+          setSignInState('error')
+          setSignInError('Could not create the passkey. Try again.')
+          return false
+        }
+        const data = (await verifyRes.json()) as { ok?: boolean; user?: AuthUser }
+        if (data.ok && data.user) {
+          applyUser(data.user)
+          setDiscoveredServers(null)
+          setSignInState('idle')
+          return true
+        }
+        setSignInState('error')
+        setSignInError('Passkey setup returned an unexpected response.')
+        return false
+      } catch (e) {
+        setSignInState('error')
+        setSignInError(e instanceof Error ? e.message : String(e))
+        return false
+      } finally {
+        signInInFlightRef.current = false
+      }
+    },
+    [applyUser],
+  )
+
   const signOut = useCallback(async () => {
     setSignOutError(null)
     let response: Response
@@ -426,6 +582,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         discoveredServers,
         signIn,
         appleSignIn,
+        passkeyLogin,
+        passkeyRegister,
         signOut,
       }}
     >
