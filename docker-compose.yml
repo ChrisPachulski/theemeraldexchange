@@ -19,6 +19,9 @@ services:
     image: theemeraldexchange-backend:latest
     container_name: exchange-backend
     restart: unless-stopped
+    # Resource ceiling (audit 9-2) so no single service starves the NAS.
+    mem_limit: 768m
+    cpus: 1.5
     ports:
       - "127.0.0.1:3001:3001"
     volumes:
@@ -126,6 +129,10 @@ services:
     image: theemeraldexchange-recommender:latest
     container_name: exchange-recommender
     restart: unless-stopped
+    # Resource ceiling (audit 9-2). Sentence-transformer embedding is the
+    # memory-heaviest path here, hence a higher cap than the backend.
+    mem_limit: 1500m
+    cpus: 1.5
     ports:
       - "127.0.0.1:8001:8000"
     volumes:
@@ -185,6 +192,9 @@ services:
     image: theemeraldexchange-media-core:latest
     container_name: exchange-media-core
     restart: unless-stopped
+    # Resource ceiling (audit 9-2).
+    mem_limit: 768m
+    cpus: 1.0
     ports:
       - "127.0.0.1:8002:8002"
     volumes:
@@ -234,6 +244,12 @@ services:
     image: theemeraldexchange-transcoder:latest
     container_name: exchange-transcoder
     restart: unless-stopped
+    # Resource ceiling (audit 9-2): the transcoder spawns ffmpeg per session
+    # and is the most likely to OOM the NAS. Cap memory and CPU so a burst of
+    # concurrent transcodes degrades to 503 (TRANSCODER_MAX_SESSIONS) instead
+    # of taking the host down. Tune alongside TRANSCODER_MAX_SESSIONS.
+    mem_limit: 3g
+    cpus: 3.0
     ports:
       - "127.0.0.1:8003:8003"
     volumes:
