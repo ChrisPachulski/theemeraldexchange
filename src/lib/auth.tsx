@@ -10,6 +10,7 @@ import {
 import { useQueryClient } from '@tanstack/react-query'
 import { apiUrl } from './api/base'
 import { throwApiError } from './api/errors'
+import { SESSION_EXPIRED_EVENT } from './queryClient'
 
 // Persists the admin "view-as" preview across reloads so an admin who
 // chose to preview the dashboard as a regular user doesn't get bumped
@@ -203,6 +204,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       alive = false
     }
   }, [applyUser])
+
+  // Centralised 401/403 handling. queryClient dispatches SESSION_EXPIRED_EVENT
+  // (debounced) when any query/mutation fails auth, so an expired cookie clears
+  // local auth state — applyUser(null) also wipes the query cache — and the
+  // AuthGate drops back to the login screen instead of a silently broken UI.
+  useEffect(() => {
+    const onExpired = () => {
+      setUser((prev) => {
+        if (!prev) return prev
+        qc.clear()
+        return null
+      })
+    }
+    window.addEventListener(SESSION_EXPIRED_EVENT, onExpired)
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired)
+  }, [qc])
 
   const stopPolling = useCallback((intervalId?: number | null) => {
     const id = intervalId === undefined ? pollRef.current : intervalId

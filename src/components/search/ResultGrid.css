@@ -17,3 +17,28 @@
     gap: var(--s-4);
   }
 }
+
+/* Virtualized variant: the outer element is a positioned block (not a grid);
+   each windowed row lays its 1-2 cells out with the same column rhythm and gap
+   as the static grid above. */
+.result-grid--virtual {
+  display: block;
+  padding-block: var(--s-5);
+}
+
+.result-grid__row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--s-3);
+  padding-inline: var(--s-5);
+  box-sizing: border-box;
+  padding-bottom: var(--s-3);
+}
+
+@media (min-width: 640px) {
+  .result-grid__row {
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--s-4);
+    padding-bottom: var(--s-4);
+  }
+}
