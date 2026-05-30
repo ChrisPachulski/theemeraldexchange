@@ -1,11 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import {
-  appleClientId,
-  isAppleSignInConfigured,
-  loadAppleSdk,
-  makeNonce,
-  runAppleSignIn,
-} from './appleSdk'
+import { appleClientId, isAppleSignInConfigured, makeNonce } from './appleSdk'
 
 // appleSdk wraps Apple's JS SDK + build-time config. The env-reading and
 // nonce helpers are pure; loadAppleSdk/runAppleSignIn touch a (faked) DOM

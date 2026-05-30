@@ -16,7 +16,7 @@ import { ApiError } from './api/errors'
 // is exercised indirectly via the component tests.
 
 function mockFetch(impl: () => Partial<Response> & { json?: () => unknown }) {
-  const fn = vi.fn(async () => {
+  const fn = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => {
     const r = impl()
     return {
       ok: r.ok ?? true,
@@ -87,7 +87,7 @@ describe('admin invite API', () => {
     }))
     const out = await createInvite({ label: 'Mom', expiresInDays: 14, maxUses: 1 })
     expect(out.code).toBe('PLAINTEXT-ONCE')
-    const [, init] = fetchFn.mock.calls[0]
+    const [, init] = fetchFn.mock.calls[0] as [unknown, RequestInit]
     expect(init.method).toBe('POST')
     expect(JSON.parse(init.body as string)).toEqual({
       label: 'Mom',
