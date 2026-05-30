@@ -65,7 +65,12 @@ describe('registerIptvSchedule', () => {
     let n = 0
     vi.spyOn(cron, 'schedule').mockImplementation(() => {
       const id = n++
-      return { stop: () => stops.push(id), start: () => undefined } as ReturnType<typeof cron.schedule>
+      return {
+        stop: () => {
+          stops.push(id)
+        },
+        start: () => undefined,
+      } as ReturnType<typeof cron.schedule>
     })
     const tasks = await registerIptvSchedule('0 */6 * * *')
     expect(tasks).toHaveLength(2) // sync + tombstone sweep
