@@ -54,6 +54,12 @@ services:
       # optional; SIWA stays dormant until ENABLE_APPLE_SIGN_IN=1.
       APPLE_CLIENT_ID: "${APPLE_CLIENT_ID:-}"
       ENABLE_APPLE_SIGN_IN: "${ENABLE_APPLE_SIGN_IN:-}"
+      # Passkeys (WebAuthn). RP_ID defaults to 'localhost' in env.ts, which
+      # breaks every prod ceremony — so it MUST be passed through. Same
+      # passthrough gap that locked the owner out via ADMIN_SUBS.
+      WEBAUTHN_RP_ID: "${WEBAUTHN_RP_ID:-}"
+      WEBAUTHN_RP_NAME: "${WEBAUTHN_RP_NAME:-}"
+      WEBAUTHN_ORIGINS: "${WEBAUTHN_ORIGINS:-}"
       PLEX_SERVER_ID: "${PLEX_SERVER_ID:-}"
       # Bootstrap escape hatch for the brief first-deploy window before
       # PLEX_SERVER_ID is known. Without this passthrough, env.ts's
