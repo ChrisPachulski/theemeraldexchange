@@ -266,32 +266,20 @@ export default function IptvPlayer({
         return
       }
 
-      // Live MPEG-TS over the open internet stalls under mpegts.js's
-      // defaults (those target on-demand FLV). These knobs trade a bit
-      // of startup latency for sustained buffering:
-      //   - isLive + liveBufferLatencyChasing: keep playhead near the
-      //     live edge; without this, every network jitter pushes us
-      //     further behind until the buffer underruns.
-      //   - enableWorker: demux off the main thread → no decode pauses
-      //     blocking React renders or the video element.
-      //   - enableStashBuffer + stashInitialSize: a stash buffer is the
-      //     network jitter shock-absorber. The stream reaches the browser
-      //     via backend proxy → cloudflared tunnel → Cloudflare edge, a
-      //     path with real jitter; without a stash the demuxer starves on
-      //     every hiccup. We keep a ~1 MB stash (was disabled, which was
-      //     the main cause of "hiccups at an insane rate").
-      //   - liveBufferLatencyChasing window WIDENED: the old 2.0s max /
-      //     0.5s min remain was video-call-tight — a 0.5s buffer cannot
-      //     ride out tunnel jitter, so it underran constantly. 8s max /
-      //     2s min keeps us "live-ish" (a few seconds behind, fine for
-      //     IPTV) while leaving enough buffer to absorb stalls. This is
-      //     what the comment above always INTENDED ("sustained buffering")
-      //     but the old values didn't deliver.
-      //   - autoCleanupSourceBuffer: trim the MSE source buffer as we
-      //     go so long sessions don't bloat memory and slow the GC.
-      //   - fixAudioTimestampGap: mybunny streams have occasional TS
-      //     gaps; without this, a single discontinuity stalls audio
-      //     and the player stops.
+      // Live MPEG-TS reaches the browser via backend proxy → cloudflared
+      // tunnel → CF edge — a path with real jitter. The config favors a
+      // resilient buffer over minimal latency; the recovery + stall watchdog
+      // below turn a transient underrun into a brief reconnect instead of
+      // the frozen "spinner of death".
+      //   - enableStashBuffer (~1 MB): the jitter shock-absorber. Without
+      //     it the demuxer starves on every hiccup.
+      //   - liveBufferLatencyChasing: FALSE. When true, mpegts.js hard-SEEKS
+      //     the playhead toward the live edge whenever latency grows — a
+      //     ~6s MSE-flushing jump that itself reads as a freeze (and a wider
+      //     window makes the jump bigger). We'd rather drift a few seconds
+      //     behind live (fine for IPTV) and stay smooth.
+      //   - enableWorker: demux off the main thread.
+      //   - fixAudioTimestampGap: ride over occasional upstream TS gaps.
       const player: MpegtsPlayer = mpegts.createPlayer(
         { type: 'mpegts', isLive: true, url: grant.url },
         {
@@ -301,9 +289,7 @@ export default function IptvPlayer({
           lazyLoad: false,
           lazyLoadMaxDuration: 0,
           deferLoadAfterSourceOpen: false,
-          liveBufferLatencyChasing: true,
-          liveBufferLatencyMaxLatency: 8.0,
-          liveBufferLatencyMinRemain: 2.0,
+          liveBufferLatencyChasing: false,
           autoCleanupSourceBuffer: true,
           autoCleanupMaxBackwardDuration: 30,
           autoCleanupMinBackwardDuration: 10,
@@ -312,33 +298,88 @@ export default function IptvPlayer({
         },
       )
 
-      // Network errors are common on live IPTV (CDN hiccups, upstream
-      // segment drops). Try to recover automatically — re-issuing
-      // load() resumes from the live edge so the user just sees a
-      // brief stutter rather than a permanent stall.
+      // ── Recovery + stall watchdog ───────────────────────────────────────
+      // A silent bandwidth underrun fires the video element's `waiting`
+      // event but NOT mpegts' ERROR — so without a watchdog the player just
+      // freezes on the spinner forever (the "smooth ~10s then dies" symptom).
+      // Both the ERROR path and a sustained stall funnel into recover(),
+      // which reloads the engine to resume at the live edge, with exponential
+      // backoff so a jitter burst can't burn the whole budget in seconds, and
+      // a reset after a stable playing window so a later blip starts fresh.
       let recoveries = 0
-      player.on(mpegts.Events.ERROR, (...args: unknown[]) => {
-        const [errType] = args as [string]
-        if (cancelled) return
-        const isNetwork = errType === mpegts.ErrorTypes.NETWORK_ERROR
-        const isMedia = errType === mpegts.ErrorTypes.MEDIA_ERROR
-        if ((isNetwork || isMedia) && recoveries < 5) {
-          recoveries += 1
+      let recovering = false
+      let stallTimer: number | null = null
+      let stableTimer: number | null = null
+      let stallMark = 0
+      const RECOVERY_CAP = 8
+
+      const recover = () => {
+        if (cancelled || recovering) return
+        if (recoveries >= RECOVERY_CAP) {
+          setError('Live stream interrupted. Close and re-open the channel to retry.')
+          return
+        }
+        recovering = true
+        const delay = Math.min(500 * 2 ** recoveries, 8000)
+        recoveries += 1
+        window.setTimeout(() => {
+          if (cancelled) return
           try {
             player.unload()
             player.load()
             void player.play()
           } catch {
-            /* fall through to error message */
+            /* a later waiting/error will retry */
           }
-          return
+          recovering = false
+        }, delay)
+      }
+
+      const clearStall = () => {
+        if (stallTimer !== null) {
+          window.clearTimeout(stallTimer)
+          stallTimer = null
         }
-        setError('Live stream interrupted. Close and re-open the channel to retry.')
+      }
+      const onStall = () => {
+        if (stallTimer !== null || recovering) return
+        stallMark = video.currentTime
+        // Give the buffer a few seconds to refill on its own; only force a
+        // live-edge reload if the playhead genuinely hasn't advanced.
+        stallTimer = window.setTimeout(() => {
+          stallTimer = null
+          if (cancelled) return
+          if (video.currentTime <= stallMark + 0.1) recover()
+        }, 4000)
+      }
+      const onProgress = () => {
+        clearStall()
+        if (stableTimer === null) {
+          stableTimer = window.setTimeout(() => {
+            recoveries = 0
+            stableTimer = null
+          }, 12000)
+        }
+      }
+
+      player.on(mpegts.Events.ERROR, () => {
+        if (cancelled) return
+        recover()
       })
+      video.addEventListener('waiting', onStall)
+      video.addEventListener('stalled', onStall)
+      video.addEventListener('playing', onProgress)
+      video.addEventListener('timeupdate', onProgress)
 
       player.attachMediaElement(video)
       player.load()
       cleanupEngine = () => {
+        clearStall()
+        if (stableTimer !== null) window.clearTimeout(stableTimer)
+        video.removeEventListener('waiting', onStall)
+        video.removeEventListener('stalled', onStall)
+        video.removeEventListener('playing', onProgress)
+        video.removeEventListener('timeupdate', onProgress)
         player.unload()
         player.detachMediaElement()
         player.destroy()
