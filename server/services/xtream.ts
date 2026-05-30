@@ -1,6 +1,6 @@
 import { env } from '../env.js'
 import { fetchJsonWithTimeout, fetchWithTimeout } from './upstream.js'
-import { normalizeEpgChannelId } from './iptvEpg.js'
+import { normalizeEpgChannelId, type EpgProgrammeRow } from './iptvEpg.js'
 
 export interface XtreamCreds {
   host: string
