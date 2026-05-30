@@ -211,8 +211,20 @@ fn production_argv_produces_playable_hls() {
         String::from_utf8_lossy(&probe.stderr)
     );
     let codec_type = String::from_utf8_lossy(&probe.stdout);
+    // An HLS segment is MPEG-TS, which carries a PROGRAM. ffprobe therefore
+    // enumerates each selected stream twice — once under `[PROGRAM]` and once
+    // under the top-level `[STREAM]` list — so `-select_streams v:0` legitimately
+    // prints "video" on more than one line (verified on static-ffmpeg 7.1 and
+    // ffmpeg 8.1 alike). The honest assertion is that ffprobe resolved at least
+    // one video stream and EVERY codec_type it reported for v:0 is "video" — not
+    // that the raw stdout equals the single string "video".
+    let codec_lines: Vec<&str> = codec_type
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
     assert!(
-        codec_type.trim() == "video",
+        !codec_lines.is_empty() && codec_lines.iter().all(|&l| l == "video"),
         "segment has no decodable video stream (ffprobe reported {codec_type:?})"
     );
 }
