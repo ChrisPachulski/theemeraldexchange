@@ -30,6 +30,23 @@ describe('iptv concurrency tracker', () => {
     }
   })
 
+  it('dedupes a re-grant for the same (sub, kind, resourceId) — no double-booking', () => {
+    const t = createConcurrencyTracker({ cap: 2, idleMs: 30_000 })
+    // Same user re-selects the SAME channel (resourceId '1') with a fresh
+    // sessionId. Must REPLACE the prior session, not hold two slots.
+    expect(t.tryAcquire(baseOpts('u1', 's1')).ok).toBe(true)
+    expect(t.tryAcquire(baseOpts('u1', 's2')).ok).toBe(true)
+    expect(t.size()).toBe(1)
+    expect(t.list().map((s) => s.sessionId)).toEqual(['s2'])
+  })
+
+  it('does NOT dedupe different channels for the same user', () => {
+    const t = createConcurrencyTracker({ cap: 2, idleMs: 30_000 })
+    expect(t.tryAcquire(baseOpts('u1', 's1')).ok).toBe(true) // resourceId '1'
+    expect(t.tryAcquire({ ...baseOpts('u1', 's2'), resourceId: '2' }).ok).toBe(true)
+    expect(t.size()).toBe(2)
+  })
+
   it('releases on heartbeat timeout', () => {
     const t = createConcurrencyTracker({ cap: 1, idleMs: 100 })
     t.tryAcquire(baseOpts('u1', 's1'))
