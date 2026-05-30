@@ -17,11 +17,16 @@ vi.mock('../services/upstream.js', () => ({
 }))
 
 vi.mock('../middleware/auth.js', () => ({
-  requireAuth: (c: unknown, next: unknown) => {
+  requireAuth: (c: { set: (k: string, v: unknown) => void }, next: () => unknown) => {
     c.set('session', { userId: 'u1', role: 'admin' })
     return next()
   },
 }))
+
+// Shape of the second arg the route passes to fetchWithTimeout: a fetch
+// RequestInit whose headers we assert on. Narrow once here so the call-site
+// casts stay readable.
+type FetchInitWithHeaders = { headers: Record<string, string> }
 
 vi.mock('../services/recommenderCaller.js', () => ({
   recommenderCallerFromSession: vi.fn(() => ({ kind: 'user', id: 'u1' })),
@@ -62,7 +67,7 @@ describe('media proxy route', () => {
     expect(mockFetch).toHaveBeenCalledOnce()
     const [url, init] = mockFetch.mock.calls[0]
     expect(url).toBe('http://media-core.test/api/media/movies')
-    expect((init as unknown as Parameters<typeof handler>[0]).headers['authorization']).toBe('Bearer minted-token')
+    expect((init as FetchInitWithHeaders).headers['authorization']).toBe('Bearer minted-token')
   })
 
   it('fails closed with 502 when mint throws while a secret is configured', async () => {
@@ -104,7 +109,7 @@ describe('media proxy route', () => {
 
     // inbound Range forwarded upstream
     const [, init] = mockFetch.mock.calls[0]
-    expect((init as unknown as Parameters<typeof handler>[0]).headers['range']).toBe('bytes=0-1023')
+    expect((init as FetchInitWithHeaders).headers['range']).toBe('bytes=0-1023')
 
     // upstream 206 + range headers preserved on the way back
     expect(res.status).toBe(206)
@@ -130,8 +135,8 @@ describe('media proxy route', () => {
     })
 
     const [, init] = mockFetch.mock.calls[0]
-    expect((init as unknown as Parameters<typeof handler>[0]).headers['if-none-match']).toBe('"abc123"')
-    expect((init as unknown as Parameters<typeof handler>[0]).headers['if-modified-since']).toBe('Wed, 21 Oct 2025 07:28:00 GMT')
+    expect((init as FetchInitWithHeaders).headers['if-none-match']).toBe('"abc123"')
+    expect((init as FetchInitWithHeaders).headers['if-modified-since']).toBe('Wed, 21 Oct 2025 07:28:00 GMT')
 
     expect(res.status).toBe(304)
     expect(res.headers.get('etag')).toBe('"abc123"')
@@ -155,7 +160,7 @@ describe('media proxy route', () => {
   })
 
   it('proxies anonymously in off posture (no caller) without failing closed', async () => {
-    mockCaller.mockReturnValue(null as unknown as Parameters<typeof handler>[0])
+    mockCaller.mockReturnValue(null as unknown as ReturnType<typeof recommenderCallerFromSession>)
     mockFetch.mockResolvedValue(new Response('x', { status: 200 }))
 
     const res = await media.request('/movies', {
@@ -166,7 +171,7 @@ describe('media proxy route', () => {
     expect(res.status).toBe(200)
     expect(mockFetch).toHaveBeenCalledOnce()
     const [, init] = mockFetch.mock.calls[0]
-    expect((init as unknown as Parameters<typeof handler>[0]).headers['authorization']).toBeUndefined()
+    expect((init as FetchInitWithHeaders).headers['authorization']).toBeUndefined()
     expect(mockMint).not.toHaveBeenCalled()
   })
 
@@ -182,6 +187,6 @@ describe('media proxy route', () => {
     expect(res.status).toBe(200)
     expect(mockFetch).toHaveBeenCalledOnce()
     const [, init] = mockFetch.mock.calls[0]
-    expect((init as unknown as Parameters<typeof handler>[0]).headers['content-type']).toBe('application/json')
+    expect((init as FetchInitWithHeaders).headers['content-type']).toBe('application/json')
   })
 })
