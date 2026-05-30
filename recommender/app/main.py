@@ -14,6 +14,7 @@ import time
 from collections.abc import Iterator
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
+from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -119,6 +120,27 @@ def require_event_secret(
         raise HTTPException(status_code=401, detail="invalid event secret")
 
 
+def authoritative_sub(principal: InternalPrincipal | None, body_sub: str) -> str:
+    """Resolve which ``sub`` to trust for a mutating event.
+
+    The body-supplied ``sub`` is spoofable by anything on the docker network
+    holding the shared event secret. When the internal-principal bridge is
+    active (mode log/enforce) the server mints a verified caller identity, so we
+    prefer ``principal.sub`` over the body. In enforce mode a body that
+    disagrees with the verified principal is rejected — a caller may not write
+    feedback/impressions on behalf of another sub. In off mode the principal is
+    None and we fall back to the body, preserving current behavior.
+    """
+    if principal is None:
+        return body_sub
+    if CONFIG.internal_principal_mode == "enforce" and body_sub != principal.sub:
+        raise HTTPException(
+            status_code=403,
+            detail="sub does not match verified internal-principal",
+        )
+    return principal.sub
+
+
 @app.get("/health", response_model=HealthResponse)
 def health(conn: sqlite3.Connection = Depends(get_db)) -> HealthResponse:
     titles = conn.execute("SELECT COUNT(*) AS c FROM titles").fetchone()["c"]
@@ -126,12 +148,24 @@ def health(conn: sqlite3.Connection = Depends(get_db)) -> HealthResponse:
     cfg_row = conn.execute(
         "SELECT version FROM model_config WHERE active = 1 LIMIT 1"
     ).fetchone()
+    # Surface the caller-identity enforcement mode + optimizer holdout status so
+    # operators can detect an identity-unauthenticated ("off") or record-only
+    # deployment at a glance.
+    optimizer_status: dict[str, Any]
+    try:
+        from workers import optimizer
+
+        optimizer_status = optimizer.holdout_status()
+    except Exception:  # noqa: BLE001 - /health must never 500 on an optional probe
+        optimizer_status = {"mode": "unknown"}
     return HealthResponse(
         ok=True,
         db_path=str(CONFIG.db_path),
         titles=titles,
         title_vectors=vecs,
         active_model_version=cfg_row["version"] if cfg_row else None,
+        internal_principal_mode=CONFIG.internal_principal_mode,
+        optimizer=optimizer_status,
     )
 
 
@@ -173,9 +207,11 @@ def score(
 def post_feedback(
     ev: FeedbackEventRequest,
     _auth: None = Depends(require_event_secret),
-    _principal: InternalPrincipal | None = Depends(internal_principal_dep),
+    principal: InternalPrincipal | None = Depends(internal_principal_dep),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, bool]:
+    # Trust the verified caller identity over the spoofable body sub.
+    ev = ev.model_copy(update={"sub": authoritative_sub(principal, ev.sub)})
     now = _utc_now_iso()
     with transaction(conn):
         if ev.signal in {"like", "clicked", "added"}:
@@ -306,7 +342,7 @@ def post_library_sync(
 def post_shown(
     payload: ShownEventRequest,
     _auth: None = Depends(require_event_secret),
-    _principal: InternalPrincipal | None = Depends(internal_principal_dep),
+    principal: InternalPrincipal | None = Depends(internal_principal_dep),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, int]:
     """Bulk-record items as 'recently shown' for a user.
@@ -327,6 +363,7 @@ def post_shown(
         raise HTTPException(status_code=413, detail="shown event batch too large")
     if not payload.tmdb_ids:
         return {"count": 0}
+    payload = payload.model_copy(update={"sub": authoritative_sub(principal, payload.sub)})
     now = _utc_now_iso()
     with transaction(conn):
         conn.executemany(
@@ -346,13 +383,14 @@ def post_shown(
 def post_impressions(
     payload: ImpressionEventRequest,
     _auth: None = Depends(require_event_secret),
-    _principal: InternalPrincipal | None = Depends(internal_principal_dep),
+    principal: InternalPrincipal | None = Depends(internal_principal_dep),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, int]:
     if len(payload.items) > 200:
         raise HTTPException(status_code=413, detail="impression event batch too large")
     if not payload.items:
         return {"count": 0}
+    payload = payload.model_copy(update={"sub": authoritative_sub(principal, payload.sub)})
     now = _utc_now_iso()
     with transaction(conn):
         conn.executemany(
@@ -405,9 +443,10 @@ def post_rejection(
 def clear_feedback(
     payload: ClearFeedbackRequest,
     _auth: None = Depends(require_event_secret),
-    _principal: InternalPrincipal | None = Depends(internal_principal_dep),
+    principal: InternalPrincipal | None = Depends(internal_principal_dep),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, bool]:
+    payload = payload.model_copy(update={"sub": authoritative_sub(principal, payload.sub)})
     signal_to_outcome = {
         "like": "liked",
         "dislike": "disliked",
