@@ -83,10 +83,16 @@ async function waitForReadable(input: Readable, signal?: AbortSignal): Promise<'
   })
 }
 
+export interface XmltvChannelDef {
+  id: string
+  names: string[]
+}
+
 export async function streamXmltv(
   input: Readable,
   onProgramme: (row: EpgProgrammeRow) => void,
   signal?: AbortSignal,
+  onChannelDef?: (def: XmltvChannelDef) => void,
 ): Promise<void> {
   // Auto-detect gzip by reading the first two bytes.
   const headChunks: Buffer[] = []
@@ -115,6 +121,13 @@ export async function streamXmltv(
   let inTitle = false
   let inDesc = false
   let counter = 0
+  // Channel-definition capture (<channel id="…"><display-name>…</display-name>).
+  // The feed ships many display-name aliases per channel so players can match
+  // schedules by name, not just by exact tvg-id. Captured in the same pass.
+  let chanId: string | null = null
+  let chanNames: string[] = []
+  let inDisplayName = false
+  let dnText = ''
 
   parser.on('opentag', (node) => {
     if (node.name === 'programme') {
@@ -130,17 +143,34 @@ export async function streamXmltv(
       } catch {
         cur = null
       }
+    } else if (node.name === 'channel') {
+      const a = node.attributes as Record<string, string>
+      chanId = a.id ?? null
+      chanNames = []
+    } else if (chanId && node.name === 'display-name') {
+      inDisplayName = true; dnText = ''
     } else if (cur && node.name === 'title') {
       inTitle = true; text = ''
     } else if (cur && node.name === 'desc') {
       inDesc = true; text = ''
     }
   })
-  parser.on('text', (t) => { if (inTitle || inDesc) text += t })
+  parser.on('text', (t) => {
+    if (inTitle || inDesc) text += t
+    else if (inDisplayName) dnText += t
+  })
   parser.on('closetag', (name) => {
     if (name === 'title' && inTitle && cur) { cur.title = text || null; inTitle = false; text = '' }
     else if (name === 'desc' && inDesc && cur) { cur.description = text || null; inDesc = false; text = '' }
-    else if (name === 'programme' && cur) {
+    else if (name === 'display-name' && inDisplayName) {
+      if (dnText) chanNames.push(dnText)
+      inDisplayName = false; dnText = ''
+    } else if (name === 'channel') {
+      if (chanId && onChannelDef) onChannelDef({ id: chanId, names: chanNames })
+      chanId = null; chanNames = []
+      counter += 1
+      if (counter % 500 === 0) void yieldEventLoop()
+    } else if (name === 'programme' && cur) {
       if (cur.channel_id && cur.start_utc && cur.stop_utc) {
         onProgramme(cur as EpgProgrammeRow)
       }
@@ -188,6 +218,7 @@ export async function streamXmltv(
 export async function fetchAndStreamEpg(
   onProgramme: (row: EpgProgrammeRow) => void,
   hostOverride?: { host: string; username: string; password: string },
+  onChannelDef?: (def: XmltvChannelDef) => void,
 ): Promise<void> {
   const host = (hostOverride?.host ?? env.XTREAM_HOST).replace(/\/+$/, '')
   const user = hostOverride?.username ?? env.XTREAM_USERNAME
@@ -216,7 +247,7 @@ export async function fetchAndStreamEpg(
         yield chunk
       }
     })())
-    await streamXmltv(nodeStream, onProgramme, controller.signal)
+    await streamXmltv(nodeStream, onProgramme, controller.signal, onChannelDef)
   } catch (err) {
     if (controller.signal.aborted) throw abortReason(controller.signal)
     throw err
