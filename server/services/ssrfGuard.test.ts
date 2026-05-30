@@ -1,5 +1,10 @@
-import { describe, it, expect } from 'vitest'
-import { isPublicHttpsUpstream } from './ssrfGuard.js'
+import { describe, it, expect, afterEach } from 'vitest'
+import {
+  isPublicHttpsUpstream,
+  assertResolvesPublic,
+  SsrfBlockedError,
+  __setSsrfLookupForTests,
+} from './ssrfGuard.js'
 
 const ok = (u: string) => isPublicHttpsUpstream(new URL(u))
 
@@ -50,5 +55,46 @@ describe('isPublicHttpsUpstream', () => {
     expect(ok('https://media-core/api')).toBe(false)
     expect(ok('https://db.internal/x')).toBe(false)
     expect(ok('https://host.local/x')).toBe(false)
+  })
+})
+
+describe('assertResolvesPublic (DNS rebinding defense)', () => {
+  afterEach(() => __setSsrfLookupForTests(null))
+
+  it('rejects a public hostname that resolves to cloud metadata', async () => {
+    __setSsrfLookupForTests(async () => [{ address: '169.254.169.254' }])
+    await expect(assertResolvesPublic('rebind.attacker.example')).rejects.toBeInstanceOf(
+      SsrfBlockedError,
+    )
+  })
+
+  it('rejects when ANY of several resolved addresses is private', async () => {
+    __setSsrfLookupForTests(async () => [
+      { address: '203.0.113.10' }, // public
+      { address: '10.0.0.5' }, // private — one bad record taints the set
+    ])
+    await expect(assertResolvesPublic('mixed.example')).rejects.toBeInstanceOf(SsrfBlockedError)
+  })
+
+  it('rejects a hostname that resolves to a private IPv6 address', async () => {
+    __setSsrfLookupForTests(async () => [{ address: 'fd00::1' }])
+    await expect(assertResolvesPublic('v6.example')).rejects.toBeInstanceOf(SsrfBlockedError)
+  })
+
+  it('allows a hostname that resolves entirely to public addresses', async () => {
+    __setSsrfLookupForTests(async () => [{ address: '8.8.8.8' }, { address: '203.0.113.1' }])
+    await expect(assertResolvesPublic('good.example')).resolves.toBeUndefined()
+  })
+
+  it('rejects when DNS resolution fails (fail closed)', async () => {
+    __setSsrfLookupForTests(async () => {
+      throw new Error('ENOTFOUND')
+    })
+    await expect(assertResolvesPublic('nxdomain.example')).rejects.toBeInstanceOf(SsrfBlockedError)
+  })
+
+  it('validates an IP literal directly without a DNS round-trip', async () => {
+    // No resolver override needed — a private literal is rejected synchronously.
+    await expect(assertResolvesPublic('10.0.0.1')).rejects.toBeInstanceOf(SsrfBlockedError)
   })
 })

@@ -22,6 +22,7 @@ import {
   heartbeatRemuxSession,
   stopRemuxSession,
   listRemuxSessions,
+  drainRemuxSessions,
   scrubXtreamCreds,
 } from './iptvRemux.js'
 
@@ -96,6 +97,31 @@ describe('iptv remux session', () => {
     proc.emit('exit', 0, null)
 
     expect(listRemuxSessions().some((x) => x.sessionId === s.sessionId)).toBe(false)
+  })
+
+  it('drainRemuxSessions SIGTERMs every active session and clears the registry (finding 14-2)', async () => {
+    const procs: FakeProcess[] = []
+    spawnMock.mockImplementation(() => {
+      const p = fakeProcess()
+      procs.push(p)
+      return p
+    })
+    startRemuxSession({ streamId: '20', sub: 'plex:a', upstreamUrl: 'https://x/a.ts' })
+    startRemuxSession({ streamId: '21', sub: 'plex:b', upstreamUrl: 'https://x/b.ts' })
+    expect(listRemuxSessions()).toHaveLength(2)
+
+    // stopRemuxSession (called by drain) deletes the Map entry synchronously and
+    // SIGTERMs the child, so drain resolves promptly and the registry is empty.
+    await drainRemuxSessions(2_000)
+
+    for (const p of procs) expect(p.kill).toHaveBeenCalledWith('SIGTERM')
+    expect(listRemuxSessions()).toHaveLength(0)
+  })
+
+  it('drainRemuxSessions is a no-op with no active sessions', async () => {
+    // Ensure the registry is empty first (beforeEach already stops any leftovers).
+    for (const s of listRemuxSessions()) stopRemuxSession(s.sessionId)
+    await expect(drainRemuxSessions(100)).resolves.toBeUndefined()
   })
 })
 

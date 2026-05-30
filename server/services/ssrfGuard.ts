@@ -58,6 +58,13 @@ function isInternalHostname(host: string): boolean {
  * True only when `url` is safe to proxy: https scheme and a host that is a
  * public address. Rejects http, IP literals in private/loopback/link-local/
  * reserved ranges, and bare internal hostnames.
+ *
+ * NOTE: this is a STRING-only check. A public DNS name that *resolves* to a
+ * private address (DNS rebinding) passes here — callers MUST additionally
+ * resolve-and-validate the host's IPs (see `assertResolvesPublic`) and route
+ * egress through `guardedFetch`, which re-runs both checks on every redirect
+ * hop. Keep this function for the cheap up-front reject; never rely on it
+ * alone before a `fetch()`.
  */
 export function isPublicHttpsUpstream(url: URL): boolean {
   if (url.protocol !== 'https:') return false
@@ -68,4 +75,160 @@ export function isPublicHttpsUpstream(url: URL): boolean {
   if (host.includes(':') && isPrivateIPv6(host)) return false
   if (isInternalHostname(host)) return false
   return true
+}
+
+import { lookup as nodeDnsLookup } from 'node:dns/promises'
+
+/** Minimal shape of dns.promises.lookup(host, { all: true }). */
+type LookupAll = (host: string) => Promise<Array<{ address: string }>>
+
+// Indirection so tests can supply a deterministic resolver instead of doing
+// real DNS (which would make resolve-and-validate flaky and network-bound).
+let lookupAll: LookupAll = (host) => nodeDnsLookup(host, { all: true })
+
+/** TEST-ONLY: override the DNS resolver used by assertResolvesPublic. */
+export function __setSsrfLookupForTests(fn: LookupAll | null): void {
+  lookupAll = fn ?? ((host) => nodeDnsLookup(host, { all: true }))
+}
+
+/** True when a resolved literal address (IPv4 or IPv6) is private/reserved. */
+function isPrivateAddress(address: string): boolean {
+  if (address.includes(':')) return isPrivateIPv6(address)
+  return isPrivateIPv4(address)
+}
+
+/**
+ * Resolve `host` to all A/AAAA records and reject if ANY of them is a
+ * private / loopback / link-local / reserved address. This closes the
+ * DNS-rebinding gap that `isPublicHttpsUpstream` (string-only) leaves open:
+ * a public name whose A record points at 169.254.169.254 / 127.0.0.1 /
+ * RFC-1918 is refused before we connect.
+ *
+ * Throws `SsrfBlockedError` on any private address or resolution failure.
+ * The resolve happens immediately before egress to minimise the TOCTOU
+ * window. (Full IP pinning would require an undici connect hook; undici is
+ * not a dependency here, so we accept the residual sub-second rebind window
+ * and instead re-validate on every redirect — the dominant exploit path.)
+ */
+export async function assertResolvesPublic(host: string): Promise<void> {
+  // An IP literal needs no DNS round-trip; validate it directly.
+  if (isPrivateIPv4(host) || (host.includes(':') && isPrivateIPv6(host))) {
+    throw new SsrfBlockedError(`blocked private/reserved address: ${host}`)
+  }
+  // Bracketless IPv6 / dotted IPv4 literals that are public still don't need
+  // resolution; only resolve actual names.
+  const isIpLiteral =
+    /^(\d{1,3}\.){3}\d{1,3}$/.test(host) || host.includes(':')
+  if (isIpLiteral) return
+
+  let records: Array<{ address: string }>
+  try {
+    records = await lookupAll(host)
+  } catch (err) {
+    throw new SsrfBlockedError(
+      `dns resolution failed for ${host}: ${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
+  if (records.length === 0) {
+    throw new SsrfBlockedError(`dns resolution returned no records for ${host}`)
+  }
+  for (const { address } of records) {
+    if (isPrivateAddress(address)) {
+      throw new SsrfBlockedError(
+        `host ${host} resolves to private/reserved address ${address}`,
+      )
+    }
+  }
+}
+
+/** Thrown when an egress target fails the SSRF guard. */
+export class SsrfBlockedError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'SsrfBlockedError'
+  }
+}
+
+const MAX_REDIRECTS = 5
+
+interface EgressOptions {
+  /**
+   * When true, the INITIAL url must pass the full public-https guard
+   * (https-only + public host + resolves-public). Use for attacker-
+   * influenceable URLs (HLS manifest/segment `rid`).
+   *
+   * When false, the initial url is trusted (operator-configured Xtream
+   * creds host, which may legitimately be plain http) and is fetched
+   * as-is — but every REDIRECT target is still fully guarded, since an
+   * upstream-issued 30x is attacker-influenceable and could point at an
+   * internal address.
+   */
+  guardInitial: boolean
+}
+
+async function guardHop(rawUrl: string): Promise<void> {
+  let parsed: URL
+  try {
+    parsed = new URL(rawUrl)
+  } catch {
+    throw new SsrfBlockedError(`malformed upstream url: ${rawUrl}`)
+  }
+  if (!isPublicHttpsUpstream(parsed)) {
+    throw new SsrfBlockedError(`blocked non-public upstream: ${parsed.protocol}//${parsed.hostname}`)
+  }
+  await assertResolvesPublic(parsed.hostname)
+}
+
+/**
+ * Core SSRF-hardened egress loop. Sets `redirect: 'manual'` so a 30x to an
+ * internal host is re-checked here instead of being followed blindly by the
+ * platform fetch, and bounds redirect depth at MAX_REDIRECTS. The final
+ * (non-redirect) Response is returned for the caller to stream. Throws
+ * `SsrfBlockedError` if any guarded hop fails.
+ */
+async function egress(
+  initialUrl: string,
+  init: RequestInit | undefined,
+  opts: EgressOptions,
+): Promise<Response> {
+  let currentUrl = initialUrl
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    // The initial hop is guarded only when guardInitial is set; every
+    // subsequent (redirect) hop is ALWAYS guarded.
+    if (hop > 0 || opts.guardInitial) {
+      await guardHop(currentUrl)
+    }
+
+    const res = await fetch(currentUrl, { ...init, redirect: 'manual' })
+
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get('location')
+      if (!location) return res // malformed redirect; hand back as-is
+      // Drain the redirect body so the socket can be reused.
+      await res.body?.cancel().catch(() => {})
+      currentUrl = new URL(location, currentUrl).toString()
+      continue
+    }
+    return res
+  }
+  throw new SsrfBlockedError(`too many redirects (>${MAX_REDIRECTS}) for ${initialUrl}`)
+}
+
+/**
+ * SSRF-hardened replacement for `fetch()` when the target URL itself is
+ * attacker-influenceable (HLS manifest sub-playlist / segment `rid`). The
+ * initial URL and every redirect hop must be https + public + resolve-public.
+ */
+export function guardedFetch(initialUrl: string, init?: RequestInit): Promise<Response> {
+  return egress(initialUrl, init, { guardInitial: true })
+}
+
+/**
+ * SSRF-hardened fetch for a TRUSTED initial origin (operator-configured
+ * Xtream creds host, which may be plain http) that must still be protected
+ * against an upstream-issued redirect into the internal network. The initial
+ * URL is fetched as-is; every redirect target is fully guarded.
+ */
+export function guardedFetchTrustedOrigin(initialUrl: string, init?: RequestInit): Promise<Response> {
+  return egress(initialUrl, init, { guardInitial: false })
 }

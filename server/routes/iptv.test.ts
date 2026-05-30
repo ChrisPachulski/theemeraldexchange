@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest'
 import { Hono, type MiddlewareHandler } from 'hono'
 import { openIptvDb, type IptvDb } from '../services/iptvDb.js'
 import { iptv } from './iptv.js'
+import { __setSsrfLookupForTests } from '../services/ssrfGuard.js'
 import { env } from '../env.js'
 
 const dbState = vi.hoisted(() => ({
@@ -64,7 +65,9 @@ vi.mock('../services/iptvConcurrency.js', () => ({
   streamConcurrency: vi.fn(() => ({
     tryAcquire: vi.fn(({ sessionId }: { sessionId: string }) => ({ ok: true, sessionId })),
     heartbeat: vi.fn(),
+    heartbeatByResource: vi.fn(() => true),
     release: vi.fn(),
+    releaseByResource: vi.fn(() => true),
     sweep: vi.fn(),
     size: vi.fn(() => 0),
   })),
@@ -184,6 +187,10 @@ vi.mock('../services/iptvCatalog.js', () => ({
 }))
 
 beforeAll(() => {
+  // Deterministic SSRF resolver: every name resolves to a public IP unless a
+  // specific test overrides it. Keeps guardedFetch's resolve-and-validate step
+  // off real, flaky, network-bound DNS (findings 8-0/16-0/3-1).
+  __setSsrfLookupForTests(async () => [{ address: '203.0.113.7' }])
   dbState.testDb = openIptvDb(':memory:')
   dbState.testDb.stmts.upsertChannel.run({
     stream_id: 10,
@@ -238,6 +245,7 @@ beforeAll(() => {
 })
 
 afterAll(() => {
+  __setSsrfLookupForTests(null)
   dbState.testDb?.close()
   dbState.testDb = null
 })
@@ -272,6 +280,7 @@ describe('vod stream grant + proxy', () => {
     expect(res.headers.get('content-range')).toBe('bytes 0-2/10')
     expect(fetchSpy).toHaveBeenCalledWith('https://panel.example.com/movie/u/p/20.mp4', expect.objectContaining({
       headers: { Range: 'bytes=0-2' },
+      redirect: 'manual',
     }))
     fetchSpy.mockRestore()
   })
@@ -290,7 +299,10 @@ describe('vod stream grant + proxy', () => {
     const text = await res.text()
 
     expect(res.status).toBe(200)
-    expect(fetchSpy).toHaveBeenCalledWith('https://panel.example.com/movie/u/p/20.m3u8')
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://panel.example.com/movie/u/p/20.m3u8',
+      expect.objectContaining({ redirect: 'manual' }),
+    )
     expect(text).toContain(`/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', 'https://panel.example.com/movie/u/p/seg-001.ts'))}`)
     fetchSpy.mockRestore()
   })
@@ -371,8 +383,50 @@ describe('segment proxy', () => {
     const text = await res.text()
 
     expect(res.status).toBe(200)
-    expect(fetchSpy).toHaveBeenCalledWith(upstreamUrl)
+    expect(fetchSpy).toHaveBeenCalledWith(upstreamUrl, expect.objectContaining({ redirect: 'manual' }))
     expect(text).toContain(`/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', 'https://cdn.example.com/foo/seg.ts'))}`)
+    fetchSpy.mockRestore()
+  })
+
+  it('refuses a segment whose public host RESOLVES to cloud metadata (DNS rebinding, finding 3-1/16-0)', async () => {
+    // The host string passes isPublicHttpsUpstream, but DNS points at the
+    // link-local cloud-metadata address — resolve-and-validate must reject
+    // BEFORE any egress.
+    __setSsrfLookupForTests(async () => [{ address: '169.254.169.254' }])
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    const res = await app.request(
+      `/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', 'https://rebind.attacker.example/seg.ts'))}`,
+    )
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toBe('bad_upstream')
+    expect(fetchSpy).not.toHaveBeenCalled()
+    fetchSpy.mockRestore()
+    // Restore the file-wide deterministic public resolver for later tests.
+    __setSsrfLookupForTests(async () => [{ address: '203.0.113.7' }])
+  })
+
+  it('refuses a segment whose upstream 302-redirects to an internal host (finding 8-0)', async () => {
+    // First hop resolves public + returns a 302 Location at a private host;
+    // the redirect target must be re-validated and refused, not followed.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: string | URL | Request) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (url.includes('cdn.example.com')) {
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://169.254.169.254/latest/meta-data/' },
+        })
+      }
+      return new Response('internal-secret', { status: 200 })
+    })
+    const res = await app.request(
+      `/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', 'https://cdn.example.com/seg.ts'))}`,
+    )
+    expect(res.status).toBe(400)
+    // The metadata URL must never have been fetched.
+    expect(fetchSpy).not.toHaveBeenCalledWith(
+      'https://169.254.169.254/latest/meta-data/',
+      expect.anything(),
+    )
     fetchSpy.mockRestore()
   })
 })

@@ -1,0 +1,28 @@
+// Cron registration for the scheduled DB backup (finding 14-4).
+//
+// Kept separate from iptvScheduler so it runs even on IPTV_DISABLED builds —
+// server.db durability is NOT IPTV-gated (it holds server_id + device tokens).
+// Returns the scheduled task so graceful shutdown can .stop() it (finding 14-2).
+
+import cron, { type ScheduledTask } from 'node-cron'
+import { runScheduledBackup } from './dbBackup.js'
+import { env } from '../env.js'
+
+const DEFAULT_DB_BACKUP_CRON = '30 3 * * *'
+
+export function registerDbBackupSchedule(cronExpr: string): ScheduledTask {
+  const expr = cron.validate(cronExpr) ? cronExpr : DEFAULT_DB_BACKUP_CRON
+  if (expr !== cronExpr) {
+    console.error(`[backup] invalid DB_BACKUP_CRON ${JSON.stringify(cronExpr)}; using ${DEFAULT_DB_BACKUP_CRON}`)
+  }
+  return cron.schedule(expr, () => {
+    try {
+      const result = runScheduledBackup()
+      console.log(
+        `[backup] snapshot ok: ${result.files.length} file(s) in ${result.dir}, stamped ${result.stampedAt}`,
+      )
+    } catch (err) {
+      console.error('[backup] scheduled backup failed:', err instanceof Error ? err.message : String(err))
+    }
+  })
+}

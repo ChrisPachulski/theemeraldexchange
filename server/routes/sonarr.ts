@@ -4,6 +4,7 @@
 
 import { Hono } from 'hono'
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
+import { rateLimit } from '../middleware/rateLimit.js'
 import { sonarrFetch, sonarrRootFolders } from '../services/sonarr.js'
 import { appendGrabEvent } from '../services/grabLog.js'
 import { postFeedback } from '../services/recommender.js'
@@ -14,6 +15,17 @@ export const sonarr = new Hono<Env>()
 
 // Reads — both roles
 sonarr.use('*', requireAuth)
+
+// Per-session token bucket on the release-search-bearing mutate routes
+// (finding 4-0). Series add + season-monitor each kick a real per-season
+// interactive indexer search; cap the rate to stop an authenticated loop
+// from burning the indexer/usenet budget.
+const sonarrMutateLimit = rateLimit({
+  name: 'sonarr-mutate',
+  capacity: env.arrMutateRateCapacity,
+  refill: env.arrMutateRateRefill,
+  intervalMs: env.arrMutateRateIntervalMs,
+})
 
 type SonarrGrabEvent = Parameters<typeof appendGrabEvent>[0]
 type RootFolderSpaceSnapshot = { path: string; freeSpace: number }
@@ -485,7 +497,7 @@ async function materializeNonAdminSeriesBody(raw: SonarrAddBody): Promise<
   return { ok: true, body: safe }
 }
 
-sonarr.post('/api/v3/series', async (c) => {
+sonarr.post('/api/v3/series', sonarrMutateLimit, async (c) => {
   const session = c.get('session')
   const parsedBody = await c.req.json().catch(() => null)
   if (!parsedBody || typeof parsedBody !== 'object' || Array.isArray(parsedBody)) {
@@ -740,7 +752,7 @@ sonarr.post('/api/v3/series', async (c) => {
 // season" from inside the dashboard without exposing the full series
 // edit surface. This route does the targeted thing: PUT the series
 // with that one season flipped, then kick the cap grab.
-sonarr.post('/api/v3/series/:id/seasons/:n/monitor', requireAdmin, async (c) => {
+sonarr.post('/api/v3/series/:id/seasons/:n/monitor', requireAdmin, sonarrMutateLimit, async (c) => {
   const id = Number(c.req.param('id'))
   const n = Number(c.req.param('n'))
   // Sonarr series ids are positive integers; season numbers are

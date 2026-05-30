@@ -60,6 +60,19 @@ describe('registerIptvSchedule', () => {
     expect(calls).toContain('*/5 * * * *')
   })
 
+  it('returns the scheduled tasks so shutdown can stop them (finding 14-2)', async () => {
+    const stops: number[] = []
+    let n = 0
+    vi.spyOn(cron, 'schedule').mockImplementation(() => {
+      const id = n++
+      return { stop: () => stops.push(id), start: () => undefined } as ReturnType<typeof cron.schedule>
+    })
+    const tasks = await registerIptvSchedule('0 */6 * * *')
+    expect(tasks).toHaveLength(2) // sync + tombstone sweep
+    for (const t of tasks) t.stop()
+    expect(stops).toHaveLength(2)
+  })
+
   it('registers tombstone sweep cron in addition to the sync cron', async () => {
     const calls: string[] = []
     vi.spyOn(cron, 'schedule').mockImplementation((expr: string) => {
