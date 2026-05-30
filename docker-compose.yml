@@ -44,6 +44,16 @@ services:
       # instance (see docs/operations/glitchtip-setup.md §4).
       EEX_TELEMETRY_DSN: "${EEX_TELEMETRY_DSN}"
       ADMINS: "${ADMINS:-}"
+      # Owner-bootstrap + admin namespaced subs (apple:/plex:/local:). The
+      # auth overhaul added env.ts READING of ADMIN_SUBS but not this
+      # passthrough, so the value lived in .env yet never reached the
+      # container — which silently locked the owner out the moment the
+      # invite/members gate became authoritative (PLEX_SERVER_ID set).
+      ADMIN_SUBS: "${ADMIN_SUBS:-}"
+      # Sign in with Apple — Services ID (aud) + explicit enable flag. Both
+      # optional; SIWA stays dormant until ENABLE_APPLE_SIGN_IN=1.
+      APPLE_CLIENT_ID: "${APPLE_CLIENT_ID:-}"
+      ENABLE_APPLE_SIGN_IN: "${ENABLE_APPLE_SIGN_IN:-}"
       PLEX_SERVER_ID: "${PLEX_SERVER_ID:-}"
       # Bootstrap escape hatch for the brief first-deploy window before
       # PLEX_SERVER_ID is known. Without this passthrough, env.ts's
