@@ -222,18 +222,19 @@ function LocalMovies({
     )
   }
   return (
-    <ResultGrid>
-      {items.map((m) => (
+    <ResultGrid
+      items={items}
+      getKey={(m) => m.id}
+      renderItem={(m) => (
         <MediaCard
-          key={m.id}
           poster={posterFor(m)}
           title={m.title}
           year={m.year ?? undefined}
           overview={m.overview ?? undefined}
           inLibrary
         />
-      ))}
-    </ResultGrid>
+      )}
+    />
   )
 }
 
@@ -276,18 +277,19 @@ function LocalShows({
     )
   }
   return (
-    <ResultGrid>
-      {items.map((s) => (
+    <ResultGrid
+      items={items}
+      getKey={(s) => s.id}
+      renderItem={(s) => (
         <MediaCard
-          key={s.id}
           poster={posterFor(s)}
           title={s.title}
           year={s.year ?? undefined}
           overview={s.overview ?? undefined}
           inLibrary
         />
-      ))}
-    </ResultGrid>
+      )}
+    />
   )
 }
 

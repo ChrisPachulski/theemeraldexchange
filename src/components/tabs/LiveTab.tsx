@@ -9,6 +9,7 @@ import { useIptvLive } from '../../lib/hooks/useIptvLive'
 import { useIptvFavoriteSet, useToggleIptvFavorite } from '../../lib/hooks/useIptvFavorites'
 import { useReportPosition } from '../../lib/hooks/useIptvHistory'
 import { useDebounced } from '../../lib/hooks/useDebounced'
+import { useModalA11y } from '../../lib/hooks/useModalA11y'
 import { ConcurrencyLimitModal } from '../iptv/ConcurrencyLimitModal'
 import {
   concurrencyPayloadFromError,
@@ -287,19 +288,11 @@ export default function LiveTab() {
       )}
 
       {playing && (
-        <div className="iptv-player-modal" role="dialog" aria-modal="true" aria-label={playing.title}>
-          <div className="iptv-player-modal__header">
-            <h2>{playing.title}</h2>
-            <button className="iptv-player-modal__close" type="button" onClick={() => setPlaying(null)} aria-label="Close player">
-              ×
-            </button>
-          </div>
-          <IptvPlayer
-            grant={playing.grant}
-            autoPlay
-            onPositionUpdate={(positionSecs, durationSecs) => reportPosition(positionSecs, durationSecs, false)}
-          />
-        </div>
+        <PlayerModal
+          playing={playing}
+          onClose={() => setPlaying(null)}
+          onPositionUpdate={(positionSecs, durationSecs) => reportPosition(positionSecs, durationSecs, false)}
+        />
       )}
 
       {concurrencyError && (
@@ -321,6 +314,40 @@ export default function LiveTab() {
   )
 }
 
+// The player modal is a plain div (role=dialog/aria-modal) rather than a
+// native <dialog> because it's a full-bleed layout, not a centered panel.
+// useModalA11y supplies the focus trap, Escape-to-close, and focus restoration
+// that aria-modal="true" promises but a bare div doesn't provide.
+function PlayerModal({
+  playing,
+  onClose,
+  onPositionUpdate,
+}: {
+  playing: { grant: StreamGrant; title: string; itemId: string }
+  onClose: () => void
+  onPositionUpdate: (positionSecs: number, durationSecs: number) => void
+}) {
+  const modalRef = useModalA11y<HTMLDivElement>(onClose)
+  return (
+    <div
+      ref={modalRef}
+      className="iptv-player-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label={playing.title}
+      tabIndex={-1}
+    >
+      <div className="iptv-player-modal__header">
+        <h2>{playing.title}</h2>
+        <button className="iptv-player-modal__close" type="button" onClick={onClose} aria-label="Close player">
+          ×
+        </button>
+      </div>
+      <IptvPlayer grant={playing.grant} autoPlay onPositionUpdate={onPositionUpdate} />
+    </div>
+  )
+}
+
 function ChannelGuide({
   channel,
   onClose,
@@ -330,6 +357,7 @@ function ChannelGuide({
   onClose: () => void
   onPlayCatchup: (programme: EpgProgrammeDto) => Promise<void>
 }) {
+  const modalRef = useModalA11y<HTMLDivElement>(onClose)
   const [pendingStart, setPendingStart] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [openedAt] = useState(() => Date.now())
@@ -354,7 +382,14 @@ function ChannelGuide({
   }
 
   return (
-    <div className="iptv-guide-modal" role="dialog" aria-modal="true" aria-label={`${channel.name} guide`}>
+    <div
+      ref={modalRef}
+      className="iptv-guide-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${channel.name} guide`}
+      tabIndex={-1}
+    >
       <div className="iptv-guide-modal__panel">
         <header className="iptv-guide-modal__header">
           <h2>{channel.name}</h2>

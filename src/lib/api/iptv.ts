@@ -1,7 +1,23 @@
-import { throwApiError } from './errors'
+import { throwApiError, ApiError } from './errors'
 import { apiUrl } from './base'
 
 const BASE = '/api/iptv'
+
+// A stalled backend must not pin a query in 'pending' forever — abort and
+// surface a clear error instead. ~15s covers slow grants without hanging.
+const DEFAULT_TIMEOUT_MS = 15_000
+
+/** Per-request options. `signal` is React Query's queryFn signal (so unmount /
+ *  re-query cancels the in-flight fetch); it is combined with a hard timeout. */
+export type RequestOpts = { signal?: AbortSignal; timeoutMs?: number }
+
+// Combine a default timeout with any caller signal; either source aborts fetch.
+// `timeout` is returned so callers can tell a timeout from a caller-cancel.
+function withTimeout(opts?: RequestOpts): { signal: AbortSignal; timeout: AbortSignal } {
+  const timeout = AbortSignal.timeout(opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS)
+  const signal = opts?.signal ? AbortSignal.any([timeout, opts.signal]) : timeout
+  return { signal, timeout }
+}
 
 type QueryParams = Record<string, string | number | boolean | undefined>
 
@@ -14,35 +30,62 @@ function cleanParams(params?: QueryParams): Record<string, string | number | boo
   return Object.keys(out).length > 0 ? out : undefined
 }
 
-async function get<T>(path: string, params?: QueryParams): Promise<T> {
-  const res = await fetch(apiUrl(`${BASE}${path}`, cleanParams(params)), {
-    credentials: 'include',
-  })
+async function get<T>(path: string, params?: QueryParams, opts?: RequestOpts): Promise<T> {
+  const { signal, timeout } = withTimeout(opts)
+  let res: Response
+  try {
+    res = await fetch(apiUrl(`${BASE}${path}`, cleanParams(params)), {
+      credentials: 'include',
+      signal,
+    })
+  } catch (err) {
+    // The hard timeout fired -> a readable error the UI shows instead of a
+    // forever-spinner. A caller cancel (unmount / re-query) re-throws so React
+    // Query treats it as cancellation, not a surfaced failure.
+    if (timeout.aborted) throw new ApiError(0, `IPTV ${path} timed out`)
+    throw err
+  }
   if (!res.ok) await throwApiError(res, `IPTV ${path}`)
   return res.json() as Promise<T>
 }
 
-async function post<T>(path: string, body?: unknown): Promise<T> {
+async function post<T>(path: string, body?: unknown, opts?: RequestOpts): Promise<T> {
+  const { signal, timeout } = withTimeout(opts)
   const init: RequestInit = {
     method: 'POST',
     credentials: 'include',
+    signal,
   }
   if (body !== undefined) {
     init.headers = { 'Content-Type': 'application/json' }
     init.body = JSON.stringify(body)
   }
 
-  const res = await fetch(apiUrl(`${BASE}${path}`), init)
+  let res: Response
+  try {
+    res = await fetch(apiUrl(`${BASE}${path}`), init)
+  } catch (err) {
+    if (timeout.aborted) throw new ApiError(0, `IPTV ${path} timed out`)
+    throw err
+  }
   if (!res.ok) await throwApiError(res, `IPTV ${path}`)
   const text = await res.text()
   return (text ? JSON.parse(text) : undefined) as T
 }
 
-async function del(path: string): Promise<void> {
-  const res = await fetch(apiUrl(`${BASE}${path}`), {
-    method: 'DELETE',
-    credentials: 'include',
-  })
+async function del(path: string, opts?: RequestOpts): Promise<void> {
+  const { signal, timeout } = withTimeout(opts)
+  let res: Response
+  try {
+    res = await fetch(apiUrl(`${BASE}${path}`), {
+      method: 'DELETE',
+      credentials: 'include',
+      signal,
+    })
+  } catch (err) {
+    if (timeout.aborted) throw new ApiError(0, `IPTV ${path} timed out`)
+    throw err
+  }
   if (!res.ok) await throwApiError(res, `IPTV ${path}`)
 }
 
