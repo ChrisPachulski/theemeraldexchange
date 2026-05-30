@@ -8,6 +8,7 @@ identity-unauthenticated deployment.
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import replace
 
 import pytest
@@ -62,11 +63,28 @@ def test_authoritative_sub_enforce_allows_match(monkeypatch):
     assert main_module._authoritative_sub(_principal("plex:real"), "plex:real") == "plex:real"
 
 
+def _seeded_conn() -> sqlite3.Connection:
+    """Minimal in-memory DB carrying just the tables /health reads."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE titles (tmdb_id INTEGER)")
+    conn.execute("CREATE TABLE title_vec (tmdb_id INTEGER)")
+    conn.execute("CREATE TABLE model_config (version TEXT, active INTEGER)")
+    return conn
+
+
 def test_health_surfaces_principal_mode(monkeypatch):
     _set_mode(monkeypatch, "off")
-    client = TestClient(main_module.app)
-    body = client.get("/health").json()
-    assert body["status"] == "ok"
+    conn = _seeded_conn()
+    # Override the per-request DB dependency so /health doesn't need a real
+    # on-disk migrated database for this introspection assertion.
+    main_module.app.dependency_overrides[main_module.get_db] = lambda: conn
+    try:
+        client = TestClient(main_module.app)
+        body = client.get("/health").json()
+    finally:
+        main_module.app.dependency_overrides.pop(main_module.get_db, None)
+        conn.close()
+    assert body["ok"] is True
     assert body["internal_principal_mode"] == "off"
-    assert "optimizer" in body
     assert body["optimizer"]["mode"] in {"active", "record-only", "unknown"}
