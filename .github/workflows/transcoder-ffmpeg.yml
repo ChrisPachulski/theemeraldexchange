@@ -1,0 +1,65 @@
+# Real-ffmpeg gate for the M4 transcoder.
+#
+# WHY THIS EXISTS
+# The default `cargo test -p transcoder` suite is hermetic: it drives the
+# session state machine against a shell stub (TRANSCODER_FFMPEG_BIN) and never
+# decodes a byte. That proves the lifecycle + argv strings, NOT that the argv we
+# assemble actually produces playable HLS. This job closes that gap by running
+# the `requires-ffmpeg` feature-gated integration test
+# (crates/transcoder/tests/real_ffmpeg.rs) against a REAL ffmpeg/ffprobe — the
+# same statically-linked build pinned in crates/transcoder/Dockerfile.
+#
+# HUMAN DECISION CAPTURED HERE
+# Adopting this job is a product/infra call (CI runner minutes + image pull
+# budget). It is committed but only runs once GitHub Actions is enabled for the
+# repo. Until it is green in CI, M4 must be read as "state-machine complete,
+# transcode unverified" (see docs/ROADMAP-STATUS.md). See also
+# docs/M4-TRANSCODE-VERIFICATION.md for the full rationale.
+
+name: transcoder-ffmpeg
+
+on:
+  push:
+    paths:
+      - "crates/transcoder/**"
+      - ".github/workflows/transcoder-ffmpeg.yml"
+  pull_request:
+    paths:
+      - "crates/transcoder/**"
+      - ".github/workflows/transcoder-ffmpeg.yml"
+  workflow_dispatch: {}
+
+jobs:
+  real-ffmpeg:
+    runs-on: ubuntu-latest
+    container:
+      # The exact static ffmpeg/ffprobe the runtime image ships, so CI exercises
+      # the production binary — not whatever ffmpeg the runner happens to carry.
+      image: rust:1.90-slim-bookworm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install static ffmpeg/ffprobe (matches the runtime Dockerfile)
+        run: |
+          set -eu
+          # Pull the same pinned static build the runtime stage copies from.
+          # The binaries are fully static, so a plain copy onto PATH is enough.
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates xz-utils curl
+          rm -rf /var/lib/apt/lists/*
+          # mwader/static-ffmpeg publishes /ffmpeg and /ffprobe at the image root;
+          # extract them via a throwaway container is not available here, so use
+          # the upstream static release that the image itself is built from.
+          ffdir="$(mktemp -d)"
+          curl -fsSL https://github.com/wader/static-ffmpeg/releases/download/7.1/linux-amd64.tar.xz \
+            | tar -xJ -C "$ffdir"
+          install -m 0755 "$ffdir"/ffmpeg /usr/local/bin/ffmpeg
+          install -m 0755 "$ffdir"/ffprobe /usr/local/bin/ffprobe
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
+
+      - name: Run the real-ffmpeg gate
+        env:
+          TRANSCODER_FFMPEG_BIN: /usr/local/bin/ffmpeg
+          TRANSCODER_FFPROBE_BIN: /usr/local/bin/ffprobe
+        run: cargo test -p transcoder --features requires-ffmpeg -- --nocapture
