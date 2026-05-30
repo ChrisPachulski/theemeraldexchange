@@ -3,6 +3,7 @@
 // imports `app` and calls serve(); test files import `app` and call
 // `app.request(...)`.
 
+import * as Sentry from '@sentry/node'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
@@ -32,6 +33,18 @@ import { passkey } from './routes/passkey.js'
 import { version } from './routes/version.js'
 
 export const app = new Hono()
+
+// §15 telemetry (finding 14-0): @sentry/node v9 + Hono does NOT auto-instrument
+// route handlers — an exception thrown in any /api/* handler would otherwise
+// become Hono's default 500 and never reach Glitchtip. Capture every handler
+// exception here. The existing piiScrub beforeSend (index.ts) still applies, so
+// no PII leaves the box. captureException is a no-op when Sentry.init was never
+// called (dev without EEX_TELEMETRY_DSN), so this is safe in every environment.
+app.onError((err, c) => {
+  Sentry.captureException(err)
+  console.error('[app] unhandled error:', err instanceof Error ? err.stack ?? err.message : err)
+  return c.json({ error: 'internal' }, 500)
+})
 
 app.use('*', logger())
 

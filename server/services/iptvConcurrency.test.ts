@@ -87,4 +87,24 @@ describe('iptv concurrency tracker', () => {
     t.release('s1')
     expect(t.tryAcquire(baseOpts('u2', 's2')).ok).toBe(true)
   })
+
+  it('a live stream held >30s WITH periodic byte-path heartbeats keeps its slot (finding 8-1)', () => {
+    // Regression for finding 8-1: previously the live/segment byte handlers
+    // never heartbeat the grant session, so a long live view with no re-grant
+    // was idle-reaped after the 30s window even while bytes flowed. The byte
+    // handlers now call heartbeat() on each chunk/range request — simulate
+    // that and assert the slot survives well past the idle window.
+    const t = createConcurrencyTracker({ cap: 1, idleMs: 30_000 })
+    expect(t.tryAcquire(baseOpts('u1', 's1')).ok).toBe(true)
+    // 90 seconds of playback, a heartbeat every 10s (as a streaming byte path
+    // would issue). The slot must never be reaped.
+    for (let elapsed = 0; elapsed < 90_000; elapsed += 10_000) {
+      vi.advanceTimersByTime(10_000)
+      t.heartbeat('s1')
+      t.sweep()
+      expect(t.size()).toBe(1)
+    }
+    // A second user still cannot acquire — the long-running stream holds the cap.
+    expect(t.tryAcquire(baseOpts('u2', 's2')).ok).toBe(false)
+  })
 })

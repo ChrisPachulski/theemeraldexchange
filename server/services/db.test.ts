@@ -97,4 +97,41 @@ describe('openDb', () => {
     expect(tables).toContain('server_state')
     expect(tables).toContain('schema_migrations')
   })
+
+  it('populates a non-empty sha256 checksum (proves the hardened migrator ran, not the legacy empty-checksum path)', () => {
+    const { db } = freshDb()
+    const rows = db.raw
+      .prepare(`SELECT version, checksum FROM schema_migrations ORDER BY version`)
+      .all() as Array<{ version: number; checksum: string }>
+    expect(rows.length).toBeGreaterThan(0)
+    for (const row of rows) {
+      // Hardened migrator writes a 64-hex-char sha256; the old openDb runner
+      // wrote ''. A non-empty hex digest proves server.db now flows through
+      // migrator.ts (finding 3-0).
+      expect(row.checksum).toMatch(/^[0-9a-f]{64}$/)
+    }
+  })
+
+  it('refuses a DROP TABLE migration that lacks the -- DESTRUCTIVE marker', () => {
+    // Stand up an isolated migrations dir whose latest file drops a table
+    // without the required marker. openDb must surface the migrator refusal.
+    const migDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opendb-destructive-'))
+    tmpDirs.push(migDir)
+    fs.writeFileSync(
+      path.join(migDir, '0001_init.sql'),
+      `CREATE TABLE widget (id INTEGER PRIMARY KEY);\n`,
+    )
+    fs.writeFileSync(
+      path.join(migDir, '0002_drop.sql'),
+      // No '-- DESTRUCTIVE' line — the hardened migrator must reject this.
+      `DROP TABLE widget;\n`,
+    )
+    const dbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opendb-destructive-db-'))
+    tmpDirs.push(dbDir)
+    const dbPath = path.join(dbDir, 'd.db')
+    expect(() => {
+      const db = openDb(migDir, dbPath, 'destructive-test')
+      openedDbs.push(db)
+    }).toThrow(/DROP TABLE.*-- DESTRUCTIVE/s)
+  })
 })

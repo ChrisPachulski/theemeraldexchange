@@ -47,7 +47,18 @@ type Session = SessionView
 export interface ConcurrencyTracker {
   tryAcquire: (opts: AcquireOpts) => AcquireResult
   heartbeat: (sessionId: string) => void
+  /**
+   * Heartbeat the active session matching (sub, kind, resourceId) — the same
+   * tuple tryAcquire dedupes on. The byte-serving handlers know the user's
+   * sub (from the stream token) and the kind+resourceId from the route, but
+   * NOT the opaque sessionId minted at grant time, so they keep a stream's
+   * slot alive through this resource-keyed path instead of the id-keyed one
+   * (finding 8-1). Returns true when a matching session was refreshed.
+   */
+  heartbeatByResource: (sub: string, kind: SessionKind, resourceId: string) => boolean
   release: (sessionId: string) => void
+  /** Resource-keyed counterpart to release() for the byte-path handlers. */
+  releaseByResource: (sub: string, kind: SessionKind, resourceId: string) => boolean
   sweep: () => void
   size: () => number
   list: () => SessionView[]
@@ -115,11 +126,41 @@ export function createConcurrencyTracker(opts: { cap: number; idleMs: number }):
     if (s) s.lastSeen = Date.now()
   }
 
+  function findByResource(sub: string, kind: SessionKind, resourceId: string): Session | undefined {
+    for (const s of sessions.values()) {
+      if (s.sub === sub && s.kind === kind && s.resourceId === resourceId) return s
+    }
+    return undefined
+  }
+
+  function heartbeatByResource(sub: string, kind: SessionKind, resourceId: string): boolean {
+    const s = findByResource(sub, kind, resourceId)
+    if (!s) return false
+    s.lastSeen = Date.now()
+    return true
+  }
+
   function release(sessionId: string): void {
     sessions.delete(sessionId)
   }
 
-  return { tryAcquire, heartbeat, release, sweep, size: () => sessions.size, list }
+  function releaseByResource(sub: string, kind: SessionKind, resourceId: string): boolean {
+    const s = findByResource(sub, kind, resourceId)
+    if (!s) return false
+    sessions.delete(s.sessionId)
+    return true
+  }
+
+  return {
+    tryAcquire,
+    heartbeat,
+    heartbeatByResource,
+    release,
+    releaseByResource,
+    sweep,
+    size: () => sessions.size,
+    list,
+  }
 }
 
 let singleton: ConcurrencyTracker | null = null
