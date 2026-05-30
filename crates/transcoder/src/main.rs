@@ -1,14 +1,25 @@
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use transcoder::args::HwEncoder;
 use transcoder::encoders;
 use transcoder::{AppState, build_router};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "transcoder=info,tower_http=info".into()),
-        )
+    // §15 telemetry: initialize Glitchtip BEFORE the tracing subscriber so the
+    // sentry-tracing layer has a live client to forward to. The guard must live
+    // for the whole of main (dropping it flushes + disables reporting), so we
+    // bind it here. When no DSN is configured this is a complete no-op.
+    let _sentry_guard = init_telemetry();
+
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "transcoder=info,tower_http=info".into());
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(tracing_subscriber::fmt::layer())
+        // Bridge tracing into Glitchtip: error!/warn! events (including the
+        // drained ffmpeg stderr in session.rs) become issues. Inert with no DSN.
+        .with(sentry_tracing::layer())
         .init();
 
     // Boot-time hardware-encoder detection (§4.4). Honor TRANSCODER_HW_ENCODER
@@ -18,7 +29,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // — otherwise a misconfigured HW family (e.g. nvenc on a binary without
     // h264_nvenc) would crash-loop every session into a 503.
     let ffmpeg_bin = std::env::var("TRANSCODER_FFMPEG_BIN").unwrap_or_else(|_| "ffmpeg".into());
-    let available = encoders::detect(&ffmpeg_bin).await;
+    // detect() only proves an encoder is COMPILED INTO ffmpeg (present in
+    // `-encoders`); it does not prove the GPU/driver actually works on this host.
+    // validate() smoke-tests each detected HW encoder once, so a GPU-less box
+    // where ffmpeg still lists h264_nvenc/h264_vaapi cleanly falls back to CPU
+    // at boot instead of crash-looping every session on the first device-open
+    // (§audit 1-13).
+    let available = encoders::detect(&ffmpeg_bin).await.validate(&ffmpeg_bin).await;
     let preferred = HwEncoder::from_env();
     let (resolved, fell_back) = available.resolve(preferred);
     if fell_back {
@@ -54,6 +71,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+/// Initialize the Glitchtip/Sentry SDK from the `GLITCHTIP_DSN` env var (§15;
+/// the DSN is distributed server->app at boot). When the var is unset or empty
+/// this returns `None` and the SDK stays fully inert, so an off/unconfigured
+/// deploy is a clean no-op rather than a hard failure (mirrors media-core's
+/// off-mode-validates-cleanly posture). The returned guard must be held for the
+/// lifetime of `main`. Crash data is per-self-hoster (island); no PII is sent.
+fn init_telemetry() -> Option<sentry::ClientInitGuard> {
+    let dsn = match std::env::var("GLITCHTIP_DSN") {
+        Ok(d) if !d.trim().is_empty() => d,
+        _ => return None,
+    };
+    Some(sentry::init((
+        dsn,
+        sentry::ClientOptions {
+            release: Some(env!("CARGO_PKG_VERSION").into()),
+            send_default_pii: false,
+            ..Default::default()
+        },
+    )))
 }
 
 /// Await the first OS shutdown signal so axum can drain in-flight requests and

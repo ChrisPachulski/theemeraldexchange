@@ -7,13 +7,20 @@ use sha2::{Digest, Sha256};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
 /// Embedded migrations, applied in ascending version order. Add a new file
-/// under `migrations/` and a row here in lockstep; bump `SCHEMA_VERSION`.
-const MIGRATIONS: &[(i64, &str, &str)] = &[
+/// under `migrations/` and a row here — that is the SINGLE source of truth for
+/// the schema version: [`crate::SCHEMA_VERSION`] is derived from the last entry
+/// here (see lib.rs), so there is no second constant to keep in lockstep.
+pub const MIGRATIONS: &[(i64, &str, &str)] = &[
     (1, "0001_init", include_str!("../migrations/0001_init.sql")),
     (
         2,
         "0002_media_metadata",
         include_str!("../migrations/0002_media_metadata.sql"),
+    ),
+    (
+        3,
+        "0003_search_fts",
+        include_str!("../migrations/0003_search_fts.sql"),
     ),
 ];
 
@@ -126,13 +133,42 @@ fn checksum(sql: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn schema_version_matches_last_migration() {
+        // SCHEMA_VERSION is derived from MIGRATIONS, so this can only fail if
+        // someone reintroduces a hand-maintained literal. Guarding it keeps the
+        // /health schema gate trustworthy.
+        let last = MIGRATIONS.last().expect("at least one migration").0;
+        assert_eq!(
+            crate::SCHEMA_VERSION,
+            last,
+            "SCHEMA_VERSION must equal the last migration version"
+        );
+    }
+
+    #[test]
+    fn migration_versions_are_dense_and_ascending() {
+        // 1-based, strictly increasing by 1. A gap or duplicate would let the
+        // migrator skip or mis-apply a migration while the derived
+        // SCHEMA_VERSION still looked plausible.
+        for (i, (version, _, _)) in MIGRATIONS.iter().enumerate() {
+            assert_eq!(
+                *version,
+                (i as i64) + 1,
+                "migration {i} has version {version}; expected {}",
+                i + 1
+            );
+        }
+    }
+
     #[tokio::test]
     async fn migrate_is_idempotent_and_sets_version() {
         let db = Db::connect_memory().await.unwrap();
-        assert_eq!(db.schema_version().await.unwrap(), 2);
+        let expected = crate::SCHEMA_VERSION;
+        assert_eq!(db.schema_version().await.unwrap(), expected);
         // Running again must not error or duplicate.
         db.migrate().await.unwrap();
-        assert_eq!(db.schema_version().await.unwrap(), 2);
+        assert_eq!(db.schema_version().await.unwrap(), expected);
         // Core tables exist.
         let n: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN \
@@ -142,6 +178,15 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(n, 6);
+        // The FTS5 search tables (§7-7) exist too.
+        let fts: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name IN \
+             ('movies_fts','shows_fts','episodes_fts')",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(fts, 3, "FTS5 virtual tables must be created by 0003");
     }
 
     #[tokio::test]
