@@ -16,6 +16,15 @@ path = "src/main.rs"
 name = "transcoder"
 path = "src/lib.rs"
 
+[features]
+# OFF by default so `cargo test` stays hermetic (no ffmpeg required). When
+# enabled, the `tests/real_ffmpeg.rs` suite invokes a REAL ffmpeg/ffprobe to
+# prove the argv we assemble actually produces playable HLS — the coverage gap
+# the state-machine stub tests cannot close. CI runs the gated job inside the
+# mwader/static-ffmpeg image already pinned in the Dockerfile:
+#   cargo test -p transcoder --features requires-ffmpeg
+requires-ffmpeg = []
+
 [dependencies]
 media-core = { path = "../media-core" }
 axum = { version = "0.8", features = ["json", "query", "macros"] }

@@ -218,6 +218,11 @@ services:
   # ffmpeg can read source bytes by the path media-core reports. Never exposed
   # publicly; binds 0.0.0.0 in-container, published to the NAS loopback only.
   transcoder:
+    # Exceed the transcoder's internal KILL_GRACE (5s in session.rs) so a
+    # SIGTERM on `docker stop`/compose down lets the graceful-shutdown path
+    # drain axum + SIGTERM->grace->SIGKILL every in-flight ffmpeg child before
+    # Docker hard-kills the container.
+    stop_grace_period: 20s
     # Context is repo root so the Dockerfile can reach the full Rust workspace
     # (transcoder depends on crates/media-core + crates/emerald-contracts).
     build:
