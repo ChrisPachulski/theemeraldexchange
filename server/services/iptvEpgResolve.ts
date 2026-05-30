@@ -13,7 +13,15 @@
 // Precision over recall: the name index DROPS any normalized name that maps to
 // more than one feed channel (ambiguous), so we never attach the wrong guide.
 
-import { normalizeEpgChannelId } from './iptvEpg.js'
+// Canonical tvg-id form: lowercase + trim, empty → null. Inlined (rather than
+// imported from iptvEpg.js) so this resolver has no dependency on that module —
+// iptvSync.test.ts mocks iptvEpg.js to stub fetchAndStreamEpg, and importing
+// from it here would make the mock swallow this helper and break the sync path.
+function normalizeEpgChannelId(id: string | null | undefined): string | null {
+  if (id == null) return null
+  const v = id.trim().toLowerCase()
+  return v.length > 0 ? v : null
+}
 
 // Country/quality/variant tokens stripped before name comparison. The catalog
 // names look like "US: ESPN", "UK FHD TNT Sport 1", "HEVC: TNT Sports 1 FHD";
@@ -30,11 +38,17 @@ const QUALITY_TOKENS =
  */
 export function normalizeChannelName(s: string | null | undefined): string | null {
   if (!s) return null
+  // Strip a leading country/locale token. Catalog names prefix the country with
+  // a separator ("US: ESPN", "USA | ESPN", "DK - TV3") OR just whitespace
+  // ("UK FHD TNT Sport 1", "USA HGTV"). Quality tokens are removed separately
+  // below, so after stripping a separator-prefix we also strip a bare 2–3 letter
+  // country code that's left at the very start.
   const v = s
-    .replace(/^\s*[A-Za-z]{2,4}\s*[:|–—-]\s*/, '') // leading "US:", "USA |", "DK -"
+    .replace(/^\s*[A-Za-z]{2,4}\s*[:|–—-]+\s*/, '') // "US:", "USA |", "DK -"
+    .replace(QUALITY_TOKENS, ' ') // FHD/HD/4K/HEVC… (also clears "UK FHD" → "UK  ")
+    .replace(/^\s*(?:US|USA|UK|CA|AU|NZ|IE|DE|FR|ES|IT|PT|NL|SE|NO|DK|FI|PL|BR|MX|AR|IN|ZA)\b\s+/i, '') // bare country code + space
     .replace(/\([^)]*\)/g, ' ') // (S) (H) (Backup)
     .replace(/\[[^\]]*\]/g, ' ') // [VIP] etc.
-    .replace(QUALITY_TOKENS, ' ')
     .replace(/[^a-z0-9]+/gi, '')
     .toLowerCase()
     .trim()
