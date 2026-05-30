@@ -42,30 +42,36 @@ def _set_mode(monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
 
 def test_authoritative_sub_off_mode_uses_body(monkeypatch):
     _set_mode(monkeypatch, "off")
-    assert main_module._authoritative_sub(None, "plex:body") == "plex:body"
+    assert main_module.authoritative_sub(None, "plex:body") == "plex:body"
 
 
 def test_authoritative_sub_prefers_principal_in_log_mode(monkeypatch):
     _set_mode(monkeypatch, "log")
     # Even if the body claims a different sub, the verified principal wins.
-    assert main_module._authoritative_sub(_principal("plex:real"), "plex:other") == "plex:real"
+    assert main_module.authoritative_sub(_principal("plex:real"), "plex:other") == "plex:real"
 
 
 def test_authoritative_sub_enforce_rejects_mismatch(monkeypatch):
     _set_mode(monkeypatch, "enforce")
     with pytest.raises(HTTPException) as exc:
-        main_module._authoritative_sub(_principal("plex:real"), "plex:other")
+        main_module.authoritative_sub(_principal("plex:real"), "plex:other")
     assert exc.value.status_code == 403
 
 
 def test_authoritative_sub_enforce_allows_match(monkeypatch):
     _set_mode(monkeypatch, "enforce")
-    assert main_module._authoritative_sub(_principal("plex:real"), "plex:real") == "plex:real"
+    assert main_module.authoritative_sub(_principal("plex:real"), "plex:real") == "plex:real"
 
 
 def _seeded_conn() -> sqlite3.Connection:
-    """Minimal in-memory DB carrying just the tables /health reads."""
-    conn = sqlite3.connect(":memory:")
+    """Minimal in-memory DB carrying just the tables /health reads.
+
+    `check_same_thread=False` because FastAPI's TestClient runs the route in a
+    worker thread (via run_in_threadpool) while this connection is created on
+    the test thread; without it sqlite raises ProgrammingError on cross-thread
+    use. Safe here: the test issues one request at a time, no concurrent access.
+    """
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("CREATE TABLE titles (tmdb_id INTEGER)")
     conn.execute("CREATE TABLE title_vec (tmdb_id INTEGER)")
