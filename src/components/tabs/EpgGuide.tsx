@@ -7,7 +7,7 @@
 // grid isn't a wall of empty rows. Search + category come from the parent.
 //
 // Rows are vertically windowed (only the on-screen slice is mounted) so the
-// grid stays smooth even at the ~1500-row cap.
+// grid stays smooth across the full has-EPG set (~11.5k channels).
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { type EpgGridDto, type EpgProgrammeDto } from '../../lib/api/iptv'
 import { useIptvEpgGrid } from '../../lib/hooks/useIptvEpg'
