@@ -4,9 +4,10 @@
 # NAS (shipped from the laptop's .env.production via scripts/deploy-nas.sh).
 # Docker Compose loads .env automatically — no env_file: directive needed.
 #
-# The backend binds 127.0.0.1:3001 only (LAN-invisible). cloudflared
-# runs in host network mode so it can dial that loopback port directly,
-# which keeps the tunnel's "URL: localhost:3001" config straightforward.
+# The backend binds 127.0.0.1:3001 only (LAN-invisible). cloudflared joins the
+# backend's network namespace (network_mode: service:backend) so it can dial that
+# listener as localhost:3001 directly — matching the tunnel's dashboard origin
+# "http://localhost:3001" without granting access to the host's loopback ports.
 #
 # The recommender service runs only inside the Docker network — the
 # backend reaches it via `http://recommender:8000`. It is never exposed
@@ -19,6 +20,18 @@ services:
     image: theemeraldexchange-backend:latest
     container_name: exchange-backend
     restart: unless-stopped
+    # Hardening (audit 9-4): no privilege escalation, drop all Linux caps
+    # (none are needed beyond the defaults that stay dropped), read-only root
+    # fs. The only writable path is the /app/data bind mount below; /tmp is
+    # supplied as tmpfs for transient writes (IPTV remux scratch lives under
+    # /tmp/iptv-remux by default).
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
     # Resource ceiling (audit 9-2) so no single service starves the NAS.
     mem_limit: 768m
     cpus: 1.5
@@ -143,6 +156,16 @@ services:
     image: theemeraldexchange-recommender:latest
     container_name: exchange-recommender
     restart: unless-stopped
+    # Hardening (audit 9-4): no privilege escalation, drop all Linux caps,
+    # read-only root fs. Writes go to the /data volume; /tmp is tmpfs (the
+    # sentence-transformer cache also lives under /data).
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
     # Resource ceiling (audit 9-2). Sentence-transformer embedding is the
     # memory-heaviest path here, hence a higher cap than the backend.
     mem_limit: 1500m
@@ -215,6 +238,16 @@ services:
     image: theemeraldexchange-media-core:latest
     container_name: exchange-media-core
     restart: unless-stopped
+    # Hardening (audit 9-4): no privilege escalation, drop all Linux caps,
+    # read-only root fs. Writes go to the /data volume; media is mounted :ro;
+    # /tmp is tmpfs.
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
     # Resource ceiling (audit 9-2).
     mem_limit: 768m
     cpus: 1.0
@@ -274,6 +307,15 @@ services:
     image: theemeraldexchange-transcoder:latest
     container_name: exchange-transcoder
     restart: unless-stopped
+    # Hardening (audit 9-4): the highest-value target (root + ffmpeg + mounted
+    # media). No privilege escalation, drop all Linux caps, read-only root fs.
+    # ffmpeg writes only to /scratch (the tmpfs declared below) and media is
+    # mounted :ro, so read_only is safe here.
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    read_only: true
     # Resource ceiling (audit 9-2): the transcoder spawns ffmpeg per session
     # and is the most likely to OOM the NAS. Cap memory and CPU so a burst of
     # concurrent transcodes degrades to 503 (TRANSCODER_MAX_SESSIONS) instead
@@ -297,8 +339,11 @@ services:
     # auto-clears on restart (segments are ephemeral, never persisted).
     # Sized for concurrent sessions; raise if MAX_CONCURRENT_TRANSCODES grows.
     # Sibling key to volumes:/environment: — not nested under volumes:.
+    # /tmp added (audit 9-4) so the read_only root fs still has a writable
+    # scratch path for any transient ffmpeg/runtime writes outside /scratch.
     tmpfs:
       - /scratch:size=2g
+      - /tmp
     environment:
       TRANSCODER_HOST: "0.0.0.0"
       TRANSCODER_PORT: "8003"
@@ -318,10 +363,36 @@ services:
       RUST_LOG: "${TRANSCODER_LOG:-transcoder=info,tower_http=info}"
 
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    # Pinned to an explicit version + digest (audit 9-3), mirroring the
+    # glitchtip pin policy below — this is the ONLY public-internet-facing
+    # container (it terminates the Cloudflare Tunnel). `latest` would silently
+    # auto-upgrade the tunnel client through breaking changes on a deploy pull.
+    # To upgrade: bump the tag + digest, docker compose pull, up -d. Resolve a
+    # new digest with: docker buildx imagetools inspect cloudflare/cloudflared:<tag>
+    # The docker ecosystem in .github/dependabot.yml surfaces bumps as PRs.
+    image: cloudflare/cloudflared:2024.12.2@sha256:12ff5c6992a9863db4da270746af7c244bcaee49353039af8104268a18d6c4f0
     container_name: exchange-cloudflared
     restart: unless-stopped
-    network_mode: host
+    # Hardening (audit 9-4): no privilege escalation, drop all Linux caps (the
+    # tunnel client needs none), read-only root fs (cloudflared persists nothing).
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    read_only: true
+    # Audit 9-7: removed `network_mode: host`. On host networking a compromised
+    # tunnel image gets the NAS host's full network namespace and can reach every
+    # loopback-published admin port (recommender :8001, media-core :8002,
+    # transcoder :8003, glitchtip :8100) plus any other 127.0.0.1 homelab
+    # service. Instead of host networking we join the BACKEND's network namespace
+    # (network_mode: service:backend): the tunnel shares only the backend's netns,
+    # never the host's, so the loopback admin ports above stay unreachable — but
+    # its `localhost:3001` now resolves to the backend's own listener, so the
+    # existing dashboard ingress origin (http://localhost:3001) keeps working with
+    # no dashboard change. The 127.0.0.1:3001 host publish stays for admin/debug.
+    # NOTE: recreating the backend container breaks this netns reference — restart
+    # cloudflared after any backend recreate (depends_on only orders first start).
+    network_mode: "service:backend"
     command: tunnel --no-autoupdate run
     environment:
       TUNNEL_TOKEN: "${TUNNEL_TOKEN}"
@@ -349,6 +420,13 @@ services:
     image: glitchtip/glitchtip:6.1
     container_name: exchange-glitchtip
     restart: unless-stopped
+    # Hardening (audit 9-4): no privilege escalation, drop all Linux caps.
+    # read_only is intentionally omitted — glitchtip's web/worker entrypoints
+    # write to internal paths beyond a single data volume.
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
     # The image's default entrypoint runs migrations ONLY in Heroku or
     # all_in_one mode (bin/start.sh). In a split web+worker deployment the
     # plain `web` role serves without ever migrating, so a fresh Postgres
@@ -391,9 +469,18 @@ services:
     # that YAML's last-key-wins would have silently dropped the gating from.)
 
   glitchtip-db:
-    image: postgres:15
+    # Digest-pinned (audit 9-11 / 11-8) for reproducible builds. Resolve a new
+    # digest with: docker buildx imagetools inspect postgres:15
+    image: postgres:15@sha256:1b92e7a80c021647bf70f5d3eb66066a998e4f5cf43c07bb9dc9f729782cf88e
     container_name: exchange-glitchtip-db
     restart: unless-stopped
+    # Hardening (audit 9-4): no privilege escalation, drop all Linux caps.
+    # read_only omitted — the official postgres image writes to several internal
+    # paths beyond its data volume.
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
     environment:
       POSTGRES_USER: glitchtip
       POSTGRES_PASSWORD: "${GLITCHTIP_DB_PASSWORD}"
@@ -411,9 +498,16 @@ services:
       retries: 5
 
   glitchtip-redis:
-    image: redis:7-alpine
+    # Digest-pinned (audit 9-11 / 11-8) for reproducible builds. Resolve a new
+    # digest with: docker buildx imagetools inspect redis:7-alpine
+    image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     container_name: exchange-glitchtip-redis
     restart: unless-stopped
+    # Hardening (audit 9-4): no privilege escalation, drop all Linux caps.
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
     # Readiness probe (audit 9-1) so glitchtip web/worker can gate on it.
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -432,6 +526,12 @@ services:
     container_name: exchange-glitchtip-worker
     command: ./bin/start.sh
     restart: unless-stopped
+    # Hardening (audit 9-4): no privilege escalation, drop all Linux caps.
+    # read_only omitted — same internal-write behavior as the glitchtip web role.
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
     environment:
       SERVER_ROLE: worker
       SECRET_KEY: "${GLITCHTIP_SECRET_KEY}"
