@@ -22,6 +22,14 @@ services:
     # Resource ceiling (audit 9-2) so no single service starves the NAS.
     mem_limit: 768m
     cpus: 1.5
+    # Readiness probe (audit 9-1) so cloudflared waits for a serving backend
+    # instead of racing a not-yet-listening container. /api/health is public.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3001/api/health"]
+      interval: 30s
+      timeout: 3s
+      start_period: 15s
+      retries: 3
     ports:
       - "127.0.0.1:3001:3001"
     volumes:
@@ -133,6 +141,15 @@ services:
     # memory-heaviest path here, hence a higher cap than the backend.
     mem_limit: 1500m
     cpus: 1.5
+    # Readiness probe (audit 9-1). The image already declares its own
+    # HEALTHCHECK; restated here so status is explicit at the compose layer.
+    # start_period is generous: first boot loads the sentence-transformer model.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 3s
+      start_period: 60s
+      retries: 3
     ports:
       - "127.0.0.1:8001:8000"
     volumes:
@@ -195,6 +212,13 @@ services:
     # Resource ceiling (audit 9-2).
     mem_limit: 768m
     cpus: 1.0
+    # Readiness probe (audit 9-1). The image ships curl + a non-root user.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8002/health"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
     ports:
       - "127.0.0.1:8002:8002"
     volumes:
@@ -250,6 +274,13 @@ services:
     # of taking the host down. Tune alongside TRANSCODER_MAX_SESSIONS.
     mem_limit: 3g
     cpus: 3.0
+    # Readiness probe (audit 9-1). The image ships curl + a non-root user.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8003/health"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
     ports:
       - "127.0.0.1:8003:8003"
     volumes:
@@ -288,8 +319,12 @@ services:
     command: tunnel --no-autoupdate run
     environment:
       TUNNEL_TOKEN: "${TUNNEL_TOKEN}"
+    # Wait for the backend to report HEALTHY (audit 9-1), not merely started —
+    # otherwise the tunnel comes up pointing at a not-yet-listening backend and
+    # the first requests after a redeploy 502.
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
   # ── Glitchtip telemetry stack ─────────────────────────────────────────────
   # MANDATORY: EEX does not support a telemetry-disabled build. Every
@@ -315,6 +350,13 @@ services:
     # Migrate (and create event partitions) before serving. Idempotent: a
     # no-op once the schema is current. run-web.sh just execs granian.
     command: sh -c "python manage.py migrate --no-input --skip-checks && python manage.py maintain_partitions && exec ./bin/run-web.sh"
+    # Gate the migrate-then-serve command on a ready DB + cache (audit 9-1) so
+    # first boot doesn't crash-loop before Postgres accepts connections.
+    depends_on:
+      glitchtip-db:
+        condition: service_healthy
+      glitchtip-redis:
+        condition: service_healthy
     ports:
       # Port changed from 8080 → 8000 in v6.0 (Granian replaces Gunicorn).
       - "127.0.0.1:8100:8000"
@@ -338,9 +380,9 @@ services:
       # Covers common LAN private ranges + Tailscale CGNAT (100.64.0.0/10).
       # Operators behind a different proxy subnet should extend this list.
       TRUSTED_PROXIES: "${GLITCHTIP_TRUSTED_PROXIES:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10}"
-    depends_on:
-      - glitchtip-db
-      - glitchtip-redis
+    # (depends_on with service_healthy conditions is declared above, alongside
+    # the migrate-then-serve command — the old list-form here was a duplicate
+    # that YAML's last-key-wins would have silently dropped the gating from.)
 
   glitchtip-db:
     image: postgres:15
@@ -352,11 +394,27 @@ services:
       POSTGRES_DB: glitchtip
     volumes:
       - glitchtip-pgdata:/var/lib/postgresql/data
+    # Readiness probe (audit 9-1) so the glitchtip web migrate step and the
+    # worker wait for an accepting Postgres instead of crash-looping on
+    # "the database system is starting up" during first boot.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U glitchtip -d glitchtip"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
 
   glitchtip-redis:
     image: redis:7-alpine
     container_name: exchange-glitchtip-redis
     restart: unless-stopped
+    # Readiness probe (audit 9-1) so glitchtip web/worker can gate on it.
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 5
 
   # Background task worker for retention sweeps and async event processing.
   # v6.0+ uses django-vtasks (not Celery). The worker image is the same as the
@@ -386,9 +444,13 @@ services:
       # django-vtasks). It is intentionally absent here — setting it would
       # be silently ignored at best or break worker startup at worst.
       TRUSTED_PROXIES: "${GLITCHTIP_TRUSTED_PROXIES:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10}"
+    # Gate on a healthy db + cache (audit 9-1) so the worker doesn't crash-loop
+    # consuming from a not-yet-ready broker on first boot.
     depends_on:
-      - glitchtip-db
-      - glitchtip-redis
+      glitchtip-db:
+        condition: service_healthy
+      glitchtip-redis:
+        condition: service_healthy
 
 volumes:
   # Renamed from glitchtip-postgres to force a clean re-init of the Postgres
