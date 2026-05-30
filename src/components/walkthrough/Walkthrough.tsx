@@ -6,6 +6,7 @@ import type { TrendingItem } from '../../lib/hooks/useTrending'
 import type { DotState } from '../search/FeedbackDots'
 import { useAuth } from '../../lib/auth'
 import { AppleSignInButton } from '../auth/AppleSignInButton'
+import { PasskeyButtons } from '../auth/PasskeyButtons'
 import './Walkthrough.css'
 
 // Default unauthenticated landing for theemeraldexchange. The
@@ -63,11 +64,13 @@ function SignInBlock({ placement }: { placement: 'hero' | 'foot' }) {
           {pending ? 'Waiting for Plex…' : 'Sign in with Plex'}
         </button>
         <AppleSignInButton inviteCode={code || undefined} />
+        <PasskeyButtons inviteCode={code || undefined} />
       </div>
       <p className="walkthrough__signin-hint">
-        Invitation-only. Returning members can sign in with Apple or the
-        Plex account the library was shared to — no code needed. First-time
-        guests: paste your invite code above, then sign in.
+        Invitation-only. Returning members can sign in with a passkey, Apple,
+        or the Plex account the library was shared to — no code needed.
+        First-time guests: paste your invite code above, then set up a passkey
+        or sign in with Plex/Apple.
       </p>
       {signInError && (
         <p className="walkthrough__signin-error" role="alert">{signInError}</p>
