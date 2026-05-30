@@ -211,7 +211,25 @@ export default function IptvPlayer({
           return
         }
 
-        const hls = new Hls()
+        // Live HLS (the remux path) over the same proxy → cloudflared →
+        // edge transport as mpegts. Default hls.js sits near the live edge
+        // and underruns on tunnel jitter, so favor a resilient buffer over
+        // low latency: sit a few segments back, allow a deep forward
+        // buffer, bridge small gaps, and retry fragments generously. A few
+        // seconds of latency is irrelevant for IPTV; uninterrupted playback
+        // is everything.
+        const hls = new Hls({
+          lowLatencyMode: false,
+          liveSyncDurationCount: 4,
+          liveMaxLatencyDurationCount: 16,
+          maxBufferLength: 30,
+          maxMaxBufferLength: 120,
+          maxBufferHole: 0.5,
+          fragLoadingMaxRetry: 8,
+          fragLoadingMaxRetryTimeout: 8000,
+          manifestLoadingMaxRetry: 4,
+          levelLoadingMaxRetry: 4,
+        })
         hlsRef.current = hls
 
         const updateHlsTracks = () => {
@@ -256,9 +274,19 @@ export default function IptvPlayer({
       //     further behind until the buffer underruns.
       //   - enableWorker: demux off the main thread → no decode pauses
       //     blocking React renders or the video element.
-      //   - enableStashBuffer:false + small stashInitialSize: don't
-      //     pre-buffer a giant chunk before first frame; live streams
-      //     don't benefit from it and it adds 1-3s of spin-up.
+      //   - enableStashBuffer + stashInitialSize: a stash buffer is the
+      //     network jitter shock-absorber. The stream reaches the browser
+      //     via backend proxy → cloudflared tunnel → Cloudflare edge, a
+      //     path with real jitter; without a stash the demuxer starves on
+      //     every hiccup. We keep a ~1 MB stash (was disabled, which was
+      //     the main cause of "hiccups at an insane rate").
+      //   - liveBufferLatencyChasing window WIDENED: the old 2.0s max /
+      //     0.5s min remain was video-call-tight — a 0.5s buffer cannot
+      //     ride out tunnel jitter, so it underran constantly. 8s max /
+      //     2s min keeps us "live-ish" (a few seconds behind, fine for
+      //     IPTV) while leaving enough buffer to absorb stalls. This is
+      //     what the comment above always INTENDED ("sustained buffering")
+      //     but the old values didn't deliver.
       //   - autoCleanupSourceBuffer: trim the MSE source buffer as we
       //     go so long sessions don't bloat memory and slow the GC.
       //   - fixAudioTimestampGap: mybunny streams have occasional TS
@@ -268,14 +296,14 @@ export default function IptvPlayer({
         { type: 'mpegts', isLive: true, url: grant.url },
         {
           enableWorker: true,
-          enableStashBuffer: false,
-          stashInitialSize: 128,
+          enableStashBuffer: true,
+          stashInitialSize: 1024,
           lazyLoad: false,
           lazyLoadMaxDuration: 0,
           deferLoadAfterSourceOpen: false,
           liveBufferLatencyChasing: true,
-          liveBufferLatencyMaxLatency: 2.0,
-          liveBufferLatencyMinRemain: 0.5,
+          liveBufferLatencyMaxLatency: 8.0,
+          liveBufferLatencyMinRemain: 2.0,
           autoCleanupSourceBuffer: true,
           autoCleanupMaxBackwardDuration: 30,
           autoCleanupMinBackwardDuration: 10,
