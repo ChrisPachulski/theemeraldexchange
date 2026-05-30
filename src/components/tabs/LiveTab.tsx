@@ -325,7 +325,7 @@ function PlayerModal({
 }: {
   playing: { grant: StreamGrant; title: string; itemId: string }
   onClose: () => void
-  onPositionUpdate: (positionSecs: number, durationSecs: number) => void
+  onPositionUpdate: (positionSecs: number, durationSecs: number | null) => void
 }) {
   const modalRef = useModalA11y<HTMLDivElement>(onClose)
   return (
