@@ -39,9 +39,10 @@ class Config:
 
     # Internal-principal verification per contract §4. Hono attaches a
     # JWE on every outbound call; this service verifies it via the PyO3
-    # binding. Mode is "off" by default so a deployment that hasn't yet
-    # provisioned the secret keeps working — operators flip to "log"
-    # during rollout, then "enforce" once every caller is observed.
+    # binding. Mode defaults to "enforce" in production (secure by default;
+    # load() fail-fasts if the secret is missing) and "off" outside
+    # production so dev/CI keeps working. Operators can pin "log" during
+    # rollout, or explicitly set "off" in production to opt out.
     internal_principal_secret: str | None
     internal_principal_mode: str
 
@@ -91,7 +92,16 @@ def _internal_principal_secret() -> str | None:
 
 
 def _internal_principal_mode() -> str:
-    raw = os.environ.get("RECOMMENDER_INTERNAL_PRINCIPAL_MODE", "off").strip().lower()
+    # Secure-by-default in production: when the operator hasn't pinned a mode,
+    # production verifies caller identity ("enforce") rather than silently
+    # ignoring the inbound JWE ("off"). Outside production the default stays
+    # "off" so dev/CI keeps working without provisioning the secret. An
+    # operator can still explicitly opt out in production with
+    # RECOMMENDER_INTERNAL_PRINCIPAL_MODE=off.
+    env_raw = os.environ.get("RECOMMENDER_INTERNAL_PRINCIPAL_MODE")
+    if env_raw is None or env_raw.strip() == "":
+        return "enforce" if os.environ.get("NODE_ENV") == "production" else "off"
+    raw = env_raw.strip().lower()
     if raw not in INTERNAL_PRINCIPAL_MODES:
         raise ValueError(
             f"RECOMMENDER_INTERNAL_PRINCIPAL_MODE={raw!r} must be one of "
@@ -101,6 +111,24 @@ def _internal_principal_mode() -> str:
 
 
 def load() -> Config:
+    internal_principal_secret = _internal_principal_secret()
+    internal_principal_mode = _internal_principal_mode()
+    # In production, a verifying mode (log/enforce) is useless without a secret:
+    # internal_principal_dep() fail-closes with a 503 on every request. Fail
+    # fast at startup instead, so the misconfiguration is loud rather than a
+    # silent per-request outage. Operators who genuinely want no caller-identity
+    # verification must set RECOMMENDER_INTERNAL_PRINCIPAL_MODE=off explicitly.
+    if (
+        os.environ.get("NODE_ENV") == "production"
+        and internal_principal_mode in {"log", "enforce"}
+        and internal_principal_secret is None
+    ):
+        raise ValueError(
+            "INTERNAL_PRINCIPAL_SECRET must be set when "
+            f"RECOMMENDER_INTERNAL_PRINCIPAL_MODE is {internal_principal_mode!r} "
+            "(the production default). Provision the secret, or set "
+            "RECOMMENDER_INTERNAL_PRINCIPAL_MODE=off to explicitly opt out."
+        )
     return Config(
         db_path=_path("RECOMMENDER_DB_PATH", "./data/exchange.db"),
         migrations_dir=_path("RECOMMENDER_MIGRATIONS_DIR", str(Path(__file__).resolve().parent.parent / "migrations")),
@@ -109,8 +137,8 @@ def load() -> Config:
         tmdb_api_key=os.environ.get("TMDB_API_KEY") or None,
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY") or None,
         event_secret=_event_secret(),
-        internal_principal_secret=_internal_principal_secret(),
-        internal_principal_mode=_internal_principal_mode(),
+        internal_principal_secret=internal_principal_secret,
+        internal_principal_mode=internal_principal_mode,
         embed_model=os.environ.get("RECOMMENDER_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2"),
         embed_dim=int(os.environ.get("RECOMMENDER_EMBED_DIM", "384")),
         cold_start_threshold=int(os.environ.get("RECOMMENDER_COLD_START_THRESHOLD", "10")),
