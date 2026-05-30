@@ -231,6 +231,28 @@ async function deleteCreatedMovie(movie: CreatedRadarrMovie): Promise<{ ok: true
   return { ok: true }
 }
 
+// Flip a just-added movie to monitored so Radarr's RSS sync downloads it
+// automatically once a release appears. Used when the cap-aware search found
+// NO releases yet (e.g. an unreleased/future film) — rather than discarding
+// the add with a dead-end 424, we keep it and let it grab when available,
+// which is what "add and monitor" is supposed to mean. PUT the full movie
+// resource back (Radarr expects the whole object) with monitored overridden.
+async function setMovieMonitored(
+  movie: CreatedRadarrMovie,
+  monitored: boolean,
+): Promise<{ ok: boolean; status: number }> {
+  if (!movie.id) return { ok: false, status: 0 }
+  const res = await radarrFetch(`/api/v3/movie/${movie.id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...movie, monitored }),
+  })
+  if (!res.ok) {
+    console.error(`[movie-cap] failed to set monitored on movie ${movie.id}: ${res.status}`)
+  }
+  return { ok: res.ok, status: res.status }
+}
+
 function normalizePath(p: string): string {
   return p.replace(/[\\/]+$/, '').toLowerCase()
 }
@@ -450,7 +472,28 @@ radarr.post('/api/v3/movie', async (c) => {
             424,
           )
         }
-        if (grab.status === 'no_releases' || grab.status === 'all_rejected_by_cap') {
+        if (grab.status === 'no_releases') {
+          // Nothing to grab YET — typically an unreleased/future film with no
+          // releases in the indexers (0 scanned). Do NOT discard the add:
+          // flip it to monitored so Radarr's RSS sync downloads it the moment
+          // a release appears. This is the "add it and it'll come when
+          // available" behavior, and removes the dead-end 424 on future titles.
+          const monitored = await setMovieMonitored(created, true)
+          return c.json(
+            {
+              status: 'monitoring',
+              phase: 'no_releases',
+              scanned: grab.scanned,
+              monitored: monitored.ok,
+              movie: created,
+            },
+            200,
+          )
+        }
+        if (grab.status === 'all_rejected_by_cap') {
+          // Releases DO exist but every one exceeds the size cap. Honor the
+          // cap and roll back rather than leave a monitored item that RSS
+          // would later auto-grab uncapped.
           const rollback = await deleteCreatedMovie(created)
           return c.json(
             {
