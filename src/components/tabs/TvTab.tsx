@@ -514,15 +514,16 @@ function DiscoverResults({ query, loading, error, results, libraryByTvdb, onCard
   if (results.length === 0) return <p className="tv-tab__hint">Nothing matched. Try a different title.</p>
 
   return (
-    <ResultGrid>
-      {results.map((item) => {
+    <ResultGrid
+      items={results}
+      getKey={(item) => item.tvdbId}
+      renderItem={(item) => {
         const inLib = libraryByTvdb.has(item.tvdbId)
         const meta = [item.network, item.status]
           .filter((x): x is string => Boolean(x))
           .join(' · ')
         return (
           <MediaCard
-            key={item.tvdbId}
             poster={pickSearchPoster(item)}
             title={item.title}
             year={item.year}
@@ -532,8 +533,8 @@ function DiscoverResults({ query, loading, error, results, libraryByTvdb, onCard
             onClick={() => onCardClick(item)}
           />
         )
-      })}
-    </ResultGrid>
+      }}
+    />
   )
 }
 
@@ -571,14 +572,15 @@ function LibraryResults({ query, letter, loading, error, items, onCardClick }: L
   }
 
   return (
-    <ResultGrid>
-      {items.map((s) => {
+    <ResultGrid
+      items={items}
+      getKey={(s) => s.id}
+      renderItem={(s) => {
         const meta = [s.network, s.status]
           .filter((x): x is string => Boolean(x))
           .join(' · ')
         return (
           <MediaCard
-            key={s.id}
             poster={pickLibraryPoster(s)}
             title={s.title}
             year={s.year}
@@ -588,7 +590,7 @@ function LibraryResults({ query, letter, loading, error, items, onCardClick }: L
             onClick={() => onCardClick(s)}
           />
         )
-      })}
-    </ResultGrid>
+      }}
+    />
   )
 }
