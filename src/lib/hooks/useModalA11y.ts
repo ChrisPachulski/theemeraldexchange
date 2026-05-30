@@ -27,9 +27,10 @@ export function useModalA11y<T extends HTMLElement>(onClose: () => void) {
   // Keep the latest onClose without re-running the effect (and re-trapping
   // focus) every render.
   const onCloseRef = useRef(onClose)
-  // eslint-disable-next-line react-hooks/refs -- latest-ref idiom: keep the ref
-  // pointed at the freshest onClose so the effect's keydown handler never closes
-  // over a stale callback. Write-only during render; render-safe.
+  // Latest-ref idiom: keep the ref pointed at the freshest onClose so the
+  // effect's keydown handler never closes over a stale callback. Write-only
+  // during render; render-safe.
+  // eslint-disable-next-line react-hooks/refs
   onCloseRef.current = onClose
 
   useEffect(() => {
