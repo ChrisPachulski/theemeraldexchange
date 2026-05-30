@@ -501,6 +501,59 @@ describe('radarr — add body rewrite (cap + monitor policy)', () => {
   })
 })
 
+// Add + "search now" but the title has NO releases yet (unreleased/future
+// film). The movie must be KEPT and flipped to monitored so Radarr's RSS
+// sync grabs it when a release appears — NOT rolled back with a 424.
+describe('radarr POST /movie — no releases yet → monitor for future', () => {
+  it('keeps the movie and sets monitored (200 monitoring), does NOT roll back', async () => {
+    let putMonitored: Record<string, unknown> | null = null
+    let deleteCalled = false
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(JSON.stringify([{ id: 1, path: '/data/movies', freeSpace: 500 * 1024 ** 3 }]), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/movie') && init?.method === 'POST') {
+          return new Response(JSON.stringify({ id: 803, title: 'Pressure', monitored: false }), { status: 201 })
+        }
+        if (url.includes('/api/v3/release?movieId=803')) {
+          return new Response('[]', { status: 200 }) // no releases exist yet
+        }
+        if (url.endsWith('/api/v3/movie/803') && init?.method === 'PUT') {
+          putMonitored = JSON.parse(init.body as string)
+          return new Response(JSON.stringify({ id: 803, monitored: true }), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/movie/803') && init?.method === 'DELETE') {
+          deleteCalled = true
+          return new Response('', { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/movie', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: 'Pressure',
+        tmdbId: 803,
+        rootFolderPath: '/data/movies',
+        qualityProfileId: 7,
+        monitored: true,
+        addOptions: { searchForMovie: true },
+      }),
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { status: string; monitored: boolean }
+    expect(body.status).toBe('monitoring')
+    expect(body.monitored).toBe(true)
+    expect(putMonitored).not.toBeNull()
+    expect((putMonitored as unknown as { monitored: boolean }).monitored).toBe(true)
+    expect(deleteCalled).toBe(false) // the add is preserved, not rolled back
+  })
+})
+
 // POST /api/v3/movie/:id/upgrade — admin-only manual upgrade trigger.
 // Reuses the same cap-filter chain as the add flow (so it can't
 // download a 50 GB rip even though it's logically an upgrade request)
