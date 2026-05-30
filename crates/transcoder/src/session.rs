@@ -43,6 +43,20 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// A segment/asset name is safe to join onto the session dir iff it is a
+/// single, ordinary path component: non-empty, not `.`/`..`, and built only
+/// from `[A-Za-z0-9._-]` (no separators, no NUL, no absolute paths). ffmpeg
+/// only ever writes `seg_%05d.ts` and `index.m3u8`, so this whitelist is
+/// strictly wider than the real surface while still blocking traversal.
+fn is_safe_segment_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+}
+
 fn sanitize(value: &str) -> String {
     value
         .chars()
@@ -161,18 +175,39 @@ impl SessionManager {
     /// Construct from the environment: `TRANSCODER_FFMPEG_BIN` (default
     /// `ffmpeg`), `TRANSCODER_TMP_DIR` (default `/tmp/eex-transcode`),
     /// concurrency caps, and `TRANSCODER_HW_ENCODER`.
+    ///
+    /// NOTE: this reads `TRANSCODER_HW_ENCODER` RAW — it does NOT verify the
+    /// encoder is actually built into ffmpeg. Callers that have run boot-time
+    /// detection (see [`crate::encoders::detect`]) MUST use
+    /// [`SessionManager::from_env_with_encoder`] with the resolved encoder so a
+    /// misconfigured HW family does not launch every ffmpeg with a `-c:v` the
+    /// binary lacks (which would crash-loop the session → 503 to the user).
     pub fn from_env() -> Self {
+        SessionManager::from_env_with_encoder(HwEncoder::from_env())
+    }
+
+    /// Construct from the environment, but with an already-resolved (boot-time
+    /// detected) hardware encoder. This is the constructor `main.rs` uses after
+    /// `encoders::detect().resolve(...)`, so the manager launches ffmpeg with an
+    /// encoder the binary actually supports (and the CPU concurrency cap keys on
+    /// the RESOLVED family, not the configured one).
+    pub fn from_env_with_encoder(encoder: HwEncoder) -> Self {
         let ffmpeg_bin = std::env::var("TRANSCODER_FFMPEG_BIN").unwrap_or_else(|_| "ffmpeg".into());
         let tmp_root = std::env::var("TRANSCODER_TMP_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| std::env::temp_dir().join("eex-transcode"));
-        let encoder = HwEncoder::from_env();
         SessionManager::new(
             Limiter::new(Caps::from_env()),
             ffmpeg_bin,
             tmp_root,
             encoder,
         )
+    }
+
+    /// The hardware encoder this manager launches ffmpeg with (the resolved
+    /// family once boot detection has run).
+    pub fn encoder(&self) -> HwEncoder {
+        self.encoder
     }
 
     pub fn limiter(&self) -> &Limiter {
@@ -296,8 +331,9 @@ impl SessionManager {
         s.start_secs = to_secs;
         s.last_seen = now_secs();
         // Clear the temp segments so the player doesn't replay stale media.
-        let _ = std::fs::remove_dir_all(&s.dir);
-        let _ = std::fs::create_dir_all(&s.dir);
+        // Use tokio::fs (not std::fs) so we never block an executor thread.
+        let _ = tokio::fs::remove_dir_all(&s.dir).await;
+        let _ = tokio::fs::create_dir_all(&s.dir).await;
         match self.spawn_child(id, &s.input_path, &s.plan, &s.dir, to_secs) {
             Ok(child) => {
                 s.child = Some(child);
@@ -348,6 +384,23 @@ impl SessionManager {
             .await
             .get(id)
             .map(|s| s.manifest_path())
+    }
+
+    /// Resolve a named asset (an HLS segment or the playlist) inside a session's
+    /// dir, defending against path traversal. The HLS manifest references
+    /// segments by bare filename (`seg_%05d.ts`), so the player requests them
+    /// relative to the manifest URL; this maps that name back to a file on disk.
+    ///
+    /// Returns `None` for an unknown session OR for any `name` that is not a
+    /// single, safe path component (no `/`, `\`, `.` / `..`, or NUL) — so a
+    /// crafted segment name can never escape the session dir to read library
+    /// bytes the caller was not granted.
+    pub async fn asset_path(&self, id: &str, name: &str) -> Option<PathBuf> {
+        if !is_safe_segment_name(name) {
+            return None;
+        }
+        let dir = self.sessions.lock().await.get(id).map(|s| s.dir.clone())?;
+        Some(dir.join(name))
     }
 
     /// Number of live sessions.
@@ -459,6 +512,15 @@ impl SessionManager {
                     Duration::from_millis(100u64.saturating_mul(1 << (attempt - 1)).min(2_000));
                 tracing::warn!(session = %id, attempt, ?code, ?backoff, "ffmpeg exited; restarting with backoff");
                 tokio::time::sleep(backoff).await;
+
+                // Clear the session dir before respawning so the fresh ffmpeg
+                // restarts segment numbering at seg_00000 against a clean
+                // playlist. Without this, `append_list` re-writes index.m3u8
+                // referencing a brand-new seg_00000 while the player may still
+                // hold the pre-crash one — a stale-media/discontinuity blip on
+                // every crash-recovery. (Mirrors the seek() dir-clear.)
+                let _ = tokio::fs::remove_dir_all(&dir).await;
+                let _ = tokio::fs::create_dir_all(&dir).await;
 
                 match this.spawn_child(&id, &input, &plan, &dir, start_secs) {
                     Ok(new_child) => {
@@ -684,6 +746,81 @@ mod tests {
         let id2 = mgr.start(opts("/lib/c.mkv")).await.unwrap();
         assert_eq!(mgr.len().await, 1);
         mgr.stop(&id2).await;
+    }
+
+    #[test]
+    fn safe_segment_name_whitelist() {
+        assert!(is_safe_segment_name("seg_00000.ts"));
+        assert!(is_safe_segment_name("index.m3u8"));
+        assert!(!is_safe_segment_name(""));
+        assert!(!is_safe_segment_name("."));
+        assert!(!is_safe_segment_name(".."));
+        assert!(!is_safe_segment_name("../secret"));
+        assert!(!is_safe_segment_name("a/b"));
+        assert!(!is_safe_segment_name("a\\b"));
+        assert!(!is_safe_segment_name("/etc/passwd"));
+    }
+
+    #[tokio::test]
+    async fn asset_path_resolves_segment_and_blocks_traversal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
+        let id = mgr.start(opts("/lib/a.mkv")).await.unwrap();
+
+        // A safe segment name resolves inside the session dir.
+        let seg = mgr.asset_path(&id, "seg_00000.ts").await.unwrap();
+        assert!(seg.ends_with("seg_00000.ts"));
+        let dir = mgr.manifest_path(&id).await.unwrap();
+        let dir = dir.parent().unwrap();
+        assert!(
+            seg.starts_with(dir),
+            "segment must live under the session dir"
+        );
+
+        // Traversal attempts are rejected.
+        assert!(mgr.asset_path(&id, "../../etc/passwd").await.is_none());
+        assert!(mgr.asset_path(&id, "a/b.ts").await.is_none());
+        // Unknown session → None even for a safe name.
+        assert!(mgr.asset_path("tx:nope", "seg_00000.ts").await.is_none());
+
+        mgr.stop(&id).await;
+    }
+
+    #[tokio::test]
+    async fn manager_uses_resolved_encoder_for_ffmpeg_args() {
+        // A manager built with a forced encoder must launch ffmpeg with THAT
+        // encoder's -c:v, not whatever TRANSCODER_HW_ENCODER says. We assert on
+        // the arg vector the manager would build for an encode plan.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = SessionManager::new(
+            Limiter::new(Caps {
+                max_total: 4,
+                max_cpu: 4,
+            }),
+            "ffmpeg".into(),
+            tmp.path().join("s"),
+            HwEncoder::Cpu,
+        );
+        assert_eq!(mgr.encoder(), HwEncoder::Cpu);
+        let plan = TranscodePlan::Transcode {
+            video: VideoOp::EncodeH264 {
+                scale_to_height: None,
+                tone_map: false,
+                burn_subtitle_index: None,
+            },
+            audio: AudioOp::Copy,
+            subtitle: SubtitleOp::None,
+            reason: "test".into(),
+        };
+        let args = crate::args::ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, mgr.encoder());
+        let j = args.join(" ");
+        assert!(
+            j.contains("-c:v libx264"),
+            "resolved CPU encoder must drive ffmpeg: {j}"
+        );
+
+        // is_cpu cap keying reflects the resolved encoder.
+        assert!(mgr.encoder().is_cpu());
     }
 
     #[tokio::test]
