@@ -101,6 +101,26 @@ export function stopRemuxSession(sessionId: string): void {
   removeDir(s.dir)
 }
 
+/**
+ * Drain every live remux session for graceful shutdown (finding 14-2).
+ *
+ * On a deploy/SIGTERM the prior code never stopped these ffmpeg children, so
+ * they could be orphaned. This SIGTERMs each, then waits (bounded by
+ * `graceMs`) for the child to actually exit — the 'exit' handler removes the
+ * session from the Map — before resolving, so the caller can proceed to close
+ * the DBs without racing an ffmpeg still writing into the temp dir. A child
+ * that ignores SIGTERM is SIGKILLed by the timer inside stopRemuxSession.
+ */
+export async function drainRemuxSessions(graceMs = 5_000): Promise<void> {
+  const ids = [...sessions.keys()]
+  if (ids.length === 0) return
+  for (const id of ids) stopRemuxSession(id)
+  const deadline = Date.now() + graceMs
+  while (sessions.size > 0 && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 50))
+  }
+}
+
 function sweepIdleSessions(): void {
   const now = Date.now()
   for (const s of sessions.values()) {

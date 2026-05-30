@@ -14,11 +14,14 @@
 
 import * as Sentry from '@sentry/node'
 import { serve } from '@hono/node-server'
+import type { ScheduledTask } from 'node-cron'
 import { env } from './env.js'
 import { app } from './app.js'
 import { validateFfmpegOrExit } from './services/ffmpeg.js'
 import { piiBreadcrumbScrub, piiScrub } from './services/telemetryPiiScrub.js'
 import { registerIptvSchedule } from './services/iptvScheduler.js'
+import { registerDbBackupSchedule } from './services/dbBackupScheduler.js'
+import { drainRemuxSessions } from './services/iptvRemux.js'
 import { closeIptvDb } from './services/iptvDbSingleton.js'
 import { ensureServerId, closeServerDb } from './services/serverDb.js'
 
@@ -69,12 +72,21 @@ if (Date.now() >= new Date('2026-06-25').getTime()) {
 const serverId = ensureServerId()
 console.log(`[boot] server_id: ${serverId}`)
 
-serve(
+// Capture the http.Server handle so graceful shutdown can stop accepting new
+// connections and drain in-flight requests (finding 14-2) — the prior code
+// discarded this return value and could not close the listener.
+const server = serve(
   { fetch: app.fetch, port: env.port },
   (info) => {
     console.log(`backend listening on http://localhost:${info.port}`)
   },
 )
+
+// Cron tasks captured so shutdown can stop them before closing the DBs they
+// write into (finding 14-2). The DB-backup cron is NOT IPTV-gated (server.db
+// durability matters even on IPTV_DISABLED builds, finding 14-4).
+const cronTasks: ScheduledTask[] = []
+cronTasks.push(registerDbBackupSchedule(env.DB_BACKUP_CRON))
 
 // IPTV sync is opt-in: only register the cron when all three Xtream creds
 // are configured AND the reviewer-insurance gate is not set. Keeps the
@@ -87,15 +99,66 @@ if (
   env.XTREAM_USERNAME &&
   env.XTREAM_PASSWORD
 ) {
-  void registerIptvSchedule(env.IPTV_SYNC_CRON)
+  void registerIptvSchedule(env.IPTV_SYNC_CRON).then((tasks) => {
+    cronTasks.push(...tasks)
+  })
 }
 
-function shutdown(signal: NodeJS.Signals): void {
-  // Close dependent DBs before the root server.db they depend on.
-  // Boot order is server.db first (§7.4); shutdown order is the reverse.
-  closeIptvDb()
-  closeServerDb()
-  process.exit(signal === 'SIGINT' ? 130 : 143)
+let shuttingDown = false
+
+/**
+ * Graceful shutdown (finding 14-2). Order matters:
+ *   1. Stop cron so no sync/sweep/backup fires mid-teardown and races a DB close.
+ *   2. server.close() — stop accepting new connections; the callback fires once
+ *      in-flight requests drain. A bounded timer force-exits if a long stream
+ *      keeps the listener open past the grace window.
+ *   3. drainRemuxSessions() — SIGTERM (then bounded SIGKILL) every ffmpeg child
+ *      and wait for exit so none are orphaned and none are still writing the
+ *      temp dir when we close DBs.
+ *   4. Sentry.close() — flush any queued events (ties to finding 14-0).
+ *   5. closeIptvDb() then closeServerDb() — dependents before the root server.db.
+ */
+async function shutdown(signal: NodeJS.Signals): Promise<void> {
+  if (shuttingDown) return
+  shuttingDown = true
+  const exitCode = signal === 'SIGINT' ? 130 : 143
+
+  // Hard backstop: if anything hangs, force-exit so a deploy never wedges.
+  const forceExit = setTimeout(() => {
+    console.error('[shutdown] grace window exceeded; forcing exit')
+    process.exit(exitCode)
+  }, 15_000)
+  forceExit.unref?.()
+
+  try {
+    for (const task of cronTasks) {
+      try {
+        task.stop()
+      } catch {
+        // Task may already be stopped.
+      }
+    }
+
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve())
+    })
+
+    await drainRemuxSessions()
+
+    try {
+      await Sentry.close(2000)
+    } catch {
+      // Telemetry flush is best-effort; never block shutdown on it.
+    }
+
+    closeIptvDb()
+    closeServerDb()
+  } catch (err) {
+    console.error('[shutdown] error during graceful shutdown:', err)
+  } finally {
+    clearTimeout(forceExit)
+    process.exit(exitCode)
+  }
 }
 
 process.once('SIGINT', shutdown)
