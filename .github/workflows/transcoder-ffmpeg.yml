@@ -11,8 +11,7 @@
 #
 # HUMAN DECISION CAPTURED HERE
 # Adopting this job is a product/infra call (CI runner minutes + image pull
-# budget). It is committed but only runs once GitHub Actions is enabled for the
-# repo. Until it is green in CI, M4 must be read as "state-machine complete,
+# budget). Until it is green in CI, M4 must be read as "state-machine complete,
 # transcode unverified" (see docs/ROADMAP-STATUS.md). See also
 # docs/M4-TRANSCODE-VERIFICATION.md for the full rationale.
 
@@ -31,32 +30,52 @@ on:
 
 jobs:
   real-ffmpeg:
+    # Runs on the runner host (NOT inside a container) so the Docker CLI is
+    # available — that's how we extract the EXACT binaries prod ships instead of
+    # chasing a release tarball. (The previous revision pulled
+    #   github.com/wader/static-ffmpeg/releases/download/7.1/linux-amd64.tar.xz
+    # which 404s: static-ffmpeg is published as a Docker image, not a GitHub
+    # release asset, so every run failed at setup before the gate ever ran.)
     runs-on: ubuntu-latest
-    container:
-      # The exact static ffmpeg/ffprobe the runtime image ships, so CI exercises
-      # the production binary — not whatever ffmpeg the runner happens to carry.
-      image: rust:1.90-slim-bookworm
+    timeout-minutes: 20
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install static ffmpeg/ffprobe (matches the runtime Dockerfile)
+      - name: Install static ffmpeg/ffprobe (byte-identical to the runtime Dockerfile)
+        shell: bash
         run: |
-          set -eu
-          # Pull the same pinned static build the runtime stage copies from.
-          # The binaries are fully static, so a plain copy onto PATH is enough.
-          apt-get update
-          apt-get install -y --no-install-recommends ca-certificates xz-utils curl
-          rm -rf /var/lib/apt/lists/*
-          # mwader/static-ffmpeg publishes /ffmpeg and /ffprobe at the image root;
-          # extract them via a throwaway container is not available here, so use
-          # the upstream static release that the image itself is built from.
-          ffdir="$(mktemp -d)"
-          curl -fsSL https://github.com/wader/static-ffmpeg/releases/download/7.1/linux-amd64.tar.xz \
-            | tar -xJ -C "$ffdir"
-          install -m 0755 "$ffdir"/ffmpeg /usr/local/bin/ffmpeg
-          install -m 0755 "$ffdir"/ffprobe /usr/local/bin/ffprobe
+          set -euo pipefail
+          # The runtime stage does:
+          #   COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /ffprobe /usr/local/bin/
+          # Reproduce it exactly: create a throwaway container from that pinned
+          # image and copy the two static binaries out onto PATH. No glibc/runtime
+          # deps (fully static), so a plain copy is enough.
+          FF_IMAGE="mwader/static-ffmpeg:7.1"
+          docker pull "$FF_IMAGE"
+          cid="$(docker create "$FF_IMAGE")"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          sudo docker cp "$cid:/ffmpeg"  /usr/local/bin/ffmpeg
+          sudo docker cp "$cid:/ffprobe" /usr/local/bin/ffprobe
+          sudo chmod 0755 /usr/local/bin/ffmpeg /usr/local/bin/ffprobe
           ffmpeg -version | head -n 1
           ffprobe -version | head -n 1
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.90'
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-transcoder-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-transcoder-
+            ${{ runner.os }}-cargo-
 
       - name: Run the real-ffmpeg gate
         env:
