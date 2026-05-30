@@ -8,11 +8,20 @@
 //! multi audio/subtitle tracks, missing fields.
 
 use std::path::Path;
+use std::process::Stdio;
+use std::time::Duration;
 
 use serde_json::Value;
 use tokio::process::Command;
 
 use crate::models::{AudioTrack, FileProbe, SubtitleTrack};
+
+/// Wall-clock cap for a single `ffprobe` invocation. A corrupt/truncated file,
+/// or a stalled network mount, can make ffprobe hang indefinitely; without a
+/// deadline that wedges the (serial) scan slot forever and leaves `scanning`
+/// stuck `true`, so `POST /scan` returns 409 permanently. 30s is generous for a
+/// healthy probe and short enough that one bad file does not stall the library.
+pub const PROBE_TIMEOUT_SECS: u64 = 30;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProbeError {
@@ -22,22 +31,66 @@ pub enum ProbeError {
     Failed(String),
     #[error("ffprobe output parse error: {0}")]
     Parse(String),
+    #[error("ffprobe timed out after {0}s")]
+    Timeout(u64),
 }
 
 /// Run `ffprobe -v quiet -print_format json -show_format -show_streams <path>`
 /// and return parsed metadata.
+///
+/// The child is spawned with `kill_on_drop(true)` and awaited under a
+/// [`PROBE_TIMEOUT_SECS`] deadline; on expiry it is force-killed and
+/// [`ProbeError::Timeout`] is returned so the scanner can log it, count it, and
+/// move on rather than blocking the scan forever. `-analyzeduration`/`-probesize`
+/// bound how much of a well-formed-but-huge input ffprobe will read before it
+/// reports, capping the common slow case in addition to the hard timeout.
 pub async fn ffprobe(path: &Path) -> Result<FileProbe, ProbeError> {
-    let output = Command::new("ffprobe")
+    ffprobe_with_bin("ffprobe", path).await
+}
+
+/// Inner implementation with an injectable binary so the timeout/kill behavior
+/// can be exercised against a stub that sleeps (see tests). Production always
+/// goes through [`ffprobe`] with the real `ffprobe` binary.
+async fn ffprobe_with_bin(bin: &str, path: &Path) -> Result<FileProbe, ProbeError> {
+    ffprobe_with_bin_timeout(bin, path, Duration::from_secs(PROBE_TIMEOUT_SECS)).await
+}
+
+/// As [`ffprobe_with_bin`] but with an explicit deadline (tests use a short one
+/// so the timeout path is exercised without a 30s wait).
+async fn ffprobe_with_bin_timeout(
+    bin: &str,
+    path: &Path,
+    deadline: Duration,
+) -> Result<FileProbe, ProbeError> {
+    let mut child = Command::new(bin)
         .arg("-v")
         .arg("quiet")
         .arg("-print_format")
         .arg("json")
         .arg("-show_format")
         .arg("-show_streams")
+        // Bound the bytes/μs ffprobe will analyze on pathologically large but
+        // valid inputs (10s / 50MB are well above what stream metadata needs).
+        .arg("-analyzeduration")
+        .arg("10000000")
+        .arg("-probesize")
+        .arg("50000000")
         .arg(path)
-        .output()
-        .await
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
         .map_err(|e| ProbeError::Spawn(e.to_string()))?;
+
+    let output = match tokio::time::timeout(deadline, child.wait_with_output()).await {
+        Ok(Ok(output)) => output,
+        // ffprobe ran to completion but the I/O plumbing failed.
+        Ok(Err(e)) => return Err(ProbeError::Spawn(e.to_string())),
+        // Deadline hit: the `child` handle was moved into wait_with_output, so
+        // it is dropped here and `kill_on_drop` reaps the still-running ffprobe.
+        Err(_) => return Err(ProbeError::Timeout(deadline.as_secs())),
+    };
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -206,6 +259,46 @@ fn parse_i64(v: &Value) -> Option<i64> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// A stub "ffprobe" that ignores its args and sleeps far past the deadline,
+    /// modeling a hung probe on a corrupt file or stalled mount.
+    #[cfg(unix)]
+    fn write_sleeping_stub(dir: &std::path::Path) -> std::path::PathBuf {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        let p = dir.join("ffprobe_sleep_stub.sh");
+        let mut f = std::fs::File::create(&p).unwrap();
+        f.write_all(b"#!/bin/sh\nsleep 30\n").unwrap();
+        let mut perms = std::fs::metadata(&p).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&p, perms).unwrap();
+        p
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ffprobe_times_out_and_frees_the_slot() {
+        // A hung probe must return ProbeError::Timeout quickly (well under the
+        // stub's 30s sleep), proving the deadline fires and the await returns so
+        // the scan slot is freed instead of wedging forever.
+        let dir = tempfile::tempdir().unwrap();
+        let stub = write_sleeping_stub(dir.path());
+        let started = std::time::Instant::now();
+        let result = ffprobe_with_bin_timeout(
+            stub.to_str().unwrap(),
+            std::path::Path::new("/whatever.mkv"),
+            Duration::from_millis(150),
+        )
+        .await;
+        assert!(
+            matches!(result, Err(ProbeError::Timeout(_))),
+            "expected Timeout, got {result:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "timeout must return promptly, not after the stub's full sleep"
+        );
+    }
 
     #[test]
     fn h264_mp4_sdr_stereo_aac() {
