@@ -163,10 +163,14 @@ export async function streamXmltv(
   // on the live 151MB feed: tv:1, programme:507973, channel:0). The programmes
   // we need still stream through SAX above; the channel aliases (used for
   // name-based EPG matching) are extracted here from the byte stream instead.
-  // Channels precede all programmes, so we accumulate only the head until the
-  // first <programme>, extract, then stop — bounded memory (~1-2MB).
+  // Scan the WHOLE stream for <channel> blocks (this feed interleaves some
+  // channel defs after the first <programme>, so we can't stop early). Memory
+  // stays bounded: after extracting complete channels we drop everything up to
+  // the last "<channel" start (or keep just a short tail if none), so the
+  // buffer never holds the 151MB of programme text — only at most one partial
+  // <channel> block plus a small carry for a tag split across a chunk boundary.
   let sniffBuf = ''
-  let sniffing = Boolean(onChannelDef)
+  const sniffEnabled = Boolean(onChannelDef)
   const CHANNEL_RE = /<channel\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/channel>/g
   const extractChannelDefs = (): void => {
     CHANNEL_RE.lastIndex = 0
@@ -183,18 +187,15 @@ export async function streamXmltv(
       onChannelDef?.({ id: m[1], names })
       lastEnd = CHANNEL_RE.lastIndex
     }
-    if (lastEnd > 0) sniffBuf = sniffBuf.slice(lastEnd) // keep trailing partial
+    if (lastEnd > 0) sniffBuf = sniffBuf.slice(lastEnd)
+    // Drop accumulated programme text but keep any trailing partial <channel>.
+    const lastOpen = sniffBuf.lastIndexOf('<channel')
+    if (lastOpen === -1) sniffBuf = sniffBuf.slice(-16)
+    else if (lastOpen > 0) sniffBuf = sniffBuf.slice(lastOpen)
   }
   const onSniffData = (chunk: Buffer | string): void => {
-    if (!sniffing) return
     sniffBuf += typeof chunk === 'string' ? chunk : chunk.toString('utf8')
     extractChannelDefs()
-    if (sniffBuf.includes('<programme')) {
-      extractChannelDefs() // final pass on any complete channel before programmes
-      sniffing = false
-      sniffBuf = ''
-      xmlStream.off('data', onSniffData)
-    }
   }
 
   await new Promise<void>((resolve, reject) => {
