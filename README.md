@@ -1,70 +1,92 @@
 # The Emerald Exchange
 
-A unified media dashboard at `http://theemeraldexchange.local:8085` that replaces the operator-grade UIs of Sonarr, Radarr, and SAB. One bookmark. Find a show, find a movie, see what's downloading, open Plex.
+An invite-only, self-hosted streaming platform — a Plex-style media experience
+the household owns end to end. Members sign in, browse the library, watch live
+and on-demand, and request new titles; the owner curates and administers. The
+web client is the reference surface; native iOS/tvOS clients are the
+distribution target.
 
-Port 8085 because Caddy already owns port 80 on the NAS and is reverse-proxying the legacy `/tv`, `/movies`, `/downloads` paths to the raw apps. Both pathways coexist; the dashboard does not displace what was there.
+This repository is proprietary. See [LICENSE](./LICENSE).
 
-## Stack
+## Architecture
 
-- **React 19 + Vite + TypeScript** — fastest static-build path; Impeccable design via the project-local skill at `.claude/skills/impeccable/`
-- **TanStack Query** — caching, polling, mutations
-- **Nginx** (Docker) — serves the static dashboard and reverse-proxies the *arr / SAB APIs at same-origin paths, injecting API keys server-side so they never reach the browser
+Four runtimes, one product:
 
-## Surface
+- **Web client** (`src/`) — React 19 + Vite + TypeScript SPA. Entry
+  `src/main.tsx`; app shell in `src/App.tsx`. Served as a static bundle
+  (Netlify in prod) that talks to the backend over `/api/*`.
+- **Backend** (`server/`) — Hono + TypeScript (run with `tsx`). Process entry
+  `server/index.ts`; the app is assembled in `server/app.ts`. Owns auth,
+  authorization, the IPTV core, the *arr/SAB bridges, recommender and
+  media-core proxies, telemetry distribution, and the SQLite data layer.
+- **Rust workspace** (`crates/`) — `emerald-contracts` (cross-language token
+  crypto, with `-napi` and `-pyo3` bindings), `media-core` (M3 library
+  scan/metadata/serve), and `transcoder` (M4 ffmpeg-HLS sessions).
+- **Recommender** (`recommender/`) — Python FastAPI + sqlite-vec scoring
+  sidecar. Local-first: household signals never leave the NAS.
 
-```
-Watch (→ Plex)   ·   TV   ·   Movies   ·   Downloads
-```
+## Authentication & authorization
 
-Four tabs. No admin/family split. Destructive actions (pause, cancel, remove from library) gate behind a confirmation modal. The dashboard is the experience; underlying *arr / SAB UIs are not promoted or linked from inside it.
+There is no homegrown password store. Identity comes from three parallel
+providers, all converging on a single invite/members allowlist:
 
-## Project files
+- **Plex OAuth** (PIN flow)
+- **Sign in with Apple** (RS256, alg/aud/iss/nonce-pinned) for the device-pair
+  bearer flow
+- **WebAuthn passkeys** (cross-platform, password-free)
 
-- `PRODUCT.md` — Impeccable gate. Audience, tone, anti-references, strategic principles.
-- `DESIGN.md` — Impeccable gate. OKLCH palette, type scale, motion easing, spacing rhythm.
-- `DEPLOY.md` — One-time NAS setup + ongoing deploys.
-- `nginx/default.conf` — Production Nginx with API-key-injecting reverse proxies.
-- `Dockerfile` — `nginx:alpine` + envsubst.
-- `scripts/deploy-nas.sh` — `npm run build && rsync && docker restart`.
+A user is authorized only if their identity is on the members allowlist, which
+the owner manages via invites. The Plex token is encrypted at rest (JWE);
+invite redemption is atomic and race-safe.
+
+## Backend surface (`/api`)
+
+`auth`, `auth/device`, `auth/passkey`, `me`, `version`, `devices`,
+`admin/devices`, `admin/invites`, `admin/members`, `sonarr`, `radarr`, `sab`,
+`tmdb`, `iptv`, `users`, `plex`, `notifications`, `grabs`, `suggestions`,
+`feedback`, `usage`, `recommender`, `telemetry`, and (when
+`USE_MEDIA_CORE=1`) `media`. CORS is an explicit allowlist
+(`env.allowedOrigins`); state-changing requests are Origin-gated
+(`requireSafeOrigin`).
 
 ## Local development
 
-1. Copy `.env.example` to `.env.local`. Fill in `SONARR_API_KEY`, `RADARR_API_KEY`, `SAB_API_KEY`. Pull them via:
-   ```bash
-   ssh root@theemeraldexchange.local 'grep -h "ApiKey\|api_key" /mnt/user/appdata/sonarr/config.xml /mnt/user/appdata/radarr/config.xml /mnt/user/appdata/sabnzbd/sabnzbd.ini'
-   ```
-2. `npm install`
-3. `npm run dev`
-4. Open `http://localhost:5173`. The Vite dev server proxies `/api/sonarr`, `/api/radarr`, `/api/sab` to the NAS and injects the keys, mirroring what Nginx does in production.
-
-## Production deploy
-
-See [DEPLOY.md](./DEPLOY.md). Short version after first-time setup:
-
 ```bash
-./scripts/deploy-nas.sh
+npm install
+npm run dev        # vite + tsx backend (concurrently)
 ```
 
-## Design contract
+`npm run dev` runs the SPA (Vite, port 5173) and the backend together; Vite
+proxies `/api/*` to the backend so requests are same-origin in dev. Backend
+secrets live in `.env` (gitignored) — never commit API keys, tokens, or DSNs.
 
-- Color: Committed (one emerald accent at ~30 to 40% surface coverage; neutrals tinted toward the same hue)
-- Theme: dark (no light theme in V1)
-- No `#000` / `#fff`, no gradient text, no side-stripe borders, no card-grid monotony, no em dashes in copy
-- Motion: ease-out-quint, 140 to 220ms; reduced-motion respected
-- Native `<dialog>` for modals (free focus trap and ESC); Enter never submits destructive actions
+## Build & test
 
-See `DESIGN.md` for the full token set.
+```bash
+npm run build      # tsc -b && vite build && tsc -p server/tsconfig.json
+npm test           # vitest run
+npm run build:napi # build the emerald-contracts N-API binding
 
-## Phases shipped (V1)
+cargo test -p emerald-contracts -p media-core -p transcoder
+( cd recommender && pytest )
+```
 
-1. **Foundation** — scaffold, Impeccable install, Nginx proxy, API skeletons
-2. **Shell** — top nav, tab router, ConfirmModal primitive (`useConfirm` hook)
-3. **TV tab** — Sonarr search-as-you-type, In Library badge, AddSeriesModal, remove flow
-4. **Movies tab** — Radarr mirror of TV
-5. **Downloads tab** — SAB live queue, pause/resume/cancel, history strip
-6. **Polish** — em-dash audit, lint, mobile responsiveness, motion tokens
-7. **Deploy** — Docker container, deploy script, deploy guide
+## Deploy
 
-## Out of scope (V1)
+Self-hosted on the NAS (`root@theemeraldexchange.local`, Unraid) via
+`docker-compose` (~15 services) behind a Cloudflare Tunnel; the SPA ships to
+Netlify. Crash/error telemetry is per-self-hoster Glitchtip (§15), with the DSN
+distributed server → client at boot. See [DEPLOY.md](./DEPLOY.md).
 
-Episode picker, calendar, settings panel, Tautulli stats, home tab widgets, Netlify production deploy. Deferred to V2 once the dashboard proves it has legs. Plan file at `~/.claude/plans/instead-could-we-robust-journal.md`.
+## Project docs
+
+- [PRODUCT.md](./PRODUCT.md) — audience, principles, scope.
+- [DESIGN.md](./DESIGN.md) — Impeccable design contract (palette, type, motion).
+- [DEPLOY.md](./DEPLOY.md) — NAS setup and ongoing deploys.
+
+## Roadmap
+
+M1 (IPTV core) shipped. M1.5 is the cross-service contract gate. M2 brings the
+Apple clients (the App-Store target), M3 the Rust media-core, M4 the
+transcoder, M5 the native clients. Until the first binary is distributed the
+repository stays private; third-party redistribution is not granted.
