@@ -1,16 +1,19 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
 import fs from 'node:fs'
-import path from 'node:path'
-import os from 'node:os'
 
 // Point server.db at a throwaway temp file before env.ts evaluates. vi.hoisted
 // runs before the static fs/path/os imports, so it requires its own builtins.
 const { tmpDbDir } = vi.hoisted(() => {
+  /* eslint-disable @typescript-eslint/no-require-imports -- vi.hoisted runs before ESM imports init; require is required here */
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- vi.hoisted runs pre-ESM-init; require needed
   const nodeFs = require('node:fs') as typeof import('node:fs')
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- vi.hoisted runs pre-ESM-init; require needed
   const nodePath = require('node:path') as typeof import('node:path')
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- vi.hoisted runs pre-ESM-init; require needed
   const nodeOs = require('node:os') as typeof import('node:os')
   const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'invites-test-'))
   process.env.SERVER_DB_PATH = nodePath.join(dir, 'server.db')
+  /* eslint-enable @typescript-eslint/no-require-imports */
   return { tmpDbDir: dir }
 })
 
@@ -160,7 +163,7 @@ describe('invites service', () => {
 
   it('listInvites never leaks the plaintext or full hash, and derives status', () => {
     const active = issueInvite(ADMIN, { label: 'active' })
-    const expired = issueInvite(ADMIN, { label: 'expired', expiresInDays: -1 })
+    issueInvite(ADMIN, { label: 'expired', expiresInDays: -1 })
     const revoked = issueInvite(ADMIN, { label: 'revoked' })
     revokeInvite(revoked.code_hash_prefix)
     const exhausted = issueInvite(ADMIN, { label: 'exhausted', maxUses: 1 })
