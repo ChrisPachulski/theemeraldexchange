@@ -125,4 +125,23 @@ describe('epg queries', () => {
     expect(rows[0].stream_id).toBe(20)
     expect(rows[0].programmes.map((row) => row.title)).toEqual(['Other Channel'])
   })
+
+  it('epgGrid hasEpgOnly drops channels without programmes in the window', () => {
+    // C1 + C2 have programmes; "No EPG" (stream 30, null tvg-id) does not.
+    const all = epgGrid(db, '2026-05-24T10:00:00Z', '2026-05-24T13:00:00Z')
+    expect(all.map((r) => r.stream_id)).toEqual([10, 20, 30])
+
+    const scoped = epgGrid(db, '2026-05-24T10:00:00Z', '2026-05-24T13:00:00Z', { hasEpgOnly: true })
+    expect(scoped.map((r) => r.stream_id)).toEqual([10, 20])
+  })
+
+  it('epgGrid filters by channel-name query', () => {
+    const rows = epgGrid(db, '2026-05-24T10:00:00Z', '2026-05-24T13:00:00Z', { q: 'C1' })
+    expect(rows.map((r) => r.stream_id)).toEqual([10])
+  })
+
+  it('epgGrid returns no rows when hasEpgOnly and the window is empty', () => {
+    const rows = epgGrid(db, '2020-01-01T00:00:00Z', '2020-01-01T01:00:00Z', { hasEpgOnly: true })
+    expect(rows).toEqual([])
+  })
 })
