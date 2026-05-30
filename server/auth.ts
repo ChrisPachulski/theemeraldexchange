@@ -34,6 +34,7 @@ import {
   clearSessionCookie,
   readSession,
   authModeFromSession,
+  type AuthMode,
 } from './session.js'
 import {
   _primeSessionGateCache,
@@ -228,11 +229,16 @@ async function parseLimitedJson(c: Context, maxBytes: number): Promise<{ tooLarg
 //
 // The sub passed here MUST already be the signature/PIN-verified,
 // parseSub-validated namespaced form. authZ never trusts a client sub.
-function authorizeOrRedeem(
+//
+// authMode spans all three identity providers — 'plex' | 'apple' | 'local'
+// (passkey/WebAuthn) — because the allowlist is the single shared authZ gate
+// for every login path. Exported so the passkey route reuses the exact same
+// admit/redeem decision rather than reimplementing it.
+export function authorizeOrRedeem(
   sub: string,
   inviteCode: string | undefined,
   displayName: string | null,
-  authMode: 'plex' | 'apple',
+  authMode: AuthMode,
 ): { allowed: boolean } {
   if (memberStatus(sub) === 'allowed') return { allowed: true }
   if (inviteCode) {
