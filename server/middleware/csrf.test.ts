@@ -116,6 +116,73 @@ describe('requireSafeOrigin — allowlist enforcement', () => {
   })
 })
 
+describe('requireSafeOrigin — bearer-only (native app) exemption', () => {
+  it.each(['POST', 'PUT', 'PATCH', 'DELETE'])(
+    'allows %s with Authorization: Bearer and no Cookie, even with no Origin',
+    async (method) => {
+      const app = await buildApp({ allowedOrigins: ['https://app.example'], isProd: true })
+      const r = await app.request('/echo', {
+        method,
+        headers: { Authorization: 'Bearer device.jwe.token' },
+      })
+      expect(r.status).toBe(200)
+    },
+  )
+
+  it('still gates a bearer request that ALSO carries a Cookie (cookie is the CSRF vector)', async () => {
+    const app = await buildApp({ allowedOrigins: ['https://app.example'], isProd: true })
+    const r = await app.request('/echo', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer device.jwe.token', Cookie: 'eex_session=abc' },
+    })
+    expect(r.status).toBe(403)
+    expect(await r.json()).toEqual({ error: 'forbidden', reason: 'bad_origin' })
+  })
+
+  it('does not exempt a non-bearer Authorization scheme', async () => {
+    const app = await buildApp({ allowedOrigins: ['https://app.example'], isProd: true })
+    const r = await app.request('/echo', {
+      method: 'POST',
+      headers: { Authorization: 'Basic dXNlcjpwYXNz' },
+    })
+    expect(r.status).toBe(403)
+  })
+
+  it('still rejects a cookieless POST with no Authorization at all', async () => {
+    const app = await buildApp({ allowedOrigins: ['https://app.example'], isProd: true })
+    const r = await app.request('/echo', { method: 'POST' })
+    expect(r.status).toBe(403)
+  })
+})
+
+describe('requireTrustedOrigin — bearer-only exemption applies to reads too', () => {
+  it('allows a bearer-only GET with no Origin (native app suggestions fetch)', async () => {
+    const app = await buildApp({
+      allowedOrigins: ['https://app.example'],
+      isProd: true,
+      middleware: 'trusted',
+    })
+    const r = await app.request('/echo', {
+      method: 'GET',
+      headers: { Authorization: 'Bearer device.jwe.token' },
+    })
+    expect(r.status).toBe(200)
+  })
+
+  it('still gates a bearer GET that also carries a Cookie', async () => {
+    const app = await buildApp({
+      allowedOrigins: ['https://app.example'],
+      isProd: true,
+      middleware: 'trusted',
+    })
+    const r = await app.request('/echo', {
+      method: 'GET',
+      headers: { Authorization: 'Bearer device.jwe.token', Cookie: 'eex_session=abc' },
+    })
+    expect(r.status).toBe(403)
+  })
+})
+
 // requireTrustedOrigin is the sibling that does NOT bypass GET/HEAD —
 // used on the small set of read endpoints with server-side
 // side-effects (e.g. the suggestions GET writes recently_shown via
