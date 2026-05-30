@@ -26,6 +26,21 @@ import { env } from '../env.js'
 
 const STATE_CHANGING = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 
+// Native clients (the iOS/tvOS app) authenticate with a bearer token and
+// send NO cookie. The entire CSRF rationale above is cookie-based: the
+// attack is a browser auto-attaching a SameSite=None session cookie to a
+// forged cross-origin request. A request carrying `Authorization: Bearer`
+// and NO `Cookie` has no ambient credential to ride — the browser never
+// auto-attaches an Authorization header, and a bearer can't be forged from
+// a victim's tab — so the Origin check is moot for it. A request that
+// presents BOTH a bearer and a cookie is still gated: the cookie remains a
+// CSRF vector regardless of the bearer.
+function isBearerOnly(c: Parameters<MiddlewareHandler>[0]): boolean {
+  const auth = c.req.header('authorization')
+  if (!auth || !auth.startsWith('Bearer ')) return false
+  return !c.req.header('cookie')
+}
+
 function checkOrigin(origin: string | undefined): { ok: true } | { ok: false; reason: string } {
   if (env.allowedOrigins.length === 0) {
     // Dev / unconfigured: same-origin via Vite proxy. In prod env.ts
@@ -48,6 +63,10 @@ export const requireSafeOrigin: MiddlewareHandler = async (c, next) => {
     await next()
     return
   }
+  if (isBearerOnly(c)) {
+    await next()
+    return
+  }
   const verdict = checkOrigin(c.req.header('origin'))
   if (!verdict.ok) {
     return c.json({ error: 'forbidden', reason: verdict.reason }, 403)
@@ -61,6 +80,10 @@ export const requireSafeOrigin: MiddlewareHandler = async (c, next) => {
 // (cookies are SameSite=None in prod) and poison server-side state
 // like the recommender's recently_shown rotation.
 export const requireTrustedOrigin: MiddlewareHandler = async (c, next) => {
+  if (isBearerOnly(c)) {
+    await next()
+    return
+  }
   const verdict = checkOrigin(c.req.header('origin'))
   if (!verdict.ok) {
     return c.json({ error: 'forbidden', reason: verdict.reason }, 403)
