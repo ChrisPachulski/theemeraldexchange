@@ -1,0 +1,65 @@
+.passkey-signin {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.passkey-signin__toggle {
+  background: none;
+  border: none;
+  color: var(--emerald-300, #6ee7b7);
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0.25rem 0;
+  align-self: center;
+}
+
+.passkey-signin__toggle:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.passkey-signin__register {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid rgba(110, 231, 183, 0.25);
+  border-radius: 0.5rem;
+  background: rgba(6, 78, 59, 0.18);
+}
+
+.passkey-signin__label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.passkey-signin__actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.passkey-signin__cancel {
+  background: none;
+  border: none;
+  color: inherit;
+  opacity: 0.7;
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+}
+
+.passkey-signin__cancel:hover:not(:disabled) {
+  opacity: 1;
+}
+
+.passkey-signin__hint {
+  font-size: 0.75rem;
+  opacity: 0.7;
+  margin: 0;
+  line-height: 1.4;
+}
