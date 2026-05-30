@@ -21,6 +21,20 @@ use crate::models::{EpisodeRow, MediaFileRow, MovieRow, ShowRow, WatchStateRow};
 use crate::scanner;
 use crate::{AppState, SCHEMA_VERSION};
 
+/// Process-wide HTTP client for the outbound transcoder handoff. Built once and
+/// reused so each transcode-required request does not spin up a fresh connection
+/// pool. A short timeout keeps a slow/dead transcoder from holding the request
+/// open — on timeout we fall back to the `503 transcoder required` path.
+fn transcoder_http() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap_or_default()
+    })
+}
+
 pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/movies", get(list_movies))
@@ -393,10 +407,175 @@ impl StreamCapsQuery {
     }
 }
 
+/// Mint a fresh internal-principal Bearer for the media-core → transcoder hop.
+///
+/// We do NOT forward the caller's inbound token: it has a 60s TTL already partly
+/// spent, and media-core only holds the *verified claims* (not a reusable raw
+/// Bearer). Instead we re-mint from the verified claims using the same shared
+/// `INTERNAL_PRINCIPAL_SECRET` both services hold, with a fresh time window — so
+/// the transcoder verifies it identically. Returns `None` when there is no
+/// secret or no verified claims (the `Off`-mode dev path, where the transcoder
+/// is also `Off` and needs no Bearer).
+fn mint_transcoder_principal(state: &AppState, claims: &Option<InternalClaims>) -> Option<String> {
+    let secret = state.config.internal_principal_secret.as_ref()?;
+    let inbound = claims.as_ref()?;
+    let now = chrono::Utc::now().timestamp();
+    let fresh = InternalClaims {
+        iss: inbound.iss.clone(),
+        sub: inbound.sub.clone(),
+        role: inbound.role.clone(),
+        auth_mode: inbound.auth_mode.clone(),
+        server_id: inbound.server_id.clone(),
+        device_id: inbound.device_id.clone(),
+        req_id: format!("mc-tx-{now}"),
+        iat: now,
+        exp: now + emerald_contracts::internal_principal::DEFAULT_TTL_SECS,
+    };
+    Some(emerald_contracts::internal_principal::encrypt_with_secret(
+        secret.as_bytes(),
+        &fresh,
+    ))
+}
+
+/// Everything the transcoder handoff needs for one transcode-required request,
+/// bundled so the call does not balloon into a positional-argument soup.
+struct TranscodeHandoff<'a> {
+    file: &'a MediaFileRow,
+    caps: &'a ClientCaps,
+    kind: &'a str,
+    id: i64,
+    claims: &'a Option<InternalClaims>,
+    /// The capability decision reason, echoed back in the grant for the client.
+    reason: &'a str,
+}
+
+impl TranscodeHandoff<'_> {
+    /// Build the transcoder `POST /api/transcode/grant` body. The transcoder's
+    /// `GrantRequest`/`GrantFile`/`ClientCaps` deserialize from these exact
+    /// field names (verified against transcoder/src/routes.rs), so we serialize
+    /// by hand — `ClientCaps`/`MediaFileRow` are not symmetrically
+    /// `Serialize`/`Deserialize` on this side, but the JSON contract is fixed.
+    fn grant_body(&self) -> Value {
+        let sub = self
+            .claims
+            .as_ref()
+            .map(|c| c.sub.as_str())
+            .unwrap_or_default();
+        json!({
+            "file": {
+                "path": self.file.path,
+                "container": self.file.container,
+                "duration_secs": self.file.duration_secs,
+                "video_codec": self.file.video_codec,
+                "video_height": self.file.video_height,
+                "video_profile": self.file.video_profile,
+                "hdr_format": self.file.hdr_format,
+                "audio_tracks_json": self.file.audio_tracks_json,
+                "subtitle_tracks_json": self.file.subtitle_tracks_json,
+            },
+            "caps": {
+                "containers": self.caps.containers,
+                "video_codecs": self.caps.video_codecs,
+                "max_height": self.caps.max_height,
+                "hdr": self.caps.hdr,
+                "max_bitrate": self.caps.max_bitrate,
+            },
+            "media_kind": self.kind,
+            "media_id": self.id,
+            "sub": sub,
+            "start_secs": 0,
+        })
+    }
+}
+
+/// Hand a transcode-required file off to the M4 transcoder and translate its
+/// response into the media-core handoff contract. Returns the JSON grant the
+/// client (via the Hono proxy) consumes to start HLS playback.
+///
+/// Failure handling treats an unreachable/slow/erroring transcoder as "offline"
+/// → `AppError::TranscoderRequired` (503), identical to the no-URL path, so a
+/// transcoder outage degrades to the exact pre-M4 behavior rather than a 500.
+async fn handoff_to_transcoder(
+    state: &AppState,
+    transcoder_url: &str,
+    handoff: &TranscodeHandoff<'_>,
+) -> Result<axum::response::Response, AppError> {
+    let claims = handoff.claims;
+    let reason = handoff.reason;
+    let body = handoff.grant_body();
+    let url = format!(
+        "{}/api/transcode/grant",
+        transcoder_url.trim_end_matches('/')
+    );
+
+    let mut request = transcoder_http().post(&url).json(&body);
+    if let Some(bearer) = mint_transcoder_principal(state, claims) {
+        request = request.bearer_auth(bearer);
+    }
+
+    let resp = match request.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            // Unreachable/timeout → behave as if no transcoder is configured.
+            tracing::warn!(error = %e, url = %url, "transcoder unreachable; treating as offline");
+            return Err(AppError::TranscoderRequired);
+        }
+    };
+
+    let status = resp.status();
+    let payload: Value = resp.json().await.unwrap_or_else(|_| json!({}));
+
+    if status.is_success() {
+        // The transcoder echoes directPlay:true only if it somehow disagreed
+        // with our decision; we only call it on !direct_play, so on that edge
+        // fall back to the 503 path rather than shipping a contradictory grant.
+        if payload.get("directPlay").and_then(Value::as_bool) == Some(true) {
+            tracing::warn!("transcoder returned directPlay on a transcode-required file; refusing");
+            return Err(AppError::TranscoderRequired);
+        }
+        let session_id = payload.get("sessionId").and_then(Value::as_str);
+        let manifest_url = payload
+            .get("manifestUrl")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| session_id.map(|s| format!("/api/transcode/session/{s}/index.m3u8")));
+        let heartbeat_url = payload
+            .get("heartbeatUrl")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| session_id.map(|s| format!("/api/transcode/session/{s}/heartbeat")));
+
+        return Ok(Json(json!({
+            "transcode": true,
+            "directPlay": false,
+            "sessionId": session_id,
+            "manifestUrl": manifest_url,
+            "heartbeatUrl": heartbeat_url,
+            "reason": reason,
+        }))
+        .into_response());
+    }
+
+    // Surface a genuine "all transcode slots busy" as a 503 the client can
+    // back off on; any other transcoder error also degrades to 503 offline.
+    if payload.get("error").and_then(Value::as_str) == Some("transcoder_busy") {
+        tracing::info!("transcoder busy at capacity");
+        return Ok((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "transcoder_busy" })),
+        )
+            .into_response());
+    }
+
+    tracing::warn!(status = %status, ?payload, "transcoder grant failed; treating as offline");
+    Err(AppError::TranscoderRequired)
+}
+
 async fn stream_file(
     State(state): State<AppState>,
     Path((kind, id)): Path<(String, i64)>,
     Query(caps_q): Query<StreamCapsQuery>,
+    claims: Option<Extension<InternalClaims>>,
     req: Request,
 ) -> Result<axum::response::Response, AppError> {
     let file = resolve_media_file(&state, &kind, id).await?;
@@ -411,13 +590,32 @@ async fn stream_file(
     }
 
     // Honor the direct-play contract (§3.5): if the client advertised caps and
-    // the file can't direct-play, this M3-only deployment has no transcoder, so
-    // return 503 rather than shipping bytes the client can't decode.
+    // the file can't direct-play, hand off to the M4 transcoder when one is
+    // configured (MEDIA_TRANSCODER_URL). Without a transcoder this is the
+    // M3-only posture, so return 503 rather than shipping undecodable bytes.
     if caps_q.advertised() {
-        let decision = capability::decide(&file, &caps_q.to_caps());
+        let caps = caps_q.to_caps();
+        let decision = capability::decide(&file, &caps);
         if !decision.direct_play {
-            tracing::info!(path = %file.path, reason = %decision.reason, "transcode required; refusing direct stream");
-            return Err(AppError::TranscoderRequired);
+            let claims = claims.map(|Extension(c)| c);
+            match state.config.transcoder_url.as_deref() {
+                Some(transcoder_url) => {
+                    tracing::info!(path = %file.path, reason = %decision.reason, "transcode required; handing off to transcoder");
+                    let handoff = TranscodeHandoff {
+                        file: &file,
+                        caps: &caps,
+                        kind: &kind,
+                        id,
+                        claims: &claims,
+                        reason: &decision.reason,
+                    };
+                    return handoff_to_transcoder(&state, transcoder_url, &handoff).await;
+                }
+                None => {
+                    tracing::info!(path = %file.path, reason = %decision.reason, "transcode required; no transcoder configured, returning 503");
+                    return Err(AppError::TranscoderRequired);
+                }
+            }
         }
     }
 
@@ -711,6 +909,7 @@ mod tests {
             tmdb_api_key: None,
             scan_interval_secs: 0,
             boot_scan: false,
+            transcoder_url: None,
         });
         let tmdb = crate::tmdb::TmdbClient::new(None);
         AppState {
@@ -1051,6 +1250,230 @@ mod tests {
             .fetch_one(&state.db.pool)
             .await
             .unwrap();
+
+        let app = crate::build_router(state);
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!(
+                        "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    /// Off-mode in-memory state with a transcoder URL wired in, so the
+    /// transcode-required path hands off instead of returning 503. Roots are
+    /// empty (containment skipped) so a seeded path need not exist on disk for
+    /// the handoff path (which never opens the file — only the transcoder does).
+    async fn test_state_with_transcoder(url: &str) -> AppState {
+        unsafe {
+            std::env::remove_var("MEDIA_INTERNAL_PRINCIPAL_MODE");
+            std::env::remove_var("RECOMMENDER_INTERNAL_PRINCIPAL_MODE");
+            std::env::remove_var("INTERNAL_PRINCIPAL_SECRET");
+        }
+        let db = crate::db::Db::connect_memory().await.unwrap();
+        let mut config = Config::from_env().unwrap();
+        config.transcoder_url = Some(url.to_string());
+        AppState {
+            db,
+            config: Arc::new(config),
+            tmdb: crate::tmdb::TmdbClient::new(None),
+            scanning: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// Spawn a tiny one-route axum server standing in for the M4 transcoder's
+    /// `POST /api/transcode/grant`. Returns `(base_url, JoinHandle)`. The mock
+    /// echoes a successful grant so media-core's handoff translation can be
+    /// asserted end-to-end without the real transcoder crate.
+    async fn spawn_mock_transcoder(
+        response: Value,
+        status: StatusCode,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let app = Router::new().route(
+            "/api/transcode/grant",
+            post(move || {
+                let response = response.clone();
+                async move { (status, Json(response)) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    async fn seed_movie_for_file(state: &AppState, file_id: i64) -> i64 {
+        sqlx::query("INSERT INTO movies (title, year, added_at, file_id) VALUES (?, ?, ?, ?)")
+            .bind("Sample")
+            .bind(2020_i64)
+            .bind("2026-01-01T00:00:00Z")
+            .bind(file_id)
+            .execute(&state.db.pool)
+            .await
+            .unwrap();
+        sqlx::query_scalar("SELECT id FROM movies WHERE file_id = ?")
+            .bind(file_id)
+            .fetch_one(&state.db.pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn stream_direct_play_serves_bytes_when_caps_match() {
+        // A file the advertised client CAN direct-play must stream the bytes,
+        // never touch the transcoder, and not 503 — even with a transcoder
+        // configured. Guards against the handoff hijacking the direct path.
+        let (base, handle) = spawn_mock_transcoder(json!({}), StatusCode::OK).await;
+        let state = test_state_with_transcoder(&base).await;
+
+        // Write a real file so ServeFile can stream it; roots are empty so the
+        // containment check is skipped and any on-disk path is allowed.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.mp4");
+        std::fs::write(&path, b"fake-mp4-bytes").unwrap();
+        let file_id = seed_media_file(&state, path.to_str().unwrap()).await;
+        let movie_id = seed_movie_for_file(&state, file_id).await;
+
+        // seed_media_file stores container=mp4, codec=h264, height=1080 → caps
+        // that match exactly direct-play.
+        let app = crate::build_router(state);
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!(
+                        "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=h264&max_height=1080"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(&bytes[..], b"fake-mp4-bytes");
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn stream_hands_off_to_transcoder_when_configured() {
+        // !direct_play + transcoder configured → media-core POSTs the grant and
+        // returns the handoff JSON (manifestUrl) instead of 503.
+        let grant = json!({
+            "directPlay": false,
+            "transcode": true,
+            "sessionId": "sess-abc",
+            "manifestUrl": "/api/transcode/session/sess-abc/index.m3u8",
+            "heartbeatUrl": "/api/transcode/session/sess-abc/heartbeat",
+        });
+        let (base, handle) = spawn_mock_transcoder(grant, StatusCode::OK).await;
+        let state = test_state_with_transcoder(&base).await;
+        let file_id = seed_media_file(&state, "/lib/needs-transcode.mkv").await;
+        let movie_id = seed_movie_for_file(&state, file_id).await;
+
+        let app = crate::build_router(state);
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!(
+                        "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["transcode"], true);
+        assert_eq!(v["directPlay"], false);
+        assert_eq!(v["sessionId"], "sess-abc");
+        assert_eq!(
+            v["manifestUrl"],
+            "/api/transcode/session/sess-abc/index.m3u8"
+        );
+        assert!(
+            v["reason"].as_str().is_some(),
+            "handoff must carry the decision reason"
+        );
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn stream_503s_when_no_transcoder_configured() {
+        // Regression guard: with MEDIA_TRANSCODER_URL unset, the transcode-
+        // required path must keep the exact pre-M4 503 behavior.
+        let state = test_state().await;
+        assert!(
+            state.config.transcoder_url.is_none(),
+            "default test state must have no transcoder"
+        );
+        let file_id = seed_media_file(&state, "/lib/needs-transcode.mkv").await;
+        let movie_id = seed_movie_for_file(&state, file_id).await;
+
+        let app = crate::build_router(state);
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!(
+                        "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn stream_handoff_maps_transcoder_busy_to_503() {
+        // A transcoder at capacity returns {error:"transcoder_busy"}; media-core
+        // surfaces that as a 503 with the same error code so the client backs off.
+        let (base, handle) = spawn_mock_transcoder(
+            json!({ "error": "transcoder_busy", "cpuCap": true }),
+            StatusCode::SERVICE_UNAVAILABLE,
+        )
+        .await;
+        let state = test_state_with_transcoder(&base).await;
+        let file_id = seed_media_file(&state, "/lib/needs-transcode.mkv").await;
+        let movie_id = seed_movie_for_file(&state, file_id).await;
+
+        let app = crate::build_router(state);
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!(
+                        "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let v = body_json(resp).await;
+        assert_eq!(v["error"], "transcoder_busy");
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn stream_handoff_degrades_to_503_when_transcoder_unreachable() {
+        // A configured-but-dead transcoder must degrade to the offline 503 path,
+        // not a 500 — an outage looks identical to the M3-only posture.
+        // Point at a port with nothing listening.
+        let state = test_state_with_transcoder("http://127.0.0.1:1").await;
+        let file_id = seed_media_file(&state, "/lib/needs-transcode.mkv").await;
+        let movie_id = seed_movie_for_file(&state, file_id).await;
 
         let app = crate::build_router(state);
         let resp = app

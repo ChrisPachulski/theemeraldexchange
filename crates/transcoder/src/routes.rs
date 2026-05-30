@@ -44,7 +44,24 @@ impl AppState {
     /// Build state from the environment, mirroring media-core's knobs:
     /// `MEDIA_INTERNAL_PRINCIPAL_MODE` / `RECOMMENDER_INTERNAL_PRINCIPAL_MODE`
     /// and `INTERNAL_PRINCIPAL_SECRET`.
+    ///
+    /// This uses the RAW `TRANSCODER_HW_ENCODER` (no boot detection). Prefer
+    /// [`AppState::from_env_with_encoder`] from `main.rs` so the session manager
+    /// runs the encoder ffmpeg actually supports — see the doc on
+    /// [`SessionManager::from_env`].
     pub fn from_env() -> Result<Self, String> {
+        Self::build_from_env(SessionManager::from_env())
+    }
+
+    /// Build state with an already-resolved (boot-detected) hardware encoder.
+    /// `main.rs` calls `encoders::detect().resolve(...)` first and passes the
+    /// result here so the running encoder matches the binary's capabilities.
+    pub fn from_env_with_encoder(encoder: crate::args::HwEncoder) -> Result<Self, String> {
+        Self::build_from_env(SessionManager::from_env_with_encoder(encoder))
+    }
+
+    /// Shared posture parsing for the two `from_env*` constructors.
+    fn build_from_env(sessions: SessionManager) -> Result<Self, String> {
         let mode_str = std::env::var("MEDIA_INTERNAL_PRINCIPAL_MODE")
             .or_else(|_| std::env::var("RECOMMENDER_INTERNAL_PRINCIPAL_MODE"))
             .unwrap_or_default();
@@ -59,7 +76,7 @@ impl AppState {
             );
         }
         Ok(AppState {
-            sessions: SessionManager::from_env(),
+            sessions,
             principal_mode,
             internal_principal_secret: secret,
         })
@@ -71,6 +88,7 @@ pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/grant", post(grant))
         .route("/session/{id}/index.m3u8", get(session_manifest))
+        .route("/session/{id}/{segment}", get(session_segment))
         .route("/session/{id}/heartbeat", post(session_heartbeat))
         .route("/session/{id}/seek", post(session_seek))
         .route("/session/{id}/stop", post(session_stop))
@@ -311,6 +329,45 @@ async fn session_manifest(State(state): State<AppState>, Path(id): Path<String>)
     }
 }
 
+/// Serve one HLS asset (a `.ts` segment) from a session's dir. The HLS
+/// playlist references segments by bare filename, so the player fetches them
+/// relative to the manifest URL (`…/session/{id}/seg_00000.ts`). This is gated
+/// by the same internal-principal layer as the manifest, so library-derived
+/// bytes are never served unauthenticated.
+///
+/// The `index.m3u8` route is registered separately and is matched first by
+/// axum (static segment wins over the `{segment}` capture), so this handler
+/// only ever sees segment names.
+async fn session_segment(
+    State(state): State<AppState>,
+    Path((id, segment)): Path<(String, String)>,
+) -> Response {
+    // `asset_path` rejects unknown sessions and any traversal-unsafe name.
+    let Some(path) = state.sessions.asset_path(&id, &segment).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "no such session or segment" })),
+        )
+            .into_response();
+    };
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "video/mp2t")],
+            bytes,
+        )
+            .into_response(),
+        // The session exists but ffmpeg has not written (or has rotated out)
+        // this segment yet. delete_segments means old segments vanish; the
+        // player should only ask for segments the live playlist still lists.
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "segment not available" })),
+        )
+            .into_response(),
+    }
+}
+
 async fn session_heartbeat(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -376,6 +433,7 @@ mod tests {
              d=$(dirname \"$last\")\n\
              mkdir -p \"$d\"\n\
              printf '#EXTM3U\\n' > \"$last\"\n\
+             printf 'seg' > \"$d/seg_00000.ts\"\n\
              sleep 30\n";
         f.write_all(script.as_bytes()).unwrap();
         let mut perms = std::fs::metadata(&path).unwrap().permissions();
@@ -572,6 +630,143 @@ mod tests {
             .unwrap();
         let v: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["error"], "transcoder_busy");
+    }
+
+    #[tokio::test]
+    async fn segment_route_serves_ts_bytes() {
+        // The stub writes seg_00000.ts beside the playlist. After a grant,
+        // GET …/session/{id}/seg_00000.ts must return the segment bytes with a
+        // video/mp2t content type — proving the manifest's segments are
+        // reachable (the end-to-end playback gap).
+        let tmp = tempfile::tempdir().unwrap();
+        let state = state_with(
+            &tmp,
+            Caps {
+                max_total: 4,
+                max_cpu: 4,
+            },
+            PrincipalMode::Off,
+        );
+        let app = router(state.clone());
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/transcode/grant")
+                    .header("content-type", "application/json")
+                    .body(Body::from(grant_body(&h264_file())))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        let session_id = v["sessionId"].as_str().unwrap().to_string();
+
+        // The stub writes seg_00000.ts; poll until present, then fetch it.
+        let seg = state
+            .sessions
+            .asset_path(&session_id, "seg_00000.ts")
+            .await
+            .unwrap();
+        for _ in 0..200 {
+            if seg.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let app2 = router(state.clone());
+        let resp = app2
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!("/api/transcode/session/{session_id}/seg_00000.ts"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .unwrap(),
+            "video/mp2t"
+        );
+        let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"seg", "segment bytes served verbatim");
+
+        // index.m3u8 still routes to the manifest handler (static wins over
+        // the {segment} capture), returning the HLS content type.
+        let app3 = router(state.clone());
+        let resp = app3
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!("/api/transcode/session/{session_id}/index.m3u8"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .unwrap(),
+            "application/vnd.apple.mpegurl"
+        );
+
+        state.sessions.stop(&session_id).await;
+    }
+
+    #[tokio::test]
+    async fn segment_route_rejects_traversal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = state_with(
+            &tmp,
+            Caps {
+                max_total: 4,
+                max_cpu: 4,
+            },
+            PrincipalMode::Off,
+        );
+        let app = router(state.clone());
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/transcode/grant")
+                    .header("content-type", "application/json")
+                    .body(Body::from(grant_body(&h264_file())))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        let session_id = v["sessionId"].as_str().unwrap().to_string();
+
+        // A %2e%2e%2f-decoded traversal name must 404, never escape the dir.
+        let app2 = router(state.clone());
+        let resp = app2
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!(
+                        "/api/transcode/session/{session_id}/..%2f..%2fetc%2fpasswd"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        state.sessions.stop(&session_id).await;
     }
 
     #[tokio::test]
