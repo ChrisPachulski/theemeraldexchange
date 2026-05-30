@@ -37,6 +37,18 @@ vi.mock('./reconcileDeviceToken.js', () => ({
   roleFor: () => 'user',
 }))
 
+// Mock the members allowlist (sibling-owned module). reconcileSession's
+// authZ now consults memberStatus FIRST and treats it as authoritative;
+// the per-test memberStatusImpl controls the verdict. Default 'allowed'
+// so the legacy Plex-probe tests below stay focused on the probe
+// behavior (now demoted to advisory token-liveness).
+const memberStatusImpl: { fn: (sub: string) => 'allowed' | 'revoked' | 'not_member' } = {
+  fn: () => 'allowed',
+}
+vi.mock('./membership.js', () => ({
+  memberStatus: (sub: string) => memberStatusImpl.fn(sub),
+}))
+
 const baseSession: Session = {
   sub: '42',
   username: 'someone',
@@ -48,6 +60,7 @@ const baseSession: Session = {
 beforeEach(() => {
   _resetSessionGateCacheForTests()
   probeImpl.fn = async () => ({ kind: 'network_error' })
+  memberStatusImpl.fn = () => 'allowed'
   cascadeSpy.mockClear()
 })
 
@@ -88,81 +101,109 @@ describe('reconcileSession — role recompute', () => {
   })
 })
 
-describe('reconcileSession — membership revalidation', () => {
-  it('signs out a user no longer in the configured Plex server', async () => {
+describe('reconcileSession — allowlist authZ (authoritative)', () => {
+  it('denies a sub that is not a member regardless of Plex state', async () => {
+    memberStatusImpl.fn = () => 'not_member'
+    // Even a perfectly-valid Plex membership probe cannot override the
+    // allowlist — the members table is the single authZ gate now.
     probeImpl.fn = async () => ({
       kind: 'ok',
       resources: [
-        // A server, but NOT the one configured. User was removed.
-        { name: 'OtherServer', clientIdentifier: 'other-machine-id', owned: true, home: false, provides: 'server' },
+        { name: 'Home', clientIdentifier: 'home-machine-id', owned: true, home: false, provides: 'server' },
       ],
     })
     const r = await reconcileSession(baseSession)
     expect(r).toBeNull()
   })
 
-  it('signs out a user whose plex.tv token was revoked (401)', async () => {
-    // Token revocation = definitive sign-out. 401 from plex.tv means
-    // the stored authToken no longer works for anything.
+  it('denies a revoked member', async () => {
+    memberStatusImpl.fn = () => 'revoked'
+    const r = await reconcileSession(baseSession)
+    expect(r).toBeNull()
+  })
+
+  it('allows an apple member without ever probing plex.tv', async () => {
+    memberStatusImpl.fn = () => 'allowed'
+    let calls = 0
+    probeImpl.fn = async () => {
+      calls++
+      return { kind: 'network_error' }
+    }
+    const appleSession: Session = {
+      sub: 'apple:000000.0123456789abcdef0123456789abcdef.0000',
+      username: 'mom',
+      role: 'user',
+    }
+    const r = await reconcileSession(appleSession)
+    expect(r).not.toBeNull()
+    expect(r!.sub).toBe(appleSession.sub)
+    expect(calls).toBe(0)
+  })
+
+  it('allows a plex member; probe demoted to advisory', async () => {
+    memberStatusImpl.fn = () => 'allowed'
+    probeImpl.fn = async () => ({
+      kind: 'ok',
+      resources: [
+        { name: 'Home', clientIdentifier: 'home-machine-id', owned: true, home: false, provides: 'server' },
+      ],
+    })
+    const r = await reconcileSession(baseSession)
+    expect(r).not.toBeNull()
+    expect(r!.sub).toBe(baseSession.sub)
+  })
+
+  it('keeps a row-backed plex member signed in even when the probe says not_member (advisory)', async () => {
+    // A plex.tv not_member no longer overrides the allowlist — only an
+    // explicit member revoke or an ADMIN action removes access.
+    memberStatusImpl.fn = () => 'allowed'
+    probeImpl.fn = async () => ({ kind: 'ok', resources: [] })
+    const r = await reconcileSession(baseSession)
+    expect(r).not.toBeNull()
+    expect(cascadeSpy).not.toHaveBeenCalled()
+  })
+
+  it('signs out a plex member whose plex.tv token was revoked (401, token-liveness)', async () => {
+    // auth_revoked = the user signed out of plex.tv. The probe is kept
+    // as a defense-in-depth token-liveness signal that ALSO drops the
+    // session even though the allowlist still lists them.
+    memberStatusImpl.fn = () => 'allowed'
     probeImpl.fn = async () => ({ kind: 'http_error', status: 401 })
     const r = await reconcileSession(baseSession)
     expect(r).toBeNull()
   })
 
-  it('does not cache a revoked token as user-wide non-membership', async () => {
-    let calls = 0
-    probeImpl.fn = async (token: string) => {
-      calls++
-      if (token === 'revoked-token') return { kind: 'http_error', status: 401 }
-      return {
-        kind: 'ok',
-        resources: [
-          {
-            name: 'Home',
-            clientIdentifier: 'home-machine-id',
-            owned: true,
-            home: false,
-            provides: 'server',
-          },
-        ],
-      }
-    }
-
-    expect(await reconcileSession({ ...baseSession, plexAuthToken: 'revoked-token' })).toBeNull()
-    const valid = await reconcileSession({ ...baseSession, plexAuthToken: 'fresh-token' })
-
-    expect(valid).not.toBeNull()
-    expect(valid!.sub).toBe(baseSession.sub)
-    expect(calls).toBe(2)
-  })
-
-  it('keeps the user signed in on a plex.tv 5xx (fail open)', async () => {
+  it('keeps a plex member signed in on a plex.tv 5xx (fail open on probe)', async () => {
+    memberStatusImpl.fn = () => 'allowed'
     probeImpl.fn = async () => ({ kind: 'http_error', status: 503 })
     const r = await reconcileSession(baseSession)
     expect(r).not.toBeNull()
     expect(r!.sub).toBe(baseSession.sub)
   })
 
-  it('keeps the user signed in on a network error (fail open)', async () => {
-    probeImpl.fn = async () => ({ kind: 'network_error' })
-    const r = await reconcileSession(baseSession)
+  it('allows a plex member with no plexAuthToken (owner-added, never logged in via Plex)', async () => {
+    // No token to probe — the allowlist decision stands. apple: subs and
+    // owner-added plex: members hit this path.
+    memberStatusImpl.fn = () => 'allowed'
+    let calls = 0
+    probeImpl.fn = async () => {
+      calls++
+      return { kind: 'network_error' }
+    }
+    const r = await reconcileSession({ ...baseSession, plexAuthToken: undefined })
     expect(r).not.toBeNull()
+    expect(calls).toBe(0)
   })
 
-  it('does not re-hit Plex within the TTL window', async () => {
+  it('does not re-hit Plex within the TTL window for an allowed member', async () => {
+    memberStatusImpl.fn = () => 'allowed'
     let calls = 0
     probeImpl.fn = async () => {
       calls++
       return {
         kind: 'ok',
         resources: [
-          {
-            name: 'Home',
-            clientIdentifier: 'home-machine-id',
-            owned: true,
-            home: false,
-            provides: 'server',
-          },
+          { name: 'Home', clientIdentifier: 'home-machine-id', owned: true, home: false, provides: 'server' },
         ],
       }
     }
@@ -171,67 +212,31 @@ describe('reconcileSession — membership revalidation', () => {
     await reconcileSession(baseSession)
     expect(calls).toBe(1)
   })
-
-  it('does not authorize a different revoked token from a member cache hit', async () => {
-    let calls = 0
-    _primeSessionGateCache(baseSession.sub, 'member', 'valid-token')
-    probeImpl.fn = async (token: string) => {
-      calls++
-      if (token === 'revoked-token') return { kind: 'http_error', status: 401 }
-      return { kind: 'network_error' }
-    }
-
-    const r = await reconcileSession({ ...baseSession, plexAuthToken: 'revoked-token' })
-
-    expect(r).toBeNull()
-    expect(calls).toBe(1)
-  })
-
-  it('keeps a previously-known not_member status from the cache', async () => {
-    // Once we have a definitive not_member answer, subsequent requests
-    // within the TTL stay denied without re-hitting plex.tv.
-    let calls = 0
-    probeImpl.fn = async () => {
-      calls++
-      return { kind: 'ok', resources: [] } // no server = not_member
-    }
-    expect(await reconcileSession(baseSession)).toBeNull()
-    expect(await reconcileSession(baseSession)).toBeNull()
-    expect(calls).toBe(1)
-  })
-
-  it('forces re-auth on legacy sessions without plexAuthToken when the gate is configured', async () => {
-    // A configured PLEX_SERVER_ID can ONLY be enforced against a
-    // session that still carries the Plex token. Without it there is
-    // no way to verify the user remains a member — trusting the cookie
-    // alone would re-open the revocation window the gate exists to
-    // close. Force a re-auth instead.
-    let calls = 0
-    probeImpl.fn = async () => {
-      calls++
-      return { kind: 'network_error' }
-    }
-    const r = await reconcileSession({ ...baseSession, plexAuthToken: undefined })
-    expect(r).toBeNull()
-    expect(calls).toBe(0)
-  })
 })
 
 describe('reconcileSession — cascade device revocation', () => {
-  // When Plex definitively denies the cookie user, every paired Apple
-  // device for the same sub must also be revoked so the M2 Bearer path
-  // is locked out on its next request. Idempotent — re-firing on a
-  // cached denial is safe.
+  // When the allowlist denies the cookie user (revoked / not a member),
+  // every paired Apple device for the same sub must also be revoked so
+  // the M2 Bearer path is locked out on its next request. Idempotent.
 
-  it('cascades on a fresh not_member verdict', async () => {
-    probeImpl.fn = async () => ({ kind: 'ok', resources: [] })
+  it('cascades with not_member reason on a non-member sub', async () => {
+    memberStatusImpl.fn = () => 'not_member'
     const r = await reconcileSession(baseSession)
     expect(r).toBeNull()
     expect(cascadeSpy).toHaveBeenCalledTimes(1)
-    expect(cascadeSpy).toHaveBeenCalledWith(baseSession.sub, 'plex_not_member')
+    expect(cascadeSpy).toHaveBeenCalledWith(baseSession.sub, 'not_member')
   })
 
-  it('cascades on a fresh auth_revoked verdict (401 from plex.tv)', async () => {
+  it('cascades with member_revoked reason on a revoked member', async () => {
+    memberStatusImpl.fn = () => 'revoked'
+    const r = await reconcileSession(baseSession)
+    expect(r).toBeNull()
+    expect(cascadeSpy).toHaveBeenCalledTimes(1)
+    expect(cascadeSpy).toHaveBeenCalledWith(baseSession.sub, 'member_revoked')
+  })
+
+  it('cascades on a plex.tv auth_revoked (token-liveness) for an allowed member', async () => {
+    memberStatusImpl.fn = () => 'allowed'
     probeImpl.fn = async () => ({ kind: 'http_error', status: 401 })
     const r = await reconcileSession(baseSession)
     expect(r).toBeNull()
@@ -239,38 +244,27 @@ describe('reconcileSession — cascade device revocation', () => {
     expect(cascadeSpy).toHaveBeenCalledWith(baseSession.sub, 'plex_auth_revoked')
   })
 
-  it('cascades on a cached not_member hit (defensive backstop)', async () => {
-    // First call seeds the cache + cascades.
-    probeImpl.fn = async () => ({ kind: 'ok', resources: [] })
-    await reconcileSession(baseSession)
-    cascadeSpy.mockClear()
-    // Second call within TTL hits the cache; cascade fires again
-    // idempotently so a device paired between calls also gets revoked.
-    const r = await reconcileSession(baseSession)
-    expect(r).toBeNull()
-    expect(cascadeSpy).toHaveBeenCalledTimes(1)
-    expect(cascadeSpy).toHaveBeenCalledWith(baseSession.sub, 'plex_not_member_cached')
-  })
-
-  it('does NOT cascade on a transient network error (unknown status, no cached denial)', async () => {
+  it('does NOT cascade on a transient network error for an allowed member', async () => {
+    memberStatusImpl.fn = () => 'allowed'
     probeImpl.fn = async () => ({ kind: 'network_error' })
-    // baseSession.verifiedPlexServerId matches env.plexServerId, so the
-    // user stays signed in — no denial = no cascade.
     const r = await reconcileSession(baseSession)
     expect(r).not.toBeNull()
     expect(cascadeSpy).not.toHaveBeenCalled()
   })
 
-  it('does NOT cascade on a legacy session without plexAuthToken', async () => {
-    // Force re-auth, not a Plex denial. Devices stay paired so the next
-    // successful login restores everything; cascading here would punish
-    // a household member for a cookie format upgrade.
-    const r = await reconcileSession({ ...baseSession, plexAuthToken: undefined })
-    expect(r).toBeNull()
+  it('does NOT cascade for an allowed apple member (no probe at all)', async () => {
+    memberStatusImpl.fn = () => 'allowed'
+    const r = await reconcileSession({
+      sub: 'apple:000000.0123456789abcdef0123456789abcdef.0000',
+      username: 'mom',
+      role: 'user',
+    })
+    expect(r).not.toBeNull()
     expect(cascadeSpy).not.toHaveBeenCalled()
   })
 
-  it('does NOT cascade on a successful member verdict', async () => {
+  it('does NOT cascade on a successful plex member verdict', async () => {
+    memberStatusImpl.fn = () => 'allowed'
     probeImpl.fn = async () => ({
       kind: 'ok',
       resources: [
