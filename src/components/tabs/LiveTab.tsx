@@ -1,5 +1,5 @@
 // src/components/tabs/LiveTab.tsx
-import { type KeyboardEvent, useMemo, useState } from 'react'
+import { type KeyboardEvent, useEffect, useMemo, useState } from 'react'
 import IptvPlayer from '../player/IptvPlayer'
 import { iptvApi, type ChannelDto, type EpgProgrammeDto, type StreamGrant } from '../../lib/api/iptv'
 import { useIptvCategories } from '../../lib/hooks/useIptvCategories'
@@ -57,6 +57,23 @@ export default function LiveTab() {
   const favs = useIptvFavoriteSet()
   const toggleFavorite = useToggleIptvFavorite()
   const reportPosition = useReportPosition('live', playing?.itemId ?? '')
+
+  // Release the upstream concurrency slot whenever the active channel changes
+  // or this tab unmounts. The grant ACQUIRES a slot; nothing released it on
+  // exit, so closing a channel left the session "active" until a later grant's
+  // 30s lazy sweep — rapid channel-hopping piled up phantom sessions and
+  // saturated the provider's connection cap, which then stalled/refused new
+  // grants. This cleanup fires for the PREVIOUS sessionId before the next play
+  // sets a new one, covering close-button, channel-switch, and navigate-away
+  // exits in one place. Best-effort: a failed release just falls back to the
+  // server-side sweep/dedup.
+  useEffect(() => {
+    const sid = playing?.grant.sessionId
+    if (!sid) return undefined
+    return () => {
+      void iptvApi.killSession(sid).catch(() => undefined)
+    }
+  }, [playing?.grant.sessionId])
 
   const sortedCats = useMemo(() => (cats.data ?? []).slice().sort((a, b) => a.name.localeCompare(b.name)), [cats.data])
   const visibleChannels = useMemo(() => list.data?.items ?? [], [list.data])
