@@ -142,6 +142,46 @@ pub enum StartError {
     Io(String),
     #[error("failed to spawn ffmpeg: {0}")]
     Spawn(String),
+    #[error("source path is not within an allowed media root: {0}")]
+    Forbidden(String),
+}
+
+/// Lexically normalize a path — resolve `.` and `..` components WITHOUT touching
+/// the filesystem (so it works for not-yet-existing paths and in tests) and
+/// without following symlinks. `..` that would climb above the root is clamped.
+/// Used by [`path_within_roots`] so a crafted `source_path` cannot escape the
+/// configured media root via `../` before we hand it to ffmpeg.
+fn lexically_normalize(p: &std::path::Path) -> std::path::PathBuf {
+    use std::path::Component;
+    let mut out: Vec<Component> = Vec::new();
+    for comp in p.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => match out.last() {
+                Some(Component::Normal(_)) => {
+                    out.pop();
+                }
+                // Can't climb above an absolute root / prefix — ignore.
+                Some(Component::RootDir) | Some(Component::Prefix(_)) => {}
+                // Relative path with a leading `..` — preserve it (it can never
+                // be "within" an absolute root anyway, so it will be rejected).
+                _ => out.push(Component::ParentDir),
+            },
+            c => out.push(c),
+        }
+    }
+    out.iter().map(|c| c.as_os_str()).collect()
+}
+
+/// True when `input` lexically resolves to a location under at least one of
+/// `roots`. Both sides are normalized the same way so `..` cannot smuggle the
+/// path outside a root. An empty `roots` slice means "no confinement"; callers
+/// must check that separately.
+fn path_within_roots(input: &str, roots: &[PathBuf]) -> bool {
+    let norm = lexically_normalize(std::path::Path::new(input));
+    roots
+        .iter()
+        .any(|r| norm.starts_with(lexically_normalize(r)))
 }
 
 /// Shared, cheap-to-clone manager (Arc'd map + config).
@@ -152,6 +192,11 @@ pub struct SessionManager {
     ffmpeg_bin: String,
     tmp_root: PathBuf,
     encoder: HwEncoder,
+    /// Directories ffmpeg is allowed to read source media from. Empty = no
+    /// confinement (dev/tests). Set from `TRANSCODER_MEDIA_ROOT` in prod so an
+    /// authorized caller still cannot point ffmpeg at arbitrary container files
+    /// (defense-in-depth behind the principal_layer auth gate).
+    media_roots: Vec<PathBuf>,
 }
 
 impl SessionManager {
@@ -169,7 +214,16 @@ impl SessionManager {
             ffmpeg_bin,
             tmp_root,
             encoder,
+            media_roots: Vec::new(),
         }
+    }
+
+    /// Restrict source media to the given root directories. Returns `self` for
+    /// chaining off [`SessionManager::new`]. An empty list leaves confinement
+    /// off. Paths are compared lexically (see [`path_within_roots`]).
+    pub fn with_media_roots(mut self, roots: Vec<PathBuf>) -> Self {
+        self.media_roots = roots;
+        self
     }
 
     /// Construct from the environment: `TRANSCODER_FFMPEG_BIN` (default
@@ -196,12 +250,25 @@ impl SessionManager {
         let tmp_root = std::env::var("TRANSCODER_TMP_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| std::env::temp_dir().join("eex-transcode"));
+        // Optional `:`-separated allow-list of directories ffmpeg may read
+        // source media from (§ audit 1-3 defense-in-depth). Unset = no
+        // confinement, preserving dev behavior.
+        let media_roots = std::env::var("TRANSCODER_MEDIA_ROOT")
+            .ok()
+            .map(|s| {
+                s.split(':')
+                    .filter(|p| !p.is_empty())
+                    .map(PathBuf::from)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         SessionManager::new(
             Limiter::new(Caps::from_env()),
             ffmpeg_bin,
             tmp_root,
             encoder,
         )
+        .with_media_roots(media_roots)
     }
 
     /// The hardware encoder this manager launches ffmpeg with (the resolved
@@ -259,6 +326,15 @@ impl SessionManager {
     /// [`StartError::Busy`] → 503 transcoder_busy), creates the tmpdir, spawns
     /// ffmpeg, and registers the session. Returns the session id.
     pub async fn start(&self, opts: StartOpts) -> Result<SessionId, StartError> {
+        // Defense-in-depth path confinement (§ audit 1-3). When media roots are
+        // configured, the source path MUST lexically resolve (incl. `..`) under
+        // one of them. principal_layer already gates WHO may call grant; this
+        // bounds WHAT ffmpeg may be pointed at even for an authorized caller, so
+        // a crafted source_path cannot read arbitrary container files. Checked
+        // before acquiring a permit so a rejected request consumes no slot.
+        if !self.media_roots.is_empty() && !path_within_roots(&opts.input_path, &self.media_roots) {
+            return Err(StartError::Forbidden(opts.input_path.clone()));
+        }
         // Direct-play never needs a transcode session.
         let is_cpu = matches!(self.encoder, HwEncoder::Cpu);
         let permit = self.limiter.try_acquire(is_cpu).map_err(StartError::Busy)?;
@@ -638,6 +714,54 @@ mod tests {
         assert!(mgr.is_empty().await);
         // Tmpdir is cleaned on stop.
         assert!(!manifest.exists());
+    }
+
+    #[tokio::test]
+    async fn start_confines_source_path_to_media_roots() {
+        let tmp = tempfile::tempdir().unwrap();
+        let media = tmp.path().join("media");
+        std::fs::create_dir_all(&media).unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"))
+            .with_media_roots(vec![media.clone()]);
+
+        // A path under the configured root is allowed.
+        let inside = media.join("movie.mkv");
+        let id = mgr
+            .start(opts(inside.to_str().unwrap()))
+            .await
+            .expect("path under media root must be allowed");
+        mgr.stop(&id).await;
+
+        // An absolute path outside the root is rejected (would read e.g.
+        // /etc/passwd or a Plex token file on the container).
+        let err = mgr
+            .start(opts("/etc/passwd"))
+            .await
+            .expect_err("path outside media root must be Forbidden");
+        assert!(matches!(err, StartError::Forbidden(_)), "got {err:?}");
+
+        // A `../` traversal that escapes the root is rejected too.
+        let escape = media.join("../../etc/passwd");
+        let err = mgr
+            .start(opts(escape.to_str().unwrap()))
+            .await
+            .expect_err("../ traversal must be Forbidden");
+        assert!(matches!(err, StartError::Forbidden(_)), "got {err:?}");
+
+        assert!(mgr.is_empty().await, "no rejected start may leak a session");
+    }
+
+    #[tokio::test]
+    async fn start_without_media_roots_allows_any_path() {
+        // Confinement is opt-in: with no roots configured the manager preserves
+        // the prior behavior (dev / tests pass arbitrary paths).
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
+        let id = mgr
+            .start(opts("/anywhere/at/all.mkv"))
+            .await
+            .expect("no roots configured => no confinement");
+        mgr.stop(&id).await;
     }
 
     #[tokio::test]

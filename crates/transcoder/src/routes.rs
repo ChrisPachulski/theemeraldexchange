@@ -294,6 +294,13 @@ async fn grant(State(state): State<AppState>, Json(req): Json<GrantRequest>) -> 
             })),
         )
             .into_response(),
+        // Source path outside the configured media root(s) — refuse without
+        // echoing the attempted path back to the caller (§ audit 1-3).
+        Err(StartError::Forbidden(_)) => (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "source_path_forbidden" })),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": e.to_string() })),
