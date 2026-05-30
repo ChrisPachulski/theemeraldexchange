@@ -104,8 +104,32 @@ sab.delete('/api/queue/:nzoId', sabMutateLimit, async (c) => {
 
 async function forward(r: Response): Promise<Response> {
   const body = await r.text()
+  // sabCall forces output=json, so a 2xx with a non-JSON body means SAB
+  // rejected the apikey and returned its HTML error page. Relaying that
+  // verbatim surfaces to the SPA as a 200 it then fails to JSON-parse —
+  // an opaque client error. Map it to a clear auth failure so a bad or
+  // rotated SAB_API_KEY is diagnosable. Genuine JSON passes through.
+  if (r.ok && !isJsonBody(r, body)) {
+    return new Response(JSON.stringify({ error: 'sab_auth_failed' }), {
+      status: 502,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
   return new Response(body, {
     status: r.status,
     headers: { 'Content-Type': r.headers.get('Content-Type') ?? 'application/json' },
   })
+}
+
+function isJsonBody(r: Response, body: string): boolean {
+  const contentType = (r.headers.get('Content-Type') ?? '').toLowerCase()
+  if (contentType.includes('application/json')) return true
+  // SAB may omit or mislabel the header on its HTML error page; fall back
+  // to a parse probe rather than rejecting solely on content-type.
+  try {
+    JSON.parse(body)
+    return true
+  } catch {
+    return false
+  }
 }
