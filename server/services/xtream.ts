@@ -240,3 +240,56 @@ export async function fetchSeriesInfo(seriesId: number, creds: XtreamCreds = cre
   }
   return out
 }
+
+function b64decode(s: unknown): string | null {
+  if (typeof s !== 'string' || s.length === 0) return null
+  try {
+    const out = Buffer.from(s, 'base64').toString('utf8').trim()
+    return out.length > 0 ? out : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Parse an Xtream `get_short_epg` payload into EPG rows keyed by the live
+ * stream_id (this endpoint is keyed by stream_id, not tvg-id). Titles and
+ * descriptions are base64-encoded; times come from the unambiguous unix
+ * `start_timestamp`/`stop_timestamp` fields. Zero-length / malformed rows are
+ * dropped.
+ *
+ * NOTE on usage: a NAIVE full-catalog sweep of this endpoint gets silently
+ * throttled by the provider (empty payloads with HTTP 200 after ~14k rapid
+ * requests). Any catalog-wide backfill MUST be a throttled, scheduled batch —
+ * see iptvEpgBatch (rate-limited, resumable). This parser is the building block.
+ */
+export function parseShortEpg(raw: unknown, streamId: number): EpgProgrammeRow[] {
+  const obj = raw as { epg_listings?: unknown; epg?: unknown } | null
+  const listings = obj && (Array.isArray(obj.epg_listings) ? obj.epg_listings : Array.isArray(obj.epg) ? obj.epg : null)
+  if (!listings) return []
+  const channelId = String(streamId)
+  const rows: EpgProgrammeRow[] = []
+  for (const item of listings) {
+    const e = item as Record<string, unknown>
+    const startSec = Number(e.start_timestamp)
+    const stopSec = Number(e.stop_timestamp)
+    if (!Number.isFinite(startSec) || !Number.isFinite(stopSec) || stopSec <= startSec) continue
+    rows.push({
+      channel_id: channelId,
+      start_utc: new Date(startSec * 1000).toISOString(),
+      stop_utc: new Date(stopSec * 1000).toISOString(),
+      title: b64decode(e.title),
+      description: b64decode(e.description),
+    })
+  }
+  return rows
+}
+
+export async function fetchShortEpg(
+  streamId: number,
+  limit = 50,
+  creds: XtreamCreds = credsFromEnv(),
+): Promise<EpgProgrammeRow[]> {
+  const url = buildPlayerApiUrl(creds, 'get_short_epg', { stream_id: streamId, limit })
+  return parseShortEpg(await getJson(url, 'xtream.get_short_epg'), streamId)
+}
