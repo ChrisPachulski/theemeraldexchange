@@ -67,3 +67,6 @@ crates/emerald-contracts-pyo3/*.pyd
 
 # Auto-generated session resume state (regenerated each Stop/PreCompact)
 .eex/
+
+# audit artifacts
+.audit_allfiles.txt
