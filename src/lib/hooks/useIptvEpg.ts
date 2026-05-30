@@ -15,10 +15,15 @@ export function useIptvEpgNow(channelIds: number[]) {
   })
 }
 
-export function useIptvEpgGrid(fromIso: string, toIso: string, categoryId?: number) {
+export function useIptvEpgGrid(
+  fromIso: string,
+  toIso: string,
+  opts: { categoryId?: number; q?: string; hasEpg?: boolean } = {},
+) {
+  const { categoryId, q, hasEpg } = opts
   return useQuery({
-    queryKey: ['iptv', 'epg', 'grid', fromIso, toIso, categoryId ?? null],
-    queryFn: () => iptvApi.epgGrid(fromIso, toIso, categoryId),
+    queryKey: ['iptv', 'epg', 'grid', fromIso, toIso, categoryId ?? null, q ?? '', hasEpg ?? false],
+    queryFn: () => iptvApi.epgGrid(fromIso, toIso, opts),
     staleTime: 60_000,
   })
 }

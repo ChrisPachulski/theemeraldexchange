@@ -85,26 +85,80 @@ export function epgChannelWindow(db: IptvDb, streamId: number, fromIso: string, 
   `).all(channel.epg_channel_id, toIso, fromIso) as EpgProgramme[]
 }
 
-export function epgGrid(db: IptvDb, fromIso: string, toIso: string, categoryId?: number): EpgGridRow[] {
-  const hasCategory = categoryId != null
+export interface EpgGridOptions {
+  categoryId?: number
+  /** Channel-name substring filter (case-insensitive LIKE). */
+  q?: string
+  /**
+   * Restrict to channels that actually have ≥1 programme overlapping the
+   * window. This provider only carries EPG for ~800 of 50k channels, so the
+   * classic guide grid would otherwise be 99% empty rows. The card view keeps
+   * showing everything; the guide view sets this true.
+   */
+  hasEpgOnly?: boolean
+  /** Hard cap on returned rows (the grid is windowed client-side). */
+  limit?: number
+}
+
+export function epgGrid(
+  db: IptvDb,
+  fromIso: string,
+  toIso: string,
+  optsOrCategoryId?: number | EpgGridOptions,
+): EpgGridRow[] {
+  // Back-compat: a bare number is the legacy categoryId positional arg.
+  const opts: EpgGridOptions =
+    typeof optsOrCategoryId === 'number'
+      ? { categoryId: optsOrCategoryId }
+      : optsOrCategoryId ?? {}
+  const limit = Math.min(Math.max(opts.limit ?? 1500, 1), 5000)
+
+  // One pass over the programmes overlapping the window, grouped by channel_id.
+  // Cheaper than N+1 per-channel lookups when the grid spans hundreds of rows,
+  // and it yields the has-EPG set used to scope the channel query below. Both
+  // sides are stored lowercase (see 0005_lowercase_epg_id + parseLiveStreams),
+  // so this exact-id grouping joins correctly.
+  const progRows = db.raw.prepare(`
+    SELECT channel_id, start_utc, stop_utc, title, description
+    FROM epg_programs
+    WHERE start_utc < ? AND stop_utc > ?
+    ORDER BY channel_id, start_utc ASC
+  `).all(toIso, fromIso) as EpgProgramme[]
+  const byChannel = new Map<string, EpgProgramme[]>()
+  for (const row of progRows) {
+    const arr = byChannel.get(row.channel_id)
+    if (arr) arr.push(row)
+    else byChannel.set(row.channel_id, [row])
+  }
+
+  const where: string[] = []
+  const args: Array<string | number> = []
+  if (opts.categoryId != null) {
+    where.push('category_id = ?')
+    args.push(opts.categoryId)
+  }
+  if (opts.q && opts.q.trim()) {
+    where.push('name LIKE ?')
+    args.push(`%${opts.q.trim()}%`)
+  }
+  if (opts.hasEpgOnly) {
+    const ids = [...byChannel.keys()]
+    if (ids.length === 0) return []
+    where.push(`epg_channel_id IN (${ids.map(() => '?').join(',')})`)
+    args.push(...ids)
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
+
   const channels = db.raw.prepare(`
     SELECT stream_id, COALESCE(num, 0) AS num, name, epg_channel_id, tv_archive, tv_archive_duration
     FROM channels
-    ${hasCategory ? 'WHERE category_id = ?' : ''}
+    ${whereSql}
     ORDER BY num, name
-  `).all(...(hasCategory ? [categoryId] : [])) as Array<Omit<EpgGridRow, 'programmes'>>
-
-  const programmeStmt = db.raw.prepare(`
-    SELECT channel_id, start_utc, stop_utc, title, description
-    FROM epg_programs
-    WHERE channel_id = ? AND start_utc < ? AND stop_utc > ?
-    ORDER BY start_utc ASC
-  `)
+    LIMIT ?
+  `).all(...args, limit) as Array<Omit<EpgGridRow, 'programmes'>>
 
   return channels.map((channel) => ({
     ...channel,
-    programmes: channel.epg_channel_id
-      ? (programmeStmt.all(channel.epg_channel_id, toIso, fromIso) as EpgProgramme[])
-      : [],
+    programmes: channel.epg_channel_id ? (byChannel.get(channel.epg_channel_id) ?? []) : [],
   }))
 }

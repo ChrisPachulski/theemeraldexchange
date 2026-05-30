@@ -212,7 +212,10 @@ iptv.get('/epg/grid', requireAuth, (c) => {
   if (categoryId != null && (!Number.isInteger(categoryId) || categoryId <= 0)) {
     return c.json({ error: 'invalid_category' }, 400)
   }
-  return c.json(epgGrid(iptvDb(), from, to, categoryId))
+  const rawQ = c.req.query('q')
+  const q = rawQ && rawQ.trim() ? rawQ.trim().slice(0, 100) : undefined
+  const hasEpgOnly = c.req.query('hasEpg') === '1' || c.req.query('hasEpg') === 'true'
+  return c.json(epgGrid(iptvDb(), from, to, { categoryId, q, hasEpgOnly }))
 })
 
 iptv.get('/vod/:streamId', requireAuth, (c) => {
