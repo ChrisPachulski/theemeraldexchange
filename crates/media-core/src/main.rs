@@ -34,6 +34,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config: Arc::new(config),
         tmdb,
         scanning: Arc::new(AtomicBool::new(false)),
+        // §7-2: cap concurrent direct-play streams so a burst of stalled reads
+        // against a degraded volume cannot exhaust tokio tasks.
+        stream_semaphore: Arc::new(tokio::sync::Semaphore::new(
+            media_core::stream_concurrency_from_env(),
+        )),
     };
 
     let host = state.config.host.clone();
@@ -50,6 +55,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = std::net::SocketAddr::new(ip, port);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("media-core listening on http://{addr}");
+    // §7-2: the two stream abuse vectors are bounded explicitly rather than with
+    // a blanket request timeout (which would truncate legitimate hours-long
+    // playback): the fast JSON API carries a TimeoutLayer (see routes.rs), and
+    // the number of concurrent direct-play streams is capped by the AppState
+    // `stream_semaphore`, returning 503 once exhausted.
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
