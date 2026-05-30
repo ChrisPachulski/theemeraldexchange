@@ -39,6 +39,44 @@ Exit code 0 is not done. After every step in stateful or deploy work, verify the
 
 Do not move to the next step until the current one is confirmed working.
 
+## Workflow Runaway Prevention
+
+Long multi-agent workflows on this repo have repeatedly run away (2.5h+ with no
+progress). The root causes and the hard rules that prevent them:
+
+1. **Shared working tree → ref-race livelock.** Multiple Claude sessions share
+   ONE working tree on `m3-media-core`. A workflow's sequential fix agents and a
+   concurrent session both commit, orphaning each other's commits; an agent that
+   commits-then-reverifies can loop forever re-committing the same change. RULE:
+   any workflow whose agents MUTATE files MUST use `isolation: 'worktree'` so each
+   agent gets its own checkout. Never run parallel/long mutating agents against
+   the shared tree.
+
+2. **Bound every workflow.** No unbounded `while`/loop-until-dry without a hard
+   ceiling. Cap fan-out (≤8 mutating agents per phase), cap total agents, and put
+   a wall-clock or budget guard on any accumulation loop. Prefer one bounded
+   phase per turn over a single mega-workflow that owns the whole job.
+
+3. **Never trust an agent's "green" self-report.** Agents have shipped commits
+   that failed typecheck/pytest while claiming success. The orchestrator (or the
+   main loop) MUST re-run the real build/test at the end, from scratch, before
+   declaring done.
+
+4. **Watch, don't babysit.** When a background workflow/command is running, go
+   event-driven (a commit monitor + the completion notification). Do NOT poll in
+   a tight loop or `ScheduleWakeup` short intervals — that itself is a runaway. If
+   a workflow shows no commit/no journal `result` for ~10 min, STOP it and finish
+   the remaining scope by hand rather than waiting longer.
+
+5. **Kill switch.** If you catch a livelock (same commit message landing 2-3×,
+   or an agent transcript active but HEAD not advancing), `TaskStop` the workflow
+   immediately, verify with `git fsck --no-reflogs | grep 'dangling commit'` that
+   no unique work was lost, and take over directly.
+
+6. **Commit small and often in a contended tree.** Only committed state survives
+   a concurrent `git add -A`. Commit each fix immediately, staging ONLY your own
+   paths (`git add -- <path>`), never `git add -A`/`.`.
+
 ## Environment Cheat-Sheet
 
 These gotchas were re-hit across multiple sessions. Treat them as invariants:
