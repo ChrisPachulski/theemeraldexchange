@@ -32,6 +32,11 @@ export type GrabEvent = {
   ts: string
   app: 'sonarr' | 'radarr'
   itemId: number
+  // Subject (user) that triggered the grab, when known. Lets /by-item be
+  // scoped to the caller instead of relying on the guessable itemId as a
+  // weak capability, and attributes events for abuse investigation.
+  // Optional so older rows (written before attribution) still parse.
+  sub?: string
   type: GrabEventType
   title?: string
   capGb?: number
@@ -159,6 +164,13 @@ export async function readEventsForItem(
   app: 'sonarr' | 'radarr',
   itemId: number,
   limit: number,
+  // When provided, scope results to events the caller triggered so the
+  // guessable itemId can no longer be enumerated to read other members'
+  // grab history. Legacy events written before attribution (no `sub`)
+  // remain visible so pre-existing household history isn't lost; once
+  // attribution has run for a while this can be tightened to strict
+  // equality.
+  sub?: string,
 ): Promise<GrabEvent[]> {
   await writeQueue
   // Scan a wider window than `limit` since events for one item are a
@@ -170,5 +182,6 @@ export async function readEventsForItem(
   const rotated = remaining > 0 ? parseEvents(await readTail(logPath + '.1', remaining)) : []
   return [...primary, ...rotated]
     .filter((e) => e.app === app && e.itemId === itemId)
+    .filter((e) => sub === undefined || e.sub === undefined || e.sub === sub)
     .slice(0, limit)
 }

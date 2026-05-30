@@ -1,9 +1,13 @@
 // Read-only view onto the grab-event log.
 //
 //   GET /api/grabs/recent?limit=20   admin only — full activity feed
-//   GET /api/grabs/by-item?app=…&itemId=…  authed — per-item history.
-//     itemId acts as a weak capability; a household member can only see
-//     events for an id they already know (e.g. one they just added).
+//   GET /api/grabs/by-item?app=…&itemId=…  authed — per-item history,
+//     scoped to the caller's own grab events (by `sub`). itemId is no
+//     longer relied on as a capability: Sonarr/Radarr ids are small
+//     sequential integers, so an unscoped read let any member enumerate
+//     itemId=1..N and read everyone's grab history. Legacy events with
+//     no recorded `sub` stay visible so pre-attribution history isn't
+//     lost (see readEventsForItem).
 //
 // The append side lives in services/grabLog.ts and is called from the
 // cap pipelines (sonarr.ts, radarr.ts) when grabs succeed or fail.
@@ -43,6 +47,7 @@ grabs.get('/by-item', async (c) => {
     return c.json({ error: 'invalid_itemId' }, 400)
   }
   const limit = parseLimit(c.req.query('limit'), 20, 100)
-  const events = await readEventsForItem(app, itemId, limit)
+  const { sub } = c.get('session')
+  const events = await readEventsForItem(app, itemId, limit, sub)
   return c.json(events)
 })

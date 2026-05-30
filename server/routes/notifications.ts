@@ -198,6 +198,15 @@ notifications.post('/discord', async (c) => {
   const body = (await c.req.json().catch(() => null)) as { webhookUrl?: string } | null
   const url = body?.webhookUrl?.trim()
   if (!url) return c.json({ error: 'webhookUrl_required' }, 400)
+  // Discord webhook hosts only. NOTE: this dashboard only *configures*
+  // the webhook on Sonarr/Radarr (via discordNotificationBody below);
+  // the actual outbound POST to Discord is performed by *arr, not by
+  // this process. That is why services/ssrfGuard.ts (isPublicHttpsUpstream)
+  // is intentionally NOT applied to this URL here — there is no egress
+  // from the dashboard side to guard, and the host allowlist is the only
+  // control needed. If this endpoint is ever loosened to accept generic
+  // webhook hosts (i.e. the dashboard starts making the request itself),
+  // route the URL through isPublicHttpsUpstream() before persisting it.
   if (!/^https:\/\/(discord\.com|discordapp\.com)\/api\/webhooks\//.test(url)) {
     return c.json({ error: 'invalid_discord_webhook' }, 400)
   }
