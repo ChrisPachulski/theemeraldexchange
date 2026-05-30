@@ -15,6 +15,19 @@ export interface EpgProgrammeRow {
   description: string | null
 }
 
+/**
+ * Canonical form for an EPG channel id (tvg-id). Lowercased + trimmed so the
+ * stream-catalog side (which preserves the provider's mixed case, e.g.
+ * "CNBC.us") joins the XMLTV side (emitted lowercase, e.g. "cnbc.us"). Shared
+ * by xtream.parseLiveStreams (channel side) and streamXmltv (programme side) so
+ * both namespaces are written in the same form. Returns null for empty/missing.
+ */
+export function normalizeEpgChannelId(id: string | null | undefined): string | null {
+  if (id == null) return null
+  const v = id.trim().toLowerCase()
+  return v.length > 0 ? v : null
+}
+
 export function xmltvTimeToIso(s: string): string {
   // Format: YYYYMMDDhhmmss [+-]HHMM
   const m = s.trim().match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\s*([+-]\d{4})$/)
@@ -108,7 +121,7 @@ export async function streamXmltv(
       const a = node.attributes as Record<string, string>
       try {
         cur = {
-          channel_id: a.channel,
+          channel_id: normalizeEpgChannelId(a.channel) ?? '',
           start_utc: xmltvTimeToIso(a.start),
           stop_utc: xmltvTimeToIso(a.stop),
           title: null,

@@ -1,6 +1,7 @@
 // src/components/tabs/LiveTab.tsx
 import { type KeyboardEvent, useEffect, useMemo, useState } from 'react'
 import IptvPlayer from '../player/IptvPlayer'
+import EpgGuide, { type GuideChannel } from './EpgGuide'
 import { iptvApi, type ChannelDto, type EpgProgrammeDto, type StreamGrant } from '../../lib/api/iptv'
 import { useIptvCategories } from '../../lib/hooks/useIptvCategories'
 import { useIptvEpgChannel, useIptvEpgNow } from '../../lib/hooks/useIptvEpg'
@@ -13,13 +14,6 @@ import {
   concurrencyPayloadFromError,
   type ConcurrencyLimitPayload,
 } from '../iptv/concurrencyLimit'
-
-type GuideChannel = {
-  id: number
-  name: string
-  archiveDays: number
-  canCatchup: boolean
-}
 
 function epgTitle(title: string | null | undefined): string {
   const trimmed = title?.trim()
@@ -44,6 +38,7 @@ function formatGuideTime(iso: string): string {
 
 export default function LiveTab() {
   const [q, setQ] = useState('')
+  const [view, setView] = useState<'cards' | 'guide'>('cards')
   const [categoryId, setCategoryId] = useState<number | undefined>(undefined)
   const [offset, setOffset] = useState(0)
   const [playing, setPlaying] = useState<{ grant: StreamGrant; title: string; itemId: string } | null>(null)
@@ -94,7 +89,7 @@ export default function LiveTab() {
     return rows
   }, [nowEpg.data])
 
-  const playChannel = async (stream: ChannelDto) => {
+  const playChannel = async (stream: { stream_id: number; name: string }) => {
     const attempt = async () => {
       const grant = await iptvApi.grantLive(stream.stream_id.toString())
       setPlaying({ grant, title: stream.name, itemId: stream.stream_id.toString() })
@@ -113,6 +108,27 @@ export default function LiveTab() {
     }
   }
 
+  // Shared by the per-channel guide modal and the grid guide. Mirrors
+  // playChannel's concurrency handling so a 429 surfaces the kick-a-session
+  // modal instead of throwing.
+  const playCatchup = async (channel: GuideChannel, programme: EpgProgrammeDto) => {
+    const attempt = async () => {
+      const grant = await iptvApi.grantCatchup(channel.id, programme.start_utc, programmeDurationMin(programme))
+      setPlaying({ grant, title: `${channel.name}: ${epgTitle(programme.title)}`, itemId: String(channel.id) })
+    }
+    try {
+      await attempt()
+    } catch (err) {
+      const payload = concurrencyPayloadFromError(err)
+      if (payload) {
+        setConcurrencyError(payload)
+        setPendingPlay(() => attempt)
+        return
+      }
+      throw err
+    }
+  }
+
   const handleCardKeyDown = (event: KeyboardEvent, stream: ChannelDto) => {
     if (event.target !== event.currentTarget) return
     if (event.key !== 'Enter' && event.key !== ' ') return
@@ -122,6 +138,15 @@ export default function LiveTab() {
 
   return (
     <section className="iptv-tab">
+      {view === 'guide' ? (
+        <EpgGuide
+          categoryId={categoryId}
+          q={debounced}
+          onPlayLive={(channel) => void playChannel(channel)}
+          onPlayCatchup={(channel, programme) => void playCatchup(channel, programme).catch(() => undefined)}
+        />
+      ) : (
+      <>
       {list.isLoading && <p className="iptv-tab__status">Loading…</p>}
       {list.error && <p className="iptv-tab__status iptv-tab__status--error">Failed to load channels.</p>}
 
@@ -199,8 +224,28 @@ export default function LiveTab() {
           </button>
         </nav>
       )}
+      </>
+      )}
 
       <footer className="iptv-tab__toolbar">
+        <div className="iptv-tab__viewtoggle" role="group" aria-label="Channel view">
+          <button
+            type="button"
+            className={view === 'cards' ? 'is-active' : ''}
+            aria-pressed={view === 'cards'}
+            onClick={() => setView('cards')}
+          >
+            Channels
+          </button>
+          <button
+            type="button"
+            className={view === 'guide' ? 'is-active' : ''}
+            aria-pressed={view === 'guide'}
+            onClick={() => setView('guide')}
+          >
+            Guide
+          </button>
+        </div>
         <input
           className="iptv-tab__search"
           placeholder="Search channels…"
@@ -235,16 +280,7 @@ export default function LiveTab() {
           channel={guideFor}
           onClose={() => setGuideFor(null)}
           onPlayCatchup={async (programme) => {
-            const grant = await iptvApi.grantCatchup(
-              guideFor.id,
-              programme.start_utc,
-              programmeDurationMin(programme),
-            )
-            setPlaying({
-              grant,
-              title: `${guideFor.name}: ${epgTitle(programme.title)}`,
-              itemId: String(guideFor.id),
-            })
+            await playCatchup(guideFor, programme)
             setGuideFor(null)
           }}
         />
