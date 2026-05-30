@@ -66,6 +66,20 @@ describe('xtream list parsers', () => {
     expect(channels[0].fetched_at).toBe('2026-05-24T00:00:00Z')
   })
 
+  it('lowercases + trims epg_channel_id so it joins the (lowercase) XMLTV feed', () => {
+    const channels = parseLiveStreams(
+      [
+        { stream_id: 1, name: 'CNBC', epg_channel_id: '  CNBC.us  ' },
+        { stream_id: 2, name: 'No tvg', epg_channel_id: '' },
+        { stream_id: 3, name: 'Missing tvg' },
+      ],
+      '2026-05-24T00:00:00Z',
+    )
+    expect(channels[0].epg_channel_id).toBe('cnbc.us')
+    expect(channels[1].epg_channel_id).toBeNull()
+    expect(channels[2].epg_channel_id).toBeNull()
+  })
+
   it('parses VOD streams with tmdb_id when present', () => {
     const v = parseVodStreams(
       [{ stream_id: 9, name: 'Movie', container_extension: 'mp4', tmdb: '603', rating: '7.8' }],

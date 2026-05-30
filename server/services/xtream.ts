@@ -1,5 +1,6 @@
 import { env } from '../env.js'
 import { fetchJsonWithTimeout, fetchWithTimeout } from './upstream.js'
+import { normalizeEpgChannelId } from './iptvEpg.js'
 
 export interface XtreamCreds {
   host: string
@@ -121,7 +122,8 @@ export function parseLiveStreams(raw: unknown, fetchedAt: string): ChannelRow[] 
       num: num(o.num),
       name: str(o.name) ?? '',
       stream_icon: str(o.stream_icon),
-      epg_channel_id: str(o.epg_channel_id),
+      // Lowercase+trim so the tvg-id joins the (lowercase) XMLTV guide feed.
+      epg_channel_id: normalizeEpgChannelId(str(o.epg_channel_id)),
       category_id: numOrNull(o.category_id),
       is_adult: num(o.is_adult) ? 1 : 0,
       tv_archive: num(o.tv_archive) ? 1 : 0,
