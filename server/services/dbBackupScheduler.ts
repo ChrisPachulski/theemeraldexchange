@@ -6,7 +6,6 @@
 
 import cron, { type ScheduledTask } from 'node-cron'
 import { runScheduledBackup } from './dbBackup.js'
-import { env } from '../env.js'
 
 const DEFAULT_DB_BACKUP_CRON = '30 3 * * *'
 

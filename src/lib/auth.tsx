@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- this auth module deliberately co-locates the AuthProvider component with its useAuth hook + context constants; react-refresh fast-refresh is a dev-only DX concern with zero runtime/correctness impact. Splitting would fragment the auth API surface. */
 import {
   createContext,
   useCallback,

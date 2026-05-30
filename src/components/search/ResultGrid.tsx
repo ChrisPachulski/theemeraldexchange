@@ -65,12 +65,18 @@ function VirtualResultGrid<T>({ items, renderItem, getKey }: VirtualProps<T>) {
   const rowCount = Math.ceil(items.length / cols)
   // Window against the page scroll so the grid keeps the document's normal
   // scroll behaviour (the tabs scroll the whole page, not an inner container).
+  /* eslint-disable react-hooks/refs -- documented @tanstack/react-virtual
+     pattern: useWindowVirtualizer reads containerRef.current.offsetTop for
+     scrollMargin at render. The virtualizer re-measures on scroll/resize, so
+     a stale first-paint offset self-corrects; there is no render-correctness
+     bug here. */
   const virtualizer = useWindowVirtualizer({
     count: rowCount,
     estimateSize: () => ESTIMATED_ROW_PX,
     overscan: 4,
     scrollMargin: containerRef.current?.offsetTop ?? 0,
   })
+  /* eslint-enable react-hooks/refs */
 
   return (
     <div ref={containerRef} className="result-grid result-grid--virtual">

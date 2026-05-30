@@ -24,6 +24,10 @@ export function PasskeyButtons({ inviteCode }: { inviteCode?: string }) {
   // WebAuthn rather than offering a button that can only fail.
   useEffect(() => {
     try {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time
+      // capability probe on mount: browserSupportsWebAuthn() touches
+      // window.PublicKeyCredential, which is unavailable during SSR/first
+      // render, so it must run post-mount. Fires once (empty dep array).
       setSupported(browserSupportsWebAuthn())
     } catch {
       setSupported(false)
