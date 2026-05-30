@@ -121,7 +121,7 @@ export function epgGrid(
   // returning the full set is fine. hasEpgOnly naturally bounds this to channels
   // that actually have a schedule (~11.5k) rather than the full 50k catalog — so
   // a generous ceiling here does not pull in empty rows.
-  const limit = Math.min(Math.max(opts.limit ?? 20000, 1), 20000)
+  const limit = Math.min(Math.max(opts.limit ?? 60000, 1), 60000)
 
   // One pass over the programmes overlapping the window, grouped by channel_id.
   // Cheaper than N+1 per-channel lookups when the grid spans hundreds of rows,
