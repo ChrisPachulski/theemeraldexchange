@@ -15,13 +15,26 @@
 
 import { Hono, type Context } from 'hono'
 import { requireAuth, type Env } from '../middleware/auth.js'
+import { rateLimit } from '../middleware/rateLimit.js'
 import { sabCall } from '../services/sab.js'
+import { env } from '../env.js'
 
 export const sab = new Hono<Env>()
 const DEFAULT_HISTORY_LIMIT = 10
 const MAX_HISTORY_LIMIT = 100
 
 sab.use('*', requireAuth)
+
+// Per-session token bucket on the queue-mutating routes (finding 4-0).
+// Reuses the shared *arr mutate budget shape; these hit SAB queue + disk I/O,
+// so an authenticated loop of pause/resume/delete is cut off the same way the
+// Sonarr/Radarr add/search loops are.
+const sabMutateLimit = rateLimit({
+  name: 'sab-mutate',
+  capacity: env.arrMutateRateCapacity,
+  refill: env.arrMutateRateRefill,
+  intervalMs: env.arrMutateRateIntervalMs,
+})
 
 // Reads — both roles. The presence of a `name` param is rejected here
 // so the legacy SAB-style "GET ?mode=queue&name=pause" attack vector
@@ -64,21 +77,21 @@ function ensureAdmin(c: Context<Env>): Response | null {
   return null
 }
 
-sab.post('/api/queue/:nzoId/pause', async (c) => {
+sab.post('/api/queue/:nzoId/pause', sabMutateLimit, async (c) => {
   const forbidden = ensureAdmin(c)
   if (forbidden) return forbidden
   const r = await sabCall('queue', { name: 'pause', value: c.req.param('nzoId') })
   return forward(r)
 })
 
-sab.post('/api/queue/:nzoId/resume', async (c) => {
+sab.post('/api/queue/:nzoId/resume', sabMutateLimit, async (c) => {
   const forbidden = ensureAdmin(c)
   if (forbidden) return forbidden
   const r = await sabCall('queue', { name: 'resume', value: c.req.param('nzoId') })
   return forward(r)
 })
 
-sab.delete('/api/queue/:nzoId', async (c) => {
+sab.delete('/api/queue/:nzoId', sabMutateLimit, async (c) => {
   const forbidden = ensureAdmin(c)
   if (forbidden) return forbidden
   const r = await sabCall('queue', {

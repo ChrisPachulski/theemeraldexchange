@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Hono } from 'hono'
 import { radarr } from './radarr.js'
 import { createSession } from '../session.js'
+import { __resetRateLimitsForTests } from '../middleware/rateLimit.js'
 import type { Env } from '../middleware/auth.js'
 
 function appUnderTest() {
@@ -29,6 +30,9 @@ const responses = new Map<string, Resp>()
 
 beforeEach(() => {
   responses.clear()
+  // Finding 4-0: the rate-limit buckets are module-global; reset between tests
+  // so a prior test's requests don't pre-drain another test's budget.
+  __resetRateLimitsForTests()
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: string | URL | Request) => {
@@ -823,4 +827,77 @@ describe('radarr non-admin add — path matching tolerance (burn-it-all fixes)',
   // whose configured default path doesn't match any upstream folder after the
   // case/slash normalization above; the case/slash tolerance tests above
   // already confirm the comparator is the only thing that changed.
+})
+
+describe('per-session rate limit middleware (finding 4-0)', () => {
+  // Exercise the token-bucket directly on a tiny app so the assertion is about
+  // the limiter mechanism, not the auth/upstream stack the *arr routes layer on
+  // top — and so this test uses its OWN bucket names and cannot drain the
+  // shared 'radarr-mutate' bucket the route tests rely on. A request whose
+  // session.sub is set is keyed by sub; the first `capacity` requests pass
+  // through, then the bucket empties and the next is refused with 429 before
+  // the handler runs. This is the exact middleware mounted on the *arr/SAB
+  // mutate routes.
+  it('admits `capacity` requests then 429s the next, keyed per session', async () => {
+    const { rateLimit, __resetRateLimitsForTests } = await import('../middleware/rateLimit.js')
+    __resetRateLimitsForTests()
+
+    let handlerHits = 0
+    const limiter = rateLimit({ name: 'rl-unit-1', capacity: 3, refill: 3, intervalMs: 60_000 })
+    const app = new Hono<Env>()
+    app.use('*', async (c, next) => {
+      c.set('session', { sub: 'plex:rl', username: 'rl', role: 'user' } as never)
+      await next()
+    })
+    app.post('/x', limiter, (c) => {
+      handlerHits++
+      return c.json({ ok: true })
+    })
+
+    const statuses: number[] = []
+    for (let i = 0; i < 4; i++) {
+      const r = await app.request('/x', { method: 'POST' })
+      statuses.push(r.status)
+    }
+    expect(statuses.slice(0, 3)).toEqual([200, 200, 200])
+    expect(statuses[3]).toBe(429)
+    expect(handlerHits).toBe(3)
+  })
+
+  it('429 body carries the rate_limited error code', async () => {
+    const { rateLimit, __resetRateLimitsForTests } = await import('../middleware/rateLimit.js')
+    __resetRateLimitsForTests()
+    const limiter = rateLimit({ name: 'rl-unit-2', capacity: 1, refill: 1, intervalMs: 60_000 })
+    const app = new Hono<Env>()
+    app.use('*', async (c, next) => {
+      c.set('session', { sub: 'plex:rl2', username: 'rl2', role: 'user' } as never)
+      await next()
+    })
+    app.post('/x', limiter, (c) => c.json({ ok: true }))
+    await app.request('/x', { method: 'POST' })
+    const r = await app.request('/x', { method: 'POST' })
+    expect(r.status).toBe(429)
+    const body = (await r.json()) as { error: string }
+    expect(body.error).toBe('rate_limited')
+  })
+
+  it('separate sessions get independent budgets', async () => {
+    const { rateLimit, __resetRateLimitsForTests } = await import('../middleware/rateLimit.js')
+    __resetRateLimitsForTests()
+    const limiter = rateLimit({ name: 'rl-unit-3', capacity: 1, refill: 1, intervalMs: 60_000 })
+    const make = (sub: string) => {
+      const app = new Hono<Env>()
+      app.use('*', async (c, next) => {
+        c.set('session', { sub, username: sub, role: 'user' } as never)
+        await next()
+      })
+      app.post('/x', limiter, (c) => c.json({ ok: true }))
+      return app
+    }
+    const a = make('plex:a')
+    const b = make('plex:b')
+    expect((await a.request('/x', { method: 'POST' })).status).toBe(200)
+    expect((await a.request('/x', { method: 'POST' })).status).toBe(429)
+    expect((await b.request('/x', { method: 'POST' })).status).toBe(200)
+  })
 })

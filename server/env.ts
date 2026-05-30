@@ -534,6 +534,14 @@ export const env = {
   // matches the NAS data bind-mount used by iptv.db and other data files.
   SERVER_DB_PATH: process.env.SERVER_DB_PATH ?? './data/server.db',
   IPTV_DB_PATH: process.env.IPTV_DB_PATH ?? './data/iptv.db',
+  // Scheduled DB-snapshot retention dir + count + cadence (finding 14-4).
+  // VACUUM INTO snapshots of server.db + iptv.db land here on a cron and on
+  // each pass stamp server_state.last_backup_at. Keep this on the SAME
+  // bind-mounted volume root as the DBs by default but in a sibling dir so a
+  // restore is a simple copy. Default cadence: daily at 03:30 local.
+  DB_BACKUP_DIR: process.env.DB_BACKUP_DIR ?? './data/backups',
+  DB_BACKUP_KEEP: positiveInt('DB_BACKUP_KEEP', 7),
+  DB_BACKUP_CRON: process.env.DB_BACKUP_CRON ?? '30 3 * * *',
   IPTV_EPG_PATH: opt('IPTV_EPG_PATH') ?? '/xmltv.php',
   IPTV_MAX_CONCURRENT_STREAMS: positiveInt('IPTV_MAX_CONCURRENT_STREAMS', 4),
   IPTV_STREAM_TOKEN_TTL_SECS: positiveInt('IPTV_STREAM_TOKEN_TTL_SECS', 300),
@@ -560,4 +568,15 @@ export const env = {
   // container build (docker build --build-arg EEX_RELEASE=$(git describe)).
   // Surfaced in /api/telemetry/config so Glitchtip can group crashes by release.
   EEX_RELEASE: opt('EEX_RELEASE') ?? 'dev',
+
+  // Per-session rate-limit budgets for the *arr / SAB proxies (finding 4-0).
+  // Each add/upgrade/search POST triggers a real upstream indexer release
+  // search + disk I/O, so an authenticated member (or a leaked session) could
+  // loop them to burn the indexer/usenet budget and flood the grab log.
+  // Defaults are generous for normal household use but cut off a hammering
+  // loop: 12-token burst, refilling 12 tokens per 60s window. Tighten via env
+  // per deploy. capacity == burst; refill == sustained per intervalMs.
+  arrMutateRateCapacity: positiveInt('ARR_MUTATE_RATE_CAPACITY', 12),
+  arrMutateRateRefill: positiveInt('ARR_MUTATE_RATE_REFILL', 12),
+  arrMutateRateIntervalMs: positiveInt('ARR_MUTATE_RATE_INTERVAL_MS', 60_000),
 } as const

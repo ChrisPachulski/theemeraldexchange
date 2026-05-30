@@ -28,7 +28,12 @@ import { tryNormaliseLegacySub } from '../services/sub.js'
 import { resolveSourcePrecedence } from '../services/sourcePrecedence.js'
 import { streamConcurrency, type SessionView, type SessionKind } from '../services/iptvConcurrency.js'
 import { rewriteManifest } from '../services/iptvHlsRewrite.js'
-import { isPublicHttpsUpstream } from '../services/ssrfGuard.js'
+import {
+  isPublicHttpsUpstream,
+  guardedFetch,
+  guardedFetchTrustedOrigin,
+  SsrfBlockedError,
+} from '../services/ssrfGuard.js'
 import {
   heartbeatRemuxSession,
   listRemuxSessions,
@@ -429,6 +434,30 @@ function clientWantsAvplayer(c: Context<Env>): boolean {
   return c.req.query('client') === 'avplayer'
 }
 
+// A pass-through TransformStream that invokes `onChunk` for each chunk that
+// flows through it. Used to heartbeat a long-lived byte stream's concurrency
+// slot (finding 8-1) without buffering or copying the payload. `onChunk` is
+// throttled to once per HEARTBEAT_THROTTLE_MS so a high-bitrate stream doesn't
+// hammer the tracker Map on every TS packet.
+const HEARTBEAT_THROTTLE_MS = 5_000
+function makeHeartbeatStream(onChunk: () => void): TransformStream<Uint8Array, Uint8Array> {
+  let lastBeat = 0
+  return new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      const now = Date.now()
+      if (now - lastBeat >= HEARTBEAT_THROTTLE_MS) {
+        lastBeat = now
+        try {
+          onChunk()
+        } catch {
+          // Heartbeat is best-effort; never let it break the byte stream.
+        }
+      }
+      controller.enqueue(chunk)
+    },
+  })
+}
+
 export function formatXtreamTimeshiftStart(iso: string): string {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) throw new Error('invalid_start')
@@ -653,7 +682,16 @@ async function proxyRangeable(c: Context, upstreamUrl: string, mime: string): Pr
   const range = c.req.header('range')
   if (range) headers.Range = range
 
-  const upstream = await fetch(upstreamUrl, { signal: controller.signal, headers })
+  // SSRF: the creds host is operator-trusted, but an upstream-issued redirect
+  // is not — guardedFetchTrustedOrigin re-validates every 30x target so a
+  // panel can't bounce us into the internal network (findings 8-0/16-0).
+  let upstream: Response
+  try {
+    upstream = await guardedFetchTrustedOrigin(upstreamUrl, { signal: controller.signal, headers })
+  } catch (err) {
+    if (err instanceof SsrfBlockedError) return c.json({ error: 'bad_upstream' }, 400)
+    throw err
+  }
   if (!upstream.ok || !upstream.body) return c.json({ error: `upstream_${upstream.status}` }, 502)
 
   const responseHeaders = new Headers({
@@ -682,7 +720,16 @@ async function rewriteHlsPlaylist(c: Context, upstreamUrl: string, sub: string):
   }
   if (!isPublicHttpsUpstream(parsed)) return c.json({ error: 'bad_upstream' }, 400)
 
-  const upstream = await fetch(upstreamUrl)
+  // guardedFetch re-validates the host's resolved IPs and every redirect hop
+  // (DNS-rebinding + redirect-SSRF). The isPublicHttpsUpstream check above is
+  // the cheap up-front string reject; resolve-and-validate happens inside.
+  let upstream: Response
+  try {
+    upstream = await guardedFetch(upstreamUrl)
+  } catch (err) {
+    if (err instanceof SsrfBlockedError) return c.json({ error: 'bad_upstream' }, 400)
+    throw err
+  }
   if (!upstream.ok) return c.json({ error: `upstream_${upstream.status}` }, 502)
 
   const text = await upstream.text()
@@ -714,16 +761,37 @@ iptv.get('/stream/live/:streamId.ts', async (c) => {
   if (!streamId) return c.json({ error: 'invalid_id' }, 400)
   const v = checkToken(c, 'live', streamId)
   if (!v.ok) return v.resp
+  // Finding 8-1: a long live view whose player never re-grants was idle-reaped
+  // after 30s while bytes still flowed. The live .ts byte stream is one long
+  // open fetch, so heartbeat the grant session now AND on each streamed chunk
+  // (see liveHeartbeatStream below), and release the slot when the client
+  // disconnects so it frees immediately on tab-close / player teardown. The
+  // grant for non-AVPlayer live acquired kind 'live' on resourceId=streamId,
+  // which this resource-keyed path matches without needing the opaque
+  // sessionId (the stream token is crate-canonical and carries no sid claim).
+  streamConcurrency().heartbeatByResource(v.sub, 'live', streamId)
   const creds = credsFromEnv()
   const upstreamUrl = `${creds.host}/live/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${streamId}.ts`
 
   const controller = new AbortController()
-  c.req.raw.signal.addEventListener('abort', () => controller.abort(), { once: true })
+  c.req.raw.signal.addEventListener('abort', () => {
+    controller.abort()
+    // Client gone — free the slot now rather than waiting for the idle sweep.
+    streamConcurrency().releaseByResource(v.sub, 'live', streamId)
+  }, { once: true })
 
-  const upstream = await fetch(upstreamUrl, {
-    signal: controller.signal,
-    headers: { 'User-Agent': 'IPTVSmarters' },
-  })
+  // SSRF: trusted creds origin, but re-validate any upstream-issued redirect
+  // so a panel can't bounce the live byte stream into the internal network.
+  let upstream: Response
+  try {
+    upstream = await guardedFetchTrustedOrigin(upstreamUrl, {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'IPTVSmarters' },
+    })
+  } catch (err) {
+    if (err instanceof SsrfBlockedError) return c.json({ error: 'bad_upstream' }, 400)
+    throw err
+  }
   if (!upstream.ok || !upstream.body) {
     return c.json({ error: `upstream_${upstream.status}` }, 502)
   }
@@ -734,7 +802,12 @@ iptv.get('/stream/live/:streamId.ts', async (c) => {
   // playback can't tolerate. Cache-Control: no-store + no-transform
   // additionally prevents any intermediary from rewriting (compressing,
   // segmenting) the MPEG-TS bytes.
-  return new Response(upstream.body, {
+  // Heartbeat the grant slot on every streamed chunk so a multi-minute live
+  // view holds its concurrency slot past the 30s idle window (finding 8-1).
+  const heartbeatBody = upstream.body.pipeThrough(
+    makeHeartbeatStream(() => streamConcurrency().heartbeatByResource(v.sub, 'live', streamId)),
+  )
+  return new Response(heartbeatBody, {
     status: 200,
     headers: {
       'Content-Type': 'video/mp2t',
@@ -849,8 +922,11 @@ iptv.get('/stream/catchup/:streamId/:startUtc/:durationMin.ts', async (c) => {
     return c.json({ error: 'invalid_params' }, 400)
   }
 
-  const v = checkToken(c, 'catchup', `${streamId}|${startUtc}|${durationMin}`)
+  const resourceId = `${streamId}|${startUtc}|${durationMin}`
+  const v = checkToken(c, 'catchup', resourceId)
   if (!v.ok) return v.resp
+  // Finding 8-1: keep the grant slot alive while catch-up bytes flow.
+  streamConcurrency().heartbeatByResource(v.sub, 'catchup', resourceId)
 
   const creds = credsFromEnv()
   const upstreamUrl =
@@ -858,11 +934,24 @@ iptv.get('/stream/catchup/:streamId/:startUtc/:durationMin.ts', async (c) => {
     `&password=${encodeURIComponent(creds.password)}&stream=${streamId}&start=${xtreamStart}&duration=${durationMin}`
 
   const controller = new AbortController()
-  c.req.raw.signal.addEventListener('abort', () => controller.abort(), { once: true })
-  const upstream = await fetch(upstreamUrl, { signal: controller.signal })
+  c.req.raw.signal.addEventListener('abort', () => {
+    controller.abort()
+    streamConcurrency().releaseByResource(v.sub, 'catchup', resourceId)
+  }, { once: true })
+  // SSRF: trusted creds origin, redirect targets re-validated (findings 8-0/16-0).
+  let upstream: Response
+  try {
+    upstream = await guardedFetchTrustedOrigin(upstreamUrl, { signal: controller.signal })
+  } catch (err) {
+    if (err instanceof SsrfBlockedError) return c.json({ error: 'bad_upstream' }, 400)
+    throw err
+  }
   if (!upstream.ok || !upstream.body) return c.json({ error: `upstream_${upstream.status}` }, 502)
 
-  return new Response(upstream.body, {
+  const heartbeatBody = upstream.body.pipeThrough(
+    makeHeartbeatStream(() => streamConcurrency().heartbeatByResource(v.sub, 'catchup', resourceId)),
+  )
+  return new Response(heartbeatBody, {
     status: 200,
     headers: {
       'Content-Type': 'video/mp2t',
@@ -922,6 +1011,9 @@ iptv.get('/stream/vod/:streamId/:ext', async (c) => {
   const ext = c.req.param('ext').toLowerCase()
   const v = checkToken(c, 'vod', streamId)
   if (!v.ok) return v.resp
+  // Finding 8-1: each range request heartbeats the grant slot so a long VOD
+  // playback (or a player paused >30s then resumed) keeps its slot.
+  streamConcurrency().heartbeatByResource(v.sub, 'vod', streamId)
 
   const creds = credsFromEnv()
   const upstreamUrl = `${creds.host}/movie/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${streamId}.${ext}`
@@ -984,6 +1076,8 @@ iptv.get('/stream/series/:episodeId/:ext', async (c) => {
   const ext = c.req.param('ext').toLowerCase()
   const v = checkToken(c, 'series', episodeId)
   if (!v.ok) return v.resp
+  // Finding 8-1: heartbeat the grant slot on each series byte/range request.
+  streamConcurrency().heartbeatByResource(v.sub, 'series', episodeId)
 
   const creds = credsFromEnv()
   const upstreamUrl = `${creds.host}/series/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${episodeId}.${ext}`
@@ -1035,7 +1129,16 @@ iptv.get('/stream/segment', async (c) => {
   const controller = new AbortController()
   c.req.raw.signal.addEventListener('abort', () => controller.abort(), { once: true })
   const range = c.req.header('range')
-  const upstreamRes = await fetch(upstream, { signal: controller.signal, headers: range ? { Range: range } : {} })
+  // guardedFetch re-validates resolved IPs + every redirect hop on this
+  // attacker-influenceable segment URL (the isPublicHttpsUpstream check above
+  // is the cheap up-front string reject) — findings 8-0/16-0.
+  let upstreamRes: Response
+  try {
+    upstreamRes = await guardedFetch(upstream, { signal: controller.signal, headers: range ? { Range: range } : {} })
+  } catch (err) {
+    if (err instanceof SsrfBlockedError) return c.json({ error: 'bad_upstream' }, 400)
+    throw err
+  }
   if (!upstreamRes.ok || !upstreamRes.body) return c.json({ error: `upstream_${upstreamRes.status}` }, 502)
 
   const headers = new Headers()

@@ -5,7 +5,7 @@
 // table has no `last_sync` row (or one older than 7 days). The bootstrap
 // run is fire-and-forget — failures land in console.error so the boot
 // path stays non-blocking; cron retries every 6h by default.
-import cron from 'node-cron'
+import cron, { type ScheduledTask } from 'node-cron'
 import { syncOnce } from './iptvSync.js'
 import { iptvDb } from './iptvDbSingleton.js'
 
@@ -13,7 +13,13 @@ const DEFAULT_IPTV_SYNC_CRON = '0 */6 * * *'
 // Hard-delete tombstoned link rows older than 14 days at 03:00 local time.
 const TOMBSTONE_SWEEP_CRON = '0 3 * * *'
 
-export async function registerIptvSchedule(cronExpr: string): Promise<void> {
+/**
+ * Register the recurring IPTV jobs and return the scheduled tasks so the
+ * caller can .stop() them during graceful shutdown (finding 14-2) — previously
+ * the tasks were created and dropped, so a sync could fire mid-shutdown and
+ * race closeIptvDb().
+ */
+export async function registerIptvSchedule(cronExpr: string): Promise<ScheduledTask[]> {
   const db = iptvDb()
   const last = db.stmts.getSyncState.get('last_sync') as { value: string; ts: string } | undefined
   const needsBootstrap = !last || (Date.now() - new Date(last.ts).getTime()) > 7 * 24 * 3600_000
@@ -26,12 +32,12 @@ export async function registerIptvSchedule(cronExpr: string): Promise<void> {
     console.error(`[iptv] invalid IPTV_SYNC_CRON ${JSON.stringify(cronExpr)}; using ${DEFAULT_IPTV_SYNC_CRON}`)
   }
 
-  cron.schedule(scheduleExpr, () => {
+  const syncTask = cron.schedule(scheduleExpr, () => {
     void syncOnce(db).catch((err) => console.error('[iptv] scheduled sync failed:', err))
   })
 
   // Nightly sweep: hard-delete link tombstones older than 14 days.
-  cron.schedule(TOMBSTONE_SWEEP_CRON, () => {
+  const sweepTask = cron.schedule(TOMBSTONE_SWEEP_CRON, () => {
     try {
       const result = db.raw.prepare(
         `DELETE FROM iptv_title_link WHERE removed_at < datetime('now', '-14 days')`,
@@ -43,4 +49,6 @@ export async function registerIptvSchedule(cronExpr: string): Promise<void> {
       console.error('[iptv] tombstone sweep failed:', err instanceof Error ? err.message : String(err))
     }
   })
+
+  return [syncTask, sweepTask]
 }

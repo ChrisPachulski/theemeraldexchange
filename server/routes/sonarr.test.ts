@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Hono } from 'hono'
 import { sonarr } from './sonarr.js'
 import { createSession } from '../session.js'
+import { __resetRateLimitsForTests } from '../middleware/rateLimit.js'
 import type { Env } from '../middleware/auth.js'
 import { env } from '../env.js'
 
@@ -40,6 +41,10 @@ type FetchSpy = ReturnType<typeof vi.fn> & {
 }
 
 beforeEach(() => {
+  // Finding 4-0: the rate-limit buckets are module-global; reset between tests
+  // so a prior test's mutate requests (POST /series add) don't pre-drain the
+  // shared 'sonarr-mutate' bucket the season-monitor tests rely on.
+  __resetRateLimitsForTests()
   const responses = new Map<string, { status: number; body: unknown }>()
   const spy: FetchSpy = vi.fn(async (input: string | URL | Request) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
