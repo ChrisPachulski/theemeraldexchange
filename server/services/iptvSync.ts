@@ -4,6 +4,7 @@ import {
 } from './xtream.js'
 import { fetchAndStreamEpg } from './iptvEpg.js'
 import { buildEpgNameIndex, resolveEpgId, type FeedChannelDef } from './iptvEpgResolve.js'
+import { ingestAllExternalEpg } from './iptvEpgExternal.js'
 import type { IptvDb } from './iptvDb.js'
 
 export type SyncResult =
@@ -252,6 +253,18 @@ export async function syncOnce(db: IptvDb): Promise<SyncResult> {
     // schedule — exact tvg-id first, then unambiguous name/alias match. Lifts
     // EPG coverage from the ~806 exact-tvg matches to ~12.5k channels.
     resolveEpgChannels(db, channelDefs)
+
+    // Supplement with third-party EPG (iptv-org via epgshare01) for channels the
+    // provider's own XMLTV omits — lifts coverage from ~14k toward ~22k. Stores
+    // programmes only for channels our catalog matches. Best-effort: a failed
+    // external fetch never fails the provider sync.
+    try {
+      for (const r of await ingestAllExternalEpg(db)) {
+        console.log('[iptv-sync] external epg', JSON.stringify(r))
+      }
+    } catch (err) {
+      console.error('[iptv-sync] external epg failed:', err)
+    }
 
     const finishedAt = new Date()
     db.stmts.putSyncState.run({ key: 'last_sync', value: 'ok', ts: finishedAt.toISOString() })
