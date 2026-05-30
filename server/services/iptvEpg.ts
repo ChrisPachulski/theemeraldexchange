@@ -229,6 +229,14 @@ export async function streamXmltv(
     parser.on('error', fail)
     parser.on('end', done)
     xmlStream.on('error', fail)
+    // Attach the channel-def sniffer to the SAME post-gunzip stream the parser
+    // reads: both consumers see every chunk; the sniffer extracts <channel>
+    // alias blocks via regex while SAX parses <programme>. WITHOUT this line the
+    // sniffer never fires, channelDefs is empty, and name-based EPG matching
+    // silently degrades to exact-tvg only (~820 channels instead of ~12k).
+    // Attach before pipe() so the channel section (which precedes most
+    // programmes) is not missed.
+    if (sniffEnabled) xmlStream.on('data', onSniffData)
     signal?.addEventListener('abort', onAbort, { once: true })
     xmlStream.pipe(parser)
   })
