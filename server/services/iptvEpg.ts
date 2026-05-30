@@ -121,13 +121,6 @@ export async function streamXmltv(
   let inTitle = false
   let inDesc = false
   let counter = 0
-  // Channel-definition capture (<channel id="…"><display-name>…</display-name>).
-  // The feed ships many display-name aliases per channel so players can match
-  // schedules by name, not just by exact tvg-id. Captured in the same pass.
-  let chanId: string | null = null
-  let chanNames: string[] = []
-  let inDisplayName = false
-  let dnText = ''
 
   parser.on('opentag', (node) => {
     if (node.name === 'programme') {
@@ -143,34 +136,17 @@ export async function streamXmltv(
       } catch {
         cur = null
       }
-    } else if (node.name === 'channel') {
-      const a = node.attributes as Record<string, string>
-      chanId = a.id ?? null
-      chanNames = []
-    } else if (chanId && node.name === 'display-name') {
-      inDisplayName = true; dnText = ''
     } else if (cur && node.name === 'title') {
       inTitle = true; text = ''
     } else if (cur && node.name === 'desc') {
       inDesc = true; text = ''
     }
   })
-  parser.on('text', (t) => {
-    if (inTitle || inDesc) text += t
-    else if (inDisplayName) dnText += t
-  })
+  parser.on('text', (t) => { if (inTitle || inDesc) text += t })
   parser.on('closetag', (name) => {
     if (name === 'title' && inTitle && cur) { cur.title = text || null; inTitle = false; text = '' }
     else if (name === 'desc' && inDesc && cur) { cur.description = text || null; inDesc = false; text = '' }
-    else if (name === 'display-name' && inDisplayName) {
-      if (dnText) chanNames.push(dnText)
-      inDisplayName = false; dnText = ''
-    } else if (name === 'channel') {
-      if (chanId && onChannelDef) onChannelDef({ id: chanId, names: chanNames })
-      chanId = null; chanNames = []
-      counter += 1
-      if (counter % 500 === 0) void yieldEventLoop()
-    } else if (name === 'programme' && cur) {
+    else if (name === 'programme' && cur) {
       if (cur.channel_id && cur.start_utc && cur.stop_utc) {
         onProgramme(cur as EpgProgrammeRow)
       }
@@ -180,12 +156,54 @@ export async function streamXmltv(
     }
   })
 
+  // Channel-definition capture is done with a REGEX SNIFFER on the raw text,
+  // NOT via SAX. This provider's feed has unescaped '&' (and similar) inside
+  // <display-name> in the channel section, which SAX strict mode silently skips
+  // — it parses every <programme> but emits ZERO <channel> open-tags (verified
+  // on the live 151MB feed: tv:1, programme:507973, channel:0). The programmes
+  // we need still stream through SAX above; the channel aliases (used for
+  // name-based EPG matching) are extracted here from the byte stream instead.
+  // Channels precede all programmes, so we accumulate only the head until the
+  // first <programme>, extract, then stop — bounded memory (~1-2MB).
+  let sniffBuf = ''
+  let sniffing = Boolean(onChannelDef)
+  const CHANNEL_RE = /<channel\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/channel>/g
+  const extractChannelDefs = (): void => {
+    CHANNEL_RE.lastIndex = 0
+    let lastEnd = 0
+    let m: RegExpExecArray | null
+    while ((m = CHANNEL_RE.exec(sniffBuf)) !== null) {
+      const names: string[] = []
+      const dre = /<display-name[^>]*>([^<]+)<\/display-name>/g
+      let dm: RegExpExecArray | null
+      while ((dm = dre.exec(m[2])) !== null) {
+        const t = dm[1].trim()
+        if (t) names.push(t)
+      }
+      onChannelDef?.({ id: m[1], names })
+      lastEnd = CHANNEL_RE.lastIndex
+    }
+    if (lastEnd > 0) sniffBuf = sniffBuf.slice(lastEnd) // keep trailing partial
+  }
+  const onSniffData = (chunk: Buffer | string): void => {
+    if (!sniffing) return
+    sniffBuf += typeof chunk === 'string' ? chunk : chunk.toString('utf8')
+    extractChannelDefs()
+    if (sniffBuf.includes('<programme')) {
+      extractChannelDefs() // final pass on any complete channel before programmes
+      sniffing = false
+      sniffBuf = ''
+      xmlStream.off('data', onSniffData)
+    }
+  }
+
   await new Promise<void>((resolve, reject) => {
     let settled = false
     const cleanup = () => {
       parser.off('error', fail)
       parser.off('end', done)
       xmlStream.off('error', fail)
+      xmlStream.off('data', onSniffData)
       signal?.removeEventListener('abort', onAbort)
     }
     const fail = (err: Error) => {

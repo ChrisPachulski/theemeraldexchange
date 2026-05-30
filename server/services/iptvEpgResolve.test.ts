@@ -6,7 +6,9 @@ describe('normalizeChannelName', () => {
     expect(normalizeChannelName('US: ESPN')).toBe('espn')
     expect(normalizeChannelName('UK FHD TNT Sport 1')).toBe('tntsport1')
     expect(normalizeChannelName('HEVC: TNT Sports 1 FHD')).toBe('tntsports1')
-    expect(normalizeChannelName('US: CBS (New York)')).toBe('cbsnewyork')
+    // Parenthetical qualifiers are stripped — matches the feed's own normalized
+    // aliases (a feed channel carries a bare "CBS" alias that this resolves to).
+    expect(normalizeChannelName('US: CBS (New York)')).toBe('cbs')
   })
 
   it('returns null for too-short or empty names', () => {
