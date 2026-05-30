@@ -8,6 +8,12 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   test: {
     environment: 'node',
+    // Per-worker DB isolation (server.db / media.db / iptv.db). vitest runs test
+    // files in parallel workers; files that don't set their own *_DB_PATH shared
+    // ./data/*.db and raced the sqlite migrator (intermittent `UNIQUE constraint
+    // failed: schema_migrations.version` → spurious 500s, e.g. radarr.test.ts
+    // under IPTV_DISABLED). See vitest.setup.ts.
+    setupFiles: ['./vitest.setup.ts'],
     include: [
       'server/**/*.test.ts',
       'src/**/*.test.ts',
