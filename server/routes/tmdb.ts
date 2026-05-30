@@ -18,6 +18,19 @@ tmdb.use('*', requireAuth)
 
 const TMDB_BASE = 'https://api.themoviedb.org/3'
 
+// TMDB/TVDB ids are positive integers. Validate before spending an
+// upstream call so garbage query values can't each turn into an
+// outbound TMDB request (response-size / rate-limit amplification on
+// the shared TMDB budget). Mirrors recommenderEvents.ts:49 and
+// grabs.ts:42, which gate ids with Number.isSafeInteger(...) > 0 before
+// forwarding.
+function positiveIntId(raw: string | undefined): number | null {
+  if (raw === undefined) return null
+  const n = Number(raw)
+  if (!Number.isSafeInteger(n) || n <= 0) return null
+  return n
+}
+
 async function tmdbFetch(path: string, params: Record<string, string> = {}) {
   if (!(env.tmdbReadAccessToken ?? env.tmdbApiKey)) {
     return null
@@ -44,13 +57,15 @@ tmdb.get('/credits', async (c) => {
   }
 
   const type = c.req.query('type')
-  const tvdbId = c.req.query('tvdbId')
-  const tmdbId = c.req.query('tmdbId')
 
-  if (type === 'tv' && tvdbId) {
+  if (type === 'tv') {
+    const tvdbId = positiveIntId(c.req.query('tvdbId'))
+    if (tvdbId === null) {
+      return c.json({ error: 'invalid_tvdbId' }, 400)
+    }
     // TVDB → TMDB lookup. /find returns matches across types; we take
     // the first tv_results entry.
-    const findRes = await tmdbFetch(`/find/${encodeURIComponent(tvdbId)}`, {
+    const findRes = await tmdbFetch(`/find/${tvdbId}`, {
       external_source: 'tvdb_id',
     })
     if (!findRes || !findRes.ok) {
@@ -67,8 +82,12 @@ tmdb.get('/credits', async (c) => {
     return c.json(data)
   }
 
-  if (type === 'movie' && tmdbId) {
-    const credits = await tmdbFetch(`/movie/${encodeURIComponent(tmdbId)}/credits`)
+  if (type === 'movie') {
+    const tmdbId = positiveIntId(c.req.query('tmdbId'))
+    if (tmdbId === null) {
+      return c.json({ error: 'invalid_tmdbId' }, 400)
+    }
+    const credits = await tmdbFetch(`/movie/${tmdbId}/credits`)
     if (!credits || !credits.ok) {
       return c.json({ error: 'tmdb_credits_failed', status: credits?.status }, 502)
     }

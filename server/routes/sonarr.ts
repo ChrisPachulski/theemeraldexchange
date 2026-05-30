@@ -128,8 +128,12 @@ async function grabTvUnderCap(
   monitoredSeasons: number[],
   title?: string,
   rootFolder?: RootFolderSpaceSnapshot,
+  sub?: string,
 ): Promise<void> {
-  const base = { app: 'sonarr' as const, itemId: seriesId, title, capGb: env.maxTvGbPerEpisode }
+  // `sub` rides on `base` so every {...base} event below is attributed
+  // to the user who triggered the add (enables /by-item per-user scoping
+  // in grabs.ts without threading the field through each call site).
+  const base = { app: 'sonarr' as const, itemId: seriesId, title, capGb: env.maxTvGbPerEpisode, sub }
   await recordSonarrGrabEvent({ ...base, type: 'grab_started' })
 
   // Brief delay so Sonarr finishes wiring the new series record.
@@ -720,12 +724,13 @@ sonarr.post('/api/v3/series', sonarrMutateLimit, async (c) => {
       if (id && monitored.length > 0) {
         const itemId = id
         const itemTitle = created.title
-        void grabTvUnderCap(itemId, monitored, itemTitle, folderSnapshot).catch((e) => {
+        void grabTvUnderCap(itemId, monitored, itemTitle, folderSnapshot, session.sub).catch((e) => {
           console.error('[tv-cap] grab failed:', e)
           void recordSonarrGrabEvent({
             app: 'sonarr',
             itemId,
             title: itemTitle,
+            sub: session.sub,
             type: 'grab_failed',
             error: e instanceof Error ? e.message : String(e),
           })
@@ -831,7 +836,7 @@ sonarr.post('/api/v3/series/:id/seasons/:n/monitor', requireAdmin, sonarrMutateL
   }
   // Fire the cap-enforced grab in the background — same path the add
   // flow uses, so the new season comes in via the same size gate.
-  void grabTvUnderCap(id, [n], series.title, folderSnapshot).catch((e) => {
+  void grabTvUnderCap(id, [n], series.title, folderSnapshot, c.get('session').sub).catch((e) => {
     console.error('[tv-monitor-season] grab failed:', e)
     void recordSonarrGrabEvent({
       app: 'sonarr',
