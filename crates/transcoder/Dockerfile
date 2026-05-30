@@ -29,10 +29,15 @@ WORKDIR /srv
 # Statically-linked ffmpeg/ffprobe 7.x — no glibc/runtime deps, runs as-is.
 COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /ffprobe /usr/local/bin/
 
+# curl is for the container HEALTHCHECK (audit 9-0). Create a non-root user
+# that owns /scratch (where ffmpeg writes HLS segments).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates \
+ && apt-get install -y --no-install-recommends ca-certificates curl \
  && rm -rf /var/lib/apt/lists/* \
- && mkdir -p /scratch
+ && mkdir -p /scratch \
+ && groupadd --system --gid 10003 transcoder \
+ && useradd --system --uid 10003 --gid transcoder --home-dir /srv --no-create-home transcoder \
+ && chown -R transcoder:transcoder /scratch /srv
 
 COPY --from=builder /build/target/release/transcoder /usr/local/bin/transcoder
 
@@ -46,5 +51,15 @@ ENV TRANSCODER_FFMPEG_BIN=/usr/local/bin/ffmpeg
 ENV TRANSCODER_TMP_DIR=/scratch
 
 EXPOSE 8003
+
+# Drop root (audit 9-0). ffmpeg writes only to /scratch (chowned above) and
+# reads the library via the read-only bind mount; no root needed at runtime.
+# NOTE: the compose tmpfs mount for /scratch must allow this uid to write —
+# tmpfs defaults to the container user, so USER below is sufficient.
+USER transcoder
+
+# Liveness/readiness probe (audit 9-0/9-1). /health is public (no auth).
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:8003/health || exit 1
 
 CMD ["transcoder"]
