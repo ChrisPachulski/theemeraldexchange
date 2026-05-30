@@ -45,3 +45,41 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 For licensing inquiries, contact Chris Pachulski directly.
+
+--------------------------------------------------------------------------
+
+THIRD-PARTY COMPONENTS AND THE ffmpeg / x264 (GPL) BOUNDARY
+
+The transcoder (crate `transcoder`, milestone M4) invokes `ffmpeg` and
+`ffprobe` as SEPARATE, SERVER-SIDE PROCESSES on the self-hoster's own
+hardware. It does not statically or dynamically link any GPL-licensed
+media library into the proprietary Software, and the distributed Apple
+client binaries (iOS/tvOS) contain NO ffmpeg, libx264, or other GPL
+code. Clients receive standard HLS (an MPEG-TS/fMP4 byte stream) over
+the network; the GPL-covered code never crosses into a distributed
+proprietary binary. The process/network boundary between the
+proprietary Software and the separately-obtained ffmpeg binary is an
+arms-length boundary, not a derivative work.
+
+The ffmpeg binary itself is NOT distributed as part of this Software.
+In the reference deployment it is supplied at container-build time from
+a third-party image (`mwader/static-ffmpeg`), whose own GPL terms apply
+to that binary and bind whoever distributes that image — not this
+Software's proprietary license. Self-hosting operators are responsible
+for the license terms of any ffmpeg build they supply.
+
+Build guidance to keep this boundary clean:
+
+  - The copy / remux transcode path uses NO video encoder (stream copy
+    only) and therefore pulls in no x264/x265 GPL encoder at all.
+  - Where re-encoding is required, prefer hardware encoders
+    (VideoToolbox / NVENC / QSV / VAAPI) or an LGPL ffmpeg build; only
+    fall back to a `--enable-gpl` (libx264) build when no alternative
+    encoder is available, and only on the server side.
+  - Never bundle, statically link, or ship libx264/libx265 inside an
+    App Store client binary.
+
+This is the project's standing engineering posture. A formal
+component-license review should accompany the first App Store
+submission (M2). See docs/M4-TRANSCODE-VERIFICATION.md for the
+transcoder's runtime model.
