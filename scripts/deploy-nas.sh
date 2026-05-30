@@ -231,6 +231,9 @@ ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && \
       theemeraldexchange-backend:latest; \
   fi"
 
+echo "→ Reclaiming BuildKit cache + dangling images (the docker vdisk creeps ~1GB/deploy otherwise)"
+ssh "${NAS_USER}@${NAS_HOST}" "docker builder prune -f >/dev/null 2>&1 || true; docker image prune -f >/dev/null 2>&1 || true"
+
 echo "→ Tail logs for 5s to confirm healthy boot"
 ssh "${NAS_USER}@${NAS_HOST}" "timeout 5 docker logs --tail=20 -f exchange-backend || true"
 
