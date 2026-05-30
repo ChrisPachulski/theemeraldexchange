@@ -56,7 +56,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Wait for a shutdown signal so axum's graceful shutdown can drain in-flight
+/// requests before the process exits.
+///
+/// Docker `stop`/compose `down` deliver **SIGTERM** to PID 1 — not SIGINT — so
+/// trapping only `ctrl_c()` (SIGINT) means the graceful path never fires in
+/// prod: after the stop grace Docker sends SIGKILL and hard-aborts in-flight
+/// requests on each redeploy. We therefore select over BOTH signals (matching
+/// the transcoder's handler).
 async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
-    tracing::info!("shutdown signal received");
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        // If we can't install the SIGTERM handler, degrade to SIGINT-only
+        // rather than aborting boot.
+        let mut sigterm = match signal(SignalKind::terminate()) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("could not install SIGTERM handler: {e}; SIGINT only");
+                ctrl_c.await;
+                tracing::info!(signal = "SIGINT", "shutdown signal received");
+                return;
+            }
+        };
+        tokio::select! {
+            _ = ctrl_c => tracing::info!(signal = "SIGINT", "shutdown signal received"),
+            _ = sigterm.recv() => tracing::info!(signal = "SIGTERM", "shutdown signal received"),
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        ctrl_c.await;
+        tracing::info!(signal = "SIGINT", "shutdown signal received");
+    }
 }
