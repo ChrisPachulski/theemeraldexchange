@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { Readable } from 'node:stream'
+import { gzipSync } from 'node:zlib'
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { getAccountInfo, credsFromEnv } from '../services/xtream.js'
 import { syncOnce, type SyncResult } from '../services/iptvSync.js'
@@ -220,7 +221,22 @@ iptv.get('/epg/grid', requireAuth, (c) => {
   const rawQ = c.req.query('q')
   const q = rawQ && rawQ.trim() ? rawQ.trim().slice(0, 100) : undefined
   const hasEpgOnly = c.req.query('hasEpg') === '1' || c.req.query('hasEpg') === 'true'
-  return c.json(epgGrid(iptvDb(), from, to, { categoryId, q, hasEpgOnly }))
+  const json = JSON.stringify(epgGrid(iptvDb(), from, to, { categoryId, q, hasEpgOnly }))
+  // The full has-EPG guide is ~28 MB of JSON (~14k channels x ~7 programmes).
+  // gzip it (~12x → ~2 MB) so the client isn't pulling tens of MB on every
+  // 30-min window refetch. Done inline (not as global middleware) so the
+  // /stream/* video-proxy endpoints are never wrapped in compression. Browsers
+  // always send Accept-Encoding: gzip and inflate transparently; fall back to
+  // plain JSON for clients that don't, or for small bodies.
+  const acceptsGzip = (c.req.header('accept-encoding') ?? '').toLowerCase().includes('gzip')
+  if (acceptsGzip && json.length > 64 * 1024) {
+    return c.body(gzipSync(json), 200, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Encoding': 'gzip',
+      Vary: 'Accept-Encoding',
+    })
+  }
+  return c.body(json, 200, { 'Content-Type': 'application/json; charset=utf-8' })
 })
 
 iptv.get('/vod/:streamId', requireAuth, (c) => {
