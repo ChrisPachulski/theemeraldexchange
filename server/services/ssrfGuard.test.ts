@@ -9,15 +9,28 @@ import {
 const ok = (u: string) => isPublicHttpsUpstream(new URL(u))
 
 describe('isPublicHttpsUpstream', () => {
-  it('allows legit public https CDN hosts (incl. cross-CDN providers)', () => {
+  it('allows legit public CDN hosts over http OR https (incl. cross-CDN providers)', () => {
     expect(ok('https://cdn.example.com/foo/seg.ts')).toBe(true)
     expect(ok('https://edge-17.provider.net/hls/seg-001.ts')).toBe(true)
     expect(ok('https://panel.someiptv.tv:8080/live/u/p/1.ts')).toBe(true)
+    // http to a PUBLIC host is allowed: scheme is irrelevant to SSRF, and many
+    // providers 30x-redirect an https panel to a plain-http public CDN
+    // (mybunny.tv -> http://turbobunny.net). The address checks still apply.
+    expect(ok('http://cdn.example.com/seg.ts')).toBe(true)
+    expect(ok('http://turbobunny.net/live/u/p/1.ts')).toBe(true)
   })
 
-  it('rejects non-https', () => {
-    expect(ok('http://cdn.example.com/seg.ts')).toBe(false)
+  it('rejects non-http(s) schemes', () => {
     expect(ok('file:///etc/passwd')).toBe(false)
+    expect(ok('gopher://example.com/x')).toBe(false)
+    expect(ok('ftp://example.com/x')).toBe(false)
+  })
+
+  it('still blocks http to PRIVATE/internal targets (scheme change does not weaken address checks)', () => {
+    expect(ok('http://169.254.169.254/latest/meta-data/')).toBe(false)
+    expect(ok('http://10.0.0.5/seg.ts')).toBe(false)
+    expect(ok('http://recommender:8000/internal')).toBe(false)
+    expect(ok('http://localhost/seg.ts')).toBe(false)
   })
 
   it('rejects cloud metadata + link-local', () => {

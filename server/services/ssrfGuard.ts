@@ -8,9 +8,12 @@
 // loopback, the docker gateway) and stream the response back to the caller.
 //
 // We cannot pin to a single host: legitimate IPTV providers serve segments
-// from separate public CDNs. So we apply the standard egress defense — require
-// https, and refuse any host that is an IP literal in a private / loopback /
-// link-local / reserved range, or an obviously-internal bare hostname.
+// from separate public CDNs. So we apply the standard egress defense — refuse
+// any host that is an IP literal in a private / loopback / link-local /
+// reserved range, an obviously-internal bare hostname, or a name that RESOLVES
+// to such an address. Scheme is http OR https: the SSRF risk is the
+// destination address, not the scheme, and several providers redirect an https
+// panel URL to a plain-http public CDN.
 
 // IPv4 dotted-quad → true when in a private / loopback / link-local / reserved
 // / CGNAT range that must never be reachable from a public proxy.
@@ -55,9 +58,19 @@ function isInternalHostname(host: string): boolean {
 }
 
 /**
- * True only when `url` is safe to proxy: https scheme and a host that is a
- * public address. Rejects http, IP literals in private/loopback/link-local/
- * reserved ranges, and bare internal hostnames.
+ * True only when `url` is safe to proxy: an http(s) scheme and a host that is a
+ * public address. Rejects non-http(s) schemes (file:, gopher:, …), IP literals
+ * in private/loopback/link-local/reserved ranges, and bare internal hostnames.
+ *
+ * Scheme note: BOTH http and https are allowed. The SSRF threat is the
+ * *destination address* (cloud metadata 169.254.169.254, RFC-1918, loopback,
+ * container DNS), which the host/IP checks below — plus `assertResolvesPublic`
+ * on the resolved IPs — fully cover regardless of scheme. Requiring https here
+ * added no SSRF protection but broke every legitimate IPTV provider that
+ * 30x-redirects an https panel URL to a plain-http public CDN (e.g.
+ * mybunny.tv → http://turbobunny.net), which 400'd all live playback. http to
+ * a *public* host cannot reach an internal target, so it is permitted; only the
+ * address is what matters.
  *
  * NOTE: this is a STRING-only check. A public DNS name that *resolves* to a
  * private address (DNS rebinding) passes here — callers MUST additionally
@@ -66,8 +79,8 @@ function isInternalHostname(host: string): boolean {
  * hop. Keep this function for the cheap up-front reject; never rely on it
  * alone before a `fetch()`.
  */
-export function isPublicHttpsUpstream(url: URL): boolean {
-  if (url.protocol !== 'https:') return false
+export function isPublicUpstream(url: URL): boolean {
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return false
   // URL.hostname strips the IPv6 brackets for us.
   const host = url.hostname
   if (!host) return false
@@ -76,6 +89,13 @@ export function isPublicHttpsUpstream(url: URL): boolean {
   if (isInternalHostname(host)) return false
   return true
 }
+
+/**
+ * Back-compat alias. The original name implied https-only; the guard now
+ * accepts http to public hosts too (see `isPublicUpstream`). Kept so existing
+ * import sites (routes/iptv.ts) need no change.
+ */
+export const isPublicHttpsUpstream = isPublicUpstream
 
 import { lookup as nodeDnsLookup } from 'node:dns/promises'
 

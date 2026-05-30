@@ -358,7 +358,9 @@ describe('segment proxy', () => {
       'https://169.254.169.254/latest/meta-data/iam/security-credentials/',
       'https://10.0.0.1/seg.ts',
       'https://recommender:8000/internal',
-      'http://cdn.example/seg.ts', // non-https
+      'http://169.254.169.254/latest/meta-data/', // http to internal is STILL blocked
+      'http://recommender:8000/internal', // scheme relaxation must not weaken address checks
+      'file:///etc/passwd', // non-http(s) scheme rejected
     ]) {
       const res = await app.request(
         `/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', evil))}`,
