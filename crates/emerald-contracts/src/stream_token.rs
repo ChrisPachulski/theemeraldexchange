@@ -93,12 +93,25 @@ pub enum TokenError {
     Expired,
     /// `k` claim does not parse to a known StreamKind.
     UnknownKind,
+    /// `exp < nbf` (nonsensical forged window), or the claimed lifetime
+    /// (`exp - iat`) exceeds `MAX_TTL_SECS`. Indicates a malformed or forged
+    /// token rather than an expiry condition, so it is reported distinctly
+    /// from `Expired`.
+    BadTtl,
 }
 
 /// Clock-skew constants per §5.7. Frozen numeric values — Rust + TS +
 /// Swift MUST agree. Without lock here we get drift between languages.
 pub const NBF_SKEW_SECS: i64 = 30;
 pub const EXP_SKEW_SECS: i64 = 5;
+
+/// Hard upper bound on a stream token's lifetime (`exp - iat`). The longest
+/// legitimate stream token is the 90-day external-playlist token; anything
+/// claiming more than that is malformed or forged. Defense-in-depth on top of
+/// the per-mint policy TTLs — the verifier never trusts an `exp` that implies a
+/// longer-than-possible window. One extra day of slack absorbs leap seconds /
+/// mint-time rounding.
+pub const MAX_TTL_SECS: i64 = 91 * 24 * 60 * 60;
 
 /// Produce the canonical byte representation used as HMAC input.
 ///
@@ -173,6 +186,20 @@ pub fn verify_dual_key(
 
 /// Enforce nbf ≤ now ≤ exp with skew constants per §5.7.
 pub fn enforce_time_window(claims: &StreamClaims, now: i64) -> Result<(), TokenError> {
+    // Upper-bound safety net: a token can never outlive the longest legitimate
+    // policy window. Checked before the skew comparisons so a forged long-lived
+    // exp is rejected as BadTtl regardless of the current clock.
+    if claims.exp - claims.iat > MAX_TTL_SECS {
+        return Err(TokenError::BadTtl);
+    }
+    // Nonsensical window: not-before was forged FORWARD past mint time (`iat`)
+    // AND past expiry (`exp`). Scoped to `nbf > iat` so a normally minted token
+    // that is simply expired (negative TTL → `exp < iat == nbf`) is NOT
+    // misclassified here — it falls through to the `Expired` check below and
+    // keeps the legacy `expired_token` contract the TS layer + tests rely on.
+    if claims.nbf > claims.iat && claims.exp < claims.nbf {
+        return Err(TokenError::BadTtl);
+    }
     if now + NBF_SKEW_SECS < claims.nbf {
         return Err(TokenError::NotYetValid);
     }
@@ -382,6 +409,41 @@ mod tests {
         );
         // Within exp skew
         assert!(enforce_time_window(&claims, 1748256000 + 5).is_ok());
+    }
+
+    #[test]
+    fn bad_ttl_rejected() {
+        // Over-long lifetime (exp - iat exceeds MAX_TTL_SECS) → BadTtl.
+        let mut over = sample_claims();
+        over.iat = 1_000_000_000;
+        over.nbf = over.iat;
+        over.exp = over.iat + MAX_TTL_SECS + 1;
+        assert_eq!(
+            enforce_time_window(&over, over.iat + 10).unwrap_err(),
+            TokenError::BadTtl,
+        );
+
+        // Forged nbf dated FORWARD past both iat and exp → BadTtl.
+        let mut forged = sample_claims();
+        forged.iat = 1_000_000_000;
+        forged.exp = forged.iat + 60;
+        forged.nbf = forged.iat + 1000;
+        assert_eq!(
+            enforce_time_window(&forged, forged.iat + 5).unwrap_err(),
+            TokenError::BadTtl,
+        );
+
+        // REGRESSION GUARD: a normally-minted but simply-expired token
+        // (nbf == iat, exp in the past) must stay Expired, NOT BadTtl — the
+        // legacy expired_token contract the TS layer maps on.
+        let mut expired = sample_claims();
+        expired.iat = 1_000_000_000;
+        expired.nbf = expired.iat;
+        expired.exp = expired.iat + 60;
+        assert_eq!(
+            enforce_time_window(&expired, expired.iat + 10_000).unwrap_err(),
+            TokenError::Expired,
+        );
     }
 
     #[test]
