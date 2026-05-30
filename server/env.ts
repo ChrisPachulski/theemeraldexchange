@@ -316,6 +316,27 @@ const adminSubs = csv('ADMIN_SUBS').map((s) => {
   }
 })
 
+// ── Passkeys (WebAuthn) ──────────────────────────────────────────────────
+// The cross-platform, password-free identity spine. Three knobs:
+//   WEBAUTHN_RP_ID    — the Relying Party id: the registrable domain the
+//                       passkey is bound to (e.g. "theemeraldexchange.com").
+//                       MUST be the origin's host or a parent domain of it.
+//                       Defaults to "localhost" for dev.
+//   WEBAUTHN_RP_NAME  — human-facing name shown in the OS passkey prompt.
+//   WEBAUTHN_ORIGINS  — comma-separated allowed origins (full scheme+host
+//                       [+port]) the assertion may come from. Defaults to the
+//                       app's CORS allow-list so a typical deploy needs no
+//                       extra config; override when the login page lives on a
+//                       different origin than the API callers.
+const webauthnRpId = (opt('WEBAUTHN_RP_ID') ?? 'localhost').trim()
+const webauthnRpName = (opt('WEBAUTHN_RP_NAME') ?? 'The Emerald Exchange').trim()
+const webauthnOrigins = (() => {
+  const explicit = csv('WEBAUTHN_ORIGINS')
+  if (explicit.length > 0) return explicit
+  if (allowedOrigins.length > 0) return allowedOrigins
+  return ['http://localhost:5173', 'http://localhost:3001']
+})()
+
 /** True when Plex OAuth is configured for this installation.
  *
  *  PLEX_CLIENT_ID is required for boot (validated by `required()` below),
@@ -366,6 +387,12 @@ export const env = {
   adminSubs,
   /** SIWA `aud` — Apple Services ID / bundle id. null when unconfigured. */
   appleClientId,
+  /** WebAuthn Relying Party id (registrable domain the passkey binds to). */
+  webauthnRpId,
+  /** Human-facing name shown in the OS passkey prompt. */
+  webauthnRpName,
+  /** Allowed origins a passkey assertion may originate from. */
+  webauthnOrigins,
   plexServerId,
   port: positiveInt('PORT', 3001),
   isProd,
