@@ -40,6 +40,9 @@ const PRESERVED_KEYS = [
   'EEX_TELEMETRY_DSN',
   'STREAM_TOKEN_SECRET',
   'INTERNAL_PRINCIPAL_SECRET',
+  'APPLE_CLIENT_ID',
+  'ENABLE_APPLE_SIGN_IN',
+  'ADMIN_SUBS',
 ] as const
 
 let snapshot: Record<string, string | undefined> = {}
@@ -69,6 +72,9 @@ function setBaselineEnv() {
   delete process.env.DEFAULT_RADARR_ROOT_FOLDER_PATH
   delete process.env.USE_LOCAL_RECOMMENDER
   delete process.env.RECOMMENDER_EVENT_SECRET
+  delete process.env.APPLE_CLIENT_ID
+  delete process.env.ENABLE_APPLE_SIGN_IN
+  delete process.env.ADMIN_SUBS
 }
 
 async function loadEnv(): Promise<typeof import('./env.js')['env']> {
@@ -435,6 +441,72 @@ describe('env — local recommender secret gate', () => {
     const env = await loadEnv()
     expect(env.useLocalRecommender).toBe(true)
     expect(env.recommenderEventSecret).toBe('shared-secret')
+  })
+})
+
+describe('env — APPLE_CLIENT_ID (SIWA aud)', () => {
+  it('unset → null and isAppleConfigured() false', async () => {
+    setBaselineEnv()
+    delete process.env.APPLE_CLIENT_ID
+    const mod = await import('./env.js')
+    expect(mod.env.appleClientId).toBeNull()
+    expect(mod.isAppleConfigured()).toBe(false)
+  })
+
+  it('set → kept and isAppleConfigured() true', async () => {
+    setBaselineEnv()
+    process.env.APPLE_CLIENT_ID = 'com.example.eex'
+    const mod = await import('./env.js')
+    expect(mod.env.appleClientId).toBe('com.example.eex')
+    expect(mod.isAppleConfigured()).toBe(true)
+  })
+
+  it('production with ENABLE_APPLE_SIGN_IN=1 but no APPLE_CLIENT_ID throws', async () => {
+    setBaselineEnv()
+    process.env.NODE_ENV = 'production'
+    process.env.ALLOWED_ORIGINS = 'https://app.example'
+    process.env.PLEX_SERVER_ID = 'home-server-machine-id'
+    process.env.EEX_TELEMETRY_DSN = 'https://test@glitchtip.example.com/1'
+    process.env.ENABLE_APPLE_SIGN_IN = '1'
+    delete process.env.APPLE_CLIENT_ID
+    await expect(loadEnv()).rejects.toThrow(/APPLE_CLIENT_ID/)
+  })
+
+  it('production WITHOUT ENABLE_APPLE_SIGN_IN tolerates a missing APPLE_CLIENT_ID (Plex-only)', async () => {
+    setBaselineEnv()
+    process.env.NODE_ENV = 'production'
+    process.env.ALLOWED_ORIGINS = 'https://app.example'
+    process.env.PLEX_SERVER_ID = 'home-server-machine-id'
+    process.env.EEX_TELEMETRY_DSN = 'https://test@glitchtip.example.com/1'
+    delete process.env.ENABLE_APPLE_SIGN_IN
+    delete process.env.APPLE_CLIENT_ID
+    const env = await loadEnv()
+    expect(env.appleClientId).toBeNull()
+  })
+})
+
+describe('env — ADMIN_SUBS (owner bootstrap allowlist)', () => {
+  it('unset → empty array', async () => {
+    setBaselineEnv()
+    delete process.env.ADMIN_SUBS
+    const env = await loadEnv()
+    expect(env.adminSubs).toEqual([])
+  })
+
+  it('valid namespaced subs are parsed + normalized', async () => {
+    setBaselineEnv()
+    process.env.ADMIN_SUBS = 'plex:42, apple:000000.0123456789abcdef0123456789abcdef.0000'
+    const env = await loadEnv()
+    expect(env.adminSubs).toEqual([
+      'plex:42',
+      'apple:000000.0123456789abcdef0123456789abcdef.0000',
+    ])
+  })
+
+  it('a malformed entry fails closed at boot (throws)', async () => {
+    setBaselineEnv()
+    process.env.ADMIN_SUBS = 'plex:42,not-a-sub'
+    await expect(loadEnv()).rejects.toThrow(/ADMIN_SUBS/)
   })
 })
 

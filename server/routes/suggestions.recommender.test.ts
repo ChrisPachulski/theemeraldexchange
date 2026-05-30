@@ -26,7 +26,10 @@ beforeAll(async () => {
       sessionSecret:
         process.env.SESSION_SECRET ?? 'test-secret-test-secret-test-secret-test-secret',
       admins: [],
+      adminSubs: [],
+      appleClientId: null,
       plexServerId: null,
+      SERVER_DB_PATH: process.env.SERVER_DB_PATH ?? './data/server.db',
       port: 3001,
       isProd: false,
       allowedOrigins: [],
