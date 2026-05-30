@@ -40,7 +40,12 @@ describe('media proxy route', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockMint.mockReturnValue('minted-token')
-    mockCaller.mockReturnValue({ kind: 'user', id: 'u1' })
+    mockCaller.mockReturnValue({
+      sub: 'plex:1',
+      role: 'user',
+      authMode: 'plex',
+      serverId: 'srv-test',
+    })
   })
 
   it('proxies GET with minted internal-principal header', async () => {

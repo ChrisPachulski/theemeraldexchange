@@ -34,6 +34,7 @@ import { scoreOnce, postShown, postImpressions, type RecommenderScoredItem } fro
 import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
 import { sanitizeTitle } from '../services/sanitize.js'
 import { iptvDb } from '../services/iptvDbSingleton.js'
+import { mediaLibraryDb } from '../services/mediaLibraryDbSingleton.js'
 import { env } from '../env.js'
 
 const MODEL = 'claude-haiku-4-5'
