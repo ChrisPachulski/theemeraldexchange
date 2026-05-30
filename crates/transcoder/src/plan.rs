@@ -251,6 +251,12 @@ fn plan_audio(file: &MediaFileRow, caps: &ClientCaps) -> AudioOp {
 /// exist in the M3 contract yet, so we use the Apple-safe baseline (AAC always,
 /// plus AC-3/E-AC-3 which AVPlayer can pass to an AVReceiver). Anything else
 /// (DTS, TrueHD, FLAC, Opus in an unsupported container) → AAC.
+///
+/// TODO(M4+): when `media_core::capability::ClientCaps` grows an
+/// `audio_codecs` field, key this off the client's actual advertised set
+/// instead of the hardcoded baseline — a client that cannot decode E-AC-3
+/// currently gets a copy it cannot play, and only the first audio track is
+/// mapped (see `-map 0:a:0?` in `args::ffmpeg_args`).
 fn accepted_audio_codecs(_caps: &ClientCaps) -> Vec<String> {
     vec!["aac".to_string(), "ac3".to_string(), "eac3".to_string()]
 }
