@@ -70,11 +70,13 @@ export default function EpgGuide({
   const fromIso = new Date(windowStartMs).toISOString()
   const toIso = new Date(windowEndMs).toISOString()
 
-  // Show ALL channels in the current category/search, not just ones with a
-  // schedule (hasEpg: false). Categories whose channels carry no EPG would
-  // otherwise render an empty guide; instead every channel appears as a tunable
-  // row, with programme blocks where the provider publishes them.
-  const grid = useIptvEpgGrid(fromIso, toIso, { categoryId, q: q.trim() || undefined, hasEpg: false })
+  // Hybrid scoping. The default "all categories" view shows only channels that
+  // actually carry a schedule (~22k) — the guide proper, kept light (~2 MB gz).
+  // The moment you pick a category or search, we show ALL matching channels even
+  // when they have no EPG, so a category is never empty and every channel stays
+  // tunable (programme blocks render where a schedule exists).
+  const scoped = categoryId != null || q.trim().length > 0
+  const grid = useIptvEpgGrid(fromIso, toIso, { categoryId, q: q.trim() || undefined, hasEpg: !scoped })
   const rows = useMemo(() => grid.data ?? [], [grid.data])
 
   // Vertical windowing.
