@@ -4,29 +4,61 @@
 // snake_case with no rename, so we normalize to camelCase at this
 // boundary and the rest of src stays camelCase-consistent.
 
-import { throwApiError } from './errors'
+import { throwApiError, ApiError } from './errors'
 import { apiUrl } from './base'
 
 const BASE = '/api/media'
 
+// A stalled backend must not pin a query in 'pending' forever — abort and
+// surface a clear error instead of an endless spinner.
+const DEFAULT_TIMEOUT_MS = 15_000
+
+/** Per-request options. `signal` is React Query's queryFn signal (so unmount /
+ *  re-query cancels the in-flight fetch); it is combined with a hard timeout. */
+export type RequestOpts = { signal?: AbortSignal; timeoutMs?: number }
+
+function withTimeout(opts?: RequestOpts): { signal: AbortSignal; timeout: AbortSignal } {
+  const timeout = AbortSignal.timeout(opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS)
+  const signal = opts?.signal ? AbortSignal.any([timeout, opts.signal]) : timeout
+  return { signal, timeout }
+}
+
 async function get<T>(
   path: string,
   params?: Record<string, string | number | boolean>,
+  opts?: RequestOpts,
 ): Promise<T> {
-  const res = await fetch(apiUrl(`${BASE}${path}`, params), {
-    credentials: 'include',
-  })
+  const { signal, timeout } = withTimeout(opts)
+  let res: Response
+  try {
+    res = await fetch(apiUrl(`${BASE}${path}`, params), {
+      credentials: 'include',
+      signal,
+    })
+  } catch (err) {
+    // Hard timeout -> readable error; caller cancel re-throws as cancellation.
+    if (timeout.aborted) throw new ApiError(0, `Media ${path} timed out`)
+    throw err
+  }
   if (!res.ok) await throwApiError(res, `Media ${path}`)
   return res.json() as Promise<T>
 }
 
-async function post<T, B>(path: string, body: B): Promise<T> {
-  const res = await fetch(apiUrl(`${BASE}${path}`), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify(body),
-  })
+async function post<T, B>(path: string, body: B, opts?: RequestOpts): Promise<T> {
+  const { signal, timeout } = withTimeout(opts)
+  let res: Response
+  try {
+    res = await fetch(apiUrl(`${BASE}${path}`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(body),
+      signal,
+    })
+  } catch (err) {
+    if (timeout.aborted) throw new ApiError(0, `Media ${path} timed out`)
+    throw err
+  }
   if (!res.ok) await throwApiError(res, `Media ${path}`)
   return res.json() as Promise<T>
 }
@@ -184,16 +216,16 @@ export function posterFor(item: {
 // ── Public API ───────────────────────────────────────────────────────
 
 export const mediaApi = {
-  movies: (q?: string) =>
-    get<RawListResponse<RawMovieRow>>('/movies', q ? { q } : undefined).then(
+  movies: (q?: string, req?: RequestOpts) =>
+    get<RawListResponse<RawMovieRow>>('/movies', q ? { q } : undefined, req).then(
       (raw) => normList(raw, normMovie),
     ),
-  shows: (q?: string) =>
-    get<RawListResponse<RawShowRow>>('/shows', q ? { q } : undefined).then(
+  shows: (q?: string, req?: RequestOpts) =>
+    get<RawListResponse<RawShowRow>>('/shows', q ? { q } : undefined, req).then(
       (raw) => normList(raw, normShow),
     ),
-  episodes: (showId: number) =>
-    get<RawListResponse<RawEpisodeRow>>(`/shows/${showId}/episodes`).then(
+  episodes: (showId: number, req?: RequestOpts) =>
+    get<RawListResponse<RawEpisodeRow>>(`/shows/${showId}/episodes`, undefined, req).then(
       (raw) => normList(raw, normEpisode),
     ),
   scan: () => post<ScanResponse, Record<string, never>>('/scan', {}),
