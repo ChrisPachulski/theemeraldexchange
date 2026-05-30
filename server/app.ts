@@ -28,6 +28,7 @@ import { device } from './routes/device.js'
 import { media } from './routes/media.js'
 import { devices, adminDevices } from './routes/devices.js'
 import { adminInvites, adminMembers } from './routes/adminInvites.js'
+import { passkey } from './routes/passkey.js'
 import { version } from './routes/version.js'
 
 export const app = new Hono()
@@ -104,6 +105,10 @@ app.route('/api/auth', auth)
 // Apple device-pair flow lives under the same /api/auth tree as the
 // Plex cookie flow. M2 PIN-pair: POST /start → POST /poll → device JWE.
 app.route('/api/auth/device', device)
+// Passkey (WebAuthn) login + registration — the cross-platform, password-free
+// identity path. Public (these endpoints ARE the login); self-owned local:
+// users gated by the same invite/members allowlist as Plex/Apple.
+app.route('/api/auth/passkey', passkey)
 app.route('/api/me', me)
 // /api/version is public — discovers server_id + auth_modes for Apple
 // PIN-pair (Keychain keying + UI gating). Mounted last under /api/v.
