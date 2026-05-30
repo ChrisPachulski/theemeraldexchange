@@ -136,14 +136,32 @@ export function useSetFeedback(kind: FeedbackKind) {
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ['feedback'] })
-      // Critical: also invalidate the suggestions cache so Claude (or
-      // TMDB trending) is re-asked with the updated reject/like state.
-      // Without this, dots just optimistically shrink the local list
-      // forever and the user can't tell the signal landed — the model
-      // never gets the chance to react. Triggers a fresh ~15s Claude
-      // call if AI is on; that's the right tradeoff — the alternative
-      // is the strip slowly running dry as more items are dismissed.
-      qc.invalidateQueries({ queryKey: ['suggestions', kind] })
+      // Do NOT reflexively re-ask the model on every dot click.
+      // Invalidating ['suggestions'] here refetches the whole strip and
+      // replaces the lineup, so a single yes/no destroys any in-progress
+      // triage — the user can't keep marking the other cards they were
+      // eyeing (the original complaint). The signal is already persisted
+      // server-side and the optimistic cache update above reflects the
+      // click instantly, so the strip stays stable across a batch of
+      // yes/no calls. The new reject/like state is picked up on the next
+      // natural refetch (mount / tab revisit / manual refresh).
+      //
+      // To avoid the strip slowly running dry as dislikes remove cards,
+      // refill lazily: only re-ask when the visible list drops to the
+      // low-water mark. Likes don't remove a card, so they never trip
+      // this — they leave the lineup untouched.
+      const LOW_WATER_MARK = 5
+      const entries = qc.getQueryCache().findAll({ queryKey: ['suggestions', kind] })
+      let lowest = Infinity
+      for (const entry of entries) {
+        const data = entry.state.data as { items?: unknown[] } | undefined
+        if (data && Array.isArray(data.items)) {
+          lowest = Math.min(lowest, data.items.length)
+        }
+      }
+      if (lowest <= LOW_WATER_MARK) {
+        qc.invalidateQueries({ queryKey: ['suggestions', kind] })
+      }
     },
   })
 }
