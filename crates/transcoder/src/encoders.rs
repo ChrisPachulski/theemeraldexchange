@@ -65,6 +65,63 @@ impl AvailableEncoders {
             (HwEncoder::Cpu, preferred != HwEncoder::Cpu)
         }
     }
+
+    /// Smoke-test each *detected* hardware encoder with a tiny null transcode and
+    /// clear any that fails to actually run on this host (§audit 1-13).
+    ///
+    /// Presence in `ffmpeg -encoders` only proves an encoder was compiled in, not
+    /// that the GPU/driver is present and functional. Without this, a GPU-less
+    /// host where ffmpeg still lists `h264_nvenc`/`h264_vaapi` would have
+    /// [`resolve`](Self::resolve) hand back a hardware family that then dies on
+    /// the first real transcode (device-open failure) — a per-session crash-loop
+    /// surfacing as a 503 to the user. Here we open the device once at boot via a
+    /// 64x64 black-frame encode to `-f null`; anything that exits non-zero is
+    /// cleared so `resolve` falls back to libx264/CPU. `libx264` is always CPU
+    /// and never smoke-tested.
+    pub async fn validate(mut self, ffmpeg_bin: &str) -> Self {
+        if self.videotoolbox && !smoke_test(ffmpeg_bin, "h264_videotoolbox").await {
+            tracing::warn!("h264_videotoolbox detected but failed smoke test; demoting to CPU");
+            self.videotoolbox = false;
+        }
+        if self.nvenc && !smoke_test(ffmpeg_bin, "h264_nvenc").await {
+            tracing::warn!("h264_nvenc detected but failed smoke test; demoting to CPU");
+            self.nvenc = false;
+        }
+        if self.vaapi && !smoke_test(ffmpeg_bin, "h264_vaapi").await {
+            tracing::warn!("h264_vaapi detected but failed smoke test; demoting to CPU");
+            self.vaapi = false;
+        }
+        if self.qsv && !smoke_test(ffmpeg_bin, "h264_qsv").await {
+            tracing::warn!("h264_qsv detected but failed smoke test; demoting to CPU");
+            self.qsv = false;
+        }
+        self
+    }
+}
+
+/// Run a throwaway encode to confirm `encoder` actually initializes on this
+/// host: encode one 64x64 black frame and discard the output via
+/// `ffmpeg -hide_banner -f lavfi -i color=c=black:s=64x64:d=0.1 -c:v <enc> -f null -`.
+/// Returns `false` if ffmpeg is missing or the encoder fails to open its device.
+async fn smoke_test(ffmpeg_bin: &str, encoder: &str) -> bool {
+    let result = tokio::process::Command::new(ffmpeg_bin)
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=64x64:d=0.1",
+            "-c:v",
+            encoder,
+            "-f",
+            "null",
+            "-",
+        ])
+        .output()
+        .await;
+    matches!(result, Ok(out) if out.status.success())
 }
 
 /// Run `ffmpeg -encoders` and parse the result. Best-effort: any failure to
@@ -166,5 +223,44 @@ Encoders:
         let e = AvailableEncoders::default();
         assert!(!e.supports(HwEncoder::Cpu));
         assert_eq!(e.resolve(HwEncoder::VideoToolbox), (HwEncoder::Cpu, true));
+    }
+
+    #[tokio::test]
+    async fn validate_demotes_hw_when_smoke_test_fails() {
+        // Point the smoke test at a binary that always exits non-zero (`false`),
+        // standing in for an ffmpeg that lists h264_nvenc but cannot open the
+        // (absent) GPU. validate() must clear every HW flag so resolve() falls
+        // back to CPU — the GPU-less-NAS crash-loop the fix prevents.
+        let detected = AvailableEncoders {
+            libx264: true,
+            videotoolbox: true,
+            nvenc: true,
+            vaapi: true,
+            qsv: true,
+        };
+        let validated = detected.validate("false").await;
+        assert!(!validated.nvenc);
+        assert!(!validated.vaapi);
+        assert!(!validated.qsv);
+        assert!(!validated.videotoolbox);
+        // libx264 is CPU and never smoke-tested, so it survives.
+        assert!(validated.libx264);
+        assert_eq!(validated.resolve(HwEncoder::Nvenc), (HwEncoder::Cpu, true));
+    }
+
+    #[tokio::test]
+    async fn validate_leaves_undetected_families_off() {
+        // validate() only ever clears flags, never sets them: a family that was
+        // not detected stays off regardless of the smoke test.
+        let detected = AvailableEncoders {
+            libx264: true,
+            ..Default::default()
+        };
+        // `true` exits 0, so any smoke test it ran would "pass" — proving we
+        // never probe an undetected family.
+        let validated = detected.validate("true").await;
+        assert!(!validated.nvenc);
+        assert!(!validated.videotoolbox);
+        assert!(validated.libx264);
     }
 }

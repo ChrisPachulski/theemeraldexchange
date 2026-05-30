@@ -35,8 +35,18 @@ fn transcoder_http() -> &'static reqwest::Client {
     })
 }
 
+/// Bounded total-request timeout for the small, fast JSON/metadata handlers. The
+/// streaming route is intentionally excluded (see [`router`]).
+const API_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub fn router(state: AppState) -> Router {
-    let api = Router::new()
+    // §7-2: the fast JSON/metadata handlers get a bounded TimeoutLayer so a
+    // wedged query cannot pin a connection indefinitely. The direct-play
+    // `/stream` route is split out and NOT wrapped — a blanket request timeout
+    // there would truncate a legitimate multi-hour playback. Its abuse vector
+    // (too many long-lived streams) is instead bounded by the per-instance
+    // `stream_semaphore` that `stream_file` acquires.
+    let timed_api = Router::new()
         .route("/movies", get(list_movies))
         .route("/movies/{id}", get(get_movie))
         .route("/shows", get(list_shows))
@@ -45,14 +55,17 @@ pub fn router(state: AppState) -> Router {
         .route("/episodes", get(list_episodes_all))
         .route("/episodes/{id}", get(get_episode))
         .route("/play/{kind}/{id}/grant", post(play_grant))
-        .route("/stream/{kind}/{id}", get(stream_file))
         .route("/watch", get(get_watch).post(post_watch))
         .route("/scan", post(trigger_scan))
         .route("/scan/status", get(scan_status))
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            principal_layer,
-        ));
+        .layer(tower_http::timeout::TimeoutLayer::new(API_REQUEST_TIMEOUT));
+
+    let stream_api = Router::new().route("/stream/{kind}/{id}", get(stream_file));
+
+    let api = timed_api.merge(stream_api).layer(middleware::from_fn_with_state(
+        state.clone(),
+        principal_layer,
+    ));
 
     Router::new()
         .route("/health", get(health))
@@ -61,17 +74,33 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
+/// Liveness + readiness. `ok` is true only when the DB answers AND its applied
+/// schema matches the version this binary was built for. A structurally broken
+/// or un-/under-migrated DB where `SELECT 1` still succeeds must NOT report
+/// healthy (the prior code returned raw `db_ok`, a half-truth — §7-5). The HTTP
+/// status mirrors `ok`: 200 when healthy, 503 otherwise, so a compose/orchestrator
+/// healthcheck can act on it. `expected_schema` is echoed for diagnosis.
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
     let db_ok = sqlx::query_scalar::<_, i64>("SELECT 1")
         .fetch_one(&state.db.pool)
         .await
         .is_ok();
     let schema = state.db.schema_version().await.unwrap_or(-1);
-    Json(json!({
-        "ok": db_ok,
-        "service": "media-core",
-        "schema": schema,
-    }))
+    let healthy = db_ok && schema == SCHEMA_VERSION;
+    let status = if healthy {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (
+        status,
+        Json(json!({
+            "ok": healthy,
+            "service": "media-core",
+            "schema": schema,
+            "expected_schema": SCHEMA_VERSION,
+        })),
+    )
 }
 
 async fn version(State(state): State<AppState>) -> impl IntoResponse {
@@ -99,6 +128,29 @@ fn paginate(limit: Option<i64>, offset: Option<i64>) -> (i64, i64) {
     (limit, offset)
 }
 
+/// Turn a free-text search box value into a safe FTS5 MATCH expression (§7-7).
+///
+/// Each whitespace-separated word becomes a double-quoted prefix term
+/// (`"word"*`) AND-ed together, so "the dark" matches a row with a token
+/// starting with "the" and one starting with "dark", case- and diacritic-folded
+/// by the unicode61/remove_diacritics tokenizer. Quoting makes every term a
+/// string literal, so FTS5 operators a user might type (`-`, `*`, `:`, `(`, `"`,
+/// `AND`/`OR`/`NOT`) cannot inject query syntax. Returns `None` when the term
+/// has no usable tokens, so the caller falls back to the unfiltered listing.
+fn fts_query(raw: &str) -> Option<String> {
+    let terms: Vec<String> = raw
+        .split_whitespace()
+        .map(|w| w.replace('"', "").trim().to_string())
+        .filter(|w| !w.is_empty())
+        .map(|w| format!("\"{w}\"*"))
+        .collect();
+    if terms.is_empty() {
+        None
+    } else {
+        Some(terms.join(" "))
+    }
+}
+
 // ── Library read APIs ───────────────────────────────────────────────────
 
 async fn list_movies(
@@ -107,23 +159,30 @@ async fn list_movies(
 ) -> AppResult<Json<Value>> {
     let (limit, offset) = paginate(q.limit, q.offset);
 
-    let (rows, total) = match &q.q {
-        Some(term) if !term.is_empty() => {
+    // §7-7: case/diacritic-insensitive, index-backed search via FTS5 MATCH —
+    // replaces the old leading-wildcard `LIKE '%'||?||'%'` (full table scan +
+    // a second full-scan COUNT, and ASCII-case-only with no diacritic folding).
+    // The FTS join also yields the count without a second scan.
+    let (rows, total) = match q.q.as_deref().and_then(fts_query) {
+        Some(expr) => {
             let rows = sqlx::query_as::<_, MovieRow>(
-                "SELECT id, tmdb_id, imdb_id, title, year, added_at, file_id, overview, poster_path \
-                 FROM movies WHERE title LIKE '%' || ? || '%' \
-                 ORDER BY title LIMIT ? OFFSET ?",
+                "SELECT m.id, m.tmdb_id, m.imdb_id, m.title, m.year, m.added_at, m.file_id, \
+                 m.overview, m.poster_path \
+                 FROM movies m JOIN movies_fts f ON f.rowid = m.id \
+                 WHERE movies_fts MATCH ? ORDER BY m.title LIMIT ? OFFSET ?",
             )
-            .bind(term)
+            .bind(&expr)
             .bind(limit)
             .bind(offset)
             .fetch_all(&state.db.pool)
             .await?;
-            let total: i64 =
-                sqlx::query_scalar("SELECT COUNT(*) FROM movies WHERE title LIKE '%' || ? || '%'")
-                    .bind(term)
-                    .fetch_one(&state.db.pool)
-                    .await?;
+            let total: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM movies m JOIN movies_fts f ON f.rowid = m.id \
+                 WHERE movies_fts MATCH ?",
+            )
+            .bind(&expr)
+            .fetch_one(&state.db.pool)
+            .await?;
             (rows, total)
         }
         _ => {
@@ -163,23 +222,27 @@ async fn list_shows(
 ) -> AppResult<Json<Value>> {
     let (limit, offset) = paginate(q.limit, q.offset);
 
-    let (rows, total) = match &q.q {
-        Some(term) if !term.is_empty() => {
+    // §7-7: FTS5 MATCH instead of leading-wildcard LIKE (see list_movies).
+    let (rows, total) = match q.q.as_deref().and_then(fts_query) {
+        Some(expr) => {
             let rows = sqlx::query_as::<_, ShowRow>(
-                "SELECT id, tmdb_id, tvdb_id, title, year, added_at, imdb_id, overview, poster_path \
-                 FROM shows WHERE title LIKE '%' || ? || '%' \
-                 ORDER BY title LIMIT ? OFFSET ?",
+                "SELECT s.id, s.tmdb_id, s.tvdb_id, s.title, s.year, s.added_at, s.imdb_id, \
+                 s.overview, s.poster_path \
+                 FROM shows s JOIN shows_fts f ON f.rowid = s.id \
+                 WHERE shows_fts MATCH ? ORDER BY s.title LIMIT ? OFFSET ?",
             )
-            .bind(term)
+            .bind(&expr)
             .bind(limit)
             .bind(offset)
             .fetch_all(&state.db.pool)
             .await?;
-            let total: i64 =
-                sqlx::query_scalar("SELECT COUNT(*) FROM shows WHERE title LIKE '%' || ? || '%'")
-                    .bind(term)
-                    .fetch_one(&state.db.pool)
-                    .await?;
+            let total: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM shows s JOIN shows_fts f ON f.rowid = s.id \
+                 WHERE shows_fts MATCH ?",
+            )
+            .bind(&expr)
+            .fetch_one(&state.db.pool)
+            .await?;
             (rows, total)
         }
         _ => {
@@ -236,22 +299,26 @@ async fn list_episodes_all(
 ) -> AppResult<Json<Value>> {
     let (limit, offset) = paginate(q.limit, q.offset);
 
-    let (rows, total) = match &q.q {
-        Some(term) if !term.is_empty() => {
+    // §7-7: FTS5 MATCH instead of leading-wildcard LIKE (see list_movies). The
+    // episodes_fts index is on title+overview; ordering stays show/season/episode.
+    let (rows, total) = match q.q.as_deref().and_then(fts_query) {
+        Some(expr) => {
             let rows = sqlx::query_as::<_, EpisodeRow>(
-                "SELECT id, show_id, season, episode, title, air_date, file_id \
-                 FROM episodes WHERE title LIKE '%' || ? || '%' \
-                 ORDER BY show_id, season, episode LIMIT ? OFFSET ?",
+                "SELECT e.id, e.show_id, e.season, e.episode, e.title, e.air_date, e.file_id \
+                 FROM episodes e JOIN episodes_fts f ON f.rowid = e.id \
+                 WHERE episodes_fts MATCH ? ORDER BY e.show_id, e.season, e.episode \
+                 LIMIT ? OFFSET ?",
             )
-            .bind(term)
+            .bind(&expr)
             .bind(limit)
             .bind(offset)
             .fetch_all(&state.db.pool)
             .await?;
             let total: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM episodes WHERE title LIKE '%' || ? || '%'",
+                "SELECT COUNT(*) FROM episodes e JOIN episodes_fts f ON f.rowid = e.id \
+                 WHERE episodes_fts MATCH ?",
             )
-            .bind(term)
+            .bind(&expr)
             .fetch_one(&state.db.pool)
             .await?;
             (rows, total)
@@ -619,13 +686,37 @@ async fn stream_file(
         }
     }
 
+    // §7-2: bound concurrent direct-play streams. We do NOT put a total-request
+    // timeout on this path (it would truncate legitimate multi-hour playback);
+    // instead we cap how many serves are in flight. Acquire an owned permit just
+    // before serving so the transcoder-handoff and error paths above never
+    // consume a slot. When the pool is exhausted, return 503 so a burst of
+    // stalled reads against a degraded volume cannot exhaust tokio tasks.
+    let permit = state
+        .stream_semaphore
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| AppError::TranscoderRequired)?;
+
     let service = ServeFile::new(&file.path);
-    let resp = service
+    let mut resp = service
         .oneshot(req)
         .await
-        .map_err(|e| AppError::Internal(format!("stream serve failed: {e}")))?;
-    Ok(resp.into_response())
+        .map_err(|e| AppError::Internal(format!("stream serve failed: {e}")))?
+        .into_response();
+    // Hold the permit for the lifetime of the response (and its streaming body):
+    // it drops when the response is dropped after the client finishes or
+    // disconnects, freeing the slot.
+    resp.extensions_mut()
+        .insert(StreamPermit(std::sync::Arc::new(permit)));
+    Ok(resp)
 }
+
+/// Newtype so the owned stream-concurrency permit can ride in the response
+/// extensions (which require `Clone`); it is only ever inserted, never cloned,
+/// and exists solely to keep the permit alive until the body is fully sent.
+#[derive(Clone)]
+struct StreamPermit(std::sync::Arc<tokio::sync::OwnedSemaphorePermit>);
 
 // ── Watch state ─────────────────────────────────────────────────────────
 
@@ -688,6 +779,49 @@ async fn get_watch(
     Ok(Json(json!({ "items": rows })))
 }
 
+/// True iff `(media_kind, media_id)` names a row that currently exists. Used to
+/// keep watch-state from referencing titles that never existed or were deleted.
+/// The relationship is polymorphic (media_kind ∈ {movie, episode}), so a SQL
+/// foreign key cannot enforce it (§7-8); this is the in-handler equivalent.
+/// `Ok(None)` distinguishes an unknown `media_kind` (→ 400) from a known kind
+/// whose id is absent (`Ok(Some(false))` → 404).
+async fn media_exists(
+    state: &AppState,
+    media_kind: &str,
+    media_id: i64,
+) -> AppResult<Option<bool>> {
+    let table = match media_kind {
+        "movie" => "movies",
+        "episode" => "episodes",
+        _ => return Ok(None),
+    };
+    // `table` is from the fixed allow-list above (never user input), so the
+    // format! is injection-safe; `media_id` is still bound as a parameter.
+    let sql = format!("SELECT 1 FROM {table} WHERE id = ? LIMIT 1");
+    let found: Option<i64> = sqlx::query_scalar(&sql)
+        .bind(media_id)
+        .fetch_optional(&state.db.pool)
+        .await?;
+    Ok(Some(found.is_some()))
+}
+
+/// Remove watch-state rows whose `(media_kind, media_id)` no longer resolves to
+/// an existing movie/episode (orphans left by title deletion, or pre-existing
+/// forged rows). Returns the number of rows removed. Safe to call periodically
+/// or after a scan. Movie/episode deletes cannot cascade here because the
+/// relationship is polymorphic (§7-8), so this GC is how orphans are reaped.
+pub async fn gc_orphan_watch_state(state: &AppState) -> Result<u64, sqlx::Error> {
+    let res = sqlx::query(
+        "DELETE FROM media_watch_state \
+         WHERE (media_kind = 'movie'   AND media_id NOT IN (SELECT id FROM movies)) \
+            OR (media_kind = 'episode' AND media_id NOT IN (SELECT id FROM episodes)) \
+            OR media_kind NOT IN ('movie', 'episode')",
+    )
+    .execute(&state.db.pool)
+    .await?;
+    Ok(res.rows_affected())
+}
+
 async fn post_watch(
     State(state): State<AppState>,
     claims: Option<Extension<InternalClaims>>,
@@ -696,6 +830,22 @@ async fn post_watch(
 ) -> AppResult<Json<Value>> {
     let claims = claims.map(|Extension(c)| c);
     let sub = acting_sub(&claims, q.sub, &state.config.principal_mode)?;
+
+    // §7-8: validate (media_kind, media_id) against a real title before writing.
+    // Without this an arbitrary/stale id silently creates an orphan or forgeable
+    // watch row (no SQL FK can guard a polymorphic id). Unknown kind → 400;
+    // known kind but absent id → 404. (The schema CHECK already constrains the
+    // stored kind, but rejecting early gives the client a clear, non-500 error.)
+    match media_exists(&state, &body.media_kind, body.media_id).await? {
+        Some(true) => {}
+        Some(false) => return Err(AppError::NotFound),
+        None => {
+            return Err(AppError::BadRequest(
+                "media_kind must be 'movie' or 'episode'".into(),
+            ));
+        }
+    }
+
     let watched_at = chrono::Utc::now().to_rfc3339();
     let completed = i64::from(body.completed);
 
@@ -890,6 +1040,9 @@ mod tests {
             config,
             tmdb,
             scanning: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            stream_semaphore: Arc::new(tokio::sync::Semaphore::new(
+                crate::DEFAULT_STREAM_CONCURRENCY,
+            )),
         }
     }
 
@@ -917,6 +1070,9 @@ mod tests {
             config,
             tmdb,
             scanning: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            stream_semaphore: Arc::new(tokio::sync::Semaphore::new(
+                crate::DEFAULT_STREAM_CONCURRENCY,
+            )),
         }
     }
 
@@ -1081,6 +1237,9 @@ mod tests {
     #[tokio::test]
     async fn watch_state_round_trips() {
         let state = test_state().await;
+        // §7-8: watch-state now requires the title to exist, so seed a movie.
+        let file_id = seed_media_file(&state, "/lib/watch.mp4").await;
+        let movie_id = seed_movie_for_file(&state, file_id).await;
         let app = crate::build_router(state);
 
         let post = app
@@ -1093,7 +1252,7 @@ mod tests {
                     .body(Body::from(
                         json!({
                             "media_kind": "movie",
-                            "media_id": 7,
+                            "media_id": movie_id,
                             "position_secs": 120,
                             "duration_secs": 3600,
                             "completed": false
@@ -1120,8 +1279,182 @@ mod tests {
         let items = v["items"].as_array().unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["sub"], "plex:1");
-        assert_eq!(items[0]["media_id"], 7);
+        assert_eq!(items[0]["media_id"], movie_id);
         assert_eq!(items[0]["position_secs"], 120);
+    }
+
+    #[tokio::test]
+    async fn post_watch_rejects_unknown_media_id() {
+        // §7-8: posting watch-state for a nonexistent title must 404, not
+        // silently create an orphan row.
+        let state = test_state().await;
+        let app = crate::build_router(state.clone());
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/media/watch?sub=plex:1")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "media_kind": "movie",
+                            "media_id": 9999,
+                            "position_secs": 10,
+                            "completed": false
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM media_watch_state")
+            .fetch_one(&state.db.pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0, "rejected watch must not create a row");
+    }
+
+    #[tokio::test]
+    async fn post_watch_rejects_unknown_kind() {
+        let state = test_state().await;
+        let app = crate::build_router(state);
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/media/watch?sub=plex:1")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "media_kind": "playlist",
+                            "media_id": 1,
+                            "position_secs": 10,
+                            "completed": false
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn gc_removes_orphaned_watch_rows() {
+        // §7-8: the GC reaps watch rows whose (kind,id) no longer resolves
+        // (title deleted / pre-validation forged rows) and keeps valid ones.
+        let state = test_state().await;
+        let file_id = seed_media_file(&state, "/lib/gc.mp4").await;
+        let movie_id = seed_movie_for_file(&state, file_id).await;
+
+        // A valid row (via the validated handler) + a forged orphan (direct).
+        post_watch(
+            State(state.clone()),
+            None,
+            Query(WatchQuery {
+                sub: Some("plex:1".into()),
+            }),
+            Json(WatchUpsert {
+                media_kind: "movie".into(),
+                media_id: movie_id,
+                position_secs: 5,
+                duration_secs: None,
+                completed: false,
+            }),
+        )
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO media_watch_state \
+             (sub, media_kind, media_id, position_secs, watched_at, completed) \
+             VALUES ('plex:1', 'movie', 4242, 0, '0', 0)",
+        )
+        .execute(&state.db.pool)
+        .await
+        .unwrap();
+
+        let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM media_watch_state")
+            .fetch_one(&state.db.pool)
+            .await
+            .unwrap();
+        assert_eq!(before, 2);
+
+        let removed = gc_orphan_watch_state(&state).await.unwrap();
+        assert_eq!(removed, 1, "exactly the orphan row is reaped");
+        let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM media_watch_state")
+            .fetch_one(&state.db.pool)
+            .await
+            .unwrap();
+        assert_eq!(after, 1, "the valid watch row survives GC");
+    }
+
+    #[tokio::test]
+    async fn movie_search_is_case_and_diacritic_insensitive() {
+        // §7-7: FTS5 unicode61 + remove_diacritics=2 folds case and diacritics,
+        // which the old ASCII-only leading-wildcard LIKE could not do.
+        let state = test_state().await;
+        let file_id = seed_media_file(&state, "/lib/amelie.mkv").await;
+        sqlx::query("INSERT INTO movies (title, year, added_at, file_id) VALUES (?, ?, ?, ?)")
+            .bind("Amélie")
+            .bind(2001_i64)
+            .bind("2026-01-01T00:00:00Z")
+            .bind(file_id)
+            .execute(&state.db.pool)
+            .await
+            .unwrap();
+
+        async fn search(state: &AppState, term: &str) -> i64 {
+            let v = list_movies(
+                State(state.clone()),
+                Query(ListQuery {
+                    q: Some(term.to_string()),
+                    genre: None,
+                    limit: None,
+                    offset: None,
+                }),
+            )
+            .await
+            .unwrap();
+            v.0["total"].as_i64().unwrap()
+        }
+
+        assert_eq!(search(&state, "amelie").await, 1, "diacritic-folded match");
+        assert_eq!(search(&state, "AMÉLIE").await, 1, "case-folded match");
+        assert_eq!(search(&state, "ame").await, 1, "prefix match");
+        assert_eq!(search(&state, "zzz").await, 0, "non-match returns nothing");
+    }
+
+    #[tokio::test]
+    async fn stream_returns_503_when_concurrency_exhausted() {
+        // §7-2: with the stream pool exhausted, a new direct-play request must
+        // get 503 rather than spawning another long-lived serve task. Build a
+        // state whose semaphore has zero permits available and confirm the 503.
+        let mut state = test_state().await;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.mp4");
+        std::fs::write(&path, b"bytes").unwrap();
+        let file_id = seed_media_file(&state, path.to_str().unwrap()).await;
+        let movie_id = seed_movie_for_file(&state, file_id).await;
+
+        // Drain the pool: a 1-permit semaphore with its single permit forgotten.
+        let sem = Arc::new(tokio::sync::Semaphore::new(1));
+        sem.clone().try_acquire_owned().unwrap().forget();
+        state.stream_semaphore = sem;
+
+        let app = crate::build_router(state);
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!("/api/media/stream/movie/{movie_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     async fn seed_show_with_episodes(state: &AppState, n: i64) {
@@ -1284,6 +1617,9 @@ mod tests {
             config: Arc::new(config),
             tmdb: crate::tmdb::TmdbClient::new(None),
             scanning: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            stream_semaphore: Arc::new(tokio::sync::Semaphore::new(
+                crate::DEFAULT_STREAM_CONCURRENCY,
+            )),
         }
     }
 

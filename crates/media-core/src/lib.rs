@@ -20,10 +20,32 @@ pub mod tmdb;
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use tokio::sync::Semaphore;
 
-/// Current `media.db` schema version. Bump in lockstep with a new file in
-/// `migrations/` and the `db::MIGRATIONS` table.
-pub const SCHEMA_VERSION: i64 = 2;
+/// Default cap on concurrent direct-play streams when `MEDIA_STREAM_CONCURRENCY`
+/// is unset. Sized for a single-NAS homelab: enough for a household, low enough
+/// that a burst of stalled reads against a degraded NFS volume cannot exhaust
+/// tokio tasks. Operators raise it via the env var. (DECISION: the exact value
+/// is operability tuning; the requirement is merely that a cap EXISTS.)
+pub const DEFAULT_STREAM_CONCURRENCY: usize = 16;
+
+/// Resolve the stream concurrency cap from `MEDIA_STREAM_CONCURRENCY`, clamped
+/// to at least 1, falling back to [`DEFAULT_STREAM_CONCURRENCY`].
+pub fn stream_concurrency_from_env() -> usize {
+    std::env::var("MEDIA_STREAM_CONCURRENCY")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .map(|n| n.max(1))
+        .unwrap_or(DEFAULT_STREAM_CONCURRENCY)
+}
+
+/// Current `media.db` schema version, DERIVED from the migration ledger so it
+/// can never silently drift from `db::MIGRATIONS`: it is always the version of
+/// the last embedded migration. Adding a migration to `db::MIGRATIONS`
+/// automatically advances this — there is no separate constant to remember to
+/// bump (the prior hand-maintained literal was the drift hazard `/health`'s
+/// schema gate depends on, see `routes::health`).
+pub const SCHEMA_VERSION: i64 = db::MIGRATIONS[db::MIGRATIONS.len() - 1].0;
 
 /// Shared application state, cheap to clone (pool + Arc'd config). The
 /// `scanning` flag guards the background scan so a second `POST /scan`
@@ -34,6 +56,12 @@ pub struct AppState {
     pub config: Arc<config::Config>,
     pub tmdb: tmdb::TmdbClient,
     pub scanning: Arc<AtomicBool>,
+    /// Caps concurrent direct-play streams (§7-2). A permit is held for the
+    /// lifetime of each `stream_file` response; when the pool is exhausted the
+    /// handler returns 503 instead of spawning an unbounded number of long-lived
+    /// tasks against a possibly-degraded volume. Cloning `AppState` shares the
+    /// same `Semaphore` (Arc), so the cap is process-wide.
+    pub stream_semaphore: Arc<Semaphore>,
 }
 
 /// Build the full axum router (public `/health` + `/version`, authed
@@ -157,6 +185,7 @@ mod tests {
             config: Arc::new(config),
             tmdb: tmdb::TmdbClient::new(None),
             scanning: Arc::new(AtomicBool::new(false)),
+            stream_semaphore: Arc::new(Semaphore::new(DEFAULT_STREAM_CONCURRENCY)),
         }
     }
 
