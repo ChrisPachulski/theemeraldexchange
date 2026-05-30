@@ -29,10 +29,15 @@ WORKDIR /srv
 # Statically-linked ffmpeg/ffprobe 7.x — no glibc/runtime deps, runs as-is.
 COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /ffprobe /usr/local/bin/
 
+# curl is for the container HEALTHCHECK (audit 9-0); ca-certificates for TLS
+# egress (TMDB). Create a non-root user (audit 9-0) that owns /data.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates \
+ && apt-get install -y --no-install-recommends ca-certificates curl \
  && rm -rf /var/lib/apt/lists/* \
- && mkdir -p /data
+ && mkdir -p /data \
+ && groupadd --system --gid 10002 mediacore \
+ && useradd --system --uid 10002 --gid mediacore --home-dir /srv --no-create-home mediacore \
+ && chown -R mediacore:mediacore /data /srv
 
 COPY --from=builder /build/target/release/media-core /usr/local/bin/media-core
 
@@ -43,5 +48,14 @@ ENV MEDIA_CORE_PORT=8002
 ENV MEDIA_DB_PATH=/data/media.db
 
 EXPOSE 8002
+
+# Drop root (audit 9-0). The library bind-mount is read-only and /data is
+# chowned above, so the service needs no root privilege at runtime.
+USER mediacore
+
+# Liveness/readiness probe (audit 9-0/9-1) so compose depends_on can gate on
+# health instead of mere container start. /health is public (no auth).
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:8002/health || exit 1
 
 CMD ["media-core"]
