@@ -75,6 +75,18 @@ export function createConcurrencyTracker(opts: { cap: number; idleMs: number }):
       existing.lastSeen = Date.now()
       return { ok: true, sessionId }
     }
+    // Dedupe by (sub, kind, resourceId): a re-grant for a channel the same
+    // user is ALREADY watching supersedes the prior session rather than
+    // booking a SECOND slot against the upstream connection cap. Without
+    // this, selecting the same channel twice held two connections — and on a
+    // ~2-slot provider line, two such double-books saturate it and every
+    // further grant stalls. Replacing also frees the stale slot immediately
+    // (the old player is being torn down and re-created with the new token).
+    for (const [id, s] of sessions) {
+      if (s.sub === sub && s.kind === kind && s.resourceId === resourceId) {
+        sessions.delete(id)
+      }
+    }
     if (sessions.size >= opts.cap) {
       return {
         ok: false,
