@@ -116,7 +116,12 @@ export function epgGrid(
     typeof optsOrCategoryId === 'number'
       ? { categoryId: optsOrCategoryId }
       : optsOrCategoryId ?? {}
-  const limit = Math.min(Math.max(opts.limit ?? 1500, 1), 5000)
+  // No artificial cap for the guide. This provider carries EPG for ~12k
+  // channels; the client grid is virtualized (only on-screen rows mount), so
+  // returning the full set is fine. hasEpgOnly naturally bounds this to channels
+  // that actually have a schedule (~11.5k) rather than the full 50k catalog — so
+  // a generous ceiling here does not pull in empty rows.
+  const limit = Math.min(Math.max(opts.limit ?? 20000, 1), 20000)
 
   // One pass over the programmes overlapping the window, grouped by channel_id.
   // Cheaper than N+1 per-channel lookups when the grid spans hundreds of rows,
