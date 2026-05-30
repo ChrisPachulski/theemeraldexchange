@@ -11,9 +11,13 @@
 }
 
 .apple-signin__button {
-  justify-self: start;
+  /* Full-width + centered so it sits flush in the sign-in stack alongside
+     the Plex and passkey buttons (was inline/left-aligned, which read as a
+     mismatched odd-one-out). */
+  width: 100%;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: var(--s-2);
   padding: var(--s-3) var(--s-5);
   font-family: var(--font-display);

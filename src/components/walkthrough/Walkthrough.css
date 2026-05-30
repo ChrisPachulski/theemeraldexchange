@@ -419,14 +419,20 @@
 /* Provider buttons sit in a row that wraps on narrow viewports so the
    Apple and Plex affordances read as a pair. */
 .walkthrough__signin-buttons {
+  /* A single full-width vertical stack — every sign-in method (Plex, Apple,
+     passkey) gets the same footprint and reflows cleanly at any viewport
+     width. The previous flex-wrap ROW broke on resize once the full-width
+     passkey block was added: a width:100% column mixed with inline buttons
+     wrapped chaotically. A column stack is robust and reads cleaner. */
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: var(--s-3);
-  align-items: flex-start;
+  align-items: stretch;
 }
 
 .walkthrough__signin-button {
-  justify-self: start;
+  width: 100%;
+  text-align: center;
   padding: var(--s-3) var(--s-5);
   font-family: var(--font-display);
   font-weight: var(--w-display);
