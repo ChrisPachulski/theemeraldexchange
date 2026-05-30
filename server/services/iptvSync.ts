@@ -3,6 +3,7 @@ import {
   fetchSeriesList, fetchSeriesInfo,
 } from './xtream.js'
 import { fetchAndStreamEpg } from './iptvEpg.js'
+import { buildEpgNameIndex, resolveEpgId, type FeedChannelDef } from './iptvEpgResolve.js'
 import type { IptvDb } from './iptvDb.js'
 
 export type SyncResult =
@@ -87,6 +88,37 @@ function assertSyncSawCatalog(args: {
   ) {
     throw new Error('xtream_empty_response')
   }
+}
+
+/**
+ * Recompute channels.epg_resolved_id from the freshly-ingested programmes and
+ * the feed's channel alias defs. Two-pass per channel: exact tvg-id, then
+ * unambiguous normalized-name match against the feed's <display-name> aliases.
+ * Runs in a single transaction after EPG ingest.
+ */
+export function resolveEpgChannels(db: IptvDb, channelDefs: FeedChannelDef[]): { resolved: number } {
+  // Feed channels that actually have programmes in the window we kept.
+  const feedWithEpg = new Set(
+    (db.raw.prepare(`SELECT DISTINCT channel_id FROM epg_programs`).all() as Array<{ channel_id: string }>)
+      .map((r) => r.channel_id),
+  )
+  const index = buildEpgNameIndex(channelDefs, feedWithEpg)
+
+  const channels = db.raw
+    .prepare(`SELECT stream_id, name, epg_channel_id FROM channels`)
+    .all() as Array<{ stream_id: number; name: string; epg_channel_id: string | null }>
+
+  const update = db.raw.prepare(`UPDATE channels SET epg_resolved_id = ? WHERE stream_id = ?`)
+  let resolved = 0
+  const apply = db.raw.transaction((rows: typeof channels) => {
+    for (const ch of rows) {
+      const id = resolveEpgId(ch, index)
+      if (id) resolved += 1
+      update.run(id, ch.stream_id)
+    }
+  })
+  apply(channels)
+  return { resolved }
 }
 
 export async function syncOnce(db: IptvDb): Promise<SyncResult> {
@@ -183,20 +215,29 @@ export async function syncOnce(db: IptvDb): Promise<SyncResult> {
       for (const r of rows) db.stmts.upsertEpg.run(r)
     })
     let flushError: unknown = null
-    await fetchAndStreamEpg((row) => {
-      if (flushError) return
-      if (row.stop_utc > horizon) return
-      batch.push(row)
-      epg += 1
-      if (batch.length >= 1_000) {
-        try {
-          flushBatch(batch)
-        } catch (err) {
-          flushError = err
+    // Capture the feed's <channel> alias defs in the same pass so we can
+    // name-match catalog channels to feed EPG (see resolveEpgChannels below).
+    const channelDefs: FeedChannelDef[] = []
+    await fetchAndStreamEpg(
+      (row) => {
+        if (flushError) return
+        if (row.stop_utc > horizon) return
+        batch.push(row)
+        epg += 1
+        if (batch.length >= 1_000) {
+          try {
+            flushBatch(batch)
+          } catch (err) {
+            flushError = err
+          }
+          batch = []
         }
-        batch = []
-      }
-    })
+      },
+      undefined,
+      (def) => {
+        channelDefs.push(def)
+      },
+    )
     if (flushError) throw flushError
     if (batch.length) {
       try {
@@ -206,6 +247,11 @@ export async function syncOnce(db: IptvDb): Promise<SyncResult> {
       }
     }
     if (flushError) throw flushError
+
+    // Resolve each catalog channel to the feed id that actually carries its
+    // schedule — exact tvg-id first, then unambiguous name/alias match. Lifts
+    // EPG coverage from the ~806 exact-tvg matches to ~12.5k channels.
+    resolveEpgChannels(db, channelDefs)
 
     const finishedAt = new Date()
     db.stmts.putSyncState.run({ key: 'last_sync', value: 'ok', ts: finishedAt.toISOString() })

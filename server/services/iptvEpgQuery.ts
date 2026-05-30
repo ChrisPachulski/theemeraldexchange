@@ -29,6 +29,11 @@ type ChannelEpgRow = {
   epg_channel_id: string | null
 }
 
+// The feed id a channel joins EPG on: the name-resolved id if the sync matched
+// one, else the raw tvg-id (so queries work before the first resync). See
+// iptvEpgResolve + migration 0006.
+const EPG_JOIN_ID = 'COALESCE(epg_resolved_id, epg_channel_id)'
+
 function uniqueStreamIds(channelStreamIds: number[]): number[] {
   return [...new Set(channelStreamIds.filter((id) => Number.isInteger(id) && id > 0))]
 }
@@ -39,7 +44,7 @@ export function epgNow(db: IptvDb, channelStreamIds: number[], at: Date = new Da
 
   const placeholders = ids.map(() => '?').join(',')
   const channels = db.raw.prepare(`
-    SELECT stream_id, epg_channel_id
+    SELECT stream_id, ${EPG_JOIN_ID} AS epg_channel_id
     FROM channels
     WHERE stream_id IN (${placeholders})
   `).all(...ids) as ChannelEpgRow[]
@@ -70,7 +75,7 @@ export function epgNow(db: IptvDb, channelStreamIds: number[], at: Date = new Da
 
 export function epgChannelWindow(db: IptvDb, streamId: number, fromIso: string, toIso: string): EpgProgramme[] {
   const channel = db.raw.prepare(`
-    SELECT epg_channel_id
+    SELECT ${EPG_JOIN_ID} AS epg_channel_id
     FROM channels
     WHERE stream_id = ?
   `).get(streamId) as { epg_channel_id: string | null } | undefined
@@ -144,13 +149,15 @@ export function epgGrid(
   if (opts.hasEpgOnly) {
     const ids = [...byChannel.keys()]
     if (ids.length === 0) return []
-    where.push(`epg_channel_id IN (${ids.map(() => '?').join(',')})`)
+    where.push(`${EPG_JOIN_ID} IN (${ids.map(() => '?').join(',')})`)
     args.push(...ids)
   }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
 
+  // epg_channel_id here is the RESOLVED join id (name-matched or tvg), so the
+  // programme lookup below joins the same id the hasEpgOnly filter used.
   const channels = db.raw.prepare(`
-    SELECT stream_id, COALESCE(num, 0) AS num, name, epg_channel_id, tv_archive, tv_archive_duration
+    SELECT stream_id, COALESCE(num, 0) AS num, name, ${EPG_JOIN_ID} AS epg_channel_id, tv_archive, tv_archive_duration
     FROM channels
     ${whereSql}
     ORDER BY num, name
