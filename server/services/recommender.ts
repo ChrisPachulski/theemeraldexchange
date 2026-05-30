@@ -14,6 +14,7 @@
 import { env } from '../env.js'
 import { fetchWithTimeout } from './upstream.js'
 import { mintInternalPrincipal, type InternalPrincipalInput } from './internalPrincipal.js'
+import { reportServerEvent } from './serverTelemetry.js'
 
 export type RecommenderKind = 'movie' | 'tv'
 
@@ -103,16 +104,31 @@ async function mirrorPost(
   label: string,
   caller?: RecommenderCaller,
 ): Promise<void> {
-  const res = await fetchWithTimeout(
-    `${env.recommenderUrl}${path}`,
-    {
-      method: 'POST',
-      headers: recommenderHeaders(caller),
-      body: JSON.stringify(body),
-    },
-    MIRROR_TIMEOUT_MS,
-    label,
-  )
+  let res: Response
+  try {
+    res = await fetchWithTimeout(
+      `${env.recommenderUrl}${path}`,
+      {
+        method: 'POST',
+        headers: recommenderHeaders(caller),
+        body: JSON.stringify(body),
+      },
+      MIRROR_TIMEOUT_MS,
+      label,
+    )
+  } catch (err) {
+    // Timeout / network error — the sidecar is unreachable. This mirror
+    // is the only path for click/feedback attribution, so a drop is
+    // silent training-signal loss. Emit to the mandatory (§15) telemetry
+    // pipeline before re-throwing so callers' existing error handling is
+    // unchanged.
+    void reportServerEvent({
+      level: 'warning',
+      message: `recommender mirror error: ${label}`,
+      context: { label, path, error: err instanceof Error ? err.message : String(err) },
+    })
+    throw err
+  }
   const responseBody = await res.text().catch(() => '')
   if (!res.ok) {
     console.warn('[recommender] mirror POST failed', {
@@ -120,6 +136,15 @@ async function mirrorPost(
       path,
       status: res.status,
       body: responseBody.slice(0, 200),
+    })
+    // Non-ok HTTP response (sidecar reachable but rejected the event).
+    // Same silent-signal-loss concern; route it through telemetry too.
+    // Handling both branches in mirrorPost covers every caller (click,
+    // /feedback, radarr added, impressions, library sync) in one place.
+    void reportServerEvent({
+      level: 'warning',
+      message: `recommender mirror non-ok: ${label}`,
+      context: { label, path, status: res.status },
     })
   }
 }

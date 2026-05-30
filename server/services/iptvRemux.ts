@@ -7,8 +7,18 @@ export function scrubXtreamCreds(line: string): string {
   let result = line
   const u = env.XTREAM_USERNAME
   const p = env.XTREAM_PASSWORD
-  if (u) result = result.replaceAll(u, 'REDACTED')
-  if (p) result = result.replaceAll(p, 'REDACTED')
+  // Redact the literal creds AND their URL-encoded form. ffmpeg echoes
+  // upstream URLs both raw and percent-encoded depending on the path, so
+  // a literal-only replace can miss the encoded copy (e.g. a password
+  // containing reserved characters).
+  const redactLiteral = (value: string | undefined): void => {
+    if (!value) return
+    result = result.replaceAll(value, 'REDACTED')
+    const encoded = encodeURIComponent(value)
+    if (encoded !== value) result = result.replaceAll(encoded, 'REDACTED')
+  }
+  redactLiteral(u)
+  redactLiteral(p)
   result = result.replace(
     /(https?:\/\/[^/\s]+\/[^/\s]+\/)([^/\s]+)\/([^/\s]+)\//g,
     '$1REDACTED/REDACTED/',
@@ -43,6 +53,25 @@ export interface StartRemuxResult {
 
 const IDLE_MS = 30_000
 const sessions = new Map<string, RemuxSession>()
+
+// Only http(s) upstreams are valid IPTV inputs. Reject anything else
+// (file:, concat:, pipe:, data:, …) before it reaches ffmpeg's '-i'.
+// The URL is server-constructed from env creds today (low risk), but a
+// future caller passing an upstream-influenced URL (a provider-redirected
+// manifest) could otherwise steer ffmpeg's broad default protocol set.
+// Pairs with the '-protocol_whitelist' arg so confinement is enforced at
+// both our layer and ffmpeg's.
+function assertHttpUpstream(upstreamUrl: string): void {
+  let parsed: URL
+  try {
+    parsed = new URL(upstreamUrl)
+  } catch {
+    throw new Error('remux upstream URL is not a valid URL')
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`remux upstream protocol not allowed: ${parsed.protocol}`)
+  }
+}
 
 function safeIdPart(value: string): string {
   return value.replace(/[^A-Za-z0-9_.-]/g, '_')
@@ -132,6 +161,10 @@ const sweepHandle = setInterval(sweepIdleSessions, 5_000)
 sweepHandle.unref?.()
 
 export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult {
+  // Defense in depth: refuse non-http(s) inputs before any side effects
+  // (temp dir creation, ffmpeg spawn).
+  assertHttpUpstream(opts.upstreamUrl)
+
   const sessionId = `remux:${opts.streamId}:${safeIdPart(opts.sub)}:${Date.now()}`
   const dir = path.join(env.IPTV_REMUX_TMP_DIR, sessionId.replace(/[:/]/g, '_'))
   fs.mkdirSync(dir, { recursive: true })
@@ -141,6 +174,10 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult {
     '-hide_banner',
     '-loglevel', 'warning',
     '-nostdin',
+    // Constrain ffmpeg to the protocols a real upstream stream needs so
+    // neither the '-i' input nor a nested manifest can reach
+    // file:/concat:/etc. Pairs with assertHttpUpstream() above.
+    '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
     '-fflags', '+discardcorrupt+genpts',
     '-i', opts.upstreamUrl,
     '-c', 'copy',
