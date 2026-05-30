@@ -66,10 +66,9 @@ function VirtualResultGrid<T>({ items, renderItem, getKey }: VirtualProps<T>) {
   // Window against the page scroll so the grid keeps the document's normal
   // scroll behaviour (the tabs scroll the whole page, not an inner container).
   /* eslint-disable react-hooks/refs -- documented @tanstack/react-virtual
-     pattern: useWindowVirtualizer reads containerRef.current.offsetTop for
-     scrollMargin at render. The virtualizer re-measures on scroll/resize, so
-     a stale first-paint offset self-corrects; there is no render-correctness
-     bug here. */
+     pattern: scrollMargin reads containerRef.current.offsetTop at render. The
+     virtualizer re-measures on scroll/resize, so a stale first-paint offset
+     self-corrects; no render-correctness bug. */
   const virtualizer = useWindowVirtualizer({
     count: rowCount,
     estimateSize: () => ESTIMATED_ROW_PX,

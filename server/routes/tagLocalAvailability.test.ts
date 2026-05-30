@@ -7,7 +7,7 @@ import Database from 'better-sqlite3'
 // is the REAL tagLocalAvailability — no logic is stubbed.
 const hoisted = vi.hoisted(() => ({
   useMediaCore: true,
-  dbHandle: null as { raw: any; close(): void } | null,
+  dbHandle: null as { raw: import('better-sqlite3').Database; close(): void } | null,
 }))
 
 vi.mock('../env.js', () => ({
@@ -27,7 +27,7 @@ vi.mock('../services/mediaLibraryDbSingleton.js', () => ({
 function makeDb(opts: {
   movies?: Array<{ tmdb_id: number | null; title: string; year: number | null }>
   shows?: Array<{ tmdb_id: number | null; title: string; year: number | null }>
-}): { raw: any; close(): void } {
+}): { raw: import('better-sqlite3').Database; close(): void } {
   const raw = new Database(':memory:')
   raw.exec(`
     CREATE TABLE movies (
