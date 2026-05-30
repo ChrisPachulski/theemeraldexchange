@@ -6,6 +6,7 @@ import {
   parseLiveStreams,
   parseVodStreams,
   parseSeriesList,
+  parseShortEpg,
   type XtreamCreds,
 } from './xtream.js'
 
@@ -78,6 +79,38 @@ describe('xtream list parsers', () => {
     expect(channels[0].epg_channel_id).toBe('cnbc.us')
     expect(channels[1].epg_channel_id).toBeNull()
     expect(channels[2].epg_channel_id).toBeNull()
+  })
+
+  it('parses get_short_epg (base64 titles, unix timestamps, stream_id key)', () => {
+    const rows = parseShortEpg(
+      {
+        epg_listings: [
+          {
+            title: Buffer.from('SportsCenter').toString('base64'),
+            description: Buffer.from('Highlights').toString('base64'),
+            start_timestamp: 1780149600,
+            stop_timestamp: 1780153200,
+            channel_id: '200163456',
+          },
+          { title: 'x', start_timestamp: 5, stop_timestamp: 5 }, // zero-length → dropped
+        ],
+      },
+      200163456,
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      channel_id: '200163456',
+      title: 'SportsCenter',
+      description: 'Highlights',
+      start_utc: new Date(1780149600 * 1000).toISOString(),
+      stop_utc: new Date(1780153200 * 1000).toISOString(),
+    })
+  })
+
+  it('parseShortEpg tolerates empty/missing listings', () => {
+    expect(parseShortEpg({ epg_listings: [] }, 1)).toEqual([])
+    expect(parseShortEpg(null, 1)).toEqual([])
+    expect(parseShortEpg({}, 1)).toEqual([])
   })
 
   it('parses VOD streams with tmdb_id when present', () => {
