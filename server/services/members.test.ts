@@ -1,18 +1,21 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
 import fs from 'node:fs'
-import path from 'node:path'
-import os from 'node:os'
 
 // Point the server.db singleton at a throwaway temp file BEFORE env.ts is
 // evaluated. vi.hoisted runs before the static imports below (including the
 // fs/path/os imports), so it must require its own node builtins. env.ts reads
 // process.env.SERVER_DB_PATH at its own import time.
 const { tmpDbDir } = vi.hoisted(() => {
+  /* eslint-disable @typescript-eslint/no-require-imports -- vi.hoisted runs before ESM imports init; require is required here */
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- vi.hoisted runs pre-ESM-init; require needed
   const nodeFs = require('node:fs') as typeof import('node:fs')
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- vi.hoisted runs pre-ESM-init; require needed
   const nodePath = require('node:path') as typeof import('node:path')
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- vi.hoisted runs pre-ESM-init; require needed
   const nodeOs = require('node:os') as typeof import('node:os')
   const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'members-test-'))
   process.env.SERVER_DB_PATH = nodePath.join(dir, 'server.db')
+  /* eslint-enable @typescript-eslint/no-require-imports */
   return { tmpDbDir: dir }
 })
 
