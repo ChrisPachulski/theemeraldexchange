@@ -1,0 +1,21 @@
+# Mutable autoloop runtime state — local only, never committed (avoids the
+# shared-tree commit race and keeps history clean). Curated docs are allowed.
+mesh/
+STOP
+claude-baseline.json
+codex-spend.jsonl
+*.log
+run_loop.jsonl
+loop.pid
+state.json
+iteration-log.md
+dead-ends.md
+handoff.md
+branch-claims.md
+windows/
+
+# Curated, version-controlled artifacts (explicitly tracked):
+!CONTROL.md
+!immune-rules.md
+!HUMAN-ACTIONS.md
+!GOALS-MET.md
