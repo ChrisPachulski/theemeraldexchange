@@ -40,6 +40,31 @@ import { reportServerEvent } from '../services/serverTelemetry.js'
 
 const MODEL = 'claude-haiku-4-5'
 
+// Cap concurrent TMDB /search lookups. validate() previously fired one
+// Promise.all over every survivor (~30+), which can burst past TMDB's rate
+// limit and 429 the whole batch (a self-DoS). 8 keeps the pick list fast (a few
+// short waves) without hammering the upstream.
+const TMDB_LOOKUP_CONCURRENCY = 8
+
+/** Concurrency-bounded map that preserves input order. */
+async function mapLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let next = 0
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const i = next++
+      if (i >= items.length) return
+      results[i] = await fn(items[i], i)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return results
+}
+
 type TmdbAuthMode = 'bearer' | 'query'
 
 // TMDB credential snapshot read at module load. Mutable so tests can
@@ -2368,8 +2393,8 @@ suggestions.get('/:type', async (c) => {
 
     // Non-pool picks fall back to TMDB /search lookup.
     if (accepted.length < TARGET_COUNT) {
-      const lookups = await Promise.all(
-        survivors.map(({ pick }) => tmdbLookup(type, pick.title, pick.year).catch(() => null)),
+      const lookups = await mapLimit(survivors, TMDB_LOOKUP_CONCURRENCY, ({ pick }) =>
+        tmdbLookup(type, pick.title, pick.year).catch(() => null),
       )
       for (let i = 0; i < lookups.length; i++) {
         if (accepted.length >= TARGET_COUNT) break
