@@ -1197,7 +1197,7 @@ V3, V4, V5, V6, V8, V9, V12, V13, V17, V21, V22, V23 — all require real Anthro
 
 **Date**: 2026-05-20
 
-**Setup**: Server at localhost:4001 booted with `.env.local` env + explicit `SONARR_URL=http://100.120.186.17:8989/tv` / `RADARR_URL=http://100.120.186.17:7878/movies` (NAS reachable via Tailscale; the `.env.production` IP `10.0.0.52` and the `theemeraldexchange.local` mDNS hostname are both unroutable from this network). TMDB_API_KEY from `.env.production` exported. Anthropic key passed in `X-Anthropic-Api-Key` per the BYO model. Session minted with the .env.local SESSION_SECRET.
+**Setup**: Server at localhost:4001 booted with `.env.local` env + explicit `SONARR_URL=http://<tailscale-host>:8989/tv` / `RADARR_URL=http://<tailscale-host>:7878/movies` (NAS reachable via Tailscale; the `.env.production` IP `<nas-host>` and the `theemeraldexchange.local` mDNS hostname are both unroutable from this network). TMDB_API_KEY from `.env.production` exported. Anthropic key passed in `X-Anthropic-Api-Key` per the BYO model. Session minted with the .env.local SESSION_SECRET.
 
 **Probes**: see `.planning/ai-recommendations-loop/live-probe-2026-05-20.txt` for the full transcript.
 
