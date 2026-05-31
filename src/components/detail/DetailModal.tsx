@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { castCharacter, TMDB_IMAGE_BASE, type CastMember } from '../../lib/api/tmdb'
+import { useDialogDismiss } from '../../lib/useDialogDismiss'
 import './DetailModal.css'
 
 // Plex-style item-detail modal.
@@ -128,20 +129,20 @@ export function DetailModal({
   const dialogRef = useRef<HTMLDialogElement>(null)
   const closeBtnRef = useRef<HTMLButtonElement>(null)
 
+  // useDialogDismiss owns showModal()/close() + the deferred unmount so the
+  // exit transition can play. We keep the open->focus side effect here.
+  const rendered = useDialogDismiss(open, dialogRef)
+
   useEffect(() => {
-    const d = dialogRef.current
-    if (!d) return
-    if (open) {
-      if (!d.open) d.showModal()
-      // Focus the close button so screen readers announce the modal but
-      // the user doesn't accidentally trigger Add/Remove on Enter.
-      closeBtnRef.current?.focus()
-    } else if (d.open) {
-      d.close()
-    }
+    if (!open) return
+    // Focus the close button so screen readers announce the modal but the
+    // user doesn't accidentally trigger Add/Remove on Enter. This effect is
+    // declared after useDialogDismiss, so the hook's showModal() has already
+    // run by the time we focus.
+    closeBtnRef.current?.focus()
   }, [open])
 
-  if (!open) return null
+  if (!rendered) return null
 
   const titleId = 'detail-title'
   const overviewId = 'detail-overview'
