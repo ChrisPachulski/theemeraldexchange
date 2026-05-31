@@ -41,6 +41,12 @@ export function ResultGrid<T = unknown>(props: ResultGridProps<T>) {
   return <VirtualResultGrid {...props} />
 }
 
+// Non-virtualized cells (lists at/under the virtualize threshold) render the
+// card directly as a grid child. The off-screen paint-skipping hint lives on
+// `.media-card` itself (see MediaCard.css: content-visibility/contain), so
+// every card ResultGrid renders skips off-screen paint with zero DOM/layout
+// change here. The virtualized path windows rows instead, and applying
+// content-visibility there would fight the virtualizer's measureElement.
 function ResultGridCell({ children }: { children: ReactNode }) {
   return <>{children}</>
 }
