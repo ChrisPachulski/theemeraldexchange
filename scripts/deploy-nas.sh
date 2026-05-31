@@ -188,6 +188,26 @@ ssh "${NAS_USER}@${NAS_HOST}" "chmod 600 ${APPDATA}/.env"
 
 ssh "${NAS_USER}@${NAS_HOST}" "test -f ${APPDATA}/.dockerignore || echo '[deploy] WARN: .dockerignore not present in build context — context will include .env, data/, recommender-db/'"
 
+# Pre-create + chown the sidecar DB bind-mount dirs to their in-container
+# service uids BEFORE `compose up`. Docker creates a missing bind-mount source
+# as root:root, which MASKS the image-time chown — on a fresh volume the
+# media-core (uid 10002) and recommender (uid 10001) services then cannot write
+# their sqlite DBs under cap_drop: ALL + read_only and crash-loop. Pre-chowning
+# the host dirs makes the first boot writable without granting the containers
+# any extra capability. The backend's /app/data is owned by root inside its own
+# image, so it needs no chown here.
+echo "→ Pre-creating + chowning sidecar DB volumes (fresh-volume crash-loop guard)"
+ssh "${NAS_USER}@${NAS_HOST}" "\
+  mkdir -p ${APPDATA}/data ${APPDATA}/recommender-db ${APPDATA}/recommender-db/hf-cache ${APPDATA}/media-core-db && \
+  chown -R 10001:10001 ${APPDATA}/recommender-db && \
+  chown -R 10002:10002 ${APPDATA}/media-core-db"
+
+# Snapshot the currently-deployed backend image as :rollback BEFORE the build
+# overwrites :latest, so an unhealthy deploy can be reverted (see post-deploy
+# healthcheck below). Best-effort: the first-ever deploy has no prior image.
+echo "→ Tagging current backend image as :rollback (revert target)"
+ssh "${NAS_USER}@${NAS_HOST}" "docker image inspect theemeraldexchange-backend:latest >/dev/null 2>&1 && docker tag theemeraldexchange-backend:latest theemeraldexchange-backend:rollback || echo '[deploy] no prior backend image to tag (first deploy)'"
+
 echo "→ Building and starting containers"
 # Unraid occasionally loses both docker compose forms (plugin + standalone)
 # after system updates. To keep deploys working without manual NAS
@@ -231,13 +251,60 @@ ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && \
       theemeraldexchange-backend:latest; \
   fi"
 
+# cloudflared joins the backend's network namespace (network_mode:
+# service:backend), so the tunnel origin (localhost:3001) only resolves while
+# the EXACT backend container it first joined is alive. `compose up --build`
+# recreates the backend on any image change, staling that netns reference —
+# `depends_on` orders the first start but does NOT re-gate a recreate — so the
+# public site 502s until cloudflared is restarted. Always restart it after a
+# deploy (cheap, idempotent). This has caused a real prod outage before.
+echo "→ Restarting cloudflared (re-joins the recreated backend netns; else public 502)"
+ssh "${NAS_USER}@${NAS_HOST}" "docker restart exchange-cloudflared >/dev/null 2>&1 || echo '[deploy] WARN: could not restart exchange-cloudflared (not running?)'"
+
+# Post-deploy healthcheck. The 5s log tail this replaces was shorter than the
+# container's 20s health start_period, so a crash-looping or boot-failing
+# backend (bad migration, env-gate crash, napi ABI mismatch) shipped with an
+# "✓ Deployed" and the API was simply down. Poll the backend's health until it
+# is actually serving; if it never does, roll back to the :rollback image.
+echo "→ Waiting for backend to report healthy (up to ~90s)"
+set +e
+ssh "${NAS_USER}@${NAS_HOST}" '
+  last=unknown
+  for i in $(seq 1 30); do
+    s=$(docker inspect --format "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}" exchange-backend 2>/dev/null || echo missing)
+    last="$s"
+    if [ "$s" = "healthy" ]; then echo "[deploy] backend healthy"; exit 0; fi
+    if [ "$s" = "none" ]; then
+      # Direct-docker fallback container has no docker healthcheck — probe the port.
+      if curl -fsS http://127.0.0.1:3001/api/health >/dev/null 2>&1; then echo "[deploy] backend healthy (port probe)"; exit 0; fi
+    fi
+    if [ "$s" = "missing" ]; then echo "[deploy] exchange-backend container is missing"; exit 2; fi
+    sleep 3
+  done
+  echo "[deploy] backend never became healthy (last status: $last)"; exit 3
+'
+health_rc=$?
+set -e
+
+if [ "$health_rc" -ne 0 ]; then
+  echo "✗ Backend unhealthy after deploy (rc=$health_rc) — rolling back to previous image" >&2
+  ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && \
+    if docker image inspect theemeraldexchange-backend:rollback >/dev/null 2>&1; then \
+      docker tag theemeraldexchange-backend:rollback theemeraldexchange-backend:latest && \
+      ( docker compose up -d --no-build backend 2>/dev/null || docker compose up -d --no-build 2>/dev/null || true ) && \
+      docker restart exchange-cloudflared >/dev/null 2>&1 || true; \
+      echo '[deploy] rolled back to previous backend image'; \
+    else \
+      echo '[deploy] FATAL: no :rollback image to restore — backend is down, manual intervention required' >&2; \
+    fi"
+  echo "✗ Deploy FAILED and was rolled back. Investigate before retrying:" >&2
+  echo "    ssh ${NAS_USER}@${NAS_HOST} 'docker logs --tail=80 exchange-backend'" >&2
+  exit 1
+fi
+
 echo "→ Reclaiming BuildKit cache + dangling images (the docker vdisk creeps ~1GB/deploy otherwise)"
 ssh "${NAS_USER}@${NAS_HOST}" "docker builder prune -f >/dev/null 2>&1 || true; docker image prune -f >/dev/null 2>&1 || true"
 
-echo "→ Tail logs for 5s to confirm healthy boot"
-ssh "${NAS_USER}@${NAS_HOST}" "timeout 5 docker logs --tail=20 -f exchange-backend || true"
-
 echo
-echo "✓ Deployed. The cloudflared container may take ~30s to register"
-echo "  with Cloudflare. Test:"
+echo "✓ Deployed and verified healthy. Public endpoint:"
 echo "    curl -s https://api.theemeraldexchange.com/api/health"
