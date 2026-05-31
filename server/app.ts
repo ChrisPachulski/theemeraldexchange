@@ -8,6 +8,7 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
 import { env } from './env.js'
+import { serverDb } from './services/serverDb.js'
 import { requireSafeOrigin } from './middleware/csrf.js'
 import { auth, me } from './auth.js'
 import { sonarr } from './routes/sonarr.js'
@@ -78,7 +79,22 @@ if (env.allowedOrigins.length > 0) {
 // reliable distinguisher between "our SPA" and "attacker's page".
 app.use('*', requireSafeOrigin)
 
-app.get('/api/health', (c) => c.json({ ok: true }))
+// Liveness/readiness gate trusted by the docker healthcheck AND cloudflared's
+// `depends_on: service_healthy`. A bare {ok:true} kept the tunnel routing live
+// traffic to a backend whose server.db was locked/corrupt — every API route
+// 500s but docker never restarts and cloudflared never fails over. Probe the
+// one critical LOCAL dependency (server.db) cheaply and 503 on failure. Do NOT
+// block on remote sidecars (recommender/IPTV) so a sidecar outage can't take
+// the public tunnel down with it.
+app.get('/api/health', (c) => {
+  try {
+    serverDb().raw.prepare('SELECT 1').get()
+    return c.json({ ok: true })
+  } catch (e) {
+    console.error('[health] server.db probe failed:', e instanceof Error ? e.message : e)
+    return c.json({ ok: false, reason: 'db_unavailable' }, 503)
+  }
+})
 
 // Public-ish (auth-free) endpoint exposing the configured limits so the
 // SPA can surface them in tooltips without each modal having to know
