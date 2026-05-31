@@ -163,6 +163,15 @@ function scrubValue(value: unknown): unknown {
   return value
 }
 
+// Public entry point for non-SDK telemetry paths (the server-side Glitchtip
+// relay in serverTelemetry.ts). Applies the SAME deep walker the SDK beforeSend
+// uses — REDACTED_FIELD_KEYS on object keys + the token/JWE regex rules on
+// strings — so a hand-built relay payload is held to the same §15.3 redaction
+// as the SDK path instead of bypassing it.
+export function scrubTelemetryValue(value: unknown): unknown {
+  return scrubValue(value)
+}
+
 function scrubObject(obj: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const [key, val] of Object.entries(obj)) {
