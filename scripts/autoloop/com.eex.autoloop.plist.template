@@ -6,10 +6,13 @@
 <dict>
   <key>Label</key>
   <string>com.eex.autoloop</string>
+  <!-- launchd → bash → detached node. A node binary exec'd directly by launchd
+       hangs in bootstrap here; bash + nohup-detach reparents it out of that
+       context. See tick.sh. -->
   <key>ProgramArguments</key>
   <array>
-    <string>__NODE__</string>
-    <string>__REPO__/scripts/autoloop/supervisor.mjs</string>
+    <string>/bin/bash</string>
+    <string>__REPO__/scripts/autoloop/tick.sh</string>
   </array>
   <key>WorkingDirectory</key>
   <string>__REPO__</string>
@@ -26,6 +29,10 @@
        an immediate run. MASTER: OFF in CONTROL.md is the real arming switch. -->
   <key>RunAtLoad</key>
   <false/>
+  <!-- Pin stdin to /dev/null. Without this launchd hands node a stdin handle
+       its bootstrap blocks on, hanging the process before it runs. -->
+  <key>StandardInPath</key>
+  <string>/dev/null</string>
   <key>StandardOutPath</key>
   <string>__REPO__/.autoloop/launchd.out.log</string>
   <key>StandardErrorPath</key>

@@ -31,6 +31,8 @@
   </dict>
   <key>RunAtLoad</key>
   <false/>
+  <key>StandardInPath</key>
+  <string>/dev/null</string>
   <key>StandardOutPath</key>
   <string>__REPO__/.autoloop/killer.out.log</string>
   <key>StandardErrorPath</key>
