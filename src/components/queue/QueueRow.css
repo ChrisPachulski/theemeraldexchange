@@ -5,7 +5,13 @@
   display: grid;
   gap: var(--s-2);
   padding: var(--s-4) var(--s-5);
-  background: #14181c;
+  /* Rendering hint only: skip off-screen row paint so a long queue scrolls
+     instantly on iPad. Intrinsic size approximates the row box so layout is
+     stable; zero visual change. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 220px;
+  contain: content;
+  background: var(--surface);
   border: 1px solid var(--emerald);
   border-radius: var(--r-card, 12px);
   box-shadow:
@@ -18,7 +24,7 @@
 }
 
 .queue-row:hover {
-  background: #1c2127;
+  background: var(--surface-2);
   border-color: var(--emerald);
   box-shadow:
     inset 0 1px 0 var(--frost-stronger),
