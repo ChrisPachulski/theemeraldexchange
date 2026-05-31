@@ -41,7 +41,12 @@ export interface IptvDb {
 export function openIptvDb(filePath: string, serverDb?: Database.Database): IptvDb {
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
   const raw = new Database(filePath)
+  // Match the shared openDb() pragmas (server.db). Without busy_timeout a
+  // concurrent reader/writer — or the VACUUM-INTO backup snapshot — fails
+  // immediately with SQLITE_BUSY instead of briefly waiting for the lock.
+  raw.pragma('busy_timeout = 5000')
   raw.pragma('journal_mode = WAL')
+  raw.pragma('synchronous = NORMAL')
   raw.pragma('foreign_keys = ON')
 
   const applyMigrations = (overrideServerDb?: Database.Database): void => {

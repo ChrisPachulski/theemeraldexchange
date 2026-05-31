@@ -63,6 +63,28 @@ function vacuumIntoPath(srcPath: string, destPath: string): void {
   }
 }
 
+/**
+ * Open the freshly-written snapshot read-only and run PRAGMA integrity_check.
+ * A VACUUM INTO copy of a subtly-corrupt source — or a snapshot truncated by a
+ * full backup disk — is itself useless, but the copy still "succeeds". Verify
+ * it NOW, while the prior good snapshots are still around (we throw before
+ * pruning), instead of discovering the corruption at restore time. Throws on a
+ * non-'ok' result or an unreadable snapshot so the caller fails the pass.
+ */
+function verifySnapshot(destPath: string): void {
+  const snap = new Database(destPath, { readonly: true })
+  try {
+    const rows = snap.pragma('integrity_check') as Array<{ integrity_check: string }>
+    const ok = rows.length === 1 && rows[0]?.integrity_check === 'ok'
+    if (!ok) {
+      const detail = rows.map((r) => r.integrity_check).join('; ').slice(0, 200)
+      throw new Error(`integrity_check failed for ${path.basename(destPath)}: ${detail}`)
+    }
+  } finally {
+    snap.close()
+  }
+}
+
 /** Delete all but the newest `keep` snapshots matching `prefix-*.db`. */
 function pruneSnapshots(dir: string, prefix: string, keep: number): void {
   let entries: string[]
@@ -111,6 +133,7 @@ export function runScheduledBackup(now = new Date()): BackupResult {
   // same-stamp snapshot (only possible on a sub-ms repeat) before writing.
   fs.rmSync(serverDest, { force: true })
   vacuumIntoHandle(sdb.raw, serverDest)
+  verifySnapshot(serverDest)
   files.push(serverDest)
   pruneSnapshots(dir, 'server', env.DB_BACKUP_KEEP)
 
@@ -122,6 +145,7 @@ export function runScheduledBackup(now = new Date()): BackupResult {
     const iptvDest = path.join(dir, `iptv-${stamp}.db`)
     fs.rmSync(iptvDest, { force: true })
     vacuumIntoPath(env.IPTV_DB_PATH, iptvDest)
+    verifySnapshot(iptvDest)
     files.push(iptvDest)
     pruneSnapshots(dir, 'iptv', env.DB_BACKUP_KEEP)
   }
