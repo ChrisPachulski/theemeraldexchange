@@ -290,7 +290,7 @@ auth.post('/plex/check', async (c) => {
   // exact Plex casing (which is sometimes uppercase, sometimes lowercase
   // depending on how the account was created). roleFor lives in
   // sessionGate so the per-request reconcile uses the same definition.
-  const role = roleFor(user.username)
+  const role = roleFor(user.username, namespacedSub)
 
   // SHARED authZ gate (identical to /api/auth/apple): the invite/members
   // allowlist — NOT the Plex machineId — decides access. An existing
@@ -392,7 +392,10 @@ auth.post('/apple', async (c) => {
   // name from the email local-part for roleFor + the members row. The
   // sub (apple:<x>) is the stable key; the username is advisory chrome.
   const displayName = verified.email ? verified.email.split('@')[0] : namespacedSub
-  const role = roleFor(displayName)
+  // Pass the apple: sub so roleFor refuses to match the attacker-controlled
+  // email local-part against ADMINS (Plex usernames). An Apple admin must be
+  // listed explicitly in ADMIN_SUBS (by stable sub) instead.
+  const role = roleFor(displayName, namespacedSub)
 
   // SHARED authZ gate (identical to /plex/check).
   const authz = authorizeOrRedeem(namespacedSub, inviteCode, displayName, 'apple')
