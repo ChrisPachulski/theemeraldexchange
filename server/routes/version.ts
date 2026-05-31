@@ -9,10 +9,33 @@
 // safely return this body to anyone on the internet.
 
 import { Hono } from 'hono'
+import Database from 'better-sqlite3'
 import { env } from '../env.js'
 import { ensureServerId } from '../session.js'
 
 export const version = new Hono()
+
+type SchemaState = { present: false } | { current: number | null }
+
+function isMissingSchemaMigrationsTable(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('no such table: schema_migrations')
+}
+
+function schemaState(dbPath: string): SchemaState {
+  let db: Database.Database | null = null
+  try {
+    db = new Database(dbPath, { readonly: true, fileMustExist: true })
+    const row = db
+      .prepare('SELECT MAX(version) AS current FROM schema_migrations')
+      .get() as { current: number | null } | undefined
+    return { current: row?.current ?? null }
+  } catch (error) {
+    if (isMissingSchemaMigrationsTable(error)) return { current: null }
+    return { present: false }
+  } finally {
+    db?.close()
+  }
+}
 
 version.get('/', (c) => {
   const auth_modes: string[] = []
@@ -29,5 +52,10 @@ version.get('/', (c) => {
     auth_modes,
     /** Mirrors contract §12.3 — apps gate "you may pair" on this. */
     accepting_device_pairs: !!env.deviceTokenSecret,
+    schemas: {
+      iptv: schemaState(env.IPTV_DB_PATH),
+      exchange: schemaState(env.RECOMMENDER_DB_PATH),
+      media: schemaState(env.MEDIA_DB_PATH),
+    },
   })
 })
