@@ -504,6 +504,10 @@ export const env = {
       ? 'http://recommender:8000'
       : 'http://localhost:8000'),
   recommenderEventSecret,
+  // Recommender's SQLite DB, named exchange.db in the cross-service contract.
+  // Hono does not own or migrate it, but /api/version reports its migration
+  // level for Apple/client compatibility checks.
+  RECOMMENDER_DB_PATH: process.env.RECOMMENDER_DB_PATH ?? './data/exchange.db',
 
   useMediaCore,
   mediaCoreUrl:
