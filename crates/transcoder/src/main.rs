@@ -35,7 +35,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // where ffmpeg still lists h264_nvenc/h264_vaapi cleanly falls back to CPU
     // at boot instead of crash-looping every session on the first device-open
     // (§audit 1-13).
-    let available = encoders::detect(&ffmpeg_bin).await.validate(&ffmpeg_bin).await;
+    let available = encoders::detect(&ffmpeg_bin)
+        .await
+        .validate(&ffmpeg_bin)
+        .await;
     let preferred = HwEncoder::from_env();
     let (resolved, fell_back) = available.resolve(preferred);
     if fell_back {

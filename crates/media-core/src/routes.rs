@@ -58,14 +58,19 @@ pub fn router(state: AppState) -> Router {
         .route("/watch", get(get_watch).post(post_watch))
         .route("/scan", post(trigger_scan))
         .route("/scan/status", get(scan_status))
-        .layer(tower_http::timeout::TimeoutLayer::new(API_REQUEST_TIMEOUT));
+        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            API_REQUEST_TIMEOUT,
+        ));
 
     let stream_api = Router::new().route("/stream/{kind}/{id}", get(stream_file));
 
-    let api = timed_api.merge(stream_api).layer(middleware::from_fn_with_state(
-        state.clone(),
-        principal_layer,
-    ));
+    let api = timed_api
+        .merge(stream_api)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            principal_layer,
+        ));
 
     Router::new()
         .route("/health", get(health))
@@ -716,7 +721,11 @@ async fn stream_file(
 /// extensions (which require `Clone`); it is only ever inserted, never cloned,
 /// and exists solely to keep the permit alive until the body is fully sent.
 #[derive(Clone)]
-struct StreamPermit(std::sync::Arc<tokio::sync::OwnedSemaphorePermit>);
+struct StreamPermit(
+    // Held purely for its `Drop` — keeps the concurrency slot reserved until the
+    // response body is fully sent. Never read by design, so silence dead_code.
+    #[allow(dead_code)] std::sync::Arc<tokio::sync::OwnedSemaphorePermit>,
+);
 
 // ── Watch state ─────────────────────────────────────────────────────────
 
@@ -1351,7 +1360,7 @@ mod tests {
         let movie_id = seed_movie_for_file(&state, file_id).await;
 
         // A valid row (via the validated handler) + a forged orphan (direct).
-        post_watch(
+        let _ = post_watch(
             State(state.clone()),
             None,
             Query(WatchQuery {
