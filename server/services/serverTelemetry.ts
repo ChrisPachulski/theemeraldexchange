@@ -11,6 +11,7 @@
 
 import { env } from '../env.js'
 import { fetchWithTimeout } from './upstream.js'
+import { scrubTelemetryValue } from './telemetryPiiScrub.js'
 
 const GLITCHTIP_RELAY_TIMEOUT_MS = 2000
 
@@ -53,8 +54,11 @@ export async function reportServerEvent(event: ServerEvent): Promise<void> {
         },
         body: JSON.stringify({
           level: event.level ?? 'error',
-          message: event.message,
-          extra: event.context ?? {},
+          // §15.3: hold the relay payload to the SAME PII redaction as the SDK
+          // beforeSend path. The message may embed a stream-grant token / JWE,
+          // and a caller-supplied context could carry a redacted-key field.
+          message: scrubTelemetryValue(event.message) as string,
+          extra: event.context ? (scrubTelemetryValue(event.context) as Record<string, unknown>) : {},
           platform: 'node',
         }),
       },
