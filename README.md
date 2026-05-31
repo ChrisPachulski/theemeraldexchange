@@ -25,6 +25,15 @@ Four runtimes, one product:
 - **Recommender** (`recommender/`) — Python FastAPI + sqlite-vec scoring
   sidecar. Local-first: household signals never leave the NAS.
 
+Plus one out-of-band tool, not part of the product runtime:
+
+- **Autoloop** (`scripts/autoloop/`, state in `.autoloop/`) — an autonomous,
+  convergent codex mesh that improves the repo while you're away. Runs on
+  **codex** (flat-rate; never `claude -p`), gated by `.autoloop/CONTROL.md`
+  (`MASTER: ON/OFF`) with a `.autoloop/STOP` kill-switch. See
+  [scripts/autoloop/README.md](./scripts/autoloop/README.md). P0–P1 landed;
+  P2–P5 pending.
+
 ## Authentication & authorization
 
 There is no homegrown password store. Identity comes from three parallel
@@ -80,9 +89,12 @@ distributed server → client at boot. See [DEPLOY.md](./DEPLOY.md).
 
 ## Project docs
 
+- [TODO.md](./TODO.md) — high-level worklist; start here for what's outstanding.
+- [docs/ROADMAP-STATUS.md](./docs/ROADMAP-STATUS.md) — honest per-milestone state (M1–M6).
 - [PRODUCT.md](./PRODUCT.md) — audience, principles, scope.
 - [DESIGN.md](./DESIGN.md) — Impeccable design contract (palette, type, motion).
 - [DEPLOY.md](./DEPLOY.md) — NAS setup and ongoing deploys.
+- [docs/PRODUCTION-READINESS-2026-05-30.md](./docs/PRODUCTION-READINESS-2026-05-30.md) — review ledger.
 
 ## Roadmap
 
