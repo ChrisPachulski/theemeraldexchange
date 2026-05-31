@@ -8,6 +8,8 @@ codex-spend.jsonl
 run_loop.jsonl
 loop.pid
 state.json
+STATUS.json
+propagation_pending
 iteration-log.md
 dead-ends.md
 handoff.md
