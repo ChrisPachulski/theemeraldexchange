@@ -2,24 +2,26 @@
 // scripts/autoloop/supervisor.mjs
 //
 // The uppermost Node. launchd invokes it (~10 min). It:
-//   1. asks the governor GO / NO-GO (enforces every law),
-//   2. mirrors a live STATUS.json (so you can see what it's doing),
-//   3. on GO, runs ONE guarded codex tick (re-checking the guard right before
-//      the call — self-monitoring, never outsourced), logging codex token spend.
+//   1. asks the governor GO / NO-GO (enforces every law incl. the 24h deadline),
+//   2. mirrors a live STATUS.json,
+//   3. on GO, runs ONE bounded orchestrator cycle (P2: discover → worktree fix
+//      → commit → push branch; never main, never deploy),
+//   4. logs errors/issues to .autoloop/errors.log AND emails them,
+//   5. on the 24h deadline, fires the kill-switch (belt to the killer agent).
 //
-// P1 scope: this proves the governed pipeline end-to-end (governor → guard →
-// codex → telemetry) with the orchestrator/team mesh (P2+) not yet wired. The
-// tick is a cheap heartbeat; real discovery/execution lands in later phases.
-// Everything stays inert while CONTROL.md has MASTER: OFF.
+// Inert while CONTROL.md has MASTER: OFF.
 
 import { appendFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { Node } from './node-state.mjs';
 import { evaluate } from './governor.mjs';
 import { checkGuard } from './guard.mjs';
-import { runCodex } from './codex.mjs';
+import { runOrchestratorTick } from './orchestrator.mjs';
+import { notify } from './notify.mjs';
 
-const AUTOLOOP = process.env.AUTOLOOP_DIR || path.join(process.cwd(), '.autoloop');
+const REPO = process.cwd();
+const AUTOLOOP = process.env.AUTOLOOP_DIR || path.join(REPO, '.autoloop');
 const MESH = path.join(AUTOLOOP, 'mesh');
 
 function writeStatus(obj) {
@@ -27,18 +29,32 @@ function writeStatus(obj) {
   writeFileSync(path.join(AUTOLOOP, 'STATUS.json'),
     JSON.stringify({ ...obj, ts: new Date().toISOString() }, null, 2));
 }
-
-function logSpend(tokens) {
-  if (!tokens?.total_tokens) return;
-  appendFileSync(path.join(AUTOLOOP, 'codex-spend.jsonl'),
-    JSON.stringify({ ts: Math.floor(Date.now() / 1000), tokens: tokens.total_tokens }) + '\n');
+function logError(line) {
+  mkdirSync(AUTOLOOP, { recursive: true });
+  appendFileSync(path.join(AUTOLOOP, 'errors.log'), `${new Date().toISOString()} ${line}\n`);
 }
+function emailIssue(subject, body) {
+  logError(`${subject} :: ${body}`.replace(/\n/g, ' '));
+  notify({ subject: `[autoloop] ${subject}`, body, channels: ['email'], isError: true });
+}
+
+// Actions from the orchestrator that represent an error/issue worth emailing.
+const ISSUE_ACTIONS = new Set(['discovery_failed', 'worktree_failed', 'commit_failed', 'aborted']);
 
 async function main() {
   const sup = new Node({ meshDir: MESH, tier: 'supervisor', nodeId: 'sup-main' });
-  sup.init({ objective: 'govern + drive the autonomous improvement mesh' });
+  sup.init({ objective: 'govern + drive the autonomous improvement mesh (first run)' });
 
   const decision = evaluate(AUTOLOOP);
+
+  // 24h hard deadline (fast path; the killer launchd agent is the guarantee).
+  if (decision.reason === 'deadline_24h') {
+    writeStatus({ state: 'DEADLINE — firing kill-switch' });
+    try { execFileSync('/bin/bash', [path.join(REPO, 'scripts/autoloop/kill-switch.sh'), 'deadline_24h-via-supervisor'], { timeout: 60000 }); } catch { /* killer agent will still fire */ }
+    process.stdout.write('DEADLINE kill-switch fired\n');
+    return 0;
+  }
+
   writeStatus({
     state: decision.go ? `running ${decision.mode}` : `idle (${decision.reason})`,
     decision: { go: decision.go, mode: decision.mode, reason: decision.reason, posture: decision.posture },
@@ -46,43 +62,38 @@ async function main() {
     telemetry: decision.guard?.telemetry ?? null,
   });
 
-  if (!decision.go) {
-    sup.update({ progress: [`NO-GO: ${decision.reason}`] });
-    process.stdout.write(`NO-GO ${decision.reason}\n`);
-    return 0;
-  }
+  if (!decision.go) { process.stdout.write(`NO-GO ${decision.reason}\n`); return 0; }
 
-  // GUARDED TICK — re-check the guard immediately before spending anything.
+  // Re-check the guard immediately before doing anything (self-monitoring).
   const pre = checkGuard({ autoloopDir: AUTOLOOP });
-  if (pre.stop) {
-    sup.update({ progress: [`aborted pre-tick: ${pre.reasons.join('; ')}`] });
-    process.stdout.write(`ABORT ${pre.reasons.join('; ')}\n`);
-    return 0;
+  if (pre.stop) { process.stdout.write(`ABORT ${pre.reasons.join('; ')}\n`); return 0; }
+
+  let result;
+  try {
+    result = await runOrchestratorTick({ autoloopDir: AUTOLOOP, repo: REPO, posture: decision.posture });
+  } catch (e) {
+    emailIssue('orchestrator threw', e.stack || e.message);
+    writeStatus({ state: `error: ${e.message}` });
+    return 1;
   }
 
-  // P1 heartbeat tick (cheap, read-only). Effort scales down under throttle.
-  const effort = decision.posture.throttle ? 'low' : 'high';
-  const r = await runCodex({
-    prompt: 'Autoloop liveness check. Reply with exactly: AUTOLOOP_TICK_OK',
-    effort,
-    write: false,
-  });
-  logSpend(r.tokens);
+  sup.update({ progress: [`tick: ${result.action}${result.branch ? ' ' + result.branch : ''}`] });
+  writeStatus({ state: `tick-complete ${decision.mode}`, result, posture: decision.posture });
 
-  sup.update({
-    progress: [`tick: codex ok=${r.ok} effort=${effort} tokens=${r.tokens?.total_tokens ?? '?'} rateLimited=${r.rateLimited}`],
-  });
-  writeStatus({
-    state: `tick-complete ${decision.mode}`,
-    tick: { ok: r.ok, output: r.output, effort, tokens: r.tokens, rateLimited: r.rateLimited },
-    posture: decision.posture,
-  });
-  process.stdout.write(`TICK ok=${r.ok} output=${JSON.stringify(r.output)} tokens=${r.tokens?.total_tokens ?? '?'}\n`);
+  // Email errors/issues; desktop-notify successful branches.
+  if (ISSUE_ACTIONS.has(result.action)) {
+    emailIssue(`tick issue: ${result.action}`, JSON.stringify(result, null, 2));
+  } else if (result.action === 'branch_created') {
+    if (!result.pushed) emailIssue('branch push failed', `${result.branch}\n${result.pushErr}`);
+    else notify({ subject: `[autoloop] new branch ${result.branch}`, body: result.pick?.title || '', channels: ['osascript'] });
+  }
+  process.stdout.write(`TICK ${result.action}${result.branch ? ' ' + result.branch : ''}\n`);
   return 0;
 }
 
 main().then((c) => process.exit(c || 0)).catch((e) => {
-  writeStatus({ state: `error: ${e.message}` });
+  logError(`supervisor fatal: ${e.stack || e.message}`);
+  notify({ subject: '[autoloop] supervisor fatal error', body: e.stack || e.message, channels: ['email'], isError: true });
   process.stderr.write(`supervisor error: ${e.stack}\n`);
   process.exit(1);
 });

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The "no matter what" 24h kill. Fires at the absolute wall-clock deadline
+     (StartCalendarInterval survives sleep/reboot). kill-switch.sh is idempotent
+     and unloads BOTH agents when it fires. Rendered by arm.sh. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.eex.autoloop-killer</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__REPO__/scripts/autoloop/kill-switch.sh</string>
+    <string>24h-deadline</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__PATH__</string>
+  </dict>
+  <!-- Absolute deadline (local time). Recurs daily at this minute; kill-switch
+       is idempotent and unloads itself on first fire, so re-fires never happen. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Month</key><integer>__MONTH__</integer>
+    <key>Day</key><integer>__DAY__</integer>
+    <key>Hour</key><integer>__HOUR__</integer>
+    <key>Minute</key><integer>__MINUTE__</integer>
+  </dict>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>__REPO__/.autoloop/killer.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__REPO__/.autoloop/killer.err.log</string>
+</dict>
+</plist>
