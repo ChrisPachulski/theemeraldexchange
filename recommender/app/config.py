@@ -129,6 +129,19 @@ def load() -> Config:
             "(the production default). Provision the secret, or set "
             "RECOMMENDER_INTERNAL_PRINCIPAL_MODE=off to explicitly opt out."
         )
+    # /score AND every /events/* endpoint depend on the event secret
+    # (require_event_secret 503s without it), so in production an unset secret
+    # makes the whole recommender inert — and the backend then silently degrades
+    # every user to trending. Fail fast at startup so the misconfiguration is a
+    # loud boot crash, not a silent per-request outage. (The compose default
+    # leaves RECOMMENDER_EVENT_SECRET empty, so this is a real first-deploy trap.)
+    event_secret = _event_secret()
+    if os.environ.get("NODE_ENV") == "production" and event_secret is None:
+        raise ValueError(
+            "RECOMMENDER_EVENT_SECRET must be set in production: /score and all "
+            "/events/* endpoints 503 without it, so the recommender is inert. "
+            "Provision the secret (shared with the Hono backend)."
+        )
     return Config(
         db_path=_path("RECOMMENDER_DB_PATH", "./data/exchange.db"),
         migrations_dir=_path("RECOMMENDER_MIGRATIONS_DIR", str(Path(__file__).resolve().parent.parent / "migrations")),
@@ -136,7 +149,7 @@ def load() -> Config:
         port=int(os.environ.get("RECOMMENDER_PORT", "8000")),
         tmdb_api_key=os.environ.get("TMDB_API_KEY") or None,
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY") or None,
-        event_secret=_event_secret(),
+        event_secret=event_secret,
         internal_principal_secret=internal_principal_secret,
         internal_principal_mode=internal_principal_mode,
         embed_model=os.environ.get("RECOMMENDER_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2"),
