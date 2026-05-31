@@ -12,7 +12,7 @@ vi.mock('../services/internalPrincipal.js', () => ({
 }))
 
 vi.mock('../services/upstream.js', () => ({
-  fetchWithTimeout: vi.fn(),
+  fetchStreamWithConnectTimeout: vi.fn(),
   LAN_TIMEOUT_MS: 5000,
 }))
 
@@ -33,11 +33,11 @@ vi.mock('../services/recommenderCaller.js', () => ({
 }))
 
 import { media } from './media.js'
-import { fetchWithTimeout } from '../services/upstream.js'
+import { fetchStreamWithConnectTimeout } from '../services/upstream.js'
 import { mintInternalPrincipal } from '../services/internalPrincipal.js'
 import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
 
-const mockFetch = vi.mocked(fetchWithTimeout)
+const mockFetch = vi.mocked(fetchStreamWithConnectTimeout)
 const mockMint = vi.mocked(mintInternalPrincipal)
 const mockCaller = vi.mocked(recommenderCallerFromSession)
 
