@@ -42,6 +42,57 @@
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 
+/* Enter + exit motion via @starting-style + allow-discrete (P0.4).
+   The native <dialog> joins/leaves the top layer, so `overlay` and
+   `display` are transitioned with `allow-discrete` to keep the element
+   painted while opacity/transform tween. Backdrop cross-fades with it.
+   Gated under no-preference; reduced-motion gets the instant hard swap
+   the dialog already had (no transition, no keyframe replacement). */
+@media (prefers-reduced-motion: no-preference) {
+  .detail {
+    transition:
+      overlay 160ms var(--ease) allow-discrete,
+      display 160ms var(--ease) allow-discrete;
+  }
+
+  .detail::backdrop {
+    transition: opacity 160ms var(--ease);
+    opacity: 1;
+  }
+
+  @starting-style {
+    .detail::backdrop { opacity: 0; }
+  }
+
+  /* Closed state — animate OUT (recon flagged abrupt exits). */
+  .detail:not([open])::backdrop {
+    opacity: 0;
+  }
+
+  /* Drive the panel via transition instead of the one-shot keyframe so it
+     can also play in reverse on close. */
+  .detail__panel {
+    animation: none;
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    transition:
+      opacity 160ms var(--ease),
+      transform 160ms var(--ease);
+  }
+
+  @starting-style {
+    .detail__panel {
+      opacity: 0;
+      transform: translateY(8px) scale(0.985);
+    }
+  }
+
+  .detail:not([open]) .detail__panel {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+}
+
 /* Backdrop image bleeds across the top, fading out so the hero text
    sits cleanly on the panel surface. */
 .detail__backdrop {
