@@ -39,6 +39,30 @@
   outline-offset: 2px;
 }
 
+/* Optimistic-pending state (spec P0.5). When a like/dislike write is in flight
+   the group is marked aria-busy / a dot carries data-pending; we drop the row
+   to the subtle text weight (token swap only, no motion) so the tap reads as
+   "settling" and reverts cleanly if the underlying mutation rejects. Driven by
+   useOptimisticMutation in the feedback caller — purely additive, inert when no
+   write is pending. */
+.feedback-dots[aria-busy='true'] {
+  opacity: 1;
+}
+
+.feedback-dot[data-pending='true'],
+.feedback-dots[aria-busy='true'] .feedback-dot {
+  color: var(--text-subtle);
+  cursor: progress;
+}
+
+.feedback-dot[data-pending='true'].feedback-dot--set,
+.feedback-dots[aria-busy='true'] .feedback-dot--set {
+  /* Keep the filled puck visible while pending, just at the muted weight so the
+     in-flight signal is legible without committing the full --text emphasis. */
+  background: var(--text-subtle);
+  box-shadow: 0 0 8px -1px var(--text-subtle);
+}
+
 .feedback-dot--red {
   color: var(--danger, oklch(0.65 0.22 25));
 }
