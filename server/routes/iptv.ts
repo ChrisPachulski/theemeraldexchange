@@ -5,11 +5,17 @@
 // tries to start a stream.
 
 import { Hono, type Context } from 'hono'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { Readable } from 'node:stream'
-import { gzipSync } from 'node:zlib'
+import { gzip } from 'node:zlib'
+import { promisify } from 'node:util'
+
+// Async gzip so a ~28 MB EPG-grid compression runs on the libuv threadpool
+// instead of blocking the event loop (and every other in-flight request) for
+// the full synchronous compress.
+const gzipAsync = promisify(gzip)
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { getAccountInfo, credsFromEnv } from '../services/xtream.js'
 import { syncOnce, type SyncResult } from '../services/iptvSync.js'
@@ -210,7 +216,7 @@ iptv.get('/epg/channel/:channelId', requireAuth, (c) => {
   return c.json(epgChannelWindow(iptvDb(), channelId, from, to))
 })
 
-iptv.get('/epg/grid', requireAuth, (c) => {
+iptv.get('/epg/grid', requireAuth, async (c) => {
   const from = c.req.query('from') ?? new Date().toISOString()
   const to = c.req.query('to') ?? new Date(Date.now() + 4 * 3600_000).toISOString()
   const rawCategoryId = c.req.query('categoryId')
@@ -230,7 +236,7 @@ iptv.get('/epg/grid', requireAuth, (c) => {
   // plain JSON for clients that don't, or for small bodies.
   const acceptsGzip = (c.req.header('accept-encoding') ?? '').toLowerCase().includes('gzip')
   if (acceptsGzip && json.length > 64 * 1024) {
-    return c.body(gzipSync(json), 200, {
+    return c.body(await gzipAsync(json), 200, {
       'Content-Type': 'application/json; charset=utf-8',
       'Content-Encoding': 'gzip',
       Vary: 'Accept-Encoding',
@@ -265,7 +271,20 @@ function userOf(c: Context<Env>): { sub: string } {
 }
 
 function escapeM3uAttr(value: string): string {
-  return value.replace(/"/g, '\'')
+  // Provider-controlled fields (channel name, group title, tvg-id/logo) are
+  // interpolated into a quoted #EXTINF attribute and the trailing display name.
+  // Collapse CR/LF/tab (which would otherwise inject new playlist lines, e.g. a
+  // rogue #EXTINF + stream URL) to a space and neutralize the attribute quote.
+  return value.replace(/[\r\n\t]+/g, ' ').replace(/"/g, '\'').trim()
+}
+
+// Constant-time secret comparison (length-prefixed) so a shared-secret check
+// doesn't leak via response timing. Mirrors how the other auth secrets compare.
+function secretsEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a)
+  const bb = Buffer.from(b)
+  if (ab.length !== bb.length) return false
+  return timingSafeEqual(ab, bb)
 }
 
 iptv.post('/playlist/token', requireAuth, async (c) => {
@@ -362,9 +381,9 @@ iptv.get('/playlist.m3u', (c) => {
     })
     const url = `${baseUrl}/api/iptv/stream/live/${ch.stream_id}.ts?t=${chToken}`
     const groupTitle = ch.category_id != null ? (catNames.get(ch.category_id) ?? 'Other') : 'Other'
-    const tvgId = ch.epg_channel_id ?? ''
-    const tvgLogo = ch.stream_icon ?? ''
-    lines.push(`#EXTINF:-1 tvg-id="${tvgId}" tvg-name="${escapeM3uAttr(ch.name)}" tvg-logo="${tvgLogo}" group-title="${escapeM3uAttr(groupTitle)}",${ch.name}`)
+    const tvgId = escapeM3uAttr(ch.epg_channel_id ?? '')
+    const tvgLogo = escapeM3uAttr(ch.stream_icon ?? '')
+    lines.push(`#EXTINF:-1 tvg-id="${tvgId}" tvg-name="${escapeM3uAttr(ch.name)}" tvg-logo="${tvgLogo}" group-title="${escapeM3uAttr(groupTitle)}",${escapeM3uAttr(ch.name)}`)
     lines.push(url)
   }
   return new Response(lines.join('\n') + '\n', {
@@ -1198,7 +1217,7 @@ function rememberJob(job: Job): void {
 
 iptv.get('/export/recommender', (c) => {
   const secret = c.req.header('x-iptv-export-secret') ?? ''
-  if (!env.IPTV_RECOMMENDER_EXPORT_SECRET || secret !== env.IPTV_RECOMMENDER_EXPORT_SECRET) {
+  if (!env.IPTV_RECOMMENDER_EXPORT_SECRET || !secretsEqual(secret, env.IPTV_RECOMMENDER_EXPORT_SECRET)) {
     return c.json({ error: 'forbidden' }, 403)
   }
 
