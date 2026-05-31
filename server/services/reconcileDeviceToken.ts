@@ -16,6 +16,7 @@
 import { serverDb } from './serverDb.js'
 import type { DeviceTokenClaims } from '../session.js'
 import { roleFor } from './sessionGate.js'
+import { memberStatus } from './membership.js'
 
 export type ReconciledDeviceSession = DeviceTokenClaims & {
   /** Stable identifier for /api/me. Device tokens don't carry a
@@ -36,6 +37,23 @@ export function reconcileDeviceToken(
   appVersion: string | null,
 ): ReconciledDeviceSession | null {
   const db = serverDb().raw
+
+  // AuthZ gate — IDENTICAL to the cookie path's reconcileSession. The Bearer
+  // path previously trusted the 180-day token claim and never re-checked the
+  // allowlist, so a member revoked via /api/admin/members who only used the
+  // native app kept full access until the token's TTL. Enforce memberStatus on
+  // every Bearer request: a revoked/never-member sub is denied AND its device
+  // tokens are cascade-revoked so the rejection persists. ADMIN_SUBS owners
+  // short-circuit to 'allowed', so the operator is never locked out.
+  const status = memberStatus(claims.sub)
+  if (status !== 'allowed') {
+    try {
+      cascadeRevokeForSub(claims.sub, status === 'revoked' ? 'member_revoked' : 'not_member')
+    } catch (e) {
+      console.error('[reconcileDeviceToken] cascade-revoke failed for sub=%s: %s', claims.sub, e)
+    }
+    return null
+  }
 
   // Read device_name + apply role recompute. roleFor needs a username
   // and device tokens don't carry one; we use sub-as-username for the

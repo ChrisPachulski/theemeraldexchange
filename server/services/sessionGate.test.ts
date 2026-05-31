@@ -11,6 +11,7 @@ vi.mock('../env.js', async () => {
     env: {
       ...actual.env,
       admins: ['admin-user'],
+      adminSubs: ['apple:owner-sub'],
       plexServerId: 'home-machine-id',
     },
   }
@@ -76,6 +77,23 @@ describe('roleFor', () => {
   it('demotes any username not in ADMINS', () => {
     expect(roleFor('someone')).toBe('user')
     expect(roleFor('')).toBe('user')
+  })
+  it('refuses to promote an apple/local identity whose displayName matches ADMINS', () => {
+    // Cross-provider escalation guard: Apple displayName is the attacker-chosen
+    // email local-part and a passkey handle is self-chosen — neither may match
+    // the Plex-username ADMINS list, or any invited apple:/local: user could
+    // pick a colliding name and become admin.
+    expect(roleFor('admin-user', 'apple:001')).toBe('user')
+    expect(roleFor('admin-user', 'local:01HZXABCDEF')).toBe('user')
+  })
+  it('still promotes a plex (and legacy bare-numeric) identity matching ADMINS', () => {
+    expect(roleFor('admin-user', 'plex:42')).toBe('admin')
+    expect(roleFor('admin-user', '42')).toBe('admin')
+  })
+  it('promotes any provider sub listed in ADMIN_SUBS, regardless of username', () => {
+    // Owner bootstrap / explicit admin-by-stable-sub works cross-provider and
+    // never depends on a guessable username.
+    expect(roleFor('not-an-admin-name', 'apple:owner-sub')).toBe('admin')
   })
 })
 

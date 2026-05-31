@@ -101,7 +101,22 @@ export function _primeSessionGateCache(
   })
 }
 
-export function roleFor(username: string): Role {
+export function roleFor(username: string, sub?: string): Role {
+  // Admin-by-sub: the stable, provider-scoped owner/admin allowlist. An exact
+  // namespaced-sub match (e.g. plex:494190801, apple:001234...) — not guessable
+  // from a free-text username/email — so this is the safe way to grant admin to
+  // a non-Plex identity.
+  if (sub && (env.adminSubs ?? []).includes(sub)) return 'admin'
+  // Legacy admin-by-Plex-username (env.admins) must NEVER promote a non-Plex
+  // identity. ADMINS is documented as *Plex usernames*; for Apple the username
+  // is `verified.email.split('@')[0]` (attacker-chosen) and for passkeys it is
+  // a self-chosen handle — matching either against ADMINS would let any invited
+  // apple:/local: user whose name collides with an admin entry escalate to
+  // admin, and reconcileSession would re-grant it on every request. Block the
+  // username match for the two non-Plex providers; plex: and legacy bare-numeric
+  // Plex subs keep the historical behavior. Apple/passkey admins must instead be
+  // named explicitly by stable sub in ADMIN_SUBS (handled above).
+  if (sub && (sub.startsWith('apple:') || sub.startsWith('local:'))) return 'user'
   const lower = username.toLowerCase()
   return env.admins.some((a) => a.toLowerCase() === lower) ? 'admin' : 'user'
 }
@@ -121,7 +136,10 @@ export function roleFor(username: string): Role {
  * override applies for the lifetime of this request only.
  */
 export async function reconcileSession(session: Session): Promise<Session | null> {
-  const role = roleFor(session.username)
+  // Pass the sub so the provider guard applies on every request — an apple:/
+  // local: session can never be re-escalated to admin via an ADMINS username
+  // collision, and ADMIN_SUBS admins keep admin without a username match.
+  const role = roleFor(session.username, session.sub)
 
   // AuthZ gate — the FIRST and AUTHORITATIVE decision, before any
   // provider-specific work. With the invite/members model the per-request

@@ -7,8 +7,10 @@
 //   POST /api/auth/device/poll   — poll the PIN. When the user has
 //                                  authorized in their phone/computer
 //                                  browser, exchange for identity,
-//                                  verify server membership (same gate
-//                                  as the cookie /plex/check), mint a
+//                                  enforce the invite/members allowlist
+//                                  (same authZ gate as the cookie
+//                                  /plex/check — an optional invite_code
+//                                  in the body is redeemed), mint a
 //                                  device-token JWE bound to the
 //                                  client-supplied device_id +
 //                                  device_name, persist a row in
@@ -21,14 +23,8 @@
 // semantics are identical to the cookie path. No new Plex API surface.
 
 import { Hono, type Context } from 'hono'
-import { env } from '../env.js'
-import {
-  buildAuthUrl,
-  checkPin,
-  createPin,
-  getUser,
-  listResources,
-} from '../plex.js'
+import { buildAuthUrl, checkPin, createPin, getUser } from '../plex.js'
+import { authorizeOrRedeem } from '../auth.js'
 import { roleFor } from '../services/sessionGate.js'
 import {
   mintDeviceToken,
@@ -104,6 +100,8 @@ device.post('/poll', async (c) => {
     device_id?: unknown
     device_name?: unknown
     device_platform?: unknown
+    invite_code?: unknown
+    inviteCode?: unknown
   } | null
 
   const pinIdRaw =
@@ -121,32 +119,37 @@ device.post('/poll', async (c) => {
   if (!deviceId) return c.json({ error: 'missing_device_id' }, 400)
   if (!deviceName) return c.json({ error: 'missing_device_name' }, 400)
   if (!devicePlatform) return c.json({ error: 'missing_device_platform' }, 400)
+  const inviteCode =
+    typeof body?.invite_code === 'string'
+      ? body.invite_code
+      : typeof body?.inviteCode === 'string'
+        ? body.inviteCode
+        : undefined
 
   const pin = await checkPin(pinId)
   if (!pin.authToken) return c.json({ status: 'pending' })
 
   const user = await getUser(pin.authToken)
 
-  // Server-membership gate — same as the cookie /plex/check path. If
-  // PLEX_SERVER_ID is unset we accept any authenticated Plex user
-  // (first-deploy bootstrap mode); production envs reject the boot
-  // without PLEX_SERVER_ID anyway, so reaching this branch in prod
-  // means the operator explicitly set ALLOW_UNSCOPED_PLEX_LOGIN=1.
-  if (env.plexServerId) {
-    const resources = await listResources(pin.authToken)
-    const isMember = resources.some(
-      (r) => r.provides.includes('server') && r.clientIdentifier === env.plexServerId,
-    )
-    if (!isMember) {
-      return c.json({ status: 'denied', reason: 'not_a_server_member' }, 403)
-    }
-  }
-
-  const role: Role = roleFor(user.username)
   // Namespaced sub per §8.2 — device tokens always carry the prefixed
   // form (no legacy grace-window normalization needed for new mints).
   const sub = `plex:${String(user.id)}`
   const authMode: AuthMode = 'plex'
+
+  // SHARED authZ gate — IDENTICAL to the cookie /plex/check path. The
+  // invite/members allowlist (NOT live Plex-server membership) decides
+  // access: an existing member is admitted, an unredeemed invite in the
+  // body mints membership, otherwise 403. Without this, the device-pair
+  // flow re-opened the invitation-only gate the cookie path closed — any
+  // Plex *server* member (even one never invited) could mint a 180-day
+  // Bearer token, and a revoked member could mint a fresh one. ADMIN_SUBS
+  // owners short-circuit memberStatus, so the operator is never locked out.
+  const authz = authorizeOrRedeem(sub, inviteCode, user.username, 'plex')
+  if (!authz.allowed) {
+    return c.json({ status: 'denied', reason: 'no_invite' }, 403)
+  }
+
+  const role: Role = roleFor(user.username, sub)
 
   const serverId = ensureServerId()
 

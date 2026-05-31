@@ -35,11 +35,36 @@ describe('GET /api/devices/self', () => {
     _resetDeviceKeyForTests()
     // Wipe the DB between tests; the migrator re-applies on next access.
     const db = serverDb().raw
-    db.exec('DELETE FROM device_token_revocations; DELETE FROM device_tokens;')
+    db.exec(
+      'DELETE FROM device_token_revocations; DELETE FROM device_tokens; DELETE FROM members;',
+    )
   })
 
   afterEach(() => {
     closeServerDb()
+  })
+
+  it('rejects a Bearer token whose member was revoked — closes the 180-day access window', async () => {
+    const token = await mintDeviceToken(SAMPLE)
+    // First request succeeds: an un-bootstrapped install lets the allowlist
+    // fall open, so a freshly-paired device works.
+    const ok = await app.request('/api/devices/self', { headers: bearerHeaders(token) })
+    expect(ok.status).toBe(200)
+    // Operator revokes the member via the allowlist.
+    serverDb()
+      .raw.prepare(
+        `INSERT INTO members (sub, display_name, role, auth_mode, joined_at, revoked_at)
+         VALUES (?, 'Revoked User', 'user', 'plex', datetime('now'), datetime('now'))`,
+      )
+      .run(SAMPLE.sub)
+    // The very NEXT Bearer request is denied — not honored until the 180-day
+    // token TTL — and the token is cascade-revoked so it stays dead.
+    const denied = await app.request('/api/devices/self', { headers: bearerHeaders(token) })
+    expect(denied.status).toBe(401)
+    const rev = serverDb()
+      .raw.prepare('SELECT COUNT(*) AS n FROM device_token_revocations')
+      .get() as { n: number }
+    expect(rev.n).toBeGreaterThan(0)
   })
 
   it('lists devices owned by the caller and excludes other subs', async () => {
