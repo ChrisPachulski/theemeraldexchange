@@ -9,6 +9,7 @@ run_loop.jsonl
 loop.pid
 supervisor.lock
 DEADLINE
+notify.env
 errors.log
 claude-baseline.json
 state.json
