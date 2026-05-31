@@ -840,6 +840,13 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
   const v = checkToken(c, 'remux', streamId)
   if (!v.ok) return v.resp
 
+  // Keep the concurrency slot acquired at grant alive on every manifest poll.
+  // AVPlayer re-fetches index.m3u8 periodically; without this the 'remux' slot
+  // is idle-swept after ~30s and the IPTV_MAX_CONCURRENT_STREAMS cap is silently
+  // defeated — every other delivery kind heartbeats its slot, remux did not, so
+  // concurrent AVPlayer viewers each held an unaccounted upstream connection.
+  streamConcurrency().heartbeatByResource(v.sub, 'remux', streamId)
+
   const key = remuxKey(streamId, v.sub)
   let entry = liveRemuxIndex.get(key)
   if (entry && !isRemuxSessionActive(entry.sessionId)) {
@@ -911,6 +918,10 @@ iptv.get('/stream/live/:streamId/remux/seg', (c) => {
   if (!fs.existsSync(filePath)) return c.json({ error: 'segment_gone' }, 404)
 
   heartbeatRemuxSession(entry.sessionId)
+  // Refresh the concurrency slot on each segment fetch too, so a steadily-
+  // playing AVPlayer that polls segments faster than the manifest still keeps
+  // its slot accounted against the cap.
+  streamConcurrency().heartbeatByResource(claims.sub, 'remux', streamId)
   const stream = fs.createReadStream(filePath)
   return new Response(Readable.toWeb(stream) as unknown as ReadableStream, {
     status: 200,

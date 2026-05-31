@@ -62,6 +62,51 @@ export async function fetchWithTimeout(
   }
 }
 
+/**
+ * Streaming-safe upstream fetch. Unlike {@link fetchWithTimeout}, this does NOT
+ * buffer the body with `arrayBuffer()` and does NOT impose a whole-transfer
+ * deadline. It bounds only TIME-TO-FIRST-BYTE (until the response headers
+ * arrive) with an AbortController, then returns the live Response so the caller
+ * can pipe `response.body` straight through.
+ *
+ * This is the correct wrapper for the media proxy: routing multi-GB direct-play
+ * (or multi-hour) streams through the buffering wrapper loaded the entire file
+ * into the Node heap before a byte reached the client, and the 15s body deadline
+ * truncated any transfer that legitimately took longer — both negate media-
+ * core's own design of separating streaming routes from its request timeout.
+ *
+ * On connect/DNS failure or a TTFB timeout it synthesizes a 504 (same shape as
+ * fetchWithTimeout) so the route's existing non-ok handling still applies.
+ */
+export async function fetchStreamWithConnectTimeout(
+  url: string | URL,
+  init: RequestInit,
+  connectTimeoutMs: number,
+  label: string,
+): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), connectTimeoutMs)
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal })
+    // Headers are in — cancel the TTFB deadline so the body can stream for as
+    // long as the transfer legitimately takes (large file / slow client). A
+    // client disconnect cancels the returned body stream, which propagates back
+    // to this upstream fetch and frees the media-core connection.
+    clearTimeout(timer)
+    return response
+  } catch (err) {
+    clearTimeout(timer)
+    const name = (err as { name?: string }).name
+    const message = err instanceof Error ? err.message : String(err)
+    const reason = name === 'AbortError' ? 'upstream_timeout' : 'upstream_unreachable'
+    console.error(`[upstream] ${label} ${reason}: ${message}`)
+    return new Response(JSON.stringify({ error: reason, service: label, message }), {
+      status: 504,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+}
+
 export async function fetchJsonWithTimeout(
   url: string | URL,
   init: RequestInit,

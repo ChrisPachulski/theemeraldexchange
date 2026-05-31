@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { requireAuth, type Env } from '../middleware/auth.js'
 import { env } from '../env.js'
-import { fetchWithTimeout, LAN_TIMEOUT_MS } from '../services/upstream.js'
+import { fetchStreamWithConnectTimeout, LAN_TIMEOUT_MS } from '../services/upstream.js'
 import { mintInternalPrincipal } from '../services/internalPrincipal.js'
 import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
 
@@ -67,7 +67,11 @@ media.all('/*', async (c) => {
     if (ct) headers['content-type'] = ct
   }
 
-  const r = await fetchWithTimeout(
+  // Stream the upstream body straight through. LAN_TIMEOUT_MS bounds only
+  // time-to-first-byte here (media-core answering with headers), NOT the body
+  // transfer — a direct-play of a multi-GB file must neither be buffered into
+  // heap nor truncated by a body deadline.
+  const r = await fetchStreamWithConnectTimeout(
     upstream,
     { method, headers, ...(hasBody && body !== undefined ? { body } : {}) },
     LAN_TIMEOUT_MS,
