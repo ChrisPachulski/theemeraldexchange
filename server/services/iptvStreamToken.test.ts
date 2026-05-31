@@ -250,6 +250,43 @@ describe('generateUlid', () => {
     const ids = new Set(Array.from({ length: 1000 }, () => generateUlid()))
     expect(ids.size).toBe(1000)
   })
+
+  // Regression: a current real-world millisecond timestamp needs ~41 bits, which
+  // overflows JS 32-bit bitwise math. The old `now & 0xffffffffffff` masked the
+  // value to a NEGATIVE int32 and made writeUIntBE throw on every call. Pinning a
+  // real-world ms value asserts the function does not throw and stays valid.
+  it('does not throw for a present-day 41-bit millisecond timestamp', () => {
+    const realNow = 1_780_000_000_000 // ~2026-05, > 2**32, the exact regime that broke
+    expect(realNow).toBeGreaterThan(0xffffffff)
+    const id = generateUlid(realNow)
+    expect(id.length).toBe(26)
+    expect(/^[0-9A-HJKMNP-TV-Z]{26}$/.test(id)).toBe(true)
+  })
+
+  it('uses the injected clock so default Date.now() callers are unaffected', () => {
+    const id = generateUlid() // no arg -> Date.now()
+    expect(id.length).toBe(26)
+    expect(/^[0-9A-HJKMNP-TV-Z]{26}$/.test(id)).toBe(true)
+  })
+
+  it('encodes the timestamp into the 10-char prefix (later time => lexically >= prefix)', () => {
+    const early = generateUlid(1_700_000_000_000)
+    const late = generateUlid(1_800_000_000_000)
+    // The random suffix differs, but the time prefix must be monotonic by ms.
+    expect(early.slice(0, 10) < late.slice(0, 10)).toBe(true)
+  })
+
+  it('handles the boundary value 2**48 - 1 without throwing', () => {
+    const maxTs = 281_474_976_710_655 // 2**48 - 1, the largest writeUIntBE(6) accepts
+    const id = generateUlid(maxTs)
+    expect(id.length).toBe(26)
+    expect(/^[0-9A-HJKMNP-TV-Z]{26}$/.test(id)).toBe(true)
+  })
+
+  it('produces an identical prefix for the same injected timestamp', () => {
+    const ts = 1_780_123_456_789
+    expect(generateUlid(ts).slice(0, 10)).toBe(generateUlid(ts).slice(0, 10))
+  })
 })
 
 // ---------------------------------------------------------------------------
