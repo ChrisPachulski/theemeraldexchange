@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useDialogDismiss } from '../../lib/useDialogDismiss'
 import './ConfirmModal.css'
 
 export type ConfirmIntent = {
@@ -20,20 +21,31 @@ export function ConfirmModal({ intent, onClose }: Props) {
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (!intent) return
-    const d = dialogRef.current
-    if (!d) return
-    d.showModal()
+  // useDialogDismiss owns showModal()/close() + deferred unmount so the exit
+  // transition can play. It also keeps the dialog mounted while closing, so we
+  // retain the last intent's content (shownIntent) to render through the
+  // fade-out — `intent` itself goes null the instant the parent clears it.
+  const open = intent !== null
+  const rendered = useDialogDismiss(open, dialogRef)
+
+  // Snapshot the active intent via adjust-state-during-render (the supported
+  // React pattern) so the closing dialog keeps painting, and reset the
+  // transient error/pending state exactly when a new intent opens.
+  const [shownIntent, setShownIntent] = useState(intent)
+  if (intent && intent !== shownIntent) {
+    setShownIntent(intent)
     setError(null)
     setPending(false)
+  }
+
+  useEffect(() => {
+    if (!intent) return
+    // Focus Cancel when a new intent opens. useDialogDismiss (declared above)
+    // has already run showModal() by the time this effect fires.
     cancelBtnRef.current?.focus()
-    return () => {
-      if (d.open) d.close()
-    }
   }, [intent])
 
-  if (!intent) return null
+  if (!rendered || !shownIntent) return null
 
   const handleClose = () => {
     if (pending) return
@@ -44,7 +56,7 @@ export function ConfirmModal({ intent, onClose }: Props) {
     setError(null)
     setPending(true)
     try {
-      await intent.onConfirm()
+      await shownIntent.onConfirm()
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -76,8 +88,8 @@ export function ConfirmModal({ intent, onClose }: Props) {
         className="confirm__panel"
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 className="confirm__title">{intent.title}</h2>
-        <p className="confirm__body">{intent.body}</p>
+        <h2 className="confirm__title">{shownIntent.title}</h2>
+        <p className="confirm__body">{shownIntent.body}</p>
         {error && <p className="confirm__error" role="alert">{error}</p>}
         <div className="confirm__actions">
           <button
@@ -87,7 +99,7 @@ export function ConfirmModal({ intent, onClose }: Props) {
             onClick={handleClose}
             disabled={pending}
           >
-            {intent.cancelLabel ?? 'Cancel'}
+            {shownIntent.cancelLabel ?? 'Cancel'}
           </button>
           <button
             type="button"
@@ -96,7 +108,7 @@ export function ConfirmModal({ intent, onClose }: Props) {
             disabled={pending}
             aria-busy={pending}
           >
-            {pending ? 'Working' : intent.confirmLabel}
+            {pending ? 'Working' : shownIntent.confirmLabel}
           </button>
         </div>
       </div>
