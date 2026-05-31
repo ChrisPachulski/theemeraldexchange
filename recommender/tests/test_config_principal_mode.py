@@ -73,6 +73,19 @@ def test_explicit_log_in_production_requires_secret(monkeypatch):
         config_module.load()
 
 
+def test_production_fails_fast_without_event_secret(monkeypatch):
+    # /score + every /events/* endpoint 503 without the event secret, so an unset
+    # secret in production must fail fast at boot, not 503 silently per request.
+    _set_env(
+        monkeypatch,
+        NODE_ENV="production",
+        RECOMMENDER_INTERNAL_PRINCIPAL_MODE="off",
+        # no RECOMMENDER_EVENT_SECRET
+    )
+    with pytest.raises(ValueError, match="RECOMMENDER_EVENT_SECRET"):
+        config_module.load()
+
+
 def test_invalid_mode_still_raises(monkeypatch):
     _set_env(monkeypatch, RECOMMENDER_INTERNAL_PRINCIPAL_MODE="bogus")
     with pytest.raises(ValueError):
