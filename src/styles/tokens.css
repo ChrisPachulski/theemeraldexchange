@@ -93,6 +93,41 @@
   --pod-h: 56px;
   --pod-inset: 16px;          /* top inset of the floating HUD pod */
   --hero-pad-top: 132px;      /* below pod, on tabs that have hero search */
+
+  /* ── Derived accent states (cutting-edge UI foundation, P0.1) ──────────────
+     ADDITIONS ONLY. Every value is a color-mix OFF the single LOCKED --emerald
+     (hue 158) or a neutral — mathematically cannot escape hue 158 or introduce
+     a second accent. Never redefines a LOCKED token above. */
+  --emerald-hover:    color-mix(in oklch, var(--emerald) 88%, white 12%);   /* accent lift on hover */
+  --emerald-ghost:    color-mix(in oklch, var(--emerald) 12%, transparent); /* low-alpha accent fill */
+  --hairline-emerald: color-mix(in oklch, var(--emerald) 30%, transparent); /* subtle accent hairline border */
+
+  /* Ice-block multi-layer elevation: 1px contact + tight mid + wide ambient,
+     capped by a neutral frost top-edge inset highlight. Built from the
+     atmosphere tokens (--frost / --ink) so depth stays colorless. */
+  --elev-card:
+    0 1px 0 0 var(--ink),
+    0 2px 6px -2px var(--ink),
+    0 12px 28px -10px var(--ink),
+    inset 0 1px 0 0 var(--frost);
+
+  /* Animatable typed custom props for later slices (registered so they can
+     tween on the compositor rather than flip discretely). */
+}
+
+/* Registered @property tokens — declared at top level (an @property cannot
+   live inside a :root rule). Animating these is compositor-safe and gated
+   per-component behind prefers-reduced-motion: no-preference. */
+@property --focus-glow {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 0;
+}
+
+@property --hud-sweep {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
 }
 
 @media (prefers-reduced-motion: reduce) {

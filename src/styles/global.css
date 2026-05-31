@@ -105,6 +105,19 @@ main {
   }
 }
 
+/* Text selection — emerald-derived tint, stays inside the locked palette.
+   Low-alpha mix so the selected text stays legible at --text. */
+::selection {
+  background: color-mix(in oklch, var(--emerald) 30%, transparent);
+  color: var(--text);
+}
+
+/* Caret in editable fields carries the accent rather than the OS default. */
+input,
+textarea {
+  caret-color: var(--emerald);
+}
+
 /* Hide focus ring on pointer interactions, surface it for keyboard users. */
 :focus {
   outline: none;
