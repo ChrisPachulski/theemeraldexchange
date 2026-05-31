@@ -10,6 +10,8 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 AUTOLOOP="$REPO/.autoloop"
+# Notify recipient resolved from env or git identity — never hardcoded in source.
+NOTIFY_TO="${AUTOLOOP_NOTIFY_TO:-$(git -C "$REPO" config user.email 2>/dev/null || true)}"
 LA="$HOME/Library/LaunchAgents"
 NODE_BIN="$(node -e 'process.stdout.write(process.execPath)')"
 PATHV="$(dirname "$NODE_BIN"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -40,7 +42,7 @@ launchctl load "$LA/com.eex.autoloop-killer.plist"
 # ARM.
 sed -i '' -E 's/^MASTER:[[:space:]]*OFF/MASTER: ON/' "$AUTOLOOP/CONTROL.md"
 
-gws gmail +send --to pachun95@gmail.com \
+[ -n "$NOTIFY_TO" ] && gws gmail +send --to "$NOTIFY_TO" \
   --subject "[autoloop] ARMED — first run, auto-kill $DEADLINE_ISO" \
   --body "Autoloop P2 first run is ARMED.
 - engine: codex (flat-rate; cannot over-bill Claude)

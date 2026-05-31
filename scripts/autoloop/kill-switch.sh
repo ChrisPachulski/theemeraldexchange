@@ -13,6 +13,8 @@ set -uo pipefail
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 AUTOLOOP="$REPO/.autoloop"
+# Notify recipient resolved from env or git identity — never hardcoded in source.
+NOTIFY_TO="${AUTOLOOP_NOTIFY_TO:-$(git -C "$REPO" config user.email 2>/dev/null || true)}"
 REASON="${1:-manual}"
 LA="$HOME/Library/LaunchAgents"
 
@@ -58,7 +60,7 @@ ${STATUS:-（none）}
 recent errors/issues (tail):
 ${ERRLOG:-（none logged）}
 "
-gws gmail +send --to pachun95@gmail.com \
+[ -n "$NOTIFY_TO" ] && gws gmail +send --to "$NOTIFY_TO" \
   --subject "[autoloop] CANCELLED ($REASON) $(date +%Y-%m-%d\ %H:%M)" \
   --body "$BODY" 2>/dev/null || true
 

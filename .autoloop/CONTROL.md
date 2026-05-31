@@ -21,6 +21,9 @@ SCOPE: anything
   85 / 90. The guard ALSO hard-stops on any rise in paid `extra_usage` regardless.
 - **ALLOWED_HOURS** — local-time window the loop may run (e.g. `01:00-08:00` for off-hours).
 - **NOTIFY** — comma list: `osascript` (desktop), `telegram`, `email`. Errors always email.
+  The email recipient comes from the `AUTOLOOP_NOTIFY_TO` env var (export it in your shell
+  profile or the launchd plist); if unset it falls back to `git config user.email`, and if
+  that's empty the email channel is skipped. No address is hardcoded in source.
 - **SCOPE** — which discovered goals the loop may pull from (`anything` = full backlog).
 
 > **Strongest no-bill setting:** disable "extra usage" billing in your Anthropic account.
