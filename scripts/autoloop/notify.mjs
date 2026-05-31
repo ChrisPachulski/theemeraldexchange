@@ -1,15 +1,30 @@
 #!/usr/bin/env node
 // scripts/autoloop/notify.mjs — the loop's outbound channels.
-//   email:     gws gmail +send → pachun95@gmail.com (verified headless)
+//   email:     gws gmail +send → $AUTOLOOP_NOTIFY_TO (falls back to git user.email)
 //   osascript: macOS desktop notification (instant, no auth)
 //
 // Errors / issues / cancellation ALWAYS email, regardless of NOTIFY config.
 
 import { execFileSync } from 'node:child_process';
 
-const TO = 'pachun95@gmail.com';
+// Recipient is resolved from env (or the repo's git identity) so no personal
+// address is hardcoded in source. Unset + no git identity → email is skipped.
+function resolveTo() {
+  if (process.env.AUTOLOOP_NOTIFY_TO) return process.env.AUTOLOOP_NOTIFY_TO.trim();
+  try {
+    return execFileSync('git', ['config', 'user.email'], { encoding: 'utf8' }).trim();
+  } catch {
+    return '';
+  }
+}
+
+const TO = resolveTo();
 
 export function email(subject, body) {
+  if (!TO) {
+    process.stderr.write('notify.email skipped: no AUTOLOOP_NOTIFY_TO / git user.email set\n');
+    return false;
+  }
   try {
     execFileSync('gws', ['gmail', '+send', '--to', TO, '--subject', subject, '--body', body],
       { encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'ignore', 'ignore'] });

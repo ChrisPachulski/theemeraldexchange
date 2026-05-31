@@ -2,7 +2,7 @@ LIVE PROBE — 2026-05-20
 
 Configuration:
 - Server: localhost:4001 (npm dev:server via tsx)
-- SONARR_URL/RADARR_URL: Tailscale (100.120.186.17) overriding .env.production's 10.0.0.52
+- SONARR_URL/RADARR_URL: Tailscale (<tailscale-host>) overriding .env.production's <nas-host>
 - TMDB_API_KEY: from .env.production
 - Anthropic key: passed in X-Anthropic-Api-Key header per BYO model
 - Session: minted via createSession() with .env.local SESSION_SECRET
