@@ -11,7 +11,7 @@
 //
 // Inert while CONTROL.md has MASTER: OFF.
 
-import { appendFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, writeFileSync, mkdirSync, readFileSync, openSync, closeSync, writeSync, unlinkSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { Node } from './node-state.mjs';
@@ -38,10 +38,37 @@ function emailIssue(subject, body) {
   notify({ subject: `[autoloop] ${subject}`, body, channels: ['email'], isError: true });
 }
 
+// Exclusive single-instance lock: a codex cycle can outlast the 10-min tick
+// cadence, so without this two supervisors could stack and run concurrent
+// --write cycles (the runaway CLAUDE.md warns about). launchd usually serializes
+// a single job label, but this also guards manual / multi-session invocation.
+const LOCK = path.join(AUTOLOOP, 'supervisor.lock');
+function pidAlive(pid) { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } }
+function acquireLock() {
+  mkdirSync(AUTOLOOP, { recursive: true });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = openSync(LOCK, 'wx'); // atomic exclusive create
+      writeSync(fd, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }));
+      closeSync(fd);
+      return true;
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      let prev = null; try { prev = JSON.parse(readFileSync(LOCK, 'utf8')); } catch { /* */ }
+      if (prev?.pid && pidAlive(prev.pid)) return false;   // another tick is live
+      try { unlinkSync(LOCK); } catch { /* */ }            // stale → reap + retry
+    }
+  }
+  return false;
+}
+function releaseLock() { try { if (JSON.parse(readFileSync(LOCK, 'utf8')).pid === process.pid) unlinkSync(LOCK); } catch { /* */ } }
+process.on('exit', releaseLock);
+
 // Actions from the orchestrator that represent an error/issue worth emailing.
 const ISSUE_ACTIONS = new Set(['discovery_failed', 'worktree_failed', 'commit_failed', 'aborted']);
 
 async function main() {
+  if (!acquireLock()) { process.stdout.write('SKIP already-running\n'); return 0; }
   const sup = new Node({ meshDir: MESH, tier: 'supervisor', nodeId: 'sup-main' });
   sup.init({ objective: 'govern + drive the autonomous improvement mesh (first run)' });
 

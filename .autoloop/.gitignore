@@ -7,6 +7,10 @@ codex-spend.jsonl
 *.log
 run_loop.jsonl
 loop.pid
+supervisor.lock
+DEADLINE
+errors.log
+claude-baseline.json
 state.json
 STATUS.json
 propagation_pending

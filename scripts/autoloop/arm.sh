@@ -12,13 +12,12 @@ REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 AUTOLOOP="$REPO/.autoloop"
 LA="$HOME/Library/LaunchAgents"
 NODE_BIN="$(node -e 'process.stdout.write(process.execPath)')"
-PATHV="$(dirname "$NODE_BIN"):/usr/bin:/bin:/usr/sbin:/sbin"
+PATHV="$(dirname "$NODE_BIN"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 mkdir -p "$AUTOLOOP" "$LA"
 
-# Deadline = now + 24h (local time).
-DEADLINE_ISO="$(date -v+24H '+%Y-%m-%dT%H:%M:%S')"
-DMONTH="$(date -v+24H '+%-m')"; DDAY="$(date -v+24H '+%-d')"
-DHOUR="$(date -v+24H '+%-H')"; DMIN="$(date -v+24H '+%-M')"
+# Deadline = now + 24h (local time). Compute fields in node so launchd integers
+# are unpadded (a plist <integer>07</integer> is invalid).
+read -r DEADLINE_ISO DMONTH DDAY DHOUR DMIN < <(node -e "const d=new Date(Date.now()+24*3600*1000);const z=n=>String(n).padStart(2,'0');console.log([d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate())+'T'+z(d.getHours())+':'+z(d.getMinutes())+':'+z(d.getSeconds()),(d.getMonth()+1),d.getDate(),d.getHours(),d.getMinutes()].join(' '))")
 echo "$DEADLINE_ISO" > "$AUTOLOOP/DEADLINE"
 rm -f "$AUTOLOOP/STOP"
 
