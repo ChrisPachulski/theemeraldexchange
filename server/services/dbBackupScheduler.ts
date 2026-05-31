@@ -6,6 +6,7 @@
 
 import cron, { type ScheduledTask } from 'node-cron'
 import { runScheduledBackup } from './dbBackup.js'
+import { reportServerEvent } from './serverTelemetry.js'
 
 const DEFAULT_DB_BACKUP_CRON = '30 3 * * *'
 
@@ -21,7 +22,16 @@ export function registerDbBackupSchedule(cronExpr: string): ScheduledTask {
         `[backup] snapshot ok: ${result.files.length} file(s) in ${result.dir}, stamped ${result.stampedAt}`,
       )
     } catch (err) {
-      console.error('[backup] scheduled backup failed:', err instanceof Error ? err.message : String(err))
+      const message = err instanceof Error ? err.message : String(err)
+      console.error('[backup] scheduled backup failed:', message)
+      // A silently-failing backup job is exactly what the mandatory §15
+      // telemetry pipeline exists to surface — console-only meant nobody learned
+      // the safety net had stopped working until a restore was needed.
+      void reportServerEvent({
+        level: 'error',
+        message: 'scheduled DB backup failed',
+        context: { error: message },
+      })
     }
   })
 }
