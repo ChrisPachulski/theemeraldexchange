@@ -58,6 +58,15 @@ export function evaluate(autoloopDir = path.join(process.cwd(), '.autoloop')) {
     decision.reason = 'converged'; decision.mode = 'CONVERGED'; return decision;
   }
 
+  // Hard deadline gate (fast path; the killer launchd agent is the guarantee).
+  const deadlineFile = path.join(autoloopDir, 'DEADLINE');
+  if (existsSync(deadlineFile)) {
+    const dl = Date.parse(readFileSync(deadlineFile, 'utf8').trim());
+    if (!Number.isNaN(dl) && Date.now() >= dl) {
+      decision.reason = 'deadline_24h'; decision.mode = 'DEADLINE'; return decision;
+    }
+  }
+
   ensureClaudeBaseline(autoloopDir);
 
   const guard = checkGuard({ autoloopDir });
