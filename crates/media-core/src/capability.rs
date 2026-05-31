@@ -61,10 +61,10 @@ pub fn decide(file: &MediaFileRow, caps: &ClientCaps) -> PlayDecision {
         return deny(format!("codec {codec} not supported by client"));
     }
 
-    if let (Some(max), Some(height)) = (caps.max_height, file.video_height) {
-        if height > max {
-            return deny(format!("height {height} exceeds client max {max}"));
-        }
+    if let (Some(max), Some(height)) = (caps.max_height, file.video_height)
+        && height > max
+    {
+        return deny(format!("height {height} exceeds client max {max}"));
     }
 
     let is_hdr = file

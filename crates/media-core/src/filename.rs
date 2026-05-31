@@ -132,15 +132,14 @@ fn strip_tags(cleaned: &str) -> String {
 /// Strip a single trailing 4-digit 1900–2099 year token from a cleaned string.
 fn strip_trailing_year(cleaned: &str) -> String {
     let trimmed = cleaned.trim_end();
-    if let Some(last) = trimmed.rsplit(' ').next() {
-        if last.len() == 4 && last.chars().all(|c| c.is_ascii_digit()) {
-            if let Ok(y) = last.parse::<i64>() {
-                if (1900..=2099).contains(&y) {
-                    let cut = trimmed.len() - last.len();
-                    return trimmed[..cut].trim_end().to_string();
-                }
-            }
-        }
+    if let Some(last) = trimmed.rsplit(' ').next()
+        && last.len() == 4
+        && last.chars().all(|c| c.is_ascii_digit())
+        && let Ok(y) = last.parse::<i64>()
+        && (1900..=2099).contains(&y)
+    {
+        let cut = trimmed.len() - last.len();
+        return trimmed[..cut].trim_end().to_string();
     }
     trimmed.to_string()
 }

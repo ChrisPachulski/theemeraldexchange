@@ -101,7 +101,10 @@ fn make_fixture(dir: &Path) -> std::path::PathBuf {
         .arg(&fixture)
         .status()
         .expect("spawn ffmpeg to build fixture");
-    assert!(status.success(), "ffmpeg failed to build the testsrc fixture");
+    assert!(
+        status.success(),
+        "ffmpeg failed to build the testsrc fixture"
+    );
     assert!(fixture.exists(), "fixture was not written");
     fixture
 }

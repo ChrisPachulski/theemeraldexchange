@@ -62,7 +62,7 @@ async fn ffprobe_with_bin_timeout(
     path: &Path,
     deadline: Duration,
 ) -> Result<FileProbe, ProbeError> {
-    let mut child = Command::new(bin)
+    let child = Command::new(bin)
         .arg("-v")
         .arg("quiet")
         .arg("-print_format")
