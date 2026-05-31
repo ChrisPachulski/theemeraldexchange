@@ -1,16 +1,28 @@
 #!/usr/bin/env node
 // scripts/autoloop/notify.mjs — the loop's outbound channels.
-//   email:     gws gmail +send → $AUTOLOOP_NOTIFY_TO (falls back to git user.email)
+//   email:     gws gmail +send → recipient resolved by resolveTo() below
 //   osascript: macOS desktop notification (instant, no auth)
 //
 // Errors / issues / cancellation ALWAYS email, regardless of NOTIFY config.
 
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
-// Recipient is resolved from env (or the repo's git identity) so no personal
-// address is hardcoded in source. Unset + no git identity → email is skipped.
+// Recipient is resolved WITHOUT hardcoding an address in tracked source:
+//   1. $AUTOLOOP_NOTIFY_TO env var
+//   2. .autoloop/notify.env (gitignored, local-only pin)
+//   3. git user.email
+//   4. else → email channel is skipped
 function resolveTo() {
   if (process.env.AUTOLOOP_NOTIFY_TO) return process.env.AUTOLOOP_NOTIFY_TO.trim();
+  try {
+    const repo = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+    const env = readFileSync(join(repo, '.autoloop', 'notify.env'), 'utf8');
+    const m = env.match(/^\s*AUTOLOOP_NOTIFY_TO\s*=\s*(.+?)\s*$/m);
+    if (m && m[1]) return m[1].trim();
+  } catch { /* no local pin */ }
   try {
     return execFileSync('git', ['config', 'user.email'], { encoding: 'utf8' }).trim();
   } catch {

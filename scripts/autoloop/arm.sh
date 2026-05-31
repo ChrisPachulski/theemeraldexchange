@@ -10,8 +10,12 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 AUTOLOOP="$REPO/.autoloop"
-# Notify recipient resolved from env or git identity — never hardcoded in source.
-NOTIFY_TO="${AUTOLOOP_NOTIFY_TO:-$(git -C "$REPO" config user.email 2>/dev/null || true)}"
+# Notify recipient: $AUTOLOOP_NOTIFY_TO → gitignored .autoloop/notify.env → git
+# identity. Never hardcoded in tracked source.
+NOTIFY_TO="${AUTOLOOP_NOTIFY_TO:-}"
+[ -z "$NOTIFY_TO" ] && [ -f "$AUTOLOOP/notify.env" ] && \
+  NOTIFY_TO="$(sed -n 's/^[[:space:]]*AUTOLOOP_NOTIFY_TO[[:space:]]*=[[:space:]]*//p' "$AUTOLOOP/notify.env" | head -1)"
+NOTIFY_TO="${NOTIFY_TO:-$(git -C "$REPO" config user.email 2>/dev/null || true)}"
 LA="$HOME/Library/LaunchAgents"
 NODE_BIN="$(node -e 'process.stdout.write(process.execPath)')"
 PATHV="$(dirname "$NODE_BIN"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
