@@ -102,6 +102,54 @@
   }
 }
 
+/* Enter + exit motion via @starting-style + allow-discrete (P0.4).
+   `.add-series` is the native <dialog>; transition `overlay`/`display`
+   with `allow-discrete` so it stays painted while the panel and the
+   scrim backdrop cross-fade. Backdrop background comes from the global
+   `dialog::backdrop { background: var(--scrim) }`. Gated under
+   no-preference; reduced-motion keeps the instant swap. */
+@media (prefers-reduced-motion: no-preference) {
+  .add-series {
+    transition:
+      overlay 160ms var(--ease) allow-discrete,
+      display 160ms var(--ease) allow-discrete;
+  }
+
+  .add-series::backdrop {
+    transition: opacity 160ms var(--ease);
+    opacity: 1;
+  }
+
+  @starting-style {
+    .add-series::backdrop { opacity: 0; }
+  }
+
+  .add-series:not([open])::backdrop {
+    opacity: 0;
+  }
+
+  .add-series__panel {
+    animation: none;
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    transition:
+      opacity 160ms var(--ease),
+      transform 160ms var(--ease);
+  }
+
+  @starting-style {
+    .add-series__panel {
+      opacity: 0;
+      transform: translateY(8px) scale(0.985);
+    }
+  }
+
+  .add-series:not([open]) .add-series__panel {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+}
+
 .add-series__header {
   display: grid;
   gap: var(--s-2);

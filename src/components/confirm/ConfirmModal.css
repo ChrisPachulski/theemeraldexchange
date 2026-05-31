@@ -40,6 +40,54 @@
   }
 }
 
+/* Enter + exit motion via @starting-style + allow-discrete (P0.4).
+   `.confirm` is the native <dialog>; transition `overlay`/`display` with
+   `allow-discrete` so it stays painted while the panel and the scrim
+   backdrop cross-fade. Backdrop background comes from the global
+   `dialog::backdrop { background: var(--scrim) }`. Gated under
+   no-preference; reduced-motion keeps the instant swap. */
+@media (prefers-reduced-motion: no-preference) {
+  .confirm {
+    transition:
+      overlay 160ms var(--ease) allow-discrete,
+      display 160ms var(--ease) allow-discrete;
+  }
+
+  .confirm::backdrop {
+    transition: opacity 160ms var(--ease);
+    opacity: 1;
+  }
+
+  @starting-style {
+    .confirm::backdrop { opacity: 0; }
+  }
+
+  .confirm:not([open])::backdrop {
+    opacity: 0;
+  }
+
+  .confirm__panel {
+    animation: none;
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    transition:
+      opacity 160ms var(--ease),
+      transform 160ms var(--ease);
+  }
+
+  @starting-style {
+    .confirm__panel {
+      opacity: 0;
+      transform: translateY(8px) scale(0.985);
+    }
+  }
+
+  .confirm:not([open]) .confirm__panel {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+}
+
 .confirm__title {
   font-family: var(--font-display);
   font-size: var(--t-lg);
