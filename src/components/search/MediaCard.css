@@ -8,7 +8,14 @@
   text-align: left;
   padding: var(--s-3);
   border-radius: var(--r-lg);
-  background: #14181c;
+  /* Rendering hint only: lets the browser skip painting off-screen cards in
+     a long result grid so iPad scroll/first-paint stays instant. Zero visual
+     change — the contain-intrinsic-size matches the real card box so layout
+     never shifts. Not applied to in-page-searchable text. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 220px;
+  contain: content;
+  background: var(--surface);
   border: 1px solid var(--emerald);
   box-shadow:
     inset 0 1px 0 var(--frost-stronger),
@@ -22,7 +29,7 @@
 }
 
 .media-card:hover {
-  background: #1c2127;
+  background: var(--surface-2);
   border-color: var(--emerald);
   box-shadow:
     inset 0 1px 0 var(--frost-stronger),
