@@ -6,7 +6,10 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist', 'coverage', '.claude', '.planning']),
+  // *.workflow.mjs are Workflow-runtime scripts (top-level await/return, injected
+  // agent()/phase()/log() globals) — not valid standalone ES modules, so espree
+  // parse-errors on them. They run only under the Workflow tool, never linted here.
+  globalIgnores(['dist', 'coverage', '.claude', '.planning', '**/*.workflow.mjs']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [
