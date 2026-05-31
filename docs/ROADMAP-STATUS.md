@@ -141,6 +141,24 @@ The project splits cleanly into a **buildable-now backend track** and an **Apple
 
 ---
 
+## Update 2026-05-31 (supersedes the 05-29 "What Changed" notes below)
+
+The 05-29 synthesis below predates two merges now on `main` (HEAD `155f73f`):
+
+1. **Passkeys are LIVE in prod.** WebAuthn cross-platform login/register shipped
+   2026-05-30; the passkey/device-auth work described as "unmerged on
+   `m3-media-core`" in item 3 below **is now merged to `main`.** Treat item 3 as resolved.
+2. **Autoloop substrate landed (P0–P1).** A new out-of-band subsystem —
+   `scripts/autoloop/` + `.autoloop/` — an autonomous codex mesh (P0 engine/guard/
+   node-contract, P1 governor/kill-switch/supervisor/launchd). Not part of the
+   product runtime; see [scripts/autoloop/README.md](../scripts/autoloop/README.md).
+   P2–P5 pending. This is independent of the M1–M6 milestone track.
+3. **Production-readiness review (2026-05-30):** all critical + high findings
+   fixed; ~63 medium/low open. See
+   [docs/PRODUCTION-READINESS-2026-05-30.md](./PRODUCTION-READINESS-2026-05-30.md).
+
+The milestone table above (M1–M6 status/%) is unchanged and remains current.
+
 ## What Changed This Session (supersedes stale roadmap memory)
 
 The canonical memory note ("M1 shipped, M1.5 contract gate before M2") is now stale on the backend. This session advanced three things:
