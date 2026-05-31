@@ -33,3 +33,38 @@
     transform: translate(-50%, 0);
   }
 }
+
+/* Enter + exit motion via @starting-style + allow-discrete (P0.4).
+   The toast is a plain element (not a <dialog>), so only `display` is
+   discrete here — no `overlay`. `@starting-style` drives the enter;
+   the `[hidden]`/`.toast--closing` closed state drives the exit so the
+   toast can animate OUT (recon flagged abrupt exits) the moment it is
+   hidden rather than removed. Transform keeps the translateX(-50%)
+   centering on every keyframe. Gated under no-preference; reduced-motion
+   keeps the instant swap. */
+@media (prefers-reduced-motion: no-preference) {
+  .toast {
+    animation: none;
+    opacity: 1;
+    transform: translate(-50%, 0);
+    transition:
+      opacity 160ms var(--ease),
+      transform 160ms var(--ease),
+      display 160ms var(--ease) allow-discrete;
+  }
+
+  @starting-style {
+    .toast {
+      opacity: 0;
+      transform: translate(-50%, 8px);
+    }
+  }
+
+  .toast[hidden],
+  .toast--closing {
+    display: block;
+    opacity: 0;
+    transform: translate(-50%, 8px);
+    pointer-events: none;
+  }
+}
