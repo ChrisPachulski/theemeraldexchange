@@ -31,18 +31,18 @@ pub struct Db {
 
 impl Db {
     pub async fn connect(path: &str) -> Result<Self, sqlx::Error> {
-        if let Some(parent) = std::path::Path::new(path).parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    sqlx::Error::Configuration(
-                        format!(
-                            "failed to create parent directory {} for media database: {e}",
-                            parent.display()
-                        )
-                        .into(),
+        if let Some(parent) = std::path::Path::new(path).parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                sqlx::Error::Configuration(
+                    format!(
+                        "failed to create parent directory {} for media database: {e}",
+                        parent.display()
                     )
-                })?;
-            }
+                    .into(),
+                )
+            })?;
         }
         let opts = SqliteConnectOptions::new()
             .filename(path)
