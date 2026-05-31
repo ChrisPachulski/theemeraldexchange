@@ -28,6 +28,7 @@ import { useCast } from '../../lib/hooks/useCast'
 import { useConfirm } from '../confirm/useConfirm'
 import { sonarr, type Series, type SeriesSearchResult } from '../../lib/api/sonarr'
 import { postClickEvent } from '../../lib/api/recommenderEvents'
+import { withViewTransition } from '../../lib/viewTransition'
 import './TvTab.css'
 
 function pickSearchPoster(item: SeriesSearchResult): string | undefined {
@@ -404,8 +405,10 @@ export function TvTab() {
         <ModeToggle
           mode={mode}
           onChange={(next) => {
-            setMode(next)
-            if (next === 'discover') setLetter('all')
+            withViewTransition(() => {
+              setMode(next)
+              if (next === 'discover') setLetter('all')
+            })
           }}
           libraryCount={library.data?.length}
         />
