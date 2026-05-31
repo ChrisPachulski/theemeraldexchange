@@ -9,6 +9,13 @@ import { NavTransitionProvider } from './lib/navTransition'
 import { ReplayButton } from './components/nav/ReplayButton'
 import { AuthProvider, useAuth } from './lib/auth'
 import { useLimits } from './lib/hooks/useLimits'
+// View Transitions cross-fade + persistent-shell view-transition-names.
+// Imported here (always-mounted root) so the ::view-transition rules and
+// the nav/dock view-transition-names are available no matter which tab is
+// active. The actual startViewTransition() calls live in the in-tab
+// mode/filter swaps (TvTab, MediaTab, LibraryFilters); the top-level tab
+// nav keeps its dedicated video-splice flourish (navTransition.tsx).
+import './styles/transitions.css'
 
 // Non-home tabs are lazy-loaded so the initial JS bundle ships only the
 // always-visible shell (Kraken atmosphere, nav, brand mark, HomeTab) plus

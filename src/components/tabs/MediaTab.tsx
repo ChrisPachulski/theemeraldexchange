@@ -20,6 +20,7 @@ import {
   useMediaScan,
 } from '../../lib/hooks/useMediaLibrary'
 import { posterFor, type MediaMovie, type MediaShow } from '../../lib/api/media'
+import { withViewTransition } from '../../lib/viewTransition'
 // TvTab.css is the shared tab-layout stylesheet — MoviesTab imports it
 // too. Reusing it keeps the dock/grid/empty/error styling consistent.
 import './TvTab.css'
@@ -32,6 +33,12 @@ export function MediaTab() {
   const [kind, setKind] = useState<Kind>('movies')
   const [source, setSource] = useState<SourceMode>('local')
   const [query, setQuery] = useState('')
+  // Wrap the source/kind axis swaps in a View Transition so the grid
+  // cross-fades instead of hard-cutting. No-ops to a plain setState under
+  // reduced-motion / unsupported browsers (see lib/viewTransition).
+  const changeSource = (next: SourceMode) =>
+    withViewTransition(() => setSource(next))
+  const changeKind = (next: Kind) => withViewTransition(() => setKind(next))
   const debouncedQuery = useDebounced(query, 300)
   const { isAdmin } = useAuth()
   const [toast, setToast] = useState<string | null>(null)
@@ -65,8 +72,8 @@ export function MediaTab() {
       <section className="tv-tab">
         <RequestableSource kind={kind} />
         <div className="tv-tab__mode-anchor">
-          <SourceToggle mode={source} onChange={setSource} />
-          <KindToggle kind={kind} onChange={setKind} />
+          <SourceToggle mode={source} onChange={changeSource} />
+          <KindToggle kind={kind} onChange={changeKind} />
         </div>
         <Toast message={toast} onDone={() => setToast(null)} />
       </section>
@@ -111,8 +118,8 @@ export function MediaTab() {
       </div>
 
       <div className="tv-tab__mode-anchor">
-        <SourceToggle mode={source} onChange={setSource} localCount={localCount} />
-        <KindToggle kind={kind} onChange={setKind} />
+        <SourceToggle mode={source} onChange={changeSource} localCount={localCount} />
+        <KindToggle kind={kind} onChange={changeKind} />
       </div>
 
       <Toast message={toast} onDone={() => setToast(null)} />

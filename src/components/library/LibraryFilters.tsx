@@ -1,3 +1,4 @@
+import { withViewTransition } from '../../lib/viewTransition'
 import './LibraryFilters.css'
 
 // Sort + status filter pair, rendered as native <select> elements styled
@@ -37,7 +38,10 @@ export function LibraryFilters<S extends string, T extends string>({
         <select
           className="lib-filters__select"
           value={sortValue}
-          onChange={(e) => onSortChange(e.target.value as S)}
+          onChange={(e) => {
+            const next = e.target.value as S
+            withViewTransition(() => onSortChange(next))
+          }}
           aria-label="Sort library"
         >
           {sortOptions.map((opt) => (
@@ -52,7 +56,10 @@ export function LibraryFilters<S extends string, T extends string>({
         <select
           className="lib-filters__select"
           value={statusValue}
-          onChange={(e) => onStatusChange(e.target.value as T)}
+          onChange={(e) => {
+            const next = e.target.value as T
+            withViewTransition(() => onStatusChange(next))
+          }}
           aria-label={`Filter by ${statusLabel.toLowerCase()}`}
         >
           {statusOptions.map((opt) => (

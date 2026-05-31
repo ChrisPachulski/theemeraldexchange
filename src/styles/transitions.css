@@ -1,0 +1,44 @@
+/* Same-document View Transitions (spec P0.3).
+ *
+ * `withViewTransition()` (src/lib/viewTransition.ts) wraps tab / mode /
+ * filter state swaps in `document.startViewTransition()`. The browser
+ * snapshots the old and new DOM and cross-fades them here.
+ *
+ * Motion discipline:
+ *  - Everything that animates is wrapped in
+ *    `@media (prefers-reduced-motion: no-preference)`. The View Transitions
+ *    API does NOT respect reduced-motion on its own, and the helper already
+ *    skips `startViewTransition()` under `reduce`; this gate is the belt to
+ *    that suspenders so a stray transition never animates.
+ *  - Only snapshot opacity animates (the default cross-fade) — colorless,
+ *    compositor-only, no layout props. Duration stays <= 200ms so the tool
+ *    never reads as delayed.
+ *  - Older iOS / non-supporting browsers never enter a transition at all
+ *    (the helper no-ops), so the swap hard-cuts exactly as before.
+ */
+
+/* Persistent shell: pin the nav and the search dock so they stay put while
+ * the content underneath cross-fades. A `view-transition-name` lifts each
+ * element into its own snapshot group instead of folding it into ::root.
+ * Names must be unique per rendered element; the nav is a fragment of three
+ * fixed siblings, so each gets its own stable name. */
+.top-nav__brand-stack {
+  view-transition-name: nav-brand;
+}
+.top-nav__tabs {
+  view-transition-name: nav-tabs;
+}
+.top-nav__right {
+  view-transition-name: nav-right;
+}
+.tv-tab__dock {
+  view-transition-name: search-dock;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-duration: 180ms;
+    animation-timing-function: var(--ease);
+  }
+}
