@@ -32,6 +32,7 @@ if [[ -f "$AUTOLOOP/loop.pid" ]]; then
   LPID="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('pid',''))" "$AUTOLOOP/loop.pid" 2>/dev/null || true)"
   [[ -n "$LPID" ]] && kill "$LPID" 2>/dev/null || true
 fi
+rm -f "$AUTOLOOP/supervisor.lock"
 
 # 3. Unload BOTH launchd agents (scheduler + this killer) so nothing reschedules.
 for label in com.eex.autoloop com.eex.autoloop-killer; do
