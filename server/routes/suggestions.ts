@@ -36,6 +36,7 @@ import { sanitizeTitle } from '../services/sanitize.js'
 import { iptvDb } from '../services/iptvDbSingleton.js'
 import { mediaLibraryDb } from '../services/mediaLibraryDbSingleton.js'
 import { env } from '../env.js'
+import { reportServerEvent } from '../services/serverTelemetry.js'
 
 const MODEL = 'claude-haiku-4-5'
 
@@ -2025,10 +2026,16 @@ suggestions.get('/:type', async (c) => {
       recDiag = resp.diag
       recSucceeded = true
     } catch (e) {
-      console.warn(
-        '[suggestions] recommender call failed, falling back to trending:',
-        e instanceof Error ? e.message : String(e),
-      )
+      const detail = e instanceof Error ? e.message : String(e)
+      console.warn('[suggestions] recommender call failed, falling back to trending:', detail)
+      // The fallback keeps the request working, but a recommender that is down
+      // silently degrades EVERY user to trending — surface it (warning level so
+      // Glitchtip groups occurrences) instead of hiding it in stdout.
+      void reportServerEvent({
+        level: 'warning',
+        message: 'recommender scoreOnce failed; served trending fallback',
+        context: { error: detail },
+      })
     }
     endRec()
 
