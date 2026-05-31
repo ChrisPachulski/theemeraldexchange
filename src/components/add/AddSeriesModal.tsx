@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { sonarr, type SeriesSearchResult } from '../../lib/api/sonarr'
 import { useSonarrProfiles, useSonarrRootFolders } from '../../lib/hooks/useSonarrLibrary'
 import { useAuth } from '../../lib/auth'
 import { useLimits } from '../../lib/hooks/useLimits'
+import { useDialogDismiss } from '../../lib/useDialogDismiss'
 import './AddSeriesModal.css'
 
 // Pick the household's curated profile by name (case-insensitive)
@@ -37,6 +38,13 @@ export function AddSeriesModal({ series, onClose, onAdded, onError }: Props) {
   const limits = useLimits()
   const maxTvGb = limits.data?.maxTvGbPerEpisode ?? 5
 
+  // useDialogDismiss owns showModal()/close() + deferred unmount so the exit
+  // transition can play. The dialog stays mounted while closing, so we render
+  // the last series' content (shownSeries) through the fade-out — `series`
+  // itself goes null the instant the parent clears it.
+  const open = series !== null
+  const rendered = useDialogDismiss(open, dialogRef)
+
   // userChoice = the value the user has explicitly selected. If they haven't,
   // we fall through to the first available value from the underlying service.
   // This avoids setState-in-effect (which causes cascading renders) by
@@ -49,11 +57,20 @@ export function AddSeriesModal({ series, onClose, onAdded, onError }: Props) {
   const [monitorChoice, setMonitorChoice] = useState<{ seriesId: number; value: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  // Snapshot the active series via adjust-state-during-render (the supported
+  // React pattern) so the closing dialog keeps painting its content, and reset
+  // the inline error exactly when a new series opens.
+  const [shownSeries, setShownSeries] = useState(series)
+  if (series && series !== shownSeries) {
+    setShownSeries(series)
+    setError(null)
+  }
+
   // Specials (seasonNumber 0) are intentionally excluded from the
   // user-facing dropdown — most households don't grab them and it keeps
   // the menu tidy. They stay unmonitored on add (since seasons[] tells
   // Sonarr which seasons to monitor explicitly).
-  const showSeasons = (series?.seasons ?? [])
+  const showSeasons = (shownSeries?.seasons ?? [])
     .filter((s) => s.seasonNumber > 0)
     .map((s) => s.seasonNumber)
     .sort((a, b) => a - b)
@@ -66,7 +83,7 @@ export function AddSeriesModal({ series, onClose, onAdded, onError }: Props) {
       : 'all'
   const currentMonitorChoice = monitorChoice
   const monitorChoiceValue =
-    currentMonitorChoice && currentMonitorChoice.seriesId === series?.tvdbId
+    currentMonitorChoice && currentMonitorChoice.seriesId === shownSeries?.tvdbId
       ? currentMonitorChoice.value
       : null
   const chosenSeason = monitorChoiceValue?.startsWith('season:')
@@ -83,16 +100,6 @@ export function AddSeriesModal({ series, onClose, onAdded, onError }: Props) {
     pickDefaultProfileId(profiles.data, (limits.data?.defaultProfileName ?? 'choose me').toLowerCase())
   const rootFolder = folderChoice ?? folders.data?.[0]?.path ?? null
 
-  useEffect(() => {
-    const d = dialogRef.current
-    if (!series || !d) return
-    d.showModal()
-    setError(null)
-    return () => {
-      if (d.open) d.close()
-    }
-  }, [series])
-
   const mutation = useMutation({
     mutationFn: (body: Record<string, unknown>) => sonarr.addSeries(body),
     onSuccess: () => {
@@ -104,7 +111,7 @@ export function AddSeriesModal({ series, onClose, onAdded, onError }: Props) {
     },
   })
 
-  if (!series) return null
+  if (!rendered || !shownSeries) return null
 
   // Admins wait on the profile + folder dropdowns to populate before
   // Add enables. Non-admins don't see those controls — the server
@@ -128,7 +135,7 @@ export function AddSeriesModal({ series, onClose, onAdded, onError }: Props) {
     if (!isAdmin) {
       mutation.mutate(
         {
-          tvdbId: series.tvdbId,
+          tvdbId: shownSeries.tvdbId,
           // tmdbId is the recommender's catalog key — without it the
           // server-side conversion mirror (sonarr.ts → postFeedback
           // signal:'added') drops every TV add on the floor, leaving
@@ -136,12 +143,12 @@ export function AddSeriesModal({ series, onClose, onAdded, onError }: Props) {
           // own add API uses tvdbId as primary; tmdbId is along for
           // the recommender ride. NON_ADMIN_SONARR_ALLOW lets it
           // through the materialize step.
-          ...(series.tmdbId !== undefined ? { tmdbId: series.tmdbId } : {}),
-          title: series.title,
+          ...(shownSeries.tmdbId !== undefined ? { tmdbId: shownSeries.tmdbId } : {}),
+          title: shownSeries.title,
         },
         {
           onSuccess: () => {
-            onAdded?.(series.title)
+            onAdded?.(shownSeries.title)
             onClose()
           },
           onError: (e) => {
@@ -162,20 +169,20 @@ export function AddSeriesModal({ series, onClose, onAdded, onError }: Props) {
     //                  added with our chosen season selected.
     const isSingle = monitor.startsWith('season:')
     const targetSeason = isSingle ? Number(monitor.slice('season:'.length)) : null
-    const seasons = isSingle && series.seasons
-      ? series.seasons.map((s) => ({
+    const seasons = isSingle && shownSeries.seasons
+      ? shownSeries.seasons.map((s) => ({
           seasonNumber: s.seasonNumber,
           monitored: s.seasonNumber === targetSeason,
         }))
-      : series.seasons
+      : shownSeries.seasons
 
     const body = {
-      tvdbId: series.tvdbId,
+      tvdbId: shownSeries.tvdbId,
       // See non-admin branch above — tmdbId is the recommender's
       // catalog key; without it the conversion mirror is silently
       // dropped. Sonarr's add API ignores it.
-      ...(series.tmdbId !== undefined ? { tmdbId: series.tmdbId } : {}),
-      title: series.title,
+      ...(shownSeries.tmdbId !== undefined ? { tmdbId: shownSeries.tmdbId } : {}),
+      title: shownSeries.title,
       qualityProfileId: profileId,
       rootFolderPath: rootFolder,
       monitored: true,
@@ -188,7 +195,7 @@ export function AddSeriesModal({ series, onClose, onAdded, onError }: Props) {
     }
     mutation.mutate(body, {
       onSuccess: () => {
-        onAdded?.(series.title)
+        onAdded?.(shownSeries.title)
         onClose()
       },
       onError: (e) => setError(e instanceof Error ? e.message : String(e)),
@@ -217,8 +224,8 @@ export function AddSeriesModal({ series, onClose, onAdded, onError }: Props) {
         <header className="add-series__header">
           <p className="add-series__eyebrow">[ Add to library ]</p>
           <h2 className="add-series__title">
-            {series.title}
-            {series.year && <span className="add-series__year"> {series.year}</span>}
+            {shownSeries.title}
+            {shownSeries.year && <span className="add-series__year"> {shownSeries.year}</span>}
           </h2>
         </header>
 
@@ -261,7 +268,7 @@ export function AddSeriesModal({ series, onClose, onAdded, onError }: Props) {
               <select
                 className="add-series__select"
                 value={monitor}
-                onChange={(e) => setMonitorChoice({ seriesId: series.tvdbId, value: e.target.value })}
+                onChange={(e) => setMonitorChoice({ seriesId: shownSeries.tvdbId, value: e.target.value })}
               >
                 {/* All Seasons stays pinned at the top so it's always
                     visible in the menu, regardless of how many seasons
