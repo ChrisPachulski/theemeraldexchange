@@ -1,51 +1,67 @@
 # Recommender research loop — iteration log
 
-## CURRENT STATE (after iteration 2)
+## CURRENT STATE (after iteration 3)
 
-**Best on the HEADLINE (nDCG@10): still `mmr_diverse`** (the deployed baseline) —
-movie 0.0021, tv 0.0030. No variant has beaten the headline yet.
+**FIRST HEADLINE WIN (movies).** Fusing MiniLM with IDF-weighted genre/keyword/
+cast/crew features and re-scoring the 800-item MiniLM-ANN pool by max fused-sim
+(`fused_balanced`) is the best config on the movie headline:
 
-**Best on DEEP RECALL (recall@50 / nDCG@50), and production-deployable:
-`item_knn` ann_max** — score the same 800-item centroid-ANN pool by MAX cosine
-to any library item instead of distance-to-centroid.
+| movie metric | mmr_diverse (baseline) | item_knn minilm ann_max (iter2) | **fused_balanced (iter3)** | absolute (of 753) |
+|---|---|---|---|---|
+| **nDCG@10 (headline)** | 0.0021 | 0.0019 | **0.0106** (5.0x) | — |
+| Recall@10 | 0.0053 | 0.0053 | **0.0279** (5.3x) | 4 -> 21 titles (+17) |
+| Recall@50 | 0.0173 | 0.0292 | **0.0398** (2.3x) | 13 -> 30 titles (+17) |
+| nDCG@50 | 0.0046 | 0.0072 | **0.0135** | — |
+| leakage_filtered@50 | 0 | 0 | **0** ✓ | — |
 
-| metric | mmr_diverse (baseline) | item_knn ann_max | item_knn full_max (offline ceiling) |
-|---|---|---|---|
-| **nDCG@10 movie (headline)** | **0.0021** | 0.0019 | 0.0000 |
-| nDCG@10 tv | **0.0030** | 0.0000 | 0.0000 |
-| Recall@50 movie | 0.0173 | **0.0292** (+69%) | 0.0372 |
-| Recall@50 tv | 0.0170 | **0.0213** (+25%) | 0.0085 |
-| nDCG@50 movie | 0.0046 | **0.0072** (+57%) | 0.0076 |
-| nDCG@50 tv | 0.0050 | 0.0049 | 0.0016 |
-| leakage_filtered@50 (GUARDRAIL) | 0 ✓ | 0 ✓ | 0 ✓ |
+`fused_meta_heavy` ties `fused_balanced` within sampling error (nDCG@10 0.0103
+vs 0.0106; SE(recall@10)~0.006, CIs overlap) — treat as one result, pick
+balanced. **TV: NO win** — fused nDCG@10 0.0015 < baseline 0.0030.
 
-**Interpretation:** item-based scoring is a real, shippable Pareto move on DEEP
-recall (more of the household's latent taste at ranks 11-50) with the top-10 and
-leakage unchanged — but it does NOT move the headline nDCG@10. The headline is
-capped by something neither approach cracks: **the content representation.**
-Blind-spot probe (iter 2): only 7% movie / 0% tv held-out titles have a strong
-content twin (>=0.8) in the rest of the library; 14% movie / 20% tv have no twin
-even >=0.5. MiniLM-over-(title+overview) gives weak item-item structure and there
-is no preference signal to rank among content-similar items. THAT is the ceiling.
+**HONEST scope of the win (devils-advocate + franchise stratification):**
+- It is REAL but ABSOLUTELY SMALL: +17 recalled titles out of 753 at recall@10.
+  The "5x" is over a basement baseline; report absolute counts alongside.
+- It is a RE-RANK-STAGE win, deployable over the EXISTING MiniLM-ANN pool with no
+  retrieval change. It is NOT yet a shipped recipe (research/, needs scipy);
+  full production deploy needs the fused vectors precomputed into the index.
+- The lift is ENTIRELY creator-affinity. Stratified: movie creator_twin (n=669,
+  shares >=2 cast or >=1 key-crew with library) recall@10 0.0105; **novel stratum
+  (n=84, no shared cast/crew) recall@10 = 0.0**. Legitimate signal (people follow
+  actors/directors) but NARROW — zero cross-creator generalization.
+- TV flatness EXPLAINED: only 24/235 (10%) of TV titles are creator-twins (vs 89%
+  for movies) — series rarely share cast/crew. The mechanism has nothing to work
+  with on TV (where twins exist, TV creator_twin recall@10 0.0417 — it works).
 
-**Next action (iteration 3):** lift the representation, not the ranker. Build
-richer item embeddings from the multi-feature content already in the DB
-(genres/cast/crew/keywords) — Spotify audiobook GNN / ItemSage lineage — and
-A/B the item_knn ann_max scoring on the richer embedding vs the MiniLM baseline.
-Also: franchise-stratified recall (skeptic MAJOR) to confirm the recall@50 gains
-are not just sequels.
+**THE NEXT CEILING (literature Q2, grounded):** content/creator similarity has a
+documented production recall ceiling (Spotify content-only HR@10 plateaus at
+0.164; a GNN over a co-ENGAGEMENT graph lifts HR 36-57%, long-tail +118% by
+reaching items sharing no content/creator overlap — DeNadai 2024 p2,p7; PinSage
++150% HR over content-only, Ying 2018 p8). Breaking it needs multi-user
+co-occurrence (we have none) OR manufacturing signal. For ONE household the only
+levers are: (A) EXPLORATION + implicit-feedback harvesting (Boltzmann-sampled
+slate, log propensities, ingest plays/adds/previews as graded positives — BaRT
+McInerney 2018; YouTube Top-K REINFORCE Chen 2019), and (B) IMPORT an exogenous
+item-item co-engagement graph (MovieLens co-ratings / Wikidata) + GNN propagation
+— which is ALSO the documented fix for the TV gap (series share audiences, not
+casts). Pure collaborative (LightGCN) is non-viable standalone (He 2020 p2).
 
-**Open analytical questions** (route via /literature-consultation):
-- Q1 [ANSWERED iter 2] Item-item for 1 household: textbook EASE over a 1-user
-  binary matrix is DEGENERATE (rank-1 Gram, near-identity B; Steck 2019 p2). The
-  right approach is content-kNN with max/top-k-mean aggregation (Amazon
-  item-to-item / Spotify cold-start content-cosine, DeNadai 2024 p3). EASE is
-  only usable as a content-feature-Gram re-weighter, not the textbook form.
-  Production item-to-item = ANN neighbor lookup (Covington p3, ItemSage p3).
-- Q2 [OPEN, now PRIMARY] MiniLM-L6 over title+overview is too coarse: max-twin
-  sim median ~0.6, strong twins (>=0.8) only 7% movie / 0% tv. Do multi-feature
-  embeddings (genres/cast/crew/keywords) materially sharpen item-item structure?
-  -> iteration 3 escalation target.
+**Next action (iteration 4):** (1) confirm fusion stability (re-run, lock the
+best config across 2 iterations); (2) run the pending fused mode=full ablation
+(retrieval vs ranking for fusion) + a clean cast-vs-crew isolation; (3) BEGIN the
+ceiling-break: implement Variant B (exogenous co-engagement graph item-item
+propagation) as the production-grounded lever that targets BOTH cross-creator
+recall AND the TV gap. Escalate the co-engagement-graph sourcing question to
+literature.
+
+**Open analytical questions:**
+- Q1 [ANSWERED iter 2] textbook EASE degenerate at n_users=1; content-kNN correct.
+- Q2 [ANSWERED iter 3] multi-feature fusion sharpens MOVIE item-item structure
+  (5x headline) but only via creator-affinity; content has a hard ceiling — the
+  documented fix is co-engagement graph + exploration (see above).
+- Q3 [OPEN] What public item-item co-engagement source best maps onto a TMDB-id
+  catalog (MovieLens links, Wikidata "shares audience", IMDb "more like this")
+  and what is the cold-start GNN recipe (two-tower distill) for single-household
+  serving? -> iteration 4 escalation.
 
 ---
 
@@ -215,3 +231,99 @@ Not converged.
 (genres/cast/crew/keywords; Spotify GNN/ItemSage) as the representation lever;
 re-A/B item_knn ann_max on the richer embedding; franchise-stratified recall to
 close the skeptic-open concern; escalate Q2 to /literature-consultation.
+
+---
+
+## Iteration 3 (variant: multi-feature fused item representation)
+
+**Implemented** `research/fusion.py`: fuse the MiniLM(title+overview) vector with
+IDF-weighted, L2-normalized SPARSE blocks for genre / keyword / top-billed cast
+(order_idx<10) / key crew (Director/Writer/Screenplay/Story/Creator). fused_sim =
+weighted sum of per-block cosines; item-knn scores a candidate by max fused-sim
+to any library item, re-ranking the SAME 800-item MiniLM-ANN pool (deployable
+re-rank stage). Lineage: ItemSage multi-feature embedding (Baltescu 2022);
+Spotify content cold-start (DeNadai 2024). Kept in research/ (needs scipy; the
+production app has no scipy dep) -- a registered recipe + precomputed index
+vectors is the promotion follow-up if it holds.
+
+**Metrics (cited from `iter_3_output.txt`):**
+- REF mmr_diverse movie (lines 38-41): nDCG@10 0.0021, recall@10 0.0053,
+  recall@50 0.0173. tv (109-112): nDCG@10 0.0030.
+- REF item_knn minilm ann_max movie (73-76): recall@50 0.0292, nDCG@10 0.0019.
+- fused_balanced movie (177-180): recall@10 0.0279, recall@50 0.0398,
+  nDCG@10 0.0106, nDCG@50 0.0135. tv (200-203): nDCG@10 0.0015 (< baseline).
+- fused_meta_heavy movie (223-226): nDCG@10 0.0103 (ties balanced within SE).
+- fused_text_kw movie (266-269): nDCG@10 0.0036 -- text+keywords alone gives
+  only ~1.7x; the full 5x needs cast+crew.
+- Franchise stratification (supplement): movie creator_twin n=669 recall@10
+  0.0105 (SE 0.0039) / recall@50 0.0463; novel n=84 recall@10 0.0 / recall@50
+  0.0. tv creator_twin n=24 recall@10 0.0417; novel n=211 recall@10 0.0.
+  leakage_filtered@50 = 0 (both kinds, verified in the loop, not by assertion).
+
+**Interpretation / deltas vs baseline:**
+- FIRST headline win: fused_balanced movie nDCG@10 0.0106 vs 0.0021 = 5.0x
+  relative; absolute recall@10 4 -> 21 titles (+17 of 753). The iteration-2
+  hypothesis (representation is the ceiling) is CONFIRMED -- enriching the item
+  vector, not the ranker, moved the headline.
+- Win is creator-affinity ONLY: novel stratum (no shared cast/crew) recall = 0.
+  Legitimate (people follow actors/directors) but narrow; no cross-creator reach.
+- TV unmoved and EXPLAINED: 10% creator-twin rate (vs 89% movie). Where TV twins
+  exist the mechanism works (creator_twin recall@10 0.0417); there just aren't
+  enough -- series share audiences, not casts.
+
+**Adversarial review (/devils-advocate substitute, Explore):** findings triaged —
+- [reframe, ACCEPTED] "5x" over a basement baseline -> now reported with absolute
+  counts (+17 titles) and SE; weight configs reported as tied within noise.
+- [MAJOR, ACCEPTED] "production-deployable" overclaim -> softened to "deployable
+  re-rank stage over the MiniLM-ANN pool; full deploy needs precomputed vectors."
+- [MAJOR doc gap, FIXED] franchise stratification existed only as a throwaway
+  script -> promoted to committed code (`fusion.franchise_stratified`, wired into
+  section3) + output appended to iter_3_output.txt. Claim now reproducible.
+- [MAJOR, DEFERRED to iter 4] no fused mode=full ablation (retrieval vs ranking
+  for fusion) and cast/crew not cleanly isolated from keywords. Logged as iter-4
+  work. (item_knn iter-2 full/ann gap was small, so unlikely to overturn, but
+  must be measured.)
+- [MINOR, REFUTED] IDF-leak: IDF is computed over the 31,166-item catalog, not
+  753; excluding one held-out title shifts df by <=1/31166 -- immaterial.
+- [PASS] leakage=0 correct; recall multipliers correct.
+
+**Literature (Q2 ANSWERED, 2nd escalation -- meets the >=2-by-iter-3 bar):**
+content/creator similarity has a DOCUMENTED production recall ceiling. Spotify
+audiobook (our closest analog): content-only LLM-KNN HR@10 plateaus at 0.164; a
+GNN over a co-LISTENING graph lifts HR 36-57% and long-tail HR +118% by reaching
+items 2 hops away that share no content/creator overlap [DeNadai2024 p2,p7].
+PinSage: graph+content beats content-only by +150% HR [Ying2018 p8]. Every fix
+needs MULTI-USER co-occurrence (we have none) -> single-household levers are
+(A) exploration + implicit-feedback harvest [BaRT McInerney2018 p1-5; YouTube
+Chen2019 p6-7] and (B) IMPORT an exogenous item-item co-engagement graph + GNN
+[DeNadai2024; Ying2018], which is also the documented TV fix. LightGCN non-viable
+solo (needs a multi-user graph) [He2020 p2].
+
+**Blind-spot probe (iter 3):** "the movie 5x could be degenerate franchise-
+matching, not taste." Evidence (Y): franchise-stratified recall (above). RESULT:
+it IS creator-affinity (novel stratum = 0 recall) -- not title/sequel matching,
+but cast/crew-driven; legitimate and production-standard, yet narrow. This both
+resolves the skeptic concern and defines the next ceiling (cross-creator recall),
+which the literature says requires co-engagement/exploration, not more content.
+
+**Overfitting check:** leave-one-out + the creator/novel split agree on
+direction (the win is real but bounded to creator-twins). Fusion is not a learned
+model (fixed weighted cosine, no training), so there is no train/test fold to
+overfit; the weight configs were not tuned on the test fold (two hand-set configs,
+tied within noise). A time-based split is deferred to when a LEARNED model (GNN)
+is introduced (iter 4+).
+
+**Convergence status:** 3/5 iterations. Baseline ✓. TWO architectures A/B'd
+(item_knn + fusion) ✓ (criterion 1 met). Headline nDCG@10 improved over baseline
+for MOVIE (5x) ✓ but TV NOT improved (criterion 2 partial). Best config stability
+across last 2 iterations: NOT yet (fusion is new this iteration) -> needs iter 4.
+Guardrail held (leakage 0). Skeptic concerns resolved (franchise=creator-affinity;
+popularity; candidate-set) except two DEFERRED ablations (fused-full, cast/crew
+isolation). Overfitting addressed via the creator/novel split. NOT converged:
+TV unsolved, fusion stability unconfirmed, ceiling-break (cross-creator) not begun.
+
+**Next action:** Iteration 4 — (1) confirm fusion stability + run the deferred
+fused mode=full ablation and clean cast-vs-crew isolation; (2) BEGIN Variant B
+(exogenous item-item co-engagement graph + propagation) as the production-grounded
+lever for cross-creator recall AND the TV gap; escalate Q3 (co-engagement source
+mapping onto TMDB ids) to /literature-consultation.
