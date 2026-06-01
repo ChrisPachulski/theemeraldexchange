@@ -15,6 +15,7 @@ const STATUS_LABEL: Record<GrabEventType, string> = {
   no_releases: 'no releases',
   all_rejected_by_cap: 'over cap',
   all_rejected_by_profile: 'profile rejected',
+  planned_size_exceeds_free_space: 'low disk space',
   grab_succeeded: 'grabbed',
   grab_failed: 'grab failed',
 }
@@ -27,6 +28,7 @@ const STATUS_TONE: Record<GrabEventType, 'ok' | 'err' | 'warn' | 'info'> = {
   no_releases: 'warn',
   all_rejected_by_cap: 'warn',
   all_rejected_by_profile: 'info',
+  planned_size_exceeds_free_space: 'warn',
   grab_succeeded: 'ok',
   grab_failed: 'err',
 }
@@ -58,6 +60,8 @@ function buildDetail(e: GrabEvent): string {
       return `${e.scanned ?? 0} scanned · cap ${e.capGb ?? '?'} GB`
     case 'all_rejected_by_profile':
       return `${e.eligible ?? 0} cap-eligible, all rejected`
+    case 'planned_size_exceeds_free_space':
+      return `${e.eligible ?? 0} eligible · insufficient free space`
     case 'grab_succeeded':
     case 'grab_failed': {
       const parts: string[] = []
