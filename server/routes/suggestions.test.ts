@@ -3341,3 +3341,59 @@ describe('suggestions route — recently-shown buffer across retry', () => {
     expect(recentBlock!.text).toContain('Clean Show A')
   })
 })
+
+describe('suggestions route — library fetch dispatches by type (Radarr for movie, Sonarr for tv)', () => {
+  // Regression guard for the fetchLibraryCached(type) collapse: the two
+  // single-line fetchSonarrLibrary/fetchRadarrLibrary wrappers were removed and
+  // the request handler now calls fetchLibraryCached(type) directly. This pins
+  // the dispatch contract that the collapse must preserve — a /movie request
+  // MUST hit Radarr's /api/v3/movie endpoint (and never Sonarr's /api/v3/series),
+  // and a /tv request MUST hit Sonarr's /api/v3/series endpoint (and never
+  // Radarr's /api/v3/movie). If the internal `kind === 'movie' ? radarr : sonarr`
+  // dispatch in fetchLibraryCached ever flips, this fails loudly.
+  function trackingFetch() {
+    const arrCalls: { movie: number; series: number } = { movie: 0, series: 0 }
+    const fn = vi.fn(async (input: unknown) => {
+      const url =
+        typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : (input as { url: string }).url
+      if (url.includes('/api/v3/movie')) {
+        arrCalls.movie++
+        return new Response(JSON.stringify([]), { status: 200 })
+      }
+      if (url.includes('/api/v3/series')) {
+        arrCalls.series++
+        return new Response(JSON.stringify([]), { status: 200 })
+      }
+      return new Response(JSON.stringify({ results: [] }), { status: 200 })
+    })
+    return { arrCalls, fn }
+  }
+
+  it('/movie fetches the Radarr library only (never Sonarr)', async () => {
+    _setTmdbApiKeyForTests('test-key')
+    const { arrCalls, fn } = trackingFetch()
+    vi.stubGlobal('fetch', fn)
+    const r = await appUnderTest().request('/movie', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    expect(arrCalls.movie).toBeGreaterThan(0)
+    expect(arrCalls.series).toBe(0)
+  })
+
+  it('/tv fetches the Sonarr library only (never Radarr)', async () => {
+    _setTmdbApiKeyForTests('test-key')
+    const { arrCalls, fn } = trackingFetch()
+    vi.stubGlobal('fetch', fn)
+    const r = await appUnderTest().request('/tv', {
+      headers: { Cookie: await userCookie(), 'X-Anthropic-Api-Key': 'sk-ant-test-fakekey' },
+    })
+    expect(r.status).toBe(200)
+    expect(arrCalls.series).toBeGreaterThan(0)
+    expect(arrCalls.movie).toBe(0)
+  })
+})
