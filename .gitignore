@@ -70,3 +70,9 @@ crates/emerald-contracts-pyo3/*.pyd
 
 # audit artifacts
 .audit_allfiles.txt
+
+# Offline recsys-eval venv (numpy + sqlite-vec + pydantic); host-specific.
+recommender/.venv-eval/
+
+# BGE content-embedding venv (torch + sentence-transformers); host-specific.
+recommender/.venv-embed/

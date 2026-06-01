@@ -32,6 +32,10 @@ REGISTRY: dict[str, str] = {
     "baseline_cosine": "app.recipes.baseline_cosine",
     "mmr_diverse": "app.recipes.mmr_diverse",
     "cold_start_trending": "app.recipes.cold_start_trending",
+    # Promoted from the research loop: content + cast/crew fused item re-rank.
+    "fused": "app.recipes.fused",
+    # Research variants (not yet promoted to production):
+    "item_knn": "app.recipes.item_knn",
 }
 
 

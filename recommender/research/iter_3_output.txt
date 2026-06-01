@@ -1,0 +1,394 @@
+emerald_contracts unavailable — sub-namespace validation disabled. Build the wheel via `cd crates/emerald-contracts-pyo3 && maturin develop --release` or run the recommender Docker image which installs it at build time.
+{
+  "db_path": "/Users/cujo253/Documents/eex-recsys-lit/snapshot/exchange.db",
+  "db_exists": true,
+  "n_titles": 37738,
+  "n_title_vec": 37738,
+  "n_title_features": 37738,
+  "n_library_items": 0,
+  "n_household_rejections": 10,
+  "library_cached_movie": true,
+  "library_cached_tv": true,
+  "rejections_cached": true,
+  "active_model": {
+    "version": "v-20260525-114009-c3fb97",
+    "recipe": "mmr_diverse",
+    "params": "{\"pool_size\": 800, \"negative_weight\": 0.3, \"popularity_weight\": 0.05, \"min_vote_count\": 50, \"personalized_threshold\": 0.45, \"mmr_lambda\": 0.7, \"mmr_input_k\": 200}"
+  }
+}
+
+===== REF mmr_diverse:movie =====
+{
+  "recipe": "mmr_diverse",
+  "kind": "movie",
+  "params": {
+    "pool_size": 800,
+    "negative_weight": 0.3,
+    "popularity_weight": 0.05,
+    "min_vote_count": 50,
+    "personalized_threshold": 0.45,
+    "mmr_lambda": 0.7,
+    "mmr_input_k": 200
+  },
+  "n_positive_folds": 753,
+  "n_recallable_ceiling": 753,
+  "recallable_frac": 1.0,
+  "n_reject_in_catalog": 363,
+  "metrics": {
+    "recall@10": 0.0053,
+    "recall@50": 0.0173,
+    "ndcg@10": 0.0021,
+    "ndcg@50": 0.0046
+  },
+  "leakage_filtered_count": {
+    "10": 0,
+    "50": 0
+  },
+  "leakage_unfiltered_count": {
+    "10": 0,
+    "50": 2
+  },
+  "leakage_filtered_frac@50": 0.0,
+  "leakage_unfiltered_frac@50": 0.0055,
+  "eval_seconds": 58.1
+}
+
+===== REF item_knn_minilm_ann_max:movie =====
+{
+  "recipe": "item_knn",
+  "kind": "movie",
+  "params": {
+    "popularity_weight": 0.05,
+    "min_vote_count": 50,
+    "personalized_threshold": 0.45,
+    "neighbor_topk": 1,
+    "candidate_pool": "ann",
+    "pool_size": 800
+  },
+  "n_positive_folds": 753,
+  "n_recallable_ceiling": 753,
+  "recallable_frac": 1.0,
+  "n_reject_in_catalog": 363,
+  "metrics": {
+    "recall@10": 0.0053,
+    "recall@50": 0.0292,
+    "ndcg@10": 0.0019,
+    "ndcg@50": 0.0072
+  },
+  "leakage_filtered_count": {
+    "10": 0,
+    "50": 0
+  },
+  "leakage_unfiltered_count": {
+    "10": 0,
+    "50": 2
+  },
+  "leakage_filtered_frac@50": 0.0,
+  "leakage_unfiltered_frac@50": 0.0055,
+  "eval_seconds": 43.8
+}
+
+===== REF mmr_diverse:tv =====
+{
+  "recipe": "mmr_diverse",
+  "kind": "tv",
+  "params": {
+    "pool_size": 800,
+    "negative_weight": 0.3,
+    "popularity_weight": 0.05,
+    "min_vote_count": 50,
+    "personalized_threshold": 0.45,
+    "mmr_lambda": 0.7,
+    "mmr_input_k": 200
+  },
+  "n_positive_folds": 235,
+  "n_recallable_ceiling": 235,
+  "recallable_frac": 1.0,
+  "n_reject_in_catalog": 286,
+  "metrics": {
+    "recall@10": 0.0085,
+    "recall@50": 0.017,
+    "ndcg@10": 0.003,
+    "ndcg@50": 0.005
+  },
+  "leakage_filtered_count": {
+    "10": 0,
+    "50": 0
+  },
+  "leakage_unfiltered_count": {
+    "10": 1,
+    "50": 4
+  },
+  "leakage_filtered_frac@50": 0.0,
+  "leakage_unfiltered_frac@50": 0.014,
+  "eval_seconds": 7.6
+}
+
+===== REF item_knn_minilm_ann_max:tv =====
+{
+  "recipe": "item_knn",
+  "kind": "tv",
+  "params": {
+    "popularity_weight": 0.05,
+    "min_vote_count": 50,
+    "personalized_threshold": 0.45,
+    "neighbor_topk": 1,
+    "candidate_pool": "ann",
+    "pool_size": 800
+  },
+  "n_positive_folds": 235,
+  "n_recallable_ceiling": 235,
+  "recallable_frac": 1.0,
+  "n_reject_in_catalog": 286,
+  "metrics": {
+    "recall@10": 0.0,
+    "recall@50": 0.0213,
+    "ndcg@10": 0.0,
+    "ndcg@50": 0.0049
+  },
+  "leakage_filtered_count": {
+    "10": 0,
+    "50": 0
+  },
+  "leakage_unfiltered_count": {
+    "10": 0,
+    "50": 1
+  },
+  "leakage_filtered_frac@50": 0.0,
+  "leakage_unfiltered_frac@50": 0.0035,
+  "eval_seconds": 6.2
+}
+
+===== VARIANT fused_balanced:movie =====
+{
+  "label": "fused_balanced",
+  "kind": "movie",
+  "mode": "ann",
+  "weights": {
+    "text": 1.0,
+    "genre": 0.3,
+    "keyword": 1.0,
+    "cast": 0.7,
+    "crew": 0.5
+  },
+  "n_positive_folds": 753,
+  "n_reject_in_catalog": 363,
+  "metrics": {
+    "recall@10": 0.0279,
+    "recall@50": 0.0398,
+    "ndcg@10": 0.0106,
+    "ndcg@50": 0.0135
+  },
+  "eval_seconds": 45.9
+}
+
+===== VARIANT fused_balanced:tv =====
+{
+  "label": "fused_balanced",
+  "kind": "tv",
+  "mode": "ann",
+  "weights": {
+    "text": 1.0,
+    "genre": 0.3,
+    "keyword": 1.0,
+    "cast": 0.7,
+    "crew": 0.5
+  },
+  "n_positive_folds": 235,
+  "n_reject_in_catalog": 286,
+  "metrics": {
+    "recall@10": 0.0043,
+    "recall@50": 0.0085,
+    "ndcg@10": 0.0015,
+    "ndcg@50": 0.0025
+  },
+  "eval_seconds": 6.5
+}
+
+===== VARIANT fused_meta_heavy:movie =====
+{
+  "label": "fused_meta_heavy",
+  "kind": "movie",
+  "mode": "ann",
+  "weights": {
+    "text": 0.5,
+    "genre": 0.5,
+    "keyword": 1.5,
+    "cast": 1.0,
+    "crew": 0.7
+  },
+  "n_positive_folds": 753,
+  "n_reject_in_catalog": 363,
+  "metrics": {
+    "recall@10": 0.0252,
+    "recall@50": 0.0398,
+    "ndcg@10": 0.0103,
+    "ndcg@50": 0.0139
+  },
+  "eval_seconds": 46.0
+}
+
+===== VARIANT fused_meta_heavy:tv =====
+{
+  "label": "fused_meta_heavy",
+  "kind": "tv",
+  "mode": "ann",
+  "weights": {
+    "text": 0.5,
+    "genre": 0.5,
+    "keyword": 1.5,
+    "cast": 1.0,
+    "crew": 0.7
+  },
+  "n_positive_folds": 235,
+  "n_reject_in_catalog": 286,
+  "metrics": {
+    "recall@10": 0.0043,
+    "recall@50": 0.0085,
+    "ndcg@10": 0.0016,
+    "ndcg@50": 0.0026
+  },
+  "eval_seconds": 6.6
+}
+
+===== VARIANT fused_text_kw:movie =====
+{
+  "label": "fused_text_kw",
+  "kind": "movie",
+  "mode": "ann",
+  "weights": {
+    "text": 1.0,
+    "keyword": 1.0
+  },
+  "n_positive_folds": 753,
+  "n_reject_in_catalog": 363,
+  "metrics": {
+    "recall@10": 0.0106,
+    "recall@50": 0.0186,
+    "ndcg@10": 0.0036,
+    "ndcg@50": 0.0055
+  },
+  "eval_seconds": 44.5
+}
+
+===== VARIANT fused_text_kw:tv =====
+{
+  "label": "fused_text_kw",
+  "kind": "tv",
+  "mode": "ann",
+  "weights": {
+    "text": 1.0,
+    "keyword": 1.0
+  },
+  "n_positive_folds": 235,
+  "n_reject_in_catalog": 286,
+  "metrics": {
+    "recall@10": 0.0043,
+    "recall@50": 0.0085,
+    "ndcg@10": 0.0015,
+    "ndcg@50": 0.0026
+  },
+  "eval_seconds": 6.6
+}
+
+=== SYNTHESIS (iteration 2) ===
+HEADLINE (nDCG@10): UNMOVED. mmr_diverse (the deployed baseline) is still best
+on the headline -- movie 0.0021, tv 0.0030. No item_knn variant beats it on
+nDCG@10 (best is item_knn ann_max movie 0.0019 ~= baseline; baseline wins tv).
+
+WHAT item_knn (ann_max) DOES win, and it is real + production-deployable:
+deep recall. recall@50 movie 0.0292 vs 0.0173 (+69%), tv 0.0213 vs 0.0170
+(+25%); ndcg@50 movie 0.0072 vs 0.0046 (+57%). ann_max uses the SAME 800-item
+centroid-ANN pool the baseline uses -- only the scoring changes (max cosine to
+any library item, not distance to the averaged centroid). So it is a shippable
+Pareto move: more of the household's latent taste deep in the list, top-10 and
+leakage unchanged. Lineage: Amazon item-to-item CF (Linden 2003) + content-kNN
+(Spotify audiobook cold-start, DeNadai 2024).
+
+DECOMPOSITION (resolves the candidate-set confound, skeptic CRITICAL #1):
+the dominant lever is AGGREGATION (max >> top-k-mean), not candidate reach.
+full_max ~= ann_max on recall@50 (0.0372 vs 0.0292); the full-catalog scan adds
+only +27% over the 800-pool for movie and is WORSE for tv (near-duplicate series
+crowd the top). Popularity prior: ablated to ZERO effect (pop0 == pop0.05).
+
+THE REAL CEILING IS THE REPRESENTATION, NOT THE RANKER. Blind-spot probe: only
+7% of movie / 0% of tv held-out titles have a strong content twin (>=0.8) in the
+rest of the library; 14% movie / 20% tv have no twin even >=0.5; the mass sits
+at 0.5-0.7. MiniLM-over-(title+overview) gives weak item-item structure, and
+there is no preference/co-occurrence signal to rank among content-similar items.
+Every recipe tops out at <4% recall@50 for this reason.
+
+LADDER AHEAD (production-first; each traces to a deployed system + Zotero paper):
+  -> ITER 3: richer item embeddings from genres/cast/crew/keywords (all in the
+     DB) -- Spotify audiobook GNN / ItemSage. Sharpen the twin structure that
+     caps recall. THIS is the indicated next lever, not more ranking machinery.
+  -> EASE only as a content-feature-Gram re-weighter (NOT the textbook 1-user
+     binary form, which is degenerate at n_users=1 -- Steck 2019 p2).
+  -> calibrated re-rank (Steck 2018) and sequential models later, if the
+     representation lift plateaus.
+
+TENSIONS:
+  - recall@50 vs nDCG@10: ann_max trades nothing at top-10 but lifts deep recall;
+    full_max lifts deep recall MORE but zeroes nDCG@10 (twins ranked 11-50, and
+    near-duplicate catalog items crowd the top-10). For a 20-item discovery strip
+    the right operating point is ann_max (top-10 safe), not full_max.
+  - movie vs tv candidate set: full helps movie recall, hurts tv (dup series).
+OPEN (skeptic MAJOR, address iter 3): franchise bias -- are recall@50 gains just
+sequels/same-franchise twins? Needs franchise-stratified recall.
+
+
+===== SUPPLEMENT (iter3): franchise stratification of fused_balanced =====
+{
+  "kind": "movie",
+  "weights": {
+    "text": 1.0,
+    "genre": 0.3,
+    "keyword": 1.0,
+    "cast": 0.7,
+    "crew": 0.5
+  },
+  "leakage_filtered@50": 0,
+  "strata": {
+    "creator_twin": {
+      "n": 669,
+      "recall@10": 0.0105,
+      "se@10": 0.0039,
+      "recall@50": 0.0463,
+      "se@50": 0.0081
+    },
+    "novel": {
+      "n": 84,
+      "recall@10": 0.0,
+      "se@10": 0.0,
+      "recall@50": 0.0,
+      "se@50": 0.0
+    }
+  }
+}
+{
+  "kind": "tv",
+  "weights": {
+    "text": 1.0,
+    "genre": 0.3,
+    "keyword": 1.0,
+    "cast": 0.7,
+    "crew": 0.5
+  },
+  "leakage_filtered@50": 0,
+  "strata": {
+    "creator_twin": {
+      "n": 24,
+      "recall@10": 0.0417,
+      "se@10": 0.0408,
+      "recall@50": 0.0417,
+      "se@50": 0.0408
+    },
+    "novel": {
+      "n": 211,
+      "recall@10": 0.0,
+      "se@10": 0.0,
+      "recall@50": 0.0047,
+      "se@50": 0.0047
+    }
+  }
+}

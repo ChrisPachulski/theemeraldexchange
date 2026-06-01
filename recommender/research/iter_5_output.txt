@@ -1,0 +1,131 @@
+emerald_contracts unavailable — sub-namespace validation disabled. Build the wheel via `cd crates/emerald-contracts-pyo3 && maturin develop --release` or run the recommender Docker image which installs it at build time.
+# graph ready 192s; nodes_w_nbr=11073
+
+===== REF content_only (ann pool, no union) =====
+{
+  "label": "content_only_annpool",
+  "kind": "movie",
+  "beta": 0.0,
+  "content_only": true,
+  "cooccur_only": false,
+  "leakage_filtered@50": 0,
+  "strata": {
+    "creator_twin": {
+      "n": 669,
+      "recall@10": 0.0194,
+      "recall@50": 0.0508,
+      "ndcg@10": 0.0091
+    },
+    "novel": {
+      "n": 84,
+      "recall@10": 0.0,
+      "recall@50": 0.0,
+      "ndcg@10": 0.0
+    },
+    "all": {
+      "n": 753,
+      "recall@10": 0.0173,
+      "recall@50": 0.0452,
+      "ndcg@10": 0.0081
+    }
+  },
+  "eval_seconds": 63.8
+}
+
+===== CAPSTONE union_content_zscored =====
+{
+  "label": "union_content_zscored",
+  "kind": "movie",
+  "score_mode": "content",
+  "beta": 0.0,
+  "mean_universe_size": 5362,
+  "held_out_in_universe_frac": 0.6401,
+  "leakage_filtered@50": 0,
+  "strata": {
+    "creator_twin": {
+      "n": 669,
+      "recall@10": 0.0463,
+      "recall@50": 0.1495,
+      "ndcg@10": 0.0194
+    },
+    "novel": {
+      "n": 84,
+      "recall@10": 0.0,
+      "recall@50": 0.0,
+      "ndcg@10": 0.0
+    },
+    "all": {
+      "n": 753,
+      "recall@10": 0.0412,
+      "recall@50": 0.1328,
+      "ndcg@10": 0.0173
+    }
+  },
+  "eval_seconds": 69.7
+}
+
+===== CAPSTONE union_fused_b0.5 =====
+{
+  "label": "union_fused_b0.5",
+  "kind": "movie",
+  "score_mode": "fused",
+  "beta": 0.5,
+  "mean_universe_size": 5362,
+  "held_out_in_universe_frac": 0.6401,
+  "leakage_filtered@50": 0,
+  "strata": {
+    "creator_twin": {
+      "n": 669,
+      "recall@10": 0.0433,
+      "recall@50": 0.145,
+      "ndcg@10": 0.0198
+    },
+    "novel": {
+      "n": 84,
+      "recall@10": 0.0,
+      "recall@50": 0.0,
+      "ndcg@10": 0.0
+    },
+    "all": {
+      "n": 753,
+      "recall@10": 0.0385,
+      "recall@50": 0.1288,
+      "ndcg@10": 0.0176
+    }
+  },
+  "eval_seconds": 78.5
+}
+
+===== CAPSTONE union_fused_b1.0 =====
+{
+  "label": "union_fused_b1.0",
+  "kind": "movie",
+  "score_mode": "fused",
+  "beta": 1.0,
+  "mean_universe_size": 5362,
+  "held_out_in_universe_frac": 0.6401,
+  "leakage_filtered@50": 0,
+  "strata": {
+    "creator_twin": {
+      "n": 669,
+      "recall@10": 0.0389,
+      "recall@50": 0.1375,
+      "ndcg@10": 0.0164
+    },
+    "novel": {
+      "n": 84,
+      "recall@10": 0.0,
+      "recall@50": 0.0,
+      "ndcg@10": 0.0
+    },
+    "all": {
+      "n": 753,
+      "recall@10": 0.0345,
+      "recall@50": 0.1222,
+      "ndcg@10": 0.0145
+    }
+  },
+  "eval_seconds": 78.7
+}
+
+EXIT: 0
