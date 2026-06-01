@@ -17,6 +17,10 @@ const DEFAULTS = {
   // driver uses the guard's nextDelaySeconds VERBATIM, so this is the hard
   // upper bound on idle time during a healthy window — no lazy 30-min gaps.
   CADENCE_SECONDS: 120,
+  // Max age (seconds) of a usage read the guard will trust. Older than this and
+  // it idles rather than spend on unverifiable headroom (the usage API 429s, so
+  // reads can go stale). Windows move slowly, so 600s is accurate enough.
+  USAGE_STALE_SECONDS: 600,
   // Claude-window ceilings (%) — stay under 100 so the loop never pushes into
   // paid overage. The guard idles until reset when a ceiling is hit.
   FIVE_HOUR_CEILING: 85,
