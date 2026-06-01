@@ -19,7 +19,7 @@ from app import telemetry
 
 def _set_env(monkeypatch: pytest.MonkeyPatch, **env: str | None) -> None:
     # Start from a clean slate for the vars init_telemetry/_resolve_dsn read.
-    for key in ("SENTRY_DSN", "GLITCHTIP_DSN", "NODE_ENV"):
+    for key in ("EEX_TELEMETRY_DSN", "SENTRY_DSN", "GLITCHTIP_DSN", "NODE_ENV"):
         monkeypatch.delenv(key, raising=False)
     for key, value in env.items():
         if value is not None:
@@ -33,7 +33,17 @@ def test_no_dsn_skips(monkeypatch):
 
 
 def test_resolve_prefers_sentry_dsn(monkeypatch):
-    # Both set -> SENTRY_DSN wins (documented precedence).
+    # Canonical EEX_TELEMETRY_DSN wins over SENTRY_DSN/GLITCHTIP_DSN (matches the
+    # server stack; this is what makes the sidecar actually init in prod).
+    _set_env(
+        monkeypatch,
+        EEX_TELEMETRY_DSN="eex-value",
+        SENTRY_DSN="sentry-value",
+        GLITCHTIP_DSN="glitchtip-value",
+    )
+    assert telemetry._resolve_dsn() == "eex-value"
+
+    # Without EEX_TELEMETRY_DSN: SENTRY_DSN wins over GLITCHTIP_DSN.
     _set_env(monkeypatch, SENTRY_DSN="sentry-value", GLITCHTIP_DSN="glitchtip-value")
     assert telemetry._resolve_dsn() == "sentry-value"
 
