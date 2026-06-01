@@ -253,3 +253,67 @@ jobs:
       # and Apple/M3/M4 ports will silently break.
       - name: cargo test (workspace minus pyo3)
         run: cargo test --workspace --exclude emerald-contracts-pyo3 --all-targets
+
+  audit:
+    # Dependency vulnerability gate (production-readiness MEDIUM #7/#23).
+    # Runs npm audit, cargo audit, and pip-audit in parallel sub-steps so a
+    # known CVE in any layer blocks the merge before it reaches main.
+    # pip-audit scans recommender/pyproject.toml via --requirement to avoid
+    # needing a full venv install.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.90'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-audit-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-audit-
+
+      - name: Install JS dependencies (for npm audit)
+        run: npm ci
+
+      - name: npm audit (high+)
+        # --audit-level=high fails on high/critical only; moderate advisories
+        # are tracked but do not block CI. Promote to moderate once the tree
+        # is clean of existing moderate findings.
+        run: npm audit --audit-level=high --omit=dev
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: cargo audit
+        run: cargo audit
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: pip-audit (recommender)
+        # Install pip-compile so we can resolve the floating pyproject.toml
+        # ranges into a concrete list for pip-audit. --no-deps on the audit
+        # is intentional: pip-audit resolves transitives itself from PyPI.
+        # When a lockfile is added (MEDIUM #10), replace this step with
+        # `pip-audit -r constraints.txt` or `pip-audit --require-hashes`.
+        working-directory: recommender
+        run: |
+          pip install pip-tools
+          pip-compile pyproject.toml --quiet --output-file /tmp/recommender-resolved.txt
+          pip-audit -r /tmp/recommender-resolved.txt
