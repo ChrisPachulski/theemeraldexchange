@@ -13,10 +13,44 @@ import { useAuth } from '../auth'
 const SCOPED_PREFIX = 'eex.apiKey.'
 const LEGACY_KEY = 'eex.apiKey'
 
+// The localStorage key for a given sub. The cross-tab listener compares
+// incoming StorageEvent.key against this exact string.
+export function scopedKeyName(sub: string): string {
+  return SCOPED_PREFIX + sub
+}
+
 function readScoped(sub: string | undefined): string | null {
   if (!sub) return null
   if (typeof localStorage === 'undefined') return null
   return localStorage.getItem(SCOPED_PREFIX + sub)
+}
+
+// Pure form of the one-time legacy migration the mount effect runs.
+// Reads the sub-scoped value; if absent, falls back to the legacy
+// unscoped key and (best-effort) copies it into the scoped slot, then
+// clears the legacy key — matching the original effect exactly: the
+// `current = legacy` assignment lives INSIDE the try, so a setItem
+// failure (private mode / quota) is swallowed and leaves `current`
+// null rather than adopting the un-persisted legacy value. Returns the
+// resolved key, or null when neither slot holds a value.
+export function migrateLegacyKey(
+  storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>,
+  sub: string,
+): string | null {
+  let current = storage.getItem(SCOPED_PREFIX + sub)
+  if (!current) {
+    const legacy = storage.getItem(LEGACY_KEY)
+    if (legacy) {
+      try {
+        storage.setItem(SCOPED_PREFIX + sub, legacy)
+        storage.removeItem(LEGACY_KEY)
+        current = legacy
+      } catch {
+        // private mode / quota — non-fatal
+      }
+    }
+  }
+  return current
 }
 
 // Non-secret fingerprint of an API key, suitable for use inside a
@@ -58,27 +92,14 @@ export function useUserApiKey(): {
       setKeyState(null)
       return
     }
-    let current = localStorage.getItem(SCOPED_PREFIX + sub)
-    if (!current) {
-      const legacy = localStorage.getItem(LEGACY_KEY)
-      if (legacy) {
-        try {
-          localStorage.setItem(SCOPED_PREFIX + sub, legacy)
-          localStorage.removeItem(LEGACY_KEY)
-          current = legacy
-        } catch {
-          // private mode / quota — non-fatal
-        }
-      }
-    }
-    setKeyState(current)
+    setKeyState(migrateLegacyKey(localStorage, sub))
   }, [sub])
 
   // Sync across tabs.
   useEffect(() => {
     if (!sub) return
     const onStorage = (e: StorageEvent) => {
-      if (e.key === SCOPED_PREFIX + sub) setKeyState(e.newValue)
+      if (e.key === scopedKeyName(sub)) setKeyState(e.newValue)
     }
     window.addEventListener('storage', onStorage)
     return () => window.removeEventListener('storage', onStorage)
