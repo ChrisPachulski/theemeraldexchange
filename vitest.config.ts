@@ -52,6 +52,18 @@ export default defineConfig({
         'server/index.ts', // entry point — only thing it does is `serve()`
         '**/*.test.ts',
       ],
+      // Regression floor derived from a real `npm run test:coverage` run
+      // (Stmts 81 / Branch 71.5 / Funcs 79.7 / Lines 84.4 on the included
+      // files). Each metric is rounded DOWN to the nearest 5 and given an
+      // extra 5-point margin — intentionally BELOW current coverage so the
+      // gate catches regressions without flaking on minor churn, not to
+      // enforce a target. perFile is left off (too brittle for this tree).
+      thresholds: {
+        statements: 75,
+        branches: 65,
+        functions: 70,
+        lines: 75,
+      },
     },
   },
 })
