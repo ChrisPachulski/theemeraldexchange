@@ -398,57 +398,106 @@ def section2_item_knn() -> dict:
     return results
 
 
+# --- SECTION 3: VARIANT -- multi-feature fused item representation ------------
+# Iteration-2 proved the ranker is not the bottleneck; the MiniLM(title+overview)
+# representation is. This fuses MiniLM with IDF-weighted genre/keyword/cast/crew
+# blocks (ItemSage multi-feature pattern, Baltescu 2022) and re-scores the SAME
+# 800-item ANN pool by max fused-sim. Fair A/B vs the iteration-2 minilm ann_max.
+
+def section3_fusion() -> dict:
+    import fusion as FUSE
+    conn = connect()
+    results: dict[str, dict] = {}
+
+    # References (self-contained iteration): production baseline + iter-2 winner.
+    for kind in KINDS:
+        print(f"\n===== REF mmr_diverse:{kind} =====")
+        results[f"mmr_diverse:{kind}"] = evaluate_recipe(
+            conn, recipe_name="mmr_diverse", params={}, kind=kind)
+        print(f"\n===== REF item_knn_minilm_ann_max:{kind} =====")
+        results[f"item_knn_minilm_ann_max:{kind}"] = evaluate_recipe(
+            conn, recipe_name="item_knn",
+            params={"candidate_pool": "ann", "neighbor_topk": 1, "pool_size": 800}, kind=kind)
+
+    # Fused variants (ann mode = deployable A/B).
+    weight_configs = {
+        "fused_balanced":   {"text": 1.0, "genre": 0.3, "keyword": 1.0, "cast": 0.7, "crew": 0.5},
+        "fused_meta_heavy": {"text": 0.5, "genre": 0.5, "keyword": 1.5, "cast": 1.0, "crew": 0.7},
+        "fused_text_kw":    {"text": 1.0, "keyword": 1.0},  # ablation: text + keywords only
+    }
+    for name, w in weight_configs.items():
+        for kind in KINDS:
+            tag = f"{name}:{kind}"
+            print(f"\n===== VARIANT {tag} =====")
+            res = FUSE.evaluate_fused(conn, kind=kind, weights=w, mode="ann", label=name)
+            print(json.dumps(res, indent=2))
+            results[tag] = res
+
+    # Franchise stratification of the winning config (skeptic franchise-bias +
+    # iteration-3 blind-spot probe): is the fused lift creator-affinity-driven?
+    win = weight_configs["fused_balanced"]
+    for kind in KINDS:
+        print(f"\n===== FRANCHISE STRATIFICATION fused_balanced:{kind} =====")
+        strat = FUSE.franchise_stratified(conn, kind=kind, weights=win)
+        print(json.dumps(strat, indent=2))
+        results[f"franchise:{kind}"] = strat
+    return results
+
+
 # --- SYNTHESIS (updated every iteration: current best metric + what changed) --
 SYNTHESIS = """
-=== SYNTHESIS (iteration 2) ===
-HEADLINE (nDCG@10): UNMOVED. mmr_diverse (the deployed baseline) is still best
-on the headline -- movie 0.0021, tv 0.0030. No item_knn variant beats it on
-nDCG@10 (best is item_knn ann_max movie 0.0019 ~= baseline; baseline wins tv).
+=== SYNTHESIS (iteration 3) ===
+BEST CONFIG (movie headline): fused_balanced -- MiniLM fused with IDF-weighted
+genre/keyword/cast/crew, re-scoring the 800-item MiniLM-ANN pool by max fused-sim.
+FIRST config to beat the baseline on the headline nDCG@10:
+  movie nDCG@10 0.0021 -> 0.0106 (5.0x); recall@10 4 -> 21 titles (+17, 5.3x);
+  recall@50 13 -> 30 (+17, 2.3x); leakage_filtered@50 = 0.
+fused_meta_heavy ties within sampling error. Lineage: ItemSage multi-feature
+fusion (Baltescu 2022); Spotify content cold-start (DeNadai 2024).
 
-WHAT item_knn (ann_max) DOES win, and it is real + production-deployable:
-deep recall. recall@50 movie 0.0292 vs 0.0173 (+69%), tv 0.0213 vs 0.0170
-(+25%); ndcg@50 movie 0.0072 vs 0.0046 (+57%). ann_max uses the SAME 800-item
-centroid-ANN pool the baseline uses -- only the scoring changes (max cosine to
-any library item, not distance to the averaged centroid). So it is a shippable
-Pareto move: more of the household's latent taste deep in the list, top-10 and
-leakage unchanged. Lineage: Amazon item-to-item CF (Linden 2003) + content-kNN
-(Spotify audiobook cold-start, DeNadai 2024).
+HONEST SCOPE (devils-advocate-tightened):
+  - Real but absolutely small: +17 of 753 at recall@10. "5x" is over a basement;
+    always pair with the count.
+  - Deployable as a RE-RANK STAGE over the existing MiniLM-ANN pool (no retrieval
+    change). NOT a shipped recipe yet (research/, scipy); full deploy = precompute
+    fused vectors into the index.
+  - The lift is ENTIRELY creator-affinity. Stratified: movie creator_twin
+    (n=669) recall@10 0.0105; novel stratum (n=84, no shared cast/crew)
+    recall@10 = 0.0. Legitimate but NARROW -- zero cross-creator generalization.
 
-DECOMPOSITION (resolves the candidate-set confound, skeptic CRITICAL #1):
-the dominant lever is AGGREGATION (max >> top-k-mean), not candidate reach.
-full_max ~= ann_max on recall@50 (0.0372 vs 0.0292); the full-catalog scan adds
-only +27% over the 800-pool for movie and is WORSE for tv (near-duplicate series
-crowd the top). Popularity prior: ablated to ZERO effect (pop0 == pop0.05).
+TV: no win (nDCG@10 0.0015 < baseline 0.0030). EXPLAINED: only 10% of TV titles
+are creator-twins (89% for movies); series rarely share cast/crew, so the
+mechanism that powers movies has nothing to work with on TV.
 
-THE REAL CEILING IS THE REPRESENTATION, NOT THE RANKER. Blind-spot probe: only
-7% of movie / 0% of tv held-out titles have a strong content twin (>=0.8) in the
-rest of the library; 14% movie / 20% tv have no twin even >=0.5; the mass sits
-at 0.5-0.7. MiniLM-over-(title+overview) gives weak item-item structure, and
-there is no preference/co-occurrence signal to rank among content-similar items.
-Every recipe tops out at <4% recall@50 for this reason.
+THE NEXT CEILING (literature Q2, grounded): content/creator similarity has a
+documented production recall ceiling (Spotify content-only HR@10 0.164 plateau;
+co-engagement-graph GNN +36-57% HR, long-tail +118% -- DeNadai 2024). Single
+household = no co-occurrence. Levers: (A) EXPLORATION + implicit-feedback harvest
+(BaRT McInerney 2018; YouTube Top-K REINFORCE Chen 2019); (B) IMPORT an exogenous
+item-item co-engagement graph + GNN propagation (also the documented TV fix:
+series share audiences, not casts). Pure collaborative (LightGCN) non-viable solo.
 
-LADDER AHEAD (production-first; each traces to a deployed system + Zotero paper):
-  -> ITER 3: richer item embeddings from genres/cast/crew/keywords (all in the
-     DB) -- Spotify audiobook GNN / ItemSage. Sharpen the twin structure that
-     caps recall. THIS is the indicated next lever, not more ranking machinery.
-  -> EASE only as a content-feature-Gram re-weighter (NOT the textbook 1-user
-     binary form, which is degenerate at n_users=1 -- Steck 2019 p2).
-  -> calibrated re-rank (Steck 2018) and sequential models later, if the
-     representation lift plateaus.
+LADDER AHEAD:
+  -> ITER 4: confirm fusion stability; fused mode=full ablation (retrieval vs
+     ranking) + clean cast-vs-crew isolation; BEGIN Variant B (exogenous
+     co-engagement graph) -- the cross-creator + TV lever.
+  -> calibrated re-rank (Steck 2018), sequential models later.
 
 TENSIONS:
-  - recall@50 vs nDCG@10: ann_max trades nothing at top-10 but lifts deep recall;
-    full_max lifts deep recall MORE but zeroes nDCG@10 (twins ranked 11-50, and
-    near-duplicate catalog items crowd the top-10). For a 20-item discovery strip
-    the right operating point is ann_max (top-10 safe), not full_max.
-  - movie vs tv candidate set: full helps movie recall, hurts tv (dup series).
-OPEN (skeptic MAJOR, address iter 3): franchise bias -- are recall@50 gains just
-sequels/same-franchise twins? Needs franchise-stratified recall.
+  - movie vs tv: fusion's creator-affinity mechanism is movie-only by data
+    structure; TV needs co-engagement, not content.
+  - relative vs absolute: 5x headline is real but +17 titles; do not oversell.
+RESOLVED: franchise bias (it IS creator-affinity, stratified + documented as
+legitimate-but-narrow); popularity confound (iter 2, zero effect); candidate-set
+confound (iter 2, survives at equal budget).
 """
 
 if __name__ == "__main__":
     info = section0_readiness()
     if info.get("db_exists"):
-        section1_baseline()
-        section2_item_knn()
+        # Iterations 1-2 (baseline + item_knn A/B) are committed and stable; their
+        # numbers live in iter_1/iter_2_output.txt. Iteration 3 runs the fusion
+        # A/B, which re-runs the production baseline + iter-2 winner as references
+        # so this output file is self-contained.
+        section3_fusion()
     print(SYNTHESIS)
