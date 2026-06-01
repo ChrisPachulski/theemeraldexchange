@@ -179,7 +179,8 @@ export function addRejection(
       // Upgrade legacy / stale entries in place when a fresh title
       // arrives. Empty incoming title never overwrites a known one
       // (filtered by the fast-path above).
-      const target = next[kind].find((e) => e.id === tmdbId)!
+      const target = next[kind].find((e) => e.id === tmdbId)
+      if (!target) return
       target.title = safeTitle
     }
     await persistSnapshot(next)
@@ -215,7 +216,8 @@ export function updateRejectionTitleIfPresent(
     if (!existing) return // cleared by a concurrent op — leave it cleared
     if (existing.title === safeTitle) return // already up to date
     const next = cloneFile(file)
-    const target = next[kind].find((e) => e.id === tmdbId)!
+    const target = next[kind].find((e) => e.id === tmdbId)
+    if (!target) return
     target.title = safeTitle
     await persistSnapshot(next)
     cached = next
