@@ -10,10 +10,12 @@ import {
 // react-test-renderer, and we must not add any. So instead of rendering
 // the hook, we pin the PURE scoping / migration / fingerprint logic the
 // hook delegates to (the same pattern usePlexLinks.test.ts uses for its
-// extracted URL builders). The hook's React-effect wiring — re-reading
-// on sub change, the cross-tab `storage` listener, setKey/clearKey —
-// is exercised indirectly via the component tests (MoviesTab/TvTab/
-// ApiKeySettings). Where a global is needed we stub it with
+// extracted URL builders). The hook's React-effect wiring itself —
+// re-reading on sub change, the cross-tab `storage` listener,
+// setKey/clearKey — is NOT directly covered here (no DOM renderer is
+// available and the consumer components have no tests yet); these tests
+// instead pin the pure scopedKeyName/migrateLegacyKey/keyFingerprint
+// logic that wiring is built on. Where a global is needed we stub it with
 // vi.stubGlobal and tear down in afterEach, matching auth.test.ts /
 // queryClient conventions. Node 24 supplies EventTarget/CustomEvent
 // natively, so no DOM shim is required.
