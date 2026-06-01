@@ -1,7 +1,9 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach } from 'vitest'
 import {
   isPublicHttpsUpstream,
   assertResolvesPublic,
+  guardedFetch,
+  guardedFetchTrustedOrigin,
   SsrfBlockedError,
   __setSsrfLookupForTests,
 } from './ssrfGuard.js'
@@ -109,5 +111,213 @@ describe('assertResolvesPublic (DNS rebinding defense)', () => {
   it('validates an IP literal directly without a DNS round-trip', async () => {
     // No resolver override needed — a private literal is rejected synchronously.
     await expect(assertResolvesPublic('10.0.0.1')).rejects.toBeInstanceOf(SsrfBlockedError)
+  })
+})
+
+describe('egress (guardedFetch / guardedFetchTrustedOrigin)', () => {
+  // --- scripted-fetch harness ---------------------------------------------
+  // egress() calls the GLOBAL fetch with `redirect: 'manual'` and follows
+  // Location headers itself. We stub globalThis.fetch with an ordered script
+  // of responses, recording every (url, init) so we can assert the exact hop
+  // sequence. If the loop asks for more hops than scripted we throw loudly so
+  // an unexpected extra fetch surfaces as a failure rather than a hang.
+
+  type ScriptStep =
+    | { kind: 'redirect'; status?: number; location: string | null }
+    | { kind: 'terminal'; status?: number; body?: string }
+
+  interface FetchCall {
+    url: string
+    init: RequestInit | undefined
+  }
+
+  let originalFetch: typeof globalThis.fetch
+  let calls: FetchCall[]
+
+  function makeResponse(step: ScriptStep): Response {
+    if (step.kind === 'redirect') {
+      const headers: Record<string, string> = {}
+      if (step.location !== null) headers.location = step.location
+      return new Response(null, { status: step.status ?? 302, headers })
+    }
+    return new Response(step.body ?? 'OK', { status: step.status ?? 200 })
+  }
+
+  function scriptFetch(steps: ScriptStep[]): void {
+    let i = 0
+    globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      calls.push({ url, init })
+      if (i >= steps.length) {
+        throw new Error(
+          `unexpected extra fetch (call #${i + 1}) to ${url}; script had ${steps.length} step(s)`,
+        )
+      }
+      return makeResponse(steps[i++])
+    }) as typeof globalThis.fetch
+  }
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch
+    calls = []
+    // Permissive DNS by default so guardHop's assertResolvesPublic passes for
+    // any public-looking name. Individual tests override for rejection paths.
+    __setSsrfLookupForTests(async () => [{ address: '8.8.8.8' }])
+  })
+
+  afterEach(() => {
+    __setSsrfLookupForTests(null)
+    globalThis.fetch = originalFetch
+  })
+
+  // (a) public -> public 302 -> 200, both hops manual.
+  it('guardedFetch follows a single public->public 302 and returns the final 200', async () => {
+    scriptFetch([
+      { kind: 'redirect', location: 'https://cdn2.example.com/seg-final.ts' },
+      { kind: 'terminal', status: 200, body: 'OK' },
+    ])
+    const res = await guardedFetch('https://cdn.example.com/a/seg.ts')
+    expect(res.status).toBe(200)
+    expect(calls.map((c) => c.url)).toEqual([
+      'https://cdn.example.com/a/seg.ts',
+      'https://cdn2.example.com/seg-final.ts',
+    ])
+    // Every hop must have been issued with redirect: 'manual'.
+    for (const c of calls) {
+      expect((c.init as RequestInit).redirect).toBe('manual')
+    }
+  })
+
+  // (b) guardedFetch blocks a redirect to a private/internal target; the
+  // internal URL is never fetched (guard fires before the second fetch).
+  it('guardedFetch BLOCKS a 302 into a private IPv4 target before fetching it', async () => {
+    scriptFetch([
+      { kind: 'redirect', location: 'http://10.0.0.5/seg.ts' },
+      // No second step scripted: if egress fetched the internal URL it would
+      // throw "unexpected extra fetch", which is also a failure — but the
+      // string guard should reject first.
+    ])
+    await expect(guardedFetch('https://cdn.example.com/a/seg.ts')).rejects.toBeInstanceOf(
+      SsrfBlockedError,
+    )
+    expect(calls).toHaveLength(1)
+    expect(calls[0].url).toBe('https://cdn.example.com/a/seg.ts')
+  })
+
+  it('guardedFetch BLOCKS a 302 into an internal service hostname', async () => {
+    scriptFetch([{ kind: 'redirect', location: 'http://recommender:8000/x' }])
+    await expect(guardedFetch('https://cdn.example.com/a/seg.ts')).rejects.toBeInstanceOf(
+      SsrfBlockedError,
+    )
+    expect(calls).toHaveLength(1)
+  })
+
+  // (c) DNS rebinding on a redirect target: public-looking host that resolves
+  // to a private address for that specific host only.
+  it('guardedFetch blocks a redirect to a public host that DNS-rebinds to a private address', async () => {
+    __setSsrfLookupForTests(async (host: string) =>
+      host === 'rebind.attacker.example'
+        ? [{ address: '169.254.169.254' }]
+        : [{ address: '8.8.8.8' }],
+    )
+    scriptFetch([
+      { kind: 'redirect', location: 'https://rebind.attacker.example/seg.ts' },
+    ])
+    await expect(guardedFetch('https://cdn.example.com/a/seg.ts')).rejects.toBeInstanceOf(
+      SsrfBlockedError,
+    )
+    // The string guard passes (public-looking name) so the DNS check is what
+    // rejects; the rebind host is never actually fetched.
+    expect(calls.map((c) => c.url)).toEqual(['https://cdn.example.com/a/seg.ts'])
+  })
+
+  // (d) trusted origin: plain-http initial hop fetched UNGUARDED. Prove it by
+  // making the DNS stub throw — if guardHop ran on hop 0 it would reject.
+  it('guardedFetchTrustedOrigin fetches an unguarded plain-http initial origin', async () => {
+    __setSsrfLookupForTests(async () => {
+      throw new Error('DNS must not be consulted on the trusted initial hop')
+    })
+    scriptFetch([{ kind: 'terminal', status: 200, body: 'OK' }])
+    const res = await guardedFetchTrustedOrigin('http://creds.provider.tv:8080/live/u/p/1.ts')
+    expect(res.status).toBe(200)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].url).toBe('http://creds.provider.tv:8080/live/u/p/1.ts')
+  })
+
+  // (e) trusted origin STILL guards a redirect into an internal host.
+  it('guardedFetchTrustedOrigin still blocks a redirect from the trusted origin into localhost', async () => {
+    scriptFetch([{ kind: 'redirect', location: 'http://localhost/admin' }])
+    await expect(
+      guardedFetchTrustedOrigin('http://creds.provider.tv:8080/live/u/p/1.ts'),
+    ).rejects.toBeInstanceOf(SsrfBlockedError)
+    // Only the trusted origin was fetched; the internal redirect target was not.
+    expect(calls.map((c) => c.url)).toEqual([
+      'http://creds.provider.tv:8080/live/u/p/1.ts',
+    ])
+  })
+
+  // (f) redirect-depth bound. 6 consecutive redirects (> MAX_REDIRECTS=5) throws.
+  it('guardedFetch rejects after exceeding MAX_REDIRECTS (6 redirects)', async () => {
+    scriptFetch([
+      { kind: 'redirect', location: 'https://h1.example.com/x' },
+      { kind: 'redirect', location: 'https://h2.example.com/x' },
+      { kind: 'redirect', location: 'https://h3.example.com/x' },
+      { kind: 'redirect', location: 'https://h4.example.com/x' },
+      { kind: 'redirect', location: 'https://h5.example.com/x' },
+      { kind: 'redirect', location: 'https://h6.example.com/x' },
+    ])
+    await expect(guardedFetch('https://cdn.example.com/0')).rejects.toThrow(/too many redirects/)
+  })
+
+  // (f, boundary) exactly 5 redirects then a 200 RESOLVES (bound is >5, not >=5).
+  it('guardedFetch resolves with exactly 5 redirects then a 200 (off-by-one guard)', async () => {
+    scriptFetch([
+      { kind: 'redirect', location: 'https://h1.example.com/x' },
+      { kind: 'redirect', location: 'https://h2.example.com/x' },
+      { kind: 'redirect', location: 'https://h3.example.com/x' },
+      { kind: 'redirect', location: 'https://h4.example.com/x' },
+      { kind: 'redirect', location: 'https://h5.example.com/x' },
+      { kind: 'terminal', status: 200, body: 'OK' },
+    ])
+    const res = await guardedFetch('https://cdn.example.com/0')
+    expect(res.status).toBe(200)
+    expect(calls).toHaveLength(6) // initial + 5 redirect targets
+  })
+
+  // (g) relative Location resolution against the current URL.
+  it('guardedFetch resolves a relative Location against the current URL', async () => {
+    scriptFetch([
+      { kind: 'redirect', location: '/next/seg.ts' },
+      { kind: 'terminal', status: 200, body: 'OK' },
+    ])
+    const res = await guardedFetch('https://cdn.example.com/a/b.ts')
+    expect(res.status).toBe(200)
+    expect(calls.map((c) => c.url)).toEqual([
+      'https://cdn.example.com/a/b.ts',
+      'https://cdn.example.com/next/seg.ts',
+    ])
+  })
+
+  // (h) a 30x with NO location header is returned as-is (not followed).
+  it('guardedFetch returns a 30x without a location header as-is', async () => {
+    scriptFetch([{ kind: 'redirect', status: 302, location: null }])
+    const res = await guardedFetch('https://cdn.example.com/a/seg.ts')
+    expect(res.status).toBe(302)
+    expect(calls).toHaveLength(1)
+  })
+
+  // (i) non-redirect status passthrough (egress only loops on 300-399).
+  it('guardedFetch returns a non-redirect error status (404) unchanged', async () => {
+    scriptFetch([{ kind: 'terminal', status: 404, body: 'nope' }])
+    const res = await guardedFetch('https://cdn.example.com/missing.ts')
+    expect(res.status).toBe(404)
+    expect(calls).toHaveLength(1)
+  })
+
+  it('guardedFetch returns a 500 terminal status unchanged', async () => {
+    scriptFetch([{ kind: 'terminal', status: 500, body: 'boom' }])
+    const res = await guardedFetch('https://cdn.example.com/err.ts')
+    expect(res.status).toBe(500)
+    expect(calls).toHaveLength(1)
   })
 })
