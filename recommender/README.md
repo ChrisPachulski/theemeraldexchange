@@ -51,6 +51,22 @@ curl -XPOST localhost:8000/score \
   -d '{"sub":"u1","kind":"tv","n":20}'
 ```
 
+## Dependency lockfile
+
+`requirements.lock` is a fully-pinned, reproducible resolution of the runtime
+dependencies in `pyproject.toml`. Regenerate it whenever those dependencies
+change:
+
+```bash
+pip-compile pyproject.toml --strip-extras --output-file requirements.lock
+```
+
+Commit the regenerated lock. CI enforces that it stays in sync with
+`pyproject.toml` (the recommender job regenerates and diffs the pinned lines)
+and runs `pip-audit -r requirements.lock` against the committed set, so the
+audited dependencies are exactly what ships. `torch` is pinned by version only
+(no CUDA platform tag); the CPU wheel index in the lock matches `Dockerfile`.
+
 ## Production
 
 Runs as a sibling container in the project's `docker-compose.yml` (service name
