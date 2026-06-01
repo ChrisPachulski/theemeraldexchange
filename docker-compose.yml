@@ -494,6 +494,17 @@ services:
       - "no-new-privileges:true"
     cap_drop:
       - ALL
+    # cap_add: the official postgres entrypoint runs as root to chown/chmod its
+    # data + socket dirs, then drops to the postgres uid via gosu. cap_drop: ALL
+    # without these crash-looped it 970x ("chmod: Operation not permitted" /
+    # "find: Permission denied"). CHOWN/FOWNER/DAC_OVERRIDE cover the dir prep;
+    # SETUID/SETGID cover the privilege drop. no-new-privileges still holds.
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
     environment:
       POSTGRES_USER: glitchtip
       POSTGRES_PASSWORD: "${GLITCHTIP_DB_PASSWORD}"
@@ -521,6 +532,13 @@ services:
       - "no-new-privileges:true"
     cap_drop:
       - ALL
+    # cap_add: redis-alpine's entrypoint chowns /data then setpriv-drops to the
+    # redis uid; CHOWN + SETUID/SETGID are required or it exits 127 ("setpriv:
+    # setresuid failed: Operation not permitted"). no-new-privileges still holds.
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
     # Readiness probe (audit 9-1) so glitchtip web/worker can gate on it.
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
