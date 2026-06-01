@@ -9,6 +9,7 @@ import { sonarrFetch, sonarrRootFolders } from '../services/sonarr.js'
 import { appendGrabEvent } from '../services/grabLog.js'
 import { postFeedback } from '../services/recommender.js'
 import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
+import { parseJsonObject } from '../services/parseJson.js'
 import { env } from '../env.js'
 
 export const sonarr = new Hono<Env>()
@@ -623,7 +624,19 @@ sonarr.post('/api/v3/series', sonarrMutateLimit, async (c) => {
         title?: string
         [key: string]: unknown
       }
-      const created = JSON.parse(out) as CreatedSeries
+      // `out` is stdout from the upstream add — on empty/malformed
+      // output a bare JSON.parse would throw. parseJsonObject is the
+      // guard that prevents that throw; mirror Radarr's no-op-on-null
+      // behavior and skip the re-read/grab logic entirely rather than
+      // 500ing on a body we can't trust.
+      const createdRaw = parseJsonObject(out)
+      if (createdRaw === null) {
+        return new Response(out, {
+          status: r.status,
+          headers: { 'Content-Type': r.headers.get('Content-Type') ?? 'application/json' },
+        })
+      }
+      const created = createdRaw as CreatedSeries
       const id = created.id
       let monitored =
         body.addOptions?.monitor === 'all' && body.seasons

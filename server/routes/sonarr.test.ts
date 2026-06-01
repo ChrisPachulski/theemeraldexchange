@@ -783,6 +783,79 @@ describe('sonarr POST /api/v3/series — wantedSearch flag', () => {
   })
 })
 
+// Regression: the post-add re-read/grab block re-parses the upstream
+// add response from `out` (curl/fetch stdout). The Radarr path already
+// guarded JSON.parse; the symmetric Sonarr path did NOT, so empty or
+// malformed `out` would THROW inside the handler. parseJsonObject now
+// guards it: a body we can't trust degrades to "forward verbatim, skip
+// the cap-aware grab" instead of crashing.
+describe('sonarr POST /api/v3/series — malformed/empty add body does not throw', () => {
+  // The shared `stub` helper JSON.stringify's the body, so we need a
+  // bespoke fetch that returns a RAW (non-JSON) string for the add.
+  function stubWithRawAddBody(rawBody: string, status = 201) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(
+            JSON.stringify([{ id: 1, path: '/data/tv', freeSpace: 500 * 1024 ** 3 }]),
+            { status: 200 },
+          )
+        }
+        if (url.includes('/api/v3/qualityprofile')) {
+          return new Response(JSON.stringify([{ id: 1, name: 'Choose Me' }]), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/series') && method === 'POST') {
+          // Raw, unparseable (or empty) stdout — the crash trigger.
+          return new Response(rawBody, { status })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+  }
+
+  it('empty add response body → normal success, no 500, no grab path', async () => {
+    stubWithRawAddBody('') // empty stdout
+    const r = await appUnderTest().request('/api/v3/series', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        rootFolderPath: '/data/tv',
+        title: 'Foo',
+        addOptions: { searchForMissingEpisodes: true },
+        seasons: [{ seasonNumber: 1, monitored: true }],
+      }),
+    })
+    // Upstream status forwarded; NOT a 500 / unhandled throw.
+    expect(r.status).toBe(201)
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.map(([u]) => String(u))
+    // The capped-grab / re-read path was skipped (no usable body).
+    expect(calls.some((u) => u.includes('/api/v3/release'))).toBe(false)
+    expect(calls.some((u) => u.endsWith('/api/v3/series/'))).toBe(false)
+  })
+
+  it('malformed JSON add response body → normal success, no 500', async () => {
+    stubWithRawAddBody('{bad json') // malformed stdout
+    const r = await appUnderTest().request('/api/v3/series', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        rootFolderPath: '/data/tv',
+        title: 'Foo',
+        addOptions: { searchForMissingEpisodes: true },
+        seasons: [{ seasonNumber: 1, monitored: true }],
+      }),
+    })
+    expect(r.status).toBe(201)
+    expect(r.status).not.toBe(500)
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.map(([u]) => String(u))
+    expect(calls.some((u) => u.includes('/api/v3/release'))).toBe(false)
+  })
+})
+
 // POST /api/v3/series/:id/seasons/:n/monitor — admin-only single-season
 // toggle. Has its own param validation, GET-existing, then PUT, then
 // background grab. The PUT failure mode is a forwarded-body response,
