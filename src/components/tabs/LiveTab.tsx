@@ -11,6 +11,7 @@ import { useReportPosition } from '../../lib/hooks/useIptvHistory'
 import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useModalA11y } from '../../lib/hooks/useModalA11y'
 import { ConcurrencyLimitModal } from '../iptv/ConcurrencyLimitModal'
+import { ConnectionsWidget } from '../iptv/ConnectionsWidget'
 import {
   concurrencyPayloadFromError,
   type ConcurrencyLimitPayload,
@@ -232,19 +233,19 @@ export default function LiveTab() {
         <div className="iptv-tab__viewtoggle" role="group" aria-label="Channel view">
           <button
             type="button"
-            className={view === 'cards' ? 'is-active' : ''}
-            aria-pressed={view === 'cards'}
-            onClick={() => setView('cards')}
-          >
-            Channels
-          </button>
-          <button
-            type="button"
             className={view === 'guide' ? 'is-active' : ''}
             aria-pressed={view === 'guide'}
             onClick={() => setView('guide')}
           >
             Guide
+          </button>
+          <button
+            type="button"
+            className={view === 'cards' ? 'is-active' : ''}
+            aria-pressed={view === 'cards'}
+            onClick={() => setView('cards')}
+          >
+            Channels
           </button>
         </div>
         <input
@@ -274,6 +275,7 @@ export default function LiveTab() {
           await navigator.clipboard.writeText(url).catch(() => undefined)
           alert(`M3U URL copied. Expires ${new Date(expiresAt).toLocaleString()}.\n\n${url}`)
         }}>Export M3U</button>
+        <ConnectionsWidget />
       </footer>
 
       {guideFor && (
