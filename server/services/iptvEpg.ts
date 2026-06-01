@@ -1,8 +1,8 @@
 import sax from 'sax'
 import { Readable } from 'node:stream'
-import { createGunzip } from 'node:zlib'
 import { setImmediate as yieldEventLoop } from 'node:timers/promises'
 import { env } from '../env.js'
+import { gunzipNodeStream, webStreamToNodeReadable } from './streamBridge.js'
 
 const EPG_FETCH_TIMEOUT_MS = 5 * 60_000
 const EPG_WALL_TIMEOUT_MS = 30 * 60_000
@@ -113,7 +113,7 @@ export async function streamXmltv(
     for (const chunk of headChunks) yield chunk
     for await (const chunk of input) yield chunk as Buffer
   })())
-  const xmlStream: Readable = isGzip ? (stream.pipe(createGunzip()) as unknown as Readable) : stream
+  const xmlStream: Readable = isGzip ? gunzipNodeStream(stream) : stream
 
   const parser = sax.createStream(true, { trim: true, normalize: true })
   let cur: Partial<EpgProgrammeRow> | null = null
@@ -267,7 +267,7 @@ export async function fetchAndStreamEpg(
     resetIdleTimer()
     const res = await fetch(url, { signal: controller.signal })
     if (!res.ok || !res.body) throw new Error(`xtream.xmltv_${res.status}`)
-    const source = Readable.fromWeb(res.body as unknown as ReadableStream<Uint8Array>)
+    const source = webStreamToNodeReadable(res.body)
     const nodeStream = Readable.from((async function* () {
       for await (const chunk of source) {
         resetIdleTimer()

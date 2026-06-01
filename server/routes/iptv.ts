@@ -8,7 +8,6 @@ import { Hono, type Context } from 'hono'
 import { randomUUID, timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { Readable } from 'node:stream'
 import { gzip } from 'node:zlib'
 import { promisify } from 'node:util'
 
@@ -18,6 +17,7 @@ import { promisify } from 'node:util'
 const gzipAsync = promisify(gzip)
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { getAccountInfo, credsFromEnv } from '../services/xtream.js'
+import { nodeReadableToWebStream } from '../services/streamBridge.js'
 import { syncOnce, type SyncResult } from '../services/iptvSync.js'
 import { iptvDb } from '../services/iptvDbSingleton.js'
 import {
@@ -942,7 +942,7 @@ iptv.get('/stream/live/:streamId/remux/seg', (c) => {
   // its slot accounted against the cap.
   streamConcurrency().heartbeatByResource(claims.sub, 'remux', streamId)
   const stream = fs.createReadStream(filePath)
-  return new Response(Readable.toWeb(stream) as unknown as ReadableStream, {
+  return new Response(nodeReadableToWebStream(stream), {
     status: 200,
     headers: {
       'Content-Type': 'video/mp2t',
