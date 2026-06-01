@@ -362,31 +362,93 @@ def section1_baseline() -> dict:
     return results
 
 
+# --- SECTION 2: VARIANT -- item-based kNN (max-sim-to-library) ----------------
+# Production lineage: Amazon item-to-item CF (Linden et al. 2003) + EASE
+# (Steck 2019). Tests the iteration-1 diagnosis that the single centroid is the
+# bottleneck. A/B vs the mmr_diverse baseline. Also sweeps neighbor_topk (max
+# vs top-k mean aggregation).
+
+def section2_item_knn() -> dict:
+    conn = connect()
+    results: dict[str, dict] = {}
+    # Confound-controlled sweep (addresses skeptic CRITICAL #1 + popularity
+    # ablation). Each entry: (label, params).
+    variants = [
+        # Retrieval-UNBOUNDED ceiling (full catalog scan): how good item-item
+        # SCORING is if retrieval reach were perfect. Not production-deployable
+        # as brute force; it is the upper bound the production fix should chase.
+        ("item_knn_full_max",      {"candidate_pool": "full", "neighbor_topk": 1}),
+        ("item_knn_full_top10",    {"candidate_pool": "full", "neighbor_topk": 10}),
+        # Popularity ablation: pop_w=0 isolates pure item-item similarity from
+        # the popularity prior (skeptic MAJOR).
+        ("item_knn_full_top10_pop0", {"candidate_pool": "full", "neighbor_topk": 10, "popularity_weight": 0.0}),
+        # FAIR A/B vs mmr_diverse: SAME centroid-ANN candidate budget (pool 800),
+        # only the scoring differs. full - ann = the retrieval contribution;
+        # ann - mmr_baseline = the scoring contribution at equal candidate reach.
+        ("item_knn_ann_top10",     {"candidate_pool": "ann", "neighbor_topk": 10, "pool_size": 800}),
+    ]
+    for label, params in variants:
+        for kind in KINDS:
+            tag = f"{label}:{kind}"
+            print(f"\n===== VARIANT {tag} =====")
+            results[tag] = evaluate_recipe(
+                conn, recipe_name="item_knn", params=params, kind=kind
+            )
+            results[tag]["label"] = label
+    return results
+
+
 # --- SYNTHESIS (updated every iteration: current best metric + what changed) --
 SYNTHESIS = """
-=== SYNTHESIS (iteration 1) ===
-Scoreboard EXISTS. Baseline measured: leave-one-out over the real household
-library (753 movie + 235 tv positives), reject-leakage over the in-catalog
-rejection set (363 movie + 286 tv), via the production retrieval+recipe path.
+=== SYNTHESIS (iteration 2) ===
+HEADLINE (nDCG@10): UNMOVED. mmr_diverse (the deployed baseline) is still best
+on the headline -- movie 0.0021, tv 0.0030. No item_knn variant beats it on
+nDCG@10 (best is item_knn ann_max movie 0.0019 ~= baseline; baseline wins tv).
 
-Headline metric: leave-one-out nDCG@10 of mmr_diverse (the deployed default).
-See iter_1_output.txt for the numbers; logged to iteration_log.md.
+WHAT item_knn (ann_max) DOES win, and it is real + production-deployable:
+deep recall. recall@50 movie 0.0292 vs 0.0173 (+69%), tv 0.0213 vs 0.0170
+(+25%); ndcg@50 movie 0.0072 vs 0.0046 (+57%). ann_max uses the SAME 800-item
+centroid-ANN pool the baseline uses -- only the scoring changes (max cosine to
+any library item, not distance to the averaged centroid). So it is a shippable
+Pareto move: more of the household's latent taste deep in the list, top-10 and
+leakage unchanged. Lineage: Amazon item-to-item CF (Linden 2003) + content-kNN
+(Spotify audiobook cold-start, DeNadai 2024).
 
-GUARDRAIL: leakage_filtered@50 must be 0 (hard exclusion intact). The
-unfiltered leakage is a diagnostic only.
+DECOMPOSITION (resolves the candidate-set confound, skeptic CRITICAL #1):
+the dominant lever is AGGREGATION (max >> top-k-mean), not candidate reach.
+full_max ~= ann_max on recall@50 (0.0372 vs 0.0292); the full-catalog scan adds
+only +27% over the 800-pool for movie and is WORSE for tv (near-duplicate series
+crowd the top). Popularity prior: ablated to ZERO effect (pop0 == pop0.05).
 
-No production-grounded variant implemented yet -- iteration 2 onward. The
-variant ladder (each must trace to a deployed system + Zotero paper):
-  EASE (Steck2019, item-item closed form; strong on sparse single-household)
-  -> two-stage retrieval->learned re-rank (YouTube/Pinterest/Spotify)
-  -> calibrated re-rank (Steck2018; Netflix+Spotify; likely beats MMR)
-  -> sequential model (SASRec/PinnerFormer) if simpler stages plateau.
+THE REAL CEILING IS THE REPRESENTATION, NOT THE RANKER. Blind-spot probe: only
+7% of movie / 0% of tv held-out titles have a strong content twin (>=0.8) in the
+rest of the library; 14% movie / 20% tv have no twin even >=0.5; the mass sits
+at 0.5-0.7. MiniLM-over-(title+overview) gives weak item-item structure, and
+there is no preference/co-occurrence signal to rank among content-similar items.
+Every recipe tops out at <4% recall@50 for this reason.
 
-TENSIONS: none yet (single approach).
+LADDER AHEAD (production-first; each traces to a deployed system + Zotero paper):
+  -> ITER 3: richer item embeddings from genres/cast/crew/keywords (all in the
+     DB) -- Spotify audiobook GNN / ItemSage. Sharpen the twin structure that
+     caps recall. THIS is the indicated next lever, not more ranking machinery.
+  -> EASE only as a content-feature-Gram re-weighter (NOT the textbook 1-user
+     binary form, which is degenerate at n_users=1 -- Steck 2019 p2).
+  -> calibrated re-rank (Steck 2018) and sequential models later, if the
+     representation lift plateaus.
+
+TENSIONS:
+  - recall@50 vs nDCG@10: ann_max trades nothing at top-10 but lifts deep recall;
+    full_max lifts deep recall MORE but zeroes nDCG@10 (twins ranked 11-50, and
+    near-duplicate catalog items crowd the top-10). For a 20-item discovery strip
+    the right operating point is ann_max (top-10 safe), not full_max.
+  - movie vs tv candidate set: full helps movie recall, hurts tv (dup series).
+OPEN (skeptic MAJOR, address iter 3): franchise bias -- are recall@50 gains just
+sequels/same-franchise twins? Needs franchise-stratified recall.
 """
 
 if __name__ == "__main__":
     info = section0_readiness()
     if info.get("db_exists"):
         section1_baseline()
+        section2_item_knn()
     print(SYNTHESIS)
