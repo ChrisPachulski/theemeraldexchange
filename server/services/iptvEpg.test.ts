@@ -40,3 +40,51 @@ describe('xmltv helpers', () => {
     expect(defs.find((d) => d.id === 'espn.us')?.names).toEqual(['ESPN'])
   })
 })
+
+describe('xmltvTimeToIso offset normalization', () => {
+  it('normalizes a half-hour positive offset (India, +0530)', () => {
+    expect(xmltvTimeToIso('20260524103000 +0530')).toBe('2026-05-24T05:00:00.000Z')
+  })
+
+  it('normalizes a quarter-hour positive offset rolling back a day (Chatham, +1245)', () => {
+    expect(xmltvTimeToIso('20260524103000 +1245')).toBe('2026-05-23T21:45:00.000Z')
+  })
+
+  it('parses an offset with no space separator', () => {
+    expect(xmltvTimeToIso('20260524103000+0000')).toBe('2026-05-24T10:30:00.000Z')
+  })
+
+  it('handles a positive offset crossing a year boundary backward in UTC', () => {
+    expect(xmltvTimeToIso('20251231233000 +0100')).toBe('2025-12-31T22:30:00.000Z')
+  })
+
+  it('handles a negative offset crossing a year boundary forward in UTC', () => {
+    expect(xmltvTimeToIso('20260101003000 -0100')).toBe('2026-01-01T01:30:00.000Z')
+  })
+
+  it('trims surrounding whitespace', () => {
+    expect(xmltvTimeToIso('  20260524103000 +0000  ')).toBe('2026-05-24T10:30:00.000Z')
+  })
+})
+
+describe('xmltvTimeToIso rejects malformed input', () => {
+  it('throws when the offset is missing entirely', () => {
+    expect(() => xmltvTimeToIso('20260524103000')).toThrow(/xmltv_time_bad_format/)
+  })
+
+  it('throws on a literal Z (not a numeric offset)', () => {
+    expect(() => xmltvTimeToIso('20260524103000 Z')).toThrow(/xmltv_time_bad_format/)
+  })
+
+  it('throws on non-time garbage', () => {
+    expect(() => xmltvTimeToIso('not-a-time')).toThrow(/xmltv_time_bad_format/)
+  })
+
+  it('throws on a colon-delimited offset', () => {
+    expect(() => xmltvTimeToIso('20260524103000 +05:30')).toThrow(/xmltv_time_bad_format/)
+  })
+
+  it('throws on a too-short (13-digit) datetime', () => {
+    expect(() => xmltvTimeToIso('2026052410300 +0000')).toThrow(/xmltv_time_bad_format/)
+  })
+})
