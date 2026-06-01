@@ -1,5 +1,11 @@
-import { describe, it, expect } from 'vitest'
-import { parseFfprobeVersion, classifyVersionToken } from './ffmpeg.js'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+const execFileSyncMock = vi.hoisted(() => vi.fn())
+vi.mock('node:child_process', () => ({
+  execFileSync: (...args: unknown[]) => execFileSyncMock(...args),
+}))
+
+import { parseFfprobeVersion, classifyVersionToken, validateFfmpegOrExit } from './ffmpeg.js'
 
 // ---------------------------------------------------------------------------
 // parseFfprobeVersion
@@ -166,5 +172,129 @@ describe('version gate integration', () => {
     // CUSTOM_BUILD_XYZ_special does not match any family; classifyVersionToken
     // returns null and we allow it through.
     expect(shouldPass('ffmpeg version CUSTOM_BUILD_XYZ_special Copyright ...')).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// validateFfmpegOrExit — boot-validation orchestration (lines 106-171)
+//
+// Mocks node:child_process.execFileSync, dispatching on the first arg:
+//   'which'   → resolves the binary path (diagnostic-only, non-fatal)
+//   'ffprobe' → returns the version string (or throws a spawn error) under test
+// ---------------------------------------------------------------------------
+
+describe('validateFfmpegOrExit', () => {
+  /** Configure the mock with a given ffprobe `-version` behaviour. */
+  function setFfprobe(version: string | (() => string)) {
+    execFileSyncMock.mockImplementation((cmd: string) => {
+      if (cmd === 'which') return '/usr/bin/ffprobe\n'
+      if (cmd === 'ffprobe') return typeof version === 'function' ? version() : version
+      throw new Error(`unexpected cmd: ${cmd}`)
+    })
+  }
+
+  beforeEach(() => {
+    execFileSyncMock.mockReset()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('a. SUCCESS — release build ≥6 does not throw and logs version + path', () => {
+    setFfprobe('ffprobe version 6.1.1 Copyright (c) 2000-2024 the FFmpeg developers')
+    expect(() => validateFfmpegOrExit()).not.toThrow()
+    const logged = (console.log as unknown as ReturnType<typeof vi.fn>).mock.calls
+      .flat()
+      .join(' ')
+    expect(logged).toContain('version=6.1.1')
+    expect(logged).toContain('path=/usr/bin/ffprobe')
+  })
+
+  it('b. SUCCESS — git-dev build (Infinity branch) does not throw', () => {
+    setFfprobe('ffmpeg version N-12345-gabc123d Copyright (c) 2000-2024 the FFmpeg developers')
+    expect(() => validateFfmpegOrExit()).not.toThrow()
+  })
+
+  it('c. SUCCESS — unknown format warns and returns without throwing', () => {
+    setFfprobe('ffmpeg version CUSTOM_BUILD_XYZ_special Copyright (c) 2000-2024 the FFmpeg developers')
+    expect(() => validateFfmpegOrExit()).not.toThrow()
+    const warned = (console.warn as unknown as ReturnType<typeof vi.fn>).mock.calls
+      .flat()
+      .join(' ')
+    expect(warned).toContain('unrecognised format')
+  })
+
+  it('d. FAIL — version below minimum throws and writes the version to stderr', () => {
+    setFfprobe('ffprobe version 5.1.4 Copyright (c) 2000-2024 the FFmpeg developers')
+    expect(() => validateFfmpegOrExit()).toThrow(/below minimum/i)
+    const errOut = (process.stderr.write as unknown as ReturnType<typeof vi.fn>).mock.calls
+      .flat()
+      .join(' ')
+    expect(errOut).toContain('5.1.4')
+  })
+
+  it('e. FAIL — ENOENT (binary missing) throws ffmpeg-not-found and writes "missing"', () => {
+    execFileSyncMock.mockImplementation((cmd: string) => {
+      if (cmd === 'which') return '/usr/bin/ffprobe\n'
+      if (cmd === 'ffprobe') throw Object.assign(new Error('not found'), { code: 'ENOENT' })
+      throw new Error(`unexpected cmd: ${cmd}`)
+    })
+    expect(() => validateFfmpegOrExit()).toThrow(/ffmpeg not found/)
+    const errOut = (process.stderr.write as unknown as ReturnType<typeof vi.fn>).mock.calls
+      .flat()
+      .join(' ')
+    expect(errOut).toContain('missing')
+  })
+
+  it('f. RECOVERY — non-ENOENT spawn error with captured stdout recovers the version', () => {
+    execFileSyncMock.mockImplementation((cmd: string) => {
+      if (cmd === 'which') return '/usr/bin/ffprobe\n'
+      if (cmd === 'ffprobe') {
+        throw Object.assign(new Error('exit 1'), {
+          stdout: 'ffprobe version 6.0 Copyright (c) 2000-2024 the FFmpeg developers',
+        })
+      }
+      throw new Error(`unexpected cmd: ${cmd}`)
+    })
+    expect(() => validateFfmpegOrExit()).not.toThrow()
+  })
+
+  it('g. FAIL — non-ENOENT spawn error with empty captured output throws "missing"', () => {
+    execFileSyncMock.mockImplementation((cmd: string) => {
+      if (cmd === 'which') return '/usr/bin/ffprobe\n'
+      if (cmd === 'ffprobe') throw Object.assign(new Error('exit 1'), { stdout: '', stderr: '' })
+      throw new Error(`unexpected cmd: ${cmd}`)
+    })
+    expect(() => validateFfmpegOrExit()).toThrow(/ffmpeg not found/)
+    const errOut = (process.stderr.write as unknown as ReturnType<typeof vi.fn>).mock.calls
+      .flat()
+      .join(' ')
+    expect(errOut).toContain('missing')
+  })
+
+  it('h. FAIL — output present but unrecognisable (token null) throws "could not be determined"', () => {
+    setFfprobe('this is not ffprobe output')
+    expect(() => validateFfmpegOrExit()).toThrow(/could not be determined/)
+    const errOut = (process.stderr.write as unknown as ReturnType<typeof vi.fn>).mock.calls
+      .flat()
+      .join(' ')
+    expect(errOut).toContain('missing')
+  })
+
+  it('i. "which" failure is non-fatal — falls back to path=ffprobe and does not throw', () => {
+    execFileSyncMock.mockImplementation((cmd: string) => {
+      if (cmd === 'which') throw new Error('which not available')
+      if (cmd === 'ffprobe') return 'ffprobe version 6.1.1 Copyright (c) 2000-2024 the FFmpeg developers'
+      throw new Error(`unexpected cmd: ${cmd}`)
+    })
+    expect(() => validateFfmpegOrExit()).not.toThrow()
+    const logged = (console.log as unknown as ReturnType<typeof vi.fn>).mock.calls
+      .flat()
+      .join(' ')
+    expect(logged).toContain('path=ffprobe')
   })
 })
