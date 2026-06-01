@@ -1,8 +1,11 @@
+/* eslint-disable react-refresh/only-export-components -- this file exports pure
+   track-switcher helpers alongside the default IptvPlayer component so they can be
+   unit-tested directly; fast-refresh is irrelevant for these pure functions. */
 import { useEffect, useRef, useState } from 'react'
 import type { StreamGrant } from '../../lib/api/iptv'
 import styles from './IptvPlayer.module.css'
 
-type TrackOption = {
+export type TrackOption = {
   id: number
   label: string
 }
@@ -49,11 +52,11 @@ export type IptvPlayerProps = {
   onEnded?: () => void
 }
 
-function labelForTrack(track: { name?: string; lang?: string; label?: string; language?: string }, index: number): string {
+export function labelForTrack(track: { name?: string; lang?: string; label?: string; language?: string }, index: number): string {
   return track.name || track.label || track.lang || track.language || `Track ${index + 1}`
 }
 
-function audioOptionsFromVideo(video: VideoWithTracks): TrackOption[] {
+export function audioOptionsFromVideo(video: VideoWithTracks): TrackOption[] {
   const tracks = video.audioTracks
   if (!tracks?.length) return []
   return Array.from({ length: tracks.length }, (_, id) => ({
@@ -62,7 +65,7 @@ function audioOptionsFromVideo(video: VideoWithTracks): TrackOption[] {
   }))
 }
 
-function subtitleOptionsFromVideo(video: HTMLVideoElement): TrackOption[] {
+export function subtitleOptionsFromVideo(video: HTMLVideoElement): TrackOption[] {
   const tracks = video.textTracks
   if (!tracks?.length) return []
   return Array.from({ length: tracks.length }, (_, id) => ({
@@ -71,7 +74,7 @@ function subtitleOptionsFromVideo(video: HTMLVideoElement): TrackOption[] {
   }))
 }
 
-function selectedAudioFromVideo(video: VideoWithTracks): number {
+export function selectedAudioFromVideo(video: VideoWithTracks): number {
   const tracks = video.audioTracks
   if (!tracks?.length) return 0
   for (let i = 0; i < tracks.length; i += 1) {
@@ -80,7 +83,7 @@ function selectedAudioFromVideo(video: VideoWithTracks): number {
   return 0
 }
 
-function selectedSubtitleFromVideo(video: HTMLVideoElement): number {
+export function selectedSubtitleFromVideo(video: HTMLVideoElement): number {
   const tracks = video.textTracks
   for (let i = 0; i < tracks.length; i += 1) {
     if (tracks[i].mode === 'showing') return i
@@ -92,7 +95,7 @@ function safePlay(video: HTMLVideoElement): void {
   void video.play().catch(() => undefined)
 }
 
-function setNativeAudioTrack(video: VideoWithTracks, trackId: number): void {
+export function setNativeAudioTrack(video: VideoWithTracks, trackId: number): void {
   const tracks = video.audioTracks
   if (!tracks?.length) return
   for (let i = 0; i < tracks.length; i += 1) {
@@ -100,7 +103,7 @@ function setNativeAudioTrack(video: VideoWithTracks, trackId: number): void {
   }
 }
 
-function setNativeSubtitleTrack(video: HTMLVideoElement, trackId: number): void {
+export function setNativeSubtitleTrack(video: HTMLVideoElement, trackId: number): void {
   for (let i = 0; i < video.textTracks.length; i += 1) {
     video.textTracks[i].mode = i === trackId ? 'showing' : 'disabled'
   }
