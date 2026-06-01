@@ -6,7 +6,8 @@ your interactive Max 5h/7d window, so the knobs below govern pacing and the neve
 guard.
 
 ```control
-MASTER: OFF
+MASTER: ON
+CADENCE_SECONDS: 120
 FIVE_HOUR_CEILING: 85
 SEVEN_DAY_CEILING: 90
 ALLOWED_HOURS: 00:00-23:59
