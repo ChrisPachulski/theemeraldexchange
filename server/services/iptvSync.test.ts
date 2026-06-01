@@ -4,6 +4,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { openIptvDb } from './iptvDb.js'
 import type { EpgProgrammeRow } from './iptvEpg.js'
+import type { SyncResult } from './iptvSync.js'
 
 vi.mock('./xtream.js', () => ({
   credsFromEnv: vi.fn(() => ({ host: 'https://p', username: 'u', password: 'p' })),
@@ -47,6 +48,9 @@ vi.mock('./iptvEpg.js', () => ({
     onRow({ channel_id: 'c.1', start_utc: '2026-05-24T10:30:00.000Z', stop_utc: '2026-05-24T11:00:00.000Z', title: 'P2', description: null })
   }),
 }))
+vi.mock('./iptvEpgExternal.js', () => ({
+  ingestAllExternalEpg: vi.fn(async () => []),
+}))
 
 import { syncOnce } from './iptvSync.js'
 
@@ -69,14 +73,19 @@ describe('iptv sync orchestrator', () => {
     const ts = db.stmts.getSyncState.get('last_sync') as { value: string; ts: string } | undefined
     expect(ts?.value).toBe('ok')
     db.close()
-  })
+  }, 5000)
 
   it('refuses overlapping runs (returns busy)', async () => {
     const db = openIptvDb(dbFile)
     const a = syncOnce(db)
     const b = syncOnce(db)
     const [ra, rb] = await Promise.all([a, b])
-    expect([ra.busy, rb.busy].filter(Boolean).length).toBe(1)
+    const busy = [ra, rb].filter((r) => r.busy === true)
+    const ok = [ra, rb].filter((r) => r.busy !== true) as Array<Extract<SyncResult, { busy?: false }>>
+    expect(busy.length).toBe(1)
+    expect(ok.length).toBe(1)
+    // the winner must have done real work, proving the mutex serialized rather than no-op'd
+    expect(ok[0].channels).toBe(1)
     db.close()
-  })
+  }, 5000)
 })
