@@ -9,6 +9,8 @@ import { radarr } from './radarr.js'
 import { createSession } from '../session.js'
 import { __resetRateLimitsForTests } from '../middleware/rateLimit.js'
 import type { Env } from '../middleware/auth.js'
+import { env } from '../env.js'
+import * as grabLog from '../services/grabLog.js'
 
 function appUnderTest() {
   const app = new Hono<Env>()
@@ -899,5 +901,250 @@ describe('per-session rate limit middleware (finding 4-0)', () => {
     expect((await a.request('/x', { method: 'POST' })).status).toBe(200)
     expect((await a.request('/x', { method: 'POST' })).status).toBe(429)
     expect((await b.request('/x', { method: 'POST' })).status).toBe(200)
+  })
+})
+
+// In-flight byte-reservation concurrency on the movie-add grab path.
+//
+// Unlike sonarr, the radarr POST /api/v3/movie handler AWAITS
+// grabBestUnderCap, which has a 1.5 s real setTimeout before the release
+// search. We drive a fake-timer clock and use vi.runAllTimersAsync() (or
+// fire two adds via Promise.all and advance once) so nothing waits on
+// wall-clock.
+//
+// Observed production behavior (radarr.ts):
+//   - grabBestUnderCap filters eligible releases by
+//     `availableBytes - r.size >= env.minFreeBytes` (line ~200), where
+//     availableBytes already subtracts in-flight reservations. So while one
+//     add holds a reservation, a concurrent add against the SAME path sees
+//     reduced availability and can find NO eligible release → it records an
+//     'all_rejected_by_cap' grab event and the route returns 424
+//     'capped_grab_not_started'.
+//   - radarr ALWAYS releases the reservation right after the grab POST
+//     (line ~251), on success AND failure — the opposite of sonarr's
+//     retain-on-success. So a sequential follow-up add reliably reclaims the
+//     space.
+//
+// The module-global pendingRadarrReservations Map is not exported / not
+// reset, so each test uses its OWN root-folder path (reservations are keyed
+// by path) to avoid cross-test leakage.
+describe('radarr movie-add in-flight reservation', () => {
+  const FOUR_GB = 4 * 1024 ** 3 // under the 10 GB movie cap
+  // Fits exactly one 4 GB reservation above the 100 GB reserve with ~3 GB
+  // slack — a second concurrent 4 GB reservation cannot also clear the gate.
+  const TIGHT_FREE = env.minFreeBytes + 7 * 1024 ** 3
+
+  type AddStubs = {
+    path: string
+    movieId: number
+    freeSpace?: number
+    grabStatus?: number
+    holdPost?: (resolve: () => void) => void
+  }
+
+  // Stub the admin add path (rootFolderPath supplied → admin passthrough):
+  // GET rootfolder, POST movie, GET release?movieId, POST release grab.
+  function stubMovieAdd(calls: Array<{ url: string; method: string }>, s: AddStubs) {
+    const freeSpace = s.freeSpace ?? TIGHT_FREE
+    const grabStatus = s.grabStatus ?? 200
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        calls.push({ url, method })
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(JSON.stringify([{ id: 1, path: s.path, freeSpace }]), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/movie') && method === 'POST') {
+          return new Response(JSON.stringify({ id: s.movieId, title: 'Reserved Movie' }), { status: 201 })
+        }
+        if (url.includes(`/api/v3/release?movieId=${s.movieId}`)) {
+          return new Response(
+            JSON.stringify([
+              { guid: `g-${s.movieId}`, indexerId: 1, size: FOUR_GB, qualityWeight: 100, title: 'Reserved Movie 1080p' },
+            ]),
+            { status: 200 },
+          )
+        }
+        if (url.endsWith('/api/v3/release') && method === 'POST') {
+          if (s.holdPost) {
+            return new Promise<Response>((resolve) => {
+              s.holdPost!(() => resolve(new Response('{}', { status: grabStatus })))
+            })
+          }
+          return new Response(JSON.stringify({ ok: grabStatus < 400 }), { status: grabStatus })
+        }
+        // DELETE rollback on the failure path returns OK.
+        if (url.includes(`/api/v3/movie/${s.movieId}`) && method === 'DELETE') {
+          return new Response('', { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+  }
+
+  function addMovie(cookie: string, path: string): Promise<Response> {
+    return Promise.resolve(appUnderTest().request('/api/v3/movie', {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        rootFolderPath: path,
+        title: 'Reserved Movie',
+        qualityProfileId: 7,
+        monitored: true,
+        addOptions: { searchForMovie: true },
+      }),
+    }))
+  }
+
+  function grabPostCount(calls: Array<{ url: string; method: string }>) {
+    return calls.filter((c) => c.url.endsWith('/api/v3/release') && c.method === 'POST').length
+  }
+
+  // Drive the awaited grab pipeline forward under fake timers. The handler's
+  // first awaits (body parse, auth) have NO timer, so we interleave real
+  // microtask yields with timer advances — advancing alone wouldn't progress
+  // a chain that hasn't yet scheduled its setTimeout. Past grabBestUnderCap's
+  // single 1.5 s delay this fully settles the request.
+  async function flush(): Promise<void> {
+    for (let i = 0; i < 12; i++) {
+      await Promise.resolve()
+      await vi.advanceTimersByTimeAsync(500)
+    }
+  }
+
+  let appendSpy: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    vi.useFakeTimers()
+    // Keep the grab log off disk so the awaited grab pipeline never blocks on
+    // real fs I/O (which fake timers don't drain) — mirrors the sonarr suite.
+    appendSpy = vi.spyOn(grabLog, 'appendGrabEvent').mockResolvedValue(undefined)
+  })
+  afterEach(() => {
+    appendSpy.mockRestore()
+    vi.useRealTimers()
+  })
+
+  it('CONCURRENT OVERCOMMIT: while one add holds its reservation, a second same-folder add finds no eligible release and is refused (424 capped_grab_not_started, no second grab POST)', async () => {
+    // Hold add #1's grab POST open so its 4 GB reservation stays on the books.
+    // Add #2 plans against the SAME path: availableBytes is now reduced, so
+    // its only release (4 GB) fails the `available - size >= minFree` filter,
+    // leaving the eligible set empty → 424 capped_grab_not_started with NO
+    // grab POST of its own.
+    const path = '/data/movies-overcommit'
+    const calls: Array<{ url: string; method: string }> = []
+    const resolvers: Array<() => void> = []
+    // movieId differs per add so the release-search stub matches each; both
+    // share the same root-folder path / reservation bucket.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        calls.push({ url, method })
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(JSON.stringify([{ id: 1, path, freeSpace: TIGHT_FREE }]), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/movie') && method === 'POST') {
+          const movieId = JSON.parse(String(init?.body)).title === 'Add One' ? 101 : 102
+          return new Response(JSON.stringify({ id: movieId, title: 'Reserved Movie' }), { status: 201 })
+        }
+        if (url.includes('/api/v3/release?movieId=')) {
+          const movieId = url.includes('movieId=101') ? 101 : 102
+          return new Response(
+            JSON.stringify([
+              { guid: `g-${movieId}`, indexerId: 1, size: FOUR_GB, qualityWeight: 100, title: 'Reserved Movie 1080p' },
+            ]),
+            { status: 200 },
+          )
+        }
+        if (url.endsWith('/api/v3/release') && method === 'POST') {
+          // Hold the FIRST grab POST open; subsequent ones (none expected) resolve.
+          return new Promise<Response>((resolve) => {
+            resolvers.push(() => resolve(new Response('{}', { status: 200 })))
+          })
+        }
+        if (url.includes('/api/v3/movie/10') && method === 'DELETE') {
+          return new Response('', { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const cookie = await adminCookie()
+    const add1 = appUnderTest().request('/api/v3/movie', {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rootFolderPath: path, title: 'Add One', qualityProfileId: 7, monitored: true, addOptions: { searchForMovie: true } }),
+    })
+    // Advance past add #1's 1.5 s delay so it reserves + posts (then hangs).
+    await flush()
+    expect(resolvers.length).toBe(1)
+    const postsAfterOne = grabPostCount(calls)
+
+    // Add #2 against the same path while #1's reservation is held.
+    const add2Promise = appUnderTest().request('/api/v3/movie', {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rootFolderPath: path, title: 'Add Two', qualityProfileId: 7, monitored: true, addOptions: { searchForMovie: true } }),
+    })
+    await flush()
+    const r2 = await add2Promise
+    expect(r2.status).toBe(424)
+    const body2 = (await r2.json()) as { error?: string; phase?: string }
+    expect(body2.error).toBe('capped_grab_not_started')
+    expect(body2.phase).toBe('all_rejected_by_cap')
+    // Add #2 issued NO grab POST (it was refused at the eligibility filter).
+    expect(grabPostCount(calls)).toBe(postsAfterOne)
+
+    // Release add #1 so its awaited handler can settle.
+    resolvers.forEach((fn) => fn())
+    await flush()
+    await add1
+  })
+
+  it('RESERVATION RELEASED ON COMPLETION: radarr releases after every grab, so a sequential same-folder add succeeds and issues its own grab POST', async () => {
+    // Add #1 grabs successfully (201). radarr releases the reservation right
+    // after the grab POST (always), so add #2 on the SAME path reclaims the
+    // space, grabs, and returns ordinary success (201 from the upstream add).
+    const path = '/data/movies-release'
+    const calls1: Array<{ url: string; method: string }> = []
+    stubMovieAdd(calls1, { path, movieId: 201, grabStatus: 201 })
+    const p1 = addMovie(await adminCookie(), path)
+    await flush()
+    const r1 = await p1
+    expect(r1.status).toBe(201)
+    expect(grabPostCount(calls1)).toBe(1)
+
+    const calls2: Array<{ url: string; method: string }> = []
+    stubMovieAdd(calls2, { path, movieId: 202, grabStatus: 201 })
+    const p2 = addMovie(await adminCookie(), path)
+    await flush()
+    const r2 = await p2
+    expect(r2.status).toBe(201)
+    expect(grabPostCount(calls2)).toBe(1)
+  })
+
+  it('RESERVATION RELEASED ON FAILED GRAB: a non-ok grab POST still releases the reservation so a follow-up add can grab', async () => {
+    // Add #1's grab POST returns 500 → 424 capped_grab_failed + rollback. The
+    // reservation is released anyway, so a follow-up same-folder add grabs.
+    const path = '/data/movies-failrelease'
+    const calls1: Array<{ url: string; method: string }> = []
+    stubMovieAdd(calls1, { path, movieId: 301, grabStatus: 500 })
+    const p1 = addMovie(await adminCookie(), path)
+    await flush()
+    const r1 = await p1
+    expect(r1.status).toBe(424)
+    const body1 = (await r1.json()) as { error?: string }
+    expect(body1.error).toBe('capped_grab_failed')
+    expect(grabPostCount(calls1)).toBe(1)
+
+    const calls2: Array<{ url: string; method: string }> = []
+    stubMovieAdd(calls2, { path, movieId: 302, grabStatus: 201 })
+    const p2 = addMovie(await adminCookie(), path)
+    await flush()
+    const r2 = await p2
+    expect(r2.status).toBe(201)
+    expect(grabPostCount(calls2)).toBe(1)
   })
 })
