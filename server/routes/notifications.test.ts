@@ -568,6 +568,214 @@ describe('notifications DELETE /discord', () => {
   })
 })
 
+describe('notifications POST /discord — mutation sequencing / rollback', () => {
+  it('extras cleanup: multiple Emerald entries on sonarr → first is PUT-updated, the rest are DELETEd', async () => {
+    const putIds: string[] = []
+    const deleteIds: string[] = []
+    let posts = 0
+    handlers.push({
+      match: (u, m) => m === 'GET' && u.endsWith('/api/v3/notification'),
+      handler: (u) => {
+        if (u.includes(sonarrHost())) {
+          return jsonResponse([
+            { id: 100, name: EMERALD, implementation: 'Discord' },
+            { id: 101, name: EMERALD, implementation: 'Discord' },
+            { id: 102, name: EMERALD, implementation: 'Discord' },
+          ])
+        }
+        return jsonResponse([{ id: 200, name: EMERALD, implementation: 'Discord' }])
+      },
+    })
+    handlers.push({
+      match: (u, m) => m === 'PUT' && u.includes('/api/v3/notification/'),
+      handler: (u) => {
+        putIds.push(u.split('/api/v3/notification/')[1])
+        return jsonResponse({}, 200)
+      },
+    })
+    handlers.push({
+      match: (u, m) => m === 'DELETE' && u.includes('/api/v3/notification/'),
+      handler: (u) => {
+        deleteIds.push(u.split('/api/v3/notification/')[1])
+        return jsonResponse({}, 200)
+      },
+    })
+    handlers.push({
+      match: (_u, m) => m === 'POST',
+      handler: () => {
+        posts++
+        return jsonResponse({ id: 999 }, 201)
+      },
+    })
+    const r = await appUnderTest().request('/discord', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ webhookUrl: GOOD_WEBHOOK }),
+    })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual({ ok: true, configured: true })
+    // first entry on each app is updated in place
+    expect(putIds).toContain('100')
+    expect(putIds).toContain('200')
+    // extras (slice(1)) on sonarr are deleted
+    expect(deleteIds).toContain('101')
+    expect(deleteIds).toContain('102')
+    // no create POSTed — entries already existed
+    expect(posts).toBe(0)
+  })
+
+  it('extras cleanup failure rolls back the just-applied update', async () => {
+    const putCalls: Array<{ id: string; body: { name?: string } }> = []
+    handlers.push({
+      match: (u, m) => m === 'GET' && u.endsWith('/api/v3/notification'),
+      handler: (u) => {
+        if (u.includes(sonarrHost())) {
+          return jsonResponse([
+            { id: 100, name: EMERALD, implementation: 'Discord' },
+            { id: 101, name: EMERALD, implementation: 'Discord' },
+          ])
+        }
+        return jsonResponse([])
+      },
+    })
+    handlers.push({
+      match: (u, m) => m === 'PUT' && u.includes('/api/v3/notification/'),
+      handler: (u, init) => {
+        const id = u.split('/api/v3/notification/')[1]
+        const body = init.body ? JSON.parse(init.body as string) : {}
+        putCalls.push({ id, body })
+        return jsonResponse({}, 200)
+      },
+    })
+    handlers.push({
+      match: (u, m) => m === 'DELETE' && u.includes('/api/v3/notification/101'),
+      handler: () => new Response('delete boom', { status: 500 }),
+    })
+    const r = await appUnderTest().request('/discord', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ webhookUrl: GOOD_WEBHOOK }),
+    })
+    expect(r.status).toBe(502)
+    const body = (await r.json()) as {
+      error: string
+      failures: Array<{ app: string; id: number; status: number }>
+    }
+    expect(body.error).toBe('partial_delete_failed')
+    expect(body.failures).toContainEqual({ app: 'sonarr', id: 101, status: 500 })
+    // The update to 100 was applied, then rolled back: a SECOND PUT to 100
+    // restoring mutation.previous (the original entry whose name === EMERALD).
+    const putsTo100 = putCalls.filter((p) => p.id === '100')
+    expect(putsTo100.length).toBe(2)
+    // The rollback PUT (the last one) sent the original `previous` config.
+    expect(putsTo100[putsTo100.length - 1].body.name).toBe(EMERALD)
+  })
+
+  it('create-path partial failure: sonarr create succeeds then radarr create fails → 502 radarr_create_failed AND rollback DELETEs the sonarr connector', async () => {
+    const sonarrDeletes: string[] = []
+    handlers.push({
+      match: (u, m) => m === 'GET' && u.endsWith('/api/v3/notification'),
+      handler: () => jsonResponse([]),
+    })
+    handlers.push({
+      match: (u, m) => m === 'POST' && u.includes(sonarrHost()) && u.endsWith('/api/v3/notification'),
+      // numeric id so the create IS recorded in `mutations` (source line ~289-292)
+      handler: () => jsonResponse({ id: 50 }, 201),
+    })
+    handlers.push({
+      match: (u, m) => m === 'POST' && u.includes(radarrHost()) && u.endsWith('/api/v3/notification'),
+      handler: () => new Response('radarr boom', { status: 500 }),
+    })
+    handlers.push({
+      match: (u, m) => m === 'DELETE' && u.includes(sonarrHost()) && u.includes('/api/v3/notification/'),
+      handler: (u) => {
+        sonarrDeletes.push(u.split('/api/v3/notification/')[1])
+        return jsonResponse({}, 200)
+      },
+    })
+    const r = await appUnderTest().request('/discord', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ webhookUrl: GOOD_WEBHOOK }),
+    })
+    expect(r.status).toBe(502)
+    const body = (await r.json()) as { error: string; cleanupFailures: unknown[] }
+    expect(body.error).toBe('radarr_create_failed')
+    // rollbackNotifications reverses mutations: the sonarr create (id 50) →
+    // DELETE /api/v3/notification/50 on sonarr.
+    expect(sonarrDeletes).toContain('50')
+    // rollback DELETE succeeded → cleanupFailures empty.
+    expect(body.cleanupFailures).toEqual([])
+  })
+
+  it('rollback DELETE failure is reported in cleanupFailures, not swallowed', async () => {
+    handlers.push({
+      match: (u, m) => m === 'GET' && u.endsWith('/api/v3/notification'),
+      handler: () => jsonResponse([]),
+    })
+    handlers.push({
+      match: (u, m) => m === 'POST' && u.includes(sonarrHost()) && u.endsWith('/api/v3/notification'),
+      handler: () => jsonResponse({ id: 50 }, 201),
+    })
+    handlers.push({
+      match: (u, m) => m === 'POST' && u.includes(radarrHost()) && u.endsWith('/api/v3/notification'),
+      handler: () => new Response('radarr boom', { status: 500 }),
+    })
+    handlers.push({
+      match: (u, m) => m === 'DELETE' && u.includes(sonarrHost()) && u.includes('/api/v3/notification/50'),
+      handler: () => new Response('rollback delete boom', { status: 500 }),
+    })
+    const r = await appUnderTest().request('/discord', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ webhookUrl: GOOD_WEBHOOK }),
+    })
+    expect(r.status).toBe(502)
+    const body = (await r.json()) as {
+      error: string
+      cleanupFailures: Array<{ app: string; id: number; status: number }>
+    }
+    expect(body.error).toBe('radarr_create_failed')
+    const sonarr50 = body.cleanupFailures.find((f) => f.app === 'sonarr' && f.id === 50)
+    expect(sonarr50).toBeDefined()
+    expect(sonarr50?.status).toBe(500)
+  })
+})
+
+describe('notifications POST /discord — serialization (withDiscordMutationLock)', () => {
+  it('concurrent POSTs are serialized — the second mutation does not overlap the first', async () => {
+    let inFlight = 0
+    let maxConcurrent = 0
+    handlers.push({
+      match: (u, m) => m === 'GET' && u.endsWith('/api/v3/notification'),
+      handler: () => jsonResponse([]),
+    })
+    const enterExit = async (): Promise<Response> => {
+      inFlight++
+      maxConcurrent = Math.max(maxConcurrent, inFlight)
+      await new Promise((r) => setTimeout(r, 5))
+      inFlight--
+      return jsonResponse({ id: 50 }, 201)
+    }
+    handlers.push({
+      match: (u, m) => m === 'POST' && u.endsWith('/api/v3/notification'),
+      handler: () => enterExit(),
+    })
+    const cookie = await adminCookie()
+    const mk = () =>
+      appUnderTest().request('/discord', {
+        method: 'POST',
+        headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ webhookUrl: GOOD_WEBHOOK }),
+      })
+    const [r1, r2] = await Promise.all([mk(), mk()])
+    expect(r1.status).toBe(200)
+    expect(r2.status).toBe(200)
+    // withDiscordMutationLock serialized the two requests' mutation sections.
+    expect(maxConcurrent).toBe(1)
+  })
+})
+
 describe('notifications POST /discord/test', () => {
   it('rejects user role with 403', async () => {
     const r = await appUnderTest().request('/discord/test', {
