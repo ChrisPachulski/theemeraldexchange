@@ -2026,16 +2026,24 @@ suggestions.get('/:type', async (c) => {
         exclude_recently_shown: true,
         library: library
           .map((it) => ({
-            ...(typeof it.tmdbId === 'number' ? { tmdb_id: it.tmdbId } : {}),
+            // Only send tmdb_id when it's a REAL positive id. Sonarr series
+            // routinely carry tmdbId:0 (they key on tvdbId), and the
+            // recommender schema is tmdb_id>0-or-omitted — sending 0 returns a
+            // 422 that fails the WHOLE batch, silently degrading every TV
+            // refresh to plain trending. A title-only LibraryItem is valid, so
+            // omit the id instead of sending a 0.
+            ...(typeof it.tmdbId === 'number' && it.tmdbId > 0 ? { tmdb_id: it.tmdbId } : {}),
             title: it.title,
             source: type === 'movie' ? ('radarr' as const) : ('sonarr' as const),
           }))
           .filter((it) => it.tmdb_id !== undefined || it.title),
+        // feedback + rejections are tmdb_id>0 in the recommender schema too, so
+        // one stray non-positive id would 422 the request — drop them.
         feedback: [
           ...likedRaw.map((e) => ({ tmdb_id: e.id, signal: 'like' as const })),
           ...dislikedRaw.map((e) => ({ tmdb_id: e.id, signal: 'dislike' as const })),
-        ],
-        household_rejections: kindRejections.map((r) => r.id),
+        ].filter((f) => f.tmdb_id > 0),
+        household_rejections: kindRejections.map((r) => r.id).filter((id) => id > 0),
       }, caller)
       recItems.push(...resp.items)
       modelVersion = resp.model_version
