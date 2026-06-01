@@ -253,3 +253,80 @@ jobs:
       # and Apple/M3/M4 ports will silently break.
       - name: cargo test (workspace minus pyo3)
         run: cargo test --workspace --exclude emerald-contracts-pyo3 --all-targets
+
+  audit:
+    # Supply-chain audit gates across all three ecosystems (npm/cargo/pip).
+    # Deliberately independent of `test` (no `needs:`) so a vuln advisory
+    # surfaces in parallel with — not gated behind — the correctness suite.
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # HARD gate. Runtime deps only (--omit=dev) at the high/critical
+      # threshold. The two known *moderate* advisories (uuid <11.1.1 and
+      # its dependent node-cron 3.x) are KNOWINGLY excluded by the high
+      # threshold: `npm audit fix --force` would pull node-cron@4, a
+      # breaking major. We accept the moderate buffer-bounds advisory
+      # rather than force that upgrade, so this step passes today.
+      - name: npm audit (prod deps, high+)
+        run: npm audit --omit=dev --audit-level=high
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.90'
+
+      # Reuse the same cache path/key pattern as the `rust` job so the
+      # registry/git/target caches are shared across jobs on a given lock.
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # --locked keeps cargo-audit's own deps pinned and is the
+      # lowest-dependency install (matches repo style over a marketplace
+      # action).
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      # SOFT gate FOR NOW. `cargo audit` reads Cargo.lock and currently
+      # surfaces 4 pre-existing advisories, all transitive through
+      # sentry → rustls → rustls-webpki 0.102.8 (RUSTSEC-2026-0049/0098/
+      # 0099/0104). These predate this gate and need a sentry/rustls bump
+      # to clear; we do NOT invent ignore-IDs.
+      # TODO: bump sentry/rustls to pull rustls-webpki >=0.103.13, then
+      # drop continue-on-error so cargo audit becomes a hard gate.
+      - name: cargo audit
+        run: cargo audit
+        continue-on-error: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # SOFT gate (advisory-only). There is no recommender lockfile
+      # (requirements*.txt / pyproject lock) — recommender deps are
+      # pip-installed ad hoc in the `recommender` CI job — so pip-audit
+      # here only inspects the ephemeral env it can resolve. This is
+      # best-effort until a recommender lockfile exists, at which point
+      # this should point at it (`pip-audit -r <lock>`) and harden.
+      - name: pip-audit (advisory only — no recommender lockfile yet)
+        run: |
+          pip install pip-audit
+          pip-audit
+        continue-on-error: true
