@@ -4,8 +4,11 @@
 //!
 //! OWNER: agent A. Implement `ffprobe` (spawn + run) and `parse_ffprobe_json`
 //! (pure). Unit-test `parse_ffprobe_json` heavily against captured fixtures
-//! covering: h264/hevc, HDR (color_transfer smpte2084 / arib-std-b67),
-//! multi audio/subtitle tracks, missing fields.
+//! covering: h264/hevc/av1, HDR (color_transfer smpte2084 / arib-std-b67,
+//! Dolby Vision with and without color_transfer, non-HDR wide-gamut transfers),
+//! multi audio/subtitle tracks, untagged audio, attached_pic cover art,
+//! multi-video first-wins selection, string-numeric and "N/A" fields,
+//! missing fields.
 
 use std::path::Path;
 use std::process::Stdio;
@@ -468,5 +471,233 @@ mod tests {
         let probe = parse_ffprobe_json(&doc);
         assert_eq!(probe.duration_secs, Some(61));
         assert_eq!(probe.video_height, Some(720));
+    }
+
+    // AV1 4K SDR remux — a modern codec not previously in the matrix.
+    #[test]
+    fn av1_video_codec_passthrough() {
+        let doc = json!({
+            "streams": [
+                { "index": 0, "codec_type": "video", "codec_name": "av1", "height": 2160 }
+            ]
+        });
+        let probe = parse_ffprobe_json(&doc);
+        assert_eq!(probe.video_codec.as_deref(), Some("av1"));
+        assert_eq!(probe.video_height, Some(2160));
+        assert_eq!(probe.hdr_format, None);
+    }
+
+    // MKV with an embedded poster (mjpeg attached_pic) ahead of the real HEVC video.
+    // CURRENT behavior: attached_pic cover art is mis-selected as the main video
+    // stream because parse_ffprobe_json takes the first codec_type=="video".
+    // Pinned so any future attached_pic skip is an intentional, test-driven change.
+    #[test]
+    fn attached_pic_coverart_is_selected_as_video_this_pins_current_behavior() {
+        let doc = json!({
+            "streams": [
+                {
+                    "index": 0,
+                    "codec_type": "video",
+                    "codec_name": "mjpeg",
+                    "height": 600,
+                    "disposition": { "attached_pic": 1 }
+                },
+                {
+                    "index": 1,
+                    "codec_type": "video",
+                    "codec_name": "hevc",
+                    "height": 2160,
+                    "color_transfer": "smpte2084"
+                },
+                {
+                    "index": 2,
+                    "codec_type": "audio",
+                    "codec_name": "aac",
+                    "channels": 2
+                }
+            ]
+        });
+        let probe = parse_ffprobe_json(&doc);
+        assert_eq!(probe.video_codec.as_deref(), Some("mjpeg"));
+        assert_eq!(probe.video_height, Some(600));
+        assert_eq!(probe.hdr_format, None);
+    }
+
+    // Dolby Vision profile 5/8 where DV side-data is present but the stream carries
+    // no color_transfer — DV must still win. NOTE: detect_hdr matches the substring
+    // "Dolby Vision" in side_data_type, so the side-data must spell it out (ffprobe
+    // emits e.g. "Dolby Vision Metadata"); the abbreviated "DOVI configuration
+    // record" alone is NOT recognized by the current mapper.
+    #[test]
+    fn dolby_vision_without_color_transfer() {
+        let doc = json!({
+            "streams": [
+                {
+                    "index": 0,
+                    "codec_type": "video",
+                    "codec_name": "hevc",
+                    "side_data_list": [
+                        { "side_data_type": "Dolby Vision Metadata" }
+                    ]
+                }
+            ]
+        });
+        let probe = parse_ffprobe_json(&doc);
+        assert_eq!(probe.hdr_format.as_deref(), Some("Dolby Vision"));
+    }
+
+    // BT.2020 10-bit SDR — wide gamut but not an HDR EOTF the mapper recognizes.
+    #[test]
+    fn unknown_color_transfer_is_not_hdr() {
+        let doc = json!({
+            "streams": [
+                {
+                    "index": 0,
+                    "codec_type": "video",
+                    "codec_name": "hevc",
+                    "color_transfer": "bt2020-10"
+                }
+            ]
+        });
+        let probe = parse_ffprobe_json(&doc);
+        assert_eq!(probe.hdr_format, None);
+    }
+
+    // ffprobe frequently emits numeric fields as JSON strings.
+    #[test]
+    fn string_numeric_height_and_channels_parsed() {
+        let doc = json!({
+            "format": { "duration": "3600" },
+            "streams": [
+                { "index": 0, "codec_type": "video", "codec_name": "h264", "height": "1080" },
+                { "index": 1, "codec_type": "audio", "codec_name": "dts", "channels": "6" }
+            ]
+        });
+        let probe = parse_ffprobe_json(&doc);
+        assert_eq!(probe.video_height, Some(1080));
+        assert_eq!(probe.audio_tracks[0].channels, Some(6));
+        assert_eq!(probe.duration_secs, Some(3600));
+    }
+
+    // ffprobe emits "N/A" for unknowable fields — must yield None, never panic.
+    #[test]
+    fn non_numeric_strings_yield_none() {
+        let doc = json!({
+            "format": { "duration": "N/A" },
+            "streams": [
+                { "index": 0, "codec_type": "video", "codec_name": "h264", "height": "N/A" }
+            ]
+        });
+        let probe = parse_ffprobe_json(&doc);
+        assert_eq!(probe.video_height, None);
+        assert_eq!(probe.duration_secs, None);
+    }
+
+    // Many remuxes ship untagged audio (no language/title metadata at all).
+    #[test]
+    fn missing_audio_tags_leave_language_and_title_none() {
+        let doc = json!({
+            "streams": [
+                { "index": 0, "codec_type": "video", "codec_name": "h264", "height": 1080 },
+                { "index": 1, "codec_type": "audio", "codec_name": "flac", "channels": 2 }
+            ]
+        });
+        let probe = parse_ffprobe_json(&doc);
+        assert_eq!(probe.audio_tracks.len(), 1);
+        assert_eq!(probe.audio_tracks[0].codec.as_deref(), Some("flac"));
+        assert_eq!(probe.audio_tracks[0].language, None);
+        assert_eq!(probe.audio_tracks[0].title, None);
+    }
+
+    // A stream with no `index` field falls back to 0 via .unwrap_or(0).
+    #[test]
+    fn audio_index_defaults_to_zero_when_missing() {
+        let doc = json!({
+            "streams": [
+                { "codec_type": "audio", "codec_name": "aac", "channels": 2 }
+            ]
+        });
+        let probe = parse_ffprobe_json(&doc);
+        assert_eq!(probe.audio_tracks[0].index, 0);
+    }
+
+    // Only disposition.forced == 1 is forced; explicit 0 and absent both mean false.
+    #[test]
+    fn subtitle_forced_false_when_disposition_absent_or_zero() {
+        let doc = json!({
+            "streams": [
+                {
+                    "index": 0,
+                    "codec_type": "subtitle",
+                    "codec_name": "subrip",
+                    "disposition": { "forced": 0 }
+                },
+                {
+                    "index": 1,
+                    "codec_type": "subtitle",
+                    "codec_name": "subrip"
+                }
+            ]
+        });
+        let probe = parse_ffprobe_json(&doc);
+        assert_eq!(probe.subtitle_tracks.len(), 2);
+        assert!(!probe.subtitle_tracks[0].forced);
+        assert!(!probe.subtitle_tracks[1].forced);
+    }
+
+    // Genuine multi-video container (e.g. concatenated angles) — first video wins.
+    #[test]
+    fn multiple_video_streams_first_wins_and_extra_ignored() {
+        let doc = json!({
+            "streams": [
+                {
+                    "index": 0,
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                    "height": 1080,
+                    "color_transfer": "bt709"
+                },
+                {
+                    "index": 1,
+                    "codec_type": "video",
+                    "codec_name": "hevc",
+                    "height": 2160,
+                    "color_transfer": "smpte2084"
+                },
+                {
+                    "index": 2,
+                    "codec_type": "audio",
+                    "codec_name": "aac",
+                    "channels": 2
+                }
+            ]
+        });
+        let probe = parse_ffprobe_json(&doc);
+        assert_eq!(probe.video_codec.as_deref(), Some("h264"));
+        assert_eq!(probe.video_height, Some(1080));
+        assert_eq!(probe.hdr_format, None);
+    }
+
+    // A bare format_name with no comma must still parse as the container.
+    #[test]
+    fn format_name_single_token_no_comma() {
+        let doc = json!({
+            "format": { "format_name": "flac" },
+            "streams": [
+                { "index": 0, "codec_type": "audio", "codec_name": "flac", "channels": 2 }
+            ]
+        });
+        let probe = parse_ffprobe_json(&doc);
+        assert_eq!(probe.container.as_deref(), Some("flac"));
+    }
+
+    // A whitespace-only format_name trims to empty and is dropped.
+    #[test]
+    fn whitespace_only_format_name_is_dropped() {
+        let doc = json!({
+            "format": { "format_name": "   " }
+        });
+        let probe = parse_ffprobe_json(&doc);
+        assert_eq!(probe.container, None);
     }
 }
