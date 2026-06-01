@@ -30,18 +30,29 @@ Run: `node scripts/autoloop/claude-guard.mjs "$AUTOLOOP_DIR"` and parse JSON `ac
   (`git fetch origin --quiet` first only if you also want remote commits.) If the merge conflicts,
   abort it (`git merge --abort`), append a
   note to `$AUTOLOOP_DIR/dead-ends.md`, and treat this as a dry window (skip to step 6). Never force.
-- Read `$AUTOLOOP_DIR/{handoff.md,iteration-log.md,dead-ends.md,immune-rules.md}` (create empty if missing).
+- Read `$AUTOLOOP_DIR/{handoff.md,iteration-log.md,dead-ends.md,immune-rules.md,GOALS.md,value-ledger.md}` (create empty if missing).
+- **Refresh the hotspot map (targeting leg):** `node scripts/autoloop/hotspot.mjs "$AUTOLOOP_WT"` — writes
+  `$AUTOLOOP_DIR/hotspots.json` (defect-density = change-freq × size; this is WHERE work pays off).
+- **Reviewer-attention budget:** scan value-ledger.md — if a work-class's recent rows show a high
+  reject/unconfirmed rate (≥3 of its last 4), treat that class as PAUSED this window (tell the mesh to
+  skip it via immuneRules note). Bias to FEWER, higher-confidence commits.
 - Done titles = `## ` entries in iteration-log.md. Existing branches = `git branch --list 'auto/*'`.
 - **First-run cap:** if `git branch --list 'auto/*' | wc -l` ≥ 6, skip to step 5 (converge check).
 
 ## 3. Run ONE mesh window (the Workflow tool)
 Invoke **Workflow** with `{ scriptPath: "scripts/autoloop/mesh.workflow.mjs" }` and
 `args: { doneTitles:[...], existingBranches:"...", immuneRules:"<contents>", firstRun:true,
-repoRoot:"<cwd>", baseBranch:"auto/integration" }`. Discovery now reads the *cumulative* integration
-state, so a fix already made this session is NOT a live bug to re-find. Wait for the result.
+repoRoot:"<cwd>", baseBranch:"auto/integration", goals:"<GOALS.md contents>",
+hotspots:<parsed hotspots.json `top` array> }`. The mesh now selects by **gate → highest non-empty
+work-class (GOALS Part A) → hotspot score × roadmap-fit (Part B)**, abstaining (dry window) when no
+candidate passes the verification gate. Discovery reads the *cumulative* integration state, so a fix
+already made this session is NOT a live bug to re-find. Wait for the result.
 
 ## 4. Persist + react (combination-lock node state, all under $AUTOLOOP_DIR)
 - Append a dated entry to iteration-log.md (action, pick title, branch, test/skeptic verdicts).
+- **Append a value-ledger.md row:** `| ts | pick.class | pick.title (file) | pick.hotspotScore | outcome |`
+  where outcome ∈ {merged, abstain/dry, unconfirmed, reverted, human-rejected}. This row feeds next
+  window's reviewer-attention budget (step 2) — it is how a low-yield class gets paused.
 - Write handoff.md (where we are, next step, what to avoid).
 - On `action:"branch_created"`:
   - If `confirmed` (tester ok AND skeptic ok): **merge it into integration** —

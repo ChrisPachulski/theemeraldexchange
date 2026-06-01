@@ -21,10 +21,16 @@ dead-ends.md
 handoff.md
 branch-claims.md
 windows/
+# Phase 2 runtime caches (regenerated each window; never committed):
+hotspots.json
+value-ledger.md
+ci-status.json
+PROMOTE-PENDING.md
 
 # Curated, version-controlled artifacts (explicitly tracked):
 !CONTROL.md
 !immune-rules.md
 !HUMAN-ACTIONS.md
 !GOALS-MET.md
+!GOALS.md
 loop.lock
