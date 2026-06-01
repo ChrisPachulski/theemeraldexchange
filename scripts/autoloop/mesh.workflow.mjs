@@ -38,14 +38,32 @@ const IMMUNE = A.immuneRules || '(no antibodies yet)'
 // session are present, so the forest cannot re-discover them. See ARCHITECTURE.md.
 const BASE = A.baseBranch || 'auto/integration'
 
-// Areas the forest scans. Each is a narrow, read-only Haiku probe.
-const AREAS = [
-  'open items in docs/PRODUCTION-READINESS-2026-05-30.md',
-  'M1.5/M1 loose ends in docs/ROADMAP-STATUS.md (e.g. /api/version schema block, .gitattributes, untested UI)',
-  'M3 media-core measurement gaps (perf <5s/100 files, >=95% match accuracy harness)',
-  'dependency hygiene (unpinned base images, missing lockfiles, audit gaps)',
-  'test coverage holes in server/ and src/',
-  'type-safety / dead-code / lint debt',
+// GOALS.md drives WHAT to work on (Part A class ladder + Part B roadmap weighting);
+// hotspots.json drives WHERE (defect concentration: change-freq × size). Selection =
+// gate → highest non-empty class → rank by hotspotScore × roadmap-fit. Effort is a
+// tiebreaker, never a divisor. See GOALS.md + the 2026-06-01 literature consultation
+// (project_autoloop_value_model_evidence): confidence is a GATE not a multiplier, a
+// lexicographic class ladder beats a blended score, reviewer attention is the scarce
+// resource, and hotspot targeting is the leg that turns "safe" work into "high-value".
+const GOALS = A.goals || '(no GOALS.md provided — fall back to broad discovery)'
+const HOTSPOTS = Array.isArray(A.hotspots) ? A.hotspots : []
+const HOTLIST = HOTSPOTS.slice(0, 20).map((h) => `${h.file} (rev=${h.revisions}, loc=${h.loc}, score=${h.score})`).join('\n') || '(no hotspot data — treat files equally)'
+const HOTMAP = new Map(HOTSPOTS.map((h) => [h.file, h.score]))
+function scoreFor(file) {
+  if (!file) return 0
+  if (HOTMAP.has(file)) return HOTMAP.get(file)
+  for (const [f, s] of HOTMAP) { if (f.endsWith(file) || file.endsWith(f)) return s }
+  return 0
+}
+
+// Evidence-derived work-class ladder (GOALS.md Part A), highest priority first.
+// One Haiku discovery leaf per class; synth picks within the HIGHEST non-empty class.
+const CLASSES = [
+  { key: 'signal-fix', desc: 'Fix a REPRODUCED failure that is RED right now (a failing test, a crash, a type error, a lint/sanitizer error). NEVER speculative bug-hunting — only an already-failing signal you can show go red→green.' },
+  { key: 'mechanical', desc: 'A mechanical, SEMANTICS-PRESERVING change at a hotspot file: codemod, dead-code removal, deprecation migration, safe lint-autofix. Behavior must be provably unchanged.' },
+  { key: 'gated-test', desc: 'A test improvement at a hotspot file that BUILDS, passes reliably, STRICTLY increases coverage, AND would catch a real regression. Coverage on a COLD file does not count.' },
+  { key: 'devex', desc: 'A cognitive-load / feedback-loop improvement at a hotspot: stronger types, de-flake a flaky test, speed up CI runtime, fill a doc gap that blocks understanding.' },
+  { key: 'dep-hygiene', desc: 'Dependency/security hygiene, BATCHED and confidence-scored (never a single trivial bump). Lowest priority — only when the classes above are empty.' },
 ]
 
 const CAND = {
@@ -59,6 +77,8 @@ const CAND = {
         required: ['title', 'autonomous', 'risk'],
         properties: {
           title: { type: 'string' },
+          class: { type: 'string', enum: ['signal-fix', 'mechanical', 'gated-test', 'devex', 'dep-hygiene'] },
+          hotspotFile: { type: 'string' },
           files: { type: 'array', items: { type: 'string' } },
           rationale: { type: 'string' },
           autonomous: { type: 'boolean' },
@@ -76,6 +96,8 @@ const VERDICT = {
     keep: { type: 'boolean' },
     reason: { type: 'string' },
     title: { type: 'string' },
+    class: { type: 'string', enum: ['signal-fix', 'mechanical', 'gated-test', 'devex', 'dep-hygiene'] },
+    hotspotFile: { type: 'string' },
   },
 }
 
@@ -84,6 +106,9 @@ const PICK = {
   required: ['title', 'instructions', 'autonomous', 'risk'],
   properties: {
     title: { type: 'string' },
+    class: { type: 'string', enum: ['signal-fix', 'mechanical', 'gated-test', 'devex', 'dep-hygiene'] },
+    hotspotScore: { type: 'number' },
+    valueRationale: { type: 'string' },
     files: { type: 'array', items: { type: 'string' } },
     instructions: { type: 'string' },
     autonomous: { type: 'boolean' },
@@ -114,59 +139,76 @@ const CHECK = {
   },
 }
 
-// ---- Discover: forest of Haiku leaves → Sonnet boolean audit (pipeline) ----
+// ---- Discover: ONE Haiku leaf per work-class, scanning hotspots → Sonnet gate ----
 phase('Discover')
 const audited = await pipeline(
-  AREAS,
-  (area) => agent(
+  CLASSES,
+  (c) => agent(
     [
       `You are a read-only discovery leaf in an autonomous improvement loop for this repo.`,
-      `Scan ONLY this area: ${area}.`,
-      `Propose up to 3 concrete improvements that are autonomous (code/tests/docs/deps — no Apple, no hardware, no deploy, no secrets), and mark each one's risk.`,
+      `Find up to 3 concrete improvements of EXACTLY this work-class:`,
+      `  class "${c.key}": ${c.desc}`,
+      `TARGET THE HOTSPOTS — the highest defect-density files (change-frequency × size). Prefer work in/near these; IGNORE cold, rarely-changed files (coverage/refactors there are near-zero value):`,
+      HOTLIST,
+      `Roadmap priorities to favor (GOALS.md Part B):\n${GOALS}`,
+      `Each candidate MUST be autonomous (code/tests/docs/deps — NO Apple, hardware, deploy, secrets, CI/.github, Dockerfile, tsconfig, vitest.config, package.json), low-risk, and have an OBJECTIVE VERIFICATION GATE it can pass: a test that goes red→green, a measurable coverage gain on a hotspot, or a build/lint that newly passes. If you cannot name the gate, do not propose it.`,
+      `Set class="${c.key}" and hotspotFile to the primary target file (use a path from the hotspot list when possible).`,
       `Do NOT propose anything already done:\n${DONE}`,
       `Avoid known dead-ends / honor these antibodies:\n${IMMUNE}`,
       `Existing in-flight branches: ${BRANCHES}`,
     ].join('\n'),
-    { model: 'haiku', phase: 'Discover', label: `scan`, schema: CAND },
+    { model: 'haiku', phase: 'Discover', label: `scan:${c.key}`, schema: CAND },
   ),
-  // Sonnet boolean-audit each candidate set down to the survivors.
-  (found, area) => agent(
+  // Sonnet gate: verifiability FIRST, abstain when unsure (a dry window is correct).
+  (found, c) => agent(
     [
-      `You are a strict auditor. Here are candidate improvements for "${area}":`,
+      `You are a strict auditor for work-class "${c.key}". Candidates:`,
       JSON.stringify(found.candidates || []),
-      `Return keep=true ONLY if the single best one is real, correct, genuinely valuable, low-risk, autonomous, and not already done:\n${DONE}`,
-      `HARD ANTIBODY GATE — you MUST return keep=false if the best candidate matches ANY of these antibodies (by symptom/root-cause, NOT just exact title — e.g. "fix the failing generateUlid tests" matches an antibody about the generateUlid crash):\n${IMMUNE}`,
-      `An antibody match means the work is ALREADY DONE on a branch and only awaits a human action; re-doing it is forbidden. When in doubt that a candidate is an antibody match, keep=false.`,
-      `Otherwise keep=false. If keep=true, set title to that single best candidate's title.`,
+      `Return keep=true for the SINGLE best candidate ONLY if ALL hold: it is real, correct, genuinely valuable, low-risk, autonomous, not already done, targets a hotspot file, AND it has an OBJECTIVE verification gate it can pass (a red→green test, a measurable coverage gain, or a newly-passing build/lint).`,
+      `If you cannot confirm the verification gate, keep=false — ABSTAIN. A clean dry window is a CORRECT, valued outcome; reviewer attention is scarce, so NEVER pass a weak candidate just to keep volume up.`,
+      `Not already done:\n${DONE}`,
+      `ANTIBODY GATE — keep=false if the best candidate matches any VERIFIED antibody by symptom/root-cause (not just title). Antibodies marked unverified/advisory are HINTS ONLY — weigh them, but do NOT hard-drop a correct, gate-passing candidate solely because an unverified antibody mentions it (the IR-4 lesson: an unverified antibody was empirically false):\n${IMMUNE}`,
+      `If keep=true, set title, class="${c.key}", and hotspotFile to the primary target file.`,
     ].join('\n'),
-    { model: 'sonnet', phase: 'Discover', label: `audit`, schema: VERDICT },
+    { model: 'sonnet', phase: 'Discover', label: `audit:${c.key}`, schema: VERDICT },
   ),
 )
 
-const survivors = audited.filter(Boolean).filter((v) => v.keep && v.title).map((v) => v.title)
-log(`forest: ${survivors.length} survivor(s) from ${AREAS.length} areas`)
+// Survivors carry their class + hotspot score (defect concentration).
+const survivors = audited.filter(Boolean).filter((v) => v.keep && v.title).map((v) => ({
+  title: v.title, class: v.class, file: v.hotspotFile || '', score: scoreFor(v.hotspotFile),
+}))
+log(`forest: ${survivors.length} survivor(s) across ${CLASSES.length} classes`)
 if (!survivors.length) {
   return { action: 'nothing_to_do', survivors: 0 }
 }
 
-// ---- Synthesize: Opus picks the single highest-value item ----
+// Lexicographic CLASS LADDER: the highest-priority class with a survivor wins
+// (evidence: a SapFix-style ordered ladder beats a blended numeric score). Within
+// it, pre-rank by hotspot score; synth applies roadmap-fit (GOALS Part B) on top.
+let chosenClass = null
+for (const c of CLASSES) { if (survivors.some((s) => s.class === c.key)) { chosenClass = c.key; break } }
+const pool = survivors.filter((s) => s.class === chosenClass).sort((a, b) => b.score - a.score).slice(0, 5)
+log(`class ladder → "${chosenClass}" (${pool.length} candidate(s); top hotspot score ${pool[0]?.score ?? 0})`)
+
+// ---- Synthesize: Opus picks ONE from the class-filtered, hotspot-ranked pool ----
 phase('Synthesize')
 const pick = await agent(
   [
-    `You are the synthesis root of an autonomous improvement loop. Survivor improvement titles:`,
-    survivors.map((s) => `- ${s}`).join('\n'),
-    `BEFORE picking, DROP any survivor that is already done:\n${DONE}`,
-    `ALSO DROP any survivor matching these antibodies by symptom/root-cause (not just exact title — e.g. anything about the generateUlid 32-bit/48-bit crash or its failing tests is an antibody match even under a fresh title):\n${IMMUNE}`,
-    `An antibody/done match is ALREADY FIXED on a branch awaiting a human merge — re-doing it produces a useless duplicate branch. This is the #1 failure mode of this loop; be ruthless about dropping these.`,
-    `If, after dropping all done/antibody matches, NOTHING autonomous and genuinely valuable remains, DO NOT invent or force a pick: return autonomous=false with title="(all remaining survivors are immune/done — dry window)" and empty instructions. A clean dry window is the CORRECT outcome when the only high-value work is human-merge-blocked.`,
-    `Otherwise pick the SINGLE highest value × lowest risk survivor. Read the repo as needed to write precise instructions.`,
-    `It MUST be autonomous and low-risk. Produce exact implementation instructions INCLUDING the tests to add/strengthen (tests matter more than the change).`,
-    `Never touch deploy config, secrets, or unrelated files.`,
+    `You are the synthesis root. The work-class for this window is ALREADY chosen by the priority ladder: "${chosenClass}". Do not switch classes.`,
+    `Candidates in this class, pre-ranked by hotspot score (defect concentration; higher = more defect-prone):`,
+    pool.map((s) => `- [hotspot ${s.score}] ${s.title} (file: ${s.file || 'n/a'})`).join('\n'),
+    `Pick the SINGLE best one. Default to the higher hotspot score UNLESS GOALS.md Part B roadmap weighting clearly favors a lower-scored candidate — then justify it in valueRationale.`,
+    `Roadmap weighting (GOALS.md Part B):\n${GOALS}`,
+    `DROP any candidate already done or matching a VERIFIED antibody:\n${DONE}\n${IMMUNE}`,
+    `If, after dropping, nothing genuinely valuable AND verifiable remains, return autonomous=false with title="(dry window — no gate-passing candidate)" and empty instructions. Abstaining is the CORRECT outcome; never force a pick.`,
+    `Otherwise write exact implementation instructions INCLUDING the verification that will PROVE it (the red→green test, the measurable coverage delta, or the newly-passing build/lint). Set class="${chosenClass}", hotspotScore to the chosen candidate's score, and valueRationale (one line: why this, tied to hotspot + roadmap).`,
+    `Never touch deploy config, secrets, CI/.github, Dockerfile, tsconfig, vitest.config, or unrelated files. Keep the diff TIGHT — reviewer attention is the scarce resource.`,
   ].join('\n'),
   { model: 'opus', phase: 'Synthesize', label: 'synth', schema: PICK },
 )
 if (!pick || pick.autonomous === false || pick.risk !== 'low') {
-  return { action: 'skipped_risky', pick }
+  return { action: 'skipped_risky', pick, chosenClass }
 }
 
 // ---- Execute: Opus executor in an ISOLATED WORKTREE ----
