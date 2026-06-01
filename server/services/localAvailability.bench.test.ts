@@ -401,7 +401,12 @@ describe('localAvailability match-accuracy benchmark', () => {
     it('matches the exact-year row (1982)', () => {
       hoisted.dbHandle = makeDb(TWIN_LIBRARY)
       const out = tagLocalAvailability(
-        [{ id: 900001, title: 'Blade Runner', year: 1982 }],
+        [{ id: 900001, title: 'Blade Runner', year: 1982 }] as Array<{
+          id: number
+          title: string
+          year: number
+          available_on?: string[]
+        }>,
         'movie',
       )
       expect(out[0].available_on).toContain('local')
@@ -410,7 +415,12 @@ describe('localAvailability match-accuracy benchmark', () => {
     it('matches the OTHER exact-year row (1983) — both years are real keys', () => {
       hoisted.dbHandle = makeDb(TWIN_LIBRARY)
       const out = tagLocalAvailability(
-        [{ id: 900002, title: 'Blade Runner', year: 1983 }],
+        [{ id: 900002, title: 'Blade Runner', year: 1983 }] as Array<{
+          id: number
+          title: string
+          year: number
+          available_on?: string[]
+        }>,
         'movie',
       )
       expect(out[0].available_on).toContain('local')
@@ -419,7 +429,12 @@ describe('localAvailability match-accuracy benchmark', () => {
     it('does NOT match a year absent from both rows (1984) — no nearest-year tiebreak', () => {
       hoisted.dbHandle = makeDb(TWIN_LIBRARY)
       const out = tagLocalAvailability(
-        [{ id: 900003, title: 'Blade Runner', year: 1984 }],
+        [{ id: 900003, title: 'Blade Runner', year: 1984 }] as Array<{
+          id: number
+          title: string
+          year: number
+          available_on?: string[]
+        }>,
         'movie',
       )
       expect(out[0].available_on ?? []).not.toContain('local')
