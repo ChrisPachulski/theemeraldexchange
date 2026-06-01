@@ -158,6 +158,18 @@ type ClaudePick = {
   reason?: string
 }
 
+// Raw TMDB result row as returned by /discover, /trending, and /search.
+// `title`/`release_date` populate for movies; `name`/`first_air_date` for TV.
+type TmdbRow = {
+  id: number
+  title?: string
+  name?: string
+  poster_path: string | null
+  overview?: string
+  release_date?: string
+  first_air_date?: string
+}
+
 type SonarrSeries = { title: string; year?: number; tmdbId?: number; genres?: string[] }
 type RadarrMovie = { title: string; year?: number; tmdbId?: number; genres?: string[] }
 type LibraryItem = SonarrSeries | RadarrMovie
@@ -935,17 +947,7 @@ async function tmdbLookup(
         clearTimeout(timer)
       }
       if (!r || !r.ok) return null
-      const data = (await r.json()) as {
-        results?: Array<{
-          id: number
-          title?: string
-          name?: string
-          poster_path: string | null
-          overview?: string
-          release_date?: string
-          first_air_date?: string
-        }>
-      }
+      const data = (await r.json()) as { results?: TmdbRow[] }
       return data.results?.[0] ?? null
     }
     // Try with the year hint first (disambiguates ambiguous titles like
@@ -1130,15 +1132,6 @@ async function fetchCandidatePool(
   if (cached && cached.key === key && cached.expiresAt > now) {
     return cached.items.slice()
   }
-  type TmdbRow = {
-    id: number
-    title?: string
-    name?: string
-    poster_path: string | null
-    overview?: string
-    release_date?: string
-    first_air_date?: string
-  }
   // Quality-sorted pages (acclaimed niche titles, vote_count≥100)
   const qualityPagesPromise = Promise.all(
     Array.from({ length: CANDIDATE_POOL_PAGES }, async (_, i) => {
@@ -1253,15 +1246,6 @@ async function tmdbTrending(kind: 'movie' | 'tv'): Promise<SuggestionItem[]> {
   const now = Date.now()
   const cached = trendingCache[kind]
   if (cached && cached.expiresAt > now) return cached.items.slice()
-  type TmdbRow = {
-    id: number
-    title?: string
-    name?: string
-    poster_path: string | null
-    overview?: string
-    release_date?: string
-    first_air_date?: string
-  }
   // Fire all pages in parallel. The TMDB free tier (~40 req / 10s)
   // comfortably absorbs 5 concurrent /trending calls, and parallel
   // pagination cuts cold-start + fill latency from ~5x serial to ~1x.

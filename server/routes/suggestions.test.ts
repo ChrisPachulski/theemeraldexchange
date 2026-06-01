@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { promises as fs } from 'fs'
+import { promises as fs, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { Hono } from 'hono'
@@ -3339,5 +3339,30 @@ describe('suggestions route — recently-shown buffer across retry', () => {
     const recentBlock = args2.system.find((s) => s.text.includes('RECENTLY SHOWN'))
     expect(recentBlock).toBeDefined()
     expect(recentBlock!.text).toContain('Clean Show A')
+  })
+})
+
+describe('suggestions source — TmdbRow type is hoisted (single definition)', () => {
+  // Regression guard for the TmdbRow dedup: the raw TMDB row shape used by
+  // /search (tmdbLookup), /discover (fetchCandidatePool), and /trending
+  // (tmdbTrending) must live in ONE module-level type, not be re-declared
+  // locally per function or inlined anonymously. If a future edit copies the
+  // shape back into a function body, this fails and points at the drift.
+  it('declares `type TmdbRow` exactly once at module scope', () => {
+    const src = readFileSync(new URL('./suggestions.ts', import.meta.url), 'utf8')
+
+    // Exactly one named declaration anywhere in the file.
+    const namedDecls = src.match(/type TmdbRow\s*=\s*\{/g) ?? []
+    expect(namedDecls.length).toBe(1)
+
+    // The single declaration is at module scope (column 0 = no leading
+    // indentation), not nested inside a function body.
+    expect(/^type TmdbRow\s*=\s*\{/m.test(src)).toBe(true)
+    expect(/^ {2,}type TmdbRow\s*=\s*\{/m.test(src)).toBe(false)
+
+    // No anonymous re-inlining of the same shape via `results?: Array<{ ... }>`.
+    // The collapsed tmdbLookup site must bind to the named type.
+    expect(src.includes('results?: TmdbRow[]')).toBe(true)
+    expect(/results\?:\s*Array<\{/.test(src)).toBe(false)
   })
 })
