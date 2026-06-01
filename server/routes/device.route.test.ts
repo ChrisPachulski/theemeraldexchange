@@ -62,7 +62,12 @@ describe('device POST /start', () => {
 
     const res = await post('/start')
     expect(res.status).toBe(200)
-    const body = await res.json()
+    const body = (await res.json()) as {
+      pinId: number
+      code: string
+      verificationUrl: string
+      authUrl: string
+    }
     expect(body.pinId).toBe(42)
     expect(body.code).toBe('WXYZ')
     expect(body.verificationUrl).toBe('https://plex.tv/link')
@@ -159,7 +164,12 @@ describe('device POST /poll — pin lifecycle', () => {
       invite_code: 'INV1',
     })
     expect(res.status).toBe(200)
-    const body = await res.json()
+    const body = (await res.json()) as {
+      status: string
+      token: string
+      server_id: string
+      user: { sub: string; username: string; role: string }
+    }
     expect(body.status).toBe('authorized')
     expect(body.token).toBe('jwe.token.value')
     expect(body.server_id).toBe('SRV-ID-1')
