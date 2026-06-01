@@ -1,4 +1,18 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+vi.mock('./upstream.js', () => ({
+  fetchJsonWithTimeout: vi.fn(),
+  fetchWithTimeout: vi.fn(),
+}))
+vi.mock('../env.js', () => ({
+  env: {
+    XTREAM_HOST: 'https://panel.example/',
+    XTREAM_USERNAME: 'u',
+    XTREAM_PASSWORD: 'p',
+    IPTV_LIST_TIMEOUT_MS: 30000,
+  },
+}))
+
 import {
   buildPlayerApiUrl,
   parseAccountInfo,
@@ -7,8 +21,20 @@ import {
   parseVodStreams,
   parseSeriesList,
   parseShortEpg,
+  credsFromEnv,
+  getAccountInfo,
+  fetchCategories,
+  fetchLiveStreams,
+  fetchVodStreams,
+  fetchSeriesList,
+  fetchSeriesInfo,
+  fetchShortEpg,
   type XtreamCreds,
 } from './xtream.js'
+import { fetchJsonWithTimeout, fetchWithTimeout } from './upstream.js'
+
+const mockJson = vi.mocked(fetchJsonWithTimeout)
+const mockFetch = vi.mocked(fetchWithTimeout)
 
 describe('xtream client primitives', () => {
   const creds: XtreamCreds = {
@@ -127,5 +153,150 @@ describe('xtream list parsers', () => {
       '2026-05-24T00:00:00Z',
     )
     expect(s[0]).toMatchObject({ series_id: 11, name: 'Show', tmdb_id: 1399, category_id: 4 })
+  })
+})
+
+describe('xtream credsFromEnv', () => {
+  it('reads creds from env and strips trailing slashes from host', () => {
+    const c = credsFromEnv()
+    expect(c.host).toBe('https://panel.example')
+    expect(c.username).toBe('u')
+    expect(c.password).toBe('p')
+  })
+})
+
+describe('xtream network fetchers', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('getAccountInfo parses user_info and tolerates string active_connections', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        user_info: {
+          exp_date: '1893456000',
+          max_connections: 3,
+          active_connections: '2',
+          status: 'Active',
+        },
+      }),
+    } as unknown as Response)
+    const a = await getAccountInfo()
+    expect(a.maxConnections).toBe(3)
+    expect(a.activeConnections).toBe(2)
+    expect(a.status).toBe('Active')
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+    expect(String(mockFetch.mock.calls[0][0])).toContain('player_api.php?username=u&password=p')
+  })
+
+  it('getAccountInfo throws on non-ok response', async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 401 } as unknown as Response)
+    await expect(getAccountInfo()).rejects.toThrow('xtream_account_401')
+  })
+
+  it('fetchCategories(live) parses payload and hits get_live_categories', async () => {
+    mockJson.mockResolvedValue([{ category_id: '1', category_name: 'News', parent_id: 0 }])
+    const cats = await fetchCategories('live')
+    expect(cats).toEqual([{ category_id: 1, name: 'News', parent_id: 0 }])
+    expect(String(mockJson.mock.calls[0][0])).toContain('action=get_live_categories')
+  })
+
+  it('fetchCategories(vod) hits get_vod_categories', async () => {
+    mockJson.mockResolvedValue([])
+    await fetchCategories('vod')
+    expect(String(mockJson.mock.calls[0][0])).toContain('action=get_vod_categories')
+  })
+
+  it('fetchCategories(series) hits get_series_categories', async () => {
+    mockJson.mockResolvedValue([])
+    await fetchCategories('series')
+    expect(String(mockJson.mock.calls[0][0])).toContain('action=get_series_categories')
+  })
+
+  it('fetchLiveStreams parses + normalizes epg_channel_id', async () => {
+    mockJson.mockResolvedValue([{ stream_id: 5, name: 'C', epg_channel_id: 'X.us' }])
+    const ch = await fetchLiveStreams('2026-05-24T00:00:00Z')
+    expect(ch[0].stream_id).toBe(5)
+    expect(ch[0].epg_channel_id).toBe('x.us')
+    expect(String(mockJson.mock.calls[0][0])).toContain('action=get_live_streams')
+  })
+
+  it('fetchVodStreams parses payload and hits get_vod_streams', async () => {
+    mockJson.mockResolvedValue([{ stream_id: 9, name: 'Movie', container_extension: 'mp4', tmdb: '603' }])
+    const v = await fetchVodStreams('2026-05-24T00:00:00Z')
+    expect(v[0]).toMatchObject({ stream_id: 9, name: 'Movie', container_extension: 'mp4', tmdb_id: 603 })
+    expect(String(mockJson.mock.calls[0][0])).toContain('action=get_vod_streams')
+  })
+
+  it('fetchSeriesList parses payload and hits get_series', async () => {
+    mockJson.mockResolvedValue([{ series_id: 11, name: 'Show', tmdb: 1399, category_id: 4 }])
+    const s = await fetchSeriesList('2026-05-24T00:00:00Z')
+    expect(s[0]).toMatchObject({ series_id: 11, name: 'Show', tmdb_id: 1399, category_id: 4 })
+    expect(String(mockJson.mock.calls[0][0])).toContain('action=get_series')
+  })
+
+  it('fetchShortEpg parses base64 titles + unix timestamps keyed by stream_id', async () => {
+    mockJson.mockResolvedValue({
+      epg_listings: [
+        {
+          title: Buffer.from('T').toString('base64'),
+          start_timestamp: 1780149600,
+          stop_timestamp: 1780153200,
+        },
+      ],
+    })
+    const rows = await fetchShortEpg(200163456)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].channel_id).toBe('200163456')
+    expect(rows[0].title).toBe('T')
+    const url = String(mockJson.mock.calls[0][0])
+    expect(url).toContain('action=get_short_epg')
+    expect(url).toContain('stream_id=')
+  })
+
+  it('fetchSeriesInfo flattens episodes across seasons with info fallbacks', async () => {
+    mockJson.mockResolvedValue({
+      episodes: {
+        '1': [
+          {
+            id: 'e1',
+            episode_num: '1',
+            title: 'Pilot',
+            container_extension: 'mp4',
+            added: '1716000000',
+            info: { plot: 'desc', duration_secs: '1320' },
+          },
+        ],
+        '2': [{ id: 'e2', episode_num: 2, info: { description: 'fallback-desc' } }],
+      },
+    })
+    const eps = await fetchSeriesInfo(11)
+    expect(eps).toHaveLength(2)
+    expect(eps[0]).toMatchObject({
+      episode_id: 'e1',
+      series_id: 11,
+      season: 1,
+      episode_num: 1,
+      title: 'Pilot',
+      plot: 'desc',
+      duration_secs: 1320,
+    })
+    expect(typeof eps[0].added_ts).toBe('string')
+    expect(eps[0].added_ts).not.toBeNull()
+    expect(eps[1]).toMatchObject({
+      season: 2,
+      episode_num: 2,
+      plot: 'fallback-desc',
+      duration_secs: null,
+    })
+  })
+
+  it('fetchSeriesInfo skips non-array season values', async () => {
+    mockJson.mockResolvedValue({ episodes: { '1': 'not-an-array' } })
+    await expect(fetchSeriesInfo(7)).resolves.toEqual([])
+  })
+
+  it('fetchSeriesInfo tolerates missing episodes key', async () => {
+    mockJson.mockResolvedValue({})
+    await expect(fetchSeriesInfo(7)).resolves.toEqual([])
   })
 })
