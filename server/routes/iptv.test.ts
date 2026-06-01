@@ -431,6 +431,55 @@ describe('segment proxy', () => {
     )
     fetchSpy.mockRestore()
   })
+
+  it('rejects a token whose kind is not "segment" (kind_mismatch → invalid_token 401)', async () => {
+    // verifyStreamTokenDualKey succeeds (valid HMAC) but the decoded kind is
+    // "live", so the route throws kind_mismatch and returns 401 before any
+    // replay/SSRF/fetch work. Covers the verify-try/catch branch (iptv.ts ~1142).
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    const res = await app.request(
+      `/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('live', 'https://cdn.example.com/seg.ts'))}`,
+    )
+    expect(res.status).toBe(401)
+    const body = (await res.json()) as { error: string; detail: string }
+    expect(body.error).toBe('invalid_token')
+    expect(body.detail).toBe('kind_mismatch')
+    expect(fetchSpy).not.toHaveBeenCalled()
+    fetchSpy.mockRestore()
+  })
+
+  it('rejects a segment whose rid is not a parseable URL (bad_upstream 400)', async () => {
+    // A valid segment token whose rid is a malformed URL string: new URL()
+    // throws, so the route returns bad_upstream 400 before isPublicHttpsUpstream
+    // or any fetch. Covers the URL-parse try/catch branch (iptv.ts ~1153).
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    const res = await app.request(
+      `/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', 'not a valid url'))}`,
+    )
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toBe('bad_upstream')
+    expect(fetchSpy).not.toHaveBeenCalled()
+    fetchSpy.mockRestore()
+  })
+
+  it('re-throws a non-SSRF guardedFetch failure (network error is NOT masked as bad_upstream)', async () => {
+    // The host string + resolved IP pass the SSRF guard, but the underlying
+    // platform fetch rejects with a plain network error. guardedFetch lets a
+    // non-SsrfBlockedError propagate, so the route's catch hits `throw err`
+    // (NOT the bad_upstream 400 branch). Covers iptv.ts ~1185-1186.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(
+      new TypeError('socket hang up'),
+    )
+    const res = await app.request(
+      `/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', 'https://cdn.example.com/net-fail.ts'))}`,
+    )
+    // The route re-threw (did NOT swallow as bad_upstream 400); Hono's error
+    // boundary surfaces it as a 500, proving the non-SsrfBlockedError branch.
+    expect(res.status).toBe(500)
+    expect(res.status).not.toBe(400)
+    expect(fetchSpy).toHaveBeenCalled()
+    fetchSpy.mockRestore()
+  })
 })
 
 describe('POST /api/iptv/admin/sync', () => {
