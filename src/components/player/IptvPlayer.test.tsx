@@ -8,6 +8,8 @@ import IptvPlayer, {
   setNativeAudioTrack,
   setNativeSubtitleTrack,
   labelForTrack,
+  applyAudioTrack,
+  applySubtitleTrack,
 } from './IptvPlayer'
 import type { StreamGrant } from '../../lib/api/iptv'
 
@@ -235,5 +237,104 @@ describe('setNativeSubtitleTrack', () => {
       'disabled',
       'disabled',
     ])
+  })
+})
+
+describe('applyAudioTrack', () => {
+  // The HLS branch is the live-TV switch path that the inline handler left
+  // uncovered; these assert both the return value AND the engine mutation.
+  it('switches the HLS engine (live path) and returns the applied id', () => {
+    const hls = { audioTrack: 0, subtitleTrack: -1 }
+
+    const applied = applyAudioTrack(hls, null, 2)
+
+    expect(applied).toBe(2)
+    expect(hls.audioTrack).toBe(2)
+  })
+
+  it('prefers HLS over native and leaves native audioTracks untouched', () => {
+    const hls = { audioTrack: 0, subtitleTrack: -1 }
+    const video = fakeVideoWithAudio([
+      { name: 'English', enabled: true },
+      { name: 'Spanish', enabled: false },
+    ])
+
+    const applied = applyAudioTrack(hls, video as never, 1)
+
+    expect(applied).toBe(1)
+    expect(hls.audioTrack).toBe(1)
+    const tracks = video.audioTracks as Record<number, AudioTrackFake>
+    expect([tracks[0].enabled, tracks[1].enabled]).toEqual([true, false])
+  })
+
+  it('switches the native audio track when no HLS engine', () => {
+    const video = fakeVideoWithAudio([
+      { name: 'English', enabled: true },
+      { name: 'Spanish', enabled: false },
+    ])
+
+    const applied = applyAudioTrack(null, video as never, 1)
+
+    expect(applied).toBe(1)
+    const tracks = video.audioTracks as Record<number, AudioTrackFake>
+    expect([tracks[0].enabled, tracks[1].enabled]).toEqual([false, true])
+  })
+
+  it('returns null and does not throw on empty native audioTracks', () => {
+    const video = fakeVideoWithAudio([])
+
+    expect(() => applyAudioTrack(null, video as never, 0)).not.toThrow()
+    expect(applyAudioTrack(null, video as never, 0)).toBeNull()
+  })
+
+  it('returns null when there is no engine at all', () => {
+    expect(applyAudioTrack(null, null, 0)).toBeNull()
+  })
+})
+
+describe('applySubtitleTrack', () => {
+  it('switches the HLS engine (live path) and returns the applied id', () => {
+    const hls = { audioTrack: 0, subtitleTrack: -1 }
+
+    const applied = applySubtitleTrack(hls, null, 1)
+
+    expect(applied).toBe(1)
+    expect(hls.subtitleTrack).toBe(1)
+  })
+
+  it('prefers HLS over native and leaves native textTracks untouched', () => {
+    const hls = { audioTrack: 0, subtitleTrack: -1 }
+    const video = fakeVideoWithText([{ mode: 'disabled' }, { mode: 'showing' }])
+
+    const applied = applySubtitleTrack(hls, video as never, 0)
+
+    expect(applied).toBe(0)
+    expect(hls.subtitleTrack).toBe(0)
+    const tracks = video.textTracks as Record<number, TextTrackFake>
+    expect([tracks[0].mode, tracks[1].mode]).toEqual(['disabled', 'showing'])
+  })
+
+  it('switches the native subtitle track when no HLS engine', () => {
+    const video = fakeVideoWithText([{ mode: 'disabled' }, { mode: 'showing' }])
+
+    const applied = applySubtitleTrack(null, video as never, 0)
+
+    expect(applied).toBe(0)
+    const tracks = video.textTracks as Record<number, TextTrackFake>
+    expect([tracks[0].mode, tracks[1].mode]).toEqual(['showing', 'disabled'])
+  })
+
+  it('applies the "Off" (-1) selection on the native path (no length guard)', () => {
+    const video = fakeVideoWithText([{ mode: 'showing' }])
+
+    const applied = applySubtitleTrack(null, video as never, -1)
+
+    expect(applied).toBe(-1)
+    const tracks = video.textTracks as Record<number, TextTrackFake>
+    expect(tracks[0].mode).toBe('disabled')
+  })
+
+  it('returns null when there is no engine at all', () => {
+    expect(applySubtitleTrack(null, null, 0)).toBeNull()
   })
 })
