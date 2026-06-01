@@ -67,6 +67,170 @@ describe('throwApiError', () => {
       message: 'Custom backend message',
     })
   })
+
+  it('explains default_quality_profile_missing with available names', async () => {
+    const r = jsonResponse(
+      {
+        error: 'default_quality_profile_missing',
+        expected_name: 'HD-1080p',
+        available_names: ['SD', 'HD-720p'],
+      },
+      400,
+    )
+    let caught: ApiError | null = null
+    try {
+      await throwApiError(r, 'Sonarr /series')
+    } catch (e) {
+      caught = e as ApiError
+    }
+    expect(caught!.status).toBe(400)
+    expect(caught!.code).toBe('default_quality_profile_missing')
+    expect(caught!.message).toMatch(/No quality profile named "HD-1080p" found/)
+    expect(caught!.message).toContain('Available profiles: SD, HD-720p.')
+    expect(caught!.message).toMatch(/Set DEFAULT_PROFILE_NAME/)
+  })
+
+  it('explains default_quality_profile_missing without available names (fallback name)', async () => {
+    const r = jsonResponse({ error: 'default_quality_profile_missing' }, 400)
+    let caught: ApiError | null = null
+    try {
+      await throwApiError(r, 'Sonarr /series')
+    } catch (e) {
+      caught = e as ApiError
+    }
+    expect(caught!.message).toMatch(/No quality profile named "choose me" found/)
+    expect(caught!.message).not.toContain('Available profiles')
+  })
+
+  it('explains default_root_folder_missing with expected and available paths', async () => {
+    const r = jsonResponse(
+      {
+        error: 'default_root_folder_missing',
+        expected_path: '/data/tv',
+        available_paths: ['/mnt/a', '/mnt/b'],
+      },
+      400,
+    )
+    let caught: ApiError | null = null
+    try {
+      await throwApiError(r, 'Sonarr /series')
+    } catch (e) {
+      caught = e as ApiError
+    }
+    expect(caught!.status).toBe(400)
+    expect(caught!.code).toBe('default_root_folder_missing')
+    expect(caught!.message).toMatch(/does not match any folder/)
+    expect(caught!.message).toContain('Configured: "/data/tv".')
+    expect(caught!.message).toContain('Available paths: /mnt/a, /mnt/b.')
+  })
+
+  it('explains default_root_folder_missing without expected/available paths', async () => {
+    const r = jsonResponse({ error: 'default_root_folder_missing' }, 400)
+    let caught: ApiError | null = null
+    try {
+      await throwApiError(r, 'Sonarr /series')
+    } catch (e) {
+      caught = e as ApiError
+    }
+    expect(caught!.message).toMatch(/does not match any folder/)
+    expect(caught!.message).not.toContain('Configured:')
+    expect(caught!.message).not.toContain('Available paths:')
+  })
+
+  it('explains admin_must_configure_upstream', async () => {
+    const r = jsonResponse({ error: 'admin_must_configure_upstream' }, 409)
+    await expect(throwApiError(r, 'Sonarr /series')).rejects.toMatchObject({
+      status: 409,
+      code: 'admin_must_configure_upstream',
+      message: expect.stringMatching(/no root folders configured/i),
+    })
+  })
+
+  it('explains rootfolder_unreachable and preserves status', async () => {
+    const r = jsonResponse({ error: 'rootfolder_unreachable' }, 502)
+    let caught: ApiError | null = null
+    try {
+      await throwApiError(r, 'Sonarr /series')
+    } catch (e) {
+      caught = e as ApiError
+    }
+    expect(caught!.status).toBe(502)
+    expect(caught!.code).toBe('rootfolder_unreachable')
+    expect(caught!.message).toMatch(/unreachable/i)
+    expect(caught!.message).toMatch(/API key/)
+  })
+
+  it('explains qualityprofile_unreachable and preserves status', async () => {
+    const r = jsonResponse({ error: 'qualityprofile_unreachable' }, 503)
+    let caught: ApiError | null = null
+    try {
+      await throwApiError(r, 'Sonarr /series')
+    } catch (e) {
+      caught = e as ApiError
+    }
+    expect(caught!.status).toBe(503)
+    expect(caught!.code).toBe('qualityprofile_unreachable')
+    expect(caught!.message).toMatch(/unreachable/i)
+    expect(caught!.message).toMatch(/API key/)
+  })
+
+  it('explains free_space_unknown with a path', async () => {
+    const r = jsonResponse({ error: 'free_space_unknown', path: '/data/movies' }, 507)
+    let caught: ApiError | null = null
+    try {
+      await throwApiError(r, 'Sonarr /series')
+    } catch (e) {
+      caught = e as ApiError
+    }
+    expect(caught!.status).toBe(507)
+    expect(caught!.code).toBe('free_space_unknown')
+    expect(caught!.message).toMatch(/cannot read the free-space value/)
+    expect(caught!.message).toContain('/data/movies')
+  })
+
+  it('handles a 507 status with a non-disk-space code (default path text)', async () => {
+    const r = jsonResponse({ error: 'some_other_507' }, 507)
+    await expect(throwApiError(r, 'Sonarr /series')).rejects.toMatchObject({
+      status: 507,
+      message: expect.stringMatching(/cannot read the free-space value for the root folder/),
+    })
+  })
+
+  it('explains free_space_unknown without a path (default path text)', async () => {
+    const r = jsonResponse({ error: 'free_space_unknown' }, 507)
+    let caught: ApiError | null = null
+    try {
+      await throwApiError(r, 'Sonarr /series')
+    } catch (e) {
+      caught = e as ApiError
+    }
+    expect(caught!.message).toContain('the root folder')
+  })
+
+  it('explains unknown_root_folder with a path', async () => {
+    const r = jsonResponse({ error: 'unknown_root_folder', path: '/x/y' }, 422)
+    let caught: ApiError | null = null
+    try {
+      await throwApiError(r, 'Sonarr /series')
+    } catch (e) {
+      caught = e as ApiError
+    }
+    expect(caught!.status).toBe(422)
+    expect(caught!.code).toBe('unknown_root_folder')
+    expect(caught!.message).toMatch(/does not list/)
+    expect(caught!.message).toContain('/x/y')
+  })
+
+  it('explains unknown_root_folder without a path (default path text)', async () => {
+    const r = jsonResponse({ error: 'unknown_root_folder' }, 422)
+    let caught: ApiError | null = null
+    try {
+      await throwApiError(r, 'Sonarr /series')
+    } catch (e) {
+      caught = e as ApiError
+    }
+    expect(caught!.message).toContain('the requested path')
+  })
 })
 
 describe('isInsufficientDiskSpace', () => {
