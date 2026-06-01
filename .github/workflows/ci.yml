@@ -30,6 +30,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Supply-chain gate (MEDIUM #7): fail the build on known-vulnerable
+      # production npm dependencies. --audit-level=high so only high/critical
+      # advisories break CI (low/moderate dev-only noise would keep the gate
+      # red and get it disabled); --omit=dev scopes to deps that actually ship.
+      - name: Audit npm dependencies (high+ severity)
+        run: npm audit --audit-level=high --omit=dev
+
       - name: Type-check (SPA)
         run: npx tsc --noEmit
 
@@ -160,6 +167,19 @@ jobs:
       - name: Install maturin + pytest
         run: pip install maturin pytest pydantic fastapi
 
+      # Supply-chain gate (MEDIUM #7 / LOW #23): audit the recommender's
+      # declared Python deps against the PyPI advisory DB (PYSEC/GHSA) and
+      # fail on any known vulnerability. There is no requirements.txt, so we
+      # extract the [project].dependencies list from pyproject.toml and feed
+      # it to pip-audit via process substitution. --strict makes resolution
+      # errors fatal (no silent skips). Process substitution needs bash, which
+      # is the default shell on ubuntu-latest, but we pin it to be explicit.
+      - name: Audit Python dependencies (pip-audit)
+        shell: bash
+        run: |
+          pip install pip-audit
+          pip-audit --strict --progress-spinner=off -r <(python -c "import tomllib,sys;d=tomllib.load(open('recommender/pyproject.toml','rb'));print(chr(10).join(d['project']['dependencies']))")
+
       # Build once into a wheel, then install it into BOTH the bare job
       # interpreter (for the pytest parity step) and a recommender/.venv
       # (for the Node cross-binding gate, whose PYTHON_PATH resolves to
@@ -227,6 +247,16 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
+
+      # Supply-chain gate (MEDIUM #7): scan Cargo.lock against the RustSec
+      # advisory DB and fail on known vulnerabilities. Uses the maintained
+      # action (reads Cargo.lock directly) to avoid a slow `cargo install
+      # cargo-audit` on every run. secrets.GITHUB_TOKEN is auto-provided by
+      # Actions — not a new secret — and only used to annotate the run.
+      - name: Audit cargo dependencies (RustSec)
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       # Format check first — fastest signal.
       - name: cargo fmt --check
