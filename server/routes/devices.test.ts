@@ -30,6 +30,18 @@ function bearerHeaders(token: string): Record<string, string> {
   }
 }
 
+// NOTE on the admin sub: plex subs must be purely numeric (parseSub regex
+// `^(0|[1-9][0-9]*)$`). A non-numeric sub like 'plex:admin1' fails
+// validation and `memberStatus` returns 'not_member' → 401 before
+// requireAdmin's role check ever runs, so we use a valid numeric sub here.
+const ADMIN_SAMPLE: Parameters<typeof mintDeviceToken>[0] = {
+  ...SAMPLE,
+  role: 'admin',
+  sub: 'plex:22222',
+  device_id: '01HADMINDEVICEADMINDEVICE0',
+  device_name: "Admin's Mac",
+}
+
 describe('GET /api/devices/self', () => {
   beforeEach(() => {
     _resetDeviceKeyForTests()
@@ -242,5 +254,200 @@ describe('GET /api/devices/self — unauthenticated', () => {
       headers: { Origin: 'https://theemeraldexchange.com' },
     })
     expect(res.status).toBe(401)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Admin device routes (mounted at /api/admin/devices). The Bearer auth path
+// passes the minted claim's `role` straight through, so a token minted with
+// role:'admin' yields an admin session; role:'user' yields a non-admin. No
+// ADMIN_SUBS env is needed for the Bearer path.
+// ---------------------------------------------------------------------------
+
+describe('GET /api/admin/devices', () => {
+  beforeEach(() => {
+    _resetDeviceKeyForTests()
+    serverDb().raw.exec(
+      'DELETE FROM device_token_revocations; DELETE FROM device_tokens; DELETE FROM members;',
+    )
+  })
+  afterEach(() => closeServerDb())
+
+  it('lists devices across ALL subs and includes the sub field', async () => {
+    const adminToken = await mintDeviceToken(ADMIN_SAMPLE)
+    await mintDeviceToken(SAMPLE)
+
+    const res = await app.request('/api/admin/devices', { headers: bearerHeaders(adminToken) })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { devices: Array<{ sub: string; device_name: string }> }
+    expect(body.devices).toHaveLength(2)
+    expect(body.devices.every((d) => typeof d.sub === 'string')).toBe(true)
+    const subs = new Set(body.devices.map((d) => d.sub))
+    expect(subs.has('plex:22222')).toBe(true)
+    expect(subs.has('plex:11111')).toBe(true)
+  })
+
+  it('includes revoked devices in the admin listing', async () => {
+    const adminToken = await mintDeviceToken(ADMIN_SAMPLE)
+    const sampleToken = await mintDeviceToken(SAMPLE)
+    const sampleClaims = await (await import('../session.js')).verifyDeviceToken(sampleToken)
+    expect(sampleClaims).not.toBeNull()
+    revokeDeviceToken(sampleClaims!.jti, 'test')
+
+    const res = await app.request('/api/admin/devices', { headers: bearerHeaders(adminToken) })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      devices: Array<{ device_name: string; revoked: boolean }>
+    }
+    const sampleDevice = body.devices.find((d) => d.device_name === 'Living Room Apple TV')
+    expect(sampleDevice).toBeDefined()
+    expect(sampleDevice!.revoked).toBe(true)
+  })
+
+  it('rejects a non-admin Bearer with 403', async () => {
+    const userToken = await mintDeviceToken(SAMPLE)
+    const res = await app.request('/api/admin/devices', { headers: bearerHeaders(userToken) })
+    expect(res.status).toBe(403)
+    const body = (await res.json()) as { reason: string }
+    expect(body.reason).toBe('admin_only')
+  })
+
+  it('rejects unauthenticated with 401', async () => {
+    const res = await app.request('/api/admin/devices', {
+      headers: { Origin: 'https://theemeraldexchange.com' },
+    })
+    expect(res.status).toBe(401)
+  })
+})
+
+describe('DELETE /api/admin/devices/:jti', () => {
+  beforeEach(() => {
+    _resetDeviceKeyForTests()
+    serverDb().raw.exec(
+      'DELETE FROM device_token_revocations; DELETE FROM device_tokens; DELETE FROM members;',
+    )
+  })
+  afterEach(() => closeServerDb())
+
+  it('revokes ANY user device by jti', async () => {
+    const adminToken = await mintDeviceToken(ADMIN_SAMPLE)
+    const sampleToken = await mintDeviceToken(SAMPLE)
+    const sampleClaims = await (await import('../session.js')).verifyDeviceToken(sampleToken)
+    expect(sampleClaims).not.toBeNull()
+    const jti = sampleClaims!.jti
+
+    const res = await app.request(`/api/admin/devices/${jti}`, {
+      method: 'DELETE',
+      headers: bearerHeaders(adminToken),
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { revoked: string }
+    expect(body.revoked).toBe(jti)
+
+    // Cascade revoke took effect — the targeted user's token no longer verifies.
+    const after = await (await import('../session.js')).verifyDeviceToken(sampleToken)
+    expect(after).toBeNull()
+
+    const rev = serverDb()
+      .raw.prepare('SELECT reason FROM device_token_revocations WHERE jti = ?')
+      .get(jti) as { reason: string } | undefined
+    expect(rev?.reason).toBe('admin_revoke')
+  })
+
+  it('returns 404 for an unknown jti', async () => {
+    const adminToken = await mintDeviceToken(ADMIN_SAMPLE)
+    const res = await app.request('/api/admin/devices/01HNONEXISTENTNONEXISTENT0', {
+      method: 'DELETE',
+      headers: bearerHeaders(adminToken),
+    })
+    expect(res.status).toBe(404)
+  })
+
+  it('rejects a non-admin caller with 403', async () => {
+    const userToken = await mintDeviceToken(SAMPLE)
+    const targetToken = await mintDeviceToken({
+      ...SAMPLE,
+      sub: 'plex:99999',
+      device_id: '01HOTHERDEVICEOTHERDEVICE0',
+      device_name: 'Target TV',
+    })
+    const targetClaims = await (await import('../session.js')).verifyDeviceToken(targetToken)
+    expect(targetClaims).not.toBeNull()
+
+    const res = await app.request(`/api/admin/devices/${targetClaims!.jti}`, {
+      method: 'DELETE',
+      headers: bearerHeaders(userToken),
+    })
+    expect(res.status).toBe(403)
+
+    // No revoke happened — the target token still verifies.
+    const stillOk = await (await import('../session.js')).verifyDeviceToken(targetToken)
+    expect(stillOk).not.toBeNull()
+  })
+})
+
+describe('PATCH /api/admin/devices/:jti/name', () => {
+  beforeEach(() => {
+    _resetDeviceKeyForTests()
+    serverDb().raw.exec(
+      'DELETE FROM device_token_revocations; DELETE FROM device_tokens; DELETE FROM members;',
+    )
+  })
+  afterEach(() => closeServerDb())
+
+  it('renames ANY user device', async () => {
+    const adminToken = await mintDeviceToken(ADMIN_SAMPLE)
+    const sampleToken = await mintDeviceToken(SAMPLE)
+    const sampleClaims = await (await import('../session.js')).verifyDeviceToken(sampleToken)
+    expect(sampleClaims).not.toBeNull()
+    const jti = sampleClaims!.jti
+
+    const res = await app.request(`/api/admin/devices/${jti}/name`, {
+      method: 'PATCH',
+      headers: { ...bearerHeaders(adminToken), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_name: 'Renamed By Admin' }),
+    })
+    expect(res.status).toBe(200)
+
+    const row = serverDb()
+      .raw.prepare(`SELECT device_name FROM device_tokens WHERE jti = ?`)
+      .get(jti) as { device_name: string }
+    expect(row.device_name).toBe('Renamed By Admin')
+  })
+
+  it('rejects empty name with 400', async () => {
+    const adminToken = await mintDeviceToken(ADMIN_SAMPLE)
+    const adminClaims = await (await import('../session.js')).verifyDeviceToken(adminToken)
+    expect(adminClaims).not.toBeNull()
+
+    const res = await app.request(`/api/admin/devices/${adminClaims!.jti}/name`, {
+      method: 'PATCH',
+      headers: { ...bearerHeaders(adminToken), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_name: '   ' }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('returns 404 for unknown jti', async () => {
+    const adminToken = await mintDeviceToken(ADMIN_SAMPLE)
+    const res = await app.request('/api/admin/devices/01HNONEXISTENTNONEXISTENT0/name', {
+      method: 'PATCH',
+      headers: { ...bearerHeaders(adminToken), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_name: 'X' }),
+    })
+    expect(res.status).toBe(404)
+  })
+
+  it('rejects a non-admin caller with 403', async () => {
+    const userToken = await mintDeviceToken(SAMPLE)
+    const userClaims = await (await import('../session.js')).verifyDeviceToken(userToken)
+    expect(userClaims).not.toBeNull()
+
+    const res = await app.request(`/api/admin/devices/${userClaims!.jti}/name`, {
+      method: 'PATCH',
+      headers: { ...bearerHeaders(userToken), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_name: 'Should Not Apply' }),
+    })
+    expect(res.status).toBe(403)
   })
 })
