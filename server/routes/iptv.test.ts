@@ -453,6 +453,52 @@ describe('POST /api/iptv/admin/sync', () => {
     expect(body.state).toBe('done')
     expect(body.result?.channels).toBe(10)
   })
+
+  it('records sync errors in job state', async () => {
+    const { syncOnce } = await import('../services/iptvSync.js')
+    vi.mocked(syncOnce).mockRejectedValueOnce(new Error('sync_failed'))
+
+    const app = new Hono().route('/api/iptv', iptv)
+    const res = await app.request('/api/iptv/admin/sync', { method: 'POST' })
+    expect(res.status).toBe(202)
+    const { jobId } = await res.json() as { jobId: string }
+
+    await new Promise(r => setTimeout(r, 30))
+    const status = await app.request(`/api/iptv/admin/sync/${jobId}`)
+    expect(status.status).toBe(200)
+    const body = await status.json() as { state: string; error?: string }
+    expect(body.state).toBe('error')
+    expect(body.error).toBe('sync_failed')
+
+    // Restore mock for subsequent tests
+    vi.mocked(syncOnce).mockResolvedValue({
+      busy: false, channels: 10, vod: 20, series: 5, episodes: 50, epg: 100, categories: 6,
+      startedAt: '2026-05-24T00:00:00Z', finishedAt: '2026-05-24T00:00:30Z', durationMs: 30000,
+    })
+  })
+
+  it('cleans up oldest job when map exceeds 20 entries', async () => {
+    const app = new Hono().route('/api/iptv', iptv)
+    const jobIds: string[] = []
+
+    // Create 21 jobs (will trigger cleanup of the oldest)
+    for (let i = 0; i < 21; i++) {
+      const res = await app.request('/api/iptv/admin/sync', { method: 'POST' })
+      expect(res.status).toBe(202)
+      const { jobId } = await res.json() as { jobId: string }
+      jobIds.push(jobId)
+    }
+
+    await new Promise(r => setTimeout(r, 50))
+
+    // Verify the oldest job (first one) is gone
+    const oldestJobStatus = await app.request(`/api/iptv/admin/sync/${jobIds[0]}`)
+    expect(oldestJobStatus.status).toBe(404)
+
+    // Verify a newer job is still there
+    const newerJobStatus = await app.request(`/api/iptv/admin/sync/${jobIds[20]}`)
+    expect(newerJobStatus.status).toBe(200)
+  })
 })
 
 describe('catalog read routes', () => {
