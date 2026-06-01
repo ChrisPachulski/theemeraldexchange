@@ -134,7 +134,7 @@ export function useSetFeedback(kind: FeedbackKind) {
         if (prev) qc.setQueryData(key, prev)
       }
     },
-    onSettled: () => {
+    onSettled: (_data, _err, variables) => {
       qc.invalidateQueries({ queryKey: ['feedback'] })
       // Do NOT reflexively re-ask the model on every dot click.
       // Invalidating ['suggestions'] here refetches the whole strip and
@@ -146,10 +146,14 @@ export function useSetFeedback(kind: FeedbackKind) {
       // yes/no calls. The new reject/like state is picked up on the next
       // natural refetch (mount / tab revisit / manual refresh).
       //
-      // To avoid the strip slowly running dry as dislikes remove cards,
-      // refill lazily: only re-ask when the visible list drops to the
-      // low-water mark. Likes don't remove a card, so they never trip
-      // this — they leave the lineup untouched.
+      // Only a DISLIKE removes a card (the onMutate optimistic filter
+      // above), so only a dislike can drain the strip toward empty. Likes
+      // and clears leave the lineup length untouched, so they must never
+      // reach the low-water check — otherwise a single green dot refetches
+      // the whole strip whenever the visible list already sits at/under the
+      // mark (a short strip = every like reshuffles, the reported bug).
+      // Gate the lazy refill on dislikes only.
+      if (variables.signal !== 'dislike') return
       const LOW_WATER_MARK = 5
       const entries = qc.getQueryCache().findAll({ queryKey: ['suggestions', kind] })
       let lowest = Infinity
