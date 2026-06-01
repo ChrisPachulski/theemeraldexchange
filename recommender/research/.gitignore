@@ -1,0 +1,4 @@
+# Household personal data sourced from Sonarr/Radarr + rejections.json.
+# The library + reject lists reveal the household's actual taste; the repo may
+# be public. Sourced locally by the loop; never committed.
+cache/
