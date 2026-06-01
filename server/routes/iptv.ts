@@ -122,6 +122,11 @@ function sessionTitle(kind: SessionKind, resourceId: string): string | null {
   return null
 }
 
+// Test-only export: sessionTitle is module-private to keep the session tracker
+// ignorant of catalog schema, but its series branch (episode→series join, with
+// null-title and missing-row fallbacks) is non-trivial and worth unit-pinning.
+export const __test = { sessionTitle }
+
 function enrichSessions(list: SessionView[]): Array<SessionView & { resolvedTitle: string | null }> {
   return list.map((s) => ({ ...s, resolvedTitle: s.title ?? sessionTitle(s.kind, s.resourceId) }))
 }
