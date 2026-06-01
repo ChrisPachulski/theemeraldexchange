@@ -250,15 +250,25 @@ def _reverse_index(graph: dict) -> dict[int, list[tuple[int, float]]]:
 
 
 def coengagement_candidates(graph: dict, rev: dict, lib_ids: set[int],
-                            catalog: set[int]) -> set[int]:
+                            catalog: set[int], cap: int | None = None) -> set[int]:
     """Items co-engaged with the library (both directions), as a candidate
-    SOURCE. This is the iteration-5 lever: co-engagement drives RETRIEVAL."""
+    SOURCE. This is the iteration-5 lever: co-engagement drives RETRIEVAL.
+
+    cap (iteration 6): keep only the top-`cap` PMI neighbors per library item
+    (precision refinement -- fewer, higher-confidence co-engagement candidates).
+    graph["neighbors"][l] is stored sorted desc by PMI; rev is unsorted.
+    """
     out: set[int] = set()
     nbr = graph["neighbors"]
     for l in lib_ids:
-        for nb, _ in nbr.get(l, []):
+        fwd = nbr.get(l, [])
+        rv = rev.get(l, [])
+        if cap is not None:
+            fwd = fwd[:cap]
+            rv = sorted(rv, key=lambda x: x[1], reverse=True)[:cap]
+        for nb, _ in fwd:
             out.add(nb)
-        for src, _ in rev.get(l, []):
+        for src, _ in rv:
             out.add(src)
     return (out & catalog) - lib_ids
 
@@ -355,7 +365,8 @@ def evaluate_latefusion(conn, *, kind: str, content_weights: dict, beta: float,
 
 def evaluate_retrieval_union(conn, *, kind: str, content_weights: dict, graph: dict,
                              beta: float = 1.0, score_mode: str = "fused",
-                             pool_size: int = 800, min_votes: int = 50, label: str = "") -> dict:
+                             pool_size: int = 800, min_votes: int = 50, label: str = "",
+                             neighbor_cap: int | None = None, pop_penalty: float = 0.0) -> dict:
     """ITERATION 5 (capstone): co-engagement as a candidate SOURCE.
 
     universe = MiniLM-centroid ANN pool UNION the PMI co-engagement neighbors of
@@ -413,7 +424,7 @@ def evaluate_retrieval_union(conn, *, kind: str, content_weights: dict, graph: d
         batch = retrieve_candidates(conn, kind=kind, query_vec=pc, user=ctx,
                                     pool_size=pool_size, min_vote_count=min_votes)
         A = {c.title.tmdb_id for c in batch.candidates if c.title.tmdb_id in index}
-        B = coengagement_candidates(graph, rev, lib_minus, catalog)
+        B = coengagement_candidates(graph, rev, lib_minus, catalog, cap=neighbor_cap)
         universe = list((A | B) - lib_minus - reject_in_catalog)
         if not universe:
             continue
@@ -429,6 +440,11 @@ def evaluate_retrieval_union(conn, *, kind: str, content_weights: dict, graph: d
         else:
             ce = coengagement_scores(graph, universe, lib_minus)
             total = _zscore(cfs) + beta * _zscore(ce)
+        if pop_penalty:
+            # Demote globally-popular candidates (Abdollahpouri 2019: co-engagement
+            # + ItemKNN amplify popularity; popular co-rated titles crowd the top).
+            pop = store["pop"][cand_idx]
+            total = total - pop_penalty * _zscore(np.log1p(pop))
         order = np.argsort(-total)
         ranked = [universe[oi] for oi in order[:max(KS)]]
         leak += sum(1 for x in ranked if x in reject_in_catalog)
@@ -446,6 +462,7 @@ def evaluate_retrieval_union(conn, *, kind: str, content_weights: dict, graph: d
     return {
         "label": label or f"union_{score_mode}_b{beta}", "kind": kind,
         "score_mode": score_mode, "beta": beta,
+        "neighbor_cap": neighbor_cap, "pop_penalty": pop_penalty,
         "mean_universe_size": int(np.mean(union_sizes)) if union_sizes else 0,
         "held_out_in_universe_frac": round(in_universe_hits / max(len(strat["all"]), 1), 4),
         "leakage_filtered@50": leak,
