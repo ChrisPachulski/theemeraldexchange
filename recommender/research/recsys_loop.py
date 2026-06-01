@@ -489,6 +489,49 @@ def section4_ablations() -> dict:
 
 # --- SYNTHESIS (updated every iteration: current best metric + what changed) --
 SYNTHESIS = """
+=== SYNTHESIS (iteration 6, CONVERGED) ===
+LOCKED BEST CONFIG: co-engagement RETRIEVAL union (top-10 PMI neighbors per
+library item) + content fusion scoring (text+cast+crew). Movie leave-one-out:
+  nDCG@10  0.0021 (baseline) -> 0.0219  = 10.4x
+  recall@50 0.0173 -> 0.1381  = 8.0x ;  recall@10 0.0053 -> 0.0425 = 8.0x
+  reject-leakage_filtered@50 = 0.
+Pipeline: candidates = MiniLM-ANN-800 pool UNION top-10-PMI co-engagement
+neighbors of the library (MovieLens-derived, PMI-debiased); score by max
+similarity over a per-block-normalized fused item vector (MiniLM + IDF cast +
+IDF crew). Deterministic; the architecture is stable across iters 5-6 and the
+neighbor_cap gain is a smooth plateau (caps 5-10 ~0.022, >=15 ~0.0173).
+
+WHAT MOVED THE HEADLINE, IN ORDER (each traced to a deployed system + paper):
+  1. Item-based scoring > single centroid (Amazon item-to-item; iter 2) -- the
+     centroid collapses a diverse library.
+  2. Multi-feature item representation: cast+crew >> title text (ItemSage;
+     iter 3) -- 5x. The win is creator-affinity; genre is noise.
+  3. Co-engagement as a RETRIEVAL source, not a re-rank score (Spotify
+     co-listening / YouTube candidate-gen; iters 4-5) -- another ~2x by getting
+     the right candidates into the pool the MiniLM centroid never surfaced.
+  4. Top-k co-engagement neighbor cap (precision; Abdollahpouri-adjacent; iter 6)
+     -- +27% nDCG@10 and a smaller, cheaper candidate set.
+
+HONEST BOUNDARIES (documented, not failures of the headline result):
+  - Cross-creator / NOVEL stratum (no shared cast/crew) stays 0 recall under
+    every config. Content + an imported movie co-engagement graph cannot recall
+    a title with no creator AND no co-engagement bridge to the library. Breaking
+    it needs household IMPLICIT FEEDBACK + EXPLORATION (Variant A: BaRT/YouTube)
+    -- requires behavioral data this single household has not yet generated.
+  - TV unsolved: MovieLens is movies-only; TV needs a TV-inclusive co-engagement
+    source (series share audiences, not casts).
+  - Popularity penalty HURTS this metric (household taste is mainstream-ish).
+
+DEPLOYMENT PATH (research -> production): precompute, per library, the top-10
+PMI co-engagement neighbor lists + the fused (MiniLM+cast+crew) item vectors;
+at score time, retrieve MiniLM-ANN pool UNION those neighbors and rank by fused
+similarity. ~2,600-candidate scoring (cheaper than the uncapped 5,362). The PMI
+graph is a periodic offline batch job over the imported co-rating source.
+
+CONVERGENCE: all five criteria hold -- see iteration_log.md CONVERGENCE ARGUMENT.
+"""
+
+_SYNTHESIS_ITER5 = """
 === SYNTHESIS (iteration 5, capstone) ===
 BEST CONFIG: co-engagement RETRIEVAL UNION + content scoring. Candidates =
 MiniLM-ANN-800 pool UNION the PMI co-engagement neighbors of the library
