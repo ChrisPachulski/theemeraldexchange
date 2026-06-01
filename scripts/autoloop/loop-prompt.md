@@ -23,8 +23,10 @@ Run: `node scripts/autoloop/claude-guard.mjs "$AUTOLOOP_DIR"` and parse JSON `ac
 - **go** — continue. Note `nextDelaySeconds` from the guard JSON; you will use it VERBATIM in step 6.
 
 ## 2. Sync integration with reality + gather context
-- **Absorb upstream:** `git fetch origin --quiet`; `git merge --no-edit origin/main` into the current
-  `auto/integration` (you are on it). If the merge conflicts, abort it (`git merge --abort`), append a
+- **Absorb upstream:** `git merge --no-edit main` into the current `auto/integration` (you are on it) —
+  local `main` is where the human's promotes and other sessions' commits land in this shared repo.
+  (`git fetch origin --quiet` first only if you also want remote commits.) If the merge conflicts,
+  abort it (`git merge --abort`), append a
   note to `$AUTOLOOP_DIR/dead-ends.md`, and treat this as a dry window (skip to step 6). Never force.
 - Read `$AUTOLOOP_DIR/{handoff.md,iteration-log.md,dead-ends.md,immune-rules.md}` (create empty if missing).
 - Done titles = `## ` entries in iteration-log.md. Existing branches = `git branch --list 'auto/*'`.
