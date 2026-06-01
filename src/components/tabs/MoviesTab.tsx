@@ -28,6 +28,7 @@ import { useCast } from '../../lib/hooks/useCast'
 import { useConfirm } from '../confirm/useConfirm'
 import { radarr, type Movie, type MovieSearchResult } from '../../lib/api/radarr'
 import { postClickEvent } from '../../lib/api/recommenderEvents'
+import { stripArticle } from '../../lib/title'
 import './TvTab.css'
 
 function pickSearchPoster(item: MovieSearchResult): string | undefined {
@@ -107,8 +108,6 @@ const MOVIE_STATUS_OPTIONS: ReadonlyArray<FilterOption<MovieStatus>> = [
   { value: 'announced', label: 'Announced' },
   { value: 'tba',       label: 'TBA' },
 ]
-
-const stripArticle = (s: string) => s.replace(/^(the|a|an)\s+/i, '')
 
 export function MoviesTab() {
   const [mode, setMode] = useState<Mode>('discover')
