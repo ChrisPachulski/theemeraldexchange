@@ -63,6 +63,19 @@ describe('rejections store', () => {
     expect(got.movie).toEqual([{ id: 42, title: 'The Lighthouse' }])
   })
 
+  it('upgrade path resolves cleanly (guarded lookup never throws on the hit)', async () => {
+    // EDIT-1 guard regression: the in-place upgrade branch replaced an
+    // unsafe non-null assertion with `find(...)` + an early-return guard.
+    // On the guaranteed-hit path the behavior is unchanged — the title is
+    // upgraded and the op resolves WITHOUT a runtime TypeError. This pins
+    // that the guard does not regress the normal upgrade and that the
+    // write is never silently skipped when the entry is present.
+    await addRejection('movie', 314, '')
+    await expect(addRejection('movie', 314, 'Pi')).resolves.toBeUndefined()
+    const got = await getRejections()
+    expect(got.movie).toContainEqual({ id: 314, title: 'Pi' })
+  })
+
   it('does not overwrite a known title with an empty one', async () => {
     await addRejection('movie', 42, 'Mickey 17')
     await addRejection('movie', 42, '')
@@ -124,6 +137,21 @@ describe('rejections store', () => {
       _setRejectionsPathForTests(path)
       await updateRejectionTitleIfPresent('movie', 10, 'Megalopolis')
       expect((await getRejections()).movie).toEqual([{ id: 10, title: 'Megalopolis' }])
+    })
+
+    it('update path resolves cleanly on the guaranteed hit (guard never throws)', async () => {
+      // EDIT-2 guard regression: updateRejectionTitleIfPresent replaced an
+      // unsafe non-null assertion on the cloned list with `find(...)` + an
+      // early-return guard. On the present-entry path the title is written
+      // and the op resolves WITHOUT a TypeError; the write is not skipped.
+      await fs.writeFile(path, JSON.stringify({ movie: [11], tv: [] }))
+      _setRejectionsPathForTests(path)
+      await expect(
+        updateRejectionTitleIfPresent('movie', 11, 'The Brutalist'),
+      ).resolves.toBeUndefined()
+      expect((await getRejections()).movie).toEqual([
+        { id: 11, title: 'The Brutalist' },
+      ])
     })
 
     it('no-op when the row was cleared concurrently — does NOT recreate', async () => {
