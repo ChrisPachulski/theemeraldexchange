@@ -179,7 +179,7 @@ describe('xtream network fetchers', () => {
           status: 'Active',
         },
       }),
-    } as any)
+    } as unknown as Response)
     const a = await getAccountInfo()
     expect(a.maxConnections).toBe(3)
     expect(a.activeConnections).toBe(2)
@@ -189,7 +189,7 @@ describe('xtream network fetchers', () => {
   })
 
   it('getAccountInfo throws on non-ok response', async () => {
-    mockFetch.mockResolvedValue({ ok: false, status: 401 } as any)
+    mockFetch.mockResolvedValue({ ok: false, status: 401 } as unknown as Response)
     await expect(getAccountInfo()).rejects.toThrow('xtream_account_401')
   })
 
