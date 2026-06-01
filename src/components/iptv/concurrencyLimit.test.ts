@@ -115,4 +115,20 @@ describe('concurrencyPayloadFromError', () => {
     expect(result?.limit).toBe(5)
     expect(result?.current).toBe(4)
   })
+
+  it('honors an explicit current:0 over sessions.length (?? not ||)', () => {
+    // Guards the nullish-vs-falsy fallback: a legit current:0 alongside a
+    // non-empty sessions array must stay 0, not silently fall back to
+    // sessions.length. A `?? -> ||` regression would surface a wrong count.
+    const err = new ApiError(429, 'x', undefined, {
+      reason: 'iptv_concurrency_limit',
+      limit: 2,
+      current: 0,
+      sessions: [makeSession(), makeSession({ sessionId: 'sess-2' })],
+    })
+    const result = concurrencyPayloadFromError(err)
+    expect(result).not.toBeNull()
+    expect(result?.current).toBe(0)
+    expect(result?.sessions).toHaveLength(2)
+  })
 })
