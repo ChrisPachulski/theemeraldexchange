@@ -41,16 +41,16 @@ const ORIG = {
 }
 
 afterEach(() => {
-  ;(env as any).EEX_TELEMETRY_DSN = ORIG.dsn
-  ;(env as any).isProd = ORIG.isProd
-  ;(env as any).EEX_RELEASE = ORIG.release
+  ;(env as Record<string, unknown>).EEX_TELEMETRY_DSN = ORIG.dsn
+  ;(env as Record<string, unknown>).isProd = ORIG.isProd
+  ;(env as Record<string, unknown>).EEX_RELEASE = ORIG.release
 })
 
 const VALID_DSN = 'https://abc123def456@glitchtip.example.com/42'
 
 describe('telemetry GET /config — auth gate', () => {
   it('rejects unauthenticated request with 401 unauthenticated', async () => {
-    ;(env as any).EEX_TELEMETRY_DSN = VALID_DSN
+    ;(env as Record<string, unknown>).EEX_TELEMETRY_DSN = VALID_DSN
     const res = await appUnderTest().request('/config')
     expect(res.status).toBe(401)
     expect(await res.json()).toEqual({ error: 'unauthenticated' })
@@ -59,7 +59,7 @@ describe('telemetry GET /config — auth gate', () => {
 
 describe('telemetry GET /config — DSN validation ladder', () => {
   it('503 telemetry_not_configured when EEX_TELEMETRY_DSN is null', async () => {
-    ;(env as any).EEX_TELEMETRY_DSN = null
+    ;(env as Record<string, unknown>).EEX_TELEMETRY_DSN = null
     const res = await appUnderTest().request('/config', {
       headers: { cookie: await authCookie() },
     })
@@ -70,7 +70,7 @@ describe('telemetry GET /config — DSN validation ladder', () => {
   })
 
   it('503 telemetry_not_configured when EEX_TELEMETRY_DSN is the empty string', async () => {
-    ;(env as any).EEX_TELEMETRY_DSN = ''
+    ;(env as Record<string, unknown>).EEX_TELEMETRY_DSN = ''
     const res = await appUnderTest().request('/config', {
       headers: { cookie: await authCookie() },
     })
@@ -80,7 +80,7 @@ describe('telemetry GET /config — DSN validation ladder', () => {
 
   it('500 telemetry_dsn_invalid when the DSN does not parse as a URL', async () => {
     // A bare token with spaces and stray colons throws in `new URL(...)`.
-    ;(env as any).EEX_TELEMETRY_DSN = '::::not a url::::'
+    ;(env as Record<string, unknown>).EEX_TELEMETRY_DSN = '::::not a url::::'
     const res = await appUnderTest().request('/config', {
       headers: { cookie: await authCookie() },
     })
@@ -94,7 +94,7 @@ describe('telemetry GET /config — DSN validation ladder', () => {
     // This is the SEPARATE `!['http:','https:'].includes(...)` guard — the
     // value is a well-formed URL (new URL does NOT throw) but the scheme
     // is rejected, with the received scheme echoed in detail.
-    ;(env as any).EEX_TELEMETRY_DSN = 'ftp://abc123@glitchtip.example.com/42'
+    ;(env as Record<string, unknown>).EEX_TELEMETRY_DSN = 'ftp://abc123@glitchtip.example.com/42'
     const res = await appUnderTest().request('/config', {
       headers: { cookie: await authCookie() },
     })
@@ -108,9 +108,9 @@ describe('telemetry GET /config — DSN validation ladder', () => {
 
 describe('telemetry GET /config — happy paths', () => {
   it('200 with environment=staging when env.isProd is false', async () => {
-    ;(env as any).EEX_TELEMETRY_DSN = VALID_DSN
-    ;(env as any).isProd = false
-    ;(env as any).EEX_RELEASE = 'dev'
+    ;(env as Record<string, unknown>).EEX_TELEMETRY_DSN = VALID_DSN
+    ;(env as Record<string, unknown>).isProd = false
+    ;(env as Record<string, unknown>).EEX_RELEASE = 'dev'
     const res = await appUnderTest().request('/config', {
       headers: { cookie: await authCookie() },
     })
@@ -122,8 +122,8 @@ describe('telemetry GET /config — happy paths', () => {
   })
 
   it('200 with environment=production when env.isProd is true', async () => {
-    ;(env as any).EEX_TELEMETRY_DSN = VALID_DSN
-    ;(env as any).isProd = true
+    ;(env as Record<string, unknown>).EEX_TELEMETRY_DSN = VALID_DSN
+    ;(env as Record<string, unknown>).isProd = true
     const res = await appUnderTest().request('/config', {
       headers: { cookie: await authCookie() },
     })
@@ -134,9 +134,9 @@ describe('telemetry GET /config — happy paths', () => {
   })
 
   it('echoes env.EEX_RELEASE verbatim in the 200 body', async () => {
-    ;(env as any).EEX_TELEMETRY_DSN = VALID_DSN
-    ;(env as any).isProd = false
-    ;(env as any).EEX_RELEASE = 'test-release-123'
+    ;(env as Record<string, unknown>).EEX_TELEMETRY_DSN = VALID_DSN
+    ;(env as Record<string, unknown>).isProd = false
+    ;(env as Record<string, unknown>).EEX_RELEASE = 'test-release-123'
     const res = await appUnderTest().request('/config', {
       headers: { cookie: await authCookie() },
     })
@@ -147,8 +147,8 @@ describe('telemetry GET /config — happy paths', () => {
 
   it('accepts an http: (non-https) DSN — both schemes pass the guard', async () => {
     const httpDsn = 'http://abc123@glitchtip.example.com/42'
-    ;(env as any).EEX_TELEMETRY_DSN = httpDsn
-    ;(env as any).isProd = false
+    ;(env as Record<string, unknown>).EEX_TELEMETRY_DSN = httpDsn
+    ;(env as Record<string, unknown>).isProd = false
     const res = await appUnderTest().request('/config', {
       headers: { cookie: await authCookie() },
     })
