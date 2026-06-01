@@ -253,3 +253,81 @@ jobs:
       # and Apple/M3/M4 ports will silently break.
       - name: cargo test (workspace minus pyo3)
         run: cargo test --workspace --exclude emerald-contracts-pyo3 --all-targets
+
+  dependency-audit:
+    # Supply-chain gate: fail CI on known high/critical advisories across
+    # all three ecosystems (npm prod deps, Rust crates, recommender Python).
+    # This is App-Store-bound; prod-dependency high/critical CVEs MUST block.
+    # Each gating audit step is intentionally BLOCKING (no continue-on-error) —
+    # tests/ci/dependency-audit.workflow.test.ts enforces that it stays so.
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- npm (prod dependencies only) ---
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Emit the full JSON report BEFORE the gate so it survives a red gate.
+      - name: npm audit report (json)
+        run: npm audit --audit-level=high --omit=dev --json > npm-audit.json || true
+
+      - name: Upload npm audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-audit
+          path: npm-audit.json
+          retention-days: 14
+
+      # --omit=dev: devDependency-only advisories (build tooling) don't gate
+      # prod. Blocking — prod high/critical CVEs fail CI.
+      - name: npm audit (high+ severity)
+        run: npm audit --audit-level=high --omit=dev
+
+      # --- cargo (Rust crates, reads committed Cargo.lock) ---
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.90'
+
+      # Cache the cargo-audit binary so we don't rebuild it every run.
+      - name: Cache cargo-audit binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: ${{ runner.os }}-cargo-audit-bin
+
+      - name: Install cargo-audit
+        run: command -v cargo-audit || cargo install cargo-audit --locked --version '^0.21'
+
+      # Reads Cargo.lock at repo root. Blocking.
+      - name: cargo audit
+        run: cargo audit --deny warnings
+
+      # --- pip-audit (recommender Python deps, metadata-only) ---
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      # Audit the recommender pyproject WITHOUT building the 6GB torch /
+      # sentence-transformers stack — pip-audit resolves dependency metadata.
+      # pip-audit >=2.7 audits a pyproject project via --project-path; fall
+      # back to auditing the project dir directly if the flag is unavailable.
+      # Blocking: pip-audit exits non-zero on any known vuln by default.
+      - name: pip-audit (recommender)
+        run: |
+          if pip-audit --help 2>&1 | grep -q -- '--project-path'; then
+            pip-audit --progress-spinner=off --desc --project-path recommender
+          else
+            cd recommender && pip-audit --progress-spinner=off --desc .
+          fi

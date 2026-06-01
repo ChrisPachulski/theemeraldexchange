@@ -18,6 +18,8 @@ export default defineConfig({
       'server/**/*.test.ts',
       'src/**/*.test.ts',
       'src/**/*.test.tsx',
+      // CI-config regression guards (workflow wiring assertions).
+      'tests/**/*.test.ts',
     ],
     // The recommendation eval harness has its own config (vitest.eval.config.ts)
     // and writes to disk — keep it out of the normal `npm test` run.
