@@ -24,6 +24,7 @@ from .context import load_user_context, select_model_config_for_context
 from .db import connect, migrate, transaction
 from . import recipes
 from .internal_principal import InternalPrincipal, internal_principal_dep
+from .telemetry import init_telemetry
 from .schemas import (
     ClearFeedbackRequest,
     FeedbackEventRequest,
@@ -75,6 +76,7 @@ async def retention_sweeper() -> None:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    init_telemetry()
     log.info("recommender starting; db=%s", CONFIG.db_path)
     applied = migrate()
     if applied:
