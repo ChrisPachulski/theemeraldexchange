@@ -291,6 +291,22 @@ export async function verifyDeviceToken(token: string): Promise<DeviceTokenClaim
   )
     return null
 
+  // §3.5 time-window: enforce the JWE's own nbf/exp claims. The crate's
+  // deviceTokenDecrypt validates aud/iss/kid only — it does NOT enforce
+  // nbf/exp — so this is the single verify chokepoint that honors them.
+  // 30s nbf skew + 5s exp skew (shared with stream tokens; constants live
+  // in crates/emerald-contracts stream_token.rs). Mirrors tryBearerAuth's
+  // belt-and-suspenders check, which now becomes truly redundant.
+  const now = Math.floor(Date.now() / 1000)
+  if (now + 30 < claims.nbf) {
+    console.warn('[device-token] not yet valid (nbf in future): %s', claims.jti)
+    return null
+  }
+  if (now - 5 > claims.exp) {
+    console.warn('[device-token] expired (past exp): %s', claims.jti)
+    return null
+  }
+
   // §3.4 a-and-b checks: row exists AND not revoked.
   const db = serverDb().raw
   const row = db
