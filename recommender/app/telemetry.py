@@ -20,13 +20,15 @@ log = logging.getLogger("recommender.telemetry")
 
 
 def _resolve_dsn() -> str | None:
-    """Return the first non-empty DSN from SENTRY_DSN, then GLITCHTIP_DSN.
+    """Return the first non-empty DSN, preferring the canonical EEX_TELEMETRY_DSN.
 
-    §15 distributes a Glitchtip DSN server->app at boot, so either env var
-    name is accepted. Values are stripped; empty/whitespace-only values are
-    ignored. SENTRY_DSN takes precedence over GLITCHTIP_DSN.
+    EEX_TELEMETRY_DSN is the §15 stack-wide name (server reads it in
+    server/env.ts / serverTelemetry.ts); SENTRY_DSN / GLITCHTIP_DSN are accepted
+    as fallbacks. §15 distributes the Glitchtip DSN server->app at boot. Values
+    are stripped; empty/whitespace-only values are ignored. Precedence:
+    EEX_TELEMETRY_DSN > SENTRY_DSN > GLITCHTIP_DSN.
     """
-    for name in ("SENTRY_DSN", "GLITCHTIP_DSN"):
+    for name in ("EEX_TELEMETRY_DSN", "SENTRY_DSN", "GLITCHTIP_DSN"):
         value = os.environ.get(name)
         if value is not None:
             stripped = value.strip()
