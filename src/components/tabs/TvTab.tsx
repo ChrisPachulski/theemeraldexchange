@@ -30,6 +30,7 @@ import { useConfirm } from '../confirm/useConfirm'
 import { sonarr, type Series, type SeriesSearchResult } from '../../lib/api/sonarr'
 import { postClickEvent } from '../../lib/api/recommenderEvents'
 import { withViewTransition } from '../../lib/viewTransition'
+import { stripArticle } from '../../lib/title'
 import './TvTab.css'
 
 function pickSearchPoster(item: SeriesSearchResult): string | undefined {
@@ -96,8 +97,6 @@ const TV_STATUS_OPTIONS: ReadonlyArray<FilterOption<TvStatus>> = [
   { value: 'ended',       label: 'Ended' },
   { value: 'upcoming',    label: 'Upcoming' },
 ]
-
-const stripArticle = (s: string) => s.replace(/^(the|a|an)\s+/i, '')
 
 export function TvTab() {
   const [mode, setMode] = useState<Mode>('discover')
