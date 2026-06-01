@@ -59,9 +59,9 @@ export async function tryBearerAuth(
   const claims = await verifyDeviceToken(token)
   if (!claims) return { ok: false, reason: 'invalid_bearer' }
 
-  // Bearer + clock-skew enforcement (jose handles nbf/exp during decrypt
-  // but jwtDecrypt only enforces with the default clock — explicit
-  // check belt-and-suspenders).
+  // Belt-and-suspenders: verifyDeviceToken already enforces nbf/exp (the
+  // crate's decrypt does NOT — it validates aud/iss/kid only). Re-check
+  // here so this middleware path is self-contained even if verify changes.
   const now = Math.floor(Date.now() / 1000)
   // 30s nbf skew + 5s exp skew per contract §5.7 (shared with stream
   // tokens; the constants live in the Rust crate).
