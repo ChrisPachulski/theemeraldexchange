@@ -47,7 +47,7 @@ const MODEL = 'claude-haiku-4-5'
 const TMDB_LOOKUP_CONCURRENCY = 8
 
 /** Concurrency-bounded map that preserves input order. */
-async function mapLimit<T, R>(
+export async function mapLimit<T, R>(
   items: readonly T[],
   limit: number,
   fn: (item: T, index: number) => Promise<R>,
