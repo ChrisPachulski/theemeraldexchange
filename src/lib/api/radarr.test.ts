@@ -58,13 +58,19 @@ describe('radarr post() timeout/abort branch', () => {
 
   it('clears the timer on success so a late timer cannot produce a false timeout', async () => {
     vi.useFakeTimers()
+    const setSpy = vi.spyOn(globalThis, 'setTimeout')
+    const clearSpy = vi.spyOn(globalThis, 'clearTimeout')
     fetchMock.mockResolvedValueOnce(jsonRes({ id: 1 }))
 
     const res = await radarr.addMovie({})
     expect(res).toMatchObject({ id: 1 })
 
-    // The finally{} clearTimeout ran; advancing past the timeout is a no-op
-    // and must not reject or corrupt the already-resolved value.
+    // The finally{} MUST clear the 60s abort timer on the success path. Assert
+    // clearTimeout ran with the exact id setTimeout returned — deleting the
+    // production clearTimeout makes this fail (not a vacuous re-assert) — then
+    // prove the late timer is a harmless no-op on the already-resolved value.
+    const timerId = setSpy.mock.results[0]?.value
+    expect(clearSpy).toHaveBeenCalledWith(timerId)
     await vi.advanceTimersByTimeAsync(120_000)
     expect(res).toMatchObject({ id: 1 })
   })
