@@ -8,7 +8,8 @@
 
 use crate::plan::{AudioOp, SubtitleOp, TranscodePlan, VideoOp};
 
-/// Hardware encoder family, selected from `TRANSCODER_HW_ENCODER` (§4.4).
+/// Hardware encoder family, selected from `TRANSCODER_HW_ENCODER`, with
+/// `TRANSCODER_FORCE_CPU=1` pinning `Cpu` regardless of that value (§4.4).
 /// `Cpu` is the always-available libx264 fallback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HwEncoder {
@@ -31,8 +32,28 @@ impl HwEncoder {
         }
     }
 
-    /// Read the selection from the environment.
+    /// True when `TRANSCODER_FORCE_CPU` is set to a truthy value (`1`, `true`,
+    /// `yes`, `on`, case-insensitive). Unset / empty / `0` / `false` / `no` /
+    /// `off` are all NOT forced. This is the operator escape hatch from §4.4:
+    /// pin the service to libx264 regardless of `TRANSCODER_HW_ENCODER` (e.g.
+    /// to sidestep a flaky GPU driver without changing the encoder family).
+    fn force_cpu_from_env() -> bool {
+        match std::env::var("TRANSCODER_FORCE_CPU") {
+            Ok(v) => matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            ),
+            Err(_) => false,
+        }
+    }
+
+    /// Read the selection from the environment. `TRANSCODER_FORCE_CPU=1` (or any
+    /// truthy spelling) forces `Cpu` regardless of `TRANSCODER_HW_ENCODER`;
+    /// otherwise the family is parsed from `TRANSCODER_HW_ENCODER`.
     pub fn from_env() -> HwEncoder {
+        if Self::force_cpu_from_env() {
+            return HwEncoder::Cpu;
+        }
         HwEncoder::parse(&std::env::var("TRANSCODER_HW_ENCODER").unwrap_or_default())
     }
 
@@ -239,6 +260,82 @@ fn escape_filter_path(p: &str) -> String {
 mod tests {
     use super::*;
     use crate::plan::{AudioOp, SubtitleOp, TranscodePlan, VideoOp};
+    use std::sync::Mutex;
+
+    /// Serializes all tests that mutate process-global env vars. `from_env`
+    /// reads both `TRANSCODER_FORCE_CPU` and `TRANSCODER_HW_ENCODER`, so any
+    /// concurrent test touching either var would flake without this lock.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Clears both env vars `from_env` reads. Edition 2024 makes these `unsafe`.
+    fn clear_encoder_env() {
+        unsafe {
+            std::env::remove_var("TRANSCODER_FORCE_CPU");
+            std::env::remove_var("TRANSCODER_HW_ENCODER");
+        }
+    }
+
+    #[test]
+    fn force_cpu_overrides_hw_encoder() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("TRANSCODER_HW_ENCODER", "nvenc");
+            std::env::set_var("TRANSCODER_FORCE_CPU", "1");
+        }
+        assert_eq!(HwEncoder::from_env(), HwEncoder::Cpu);
+        clear_encoder_env();
+    }
+
+    #[test]
+    fn force_cpu_truthy_values() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        for v in ["1", "true", "TRUE", "yes", "on", " On "] {
+            unsafe {
+                std::env::set_var("TRANSCODER_HW_ENCODER", "videotoolbox");
+                std::env::set_var("TRANSCODER_FORCE_CPU", v);
+            }
+            assert_eq!(
+                HwEncoder::from_env(),
+                HwEncoder::Cpu,
+                "truthy value {v:?} must force Cpu"
+            );
+        }
+        clear_encoder_env();
+    }
+
+    #[test]
+    fn force_cpu_falsey_values_do_not_override() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        for v in ["0", "false", "no", "off", ""] {
+            unsafe {
+                std::env::set_var("TRANSCODER_HW_ENCODER", "nvenc");
+                std::env::set_var("TRANSCODER_FORCE_CPU", v);
+            }
+            assert_eq!(
+                HwEncoder::from_env(),
+                HwEncoder::Nvenc,
+                "falsey value {v:?} must NOT force Cpu"
+            );
+        }
+        // Var removed entirely → HW selection still honored.
+        unsafe {
+            std::env::set_var("TRANSCODER_HW_ENCODER", "nvenc");
+            std::env::remove_var("TRANSCODER_FORCE_CPU");
+        }
+        assert_eq!(HwEncoder::from_env(), HwEncoder::Nvenc);
+        clear_encoder_env();
+    }
+
+    #[test]
+    fn force_cpu_unset_preserves_hw_selection() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var("TRANSCODER_FORCE_CPU");
+            std::env::set_var("TRANSCODER_HW_ENCODER", "videotoolbox");
+        }
+        assert_eq!(HwEncoder::from_env(), HwEncoder::VideoToolbox);
+        clear_encoder_env();
+    }
 
     fn transcode(video: VideoOp, audio: AudioOp, subtitle: SubtitleOp) -> TranscodePlan {
         TranscodePlan::Transcode {
