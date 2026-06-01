@@ -52,6 +52,19 @@ export default defineConfig({
         'server/index.ts', // entry point — only thing it does is `serve()`
         '**/*.test.ts',
       ],
+      // Regression ratchet (NOT a hard 75% target). Floored ~2 points under the
+      // measured global baseline (stmts 73.9 / branch 63.7 / funcs 74.0 / lines
+      // 77.3 as of 2026-06-01, stable across repeated runs) so a real coverage
+      // drop fails `npm run test:coverage` while normal worker-parallelism jitter
+      // does not. Branches deliberately sits at 62 (not 75): the suite is at
+      // 63.7%, so a 75% branch gate would break CI on landing. These are floors,
+      // not goals — raise them as coverage climbs; never lower them.
+      thresholds: {
+        statements: 72,
+        branches: 62,
+        functions: 72,
+        lines: 75,
+      },
     },
   },
 })
