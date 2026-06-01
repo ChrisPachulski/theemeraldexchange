@@ -3,6 +3,7 @@
 mesh/
 STOP
 claude-baseline.json
+usage-last-good.json
 codex-spend.jsonl
 *.log
 run_loop.jsonl

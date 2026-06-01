@@ -36,8 +36,15 @@ const DEFAULT_CADENCE_SECONDS = 120;
 
 function readJson(p) { try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; } }
 
-function refreshUsage() {
+function nowSec() { return Math.floor(Date.now() / 1000); }
+
+function refreshUsage(prior) {
   if (!existsSync(FETCHER)) return;
+  // Throttle: the usage endpoint rate-limits (http_429), and the statusline +
+  // other sessions hit it too. Don't pile on — skip if a fetch was attempted in
+  // the last 90s. Lets genuine fetches through instead of guaranteeing 429s.
+  const lastAttempt = Number(prior?.last_attempted_at) || 0;
+  if (lastAttempt && (nowSec() - lastAttempt) < 90) return;
   try { execFileSync(process.execPath, [FETCHER], { timeout: 15000, stdio: 'ignore' }); } catch { /* best-effort */ }
 }
 
@@ -68,8 +75,9 @@ export function evaluate(autoloopDir = path.join(process.cwd(), '.autoloop'), op
   if (existsSync(path.join(autoloopDir, 'STOP'))) return { ...out, action: 'stop', reason: 'stop_flag' };
   if (existsSync(path.join(autoloopDir, 'GOALS-MET.md'))) return { ...out, action: 'stop', reason: 'converged' };
 
-  refreshUsage();
-  const cache = readJson(USAGE_CACHE);
+  let cache = readJson(USAGE_CACHE);
+  refreshUsage(cache);
+  cache = readJson(USAGE_CACHE) || cache;
   if (!cache) {
     // No telemetry → cannot prove we're safe → idle briefly and retry.
     return { ...out, action: 'idle', reason: 'no_usage_cache', sleepSeconds: 300 };
@@ -80,31 +88,63 @@ export function evaluate(autoloopDir = path.join(process.cwd(), '.autoloop'), op
     five_hour_resets_at: cache.five_hour_resets_at,
     seven_day_resets_at: cache.seven_day_resets_at,
     extra_usage_used_credits: cache.extra_usage_used_credits,
+    fetched_at: cache.fetched_at ?? 0,
+    last_error: cache.last_error ?? null,
   };
-  out.telemetry = tel;
 
-  // PRIME DIRECTIVE: any rise in paid extra-usage → freeze immediately.
+  // FRESHNESS via OUR OWN last-good record. The fetcher zeroes fetched_at on any
+  // failed refresh (e.g. http_429) while preserving the prior pcts, so fetched_at
+  // can't measure true age. We persist every successful read to usage-last-good
+  // and measure age from THAT — so a transient 429 doesn't blind us when we have
+  // a recent good read, but a genuinely old one (>STALE_AFTER) forces idle.
+  // Trusting stale numbers as live was the bug that let us claim "7d 79%" off a
+  // rate-limited cache. Fail-safe, in service of never-over-bill.
+  const STALE_AFTER = Number(control.USAGE_STALE_SECONDS ?? opts.staleAfter ?? 600);
+  const lastGoodFile = path.join(autoloopDir, 'usage-last-good.json');
+  let good = null;
+  if (tel.fetched_at > 0 && typeof tel.seven_day_pct === 'number') {
+    good = { ...tel, goodAtSec: tel.fetched_at };
+    try { mkdirSync(autoloopDir, { recursive: true }); writeFileSync(lastGoodFile, JSON.stringify(good, null, 2)); } catch { /* best-effort */ }
+  } else {
+    good = readJson(lastGoodFile);
+  }
+  const ageSec = good && typeof good.goodAtSec === 'number' ? (nowSec() - good.goodAtSec) : Infinity;
+  const fresh = !!good && ageSec <= STALE_AFTER;
+  // Use the trusted (live or recent-good) values for all spend decisions below.
+  const v = fresh ? good : tel;
+  out.telemetry = { ...v, fetched_at: tel.fetched_at, last_error: tel.last_error };
+  out.usage = { fresh, ageSeconds: ageSec === Infinity ? null : ageSec, source: tel.fetched_at > 0 ? 'live' : 'last_good', lastError: tel.last_error };
+
+  // PRIME DIRECTIVE: any rise in paid extra-usage → freeze immediately. Checked
+  // even on stale data: if the last-known value ALREADY shows a rise, stop now.
   const base = ensureBaseline(autoloopDir, cache);
-  if (typeof tel.extra_usage_used_credits === 'number' && typeof base?.extra_usage_used_credits === 'number'
-      && tel.extra_usage_used_credits > base.extra_usage_used_credits) {
+  if (typeof v.extra_usage_used_credits === 'number' && typeof base?.extra_usage_used_credits === 'number'
+      && v.extra_usage_used_credits > base.extra_usage_used_credits) {
     return { ...out, action: 'stop', reason: 'overage_detected',
-      delta_credits: tel.extra_usage_used_credits - base.extra_usage_used_credits, telemetry: tel };
+      delta_credits: v.extra_usage_used_credits - base.extra_usage_used_credits, telemetry: out.telemetry };
+  }
+
+  // Cannot confirm fresh usage → refuse to spend on unverifiable headroom.
+  if (!fresh) {
+    return { ...out, action: 'idle',
+      reason: `usage_stale(${tel.last_error || 'no_fresh_read'},age=${ageSec === Infinity ? 'never' : ageSec + 's'})`,
+      sleepSeconds: 180, telemetry: out.telemetry };
   }
 
   const c5 = Number(control.FIVE_HOUR_CEILING ?? opts.fiveHourCeiling ?? DEFAULT_5H_CEILING);
   const c7 = Number(control.SEVEN_DAY_CEILING ?? opts.sevenDayCeiling ?? DEFAULT_7D_CEILING);
 
-  if (typeof tel.seven_day_pct === 'number' && tel.seven_day_pct >= c7) {
-    return { ...out, action: 'idle', reason: `7d_window_tight(${tel.seven_day_pct}%>=${c7})`,
-      sleepSeconds: Math.max(300, secsUntil(tel.seven_day_resets_at)), telemetry: tel };
+  if (typeof v.seven_day_pct === 'number' && v.seven_day_pct >= c7) {
+    return { ...out, action: 'idle', reason: `7d_window_tight(${v.seven_day_pct}%>=${c7})`,
+      sleepSeconds: Math.max(300, secsUntil(v.seven_day_resets_at)), telemetry: out.telemetry };
   }
-  if (typeof tel.five_hour_pct === 'number' && tel.five_hour_pct >= c5) {
-    return { ...out, action: 'idle', reason: `5h_window_tight(${tel.five_hour_pct}%>=${c5})`,
-      sleepSeconds: Math.max(300, secsUntil(tel.five_hour_resets_at)), telemetry: tel };
+  if (typeof v.five_hour_pct === 'number' && v.five_hour_pct >= c5) {
+    return { ...out, action: 'idle', reason: `5h_window_tight(${v.five_hour_pct}%>=${c5})`,
+      sleepSeconds: Math.max(300, secsUntil(v.five_hour_resets_at)), telemetry: out.telemetry };
   }
 
-  out.headroom = { five_hour_pct: tel.five_hour_pct, seven_day_pct: tel.seven_day_pct,
-    five_h_to_ceiling: c5 - (tel.five_hour_pct ?? 0), seven_d_to_ceiling: c7 - (tel.seven_day_pct ?? 0) };
+  out.headroom = { five_hour_pct: v.five_hour_pct, seven_day_pct: v.seven_day_pct,
+    five_h_to_ceiling: c5 - (v.five_hour_pct ?? 0), seven_d_to_ceiling: c7 - (v.seven_day_pct ?? 0) };
   // Authoritative next-window delay. The driver uses this VERBATIM — it is not
   // a suggestion. While `go`, the window is by definition below both ceilings,
   // so a dense cadence is safe: if it ever tightens, the very next evaluate()
