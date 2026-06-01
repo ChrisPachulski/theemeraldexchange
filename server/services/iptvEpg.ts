@@ -7,6 +7,13 @@ import { env } from '../env.js'
 const EPG_FETCH_TIMEOUT_MS = 5 * 60_000
 const EPG_WALL_TIMEOUT_MS = 30 * 60_000
 
+// Hard ceiling on the channel-def sniff buffer. A real <channel> block is a few
+// KB; this cap only ever trips on a malformed/hostile feed that opens a <channel
+// tag and never closes it (or floods junk after it), which would otherwise grow
+// sniffBuf without bound -> OOM. When tripped we keep only the trailing slice so
+// a <channel> that legitimately straddles the boundary can still complete.
+const SNIFF_BUF_MAX = 1_000_000 // 1 MB
+
 export interface EpgProgrammeRow {
   channel_id: string
   start_utc: string
@@ -192,6 +199,12 @@ export async function streamXmltv(
     const lastOpen = sniffBuf.lastIndexOf('<channel')
     if (lastOpen === -1) sniffBuf = sniffBuf.slice(-16)
     else if (lastOpen > 0) sniffBuf = sniffBuf.slice(lastOpen)
+    // Final safety net: if normal trimming still left an oversized buffer (e.g. a
+    // <channel tag that never closes, or junk flooded after it), drop everything
+    // but a trailing window. Bounds memory on malformed/hostile feeds.
+    if (sniffBuf.length > SNIFF_BUF_MAX) {
+      sniffBuf = sniffBuf.slice(-SNIFF_BUF_MAX)
+    }
   }
   const onSniffData = (chunk: Buffer | string): void => {
     sniffBuf += typeof chunk === 'string' ? chunk : chunk.toString('utf8')
