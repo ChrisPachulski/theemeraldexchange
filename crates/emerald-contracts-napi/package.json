@@ -21,7 +21,7 @@
   "scripts": {
     "build": "node scripts/build-with-dts-guard.mjs build --platform --release",
     "build:debug": "node scripts/build-with-dts-guard.mjs build --platform",
-    "prepare": "node -e \"const fs=require('fs');if(fs.readdirSync(process.cwd()).some(f=>f.endsWith('.node'))){process.exit(0)}try{require('child_process').execSync('napi build --platform --release',{stdio:'inherit'})}catch(e){console.warn('[emerald-contracts-napi] native build skipped — no prebuilt .node and no Rust toolchain (non-fatal)')}\""
+    "prepare": "node -e \"const fs=require('fs');if(fs.readdirSync('.').some(f=>f.endsWith('.node')))process.exit(0);try{require('child_process').execSync('node scripts/build-with-dts-guard.mjs build --platform --release',{stdio:'inherit'})}catch(e){console.warn('[emerald-contracts-napi] native build skipped — index.d.ts preserved by dts-guard (non-fatal)')}process.exit(0)\""
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.7.0"
