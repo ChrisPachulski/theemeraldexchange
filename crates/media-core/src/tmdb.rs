@@ -67,6 +67,56 @@ fn retry_after_duration(headers: &reqwest::header::HeaderMap) -> Duration {
     Duration::from_secs(secs)
 }
 
+/// Floor below which a TMDB search hit is treated as "no confident match":
+/// [`match_with`] returns `None` rather than writing a wrong tmdb_id/imdb_id/
+/// poster onto a scanned file. A score at or above this passes.
+const MIN_MATCH_CONFIDENCE: f64 = 0.5;
+
+/// Score how well a chosen TMDB result matches the title (and year) we queried,
+/// in `[0.0, 1.0]`. Pure, offline-testable; used only to gate acceptance.
+///
+/// Title component (weight `0.8`): both titles are run through the existing
+/// [`crate::filename::normalize_show_name`] (lowercase, strip punctuation/year/
+/// quality tokens) and compared as token *sets* via Jaccard similarity
+/// (`|intersection| / |union|`). Identical normalized strings yield `1.0`; an
+/// empty token set on either side yields `0.0`.
+///
+/// Year component (weight `0.2`): if we did not query a year it contributes a
+/// neutral `1.0` (cannot penalize what we did not ask for); both present and
+/// equal → `1.0`; off by exactly one → `0.5` (cross-region release drift);
+/// off by more than one → `0.0`; queried but the result has no year → `0.5`.
+fn match_confidence(
+    query_title: &str,
+    query_year: Option<i64>,
+    result_title: &str,
+    result_year: Option<i64>,
+) -> f64 {
+    let q = crate::filename::normalize_show_name(query_title);
+    let r = crate::filename::normalize_show_name(result_title);
+    let q_tokens: std::collections::BTreeSet<&str> = q.split_whitespace().collect();
+    let r_tokens: std::collections::BTreeSet<&str> = r.split_whitespace().collect();
+
+    let title_score = if q_tokens.is_empty() || r_tokens.is_empty() {
+        0.0
+    } else {
+        let intersection = q_tokens.intersection(&r_tokens).count() as f64;
+        let union = q_tokens.union(&r_tokens).count() as f64;
+        intersection / union
+    };
+
+    let year_score = match (query_year, result_year) {
+        (None, _) => 1.0,
+        (Some(qy), Some(ry)) => match (qy - ry).abs() {
+            0 => 1.0,
+            1 => 0.5,
+            _ => 0.0,
+        },
+        (Some(_), None) => 0.5,
+    };
+
+    0.8 * title_score + 0.2 * year_score
+}
+
 /// Read the year (first four digits) from a TMDB date string like `2014-11-07`.
 fn year_from_date(date: &str) -> Option<i64> {
     let prefix: String = date.chars().take(4).collect();
@@ -363,6 +413,18 @@ impl TmdbClient {
                 return None;
             }
         };
+        // Guard against a wrong-but-confident `results[0]`: score the queried
+        // title/year against the chosen result and reject below the floor
+        // BEFORE any external_ids enrichment, so a wrong id is never written.
+        let score = match_confidence(title, year, &found.title, found.year);
+        if score < MIN_MATCH_CONFIDENCE {
+            tracing::warn!(
+                target: "media_core::tmdb",
+                "rejected low-confidence match for {title:?}: got {:?} (score {:.2})",
+                found.title, score
+            );
+            return None;
+        }
         let ext = self.external_ids(kind, found.tmdb_id).await;
         found.imdb_id = ext.imdb_id;
         found.tvdb_id = ext.tvdb_id;
@@ -532,5 +594,73 @@ mod tests {
             HeaderValue::from_static("Wed, 21 Oct 2015 07:28:00 GMT"),
         );
         assert_eq!(retry_after_duration(&h), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn confidence_exact_title_and_year_is_one() {
+        // Identical normalized titles → Jaccard 1.0; equal years → 1.0. Exact.
+        assert_eq!(
+            match_confidence("Interstellar", Some(2014), "Interstellar", Some(2014)),
+            1.0
+        );
+    }
+
+    #[test]
+    fn confidence_exact_title_year_off_by_one_still_accepts() {
+        // 0.8*1.0 + 0.2*0.5 = 0.9
+        let score = match_confidence("Interstellar", Some(2014), "Interstellar", Some(2015));
+        assert!((score - 0.9).abs() < 1e-9);
+        assert!(score >= MIN_MATCH_CONFIDENCE);
+    }
+
+    #[test]
+    fn confidence_wrong_title_is_rejected() {
+        let score = match_confidence("Interstellar", Some(2014), "The Notebook", Some(2004));
+        assert!(score < MIN_MATCH_CONFIDENCE);
+    }
+
+    #[test]
+    fn confidence_partial_title_overlap() {
+        // tokens {the,matrix} vs {matrix,reloaded}: Jaccard 1/3 ≈ 0.333;
+        // year neutral (None) → 0.8*0.333 + 0.2*1.0 ≈ 0.4667 < 0.5.
+        let score = match_confidence("The Matrix", None, "Matrix Reloaded", None);
+        assert!((score - 0.4667).abs() < 0.01);
+        assert!(score < MIN_MATCH_CONFIDENCE);
+    }
+
+    #[test]
+    fn confidence_no_query_year_uses_neutral_year() {
+        // Year neutral when not queried → exact 1.0.
+        assert_eq!(
+            match_confidence("Severance", None, "Severance", Some(2022)),
+            1.0
+        );
+    }
+
+    #[test]
+    fn confidence_year_known_vs_unknown_mild_penalty() {
+        // 0.8*1.0 + 0.2*0.5 = 0.9
+        let score = match_confidence("Dune", Some(2021), "Dune", None);
+        assert!((score - 0.9).abs() < 1e-9);
+        assert!(score >= MIN_MATCH_CONFIDENCE);
+    }
+
+    #[test]
+    fn confidence_empty_query_title_is_zero() {
+        // Empty query title → empty token set → title score 0.0.
+        let score = match_confidence("", Some(2000), "Something", Some(2000));
+        assert!(score < MIN_MATCH_CONFIDENCE);
+    }
+
+    #[test]
+    fn confidence_normalization_ignores_quality_tokens() {
+        // Both normalize toward "adventure time" via normalize_show_name.
+        let score = match_confidence(
+            "adventure.time.2008.1080p.bluray.x265",
+            Some(2008),
+            "Adventure Time",
+            Some(2008),
+        );
+        assert!(score >= MIN_MATCH_CONFIDENCE);
     }
 }
