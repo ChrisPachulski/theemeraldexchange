@@ -33,6 +33,10 @@ const A = args || {}
 const DONE = (A.doneTitles || []).map((t) => `- ${t}`).join('\n') || '(none yet)'
 const BRANCHES = A.existingBranches || '(none)'
 const IMMUNE = A.immuneRules || '(no antibodies yet)'
+// The integration branch is the loop's cumulative base (= main + confirmed work).
+// The driver runs on it, so worktrees fork from it — fixes already made this
+// session are present, so the forest cannot re-discover them. See ARCHITECTURE.md.
+const BASE = A.baseBranch || 'auto/integration'
 
 // Areas the forest scans. Each is a narrow, read-only Haiku probe.
 const AREAS = [
@@ -174,8 +178,9 @@ const fix = await agent(
     `Instructions: ${pick.instructions}`,
     `Target files (guide): ${(pick.files || []).join(', ') || 'as needed'}`,
     `Make a focused, correct change and ADD/STRENGTHEN TESTS for it.`,
-    `Then: create branch auto/<timestamp>-<short-slug>, stage only your changed paths, commit with a clear message, and 'git push -u origin <branch>'.`,
-    `NEVER touch main. NEVER deploy. Keep the diff tight. Report the branch name, whether push succeeded, and a one-paragraph summary + the tests you added.`,
+    `Your worktree forks from '${BASE}' (the loop's cumulative base) — build on what's already there.`,
+    `Then: create branch auto/<timestamp>-<short-slug> off ${BASE}, stage only your changed paths, commit with a clear message, and 'git push -u origin <branch>'.`,
+    `NEVER touch main (the human promotes integration→main). NEVER deploy. Keep the diff tight. Report the branch name, whether push succeeded, and a one-paragraph summary + the tests you added.`,
   ].join('\n'),
   { model: 'opus', phase: 'Execute', label: 'executor', isolation: 'worktree', schema: FIX },
 )
