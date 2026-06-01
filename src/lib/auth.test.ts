@@ -9,6 +9,10 @@ import {
   revokeMember,
 } from './auth'
 import { ApiError } from './api/errors'
+import type {
+  PublicKeyCredentialRequestOptionsJSON,
+  PublicKeyCredentialCreationOptionsJSON,
+} from '@simplewebauthn/browser'
 
 // These cover the non-React surface of auth.tsx: the provider-inference
 // and denied-copy helpers, plus the admin allowlist API functions (which
@@ -131,5 +135,38 @@ describe('admin invite API', () => {
       json: async () => ({ error: 'forbidden', reason: 'admin_only' }),
     }))
     await expect(listInvites()).rejects.toBeInstanceOf(ApiError)
+  })
+})
+
+// Compile-time contract that guards the removal of the `as never` casts at the
+// @simplewebauthn/browser boundary in auth.tsx. passkeyLogin / passkeyRegister
+// parse the server response and feed `options` straight into
+// startAuthentication / startRegistration via `optionsJSON`. These fixtures are
+// typed with the SDK's own JSON option types, so if the SDK shape drifts (or our
+// server-response annotation stops matching it), `tsc -b` fails to compile this
+// file — surfacing the exact error that `as never` used to hide. The runtime
+// asserts are incidental; the value is that the fixtures must type-check.
+describe('webauthn option type contract', () => {
+  it('request options (login) match the SDK JSON type', () => {
+    const x: PublicKeyCredentialRequestOptionsJSON = {
+      challenge: 'abc',
+      rpId: 'example.com',
+      allowCredentials: [],
+      timeout: 60000,
+      userVerification: 'preferred',
+    }
+    expect(x.challenge).toBe('abc')
+    expect(x.rpId).toBe('example.com')
+  })
+
+  it('creation options (register) match the SDK JSON type', () => {
+    const y: PublicKeyCredentialCreationOptionsJSON = {
+      challenge: 'abc',
+      rp: { name: 'eex', id: 'example.com' },
+      user: { id: 'u1', name: 'h', displayName: 'h' },
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+    }
+    expect(y.user.name).toBe('h')
+    expect(y.challenge).toBe('abc')
   })
 })
