@@ -255,6 +255,37 @@ export type DeviceTokenClaims = {
   exp: number
 }
 
+/** Type-guard: narrows an unknown value to a valid session/device Role. */
+export function isRole(value: unknown): value is Role {
+  return value === 'admin' || value === 'user'
+}
+
+/** Type-guard: narrows an unknown value to a valid AuthMode (§3.2). */
+export function isAuthMode(value: unknown): value is AuthMode {
+  return value === 'plex' || value === 'local' || value === 'apple'
+}
+
+/** Validate the immutable identity claims of a decoded device token
+ *  (aud/iss/role/auth_mode). Returns true only when every claim matches
+ *  the contract (§3.2). Time-window (nbf/exp) and DB row/revocation checks
+ *  are enforced separately in verifyDeviceToken.
+ *
+ *  NOTE: this intentionally REJECTS role='guest'. The static Role type is
+ *  only 'admin' | 'user'; the legacy inline check accepted 'guest', which
+ *  would have produced claims whose runtime role contradicted its static
+ *  type. There are no non-test callers that mint or rely on a 'guest'
+ *  device-token role, so rejecting it here is the type-honest behavior. */
+export function hasValidDeviceClaimShape(
+  claims: Pick<ContractsTypes.DeviceClaimsJs, 'aud' | 'iss' | 'role' | 'authMode'>,
+): boolean {
+  return (
+    claims.aud === 'device' &&
+    claims.iss === 'eex' &&
+    isRole(claims.role) &&
+    isAuthMode(claims.authMode)
+  )
+}
+
 /** Verify a device-token JWE. Performs:
  *  1. Read `kid` from the protected header without decrypting.
  *  2. Look up the active key for that kid (only `device-v1` at v1).
@@ -282,14 +313,7 @@ export async function verifyDeviceToken(token: string): Promise<DeviceTokenClaim
     return null
   }
 
-  if (claims.aud !== 'device' || claims.iss !== 'eex') return null
-  if (claims.role !== 'admin' && claims.role !== 'user' && claims.role !== 'guest') return null
-  if (
-    claims.authMode !== 'plex' &&
-    claims.authMode !== 'local' &&
-    claims.authMode !== 'apple'
-  )
-    return null
+  if (!hasValidDeviceClaimShape(claims)) return null
 
   // §3.5 time-window: enforce the JWE's own nbf/exp claims. The crate's
   // deviceTokenDecrypt validates aud/iss/kid only — it does NOT enforce
