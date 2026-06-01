@@ -12,6 +12,16 @@
   margin-top: var(--s-2);
 }
 
+/* Label + refresh control on one baseline-aligned row. The label keeps
+   its own ellipsis behaviour; the refresh button is pinned to the end. */
+.trending__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  min-width: 0;
+}
+
 .trending__label {
   font-family: var(--font-display);
   font-weight: var(--w-display);
@@ -20,6 +30,57 @@
   text-transform: uppercase;
   color: var(--text-subtle);
   margin: 0;
+  min-width: 0;
+}
+
+/* Quiet ghost button at the end of the strip header. Re-runs the
+   recommender on click; spins while a refresh is in flight. */
+.trending__refresh {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border-faint, rgba(255, 255, 255, 0.08));
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-faint, rgba(255, 255, 255, 0.02));
+  color: var(--text-subtle);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.trending__refresh:hover:not(:disabled) {
+  color: var(--text-primary, var(--text-subtle));
+  border-color: var(--border, rgba(255, 255, 255, 0.18));
+  background: var(--bg-raised, rgba(255, 255, 255, 0.05));
+}
+
+.trending__refresh:focus-visible {
+  outline: 2px solid var(--accent, currentColor);
+  outline-offset: 2px;
+}
+
+.trending__refresh:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.trending__refresh--busy svg {
+  animation: trending-refresh-spin 0.8s linear infinite;
+}
+
+@keyframes trending-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trending__refresh--busy svg {
+    animation: none;
+  }
 }
 
 /* Tiny inline hint appended to the label when items came from a

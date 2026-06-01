@@ -159,10 +159,23 @@ services:
     # Hardening (audit 9-4): no privilege escalation, drop all Linux caps,
     # read-only root fs. Writes go to the /data volume; /tmp is tmpfs (the
     # sentence-transformer cache also lives under /data).
+    #
+    # cap_add (SETUID/SETGID/CHOWN): docker-entrypoint.sh starts as root to
+    # chown the bind-mounted /data, then `exec gosu recommender` drops to
+    # uid 10001 for the long-running process. gosu's setuid()/setgid() and
+    # the entrypoint chown require these three caps — dropping ALL without
+    # re-adding them is what crash-looped the container (gosu: "operation
+    # not permitted"). no-new-privileges still holds; the process never
+    # ends up with more privilege than the entrypoint started with, and the
+    # final uvicorn runs unprivileged.
     security_opt:
       - "no-new-privileges:true"
     cap_drop:
       - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+      - CHOWN
     read_only: true
     tmpfs:
       - /tmp
