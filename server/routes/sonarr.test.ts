@@ -832,6 +832,89 @@ describe('sonarr POST /series/:id/seasons/:n/monitor', () => {
     })
     expect(r.status).toBe(404)
   })
+
+  it('PUT series upstream non-OK is forwarded with its status and body', async () => {
+    stub('/api/v3/series/42', { id: 42, title: 'Foo', seasons: [{ seasonNumber: 5, monitored: false }] })
+    stub('/api/v3/rootfolder', [{ id: 1, path: '/data/tv', freeSpace: 500 * 1024 ** 3 }])
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        if (url.includes('/api/v3/series/42') && method === 'GET') {
+          return new Response(
+            JSON.stringify({ id: 42, title: 'Foo', rootFolderPath: '/data/tv', seasons: [{ seasonNumber: 5, monitored: false }] }),
+            { status: 200 },
+          )
+        }
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(JSON.stringify([{ id: 1, path: '/data/tv', freeSpace: 500 * 1024 ** 3 }]), { status: 200 })
+        }
+        if (url.includes('/api/v3/series/42') && method === 'PUT') {
+          return new Response('{"error":"validation failed"}', { status: 400 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/series/42/seasons/5/monitor', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(400)
+    expect(await r.text()).toBe('{"error":"validation failed"}')
+  })
+
+  it('507 insufficient_disk_space when season-monitor series folder free space is below threshold', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes('/api/v3/series/99')) {
+          return new Response(
+            JSON.stringify({ id: 99, title: 'LowSpace', rootFolderPath: '/data/tiny', seasons: [{ seasonNumber: 3, monitored: false }] }),
+            { status: 200 },
+          )
+        }
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(JSON.stringify([{ id: 1, path: '/data/tiny', freeSpace: 5 * 1024 ** 3 }]), { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/series/99/seasons/3/monitor', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(507)
+    const body = await r.json() as { error?: string }
+    expect(body.error).toBe('insufficient_disk_space')
+  })
+
+  it('507 free_space_unknown when season-monitor folder freeSpace field is missing', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes('/api/v3/series/55')) {
+          return new Response(
+            JSON.stringify({ id: 55, title: 'NoSpace', rootFolderPath: '/data/mystery', seasons: [{ seasonNumber: 1, monitored: false }] }),
+            { status: 200 },
+          )
+        }
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(JSON.stringify([{ id: 1, path: '/data/mystery' }]), { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/series/55/seasons/1/monitor', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(507)
+    const body = await r.json() as { error?: string }
+    expect(body.error).toBe('free_space_unknown')
+  })
 })
 
 // In-flight byte-reservation concurrency on the season-grab path.
