@@ -14,8 +14,8 @@
 // channels against the external aliases, then store only the matched channels'
 // programmes as the rest of the stream flows by.
 
-import { Readable } from 'node:stream'
 import { streamXmltv, normalizeEpgChannelId, type XmltvChannelDef, type EpgProgrammeRow } from './iptvEpg.js'
+import { webStreamToNodeReadable } from './streamBridge.js'
 import { buildEpgNameIndex, resolveEpgId, type FeedChannelDef } from './iptvEpgResolve.js'
 import type { IptvDb } from './iptvDb.js'
 
@@ -92,7 +92,7 @@ export async function ingestExternalEpg(
     if (!res.ok || !res.body) {
       return { url, ok: false, channelsMatched: 0, programmesStored: 0, error: `http_${res.status}` }
     }
-    const src = Readable.fromWeb(res.body as unknown as ReadableStream<Uint8Array>)
+    const src = webStreamToNodeReadable(res.body)
 
     const defs: XmltvChannelDef[] = []
     let wanted: Set<string> | null = null
