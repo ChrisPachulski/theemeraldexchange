@@ -83,6 +83,13 @@ export default function EpgGuide({
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportH, setViewportH] = useState(600)
+  // The scroll container only mounts AFTER data loads — the loading/empty/error
+  // states render a <p> instead, so on first mount scrollRef.current is null.
+  // With [] deps this effect ran exactly once (during "Loading…"), bailed on the
+  // null ref, and never re-ran — so the scroll listener never attached and the
+  // guide stayed frozen on its first ~viewport of rows (looked like "only ~25
+  // channels" even though thousands were returned). Re-bind when it mounts.
+  const guideReady = !grid.isLoading && !grid.error && rows.length > 0
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return undefined
@@ -95,7 +102,7 @@ export default function EpgGuide({
       el.removeEventListener('scroll', onScroll)
       window.removeEventListener('resize', measure)
     }
-  }, [])
+  }, [guideReady])
 
   const firstVisible = Math.max(0, Math.floor((scrollTop - HEADER_H) / ROW_H) - OVERSCAN)
   const visibleCount = Math.ceil(viewportH / ROW_H) + OVERSCAN * 2
