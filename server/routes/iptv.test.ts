@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest'
 import { Hono, type MiddlewareHandler } from 'hono'
 import { openIptvDb, type IptvDb } from '../services/iptvDb.js'
-import { iptv } from './iptv.js'
+import { iptv, __test } from './iptv.js'
 import { __setSsrfLookupForTests } from '../services/ssrfGuard.js'
 import { env } from '../env.js'
 
@@ -318,6 +318,62 @@ describe('series stream grant', () => {
     expect(body.url).toContain('/api/iptv/stream/series/ep-1/mkv?t=fake.series.ZXAtMQ')
     expect(body.delivery).toBe('progressive')
     expect(body.mime).toBe('video/x-matroska')
+  })
+})
+
+describe('sessionTitle() series branches', () => {
+  beforeAll(() => {
+    // Episode whose own title is null → resolved title should be just the
+    // series name (no " — <title>" suffix).
+    dbState.testDb!.stmts.upsertEpisode.run({
+      episode_id: 'ep-null-title',
+      series_id: 30,
+      season: 1,
+      episode_num: 2,
+      title: null,
+      container_extension: 'mkv',
+      added_ts: null,
+      plot: null,
+      duration_secs: null,
+    })
+    // Episode whose series row is absent → falls back to the episode's own
+    // title. The episodes→series FK blocks dangling inserts, so seed a throw-
+    // away series, attach the episode, then delete the series with FKs off to
+    // recreate the "cleaned catalog / deleted parent" state the branch guards.
+    const raw = dbState.testDb!.raw
+    raw.prepare(
+      'INSERT INTO series (series_id, name, fetched_at) VALUES (?, ?, ?)',
+    ).run(31, 'DoomedShow', '2026-05-24T00:00:00Z')
+    dbState.testDb!.stmts.upsertEpisode.run({
+      episode_id: 'ep-orphan',
+      series_id: 31,
+      season: 1,
+      episode_num: 1,
+      title: 'Orphan Ep',
+      container_extension: 'mkv',
+      added_ts: null,
+      plot: null,
+      duration_secs: null,
+    })
+    raw.pragma('foreign_keys = OFF')
+    raw.prepare('DELETE FROM series WHERE series_id = ?').run(31)
+    raw.pragma('foreign_keys = ON')
+  })
+
+  it('joins series name with episode title when both present', () => {
+    expect(__test.sessionTitle('series', 'ep-1')).toBe('GoT — Pilot')
+  })
+
+  it('returns bare series name when the episode title is null', () => {
+    expect(__test.sessionTitle('series', 'ep-null-title')).toBe('GoT')
+  })
+
+  it('falls back to episode title when the series row is missing', () => {
+    expect(__test.sessionTitle('series', 'ep-orphan')).toBe('Orphan Ep')
+  })
+
+  it('returns null when the episode row does not exist', () => {
+    expect(__test.sessionTitle('series', 'no-such-episode')).toBeNull()
   })
 })
 
