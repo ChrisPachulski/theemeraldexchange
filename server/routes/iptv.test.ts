@@ -140,7 +140,7 @@ vi.mock('node:fs', async (importOriginal) => {
     readFileSync,
     createReadStream,
     default: {
-      ...actual.default,
+      ...(actual as unknown as { default: typeof import('node:fs') }).default,
       existsSync,
       readFileSync,
       createReadStream,
