@@ -1,14 +1,17 @@
 import { throwApiError } from './errors'
 import { apiUrl } from './base'
 
-// Mirror of server's GrabEvent type. Kept in sync by hand; the surface
-// is small and stable.
+// Mirror of server's GrabEvent type (server/services/grabLog.ts). Kept in
+// sync by hand; grabs.driftguard.test.ts asserts this union matches the
+// server's member-for-member so a new server event type can't silently
+// resolve to undefined in GrabActivityPanel's exhaustive label/tone maps.
 export type GrabEventType =
   | 'grab_started'
   | 'search_failed'
   | 'no_releases'
   | 'all_rejected_by_cap'
   | 'all_rejected_by_profile'
+  | 'planned_size_exceeds_free_space'
   | 'grab_succeeded'
   | 'grab_failed'
 
