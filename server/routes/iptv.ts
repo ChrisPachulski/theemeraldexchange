@@ -71,7 +71,7 @@ iptv.get('/health', requireAuth, async (c) => {
 // is the fallback for non-CF deploys. Used to label active sessions so the
 // user can tell "the browser I'm sitting at" from "that phone in the
 // kitchen" when deciding which slot to free.
-function clientIp(c: Context<Env>): string | null {
+export function clientIp(c: Context<Env>): string | null {
   return (
     c.req.header('cf-connecting-ip') ??
     c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ??
