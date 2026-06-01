@@ -17,6 +17,7 @@ import { createSession } from '../session.js'
 import { __resetRateLimitsForTests } from '../middleware/rateLimit.js'
 import type { Env } from '../middleware/auth.js'
 import { env } from '../env.js'
+import * as grabLog from '../services/grabLog.js'
 
 function appUnderTest() {
   const app = new Hono<Env>()
@@ -830,5 +831,210 @@ describe('sonarr POST /series/:id/seasons/:n/monitor', () => {
       headers: { Cookie: await adminCookie() },
     })
     expect(r.status).toBe(404)
+  })
+})
+
+// In-flight byte-reservation concurrency on the season-grab path.
+//
+// grabTvUnderCap() runs via `void` AFTER the add response is written and has
+// a 2 s + repeated 1.5 s of real setTimeout before it reaches a
+// /api/v3/release POST. To observe the reservation logic deterministically
+// we (a) drive a fake-timer clock so we never wait on wall-clock, and (b)
+// spy on appendGrabEvent so we can read the grab-log events the background
+// pipeline emits (the same seam recordSonarrGrabEvent writes through).
+//
+// IMPORTANT — observed production behavior (sonarr.ts:287/333-335): a grab
+// that FULLY completes (grabbedBytes === plannedBytes) does NOT release its
+// reservation — the bytes are intentionally treated as committed downstream
+// and the reservation is held until restart. Only a partial/failed grab
+// releases the unused remainder (plannedBytes - grabbedBytes). This is the
+// OPPOSITE of radarr.ts, which always releases. The tests below assert that
+// actual behavior, not the symmetric assumption.
+//
+// The module-global pendingRootFolderReservations Map is NOT exported and is
+// never reset, so each test uses its OWN root-folder PATH — reservations are
+// keyed by path, so distinct paths can't leak across tests. We drive these
+// through the season-monitor route (admin-only) because it reuses the SAME
+// grabTvUnderCap with the smallest stub surface (GET series, GET rootfolder,
+// PUT series, then the background grab).
+describe('sonarr season-grab in-flight reservation', () => {
+  const FOUR_GB = 4 * 1024 ** 3
+  // Free space that fits exactly ONE 4 GB reservation above the 100 GB
+  // reserve with ~3 GB slack — a second concurrent 4 GB reservation cannot
+  // also clear minFreeBytes.
+  const TIGHT_FREE = env.minFreeBytes + 7 * 1024 ** 3
+
+  type Stubs = {
+    path: string
+    freeSpace?: number
+    grabStatus?: number
+    // No eligible releases → finalPicks sum to 0 bytes (reserve guard path).
+    noReleases?: boolean
+    // Optional gate to hold the grab POST open (used by the overcommit test).
+    holdPost?: (resolve: () => void) => void
+  }
+
+  function stubSeasonMonitor(calls: Array<{ url: string; method: string }>, s: Stubs) {
+    const freeSpace = s.freeSpace ?? TIGHT_FREE
+    const grabStatus = s.grabStatus ?? 200
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        calls.push({ url, method })
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(JSON.stringify([{ id: 1, path: s.path, freeSpace }]), { status: 200 })
+        }
+        if (url.includes('/api/v3/series/7') && method === 'GET') {
+          return new Response(
+            JSON.stringify({
+              id: 7,
+              title: 'Reserved Show',
+              rootFolderPath: s.path,
+              seasons: [{ seasonNumber: 1, monitored: false }],
+            }),
+            { status: 200 },
+          )
+        }
+        if (url.includes('/api/v3/series/7') && method === 'PUT') {
+          return new Response(JSON.stringify({ id: 7 }), { status: 200 })
+        }
+        if (url.includes('/api/v3/episode')) {
+          return new Response(JSON.stringify([{ seasonNumber: 1, episodeNumber: 1, hasFile: false }]), { status: 200 })
+        }
+        if (url.includes('/api/v3/release') && method === 'GET') {
+          if (s.noReleases) return new Response(JSON.stringify([]), { status: 200 })
+          return new Response(
+            JSON.stringify([
+              {
+                guid: 'g-7',
+                indexerId: 1,
+                size: FOUR_GB,
+                qualityWeight: 100,
+                title: 'Reserved Show S01E01',
+                seasonNumber: 1,
+                episodeNumbers: [1],
+              },
+            ]),
+            { status: 200 },
+          )
+        }
+        if (url.endsWith('/api/v3/release') && method === 'POST') {
+          if (s.holdPost) {
+            return new Promise<Response>((resolve) => {
+              s.holdPost!(() => resolve(new Response('{}', { status: 200 })))
+            })
+          }
+          return new Response(JSON.stringify({ ok: grabStatus < 400 }), { status: grabStatus })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+  }
+
+  async function monitorAndFlushGrab(cookie: string): Promise<Response> {
+    const r = await appUnderTest().request('/api/v3/series/7/seasons/1/monitor', {
+      method: 'POST',
+      headers: { Cookie: cookie },
+    })
+    // Skip the 2 s + 1.5 s real setTimeouts and drain the microtask queue.
+    await vi.runAllTimersAsync()
+    return r
+  }
+
+  function plannedSizeEvents() {
+    return (grabLog.appendGrabEvent as ReturnType<typeof vi.fn>).mock.calls
+      .map(([e]) => e as { type?: string; error?: string })
+      .filter((e) => e.type === 'planned_size_exceeds_free_space')
+  }
+  function grabPostCount(calls: Array<{ url: string; method: string }>) {
+    return calls.filter((c) => c.url.endsWith('/api/v3/release') && c.method === 'POST').length
+  }
+
+  let appendSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    appendSpy = vi.spyOn(grabLog, 'appendGrabEvent').mockResolvedValue(undefined)
+  })
+  afterEach(() => {
+    appendSpy.mockRestore()
+    vi.useRealTimers()
+  })
+
+  it('CONCURRENT OVERCOMMIT: a second same-folder add cannot also reserve while the first is in flight — it emits planned_size_exceeds_free_space and issues no grab POST', async () => {
+    // Free space fits exactly one 4 GB reservation above the reserve. We hold
+    // add #1's grab POST open so its reservation stays on the books while add
+    // #2 plans against the SAME path. Add #2 must be refused at the reserve
+    // gate (overcommit) and never issue its own /api/v3/release POST.
+    const path = '/data/tv-overcommit'
+    const calls: Array<{ url: string; method: string }> = []
+    const resolvers: Array<() => void> = []
+    stubSeasonMonitor(calls, { path, holdPost: (resolve) => resolvers.push(resolve) })
+
+    const cookie = await adminCookie()
+    const r1 = await appUnderTest().request('/api/v3/series/7/seasons/1/monitor', {
+      method: 'POST',
+      headers: { Cookie: cookie },
+    })
+    expect(r1.status).toBe(200)
+    // Advance past the 2 s + episode poll so add #1 reserves and posts (then hangs).
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(resolvers.length).toBe(1)
+    const postsAfterOne = grabPostCount(calls)
+
+    const r2 = await appUnderTest().request('/api/v3/series/7/seasons/1/monitor', {
+      method: 'POST',
+      headers: { Cookie: cookie },
+    })
+    expect(r2.status).toBe(200)
+    await vi.advanceTimersByTimeAsync(6000)
+
+    const events = plannedSizeEvents()
+    expect(events.length).toBeGreaterThanOrEqual(1)
+    expect(events.some((e) => /overcommit|reservation/i.test(e.error ?? ''))).toBe(true)
+    // No NEW grab POST from add #2 (it was refused before the grab loop).
+    expect(grabPostCount(calls)).toBe(postsAfterOne)
+
+    // Let add #1 complete; runAllTimersAsync drains the resolution microtasks.
+    resolvers.forEach((fn) => fn())
+    await vi.runAllTimersAsync()
+  })
+
+  it('RESERVATION RELEASED ON FAILED GRAB: a non-ok grab POST frees the reservation so a follow-up same-folder add can grab', async () => {
+    // Add #1's grab POST returns 500 → grabbedBytes (0) < plannedBytes → the
+    // leftover reservation is released. A follow-up same-size add on the SAME
+    // path must then clear the gate and issue its own grab POST.
+    const path = '/data/tv-failrelease'
+    const calls1: Array<{ url: string; method: string }> = []
+    stubSeasonMonitor(calls1, { path, grabStatus: 500 })
+    await monitorAndFlushGrab(await adminCookie())
+    expect(grabPostCount(calls1)).toBe(1)
+
+    const calls2: Array<{ url: string; method: string }> = []
+    stubSeasonMonitor(calls2, { path, grabStatus: 200 })
+    await monitorAndFlushGrab(await adminCookie())
+    // No leftover reservation leaked from the failed grab.
+    expect(plannedSizeEvents().length).toBe(0)
+    expect(grabPostCount(calls2)).toBe(1)
+  })
+
+  it('RESERVE GUARD: a planned grab summing to 0 bytes does not reserve and does not wedge the folder', async () => {
+    // No eligible releases → bestByChunk is empty → the route returns BEFORE
+    // reserveRootFolderBytes (which would itself refuse bytes <= 0). Nothing
+    // is recorded, no grab POST fires, and a normal add afterward still works.
+    const path = '/data/tv-zerobytes'
+    const calls1: Array<{ url: string; method: string }> = []
+    stubSeasonMonitor(calls1, { path, noReleases: true })
+    await monitorAndFlushGrab(await adminCookie())
+    expect(grabPostCount(calls1)).toBe(0)
+    expect(plannedSizeEvents().length).toBe(0)
+
+    const calls2: Array<{ url: string; method: string }> = []
+    stubSeasonMonitor(calls2, { path, grabStatus: 200 })
+    await monitorAndFlushGrab(await adminCookie())
+    expect(plannedSizeEvents().length).toBe(0)
+    expect(grabPostCount(calls2)).toBe(1)
   })
 })
