@@ -832,6 +832,158 @@ describe('sonarr POST /series/:id/seasons/:n/monitor', () => {
     })
     expect(r.status).toBe(404)
   })
+
+  // sonarr.ts:788-793 — the fetched series carries no rootFolderPath, so the
+  // route 400s with rootFolderPath_required BEFORE any rootfolder lookup or
+  // PUT. We assert no PUT was issued so a refactor that reorders the guard
+  // (e.g. PUTs first, validates after) is caught.
+  it('400 rootFolderPath_required when the series has no rootFolderPath', async () => {
+    const calls: Array<{ url: string; method: string }> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        calls.push({ url, method })
+        if (url.includes('/api/v3/series/10') && method === 'GET') {
+          return new Response(
+            JSON.stringify({ id: 10, title: 'NoRoot', seasons: [{ seasonNumber: 1, monitored: false }] }),
+            { status: 200 },
+          )
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/series/10/seasons/1/monitor', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'rootFolderPath_required' })
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false)
+  })
+
+  // sonarr.ts:797-803 — series.rootFolderPath points at a path the rootfolder
+  // list does not contain, so the route 400s unknown_root_folder (echoing the
+  // offending path) without writing the monitor PUT.
+  it('400 unknown_root_folder when rootFolderPath matches no rootfolder entry', async () => {
+    const calls: Array<{ url: string; method: string }> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        calls.push({ url, method })
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(JSON.stringify([{ id: 1, path: '/data/tv', freeSpace: 500 * 1024 ** 3 }]), {
+            status: 200,
+          })
+        }
+        if (url.includes('/api/v3/series/11') && method === 'GET') {
+          return new Response(
+            JSON.stringify({
+              id: 11,
+              title: 'Orphan',
+              rootFolderPath: '/data/gone',
+              seasons: [{ seasonNumber: 2, monitored: false }],
+            }),
+            { status: 200 },
+          )
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/series/11/seasons/2/monitor', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'unknown_root_folder', path: '/data/gone' })
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false)
+  })
+
+  // sonarr.ts:794-795 — loadSonarrRootFolders() failure is a forwarded
+  // Response. A thrown rootfolder fetch is caught by fetchWithTimeout and
+  // synthesized into a 504 (upstream.ts:44-59); sonarrRootFolders then throws
+  // "sonarr rootfolder 504", whose 504 substring drives loadSonarrRootFolders
+  // (sonarr.ts:69) to map to status 503. So the observed status is 503, not
+  // 502 — verified by running the suite. No PUT happens.
+  it('forwards rootfolder_unreachable when the rootfolder lookup fails', async () => {
+    const calls: Array<{ url: string; method: string }> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        calls.push({ url, method })
+        if (url.includes('/api/v3/rootfolder')) {
+          throw new Error('connect ECONNREFUSED')
+        }
+        if (url.includes('/api/v3/series/12') && method === 'GET') {
+          return new Response(
+            JSON.stringify({
+              id: 12,
+              title: 'Unreachable',
+              rootFolderPath: '/data/tv',
+              seasons: [{ seasonNumber: 1, monitored: false }],
+            }),
+            { status: 200 },
+          )
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/series/12/seasons/1/monitor', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(503)
+    expect(await r.json()).toEqual({ error: 'rootfolder_unreachable' })
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false)
+  })
+
+  // sonarr.ts:849 — happy path. After a successful PUT the route returns the
+  // structured success body BEFORE the background grab fires (the grab's first
+  // release call sits behind a 2 s real setTimeout, and this block uses real
+  // timers, so the request returns first — no timers to drive, no await on the
+  // fire-and-forget grab). The existing reservation tests only assert status
+  // 200; this pins the exact JSON contract.
+  it('200 with { ok, seriesId, seasonNumber } on a successful season monitor', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(JSON.stringify([{ id: 1, path: '/data/tv', freeSpace: 500 * 1024 ** 3 }]), {
+            status: 200,
+          })
+        }
+        if (url.includes('/api/v3/series/13') && method === 'GET') {
+          return new Response(
+            JSON.stringify({
+              id: 13,
+              title: 'Happy',
+              rootFolderPath: '/data/tv',
+              seasons: [{ seasonNumber: 4, monitored: false }],
+            }),
+            { status: 200 },
+          )
+        }
+        if (url.includes('/api/v3/series/13') && method === 'PUT') {
+          return new Response(JSON.stringify({ id: 13 }), { status: 200 })
+        }
+        // Background grab seams — return early so a stray late call never errors.
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/series/13/seasons/4/monitor', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual({ ok: true, seriesId: 13, seasonNumber: 4 })
+  })
 })
 
 // In-flight byte-reservation concurrency on the season-grab path.
