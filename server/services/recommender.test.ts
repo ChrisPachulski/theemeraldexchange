@@ -9,6 +9,8 @@ import {
   postFeedback,
   postRejection,
   postLibrarySync,
+  postShown,
+  postImpressions,
   RecommenderError,
 } from './recommender.js'
 import { env } from '../env.js'
@@ -193,5 +195,76 @@ describe('postLibrarySync (fire-and-forget)', () => {
   it('swallows network errors', async () => {
     ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('down'))
     await expect(postLibrarySync('tv', [])).resolves.toBeUndefined()
+  })
+})
+
+describe('postShown (fire-and-forget)', () => {
+  it('POSTs to /events/shown with sub + kind + tmdb_ids', async () => {
+    ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      new Response(null, { status: 200 }),
+    )
+    await postShown('plex:42', 'movie', [1, 2, 3])
+    const fetchSpy = globalThis.fetch as ReturnType<typeof vi.fn>
+    const [calledUrl, init] = fetchSpy.mock.calls[0]
+    expect(calledUrl).toBe(`${env.recommenderUrl}/events/shown`)
+    expect(JSON.parse(init.body)).toEqual({
+      sub: 'plex:42',
+      kind: 'movie',
+      tmdb_ids: [1, 2, 3],
+    })
+  })
+
+  it('early-returns without fetch when tmdb_ids is empty', async () => {
+    await postShown('plex:42', 'tv', [])
+    const fetchSpy = globalThis.fetch as ReturnType<typeof vi.fn>
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('swallows network errors', async () => {
+    ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('down'))
+    await expect(postShown('u', 'movie', [1])).resolves.toBeUndefined()
+  })
+})
+
+describe('postImpressions (fire-and-forget)', () => {
+  it('POSTs to /events/impressions with sub + kind + items', async () => {
+    ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      new Response(null, { status: 200 }),
+    )
+    const items = [
+      {
+        tmdb_id: 1,
+        rank: 1,
+        score: 0.9,
+        provenance: 'personalized' as const,
+        model_version: 'v1',
+      },
+    ]
+    await postImpressions('plex:42', 'movie', items)
+    const fetchSpy = globalThis.fetch as ReturnType<typeof vi.fn>
+    const [calledUrl, init] = fetchSpy.mock.calls[0]
+    expect(calledUrl).toBe(`${env.recommenderUrl}/events/impressions`)
+    expect(JSON.parse(init.body)).toEqual({
+      sub: 'plex:42',
+      kind: 'movie',
+      items,
+    })
+  })
+
+  it('early-returns without fetch when items is empty', async () => {
+    await postImpressions('plex:42', 'tv', [])
+    const fetchSpy = globalThis.fetch as ReturnType<typeof vi.fn>
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('swallows network errors', async () => {
+    ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('down'))
+    await expect(postImpressions('u', 'movie', [{
+      tmdb_id: 1,
+      rank: 1,
+      score: 0.5,
+      provenance: 'personalized',
+      model_version: 'v1',
+    }])).resolves.toBeUndefined()
   })
 })
