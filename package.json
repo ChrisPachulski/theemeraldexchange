@@ -22,7 +22,7 @@
     "build:napi": "npm --prefix crates/emerald-contracts-napi run build"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.95.2",
+    "@anthropic-ai/sdk": "0.100.1",
     "@emerald/contracts-napi": "file:./crates/emerald-contracts-napi",
     "@hono/node-server": "^2.0.4",
     "@sentry/node": "^9.47.1",
@@ -49,14 +49,14 @@
     "@playwright/test": "^1.60.0",
     "@runwayml/sdk": "^3.21.1",
     "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^24.12.2",
+    "@types/node": "24.12.4",
     "@types/node-cron": "^3.0.11",
     "@types/react": "^19.2.16",
     "@types/react-dom": "^19.2.3",
     "@types/sax": "^1.2.7",
     "@types/three": "^0.184.1",
     "@vitejs/plugin-react": "^6.0.2",
-    "@vitest/coverage-v8": "^4.1.5",
+    "@vitest/coverage-v8": "4.1.8",
     "concurrently": "^9.2.1",
     "eslint": "^10.4.1",
     "eslint-plugin-react-hooks": "^7.1.1",
@@ -67,6 +67,6 @@
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.60.1",
     "vite": "^8.0.16",
-    "vitest": "^4.1.5"
+    "vitest": "4.1.8"
   }
 }
