@@ -21,6 +21,8 @@ Run: `node scripts/autoloop/claude-guard.mjs "$AUTOLOOP_DIR"` and parse JSON `ac
 - **idle** — do NO work. `ScheduleWakeup(delaySeconds = min(3600, sleepSeconds))` with the same
   `/loop` prompt, then stop. (Covers window-tight AND `usage_stale` — never spend on unverifiable usage.)
 - **go** — continue. Note `nextDelaySeconds` from the guard JSON; you will use it VERBATIM in step 6.
+  The guard JSON also includes `mainCI` (`{healthy, conclusion}` for origin/main's CI) — an
+  ANNOTATION only (it never gates spend). You use it in step 4 to decide auto-PR escalation.
 
 ## 2. Sync integration with reality + gather context
 - **Absorb upstream:** `git merge --no-edit main` into the current `auto/integration` (you are on it) —
@@ -43,8 +45,12 @@ state, so a fix already made this session is NOT a live bug to re-find. Wait for
 - Write handoff.md (where we are, next step, what to avoid).
 - On `action:"branch_created"`:
   - If `confirmed` (tester ok AND skeptic ok): **merge it into integration** —
-    `git merge --no-ff <branch> -m "loop: <title>"` (you are on auto/integration). This is how work
-    compounds. Then `osascript` notify "merged <branch> into integration".
+    `git merge --no-ff <branch> -m "loop: <title>"` (you are on auto/integration). Then run the
+    authoritative post-merge gate `bash scripts/autoloop/ci-gate.sh` (it mirrors CI's test job incl.
+    `tsc -b` — catches merge-interaction breakage the standalone branch gate can't). If it exits 0,
+    the merge stands — `osascript` notify "merged <branch> into integration". If it exits non-zero,
+    **undo the merge** (`git reset --hard HEAD~1`), append the failure to dead-ends.md, and treat the
+    branch as unconfirmed. This is how work compounds without ever shipping CI-red state to integration.
   - If NOT confirmed: append to dead-ends.md (`| ts | category | what | why |`). If the same category
     hits ≥3×, write a generalized rule to immune-rules.md and
     `node scripts/autoloop/notify.mjs "[autoloop] unconfirmed branch" "<details>"`.

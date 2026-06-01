@@ -67,6 +67,35 @@ function ensureBaseline(autoloopDir, cache) {
   return base;
 }
 
+// Best-effort CI health of origin/main. Annotation ONLY — never changes the
+// bill-safety action. The loop works on auto/integration, so a red main does not
+// block it; the driver uses this to decide whether to auto-open a PR for a
+// confirmed main-breaking fix (the structural cure for the red-main livelock).
+// Throttled + cached (CI status moves slowly); degrades silently with no gh/net.
+function checkMainCI(autoloopDir, repoRoot) {
+  const f = path.join(autoloopDir, 'ci-status.json');
+  const prev = readJson(f);
+  const FRESH = 300; // 5-minute cache — don't hammer the GH API every window
+  if (prev && typeof prev.checkedAtSec === 'number' && (nowSec() - prev.checkedAtSec) < FRESH) return prev;
+  let result = prev || { healthy: null, conclusion: null, status: null, checkedAtSec: 0 };
+  try {
+    const out = execFileSync('gh',
+      ['run', 'list', '--branch', 'main', '--workflow', 'CI', '--limit', '1', '--json', 'conclusion,status,headSha'],
+      { cwd: repoRoot || process.cwd(), timeout: 8000, stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' });
+    const run = (JSON.parse(out) || [])[0];
+    if (run) {
+      const done = run.status === 'completed';
+      result = {
+        healthy: done ? run.conclusion === 'success' : null,
+        conclusion: run.conclusion || null, status: run.status || null,
+        headSha: run.headSha || null, checkedAtSec: nowSec(),
+      };
+      try { mkdirSync(autoloopDir, { recursive: true }); writeFileSync(f, JSON.stringify(result, null, 2)); } catch { /* best-effort */ }
+    }
+  } catch { /* gh/network absent or rate-limited → keep prior (best-effort, never throws) */ }
+  return result;
+}
+
 export function evaluate(autoloopDir = path.join(process.cwd(), '.autoloop'), opts = {}) {
   const control = readControl(autoloopDir);
   const out = { action: 'go', reason: 'go', control };
@@ -150,6 +179,9 @@ export function evaluate(autoloopDir = path.join(process.cwd(), '.autoloop'), op
   // so a dense cadence is safe: if it ever tightens, the very next evaluate()
   // returns `idle` with sleepSeconds instead. This is what kills long idle gaps.
   out.nextDelaySeconds = Math.max(30, Number(control.CADENCE_SECONDS ?? opts.cadenceSeconds ?? DEFAULT_CADENCE_SECONDS));
+  // Annotation only (does NOT gate spend): main/CI health for the driver's
+  // auto-PR escalation. Computed only on the `go` path, where it's actionable.
+  if (opts.checkMainCI !== false) out.mainCI = checkMainCI(autoloopDir, path.dirname(autoloopDir));
   return out;
 }
 
