@@ -65,6 +65,17 @@ def build_cooccurrence(catalog_ids: set[int], *, min_rating: float = 4.0,
     key = (min_rating, support_floor, topk, len(catalog_ids))
     if key in _GRAPH:
         return _GRAPH[key]
+    # Disk cache (gitignored): the 25M-row build is ~250s; cache it so re-runs
+    # and later iterations are instant. Keyed by params + catalog size.
+    import pickle
+    cache_dir = Path(__file__).resolve().parent / "cache"
+    cache_dir.mkdir(exist_ok=True)
+    disk = cache_dir / f"coengagement_g_{min_rating}_{support_floor}_{topk}_{len(catalog_ids)}.pkl"
+    if disk.exists():
+        with open(disk, "rb") as fh:
+            graph = pickle.load(fh)
+        _GRAPH[key] = graph
+        return graph
     import pandas as pd
 
     links = _load_links()  # movieId -> tmdbId
@@ -134,6 +145,8 @@ def build_cooccurrence(catalog_ids: set[int], *, min_rating: float = 4.0,
         "params": {"min_rating": min_rating, "support_floor": support_floor, "topk": topk},
     }
     _GRAPH[key] = graph
+    with open(disk, "wb") as fh:
+        pickle.dump(graph, fh)
     return graph
 
 
@@ -226,6 +239,30 @@ def _zscore(a: np.ndarray) -> np.ndarray:
     return (a - a.mean()) / sd if sd > 1e-9 else np.zeros_like(a)
 
 
+def _reverse_index(graph: dict) -> dict[int, list[tuple[int, float]]]:
+    """neighbor_tmdb -> [(source_tmdb, ppmi)] so we can find items that point AT
+    a library item (the stored top-k is per-source, hence asymmetric)."""
+    rev: dict[int, list[tuple[int, float]]] = {}
+    for src, lst in graph["neighbors"].items():
+        for nb, p in lst:
+            rev.setdefault(nb, []).append((src, p))
+    return rev
+
+
+def coengagement_candidates(graph: dict, rev: dict, lib_ids: set[int],
+                            catalog: set[int]) -> set[int]:
+    """Items co-engaged with the library (both directions), as a candidate
+    SOURCE. This is the iteration-5 lever: co-engagement drives RETRIEVAL."""
+    out: set[int] = set()
+    nbr = graph["neighbors"]
+    for l in lib_ids:
+        for nb, _ in nbr.get(l, []):
+            out.add(nb)
+        for src, _ in rev.get(l, []):
+            out.add(src)
+    return (out & catalog) - lib_ids
+
+
 def evaluate_latefusion(conn, *, kind: str, content_weights: dict, beta: float,
                         graph: dict, mode: str = "ann", pool_size: int = 800,
                         min_votes: int = 50, label: str = "",
@@ -314,3 +351,104 @@ def evaluate_latefusion(conn, *, kind: str, content_weights: dict, beta: float,
             "content_only": content_only, "cooccur_only": cooccur_only,
             "leakage_filtered@50": leak, "strata": {k: agg(v) for k, v in strat.items()},
             "eval_seconds": round(time.monotonic() - t0, 1)}
+
+
+def evaluate_retrieval_union(conn, *, kind: str, content_weights: dict, graph: dict,
+                             beta: float = 1.0, score_mode: str = "fused",
+                             pool_size: int = 800, min_votes: int = 50, label: str = "") -> dict:
+    """ITERATION 5 (capstone): co-engagement as a candidate SOURCE.
+
+    universe = MiniLM-centroid ANN pool UNION the PMI co-engagement neighbors of
+    the library. Then score:
+      score_mode="content" -> fused content score only (does ADDING co-engaged
+        candidates help, even if scored by content?).
+      score_mode="fused"   -> z(content) + beta*z(cooccur) (the co-engagement
+        signal lifts co-engaged-but-content-dissimilar titles).
+    Stratified creator_twin/novel -- the decisive test is whether the NOVEL
+    stratum (0 recall under every content-only / re-scoring config) finally moves.
+    """
+    import recsys_loop as L
+    import fusion as F
+    from app.retrieval import retrieve_candidates
+
+    store = F.build_feature_store(conn, kind, min_votes)
+    index = store["index"]
+    catalog = set(store["ids"])
+    KS = L.KS
+    lib = [x["tmdb_id"] for x in L.load_cache_library(kind)]
+    rej = L.load_cache_rejections()
+    rej_ids = [e["id"] for e in rej.get(kind, [])]
+    emb = L.load_embeddings_for(conn, kind, lib + rej_ids)
+    positives = [i for i in lib if i in index and i in emb]
+    reject_in_catalog = {i for i in rej_ids if i in index}
+    pos_set = set(positives)
+    rev = _reverse_index(graph)
+
+    def fetch_sets(table, extra, params):
+        d: dict[int, set] = {}
+        for tid, pid in conn.execute(f"SELECT tmdb_id,person_id FROM {table} WHERE kind=? {extra}", (kind, *params)):
+            if tid in pos_set:
+                d.setdefault(tid, set()).add(pid)
+        return d
+    cast = fetch_sets("title_cast", "AND order_idx<?", (F.CAST_TOPN,))
+    crew = fetch_sets("title_crew", f"AND job IN ({','.join('?' for _ in F.KEY_CREW_JOBS)})", F.KEY_CREW_JOBS)
+    def is_twin(t):
+        ct, kt = cast.get(t, set()), crew.get(t, set())
+        return any(t != l and (len(ct & cast.get(l, set())) >= 2 or len(kt & crew.get(l, set())) >= 1) for l in pos_set)
+
+    strat = {"creator_twin": [], "novel": [], "all": []}
+    leak = 0
+    union_sizes: list[int] = []
+    in_universe_hits = 0  # held-out title present in the union universe at all
+    import time
+    t0 = time.monotonic()
+    for t in positives:
+        lib_minus = pos_set - {t}
+        lib_idx = [index[i] for i in lib_minus]
+        ctx = L.build_context(kind=kind, library_ids=lib_minus, emb_map=emb,
+                              title_key_set=set(), rejected_ids=reject_in_catalog)
+        pc = ctx.positive_centroid()
+        if pc is None:
+            continue
+        batch = retrieve_candidates(conn, kind=kind, query_vec=pc, user=ctx,
+                                    pool_size=pool_size, min_vote_count=min_votes)
+        A = {c.title.tmdb_id for c in batch.candidates if c.title.tmdb_id in index}
+        B = coengagement_candidates(graph, rev, lib_minus, catalog)
+        universe = list((A | B) - lib_minus - reject_in_catalog)
+        if not universe:
+            continue
+        union_sizes.append(len(universe))
+        if t in universe:
+            in_universe_hits += 1
+        cand_idx = np.array([index[i] for i in universe])
+        cfs = F.fused_scores(store, cand_idx, lib_idx, content_weights)
+        # z-score BOTH paths so content vs fused differ ONLY in the co-engagement
+        # term (fixes the iteration-5 devils-advocate z-score asymmetry).
+        if score_mode == "content":
+            total = _zscore(cfs)
+        else:
+            ce = coengagement_scores(graph, universe, lib_minus)
+            total = _zscore(cfs) + beta * _zscore(ce)
+        order = np.argsort(-total)
+        ranked = [universe[oi] for oi in order[:max(KS)]]
+        leak += sum(1 for x in ranked if x in reject_in_catalog)
+        rec = (1.0 if t in ranked[:10] else 0.0, 1.0 if t in ranked[:50] else 0.0,
+               (1.0 / math.log2(ranked.index(t) + 2)) if t in ranked[:10] else 0.0)
+        strat["all"].append(rec)
+        strat["creator_twin" if is_twin(t) else "novel"].append(rec)
+
+    def agg(v):
+        if not v:
+            return {}
+        a = np.array(v)
+        return {"n": len(v), "recall@10": round(float(a[:, 0].mean()), 4),
+                "recall@50": round(float(a[:, 1].mean()), 4), "ndcg@10": round(float(a[:, 2].mean()), 4)}
+    return {
+        "label": label or f"union_{score_mode}_b{beta}", "kind": kind,
+        "score_mode": score_mode, "beta": beta,
+        "mean_universe_size": int(np.mean(union_sizes)) if union_sizes else 0,
+        "held_out_in_universe_frac": round(in_universe_hits / max(len(strat["all"]), 1), 4),
+        "leakage_filtered@50": leak,
+        "strata": {k: agg(v) for k, v in strat.items()},
+        "eval_seconds": round(time.monotonic() - t0, 1),
+    }
