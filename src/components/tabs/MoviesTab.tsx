@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { SearchInput } from '../search/SearchInput'
 import { ResultGrid } from '../search/ResultGrid'
@@ -16,6 +16,7 @@ import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useMovieSearch } from '../../lib/hooks/useMovieSearch'
 import { useRadarrLibrary } from '../../lib/hooks/useRadarrLibrary'
 import { useSuggestedMovies } from '../../lib/hooks/useSuggested'
+import { useStripAutoRefresh } from '../../lib/hooks/useStripAutoRefresh'
 import { useAiSuggestionsEnabled } from '../../lib/hooks/useAiSuggestionsEnabled'
 import { useUserApiKey } from '../../lib/hooks/useUserApiKey'
 import { useLimits } from '../../lib/hooks/useLimits'
@@ -170,6 +171,20 @@ export function MoviesTab() {
       return true
     })
   }, [suggested.data, libraryByTmdb])
+  // Manual refresh trigger = a fresh recommender run. refetch() re-hits
+  // /api/suggestions/movie, which (local recommender on) re-scores.
+  const refreshSuggestions = useCallback(() => {
+    void suggested.refetch()
+  }, [suggested])
+  // Auto-run when the whole strip has been judged yes/no: once every
+  // shown card carries a like/dislike, pull a fresh batch. See
+  // useStripAutoRefresh for the loop-safety latch.
+  useStripAutoRefresh(
+    trendingFiltered,
+    (id) => stateFor(id) !== 'unset',
+    suggested.isFetching,
+    refreshSuggestions,
+  )
   // Label adjusts based on whether the backend served personalized
   // recs or fell back to TMDB trending (cold start or no API key).
   // 'recommender' is the local-model source — also a personalized
@@ -328,6 +343,8 @@ export function MoviesTab() {
                 onPick={handleTrendingPick}
                 pendingId={trendingPending}
                 label={trendingLabel}
+                onRefresh={refreshSuggestions}
+                refreshing={suggested.isFetching}
                 feedback={{
                   stateFor,
                   onLike: (id, title) => {
