@@ -606,7 +606,6 @@ function LibraryResults({ query, letter, loading, error, items, onCardClick }: L
             year={s.year}
             meta={meta || undefined}
             overview={s.overview}
-            inLibrary
             onClick={() => onCardClick(s)}
           />
         )
