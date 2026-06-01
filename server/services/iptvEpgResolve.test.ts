@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { normalizeChannelName, buildEpgNameIndex, resolveEpgId } from './iptvEpgResolve.js'
+import { normalizeChannelName, buildEpgNameIndex, resolveEpgId, titleSimilarity } from './iptvEpgResolve.js'
 
 describe('normalizeChannelName', () => {
   it('strips country prefix, quality tags, punctuation', () => {
@@ -52,5 +52,36 @@ describe('buildEpgNameIndex + resolveEpgId', () => {
 
   it('returns null when nothing matches', () => {
     expect(resolveEpgId({ name: 'Totally Unknown XYZ', epg_channel_id: 'nope.zz' }, index)).toBeNull()
+  })
+})
+
+describe('titleSimilarity', () => {
+  it('returns 1 when both names normalize to the same form', () => {
+    // "US: ESPN" and "ESPN FHD" both normalize to "espn"
+    expect(titleSimilarity('US: ESPN', 'ESPN FHD')).toBe(1)
+  })
+
+  it('returns 0 for disjoint normalized forms', () => {
+    expect(titleSimilarity('ESPN', 'CNN')).toBe(0)
+  })
+
+  it('returns 0 when either input normalizes to null (too short)', () => {
+    expect(titleSimilarity('US: HD', 'ESPN')).toBe(0) // first normalizes to null
+    expect(titleSimilarity('ESPN', '')).toBe(0)
+    expect(titleSimilarity('US: HD', 'UK SD')).toBe(0) // both null
+  })
+
+  it('returns the Jaccard trigram similarity for partially overlapping names', () => {
+    // "TNT Sports 1" -> "tntsports1", "TNT Sports 2" -> "tntsports2"
+    // shared trigrams give 7/9 overlap.
+    expect(titleSimilarity('TNT Sports 1', 'TNT Sports 2')).toBeCloseTo(0.7777777, 5)
+  })
+
+  it('is symmetric in its arguments', () => {
+    const ab = titleSimilarity('Disney Channel', 'Disney XD')
+    const ba = titleSimilarity('Disney XD', 'Disney Channel')
+    expect(ab).toBe(ba)
+    expect(ab).toBeGreaterThan(0)
+    expect(ab).toBeLessThan(1)
   })
 })
