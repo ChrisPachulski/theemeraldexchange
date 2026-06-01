@@ -58,6 +58,25 @@ async fn ffprobe_with_bin(bin: &str, path: &Path) -> Result<FileProbe, ProbeErro
     ffprobe_with_bin_timeout(bin, path, Duration::from_secs(PROBE_TIMEOUT_SECS)).await
 }
 
+/// Test-only crate-internal handle to the bin-injectable probe path, so
+/// sibling test modules (e.g. scanner benchmarks) can drive a mock ffprobe
+/// without shelling out to the real binary. Never compiled into release.
+#[cfg(test)]
+pub(crate) async fn ffprobe_with_bin_for_test(
+    bin: &str,
+    path: &Path,
+) -> Result<FileProbe, ProbeError> {
+    ffprobe_with_bin(bin, path).await
+}
+
+/// Test-only crate-internal re-export of the echoing stub writer (defined in
+/// this module's `tests` submodule) so sibling test modules can build a
+/// deterministic successful-ffprobe stub. Never compiled into release.
+#[cfg(test)]
+pub(crate) fn write_echoing_stub_path(dir: &std::path::Path) -> std::path::PathBuf {
+    tests::write_echoing_stub(dir)
+}
+
 /// As [`ffprobe_with_bin`] but with an explicit deadline (tests use a short one
 /// so the timeout path is exercised without a 30s wait).
 async fn ffprobe_with_bin_timeout(
@@ -276,6 +295,41 @@ mod tests {
         perms.set_mode(0o755);
         std::fs::set_permissions(&p, perms).unwrap();
         p
+    }
+
+    /// A stub "ffprobe" that ignores its args and prints a fixed, valid
+    /// ffprobe-style JSON document on stdout, exiting 0 — a deterministic
+    /// stand-in for a successful probe so timing/throughput can be measured
+    /// without the real binary. Returns the path to the executable stub.
+    #[cfg(unix)]
+    pub(crate) fn write_echoing_stub(dir: &std::path::Path) -> std::path::PathBuf {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        // Minimal but realistic: one h264 1080p video stream + one aac audio
+        // stream + a format block, matching what parse_ffprobe_json reads.
+        let json = r#"{"streams":[{"codec_type":"video","codec_name":"h264","height":1080},{"codec_type":"audio","codec_name":"aac","channels":2}],"format":{"format_name":"mov,mp4,m4a","duration":"1.0"}}"#;
+        let p = dir.join("ffprobe_echo_stub.sh");
+        let mut f = std::fs::File::create(&p).unwrap();
+        // Single-quote the heredoc delimiter so the shell does not interpolate.
+        writeln!(f, "#!/bin/sh\ncat <<'EOF'\n{json}\nEOF").unwrap();
+        let mut perms = std::fs::metadata(&p).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&p, perms).unwrap();
+        p
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn echoing_stub_round_trips_through_spawn_and_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let stub = write_echoing_stub(dir.path());
+        // Any path; the stub ignores its args.
+        let probe = ffprobe_with_bin(stub.to_str().unwrap(), dir.path())
+            .await
+            .expect("echoing stub must spawn, exit 0, and parse");
+        assert_eq!(probe.video_codec.as_deref(), Some("h264"));
+        assert_eq!(probe.video_height, Some(1080));
+        assert_eq!(probe.audio_tracks.len(), 1);
     }
 
     #[cfg(unix)]
