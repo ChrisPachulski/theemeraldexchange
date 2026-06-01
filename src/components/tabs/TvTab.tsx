@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { SearchInput } from '../search/SearchInput'
 import { ResultGrid } from '../search/ResultGrid'
@@ -17,6 +17,7 @@ import { useSeriesSearch } from '../../lib/hooks/useSeriesSearch'
 import { useSonarrLibrary } from '../../lib/hooks/useSonarrLibrary'
 import { useSonarrEpisodes } from '../../lib/hooks/useSonarrEpisodes'
 import { useSuggestedTv } from '../../lib/hooks/useSuggested'
+import { useStripAutoRefresh } from '../../lib/hooks/useStripAutoRefresh'
 import { useAiSuggestionsEnabled } from '../../lib/hooks/useAiSuggestionsEnabled'
 import { useUserApiKey } from '../../lib/hooks/useUserApiKey'
 import { useLimits } from '../../lib/hooks/useLimits'
@@ -167,6 +168,20 @@ export function TvTab() {
       return true
     })
   }, [suggested.data, libraryByTmdbForTrending])
+  // Manual refresh trigger = a fresh recommender run. refetch() re-hits
+  // /api/suggestions/tv, which (local recommender on) re-scores.
+  const refreshSuggestions = useCallback(() => {
+    void suggested.refetch()
+  }, [suggested])
+  // Auto-run when the whole strip has been judged yes/no: once every
+  // shown card carries a like/dislike, pull a fresh batch. See
+  // useStripAutoRefresh for the loop-safety latch.
+  useStripAutoRefresh(
+    trendingFiltered,
+    (id) => stateFor(id) !== 'unset',
+    suggested.isFetching,
+    refreshSuggestions,
+  )
   // 'recommender' is the local-model source — also a personalized
   // pick, just from the on-NAS model rather than Claude.
   const src = suggested.data?.source
@@ -331,6 +346,8 @@ export function TvTab() {
                 onPick={handleTrendingPick}
                 pendingId={trendingPending}
                 label={trendingLabel}
+                onRefresh={refreshSuggestions}
+                refreshing={suggested.isFetching}
                 feedback={{
                   stateFor,
                   onLike: (id, title) => {

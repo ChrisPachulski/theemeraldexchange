@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import type { TrendingItem } from '../../lib/hooks/useTrending'
 import type { SuggestionDiag } from '../../lib/hooks/useSuggested'
 import { AiToggle } from './AiToggle'
@@ -53,6 +54,61 @@ type Props = {
   /** Response `_diag` payload for the current items. Drives the
    * specific "why is this empty" hint when accepted=0. */
   diag?: SuggestionDiag | null
+  /** Manual refresh trigger. When provided, a refresh button renders in
+   * the strip header AND the strip never collapses to `null` on an empty
+   * round — so the control is always reachable even when the recommender
+   * returns nothing (the local-recommender-mode "strip vanished" bug). */
+  onRefresh?: () => void
+  /** True while a refresh/refetch is in flight. Disables + spins the
+   * refresh button so repeated taps don't stack duplicate runs. */
+  refreshing?: boolean
+}
+
+// Strip header: the section label plus the optional refresh control,
+// laid out on one row. Used by every TrendingRow branch (loaded, empty,
+// error) so the refresh affordance and label placement stay identical
+// regardless of state. `children` carries the inline source/feedback
+// hints that the loaded state appends after the label text.
+function StripHeader({
+  label,
+  onRefresh,
+  refreshing,
+  children,
+}: {
+  label?: string
+  onRefresh?: () => void
+  refreshing?: boolean
+  children?: ReactNode
+}) {
+  return (
+    <div className="trending__header">
+      <h3 className="trending__label">
+        {label ?? 'Trending this week'}
+        {children}
+      </h3>
+      {onRefresh && (
+        <button
+          type="button"
+          className={`trending__refresh${refreshing ? ' trending__refresh--busy' : ''}`}
+          onClick={onRefresh}
+          disabled={refreshing}
+          aria-label="Refresh suggestions"
+          title="Refresh suggestions"
+        >
+          <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" focusable="false">
+            <path
+              d="M21 12a9 9 0 1 1-2.64-6.36M21 4v5h-5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+      )}
+    </div>
+  )
 }
 
 function describeError(error: unknown): { headline: string; hint: string } {
@@ -159,12 +215,14 @@ export function TrendingRow({
   error,
   source,
   diag,
+  onRefresh,
+  refreshing,
 }: Props) {
   if (error) {
     const { headline, hint } = describeError(error)
     return (
       <section className="trending">
-        <h3 className="trending__label">{label ?? 'Trending this week'}</h3>
+        <StripHeader label={label} onRefresh={onRefresh} refreshing={refreshing} />
         <div className="trending__empty">
           <p className="trending__empty-headline">{headline}</p>
           <p className="trending__empty-hint">{hint}</p>
@@ -203,11 +261,21 @@ export function TrendingRow({
   }
 
   if (items.length === 0) {
-    const emptyHint = describeEmptySource(source, diag)
-    if (!ai && !emptyHint) return null
+    // Specific degraded-source hint if we have one; otherwise a generic
+    // "nothing this round" line when a refresh control is present (so the
+    // empty state still explains itself). Previously the whole strip
+    // returned `null` here when neither an AI toggle nor a source hint
+    // applied — which is exactly how the TV strip silently vanished in
+    // local-recommender mode (no toggle shown, source/path not matched by
+    // describeEmptySource). With a refresh control wired in, the strip
+    // must stay on screen so the user can re-run it.
+    const emptyHint =
+      describeEmptySource(source, diag) ??
+      (onRefresh ? 'No fresh picks this round — refresh to run the recommender again.' : null)
+    if (!ai && !emptyHint && !onRefresh) return null
     return (
       <section className="trending">
-        <h3 className="trending__label">{label ?? 'Trending this week'}</h3>
+        <StripHeader label={label} onRefresh={onRefresh} refreshing={refreshing} />
         {emptyHint && (
           <div className="trending__empty">
             <p className="trending__empty-hint">{emptyHint}</p>
@@ -270,8 +338,7 @@ export function TrendingRow({
 
   return (
     <section className="trending">
-      <h3 className="trending__label">
-        {label ?? 'Trending this week'}
+      <StripHeader label={label} onRefresh={onRefresh} refreshing={refreshing}>
         {sourceHint && <span className="trending__source-hint"> · {sourceHint}</span>}
         {feedback?.unavailable && (
           <span className="trending__source-hint" role="status">
@@ -279,7 +346,7 @@ export function TrendingRow({
             · Feedback unavailable
           </span>
         )}
-      </h3>
+      </StripHeader>
       <div className="trending__row">
         {items.slice(0, 16).map((item) => {
           const isPending = pendingId === item.id
