@@ -107,4 +107,45 @@ describe('iptv concurrency tracker', () => {
     // A second user still cannot acquire — the long-running stream holds the cap.
     expect(t.tryAcquire(baseOpts('u2', 's2')).ok).toBe(false)
   })
+
+  it('heartbeatByResource refreshes the matching session and returns true; returns false when no match', () => {
+    const t = createConcurrencyTracker({ cap: 1, idleMs: 100 })
+    t.tryAcquire(baseOpts('u1', 's1')) // kind 'live', resourceId '1'
+    vi.advanceTimersByTime(80)
+    expect(t.heartbeatByResource('u1', 'live', '1')).toBe(true)
+    vi.advanceTimersByTime(80)
+    t.sweep()
+    // total 160ms elapsed but last refresh was at 80ms, so within idleMs=100 -> slot survives
+    expect(t.size()).toBe(1)
+    // non-matching tuple returns false and does NOT throw
+    expect(t.heartbeatByResource('u1', 'live', '999')).toBe(false)
+    expect(t.heartbeatByResource('u2', 'live', '1')).toBe(false)
+    expect(t.heartbeatByResource('u1', 'vod', '1')).toBe(false)
+  })
+
+  it('releaseByResource frees the matching slot and returns true; returns false when no match', () => {
+    const t = createConcurrencyTracker({ cap: 1, idleMs: 30_000 })
+    t.tryAcquire(baseOpts('u1', 's1'))
+    expect(t.tryAcquire(baseOpts('u2', 's2')).ok).toBe(false) // cap full
+    // wrong tuple does not free anything
+    expect(t.releaseByResource('u1', 'live', '999')).toBe(false)
+    expect(t.size()).toBe(1)
+    // correct tuple frees the slot
+    expect(t.releaseByResource('u1', 'live', '1')).toBe(true)
+    expect(t.size()).toBe(0)
+    // now u2 can acquire
+    expect(t.tryAcquire(baseOpts('u2', 's2')).ok).toBe(true)
+  })
+
+  it('resource-keyed methods discriminate on all three of (sub, kind, resourceId)', () => {
+    const t = createConcurrencyTracker({ cap: 5, idleMs: 30_000 })
+    t.tryAcquire({ ...baseOpts('u1', 's1'), kind: 'live', resourceId: '1' })
+    t.tryAcquire({ ...baseOpts('u1', 's2'), kind: 'vod', resourceId: '1' })
+    // same sub+resourceId but different kind must be distinct sessions
+    expect(t.size()).toBe(2)
+    expect(t.releaseByResource('u1', 'live', '1')).toBe(true)
+    expect(t.size()).toBe(1)
+    expect(t.list()[0].kind).toBe('vod')
+    expect(t.heartbeatByResource('u1', 'vod', '1')).toBe(true)
+  })
 })
