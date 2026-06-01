@@ -1256,4 +1256,71 @@ mod tests {
         assert!(!is_video_file("metadata.nfo"));
         assert!(!is_video_file("noextension"));
     }
+
+    /// Create a synthetic library of `n` video files (plus `noise` non-video
+    /// sidecar files) under `root`, returning the count of video files written.
+    /// Files have real bytes so `file_stat` reports a non-zero size; the probe
+    /// itself is driven by the deterministic echoing stub, not these contents.
+    #[cfg(unix)]
+    fn build_synthetic_library(root: &Path, n: usize, noise: usize) -> usize {
+        use std::io::Write;
+        for i in 0..n {
+            let p = root.join(format!("Movie {i} (2020).mkv"));
+            let mut f = std::fs::File::create(&p).unwrap();
+            f.write_all(b"not real video bytes").unwrap();
+        }
+        for i in 0..noise {
+            let p = root.join(format!("notes_{i}.txt"));
+            let mut f = std::fs::File::create(&p).unwrap();
+            f.write_all(b"sidecar").unwrap();
+        }
+        n
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn scan_probe_path_throughput_parametrized() {
+        // Real benchmark for the SLOW path: empty-file scans let ffprobe fail
+        // fast or be absent, so they never time the spawn+parse cost that
+        // dominates a first-time production scan. This drives a SUCCESSFUL
+        // ffprobe per file via a deterministic stub, plus the same file_stat +
+        // is_video_file walk work production does, so it models the real scan.
+        let stub_dir = tempfile::tempdir().unwrap();
+        let stub = crate::probe::write_echoing_stub_path(stub_dir.path());
+
+        for &n in &[10usize, 50, 200] {
+            let tmp = tempfile::tempdir().unwrap();
+            build_synthetic_library(tmp.path(), n, n / 5);
+
+            let mut probed = 0usize;
+            let start = std::time::Instant::now();
+            for entry in WalkDir::new(tmp.path()).follow_links(true) {
+                let entry = entry.unwrap();
+                if !entry.file_type().is_file() {
+                    continue;
+                }
+                let name = entry.file_name().to_str().unwrap();
+                if !is_video_file(name) {
+                    continue;
+                }
+                let path = entry.path();
+                let _stat = file_stat(path).unwrap();
+                let p = crate::probe::ffprobe_with_bin_for_test(stub.to_str().unwrap(), path)
+                    .await
+                    .expect("stub probe must succeed");
+                // Touch a parsed field so the parse is not optimized away.
+                assert!(p.video_height.is_some());
+                probed += 1;
+            }
+            let elapsed = start.elapsed();
+
+            assert_eq!(probed, n, "every video file must be probed (n={n})");
+            if n == 200 {
+                assert!(
+                    elapsed < std::time::Duration::from_secs(30),
+                    "200-file probe-path scan took {elapsed:?} (regression tripwire)"
+                );
+            }
+        }
+    }
 }
