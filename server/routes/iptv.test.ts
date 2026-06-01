@@ -158,6 +158,20 @@ describe('catchup stream grant + proxy', () => {
     )
     fetchSpy.mockRestore()
   })
+
+  it('maps an upstream error status to 502 upstream_<status>', async () => {
+    const startUtc = '2026-05-24T12:00:00Z'
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('nope', { status: 404 }))
+
+    const res = await app.request(
+      `/api/iptv/stream/catchup/10/${encodeURIComponent(startUtc)}/30.ts?t=${fakeToken('catchup', `10|${startUtc}|30`)}`,
+    )
+
+    expect(res.status).toBe(502)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toBe('upstream_404')
+    fetchSpy.mockRestore()
+  })
 })
 
 vi.mock('../services/iptvSync.js', () => ({
@@ -306,6 +320,32 @@ describe('vod stream grant + proxy', () => {
     expect(text).toContain(`/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', 'https://panel.example.com/movie/u/p/seg-001.ts'))}`)
     fetchSpy.mockRestore()
   })
+
+  it('maps an upstream error status on the Range path to 502 upstream_<status>', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('gone', { status: 502 }))
+
+    const res = await app.request('/api/iptv/stream/vod/20/mp4?t=fake.vod.MjA', {
+      headers: { Range: 'bytes=0-2' },
+    })
+
+    expect(res.status).toBe(502)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toBe('upstream_502')
+    fetchSpy.mockRestore()
+  })
+
+  it('maps an ok-but-bodyless upstream response on the Range path to 502', async () => {
+    // proxyRangeable also 502s when the upstream is 2xx but carries no body
+    // (e.g. a 204/empty 200 the player cannot consume as video bytes).
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(null, { status: 204 }))
+
+    const res = await app.request('/api/iptv/stream/vod/20/mp4?t=fake.vod.MjA')
+
+    expect(res.status).toBe(502)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toBe('upstream_204')
+    fetchSpy.mockRestore()
+  })
 })
 
 describe('series stream grant', () => {
@@ -346,6 +386,21 @@ describe('segment proxy', () => {
     expect(fetchSpy).toHaveBeenCalledWith(upstreamUrl, expect.objectContaining({
       headers: { Range: 'bytes=0-2' },
     }))
+    fetchSpy.mockRestore()
+  })
+
+  it('maps an upstream error status to 502 upstream_<status>', async () => {
+    const upstreamUrl = 'https://cdn.example.com/foo/seg.ts'
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('upstream down', { status: 503 }))
+
+    const res = await app.request(
+      `/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', upstreamUrl))}`,
+    )
+
+    expect(res.status).toBe(502)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toBe('upstream_503')
+    expect(fetchSpy).toHaveBeenCalledWith(upstreamUrl, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     fetchSpy.mockRestore()
   })
 
