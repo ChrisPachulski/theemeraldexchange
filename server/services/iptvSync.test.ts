@@ -88,4 +88,25 @@ describe('iptv sync orchestrator', () => {
     expect(ok[0].channels).toBe(1)
     db.close()
   }, 5000)
+
+  it('stores error state when sync fails', async () => {
+    const { fetchLiveStreams } = await import('./xtream.js')
+    vi.mocked(fetchLiveStreams).mockRejectedValueOnce(new Error('fetch_live_failed'))
+
+    const db = openIptvDb(dbFile)
+    await expect(syncOnce(db)).rejects.toThrow('fetch_live_failed')
+
+    // Verify error state was saved
+    const ts = db.stmts.getSyncState.get('last_sync') as { value: string; ts: string } | undefined
+    expect(ts?.value).toContain('error:')
+    expect(ts?.value).toContain('fetch_live_failed')
+    db.close()
+
+    // Restore mock
+    vi.mocked(fetchLiveStreams).mockResolvedValue([
+      { stream_id: 10, num: 1, name: 'C', stream_icon: null, epg_channel_id: 'c.1',
+        category_id: 1, is_adult: 0, tv_archive: 1, tv_archive_duration: 7,
+        added_ts: null, fetched_at: '2026-05-24T00:00:00Z' },
+    ])
+  })
 })
