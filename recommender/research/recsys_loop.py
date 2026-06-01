@@ -489,6 +489,53 @@ def section4_ablations() -> dict:
 
 # --- SYNTHESIS (updated every iteration: current best metric + what changed) --
 SYNTHESIS = """
+=== SYNTHESIS (iteration 5, capstone) ===
+BEST CONFIG: co-engagement RETRIEVAL UNION + content scoring. Candidates =
+MiniLM-ANN-800 pool UNION the PMI co-engagement neighbors of the library
+(MovieLens-derived), scored by content fusion (text+cast+crew). Movie:
+  nDCG@10  0.0081 -> 0.0173 (2.1x) vs content-only on the SAME harness;
+  recall@50 0.0452 -> 0.1328 (2.9x); ~8x nDCG@10 / ~7.7x recall@50 vs the
+  original mmr_diverse baseline. leakage_filtered@50 = 0.
+This CONFIRMS the iteration-4 diagnosis: co-engagement helps as RETRIEVAL (a
+candidate source), not as a re-rank score. union_content ~= union_fused (the
+co-engagement SCORE term adds nothing; z-score-clean) -> the win is the
+candidate SET. (Production item-to-item is an ANN candidate source: Covington
+p3; the edges carry the lift: LightGCN p1-2, Spotify edges-only p7-8.)
+
+HONEST LIMIT (the stated cross-creator goal was NOT achieved): the NOVEL stratum
+(no shared cast/crew) STAYS 0 recall. The 2.9x lift is creator-twin recall
+amplification (creator_twin recall@50 0.0508 -> 0.1495; the 89% majority). Truly
+content-AND-creator-novel titles have co-engagement edges too weak to rank among
+~5,362 candidates. Cross-creator recall needs household IMPLICIT FEEDBACK +
+EXPLORATION (Variant A: BaRT/YouTube), not content + an imported graph.
+
+CEILING: held_out_in_universe_frac = 0.64 (36% of held-out titles are not
+candidates at all -> auto-0). recall@50 (0.13) << 0.64, so SCORING is the
+binding constraint, not pool size (rebuts the big-pool-artifact concern).
+
+DEPLOYABILITY: precompute the per-library co-engagement neighbor lists; scoring
+a ~5,362-candidate union is ~6.7x the 800-pool cost but bounded and cacheable.
+The fusion vectors must also be precomputed into the index (research uses scipy).
+
+TV: still unsolved (MovieLens is movies-only; needs a TV-inclusive co-engagement
+source).
+
+LADDER AHEAD (iteration 6 = convergence iteration):
+  -> confirm union stability (deterministic; re-run) + lock the leaner config;
+  -> precision refinements: popularity-cap / per-item neighbor cap on the union
+     (Abdollahpouri) to lift nDCG@10 without losing recall;
+  -> write the CONVERGENCE ARGUMENT.
+  -> (future milestone, not this loop) Variant A implicit-feedback+exploration
+     for the novel stratum; TV co-engagement source.
+
+TENSIONS: retrieval vs scoring (a better score can't recall an un-retrieved
+candidate -- the whole iter-5 win is retrieval); overall-recall vs novel-stratum
+(co-engagement amplifies the creator-twin majority, not cross-creator discovery).
+RESOLVED: z-score asymmetry (monotonic, no ranking effect); big-pool artifact
+(in-universe ceiling); LOO-leakage (foreign graph, zero household signal).
+"""
+
+_SYNTHESIS_ITER4 = """
 === SYNTHESIS (iteration 4) ===
 BEST CONFIG UNCHANGED + NOW LOCKED: fused_balanced (== text+cast+crew) movie
 nDCG@10 0.0106, reproduced EXACTLY this iteration (deterministic) -> stable
