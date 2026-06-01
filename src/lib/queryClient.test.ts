@@ -37,11 +37,18 @@ async function freshModule(): Promise<{ mod: QueryClientModule; ApiError: ApiErr
 }
 
 function fireQueryError(mod: QueryClientModule, error: unknown): void {
-  mod.queryClient.getQueryCache().config.onError?.(error, STUB)
+  // react-query v5 types the queryCache onError error param as `Error`. The
+  // helper keeps `unknown` so tests can pass plain Errors and ApiErrors alike;
+  // handleAuthError only reads `.status`/`instanceof ApiError`, so the cast is
+  // sound for the values these tests own.
+  mod.queryClient.getQueryCache().config.onError?.(error as Error, STUB)
 }
 
 function fireMutationError(mod: QueryClientModule, error: unknown): void {
-  mod.queryClient.getMutationCache().config.onError?.(error, STUB, STUB, STUB)
+  // mutationCache onError in this query-core is
+  // (error, variables, onMutateResult, mutation, context) — 5 params. Only the
+  // error is consumed by handleAuthError; the trailing four are STUBs.
+  mod.queryClient.getMutationCache().config.onError?.(error as Error, STUB, STUB, STUB, STUB)
 }
 
 // A real EventTarget gives genuine addEventListener/dispatchEvent semantics.
@@ -56,6 +63,14 @@ function installWindow(): FakeWindow {
 
 let win: FakeWindow
 let listener: ReturnType<typeof vi.fn>
+
+// A vitest Mock is not structurally a DOM EventListener, so register it through
+// one typed bridge (the standard `as unknown as` double-cast, no `any`). Keeping
+// the cast in a single helper means the test bodies stay readable and the mock's
+// `.mock.calls` assertion ergonomics are preserved.
+function addListener(target: EventTarget, type: string): void {
+  target.addEventListener(type, listener as unknown as EventListener)
+}
 
 beforeEach(() => {
   // Hold time still so the 2s debounce is deterministic unless a test advances it.
@@ -72,7 +87,7 @@ afterEach(() => {
 describe('queryClient session-expiry dispatch', () => {
   it('dispatches SESSION_EXPIRED_EVENT once for an ApiError 401 surfaced through the queryCache', async () => {
     const { mod, ApiError } = await freshModule()
-    win.addEventListener(mod.SESSION_EXPIRED_EVENT, listener)
+    addListener(win, mod.SESSION_EXPIRED_EVENT)
 
     fireQueryError(mod, new ApiError(401, 'x'))
 
@@ -83,7 +98,7 @@ describe('queryClient session-expiry dispatch', () => {
 
   it('dispatches for ApiError 403', async () => {
     const { mod, ApiError } = await freshModule()
-    win.addEventListener(mod.SESSION_EXPIRED_EVENT, listener)
+    addListener(win, mod.SESSION_EXPIRED_EVENT)
 
     fireQueryError(mod, new ApiError(403, 'forbidden'))
 
@@ -92,7 +107,7 @@ describe('queryClient session-expiry dispatch', () => {
 
   it('does NOT dispatch for ApiError 500', async () => {
     const { mod, ApiError } = await freshModule()
-    win.addEventListener(mod.SESSION_EXPIRED_EVENT, listener)
+    addListener(win, mod.SESSION_EXPIRED_EVENT)
 
     fireQueryError(mod, new ApiError(500, 'boom'))
 
@@ -101,7 +116,7 @@ describe('queryClient session-expiry dispatch', () => {
 
   it('does NOT dispatch for a non-ApiError (plain Error)', async () => {
     const { mod } = await freshModule()
-    win.addEventListener(mod.SESSION_EXPIRED_EVENT, listener)
+    addListener(win, mod.SESSION_EXPIRED_EVENT)
 
     fireQueryError(mod, new Error('network down'))
 
@@ -110,7 +125,7 @@ describe('queryClient session-expiry dispatch', () => {
 
   it('debounces a burst: two 401s within 2000ms dispatch only once', async () => {
     const { mod, ApiError } = await freshModule()
-    win.addEventListener(mod.SESSION_EXPIRED_EVENT, listener)
+    addListener(win, mod.SESSION_EXPIRED_EVENT)
 
     // Date.now is pinned at 1_000_000 by beforeEach; second call is < 2000ms later.
     fireQueryError(mod, new ApiError(401, 'first'))
@@ -122,7 +137,7 @@ describe('queryClient session-expiry dispatch', () => {
 
   it('dispatches again after the debounce window elapses', async () => {
     const { mod, ApiError } = await freshModule()
-    win.addEventListener(mod.SESSION_EXPIRED_EVENT, listener)
+    addListener(win, mod.SESSION_EXPIRED_EVENT)
 
     fireQueryError(mod, new ApiError(401, 'first'))
     // Advance to exactly the 2000ms boundary (now - lastDispatch === 2000, not < 2000).
@@ -134,9 +149,22 @@ describe('queryClient session-expiry dispatch', () => {
 
   it('mutationCache onError also dispatches on 401', async () => {
     const { mod, ApiError } = await freshModule()
-    win.addEventListener(mod.SESSION_EXPIRED_EVENT, listener)
+    addListener(win, mod.SESSION_EXPIRED_EVENT)
 
     fireMutationError(mod, new ApiError(401, 'x'))
+
+    expect(listener).toHaveBeenCalledTimes(1)
+  })
+
+  it('queryCache and mutationCache share one debounce: a 401 on each within 2000ms dispatches only once', async () => {
+    const { mod, ApiError } = await freshModule()
+    addListener(win, mod.SESSION_EXPIRED_EVENT)
+
+    // Both caches funnel through the same module-scoped `lastDispatch` clock.
+    // Date.now is pinned at 1_000_000 by beforeEach; the second hit is < 2000ms later.
+    fireQueryError(mod, new ApiError(401, 'query'))
+    vi.spyOn(Date, 'now').mockReturnValue(1_000_000 + 1_999)
+    fireMutationError(mod, new ApiError(401, 'mutation'))
 
     expect(listener).toHaveBeenCalledTimes(1)
   })
