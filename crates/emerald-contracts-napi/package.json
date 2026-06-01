@@ -21,7 +21,7 @@
   "scripts": {
     "build": "node scripts/build-with-dts-guard.mjs build --platform --release",
     "build:debug": "node scripts/build-with-dts-guard.mjs build --platform",
-    "prepare": "node -e \"if (!require('fs').existsSync(require('path').join(__dirname, 'emerald-contracts-napi.' + (process.platform === 'darwin' ? (process.arch === 'arm64' ? 'darwin-arm64' : 'darwin-x64') : process.platform === 'linux' ? (process.arch === 'arm64' ? 'linux-arm64-gnu' : 'linux-x64-gnu') : 'win32-x64-msvc') + '.node'))) { require('child_process').execSync('node scripts/build-with-dts-guard.mjs build --platform --release', { stdio: 'inherit', cwd: __dirname }) }\""
+    "prepare": "node scripts/prepare.mjs"
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.7.0"
