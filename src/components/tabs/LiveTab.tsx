@@ -39,7 +39,7 @@ function formatGuideTime(iso: string): string {
 
 export default function LiveTab() {
   const [q, setQ] = useState('')
-  const [view, setView] = useState<'cards' | 'guide'>('cards')
+  const [view, setView] = useState<'cards' | 'guide'>('guide')
   const [categoryId, setCategoryId] = useState<number | undefined>(undefined)
   const [offset, setOffset] = useState(0)
   const [playing, setPlaying] = useState<{ grant: StreamGrant; title: string; itemId: string } | null>(null)
