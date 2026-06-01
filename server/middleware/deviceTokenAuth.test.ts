@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -167,5 +167,13 @@ describe('deviceSessionToSession', () => {
     expect(session.role).toBe('admin')
     expect(session.auth_mode).toBe('apple')
     expect('plexAuthToken' in session).toBe(false)
+  })
+
+  // IR-3: this file sets ADMIN_SUBS + SERVER_DB_PATH at module load; restore the
+  // shared process.env after the suite so those gate vars cannot leak into sibling
+  // test files that Vitest co-locates in the same worker.
+  afterAll(() => {
+    delete process.env.ADMIN_SUBS
+    delete process.env.SERVER_DB_PATH
   })
 })
