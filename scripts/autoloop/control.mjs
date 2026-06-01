@@ -13,6 +13,10 @@ const DEFAULTS = {
   MAX_TOKENS_PER_WINDOW: 4_000_000,
   NOTIFY: 'osascript',
   SCOPE: 'anything',
+  // Seconds between windows while the guard says `go` (window healthy). The
+  // driver uses the guard's nextDelaySeconds VERBATIM, so this is the hard
+  // upper bound on idle time during a healthy window — no lazy 30-min gaps.
+  CADENCE_SECONDS: 120,
   // Claude-window ceilings (%) — stay under 100 so the loop never pushes into
   // paid overage. The guard idles until reset when a ceiling is hit.
   FIVE_HOUR_CEILING: 85,

@@ -47,14 +47,14 @@ If the last **two** windows were dry (no new branch) AND a quick goal scan
 `node scripts/autoloop/notify.mjs "[autoloop] CONVERGED — EEX-GOALS-MET" "<summary>"`, print
 `<promise>EEX-GOALS-MET</promise>`, and **end the loop**.
 
-## 6. Schedule the next window — run NEAR-CONTINUOUSLY while the window is healthy
-`ScheduleWakeup` with the same `/loop` prompt. The default is **dense**, not lazy:
-- **Comfortable headroom** (both 5h and 7d are ≥5 points below their ceilings): use **~120s**.
-  The point of this loop is to keep working; back-to-back windows are expected and correct.
-- **Approaching a ceiling** (within 5 points of either ceiling): use the guard's `sleepSeconds`
-  (idle to the reset) so we never cross into overage.
-The guard re-gates every wake, so a short delay is safe — it will flip to idle/stop the instant
-the window tightens. Never sit on a 30–60 min gap while headroom is wide.
+## 6. Schedule the next window — delay is the GUARD's call, not yours
+The guard's JSON from step 1 carries the authoritative delay. **Use it verbatim — do NOT
+substitute your own pacing judgment** (that is what caused 30-min idle gaps):
+- `action: "go"` → `ScheduleWakeup(delaySeconds = guard.nextDelaySeconds)` (≈120s — dense).
+- `action: "idle"` → `ScheduleWakeup(delaySeconds = min(3600, guard.sleepSeconds))`.
+Either way, re-fire the same `/loop` prompt. The only long sleeps come from `idle` (window
+genuinely tight → waiting for reset to avoid overage). While `go`, you run near-continuously;
+never invent a longer delay because the window "feels" busy — the guard already accounts for it.
 
 ## Hard rules
 - Branches only — **never commit to main, never deploy** (first run).

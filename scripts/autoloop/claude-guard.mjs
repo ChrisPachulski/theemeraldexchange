@@ -28,6 +28,11 @@ const FETCHER = path.join(HOME, '.claude', 'hooks', 'usage-fetcher.js');
 // Default ceilings: stay well under 100% so we never push into paid overage.
 const DEFAULT_5H_CEILING = 85;
 const DEFAULT_7D_CEILING = 90;
+// Deterministic cadence: when the guard says `go`, this is the EXACT delay the
+// driver must use for the next ScheduleWakeup — no LLM pacing judgment. Keeps
+// the loop near-continuous while the window is healthy. Long sleeps only ever
+// come from the `idle` branch (window genuinely tight → wait for reset).
+const DEFAULT_CADENCE_SECONDS = 120;
 
 function readJson(p) { try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; } }
 
@@ -100,6 +105,11 @@ export function evaluate(autoloopDir = path.join(process.cwd(), '.autoloop'), op
 
   out.headroom = { five_hour_pct: tel.five_hour_pct, seven_day_pct: tel.seven_day_pct,
     five_h_to_ceiling: c5 - (tel.five_hour_pct ?? 0), seven_d_to_ceiling: c7 - (tel.seven_day_pct ?? 0) };
+  // Authoritative next-window delay. The driver uses this VERBATIM — it is not
+  // a suggestion. While `go`, the window is by definition below both ceilings,
+  // so a dense cadence is safe: if it ever tightens, the very next evaluate()
+  // returns `idle` with sleepSeconds instead. This is what kills long idle gaps.
+  out.nextDelaySeconds = Math.max(30, Number(control.CADENCE_SECONDS ?? opts.cadenceSeconds ?? DEFAULT_CADENCE_SECONDS));
   return out;
 }
 
