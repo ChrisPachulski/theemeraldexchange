@@ -1256,4 +1256,175 @@ mod tests {
         assert!(!is_video_file("metadata.nfo"));
         assert!(!is_video_file("noextension"));
     }
+
+    // ── scan_once fixture harness ─────────────────────────────────────────
+    //
+    // These tests drive the real `scan_once` WalkDir walk end-to-end against a
+    // synthetic on-disk library, locking in the documented success criterion at
+    // the top of this file ("a 100-file fixture library scans in < 5s"). The
+    // lower-level tests above call `index_file`/`backfill` directly and never
+    // exercise the walk, the `is_video_file` filter, or the
+    // `files_seen`/`errors` accounting.
+    //
+    // CRITICAL: `scan_once` calls `probe::ffprobe` on every NEW video file, and
+    // ffprobe is a real external binary that may be absent in CI (and cannot
+    // probe empty files anyway). On a probe failure the code does
+    // `warn + errors += 1 + continue`. So these assertions target only
+    // counters that are deterministic regardless of whether ffprobe exists:
+    // `files_seen` (incremented before any probe, once per `is_video_file`
+    // match) is the reliable target. We do NOT assert indexed movie/episode
+    // counts, which depend on ffprobe succeeding.
+
+    use crate::filename::RootKind;
+    use tempfile::tempdir;
+
+    /// Build a synthetic library under `dir`: `n_videos` empty video files with
+    /// realistic movie/episode names cycling through `VIDEO_EXTENSIONS`, spread
+    /// across nested subdirectories to prove recursion, plus `n_decoys`
+    /// non-video files and an empty subdir to prove the `is_video_file` filter
+    /// and the `is_file()` check exclude them.
+    fn build_synthetic_library(dir: &std::path::Path, n_videos: usize, n_decoys: usize) {
+        use std::fs::{File, create_dir_all};
+
+        // A couple of nested subdirs so the walk has to recurse.
+        let sub_a = dir.join("Movies");
+        let sub_b = dir.join("Shows").join("Season 01");
+        create_dir_all(&sub_a).unwrap();
+        create_dir_all(&sub_b).unwrap();
+        // An empty subdir that must be skipped (not a file).
+        create_dir_all(dir.join("empty_dir")).unwrap();
+
+        for i in 0..n_videos {
+            let ext = VIDEO_EXTENSIONS[i % VIDEO_EXTENSIONS.len()];
+            // Alternate movie-style and episode-style names, and alternate the
+            // target subdirectory so recursion is exercised.
+            let (name, target) = if i % 2 == 0 {
+                (format!("Blade Runner {i} (1982).{ext}"), &sub_a)
+            } else {
+                let season = (i % 3) + 1;
+                let episode = (i % 9) + 1;
+                (format!("Show {i} S{season:02}E{episode:02}.{ext}"), &sub_b)
+            };
+            File::create(target.join(name)).unwrap();
+        }
+
+        // Decoys: non-video files plus a `.partial` (a video ext with a trailing
+        // suffix, which must NOT match). Cycle through a few extensions.
+        let decoy_exts = ["nfo", "srt", "txt", "jpg", "mkv.partial"];
+        for i in 0..n_decoys {
+            let ext = decoy_exts[i % decoy_exts.len()];
+            File::create(sub_a.join(format!("decoy_{i}.{ext}"))).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn scan_once_walks_synthetic_library_and_counts_only_videos() {
+        let tmp = tempdir().unwrap();
+        build_synthetic_library(tmp.path(), 12, 8);
+        let db = Db::connect_memory().await.unwrap();
+        let roots = vec![LibraryRoot {
+            path: tmp.path().to_path_buf(),
+            kind: RootKind::Movies,
+        }];
+        let report = scan_once(&db, &roots, &no_tmdb()).await.unwrap();
+        // Only the 12 video files are seen; the 8 decoys and the directories
+        // (including the empty one) are filtered out before the counter. This
+        // is the core, ffprobe-independent assertion.
+        assert_eq!(report.files_seen, 12);
+    }
+
+    #[tokio::test]
+    async fn scan_once_skips_unchanged_files_on_rescan() {
+        // Proves the skip-unchanged fast path: when a media_files row already
+        // matches the on-disk `(path, size_bytes, mtime)`, the scanner takes the
+        // probe-FREE backfill branch and `continue`s — no ffprobe call. We
+        // pre-seed rows whose path/size/mtime EXACTLY match the fixture files
+        // (replicating `file_stat`'s RFC3339 mtime format), then assert the
+        // first scan is all-skips: `files_seen == video count` and `errors == 0`
+        // (a probe attempt on an empty file would otherwise bump `errors`).
+        let tmp = tempdir().unwrap();
+        build_synthetic_library(tmp.path(), 6, 3);
+        let db = Db::connect_memory().await.unwrap();
+
+        // Pre-seed a matching media_files row for every on-disk video file using
+        // the SAME size + mtime the scanner will compute, so the
+        // `prev_size == size_bytes && prev_mtime == mtime` skip branch fires.
+        for entry in WalkDir::new(tmp.path()).follow_links(true) {
+            let entry = entry.unwrap();
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let name = entry.file_name().to_str().unwrap();
+            if !is_video_file(name) {
+                continue;
+            }
+            let path = entry.path();
+            let (size_bytes, mtime) = file_stat(path).unwrap();
+            sqlx::query(
+                "INSERT INTO media_files \
+                 (path, size_bytes, mtime, container, duration_secs, video_codec, \
+                  video_height, video_profile, hdr_format, audio_tracks_json, \
+                  subtitle_tracks_json, scanned_at) \
+                 VALUES (?, ?, ?, 'mkv', 1, 'h264', 1080, NULL, NULL, '[]', '[]', 't')",
+            )
+            .bind(path.to_str().unwrap())
+            .bind(size_bytes)
+            .bind(&mtime)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
+
+        let roots = vec![LibraryRoot {
+            path: tmp.path().to_path_buf(),
+            kind: RootKind::Auto,
+        }];
+        let report = scan_once(&db, &roots, &no_tmdb()).await.unwrap();
+        // Every video file matched an unchanged row, so the probe-free backfill
+        // branch was taken for all of them: no ffprobe, hence no probe errors.
+        assert_eq!(report.files_seen, 6);
+        assert_eq!(
+            report.errors, 0,
+            "unchanged files must take the probe-free skip path (no ffprobe, no errors)"
+        );
+        // No new files were probed/indexed on this all-unchanged pass.
+        assert_eq!(report.files_added, 0);
+        assert_eq!(report.files_updated, 0);
+    }
+
+    #[tokio::test]
+    async fn scan_once_100_file_library_under_5s() {
+        // Coarse regression guard for the stated success criterion (scanner.rs
+        // line 11: "a 100-file fixture library scans in < 5s"). NOT a benchmark:
+        // empty files fail ffprobe fast (or ffprobe is absent), so the walk +
+        // stat + lookup loop dominates and should be well under the ceiling.
+        let tmp = tempdir().unwrap();
+        build_synthetic_library(tmp.path(), 100, 0);
+        let db = Db::connect_memory().await.unwrap();
+        let roots = vec![LibraryRoot {
+            path: tmp.path().to_path_buf(),
+            kind: RootKind::Movies,
+        }];
+        let start = std::time::Instant::now();
+        let report = scan_once(&db, &roots, &no_tmdb()).await.unwrap();
+        let elapsed = start.elapsed();
+        assert_eq!(report.files_seen, 100);
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "scan took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn is_video_file_filters_extensions() {
+        // Pins the filter behavior the harness relies on: known video
+        // extensions match (case-insensitively), everything else does not.
+        assert!(is_video_file("a.mkv"));
+        assert!(is_video_file("A.MP4"));
+        assert!(!is_video_file("a.nfo"));
+        assert!(!is_video_file("noext"));
+        // A trailing `.partial` suffix means the real extension is not a video
+        // extension, so it must be excluded.
+        assert!(!is_video_file("a.mkv.partial"));
+    }
 }
