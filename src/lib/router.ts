@@ -5,9 +5,13 @@ export type Route = 'home' | 'tv' | 'movies' | 'media' | 'downloads' | 'users' |
 const ROUTES: Route[] = ['home', 'tv', 'movies', 'media', 'live', 'downloads', 'users']
 const DEFAULT_ROUTE: Route = 'home'
 
-function parseHash(): Route {
+export function parseHash(): Route {
   const raw = window.location.hash.replace(/^#\/?/, '').trim().toLowerCase()
   return (ROUTES as string[]).includes(raw) ? (raw as Route) : DEFAULT_ROUTE
+}
+
+export function nextHash(current: Route, next: Route): string | null {
+  return next === current ? null : `#/${next}`
 }
 
 export function useRoute(): [Route, (next: Route) => void] {
@@ -20,8 +24,8 @@ export function useRoute(): [Route, (next: Route) => void] {
   }, [])
 
   const navigate = (next: Route) => {
-    if (next === route) return
-    window.location.hash = `#/${next}`
+    const target = nextHash(route, next)
+    if (target !== null) window.location.hash = target
   }
 
   return [route, navigate]
