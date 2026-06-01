@@ -26,10 +26,32 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
   exit 0
 fi
 
+PROMPT="/loop Run exactly one iteration by following the instructions in scripts/autoloop/loop-prompt.md, then schedule the next per that file."
+
 tmux new-session -d -s "$SESSION" -c "$REPO"
 tmux send-keys -t "$SESSION" "claude" Enter
-sleep 8   # let the Claude Code TUI boot before issuing the slash command
-tmux send-keys -t "$SESSION" "/loop Run exactly one iteration by following the instructions in scripts/autoloop/loop-prompt.md, then schedule the next per that file." Enter
+
+# Wait for the TUI to actually be ready (boot time varies per machine) — the
+# footer shows "bypass permissions" once the prompt accepts input. Poll up to 60s.
+ready=0
+for _ in $(seq 1 60); do
+  if tmux capture-pane -t "$SESSION" -p 2>/dev/null | grep -q "bypass permissions"; then ready=1; break; fi
+  sleep 1
+done
+[ "$ready" = 1 ] || { echo "WARN: TUI not confirmed ready after 60s; sending anyway"; }
+
+# Type the prompt, then submit — and VERIFY it submitted (Enter can land before
+# the TUI is listening). Retry the Enter until the command leaves the input line.
+tmux send-keys -t "$SESSION" "$PROMPT"
+sleep 1
+submitted=0
+for _ in $(seq 1 8); do
+  tmux send-keys -t "$SESSION" Enter
+  sleep 2
+  # If the prompt text is no longer sitting in the input buffer, it submitted.
+  if ! tmux capture-pane -t "$SESSION" -p 2>/dev/null | grep -q "❯ /loop"; then submitted=1; break; fi
+done
+if [ "$submitted" = 1 ]; then echo "kicked off /loop (submit verified)."; else echo "WARN: could not confirm /loop submitted — attach and press Enter."; fi
 
 echo "started in tmux session '$SESSION'."
 echo "  watch:  tmux attach -t $SESSION   (detach: Ctrl-b then d)"
