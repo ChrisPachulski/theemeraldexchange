@@ -1,12 +1,37 @@
 # Recommender research loop — iteration log
 
-## CURRENT STATE (after iteration 4)
+## CURRENT STATE (after iteration 5, capstone)
 
-**Best config LOCKED:** `fused_balanced` (== `text+cast+crew`; genre/keyword add
-nothing) — movie nDCG@10 **0.0106**, reproduced EXACTLY in iteration 4 →
-**stable across the last 2 iterations**. recall@10 0.0279 (21/753), leakage 0.
-Iteration 4 = ablations (closed all devils-advocate items) + Variant B
-(co-engagement) which gave a decisive **negative-but-informative** result.
+**Best config: co-engagement RETRIEVAL UNION + content scoring.** Candidates =
+MiniLM-ANN-800 pool ∪ PMI co-engagement neighbors of the library (MovieLens),
+scored by content fusion (text+cast+crew). Movie headline:
+
+| movie | original baseline (mmr) | content-only (same harness) | **union (best)** |
+|---|---|---|---|
+| **nDCG@10** | 0.0021 | 0.0081 | **0.0173** (8.2× base / 2.1× content) |
+| recall@50 | 0.0173 | 0.0452 | **0.1328** (7.7× base / 2.9× content) |
+| recall@10 | 0.0053 | 0.0173 | **0.0412** |
+| leakage_filtered@50 | 0 | 0 | **0** |
+
+The win is the candidate SET (retrieval), not the co-engagement score term
+(`union_content` ≈ `union_fused`, z-score-clean). This confirms the iteration-4
+retrieval-gate diagnosis. **deterministic; reproduced identically across two
+runs in iteration 5.**
+
+**HONEST LIMITS (not spin):**
+- The **cross-creator goal was NOT achieved**: the novel stratum (no shared
+  cast/crew) stays **0** recall. The 2.9× lift is creator-twin recall
+  amplification (the 89% majority; creator_twin recall@50 0.0508→0.1495). Cross-
+  creator recall needs household implicit feedback + exploration (Variant A) —
+  out of reach with content + an imported graph alone.
+- Ceiling: held-out-in-universe 0.64 (36% auto-0). recall@50 (0.13) ≪ 0.64 →
+  scoring binds, not pool size.
+- TV still unsolved (MovieLens is movies-only).
+- Deployability: precompute per-library co-engagement neighbor lists + fused
+  vectors; scoring a ~5,362-candidate union is ~6.7× the 800-pool cost (bounded).
+
+**Prior best (superseded):** `fused_balanced` (== text+cast+crew) movie nDCG@10
+0.0106, stable across iters 3-4. The union supersedes it.
 
 **Iteration-4 outcomes (detail in the Iteration 4 entry):**
 - Feature isolation: the lift is **cast+crew** (text_castcrew 0.0107 ≈ balanced);
@@ -433,3 +458,78 @@ library, then fused (text+cast+crew) scoring; measure novel-stratum + overall
 recall lift (the 3% -> ? test) and whether it lifts the movie headline beyond
 0.0106. Note the TV gap needs a TV-inclusive co-engagement source (separate
 sourcing) — scope it explicitly.
+
+---
+
+## Iteration 5 (capstone: co-engagement RETRIEVAL union)
+
+**Implemented** `coengagement.evaluate_retrieval_union` + `coengagement_candidates`
+(+ reverse index, + graph disk-cache). Candidate universe = MiniLM-ANN-800 pool
+∪ PMI co-engagement neighbors of the library (both directions), scored by content
+fusion (text+cast+crew); optional + beta*z(cooccur). Stratified creator_twin/novel.
+
+**Metrics (cited from `iter_5_output.txt`):**
+- REF content_only (ann pool, no union): all recall@10 0.0173, recall@50 0.0452,
+  nDCG@10 0.0081; novel 0.0.
+- union_content (z-scored): all recall@10 0.0412, recall@50 0.1328, nDCG@10
+  0.0173; creator_twin recall@50 0.1495; **novel 0.0**; mean_universe 5362;
+  held_out_in_universe 0.6401; leakage 0.
+- union_fused beta0.5: recall@50 0.1288, nDCG@10 0.0176 (≈ union_content).
+- union_fused beta1.0: recall@50 0.1222, nDCG@10 0.0145 (worse — over-weighting
+  cooccur pulls popular co-engaged noise).
+- Reproduced identically across two runs (pre- and post- z-score fix) ⇒ deterministic.
+
+**Interpretation / deltas:** the retrieval union is the BEST config — recall@50
+2.9× and nDCG@10 2.1× over content-only on the SAME harness (8.2×/7.7× over the
+original baseline). Holding scoring constant (content) across content_only(800)
+vs union_content isolates the lift to the CANDIDATE SET = retrieval. The
+co-engagement SCORE term adds nothing (union_content ≈ union_fused). Confirms
+iteration-4: co-engagement helps as a candidate SOURCE, not a re-ranker.
+
+**Adversarial review (/devils-advocate, scheduled iter 5):** triaged —
+- [z-score asymmetry, FIXED] content path now z-scored; z-score is monotonic so
+  ranking is unchanged — the fix confirmed the prior numbers exactly (no effect),
+  and the union_content≈union_fused conclusion is now clean.
+- [novel=0 / goal not met, ACCEPTED + reframed] reported honestly: the capstone
+  did NOT achieve cross-creator/novel recall; it is a creator-twin recall
+  amplifier. Stated plainly in CURRENT STATE + SYNTHESIS, not spun.
+- [big-pool artifact, REBUTTED] recall@50 (0.13) ≪ held-out-in-universe (0.64);
+  more candidates = more distractors for a fixed top-50, so the lift is not
+  mechanical — it is that the right candidates are now retrieved. union_content
+  vs content_only holds scoring constant (the retrieval ablation).
+- [LOO leakage via static graph, REBUTTED] the graph uses ZERO household signal
+  (foreign MovieLens population). Removing t from the SEED set (lib_minus) is the
+  correct LOO control; retrieving t via foreign co-occurrence is the tested
+  capability, not leakage. Rebuilding the graph without t would be wrong (t is a
+  catalog item independent of this household).
+- [deployability, QUALIFIED] ~5,362-candidate scoring is ~6.7× the 800-pool;
+  neighbor lists + fused vectors are precomputable/cacheable. Stated as a cost.
+- [leakage metric, NON-ISSUE] leakage_filtered@50 is the reject GUARDRAIL by
+  design (=0), not a test-leakage measure.
+
+**Blind-spot probe (iter 5):** "the union win might be a pool-size metric
+artifact." Evidence (Y): held_out_in_universe_frac (0.64) and recall@50 (0.13).
+RESULT: recall@50 ≪ in-universe, so scoring is the binding constraint and the
+36% out-of-universe titles auto-0 — the win is genuine retrieval (right
+candidates now present), not a metric inflation. Confirmed.
+
+**Overfitting check:** deterministic (two identical runs); foreign-population
+graph cannot overfit the household (domain-shift is the relevant risk, flagged);
+leave-one-out + creator/novel split agree (lift is creator-twin, novel unmoved).
+
+**Convergence status:** 5/5 iterations ✓. Baseline ✓. THREE+ architectures A/B'd
+(item_knn, fusion, co-engagement re-scoring, co-engagement retrieval union) ✓.
+Headline nDCG@10 improved 8× over baseline, leakage 0 ✓. BUT the new best (union)
+is NEW this iteration — "stable across the last 2 iterations" (criterion 2) needs
+one confirming iteration. Skeptic/devils-advocate concerns resolved/rebutted ✓.
+Overfitting addressed ✓. Each variant traces to production + paper ✓.
+NOT YET CONVERGED: criterion 2 stability clause (union measured once as the best);
+honest documentation that the cross-creator/novel sub-goal + TV remain open
+(these are bounded by data availability, not ranking-method failures).
+
+**Next action:** Iteration 6 (convergence iteration) — (1) re-run the union to
+confirm stability across iters 5-6 (deterministic, fast via the disk-cached
+graph); (2) attempt precision refinements (per-item co-engagement neighbor cap +
+popularity cap, Abdollahpouri) to lift nDCG@10 without losing recall, and lock
+the leanest config that holds; (3) write the formal CONVERGENCE ARGUMENT (one
+para per criterion) and emit the promise iff every clause genuinely holds.
