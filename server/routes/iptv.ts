@@ -171,7 +171,6 @@ iptv.delete('/sessions/:sessionId', requireAuth, (c) => {
 })
 
 const KINDS = new Set(['live', 'vod', 'series'])
-const FAV_KINDS = new Set(['live', 'vod', 'series'])
 const HIST_KINDS = new Set(['live', 'vod', 'series_episode'])
 
 iptv.get('/categories', requireAuth, (c) => {
@@ -405,7 +404,7 @@ iptv.get('/favorites', requireAuth, (c) => {
 iptv.post('/favorites', requireAuth, async (c) => {
   const { sub } = userOf(c)
   const body = await c.req.json().catch(() => ({})) as { kind?: unknown; itemId?: unknown }
-  if (typeof body.kind !== 'string' || !FAV_KINDS.has(body.kind)) return c.json({ error: 'invalid_kind' }, 400)
+  if (typeof body.kind !== 'string' || !KINDS.has(body.kind)) return c.json({ error: 'invalid_kind' }, 400)
   if (typeof body.itemId !== 'string' || body.itemId.length === 0) return c.json({ error: 'invalid_item' }, 400)
 
   iptvDb().stmts.addFavorite.run({
@@ -421,7 +420,7 @@ iptv.delete('/favorites/:kind/:itemId', requireAuth, (c) => {
   const { sub } = userOf(c)
   const kind = c.req.param('kind')
   const itemId = c.req.param('itemId')
-  if (!FAV_KINDS.has(kind)) return c.json({ error: 'invalid_kind' }, 400)
+  if (!KINDS.has(kind)) return c.json({ error: 'invalid_kind' }, 400)
   iptvDb().stmts.removeFavorite.run({ sub, kind, item_id: itemId })
   return c.body(null, 204)
 })
