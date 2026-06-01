@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, it, expect, vi } from 'vitest'
 import { Hono, type MiddlewareHandler } from 'hono'
 import { openIptvDb, type IptvDb } from '../services/iptvDb.js'
 import { iptv } from './iptv.js'
@@ -86,6 +86,80 @@ vi.mock('../services/tokenReplayCache.js', () => ({
   startGcSweep: vi.fn(),
   stopGcSweep: vi.fn(),
   clearReplayCache: vi.fn(),
+}))
+
+// Remux live-delivery (AVPlayer) coverage scaffolding. The two remux routes
+// (index.m3u8 + seg) call into ../services/iptvRemux.js (which would spawn
+// ffmpeg) and read the manifest/segments off disk via node:fs. We replace both
+// with in-memory fakes so the route handlers run without touching the real FS
+// or spawning a transcoder. Shared mutable state lives in vi.hoisted so each
+// test can flip session activity / manifest content.
+const remuxState = vi.hoisted(() => ({
+  // sessionId currently considered "active" by listRemuxSessions
+  activeSessions: new Set<string>(),
+  // virtual filesystem: path -> contents (manifest string, '' for segments)
+  files: new Map<string, string>(),
+  startCalls: [] as Array<{ streamId: string; sub: string; upstreamUrl: string }>,
+}))
+
+vi.mock('../services/iptvRemux.js', () => ({
+  startRemuxSession: vi.fn((opts: { streamId: string; sub: string; upstreamUrl: string }) => {
+    remuxState.startCalls.push(opts)
+    const sessionId = 'sess-1'
+    remuxState.activeSessions.add(sessionId)
+    return { sessionId, dir: '/tmp/remux/sess-1', manifestPath: '/tmp/remux/sess-1/index.m3u8' }
+  }),
+  listRemuxSessions: vi.fn(() => [...remuxState.activeSessions].map((sessionId) => ({ sessionId }))),
+  stopRemuxSession: vi.fn((sessionId: string) => {
+    remuxState.activeSessions.delete(sessionId)
+  }),
+  heartbeatRemuxSession: vi.fn(),
+}))
+
+// node:fs is shared with better-sqlite3 migrations (which readFileSync the .sql
+// files) and other consumers, so the mock MUST only divert the remux virtual
+// paths (/tmp/remux/...) and delegate everything else to the real fs. Otherwise
+// migration SQL reads come back empty and the test DB has no tables.
+const isRemuxPath = (p: unknown) => String(p).startsWith('/tmp/remux/')
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  const existsSync = vi.fn((p: string, ...rest: unknown[]) =>
+    isRemuxPath(p) ? remuxState.files.has(String(p)) : (actual.existsSync as (...a: unknown[]) => boolean)(p, ...rest),
+  )
+  const readFileSync = vi.fn((p: string, ...rest: unknown[]) =>
+    isRemuxPath(p) ? (remuxState.files.get(String(p)) ?? '') : (actual.readFileSync as (...a: unknown[]) => unknown)(p, ...rest),
+  )
+  // createReadStream's return value is irrelevant for remux because streamBridge
+  // is mocked; delegate non-remux reads to the real implementation.
+  const createReadStream = vi.fn((p: string, ...rest: unknown[]) =>
+    isRemuxPath(p) ? (({}) as unknown as import('node:fs').ReadStream) : (actual.createReadStream as (...a: unknown[]) => unknown)(p, ...rest),
+  )
+  return {
+    ...actual,
+    existsSync,
+    readFileSync,
+    createReadStream,
+    default: {
+      ...actual.default,
+      existsSync,
+      readFileSync,
+      createReadStream,
+    },
+  }
+})
+
+// streamBridge wraps fs.createReadStream's return into a web stream; mocking it
+// lets the seg route produce a deterministic body without node:stream interop.
+vi.mock('../services/streamBridge.js', () => ({
+  nodeReadableToWebStream: vi.fn(
+    () =>
+      new ReadableStream<Uint8Array>({
+        start(ctrl) {
+          ctrl.enqueue(new Uint8Array([0x47, 0x40]))
+          ctrl.close()
+        },
+      }),
+  ),
 }))
 
 function fakeToken(kind: string, resourceId: string): string {
@@ -696,5 +770,147 @@ describe('§9 source_unavailable propagation on grant endpoints', () => {
     expect(res.status).toBe(503)
     const body = (await res.json()) as { reason: string }
     expect(body.reason).toBe('source_unavailable')
+  })
+})
+
+describe('remux live delivery (AVPlayer)', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+  const manifestPath = '/tmp/remux/sess-1/index.m3u8'
+  const sampleManifest =
+    '#EXTM3U\n#EXTINF:6,\nseg_00000.ts\n#EXTINF:6,\nseg_00001.ts\n'
+
+  beforeEach(() => {
+    remuxState.activeSessions.clear()
+    remuxState.files.clear()
+    remuxState.startCalls.length = 0
+  })
+
+  // ── index.m3u8 ──────────────────────────────────────────────────────────
+  it('index.m3u8 rejects a non-numeric streamId with 400 invalid_id', async () => {
+    const res = await app.request(
+      '/api/iptv/stream/live/abc/remux/index.m3u8?t=' + fakeToken('remux', 'abc'),
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toBe('invalid_id')
+  })
+
+  it('index.m3u8 rejects a bad token with 401', async () => {
+    const res = await app.request('/api/iptv/stream/live/10/remux/index.m3u8?t=bogus')
+    expect(res.status).toBe(401)
+  })
+
+  it('index.m3u8 starts a session and returns a rewritten signed manifest', async () => {
+    remuxState.files.set(manifestPath, sampleManifest)
+    const res = await app.request(
+      `/api/iptv/stream/live/10/remux/index.m3u8?t=${fakeToken('remux', '10')}`,
+    )
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('application/vnd.apple.mpegurl')
+
+    const text = await res.text()
+    // bare segment lines are rewritten into signed seg URLs …
+    expect(text).not.toMatch(/^seg_00000\.ts$/m)
+    expect(text).not.toMatch(/^seg_00001\.ts$/m)
+    expect(text).toContain('/api/iptv/stream/live/10/remux/seg?t=')
+    // … while #EXTINF comment lines are preserved unchanged.
+    expect(text).toContain('#EXTM3U')
+    expect(text).toContain('#EXTINF:6,')
+
+    expect(remuxState.startCalls.length).toBe(1)
+    expect(remuxState.startCalls[0].streamId).toBe('10')
+    // creds come from the mocked credsFromEnv (host https://panel.example.com, u/p)
+    expect(remuxState.startCalls[0].upstreamUrl).toContain('/live/u/p/10.ts')
+  })
+
+  it('index.m3u8 returns 504 remux_manifest_timeout when the manifest never appears', async () => {
+    vi.useFakeTimers()
+    try {
+      // No file seeded -> existsSync stays false through the whole poll window.
+      const p = app.request(
+        `/api/iptv/stream/live/10/remux/index.m3u8?t=${fakeToken('remux', '10')}`,
+      )
+      // Drive the handler's 8s Date.now() deadline + 200ms sleep() loop.
+      await vi.advanceTimersByTimeAsync(8200)
+      const res = await p
+      expect(res.status).toBe(504)
+      const body = (await res.json()) as { error: string }
+      expect(body.error).toBe('remux_manifest_timeout')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // ── seg ─────────────────────────────────────────────────────────────────
+  it('seg rejects a non-numeric streamId with 400 invalid_id', async () => {
+    const res = await app.request(
+      `/api/iptv/stream/live/x/remux/seg?t=${fakeToken('remux', 'sess-1/seg_00000.ts')}`,
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toBe('invalid_id')
+  })
+
+  it('seg rejects a token of the wrong kind with 401 invalid_token', async () => {
+    const res = await app.request(
+      `/api/iptv/stream/live/10/remux/seg?t=${fakeToken('segment', 'sess-1/seg_00000.ts')}`,
+    )
+    expect(res.status).toBe(401)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toBe('invalid_token')
+  })
+
+  it('seg rejects a rid lacking the seg pattern with 400 bad_resource', async () => {
+    const res = await app.request(
+      `/api/iptv/stream/live/10/remux/seg?t=${fakeToken('remux', 'sess-1/notaseg.ts')}`,
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toBe('bad_resource')
+  })
+
+  it('seg returns 410 session_gone when no live index entry exists', async () => {
+    // activeSessions empty AND liveRemuxIndex has no entry (index.m3u8 never called).
+    const res = await app.request(
+      `/api/iptv/stream/live/10/remux/seg?t=${fakeToken('remux', 'sess-1/seg_00000.ts')}`,
+    )
+    expect(res.status).toBe(410)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toBe('session_gone')
+  })
+
+  it('seg streams the segment with 200 video/mp2t on the happy path', async () => {
+    // Establish the liveRemuxIndex entry + active session via index.m3u8 first.
+    remuxState.files.set(manifestPath, sampleManifest)
+    const idx = await app.request(
+      `/api/iptv/stream/live/10/remux/index.m3u8?t=${fakeToken('remux', '10')}`,
+    )
+    expect(idx.status).toBe(200)
+
+    // Seed the requested segment so existsSync(filePath) is true.
+    remuxState.files.set('/tmp/remux/sess-1/seg_00000.ts', '')
+    const res = await app.request(
+      `/api/iptv/stream/live/10/remux/seg?t=${fakeToken('remux', 'sess-1/seg_00000.ts')}`,
+    )
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('video/mp2t')
+    const bytes = new Uint8Array(await res.arrayBuffer())
+    expect(bytes.length).toBeGreaterThan(0)
+  })
+
+  it('seg returns 404 segment_gone when the segment file is missing', async () => {
+    // Same setup as happy path (indexed + active) but do NOT seed the segment.
+    remuxState.files.set(manifestPath, sampleManifest)
+    const idx = await app.request(
+      `/api/iptv/stream/live/10/remux/index.m3u8?t=${fakeToken('remux', '10')}`,
+    )
+    expect(idx.status).toBe(200)
+
+    const res = await app.request(
+      `/api/iptv/stream/live/10/remux/seg?t=${fakeToken('remux', 'sess-1/seg_00000.ts')}`,
+    )
+    expect(res.status).toBe(404)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toBe('segment_gone')
   })
 })
