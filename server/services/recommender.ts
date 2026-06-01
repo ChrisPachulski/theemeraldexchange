@@ -59,7 +59,15 @@ export type RecommenderScoreResponse = {
   diag: Record<string, unknown>
 }
 
-const REQUEST_TIMEOUT_MS = 5_000
+// 5s was set when /score was a trivial lookup. The production `fused` recipe
+// (co-engagement retrieval-union + cast/crew fusion) plus a cold model/vec
+// index right after a deploy restart can push a real full-library scoring call
+// past 5s, which aborted → silently degraded EVERY user to trending ("broken
+// everywhere" after a deploy). Warm calls return in ~1s so this ceiling only
+// engages on a genuinely slow call, where waiting for a personalized result
+// beats failing closed to trending. A truly-down sidecar fails fast (connection
+// refused), not a 15s hang, so the larger budget costs nothing in that case.
+const REQUEST_TIMEOUT_MS = 15_000
 
 // Fire-and-forget mirror posts to the recommender sidecar still have
 // to be bounded so a hung sidecar doesn't leak sockets every time the
