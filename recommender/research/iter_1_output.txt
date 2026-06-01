@@ -1,0 +1,179 @@
+emerald_contracts unavailable — sub-namespace validation disabled. Build the wheel via `cd crates/emerald-contracts-pyo3 && maturin develop --release` or run the recommender Docker image which installs it at build time.
+{
+  "db_path": "/Users/cujo253/Documents/eex-recsys-lit/snapshot/exchange.db",
+  "db_exists": true,
+  "n_titles": 37738,
+  "n_title_vec": 37738,
+  "n_title_features": 37738,
+  "n_library_items": 0,
+  "n_household_rejections": 10,
+  "library_cached_movie": true,
+  "library_cached_tv": true,
+  "rejections_cached": true,
+  "active_model": {
+    "version": "v-20260525-114009-c3fb97",
+    "recipe": "mmr_diverse",
+    "params": "{\"pool_size\": 800, \"negative_weight\": 0.3, \"popularity_weight\": 0.05, \"min_vote_count\": 50, \"personalized_threshold\": 0.45, \"mmr_lambda\": 0.7, \"mmr_input_k\": 200}"
+  }
+}
+
+===== BASELINE mmr_diverse:movie =====
+{
+  "recipe": "mmr_diverse",
+  "kind": "movie",
+  "params": {
+    "pool_size": 800,
+    "negative_weight": 0.3,
+    "popularity_weight": 0.05,
+    "min_vote_count": 50,
+    "personalized_threshold": 0.45,
+    "mmr_lambda": 0.7,
+    "mmr_input_k": 200
+  },
+  "n_positive_folds": 753,
+  "n_recallable_ceiling": 753,
+  "recallable_frac": 1.0,
+  "n_reject_in_catalog": 363,
+  "metrics": {
+    "recall@10": 0.0053,
+    "recall@50": 0.0173,
+    "ndcg@10": 0.0021,
+    "ndcg@50": 0.0046
+  },
+  "leakage_filtered_count": {
+    "10": 0,
+    "50": 0
+  },
+  "leakage_unfiltered_count": {
+    "10": 0,
+    "50": 2
+  },
+  "leakage_filtered_frac@50": 0.0,
+  "leakage_unfiltered_frac@50": 0.0055,
+  "eval_seconds": 55.9
+}
+
+===== BASELINE mmr_diverse:tv =====
+{
+  "recipe": "mmr_diverse",
+  "kind": "tv",
+  "params": {
+    "pool_size": 800,
+    "negative_weight": 0.3,
+    "popularity_weight": 0.05,
+    "min_vote_count": 50,
+    "personalized_threshold": 0.45,
+    "mmr_lambda": 0.7,
+    "mmr_input_k": 200
+  },
+  "n_positive_folds": 235,
+  "n_recallable_ceiling": 235,
+  "recallable_frac": 1.0,
+  "n_reject_in_catalog": 286,
+  "metrics": {
+    "recall@10": 0.0085,
+    "recall@50": 0.017,
+    "ndcg@10": 0.003,
+    "ndcg@50": 0.005
+  },
+  "leakage_filtered_count": {
+    "10": 0,
+    "50": 0
+  },
+  "leakage_unfiltered_count": {
+    "10": 1,
+    "50": 4
+  },
+  "leakage_filtered_frac@50": 0.0,
+  "leakage_unfiltered_frac@50": 0.014,
+  "eval_seconds": 7.8
+}
+
+===== BASELINE baseline_cosine:movie =====
+{
+  "recipe": "baseline_cosine",
+  "kind": "movie",
+  "params": {
+    "pool_size": 500,
+    "negative_weight": 0.3,
+    "popularity_weight": 0.05,
+    "min_vote_count": 50,
+    "personalized_threshold": 0.45
+  },
+  "n_positive_folds": 753,
+  "n_recallable_ceiling": 753,
+  "recallable_frac": 1.0,
+  "n_reject_in_catalog": 363,
+  "metrics": {
+    "recall@10": 0.0027,
+    "recall@50": 0.008,
+    "ndcg@10": 0.0008,
+    "ndcg@50": 0.0018
+  },
+  "leakage_filtered_count": {
+    "10": 0,
+    "50": 0
+  },
+  "leakage_unfiltered_count": {
+    "10": 0,
+    "50": 1
+  },
+  "leakage_filtered_frac@50": 0.0,
+  "leakage_unfiltered_frac@50": 0.0028,
+  "eval_seconds": 50.1
+}
+
+===== BASELINE baseline_cosine:tv =====
+{
+  "recipe": "baseline_cosine",
+  "kind": "tv",
+  "params": {
+    "pool_size": 500,
+    "negative_weight": 0.3,
+    "popularity_weight": 0.05,
+    "min_vote_count": 50,
+    "personalized_threshold": 0.45
+  },
+  "n_positive_folds": 235,
+  "n_recallable_ceiling": 235,
+  "recallable_frac": 1.0,
+  "n_reject_in_catalog": 286,
+  "metrics": {
+    "recall@10": 0.0043,
+    "recall@50": 0.0128,
+    "ndcg@10": 0.0013,
+    "ndcg@50": 0.0031
+  },
+  "leakage_filtered_count": {
+    "10": 0,
+    "50": 0
+  },
+  "leakage_unfiltered_count": {
+    "10": 1,
+    "50": 4
+  },
+  "leakage_filtered_frac@50": 0.0,
+  "leakage_unfiltered_frac@50": 0.014,
+  "eval_seconds": 5.7
+}
+
+=== SYNTHESIS (iteration 1) ===
+Scoreboard EXISTS. Baseline measured: leave-one-out over the real household
+library (753 movie + 235 tv positives), reject-leakage over the in-catalog
+rejection set (363 movie + 286 tv), via the production retrieval+recipe path.
+
+Headline metric: leave-one-out nDCG@10 of mmr_diverse (the deployed default).
+See iter_1_output.txt for the numbers; logged to iteration_log.md.
+
+GUARDRAIL: leakage_filtered@50 must be 0 (hard exclusion intact). The
+unfiltered leakage is a diagnostic only.
+
+No production-grounded variant implemented yet -- iteration 2 onward. The
+variant ladder (each must trace to a deployed system + Zotero paper):
+  EASE (Steck2019, item-item closed form; strong on sparse single-household)
+  -> two-stage retrieval->learned re-rank (YouTube/Pinterest/Spotify)
+  -> calibrated re-rank (Steck2018; Netflix+Spotify; likely beats MMR)
+  -> sequential model (SASRec/PinnerFormer) if simpler stages plateau.
+
+TENSIONS: none yet (single approach).
+
