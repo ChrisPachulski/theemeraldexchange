@@ -444,8 +444,96 @@ def section3_fusion() -> dict:
     return results
 
 
+# --- SECTION 4: ablations -- close the iteration-3 devils-advocate items -------
+# (a) stability: re-run fused_balanced (deterministic) to lock it across 2 iters.
+# (b) clean feature isolation: which block carries the lift?
+# (c) fused mode=full vs ann: is the win retrieval-bound or scoring (ann is the
+#     deployable re-rank stage)? Sampled folds for the expensive full scan.
+
+def section4_ablations() -> dict:
+    import fusion as FUSE
+    conn = connect()
+    results: dict[str, dict] = {}
+
+    # (a) stability reference + production baseline
+    for kind in KINDS:
+        print(f"\n===== REF mmr_diverse:{kind} =====")
+        results[f"mmr_diverse:{kind}"] = evaluate_recipe(conn, recipe_name="mmr_diverse", params={}, kind=kind)
+    balanced = {"text": 1.0, "genre": 0.3, "keyword": 1.0, "cast": 0.7, "crew": 0.5}
+    for kind in KINDS:
+        print(f"\n===== STABILITY fused_balanced:{kind} (expect iter-3 numbers) =====")
+        r = FUSE.evaluate_fused(conn, kind=kind, weights=balanced, mode="ann", label="fused_balanced")
+        print(json.dumps(r, indent=2)); results[f"stability_fused_balanced:{kind}"] = r
+
+    # (b) clean feature isolation (movie, ann) -- one block at a time over text.
+    iso = {
+        "text_only":     {"text": 1.0},
+        "text_genre":    {"text": 1.0, "genre": 1.0},
+        "text_keyword":  {"text": 1.0, "keyword": 1.0},
+        "text_cast":     {"text": 1.0, "cast": 1.0},
+        "text_crew":     {"text": 1.0, "crew": 1.0},
+        "text_castcrew": {"text": 1.0, "cast": 0.7, "crew": 0.5},
+    }
+    for name, w in iso.items():
+        print(f"\n===== ISOLATION {name}:movie =====")
+        r = FUSE.evaluate_fused(conn, kind="movie", weights=w, mode="ann", label=name)
+        print(json.dumps(r, indent=2)); results[f"{name}:movie"] = r
+
+    # (c) retrieval-vs-ranking: fused balanced full-catalog scan (sampled folds).
+    print(f"\n===== ABLATION fused_balanced FULL (movie, sampled) =====")
+    r = FUSE.evaluate_fused(conn, kind="movie", weights=balanced, mode="full",
+                            label="fused_balanced_full", sample=250)
+    print(json.dumps(r, indent=2)); results["fused_balanced_full:movie"] = r
+    return results
+
+
 # --- SYNTHESIS (updated every iteration: current best metric + what changed) --
 SYNTHESIS = """
+=== SYNTHESIS (iteration 4) ===
+BEST CONFIG UNCHANGED + NOW LOCKED: fused_balanced (== text+cast+crew) movie
+nDCG@10 0.0106, reproduced EXACTLY this iteration (deterministic) -> stable
+across iters 3-4. recall@10 0.0279 (21/753), leakage_filtered@50 0.
+
+ABLATIONS (closed the iteration-3 devils-advocate items):
+  - Feature isolation: the lift is CAST+CREW. text_only nDCG@10 0.0009; +cast
+    0.0076; +crew 0.0077; +cast+crew 0.0107 ~= balanced 0.0106. GENRE HURTS
+    (0.0), keyword minor (0.0036). Creator-affinity confirmed at the feature
+    level; a leaner text+cast+crew equals balanced -> drop genre.
+  - Retrieval vs ranking: full-catalog fused recall@50 ~0.08 vs ann 0.0398 (~2x)
+    but worse nDCG@10 -> the MiniLM-centroid 800-pool CAPS deep recall (full
+    finds more) while crowding the top. Retrieval reach is itself a lever.
+
+VARIANT B (co-engagement, MovieLens 25M PMI item-item graph): a NEGATIVE-but-
+decisive result. Sourced + built the graph (162k users, 11k nodes w/ neighbors,
+PMI-debiased). Coverage good: 80% of library / 40% of the content-NOVEL stratum
+have a co-engagement edge. BUT co-engagement as a RE-SCORER does NOT help
+(cooccur_only weak; late-fusion nDCG@10 0.0077-0.0078 <= content 0.0081; novel
+recall stays 0). ROOT CAUSE (proven): of the 34 novel-stratum titles WITH a
+co-engagement edge, only 1 (3%) is in its MiniLM-centroid ANN pool -- 33/34 are
+invisible to any re-scorer. => Co-engagement must drive RETRIEVAL (candidate
+union), NOT re-ranking. This is the iteration-5 lever (Spotify/YouTube serve
+item-to-item as an ANN candidate source, not a re-rank -- Covington p3).
+
+TV: still unsolved. MovieLens is movies-only; the TV co-engagement source +
+the retrieval-union lever are the open path.
+
+LADDER AHEAD:
+  -> ITER 5: co-engagement RETRIEVAL union -- candidates = MiniLM-ANN pool UNION
+     PMI co-engagement neighbors of the library, then fused scoring. Measure
+     novel-stratum + overall recall lift. (The 3% -> ? test.)
+  -> TV co-engagement source (TV-inclusive co-rating/co-watch) for the TV gap.
+  -> calibrated re-rank (Steck 2018) once recall is lifted.
+
+TENSIONS:
+  - re-scoring vs retrieval: a better SCORE cannot recall a candidate the
+    RETRIEVAL never surfaced. The novel-stratum + deep-recall gains both live
+    behind retrieval, not scoring.
+RESOLVED this iter: fused-full ablation (retrieval caps deep recall); cast/crew
+isolation (the win is cast+crew, genre is noise); fusion stability (deterministic
+reproduce). Prior: franchise=creator-affinity; popularity; candidate-set.
+"""
+
+_SYNTHESIS_ITER3 = """
 === SYNTHESIS (iteration 3) ===
 BEST CONFIG (movie headline): fused_balanced -- MiniLM fused with IDF-weighted
 genre/keyword/cast/crew, re-scoring the 800-item MiniLM-ANN pool by max fused-sim.
@@ -495,9 +583,8 @@ confound (iter 2, survives at equal budget).
 if __name__ == "__main__":
     info = section0_readiness()
     if info.get("db_exists"):
-        # Iterations 1-2 (baseline + item_knn A/B) are committed and stable; their
-        # numbers live in iter_1/iter_2_output.txt. Iteration 3 runs the fusion
-        # A/B, which re-runs the production baseline + iter-2 winner as references
-        # so this output file is self-contained.
-        section3_fusion()
+        # Prior iterations' numbers live in their iter_N_output.txt. The active
+        # iteration's section runs here; flip as the loop advances.
+        #   section1_baseline(); section2_item_knn(); section3_fusion()
+        section4_ablations()
     print(SYNTHESIS)
