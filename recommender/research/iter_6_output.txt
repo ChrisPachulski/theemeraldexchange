@@ -1,0 +1,220 @@
+emerald_contracts unavailable — sub-namespace validation disabled. Build the wheel via `cd crates/emerald-contracts-pyo3 && maturin develop --release` or run the recommender Docker image which installs it at build time.
+# graph ready 0s (disk-cached)
+
+===== STABILITY union_content (expect iter5: r@50 0.1328 nDCG@10 0.0173) =====
+{
+  "label": "STABILITY union_content (expect iter5: r@50 0.1328 nDCG@10 0.0173)",
+  "kind": "movie",
+  "score_mode": "content",
+  "beta": 1.0,
+  "neighbor_cap": null,
+  "pop_penalty": 0.0,
+  "mean_universe_size": 5362,
+  "held_out_in_universe_frac": 0.6401,
+  "leakage_filtered@50": 0,
+  "strata": {
+    "creator_twin": {
+      "n": 669,
+      "recall@10": 0.0463,
+      "recall@50": 0.1495,
+      "ndcg@10": 0.0194
+    },
+    "novel": {
+      "n": 84,
+      "recall@10": 0.0,
+      "recall@50": 0.0,
+      "ndcg@10": 0.0
+    },
+    "all": {
+      "n": 753,
+      "recall@10": 0.0412,
+      "recall@50": 0.1328,
+      "ndcg@10": 0.0173
+    }
+  },
+  "eval_seconds": 69.6
+}
+
+===== union_pop0.5 =====
+{
+  "label": "union_pop0.5",
+  "kind": "movie",
+  "score_mode": "content",
+  "beta": 1.0,
+  "neighbor_cap": null,
+  "pop_penalty": 0.5,
+  "mean_universe_size": 5362,
+  "held_out_in_universe_frac": 0.6401,
+  "leakage_filtered@50": 0,
+  "strata": {
+    "creator_twin": {
+      "n": 669,
+      "recall@10": 0.0179,
+      "recall@50": 0.0942,
+      "ndcg@10": 0.007
+    },
+    "novel": {
+      "n": 84,
+      "recall@10": 0.0,
+      "recall@50": 0.0,
+      "ndcg@10": 0.0
+    },
+    "all": {
+      "n": 753,
+      "recall@10": 0.0159,
+      "recall@50": 0.0837,
+      "ndcg@10": 0.0062
+    }
+  },
+  "eval_seconds": 69.9
+}
+
+===== union_pop1.0 =====
+{
+  "label": "union_pop1.0",
+  "kind": "movie",
+  "score_mode": "content",
+  "beta": 1.0,
+  "neighbor_cap": null,
+  "pop_penalty": 1.0,
+  "mean_universe_size": 5362,
+  "held_out_in_universe_frac": 0.6401,
+  "leakage_filtered@50": 0,
+  "strata": {
+    "creator_twin": {
+      "n": 669,
+      "recall@10": 0.0164,
+      "recall@50": 0.0643,
+      "ndcg@10": 0.006
+    },
+    "novel": {
+      "n": 84,
+      "recall@10": 0.0,
+      "recall@50": 0.0,
+      "ndcg@10": 0.0
+    },
+    "all": {
+      "n": 753,
+      "recall@10": 0.0146,
+      "recall@50": 0.0571,
+      "ndcg@10": 0.0054
+    }
+  },
+  "eval_seconds": 69.8
+}
+
+===== union_cap10 =====
+{
+  "label": "union_cap10",
+  "kind": "movie",
+  "score_mode": "content",
+  "beta": 1.0,
+  "neighbor_cap": 10,
+  "pop_penalty": 0.0,
+  "mean_universe_size": 2599,
+  "held_out_in_universe_frac": 0.4462,
+  "leakage_filtered@50": 0,
+  "strata": {
+    "creator_twin": {
+      "n": 669,
+      "recall@10": 0.0478,
+      "recall@50": 0.1555,
+      "ndcg@10": 0.0247
+    },
+    "novel": {
+      "n": 84,
+      "recall@10": 0.0,
+      "recall@50": 0.0,
+      "ndcg@10": 0.0
+    },
+    "all": {
+      "n": 753,
+      "recall@10": 0.0425,
+      "recall@50": 0.1381,
+      "ndcg@10": 0.0219
+    }
+  },
+  "eval_seconds": 65.7
+}
+
+===== union_cap10_pop0.5 =====
+{
+  "label": "union_cap10_pop0.5",
+  "kind": "movie",
+  "score_mode": "content",
+  "beta": 1.0,
+  "neighbor_cap": 10,
+  "pop_penalty": 0.5,
+  "mean_universe_size": 2599,
+  "held_out_in_universe_frac": 0.4462,
+  "leakage_filtered@50": 0,
+  "strata": {
+    "creator_twin": {
+      "n": 669,
+      "recall@10": 0.0284,
+      "recall@50": 0.1076,
+      "ndcg@10": 0.0112
+    },
+    "novel": {
+      "n": 84,
+      "recall@10": 0.0,
+      "recall@50": 0.0,
+      "ndcg@10": 0.0
+    },
+    "all": {
+      "n": 753,
+      "recall@10": 0.0252,
+      "recall@50": 0.0956,
+      "ndcg@10": 0.01
+    }
+  },
+  "eval_seconds": 66.3
+}
+
+===== union_cap20_pop0.5 =====
+{
+  "label": "union_cap20_pop0.5",
+  "kind": "movie",
+  "score_mode": "content",
+  "beta": 1.0,
+  "neighbor_cap": 20,
+  "pop_penalty": 0.5,
+  "mean_universe_size": 3441,
+  "held_out_in_universe_frac": 0.498,
+  "leakage_filtered@50": 0,
+  "strata": {
+    "creator_twin": {
+      "n": 669,
+      "recall@10": 0.0194,
+      "recall@50": 0.0912,
+      "ndcg@10": 0.0074
+    },
+    "novel": {
+      "n": 84,
+      "recall@10": 0.0,
+      "recall@50": 0.0,
+      "ndcg@10": 0.0
+    },
+    "all": {
+      "n": 753,
+      "recall@10": 0.0173,
+      "recall@50": 0.081,
+      "ndcg@10": 0.0066
+    }
+  },
+  "eval_seconds": 67.2
+}
+
+EXIT: 0
+
+===== ITER 6 cap curve (robustness of neighbor_cap; reproduces via evaluate_retrieval_union(neighbor_cap=...)) =====
+# CAP CURVE (movie, content scoring, no pop penalty) — is cap10 a smooth plateau?
+   cap  universe  recall@10  recall@50   nDCG@10
+     5      1962     0.0425     0.1381    0.0221
+     8      2369     0.0425     0.1381    0.0221
+    10      2599     0.0425     0.1381    0.0219
+    15      3080     0.0412     0.1341    0.0173
+    20      3441     0.0412     0.1368    0.0173
+    30      4078     0.0412     0.1341    0.0173
+  None      5362     0.0412     0.1328    0.0173
+EXIT
