@@ -606,6 +606,33 @@ describe('favorites + history', () => {
     expect(empty).toEqual([])
   })
 
+  it.each(['live', 'vod', 'series'])('accepts %s as a valid favorite kind (KINDS set)', async (kind) => {
+    const add = await app.request('/api/iptv/favorites', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind, itemId: '99' }),
+    })
+    expect(add.status).toBe(201)
+    await app.request(`/api/iptv/favorites/${kind}/99`, { method: 'DELETE' })
+  })
+
+  it('rejects an unknown kind on POST /favorites with 400 invalid_kind', async () => {
+    // 'series_episode' is in HIST_KINDS but NOT in the favorites KINDS set — must be rejected.
+    const res = await app.request('/api/iptv/favorites', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'series_episode', itemId: '10' }),
+    })
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ error: 'invalid_kind' })
+  })
+
+  it('rejects an unknown kind on DELETE /favorites/:kind/:itemId with 400 invalid_kind', async () => {
+    const res = await app.request('/api/iptv/favorites/series_episode/10', { method: 'DELETE' })
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ error: 'invalid_kind' })
+  })
+
   it('records and reads history with the reported position', async () => {
     const put = await app.request('/api/iptv/history', {
       method: 'POST',
