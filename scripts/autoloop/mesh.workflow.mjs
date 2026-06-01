@@ -130,7 +130,9 @@ const audited = await pipeline(
     [
       `You are a strict auditor. Here are candidate improvements for "${area}":`,
       JSON.stringify(found.candidates || []),
-      `Return keep=true ONLY if the single best one is real, correct, genuinely valuable, low-risk, autonomous, and not already done (${DONE}).`,
+      `Return keep=true ONLY if the single best one is real, correct, genuinely valuable, low-risk, autonomous, and not already done:\n${DONE}`,
+      `HARD ANTIBODY GATE — you MUST return keep=false if the best candidate matches ANY of these antibodies (by symptom/root-cause, NOT just exact title — e.g. "fix the failing generateUlid tests" matches an antibody about the generateUlid crash):\n${IMMUNE}`,
+      `An antibody match means the work is ALREADY DONE on a branch and only awaits a human action; re-doing it is forbidden. When in doubt that a candidate is an antibody match, keep=false.`,
       `Otherwise keep=false. If keep=true, set title to that single best candidate's title.`,
     ].join('\n'),
     { model: 'sonnet', phase: 'Discover', label: `audit`, schema: VERDICT },
@@ -149,7 +151,11 @@ const pick = await agent(
   [
     `You are the synthesis root of an autonomous improvement loop. Survivor improvement titles:`,
     survivors.map((s) => `- ${s}`).join('\n'),
-    `Pick the SINGLE highest value × lowest risk one. Read the repo as needed to write precise instructions.`,
+    `BEFORE picking, DROP any survivor that is already done:\n${DONE}`,
+    `ALSO DROP any survivor matching these antibodies by symptom/root-cause (not just exact title — e.g. anything about the generateUlid 32-bit/48-bit crash or its failing tests is an antibody match even under a fresh title):\n${IMMUNE}`,
+    `An antibody/done match is ALREADY FIXED on a branch awaiting a human merge — re-doing it produces a useless duplicate branch. This is the #1 failure mode of this loop; be ruthless about dropping these.`,
+    `If, after dropping all done/antibody matches, NOTHING autonomous and genuinely valuable remains, DO NOT invent or force a pick: return autonomous=false with title="(all remaining survivors are immune/done — dry window)" and empty instructions. A clean dry window is the CORRECT outcome when the only high-value work is human-merge-blocked.`,
+    `Otherwise pick the SINGLE highest value × lowest risk survivor. Read the repo as needed to write precise instructions.`,
     `It MUST be autonomous and low-risk. Produce exact implementation instructions INCLUDING the tests to add/strengthen (tests matter more than the change).`,
     `Never touch deploy config, secrets, or unrelated files.`,
   ].join('\n'),
