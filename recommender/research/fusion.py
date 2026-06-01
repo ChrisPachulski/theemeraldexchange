@@ -233,7 +233,8 @@ def franchise_stratified(conn, *, kind: str, weights: dict, pool_size: int = 800
 
 
 def evaluate_fused(conn, *, kind: str, weights: dict, mode: str = "ann",
-                   pool_size: int = 800, min_votes: int = 50, label: str = "") -> dict:
+                   pool_size: int = 800, min_votes: int = 50, label: str = "",
+                   sample: int | None = None, seed: int = 1234) -> dict:
     """Leave-one-out eval of item-knn with FUSED max-sim scoring.
 
     mode="ann": candidates = the MiniLM-centroid ANN pool of pool_size (the
@@ -260,6 +261,15 @@ def evaluate_fused(conn, *, kind: str, weights: dict, mode: str = "ann",
     reject_in_catalog = {i for i in rej_ids_all if i in index}
     pos_set = set(positives)
 
+    # Optional fold subsample (for the expensive mode="full" ablation). The
+    # library context still uses ALL other positives; only the set of held-out
+    # folds is sampled. Deterministic via seed. Reported as an estimate.
+    eval_positives = positives
+    if sample is not None and sample < len(positives):
+        import random as _random
+        rng = _random.Random(seed)
+        eval_positives = sorted(rng.sample(positives, sample))
+
     # per-title key variants + frequency (to drop the held-out title's own keys)
     from collections import Counter
     kv = {i: store["keys"][i] for i in positives}
@@ -276,7 +286,7 @@ def evaluate_fused(conn, *, kind: str, weights: dict, mode: str = "ann",
     import time
     t0 = time.monotonic()
     n_folds = 0
-    for t in positives:
+    for t in eval_positives:
         lib_minus = pos_set - {t}
         tks = kv[t]
         key_set = {k for k in full_keys if (freq[k] - (1 if k in tks else 0)) > 0}
@@ -319,6 +329,8 @@ def evaluate_fused(conn, *, kind: str, weights: dict, mode: str = "ann",
     return {
         "label": label or f"fused_{mode}",
         "kind": kind, "mode": mode, "weights": weights,
-        "n_positive_folds": n_folds, "n_reject_in_catalog": len(reject_in_catalog),
+        "n_positive_folds": n_folds, "n_total_positives": len(positives),
+        "sampled": sample is not None and sample < len(positives),
+        "n_reject_in_catalog": len(reject_in_catalog),
         "metrics": metrics, "eval_seconds": round(time.monotonic() - t0, 1),
     }
