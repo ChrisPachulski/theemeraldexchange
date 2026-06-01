@@ -294,14 +294,6 @@ export function _resetLibraryStaleFallbackForTests(): void {
   delete libraryStaleFallback.tv
 }
 
-async function fetchSonarrLibrary(): Promise<SonarrSeries[]> {
-  return (await fetchLibraryCached('tv')) as SonarrSeries[]
-}
-
-async function fetchRadarrLibrary(): Promise<RadarrMovie[]> {
-  return (await fetchLibraryCached('movie')) as RadarrMovie[]
-}
-
 // Compact library line: "Title (Year) — genre1, genre2". Genres give
 // Claude enough signal to taste-match without ballooning tokens.
 function formatLibraryItem(it: { title: string; year?: number; genres?: string[] }): string {
@@ -1919,7 +1911,7 @@ suggestions.get('/:type', async (c) => {
   let rejections: Awaited<ReturnType<typeof getRejections>>
   try {
     ;[library, rejections] = await Promise.all([
-      type === 'movie' ? fetchRadarrLibrary() : fetchSonarrLibrary(),
+      fetchLibraryCached(type),
       getRejections(),
     ])
   } catch (err) {
