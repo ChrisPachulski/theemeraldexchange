@@ -73,3 +73,6 @@ crates/emerald-contracts-pyo3/*.pyd
 
 # Offline recsys-eval venv (numpy + sqlite-vec + pydantic); host-specific.
 recommender/.venv-eval/
+
+# BGE content-embedding venv (torch + sentence-transformers); host-specific.
+recommender/.venv-embed/
