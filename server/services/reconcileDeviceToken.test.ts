@@ -104,6 +104,15 @@ describe('reconcileDeviceToken', () => {
   afterAll(() => {
     closeServerDb()
     fs.rmSync(tmpDbDir, { recursive: true, force: true })
+    // Restore the shared process.env + module registry so this file's gate-env
+    // mutations (set via importReconcile) cannot leak into sibling test files
+    // that Vitest co-locates in the same worker — the source of the prior
+    // intermittent failures in devices.test.ts.
+    delete process.env.PLEX_SERVER_ID
+    delete process.env.ADMIN_SUBS
+    delete process.env.APPLE_CLIENT_ID
+    delete process.env.ENABLE_APPLE_SIGN_IN
+    vi.resetModules()
   })
   beforeEach(() => {
     delete process.env.PLEX_SERVER_ID
