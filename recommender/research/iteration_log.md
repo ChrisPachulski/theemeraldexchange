@@ -1,6 +1,29 @@
 # Recommender research loop — iteration log
 
-## CURRENT STATE (after iteration 3)
+## CURRENT STATE (after iteration 4)
+
+**Best config LOCKED:** `fused_balanced` (== `text+cast+crew`; genre/keyword add
+nothing) — movie nDCG@10 **0.0106**, reproduced EXACTLY in iteration 4 →
+**stable across the last 2 iterations**. recall@10 0.0279 (21/753), leakage 0.
+Iteration 4 = ablations (closed all devils-advocate items) + Variant B
+(co-engagement) which gave a decisive **negative-but-informative** result.
+
+**Iteration-4 outcomes (detail in the Iteration 4 entry):**
+- Feature isolation: the lift is **cast+crew** (text_castcrew 0.0107 ≈ balanced);
+  **genre HURTS** (0.0), keyword minor — creator-affinity confirmed at the
+  feature level. Use the leaner text+cast+crew.
+- Retrieval ablation: the MiniLM-centroid 800-pool **caps deep recall**
+  (full-catalog recall@50 ~0.08 vs ann 0.0398) — retrieval reach is a lever.
+- **Variant B (MovieLens PMI co-engagement) as a RE-SCORER does NOT help**
+  (late-fusion ≤ content-only; novel recall stays 0). PROVEN cause: of 34
+  novel-stratum titles with a co-engagement edge, only **1 (3%)** is in its
+  MiniLM-centroid pool. → co-engagement must drive **RETRIEVAL (candidate
+  union), not re-ranking** (the iteration-5 lever).
+- TV: still unsolved (MovieLens is movies-only).
+
+---
+
+### Iteration-3 snapshot (superseded above; kept for history)
 
 **FIRST HEADLINE WIN (movies).** Fusing MiniLM with IDF-weighted genre/keyword/
 cast/crew features and re-scoring the 800-item MiniLM-ANN pool by max fused-sim
@@ -327,3 +350,86 @@ fused mode=full ablation and clean cast-vs-crew isolation; (2) BEGIN Variant B
 (exogenous item-item co-engagement graph + propagation) as the production-grounded
 lever for cross-creator recall AND the TV gap; escalate Q3 (co-engagement source
 mapping onto TMDB ids) to /literature-consultation.
+
+---
+
+## Iteration 4 (close-out ablations + Variant B: co-engagement)
+
+**Part 1 — ablations (close the iteration-3 devils-advocate items), cited from
+`iter_4_output.txt`:**
+- STABILITY: fused_balanced movie reproduced EXACTLY (recall@10 0.0279, nDCG@10
+  0.0106; lines 109-112) and tv (0.0015) — deterministic; best config stable
+  across iters 3-4 (convergence criterion: stability across last 2 iters MET).
+- FEATURE ISOLATION (movie, ann), nDCG@10: text_only 0.0009 (155-158);
+  text_genre 0.0 (177-180, GENRE HURTS — same-genre noise); text_keyword 0.0036
+  (199-202); text_cast 0.0076 (221-224); text_crew 0.0077 (243-246);
+  text_castcrew 0.0107 (266-269) ≈ balanced 0.0106. CONCLUSION: the lift IS
+  cast+crew (creator-affinity at the feature level); genre is noise, keyword
+  minor; leaner text+cast+crew == balanced. Drop genre.
+- RETRIEVAL vs RANKING: fused_balanced FULL (movie, sampled 250; lines 291-294)
+  recall@10 0.016, recall@50 0.08, nDCG@10 0.0054 vs ann recall@50 0.0398,
+  nDCG@10 0.0106. Full-catalog recalls ~2x MORE deep (recall@50) but ranks the
+  top worse (near-dups crowd top-10). => the centroid-ANN 800-pool CAPS deep
+  recall; retrieval reach is itself a lever. (Resolves devils-advocate MAJOR.)
+
+**Part 2 — Variant B (co-engagement), cited from `iter_4_output.txt` tail:**
+- Sourced MovieLens 25M (262 MB), built a PMI-weighted item-item co-occurrence
+  graph restricted to our catalog (`research/coengagement.py`): 162,342 users,
+  11,073 catalog nodes with neighbors. PMI = closed-form popularity debiasing
+  (Q3 literature, DeNadai 2024 p6 IPS analogue; Abdollahpouri 2019 ItemKNN
+  amplifies popularity). NO GNN — edges carry the lift (LightGCN p1-2; Spotify
+  edges-only ~93% of HR, p7-8).
+- Coverage: 80% of library / 459 of 753 have an edge to another library item;
+  40% (34/84) of the content-NOVEL stratum have a co-engagement edge.
+- A/B (late-fusion = z(content)+beta*z(cooccur), movie): content_only nDCG@10
+  0.0081; cooccur_only 0.0014 (WEAK); late-fusion beta0.5 0.0077, beta1.0 0.0078
+  — co-engagement re-scoring does NOT beat content-only, and NOVEL recall stays
+  0.0 in every config. leakage_filtered@50 = 0 throughout.
+- ROOT CAUSE (retrieval-gate probe, committed `coverage_and_retrieval_gate`):
+  of the 34 novel-with-edge titles, only 1 (3%) is in its MiniLM-centroid ANN-800
+  pool. 33/34 are invisible to ANY re-scorer. => co-engagement MUST drive
+  RETRIEVAL (candidate union), not re-ranking.
+
+**Adversarial review (Explore skeptic equivalent — self + prior devils-advocate
+items):** the iteration-3 open items are now closed with numbers (fused-full
+ablation; cast/crew isolation; stability). No new claim overreaches — the Variant
+B result is reported as a NEGATIVE with the proven mechanism, not spun.
+
+**Literature (Q3 ANSWERED, 3rd escalation):** for an imported item-item
+co-engagement graph + single household: NO GNN needed (edges carry the lift —
+LightGCN p1-2; Spotify edges-only row E ~93% of HR, p7-8). Recipe: PMI-weighted
+co-occurrence kNN (PMI = closed-form popularity debiasing, the training-free
+analogue of Spotify's IPS, DeNadai 2024 p6), late-fuse z-scored with content,
+confidence-gate thin-evidence edges for domain shift, popularity-cap at serving
+(Abdollahpouri 2019). iALS p1: count=confidence, not preference (binarize). Built
+exactly this; the negative result is NOT a recipe flaw but the retrieval-gate.
+
+**Blind-spot probe (iter 4):** "I'm assuming co-engagement will help; the untested
+threat is that it operates on the wrong candidate set." Evidence (Y): the
+retrieval-gate probe above. RESULT: confirmed — 33/34 novel-with-edge titles are
+not in the MiniLM pool, so re-scoring is structurally incapable of recalling
+them. This both explains the negative A/B and pinpoints the iteration-5 lever
+(retrieval union), turning a null result into a precise next step.
+
+**Overfitting check:** fusion is deterministic (reproduced exactly); the
+creator/novel split + the feature isolation (cast+crew, not a tuned blend) show
+the win is a real, interpretable mechanism, not test-fold tuning. Co-engagement
+PMI graph is built from a FOREIGN population (MovieLens), so it cannot overfit
+this household; domain-shift is the relevant risk (flagged, confidence-gating is
+the documented mitigation for iter 5).
+
+**Convergence status:** 4/5 iterations. Baseline ✓. THREE architectures A/B'd
+(item_knn, fusion, co-engagement) ✓. Movie headline improved 5x AND stable across
+last 2 iters ✓. Skeptic/devils-advocate concerns resolved (franchise=creator-
+affinity feature-isolated; fused-full; cast/crew; popularity; candidate-set).
+Overfitting addressed. Each variant traces to a production system + paper ✓.
+NOT converged: (a) <5 iterations; (b) TV unsolved; (c) the cross-creator lever
+(co-engagement RETRIEVAL union) is identified + proven-necessary but not yet
+implemented.
+
+**Next action:** Iteration 5 (capstone) — implement co-engagement RETRIEVAL
+union: candidates = MiniLM-ANN pool UNION the PMI co-engagement neighbors of the
+library, then fused (text+cast+crew) scoring; measure novel-stratum + overall
+recall lift (the 3% -> ? test) and whether it lifts the movie headline beyond
+0.0106. Note the TV gap needs a TV-inclusive co-engagement source (separate
+sourcing) — scope it explicitly.

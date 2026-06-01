@@ -1,0 +1,473 @@
+emerald_contracts unavailable — sub-namespace validation disabled. Build the wheel via `cd crates/emerald-contracts-pyo3 && maturin develop --release` or run the recommender Docker image which installs it at build time.
+{
+  "db_path": "/Users/cujo253/Documents/eex-recsys-lit/snapshot/exchange.db",
+  "db_exists": true,
+  "n_titles": 37738,
+  "n_title_vec": 37738,
+  "n_title_features": 37738,
+  "n_library_items": 0,
+  "n_household_rejections": 10,
+  "library_cached_movie": true,
+  "library_cached_tv": true,
+  "rejections_cached": true,
+  "active_model": {
+    "version": "v-20260525-114009-c3fb97",
+    "recipe": "mmr_diverse",
+    "params": "{\"pool_size\": 800, \"negative_weight\": 0.3, \"popularity_weight\": 0.05, \"min_vote_count\": 50, \"personalized_threshold\": 0.45, \"mmr_lambda\": 0.7, \"mmr_input_k\": 200}"
+  }
+}
+
+===== REF mmr_diverse:movie =====
+{
+  "recipe": "mmr_diverse",
+  "kind": "movie",
+  "params": {
+    "pool_size": 800,
+    "negative_weight": 0.3,
+    "popularity_weight": 0.05,
+    "min_vote_count": 50,
+    "personalized_threshold": 0.45,
+    "mmr_lambda": 0.7,
+    "mmr_input_k": 200
+  },
+  "n_positive_folds": 753,
+  "n_recallable_ceiling": 753,
+  "recallable_frac": 1.0,
+  "n_reject_in_catalog": 363,
+  "metrics": {
+    "recall@10": 0.0053,
+    "recall@50": 0.0173,
+    "ndcg@10": 0.0021,
+    "ndcg@50": 0.0046
+  },
+  "leakage_filtered_count": {
+    "10": 0,
+    "50": 0
+  },
+  "leakage_unfiltered_count": {
+    "10": 0,
+    "50": 2
+  },
+  "leakage_filtered_frac@50": 0.0,
+  "leakage_unfiltered_frac@50": 0.0055,
+  "eval_seconds": 57.3
+}
+
+===== REF mmr_diverse:tv =====
+{
+  "recipe": "mmr_diverse",
+  "kind": "tv",
+  "params": {
+    "pool_size": 800,
+    "negative_weight": 0.3,
+    "popularity_weight": 0.05,
+    "min_vote_count": 50,
+    "personalized_threshold": 0.45,
+    "mmr_lambda": 0.7,
+    "mmr_input_k": 200
+  },
+  "n_positive_folds": 235,
+  "n_recallable_ceiling": 235,
+  "recallable_frac": 1.0,
+  "n_reject_in_catalog": 286,
+  "metrics": {
+    "recall@10": 0.0085,
+    "recall@50": 0.017,
+    "ndcg@10": 0.003,
+    "ndcg@50": 0.005
+  },
+  "leakage_filtered_count": {
+    "10": 0,
+    "50": 0
+  },
+  "leakage_unfiltered_count": {
+    "10": 1,
+    "50": 4
+  },
+  "leakage_filtered_frac@50": 0.0,
+  "leakage_unfiltered_frac@50": 0.014,
+  "eval_seconds": 8.0
+}
+
+===== STABILITY fused_balanced:movie (expect iter-3 numbers) =====
+{
+  "label": "fused_balanced",
+  "kind": "movie",
+  "mode": "ann",
+  "weights": {
+    "text": 1.0,
+    "genre": 0.3,
+    "keyword": 1.0,
+    "cast": 0.7,
+    "crew": 0.5
+  },
+  "n_positive_folds": 753,
+  "n_total_positives": 753,
+  "sampled": false,
+  "n_reject_in_catalog": 363,
+  "metrics": {
+    "recall@10": 0.0279,
+    "recall@50": 0.0398,
+    "ndcg@10": 0.0106,
+    "ndcg@50": 0.0135
+  },
+  "eval_seconds": 45.9
+}
+
+===== STABILITY fused_balanced:tv (expect iter-3 numbers) =====
+{
+  "label": "fused_balanced",
+  "kind": "tv",
+  "mode": "ann",
+  "weights": {
+    "text": 1.0,
+    "genre": 0.3,
+    "keyword": 1.0,
+    "cast": 0.7,
+    "crew": 0.5
+  },
+  "n_positive_folds": 235,
+  "n_total_positives": 235,
+  "sampled": false,
+  "n_reject_in_catalog": 286,
+  "metrics": {
+    "recall@10": 0.0043,
+    "recall@50": 0.0085,
+    "ndcg@10": 0.0015,
+    "ndcg@50": 0.0025
+  },
+  "eval_seconds": 6.4
+}
+
+===== ISOLATION text_only:movie =====
+{
+  "label": "text_only",
+  "kind": "movie",
+  "mode": "ann",
+  "weights": {
+    "text": 1.0
+  },
+  "n_positive_folds": 753,
+  "n_total_positives": 753,
+  "sampled": false,
+  "n_reject_in_catalog": 363,
+  "metrics": {
+    "recall@10": 0.0027,
+    "recall@50": 0.0239,
+    "ndcg@10": 0.0009,
+    "ndcg@50": 0.0057
+  },
+  "eval_seconds": 43.0
+}
+
+===== ISOLATION text_genre:movie =====
+{
+  "label": "text_genre",
+  "kind": "movie",
+  "mode": "ann",
+  "weights": {
+    "text": 1.0,
+    "genre": 1.0
+  },
+  "n_positive_folds": 753,
+  "n_total_positives": 753,
+  "sampled": false,
+  "n_reject_in_catalog": 363,
+  "metrics": {
+    "recall@10": 0.0,
+    "recall@50": 0.0199,
+    "ndcg@10": 0.0,
+    "ndcg@50": 0.0048
+  },
+  "eval_seconds": 44.9
+}
+
+===== ISOLATION text_keyword:movie =====
+{
+  "label": "text_keyword",
+  "kind": "movie",
+  "mode": "ann",
+  "weights": {
+    "text": 1.0,
+    "keyword": 1.0
+  },
+  "n_positive_folds": 753,
+  "n_total_positives": 753,
+  "sampled": false,
+  "n_reject_in_catalog": 363,
+  "metrics": {
+    "recall@10": 0.0106,
+    "recall@50": 0.0186,
+    "ndcg@10": 0.0036,
+    "ndcg@50": 0.0055
+  },
+  "eval_seconds": 44.3
+}
+
+===== ISOLATION text_cast:movie =====
+{
+  "label": "text_cast",
+  "kind": "movie",
+  "mode": "ann",
+  "weights": {
+    "text": 1.0,
+    "cast": 1.0
+  },
+  "n_positive_folds": 753,
+  "n_total_positives": 753,
+  "sampled": false,
+  "n_reject_in_catalog": 363,
+  "metrics": {
+    "recall@10": 0.0133,
+    "recall@50": 0.0398,
+    "ndcg@10": 0.0076,
+    "ndcg@50": 0.0135
+  },
+  "eval_seconds": 44.1
+}
+
+===== ISOLATION text_crew:movie =====
+{
+  "label": "text_crew",
+  "kind": "movie",
+  "mode": "ann",
+  "weights": {
+    "text": 1.0,
+    "crew": 1.0
+  },
+  "n_positive_folds": 753,
+  "n_total_positives": 753,
+  "sampled": false,
+  "n_reject_in_catalog": 363,
+  "metrics": {
+    "recall@10": 0.0159,
+    "recall@50": 0.0465,
+    "ndcg@10": 0.0077,
+    "ndcg@50": 0.0145
+  },
+  "eval_seconds": 46.0
+}
+
+===== ISOLATION text_castcrew:movie =====
+{
+  "label": "text_castcrew",
+  "kind": "movie",
+  "mode": "ann",
+  "weights": {
+    "text": 1.0,
+    "cast": 0.7,
+    "crew": 0.5
+  },
+  "n_positive_folds": 753,
+  "n_total_positives": 753,
+  "sampled": false,
+  "n_reject_in_catalog": 363,
+  "metrics": {
+    "recall@10": 0.0226,
+    "recall@50": 0.0438,
+    "ndcg@10": 0.0107,
+    "ndcg@50": 0.0157
+  },
+  "eval_seconds": 48.6
+}
+
+===== ABLATION fused_balanced FULL (movie, sampled) =====
+{
+  "label": "fused_balanced_full",
+  "kind": "movie",
+  "mode": "full",
+  "weights": {
+    "text": 1.0,
+    "genre": 0.3,
+    "keyword": 1.0,
+    "cast": 0.7,
+    "crew": 0.5
+  },
+  "n_positive_folds": 250,
+  "n_total_positives": 753,
+  "sampled": true,
+  "n_reject_in_catalog": 363,
+  "metrics": {
+    "recall@10": 0.016,
+    "recall@50": 0.08,
+    "ndcg@10": 0.0054,
+    "ndcg@50": 0.019
+  },
+  "eval_seconds": 23.2
+}
+
+=== SYNTHESIS (iteration 3) ===
+BEST CONFIG (movie headline): fused_balanced -- MiniLM fused with IDF-weighted
+genre/keyword/cast/crew, re-scoring the 800-item MiniLM-ANN pool by max fused-sim.
+FIRST config to beat the baseline on the headline nDCG@10:
+  movie nDCG@10 0.0021 -> 0.0106 (5.0x); recall@10 4 -> 21 titles (+17, 5.3x);
+  recall@50 13 -> 30 (+17, 2.3x); leakage_filtered@50 = 0.
+fused_meta_heavy ties within sampling error. Lineage: ItemSage multi-feature
+fusion (Baltescu 2022); Spotify content cold-start (DeNadai 2024).
+
+HONEST SCOPE (devils-advocate-tightened):
+  - Real but absolutely small: +17 of 753 at recall@10. "5x" is over a basement;
+    always pair with the count.
+  - Deployable as a RE-RANK STAGE over the existing MiniLM-ANN pool (no retrieval
+    change). NOT a shipped recipe yet (research/, scipy); full deploy = precompute
+    fused vectors into the index.
+  - The lift is ENTIRELY creator-affinity. Stratified: movie creator_twin
+    (n=669) recall@10 0.0105; novel stratum (n=84, no shared cast/crew)
+    recall@10 = 0.0. Legitimate but NARROW -- zero cross-creator generalization.
+
+TV: no win (nDCG@10 0.0015 < baseline 0.0030). EXPLAINED: only 10% of TV titles
+are creator-twins (89% for movies); series rarely share cast/crew, so the
+mechanism that powers movies has nothing to work with on TV.
+
+THE NEXT CEILING (literature Q2, grounded): content/creator similarity has a
+documented production recall ceiling (Spotify content-only HR@10 0.164 plateau;
+co-engagement-graph GNN +36-57% HR, long-tail +118% -- DeNadai 2024). Single
+household = no co-occurrence. Levers: (A) EXPLORATION + implicit-feedback harvest
+(BaRT McInerney 2018; YouTube Top-K REINFORCE Chen 2019); (B) IMPORT an exogenous
+item-item co-engagement graph + GNN propagation (also the documented TV fix:
+series share audiences, not casts). Pure collaborative (LightGCN) non-viable solo.
+
+LADDER AHEAD:
+  -> ITER 4: confirm fusion stability; fused mode=full ablation (retrieval vs
+     ranking) + clean cast-vs-crew isolation; BEGIN Variant B (exogenous
+     co-engagement graph) -- the cross-creator + TV lever.
+  -> calibrated re-rank (Steck 2018), sequential models later.
+
+TENSIONS:
+  - movie vs tv: fusion's creator-affinity mechanism is movie-only by data
+    structure; TV needs co-engagement, not content.
+  - relative vs absolute: 5x headline is real but +17 titles; do not oversell.
+RESOLVED: franchise bias (it IS creator-affinity, stratified + documented as
+legitimate-but-narrow); popularity confound (iter 2, zero effect); candidate-set
+confound (iter 2, survives at equal budget).
+
+
+===== VARIANT B (iter4): co-engagement late-fusion A/B (movie) =====
+# graph: users=162342 nodes_w_nbr=11073 built 99s
+{
+  "label": "content_only(text+cast+crew)",
+  "kind": "movie",
+  "beta": 0.0,
+  "content_only": true,
+  "cooccur_only": false,
+  "leakage_filtered@50": 0,
+  "strata": {
+    "creator_twin": {
+      "n": 669,
+      "recall@10": 0.0194,
+      "recall@50": 0.0508,
+      "ndcg@10": 0.0091
+    },
+    "novel": {
+      "n": 84,
+      "recall@10": 0.0,
+      "recall@50": 0.0,
+      "ndcg@10": 0.0
+    },
+    "all": {
+      "n": 753,
+      "recall@10": 0.0173,
+      "recall@50": 0.0452,
+      "ndcg@10": 0.0081
+    }
+  },
+  "eval_seconds": 47.4
+}
+{
+  "label": "cooccur_only",
+  "kind": "movie",
+  "beta": 0.0,
+  "content_only": false,
+  "cooccur_only": true,
+  "leakage_filtered@50": 0,
+  "strata": {
+    "creator_twin": {
+      "n": 669,
+      "recall@10": 0.0045,
+      "recall@50": 0.009,
+      "ndcg@10": 0.0016
+    },
+    "novel": {
+      "n": 84,
+      "recall@10": 0.0,
+      "recall@50": 0.0,
+      "ndcg@10": 0.0
+    },
+    "all": {
+      "n": 753,
+      "recall@10": 0.004,
+      "recall@50": 0.008,
+      "ndcg@10": 0.0014
+    }
+  },
+  "eval_seconds": 47.0
+}
+{
+  "label": "latefusion_beta0.5",
+  "kind": "movie",
+  "beta": 0.5,
+  "content_only": false,
+  "cooccur_only": false,
+  "leakage_filtered@50": 0,
+  "strata": {
+    "creator_twin": {
+      "n": 669,
+      "recall@10": 0.0135,
+      "recall@50": 0.0508,
+      "ndcg@10": 0.0086
+    },
+    "novel": {
+      "n": 84,
+      "recall@10": 0.0,
+      "recall@50": 0.0,
+      "ndcg@10": 0.0
+    },
+    "all": {
+      "n": 753,
+      "recall@10": 0.012,
+      "recall@50": 0.0452,
+      "ndcg@10": 0.0077
+    }
+  },
+  "eval_seconds": 49.6
+}
+{
+  "label": "latefusion_beta1.0",
+  "kind": "movie",
+  "beta": 1.0,
+  "content_only": false,
+  "cooccur_only": false,
+  "leakage_filtered@50": 0,
+  "strata": {
+    "creator_twin": {
+      "n": 669,
+      "recall@10": 0.0179,
+      "recall@50": 0.0433,
+      "ndcg@10": 0.0088
+    },
+    "novel": {
+      "n": 84,
+      "recall@10": 0.0,
+      "recall@50": 0.0,
+      "ndcg@10": 0.0
+    },
+    "all": {
+      "n": 753,
+      "recall@10": 0.0159,
+      "recall@50": 0.0385,
+      "ndcg@10": 0.0078
+    }
+  },
+  "eval_seconds": 54.4
+}
+
+===== VARIANT B (iter4): coverage + retrieval-gate diagnosis =====
+{
+  "kind": "movie",
+  "library": 753,
+  "library_with_edge_to_another_library_item": 459,
+  "novel_stratum": 84,
+  "novel_with_coengagement_edge": 34,
+  "novel_with_edge_in_minilm_ann_pool": 1,
+  "verdict": "co-engagement must drive RETRIEVAL not re-scoring: 33/34 novel-with-edge titles are invisible to the MiniLM-centroid pool"
+}
