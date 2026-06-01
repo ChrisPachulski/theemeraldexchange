@@ -16,6 +16,10 @@ import { useQueryClient } from '@tanstack/react-query'
 import { apiUrl } from './api/base'
 import { throwApiError } from './api/errors'
 import { SESSION_EXPIRED_EVENT } from './queryClient'
+import type {
+  PublicKeyCredentialRequestOptionsJSON,
+  PublicKeyCredentialCreationOptionsJSON,
+} from '@simplewebauthn/browser'
 
 // Persists the admin "view-as" preview across reloads so an admin who
 // chose to preview the dashboard as a regular user doesn't get bumped
@@ -434,13 +438,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
       if (!optRes.ok) throw new Error(`passkey options failed: ${optRes.status}`)
       const { options, challengeId } = (await optRes.json()) as {
-        options: unknown
+        options: PublicKeyCredentialRequestOptionsJSON
         challengeId: string
       }
       const { startAuthentication } = await import('@simplewebauthn/browser')
       let assertion
       try {
-        assertion = await startAuthentication({ optionsJSON: options as never })
+        assertion = await startAuthentication({ optionsJSON: options })
       } catch {
         // User cancelled the OS prompt, no passkey for this site, or the
         // authenticator errored. Not a server failure — soft message.
@@ -505,13 +509,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         if (!optRes.ok) throw new Error(`passkey register options failed: ${optRes.status}`)
         const { options, challengeId } = (await optRes.json()) as {
-          options: unknown
+          options: PublicKeyCredentialCreationOptionsJSON
           challengeId: string
         }
         const { startRegistration } = await import('@simplewebauthn/browser')
         let attestation
         try {
-          attestation = await startRegistration({ optionsJSON: options as never })
+          attestation = await startRegistration({ optionsJSON: options })
         } catch {
           setSignInState('error')
           setSignInError('Passkey setup was cancelled.')
