@@ -621,3 +621,34 @@ the ranking method — they are the next milestone (Variant A: exploration +
 implicit-feedback harvesting), not unfinished work in this loop's scope.
 
 CONVERGED.
+
+---
+
+## Post-convergence: content-representation test (does "about-ness" crack novel?)
+
+Challenge: the converged lift is creator-affinity (cast/crew = who's in it), which
+is content-irrelevant; and "novel needs behavioral data" was asserted, not tested.
+Test: re-embed the full movie catalog with a strong modern model (BAAI/bge-base-
+en-v1.5, 768d, on MPS) over RICHER text (title + overview + up to 30 theme
+keywords), then pure content item-knn (max-sim to any library item, full catalog).
+Code: `research/content_embed.py`.
+
+RESULT: creator_twin recall@50 0.0284 (MiniLM) -> 0.0478 (BGE) — the stronger
+model helped the PREDICTABLE stratum. NOVEL recall@50 0.0 -> **0.0** (still zero);
+recall@10 0.0. ALL recall@50 0.0425.
+
+CONCLUSION (now earned, not asserted): a strong content embedding over richer
+text STILL cannot recall the novel stratum. The novel titles have ~0.55 content
+twins in the library, but that similarity is NON-DISCRIMINATIVE — dozens of
+catalog films are equally content-similar, so no content model can prefer the one
+the household actually chose. The distinguishing information is not in the content
+— it is the collaborative/behavioral signal. So "novel needs behavioral data
+(Variant A)" is correct, now demonstrated by giving content its best shot.
+
+Two valid critiques this surfaces: (1) the system's win is "who's in it" (shallow,
+content-irrelevant) — cast/crew won only by being the one DISCRIMINATIVE signal,
+not the right one; (2) the leave-one-out reconstruction METRIC rewards franchise/
+creator prediction over thematic discovery. Untested content levers (full plot
+synopsis text; LLM theme/tone tags) would make recs theme-driven rather than
+cast-driven — likely won't crack novel (structural), but worth it for the
+shallowness fix if pursued.
