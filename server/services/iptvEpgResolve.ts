@@ -118,3 +118,36 @@ export function resolveEpgId(
   }
   return null
 }
+
+/**
+ * Benchmark/scoring aid — NOT used in the live resolve path. Returns a 0..1
+ * title-similarity score between two raw channel names, computed as the Jaccard
+ * similarity (|A ∩ B| / |A ∪ B|) of their character-trigram sets AFTER applying
+ * the same normalizeChannelName() the resolver uses. This lets a deterministic,
+ * network-free benchmark score how close two names are without TMDB calls:
+ *   - identical normalized forms → 1 ("US: ESPN" and "ESPN FHD" both → "espn")
+ *   - disjoint forms → 0
+ * If either input normalizes to null (too short/empty), returns 0. A normalized
+ * string shorter than 3 chars cannot occur (normalizeChannelName rejects <3),
+ * but is guarded by treating the whole string as a single token.
+ */
+export function titleSimilarity(a: string, b: string): number {
+  const na = normalizeChannelName(a)
+  const nb = normalizeChannelName(b)
+  if (!na || !nb) return 0
+  if (na === nb) return 1
+
+  const trigrams = (s: string): Set<string> => {
+    if (s.length < 3) return new Set([s]) // guard: whole string as one token
+    const set = new Set<string>()
+    for (let i = 0; i <= s.length - 3; i++) set.add(s.slice(i, i + 3))
+    return set
+  }
+
+  const A = trigrams(na)
+  const B = trigrams(nb)
+  let inter = 0
+  for (const t of A) if (B.has(t)) inter++
+  const union = A.size + B.size - inter
+  return union === 0 ? 0 : inter / union
+}
