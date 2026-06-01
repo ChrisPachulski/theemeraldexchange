@@ -60,11 +60,14 @@ function encodeBase32Crockford(bytes: Buffer, bits: number): string {
   return result
 }
 
-export function generateUlid(): string {
-  const now = Date.now()
-  // 10 chars for 48-bit timestamp
+export function generateUlid(nowMs: number = Date.now()): string {
+  // 10 chars for 48-bit timestamp. writeUIntBE natively validates the value is
+  // in [0, 2**48); Date.now() stays in that range until ~year 10889. The prior
+  // `& 0xffffffffffff` mask was a bug: JS bitwise-AND coerces both operands to
+  // 32-bit SIGNED ints, so the 48-bit mask became -1 and the timestamp became a
+  // negative int32, which made writeUIntBE throw on every call.
   const tsBuf = Buffer.allocUnsafe(6)
-  tsBuf.writeUIntBE(now & 0xffffffffffff, 0, 6)
+  tsBuf.writeUIntBE(nowMs, 0, 6)
   const tsPart = encodeBase32Crockford(tsBuf, 50).slice(-10)
   // 16 chars for 80-bit random
   const rndBuf = randomBytes(10)
