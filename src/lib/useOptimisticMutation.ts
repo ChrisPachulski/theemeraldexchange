@@ -51,6 +51,38 @@ export type OptimisticMutation<TState, TPatch> = {
   run: (patch: TPatch, action: () => Promise<unknown> | unknown) => void
 }
 
+/**
+ * Pure, framework-agnostic run orchestration extracted from the hook so it can
+ * be unit-tested in the `node` environment (no jsdom / @testing-library).
+ *
+ * The two React primitives are INJECTED:
+ *   - `applyOptimistic` is `useOptimistic`'s dispatch (apply the patch).
+ *   - `startTransition` is `useTransition`'s starter (mark the work pending).
+ *
+ * Behavior: apply the patch optimistically, then await `action` INSIDE the
+ * transition so the optimistic layer stays applied for the action's full
+ * duration and is torn down (commit or revert) exactly when it settles.
+ */
+export function runOptimisticMutation<TPatch>(
+  applyOptimistic: (patch: TPatch) => void,
+  startTransition: (scope: () => void | Promise<void>) => void,
+  patch: TPatch,
+  action: () => Promise<unknown> | unknown,
+): void {
+  startTransition(async () => {
+    applyOptimistic(patch)
+    try {
+      await action()
+    } catch {
+      // Intentional: the optimistic layer is discarded when this
+      // transition settles, so a throw reverts `value` back to `base`.
+      // The owning React Query mutation is responsible for toasts /
+      // retries / cache rollback — re-throwing here would only surface
+      // an unhandled rejection without changing the visible outcome.
+    }
+  })
+}
+
 export function useOptimisticMutation<TState, TPatch = TState>(
   base: TState,
   reducer: OptimisticReducer<TState, TPatch>,
@@ -60,18 +92,7 @@ export function useOptimisticMutation<TState, TPatch = TState>(
 
   const run = useCallback(
     (patch: TPatch, action: () => Promise<unknown> | unknown) => {
-      startTransition(async () => {
-        applyOptimistic(patch)
-        try {
-          await action()
-        } catch {
-          // Intentional: the optimistic layer is discarded when this
-          // transition settles, so a throw reverts `value` back to `base`.
-          // The owning React Query mutation is responsible for toasts /
-          // retries / cache rollback — re-throwing here would only surface
-          // an unhandled rejection without changing the visible outcome.
-        }
-      })
+      runOptimisticMutation(applyOptimistic, startTransition, patch, action)
     },
     [applyOptimistic],
   )
