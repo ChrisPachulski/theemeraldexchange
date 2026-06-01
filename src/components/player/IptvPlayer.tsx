@@ -109,6 +109,49 @@ export function setNativeSubtitleTrack(video: HTMLVideoElement, trackId: number)
   }
 }
 
+// Minimal structural type for the hls.js handle we mutate. Mirrors the
+// properties IptvPlayer assigns; kept local so tests need no hls.js import.
+export type HlsTrackController = { audioTrack: number; subtitleTrack: number }
+
+// Applies an audio-track selection to whichever engine is active and reports
+// the selection that should be reflected in component state. HLS takes
+// precedence (live path); otherwise the native <video> audioTracks are used.
+// Returns the trackId that was applied, or null when there is no switchable
+// engine (so the caller can skip the setState).
+export function applyAudioTrack(
+  hls: HlsTrackController | null,
+  video: VideoWithTracks | null,
+  trackId: number,
+): number | null {
+  if (hls) {
+    hls.audioTrack = trackId
+    return trackId
+  }
+  if (!video) return null
+  const tracks = video.audioTracks
+  if (!tracks?.length) return null
+  setNativeAudioTrack(video, trackId)
+  return trackId
+}
+
+// Subtitle counterpart. HLS precedence; otherwise native textTracks via
+// setNativeSubtitleTrack. trackId === -1 means "Off" and is always applicable
+// on the native path (setNativeSubtitleTrack disables all tracks), so unlike
+// audio there is no length guard — return the applied id when a video exists.
+export function applySubtitleTrack(
+  hls: HlsTrackController | null,
+  video: HTMLVideoElement | null,
+  trackId: number,
+): number | null {
+  if (hls) {
+    hls.subtitleTrack = trackId
+    return trackId
+  }
+  if (!video) return null
+  setNativeSubtitleTrack(video, trackId)
+  return trackId
+}
+
 export default function IptvPlayer({
   grant,
   autoPlay = false,
@@ -403,33 +446,17 @@ export default function IptvPlayer({
   }, [autoPlay, grant])
 
   const chooseAudioTrack = (trackId: number) => {
-    const hls = hlsRef.current
-    if (hls) {
-      hls.audioTrack = trackId
-      setSelectedAudio(trackId)
-      return
-    }
-
-    const video = videoRef.current as VideoWithTracks | null
-    if (!video) return
-    const tracks = video.audioTracks
-    if (!tracks?.length) return
-    setNativeAudioTrack(video, trackId)
-    setSelectedAudio(trackId)
+    const applied = applyAudioTrack(
+      hlsRef.current,
+      videoRef.current as VideoWithTracks | null,
+      trackId,
+    )
+    if (applied !== null) setSelectedAudio(applied)
   }
 
   const chooseSubtitleTrack = (trackId: number) => {
-    const hls = hlsRef.current
-    if (hls) {
-      hls.subtitleTrack = trackId
-      setSelectedSubtitle(trackId)
-      return
-    }
-
-    const video = videoRef.current
-    if (!video) return
-    setNativeSubtitleTrack(video, trackId)
-    setSelectedSubtitle(trackId)
+    const applied = applySubtitleTrack(hlsRef.current, videoRef.current, trackId)
+    if (applied !== null) setSelectedSubtitle(applied)
   }
 
   return (
