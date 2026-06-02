@@ -27,15 +27,24 @@ loop does (stop→end; idle→ScheduleWakeup(min(3600,sleepSeconds)) & end; go�
 - Refresh engine targeting:
   `HOTSPOT_SRC_DIRS=scripts/autoloop AUTOLOOP_DIR="$AUTOLOOP_DIR" node scripts/autoloop/hotspot.mjs "$AUTOLOOP_WT"`
   `SIGNAL_SRC_DIRS=scripts/autoloop AUTOLOOP_DIR="$AUTOLOOP_DIR" node scripts/autoloop/signals.mjs "$AUTOLOOP_WT"`
-- **Discovery MUST be literature-grounded — this is REQUIRED, not optional.** At the START of every batch
-  (self-cap reports `improvements: 0`, i.e. the first window after a fresh `cap-baseline.txt`), you MUST
-  invoke the **literature-consultation** skill via the **Skill tool** — scoped to the engine-improvement
-  topic (production agentic-SWE loops: task selection, self-mod safety, verification, escalation) — to
-  (re)ground `RESEARCH-BACKLOG.md`. Do NOT skip it and do NOT substitute reading the existing backlog for
-  invoking the skill. (The first fire skipped it entirely — that is the bug being fixed.) Within a batch,
-  later windows reuse the refreshed backlog. THEN pick the next un-done item, highest tier first
-  (T0 safety → T1 verification → T2 proactivity → T3 escalation → T4 capability), skipping done items.
-  Never invent an engine change from prior alone.
+- **Merit gate — decide whether to re-ground on the literature THIS window. Run:**
+  `node scripts/autoloop/merit-state.mjs "$AUTOLOOP_DIR"` and parse the JSON.
+  - **`consult: false`** (open impactful backlog items remain) — DO NOT invoke literature-consultation;
+    it is expensive and re-grounding is unnecessary while real work is queued. Steer this window to
+    **`topOpen`** (the highest-tier un-done backlog item, ID + its description from RESEARCH-BACKLOG.md).
+    Do NOT invent low-level work (ad-hoc lint cleanup, coverage padding) while an impactful item is open —
+    that funnel-to-trivia is exactly the failure mode this gate exists to stop. (A REPRODUCED engine
+    signal-fix from signals.mjs still outranks backlog grooming — if discovery surfaces a red/broken
+    engine script, fix that first.)
+  - **`consult: true`** (backlog empty, or all impactful items done — the loop has run out of real work
+    and would otherwise drop to busywork) — THIS is the trigger: invoke the **literature-consultation**
+    skill via the **Skill tool**, scoped to the engine-improvement topic (production agentic-SWE loops:
+    task selection, self-mod safety, verification, escalation), to refill `RESEARCH-BACKLOG.md` with fresh
+    high-value targets. Then pick the new `topOpen`. If consultation surfaces nothing genuinely impactful,
+    the engine is CONVERGED → abstain/halt (a clean dry window) rather than padding with trivia.
+  - Lit-consult fires on DEGRADATION (impactful work exhausted), never on a fixed every-batch cadence.
+  - When you land an item, cite its backlog ID with a `— DONE`/`CONFIRMED` marker in iteration-log.md so
+    merit-state retires it (a bare mention does NOT count — the gate requires the explicit marker).
 - **Scope is a PREFERENCE, not a wall.** Favor `scripts/autoloop/**`, but reasonable, low-risk, clearly-
   related adjacent work is allowed (being proactive beyond a strict path is good). The ONLY hard rule is:
   never touch the infra set (package.json, lockfiles, .github, Dockerfile, compose, tsconfig, vitest.config,
@@ -46,8 +55,11 @@ loop does (stop→end; idle→ScheduleWakeup(min(3600,sleepSeconds)) & end; go�
 Invoke **Workflow** with `{ scriptPath: "scripts/autoloop/mesh.workflow.mjs" }` and `args`:
 `{ doneTitles:[…], existingBranches:"…", immuneRules:"<immune-rules if any>", repoRoot:"<cwd>",
   baseBranch:"auto/self-improve", scope:"scripts/autoloop/", gateCmd:"node scripts/autoloop/engine-gate.mjs scripts/autoloop",
-  goals:"<GOALS.md contents + RESEARCH-BACKLOG.md contents — so discovery+synth rank toward the
-  literature-grounded backlog items, highest tier first>", hotspots:<hotspots.json top>, signals:<signals.json signals> }`.
+  goals:"TARGET THIS WINDOW: backlog item <merit-state.topOpen> — paste its full description from
+  RESEARCH-BACKLOG.md as the PRIMARY objective. Discovery/synth MUST converge on implementing that item
+  (or a reproduced engine signal-fix, which outranks it); do NOT return an invented low-level pick while
+  this item is open. Followed by: <GOALS.md contents + RESEARCH-BACKLOG.md contents for ranking>",
+  hotspots:<hotspots.json top>, signals:<signals.json signals> }`.
 The executor forks from `origin/auto/self-improve` (it is PUSHED) and PREFERS `scripts/autoloop/**` (adjacent
 related work allowed; infra never). The tester verifies with `engine-gate.mjs` (the engine is .mjs/.sh/.json);
 if the change touched a non-engine file, also run any test that covers it. Wait for the result.
