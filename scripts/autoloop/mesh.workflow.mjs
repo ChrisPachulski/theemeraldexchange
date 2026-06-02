@@ -37,6 +37,11 @@ const IMMUNE = A.immuneRules || '(no antibodies yet)'
 // The driver runs on it, so worktrees fork from it — fixes already made this
 // session are present, so the forest cannot re-discover them. See ARCHITECTURE.md.
 const BASE = A.baseBranch || 'auto/integration'
+// Verification gate is PARAMETERIZED (agnostic): the EEX run uses ci-gate.sh
+// (tsc/vitest); a self-improvement run targeting scripts/autoloop passes
+// engine-gate.mjs (validates workflow scripts via the sandbox-wrap that plain
+// `node --check` false-fails). Default preserves product-loop behavior.
+const GATE = A.gateCmd || 'bash scripts/autoloop/ci-gate.sh'
 
 // GOALS.md drives WHAT to work on (Part A class ladder + Part B roadmap weighting);
 // hotspots.json drives WHERE (defect concentration: change-freq × size). Selection =
@@ -265,17 +270,18 @@ phase('Verify')
 const [test, skeptic] = await parallel([
   () => agent(
     [
-      `Independently verify branch ${fix.branch || '(the pushed auto/* branch)'} with CI's EXACT gate.`,
+      `Independently verify branch ${fix.branch || '(the pushed auto/* branch)'} with the EXACT gate.`,
       `Do NOT trust the executor's self-report — agents have shipped false greens. Verify in a THROWAWAY`,
       `git worktree so you never disturb the driver's checkout:`,
       `    git fetch origin --quiet`,
       `    WT="$(mktemp -d)/verify"; git worktree add --force "$WT" "${fix.branch || 'FETCH_HEAD'}"`,
-      `    ( cd "$WT" && bash scripts/autoloop/ci-gate.sh ); rc=$?`,
+      `    ( cd "$WT" && ${GATE} ); rc=$?`,
       `    git worktree remove --force "$WT" 2>/dev/null || true`,
-      `ci-gate.sh is the single source of truth mirroring CI's test job: tsc --noEmit, tsc -p server,`,
-      `eslint, test:coverage, AND 'npm run build' (tsc -b + vite + server tsc — the step that catches`,
-      `type errors 'tsc --noEmit' MISSES, the IR-7 gap), plus the cargo gate when Rust changed.`,
-      `Report ok=true ONLY if ci-gate.sh exited 0 (rc=0). On failure, put the failing command + first errors in findings.`,
+      `The gate (\`${GATE}\`) is the single source of truth. For ci-gate.sh that means tsc -b + server`,
+      `tsc + eslint + test:coverage (catches the IR-7 type errors 'tsc --noEmit' misses) + cargo when Rust`,
+      `changed; for engine-gate.mjs it means every engine file parses under its real loader (workflow-wrap`,
+      `+ node --check + bash -n + json). Run any sibling tests the change touches too.`,
+      `Report ok=true ONLY if the gate exited 0 (rc=0). On failure, put the failing command + first errors in findings.`,
     ].join('\n'),
     { model: 'sonnet', phase: 'Verify', label: 'tester', schema: CHECK },
   ),
