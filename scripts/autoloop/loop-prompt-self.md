@@ -37,7 +37,7 @@ loop does (stop→end; idle→ScheduleWakeup(min(3600,sleepSeconds)) & end; go�
 ## 4. Run ONE mesh window (Workflow tool)
 Invoke **Workflow** with `{ scriptPath: "scripts/autoloop/mesh.workflow.mjs" }` and `args`:
 `{ doneTitles:[…], existingBranches:"…", immuneRules:"<immune-rules if any>", repoRoot:"<cwd>",
-  baseBranch:"auto/self-improve", gateCmd:"node scripts/autoloop/engine-gate.mjs scripts/autoloop",
+  baseBranch:"auto/self-improve", scope:"scripts/autoloop/", gateCmd:"node scripts/autoloop/engine-gate.mjs scripts/autoloop",
   goals:"<GOALS.md contents + RESEARCH-BACKLOG.md contents — so discovery+synth rank toward the
   literature-grounded backlog items, highest tier first>", hotspots:<hotspots.json top>, signals:<signals.json signals> }`.
 The executor forks from `origin/auto/self-improve` (it is PUSHED) and edits ONLY `scripts/autoloop/**`.
@@ -48,6 +48,11 @@ The tester verifies with `engine-gate.mjs` (NOT ci-gate — the engine is .mjs/.
 - Append a value-ledger.md row `| ts | class | title (file) | hotspotScore | outcome |`.
 - On `branch_created` + `confirmed` (tester ok AND skeptic ok — skeptic must assert VALIDITY, not just a
   green gate; a plausible-but-wrong engine change is NOT confirmed):
+  - **DETERMINISTIC SCOPE CHECK (do this BEFORE merge):** `git fetch origin --quiet && git diff --name-only
+    origin/auto/self-improve...<branch>` — if ANY path is NOT under `scripts/autoloop/`, REJECT the branch
+    (append to dead-ends.md as `out-of-scope`, do NOT merge). The mesh is scope-constrained but this is the
+    non-negotiable backstop: a self-improvement run may only change the engine. Only if every path is in
+    scope do you proceed.
   - `git merge --no-ff <branch> -m "loop(self): <title>"` into auto/self-improve.
   - **Authoritative re-gate:** `node scripts/autoloop/engine-gate.mjs scripts/autoloop`. Exit 0 → merge
     stands; push (`git push origin auto/self-improve`); mirror changed files to `~/claude-sync/tools/autoloop/`;
