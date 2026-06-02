@@ -55,6 +55,15 @@ const scopeRule = SCOPE
   ? `FOCUS: this run primarily improves \`${SCOPE}\`. PREFER candidates there. Reasonable, low-risk work in clearly-RELATED files just outside it is allowed when it's genuinely proactive (don't contort to stay inside). HARD RULE (any file): NEVER touch dependency/build/CI/secret infra — package.json, lockfiles, Dockerfile, compose, .github, tsconfig, vitest.config, .env, deploy scripts. Those are human decisions (IR-8).`
   : ''
 
+// USE THE INTERNET (mirrors the repo/global CLAUDE.md "research before asserting" directive,
+// which Workflow SUBAGENTS do NOT inherit automatically — so it must be stated in-prompt).
+// For ANY external/objective fact — library/API/framework behavior, version-specific syntax,
+// a config option, an error meaning, "is this still the current way" — these agents must
+// consult authoritative docs FIRST rather than rely on (possibly stale) training memory.
+// They can reach WebSearch / WebFetch and the context7 MCP docs tool on demand (load schemas
+// via ToolSearch). Looking it up is the default reflex, not a last resort.
+const WEB_RULE = 'USE THE INTERNET — verify external facts before acting. For any library/API/framework behavior, version-specific syntax, config flag, deprecation, or error meaning, run WebSearch and read the authoritative/vendor docs (or use the context7 MCP tool for library docs; load tool schemas via ToolSearch if needed) BEFORE implementing or judging from memory. Training knowledge may be out of date; ground every external claim in what the current docs ACTUALLY say. Do this proactively, not only when stuck.'
+
 // GOALS.md drives WHAT to work on (Part A class ladder + Part B roadmap weighting);
 // hotspots.json drives WHERE (defect concentration: change-freq × size). Selection =
 // gate → highest non-empty class → rank by hotspotScore × roadmap-fit. Effort is a
@@ -249,6 +258,7 @@ const audited = await pipeline(
       HOTLIST,
       `Roadmap priorities to favor (GOALS.md Part B):\n${GOALS}`,
       `Each candidate MUST be autonomous (code/tests/docs/deps — NO Apple, hardware, deploy, secrets, CI/.github, Dockerfile, tsconfig, vitest.config, package.json), low-risk, and have an OBJECTIVE VERIFICATION GATE it can pass: a test that goes red→green, a measurable coverage gain on a hotspot, or a build/lint that newly passes. If you cannot name the gate, do not propose it.`,
+      WEB_RULE,
       scopeRule,
       `Set class="${c.key}" and hotspotFile to the primary target file (use a path from the hotspot list when possible).`,
       `Do NOT propose anything already done:\n${DONE}`,
@@ -305,6 +315,7 @@ const pick = await agent(
     `DROP any candidate already done or matching a VERIFIED antibody:\n${DONE}\n${IMMUNE}`,
     `If, after dropping, nothing genuinely valuable AND verifiable remains, return autonomous=false with title="(dry window — no gate-passing candidate)" and empty instructions. Abstaining is the CORRECT outcome; never force a pick.`,
     `Otherwise write exact implementation instructions INCLUDING the verification that will PROVE it (the red→green test, the measurable coverage delta, or the newly-passing build/lint). Set class="${chosenClass}", hotspotScore to the chosen candidate's score, and valueRationale (one line: why this, tied to hotspot + roadmap).`,
+    WEB_RULE,
     `Never touch deploy config, secrets, CI/.github, Dockerfile, tsconfig, vitest.config, or unrelated files. Keep the diff TIGHT — reviewer attention is the scarce resource.`,
     scopeRule ? `${scopeRule} Drop only candidates that touch the forbidden infra set; if nothing reasonable remains, return autonomous=false.` : '',
   ].join('\n'),
@@ -354,6 +365,7 @@ const fix = await agent(
     `isolated worktree forks from main (stale), causing duplicate-helper conflicts (IR-9). BEFORE editing, run:`,
     `    git fetch origin --quiet && git checkout -B auto/<timestamp>-<short-slug> origin/${BASE}`,
     `so your branch starts from the cumulative '${BASE}' tip and builds on what's already there.`,
+    WEB_RULE,
     `Then make a focused, correct change and ADD/STRENGTHEN TESTS for it (tests matter more than the change).`,
     `Then: stage ONLY your changed paths, commit with a clear message, and 'git push -u origin <branch>'.`,
     `NEVER touch main (the human promotes integration→main). NEVER deploy. Keep the diff tight. Report the`,
