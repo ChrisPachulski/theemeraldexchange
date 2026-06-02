@@ -42,13 +42,17 @@ const BASE = A.baseBranch || 'auto/integration'
 // engine-gate.mjs (validates workflow scripts via the sandbox-wrap that plain
 // `node --check` false-fails). Default preserves product-loop behavior.
 const GATE = A.gateCmd || 'bash scripts/autoloop/ci-gate.sh'
-// HARD SCOPE (agnostic): when set (e.g. a self-improvement run → "scripts/autoloop/"),
-// EVERY stage refuses files outside it. Without this the discovery forest free-scans
-// the whole repo and defaults to product coverage (observed on the first self-fire).
-// The driver ALSO does a deterministic diff-path check before landing (defense in depth).
+// SCOPE = the run's PREFERRED focus (e.g. a self-improvement run → "scripts/autoloop/"),
+// NOT a brick wall. Proactive, reasonable, low-risk ADJACENT work outside it is allowed
+// and welcome — that's part of being useful. What is NEVER allowed (any run) is the
+// dependency/build/CI/secret INFRA set: those are human decisions (IR-8) and were the
+// genuinely-bad escapes on the first fire (package.json dep bumps). The deterministic
+// gate below hard-blocks ONLY that infra set; SCOPE biases discovery, it doesn't forbid.
 const SCOPE = A.scope || ''
+// Hard-block set — infra/build/CI/secrets/deps. Out-of-scope-but-reasonable is fine; THIS is not.
+const FORBIDDEN_RE = /(^|\/)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|Dockerfile|docker-compose[^/]*|compose\.ya?ml|tsconfig[^/]*\.json|vitest\.config\.[jt]s|\.env|\.github\/|deploy)/
 const scopeRule = SCOPE
-  ? `HARD SCOPE — this run improves ONLY \`${SCOPE}\`. EVERY target/changed file MUST be within \`${SCOPE}\`. Any candidate touching a file outside it (product code, etc.) is INELIGIBLE — ignore the rest of the repo entirely.`
+  ? `FOCUS: this run primarily improves \`${SCOPE}\`. PREFER candidates there. Reasonable, low-risk work in clearly-RELATED files just outside it is allowed when it's genuinely proactive (don't contort to stay inside). HARD RULE (any file): NEVER touch dependency/build/CI/secret infra — package.json, lockfiles, Dockerfile, compose, .github, tsconfig, vitest.config, .env, deploy scripts. Those are human decisions (IR-8).`
   : ''
 
 // GOALS.md drives WHAT to work on (Part A class ladder + Part B roadmap weighting);
@@ -204,7 +208,7 @@ const audited = await pipeline(
       `You are a strict auditor for work-class "${c.key}". Candidates:`,
       JSON.stringify(found.candidates || []),
       `Return keep=true for the SINGLE best candidate ONLY if ALL hold: it is real, correct, genuinely valuable, low-risk, autonomous, not already done, targets a hotspot file, AND it has an OBJECTIVE verification gate it can pass (a red→green test, a measurable coverage gain, or a newly-passing build/lint).`,
-      scopeRule ? `${scopeRule} keep=false if the candidate's files are outside scope.` : '',
+      scopeRule ? `${scopeRule} keep=false ONLY if the candidate touches the forbidden infra set; a reasonable out-of-\`${SCOPE}\` pick that's clearly related is OK.` : '',
       `If you cannot confirm the verification gate, keep=false — ABSTAIN. A clean dry window is a CORRECT, valued outcome; reviewer attention is scarce, so NEVER pass a weak candidate just to keep volume up.`,
       `Not already done:\n${DONE}`,
       `ANTIBODY GATE — keep=false if the best candidate matches any VERIFIED antibody by symptom/root-cause (not just title). Antibodies marked unverified/advisory are HINTS ONLY — weigh them, but do NOT hard-drop a correct, gate-passing candidate solely because an unverified antibody mentions it (the IR-4 lesson: an unverified antibody was empirically false):\n${IMMUNE}`,
@@ -244,12 +248,27 @@ const pick = await agent(
     `If, after dropping, nothing genuinely valuable AND verifiable remains, return autonomous=false with title="(dry window — no gate-passing candidate)" and empty instructions. Abstaining is the CORRECT outcome; never force a pick.`,
     `Otherwise write exact implementation instructions INCLUDING the verification that will PROVE it (the red→green test, the measurable coverage delta, or the newly-passing build/lint). Set class="${chosenClass}", hotspotScore to the chosen candidate's score, and valueRationale (one line: why this, tied to hotspot + roadmap).`,
     `Never touch deploy config, secrets, CI/.github, Dockerfile, tsconfig, vitest.config, or unrelated files. Keep the diff TIGHT — reviewer attention is the scarce resource.`,
-    scopeRule ? `${scopeRule} If after dropping out-of-scope candidates nothing remains, return autonomous=false.` : '',
+    scopeRule ? `${scopeRule} Drop only candidates that touch the forbidden infra set; if nothing reasonable remains, return autonomous=false.` : '',
   ].join('\n'),
   { model: 'opus', phase: 'Synthesize', label: 'synth', schema: PICK },
 )
 if (!pick || pick.autonomous === false || pick.risk !== 'low') {
   return { action: 'skipped_risky', pick, chosenClass }
+}
+
+// DETERMINISTIC INFRA GATE (defense in depth, pre-execute). Prose rules are
+// advisory — an LLM synth has ignored them. This is the cheap early cut BEFORE the
+// expensive executor/verify stages, but it ONLY blocks the dependency/build/CI/
+// secret infra set (package.json, lockfiles, .github, Dockerfile, tsconfig,
+// vitest.config, .env, deploy). Out-of-SCOPE-but-reasonable work is allowed — being
+// proactive beyond a strict path is fine; touching infra is not (IR-8).
+{
+  const files = (pick.files || []).map((f) => String(f))
+  const infra = files.filter((f) => FORBIDDEN_RE.test(f))
+  if (infra.length) {
+    log(`INFRA GATE: rejecting pick "${pick.title}" — touches human-owned infra: ${infra.join(', ')}`)
+    return { action: 'out_of_scope', pick, chosenClass, forbidden: infra }
+  }
 }
 
 // ---- Execute: Opus executor in an ISOLATED WORKTREE ----
@@ -260,16 +279,16 @@ const fix = await agent(
     `Title: ${pick.title}`,
     `Instructions: ${pick.instructions}`,
     `Target files (guide): ${(pick.files || []).join(', ') || 'as needed'}`,
-    `CRITICAL FIRST STEP — base your branch on the INTEGRATION tip, not main. The isolated worktree`,
-    `forks from main (stale: it lacks this session's confirmed work), which causes duplicate-helper`,
-    `merge conflicts that have to be hand-resolved (IR-9). BEFORE editing anything, run:`,
+    `CRITICAL FIRST STEP — base your branch on the '${BASE}' tip, not main. Use '${BASE}' VERBATIM —`,
+    `do NOT substitute another branch (e.g. auto/integration) even if the task text mentions one. The`,
+    `isolated worktree forks from main (stale), causing duplicate-helper conflicts (IR-9). BEFORE editing, run:`,
     `    git fetch origin --quiet && git checkout -B auto/<timestamp>-<short-slug> origin/${BASE}`,
     `so your branch starts from the cumulative '${BASE}' tip and builds on what's already there.`,
     `Then make a focused, correct change and ADD/STRENGTHEN TESTS for it (tests matter more than the change).`,
     `Then: stage ONLY your changed paths, commit with a clear message, and 'git push -u origin <branch>'.`,
     `NEVER touch main (the human promotes integration→main). NEVER deploy. Keep the diff tight. Report the`,
     `branch name, whether push succeeded, and a one-paragraph summary + the tests you added.`,
-    scopeRule ? `${scopeRule} Edit ONLY files within \`${SCOPE}\`. If the task needs a change outside it, make NO edits and report changed=false with the reason.` : '',
+    scopeRule ? `${scopeRule} Prefer editing within \`${SCOPE}\`; a related adjacent file is OK if it's the right fix. NEVER edit the forbidden infra set — if the task needs that, make NO edits and report changed=false with the reason.` : '',
   ].join('\n'),
   { model: 'opus', phase: 'Execute', label: 'executor', isolation: 'worktree', schema: FIX },
 )
