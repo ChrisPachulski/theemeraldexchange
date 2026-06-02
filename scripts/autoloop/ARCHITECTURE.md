@@ -43,6 +43,27 @@ Even with the above, `immuneRules`/`doneTitles` are injected into BOTH deciding 
 auditor + Opus synth), matched by symptom/root-cause not just title, with a clean dry-window exit
 when only immune/done survivors remain. (Committed `ef74ac3`.) This catches any residual repeat.
 
+## Signal ingestion (the proactivity leg — `signals.mjs`)
+The first live run produced almost entirely *defensive coverage* because the discovery forest had ONE
+input modality: Haiku leaves scan code SHAPE per work-class. The top class — `signal-fix` ("a REPRODUCED
+failure that is RED right now") — had no feed of actual failures, so it rarely fired and the loop fell
+through to `gated-test`. The loop was structurally blind to everything but code shape.
+
+`signals.mjs` is the fix, and it is **repo-agnostic**:
+- **Built-in adapters (any git repo, zero config):** CI health (reads the guard's `ci-status.json` — a red
+  `main` is the highest-merit reproduced failure, and was the rediscovery-livelock root cause); git
+  regression-risk (files with repeated fix/bug/revert commits, especially those lacking a sibling test);
+  TODO/FIXME/BUG markers at hotspots; and an OPT-IN live-gate harvest (`SIGNAL_RUN_GATE=1` runs the gate
+  and parses real test/type/lint failures).
+- **Per-repo adapters (drop-in, loaded blindly):** every `<AUTOLOOP_DIR>/signals/*.mjs` exporting
+  `export async function collect(ctx)` is run best-effort. An error tracker, issue tracker, or perf budget
+  is a ~30-line adapter the repo adds **without touching the engine** — the engine never names a source.
+
+The driver runs `signals.mjs` each window → `signals.json`, passes `signals` into the mesh, and each
+work-class's discovery leaf is SEEDED with the real signals for its class. Result: the highest-merit class
+fires on reproduced, evidence-bearing work; coverage is the floor (signal queue dry), not the default.
+A reproduced `signal-fix` is exempt from the hotspot-targeting rail — the red itself is the justification.
+
 ## Single-loop invariant
 Every loop spends the same account 5h/7d window, and two mutating loops on one repo re-introduce
 contention. `start-loop.sh` refuses to start if another autoloop worktree/session is already live

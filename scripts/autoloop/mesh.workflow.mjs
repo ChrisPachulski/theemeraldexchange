@@ -56,6 +56,31 @@ function scoreFor(file) {
   return 0
 }
 
+// SIGNALS (the PROACTIVITY leg, from signals.mjs) — real, reproduced,
+// evidence-bearing work items: a red CI job, a recurring-fix file, a TODO/FIXME,
+// or anything a per-repo adapter surfaced (error tracker, issues, perf budget).
+// Each discovery leaf is SEEDED with the real signals for its class so the forest
+// works on what is actually broken/needed, not what it can imagine by code-shape.
+// When the signal queue is dry, the leaves fall back to code-scan (coverage = floor).
+// See signals.mjs + ARCHITECTURE.md "Signal ingestion".
+const SIGNALS = Array.isArray(A.signals) ? A.signals : []
+const SIGBYCLASS = new Map()
+for (const s of SIGNALS) {
+  const k = s.class || 'signal-fix'
+  if (!SIGBYCLASS.has(k)) SIGBYCLASS.set(k, [])
+  SIGBYCLASS.get(k).push(s)
+}
+function signalsBlock(classKey) {
+  const items = SIGBYCLASS.get(classKey) || []
+  if (!items.length) return ''
+  return [
+    `REAL REPRODUCED SIGNALS for this class — PREFER THESE over anything you imagine by reading code.`,
+    `They are already evidenced and carry an objective gate; pick from here first:`,
+    ...items.slice(0, 6).map((s) => `  • [sev ${s.severity}] ${s.title}${s.file ? ` (file: ${s.file})` : ''}\n      evidence: ${s.evidence}\n      gate: ${s.gate}`),
+    `A reproduced signal is high-merit by definition — for the signal-fix class it need NOT target a hotspot file (the red itself is the justification). For other classes still prefer hotspots.`,
+  ].join('\n')
+}
+
 // Evidence-derived work-class ladder (GOALS.md Part A), highest priority first.
 // One Haiku discovery leaf per class; synth picks within the HIGHEST non-empty class.
 const CLASSES = [
