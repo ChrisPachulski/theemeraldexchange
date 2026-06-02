@@ -55,3 +55,16 @@ test('mesh.workflow.mjs collapses classes + gates on the same allowed set', () =
   // (3) A rejected pick must abstain (off_objective), never fall through to execute.
   assert.match(mesh, /action:\s*'off_objective'/, 'mesh must return off_objective on drift, not commit');
 });
+
+// ---- REGRESSION: args must be normalized when the driver hands a JSON string ----
+// The driver passed `args` as a JSON-encoded STRING, so every `args.*` read was undefined
+// → no scope, no objective mode, default base → the mesh drifted into product code. The
+// mesh MUST parse a string `args` back to an object or the deterministic steer is inert.
+test('mesh.workflow.mjs normalizes args when handed a JSON string', () => {
+  const mesh = readFileSync(join(HERE, 'mesh.workflow.mjs'), 'utf8');
+  assert.match(
+    mesh,
+    /typeof\s+args\s*===\s*'string'/,
+    'mesh must JSON.parse args when it arrives as a string (else scope/objective/base are silently undefined)',
+  );
+});

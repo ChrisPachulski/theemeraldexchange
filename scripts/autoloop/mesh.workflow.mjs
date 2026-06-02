@@ -29,7 +29,16 @@ export const meta = {
   ],
 }
 
-const A = args || {}
+// ROBUSTNESS: the /loop driver sometimes hands `args` as a JSON-ENCODED STRING rather
+// than an object (the prompt shows it as a literal; an LLM driver tends to serialize it).
+// When that happens, `args.scope` / `args.primaryObjective` / `args.baseBranch` are all
+// undefined → the mesh silently runs with NO scope, NO objective mode, and the DEFAULT
+// base (auto/integration) — which is exactly what made every self-improve window "drift"
+// into product code. Parse it back so the args actually take effect. (Workflow docs warn
+// args should be a real JSON value; this is the defensive net for when it isn't.)
+const A = (typeof args === 'string'
+  ? (() => { try { return JSON.parse(args) } catch { return {} } })()
+  : args) || {}
 const DONE = (A.doneTitles || []).map((t) => `- ${t}`).join('\n') || '(none yet)'
 const BRANCHES = A.existingBranches || '(none)'
 const IMMUNE = A.immuneRules || '(no antibodies yet)'
