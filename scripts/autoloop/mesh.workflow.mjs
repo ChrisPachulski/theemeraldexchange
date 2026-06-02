@@ -181,6 +181,38 @@ const CHECK = {
   },
 }
 
+// SKEPTIC schema (backlog V1.1) — distinct from CHECK so the adversary must
+// separate PLAUSIBLE (the gate is green) from VALID (the change is semantically
+// correct AND the tests are meaningful, not rubber-stamping). [G1, Passerine]:
+// passing the test is plausible; correctness is a separate, lower bar. A change
+// confirms only on VALID — see isConfirmed below.
+const SKEPTIC = {
+  type: 'object',
+  required: ['plausible', 'valid', 'validityRationale'],
+  properties: {
+    plausible: { type: 'boolean' }, // gate green / tests pass on their face
+    valid: { type: 'boolean' },     // semantically correct AND tests are meaningful
+    validityRationale: { type: 'string' }, // concrete WHY it is (or is not) valid
+    ok: { type: 'boolean' },        // back-compat mirror of `valid`
+    findings: { type: 'string' },
+    verdict: { type: 'string' },
+  },
+}
+
+// Inline TWIN of scripts/autoloop/confirm.mjs:isConfirmed — the canonical, unit-
+// tested predicate. Workflow scripts run in a sandbox that forbids `import`, so
+// the logic is duplicated here; confirm.test.mjs pins this twin to the canonical
+// version (drift guard). CONFIRMED iff the gate is green AND the skeptic asserts
+// VALIDITY with a rationale — a green gate alone (plausible) is NOT enough.
+function isConfirmed(r = {}) {
+  const { test, skeptic } = r
+  const gateGreen = test && test.ok === true
+  const valid = skeptic && skeptic.valid === true
+  const rationale =
+    skeptic && typeof skeptic.validityRationale === 'string' && skeptic.validityRationale.trim().length > 0
+  return !!(gateGreen && valid && rationale)
+}
+
 // ---- Discover: ONE Haiku leaf per work-class, scanning hotspots → Sonnet gate ----
 phase('Discover')
 const audited = await pipeline(
@@ -320,10 +352,18 @@ const [test, skeptic] = await parallel([
     [
       `You are an adversarial skeptic who did NOT write this change: "${pick.title}".`,
       `Summary: ${fix.summary}`,
-      `Find the single weakest link — is the change correct, are the tests meaningful or do they just rubber-stamp the code, any regression risk? Be specific.`,
-      `Return ok=true only if it genuinely holds up; verdict = your one-line judgement.`,
+      `Distinguish TWO separate judgements (do not conflate them):`,
+      `  • plausible = does the gate pass / do the tests go green on their face? (a low bar)`,
+      `  • valid     = is the change SEMANTICALLY CORRECT and are the tests MEANINGFUL`,
+      `                (they exercise the real behavior, not rubber-stamp the implementation)?`,
+      `Evidence [Passerine @ Google]: a patch that passes the bug's test is merely plausible;`,
+      `semantic correctness is a separate, strictly-lower number. GREEN IS NOT CORRECT.`,
+      `Find the single weakest link — correctness, test meaningfulness, regression risk. Be specific.`,
+      `Set valid=true ONLY if you can give a concrete validityRationale for why it is genuinely`,
+      `correct; if a green gate is the ONLY evidence, that is plausible=true, valid=false. When in`,
+      `doubt, valid=false. Also set ok (back-compat) = valid. verdict = your one-line judgement.`,
     ].join('\n'),
-    { model: 'opus', phase: 'Verify', label: 'skeptic', schema: CHECK },
+    { model: 'opus', phase: 'Verify', label: 'skeptic', schema: SKEPTIC },
   ),
 ])
 
@@ -336,5 +376,6 @@ return {
   testsAdded: fix.testsAdded,
   test,
   skeptic,
-  confirmed: !!(test && test.ok && skeptic && skeptic.ok),
+  // V1.1: confirm on VALIDITY, not a green gate alone (see isConfirmed / confirm.mjs).
+  confirmed: isConfirmed({ test, skeptic }),
 }
