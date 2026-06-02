@@ -23,13 +23,21 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 
 const argv = process.argv.slice(2);
+// --committed = AUTHORITATIVE LAND-GATE mode (run by the driver AFTER it commits): on top
+// of the parse check, reject uncommitted scope changes (a partial commit — impl left in the
+// working tree while only the test landed — is the failure that shipped a broken HEAD whose
+// tests fail) AND run the test suite (a green parse is not a green suite; the old gate only
+// parsed, so a test-breaking commit sailed through). Plain mode (no flag) is the mid-window
+// tester gate: parse only, dirty tree is expected there.
+const COMMITTED = argv.includes('--committed');
 let files = [];
+let scopeDir = 'scripts/autoloop';
 const fi = argv.indexOf('--files');
 if (fi !== -1) {
   files = argv.slice(fi + 1).filter((a) => !a.startsWith('--'));
 } else {
-  const dir = argv.find((a) => !a.startsWith('--')) || 'scripts/autoloop';
-  files = walk(dir);
+  scopeDir = argv.find((a) => !a.startsWith('--')) || 'scripts/autoloop';
+  files = walk(scopeDir);
 }
 
 function walk(dir) {
@@ -95,3 +103,34 @@ if (failures.length) {
   process.exit(1);
 }
 console.log(`engine-gate: OK — ${checked} engine file(s) parse clean (workflow-wrap + node --check + bash -n + json).`);
+
+if (COMMITTED) {
+  // (1) No uncommitted changes in scope — the committed state IS what gets tested. A
+  //     partial commit (impl left dirty while only the test landed) is rejected here.
+  let dirty = '';
+  try { dirty = execFileSync('git', ['status', '--porcelain', '--', scopeDir], { encoding: 'utf8' }).trim(); }
+  catch (e) { console.error(`engine-gate --committed: cannot read git status: ${e.message}`); process.exit(1); }
+  if (dirty) {
+    console.error('engine-gate --committed: FAIL — uncommitted changes in scope (the commit is INCOMPLETE):');
+    for (const l of dirty.split('\n')) console.error(`  ${l}`);
+    console.error('  A green self-report against a dirty tree is not a green COMMIT. Commit (or revert) these, then re-gate.');
+    process.exit(1);
+  }
+  // (2) The test suite must pass on the committed tree — a parse is not a pass.
+  const tests = walk(scopeDir).filter((f) => /\.test\.mjs$/.test(f));
+  if (tests.length) {
+    try {
+      execFileSync('node', ['--test', ...tests], { stdio: 'pipe' });
+    } catch (e) {
+      const out = ((e.stdout ? e.stdout.toString() : '') + (e.stderr ? e.stderr.toString() : ''));
+      const fails = out.split('\n').filter((l) => /^not ok|✖|# fail/.test(l)).slice(0, 8).join('\n');
+      console.error(`engine-gate --committed: FAIL — ${tests.length} test file(s) ran, suite is RED on the committed tree:`);
+      console.error(fails || out.slice(-600));
+      console.error('  The committed state does not pass its own tests. This commit MUST NOT stand.');
+      process.exit(1);
+    }
+    console.log(`engine-gate --committed: OK — clean tree + ${tests.length} test file(s) GREEN on the committed state.`);
+  } else {
+    console.log('engine-gate --committed: OK — clean tree (no test files in scope to run).');
+  }
+}

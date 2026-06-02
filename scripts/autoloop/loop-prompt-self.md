@@ -80,10 +80,14 @@ if the change touched a non-engine file, also run any test that covers it. Wait 
     (append dead-ends.md as `infra-touch`, do NOT merge). Non-engine but reasonable files are fine — this
     backstop blocks only human-owned infra (the first fire's package.json dep bumps), not proactive adjacent work.
   - `git merge --no-ff <branch> -m "loop(self): <title>"` into auto/self-improve.
-  - **Authoritative re-gate:** `node scripts/autoloop/engine-gate.mjs scripts/autoloop`. Exit 0 → merge
-    stands; push (`git push origin auto/self-improve`); mirror changed files to `~/claude-sync/tools/autoloop/`;
-    `notify.mjs`. Non-zero → `git reset --hard HEAD~1`, append dead-ends.md, treat as unconfirmed (never
-    brick — last-good engine stays).
+  - **Authoritative re-gate (MUST use `--committed`):** `node scripts/autoloop/engine-gate.mjs --committed scripts/autoloop`.
+    This runs AFTER the commit/merge and verifies the COMMITTED tree: (a) NO uncommitted scope changes
+    (a partial commit — impl left dirty while only the test landed — is rejected here; a green self-report
+    against a dirty tree is NOT a green commit), and (b) the engine TEST SUITE passes on the committed state
+    (a parse is not a pass). Exit 0 → merge stands; push (`git push origin auto/self-improve`); mirror changed
+    files to `~/claude-sync/tools/autoloop/`; `notify.mjs`. Non-zero → `git reset --hard HEAD~1` (or commit the
+    missing files if the failure is "uncommitted changes"), append dead-ends.md, treat as unconfirmed (never
+    brick — last-good engine stays). Do NOT push on a non-zero gate.
 - NOT confirmed / dry → note it; append dead-ends.md if a branch failed.
 
 ## 6. Schedule next
