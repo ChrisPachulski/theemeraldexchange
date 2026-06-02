@@ -46,6 +46,12 @@ const BASE = A.baseBranch || 'auto/integration'
 // lexicographic class ladder beats a blended score, reviewer attention is the scarce
 // resource, and hotspot targeting is the leg that turns "safe" work into "high-value".
 const GOALS = A.goals || '(no GOALS.md provided — fall back to broad discovery)'
+// USE THE INTERNET (mirrors the repo/global CLAUDE.md "research before asserting" directive,
+// which Workflow SUBAGENTS do NOT inherit automatically — so it must be stated in-prompt).
+// The discovery/synth/executor agents otherwise code from possibly-stale training memory.
+// They can reach WebSearch / WebFetch and the context7 MCP docs tool on demand (load schemas
+// via ToolSearch). Looking it up is the default reflex, not a last resort.
+const WEB_RULE = 'USE THE INTERNET — verify external facts before acting. For any library/API/framework behavior, version-specific syntax, config flag, deprecation, or error meaning, run WebSearch and read the authoritative/vendor docs (or use the context7 MCP tool for library docs; load tool schemas via ToolSearch if needed) BEFORE implementing or judging from memory. Training knowledge may be out of date; ground every external claim in what the current docs ACTUALLY say. Do this proactively, not only when stuck.'
 const HOTSPOTS = Array.isArray(A.hotspots) ? A.hotspots : []
 const HOTLIST = HOTSPOTS.slice(0, 20).map((h) => `${h.file} (rev=${h.revisions}, loc=${h.loc}, score=${h.score})`).join('\n') || '(no hotspot data — treat files equally)'
 const HOTMAP = new Map(HOTSPOTS.map((h) => [h.file, h.score]))
@@ -177,6 +183,7 @@ const audited = await pipeline(
       HOTLIST,
       `Roadmap priorities to favor (GOALS.md Part B):\n${GOALS}`,
       `Each candidate MUST be autonomous (code/tests/docs/deps — NO Apple, hardware, deploy, secrets, CI/.github, Dockerfile, tsconfig, vitest.config, package.json), low-risk, and have an OBJECTIVE VERIFICATION GATE it can pass: a test that goes red→green, a measurable coverage gain on a hotspot, or a build/lint that newly passes. If you cannot name the gate, do not propose it.`,
+      WEB_RULE,
       `Set class="${c.key}" and hotspotFile to the primary target file (use a path from the hotspot list when possible).`,
       `Do NOT propose anything already done:\n${DONE}`,
       `Avoid known dead-ends / honor these antibodies:\n${IMMUNE}`,
@@ -228,6 +235,7 @@ const pick = await agent(
     `DROP any candidate already done or matching a VERIFIED antibody:\n${DONE}\n${IMMUNE}`,
     `If, after dropping, nothing genuinely valuable AND verifiable remains, return autonomous=false with title="(dry window — no gate-passing candidate)" and empty instructions. Abstaining is the CORRECT outcome; never force a pick.`,
     `Otherwise write exact implementation instructions INCLUDING the verification that will PROVE it (the red→green test, the measurable coverage delta, or the newly-passing build/lint). Set class="${chosenClass}", hotspotScore to the chosen candidate's score, and valueRationale (one line: why this, tied to hotspot + roadmap).`,
+    WEB_RULE,
     `Never touch deploy config, secrets, CI/.github, Dockerfile, tsconfig, vitest.config, or unrelated files. Keep the diff TIGHT — reviewer attention is the scarce resource.`,
   ].join('\n'),
   { model: 'opus', phase: 'Synthesize', label: 'synth', schema: PICK },
@@ -249,6 +257,7 @@ const fix = await agent(
     `merge conflicts that have to be hand-resolved (IR-9). BEFORE editing anything, run:`,
     `    git fetch origin --quiet && git checkout -B auto/<timestamp>-<short-slug> origin/${BASE}`,
     `so your branch starts from the cumulative '${BASE}' tip and builds on what's already there.`,
+    WEB_RULE,
     `Then make a focused, correct change and ADD/STRENGTHEN TESTS for it (tests matter more than the change).`,
     `Then: stage ONLY your changed paths, commit with a clear message, and 'git push -u origin <branch>'.`,
     `NEVER touch main (the human promotes integration→main). NEVER deploy. Keep the diff tight. Report the`,
