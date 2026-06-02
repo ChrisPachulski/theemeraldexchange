@@ -38,7 +38,8 @@ loop does (stop→end; idle→ScheduleWakeup(min(3600,sleepSeconds)) & end; go�
 Invoke **Workflow** with `{ scriptPath: "scripts/autoloop/mesh.workflow.mjs" }` and `args`:
 `{ doneTitles:[…], existingBranches:"…", immuneRules:"<immune-rules if any>", repoRoot:"<cwd>",
   baseBranch:"auto/self-improve", gateCmd:"node scripts/autoloop/engine-gate.mjs scripts/autoloop",
-  goals:"<GOALS.md contents>", hotspots:<hotspots.json top>, signals:<signals.json signals> }`.
+  goals:"<GOALS.md contents + RESEARCH-BACKLOG.md contents — so discovery+synth rank toward the
+  literature-grounded backlog items, highest tier first>", hotspots:<hotspots.json top>, signals:<signals.json signals> }`.
 The executor forks from `origin/auto/self-improve` (it is PUSHED) and edits ONLY `scripts/autoloop/**`.
 The tester verifies with `engine-gate.mjs` (NOT ci-gate — the engine is .mjs/.sh/.json). Wait for the result.
 
