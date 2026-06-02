@@ -186,7 +186,7 @@ const VERDICT = {
 
 const PICK = {
   type: 'object',
-  required: ['title', 'instructions', 'autonomous', 'risk'],
+  required: ['title', 'instructions', 'autonomous', 'risk', 'delta'],
   properties: {
     title: { type: 'string' },
     class: { type: 'string', enum: CLASS_ENUM },
@@ -196,18 +196,20 @@ const PICK = {
     instructions: { type: 'string' },
     autonomous: { type: 'boolean' },
     risk: { type: 'string', enum: ['low', 'medium', 'high'] },
+    delta: { type: 'string' },
   },
 }
 
 const FIX = {
   type: 'object',
-  required: ['changed', 'summary'],
+  required: ['changed', 'summary', 'delta'],
   properties: {
     changed: { type: 'boolean' },
     branch: { type: 'string' },
     pushed: { type: 'boolean' },
     summary: { type: 'string' },
     testsAdded: { type: 'string' },
+    delta: { type: 'string' },
     error: { type: 'string' },
   },
 }
@@ -249,17 +251,20 @@ const SKEPTIC = {
 // - the gate is green (test.ok === true), AND
 // - both regression guard dimensions pass: PASS_TO_PASS (pre-existing tests stayed green) and
 //   FAIL_TO_PASS (new tests went red→green), AND
-// - the skeptic asserts VALIDITY with a rationale (semantic correctness is separate from gate).
+// - the skeptic asserts VALIDITY with a rationale (semantic correctness is separate from gate), AND
+// - a measured delta is present (fix.delta truthy, V1.3 assured-improvement gate).
 // A green gate + green new test alone is NOT enough if a pre-existing test broke (regression).
+// A green gate + VALID skeptic is still not confirmed if there is NO measured delta (V1.3).
 function isConfirmed(r = {}) {
-  const { test, skeptic } = r
+  const { test, skeptic, fix } = r
   const gateGreen = test && test.ok === true
   const passToPass = test && test.passToPass === true // pre-existing suite stayed green
   const failToPass = test && (test.failToPass === true || (typeof test.failToPass === 'string' && test.failToPass.trim().length > 0)) // new test went red→green
   const valid = skeptic && skeptic.valid === true
   const rationale =
     skeptic && typeof skeptic.validityRationale === 'string' && skeptic.validityRationale.trim().length > 0
-  return !!(gateGreen && passToPass && failToPass && valid && rationale)
+  const delta = fix && typeof fix.delta === 'string' && fix.delta.trim().length > 0 // measured improvement (V1.3)
+  return !!(gateGreen && passToPass && failToPass && valid && rationale && delta)
 }
 
 // ---- Discover: ONE Haiku leaf per work-class, scanning hotspots → Sonnet gate ----
@@ -331,7 +336,7 @@ const pick = await agent(
     `Roadmap weighting (GOALS.md Part B):\n${GOALS}`,
     `DROP any candidate already done or matching a VERIFIED antibody:\n${DONE}\n${IMMUNE}`,
     `If, after dropping, nothing genuinely valuable AND verifiable remains, return autonomous=false with title="(dry window — no gate-passing candidate)" and empty instructions. Abstaining is the CORRECT outcome; never force a pick.`,
-    `Otherwise write exact implementation instructions INCLUDING the verification that will PROVE it (the red→green test, the measurable coverage delta, or the newly-passing build/lint). Set class="${chosenClass}", hotspotScore to the chosen candidate's score, and valueRationale (one line: why this, tied to hotspot + roadmap).`,
+    `Otherwise write exact implementation instructions INCLUDING the verification that will PROVE it (the red→green test, the measurable coverage delta, or the newly-passing build/lint). Set class="${chosenClass}", hotspotScore to the chosen candidate's score, valueRationale (one line: why this, tied to hotspot + roadmap), and delta (REQUIRED: concrete description of the measured improvement gate: which test goes red→green, exact coverage delta % with before/after numbers, or which named mutant is killed). No delta ⇒ dry window.`,
     WEB_RULE,
     `Never touch deploy config, secrets, CI/.github, Dockerfile, tsconfig, vitest.config, or unrelated files. Keep the diff TIGHT — reviewer attention is the scarce resource.`,
     scopeRule ? `${scopeRule} Drop only candidates that touch the forbidden infra set; if nothing reasonable remains, return autonomous=false.` : '',
@@ -386,7 +391,10 @@ const fix = await agent(
     `Then make a focused, correct change and ADD/STRENGTHEN TESTS for it (tests matter more than the change).`,
     `Then: stage ONLY your changed paths, commit with a clear message, and 'git push -u origin <branch>'.`,
     `NEVER touch main (the human promotes integration→main). NEVER deploy. Keep the diff tight. Report the`,
-    `branch name, whether push succeeded, and a one-paragraph summary + the tests you added.`,
+    `branch name, whether push succeeded, a one-paragraph summary + the tests you added, and DELTA (REQUIRED):`,
+    `  the MEASURED improvement gate that proves this works: e.g. "test X now passes red→green", "coverage on`,
+    `  hotspot-file.ts increased 34% → 56% (+22pp)", or "mutant #7 (null-deref) now killed". This delta is the`,
+    `  proof a change is not speculative — it gates whether the change lands.`,
     scopeRule ? `${scopeRule} Prefer editing within \`${SCOPE}\`; a related adjacent file is OK if it's the right fix. NEVER edit the forbidden infra set — if the task needs that, make NO edits and report changed=false with the reason.` : '',
   ].join('\n'),
   { model: 'opus', phase: 'Execute', label: 'executor', isolation: 'worktree', schema: FIX },
@@ -448,6 +456,9 @@ return {
   testsAdded: fix.testsAdded,
   test,
   skeptic,
-  // V1.1: confirm on VALIDITY, not a green gate alone (see isConfirmed / confirm.mjs).
-  confirmed: isConfirmed({ test, skeptic }),
+  fix,
+  // V1.1: confirm on VALIDITY, not a green gate alone.
+  // V1.2: regression guard (PASS_TO_PASS + FAIL_TO_PASS) is a first-class gate.
+  // V1.3: measured delta (fix.delta) is required — plausible≠valid≠assured-improvement.
+  confirmed: isConfirmed({ test, skeptic, fix }),
 }

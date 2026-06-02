@@ -29,35 +29,40 @@ function hasRationale(s) {
  *   - pre-existing tests stayed green (test.passToPass === true)     — REGRESSION GUARD (V1.2), and
  *   - new tests went red→green        (test.failToPass truthy)       — REGRESSION GUARD (V1.2), and
  *   - the skeptic asserts VALID       (skeptic.valid === true)       — semantically correct, and
- *   - the skeptic backs validity      (non-empty validityRationale)  — with concrete reasoning.
+ *   - the skeptic backs validity      (non-empty validityRationale)  — with concrete reasoning, and
+ *   - a measured delta is present     (fix.delta truthy)             — ASSURED-IMPROVEMENT GATE (V1.3).
  *
  * Note the asymmetry from the evidence [O1 OpenHands/SWE-bench, S1 SWE-agent]: a patch that passes
  * the new test is PLAUSIBLE; regression-free behavior is a separate gate (V1.2 PASS_TO_PASS).
  * A change that makes the new test pass but silently breaks a pre-existing test is NOT confirmed
  * even if the gate goes green. Missing/undefined fields default to NOT confirmed (false skew).
  *
- * @param {{ test?: { ok?: boolean, passToPass?: boolean, failToPass?: boolean | string }, skeptic?: { valid?: boolean, validityRationale?: string } }} [r]
+ * Per Google TestGen-LLM (Meta Cinder): land only survivors of measurable-improvement + non-regression
+ * filters. A green gate with no measured delta is speculative and lands only on explicit delta assertion.
+ *
+ * @param {{ test?: { ok?: boolean, passToPass?: boolean, failToPass?: boolean | string }, skeptic?: { valid?: boolean, validityRationale?: string }, fix?: { delta?: string } }} [r]
  * @returns {boolean}
  */
 export function isConfirmed(r = {}) {
-  const { test, skeptic } = r;
+  const { test, skeptic, fix } = r;
   const gateGreen = test?.ok === true;
   const passToPass = test?.passToPass === true; // pre-existing suite stayed green (V1.2)
   const failToPass = test?.failToPass === true || (typeof test?.failToPass === 'string' && hasRationale(test.failToPass)); // new test red→green (V1.2)
   const valid = skeptic?.valid === true;
   const rationale = hasRationale(skeptic?.validityRationale);
-  return gateGreen && passToPass && failToPass && valid && rationale;
+  const delta = hasRationale(fix?.delta); // measured improvement gate (V1.3)
+  return gateGreen && passToPass && failToPass && valid && rationale && delta;
 }
 
 /**
  * Human-readable reason for the confirm/no-confirm decision — for the
  * iteration-log / value-ledger so a dry/abstained window is auditable.
  *
- * @param {{ test?: { ok?: boolean, passToPass?: boolean, failToPass?: boolean | string }, skeptic?: { plausible?: boolean, valid?: boolean, validityRationale?: string } }} [r]
+ * @param {{ test?: { ok?: boolean, passToPass?: boolean, failToPass?: boolean | string }, skeptic?: { plausible?: boolean, valid?: boolean, validityRationale?: string }, fix?: { delta?: string } }} [r]
  * @returns {string}
  */
 export function confirmationReason(r = {}) {
-  const { test, skeptic } = r;
+  const { test, skeptic, fix } = r;
   if (test?.ok !== true) return 'NOT confirmed: gate not green (not even plausible).';
   const passToPass = test?.passToPass === true;
   const failToPass = test?.failToPass === true || (typeof test?.failToPass === 'string' && hasRationale(test.failToPass));
@@ -73,5 +78,8 @@ export function confirmationReason(r = {}) {
   if (!hasRationale(skeptic?.validityRationale)) {
     return 'NOT confirmed: skeptic claimed valid=true without a validity rationale (unsupported assertion).';
   }
-  return `CONFIRMED: gate green AND regression guard passed AND skeptic asserts validity — ${skeptic.validityRationale.trim()}`;
+  if (!hasRationale(fix?.delta)) {
+    return 'NOT confirmed: gate green + regression guard passed + skeptic valid but NO MEASURED DELTA — speculative improvement, must assert concrete proof (V1.3).';
+  }
+  return `CONFIRMED: gate green AND regression guard passed AND skeptic asserts validity AND measured delta present — ${fix.delta.trim()}`;
 }
