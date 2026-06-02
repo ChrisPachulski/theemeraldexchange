@@ -49,14 +49,40 @@ const MAX_WINDOWS = readControlNum('MAX_WINDOWS', 6);
 const head = git(['rev-parse', 'HEAD']);
 if (!head) { out({ action: 'go', reason: 'no_git_head_skip_cap', improvements: 0, windows: 0 }); process.exit(0); }
 
-// Baseline: record HEAD on first run of a fresh batch.
+// Lifetime window count = '## ' entries in the iteration log (one per window, ever).
+const lifetimeWindows = (() => {
+  try { return (readFileSync(ITERLOG, 'utf8').match(/^## /gm) || []).length; } catch { return 0; }
+})();
+
+// Baseline: record HEAD *and* the lifetime window-count on the first run of a fresh
+// batch. cap-baseline.txt = two lines: "<head>\n<windowCountAtBaseline>". Both the
+// improvements counter (commits since baseline HEAD) and the windows counter (## entries
+// since baseline count) are batch-relative, so deleting cap-baseline.txt fully re-baselines
+// BOTH. (Bug fix: windows used to be counted LIFETIME, so any batch started after the log
+// had accumulated >= MAX_WINDOWS entries halted instantly at window 1.)
 let baseline = '';
-if (existsSync(BASELINE)) { try { baseline = readFileSync(BASELINE, 'utf8').trim(); } catch {} }
-if (!baseline) { baseline = head; try { writeFileSync(BASELINE, head + '\n'); } catch {} }
+let baselineWindows = null;
+if (existsSync(BASELINE)) {
+  try {
+    const lines = readFileSync(BASELINE, 'utf8').split('\n').map((s) => s.trim()).filter(Boolean);
+    baseline = lines[0] || '';
+    if (lines[1] !== undefined && /^\d+$/.test(lines[1])) baselineWindows = Number(lines[1]);
+  } catch {}
+}
+if (!baseline) {
+  baseline = head;
+  baselineWindows = lifetimeWindows;
+  try { writeFileSync(BASELINE, `${head}\n${lifetimeWindows}\n`); } catch {}
+}
+// Back-compat: an old single-line baseline file → anchor the window count now (treat the
+// current batch as starting from here rather than mis-counting all historical windows).
+if (baselineWindows === null) {
+  baselineWindows = lifetimeWindows;
+  try { writeFileSync(BASELINE, `${baseline}\n${lifetimeWindows}\n`); } catch {}
+}
 
 const improvements = Number(git(['rev-list', '--count', `${baseline}..HEAD`]) || '0');
-let windows = 0;
-try { windows = (readFileSync(ITERLOG, 'utf8').match(/^## /gm) || []).length; } catch {}
+const windows = Math.max(0, lifetimeWindows - baselineWindows);
 
 const capImpr = improvements >= MAX_IMPROVEMENTS;
 const capWin = windows >= MAX_WINDOWS;
