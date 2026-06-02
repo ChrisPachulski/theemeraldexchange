@@ -65,7 +65,14 @@ const DONE_MARK = /\b(DONE|CONFIRMED|LANDED)\b/i;
 const ledgerLines = ledger.split('\n');
 const isDone = (id) => {
   const idRe = new RegExp(`\\b${id.replace('.', '\\.')}\\b`);
-  return ledgerLines.some((line) => idRe.test(line) && DONE_MARK.test(line));
+  return ledgerLines.some((line) => {
+    const mk = line.match(DONE_MARK);
+    if (!mk) return false;
+    // The marker applies to the item it's ABOUT — the ID(s) BEFORE the marker on the
+    // line. IDs appearing AFTER the marker are "next-item" references (e.g. "V1.2 — DONE …
+    // next top-open = V1.3") and must NOT be retired. Only count IDs left of the marker.
+    return idRe.test(line.slice(0, mk.index));
+  });
 };
 
 const doneIds = ids.filter(isDone);
