@@ -214,9 +214,11 @@ const FIX = {
 
 const CHECK = {
   type: 'object',
-  required: ['ok'],
+  required: ['ok', 'passToPass', 'failToPass'],
   properties: {
-    ok: { type: 'boolean' },
+    ok: { type: 'boolean' }, // aggregate: passToPass && failToPass
+    passToPass: { type: 'boolean' }, // pre-existing engine suite stayed green
+    failToPass: { type: ['boolean', 'string'] }, // new test(s) went red→green (boolean or description)
     findings: { type: 'string' },
     verdict: { type: 'string' },
   },
@@ -243,15 +245,21 @@ const SKEPTIC = {
 // Inline TWIN of scripts/autoloop/confirm.mjs:isConfirmed — the canonical, unit-
 // tested predicate. Workflow scripts run in a sandbox that forbids `import`, so
 // the logic is duplicated here; confirm.test.mjs pins this twin to the canonical
-// version (drift guard). CONFIRMED iff the gate is green AND the skeptic asserts
-// VALIDITY with a rationale — a green gate alone (plausible) is NOT enough.
+// version (drift guard). CONFIRMED iff:
+// - the gate is green (test.ok === true), AND
+// - both regression guard dimensions pass: PASS_TO_PASS (pre-existing tests stayed green) and
+//   FAIL_TO_PASS (new tests went red→green), AND
+// - the skeptic asserts VALIDITY with a rationale (semantic correctness is separate from gate).
+// A green gate + green new test alone is NOT enough if a pre-existing test broke (regression).
 function isConfirmed(r = {}) {
   const { test, skeptic } = r
   const gateGreen = test && test.ok === true
+  const passToPass = test && test.passToPass === true // pre-existing suite stayed green
+  const failToPass = test && (test.failToPass === true || (typeof test.failToPass === 'string' && test.failToPass.trim().length > 0)) // new test went red→green
   const valid = skeptic && skeptic.valid === true
   const rationale =
     skeptic && typeof skeptic.validityRationale === 'string' && skeptic.validityRationale.trim().length > 0
-  return !!(gateGreen && valid && rationale)
+  return !!(gateGreen && passToPass && failToPass && valid && rationale)
 }
 
 // ---- Discover: ONE Haiku leaf per work-class, scanning hotspots → Sonnet gate ----
@@ -403,7 +411,12 @@ const [test, skeptic] = await parallel([
       `tsc + eslint + test:coverage (catches the IR-7 type errors 'tsc --noEmit' misses) + cargo when Rust`,
       `changed; for engine-gate.mjs it means every engine file parses under its real loader (workflow-wrap`,
       `+ node --check + bash -n + json). Run any sibling tests the change touches too.`,
-      `Report ok=true ONLY if the gate exited 0 (rc=0). On failure, put the failing command + first errors in findings.`,
+      `REGRESSION GUARD (V1.2): Report BOTH dimensions distinctly:`,
+      `  • passToPass: boolean — did the PRE-EXISTING engine test suite stay green? (PASS→PASS, no regressions)`,
+      `  • failToPass: boolean|string — did the NEW tests added by the change go red→green? (FAIL→PASS on the new test)`,
+      `  • ok: aggregate — true ONLY if BOTH passToPass=true AND failToPass=true/non-empty.`,
+      `A change that makes the new test pass but silently breaks a pre-existing test is NOT ok.`,
+      `On failure, put the failing command + first errors in findings. Set verdict to your summary.`,
     ].join('\n'),
     { model: 'sonnet', phase: 'Verify', label: 'tester', schema: CHECK },
   ),
