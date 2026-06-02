@@ -1660,7 +1660,6 @@ async function callClaudeRetry(
   libraryBlock: string,
   priorityTasteBlock: string,
   userLikesBlock: string,
-  recentlyShownBlock: string,
   candidatePoolBlock: string,
   prior: ToolUseBlock,
   rejectedPicks: Array<{ title: string; reason: string }>,
@@ -1678,10 +1677,7 @@ async function callClaudeRetry(
   // Retry intentionally drops the recently-shown block from the system
   // stack: the retry is exactly when Claude needs more candidate
   // freedom, not the same rotation blocklist that just constrained the
-  // initial call. We pass it through the function signature only so
-  // the call-site remains symmetric; if a caller really wants it,
-  // they can pass a non-empty string.
-  void recentlyShownBlock
+  // initial call.
   const response = await withAnthropicRetry(() =>
     withClaudeDeadline((signal) =>
       client.messages.create({
@@ -2555,7 +2551,6 @@ suggestions.get('/:type', async (c) => {
         libraryBlock,
         priorityTasteBlock,
         userLikesBlock,
-        recentlyShownBlock,
         candidatePoolBlock,
         r1.toolUse,
         v1.rejectedForRetry,
