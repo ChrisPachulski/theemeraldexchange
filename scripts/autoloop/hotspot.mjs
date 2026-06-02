@@ -21,7 +21,11 @@ const repoRoot = process.argv[2] && !process.argv[2].startsWith('--') ? process.
 const SINCE = process.env.HOTSPOT_SINCE || '120 days ago';
 const TOP = Number(process.env.HOTSPOT_TOP || 40);
 
-const SRC_RE = /^(server|src|crates|recommender)\//;        // where defects we must fix live
+// Source roots are CONFIGURABLE (agnostic) — a self-improvement run points this at
+// scripts/autoloop; another repo sets its own layout. Default covers EEX's tree.
+const HOTSPOT_SRC_DIRS = (process.env.HOTSPOT_SRC_DIRS || 'server,src,crates,recommender')
+  .split(',').map((s) => s.trim()).filter(Boolean);
+const SRC_RE = new RegExp(`^(${HOTSPOT_SRC_DIRS.map((d) => d.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})/`);
 const SKIP_RE = /(^|\/)(node_modules|dist|target|\.venv|coverage|__pycache__)\//;
 const CODE_EXT = /\.(ts|tsx|js|jsx|mjs|rs|py)$/;
 const TEST_RE = /(\.test\.|\.spec\.|\.bench\.|(^|\/)tests?\/)/;
