@@ -252,6 +252,32 @@ if (!pick || pick.autonomous === false || pick.risk !== 'low') {
   return { action: 'skipped_risky', pick, chosenClass }
 }
 
+// DETERMINISTIC SCOPE GATE (defense in depth, pre-execute). The synth's scopeRule
+// (above) is prose-only and LLMs have IGNORED it — observed 2026-06-02: on a
+// scope="scripts/autoloop/" run the synth picked a product test file
+// (server/services/upstream.test.ts) and the whole window (executor worktree +
+// tester + skeptic) burned out-of-scope before the driver's land-step check could
+// reject it. This is the cheap early cut: a self-improvement run may ONLY touch
+// files within SCOPE, so a pick that names zero in-scope files — or ANY file
+// outside SCOPE — is rejected HERE, before the expensive Execute/Verify stages.
+// Mirrors the driver's authoritative land-step diff check, moved pre-execute.
+if (SCOPE) {
+  const files = (pick.files || []).map((f) => String(f))
+  const outOfScope = files.filter((f) => !f.includes(SCOPE))
+  if (!files.length || outOfScope.length) {
+    log(`SCOPE GATE: rejecting out-of-scope pick "${pick.title}" — ${
+      !files.length ? 'named no in-scope files' : `outside ${SCOPE}: ${outOfScope.join(', ')}`
+    }`)
+    return {
+      action: 'out_of_scope',
+      pick,
+      chosenClass,
+      scope: SCOPE,
+      outOfScope: outOfScope.length ? outOfScope : ['(pick named no files)'],
+    }
+  }
+}
+
 // ---- Execute: Opus executor in an ISOLATED WORKTREE ----
 phase('Execute')
 const fix = await agent(
@@ -260,9 +286,10 @@ const fix = await agent(
     `Title: ${pick.title}`,
     `Instructions: ${pick.instructions}`,
     `Target files (guide): ${(pick.files || []).join(', ') || 'as needed'}`,
-    `CRITICAL FIRST STEP — base your branch on the INTEGRATION tip, not main. The isolated worktree`,
+    `CRITICAL FIRST STEP — base your branch on the '${BASE}' tip, not main. The isolated worktree`,
     `forks from main (stale: it lacks this session's confirmed work), which causes duplicate-helper`,
-    `merge conflicts that have to be hand-resolved (IR-9). BEFORE editing anything, run:`,
+    `merge conflicts that have to be hand-resolved (IR-9). Use '${BASE}' VERBATIM — do not substitute`,
+    `another branch (e.g. auto/integration) even if the task text mentions one. BEFORE editing anything, run:`,
     `    git fetch origin --quiet && git checkout -B auto/<timestamp>-<short-slug> origin/${BASE}`,
     `so your branch starts from the cumulative '${BASE}' tip and builds on what's already there.`,
     `Then make a focused, correct change and ADD/STRENGTHEN TESTS for it (tests matter more than the change).`,
