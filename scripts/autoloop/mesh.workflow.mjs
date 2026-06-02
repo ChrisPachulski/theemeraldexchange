@@ -63,6 +63,17 @@ const scopeRule = SCOPE
 // lexicographic class ladder beats a blended score, reviewer attention is the scarce
 // resource, and hotspot targeting is the leg that turns "safe" work into "high-value".
 const GOALS = A.goals || '(no GOALS.md provided — fall back to broad discovery)'
+// PRIMARY_OBJECTIVE (optional) — a SPECIFIC backlog item this window must implement
+// (e.g. the driver's merit-state `topOpen` + its full spec). When set, the mesh enters
+// OBJECTIVE MODE: the discoverable classes collapse to {signal-fix, objective} so the
+// forest CANNOT surface trivia. A reproduced red signal still preempts (it always
+// outranks grooming); otherwise the only legal pick is implementing THIS objective, or a
+// clean dry window. This is the deterministic cure for the drift where free-roam
+// discovery ignored the steer and returned mechanical busywork — there is simply no
+// trivial candidate in the pool to pick. Plain prose steering was advisory and got
+// ignored twice; this makes the steer structural.
+const PRIMARY_OBJECTIVE = (A.primaryObjective || '').toString().trim()
+const OBJECTIVE_MODE = PRIMARY_OBJECTIVE.length > 0
 const HOTSPOTS = Array.isArray(A.hotspots) ? A.hotspots : []
 const HOTLIST = HOTSPOTS.slice(0, 20).map((h) => `${h.file} (rev=${h.revisions}, loc=${h.loc}, score=${h.score})`).join('\n') || '(no hotspot data — treat files equally)'
 const HOTMAP = new Map(HOTSPOTS.map((h) => [h.file, h.score]))
@@ -100,13 +111,25 @@ function signalsBlock(classKey) {
 
 // Evidence-derived work-class ladder (GOALS.md Part A), highest priority first.
 // One Haiku discovery leaf per class; synth picks within the HIGHEST non-empty class.
-const CLASSES = [
-  { key: 'signal-fix', desc: 'Fix a REPRODUCED failure that is RED right now (a failing test, a crash, a type error, a lint/sanitizer error). NEVER speculative bug-hunting — only an already-failing signal you can show go red→green.' },
-  { key: 'mechanical', desc: 'A mechanical, SEMANTICS-PRESERVING change at a hotspot file: codemod, dead-code removal, deprecation migration, safe lint-autofix. Behavior must be provably unchanged.' },
-  { key: 'gated-test', desc: 'A test improvement at a hotspot file that BUILDS, passes reliably, STRICTLY increases coverage, AND would catch a real regression. Coverage on a COLD file does not count.' },
-  { key: 'devex', desc: 'A cognitive-load / feedback-loop improvement at a hotspot: stronger types, de-flake a flaky test, speed up CI runtime, fill a doc gap that blocks understanding.' },
-  { key: 'dep-hygiene', desc: 'Dependency/security hygiene, BATCHED and confidence-scored (never a single trivial bump). Lowest priority — only when the classes above are empty.' },
-]
+const SIGNAL_FIX_CLASS = { key: 'signal-fix', desc: 'Fix a REPRODUCED failure that is RED right now (a failing test, a crash, a type error, a lint/sanitizer error). NEVER speculative bug-hunting — only an already-failing signal you can show go red→green.' }
+const CLASSES = OBJECTIVE_MODE
+  // OBJECTIVE MODE: signal-fix may preempt (a red is always higher-merit); otherwise the
+  // ONLY discoverable work is implementing the specific objective. No trivial classes are
+  // offered, so the forest cannot drift to busywork — it implements the objective or goes dry.
+  ? [
+      SIGNAL_FIX_CLASS,
+      { key: 'objective', desc: `Implement EXACTLY this assigned backlog objective and NOTHING else:\n${PRIMARY_OBJECTIVE}\n\nProduce the concrete file change(s) that implement it PLUS the verification that proves it (a red→green test, a measurable delta, or a newly-passing gate). If the objective is ALREADY fully implemented (verify before claiming so), return autonomous=false / a dry window — do NOT substitute unrelated cleanup. Do NOT invent a different task; this window is dedicated to the objective above.` },
+    ]
+  : [
+      SIGNAL_FIX_CLASS,
+      { key: 'mechanical', desc: 'A mechanical, SEMANTICS-PRESERVING change at a hotspot file: codemod, dead-code removal, deprecation migration, safe lint-autofix. Behavior must be provably unchanged.' },
+      { key: 'gated-test', desc: 'A test improvement at a hotspot file that BUILDS, passes reliably, STRICTLY increases coverage, AND would catch a real regression. Coverage on a COLD file does not count.' },
+      { key: 'devex', desc: 'A cognitive-load / feedback-loop improvement at a hotspot: stronger types, de-flake a flaky test, speed up CI runtime, fill a doc gap that blocks understanding.' },
+      { key: 'dep-hygiene', desc: 'Dependency/security hygiene, BATCHED and confidence-scored (never a single trivial bump). Lowest priority — only when the classes above are empty.' },
+    ]
+if (OBJECTIVE_MODE) log(`OBJECTIVE MODE — discoverable classes collapsed to {signal-fix, objective}; no trivia can be picked`)
+// All class keys that may legally appear (for schema enums + the deterministic gate).
+const CLASS_ENUM = ['signal-fix', 'mechanical', 'gated-test', 'devex', 'dep-hygiene', 'objective']
 
 const CAND = {
   type: 'object',
@@ -119,7 +142,7 @@ const CAND = {
         required: ['title', 'autonomous', 'risk'],
         properties: {
           title: { type: 'string' },
-          class: { type: 'string', enum: ['signal-fix', 'mechanical', 'gated-test', 'devex', 'dep-hygiene'] },
+          class: { type: 'string', enum: CLASS_ENUM },
           hotspotFile: { type: 'string' },
           files: { type: 'array', items: { type: 'string' } },
           rationale: { type: 'string' },
@@ -138,7 +161,7 @@ const VERDICT = {
     keep: { type: 'boolean' },
     reason: { type: 'string' },
     title: { type: 'string' },
-    class: { type: 'string', enum: ['signal-fix', 'mechanical', 'gated-test', 'devex', 'dep-hygiene'] },
+    class: { type: 'string', enum: CLASS_ENUM },
     hotspotFile: { type: 'string' },
   },
 }
@@ -148,7 +171,7 @@ const PICK = {
   required: ['title', 'instructions', 'autonomous', 'risk'],
   properties: {
     title: { type: 'string' },
-    class: { type: 'string', enum: ['signal-fix', 'mechanical', 'gated-test', 'devex', 'dep-hygiene'] },
+    class: { type: 'string', enum: CLASS_ENUM },
     hotspotScore: { type: 'number' },
     valueRationale: { type: 'string' },
     files: { type: 'array', items: { type: 'string' } },
@@ -272,6 +295,9 @@ phase('Synthesize')
 const pick = await agent(
   [
     `You are the synthesis root. The work-class for this window is ALREADY chosen by the priority ladder: "${chosenClass}". Do not switch classes.`,
+    OBJECTIVE_MODE
+      ? `THIS WINDOW IS DEDICATED TO A SPECIFIC OBJECTIVE — do NOT substitute any other work:\n${PRIMARY_OBJECTIVE}\nIf the chosen class is "objective", your pick MUST implement exactly this; if it is already fully implemented, return autonomous=false (a dry window is correct — never pad with unrelated cleanup). If the chosen class is "signal-fix", a reproduced red is preempting the objective this window — fix the red.`
+      : '',
     `Candidates in this class, pre-ranked by hotspot score (defect concentration; higher = more defect-prone):`,
     pool.map((s) => `- [hotspot ${s.score}] ${s.title} (file: ${s.file || 'n/a'})`).join('\n'),
     `Pick the SINGLE best one. Default to the higher hotspot score UNLESS GOALS.md Part B roadmap weighting clearly favors a lower-scored candidate — then justify it in valueRationale.`,
@@ -301,6 +327,18 @@ if (!pick || pick.autonomous === false || pick.risk !== 'low') {
     log(`INFRA GATE: rejecting pick "${pick.title}" — touches human-owned infra: ${infra.join(', ')}`)
     return { action: 'out_of_scope', pick, chosenClass, forbidden: infra }
   }
+}
+
+// DETERMINISTIC OBJECTIVE GATE (defense in depth, pre-execute). When the driver set a
+// PRIMARY_OBJECTIVE, the ONLY legal picks are implementing that objective ('objective')
+// or preempting with a reproduced red ('signal-fix'). Anything else means the synth
+// drifted to invented work despite the collapsed class set — reject it to a dry window
+// rather than commit trivia. This is the structural guarantee that the "#1" failure mode
+// (mesh ignores the steer → trivia, driver must rescue) CANNOT recur: with an objective
+// set, the mesh implements it or abstains; it can never hand back busywork.
+if (OBJECTIVE_MODE && pick.class !== 'objective' && pick.class !== 'signal-fix') {
+  log(`OBJECTIVE GATE: rejecting pick "${pick.title}" (class=${pick.class}) — a primary objective is set; only 'objective' or 'signal-fix' may land. Abstaining (dry).`)
+  return { action: 'off_objective', pick, chosenClass, objective: PRIMARY_OBJECTIVE }
 }
 
 // ---- Execute: Opus executor in an ISOLATED WORKTREE ----

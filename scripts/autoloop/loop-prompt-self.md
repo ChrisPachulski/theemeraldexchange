@@ -55,11 +55,16 @@ loop does (stop→end; idle→ScheduleWakeup(min(3600,sleepSeconds)) & end; go�
 Invoke **Workflow** with `{ scriptPath: "scripts/autoloop/mesh.workflow.mjs" }` and `args`:
 `{ doneTitles:[…], existingBranches:"…", immuneRules:"<immune-rules if any>", repoRoot:"<cwd>",
   baseBranch:"auto/self-improve", scope:"scripts/autoloop/", gateCmd:"node scripts/autoloop/engine-gate.mjs scripts/autoloop",
-  goals:"TARGET THIS WINDOW: backlog item <merit-state.topOpen> — paste its full description from
-  RESEARCH-BACKLOG.md as the PRIMARY objective. Discovery/synth MUST converge on implementing that item
-  (or a reproduced engine signal-fix, which outranks it); do NOT return an invented low-level pick while
-  this item is open. Followed by: <GOALS.md contents + RESEARCH-BACKLOG.md contents for ranking>",
+  primaryObjective:"<merit-state.topOpen ID + its FULL description pasted verbatim from RESEARCH-BACKLOG.md>",
+  goals:"<GOALS.md contents + RESEARCH-BACKLOG.md contents for ranking>",
   hotspots:<hotspots.json top>, signals:<signals.json signals> }`.
+- **`primaryObjective` is the DETERMINISTIC steer (not advisory prose).** When set, the mesh enters
+  OBJECTIVE MODE: discoverable classes collapse to {signal-fix, objective}, and an in-script gate rejects
+  any pick that is not 'objective' or 'signal-fix' (→ `action:'off_objective'`, a dry window) BEFORE the
+  executor runs. So the mesh either implements the assigned item, fixes a reproduced red that preempts it,
+  or abstains — it CANNOT return invented trivia (the "#1" failure mode). Always pass it (from
+  merit-state.topOpen) on a normal `consult:false` window; omit it only on a `consult:true` window
+  (backlog exhausted) where you've just refilled via literature-consultation but not yet chosen the new top.
 The executor forks from `origin/auto/self-improve` (it is PUSHED) and PREFERS `scripts/autoloop/**` (adjacent
 related work allowed; infra never). The tester verifies with `engine-gate.mjs` (the engine is .mjs/.sh/.json);
 if the change touched a non-engine file, also run any test that covers it. Wait for the result.
