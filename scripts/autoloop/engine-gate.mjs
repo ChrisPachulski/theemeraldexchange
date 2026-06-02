@@ -75,7 +75,6 @@ for (const f of files) {
         // Parse the way the Workflow runtime wraps it: an async fn with the
         // sandbox globals in scope. `new Function` parses without executing.
         const body = src.replace(/^export\s+const\s+meta/m, 'const meta');
-        // eslint-disable-next-line no-new-func
         new Function(`return (async function(${SANDBOX_GLOBALS.join(',')}){\n${body}\n})`);
       } else {
         // A normal ESM module — node --check is the right parser.
