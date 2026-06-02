@@ -35,11 +35,17 @@ const BACKLOG = [
 ].join('\n');
 
 test('a DONE line retires only the item it is about, not a "next item" named after the marker', () => {
-  const log = '## window\n- **V1.2 — DONE / CONFIRMED.** next top-open = V1.3 Assured-improvement delta.\n';
+  // Mirrors the real log: V1.1 done earlier, then "V1.2 — DONE … next top-open = V1.3".
+  const log = [
+    '## earlier window',
+    '- **V1.1** — CONFIRMED',
+    '## this window',
+    '- **V1.2 — DONE / CONFIRMED.** next top-open = V1.3 Assured-improvement delta.',
+  ].join('\n');
   const r = runMerit(BACKLOG, log);
   assert.ok(r.doneIds.includes('V1.2'), 'V1.2 (before the marker) must be done');
   assert.ok(!r.doneIds.includes('V1.3'), 'V1.3 (a next-item reference after the marker) must NOT be done');
-  assert.equal(r.topOpen, 'V1.3', 'topOpen should be the genuinely-next item V1.3');
+  assert.equal(r.topOpen, 'V1.3', 'with V1.1+V1.2 done, the genuinely-next open item is V1.3');
 });
 
 test('a bare mention without a marker does not retire an item', () => {
