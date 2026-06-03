@@ -269,15 +269,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signInInFlightRef.current = false
     }
     try {
-      const res = await fetch(apiUrl('/api/auth/plex/pin'), {
-        method: 'POST',
+      // Fetch the PUBLIC Plex client config (the clientId is the same
+      // non-secret app id already embedded in every Plex auth URL).
+      const cfgRes = await fetch(apiUrl('/api/auth/plex/config'), {
         credentials: 'include',
       })
-      if (!res.ok) throw new Error(`pin create failed: ${res.status}`)
-      const { pinId, authUrl } = (await res.json()) as {
-        pinId: number
-        authUrl: string
+      if (!cfgRes.ok) throw new Error(`plex config failed: ${cfgRes.status}`)
+      const { clientId, product } = (await cfgRes.json()) as {
+        clientId: string
+        product: string
       }
+
+      // Create the PIN DIRECTLY at plex.tv from the browser so plex.tv
+      // attributes the sign-in to the VISITOR's own IP — not the server's
+      // home IP, which previously leaked onto Plex's "Security Alert" page
+      // for everyone authenticating. The backend keeps polling with this
+      // SAME clientId, so checkPin still finds the authorized token.
+      const pinRes = await fetch('https://plex.tv/api/v2/pins?strong=true', {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'X-Plex-Product': product,
+          'X-Plex-Client-Identifier': clientId,
+        },
+      })
+      if (!pinRes.ok) throw new Error(`plex pin create failed: ${pinRes.status}`)
+      const pin = (await pinRes.json()) as { id: number; code: string }
+      const pinId = pin.id
+
+      // Mirror of the old server-side buildAuthUrl: the PIN `code` (not the
+      // id) goes into the auth-page hash params with the same clientId.
+      const authUrl =
+        'https://app.plex.tv/auth#?' +
+        new URLSearchParams({
+          clientID: clientId,
+          code: pin.code,
+          'context[device][product]': product,
+        }).toString()
 
       popup.location.href = authUrl
       setSignInState('pending')

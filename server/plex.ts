@@ -10,13 +10,20 @@ import { fetchWithTimeout, WAN_TIMEOUT_MS } from './services/upstream.js'
 const PLEX_BASE = 'https://plex.tv/api/v2'
 const AUTH_PAGE = 'https://app.plex.tv/auth#'
 
+// The product label plex.tv shows the user during sign-in ("<product> is
+// trying to sign in"). Exported so the auth route can hand it to the SPA,
+// which creates the WEB PIN in the browser — keeping a SINGLE source of
+// truth for the product string across the header here, buildAuthUrl, and
+// the browser-side create.
+export const PLEX_PRODUCT = 'The Emerald Exchange'
+
 const baseHeaders = (): Record<string, string> => ({
   Accept: 'application/json',
-  'X-Plex-Product': 'The Emerald Exchange',
+  'X-Plex-Product': PLEX_PRODUCT,
   'X-Plex-Client-Identifier': env.plexClientId,
   'X-Plex-Version': '0.1.0',
   'X-Plex-Platform': 'Web',
-  'X-Plex-Device': 'The Emerald Exchange',
+  'X-Plex-Device': PLEX_PRODUCT,
 })
 
 export type Pin = {
@@ -41,9 +48,14 @@ export type PlexResource = {
   provides: string
 }
 
-// Step 1: create a PIN. The returned `code` is plugged into the auth
-// page URL; the user authenticates there; we then poll the PIN until it
-// has an `authToken`.
+// Step 1: create a PIN.
+//
+// IMPORTANT: the WEB sign-in NO LONGER calls this — the SPA creates its PIN
+// directly in the browser (server/auth.ts has no /plex/pin route) so plex.tv
+// attributes the request to the VISITOR's IP instead of leaking the host's
+// home IP onto Plex's "Security Alert" page. This server-side createPin is
+// retained ONLY for the native device-pairing flow (server/routes/device.ts),
+// where the authorizing user is on a separate device via plex.tv/link.
 export async function createPin(): Promise<Pin> {
   const res = await fetchWithTimeout(
     `${PLEX_BASE}/pins?strong=true`,
@@ -52,11 +64,6 @@ export async function createPin(): Promise<Pin> {
     'plex.createPin',
   )
   if (!res.ok) {
-    // Log the plex.tv response body so a 4xx surfaces the reason. plex.tv
-    // returns text/plain or JSON depending on the error; capture both
-    // safely. The clientID is a public app identifier (no secret), so
-    // logging it here is fine and makes mismatched-deploy diagnosis
-    // trivial.
     const body = await res.text().catch(() => '<read failed>')
     console.error(
       `[plex.createPin] FAILED status=${res.status} clientID=${env.plexClientId} body=${body.slice(0, 300)}`,
@@ -64,15 +71,6 @@ export async function createPin(): Promise<Pin> {
     throw new Error(`plex.createPin failed: ${res.status}`)
   }
   const data = (await res.json()) as Pin
-  // One-line log per pin issued. Confirms our clientID + the pin id
-  // plex.tv minted — without this, a downstream "checkPin returns
-  // pending forever" failure is opaque. The PIN code itself is a live,
-  // short-lived auth artifact: anyone with log access during the 60 s
-  // window can claim the PIN at https://www.plex.tv/link and the
-  // attacker's session — not the legitimate user's — receives the
-  // authToken. Log only the id (sufficient for diagnosis when paired
-  // with checkPin's id-keyed line); the code stays out of default logs.
-  // authToken is null at this stage by definition.
   console.info(`[plex.createPin] ok id=${data.id} clientID=${env.plexClientId}`)
   return data
 }
@@ -463,12 +461,14 @@ export async function listHomeUsers(authToken: string): Promise<PlexFriend[]> {
 }
 
 // Build the URL the user's browser opens to authorize the PIN. The PIN
-// `code` (NOT the id) goes into the hash params.
+// `code` (NOT the id) goes into the hash params. Used by the native
+// device-pairing flow (server/routes/device.ts); the web SPA builds the
+// equivalent URL client-side.
 export function buildAuthUrl(pinCode: string): string {
   const params = new URLSearchParams({
     clientID: env.plexClientId,
     code: pinCode,
-    'context[device][product]': 'The Emerald Exchange',
+    'context[device][product]': PLEX_PRODUCT,
   })
   return `${AUTH_PAGE}?${params.toString()}`
 }
