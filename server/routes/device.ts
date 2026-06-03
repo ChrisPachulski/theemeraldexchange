@@ -1,10 +1,6 @@
 // Apple device-pair flow.
 //
-//   POST /api/auth/device/start  — create a Plex PIN; return id + code
-//                                  + the verification URL. tvOS/iOS
-//                                  apps show the code on-screen and
-//                                  ask the user to visit plex.tv/link.
-//   POST /api/auth/device/poll   — poll the PIN. When the user has
+//   POST /api/auth/device/poll   — poll a Plex PIN. When the user has
 //                                  authorized in their phone/computer
 //                                  browser, exchange for identity,
 //                                  enforce the invite/members allowlist
@@ -18,12 +14,23 @@
 //                                  Bearer token plus server_id for
 //                                  Keychain keying.
 //
-// Both endpoints reuse the existing createPin/checkPin Plex helpers
-// (server/plex.ts) so the upstream rate-limit and PIN-lifecycle
-// semantics are identical to the cookie path. No new Plex API surface.
+// PIN CREATION HAPPENS ON THE DEVICE, not here. There is intentionally NO
+// /device/start: a server-side createPin made plex.tv attribute the request
+// to the NAS's public IP, leaking the host's home location onto the
+// plex.tv/link confirmation the user sees while pairing. The tvOS/iOS app
+// must instead:
+//   1. GET  /api/auth/plex/config → { clientId, product }  (public, no secret)
+//   2. POST https://plex.tv/api/v2/pins?strong=true with that
+//      X-Plex-Client-Identifier → { id, code }  (so plex.tv sees the DEVICE's
+//      IP, not the server's)
+//   3. show `code`, send the user to https://plex.tv/link
+//   4. POST /api/auth/device/poll { pinId, device_id, ... }
+// The pin is keyed by client identifier, so the app MUST create it with the
+// clientId from step 1 — checkPin here polls with that same env.plexClientId
+// and finds the authorized token. Mirrors the web SPA flow exactly.
 
 import { Hono, type Context } from 'hono'
-import { buildAuthUrl, checkPin, createPin, getUser } from '../plex.js'
+import { checkPin, getUser } from '../plex.js'
 import { authorizeOrRedeem } from '../auth.js'
 import { roleFor } from '../services/sessionGate.js'
 import {
@@ -78,19 +85,6 @@ async function parseLimitedJson(
     return { tooLarge: false, body: null }
   }
 }
-
-device.post('/start', async (c) => {
-  const pin = await createPin()
-  return c.json({
-    pinId: pin.id,
-    code: pin.code,
-    /** plex.tv URL the user opens on a separate device to authorize. */
-    verificationUrl: 'https://plex.tv/link',
-    /** Convenience deep-link prefilled with the code (some Apple TV
-     *  setups can render this as a popover). */
-    authUrl: buildAuthUrl(pin.code),
-  })
-})
 
 device.post('/poll', async (c) => {
   const parsed = await parseLimitedJson(c, PAIR_MAX_BODY_BYTES)
