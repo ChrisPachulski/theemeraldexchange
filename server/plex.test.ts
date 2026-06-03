@@ -389,3 +389,4 @@ describe('buildAuthUrl', () => {
     expect(url).toContain(encodeURIComponent('context[device][product]'))
   })
 })
+

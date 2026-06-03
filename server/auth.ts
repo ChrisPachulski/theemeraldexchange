@@ -1,7 +1,13 @@
 // Plex PIN auth flow.
 //
-//   POST /api/auth/plex/pin     — create a Plex PIN, return id + authUrl.
-//                                  SPA opens authUrl in a popup.
+//   GET  /api/auth/plex/config  — public: the X-Plex-Client-Identifier (a
+//                                  non-secret app id) + product label the SPA
+//                                  needs to create the PIN IN THE BROWSER. The
+//                                  PIN is created browser-side so plex.tv
+//                                  attributes the sign-in to the visitor's own
+//                                  IP — a server-side createPin leaked the
+//                                  host's home IP/geo onto Plex's Security
+//                                  Alert page to everyone signing in.
 //   POST /api/auth/plex/check   — poll the PIN. When the user has
 //                                  authorized in the popup, plex.tv
 //                                  attaches an authToken; we exchange it
@@ -22,12 +28,11 @@
 import { Hono, type Context } from 'hono'
 import { env, isAppleConfigured } from './env.js'
 import {
-  createPin,
   checkPin,
   getUser,
   listResources,
-  buildAuthUrl,
   signOut as signOutPlex,
+  PLEX_PRODUCT,
 } from './plex.js'
 import {
   setSessionCookie,
@@ -42,6 +47,7 @@ import {
   roleFor,
 } from './services/sessionGate.js'
 import { memberStatus, redeemInvite } from './services/membership.js'
+import { addMember } from './services/members.js'
 import { verifyAppleIdentityToken } from './services/appleAuth.js'
 
 export const auth = new Hono()
@@ -248,16 +254,35 @@ export function authorizeOrRedeem(
   return { allowed: false }
 }
 
-auth.post('/plex/pin', async (c) => {
-  const limited = enforceAuthRateLimit(c, 'pin')
-  if (limited) return limited
-  const pin = await createPin()
-  return c.json({
-    pinId: pin.id,
-    code: pin.code,
-    authUrl: buildAuthUrl(pin.code),
-  })
-})
+// Public, auth-free: hands the SPA the non-secret X-Plex-Client-Identifier
+// (already embedded in every Plex auth URL) + product label so it can create
+// the PIN IN THE BROWSER. The PIN is no longer minted server-side — that made
+// plex.tv attribute the request to the host's public IP and leak the owner's
+// home location onto Plex's "Security Alert" page for every person signing in.
+// The browser creates the PIN with THIS clientId; the backend's checkPin polls
+// with the SAME clientId, so the authorized token is still found.
+auth.get('/plex/config', (c) =>
+  c.json({ clientId: env.plexClientId, product: PLEX_PRODUCT }),
+)
+
+// Is this Plex token a member (owner OR shared invitee) of the configured home
+// server? Matches the plex.tv resource clientIdentifier against PLEX_SERVER_ID
+// — the exact predicate sessionGate.checkMembership uses. Fail CLOSED on a
+// probe error: this is a login-time admit gate, so uncertainty must not grant
+// access (the user can retry or present an invite). This differs from the
+// per-request reconcile, which fails OPEN to avoid mass lockout on a plex.tv
+// hiccup once a member row already exists.
+async function isOwnerServerMember(authToken: string): Promise<boolean> {
+  if (!env.plexServerId) return false
+  try {
+    const resources = await listResources(authToken)
+    return resources.some(
+      (r) => r.provides.includes('server') && r.clientIdentifier === env.plexServerId,
+    )
+  } catch {
+    return false
+  }
+}
 
 auth.post('/plex/check', async (c) => {
   const preLimit = enforceAuthRateLimit(c, 'check')
@@ -298,8 +323,30 @@ auth.post('/plex/check', async (c) => {
   // mints a membership; otherwise 403. This is the behavior change that
   // makes the app invitation-only by membership rather than by live
   // Plex-server membership, and makes the Plex and Apple paths symmetric.
-  const authz = authorizeOrRedeem(namespacedSub, inviteCode, user.username, 'plex')
-  if (!authz.allowed) {
+  let allowed = authorizeOrRedeem(namespacedSub, inviteCode, user.username, 'plex').allowed
+
+  // Plex-server-share auto-admit: a verified Plex identity that is shared on
+  // (or owns) the configured home server is admitted automatically and minted
+  // onto the members allowlist, so being shared on Plex grants app access
+  // without a separate invite. Gated to a brand-new identity
+  // (memberStatus === 'not_member'): a 'revoked' member is NOT silently
+  // re-admitted by a still-present Plex share — an explicit revoke wins. The
+  // minted row makes the per-request reconcile (which keys on the allowlist)
+  // see 'allowed' on every subsequent request without re-probing.
+  if (!allowed && env.plexServerId && memberStatus(namespacedSub) === 'not_member') {
+    if (await isOwnerServerMember(pin.authToken)) {
+      addMember({
+        sub: namespacedSub,
+        displayName: user.username,
+        role,
+        authMode: 'plex',
+        invitedBy: 'plex:server-share',
+      })
+      allowed = true
+    }
+  }
+
+  if (!allowed) {
     return c.json({ status: 'denied', reason: 'no_invite' }, 403)
   }
 

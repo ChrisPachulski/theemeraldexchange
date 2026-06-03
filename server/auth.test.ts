@@ -41,6 +41,14 @@ vi.mock('./services/membership.js', () => ({
   ) => redeemSpy(code, sub, displayName, authMode),
 }))
 
+// members.js owns the allowlist write surface; the Plex-server-share
+// auto-admit calls addMember to mint a row. Mock it so we can assert it
+// fired without touching a real DB.
+const addMemberSpy = vi.fn()
+vi.mock('./services/members.js', () => ({
+  addMember: (opts: unknown) => addMemberSpy(opts),
+}))
+
 // Apple verifier: success keyed on a fixed valid-token sentinel; otherwise
 // returns a typed failure. The verified sub is a valid apple-pattern sub.
 const APPLE_SUB = 'apple:000000.0123456789abcdef0123456789abcdef.0000'
@@ -96,6 +104,7 @@ beforeEach(() => {
   allowlist.clear()
   invites.clear()
   redeemSpy.mockClear()
+  addMemberSpy.mockClear()
   appleVerifyImpl.fn = async (idToken) => {
     if (idToken === 'valid-apple-token') {
       return {
@@ -173,43 +182,14 @@ function stubPlex(opts: {
   )
 }
 
-describe('POST /auth/plex/pin', () => {
-  it('returns pin id, code, and a properly-formatted authUrl', async () => {
-    stubPlex({})
-    const r = await app().request('/auth/plex/pin', { method: 'POST' })
+describe('GET /auth/plex/config', () => {
+  it('returns the public X-Plex-Client-Identifier + product (no PIN created server-side)', async () => {
+    const r = await app().request('/auth/plex/config')
     expect(r.status).toBe(200)
-    const body = (await r.json()) as { pinId: number; code: string; authUrl: string }
-    expect(body.pinId).toBe(12345)
-    expect(body.code).toBe('abc')
-    expect(body.authUrl).toContain('https://app.plex.tv/auth#?')
-    expect(body.authUrl).toContain('clientID=' + env.plexClientId)
-    expect(body.authUrl).toContain('code=abc')
-  })
-
-  it('rate-limits excessive PIN creation by trusted edge identity without trusting spoofable forwarding headers', async () => {
-    stubPlex({})
-    // Build the app once and reuse it across the loop — each request
-    // exercises the IP-keyed rate limiter (module-scoped state, reset
-    // in beforeEach), so a single instance is correct and avoids
-    // rebuilding the Hono router on every iteration.
-    const a = app()
-    for (let i = 0; i < 10; i++) {
-      const headers = { 'cf-connecting-ip': '198.51.100.10', 'x-forwarded-for': `203.0.113.${i}` }
-      const r = await a.request('/auth/plex/pin', { method: 'POST', headers })
-      expect(r.status).toBe(200)
-    }
-    const r = await a.request('/auth/plex/pin', {
-      method: 'POST',
-      headers: { 'cf-connecting-ip': '198.51.100.10', 'x-forwarded-for': '203.0.113.200' },
-    })
-    expect(r.status).toBe(429)
-    expect(await r.json()).toEqual({ error: 'rate_limited' })
-
-    const other = await a.request('/auth/plex/pin', {
-      method: 'POST',
-      headers: { 'cf-connecting-ip': '198.51.100.11' },
-    })
-    expect(other.status).toBe(200)
+    const body = (await r.json()) as { clientId: string; product: string }
+    expect(body.clientId).toBe(env.plexClientId)
+    expect(typeof body.product).toBe('string')
+    expect(body.product.length).toBeGreaterThan(0)
   })
 })
 
@@ -326,6 +306,74 @@ describe('POST /auth/plex/check', () => {
     })
     expect(r.status).toBe(403)
     expect(await r.json()).toEqual({ status: 'denied', reason: 'no_invite' })
+    // No PLEX_SERVER_ID configured here (beforeEach nulls it), so the
+    // Plex-server-share auto-admit must NOT fire.
+    expect(addMemberSpy).not.toHaveBeenCalled()
+  })
+
+  it('auto-admits a Plex identity shared on the owner server (mints a member, no invite)', async () => {
+    // The headline behavior: being shared on the owner's Plex server grants
+    // app access automatically — no separate invite. PLEX_SERVER_ID is set
+    // and the user's resources include that server (owned:false = invited).
+    ;(env as Record<string, unknown>).plexServerId = 'home-server-id'
+    stubPlex({
+      authToken: 'real-token',
+      username: 'shared-friend',
+      resources: [
+        { name: 'Home', clientIdentifier: 'home-server-id', owned: false, provides: 'server' },
+      ],
+    })
+    const r = await app().request('/auth/plex/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinId: 12345 }),
+    })
+    expect(r.status).toBe(200)
+    expect(((await r.json()) as { status?: string }).status).toBe('authorized')
+    expect(addMemberSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ sub: 'plex:999', authMode: 'plex', invitedBy: 'plex:server-share' }),
+    )
+  })
+
+  it('does NOT auto-admit a Plex identity that is not on the owner server (403)', async () => {
+    ;(env as Record<string, unknown>).plexServerId = 'home-server-id'
+    stubPlex({
+      authToken: 'real-token',
+      username: 'stranger',
+      resources: [
+        // Only a server they own / a different server — not the owner's.
+        { name: 'Someone Else', clientIdentifier: 'other-server', owned: false, provides: 'server' },
+      ],
+    })
+    const r = await app().request('/auth/plex/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinId: 12345 }),
+    })
+    expect(r.status).toBe(403)
+    expect(await r.json()).toEqual({ status: 'denied', reason: 'no_invite' })
+    expect(addMemberSpy).not.toHaveBeenCalled()
+  })
+
+  it('does NOT auto-admit a REVOKED member even if still shared on the server (explicit revoke wins)', async () => {
+    // A revoked member is status 'revoked', not 'not_member', so the
+    // auto-admit (gated to brand-new identities) must not silently re-grant.
+    ;(env as Record<string, unknown>).plexServerId = 'home-server-id'
+    allowlist.set('plex:999', 'revoked')
+    stubPlex({
+      authToken: 'real-token',
+      username: 'kicked',
+      resources: [
+        { name: 'Home', clientIdentifier: 'home-server-id', owned: false, provides: 'server' },
+      ],
+    })
+    const r = await app().request('/auth/plex/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinId: 12345 }),
+    })
+    expect(r.status).toBe(403)
+    expect(addMemberSpy).not.toHaveBeenCalled()
   })
 
   it('admits an existing Plex member (allowlist hit, no invite needed)', async () => {
