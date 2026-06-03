@@ -11,7 +11,6 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
-  createPin,
   checkPin,
   getUser,
   listResources,
@@ -22,7 +21,6 @@ import {
   listSharedServerInvitees,
   listLocalServerAccounts,
   listHomeUsers,
-  buildAuthUrl,
 } from './plex.js'
 import { env } from './env.js'
 
@@ -94,22 +92,6 @@ function headerOf(init: RequestInit | undefined, name: string): string | undefin
 }
 
 const TOKEN = 'plex-token-abc'
-
-describe('createPin', () => {
-  it('returns the pin JSON and POSTs to /pins?strong=true', async () => {
-    stubJson('/pins?strong=true', { id: 123, code: 'ABCD', authToken: null })
-    const pin = await createPin()
-    expect(pin).toEqual({ id: 123, code: 'ABCD', authToken: null })
-    const { url, init } = callAt(0)
-    expect(url).toContain('/pins?strong=true')
-    expect(init?.method).toBe('POST')
-  })
-
-  it('throws on a non-ok status', async () => {
-    stubText('/pins?strong=true', 'nope', 400)
-    await expect(createPin()).rejects.toThrow('plex.createPin failed: 400')
-  })
-})
 
 describe('checkPin', () => {
   it('returns the pin JSON and GETs /pins/{id}', async () => {
@@ -377,16 +359,6 @@ describe('listHomeUsers', () => {
   it('returns [] on 404', async () => {
     stubText('/api/home/users', '', 404)
     await expect(listHomeUsers(TOKEN)).resolves.toEqual([])
-  })
-})
-
-describe('buildAuthUrl', () => {
-  it('builds the plex.tv auth URL with clientID, code, and product context', () => {
-    const url = buildAuthUrl('ABCD123')
-    expect(url.startsWith('https://app.plex.tv/auth#')).toBe(true)
-    expect(url).toContain(`clientID=${env.plexClientId}`)
-    expect(url).toContain('code=ABCD123')
-    expect(url).toContain(encodeURIComponent('context[device][product]'))
   })
 })
 
