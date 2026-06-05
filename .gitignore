@@ -76,3 +76,8 @@ recommender/.venv-eval/
 
 # BGE content-embedding venv (torch + sentence-transformers); host-specific.
 recommender/.venv-embed/
+
+# local security audit scratch (not committed)
+.security-audit/
+scripts/security/.exposure-baseline.json
+scripts/security/exposure-drift.log

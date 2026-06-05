@@ -24,7 +24,7 @@
 
 import { Hono, type Context } from 'hono'
 import { buildAuthUrl, checkPin, createPin, getUser } from '../plex.js'
-import { authorizeOrRedeem } from '../auth.js'
+import { authorizeOrRedeem, enforceAuthRateLimit } from '../auth.js'
 import { roleFor } from '../services/sessionGate.js'
 import {
   mintDeviceToken,
@@ -80,6 +80,10 @@ async function parseLimitedJson(
 }
 
 device.post('/start', async (c) => {
+  // Same bucket as the cookie Plex-PIN create path — /start mints a PIN via
+  // an upstream plex.tv call, so it shares the 'pin' per-IP + global limits.
+  const limited = enforceAuthRateLimit(c, 'pin')
+  if (limited) return limited
   const pin = await createPin()
   return c.json({
     pinId: pin.id,
@@ -111,6 +115,12 @@ device.post('/poll', async (c) => {
   if (!pinIdRaw) return c.json({ error: 'missing_pinId' }, 400)
   const pinId = Number(pinIdRaw)
   if (!Number.isInteger(pinId)) return c.json({ error: 'bad_pinId' }, 400)
+
+  // Same bucket as the cookie checkPin path — per-IP + global + per-PIN.
+  // Rate-limit BEFORE the two upstream plex.tv calls below so a poll flood
+  // can't burn the Plex API budget or grind the authZ decision.
+  const limited = enforceAuthRateLimit(c, 'check', pinId)
+  if (limited) return limited
 
   const deviceId = typeof body?.device_id === 'string' ? body.device_id.trim() : ''
   const deviceName = typeof body?.device_name === 'string' ? body.device_name.trim() : ''

@@ -110,7 +110,7 @@ describe('plex-admin /remote-access — happy path', () => {
         manualPort: string | null
         publicAddressDetected: boolean
         detectedPublicPort: string | null
-        customConnections: string | null
+        hasCustomConnections: boolean
         secureConnectionsMode: string | null
         hasCertificate: boolean
         wanUploadCapBytes: string | null
@@ -128,12 +128,18 @@ describe('plex-admin /remote-access — happy path', () => {
     expect(body.summary.publicAddressDetected).toBe(true)
     expect(JSON.stringify(body)).not.toContain('203.0.113.10')
     expect(body.summary.detectedPublicPort).toBe('32400')
-    expect(body.summary.customConnections).toBe('https://example.lan:32400')
+    // customConnections holds the operator's LAN/WAN address — only a presence
+    // boolean may cross to the client, never the raw value.
+    expect(body.summary).not.toHaveProperty('customConnections')
+    expect(body.summary.hasCustomConnections).toBe(true)
+    expect(JSON.stringify(body)).not.toContain('example.lan')
     expect(body.summary.secureConnectionsMode).toBe('2')
     expect(body.summary.hasCertificate).toBe(true)
     expect(body.summary.allowedNetworks).toBe('192.168.1.0/24')
     expect(body.interpretation.remoteAccess).toContain('advertising')
     expect(body.interpretation.portMapping).toContain('32400')
+    // The internal NAS hostname (env.plexServerUrl) must never reach the client.
+    expect(JSON.stringify(body)).not.toContain('theemeraldexchange.local')
   })
 
   it('threads the session plex token into the header', async () => {
