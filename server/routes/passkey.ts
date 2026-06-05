@@ -25,7 +25,7 @@ import {
   beginLogin,
   verifyLogin,
 } from '../services/webauthn.js'
-import { authorizeOrRedeem } from '../auth.js'
+import { authorizeOrRedeem, enforceAuthRateLimit } from '../auth.js'
 import { isMember, recordMemberLogin } from '../services/members.js'
 import { setSessionCookie } from '../session.js'
 
@@ -45,6 +45,8 @@ function cleanHandle(v: unknown): string | null {
 // ── registration ────────────────────────────────────────────────────────────
 
 passkey.post('/register/options', async (c) => {
+  const limited = enforceAuthRateLimit(c, 'passkey')
+  if (limited) return limited
   const body = await c.req.json().catch(() => null)
   const handle = cleanHandle(body?.handle)
   if (!handle) return c.json({ error: 'invalid_handle' }, 400)
@@ -54,6 +56,8 @@ passkey.post('/register/options', async (c) => {
 })
 
 passkey.post('/register/verify', async (c) => {
+  const limited = enforceAuthRateLimit(c, 'passkey')
+  if (limited) return limited
   const body = await c.req.json().catch(() => null)
   const challengeId = typeof body?.challengeId === 'string' ? body.challengeId : null
   const response = body?.response
@@ -95,11 +99,15 @@ passkey.post('/register/verify', async (c) => {
 // ── authentication ──────────────────────────────────────────────────────────
 
 passkey.post('/login/options', async (c) => {
+  const limited = enforceAuthRateLimit(c, 'passkey')
+  if (limited) return limited
   const { options, challengeId } = await beginLogin()
   return c.json({ options, challengeId })
 })
 
 passkey.post('/login/verify', async (c) => {
+  const limited = enforceAuthRateLimit(c, 'passkey')
+  if (limited) return limited
   const body = await c.req.json().catch(() => null)
   const challengeId = typeof body?.challengeId === 'string' ? body.challengeId : null
   const response = body?.response
