@@ -108,7 +108,7 @@ describe('plex-admin /remote-access — happy path', () => {
         remoteAccessEnabled: boolean
         manualPortMappingEnabled: boolean
         manualPort: string | null
-        detectedPublicAddress: string | null
+        publicAddressDetected: boolean
         detectedPublicPort: string | null
         customConnections: string | null
         secureConnectionsMode: string | null
@@ -122,7 +122,11 @@ describe('plex-admin /remote-access — happy path', () => {
     expect(body.summary.remoteAccessEnabled).toBe(true)
     expect(body.summary.manualPortMappingEnabled).toBe(true)
     expect(body.summary.manualPort).toBe('32400')
-    expect(body.summary.detectedPublicAddress).toBe('203.0.113.10')
+    // The raw public IP must never be returned to the client — only a
+    // presence boolean. Guard against a regression that re-leaks it.
+    expect(body.summary).not.toHaveProperty('detectedPublicAddress')
+    expect(body.summary.publicAddressDetected).toBe(true)
+    expect(JSON.stringify(body)).not.toContain('203.0.113.10')
     expect(body.summary.detectedPublicPort).toBe('32400')
     expect(body.summary.customConnections).toBe('https://example.lan:32400')
     expect(body.summary.secureConnectionsMode).toBe('2')

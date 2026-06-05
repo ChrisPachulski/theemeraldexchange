@@ -67,7 +67,11 @@ plexAdmin.get('/remote-access', async (c) => {
       remoteAccessEnabled: publish,
       manualPortMappingEnabled: manualPortMode,
       manualPort: manualPort ?? null,
-      detectedPublicAddress: publicAddress ?? null,
+      // Never ship the raw public IP to the browser — even owner-only, it
+      // lands in the Network tab / dev tools and is the owner's home WAN
+      // address. A presence boolean is all the reachability diagnostic needs;
+      // the owner can read the literal IP in Plex's own web UI if required.
+      publicAddressDetected: Boolean(publicAddress),
       detectedPublicPort: publicPort ?? null,
       customConnections: customConnections || null,
       secureConnectionsMode: securePref ?? null, // 0=disabled, 1=preferred, 2=required
@@ -84,7 +88,7 @@ plexAdmin.get('/remote-access', async (c) => {
         ? `Plex is asking your router to forward TCP ${manualPort ?? '?'} → ${env.plexServerUrl}. Router must be configured to honor this.`
         : 'Plex is using UPnP to auto-map the port. If your router has UPnP disabled or broken (common on UGREEN/ISP routers), this will silently fail. Switch to manual.',
       publicReachability: publicAddress
-        ? `Plex thinks the public IP is ${publicAddress}${publicPort ? `:${publicPort}` : ''}. If this is wrong (e.g. your ISP rotated the IP), hit Retry in the Plex web UI.`
+        ? `Plex has detected a public address${publicPort ? ` on port ${publicPort}` : ''}. The literal IP is intentionally not returned here; read it in Plex's own web UI if you need it. If reachability is wrong (e.g. your ISP rotated the IP), hit Retry there.`
         : 'Plex has not detected a public address — strong signal that remote access is broken end-to-end.',
     },
   })
