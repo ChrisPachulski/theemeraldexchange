@@ -17,8 +17,12 @@ const webauthn = vi.hoisted(() => ({
 }))
 vi.mock('../services/webauthn.js', () => webauthn)
 
-const { authorizeOrRedeem } = vi.hoisted(() => ({ authorizeOrRedeem: vi.fn() }))
-vi.mock('../auth.js', () => ({ authorizeOrRedeem }))
+const { authorizeOrRedeem, enforceAuthRateLimit } = vi.hoisted(() => ({
+  authorizeOrRedeem: vi.fn(),
+  // Default: never rate-limited (returns null). Individual tests can override.
+  enforceAuthRateLimit: vi.fn(() => null),
+}))
+vi.mock('../auth.js', () => ({ authorizeOrRedeem, enforceAuthRateLimit }))
 
 const members = vi.hoisted(() => ({ isMember: vi.fn(), recordMemberLogin: vi.fn() }))
 vi.mock('../services/members.js', () => members)
