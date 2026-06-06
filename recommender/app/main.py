@@ -22,6 +22,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from .config import CONFIG
 from .context import load_user_context, select_model_config_for_context
 from .db import connect, migrate, transaction
+from .metrics import compute_funnel
 from . import recipes
 from .internal_principal import InternalPrincipal, internal_principal_dep
 from .telemetry import init_telemetry
@@ -169,6 +170,18 @@ def health(conn: sqlite3.Connection = Depends(get_db)) -> HealthResponse:
         internal_principal_mode=CONFIG.internal_principal_mode,
         optimizer=optimizer_status,
     )
+
+
+@app.get("/metrics/funnel")
+def metrics_funnel(
+    window_days: int = 30,
+    _auth: None = Depends(require_event_secret),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    """Online funnel metrics (impressions -> added/clicked, + dot feedback) with
+    Wilson 95% CIs + sample sizes over the last `window_days`. Read-only; the
+    flywheel's observability so recsys changes aren't shipped blind."""
+    return compute_funnel(conn, window_days)
 
 
 @app.post("/score", response_model=ScoreResponse)
