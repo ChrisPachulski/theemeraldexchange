@@ -140,7 +140,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: '1.90'
+          toolchain: '1.96'
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -220,7 +220,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: '1.90'
+          toolchain: '1.96'
           components: clippy, rustfmt
 
       - name: Cache cargo
@@ -282,7 +282,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: '1.90'
+          toolchain: '1.96'
 
       - uses: actions/setup-python@v5
         with:

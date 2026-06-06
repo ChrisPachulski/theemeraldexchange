@@ -12,7 +12,7 @@
 # can't be reached from a context rooted at recommender/.
 
 # ─── Stage 1: build the emerald_contracts PyO3 wheel ─────────────────────────
-FROM rust:1.90-slim-bookworm AS rust-builder
+FROM rust:1.96-slim-bookworm AS rust-builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
