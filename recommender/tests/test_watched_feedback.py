@@ -53,6 +53,16 @@ def _user_feedback_0001(conn: sqlite3.Connection) -> None:
     )
 
 
+def test_migration_0008_is_annotated_destructive() -> None:
+    # 0008 contains DROP TABLE; the migrator refuses to apply a DROP-TABLE
+    # migration (RuntimeError on boot) unless it carries '-- DESTRUCTIVE' on its
+    # own line. Guard that annotation so the recommender can't crash-loop on
+    # deploy if someone edits this migration.
+    sql = (Path(__file__).resolve().parents[1] / "migrations" / "0008_user_feedback_watched.sql").read_text()
+    assert "DROP TABLE" in sql.upper()
+    assert any(line.strip() == "-- DESTRUCTIVE" for line in sql.splitlines())
+
+
 def test_migration_0008_allows_watched_and_preserves_rows() -> None:
     sql = (Path(__file__).resolve().parents[1] / "migrations" / "0008_user_feedback_watched.sql").read_text()
     conn = sqlite3.connect(":memory:")
