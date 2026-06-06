@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// Route-level coverage for the Apple device-pair HTTP handlers (POST /start,
-// POST /poll). Mock every upstream dep with vi.hoisted + vi.mock so the tests
+// Route-level coverage for the Apple device-pair HTTP handler (POST /poll).
+// Mock every upstream dep with vi.hoisted + vi.mock so the tests
 // exercise ROUTE ORCHESTRATION only — body-limit parsing, the five field
 // validations, the body-too-large guard, and the pending/denied/authorized
 // branches. Most important is the security-critical authZ gate: a denied
@@ -22,8 +22,12 @@ const plex = vi.hoisted(() => ({
 }))
 vi.mock('../plex.js', () => plex)
 
-const { authorizeOrRedeem } = vi.hoisted(() => ({ authorizeOrRedeem: vi.fn() }))
-vi.mock('../auth.js', () => ({ authorizeOrRedeem }))
+const { authorizeOrRedeem, enforceAuthRateLimit } = vi.hoisted(() => ({
+  authorizeOrRedeem: vi.fn(),
+  // Default: never rate-limited (returns null). Individual tests can override.
+  enforceAuthRateLimit: vi.fn(() => null),
+}))
+vi.mock('../auth.js', () => ({ authorizeOrRedeem, enforceAuthRateLimit }))
 
 const { roleFor } = vi.hoisted(() => ({ roleFor: vi.fn() }))
 vi.mock('../services/sessionGate.js', () => ({ roleFor }))
@@ -55,26 +59,10 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe('device POST /start', () => {
-  it('200s with pinId/code/verificationUrl/authUrl', async () => {
-    plex.createPin.mockResolvedValue({ id: 42, code: 'WXYZ' })
-    plex.buildAuthUrl.mockReturnValue('https://plex.tv/link?code=WXYZ')
-
-    const res = await post('/start')
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as {
-      pinId: number
-      code: string
-      verificationUrl: string
-      authUrl: string
-    }
-    expect(body.pinId).toBe(42)
-    expect(body.code).toBe('WXYZ')
-    expect(body.verificationUrl).toBe('https://plex.tv/link')
-    expect(body.authUrl).toBe('https://plex.tv/link?code=WXYZ')
-    expect(plex.createPin).toHaveBeenCalledTimes(1)
-  })
-})
+// NOTE: POST /start was intentionally removed (commit b1fa1d3) — a server-side
+// createPin made plex.tv attribute the request to the NAS's public IP, leaking
+// the host's home location. PIN creation now happens on the device. Its former
+// test lived here and is deleted along with the route.
 
 describe('device POST /poll — validation', () => {
   it('400 missing_pinId when pinId absent', async () => {
