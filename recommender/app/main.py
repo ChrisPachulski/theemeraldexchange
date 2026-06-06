@@ -216,7 +216,7 @@ def post_feedback(
     ev = ev.model_copy(update={"sub": authoritative_sub(principal, ev.sub)})
     now = _utc_now_iso()
     with transaction(conn):
-        if ev.signal in {"like", "clicked", "added"}:
+        if ev.signal in {"like", "clicked", "added", "watched"}:
             conn.execute(
                 """DELETE FROM user_feedback
                    WHERE sub=? AND kind=? AND tmdb_id=?
@@ -227,14 +227,14 @@ def post_feedback(
             conn.execute(
                 """DELETE FROM user_feedback
                    WHERE sub=? AND kind=? AND tmdb_id=?
-                     AND signal IN ('like', 'clicked', 'added')""",
+                     AND signal IN ('like', 'clicked', 'added', 'watched')""",
                 (ev.sub, ev.kind, ev.tmdb_id),
             )
         elif ev.signal == "reject":
             conn.execute(
                 """DELETE FROM user_feedback
                    WHERE sub=? AND kind=? AND tmdb_id=?
-                     AND signal IN ('like', 'dislike', 'shown', 'clicked', 'added')""",
+                     AND signal IN ('like', 'dislike', 'shown', 'clicked', 'added', 'watched')""",
                 (ev.sub, ev.kind, ev.tmdb_id),
             )
         elif ev.signal == "shown":
