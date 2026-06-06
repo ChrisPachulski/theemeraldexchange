@@ -33,6 +33,12 @@ Run: `node scripts/autoloop/claude-guard.mjs "$AUTOLOOP_DIR"` and parse JSON `ac
 - Read `$AUTOLOOP_DIR/{handoff.md,iteration-log.md,dead-ends.md,immune-rules.md,GOALS.md,value-ledger.md}` (create empty if missing).
 - **Refresh the hotspot map (targeting leg):** `node scripts/autoloop/hotspot.mjs "$AUTOLOOP_WT"` — writes
   `$AUTOLOOP_DIR/hotspots.json` (defect-density = change-freq × size; this is WHERE work pays off).
+- **Refresh the signal queue (PROACTIVITY leg):** `node scripts/autoloop/signals.mjs "$AUTOLOOP_WT"` — writes
+  `$AUTOLOOP_DIR/signals.json` (real REPRODUCED work items: red CI, recurring-fix files, TODO/FIXME at
+  hotspots, + any per-repo `signals/*.mjs` adapter output). This is WHAT is actually broken/needed, so the
+  forest works on merit instead of imagining coverage holes. An empty queue is fine — the forest falls back
+  to code-scan and coverage becomes the floor. (Set `SIGNAL_RUN_GATE=1` to also harvest live test/type
+  failures — a full gate run, opt-in.)
 - **Reviewer-attention budget:** scan value-ledger.md — if a work-class's recent rows show a high
   reject/unconfirmed rate (≥3 of its last 4), treat that class as PAUSED this window (tell the mesh to
   skip it via immuneRules note). Bias to FEWER, higher-confidence commits.
@@ -43,9 +49,11 @@ Run: `node scripts/autoloop/claude-guard.mjs "$AUTOLOOP_DIR"` and parse JSON `ac
 Invoke **Workflow** with `{ scriptPath: "scripts/autoloop/mesh.workflow.mjs" }` and
 `args: { doneTitles:[...], existingBranches:"...", immuneRules:"<contents>", firstRun:true,
 repoRoot:"<cwd>", baseBranch:"auto/integration", goals:"<GOALS.md contents>",
-hotspots:<parsed hotspots.json `top` array> }`. The mesh now selects by **gate → highest non-empty
-work-class (GOALS Part A) → hotspot score × roadmap-fit (Part B)**, abstaining (dry window) when no
-candidate passes the verification gate. Discovery reads the *cumulative* integration state, so a fix
+hotspots:<parsed hotspots.json `top` array>, signals:<parsed signals.json `signals` array> }`.
+The mesh now selects by **gate → highest non-empty work-class (GOALS Part A) → hotspot score ×
+roadmap-fit (Part B)**, and SEEDS each work-class's discovery leaf with the real `signals` for that
+class (so the highest-merit class fires on reproduced work, not imagined coverage), abstaining (dry
+window) when no candidate passes the verification gate. Discovery reads the *cumulative* integration state, so a fix
 already made this session is NOT a live bug to re-find. Wait for the result.
 
 ## 4. Persist + react (combination-lock node state, all under $AUTOLOOP_DIR)
