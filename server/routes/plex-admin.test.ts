@@ -108,9 +108,9 @@ describe('plex-admin /remote-access — happy path', () => {
         remoteAccessEnabled: boolean
         manualPortMappingEnabled: boolean
         manualPort: string | null
-        detectedPublicAddress: string | null
+        publicAddressDetected: boolean
         detectedPublicPort: string | null
-        customConnections: string | null
+        hasCustomConnections: boolean
         secureConnectionsMode: string | null
         hasCertificate: boolean
         wanUploadCapBytes: string | null
@@ -122,14 +122,23 @@ describe('plex-admin /remote-access — happy path', () => {
     expect(body.summary.remoteAccessEnabled).toBe(true)
     expect(body.summary.manualPortMappingEnabled).toBe(true)
     expect(body.summary.manualPort).toBe('32400')
-    expect(body.summary.detectedPublicAddress).toBe('203.0.113.10')
+    // The raw public IP and raw customConnections (both hold the operator's
+    // home/LAN address) must NEVER reach the client — only presence booleans.
+    expect(body.summary).not.toHaveProperty('detectedPublicAddress')
+    expect(body.summary).not.toHaveProperty('customConnections')
+    expect(body.summary.publicAddressDetected).toBe(true)
+    expect(body.summary.hasCustomConnections).toBe(true)
     expect(body.summary.detectedPublicPort).toBe('32400')
-    expect(body.summary.customConnections).toBe('https://example.lan:32400')
     expect(body.summary.secureConnectionsMode).toBe('2')
     expect(body.summary.hasCertificate).toBe(true)
     expect(body.summary.allowedNetworks).toBe('192.168.1.0/24')
     expect(body.interpretation.remoteAccess).toContain('advertising')
     expect(body.interpretation.portMapping).toContain('32400')
+    // No raw IP, internal hostname, or customConnections value anywhere in body.
+    const serialized = JSON.stringify(body)
+    expect(serialized).not.toContain('203.0.113.10')
+    expect(serialized).not.toContain('example.lan')
+    expect(serialized).not.toContain('theemeraldexchange.local')
   })
 
   it('threads the session plex token into the header', async () => {
