@@ -22,6 +22,7 @@ async function userCookie() {
   return `eex.session=${t}`
 }
 
+
 beforeEach(() => {
   // Stub the recommender mirror — the route fires postFeedback, which
   // hits fetch under the hood. Allow any call to succeed so the
@@ -78,6 +79,26 @@ describe('POST /event — happy path', () => {
     )
     expect(mirrorCalls).toEqual([])
   })
+})
+
+describe('GET /metrics — admin funnel observability', () => {
+  it('401s without a session', async () => {
+    const r = await appUnderTest().request('/metrics', { method: 'GET' })
+    expect(r.status).toBe(401)
+  })
+
+  it('403s a non-admin user (admin-only observability)', async () => {
+    const r = await appUnderTest().request('/metrics', {
+      method: 'GET',
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r.status).toBe(403)
+  })
+  // The disabled-gate (503) and happy-path (200, proxied funnel JSON) require a
+  // reconciled ADMIN session (membership-derived, not a mint-only role claim)
+  // plus USE_LOCAL_RECOMMENDER=1 — not constructible in this unit harness. They
+  // are verified live post-deploy by hitting /api/recommender/metrics as admin.
+  // The recommender-side compute is unit-tested in test_funnel_metrics.py.
 })
 
 describe('POST /event — validation', () => {
