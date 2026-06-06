@@ -27,6 +27,14 @@ jobs:
           node-version: '24'
           cache: npm
 
+      # The @emerald/contracts-napi file: dep builds its .node during `npm ci`
+      # (prepare script). The crate's rust-version is 1.96, so the runner's
+      # default rust is too old — pin 1.96 explicitly, otherwise the addon
+      # silently fails to build and the device-token crypto tests can't load it.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.96'
+
       - name: Install dependencies
         run: npm ci
 
@@ -100,6 +108,14 @@ jobs:
         with:
           node-version: '24'
           cache: npm
+
+      # The @emerald/contracts-napi file: dep builds its .node during `npm ci`
+      # (prepare script). The crate's rust-version is 1.96, so the runner's
+      # default rust is too old — pin 1.96 explicitly, otherwise the addon
+      # silently fails to build and the device-token crypto tests can't load it.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.96'
 
       - name: Install dependencies
         run: npm ci
