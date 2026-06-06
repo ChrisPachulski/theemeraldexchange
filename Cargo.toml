@@ -12,7 +12,12 @@ members = [
 edition = "2024"
 license-file = "LICENSE"
 authors = ["ChrisPachulski"]
-rust-version = "1.85"
+# Match the only toolchain actually shipped (CI dtolnay/rust-toolchain 1.90, all
+# Dockerfiles rust:1.90-slim-bookworm). The previous 1.85 floor was never built
+# or tested, so it was misleading documentation. If an older support floor is
+# ever genuinely required, add a dedicated MSRV CI lane (dtolnay
+# /rust-toolchain@1.85 + cargo build) rather than lowering this back.
+rust-version = "1.90"
 
 [workspace.dependencies]
 aes-gcm = "0.10.3"

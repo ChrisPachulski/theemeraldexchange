@@ -1,0 +1,85 @@
+# Dependency bump policy (audit DEP-003).
+#
+# Report-only posture for now: Dependabot opens weekly PRs across every
+# ecosystem so the digest pins added in 9-11 / 11-8 (Dockerfile FROM + compose
+# images) and the npm / cargo / pip dependency sets get INTENTIONAL bump PRs
+# instead of drifting. The repo is private until M2 TestFlight (no public
+# exposure yet), so this stays advisory; tighten to hard-gate high/critical
+# vulnerabilities before TestFlight.
+#
+# `docker` ecosystem here covers the FROM/COPY --from base images in the
+# Dockerfiles; compose `image:` pins are bumped via the same ecosystem when
+# Dependabot supports the compose path, otherwise bump them alongside the
+# Dockerfile PRs.
+version: 2
+updates:
+  # Root npm workspace (SPA + Hono backend).
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      # Keep the churn manageable: group dev tooling and type stubs.
+      dev-tooling:
+        patterns:
+          - "@types/*"
+          - "eslint*"
+          - "typescript*"
+          - "vite*"
+          - "vitest*"
+          - "@vitejs/*"
+          - "@playwright/*"
+          - "playwright"
+
+  # napi binding package (pins @napi-rs/cli — keep on the same cadence).
+  - package-ecosystem: "npm"
+    directory: "/crates/emerald-contracts-napi"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+
+  # Rust workspace (emerald-contracts crypto crate + media-core/transcoder).
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  # Python recommender sidecar.
+  - package-ecosystem: "pip"
+    directory: "/recommender"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  # Container base images — keeps the 9-11 / 11-8 digest pins moving via PRs.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  # Container base images for the sidecar service Dockerfiles.
+  - package-ecosystem: "docker"
+    directory: "/recommender"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/crates/media-core"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/crates/transcoder"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+
+  # Keep the CI workflow's own actions current.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
