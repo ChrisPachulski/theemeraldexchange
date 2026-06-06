@@ -182,11 +182,13 @@ jobs:
 
       - name: Cross-language parity tests (recommender ↔ Rust ↔ TS)
         working-directory: recommender
-        # Whole-directory collection so the DB migrator (test_db_migrator.py),
-        # config principal-mode, and the rest of the recommender suite are gated
-        # — not just the 3 hand-picked parity files. The eval harness
-        # (build_holdout) is collected too.
-        run: pytest tests/ eval/ -v
+        # Scoped to the tests runnable with this job's minimal dep set
+        # (emerald_contracts wheel + pydantic/fastapi). Whole-directory
+        # collection (tests/ eval/) needs the FULL recommender environment
+        # (anthropic, httpx, torch, …) which this job intentionally does not
+        # install — broadening it requires installing recommender deps first
+        # (tracked alongside the parked requirements.lock work).
+        run: pytest tests/test_emerald_contracts_parity.py tests/test_sub_validation.py tests/test_internal_principal.py -v
 
       # Node side of the gate: install JS deps + build the napi addon,
       # then run the N-API→PyO3 cross-binding test with the require flag
