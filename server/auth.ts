@@ -52,7 +52,7 @@ import { verifyAppleIdentityToken } from './services/appleAuth.js'
 
 export const auth = new Hono()
 
-type AuthRateLimitKind = 'pin' | 'check' | 'apple'
+type AuthRateLimitKind = 'pin' | 'check' | 'apple' | 'passkey'
 type AuthRateLimitBucket = { count: number; resetAt: number }
 type AuthRateLimitRule = { key: string; limit: number; windowMs: number }
 
@@ -64,11 +64,18 @@ const AUTH_CLIENT_RATE_LIMITS: Record<AuthRateLimitKind, { limit: number; window
   // so a stolen-invite / token-replay flood is blunted on top of the
   // 128-bit invite entropy and the Apple-JWKS signature requirement.
   apple: { limit: 20, windowMs: 60_000 },
+  // WebAuthn login + registration. Every passkey request is either a
+  // challenge mint or a crypto verify + DB write (register also redeems an
+  // invite) — no innocuous polling — so it gets the same tight bucket as
+  // apple. Blunts credential-stuffing against /login/verify and challenge-
+  // table burn against /register/options.
+  passkey: { limit: 20, windowMs: 60_000 },
 }
 const AUTH_GLOBAL_RATE_LIMITS: Record<AuthRateLimitKind, { limit: number; windowMs: number }> = {
   pin: { limit: 120, windowMs: 60_000 },
   check: { limit: 600, windowMs: 60_000 },
   apple: { limit: 200, windowMs: 60_000 },
+  passkey: { limit: 200, windowMs: 60_000 },
 }
 const AUTH_CHECK_PIN_RATE_LIMIT = { limit: 90, windowMs: 60_000 }
 const AUTH_RATE_LIMIT_MAX_BUCKETS = 256
@@ -141,7 +148,11 @@ function sweepAuthRateLimitBuckets(now: number): void {
   }
 }
 
-function enforceAuthRateLimit(c: Context, kind: AuthRateLimitKind, pinId?: number): Response | null {
+export function enforceAuthRateLimit(
+  c: Context,
+  kind: AuthRateLimitKind,
+  pinId?: number,
+): Response | null {
   const now = Date.now()
   sweepAuthRateLimitBuckets(now)
   const rules = authRateLimitRules(c, kind, pinId)
