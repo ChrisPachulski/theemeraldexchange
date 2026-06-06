@@ -19,14 +19,31 @@
 // anotherUserDislikes) before mirroring.
 
 import { Hono } from 'hono'
-import { requireAuth, type Env } from '../middleware/auth.js'
-import { postFeedback } from '../services/recommender.js'
+import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
+import { postFeedback, getFunnelMetrics } from '../services/recommender.js'
 import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
 import { env } from '../env.js'
 
 export const recommenderEvents = new Hono<Env>()
 
 recommenderEvents.use('*', requireAuth)
+
+// Admin-only funnel metrics (impressions -> added/clicked + dot feedback, with
+// Wilson CIs). Read-only observability so recsys changes aren't shipped blind.
+recommenderEvents.get('/metrics', requireAdmin, async (c) => {
+  if (!env.useLocalRecommender) return c.json({ error: 'recommender_disabled' }, 503)
+  const raw = Number(c.req.query('windowDays') ?? 30)
+  const windowDays = Number.isFinite(raw) ? Math.max(1, Math.min(365, Math.floor(raw))) : 30
+  try {
+    const data = await getFunnelMetrics(windowDays, recommenderCallerFromSession(c.get('session')))
+    return c.json(data as Record<string, unknown>)
+  } catch (e) {
+    return c.json(
+      { error: 'metrics_unavailable', detail: e instanceof Error ? e.message : String(e) },
+      502,
+    )
+  }
+})
 
 type ClickEvent = {
   kind?: unknown
