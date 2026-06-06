@@ -9,8 +9,6 @@ import {
   clearFeedback,
   anotherUserDislikes,
   updateLikedTitleIfPresent,
-  FeedbackQuotaError,
-  MAX_FEEDBACK_ENTRIES_PER_SIGNAL,
   _setUserFeedbackPathForTests,
 } from './userFeedback.js'
 
@@ -249,13 +247,18 @@ describe('user feedback store', () => {
     ).toEqual([1, 2, 3])
   })
 
-  it('rejects new likes at the per-user cap but preserves duplicate updates', async () => {
+  // No storage cap on either signal: user feedback is never silently
+  // dropped. A red is a permanent "never suggest again" contract, so
+  // evicting an old one (which would let the title resurface) is wrong.
+  const OVER_CAP = 520 // comfortably past the old 500 limit
+
+  it('does not cap likes — old entries are retained as the list grows', async () => {
     await fs.writeFile(
       path,
       JSON.stringify({
         alice: {
           movie: {
-            liked: Array.from({ length: MAX_FEEDBACK_ENTRIES_PER_SIGNAL }, (_, i) => ({
+            liked: Array.from({ length: OVER_CAP }, (_, i) => ({
               id: i + 1,
               title: `Title ${i + 1}`,
             })),
@@ -268,24 +271,30 @@ describe('user feedback store', () => {
     _setUserFeedbackPathForTests(path)
     vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    await expect(setLike('alice', 'movie', MAX_FEEDBACK_ENTRIES_PER_SIGNAL + 1, 'Overflow'))
-      .rejects.toBeInstanceOf(FeedbackQuotaError)
-    await expect(setLike('alice', 'movie', 2, 'Updated 2')).resolves.toBeUndefined()
+    // A fresh like beyond the old cap SUCCEEDS and grows the list — the
+    // click is never a silent no-op, and nothing is evicted.
+    await expect(setLike('alice', 'movie', OVER_CAP + 1, 'Newest')).resolves.toBeUndefined()
 
     const likes = (await getUserFeedback('alice')).movie.liked
-    expect(likes).toHaveLength(MAX_FEEDBACK_ENTRIES_PER_SIGNAL)
-    expect(likes.some((e) => e.id === MAX_FEEDBACK_ENTRIES_PER_SIGNAL + 1)).toBe(false)
-    expect(likes.at(-1)).toEqual({ id: 2, title: 'Updated 2' })
+    expect(likes).toHaveLength(OVER_CAP + 1)
+    expect(likes.some((e) => e.id === 1)).toBe(true) // oldest still present
+    expect(likes.at(-1)).toEqual({ id: OVER_CAP + 1, title: 'Newest' })
+
+    // A duplicate update moves the entry to the tail without changing length.
+    await expect(setLike('alice', 'movie', 2, 'Updated 2')).resolves.toBeUndefined()
+    const after = (await getUserFeedback('alice')).movie.liked
+    expect(after).toHaveLength(OVER_CAP + 1)
+    expect(after.at(-1)).toEqual({ id: 2, title: 'Updated 2' })
   })
 
-  it('rejects new dislikes at the per-user cap but preserves duplicate updates', async () => {
+  it('does not cap dislikes — a red is permanent and never evicted', async () => {
     await fs.writeFile(
       path,
       JSON.stringify({
         alice: {
           movie: {
             liked: [],
-            disliked: Array.from({ length: MAX_FEEDBACK_ENTRIES_PER_SIGNAL }, (_, i) => ({
+            disliked: Array.from({ length: OVER_CAP }, (_, i) => ({
               id: i + 1,
               title: `Title ${i + 1}`,
             })),
@@ -296,13 +305,19 @@ describe('user feedback store', () => {
     )
     _setUserFeedbackPathForTests(path)
 
-    await expect(setDislike('alice', 'movie', MAX_FEEDBACK_ENTRIES_PER_SIGNAL + 1, 'Overflow'))
-      .rejects.toBeInstanceOf(FeedbackQuotaError)
-    await expect(setDislike('alice', 'movie', 1, 'Updated 1')).resolves.toBeUndefined()
+    // Red = "never suggest again" — it MUST always stick AND never push an
+    // older red out (that would let the old title resurface in suggestions).
+    await expect(setDislike('alice', 'movie', OVER_CAP + 1, 'Newest')).resolves.toBeUndefined()
 
     const dislikes = (await getUserFeedback('alice')).movie.disliked
-    expect(dislikes).toHaveLength(MAX_FEEDBACK_ENTRIES_PER_SIGNAL)
-    expect(dislikes.at(-1)).toEqual({ id: 1, title: 'Updated 1' })
+    expect(dislikes).toHaveLength(OVER_CAP + 1)
+    expect(dislikes.some((e) => e.id === 1)).toBe(true) // oldest red retained
+    expect(dislikes.at(-1)).toEqual({ id: OVER_CAP + 1, title: 'Newest' })
+
+    await expect(setDislike('alice', 'movie', 2, 'Updated 2')).resolves.toBeUndefined()
+    const after = (await getUserFeedback('alice')).movie.disliked
+    expect(after).toHaveLength(OVER_CAP + 1)
+    expect(after.at(-1)).toEqual({ id: 2, title: 'Updated 2' })
   })
 
   it('writeFile failure rejects the awaited result (no UI lie)', async () => {
