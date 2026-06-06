@@ -38,7 +38,7 @@ thiserror = "2"
 # §15 telemetry: self-report crashes/errors to Glitchtip when a DSN is present.
 # rustls (not native-tls/OpenSSL) matches the repo's no-OpenSSL posture; the
 # tracing feature bridges existing tracing::error!/warn! into Glitchtip issues.
-sentry = { version = "0.35", default-features = false, features = ["backtrace", "contexts", "panic", "rustls", "reqwest", "tracing"] }
+sentry = { version = "0.48", default-features = false, features = ["backtrace", "contexts", "panic", "rustls", "reqwest", "tracing"] }
 sentry-tracing = "0.35"
 
 [dev-dependencies]
