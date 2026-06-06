@@ -206,6 +206,28 @@ export async function postFeedback(
   await mirrorPost('/events/feedback', ev, 'recommender.postFeedback', caller)
 }
 
+// Read-only funnel metrics for the admin observability surface. Unlike the
+// fire-and-forget mirrors, the caller needs the payload, so this throws on
+// failure rather than swallowing it.
+export async function getFunnelMetrics(
+  windowDays = 30,
+  caller?: RecommenderCaller,
+): Promise<unknown> {
+  const wd = Number.isFinite(windowDays) ? Math.max(1, Math.min(365, Math.floor(windowDays))) : 30
+  const url = `${env.recommenderUrl}/metrics/funnel?window_days=${wd}`
+  const res = await fetchWithTimeout(
+    url,
+    { method: 'GET', headers: recommenderHeaders(caller) },
+    REQUEST_TIMEOUT_MS,
+    'recommender.getFunnelMetrics',
+  )
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new RecommenderError(`funnel metrics ${res.status}: ${body.slice(0, 200)}`, res.status)
+  }
+  return res.json()
+}
+
 export async function postRejection(
   ev: { kind: RecommenderKind; tmdb_id: number },
   caller?: RecommenderCaller,
