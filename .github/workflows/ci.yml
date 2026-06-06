@@ -182,7 +182,11 @@ jobs:
 
       - name: Cross-language parity tests (recommender ↔ Rust ↔ TS)
         working-directory: recommender
-        run: pytest tests/test_emerald_contracts_parity.py tests/test_sub_validation.py tests/test_internal_principal.py -v
+        # Whole-directory collection so the DB migrator (test_db_migrator.py),
+        # config principal-mode, and the rest of the recommender suite are gated
+        # — not just the 3 hand-picked parity files. The eval harness
+        # (build_holdout) is collected too.
+        run: pytest tests/ eval/ -v
 
       # Node side of the gate: install JS deps + build the napi addon,
       # then run the N-API→PyO3 cross-binding test with the require flag
@@ -236,8 +240,11 @@ jobs:
         continue-on-error: true
 
       - name: cargo clippy
+        # Gating: removed continue-on-error. emerald-contracts is the canonical
+        # cross-language crypto crate (token/JWE/HMAC/HKDF) where clippy catches
+        # real soundness issues; an advisory lint never enforces the
+        # deny-warnings intent. fmt above stays advisory (cosmetic).
         run: cargo clippy --all-targets --workspace -- -D warnings
-        continue-on-error: true
 
       # emerald-contracts-pyo3 uses pyo3's extension-module feature,
       # which can't be linked by plain `cargo build` — it requires the
@@ -317,3 +324,44 @@ jobs:
           pip install pip-tools
           pip-compile pyproject.toml --quiet --output-file /tmp/recommender-resolved.txt
           pip-audit -r /tmp/recommender-resolved.txt
+
+  docker-build:
+    # Every other job runs on the host runner via npm/cargo/pytest — nothing
+    # builds the multi-stage Dockerfiles that actually ship. Their fragile logic
+    # (cross-stage NAPI .node staging, static-ffmpeg COPY, better-sqlite3 source
+    # compile) only fails at `docker compose up --build` on the NAS, not in CI.
+    # Validate compose interpolation on every run and build the backend image so
+    # image-build regressions are caught pre-deploy. The heavy sidecar images
+    # (recommender torch, media-core/transcoder Rust) build only on the deploy
+    # branch to keep PR feedback fast.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Validate compose config
+        # `docker compose config` resolves ${...} interpolation and validates the
+        # schema. The compose file uses only plain ${VAR} (no ${VAR:?required}),
+        # so unset vars default to empty with a warning — `-q` still exits 0.
+        # Verified against the production compose file on the deploy host.
+        run: docker compose config -q
+
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build sidecar images (deploy branch only)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          docker build -f ./recommender/Dockerfile .
+          docker build -f ./crates/media-core/Dockerfile .
+          docker build -f ./crates/transcoder/Dockerfile .
