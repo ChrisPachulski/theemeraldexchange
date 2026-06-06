@@ -75,7 +75,7 @@ iptv.get('/health', requireAuth, async (c) => {
 // is the fallback for non-CF deploys. Used to label active sessions so the
 // user can tell "the browser I'm sitting at" from "that phone in the
 // kitchen" when deciding which slot to free.
-function clientIp(c: Context<Env>): string | null {
+export function clientIp(c: Context<Env>): string | null {
   return (
     c.req.header('cf-connecting-ip') ??
     c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ??
@@ -125,6 +125,11 @@ function sessionTitle(kind: SessionKind, resourceId: string): string | null {
   }
   return null
 }
+
+// Test-only export: sessionTitle is module-private to keep the session tracker
+// ignorant of catalog schema, but its series branch (episode→series join, with
+// null-title and missing-row fallbacks) is non-trivial and worth unit-pinning.
+export const __test = { sessionTitle }
 
 function enrichSessions(list: SessionView[]): Array<SessionView & { resolvedTitle: string | null }> {
   return list.map((s) => ({ ...s, resolvedTitle: s.title ?? sessionTitle(s.kind, s.resourceId) }))
