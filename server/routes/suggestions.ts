@@ -482,10 +482,18 @@ function buildLibraryBlock(
 // title at the top of the block — the highest-attention position after
 // the label. Claude should up-weight the first bullets because they
 // represent the user's freshest taste signal.
+// The per-user liked store is unbounded (see services/userFeedback.ts —
+// user signal is never silently dropped). This dormant BYO-key Claude
+// path is the only consumer that pays per token for it, so bound the
+// PROMPT here — most-recent N — rather than capping the store. Prod uses
+// the local Python recommender and never reaches this code.
+const CLAUDE_PROMPT_LIKES_CAP = 500
+
 function buildUserLikesBlock(liked: Array<{ id: number; title: string }>): string {
   if (liked.length === 0) return ''
-  // Reverse so newest likes appear first (highest prompt attention).
-  const recencyOrdered = [...liked].reverse()
+  // Reverse so newest likes appear first (highest prompt attention), then
+  // keep only the freshest CLAUDE_PROMPT_LIKES_CAP to bound prompt tokens.
+  const recencyOrdered = [...liked].reverse().slice(0, CLAUDE_PROMPT_LIKES_CAP)
   return (
     `This user has explicitly LIKED the following — recommend more in this vein ` +
     `(strongest positive taste signal; items listed first are the MOST RECENTLY liked):\n${renderEntryBullets(recencyOrdered)}`
