@@ -1003,15 +1003,35 @@ describe('radarr movie-add in-flight reservation', () => {
   }
 
   // Drive the awaited grab pipeline forward under fake timers. The handler's
-  // first awaits (body parse, auth) have NO timer, so we interleave real
-  // microtask yields with timer advances — advancing alone wouldn't progress
-  // a chain that hasn't yet scheduled its setTimeout. Past grabBestUnderCap's
-  // single 1.5 s delay this fully settles the request.
-  async function flush(): Promise<void> {
-    for (let i = 0; i < 12; i++) {
+  // first awaits (body parse, auth, the grab POST) have NO timer; only later
+  // does grabBestUnderCap schedule its single real 1.5 s release setTimeout.
+  //
+  // The old helper advanced a FIXED number of rounds, then the test did
+  // `await p`. Under the parallel-suite CI load the chain progressed slower, so
+  // that timer was sometimes scheduled AFTER the fixed rounds ended — and with
+  // the clock frozen it never fired, hanging `await p` to the test timeout (a
+  // pass-here/hang-there flake). Looping on a PREDICATE instead of a fixed
+  // count fires the timer no matter how late it appears.
+
+  // Advance fake time (interleaved with microtask drains) until `done()` holds.
+  async function advanceUntil(done: () => boolean, maxFakeMs = 60_000): Promise<void> {
+    for (let elapsed = 0; elapsed < maxFakeMs && !done(); elapsed += 250) {
       await Promise.resolve()
-      await vi.advanceTimersByTimeAsync(500)
+      await vi.advanceTimersByTimeAsync(250)
     }
+  }
+
+  // Advance fake time until the request promise settles, then return it. This
+  // is race-free: it keeps firing timers until THIS request is done, so a
+  // late-scheduled release timer can never strand the awaited response.
+  async function settle<T>(p: T | PromiseLike<T>): Promise<T> {
+    let settled = false
+    const tracked = Promise.resolve(p).then(
+      (v) => ((settled = true), v),
+      (e) => ((settled = true), Promise.reject(e)),
+    )
+    await advanceUntil(() => settled)
+    return tracked
   }
 
   let appendSpy: ReturnType<typeof vi.spyOn>
@@ -1078,7 +1098,7 @@ describe('radarr movie-add in-flight reservation', () => {
       body: JSON.stringify({ rootFolderPath: path, title: 'Add One', qualityProfileId: 7, monitored: true, addOptions: { searchForMovie: true } }),
     })
     // Advance past add #1's 1.5 s delay so it reserves + posts (then hangs).
-    await flush()
+    await advanceUntil(() => resolvers.length === 1)
     expect(resolvers.length).toBe(1)
     const postsAfterOne = grabPostCount(calls)
 
@@ -1088,8 +1108,7 @@ describe('radarr movie-add in-flight reservation', () => {
       headers: { Cookie: cookie, 'Content-Type': 'application/json' },
       body: JSON.stringify({ rootFolderPath: path, title: 'Add Two', qualityProfileId: 7, monitored: true, addOptions: { searchForMovie: true } }),
     })
-    await flush()
-    const r2 = await add2Promise
+    const r2 = await settle(add2Promise)
     expect(r2.status).toBe(424)
     const body2 = (await r2.json()) as { error?: string; phase?: string }
     expect(body2.error).toBe('capped_grab_not_started')
@@ -1099,8 +1118,7 @@ describe('radarr movie-add in-flight reservation', () => {
 
     // Release add #1 so its awaited handler can settle.
     resolvers.forEach((fn) => fn())
-    await flush()
-    await add1
+    await settle(add1)
   })
 
   it('RESERVATION RELEASED ON COMPLETION: radarr releases after every grab, so a sequential same-folder add succeeds and issues its own grab POST', async () => {
@@ -1110,17 +1128,13 @@ describe('radarr movie-add in-flight reservation', () => {
     const path = '/data/movies-release'
     const calls1: Array<{ url: string; method: string }> = []
     stubMovieAdd(calls1, { path, movieId: 201, grabStatus: 201 })
-    const p1 = addMovie(await adminCookie(), path)
-    await flush()
-    const r1 = await p1
+    const r1 = await settle(addMovie(await adminCookie(), path))
     expect(r1.status).toBe(201)
     expect(grabPostCount(calls1)).toBe(1)
 
     const calls2: Array<{ url: string; method: string }> = []
     stubMovieAdd(calls2, { path, movieId: 202, grabStatus: 201 })
-    const p2 = addMovie(await adminCookie(), path)
-    await flush()
-    const r2 = await p2
+    const r2 = await settle(addMovie(await adminCookie(), path))
     expect(r2.status).toBe(201)
     expect(grabPostCount(calls2)).toBe(1)
   })
@@ -1131,9 +1145,7 @@ describe('radarr movie-add in-flight reservation', () => {
     const path = '/data/movies-failrelease'
     const calls1: Array<{ url: string; method: string }> = []
     stubMovieAdd(calls1, { path, movieId: 301, grabStatus: 500 })
-    const p1 = addMovie(await adminCookie(), path)
-    await flush()
-    const r1 = await p1
+    const r1 = await settle(addMovie(await adminCookie(), path))
     expect(r1.status).toBe(424)
     const body1 = (await r1.json()) as { error?: string }
     expect(body1.error).toBe('capped_grab_failed')
@@ -1141,9 +1153,7 @@ describe('radarr movie-add in-flight reservation', () => {
 
     const calls2: Array<{ url: string; method: string }> = []
     stubMovieAdd(calls2, { path, movieId: 302, grabStatus: 201 })
-    const p2 = addMovie(await adminCookie(), path)
-    await flush()
-    const r2 = await p2
+    const r2 = await settle(addMovie(await adminCookie(), path))
     expect(r2.status).toBe(201)
     expect(grabPostCount(calls2)).toBe(1)
   })
