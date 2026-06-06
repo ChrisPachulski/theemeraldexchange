@@ -39,6 +39,7 @@ const PRESERVED_KEYS = [
   'USE_LOCAL_RECOMMENDER',
   'EEX_TELEMETRY_DSN',
   'STREAM_TOKEN_SECRET',
+  'DEVICE_TOKEN_SECRET',
   'INTERNAL_PRINCIPAL_SECRET',
   'APPLE_CLIENT_ID',
   'ENABLE_APPLE_SIGN_IN',
@@ -536,5 +537,69 @@ describe('env — DEFAULT_PROFILE_NAME case folding', () => {
     process.env.DEFAULT_PROFILE_NAME = 'HIGH QUALITY'
     const env = await loadEnv()
     expect(env.defaultProfileName).toBe('high quality')
+  })
+})
+
+describe('env — fail-closed on missing/misconfigured token secrets (audit 17-5)', () => {
+  // vitest.config.ts injects STREAM/DEVICE/INTERNAL token secrets globally for
+  // every test, so the import-time validator was previously only ever exercised
+  // in the SUCCESS direction. These cases drive it in the FAILURE direction —
+  // the §3/§4/§5.4 fail-closed posture must be a tested property, not a comment.
+  //
+  // setBaselineEnv() does not touch the token secrets, so the globally-injected
+  // values are still present; each case explicitly deletes / equalizes the one
+  // under test on top of a prod baseline.
+  function setProdBaseline() {
+    setBaselineEnv()
+    process.env.NODE_ENV = 'production'
+    process.env.ALLOWED_ORIGINS = 'https://app.example'
+    process.env.PLEX_SERVER_ID = 'home-server-machine-id'
+    process.env.EEX_TELEMETRY_DSN = 'https://test@glitchtip.example.com/1'
+    delete process.env.ALLOW_UNSCOPED_PLEX_LOGIN
+    // Distinct, sufficiently-strong defaults so a case can isolate ONE failure.
+    process.env.SESSION_SECRET = 'session-secret-AAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+    process.env.STREAM_TOKEN_SECRET = 'stream-secret-BBBBBBBBBBBBBBBBBBBBBBBBBBBB'
+    process.env.DEVICE_TOKEN_SECRET = 'device-secret-CCCCCCCCCCCCCCCCCCCCCCCCCCCC'
+    process.env.INTERNAL_PRINCIPAL_SECRET = 'internal-secret-DDDDDDDDDDDDDDDDDDDDDDDDDD'
+  }
+
+  it('production WITHOUT STREAM_TOKEN_SECRET throws at boot', async () => {
+    setProdBaseline()
+    delete process.env.STREAM_TOKEN_SECRET
+    await expect(loadEnv()).rejects.toThrow(/STREAM_TOKEN_SECRET/)
+  })
+
+  it('production WITHOUT DEVICE_TOKEN_SECRET throws at boot', async () => {
+    setProdBaseline()
+    delete process.env.DEVICE_TOKEN_SECRET
+    await expect(loadEnv()).rejects.toThrow(/DEVICE_TOKEN_SECRET/)
+  })
+
+  it('production WITHOUT INTERNAL_PRINCIPAL_SECRET throws at boot', async () => {
+    setProdBaseline()
+    delete process.env.INTERNAL_PRINCIPAL_SECRET
+    await expect(loadEnv()).rejects.toThrow(/INTERNAL_PRINCIPAL_SECRET/)
+  })
+
+  it('production WITHOUT EEX_TELEMETRY_DSN throws at boot (§15.1 mandatory)', async () => {
+    setProdBaseline()
+    delete process.env.EEX_TELEMETRY_DSN
+    await expect(loadEnv()).rejects.toThrow(/EEX_TELEMETRY_DSN/)
+  })
+
+  it('throws when two token secrets are identical (pairwise-distinctness)', async () => {
+    // Runs in all envs (the distinctness check is not prod-gated), so a
+    // copy-paste mistake is caught before it reaches CI.
+    setBaselineEnv()
+    process.env.SESSION_SECRET = 'identical-secret-XXXXXXXXXXXXXXXXXXXXXXXX'
+    process.env.STREAM_TOKEN_SECRET = 'identical-secret-XXXXXXXXXXXXXXXXXXXXXXXX'
+    await expect(loadEnv()).rejects.toThrow()
+  })
+
+  it('throws when SESSION_SECRET and INTERNAL_PRINCIPAL_SECRET collide', async () => {
+    setBaselineEnv()
+    process.env.SESSION_SECRET = 'shared-secret-YYYYYYYYYYYYYYYYYYYYYYYYYYYY'
+    process.env.INTERNAL_PRINCIPAL_SECRET = 'shared-secret-YYYYYYYYYYYYYYYYYYYYYYYYYYYY'
+    await expect(loadEnv()).rejects.toThrow()
   })
 })
