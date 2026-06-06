@@ -24,7 +24,11 @@ from .schemas import Kind, ScoreRequest
 log = logging.getLogger(__name__)
 IN_BATCH_SIZE = 500
 RECENTLY_SHOWN_RETENTION_DAYS = 30
-ENGAGEMENT_FEEDBACK_SIGNALS = {"clicked", "added"}
+# "watched" is implicit feedback: the household actually played >=40% of (or
+# completed) a title. It's the strongest positive intent we capture short of an
+# explicit like, so it joins the engagement tier and feeds the positive
+# centroid via load_user_context.
+ENGAGEMENT_FEEDBACK_SIGNALS = {"clicked", "added", "watched"}
 POSITIVE_FEEDBACK_SIGNALS = {"like", *ENGAGEMENT_FEEDBACK_SIGNALS}
 MODEL_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
     "pool_size": (1, 5000),
