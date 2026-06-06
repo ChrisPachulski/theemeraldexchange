@@ -39,19 +39,6 @@ type KindBucket = { liked: FeedbackEntry[]; disliked: FeedbackEntry[] }
 type UserBucket = { movie: KindBucket; tv: KindBucket }
 type FeedbackFile = Record<string, UserBucket>
 
-export const MAX_FEEDBACK_ENTRIES_PER_SIGNAL = 500
-
-export class FeedbackQuotaError extends Error {
-  signal: FeedbackSignal
-  limit: number
-
-  constructor(signal: FeedbackSignal, limit = MAX_FEEDBACK_ENTRIES_PER_SIGNAL) {
-    super(`feedback_${signal}_quota_exceeded`)
-    this.name = 'FeedbackQuotaError'
-    this.signal = signal
-    this.limit = limit
-  }
-}
 
 function emptyBucket(): UserBucket {
   return {
@@ -105,7 +92,7 @@ function normalizeList(raw: unknown): FeedbackEntry[] {
 function sanitizeBucket(raw: unknown): KindBucket {
   const r = (raw ?? {}) as Partial<{ liked: unknown; disliked: unknown }>
   return {
-    liked: normalizeList(r.liked).slice(-MAX_FEEDBACK_ENTRIES_PER_SIGNAL),
+    liked: normalizeList(r.liked),
     disliked: normalizeList(r.disliked),
   }
 }
@@ -253,28 +240,19 @@ function mutate(
     const existing =
       bucket.liked.find((e) => e.id === tmdbId) ??
       bucket.disliked.find((e) => e.id === tmdbId)
-    const existingLike = bucket.liked.some((e) => e.id === tmdbId)
-    const existingDislike = bucket.disliked.some((e) => e.id === tmdbId)
-    if (
-      next === 'like' &&
-      !existingLike &&
-      bucket.liked.length >= MAX_FEEDBACK_ENTRIES_PER_SIGNAL
-    ) {
-      throw new FeedbackQuotaError('like')
-    }
-    if (
-      next === 'dislike' &&
-      !existingDislike &&
-      bucket.disliked.length >= MAX_FEEDBACK_ENTRIES_PER_SIGNAL
-    ) {
-      throw new FeedbackQuotaError('dislike')
-    }
     const carryTitle = safeTitle || existing?.title || ''
     bucket.liked = bucket.liked.filter((e) => e.id !== tmdbId)
     bucket.disliked = bucket.disliked.filter((e) => e.id !== tmdbId)
-    if (next === 'like') {
-      bucket.liked.push({ id: tmdbId, title: carryTitle })
-    }
+    // No storage cap — neither list silently drops user signal. A red is a
+    // permanent "never suggest again" contract: evicting an old one would
+    // let that title resurface in suggestions, the exact bad UX the list
+    // exists to prevent. Prod serves recs from the local Python
+    // recommender (USE_LOCAL_RECOMMENDER=1), so neither list feeds a
+    // token-metered prompt; the recommender mirrors (postFeedback/
+    // postRejection) and the household veto stores it feeds are likewise
+    // unbounded. (The dormant BYO-key Claude path bounds ITS prompt at
+    // render time in suggestions.ts — never the store.)
+    if (next === 'like') bucket.liked.push({ id: tmdbId, title: carryTitle })
     if (next === 'dislike') bucket.disliked.push({ id: tmdbId, title: carryTitle })
     // Shallow spread of `file` preserves other users by reference —
     // safe because mutate() never touches anything outside
