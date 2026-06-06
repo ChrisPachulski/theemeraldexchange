@@ -1,4 +1,7 @@
 -- 0008_user_feedback_watched.sql
+-- DESTRUCTIVE
+-- (DROP TABLE below; the migrator requires this annotation and takes an
+-- auto-backup of exchange.db before applying — see app/db.py _check_backup_gate.)
 -- Add 'watched' to the user_feedback.signal CHECK so the implicit-feedback
 -- loop can record what the household actually WATCHES (>=40% watched or
 -- completed) as a positive engagement signal. 'watched' joins the engagement
