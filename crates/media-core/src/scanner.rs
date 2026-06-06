@@ -701,7 +701,9 @@ mod tests {
     }
 
     async fn count(db: &Db, table: &str) -> i64 {
-        sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+        // Test-only helper; `table` is a hardcoded test literal. sqlx 0.9
+        // requires an explicit safety assertion for non-'static SQL.
+        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
             .fetch_one(&db.pool)
             .await
             .unwrap()
