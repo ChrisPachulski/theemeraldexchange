@@ -199,7 +199,7 @@ export async function postFeedback(
     sub: string
     kind: RecommenderKind
     tmdb_id: number
-    signal: 'like' | 'dislike' | 'reject' | 'shown' | 'clicked' | 'added'
+    signal: 'like' | 'dislike' | 'reject' | 'shown' | 'clicked' | 'added' | 'watched'
   },
   caller?: RecommenderCaller,
 ): Promise<void> {

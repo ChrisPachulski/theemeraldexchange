@@ -35,6 +35,10 @@ import { tryNormaliseLegacySub } from '../services/sub.js'
 import { resolveSourcePrecedence } from '../services/sourcePrecedence.js'
 import { streamConcurrency, type SessionView, type SessionKind } from '../services/iptvConcurrency.js'
 import { rewriteManifest } from '../services/iptvHlsRewrite.js'
+import { postFeedback } from '../services/recommender.js'
+import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
+import { type Session } from '../session.js'
+import { crossedWatchThreshold, type WatchPoint } from '../services/watchSignal.js'
 import {
   isPublicHttpsUpstream,
   guardedFetch,
@@ -172,6 +176,44 @@ iptv.delete('/sessions/:sessionId', requireAuth, (c) => {
 
 const KINDS = new Set(['live', 'vod', 'series'])
 const HIST_KINDS = new Set(['live', 'vod', 'series_episode'])
+
+// Forward a watch as a 'watched' positive to the recommender, exactly once on
+// the transition into "qualified" (not on every 5s progress tick). Resolves the
+// IPTV item_id to its TMDB id (vod -> movie, series_episode -> parent series tv;
+// live is skipped — no tmdb_id, no completion). Best-effort and fire-and-forget:
+// a recommender hiccup must never break watch-history persistence.
+function maybeEmitWatched(
+  session: Session,
+  kind: string,
+  itemId: string,
+  now: WatchPoint,
+  prior: WatchPoint | undefined,
+): void {
+  try {
+    if (!crossedWatchThreshold(prior, now)) return
+
+    const db = iptvDb()
+    let tmdbId: number | null = null
+    let recKind: 'movie' | 'tv' | null = null
+    if (kind === 'vod') {
+      const streamId = Number(itemId)
+      if (!Number.isInteger(streamId)) return
+      const row = db.stmts.vodTmdbByStreamId.get({ stream_id: streamId }) as { tmdb_id: number | null } | undefined
+      tmdbId = row?.tmdb_id ?? null
+      recKind = 'movie'
+    } else if (kind === 'series_episode') {
+      const row = db.stmts.episodeSeriesTmdbByEpisodeId.get({ episode_id: itemId }) as { tmdb_id: number | null } | undefined
+      tmdbId = row?.tmdb_id ?? null
+      recKind = 'tv'
+    }
+    if (recKind == null || tmdbId == null || !Number.isInteger(tmdbId) || tmdbId <= 0) return
+
+    const caller = recommenderCallerFromSession(session)
+    void postFeedback({ sub: session.sub, kind: recKind, tmdb_id: tmdbId, signal: 'watched' }, caller)
+  } catch {
+    // best-effort training signal; never surface to the watch-history write
+  }
+}
 
 iptv.get('/categories', requireAuth, (c) => {
   const kind = c.req.query('kind') ?? ''
@@ -449,18 +491,42 @@ iptv.post('/history', requireAuth, async (c) => {
   }
   if (typeof body.kind !== 'string' || !HIST_KINDS.has(body.kind)) return c.json({ error: 'invalid_kind' }, 400)
   if (typeof body.itemId !== 'string' || body.itemId.length === 0) return c.json({ error: 'invalid_item' }, 400)
+  const kind = body.kind
+  const itemId = body.itemId
 
-  const positionSecs = Number(body.positionSecs ?? 0)
-  const durationSecs = body.durationSecs == null ? null : Number(body.durationSecs)
-  iptvDb().stmts.putHistory.run({
+  const rawPos = Number(body.positionSecs ?? 0)
+  const positionSecs = Number.isFinite(rawPos) ? Math.max(0, Math.floor(rawPos)) : 0
+  const rawDur = body.durationSecs == null ? null : Number(body.durationSecs)
+  const durationSecs = rawDur != null && Number.isFinite(rawDur) ? Math.max(0, Math.floor(rawDur)) : null
+  const completed = body.completed ? 1 : 0
+
+  const db = iptvDb()
+  // Snapshot the prior watch row BEFORE the upsert so the implicit 'watched'
+  // signal fires exactly once — on the transition into "qualified" — rather
+  // than on every throttled 5s progress tick.
+  const prior = db.stmts.getHistoryItem.get({ sub, kind, item_id: itemId }) as
+    | { position_secs: number; duration_secs: number | null; completed: number }
+    | undefined
+
+  db.stmts.putHistory.run({
     sub,
-    kind: body.kind,
-    item_id: body.itemId,
-    position_secs: Number.isFinite(positionSecs) ? Math.max(0, Math.floor(positionSecs)) : 0,
-    duration_secs: durationSecs != null && Number.isFinite(durationSecs) ? Math.max(0, Math.floor(durationSecs)) : null,
+    kind,
+    item_id: itemId,
+    position_secs: positionSecs,
+    duration_secs: durationSecs,
     watched_at: new Date().toISOString(),
-    completed: body.completed ? 1 : 0,
+    completed,
   })
+
+  if (env.useLocalRecommender && kind !== 'live') {
+    maybeEmitWatched(
+      c.get('session'),
+      kind,
+      itemId,
+      { position_secs: positionSecs, duration_secs: durationSecs, completed },
+      prior,
+    )
+  }
   return c.body(null, 201)
 })
 
