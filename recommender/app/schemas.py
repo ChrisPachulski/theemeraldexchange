@@ -26,7 +26,7 @@ class LibraryItem(BaseModel):
 
 class FeedbackEntry(BaseModel):
     tmdb_id: PositiveStrictInt
-    signal: Literal["like", "dislike", "reject", "clicked", "added"]
+    signal: Literal["like", "dislike", "reject", "clicked", "added", "watched"]
 
 
 class ScoreRequest(BaseModel):
@@ -74,7 +74,7 @@ class FeedbackEventRequest(BaseModel):
     sub: str
     kind: Kind
     tmdb_id: int
-    signal: Literal["like", "dislike", "reject", "shown", "clicked", "added"]
+    signal: Literal["like", "dislike", "reject", "shown", "clicked", "added", "watched"]
 
     _validate_sub = field_validator("sub")(_check_sub)
 

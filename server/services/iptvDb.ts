@@ -26,6 +26,12 @@ export interface IptvDb {
     getFavorites: Database.Statement
     putHistory: Database.Statement
     getHistory: Database.Statement
+    // Implicit-feedback wiring: read the prior watch row (transition detection)
+    // and resolve an IPTV item_id to its TMDB id so a watch can be forwarded to
+    // the recommender as a 'watched' positive signal.
+    getHistoryItem: Database.Statement
+    vodTmdbByStreamId: Database.Statement
+    episodeSeriesTmdbByEpisodeId: Database.Statement
     putSyncState: Database.Statement
     getSyncState: Database.Statement
     // playlist token persistence (D12 / §6.2)
@@ -142,6 +148,20 @@ export function openIptvDb(filePath: string, serverDb?: Database.Database): Iptv
       WHERE sub = ?
       ORDER BY watched_at DESC
       LIMIT ?
+    `),
+    getHistoryItem: raw.prepare(`
+      SELECT position_secs, duration_secs, completed
+      FROM iptv_watch_history
+      WHERE sub = @sub AND kind = @kind AND item_id = @item_id
+    `),
+    vodTmdbByStreamId: raw.prepare(`
+      SELECT tmdb_id FROM vod WHERE stream_id = @stream_id
+    `),
+    episodeSeriesTmdbByEpisodeId: raw.prepare(`
+      SELECT s.tmdb_id AS tmdb_id
+      FROM series_episodes e
+      JOIN series s ON s.series_id = e.series_id
+      WHERE e.episode_id = @episode_id
     `),
     putSyncState: raw.prepare(`
       INSERT INTO iptv_sync_state (key, value, ts) VALUES (@key, @value, @ts)
