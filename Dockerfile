@@ -74,7 +74,7 @@ RUN npx --yes --package @napi-rs/cli@3.7.0 napi build --platform --release
 # ---------------------------------------------------------------------------
 # Digest-pinned for reproducible builds. Resolve a new digest with:
 #   docker buildx imagetools inspect node:24-slim
-FROM node:24-slim@sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf AS base
+FROM node:26-slim@sha256:aa27a5fbf5acb298116a38133794f080406c6f8dfe52e2e2836bb55dc7cae8f0 AS base
 
 WORKDIR /app
 
