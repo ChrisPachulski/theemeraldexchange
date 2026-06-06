@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, it, expect, vi } from 'vitest'
 import { Hono, type MiddlewareHandler } from 'hono'
 import { openIptvDb, type IptvDb } from '../services/iptvDb.js'
-import { iptv } from './iptv.js'
+import { iptv, __test } from './iptv.js'
 import { __setSsrfLookupForTests } from '../services/ssrfGuard.js'
 import { env } from '../env.js'
 
@@ -395,6 +395,62 @@ describe('series stream grant', () => {
   })
 })
 
+describe('sessionTitle() series branches', () => {
+  beforeAll(() => {
+    // Episode whose own title is null → resolved title should be just the
+    // series name (no " — <title>" suffix).
+    dbState.testDb!.stmts.upsertEpisode.run({
+      episode_id: 'ep-null-title',
+      series_id: 30,
+      season: 1,
+      episode_num: 2,
+      title: null,
+      container_extension: 'mkv',
+      added_ts: null,
+      plot: null,
+      duration_secs: null,
+    })
+    // Episode whose series row is absent → falls back to the episode's own
+    // title. The episodes→series FK blocks dangling inserts, so seed a throw-
+    // away series, attach the episode, then delete the series with FKs off to
+    // recreate the "cleaned catalog / deleted parent" state the branch guards.
+    const raw = dbState.testDb!.raw
+    raw.prepare(
+      'INSERT INTO series (series_id, name, fetched_at) VALUES (?, ?, ?)',
+    ).run(31, 'DoomedShow', '2026-05-24T00:00:00Z')
+    dbState.testDb!.stmts.upsertEpisode.run({
+      episode_id: 'ep-orphan',
+      series_id: 31,
+      season: 1,
+      episode_num: 1,
+      title: 'Orphan Ep',
+      container_extension: 'mkv',
+      added_ts: null,
+      plot: null,
+      duration_secs: null,
+    })
+    raw.pragma('foreign_keys = OFF')
+    raw.prepare('DELETE FROM series WHERE series_id = ?').run(31)
+    raw.pragma('foreign_keys = ON')
+  })
+
+  it('joins series name with episode title when both present', () => {
+    expect(__test.sessionTitle('series', 'ep-1')).toBe('GoT — Pilot')
+  })
+
+  it('returns bare series name when the episode title is null', () => {
+    expect(__test.sessionTitle('series', 'ep-null-title')).toBe('GoT')
+  })
+
+  it('falls back to episode title when the series row is missing', () => {
+    expect(__test.sessionTitle('series', 'ep-orphan')).toBe('Orphan Ep')
+  })
+
+  it('returns null when the episode row does not exist', () => {
+    expect(__test.sessionTitle('series', 'no-such-episode')).toBeNull()
+  })
+})
+
 describe('segment proxy', () => {
   const app = new Hono().route('/api/iptv', iptv)
 
@@ -503,6 +559,55 @@ describe('segment proxy', () => {
       'https://169.254.169.254/latest/meta-data/',
       expect.anything(),
     )
+    fetchSpy.mockRestore()
+  })
+
+  it('rejects a token whose kind is not "segment" (kind_mismatch → invalid_token 401)', async () => {
+    // verifyStreamTokenDualKey succeeds (valid HMAC) but the decoded kind is
+    // "live", so the route throws kind_mismatch and returns 401 before any
+    // replay/SSRF/fetch work. Covers the verify-try/catch branch (iptv.ts ~1142).
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    const res = await app.request(
+      `/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('live', 'https://cdn.example.com/seg.ts'))}`,
+    )
+    expect(res.status).toBe(401)
+    const body = (await res.json()) as { error: string; detail: string }
+    expect(body.error).toBe('invalid_token')
+    expect(body.detail).toBe('kind_mismatch')
+    expect(fetchSpy).not.toHaveBeenCalled()
+    fetchSpy.mockRestore()
+  })
+
+  it('rejects a segment whose rid is not a parseable URL (bad_upstream 400)', async () => {
+    // A valid segment token whose rid is a malformed URL string: new URL()
+    // throws, so the route returns bad_upstream 400 before isPublicHttpsUpstream
+    // or any fetch. Covers the URL-parse try/catch branch (iptv.ts ~1153).
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    const res = await app.request(
+      `/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', 'not a valid url'))}`,
+    )
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toBe('bad_upstream')
+    expect(fetchSpy).not.toHaveBeenCalled()
+    fetchSpy.mockRestore()
+  })
+
+  it('re-throws a non-SSRF guardedFetch failure (network error is NOT masked as bad_upstream)', async () => {
+    // The host string + resolved IP pass the SSRF guard, but the underlying
+    // platform fetch rejects with a plain network error. guardedFetch lets a
+    // non-SsrfBlockedError propagate, so the route's catch hits `throw err`
+    // (NOT the bad_upstream 400 branch). Covers iptv.ts ~1185-1186.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(
+      new TypeError('socket hang up'),
+    )
+    const res = await app.request(
+      `/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', 'https://cdn.example.com/net-fail.ts'))}`,
+    )
+    // The route re-threw (did NOT swallow as bad_upstream 400); Hono's error
+    // boundary surfaces it as a 500, proving the non-SsrfBlockedError branch.
+    expect(res.status).toBe(500)
+    expect(res.status).not.toBe(400)
+    expect(fetchSpy).toHaveBeenCalled()
     fetchSpy.mockRestore()
   })
 })
