@@ -40,7 +40,7 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install static ffmpeg/ffprobe (byte-identical to the runtime Dockerfile)
         shell: bash
