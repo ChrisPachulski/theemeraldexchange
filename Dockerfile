@@ -20,7 +20,10 @@
 #   3. Image size delta is ~50 MB. Acceptable given the build-toolchain
 #      drop and the new linux-x64-gnu .node payload.
 
-FROM rust:1.90-slim-bookworm AS napi-builder
+# Digest-pinned for reproducible builds. The human tag is kept for readability;
+# the digest is the source of truth. Resolve a new digest with:
+#   docker buildx imagetools inspect rust:1.90-slim-bookworm
+FROM rust:1.90-slim-bookworm@sha256:64232e656c058f4468e8d024e990acff04f0fd5a5c0a88a574dc37773d7325c9 AS napi-builder
 
 WORKDIR /build
 
@@ -62,10 +65,16 @@ COPY crates/transcoder ./crates/transcoder
 # fetch it explicitly. Output lands at
 # crates/emerald-contracts-napi/emerald-contracts-napi.linux-x64-gnu.node.
 WORKDIR /build/crates/emerald-contracts-napi
-RUN npx --yes --package @napi-rs/cli@3 napi build --platform --release
+# @napi-rs/cli pinned to an EXACT version, matching
+# crates/emerald-contracts-napi/package.json — this CLI emits the ABI-critical
+# .node that the crypto/contracts wire boundary loads, so a floating major is a
+# reproducibility risk for the wire-format-sensitive binding.
+RUN npx --yes --package @napi-rs/cli@3.7.0 napi build --platform --release
 
 # ---------------------------------------------------------------------------
-FROM node:24-slim AS base
+# Digest-pinned for reproducible builds. Resolve a new digest with:
+#   docker buildx imagetools inspect node:24-slim
+FROM node:24-slim@sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf AS base
 
 WORKDIR /app
 
@@ -74,7 +83,12 @@ WORKDIR /app
 # video frames). Debian bookworm's apt ships ffmpeg 5.1, which FAILS that gate,
 # so we COPY statically-linked 7.x binaries from a pinned, binaries-only image
 # instead. Static build → no glibc/runtime deps, runs as-is on node:24-slim.
-COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /ffprobe /usr/local/bin/
+# Digest-pinned — pinning this digest also pins the GPL ffmpeg/x264 binary
+# provenance at the heart of the licensing review. When the tag is bumped, record
+# the new digest plus the ffmpeg/x264 versions it ships in THIRD-PARTY-LICENSES.
+# Resolve a new digest with:
+#   docker buildx imagetools inspect mwader/static-ffmpeg:7.1
+COPY --from=mwader/static-ffmpeg:7.1@sha256:a8090df5f5608daef387e1b2e93b98aaacb4d92153ad904e7d715c725724fca4 /ffmpeg /ffprobe /usr/local/bin/
 
 # Pre-stage the napi crate's JS surface + the linux-x64-gnu .node so the
 # file: dep resolves and the prepare-script's existence check finds the
