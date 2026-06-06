@@ -806,8 +806,9 @@ async fn media_exists(
     };
     // `table` is from the fixed allow-list above (never user input), so the
     // format! is injection-safe; `media_id` is still bound as a parameter.
+    // sqlx 0.9 requires an explicit safety assertion for non-'static SQL.
     let sql = format!("SELECT 1 FROM {table} WHERE id = ? LIMIT 1");
-    let found: Option<i64> = sqlx::query_scalar(&sql)
+    let found: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .bind(media_id)
         .fetch_optional(&state.db.pool)
         .await?;

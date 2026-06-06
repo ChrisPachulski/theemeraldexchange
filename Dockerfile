@@ -22,8 +22,8 @@
 
 # Digest-pinned for reproducible builds. The human tag is kept for readability;
 # the digest is the source of truth. Resolve a new digest with:
-#   docker buildx imagetools inspect rust:1.90-slim-bookworm
-FROM rust:1.90-slim-bookworm@sha256:64232e656c058f4468e8d024e990acff04f0fd5a5c0a88a574dc37773d7325c9 AS napi-builder
+#   docker buildx imagetools inspect rust:1.96-slim-bookworm
+FROM rust:1.96-slim-bookworm@sha256:b5f842fac1e3b4ff718a652a8e0173b62d9403ec826ef4998880b9347db30684 AS napi-builder
 
 WORKDIR /build
 
