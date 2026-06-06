@@ -12,12 +12,11 @@ members = [
 edition = "2024"
 license-file = "LICENSE"
 authors = ["ChrisPachulski"]
-# Match the only toolchain actually shipped (CI dtolnay/rust-toolchain 1.90, all
-# Dockerfiles rust:1.90-slim-bookworm). The previous 1.85 floor was never built
-# or tested, so it was misleading documentation. If an older support floor is
-# ever genuinely required, add a dedicated MSRV CI lane (dtolnay
-# /rust-toolchain@1.85 + cargo build) rather than lowering this back.
-rust-version = "1.90"
+# Match the only toolchain actually shipped (CI dtolnay/rust-toolchain 1.96, all
+# Dockerfiles rust:1.96-slim-bookworm). Bumped from 1.90 alongside sqlx 0.9,
+# which requires rustc 1.94+. If an older support floor is ever genuinely
+# required, add a dedicated MSRV CI lane rather than lowering this back.
+rust-version = "1.96"
 
 [workspace.dependencies]
 aes-gcm = "0.10.3"
