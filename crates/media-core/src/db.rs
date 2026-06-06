@@ -90,7 +90,10 @@ impl Db {
         for (version, name, sql) in MIGRATIONS {
             if *version > current {
                 let mut tx = self.pool.begin().await?;
-                sqlx::raw_sql(sql).execute(&mut *tx).await?;
+                // `sql` is a compile-time-constant migration string from the
+                // MIGRATIONS table (never user input). sqlx 0.9 requires an
+                // explicit safety assertion for non-'static SQL; audited safe.
+                sqlx::raw_sql(sqlx::AssertSqlSafe(*sql)).execute(&mut *tx).await?;
                 sqlx::query(
                     "INSERT INTO schema_migrations (version, applied_at, checksum) VALUES (?, ?, ?)",
                 )
