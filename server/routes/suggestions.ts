@@ -2123,41 +2123,19 @@ suggestions.get('/:type', async (c) => {
       })
     }
 
-    // Partial-fill: the recommender can legitimately return fewer than
-    // TARGET_COUNT after KNN + recently-shown exclusion + household
-    // rejection filtering (a household that's seen most of the
-    // catalog, or a tight taste cluster that doesn't have N viable
-    // neighbors yet). Pre-fill commit: returning the short list as-is
-    // gave users 1-19 item strips even though TMDB trending had clean
-    // fallbacks available. Top up with trending, dedupe against the
-    // recommender's picks, mark provenance='trending' so the SPA can
-    // render the join visibly. Source stays 'recommender' since the
-    // primary engine succeeded — only the tail is fill.
-    let items = safe.slice(0, TARGET_COUNT)
-    let fillCount = 0
-    if (items.length < TARGET_COUNT && _tmdbKey) {
-      const have = new Set(items.map((it) => it.id))
-      const trending = filterHouseholdSafe(await tmdbTrending(type))
-        .filter((it) => !have.has(it.id))
-        .map((it) => ({
-          ...it,
-          provenance: 'trending' as const,
-          reason: null,
-        }))
-      const need = TARGET_COUNT - items.length
-      const fill = trending.slice(0, need)
-      fillCount = fill.length
-      items = [...items, ...fill]
-      // Tell the sidecar these fill items were shown so the next
-      // refresh's exclude_recently_shown filter sees them. Without
-      // this, a household with a tight taste cluster (where fill
-      // fires every refresh) would see the SAME trending cards
-      // every poll until they aged out of TMDB's trending window.
-      // Fire-and-forget; bounded by services/recommender.ts timeout.
-      if (fill.length > 0) {
-        void postShown(session.sub, type, fill.map((it) => it.id), caller)
-      }
-    }
+    // Real picks only — NO trending tail-padding. When the recommender
+    // returns fewer than TARGET_COUNT, show the short strip of genuine
+    // personalized picks as-is rather than padding the tail with TMDB
+    // trending. The old padding re-fetched the same top-N weekly trending
+    // every refresh (deduped only against the current picks, never against
+    // what was already shown), so the far-right fill cards looked frozen —
+    // identical on every poll for any household whose taste cluster doesn't
+    // yield N viable neighbours. A genuinely empty result is still handled
+    // above (safe.length === 0 → trending fallback), so the strip is never
+    // blank; only the padding of a NON-empty personalized list is dropped.
+    // `fillCount` stays in the diag (always 0 now) for back-compat.
+    const items = safe.slice(0, TARGET_COUNT)
+    const fillCount = 0
     const recById = new Map(recItems.map((it) => [it.tmdb_id, it]))
     const renderedRecImpressions = items
       .map((it, rank) => ({ item: recById.get(it.id), rank }))
