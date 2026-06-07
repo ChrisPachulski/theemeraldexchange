@@ -77,16 +77,46 @@ fn year_from_date(date: &str) -> Option<i64> {
     }
 }
 
-/// Pure parser over a TMDB search response. Reads `results[0]` and extracts the
-/// id, title (`title` for movies, `name` for tv), year, overview, poster_path.
-/// Returns `None` when there is no first result or it lacks an id/title.
-fn parse_search_response(doc: &serde_json::Value, is_movie: bool) -> Option<TmdbMatch> {
-    let first = doc.get("results")?.as_array()?.first()?;
+/// Stopwords dropped before title comparison so a shared "the"/"of" alone never
+/// counts as agreement between two otherwise-unrelated titles.
+const TITLE_STOPWORDS: &[&str] = &["the", "a", "an", "of", "and", "or", "to", "in"];
 
-    let tmdb_id = first.get("id")?.as_i64()?;
+/// Normalize a title into lowercased alphanumeric tokens with stopwords removed.
+/// Used only for match-confidence scoring, never for what gets stored.
+fn title_tokens(s: &str) -> Vec<String> {
+    s.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .filter(|w| !TITLE_STOPWORDS.contains(&w.as_str()))
+        .collect()
+}
+
+/// Confidence that a candidate title is the same work as the query, in
+/// `[0.0, 1.0]`. A subset relation either way (query "Batman" vs candidate
+/// "Batman Begins") scores 1.0; otherwise it is the Jaccard overlap of the token
+/// sets. 0.0 means no shared non-stopword token — a near-certain wrong match.
+fn title_match_score(query: &[String], candidate: &[String]) -> f64 {
+    use std::collections::BTreeSet;
+    let q: BTreeSet<&String> = query.iter().collect();
+    let c: BTreeSet<&String> = candidate.iter().collect();
+    if q.is_empty() || c.is_empty() {
+        return 0.0;
+    }
+    if q.is_subset(&c) || c.is_subset(&q) {
+        return 1.0;
+    }
+    let inter = q.intersection(&c).count();
+    let union = q.union(&c).count();
+    inter as f64 / union as f64
+}
+
+/// Build a [`TmdbMatch`] from a single TMDB search result object, or `None` if
+/// it lacks an id or a non-empty title.
+fn parse_one(result: &serde_json::Value, is_movie: bool) -> Option<TmdbMatch> {
+    let tmdb_id = result.get("id")?.as_i64()?;
 
     let title_key = if is_movie { "title" } else { "name" };
-    let title = first.get(title_key)?.as_str()?;
+    let title = result.get(title_key)?.as_str()?;
     if title.is_empty() {
         return None;
     }
@@ -96,17 +126,17 @@ fn parse_search_response(doc: &serde_json::Value, is_movie: bool) -> Option<Tmdb
     } else {
         "first_air_date"
     };
-    let year = first
+    let year = result
         .get(date_key)
         .and_then(serde_json::Value::as_str)
         .and_then(year_from_date);
 
-    let overview = first
+    let overview = result
         .get("overview")
         .and_then(serde_json::Value::as_str)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    let poster_path = first
+    let poster_path = result
         .get("poster_path")
         .and_then(serde_json::Value::as_str)
         .filter(|s| !s.is_empty())
@@ -121,6 +151,48 @@ fn parse_search_response(doc: &serde_json::Value, is_movie: bool) -> Option<Tmdb
         overview,
         poster_path,
     })
+}
+
+/// Pure parser over a TMDB search response. Instead of blindly trusting
+/// `results[0]`, it scores every candidate's title against `query_title` and
+/// returns the best-scoring one, breaking ties toward TMDB's own ordering
+/// (popularity). A candidate that shares no non-stopword token with the query
+/// (score 0.0) is rejected so a confident-but-wrong top hit can never pollute
+/// the library — the caller then keeps the filename-derived title.
+///
+/// Deliberately conservative: any token overlap or a subset relation is enough
+/// to accept, so legitimate fuzzy matches ("LOTR Fellowship" →
+/// "The Lord of the Rings: The Fellowship of the Ring") are preserved. When the
+/// query has no usable tokens, it falls back to the first valid result.
+fn parse_search_response(
+    doc: &serde_json::Value,
+    is_movie: bool,
+    query_title: &str,
+) -> Option<TmdbMatch> {
+    let results = doc.get("results")?.as_array()?;
+    let query = title_tokens(query_title);
+
+    // No usable query tokens: nothing to score against, so defer to TMDB's
+    // ranking (old behavior) rather than rejecting everything.
+    if query.is_empty() {
+        return results.iter().find_map(|r| parse_one(r, is_movie));
+    }
+
+    let mut best: Option<(f64, TmdbMatch)> = None;
+    for result in results {
+        let Some(candidate) = parse_one(result, is_movie) else {
+            continue;
+        };
+        let score = title_match_score(&query, &title_tokens(&candidate.title));
+        if score <= 0.0 {
+            continue;
+        }
+        // Strictly-greater keeps the earliest (most popular) result on ties.
+        if best.as_ref().is_none_or(|(b, _)| score > *b) {
+            best = Some((score, candidate));
+        }
+    }
+    best.map(|(_, m)| m)
 }
 
 /// Pure parser over an `/external_ids` response: pulls a non-empty `imdb_id`
@@ -223,7 +295,7 @@ impl TmdbClient {
             .json::<serde_json::Value>()
             .await
             .map_err(|e| format!("json: {e}"))?;
-        Ok(parse_search_response(&doc, is_movie))
+        Ok(parse_search_response(&doc, is_movie, title))
     }
 
     /// Fetch external ids (`imdb_id`, `tvdb_id`) for a TMDB title via
@@ -391,7 +463,7 @@ mod tests {
                 { "id": 1, "title": "Other", "release_date": "2000-01-01" }
             ]
         });
-        let m = parse_search_response(&doc, true).expect("expected a match");
+        let m = parse_search_response(&doc, true, "Interstellar").expect("expected a match");
         assert_eq!(m.tmdb_id, 157336);
         assert_eq!(m.title, "Interstellar");
         assert_eq!(m.year, Some(2014));
@@ -410,7 +482,7 @@ mod tests {
                 { "id": 95396, "name": "Severance", "first_air_date": "2022-02-18" }
             ]
         });
-        let m = parse_search_response(&doc, false).expect("expected a match");
+        let m = parse_search_response(&doc, false, "Severance").expect("expected a match");
         assert_eq!(m.tmdb_id, 95396);
         assert_eq!(m.title, "Severance");
         assert_eq!(m.year, Some(2022));
@@ -464,31 +536,31 @@ mod tests {
     #[test]
     fn empty_results_yields_none() {
         let doc = json!({ "results": [] });
-        assert_eq!(parse_search_response(&doc, true), None);
+        assert_eq!(parse_search_response(&doc, true, "Anything"), None);
     }
 
     #[test]
     fn missing_results_key_yields_none() {
         let doc = json!({ "page": 1 });
-        assert_eq!(parse_search_response(&doc, true), None);
+        assert_eq!(parse_search_response(&doc, true, "Anything"), None);
     }
 
     #[test]
     fn missing_id_yields_none() {
         let doc = json!({ "results": [ { "title": "No Id" } ] });
-        assert_eq!(parse_search_response(&doc, true), None);
+        assert_eq!(parse_search_response(&doc, true, "No Id"), None);
     }
 
     #[test]
     fn missing_title_yields_none() {
         let doc = json!({ "results": [ { "id": 5, "release_date": "1999-01-01" } ] });
-        assert_eq!(parse_search_response(&doc, true), None);
+        assert_eq!(parse_search_response(&doc, true, "Anything"), None);
     }
 
     #[test]
     fn missing_date_yields_match_with_no_year() {
         let doc = json!({ "results": [ { "id": 7, "title": "Dateless" } ] });
-        let m = parse_search_response(&doc, true).expect("expected a match");
+        let m = parse_search_response(&doc, true, "Dateless").expect("expected a match");
         assert_eq!(m.tmdb_id, 7);
         assert_eq!(m.year, None);
     }
@@ -496,8 +568,56 @@ mod tests {
     #[test]
     fn malformed_date_yields_no_year() {
         let doc = json!({ "results": [ { "id": 8, "title": "Short", "release_date": "20" } ] });
-        let m = parse_search_response(&doc, true).expect("expected a match");
+        let m = parse_search_response(&doc, true, "Short").expect("expected a match");
         assert_eq!(m.year, None);
+    }
+
+    #[test]
+    fn rejects_zero_overlap_top_result() {
+        // TMDB returned a confident top hit that shares no word with the query.
+        // The old `results[0]` path would have stored it; the gate rejects it so
+        // the scanner keeps the filename-derived title instead.
+        let doc = json!({
+            "results": [ { "id": 99, "title": "Completely Unrelated Film",
+                           "release_date": "2010-01-01" } ]
+        });
+        assert_eq!(parse_search_response(&doc, true, "Interstellar"), None);
+    }
+
+    #[test]
+    fn picks_best_title_match_not_just_first() {
+        // results[0] only partially overlaps; results[1] is an exact subset of
+        // the query and must win over TMDB's ordering.
+        let doc = json!({
+            "results": [
+                { "id": 1, "title": "Batman & Robin", "release_date": "1997-06-20" },
+                { "id": 2, "title": "Batman Begins", "release_date": "2005-06-15" }
+            ]
+        });
+        let m = parse_search_response(&doc, true, "Batman Begins").expect("expected a match");
+        assert_eq!(m.tmdb_id, 2);
+    }
+
+    #[test]
+    fn keeps_fuzzy_subset_match() {
+        // A short filename title that is a subset of the canonical title must
+        // still match — the gate protects recall, it does not tighten it.
+        let doc = json!({
+            "results": [ { "id": 268, "title": "Batman Begins", "release_date": "2005-06-15" } ]
+        });
+        let m = parse_search_response(&doc, true, "Batman").expect("expected a match");
+        assert_eq!(m.tmdb_id, 268);
+    }
+
+    #[test]
+    fn empty_query_falls_back_to_first_valid() {
+        // A token-less query (nothing to score) defers to TMDB's ranking rather
+        // than rejecting everything.
+        let doc = json!({
+            "results": [ { "id": 5, "title": "Something", "release_date": "2001-01-01" } ]
+        });
+        let m = parse_search_response(&doc, true, "   ").expect("expected a match");
+        assert_eq!(m.tmdb_id, 5);
     }
 
     #[test]
