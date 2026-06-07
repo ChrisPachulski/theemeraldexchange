@@ -75,6 +75,46 @@ describe('mediaApi', () => {
     })
   })
 
+  it('allMovies() pages past the 200-row cap and concatenates every page', async () => {
+    // media-core clamps limit to 200; a >200-title library spans multiple
+    // pages. allMovies must fetch them ALL (the "Play Direct" index bug:
+    // a single un-limited call only returned the first 50). Page 1 = full
+    // 200 rows -> keep going; page 2 = 30 rows (< 200) -> stop.
+    const row = (id: number) => ({
+      id,
+      tmdb_id: id + 1000,
+      imdb_id: null,
+      title: `M${id}`,
+      year: 2000,
+      added_at: '2026-01-01T00:00:00Z',
+      file_id: id,
+      overview: null,
+      poster_path: null,
+    })
+    const page1 = Array.from({ length: 200 }, (_, i) => row(i))
+    const page2 = Array.from({ length: 30 }, (_, i) => row(200 + i))
+    fetchMock
+      .mockResolvedValueOnce(jsonRes({ items: page1, total: 230 }))
+      .mockResolvedValueOnce(jsonRes({ items: page2, total: 230 }))
+
+    const all = await mediaApi.allMovies()
+
+    expect(all).toHaveLength(230)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    // First page offset 0, second page offset 200, both at limit 200.
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(/limit=200/)
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(/offset=0/)
+    expect(String(fetchMock.mock.calls[1][0])).toMatch(/offset=200/)
+    expect(all[229]).toMatchObject({ id: 229, tmdbId: 1229 })
+  })
+
+  it('allMovies() stops after a single page when the library fits under the cap', async () => {
+    fetchMock.mockResolvedValueOnce(jsonRes({ items: [], total: 0 }))
+    const all = await mediaApi.allMovies()
+    expect(all).toHaveLength(0)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('shows() normalizes show rows including tvdbId', async () => {
     fetchMock.mockResolvedValueOnce(
       jsonRes({

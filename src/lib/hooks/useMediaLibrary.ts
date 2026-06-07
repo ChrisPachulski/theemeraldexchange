@@ -4,17 +4,19 @@ import { mediaApi, type PlayableKind } from '../api/media'
 
 // tmdbId -> local media-core movie id, for matching a discover/Radarr title to
 // a locally-available file (powers the DetailModal "Play Direct here" button).
-// Shares the ['media','movies',''] cache with useMediaMovies(); `enabled` gates
-// it on mediaEnabled so deployments without media-core don't fire a 404.
+// `enabled` gates it on mediaEnabled so deployments without media-core don't
+// fire a 404. Uses allMovies (paged past the 50/200 list cap) so the index
+// covers the WHOLE library — calling /movies with no limit only returned the
+// first 50, so Play Direct silently vanished for every title past that page.
 export function useLocalMovieIndex(enabled: boolean) {
   return useQuery({
-    queryKey: ['media', 'movies', ''],
-    queryFn: ({ signal }) => mediaApi.movies(undefined, { signal }),
+    queryKey: ['media', 'movies', 'index'],
+    queryFn: ({ signal }) => mediaApi.allMovies({ signal }),
     staleTime: 60_000,
     enabled,
     select: (data): Map<number, number> => {
       const m = new Map<number, number>()
-      for (const mv of data.items) if (mv.tmdbId) m.set(mv.tmdbId, mv.id)
+      for (const mv of data) if (mv.tmdbId) m.set(mv.tmdbId, mv.id)
       return m
     },
   })
@@ -22,15 +24,16 @@ export function useLocalMovieIndex(enabled: boolean) {
 
 // tmdbId -> local media-core show id, for matching a discover/Sonarr show to a
 // locally-available one (powers the show DetailModal "Watch episodes" button).
+// Paged (allShows) for the same whole-library reason as useLocalMovieIndex.
 export function useLocalShowIndex(enabled: boolean) {
   return useQuery({
-    queryKey: ['media', 'shows', ''],
-    queryFn: ({ signal }) => mediaApi.shows(undefined, { signal }),
+    queryKey: ['media', 'shows', 'index'],
+    queryFn: ({ signal }) => mediaApi.allShows({ signal }),
     staleTime: 60_000,
     enabled,
     select: (data): Map<number, number> => {
       const m = new Map<number, number>()
-      for (const s of data.items) if (s.tmdbId) m.set(s.tmdbId, s.id)
+      for (const s of data) if (s.tmdbId) m.set(s.tmdbId, s.id)
       return m
     },
   })
