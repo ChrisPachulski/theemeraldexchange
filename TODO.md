@@ -25,11 +25,19 @@ now; it is the only thing the Apple gate does not block.
 
 ## P0 — Buildable now, highest leverage (no Apple dependency)
 
-- [ ] **Prove M4 deployed playback end-to-end.** A real-ffmpeg fixture test now
-      proves the production argv can emit playable HLS, but the deployed
-      transcoder still needs one captured non-direct-play library file
-      transcode+play under real NAS/service conditions. This remains the top
-      unblock for M5 playback.
+- [x] **Deployed M4 transcode proven (2026-06-07).** The deployed enforce-mode
+      transcoder now transcodes a real non-direct-play library file and serves
+      `ffprobe`-validated H.264/AAC HLS end-to-end (docs/M4-TRANSCODE-VERIFICATION.md;
+      harness scripts/m4-transcode-proof.sh). Found+fixed a `/scratch` tmpfs
+      EACCES bug that meant it had never actually transcoded.
+- [ ] **Exercise a real player against the M4 path** (web SPA / native). The
+      proof validates serving + output bytes, NOT a client consuming the stream —
+      that player path is the remaining true-"playback" step (folds into the SPA
+      media-core consumer item below and M5).
+- [ ] **Unblock `/media/Movies` for the service uids.** Movies is `0700 uid 99`
+      on the NAS, so neither media-core (10002) nor transcoder (10003) can read
+      it — most of the library is unservable until the share is loosened or the
+      services run as the media-owning uid (ops decision; see M4 doc §bugs).
 - [ ] **Build the M4 stress/bench harness on NAS hardware** (non-optional per
       spec) → capture CPU/latency for crit 2/3/6. `TRANSCODER_FORCE_CPU=1`
       already exists; the remaining gap is measurement evidence.
@@ -38,16 +46,18 @@ now; it is the only thing the Apple gate does not block.
       `/api/media/*`** — crit 4/5 can't be demonstrated until one does. This is
       the pre-Apple way to prove M3.
 - [ ] **Add M3 measurement harnesses.** 100-file `<5s` scan-timing fixture
-      (crit 2) and a TMDB match-accuracy eval with title-similarity scoring +
-      confidence threshold (crit 3). Both bars are currently unfalsifiable; the
-      matcher blindly takes `results.first()`.
+      (crit 2) and a TMDB match-accuracy eval (crit 3). The matcher no longer
+      blindly takes `results.first()` — it now scores candidates by stopword-aware
+      title similarity and rejects zero-overlap hits (crates/media-core
+      `tmdb.rs`) — but the accuracy eval that would actually falsify crit 3 still
+      doesn't exist.
 
 ## P1 — Close the contract & infra loose ends
 
-- [ ] **Verify production internal-principal posture.** Source and CI prove the
-      cross-binding path, but `docker-compose.yml` still defaults media-core and
-      transcoder verification to `off`; confirm production env overrides or
-      make enforce mode the default.
+- [x] **Production internal-principal posture verified (2026-06-07).**
+      `docker-compose.yml` now defaults media-core + transcoder to
+      `MEDIA_INTERNAL_PRINCIPAL_MODE=enforce` (fail-closed, matching the
+      recommender); prod confirmed already running enforce.
 - [ ] **HIGH-3 (partial): recommender entrypoint `chown` under `cap_drop: ALL`.**
       Still flagged partial in the readiness ledger — confirm fresh-volume boot
       doesn't crash-loop.

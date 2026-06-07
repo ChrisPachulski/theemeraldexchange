@@ -1,6 +1,6 @@
 # M4 Transcoder — Verification Status & Real-ffmpeg Gate
 
-**Status label (authoritative): deployed real-library transcode+play is now PROVEN end-to-end on the NAS (2026-06-07) — see the proof section below. Two real deployment bugs were found and one is fixed; the other is a host share-permission issue outside the transcoder.**
+**Status label (authoritative): the deployed transcoder is now PROVEN (2026-06-07) to transcode a real non-direct-play library file and serve `ffprobe`-validated, decodable H.264/AAC HLS end-to-end over its authenticated surface — see the proof section below. This is NOT yet "played in a real client": the proof exercises manifest+segment serving + `ffprobe` validation of the output bytes, not a web/native player consuming the stream (no such client path exists yet — that is the remaining M5 step). Two real deployment bugs were found; one is fixed, the other is a host share-permission issue outside the transcoder.**
 
 Do not read the green default `cargo test -p transcoder` run as "deployed playback works."
 
