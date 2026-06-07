@@ -93,14 +93,22 @@ COPY recommender/migrations ./migrations
 # land in the image.
 COPY recommender/eval ./eval
 COPY recommender/docker-entrypoint.sh /usr/local/bin/recommender-entrypoint
-# sentence-transformers pulls torch, which from PyPI defaults to the CUDA
-# build — ~6GB of nvidia-* libraries (cublas, cudnn, triton, nccl, …).
-# The NAS has no GPU, so that payload is pure waste and it overran the
-# Docker build disk (ENOSPC). Install the CPU-only torch wheel first from
-# PyTorch's CPU index; `pip install .` below then sees torch already
-# satisfied and resolves sentence-transformers without the CUDA stack.
-RUN pip install --index-url https://download.pytorch.org/whl/cpu torch
-RUN pip install .
+# Reproducible install from the committed lock (recommender/requirements.lock),
+# pinned to the proven-in-prod resolved set. This replaces the old
+# `pip install .` that re-resolved pyproject's `>=` floors on every build (so
+# every rebuild silently drifted) and the bare `pip install torch` that pulled
+# whatever CPU torch was newest.
+#
+# torch is pinned to the CPU build (`+cpu`) in the lock; it only resolves from
+# PyTorch's CPU index, added here as an extra index so torch comes from there
+# and everything else from PyPI. The CPU build keeps the ~6GB CUDA/nvidia stack
+# (cublas, cudnn, triton, nccl, …) out of the image — the NAS has no GPU and it
+# overran the build disk (ENOSPC).
+COPY recommender/requirements.lock ./requirements.lock
+RUN pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.lock
+# Install the local package itself WITHOUT re-resolving deps (already pinned and
+# installed above), so the lock — not pyproject's floors — governs the build.
+RUN pip install --no-deps .
 RUN mkdir -p /data /data/hf-cache \
  && chown -R recommender:recommender /srv /data \
  && chmod 755 /usr/local/bin/recommender-entrypoint
