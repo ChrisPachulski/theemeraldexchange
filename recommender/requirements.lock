@@ -8,6 +8,10 @@
 #
 # Regenerate after an intentional dependency bump:
 #   docker exec exchange-recommender pip freeze | grep -viE '@ file://' > recommender/requirements.lock
+# CAUTION: a naive freeze-regen reverts security bumps that lead the running
+# container. setuptools is held at >=78.1.1 for PYSEC-2025-49 (CI pip-audit gate)
+# even though prod still ships 70.2.0 until its next image rebuild — do NOT let a
+# regen drop it back to 70.2.0.
 #
 # Two packages are intentionally EXCLUDED (they are not installed from an index):
 #   - emerald-contracts : built + installed from the PyO3 wheel in an earlier
@@ -66,7 +70,7 @@ safetensors==0.7.0
 scikit-learn==1.9.0
 scipy==1.17.1
 sentence-transformers==5.5.1
-setuptools==70.2.0
+setuptools==78.1.1
 shellingham==1.5.4
 six==1.17.0
 sniffio==1.3.1
