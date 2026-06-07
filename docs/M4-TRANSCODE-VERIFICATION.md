@@ -10,7 +10,8 @@ The deployed transcoder was driven against a **real library file** through its
 **authenticated (enforce-mode) HTTP surface** — not a fixture, not a stub. A
 minted internal-principal token (`hkdf_internal_principal` + `internal_principal_encrypt`,
 kid `internal-v1`) was POSTed to `POST /api/transcode/grant` with the real probe
-row media-core stores; the resulting HLS session was played and validated.
+row media-core stores; the resulting HLS session was served and `ffprobe`-validated
+(manifest + segment serving + output-codec validation — not a real client playing it).
 
 File: `/media/tv_shows/3 Body Problem/Season 1/…S01E01…x265…mp4` — **HEVC 1080p, mov/mp4 container**.
 

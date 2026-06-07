@@ -4,7 +4,7 @@ _Generated 2026-05-29. Updated 2026-06-07 to remove stale source/CI assumptions 
 
 ## Bottom Line
 
-The backend half of the project is real and largely shipped: M1 (IPTV viewer), M1.5 (cross-service contract) and the M3 media-core are live on the NAS, and the M4 transcoder is deployed and unit-green. The entire client half — every native Apple target (M2, M5) and the whole monetization tail (M6) — is unbuilt and **hard-blocked on Apple tooling**: Xcode is not installed and the Apple Developer Program membership (purchased 2026-05-29) is pending activation. **The single critical-path blocker is the Apple gate**; secondarily, M4 has fixture-level real-ffmpeg proof but still lacks a deployed transcode+play capture against a real non-direct-play library file, which gates M5 playback.
+The backend half of the project is real and largely shipped: M1 (IPTV viewer), M1.5 (cross-service contract) and the M3 media-core are live on the NAS, and the M4 transcoder is deployed with real-library transcode now proven end-to-end (2026-06-07). The entire client half — every native Apple target (M2, M5) and the whole monetization tail (M6) — is unbuilt and **hard-blocked on Apple tooling**: Xcode is not installed and the Apple Developer Program membership (purchased 2026-05-29) is pending activation. **The single critical-path blocker is the Apple gate**; secondarily, M4's deployed transcoder is now proven to transcode a real non-direct-play file and serve `ffprobe`-validated HLS end-to-end; what remains for M5 playback is a real client consuming that stream, plus stress/bench evidence.
 
 ## Milestone Table
 
@@ -14,7 +14,7 @@ The backend half of the project is real and largely shipped: M1 (IPTV viewer), M
 | M1.5 | Cross-service compatibility contract | done | 98% | RATIFIED/LOCKED; Rust↔TS↔Python byte parity in CI; /version schemas + repo .gitattributes present |
 | M2 | Swift SDK + tvOS/iOS apps + TestFlight | not-started | 5% | Spec-complete, zero Swift code; blocked on Xcode + Apple account + missing sibling repo |
 | M3 | Media server core (Rust media-core) | mostly-done | 75% | Live in enforce mode, 793 movies/292 shows/20k episodes; perf + match-accuracy unproven, no client consumer |
-| M4 | Transcoder + capability matching | in-progress | 50% | Deployed + healthy; real-ffmpeg fixture proof exists, but no deployed real-library transcode+play or stress evidence yet |
+| M4 | Transcoder + capability matching | in-progress | 60% | Deployed; real-library transcode PROVEN end-to-end (serves `ffprobe`-validated HLS, 2026-06-07; found+fixed a /scratch EACCES bug); remaining = real client player path + stress/bench |
 | M5 | Native clients (browse + playback + offline downloads) | not-started | 3% | Spec-only; extends the non-existent M2 EmeraldKit; offline downloads has zero code |
 | M6 | Plex-Pass equivalent (DVR/intro/music/photos/sharing) | not-started | 3% | A menu, not a plan; one reserved enum line; correctly gated behind M5 |
 
@@ -43,7 +43,7 @@ The backend half of the project is real and largely shipped: M1 (IPTV viewer), M
 - CI has 4 jobs incl. Rust↔napi↔pyo3 cross-binding gate + IPTV_DISABLED insurance build. cargo workspace + 95 TS contract tests green; Python parity loads the same vectors.
 
 **REMAINING**
-- Verify the production deployment posture for internal-principal enforcement. The source/CI path is present, but the compose defaults still leave media-core and transcoder verification `off` unless production env overrides them.
+- RESOLVED (2026-06-07): production internal-principal posture verified. `docker-compose.yml` now defaults media-core + transcoder to `enforce` (fail-closed, matching the recommender); prod confirmed already running enforce.
 - Cosmetic: internal_principal iss `'eex'` vs doc's illustrative `'eex-hono'` (internally consistent).
 - Swift port of contracts correctly deferred to M2/M5 (vectors are the oracle it must satisfy).
 
@@ -67,7 +67,7 @@ The backend half of the project is real and largely shipped: M1 (IPTV viewer), M
 
 **REMAINING**
 - Crit 2 UNPROVEN: no 100-file <5s perf/fixture test exists — only a doc-comment target.
-- Crit 3 UNPROVEN: ≥95% match accuracy is asserted, not benchmarked — matcher blindly takes `results.first()`, no scoring/confidence/language filter.
+- Crit 3 UNPROVEN: ≥95% match accuracy is asserted, not benchmarked. The matcher now scores candidates by stopword-aware title similarity and rejects zero-overlap hits (no longer blind `results.first()`), but no accuracy benchmark/eval exists to falsify the bar; a language filter is still absent.
 - Crit 4 cross-platform UNPROVEN: backend grant correct but no client exercises it; web `mediaApi` exposes only movies/shows/episodes/scan — no grant/stream/watch consumer.
 - Crit 5 NOT end-to-end: zero clients consume `/api/media/watch`; web position/grant wiring is IPTV-only. Same-sub web↔tvOS sync structurally possible, never demonstrated.
 
@@ -75,17 +75,17 @@ The backend half of the project is real and largely shipped: M1 (IPTV viewer), M
 - Native clients (web library player + tvOS) gate crit 4/5; web SPA never wires media-core endpoints, tvOS blocked on Xcode.
 - No measurement harness for crit 2/3 — both bars currently unfalsifiable in-repo.
 
-### M4 — Transcoder + capability matching (the long pole) — in-progress (45%)
+### M4 — Transcoder + capability matching (the long pole) — in-progress (60%)
 **DONE**
 - Real Rust crate (3304 LoC), 55 tests green. Capability-matching planner delegates to media-core decide then computes smallest per-stream re-encode (10 plan tests: hevc→h264, 4K→1080p, HDR→SDR, codec copy/remux). Subtitles first-class (text→WebVTT, image→burn-in). Complete snapshot-tested ffmpeg arg assembly (HLS, HW encoder selection, scale/tonemap/burn-in filtergraph). Boot-time `ffmpeg -encoders` probe with libx264 fallback. 30s heartbeat-loss reap + SIGTERM→SIGKILL + tmpdir cleanup. Seek = kill+respawn with new `-ss`. Concurrency caps (4 global/1 CPU) with leak-safe permits → 503 transcoder_busy. **media-core→transcoder handoff fully wired** (mints internal-principal bearer; degrades to 503 on outage). Deployed to NAS this session — container up + healthy.
 
 **REMAINING / NOT MET**
-- **Crit 1 PARTIAL: transcode path has fixture-level real-ffmpeg proof, but not deployed real-library playback proof.** The `requires-ffmpeg` integration test generates media, assembles production argv, runs real ffmpeg, and verifies HLS/segment demuxability. The remaining gap is a deployed service transcode+play capture against a real non-direct-play library file. Stress-test phase (non-optional per spec) not performed; no bench artifacts exist.
+- **Crit 1 MET (serving): deployed real-library transcode proven end-to-end (2026-06-07).** The deployed enforce-mode transcoder was driven against a real HEVC 1080p library file: HEVC→H.264 in 2.6s to first segment, served `ffprobe`-validated h264/yuv420p/bt709 + aac over the authed HTTP path (harness `scripts/m4-transcode-proof.sh`; see docs/M4-TRANSCODE-VERIFICATION.md). This also found+fixed a `/scratch` tmpfs EACCES that meant the deployed transcoder had never actually transcoded. NOT yet proven: a real client *playing* the stream (serving + ffprobe only). Stress-test phase (non-optional per spec) still not performed; no bench artifacts exist.
 - Crit 2 UNMEASURED: no evidence h264 1080p sustains real-time on Apple Silicon — and the deployed NAS target is x86 + static libx264 (no VideoToolbox), so the Apple-Silicon claim is untestable on the current deployment.
 - Crit 3 UNMEASURED: 4-concurrent-under-80%-CPU unverified; NAS default max_cpu=1 won't even permit 4 CPU transcodes.
 - Crit 4 PARTIAL: reap/cleanup unit-tested against the stub and argv fixture-tested against real ffmpeg, but not yet exercised as a long-running deployed child holding real library segments.
 - Crit 5 MET: `TRANSCODER_FORCE_CPU=1` now exists and forces libx264 regardless of `TRANSCODER_HW_ENCODER`.
-- Crit 6 UNMEASURED: "seek resumes within 2s" — zero latency measurement.
+- Crit 6 MEASURED + FAILING: deployed seek (`?to=`) first post-seek segment took ~23–27s, far above the "<2s" target — seek is a full kill+respawn+re-encode, so the 2s bar needs a different approach (e.g. segment pre-seek / keyframe index), not just measurement.
 - HW-encoder edge cases (VideoToolbox/NVENC/VAAPI/QSV, HDR/DV tone-map, PGS burn-in) exist only as arg strings, never run. audio_codecs capability gap: planner uses a hardcoded Apple-safe baseline (no ClientCaps.audio_codecs); only first audio track mapped.
 
 **BLOCKERS**
