@@ -25,17 +25,8 @@ const valid: Session = { sub: 'plex:42', username: 'someone', role: 'user', auth
 // Mirrors the production code; if the derivation changes there, this
 // must change here too — and these tests catch divergence by failing
 // the round-trip case below.
-// The legacy SHA-256 key is retained for negative test cases that exercise
-// the grace-window fallback path.
 function key(): Buffer {
   return deriveKey(process.env.SESSION_SECRET!, INFO_SESSION)
-}
-
-// Retained for negative test cases that exercise the grace-window fallback
-// path; not currently called. Prefixed with `_` so the lint config's
-// unused-vars rule doesn't flag it.
-function _legacyKey(): Buffer {
-  return createHash('sha256').update(process.env.SESSION_SECRET!, 'utf8').digest()
 }
 
 async function mintJwe(
