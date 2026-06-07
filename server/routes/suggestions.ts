@@ -2010,18 +2010,40 @@ suggestions.get('/:type', async (c) => {
     ...extra,
   })
 
+  // Explicit "Trending" choice from the SPA's Recommended ⇄ Trending
+  // toggle. Honor it in EVERY mode — including local-recommender mode,
+  // which otherwise always personalizes and left no way to view trending
+  // once the on-NAS model shipped. The SPA now sends ?force=trending ONLY
+  // on an explicit user choice (no longer as the no-key escape hatch), so
+  // this can't fire by accident and flip personalized households to
+  // trending. Needs a TMDB key to source the feed; without one we fall
+  // through to the recommender / cold-start paths below.
+  if (force === 'trending' && _tmdbKey) {
+    const endTrending = timing.mark('trending')
+    const trending = filterHouseholdSafe(await tmdbTrending(type)).map((it) => ({
+      ...it,
+      provenance: 'trending' as const,
+      reason: null,
+    }))
+    endTrending()
+    setTimingHeader()
+    return c.json({
+      source: 'trending',
+      items: tagIptvAvailability(trending.slice(0, TARGET_COUNT)),
+      _diag: diag(),
+    })
+  }
+
   // Local-recommender fast path. When USE_LOCAL_RECOMMENDER=1, the
   // Python sidecar in the same compose stack does retrieval + ranking
   // for FREE — no Claude tokens, no BYO key, no household-cost concern.
-  // It takes precedence over BOTH force=trending and the server-side
-  // cold-start short-circuit:
+  // It takes precedence over the server-side cold-start short-circuit
+  // (explicit force=trending is already handled above):
   //
-  //   - force=trending was a token-cost escape hatch from when Claude
-  //     was the only personalization path. With a free local model the
-  //     SPA still sends ?force=trending for no-key users (so the BYO-
-  //     key gate below doesn't 402 them), but pure trending is the
-  //     WRONG default when personalized output is available at zero
-  //     cost. Override.
+  //   - An explicit Trending request is served above; absent that, the
+  //     free local model is the right default — pure trending would be
+  //     the WRONG default when personalized output is available at zero
+  //     cost.
   //
   //   - Cold-start: the sidecar's own cold_start_trending recipe
   //     handles small libraries internally (see recommender/app/main.py)
@@ -2202,25 +2224,14 @@ suggestions.get('/:type', async (c) => {
     })
   }
 
-  // Legacy (non-recommender) trending short-circuits. Only reachable
-  // when USE_LOCAL_RECOMMENDER is OFF — when it's on, the block above
-  // returns first and these never fire (intentional: a free local
-  // model beats hard-coded trending fallback in every case).
+  // Legacy (non-recommender) short-circuits. Only reachable when
+  // USE_LOCAL_RECOMMENDER is OFF — when it's on, the block above returns
+  // first and these never fire (intentional: a free local model beats
+  // hard-coded trending fallback in every case). Explicit force=trending
+  // is already handled near the top of the handler for every mode.
   if (!_tmdbKey) {
     setTimingHeader()
     return c.json({ error: 'tmdb_not_configured' }, 503)
-  }
-
-  if (force === 'trending') {
-    const endTrending = timing.mark('trending')
-    const trending = filterHouseholdSafe(await tmdbTrending(type)).map((it) => ({
-      ...it,
-      provenance: 'trending' as const,
-      reason: null,
-    }))
-    endTrending()
-    setTimingHeader()
-    return c.json({ source: 'trending', items: tagIptvAvailability(trending.slice(0, TARGET_COUNT)), _diag: diag() })
   }
 
   // Cold start: library too small for meaningful taste signal.
