@@ -22,6 +22,9 @@ import { useUserApiKey } from '../../lib/hooks/useUserApiKey'
 import { useLimits } from '../../lib/hooks/useLimits'
 import { useFeedback, useSetFeedback } from '../../lib/hooks/useUserFeedback'
 import { usePlexLinks } from '../../lib/hooks/usePlexLinks'
+import { useLocalShowIndex } from '../../lib/hooks/useMediaLibrary'
+import { MediaPlayer } from '../media/MediaPlayer'
+import { EpisodePicker } from '../media/EpisodePicker'
 import type { DotState } from '../search/FeedbackDots'
 import { TrendingRow } from '../search/TrendingRow'
 import { useCast } from '../../lib/hooks/useCast'
@@ -114,6 +117,9 @@ export function TvTab() {
   const [adding, setAdding] = useState<SeriesSearchResult | null>(null)
   const [viewing, setViewing] = useState<SeriesSearchResult | Series | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  // In-browser playback of a locally-available show: pick an episode, then play.
+  const [pickShow, setPickShow] = useState<{ id: number; title: string } | null>(null)
+  const [playingEpisode, setPlayingEpisode] = useState<{ id: number; title: string } | null>(null)
 
   const cast = useCast({
     type: 'tv',
@@ -129,6 +135,14 @@ export function TvTab() {
 
   const userKey = useUserApiKey()
   const limits = useLimits()
+  // Match the viewed show to a locally-available one (media-core) so the detail
+  // modal can offer in-browser episode playback. Gated on mediaEnabled.
+  const mediaEnabled = limits.data?.mediaEnabled !== false
+  const localShowIdx = useLocalShowIndex(mediaEnabled)
+  const localShowId =
+    viewing && typeof viewing.tmdbId === 'number'
+      ? localShowIdx.data?.get(viewing.tmdbId)
+      : undefined
   const localRecommender = limits.data?.useLocalRecommender === true
   // See MoviesTab — Recommended ⇄ Trending toggle, shown whenever
   // personalization is achievable (free local recommender or a BYO key).
@@ -469,6 +483,16 @@ export function TvTab() {
               })
             : null
         }
+        onPlayDirect={
+          viewing && localShowId != null
+            ? () => {
+                const t = viewing.title
+                setViewing(null)
+                setPickShow({ id: localShowId, title: t })
+              }
+            : undefined
+        }
+        playDirectLabel="Watch episodes here"
         seasons={viewing && 'id' in viewing && viewing.seasons ? viewing.seasons.map((s) => {
           const eps = episodesBySeason.get(s.seasonNumber)
           const firstAired = eps && eps.length > 0
@@ -503,6 +527,27 @@ export function TvTab() {
           confirmRemove(s)
         } : undefined}
       />
+
+      {pickShow && (
+        <EpisodePicker
+          showId={pickShow.id}
+          showTitle={pickShow.title}
+          onClose={() => setPickShow(null)}
+          onPlay={(ep, label) => {
+            setPickShow(null)
+            setPlayingEpisode({ id: ep.id, title: label })
+          }}
+        />
+      )}
+      {playingEpisode && (
+        <MediaPlayer
+          key={playingEpisode.id}
+          kind="episode"
+          id={playingEpisode.id}
+          title={playingEpisode.title}
+          onClose={() => setPlayingEpisode(null)}
+        />
+      )}
 
       <Toast message={toast} onDone={() => setToast(null)} />
     </section>

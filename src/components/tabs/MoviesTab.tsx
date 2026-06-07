@@ -21,6 +21,8 @@ import { useUserApiKey } from '../../lib/hooks/useUserApiKey'
 import { useLimits } from '../../lib/hooks/useLimits'
 import { useFeedback, useSetFeedback } from '../../lib/hooks/useUserFeedback'
 import { usePlexLinks } from '../../lib/hooks/usePlexLinks'
+import { useLocalMovieIndex } from '../../lib/hooks/useMediaLibrary'
+import { MediaPlayer } from '../media/MediaPlayer'
 import type { DotState } from '../search/FeedbackDots'
 import { TrendingRow } from '../search/TrendingRow'
 import { useCast } from '../../lib/hooks/useCast'
@@ -125,6 +127,8 @@ export function MoviesTab() {
   const [adding, setAdding] = useState<MovieSearchResult | null>(null)
   const [viewing, setViewing] = useState<MovieSearchResult | Movie | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  // In-browser playback of a locally-available title (media-core).
+  const [playingLocal, setPlayingLocal] = useState<{ id: number; title: string } | null>(null)
 
   const cast = useCast({
     type: 'movie',
@@ -140,6 +144,14 @@ export function MoviesTab() {
 
   const userKey = useUserApiKey()
   const limits = useLimits()
+  // Match the viewed title to a locally-available file so the detail modal can
+  // offer in-browser playback. Gated on mediaEnabled (no media-core → no fetch).
+  const mediaEnabled = limits.data?.mediaEnabled !== false
+  const localMovieIdx = useLocalMovieIndex(mediaEnabled)
+  const localMovieId =
+    viewing && typeof viewing.tmdbId === 'number'
+      ? localMovieIdx.data?.get(viewing.tmdbId)
+      : undefined
   const localRecommender = limits.data?.useLocalRecommender === true
   // Personalization is achievable when the free on-NAS recommender runs,
   // or the user supplied a BYO Anthropic key. The Recommended ⇄ Trending
@@ -468,6 +480,15 @@ export function MoviesTab() {
               })
             : null
         }
+        onPlayDirect={
+          viewing && localMovieId != null
+            ? () => {
+                const t = viewing.title
+                setViewing(null)
+                setPlayingLocal({ id: localMovieId, title: t })
+              }
+            : undefined
+        }
         onAdd={viewing && !('id' in viewing) ? () => {
           const item = viewing as MovieSearchResult
           setViewing(null)
@@ -484,6 +505,16 @@ export function MoviesTab() {
           confirmRemove(m)
         } : undefined}
       />
+
+      {playingLocal && (
+        <MediaPlayer
+          key={playingLocal.id}
+          kind="movie"
+          id={playingLocal.id}
+          title={playingLocal.title}
+          onClose={() => setPlayingLocal(null)}
+        />
+      )}
 
       <Toast message={toast} onDone={() => setToast(null)} />
     </section>

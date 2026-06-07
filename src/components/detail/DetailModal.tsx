@@ -98,6 +98,13 @@ type Props = {
    *  alongside inLibrary=true, the action footer gains a primary
    *  "Play in Plex →" button. Opens in a new tab. */
   playUrl?: string | null
+  /** When the title exists in the local media-core library, the footer gains a
+   *  primary "Play Direct here" button that streams it in-browser (direct-play
+   *  or transcoded HLS) instead of bouncing to Plex. */
+  onPlayDirect?: () => void
+  /** Label for the direct-play button (e.g. "Play Direct here" for a movie,
+   *  "Watch episodes" for a show). Defaults to "Play Direct here". */
+  playDirectLabel?: string
 }
 
 export function DetailModal({
@@ -125,6 +132,8 @@ export function DetailModal({
   onUpgrade,
   upgrading,
   playUrl,
+  onPlayDirect,
+  playDirectLabel,
 }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const closeBtnRef = useRef<HTMLButtonElement>(null)
@@ -405,9 +414,18 @@ export function DetailModal({
               Add to library
             </button>
           )}
+          {onPlayDirect && (
+            <button
+              type="button"
+              className="detail__btn detail__btn--primary"
+              onClick={onPlayDirect}
+            >
+              {playDirectLabel ?? 'Play Direct here'}
+            </button>
+          )}
           {inLibrary && playUrl && (
             <a
-              className="detail__btn detail__btn--primary"
+              className={`detail__btn ${onPlayDirect ? 'detail__btn--secondary' : 'detail__btn--primary'}`}
               href={playUrl}
               target="_blank"
               rel="noopener"
