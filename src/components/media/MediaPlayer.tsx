@@ -27,6 +27,7 @@ type Props = {
 export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Props) {
   const [grant, setGrant] = useState<PlaybackGrant | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [playbackEnded, setPlaybackEnded] = useState(false)
   const report = useReportWatch(kind, id)
   // Latest (position, duration) so unmount/close can flush an exact resume point.
   const latest = useRef<{ pos: number; dur: number | null }>({
@@ -40,7 +41,7 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
   useEffect(() => {
     let cancelled = false
     mediaApi
-      .playback(kind, id)
+      .playback(kind, id, undefined, startPositionSecs)
       .then((g) => {
         if (!cancelled) setGrant(g)
       })
@@ -50,17 +51,18 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
     return () => {
       cancelled = true
     }
-  }, [kind, id])
+  }, [kind, id, startPositionSecs])
 
   // Heartbeat the transcode session (direct-play grants have no heartbeatUrl).
   useEffect(() => {
     const url = grant?.heartbeatUrl
+    if (playbackEnded) return undefined
     if (!url) return undefined
     const timer = window.setInterval(() => {
       void mediaApi.heartbeat(url)
     }, HEARTBEAT_INTERVAL_MS)
     return () => window.clearInterval(timer)
-  }, [grant?.heartbeatUrl])
+  }, [grant?.heartbeatUrl, playbackEnded])
 
   // Esc closes the player.
   useEffect(() => {
@@ -101,6 +103,7 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
   )
 
   const onEnded = useCallback(() => {
+    setPlaybackEnded(true)
     const dur = latest.current.dur ?? grant?.durationSecs ?? null
     report(latest.current.pos, dur, true, true)
   }, [report, grant?.durationSecs])

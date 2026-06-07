@@ -212,6 +212,23 @@ describe('mediaApi playback + watch', () => {
     expect(grant.heartbeatUrl).toBeNull()
   })
 
+  it('playback() sends a floored start_secs when resuming', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({
+        delivery: 'hls',
+        url: '/api/transcode/session/sid/index.m3u8?t=TOK',
+        heartbeatUrl: '/api/transcode/session/sid/heartbeat?t=TOK',
+        sessionId: 'sid',
+        durationSecs: 1200,
+      }),
+    )
+
+    await mediaApi.playback('movie', 7, browserCaps(), 95.8)
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body))
+    expect(body.start_secs).toBe(95)
+  })
+
   it('playback() absolutizes the HLS manifest + heartbeat urls', async () => {
     fetchMock.mockResolvedValueOnce(
       jsonRes({

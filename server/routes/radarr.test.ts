@@ -623,6 +623,59 @@ describe('radarr POST /movie — releases exist but all Radarr-rejected → moni
     expect(putMonitored).not.toBeNull()
     expect(deleteCalled).toBe(false) // preserved, not rolled back
   })
+
+  it('returns a typed error when the monitor-enable recovery PUT fails', async () => {
+    const tiny = Math.round(0.12 * 1024 ** 3)
+    let deleteCalled = false
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(JSON.stringify([{ id: 1, path: '/data/movies', freeSpace: 500 * 1024 ** 3 }]), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/movie') && init?.method === 'POST') {
+          return new Response(JSON.stringify({ id: 831, title: 'Needs Monitor', monitored: false }), { status: 201 })
+        }
+        if (url.includes('/api/v3/release?movieId=831')) {
+          return new Response(
+            JSON.stringify([
+              { guid: 'g1', indexerId: 1, size: tiny, qualityWeight: 100, title: 'Needs.Monitor.1080p', rejected: true },
+            ]),
+            { status: 200 },
+          )
+        }
+        if (url.endsWith('/api/v3/movie/831') && init?.method === 'PUT') {
+          return new Response(JSON.stringify({ error: 'upstream failed' }), { status: 500 })
+        }
+        if (url.endsWith('/api/v3/movie/831') && init?.method === 'DELETE') {
+          deleteCalled = true
+          return new Response('', { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+
+    const r = await appUnderTest().request('/api/v3/movie', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: 'Needs Monitor',
+        tmdbId: 58509,
+        rootFolderPath: '/data/movies',
+        qualityProfileId: 7,
+        monitored: true,
+        addOptions: { searchForMovie: true },
+      }),
+    })
+
+    expect(r.status).toBe(502)
+    const body = (await r.json()) as { error?: string; status?: number; phase?: string }
+    expect(body.error).toBe('monitor_enable_failed')
+    expect(body.status).toBe(500)
+    expect(body.phase).toBe('no_matching_releases')
+    expect(deleteCalled).toBe(false)
+  })
 })
 
 // POST /api/v3/movie/:id/upgrade — admin-only manual upgrade trigger.

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { mediaApi, type PlayableKind } from '../api/media'
+import { mediaApi, type PlayableKind, type WatchEntry } from '../api/media'
 
 // tmdbId -> local media-core movie id, for matching a discover/Radarr title to
 // a locally-available file (powers the DetailModal "Play Direct here" button).
@@ -47,6 +47,28 @@ export function useMediaEpisodes(showId: number | null) {
     enabled: showId != null,
     staleTime: 60_000,
   })
+}
+
+// Current user's local-media watch rows keyed by `kind:id`, used to resume
+// "Play Direct here" from Movies/TV. Completed rows intentionally return no
+// resume point at the call site, but stay in the map for progress display later.
+export function useMediaWatch(enabled: boolean) {
+  return useQuery({
+    queryKey: ['media', 'watch'],
+    queryFn: ({ signal }) => mediaApi.watch({ signal }),
+    staleTime: 60_000,
+    enabled,
+    select: (rows): Map<string, WatchEntry> => {
+      const m = new Map<string, WatchEntry>()
+      for (const row of rows) m.set(`${row.mediaKind}:${row.mediaId}`, row)
+      return m
+    },
+  })
+}
+
+export function resumePosition(row: WatchEntry | undefined): number | undefined {
+  if (!row || row.completed || row.positionSecs <= 0) return undefined
+  return row.positionSecs
 }
 
 // Throttled watch-progress reporter, mirroring useReportPosition (IPTV). The

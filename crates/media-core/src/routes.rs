@@ -446,6 +446,8 @@ struct StreamCapsQuery {
     max_height: Option<i64>,
     #[serde(default)]
     hdr: bool,
+    #[serde(default)]
+    start_secs: Option<u64>,
 }
 
 impl StreamCapsQuery {
@@ -517,6 +519,7 @@ struct TranscodeHandoff<'a> {
     kind: &'a str,
     id: i64,
     claims: &'a Option<InternalClaims>,
+    start_secs: u64,
     /// The capability decision reason, echoed back in the grant for the client.
     reason: &'a str,
 }
@@ -555,7 +558,7 @@ impl TranscodeHandoff<'_> {
             "media_kind": self.kind,
             "media_id": self.id,
             "sub": sub,
-            "start_secs": 0,
+            "start_secs": self.start_secs,
         })
     }
 }
@@ -679,6 +682,7 @@ async fn stream_file(
                         kind: &kind,
                         id,
                         claims: &claims,
+                        start_secs: caps_q.start_secs.unwrap_or(0),
                         reason: &decision.reason,
                     };
                     return handoff_to_transcoder(&state, transcoder_url, &handoff).await;
@@ -1656,6 +1660,30 @@ mod tests {
         (format!("http://{addr}"), handle)
     }
 
+    async fn spawn_mock_transcoder_capture(
+        response: Value,
+        status: StatusCode,
+        seen_body: Arc<tokio::sync::Mutex<Option<Value>>>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let app = Router::new().route(
+            "/api/transcode/grant",
+            post(move |Json(body): Json<Value>| {
+                let response = response.clone();
+                let seen_body = seen_body.clone();
+                async move {
+                    *seen_body.lock().await = Some(body);
+                    (status, Json(response))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}"), handle)
+    }
+
     async fn seed_movie_for_file(state: &AppState, file_id: i64) -> i64 {
         sqlx::query("INSERT INTO movies (title, year, added_at, file_id) VALUES (?, ?, ?, ?)")
             .bind("Sample")
@@ -1751,6 +1779,40 @@ mod tests {
             v["reason"].as_str().is_some(),
             "handoff must carry the decision reason"
         );
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn stream_handoff_forwards_resume_start_secs_to_transcoder() {
+        let grant = json!({
+            "directPlay": false,
+            "transcode": true,
+            "sessionId": "sess-resume",
+            "manifestUrl": "/api/transcode/session/sess-resume/index.m3u8",
+            "heartbeatUrl": "/api/transcode/session/sess-resume/heartbeat",
+        });
+        let seen = Arc::new(tokio::sync::Mutex::new(None));
+        let (base, handle) =
+            spawn_mock_transcoder_capture(grant, StatusCode::OK, seen.clone()).await;
+        let state = test_state_with_transcoder(&base).await;
+        let file_id = seed_media_file(&state, "/lib/resume.mkv").await;
+        let movie_id = seed_movie_for_file(&state, file_id).await;
+
+        let app = crate::build_router(state);
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!(
+                        "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1&start_secs=95"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = seen.lock().await.clone().expect("transcoder grant body");
+        assert_eq!(body["start_secs"], 95);
         handle.abort();
     }
 

@@ -43,14 +43,16 @@ const FORWARD_RESPONSE_HEADERS = [
 // everything else (mkv, hevc, hdr) to the transcoder rather than risk shipping
 // an undecodable container to a <video> element.
 type Caps = { containers: string[]; video_codecs: string[]; max_height?: number; hdr: boolean }
+type PlaybackRequest = Partial<Caps> & { start_secs?: unknown }
 const DEFAULT_CAPS: Caps = { containers: ['mp4'], video_codecs: ['h264'], max_height: 2160, hdr: false }
 
-function capsQuery(caps: Caps): string {
+function capsQuery(caps: Caps, startSecs?: number): string {
   const p = new URLSearchParams()
   if (caps.containers.length) p.set('containers', caps.containers.join(','))
   if (caps.video_codecs.length) p.set('video_codecs', caps.video_codecs.join(','))
   if (typeof caps.max_height === 'number') p.set('max_height', String(caps.max_height))
   p.set('hdr', String(Boolean(caps.hdr)))
+  if (startSecs !== undefined) p.set('start_secs', String(startSecs))
   return p.toString()
 }
 
@@ -105,13 +107,19 @@ media.post('/playback/:kind/:id', async (c) => {
     return c.json({ error: 'unknown media kind' }, 400)
   }
 
-  const reqCaps = await c.req.json<Partial<Caps>>().catch(() => ({}) as Partial<Caps>)
+  const reqCaps = await c.req.json<PlaybackRequest>().catch(() => ({}) as PlaybackRequest)
   const caps: Caps = {
     containers: reqCaps.containers?.length ? reqCaps.containers : DEFAULT_CAPS.containers,
     video_codecs: reqCaps.video_codecs?.length ? reqCaps.video_codecs : DEFAULT_CAPS.video_codecs,
     max_height: typeof reqCaps.max_height === 'number' ? reqCaps.max_height : DEFAULT_CAPS.max_height,
     hdr: Boolean(reqCaps.hdr),
   }
+  const startSecs =
+    typeof reqCaps.start_secs === 'number' &&
+    Number.isFinite(reqCaps.start_secs) &&
+    reqCaps.start_secs > 0
+      ? Math.floor(reqCaps.start_secs)
+      : undefined
 
   let auth: Record<string, string>
   try {
@@ -168,7 +176,7 @@ media.post('/playback/:kind/:id', async (c) => {
   let handoff: { sessionId?: string; manifestUrl?: string; heartbeatUrl?: string }
   try {
     const r = await fetchStreamWithConnectTimeout(
-      `${env.mediaCoreUrl}/api/media/stream/${kind}/${id}?${capsQuery(caps)}`,
+      `${env.mediaCoreUrl}/api/media/stream/${kind}/${id}?${capsQuery(caps, startSecs)}`,
       { method: 'GET', headers: auth },
       LAN_TIMEOUT_MS,
       'media-core',
