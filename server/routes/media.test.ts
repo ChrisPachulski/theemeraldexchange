@@ -264,6 +264,14 @@ describe('media playback grant', () => {
           { status: 200, headers: { 'Content-Type': 'application/json' } },
         ),
       )
+      // Manifest-ready probe: the grant polls the transcoder until a segment is
+      // listed before returning, so the SPA's hls.js gets a 200 on first fetch.
+      .mockResolvedValueOnce(
+        new Response('#EXTM3U\n#EXTINF:6.0,\nseg_00000.ts\n', {
+          status: 200,
+          headers: { 'Content-Type': 'application/vnd.apple.mpegurl' },
+        }),
+      )
 
     const res = await media.request('/playback/episode/99', {
       method: 'POST',
