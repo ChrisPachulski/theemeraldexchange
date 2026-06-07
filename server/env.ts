@@ -515,6 +515,17 @@ export const env = {
     (process.env.NODE_ENV === 'production'
       ? 'http://media-core:8002'
       : 'http://127.0.0.1:8002'),
+  // Transcoder base URL. When a library file cannot direct-play, media-core's
+  // /play grant routes the client to the transcoder's HLS session, whose
+  // manifest/segment URLs are served back through the backend's /api/transcode
+  // proxy (server/routes/transcode.ts). Mirrors media-core's own
+  // MEDIA_TRANSCODER_URL so both reach the same service. Only consumed when
+  // useMediaCore is on.
+  transcoderUrl:
+    opt('MEDIA_TRANSCODER_URL') ??
+    (process.env.NODE_ENV === 'production'
+      ? 'http://transcoder:8003'
+      : 'http://127.0.0.1:8003'),
   // Path to media-core's library DB (media.db). The server opens this
   // file READ-ONLY for availability tagging (recommender stamps
   // available_on:['local'] for titles already on disk). media-core owns
@@ -549,6 +560,12 @@ export const env = {
   IPTV_EPG_PATH: opt('IPTV_EPG_PATH') ?? '/xmltv.php',
   IPTV_MAX_CONCURRENT_STREAMS: positiveInt('IPTV_MAX_CONCURRENT_STREAMS', 4),
   IPTV_STREAM_TOKEN_TTL_SECS: positiveInt('IPTV_STREAM_TOKEN_TTL_SECS', 300),
+  // TTL for local-media playback stream tokens (routes/media.ts). Unlike IPTV's
+  // short-lived per-request tokens, a movie token must outlast a whole sitting:
+  // the same token is presented on every byte-range (direct play) or HLS
+  // segment fetch for the duration of playback. Default 6h covers any film with
+  // room for pauses; it scopes one user to one title, so a leak is low-impact.
+  MEDIA_STREAM_TOKEN_TTL_SECS: positiveInt('MEDIA_STREAM_TOKEN_TTL_SECS', 21_600),
   IPTV_LIST_TIMEOUT_MS: positiveInt('IPTV_LIST_TIMEOUT_MS', 30_000),
   IPTV_SYNC_CRON: process.env.IPTV_SYNC_CRON ?? '0 */6 * * *',
   IPTV_RECOMMENDER_EXPORT_SECRET: opt('IPTV_RECOMMENDER_EXPORT_SECRET') ?? null,

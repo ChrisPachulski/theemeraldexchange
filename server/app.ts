@@ -28,6 +28,7 @@ import { recommenderEvents } from './routes/recommenderEvents.js'
 import { telemetry } from './routes/telemetry.js'
 import { device } from './routes/device.js'
 import { media } from './routes/media.js'
+import { transcode } from './routes/transcode.js'
 import { devices, adminDevices } from './routes/devices.js'
 import { adminInvites, adminMembers } from './routes/adminInvites.js'
 import { passkey } from './routes/passkey.js'
@@ -197,4 +198,9 @@ app.route('/api/telemetry', telemetry)
 
 if (env.useMediaCore) {
   app.route('/api/media', media)
+  // HLS playback for non-direct-play files: media-core hands the client a
+  // transcoder session whose manifest/segment URLs are served back through
+  // this proxy. Gated on the same flag as /api/media — without media-core
+  // there is nothing to hand off.
+  app.route('/api/transcode', transcode)
 }
