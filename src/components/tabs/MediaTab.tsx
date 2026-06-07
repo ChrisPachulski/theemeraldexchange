@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { SearchInput } from '../search/SearchInput'
 import { ResultGrid } from '../search/ResultGrid'
 import { MediaCard } from '../search/MediaCard'
@@ -7,6 +7,7 @@ import { type Mode } from '../search/ModeToggle'
 // Movies/Shows kind toggle below.
 import '../search/ModeToggle.css'
 import { SourceToggle, type SourceMode } from '../media/SourceToggle'
+import { MediaPlayer } from '../media/MediaPlayer'
 import { Toast } from '../toast/Toast'
 import { LoadingPulse } from '../feedback/LoadingPulse'
 import { EmeraldMark } from '../atmosphere/EmeraldMark'
@@ -17,9 +18,18 @@ import { useDebounced } from '../../lib/hooks/useDebounced'
 import {
   useMediaMovies,
   useMediaShows,
+  useMediaEpisodes,
   useMediaScan,
+  useWatchState,
 } from '../../lib/hooks/useMediaLibrary'
-import { posterFor, type MediaMovie, type MediaShow } from '../../lib/api/media'
+import {
+  posterFor,
+  type MediaMovie,
+  type MediaShow,
+  type MediaEpisode,
+  type PlayableKind,
+  type WatchEntry,
+} from '../../lib/api/media'
 import { withViewTransition } from '../../lib/viewTransition'
 // TvTab.css is the shared tab-layout stylesheet — MoviesTab imports it
 // too. Reusing it keeps the dock/grid/empty/error styling consistent.
@@ -29,10 +39,31 @@ import './MediaTab.css'
 
 type Kind = 'movies' | 'shows'
 
+/** What the player is currently showing, if anything. */
+type NowPlaying = {
+  kind: PlayableKind
+  id: number
+  title: string
+  startPositionSecs?: number
+}
+
+/** Index watch rows by `${kind}:${id}` for O(1) resume lookups. */
+function watchKey(kind: PlayableKind, id: number): string {
+  return `${kind}:${id}`
+}
+
+function resumePosition(entry: WatchEntry | undefined): number | undefined {
+  if (!entry || entry.completed || entry.positionSecs <= 0) return undefined
+  return entry.positionSecs
+}
+
 export function MediaTab() {
   const [kind, setKind] = useState<Kind>('movies')
   const [source, setSource] = useState<SourceMode>('local')
   const [query, setQuery] = useState('')
+  const [playing, setPlaying] = useState<NowPlaying | null>(null)
+  // The show whose episode picker is open (TV needs an episode before play).
+  const [pickShow, setPickShow] = useState<MediaShow | null>(null)
   // Wrap the source/kind axis swaps in a View Transition so the grid
   // cross-fades instead of hard-cutting. No-ops to a plain setState under
   // reduced-motion / unsupported browsers (see lib/viewTransition).
@@ -49,6 +80,22 @@ export function MediaTab() {
   const q = debouncedQuery.trim() || undefined
   const movies = useMediaMovies(kind === 'movies' ? q : undefined)
   const shows = useMediaShows(kind === 'shows' ? q : undefined)
+  const watch = useWatchState()
+
+  const watchIndex = useMemo(() => {
+    const m = new Map<string, WatchEntry>()
+    for (const e of watch.data ?? []) m.set(watchKey(e.mediaKind, e.mediaId), e)
+    return m
+  }, [watch.data])
+
+  const play = (kindToPlay: PlayableKind, id: number, title: string) => {
+    setPlaying({
+      kind: kindToPlay,
+      id,
+      title,
+      startPositionSecs: resumePosition(watchIndex.get(watchKey(kindToPlay, id))),
+    })
+  }
 
   const scan = useMediaScan()
   const handleScan = () => {
@@ -64,6 +111,31 @@ export function MediaTab() {
     })
   }
 
+  const overlays = (
+    <>
+      {pickShow && (
+        <EpisodePicker
+          show={pickShow}
+          onClose={() => setPickShow(null)}
+          onPlay={(ep, label) => {
+            setPickShow(null)
+            play('episode', ep.id, label)
+          }}
+        />
+      )}
+      {playing && (
+        <MediaPlayer
+          key={`${playing.kind}-${playing.id}`}
+          kind={playing.kind}
+          id={playing.id}
+          title={playing.title}
+          startPositionSecs={playing.startPositionSecs}
+          onClose={() => setPlaying(null)}
+        />
+      )}
+    </>
+  )
+
   // 'requestable' reuses the existing discover/search/add flow wholesale
   // — MoviesTab / TvTab already own Radarr/Sonarr lookup, the detail
   // modal, add modal, trending, and feedback dots. No duplication.
@@ -76,6 +148,7 @@ export function MediaTab() {
           <KindToggle kind={kind} onChange={changeKind} />
         </div>
         <Toast message={toast} onDone={() => setToast(null)} />
+        {overlays}
       </section>
     )
   }
@@ -94,6 +167,7 @@ export function MediaTab() {
           isAdmin={isAdmin}
           onScan={handleScan}
           scanning={scan.isPending}
+          onPlay={(m) => play('movie', m.id, m.title)}
         />
       ) : (
         <LocalShows
@@ -104,6 +178,7 @@ export function MediaTab() {
           isAdmin={isAdmin}
           onScan={handleScan}
           scanning={scan.isPending}
+          onPick={(s) => setPickShow(s)}
         />
       )}
 
@@ -123,6 +198,7 @@ export function MediaTab() {
       </div>
 
       <Toast message={toast} onDone={() => setToast(null)} />
+      {overlays}
     </section>
   )
 }
@@ -198,6 +274,7 @@ type LocalMoviesProps = {
   isAdmin: boolean
   onScan: () => void
   scanning: boolean
+  onPlay: (movie: MediaMovie) => void
 }
 
 function LocalMovies({
@@ -208,6 +285,7 @@ function LocalMovies({
   isAdmin,
   onScan,
   scanning,
+  onPlay,
 }: LocalMoviesProps) {
   if (loading) return <LoadingPulse>Loading library</LoadingPulse>
   if (error) {
@@ -239,6 +317,7 @@ function LocalMovies({
           year={m.year ?? undefined}
           overview={m.overview ?? undefined}
           inLibrary
+          onClick={() => onPlay(m)}
         />
       )}
     />
@@ -253,6 +332,7 @@ type LocalShowsProps = {
   isAdmin: boolean
   onScan: () => void
   scanning: boolean
+  onPick: (show: MediaShow) => void
 }
 
 function LocalShows({
@@ -263,6 +343,7 @@ function LocalShows({
   isAdmin,
   onScan,
   scanning,
+  onPick,
 }: LocalShowsProps) {
   if (loading) return <LoadingPulse>Loading library</LoadingPulse>
   if (error) {
@@ -294,9 +375,70 @@ function LocalShows({
           year={s.year ?? undefined}
           overview={s.overview ?? undefined}
           inLibrary
+          onClick={() => onPick(s)}
         />
       )}
     />
+  )
+}
+
+/** Format an episode label like "Show — S02E05 · Title". */
+function episodeLabel(show: MediaShow, ep: MediaEpisode): string {
+  const code = `S${String(ep.season).padStart(2, '0')}E${String(ep.episode).padStart(2, '0')}`
+  return ep.title ? `${show.title} — ${code} · ${ep.title}` : `${show.title} — ${code}`
+}
+
+/** Episode picker overlay. Reuses the player-modal chrome for visual
+ *  consistency; lists a show's episodes and plays the chosen one. */
+function EpisodePicker({
+  show,
+  onClose,
+  onPlay,
+}: {
+  show: MediaShow
+  onClose: () => void
+  onPlay: (ep: MediaEpisode, label: string) => void
+}) {
+  const episodes = useMediaEpisodes(show.id)
+  return (
+    <div className="iptv-player-modal" role="dialog" aria-modal="true" aria-label={`${show.title} episodes`}>
+      <div className="iptv-player-modal__header">
+        <h2>{show.title}</h2>
+        <button
+          className="iptv-player-modal__close"
+          type="button"
+          onClick={onClose}
+          aria-label="Close episode list"
+        >
+          ×
+        </button>
+      </div>
+      {episodes.isPending && <p className="iptv-tab__status">Loading episodes…</p>}
+      {episodes.error && (
+        <p className="iptv-tab__status iptv-tab__status--error">Couldn't load episodes.</p>
+      )}
+      {episodes.data && episodes.data.items.length === 0 && (
+        <p className="iptv-tab__status">No episodes scanned for this show.</p>
+      )}
+      {episodes.data && episodes.data.items.length > 0 && (
+        <ul className="media-episode-list">
+          {episodes.data.items.map((ep) => (
+            <li key={ep.id}>
+              <button
+                type="button"
+                className="media-episode-list__item"
+                onClick={() => onPlay(ep, episodeLabel(show, ep))}
+              >
+                <span className="media-episode-list__code">
+                  S{String(ep.season).padStart(2, '0')}E{String(ep.episode).padStart(2, '0')}
+                </span>
+                <span className="media-episode-list__title">{ep.title ?? 'Untitled'}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }
 
