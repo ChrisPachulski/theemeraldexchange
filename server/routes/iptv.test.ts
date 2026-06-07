@@ -11,13 +11,17 @@ const dbState = vi.hoisted(() => ({
 
 type TestAuthEnv = {
   Variables: {
-    user: { sub: string; role: string; displayName: string }
+    session: { sub: string; username: string; role: 'admin' | 'user' }
   }
 }
 
+const authState = vi.hoisted(() => ({
+  session: { sub: 'plex:42', username: 'Test', role: 'admin' as 'admin' | 'user' },
+}))
+
 vi.mock('../middleware/auth.js', async () => {
   const requireTestAuth: MiddlewareHandler<TestAuthEnv> = async (c, next) => {
-    c.set('user', { sub: 'plex:42', role: 'admin', displayName: 'Test' })
+    c.set('session', authState.session)
     await next()
   }
   return {
@@ -61,16 +65,58 @@ vi.mock('../services/iptvStreamToken.js', () => {
   }
 })
 
+const concurrencyState = vi.hoisted(() => {
+  const sessions: Array<{
+    sessionId: string
+    sub: string
+    kind: 'live' | 'vod' | 'series' | 'catchup' | 'remux'
+    resourceId: string
+    title: string | null
+    ip: string | null
+    startedAt: number
+    lastSeen: number
+  }> = []
+
+  return {
+    sessions,
+    tracker: {
+      tryAcquire: ({ sub, sessionId, kind, resourceId, ip, title }: {
+        sub: string
+        sessionId: string
+        kind: 'live' | 'vod' | 'series' | 'catchup' | 'remux'
+        resourceId: string
+        ip?: string | null
+        title?: string | null
+      }) => {
+        const now = Date.now()
+        sessions.push({
+          sessionId,
+          sub,
+          kind,
+          resourceId,
+          title: title ?? null,
+          ip: ip ?? null,
+          startedAt: now,
+          lastSeen: now,
+        })
+        return { ok: true, sessionId }
+      },
+      heartbeat: () => {},
+      heartbeatByResource: () => true,
+      release: (sessionId: string) => {
+        const index = sessions.findIndex((session) => session.sessionId === sessionId)
+        if (index !== -1) sessions.splice(index, 1)
+      },
+      releaseByResource: () => true,
+      sweep: () => {},
+      size: () => sessions.length,
+      list: () => sessions,
+    },
+  }
+})
+
 vi.mock('../services/iptvConcurrency.js', () => ({
-  streamConcurrency: vi.fn(() => ({
-    tryAcquire: vi.fn(({ sessionId }: { sessionId: string }) => ({ ok: true, sessionId })),
-    heartbeat: vi.fn(),
-    heartbeatByResource: vi.fn(() => true),
-    release: vi.fn(),
-    releaseByResource: vi.fn(() => true),
-    sweep: vi.fn(),
-    size: vi.fn(() => 0),
-  })),
+  streamConcurrency: vi.fn(() => concurrencyState.tracker),
 }))
 
 // S9: mock sourcePrecedence so grant endpoints resolve without probing real upstreams
@@ -166,6 +212,11 @@ function fakeToken(kind: string, resourceId: string): string {
   return `fake.${kind}.${Buffer.from(resourceId, 'utf-8').toString('base64url')}`
 }
 
+beforeEach(() => {
+  authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
+  concurrencyState.sessions.length = 0
+})
+
 describe('GET /api/iptv/health', () => {
   it('returns account info shape', async () => {
     const app = new Hono().route('/api/iptv', iptv)
@@ -179,6 +230,55 @@ describe('GET /api/iptv/health', () => {
     expect(body.maxConnections).toBe(4)
     expect(body.status).toBe('Active')
     expect(typeof body.expiresAt).toBe('string')
+  })
+})
+
+describe('DELETE /api/iptv/sessions/:sessionId', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+
+  function seedSession(sessionId: string, sub: string) {
+    concurrencyState.sessions.push({
+      sessionId,
+      sub,
+      kind: 'live',
+      resourceId: '10',
+      title: 'CNN',
+      ip: null,
+      startedAt: 1,
+      lastSeen: 1,
+    })
+  }
+
+  it('allows an admin session to release another user session', async () => {
+    seedSession('other-session', 'plex:other')
+
+    const res = await app.request('/api/iptv/sessions/other-session', { method: 'DELETE' })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true, released: 'other-session' })
+    expect(concurrencyState.sessions).toHaveLength(0)
+  })
+
+  it('forbids a non-admin session from releasing another user session', async () => {
+    authState.session = { sub: 'plex:42', username: 'Test', role: 'user' }
+    seedSession('other-session', 'plex:other')
+
+    const res = await app.request('/api/iptv/sessions/other-session', { method: 'DELETE' })
+
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: 'forbidden' })
+    expect(concurrencyState.sessions).toHaveLength(1)
+  })
+
+  it('allows a non-admin session to release its own session', async () => {
+    authState.session = { sub: 'plex:42', username: 'Test', role: 'user' }
+    seedSession('own-session', 'plex:42')
+
+    const res = await app.request('/api/iptv/sessions/own-session', { method: 'DELETE' })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true, released: 'own-session' })
+    expect(concurrencyState.sessions).toHaveLength(0)
   })
 })
 

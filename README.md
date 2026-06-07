@@ -94,7 +94,7 @@ distributed server → client at boot. See [DEPLOY.md](./DEPLOY.md).
 - [PRODUCT.md](./PRODUCT.md) — audience, principles, scope.
 - [DESIGN.md](./DESIGN.md) — Impeccable design contract (palette, type, motion).
 - [DEPLOY.md](./DEPLOY.md) — NAS setup and ongoing deploys.
-- [docs/PRODUCTION-READINESS-2026-05-30.md](./docs/PRODUCTION-READINESS-2026-05-30.md) — review ledger.
+- [docs/PRODUCTION-READINESS-2026-05-30.md](./docs/PRODUCTION-READINESS-2026-05-30.md) — historical review ledger; re-verify rows before planning.
 
 ## Roadmap
 

@@ -30,6 +30,8 @@ dist-ssr
 
 # Local tooling
 .claude/
+.autoloop-self/
+.graphify/
 
 # Scratch scripts (underscore-prefixed in scripts/ are local-only)
 scripts/_*
@@ -70,6 +72,11 @@ crates/emerald-contracts-pyo3/*.pyd
 
 # audit artifacts
 .audit_allfiles.txt
+docs/audit-results.json
+docs/PRODUCTION-AUDIT.html
+
+# Local uv resolver output. Do not commit until Docker/CI consume uv.lock.
+recommender/uv.lock
 
 # Offline recsys-eval venv (numpy + sqlite-vec + pydantic); host-specific.
 recommender/.venv-eval/

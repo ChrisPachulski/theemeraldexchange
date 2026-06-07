@@ -170,7 +170,7 @@ iptv.get('/sessions', requireAuth, async (c) => {
 iptv.delete('/sessions/:sessionId', requireAuth, (c) => {
   const sessionId = c.req.param('sessionId')
   const { sub } = userOf(c)
-  const isAdmin = ((c.var as Record<string, unknown>).user as { role?: string } | undefined)?.role === 'admin'
+  const isAdmin = c.get('session').role === 'admin'
   const all = streamConcurrency().list()
   const target = all.find((s) => s.sessionId === sessionId)
   if (!target) return c.json({ error: 'not_found' }, 404)
