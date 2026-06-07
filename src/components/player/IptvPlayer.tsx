@@ -289,6 +289,35 @@ export default function IptvPlayer({
         hls.on(Hls.Events.MANIFEST_PARSED, updateHlsTracks)
         hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, updateHlsTracks)
         hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, updateHlsTracks)
+
+        // Fatal-error recovery. Without this a transient manifest/segment error
+        // — e.g. a transcoder still emitting its first segment (HTTP 503 during
+        // warm-up) — leaves a blank <video> with no feedback. Retry network
+        // errors (reloading the manifest), recover media errors, and only give
+        // up with a visible message after a bounded number of attempts.
+        let netRetries = 0
+        const MAX_NET_RETRIES = 8
+        hls.on(Hls.Events.ERROR, (_evt, data) => {
+          if (cancelled || !data.fatal) return
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+            if (netRetries >= MAX_NET_RETRIES) {
+              setError('Couldn’t start playback. The transcoder may still be warming up — try again in a moment.')
+              hls.destroy()
+              return
+            }
+            netRetries += 1
+            // Backoff a touch so a warm-up 503 has time to resolve.
+            window.setTimeout(() => {
+              if (!cancelled) hls.startLoad()
+            }, Math.min(500 * netRetries, 3000))
+          } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+            hls.recoverMediaError()
+          } else {
+            setError('Playback failed.')
+            hls.destroy()
+          }
+        })
+
         hls.loadSource(grant.url)
         hls.attachMedia(video)
         cleanupEngine = () => hls.destroy()

@@ -184,6 +184,35 @@ media.post('/playback/:kind/:id', async (c) => {
   if (!sid || !handoff.manifestUrl) {
     return c.json({ error: 'transcoder_unavailable' }, 503)
   }
+
+  // Wait for the transcoder to produce its first segment before handing the
+  // manifest URL to the client. ffmpeg needs a moment to emit seg_00000.ts, and
+  // until then the manifest route returns 503. The browser player (hls.js)
+  // fetches the manifest ONCE and does not retry a 503, so returning too early
+  // leaves an empty <video> ("grey rectangle"). Poll the transcoder directly
+  // (the internal principal is shared across services) until the manifest is
+  // ready, capped so a stuck encode can't hang the request. The internal
+  // principal Bearer in `auth` is accepted by the transcoder too.
+  const manifestProbe = `${env.transcoderUrl}${handoff.manifestUrl}`
+  const READY_POLLS = 24 // × 500ms = up to 12s
+  for (let i = 0; i < READY_POLLS; i++) {
+    try {
+      const m = await fetchStreamWithConnectTimeout(
+        manifestProbe,
+        { method: 'GET', headers: auth },
+        LAN_TIMEOUT_MS,
+        'transcoder',
+      )
+      if (m.ok) {
+        const body = await m.text()
+        if (/\.ts(\?|\s|$)/m.test(body)) break // a segment is listed → ready
+      }
+    } catch {
+      // transient — keep polling until the cap
+    }
+    await new Promise((r) => setTimeout(r, 500))
+  }
+
   const token = signMediaToken({
     sub: session.sub,
     rid: mediaSessionResourceId(sid),
