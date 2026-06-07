@@ -121,6 +121,32 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+describe('GET /api/suggestions/:type — ?force=trending in local-recommender mode', () => {
+  it('serves trending and does NOT call the recommender when force=trending', async () => {
+    // The SPA's Recommended ⇄ Trending toggle sends ?force=trending when
+    // the user picks Trending. Even with USE_LOCAL_RECOMMENDER=1 (this
+    // suite's env), the route must honor it — serve TMDB trending and skip
+    // /score entirely. Regression guard for the toggle's backend half:
+    // before this, the recommender block returned first and force=trending
+    // was dead, so there was no way to view trending.
+    const fetchSpy = globalThis.fetch as FetchSpy
+    const r = await app.request('/api/suggestions/movie?force=trending', {
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { source: string; items: Array<{ id: number }> }
+    expect(body.source).toBe('trending')
+    expect(body.items.length).toBeGreaterThan(0)
+
+    // The recommender was never consulted — force=trending short-circuits
+    // above the useLocalRecommender block.
+    const scoreCalls = fetchSpy.mock.calls.filter(([url]) =>
+      String(url).includes('recommender.test/score'),
+    )
+    expect(scoreCalls).toEqual([])
+  })
+})
+
 describe('GET /api/suggestions/:type — recommender fallback', () => {
   it('returns trending and SKIPS postShown when /score throws', async () => {
     const fetchSpy = globalThis.fetch as FetchSpy

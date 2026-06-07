@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react'
 import type { TrendingItem } from '../../lib/hooks/useTrending'
 import type { SuggestionDiag } from '../../lib/hooks/useSuggested'
-import { AiToggle } from './AiToggle'
+import type { SuggestionMode } from '../../lib/hooks/useSuggestionMode'
+import { StripModeToggle } from './StripModeToggle'
 import { FeedbackDots, type DotState } from './FeedbackDots'
 import './TrendingRow.css'
 
@@ -38,12 +39,13 @@ type Props = {
     unavailable?: boolean
   }
   /**
-   * Optional AI on/off toggle anchored to the bottom-right of the
-   * section. When provided, the household can switch between Claude-
-   * backed personalization and free TMDB trending without leaving
-   * the surface. Hide entirely when the caller has no API key set.
+   * Optional Recommended ⇄ Trending toggle anchored to the bottom-right
+   * of the section. When provided, the household can switch between their
+   * personalized picks and TMDB trending without leaving the surface.
+   * Hide entirely when personalization isn't achievable (no local
+   * recommender and no API key) — there's nothing to switch to.
    */
-  ai?: { enabled: boolean; onToggle: () => void }
+  mode?: { value: SuggestionMode; onChange: (next: SuggestionMode) => void }
   /** Fetch error from the suggestions query, if any. Surfaces 4xx/5xx
    * to the user instead of rendering an indistinguishable blank strip. */
   error?: unknown
@@ -211,7 +213,7 @@ export function TrendingRow({
   pendingId,
   label,
   feedback,
-  ai,
+  mode,
   error,
   source,
   diag,
@@ -227,9 +229,9 @@ export function TrendingRow({
           <p className="trending__empty-headline">{headline}</p>
           <p className="trending__empty-hint">{hint}</p>
         </div>
-        {ai && (
+        {mode && (
           <div className="trending__footer">
-            <AiToggle enabled={ai.enabled} onToggle={ai.onToggle} />
+            <StripModeToggle value={mode.value} onChange={mode.onChange} />
           </div>
         )}
       </section>
@@ -240,9 +242,9 @@ export function TrendingRow({
     return (
       <section className="trending" aria-busy="true">
         <h3 className="trending__label trending__label--loading">
-          {ai?.enabled ? 'Finding picks for you' : 'Loading trending'}
+          {mode?.value === 'recommended' ? 'Finding picks for you' : 'Loading trending'}
           <span className="trending__loading-dot" aria-hidden="true" />
-          {ai?.enabled && (
+          {mode?.value === 'recommended' && (
             <span className="trending__loading-hint">takes a few seconds…</span>
           )}
         </h3>
@@ -251,9 +253,9 @@ export function TrendingRow({
             <div key={i} className="trending__card trending__card--skeleton" />
           ))}
         </div>
-        {ai && (
+        {mode && (
           <div className="trending__footer">
-            <AiToggle enabled={ai.enabled} onToggle={ai.onToggle} />
+            <StripModeToggle value={mode.value} onChange={mode.onChange} />
           </div>
         )}
       </section>
@@ -272,7 +274,7 @@ export function TrendingRow({
     const emptyHint =
       describeEmptySource(source, diag) ??
       (onRefresh ? 'No fresh picks this round — refresh to run the recommender again.' : null)
-    if (!ai && !emptyHint && !onRefresh) return null
+    if (!mode && !emptyHint && !onRefresh) return null
     return (
       <section className="trending">
         <StripHeader label={label} onRefresh={onRefresh} refreshing={refreshing} />
@@ -281,9 +283,9 @@ export function TrendingRow({
             <p className="trending__empty-hint">{emptyHint}</p>
           </div>
         )}
-        {ai && (
+        {mode && (
           <div className="trending__footer">
-            <AiToggle enabled={ai.enabled} onToggle={ai.onToggle} />
+            <StripModeToggle value={mode.value} onChange={mode.onChange} />
           </div>
         )}
       </section>
@@ -318,7 +320,7 @@ export function TrendingRow({
   // key" prompt.
   const isRecommenderFallback = diag?.path === 'recommender_fallback_trending'
   const noAiNudge =
-    source === 'trending' && !diag?.reason && !ai && !isRecommenderFallback
+    source === 'trending' && !diag?.reason && !mode && !isRecommenderFallback
       ? 'Add an Anthropic key to unlock picks tailored to your library.'
       : null
   const sourceHint =
@@ -426,9 +428,9 @@ export function TrendingRow({
           )
         })}
       </div>
-      {ai && (
+      {mode && (
         <div className="trending__footer">
-          <AiToggle enabled={ai.enabled} onToggle={ai.onToggle} />
+          <StripModeToggle value={mode.value} onChange={mode.onChange} />
         </div>
       )}
     </section>
