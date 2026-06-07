@@ -104,10 +104,13 @@ export function AddSeriesModal({ series, onClose, onAdded, onError }: Props) {
     mutationFn: (body: Record<string, unknown>) => sonarr.addSeries(body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['sonarr', 'series'] })
-      // Library changed — recompute Discover so the just-added show
-      // doesn't reappear there and Claude's next prompt reflects the
-      // new library state.
-      qc.invalidateQueries({ queryKey: ['suggestions', 'tv'] })
+      // Do NOT invalidate ['suggestions'] here — it force-refetches and
+      // reshuffles the whole strip the moment the user adds a show
+      // ("accept one and the line resets"). The added show already drops
+      // out via the library filter (trendingFiltered excludes
+      // libraryByTmdbForTrending, refreshed by the sonarr invalidation
+      // above); the rest of the lineup stays put. Claude sees the new
+      // library state on the next explicit refresh.
     },
   })
 

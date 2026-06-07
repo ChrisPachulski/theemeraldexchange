@@ -64,10 +64,15 @@ export function AddMovieModal({ movie, onClose, onAdded, onError }: Props) {
     mutationFn: (body: Record<string, unknown>) => radarr.addMovie(body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['radarr', 'movie'] })
-      // Library changed — recompute Discover so the just-added movie
-      // doesn't reappear there and Claude's next prompt reflects the
-      // new library state.
-      qc.invalidateQueries({ queryKey: ['suggestions', 'movie'] })
+      // Do NOT invalidate ['suggestions'] here. That force-refetches the
+      // whole strip (bypassing staleTime) and reshuffles the lineup the
+      // instant the user adds a pick — the repeated "accept one and the
+      // line resets, can't grab the next" complaint. The just-added movie
+      // already drops out of the strip via the library filter
+      // (trendingFiltered excludes libraryByTmdb, which the radarr
+      // invalidation above refreshes), so the card vanishes WITHOUT
+      // disturbing the rest. Claude's next prompt picks up the new library
+      // state on the next explicit refresh.
     },
   })
 
