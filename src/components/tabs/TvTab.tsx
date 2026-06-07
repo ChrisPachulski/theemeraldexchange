@@ -17,7 +17,6 @@ import { useSeriesSearch } from '../../lib/hooks/useSeriesSearch'
 import { useSonarrLibrary } from '../../lib/hooks/useSonarrLibrary'
 import { useSonarrEpisodes } from '../../lib/hooks/useSonarrEpisodes'
 import { useSuggestedTv } from '../../lib/hooks/useSuggested'
-import { useStripAutoRefresh } from '../../lib/hooks/useStripAutoRefresh'
 import { useSuggestionMode } from '../../lib/hooks/useSuggestionMode'
 import { useUserApiKey } from '../../lib/hooks/useUserApiKey'
 import { useLimits } from '../../lib/hooks/useLimits'
@@ -175,15 +174,12 @@ export function TvTab() {
   const refreshSuggestions = useCallback(() => {
     void suggested.refetch()
   }, [suggested])
-  // Auto-run when the whole strip has been judged yes/no: once every
-  // shown card carries a like/dislike, pull a fresh batch. See
-  // useStripAutoRefresh for the loop-safety latch.
-  useStripAutoRefresh(
-    trendingFiltered,
-    (id) => stateFor(id) !== 'unset',
-    suggested.isFetching,
-    refreshSuggestions,
-  )
+  // No auto-refresh on judgement. The strip is only ever replaced by an
+  // explicit refresh (the header button), a dislike draining it to the
+  // low-water mark (useSetFeedback lazy-refill), or a natural remount.
+  // A *like* must NEVER swap the lineup: liking the last unjudged card
+  // used to flip "every card judged" → auto-refetch, yanking the picks
+  // the user just accepted out from under them (the repeated complaint).
   // 'recommender' is the local-model source — also a personalized
   // pick, just from the on-NAS model rather than Claude.
   const src = suggested.data?.source
