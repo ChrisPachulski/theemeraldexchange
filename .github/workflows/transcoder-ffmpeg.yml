@@ -11,9 +11,9 @@
 #
 # HUMAN DECISION CAPTURED HERE
 # Adopting this job is a product/infra call (CI runner minutes + image pull
-# budget). Until it is green in CI, M4 must be read as "state-machine complete,
-# transcode unverified" (see docs/ROADMAP-STATUS.md). See also
-# docs/M4-TRANSCODE-VERIFICATION.md for the full rationale.
+# budget). It proves the real-ffmpeg fixture path in CI; deployed real-library
+# serving and real-client playback are tracked separately in
+# docs/M4-TRANSCODE-VERIFICATION.md and docs/ROADMAP-STATUS.md.
 
 name: transcoder-ffmpeg
 
