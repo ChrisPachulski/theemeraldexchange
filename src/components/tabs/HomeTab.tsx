@@ -1,13 +1,17 @@
 import type { Route } from '../../lib/router'
 import { useNavTransition } from '../../lib/navTransition'
 import { useAuth } from '../../lib/auth'
+import { useLimits } from '../../lib/hooks/useLimits'
 import './HomeTab.css'
 
-type Entry = { route: Route; label: string; adminOnly?: boolean }
+type Entry = { route: Route; label: string; adminOnly?: boolean; media?: boolean }
 
 const ENTRIES: Entry[] = [
   { route: 'tv', label: 'TV Shows' },
   { route: 'movies', label: 'Movies' },
+  // Local library browser + in-browser player. `media: true` hides it when the
+  // backend boots without media-core (mediaEnabled=false from /api/limits).
+  { route: 'media', label: 'Media', media: true },
   { route: 'live', label: 'Live' },
   { route: 'downloads', label: 'Downloader' },
   { route: 'users', label: 'Users', adminOnly: true },
@@ -60,7 +64,11 @@ function ChevronDown() {
 export function HomeTab() {
   const { transitionTo } = useNavTransition()
   const { isAdmin } = useAuth()
-  const entries = ENTRIES.filter((e) => !e.adminOnly || isAdmin)
+  const limits = useLimits()
+  const mediaEnabled = limits.data?.mediaEnabled !== false
+  const entries = ENTRIES.filter(
+    (e) => (!e.adminOnly || isAdmin) && (!e.media || mediaEnabled),
+  )
 
   return (
     <section className="home" aria-label="Emerald Exchange home">
