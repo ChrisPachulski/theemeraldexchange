@@ -242,8 +242,8 @@ Add a compact capability field (e.g. `ent: Vec<String>` or a `plan` enum) to the
 - Multi-user, downloads/offline (new media-core route), IPTV DVR (web), multi-server.
 
 **Security hardening (parallel, before monetized launch — from audit, not blockers but close-before-paid):**
-- Flip internal-principal mode default from `off` (no-op) to `enforce` for media-core/transcoder, or fail-closed when a secret is present but mode is off (`crates/media-core/src/config.rs:74`, `crates/media-core/src/auth.rs:38-41`, `crates/transcoder/src/routes.rs:111-115`). Today only loopback/docker binding behind cloudflared protects these.
-- Add non-root `USER` to the three Dockerfiles (`Dockerfile`, `crates/media-core/Dockerfile`, `crates/transcoder/Dockerfile` — only `recommender/Dockerfile:71` drops privilege today). ffmpeg/ffprobe RCE would run as root.
+- **Closed 2026-06-07:** media-core/transcoder compose defaults now run `MEDIA_INTERNAL_PRINCIPAL_MODE=enforce` and fail closed without `INTERNAL_PRINCIPAL_SECRET`; prod was verified in enforce mode. Keep this invariant before charging money.
+- **Partially closed:** media-core and transcoder now drop to non-root users (`mediacore`/`transcoder`) and compose adds `no-new-privileges`, `cap_drop: ALL`, read-only roots, and loopback-only published ports. The remaining container hardening gap is the Hono backend `Dockerfile`, which still has no runtime `USER`.
 - Resolve-then-recheck the SSRF guard (DNS-rebinding hole, `server/services/ssrfGuard.ts:62-71`).
 - Add a per-principal rate limiter (no global limiter today, `server/app.ts:36-66`; auth limiter trusts spoofable `cf-connecting-ip`).
 
@@ -268,5 +268,5 @@ Six genuine choices, each with a recommended default. Everything else is executi
 5. **Pricing.** Subscription and lifetime numbers.
    **Recommended default:** sub ~$30-40/yr (or ~$3-5/mo), lifetime ~$100-150 — deliberately under Plex's $749.99, in the Infuse/Emby range, timed to the July 1 2026 Plex hike.
 
-6. **Pre-paid security posture.** Ship internal-principal default `off` and root containers, or close them before charging money.
-   **Recommended default:** close both before monetized launch — flip internal-principal to `enforce`/fail-closed and add non-root `USER` to the three Dockerfiles. Cheap insurance for a paid product; an exposed-port mistake by a self-hoster = unauthenticated media exfiltration today.
+6. **Pre-paid security posture.** Keep the now-enforced internal-principal defaults, and finish container hardening by dropping root in the Hono backend image.
+   **Recommended default:** treat enforce/fail-closed internal-principal as non-negotiable for paid builds; add a non-root runtime `USER` to the backend Dockerfile before monetized launch.

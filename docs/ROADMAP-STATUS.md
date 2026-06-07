@@ -67,7 +67,7 @@ The backend half of the project is real and largely shipped: M1 (IPTV viewer), M
 
 **REMAINING**
 - Crit 2 UNPROVEN: no 100-file <5s perf/fixture test exists — only a doc-comment target.
-- Crit 3 UNPROVEN: ≥95% match accuracy is asserted, not benchmarked. The matcher now scores candidates by stopword-aware title similarity and rejects zero-overlap hits (no longer blind `results.first()`), but no accuracy benchmark/eval exists to falsify the bar; a language filter is still absent.
+- Crit 3 UNPROVEN: >=95% match accuracy is asserted, not benchmarked. The matcher now scores candidates by stopword-aware title similarity and rejects zero-overlap hits, but no accuracy benchmark/eval exists to falsify the bar; a language filter is still absent.
 - Crit 4 cross-platform UNPROVEN: backend grant correct but no client exercises it; web `mediaApi` exposes only movies/shows/episodes/scan — no grant/stream/watch consumer.
 - Crit 5 NOT end-to-end: zero clients consume `/api/media/watch`; web position/grant wiring is IPTV-only. Same-sub web↔tvOS sync structurally possible, never demonstrated.
 
@@ -90,7 +90,7 @@ The backend half of the project is real and largely shipped: M1 (IPTV viewer), M
 
 **BLOCKERS**
 - Apple-Silicon perf criteria blocked on deployment target (NAS = x86 no-VideoToolbox) + no AS transcode host.
-- End-to-end proof (crit 1/2/3/4/6) blocked on running real library files under the deployed service and capturing playback, CPU, and latency evidence — not started.
+- Remaining M4 proof is now narrower: real-library serving is proven, but real client playback, stress/bench CPU evidence, long-running deployed child cleanup, and seek-latency remediation are still open.
 - No stress harness; building/running one on NAS hardware is the gating non-optional step.
 
 ### M5 — Native clients for media server — not-started (3%)
@@ -103,7 +103,7 @@ The backend half of the project is real and largely shipped: M1 (IPTV viewer), M
 
 **BLOCKERS**
 - Xcode not installed; Apple Developer membership pending — neither the M2 EmeraldKit foundation nor the M5 extension can be built.
-- Hard sequencing: M5 needs M3 (live) AND M4 (deployed but not yet proven by a real non-direct-play transcode+play). M2 (the EmeraldKit SDK M5 extends) is unbuilt — though UI can develop in parallel against a mocked media-core API.
+- Hard sequencing: M5 needs M3 (live) AND M4's served-HLS proof to become a real player path. M4 can now transcode and serve a real non-direct-play file, but no web/native client consumes that stream yet. M2 (the EmeraldKit SDK M5 extends) is unbuilt — though UI can develop in parallel against a mocked media-core API.
 
 ### M6 — Plex-Pass equivalent — not-started (3%)
 **DONE**
@@ -122,11 +122,11 @@ The backend half of the project is real and largely shipped: M1 (IPTV viewer), M
 The project splits cleanly into a **buildable-now backend track** and an **Apple-blocked client track**. The Apple gate is the dominant constraint.
 
 **Buildable now (no Apple dependency):**
-1. **Prove M4 deployed playback end-to-end.** The real-ffmpeg fixture test proves argv/playable-HLS generation; the remaining proof is a real non-direct-play library file under the deployed transcoder with one captured transcode+play. This is the highest-leverage unblock and remains a hard prerequisite for M5 playback.
-2. **Build the M4 stress/bench harness on NAS hardware** (non-optional per spec) and capture CPU/latency for crit 2/3/6.
-3. **Add M3 measurement harnesses:** 100-file <5s scan-timing fixture (crit 2) and a TMDB match-accuracy eval with title-similarity scoring/confidence threshold (crit 3). Both bars are currently unfalsifiable.
-4. **Wire the web SPA media-core consumer** (grant/stream/watch in `mediaApi`) so M3 crit 4/5 can be demonstrated on at least one client without waiting for Apple.
-5. **Verify deployment config:** prove production media-core/transcoder run with internal-principal enforcement, or make enforce mode the compose default.
+1. **Exercise a real player against the M4 path.** The deployed service now transcodes and serves a real non-direct-play file as validated HLS; the remaining proof is web/native playback consuming that stream through the media-core grant path.
+2. **Build the M4 stress/bench harness on NAS hardware** (non-optional per spec) and capture CPU/latency for crit 2/3/6. Seek currently measures ~23-27s after `?to=1800`, so the old "<2s" target is known failing.
+3. **Add M3 measurement harnesses:** 100-file <5s scan-timing fixture (crit 2) and a TMDB match-accuracy eval against the title-scoring matcher (crit 3). Both bars are still unfalsifiable without fixtures.
+4. **Wire the web SPA media-core consumer** (grant/stream/watch in `mediaApi`) so M3 crit 4/5 and the M4 real-player step can be demonstrated without waiting for Apple.
+5. **Unblock `/media/Movies` for service uids** so media-core/transcoder can read the full library, not only the world-traversable `tv_shows` share.
 6. **M5 UI in parallel against a mocked media-core API** — the only M5 work possible pre-Apple, per spec.
 
 **Blocked on the Apple gate (Xcode install + Developer Program activation + sibling `theemeraldexchange-apple/` repo):**

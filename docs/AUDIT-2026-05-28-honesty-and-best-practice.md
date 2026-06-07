@@ -4,6 +4,11 @@
 **Branch audited:** `m3-media-core` @ `a8046ec` (main worktree — confirmed to contain `crates/media-core`)
 **Auditor stance:** blunt, no-hedge. Every number below was re-executed on this exact commit.
 
+> **Historical snapshot:** this audit describes commit `a8046ec` on
+> 2026-05-28. It is useful evidence of what was wrong then, not current status.
+> Current source-of-truth planning lives in `TODO.md` and
+> `docs/ROADMAP-STATUS.md`; re-verify any row here before treating it as open.
+
 > Process note: an earlier ground-truth pass ran on the wrong worktree (`36465cf`, which has **no** media-core). That run's "773 passed", "no media-core", and "Python = 0 collected" numbers describe a **different commit** and do not apply to this branch. This report supersedes it with commands re-run on `a8046ec`.
 
 ---

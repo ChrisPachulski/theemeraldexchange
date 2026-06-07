@@ -1,9 +1,10 @@
 # theemeraldexchange — Production-Readiness Review
 
 > **Status note, 2026-06-07:** this file is a historical review ledger, not the
-> authoritative current project state. Several rows below were closed by later
-> code/CI changes and have been marked accordingly. Re-verify any remaining open
-> row against the current tree before using it for planning.
+> authoritative current project state. It preserves the 2026-05-30 findings as
+> reviewed at that time; some rows below are now stale or closed by later code/CI
+> changes even when the row text still says open. Use `TODO.md`,
+> `docs/ROADMAP-STATUS.md`, and a fresh grep/test pass for current planning.
 
 **Date:** 2026-05-30  
 **Method:** 12-dimension read-only review (auth, backend, IPTV, data, frontend, Rust, Python, infra, observability, testing, deps, prior-audit follow-up), each finding adversarially re-verified against the live code (refute-by-default).  
@@ -39,7 +40,7 @@ All CI gates verified green from scratch after the fixes (lint, tsc×2, vitest, 
 | # | Status | Commit | Finding | Location |
 |---|--------|--------|---------|----------|
 | 1 | ✅ fixed | f73f7be | CI rust job reports green while `cargo clippy -D warnings` actually fails (8 errors) — gate is advisory on `ma | `.github/workflows/ci.yml rust job, `cargo clippy` step lines` |
-| 2 | ⬜ open | — | media-core internal-principal auth ships OFF by default on a 0.0.0.0 listener in production compose | `docker-compose.yml media-core service: MEDIA_CORE_HOST line ` |
+| 2 | ✅ fixed | post-ledger | media-core/transcoder internal-principal defaults now enforce/fail-closed in production compose | `docker-compose.yml media-core/transcoder MEDIA_INTERNAL_PRINCIPAL_MODE` |
 | 3 | ✅ fixed | post-ledger | CI now validates compose config, builds the backend image, and builds sidecar images on `main` | `.github/workflows/ci.yml docker-build job` |
 | 4 | ⬜ open | — | Suggestions route can issue ~30+ concurrent unbounded TMDB /search lookups per request (rate-limit self-DoS) | `server/routes/suggestions.ts validate(), lines 2362-2366 (Pr` |
 | 5 | ✅ fixed | c3871be | iptv.db connection is missing busy_timeout pragma — concurrent reader/writer or backup gets SQLITE_BUSY thrown | `server/services/iptvDb.ts openIptvDb, lines 43-45` |
@@ -47,7 +48,7 @@ All CI gates verified green from scratch after the fixes (lint, tsc×2, vitest, 
 | 7 | ✅ fixed | post-ledger | CI now runs npm audit, cargo audit, and pip-audit in the `audit` job | `.github/workflows/ci.yml audit job` |
 | 8 | ⬜ open | — | GPL-3.0 ffmpeg/libx264 bundled in every shipped image with no source offer, attribution, or THIRD-PARTY-LICENS | `Dockerfile Dockerfile:91; crates/media-core/Dockerfile:30; c` |
 | 9 | ⬜ open | — | Sidecar Dockerfile base images are tag-only (unpinned) while the main image is digest-pinned — non-reproducibl | `recommender/Dockerfile recommender/Dockerfile:16 & :42; crat` |
-| 10 | ⬜ open | — | Recommender Python deps have no lockfile and only floating `>=` ranges — non-reproducible, unpinned third-part | `recommender/pyproject.toml recommender/pyproject.toml:5-18 (` |
+| 10 | ✅ fixed | post-ledger | Recommender Docker image now installs from committed `requirements.lock`; CI audits that shipped lockfile | `recommender/requirements.lock`; `.github/workflows/ci.yml audit job` |
 | 11 | ⬜ open | — | Grant failures other than 429 produce a silent unhandled promise rejection — no error UI for the user | `src/components/tabs/LiveTab.tsx playChannel (lines 93-110) /` |
 | 12 | ⬜ open | — | Single root-only error boundary: one tab's lazy-chunk failure tears down the entire authenticated SPA | `src/App.tsx Shell <Suspense> (lines 84-86), TABS lazy import` |
 | 13 | ⬜ open | — | Direct-docker deploy fallback ships the backend without any of the compose security hardening | `scripts/deploy-nas.sh lines 217-231 (docker run fallback bra` |
@@ -90,7 +91,7 @@ All CI gates verified green from scratch after the fixes (lint, tsc×2, vitest, 
 | 19 | ⬜ open | — | VodTab/IptvSeriesTab favorite toggles render no error state when the favorites store is unreachable | `src/components/tabs/VodTab.tsx fav toggle button onClick (li` |
 | 20 | ⬜ open | — | Dead TabPlaceholder component ships a console.log probe into the production bundle | `src/components/tabs/TabPlaceholder.tsx probe.onConfirm conso` |
 | 21 | ⬜ open | — | Sidecar Dockerfiles use floating base tags while the backend is digest-pinned — non-reproducible builds and un | `crates/transcoder/Dockerfile transcoder/Dockerfile lines 13,` |
-| 22 | ⬜ open | — | real-ffmpeg verification gate does not run when transcoder's dependencies change | `.github/workflows/transcoder-ffmpeg.yml lines 20-28 (path fi` |
+| 22 | ✅ fixed | post-ledger | real-ffmpeg verification gate now triggers on transcoder plus media-core, emerald-contracts, Cargo.toml, and Cargo.lock changes | `.github/workflows/transcoder-ffmpeg.yml paths` |
 | 23 | ✅ fixed | post-ledger | CI now runs npm audit, cargo audit, and pip-audit in the `audit` job | `.github/workflows/ci.yml audit job` |
 | 24 | ⬜ open | — | Attacker-controlled 'ext' path segment is interpolated unencoded into the upstream provider URL | `server/routes/iptv.ts /stream/vod/:streamId/:ext (1025-1040)` |
 | 25 | ⬜ open | — | Non-constant-time comparison of the recommender export secret | `server/routes/iptv.ts /export/recommender, line 1190` |

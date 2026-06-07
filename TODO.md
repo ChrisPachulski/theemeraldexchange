@@ -46,11 +46,10 @@ now; it is the only thing the Apple gate does not block.
       `/api/media/*`** — crit 4/5 can't be demonstrated until one does. This is
       the pre-Apple way to prove M3.
 - [ ] **Add M3 measurement harnesses.** 100-file `<5s` scan-timing fixture
-      (crit 2) and a TMDB match-accuracy eval (crit 3). The matcher no longer
-      blindly takes `results.first()` — it now scores candidates by stopword-aware
-      title similarity and rejects zero-overlap hits (crates/media-core
-      `tmdb.rs`) — but the accuracy eval that would actually falsify crit 3 still
-      doesn't exist.
+      (crit 2) and a TMDB match-accuracy eval (crit 3). The matcher now scores
+      candidates by stopword-aware title similarity and rejects zero-overlap hits
+      (crates/media-core `tmdb.rs`), but the accuracy eval that would actually
+      falsify crit 3 still doesn't exist.
 
 ## P1 — Close the contract & infra loose ends
 

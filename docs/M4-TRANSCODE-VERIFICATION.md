@@ -99,7 +99,7 @@ It does **not** certify:
 - **CI budget / runner image.** The gate is committed but inert until GitHub
   Actions is enabled for this repo. Adopting it costs runner minutes + an image
   pull on every transcoder change. That is a product/infra call. Until the gate
-  is green in CI, the deployed playback gap above stands.
+  is green in CI, CI does not independently prove the real-ffmpeg path.
 - **Fixture fidelity.** The committed test uses a synthetic `testsrc` fixture
   (no binary media in-repo). A higher-fidelity matrix (HDR tonemap, PGS burn-in,
   HEVC->H.264, DTS->AAC) needs real sample files and is the multi-month long
