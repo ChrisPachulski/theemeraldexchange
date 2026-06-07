@@ -1,8 +1,51 @@
 # M4 Transcoder — Verification Status & Real-ffmpeg Gate
 
-**Status label (authoritative): M4 transcoder has fixture-level real-ffmpeg proof, but deployed real-library playback remains unverified.**
+**Status label (authoritative): deployed real-library transcode+play is now PROVEN end-to-end on the NAS (2026-06-07) — see the proof section below. Two real deployment bugs were found and one is fixed; the other is a host share-permission issue outside the transcoder.**
 
 Do not read the green default `cargo test -p transcoder` run as "deployed playback works."
+
+## Deployed real-library proof (2026-06-07)
+
+The deployed transcoder was driven against a **real library file** through its
+**authenticated (enforce-mode) HTTP surface** — not a fixture, not a stub. A
+minted internal-principal token (`hkdf_internal_principal` + `internal_principal_encrypt`,
+kid `internal-v1`) was POSTed to `POST /api/transcode/grant` with the real probe
+row media-core stores; the resulting HLS session was played and validated.
+
+File: `/media/tv_shows/3 Body Problem/Season 1/…S01E01…x265…mp4` — **HEVC 1080p, mov/mp4 container**.
+
+| Measurement | Result |
+|---|---|
+| Plan | `EncodeH264` (HEVC→H.264) + audio `Copy`, reason "container mov not supported by client" |
+| Time to first segment | **2.6 s** |
+| Resource cost (mid-transcode) | **CPU ~300–330%** (libx264, ~3 cores of the 3.0 cap), **mem ~520 MiB / 3 GiB** |
+| Served segment | real **4.3 MB** `.ts` over the authed path |
+| Seek (`?to=1800`) | first post-seek segment in **~23–27 s** (kill+respawn+re-encode) |
+| Output validation (`ffprobe`) | **video h264 High, 1920×1080, yuv420p (8-bit SDR), bt709**; **audio aac copy, 48 kHz 6ch** |
+
+This proves the full deployed path: auth → plan → real ffmpeg session → HLS
+manifest + segment serving → seek lifecycle → valid playable H.264/AAC output.
+
+### Two deployment bugs found (the reason "unverified" mattered)
+
+1. **`/scratch` tmpfs was not writable by the container uid → every real
+   transcode died with `failed to prepare session: Permission denied`.** Health
+   checks and unit tests never write `/scratch`, so this was invisible. Root
+   cause: the compose `tmpfs: /scratch:size=2g` mount masks the image's `chown`,
+   and a tmpfs mount *with options* defaults to `root:root 0755` (not the
+   container user — the transcoder Dockerfile comment asserting otherwise was
+   wrong). **FIXED:** compose now mounts `/scratch:size=2g,mode=1777` (matches
+   `/tmp`); applied on the NAS and re-verified on a fresh container with no
+   manual intervention. Dockerfile comment corrected.
+
+2. **The hardened service uids cannot read `/media/Movies`.** That host dir is
+   `drwx------ uid 99` (0700, owner-only), so neither media-core (uid 10002) nor
+   transcoder (uid 10003) can read anything under Movies — only `tv_shows`
+   (0755) is reachable. This is a **host share-permission issue, not a
+   transcoder bug** (it reproduces identically for media-core). It needs an ops
+   decision — loosen the Movies share to be group/world-traversable, or run the
+   media services as the media-owning uid — and is flagged separately, not
+   silently changed.
 
 ## What the default test suite actually proves
 
