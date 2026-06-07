@@ -52,10 +52,13 @@ ENV TRANSCODER_TMP_DIR=/scratch
 
 EXPOSE 8003
 
-# Drop root (audit 9-0). ffmpeg writes only to /scratch (chowned above) and
-# reads the library via the read-only bind mount; no root needed at runtime.
-# NOTE: the compose tmpfs mount for /scratch must allow this uid to write —
-# tmpfs defaults to the container user, so USER below is sufficient.
+# Drop root (audit 9-0). ffmpeg writes only to /scratch and reads the library
+# via the read-only bind mount; no root needed at runtime.
+# CAUTION: this `chown` of /scratch is MASKED at runtime when compose mounts a
+# tmpfs over /scratch. A tmpfs mount with options (size=) defaults to root:root
+# 0755, NOT this uid — so the compose tmpfs MUST set `mode=1777` or the
+# transcoder cannot create a session dir (EACCES on every real transcode). The
+# image chown only matters when /scratch is NOT a tmpfs (e.g. local `cargo run`).
 USER transcoder
 
 # Liveness/readiness probe (audit 9-0/9-1). /health is public (no auth).

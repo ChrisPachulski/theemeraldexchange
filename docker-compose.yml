@@ -285,10 +285,15 @@ services:
       MEDIA_CORE_PORT: "8002"
       MEDIA_DB_PATH: "/data/media.db"
       MEDIA_LIBRARY_PATHS: "${MEDIA_LIBRARY_PATHS:-/media}"
-      # Internal-principal verification (contract §4), same posture knobs as
-      # the recommender. Secret MUST match the backend's INTERNAL_PRINCIPAL_SECRET.
+      # Internal-principal verification (contract §4), same posture knobs AND
+      # default as the recommender: enforce (fail-closed). The receiver verifies
+      # the server-minted caller identity rather than trusting a spoofable body
+      # sub. config.rs fail-fasts at boot if the secret is missing, so a deploy
+      # that forgets INTERNAL_PRINCIPAL_SECRET refuses to start rather than
+      # silently running unauthenticated. Secret MUST match the backend's value.
+      # Set the mode to log/off only to deliberately walk back during a soak.
       INTERNAL_PRINCIPAL_SECRET: "${INTERNAL_PRINCIPAL_SECRET:-}"
-      MEDIA_INTERNAL_PRINCIPAL_MODE: "${MEDIA_INTERNAL_PRINCIPAL_MODE:-off}"
+      MEDIA_INTERNAL_PRINCIPAL_MODE: "${MEDIA_INTERNAL_PRINCIPAL_MODE:-enforce}"
       SERVER_ID: "${PLEX_SERVER_ID:-}"
       TMDB_API_KEY: "${TMDB_API_KEY:-}"
       # M4 handoff (§4.x). When set, media-core proxies the transcode-required
@@ -354,8 +359,17 @@ services:
     # Sibling key to volumes:/environment: — not nested under volumes:.
     # /tmp added (audit 9-4) so the read_only root fs still has a writable
     # scratch path for any transient ffmpeg/runtime writes outside /scratch.
+    #
+    # mode=1777 is REQUIRED: a tmpfs mount masks the image's `chown` of /scratch
+    # and, when ANY tmpfs option is given (size=), Docker defaults the mount to
+    # root:root 0755 — NOT the container user. Without an explicit mode the
+    # non-root `transcoder` uid (10003) cannot create a session dir and every
+    # real transcode dies with "failed to prepare session: Permission denied".
+    # (Health checks and unit tests never hit this — they don't write /scratch.)
+    # 1777 = world-writable + sticky, matching /tmp; the container is single-uid
+    # and isolated, so this is the scratch-dir convention, not a privilege grant.
     tmpfs:
-      - /scratch:size=2g
+      - /scratch:size=2g,mode=1777
       - /tmp
     environment:
       TRANSCODER_HOST: "0.0.0.0"
@@ -368,11 +382,12 @@ services:
       # Concurrency caps (§4.4/§4.5). Defaults match concurrency.rs (4 / 1).
       MAX_CONCURRENT_TRANSCODES: "${MAX_CONCURRENT_TRANSCODES:-4}"
       MAX_CONCURRENT_CPU_TRANSCODES: "${MAX_CONCURRENT_CPU_TRANSCODES:-1}"
-      # Internal-principal verification (contract §4), SAME knobs as media-core.
-      # Secret MUST match the backend's INTERNAL_PRINCIPAL_SECRET. Enforce mode
-      # boot-fails without the secret, matching media-core's posture.
+      # Internal-principal verification (contract §4), SAME knobs AND default as
+      # media-core: enforce (fail-closed). Boot-fails without the secret, so a
+      # deploy that forgets INTERNAL_PRINCIPAL_SECRET refuses to start rather
+      # than running unauthenticated. Secret MUST match the backend's value.
       INTERNAL_PRINCIPAL_SECRET: "${INTERNAL_PRINCIPAL_SECRET:-}"
-      MEDIA_INTERNAL_PRINCIPAL_MODE: "${MEDIA_INTERNAL_PRINCIPAL_MODE:-off}"
+      MEDIA_INTERNAL_PRINCIPAL_MODE: "${MEDIA_INTERNAL_PRINCIPAL_MODE:-enforce}"
       RUST_LOG: "${TRANSCODER_LOG:-transcoder=info,tower_http=info}"
 
   cloudflared:
