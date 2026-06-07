@@ -253,15 +253,15 @@ jobs:
       # Format check first — fastest signal.
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
-        # Allow this to soft-fail until we wire a pre-commit hook;
-        # the actual correctness gate is the test step below.
-        continue-on-error: true
+        # Hard gate: the workspace is fmt-clean, so a fmt drift is now a real
+        # failure (no more advisory soft-fail). Run `cargo fmt --all` locally
+        # before pushing.
 
       - name: cargo clippy
         # Gating: removed continue-on-error. emerald-contracts is the canonical
         # cross-language crypto crate (token/JWE/HMAC/HKDF) where clippy catches
         # real soundness issues; an advisory lint never enforces the
-        # deny-warnings intent. fmt above stays advisory (cosmetic).
+        # deny-warnings intent. fmt above is now a hard gate too.
         run: cargo clippy --all-targets --workspace -- -D warnings
 
       # emerald-contracts-pyo3 uses pyo3's extension-module feature,
