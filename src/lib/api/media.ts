@@ -159,6 +159,11 @@ export type PlaybackCaps = {
   hdr: boolean
 }
 
+type PlaybackRequest = PlaybackCaps & {
+  /** Optional resume offset. The backend forwards this to the HLS transcoder. */
+  start_secs?: number
+}
+
 /** What the backend hands back: a tokenised URL the <video>/hls.js player can
  *  load cross-origin, plus playback metadata. Mirrors the IPTV StreamGrant
  *  ({ delivery, url }) so the shared IptvPlayer consumes it directly. */
@@ -372,8 +377,18 @@ export const mediaApi = {
   scan: () => post<ScanResponse, Record<string, never>>('/scan', {}),
 
   /** Request a playback grant. Returns a tokenised URL the player loads. */
-  playback: (kind: PlayableKind, id: number, caps: PlaybackCaps = browserCaps()) =>
-    post<RawPlaybackGrant, PlaybackCaps>(`/playback/${kind}/${id}`, caps).then(absolutizeGrant),
+  playback: (
+    kind: PlayableKind,
+    id: number,
+    caps: PlaybackCaps = browserCaps(),
+    startPositionSecs?: number,
+  ) => {
+    const body: PlaybackRequest = { ...caps }
+    if (startPositionSecs != null && Number.isFinite(startPositionSecs) && startPositionSecs > 0) {
+      body.start_secs = Math.floor(startPositionSecs)
+    }
+    return post<RawPlaybackGrant, PlaybackRequest>(`/playback/${kind}/${id}`, body).then(absolutizeGrant)
+  },
 
   /** The current user's watch-progress rows. */
   watch: (req?: RequestOpts) =>

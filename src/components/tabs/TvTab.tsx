@@ -22,7 +22,7 @@ import { useUserApiKey } from '../../lib/hooks/useUserApiKey'
 import { useLimits } from '../../lib/hooks/useLimits'
 import { useFeedback, useSetFeedback } from '../../lib/hooks/useUserFeedback'
 import { usePlexLinks } from '../../lib/hooks/usePlexLinks'
-import { useLocalShowIndex } from '../../lib/hooks/useMediaLibrary'
+import { resumePosition, useLocalShowIndex, useMediaWatch } from '../../lib/hooks/useMediaLibrary'
 import { MediaPlayer } from '../media/MediaPlayer'
 import { EpisodePicker } from '../media/EpisodePicker'
 import type { DotState } from '../search/FeedbackDots'
@@ -119,7 +119,11 @@ export function TvTab() {
   const [toast, setToast] = useState<string | null>(null)
   // In-browser playback of a locally-available show: pick an episode, then play.
   const [pickShow, setPickShow] = useState<{ id: number; title: string } | null>(null)
-  const [playingEpisode, setPlayingEpisode] = useState<{ id: number; title: string } | null>(null)
+  const [playingEpisode, setPlayingEpisode] = useState<{
+    id: number
+    title: string
+    startPositionSecs?: number
+  } | null>(null)
 
   const cast = useCast({
     type: 'tv',
@@ -139,6 +143,7 @@ export function TvTab() {
   // modal can offer in-browser episode playback. Gated on mediaEnabled.
   const mediaEnabled = limits.data?.mediaEnabled !== false
   const localShowIdx = useLocalShowIndex(mediaEnabled)
+  const mediaWatch = useMediaWatch(mediaEnabled)
   const localShowId =
     viewing && typeof viewing.tmdbId === 'number'
       ? localShowIdx.data?.get(viewing.tmdbId)
@@ -534,8 +539,9 @@ export function TvTab() {
           showTitle={pickShow.title}
           onClose={() => setPickShow(null)}
           onPlay={(ep, label) => {
+            const startPositionSecs = resumePosition(mediaWatch.data?.get(`episode:${ep.id}`))
             setPickShow(null)
-            setPlayingEpisode({ id: ep.id, title: label })
+            setPlayingEpisode({ id: ep.id, title: label, startPositionSecs })
           }}
         />
       )}
@@ -545,6 +551,7 @@ export function TvTab() {
           kind="episode"
           id={playingEpisode.id}
           title={playingEpisode.title}
+          startPositionSecs={playingEpisode.startPositionSecs}
           onClose={() => setPlayingEpisode(null)}
         />
       )}

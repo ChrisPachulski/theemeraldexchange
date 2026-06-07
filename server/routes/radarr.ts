@@ -587,12 +587,24 @@ radarr.post('/api/v3/movie', radarrMutateLimit, async (c) => {
           // avoids the dead-end 424 on titles that simply have no clean
           // release right now.
           const monitored = await setMovieMonitored(created, true)
+          if (!monitored.ok) {
+            return c.json(
+              {
+                error: 'monitor_enable_failed',
+                status: monitored.status || undefined,
+                phase: grab.status,
+                scanned: grab.scanned,
+                movie: created,
+              },
+              502,
+            )
+          }
           return c.json(
             {
               status: 'monitoring',
               phase: grab.status,
               scanned: grab.scanned,
-              monitored: monitored.ok,
+              monitored: true,
               movie: created,
             },
             200,

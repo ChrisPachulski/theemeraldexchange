@@ -276,7 +276,7 @@ describe('media playback grant', () => {
     const res = await media.request('/playback/episode/99', {
       method: 'POST',
       headers: { host: 'localhost', 'content-type': 'application/json' },
-      body: '{}',
+      body: JSON.stringify({ start_secs: 95.8 }),
     })
 
     expect(res.status).toBe(200)
@@ -294,6 +294,7 @@ describe('media playback grant', () => {
     expect(body.durationSecs).toBe(5400)
     // Second call hit the media-core /stream handoff with the caps query.
     expect(String(mockFetch.mock.calls[1][0])).toContain('/api/media/stream/episode/99?')
+    expect(String(mockFetch.mock.calls[1][0])).toContain('start_secs=95')
   })
 
   it('propagates a media-core 404 as 404', async () => {

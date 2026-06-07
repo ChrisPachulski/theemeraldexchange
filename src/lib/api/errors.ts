@@ -84,6 +84,10 @@ export async function throwApiError(res: Response, scope: string): Promise<never
     message =
       `Couldn't finish ${phase} a release for this title — Radarr returned an error, so it wasn't added. ` +
       `Try again in a moment.`
+  } else if (code === 'monitor_enable_failed') {
+    message =
+      `The title was added, but Radarr couldn't enable monitoring for future releases. ` +
+      `Open Radarr to enable monitoring, or ask an admin to check the Radarr API.`
   } else if (typeof data.message === 'string') {
     message = data.message
   }

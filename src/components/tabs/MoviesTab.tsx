@@ -21,7 +21,7 @@ import { useUserApiKey } from '../../lib/hooks/useUserApiKey'
 import { useLimits } from '../../lib/hooks/useLimits'
 import { useFeedback, useSetFeedback } from '../../lib/hooks/useUserFeedback'
 import { usePlexLinks } from '../../lib/hooks/usePlexLinks'
-import { useLocalMovieIndex } from '../../lib/hooks/useMediaLibrary'
+import { resumePosition, useLocalMovieIndex, useMediaWatch } from '../../lib/hooks/useMediaLibrary'
 import { MediaPlayer } from '../media/MediaPlayer'
 import type { DotState } from '../search/FeedbackDots'
 import { TrendingRow } from '../search/TrendingRow'
@@ -128,7 +128,11 @@ export function MoviesTab() {
   const [viewing, setViewing] = useState<MovieSearchResult | Movie | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   // In-browser playback of a locally-available title (media-core).
-  const [playingLocal, setPlayingLocal] = useState<{ id: number; title: string } | null>(null)
+  const [playingLocal, setPlayingLocal] = useState<{
+    id: number
+    title: string
+    startPositionSecs?: number
+  } | null>(null)
 
   const cast = useCast({
     type: 'movie',
@@ -148,6 +152,7 @@ export function MoviesTab() {
   // offer in-browser playback. Gated on mediaEnabled (no media-core → no fetch).
   const mediaEnabled = limits.data?.mediaEnabled !== false
   const localMovieIdx = useLocalMovieIndex(mediaEnabled)
+  const mediaWatch = useMediaWatch(mediaEnabled)
   const localMovieId =
     viewing && typeof viewing.tmdbId === 'number'
       ? localMovieIdx.data?.get(viewing.tmdbId)
@@ -484,8 +489,9 @@ export function MoviesTab() {
           viewing && localMovieId != null
             ? () => {
                 const t = viewing.title
+                const startPositionSecs = resumePosition(mediaWatch.data?.get(`movie:${localMovieId}`))
                 setViewing(null)
-                setPlayingLocal({ id: localMovieId, title: t })
+                setPlayingLocal({ id: localMovieId, title: t, startPositionSecs })
               }
             : undefined
         }
@@ -512,6 +518,7 @@ export function MoviesTab() {
           kind="movie"
           id={playingLocal.id}
           title={playingLocal.title}
+          startPositionSecs={playingLocal.startPositionSecs}
           onClose={() => setPlayingLocal(null)}
         />
       )}
