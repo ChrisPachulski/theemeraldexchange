@@ -12,15 +12,19 @@
 //!   tone-map flag when the source is HDR and the client is SDR.
 //! * audio — copy when the codec is accepted; otherwise transcode to AAC.
 //! * subtitles — text formats (subrip/srt/webvtt/ass/ssa/mov_text) are
-//!   extracted to WebVTT; image formats (pgs/hdmv_pgs/dvd_subtitle/vobsub) are
-//!   burned into the video, which forces a video re-encode.
+//!   extracted to a selectable WebVTT track. Image formats
+//!   (pgs/hdmv_pgs/dvd_subtitle/vobsub) are DROPPED, not burned: the libass
+//!   `subtitles` filter cannot render bitmap subtitles and aborts the ffmpeg
+//!   session, so a correct burn would need an `overlay`-based filtergraph.
+//!   Until that lands, a title with only image subs plays without subs rather
+//!   than failing outright. See [`plan_subtitle`].
 //!
 //! This is deliberately deterministic: every branch is exercised by a unit
 //! test, and `ffmpeg_args` (in [`crate::args`]) turns a plan into a concrete
 //! invocation. No real transcode happens here.
 
 use media_core::capability::{ClientCaps, decide};
-use media_core::models::MediaFileRow;
+use media_core::models::{MediaFileRow, SubtitleTrack};
 use serde::Serialize;
 
 /// Target H.264 height once we re-encode. The capability matrix only ever
@@ -34,8 +38,9 @@ const TEXT_SUBTITLE_CODECS: &[&str] = &[
     "subrip", "srt", "webvtt", "vtt", "ass", "ssa", "mov_text", "text",
 ];
 
-/// Image-based subtitle codecs AVPlayer cannot render; these must be burned in
-/// (§8 subtitle matrix).
+/// Image-based (bitmap) subtitle codecs. These can only be shown by
+/// compositing onto the video; we currently drop them (see [`plan_subtitle`])
+/// because the libass `subtitles` filter cannot render bitmap subtitles.
 const IMAGE_SUBTITLE_CODECS: &[&str] = &[
     "hdmv_pgs_subtitle",
     "pgssub",
@@ -76,10 +81,6 @@ pub enum SubtitleOp {
     None,
     /// Repackage a text subtitle as WebVTT (`-c:s webvtt`).
     ExtractWebVtt { source_index: i64 },
-    /// Burn an image subtitle into the video. The index is also threaded into
-    /// [`VideoOp::EncodeH264::burn_subtitle_index`] so the filtergraph and the
-    /// video op stay consistent.
-    BurnIn { source_index: i64 },
 }
 
 /// Default AAC bitrate when we have to re-encode audio (§4.3).
@@ -124,37 +125,44 @@ fn is_image_subtitle(codec: &str) -> bool {
         .any(|c| codec.eq_ignore_ascii_case(c))
 }
 
-/// Pick the subtitle disposition. We only act on the FIRST forced subtitle, or
-/// else the first subtitle of any kind — mirroring the single-track selection
-/// AVPlayer expects. Text → WebVTT, image → burn-in. Returns `(op, burn_index)`
-/// where `burn_index` is `Some` only for the burn-in case (so the caller can
-/// wire it into the video op).
+/// Pick the subtitle disposition for the OUTPUT. Only TEXT subtitles are
+/// carried, repackaged as a single selectable WebVTT track (the right model for
+/// both hls.js and AVPlayer). A forced text track wins; otherwise the first
+/// text track present. Returns `(op, burn_index)`; `burn_index` is always `None`
+/// now — image burn-in is not emitted (see below).
+///
+/// Image subtitles (PGS/VOBSUB/DVD) are intentionally DROPPED. Rendering them
+/// means compositing the bitmap onto the video, but the libass `subtitles`
+/// filter cannot decode image formats — it aborts the whole ffmpeg session with
+/// "Only text based subtitles are currently supported". A correct burn needs an
+/// `overlay`-based filtergraph fed by the decoded subtitle stream; until that
+/// lands, dropping image subs lets the title play (without those subs) instead
+/// of failing to play at all.
 fn plan_subtitle(file: &MediaFileRow) -> (SubtitleOp, Option<i64>) {
     let tracks = file.subtitle_tracks();
-    // Prefer a forced track; otherwise the first track present.
-    let chosen = tracks.iter().find(|t| t.forced).or_else(|| tracks.first());
-    let Some(track) = chosen else {
-        return (SubtitleOp::None, None);
-    };
-    let codec = track.codec.as_deref().unwrap_or("").trim();
-    if is_image_subtitle(codec) {
-        (
-            SubtitleOp::BurnIn {
-                source_index: track.index,
-            },
-            Some(track.index),
-        )
-    } else if is_text_subtitle(codec) {
-        (
+    let is_text = |t: &&SubtitleTrack| is_text_subtitle(t.codec.as_deref().unwrap_or("").trim());
+    let chosen = tracks
+        .iter()
+        .find(|t| t.forced && is_text(t))
+        .or_else(|| tracks.iter().find(is_text));
+    if let Some(track) = chosen {
+        return (
             SubtitleOp::ExtractWebVtt {
                 source_index: track.index,
             },
             None,
-        )
-    } else {
-        // Unknown/empty subtitle codec: don't gamble on it, just drop it.
-        (SubtitleOp::None, None)
+        );
     }
+    // No usable text track. Log when we drop image-only subs so the gap is
+    // observable rather than silent (and to keep is_image_subtitle in use until
+    // the overlay burn path lands).
+    if tracks
+        .iter()
+        .any(|t| is_image_subtitle(t.codec.as_deref().unwrap_or("").trim()))
+    {
+        tracing::debug!(path = %file.path, "dropping image-only subtitles (burn-in not yet supported)");
+    }
+    (SubtitleOp::None, None)
 }
 
 /// Compute the transcode plan for `file` against `caps`.
@@ -168,7 +176,8 @@ pub fn plan_transcode(file: &MediaFileRow, caps: &ClientCaps) -> TranscodePlan {
         };
     }
 
-    // ── Subtitles first: an image subtitle forces a video re-encode. ───────
+    // ── Subtitles. burn_index is always None now (image subs are dropped, not
+    // burned), so subtitles no longer force a video re-encode on their own. ──
     let (subtitle, burn_index) = plan_subtitle(file);
 
     // ── Video ──────────────────────────────────────────────────────────────
@@ -505,10 +514,12 @@ mod tests {
     }
 
     #[test]
-    fn pgs_subtitle_burns_in_and_forces_video_reencode() {
-        // PGS is image-based → burn-in. Even though the video codec (h264)
-        // would otherwise copy, burn-in forces a re-encode and threads the
-        // subtitle index into the video op.
+    fn pgs_subtitle_is_dropped_not_burned() {
+        // PGS is image-based. The libass `subtitles` filter cannot render bitmap
+        // subs (it crashes the ffmpeg session), so the planner DROPS them rather
+        // than emitting a burn-in. Because the burn no longer forces a re-encode,
+        // an otherwise-copyable h264 stream now just remuxes (video Copy) — the
+        // container change to HLS is what the transcode is for.
         let f = file(
             Some("mp4"),
             Some("h264"),
@@ -518,8 +529,8 @@ mod tests {
             vec![sub(3, "hdmv_pgs_subtitle", false)],
         );
         // Force the transcode gate via an unsupported container so decide()
-        // denies; otherwise an all-accepted file direct-plays and burn-in is
-        // moot. Use mkv container the client doesn't list.
+        // denies; otherwise an all-accepted file direct-plays and the subtitle
+        // disposition is moot. Use mkv the client doesn't list.
         let mut f = f;
         f.container = Some("mkv".into());
         let plan = plan_transcode(&f, &caps_h264_1080_sdr());
@@ -527,15 +538,8 @@ mod tests {
             TranscodePlan::Transcode {
                 video, subtitle, ..
             } => {
-                assert_eq!(subtitle, SubtitleOp::BurnIn { source_index: 3 });
-                assert_eq!(
-                    video,
-                    VideoOp::EncodeH264 {
-                        scale_to_height: None,
-                        tone_map: false,
-                        burn_subtitle_index: Some(3)
-                    }
-                );
+                assert_eq!(subtitle, SubtitleOp::None);
+                assert_eq!(video, VideoOp::Copy);
             }
             other => panic!("expected transcode, got {other:?}"),
         }
