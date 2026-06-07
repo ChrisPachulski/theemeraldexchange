@@ -17,14 +17,26 @@
 
 name: transcoder-ffmpeg
 
+# Trigger on the transcoder AND everything it compiles against: it depends on
+# crates/media-core and crates/emerald-contracts, and a workspace dependency
+# bump (Cargo.lock / root Cargo.toml) can change the produced ffmpeg argv or
+# the binary's behavior without touching crates/transcoder/** at all.
 on:
   push:
     paths:
       - "crates/transcoder/**"
+      - "crates/media-core/**"
+      - "crates/emerald-contracts/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/transcoder-ffmpeg.yml"
   pull_request:
     paths:
       - "crates/transcoder/**"
+      - "crates/media-core/**"
+      - "crates/emerald-contracts/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/transcoder-ffmpeg.yml"
   workflow_dispatch: {}
 
