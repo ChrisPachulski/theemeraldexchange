@@ -126,6 +126,18 @@ pub fn ffmpeg_args(
         a.push(start_secs.to_string());
     }
 
+    // Throttle reading to the input's native rate so the HLS sliding window
+    // (delete_segments + hls_list_size 8) tracks real playback instead of
+    // racing to EOF. WITHOUT -re ffmpeg remuxes a whole movie in seconds,
+    // deletes every segment behind the 8-deep window, then exits cleanly —
+    // the player 404s on segments that already scrolled off (stuck grey at
+    // 0:00) and the supervisor mistakes the early exit for a crash and
+    // restart-loops until it tears the session down. With -re the producer
+    // tracks the consumer, the 2 GB scratch tmpfs only ever holds the live
+    // window, and ffmpeg runs for the title's real duration. -re is an input
+    // option, so it sits with -ss just before -i.
+    push(&mut a, "-re");
+
     push(&mut a, "-fflags");
     push(&mut a, "+genpts");
     push(&mut a, "-i");
@@ -383,11 +395,33 @@ mod tests {
         let joined = args.join(" ");
         assert_eq!(
             joined,
-            "-hide_banner -loglevel warning -nostdin -fflags +genpts -i /lib/m.mkv \
+            "-hide_banner -loglevel warning -nostdin -re -fflags +genpts -i /lib/m.mkv \
              -map 0:v:0 -map 0:a:0? -c:v copy -c:a copy \
              -f hls -hls_time 4 -hls_list_size 8 -hls_flags delete_segments+append_list+omit_endlist \
              -hls_segment_filename /tmp/sess/seg_%05d.ts /tmp/sess/index.m3u8"
         );
+    }
+
+    #[test]
+    fn realtime_throttle_present_and_precedes_input() {
+        // -re must be emitted (so ffmpeg doesn't race a whole title to EOF and
+        // blow past the sliding window) and must sit before -i as an input opt.
+        let plan = transcode(VideoOp::Copy, AudioOp::Copy, SubtitleOp::None);
+        let args = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Cpu);
+        let re = args.iter().position(|s| s == "-re").expect("missing -re");
+        let i = args.iter().position(|s| s == "-i").expect("missing -i");
+        assert!(re < i, "-re must precede -i");
+    }
+
+    #[test]
+    fn realtime_throttle_coexists_with_seek() {
+        // With a resume offset both -ss and -re precede -i.
+        let plan = transcode(VideoOp::Copy, AudioOp::Copy, SubtitleOp::None);
+        let args = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 120, HwEncoder::Cpu);
+        let ss = args.iter().position(|s| s == "-ss").expect("missing -ss");
+        let re = args.iter().position(|s| s == "-re").expect("missing -re");
+        let i = args.iter().position(|s| s == "-i").expect("missing -i");
+        assert!(ss < i && re < i, "-ss and -re must precede -i");
     }
 
     #[test]

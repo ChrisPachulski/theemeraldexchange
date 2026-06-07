@@ -565,6 +565,24 @@ impl SessionManager {
                     continue;
                 }
 
+                // A CLEAN exit (status 0) means ffmpeg reached EOF — the
+                // transcode is COMPLETE, not crashed. Restarting it would
+                // re-run the whole title from seg_00000 (and the dir-clear in
+                // the restart path would yank the segments the player is still
+                // draining). Leave the session and its segments in place with no
+                // child; the idle reaper collects it once the client stops
+                // heart-beating. Without this, a fast remux that finishes in
+                // seconds gets "restarted" repeatedly until the restart cap
+                // tears the session down mid-watch.
+                if matches!(status.as_ref(), Ok(st) if st.success()) {
+                    tracing::info!(
+                        session = %id,
+                        "ffmpeg completed (clean exit); keeping segments for drain"
+                    );
+                    s.child = None;
+                    return;
+                }
+
                 let code = status.as_ref().ok().and_then(|st| st.code());
                 if s.restarts >= MAX_RESTARTS {
                     tracing::warn!(session = %id, ?code, "ffmpeg exceeded restart cap; tearing down session");
