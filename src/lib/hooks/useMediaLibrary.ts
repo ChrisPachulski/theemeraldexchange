@@ -20,6 +20,40 @@ export function useMediaShows(q?: string) {
   })
 }
 
+// tmdbId -> local media-core movie id, for matching a discover/Radarr title to
+// a locally-available file (powers the DetailModal "Play Direct here" button).
+// Shares the ['media','movies',''] cache with useMediaMovies(); `enabled` gates
+// it on mediaEnabled so deployments without media-core don't fire a 404.
+export function useLocalMovieIndex(enabled: boolean) {
+  return useQuery({
+    queryKey: ['media', 'movies', ''],
+    queryFn: ({ signal }) => mediaApi.movies(undefined, { signal }),
+    staleTime: 60_000,
+    enabled,
+    select: (data): Map<number, number> => {
+      const m = new Map<number, number>()
+      for (const mv of data.items) if (mv.tmdbId) m.set(mv.tmdbId, mv.id)
+      return m
+    },
+  })
+}
+
+// tmdbId -> local media-core show id, for matching a discover/Sonarr show to a
+// locally-available one (powers the show DetailModal "Watch episodes" button).
+export function useLocalShowIndex(enabled: boolean) {
+  return useQuery({
+    queryKey: ['media', 'shows', ''],
+    queryFn: ({ signal }) => mediaApi.shows(undefined, { signal }),
+    staleTime: 60_000,
+    enabled,
+    select: (data): Map<number, number> => {
+      const m = new Map<number, number>()
+      for (const s of data.items) if (s.tmdbId) m.set(s.tmdbId, s.id)
+      return m
+    },
+  })
+}
+
 // Episodes for one show, fetched lazily when an episode picker opens.
 export function useMediaEpisodes(showId: number | null) {
   return useQuery({
