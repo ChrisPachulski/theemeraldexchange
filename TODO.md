@@ -7,7 +7,6 @@ items here, demote detail to the source docs._
 **Authoritative detail docs**
 - [docs/ROADMAP-STATUS.md](./docs/ROADMAP-STATUS.md) — honest per-milestone state (M1–M6).
 - [docs/PRODUCTION-READINESS-2026-05-30.md](./docs/PRODUCTION-READINESS-2026-05-30.md) — historical 80-finding review ledger. Re-verify against code/CI before treating any row as current.
-- [scripts/autoloop/README.md](./scripts/autoloop/README.md) — autonomous codex mesh design. Treat runtime status files as non-authoritative unless the process is freshly verified.
 - [README.md](./README.md) · [PRODUCT.md](./PRODUCT.md) · [DESIGN.md](./DESIGN.md) · [DEPLOY.md](./DEPLOY.md)
 
 ---
@@ -63,17 +62,6 @@ now; it is the only thing the Apple gate does not block.
 - [ ] **Refresh the readiness tail** — the 2026-05-30 ledger is historical and
       contains stale rows now closed by code/CI. Re-run a current review before
       using its medium/low counts for planning.
-
-## P2 — Autoloop substrate (autonomous self-improvement mesh)
-
-See [scripts/autoloop/README.md](./scripts/autoloop/README.md). Runs on **codex**
-(flat-rate, never `claude -p`). P0 (engine/guard/node-contract) and P1
-(governor/CONTROL.md kill-switch/supervisor/launchd) are landed on `main`.
-
-- [ ] **P2–P5:** orchestrator + team mesh, rotation/handoff at every tier,
-      goal-classifier + researcher + auto-immune, propagation + final-synthesis +
-      notifications + convergence (`EEX-GOALS-MET`). (First-run orchestrator +
-      24h kill + email channel already landed in commit `aafe7c5`.)
 
 ## Apple-blocked — cannot start until Xcode installs + Developer Program activates
 
