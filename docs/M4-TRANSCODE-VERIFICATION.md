@@ -1,8 +1,8 @@
 # M4 Transcoder — Verification Status & Real-ffmpeg Gate
 
-**Status label (authoritative): M4 transcoder is STATE-MACHINE COMPLETE, TRANSCODE UNVERIFIED.**
+**Status label (authoritative): M4 transcoder has fixture-level real-ffmpeg proof, but deployed real-library playback remains unverified.**
 
-Do not read the green `cargo test -p transcoder` run as "transcoding works."
+Do not read the green default `cargo test -p transcoder` run as "deployed playback works."
 
 ## What the default test suite actually proves
 
@@ -17,10 +17,9 @@ output — e.g. `routes.rs` `assert_eq!(&body[..], b"seg")`. The module doc in
 > exercising the full start -> heartbeat -> seek (kill+respawn) -> stop lifecycle
 > and orphan cleanup WITHOUT a real transcode.
 
-So the green suite certifies the **session state machine + ffmpeg argv strings**.
+So the green default suite certifies the **session state machine + ffmpeg argv strings**.
 It does **not** certify:
 
-- real argv producing playable HLS,
 - hardware-encoder selection against a real binary,
 - tonemap / scale / subtitle burn-in correctness,
 - ffmpeg failure modes (OOM/segfault) under load,
@@ -56,7 +55,7 @@ It does **not** certify:
 - **CI budget / runner image.** The gate is committed but inert until GitHub
   Actions is enabled for this repo. Adopting it costs runner minutes + an image
   pull on every transcoder change. That is a product/infra call. Until the gate
-  is green in CI, the M4 status label above stands.
+  is green in CI, the deployed playback gap above stands.
 - **Fixture fidelity.** The committed test uses a synthetic `testsrc` fixture
   (no binary media in-repo). A higher-fidelity matrix (HDR tonemap, PGS burn-in,
   HEVC->H.264, DTS->AAC) needs real sample files and is the multi-month long

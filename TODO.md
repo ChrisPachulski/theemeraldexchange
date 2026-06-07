@@ -1,13 +1,13 @@
 # theemeraldexchange — High-Level TODO
 
-_Last updated: 2026-05-31. The single at-a-glance worklist. Detail lives in the
+_Last updated: 2026-06-07. The single at-a-glance worklist. Detail lives in the
 linked docs; this file is the map, not the territory. Keep it short — promote
 items here, demote detail to the source docs._
 
 **Authoritative detail docs**
 - [docs/ROADMAP-STATUS.md](./docs/ROADMAP-STATUS.md) — honest per-milestone state (M1–M6).
-- [docs/PRODUCTION-READINESS-2026-05-30.md](./docs/PRODUCTION-READINESS-2026-05-30.md) — 80-finding review ledger; all crit/high fixed, ~63 medium/low open.
-- [scripts/autoloop/README.md](./scripts/autoloop/README.md) — the autonomous codex mesh (P0–P1 done, P2–P5 pending).
+- [docs/PRODUCTION-READINESS-2026-05-30.md](./docs/PRODUCTION-READINESS-2026-05-30.md) — historical 80-finding review ledger. Re-verify against code/CI before treating any row as current.
+- [scripts/autoloop/README.md](./scripts/autoloop/README.md) — autonomous codex mesh design. Treat runtime status files as non-authoritative unless the process is freshly verified.
 - [README.md](./README.md) · [PRODUCT.md](./PRODUCT.md) · [DESIGN.md](./DESIGN.md) · [DEPLOY.md](./DEPLOY.md)
 
 ---
@@ -25,14 +25,14 @@ now; it is the only thing the Apple gate does not block.
 
 ## P0 — Buildable now, highest leverage (no Apple dependency)
 
-- [ ] **Prove M4 end-to-end.** Run real ffmpeg against a real non-direct-play
-      library file under the deployed transcoder and capture one verified
-      transcode+play. The code is deployed + 55 tests green but **self-admitted
-      stub-verified — no real transcode has ever run.** This is the top unblock:
-      it converts M4 from scaffold to real and gates all M5 playback.
+- [ ] **Prove M4 deployed playback end-to-end.** A real-ffmpeg fixture test now
+      proves the production argv can emit playable HLS, but the deployed
+      transcoder still needs one captured non-direct-play library file
+      transcode+play under real NAS/service conditions. This remains the top
+      unblock for M5 playback.
 - [ ] **Build the M4 stress/bench harness on NAS hardware** (non-optional per
-      spec) → capture CPU/latency for crit 2/3/6. Add a `TRANSCODER_FORCE_CPU=1`
-      alias or restate crit 5 (the env var does not currently exist).
+      spec) → capture CPU/latency for crit 2/3/6. `TRANSCODER_FORCE_CPU=1`
+      already exists; the remaining gap is measurement evidence.
 - [ ] **Wire the web SPA media-core consumer** (`grant`/`stream`/`watch` in
       `mediaApi`). M3 is live in enforce mode but **no client consumes
       `/api/media/*`** — crit 4/5 can't be demonstrated until one does. This is
@@ -44,16 +44,16 @@ now; it is the only thing the Apple gate does not block.
 
 ## P1 — Close the contract & infra loose ends
 
-- [ ] **M1.5: add the `/api/version` `schemas:{iptv,exchange,media}` block** (§7.2).
-      Half-wired today; M2 clients expecting per-DB schema versions get a thin response.
-- [ ] **M1.5: add repo-root `.gitattributes`** (`*.sql text eol=lf`, §7.1 hard
-      requirement). Mitigated by runtime CRLF→LF normalization, so belt-without-suspenders.
+- [ ] **Verify production internal-principal posture.** Source and CI prove the
+      cross-binding path, but `docker-compose.yml` still defaults media-core and
+      transcoder verification to `off`; confirm production env overrides or
+      make enforce mode the default.
 - [ ] **HIGH-3 (partial): recommender entrypoint `chown` under `cap_drop: ALL`.**
       Still flagged partial in the readiness ledger — confirm fresh-volume boot
       doesn't crash-loop.
-- [ ] **Burn down the readiness tail** — ~63 medium/low findings open in
-      [the ledger](./docs/PRODUCTION-READINESS-2026-05-30.md). All critical and
-      high are fixed; triage mediums next.
+- [ ] **Refresh the readiness tail** — the 2026-05-30 ledger is historical and
+      contains stale rows now closed by code/CI. Re-run a current review before
+      using its medium/low counts for planning.
 
 ## P2 — Autoloop substrate (autonomous self-improvement mesh)
 

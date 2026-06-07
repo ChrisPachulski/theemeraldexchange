@@ -1,5 +1,10 @@
 # theemeraldexchange — Production-Readiness Review
 
+> **Status note, 2026-06-07:** this file is a historical review ledger, not the
+> authoritative current project state. Several rows below were closed by later
+> code/CI changes and have been marked accordingly. Re-verify any remaining open
+> row against the current tree before using it for planning.
+
 **Date:** 2026-05-30  
 **Method:** 12-dimension read-only review (auth, backend, IPTV, data, frontend, Rust, Python, infra, observability, testing, deps, prior-audit follow-up), each finding adversarially re-verified against the live code (refute-by-default).  
 **Raw findings:** 90 → **confirmed:** 80, refuted: 10.
@@ -35,11 +40,11 @@ All CI gates verified green from scratch after the fixes (lint, tsc×2, vitest, 
 |---|--------|--------|---------|----------|
 | 1 | ✅ fixed | f73f7be | CI rust job reports green while `cargo clippy -D warnings` actually fails (8 errors) — gate is advisory on `ma | `.github/workflows/ci.yml rust job, `cargo clippy` step lines` |
 | 2 | ⬜ open | — | media-core internal-principal auth ships OFF by default on a 0.0.0.0 listener in production compose | `docker-compose.yml media-core service: MEDIA_CORE_HOST line ` |
-| 3 | ⬜ open | — | No CI job builds the multi-stage Dockerfiles on `main` — deploy-image regressions only surface on the NAS | `.github/workflows/ci.yml committed HEAD has no `docker-build` |
+| 3 | ✅ fixed | post-ledger | CI now validates compose config, builds the backend image, and builds sidecar images on `main` | `.github/workflows/ci.yml docker-build job` |
 | 4 | ⬜ open | — | Suggestions route can issue ~30+ concurrent unbounded TMDB /search lookups per request (rate-limit self-DoS) | `server/routes/suggestions.ts validate(), lines 2362-2366 (Pr` |
 | 5 | ✅ fixed | c3871be | iptv.db connection is missing busy_timeout pragma — concurrent reader/writer or backup gets SQLITE_BUSY thrown | `server/services/iptvDb.ts openIptvDb, lines 43-45` |
 | 6 | ✅ fixed | c3871be | No integrity_check on backup snapshots or on restore — a corrupt VACUUM INTO copy is silently trusted | `server/services/dbBackup.ts runScheduledBackup / vacuumIntoH` |
-| 7 | ⬜ open | — | No automated dependency-audit gate in CI (npm/cargo/pip) — vulnerable deps merge silently | `.github/workflows/ci.yml jobs.test / jobs.recommender / jobs` |
+| 7 | ✅ fixed | post-ledger | CI now runs npm audit, cargo audit, and pip-audit in the `audit` job | `.github/workflows/ci.yml audit job` |
 | 8 | ⬜ open | — | GPL-3.0 ffmpeg/libx264 bundled in every shipped image with no source offer, attribution, or THIRD-PARTY-LICENS | `Dockerfile Dockerfile:91; crates/media-core/Dockerfile:30; c` |
 | 9 | ⬜ open | — | Sidecar Dockerfile base images are tag-only (unpinned) while the main image is digest-pinned — non-reproducibl | `recommender/Dockerfile recommender/Dockerfile:16 & :42; crat` |
 | 10 | ⬜ open | — | Recommender Python deps have no lockfile and only floating `>=` ranges — non-reproducible, unpinned third-part | `recommender/pyproject.toml recommender/pyproject.toml:5-18 (` |
@@ -86,7 +91,7 @@ All CI gates verified green from scratch after the fixes (lint, tsc×2, vitest, 
 | 20 | ⬜ open | — | Dead TabPlaceholder component ships a console.log probe into the production bundle | `src/components/tabs/TabPlaceholder.tsx probe.onConfirm conso` |
 | 21 | ⬜ open | — | Sidecar Dockerfiles use floating base tags while the backend is digest-pinned — non-reproducible builds and un | `crates/transcoder/Dockerfile transcoder/Dockerfile lines 13,` |
 | 22 | ⬜ open | — | real-ffmpeg verification gate does not run when transcoder's dependencies change | `.github/workflows/transcoder-ffmpeg.yml lines 20-28 (path fi` |
-| 23 | ⬜ open | — | No dependency-vulnerability gate (npm/cargo/pip audit) in CI; dependabot is advisory-only | `.github/workflows/ci.yml whole file (test/recommender/rust j` |
+| 23 | ✅ fixed | post-ledger | CI now runs npm audit, cargo audit, and pip-audit in the `audit` job | `.github/workflows/ci.yml audit job` |
 | 24 | ⬜ open | — | Attacker-controlled 'ext' path segment is interpolated unencoded into the upstream provider URL | `server/routes/iptv.ts /stream/vod/:streamId/:ext (1025-1040)` |
 | 25 | ⬜ open | — | Non-constant-time comparison of the recommender export secret | `server/routes/iptv.ts /export/recommender, line 1190` |
 | 26 | ✅ fixed | 0dd1aca | reportServerEvent relay bypasses the §15.3 PII scrubber when POSTing context to Glitchtip | `server/services/serverTelemetry.ts reportServerEvent, lines ` |
@@ -103,8 +108,8 @@ All CI gates verified green from scratch after the fixes (lint, tsc×2, vitest, 
 | 37 | ⬜ open | — | ffmpeg burn-in subtitle filtergraph path escaping is incomplete (filename comma / bracket breaks the encode) | `crates/transcoder/src/args.rs build_video_filter burn-in bra` |
 | 38 | ⬜ open | — | verify_principal re-derives the HKDF key on every request on the hot internal-auth path | `crates/media-core/src/auth.rs verify_principal() lines 21-28` |
 | 39 | ⬜ open | — | Library scan issues unbounded serial TMDB round-trips with per-call 5s timeout; a large library scan can run f | `crates/media-core/src/scanner.rs scan_once loop -> index_fil` |
-| 40 | ⬜ open | — | No coverage threshold gate — coverage can silently rot to zero with CI green | `vitest.config.ts coverage block, lines 44-55` |
-| 41 | ⬜ open | — | Coverage scope excludes the entire SPA except one file — login/router/telemetry coverage is unmeasured | `vitest.config.ts coverage.include, lines 47-50` |
+| 40 | ✅ fixed | post-ledger | Coverage thresholds now exist; SPA floors are intentionally low and should be ratcheted upward | `vitest.config.ts coverage.thresholds` |
+| 41 | ✅ fixed | post-ledger | Coverage scope now includes the SPA; coverage remains low and needs focused hook/player tests | `vitest.config.ts coverage.include + thresholds` |
 | 42 | ⬜ open | — | Recommendation eval harness never runs in CI — recommendation quality and library-leak hygiene are not gated | `.github/workflows/ci.yml jobs (no eval:recs step anywhere); ` |
 | 43 | ⬜ open | — | E2E suite never exercises real login or any playback path | `tests/e2e/auth.spec.ts whole e2e suite + tests/e2e/helpers/m` |
 | 44 | ⬜ open | — | media proxy route test stubs out requireAuth, so its auth gate is never exercised | `server/routes/media.test.ts vi.mock('../middleware/auth.js')` |
