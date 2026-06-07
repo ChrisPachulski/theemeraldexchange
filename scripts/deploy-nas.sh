@@ -266,6 +266,13 @@ ssh "${NAS_USER}@${NAS_HOST}" "docker restart exchange-cloudflared >/dev/null 2>
 # backend (bad migration, env-gate crash, napi ABI mismatch) shipped with an
 # "✓ Deployed" and the API was simply down. Poll the backend's health until it
 # is actually serving; if it never does, roll back to the :rollback image.
+# Bootstrap window: on the very first deploy EEX_TELEMETRY_DSN doesn't exist yet
+# (you create it from the Glitchtip instance THIS deploy brings up — see
+# glitchtip-setup.md §2). The backend crash-loops by design that one time, so we
+# must NOT health-gate/roll-back the whole stack — that would tear down the
+# Glitchtip you need to mint the DSN from. Detect the unset DSN and, in that
+# window only, skip the rollback with guidance instead.
+telemetry_dsn="$(env_value EEX_TELEMETRY_DSN 2>/dev/null || true)"
 echo "→ Waiting for backend to report healthy (up to ~90s)"
 set +e
 ssh "${NAS_USER}@${NAS_HOST}" '
@@ -286,7 +293,13 @@ ssh "${NAS_USER}@${NAS_HOST}" '
 health_rc=$?
 set -e
 
-if [ "$health_rc" -ne 0 ]; then
+if [ "$health_rc" -ne 0 ] && [ -z "$telemetry_dsn" ]; then
+  echo "→ Backend not healthy, but EEX_TELEMETRY_DSN is unset — this is the" >&2
+  echo "  expected Glitchtip bootstrap window, NOT a deploy failure. The stack is" >&2
+  echo "  up; create the EEX project + DSN (docs/operations/glitchtip-setup.md §4)," >&2
+  echo "  set EEX_TELEMETRY_DSN in .env.production, then re-run this deploy — the" >&2
+  echo "  next run health-gates the backend normally. Skipping rollback." >&2
+elif [ "$health_rc" -ne 0 ]; then
   echo "✗ Backend unhealthy after deploy (rc=$health_rc) — rolling back to previous image" >&2
   ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && \
     if docker image inspect theemeraldexchange-backend:rollback >/dev/null 2>&1; then \

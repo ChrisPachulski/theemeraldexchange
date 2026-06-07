@@ -57,6 +57,14 @@ Wait for the `glitchtip` and `glitchtip-worker` containers to reach a healthy st
 (watch via `docker compose logs -f glitchtip`). Glitchtip runs its database migrations
 automatically on startup.
 
+> **The first deploy is a two-step bootstrap.** `EEX_TELEMETRY_DSN` doesn't exist
+> yet, so the backend intentionally crash-loops on this first run. The deploy
+> script detects the unset DSN and **skips its health-gate/rollback** (it prints a
+> bootstrap notice instead of tearing the stack down), so the Glitchtip services
+> still come up healthy. Bring the stack up here, finish §3–§4 to create the
+> project + DSN, set `EEX_TELEMETRY_DSN` in `.env.production`, then re-run
+> `./scripts/deploy-nas.sh` — the second run health-gates the backend normally.
+
 Access the Glitchtip web UI at the URL you configured in §3 (or temporarily via the
 loopback port `http://127.0.0.1:8100` from the NAS itself for initial setup).
 
