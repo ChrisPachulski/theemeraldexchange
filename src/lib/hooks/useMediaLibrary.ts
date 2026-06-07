@@ -2,24 +2,6 @@ import { useCallback, useEffect, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { mediaApi, type PlayableKind } from '../api/media'
 
-// Locally-available movies from media-core. Mirrors useRadarrLibrary's
-// staleTime so a tab revisit doesn't refetch within the minute.
-export function useMediaMovies(q?: string) {
-  return useQuery({
-    queryKey: ['media', 'movies', q ?? ''],
-    queryFn: () => mediaApi.movies(q),
-    staleTime: 60_000,
-  })
-}
-
-export function useMediaShows(q?: string) {
-  return useQuery({
-    queryKey: ['media', 'shows', q ?? ''],
-    queryFn: () => mediaApi.shows(q),
-    staleTime: 60_000,
-  })
-}
-
 // tmdbId -> local media-core movie id, for matching a discover/Radarr title to
 // a locally-available file (powers the DetailModal "Play Direct here" button).
 // Shares the ['media','movies',''] cache with useMediaMovies(); `enabled` gates
@@ -61,27 +43,6 @@ export function useMediaEpisodes(showId: number | null) {
     queryFn: ({ signal }) => mediaApi.episodes(showId as number, { signal }),
     enabled: showId != null,
     staleTime: 60_000,
-  })
-}
-
-// Admin-only trigger for a background library re-scan. Invalidates the
-// whole ['media'] subtree so movies/shows refetch once the scan lands.
-export function useMediaScan() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: () => mediaApi.scan(),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['media'] }),
-  })
-}
-
-// The current user's watch-progress rows, used to resume playback and badge
-// in-progress titles. Short staleTime: a just-watched title should reflect new
-// progress on a tab revisit, but we don't need to refetch mid-render.
-export function useWatchState() {
-  return useQuery({
-    queryKey: ['media', 'watch'],
-    queryFn: ({ signal }) => mediaApi.watch({ signal }),
-    staleTime: 30_000,
   })
 }
 

@@ -1,5 +1,6 @@
 import { useMediaEpisodes } from '../../lib/hooks/useMediaLibrary'
 import type { MediaEpisode } from '../../lib/api/media'
+import './EpisodePicker.css'
 
 /** Format an episode label like "Show — S02E05 · Title". */
 function episodeLabel(showTitle: string, ep: MediaEpisode): string {

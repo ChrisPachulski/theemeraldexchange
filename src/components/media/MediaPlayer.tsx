@@ -34,9 +34,9 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
     dur: null,
   })
 
-  // Fetch the grant once. The component is keyed by title in MediaTab, so a new
-  // selection remounts this fresh (state starts null) rather than mutating it
-  // here — no synchronous reset needed.
+  // Fetch the grant once. Callers key this by title, so a new selection remounts
+  // it fresh (state starts null) rather than mutating it here — no synchronous
+  // reset needed.
   useEffect(() => {
     let cancelled = false
     mediaApi
