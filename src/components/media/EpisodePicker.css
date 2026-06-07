@@ -1,43 +1,5 @@
-/* Media Library tab extras layered on top of the shared TvTab.css.
-   The dock/grid/empty/error/mode-anchor classes come from TvTab.css. */
-
-/* Stack the source toggle and the movies/shows kind toggle in the
-   bottom-anchored control cluster. */
-.media-tab__kind {
-  display: inline-flex;
-}
-
-/* Admin-only re-scan affordance shown in the empty state. Emerald
-   token palette, matching the rest of the tab's controls. */
-.media-tab__scan {
-  margin-top: var(--s-4);
-  padding: 8px var(--s-5);
-  font-family: var(--font-display);
-  font-size: var(--t-xs);
-  font-weight: var(--w-ui);
-  letter-spacing: var(--tr-eyebrow);
-  text-transform: uppercase;
-  color: var(--text);
-  background: var(--emerald-bg);
-  border: 1px solid var(--border);
-  border-radius: var(--r-pod);
-  transition:
-    background var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease),
-    opacity var(--dur-fast) var(--ease);
-}
-
-.media-tab__scan:hover:not(:disabled) {
-  color: var(--emerald);
-}
-
-.media-tab__scan:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-
 /* Episode picker list, shown inside the shared .iptv-player-modal chrome when
-   a show is opened for playback. */
+   a show is opened for playback (from the Media-less detail-modal flow). */
 .media-episode-list {
   list-style: none;
   margin: 0;
