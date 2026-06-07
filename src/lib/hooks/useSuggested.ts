@@ -4,13 +4,21 @@ import { keyFingerprint } from './useUserApiKey'
 import type { TrendingItem } from './useTrending'
 
 // Library-aware personalized suggestions for the Discover surface. The
-// backend asks Claude on every refresh — output is taste-matched
-// against what's already in the library, with explicit rejections
-// filtered out (and also passed to Claude in-prompt).
+// backend asks Claude (or the local recommender) for a taste-matched
+// lineup, scored against the library with explicit rejections filtered
+// out (and also passed in-prompt).
 //
-// Always re-fetches on mount (`staleTime: 0`, `refetchOnMount: 'always'`)
-// per the product spec. Variety comes from temperature on the backend
-// plus a prompt instruction not to return identical lists.
+// The lineup is CACHED for the session (`staleTime: Infinity`) and only
+// refreshed on an explicit user action — the strip's Refresh button
+// (`refetch()`, which bypasses staleTime), or a dislike draining the
+// strip to its low-water mark (useSetFeedback invalidates this key).
+// It deliberately does NOT re-fetch on mount or on toggling the
+// Recommended ⇄ Trending switch: re-running on every remount/toggle
+// yanked the lineup out from under the user mid-browse — flipping to
+// Trending and back re-ran the whole (slow, paid) recommender, and any
+// surface remount swapped the picks before the user could act on the
+// one they were eyeing. Stability while browsing beats churn; variety
+// still comes from the backend's temperature on each explicit refresh.
 
 type SuggestionSource =
   | 'personalized'
@@ -162,8 +170,10 @@ export function useSuggestedMovies(forceTrending: boolean, apiKey: string | null
   return useQuery({
     queryKey: ['suggestions', 'movie', forceTrending ? 'trending' : 'recommended', keyFingerprint(apiKey)],
     queryFn: () => fetchSuggested('movie', forceTrending, apiKey),
-    staleTime: 0,
-    refetchOnMount: 'always',
+    // Cache the lineup for the session; refresh only on explicit action
+    // (Refresh button refetch / dislike low-water invalidation). See the
+    // module header for why mount/toggle must NOT re-fetch.
+    staleTime: Infinity,
     retry: (failureCount, err) => {
       // Don't retry 4xx — the user needs to fix their key / re-auth,
       // not wait for a network blip.
@@ -178,8 +188,8 @@ export function useSuggestedTv(forceTrending: boolean, apiKey: string | null) {
   return useQuery({
     queryKey: ['suggestions', 'tv', forceTrending ? 'trending' : 'recommended', keyFingerprint(apiKey)],
     queryFn: () => fetchSuggested('tv', forceTrending, apiKey),
-    staleTime: 0,
-    refetchOnMount: 'always',
+    // See useSuggestedMovies / the module header for the caching rationale.
+    staleTime: Infinity,
     retry: (failureCount, err) => {
       if (err instanceof SuggestionsError && err.status >= 400 && err.status < 500) return false
       return failureCount < 1
