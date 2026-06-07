@@ -319,6 +319,34 @@ type WatchUpsertBody = {
   completed: boolean
 }
 
+// media-core's list routes clamp `limit` to 1..=200 and default to 50 when
+// it's omitted. The "Play Direct" tmdbId index needs EVERY local title, not
+// the first page — calling /movies with no limit only ever indexed 50 titles,
+// so the button silently vanished for the rest of a large library. Page
+// through at the max page size and concatenate. The cap is a runaway guard
+// (200 pages = 40k titles, far above any real homelab library).
+const LIST_PAGE_SIZE = 200
+const MAX_LIST_PAGES = 200
+
+async function fetchAllPages<R, T>(
+  path: string,
+  map: (r: R) => T,
+  req?: RequestOpts,
+): Promise<T[]> {
+  const out: T[] = []
+  for (let page = 0; page < MAX_LIST_PAGES; page++) {
+    const raw = await get<RawListResponse<R>>(
+      path,
+      { limit: LIST_PAGE_SIZE, offset: page * LIST_PAGE_SIZE },
+      req,
+    )
+    const items = (raw.items ?? []).map(map)
+    out.push(...items)
+    if (items.length < LIST_PAGE_SIZE) break
+  }
+  return out
+}
+
 // ── Public API ───────────────────────────────────────────────────────
 
 export const mediaApi = {
@@ -330,6 +358,13 @@ export const mediaApi = {
     get<RawListResponse<RawShowRow>>('/shows', q ? { q } : undefined, req).then(
       (raw) => normList(raw, normShow),
     ),
+  /** Every local movie (paged past the 50/200 list cap) — for the
+   *  tmdbId→id "Play Direct" index, which must cover the whole library. */
+  allMovies: (req?: RequestOpts): Promise<MediaMovie[]> =>
+    fetchAllPages<RawMovieRow, MediaMovie>('/movies', normMovie, req),
+  /** Every local show (paged) — for the show "Watch episodes" index. */
+  allShows: (req?: RequestOpts): Promise<MediaShow[]> =>
+    fetchAllPages<RawShowRow, MediaShow>('/shows', normShow, req),
   episodes: (showId: number, req?: RequestOpts) =>
     get<RawListResponse<RawEpisodeRow>>(`/shows/${showId}/episodes`, undefined, req).then(
       (raw) => normList(raw, normEpisode),
