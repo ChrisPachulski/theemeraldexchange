@@ -3,10 +3,12 @@ import * as ts from 'typescript'
 
 // Build-guard for the SPA TypeScript config.
 //
-// (a) Asserts that the hardening flags (`noImplicitThis`, `noImplicitAny`) are
-//     present in tsconfig.app.json so they can't be silently dropped. The file
-//     is JSONC (it has comments), so we parse it with the TypeScript compiler
-//     API rather than JSON.parse.
+// (a) Asserts that `strict: true` is present in tsconfig.app.json so the
+//     hardening can't be silently dropped. `strict` subsumes noImplicitAny,
+//     noImplicitThis, strictNullChecks, and the rest of the strict family, so
+//     the individual flags are no longer listed explicitly. The file is JSONC
+//     (it has comments), so we parse it with the TypeScript compiler API rather
+//     than JSON.parse, and we also confirm the parser resolves `strict` on.
 // (b) Runs a real in-process typecheck of the SPA source under
 //     tsconfig.app.json and asserts ZERO diagnostics, proving the flags don't
 //     break the build and that no future implicit-any creeps in.
@@ -22,14 +24,27 @@ const repoRoot = new URL('../../', import.meta.url)
 const configPath = ts.sys.resolvePath(new URL('tsconfig.app.json', repoRoot).pathname)
 
 describe('tsconfig.app.json hardening', () => {
-  it('declares noImplicitThis and noImplicitAny in compilerOptions', () => {
+  it('enables full strict mode in compilerOptions', () => {
     const cfg = ts.readConfigFile(configPath, ts.sys.readFile)
     expect(cfg.error, 'tsconfig.app.json failed to parse').toBeUndefined()
 
     const compilerOptions = cfg.config?.compilerOptions
     expect(compilerOptions, 'compilerOptions missing from tsconfig.app.json').toBeDefined()
-    expect(compilerOptions.noImplicitThis).toBe(true)
-    expect(compilerOptions.noImplicitAny).toBe(true)
+    // `strict: true` is the contract — it subsumes noImplicitAny / noImplicitThis
+    // / strictNullChecks / strictFunctionTypes / etc. Guard against it being
+    // silently dropped.
+    expect(
+      compilerOptions.strict,
+      'tsconfig.app.json must keep `strict: true` (subsumes noImplicitAny/noImplicitThis/strictNullChecks)',
+    ).toBe(true)
+
+    // And confirm the compiler actually resolves strict on from the config.
+    const parsed = ts.getParsedCommandLineOfConfigFile(
+      configPath,
+      {},
+      { ...ts.sys, onUnRecoverableConfigFileDiagnostic: () => {} },
+    )
+    expect(parsed?.options.strict, 'parsed compiler options must have strict enabled').toBe(true)
   })
 
   it('typechecks the SPA source with zero errors under tsconfig.app.json', () => {
