@@ -13,6 +13,7 @@ const STATUS_LABEL: Record<GrabEventType, string> = {
   grab_started: 'searching',
   search_failed: 'indexer error',
   no_releases: 'no releases',
+  no_matching_releases: 'no match',
   all_rejected_by_cap: 'over cap',
   all_rejected_by_profile: 'profile rejected',
   planned_size_exceeds_free_space: 'low disk space',
@@ -26,6 +27,7 @@ const STATUS_TONE: Record<GrabEventType, 'ok' | 'err' | 'warn' | 'info'> = {
   grab_started: 'info',
   search_failed: 'err',
   no_releases: 'warn',
+  no_matching_releases: 'warn',
   all_rejected_by_cap: 'warn',
   all_rejected_by_profile: 'info',
   planned_size_exceeds_free_space: 'warn',
@@ -56,6 +58,8 @@ function buildDetail(e: GrabEvent): string {
       return e.status ? `HTTP ${e.status}` : ''
     case 'no_releases':
       return `${e.scanned ?? 0} scanned`
+    case 'no_matching_releases':
+      return `${e.scanned ?? 0} scanned · none matched`
     case 'all_rejected_by_cap':
       return `${e.scanned ?? 0} scanned · cap ${e.capGb ?? '?'} GB`
     case 'all_rejected_by_profile':

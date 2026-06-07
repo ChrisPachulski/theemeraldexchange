@@ -22,6 +22,11 @@ export type GrabEventType =
   | 'grab_started'
   | 'search_failed'
   | 'no_releases'
+  // Indexers returned releases but Radarr/Sonarr rejected every one for
+  // reasons unrelated to our size cap (unparseable name, title mismatch,
+  // unwanted quality). The cap never applied — treated like no_releases
+  // (kept monitored), NOT rolled back like all_rejected_by_cap.
+  | 'no_matching_releases'
   | 'all_rejected_by_cap'
   | 'all_rejected_by_profile'
   | 'planned_size_exceeds_free_space'

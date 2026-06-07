@@ -69,6 +69,21 @@ export async function throwApiError(res: Response, scope: string): Promise<never
   } else if (code === 'unknown_root_folder') {
     const path = typeof data.path === 'string' ? data.path : 'the requested path'
     message = `Sonarr/Radarr does not list ${path} as a root folder. Pick a different folder or add it upstream.`
+  } else if (code === 'capped_grab_not_started') {
+    // Every Radarr-accepted release for this title exceeds the household
+    // size cap, so nothing was grabbed and the add was rolled back.
+    const cap = Number(data.capGb)
+    const capText = Number.isFinite(cap) && cap > 0 ? ` ${cap} GB` : ''
+    message =
+      `Every release for this title is over the${capText} size limit, so it wasn't added. ` +
+      `Ask an admin to raise the cap, or pick a smaller release.`
+  } else if (code === 'capped_grab_failed') {
+    // The release search or grab itself errored (or threw), and the add
+    // was rolled back. Transient far more often than not.
+    const phase = data.phase === 'search' ? 'searching for' : 'grabbing'
+    message =
+      `Couldn't finish ${phase} a release for this title — Radarr returned an error, so it wasn't added. ` +
+      `Try again in a moment.`
   } else if (typeof data.message === 'string') {
     message = data.message
   }

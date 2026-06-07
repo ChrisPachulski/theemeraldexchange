@@ -560,6 +560,71 @@ describe('radarr POST /movie — no releases yet → monitor for future', () => 
   })
 })
 
+// Add + "search now" but every release the indexers return is REJECTED by
+// Radarr for reasons unrelated to our size cap (unparseable name, title
+// mismatch). This is the "Far Far Away Idol" shape: 4 tiny (0.12 GB)
+// releases, all rejected:true with "Unable to parse release". The cap never
+// applied, so the movie must be KEPT + monitored (200), NOT rolled back with
+// a misleading capped_grab_not_started 424.
+describe('radarr POST /movie — releases exist but all Radarr-rejected → monitor', () => {
+  it('keeps the movie + sets monitored (200 monitoring), does NOT roll back or 424', async () => {
+    const tiny = Math.round(0.12 * 1024 ** 3) // 0.12 GB — nowhere near the cap
+    let putMonitored: Record<string, unknown> | null = null
+    let deleteCalled = false
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(JSON.stringify([{ id: 1, path: '/data/movies', freeSpace: 500 * 1024 ** 3 }]), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/movie') && init?.method === 'POST') {
+          return new Response(JSON.stringify({ id: 830, title: 'Far Far Away Idol', monitored: false }), { status: 201 })
+        }
+        if (url.includes('/api/v3/release?movieId=830')) {
+          // All under the cap, but every one rejected by Radarr's parser.
+          return new Response(
+            JSON.stringify([
+              { guid: 'g1', indexerId: 1, size: tiny, qualityWeight: 100, title: 'Far.Far.Away.Idol.NF.WEB-DL.1080p', rejected: true },
+              { guid: 'g2', indexerId: 1, size: tiny, qualityWeight: 90, title: 'Far.Far.Away.Idol', rejected: true },
+              { guid: 'g3', indexerId: 1, size: tiny, qualityWeight: 80, title: 'Far.Far.Away.Idol', temporarilyRejected: true },
+            ]),
+            { status: 200 },
+          )
+        }
+        if (url.endsWith('/api/v3/movie/830') && init?.method === 'PUT') {
+          putMonitored = JSON.parse(init.body as string)
+          return new Response(JSON.stringify({ id: 830, monitored: true }), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/movie/830') && init?.method === 'DELETE') {
+          deleteCalled = true
+          return new Response('', { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/movie', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: 'Far Far Away Idol',
+        tmdbId: 58508,
+        rootFolderPath: '/data/movies',
+        qualityProfileId: 7,
+        monitored: true,
+        addOptions: { searchForMovie: true },
+      }),
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { status: string; phase: string; monitored: boolean }
+    expect(body.status).toBe('monitoring')
+    expect(body.phase).toBe('no_matching_releases')
+    expect(body.monitored).toBe(true)
+    expect(putMonitored).not.toBeNull()
+    expect(deleteCalled).toBe(false) // preserved, not rolled back
+  })
+})
+
 // POST /api/v3/movie/:id/upgrade — admin-only manual upgrade trigger.
 // Reuses the same cap-filter chain as the add flow (so it can't
 // download a 50 GB rip even though it's logically an upgrade request)
