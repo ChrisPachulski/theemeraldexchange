@@ -5,7 +5,7 @@ V2 splits the dashboard across two hosts. The SPA lives on Netlify; the Hono bac
 ```
 theemeraldexchange.com           ──▶ Netlify (SPA)              ◀── git push triggers redeploy
 api.theemeraldexchange.com       ──▶ Cloudflare Tunnel
-                                  ──▶ cloudflared on NAS (host net)
+                                  ──▶ cloudflared on NAS (shares backend netns)
                                   ──▶ 127.0.0.1:3001
                                   ──▶ exchange-backend (Hono)
                                   ──▶ Sonarr / Radarr / SAB on the LAN
@@ -130,7 +130,7 @@ That frees host port 8085. The `nginx/` directory in the repo is dead code at th
 |---|---|---|
 | Browser: Plex login popup never closes after auth | Cookie isn't being set cross-origin | Check `ALLOWED_ORIGINS` matches the actual frontend origin exactly; check `NODE_ENV=production` is in the backend container env (`docker exec exchange-backend env \| grep NODE_ENV`). |
 | `/api/*` returns 503 | Backend not up | `docker logs exchange-backend` — usually a missing required env var. |
-| `/api/*` returns 502 / never resolves | Tunnel registered but can't reach backend | The tunnel hostname config is `localhost:3001`; cloudflared runs `network_mode: host` so this should hit the backend's `127.0.0.1:3001`. If broken, check `docker ps` shows both containers Up and `ss -ltn 'sport = :3001'` on the NAS shows the port bound. |
+| `/api/*` returns 502 / never resolves | Tunnel registered but can't reach backend | The tunnel hostname config is `localhost:3001`; cloudflared joins the backend's network namespace (`network_mode: service:backend`) so `localhost:3001` resolves to the backend's own listener. If broken, check `docker ps` shows both containers Up and (since they share a netns) **restart `exchange-cloudflared` after any backend recreate** — the netns reference breaks otherwise. |
 | `/api/*` returns 401 | Session cookie not present | Confirm browser is sending cookies to `api.theemeraldexchange.com`; check DevTools Network tab → Request Headers → Cookie. If missing, the browser blocked it (third-party cookie blocking on Safari is the usual culprit). |
 | Tunnel shows "Inactive" in CF dashboard | cloudflared can't authenticate | Wrong `TUNNEL_TOKEN`. Re-copy from the CF dashboard, update `.env.production`, redeploy. |
 | Disk-space gate firing for everyone | `MIN_FREE_GB` too high or actually no space | `df -h /mnt/user` on the NAS. The gate applies to admins too — by design. |
@@ -299,4 +299,4 @@ curl -s http://127.0.0.1:8001/health
 - **Netlify for SPA, NAS for backend**: Sonarr/Radarr/SAB live on the LAN and aren't reachable from a Netlify Function. The backend has to be where the services are.
 - **Cloudflare Tunnel** instead of port forwarding: free SSL, no router config, no exposing the NAS to the public internet, revocable from the dashboard if compromised.
 - **Backend runs as Docker on the NAS** (not bare metal): matches Unraid's pattern for everything else (Sonarr/Radarr/SAB/Plex are all containers), keeps env vars scoped to the container, easy to redeploy.
-- **`network_mode: host` for cloudflared**: simplest way to keep the tunnel's "service URL" config as `localhost:3001`. The backend stays bound to `127.0.0.1` (LAN-invisible); only the tunnel can reach it.
+- **`network_mode: service:backend` for cloudflared**: the tunnel joins the backend's network namespace, so its "service URL" config stays `localhost:3001` (resolves to the backend's own listener) while the backend stays bound to `127.0.0.1` (LAN-invisible). Host networking was deliberately **removed** (audit 9-7): on the host netns a compromised tunnel image could reach every loopback-published admin port (recommender :8001, media-core :8002, transcoder :8003, glitchtip :8100); sharing only the backend's netns closes that. Trade-off: recreating the backend container breaks the netns reference, so cloudflared must be restarted after any backend recreate (the deploy script does this).
