@@ -55,18 +55,6 @@ if (env.EEX_TELEMETRY_DSN) {
   )
 }
 
-// D18 grace-window deadline guard.
-// The legacy SHA-256 key path in session.ts is scheduled for removal after
-// 2026-06-25 (one full 30-day cookie TTL after the D18 deploy date).
-// This check makes that removal mandatory: if the server starts on or after
-// the deadline without the legacy path having been removed, it refuses to
-// boot rather than silently running with deprecated crypto.
-if (Date.now() >= new Date('2026-06-25').getTime()) {
-  throw new Error(
-    'HKDF legacy-SHA256 grace window expired; remove legacyKey path per D18',
-  )
-}
-
 // Boot sequence: open server.db, run migrations, generate server_id on
 // first boot (INSERT OR IGNORE — safe to call on every subsequent boot).
 const serverId = ensureServerId()

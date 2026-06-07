@@ -33,7 +33,6 @@
 //   (iptvStreamToken.ts / deviceToken.ts).
 
 import { EncryptJWT, jwtDecrypt } from 'jose'
-import { createHash } from 'node:crypto'
 import type { Context } from 'hono'
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie'
 import { contracts, type ContractsTypes } from './services/contractsBinding.js'
@@ -358,12 +357,6 @@ export { ensureServerId }
 // This is the canonical signing key for all cookies issued from D18 onward.
 const hkdfKey = deriveKey(env.sessionSecret, INFO_SESSION)
 
-// Legacy derivation: plain SHA-256. Used ONLY in the verifier grace window
-// so users with cookies minted before the D18 deploy are not silently
-// logged out. The signer (createSession) never uses this key.
-// TODO: Remove after 2026-06-25 (30 days post-D18 deploy — one cookie TTL).
-const legacyKey = createHash('sha256').update(env.sessionSecret, 'utf8').digest()
-
 export async function createSession(payload: Session): Promise<string> {
   return await new EncryptJWT({ ...payload })
     // No `kid` in this header: v1 has a single active session key, so there
@@ -377,21 +370,10 @@ export async function createSession(payload: Session): Promise<string> {
 }
 
 export async function verifySession(token: string): Promise<Session | null> {
-  // Try the current HKDF-derived key first.
-  const result = await tryDecrypt(token, hkdfKey)
-  if (result !== null) return result
-
-  // Grace-window fallback: attempt the legacy SHA-256 key. A cookie
-  // that decrypts here was minted before D18. Emit a WARN so the
-  // operator can see the tail-off and remove this path after
-  // 2026-06-25.
-  const legacy = await tryDecrypt(token, legacyKey)
-  if (legacy !== null) {
-    console.warn('[session] legacy-sha256-key accepted — user needs re-auth before grace window expires')
-    return legacy
-  }
-
-  return null
+  // Single active session key (HKDF-derived). The pre-D18 legacy SHA-256
+  // verifier fallback was removed once its 30-day cookie-TTL grace window
+  // closed; any cookie minted before D18 has long since expired.
+  return await tryDecrypt(token, hkdfKey)
 }
 
 async function tryDecrypt(token: string, key: Uint8Array): Promise<Session | null> {
