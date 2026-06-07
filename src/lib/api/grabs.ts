@@ -9,6 +9,7 @@ export type GrabEventType =
   | 'grab_started'
   | 'search_failed'
   | 'no_releases'
+  | 'no_matching_releases'
   | 'all_rejected_by_cap'
   | 'all_rejected_by_profile'
   | 'planned_size_exceeds_free_space'

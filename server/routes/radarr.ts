@@ -69,6 +69,10 @@ type CappedGrabResult =
   | { status: 'grab_succeeded' }
   | { status: 'search_failed'; upstreamStatus: number }
   | { status: 'no_releases'; scanned: number }
+  // Releases existed but Radarr rejected every one (parse/title/quality),
+  // so the size cap never applied. Handled like no_releases (monitor),
+  // not like all_rejected_by_cap (roll back).
+  | { status: 'no_matching_releases'; scanned: number }
   | { status: 'all_rejected_by_cap'; scanned: number }
   | { status: 'grab_failed'; upstreamStatus: number }
 
@@ -191,30 +195,46 @@ async function grabBestUnderCap(
   // the raw snapshot, so two concurrent adds don't both pass against the same
   // figure.
   const availableBytes = availableRadarrFolderBytes(rootFolder)
-  const eligible = all
-    .filter((r) =>
-      !r.rejected &&
-      !r.temporarilyRejected &&
-      r.size > 0 &&
-      r.size <= env.maxMovieBytes &&
-      availableBytes - r.size >= env.minFreeBytes
+  // Releases Radarr ITSELF accepts: parsed, title-matched, wanted quality,
+  // not rejected. A release Radarr marks rejected/temporarilyRejected (e.g.
+  // "Unable to parse release", wrong movie) is not grabbable for reasons
+  // that have nothing to do with our size cap — splitting it out here lets
+  // the caller distinguish "every candidate is over the cap" (roll back)
+  // from "Radarr rejected everything" (keep monitored, like no_releases).
+  const radarrAccepted = all.filter(
+    (r) => !r.rejected && !r.temporarilyRejected && r.size > 0,
+  )
+  const eligible = radarrAccepted
+    .filter(
+      (r) =>
+        r.size <= env.maxMovieBytes &&
+        availableBytes - r.size >= env.minFreeBytes,
     )
     .sort((a, b) => b.qualityWeight - a.qualityWeight)
   if (eligible.length === 0) {
+    // Three distinct "nothing to grab" cases:
+    //   no_releases          — indexers returned nothing at all.
+    //   no_matching_releases — releases exist but Radarr rejected every one
+    //                          (parse/title/quality); the cap never applied.
+    //   all_rejected_by_cap  — Radarr-accepted releases exist, but every one
+    //                          exceeds the size cap / free-space gate.
+    const status =
+      all.length === 0
+        ? 'no_releases'
+        : radarrAccepted.length === 0
+          ? 'no_matching_releases'
+          : 'all_rejected_by_cap'
     console.log(
-      `[movie-cap] no releases ≤ ${env.maxMovieGb}GB for movie ${movieId} ` +
-        `(${all.length} scanned)`,
+      `[movie-cap] ${status} for movie ${movieId} ` +
+        `(${all.length} scanned, ${radarrAccepted.length} matched, 0 ≤ ${env.maxMovieGb}GB)`,
     )
     await recordRadarrGrabEvent({
       ...base,
-      type: all.length === 0 ? 'no_releases' : 'all_rejected_by_cap',
+      type: status,
       scanned: all.length,
       eligible: 0,
     })
-    return {
-      status: all.length === 0 ? 'no_releases' : 'all_rejected_by_cap',
-      scanned: all.length,
-    }
+    return { status, scanned: all.length }
   }
   const best = eligible[0]
   // Finding 4-1: reserve the planned bytes BEFORE issuing the grab so a
@@ -555,17 +575,22 @@ radarr.post('/api/v3/movie', radarrMutateLimit, async (c) => {
             424,
           )
         }
-        if (grab.status === 'no_releases') {
-          // Nothing to grab YET — typically an unreleased/future film with no
-          // releases in the indexers (0 scanned). Do NOT discard the add:
-          // flip it to monitored so Radarr's RSS sync downloads it the moment
-          // a release appears. This is the "add it and it'll come when
-          // available" behavior, and removes the dead-end 424 on future titles.
+        if (grab.status === 'no_releases' || grab.status === 'no_matching_releases') {
+          // Nothing GRABBABLE yet — either an unreleased/future film with no
+          // releases at all (no_releases), or releases exist but Radarr
+          // rejected every one for parse/title/quality reasons unrelated to
+          // our size cap (no_matching_releases — e.g. an obscure short whose
+          // only releases have unparseable names). In BOTH cases the size cap
+          // never applied, so do NOT discard the add: flip it to monitored so
+          // Radarr's RSS sync grabs it the moment a usable release appears.
+          // This is the "add it and it'll come when available" behavior, and
+          // avoids the dead-end 424 on titles that simply have no clean
+          // release right now.
           const monitored = await setMovieMonitored(created, true)
           return c.json(
             {
               status: 'monitoring',
-              phase: 'no_releases',
+              phase: grab.status,
               scanned: grab.scanned,
               monitored: monitored.ok,
               movie: created,
@@ -583,6 +608,7 @@ radarr.post('/api/v3/movie', radarrMutateLimit, async (c) => {
               error: 'capped_grab_not_started',
               phase: grab.status,
               scanned: grab.scanned,
+              capGb: env.maxMovieGb,
               rollbackStatus: rollback.ok ? undefined : rollback.status || undefined,
               movie: created,
             },
