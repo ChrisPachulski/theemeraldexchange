@@ -89,6 +89,7 @@ distributed server → client at boot. See [DEPLOY.md](./DEPLOY.md).
 
 ## Project docs
 
+- [docs/README.md](./docs/README.md) — the doc map: which docs are current source-of-truth vs historical archive. Start here when unsure.
 - [TODO.md](./TODO.md) — high-level worklist; start here for what's outstanding.
 - [docs/ROADMAP-STATUS.md](./docs/ROADMAP-STATUS.md) — honest per-milestone state (M1–M6).
 - [PRODUCT.md](./PRODUCT.md) — audience, principles, scope.
@@ -98,7 +99,20 @@ distributed server → client at boot. See [DEPLOY.md](./DEPLOY.md).
 
 ## Roadmap
 
-M1 (IPTV core) shipped. M1.5 is the cross-service contract gate. M2 brings the
-Apple clients (the App-Store target), M3 the Rust media-core, M4 the
-transcoder, M5 the native clients. Until the first binary is distributed the
-repository stays private; third-party redistribution is not granted.
+The backend track is largely shipped; the client track is hard-blocked on Apple
+tooling (Xcode + Developer Program). Honest per-milestone detail with status and
+percentages lives in [docs/ROADMAP-STATUS.md](./docs/ROADMAP-STATUS.md).
+
+- **M1 — IPTV core:** shipped and live.
+- **M1.5 — cross-service contract:** ratified/locked; Rust↔TS↔Python byte
+  parity enforced in CI.
+- **M3 — Rust media-core:** live on the NAS in enforce mode (library
+  scan / metadata / serve).
+- **M4 — transcoder:** deployed; real-library HEVC→H.264 transcode proven
+  end-to-end (serving + `ffprobe`-validated output). Remaining: a real client
+  player path and stress/bench evidence.
+- **M2 / M5 / M6 — Apple clients, native playback + offline downloads, the
+  Plex-Pass-equivalent tier:** not started, blocked on the Apple gate.
+
+Until the first binary is distributed the repository stays private; third-party
+redistribution is not granted.
