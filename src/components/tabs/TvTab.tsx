@@ -18,7 +18,7 @@ import { useSonarrLibrary } from '../../lib/hooks/useSonarrLibrary'
 import { useSonarrEpisodes } from '../../lib/hooks/useSonarrEpisodes'
 import { useSuggestedTv } from '../../lib/hooks/useSuggested'
 import { useStripAutoRefresh } from '../../lib/hooks/useStripAutoRefresh'
-import { useAiSuggestionsEnabled } from '../../lib/hooks/useAiSuggestionsEnabled'
+import { useSuggestionMode } from '../../lib/hooks/useSuggestionMode'
 import { useUserApiKey } from '../../lib/hooks/useUserApiKey'
 import { useLimits } from '../../lib/hooks/useLimits'
 import { useFeedback, useSetFeedback } from '../../lib/hooks/useUserFeedback'
@@ -128,14 +128,17 @@ export function TvTab() {
     return map
   }, [library.data])
 
-  const ai = useAiSuggestionsEnabled()
   const userKey = useUserApiKey()
   const limits = useLimits()
-  // See MoviesTab — when the server is configured to use the local
-  // recommender, the AI toggle does nothing (every refresh routes
-  // through the sidecar). Hide it.
   const localRecommender = limits.data?.useLocalRecommender === true
-  const suggested = useSuggestedTv(ai.enabled, userKey.key)
+  // See MoviesTab — Recommended ⇄ Trending toggle, shown whenever
+  // personalization is achievable (free local recommender or a BYO key).
+  const personalizedAchievable = localRecommender || userKey.hasKey
+  const { mode: suggestionMode, setMode: setSuggestionMode } = useSuggestionMode(
+    localRecommender ? 'recommended' : 'trending',
+  )
+  const forceTrending = !personalizedAchievable || suggestionMode === 'trending'
+  const suggested = useSuggestedTv(forceTrending, userKey.key)
   const feedback = useFeedback()
   const setFeedback = useSetFeedback('tv')
   const stateFor = (id: number): DotState => {
@@ -362,7 +365,7 @@ export function TvTab() {
                   // looking like a clean first-run.
                   unavailable: !!feedback.error,
                 }}
-                ai={userKey.hasKey && !localRecommender ? { enabled: ai.enabled, onToggle: ai.toggle } : undefined}
+                mode={personalizedAchievable ? { value: suggestionMode, onChange: setSuggestionMode } : undefined}
               />
             </div>
           )}

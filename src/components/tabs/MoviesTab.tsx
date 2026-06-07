@@ -17,7 +17,7 @@ import { useMovieSearch } from '../../lib/hooks/useMovieSearch'
 import { useRadarrLibrary } from '../../lib/hooks/useRadarrLibrary'
 import { useSuggestedMovies } from '../../lib/hooks/useSuggested'
 import { useStripAutoRefresh } from '../../lib/hooks/useStripAutoRefresh'
-import { useAiSuggestionsEnabled } from '../../lib/hooks/useAiSuggestionsEnabled'
+import { useSuggestionMode } from '../../lib/hooks/useSuggestionMode'
 import { useUserApiKey } from '../../lib/hooks/useUserApiKey'
 import { useLimits } from '../../lib/hooks/useLimits'
 import { useFeedback, useSetFeedback } from '../../lib/hooks/useUserFeedback'
@@ -139,14 +139,20 @@ export function MoviesTab() {
     return map
   }, [library.data])
 
-  const ai = useAiSuggestionsEnabled()
   const userKey = useUserApiKey()
   const limits = useLimits()
-  // Local recommender takes precedence on the server; the AI toggle is
-  // inert when it's on. Hide the toggle so we don't show users a
-  // setting that does nothing.
   const localRecommender = limits.data?.useLocalRecommender === true
-  const suggested = useSuggestedMovies(ai.enabled, userKey.key)
+  // Personalization is achievable when the free on-NAS recommender runs,
+  // or the user supplied a BYO Anthropic key. The Recommended ⇄ Trending
+  // toggle is only meaningful when it is. Default to Recommended only when
+  // it's free (local recommender); BYO-key-only deployments default to
+  // Trending so they don't spend tokens until the user opts in.
+  const personalizedAchievable = localRecommender || userKey.hasKey
+  const { mode: suggestionMode, setMode: setSuggestionMode } = useSuggestionMode(
+    localRecommender ? 'recommended' : 'trending',
+  )
+  const forceTrending = !personalizedAchievable || suggestionMode === 'trending'
+  const suggested = useSuggestedMovies(forceTrending, userKey.key)
   const feedback = useFeedback()
   const setFeedback = useSetFeedback('movie')
   const stateFor = (id: number): DotState => {
@@ -360,7 +366,7 @@ export function MoviesTab() {
                   // from a clean first-run.
                   unavailable: !!feedback.error,
                 }}
-                ai={userKey.hasKey && !localRecommender ? { enabled: ai.enabled, onToggle: ai.toggle } : undefined}
+                mode={personalizedAchievable ? { value: suggestionMode, onChange: setSuggestionMode } : undefined}
               />
             </div>
           )}

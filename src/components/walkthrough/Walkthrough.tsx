@@ -207,7 +207,10 @@ function StripDemo() {
           onLike: (id) => apply(id, 'liked'),
           onDislike: (id) => apply(id, 'disliked'),
         }}
-        ai={{ enabled: aiEnabled, onToggle: () => setAiEnabled((v) => !v) }}
+        mode={{
+          value: aiEnabled ? 'recommended' : 'trending',
+          onChange: (m) => setAiEnabled(m === 'recommended'),
+        }}
       />
     </div>
   )

@@ -109,18 +109,22 @@ export class SuggestionsError extends Error {
 
 async function fetchSuggested(
   kind: 'movie' | 'tv',
-  aiEnabled: boolean,
+  forceTrending: boolean,
   apiKey: string | null,
 ): Promise<SuggestionResult> {
-  // AI only flips on when both the toggle says yes AND the user has
-  // an API key. Without a key, force ?force=trending so the backend
-  // skips the (now-required) BYO key check and returns TMDB trending.
-  const useAi = aiEnabled && !!apiKey
-  const url = useAi
-    ? apiUrl(`/api/suggestions/${kind}`)
-    : apiUrl(`/api/suggestions/${kind}`, { force: 'trending' })
+  // forceTrending is the caller's resolved decision (see the tabs): the
+  // user picked "Trending", OR personalization isn't achievable (no local
+  // recommender and no BYO key). When forcing trending we send
+  // ?force=trending so the backend serves TMDB trending in every mode —
+  // including local-recommender mode, which otherwise always personalizes.
+  const url = forceTrending
+    ? apiUrl(`/api/suggestions/${kind}`, { force: 'trending' })
+    : apiUrl(`/api/suggestions/${kind}`)
   const headers: Record<string, string> = {}
-  if (useAi && apiKey) headers['X-Anthropic-Api-Key'] = apiKey
+  // Attach the BYO key on the personalized path so the legacy Claude
+  // route can authenticate. Harmless when the local recommender wins
+  // (it ignores the header).
+  if (!forceTrending && apiKey) headers['X-Anthropic-Api-Key'] = apiKey
   const r = await fetch(url, { credentials: 'include', headers })
   if (!r.ok) {
     // Throw instead of returning empty so React Query surfaces
@@ -147,17 +151,17 @@ async function fetchSuggested(
   }
 }
 
-export function useSuggestedMovies(aiEnabled: boolean, apiKey: string | null) {
-  // Fourth segment is a non-secret fingerprint of the API key. When
-  // the key changes (same tab via setKey, or cross-tab via the
-  // `storage` event in useUserApiKey), the query key changes, so
-  // TanStack Query treats it as a different query and refetches —
-  // closing the cross-tab cache-staleness gap. The 'ai' | 'trending'
-  // mode is kept as a separate segment so the cache shape stays
-  // intuitive; the fingerprint only disambiguates within 'ai'.
+export function useSuggestedMovies(forceTrending: boolean, apiKey: string | null) {
+  // Third segment is the resolved feed (trending vs recommended) so
+  // flipping the toggle is a distinct query that refetches. Fourth is a
+  // non-secret fingerprint of the API key: when the key changes (same
+  // tab via setKey, or cross-tab via the `storage` event in
+  // useUserApiKey), the query key changes, so TanStack Query treats it
+  // as a different query and refetches — closing the cross-tab
+  // cache-staleness gap.
   return useQuery({
-    queryKey: ['suggestions', 'movie', aiEnabled && apiKey ? 'ai' : 'trending', keyFingerprint(apiKey)],
-    queryFn: () => fetchSuggested('movie', aiEnabled, apiKey),
+    queryKey: ['suggestions', 'movie', forceTrending ? 'trending' : 'recommended', keyFingerprint(apiKey)],
+    queryFn: () => fetchSuggested('movie', forceTrending, apiKey),
     staleTime: 0,
     refetchOnMount: 'always',
     retry: (failureCount, err) => {
@@ -169,11 +173,11 @@ export function useSuggestedMovies(aiEnabled: boolean, apiKey: string | null) {
   })
 }
 
-export function useSuggestedTv(aiEnabled: boolean, apiKey: string | null) {
-  // See useSuggestedMovies for the fingerprint rationale.
+export function useSuggestedTv(forceTrending: boolean, apiKey: string | null) {
+  // See useSuggestedMovies for the query-key rationale.
   return useQuery({
-    queryKey: ['suggestions', 'tv', aiEnabled && apiKey ? 'ai' : 'trending', keyFingerprint(apiKey)],
-    queryFn: () => fetchSuggested('tv', aiEnabled, apiKey),
+    queryKey: ['suggestions', 'tv', forceTrending ? 'trending' : 'recommended', keyFingerprint(apiKey)],
+    queryFn: () => fetchSuggested('tv', forceTrending, apiKey),
     staleTime: 0,
     refetchOnMount: 'always',
     retry: (failureCount, err) => {
