@@ -130,6 +130,11 @@ services:
       # until then the backend never proxies to it (no behavior change).
       USE_MEDIA_CORE: "${USE_MEDIA_CORE:-0}"
       MEDIA_CORE_URL: "${MEDIA_CORE_URL:-http://media-core:8002}"
+      # When a file can't direct-play, media-core hands the client an HLS
+      # session on the transcoder; the SPA reaches those manifest/segment
+      # URLs through the backend's /api/transcode proxy. Same service URL
+      # media-core itself uses for the grant handoff.
+      MEDIA_TRANSCODER_URL: "${MEDIA_TRANSCODER_URL:-http://transcoder:8003}"
       # mybunny.tv / Xtream Codes — see server/services/xtream.ts and
       # server/services/iptvSync.ts. With XTREAM_HOST blank, the scheduler
       # self-skips at boot so non-iptv deploys still work unchanged.
