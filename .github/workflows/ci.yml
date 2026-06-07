@@ -332,16 +332,16 @@ jobs:
         run: pip install pip-audit
 
       - name: pip-audit (recommender)
-        # Install pip-compile so we can resolve the floating pyproject.toml
-        # ranges into a concrete list for pip-audit. --no-deps on the audit
-        # is intentional: pip-audit resolves transitives itself from PyPI.
-        # When a lockfile is added (MEDIUM #10), replace this step with
-        # `pip-audit -r constraints.txt` or `pip-audit --require-hashes`.
+        # Audit the EXACT shipped dependency set — the committed lock the Docker
+        # image installs from (recommender/requirements.lock) — instead of a
+        # freshly re-resolved pyproject (which drifts from what actually ships).
+        # torch is pinned to the +cpu local build, which isn't a PyPI release the
+        # advisory DB keys on, so strip the +cpu suffix for the audit only: the
+        # CPU build is the same upstream 2.x.x release, just a different wheel.
         working-directory: recommender
         run: |
-          pip install pip-tools
-          pip-compile pyproject.toml --quiet --output-file /tmp/recommender-resolved.txt
-          pip-audit -r /tmp/recommender-resolved.txt
+          sed 's/+cpu//' requirements.lock > /tmp/recommender-audit.txt
+          pip-audit -r /tmp/recommender-audit.txt
 
   docker-build:
     # Every other job runs on the host runner via npm/cargo/pytest — nothing
