@@ -25,15 +25,6 @@ Four runtimes, one product:
 - **Recommender** (`recommender/`) — Python FastAPI + sqlite-vec scoring
   sidecar. Local-first: household signals never leave the NAS.
 
-Plus one out-of-band tool, not part of the product runtime:
-
-- **Autoloop** (`scripts/autoloop/`, state in `.autoloop/`) — an autonomous,
-  convergent codex mesh that improves the repo while you're away. Runs on
-  **codex** (flat-rate; never `claude -p`), gated by `.autoloop/CONTROL.md`
-  (`MASTER: ON/OFF`) with a `.autoloop/STOP` kill-switch. See
-  [scripts/autoloop/README.md](./scripts/autoloop/README.md). P0–P1 landed;
-  P2–P5 pending.
-
 ## Authentication & authorization
 
 There is no homegrown password store. Identity comes from three parallel
