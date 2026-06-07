@@ -145,6 +145,68 @@ export type ScanStarted = { status: 'started'; jobId?: string | number }
 export type ScanRunning = { status: 'running' }
 export type ScanResponse = ScanStarted | ScanRunning
 
+// ── Playback ─────────────────────────────────────────────────────────
+
+/** Media kinds the playback grant accepts (movies + episodes have a file). */
+export type PlayableKind = 'movie' | 'episode'
+
+/** Capabilities advertised to the grant. snake_case to match the backend body
+ *  (which forwards them to media-core's ClientCaps). */
+export type PlaybackCaps = {
+  containers: string[]
+  video_codecs: string[]
+  max_height?: number
+  hdr: boolean
+}
+
+/** What the backend hands back: a tokenised URL the <video>/hls.js player can
+ *  load cross-origin, plus playback metadata. Mirrors the IPTV StreamGrant
+ *  ({ delivery, url }) so the shared IptvPlayer consumes it directly. */
+export type PlaybackGrant = {
+  delivery: 'progressive' | 'hls'
+  /** Absolute, token-bearing stream/manifest URL. */
+  url: string
+  durationSecs: number | null
+  /** Present only for the HLS (transcode) path — POST it to keep the session
+   *  alive (the transcoder reaps idle sessions). */
+  heartbeatUrl?: string | null
+  sessionId?: string
+}
+
+/** A persisted watch-progress row (camelCase-normalised from media-core). */
+export type WatchEntry = {
+  mediaKind: PlayableKind
+  mediaId: number
+  positionSecs: number
+  durationSecs: number | null
+  watchedAt: string
+  completed: boolean
+}
+
+type RawWatchRow = {
+  media_kind: PlayableKind
+  media_id: number
+  position_secs: number
+  duration_secs: number | null
+  watched_at: string
+  completed: number | boolean
+}
+
+/** Conservative browser playback capabilities. The backend already defaults to
+ *  mp4/h264 (routing everything else through the transcoder); we advertise the
+ *  same explicitly and cap height to the display so a 4K source isn't
+ *  direct-played to a 1080p screen. */
+export function browserCaps(): PlaybackCaps {
+  const screenH =
+    typeof window !== 'undefined' && window.screen?.height ? window.screen.height : 1080
+  return {
+    containers: ['mp4'],
+    video_codecs: ['h264'],
+    max_height: Math.max(screenH, 720),
+    hdr: false,
+  }
+}
+
 // ── Normalizers ──────────────────────────────────────────────────────
 
 function normMovie(r: RawMovieRow): MediaMovie {
@@ -213,6 +275,50 @@ export function posterFor(item: {
   return `https://image.tmdb.org/t/p/w342${item.posterPath}`
 }
 
+type RawPlaybackGrant = {
+  delivery: 'progressive' | 'hls'
+  url: string
+  durationSecs: number | null
+  heartbeatUrl?: string | null
+  sessionId?: string
+}
+
+// The grant's url/heartbeatUrl are returned root-relative; resolve them through
+// apiUrl so the <video>/hls.js element loads them from the API origin (which in
+// prod is a different host than the SPA). The embedded ?t= token is preserved.
+function absolutizeGrant(g: RawPlaybackGrant): PlaybackGrant {
+  return {
+    delivery: g.delivery,
+    url: g.url.startsWith('/') ? apiUrl(g.url) : g.url,
+    durationSecs: g.durationSecs ?? null,
+    heartbeatUrl: g.heartbeatUrl
+      ? g.heartbeatUrl.startsWith('/')
+        ? apiUrl(g.heartbeatUrl)
+        : g.heartbeatUrl
+      : null,
+    sessionId: g.sessionId,
+  }
+}
+
+function normWatch(r: RawWatchRow): WatchEntry {
+  return {
+    mediaKind: r.media_kind,
+    mediaId: r.media_id,
+    positionSecs: r.position_secs,
+    durationSecs: r.duration_secs ?? null,
+    watchedAt: r.watched_at,
+    completed: Boolean(r.completed),
+  }
+}
+
+type WatchUpsertBody = {
+  media_kind: PlayableKind
+  media_id: number
+  position_secs: number
+  duration_secs?: number
+  completed: boolean
+}
+
 // ── Public API ───────────────────────────────────────────────────────
 
 export const mediaApi = {
@@ -229,4 +335,37 @@ export const mediaApi = {
       (raw) => normList(raw, normEpisode),
     ),
   scan: () => post<ScanResponse, Record<string, never>>('/scan', {}),
+
+  /** Request a playback grant. Returns a tokenised URL the player loads. */
+  playback: (kind: PlayableKind, id: number, caps: PlaybackCaps = browserCaps()) =>
+    post<RawPlaybackGrant, PlaybackCaps>(`/playback/${kind}/${id}`, caps).then(absolutizeGrant),
+
+  /** The current user's watch-progress rows. */
+  watch: (req?: RequestOpts) =>
+    get<{ items: RawWatchRow[] }>('/watch', undefined, req).then((r) =>
+      (r.items ?? []).map(normWatch),
+    ),
+
+  /** Upsert watch progress for one title. */
+  saveWatch: (entry: {
+    kind: PlayableKind
+    id: number
+    positionSecs: number
+    durationSecs?: number | null
+    completed?: boolean
+  }) =>
+    post<{ ok: boolean }, WatchUpsertBody>('/watch', {
+      media_kind: entry.kind,
+      media_id: entry.id,
+      position_secs: Math.max(0, Math.floor(entry.positionSecs)),
+      ...(entry.durationSecs != null && Number.isFinite(entry.durationSecs)
+        ? { duration_secs: Math.floor(entry.durationSecs) }
+        : {}),
+      completed: entry.completed ?? false,
+    }),
+
+  /** Keep a transcode session alive. Fire-and-forget; the absolute heartbeatUrl
+   *  already carries its ?t= token, so no credentials are needed. */
+  heartbeat: (url: string) =>
+    fetch(url, { method: 'POST', keepalive: true }).catch(() => undefined),
 }

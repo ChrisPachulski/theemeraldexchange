@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ApiError } from './errors'
-import { mediaApi, posterFor } from './media'
+import { mediaApi, posterFor, browserCaps } from './media'
 
 const fetchMock = vi.fn()
 
@@ -143,6 +143,105 @@ describe('mediaApi', () => {
       expect.objectContaining({ method: 'POST', credentials: 'include' }),
     )
     expect(res).toMatchObject({ status: 'started' })
+  })
+})
+
+describe('mediaApi playback + watch', () => {
+  it('playback() POSTs caps and absolutizes the returned progressive url', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({
+        delivery: 'progressive',
+        url: '/api/media/stream/movie/7?t=TOK',
+        durationSecs: 1200,
+      }),
+    )
+
+    const grant = await mediaApi.playback('movie', 7)
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/media/playback/movie/7'),
+      expect.objectContaining({ method: 'POST', credentials: 'include' }),
+    )
+    // Default caps are sent in the body.
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body))
+    expect(body).toMatchObject({ containers: ['mp4'], video_codecs: ['h264'], hdr: false })
+    // Root-relative url is resolved to an absolute URL (token preserved).
+    expect(grant.delivery).toBe('progressive')
+    expect(grant.url).toBe('http://localhost/api/media/stream/movie/7?t=TOK')
+    expect(grant.durationSecs).toBe(1200)
+    expect(grant.heartbeatUrl).toBeNull()
+  })
+
+  it('playback() absolutizes the HLS manifest + heartbeat urls', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({
+        delivery: 'hls',
+        url: '/api/transcode/session/sid/index.m3u8?t=TOK',
+        heartbeatUrl: '/api/transcode/session/sid/heartbeat?t=TOK',
+        sessionId: 'sid',
+        durationSecs: null,
+      }),
+    )
+
+    const grant = await mediaApi.playback('episode', 42)
+
+    expect(grant.url).toBe('http://localhost/api/transcode/session/sid/index.m3u8?t=TOK')
+    expect(grant.heartbeatUrl).toBe('http://localhost/api/transcode/session/sid/heartbeat?t=TOK')
+    expect(grant.sessionId).toBe('sid')
+  })
+
+  it('watch() normalizes rows and coerces completed to boolean', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({
+        items: [
+          {
+            media_kind: 'movie',
+            media_id: 7,
+            position_secs: 600,
+            duration_secs: 1200,
+            watched_at: '2026-06-07T00:00:00Z',
+            completed: 0,
+          },
+        ],
+      }),
+    )
+
+    const rows = await mediaApi.watch()
+    expect(rows[0]).toMatchObject({
+      mediaKind: 'movie',
+      mediaId: 7,
+      positionSecs: 600,
+      durationSecs: 1200,
+      completed: false,
+    })
+  })
+
+  it('saveWatch() POSTs floored snake_case progress', async () => {
+    fetchMock.mockResolvedValueOnce(jsonRes({ ok: true }))
+
+    await mediaApi.saveWatch({ kind: 'movie', id: 7, positionSecs: 12.9, durationSecs: 1200.4 })
+
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(String(url)).toContain('/api/media/watch')
+    expect(init.method).toBe('POST')
+    const body = JSON.parse(String(init.body))
+    expect(body).toMatchObject({
+      media_kind: 'movie',
+      media_id: 7,
+      position_secs: 12,
+      duration_secs: 1200,
+      completed: false,
+    })
+  })
+})
+
+describe('browserCaps', () => {
+  it('advertises the conservative mp4/h264 web-safe profile', () => {
+    const caps = browserCaps()
+    expect(caps.containers).toEqual(['mp4'])
+    expect(caps.video_codecs).toEqual(['h264'])
+    expect(caps.hdr).toBe(false)
+    expect(caps.max_height).toBeGreaterThanOrEqual(720)
   })
 })
 
