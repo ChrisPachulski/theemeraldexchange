@@ -1946,6 +1946,9 @@ suggestions.get('/:type', async (c) => {
   // sources on subtitles ("X: The Y" vs "X"). titleSetFrom() includes
   // both the full normalized title and the pre-subtitle base form.
   const libraryTitles = titleSetFrom(library)
+  // Full-title-only library set (no base form) for the recommender path —
+  // see filterRecommenderSafe for why base-form franchise roots over-block.
+  const libraryTitlesFull = titleSetFrom(library, { includeBase: false })
   // Rejections are exact-title only (no base form) — a "no" on
   // "Avatar: The Last Airbender" shouldn't blanket-ban every other
   // work in the Avatar franchise.
@@ -1965,6 +1968,32 @@ suggestions.get('/:type', async (c) => {
         !titleMatches(i.title, rejectedTitles) &&
         !titleMatches(i.title, libraryTitles),
     )
+  }
+
+  // Recommender-path safety filter. The local recommender already excludes the
+  // household's library, rejections, and dislikes BY ID (it receives all three
+  // in the /score payload) plus its own library title-key dedup, and every item
+  // it returns carries a real tmdb_id. So the id-less-leak protection that
+  // filterHouseholdSafe adds for the trending/Claude paths is unnecessary here —
+  // and its base-form title matching is actively harmful: `normalizeTitleBase`
+  // collapses "Batman: Bad Blood" / "Terminator: Dark Fate" / "Transformers:
+  // The Movie" to the franchise root ("batman"/"terminator"/"transformers"), so
+  // owning ONE entry of a franchise blocked EVERY other distinct film in it.
+  // Movies are franchise-dense, so this silently nuked ~13 of 20 picks (strip
+  // collapsed to ~7); TV, which rarely uses "Franchise: Subtitle" naming, barely
+  // noticed. Match by id and FULL normalized title only — exact-title duplicates
+  // of an owned/rejected film are still suppressed (honoring the permanent veto
+  // even across TMDB-duplicate ids), but distinct franchise entries survive.
+  function filterRecommenderSafe(items: SuggestionItem[]): SuggestionItem[] {
+    return items.filter((i) => {
+      const full = normalizeTitle(i.title)
+      return (
+        !rejected.has(i.id) &&
+        !libraryTmdbIds.has(i.id) &&
+        !rejectedTitles.has(full) &&
+        !libraryTitlesFull.has(full)
+      )
+    })
   }
 
   // Include top genre distribution in every diag response so the
@@ -2077,7 +2106,7 @@ suggestions.get('/:type', async (c) => {
       provenance: it.provenance,
       reason: it.reason,
     }))
-    const safe = filterHouseholdSafe(mapped)
+    const safe = filterRecommenderSafe(mapped)
 
     if (safe.length === 0) {
       // Recommender returned nothing usable (down, empty catalog, or all

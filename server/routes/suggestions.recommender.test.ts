@@ -158,3 +158,76 @@ describe('GET /api/suggestions/:type — recommender fallback', () => {
     expect(scoreCalls.length).toBeGreaterThanOrEqual(1)
   })
 })
+
+describe('GET /api/suggestions/:type — recommender franchise-collision filter', () => {
+  it('keeps distinct franchise entries; drops only id + exact-title dupes', async () => {
+    // Regression: the recommender already excludes the household library /
+    // rejections / dislikes by id, so the backend re-filter must NOT use
+    // base-form ("Franchise: Subtitle" → "franchise") title matching, which
+    // let one owned Batman/Terminator/Transformers title nuke every other
+    // distinct film in the franchise and collapsed the movie strip to ~7.
+    const mod = await import('./suggestions.js')
+    mod._resetLibraryCacheForTests()
+    mod._resetLibraryStaleFallbackForTests()
+
+    const OWNED_BATMAN = 9001 // owned "Batman: The Killing Joke"
+    const DISTINCT_BATMAN = 9002 // unrelated "Batman: Bad Blood" — must SURVIVE
+    const EXACT_DUP_OF_OWNED = 9003 // different id, exact title of an owned film
+    const FRESH = 9005
+
+    const spy: FetchSpy = vi.fn(async (input: string | URL | Request) => {
+      const url =
+        typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url
+      if (url.includes('/api/v3/movie')) {
+        return new Response(
+          JSON.stringify([
+            { tmdbId: OWNED_BATMAN, title: 'Batman: The Killing Joke', year: 2016 },
+            { tmdbId: 9100, title: 'Inception', year: 2010 },
+          ]),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )
+      }
+      if (url.includes('/api/v3/series')) {
+        return new Response('[]', { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (url.includes('recommender.test/score')) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              { tmdb_id: DISTINCT_BATMAN, title: 'Batman: Bad Blood', year: 2016, provenance: 'personalized', score: 0.71 },
+              { tmdb_id: EXACT_DUP_OF_OWNED, title: 'Inception', year: 2010, provenance: 'personalized', score: 0.7 },
+              { tmdb_id: OWNED_BATMAN, title: 'Batman: The Killing Joke', year: 2016, provenance: 'personalized', score: 0.69 },
+              { tmdb_id: FRESH, title: 'A Completely Fresh Film', year: 2024, provenance: 'personalized', score: 0.68 },
+            ],
+            model_version: 'test-mv',
+            recipe: 'fused',
+            diag: {},
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )
+      }
+      // impressions / shown / anything else
+      return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })
+    })
+    vi.stubGlobal('fetch', spy)
+
+    const r = await app.request('/api/suggestions/movie', { headers: { Cookie: await userCookie() } })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { source: string; items: Array<{ id: number }> }
+    expect(body.source).toBe('recommender')
+    const ids = body.items.map((i) => i.id)
+
+    // THE FIX: a distinct film sharing a franchise root with an owned title
+    // survives instead of being blanket-banned by the base-form match.
+    expect(ids).toContain(DISTINCT_BATMAN)
+    expect(ids).toContain(FRESH)
+    // Still household-safe: an owned id and an exact-title duplicate of an
+    // owned film are dropped (permanent veto honored even across dup ids).
+    expect(ids).not.toContain(OWNED_BATMAN)
+    expect(ids).not.toContain(EXACT_DUP_OF_OWNED)
+  })
+})
