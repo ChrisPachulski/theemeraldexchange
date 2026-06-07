@@ -25,10 +25,11 @@ type Tab = {
 const TABS: Tab[] = [
   { route: 'tv', label: 'TV Shows' },
   { route: 'movies', label: 'Movies' },
-  // M3 media-core Library tab — intentionally NOT surfaced in nav yet. The
-  // /media route + backend stay wired (USE_MEDIA_CORE) for continued M3 dev,
-  // but the tab is hidden from prod until the milestone is signed off.
-  // To re-enable: { route: 'media', label: 'Media', media: true },
+  // M3 media-core Library tab. `media: true` hides it when the backend boots
+  // without USE_MEDIA_CORE (mediaEnabled=false from /api/config). Now that the
+  // tab plays local titles in-browser (direct-play + transcoded HLS), it is
+  // surfaced in prod.
+  { route: 'media', label: 'Media', media: true },
   // `iptv: true` hides the tab when the server boots with IPTV_DISABLED=1
   // (contract §13.3 reviewer-insurance gate).
   { route: 'live', label: 'Live', iptv: true },
