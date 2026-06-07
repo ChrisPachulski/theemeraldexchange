@@ -4,6 +4,11 @@ vi.mock('../env.js', () => ({
   env: {
     mediaCoreUrl: 'http://media-core.test',
     internalPrincipalSecret: 'test-secret',
+    // Real-ish secrets so signMediaToken (canonical Rust signer) round-trips in
+    // the playback-grant tests below.
+    streamTokenSecret: 'media-grant-test-secret-aaaaaaaaaaaaaaaa',
+    sessionSecret: 'session-fallback-secret-bbbbbbbbbbbbbbbb',
+    MEDIA_STREAM_TOKEN_TTL_SECS: 21_600,
   },
 }))
 
@@ -18,7 +23,7 @@ vi.mock('../services/upstream.js', () => ({
 
 vi.mock('../middleware/auth.js', () => ({
   requireAuth: (c: { set: (k: string, v: unknown) => void }, next: () => unknown) => {
-    c.set('session', { userId: 'u1', role: 'admin' })
+    c.set('session', { sub: 'plex:42', username: 'u1', role: 'user' })
     return next()
   },
 }))
@@ -188,5 +193,108 @@ describe('media proxy route', () => {
     expect(mockFetch).toHaveBeenCalledOnce()
     const [, init] = mockFetch.mock.calls[0]
     expect((init as FetchInitWithHeaders).headers['content-type']).toBe('application/json')
+  })
+})
+
+describe('media playback grant', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockMint.mockReturnValue('minted-token')
+    mockCaller.mockReturnValue({
+      sub: 'plex:42',
+      role: 'user',
+      authMode: 'plex',
+      serverId: 'srv-test',
+    })
+  })
+
+  it('rejects an unknown media kind with 400', async () => {
+    const res = await media.request('/playback/bogus/7', {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: '{}',
+    })
+    expect(res.status).toBe(400)
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('direct-play → progressive grant with a tokenised stream url', async () => {
+    // media-core returns directPlay:true.
+    mockFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ directPlay: true, file: { duration_secs: 1200 } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const res = await media.request('/playback/movie/7', {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: JSON.stringify({ containers: ['mp4'], video_codecs: ['h264'], hdr: false }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { delivery: string; url: string; durationSecs: number }
+    expect(body.delivery).toBe('progressive')
+    expect(body.url).toMatch(/^\/api\/media\/stream\/movie\/7\?t=.+/)
+    expect(body.durationSecs).toBe(1200)
+    // Only the capability grant was called (no transcode handoff).
+    expect(mockFetch).toHaveBeenCalledOnce()
+    expect(String(mockFetch.mock.calls[0][0])).toContain('/api/media/play/movie/7/grant')
+  })
+
+  it('transcode → hls grant with tokenised manifest + heartbeat urls', async () => {
+    // First call: capability grant denies direct play. Second: media-core
+    // /stream handoff returns a transcoder session.
+    mockFetch
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ directPlay: false, file: { duration_secs: 5400 } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            transcode: true,
+            sessionId: 'sess-1',
+            manifestUrl: '/api/transcode/session/sess-1/index.m3u8',
+            heartbeatUrl: '/api/transcode/session/sess-1/heartbeat',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+
+    const res = await media.request('/playback/episode/99', {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: '{}',
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      delivery: string
+      url: string
+      heartbeatUrl: string
+      sessionId: string
+      durationSecs: number
+    }
+    expect(body.delivery).toBe('hls')
+    expect(body.url).toMatch(/^\/api\/transcode\/session\/sess-1\/index\.m3u8\?t=.+/)
+    expect(body.heartbeatUrl).toMatch(/^\/api\/transcode\/session\/sess-1\/heartbeat\?t=.+/)
+    expect(body.sessionId).toBe('sess-1')
+    expect(body.durationSecs).toBe(5400)
+    // Second call hit the media-core /stream handoff with the caps query.
+    expect(String(mockFetch.mock.calls[1][0])).toContain('/api/media/stream/episode/99?')
+  })
+
+  it('propagates a media-core 404 as 404', async () => {
+    mockFetch.mockResolvedValueOnce(new Response('{}', { status: 404 }))
+    const res = await media.request('/playback/movie/123456', {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: '{}',
+    })
+    expect(res.status).toBe(404)
   })
 })
