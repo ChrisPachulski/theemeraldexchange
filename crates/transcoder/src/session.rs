@@ -335,9 +335,19 @@ impl SessionManager {
         if !self.media_roots.is_empty() && !path_within_roots(&opts.input_path, &self.media_roots) {
             return Err(StartError::Forbidden(opts.input_path.clone()));
         }
-        // Direct-play never needs a transcode session.
-        let is_cpu = matches!(self.encoder, HwEncoder::Cpu);
-        let permit = self.limiter.try_acquire(is_cpu).map_err(StartError::Busy)?;
+        // Charge the stricter CPU cap ONLY when this session actually
+        // re-encodes video on the CPU encoder. A copy-remux (most local titles —
+        // they transcode only because the container/audio isn't browser-safe)
+        // uses ~no CPU, so it should count against the global cap alone.
+        // Without this, a box with no HW encoder resolves EVERY session to the
+        // CPU encoder, so the CPU cap of 1 lets only a single stream play at a
+        // time — opening a second title (or reopening within the 30s idle-reap
+        // window) returns 503 transcoder_unavailable.
+        let cpu_reencode = matches!(self.encoder, HwEncoder::Cpu) && opts.plan.reencodes_video();
+        let permit = self
+            .limiter
+            .try_acquire(cpu_reencode)
+            .map_err(StartError::Busy)?;
 
         let now = now_secs();
         let session_id = format!(
@@ -866,6 +876,83 @@ mod tests {
         assert!(
             matches!(err, StartError::Busy(_)),
             "second start past cap must be Busy"
+        );
+    }
+
+    // Distinct media_id per call so two concurrent sessions get distinct ids
+    // (the id embeds media_id + a 1s-granular timestamp, so same-id starts in
+    // the same second would otherwise collide in the map).
+    fn remux_opts_id(input: &str, media_id: i64) -> StartOpts {
+        StartOpts {
+            media_id,
+            ..opts(input)
+        }
+    }
+
+    fn encode_opts_id(input: &str, media_id: i64) -> StartOpts {
+        StartOpts {
+            media_kind: "movie".into(),
+            media_id,
+            sub: "plex:42".into(),
+            input_path: input.into(),
+            plan: TranscodePlan::Transcode {
+                video: VideoOp::EncodeH264 {
+                    scale_to_height: None,
+                    tone_map: false,
+                    burn_subtitle_index: None,
+                },
+                audio: AudioOp::Copy,
+                subtitle: SubtitleOp::None,
+                reason: "test".into(),
+            },
+            start_secs: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn remux_does_not_charge_cpu_cap_on_cpu_encoder() {
+        // No HW encoder → every session resolves to the CPU encoder. A
+        // copy-remux must NOT charge the strict cpu cap, so two remuxes run
+        // concurrently under max_cpu=1 (they only count against the roomy global
+        // cap). Regression for the household "second title 503s" failure.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = SessionManager::new(
+            Limiter::new(Caps {
+                max_total: 4,
+                max_cpu: 1,
+            }),
+            write_stub(tmp.path(), "run").to_string_lossy().into_owned(),
+            tmp.path().join("s"),
+            HwEncoder::Cpu,
+        );
+        let _a = mgr.start(remux_opts_id("/lib/a.mkv", 7)).await.unwrap();
+        let _b = mgr
+            .start(remux_opts_id("/lib/b.mkv", 8))
+            .await
+            .expect("a second copy-remux must start despite cpu cap 1");
+        assert_eq!(mgr.len().await, 2);
+    }
+
+    #[tokio::test]
+    async fn video_reencode_charges_cpu_cap_on_cpu_encoder() {
+        // A real libx264 VIDEO re-encode DOES load the CPU, so it charges the
+        // cpu cap — a second concurrent encode under max_cpu=1 is refused even
+        // though the global cap (4) has room.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = SessionManager::new(
+            Limiter::new(Caps {
+                max_total: 4,
+                max_cpu: 1,
+            }),
+            write_stub(tmp.path(), "run").to_string_lossy().into_owned(),
+            tmp.path().join("s"),
+            HwEncoder::Cpu,
+        );
+        let _a = mgr.start(encode_opts_id("/lib/a.mkv", 7)).await.unwrap();
+        let err = mgr.start(encode_opts_id("/lib/b.mkv", 8)).await.unwrap_err();
+        assert!(
+            matches!(err, StartError::Busy(_)),
+            "second CPU re-encode past the cpu cap must be Busy"
         );
     }
 
