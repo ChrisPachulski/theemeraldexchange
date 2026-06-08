@@ -94,12 +94,22 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
 
   const onPositionUpdate = useCallback(
     (positionSecs: number, durationSecs: number | null) => {
-      const dur = durationSecs ?? grant?.durationSecs ?? null
-      latest.current = { pos: positionSecs, dur }
-      const completed = dur != null && positionSecs >= Math.max(0, dur - COMPLETE_TAIL_SECS)
-      report(positionSecs, dur, completed)
+      // For a transcoded (HLS) resume the backend bakes the offset into ffmpeg
+      // (-ss start_secs), so the <video> timeline restarts near 0 — the real
+      // content position is start_secs + currentTime. Direct-play (progressive)
+      // serves the whole file with a true timeline, so currentTime is already
+      // absolute. The HLS <video> "duration" is only the live window (or
+      // Infinity), so trust the grant's full-title duration there too;
+      // otherwise the completion check would fire seconds in.
+      const isHls = grant?.delivery === 'hls'
+      const offset = isHls ? (startPositionSecs ?? 0) : 0
+      const absPos = offset + positionSecs
+      const dur = isHls ? (grant?.durationSecs ?? null) : (durationSecs ?? grant?.durationSecs ?? null)
+      latest.current = { pos: absPos, dur }
+      const completed = dur != null && absPos >= Math.max(0, dur - COMPLETE_TAIL_SECS)
+      report(absPos, dur, completed)
     },
-    [report, grant?.durationSecs],
+    [report, grant?.delivery, grant?.durationSecs, startPositionSecs],
   )
 
   const onEnded = useCallback(() => {
@@ -127,7 +137,11 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
         <IptvPlayer
           grant={streamGrant}
           autoPlay
-          startPositionSecs={startPositionSecs}
+          // Only the progressive (direct-play) path has a real, full-length
+          // timeline to seek into. For HLS the resume offset is already baked
+          // server-side via ffmpeg -ss, so a client seek would jump past the
+          // live window's end and stall at a spinner (the de9411c regression).
+          startPositionSecs={grant?.delivery === 'progressive' ? startPositionSecs : undefined}
           onPositionUpdate={onPositionUpdate}
           onEnded={onEnded}
         />
