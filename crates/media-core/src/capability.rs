@@ -76,6 +76,23 @@ pub fn decide(file: &MediaFileRow, caps: &ClientCaps) -> PlayDecision {
         return deny("hdr requires tone-map");
     }
 
+    // The primary audio must be decodable by the client too. A direct-play hands
+    // the raw file to the client's <video> element; the shipped client is a
+    // browser (hls.js/native HLS), which decodes AAC universally but NOT
+    // AC-3/E-AC-3/DTS — those direct-play with dead audio. So a non-AAC primary
+    // track denies direct-play, routing the file to the transcode path which
+    // re-encodes audio to AAC (mirrors transcoder::plan::accepted_audio_codecs).
+    // An unknown/absent audio codec is left to direct-play (nothing to gate on).
+    // TODO(M4+): when ClientCaps carries an `audio_codecs` set, gate on the
+    // client's real capabilities (Apple AVPlayer can pass AC-3/E-AC-3 through and
+    // should direct-play them) instead of this fixed browser-safe baseline.
+    if let Some(track) = file.audio_tracks().first() {
+        let acodec = track.codec.as_deref().map(str::trim).unwrap_or("");
+        if !acodec.is_empty() && !acodec.eq_ignore_ascii_case("aac") {
+            return deny(format!("audio codec {acodec} not supported by client"));
+        }
+    }
+
     PlayDecision {
         direct_play: true,
         reason: "direct play".to_string(),
@@ -172,6 +189,50 @@ mod tests {
         caps.max_height = None;
         let f = file(Some("mp4"), Some("h264"), Some(4320), None);
         assert!(decide(&f, &caps).direct_play);
+    }
+
+    fn with_audio(mut f: MediaFileRow, codec: &str) -> MediaFileRow {
+        f.audio_tracks_json = format!(
+            r#"[{{"index":1,"codec":"{codec}","channels":6,"language":"eng","title":null}}]"#
+        );
+        f
+    }
+
+    #[test]
+    fn eac3_audio_denies_direct_play() {
+        // mp4/h264/SDR/1080p would direct-play, but E-AC-3 audio is undecodable
+        // by the browser <video>, so it must transcode (→ AAC). Regression for
+        // the 200+ direct-play-eligible files that were shipping silent audio.
+        let f = with_audio(file(Some("mp4"), Some("h264"), Some(1080), None), "eac3");
+        let d = decide(&f, &h264_client());
+        assert!(!d.direct_play, "eac3 must not direct-play");
+        assert!(d.reason.contains("audio"), "reason: {}", d.reason);
+    }
+
+    #[test]
+    fn ac3_and_dts_audio_deny_direct_play() {
+        for codec in ["ac3", "dts", "truehd"] {
+            let f = with_audio(file(Some("mp4"), Some("h264"), Some(720), None), codec);
+            assert!(
+                !decide(&f, &h264_client()).direct_play,
+                "{codec} must transcode"
+            );
+        }
+    }
+
+    #[test]
+    fn aac_audio_still_direct_plays() {
+        let f = with_audio(file(Some("mp4"), Some("h264"), Some(1080), None), "aac");
+        assert!(
+            decide(&f, &h264_client()).direct_play,
+            "aac must direct-play"
+        );
+    }
+
+    #[test]
+    fn aac_audio_match_is_case_insensitive() {
+        let f = with_audio(file(Some("mp4"), Some("h264"), Some(1080), None), "AAC");
+        assert!(decide(&f, &h264_client()).direct_play);
     }
 
     #[test]
