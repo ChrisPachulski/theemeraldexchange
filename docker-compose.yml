@@ -99,6 +99,11 @@ services:
       ALLOW_UNSCOPED_PLEX_LOGIN: "${ALLOW_UNSCOPED_PLEX_LOGIN:-0}"
       PLEX_SERVER_URL: "${PLEX_SERVER_URL:-}"
       ALLOWED_ORIGINS: "${ALLOWED_ORIGINS}"
+      # Trust CF-Connecting-IP/True-Client-IP for per-client auth buckets only
+      # in this compose topology: cloudflared shares the backend netns and the
+      # host publish is loopback-only, so clients cannot set these headers by
+      # reaching the backend directly.
+      TRUST_CLIENT_IP_HEADERS: "1"
       SONARR_URL: "${SONARR_URL:-}"
       SONARR_API_KEY: "${SONARR_API_KEY}"
       RADARR_URL: "${RADARR_URL:-}"
@@ -450,7 +455,7 @@ services:
     # breaking changes — v6.0 introduced TRUSTED_PROXIES, django-vtasks, and
     # Granian with no forward-compat shims for operators on `latest`.
     # To upgrade: bump this tag, docker compose pull, docker compose up -d.
-    image: glitchtip/glitchtip:6.1
+    image: glitchtip/glitchtip:6.1@sha256:7e497103d3694e95fce232e83193cc2ef6865569314c66eb577b97c7c651008b
     container_name: exchange-glitchtip
     restart: unless-stopped
     # Hardening (audit 9-4): no privilege escalation, drop all Linux caps.
@@ -573,7 +578,7 @@ services:
   # run-celery-with-beat.sh was removed in v6.0 — ./bin/start.sh reads
   # SERVER_ROLE and branches accordingly.
   glitchtip-worker:
-    image: glitchtip/glitchtip:6.1
+    image: glitchtip/glitchtip:6.1@sha256:7e497103d3694e95fce232e83193cc2ef6865569314c66eb577b97c7c651008b
     container_name: exchange-glitchtip-worker
     command: ./bin/start.sh
     restart: unless-stopped

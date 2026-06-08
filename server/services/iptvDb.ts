@@ -38,6 +38,7 @@ export interface IptvDb {
     insertPlaylistToken: Database.Statement
     getPlaylistToken: Database.Statement
     revokePlaylistToken: Database.Statement
+    revokePlaylistTokensBySub: Database.Statement
     listPlaylistTokensBySub: Database.Statement
     listAllPlaylistTokens: Database.Statement
   }
@@ -179,6 +180,9 @@ export function openIptvDb(filePath: string, serverDb?: Database.Database): Iptv
     `),
     revokePlaylistToken: raw.prepare(`
       UPDATE iptv_playlist_tokens SET revoked_at = ? WHERE jti = ? AND revoked_at IS NULL
+    `),
+    revokePlaylistTokensBySub: raw.prepare(`
+      UPDATE iptv_playlist_tokens SET revoked_at = ? WHERE sub = ? AND revoked_at IS NULL
     `),
     listPlaylistTokensBySub: raw.prepare(`
       SELECT jti, sub, device_name, issued_at, expires_at, revoked_at

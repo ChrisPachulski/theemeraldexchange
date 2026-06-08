@@ -39,6 +39,7 @@ import { postFeedback } from '../services/recommender.js'
 import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
 import { type Session } from '../session.js'
 import { crossedWatchThreshold, type WatchPoint } from '../services/watchSignal.js'
+import { memberStatus } from '../services/membership.js'
 import {
   isPublicHttpsUpstream,
   guardedFetch,
@@ -54,6 +55,72 @@ import {
 import { env } from '../env.js'
 
 export const iptv = new Hono<Env>()
+
+const PLAYLIST_TOKEN_MAX_BODY_BYTES = 1024
+
+async function parseLimitedJson(c: Context, maxBytes: number): Promise<{ tooLarge: boolean; body: unknown }> {
+  const contentLength = c.req.header('content-length')
+  if (contentLength) {
+    const n = Number(contentLength)
+    if (Number.isFinite(n) && n > maxBytes) return { tooLarge: true, body: {} }
+  }
+  const stream = c.req.raw.body
+  if (!stream) return { tooLarge: false, body: {} }
+  const reader = stream.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value) continue
+      total += value.byteLength
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => undefined)
+        return { tooLarge: true, body: {} }
+      }
+      chunks.push(value)
+    }
+  } catch {
+    return { tooLarge: false, body: {} }
+  }
+  const bytes = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  try {
+    return { tooLarge: false, body: JSON.parse(new TextDecoder().decode(bytes)) }
+  } catch {
+    return { tooLarge: false, body: {} }
+  }
+}
+
+function firstHeaderValue(value: string | undefined): string {
+  return value?.split(',')[0]?.trim() ?? ''
+}
+
+function safeHost(value: string, fallback: string): string {
+  if (!value) return fallback
+  if (/[\s/\\]/.test(value)) return fallback
+  return value
+}
+
+function publicBaseUrl(c: Context): string {
+  const requestUrl = new URL(c.req.url)
+  const forwardedProto = firstHeaderValue(c.req.header('x-forwarded-proto')).toLowerCase()
+  const proto = forwardedProto === 'http' || forwardedProto === 'https'
+    ? `${forwardedProto}:`
+    : requestUrl.protocol
+  const host = safeHost(
+    firstHeaderValue(c.req.header('x-forwarded-host')) ||
+      firstHeaderValue(c.req.header('host')) ||
+      requestUrl.host,
+    requestUrl.host,
+  )
+  return `${proto}//${host}`
+}
 
 iptv.get('/health', requireAuth, async (c) => {
   try {
@@ -76,11 +143,13 @@ iptv.get('/health', requireAuth, async (c) => {
 // user can tell "the browser I'm sitting at" from "that phone in the
 // kitchen" when deciding which slot to free.
 export function clientIp(c: Context<Env>): string | null {
-  return (
-    c.req.header('cf-connecting-ip') ??
-    c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ??
-    null
-  )
+  const cf = c.req.header('cf-connecting-ip')?.trim()
+  if (cf) return cf
+  const firstForwarded = c.req.header('x-forwarded-for')
+    ?.split(',')
+    .map((part) => part.trim())
+    .find(Boolean)
+  return firstForwarded ?? null
 }
 
 // Title resolver for the sessions widget. Called only when listing — keeps
@@ -337,7 +406,9 @@ iptv.post('/playlist/token', requireAuth, async (c) => {
   const { sub } = userOf(c)
   // Optional device label — free-form string, max 120 chars. Returned in the
   // response so the admin list can show "iPhone 15 (kitchen)" next to the jti.
-  const body = await c.req.json().catch(() => ({})) as { deviceName?: unknown }
+  const parsed = await parseLimitedJson(c, PLAYLIST_TOKEN_MAX_BODY_BYTES)
+  if (parsed.tooLarge) return c.json({ error: 'body_too_large' }, 413)
+  const body = parsed.body as { deviceName?: unknown }
   const deviceName = typeof body.deviceName === 'string'
     ? body.deviceName.trim().slice(0, 120)
     : undefined
@@ -357,15 +428,53 @@ iptv.post('/playlist/token', requireAuth, async (c) => {
     issued_at: now.toISOString(),
     expires_at: expiresAt.toISOString(),
   })
-  const requestUrl = new URL(c.req.url)
-  const host = c.req.header('host') ?? requestUrl.host
-  const baseUrl = `${requestUrl.protocol}//${host}`
+  const baseUrl = publicBaseUrl(c)
   return c.json({
     jti,
     deviceName: deviceName ?? null,
     url: `${baseUrl}/api/iptv/playlist.m3u?t=${token}`,
     expiresAt: expiresAt.toISOString(),
   })
+})
+
+type PlaylistTokenRow = {
+  jti: string
+  sub: string
+  device_name: string | null
+  issued_at: string
+  expires_at: string
+  revoked_at: string | null
+}
+
+function playlistTokenView(row: PlaylistTokenRow) {
+  return {
+    jti: row.jti,
+    sub: row.sub,
+    deviceName: row.device_name,
+    issuedAt: row.issued_at,
+    expiresAt: row.expires_at,
+    revokedAt: row.revoked_at,
+    revoked: row.revoked_at != null,
+  }
+}
+
+iptv.get('/playlist/tokens', requireAuth, (c) => {
+  const { sub } = userOf(c)
+  const rows = iptvDb().stmts.listPlaylistTokensBySub.all(sub) as PlaylistTokenRow[]
+  return c.json({ tokens: rows.map(playlistTokenView) })
+})
+
+iptv.delete('/playlist/tokens/:jti', requireAuth, (c) => {
+  const session = c.get('session')
+  const jti = c.req.param('jti')
+  const row = iptvDb().stmts.getPlaylistToken.get(jti) as PlaylistTokenRow | undefined
+  if (!row) return c.json({ error: 'not_found' }, 404)
+  if (row.sub !== session.sub && session.role !== 'admin') {
+    return c.json({ error: 'forbidden' }, 403)
+  }
+  const info = iptvDb().stmts.revokePlaylistToken.run(new Date().toISOString(), jti)
+  if (info.changes === 0 && row.revoked_at != null) return c.json({ error: 'already_revoked' }, 409)
+  return c.json({ ok: true })
 })
 
 // Hit by external players (VLC, iPlayTV, TiviMate) that have no session
@@ -404,6 +513,14 @@ iptv.get('/playlist.m3u', (c) => {
     }
   }
 
+  const status = memberStatus(claims.sub)
+  if (status !== 'allowed') {
+    if (claims.jti != null && status === 'revoked') {
+      iptvDb().stmts.revokePlaylistToken.run(new Date().toISOString(), claims.jti)
+    }
+    return c.json({ error: 'access_revoked' }, 401)
+  }
+
   const channels = iptvDb().raw
     .prepare(`SELECT stream_id, num, name, stream_icon, epg_channel_id, category_id FROM channels ORDER BY num, name`)
     .all() as Array<{ stream_id: number; num: number; name: string; stream_icon: string | null; epg_channel_id: string | null; category_id: number | null }>
@@ -416,9 +533,7 @@ iptv.get('/playlist.m3u', (c) => {
   // M1 used 30 days here; that was wrong — external players re-fetch the M3U
   // frequently enough that 300 s is fine, and shorter TTL limits credential
   // exposure if the M3U body leaks.
-  const requestUrl = new URL(c.req.url)
-  const host = c.req.header('host') ?? requestUrl.host
-  const baseUrl = `${requestUrl.protocol}//${host}`
+  const baseUrl = publicBaseUrl(c)
   const chTtl = 300
   const lines: string[] = ['#EXTM3U']
   for (const ch of channels) {

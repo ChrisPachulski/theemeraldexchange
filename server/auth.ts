@@ -94,6 +94,7 @@ export function _resetAuthRateLimitsForTests(): void {
 }
 
 function trustedAuthClientIdentity(c: Context): string | null {
+  if (!env.trustClientIpHeaders) return null
   const cfConnectingIp = c.req.header('cf-connecting-ip')?.trim()
   if (cfConnectingIp) return `cf:${cfConnectingIp}`
   const trueClientIp = c.req.header('true-client-ip')?.trim()

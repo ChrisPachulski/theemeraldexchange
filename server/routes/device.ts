@@ -159,6 +159,7 @@ device.post('/poll', async (c) => {
     auth_mode: authMode,
     device_id: deviceId,
     device_name: deviceName,
+    username: user.username,
     device_platform: devicePlatform,
     server_id: serverId,
   })

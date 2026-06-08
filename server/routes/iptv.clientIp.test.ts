@@ -28,8 +28,10 @@ describe('clientIp', () => {
   it('returns null when no ip headers are present', () => {
     expect(clientIp(ctx({}))).toBeNull()
   })
-  it('returns empty string (not null) for a leading-comma x-forwarded-for — documents current split[0].trim behavior', () => {
-    // ',1.2.3.4' -> split[0] === '' -> ''.trim() === '' (falsy but returned as-is, not coerced to null)
-    expect(clientIp(ctx({ 'x-forwarded-for': ',1.2.3.4' }))).toBe('')
+  it('skips empty x-forwarded-for hops', () => {
+    expect(clientIp(ctx({ 'x-forwarded-for': ',1.2.3.4' }))).toBe('1.2.3.4')
+  })
+  it('returns null for blank IP headers', () => {
+    expect(clientIp(ctx({ 'cf-connecting-ip': ' ', 'x-forwarded-for': ' , ' }))).toBeNull()
   })
 })

@@ -12,7 +12,7 @@
 # can't be reached from a context rooted at recommender/.
 
 # ─── Stage 1: build the emerald_contracts PyO3 wheel ─────────────────────────
-FROM rust:1.96-slim-bookworm AS rust-builder
+FROM rust:1.96-slim-bookworm@sha256:b5f842fac1e3b4ff718a652a8e0173b62d9403ec826ef4998880b9347db30684 AS rust-builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -55,7 +55,7 @@ RUN /opt/maturin-venv/bin/maturin build \
       --out /wheels
 
 # ─── Stage 2: runtime image ──────────────────────────────────────────────────
-FROM python:3.12-slim AS base
+FROM python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203 AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

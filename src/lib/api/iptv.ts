@@ -138,6 +138,16 @@ export type SessionsResponse = {
   ours: SessionRow[]
 }
 
+export type PlaylistTokenRow = {
+  jti: string
+  sub: string
+  deviceName: string | null
+  issuedAt: string
+  expiresAt: string
+  revokedAt: string | null
+  revoked: boolean
+}
+
 export type ConcurrencyLimitError = {
   reason: 'iptv_concurrency_limit'
   limit: number
@@ -337,6 +347,8 @@ export const iptvApi = Object.assign({
     const r = await post<{ url: string; expiresAt: string }>('/playlist/token')
     return { ...r, url: absolutize(r.url) }
   },
+  listPlaylistTokens: () => get<{ tokens: PlaylistTokenRow[] }>('/playlist/tokens'),
+  revokePlaylistToken: (jti: string) => del(`/playlist/tokens/${encodeURIComponent(jti)}`),
   listSessions: () => get<SessionsResponse>('/sessions'),
   killSession: (sessionId: string) => del(`/sessions/${encodeURIComponent(sessionId)}`),
 })

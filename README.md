@@ -68,7 +68,7 @@ npm test           # vitest run
 npm run build:napi # build the emerald-contracts N-API binding
 
 cargo test -p emerald-contracts -p media-core -p transcoder
-( cd recommender && pytest )
+( cd recommender && uv sync --extra dev && uv pip install --python .venv/bin/python maturin && .venv/bin/maturin develop --release -m ../crates/emerald-contracts-pyo3/Cargo.toml && uv run pytest )
 ```
 
 ## Deploy

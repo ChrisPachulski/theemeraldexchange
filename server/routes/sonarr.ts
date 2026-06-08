@@ -36,6 +36,10 @@ function availableRootFolderBytes(folder: RootFolderSpaceSnapshot): number {
   return folder.freeSpace - (pendingRootFolderReservations.get(folder.path) ?? 0)
 }
 
+function pendingRootFolderBytes(folder: RootFolderSpaceSnapshot): number {
+  return pendingRootFolderReservations.get(folder.path) ?? 0
+}
+
 function reserveRootFolderBytes(folder: RootFolderSpaceSnapshot, bytes: number): boolean {
   if (!Number.isFinite(bytes) || bytes <= 0) return false
   const reserved = pendingRootFolderReservations.get(folder.path) ?? 0
@@ -533,6 +537,10 @@ sonarr.post('/api/v3/series', sonarrMutateLimit, async (c) => {
     }
     body = materialized.body
   }
+  const wantedSearch =
+    body.addOptions?.searchForMissingEpisodes !== false ||
+    body.addOptions?.searchForCutoffUnmetEpisodes === true
+
   // Hard disk-space gate. Fail closed on every "we couldn't actually
   // measure free space" case — the prior implementation only blocked
   // when rootFolderPath was supplied AND the folder matched AND
@@ -561,21 +569,31 @@ sonarr.post('/api/v3/series', sonarrMutateLimit, async (c) => {
     )
   }
   const folderSnapshot: RootFolderSpaceSnapshot = { path: folder.path, freeSpace: folder.freeSpace }
-  if (folderSnapshot.freeSpace < env.minFreeBytes) {
+  const availableBytes = availableRootFolderBytes(folderSnapshot)
+  if (availableBytes < env.minFreeBytes) {
     return c.json(
       {
         error: 'insufficient_disk_space',
-        free_bytes: folderSnapshot.freeSpace,
+        free_bytes: availableBytes,
         threshold_bytes: env.minFreeBytes,
         path: folderSnapshot.path,
       },
       507,
     )
   }
+  const reservedBytes = pendingRootFolderBytes(folderSnapshot)
+  if (wantedSearch && reservedBytes > 0) {
+    return c.json(
+      {
+        error: 'root_folder_reservation_in_flight',
+        reserved_bytes: reservedBytes,
+        free_bytes: availableBytes,
+        path: folderSnapshot.path,
+      },
+      409,
+    )
+  }
 
-  const wantedSearch =
-    body.addOptions?.searchForMissingEpisodes !== false ||
-    body.addOptions?.searchForCutoffUnmetEpisodes === true
   const cappedBody = {
     ...body,
     addOptions: {
@@ -808,15 +826,28 @@ sonarr.post('/api/v3/series/:id/seasons/:n/monitor', requireAdmin, sonarrMutateL
     )
   }
   const folderSnapshot: RootFolderSpaceSnapshot = { path: folder.path, freeSpace: folder.freeSpace }
-  if (folderSnapshot.freeSpace < env.minFreeBytes) {
+  const availableBytes = availableRootFolderBytes(folderSnapshot)
+  if (availableBytes < env.minFreeBytes) {
     return c.json(
       {
         error: 'insufficient_disk_space',
-        free_bytes: folderSnapshot.freeSpace,
+        free_bytes: availableBytes,
         threshold_bytes: env.minFreeBytes,
         path: folderSnapshot.path,
       },
       507,
+    )
+  }
+  const reservedBytes = pendingRootFolderBytes(folderSnapshot)
+  if (reservedBytes > 0) {
+    return c.json(
+      {
+        error: 'root_folder_reservation_in_flight',
+        reserved_bytes: reservedBytes,
+        free_bytes: availableBytes,
+        path: folderSnapshot.path,
+      },
+      409,
     )
   }
   const patched = {

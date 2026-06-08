@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+const membershipState = vi.hoisted(() => ({
+  status: 'allowed' as 'allowed' | 'revoked' | 'not_member',
+}))
+
 vi.mock('../env.js', () => ({
   env: {
     mediaCoreUrl: 'http://media-core.test',
@@ -28,6 +32,10 @@ vi.mock('../middleware/auth.js', () => ({
   },
 }))
 
+vi.mock('../services/membership.js', () => ({
+  memberStatus: vi.fn(() => membershipState.status),
+}))
+
 // Shape of the second arg the route passes to fetchWithTimeout: a fetch
 // RequestInit whose headers we assert on. Narrow once here so the call-site
 // casts stay readable.
@@ -49,6 +57,7 @@ const mockCaller = vi.mocked(recommenderCallerFromSession)
 describe('media proxy route', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    membershipState.status = 'allowed'
     mockMint.mockReturnValue('minted-token')
     mockCaller.mockReturnValue({
       sub: 'plex:1',
@@ -199,6 +208,7 @@ describe('media proxy route', () => {
 describe('media playback grant', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    membershipState.status = 'allowed'
     mockMint.mockReturnValue('minted-token')
     mockCaller.mockReturnValue({
       sub: 'plex:42',
@@ -241,6 +251,32 @@ describe('media playback grant', () => {
     // Only the capability grant was called (no transcode handoff).
     expect(mockFetch).toHaveBeenCalledOnce()
     expect(String(mockFetch.mock.calls[0][0])).toContain('/api/media/play/movie/7/grant')
+  })
+
+  it('rejects a direct-play stream token after membership revocation', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ directPlay: true, file: { duration_secs: 1200 } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const grant = await media.request('/playback/movie/7', {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: JSON.stringify({ containers: ['mp4'], video_codecs: ['h264'], hdr: false }),
+    })
+    const body = (await grant.json()) as { url: string }
+    vi.clearAllMocks()
+    membershipState.status = 'revoked'
+
+    const res = await media.request(body.url.replace(/^\/api\/media/, ''), {
+      method: 'GET',
+      headers: { host: 'localhost' },
+    })
+
+    expect(res.status).toBe(401)
+    expect((await res.json()) as { error: string }).toEqual({ error: 'access_revoked' })
+    expect(mockFetch).not.toHaveBeenCalled()
   })
 
   it('transcode → hls grant with tokenised manifest + heartbeat urls', async () => {

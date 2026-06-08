@@ -1046,7 +1046,7 @@ describe('sonarr season-grab in-flight reservation', () => {
     vi.useRealTimers()
   })
 
-  it('CONCURRENT OVERCOMMIT: a second same-folder add cannot also reserve while the first is in flight — it emits planned_size_exceeds_free_space and issues no grab POST', async () => {
+  it('CONCURRENT OVERCOMMIT: a second same-folder season monitor is rejected at the preflight gate while the first reservation is in flight', async () => {
     // Free space fits exactly one 4 GB reservation above the reserve. We hold
     // add #1's grab POST open so its reservation stays on the books while add
     // #2 plans against the SAME path. Add #2 must be refused at the reserve
@@ -1071,14 +1071,26 @@ describe('sonarr season-grab in-flight reservation', () => {
       method: 'POST',
       headers: { Cookie: cookie },
     })
-    expect(r2.status).toBe(200)
+    expect(r2.status).toBe(409)
+    const r2Body = (await r2.json()) as { error: string }
+    expect(r2Body.error).toBe('root_folder_reservation_in_flight')
     await vi.advanceTimersByTimeAsync(6000)
 
-    const events = plannedSizeEvents()
-    expect(events.length).toBeGreaterThanOrEqual(1)
-    expect(events.some((e) => /overcommit|reservation/i.test(e.error ?? ''))).toBe(true)
-    // No NEW grab POST from add #2 (it was refused before the grab loop).
+    // No NEW grab POST from request #2 (it was refused before the async grab loop).
     expect(grabPostCount(calls)).toBe(postsAfterOne)
+
+    const add = await appUnderTest().request('/api/v3/series', {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: 'Another Show',
+        rootFolderPath: path,
+        qualityProfileId: 7,
+        addOptions: { searchForMissingEpisodes: true },
+      }),
+    })
+    expect(add.status).toBe(409)
+    expect(((await add.json()) as { error: string }).error).toBe('root_folder_reservation_in_flight')
 
     // Let add #1 complete; runAllTimersAsync drains the resolution microtasks.
     resolvers.forEach((fn) => fn())

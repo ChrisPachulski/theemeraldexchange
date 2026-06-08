@@ -21,6 +21,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Hono } from 'hono'
 import { rateLimit, __resetRateLimitsForTests } from './rateLimit.js'
 import type { Env } from './auth.js'
+import { env } from '../env.js'
 
 /** Build an app whose limiter is keyed by a fixed session sub. */
 function appWithSession(
@@ -46,6 +47,7 @@ function appNoSession(limiter: ReturnType<typeof rateLimit>): Hono<Env> {
 describe('rateLimit middleware', () => {
   beforeEach(() => {
     __resetRateLimitsForTests()
+    ;(env as Record<string, unknown>).trustClientIpHeaders = false
   })
 
   it('refills tokens after one full interval elapses (fake timers)', async () => {
@@ -100,6 +102,7 @@ describe('rateLimit middleware', () => {
   })
 
   it('falls back to cf-connecting-ip keying when there is no session', async () => {
+    ;(env as Record<string, unknown>).trustClientIpHeaders = true
     const limiter = rateLimit({ name: 'rl-ip', capacity: 1, refill: 1, intervalMs: 60_000 })
     const app = appNoSession(limiter)
 
@@ -113,6 +116,7 @@ describe('rateLimit middleware', () => {
   })
 
   it('uses the first hop of x-forwarded-for when cf-connecting-ip is absent', async () => {
+    ;(env as Record<string, unknown>).trustClientIpHeaders = true
     const limiter = rateLimit({ name: 'rl-xff', capacity: 1, refill: 1, intervalMs: 60_000 })
     const app = appNoSession(limiter)
 
@@ -134,6 +138,20 @@ describe('rateLimit middleware', () => {
     // Both header-less, session-less requests collapse to key 'anon'.
     expect((await app.request('/x', { method: 'POST' })).status).toBe(200)
     expect((await app.request('/x', { method: 'POST' })).status).toBe(429)
+  })
+
+  it('ignores forwarded IP headers when proxy-header trust is disabled', async () => {
+    const limiter = rateLimit({ name: 'rl-untrusted-ip', capacity: 1, refill: 1, intervalMs: 60_000 })
+    const app = appNoSession(limiter)
+
+    expect((await app.request('/x', {
+      method: 'POST',
+      headers: { 'cf-connecting-ip': '203.0.113.7' },
+    })).status).toBe(200)
+    expect((await app.request('/x', {
+      method: 'POST',
+      headers: { 'cf-connecting-ip': '203.0.113.8' },
+    })).status).toBe(429)
   })
 
   it('emits a Retry-After header and retry_after_ms body hint on 429', async () => {

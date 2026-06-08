@@ -55,28 +55,19 @@ export function reconcileDeviceToken(
     return null
   }
 
-  // Read device_name + apply role recompute. roleFor needs a username
-  // and device tokens don't carry one; we use sub-as-username for the
-  // role check, which works because env.admins is a list of Plex
-  // usernames that the cookie path already maps from. For device tokens
-  // the mint path looked the role up at pairing time and embedded it
-  // in the claim — so role IS already current as of pairing. We
-  // additionally re-derive it from the sub-derived username so that
-  // admin demotions land on the next request without re-pairing.
-  //
-  // Implementation note: the username-by-sub mapping lives in
-  // device_tokens (not directly — but we can store it there at mint
-  // time as a future enhancement). For now, trust the role claim and
-  // touch last_seen_at.
+  // Read device metadata and recompute the role from current server policy.
+  // New rows carry the pairing-time username so legacy ADMINS demotions apply
+  // immediately. Older rows do not; those fail closed to user unless ADMIN_SUBS
+  // explicitly promotes the stable sub.
   const row = db
     .prepare(
       `UPDATE device_tokens
          SET last_seen_at = datetime('now'),
              last_seen_version = COALESCE(?, last_seen_version)
        WHERE jti = ?
-       RETURNING device_name`,
+       RETURNING device_name, username`,
     )
-    .get(appVersion, claims.jti) as { device_name: string } | undefined
+    .get(appVersion, claims.jti) as { device_name: string; username: string | null } | undefined
 
   if (!row) {
     // jti row vanished between verify and reconcile (concurrent revoke +
@@ -84,13 +75,14 @@ export function reconcileDeviceToken(
     return null
   }
 
+  const role = row.username
+    ? roleFor(row.username, claims.sub)
+    : roleFor('', claims.sub)
+
   return {
     ...claims,
+    role,
     device_name: row.device_name,
-    // role passthrough — could re-derive via roleFor but device tokens
-    // don't carry username. Future work: store username column in
-    // device_tokens at mint time, then call roleFor here for parity
-    // with the cookie path's per-request demotion semantics.
   }
 }
 
