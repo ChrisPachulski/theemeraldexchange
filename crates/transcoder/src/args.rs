@@ -92,6 +92,15 @@ fn h264_bitrate_kbps(height: Option<i64>) -> u32 {
 /// render node via `qsv=hw`, so it needs no path here.)
 pub(crate) const VAAPI_RENDER_NODE: &str = "/dev/dri/renderD128";
 
+/// HLS target segment duration (seconds). Used both for `-hls_time` and for the
+/// re-encode keyframe cadence (`-force_key_frames`), which MUST stay in lockstep:
+/// the HLS muxer can only cut a segment at a keyframe, so if the encoder's GOP
+/// runs longer than this the first segment can't close until the next native
+/// keyframe — tens of seconds in. Under `-re` (real-time pacing) that pushes the
+/// first segment past the backend's manifest-readiness probe, and the player is
+/// handed a not-yet-written playlist (503) → a grey rectangle stuck at 0:00.
+const HLS_SEGMENT_SECS: u32 = 4;
+
 /// Build the ffmpeg argument vector for a transcode plan (software-decode path).
 ///
 /// Thin wrapper over [`ffmpeg_args_hw`] with hardware decode OFF — the historical
@@ -274,6 +283,18 @@ pub fn ffmpeg_args_hw(
             push(&mut a, "-bufsize");
             a.push(format!("{}k", br * 2));
 
+            // Force a keyframe at every HLS segment boundary. The encoder's
+            // native GOP can be far longer than a segment (h264_vaapi defaults to
+            // ~tens of seconds), and the HLS muxer can only split at a keyframe —
+            // so without this the FIRST segment doesn't close until the first
+            // native keyframe past `hls_time`. Under -re (real-time pacing) that
+            // is tens of seconds of wall-clock, blowing past the backend's
+            // manifest-readiness probe; the player then loads a 503 and sits grey
+            // at 0:00. The time-based expr is fps- and VFR-safe. Re-encode only:
+            // a copy-remux cuts at the source's own keyframes (nothing to force).
+            push(&mut a, "-force_key_frames");
+            a.push(format!("expr:gte(t,n_forced*{HLS_SEGMENT_SECS})"));
+
             // Filtergraph. Under full-HW the frames are already VAAPI surfaces
             // decoded on the GPU, so tone-map/scale run on the iGPU
             // (tonemap_vaapi/scale_vaapi) and the graph terminates in NV12
@@ -344,7 +365,7 @@ pub fn ffmpeg_args_hw(
     push(&mut a, "-f");
     push(&mut a, "hls");
     push(&mut a, "-hls_time");
-    push(&mut a, "4");
+    a.push(HLS_SEGMENT_SECS.to_string());
     push(&mut a, "-hls_list_size");
     push(&mut a, "8");
     push(&mut a, "-hls_flags");
@@ -606,6 +627,49 @@ mod tests {
         assert!(j.contains("-c:a aac -b:a 192k"), "{j}");
         // No -vf when nothing in the filtergraph.
         assert!(!j.contains("-vf"), "{j}");
+    }
+
+    #[test]
+    fn reencode_forces_keyframes_at_segment_boundary() {
+        // A re-encode MUST force keyframes at the HLS segment cadence (== -hls_time)
+        // so the first segment closes promptly under -re. Otherwise the encoder's
+        // long native GOP delays segment 0 past the readiness probe → grey 0:00.
+        let plan = transcode(
+            VideoOp::EncodeH264 {
+                scale_to_height: None,
+                tone_map: false,
+                burn_subtitle_index: None,
+            },
+            AudioOp::Copy,
+            SubtitleOp::None,
+        );
+        // Holds across every encoder family (CPU + each HW path).
+        for enc in [
+            HwEncoder::Cpu,
+            HwEncoder::Vaapi,
+            HwEncoder::Qsv,
+            HwEncoder::Nvenc,
+            HwEncoder::VideoToolbox,
+        ] {
+            let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, enc).join(" ");
+            assert!(
+                j.contains(&format!(
+                    "-force_key_frames expr:gte(t,n_forced*{HLS_SEGMENT_SECS})"
+                )),
+                "re-encode must force keyframes ({enc:?}): {j}"
+            );
+            // The keyframe cadence and the segment length must be the same value.
+            assert!(j.contains(&format!("-hls_time {HLS_SEGMENT_SECS}")), "{j}");
+        }
+    }
+
+    #[test]
+    fn copy_remux_does_not_force_keyframes() {
+        // A copy-remux has no encoder to force keyframes on; it cuts at the
+        // source's own keyframes. Forcing here would be a no-op flag at best.
+        let plan = transcode(VideoOp::Copy, AudioOp::Copy, SubtitleOp::None);
+        let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Cpu).join(" ");
+        assert!(!j.contains("-force_key_frames"), "{j}");
     }
 
     #[test]
