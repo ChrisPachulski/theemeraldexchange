@@ -12,6 +12,15 @@ import type { Env } from '../middleware/auth.js'
 import { env } from '../env.js'
 import * as grabLog from '../services/grabLog.js'
 
+// Spy on the recommender 'added' conversion mirror so we can assert WHEN it
+// fires relative to the cap-aware grab (it must never fire on a rollback).
+vi.mock('../services/recommender.js', async (orig) => ({
+  ...(await orig<typeof import('../services/recommender.js')>()),
+  postFeedback: vi.fn(() => Promise.resolve()),
+}))
+import { postFeedback } from '../services/recommender.js'
+const mockPostFeedback = vi.mocked(postFeedback)
+
 function appUnderTest() {
   const app = new Hono<Env>()
   app.route('/', radarr)
@@ -675,6 +684,82 @@ describe('radarr POST /movie — releases exist but all Radarr-rejected → moni
     expect(body.status).toBe(500)
     expect(body.phase).toBe('no_matching_releases')
     expect(deleteCalled).toBe(false)
+  })
+})
+
+// The recommender 'added' conversion signal must fire only when the movie is
+// KEPT — never on a cap-grab rollback (which deletes the movie + 424s),
+// otherwise the optimizer learns conversions for titles that no longer exist.
+describe('radarr POST /movie — recommender "added" signal timing', () => {
+  const realUseLocal = env.useLocalRecommender
+  beforeEach(() => {
+    mockPostFeedback.mockClear()
+    ;(env as { useLocalRecommender: boolean }).useLocalRecommender = true
+  })
+  afterEach(() => {
+    ;(env as { useLocalRecommender: boolean }).useLocalRecommender = realUseLocal
+  })
+
+  it('does NOT signal "added" when the cap-grab rolls the movie back (424)', async () => {
+    const huge = 999 * 1024 ** 3 // over any cap → all_rejected_by_cap → rollback
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(JSON.stringify([{ id: 1, path: '/data/movies', freeSpace: 5000 * 1024 ** 3 }]), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/movie') && init?.method === 'POST') {
+          return new Response(JSON.stringify({ id: 901, title: 'Over Cap', monitored: false }), { status: 201 })
+        }
+        if (url.includes('/api/v3/release?movieId=901')) {
+          // Radarr-ACCEPTED (not rejected) but huge → over the size cap.
+          return new Response(JSON.stringify([{ guid: 'g', indexerId: 1, size: huge, qualityWeight: 100, title: '4K' }]), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/movie/901') && init?.method === 'DELETE') {
+          return new Response('', { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const res = await appUnderTest().request('/api/v3/movie', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Over Cap', tmdbId: 901, rootFolderPath: '/data/movies', qualityProfileId: 7, monitored: true, addOptions: { searchForMovie: true } }),
+    })
+    expect(res.status).toBe(424)
+    expect((await res.json() as { error: string }).error).toBe('capped_grab_not_started')
+    expect(mockPostFeedback).not.toHaveBeenCalled()
+  })
+
+  it('signals "added" once when the movie is kept (monitoring path)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(JSON.stringify([{ id: 1, path: '/data/movies', freeSpace: 500 * 1024 ** 3 }]), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/movie') && init?.method === 'POST') {
+          return new Response(JSON.stringify({ id: 902, title: 'Future Film', monitored: false }), { status: 201 })
+        }
+        if (url.includes('/api/v3/release?movieId=902')) {
+          return new Response('[]', { status: 200 }) // no releases → monitoring
+        }
+        if (url.endsWith('/api/v3/movie/902') && init?.method === 'PUT') {
+          return new Response(JSON.stringify({ id: 902, monitored: true }), { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const res = await appUnderTest().request('/api/v3/movie', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Future Film', tmdbId: 902, rootFolderPath: '/data/movies', qualityProfileId: 7, monitored: true, addOptions: { searchForMovie: true } }),
+    })
+    expect(res.status).toBe(200)
+    expect(mockPostFeedback).toHaveBeenCalledTimes(1)
+    expect(mockPostFeedback.mock.calls[0][0]).toMatchObject({ kind: 'movie', tmdb_id: 902, signal: 'added' })
   })
 })
 

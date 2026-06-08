@@ -522,28 +522,28 @@ radarr.post('/api/v3/movie', radarrMutateLimit, async (c) => {
   })
   const out = await r.text()
 
-  // Mirror the successful add to the recommender as a strong positive
-  // signal — the user converted a suggestion into a real library
-  // entry. The sidecar maps signal:'added' to outcome:'added' and ties
-  // it back to the most recent rec_log row for the same (sub, kind,
-  // tmdb_id), so the optimizer learns from real conversions, not just
-  // the dot-feedback subset. tmdbId comes from the incoming body —
-  // for non-admin adds the materialize step strips most fields but
-  // preserves tmdbId per NON_ADMIN_RADARR_ALLOW. Fire-and-forget; the
-  // mirror has its own bounded timeout in services/recommender.ts.
-  // Gated on env.useLocalRecommender so disabled/direct-backend
-  // deployments don't generate sidecar traffic or timeout log noise —
-  // mirrors the gate at /api/feedback.
-  if (r.ok && env.useLocalRecommender) {
+  // Mirror a successful add to the recommender as a strong 'added' conversion
+  // signal — the user turned a suggestion into a real library entry. The
+  // sidecar maps signal:'added' to outcome:'added' and ties it to the most
+  // recent rec_log row for the same (sub, kind, tmdb_id), so the optimizer
+  // learns from real conversions, not just the dot-feedback subset. tmdbId
+  // survives the non-admin materialize step (NON_ADMIN_RADARR_ALLOW).
+  //
+  // CRITICAL: only fire this where the movie is actually KEPT (called at the
+  // keep-success returns below), NOT here up-front. Firing before the
+  // cap-aware grab — as this used to — recorded a false 'added' even when the
+  // grab then rolled the movie back out with a 424 (over-cap, search/grab
+  // failure, or every release Radarr-rejected), poisoning the optimizer with
+  // conversions for titles that no longer exist. Gated on useLocalRecommender
+  // so disabled/direct-backend deployments emit no sidecar traffic.
+  const signalAdded = () => {
+    if (!(r.ok && env.useLocalRecommender)) return
     const tmdbId = typeof body.tmdbId === 'number' ? body.tmdbId : undefined
-    if (tmdbId !== undefined) {
-      void postFeedback({
-        sub: session.sub,
-        kind: 'movie',
-        tmdb_id: tmdbId,
-        signal: 'added',
-      }, recommenderCallerFromSession(session))
-    }
+    if (tmdbId === undefined) return
+    void postFeedback(
+      { sub: session.sub, kind: 'movie', tmdb_id: tmdbId, signal: 'added' },
+      recommenderCallerFromSession(session),
+    )
   }
 
   // Wait for the size-capped grab before returning ordinary success.
@@ -599,6 +599,7 @@ radarr.post('/api/v3/movie', radarrMutateLimit, async (c) => {
               502,
             )
           }
+          signalAdded() // kept + monitored → a real conversion
           return c.json(
             {
               status: 'monitoring',
@@ -650,6 +651,11 @@ radarr.post('/api/v3/movie', radarrMutateLimit, async (c) => {
     }
   }
 
+  // Reached on: a successful capped grab (grab_succeeded), the "Just monitor"
+  // path (!wantedSearch), or r.ok with an unparseable add body — all KEEP the
+  // movie, so the conversion signal is real. (Every rollback path above
+  // returned a 424 before here.)
+  signalAdded()
   return new Response(out, {
     status: r.status,
     headers: { 'Content-Type': r.headers.get('Content-Type') ?? 'application/json' },
