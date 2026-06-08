@@ -34,6 +34,22 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
     pos: startPositionSecs ?? 0,
     dur: null,
   })
+  // Latest stopUrl in a ref so the unmount/pagehide cleanups can free the
+  // transcoder slot without re-subscribing on every grant change.
+  const stopUrlRef = useRef<string | null>(null)
+  useEffect(() => {
+    stopUrlRef.current = grant?.stopUrl ?? null
+  }, [grant?.stopUrl])
+
+  // Free the transcode session's concurrency slot. Idempotent (nulls the ref
+  // after firing; the transcoder /stop is itself idempotent), so calling it
+  // from onEnded AND unmount AND pagehide is safe.
+  const stopSession = useCallback(() => {
+    const url = stopUrlRef.current
+    if (!url) return
+    stopUrlRef.current = null
+    void mediaApi.stop(url)
+  }, [])
 
   // Fetch the grant once. Callers key this by title, so a new selection remounts
   // it fresh (state starts null) rather than mutating it here — no synchronous
@@ -74,7 +90,7 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
   }, [onClose])
 
   // Final flush on unmount so the resume point reflects where they actually
-  // stopped, not the last throttled tick.
+  // stopped, not the last throttled tick — and free the transcode slot.
   useEffect(() => {
     return () => {
       const { pos, dur } = latest.current
@@ -82,8 +98,17 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
         const completed = dur != null && pos >= Math.max(0, dur - COMPLETE_TAIL_SECS)
         report(pos, dur, completed, true)
       }
+      stopSession()
     }
-  }, [report])
+  }, [report, stopSession])
+
+  // A hard page unload (tab close / navigation) doesn't run React cleanup, so
+  // free the slot there too. mediaApi.stop uses keepalive to flush on unload.
+  useEffect(() => {
+    const onHide = () => stopSession()
+    window.addEventListener('pagehide', onHide)
+    return () => window.removeEventListener('pagehide', onHide)
+  }, [stopSession])
 
   // Stable StreamGrant reference: a new object each render would make
   // IptvPlayer tear down and rebuild its (HLS) engine on every render.
@@ -116,7 +141,8 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
     setPlaybackEnded(true)
     const dur = latest.current.dur ?? grant?.durationSecs ?? null
     report(latest.current.pos, dur, true, true)
-  }, [report, grant?.durationSecs])
+    stopSession()
+  }, [report, grant?.durationSecs, stopSession])
 
   return (
     <div className="iptv-player-modal" role="dialog" aria-modal="true" aria-label={title}>

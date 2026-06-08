@@ -229,12 +229,13 @@ describe('mediaApi playback + watch', () => {
     expect(body.start_secs).toBe(95)
   })
 
-  it('playback() absolutizes the HLS manifest + heartbeat urls', async () => {
+  it('playback() absolutizes the HLS manifest + heartbeat + stop urls', async () => {
     fetchMock.mockResolvedValueOnce(
       jsonRes({
         delivery: 'hls',
         url: '/api/transcode/session/sid/index.m3u8?t=TOK',
         heartbeatUrl: '/api/transcode/session/sid/heartbeat?t=TOK',
+        stopUrl: '/api/transcode/session/sid/stop?t=TOK',
         sessionId: 'sid',
         durationSecs: null,
       }),
@@ -244,7 +245,25 @@ describe('mediaApi playback + watch', () => {
 
     expect(grant.url).toBe('http://localhost/api/transcode/session/sid/index.m3u8?t=TOK')
     expect(grant.heartbeatUrl).toBe('http://localhost/api/transcode/session/sid/heartbeat?t=TOK')
+    expect(grant.stopUrl).toBe('http://localhost/api/transcode/session/sid/stop?t=TOK')
     expect(grant.sessionId).toBe('sid')
+  })
+
+  it('progressive grant has no stopUrl (nothing to reap)', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({ delivery: 'progressive', url: '/api/media/stream/movie/7?t=TOK', durationSecs: 1200 }),
+    )
+    const grant = await mediaApi.playback('movie', 7)
+    expect(grant.stopUrl).toBeNull()
+  })
+
+  it('stop() POSTs the tokenised stop url with keepalive', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('', { status: 200 }))
+    await mediaApi.stop('http://localhost/api/transcode/session/sid/stop?t=TOK')
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost/api/transcode/session/sid/stop?t=TOK',
+      expect.objectContaining({ method: 'POST', keepalive: true }),
+    )
   })
 
   it('watch() normalizes rows and coerces completed to boolean', async () => {
