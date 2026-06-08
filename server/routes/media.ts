@@ -229,10 +229,18 @@ media.post('/playback/:kind/:id', async (c) => {
     kind: MEDIA_HLS_KIND,
   })
   const withToken = (u: string) => `${u}${u.includes('?') ? '&' : '?'}t=${token}`
+  // Derive the stop URL from the manifest path so it tracks any prefix change.
+  // The same session token authorizes it (transcodeAuth accepts a remux token
+  // bound to media:session:<sid> on every /session/<sid>/* route). The client
+  // POSTs this on player close so the transcoder frees its concurrency permit
+  // immediately instead of pinning the (CPU-only → single) slot until the 30s
+  // idle reaper runs — which otherwise 503s the next title the user opens.
+  const stopPath = handoff.manifestUrl.replace(/\/index\.m3u8$/, '/stop')
   return c.json({
     delivery: 'hls',
     url: withToken(handoff.manifestUrl),
     heartbeatUrl: handoff.heartbeatUrl ? withToken(handoff.heartbeatUrl) : null,
+    stopUrl: withToken(stopPath),
     sessionId: sid,
     durationSecs,
   })

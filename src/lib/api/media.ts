@@ -175,6 +175,10 @@ export type PlaybackGrant = {
   /** Present only for the HLS (transcode) path — POST it to keep the session
    *  alive (the transcoder reaps idle sessions). */
   heartbeatUrl?: string | null
+  /** Present only for the HLS (transcode) path — POST it on player close to
+   *  free the transcoder's concurrency slot immediately (don't wait for the
+   *  30s idle reaper). */
+  stopUrl?: string | null
   sessionId?: string
 }
 
@@ -285,6 +289,7 @@ type RawPlaybackGrant = {
   url: string
   durationSecs: number | null
   heartbeatUrl?: string | null
+  stopUrl?: string | null
   sessionId?: string
 }
 
@@ -300,6 +305,11 @@ function absolutizeGrant(g: RawPlaybackGrant): PlaybackGrant {
       ? g.heartbeatUrl.startsWith('/')
         ? apiUrl(g.heartbeatUrl)
         : g.heartbeatUrl
+      : null,
+    stopUrl: g.stopUrl
+      ? g.stopUrl.startsWith('/')
+        ? apiUrl(g.stopUrl)
+        : g.stopUrl
       : null,
     sessionId: g.sessionId,
   }
@@ -417,5 +427,11 @@ export const mediaApi = {
   /** Keep a transcode session alive. Fire-and-forget; the absolute heartbeatUrl
    *  already carries its ?t= token, so no credentials are needed. */
   heartbeat: (url: string) =>
+    fetch(url, { method: 'POST', keepalive: true }).catch(() => undefined),
+
+  /** Stop a transcode session, freeing its concurrency slot immediately.
+   *  Fire-and-forget with keepalive so it still flushes during page unload
+   *  (pagehide/tab close). The absolute stopUrl carries its own ?t= token. */
+  stop: (url: string) =>
     fetch(url, { method: 'POST', keepalive: true }).catch(() => undefined),
 }

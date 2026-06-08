@@ -320,12 +320,16 @@ describe('media playback grant', () => {
       delivery: string
       url: string
       heartbeatUrl: string
+      stopUrl: string
       sessionId: string
       durationSecs: number
     }
     expect(body.delivery).toBe('hls')
     expect(body.url).toMatch(/^\/api\/transcode\/session\/sess-1\/index\.m3u8\?t=.+/)
     expect(body.heartbeatUrl).toMatch(/^\/api\/transcode\/session\/sess-1\/heartbeat\?t=.+/)
+    // Stop URL is derived from the manifest path (index.m3u8 -> stop) and
+    // carries the same session token so the client can free the slot on close.
+    expect(body.stopUrl).toMatch(/^\/api\/transcode\/session\/sess-1\/stop\?t=.+/)
     expect(body.sessionId).toBe('sess-1')
     expect(body.durationSecs).toBe(5400)
     // Second call hit the media-core /stream handoff with the caps query.
