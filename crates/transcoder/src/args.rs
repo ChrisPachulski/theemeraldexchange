@@ -221,7 +221,8 @@ pub fn ffmpeg_args(
             a.push(format!("{}k", br * 2));
 
             // Filtergraph: scale, tone-map, burn-in. Composed into one -vf.
-            let mut vf = build_video_filter(*scale_to_height, *tone_map, *burn_subtitle_index, input);
+            let mut vf =
+                build_video_filter(*scale_to_height, *tone_map, *burn_subtitle_index, input);
 
             // VAAPI/QSV encode from hardware surfaces, so the software-decoded
             // (and CPU-scaled/tone-mapped) frames must be converted to NV12
@@ -690,11 +691,17 @@ mod tests {
         let args = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Qsv);
         let vf_idx = args.iter().position(|s| s == "-vf").unwrap();
         let filter = &args[vf_idx + 1];
-        assert!(filter.ends_with(",format=nv12,hwupload=extra_hw_frames=64"), "{filter}");
+        assert!(
+            filter.ends_with(",format=nv12,hwupload=extra_hw_frames=64"),
+            "{filter}"
+        );
         let tone = filter.find("tonemap").unwrap();
         let scale = filter.find("scale=-2:720").unwrap();
         let upload = filter.find("hwupload").unwrap();
-        assert!(tone < scale && scale < upload, "order tonemap<scale<hwupload: {filter}");
+        assert!(
+            tone < scale && scale < upload,
+            "order tonemap<scale<hwupload: {filter}"
+        );
     }
 
     #[test]
@@ -709,7 +716,10 @@ mod tests {
             SubtitleOp::None,
         );
         let args = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Qsv);
-        let dev = args.iter().position(|s| s == "-init_hw_device").expect("missing device init");
+        let dev = args
+            .iter()
+            .position(|s| s == "-init_hw_device")
+            .expect("missing device init");
         let i = args.iter().position(|s| s == "-i").expect("missing -i");
         assert!(dev < i, "-init_hw_device must precede -i (global opt)");
     }
@@ -721,7 +731,10 @@ mod tests {
         // QSV. (Avoids a wasted device-open on the common local-title path.)
         let plan = transcode(VideoOp::Copy, AudioOp::Copy, SubtitleOp::None);
         let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Qsv).join(" ");
-        assert!(!j.contains("-init_hw_device"), "remux must not init hw device: {j}");
+        assert!(
+            !j.contains("-init_hw_device"),
+            "remux must not init hw device: {j}"
+        );
         assert!(!j.contains("hwupload"), "remux must not upload: {j}");
         assert!(j.contains("-c:v copy"), "{j}");
     }
@@ -785,7 +798,12 @@ mod tests {
         );
         let args = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Vaapi);
         let vf_idx = args.iter().position(|s| s == "-vf").expect("missing -vf");
-        assert_eq!(args[vf_idx + 1], "scale=-2:720,format=nv12,hwupload", "{}", args.join(" "));
+        assert_eq!(
+            args[vf_idx + 1],
+            "scale=-2:720,format=nv12,hwupload",
+            "{}",
+            args.join(" ")
+        );
     }
 
     #[test]
@@ -800,7 +818,10 @@ mod tests {
             SubtitleOp::None,
         );
         let args = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Vaapi);
-        let dev = args.iter().position(|s| s == "-vaapi_device").expect("missing -vaapi_device");
+        let dev = args
+            .iter()
+            .position(|s| s == "-vaapi_device")
+            .expect("missing -vaapi_device");
         let i = args.iter().position(|s| s == "-i").expect("missing -i");
         assert!(dev < i, "-vaapi_device must precede -i");
     }

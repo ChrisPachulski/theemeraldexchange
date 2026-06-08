@@ -374,7 +374,10 @@ mod tests {
             subtitle: SubtitleOp::None,
             reason: "container".into(),
         };
-        assert!(!remux.reencodes_video(), "copy-remux must not count as a video re-encode");
+        assert!(
+            !remux.reencodes_video(),
+            "copy-remux must not count as a video re-encode"
+        );
         let encode = TranscodePlan::Transcode {
             video: VideoOp::EncodeH264 {
                 scale_to_height: None,
