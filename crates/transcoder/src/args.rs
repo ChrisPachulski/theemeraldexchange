@@ -120,6 +120,27 @@ pub fn ffmpeg_args(
     push(&mut a, "warning");
     push(&mut a, "-nostdin");
 
+    // QSV needs an Intel hardware device available to BOTH the encoder and the
+    // `hwupload` filter that hands it surfaces. `qsv=hw` (no DRM path) lets
+    // ffmpeg auto-select the lone render node — on this single-iGPU box that is
+    // /dev/dri/renderD128 — and derives the required VAAPI child device from it.
+    // `-filter_hw_device hw` names that device for the filtergraph so the
+    // trailing `format=nv12,hwupload` (see the EncodeH264 branch) can upload the
+    // software-decoded/scaled frames to it. These are global options and MUST
+    // precede -i. Emitted only for QSV AND only for a real video re-encode:
+    // VideoToolbox/NVENC take software frames directly and need no device init,
+    // and a copy-remux (VideoOp::Copy — the common case for local titles that
+    // only transcode because their container/audio isn't browser-safe) never
+    // touches the encoder, so opening the GPU device for it would be pure waste.
+    let qsv_reencode =
+        matches!(encoder, HwEncoder::Qsv) && matches!(video, VideoOp::EncodeH264 { .. });
+    if qsv_reencode {
+        push(&mut a, "-init_hw_device");
+        push(&mut a, "qsv=hw");
+        push(&mut a, "-filter_hw_device");
+        push(&mut a, "hw");
+    }
+
     // Seek BEFORE input for fast keyframe seek (§4.2). Omit at 0.
     if start_secs > 0 {
         push(&mut a, "-ss");
@@ -176,7 +197,26 @@ pub fn ffmpeg_args(
             a.push(format!("{}k", br * 2));
 
             // Filtergraph: scale, tone-map, burn-in. Composed into one -vf.
-            let vf = build_video_filter(*scale_to_height, *tone_map, *burn_subtitle_index, input);
+            let mut vf = build_video_filter(*scale_to_height, *tone_map, *burn_subtitle_index, input);
+
+            // QSV encodes from hardware surfaces, so software-decoded frames must
+            // be converted to NV12 (8-bit 4:2:0, the format the iGPU encoder wants
+            // — this also collapses 10-bit p010 sources) and uploaded to a QSV
+            // surface. The upload is the LAST link in the chain so it sits after
+            // any scale/tone-map/burn-in done on the CPU. When there is no other
+            // filter the upload chain stands alone as the whole filtergraph.
+            // `extra_hw_frames` gives the encoder a small surface pool for its
+            // look-ahead. Empirically validated against the deployed jellyfin
+            // ffmpeg for plain 8-bit, 10-bit, scaled, and 4K-HDR-tone-mapped
+            // sources (see crates/transcoder QSV bring-up).
+            if matches!(encoder, HwEncoder::Qsv) {
+                const QSV_UPLOAD: &str = "format=nv12,hwupload=extra_hw_frames=64";
+                vf = Some(match vf {
+                    Some(existing) => format!("{existing},{QSV_UPLOAD}"),
+                    None => QSV_UPLOAD.to_string(),
+                });
+            }
+
             if let Some(filter) = vf {
                 push(&mut a, "-vf");
                 a.push(filter);
@@ -557,6 +597,124 @@ mod tests {
         let j = args.join(" ");
         assert!(j.contains("-map 0:3"), "{j}");
         assert!(j.contains("-c:s webvtt"), "{j}");
+    }
+
+    #[test]
+    fn qsv_reencode_inits_device_and_uploads_with_no_other_filter() {
+        // Plain HEVC→H264 (no scale/tone-map/burn): the QSV upload chain stands
+        // alone as the whole filtergraph, and the hw device is initialized.
+        let plan = transcode(
+            VideoOp::EncodeH264 {
+                scale_to_height: None,
+                tone_map: false,
+                burn_subtitle_index: None,
+            },
+            AudioOp::EncodeAac { bitrate_kbps: 160 },
+            SubtitleOp::None,
+        );
+        let args = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Qsv);
+        let j = args.join(" ");
+        assert!(j.contains("-init_hw_device qsv=hw"), "{j}");
+        assert!(j.contains("-filter_hw_device hw"), "{j}");
+        assert!(j.contains("-c:v h264_qsv"), "{j}");
+        // HW encoders use the neutral `fast` preset, never libx264's veryfast.
+        assert!(j.contains("-preset fast"), "{j}");
+        let vf_idx = args.iter().position(|s| s == "-vf").expect("missing -vf");
+        assert_eq!(
+            args[vf_idx + 1],
+            "format=nv12,hwupload=extra_hw_frames=64",
+            "standalone upload chain: {j}"
+        );
+    }
+
+    #[test]
+    fn qsv_appends_upload_after_scale() {
+        let plan = transcode(
+            VideoOp::EncodeH264 {
+                scale_to_height: Some(720),
+                tone_map: false,
+                burn_subtitle_index: None,
+            },
+            AudioOp::Copy,
+            SubtitleOp::None,
+        );
+        let args = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Qsv);
+        let vf_idx = args.iter().position(|s| s == "-vf").expect("missing -vf");
+        assert_eq!(
+            args[vf_idx + 1],
+            "scale=-2:720,format=nv12,hwupload=extra_hw_frames=64",
+            "upload must be the last link, after the CPU scale"
+        );
+    }
+
+    #[test]
+    fn qsv_upload_is_last_after_tonemap_and_scale() {
+        // The full HDR chain: tone-map → scale → nv12 → hwupload, in that order.
+        let plan = transcode(
+            VideoOp::EncodeH264 {
+                scale_to_height: Some(720),
+                tone_map: true,
+                burn_subtitle_index: None,
+            },
+            AudioOp::Copy,
+            SubtitleOp::None,
+        );
+        let args = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Qsv);
+        let vf_idx = args.iter().position(|s| s == "-vf").unwrap();
+        let filter = &args[vf_idx + 1];
+        assert!(filter.ends_with(",format=nv12,hwupload=extra_hw_frames=64"), "{filter}");
+        let tone = filter.find("tonemap").unwrap();
+        let scale = filter.find("scale=-2:720").unwrap();
+        let upload = filter.find("hwupload").unwrap();
+        assert!(tone < scale && scale < upload, "order tonemap<scale<hwupload: {filter}");
+    }
+
+    #[test]
+    fn qsv_device_init_precedes_input() {
+        let plan = transcode(
+            VideoOp::EncodeH264 {
+                scale_to_height: None,
+                tone_map: false,
+                burn_subtitle_index: None,
+            },
+            AudioOp::Copy,
+            SubtitleOp::None,
+        );
+        let args = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Qsv);
+        let dev = args.iter().position(|s| s == "-init_hw_device").expect("missing device init");
+        let i = args.iter().position(|s| s == "-i").expect("missing -i");
+        assert!(dev < i, "-init_hw_device must precede -i (global opt)");
+    }
+
+    #[test]
+    fn qsv_copy_remux_does_not_init_device() {
+        // A pure remux never touches the encoder, so the GPU device must NOT be
+        // opened and no hwupload is injected — even when the resolved family is
+        // QSV. (Avoids a wasted device-open on the common local-title path.)
+        let plan = transcode(VideoOp::Copy, AudioOp::Copy, SubtitleOp::None);
+        let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Qsv).join(" ");
+        assert!(!j.contains("-init_hw_device"), "remux must not init hw device: {j}");
+        assert!(!j.contains("hwupload"), "remux must not upload: {j}");
+        assert!(j.contains("-c:v copy"), "{j}");
+    }
+
+    #[test]
+    fn cpu_reencode_never_inits_hw_device() {
+        // Regression guard: the CPU (libx264) path must stay free of any QSV
+        // device init or hwupload filter.
+        let plan = transcode(
+            VideoOp::EncodeH264 {
+                scale_to_height: Some(720),
+                tone_map: true,
+                burn_subtitle_index: None,
+            },
+            AudioOp::Copy,
+            SubtitleOp::None,
+        );
+        let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Cpu).join(" ");
+        assert!(!j.contains("-init_hw_device"), "{j}");
+        assert!(!j.contains("hwupload"), "{j}");
+        assert!(!j.contains("format=nv12"), "{j}");
     }
 
     #[test]

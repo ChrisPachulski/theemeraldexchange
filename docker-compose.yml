@@ -357,6 +357,20 @@ services:
       timeout: 3s
       start_period: 10s
       retries: 3
+    # Intel QSV hardware transcode (§4.4): map the iGPU render node so the
+    # jellyfin-ffmpeg iHD driver can open it, and add the node's owning group
+    # (gid 18 = `video` on this Unraid host) as a supplementary group so the
+    # non-root `transcoder` uid (10003) keeps access even if the device's
+    # world-rw bit is ever tightened. This survives cap_drop:ALL + read_only
+    # (opening a 0666/0777 device needs no Linux capability and no rootfs write).
+    # With no device mapped the service still boots and the boot smoke-test
+    # demotes QSV→libx264 (graceful CPU fallback) — so this mapping is the only
+    # thing standing between CPU and GPU encode. If the host enumerates the iGPU
+    # at a different render node, change BOTH sides of the mapping.
+    devices:
+      - "/dev/dri/renderD128:/dev/dri/renderD128"
+    group_add:
+      - "18"
     ports:
       - "127.0.0.1:8003:8003"
     volumes:
@@ -385,10 +399,13 @@ services:
       TRANSCODER_HOST: "0.0.0.0"
       TRANSCODER_PORT: "8003"
       TRANSCODER_TMP_DIR: "/scratch"
-      TRANSCODER_FFMPEG_BIN: "/usr/local/bin/ffmpeg"
-      # CPU encode on the NAS (no GPU). Leave unset/"cpu" → libx264. Set to
-      # nvenc/qsv/vaapi/videotoolbox only with a HW-capable ffmpeg + device.
-      TRANSCODER_HW_ENCODER: "${TRANSCODER_HW_ENCODER:-cpu}"
+      TRANSCODER_FFMPEG_BIN: "/usr/lib/jellyfin-ffmpeg/ffmpeg"
+      # Intel QSV hardware H.264 encode on the NAS iGPU (Pentium 8505, Alder
+      # Lake UHD). jellyfin-ffmpeg + the mapped /dev/dri/renderD128 above make
+      # this real; the boot smoke-test (encoders.rs) auto-demotes to libx264 if
+      # the device/driver is unavailable, so "qsv" is a safe default. Override
+      # to "cpu" via the env to force libx264 (e.g. to sidestep a driver issue).
+      TRANSCODER_HW_ENCODER: "${TRANSCODER_HW_ENCODER:-qsv}"
       # Concurrency caps (§4.4/§4.5). Defaults match concurrency.rs (4 / 1).
       MAX_CONCURRENT_TRANSCODES: "${MAX_CONCURRENT_TRANSCODES:-4}"
       MAX_CONCURRENT_CPU_TRANSCODES: "${MAX_CONCURRENT_CPU_TRANSCODES:-1}"

@@ -5,10 +5,23 @@
 # cargo resolves the full workspace — transcoder depends on the
 # media-core + emerald-contracts crates.
 #
-# Stage 2 (runtime): debian-slim + statically-linked ffmpeg/ffprobe.
+# Stage 2 (runtime): debian-slim + jellyfin-ffmpeg (Intel QSV-capable).
 # The transcoder spawns `ffmpeg` per session (tokio::process), so the
 # binary MUST be present at runtime. The Rust binary is glibc-linked, so
 # the runtime base matches the bookworm builder.
+#
+# ffmpeg provisioning — jellyfin-ffmpeg, NOT mwader/static-ffmpeg (history):
+# QSV hardware H.264 encode (§4.4) needs a DYNAMICALLY-linked ffmpeg built with
+# VAAPI+QSV plus the Intel runtime stack (the iHD driver, libva, the oneVPL GPU
+# runtime). A fully-static ffmpeg fundamentally cannot dlopen the iHD driver, so
+# `h264_qsv` could never create its VAAPI child device ("No supported child
+# device type is enabled") and the service silently fell back to libx264 on a
+# weak 6-thread CPU. jellyfin-ffmpeg bundles ffmpeg + iHD + libva + oneVPL under
+# /usr/lib/jellyfin-ffmpeg and is purpose-built for self-hosted Intel transcode.
+# Hardware encode ALSO requires /dev/dri/renderD128 mapped in and the process in
+# the render node's group — both wired in docker-compose.yml. Without the device
+# the binary still runs everything on the CPU (graceful: boot smoke-test demotes
+# QSV→libx264), so the image is safe even on a box with no iGPU.
 
 FROM rust:1.96-slim-bookworm@sha256:b5f842fac1e3b4ff718a652a8e0173b62d9403ec826ef4998880b9347db30684 AS builder
 
@@ -26,14 +39,20 @@ FROM debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f206
 
 WORKDIR /srv
 
-# Statically-linked ffmpeg/ffprobe 7.x — no glibc/runtime deps, runs as-is.
-COPY --from=mwader/static-ffmpeg:7.1@sha256:a8090df5f5608daef387e1b2e93b98aaacb4d92153ad904e7d715c725724fca4 /ffmpeg /ffprobe /usr/local/bin/
-
-# curl is for the container HEALTHCHECK (audit 9-0). Create a non-root user
-# that owns /scratch (where ffmpeg writes HLS segments).
+# jellyfin-ffmpeg, version- and sha256-pinned (supply chain). curl serves both
+# the HEALTHCHECK (audit 9-0) and the .deb download (follows GitHub's redirect to
+# the release object). The .deb's own dependencies (libva, intel-media-driver
+# runtime bits, etc.) resolve from the bookworm repos via `apt-get install`.
+# Then create a non-root user that owns /scratch (where ffmpeg writes HLS
+# segments).
+ARG JF_VERSION=7.1.4-3
+ARG JF_SHA256=0cf62bc2423822c9ec7a38dbc8f526d9a58671bd01843daa7817ece35619fc1c
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl \
- && rm -rf /var/lib/apt/lists/* \
+ && curl -fsSL -o /tmp/jf.deb "https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/v${JF_VERSION}/jellyfin-ffmpeg7_${JF_VERSION}-bookworm_amd64.deb" \
+ && echo "${JF_SHA256}  /tmp/jf.deb" | sha256sum -c - \
+ && apt-get install -y --no-install-recommends /tmp/jf.deb \
+ && rm -rf /var/lib/apt/lists/* /tmp/jf.deb \
  && mkdir -p /scratch \
  && groupadd --system --gid 10003 transcoder \
  && useradd --system --uid 10003 --gid transcoder --home-dir /srv --no-create-home transcoder \
@@ -47,7 +66,7 @@ COPY --from=builder /build/target/release/transcoder /usr/local/bin/transcoder
 # (binary default is 8090; we run on 8003).
 ENV TRANSCODER_HOST=0.0.0.0
 ENV TRANSCODER_PORT=8003
-ENV TRANSCODER_FFMPEG_BIN=/usr/local/bin/ffmpeg
+ENV TRANSCODER_FFMPEG_BIN=/usr/lib/jellyfin-ffmpeg/ffmpeg
 ENV TRANSCODER_TMP_DIR=/scratch
 
 EXPOSE 8003
