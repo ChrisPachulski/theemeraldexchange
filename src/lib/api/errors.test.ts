@@ -231,6 +231,42 @@ describe('throwApiError', () => {
     }
     expect(caught!.message).toContain('the requested path')
   })
+
+  it('explains transcoder_unavailable (busy playback slots) instead of a raw 503', async () => {
+    const r = jsonResponse({ error: 'transcoder_unavailable' }, 503)
+    await expect(throwApiError(r, 'Media /playback/movie/1')).rejects.toMatchObject({
+      status: 503,
+      code: 'transcoder_unavailable',
+    })
+    let msg = ''
+    try {
+      await throwApiError(jsonResponse({ error: 'transcoder_unavailable' }, 503), 'Media /playback/movie/1')
+    } catch (e) {
+      msg = (e as ApiError).message
+    }
+    expect(msg).toMatch(/playback slots are busy/i)
+    expect(msg).not.toMatch(/503/)
+  })
+
+  it('explains transcode_start_failed / transcoder unreachable', async () => {
+    let msg = ''
+    try {
+      await throwApiError(jsonResponse({ error: 'transcode_start_failed' }, 502), 'Media /playback/episode/9')
+    } catch (e) {
+      msg = (e as ApiError).message
+    }
+    expect(msg).toMatch(/couldn.t start playback/i)
+  })
+
+  it('maps a 404 on a playback grant to "not available locally"', async () => {
+    let msg = ''
+    try {
+      await throwApiError(jsonResponse({}, 404), 'Media /playback/movie/999999')
+    } catch (e) {
+      msg = (e as ApiError).message
+    }
+    expect(msg).toMatch(/isn.t available to play/i)
+  })
 })
 
 describe('isInsufficientDiskSpace', () => {
