@@ -11,13 +11,12 @@
 //!   a scale filter when the source exceeds the client's `max_height` and a
 //!   tone-map flag when the source is HDR and the client is SDR.
 //! * audio — copy when the codec is accepted; otherwise transcode to AAC.
-//! * subtitles — text formats (subrip/srt/webvtt/ass/ssa/mov_text) are
-//!   extracted to a selectable WebVTT track. Image formats
-//!   (pgs/hdmv_pgs/dvd_subtitle/vobsub) are DROPPED, not burned: the libass
-//!   `subtitles` filter cannot render bitmap subtitles and aborts the ffmpeg
-//!   session, so a correct burn would need an `overlay`-based filtergraph.
-//!   Until that lands, a title with only image subs plays without subs rather
-//!   than failing outright. See [`plan_subtitle`].
+//! * subtitles — NOT carried on the live stream. Inline WebVTT extraction
+//!   stalled the first segment under `-re` (and was orphaned with no master
+//!   playlist), so it is disabled; image formats were already dropped (libass
+//!   can't render bitmaps). A title transcodes without in-player subs rather
+//!   than not playing at all; selectable subs return via a sidecar `<track>`.
+//!   See [`plan_subtitle`].
 //!
 //! This is deliberately deterministic: every branch is exercised by a unit
 //! test, and `ffmpeg_args` (in [`crate::args`]) turns a plan into a concrete
@@ -142,38 +141,51 @@ fn is_image_subtitle(codec: &str) -> bool {
         .any(|c| codec.eq_ignore_ascii_case(c))
 }
 
-/// Pick the subtitle disposition for the OUTPUT. Only TEXT subtitles are
-/// carried, repackaged as a single selectable WebVTT track (the right model for
-/// both hls.js and AVPlayer). A forced text track wins; otherwise the first
-/// text track present. Returns `(op, burn_index)`; `burn_index` is always `None`
-/// now — image burn-in is not emitted (see below).
+/// Subtitle disposition for the live HLS output. Currently always `None`:
+/// inline subtitle handling is DISABLED on the real-time stream for two reasons.
 ///
-/// Image subtitles (PGS/VOBSUB/DVD) are intentionally DROPPED. Rendering them
-/// means compositing the bitmap onto the video, but the libass `subtitles`
-/// filter cannot decode image formats — it aborts the whole ffmpeg session with
-/// "Only text based subtitles are currently supported". A correct burn needs an
-/// `overlay`-based filtergraph fed by the decoded subtitle stream; until that
-/// lands, dropping image subs lets the title play (without those subs) instead
-/// of failing to play at all.
+/// 1. **Latency.** Under `-re` (real-time input pacing) the HLS muxer holds a
+///    segment open until *every* mapped stream — including the sparse subtitle
+///    stream — reaches the segment boundary. On a title whose first subtitle cue
+///    is late, that delays the FIRST video segment by ~9s of wall-clock, long
+///    enough to blow past the player's manifest-readiness window and leave a grey
+///    rectangle at 0:00. (Measured: ~13s with the WebVTT map, ~4.5s without it.)
+/// 2. **It delivered nothing.** ffmpeg wrote the WebVTT rendition as a separate
+///    `index_vtt.m3u8`, but the muxer emits no master playlist (`-master_pl_name`
+///    is unset), so nothing referenced it — the extracted subs were orphaned and
+///    never shown by the player anyway.
+///
+/// So removing inline extraction costs no working feature and fixes the stall.
+/// Subtitles will return as a pre-extracted **sidecar WebVTT** (`<track>`,
+/// decoupled from the live stream) — see TODO below. Until then a transcoded
+/// title plays WITHOUT in-player subtitles rather than not playing at all.
+///
+/// Returns `(op, burn_index)`; both are `None`. Detection is still run for the
+/// log trail (and to keep the text/image classifiers + the `ExtractWebVtt` op
+/// live for the sidecar follow-up and the args-builder test).
+///
+/// Image subtitles (PGS/VOBSUB/DVD) were already dropped: the libass `subtitles`
+/// filter cannot decode bitmaps and would abort the session ("Only text based
+/// subtitles are currently supported"); a correct burn needs an `overlay`-based
+/// filtergraph fed by the decoded subtitle stream.
+///
+/// TODO(M4+): pre-extract the chosen subtitle to a complete sidecar `.vtt`
+/// (one-shot, no `-re`) served alongside the session and loaded by the SPA as a
+/// `<track>`, restoring selectable subs without the live-stream coupling.
 fn plan_subtitle(file: &MediaFileRow) -> (SubtitleOp, Option<i64>) {
     let tracks = file.subtitle_tracks();
     let is_text = |t: &&SubtitleTrack| is_text_subtitle(t.codec.as_deref().unwrap_or("").trim());
-    let chosen = tracks
+    if let Some(track) = tracks
         .iter()
         .find(|t| t.forced && is_text(t))
-        .or_else(|| tracks.iter().find(is_text));
-    if let Some(track) = chosen {
-        return (
-            SubtitleOp::ExtractWebVtt {
-                source_index: track.index,
-            },
-            None,
+        .or_else(|| tracks.iter().find(is_text))
+    {
+        tracing::debug!(
+            path = %file.path,
+            index = track.index,
+            "text subtitle present; inline extraction disabled (needs sidecar)"
         );
-    }
-    // No usable text track. Log when we drop image-only subs so the gap is
-    // observable rather than silent (and to keep is_image_subtitle in use until
-    // the overlay burn path lands).
-    if tracks
+    } else if tracks
         .iter()
         .any(|t| is_image_subtitle(t.codec.as_deref().unwrap_or("").trim()))
     {
@@ -536,9 +548,12 @@ mod tests {
     }
 
     #[test]
-    fn ass_subtitle_extracts_to_webvtt_when_transcoding() {
-        // ASS is a text format → WebVTT extract, NOT burn-in. The video op is
-        // driven only by the codec mismatch (hevc), so no burn index.
+    fn text_subtitle_not_inline_extracted_on_live_stream() {
+        // Inline WebVTT extraction is disabled: under -re it delays the first
+        // video segment ~9s (grey 0:00) AND was orphaned (no master playlist),
+        // so a text sub yields SubtitleOp::None. The video op is still driven by
+        // the codec mismatch (hevc). Subs will return via a sidecar (see
+        // plan_subtitle TODO). Regression for American Dad! S01E07.
         let f = file(
             Some("mp4"),
             Some("hevc"),
@@ -552,7 +567,11 @@ mod tests {
             TranscodePlan::Transcode {
                 video, subtitle, ..
             } => {
-                assert_eq!(subtitle, SubtitleOp::ExtractWebVtt { source_index: 2 });
+                assert_eq!(
+                    subtitle,
+                    SubtitleOp::None,
+                    "text sub must not inline-extract"
+                );
                 assert_eq!(
                     video,
                     VideoOp::EncodeH264 {
@@ -599,7 +618,9 @@ mod tests {
     }
 
     #[test]
-    fn forced_subtitle_is_preferred_over_first() {
+    fn text_subtitles_yield_none_regardless_of_forced_flag() {
+        // With inline extraction disabled, neither a forced nor a plain text
+        // track is selected onto the live stream — both yield None (sidecar TODO).
         let f = file(
             Some("mkv"),
             Some("h264"),
@@ -611,7 +632,7 @@ mod tests {
         let plan = plan_transcode(&f, &caps_h264_1080_sdr());
         match plan {
             TranscodePlan::Transcode { subtitle, .. } => {
-                assert_eq!(subtitle, SubtitleOp::ExtractWebVtt { source_index: 3 });
+                assert_eq!(subtitle, SubtitleOp::None);
             }
             other => panic!("expected transcode, got {other:?}"),
         }
