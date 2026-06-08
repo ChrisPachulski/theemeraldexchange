@@ -949,7 +949,10 @@ mod tests {
             HwEncoder::Cpu,
         );
         let _a = mgr.start(encode_opts_id("/lib/a.mkv", 7)).await.unwrap();
-        let err = mgr.start(encode_opts_id("/lib/b.mkv", 8)).await.unwrap_err();
+        let err = mgr
+            .start(encode_opts_id("/lib/b.mkv", 8))
+            .await
+            .unwrap_err();
         assert!(
             matches!(err, StartError::Busy(_)),
             "second CPU re-encode past the cpu cap must be Busy"
