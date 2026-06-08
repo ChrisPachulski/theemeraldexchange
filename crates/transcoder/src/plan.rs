@@ -247,9 +247,8 @@ pub fn plan_transcode(file: &MediaFileRow, caps: &ClientCaps) -> TranscodePlan {
 
 /// Audio op: copy when at least one track's codec is accepted, else AAC 192k.
 fn plan_audio(file: &MediaFileRow, caps: &ClientCaps) -> AudioOp {
-    // media-core's ClientCaps has no audio_codecs field yet; the contract uses
-    // a conventional set carried in video_codecs is NOT correct, so we accept
-    // a small built-in set of universally-direct-play audio codecs plus AAC.
+    // media-core's ClientCaps has no audio_codecs field yet, so accepted is a
+    // fixed browser-safe baseline (AAC only — see accepted_audio_codecs).
     // When the file's primary audio codec is in that set, copy; else AAC.
     let tracks = file.audio_tracks();
     let primary = tracks.first();
@@ -273,18 +272,22 @@ fn plan_audio(file: &MediaFileRow, caps: &ClientCaps) -> AudioOp {
     }
 }
 
-/// Audio codecs we let through as direct-play. `caps.audio_codecs` does not
-/// exist in the M3 contract yet, so we use the Apple-safe baseline (AAC always,
-/// plus AC-3/E-AC-3 which AVPlayer can pass to an AVReceiver). Anything else
-/// (DTS, TrueHD, FLAC, Opus in an unsupported container) → AAC.
+/// Audio codecs we copy through instead of re-encoding. The shipped delivery
+/// path is HLS into a browser `<video>` — hls.js/MSE on Chrome & Firefox, native
+/// HLS on Safari — and **AAC is the only audio codec all three can decode**.
+/// Chrome's and Firefox's MSE reject AC-3/E-AC-3, so a passthrough copy of those
+/// hands the player a stream it renders with dead audio (or fails outright — a
+/// grey 0:00). So only AAC copies; everything else (AC-3, E-AC-3, DTS, TrueHD,
+/// FLAC, …) is re-encoded to AAC.
 ///
-/// TODO(M4+): when `media_core::capability::ClientCaps` grows an
-/// `audio_codecs` field, key this off the client's actual advertised set
-/// instead of the hardcoded baseline — a client that cannot decode E-AC-3
-/// currently gets a copy it cannot play, and only the first audio track is
-/// mapped (see `-map 0:a:0?` in `args::ffmpeg_args`).
+/// `caps.audio_codecs` does not exist in the M3 `ClientCaps` contract yet, so
+/// this is a fixed browser-safe baseline rather than the client's advertised set.
+/// TODO(M4+): when `ClientCaps` grows an `audio_codecs` field, key off the
+/// client's real set so a native Apple client (AVPlayer can pass AC-3/E-AC-3 to a
+/// receiver) gets passthrough while browsers keep AAC. Note also that only the
+/// first audio track is mapped (`-map 0:a:0?` in `args::ffmpeg_args`).
 fn accepted_audio_codecs(_caps: &ClientCaps) -> Vec<String> {
-    vec!["aac".to_string(), "ac3".to_string(), "eac3".to_string()]
+    vec!["aac".to_string()]
 }
 
 #[cfg(test)]
@@ -489,9 +492,9 @@ mod tests {
     }
 
     #[test]
-    fn eac3_not_in_caps_transcodes_audio_to_aac() {
-        // eac3 IS in our Apple-safe baseline, so to prove the AAC path we use
-        // DTS, which is not. Codec mismatch on video forces the transcode gate.
+    fn non_aac_audio_transcodes_to_aac() {
+        // DTS is not browser-decodable → must re-encode to AAC. (Codec mismatch
+        // on video forces the transcode gate regardless.)
         let f = file(
             Some("mp4"),
             Some("hevc"),
@@ -510,7 +513,11 @@ mod tests {
     }
 
     #[test]
-    fn eac3_audio_is_copied_when_present() {
+    fn eac3_audio_is_reencoded_to_aac_for_browsers() {
+        // E-AC-3 (Dolby Digital Plus) is NOT decodable by Chrome/Firefox MSE, so
+        // it must be re-encoded to AAC rather than copied — copying it played
+        // video with dead audio (or a grey 0:00). Regression for the American
+        // Dad! S01E07 (EAC3 5.1) grey-screen report.
         let f = file(
             Some("mp4"),
             Some("hevc"),
@@ -521,7 +528,9 @@ mod tests {
         );
         let plan = plan_transcode(&f, &caps_h264_1080_sdr());
         match plan {
-            TranscodePlan::Transcode { audio, .. } => assert_eq!(audio, AudioOp::Copy),
+            TranscodePlan::Transcode { audio, .. } => {
+                assert_eq!(audio, AudioOp::EncodeAac { bitrate_kbps: 192 })
+            }
             other => panic!("expected transcode, got {other:?}"),
         }
     }
