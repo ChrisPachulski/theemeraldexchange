@@ -49,10 +49,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     tracing::info!(?resolved, available = ?available, "transcoder encoder resolved");
 
-    let state = AppState::from_env_with_encoder(resolved).map_err(|e| {
+    let mut state = AppState::from_env_with_encoder(resolved).map_err(|e| {
         tracing::error!("transcoder config error: {e}");
         e
     })?;
+
+    // Full-hardware VAAPI pipeline (GPU decode + tonemap_vaapi/scale_vaapi +
+    // h264_vaapi, no CPU<->GPU round-trip). Only meaningful when the resolved
+    // encoder is VAAPI; probe the VPP+encode chain at boot so a GPU without
+    // working VAAPI post-processing cleanly keeps the proven software-decode path
+    // instead of crash-looping. TRANSCODER_VAAPI_HWDECODE=0 forces it off (escape
+    // hatch for a flaky driver), mirroring TRANSCODER_FORCE_CPU.
+    if resolved == HwEncoder::Vaapi {
+        if vaapi_hwdecode_enabled() {
+            let full_hw = encoders::vaapi_full_hw_supported(&ffmpeg_bin).await;
+            state.sessions.set_vaapi_hw_decode(full_hw);
+            tracing::info!(
+                vaapi_full_hw = full_hw,
+                "VAAPI full-hardware decode/tone-map pipeline"
+            );
+        } else {
+            tracing::info!("VAAPI full-hardware decode disabled via TRANSCODER_VAAPI_HWDECODE");
+        }
+    }
 
     // Idle-session sweeper (5s cadence; 30s no-heartbeat → reap).
     let _sweeper = state.sessions.spawn_sweeper();
@@ -74,6 +93,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+/// Operator escape hatch for the full-hardware VAAPI decode path. Defaults ON;
+/// set `TRANSCODER_VAAPI_HWDECODE` to a falsey value (`0`/`false`/`no`/`off`,
+/// case-insensitive) to pin the proven software-decode path regardless of the
+/// boot capability probe (mirrors `TRANSCODER_FORCE_CPU` for the encoder).
+fn vaapi_hwdecode_enabled() -> bool {
+    match std::env::var("TRANSCODER_VAAPI_HWDECODE") {
+        Ok(v) => !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        ),
+        Err(_) => true,
+    }
 }
 
 /// Initialize the Glitchtip/Sentry SDK from the `GLITCHTIP_DSN` env var (§15;

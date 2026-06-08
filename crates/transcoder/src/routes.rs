@@ -256,6 +256,9 @@ async fn grant(State(state): State<AppState>, Json(req): Json<GrantRequest>) -> 
     } = req;
     let input_path = file.path.clone();
     let row = file.into_row();
+    // Source codec gates the full-hardware VAAPI decode path (see
+    // SessionManager::spawn_child); carry it through to StartOpts.
+    let source_codec = row.video_codec.clone();
     let plan = plan_transcode(&row, &caps);
 
     if let TranscodePlan::DirectPlay { reason } = &plan {
@@ -274,6 +277,7 @@ async fn grant(State(state): State<AppState>, Json(req): Json<GrantRequest>) -> 
         input_path,
         plan: plan.clone(),
         start_secs,
+        source_codec,
     };
 
     match state.sessions.start(opts).await {

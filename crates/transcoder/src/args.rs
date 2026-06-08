@@ -92,21 +92,48 @@ fn h264_bitrate_kbps(height: Option<i64>) -> u32 {
 /// render node via `qsv=hw`, so it needs no path here.)
 pub(crate) const VAAPI_RENDER_NODE: &str = "/dev/dri/renderD128";
 
-/// Build the full ffmpeg argument vector for a transcode plan.
+/// Build the ffmpeg argument vector for a transcode plan (software-decode path).
 ///
-/// * `input` — absolute source path.
-/// * `session_dir` — per-session tmpdir; the playlist and segments land here.
-/// * `start_secs` — seek offset for resume/seek (`-ss`); 0 for a fresh start.
-/// * `encoder` — selected HW family.
-///
-/// Returns an empty vec for a [`TranscodePlan::DirectPlay`] (caller should
-/// never invoke ffmpeg in that case — this is a defensive no-op).
+/// Thin wrapper over [`ffmpeg_args_hw`] with hardware decode OFF — the historical
+/// 5-arg signature, kept for the call sites and tests that assert the CPU-decode
+/// behavior. The session manager calls [`ffmpeg_args_hw`] directly so it can flip
+/// on the full-hardware pipeline per session.
 pub fn ffmpeg_args(
     plan: &TranscodePlan,
     input: &str,
     session_dir: &str,
     start_secs: u64,
     encoder: HwEncoder,
+) -> Vec<String> {
+    ffmpeg_args_hw(plan, input, session_dir, start_secs, encoder, false)
+}
+
+/// Build the full ffmpeg argument vector for a transcode plan.
+///
+/// * `input` — absolute source path.
+/// * `session_dir` — per-session tmpdir; the playlist and segments land here.
+/// * `start_secs` — seek offset for resume/seek (`-ss`); 0 for a fresh start.
+/// * `encoder` — selected HW family.
+/// * `hw_decode` — when set (and the family is VAAPI and the plan re-encodes
+///   video with no subtitle burn-in), decode the source straight into VAAPI
+///   surfaces (`-hwaccel vaapi -hwaccel_output_format vaapi`) and run tone-map +
+///   scale on the iGPU (`tonemap_vaapi`/`scale_vaapi`), encoding with
+///   `h264_vaapi` and NO CPU<->GPU `hwupload`. The whole pipeline (decode, VPP,
+///   encode) then runs on the GPU. Otherwise the software-decode path runs (CPU
+///   decode + CPU scale/tonemap/burn, then `format=nv12,hwupload` for a VAAPI/QSV
+///   encoder). Only enable `hw_decode` for a source codec the device can decode —
+///   under `-hwaccel_output_format vaapi` an undecodable codec has no software
+///   fallback and hard-fails the session.
+///
+/// Returns an empty vec for a [`TranscodePlan::DirectPlay`] (caller should
+/// never invoke ffmpeg in that case — this is a defensive no-op).
+pub fn ffmpeg_args_hw(
+    plan: &TranscodePlan,
+    input: &str,
+    session_dir: &str,
+    start_secs: u64,
+    encoder: HwEncoder,
+    hw_decode: bool,
 ) -> Vec<String> {
     let (video, audio, subtitle) = match plan {
         TranscodePlan::DirectPlay { .. } => return Vec::new(),
@@ -126,6 +153,22 @@ pub fn ffmpeg_args(
     push(&mut a, "warning");
     push(&mut a, "-nostdin");
 
+    // Full-hardware pipeline: decode the source directly into VAAPI surfaces and
+    // keep every frame on the GPU through tone-map/scale/encode. Only for a VAAPI
+    // re-encode with NO subtitle burn-in — image burn-in needs the libass
+    // `subtitles` filter, which runs on CPU frames the GPU path doesn't have. The
+    // caller gates `hw_decode` on a HW-decodable source codec, since
+    // -hwaccel_output_format vaapi has no software fallback for an undecodable one.
+    let full_hw = hw_decode
+        && matches!(encoder, HwEncoder::Vaapi)
+        && matches!(
+            video,
+            VideoOp::EncodeH264 {
+                burn_subtitle_index: None,
+                ..
+            }
+        );
+
     // VAAPI and QSV both encode from Intel hardware surfaces, so they need a
     // device initialized BEFORE -i (a global option) and the filtergraph
     // terminated with an upload to it (see the EncodeH264 branch). The init
@@ -138,7 +181,18 @@ pub fn ffmpeg_args(
     // the encoder, so opening the GPU device for it would be pure waste.
     let hw_surface_reencode = matches!(encoder, HwEncoder::Vaapi | HwEncoder::Qsv)
         && matches!(video, VideoOp::EncodeH264 { .. });
-    if hw_surface_reencode {
+    if full_hw {
+        // Hardware-decode into VAAPI surfaces; the decoder, the VPP filters, and
+        // h264_vaapi all share the device derived from this hw frames context, so
+        // no separate -vaapi_device is needed. These are input options (they
+        // apply to the -i that follows).
+        push(&mut a, "-hwaccel");
+        push(&mut a, "vaapi");
+        push(&mut a, "-hwaccel_device");
+        push(&mut a, VAAPI_RENDER_NODE);
+        push(&mut a, "-hwaccel_output_format");
+        push(&mut a, "vaapi");
+    } else if hw_surface_reencode {
         match encoder {
             HwEncoder::Vaapi => {
                 push(&mut a, "-vaapi_device");
@@ -220,30 +274,39 @@ pub fn ffmpeg_args(
             push(&mut a, "-bufsize");
             a.push(format!("{}k", br * 2));
 
-            // Filtergraph: scale, tone-map, burn-in. Composed into one -vf.
-            let mut vf =
-                build_video_filter(*scale_to_height, *tone_map, *burn_subtitle_index, input);
-
-            // VAAPI/QSV encode from hardware surfaces, so the software-decoded
-            // (and CPU-scaled/tone-mapped) frames must be converted to NV12
-            // (8-bit 4:2:0 — the format the iGPU encoder wants; this also
-            // collapses 10-bit p010 sources) and uploaded to a GPU surface. The
-            // upload is the LAST link so it sits after any CPU filter; when there
-            // is no other filter it stands alone as the whole graph. QSV takes an
-            // `extra_hw_frames` surface pool for its look-ahead; VAAPI needs no
-            // such hint. Empirically validated against the deployed ffmpeg for
-            // plain 8-bit, 10-bit, scaled, and 4K-HDR-tone-mapped sources (see
-            // crates/transcoder HW bring-up).
-            let upload = match encoder {
-                HwEncoder::Vaapi => Some("format=nv12,hwupload"),
-                HwEncoder::Qsv => Some("format=nv12,hwupload=extra_hw_frames=64"),
-                _ => None,
+            // Filtergraph. Under full-HW the frames are already VAAPI surfaces
+            // decoded on the GPU, so tone-map/scale run on the iGPU
+            // (tonemap_vaapi/scale_vaapi) and the graph terminates in NV12
+            // directly — no upload. The software path scales/tone-maps/burns on
+            // CPU frames, then converts to NV12 and uploads as the LAST link.
+            let mut vf = if full_hw {
+                Some(build_vaapi_hw_filter(*scale_to_height, *tone_map))
+            } else {
+                build_video_filter(*scale_to_height, *tone_map, *burn_subtitle_index, input)
             };
-            if let Some(up) = upload {
-                vf = Some(match vf {
-                    Some(existing) => format!("{existing},{up}"),
-                    None => up.to_string(),
-                });
+
+            // VAAPI/QSV software-decode path: the CPU-decoded (and CPU-scaled/
+            // tone-mapped) frames must be converted to NV12 (8-bit 4:2:0 — the
+            // format the iGPU encoder wants; this also collapses 10-bit p010
+            // sources) and uploaded to a GPU surface. The upload is the LAST link
+            // so it sits after any CPU filter; when there is no other filter it
+            // stands alone as the whole graph. QSV takes an `extra_hw_frames`
+            // surface pool for its look-ahead; VAAPI needs no such hint. Skipped
+            // under full-HW (frames are already on the GPU). Empirically validated
+            // against the deployed ffmpeg for plain 8-bit, 10-bit, scaled, and
+            // 4K-HDR-tone-mapped sources (see crates/transcoder HW bring-up).
+            if !full_hw {
+                let upload = match encoder {
+                    HwEncoder::Vaapi => Some("format=nv12,hwupload"),
+                    HwEncoder::Qsv => Some("format=nv12,hwupload=extra_hw_frames=64"),
+                    _ => None,
+                };
+                if let Some(up) = upload {
+                    vf = Some(match vf {
+                        Some(existing) => format!("{existing},{up}"),
+                        None => up.to_string(),
+                    });
+                }
             }
 
             if let Some(filter) = vf {
@@ -326,6 +389,25 @@ fn build_video_filter(
         None
     } else {
         Some(parts.join(","))
+    }
+}
+
+/// GPU-native VAAPI filtergraph for the full-hardware path: the source is decoded
+/// straight into VAAPI surfaces, so tone-map and scale run on the iGPU
+/// (`tonemap_vaapi`/`scale_vaapi`). The graph ALWAYS terminates in an NV12
+/// surface — `h264_vaapi` (Low-Power on Alder Lake) cannot encode the 10-bit P010
+/// surface a Main-10 HEVC decodes to, so a bare graph fails with "No usable
+/// encoding profile found". `tonemap_vaapi` is only emitted when collapsing
+/// HDR→SDR: it reads the input's HDR mastering-display metadata and errors on SDR
+/// input. With neither tone-map nor scale we still run `scale_vaapi=format=nv12`
+/// as a cheap GPU format pass to guarantee the NV12 the encoder needs.
+fn build_vaapi_hw_filter(scale_to_height: Option<i64>, tone_map: bool) -> String {
+    match (tone_map, scale_to_height) {
+        // tonemap_vaapi outputs NV12; scale_vaapi after it keeps NV12.
+        (true, Some(h)) => format!("tonemap_vaapi=format=nv12,scale_vaapi=w=-2:h={h}"),
+        (true, None) => "tonemap_vaapi=format=nv12".to_string(),
+        (false, Some(h)) => format!("scale_vaapi=w=-2:h={h}:format=nv12"),
+        (false, None) => "scale_vaapi=format=nv12".to_string(),
     }
 }
 
@@ -850,5 +932,158 @@ mod tests {
             j.ends_with("/tmp/s/index.m3u8"),
             "playlist is last arg: {j}"
         );
+    }
+
+    // ── Full-hardware VAAPI pipeline (hw_decode=true) ───────────────────────
+
+    fn encode(scale: Option<i64>, tone_map: bool, burn: Option<i64>) -> TranscodePlan {
+        transcode(
+            VideoOp::EncodeH264 {
+                scale_to_height: scale,
+                tone_map,
+                burn_subtitle_index: burn,
+            },
+            AudioOp::EncodeAac { bitrate_kbps: 192 },
+            SubtitleOp::None,
+        )
+    }
+
+    #[test]
+    fn vaapi_full_hw_plain_inits_hwaccel_and_converts_nv12() {
+        // Plain HEVC→H264 (no scale/tone-map): decode straight to VAAPI surfaces
+        // and convert to NV12 on the GPU. NO software -vaapi_device, NO hwupload.
+        let plan = encode(None, false, None);
+        let args = ffmpeg_args_hw(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Vaapi, true);
+        let j = args.join(" ");
+        assert!(
+            j.contains(
+                "-hwaccel vaapi -hwaccel_device /dev/dri/renderD128 -hwaccel_output_format vaapi"
+            ),
+            "{j}"
+        );
+        assert!(j.contains("-c:v h264_vaapi"), "{j}");
+        assert!(j.contains("-low_power 1"), "{j}");
+        let vf_idx = args.iter().position(|s| s == "-vf").expect("missing -vf");
+        assert_eq!(args[vf_idx + 1], "scale_vaapi=format=nv12", "{j}");
+        // Full-HW must NOT use the software-decode upload path.
+        assert!(!j.contains("hwupload"), "no hwupload under full-HW: {j}");
+        assert!(!j.contains("format=nv12,hwupload"), "{j}");
+        assert!(
+            !j.contains("-vaapi_device"),
+            "no software -vaapi_device: {j}"
+        );
+        assert!(!j.contains("-preset"), "{j}");
+    }
+
+    #[test]
+    fn vaapi_full_hw_hdr_uses_tonemap_vaapi_not_zscale() {
+        // HDR→SDR runs on the GPU via tonemap_vaapi, NOT the CPU zscale/tonemap.
+        let plan = encode(None, true, None);
+        let args = ffmpeg_args_hw(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Vaapi, true);
+        let vf_idx = args.iter().position(|s| s == "-vf").expect("missing -vf");
+        assert_eq!(
+            args[vf_idx + 1],
+            "tonemap_vaapi=format=nv12",
+            "{}",
+            args.join(" ")
+        );
+        let j = args.join(" ");
+        assert!(!j.contains("zscale"), "no CPU zscale under full-HW: {j}");
+        assert!(
+            !j.contains("tonemap=hable"),
+            "no CPU tonemap under full-HW: {j}"
+        );
+        assert!(!j.contains("hwupload"), "{j}");
+    }
+
+    #[test]
+    fn vaapi_full_hw_hdr_and_downscale_chain_order() {
+        // 4K HDR → 1080p SDR: tonemap_vaapi then scale_vaapi, both on the GPU.
+        let plan = encode(Some(1080), true, None);
+        let args = ffmpeg_args_hw(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Vaapi, true);
+        let vf_idx = args.iter().position(|s| s == "-vf").expect("missing -vf");
+        assert_eq!(
+            args[vf_idx + 1],
+            "tonemap_vaapi=format=nv12,scale_vaapi=w=-2:h=1080",
+            "{}",
+            args.join(" ")
+        );
+    }
+
+    #[test]
+    fn vaapi_full_hw_scale_only_terminates_nv12() {
+        // Non-HDR downscale: scale_vaapi carries the format=nv12 conversion.
+        let plan = encode(Some(720), false, None);
+        let args = ffmpeg_args_hw(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Vaapi, true);
+        let vf_idx = args.iter().position(|s| s == "-vf").expect("missing -vf");
+        assert_eq!(
+            args[vf_idx + 1],
+            "scale_vaapi=w=-2:h=720:format=nv12",
+            "{}",
+            args.join(" ")
+        );
+    }
+
+    #[test]
+    fn vaapi_full_hw_hwaccel_precedes_input_with_resume() {
+        // -hwaccel* are input options: they (and -ss for resume) must precede -i.
+        let plan = encode(None, false, None);
+        let args = ffmpeg_args_hw(&plan, "/in.mkv", "/tmp/s", 600, HwEncoder::Vaapi, true);
+        let hw = args
+            .iter()
+            .position(|s| s == "-hwaccel")
+            .expect("missing -hwaccel");
+        let fmt = args
+            .iter()
+            .position(|s| s == "-hwaccel_output_format")
+            .expect("missing -hwaccel_output_format");
+        let ss = args.iter().position(|s| s == "-ss").expect("missing -ss");
+        let i = args.iter().position(|s| s == "-i").expect("missing -i");
+        assert!(
+            hw < i && fmt < i && ss < i,
+            "hwaccel/ss must precede -i: {}",
+            args.join(" ")
+        );
+        assert_eq!(args[ss + 1], "600");
+    }
+
+    #[test]
+    fn vaapi_full_hw_falls_back_to_software_when_burning_subs() {
+        // Image burn-in needs the CPU `subtitles` filter, so even with hw_decode
+        // requested a burn forces the software-decode path (upload, no -hwaccel).
+        let plan = encode(None, false, Some(2));
+        let args = ffmpeg_args_hw(&plan, "/lib/m.mkv", "/tmp/s", 0, HwEncoder::Vaapi, true);
+        let j = args.join(" ");
+        assert!(
+            !j.contains("-hwaccel"),
+            "burn must not use full-HW decode: {j}"
+        );
+        assert!(j.contains("subtitles="), "{j}");
+        assert!(
+            j.contains("format=nv12,hwupload"),
+            "burn uses software upload path: {j}"
+        );
+        assert!(j.contains("-vaapi_device /dev/dri/renderD128"), "{j}");
+    }
+
+    #[test]
+    fn hw_decode_ignored_for_non_vaapi_family() {
+        // hw_decode only drives the VAAPI full-HW path; QSV keeps its software
+        // upload path even when hw_decode is set.
+        let plan = encode(None, false, None);
+        let j = ffmpeg_args_hw(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Qsv, true).join(" ");
+        assert!(!j.contains("-hwaccel "), "no hwaccel decode for QSV: {j}");
+        assert!(j.contains("-init_hw_device qsv=hw"), "{j}");
+        assert!(j.contains("format=nv12,hwupload=extra_hw_frames=64"), "{j}");
+    }
+
+    #[test]
+    fn hw_decode_false_keeps_software_vaapi_path() {
+        // The default (hw_decode=false) is the proven software-decode VAAPI path.
+        let plan = encode(None, false, None);
+        let j = ffmpeg_args_hw(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Vaapi, false).join(" ");
+        assert!(!j.contains("-hwaccel"), "{j}");
+        assert!(j.contains("-vaapi_device /dev/dri/renderD128"), "{j}");
+        assert!(j.contains("format=nv12,hwupload"), "{j}");
     }
 }
