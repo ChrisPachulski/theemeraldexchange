@@ -10,7 +10,9 @@
 //!   range; otherwise re-encode to the smallest accepted target (h264), adding
 //!   a scale filter when the source exceeds the client's `max_height` and a
 //!   tone-map flag when the source is HDR and the client is SDR.
-//! * audio — copy when the codec is accepted; otherwise transcode to AAC.
+//! * audio — copy only when the codec is accepted *and* the track is stereo/
+//!   mono; otherwise transcode to AAC (stereo). Multichannel (5.1/7.1) audio is
+//!   downmixed because the browser MSE path rejects a >2-channel append.
 //! * subtitles — NOT carried on the live stream. Inline WebVTT extraction
 //!   stalled the first segment under `-re` (and was orphaned with no master
 //!   playlist), so it is disabled; image formats were already dropped (libass
@@ -257,16 +259,28 @@ pub fn plan_transcode(file: &MediaFileRow, caps: &ClientCaps) -> TranscodePlan {
     }
 }
 
-/// Audio op: copy when at least one track's codec is accepted, else AAC 192k.
+/// Audio op: copy only when the primary track is an accepted codec AND stereo/
+/// mono; otherwise re-encode to AAC (the args builder downmixes to stereo).
 fn plan_audio(file: &MediaFileRow, caps: &ClientCaps) -> AudioOp {
     // media-core's ClientCaps has no audio_codecs field yet, so accepted is a
     // fixed browser-safe baseline (AAC only — see accepted_audio_codecs).
-    // When the file's primary audio codec is in that set, copy; else AAC.
+    //
+    // Copy requires TWO conditions, not one:
+    //   1. the codec is accepted (AAC), and
+    //   2. the track is stereo or mono (≤ 2 channels).
+    // A multichannel (5.1/7.1) AAC source must STILL be re-encoded. The HLS
+    // output feeds hls.js, which transmuxes the TS audio to fMP4 for MSE; Chrome
+    // and Firefox REJECT the SourceBuffer append of a >2-channel AAC track
+    // ("audio SourceBuffer error. MediaSource readyState: ended"), which fails
+    // the whole fragment and freezes the player grey at 0:00 — even though the
+    // codec STRING (mp4a.40.2) reports as supported. Re-encoding forces the
+    // stereo downmix (args adds `-ac 2`). When channel count is unknown we
+    // re-encode: a wrongly-copied 5.1 track is a silent total playback failure,
+    // whereas a needless stereo re-encode merely costs a little CPU.
     let tracks = file.audio_tracks();
-    let primary = tracks.first();
-    let Some(track) = primary else {
-        // No audio at all: nothing to encode, emit AAC op is meaningless, but
-        // ffmpeg_args guards on -map; treat as copy (no-op).
+    let Some(track) = tracks.first() else {
+        // No audio at all: nothing to encode; ffmpeg_args guards on -map, so a
+        // copy op is a harmless no-op.
         return AudioOp::Copy;
     };
     let codec = track
@@ -275,7 +289,8 @@ fn plan_audio(file: &MediaFileRow, caps: &ClientCaps) -> AudioOp {
         .unwrap_or("")
         .trim()
         .to_ascii_lowercase();
-    if accepted_audio_codecs(caps).contains(&codec) {
+    let browser_safe_channels = track.channels.is_some_and(|c| c <= 2);
+    if accepted_audio_codecs(caps).contains(&codec) && browser_safe_channels {
         AudioOp::Copy
     } else {
         AudioOp::EncodeAac {
@@ -291,6 +306,10 @@ fn plan_audio(file: &MediaFileRow, caps: &ClientCaps) -> AudioOp {
 /// hands the player a stream it renders with dead audio (or fails outright — a
 /// grey 0:00). So only AAC copies; everything else (AC-3, E-AC-3, DTS, TrueHD,
 /// FLAC, …) is re-encoded to AAC.
+///
+/// This is a CODEC test only. [`plan_audio`] adds a second, independent gate on
+/// channel count: even an accepted AAC track is re-encoded (downmixed) when it
+/// carries >2 channels, because MSE also rejects a multichannel AAC append.
 ///
 /// `caps.audio_codecs` does not exist in the M3 `ClientCaps` contract yet, so
 /// this is a fixed browser-safe baseline rather than the client's advertised set.
@@ -342,11 +361,32 @@ mod tests {
         }
     }
 
+    /// Stereo AAC — the browser-safe, copyable baseline.
     fn aac(index: i64) -> AudioTrack {
         AudioTrack {
             index,
             codec: Some("aac".into()),
+            channels: Some(2),
+            language: Some("eng".into()),
+            title: None,
+        }
+    }
+    /// Multichannel (5.1) AAC — accepted codec but must be downmixed, not copied.
+    fn aac_51(index: i64) -> AudioTrack {
+        AudioTrack {
+            index,
+            codec: Some("aac".into()),
             channels: Some(6),
+            language: Some("eng".into()),
+            title: None,
+        }
+    }
+    /// AAC with unknown channel count — re-encode conservatively.
+    fn aac_unknown_channels(index: i64) -> AudioTrack {
+        AudioTrack {
+            index,
+            codec: Some("aac".into()),
+            channels: None,
             language: Some("eng".into()),
             title: None,
         }
@@ -545,6 +585,81 @@ mod tests {
             }
             other => panic!("expected transcode, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn multichannel_aac_is_downmixed_not_copied() {
+        // AAC is an accepted codec, but 5.1 (6ch) must be RE-ENCODED so the args
+        // builder downmixes it to stereo. Copying it hands hls.js a multichannel
+        // AAC that Chrome/Firefox MSE refuses to append → grey 0:00. Regression
+        // for American Dad! S02E03 (10-bit HEVC + EAC3→AAC 5.1). Use mkv (wrong
+        // container) so video just remuxes (Copy) and the audio op is isolated.
+        let f = file(
+            Some("mkv"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![aac_51(1)],
+            vec![],
+        );
+        let plan = plan_transcode(&f, &caps_h264_1080_sdr());
+        match plan {
+            TranscodePlan::Transcode { video, audio, .. } => {
+                assert_eq!(
+                    video,
+                    VideoOp::Copy,
+                    "container-only mismatch remuxes video"
+                );
+                assert_eq!(
+                    audio,
+                    AudioOp::EncodeAac { bitrate_kbps: 192 },
+                    "5.1 AAC must re-encode (downmix), not copy"
+                );
+            }
+            other => panic!("expected transcode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_channel_aac_is_reencoded() {
+        // Channel count unknown → re-encode (conservative). A wrongly-copied 5.1
+        // track is a silent total failure; a needless stereo re-encode is cheap.
+        let f = file(
+            Some("mkv"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![aac_unknown_channels(1)],
+            vec![],
+        );
+        let plan = plan_transcode(&f, &caps_h264_1080_sdr());
+        match plan {
+            TranscodePlan::Transcode { audio, .. } => {
+                assert_eq!(audio, AudioOp::EncodeAac { bitrate_kbps: 192 });
+            }
+            other => panic!("expected transcode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn multichannel_aac_mp4_still_direct_plays() {
+        // Scope boundary: the channel gate is a TRANSCODE-path concern only.
+        // Direct-play serves the original file to the native <video> element,
+        // which decodes 5.1 fine — so an h264 + AAC 5.1 + mp4 file (everything
+        // else accepted) still direct-plays. decide() does not gate on channels.
+        let f = file(
+            Some("mp4"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![aac_51(1)],
+            vec![],
+        );
+        let plan = plan_transcode(&f, &caps_h264_1080_sdr());
+        assert!(
+            plan.is_direct_play(),
+            "5.1 AAC mp4 must still direct-play: {plan:?}"
+        );
     }
 
     #[test]
