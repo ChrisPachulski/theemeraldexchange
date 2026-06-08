@@ -86,6 +86,12 @@ fn h264_bitrate_kbps(height: Option<i64>) -> u32 {
     }
 }
 
+/// DRM render node used for VAAPI hardware encode. Must match the device mapped
+/// into the transcoder container in docker-compose.yml; change both together if
+/// the host enumerates the iGPU at a different node. (QSV auto-selects the lone
+/// render node via `qsv=hw`, so it needs no path here.)
+pub(crate) const VAAPI_RENDER_NODE: &str = "/dev/dri/renderD128";
+
 /// Build the full ffmpeg argument vector for a transcode plan.
 ///
 /// * `input` — absolute source path.
@@ -120,25 +126,32 @@ pub fn ffmpeg_args(
     push(&mut a, "warning");
     push(&mut a, "-nostdin");
 
-    // QSV needs an Intel hardware device available to BOTH the encoder and the
-    // `hwupload` filter that hands it surfaces. `qsv=hw` (no DRM path) lets
-    // ffmpeg auto-select the lone render node — on this single-iGPU box that is
-    // /dev/dri/renderD128 — and derives the required VAAPI child device from it.
-    // `-filter_hw_device hw` names that device for the filtergraph so the
-    // trailing `format=nv12,hwupload` (see the EncodeH264 branch) can upload the
-    // software-decoded/scaled frames to it. These are global options and MUST
-    // precede -i. Emitted only for QSV AND only for a real video re-encode:
-    // VideoToolbox/NVENC take software frames directly and need no device init,
-    // and a copy-remux (VideoOp::Copy — the common case for local titles that
-    // only transcode because their container/audio isn't browser-safe) never
-    // touches the encoder, so opening the GPU device for it would be pure waste.
-    let qsv_reencode =
-        matches!(encoder, HwEncoder::Qsv) && matches!(video, VideoOp::EncodeH264 { .. });
-    if qsv_reencode {
-        push(&mut a, "-init_hw_device");
-        push(&mut a, "qsv=hw");
-        push(&mut a, "-filter_hw_device");
-        push(&mut a, "hw");
+    // VAAPI and QSV both encode from Intel hardware surfaces, so they need a
+    // device initialized BEFORE -i (a global option) and the filtergraph
+    // terminated with an upload to it (see the EncodeH264 branch). The init
+    // differs per family: VAAPI takes an explicit DRM render node; QSV uses
+    // `qsv=hw` (auto-selects the lone render node) plus `-filter_hw_device` so
+    // the hwupload filter knows which device to target. Emitted only for a real
+    // video re-encode — VideoToolbox/NVENC take software frames directly, and a
+    // copy-remux (VideoOp::Copy — the common case for local titles that only
+    // transcode because their container/audio isn't browser-safe) never touches
+    // the encoder, so opening the GPU device for it would be pure waste.
+    let hw_surface_reencode = matches!(encoder, HwEncoder::Vaapi | HwEncoder::Qsv)
+        && matches!(video, VideoOp::EncodeH264 { .. });
+    if hw_surface_reencode {
+        match encoder {
+            HwEncoder::Vaapi => {
+                push(&mut a, "-vaapi_device");
+                push(&mut a, VAAPI_RENDER_NODE);
+            }
+            HwEncoder::Qsv => {
+                push(&mut a, "-init_hw_device");
+                push(&mut a, "qsv=hw");
+                push(&mut a, "-filter_hw_device");
+                push(&mut a, "hw");
+            }
+            _ => {}
+        }
     }
 
     // Seek BEFORE input for fast keyframe seek (§4.2). Omit at 0.
@@ -188,6 +201,16 @@ pub fn ffmpeg_args(
             // CPU encoder understands and HW encoders tolerate.
             push(&mut a, if encoder.is_cpu() { "veryfast" } else { "fast" });
 
+            // Alder Lake exposes only the Low-Power H.264 VAAPI encode
+            // entrypoint, so pin it: ffmpeg then uses it deterministically
+            // instead of probing for the absent full entrypoint (which logs a
+            // warning before falling back). h264_qsv/libx264/VideoToolbox don't
+            // take this flag, so it's VAAPI-only.
+            if matches!(encoder, HwEncoder::Vaapi) {
+                push(&mut a, "-low_power");
+                push(&mut a, "1");
+            }
+
             let br = h264_bitrate_kbps(*scale_to_height);
             push(&mut a, "-b:v");
             a.push(format!("{br}k"));
@@ -199,21 +222,25 @@ pub fn ffmpeg_args(
             // Filtergraph: scale, tone-map, burn-in. Composed into one -vf.
             let mut vf = build_video_filter(*scale_to_height, *tone_map, *burn_subtitle_index, input);
 
-            // QSV encodes from hardware surfaces, so software-decoded frames must
-            // be converted to NV12 (8-bit 4:2:0, the format the iGPU encoder wants
-            // — this also collapses 10-bit p010 sources) and uploaded to a QSV
-            // surface. The upload is the LAST link in the chain so it sits after
-            // any scale/tone-map/burn-in done on the CPU. When there is no other
-            // filter the upload chain stands alone as the whole filtergraph.
-            // `extra_hw_frames` gives the encoder a small surface pool for its
-            // look-ahead. Empirically validated against the deployed jellyfin
-            // ffmpeg for plain 8-bit, 10-bit, scaled, and 4K-HDR-tone-mapped
-            // sources (see crates/transcoder QSV bring-up).
-            if matches!(encoder, HwEncoder::Qsv) {
-                const QSV_UPLOAD: &str = "format=nv12,hwupload=extra_hw_frames=64";
+            // VAAPI/QSV encode from hardware surfaces, so the software-decoded
+            // (and CPU-scaled/tone-mapped) frames must be converted to NV12
+            // (8-bit 4:2:0 — the format the iGPU encoder wants; this also
+            // collapses 10-bit p010 sources) and uploaded to a GPU surface. The
+            // upload is the LAST link so it sits after any CPU filter; when there
+            // is no other filter it stands alone as the whole graph. QSV takes an
+            // `extra_hw_frames` surface pool for its look-ahead; VAAPI needs no
+            // such hint. Empirically validated against the deployed ffmpeg for
+            // plain 8-bit, 10-bit, scaled, and 4K-HDR-tone-mapped sources (see
+            // crates/transcoder HW bring-up).
+            let upload = match encoder {
+                HwEncoder::Vaapi => Some("format=nv12,hwupload"),
+                HwEncoder::Qsv => Some("format=nv12,hwupload=extra_hw_frames=64"),
+                _ => None,
+            };
+            if let Some(up) = upload {
                 vf = Some(match vf {
-                    Some(existing) => format!("{existing},{QSV_UPLOAD}"),
-                    None => QSV_UPLOAD.to_string(),
+                    Some(existing) => format!("{existing},{up}"),
+                    None => up.to_string(),
                 });
             }
 
@@ -713,8 +740,78 @@ mod tests {
         );
         let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Cpu).join(" ");
         assert!(!j.contains("-init_hw_device"), "{j}");
+        assert!(!j.contains("-vaapi_device"), "{j}");
+        assert!(!j.contains("-low_power"), "{j}");
         assert!(!j.contains("hwupload"), "{j}");
         assert!(!j.contains("format=nv12"), "{j}");
+    }
+
+    #[test]
+    fn vaapi_reencode_inits_device_low_power_and_uploads() {
+        // Plain HEVC→H264 on VAAPI: explicit DRM device, low-power entrypoint,
+        // and a standalone NV12 upload as the whole filtergraph.
+        let plan = transcode(
+            VideoOp::EncodeH264 {
+                scale_to_height: None,
+                tone_map: false,
+                burn_subtitle_index: None,
+            },
+            AudioOp::EncodeAac { bitrate_kbps: 160 },
+            SubtitleOp::None,
+        );
+        let args = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Vaapi);
+        let j = args.join(" ");
+        assert!(j.contains("-vaapi_device /dev/dri/renderD128"), "{j}");
+        assert!(j.contains("-c:v h264_vaapi"), "{j}");
+        assert!(j.contains("-low_power 1"), "{j}");
+        // VAAPI's hwupload takes no extra_hw_frames hint (that's QSV-only).
+        let vf_idx = args.iter().position(|s| s == "-vf").expect("missing -vf");
+        assert_eq!(args[vf_idx + 1], "format=nv12,hwupload", "{j}");
+    }
+
+    #[test]
+    fn vaapi_appends_upload_after_scale() {
+        let plan = transcode(
+            VideoOp::EncodeH264 {
+                scale_to_height: Some(720),
+                tone_map: false,
+                burn_subtitle_index: None,
+            },
+            AudioOp::Copy,
+            SubtitleOp::None,
+        );
+        let args = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Vaapi);
+        let vf_idx = args.iter().position(|s| s == "-vf").expect("missing -vf");
+        assert_eq!(args[vf_idx + 1], "scale=-2:720,format=nv12,hwupload", "{}", args.join(" "));
+    }
+
+    #[test]
+    fn vaapi_device_precedes_input() {
+        let plan = transcode(
+            VideoOp::EncodeH264 {
+                scale_to_height: None,
+                tone_map: false,
+                burn_subtitle_index: None,
+            },
+            AudioOp::Copy,
+            SubtitleOp::None,
+        );
+        let args = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Vaapi);
+        let dev = args.iter().position(|s| s == "-vaapi_device").expect("missing -vaapi_device");
+        let i = args.iter().position(|s| s == "-i").expect("missing -i");
+        assert!(dev < i, "-vaapi_device must precede -i");
+    }
+
+    #[test]
+    fn vaapi_copy_remux_does_not_init_device() {
+        // A pure remux never re-encodes, so VAAPI must not open the GPU device,
+        // emit -low_power, or inject an upload — even when the family is VAAPI.
+        let plan = transcode(VideoOp::Copy, AudioOp::Copy, SubtitleOp::None);
+        let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Vaapi).join(" ");
+        assert!(!j.contains("-vaapi_device"), "{j}");
+        assert!(!j.contains("-low_power"), "{j}");
+        assert!(!j.contains("hwupload"), "{j}");
+        assert!(j.contains("-c:v copy"), "{j}");
     }
 
     #[test]

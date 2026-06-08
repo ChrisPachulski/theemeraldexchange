@@ -357,8 +357,8 @@ services:
       timeout: 3s
       start_period: 10s
       retries: 3
-    # Intel QSV hardware transcode (§4.4): map the iGPU render node so the
-    # jellyfin-ffmpeg iHD driver can open it, and add the node's owning group
+    # Intel VAAPI hardware transcode (§4.4): map the iGPU render node so the
+    # intel-media-va-driver (iHD) can open it, and add the node's owning group
     # (gid 18 = `video` on this Unraid host) as a supplementary group so the
     # non-root `transcoder` uid (10003) keeps access even if the device's
     # world-rw bit is ever tightened. This survives cap_drop:ALL + read_only
@@ -399,13 +399,14 @@ services:
       TRANSCODER_HOST: "0.0.0.0"
       TRANSCODER_PORT: "8003"
       TRANSCODER_TMP_DIR: "/scratch"
-      TRANSCODER_FFMPEG_BIN: "/usr/lib/jellyfin-ffmpeg/ffmpeg"
-      # Intel QSV hardware H.264 encode on the NAS iGPU (Pentium 8505, Alder
-      # Lake UHD). jellyfin-ffmpeg + the mapped /dev/dri/renderD128 above make
-      # this real; the boot smoke-test (encoders.rs) auto-demotes to libx264 if
-      # the device/driver is unavailable, so "qsv" is a safe default. Override
-      # to "cpu" via the env to force libx264 (e.g. to sidestep a driver issue).
-      TRANSCODER_HW_ENCODER: "${TRANSCODER_HW_ENCODER:-qsv}"
+      TRANSCODER_FFMPEG_BIN: "/usr/bin/ffmpeg"
+      # Intel VAAPI hardware H.264 encode on the NAS iGPU (Pentium 8505, Alder
+      # Lake UHD), via Debian's stock ffmpeg + intel-media-va-driver. The mapped
+      # /dev/dri/renderD128 above makes this real; the boot smoke-test
+      # (encoders.rs) auto-demotes to libx264 if the device/driver is
+      # unavailable, so "vaapi" is a safe default. Override to "cpu" via the env
+      # to force libx264 (e.g. to sidestep a driver issue).
+      TRANSCODER_HW_ENCODER: "${TRANSCODER_HW_ENCODER:-vaapi}"
       # Concurrency caps (§4.4/§4.5). Defaults match concurrency.rs (4 / 1).
       MAX_CONCURRENT_TRANSCODES: "${MAX_CONCURRENT_TRANSCODES:-4}"
       MAX_CONCURRENT_CPU_TRANSCODES: "${MAX_CONCURRENT_CPU_TRANSCODES:-1}"
