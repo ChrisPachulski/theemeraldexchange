@@ -196,19 +196,20 @@ pub fn ffmpeg_args(
         } => {
             push(&mut a, "-c:v");
             push(&mut a, encoder.h264_encoder());
-            push(&mut a, "-preset");
-            // VideoToolbox ignores libx264 presets; use a neutral value the
-            // CPU encoder understands and HW encoders tolerate.
-            push(&mut a, if encoder.is_cpu() { "veryfast" } else { "fast" });
 
-            // Alder Lake exposes only the Low-Power H.264 VAAPI encode
-            // entrypoint, so pin it: ffmpeg then uses it deterministically
-            // instead of probing for the absent full entrypoint (which logs a
-            // warning before falling back). h264_qsv/libx264/VideoToolbox don't
-            // take this flag, so it's VAAPI-only.
+            // libx264 needs a speed preset; VideoToolbox/NVENC/QSV tolerate one
+            // (a neutral value the CPU encoder understands and HW encoders
+            // accept). VAAPI has NO preset concept — passing it logs "preset ...
+            // has not been used for any stream" on every session — so skip it
+            // there and instead pin the Low-Power H.264 entrypoint, the only one
+            // Alder Lake exposes, so ffmpeg uses it deterministically rather than
+            // probing for the absent full entrypoint.
             if matches!(encoder, HwEncoder::Vaapi) {
                 push(&mut a, "-low_power");
                 push(&mut a, "1");
+            } else {
+                push(&mut a, "-preset");
+                push(&mut a, if encoder.is_cpu() { "veryfast" } else { "fast" });
             }
 
             let br = h264_bitrate_kbps(*scale_to_height);
@@ -764,6 +765,8 @@ mod tests {
         assert!(j.contains("-vaapi_device /dev/dri/renderD128"), "{j}");
         assert!(j.contains("-c:v h264_vaapi"), "{j}");
         assert!(j.contains("-low_power 1"), "{j}");
+        // h264_vaapi has no preset; emitting one logs a per-session warning.
+        assert!(!j.contains("-preset"), "VAAPI must not emit -preset: {j}");
         // VAAPI's hwupload takes no extra_hw_frames hint (that's QSV-only).
         let vf_idx = args.iter().position(|s| s == "-vf").expect("missing -vf");
         assert_eq!(args[vf_idx + 1], "format=nv12,hwupload", "{j}");
