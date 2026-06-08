@@ -107,6 +107,23 @@ impl TranscodePlan {
     pub fn is_direct_play(&self) -> bool {
         matches!(self, TranscodePlan::DirectPlay { .. })
     }
+
+    /// True iff the plan RE-ENCODES the video stream (libx264/HW H.264) — the
+    /// only work that actually loads the CPU. A copy-remux (changing only the
+    /// container and/or audio codec) uses negligible CPU, so it must NOT be
+    /// charged against the stricter CPU-transcode cap; otherwise a box with no
+    /// HW encoder (every session resolves to the CPU encoder) throttles the
+    /// whole household to ONE concurrent stream even though remuxes are nearly
+    /// free, and a second title (or a reopen within the idle-reap window) 503s.
+    pub fn reencodes_video(&self) -> bool {
+        matches!(
+            self,
+            TranscodePlan::Transcode {
+                video: VideoOp::EncodeH264 { .. },
+                ..
+            }
+        )
+    }
 }
 
 fn contains_ci(haystack: &[String], needle: &str) -> bool {
@@ -345,6 +362,30 @@ mod tests {
             title: None,
             forced,
         }
+    }
+
+    #[test]
+    fn reencodes_video_only_for_encode_plans() {
+        let direct = TranscodePlan::DirectPlay { reason: "x".into() };
+        assert!(!direct.reencodes_video());
+        let remux = TranscodePlan::Transcode {
+            video: VideoOp::Copy,
+            audio: AudioOp::EncodeAac { bitrate_kbps: 192 },
+            subtitle: SubtitleOp::None,
+            reason: "container".into(),
+        };
+        assert!(!remux.reencodes_video(), "copy-remux must not count as a video re-encode");
+        let encode = TranscodePlan::Transcode {
+            video: VideoOp::EncodeH264 {
+                scale_to_height: None,
+                tone_map: false,
+                burn_subtitle_index: None,
+            },
+            audio: AudioOp::Copy,
+            subtitle: SubtitleOp::None,
+            reason: "hevc".into(),
+        };
+        assert!(encode.reencodes_video());
     }
 
     #[test]
