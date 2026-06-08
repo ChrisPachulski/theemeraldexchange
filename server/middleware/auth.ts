@@ -18,10 +18,12 @@ import { clearSessionCookie, readSession } from '../session.js'
 import type { Session } from '../session.js'
 import { reconcileSession } from '../services/sessionGate.js'
 import { tryBearerAuth } from './deviceTokenAuth.js'
+import type { DeviceTokenClaims } from '../session.js'
 
 export type Env = {
   Variables: {
     session: Session
+    deviceClaims?: DeviceTokenClaims
   }
 }
 
@@ -35,7 +37,7 @@ export type Env = {
  *  to the cookie. That would let an attacker who somehow obtained a
  *  cookie bypass a freshly-revoked device token. */
 async function loadReconciledSession(c: Parameters<MiddlewareHandler<Env>>[0]): Promise<
-  | { ok: true; session: Session }
+  | { ok: true; session: Session; deviceClaims?: DeviceTokenClaims }
   | { ok: false; reason: 'unauthenticated' | 'access_revoked' | 'invalid_bearer' }
 > {
   const bearer = await tryBearerAuth(c)
@@ -43,7 +45,7 @@ async function loadReconciledSession(c: Parameters<MiddlewareHandler<Env>>[0]): 
     if (!bearer.ok) {
       return { ok: false, reason: 'invalid_bearer' }
     }
-    return { ok: true, session: bearer.session }
+    return { ok: true, session: bearer.session, deviceClaims: bearer.claims }
   }
 
   // No Bearer present — try cookie.
@@ -74,6 +76,7 @@ export const requireAuth: MiddlewareHandler<Env> = async (c, next) => {
     )
   }
   c.set('session', r.session)
+  if (r.deviceClaims) c.set('deviceClaims', r.deviceClaims)
   await next()
 }
 

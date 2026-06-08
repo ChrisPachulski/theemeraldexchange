@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -6,6 +6,7 @@ import path from 'node:path'
 // Fresh server.db per test run so the route-level inserts don't leak.
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eex-devices-test-'))
 process.env.SERVER_DB_PATH = path.join(tmpDir, 'server.db')
+process.env.ADMINS = 'admin-user'
 
 const { mintDeviceToken, _resetDeviceKeyForTests, revokeDeviceToken } = await import(
   '../session.js'
@@ -13,9 +14,17 @@ const { mintDeviceToken, _resetDeviceKeyForTests, revokeDeviceToken } = await im
 const { closeServerDb, serverDb } = await import('../services/serverDb.js')
 const { app } = await import('../app.js')
 
+afterAll(() => {
+  delete process.env.ADMINS
+  delete process.env.SERVER_DB_PATH
+  closeServerDb()
+  fs.rmSync(tmpDir, { recursive: true, force: true })
+})
+
 const SAMPLE: Parameters<typeof mintDeviceToken>[0] = {
   sub: 'plex:11111',
   role: 'user',
+  username: 'regular-user',
   auth_mode: 'plex',
   device_id: '01HABCDEFGHJKMNPQRSTVWXYZ0',
   device_name: 'Living Room Apple TV',
@@ -37,6 +46,7 @@ function bearerHeaders(token: string): Record<string, string> {
 const ADMIN_SAMPLE: Parameters<typeof mintDeviceToken>[0] = {
   ...SAMPLE,
   role: 'admin',
+  username: 'admin-user',
   sub: 'plex:22222',
   device_id: '01HADMINDEVICEADMINDEVICE0',
   device_name: "Admin's Mac",
@@ -93,6 +103,7 @@ describe('GET /api/devices/self', () => {
     const body = (await res.json()) as { devices: Array<{ device_name: string }> }
     expect(body.devices).toHaveLength(1)
     expect(body.devices[0].device_name).toBe('Living Room Apple TV')
+    expect(body.devices[0]).toMatchObject({ is_current: true })
   })
 
   it('excludes revoked devices from /self listing', async () => {
@@ -259,9 +270,9 @@ describe('GET /api/devices/self — unauthenticated', () => {
 
 // ---------------------------------------------------------------------------
 // Admin device routes (mounted at /api/admin/devices). The Bearer auth path
-// passes the minted claim's `role` straight through, so a token minted with
-// role:'admin' yields an admin session; role:'user' yields a non-admin. No
-// ADMIN_SUBS env is needed for the Bearer path.
+// recomputes the role from current env policy plus the username stored in the
+// device row at pairing time. ADMIN_SAMPLE carries username:'admin-user', which
+// matches the deterministic ADMINS env set before module import.
 // ---------------------------------------------------------------------------
 
 describe('GET /api/admin/devices', () => {

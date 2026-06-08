@@ -1,9 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+const membershipState = vi.hoisted(() => ({
+  status: 'allowed' as 'allowed' | 'revoked' | 'not_member',
+}))
+
 vi.mock('../env.js', () => ({
   env: {
     transcoderUrl: 'http://transcoder.test',
     internalPrincipalSecret: 'test-secret',
+    streamTokenSecret: 'media-grant-test-secret-aaaaaaaaaaaaaaaa',
+    sessionSecret: 'session-fallback-secret-bbbbbbbbbbbbbbbb',
+    MEDIA_STREAM_TOKEN_TTL_SECS: 21_600,
   },
 }))
 
@@ -23,6 +30,10 @@ vi.mock('../middleware/auth.js', () => ({
   },
 }))
 
+vi.mock('../services/membership.js', () => ({
+  memberStatus: vi.fn(() => membershipState.status),
+}))
+
 type FetchInitWithHeaders = { headers: Record<string, string> }
 
 vi.mock('../services/recommenderCaller.js', () => ({
@@ -33,6 +44,7 @@ import { transcode, appendTokenToManifest } from './transcode.js'
 import { fetchStreamWithConnectTimeout } from '../services/upstream.js'
 import { mintInternalPrincipal } from '../services/internalPrincipal.js'
 import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
+import { signMediaToken, mediaSessionResourceId, MEDIA_HLS_KIND } from '../services/mediaStreamToken.js'
 
 const mockFetch = vi.mocked(fetchStreamWithConnectTimeout)
 const mockMint = vi.mocked(mintInternalPrincipal)
@@ -41,6 +53,7 @@ const mockCaller = vi.mocked(recommenderCallerFromSession)
 describe('transcode proxy route', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    membershipState.status = 'allowed'
     mockMint.mockReturnValue('minted-token')
     mockCaller.mockReturnValue({
       sub: 'plex:1',
@@ -69,6 +82,24 @@ describe('transcode proxy route', () => {
     expect(url).toBe('http://transcoder.test/api/transcode/session/abc/index.m3u8')
     expect((init as FetchInitWithHeaders).headers['authorization']).toBe('Bearer minted-token')
     expect(res.headers.get('content-type')).toBe('application/vnd.apple.mpegurl')
+  })
+
+  it('rejects an HLS stream token after membership revocation', async () => {
+    const token = signMediaToken({
+      kind: MEDIA_HLS_KIND,
+      rid: mediaSessionResourceId('abc'),
+      sub: 'plex:42',
+    })
+    membershipState.status = 'revoked'
+
+    const res = await transcode.request(`/session/abc/index.m3u8?t=${token}`, {
+      method: 'GET',
+      headers: { host: 'localhost' },
+    })
+
+    expect(res.status).toBe(401)
+    expect((await res.json()) as { error: string }).toEqual({ error: 'access_revoked' })
+    expect(mockFetch).not.toHaveBeenCalled()
   })
 
   it('fails closed with 502 when mint throws while a secret is configured', async () => {

@@ -10,7 +10,7 @@
 # must be present at runtime. The Rust binary is glibc-linked, so the
 # runtime base matches the bookworm builder.
 
-FROM rust:1.96-slim-bookworm AS builder
+FROM rust:1.96-slim-bookworm@sha256:b5f842fac1e3b4ff718a652a8e0173b62d9403ec826ef4998880b9347db30684 AS builder
 
 WORKDIR /build
 
@@ -22,12 +22,12 @@ COPY crates ./crates
 RUN cargo build --release -p media-core
 
 # ---------------------------------------------------------------------------
-FROM debian:bookworm-slim AS runtime
+FROM debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb AS runtime
 
 WORKDIR /srv
 
 # Statically-linked ffmpeg/ffprobe 7.x — no glibc/runtime deps, runs as-is.
-COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /ffprobe /usr/local/bin/
+COPY --from=mwader/static-ffmpeg:7.1@sha256:a8090df5f5608daef387e1b2e93b98aaacb4d92153ad904e7d715c725724fca4 /ffmpeg /ffprobe /usr/local/bin/
 
 # curl is for the container HEALTHCHECK (audit 9-0); ca-certificates for TLS
 # egress (TMDB). Create a non-root user (audit 9-0) that owns /data.

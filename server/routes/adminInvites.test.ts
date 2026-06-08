@@ -30,11 +30,13 @@ import type { Env } from '../middleware/auth.js'
 // --- env bootstrap, BEFORE any server module import ------------------------
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'admin-invites-test-'))
 process.env.SERVER_DB_PATH = path.join(tmpDir, 'server.db')
+process.env.IPTV_DB_PATH = path.join(tmpDir, 'iptv.db')
 process.env.ADMIN_SUBS = 'plex:42'
 
 // Dynamic imports so the modules read the env set above. Hono is imported the
 // same way purely to keep all "load after env" imports in one place.
 const { serverDb, closeServerDb } = await import('../services/serverDb.js')
+const { iptvDb, closeIptvDb } = await import('../services/iptvDbSingleton.js')
 const { adminInvites, adminMembers } = await import('./adminInvites.js')
 const { createSession } = await import('../session.js')
 const { Hono } = await import('hono')
@@ -128,19 +130,22 @@ describe('admin invites + members routes', () => {
 
   afterAll(() => {
     // IR-3 leak-guard: this suite MUTATES process.env (ADMIN_SUBS,
-    // SERVER_DB_PATH) to bootstrap an isolated admin + temp DB. If we leave
+    // SERVER_DB_PATH/IPTV_DB_PATH) to bootstrap an isolated admin + temp DB. If we leave
     // those set, sibling suites in the same vitest worker inherit a phantom
     // ADMIN_SUBS owner and a stale DB path — the exact cross-suite-leak class
     // commits cea20ce / 8d1d418 fixed. Restore the env, close the DB handle,
     // and delete the temp dir so no state escapes this file.
     delete process.env.ADMIN_SUBS
     delete process.env.SERVER_DB_PATH
+    delete process.env.IPTV_DB_PATH
     closeServerDb()
+    closeIptvDb()
     fs.rmSync(tmpDir, { recursive: true, force: true })
   })
 
   beforeEach(() => {
     serverDb().raw.exec('DELETE FROM members; DELETE FROM invites;')
+    iptvDb().raw.exec('DELETE FROM iptv_playlist_tokens;')
   })
 
   // -------------------------------------------------------------------------
@@ -360,20 +365,31 @@ describe('admin invites + members routes', () => {
       expect(row).toBeUndefined()
     })
 
-    it('revokes an ordinary member → 200; the row is retained with revoked_at set', async () => {
-      insertActiveMember(USER_SUB, 'user')
-      const del = await appUnderTest().request(`/members/${USER_SUB}`, {
-        method: 'DELETE',
-        headers: { Cookie: await adminCookie() },
+  it('revokes an ordinary member → 200; the row is retained with revoked_at set', async () => {
+    insertActiveMember(USER_SUB, 'user')
+    iptvDb().stmts.insertPlaylistToken.run({
+      jti: 'playlist-user-sub',
+      sub: USER_SUB,
+      device_name: 'Kitchen TV',
+      issued_at: new Date('2026-01-01T00:00:00Z').toISOString(),
+      expires_at: new Date('2026-04-01T00:00:00Z').toISOString(),
+    })
+    const del = await appUnderTest().request(`/members/${USER_SUB}`, {
+      method: 'DELETE',
+      headers: { Cookie: await adminCookie() },
       })
       expect(del.status).toBe(200)
       expect((await del.json()) as { ok: boolean }).toEqual({ ok: true })
 
       const members = await listMembersViaRoute()
-      const revoked = members.find((m) => m.sub === USER_SUB)
-      expect(revoked).toBeDefined() // retained for audit, not removed
-      expect(revoked?.revoked_at).not.toBeNull()
-    })
+    const revoked = members.find((m) => m.sub === USER_SUB)
+    expect(revoked).toBeDefined() // retained for audit, not removed
+    expect(revoked?.revoked_at).not.toBeNull()
+    const token = iptvDb().stmts.getPlaylistToken.get('playlist-user-sub') as
+      | { revoked_at: string | null }
+      | undefined
+    expect(token?.revoked_at).not.toBeNull()
+  })
 
     it('revoking a non-existent member → 404 not_found', async () => {
       const r = await appUnderTest().request('/members/plex:8', {

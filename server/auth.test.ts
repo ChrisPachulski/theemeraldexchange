@@ -95,6 +95,7 @@ beforeEach(() => {
   // by mutating env directly. (We mutate the const-asserted object via
   // a cast — fine for tests, ugly in prod.)
   ;(env as Record<string, unknown>).plexServerId = null
+  ;(env as Record<string, unknown>).trustClientIpHeaders = false
   // sessionGate's membership cache is module-scoped — clear between
   // tests so the revoked-access tests below don't carry primed state
   // into the next case.
@@ -206,6 +207,7 @@ describe('POST /auth/plex/check', () => {
   })
 
   it('allows normal polling but does not let rotated forwarding headers bypass PIN-check limits', async () => {
+    ;(env as Record<string, unknown>).trustClientIpHeaders = true
     stubPlex({ authToken: null })
     // 60 sequential requests through the rate limiter; reuse one app
     // instance (state is module-scoped, reset in beforeEach) instead of
@@ -241,6 +243,19 @@ describe('POST /auth/plex/check', () => {
   it('400s a missing pinId', async () => {
     const r = await app().request('/auth/plex/check', { method: 'POST' })
     expect(r.status).toBe(400)
+  })
+
+  it('does not trust proxy client-IP headers unless explicitly enabled', async () => {
+    stubPlex({ authToken: null })
+    const a = app()
+    for (let i = 0; i < 61; i++) {
+      const r = await a.request('/auth/plex/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': '198.51.100.20' },
+        body: JSON.stringify({ pinId: 12345 }),
+      })
+      expect(r.status).toBe(200)
+    }
   })
 
   it('400s a non-numeric pinId', async () => {

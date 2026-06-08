@@ -13,6 +13,7 @@ import {
   MEDIA_DIRECT_KIND,
   MEDIA_HLS_KIND,
 } from '../services/mediaStreamToken.js'
+import { memberStatus } from '../services/membership.js'
 
 export const media = new Hono<Env>()
 
@@ -87,6 +88,7 @@ async function mediaAuth(c: Context<Env>, next: Next) {
     const rid = mediaResourceId(streamMatch[1], streamMatch[2])
     const v = verifyMediaToken(token, { kinds: [MEDIA_DIRECT_KIND], rid })
     if (!v.ok) return c.json({ error: v.error }, 401)
+    if (memberStatus(v.sub) !== 'allowed') return c.json({ error: 'access_revoked' }, 401)
     c.set('session', sessionFromSub(v.sub))
     return next()
   }

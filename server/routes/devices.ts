@@ -104,7 +104,7 @@ devices.use('/self/*', requireAuth)
 
 devices.get('/self', (c) => {
   const session = c.get('session')
-  const currentJti = c.get('deviceClaims' as never) as { jti: string } | undefined
+  const currentJti = c.get('deviceClaims')?.jti
   const rows = serverDb()
     .raw.prepare(
       `${SELECT_DEVICES}
@@ -112,7 +112,7 @@ devices.get('/self', (c) => {
        ORDER BY datetime(COALESCE(d.last_seen_at, d.issued_at)) DESC`,
     )
     .all(session.sub) as DeviceRow[]
-  return c.json({ devices: rows.map((r) => toView(r, currentJti?.jti)) })
+  return c.json({ devices: rows.map((r) => toView(r, currentJti)) })
 })
 
 devices.delete('/self/:jti', (c) => {

@@ -18,6 +18,7 @@ const { tmpDbDir } = vi.hoisted(() => {
   process.env.SERVER_DB_PATH = nodePath.join(dir, 'server.db')
   delete process.env.PLEX_SERVER_ID
   delete process.env.ADMIN_SUBS
+  delete process.env.ADMINS
   delete process.env.APPLE_CLIENT_ID
   delete process.env.ENABLE_APPLE_SIGN_IN
   return { tmpDbDir: dir }
@@ -65,14 +66,14 @@ function makeClaims(jti: string, sub: string, overrides: Partial<DeviceTokenClai
   }
 }
 
-function seedDeviceToken(jti: string, sub: string, deviceName = 'iPhone'): void {
+function seedDeviceToken(jti: string, sub: string, deviceName = 'iPhone', username: string | null = null): void {
   serverDb()
     .raw.prepare(
       `INSERT INTO device_tokens
-         (jti, sub, device_id, device_name, platform, server_id, issued_at, expires_at, last_seen_at, last_seen_version)
-       VALUES (?, ?, ?, ?, 'ios', 'srv', datetime('now'), datetime('now','+180 day'), NULL, NULL)`,
+         (jti, sub, device_id, device_name, username, platform, server_id, issued_at, expires_at, last_seen_at, last_seen_version)
+       VALUES (?, ?, ?, ?, ?, 'ios', 'srv', datetime('now'), datetime('now','+180 day'), NULL, NULL)`,
     )
-    .run(jti, sub, 'dev-' + jti, deviceName)
+    .run(jti, sub, 'dev-' + jti, deviceName, username)
 }
 
 function tokenRow(jti: string): { last_seen_at: string | null; last_seen_version: string | null } | undefined {
@@ -110,6 +111,7 @@ describe('reconcileDeviceToken', () => {
     // intermittent failures in devices.test.ts.
     delete process.env.PLEX_SERVER_ID
     delete process.env.ADMIN_SUBS
+    delete process.env.ADMINS
     delete process.env.APPLE_CLIENT_ID
     delete process.env.ENABLE_APPLE_SIGN_IN
     vi.resetModules()
@@ -117,6 +119,7 @@ describe('reconcileDeviceToken', () => {
   beforeEach(() => {
     delete process.env.PLEX_SERVER_ID
     delete process.env.ADMIN_SUBS
+    delete process.env.ADMINS
     delete process.env.APPLE_CLIENT_ID
     delete process.env.ENABLE_APPLE_SIGN_IN
     serverDb().raw.exec(
@@ -164,6 +167,34 @@ describe('reconcileDeviceToken', () => {
     const row = tokenRow('jti-B')
     expect(row?.last_seen_version).toBe('old-ver')
     expect(row?.last_seen_at).not.toBeNull()
+  })
+
+  it('recomputes admin role from the stored pairing username on every request', async () => {
+    const { reconcileDeviceToken } = await importReconcile({
+      ADMIN_SUBS: OTHER_ADMIN,
+      ADMINS: 'admin-user',
+    })
+    const sub = 'plex:7'
+    addMember({ sub, authMode: 'plex' })
+    seedDeviceToken('jti-role-admin', sub, 'Chris iPhone', 'admin-user')
+
+    const result = reconcileDeviceToken(makeClaims('jti-role-admin', sub, { role: 'user' }), null)
+
+    expect(result?.role).toBe('admin')
+  })
+
+  it('fails closed to user for legacy rows without a stored username', async () => {
+    const { reconcileDeviceToken } = await importReconcile({
+      ADMIN_SUBS: OTHER_ADMIN,
+      ADMINS: 'admin-user',
+    })
+    const sub = 'plex:8'
+    addMember({ sub, authMode: 'plex' })
+    seedDeviceToken('jti-role-legacy', sub)
+
+    const result = reconcileDeviceToken(makeClaims('jti-role-legacy', sub, { role: 'admin' }), null)
+
+    expect(result?.role).toBe('user')
   })
 
   // C) ALLOWED PATH — jti row vanished → returns null, no revocation written.

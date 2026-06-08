@@ -24,6 +24,7 @@ import { requireAdmin, type Env } from '../middleware/auth.js'
 import { env } from '../env.js'
 import { issueInvite, listInvites, revokeInvite } from '../services/invites.js'
 import { listMembers, revokeMember, type Member } from '../services/members.js'
+import { iptvDb } from '../services/iptvDbSingleton.js'
 
 // ---------------------------------------------------------------------------
 // Invites
@@ -145,5 +146,10 @@ adminMembers.delete('/:sub', (c) => {
   }
   const revoked = revokeMember(sub)
   if (!revoked) return c.json({ error: 'not_found' }, 404)
+  try {
+    iptvDb().stmts.revokePlaylistTokensBySub.run(new Date().toISOString(), sub)
+  } catch (err) {
+    console.error('[adminMembers] playlist-token cascade revoke failed for sub=%s: %s', sub, err)
+  }
   return c.json({ ok: true })
 })

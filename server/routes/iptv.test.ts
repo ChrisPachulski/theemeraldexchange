@@ -19,6 +19,10 @@ const authState = vi.hoisted(() => ({
   session: { sub: 'plex:42', username: 'Test', role: 'admin' as 'admin' | 'user' },
 }))
 
+const membershipState = vi.hoisted(() => ({
+  status: 'allowed' as 'allowed' | 'revoked' | 'not_member',
+}))
+
 vi.mock('../middleware/auth.js', async () => {
   const requireTestAuth: MiddlewareHandler<TestAuthEnv> = async (c, next) => {
     c.set('session', authState.session)
@@ -29,6 +33,10 @@ vi.mock('../middleware/auth.js', async () => {
     requireAdmin: requireTestAuth,
   }
 })
+
+vi.mock('../services/membership.js', () => ({
+  memberStatus: vi.fn(() => membershipState.status),
+}))
 
 vi.mock('../services/xtream.js', () => ({
   getAccountInfo: vi.fn(async () => ({
@@ -41,13 +49,13 @@ vi.mock('../services/xtream.js', () => ({
 
 vi.mock('../services/iptvStreamToken.js', () => {
   const decodeFake = (t: string) => {
-    const match = /^fake\.([^.]+)\.(.+)$/.exec(t)
+    const match = /^fake\.([^.]+)\.([^.]+)(?:\.([^.]+))?$/.exec(t)
     if (!match) throw new Error('invalid_signature')
     const now = Math.floor(Date.now() / 1000)
     return {
       exp: now + 60,
       iat: now,
-      jti: '01J0000000000000000000000X',
+      jti: match[3] ?? '01J0000000000000000000000X',
       k: match[1],
       nbf: now,
       rid: Buffer.from(match[2], 'base64url').toString('utf-8'),
@@ -56,8 +64,8 @@ vi.mock('../services/iptvStreamToken.js', () => {
     }
   }
   return {
-    signStreamToken: vi.fn((_secret: string, opts: { kind: string; resourceId: string }) =>
-      `fake.${opts.kind}.${Buffer.from(opts.resourceId, 'utf-8').toString('base64url')}`),
+    signStreamToken: vi.fn((_secret: string, opts: { kind: string; resourceId: string; jti?: string }) =>
+      `fake.${opts.kind}.${Buffer.from(opts.resourceId, 'utf-8').toString('base64url')}${opts.jti ? `.${opts.jti}` : ''}`),
     verifyStreamToken: vi.fn((_secret: string, t: string) => decodeFake(t)),
     verifyStreamTokenDualKey: vi.fn(
       (_primary: string, _fallback: string, t: string) => decodeFake(t),
@@ -214,7 +222,9 @@ function fakeToken(kind: string, resourceId: string): string {
 
 beforeEach(() => {
   authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
+  membershipState.status = 'allowed'
   concurrencyState.sessions.length = 0
+  dbState.testDb?.raw.exec('DELETE FROM iptv_playlist_tokens;')
 })
 
 describe('GET /api/iptv/health', () => {
@@ -230,6 +240,64 @@ describe('GET /api/iptv/health', () => {
     expect(body.maxConnections).toBe(4)
     expect(body.status).toBe('Active')
     expect(typeof body.expiresAt).toBe('string')
+  })
+})
+
+describe('playlist token lifecycle', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+
+  async function mintPlaylistToken() {
+    const res = await app.request('/api/iptv/playlist/token', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        host: 'internal.local:3001',
+        'x-forwarded-proto': 'https',
+        'x-forwarded-host': 'api.example.com',
+      },
+      body: JSON.stringify({ deviceName: '  Kitchen TV  ' }),
+    })
+    expect(res.status).toBe(200)
+    return (await res.json()) as { jti: string; url: string; deviceName: string }
+  }
+
+  it('generates forwarded HTTPS playlist URLs and exposes owner revoke/list routes', async () => {
+    const minted = await mintPlaylistToken()
+    expect(minted.deviceName).toBe('Kitchen TV')
+    expect(minted.url).toMatch(/^https:\/\/api\.example\.com\/api\/iptv\/playlist\.m3u\?t=/)
+
+    const list = await app.request('/api/iptv/playlist/tokens')
+    expect(list.status).toBe(200)
+    const listBody = (await list.json()) as { tokens: Array<{ jti: string; revoked: boolean }> }
+    expect(listBody.tokens).toEqual([expect.objectContaining({ jti: minted.jti, revoked: false })])
+
+    const del = await app.request(`/api/iptv/playlist/tokens/${minted.jti}`, { method: 'DELETE' })
+    expect(del.status).toBe(200)
+
+    const playlist = await app.request(new URL(minted.url).pathname + new URL(minted.url).search)
+    expect(playlist.status).toBe(401)
+    expect((await playlist.json()) as { error: string }).toEqual({ error: 'token_revoked' })
+  })
+
+  it('rejects playlist tokens for revoked members and persists token revocation', async () => {
+    const minted = await mintPlaylistToken()
+    membershipState.status = 'revoked'
+
+    const playlist = await app.request(new URL(minted.url).pathname + new URL(minted.url).search)
+    expect(playlist.status).toBe(401)
+    expect((await playlist.json()) as { error: string }).toEqual({ error: 'access_revoked' })
+
+    const row = dbState.testDb!.stmts.getPlaylistToken.get(minted.jti) as { revoked_at: string | null }
+    expect(row.revoked_at).not.toBeNull()
+  })
+
+  it('caps playlist token request bodies', async () => {
+    const res = await app.request('/api/iptv/playlist/token', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': '2048' },
+      body: '{}',
+    })
+    expect(res.status).toBe(413)
   })
 })
 

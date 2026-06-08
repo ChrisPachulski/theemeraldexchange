@@ -4,7 +4,7 @@
 # Architecture (V2):
 #   theemeraldexchange.com         → Netlify (SPA)             [auto-deploys on git push]
 #   api.theemeraldexchange.com     → Cloudflare Tunnel
-#                                   → cloudflared container on NAS (network_mode: host)
+#                                   → cloudflared container sharing backend netns
 #                                   → 127.0.0.1:3001
 #                                   → exchange-backend container (Hono on Node)
 #                                   → Sonarr / Radarr / SAB on the LAN

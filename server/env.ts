@@ -32,6 +32,10 @@
 //   NODE_ENV          — 'production' switches cookies to SameSite=None;
 //                       Secure for cross-origin Netlify ↔ NAS use, and
 //                       enforces ALLOWED_ORIGINS.
+//   TRUST_CLIENT_IP_HEADERS
+//                     — set to 1 only when the backend is reachable solely
+//                       through a trusted proxy/tunnel that owns CF/Forwarded
+//                       client IP headers.
 
 import { config as dotenvConfig } from 'dotenv'
 import { validateSecretStrength, assertSecretsDistinct } from './services/secrets.js'
@@ -132,6 +136,7 @@ if (isProd && !plexServerId && !allowUnscopedPlexLogin) {
 
 const useLocalRecommender = process.env.USE_LOCAL_RECOMMENDER === '1'
 const useMediaCore = process.env.USE_MEDIA_CORE === '1'
+const trustClientIpHeaders = process.env.TRUST_CLIENT_IP_HEADERS === '1'
 const recommenderEventSecret = opt('RECOMMENDER_EVENT_SECRET') ?? null
 if (useLocalRecommender && !recommenderEventSecret) {
   throw new Error(
@@ -397,6 +402,9 @@ export const env = {
   port: positiveInt('PORT', 3001),
   isProd,
   allowedOrigins,
+  /** Trust Cloudflare/proxy client IP headers for per-client auth rate limits.
+   *  Keep off unless the backend is reachable only through that proxy. */
+  trustClientIpHeaders,
 
   // Backing services. URL defaults match the existing NAS deployment;
   // override per-environment via env vars.

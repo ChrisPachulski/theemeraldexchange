@@ -10,6 +10,7 @@ import {
   mediaSessionResourceId,
   MEDIA_HLS_KIND,
 } from '../services/mediaStreamToken.js'
+import { memberStatus } from '../services/membership.js'
 
 // Authenticated proxy for the transcoder's HLS surface. When a library file
 // cannot direct-play, media-core's /playback grant routes the client to an HLS
@@ -59,6 +60,7 @@ async function transcodeAuth(c: Context<Env>, next: Next) {
     const rid = mediaSessionResourceId(sessMatch[1])
     const v = verifyMediaToken(token, { kinds: [MEDIA_HLS_KIND], rid })
     if (!v.ok) return c.json({ error: v.error }, 401)
+    if (memberStatus(v.sub) !== 'allowed') return c.json({ error: 'access_revoked' }, 401)
     c.set('session', sessionFromSub(v.sub))
     return next()
   }

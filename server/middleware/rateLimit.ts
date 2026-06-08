@@ -16,6 +16,7 @@
 
 import { createMiddleware } from 'hono/factory'
 import type { Env } from './auth.js'
+import { env } from '../env.js'
 
 interface Bucket {
   tokens: number
@@ -66,10 +67,11 @@ export function rateLimit(opts: RateLimitOptions): ReturnType<typeof createMiddl
     // `registries` map (a test would then start with a pre-drained bucket).
     const reg = registryFor(opts.name)
     const session = c.get('session')
-    const ip =
-      c.req.header('cf-connecting-ip') ??
-      c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ??
-      null
+    const ip = env.trustClientIpHeaders
+      ? c.req.header('cf-connecting-ip') ??
+        c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ??
+        null
+      : null
     const key = callerKey(session?.sub, ip)
 
     const now = Date.now()

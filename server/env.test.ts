@@ -44,6 +44,7 @@ const PRESERVED_KEYS = [
   'APPLE_CLIENT_ID',
   'ENABLE_APPLE_SIGN_IN',
   'ADMIN_SUBS',
+  'TRUST_CLIENT_IP_HEADERS',
 ] as const
 
 let snapshot: Record<string, string | undefined> = {}
@@ -76,6 +77,7 @@ function setBaselineEnv() {
   delete process.env.APPLE_CLIENT_ID
   delete process.env.ENABLE_APPLE_SIGN_IN
   delete process.env.ADMIN_SUBS
+  delete process.env.TRUST_CLIENT_IP_HEADERS
 }
 
 async function loadEnv(): Promise<typeof import('./env.js')['env']> {
@@ -128,6 +130,21 @@ describe('env — blank URL fallbacks', () => {
     const env = await loadEnv()
     expect(env.sonarrUrl).toBe('http://my-nas:8989')
     expect(env.radarrUrl).toBe('http://my-nas:7878')
+  })
+})
+
+describe('env — trusted client IP headers', () => {
+  it('defaults to not trusting proxy-supplied client IP headers', async () => {
+    setBaselineEnv()
+    const env = await loadEnv()
+    expect(env.trustClientIpHeaders).toBe(false)
+  })
+
+  it('enables proxy-supplied client IP headers only with TRUST_CLIENT_IP_HEADERS=1', async () => {
+    setBaselineEnv()
+    process.env.TRUST_CLIENT_IP_HEADERS = '1'
+    const env = await loadEnv()
+    expect(env.trustClientIpHeaders).toBe(true)
   })
 })
 

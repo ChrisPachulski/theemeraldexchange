@@ -84,7 +84,7 @@ describe('tryBearerAuth (deviceTokenAuth middleware)', () => {
     expect(result.session.sub).toBe('plex:12345')
     // device_name is surfaced as the username (deviceSessionToSession).
     expect(result.session.username).toBe('Living Room Apple TV')
-    expect(result.session.role).toBe('user')
+    expect(result.session.role).toBe('admin')
     expect(result.session.auth_mode).toBe('plex')
     // Device tokens carry no Plex token.
     expect(result.session.plexAuthToken).toBeUndefined()

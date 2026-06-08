@@ -138,6 +138,9 @@ export type DeviceTokenInput = {
    *  (Apple device name) and stored in device_tokens.device_name.
    *  Mutable via admin/self rename routes. NOT carried in the JWE. */
   device_name: string
+  /** Plex/local display username captured at pairing time. Not carried in the
+   *  token; stored server-side so Bearer reconcile can recompute roles. */
+  username?: string
   /** Stable server UUID from server_state (§12.3). */
   server_id: string
 }
@@ -218,14 +221,15 @@ export async function mintDeviceToken(input: DeviceTokenInput): Promise<string> 
   serverDb()
     .raw.prepare(
       `INSERT INTO device_tokens
-        (jti, sub, device_id, device_name, platform, server_id, kid, issued_at, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (jti, sub, device_id, device_name, username, platform, server_id, kid, issued_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       jti,
       input.sub,
       input.device_id,
       input.device_name,
+      input.username ?? null,
       input.device_platform,
       input.server_id,
       DEVICE_TOKEN_KID,
@@ -282,7 +286,7 @@ export async function verifyDeviceToken(token: string): Promise<DeviceTokenClaim
   }
 
   if (claims.aud !== 'device' || claims.iss !== 'eex') return null
-  if (claims.role !== 'admin' && claims.role !== 'user' && claims.role !== 'guest') return null
+  if (claims.role !== 'admin' && claims.role !== 'user') return null
   if (
     claims.authMode !== 'plex' &&
     claims.authMode !== 'local' &&
