@@ -104,24 +104,33 @@ impl AvailableEncoders {
 /// `ffmpeg -hide_banner -f lavfi -i color=c=black:s=64x64:d=0.1 -c:v <enc> -f null -`.
 /// Returns `false` if ffmpeg is missing or the encoder fails to open its device.
 ///
-/// QSV is special-cased to mirror the REAL session invocation (see
-/// [`crate::args::ffmpeg_args`]): a bare `-c:v h264_qsv` will auto-init a default
-/// device and can succeed even where the production `hwupload` path fails — which
-/// would let [`AvailableEncoders::resolve`] hand back QSV only for every real
-/// transcode to die on a device/upload error (a per-session crash-loop → 503). So
-/// for QSV we init the hw device and upload the synthetic frames through
-/// `format=nv12,hwupload` exactly as production does, making a passing smoke test
-/// genuinely imply a working encode.
+/// The VAAPI and QSV families are special-cased to mirror the REAL session
+/// invocation (see [`crate::args::ffmpeg_args`]): a bare `-c:v h264_qsv`/
+/// `h264_vaapi` can auto-init a device and succeed even where the production
+/// `hwupload` path fails — which would let [`AvailableEncoders::resolve`] hand
+/// back a HW family only for every real transcode to die on a device/upload
+/// error (a per-session crash-loop → 503). So for those families we open the
+/// device and upload the synthetic frames exactly as production does (VAAPI also
+/// pins `-low_power 1`), making a passing smoke test genuinely imply a working
+/// encode.
 async fn smoke_test(ffmpeg_bin: &str, encoder: &str) -> bool {
     let mut args: Vec<&str> = vec!["-hide_banner", "-loglevel", "error"];
-    if encoder == "h264_qsv" {
-        args.extend(["-init_hw_device", "qsv=hw", "-filter_hw_device", "hw"]);
+    match encoder {
+        "h264_qsv" => args.extend(["-init_hw_device", "qsv=hw", "-filter_hw_device", "hw"]),
+        "h264_vaapi" => args.extend(["-vaapi_device", crate::args::VAAPI_RENDER_NODE]),
+        _ => {}
     }
     args.extend(["-f", "lavfi", "-i", "color=c=black:s=64x64:d=0.1"]);
-    if encoder == "h264_qsv" {
-        args.extend(["-vf", "format=nv12,hwupload=extra_hw_frames=64"]);
+    match encoder {
+        "h264_qsv" => args.extend(["-vf", "format=nv12,hwupload=extra_hw_frames=64"]),
+        "h264_vaapi" => args.extend(["-vf", "format=nv12,hwupload"]),
+        _ => {}
     }
-    args.extend(["-c:v", encoder, "-f", "null", "-"]);
+    args.extend(["-c:v", encoder]);
+    if encoder == "h264_vaapi" {
+        args.extend(["-low_power", "1"]);
+    }
+    args.extend(["-f", "null", "-"]);
     let result = tokio::process::Command::new(ffmpeg_bin)
         .args(&args)
         .output()
