@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config'
+import { TEST_ENV } from './vitest.env'
 
 // Test runner config. Tests live next to the code they cover under a
 // __tests__/ directory or as *.test.ts siblings. The backend tests
@@ -26,21 +27,9 @@ export default defineConfig({
       '**/dist/**',
       'server/routes/suggestions.eval.test.ts',
     ],
-    env: {
-      // Required by server/env.ts. Tests don't actually call plex.tv
-      // or Sonarr — those are mocked — but the validator runs at
-      // import time so it needs *something* present.
-      PLEX_CLIENT_ID: '00000000-0000-4000-a000-000000000000',
-      SESSION_SECRET: 'test-secret-test-secret-test-secret-test-secret',
-      SONARR_API_KEY: 'test-sonarr-key',
-      RADARR_API_KEY: 'test-radarr-key',
-      SAB_API_KEY: 'test-sab-key',
-      ADMINS: 'admin-user',
-      MIN_FREE_GB: '100',
-      STREAM_TOKEN_SECRET: 'stream-token-secret-test-placeholder-xxxxxxxxx',
-      DEVICE_TOKEN_SECRET: 'device-token-secret-test-placeholder-yyyyyyyyy',
-      INTERNAL_PRINCIPAL_SECRET: 'internal-principal-secret-test-placeholder-zzz',
-    },
+    // Required by server/env.ts (validated at import time). Shared with the
+    // eval-harness runner via vitest.env.ts so the two can't drift.
+    env: TEST_ENV,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],

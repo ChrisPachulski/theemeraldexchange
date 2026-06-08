@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config'
+import { TEST_ENV } from './vitest.env'
 
 // Separate vitest config for the AI-recommendation-section eval harness.
 // Runs only under `npm run eval:recs` so the regular `npm test` flow
@@ -11,14 +12,9 @@ export default defineConfig({
     environment: 'node',
     include: ['server/routes/suggestions.eval.test.ts'],
     sequence: { concurrent: false },
-    env: {
-      PLEX_CLIENT_ID: '00000000-0000-4000-a000-000000000000',
-      SESSION_SECRET: 'test-secret-test-secret-test-secret-test-secret',
-      SONARR_API_KEY: 'test-sonarr-key',
-      RADARR_API_KEY: 'test-radarr-key',
-      SAB_API_KEY: 'test-sab-key',
-      ADMINS: 'admin-user',
-      MIN_FREE_GB: '100',
-    },
+    // Shared with vitest.config.ts via vitest.env.ts. This block used to be a
+    // hand-maintained subset and silently broke when STREAM_TOKEN_SECRET became
+    // required by server/env.ts; sharing it stops that drift recurring.
+    env: TEST_ENV,
   },
 })
