@@ -21,7 +21,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
-use crate::args::{HwEncoder, ffmpeg_args};
+use crate::args::{HwEncoder, ffmpeg_args_hw};
 use crate::concurrency::{Busy, Caps, Limiter, Permit};
 use crate::plan::TranscodePlan;
 
@@ -79,6 +79,11 @@ pub struct StartOpts {
     pub input_path: String,
     pub plan: TranscodePlan,
     pub start_secs: u64,
+    /// Source video codec (e.g. `hevc`, `h264`, `av1`) from the file's probe,
+    /// used to gate the full-hardware VAAPI decode path: `-hwaccel_output_format
+    /// vaapi` has NO software fallback, so we only enable it for codecs the iGPU
+    /// can decode (see [`is_vaapi_hw_decodable`]). `None` → software decode.
+    pub source_codec: Option<String>,
 }
 
 /// A point-in-time view of a session for the admin inventory (§4.5 phase 7).
@@ -111,6 +116,9 @@ struct Session {
     _permit: Permit,
     plan: TranscodePlan,
     input_path: String,
+    /// Source video codec, carried for the supervisor/seek respawn so the
+    /// full-HW gate is recomputed identically on every spawn.
+    source_codec: Option<String>,
 }
 
 impl Session {
@@ -184,6 +192,20 @@ fn path_within_roots(input: &str, roots: &[PathBuf]) -> bool {
         .any(|r| norm.starts_with(lexically_normalize(r)))
 }
 
+/// Codecs the Intel iGPU can decode via VAAPI (`-hwaccel vaapi
+/// -hwaccel_output_format vaapi`). Anything outside this set — notably MPEG-4
+/// part 2 / DivX, which modern Intel fixed-function decode dropped — has NO
+/// software fallback under `-hwaccel_output_format vaapi` and would hard-fail the
+/// session, so it must use the software-decode path instead. The list is kept
+/// deliberately conservative: an omitted-but-decodable codec merely costs a CPU
+/// decode (correct, just slower), whereas a wrongly-included one breaks playback.
+fn is_vaapi_hw_decodable(codec: &str) -> bool {
+    matches!(
+        codec.trim().to_ascii_lowercase().as_str(),
+        "hevc" | "h265" | "h264" | "avc" | "avc1" | "av1" | "vp9"
+    )
+}
+
 /// Shared, cheap-to-clone manager (Arc'd map + config).
 #[derive(Clone)]
 pub struct SessionManager {
@@ -197,6 +219,12 @@ pub struct SessionManager {
     /// authorized caller still cannot point ffmpeg at arbitrary container files
     /// (defense-in-depth behind the principal_layer auth gate).
     media_roots: Vec<PathBuf>,
+    /// When set, eligible VAAPI re-encodes run the FULL hardware pipeline
+    /// (GPU decode → tonemap_vaapi/scale_vaapi → h264_vaapi, no CPU round-trip).
+    /// Set by `main.rs` only after a boot probe confirms the iGPU's VAAPI VPP +
+    /// encode chain works (see [`crate::encoders::vaapi_full_hw_supported`]); off
+    /// by default so the manager falls back to the proven software-decode path.
+    vaapi_hw_decode: bool,
 }
 
 impl SessionManager {
@@ -215,6 +243,7 @@ impl SessionManager {
             tmp_root,
             encoder,
             media_roots: Vec::new(),
+            vaapi_hw_decode: false,
         }
     }
 
@@ -224,6 +253,21 @@ impl SessionManager {
     pub fn with_media_roots(mut self, roots: Vec<PathBuf>) -> Self {
         self.media_roots = roots;
         self
+    }
+
+    /// Enable/disable the full-hardware VAAPI pipeline (chainable form, for
+    /// tests). In `main.rs` use [`SessionManager::set_vaapi_hw_decode`] after the
+    /// boot probe.
+    pub fn with_vaapi_hw_decode(mut self, on: bool) -> Self {
+        self.vaapi_hw_decode = on;
+        self
+    }
+
+    /// Enable/disable the full-hardware VAAPI pipeline in place. `main.rs` calls
+    /// this once at boot with the result of the VAAPI VPP+encode capability probe
+    /// (only meaningful when the resolved encoder is VAAPI).
+    pub fn set_vaapi_hw_decode(&mut self, on: bool) {
+        self.vaapi_hw_decode = on;
     }
 
     /// Construct from the environment: `TRANSCODER_FFMPEG_BIN` (default
@@ -293,9 +337,26 @@ impl SessionManager {
         plan: &TranscodePlan,
         dir: &PathBuf,
         start_secs: u64,
+        source_codec: Option<&str>,
     ) -> Result<Child, StartError> {
         let dir_str = dir.to_string_lossy();
-        let args = ffmpeg_args(plan, opts_input, &dir_str, start_secs, self.encoder);
+        // Full-hardware VAAPI decode is gated on: the resolved encoder being
+        // VAAPI, the boot probe having confirmed the VPP+encode chain
+        // (`vaapi_hw_decode`), and the SOURCE codec being one the iGPU can decode
+        // — `-hwaccel_output_format vaapi` hard-fails with no software fallback on
+        // an undecodable codec (e.g. MPEG-4/DivX). `ffmpeg_args_hw` further
+        // restricts it to a video re-encode without subtitle burn-in.
+        let hw_decode = self.vaapi_hw_decode
+            && matches!(self.encoder, HwEncoder::Vaapi)
+            && source_codec.is_some_and(is_vaapi_hw_decodable);
+        let args = ffmpeg_args_hw(
+            plan,
+            opts_input,
+            &dir_str,
+            start_secs,
+            self.encoder,
+            hw_decode,
+        );
         let mut child = Command::new(&self.ffmpeg_bin)
             .args(&args)
             .current_dir(dir)
@@ -368,6 +429,7 @@ impl SessionManager {
             &opts.plan,
             &dir,
             opts.start_secs,
+            opts.source_codec.as_deref(),
         )?;
 
         let session = Session {
@@ -383,6 +445,7 @@ impl SessionManager {
             _permit: permit,
             plan: opts.plan,
             input_path: opts.input_path,
+            source_codec: opts.source_codec,
         };
 
         self.sessions
@@ -420,7 +483,14 @@ impl SessionManager {
         // Use tokio::fs (not std::fs) so we never block an executor thread.
         let _ = tokio::fs::remove_dir_all(&s.dir).await;
         let _ = tokio::fs::create_dir_all(&s.dir).await;
-        match self.spawn_child(id, &s.input_path, &s.plan, &s.dir, to_secs) {
+        match self.spawn_child(
+            id,
+            &s.input_path,
+            &s.plan,
+            &s.dir,
+            to_secs,
+            s.source_codec.as_deref(),
+        ) {
             Ok(child) => {
                 s.child = Some(child);
                 true
@@ -609,6 +679,7 @@ impl SessionManager {
                 let plan = s.plan.clone();
                 let dir = s.dir.clone();
                 let start_secs = s.start_secs;
+                let source_codec = s.source_codec.clone();
                 drop(guard);
 
                 // Exponential backoff: 100ms * 2^(attempt-1), capped at ~2s.
@@ -626,7 +697,14 @@ impl SessionManager {
                 let _ = tokio::fs::remove_dir_all(&dir).await;
                 let _ = tokio::fs::create_dir_all(&dir).await;
 
-                match this.spawn_child(&id, &input, &plan, &dir, start_secs) {
+                match this.spawn_child(
+                    &id,
+                    &input,
+                    &plan,
+                    &dir,
+                    start_secs,
+                    source_codec.as_deref(),
+                ) {
                     Ok(new_child) => {
                         let mut guard = this.sessions.lock().await;
                         match guard.get_mut(&id) {
@@ -707,6 +785,7 @@ mod tests {
             input_path: input.into(),
             plan: remux_plan(),
             start_secs: 0,
+            source_codec: None,
         }
     }
 
@@ -906,6 +985,28 @@ mod tests {
                 reason: "test".into(),
             },
             start_secs: 0,
+            source_codec: Some("hevc".into()),
+        }
+    }
+
+    #[test]
+    fn vaapi_hw_decodable_allowlist() {
+        for c in [
+            "hevc", "H265", "h264", "AVC", "avc1", "av1", "vp9", " hevc ",
+        ] {
+            assert!(is_vaapi_hw_decodable(c), "{c} must be HW-decodable");
+        }
+        // MPEG-4 part 2 / DivX has no Intel HW decode → must fall back to SW.
+        for c in [
+            "mpeg4",
+            "msmpeg4v3",
+            "mpeg2video",
+            "vc1",
+            "mjpeg",
+            "theora",
+            "",
+        ] {
+            assert!(!is_vaapi_hw_decodable(c), "{c} must NOT be HW-decodable");
         }
     }
 

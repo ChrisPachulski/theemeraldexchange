@@ -138,6 +138,47 @@ async fn smoke_test(ffmpeg_bin: &str, encoder: &str) -> bool {
     matches!(result, Ok(out) if out.status.success())
 }
 
+/// Probe whether the FULL-hardware VAAPI pipeline (decode → VPP → encode entirely
+/// on the iGPU) is usable on this host.
+///
+/// `tonemap_vaapi` cannot be exercised synthetically — it reads the input's HDR
+/// mastering-display metadata and errors on a generated SDR source ("No mastering
+/// display data from input") — so we validate the representative VPP+encode chain
+/// instead: upload an NV12 surface, run it through `scale_vaapi`, and encode with
+/// `h264_vaapi -low_power 1`, exactly as a non-HDR full-HW session does. A working
+/// VAAPI VPP scale on Intel iHD implies a working `tonemap_vaapi` (same VPP
+/// engine, shipped in the same ffmpeg build), so HDR sessions ride this flag too.
+/// Returns `false` on any failure so the session manager keeps the proven
+/// software-decode path (and `false` is also returned on a GPU-less host where
+/// the `-vaapi_device` open fails).
+pub async fn vaapi_full_hw_supported(ffmpeg_bin: &str) -> bool {
+    let args = [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-vaapi_device",
+        crate::args::VAAPI_RENDER_NODE,
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black:s=128x128:d=0.2",
+        "-vf",
+        "format=nv12,hwupload,scale_vaapi=w=64:h=64:format=nv12",
+        "-c:v",
+        "h264_vaapi",
+        "-low_power",
+        "1",
+        "-f",
+        "null",
+        "-",
+    ];
+    let result = tokio::process::Command::new(ffmpeg_bin)
+        .args(args)
+        .output()
+        .await;
+    matches!(result, Ok(out) if out.status.success())
+}
+
 /// Run `ffmpeg -encoders` and parse the result. Best-effort: any failure to
 /// launch ffmpeg yields an empty set (caller falls back to CPU and logs).
 pub async fn detect(ffmpeg_bin: &str) -> AvailableEncoders {
