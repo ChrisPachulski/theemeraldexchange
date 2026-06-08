@@ -346,6 +346,20 @@ pub fn ffmpeg_args_hw(
         AudioOp::EncodeAac { bitrate_kbps } => {
             push(&mut a, "-c:a");
             push(&mut a, "aac");
+            // Downmix to stereo. The HLS output is consumed by hls.js, which
+            // transmuxes the TS audio to fMP4 for MSE; Chrome and Firefox FAIL
+            // the SourceBuffer append of a >2-channel (5.1/7.1) AAC track
+            // ("audio SourceBuffer error. MediaSource readyState: ended"),
+            // which fails the whole fragment and freezes the player grey at
+            // 0:00 — even though the codec string (mp4a.40.2) reports as
+            // supported. Stereo appends and plays in every target browser
+            // (proven by an in-browser A/B on a real 5.1 title). Mono upmixes
+            // harmlessly; an already-stereo source is a no-op. TODO(M4+): when
+            // ClientCaps grows an audio-channel capability, pass multichannel
+            // through for native clients (AVPlayer handles 5.1) and downmix
+            // only for browser/MSE consumers.
+            push(&mut a, "-ac");
+            push(&mut a, "2");
             push(&mut a, "-b:a");
             a.push(format!("{bitrate_kbps}k"));
         }
@@ -624,9 +638,30 @@ mod tests {
         assert!(j.contains("-b:v 6000k"), "1080p default ladder: {j}");
         assert!(j.contains("-maxrate 9000k"), "{j}");
         assert!(j.contains("-bufsize 12000k"), "{j}");
-        assert!(j.contains("-c:a aac -b:a 192k"), "{j}");
+        // AAC re-encode is forced to stereo (-ac 2) so the browser MSE path can
+        // append it — a multichannel append fails ("audio SourceBuffer error").
+        assert!(j.contains("-c:a aac -ac 2 -b:a 192k"), "{j}");
         // No -vf when nothing in the filtergraph.
         assert!(!j.contains("-vf"), "{j}");
+    }
+
+    #[test]
+    fn reencoded_audio_is_downmixed_to_stereo() {
+        // Regression for the American Dad! S02E03 grey-box: a 5.1 AAC append is
+        // rejected by Chrome/Firefox MSE, so every AAC re-encode must emit -ac 2.
+        let plan = transcode(
+            VideoOp::Copy,
+            AudioOp::EncodeAac { bitrate_kbps: 192 },
+            SubtitleOp::None,
+        );
+        let args = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Cpu);
+        let ac = args
+            .iter()
+            .position(|s| s == "-ac")
+            .expect("must force channel count");
+        assert_eq!(args[ac + 1], "2", "downmix to stereo");
+        let j = args.join(" ");
+        assert!(j.contains("-c:a aac -ac 2 -b:a 192k"), "{j}");
     }
 
     #[test]
