@@ -88,6 +88,17 @@ export async function throwApiError(res: Response, scope: string): Promise<never
     message =
       `The title was added, but Radarr couldn't enable monitoring for future releases. ` +
       `Open Radarr to enable monitoring, or ask an admin to check the Radarr API.`
+  } else if (code === 'transcoder_unavailable') {
+    // All transcode slots busy (CPU-only NAS caps concurrent re-encodes), or
+    // media-core couldn't start a session. The player rendered this as a raw
+    // "Media /playback/...: 503" before — now it's actionable.
+    message =
+      'All playback slots are busy right now. Close another stream and try again in a moment.'
+  } else if (code === 'transcode_start_failed' || code === 'transcoder unreachable') {
+    message =
+      "Couldn't start playback for this title — the transcoder didn't respond. Try again in a moment."
+  } else if (scope.includes('/playback/') && res.status === 404) {
+    message = "This title isn't available to play from your local library."
   } else if (typeof data.message === 'string') {
     message = data.message
   }
