@@ -190,19 +190,23 @@ fn parse_movie(stem: &str) -> ParsedName {
     // byte positions directly (rather than `captures_iter`, which cannot match
     // two space-separated years like "1917 2019" because the first match
     // consumes the shared boundary) lets adjacent year tokens both be seen.
+    // All candidate checks happen on raw bytes; `stem` is only sliced once the
+    // run is confirmed all-ASCII-digit, which guarantees `i` and `i + 4` are
+    // char boundaries — a `&stem[i..i + 4]` probe at an arbitrary byte offset
+    // panics on non-ASCII stems like "Amélie (2001)".
     let bytes = stem.as_bytes();
     let mut chosen: Option<(usize, i64)> = None;
     let mut i = 0;
     while i + 4 <= bytes.len() {
         let before_ok = i == 0 || !bytes[i - 1].is_ascii_digit();
         let after_ok = i + 4 == bytes.len() || !bytes[i + 4].is_ascii_digit();
-        let run = &stem[i..i + 4];
+        let run = &bytes[i..i + 4];
         let is_year = before_ok
             && after_ok
-            && run.bytes().all(|b| b.is_ascii_digit())
-            && (run.starts_with("19") || run.starts_with("20"));
+            && run.iter().all(u8::is_ascii_digit)
+            && (run.starts_with(b"19") || run.starts_with(b"20"));
         if is_year {
-            let year: i64 = run.parse().unwrap();
+            let year: i64 = stem[i..i + 4].parse().unwrap();
             let preceding = strip_tags(&clean(&stem[..i]));
             if !preceding.is_empty() {
                 chosen = Some((i, year));
@@ -497,6 +501,71 @@ mod tests {
             ParsedName::Movie {
                 title: "1917".to_string(),
                 year: Some(2019),
+            }
+        );
+    }
+
+    #[test]
+    fn non_ascii_titles_parse_without_panicking() {
+        // Regression: the year scan advanced a raw byte index and sliced
+        // `&stem[i..i + 4]`, panicking on any non-char-boundary offset — one
+        // accented/CJK/emoji filename killed the whole scan task.
+        assert_eq!(
+            parse_filename("Amélie (2001).mkv"),
+            ParsedName::Movie {
+                title: "Amélie".to_string(),
+                year: Some(2001),
+            }
+        );
+        assert_eq!(
+            parse_filename("Léon The Professional 1994.mkv"),
+            ParsedName::Movie {
+                title: "Léon The Professional".to_string(),
+                year: Some(1994),
+            }
+        );
+        assert_eq!(
+            parse_filename("千と千尋の神隠し (2001).mkv"),
+            ParsedName::Movie {
+                title: "千と千尋の神隠し".to_string(),
+                year: Some(2001),
+            }
+        );
+        assert_eq!(
+            parse_filename("🎬 Movie Night 2020.mkv"),
+            ParsedName::Movie {
+                title: "🎬 Movie Night".to_string(),
+                year: Some(2020),
+            }
+        );
+        // Year-less non-ASCII drives the scan loop across every (multi-byte)
+        // char position to end-of-string.
+        assert_eq!(
+            parse_filename("こんにちは.mkv"),
+            ParsedName::Movie {
+                title: "こんにちは".to_string(),
+                year: None,
+            }
+        );
+    }
+
+    #[test]
+    fn classify_handles_non_ascii_under_both_roots() {
+        let movie_path = PathBuf::from("/media/Movies/Amélie (2001).mkv");
+        assert_eq!(
+            classify(RootKind::Movies, &movie_path, "Amélie (2001).mkv"),
+            ParsedName::Movie {
+                title: "Amélie".to_string(),
+                year: Some(2001),
+            }
+        );
+        let show_path = PathBuf::from("/media/tv_shows/Élite/Élite S01E01.mkv");
+        assert_eq!(
+            classify(RootKind::Shows, &show_path, "Élite S01E01.mkv"),
+            ParsedName::Episode {
+                show: "Élite".to_string(),
+                season: 1,
+                episode: 1,
             }
         );
     }
