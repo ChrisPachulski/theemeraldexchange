@@ -41,7 +41,7 @@ type RadarrSpaceGateFailure = SpaceGateFailure | { status: 502; body: Record<str
 // Finding 4-1: in-flight disk-space reservations against root-folder
 // free space. Mechanism + rationale live in services/arrGrab.ts; this
 // instance is Radarr's own ledger (Sonarr keeps a separate one).
-const radarrReservations = createReservationLedger()
+const radarrReservations = createReservationLedger('radarr')
 
 const recordRadarrGrabEvent = createGrabEventRecorder('radarr')
 
