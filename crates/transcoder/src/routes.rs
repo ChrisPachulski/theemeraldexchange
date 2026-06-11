@@ -294,6 +294,22 @@ async fn grant(
     } = req;
     let input_path = file.path.clone();
     let row = file.into_row();
+
+    // A file with NO video stream (audio-only, or a probe that found none —
+    // either way `video_codec` is empty) can never satisfy the mandatory
+    // `-map 0:v:0` in the ffmpeg invocation: ffmpeg exits immediately with
+    // "Stream map '0:v:0' matches no streams", the supervisor burns its whole
+    // restart budget on the guaranteed-fatal respawn loop, and the caller sees
+    // an opaque late 503. Reject it up front with a typed, client-readable
+    // error instead — nothing downstream can ever make such a grant playable.
+    if row.video_codec.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "error": "no_video_stream" })),
+        )
+            .into_response();
+    }
+
     // Source codec gates the full-hardware VAAPI decode path (see
     // SessionManager::spawn_child); carry it through to StartOpts.
     let source_codec = row.video_codec.clone();
@@ -682,6 +698,58 @@ mod tests {
         assert_eq!(v["transcode"], true);
         assert!(v["sessionId"].as_str().unwrap().starts_with("tx:"));
         assert!(v["manifestUrl"].as_str().unwrap().ends_with("/index.m3u8"));
+    }
+
+    #[tokio::test]
+    async fn grant_without_video_stream_is_rejected_with_typed_error() {
+        // Regression: a grant for a file with no video stream (video_codec
+        // empty/absent) spawned ffmpeg with the mandatory `-map 0:v:0`, which
+        // matches no streams — a guaranteed crash-loop to the restart cap and
+        // an opaque late failure. It must be rejected up front, with no
+        // session started or slot consumed.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = state_with(
+            &tmp,
+            Caps {
+                max_total: 4,
+                max_cpu: 4,
+            },
+            PrincipalMode::Off,
+        );
+        for codec in [None, Some(""), Some("  ")] {
+            let mut file = h264_file();
+            file.video_codec = codec.map(str::to_string);
+            let resp = router(state.clone())
+                .oneshot(
+                    HttpRequest::builder()
+                        .method("POST")
+                        .uri("/api/transcode/grant")
+                        .header("content-type", "application/json")
+                        .body(Body::from(grant_body(&file)))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.status(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "codec {codec:?}"
+            );
+            let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+                .await
+                .unwrap();
+            let v: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(v["error"], "no_video_stream", "codec {codec:?}");
+        }
+        assert!(
+            state.sessions.is_empty().await,
+            "rejected grant must not start a session"
+        );
+        assert_eq!(
+            state.sessions.limiter().active(),
+            (0, 0),
+            "rejected grant must not consume a slot"
+        );
     }
 
     #[tokio::test]
