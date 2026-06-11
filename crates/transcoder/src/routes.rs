@@ -507,23 +507,53 @@ async fn session_stop(
     Json(json!({ "ok": true })).into_response()
 }
 
+/// The owner-facing projection of a [`crate::session::SessionInfo`]: just
+/// enough for a client to render "what am I playing and where" — id, kind,
+/// media id, and position. Everything else is REDACTED for non-admins:
+/// `manifest_path` is a server-container filesystem path (internal layout /
+/// scratch-mount disclosure), and `sub`/`owner`/`restarts` are operator
+/// telemetry, not player state. Admins keep the full struct.
+#[derive(serde::Serialize)]
+struct OwnerSessionView {
+    session_id: String,
+    media_kind: String,
+    media_id: i64,
+    /// The session's current play offset in seconds (the `-ss` of the live
+    /// ffmpeg child — grant/seek/crash-resume position).
+    position_secs: u64,
+}
+
 /// Session inventory (§4.5 phase 7). Admins (and the unverified Off/log
 /// postures) see everything; any other verified principal sees only their own
-/// sessions — the inventory leaks who is watching what otherwise.
+/// sessions — and only a SANITIZED view of those: the full `SessionInfo`
+/// carries server filesystem paths that must not leave the admin surface.
 async fn list_sessions(
     State(state): State<AppState>,
     claims: Option<Extension<InternalClaims>>,
 ) -> Json<Value> {
     let claims = claims.map(|Extension(c)| c);
-    let mut sessions = state.sessions.list().await;
-    if let Some(c) = &claims
-        && c.role != "admin"
-    {
-        sessions.retain(|s| s.owner.as_deref() == Some(c.sub.as_str()));
-    }
+    let sessions = state.sessions.list().await;
     let (total, cpu) = state.sessions.limiter().active();
+    let sessions_json = match &claims {
+        Some(c) if c.role != "admin" => {
+            let own: Vec<OwnerSessionView> = sessions
+                .into_iter()
+                .filter(|s| s.owner.as_deref() == Some(c.sub.as_str()))
+                .map(|s| OwnerSessionView {
+                    session_id: s.session_id,
+                    media_kind: s.media_kind,
+                    media_id: s.media_id,
+                    position_secs: s.start_secs,
+                })
+                .collect();
+            json!(own)
+        }
+        // Admins — and the Off/log postures with no verified identity, which
+        // are operator-internal deployments by definition — keep full detail.
+        _ => json!(sessions),
+    };
     Json(json!({
-        "sessions": sessions,
+        "sessions": sessions_json,
         "active": total,
         "active_cpu": cpu,
     }))
@@ -1131,6 +1161,56 @@ mod tests {
         assert_eq!(count(owner_tok).await, 1, "owner sees their session");
         assert_eq!(count(other_tok).await, 0, "stranger sees nothing");
         assert_eq!(count(admin_tok).await, 1, "admin sees everything");
+    }
+
+    #[tokio::test]
+    async fn session_list_redacts_server_paths_for_non_admin_owners() {
+        // Regression: the owner-scoped inventory serialized the full
+        // SessionInfo, leaking the server-container filesystem path
+        // (manifest_path) and operator telemetry to any authenticated user.
+        // Owners get id/kind/media_id/position only; admins keep full detail.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = enforce_state(&tmp);
+        let owner_tok = mint(TEST_SECRET, "plex:42", "user");
+        let admin_tok = mint(TEST_SECRET, "plex:1", "admin");
+
+        let resp = authed(&state, "POST", "/api/transcode/grant", &owner_tok).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let list = |tok: String| {
+            let state = state.clone();
+            async move {
+                let resp = authed(&state, "GET", "/api/transcode/sessions", &tok).await;
+                assert_eq!(resp.status(), StatusCode::OK);
+                let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+                    .await
+                    .unwrap();
+                let v: Value = serde_json::from_slice(&body).unwrap();
+                v["sessions"].as_array().unwrap().clone()
+            }
+        };
+
+        let own = list(owner_tok).await;
+        assert_eq!(own.len(), 1);
+        let entry = own[0].as_object().unwrap();
+        // The sanitized projection: exactly these fields, nothing else.
+        for key in ["session_id", "media_kind", "media_id", "position_secs"] {
+            assert!(entry.contains_key(key), "owner view must keep {key}");
+        }
+        for key in ["manifest_path", "sub", "owner", "restarts"] {
+            assert!(
+                !entry.contains_key(key),
+                "owner view must NOT leak {key}: {entry:?}"
+            );
+        }
+        assert_eq!(entry["media_kind"], "movie");
+        assert_eq!(entry["media_id"], 7);
+
+        // Admins keep the full operational detail, paths included.
+        let admin = list(admin_tok).await;
+        let entry = admin[0].as_object().unwrap();
+        assert!(entry.contains_key("manifest_path"), "{entry:?}");
+        assert!(entry.contains_key("owner"), "{entry:?}");
     }
 
     #[tokio::test]
