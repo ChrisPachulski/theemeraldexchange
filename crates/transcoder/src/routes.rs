@@ -368,13 +368,28 @@ async fn grant(
     }
 }
 
-async fn session_manifest(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+/// `GET …/session/{id}/index.m3u8` — the session's live playlist. Owner-bound
+/// exactly like stop/seek/heartbeat: the manifest (and the segments it lists)
+/// is the actual library-derived MEDIA, so it must not be readable by any
+/// authenticated principal who merely knows/guesses a session id. The deployed
+/// path is unaffected: the backend proxy mints the internal principal from the
+/// stream token's sub on every forwarded request, so the player always arrives
+/// as the session's owner. Fail-closed: an ownerless session under a verified
+/// principal is admin-only (same posture as `session_authorized`).
+async fn session_manifest(
+    State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
+    Path(id): Path<String>,
+) -> Response {
+    let claims = claims.map(|Extension(c)| c);
+    let Some(owner) = state.sessions.session_owner(&id).await else {
+        return session_not_found();
+    };
+    if !session_authorized(&claims, owner.as_deref()) {
+        return forbidden();
+    }
     let Some(path) = state.sessions.manifest_path(&id).await else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "no such session" })),
-        )
-            .into_response();
+        return session_not_found(); // reaped between the owner check and here
     };
     match tokio::fs::read(&path).await {
         Ok(bytes) => (
@@ -397,17 +412,26 @@ async fn session_manifest(State(state): State<AppState>, Path(id): Path<String>)
 
 /// Serve one HLS asset (a `.ts` segment) from a session's dir. The HLS
 /// playlist references segments by bare filename, so the player fetches them
-/// relative to the manifest URL (`…/session/{id}/seg_00000.ts`). This is gated
-/// by the same internal-principal layer as the manifest, so library-derived
-/// bytes are never served unauthenticated.
+/// relative to the manifest URL (`…/session/{id}/seg_00000.ts`). Gated by the
+/// internal-principal layer AND owner-bound like the manifest above — segments
+/// are the library-derived bytes themselves, the most valuable thing on this
+/// surface, so they get the same owner-or-admin posture as stop/seek/heartbeat.
 ///
 /// The `index.m3u8` route is registered separately and is matched first by
 /// axum (static segment wins over the `{segment}` capture), so this handler
 /// only ever sees segment names.
 async fn session_segment(
     State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
     Path((id, segment)): Path<(String, String)>,
 ) -> Response {
+    let claims = claims.map(|Extension(c)| c);
+    let Some(owner) = state.sessions.session_owner(&id).await else {
+        return session_not_found();
+    };
+    if !session_authorized(&claims, owner.as_deref()) {
+        return forbidden();
+    }
     // `asset_path` rejects unknown sessions and any traversal-unsafe name.
     let Some(path) = state.sessions.asset_path(&id, &segment).await else {
         return (
@@ -1132,6 +1156,62 @@ mod tests {
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert!(state.sessions.is_empty().await);
+    }
+
+    #[tokio::test]
+    async fn manifest_and_segment_reads_enforce_owner_or_admin() {
+        // Regression: stop/seek/heartbeat were owner-bound but the manifest
+        // and segment GETs were not — any authenticated principal who knew a
+        // session id could read someone else's library-derived media bytes.
+        // Same fail-closed posture as the other session ops: wrong sub 403,
+        // owner 200, admin 200.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = enforce_state(&tmp);
+        let owner_tok = mint(TEST_SECRET, "plex:42", "user");
+        let intruder_tok = mint(TEST_SECRET, "plex:99", "user");
+        let admin_tok = mint(TEST_SECRET, "plex:1", "admin");
+
+        let resp = authed(&state, "POST", "/api/transcode/grant", &owner_tok).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        let sid = v["sessionId"].as_str().unwrap().to_string();
+
+        // Wait for the stub to have written the playlist + first segment.
+        let seg = state
+            .sessions
+            .asset_path(&sid, "seg_00000.ts")
+            .await
+            .unwrap();
+        for _ in 0..200 {
+            if seg.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let manifest_uri = format!("/api/transcode/session/{sid}/index.m3u8");
+        let segment_uri = format!("/api/transcode/session/{sid}/seg_00000.ts");
+
+        // A different (non-admin) sub must not read the media.
+        for uri in [&manifest_uri, &segment_uri] {
+            let resp = authed(&state, "GET", uri, &intruder_tok).await;
+            assert_eq!(resp.status(), StatusCode::FORBIDDEN, "{uri}");
+        }
+        // The owner streams their own session.
+        for uri in [&manifest_uri, &segment_uri] {
+            let resp = authed(&state, "GET", uri, &owner_tok).await;
+            assert_eq!(resp.status(), StatusCode::OK, "{uri}");
+        }
+        // Admins may read any session.
+        for uri in [&manifest_uri, &segment_uri] {
+            let resp = authed(&state, "GET", uri, &admin_tok).await;
+            assert_eq!(resp.status(), StatusCode::OK, "{uri}");
+        }
+
+        state.sessions.stop(&sid).await;
     }
 
     #[tokio::test]
