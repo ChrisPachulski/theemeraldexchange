@@ -444,6 +444,48 @@ def _migration_statements(sql: str) -> list[str]:
     return statements
 
 
+def _is_pragma_statement(stmt: str) -> bool:
+    """True if *stmt* is a PRAGMA once leading `--` comment lines are skipped.
+
+    Migrations use line comments only; block comments (/* */) would need a
+    real tokenizer and are rejected by review convention.
+    """
+    for line in stmt.splitlines():
+        text = line.strip()
+        if not text or text.startswith("--"):
+            continue
+        return text.upper().startswith("PRAGMA")
+    return False
+
+
+def _split_pragma_statements(
+    statements: list[str], name: str
+) -> tuple[list[str], list[str], list[str]]:
+    """Split a migration's statements into (leading PRAGMAs, body, trailing PRAGMAs).
+
+    SQLite silently ignores connection-level PRAGMAs (e.g. foreign_keys)
+    issued inside an open transaction, so the migrator must execute them
+    OUTSIDE the per-file transaction for them to take effect. Leading and
+    trailing PRAGMAs can be hoisted without changing semantics; a PRAGMA
+    sandwiched between DML/DDL cannot be honored while keeping the body
+    atomic, so that is rejected loudly instead of silently no-opping.
+    """
+    i, j = 0, len(statements)
+    while i < j and _is_pragma_statement(statements[i]):
+        i += 1
+    while j > i and _is_pragma_statement(statements[j - 1]):
+        j -= 1
+    leading, body, trailing = statements[:i], statements[i:j], statements[j:]
+    for stmt in body:
+        if _is_pragma_statement(stmt):
+            raise RuntimeError(
+                f"[migration] ABORT: {name} interleaves a PRAGMA between DML/DDL "
+                "statements. PRAGMAs are silently ignored inside the migration "
+                "transaction; move them to the top or bottom of the file."
+            )
+    return leading, body, trailing
+
+
 def _migrate(conn: sqlite3.Connection, *, db_path: Path) -> list[str]:
     applied: list[str] = []
 
@@ -529,14 +571,32 @@ def _migrate(conn: sqlite3.Connection, *, db_path: Path) -> list[str]:
             log.info("[migration] applying %s", f.name)
             t0 = time.monotonic()
 
-            with transaction(conn):
-                for statement in _migration_statements(lf_text):
+            leading, body, trailing = _split_pragma_statements(
+                _migration_statements(lf_text), f.name
+            )
+            # PRAGMAs must run OUTSIDE the transaction — sqlite silently
+            # ignores connection-level PRAGMAs (foreign_keys, ...) issued
+            # mid-transaction, which made e.g. 0005's `PRAGMA foreign_keys
+            # = OFF` a no-op. The DML/DDL body stays atomic.
+            fk_before = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+            for statement in leading:
+                cur.execute(statement)
+            try:
+                with transaction(conn):
+                    for statement in body:
+                        cur.execute(statement)
+                    cur.execute(
+                        "INSERT INTO schema_migrations(version, applied_at, checksum) "
+                        "VALUES (?, datetime('now'), ?)",
+                        (version, checksum),
+                    )
+            finally:
+                # Run trailing PRAGMAs and restore foreign_keys even when the
+                # body rolled back, so a failed migration can't leak
+                # foreign_keys=OFF into the rest of the boot.
+                for statement in trailing:
                     cur.execute(statement)
-                cur.execute(
-                    "INSERT INTO schema_migrations(version, applied_at, checksum) "
-                    "VALUES (?, datetime('now'), ?)",
-                    (version, checksum),
-                )
+                conn.execute(f"PRAGMA foreign_keys={'ON' if fk_before else 'OFF'}")
 
             elapsed_s = time.monotonic() - t0
             if elapsed_s > _SLOW_MIGRATION_THRESHOLD_S:

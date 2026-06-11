@@ -364,6 +364,34 @@ def test_fused_cast_weight_direction(conn) -> None:
     assert with_cast[CAST_RARE] > no_cast[CAST_RARE], "cast weight must ADD signal, not subtract"
 
 
+def test_fused_cast_topn_param_is_wired(conn) -> None:
+    # cast_topn is an optimizer-tunable param: score() must read it from
+    # params, not from the module DEFAULTS. LIB_A1 carries COMMON_PERSON at
+    # order_idx=1, so with cast_topn=1 (only order_idx < 1 counts) the library
+    # side of the COMMON overlap disappears and CAST_COMMON loses its cast
+    # bonus, while CAST_RARE (RARE_PERSON at order_idx=0 on both sides) keeps
+    # its boost. With the default cast_topn=10 both pairs overlap.
+    ctx = _ctx(conn)
+    default = {it.tmdb_id: it.score for it in
+               fused.score(ctx, conn, n=13, params={}).items}
+    topn1 = {it.tmdb_id: it.score for it in
+             fused.score(ctx, conn, n=13, params={"cast_topn": 1}).items}
+    assert topn1[CAST_COMMON] < default[CAST_COMMON], (
+        "cast_topn=1 must drop the order_idx=1 library cast overlap; "
+        "if this ties, score() is still reading DEFAULTS instead of params"
+    )
+    # CAST_RARE keeps its overlap (order_idx=0 on both sides); with the library
+    # cast vector shrunk to just the rare person its normalized weight can only
+    # grow, so the rare/common gap must widen.
+    assert topn1[CAST_RARE] >= default[CAST_RARE]
+    assert (topn1[CAST_RARE] - topn1[CAST_COMMON]) > (
+        default[CAST_RARE] - default[CAST_COMMON]
+    )
+    # The IDF cache must key on cast_topn — otherwise the second call would
+    # silently reuse df counts computed for a different cutoff.
+    assert ("movie", "cast", 1) in fused._IDF and ("movie", "cast", 10) in fused._IDF
+
+
 def test_fused_cold_start_fallback(conn) -> None:
     ctx = _ctx(conn, library=[], feedback=[], household_rejections=[])
     result = fused.score(ctx, conn, n=5, params={})

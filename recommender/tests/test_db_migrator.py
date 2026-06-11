@@ -494,3 +494,103 @@ def test_checksum_amnesty_does_not_cover_unknown_edits(
     monkeypatch.delenv("ALLOW_MIGRATION_CHECKSUM_MISMATCH", raising=False)
     with pytest.raises(RuntimeError, match="checksum mismatch"):
         migrate(db_path=db)
+
+
+# ---------------------------------------------------------------------------
+# (g) PRAGMA statements execute OUTSIDE the migration transaction
+# ---------------------------------------------------------------------------
+
+
+def _pragma_migrations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point CONFIG at a synthetic migrations dir; return it."""
+    from dataclasses import replace
+
+    import app.db as db_mod
+
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    monkeypatch.setattr(
+        db_mod, "CONFIG", replace(db_mod.CONFIG, migrations_dir=migrations_dir)
+    )
+    return migrations_dir
+
+
+def test_migration_pragma_foreign_keys_off_actually_takes_effect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A leading `PRAGMA foreign_keys = OFF` must be honored.
+
+    Regression: the migrator wrapped every statement in one transaction, and
+    sqlite silently ignores connection-level PRAGMAs issued mid-transaction —
+    so 0005-style `PRAGMA foreign_keys = OFF` headers were no-ops. The child
+    insert below violates its FK and only succeeds if the PRAGMA ran outside
+    the transaction.
+    """
+    from app.db import migrate
+
+    migrations_dir = _pragma_migrations(tmp_path, monkeypatch)
+    (migrations_dir / "0001_parent_child.sql").write_text(
+        "CREATE TABLE parent (id INTEGER PRIMARY KEY);\n"
+        "CREATE TABLE child (\n"
+        "  id INTEGER PRIMARY KEY,\n"
+        "  parent_id INTEGER NOT NULL REFERENCES parent(id)\n"
+        ");\n",
+        encoding="utf-8",
+    )
+    (migrations_dir / "0002_orphan_rebuild.sql").write_text(
+        "-- 0005-style rebuild prologue\n"
+        "PRAGMA foreign_keys = OFF;\n"
+        "INSERT INTO child(id, parent_id) VALUES (1, 999);\n"
+        "PRAGMA foreign_keys = ON;\n",
+        encoding="utf-8",
+    )
+
+    db = tmp_path / "exchange.db"
+    applied = migrate(db_path=db)
+    assert "0002_orphan_rebuild.sql" in applied
+
+    conn = _make_conn(db)
+    assert conn.execute("SELECT parent_id FROM child").fetchone()[0] == 999
+    conn.close()
+
+
+def test_migration_interleaved_pragma_is_rejected_loudly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A PRAGMA sandwiched between DML/DDL can't be honored atomically — abort."""
+    from app.db import migrate
+
+    migrations_dir = _pragma_migrations(tmp_path, monkeypatch)
+    (migrations_dir / "0001_interleaved.sql").write_text(
+        "CREATE TABLE a (id INTEGER PRIMARY KEY);\n"
+        "PRAGMA foreign_keys = OFF;\n"
+        "CREATE TABLE b (id INTEGER PRIMARY KEY);\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="interleaves a PRAGMA"):
+        migrate(db_path=tmp_path / "exchange.db")
+
+
+def test_migration_restores_foreign_keys_after_failed_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed body must not leak foreign_keys=OFF onto the connection."""
+    import app.db as db_mod
+    from app.db import connect
+
+    migrations_dir = _pragma_migrations(tmp_path, monkeypatch)
+    (migrations_dir / "0001_fails.sql").write_text(
+        "PRAGMA foreign_keys = OFF;\n"
+        "INSERT INTO does_not_exist VALUES (1);\n",
+        encoding="utf-8",
+    )
+    db = tmp_path / "exchange.db"
+    conn = connect(db_path=db)
+    try:
+        with pytest.raises(sqlite3.OperationalError):
+            db_mod._migrate(conn, db_path=db)
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1, (
+            "foreign_keys must be restored to ON after the rollback"
+        )
+    finally:
+        conn.close()

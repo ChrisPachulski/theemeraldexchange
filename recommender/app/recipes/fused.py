@@ -58,12 +58,14 @@ DEFAULTS: dict[str, float | int | str] = {
 KEY_CREW_JOBS = ("Director", "Writer", "Screenplay", "Story", "Creator", "Author", "Novel")
 EMBED_EPS = 1e-9
 
-# Global IDF over the catalog, cached per (kind, key). df is the number of
-# titles a person appears in (top-billed cast / key crew). The nightly ingest
+# Global IDF over the catalog, cached per (kind, which, cast_topn). df is the
+# number of titles a person appears in (top-billed cast / key crew). cast_topn
+# is part of the key because it changes the df counts (only relevant for
+# which == "cast"; crew entries always use cast_topn=0). The nightly ingest
 # rehydrates title_cast/title_crew via DELETE+INSERT, so each entry carries the
 # table_generation fingerprint it was computed against and is recomputed when
 # the underlying tables move.
-_IDF: dict[tuple[str, str], tuple[tuple, dict[int, float]]] = {}
+_IDF: dict[tuple[str, str, int], tuple[tuple, dict[int, float]]] = {}
 
 
 def _normalize(v: np.ndarray) -> np.ndarray:
@@ -71,8 +73,13 @@ def _normalize(v: np.ndarray) -> np.ndarray:
     return v / n if n > 0 else v
 
 
-def _idf_map(conn: sqlite3.Connection, kind: str, which: str) -> dict[int, float]:
-    key = (kind, which)
+def _idf_map(
+    conn: sqlite3.Connection,
+    kind: str,
+    which: str,
+    cast_topn: int = int(DEFAULTS["cast_topn"]),
+) -> dict[int, float]:
+    key = (kind, which, cast_topn if which == "cast" else 0)
     gen = table_generation(conn, "titles", "title_cast" if which == "cast" else "title_crew")
     cached = _IDF.get(key)
     if cached is not None and cached[0] == gen:
@@ -81,7 +88,7 @@ def _idf_map(conn: sqlite3.Connection, kind: str, which: str) -> dict[int, float
         rows = conn.execute(
             "SELECT person_id, COUNT(DISTINCT tmdb_id) AS df FROM title_cast "
             "WHERE kind = ? AND order_idx < ? GROUP BY person_id",
-            (kind, int(DEFAULTS["cast_topn"])),
+            (kind, cast_topn),
         ).fetchall()
     else:
         placeholders = ",".join("?" for _ in KEY_CREW_JOBS)
@@ -99,7 +106,12 @@ def _idf_map(conn: sqlite3.Connection, kind: str, which: str) -> dict[int, float
 
 
 def _person_vectors(
-    conn: sqlite3.Connection, kind: str, ids: list[int], which: str, idf: dict[int, float]
+    conn: sqlite3.Connection,
+    kind: str,
+    ids: list[int],
+    which: str,
+    idf: dict[int, float],
+    cast_topn: int = int(DEFAULTS["cast_topn"]),
 ) -> dict[int, dict[int, float]]:
     """tmdb_id -> {person_id: l2-normalized idf weight} for the given title ids."""
     out: dict[int, dict[int, float]] = {}
@@ -111,7 +123,7 @@ def _person_vectors(
         if which == "cast":
             q = (f"SELECT tmdb_id, person_id FROM title_cast "
                  f"WHERE kind = ? AND order_idx < ? AND tmdb_id IN ({ph})")
-            args = (kind, int(DEFAULTS["cast_topn"]), *batch)
+            args = (kind, cast_topn, *batch)
         else:
             jph = ",".join("?" for _ in KEY_CREW_JOBS)
             q = (f"SELECT tmdb_id, person_id FROM title_crew "
@@ -168,6 +180,7 @@ def score(ctx: UserContext, conn: sqlite3.Connection, *, n: int, params: dict) -
     w_cast = float(p["cast_weight"])
     w_crew = float(p["crew_weight"])
     pop_w = float(p["popularity_weight"])
+    cast_topn = int(p["cast_topn"])
 
     pos = ctx.positive_centroid()
     if pos is None:
@@ -206,9 +219,9 @@ def score(ctx: UserContext, conn: sqlite3.Connection, *, n: int, params: dict) -
 
     fused = w_content * content
     if w_cast:
-        idf_c = _idf_map(conn, ctx.kind, "cast")
-        cv = _person_vectors(conn, ctx.kind, cand_ids, "cast", idf_c)
-        lv = _person_vectors(conn, ctx.kind, lib_ids, "cast", idf_c)
+        idf_c = _idf_map(conn, ctx.kind, "cast", cast_topn)
+        cv = _person_vectors(conn, ctx.kind, cand_ids, "cast", idf_c, cast_topn)
+        lv = _person_vectors(conn, ctx.kind, lib_ids, "cast", idf_c, cast_topn)
         fused = fused + w_cast * _block_bonus(cand_ids, lib_ids, cv, lv)
     if w_crew:
         idf_k = _idf_map(conn, ctx.kind, "crew")
