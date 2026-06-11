@@ -546,7 +546,7 @@ function DiscoverResults({ query, loading, error, results, libraryByTmdb, onCard
   if (error) {
     return (
       <div className="tv-tab__error">
-        <p>Couldn't reach Radarr. Check that the dev server has RADARR_API_KEY in .env.local.</p>
+        <p>Couldn't reach Radarr — the server may be down or misconfigured.</p>
         <p className="tv-tab__error-detail">{String(error)}</p>
       </div>
     )

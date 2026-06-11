@@ -82,7 +82,7 @@ export function DownloadsTab() {
     return (
       <section className="downloads-tab">
         <div className="downloads-tab__error">
-          <p>Couldn't reach SABnzbd. Check that the dev server has SAB_API_KEY in .env.local.</p>
+          <p>Couldn't reach SABnzbd — the server may be down or misconfigured.</p>
           <p className="downloads-tab__error-detail">{String(queue.error)}</p>
         </div>
       </section>
