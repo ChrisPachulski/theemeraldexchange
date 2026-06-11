@@ -32,7 +32,6 @@ vectors into the sqlite-vec index as a registered production recipe.
 """
 from __future__ import annotations
 
-import math
 import sys
 from pathlib import Path
 
@@ -89,7 +88,6 @@ def build_feature_store(conn, kind: str, min_votes: int) -> dict:
     if key in _STORE:
         return _STORE[key]
     # Import here to avoid an import cycle with recsys_loop.
-    import recsys_loop as L
     from app.db import deserialize_f32
     from app.context import title_key_variants
     from app.retrieval import AVAILABLE_TITLE_PREDICATE
@@ -183,8 +181,9 @@ def franchise_stratified(conn, *, kind: str, weights: dict, pool_size: int = 800
 
     def is_creator_twin(t: int) -> bool:
         ct, kt = cast.get(t, set()), crew.get(t, set())
-        for l in pos_set:
-            if l != t and (len(ct & cast.get(l, set())) >= 2 or len(kt & crew.get(l, set())) >= 1):
+        for lib_item in pos_set:
+            if lib_item != t and (len(ct & cast.get(lib_item, set())) >= 2
+                                  or len(kt & crew.get(lib_item, set())) >= 1):
                 return True
         return False
 
@@ -246,7 +245,6 @@ def evaluate_fused(conn, *, kind: str, weights: dict, mode: str = "ann",
     """
     import recsys_loop as L
     from app.retrieval import retrieve_candidates
-    from app.context import title_key_variants
 
     store = build_feature_store(conn, kind, min_votes)
     index = store["index"]
@@ -279,7 +277,6 @@ def evaluate_fused(conn, *, kind: str, weights: dict, mode: str = "ann",
     full_keys = set(freq)
 
     full_ids = store["ids"]
-    full_idx_all = np.arange(len(full_ids))
 
     agg = {f"recall@{k}": 0.0 for k in KS}
     agg.update({f"ndcg@{k}": 0.0 for k in KS})
