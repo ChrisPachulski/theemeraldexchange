@@ -15,10 +15,13 @@
 # Base switched from alpine (musl) to slim (glibc) because:
 #   1. napi-rs linux-x64-gnu artifact is glibc; alpine couldn't load it
 #      without rebuilding for musl (extra toolchain in stage 1).
-#   2. better-sqlite3 ships prebuilt glibc binaries for node 24 — drops
-#      the python3+make+g++ install the alpine image needed.
-#   3. Image size delta is ~50 MB. Acceptable given the build-toolchain
-#      drop and the new linux-x64-gnu .node payload.
+#   2. better-sqlite3 is compiled from source either way — it has NO
+#      prebuilt binary for node 24's ABI — so the npm ci layer below
+#      installs python3+make+g++ and purges them in the same layer.
+#      (An earlier revision of this header claimed a prebuilt glibc
+#      binary existed; the RUN block below was always the reality.)
+#   3. Image size delta is ~50 MB. Acceptable given the glibc
+#      compatibility and the new linux-x64-gnu .node payload.
 
 # Digest-pinned for reproducible builds. The human tag is kept for readability;
 # the digest is the source of truth. Resolve a new digest with:
