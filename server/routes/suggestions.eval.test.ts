@@ -4,10 +4,14 @@
 // programmable mock Anthropic so each iteration of the improvement
 // loop can produce a measurable score per rubric dimension.
 //
-// Output: .planning/ai-recommendations-loop/eval-runs/<timestamp>.json
-// plus a stdout table.
+// Output: <RECS_EVAL_OUT_DIR or $TMPDIR/eex-eval-runs>/<timestamp>.json
+// plus a stdout table. The report is written from an afterAll hook so
+// every scenario test stands alone — running a subset (--testNamePattern,
+// .only) or a shuffled order still passes and still emits a report for
+// whichever scenarios actually ran. Artifacts never land in the repo
+// tree (they used to accumulate under .planning/ as untracked junk).
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import { promises as fs } from 'fs'
 import { tmpdir } from 'os'
 import { join, resolve } from 'path'
@@ -771,9 +775,17 @@ describe('AI recommendation section — eval scenarios', () => {
     expect(results.every((r) => r.status === 200)).toBe(true)
   })
 
-  it('writes consolidated report to .planning/ai-recommendations-loop/eval-runs/', async () => {
+  // Report writer — an afterAll hook, NOT a test, so the suite is
+  // order-independent: no test depends on the other scenarios having
+  // populated REPORT first. Skips silently when zero scenarios ran
+  // (e.g. a --testNamePattern that matches nothing).
+  afterAll(async () => {
+    if (REPORT.length === 0) return
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-    const outDir = resolve(__dirname, '../../.planning/ai-recommendations-loop/eval-runs')
+    // Artifacts go OUTSIDE the repo tree (os tmpdir by default) so eval
+    // runs never accumulate untracked files under .planning/. Override
+    // with RECS_EVAL_OUT_DIR when the loop wants a stable location.
+    const outDir = process.env['RECS_EVAL_OUT_DIR'] ?? join(tmpdir(), 'eex-eval-runs')
     await fs.mkdir(outDir, { recursive: true })
     const outPath = join(outDir, `${stamp}.json`)
     // Aggregate per dimension across scenarios (simple mean, rounded)
@@ -816,7 +828,6 @@ describe('AI recommendation section — eval scenarios', () => {
     console.log('Overall (mean across scenarios):', JSON.stringify(overall))
     console.log('Realistic scenarios only:', JSON.stringify(realisticOverall))
     console.log(stuckIndicator)
-    expect(REPORT.length).toBeGreaterThan(0)
   })
 })
 
