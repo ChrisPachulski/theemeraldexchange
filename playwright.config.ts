@@ -26,6 +26,14 @@ import { defineConfig, devices } from '@playwright/test'
 // The integration tiers use ports 3105 (backend) / 3106 (stubs) / 5175
 // (Vite) so they can never collide with a developer's running `npm run dev`
 // (3001/5173).
+//
+// The tiers are NOT meant to share one `playwright test` invocation: the
+// mocked specs deliberately leave some /api/* endpoints unmocked (no
+// backend exists in their topology, so those fetches just fail quietly),
+// but against the integration stack the same endpoints return REAL 401s
+// (no session cookie), which the SPA correctly treats as sign-out — and
+// the mocked specs flake. `npm run test:e2e:all` therefore chains the
+// tiers as separate runs, each on its own server topology.
 
 const INTEGRATION = process.env.PW_INTEGRATION === '1'
 const BACKEND_PORT = 3105
