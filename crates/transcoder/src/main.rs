@@ -47,6 +47,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "configured HW encoder unavailable; falling back to libx264 (CPU)"
         );
     }
+    // Verify the fallback actually exists: resolve() demotes to Cpu blindly,
+    // but an ffmpeg built without libx264 has NO working software encoder —
+    // every video re-encode would crash-loop to the restart cap and 503.
+    // Fail loudly at boot (error log → Glitchtip) rather than at first
+    // playback. We deliberately do NOT abort: copy-remux sessions (the common
+    // local-library case) use no encoder and still work.
+    if resolved == HwEncoder::Cpu && available.cpu_fallback_missing() {
+        tracing::error!(
+            ffmpeg_bin,
+            "ffmpeg has NO usable H.264 encoder: libx264 is missing and no HW encoder \
+             survived detection — every video re-encode will fail (remux-only service); \
+             fix the ffmpeg build/image"
+        );
+    }
     tracing::info!(?resolved, available = ?available, "transcoder encoder resolved");
 
     let mut state = AppState::from_env_with_encoder(resolved).map_err(|e| {
