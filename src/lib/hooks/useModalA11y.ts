@@ -1,5 +1,26 @@
 import { useEffect, useRef } from 'react'
 
+// The repo's modal a11y contract has exactly TWO sanctioned implementations
+// (a deliberate decision, not drift):
+//
+//   1. Plain-div modals (`role="dialog"` + `aria-modal`) MUST take this hook
+//      for the focus trap, Escape-to-close, and focus restoration the role
+//      promises. Current roster: MediaPlayer, EpisodePicker, the IPTV player
+//      modals (LiveTab/VodTab/IptvSeriesTab), ConcurrencyLimitModal, and
+//      ConnectionsWidget. These render inline (no top-layer) because they
+//      host <video> engines or anchor to surrounding layout.
+//
+//   2. Native `<dialog>` modals (DetailModal, AddMovieModal, AddSeriesModal,
+//      ConfirmModal — see useDialogDismiss) do NOT take this hook: the
+//      browser's showModal() already provides the focus trap, Escape
+//      semantics, background inertness, and focus restoration natively.
+//      Layering this trap on top would double-handle Escape and fight the
+//      user agent's focus logic.
+//
+// Adding a third pattern (a role="dialog" div WITHOUT this hook, or a
+// hand-rolled trap) is a review error. Cheap audit: grep role="dialog" and
+// confirm the file imports useModalA11y.
+
 const FOCUSABLE = [
   'a[href]',
   'button:not([disabled])',
