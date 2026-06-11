@@ -873,7 +873,10 @@ mod tests {
             SubtitleOp::None,
         );
         let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Cpu).join(" ");
-        assert!(j.contains("-b:v 6000k"), "scaled output keys the ladder: {j}");
+        assert!(
+            j.contains("-b:v 6000k"),
+            "scaled output keys the ladder: {j}"
+        );
     }
 
     #[test]
@@ -981,10 +984,7 @@ mod tests {
         assert_eq!(escape_filter_path("/lib/a:b.mkv"), "/lib/a\\:b.mkv");
         assert_eq!(escape_filter_path("/lib/a\\b.mkv"), "/lib/a\\\\b.mkv");
         // All three composed; the quote handling never re-escapes itself.
-        assert_eq!(
-            escape_filter_path("a'b:c\\d"),
-            "a'\\''b\\:c\\\\d"
-        );
+        assert_eq!(escape_filter_path("a'b:c\\d"), "a'\\''b\\:c\\\\d");
     }
 
     #[test]
@@ -1248,10 +1248,7 @@ mod tests {
     fn hls_flags_always_present() {
         let plan = transcode(VideoOp::Copy, AudioOp::Copy, SubtitleOp::None);
         let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Cpu).join(" ");
-        assert!(
-            j.contains("-hls_flags delete_segments+append_list"),
-            "{j}"
-        );
+        assert!(j.contains("-hls_flags delete_segments+append_list"), "{j}");
         assert!(
             j.ends_with("/tmp/s/index.m3u8"),
             "playlist is last arg: {j}"

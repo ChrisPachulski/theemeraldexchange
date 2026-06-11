@@ -92,7 +92,12 @@ fn sub_namespace_vector() {
                 emerald_contracts::Provider::Local => "local",
                 emerald_contracts::Provider::Apple => "apple",
             };
-            assert_eq!(provider, case["provider"].as_str().unwrap(), "vector {}", name);
+            assert_eq!(
+                provider,
+                case["provider"].as_str().unwrap(),
+                "vector {}",
+                name
+            );
             assert_eq!(got.id, case["id"].as_str().unwrap(), "vector {}", name);
             assert_eq!(got.raw, input, "vector {}", name);
         } else {
@@ -152,9 +157,8 @@ fn device_token_kid_rotation_vector() {
         let name = case["name"].as_str().unwrap();
         match case["expectedResult"].as_str().unwrap() {
             "accepted" => {
-                let claims: DeviceClaims =
-                    serde_json::from_value(case["expectedClaims"].clone())
-                        .unwrap_or_else(|e| panic!("vector {}: bad expectedClaims: {}", name, e));
+                let claims: DeviceClaims = serde_json::from_value(case["expectedClaims"].clone())
+                    .unwrap_or_else(|e| panic!("vector {}: bad expectedClaims: {}", name, e));
                 let kid = case["kid"].as_str().unwrap();
                 let key = keys.get(kid).expect("kid present in keyMap");
 
@@ -224,8 +228,11 @@ fn internal_principal_round_trip_vector() {
     // other alg/enc live in the jwe module's own tests).
     let header_b64 = token.split('.').next().unwrap();
     let header: Value = serde_json::from_slice(
-        &base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, header_b64)
-            .expect("header b64u"),
+        &base64::Engine::decode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            header_b64,
+        )
+        .expect("header b64u"),
     )
     .expect("header JSON");
     assert_eq!(header, v["jwe_shape"]["protected_header"]);
@@ -233,7 +240,10 @@ fn internal_principal_round_trip_vector() {
     // negative_checks: nonce-uniqueness — same claims+key must yield a
     // different compact string every encrypt (random IV).
     let token2 = internal_principal::encrypt(keys.get(kid).unwrap(), kid, &claims);
-    assert_ne!(token, token2, "nonce reuse: two encrypts produced identical JWE");
+    assert_ne!(
+        token, token2,
+        "nonce reuse: two encrypts produced identical JWE"
+    );
 
     // negative_checks: expired-rejected — enforce_time_window fires past exp.
     assert!(matches!(

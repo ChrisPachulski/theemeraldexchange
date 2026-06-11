@@ -63,6 +63,11 @@ async function sessionCookie(role: 'admin' | 'user' = 'user') {
 // --- Cookieless requests must 401 (not 200, not 404) -------------------
 
 describe('app authz — cookieless requests to protected trees are 401', () => {
+  // The /api/iptv tree is unmounted under IPTV_DISABLED (the CI reviewer-
+  // insurance matrix variant, contract §13.3) — there it 404s, which is the
+  // correct "tree absent" response, not an auth regression. Only assert the
+  // 401 gate on it when the tree is actually mounted.
+  const iptvMounted = process.env.IPTV_DISABLED !== '1' && process.env.IPTV_DISABLED !== 'true'
   const protectedGets: Array<{ label: string; path: string }> = [
     { label: '/api/me', path: '/api/me' },
     { label: '/api/media/movies', path: '/api/media/movies' },
@@ -72,7 +77,7 @@ describe('app authz — cookieless requests to protected trees are 401', () => {
     { label: '/api/sab/api?mode=queue', path: '/api/sab/api?mode=queue' },
     { label: '/api/sonarr/api/v3/series', path: '/api/sonarr/api/v3/series' },
     { label: '/api/radarr/api/v3/movie', path: '/api/radarr/api/v3/movie' },
-    { label: '/api/iptv/live', path: '/api/iptv/live' },
+    ...(iptvMounted ? [{ label: '/api/iptv/live', path: '/api/iptv/live' }] : []),
     { label: '/api/users (admin tree)', path: '/api/users' },
   ]
 

@@ -185,7 +185,10 @@ async fn kill_child(child: &mut Child, id: &str) {
             libc::kill(pid as i32, libc::SIGTERM);
         }
     }
-    if tokio::time::timeout(KILL_GRACE, child.wait()).await.is_err() {
+    if tokio::time::timeout(KILL_GRACE, child.wait())
+        .await
+        .is_err()
+    {
         tracing::warn!(session = %id, "ffmpeg ignored SIGTERM; escalating to SIGKILL");
         let _ = child.start_kill();
         let _ = child.wait().await;
@@ -336,7 +339,11 @@ async fn max_segment_index(dir: &PathBuf) -> Option<u64> {
 /// time since the last successful spawn would reset the budget on every retry
 /// and livelock a permanently-broken respawn.
 fn effective_restart_count(prev: u32, ran_for: Duration) -> u32 {
-    if ran_for >= HEALTHY_RUN_RESET { 0 } else { prev }
+    if ran_for >= HEALTHY_RUN_RESET {
+        0
+    } else {
+        prev
+    }
 }
 
 /// Approximate furthest-encoded position for a crash respawn: the offset the
@@ -344,8 +351,7 @@ fn effective_restart_count(prev: u32, ran_for: Duration) -> u32 {
 /// segments it wrote (`next_number - prev_number`) times the segment length.
 /// Pure so the math is unit-testable without a real crash.
 fn crash_resume_secs(spawn_secs: u64, prev_number: u64, next_number: u64) -> u64 {
-    spawn_secs
-        + next_number.saturating_sub(prev_number) * u64::from(crate::args::HLS_SEGMENT_SECS)
+    spawn_secs + next_number.saturating_sub(prev_number) * u64::from(crate::args::HLS_SEGMENT_SECS)
 }
 
 /// Shared, cheap-to-clone manager (Arc'd map + config).
@@ -979,25 +985,24 @@ impl SessionManager {
                     // change anything: a seek revives the session, a stop (or
                     // the session being dropped) ends it.
                     ChildSlot::Completed => match ctl.recv().await {
-                        Some(SessionCmd::Restart { ack }) => match this
-                            .respawn(&id, RespawnMode::Seek)
-                            .await
-                        {
-                            Respawn::Ok(new) => {
-                                let _ = ack.send(true);
-                                spawned_at = std::time::Instant::now();
-                                ChildSlot::Running(new)
+                        Some(SessionCmd::Restart { ack }) => {
+                            match this.respawn(&id, RespawnMode::Seek).await {
+                                Respawn::Ok(new) => {
+                                    let _ = ack.send(true);
+                                    spawned_at = std::time::Instant::now();
+                                    ChildSlot::Running(new)
+                                }
+                                Respawn::Failed => {
+                                    let _ = ack.send(false);
+                                    last_run = Duration::ZERO;
+                                    ChildSlot::Crashed
+                                }
+                                Respawn::Gone => {
+                                    let _ = ack.send(false);
+                                    return;
+                                }
                             }
-                            Respawn::Failed => {
-                                let _ = ack.send(false);
-                                last_run = Duration::ZERO;
-                                ChildSlot::Crashed
-                            }
-                            Respawn::Gone => {
-                                let _ = ack.send(false);
-                                return;
-                            }
-                        },
+                        }
                         Some(SessionCmd::Shutdown { ack }) => {
                             let _ = ack.send(());
                             return;
@@ -1484,7 +1489,10 @@ mod tests {
         );
         // A short-lived child keeps the accumulated count (crash-loop).
         assert_eq!(effective_restart_count(2, almost), 2);
-        assert_eq!(effective_restart_count(MAX_RESTARTS, Duration::ZERO), MAX_RESTARTS);
+        assert_eq!(
+            effective_restart_count(MAX_RESTARTS, Duration::ZERO),
+            MAX_RESTARTS
+        );
         // A failed respawn reports ZERO run time and must never reset —
         // otherwise a permanently-broken respawn retries forever.
         assert_eq!(effective_restart_count(1, Duration::ZERO), 1);
@@ -1514,10 +1522,7 @@ mod tests {
         }
         assert_eq!(max_segment_index(&dir).await, Some(7));
         // Unreadable/missing dir → None, not a panic.
-        assert_eq!(
-            max_segment_index(&tmp.path().join("nope")).await,
-            None
-        );
+        assert_eq!(max_segment_index(&tmp.path().join("nope")).await, None);
     }
 
     /// A stub that CRASHES on its first invocation after writing two segments
@@ -1613,10 +1618,7 @@ mod tests {
         let dir = manifest.parent().unwrap().to_path_buf();
 
         assert!(mgr.seek(&id, 120).await, "seek must succeed");
-        let args = wait_for_args(&dir.join("args.txt"), |a| {
-            a.iter().any(|s| s == "120")
-        })
-        .await;
+        let args = wait_for_args(&dir.join("args.txt"), |a| a.iter().any(|s| s == "120")).await;
         let ss = args.iter().position(|s| s == "-ss").expect("-ss");
         assert_eq!(args[ss + 1], "120", "seek target honored exactly");
         let sn = args

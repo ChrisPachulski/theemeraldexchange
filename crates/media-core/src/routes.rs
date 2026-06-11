@@ -1409,7 +1409,9 @@ mod tests {
             .unwrap();
         assert_eq!(before, 2);
 
-        let removed = crate::scanner::gc_orphan_watch_state(&state.db).await.unwrap();
+        let removed = crate::scanner::gc_orphan_watch_state(&state.db)
+            .await
+            .unwrap();
         assert_eq!(removed, 1, "exactly the orphan row is reaped");
         let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM media_watch_state")
             .fetch_one(&state.db.pool)
