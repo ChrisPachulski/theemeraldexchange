@@ -1,12 +1,19 @@
 //! ffmpeg argument assembly (§4.2 HLS invocation, §4.4 encoder selection).
 //!
 //! Pure string assembly from a [`TranscodePlan`] → a `Vec<String>` ready for
-//! `tokio::process::Command::args`. The HLS flags mirror the shipped
-//! `iptvRemux.ts` invocation (`-f hls -hls_time 4 -hls_list_size 8 -hls_flags
-//! delete_segments+append_list`), with `omit_endlist` added ONLY for live
-//! media kinds — finite VOD (movies/episodes) must get `EXT-X-ENDLIST` on
-//! clean EOF so players treat a finished title as finished, not as a live
-//! stream forever. Snapshot-tested per plan and per kind.
+//! `tokio::process::Command::args`. The HLS muxer is configured per media kind:
+//!
+//! * LIVE (iptv/channel) — paced to wall-clock with `-re` and a bounded sliding
+//!   window (`-hls_list_size 8 -hls_flags delete_segments+append_list+omit_endlist`),
+//!   mirroring `iptvRemux.ts`. Only the live edge is ever on disk.
+//! * VOD (movies/episodes, the default) — transcoded full-speed and retained
+//!   WHOLE (`-hls_list_size 0 -hls_flags append_list -hls_playlist_type event`,
+//!   no `-re`, no delete). The EVENT playlist grows as the encoder races ahead,
+//!   so the player buffers deep and seeks to any produced position; a clean EOF
+//!   appends `EXT-X-ENDLIST` for full seek-to-end. Requires durable scratch
+//!   sized for a whole title (see docker-compose.yml), not a RAM tmpfs.
+//!
+//! Snapshot-tested per plan and per kind.
 
 use crate::plan::{AudioOp, SubtitleOp, TranscodePlan, VideoOp};
 
@@ -99,9 +106,10 @@ pub(crate) const VAAPI_RENDER_NODE: &str = "/dev/dri/renderD128";
 /// re-encode keyframe cadence (`-force_key_frames`), which MUST stay in lockstep:
 /// the HLS muxer can only cut a segment at a keyframe, so if the encoder's GOP
 /// runs longer than this the first segment can't close until the next native
-/// keyframe — tens of seconds in. Under `-re` (real-time pacing) that pushes the
-/// first segment past the backend's manifest-readiness probe, and the player is
-/// handed a not-yet-written playlist (503) → a grey rectangle stuck at 0:00.
+/// keyframe — tens of seconds in. That pushes the first segment past the
+/// backend's manifest-readiness probe, and the player is handed a not-yet-written
+/// playlist (503) → a grey rectangle stuck at 0:00. (Most acute for live `-re`
+/// pacing, but the cadence pin matters for full-speed VOD re-encodes too.)
 pub(crate) const HLS_SEGMENT_SECS: u32 = 4;
 
 /// Is this media kind a LIVE source (an unbounded stream with no EOF)?
@@ -299,17 +307,19 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
         a.push(start_secs.to_string());
     }
 
-    // Throttle reading to the input's native rate so the HLS sliding window
-    // (delete_segments + hls_list_size 8) tracks real playback instead of
-    // racing to EOF. WITHOUT -re ffmpeg remuxes a whole movie in seconds,
-    // deletes every segment behind the 8-deep window, then exits cleanly —
-    // the player 404s on segments that already scrolled off (stuck grey at
-    // 0:00) and the supervisor mistakes the early exit for a crash and
-    // restart-loops until it tears the session down. With -re the producer
-    // tracks the consumer, the 2 GB scratch tmpfs only ever holds the live
-    // window, and ffmpeg runs for the title's real duration. -re is an input
-    // option, so it sits with -ss just before -i.
-    push(&mut a, "-re");
+    // Real-time input pacing (`-re`) is for LIVE sources ONLY. A live remux
+    // streams at wall-clock rate, and its HLS sliding window (delete_segments +
+    // hls_list_size 8) tracks the consumer so the bounded scratch only ever
+    // holds the live edge. Finite VOD titles do the OPPOSITE: they transcode AS
+    // FAST AS THE ENCODER ALLOWS and retain every segment (list_size 0, no
+    // delete — see the HLS muxer block), so the player buffers deep ahead of
+    // playback and can seek to anything already produced. Pacing a VOD title
+    // with -re is exactly what pinned the buffer to the live edge (~one segment
+    // at a time) and made forward-seeking impossible — segments past "now"
+    // didn't exist yet. -re is an input option, so it sits with -ss before -i.
+    if is_live_media_kind(media_kind) {
+        push(&mut a, "-re");
+    }
 
     push(&mut a, "-fflags");
     push(&mut a, "+genpts");
@@ -462,27 +472,32 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
     push(&mut a, "hls");
     push(&mut a, "-hls_time");
     a.push(HLS_SEGMENT_SECS.to_string());
-    push(&mut a, "-hls_list_size");
-    push(&mut a, "8");
-    push(&mut a, "-hls_flags");
-    // `omit_endlist` is correct ONLY for live sources: a finite VOD title with
-    // it never gets `EXT-X-ENDLIST`, so when ffmpeg reaches EOF the player
-    // keeps treating the title as a live stream — polling the manifest forever
-    // and never firing its natural ended handling. For finite kinds we drop it
-    // so a CLEAN ffmpeg exit writes ENDLIST (the supervisor parks the session
-    // in `Completed` and keeps the segments for the player to drain).
-    //
-    // `delete_segments` + ENDLIST is an accepted combination here: the sliding
-    // window (hls_list_size 8) keeps pruning during playback, so the finished
-    // playlist holds only the LAST ~8 segments + ENDLIST. That is fine because
-    // a player paced by `-re` is already at the live edge when EOF lands, and
-    // any backward seek/resume goes through a FRESH grant (the server bakes
-    // `-ss` into a new session) by design — nothing ever re-reads pruned
-    // segments from a finished session.
     if is_live_media_kind(media_kind) {
+        // LIVE: a bounded sliding window on the scratch disk. delete_segments
+        // prunes the oldest as new ones arrive (only the live edge is kept), and
+        // omit_endlist keeps the playlist "live" so a player treats an upstream
+        // death as a retryable gap, not a clean programme end. Paced by -re
+        // above so the producer tracks the consumer and the window never races.
+        push(&mut a, "-hls_list_size");
+        push(&mut a, "8");
+        push(&mut a, "-hls_flags");
         push(&mut a, "delete_segments+append_list+omit_endlist");
     } else {
-        push(&mut a, "delete_segments+append_list");
+        // VOD: retain EVERY segment (list_size 0, no delete_segments) and mark
+        // the playlist EVENT so hls.js treats it as a growing, fully-seekable
+        // VOD — the player buffers as far ahead as the (faster-than-realtime)
+        // encoder has reached and can seek to any produced position, with full
+        // seek-to-end once a clean EOF appends EXT-X-ENDLIST (the supervisor
+        // parks the session `Completed` and keeps the segments for drain). A
+        // backward seek/resume no longer needs a fresh -ss grant — the segment
+        // is already on disk. This requires durable scratch sized for a whole
+        // title, NOT the old 2 GB RAM tmpfs (see docker-compose.yml).
+        push(&mut a, "-hls_list_size");
+        push(&mut a, "0");
+        push(&mut a, "-hls_flags");
+        push(&mut a, "append_list");
+        push(&mut a, "-hls_playlist_type");
+        push(&mut a, "event");
     }
     // Monotonic segment numbering across supervisor respawns (see ArgSpec).
     // Omitted at 0 — ffmpeg's default — so fresh sessions keep the proven argv.
@@ -686,38 +701,75 @@ mod tests {
 
     #[test]
     fn remux_copy_copy_hls_snapshot() {
+        // The historical wrappers default to a finite/VOD kind: no -re, retain
+        // every segment (list_size 0, append_list), EVENT playlist for a growing
+        // seekable VOD.
         let plan = transcode(VideoOp::Copy, AudioOp::Copy, SubtitleOp::None);
         let args = ffmpeg_args(&plan, "/lib/m.mkv", "/tmp/sess", 0, HwEncoder::Cpu);
         let joined = args.join(" ");
         assert_eq!(
             joined,
-            "-hide_banner -loglevel warning -nostdin -re -fflags +genpts -i /lib/m.mkv \
+            "-hide_banner -loglevel warning -nostdin -fflags +genpts -i /lib/m.mkv \
              -map 0:v:0 -map 0:a:0? -c:v copy -c:a copy \
-             -f hls -hls_time 4 -hls_list_size 8 -hls_flags delete_segments+append_list \
+             -f hls -hls_time 4 -hls_list_size 0 -hls_flags append_list \
+             -hls_playlist_type event \
              -hls_segment_filename /tmp/sess/seg_%05d.ts /tmp/sess/index.m3u8"
         );
     }
 
     #[test]
-    fn realtime_throttle_present_and_precedes_input() {
-        // -re must be emitted (so ffmpeg doesn't race a whole title to EOF and
-        // blow past the sliding window) and must sit before -i as an input opt.
-        let plan = transcode(VideoOp::Copy, AudioOp::Copy, SubtitleOp::None);
-        let args = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Cpu);
+    fn live_kinds_pace_with_re_before_input() {
+        // -re is emitted for LIVE sources (so the producer tracks the consumer
+        // and the sliding window never races) and must sit before -i.
+        let args = args_for_kind("live");
         let re = args.iter().position(|s| s == "-re").expect("missing -re");
         let i = args.iter().position(|s| s == "-i").expect("missing -i");
         assert!(re < i, "-re must precede -i");
     }
 
     #[test]
-    fn realtime_throttle_coexists_with_seek() {
-        // With a resume offset both -ss and -re precede -i.
+    fn vod_kinds_omit_re() {
+        // Finite VOD must NOT be paced: -re is what capped the buffer at the live
+        // edge and blocked forward-seeking. The encoder runs full speed.
+        for kind in ["movie", "episode", "show"] {
+            let args = args_for_kind(kind);
+            assert!(
+                !args.iter().any(|s| s == "-re"),
+                "{kind}: VOD must not emit -re: {}",
+                args.join(" ")
+            );
+        }
+    }
+
+    #[test]
+    fn seek_offset_coexists_with_re_for_live() {
+        // A live resume carries both -ss and -re before -i.
         let plan = transcode(VideoOp::Copy, AudioOp::Copy, SubtitleOp::None);
-        let args = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 120, HwEncoder::Cpu);
+        let args = ffmpeg_args_for(&ArgSpec {
+            plan: &plan,
+            input: "/in.mkv",
+            session_dir: "/tmp/s",
+            start_secs: 120,
+            encoder: HwEncoder::Cpu,
+            hw_decode: false,
+            media_kind: "live",
+            start_number: 0,
+        });
         let ss = args.iter().position(|s| s == "-ss").expect("missing -ss");
         let re = args.iter().position(|s| s == "-re").expect("missing -re");
         let i = args.iter().position(|s| s == "-i").expect("missing -i");
         assert!(ss < i && re < i, "-ss and -re must precede -i");
+    }
+
+    #[test]
+    fn vod_seek_offset_has_ss_without_re() {
+        // A VOD resume bakes -ss (fast keyframe seek) but never -re.
+        let plan = transcode(VideoOp::Copy, AudioOp::Copy, SubtitleOp::None);
+        let args = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 120, HwEncoder::Cpu);
+        let ss = args.iter().position(|s| s == "-ss").expect("missing -ss");
+        let i = args.iter().position(|s| s == "-i").expect("missing -i");
+        assert!(ss < i, "-ss must precede -i");
+        assert!(!args.iter().any(|s| s == "-re"), "VOD must not emit -re");
     }
 
     #[test]
@@ -1246,9 +1298,13 @@ mod tests {
 
     #[test]
     fn hls_flags_always_present() {
+        // VOD default: append-only growing playlist, no deletion, EVENT type.
         let plan = transcode(VideoOp::Copy, AudioOp::Copy, SubtitleOp::None);
         let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Cpu).join(" ");
-        assert!(j.contains("-hls_flags delete_segments+append_list"), "{j}");
+        assert!(j.contains("-hls_list_size 0"), "{j}");
+        assert!(j.contains("-hls_flags append_list"), "{j}");
+        assert!(j.contains("-hls_playlist_type event"), "{j}");
+        assert!(!j.contains("delete_segments"), "VOD must not prune: {j}");
         assert!(
             j.ends_with("/tmp/s/index.m3u8"),
             "playlist is last arg: {j}"
@@ -1306,9 +1362,13 @@ mod tests {
         // are treated as finite too — the conservative default.
         for kind in ["movie", "episode", "series", "show", "Movie", "whatever"] {
             let j = args_for_kind(kind).join(" ");
+            // EVENT playlist + append-only, all segments retained, no pruning.
+            assert!(j.contains("-hls_playlist_type event"), "{kind}: {j}");
+            assert!(j.contains("-hls_flags append_list"), "{kind}: {j}");
+            assert!(j.contains("-hls_list_size 0"), "{kind}: {j}");
             assert!(
-                j.contains("-hls_flags delete_segments+append_list"),
-                "{kind}: {j}"
+                !j.contains("delete_segments"),
+                "finite kind {kind:?} must retain segments: {j}"
             );
             assert!(
                 !j.contains("omit_endlist"),

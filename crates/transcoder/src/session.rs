@@ -463,6 +463,48 @@ impl SessionManager {
         .with_media_roots(media_roots)
     }
 
+    /// Remove session directories left over from a previous run (crash or
+    /// restart). Call ONLY at boot, before any session exists. The VOD scratch
+    /// now lives on durable disk (not the old auto-clearing RAM tmpfs), so
+    /// orphaned `seg_*.ts`/`index.m3u8` dirs would otherwise accumulate forever
+    /// and slowly fill the cache. Best-effort and fully logged; a missing root
+    /// (first boot) is not an error.
+    pub async fn sweep_scratch_on_boot(&self) {
+        let mut rd = match tokio::fs::read_dir(&self.tmp_root).await {
+            Ok(rd) => rd,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(e) => {
+                tracing::warn!(
+                    root = %self.tmp_root.display(),
+                    error = %e,
+                    "scratch boot-sweep: cannot read scratch root"
+                );
+                return;
+            }
+        };
+        let mut removed = 0u32;
+        while let Ok(Some(entry)) = rd.next_entry().await {
+            if entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
+                let path = entry.path();
+                match tokio::fs::remove_dir_all(&path).await {
+                    Ok(()) => removed += 1,
+                    Err(e) => tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "scratch boot-sweep: failed to remove stale session dir"
+                    ),
+                }
+            }
+        }
+        if removed > 0 {
+            tracing::info!(
+                removed,
+                root = %self.tmp_root.display(),
+                "scratch boot-sweep: cleared stale session dirs"
+            );
+        }
+    }
+
     /// The hardware encoder this manager launches ffmpeg with (the resolved
     /// family once boot detection has run).
     pub fn encoder(&self) -> HwEncoder {

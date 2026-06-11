@@ -384,23 +384,21 @@ services:
       # Media library, READ-ONLY — SAME source as media-core so the input
       # paths media-core reports resolve identically inside this container.
       - "${MEDIA_LIBRARY_HOST_PATH:-/mnt/user/appdata/exchange-backend/media-test}:/media:ro"
-    # HLS segment scratch. tmpfs keeps churn off the array spindles and
-    # auto-clears on restart (segments are ephemeral, never persisted).
-    # Sized for concurrent sessions; raise if MAX_CONCURRENT_TRANSCODES grows.
+      # HLS segment scratch — DURABLE disk (cache SSD), NOT a RAM tmpfs.
+      # VOD transcodes now retain EVERY segment of a title (growing EVENT
+      # playlist, no sliding-window delete — see crates/transcoder/src/args.rs)
+      # so the player can buffer deep and seek anywhere; a whole title does not
+      # fit a 2 GB RAM disk. The cache SSD absorbs the churn fine, and the idle
+      # reaper (30s no-heartbeat → remove_dir_all) plus the boot-sweep
+      # (sweep_scratch_on_boot) bound usage to ACTIVE sessions, never history.
+      # The host dir must let uid 10003 (transcoder) create session subdirs —
+      # provisioned `chmod 1777` (world-writable + sticky, the scratch-dir
+      # convention) by the deploy. Override the path with TRANSCODER_SCRATCH_HOST_PATH.
+      - "${TRANSCODER_SCRATCH_HOST_PATH:-/mnt/user/appdata/exchange-backend/transcoder-scratch}:/scratch"
+    # /tmp stays a small RAM tmpfs (audit 9-4) so the read_only root fs still has
+    # a writable path for transient ffmpeg/runtime writes outside /scratch.
     # Sibling key to volumes:/environment: — not nested under volumes:.
-    # /tmp added (audit 9-4) so the read_only root fs still has a writable
-    # scratch path for any transient ffmpeg/runtime writes outside /scratch.
-    #
-    # mode=1777 is REQUIRED: a tmpfs mount masks the image's `chown` of /scratch
-    # and, when ANY tmpfs option is given (size=), Docker defaults the mount to
-    # root:root 0755 — NOT the container user. Without an explicit mode the
-    # non-root `transcoder` uid (10003) cannot create a session dir and every
-    # real transcode dies with "failed to prepare session: Permission denied".
-    # (Health checks and unit tests never hit this — they don't write /scratch.)
-    # 1777 = world-writable + sticky, matching /tmp; the container is single-uid
-    # and isolated, so this is the scratch-dir convention, not a privilege grant.
     tmpfs:
-      - /scratch:size=2g,mode=1777
       - /tmp
     environment:
       TRANSCODER_HOST: "0.0.0.0"
