@@ -826,23 +826,6 @@ async fn media_exists(
     Ok(Some(found.is_some()))
 }
 
-/// Remove watch-state rows whose `(media_kind, media_id)` no longer resolves to
-/// an existing movie/episode (orphans left by title deletion, or pre-existing
-/// forged rows). Returns the number of rows removed. Safe to call periodically
-/// or after a scan. Movie/episode deletes cannot cascade here because the
-/// relationship is polymorphic (§7-8), so this GC is how orphans are reaped.
-pub async fn gc_orphan_watch_state(state: &AppState) -> Result<u64, sqlx::Error> {
-    let res = sqlx::query(
-        "DELETE FROM media_watch_state \
-         WHERE (media_kind = 'movie'   AND media_id NOT IN (SELECT id FROM movies)) \
-            OR (media_kind = 'episode' AND media_id NOT IN (SELECT id FROM episodes)) \
-            OR media_kind NOT IN ('movie', 'episode')",
-    )
-    .execute(&state.db.pool)
-    .await?;
-    Ok(res.rows_affected())
-}
-
 async fn post_watch(
     State(state): State<AppState>,
     claims: Option<Extension<InternalClaims>>,
@@ -1411,7 +1394,7 @@ mod tests {
             .unwrap();
         assert_eq!(before, 2);
 
-        let removed = gc_orphan_watch_state(&state).await.unwrap();
+        let removed = crate::scanner::gc_orphan_watch_state(&state.db).await.unwrap();
         assert_eq!(removed, 1, "exactly the orphan row is reaped");
         let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM media_watch_state")
             .fetch_one(&state.db.pool)
