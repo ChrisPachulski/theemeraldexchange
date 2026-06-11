@@ -22,6 +22,9 @@ pub struct ClientCaps {
     pub max_height: Option<i64>,
     #[serde(default)]
     pub hdr: bool,
+    /// Maximum average bitrate (bits/second) the client wants to receive.
+    /// Evaluated against the file's size/duration-derived average in
+    /// [`decide`]; a file over the cap is routed to the transcoder.
     #[serde(default)]
     pub max_bitrate: Option<i64>,
 }
@@ -65,6 +68,21 @@ pub fn decide(file: &MediaFileRow, caps: &ClientCaps) -> PlayDecision {
         && height > max
     {
         return deny(format!("height {height} exceeds client max {max}"));
+    }
+
+    // Bandwidth gate: `max_bitrate` is bits/second; the probe records no
+    // per-stream bitrate, so the file's whole-container average
+    // (size_bytes * 8 / duration) is the comparison. Files missing a positive
+    // duration are not gated — no average can be derived.
+    if let (Some(max), Some(duration)) = (caps.max_bitrate, file.duration_secs)
+        && max > 0
+        && duration > 0
+        && file.size_bytes > 0
+    {
+        let avg_bps = file.size_bytes.saturating_mul(8) / duration;
+        if avg_bps > max {
+            return deny(format!("bitrate {avg_bps} exceeds client max {max}"));
+        }
     }
 
     let is_hdr = file
@@ -232,6 +250,39 @@ mod tests {
     #[test]
     fn aac_audio_match_is_case_insensitive() {
         let f = with_audio(file(Some("mp4"), Some("h264"), Some(1080), None), "AAC");
+        assert!(decide(&f, &h264_client()).direct_play);
+    }
+
+    #[test]
+    fn bitrate_over_client_max_transcodes() {
+        // 9 GB over 3600s ≈ 20 Mbps average. A 10 Mbps client must transcode;
+        // a 25 Mbps client direct-plays the same file.
+        let mut f = file(Some("mp4"), Some("h264"), Some(1080), None);
+        f.size_bytes = 9_000_000_000;
+        f.duration_secs = Some(3600);
+
+        let mut caps = h264_client();
+        caps.max_bitrate = Some(10_000_000);
+        let d = decide(&f, &caps);
+        assert!(!d.direct_play);
+        assert!(d.reason.contains("bitrate"), "reason: {}", d.reason);
+
+        caps.max_bitrate = Some(25_000_000);
+        assert!(decide(&f, &caps).direct_play);
+    }
+
+    #[test]
+    fn bitrate_gate_skipped_without_duration_or_cap() {
+        // No duration → no derivable average → not gated.
+        let mut f = file(Some("mp4"), Some("h264"), Some(1080), None);
+        f.size_bytes = 9_000_000_000;
+        f.duration_secs = None;
+        let mut caps = h264_client();
+        caps.max_bitrate = Some(10_000_000);
+        assert!(decide(&f, &caps).direct_play);
+
+        // No advertised cap → never gated (back-compat default).
+        let f = file(Some("mp4"), Some("h264"), Some(1080), None);
         assert!(decide(&f, &h264_client()).direct_play);
     }
 

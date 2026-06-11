@@ -44,9 +44,16 @@ impl Db {
                 )
             })?;
         }
+        // WAL + busy_timeout: the Node backend reads this same DB file
+        // concurrently (read-only catalog queries). The default rollback
+        // journal blocks readers for the duration of every scan write; WAL
+        // lets them proceed, and the busy_timeout retries briefly instead of
+        // failing fast with SQLITE_BUSY when the writer holds the lock.
         let opts = SqliteConnectOptions::new()
             .filename(path)
             .create_if_missing(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            .busy_timeout(std::time::Duration::from_secs(5))
             .foreign_keys(true);
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
@@ -192,6 +199,31 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(fts, 3, "FTS5 virtual tables must be created by 0003");
+    }
+
+    #[tokio::test]
+    async fn file_backed_db_uses_wal_with_busy_timeout() {
+        // The Node backend reads the same file concurrently; the connection
+        // must come up in WAL mode with a non-zero busy_timeout, not the
+        // default rollback journal that blocks readers during scan writes.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("media.db");
+        let db = Db::connect(path.to_str().unwrap()).await.unwrap();
+
+        let mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(mode.to_lowercase(), "wal");
+
+        let timeout_ms: i64 = sqlx::query_scalar("PRAGMA busy_timeout")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert!(
+            timeout_ms >= 5000,
+            "busy_timeout must be set (got {timeout_ms}ms)"
+        );
     }
 
     #[tokio::test]
