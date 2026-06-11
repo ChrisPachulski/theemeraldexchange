@@ -11,6 +11,14 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Least-privilege token (production-readiness re-review): every job here only
+# checks out code and uploads workflow artifacts (artifact upload uses the
+# Actions service, not the repo-scoped token) — none needs write access to
+# contents, packages, PRs, or anything else. Raise per-job if a future job
+# provably needs more.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -393,6 +401,17 @@ jobs:
         # Verified against the production compose file on the deploy host.
         run: docker compose config -q
 
+      - name: Image-pin staleness guard (best-effort)
+        # Flags compose image pins whose Docker Hub tag was last pushed >12
+        # months ago (the cloudflared pin once sat ~18 months stale with
+        # nothing watching it). Self-test first (offline parser assertions),
+        # then the live check. The script treats network/Hub-API failures as
+        # warnings (exit 0) so a registry blip can never fail CI — only a
+        # CONFIRMED stale tag does.
+        run: |
+          node scripts/check-image-pin-staleness.mjs --self-test
+          node scripts/check-image-pin-staleness.mjs docker-compose.yml
+
       - name: Build backend image
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
@@ -409,3 +428,25 @@ jobs:
           docker build -f ./recommender/Dockerfile .
           docker build -f ./crates/media-core/Dockerfile .
           docker build -f ./crates/transcoder/Dockerfile .
+
+  shellcheck:
+    # The ~500-line deploy script (scripts/deploy-nas.sh) snapshots, rsyncs,
+    # rolls back, and health-gates the production stack — exactly the kind of
+    # shell where an unquoted variable or masked exit code ships an outage.
+    # Nothing linted it before this job. shellcheck is preinstalled on
+    # ubuntu-latest runner images (no apt/container needed).
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: shellcheck scripts/*.sh
+        # --severity=warning: gate on warnings+errors. Info-level findings are
+        # dominated by SC2029 ("expands on the client side") on the ssh
+        # one-liners — which is the deploy script's INTENT (local values like
+        # $APPDATA/$ROLLBACK_TS are deliberately interpolated before the
+        # remote shell runs), so info stays advisory.
+        run: |
+          shellcheck --version
+          shellcheck --severity=warning scripts/*.sh

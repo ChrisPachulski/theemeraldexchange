@@ -51,7 +51,7 @@ echo "sessionId=$SID"
 say "TIME TO FIRST SEGMENT"
 t0=$(date +%s.%N)
 SEG=""; ready=0
-for i in $(seq 1 120); do
+for _ in $(seq 1 120); do
   M=$(curl -s -H "$AUTH" "$T/api/transcode/session/$SID/index.m3u8")
   SEG=$(printf '%s' "$M" | grep -oE 'seg_[0-9]+\.ts' | head -1)
   if [ -n "$SEG" ]; then ready=1; break; fi
@@ -91,7 +91,7 @@ docker exec exchange-transcoder rm -f /scratch/_probe.ts 2>/dev/null
 say "SEEK LATENCY (seek to 1800s, re-measure first segment)"
 curl -s -X POST -H "$AUTH" "$T/api/transcode/session/$SID/seek?to=1800" >/dev/null
 s0=$(date +%s.%N); sok=0
-for i in $(seq 1 120); do
+for _ in $(seq 1 120); do
   M=$(curl -s -H "$AUTH" "$T/api/transcode/session/$SID/index.m3u8")
   SS=$(printf '%s' "$M" | grep -oE 'seg_[0-9]+\.ts' | head -1)
   if [ -n "$SS" ]; then
