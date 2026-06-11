@@ -40,6 +40,16 @@ pub struct ScanReport {
     pub files_removed: usize,
     /// Watch-state rows reaped because their movie/episode no longer exists.
     pub watch_orphans_removed: usize,
+    /// Video files skipped because their canonical path (symlinks resolved)
+    /// escapes every configured library root. `stream_file` refuses to serve
+    /// such paths (path_within_roots), so indexing them would create
+    /// permanently unplayable rows.
+    pub files_skipped_outside_roots: usize,
+    /// Video files skipped because their name/path is not valid UTF-8 (the
+    /// DB stores paths as TEXT, so they cannot be indexed). Surfaced so a
+    /// library gap is explainable from the scan report instead of the file
+    /// just silently never appearing.
+    pub files_skipped_non_utf8: usize,
     pub errors: usize,
 }
 
@@ -59,6 +69,19 @@ struct WalkOutcome {
     files: Vec<WalkedFile>,
     files_seen: usize,
     errors: usize,
+    /// Roots whose directory existed AND whose walk completed without a single
+    /// I/O error. Only paths under these roots are eligible for the
+    /// missing-file prune: an unmounted/failed root yields 0 files, and
+    /// pruning against that view would wipe the whole catalog (cascading
+    /// movies/episodes and then the watch-state GC) for a transient mount
+    /// hiccup.
+    prunable_roots: Vec<std::path::PathBuf>,
+    /// Files whose canonical path escapes every root (see
+    /// [`ScanReport::files_skipped_outside_roots`]).
+    files_outside_roots: usize,
+    /// Video files with a non-UTF-8 name/path (see
+    /// [`ScanReport::files_skipped_non_utf8`]).
+    files_non_utf8: usize,
 }
 
 /// Enumerate every video file under `roots`. Pure blocking FS work (WalkDir +
@@ -69,16 +92,49 @@ fn walk_roots(roots: &[LibraryRoot]) -> WalkOutcome {
         files: Vec::new(),
         files_seen: 0,
         errors: 0,
+        prunable_roots: Vec::new(),
+        files_outside_roots: 0,
+        files_non_utf8: 0,
     };
 
+    // Canonical forms of every existing root, for the symlink-containment
+    // check below. Mirrors `routes::path_within_roots`: the scanner follows
+    // symlinks, but `stream_file` refuses any path that canonicalizes outside
+    // all roots — indexing such a file would create a permanently unplayable
+    // row, so it is skipped here instead (a symlink resolving into ANOTHER
+    // configured root is fine on both sides).
+    let canon_roots: Vec<std::path::PathBuf> = roots
+        .iter()
+        .filter_map(|r| std::fs::canonicalize(&r.path).ok())
+        .collect();
+    // Warn loudly on the first escapee only; the rest are counted (a tree of
+    // thousands of out-of-root symlinks must not flood the log every scan).
+    let mut warned_outside_roots = false;
+
     for root in roots {
+        // A configured root whose directory is missing (unmounted volume,
+        // typo'd MEDIA_LIBRARY_PATHS) must NOT be treated as "everything was
+        // deleted". Skip it loudly and keep it out of the prune set.
+        if !root.path.is_dir() {
+            tracing::error!(
+                root = %root.path.display(),
+                "library root missing or not a directory; skipping walk AND \
+                 excluding it from the missing-file prune (its rows are kept)"
+            );
+            out.errors += 1;
+            continue;
+        }
+
         let root_kind = root.kind;
+        // I/O errors local to THIS root; any error disqualifies the root from
+        // the prune pass (an incomplete enumeration cannot prove deletion).
+        let mut root_errors = 0usize;
         for entry in WalkDir::new(&root.path).follow_links(true) {
             let entry = match entry {
                 Ok(e) => e,
                 Err(e) => {
                     tracing::warn!("walk error under {}: {e}", root.path.display());
-                    out.errors += 1;
+                    root_errors += 1;
                     continue;
                 }
             };
@@ -87,9 +143,28 @@ fn walk_roots(roots: &[LibraryRoot]) -> WalkOutcome {
                 continue;
             }
 
+            // Non-UTF-8 names/paths cannot be indexed (paths are stored as
+            // TEXT), but they used to vanish without a trace. Count them so a
+            // missing title is explainable from the scan report. They are NOT
+            // root errors: the condition is permanent (not a transient I/O
+            // failure), the path can never be in the DB, and treating it as an
+            // error would permanently disqualify the root from pruning.
             let name = match entry.file_name().to_str() {
                 Some(n) => n.to_string(),
-                None => continue,
+                None => {
+                    // Only count names that LOOK like video files (judged on
+                    // the lossy form) — arbitrary non-UTF-8 junk stays silent,
+                    // matching the is_video_file filter for UTF-8 names.
+                    let lossy = entry.file_name().to_string_lossy().into_owned();
+                    if is_video_file(&lossy) {
+                        tracing::warn!(
+                            "non-utf8 file name skipped (cannot be indexed): {}",
+                            entry.path().display()
+                        );
+                        out.files_non_utf8 += 1;
+                    }
+                    continue;
+                }
             };
             if !is_video_file(&name) {
                 continue;
@@ -99,19 +174,48 @@ fn walk_roots(roots: &[LibraryRoot]) -> WalkOutcome {
             let path_str = match entry_path.to_str() {
                 Some(p) => p.to_string(),
                 None => {
-                    tracing::warn!("non-utf8 path skipped: {}", entry_path.display());
-                    out.errors += 1;
+                    // Valid-UTF-8 video name under a non-UTF-8 directory.
+                    tracing::warn!(
+                        "non-utf8 path skipped (cannot be indexed): {}",
+                        entry_path.display()
+                    );
+                    out.files_non_utf8 += 1;
                     continue;
                 }
             };
 
             out.files_seen += 1;
 
+            // Containment: skip files whose canonical path (symlinks resolved)
+            // escapes every configured root — stream_file would refuse them.
+            match std::fs::canonicalize(entry_path) {
+                Ok(canon) => {
+                    if !canon_roots.iter().any(|r| canon.starts_with(r)) {
+                        if !warned_outside_roots {
+                            tracing::warn!(
+                                path = %entry_path.display(),
+                                resolves_to = %canon.display(),
+                                "file resolves outside all library roots; skipping \
+                                 (unservable — further escapees this scan are counted silently)"
+                            );
+                            warned_outside_roots = true;
+                        }
+                        out.files_outside_roots += 1;
+                        continue;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("canonicalize failed for {path_str}: {e}");
+                    root_errors += 1;
+                    continue;
+                }
+            }
+
             let (size_bytes, mtime) = match file_stat(entry_path) {
                 Ok(stat) => stat,
                 Err(e) => {
                     tracing::warn!("stat failed for {path_str}: {e}");
-                    out.errors += 1;
+                    root_errors += 1;
                     continue;
                 }
             };
@@ -125,6 +229,18 @@ fn walk_roots(roots: &[LibraryRoot]) -> WalkOutcome {
                 mtime,
             });
         }
+
+        if root_errors == 0 {
+            out.prunable_roots.push(root.path.clone());
+        } else {
+            tracing::error!(
+                root = %root.path.display(),
+                errors = root_errors,
+                "walk of library root hit I/O errors; excluding it from the \
+                 missing-file prune this pass (its rows are kept)"
+            );
+        }
+        out.errors += root_errors;
     }
 
     out
@@ -150,6 +266,8 @@ pub async fn scan_once(
         .map_err(|e| AppError::Internal(format!("walk task failed: {e}")))?;
     report.files_seen = walk.files_seen;
     report.errors = walk.errors;
+    report.files_skipped_outside_roots = walk.files_outside_roots;
+    report.files_skipped_non_utf8 = walk.files_non_utf8;
 
     for file in &walk.files {
         let path_str = &file.path_str;
@@ -230,8 +348,13 @@ pub async fn scan_once(
     // reap watch-state orphans (the polymorphic media_kind/media_id pair has
     // no SQL FK, so a cascade cannot do this). Skipped entirely when no roots
     // are configured (dev/tests) — an empty config must never empty the DB.
+    // Pruning is further restricted to roots whose walk was HEALTHY (directory
+    // existed, zero I/O errors): an unmounted MEDIA_LIBRARY_PATHS volume
+    // enumerates as 0 files, and pruning against that view would delete every
+    // media_files row, cascade-destroy movies/episodes, and let the
+    // watch-state GC reap all progress — for a transient mount failure.
     if !roots.is_empty() {
-        match prune_missing_files(db).await {
+        match prune_missing_files(db, &walk.prunable_roots).await {
             Ok(removed) => report.files_removed = removed,
             Err(e) => {
                 tracing::warn!("prune of deleted files failed: {e}");
@@ -255,15 +378,33 @@ pub async fn scan_once(
 /// CASCADE); shows left with zero episodes are swept afterwards so the
 /// library never lists an empty series. Returns the number of file rows
 /// removed.
-async fn prune_missing_files(db: &Db) -> Result<usize, AppError> {
+///
+/// Only rows under `prunable_roots` — roots whose directory existed and whose
+/// walk completed without I/O errors — are candidates. Rows under a missing or
+/// errored root are deliberately retained: an unmounted volume looks exactly
+/// like "every file was deleted", and acting on that view destroys the catalog
+/// and all watch state. With no healthy roots, nothing is pruned.
+async fn prune_missing_files(
+    db: &Db,
+    prunable_roots: &[std::path::PathBuf],
+) -> Result<usize, AppError> {
+    if prunable_roots.is_empty() {
+        tracing::warn!("no healthy library roots this pass; skipping missing-file prune");
+        return Ok(0);
+    }
+
     let rows: Vec<(i64, String)> = sqlx::query_as("SELECT id, path FROM media_files")
         .fetch_all(&db.pool)
         .await?;
 
     // Existence probes are blocking FS I/O; batch them off the runtime.
+    let roots = prunable_roots.to_vec();
     let missing: Vec<i64> = tokio::task::spawn_blocking(move || {
         rows.into_iter()
-            .filter(|(_, path)| !std::path::Path::new(path).exists())
+            .filter(|(_, path)| {
+                let p = std::path::Path::new(path);
+                roots.iter().any(|root| p.starts_with(root)) && !p.exists()
+            })
             .map(|(id, _)| id)
             .collect()
     })
@@ -1743,6 +1884,210 @@ mod tests {
             surviving_watch, kept_movie,
             "the surviving title's watch state stays"
         );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn scan_counts_non_utf8_video_names_without_failing_prune() {
+        // A video file with a non-UTF-8 name cannot be indexed (paths are
+        // stored as TEXT) but used to vanish silently. It must be counted in
+        // files_skipped_non_utf8, must NOT bump errors, and must NOT
+        // disqualify the root from the missing-file prune (the condition is
+        // permanent, not a transient I/O failure).
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let tmp = tempdir().unwrap();
+        // Invalid UTF-8 byte in the stem; extension still reads ".mkv".
+        // APFS/HFS+ (macOS) reject non-UTF-8 names outright (EILSEQ), so the
+        // full scenario is only constructible on Linux filesystems — exactly
+        // where prod (NAS, ext4/xfs in Docker) runs and where CI executes.
+        // On a UTF-8-enforcing FS, degrade to proving the healthy-prune half.
+        let bad_name = OsStr::from_bytes(b"caf\xff (2020).mkv");
+        let non_utf8_supported = std::fs::write(tmp.path().join(bad_name), b"bytes").is_ok();
+        if non_utf8_supported {
+            // Non-video non-UTF-8 junk stays silent (no count).
+            let bad_junk = OsStr::from_bytes(b"junk\xff.nfo");
+            std::fs::write(tmp.path().join(bad_junk), b"x").unwrap();
+        }
+
+        let db = Db::connect_memory().await.unwrap();
+        // A vanished row under the same root: prune must still fire.
+        let gone = tmp.path().join("Gone (2019).mkv");
+        let gone_file = seed_media_file(&db, gone.to_str().unwrap()).await;
+        upsert_movie(&db, "Gone", Some(2019), gone_file, "t", None)
+            .await
+            .unwrap();
+
+        let roots = vec![LibraryRoot {
+            path: tmp.path().to_path_buf(),
+            kind: RootKind::Movies,
+        }];
+        let report = scan_once(&db, &roots, &no_tmdb()).await.unwrap();
+
+        if non_utf8_supported {
+            assert_eq!(
+                report.files_skipped_non_utf8, 1,
+                "the non-utf8 VIDEO file is counted (junk is not)"
+            );
+        } else {
+            eprintln!("filesystem enforces UTF-8 names; non-utf8 half skipped");
+        }
+        assert_eq!(report.errors, 0, "non-utf8 is a skip stat, not an error");
+        assert_eq!(
+            report.files_removed, 1,
+            "the root stays prune-healthy despite the non-utf8 skip"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn scan_skips_symlinks_escaping_all_roots() {
+        // Consistency with stream_file: a symlinked file whose canonical path
+        // escapes every library root would be indexed by the scanner but
+        // refused by path_within_roots at stream time — a permanently
+        // unplayable row. The scanner must skip (and count) it, while a
+        // symlink resolving WITHIN a root stays indexable.
+        let root = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+
+        // A real, in-root file (seeded as unchanged so no ffprobe is needed).
+        let real = root.path().join("Inside (2020).mkv");
+        std::fs::write(&real, b"bytes").unwrap();
+        // An in-root symlink to an in-root target: allowed.
+        let in_link = root.path().join("Also Inside (2021).mkv");
+        std::os::unix::fs::symlink(&real, &in_link).unwrap();
+        // An in-root symlink escaping to a file outside every root: skipped.
+        let escapee_target = outside.path().join("Escapee (2022).mkv");
+        std::fs::write(&escapee_target, b"bytes").unwrap();
+        let escapee = root.path().join("Escapee (2022).mkv");
+        std::os::unix::fs::symlink(&escapee_target, &escapee).unwrap();
+
+        let db = Db::connect_memory().await.unwrap();
+        for p in [&real, &in_link] {
+            let (size, mtime) = file_stat(p).unwrap();
+            sqlx::query(
+                "INSERT INTO media_files \
+                 (path, size_bytes, mtime, container, duration_secs, video_codec, \
+                  video_height, video_profile, hdr_format, audio_tracks_json, \
+                  subtitle_tracks_json, scanned_at) \
+                 VALUES (?, ?, ?, 'mkv', 1, 'h264', 1080, NULL, NULL, '[]', '[]', 't')",
+            )
+            .bind(p.to_str().unwrap())
+            .bind(size)
+            .bind(&mtime)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
+
+        let roots = vec![LibraryRoot {
+            path: root.path().to_path_buf(),
+            kind: RootKind::Movies,
+        }];
+        let report = scan_once(&db, &roots, &no_tmdb()).await.unwrap();
+
+        assert_eq!(report.files_seen, 3, "all three candidates are walked");
+        assert_eq!(
+            report.files_skipped_outside_roots, 1,
+            "exactly the escaping symlink is skipped"
+        );
+        let escapee_rows: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM media_files WHERE path LIKE '%Escapee%'")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(escapee_rows, 0, "the escapee must not be indexed");
+        // The in-root rows survive (the escapee skip must not poison prune).
+        assert_eq!(count(&db, "media_files").await, 2);
+    }
+
+    #[tokio::test]
+    async fn scan_with_missing_root_never_prunes() {
+        // REGRESSION: an unmounted/missing MEDIA_LIBRARY_PATHS volume must not
+        // be read as "every file was deleted". A configured root whose
+        // directory does not exist enumerates 0 files; pruning against that
+        // view used to delete EVERY media_files row, cascade movies/episodes,
+        // and let the watch-state GC reap all progress.
+        let db = Db::connect_memory().await.unwrap();
+        let gone_root = std::path::PathBuf::from("/definitely-not-mounted-eex-test");
+        let file_id =
+            seed_media_file(&db, "/definitely-not-mounted-eex-test/Movie (2020).mkv").await;
+        upsert_movie(&db, "Movie", Some(2020), file_id, "t", None)
+            .await
+            .unwrap();
+        let movie_id: i64 = sqlx::query_scalar("SELECT id FROM movies WHERE file_id = ?")
+            .bind(file_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO media_watch_state \
+             (sub, media_kind, media_id, position_secs, watched_at, completed) \
+             VALUES ('plex:1', 'movie', ?, 10, 't', 0)",
+        )
+        .bind(movie_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        let roots = vec![LibraryRoot {
+            path: gone_root,
+            kind: RootKind::Movies,
+        }];
+        let report = scan_once(&db, &roots, &no_tmdb()).await.unwrap();
+
+        assert_eq!(report.files_removed, 0, "missing root must prune nothing");
+        assert_eq!(report.watch_orphans_removed, 0, "watch state must survive");
+        assert!(report.errors >= 1, "the skipped root is surfaced as an error");
+        assert_eq!(count(&db, "media_files").await, 1);
+        assert_eq!(count(&db, "movies").await, 1);
+        assert_eq!(count(&db, "media_watch_state").await, 1);
+    }
+
+    #[tokio::test]
+    async fn scan_prunes_only_under_healthy_roots() {
+        // Mixed config: one healthy root with a genuinely deleted file, one
+        // missing root with intact rows. Exactly the healthy root's vanished
+        // file is pruned; the missing root's catalog is untouched.
+        let tmp = tempdir().unwrap();
+        let db = Db::connect_memory().await.unwrap();
+
+        // Healthy root: one row whose file was deleted.
+        let gone_path = tmp.path().join("Deleted (2019).mkv");
+        let gone_file = seed_media_file(&db, gone_path.to_str().unwrap()).await;
+        upsert_movie(&db, "Deleted", Some(2019), gone_file, "t", None)
+            .await
+            .unwrap();
+
+        // Missing root: a row that must survive.
+        let kept_file = seed_media_file(&db, "/unmounted-eex-test/Kept (2021).mkv").await;
+        upsert_movie(&db, "Kept", Some(2021), kept_file, "t", None)
+            .await
+            .unwrap();
+
+        let roots = vec![
+            LibraryRoot {
+                path: tmp.path().to_path_buf(),
+                kind: RootKind::Movies,
+            },
+            LibraryRoot {
+                path: std::path::PathBuf::from("/unmounted-eex-test"),
+                kind: RootKind::Movies,
+            },
+        ];
+        let report = scan_once(&db, &roots, &no_tmdb()).await.unwrap();
+
+        assert_eq!(
+            report.files_removed, 1,
+            "exactly the healthy root's deleted file is pruned"
+        );
+        let remaining: Vec<String> = sqlx::query_scalar("SELECT path FROM media_files")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(remaining, vec!["/unmounted-eex-test/Kept (2021).mkv"]);
+        assert_eq!(count(&db, "movies").await, 1);
     }
 
     #[tokio::test]

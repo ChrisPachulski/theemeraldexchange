@@ -719,7 +719,7 @@ async fn stream_file(
         .stream_semaphore
         .clone()
         .try_acquire_owned()
-        .map_err(|_| AppError::TranscoderRequired)?;
+        .map_err(|_| AppError::StreamSlotsExhausted)?;
 
     let service = ServeFile::new(&file.path);
     let mut resp = service
@@ -969,13 +969,21 @@ async fn trigger_scan(
 
     let job_id = chrono::Utc::now().timestamp_millis().to_string();
     let started_at = chrono::Utc::now().to_rfc3339();
-    set_scan_state(&state.db, "state", "running").await;
-    set_scan_state(&state.db, "job_id", &job_id).await;
-    set_scan_state(&state.db, "started_at", &started_at).await;
-    set_scan_state(&state.db, "finished_at", "").await;
 
+    // CANCELLATION SAFETY: spawn the background task IMMEDIATELY after the
+    // compare_exchange claim, with no intervening await. The bookkeeping
+    // writes below run inside the spawned task: if they ran here and the
+    // handler future was dropped mid-await (client disconnect, TimeoutLayer),
+    // the spawn would never happen and `scanning` would stay true, 409-ing
+    // every future POST /scan forever.
     let bg = state.clone();
+    let bg_job_id = job_id.clone();
     tokio::spawn(async move {
+        set_scan_state(&bg.db, "state", "running").await;
+        set_scan_state(&bg.db, "job_id", &bg_job_id).await;
+        set_scan_state(&bg.db, "started_at", &started_at).await;
+        set_scan_state(&bg.db, "finished_at", "").await;
+
         // scan_once_isolated contains a panic in the scan pass as an Err, so
         // the state/flag resets below always run — otherwise one bad file
         // would leave `scanning` true and 409 every future POST /scan.
@@ -1473,6 +1481,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        // The body must carry the DISTINCT capacity code, not the misleading
+        // "transcoder required (M4 offline)" outage message — ops/clients need
+        // to tell "retry shortly, at capacity" from "transcoder is down".
+        let v = body_json(resp).await;
+        assert_eq!(v["error"], "stream_slots_exhausted");
     }
 
     async fn seed_show_with_episodes(state: &AppState, n: i64) {
@@ -1982,6 +1995,61 @@ mod tests {
             tokio::task::yield_now().await;
         }
         assert!(idle, "scan/status never returned idle");
+    }
+
+    #[tokio::test]
+    async fn trigger_scan_dropped_mid_flight_never_wedges_the_flag() {
+        // REGRESSION: trigger_scan used to claim the `scanning` flag and then
+        // await four scan_state writes BEFORE tokio::spawn. A handler future
+        // dropped in that window (client disconnect, TimeoutLayer) left the
+        // flag true forever, 409-ing every future POST /scan. The fix spawns
+        // immediately after the claim with no intervening await — so a single
+        // poll must complete the handler (claim + spawn + 202), and dropping
+        // the future right after must still let the background task reset the
+        // flag.
+        use std::future::Future;
+
+        let state = test_state().await;
+        {
+            let fut = trigger_scan(State(state.clone()), None);
+            let mut fut = std::pin::pin!(fut);
+            let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+            // One poll, then drop — simulating cancellation at the first await
+            // point. With no await between claim and spawn this poll already
+            // returns Ready(202).
+            let polled = fut.as_mut().poll(&mut cx);
+            assert!(
+                polled.is_ready(),
+                "trigger_scan must reach tokio::spawn without an await point \
+                 between the scanning-flag claim and the spawn"
+            );
+        }
+
+        // The spawned task owns the flag reset; with empty roots it finishes
+        // almost immediately.
+        let mut cleared = false;
+        for _ in 0..200 {
+            if !state.scanning.load(std::sync::atomic::Ordering::SeqCst) {
+                cleared = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(cleared, "scanning flag wedged after handler drop");
+
+        // And a follow-up scan can start: 202, not 409.
+        let app = crate::build_router(state);
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/media/scan")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
     }
 
     #[test]
