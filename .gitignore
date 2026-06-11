@@ -66,6 +66,14 @@ crates/emerald-contracts-pyo3/*.pyd
 
 .planning/burn-it-all/
 
+# Recs eval-run artifacts. The eval suite now writes to $TMPDIR/eex-eval-runs
+# (see server/routes/suggestions.eval.test.ts); these in-tree stragglers are
+# generated output, not source. Pre-2026-06 runs remain tracked as history.
+.planning/ai-recommendations-loop/eval-runs/
+
+# Playwright-MCP browser session scratch (page snapshots, traces)
+.playwright-mcp/
+
 # Auto-generated session resume state (regenerated each Stop/PreCompact)
 .eex/
 
