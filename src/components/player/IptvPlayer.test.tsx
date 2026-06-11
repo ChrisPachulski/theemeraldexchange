@@ -11,6 +11,7 @@ import IptvPlayer, {
   applyAudioTrack,
   applySubtitleTrack,
   createFatalHlsErrorHandler,
+  selectHlsEngine,
   MAX_NET_RETRIES,
   MEDIA_RECOVERY_WINDOW_MS,
   type RecoverableHls,
@@ -83,6 +84,26 @@ describe('IptvPlayer', () => {
     const html = renderToStaticMarkup(<IptvPlayer grant={grant} />)
 
     expect(html).toContain('<video')
+  })
+})
+
+describe('selectHlsEngine', () => {
+  // Regression: desktop Chrome returns canPlayType('application/vnd.apple.mpegurl')
+  // === 'maybe' but cannot actually play HLS natively. MSE must win whenever
+  // available, or Chrome silently dead-ends on video.src = .m3u8 (error 4).
+  it('chooses MSE when hls.js is supported, even if native HLS claims support', () => {
+    expect(selectHlsEngine(true, 'maybe')).toBe('mse')
+    expect(selectHlsEngine(true, 'probably')).toBe('mse')
+    expect(selectHlsEngine(true, '')).toBe('mse')
+  })
+
+  it('falls back to native HLS only when MSE is unavailable (iOS Safari)', () => {
+    expect(selectHlsEngine(false, 'maybe')).toBe('native')
+    expect(selectHlsEngine(false, 'probably')).toBe('native')
+  })
+
+  it('reports unsupported when neither MSE nor native HLS is available', () => {
+    expect(selectHlsEngine(false, '')).toBe('unsupported')
   })
 })
 
