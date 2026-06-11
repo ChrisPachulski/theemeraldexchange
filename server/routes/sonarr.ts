@@ -279,40 +279,43 @@ async function grabTvUnderCap(
     return
   }
 
-  let grabbedBytes = 0
-  for (const pick of finalPicks) {
-    let grabRes: Awaited<ReturnType<typeof sonarrFetch>>
-    try {
-      grabRes = await sonarrFetch('/api/v3/release', {
+  // The reservation guards the PLANNING window only — the gap where a second
+  // concurrent add could clear the free-space gate against the same stale
+  // snapshot. Once every grab POST has a final outcome, SAB/Sonarr own the
+  // real on-disk accounting (mirrors grabBestUnderCap in radarr.ts), so the
+  // FULL reservation settles in `finally` whatever happened. The prior code
+  // only released when grabbedBytes < plannedBytes: a fully-successful grab
+  // released nothing and the leaked reservation 409'd every later add to the
+  // same root folder until restart.
+  try {
+    for (const pick of finalPicks) {
+      const grabRes = await sonarrFetch('/api/v3/release', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ guid: pick.guid, indexerId: pick.indexerId }),
       })
-    } catch (err) {
-      if (rootFolder) sonarrReservations.release(rootFolder, plannedBytes - grabbedBytes)
-      throw err
+      const ec = effectiveEpisodeCount(pick) ?? 1
+      console.log(
+        `[tv-cap] grab "${pick.title.slice(0, 80)}" ${(pick.size / 1024 ** 3).toFixed(2)}GB ` +
+          `(~${(pick.size / ec / 1024 ** 3).toFixed(2)}GB/ep, ${ec} ep) ` +
+          `series=${seriesId} → ${grabRes.status}`,
+      )
+      await recordSonarrGrabEvent({
+        ...base,
+        type: grabRes.ok ? 'grab_succeeded' : 'grab_failed',
+        status: grabRes.status,
+        release: {
+          title: pick.title,
+          sizeBytes: pick.size,
+          qualityWeight: pick.qualityWeight,
+          seasonNumber: pick.seasonNumber,
+        },
+      })
     }
-    if (grabRes.ok) grabbedBytes += pick.size
-    const ec = effectiveEpisodeCount(pick) ?? 1
-    console.log(
-      `[tv-cap] grab "${pick.title.slice(0, 80)}" ${(pick.size / 1024 ** 3).toFixed(2)}GB ` +
-        `(~${(pick.size / ec / 1024 ** 3).toFixed(2)}GB/ep, ${ec} ep) ` +
-        `series=${seriesId} → ${grabRes.status}`,
-    )
-    await recordSonarrGrabEvent({
-      ...base,
-      type: grabRes.ok ? 'grab_succeeded' : 'grab_failed',
-      status: grabRes.status,
-      release: {
-        title: pick.title,
-        sizeBytes: pick.size,
-        qualityWeight: pick.qualityWeight,
-        seasonNumber: pick.seasonNumber,
-      },
-    })
-  }
-  if (rootFolder && grabbedBytes < plannedBytes) {
-    sonarrReservations.release(rootFolder, plannedBytes - grabbedBytes)
+  } finally {
+    // Always settle the whole reservation — success, partial failure, or a
+    // thrown egress error. release() floors at zero, so this is idempotent.
+    if (rootFolder) sonarrReservations.release(rootFolder, plannedBytes)
   }
 }
 
