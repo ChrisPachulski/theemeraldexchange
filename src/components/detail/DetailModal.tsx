@@ -423,6 +423,12 @@ export function DetailModal({
               {playDirectLabel ?? 'Play Direct here'}
             </button>
           )}
+          {/* Recorded PRODUCT.md exception (re-review fix3, orchestrator
+              decision): a TRANSITIONAL per-title affordance beyond the
+              Watch-entry exception, kept while Plex remains the household's
+              playback surface. It stays available to every member (playback
+              is not an operator action). Expected to retire when in-app
+              playback fully covers the library. */}
           {inLibrary && playUrl && (
             <a
               className={`detail__btn ${onPlayDirect ? 'detail__btn--secondary' : 'detail__btn--primary'}`}
@@ -430,7 +436,7 @@ export function DetailModal({
               target="_blank"
               rel="noopener"
             >
-              Play in Plex →
+              Play in Plex -&gt;
             </a>
           )}
           {inLibrary && onUpgrade && (

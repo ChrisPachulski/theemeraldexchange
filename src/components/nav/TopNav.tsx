@@ -69,7 +69,7 @@ export function TopNav({ active }: Props) {
         <button
           type="button"
           className="top-nav__brand"
-          aria-label="Emerald Exchange — home"
+          aria-label="Emerald Exchange home"
           onClick={() => navigate('home')}
         >
           <EmeraldMark width={26} variant="single" className="top-nav__brand-gems" />

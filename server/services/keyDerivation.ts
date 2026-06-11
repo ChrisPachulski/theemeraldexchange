@@ -66,6 +66,11 @@ export const INFO_STREAM_TOKEN = 'eex/stream-token/v1' as const
  *  to every internal service call (recommender, M3 media-core, M4
  *  transcoder). Pure ASCII for byte-equality across Rust/Swift. */
 export const INFO_INTERNAL_PRINCIPAL = 'eex/internal-principal/v1' as const
+/** AES-256-GCM key for per-user BYO API keys encrypted at rest in
+ *  server.db (services/userApiKeys.ts). Derived from SESSION_SECRET —
+ *  rotating that secret orphans stored keys (users re-enter them),
+ *  which is the accepted trade for not adding a fourth env secret. */
+export const INFO_USER_API_KEY = 'eex/user-api-key/v1' as const
 
 /**
  * Derive a 32-byte AES-GCM / HMAC key from an arbitrary-length secret

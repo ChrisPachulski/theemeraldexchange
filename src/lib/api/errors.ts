@@ -82,7 +82,7 @@ export async function throwApiError(res: Response, scope: string): Promise<never
     // was rolled back. Transient far more often than not.
     const phase = data.phase === 'search' ? 'searching for' : 'grabbing'
     message =
-      `Couldn't finish ${phase} a release for this title — Radarr returned an error, so it wasn't added. ` +
+      `Couldn't finish ${phase} a release for this title; Radarr returned an error, so it wasn't added. ` +
       `Try again in a moment.`
   } else if (code === 'monitor_enable_failed') {
     message =
@@ -102,7 +102,7 @@ export async function throwApiError(res: Response, scope: string): Promise<never
     code === 'transcoder unreachable'
   ) {
     message =
-      "Couldn't start playback for this title — the transcoder didn't respond. Try again in a moment."
+      "Couldn't start playback for this title; the transcoder didn't respond. Try again in a moment."
   } else if (code === 'media_core_unreachable') {
     message =
       "Couldn't reach the media library service. Try again in a moment."
@@ -117,4 +117,20 @@ export async function throwApiError(res: Response, scope: string): Promise<never
 
 export function isInsufficientDiskSpace(e: unknown): e is ApiError {
   return e instanceof ApiError && e.code === 'insufficient_disk_space'
+}
+
+/**
+ * Duck-typed HTTP status of any thrown error, or undefined when the value
+ * carries none. Several modules throw their own status-carrying error
+ * classes instead of ApiError (e.g. SuggestionsError in useSuggested) —
+ * cross-cutting consumers like the queryClient session-expiry detector
+ * must not depend on `instanceof ApiError` or those errors silently
+ * bypass them. Any error shaped `{ status: number }` participates.
+ */
+export function errorStatus(e: unknown): number | undefined {
+  if (e && typeof e === 'object' && 'status' in e) {
+    const s = (e as { status?: unknown }).status
+    if (typeof s === 'number' && Number.isFinite(s)) return s
+  }
+  return undefined
 }

@@ -192,7 +192,7 @@ describe('IptvPlayer (mounted) — MEDIA_ERROR recovery ladder', () => {
     expect(hls.swapAudioCodec).toHaveBeenCalledTimes(1)
     // The user sees a real message instead of a frozen grey box.
     expect(
-      screen.getByText('Playback failed — this stream couldn’t be decoded. Close and re-open to retry.'),
+      screen.getByText('Playback failed; this stream couldn’t be decoded. Close and re-open to retry.'),
     ).toBeInTheDocument()
   })
 

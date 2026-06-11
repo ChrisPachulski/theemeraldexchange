@@ -3,7 +3,10 @@ import { useModalA11y } from '../../lib/hooks/useModalA11y'
 import type { MediaEpisode } from '../../lib/api/media'
 import './EpisodePicker.css'
 
-/** Format an episode label like "Show — S02E05 · Title". */
+/** Format an episode label like "Show — S02E05 · Title". The em dash here is
+ *  a SEPARATOR between data fields (show vs episode code), not prose copy —
+ *  DESIGN.md's em-dash law governs sentence punctuation; this is the same
+ *  glyph-as-delimiter idiom as the stat-table '—' placeholders. */
 function episodeLabel(showTitle: string, ep: MediaEpisode): string {
   const code = `S${String(ep.season).padStart(2, '0')}E${String(ep.episode).padStart(2, '0')}`
   return ep.title ? `${showTitle} — ${code} · ${ep.title}` : `${showTitle} — ${code}`

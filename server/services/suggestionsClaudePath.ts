@@ -49,6 +49,7 @@ import {
 } from './suggestionsRecentlyShown.js'
 import { validatePicks, type PickValidationContext } from './suggestionsValidation.js'
 import { tagIptvAvailability } from './iptvAvailability.js'
+import { getUserApiKey } from './userApiKeys.js'
 import type { SuggestionRequestContext } from './suggestionsContext.js'
 
 // Minimum library size for a meaningful taste signal. Below this, the
@@ -113,12 +114,18 @@ export async function runClaudeSuggestionPath(
     })
   }
 
-  // BYO key model — caller must supply their Anthropic key in the
-  // request header. 402 is the semantically correct response: "you
-  // need to provide credentials/funds yourself before this resource
-  // is available." Distinguishes from auth failure (401) and upstream
-  // breakage (5xx).
-  const userKey = (c.req.header('x-anthropic-api-key') ?? '').trim()
+  // BYO key model — the caller's Anthropic key. Resolution order:
+  //   1. X-Anthropic-Api-Key request header (back-compat: pre-migration
+  //      SPAs and any scripted callers still send it) — header wins.
+  //   2. The user's server-stored key (PUT /api/settings/anthropic-key,
+  //      encrypted at rest per sub in services/userApiKeys.ts) — the
+  //      current SPA never holds the key client-side.
+  // 402 is the semantically correct response when neither is present:
+  // "you need to provide credentials/funds yourself before this
+  // resource is available." Distinguishes from auth failure (401) and
+  // upstream breakage (5xx). The key itself must never be logged.
+  const headerKey = (c.req.header('x-anthropic-api-key') ?? '').trim()
+  const userKey = headerKey || (getUserApiKey(session.sub) ?? '')
   if (!userKey || !userKey.startsWith('sk-ant-')) {
     return c.json({ error: 'api_key_required', hint: 'set your key in the user menu' }, 402)
   }
