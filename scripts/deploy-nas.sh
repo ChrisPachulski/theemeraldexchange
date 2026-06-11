@@ -521,12 +521,48 @@ elif [ "$health_rc" -ne 0 ]; then
   exit 1
 fi
 
+# ── Release drift check (executed, not printed) ────────────────────────────
+# /api/version exists precisely so a deploy can prove the serving container
+# was built from the commit it shipped (EEX_RELEASE build arg → env.ts →
+# `release` field). Query it via the NAS loopback publish (curl exists on the
+# NAS; deliberately NOT the public URL, so this verifies the container we just
+# deployed independent of Cloudflare edge state — the tunnel path is covered
+# by the cloudflared restart above). Only meaningful when the health gate
+# passed; the bootstrap window (health_rc != 0, no DSN) has a crash-looping
+# backend by design, so the check is skipped there.
+if [ "$health_rc" -eq 0 ]; then
+  echo "→ Verifying deployed release via /api/version (drift check)"
+  deployed_release=$(ssh "${NAS_USER}@${NAS_HOST}" \
+    "curl -fsS --max-time 10 http://127.0.0.1:3001/api/version" 2>/dev/null \
+    | sed -n 's/.*"release":"\([^"]*\)".*/\1/p')
+  if [ -z "$deployed_release" ]; then
+    # The health gate just proved /api/health serves, so an unreadable
+    # /api/version is transport noise (ssh blip), not drift evidence — warn,
+    # don't fail a verified-healthy deploy on it.
+    echo "[deploy] WARN: could not read /api/version for the drift check — verify manually:" >&2
+    echo "         ssh ${NAS_USER}@${NAS_HOST} 'curl -s http://127.0.0.1:3001/api/version'" >&2
+  elif [ "$deployed_release" != "$DEPLOY_SHA_SHORT" ]; then
+    echo "✗ RELEASE DRIFT: /api/version reports release '${deployed_release}' but this run shipped ${DEPLOY_SHA_SHORT}." >&2
+    echo "  The stack is healthy but serving the WRONG build — the new image did not" >&2
+    echo "  actually take (stale compose cache? container not recreated?). NOT rolling" >&2
+    echo "  back (the running code IS the previous build); investigate on the NAS:" >&2
+    echo "    ssh ${NAS_USER}@${NAS_HOST} 'cd ${APPDATA} && docker compose up -d --build --force-recreate backend'" >&2
+    exit 1
+  else
+    echo "[deploy] /api/version release matches ${DEPLOY_SHA_SHORT} — no drift."
+  fi
+fi
+
 echo "→ Reclaiming BuildKit cache + dangling images (the docker vdisk creeps ~1GB/deploy otherwise)"
 ssh "${NAS_USER}@${NAS_HOST}" "docker builder prune -f >/dev/null 2>&1 || true; docker image prune -f >/dev/null 2>&1 || true"
 
 echo
-echo "✓ Deployed commit ${DEPLOY_SHA} (release tag: ${DEPLOY_SHA_SHORT}) and verified healthy."
-echo "  Verify the deployed release matches:"
-echo "    curl -s https://api.theemeraldexchange.com/api/version | grep ${DEPLOY_SHA_SHORT}"
+if [ "$health_rc" -eq 0 ]; then
+  echo "✓ Deployed commit ${DEPLOY_SHA} (release tag: ${DEPLOY_SHA_SHORT}) — health-gated and release-verified."
+else
+  # Only reachable in the Glitchtip bootstrap window (rollback skipped above).
+  echo "⚠ Deployed commit ${DEPLOY_SHA} (release tag: ${DEPLOY_SHA_SHORT}) — backend NOT healthy yet"
+  echo "  (expected: EEX_TELEMETRY_DSN bootstrap window — mint the DSN and re-deploy)."
+fi
 echo "  Public health endpoint:"
 echo "    curl -s https://api.theemeraldexchange.com/api/health"
