@@ -101,6 +101,13 @@ export function UserMenu() {
             </>
           )}
 
+          {/* Admin apps (Sonarr/Radarr/SAB) are OPERATOR tools and a recorded
+              PRODUCT.md exception (re-review fix3, orchestrator decision):
+              they render for admins ONLY. `isAdmin` is effectiveRole-based,
+              which is strictly tighter than role==='admin' — only a real
+              admin can hold effectiveRole 'admin', and an admin previewing
+              as a user intentionally loses the links along with the rest of
+              the admin chrome. Never widen this gate to non-admin roles. */}
           {isAdmin && (
             <>
               <hr className="user-menu__divider" />
