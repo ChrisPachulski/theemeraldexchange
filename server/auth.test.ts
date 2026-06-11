@@ -524,6 +524,60 @@ describe('POST /auth/apple (Sign in with Apple)', () => {
     })
   })
 
+  it('throttles repeated attempts against ONE Apple identity even with untrusted IP headers', async () => {
+    await withApple(async () => {
+      // TRUST_CLIENT_IP_HEADERS is off (beforeEach default) — the per-client
+      // IP buckets never engage, which used to leave only the coarse global
+      // bucket (200/min) biting behind the tunnel. The identity bucket keys
+      // on the token's (unverified) sub, so rotating source IPs doesn't help.
+      expect(env.trustClientIpHeaders).toBe(false)
+      const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url')
+      const fakeJwt = (sub: string) => `${b64({ alg: 'RS256' })}.${b64({ sub })}.sig`
+      const a = app()
+      const stuffedToken = fakeJwt('001234.deadbeefdeadbeefdeadbeefdeadbeef.5678')
+      for (let i = 0; i < 20; i++) {
+        const r = await a.request('/auth/apple', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'cf-connecting-ip': `203.0.113.${i}`, // rotating, untrusted
+          },
+          body: JSON.stringify({ identityToken: stuffedToken }),
+        })
+        // Verifier rejects the forgery, but the limiter hasn't tripped yet.
+        expect(r.status).toBe(401)
+      }
+      const limited = await a.request('/auth/apple', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': '203.0.113.250' },
+        body: JSON.stringify({ identityToken: stuffedToken }),
+      })
+      expect(limited.status).toBe(429)
+      expect(await limited.json()).toEqual({ error: 'rate_limited' })
+      expect(limited.headers.get('Retry-After')).toBeTruthy()
+
+      // A DIFFERENT identity is not collateral damage of the stuffed one.
+      const other = await a.request('/auth/apple', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identityToken: fakeJwt('009999.feedfacefeedfacefeedfacefeedface.1111') }),
+      })
+      expect(other.status).toBe(401)
+    })
+  }, 15_000)
+
+  it('a token without a parseable sub still passes through to verification (global bucket only)', async () => {
+    await withApple(async () => {
+      const r = await app().request('/auth/apple', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identityToken: 'not-a-jwt-at-all' }),
+      })
+      // No identity to key on → no identity bucket; the verifier rejects it.
+      expect(r.status).toBe(401)
+    })
+  })
+
   it('verified Apple identity with a valid invite creates a member and mints a session', async () => {
     await withApple(async () => {
       invites.set('APPLECODE', { uses: 1 })
