@@ -295,6 +295,56 @@ describe('playlist token lifecycle', () => {
     expect(row.revoked_at).not.toBeNull()
   })
 
+  describe('publicBaseUrl host allowlisting', () => {
+    const envRw = env as unknown as { allowedOrigins: string[] }
+    const prevOrigins = envRw.allowedOrigins
+
+    afterAll(() => {
+      envRw.allowedOrigins = prevOrigins
+    })
+
+    async function mintWithForwardedHost(forwardedHost: string) {
+      const res = await app.request('/api/iptv/playlist/token', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          host: 'internal.local:3001',
+          'x-forwarded-proto': 'https',
+          'x-forwarded-host': forwardedHost,
+        },
+        body: JSON.stringify({}),
+      })
+      expect(res.status).toBe(200)
+      return (await res.json()) as { url: string }
+    }
+
+    it('accepts a forwarded host that matches an allowed origin exactly', async () => {
+      envRw.allowedOrigins = ['https://theemeraldexchange.example']
+      const minted = await mintWithForwardedHost('theemeraldexchange.example')
+      expect(minted.url).toMatch(/^https:\/\/theemeraldexchange\.example\/api\/iptv\/playlist\.m3u\?t=/)
+    })
+
+    it('accepts a forwarded host that is a subdomain of an allowed origin (api.<spa-domain>)', async () => {
+      envRw.allowedOrigins = ['https://theemeraldexchange.example']
+      const minted = await mintWithForwardedHost('api.theemeraldexchange.example')
+      expect(minted.url).toMatch(/^https:\/\/api\.theemeraldexchange\.example\//)
+    })
+
+    it('falls back to the first allowed origin for a forwarded host outside the allowlist', async () => {
+      envRw.allowedOrigins = ['https://theemeraldexchange.example']
+      for (const evil of ['evil.example.com', 'eviltheemeraldexchange.example', 'theemeraldexchange.example.evil.com']) {
+        const minted = await mintWithForwardedHost(evil)
+        expect(minted.url).toMatch(/^https:\/\/theemeraldexchange\.example\//)
+      }
+    })
+
+    it('passes the forwarded host through when no allowlist is configured (dev)', async () => {
+      envRw.allowedOrigins = []
+      const minted = await mintWithForwardedHost('api.example.com')
+      expect(minted.url).toMatch(/^https:\/\/api\.example\.com\//)
+    })
+  })
+
   it('rejects the legacy M1 rid "all" (D2a fallback removed)', async () => {
     const res = await app.request(`/api/iptv/playlist.m3u?t=${fakeToken('playlist', 'all')}`)
     expect(res.status).toBe(401)
