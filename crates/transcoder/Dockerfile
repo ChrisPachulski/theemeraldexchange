@@ -35,12 +35,22 @@ COPY crates ./crates
 
 # Compile-parallelism cap for constrained / shared hosts. The NAS deploy passes
 # --build-arg CARGO_BUILD_JOBS=2 (via docker-compose build.args) so a rebuild
-# uses at most 2 of the box's 5 cores and CANNOT pin the CPU and starve
-# co-tenant services (Plex shares this host). Unset (CI / dev) = cargo's default
-# (all cores). A real prior incident: an uncapped rebuild drove load to 73 on the
-# 5-core NAS and brown-outed Plex for ~13 minutes.
+# uses at most N of the box's cores and CANNOT pin the CPU and starve co-tenant
+# services (Plex shares this host). Unset (CI / dev) = cargo's default (all
+# cores). A real prior incident: an uncapped rebuild drove load to 73 on the
+# 6-thread NAS and brown-outed Plex for ~13 minutes.
 ARG CARGO_BUILD_JOBS
-RUN cargo build --release -p transcoder ${CARGO_BUILD_JOBS:+--jobs ${CARGO_BUILD_JOBS}}
+# BuildKit cache mounts make rebuilds INCREMENTAL: the compiled-dependency
+# `target/` and the downloaded crate `registry/` persist across builds, so a
+# source change recompiles only the handful of changed crates (~1-2 min, light)
+# instead of the whole 400-crate workspace from cold (~20-30 min, the load storm
+# that brown-outed Plex). The cache mounts are NOT part of the image layer, so
+# the built binary is copied OUT to a normal path for the runtime stage to grab.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/build/target,sharing=locked \
+    cargo build --release -p transcoder ${CARGO_BUILD_JOBS:+--jobs ${CARGO_BUILD_JOBS}} \
+ && cp /build/target/release/transcoder /usr/local/bin/transcoder-bin
 
 # ---------------------------------------------------------------------------
 FROM debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb AS runtime
@@ -62,7 +72,9 @@ RUN apt-get update \
  && useradd --system --uid 10003 --gid transcoder --home-dir /srv --no-create-home transcoder \
  && chown -R transcoder:transcoder /scratch /srv
 
-COPY --from=builder /build/target/release/transcoder /usr/local/bin/transcoder
+# From the persisted copy made in the builder (the `target/` cache mount that
+# produced it is ephemeral and not present in the builder layer).
+COPY --from=builder /usr/local/bin/transcoder-bin /usr/local/bin/transcoder
 
 # Bind 0.0.0.0 inside the container so media-core/backend can reach it over
 # the docker network; compose publishes the port to the host loopback only.
