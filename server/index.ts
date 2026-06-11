@@ -24,6 +24,11 @@ import { registerDbBackupSchedule } from './services/dbBackupScheduler.js'
 import { drainRemuxSessions } from './services/iptvRemux.js'
 import { closeIptvDb } from './services/iptvDbSingleton.js'
 import { ensureServerId, closeServerDb } from './services/serverDb.js'
+import { createLogger } from './services/logger.js'
+import { warnExpiredCompatWindows } from './services/compatWindows.js'
+
+const log = createLogger('boot')
+const shutdownLog = createLogger('shutdown')
 
 // Abort immediately if ffmpeg is absent or below the required minimum version.
 // §13.4: silent ENOENT at runtime is unacceptable; fail fast at boot instead.
@@ -48,9 +53,8 @@ if (env.EEX_TELEMETRY_DSN) {
     ],
   })
 } else {
-  console.warn(
-    '[telemetry] EEX_TELEMETRY_DSN is not set. ' +
-      'Sentry SDK will not be initialized. ' +
+  log.warn(
+    'EEX_TELEMETRY_DSN is not set. Sentry SDK will not be initialized. ' +
       'Telemetry is mandatory in production (§15.1).',
   )
 }
@@ -58,7 +62,11 @@ if (env.EEX_TELEMETRY_DSN) {
 // Boot sequence: open server.db, run migrations, generate server_id on
 // first boot (INSERT OR IGNORE — safe to call on every subsequent boot).
 const serverId = ensureServerId()
-console.log(`[boot] server_id: ${serverId}`)
+log.info('server_id resolved', { serverId })
+
+// Surface any dated backward-compat shim whose removal date has passed —
+// expiry becomes a boot log line instead of a manual calendar sweep.
+warnExpiredCompatWindows()
 
 // Capture the http.Server handle so graceful shutdown can stop accepting new
 // connections and drain in-flight requests (finding 14-2) — the prior code
@@ -66,7 +74,7 @@ console.log(`[boot] server_id: ${serverId}`)
 const server = serve(
   { fetch: app.fetch, port: env.port },
   (info) => {
-    console.log(`backend listening on http://localhost:${info.port}`)
+    log.info(`backend listening on http://localhost:${info.port}`)
   },
 )
 
@@ -113,7 +121,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
 
   // Hard backstop: if anything hangs, force-exit so a deploy never wedges.
   const forceExit = setTimeout(() => {
-    console.error('[shutdown] grace window exceeded; forcing exit')
+    shutdownLog.error('grace window exceeded; forcing exit', { signal })
     process.exit(exitCode)
   }, 15_000)
   forceExit.unref?.()
@@ -142,7 +150,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
     closeIptvDb()
     closeServerDb()
   } catch (err) {
-    console.error('[shutdown] error during graceful shutdown:', err)
+    shutdownLog.error('error during graceful shutdown', { error: err })
   } finally {
     clearTimeout(forceExit)
     process.exit(exitCode)

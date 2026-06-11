@@ -1,14 +1,22 @@
 // Allow-list of Radarr endpoints. Mirrors sonarr.ts.
 
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { rateLimit } from '../middleware/rateLimit.js'
-import { radarrFetch, radarrRootFolders, type RootFolder } from '../services/radarr.js'
+import { radarrFetch, radarrRootFolders } from '../services/radarr.js'
 import {
   createGrabEventRecorder,
   createReservationLedger,
   type CappedGrabResult,
+  type RootFolderSpaceSnapshot,
 } from '../services/arrGrab.js'
+import {
+  gateRootFolderSpace,
+  materializeFailurePayload,
+  materializeNonAdminAddBody,
+  type Release,
+  type SpaceGateFailure,
+} from '../services/arrAdd.js'
 import { postFeedback } from '../services/recommender.js'
 import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
 import { env } from '../env.js'
@@ -28,11 +36,7 @@ const radarrMutateLimit = rateLimit({
   intervalMs: env.arrMutateRateIntervalMs,
 })
 
-type RadarrSpaceGateFailure = {
-  status: 400 | 502 | 507
-  body: Record<string, unknown>
-}
-type RadarrFolderWithFreeSpace = RootFolder & { freeSpace: number }
+type RadarrSpaceGateFailure = SpaceGateFailure | { status: 502; body: Record<string, unknown> }
 
 // Finding 4-1: in-flight disk-space reservations against root-folder
 // free space. Mechanism + rationale live in services/arrGrab.ts; this
@@ -41,12 +45,11 @@ const radarrReservations = createReservationLedger()
 
 const recordRadarrGrabEvent = createGrabEventRecorder('radarr')
 
+// STEP: space gate. Folder loading (and its 502 wiring) is Radarr's; the
+// fail-closed free-space/reservation logic is shared (services/arrAdd.ts).
 async function validateRadarrRootFolderSpace(rootFolderPath?: string): Promise<
-  { ok: true; folder: RadarrFolderWithFreeSpace } | { ok: false; failure: RadarrSpaceGateFailure }
+  { ok: true; folder: RootFolderSpaceSnapshot } | { ok: false; failure: RadarrSpaceGateFailure }
 > {
-  if (!rootFolderPath) {
-    return { ok: false, failure: { status: 400, body: { error: 'rootFolderPath_required' } } }
-  }
   let folders: Awaited<ReturnType<typeof radarrRootFolders>>
   try {
     folders = await radarrRootFolders()
@@ -54,33 +57,7 @@ async function validateRadarrRootFolderSpace(rootFolderPath?: string): Promise<
     console.error('[radarr] rootfolder lookup failed:', err)
     return { ok: false, failure: { status: 502, body: { error: 'rootfolder_unreachable' } } }
   }
-  const folder = folders.find((f) => f.path === rootFolderPath)
-  if (!folder) {
-    return { ok: false, failure: { status: 400, body: { error: 'unknown_root_folder', path: rootFolderPath } } }
-  }
-  if (typeof folder.freeSpace !== 'number' || !Number.isFinite(folder.freeSpace)) {
-    return { ok: false, failure: { status: 507, body: { error: 'free_space_unknown', path: folder.path } } }
-  }
-  const typedFolder = folder as RadarrFolderWithFreeSpace
-  // Finding 4-1: gate against free space MINUS in-flight reservations so a
-  // second concurrent add can't clear the gate against the same stale snapshot
-  // the first add is already spending.
-  const available = radarrReservations.availableBytes(typedFolder)
-  if (available < env.minFreeBytes) {
-    return {
-      ok: false,
-      failure: {
-        status: 507,
-        body: {
-          error: 'insufficient_disk_space',
-          free_bytes: available,
-          threshold_bytes: env.minFreeBytes,
-          path: folder.path,
-        },
-      },
-    }
-  }
-  return { ok: true, folder: typedFolder }
+  return gateRootFolderSpace({ rootFolderPath, folders, ledger: radarrReservations })
 }
 
 const forwardRead = (path: string) =>
@@ -123,7 +100,7 @@ forwardRead('/api/v3/queue')
 //     gated by Radarr's quality profile, NOT env.maxMovieBytes.
 async function grabBestUnderCap(
   movieId: number,
-  rootFolder: RadarrFolderWithFreeSpace,
+  rootFolder: RootFolderSpaceSnapshot,
   title?: string,
   sub?: string,
 ): Promise<CappedGrabResult> {
@@ -144,15 +121,6 @@ async function grabBestUnderCap(
     console.error(`[movie-cap] release search ${releaseRes.status} for movie ${movieId}`)
     await recordRadarrGrabEvent({ ...base, type: 'search_failed', status: releaseRes.status })
     return { status: 'search_failed', upstreamStatus: releaseRes.status }
-  }
-  type Release = {
-    guid: string
-    indexerId: number
-    size: number
-    qualityWeight: number
-    title: string
-    rejected?: boolean
-    temporarilyRejected?: boolean
   }
   const all = (await releaseRes.json()) as Release[]
   // Finding 4-1: filter against free space MINUS in-flight reservations, not
@@ -346,144 +314,74 @@ function isUsableCreatedMovie(
   return Boolean(m?.id && typeof m.title === 'string' && m.title.trim().length > 0)
 }
 
-function normalizePath(p: string): string {
-  return p.replace(/[\\/]+$/, '').toLowerCase()
+// STEP: non-admin policy materialization. The allowlist + policy stamping
+// is Radarr's; the folder/profile resolution machinery (incl. pickProfile's
+// preference chain) is shared with Sonarr in services/arrAdd.ts. Profile
+// selection prefers env.defaultProfileName (case-insensitive — defaults to
+// "choose me" to mirror the frontend modals) and fails closed if missing;
+// without it, Radarr's default Any profile is sometimes id 1 and a
+// non-admin direct-POST would land on the most permissive setting.
+function materializeNonAdminMovieBody(raw: RadarrAddBody) {
+  return materializeNonAdminAddBody({
+    app: 'radarr',
+    raw,
+    allowKeys: NON_ADMIN_RADARR_ALLOW,
+    loadFolders: radarrRootFolders,
+    fetchProfiles: () => radarrFetch('/api/v3/qualityprofile', { method: 'GET' }),
+    configuredFolderPath: env.defaultRadarrRootFolderPath,
+    applyPolicy: (safe, picked) => {
+      safe.rootFolderPath = picked.folderPath
+      safe.qualityProfileId = picked.profileId
+      safe.monitored = true
+      // searchForMovie:true gates the cap-aware grab for non-admins who'd
+      // otherwise just want "add and start." The cap rewrite still forces
+      // searchForMovie:false on the actual upstream call so the grab path
+      // is the only download trigger.
+      safe.addOptions = { searchForMovie: true }
+      safe.tags = []
+    },
+  })
 }
 
-/**
- * Pick a quality profile by preference order. See sonarr.ts pickProfile
- * for the rationale — the Radarr version is identical so a curated
- * household with one "Choose Me" or one "HD-1080p" profile lands on it
- * automatically.
- */
-function pickProfile(
-  profiles: Array<{ id: number; name?: string }>,
-  defaultName: string,
-): { id: number; name?: string } | undefined {
-  if (profiles.length === 0) return undefined
-  const norm = (n?: string) => (n ?? '').trim().toLowerCase()
-  const named = profiles.find((p) => norm(p.name) === defaultName)
-  if (named) return named
-  const has1080p = profiles.find((p) => norm(p.name).includes('1080p'))
-  if (has1080p) return has1080p
-  const startsHd = profiles.find((p) => norm(p.name).startsWith('hd'))
-  if (startsHd) return startsHd
-  const notAny = profiles.find((p) => norm(p.name) !== 'any')
-  if (notAny) return notAny
-  return profiles[0]
-}
-
-async function materializeNonAdminMovieBody(raw: RadarrAddBody): Promise<
-  | { ok: true; body: RadarrAddBody }
-  | {
-      ok: false
-      reason: string
-      expected_name?: string
-      available_names?: string[]
-      expected_path?: string
-      available_paths?: string[]
-    }
-> {
-  // Pull the upstream's qualityprofile + rootfolder lists, then pick
-  // the canonical "what the admin already curates" defaults. Profile
-  // selection prefers env.defaultProfileName (case-insensitive exact
-  // match — defaults to "choose me" to mirror the frontend modals)
-  // and fails closed if that profile is missing. Without this
-  // preference, Radarr's default Any profile is sometimes id 1 and a
-  // non-admin direct-POST would land on the most permissive setting
-  // instead of the curated one.
-  const [folderResult, profileRes] = await Promise.all([
-    radarrRootFolders()
-      .then((folders) => ({ ok: true as const, folders }))
-      .catch((err) => {
-        console.error('[radarr] rootfolder lookup failed:', err)
-        return { ok: false as const }
-      }),
-    radarrFetch('/api/v3/qualityprofile', { method: 'GET' }),
-  ])
-  if (!folderResult.ok) {
-    return { ok: false, reason: 'rootfolder_unreachable' }
+// STEP: parse + policy. Pass through full admin policy only when the client
+// actually sent policy fields. An admin previewing-as-user (auth.tsx makes
+// isAdmin viewAs-aware) sends the slim user-shape body { tmdbId, title, year }
+// through AddMovieModal — without this branch that body would skip
+// materialize and trip the rootFolderPath_required gate in 2ms, surfacing as
+// the cryptic "Radarr /movie: 400" toast. Non-admins (and admins-in-preview)
+// can't dictate quality / folder / monitor / tag / searchForMovie policy —
+// those are admin-curated; materialization replaces them with server-derived
+// defaults so a direct-POST can't bypass the curated profile.
+async function resolveMovieAddBody(
+  session: { role: string },
+  parsedBody: unknown,
+): Promise<{ ok: true; body: RadarrAddBody } | { ok: false; payload: Record<string, unknown>; status: 400 | 503 }> {
+  if (!parsedBody || typeof parsedBody !== 'object' || Array.isArray(parsedBody)) {
+    return { ok: false, payload: { error: 'invalid_body' }, status: 400 }
   }
-  if (!profileRes.ok) {
-    return { ok: false, reason: 'qualityprofile_unreachable' }
+  const rawBody = parsedBody as RadarrAddBody
+  const adminSuppliedPolicy = session.role === 'admin' && rawBody.rootFolderPath !== undefined
+  if (adminSuppliedPolicy) {
+    return { ok: true, body: rawBody }
   }
-  const profiles = (await profileRes.json()) as Array<{ id: number; name?: string }>
-  const folders = folderResult.folders
-  const configuredFolder = env.defaultRadarrRootFolderPath
-  const folder = configuredFolder
-    ? folders.find((f) => normalizePath(f.path) === normalizePath(configuredFolder))
-    : folders[0]
-  const profile = pickProfile(profiles, env.defaultProfileName)
-  if (!folder) {
-    return {
-      ok: false,
-      reason: configuredFolder ? 'default_root_folder_missing' : 'admin_must_configure_upstream',
-      expected_path: configuredFolder ?? undefined,
-      available_paths: folders.map((f) => f.path),
-    }
+  const materialized = await materializeNonAdminMovieBody(rawBody)
+  if (!materialized.ok) {
+    return { ok: false, payload: materializeFailurePayload(materialized), status: 503 }
   }
-  if (!profile) {
-    return {
-      ok: false,
-      reason: 'default_quality_profile_missing',
-      expected_name: env.defaultProfileName,
-      available_names: profiles.map((p) => p.name).filter((n): n is string => typeof n === 'string'),
-    }
-  }
-  const safe: RadarrAddBody = {}
-  for (const key of NON_ADMIN_RADARR_ALLOW) {
-    if (raw[key] !== undefined) safe[key] = raw[key]
-  }
-  safe.rootFolderPath = folder.path
-  safe.qualityProfileId = profile.id
-  safe.monitored = true
-  // searchForMovie:true gates the cap-aware grab below for non-admins
-  // who'd otherwise just want "add and start." The existing cap
-  // rewrite still forces searchForMovie:false on the actual upstream
-  // call so the grab path is the only download trigger.
-  safe.addOptions = { searchForMovie: true }
-  safe.tags = []
-  return { ok: true, body: safe }
+  return { ok: true, body: materialized.body }
 }
 
 radarr.post('/api/v3/movie', radarrMutateLimit, async (c) => {
   const session = c.get('session')
-  const parsedBody = await c.req.json().catch(() => null)
-  if (!parsedBody || typeof parsedBody !== 'object' || Array.isArray(parsedBody)) {
-    return c.json({ error: 'invalid_body' }, 400)
+  // STEP 1 — parse + policy.
+  const resolved = await resolveMovieAddBody(session, await c.req.json().catch(() => null))
+  if (!resolved.ok) {
+    return c.json(resolved.payload, resolved.status)
   }
-  const rawBody = parsedBody as RadarrAddBody
-  let body: RadarrAddBody
-  // Pass through full admin policy only when the client actually sent
-  // policy fields. An admin previewing-as-user (auth.tsx makes isAdmin
-  // viewAs-aware) sends the slim user-shape body { tmdbId, title, year }
-  // through AddMovieModal — without this branch that body would skip
-  // materialize and trip the rootFolderPath_required gate below in 2ms,
-  // surfacing as the cryptic "Radarr /movie: 400" toast.
-  const adminSuppliedPolicy = session.role === 'admin' && rawBody.rootFolderPath !== undefined
-  if (adminSuppliedPolicy) {
-    body = rawBody
-  } else {
-    // Non-admins (and admins-in-preview) can't dictate quality / folder /
-    // monitor / tag / searchForMovie policy — those are admin-curated.
-    // Replace policy fields with server-derived defaults so a direct-POST
-    // can't bypass the curated profile or pin a different root folder.
-    const materialized = await materializeNonAdminMovieBody(rawBody)
-    if (!materialized.ok) {
-      const payload: Record<string, unknown> = { error: materialized.reason }
-      if (materialized.expected_name) payload.expected_name = materialized.expected_name
-      if (materialized.available_names) payload.available_names = materialized.available_names
-      if (materialized.expected_path) payload.expected_path = materialized.expected_path
-      if (materialized.available_paths) payload.available_paths = materialized.available_paths
-      return c.json(payload, 503)
-    }
-    body = materialized.body
-  }
-  // Hard disk-space gate. Fail closed on every "we couldn't actually
-  // measure free space" case — the prior implementation only blocked
-  // when rootFolderPath was supplied AND the folder matched AND
-  // freeSpace was a number, so a missing path, an unknown path, or a
-  // Radarr response without freeSpace all silently bypassed the cap.
+  const body = resolved.body
+  // STEP 2 — hard disk-space gate. Fail closed on every "we couldn't
+  // actually measure free space" case (missing path, unknown path, response
+  // without freeSpace) — see gateRootFolderSpace in services/arrAdd.ts.
   const spaceGate = await validateRadarrRootFolderSpace(body.rootFolderPath)
   if (!spaceGate.ok) {
     return c.json(spaceGate.failure.body, spaceGate.failure.status)
@@ -542,145 +440,30 @@ radarr.post('/api/v3/movie', radarrMutateLimit, async (c) => {
   let keepBody = out
   let keepContentType = r.headers.get('Content-Type') ?? 'application/json'
 
-  // Wait for the size-capped grab before returning ordinary success.
-  // The movie is intentionally added unmonitored on this path, so a failed
-  // capped search has no Radarr retry safety net unless we surface it here.
+  // STEP 4+5 — recover the created record, then AWAIT the size-capped grab
+  // before returning ordinary success. The movie is intentionally added
+  // unmonitored on this path, so a failed capped search has no Radarr retry
+  // safety net unless we surface it here. (This is deliberately synchronous
+  // where Sonarr's TV grab is fire-and-forget — see the contrast note on
+  // grabTvUnderCap's spawn site in sonarr.ts: the movie path has rollback
+  // semantics the SPA turns into capped_grab_* toasts.)
   if (r.ok && wantedSearch) {
-    let created = (() => {
-      try {
-        return JSON.parse(out) as CreatedRadarrMovie
-      } catch {
-        return null
-      }
-    })()
+    const recovered = await recoverCreatedMovie(out, body.tmdbId)
+    if (recovered.refetchedBody !== null) {
+      keepBody = recovered.refetchedBody
+      keepContentType = 'application/json'
+    }
+    const created = recovered.created
     if (!isUsableCreatedMovie(created)) {
-      // 201 with an unparseable or untitled body. cappedBody forced
-      // monitored:false, so silently skipping the grab here used to leave a
-      // dead unmonitored movie while the response still read as success.
-      const refetched = await lookupMovieByTmdbId(body.tmdbId)
-      if (refetched) {
-        created = refetched
-        keepBody = JSON.stringify(refetched)
-        keepContentType = 'application/json'
-      }
+      return await rejectUnverifiedAdd(c, created, body.title, session.sub)
     }
-    if (isUsableCreatedMovie(created)) {
-      const itemId = created.id
-      const itemTitle = created.title
-      try {
-        const grab = await grabBestUnderCap(itemId, spaceGate.folder, itemTitle, session.sub)
-        if (grab.status === 'search_failed' || grab.status === 'grab_failed') {
-          const rollback = await deleteCreatedMovie(created)
-          return c.json(
-            {
-              error: 'capped_grab_failed',
-              status: grab.upstreamStatus,
-              phase: grab.status === 'search_failed' ? 'search' : 'grab',
-              rollbackStatus: rollback.ok ? undefined : rollback.status || undefined,
-              movie: created,
-            },
-            424,
-          )
-        }
-        if (grab.status === 'no_releases' || grab.status === 'no_matching_releases') {
-          // Nothing GRABBABLE yet — either an unreleased/future film with no
-          // releases at all (no_releases), or releases exist but Radarr
-          // rejected every one for parse/title/quality reasons unrelated to
-          // our size cap (no_matching_releases — e.g. an obscure short whose
-          // only releases have unparseable names). In BOTH cases the size cap
-          // never applied, so do NOT discard the add: flip it to monitored so
-          // Radarr's RSS sync grabs it the moment a usable release appears.
-          // This is the "add it and it'll come when available" behavior, and
-          // avoids the dead-end 424 on titles that simply have no clean
-          // release right now.
-          const monitored = await setMovieMonitored(created, true)
-          if (!monitored.ok) {
-            return c.json(
-              {
-                error: 'monitor_enable_failed',
-                status: monitored.status || undefined,
-                phase: grab.status,
-                scanned: grab.scanned,
-                movie: created,
-              },
-              502,
-            )
-          }
-          signalAdded() // kept + monitored → a real conversion
-          return c.json(
-            {
-              status: 'monitoring',
-              phase: grab.status,
-              scanned: grab.scanned,
-              monitored: true,
-              movie: created,
-            },
-            200,
-          )
-        }
-        if (grab.status === 'all_rejected_by_cap') {
-          // Releases DO exist but every one exceeds the size cap. Honor the
-          // cap and roll back rather than leave a monitored item that RSS
-          // would later auto-grab uncapped.
-          const rollback = await deleteCreatedMovie(created)
-          return c.json(
-            {
-              error: 'capped_grab_not_started',
-              phase: grab.status,
-              scanned: grab.scanned,
-              capGb: env.maxMovieGb,
-              rollbackStatus: rollback.ok ? undefined : rollback.status || undefined,
-              movie: created,
-            },
-            424,
-          )
-        }
-      } catch (e) {
-        console.error('[movie-cap] grab failed:', e)
-        await recordRadarrGrabEvent({
-          itemId,
-          title: itemTitle,
-          sub: session.sub,
-          type: 'grab_failed',
-          error: e instanceof Error ? e.message : String(e),
-        })
-        const rollback = await deleteCreatedMovie(created)
-        return c.json(
-          {
-            error: 'capped_grab_failed',
-            phase: 'exception',
-            message: e instanceof Error ? e.message : String(e),
-            rollbackStatus: rollback.ok ? undefined : rollback.status || undefined,
-          },
-          424,
-        )
-      }
-    } else {
-      // The 201 body was unusable AND the tmdbId re-fetch couldn't identify
-      // the movie. The cap grab and the monitor fallback are both impossible,
-      // so don't claim success: roll back if an id survived parsing, record
-      // why for the admin panel, and surface a distinct error to the UI.
-      const rollback = created?.id ? await deleteCreatedMovie(created) : null
-      await recordRadarrGrabEvent({
-        itemId: created?.id ?? 0,
-        title: typeof body.title === 'string' ? body.title : undefined,
-        sub: session.sub,
-        type: 'grab_failed',
-        error:
-          'Radarr add returned success but the created movie could not be identified ' +
-          '(unparseable/untitled response body and tmdbId re-fetch failed); cap-aware grab skipped',
-      })
-      return c.json(
-        {
-          error: 'add_unverified',
-          message:
-            'Radarr accepted the add but did not identify the created movie, so no download was started. ' +
-            'Check Radarr directly, then retry.',
-          rollbackStatus: rollback && !rollback.ok ? rollback.status || undefined : undefined,
-        },
-        502,
-      )
-    }
+    const settled = await settleCappedMovieGrab(c, {
+      created,
+      folder: spaceGate.folder,
+      sub: session.sub,
+      signalAdded,
+    })
+    if (settled) return settled
   }
 
   // Reached on: a successful capped grab (grab_succeeded) or the "Just
@@ -692,6 +475,172 @@ radarr.post('/api/v3/movie', radarrMutateLimit, async (c) => {
     headers: { 'Content-Type': keepContentType },
   })
 })
+
+// STEP 4 — recover the created record. Radarr can 201 the add while
+// returning a body we can't use; the movie DOES exist upstream (created
+// unmonitored by the cap rewrite), so silently skipping the grab on a bad
+// body would strand a dead movie. Re-fetch the canonical record by tmdbId;
+// when that succeeds the refetched JSON also replaces the response body the
+// SPA receives.
+async function recoverCreatedMovie(
+  out: string,
+  tmdbId: unknown,
+): Promise<{ created: CreatedRadarrMovie | null; refetchedBody: string | null }> {
+  let created = (() => {
+    try {
+      return JSON.parse(out) as CreatedRadarrMovie
+    } catch {
+      return null
+    }
+  })()
+  let refetchedBody: string | null = null
+  if (!isUsableCreatedMovie(created)) {
+    const refetched = await lookupMovieByTmdbId(tmdbId)
+    if (refetched) {
+      created = refetched
+      refetchedBody = JSON.stringify(refetched)
+    }
+  }
+  return { created, refetchedBody }
+}
+
+// STEP 5 (failure leg) — the 201 body was unusable AND the tmdbId re-fetch
+// couldn't identify the movie. The cap grab and the monitor fallback are both
+// impossible, so don't claim success: roll back if an id survived parsing,
+// record why for the admin panel, and surface a distinct error to the UI.
+async function rejectUnverifiedAdd(
+  c: Context<Env>,
+  created: CreatedRadarrMovie | null,
+  bodyTitle: unknown,
+  sub: string,
+): Promise<Response> {
+  const rollback = created?.id ? await deleteCreatedMovie(created) : null
+  await recordRadarrGrabEvent({
+    itemId: created?.id ?? 0,
+    title: typeof bodyTitle === 'string' ? bodyTitle : undefined,
+    sub,
+    type: 'grab_failed',
+    error:
+      'Radarr add returned success but the created movie could not be identified ' +
+      '(unparseable/untitled response body and tmdbId re-fetch failed); cap-aware grab skipped',
+  })
+  return c.json(
+    {
+      error: 'add_unverified',
+      message:
+        'Radarr accepted the add but did not identify the created movie, so no download was started. ' +
+        'Check Radarr directly, then retry.',
+      rollbackStatus: rollback && !rollback.ok ? rollback.status || undefined : undefined,
+    },
+    502,
+  )
+}
+
+// STEP 5 — map the capped-grab outcome to a response. Returns null when the
+// movie is KEPT with a successful grab (the handler then falls through to the
+// ordinary-success response + conversion signal).
+async function settleCappedMovieGrab(
+  c: Context<Env>,
+  opts: {
+    created: CreatedRadarrMovie & { id: number; title: string }
+    folder: RootFolderSpaceSnapshot
+    sub: string
+    signalAdded: () => void
+  },
+): Promise<Response | null> {
+  const { created, folder, sub, signalAdded } = opts
+  const itemId = created.id
+  const itemTitle = created.title
+  try {
+    const grab = await grabBestUnderCap(itemId, folder, itemTitle, sub)
+    if (grab.status === 'search_failed' || grab.status === 'grab_failed') {
+      const rollback = await deleteCreatedMovie(created)
+      return c.json(
+        {
+          error: 'capped_grab_failed',
+          status: grab.upstreamStatus,
+          phase: grab.status === 'search_failed' ? 'search' : 'grab',
+          rollbackStatus: rollback.ok ? undefined : rollback.status || undefined,
+          movie: created,
+        },
+        424,
+      )
+    }
+    if (grab.status === 'no_releases' || grab.status === 'no_matching_releases') {
+      // Nothing GRABBABLE yet — either an unreleased/future film with no
+      // releases at all (no_releases), or releases exist but Radarr
+      // rejected every one for parse/title/quality reasons unrelated to
+      // our size cap (no_matching_releases — e.g. an obscure short whose
+      // only releases have unparseable names). In BOTH cases the size cap
+      // never applied, so do NOT discard the add: flip it to monitored so
+      // Radarr's RSS sync grabs it the moment a usable release appears.
+      // This is the "add it and it'll come when available" behavior, and
+      // avoids the dead-end 424 on titles that simply have no clean
+      // release right now.
+      const monitored = await setMovieMonitored(created, true)
+      if (!monitored.ok) {
+        return c.json(
+          {
+            error: 'monitor_enable_failed',
+            status: monitored.status || undefined,
+            phase: grab.status,
+            scanned: grab.scanned,
+            movie: created,
+          },
+          502,
+        )
+      }
+      signalAdded() // kept + monitored → a real conversion
+      return c.json(
+        {
+          status: 'monitoring',
+          phase: grab.status,
+          scanned: grab.scanned,
+          monitored: true,
+          movie: created,
+        },
+        200,
+      )
+    }
+    if (grab.status === 'all_rejected_by_cap') {
+      // Releases DO exist but every one exceeds the size cap. Honor the
+      // cap and roll back rather than leave a monitored item that RSS
+      // would later auto-grab uncapped.
+      const rollback = await deleteCreatedMovie(created)
+      return c.json(
+        {
+          error: 'capped_grab_not_started',
+          phase: grab.status,
+          scanned: grab.scanned,
+          capGb: env.maxMovieGb,
+          rollbackStatus: rollback.ok ? undefined : rollback.status || undefined,
+          movie: created,
+        },
+        424,
+      )
+    }
+  } catch (e) {
+    console.error('[movie-cap] grab failed:', e)
+    await recordRadarrGrabEvent({
+      itemId,
+      title: itemTitle,
+      sub,
+      type: 'grab_failed',
+      error: e instanceof Error ? e.message : String(e),
+    })
+    const rollback = await deleteCreatedMovie(created)
+    return c.json(
+      {
+        error: 'capped_grab_failed',
+        phase: 'exception',
+        message: e instanceof Error ? e.message : String(e),
+        rollbackStatus: rollback.ok ? undefined : rollback.status || undefined,
+      },
+      424,
+    )
+  }
+  return null // grab_succeeded → keep
+}
 
 // Manually trigger an upgrade pass on an existing movie. Radarr's
 // release search returns releases with `rejected: true` when they're
@@ -730,15 +679,6 @@ radarr.post('/api/v3/movie/:id/upgrade', requireAdmin, radarrMutateLimit, async 
   })
   if (!releaseRes.ok) {
     return c.json({ error: 'release_search_failed', status: releaseRes.status }, 502)
-  }
-  type Release = {
-    guid: string
-    indexerId: number
-    size: number
-    qualityWeight: number
-    title: string
-    rejected?: boolean
-    temporarilyRejected?: boolean
   }
   const all = (await releaseRes.json()) as Release[]
   if (all.length === 0) {

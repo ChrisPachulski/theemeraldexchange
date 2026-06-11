@@ -393,8 +393,9 @@ async function tryDecrypt(token: string, key: Uint8Array): Promise<Session | nul
       typeof payload.verifiedPlexServerId === 'string' ? payload.verifiedPlexServerId : undefined
     // Backward-compat default: cookies issued before D17 have no auth_mode
     // field. All M1 sessions are Plex-authenticated, so 'plex' is the safe
-    // fallback. TODO: drop this default after 2026-06-25 (30 days post-D17
-    // deploy) — at that point all active cookies will carry an explicit value.
+    // fallback. Dated window — expiry (2026-06-25, 30 days post-D17 deploy)
+    // is tracked as 'session-auth-mode-default' in services/compatWindows.ts,
+    // which boot-warns once the date passes. Remove the fallback then.
     const rawAuthMode = payload.auth_mode
     const auth_mode: AuthMode =
       rawAuthMode === 'plex' || rawAuthMode === 'local' || rawAuthMode === 'apple'
@@ -405,8 +406,11 @@ async function tryDecrypt(token: string, key: Uint8Array): Promise<Session | nul
     // Plex user id as `sub`. Normalise bare numeric ids to `plex:<id>` in
     // memory for the 30-day grace period post-D7. The cookie on disk is NOT
     // re-encrypted — the rewrite re-applies on every request until the
-    // cookie expires or the user re-authenticates. Drop this block one
-    // cookie-TTL (30 days) after D7 ships.
+    // cookie expires or the user re-authenticates. Dated window — expiry
+    // (2026-06-25, 30 days post-D7) is tracked as
+    // 'legacy-bare-plex-sub-normalisation' in services/compatWindows.ts,
+    // which boot-warns once the date passes. Replace with strict parseSub
+    // then.
     const parsed = tryNormaliseLegacySub(payload.sub)
     if (!parsed) return null
 
