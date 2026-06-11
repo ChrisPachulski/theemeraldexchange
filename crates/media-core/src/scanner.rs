@@ -38,6 +38,93 @@ pub struct ScanReport {
     pub errors: usize,
 }
 
+/// One candidate video file collected by the blocking walk phase.
+struct WalkedFile {
+    root_kind: crate::filename::RootKind,
+    path: std::path::PathBuf,
+    path_str: String,
+    name: String,
+    size_bytes: i64,
+    mtime: String,
+}
+
+/// Result of enumerating all roots: the candidate files plus the
+/// `files_seen`/`errors` accounting accumulated during the walk.
+struct WalkOutcome {
+    files: Vec<WalkedFile>,
+    files_seen: usize,
+    errors: usize,
+}
+
+/// Enumerate every video file under `roots`. Pure blocking FS work (WalkDir +
+/// stat) — must run inside `spawn_blocking`, never directly on the async
+/// runtime where it would starve other tasks for the duration of a large walk.
+fn walk_roots(roots: &[LibraryRoot]) -> WalkOutcome {
+    let mut out = WalkOutcome {
+        files: Vec::new(),
+        files_seen: 0,
+        errors: 0,
+    };
+
+    for root in roots {
+        let root_kind = root.kind;
+        for entry in WalkDir::new(&root.path).follow_links(true) {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::warn!("walk error under {}: {e}", root.path.display());
+                    out.errors += 1;
+                    continue;
+                }
+            };
+
+            if !entry.file_type().is_file() {
+                continue;
+            }
+
+            let name = match entry.file_name().to_str() {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+            if !is_video_file(&name) {
+                continue;
+            }
+
+            let entry_path = entry.path();
+            let path_str = match entry_path.to_str() {
+                Some(p) => p.to_string(),
+                None => {
+                    tracing::warn!("non-utf8 path skipped: {}", entry_path.display());
+                    out.errors += 1;
+                    continue;
+                }
+            };
+
+            out.files_seen += 1;
+
+            let (size_bytes, mtime) = match file_stat(entry_path) {
+                Ok(stat) => stat,
+                Err(e) => {
+                    tracing::warn!("stat failed for {path_str}: {e}");
+                    out.errors += 1;
+                    continue;
+                }
+            };
+
+            out.files.push(WalkedFile {
+                root_kind,
+                path: entry_path.to_path_buf(),
+                path_str,
+                name,
+                size_bytes,
+                mtime,
+            });
+        }
+    }
+
+    out
+}
+
 /// Run one full scan pass over `roots`, mutating `db`. The current root's
 /// [`RootKind`](crate::filename::RootKind) is authoritative for classification,
 /// and `tmdb` is consulted best-effort for enrichment (never fails the scan).
@@ -48,113 +135,85 @@ pub async fn scan_once(
 ) -> Result<ScanReport, AppError> {
     let mut report = ScanReport::default();
 
-    for root in roots {
-        let root_kind = root.kind;
-        for entry in WalkDir::new(&root.path).follow_links(true) {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(e) => {
-                    tracing::warn!("walk error under {}: {e}", root.path.display());
-                    report.errors += 1;
-                    continue;
-                }
-            };
+    // The walk + per-file stat is blocking FS I/O; run it off the runtime.
+    let roots_owned = roots.to_vec();
+    let walk = tokio::task::spawn_blocking(move || walk_roots(&roots_owned))
+        .await
+        .map_err(|e| AppError::Internal(format!("walk task failed: {e}")))?;
+    report.files_seen = walk.files_seen;
+    report.errors = walk.errors;
 
-            if !entry.file_type().is_file() {
+    for file in &walk.files {
+        let path_str = &file.path_str;
+        // Skip reprobing unchanged files — probing is the slow path. But an
+        // unchanged file whose movie/episode row was indexed before TMDB
+        // enrichment existed still carries NULL metadata forever, since the
+        // old skip just `continue`d. Run a probe-free backfill: classify the
+        // name and, only when the row is missing metadata, hit TMDB and
+        // upsert against the already-stored file. Files that are already
+        // enriched do zero network work.
+        match existing_stat(db, path_str).await {
+            Ok(Some((prev_size, prev_mtime)))
+                if prev_size == file.size_bytes && prev_mtime == file.mtime =>
+            {
+                let parsed = filename::classify(file.root_kind, &file.path, &file.name);
+                match backfill_metadata(db, path_str, &parsed, tmdb).await {
+                    Ok(true) => report.backfilled += 1,
+                    Ok(false) => {}
+                    Err(e) => {
+                        tracing::warn!("backfill failed for {path_str}: {e}");
+                        report.errors += 1;
+                    }
+                }
                 continue;
             }
-
-            let name = match entry.file_name().to_str() {
-                Some(n) => n,
-                None => continue,
-            };
-            if !is_video_file(name) {
-                continue;
-            }
-
-            let entry_path = entry.path();
-            let path_str = match entry_path.to_str() {
-                Some(p) => p.to_string(),
-                None => {
-                    tracing::warn!("non-utf8 path skipped: {}", entry_path.display());
-                    report.errors += 1;
-                    continue;
-                }
-            };
-
-            report.files_seen += 1;
-
-            let (size_bytes, mtime) = match file_stat(entry_path) {
-                Ok(stat) => stat,
-                Err(e) => {
-                    tracing::warn!("stat failed for {path_str}: {e}");
-                    report.errors += 1;
-                    continue;
-                }
-            };
-
-            // Skip reprobing unchanged files — probing is the slow path. But an
-            // unchanged file whose movie/episode row was indexed before TMDB
-            // enrichment existed still carries NULL metadata forever, since the
-            // old skip just `continue`d. Run a probe-free backfill: classify the
-            // name and, only when the row is missing metadata, hit TMDB and
-            // upsert against the already-stored file. Files that are already
-            // enriched do zero network work.
-            match existing_stat(db, &path_str).await {
-                Ok(Some((prev_size, prev_mtime)))
-                    if prev_size == size_bytes && prev_mtime == mtime =>
+            Ok(existing) => {
+                let is_update = existing.is_some();
+                let probe_result = probe::ffprobe(&file.path).await;
+                let probed = match probe_result {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::warn!("ffprobe failed for {path_str}: {e}");
+                        report.errors += 1;
+                        continue;
+                    }
+                };
+                let parsed = filename::classify(file.root_kind, &file.path, &file.name);
+                match index_file(
+                    db,
+                    path_str,
+                    file.size_bytes,
+                    &file.mtime,
+                    &probed,
+                    &parsed,
+                    tmdb,
+                )
+                .await
                 {
-                    let parsed = filename::classify(root_kind, entry_path, name);
-                    match backfill_metadata(db, &path_str, &parsed, tmdb).await {
-                        Ok(true) => report.backfilled += 1,
-                        Ok(false) => {}
-                        Err(e) => {
-                            tracing::warn!("backfill failed for {path_str}: {e}");
-                            report.errors += 1;
+                    Ok(enriched) => {
+                        if is_update {
+                            report.files_updated += 1;
+                        } else {
+                            report.files_added += 1;
+                        }
+                        if enriched {
+                            report.enriched += 1;
+                        }
+                        match parsed {
+                            ParsedName::Movie { .. } => report.movies += 1,
+                            ParsedName::Episode { .. } => report.episodes += 1,
+                            ParsedName::Unknown => {}
                         }
                     }
-                    continue;
-                }
-                Ok(existing) => {
-                    let is_update = existing.is_some();
-                    let probe_result = probe::ffprobe(entry_path).await;
-                    let probed = match probe_result {
-                        Ok(p) => p,
-                        Err(e) => {
-                            tracing::warn!("ffprobe failed for {path_str}: {e}");
-                            report.errors += 1;
-                            continue;
-                        }
-                    };
-                    let parsed = filename::classify(root_kind, entry_path, name);
-                    match index_file(db, &path_str, size_bytes, &mtime, &probed, &parsed, tmdb)
-                        .await
-                    {
-                        Ok(enriched) => {
-                            if is_update {
-                                report.files_updated += 1;
-                            } else {
-                                report.files_added += 1;
-                            }
-                            if enriched {
-                                report.enriched += 1;
-                            }
-                            match parsed {
-                                ParsedName::Movie { .. } => report.movies += 1,
-                                ParsedName::Episode { .. } => report.episodes += 1,
-                                ParsedName::Unknown => {}
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!("index failed for {path_str}: {e}");
-                            report.errors += 1;
-                        }
+                    Err(e) => {
+                        tracing::warn!("index failed for {path_str}: {e}");
+                        report.errors += 1;
                     }
                 }
-                Err(e) => {
-                    tracing::warn!("lookup failed for {path_str}: {e}");
-                    report.errors += 1;
-                }
+            }
+            Err(e) => {
+                tracing::warn!("lookup failed for {path_str}: {e}");
+                report.errors += 1;
             }
         }
     }
