@@ -16,7 +16,14 @@
 
 services:
   backend:
-    build: .
+    build:
+      context: .
+      args:
+        # Build identifier baked into the image (Dockerfile ARG → ENV →
+        # env.ts → /api/version `release`). scripts/deploy-nas.sh exports
+        # EEX_RELEASE=<short sha of the archived HEAD> in the remote shell
+        # before `compose up --build`; ad-hoc builds fall back to 'dev'.
+        EEX_RELEASE: "${EEX_RELEASE:-dev}"
     image: theemeraldexchange-backend:latest
     container_name: exchange-backend
     restart: unless-stopped

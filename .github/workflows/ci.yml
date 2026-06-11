@@ -20,9 +20,9 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: '24'
           cache: npm
@@ -31,7 +31,7 @@ jobs:
       # (prepare script). The crate's rust-version is 1.96, so the runner's
       # default rust is too old — pin 1.96 explicitly, otherwise the addon
       # silently fails to build and the device-token crypto tests can't load it.
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27; explicit `toolchain` input pins the actual compiler
         with:
           toolchain: '1.96'
 
@@ -52,6 +52,13 @@ jobs:
       - name: Test + coverage
         run: npm run test:coverage
 
+      # Recommendation-quality eval gate (vitest.eval.config.ts). Fully
+      # offline — Anthropic + TMDB are mocked — so it is deterministic and
+      # cheap. It rotted once already (vitest.env.ts drift) precisely because
+      # nothing ran it in CI; this step keeps it alive.
+      - name: Recommendation eval gate (offline)
+        run: npm run eval:recs
+
       - name: Build (Vite + server tsc)
         run: npm run build
 
@@ -67,7 +74,7 @@ jobs:
 
       - name: Upload Playwright report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: playwright-report
           path: playwright-report/
@@ -75,7 +82,7 @@ jobs:
 
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage
           path: coverage/
@@ -83,7 +90,7 @@ jobs:
 
       - name: Upload SPA build
         if: success()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist
           path: dist/
@@ -102,9 +109,9 @@ jobs:
       IPTV_DISABLED: '1'
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: '24'
           cache: npm
@@ -113,7 +120,7 @@ jobs:
       # (prepare script). The crate's rust-version is 1.96, so the runner's
       # default rust is too old — pin 1.96 explicitly, otherwise the addon
       # silently fails to build and the device-token crypto tests can't load it.
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27; explicit `toolchain` input pins the actual compiler
         with:
           toolchain: '1.96'
 
@@ -143,23 +150,23 @@ jobs:
     timeout-minutes: 12
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.12'
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: '24'
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27; explicit `toolchain` input pins the actual compiler
         with:
           toolchain: '1.96'
 
       - name: Cache cargo
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             ~/.cargo/registry
@@ -173,8 +180,27 @@ jobs:
       - name: Syntax check (recommender)
         run: python3 -m compileall -q recommender/app recommender/workers
 
-      - name: Install maturin + pytest
-        run: pip install maturin pytest pydantic fastapi
+      # Install the EXACT dependency set the production image ships
+      # (recommender/requirements.lock) minus torch: the +cpu torch wheel is
+      # heavyweight and only workers/featurize.py imports it (lazily, inside
+      # the embed function) — no test under tests/ or eval/ reaches it. The
+      # lock is the full transitive closure, so --no-deps keeps pip from
+      # re-resolving (and from pulling CUDA torch via sentence-transformers).
+      # Tooling pins: maturin within the Dockerfile's >=1.7,<2.0 range; ruff
+      # pinned so lint results are reproducible; pytest satisfies pyproject's
+      # dev floor (>=8.3).
+      - name: Install recommender deps (requirements.lock minus torch) + pinned tooling
+        working-directory: recommender
+        run: |
+          grep -v '^torch==' requirements.lock > /tmp/ci-requirements.txt
+          pip install --no-deps -r /tmp/ci-requirements.txt
+          pip install maturin==1.8.1 pytest==8.3.5 ruff==0.15.15
+
+      # ruff is the lint gate used locally (pyproject [tool.ruff]); without
+      # this step it was never enforced in CI.
+      - name: Lint (ruff)
+        working-directory: recommender
+        run: ruff check .
 
       # Build once into a wheel, then install it into BOTH the bare job
       # interpreter (for the pytest parity step) and a recommender/.venv
@@ -196,15 +222,15 @@ jobs:
           recommender/.venv/bin/python -m pip install crates/emerald-contracts-pyo3/wheels/*.whl
           recommender/.venv/bin/python -c "import emerald_contracts; print('emerald_contracts OK')"
 
-      - name: Cross-language parity tests (recommender ↔ Rust ↔ TS)
+      - name: Recommender test suite (tests/ + eval/, full lock minus torch)
         working-directory: recommender
-        # Scoped to the tests runnable with this job's minimal dep set
-        # (emerald_contracts wheel + pydantic/fastapi). Whole-directory
-        # collection (tests/ eval/) needs the FULL recommender environment
-        # (anthropic, httpx, torch, …) which this job intentionally does not
-        # install — broadening it requires installing recommender deps first
-        # (tracked alongside the parked requirements.lock work).
-        run: pytest tests/test_emerald_contracts_parity.py tests/test_sub_validation.py tests/test_internal_principal.py -v
+        # The full suite — scoring path, retrieval, optimizer, migrator,
+        # telemetry, schemas, parity — runs against the lock-pinned
+        # environment installed above. Only torch is absent; its sole import
+        # is lazy (workers/featurize.py inside the embed function) and no
+        # collected test reaches it, so collection is clean. eval/ carries
+        # test_build_holdout.py for the operator holdout tooling.
+        run: pytest tests/ eval/test_build_holdout.py -v
 
       # Node side of the gate: install JS deps + build the napi addon,
       # then run the N-API→PyO3 cross-binding test with the require flag
@@ -232,15 +258,15 @@ jobs:
     timeout-minutes: 8
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27; explicit `toolchain` input pins the actual compiler
         with:
           toolchain: '1.96'
           components: clippy, rustfmt
 
       - name: Cache cargo
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             ~/.cargo/registry
@@ -289,23 +315,23 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: '24'
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27; explicit `toolchain` input pins the actual compiler
         with:
           toolchain: '1.96'
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.12'
 
       - name: Cache cargo
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             ~/.cargo/registry
@@ -356,9 +382,9 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
       - name: Validate compose config
         # `docker compose config` resolves ${...} interpolation and validates the
@@ -368,7 +394,7 @@ jobs:
         run: docker compose config -q
 
       - name: Build backend image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           file: ./Dockerfile

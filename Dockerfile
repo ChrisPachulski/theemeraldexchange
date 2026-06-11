@@ -110,9 +110,18 @@ COPY package.json package-lock.json ./
 # GitHub runner has them preinstalled). Install the toolchain, build,
 # then purge it in the same layer so the runtime image stays slim — the
 # compiled .node persists and needs no toolchain at runtime.
+#
+# --omit=dev: this is the RUNTIME image; the server runs via `npm start`
+# → `tsx server/index.ts`, and tsx is a production dependency. None of
+# the devDependencies (vite, vitest, eslint, playwright, typescript, …)
+# are imported at runtime — they exist for the SPA build and the test
+# suites, which never run in this image. Omitting them keeps the image
+# smaller and shrinks the runtime supply-chain surface. The napi file:
+# dep's prepare script still runs but short-circuits on the pre-staged
+# .node above (plain `node -e`, no devDeps required).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 make g++ \
- && npm ci \
+ && npm ci --omit=dev \
  && apt-get purge -y --auto-remove python3 make g++ \
  && rm -rf /var/lib/apt/lists/*
 
@@ -126,6 +135,14 @@ RUN mkdir -p /app/data
 
 ENV NODE_ENV=production
 ENV PORT=3001
+
+# Build identifier surfaced by /api/version (env.ts EEX_RELEASE, default
+# 'dev'). scripts/deploy-nas.sh passes the short sha of the archived HEAD via
+# docker-compose.yml's build args, so the deployed API self-reports the exact
+# commit it was built from — that's the deployed-vs-HEAD drift detection.
+# Declared AFTER the heavy npm ci layer so a sha change never busts its cache.
+ARG EEX_RELEASE=dev
+ENV EEX_RELEASE=$EEX_RELEASE
 
 EXPOSE 3001
 

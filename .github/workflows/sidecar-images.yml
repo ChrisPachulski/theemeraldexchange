@@ -1,0 +1,62 @@
+# PR-time docker builds for the sidecar images.
+#
+# ci.yml's docker-build job builds the backend image on every run but the
+# heavy sidecars (recommender torch stack, media-core/transcoder Rust
+# workspaces) only on push to main — which meant a PR could break a sidecar
+# Dockerfile and the failure surfaced only AFTER merge. This workflow closes
+# that gap: it builds the three sidecar images on PRs, but only when the
+# inputs that feed them change (path filter below), so routine SPA/server PRs
+# stay fast.
+#
+# The matrix fans the three images out in parallel; per-image GHA cache
+# scopes keep layer caches from clobbering each other.
+
+name: sidecar-images
+
+on:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "recommender/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - ".dockerignore"
+      - ".github/workflows/sidecar-images.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # The recommender image installs the +cpu torch stack and the Rust images
+    # compile the whole workspace from scratch on a cache miss — generous cap.
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: recommender
+            dockerfile: ./recommender/Dockerfile
+          - name: media-core
+            dockerfile: ./crates/media-core/Dockerfile
+          - name: transcoder
+            dockerfile: ./crates/transcoder/Dockerfile
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Build ${{ matrix.name }} image
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: false
+          load: false
+          cache-from: type=gha,scope=sidecar-${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=sidecar-${{ matrix.name }}
