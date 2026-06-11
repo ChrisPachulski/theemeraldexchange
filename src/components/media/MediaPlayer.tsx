@@ -3,6 +3,7 @@ import IptvPlayer from '../player/IptvPlayer'
 import type { StreamGrant } from '../../lib/api/iptv'
 import { mediaApi, type PlayableKind, type PlaybackGrant } from '../../lib/api/media'
 import { useReportWatch } from '../../lib/hooks/useMediaLibrary'
+import { useModalA11y } from '../../lib/hooks/useModalA11y'
 
 const HEARTBEAT_INTERVAL_MS = 10_000
 // Treat the title as finished when within this many seconds of the end so the
@@ -80,14 +81,9 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
     return () => window.clearInterval(timer)
   }, [grant?.heartbeatUrl, playbackEnded])
 
-  // Esc closes the player.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  // Plain-div dialog: useModalA11y supplies Escape-to-close, the focus trap,
+  // and focus restoration that aria-modal="true" promises (LiveTab pattern).
+  const modalRef = useModalA11y<HTMLDivElement>(onClose)
 
   // Final flush on unmount so the resume point reflects where they actually
   // stopped, not the last throttled tick — and free the transcode slot.
@@ -145,7 +141,14 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
   }, [report, grant?.durationSecs, stopSession])
 
   return (
-    <div className="iptv-player-modal" role="dialog" aria-modal="true" aria-label={title}>
+    <div
+      ref={modalRef}
+      className="iptv-player-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      tabIndex={-1}
+    >
       <div className="iptv-player-modal__header">
         <h2>{title}</h2>
         <button
