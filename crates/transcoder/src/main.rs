@@ -87,6 +87,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Durable scratch (not RAM tmpfs anymore): clear any session dirs orphaned
+    // by a prior crash/restart before serving, so disk stays bounded by ACTIVE
+    // sessions and a finished VOD title's segments never linger across restarts.
+    state.sessions.sweep_scratch_on_boot().await;
+
     // Idle-session sweeper (5s cadence; 30s no-heartbeat → reap).
     let _sweeper = state.sessions.spawn_sweeper();
 
