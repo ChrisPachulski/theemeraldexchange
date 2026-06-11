@@ -19,9 +19,9 @@ typographic family. We're stealing the chrome, not the chrome's prerequisites.
 
 What we don't take: WebGL hero scenes, scroll-hijacking, brand wordmarks at
 40vw. This is a tool used nightly, not a portfolio reel — the chrome carries
-the reference; the function stays instant. (Two narrow, owner-approved
-atmosphere exceptions — the WebGL brand mark and the kraken video — are
-recorded under "Recorded exceptions" below.)
+the reference; the function stays instant. (The narrow, owner-approved
+atmosphere exceptions — the WebGL brand mark, the kraken video, and the
+dormant Beacon gem video — are recorded under "Recorded exceptions" below.)
 
 ## Physical scene (forces theme)
 
@@ -305,6 +305,15 @@ agree — they set ceilings, not precedents.
   constellation stays in the tree as the fallback. Floating chrome over the
   moving video is also why backdrop-blur extends beyond the HUD pod (see
   the glassmorphism law above).
+- **Beacon gem video (dormant).** A live-action alpha-cutout emerald loop
+  (`src/components/atmosphere/Beacon.tsx`, `public/gem.webm` — two phase-
+  offset `<video>` elements cross-faded so the loop seam never shows),
+  originally pinned top-right as the prize the kraken reaches for. It is
+  **currently unmounted**: the App mount was dropped in the home-page
+  redesign (`faf29ca`) and its walkthrough stage was replaced by the
+  single WebGL gem (`36fc64c`). Like the constellation, it stays in the
+  tree (component + shipped assets) as recorded atmosphere inventory —
+  remounting it is an owner decision, not a license this doc grants.
 
 ## What "done" looks like visually
 
