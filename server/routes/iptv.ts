@@ -887,9 +887,26 @@ function remuxSegmentResource(resourceId: string): { sessionId: string; segFile:
   return { sessionId, segFile }
 }
 
-async function proxyRangeable(c: Context, upstreamUrl: string, mime: string): Promise<Response> {
+async function proxyRangeable(
+  c: Context,
+  upstreamUrl: string,
+  mime: string,
+  // Fired when the CLIENT disconnects mid-transfer. VOD/series progressive
+  // streams use it to free their concurrency slot immediately (mirroring the
+  // live/catchup byte paths) instead of pinning the slot until the 30s idle
+  // sweep — without it, closing the player tab left the slot occupied and
+  // could 429 the household's next stream for no real reason.
+  onClientAbort?: () => void,
+): Promise<Response> {
   const controller = new AbortController()
-  c.req.raw.signal.addEventListener('abort', () => controller.abort(), { once: true })
+  c.req.raw.signal.addEventListener('abort', () => {
+    controller.abort()
+    try {
+      onClientAbort?.()
+    } catch {
+      // Slot release is best-effort; never let it break the teardown path.
+    }
+  }, { once: true })
   const headers: Record<string, string> = {}
   const range = c.req.header('range')
   if (range) headers.Range = range
@@ -1289,7 +1306,10 @@ iptv.get('/stream/vod/:streamId/:ext', async (c) => {
   if (ext === 'm3u8') return await rewriteHlsPlaylist(c, upstreamUrl, v.sub)
 
   const mime = ext === 'mkv' ? 'video/x-matroska' : 'video/mp4'
-  return await proxyRangeable(c, upstreamUrl, mime)
+  // Client gone mid-stream → free the slot now (same as live/catchup).
+  return await proxyRangeable(c, upstreamUrl, mime, () =>
+    streamConcurrency().releaseByResource(v.sub, 'vod', streamId),
+  )
 })
 
 iptv.post('/stream/series/:episodeId/grant', requireAuth, async (c) => {
@@ -1353,7 +1373,10 @@ iptv.get('/stream/series/:episodeId/:ext', async (c) => {
   if (ext === 'm3u8') return await rewriteHlsPlaylist(c, upstreamUrl, v.sub)
 
   const mime = ext === 'mkv' ? 'video/x-matroska' : 'video/mp4'
-  return await proxyRangeable(c, upstreamUrl, mime)
+  // Client gone mid-stream → free the slot now (same as live/catchup).
+  return await proxyRangeable(c, upstreamUrl, mime, () =>
+    streamConcurrency().releaseByResource(v.sub, 'series', episodeId),
+  )
 })
 
 iptv.get('/stream/segment', async (c) => {

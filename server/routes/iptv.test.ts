@@ -87,9 +87,11 @@ const concurrencyState = vi.hoisted(() => {
     startedAt: number
     lastSeen: number
   }> = []
+  const releasedByResource: Array<{ sub: string; kind: string; resourceId: string }> = []
 
   return {
     sessions,
+    releasedByResource,
     tracker: {
       tryAcquire: ({ sub, sessionId, kind, resourceId, ip, title }: {
         sub: string
@@ -118,7 +120,10 @@ const concurrencyState = vi.hoisted(() => {
         const index = sessions.findIndex((session) => session.sessionId === sessionId)
         if (index !== -1) sessions.splice(index, 1)
       },
-      releaseByResource: () => true,
+      releaseByResource: (sub: string, kind: string, resourceId: string) => {
+        releasedByResource.push({ sub, kind, resourceId })
+        return true
+      },
       sweep: () => {},
       size: () => sessions.length,
       list: () => sessions,
@@ -228,6 +233,7 @@ beforeEach(() => {
   membershipState.status = 'allowed'
   tokenState.sub = 'plex:42'
   concurrencyState.sessions.length = 0
+  concurrencyState.releasedByResource.length = 0
   dbState.testDb?.raw.exec('DELETE FROM iptv_playlist_tokens;')
 })
 
@@ -607,6 +613,68 @@ describe('vod stream grant + proxy', () => {
       redirect: 'manual',
     }))
     fetchSpy.mockRestore()
+  })
+
+  it('releases the concurrency slot when the client aborts a progressive VOD stream', async () => {
+    // Upstream hangs forever (only the abort signal settles it) — the route is
+    // mid-proxy when the client disconnects. The slot must be released
+    // immediately, exactly like the live/catchup byte paths, instead of
+    // waiting for the 30s idle sweep.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      (_input, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          const s = init?.signal
+          if (!s) return
+          if (s.aborted) return reject(s.reason)
+          s.addEventListener('abort', () => reject(s.reason), { once: true })
+        }),
+    )
+    try {
+      const ac = new AbortController()
+      const pending = app
+        .request('/api/iptv/stream/vod/20/mp4?t=fake.vod.MjA', { signal: ac.signal })
+        .catch(() => undefined) // the aborted request itself may reject
+      await new Promise((r) => setTimeout(r, 20))
+      ac.abort()
+      await pending
+      expect(concurrencyState.releasedByResource).toContainEqual({
+        sub: 'plex:42',
+        kind: 'vod',
+        resourceId: '20',
+      })
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it('releases the concurrency slot when the client aborts a progressive series stream', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      (_input, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          const s = init?.signal
+          if (!s) return
+          if (s.aborted) return reject(s.reason)
+          s.addEventListener('abort', () => reject(s.reason), { once: true })
+        }),
+    )
+    try {
+      const ac = new AbortController()
+      const pending = app
+        .request(`/api/iptv/stream/series/ep-1/mkv?t=${fakeToken('series', 'ep-1')}`, {
+          signal: ac.signal,
+        })
+        .catch(() => undefined)
+      await new Promise((r) => setTimeout(r, 20))
+      ac.abort()
+      await pending
+      expect(concurrencyState.releasedByResource).toContainEqual({
+        sub: 'plex:42',
+        kind: 'series',
+        resourceId: 'ep-1',
+      })
+    } finally {
+      fetchSpy.mockRestore()
+    }
   })
 
   it('rewrites HLS playlists to signed segment proxy URLs', async () => {
