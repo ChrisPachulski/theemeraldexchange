@@ -12,14 +12,22 @@
 //     we pin the negative case.
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
+import Database from 'better-sqlite3'
 import type { Hono } from 'hono'
 import type { Env } from '../middleware/auth.js'
 
 let app: Hono<Env>
 let createSessionFn: typeof import('../session.js').createSession
 
+// Swappable media.db handle for the local-availability wiring test.
+// null = "media.db missing" (graceful degrade) for every other test.
+let mediaDbHandle: { raw: import('better-sqlite3').Database; close(): void } | null = null
+
 beforeAll(async () => {
   vi.resetModules()
+  vi.doMock('../services/mediaLibraryDbSingleton.js', () => ({
+    mediaLibraryDb: () => mediaDbHandle,
+  }))
   vi.doMock('../env.js', () => ({
     env: {
       plexClientId: 'test-client',
@@ -55,6 +63,10 @@ beforeAll(async () => {
       // to postShown about either way.
       tmdbApiKey: 'fake-tmdb-key',
       useLocalRecommender: true,
+      // Media-core ON so the recommender success path exercises the real
+      // services/localAvailability tagger (gated on this flag). The
+      // singleton above returns null unless a test installs a handle.
+      useMediaCore: true,
       recommenderUrl: 'http://recommender.test',
       optimizerMaxTokens: 1024,
       optimizerMaxDriftPct: 0.2,
@@ -71,6 +83,7 @@ beforeAll(async () => {
 
 afterAll(() => {
   vi.doUnmock('../env.js')
+  vi.doUnmock('../services/mediaLibraryDbSingleton.js')
   vi.resetModules()
 })
 
@@ -255,5 +268,83 @@ describe('GET /api/suggestions/:type — recommender franchise-collision filter'
     // owned film are dropped (permanent veto honored even across dup ids).
     expect(ids).not.toContain(OWNED_BATMAN)
     expect(ids).not.toContain(EXACT_DUP_OF_OWNED)
+  })
+})
+
+describe('GET /api/suggestions/:type — local availability tagging (recommender path)', () => {
+  it('stamps available_on:["local"] through services/localAvailability', async () => {
+    // Regression for the dead-service finding: the route used to run an
+    // inline byte-for-byte clone of services/localAvailability while the
+    // unit-tested service was dead code, so the unit tests verified a copy
+    // of prod instead of prod. This pins the WIRING end-to-end — the
+    // recommender success path must tag through the real service (gated on
+    // env.useMediaCore + the mediaLibraryDb singleton), so a future inline
+    // re-duplication or a dropped call site fails here, not in review.
+    const mod = await import('./suggestions.js')
+    mod._resetLibraryCacheForTests()
+    mod._resetLibraryStaleFallbackForTests()
+
+    const ON_DISK = 7001
+    const NOT_ON_DISK = 7002
+    const raw = new Database(':memory:')
+    raw.exec(`
+      CREATE TABLE movies (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tmdb_id INTEGER UNIQUE,
+        title TEXT NOT NULL,
+        year INTEGER
+      );
+    `)
+    raw.prepare('INSERT INTO movies (tmdb_id, title, year) VALUES (?, ?, ?)').run(
+      ON_DISK,
+      'Owned On Disk',
+      2020,
+    )
+    mediaDbHandle = { raw, close: () => raw.close() }
+
+    try {
+      const spy: FetchSpy = vi.fn(async (input: string | URL | Request) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : input.url
+        if (url.includes('/api/v3/movie') || url.includes('/api/v3/series')) {
+          return new Response('[]', { status: 200, headers: { 'Content-Type': 'application/json' } })
+        }
+        if (url.includes('recommender.test/score')) {
+          return new Response(
+            JSON.stringify({
+              items: [
+                { tmdb_id: ON_DISK, title: 'Owned On Disk', year: 2020, provenance: 'personalized', score: 0.9 },
+                { tmdb_id: NOT_ON_DISK, title: 'Streaming Only', year: 2023, provenance: 'personalized', score: 0.8 },
+              ],
+              model_version: 'test-mv',
+              recipe: 'fused',
+              diag: {},
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          )
+        }
+        return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })
+      })
+      vi.stubGlobal('fetch', spy)
+
+      const r = await app.request('/api/suggestions/movie', { headers: { Cookie: await userCookie() } })
+      expect(r.status).toBe(200)
+      const body = (await r.json()) as {
+        source: string
+        items: Array<{ id: number; available_on?: string[] }>
+      }
+      expect(body.source).toBe('recommender')
+      const onDisk = body.items.find((i) => i.id === ON_DISK)
+      const notOnDisk = body.items.find((i) => i.id === NOT_ON_DISK)
+      expect(onDisk?.available_on).toContain('local')
+      expect(notOnDisk?.available_on ?? []).not.toContain('local')
+    } finally {
+      mediaDbHandle = null
+      raw.close()
+    }
   })
 })
