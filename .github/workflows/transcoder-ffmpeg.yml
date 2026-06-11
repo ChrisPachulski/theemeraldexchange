@@ -7,7 +7,17 @@
 # assemble actually produces playable HLS. This job closes that gap by running
 # the `requires-ffmpeg` feature-gated integration test
 # (crates/transcoder/tests/real_ffmpeg.rs) against a REAL ffmpeg/ffprobe — the
-# same statically-linked build pinned in crates/transcoder/Dockerfile.
+# SAME apt-installed Debian bookworm ffmpeg the production image ships
+# (crates/transcoder/Dockerfile's runtime stage), not a newer static build.
+#
+# PROD PARITY (what IS and ISN'T tested)
+# The job runs inside the same digest-pinned debian:bookworm-slim base as the
+# runtime stage and installs ffmpeg from the same Debian repos, so the binary
+# under test matches production (~5.1.x) including its encoder/muxer feature
+# set. NOT covered here: the VAAPI hardware path (h264_vaapi via
+# /dev/dri/renderD128 + intel-media-va-driver) — GitHub runners have no iGPU,
+# so CI exercises the software (libx264) pipeline only; the boot smoke-test's
+# VAAPI→libx264 demotion is what makes that a faithful no-GPU configuration.
 #
 # HUMAN DECISION CAPTURED HERE
 # Adopting this job is a product/infra call (CI runner minutes + image pull
@@ -42,55 +52,55 @@ on:
 
 jobs:
   real-ffmpeg:
-    # Runs on the runner host (NOT inside a container) so the Docker CLI is
-    # available — that's how we extract the EXACT binaries prod ships instead of
-    # chasing a release tarball. (The previous revision pulled
-    #   github.com/wader/static-ffmpeg/releases/download/7.1/linux-amd64.tar.xz
-    # which 404s: static-ffmpeg is published as a Docker image, not a GitHub
-    # release asset, so every run failed at setup before the gate ever ran.)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Mirror crates/transcoder/Dockerfile's runtime stage: SAME digest-pinned
+    # debian:bookworm-slim base, SAME apt ffmpeg. Keep this digest in lockstep
+    # with the Dockerfile when dependabot bumps it.
+    container:
+      image: debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb
+    timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v6
-
-      - name: Install static ffmpeg/ffprobe (byte-identical to the runtime Dockerfile)
+      # Toolchain + the production ffmpeg, from the same Debian repos the
+      # runtime image installs from. build-essential/pkg-config compile the
+      # Rust workspace inside the slim container; curl + ca-certificates are
+      # for the rustup installer dtolnay/rust-toolchain runs when rustup is
+      # absent; git keeps actions/checkout on the fast git path; zstd is for
+      # actions/cache. libva2/libva-drm2 ride in as ffmpeg dependencies,
+      # matching the runtime stage's VAAPI userspace (the hardware path still
+      # can't run here — no /dev/dri on GitHub runners; see header).
+      - name: Install prod-parity ffmpeg + build toolchain (Debian bookworm apt)
         shell: bash
         run: |
           set -euo pipefail
-          # The runtime stage does:
-          #   COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /ffprobe /usr/local/bin/
-          # Reproduce it exactly: create a throwaway container from that pinned
-          # image and copy the two static binaries out onto PATH. No glibc/runtime
-          # deps (fully static), so a plain copy is enough.
-          FF_IMAGE="mwader/static-ffmpeg:7.1"
-          docker pull "$FF_IMAGE"
-          cid="$(docker create "$FF_IMAGE")"
-          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
-          sudo docker cp "$cid:/ffmpeg"  /usr/local/bin/ffmpeg
-          sudo docker cp "$cid:/ffprobe" /usr/local/bin/ffprobe
-          sudo chmod 0755 /usr/local/bin/ffmpeg /usr/local/bin/ffprobe
+          apt-get update
+          # cmake + perl: aws-lc-sys (rustls's default crypto provider, pulled
+          # in via reqwest/sentry) builds its C/asm sources with CMake.
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git build-essential pkg-config cmake perl zstd \
+            ffmpeg libva2 libva-drm2
           ffmpeg -version | head -n 1
           ffprobe -version | head -n 1
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27; explicit `toolchain` input pins the actual compiler
         with:
           toolchain: '1.96'
 
       - name: Cache cargo
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-transcoder-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          key: ${{ runner.os }}-cargo-transcoder-bookworm-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-transcoder-
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-transcoder-bookworm-
 
       - name: Run the real-ffmpeg gate
         env:
-          TRANSCODER_FFMPEG_BIN: /usr/local/bin/ffmpeg
-          TRANSCODER_FFPROBE_BIN: /usr/local/bin/ffprobe
+          TRANSCODER_FFMPEG_BIN: /usr/bin/ffmpeg
+          TRANSCODER_FFPROBE_BIN: /usr/bin/ffprobe
         run: cargo test -p transcoder --features requires-ffmpeg -- --nocapture
