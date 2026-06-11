@@ -69,6 +69,36 @@ describe('createReservationLedger', () => {
     expect(ledger.availableBytes(folder)).toBe(folder.freeSpace)
   })
 
+  it('a reservation whose release never fires self-heals after the TTL', () => {
+    // The 3-day incident: a fully-successful grab skipped its release, so the
+    // reservation wedged the free-space gate until the process restarted and
+    // 409'd EVERY later add to the folder. With the TTL, a leaked reservation
+    // ages out on its own — the gate can no longer be stuck for more than the
+    // TTL window. Drive wall-clock with fake timers so the test is instant.
+    vi.useFakeTimers()
+    try {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const ledger = createReservationLedger('sonarr')
+      expect(ledger.reserve(folder, 5 * GB)).toBe(true)
+      expect(ledger.pendingBytes(folder)).toBe(5 * GB)
+
+      // Just before the TTL: still held (a live grab is never expired early).
+      vi.advanceTimersByTime(14 * 60 * 1000)
+      expect(ledger.pendingBytes(folder)).toBe(5 * GB)
+
+      // Past the TTL with no release: the gate self-heals to zero and a new
+      // add is admitted again — and the leak is logged loud, not silent.
+      vi.advanceTimersByTime(2 * 60 * 1000)
+      expect(ledger.pendingBytes(folder)).toBe(0)
+      expect(ledger.availableBytes(folder)).toBe(folder.freeSpace)
+      expect(ledger.reserve(folder, 5 * GB)).toBe(true)
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('stale disk reservation'))
+      warn.mockRestore()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('ledgers are independent per instance (radarr vs sonarr maps stay separate)', () => {
     const a = createReservationLedger()
     const b = createReservationLedger()

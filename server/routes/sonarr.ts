@@ -40,7 +40,7 @@ const sonarrMutateLimit = rateLimit({
 // In-flight disk-space reservations against root-folder free space.
 // Mechanism + rationale live in services/arrGrab.ts; this instance is
 // Sonarr's own ledger (Radarr keeps a separate one).
-const sonarrReservations = createReservationLedger()
+const sonarrReservations = createReservationLedger('sonarr')
 
 const recordSonarrGrabEvent = createGrabEventRecorder('sonarr')
 
