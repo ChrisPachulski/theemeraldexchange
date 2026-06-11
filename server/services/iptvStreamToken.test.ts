@@ -72,6 +72,21 @@ describe('iptv stream token — round trip', () => {
     expect(verifyStreamToken(SECRET, t).rid).toBe('https://x/y.ts')
   })
 
+  it('round-trips the M6-reserved "recording" kind (§5.3 — verifiers must accept it)', () => {
+    // 'recording' is minted by no current path, but the verifier surface
+    // (TS union + Rust enum + vector file) must already accept it so M6
+    // DVR work doesn't need a cross-language enum amendment.
+    const token = signStreamToken(SECRET, {
+      kind: 'recording',
+      resourceId: 'rec-2026-05-25-ch101',
+      sub: 'plex:12345',
+      ttlSecs: 60,
+    })
+    const claims = verifyStreamToken(SECRET, token)
+    expect(claims.k).toBe('recording')
+    expect(claims.rid).toBe('rec-2026-05-25-ch101')
+  })
+
   it('rejects token with missing v field', () => {
     // Forge a token with no v claim by signing a hand-rolled payload
     const payload = Buffer.from(JSON.stringify({ k: 'live', rid: '10', sub: 'plex:1', exp: Math.floor(Date.now()/1000) + 60 }))

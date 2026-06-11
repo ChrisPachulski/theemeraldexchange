@@ -18,8 +18,21 @@ import { contracts, type ContractsTypes } from './contractsBinding.js'
  * enum independently breaks AVPlayer segment playback — an earlier contract
  * draft proposed stripping it from StreamKind, which was incorrect. See §5.3
  * for the full dual-membership mapping and the rationale for keeping it here.
+ *
+ * `'recording'` is M6-reserved (DVR): verifiers MUST accept it but no current
+ * path mints it. It exists in the union (mirroring Rust
+ * `stream_token::StreamKind::Recording` and the `recording-m6-reserved`
+ * vector) so M6 code doesn't need a cross-language enum amendment.
  */
-export type StreamKind = 'live' | 'vod' | 'series' | 'catchup' | 'segment' | 'remux' | 'playlist'
+export type StreamKind =
+  | 'live'
+  | 'vod'
+  | 'series'
+  | 'catchup'
+  | 'segment'
+  | 'remux'
+  | 'playlist'
+  | 'recording'
 
 // V1 canonical claim shape (§5.2). Short key names to save bytes in URL query params.
 // Alphabetical key order matches the fixed-template serializer below.
