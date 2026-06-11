@@ -134,6 +134,11 @@ struct Session {
     started_at: u64,
     last_seen: u64,
     start_secs: u64,
+    /// First segment number (`-start_number`) of the CURRENT ffmpeg child.
+    /// 0 for the initial spawn; each respawn advances it past the furthest
+    /// segment already written so numbering stays monotonic for the session's
+    /// whole lifetime (see [`SessionManager::respawn`]).
+    start_number: u64,
     restarts: u32,
     /// Command channel to the supervisor (kill/respawn the real ffmpeg).
     ctl: mpsc::UnboundedSender<SessionCmd>,
@@ -280,6 +285,47 @@ fn is_vaapi_hw_decodable(codec: &str) -> bool {
     )
 }
 
+/// Why a supervisor respawn is happening — drives the resume position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RespawnMode {
+    /// A user seek: the session's `start_secs` was just set to the seek target
+    /// and the respawn must honor it exactly.
+    Seek,
+    /// Crash recovery: the child died mid-encode. Resume at the approximate
+    /// FURTHEST-ENCODED position, not the stale grant/seek offset — otherwise
+    /// every crash silently rewinds playback to where the session started.
+    Crash,
+}
+
+/// Parse a segment file name (`seg_%05d.ts`) into its index.
+fn segment_index(name: &str) -> Option<u64> {
+    name.strip_prefix("seg_")?.strip_suffix(".ts")?.parse().ok()
+}
+
+/// The highest segment index present in a session dir, or `None` when the dir
+/// is unreadable or holds no segments. The HLS sliding window
+/// (`delete_segments`) prunes from the OLDEST end, so the max index present is
+/// the furthest segment the previous child wrote — even after pruning.
+async fn max_segment_index(dir: &PathBuf) -> Option<u64> {
+    let mut rd = tokio::fs::read_dir(dir).await.ok()?;
+    let mut max: Option<u64> = None;
+    while let Ok(Some(entry)) = rd.next_entry().await {
+        if let Some(idx) = entry.file_name().to_str().and_then(segment_index) {
+            max = Some(max.map_or(idx, |m| m.max(idx)));
+        }
+    }
+    max
+}
+
+/// Approximate furthest-encoded position for a crash respawn: the offset the
+/// crashed child was spawned at (`spawn_secs`, its baked `-ss`) plus the
+/// segments it wrote (`next_number - prev_number`) times the segment length.
+/// Pure so the math is unit-testable without a real crash.
+fn crash_resume_secs(spawn_secs: u64, prev_number: u64, next_number: u64) -> u64 {
+    spawn_secs
+        + next_number.saturating_sub(prev_number) * u64::from(crate::args::HLS_SEGMENT_SECS)
+}
+
 /// Shared, cheap-to-clone manager (Arc'd map + config).
 #[derive(Clone)]
 pub struct SessionManager {
@@ -414,6 +460,7 @@ impl SessionManager {
         start_secs: u64,
         source_codec: Option<&str>,
         media_kind: &str,
+        start_number: u64,
     ) -> Result<Child, StartError> {
         let dir_str = dir.to_string_lossy();
         // Full-hardware VAAPI decode is gated on: the resolved encoder being
@@ -433,6 +480,7 @@ impl SessionManager {
             encoder: self.encoder,
             hw_decode,
             media_kind,
+            start_number,
         });
         let mut child = Command::new(&self.ffmpeg_bin)
             .args(&args)
@@ -517,6 +565,7 @@ impl SessionManager {
             opts.start_secs,
             opts.source_codec.as_deref(),
             &opts.media_kind,
+            0,
         )?;
 
         let (ctl_tx, ctl_rx) = mpsc::unbounded_channel();
@@ -528,6 +577,7 @@ impl SessionManager {
             started_at: now,
             last_seen: now,
             start_secs: opts.start_secs,
+            start_number: 0,
             restarts: 0,
             ctl: ctl_tx,
             _permit: permit,
@@ -692,18 +742,32 @@ impl SessionManager {
         })
     }
 
-    /// Kill the current ffmpeg (if any) and respawn a fresh one for `id`,
-    /// re-reading the session's CURRENT params (so a seek's updated
-    /// `start_secs` takes effect). Used by the supervisor for both crash
-    /// recovery and seek restarts; it is the ONLY respawn path, keeping the
-    /// supervisor the sole Child owner.
+    /// Kill the current ffmpeg (if any) and respawn a fresh one for `id`.
+    /// Used by the supervisor for both crash recovery and seek restarts; it is
+    /// the ONLY respawn path, keeping the supervisor the sole Child owner.
+    ///
+    /// The resume position depends on `mode`:
+    /// * [`RespawnMode::Seek`] — the session's `start_secs` was just set to
+    ///   the seek target by `seek()`; honor it exactly.
+    /// * [`RespawnMode::Crash`] — resume at the approximate FURTHEST-ENCODED
+    ///   position (`spawn offset + segments_written × segment length`, derived
+    ///   from the highest segment index in the session dir). Respawning at the
+    ///   stale grant/seek offset silently rewound playback to the session's
+    ///   start on every crash.
+    ///
+    /// Either way segment numbering continues from the furthest segment
+    /// (`-start_number`), so numbering is MONOTONIC across respawns and a
+    /// stale cached playlist can never alias an old segment name onto new
+    /// media. The new spawn params are persisted to the session BEFORE the
+    /// spawn so a further crash compounds from them and `SessionInfo` reports
+    /// the real position.
     ///
     /// The session map is re-checked immediately before the dir is cleared AND
     /// again after the spawn, so a `stop()` racing this never has its removed
     /// dir recreated behind it (a leak on the bounded /scratch tmpfs) and never
     /// leaves an unsupervised encoder.
-    async fn respawn(&self, id: &str) -> Respawn {
-        let (input, plan, dir, start_secs, source_codec, media_kind) = {
+    async fn respawn(&self, id: &str, mode: RespawnMode) -> Respawn {
+        let (input, plan, dir, start_secs, source_codec, media_kind, prev_number) = {
             let guard = self.sessions.lock().await;
             let Some(s) = guard.get(id) else {
                 return Respawn::Gone;
@@ -715,12 +779,30 @@ impl SessionManager {
                 s.start_secs,
                 s.source_codec.clone(),
                 s.info_kind.clone(),
+                s.start_number,
             )
         };
-        // Clear the dir so the fresh ffmpeg restarts segment numbering at
-        // seg_00000 against a clean playlist. Without this, `append_list`
-        // re-writes index.m3u8 referencing a brand-new seg_00000 while the
-        // player may still hold the old one — stale media on every restart.
+        // Derive the furthest-written segment BEFORE clearing the dir.
+        let next_number = max_segment_index(&dir)
+            .await
+            .map_or(prev_number, |m| m.saturating_add(1).max(prev_number));
+        let spawn_secs = match mode {
+            RespawnMode::Seek => start_secs,
+            RespawnMode::Crash => crash_resume_secs(start_secs, prev_number, next_number),
+        };
+        {
+            let mut guard = self.sessions.lock().await;
+            let Some(s) = guard.get_mut(id) else {
+                return Respawn::Gone;
+            };
+            s.start_secs = spawn_secs;
+            s.start_number = next_number;
+        }
+        // Clear the dir so the fresh ffmpeg writes against a clean playlist.
+        // Without this, `append_list` re-writes index.m3u8 referencing new
+        // segments while the player may still hold the old list — stale media
+        // on every restart. (Numbering continuity is preserved by
+        // `-start_number` above, not by keeping old files around.)
         remove_dir_logged(&dir, id, "pre-respawn clear").await;
         if let Err(e) = tokio::fs::create_dir_all(&dir).await {
             tracing::warn!(session = %id, error = %e, "failed to recreate session dir for respawn");
@@ -731,9 +813,10 @@ impl SessionManager {
             &input,
             &plan,
             &dir,
-            start_secs,
+            spawn_secs,
             source_codec.as_deref(),
             &media_kind,
+            next_number,
         ) {
             Ok(mut child) => {
                 // A stop() may have removed the session while we spawned; kill
@@ -793,7 +876,7 @@ impl SessionManager {
                             cmd = ctl.recv() => match cmd {
                                 Some(SessionCmd::Restart { ack }) => {
                                     kill_child(&mut child, &id).await;
-                                    match this.respawn(&id).await {
+                                    match this.respawn(&id, RespawnMode::Seek).await {
                                         Respawn::Ok(new) => {
                                             let _ = ack.send(true);
                                             ChildSlot::Running(new)
@@ -828,7 +911,10 @@ impl SessionManager {
                     // change anything: a seek revives the session, a stop (or
                     // the session being dropped) ends it.
                     ChildSlot::Completed => match ctl.recv().await {
-                        Some(SessionCmd::Restart { ack }) => match this.respawn(&id).await {
+                        Some(SessionCmd::Restart { ack }) => match this
+                            .respawn(&id, RespawnMode::Seek)
+                            .await
+                        {
                             Respawn::Ok(new) => {
                                 let _ = ack.send(true);
                                 ChildSlot::Running(new)
@@ -890,7 +976,15 @@ impl SessionManager {
                                 None => return,
                             }
                         }
-                        let outcome = this.respawn(&id).await;
+                        // A seek that landed during the backoff already updated
+                        // start_secs to its target — honor it. A plain crash
+                        // recovery resumes at the furthest-encoded position.
+                        let mode = if pending_ack.is_some() {
+                            RespawnMode::Seek
+                        } else {
+                            RespawnMode::Crash
+                        };
+                        let outcome = this.respawn(&id, mode).await;
                         if let Some(ack) = pending_ack {
                             let _ = ack.send(matches!(outcome, Respawn::Ok(_)));
                         }
@@ -957,6 +1051,7 @@ mod tests {
              d=$(dirname \"$last\")\n\
              mkdir -p \"$d\"\n\
              printf '%s' \"$$\" > \"$d/pid.txt\"\n\
+             printf '%s\\n' \"$@\" > \"$d/args.txt\"\n\
              printf '#EXTM3U\\n#EXT-X-VERSION:3\\n' > \"$last\"\n\
              printf 'seg' > \"$d/seg_00000.ts\"\n\
              if [ \"{mode}\" = crash ]; then exit 1; fi\n\
@@ -1272,6 +1367,152 @@ mod tests {
         mgr.stop(&b).await;
         wait_for(|| !process_alive(pid_b)).await;
         assert!(mgr.is_empty().await);
+    }
+
+    #[test]
+    fn segment_index_parses_only_segment_names() {
+        assert_eq!(segment_index("seg_00000.ts"), Some(0));
+        assert_eq!(segment_index("seg_00042.ts"), Some(42));
+        assert_eq!(segment_index("seg_123456.ts"), Some(123456));
+        assert_eq!(segment_index("index.m3u8"), None);
+        assert_eq!(segment_index("args.txt"), None);
+        assert_eq!(segment_index("seg_.ts"), None);
+        assert_eq!(segment_index("seg_abc.ts"), None);
+    }
+
+    #[test]
+    fn crash_resume_math() {
+        // 2 segments (idx 0,1) written from a fresh start → resume at 2×4s.
+        assert_eq!(crash_resume_secs(0, 0, 2), 8);
+        // Compounds from the crashed child's own spawn offset + numbering.
+        assert_eq!(crash_resume_secs(100, 5, 10), 120);
+        // No segments written → stay at the spawn offset.
+        assert_eq!(crash_resume_secs(50, 3, 3), 50);
+        // Defensive: never rewind even on an impossible numbering regression.
+        assert_eq!(crash_resume_secs(50, 3, 2), 50);
+    }
+
+    #[tokio::test]
+    async fn max_segment_index_finds_furthest_segment() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        assert_eq!(max_segment_index(&dir).await, None, "no segments yet");
+        for name in ["seg_00003.ts", "seg_00007.ts", "index.m3u8", "args.txt"] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        assert_eq!(max_segment_index(&dir).await, Some(7));
+        // Unreadable/missing dir → None, not a panic.
+        assert_eq!(
+            max_segment_index(&tmp.path().join("nope")).await,
+            None
+        );
+    }
+
+    /// A stub that CRASHES on its first invocation after writing two segments
+    /// (simulating an encode that died ~8s in), then behaves like a healthy
+    /// long-running ffmpeg on every later invocation, recording its argv.
+    fn write_crash_once_stub(dir: &std::path::Path) -> PathBuf {
+        let path = dir.join("ffmpeg_crash_once.sh");
+        let flag = dir.join("crashed.flag");
+        let mut f = std::fs::File::create(&path).unwrap();
+        let script = format!(
+            "#!/bin/sh\n\
+             for a in \"$@\"; do last=\"$a\"; done\n\
+             d=$(dirname \"$last\")\n\
+             mkdir -p \"$d\"\n\
+             if [ ! -f \"{flag}\" ]; then\n\
+               : > \"{flag}\"\n\
+               printf 'seg' > \"$d/seg_00000.ts\"\n\
+               printf 'seg' > \"$d/seg_00001.ts\"\n\
+               exit 1\n\
+             fi\n\
+             printf '%s\\n' \"$@\" > \"$d/args.txt\"\n\
+             printf '#EXTM3U\\n' > \"$last\"\n\
+             sleep 30\n",
+            flag = flag.display()
+        );
+        f.write_all(script.as_bytes()).unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+        path
+    }
+
+    /// Poll the respawned child's recorded argv until `pred` matches.
+    async fn wait_for_args<F>(path: &std::path::Path, mut pred: F) -> Vec<String>
+    where
+        F: FnMut(&[String]) -> bool,
+    {
+        for _ in 0..200 {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                let args: Vec<String> = text.lines().map(str::to_string).collect();
+                if pred(&args) {
+                    return args;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("expected argv never appeared at {}", path.display());
+    }
+
+    #[tokio::test]
+    async fn crash_respawn_resumes_at_furthest_position_with_monotonic_numbering() {
+        // Regression: a crash respawn re-used the stale grant/seek offset and
+        // reset segment numbering to 0 — playback silently rewound to the
+        // session start and new seg_00000.ts aliased the old one. The
+        // supervisor must resume at ~the furthest-encoded position
+        // (spawn offset + segments_written × 4s) and continue numbering.
+        let tmp = tempfile::tempdir().unwrap();
+        let stub = write_crash_once_stub(tmp.path());
+        let mgr = manager_with_stub(&tmp, stub);
+        let id = mgr.start(opts("/lib/a.mkv")).await.unwrap();
+        let dir = mgr.manifest_path(&id).await.unwrap();
+        let dir = dir.parent().unwrap().to_path_buf();
+
+        // The first child wrote seg_00000+seg_00001 then crashed; the healthy
+        // respawn records its argv.
+        let args = wait_for_args(&dir.join("args.txt"), |_| true).await;
+        let ss = args
+            .iter()
+            .position(|s| s == "-ss")
+            .expect("crash respawn must bake a resume -ss");
+        assert_eq!(args[ss + 1], "8", "2 segments × 4s past offset 0: {args:?}");
+        let sn = args
+            .iter()
+            .position(|s| s == "-start_number")
+            .expect("crash respawn must continue segment numbering");
+        assert_eq!(args[sn + 1], "2", "numbering continues after seg_00001");
+
+        // The session reports the resumed position, not the stale offset.
+        assert_eq!(mgr.list().await[0].start_secs, 8);
+        mgr.stop(&id).await;
+    }
+
+    #[tokio::test]
+    async fn seek_respawn_honors_target_but_keeps_numbering_monotonic() {
+        // A seek must land exactly on its target (NOT the crash-resume
+        // estimate), while segment numbering still advances past everything
+        // already written so stale playlist entries can't alias new media.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
+        let id = mgr.start(opts("/lib/a.mkv")).await.unwrap();
+        let manifest = mgr.manifest_path(&id).await.unwrap();
+        wait_for(|| manifest.exists()).await;
+        let dir = manifest.parent().unwrap().to_path_buf();
+
+        assert!(mgr.seek(&id, 120).await, "seek must succeed");
+        let args = wait_for_args(&dir.join("args.txt"), |a| {
+            a.iter().any(|s| s == "120")
+        })
+        .await;
+        let ss = args.iter().position(|s| s == "-ss").expect("-ss");
+        assert_eq!(args[ss + 1], "120", "seek target honored exactly");
+        let sn = args
+            .iter()
+            .position(|s| s == "-start_number")
+            .expect("seek respawn must keep numbering monotonic");
+        assert_eq!(args[sn + 1], "1", "first child wrote seg_00000: {args:?}");
+        mgr.stop(&id).await;
     }
 
     #[tokio::test]

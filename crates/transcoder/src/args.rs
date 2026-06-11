@@ -147,6 +147,13 @@ pub struct ArgSpec<'a> {
     /// semantics: live kinds keep `omit_endlist`, finite VOD gets
     /// `EXT-X-ENDLIST` on clean EOF (see [`is_live_media_kind`]).
     pub media_kind: &'a str,
+    /// First segment number for this invocation (`-start_number`). 0 for a
+    /// fresh session; a supervisor respawn passes the next number after the
+    /// furthest segment the previous child wrote, keeping segment numbering
+    /// MONOTONIC across respawns — a player (or cache) still holding the
+    /// pre-respawn playlist can then never alias a stale `seg_00000.ts` name
+    /// onto new media.
+    pub start_number: u64,
 }
 
 /// Build the ffmpeg argument vector for a transcode plan (software-decode path).
@@ -193,6 +200,7 @@ pub fn ffmpeg_args_hw(
         encoder,
         hw_decode,
         media_kind: "movie",
+        start_number: 0,
     })
 }
 
@@ -210,6 +218,7 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
         encoder,
         hw_decode,
         media_kind,
+        start_number,
     } = *spec;
     let (video, audio, subtitle) = match plan {
         TranscodePlan::DirectPlay { .. } => return Vec::new(),
@@ -474,6 +483,12 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
         push(&mut a, "delete_segments+append_list+omit_endlist");
     } else {
         push(&mut a, "delete_segments+append_list");
+    }
+    // Monotonic segment numbering across supervisor respawns (see ArgSpec).
+    // Omitted at 0 — ffmpeg's default — so fresh sessions keep the proven argv.
+    if start_number > 0 {
+        push(&mut a, "-start_number");
+        a.push(start_number.to_string());
     }
     push(&mut a, "-hls_segment_filename");
     a.push(format!("{session_dir}/seg_%05d.ts"));
@@ -1253,7 +1268,36 @@ mod tests {
             encoder: HwEncoder::Cpu,
             hw_decode: false,
             media_kind: kind,
+            start_number: 0,
         })
+    }
+
+    #[test]
+    fn start_number_emitted_only_when_nonzero() {
+        let plan = transcode(VideoOp::Copy, AudioOp::Copy, SubtitleOp::None);
+        let spec = |n: u64| ArgSpec {
+            plan: &plan,
+            input: "/in.mkv",
+            session_dir: "/tmp/s",
+            start_secs: 0,
+            encoder: HwEncoder::Cpu,
+            hw_decode: false,
+            media_kind: "movie",
+            start_number: n,
+        };
+        // Fresh session: ffmpeg's default numbering, no extra flag.
+        let j0 = ffmpeg_args_for(&spec(0)).join(" ");
+        assert!(!j0.contains("-start_number"), "{j0}");
+        // Respawn: numbering continues from the supervisor's counter.
+        let args = ffmpeg_args_for(&spec(7));
+        let pos = args
+            .iter()
+            .position(|s| s == "-start_number")
+            .expect("respawn must emit -start_number");
+        assert_eq!(args[pos + 1], "7");
+        // It must be a muxer (output) option: after -i.
+        let i = args.iter().position(|s| s == "-i").unwrap();
+        assert!(pos > i, "-start_number is an output option");
     }
 
     #[test]
