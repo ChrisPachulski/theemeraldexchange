@@ -763,6 +763,62 @@ describe('radarr POST /movie — recommender "added" signal timing', () => {
   })
 })
 
+// Grab events written by the movie-add pipeline must carry the caller's sub.
+// Without it, readEventsForItem's legacy allowance (undefined sub matches
+// every caller) made every Radarr grab event visible to every member via
+// /api/grabs/by-item — Sonarr already threaded sub; Radarr did not.
+describe('radarr POST /movie — grab events attributed to the caller sub', () => {
+  it('every event from the add pipeline carries the session sub', async () => {
+    const appendSpy = vi.spyOn(grabLog, 'appendGrabEvent').mockResolvedValue(undefined)
+    try {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+          const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+          if (url.includes('/api/v3/rootfolder')) {
+            return new Response(JSON.stringify([{ id: 1, path: '/data/movies', freeSpace: 500 * 1024 ** 3 }]), { status: 200 })
+          }
+          if (url.includes('/api/v3/qualityprofile')) {
+            return new Response(JSON.stringify([{ id: 7, name: 'Choose Me' }]), { status: 200 })
+          }
+          if (url.endsWith('/api/v3/movie') && init?.method === 'POST') {
+            return new Response(JSON.stringify({ id: 555, title: 'Attributed' }), { status: 201 })
+          }
+          if (url.includes('/api/v3/release?movieId=555')) {
+            return new Response(
+              JSON.stringify([
+                { guid: 'g-555', indexerId: 1, size: 2 * 1024 ** 3, qualityWeight: 100, title: 'Attributed 1080p' },
+              ]),
+              { status: 200 },
+            )
+          }
+          if (url.endsWith('/api/v3/release') && init?.method === 'POST') {
+            return new Response(JSON.stringify({ ok: true }), { status: 200 })
+          }
+          return new Response('[]', { status: 200 })
+        }),
+      )
+      // userCookie() resolves to sub 'plex:2' — the non-admin add path.
+      const r = await appUnderTest().request('/api/v3/movie', {
+        method: 'POST',
+        headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'Attributed', tmdbId: 555 }),
+      })
+      expect(r.status).toBe(201)
+      // grab_started + grab_succeeded at minimum — and EVERY one attributed.
+      expect(appendSpy.mock.calls.length).toBeGreaterThanOrEqual(2)
+      for (const [event] of appendSpy.mock.calls) {
+        expect(event).toMatchObject({ app: 'radarr', itemId: 555, sub: 'plex:2' })
+      }
+      const types = appendSpy.mock.calls.map(([e]) => (e as { type: string }).type)
+      expect(types).toContain('grab_started')
+      expect(types).toContain('grab_succeeded')
+    } finally {
+      appendSpy.mockRestore()
+    }
+  })
+})
+
 // POST /api/v3/movie/:id/upgrade — admin-only manual upgrade trigger.
 // Reuses the same cap-filter chain as the add flow (so it can't
 // download a 50 GB rip even though it's logically an upgrade request)

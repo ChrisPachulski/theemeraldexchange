@@ -848,6 +848,7 @@ sonarr.post('/api/v3/series/:id/seasons/:n/monitor', requireAdmin, sonarrMutateL
     void recordSonarrGrabEvent({
       itemId: id,
       title: series.title,
+      sub: c.get('session').sub,
       type: 'grab_failed',
       error: e instanceof Error ? e.message : String(e),
     })
