@@ -61,6 +61,57 @@ npm run dev        # vite + tsx backend (concurrently)
 proxies `/api/*` to the backend so requests are same-origin in dev. Backend
 secrets live in `.env` (gitignored) — never commit API keys, tokens, or DSNs.
 
+### Local full-stack development
+
+The sidecars are opt-in: with their flags off, `npm run dev` alone gives you
+the SPA + backend (auth, search, *arr bridges pointed at whatever `.env`
+says). To run the full stack locally alongside it:
+
+- **Recommender** (FastAPI, port 8000):
+
+  ```bash
+  cd recommender
+  make install && make migrate            # creates ./data/exchange.db
+  TMDB_API_KEY=... make ingest-bootstrap  # one-time catalog ingest
+  make featurize
+  RECOMMENDER_EVENT_SECRET=local-dev-secret make serve
+  ```
+
+  Then wire the backend via `.env`: `USE_LOCAL_RECOMMENDER=1`,
+  `RECOMMENDER_URL=http://localhost:8000`, and the same
+  `RECOMMENDER_EVENT_SECRET` (required whenever the flag is on).
+
+- **media-core** (Rust, port 8002):
+
+  ```bash
+  MEDIA_CORE_PORT=8002 MEDIA_DB_PATH=./data/media.db \
+    MEDIA_LIBRARY_PATHS=/path/to/your/media \
+    cargo run -p media-core
+  ```
+
+  Backend wiring: `USE_MEDIA_CORE=1`, `MEDIA_CORE_URL=http://localhost:8002`.
+  With `MEDIA_INTERNAL_PRINCIPAL_MODE` unset the principal gate defaults to
+  `off`, so no shared secret is needed in dev (prod runs `enforce` with
+  `INTERNAL_PRINCIPAL_SECRET`).
+
+- **Transcoder** (Rust, port 8003; needs `ffmpeg` on PATH, or set
+  `TRANSCODER_FFMPEG_BIN`):
+
+  ```bash
+  TRANSCODER_PORT=8003 cargo run -p transcoder
+  ```
+
+  Point media-core at it with `MEDIA_TRANSCODER_URL=http://localhost:8003`
+  (unset, media-core answers transcode-required files with 503).
+
+What honestly needs the NAS: hardware VAAPI encode (the Intel iGPU at
+`/dev/dri` — on a dev laptop the boot probe demotes to software x264, which
+is correct but slow), the real Sonarr/Radarr/SAB/IPTV upstreams, the
+Glitchtip stack, and the Cloudflare tunnel. The compose file
+(`docker-compose.yml`) is the authoritative env reference for every service;
+local processes are the fast loop, `docker compose` on the NAS is the real
+topology.
+
 ## Build & test
 
 ```bash

@@ -19,9 +19,9 @@ typographic family. We're stealing the chrome, not the chrome's prerequisites.
 
 What we don't take: WebGL hero scenes, scroll-hijacking, brand wordmarks at
 40vw. This is a tool used nightly, not a portfolio reel — the chrome carries
-the reference; the function stays instant. (Two narrow, owner-approved
-atmosphere exceptions — the WebGL brand mark and the kraken video — are
-recorded under "Recorded exceptions" below.)
+the reference; the function stays instant. (The narrow, owner-approved
+atmosphere exceptions — the WebGL brand mark, the kraken video, and the
+dormant Beacon gem video — are recorded under "Recorded exceptions" below.)
 
 ## Physical scene (forces theme)
 
@@ -258,19 +258,34 @@ Slightly slower than V1 to feel cinematic, never theatrical.
 - Modal-as-first-thought. Modals are the exception, never the default — a
   surface earns one only when its task is genuinely modal (committing an
   add, confirming a destructive action, focused detail/selection/playback).
-  Every modal must take the shared a11y contract: focus trap + Escape via
-  `useModalA11y`, `role="dialog"`/`aria-modal`, and a scrim. Current roster:
-  Add (movie/series), Confirm, DetailModal, EpisodePicker, MediaPlayer,
-  ConcurrencyLimitModal, and the IPTV connections panel
-  (`ConnectionsWidget`). Recorded debt, not silent license: the connections
-  panel still lacks the `useModalA11y` trap, and the IPTV modal styles
-  (`iptv-conn-*` rules in `src/index.css`) carry raw hex values instead of
-  the OKLCH tokens. Both are to be paid down, neither permits more.
+  Every modal must take a complete a11y contract — focus trap, Escape,
+  `aria-modal` semantics, and a scrim — via one of two sanctioned
+  mechanisms:
+  - **Native `<dialog>` + `showModal()`** (the platform supplies the trap
+    and Escape; `useDialogDismiss` owns open/close + deferred unmount):
+    AddMovieModal, AddSeriesModal, ConfirmModal, DetailModal.
+  - **`role="dialog"` div + `useModalA11y`** (the shared hook supplies the
+    trap + Escape + focus restore): EpisodePicker, MediaPlayer,
+    ConcurrencyLimitModal, the IPTV connections panel
+    (`ConnectionsWidget`), and the fullscreen IPTV players in
+    VodTab / LiveTab / IptvSeriesTab. As of the 2026-06 hardening wave
+    every `role="dialog"` surface in the tree takes `useModalA11y` —
+    including the connections panel, whose missing trap was the previously
+    recorded debt (paid down in `628a7ac`).
+  Recorded debt, not silent license: raw hex color literals still bypass
+  the OKLCH tokens at real scale — ~97 occurrences across 12 CSS files at
+  last count (`grep -rEo '#[0-9a-fA-F]{3,8}\b' src --include='*.css'`).
+  The main offenders: `src/index.css` (~64, including the `iptv-conn-*`
+  modal styles), `auth/AppleSignInButton.css` (~7 — Apple's mandated
+  button branding, likely permanent), `player/IptvPlayer.css`,
+  `auth/InvitesPanel.css`, `auth/DevicesPanel.css` (~5 each), and
+  `tabs/UsersTab.css` (4). This is tracked debt to migrate toward the
+  token palette (Apple branding excepted); it permits no new hex.
 - Em dashes in copy. (Comma, semicolon, period, parens.)
 - WebGL hero scenes. Three.js stays out of layout and content surfaces. The
-  two owner-approved atmosphere exceptions below (the three-emerald brand
-  mark, the kraken video) are the ceiling, not a wedge — no scroll scenes,
-  no WebGL heroes.
+  owner-approved atmosphere exceptions below (the WebGL brand mark, the
+  kraken video, the dormant Beacon) are the ceiling, not a wedge — no
+  scroll scenes, no WebGL heroes.
 
 ## Recorded exceptions (owner-approved)
 
@@ -278,9 +293,12 @@ The laws above describe the system this doc locks; these are the deliberate,
 bounded departures the owner has approved. They are recorded so doc and tree
 agree — they set ceilings, not precedents.
 
-- **WebGL three-emerald brand mark.** The brand mark is a live Three.js
+- **WebGL emerald brand mark.** The brand mark is a live Three.js
   brilliant-cut gem scene (`src/lib/gemScene.ts`, rendered by `EmeraldMark`
-  in both navs and driving the animated favicon). It earns its WebGL: the
+  in both navs and driving the animated favicon). Originally a three-gem
+  row, consolidated to a single centred gem in `36fc64c` (the row read as
+  a noisy green stripe at mark sizes); the scene keeps a `gemCount` option
+  but every placement renders the single variant. It earns its WebGL: the
   product's name promises a jewel, and a static SVG read as clip-art.
   Scope: the mark and favicon only.
 - **Kraken video atmosphere.** The page background is a full-screen video
@@ -290,6 +308,15 @@ agree — they set ceilings, not precedents.
   constellation stays in the tree as the fallback. Floating chrome over the
   moving video is also why backdrop-blur extends beyond the HUD pod (see
   the glassmorphism law above).
+- **Beacon gem video (dormant).** A live-action alpha-cutout emerald loop
+  (`src/components/atmosphere/Beacon.tsx`, `public/gem.webm` — two phase-
+  offset `<video>` elements cross-faded so the loop seam never shows),
+  originally pinned top-right as the prize the kraken reaches for. It is
+  **currently unmounted**: the App mount was dropped in the home-page
+  redesign (`faf29ca`) and its walkthrough stage was replaced by the
+  single WebGL gem (`36fc64c`). Like the constellation, it stays in the
+  tree (component + shipped assets) as recorded atmosphere inventory —
+  remounting it is an owner decision, not a license this doc grants.
 
 ## What "done" looks like visually
 

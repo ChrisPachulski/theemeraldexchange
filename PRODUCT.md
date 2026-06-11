@@ -72,6 +72,23 @@ Voice: short, confident, no jargon. No "successfully added!" exclamations; just
    resume everywhere, subtitle support, and downloads-in-progress visibility —
    at which point it is removed. This exception is bounded to the Watch entry;
    it licenses no other link to an underlying service.
+
+   *Recorded exception (2026-06-11, owner-approved):* the **"Play in Plex"
+   per-title link** in `DetailModal` (deep-link or title-search into
+   app.plex.tv for in-library titles, via `usePlexLinks`). Same rationale and
+   same bound as the Watch entry: transitional, member-facing (playback is
+   not an operator action), and removed when native playback reaches parity —
+   resume everywhere plus subtitle support. It is the only per-title external
+   link permitted; it licenses nothing else.
+
+   *Recorded exception (2026-06-11, owner-approved):* the **admin apps links**
+   (Sonarr / Radarr / SAB) in the user menu (`UserMenu`). These are operator
+   tooling, not part of the member experience: they render for the
+   **admin role only** (gated on `isAdmin`, which follows `effectiveRole` —
+   an admin previewing as a user loses them with the rest of the admin
+   chrome), and they are explicitly not member-facing. They do not weaken
+   principle 1 for members: no member-visible surface links to an underlying
+   service. The gate must never widen beyond the admin role.
 2. **One unified UI.** No admin/family toggle on the consumption surface.
    Owner-only administration lives behind authorized routes, gated by the members
    allowlist — never by a hidden client mode.
