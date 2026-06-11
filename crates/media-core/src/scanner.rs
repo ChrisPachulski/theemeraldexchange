@@ -40,6 +40,11 @@ pub struct ScanReport {
     pub files_removed: usize,
     /// Watch-state rows reaped because their movie/episode no longer exists.
     pub watch_orphans_removed: usize,
+    /// Video files skipped because their canonical path (symlinks resolved)
+    /// escapes every configured library root. `stream_file` refuses to serve
+    /// such paths (path_within_roots), so indexing them would create
+    /// permanently unplayable rows.
+    pub files_skipped_outside_roots: usize,
     pub errors: usize,
 }
 
@@ -66,6 +71,9 @@ struct WalkOutcome {
     /// movies/episodes and then the watch-state GC) for a transient mount
     /// hiccup.
     prunable_roots: Vec<std::path::PathBuf>,
+    /// Files whose canonical path escapes every root (see
+    /// [`ScanReport::files_skipped_outside_roots`]).
+    files_outside_roots: usize,
 }
 
 /// Enumerate every video file under `roots`. Pure blocking FS work (WalkDir +
@@ -77,7 +85,22 @@ fn walk_roots(roots: &[LibraryRoot]) -> WalkOutcome {
         files_seen: 0,
         errors: 0,
         prunable_roots: Vec::new(),
+        files_outside_roots: 0,
     };
+
+    // Canonical forms of every existing root, for the symlink-containment
+    // check below. Mirrors `routes::path_within_roots`: the scanner follows
+    // symlinks, but `stream_file` refuses any path that canonicalizes outside
+    // all roots — indexing such a file would create a permanently unplayable
+    // row, so it is skipped here instead (a symlink resolving into ANOTHER
+    // configured root is fine on both sides).
+    let canon_roots: Vec<std::path::PathBuf> = roots
+        .iter()
+        .filter_map(|r| std::fs::canonicalize(&r.path).ok())
+        .collect();
+    // Warn loudly on the first escapee only; the rest are counted (a tree of
+    // thousands of out-of-root symlinks must not flood the log every scan).
+    let mut warned_outside_roots = false;
 
     for root in roots {
         // A configured root whose directory is missing (unmounted volume,
@@ -130,6 +153,31 @@ fn walk_roots(roots: &[LibraryRoot]) -> WalkOutcome {
             };
 
             out.files_seen += 1;
+
+            // Containment: skip files whose canonical path (symlinks resolved)
+            // escapes every configured root — stream_file would refuse them.
+            match std::fs::canonicalize(entry_path) {
+                Ok(canon) => {
+                    if !canon_roots.iter().any(|r| canon.starts_with(r)) {
+                        if !warned_outside_roots {
+                            tracing::warn!(
+                                path = %entry_path.display(),
+                                resolves_to = %canon.display(),
+                                "file resolves outside all library roots; skipping \
+                                 (unservable — further escapees this scan are counted silently)"
+                            );
+                            warned_outside_roots = true;
+                        }
+                        out.files_outside_roots += 1;
+                        continue;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("canonicalize failed for {path_str}: {e}");
+                    root_errors += 1;
+                    continue;
+                }
+            }
 
             let (size_bytes, mtime) = match file_stat(entry_path) {
                 Ok(stat) => stat,
@@ -186,6 +234,7 @@ pub async fn scan_once(
         .map_err(|e| AppError::Internal(format!("walk task failed: {e}")))?;
     report.files_seen = walk.files_seen;
     report.errors = walk.errors;
+    report.files_skipped_outside_roots = walk.files_outside_roots;
 
     for file in &walk.files {
         let path_str = &file.path_str;
@@ -1802,6 +1851,68 @@ mod tests {
             surviving_watch, kept_movie,
             "the surviving title's watch state stays"
         );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn scan_skips_symlinks_escaping_all_roots() {
+        // Consistency with stream_file: a symlinked file whose canonical path
+        // escapes every library root would be indexed by the scanner but
+        // refused by path_within_roots at stream time — a permanently
+        // unplayable row. The scanner must skip (and count) it, while a
+        // symlink resolving WITHIN a root stays indexable.
+        let root = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+
+        // A real, in-root file (seeded as unchanged so no ffprobe is needed).
+        let real = root.path().join("Inside (2020).mkv");
+        std::fs::write(&real, b"bytes").unwrap();
+        // An in-root symlink to an in-root target: allowed.
+        let in_link = root.path().join("Also Inside (2021).mkv");
+        std::os::unix::fs::symlink(&real, &in_link).unwrap();
+        // An in-root symlink escaping to a file outside every root: skipped.
+        let escapee_target = outside.path().join("Escapee (2022).mkv");
+        std::fs::write(&escapee_target, b"bytes").unwrap();
+        let escapee = root.path().join("Escapee (2022).mkv");
+        std::os::unix::fs::symlink(&escapee_target, &escapee).unwrap();
+
+        let db = Db::connect_memory().await.unwrap();
+        for p in [&real, &in_link] {
+            let (size, mtime) = file_stat(p).unwrap();
+            sqlx::query(
+                "INSERT INTO media_files \
+                 (path, size_bytes, mtime, container, duration_secs, video_codec, \
+                  video_height, video_profile, hdr_format, audio_tracks_json, \
+                  subtitle_tracks_json, scanned_at) \
+                 VALUES (?, ?, ?, 'mkv', 1, 'h264', 1080, NULL, NULL, '[]', '[]', 't')",
+            )
+            .bind(p.to_str().unwrap())
+            .bind(size)
+            .bind(&mtime)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
+
+        let roots = vec![LibraryRoot {
+            path: root.path().to_path_buf(),
+            kind: RootKind::Movies,
+        }];
+        let report = scan_once(&db, &roots, &no_tmdb()).await.unwrap();
+
+        assert_eq!(report.files_seen, 3, "all three candidates are walked");
+        assert_eq!(
+            report.files_skipped_outside_roots, 1,
+            "exactly the escaping symlink is skipped"
+        );
+        let escapee_rows: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM media_files WHERE path LIKE '%Escapee%'")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(escapee_rows, 0, "the escapee must not be indexed");
+        // The in-root rows survive (the escapee skip must not poison prune).
+        assert_eq!(count(&db, "media_files").await, 2);
     }
 
     #[tokio::test]
