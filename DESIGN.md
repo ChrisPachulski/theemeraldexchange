@@ -283,9 +283,9 @@ Slightly slower than V1 to feel cinematic, never theatrical.
   token palette (Apple branding excepted); it permits no new hex.
 - Em dashes in copy. (Comma, semicolon, period, parens.)
 - WebGL hero scenes. Three.js stays out of layout and content surfaces. The
-  two owner-approved atmosphere exceptions below (the three-emerald brand
-  mark, the kraken video) are the ceiling, not a wedge — no scroll scenes,
-  no WebGL heroes.
+  owner-approved atmosphere exceptions below (the WebGL brand mark, the
+  kraken video, the dormant Beacon) are the ceiling, not a wedge — no
+  scroll scenes, no WebGL heroes.
 
 ## Recorded exceptions (owner-approved)
 
@@ -293,9 +293,12 @@ The laws above describe the system this doc locks; these are the deliberate,
 bounded departures the owner has approved. They are recorded so doc and tree
 agree — they set ceilings, not precedents.
 
-- **WebGL three-emerald brand mark.** The brand mark is a live Three.js
+- **WebGL emerald brand mark.** The brand mark is a live Three.js
   brilliant-cut gem scene (`src/lib/gemScene.ts`, rendered by `EmeraldMark`
-  in both navs and driving the animated favicon). It earns its WebGL: the
+  in both navs and driving the animated favicon). Originally a three-gem
+  row, consolidated to a single centred gem in `36fc64c` (the row read as
+  a noisy green stripe at mark sizes); the scene keeps a `gemCount` option
+  but every placement renders the single variant. It earns its WebGL: the
   product's name promises a jewel, and a static SVG read as clip-art.
   Scope: the mark and favicon only.
 - **Kraken video atmosphere.** The page background is a full-screen video
