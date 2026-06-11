@@ -291,26 +291,18 @@ describe('generateUlid', () => {
 
 // ---------------------------------------------------------------------------
 // Test vector file (§13.1)
-// Sibling agent impl-vectors-hand-author owns the file; we assert it exists
-// and each vector round-trips through canonicalBytes.
+// The vector file is the cross-language interop oracle (the Rust harness
+// runs the same file) — a missing file is a hard failure, never a skip.
 // ---------------------------------------------------------------------------
 
 describe('stream-token-canonical.json vectors (§13.1)', () => {
   const vectorPath = join(__dirname, '../../tests/vectors/stream-token-canonical.json')
 
-  it('vector file exists at tests/vectors/stream-token-canonical.json (populated by impl-vectors-hand-author)', () => {
-    if (!existsSync(vectorPath)) {
-      // Sibling agent impl-vectors-hand-author owns this file; skip when not yet present.
-      // Once the vectors file lands, this test will run and validate canonical correctness.
-      console.warn(`[SKIP] vector file not yet present: ${vectorPath}`)
-      return
-    }
-    expect(existsSync(vectorPath)).toBe(true)
+  it('vector file exists at tests/vectors/stream-token-canonical.json', () => {
+    expect(existsSync(vectorPath), `vector file missing: ${vectorPath}`).toBe(true)
   })
 
   it('each vector: canonicalBytes(claims_input) matches canonical_bytes_hex', () => {
-    if (!existsSync(vectorPath)) return // skip if file not yet present (sibling agent pending)
-
     interface Vector {
       claims_input: {
         exp: number
@@ -342,8 +334,6 @@ describe('stream-token-canonical.json vectors (§13.1)', () => {
   })
 
   it('each vector: verifyStreamToken with test key produces matching HMAC', () => {
-    if (!existsSync(vectorPath)) return
-
     interface Vector {
       claims_input: {
         exp: number
