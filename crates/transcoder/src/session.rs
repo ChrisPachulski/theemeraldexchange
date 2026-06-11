@@ -96,6 +96,11 @@ pub struct StartOpts {
     /// vaapi` has NO software fallback, so we only enable it for codecs the iGPU
     /// can decode (see [`is_vaapi_hw_decodable`]). `None` → software decode.
     pub source_codec: Option<String>,
+    /// The VERIFIED principal's sub from the grant request, binding the session
+    /// to its creator so stop/seek/heartbeat can enforce owner-or-admin.
+    /// `None` only in the Off/log postures where no verified identity exists
+    /// (routes skip enforcement accordingly).
+    pub owner: Option<String>,
 }
 
 /// A point-in-time view of a session for the admin inventory (§4.5 phase 7).
@@ -110,6 +115,8 @@ pub struct SessionInfo {
     pub start_secs: u64,
     pub restarts: u32,
     pub manifest_path: String,
+    /// Verified-principal owner; `None` for sessions created without one.
+    pub owner: Option<String>,
 }
 
 /// Live session state. Not `Clone` — the manager holds it behind the map mutex.
@@ -137,6 +144,8 @@ struct Session {
     /// Source video codec, carried for the supervisor respawn so the full-HW
     /// gate is recomputed identically on every spawn.
     source_codec: Option<String>,
+    /// Verified principal sub that created the session (owner-or-admin gate).
+    owner: Option<String>,
 }
 
 /// Control messages for a session's supervisor — the SOLE owner of the ffmpeg
@@ -201,6 +210,7 @@ impl Session {
             start_secs: self.start_secs,
             restarts: self.restarts,
             manifest_path: self.manifest_path().to_string_lossy().into_owned(),
+            owner: self.owner.clone(),
         }
     }
 }
@@ -520,6 +530,7 @@ impl SessionManager {
             plan: opts.plan,
             input_path: opts.input_path,
             source_codec: opts.source_codec,
+            owner: opts.owner,
         };
 
         self.sessions
@@ -541,6 +552,13 @@ impl SessionManager {
             }
             None => false,
         }
+    }
+
+    /// The owner (verified principal sub) of a session. Outer `None` = no such
+    /// session; `Some(None)` = the session exists but was created without a
+    /// verified principal (Off/log posture).
+    pub async fn session_owner(&self, id: &str) -> Option<Option<String>> {
+        self.sessions.lock().await.get(id).map(|s| s.owner.clone())
     }
 
     /// Seek: ask the supervisor to kill the current ffmpeg and respawn it with
@@ -959,6 +977,7 @@ mod tests {
             plan: remux_plan(),
             start_secs: 0,
             source_codec: None,
+            owner: None,
         }
     }
 
@@ -1317,6 +1336,7 @@ mod tests {
             },
             start_secs: 0,
             source_codec: Some("hevc".into()),
+            owner: None,
         }
     }
 
