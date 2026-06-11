@@ -21,7 +21,9 @@ const { authorizeOrRedeem, enforceAuthRateLimit, enforceAuthIdentityRateLimit } 
   authorizeOrRedeem: vi.fn(),
   // Default: never rate-limited (returns null). Individual tests can override.
   enforceAuthRateLimit: vi.fn(() => null),
-  enforceAuthIdentityRateLimit: vi.fn(() => null),
+  enforceAuthIdentityRateLimit: vi.fn<typeof import('../auth.js').enforceAuthIdentityRateLimit>(
+    () => null,
+  ),
 }))
 vi.mock('../auth.js', () => ({
   authorizeOrRedeem,

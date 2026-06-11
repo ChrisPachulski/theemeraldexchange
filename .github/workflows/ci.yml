@@ -376,10 +376,16 @@ jobs:
         # satisfied once the local tag is stripped), and strip the +cpu suffix
         # (the advisory DB keys on the plain upstream 2.x.x release, not the wheel).
         working-directory: recommender
+        # --ignore-vuln CVE-2025-3000 (GHSA-rrmf-rvhw-rf47): a torch.jit.script
+        # memory-corruption with a local-only attack vector and NO fixed torch
+        # release available (pip-audit reports an empty Fix Versions column). The
+        # recommender never calls torch.jit.script and only uses torch for offline
+        # embedding featurization of its own catalog, so the vulnerable path is
+        # unreachable. Re-evaluate and drop this ignore once a patched torch ships.
         run: |
           grep -E '^[a-zA-Z0-9._-]+==' requirements.lock \
             | sed 's/[[:space:]]*\\$//; s/+cpu//' > /tmp/recommender-audit.txt
-          pip-audit -r /tmp/recommender-audit.txt
+          pip-audit -r /tmp/recommender-audit.txt --ignore-vuln CVE-2025-3000
 
   docker-build:
     # Every other job runs on the host runner via npm/cargo/pytest — nothing
