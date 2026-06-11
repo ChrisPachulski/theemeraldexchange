@@ -161,6 +161,29 @@ describe('transcode proxy route', () => {
     expect((init as FetchInitWithHeaders).headers['content-type']).toBe('application/json')
   })
 
+  it('forwards the internal principal (sub + role) on the GET /sessions list path', async () => {
+    // /sessions is a NON-/session/ subpath: it has no per-session stream token
+    // so it authenticates via requireAuth (cookie/bearer). The proxy must still
+    // mint and attach the caller's principal — the transcoder filters the
+    // session list for non-admins based on it.
+    mockFetch.mockResolvedValue(
+      new Response('[]', { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    )
+
+    const res = await transcode.request('/sessions', {
+      method: 'GET',
+      headers: { host: 'localhost' },
+    })
+
+    expect(res.status).toBe(200)
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('http://transcoder.test/api/transcode/sessions')
+    expect((init as FetchInitWithHeaders).headers['authorization']).toBe('Bearer minted-token')
+    expect(mockMint).toHaveBeenCalledWith(
+      expect.objectContaining({ sub: 'plex:1', role: 'user' }),
+    )
+  })
+
   it('proxies anonymously in off posture (no caller) without failing closed', async () => {
     mockCaller.mockReturnValue(null as unknown as ReturnType<typeof recommenderCallerFromSession>)
     mockFetch.mockResolvedValue(new Response('x', { status: 200 }))

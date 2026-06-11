@@ -29,10 +29,11 @@
 // clientId from step 1 — checkPin here polls with that same env.plexClientId
 // and finds the authorized token. Mirrors the web SPA flow exactly.
 
-import { Hono, type Context } from 'hono'
+import { Hono } from 'hono'
 import { checkPin, getUser } from '../plex.js'
 import { authorizeOrRedeem, enforceAuthRateLimit } from '../auth.js'
 import { roleFor } from '../services/sessionGate.js'
+import { parseLimitedJson } from '../services/parseLimitedJson.js'
 import {
   mintDeviceToken,
   ensureServerId,
@@ -43,48 +44,6 @@ import {
 export const device = new Hono()
 
 const PAIR_MAX_BODY_BYTES = 2048
-
-async function parseLimitedJson(
-  c: Context,
-  maxBytes: number,
-): Promise<{ tooLarge: boolean; body: unknown | null }> {
-  const contentLength = c.req.header('content-length')
-  if (contentLength) {
-    const n = Number(contentLength)
-    if (Number.isFinite(n) && n > maxBytes) return { tooLarge: true, body: null }
-  }
-  const stream = c.req.raw.body
-  if (!stream) return { tooLarge: false, body: null }
-  const reader = stream.getReader()
-  const chunks: Uint8Array[] = []
-  let total = 0
-  try {
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      if (!value) continue
-      total += value.byteLength
-      if (total > maxBytes) {
-        await reader.cancel().catch(() => undefined)
-        return { tooLarge: true, body: null }
-      }
-      chunks.push(value)
-    }
-  } catch {
-    return { tooLarge: false, body: null }
-  }
-  const bytes = new Uint8Array(total)
-  let offset = 0
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset)
-    offset += chunk.byteLength
-  }
-  try {
-    return { tooLarge: false, body: JSON.parse(new TextDecoder().decode(bytes)) }
-  } catch {
-    return { tooLarge: false, body: null }
-  }
-}
 
 device.post('/poll', async (c) => {
   const parsed = await parseLimitedJson(c, PAIR_MAX_BODY_BYTES)

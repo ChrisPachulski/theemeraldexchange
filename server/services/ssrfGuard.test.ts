@@ -50,17 +50,32 @@ describe('isPublicHttpsUpstream', () => {
     expect(ok('https://100.64.0.1/seg.ts')).toBe(false) // CGNAT
   })
 
+  it('rejects special-purpose IPv4 ranges (benchmarking, IETF, 6to4 relay)', () => {
+    expect(ok('https://198.18.0.1/seg.ts')).toBe(false) // benchmarking 198.18/15
+    expect(ok('https://198.19.255.255/seg.ts')).toBe(false) // upper half of /15
+    expect(ok('https://192.0.0.1/seg.ts')).toBe(false) // IETF 192.0.0.0/24
+    expect(ok('https://192.88.99.1/seg.ts')).toBe(false) // 6to4 relay anycast
+  })
+
   it('allows public IPv4 that is adjacent to private ranges', () => {
     expect(ok('https://172.15.0.1/seg.ts')).toBe(true) // just below 172.16/12
     expect(ok('https://172.32.0.1/seg.ts')).toBe(true) // just above
     expect(ok('https://11.0.0.1/seg.ts')).toBe(true)
     expect(ok('https://8.8.8.8/seg.ts')).toBe(true)
+    expect(ok('https://198.17.255.255/seg.ts')).toBe(true) // just below 198.18/15
+    expect(ok('https://198.20.0.1/seg.ts')).toBe(true) // just above 198.18/15
+    expect(ok('https://192.0.1.1/seg.ts')).toBe(true) // adjacent to 192.0.0.0/24
+    expect(ok('https://192.88.100.1/seg.ts')).toBe(true) // adjacent to 192.88.99/24
   })
 
-  it('rejects loopback + unique-local + link-local IPv6', () => {
+  it('rejects loopback + unique-local + link-local + site-local + NAT64 IPv6', () => {
     expect(ok('https://[::1]/seg.ts')).toBe(false)
     expect(ok('https://[fd00::1]/seg.ts')).toBe(false)
     expect(ok('https://[fe80::1]/seg.ts')).toBe(false)
+    expect(ok('https://[fec0::1]/seg.ts')).toBe(false) // site-local (deprecated)
+    expect(ok('https://[feff::1]/seg.ts')).toBe(false) // top of fec0::/10
+    expect(ok('https://[64:ff9b::a00:1]/seg.ts')).toBe(false) // NAT64 → 10.0.0.1
+    expect(ok('https://[64:ff9b::808:808]/seg.ts')).toBe(false) // NAT64 even to public v4
     expect(ok('https://[::ffff:10.0.0.1]/seg.ts')).toBe(false) // IPv4-mapped private
   })
 
@@ -319,5 +334,56 @@ describe('egress (guardedFetch / guardedFetchTrustedOrigin)', () => {
     const res = await guardedFetch('https://cdn.example.com/err.ts')
     expect(res.status).toBe(500)
     expect(calls).toHaveLength(1)
+  })
+
+  // A fetch stub that never settles on its own — it only rejects when the
+  // composed signal egress() passes in fires. Models a hung upstream.
+  function hangingFetch(): void {
+    globalThis.fetch = ((input: string | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      calls.push({ url, init })
+      return new Promise((_resolve, reject) => {
+        const s = init?.signal
+        if (!s) return // hang forever — the test would time out, proving the bug
+        if (s.aborted) return reject(s.reason)
+        s.addEventListener('abort', () => reject(s.reason), { once: true })
+      })
+    }) as typeof globalThis.fetch
+  }
+
+  // (j) per-hop deadline: a hung upstream is aborted within hopTimeoutMs
+  // instead of pinning the egress loop open forever.
+  it('guardedFetch aborts a hung upstream within the per-hop deadline', async () => {
+    hangingFetch()
+    await expect(
+      guardedFetch('https://cdn.example.com/index.m3u8', undefined, { hopTimeoutMs: 25 }),
+    ).rejects.toMatchObject({ name: 'TimeoutError' })
+    expect(calls).toHaveLength(1)
+  })
+
+  // (k) the caller's signal (client disconnect) is composed with the per-hop
+  // timer, so an aborted client tears the upstream fetch down immediately.
+  it('guardedFetch propagates the caller signal alongside the per-hop deadline', async () => {
+    hangingFetch()
+    const caller = new AbortController()
+    const pending = expect(
+      guardedFetch(
+        'https://cdn.example.com/index.m3u8',
+        { signal: caller.signal },
+        { hopTimeoutMs: 60_000 },
+      ),
+    ).rejects.toMatchObject({ name: 'AbortError' })
+    caller.abort()
+    await pending
+    expect(calls).toHaveLength(1)
+  })
+
+  // (l) without hopTimeoutMs and without a caller signal, no signal is
+  // injected — long-lived byte streams must not pick up a surprise timer.
+  it('guardedFetch passes NO signal when neither caller signal nor hop timeout is set', async () => {
+    scriptFetch([{ kind: 'terminal', status: 200, body: 'OK' }])
+    const res = await guardedFetch('https://cdn.example.com/live.ts')
+    expect(res.status).toBe(200)
+    expect((calls[0].init as RequestInit).signal).toBeUndefined()
   })
 })

@@ -23,6 +23,12 @@ const membershipState = vi.hoisted(() => ({
   status: 'allowed' as 'allowed' | 'revoked' | 'not_member',
 }))
 
+// Sub claim the fake token decoder reports. Tests override it to exercise the
+// strict namespaced-sub requirement (the M1 bare-numeric grace is removed).
+const tokenState = vi.hoisted(() => ({
+  sub: 'plex:42',
+}))
+
 vi.mock('../middleware/auth.js', async () => {
   const requireTestAuth: MiddlewareHandler<TestAuthEnv> = async (c, next) => {
     c.set('session', authState.session)
@@ -59,7 +65,7 @@ vi.mock('../services/iptvStreamToken.js', () => {
       k: match[1],
       nbf: now,
       rid: Buffer.from(match[2], 'base64url').toString('utf-8'),
-      sub: 'plex:42',
+      sub: tokenState.sub,
       v: 1,
     }
   }
@@ -67,9 +73,6 @@ vi.mock('../services/iptvStreamToken.js', () => {
     signStreamToken: vi.fn((_secret: string, opts: { kind: string; resourceId: string; jti?: string }) =>
       `fake.${opts.kind}.${Buffer.from(opts.resourceId, 'utf-8').toString('base64url')}${opts.jti ? `.${opts.jti}` : ''}`),
     verifyStreamToken: vi.fn((_secret: string, t: string) => decodeFake(t)),
-    verifyStreamTokenDualKey: vi.fn(
-      (_primary: string, _fallback: string, t: string) => decodeFake(t),
-    ),
   }
 })
 
@@ -223,6 +226,7 @@ function fakeToken(kind: string, resourceId: string): string {
 beforeEach(() => {
   authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
   membershipState.status = 'allowed'
+  tokenState.sub = 'plex:42'
   concurrencyState.sessions.length = 0
   dbState.testDb?.raw.exec('DELETE FROM iptv_playlist_tokens;')
 })
@@ -289,6 +293,84 @@ describe('playlist token lifecycle', () => {
 
     const row = dbState.testDb!.stmts.getPlaylistToken.get(minted.jti) as { revoked_at: string | null }
     expect(row.revoked_at).not.toBeNull()
+  })
+
+  describe('publicBaseUrl host allowlisting', () => {
+    const envRw = env as unknown as { allowedOrigins: string[] }
+    const prevOrigins = envRw.allowedOrigins
+
+    afterAll(() => {
+      envRw.allowedOrigins = prevOrigins
+    })
+
+    async function mintWithForwardedHost(forwardedHost: string) {
+      const res = await app.request('/api/iptv/playlist/token', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          host: 'internal.local:3001',
+          'x-forwarded-proto': 'https',
+          'x-forwarded-host': forwardedHost,
+        },
+        body: JSON.stringify({}),
+      })
+      expect(res.status).toBe(200)
+      return (await res.json()) as { url: string }
+    }
+
+    it('accepts a forwarded host that matches an allowed origin exactly', async () => {
+      envRw.allowedOrigins = ['https://theemeraldexchange.example']
+      const minted = await mintWithForwardedHost('theemeraldexchange.example')
+      expect(minted.url).toMatch(/^https:\/\/theemeraldexchange\.example\/api\/iptv\/playlist\.m3u\?t=/)
+    })
+
+    it('accepts a forwarded host that is a subdomain of an allowed origin (api.<spa-domain>)', async () => {
+      envRw.allowedOrigins = ['https://theemeraldexchange.example']
+      const minted = await mintWithForwardedHost('api.theemeraldexchange.example')
+      expect(minted.url).toMatch(/^https:\/\/api\.theemeraldexchange\.example\//)
+    })
+
+    it('falls back to the first allowed origin for a forwarded host outside the allowlist', async () => {
+      envRw.allowedOrigins = ['https://theemeraldexchange.example']
+      for (const evil of ['evil.example.com', 'eviltheemeraldexchange.example', 'theemeraldexchange.example.evil.com']) {
+        const minted = await mintWithForwardedHost(evil)
+        expect(minted.url).toMatch(/^https:\/\/theemeraldexchange\.example\//)
+      }
+    })
+
+    it('passes the forwarded host through when no allowlist is configured (dev)', async () => {
+      envRw.allowedOrigins = []
+      const minted = await mintWithForwardedHost('api.example.com')
+      expect(minted.url).toMatch(/^https:\/\/api\.example\.com\//)
+    })
+  })
+
+  it('rejects the legacy M1 rid "all" (D2a fallback removed)', async () => {
+    const res = await app.request(`/api/iptv/playlist.m3u?t=${fakeToken('playlist', 'all')}`)
+    expect(res.status).toBe(401)
+    const body = (await res.json()) as { error: string; detail: string }
+    expect(body.error).toBe('invalid_token')
+    expect(body.detail).toBe('resource_mismatch')
+  })
+
+  it('rejects a playlist token whose jti has no persisted row (jti-less M1 bypass removed)', async () => {
+    // Valid HMAC + canonical rid, but the jti was never persisted at mint —
+    // the revocation-table lookup is now unconditional, so this must 401
+    // instead of bypassing the revocation check like pre-D12 tokens did.
+    const res = await app.request(
+      `/api/iptv/playlist.m3u?t=${fakeToken('playlist', 'iptv-channels-all')}`,
+    )
+    expect(res.status).toBe(401)
+    expect((await res.json()) as { error: string }).toEqual({ error: 'token_not_found' })
+  })
+
+  it('rejects a stream token carrying a bare-numeric legacy sub (grace window closed)', async () => {
+    tokenState.sub = '42'
+    const res = await app.request('/api/iptv/stream/live/10.ts?t=' + fakeToken('live', '10'))
+    expect(res.status).toBe(401)
+    const body = (await res.json()) as { error: string; detail: string }
+    expect(body.error).toBe('invalid_token')
+    expect(body.detail).toBe('sub_invalid_format')
   })
 
   it('caps playlist token request bodies', async () => {
@@ -550,6 +632,57 @@ describe('vod stream grant + proxy', () => {
   })
 })
 
+describe('HLS manifest egress deadline + body bound', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+  const envRw = env as unknown as {
+    IPTV_MANIFEST_FETCH_TIMEOUT_MS: number
+    IPTV_MANIFEST_MAX_BYTES: number
+  }
+
+  it('aborts a hung manifest upstream within the configured deadline (504 upstream_timeout)', async () => {
+    const prevTimeout = envRw.IPTV_MANIFEST_FETCH_TIMEOUT_MS
+    envRw.IPTV_MANIFEST_FETCH_TIMEOUT_MS = 50
+    // Never settles on its own; rejects only when the composed abort signal
+    // (whole-transfer timeout / per-hop timeout / client disconnect) fires.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      (_input, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          const s = init?.signal
+          if (!s) return
+          if (s.aborted) return reject(s.reason)
+          s.addEventListener('abort', () => reject(s.reason), { once: true })
+        }),
+    )
+    try {
+      const res = await app.request(`/api/iptv/stream/vod/20/m3u8?t=${fakeToken('vod', '20')}`)
+      expect(res.status).toBe(504)
+      expect(((await res.json()) as { error: string }).error).toBe('upstream_timeout')
+      // The fetch must have carried the composed abort signal.
+      const init = fetchSpy.mock.calls[0][1] as RequestInit
+      expect(init.signal).toBeInstanceOf(AbortSignal)
+    } finally {
+      envRw.IPTV_MANIFEST_FETCH_TIMEOUT_MS = prevTimeout
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it('refuses a manifest body larger than the cap (502 manifest_too_large)', async () => {
+    const prevMax = envRw.IPTV_MANIFEST_MAX_BYTES
+    envRw.IPTV_MANIFEST_MAX_BYTES = 64
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response('#EXTM3U\n' + 'X'.repeat(1024), { status: 200 }),
+    )
+    try {
+      const res = await app.request(`/api/iptv/stream/vod/20/m3u8?t=${fakeToken('vod', '20')}`)
+      expect(res.status).toBe(502)
+      expect(((await res.json()) as { error: string }).error).toBe('manifest_too_large')
+    } finally {
+      envRw.IPTV_MANIFEST_MAX_BYTES = prevMax
+      fetchSpy.mockRestore()
+    }
+  })
+})
+
 describe('series stream grant', () => {
   const app = new Hono().route('/api/iptv', iptv)
 
@@ -731,7 +864,7 @@ describe('segment proxy', () => {
   })
 
   it('rejects a token whose kind is not "segment" (kind_mismatch → invalid_token 401)', async () => {
-    // verifyStreamTokenDualKey succeeds (valid HMAC) but the decoded kind is
+    // verifyStreamToken succeeds (valid HMAC) but the decoded kind is
     // "live", so the route throws kind_mismatch and returns 401 before any
     // replay/SSRF/fetch work. Covers the verify-try/catch branch (iptv.ts ~1142).
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
@@ -834,6 +967,9 @@ describe('POST /api/iptv/admin/sync', () => {
       expect(res.status).toBe(202)
       const { jobId } = await res.json() as { jobId: string }
       jobIds.push(jobId)
+      // Let the mocked syncOnce settle so the job is finished (evictable)
+      // before the next insert — only finished jobs may be evicted.
+      await new Promise(r => setTimeout(r, 0))
     }
 
     await new Promise(r => setTimeout(r, 50))
@@ -845,6 +981,50 @@ describe('POST /api/iptv/admin/sync', () => {
     // Verify a newer job is still there
     const newerJobStatus = await app.request(`/api/iptv/admin/sync/${jobIds[20]}`)
     expect(newerJobStatus.status).toBe(200)
+  })
+
+  it('records a busy refusal as state "rejected", not "done"', async () => {
+    const { syncOnce } = await import('../services/iptvSync.js')
+    vi.mocked(syncOnce).mockResolvedValueOnce({ busy: true })
+
+    const app = new Hono().route('/api/iptv', iptv)
+    const res = await app.request('/api/iptv/admin/sync', { method: 'POST' })
+    expect(res.status).toBe(202)
+    const { jobId } = await res.json() as { jobId: string }
+
+    await new Promise(r => setTimeout(r, 30))
+    const status = await app.request(`/api/iptv/admin/sync/${jobId}`)
+    expect(status.status).toBe(200)
+    const body = await status.json() as { state: string }
+    expect(body.state).toBe('rejected')
+  })
+
+  it('never evicts a still-RUNNING job when the cap is exceeded', async () => {
+    const { syncOnce } = await import('../services/iptvSync.js')
+    // First job never settles — stays 'running' for the whole test.
+    vi.mocked(syncOnce).mockImplementationOnce(() => new Promise(() => {}))
+
+    const app = new Hono().route('/api/iptv', iptv)
+    const first = await app.request('/api/iptv/admin/sync', { method: 'POST' })
+    const { jobId: runningId } = await first.json() as { jobId: string }
+
+    // Flood past the 20-entry cap with jobs that finish normally.
+    const finishedIds: string[] = []
+    for (let i = 0; i < 21; i++) {
+      const res = await app.request('/api/iptv/admin/sync', { method: 'POST' })
+      const { jobId } = await res.json() as { jobId: string }
+      finishedIds.push(jobId)
+      await new Promise(r => setTimeout(r, 0))
+    }
+
+    // The running job is still queryable — eviction skipped over it…
+    const runningStatus = await app.request(`/api/iptv/admin/sync/${runningId}`)
+    expect(runningStatus.status).toBe(200)
+    expect(((await runningStatus.json()) as { state: string }).state).toBe('running')
+
+    // …and the oldest FINISHED job was evicted instead.
+    const evicted = await app.request(`/api/iptv/admin/sync/${finishedIds[0]}`)
+    expect(evicted.status).toBe(404)
   })
 })
 

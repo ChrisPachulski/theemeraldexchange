@@ -216,10 +216,12 @@ export function verifyStreamToken(secret: string, token: string): StreamClaims {
  * HMACs unconditionally so a timing-side-channel cannot reveal which key
  * matched (§5.4).
  *
- * Used during the STREAM_TOKEN_SECRET rotation window: tokens minted before
- * rotation were signed with the previous secret. After rotation, the verifier
- * accepts either while the 90-day stream-token TTL window drains. Mint paths
- * always use the primary secret.
+ * Reserved for a future STREAM_TOKEN_SECRET rotation window: pass the OLD
+ * stream-token secret as the fallback while the longest token TTL drains, and
+ * mint with the new primary only. No production verify site uses this today —
+ * the D2a SESSION_SECRET fallback expired and was removed (single-key
+ * verification everywhere), and the fallback must never again be a secret of
+ * a *different* class (key separation, §5.4).
  */
 export function verifyStreamTokenDualKey(
   primarySecret: string,

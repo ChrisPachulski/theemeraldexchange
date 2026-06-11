@@ -51,7 +51,12 @@ function sessionFromSub(sub: string): Session {
 
 // Token-or-cookie auth. A `?t=` token must be a remux-kind media token bound to
 // the session id in the path (`media:session:<sid>`); otherwise fall back to
-// the session cookie/bearer.
+// the session cookie/bearer (e.g. the GET /sessions admin/list path, which has
+// no per-session token). BOTH branches set `session`, and the catch-all proxy
+// below mints the internal principal (sub + role) from that session on every
+// forwarded request — the transcoder's owner-binding (stop/seek/heartbeat
+// enforcement, non-admin sessions filtering) depends on the principal being
+// present on ALL proxied paths, not just /session/* ones.
 async function transcodeAuth(c: Context<Env>, next: Next) {
   const subpath = new URL(c.req.url).pathname.replace(/^\/api\/transcode/, '') || '/'
   const token = c.req.query('t')

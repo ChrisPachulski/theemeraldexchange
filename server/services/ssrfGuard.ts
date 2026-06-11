@@ -22,26 +22,34 @@ function isPrivateIPv4(host: string): boolean {
   if (!m) return false
   const o = m.slice(1).map(Number)
   if (o.some((n) => n > 255)) return true // malformed → treat as unsafe
-  const [a, b] = o
+  const [a, b, c] = o
   if (a === 10) return true // 10.0.0.0/8
   if (a === 127) return true // loopback
   if (a === 0) return true // 0.0.0.0/8 "this host"
   if (a === 169 && b === 254) return true // link-local incl. cloud metadata
   if (a === 172 && b >= 16 && b <= 31) return true // 172.16.0.0/12
   if (a === 192 && b === 168) return true // 192.168.0.0/16
+  if (a === 192 && b === 0 && c === 0) return true // IETF protocol assignments 192.0.0.0/24
+  if (a === 192 && b === 88 && c === 99) return true // 6to4 relay anycast 192.88.99.0/24
+  if (a === 198 && (b === 18 || b === 19)) return true // benchmarking 198.18.0.0/15
   if (a === 100 && b >= 64 && b <= 127) return true // CGNAT 100.64.0.0/10
   if (a >= 224) return true // multicast + reserved (224+)
   return false
 }
 
 // IPv6 (already unbracketed) → true for loopback, unspecified, unique-local
-// (fc00::/7), link-local (fe80::/10), and IPv4-mapped private addresses.
+// (fc00::/7), link-local (fe80::/10), deprecated site-local (fec0::/10),
+// NAT64 (64:ff9b::/96 — embeds an IPv4 target a NAT64 gateway would reach),
+// and IPv4-mapped private addresses.
 function isPrivateIPv6(host: string): boolean {
   const h = host.toLowerCase()
   if (h === '::1' || h === '::') return true
   if (h.startsWith('fc') || h.startsWith('fd')) return true // unique-local fc00::/7
   if (h.startsWith('fe8') || h.startsWith('fe9') || h.startsWith('fea') || h.startsWith('feb'))
     return true // link-local fe80::/10
+  if (h.startsWith('fec') || h.startsWith('fed') || h.startsWith('fee') || h.startsWith('fef'))
+    return true // site-local (deprecated) fec0::/10
+  if (h.startsWith('64:ff9b:')) return true // NAT64 64:ff9b::/96 (+ local-use 64:ff9b:1::/48)
   const mapped = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(h)
   if (mapped) return isPrivateIPv4(mapped[1])
   return false
@@ -125,10 +133,25 @@ function isPrivateAddress(address: string): boolean {
  * RFC-1918 is refused before we connect.
  *
  * Throws `SsrfBlockedError` on any private address or resolution failure.
- * The resolve happens immediately before egress to minimise the TOCTOU
- * window. (Full IP pinning would require an undici connect hook; undici is
- * not a dependency here, so we accept the residual sub-second rebind window
- * and instead re-validate on every redirect — the dominant exploit path.)
+ *
+ * ACCEPTED RESIDUAL RISK — DNS-rebind TOCTOU: this check resolves the name,
+ * then `fetch()` resolves it AGAIN to connect, so an attacker who controls
+ * the authoritative nameserver can answer public here and private (e.g.
+ * 169.254.169.254) on the connect-time lookup. Closing it fully requires
+ * pinning the connection to the validated IP via an undici Agent connect
+ * hook; undici is not a direct dependency and the platform-fetch dispatcher
+ * is not exposed here, so we deliberately do NOT attempt that rewrite.
+ * Mitigations that bound the residual risk:
+ *   - the resolve happens immediately before egress, so the attacker must
+ *     win a sub-second race against the OS resolver cache with a TTL-0
+ *     record (most resolvers clamp TTL 0 upward);
+ *   - every redirect hop — the dominant, race-free exploit path — is
+ *     re-validated by `egress()` before it is followed;
+ *   - internal services (recommender, media-core, transcoder) additionally
+ *     require internal-principal auth, so a rebound request that does land
+ *     inside the compose network hits an authenticated surface, not an
+ *     open one. The highest-value unauth'd target is cloud metadata, which
+ *     does not exist on this self-hosted NAS deployment.
  */
 export async function assertResolvesPublic(host: string): Promise<void> {
   // An IP literal needs no DNS round-trip; validate it directly.
@@ -184,6 +207,21 @@ interface EgressOptions {
    * internal address.
    */
   guardInitial: boolean
+  /**
+   * Per-hop deadline in ms. Each hop's fetch gets a FRESH
+   * AbortSignal.timeout composed (AbortSignal.any) with the caller's
+   * `init.signal`, so a hung upstream cannot pin the egress loop open
+   * forever. The timeout signal also governs the final response's body
+   * read, so ONLY small-bodied fetches (HLS manifests) may opt in —
+   * long-lived byte streams (live .ts, VOD ranges) must stay un-timed or
+   * the timer would abort them mid-stream.
+   */
+  hopTimeoutMs?: number
+}
+
+export interface GuardedFetchOptions {
+  /** See EgressOptions.hopTimeoutMs. Small-bodied fetches only. */
+  hopTimeoutMs?: number
 }
 
 async function guardHop(rawUrl: string): Promise<void> {
@@ -219,7 +257,18 @@ async function egress(
       await guardHop(currentUrl)
     }
 
-    const res = await fetch(currentUrl, { ...init, redirect: 'manual' })
+    // Compose the caller's signal (client disconnect / whole-transfer
+    // deadline) with a fresh per-hop timeout so neither can be starved by
+    // the other. Redirect hops each get a full hopTimeoutMs budget; the
+    // total is still bounded by MAX_REDIRECTS × hopTimeoutMs plus whatever
+    // whole-transfer deadline the caller composed into init.signal.
+    const signals: AbortSignal[] = []
+    if (init?.signal) signals.push(init.signal)
+    if (opts.hopTimeoutMs != null) signals.push(AbortSignal.timeout(opts.hopTimeoutMs))
+    const signal =
+      signals.length === 0 ? undefined : signals.length === 1 ? signals[0] : AbortSignal.any(signals)
+
+    const res = await fetch(currentUrl, { ...init, ...(signal ? { signal } : {}), redirect: 'manual' })
 
     if (res.status >= 300 && res.status < 400) {
       const location = res.headers.get('location')
@@ -239,8 +288,12 @@ async function egress(
  * attacker-influenceable (HLS manifest sub-playlist / segment `rid`). The
  * initial URL and every redirect hop must be https + public + resolve-public.
  */
-export function guardedFetch(initialUrl: string, init?: RequestInit): Promise<Response> {
-  return egress(initialUrl, init, { guardInitial: true })
+export function guardedFetch(
+  initialUrl: string,
+  init?: RequestInit,
+  opts?: GuardedFetchOptions,
+): Promise<Response> {
+  return egress(initialUrl, init, { guardInitial: true, hopTimeoutMs: opts?.hopTimeoutMs })
 }
 
 /**
@@ -249,6 +302,10 @@ export function guardedFetch(initialUrl: string, init?: RequestInit): Promise<Re
  * against an upstream-issued redirect into the internal network. The initial
  * URL is fetched as-is; every redirect target is fully guarded.
  */
-export function guardedFetchTrustedOrigin(initialUrl: string, init?: RequestInit): Promise<Response> {
-  return egress(initialUrl, init, { guardInitial: false })
+export function guardedFetchTrustedOrigin(
+  initialUrl: string,
+  init?: RequestInit,
+  opts?: GuardedFetchOptions,
+): Promise<Response> {
+  return egress(initialUrl, init, { guardInitial: false, hopTimeoutMs: opts?.hopTimeoutMs })
 }
