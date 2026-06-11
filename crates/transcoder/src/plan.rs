@@ -59,10 +59,14 @@ pub enum VideoOp {
     /// Re-encode to H.264. `scale_to_height` is `Some` when we down-scale,
     /// `tone_map` is set when collapsing HDR → SDR, and `burn_subtitle_index`
     /// carries the absolute stream index of an image subtitle to burn in.
+    /// `source_height` is the probe height of the source; with no scale the
+    /// OUTPUT keeps it, so the bitrate ladder must key on it (an unscaled 4K
+    /// re-encode needs the 4K rate arm, not the 1080p default).
     EncodeH264 {
         scale_to_height: Option<i64>,
         tone_map: bool,
         burn_subtitle_index: Option<i64>,
+        source_height: Option<i64>,
     },
 }
 
@@ -245,6 +249,7 @@ pub fn plan_transcode(file: &MediaFileRow, caps: &ClientCaps) -> TranscodePlan {
             scale_to_height,
             tone_map,
             burn_subtitle_index: burn_index,
+            source_height: file.video_height,
         }
     };
 
@@ -438,6 +443,7 @@ mod tests {
                 scale_to_height: None,
                 tone_map: false,
                 burn_subtitle_index: None,
+                source_height: Some(1080),
             },
             audio: AudioOp::Copy,
             subtitle: SubtitleOp::None,
@@ -483,7 +489,8 @@ mod tests {
                     VideoOp::EncodeH264 {
                         scale_to_height: None,
                         tone_map: false,
-                        burn_subtitle_index: None
+                        burn_subtitle_index: None,
+                        source_height: Some(1080),
                     }
                 );
                 assert_eq!(audio, AudioOp::Copy, "aac is accepted, must copy");
@@ -512,7 +519,41 @@ mod tests {
                 VideoOp::EncodeH264 {
                     scale_to_height: Some(1080),
                     tone_map: false,
-                    burn_subtitle_index: None
+                    burn_subtitle_index: None,
+                    source_height: Some(2160),
+                }
+            ),
+            other => panic!("expected transcode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unscaled_4k_reencode_carries_source_height() {
+        // 4K HEVC to a client with NO height cap: the codec forces a re-encode
+        // but nothing scales, so the OUTPUT stays 2160p. The plan must carry
+        // the source height for the bitrate ladder — keyed on scale_to_height
+        // alone the >1080p arm was unreachable and 4K got the 1080p rate.
+        let f = file(
+            Some("mp4"),
+            Some("hevc"),
+            Some(2160),
+            None,
+            vec![aac(1)],
+            vec![],
+        );
+        let caps = ClientCaps {
+            max_height: None,
+            ..caps_h264_1080_sdr()
+        };
+        let plan = plan_transcode(&f, &caps);
+        match plan {
+            TranscodePlan::Transcode { video, .. } => assert_eq!(
+                video,
+                VideoOp::EncodeH264 {
+                    scale_to_height: None,
+                    tone_map: false,
+                    burn_subtitle_index: None,
+                    source_height: Some(2160),
                 }
             ),
             other => panic!("expected transcode, got {other:?}"),
@@ -536,7 +577,8 @@ mod tests {
                 VideoOp::EncodeH264 {
                     scale_to_height: None,
                     tone_map: true,
-                    burn_subtitle_index: None
+                    burn_subtitle_index: None,
+                    source_height: Some(1080),
                 }
             ),
             other => panic!("expected transcode, got {other:?}"),
@@ -692,7 +734,8 @@ mod tests {
                     VideoOp::EncodeH264 {
                         scale_to_height: None,
                         tone_map: false,
-                        burn_subtitle_index: None
+                        burn_subtitle_index: None,
+                        source_height: Some(1080),
                     }
                 );
             }

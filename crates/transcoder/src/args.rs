@@ -75,8 +75,9 @@ impl HwEncoder {
     }
 }
 
-/// Bitrate target (kbps) for an H.264 re-encode at a given height. Conservative
-/// VBR ladder; `maxrate`/`bufsize` are derived from this.
+/// Bitrate target (kbps) for an H.264 re-encode at the given OUTPUT height
+/// (the scale target when scaling, else the source height). Conservative VBR
+/// ladder; `maxrate`/`bufsize` are derived from this.
 fn h264_bitrate_kbps(height: Option<i64>) -> u32 {
     match height.unwrap_or(1080) {
         h if h <= 480 => 1_500,
@@ -256,6 +257,7 @@ pub fn ffmpeg_args_hw(
             scale_to_height,
             tone_map,
             burn_subtitle_index,
+            source_height,
         } => {
             push(&mut a, "-c:v");
             push(&mut a, encoder.h264_encoder());
@@ -275,7 +277,12 @@ pub fn ffmpeg_args_hw(
                 push(&mut a, if encoder.is_cpu() { "veryfast" } else { "fast" });
             }
 
-            let br = h264_bitrate_kbps(*scale_to_height);
+            // Key the ladder on the OUTPUT height: the scale target when
+            // down-scaling, else the source's own height (an unscaled re-encode
+            // keeps it). Keying on scale_to_height alone (capped at 1080/None)
+            // made the >1080p arm unreachable — an unscaled 4K re-encode got
+            // the 1080p 6000k and looked like mud.
+            let br = h264_bitrate_kbps(scale_to_height.or(*source_height));
             push(&mut a, "-b:v");
             a.push(format!("{br}k"));
             push(&mut a, "-maxrate");
@@ -628,6 +635,7 @@ mod tests {
                 scale_to_height: None,
                 tone_map: false,
                 burn_subtitle_index: None,
+                source_height: None,
             },
             AudioOp::EncodeAac { bitrate_kbps: 192 },
             SubtitleOp::None,
@@ -674,6 +682,7 @@ mod tests {
                 scale_to_height: None,
                 tone_map: false,
                 burn_subtitle_index: None,
+                source_height: None,
             },
             AudioOp::Copy,
             SubtitleOp::None,
@@ -714,6 +723,7 @@ mod tests {
                 scale_to_height: None,
                 tone_map: false,
                 burn_subtitle_index: None,
+                source_height: None,
             },
             AudioOp::Copy,
             SubtitleOp::None,
@@ -724,12 +734,71 @@ mod tests {
     }
 
     #[test]
+    fn unscaled_4k_reencode_uses_4k_bitrate_arm() {
+        // Regression: the ladder keyed on scale_to_height, which the planner
+        // caps at 1080/None — so an UNSCALED 4K re-encode (e.g. an HEVC 2160p
+        // source for a 4K-capable h264 client) fell into the 1080p 6000k arm.
+        // The output keeps the source height, so the ladder must key on it.
+        let plan = transcode(
+            VideoOp::EncodeH264 {
+                scale_to_height: None,
+                tone_map: false,
+                burn_subtitle_index: None,
+                source_height: Some(2160),
+            },
+            AudioOp::Copy,
+            SubtitleOp::None,
+        );
+        let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Cpu).join(" ");
+        assert!(j.contains("-b:v 12000k"), "4K arm must apply: {j}");
+        assert!(j.contains("-maxrate 18000k"), "{j}");
+        assert!(j.contains("-bufsize 24000k"), "{j}");
+    }
+
+    #[test]
+    fn downscaled_4k_uses_scale_target_bitrate() {
+        // When scaling IS applied the output height is the scale target, so a
+        // 4K source down-scaled to 1080p stays on the 1080p arm.
+        let plan = transcode(
+            VideoOp::EncodeH264 {
+                scale_to_height: Some(1080),
+                tone_map: false,
+                burn_subtitle_index: None,
+                source_height: Some(2160),
+            },
+            AudioOp::Copy,
+            SubtitleOp::None,
+        );
+        let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Cpu).join(" ");
+        assert!(j.contains("-b:v 6000k"), "scaled output keys the ladder: {j}");
+    }
+
+    #[test]
+    fn unscaled_720p_reencode_uses_720p_bitrate_arm() {
+        // The output-height keying must also step DOWN: an unscaled 720p
+        // source doesn't deserve the 1080p default rate.
+        let plan = transcode(
+            VideoOp::EncodeH264 {
+                scale_to_height: None,
+                tone_map: false,
+                burn_subtitle_index: None,
+                source_height: Some(720),
+            },
+            AudioOp::Copy,
+            SubtitleOp::None,
+        );
+        let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Cpu).join(" ");
+        assert!(j.contains("-b:v 3000k"), "720p arm must apply: {j}");
+    }
+
+    #[test]
     fn scale_filter_present_when_downscaling() {
         let plan = transcode(
             VideoOp::EncodeH264 {
                 scale_to_height: Some(1080),
                 tone_map: false,
                 burn_subtitle_index: None,
+                source_height: None,
             },
             AudioOp::Copy,
             SubtitleOp::None,
@@ -747,6 +816,7 @@ mod tests {
                 scale_to_height: None,
                 tone_map: true,
                 burn_subtitle_index: None,
+                source_height: None,
             },
             AudioOp::Copy,
             SubtitleOp::None,
@@ -763,6 +833,7 @@ mod tests {
                 scale_to_height: Some(1080),
                 tone_map: true,
                 burn_subtitle_index: None,
+                source_height: None,
             },
             AudioOp::Copy,
             SubtitleOp::None,
@@ -783,6 +854,7 @@ mod tests {
                 scale_to_height: None,
                 tone_map: false,
                 burn_subtitle_index: Some(2),
+                source_height: None,
             },
             AudioOp::Copy,
             SubtitleOp::None,
@@ -799,6 +871,7 @@ mod tests {
                 scale_to_height: None,
                 tone_map: false,
                 burn_subtitle_index: None,
+                source_height: None,
             },
             AudioOp::Copy,
             SubtitleOp::ExtractWebVtt { source_index: 3 },
@@ -818,6 +891,7 @@ mod tests {
                 scale_to_height: None,
                 tone_map: false,
                 burn_subtitle_index: None,
+                source_height: None,
             },
             AudioOp::EncodeAac { bitrate_kbps: 160 },
             SubtitleOp::None,
@@ -844,6 +918,7 @@ mod tests {
                 scale_to_height: Some(720),
                 tone_map: false,
                 burn_subtitle_index: None,
+                source_height: None,
             },
             AudioOp::Copy,
             SubtitleOp::None,
@@ -865,6 +940,7 @@ mod tests {
                 scale_to_height: Some(720),
                 tone_map: true,
                 burn_subtitle_index: None,
+                source_height: None,
             },
             AudioOp::Copy,
             SubtitleOp::None,
@@ -892,6 +968,7 @@ mod tests {
                 scale_to_height: None,
                 tone_map: false,
                 burn_subtitle_index: None,
+                source_height: None,
             },
             AudioOp::Copy,
             SubtitleOp::None,
@@ -929,6 +1006,7 @@ mod tests {
                 scale_to_height: Some(720),
                 tone_map: true,
                 burn_subtitle_index: None,
+                source_height: None,
             },
             AudioOp::Copy,
             SubtitleOp::None,
@@ -950,6 +1028,7 @@ mod tests {
                 scale_to_height: None,
                 tone_map: false,
                 burn_subtitle_index: None,
+                source_height: None,
             },
             AudioOp::EncodeAac { bitrate_kbps: 160 },
             SubtitleOp::None,
@@ -973,6 +1052,7 @@ mod tests {
                 scale_to_height: Some(720),
                 tone_map: false,
                 burn_subtitle_index: None,
+                source_height: None,
             },
             AudioOp::Copy,
             SubtitleOp::None,
@@ -994,6 +1074,7 @@ mod tests {
                 scale_to_height: None,
                 tone_map: false,
                 burn_subtitle_index: None,
+                source_height: None,
             },
             AudioOp::Copy,
             SubtitleOp::None,
@@ -1041,6 +1122,7 @@ mod tests {
                 scale_to_height: scale,
                 tone_map,
                 burn_subtitle_index: burn,
+                source_height: None,
             },
             AudioOp::EncodeAac { bitrate_kbps: 192 },
             SubtitleOp::None,
