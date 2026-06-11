@@ -1,6 +1,6 @@
 # theemeraldexchange — High-Level TODO
 
-_Last updated: 2026-06-07. The single at-a-glance worklist. Detail lives in the
+_Last updated: 2026-06-10. The single at-a-glance worklist. Detail lives in the
 linked docs; this file is the map, not the territory. Keep it short — promote
 items here, demote detail to the source docs._
 
@@ -29,21 +29,34 @@ now; it is the only thing the Apple gate does not block.
       `ffprobe`-validated H.264/AAC HLS end-to-end (docs/M4-TRANSCODE-VERIFICATION.md;
       harness scripts/m4-transcode-proof.sh). Found+fixed a `/scratch` tmpfs
       EACCES bug that meant it had never actually transcoded.
-- [ ] **Exercise a real player against the M4 path** (web SPA / native). The
-      proof validates serving + output bytes, NOT a client consuming the stream —
-      that player path is the remaining true-"playback" step (folds into the SPA
-      media-core consumer item below and M5).
-- [ ] **Unblock `/media/Movies` for the service uids.** Movies is `0700 uid 99`
-      on the NAS, so neither media-core (10002) nor transcoder (10003) can read
-      it — most of the library is unservable until the share is loosened or the
-      services run as the media-owning uid (ops decision; see M4 doc §bugs).
+- [x] **Real player against the M4 path — DONE (2026-06-08).** The web SPA's
+      `MediaPlayer` plays transcoded HLS in a real Chrome over the full public
+      path (laptop → Cloudflare → cloudflared → backend `/api/transcode` proxy →
+      media-core → transcoder), including resume. Proof harness:
+      `scripts/media-playback-proof.sh`. Four grey-box-at-0:00 root causes were
+      found+fixed along the way (keyframe cadence, non-AAC audio, inline
+      subtitles under `-re`, multichannel-AAC MSE rejection — `0cda2f4`,
+      `977f892`, `f091d41`, `d1fc9a7`).
+- [x] **`/media/Movies` unblocked — DONE (2026-06-07).** The share was loosened
+      `0700` → `0755` (`chmod a+rX`), so media-core (10002) and transcoder
+      (10003) can read the full movie library.
+- [x] **Wire the web SPA media-core consumer — DONE (2026-06-07).**
+      `src/lib/api/media.ts` exposes grant/watch/stop (+ paged
+      `allMovies`/`allShows`) and `src/components/media/MediaPlayer.tsx` is wired
+      into the Movies and TV tabs. M3 crit 4/5 are demonstrable on the web; the
+      cross-platform (tvOS) half stays Apple-blocked.
+- [x] **Intel VAAPI hardware transcode — SHIPPED (2026-06-08).** The transcoder
+      image moved from static ffmpeg to Debian's stock ffmpeg + the Intel VAAPI
+      stack; `h264_vaapi` is the primary encoder (boot smoke-test demotes to
+      libx264 when no GPU), with a full-HW decode→tone-map→scale pipeline behind
+      a source-codec allowlist + boot probe (`8d4c373`). 3 concurrent
+      HEVC→H.264 GPU sessions proven on the NAS iGPU.
 - [ ] **Build the M4 stress/bench harness on NAS hardware** (non-optional per
       spec) → capture CPU/latency for crit 2/3/6. `TRANSCODER_FORCE_CPU=1`
-      already exists; the remaining gap is measurement evidence.
-- [ ] **Wire the web SPA media-core consumer** (`grant`/`stream`/`watch` in
-      `mediaApi`). M3 is live in enforce mode but **no client consumes
-      `/api/media/*`** — crit 4/5 can't be demonstrated until one does. This is
-      the pre-Apple way to prove M3.
+      already exists and 3 concurrent GPU sessions were proven informally
+      (2026-06-08), but the formal measurement evidence still doesn't exist —
+      and the crit-6 seek number (~23–27 s) predates the VAAPI pipeline and
+      needs re-measuring.
 - [ ] **Add M3 measurement harnesses.** 100-file `<5s` scan-timing fixture
       (crit 2) and a TMDB match-accuracy eval (crit 3). The matcher now scores
       candidates by stopword-aware title similarity and rejects zero-overlap hits
@@ -52,13 +65,21 @@ now; it is the only thing the Apple gate does not block.
 
 ## P1 — Close the contract & infra loose ends
 
+- [x] **Repo-wide hardening wave 1 (2026-06-10).** Transcoder session
+      lifecycle + principal ownership, media-core scanner/probe/db hardening,
+      suggestions.ts decomposed into nine services, stream-token single-key
+      (dual-key fallback removed), recommender scoring tests. Gates green:
+      vitest 1793 / cargo 310 / pytest 189. Detail in
+      [docs/ROADMAP-STATUS.md](./docs/ROADMAP-STATUS.md) §Update 2026-06-10.
 - [x] **Production internal-principal posture verified (2026-06-07).**
       `docker-compose.yml` now defaults media-core + transcoder to
       `MEDIA_INTERNAL_PRINCIPAL_MODE=enforce` (fail-closed, matching the
       recommender); prod confirmed already running enforce.
 - [ ] **HIGH-3 (partial): recommender entrypoint `chown` under `cap_drop: ALL`.**
-      Still flagged partial in the readiness ledger — confirm fresh-volume boot
-      doesn't crash-loop.
+      Two mitigations have since landed — `scripts/deploy-nas.sh` pre-creates +
+      pre-chowns the sidecar DB bind-mount dirs (uid 10001/10002) before
+      `compose up`, and `29d85be` fixed the fresh-DB migration ordering — but an
+      actual fresh-volume boot has still not been run to confirm no crash-loop.
 - [ ] **Refresh the readiness tail** — the 2026-05-30 ledger is historical and
       contains stale rows now closed by code/CI. Re-run a current review before
       using its medium/low counts for planning.
@@ -78,9 +99,12 @@ now; it is the only thing the Apple gate does not block.
 
 ## Standing risk flags (resolve before any monetized binary ships)
 
-- [ ] **ffmpeg / GPL licensing.** The transcoder ships static ffmpeg + libx264
-      (GPL/x264). For App-Store/paid distribution this is an unresolved licensing
-      question — not yet addressed anywhere in the repo.
+- [ ] **ffmpeg / GPL licensing.** The transcoder now ships Debian's apt ffmpeg +
+      the Intel VAAPI stack (`h264_vaapi` primary, libx264 boot-probe fallback);
+      the backend and media-core images still `COPY` the static
+      `mwader/static-ffmpeg:7.1` binary. Both builds enable GPL x264, so for
+      App-Store/paid distribution the licensing question is unresolved either
+      way — not yet addressed anywhere in the repo.
 - [ ] **IPTV distributability.** The M5.5 policy already makes the
       IPTV-disabled compile-flag build the default public artifact (good); treat
       any monetized build's IPTV surface as a standing legal/compliance risk.
@@ -89,10 +113,10 @@ now; it is the only thing the Apple gate does not block.
 
 ## Doc hygiene
 
-- [ ] **DEPLOY.md** last had a substantive edit 2026-05-23; several operational
-      learnings since (cloudflared netns restart-after-recreate, node-not-curl
-      healthcheck, SSRF http-redirect allowance) live only in
-      [docs/operations/](./docs/operations/) and incident notes. Fold the
-      load-bearing ones into DEPLOY.md or link them from it.
+- [x] **DEPLOY.md refreshed (2026-06-10).** Now documents the real
+      `deploy-nas.sh` behavior (git-archive-HEAD staging, clean-tree guard,
+      `EEX_RELEASE` drift detection, full-stack rollback tags + health gate,
+      cloudflared restart), the 9-service first boot including Glitchtip
+      secrets-before-first-up, and the node-not-curl health probe.
 - [ ] **LICENSE** is the proprietary placeholder (intentional defer to M2
       TestFlight / first binary distribution). Revisit when the first artifact ships.
