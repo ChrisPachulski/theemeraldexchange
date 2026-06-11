@@ -2,8 +2,9 @@
 //
 // Pure availability tagger that cross-references media-core's read-only
 // media.db and stamps available_on:['local'] onto suggestion items the
-// household already has on disk. Extracted from suggestions.ts so it can
-// be unit-tested without loading the full Hono route module.
+// household already has on disk. This is the implementation the
+// suggestions route runs in production; it lives here so it can be
+// unit-tested without loading the full Hono route module.
 //
 // Mirrors tagIptvAvailability exactly in shape: gate on env.useMediaCore,
 // read-only DB via lazy singleton, try/catch that returns items unchanged
@@ -17,6 +18,10 @@
 
 import { env } from '../env.js'
 import { mediaLibraryDb } from './mediaLibraryDbSingleton.js'
+// Same normalization on both sides of the fallback comparison — the
+// shared helper is the single source of truth (this module used to
+// carry a "kept in sync deliberately" copy).
+import { normalizeTitle } from './suggestionsShared.js'
 
 // Minimal structural type — kept local so this module does not depend on
 // the route module. Matches the SuggestionItem fields we read/write.
@@ -25,18 +30,6 @@ export interface LocalTaggableItem {
   title: string
   year?: number
   available_on?: string[]
-}
-
-// Normalize a title for cross-source matching (same rules as
-// suggestions.ts normalizeTitle): lowercase, strip a leading article,
-// drop non-alphanumerics. Kept in sync deliberately — both sides of a
-// fallback comparison must normalize identically.
-function normalizeTitle(t: string): string {
-  return t
-    .toLowerCase()
-    .replace(/^(the|a|an)\s+/i, '')
-    .replace(/[^a-z0-9]+/g, '')
-    .trim()
 }
 
 /**
