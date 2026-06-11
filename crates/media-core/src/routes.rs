@@ -420,19 +420,24 @@ async fn play_grant(
 /// poisoned scan could persist a path containing `..` or a symlink escaping the
 /// library; we must never serve such a file. Canonicalizes both sides so `..`
 /// and symlinks are resolved before the prefix check. With no roots configured
-/// (dev/tests), containment is skipped.
-fn path_within_roots(path: &std::path::Path, roots: &[crate::config::LibraryRoot]) -> bool {
+/// (dev/tests), containment is skipped. Uses `tokio::fs` so the canonicalize
+/// syscalls (blocking FS I/O, possibly against a stalled mount) run off the
+/// async runtime instead of pinning a request worker.
+async fn path_within_roots(path: &std::path::Path, roots: &[crate::config::LibraryRoot]) -> bool {
     if roots.is_empty() {
         return true;
     }
-    let Ok(canon) = std::fs::canonicalize(path) else {
+    let Ok(canon) = tokio::fs::canonicalize(path).await else {
         return false;
     };
-    roots.iter().any(|r| {
-        std::fs::canonicalize(&r.path)
-            .map(|root| canon.starts_with(&root))
-            .unwrap_or(false)
-    })
+    for r in roots {
+        if let Ok(root) = tokio::fs::canonicalize(&r.path).await
+            && canon.starts_with(&root)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Optional client capabilities advertised on the stream request as query
@@ -659,7 +664,9 @@ async fn stream_file(
     if !path_within_roots(
         std::path::Path::new(&file.path),
         &state.config.library_roots,
-    ) {
+    )
+    .await
+    {
         tracing::warn!(path = %file.path, "refusing to stream file outside library roots");
         return Err(AppError::NotFound);
     }
