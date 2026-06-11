@@ -91,7 +91,16 @@ pub async fn run_guarded_scan(state: &AppState, trigger: &str) -> bool {
     }
 
     tracing::info!(trigger, "starting scheduled library scan");
-    match scanner::scan_once(&state.db, &state.config.library_roots, &state.tmdb).await {
+    // The scan runs on its own spawned task (scan_once_isolated) so a panic in
+    // the pass cannot unwind past the guard release below — a wedged `scanning`
+    // flag would block every future scheduled AND manual scan.
+    match scanner::scan_once_isolated(
+        state.db.clone(),
+        state.config.library_roots.clone(),
+        state.tmdb.clone(),
+    )
+    .await
+    {
         Ok(report) => {
             tracing::info!(
                 trigger,
