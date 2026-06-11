@@ -234,8 +234,13 @@ async fn existing_stat(db: &Db, path: &str) -> Result<Option<(i64, String)>, App
 /// Upsert one media file plus its `movies`/`shows`/`episodes` rows. Returns
 /// `true` when TMDB enrichment found a match for this file.
 ///
-/// `media_files` is keyed on the UNIQUE `path`; `INSERT OR REPLACE` keeps the
-/// row current. The resulting file id then drives the movie/episode upserts.
+/// `media_files` is keyed on the UNIQUE `path`; the upsert MUST be
+/// `ON CONFLICT(path) DO UPDATE` and never `INSERT OR REPLACE` — REPLACE
+/// deletes the conflicting row first, which cascades through
+/// `movies.file_id`/`episodes.file_id` (ON DELETE CASCADE), reissues new
+/// autoincrement movie/episode ids, and silently orphans every
+/// `media_watch_state` row keyed on the old ids. The stable file id then
+/// drives the movie/episode upserts.
 async fn index_file(
     db: &Db,
     path: &str,
@@ -252,11 +257,19 @@ async fn index_file(
     let scanned_at = now_rfc3339();
 
     sqlx::query(
-        "INSERT OR REPLACE INTO media_files \
+        "INSERT INTO media_files \
          (path, size_bytes, mtime, container, duration_secs, video_codec, \
           video_height, video_profile, hdr_format, audio_tracks_json, \
           subtitle_tracks_json, scanned_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         ON CONFLICT(path) DO UPDATE SET \
+         size_bytes = excluded.size_bytes, mtime = excluded.mtime, \
+         container = excluded.container, duration_secs = excluded.duration_secs, \
+         video_codec = excluded.video_codec, video_height = excluded.video_height, \
+         video_profile = excluded.video_profile, hdr_format = excluded.hdr_format, \
+         audio_tracks_json = excluded.audio_tracks_json, \
+         subtitle_tracks_json = excluded.subtitle_tracks_json, \
+         scanned_at = excluded.scanned_at",
     )
     .bind(path)
     .bind(size_bytes)
@@ -866,6 +879,66 @@ mod tests {
         }
         assert_eq!(count(&db, "media_files").await, 1);
         assert_eq!(count(&db, "movies").await, 1);
+    }
+
+    #[tokio::test]
+    async fn rescan_of_changed_file_preserves_ids_and_watch_state() {
+        // Regression: index_file used INSERT OR REPLACE, which DELETEs the
+        // conflicting media_files row, cascades movies/episodes (file_id ON
+        // DELETE CASCADE), reissues new autoincrement ids, and orphans every
+        // media_watch_state row keyed on the old ids. A size/mtime change on
+        // rescan must keep the same file AND movie ids so watch state resolves.
+        let db = Db::connect_memory().await.unwrap();
+        let parsed = ParsedName::Movie {
+            title: "Heat".into(),
+            year: Some(1995),
+        };
+        let path = "/lib/Heat (1995).mkv";
+        index_file(&db, path, 100, "t1", &sample_probe(), &parsed, &no_tmdb())
+            .await
+            .unwrap();
+        let (file_id, movie_id): (i64, i64) =
+            sqlx::query_as("SELECT file_id, id FROM movies LIMIT 1")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+
+        // Record progress against the movie, as POST /watch does.
+        sqlx::query(
+            "INSERT INTO media_watch_state \
+             (sub, media_kind, media_id, position_secs, watched_at, completed) \
+             VALUES ('plex:1', 'movie', ?, 1200, 't1', 0)",
+        )
+        .bind(movie_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        // The file changed on disk (new size + mtime) and is reindexed.
+        index_file(&db, path, 200, "t2", &sample_probe(), &parsed, &no_tmdb())
+            .await
+            .unwrap();
+
+        let (new_file_id, new_movie_id, size): (i64, i64, i64) = sqlx::query_as(
+            "SELECT m.file_id, m.id, f.size_bytes FROM movies m \
+             JOIN media_files f ON f.id = m.file_id LIMIT 1",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(new_file_id, file_id, "media_files id must be stable");
+        assert_eq!(new_movie_id, movie_id, "movie id must be stable");
+        assert_eq!(size, 200, "the changed stat must still be persisted");
+
+        // The watch row still resolves to the (same) movie.
+        let resumable: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM media_watch_state w \
+             JOIN movies m ON m.id = w.media_id WHERE w.media_kind = 'movie'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(resumable, 1, "watch state must survive a rescan");
     }
 
     #[tokio::test]
