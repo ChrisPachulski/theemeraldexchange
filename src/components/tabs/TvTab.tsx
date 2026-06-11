@@ -190,9 +190,12 @@ export function TvTab() {
   }, [suggested.data, libraryByTmdbForTrending])
   // Manual refresh trigger = a fresh recommender run. refetch() re-hits
   // /api/suggestions/tv, which (local recommender on) re-scores.
+  // See MoviesTab — depend on the stable `refetch`, not the whole query
+  // result, or the memo is a no-op (new reference every render).
+  const refresh = suggested.refetch
   const refreshSuggestions = useCallback(() => {
-    void suggested.refetch()
-  }, [suggested])
+    void refresh()
+  }, [refresh])
   // No auto-refresh on judgement. The strip is only ever replaced by an
   // explicit refresh (the header button), a dislike draining it to the
   // low-water mark (useSetFeedback lazy-refill), or a natural remount.
