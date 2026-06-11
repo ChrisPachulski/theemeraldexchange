@@ -1,12 +1,13 @@
 {
   "_meta": {
-    "format_version": 1,
+    "format_version": 2,
     "authored_from": "§3.6 (kid header, multi-key verifier pattern) + §3.3 (alg: dir, enc: A256GCM, HKDF derivation), cross-service-contract 2026-05-25",
     "author": "ChrisPachulski",
     "date": "2026-05-26",
     "reviewed_by": "ChrisPachulski",
+    "revised": "2026-06-10 — claim shape locked to the shipped emerald-contracts DeviceClaims serialization (flat device_id/device_platform, not the pre-crate nested device:{id,platform}); sampleTokens regenerated via the N-API binding; missing-kid expectation updated to the crate's header-parse hard-reject.",
     "notes": [
-      "Tests the §3.6 verifier dispatch pattern: decodeProtectedHeader(token).kid → keyMap.get(kid) → jwtDecrypt.",
+      "Tests the §3.6 verifier dispatch pattern: decode_protected_header(token).kid → keyMap[kid] → decrypt.",
       "Key derivation: HKDF-Extract+Expand (RFC 5869, SHA-256) over the raw secret with salt='' and info='eex/device-token/v<N>'.",
       "v1 test secret (32 bytes UTF-8): DEVICE_TEST_SECRET_V1_32CHARS_XX",
       "v1 test secret hex: 4445564943455f544553545f5345435245545f56315f333243484152535f5858",
@@ -15,9 +16,10 @@
       "v2 test secret hex: 4445564943455f544553545f5345435245545f56325f333243484152535f5858",
       "v2 derived key hex (HKDF, info='eex/device-token/v2'): af820c0c6205c5ce8f9a2a00d97edf79e826e937e38570874b391d13e623f2ea",
       "alg: dir means the encrypted key component (part[1] of the compact serialization) is empty.",
-      "JWE tokens are generated with jose CompactEncrypt; they are NOT deterministic (IV is random). Consumers MUST decrypt and compare the claims object, not the token bytes.",
+      "JWE tokens are NOT deterministic (random 12-byte IV per encrypt). Consumers MUST decrypt and compare the claims object, not the token bytes.",
+      "expectedClaims keys use the canonical wire serialization of emerald-contracts::device_token::DeviceClaims (snake_case, flat device_id/device_platform). The N-API binding exposes the same fields camelCased (deviceId/devicePlatform); the wire bytes inside the JWE are snake_case.",
       "ULID charset check: 01HWXYZ01234567890ABCDEFGS, 01HWXYZ01234567890ABCDEFGT, 01HWXYZ01234567890ABCDEFGV, 01HWXYZ01234567890ABCDEFGW — all Crockford Base32, no I/L/O/U.",
-      "These vectors are the ground truth for TS (D-row deviceTokenMiddleware), Rust (M2+ emerald-contracts verifier), Swift (M2 EmeraldKit decryptDeviceToken)."
+      "Executed by: crates/emerald-contracts/tests/vectors.rs (Rust) and server/services/contractsBinding.test.ts (TS via the production N-API binding — the same functions server/session.ts mint/verify call)."
     ]
   },
   "keyMap": {
@@ -37,28 +39,26 @@
   "vectors": [
     {
       "name": "device-v1-known-kid-passes",
-      "description": "Token with kid='device-v1' and the correct v1 key decrypts successfully. Tests the happy path of the §3.6 kid-dispatch verifier: decodeProtectedHeader returns kid='device-v1', keyMap.get('device-v1') returns the derived v1 key, jwtDecrypt succeeds.",
+      "description": "Token with kid='device-v1' and the correct v1 key decrypts successfully. Tests the happy path of the §3.6 kid-dispatch verifier: decode the protected header, look up kid='device-v1' in the key map, decrypt with the derived v1 key.",
       "kid": "device-v1",
       "expectedResult": "accepted",
       "expectedClaims": {
-        "sub": "plex:12345",
         "aud": "device",
         "iss": "eex",
-        "jti": "01HWXYZ01234567890ABCDEFGS",
-        "server_id": "00000000-0000-0000-0000-000000000001",
-        "auth_mode": "plex",
+        "sub": "plex:12345",
         "role": "user",
-        "device": {
-          "id": "01HWXYZ01234567890ABCDEFGT",
-          "platform": "tvos"
-        },
+        "auth_mode": "plex",
+        "device_id": "01HWXYZ01234567890ABCDEFGT",
+        "device_platform": "tvos",
+        "server_id": "00000000-0000-0000-0000-000000000001",
+        "jti": "01HWXYZ01234567890ABCDEFGS",
         "iat": 1748169600,
         "nbf": 1748169600,
         "exp": 1763721600
       },
       "decryptionNote": "Decrypt with keyMap['device-v1'].derivedKeyHex. Assert decrypted claims match expectedClaims. Token bytes are NOT stable (random IV); do not compare token bytes.",
-      "sampleToken": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiZGV2aWNlLXYxIn0..rYVfdZOx1tm42yKd.kusq7DC5g4aop9kIAx4WcusPvYAZqS-ON6_z30sXOWOEwRcxdJoJT0E_LLoI0udO9dqKql-G9jJYPs5y0eAZj8iIYWM57CSppCTHmajJh9-naTmsTQw1GIPGlzyXoLnRDXD9AN18_DYMcVsgAWbG6hcRgKyCp66J6h-8hSPoRibWLpyU6HdZuTeHe_57YpF2mhaNRjt1MMWPYEmANv2rEMhw-BJm7hU8HYTvy9rpPJqF1yAsdBhggoqYgBcTtZdNh34EKMLsIVKZGbEJk2jTa3yZaIqx-FG3JPpoNtQTERgfni1Cnw_-93J05jS94P8rC6rZG_Bfuh2XL3KZ_tF0CHtWbcQQJI2Q5B2qlI1o9m7gfF2kNasYdg.6O419Fjcms4oyowjwFA7pg",
-      "sampleTokenNote": "sampleToken is a pre-generated example encrypted with derivedKeyHex for device-v1. Test harnesses SHOULD generate a fresh token from expectedClaims + kid + derivedKeyHex and verify round-trip. The sampleToken is provided as a cross-language sanity fixture only."
+      "sampleToken": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiZGV2aWNlLXYxIn0..EQ0yQMduZGNe84DH.meKd8VaEfQg3Nrxu52df0pqaKtiOx6ge6ErHN1Je3QbuqnlWOKvxyndbvyM82nCZ-aCFjivlBw_DAdN8_VOyJPj8RJD9lGG7tdXkfwr_TUd4tBjdTJkmw9aQus4eD1SI54DJg_lOzi3YFsYzSHjQVgnHCZTivuW5gyRGd76mK8ZQv767bmz5BcBtGLnqIBD5oAbPWBnuIkpqI1PUnD9I_LKe5eOs5OI1haEyzMgNoKmRtUWyMwRWD8wIMQUDtwr5aDTtUwdNImjFRbnOORLbwgg_xrzzyPojhaqurXRdxX3ycn63GQ8Q62_mqN3Arna1CwgYLl5WL7CKBy_e62yBK-BEVbepDvlcWMGGpVB8NwioHQk-Ww00_LEJUQ.G0bZRn0xx4v2ibjaucV0sA",
+      "sampleTokenNote": "Pre-generated with the N-API binding (deviceTokenEncrypt) using derivedKeyHex for device-v1. Test harnesses SHOULD generate a fresh token from expectedClaims + kid + derivedKeyHex and verify round-trip; the sampleToken is a cross-language sanity fixture that MUST also decrypt to expectedClaims."
     },
     {
       "name": "device-v2-known-kid-passes",
@@ -66,44 +66,42 @@
       "kid": "device-v2",
       "expectedResult": "accepted",
       "expectedClaims": {
-        "sub": "plex:12345",
         "aud": "device",
         "iss": "eex",
-        "jti": "01HWXYZ01234567890ABCDEFGV",
-        "server_id": "00000000-0000-0000-0000-000000000001",
-        "auth_mode": "plex",
+        "sub": "plex:12345",
         "role": "user",
-        "device": {
-          "id": "01HWXYZ01234567890ABCDEFGW",
-          "platform": "tvos"
-        },
+        "auth_mode": "plex",
+        "device_id": "01HWXYZ01234567890ABCDEFGW",
+        "device_platform": "tvos",
+        "server_id": "00000000-0000-0000-0000-000000000001",
+        "jti": "01HWXYZ01234567890ABCDEFGV",
         "iat": 1748169600,
         "nbf": 1748169600,
         "exp": 1763721600
       },
       "decryptionNote": "Decrypt with keyMap['device-v2'].derivedKeyHex. Assert decrypted claims match expectedClaims.",
-      "sampleToken": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiZGV2aWNlLXYyIn0..eWAGEj94WsJzRy3x.picFdS_8HuOmVRaZdUP7rMqTPWqSkq8yiPr1FxDbFXdN4RjHmz98HPJ1fLlHoEpwALoLmJaGOfrXFnqbg_qGsYwLXI82CdVa_CVYAUEBamEUEReuSOagcvTlBcX-0DKpPwcUINltUkdW7TMlbXpFIVl12dtSvT_4eMdPJFcFmw3tsuyzvcHkVYBMoX2eRaR2SETaHcsGCZnnvG16Tw-9pieuwqpZPnSKKcX0kFfRHWiNY-Ok1kDrlWh3k3XeG1Q0S67f7RvWL1MEGxhw_1Gkj59SCWQ_Dqgj2CJD-ZKBXRsvWgJRz3nk2FutiEkDYbaRsR7k7DlYUQFQa9Oo9x5wllEpV7wb8IST2Ab7tz3wAl-84AbSFuJx9w.cXUspmFzt1r5tldoDMFyRA",
-      "sampleTokenNote": "sampleToken is a pre-generated example encrypted with derivedKeyHex for device-v2. Same note as device-v1-known-kid-passes."
+      "sampleToken": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiZGV2aWNlLXYyIn0..gYwQ-5D77igBoOth.Q2pCZmUjifZlzUrUrfQeJte9qGYLIKr2AYCf7V8HMtnC90SpT-jBv4cS6Rntctj_FQiYSscuBKgTDWNwYi4DENiciLONiK9jDVtyAq3a3g5H491uP_4gDqMZJ3UnMhInnQ2WTHYrtZgnWXZfl78bBVZ70iPoyWHEyjebHLTHLlBCdBWtcSv2Vy3OTyE-rLeDLwnqbwZD2P-cg-pkNPZqvsRzeOND2VVRsDX8jXGDSDVkGzSpJrTzWrAd29SzfDr6wZaLVmPpJ0Fbug3TzbRu0bOUNt_CGarKn4gHNGbQ_Rx0waFao8XPE5jf9Pp4nlmO_RAk-5gj-I_ia37wzehJ60z_3ZTZQFnASu2QY7TauNiWvjON-6q1mFjiWQ.8VIemLGWcBgGFfzzcX7XNw",
+      "sampleTokenNote": "Pre-generated with the N-API binding (deviceTokenEncrypt) using derivedKeyHex for device-v2. Same note as device-v1-known-kid-passes."
     },
     {
       "name": "unknown-kid-hard-rejects",
-      "description": "Token with kid='device-v99' (not in keyMap) must be hard-rejected before decryption is attempted. Tests the §3.6 guard: if keyMap.get(kid) returns undefined, throw immediately with a clear error. Do NOT attempt to iterate all keys — that enables kid enumeration attacks.",
+      "description": "Token with kid='device-v99' (not in keyMap) must be hard-rejected before decryption is attempted. Tests the §3.6 guard: if the kid lookup misses, fail immediately with a clear error. Do NOT attempt to iterate all keys — that enables kid enumeration attacks.",
       "kid": "device-v99",
       "expectedResult": "rejected",
       "expectedErrorCode": "kid_unknown",
-      "errorNote": "The verifier MUST throw/return an error containing 'unknown kid' or equivalent before any decryption attempt. The token bytes need not be a valid JWE — the kid check fires first on the result of decodeProtectedHeader().",
+      "errorNote": "The verifier MUST throw/return an error containing 'unknown kid' or equivalent (Rust: DeviceTokenError::UnknownKid) before any decryption attempt. The token bytes need not be a valid JWE — the kid check fires first on the decoded protected header.",
       "syntheticToken": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiZGV2aWNlLXY5OSJ9..AAAAAAAAAA.AAAAAAAAAAAAAAAA.AAAAAAAAAAAAAAAA",
       "syntheticTokenNote": "This is a structurally plausible JWE compact with kid='device-v99' in the protected header. The ciphertext/tag are dummy bytes — decryption would fail even if attempted. The test asserts the verifier rejects on kid lookup, not on decryption."
     },
     {
       "name": "missing-kid-hard-rejects",
-      "description": "Token with no kid field in the protected header must be hard-rejected. Tests the null/undefined guard in the verifier: kid = decodeProtectedHeader(token).kid; if !kid or keyMap.get(kid ?? '') returns undefined, throw immediately. A token without kid cannot be dispatched to any key.",
+      "description": "Token with no kid field in the protected header must be hard-rejected. The canonical crate requires kid at header-parse time: decode_protected_header fails (Rust: JweError::BadHeader) before any key lookup or decryption. This is stricter than the legacy §3.6 reference (coalesce absent kid to '' then miss the map) — both reject, the crate rejects earlier.",
       "kid": null,
       "expectedResult": "rejected",
-      "expectedErrorCode": "kid_unknown",
-      "errorNote": "Same rejection path as unknown-kid-hard-rejects. The verifier coalesces absent kid to '' (per the §3.6 reference implementation: keyMap.get(kid ?? '')), which is also not in keyMap.",
+      "expectedErrorCode": "header_invalid",
+      "errorNote": "Reject fires at protected-header parse — a token without kid cannot be dispatched to any key. Harnesses assert a hard failure before decryption; the exact error label is binding-specific (Rust Jwe(BadHeader), N-API throws).",
       "syntheticToken": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..AAAAAAAAAA.AAAAAAAAAAAAAAAA.AAAAAAAAAAAAAAAA",
-      "syntheticTokenNote": "Protected header has alg+enc but no kid field. decodeProtectedHeader().kid is undefined. The verifier must catch this."
+      "syntheticTokenNote": "Protected header has alg+enc but no kid field. Header parse fails closed — the verifier must reject."
     }
   ]
 }
