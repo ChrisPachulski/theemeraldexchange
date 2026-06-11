@@ -20,7 +20,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:e2e": "playwright test",
+    "test:e2e": "playwright test --project=chromium",
+    "test:e2e:integration": "PW_INTEGRATION=1 playwright test --project=integration",
+    "test:e2e:playback": "PW_INTEGRATION=1 playwright test --project=playback-chrome",
+    "test:e2e:all": "npm run test:e2e && npm run test:e2e:integration && npm run test:e2e:playback",
     "eval:recs": "vitest run --config vitest.eval.config.ts",
     "build:napi": "npm --prefix crates/emerald-contracts-napi run build"
   },

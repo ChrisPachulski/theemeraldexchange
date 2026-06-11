@@ -53,46 +53,42 @@ export default defineConfig({
         'src/vite-env.d.ts',
       ],
       // Thresholds make the gate FAIL on regression instead of only reporting
-      // (audit 9-5 / 17-7). The server data plane alone measures ~74% stmts /
-      // 63% branches / 75% fns / 78% lines and is well-tested; broadening the
-      // include to the (thin, largely untested) SPA pulls the GLOBAL averages
-      // down hard, so the global floors are set conservatively below the
-      // broadened measured numbers and ratchet upward as the SPA hook/player
-      // tests (audit 17-8) land. The point is a gate that bites on a real
-      // regression without breaking the current green build. Two scoped blocks
-      // keep the well-tested server held to a high floor while the SPA starts
-      // low; raise both over time.
-      // The regression gate's teeth are the per-glob `server/**` floor (the
-      // well-tested surface, ~74-78%). The combined global floor is deliberately
-      // low because the broadened SPA include drags the average down until the
-      // 17-8 hook/player tests land — a low global floor still fails a real
-      // catastrophic regression while never breaking the current green build.
-      // Ratchet all three blocks upward over time.
+      // (audit 9-5 / 17-7). RATCHET POLICY: floors sit just below (≤1pt under)
+      // the numbers measured on the tree they were set against, so the gate
+      // bites on a real regression without flaking on a small refactor. Raise
+      // every block as tests land; NEVER lower a floor — a drop below any
+      // floor means coverage genuinely regressed and the fix is more tests,
+      // not a lower bar.
+      //
+      // Last re-measured 2026-06-11 on the fix-wave-3 merged tree
+      // (fix3/spa + fix3/server), `npx vitest run --coverage`:
+      //   global    65.52 stmts / 54.82 branches / 53.90 fns / 67.78 lines
+      //   server/** 87.89 stmts / 78.00 branches / 87.05 fns / 90.98 lines
+      //   src/**    25.86 stmts / 22.62 branches / 21.62 fns / 26.90 lines
+      // The prior global floors (20/35/20/20) and src floors were token-level
+      // relative to those numbers and gated nothing — ratcheted to just-below-
+      // measured across all three blocks.
       thresholds: {
-        // Global floor (server + SPA combined) — intentionally low; ratchet up.
-        statements: 20,
-        branches: 35,
-        functions: 20,
-        lines: 20,
+        // Global floor (server + SPA combined).
+        statements: 65,
+        branches: 54,
+        functions: 53,
+        lines: 67,
         // Server data plane — held to a high floor so backend coverage cannot
         // silently regress even as the SPA average drags the global down.
         'server/**/*.ts': {
-          statements: 65,
-          branches: 55,
-          functions: 65,
-          lines: 65,
+          statements: 87,
+          branches: 77,
+          functions: 86,
+          lines: 90,
         },
-        // SPA — ratcheted as the mounted-DOM player/modal suites landed
-        // (MediaPlayer/IptvPlayer/EpisodePicker *.dom.test.tsx). Floors sit
-        // just below the measured numbers (stmts 22.2% / branches 19.0% /
-        // fns 18.1% / lines 23.1%) so the gate bites on a real regression
-        // without flaking on a small refactor. Keep raising as SPA tests
-        // come in; never lower.
+        // SPA — ratcheted as the mounted-DOM hook/player suites landed
+        // (useSuggestionStrip/useUserApiKey/MediaPlayer *.dom.test.tsx).
         'src/**/*.{ts,tsx}': {
-          statements: 21,
-          branches: 17,
-          functions: 17,
-          lines: 22,
+          statements: 25,
+          branches: 22,
+          functions: 21,
+          lines: 26,
         },
       },
     },
