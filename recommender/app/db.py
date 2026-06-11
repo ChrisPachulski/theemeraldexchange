@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import logging
+import os
 import re
 import sqlite3
 import struct
@@ -456,11 +457,25 @@ def _migrate(conn: sqlite3.Connection, *, db_path: Path) -> list[str]:
             checksum = _sha256(raw_text)
 
             if version in seen:
-                # Already applied — verify checksum.
+                # Already applied — verify checksum. An edited migration file
+                # means the DB schema no longer matches what the file would
+                # produce, so fail the boot rather than run against an unknown
+                # schema. ALLOW_MIGRATION_CHECKSUM_MISMATCH=1 is the operator
+                # escape hatch for deliberate repairs (after which the stored
+                # checksum should be fixed up to match the file).
                 if checksum != seen[version]:
-                    log.warning(
-                        "[migration] checksum mismatch on %d: file may have been edited",
-                        version,
+                    if os.environ.get("ALLOW_MIGRATION_CHECKSUM_MISMATCH") == "1":
+                        log.warning(
+                            "[migration] checksum mismatch on %d allowed by "
+                            "ALLOW_MIGRATION_CHECKSUM_MISMATCH=1: file may have been edited",
+                            version,
+                        )
+                        continue
+                    raise RuntimeError(
+                        f"[migration] ABORT: checksum mismatch on applied migration "
+                        f"{version} ({f.name}): the file no longer matches what was "
+                        "applied to this database. Restore the original file, or set "
+                        "ALLOW_MIGRATION_CHECKSUM_MISMATCH=1 for a deliberate repair."
                     )
                 continue
 
