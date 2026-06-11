@@ -5,11 +5,17 @@ records. Treat the files below as the current source of truth unless a newer
 commit explicitly says otherwise:
 
 - `TODO.md` at the repo root: active execution queue.
+- `DEPLOY.md` at the repo root: NAS deploy pipeline, first boot of the full
+  9-service stack, and ongoing-deploy rules.
 - `docs/ROADMAP-STATUS.md`: current milestone status and critical path.
-- `docs/M4-TRANSCODE-VERIFICATION.md`: current M4 transcoder proof status.
+- `docs/M4-TRANSCODE-VERIFICATION.md`: the M4 transcoder serving proof
+  (2026-06-07). Its "not yet played in a real client" caveat is superseded —
+  real-browser playback over the public path was proven 2026-06-08
+  (`scripts/media-playback-proof.sh`); see `docs/ROADMAP-STATUS.md` M4.
 - `docs/MONETIZATION-AND-PUBLISHING.md`: current monetization and pre-paid
   launch constraints.
-- `docs/operations/*`: operational runbooks.
+- `docs/operations/*`: operational runbooks (Cloudflare tunnel, Glitchtip
+  setup, EPG, internal-principal rollout, incident records).
 
 Historical audits and design records are intentionally not rewritten every time
 the code changes. They preserve what was true at the reviewed commit, so stale

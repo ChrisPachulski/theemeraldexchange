@@ -8,18 +8,24 @@ api.theemeraldexchange.com       ──▶ Cloudflare Tunnel
                                   ──▶ cloudflared on NAS (shares backend netns)
                                   ──▶ 127.0.0.1:3001
                                   ──▶ exchange-backend (Hono)
-                                  ──▶ Sonarr / Radarr / SAB on the LAN
-                                  ──▶ exchange-recommender (Python+FastAPI, internal net only)
-                                       └─ SQLite at /mnt/user/appdata/exchange-backend/recommender-db/exchange.db
+                                       ├─▶ Sonarr / Radarr / SAB on the LAN
+                                       ├─▶ exchange-recommender   (FastAPI, internal net; loopback :8001)
+                                       │    └─ SQLite at /mnt/user/appdata/exchange-backend/recommender-db/exchange.db
+                                       ├─▶ exchange-media-core    (Rust, library scan/serve; loopback :8002)
+                                       │    └─▶ exchange-transcoder (Rust + ffmpeg/VAAPI HLS; loopback :8003)
+                                       └─▶ glitchtip (+ -db, -redis, -worker) — telemetry; loopback :8100
 ```
 
-The legacy **V1 nginx-static container** (`exchange-dashboard` on port 8085) and its DEPLOY.md recipe are superseded. Tear it down once V2 is verified working.
+`docker-compose.yml` defines **9 services**: `backend`, `recommender`,
+`media-core`, `transcoder`, `cloudflared`, `glitchtip`, `glitchtip-db`,
+`glitchtip-redis`, `glitchtip-worker`. One deploy script
+(`scripts/deploy-nas.sh`) ships and health-gates the whole stack.
 
 ---
 
 ## One-time setup
 
-You need three things to be working before the first deploy: a Cloudflare Tunnel, a `.env.production` on this laptop, and Netlify connected to the GitHub repo.
+You need four things in place before the first deploy: a Cloudflare Tunnel, a `.env.production` on this laptop, Netlify connected to the GitHub repo, and Glitchtip secrets generated (§4).
 
 ### 1. Cloudflare Tunnel
 
@@ -45,7 +51,11 @@ Open it and fill in:
 |---|---|
 | `TUNNEL_TOKEN` | The `eyJhI…` you copied above. |
 | `PLEX_CLIENT_ID` | Same value as in your `.env.local` (or generate fresh: `node -e 'console.log(crypto.randomUUID())'`). |
-| `SESSION_SECRET` | Generate fresh: `openssl rand -base64 48`. **Different from dev** so the two environments can't share sessions. |
+| `SESSION_SECRET` | Generate fresh: `openssl rand -base64 48`. Must be ≥32 bytes and not a placeholder — the deploy script hard-fails otherwise. **Different from dev** so the two environments can't share sessions. |
+| `STREAM_TOKEN_SECRET` | `openssl rand -base64 48`. Signs IPTV/media stream tokens (HMAC-SHA256). |
+| `DEVICE_TOKEN_SECRET` | `openssl rand -base64 48`. IKM for the device-token JWE (Apple device pairing). Must be distinct from every other secret. |
+| `INTERNAL_PRINCIPAL_SECRET` | `openssl rand -base64 48`. IKM for the internal-principal JWE the backend mints toward recommender/media-core/transcoder. Distinct from every other secret. |
+| `RECOMMENDER_EVENT_SECRET` | `openssl rand -base64 48`. Shared secret signing backend → recommender calls. |
 | `ADMINS` | Your Plex username(s), comma-separated. |
 | `PLEX_SERVER_ID` | **Required in production** — your home Plex server's machineIdentifier. Without it, any authenticated Plex user can sign in. Discoverable via the SPA's first prod login (in the `discoveredServers` payload). Or query plex.tv directly. For the brief first-deploy bootstrap window before you know the id, set `ALLOW_UNSCOPED_PLEX_LOGIN=1` instead — but remove that opt-in as soon as you copy the id into `PLEX_SERVER_ID`. |
 | `ALLOWED_ORIGINS` | `https://theemeraldexchange.com` |
@@ -53,6 +63,12 @@ Open it and fill in:
 | `RADARR_URL`, `RADARR_API_KEY` | Existing Radarr install. |
 | `SAB_URL`, `SAB_API_KEY` | Existing SAB install. |
 | `MIN_FREE_GB` | Default 100. |
+| `GLITCHTIP_SECRET_KEY`, `GLITCHTIP_DB_PASSWORD`, `GLITCHTIP_DOMAIN` | **Set BEFORE the first `compose up`** — see [docs/operations/glitchtip-setup.md](./docs/operations/glitchtip-setup.md). The DB password must be hex (base64 characters break the `DATABASE_URL`); the domain needs an `http(s)://` scheme. |
+| `EEX_TELEMETRY_DSN` | Does NOT exist yet on the first deploy — you mint it from the Glitchtip instance that deploy brings up, then redeploy. See the two-step bootstrap below. |
+
+The full annotated key list lives in `.env.production.example`. The deploy
+script validates all required keys (and the `SESSION_SECRET` strength /
+`PLEX_SERVER_ID` scoping gates) before anything ships.
 
 This file is gitignored. If you ever lose it, regenerate the secrets and redeploy — every active session resets, which is fine.
 
@@ -68,26 +84,75 @@ This file is gitignored. If you ever lose it, regenerate the secrets and redeplo
 
 Site loads at https://theemeraldexchange.com but the API isn't there yet — onto the NAS deploy.
 
-### 4. First NAS deploy
+### 4. Glitchtip secrets (BEFORE the first compose up)
+
+Telemetry is mandatory and self-hosted; the Glitchtip sidecar stack
+(`glitchtip` + `glitchtip-db` + `glitchtip-redis` + `glitchtip-worker`) comes
+up with everything else. **Work through
+[docs/operations/glitchtip-setup.md](./docs/operations/glitchtip-setup.md)
+first** — it generates `GLITCHTIP_SECRET_KEY` / `GLITCHTIP_DB_PASSWORD` /
+`GLITCHTIP_DOMAIN`, which must exist in `.env.production` before the first
+`docker compose up`, and walks the admin-account + DSN minting steps.
+
+### 5. First NAS deploy (two-step bootstrap)
 
 ```bash
 cd ~/Documents/theemeraldexchange
 ./scripts/deploy-nas.sh
 ```
 
-The script:
-1. Validates `.env.production` has all required keys.
-2. Rsyncs `Dockerfile`, `docker-compose.yml`, `package*.json`, `tsconfig.json`, and `server/` to `/mnt/user/appdata/exchange-backend/` on the NAS.
-3. Ships `.env.production` → NAS as `.env`, chmod 600.
-4. SSHs in and runs `docker compose up -d --build`.
+What the script actually does (`./scripts/deploy-nas.sh --help` prints its own summary):
 
-First build takes ~2 min (npm ci + image layers). Subsequent deploys are faster.
+1. **Refuses to run on a dirty tree.** The payload is always `git archive HEAD`,
+   so uncommitted tracked edits would silently not ship. `--allow-dirty`
+   overrides with a loud warning; a HEAD ≠ `origin/main` drift is warned, not
+   blocked.
+2. Validates `.env.production` has every required key, mirrors the backend's
+   `SESSION_SECRET` strength gate and the `PLEX_SERVER_ID` /
+   `ALLOW_UNSCOPED_PLEX_LOGIN` scoping gate, so a bad env fails here instead of
+   as a container crash loop.
+3. Stages the payload from `git archive HEAD` into a temp dir and rsyncs — from
+   that stage, never the working tree — `Dockerfile`, `docker-compose.yml`,
+   `.dockerignore`, `package*.json`, `tsconfig.json`, `server/`, `recommender/`,
+   `crates/`, and the root `Cargo.toml`/`Cargo.lock`/`LICENSE` to
+   `/mnt/user/appdata/exchange-backend/` on the NAS.
+4. Ships `.env.production` → NAS as `.env`, chmod 600.
+5. Pre-creates + chowns the sidecar DB bind-mount dirs (`recommender-db` →
+   uid 10001, `media-core-db` → uid 10002) so a fresh volume doesn't crash-loop
+   the `cap_drop: ALL` sidecars.
+6. Tags every currently-deployed image (`backend`, `recommender`, `media-core`,
+   `transcoder`) as `:rollback`, then runs `docker compose up -d --build` with
+   `EEX_RELEASE=<short sha of HEAD>` — `/api/version` reports that sha as
+   `release`, which is how you detect deploy drift.
+7. Restarts `exchange-cloudflared` (it shares the backend's netns; a backend
+   recreate stales the reference and the public site 502s until the restart).
+8. **Health-gates the whole stack** (~150s ceiling): backend + recommender +
+   media-core + transcoder must all report docker-healthy. On failure it
+   restores every `:rollback` image, re-ups, and prints per-container log and
+   manual-rollback commands.
 
-### 5. Verify end-to-end
+> **The first deploy is a two-step bootstrap.** `EEX_TELEMETRY_DSN` cannot exist
+> yet — you mint it from the Glitchtip instance this very deploy brings up. The
+> backend crash-loops in that window **by design**, and the script detects the
+> unset DSN and skips the rollback instead of tearing down the Glitchtip you
+> need. Create the EEX project + DSN
+> ([glitchtip-setup.md §4](./docs/operations/glitchtip-setup.md)), set
+> `EEX_TELEMETRY_DSN` in `.env.production`, and run `./scripts/deploy-nas.sh`
+> again — the second run health-gates normally.
+
+First build takes several minutes (npm ci + two Rust release builds + image
+layers). Subsequent deploys are much faster (cached layers).
+
+### 6. Verify end-to-end
 
 ```bash
 curl -s https://api.theemeraldexchange.com/api/health
 # {"ok":true}
+
+# The deployed release must match what you shipped (the script prints this
+# exact check with the sha filled in on success):
+curl -s https://api.theemeraldexchange.com/api/version
+# {... "release":"<short sha of the deployed HEAD>" ...}
 ```
 
 Then in the browser: https://theemeraldexchange.com → Plex login should work cross-origin.
@@ -95,32 +160,52 @@ Then in the browser: https://theemeraldexchange.com → Plex login should work c
 If `/api/health` 502s, the tunnel is up but the backend isn't reachable: `ssh root@theemeraldexchange.local 'docker logs exchange-backend --tail=30'`.
 If it never resolves, the tunnel didn't register: `ssh root@theemeraldexchange.local 'docker logs exchange-cloudflared --tail=30'`.
 
+### 7. Media library + GPU (media-core / transcoder)
+
+`media-core` and `transcoder` both mount the media library read-only at
+`/media` from `MEDIA_LIBRARY_HOST_PATH` (compose default is a test dir —
+point it at the real share, e.g. `/mnt/user/media`). Two gotchas that have
+each caused a real "library invisible / nothing plays" incident:
+
+- **Library permissions.** The services run as dedicated uids (media-core
+  10002, transcoder 10003). Every library directory must be world-traversable
+  and files world-readable (`chmod -R a+rX` → dirs `0755`); a `0700` share is
+  silently unservable even though the mount succeeds.
+- **Backend flag.** The backend only proxies `/api/media` + `/api/transcode`
+  when `USE_MEDIA_CORE=1` is set in `.env.production`. Until then media-core
+  runs idle and the SPA shows no local library.
+
+Hardware transcode: the compose maps `/dev/dri/renderD128` into the
+transcoder with `group_add: "18"` (the NAS `video` group) and defaults
+`TRANSCODER_HW_ENCODER=vaapi`. The boot smoke-test demotes to software
+libx264 automatically if the GPU is absent — playback still works, just on
+CPU. Verify after first boot:
+
+```bash
+ssh root@theemeraldexchange.local 'docker logs exchange-transcoder 2>&1 | grep -i -m1 encoder'
+```
+
 ---
 
 ## Ongoing deploys
 
+The deploy payload is `git archive HEAD` — **commit first**, then deploy. An
+uncommitted edit never ships (the script refuses a dirty tree for exactly this
+reason).
+
 | What changed | Command | Effect |
 |---|---|---|
 | SPA only (anything in `src/`) | `git push` | Netlify auto-builds and deploys. ~30s. |
-| Backend only (anything in `server/`) | `./scripts/deploy-nas.sh` | NAS rebuild + restart. ~30–60s. |
-| Both | `git push && ./scripts/deploy-nas.sh` | In any order. SPA and backend redeploy independently. |
+| Backend (anything in `server/`) | `./scripts/deploy-nas.sh` | NAS rebuild + restart of the backend image. ~30–60s. |
+| Rust sidecars (anything in `crates/`, root `Cargo.toml`/`Cargo.lock`) | `./scripts/deploy-nas.sh` | NAS deploy too — `crates/` feeds the media-core + transcoder images AND the backend's napi / recommender's pyo3 contract bindings. Rust release rebuilds take minutes, not seconds. |
+| Recommender (anything in `recommender/`) | `./scripts/deploy-nas.sh` | NAS rebuild of the recommender image. |
+| Both SPA + NAS | `git push && ./scripts/deploy-nas.sh` | Deploy the **frontend before the backend** when a change spans both (the SPA is the consumer). |
 | Env var change in `.env.production` | `./scripts/deploy-nas.sh` | Same script; new `.env` ships and containers restart. |
 | `VITE_API_BASE_URL` change | Netlify UI → trigger redeploy | Vite bakes env vars at build time, so a redeploy is required. |
 
----
-
-## Tearing down V1
-
-Once V2 is working end-to-end:
-
-```bash
-ssh root@theemeraldexchange.local '
-  docker rm -f exchange-dashboard 2>/dev/null
-  rm -rf /mnt/user/appdata/exchange-dashboard
-'
-```
-
-That frees host port 8085. The `nginx/` directory in the repo is dead code at that point — safe to delete in a follow-up commit.
+After any deploy, `curl -s https://api.theemeraldexchange.com/api/version`
+must report the `release` sha the script printed — if it doesn't, the NAS is
+running stale code.
 
 ---
 
@@ -284,12 +369,19 @@ so you can flip back without a fresh bootstrap.
 
 ### Health check
 
-```bash
-# Backend → recommender connectivity
-ssh root@theemeraldexchange.local 'docker exec exchange-backend curl -s http://recommender:8000/health'
+The backend's Node image does **not** ship `curl` — a `docker exec
+exchange-backend curl …` fails with `exec: curl: not found` (this exact
+assumption once made the backend permanently "unhealthy" and took the public
+site down via cloudflared's `depends_on` gate). Probe through `node`, which is
+always present:
 
-# Recommender directly (from NAS loopback)
-curl -s http://127.0.0.1:8001/health
+```bash
+# Backend → recommender connectivity (node-based probe, run on the NAS)
+ssh root@theemeraldexchange.local \
+  'docker exec exchange-backend node -e "fetch(\"http://recommender:8000/health\").then(r=>r.text()).then(console.log)"'
+
+# Recommender directly (run ON the NAS — curl exists there)
+ssh root@theemeraldexchange.local 'curl -s http://127.0.0.1:8001/health'
 ```
 
 ---
