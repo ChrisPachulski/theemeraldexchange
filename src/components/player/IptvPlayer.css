@@ -1,0 +1,51 @@
+/* IptvPlayer — shared playback engine (IPTV Live/VOD/Series + local media).
+ *
+ * Migrated from IptvPlayer.module.css (the tree's lone CSS module) to the
+ * repo-wide convention: a plain component stylesheet with BEM-ish
+ * `iptv-player__*` class names, imported for side effects. Values are
+ * unchanged from the module.
+ *
+ * Recorded debt (matches the DESIGN.md note on the iptv-conn-* rules): these
+ * rules still carry raw hex values instead of the OKLCH tokens; converting is
+ * a visual-tuning pass, not part of this structural migration.
+ */
+
+.iptv-player {
+  width: min(100%, 960px);
+  color: #f5f5f5;
+}
+
+.iptv-player__video {
+  display: block;
+  width: 100%;
+  max-height: 72vh;
+  background: #000;
+}
+
+.iptv-player__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .75rem;
+  align-items: center;
+  margin-top: .75rem;
+}
+
+.iptv-player__selector {
+  display: flex;
+  gap: .35rem;
+  align-items: center;
+  font-size: .9rem;
+}
+
+.iptv-player__selector select {
+  color: #f5f5f5;
+  background: #171717;
+  border: 1px solid rgba(255, 255, 255, .28);
+  border-radius: 4px;
+  padding: .35rem .5rem;
+}
+
+.iptv-player__error {
+  margin-top: .75rem;
+  color: #ffb4ab;
+}
