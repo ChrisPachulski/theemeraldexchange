@@ -4,11 +4,13 @@
 //! swallowed) so a misconfigured key or rate-limit is visible, then converted
 //! to `None` at the public `match_*` boundary.
 //!
-//! Uses `https://api.themoviedb.org/3/search/{movie,tv}` with the `api_key`
-//! query param for the title hit, then `/{movie,tv}/{id}/external_ids` to fill
-//! `imdb_id`/`tvdb_id` (the search endpoints never return them), and
-//! `/tv/{id}/season/{s}/episode/{e}` for per-episode title/air_date. 5s timeout
-//! per request.
+//! Uses `https://api.themoviedb.org/3/search/{movie,tv}` for the title hit,
+//! then `/{movie,tv}/{id}/external_ids` to fill `imdb_id`/`tvdb_id` (the
+//! search endpoints never return them), and `/tv/{id}/season/{s}/episode/{e}`
+//! for per-episode title/air_date. One shared pooled client, 5s timeout per
+//! request. A v4 Read Access Token (JWT) is sent as `Authorization: Bearer`;
+//! a classic v3 key rides the `api_key` query param, and all logged reqwest
+//! errors are URL-stripped so the key never leaks into logs either way.
 
 use std::time::Duration;
 
@@ -44,6 +46,10 @@ pub struct TmdbEpisode {
 #[derive(Clone)]
 pub struct TmdbClient {
     pub api_key: Option<String>,
+    /// One pooled HTTP client for the whole process (reqwest::Client is an Arc
+    /// internally, cheap to clone). Building a fresh client per call defeated
+    /// connection reuse and re-initialized TLS state on every TMDB hit.
+    client: reqwest::Client,
 }
 
 const SEARCH_MOVIE_URL: &str = "https://api.themoviedb.org/3/search/movie";
@@ -227,14 +233,42 @@ fn parse_episode_response(doc: &serde_json::Value) -> Option<TmdbEpisode> {
     Some(TmdbEpisode { title, air_date })
 }
 
+/// `true` when the configured credential is a TMDB v4 Read Access Token (a
+/// JWT, always `eyJ…`) rather than a classic v3 key. v4 tokens ride the
+/// `Authorization: Bearer` header — never the URL — so they cannot leak via
+/// logged request errors. v3 keys are NOT accepted as Bearer by TMDB, so they
+/// must stay on the `api_key` query param; for those, every logged reqwest
+/// error is stripped of its URL (`without_url`) instead.
+fn is_v4_token(key: &str) -> bool {
+    key.starts_with("eyJ")
+}
+
 impl TmdbClient {
     pub fn new(api_key: Option<String>) -> Self {
-        Self { api_key }
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            // Builder failure here means TLS init failed; the default client
+            // keeps the scanner functional (requests will surface errors).
+            .unwrap_or_default();
+        Self { api_key, client }
+    }
+
+    /// A GET on `url` carrying the TMDB credential: Bearer header for a v4
+    /// token, `api_key` query param for a v3 key (see [`is_v4_token`]).
+    fn authed_get(&self, url: &str, key: &str) -> reqwest::RequestBuilder {
+        let rb = self.client.get(url);
+        if is_v4_token(key) {
+            rb.bearer_auth(key)
+        } else {
+            rb.query(&[("api_key", key)])
+        }
     }
 
     /// Run a search request, returning a typed error so callers can log the
     /// specific failure mode. `Ok(None)` means "no match"; `Err` means a real
-    /// transport/parse failure.
+    /// transport/parse failure. Error strings are URL-free (`without_url`) so
+    /// a v3 `api_key` query param can never leak into logs.
     async fn search(
         &self,
         url: &str,
@@ -247,15 +281,7 @@ impl TmdbClient {
             None => return Ok(None),
         };
 
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(5))
-            .build()
-            .map_err(|e| format!("build client: {e}"))?;
-
-        let mut query: Vec<(&str, String)> = vec![
-            ("api_key", api_key.to_string()),
-            ("query", title.to_string()),
-        ];
+        let mut query: Vec<(&str, String)> = vec![("query", title.to_string())];
         if let Some(y) = year {
             let key = if is_movie {
                 "year"
@@ -265,12 +291,12 @@ impl TmdbClient {
             query.push((key, y.to_string()));
         }
 
-        let resp = client
-            .get(url)
+        let resp = self
+            .authed_get(url, api_key)
             .query(&query)
             .send()
             .await
-            .map_err(|e| format!("send: {e}"))?;
+            .map_err(|e| format!("send: {}", e.without_url()))?;
         // Honour a single Retry-After back-off on 429 before surfacing failure.
         let resp = if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
             let wait = retry_after_duration(resp.headers());
@@ -279,12 +305,11 @@ impl TmdbClient {
                 "search rate-limited (429), retrying in {:?}", wait
             );
             tokio::time::sleep(wait).await;
-            client
-                .get(url)
+            self.authed_get(url, api_key)
                 .query(&query)
                 .send()
                 .await
-                .map_err(|e| format!("retry send: {e}"))?
+                .map_err(|e| format!("retry send: {}", e.without_url()))?
         } else {
             resp
         };
@@ -294,7 +319,7 @@ impl TmdbClient {
         let doc = resp
             .json::<serde_json::Value>()
             .await
-            .map_err(|e| format!("json: {e}"))?;
+            .map_err(|e| format!("json: {}", e.without_url()))?;
         Ok(parse_search_response(&doc, is_movie, title))
     }
 
@@ -306,21 +331,15 @@ impl TmdbClient {
             Some(k) => k,
             None => return ExternalIds::default(),
         };
-        let client = match reqwest::Client::builder()
-            .timeout(Duration::from_secs(5))
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(target: "media_core::tmdb", "external_ids build client: {e}");
-                return ExternalIds::default();
-            }
-        };
         let url = format!("{API_BASE}/{kind}/{id}/external_ids");
-        let resp = match client.get(&url).query(&[("api_key", api_key)]).send().await {
+        let resp = match self.authed_get(&url, api_key).send().await {
             Ok(r) => r,
             Err(e) => {
-                tracing::warn!(target: "media_core::tmdb", "external_ids send failed: {e}");
+                tracing::warn!(
+                    target: "media_core::tmdb",
+                    "external_ids send failed: {}",
+                    e.without_url()
+                );
                 return ExternalIds::default();
             }
         };
@@ -335,7 +354,11 @@ impl TmdbClient {
         match resp.json::<serde_json::Value>().await {
             Ok(doc) => parse_external_ids(&doc),
             Err(e) => {
-                tracing::warn!(target: "media_core::tmdb", "external_ids json failed: {e}");
+                tracing::warn!(
+                    target: "media_core::tmdb",
+                    "external_ids json failed: {}",
+                    e.without_url()
+                );
                 ExternalIds::default()
             }
         }
@@ -351,19 +374,16 @@ impl TmdbClient {
         episode: i64,
     ) -> Option<TmdbEpisode> {
         let api_key = self.api_key.as_deref()?;
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(5))
-            .build()
-            .map_err(|e| {
-                tracing::warn!(target: "media_core::tmdb", "episode build client: {e}");
-            })
-            .ok()?;
         let url = format!("{API_BASE}/tv/{show_tmdb_id}/season/{season}/episode/{episode}");
-        let send = || async { client.get(&url).query(&[("api_key", api_key)]).send().await };
+        let send = || async { self.authed_get(&url, api_key).send().await };
         let resp = match send().await {
             Ok(r) => r,
             Err(e) => {
-                tracing::warn!(target: "media_core::tmdb", "episode send failed: {e}");
+                tracing::warn!(
+                    target: "media_core::tmdb",
+                    "episode send failed: {}",
+                    e.without_url()
+                );
                 return None;
             }
         };
@@ -379,7 +399,11 @@ impl TmdbClient {
             match send().await {
                 Ok(r) => r,
                 Err(e) => {
-                    tracing::warn!(target: "media_core::tmdb", "episode retry send failed: {e}");
+                    tracing::warn!(
+                        target: "media_core::tmdb",
+                        "episode retry send failed: {}",
+                        e.without_url()
+                    );
                     return None;
                 }
             }
@@ -397,7 +421,11 @@ impl TmdbClient {
         match resp.json::<serde_json::Value>().await {
             Ok(doc) => parse_episode_response(&doc),
             Err(e) => {
-                tracing::warn!(target: "media_core::tmdb", "episode json failed: {e}");
+                tracing::warn!(
+                    target: "media_core::tmdb",
+                    "episode json failed: {}",
+                    e.without_url()
+                );
                 None
             }
         }
@@ -618,6 +646,42 @@ mod tests {
         });
         let m = parse_search_response(&doc, true, "   ").expect("expected a match");
         assert_eq!(m.tmdb_id, 5);
+    }
+
+    #[test]
+    fn v4_token_rides_authorization_header_not_url() {
+        // A v4 Read Access Token (JWT) must NEVER appear in the URL — reqwest
+        // errors Display the URL (incl. query) and get logged verbatim.
+        let token = "eyJhbGciOiJIUzI1NiJ9.fake.token";
+        let c = TmdbClient::new(Some(token.into()));
+        let req = c
+            .authed_get(SEARCH_MOVIE_URL, token)
+            .query(&[("query", "Heat")])
+            .build()
+            .unwrap();
+        assert!(
+            !req.url().as_str().contains("eyJ"),
+            "token leaked into URL: {}",
+            req.url()
+        );
+        let auth = req
+            .headers()
+            .get("authorization")
+            .expect("Bearer header must be set")
+            .to_str()
+            .unwrap();
+        assert_eq!(auth, format!("Bearer {token}"));
+    }
+
+    #[test]
+    fn v3_key_rides_query_param_without_bearer() {
+        // TMDB does not accept v3 keys as Bearer, so a classic key keeps the
+        // api_key query param (log redaction handles the leak vector instead).
+        let key = "0123456789abcdef0123456789abcdef";
+        let c = TmdbClient::new(Some(key.into()));
+        let req = c.authed_get(SEARCH_MOVIE_URL, key).build().unwrap();
+        assert!(req.url().query().unwrap().contains("api_key="));
+        assert!(req.headers().get("authorization").is_none());
     }
 
     #[test]

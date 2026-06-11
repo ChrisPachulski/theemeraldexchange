@@ -117,10 +117,12 @@ async fn version(State(state): State<AppState>) -> impl IntoResponse {
     }))
 }
 
+/// List-endpoint query params. Every field here is evaluated — do not add
+/// accepted-but-ignored params (a `genre` filter was once deserialized and
+/// silently dropped; nothing in server/ or the SPA ever sent it).
 #[derive(Debug, Deserialize)]
 pub struct ListQuery {
     pub q: Option<String>,
-    pub genre: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
@@ -420,30 +422,39 @@ async fn play_grant(
 /// poisoned scan could persist a path containing `..` or a symlink escaping the
 /// library; we must never serve such a file. Canonicalizes both sides so `..`
 /// and symlinks are resolved before the prefix check. With no roots configured
-/// (dev/tests), containment is skipped.
-fn path_within_roots(path: &std::path::Path, roots: &[crate::config::LibraryRoot]) -> bool {
+/// (dev/tests), containment is skipped. Uses `tokio::fs` so the canonicalize
+/// syscalls (blocking FS I/O, possibly against a stalled mount) run off the
+/// async runtime instead of pinning a request worker.
+async fn path_within_roots(path: &std::path::Path, roots: &[crate::config::LibraryRoot]) -> bool {
     if roots.is_empty() {
         return true;
     }
-    let Ok(canon) = std::fs::canonicalize(path) else {
+    let Ok(canon) = tokio::fs::canonicalize(path).await else {
         return false;
     };
-    roots.iter().any(|r| {
-        std::fs::canonicalize(&r.path)
-            .map(|root| canon.starts_with(&root))
-            .unwrap_or(false)
-    })
+    for r in roots {
+        if let Ok(root) = tokio::fs::canonicalize(&r.path).await
+            && canon.starts_with(&root)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Optional client capabilities advertised on the stream request as query
 /// params, so a GET can carry the same direct-play contract that `play_grant`
-/// computes from a JSON body. All fields are optional; absent caps mean "no
-/// constraints advertised" and the file streams directly (back-compat).
+/// computes from a JSON body — including `max_bitrate` (bits/second). All
+/// fields are optional; absent caps mean "no constraints advertised" and the
+/// file streams directly (back-compat). Audio caps are intentionally absent:
+/// `ClientCaps` carries no `audio_codecs` set yet, so `decide()` applies a
+/// fixed browser-safe AAC baseline (see capability.rs TODO(M4+)).
 #[derive(Debug, Deserialize, Default)]
 struct StreamCapsQuery {
     containers: Option<String>,
     video_codecs: Option<String>,
     max_height: Option<i64>,
+    max_bitrate: Option<i64>,
     #[serde(default)]
     hdr: bool,
     #[serde(default)]
@@ -456,6 +467,7 @@ impl StreamCapsQuery {
         self.containers.is_some()
             || self.video_codecs.is_some()
             || self.max_height.is_some()
+            || self.max_bitrate.is_some()
             || self.hdr
     }
 
@@ -476,7 +488,7 @@ impl StreamCapsQuery {
             video_codecs: split(&self.video_codecs),
             max_height: self.max_height,
             hdr: self.hdr,
-            max_bitrate: None,
+            max_bitrate: self.max_bitrate,
         }
     }
 }
@@ -659,7 +671,9 @@ async fn stream_file(
     if !path_within_roots(
         std::path::Path::new(&file.path),
         &state.config.library_roots,
-    ) {
+    )
+    .await
+    {
         tracing::warn!(path = %file.path, "refusing to stream file outside library roots");
         return Err(AppError::NotFound);
     }
@@ -819,23 +833,6 @@ async fn media_exists(
     Ok(Some(found.is_some()))
 }
 
-/// Remove watch-state rows whose `(media_kind, media_id)` no longer resolves to
-/// an existing movie/episode (orphans left by title deletion, or pre-existing
-/// forged rows). Returns the number of rows removed. Safe to call periodically
-/// or after a scan. Movie/episode deletes cannot cascade here because the
-/// relationship is polymorphic (§7-8), so this GC is how orphans are reaped.
-pub async fn gc_orphan_watch_state(state: &AppState) -> Result<u64, sqlx::Error> {
-    let res = sqlx::query(
-        "DELETE FROM media_watch_state \
-         WHERE (media_kind = 'movie'   AND media_id NOT IN (SELECT id FROM movies)) \
-            OR (media_kind = 'episode' AND media_id NOT IN (SELECT id FROM episodes)) \
-            OR media_kind NOT IN ('movie', 'episode')",
-    )
-    .execute(&state.db.pool)
-    .await?;
-    Ok(res.rows_affected())
-}
-
 async fn post_watch(
     State(state): State<AppState>,
     claims: Option<Extension<InternalClaims>>,
@@ -979,7 +976,15 @@ async fn trigger_scan(
 
     let bg = state.clone();
     tokio::spawn(async move {
-        let result = scanner::scan_once(&bg.db, &bg.config.library_roots, &bg.tmdb).await;
+        // scan_once_isolated contains a panic in the scan pass as an Err, so
+        // the state/flag resets below always run — otherwise one bad file
+        // would leave `scanning` true and 409 every future POST /scan.
+        let result = scanner::scan_once_isolated(
+            bg.db.clone(),
+            bg.config.library_roots.clone(),
+            bg.tmdb.clone(),
+        )
+        .await;
         match result {
             Ok(report) => {
                 let json = serde_json::to_string(&report).unwrap_or_else(|_| "{}".into());
@@ -1396,7 +1401,7 @@ mod tests {
             .unwrap();
         assert_eq!(before, 2);
 
-        let removed = gc_orphan_watch_state(&state).await.unwrap();
+        let removed = crate::scanner::gc_orphan_watch_state(&state.db).await.unwrap();
         assert_eq!(removed, 1, "exactly the orphan row is reaped");
         let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM media_watch_state")
             .fetch_one(&state.db.pool)
@@ -1425,7 +1430,6 @@ mod tests {
                 State(state.clone()),
                 Query(ListQuery {
                     q: Some(term.to_string()),
-                    genre: None,
                     limit: None,
                     offset: None,
                 }),
@@ -1604,6 +1608,44 @@ mod tests {
                 HttpRequest::builder()
                     .uri(format!(
                         "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn stream_refuses_when_bitrate_exceeds_client_max() {
+        // The GET stream path must honor ?max_bitrate just like the JSON grant
+        // body — previously the param could not be expressed and the cap was
+        // silently ignored. 9GB/3600s ≈ 20 Mbps > a 10 Mbps client cap → 503.
+        let state = test_state().await;
+        sqlx::query(
+            "INSERT INTO media_files \
+             (path, size_bytes, mtime, container, duration_secs, video_codec, video_height, \
+             video_profile, hdr_format, audio_tracks_json, subtitle_tracks_json, scanned_at) \
+             VALUES (?, 9000000000, 't', 'mp4', 3600, 'h264', 1080, NULL, NULL, '[]', '[]', 't')",
+        )
+        .bind("/lib/huge.mp4")
+        .execute(&state.db.pool)
+        .await
+        .unwrap();
+        let file_id: i64 = sqlx::query_scalar("SELECT id FROM media_files WHERE path = ?")
+            .bind("/lib/huge.mp4")
+            .fetch_one(&state.db.pool)
+            .await
+            .unwrap();
+        let movie_id = seed_movie_for_file(&state, file_id).await;
+
+        let app = crate::build_router(state);
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!(
+                        "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=h264&max_bitrate=10000000"
                     ))
                     .body(Body::empty())
                     .unwrap(),
