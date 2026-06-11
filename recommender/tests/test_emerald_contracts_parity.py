@@ -6,22 +6,38 @@ If this file fails, the recommender is producing different bytes than
 Hono — which means M3 will silently break when Hono mints an
 internal-principal that Python can't decode.
 
-Skipped automatically when the ``emerald_contracts`` module isn't
-installed (e.g., dev machine without maturin). CI installs it via
-``maturin develop --release`` in the dedicated job.
+Binding-availability policy (mirrors ``app/sub_validation.py``):
+when ``EEX_REQUIRE_BINDING=1`` (CI + prod image) a missing
+``emerald_contracts`` module is a HARD collection failure — a
+green-skip here would let CI pass while enforcing none of the
+cross-language byte-equality assertions. Without the flag (local dev
+machine without maturin) the module skips as before.
 """
 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 
-emerald_contracts = pytest.importorskip(
-    "emerald_contracts",
-    reason="run `maturin develop --release` in crates/emerald-contracts-pyo3 first",
-)
+try:
+    import emerald_contracts
+except ImportError as exc:
+    if os.environ.get("EEX_REQUIRE_BINDING") == "1":
+        raise RuntimeError(
+            "EEX_REQUIRE_BINDING=1 but the emerald_contracts PyO3 binding failed "
+            "to import — the cross-language parity suite must run, not skip. "
+            "Build it via `maturin develop --release` in "
+            f"crates/emerald-contracts-pyo3. Original import error: {exc}"
+        ) from exc
+    pytest.skip(
+        "emerald_contracts not installed — run `maturin develop --release` in "
+        "crates/emerald-contracts-pyo3 first (set EEX_REQUIRE_BINDING=1 to make "
+        "this a hard failure, as CI does)",
+        allow_module_level=True,
+    )
 
 VECTOR_DIR = Path(__file__).resolve().parents[2] / "tests" / "vectors"
 
