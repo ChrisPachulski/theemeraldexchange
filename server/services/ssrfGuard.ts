@@ -133,10 +133,25 @@ function isPrivateAddress(address: string): boolean {
  * RFC-1918 is refused before we connect.
  *
  * Throws `SsrfBlockedError` on any private address or resolution failure.
- * The resolve happens immediately before egress to minimise the TOCTOU
- * window. (Full IP pinning would require an undici connect hook; undici is
- * not a dependency here, so we accept the residual sub-second rebind window
- * and instead re-validate on every redirect — the dominant exploit path.)
+ *
+ * ACCEPTED RESIDUAL RISK — DNS-rebind TOCTOU: this check resolves the name,
+ * then `fetch()` resolves it AGAIN to connect, so an attacker who controls
+ * the authoritative nameserver can answer public here and private (e.g.
+ * 169.254.169.254) on the connect-time lookup. Closing it fully requires
+ * pinning the connection to the validated IP via an undici Agent connect
+ * hook; undici is not a direct dependency and the platform-fetch dispatcher
+ * is not exposed here, so we deliberately do NOT attempt that rewrite.
+ * Mitigations that bound the residual risk:
+ *   - the resolve happens immediately before egress, so the attacker must
+ *     win a sub-second race against the OS resolver cache with a TTL-0
+ *     record (most resolvers clamp TTL 0 upward);
+ *   - every redirect hop — the dominant, race-free exploit path — is
+ *     re-validated by `egress()` before it is followed;
+ *   - internal services (recommender, media-core, transcoder) additionally
+ *     require internal-principal auth, so a rebound request that does land
+ *     inside the compose network hits an authenticated surface, not an
+ *     open one. The highest-value unauth'd target is cloud metadata, which
+ *     does not exist on this self-hosted NAS deployment.
  */
 export async function assertResolvesPublic(host: string): Promise<void> {
   // An IP literal needs no DNS round-trip; validate it directly.
