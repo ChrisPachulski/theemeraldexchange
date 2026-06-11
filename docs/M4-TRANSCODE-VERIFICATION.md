@@ -1,6 +1,6 @@
 # M4 Transcoder — Verification Status & Real-ffmpeg Gate
 
-**Status label (authoritative): the deployed transcoder is now PROVEN (2026-06-07) to transcode a real non-direct-play library file and serve `ffprobe`-validated, decodable H.264/AAC HLS end-to-end over its authenticated surface — see the proof section below. This is NOT yet "played in a real client": the proof exercises manifest+segment serving + `ffprobe` validation of the output bytes, not a web/native player consuming the stream (no such client path exists yet — that is the remaining M5 step). Two real deployment bugs were found; one is fixed, the other is a host share-permission issue outside the transcoder.**
+**Status label (authoritative): the deployed transcoder is now PROVEN (2026-06-07) to transcode a real non-direct-play library file and serve `ffprobe`-validated, decodable H.264/AAC HLS end-to-end over its authenticated surface — see the proof section below. SUPERSEDED 2026-06-08: the "real client" step has since shipped and been proven — the web SPA consumes this path via `src/lib/api/media.ts` + `MediaPlayer`, verified in real Chrome over the public Cloudflare path (see ROADMAP-STATUS.md). The host share-permission issue (`/media/Movies` 0700) is also fixed (0755). This document remains as the M4 server-side proof record.**
 
 Do not read the green default `cargo test -p transcoder` run as "deployed playback works."
 
