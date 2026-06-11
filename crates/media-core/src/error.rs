@@ -13,6 +13,13 @@ pub enum AppError {
     BadRequest(String),
     #[error("transcoder required")]
     TranscoderRequired,
+    /// All direct-play stream slots are in use (§7-2 concurrency cap). Kept
+    /// distinct from [`AppError::TranscoderRequired`] so clients/ops can tell
+    /// "back off and retry, the server is at capacity" from "this file needs
+    /// an offline transcoder" — both are 503, but conflating them made a
+    /// busy server look like an M4 outage.
+    #[error("stream_slots_exhausted")]
+    StreamSlotsExhausted,
     #[error(transparent)]
     Db(#[from] sqlx::Error),
     #[error("{0}")]
@@ -30,6 +37,14 @@ impl IntoResponse for AppError {
             AppError::TranscoderRequired => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "transcoder required (M4 offline)".to_string(),
+            ),
+            // Distinct machine-readable code (verified unmatched by the Hono
+            // proxy/SPA, which pass 503 bodies through opaquely) so capacity
+            // exhaustion is distinguishable from a transcoder outage in logs
+            // and client error handling.
+            AppError::StreamSlotsExhausted => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "stream_slots_exhausted".to_string(),
             ),
             AppError::Db(e) => {
                 tracing::error!("db error: {e}");
