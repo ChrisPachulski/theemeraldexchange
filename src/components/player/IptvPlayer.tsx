@@ -152,6 +152,25 @@ export function applySubtitleTrack(
   return trackId
 }
 
+// ── HLS engine selection ─────────────────────────────────────────────
+//
+// Which engine plays an HLS grant: hls.js (MSE) or the browser's native
+// <video> HLS. MSE wins whenever it is available. Native HLS is a fallback
+// ONLY for engines without MSE (iOS Safari) — desktop Chrome reports
+// canPlayType('application/vnd.apple.mpegurl') === 'maybe' yet cannot actually
+// play HLS in a <video>, so trusting canPlayType first silently routes Chrome
+// to a dead native path (video.src = .m3u8 → MEDIA_ERR_SRC_NOT_SUPPORTED, a
+// blank player frozen at 0:00). Regression: a Chrome update flipped that MIME
+// from '' to 'maybe', breaking all transcoded playback until this went
+// MSE-first.
+export type HlsEngine = 'mse' | 'native' | 'unsupported'
+
+export function selectHlsEngine(mseSupported: boolean, nativeHlsCanPlay: string): HlsEngine {
+  if (mseSupported) return 'mse'
+  if (nativeHlsCanPlay) return 'native' // 'maybe' | 'probably' — any non-empty string
+  return 'unsupported'
+}
+
 // ── Fatal hls.js error recovery ──────────────────────────────────────
 //
 // hls.js fatal errors fall into three classes with different recovery
@@ -323,19 +342,21 @@ export default function IptvPlayer({
       }
 
       if (grant.delivery === 'hls') {
-        if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        const Hls = (await import('hls.js')).default
+        if (cancelled) return
+
+        const engine = selectHlsEngine(Hls.isSupported(), video.canPlayType('application/vnd.apple.mpegurl'))
+        if (engine === 'native') {
           video.src = grant.url
           updateNativeTracks()
           if (autoPlay) safePlay(video)
           return
         }
-
-        const Hls = (await import('hls.js')).default
-        if (cancelled) return
-        if (!Hls.isSupported()) {
+        if (engine === 'unsupported') {
           setError('HLS playback is not supported in this browser.')
           return
         }
+        // engine === 'mse' — drive the <video> through hls.js below.
 
         // Live HLS (the remux path) over the same proxy → cloudflared →
         // edge transport as mpegts. Default hls.js sits near the live edge
