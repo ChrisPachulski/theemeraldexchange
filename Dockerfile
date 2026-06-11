@@ -127,6 +127,14 @@ RUN mkdir -p /app/data
 ENV NODE_ENV=production
 ENV PORT=3001
 
+# Build identifier surfaced by /api/version (env.ts EEX_RELEASE, default
+# 'dev'). scripts/deploy-nas.sh passes the short sha of the archived HEAD via
+# docker-compose.yml's build args, so the deployed API self-reports the exact
+# commit it was built from — that's the deployed-vs-HEAD drift detection.
+# Declared AFTER the heavy npm ci layer so a sha change never busts its cache.
+ARG EEX_RELEASE=dev
+ENV EEX_RELEASE=$EEX_RELEASE
+
 EXPOSE 3001
 
 CMD ["npm", "start"]

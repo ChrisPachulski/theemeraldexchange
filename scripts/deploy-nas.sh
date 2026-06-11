@@ -10,17 +10,30 @@
 #                                   → Sonarr / Radarr / SAB on the LAN
 #
 # What this script does:
-#   1. Validates a local .env.production exists with all required keys.
-#   2. Rsyncs Dockerfile, docker-compose.yml, package*.json, tsconfig.json,
-#      and the server/ source tree to /mnt/user/appdata/exchange-backend/
-#      on the NAS.
-#   3. Ships .env.production → NAS as .env (consumed by docker compose).
-#   4. SSHs into the NAS and runs `docker compose up -d --build`.
+#   1. Refuses to run with uncommitted tracked changes (--allow-dirty to
+#      override — the payload is ALWAYS `git archive HEAD`, so dirty edits
+#      would silently not ship).
+#   2. Validates a local .env.production exists with all required keys.
+#   3. Stages a clean payload from `git archive HEAD` into a temp dir and
+#      rsyncs Dockerfile, docker-compose.yml, package*.json, tsconfig.json,
+#      server/, recommender/, crates/ FROM THAT STAGE — never the working
+#      tree — to /mnt/user/appdata/exchange-backend/ on the NAS.
+#   4. Ships .env.production → NAS as .env (consumed by docker compose).
+#   5. Tags every currently-deployed image as :rollback, then SSHs into the
+#      NAS and runs `docker compose up -d --build` with
+#      EEX_RELEASE=<short sha of HEAD> so /api/version reports the deployed
+#      commit (drift detection).
+#   6. Health-gates backend + recommender + media-core + transcoder; on
+#      failure rolls back to the :rollback images and prints the manual
+#      rollback commands for every image.
 #
 # What this script does NOT do:
 #   - Build the SPA. That's Netlify's job, triggered by `git push`.
-#   - Touch the V1 nginx-static container. Tear that down separately
-#     once you've verified V2 works (`docker rm -f exchange-dashboard`).
+#
+# Flags:
+#   --allow-dirty   Deploy even when tracked files have uncommitted changes.
+#                   LOUD WARNING: those changes are NOT shipped — the payload
+#                   is git archive HEAD. Commit first unless you know better.
 #
 # First-time setup: see DEPLOY.md.
 
@@ -30,6 +43,60 @@ NAS_HOST="${NAS_HOST:-theemeraldexchange.local}"
 NAS_USER="${NAS_USER:-root}"
 APPDATA="${APPDATA:-/mnt/user/appdata/exchange-backend}"
 LOCAL_ENV="${LOCAL_ENV:-.env.production}"
+
+ALLOW_DIRTY=0
+for arg in "$@"; do
+  case "$arg" in
+    --allow-dirty) ALLOW_DIRTY=1 ;;
+    -h|--help)
+      sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *)
+      echo "ERROR: unknown argument: $arg (supported: --allow-dirty, --help)" >&2
+      exit 1
+      ;;
+  esac
+done
+
+# ── Source-of-truth guard ────────────────────────────────────────────────────
+# The payload is built from `git archive HEAD`, never the working tree, so an
+# uncommitted edit would silently NOT ship. Refuse to run on a dirty tree
+# (tracked files only — untracked scratch is fine) unless explicitly waived.
+if ! git rev-parse --verify HEAD >/dev/null 2>&1; then
+  echo "ERROR: not inside a git repository (the deploy payload is git archive HEAD)." >&2
+  exit 1
+fi
+dirty=$(git status --porcelain --untracked-files=no)
+if [[ -n "$dirty" ]]; then
+  if [[ "$ALLOW_DIRTY" == "1" ]]; then
+    echo "╔════════════════════════════════════════════════════════════════════╗" >&2
+    echo "║ WARNING: deploying with UNCOMMITTED tracked changes (--allow-dirty) ║" >&2
+    echo "║ The payload is git archive HEAD — these changes will NOT ship:      ║" >&2
+    echo "╚════════════════════════════════════════════════════════════════════╝" >&2
+    printf '%s\n' "$dirty" >&2
+  else
+    echo "ERROR: tracked files have uncommitted changes — the deploy payload is" >&2
+    echo "       git archive HEAD, so these edits would silently not ship:" >&2
+    printf '%s\n' "$dirty" >&2
+    echo "       Commit them first, or re-run with --allow-dirty to deploy HEAD anyway." >&2
+    exit 1
+  fi
+fi
+
+DEPLOY_SHA=$(git rev-parse HEAD)
+DEPLOY_SHA_SHORT=$(git rev-parse --short HEAD)
+
+# Ad-hoc branch deploys are legitimate (hotfix soaks), but flag the drift so a
+# stale local main or a forgotten feature branch never ships silently.
+if git rev-parse --verify origin/main >/dev/null 2>&1; then
+  if [[ "$DEPLOY_SHA" != "$(git rev-parse origin/main)" ]]; then
+    echo "[deploy] WARN: HEAD ($DEPLOY_SHA_SHORT) != origin/main ($(git rev-parse --short origin/main))." >&2
+    echo "         Deploying HEAD anyway — make sure that's intentional." >&2
+  fi
+else
+  echo "[deploy] WARN: origin/main not found locally; skipping branch-drift check." >&2
+fi
 
 if [[ ! -f "$LOCAL_ENV" ]]; then
   echo "ERROR: $LOCAL_ENV not found at $(pwd)/$LOCAL_ENV" >&2
@@ -130,19 +197,30 @@ else
   exit 1
 fi
 
+# ── Stage the payload from the committed tree, never the working tree ──────
+# `git archive HEAD` materializes exactly what is committed: no uncommitted
+# edits, no untracked scratch, no node_modules/target/.venv — so the rsyncs
+# below ship a reproducible payload identified by $DEPLOY_SHA.
+STAGE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/eex-deploy-stage.XXXXXX")
+cleanup_stage() { rm -rf "$STAGE_DIR"; }
+trap cleanup_stage EXIT
+echo "→ Staging payload from git archive ${DEPLOY_SHA_SHORT} (${STAGE_DIR})"
+git archive HEAD | tar -x -C "$STAGE_DIR"
+
 echo "→ Ensuring ${APPDATA} exists on ${NAS_HOST}"
 ssh "${NAS_USER}@${NAS_HOST}" "mkdir -p ${APPDATA}"
 
-echo "→ Syncing build context"
+echo "→ Syncing build context (from stage, commit ${DEPLOY_SHA_SHORT})"
 rsync -av \
-  Dockerfile docker-compose.yml .dockerignore package.json package-lock.json tsconfig.json \
+  "${STAGE_DIR}/Dockerfile" "${STAGE_DIR}/docker-compose.yml" "${STAGE_DIR}/.dockerignore" \
+  "${STAGE_DIR}/package.json" "${STAGE_DIR}/package-lock.json" "${STAGE_DIR}/tsconfig.json" \
   "${NAS_USER}@${NAS_HOST}:${APPDATA}/"
 
 echo "→ Syncing server/"
 rsync -av --delete \
   --exclude '*.test.ts' \
   --exclude 'middleware/*.test.ts' \
-  server/ "${NAS_USER}@${NAS_HOST}:${APPDATA}/server/"
+  "${STAGE_DIR}/server/" "${NAS_USER}@${NAS_HOST}:${APPDATA}/server/"
 
 echo "→ Syncing recommender/"
 rsync -av --delete \
@@ -153,7 +231,7 @@ rsync -av --delete \
   --exclude '.ruff_cache' \
   --exclude '.pytest_cache' \
   --exclude 'eval/holdout.jsonl' \
-  recommender/ "${NAS_USER}@${NAS_HOST}:${APPDATA}/recommender/"
+  "${STAGE_DIR}/recommender/" "${NAS_USER}@${NAS_HOST}:${APPDATA}/recommender/"
 
 # crates/ feeds two multi-stage image builds:
 #   - recommender/Dockerfile compiles the PyO3 wheel from
@@ -174,13 +252,14 @@ rsync -av --delete \
   --exclude '__pycache__' \
   --exclude '*.pyc' \
   --exclude '*.node' \
-  crates/ "${NAS_USER}@${NAS_HOST}:${APPDATA}/crates/"
+  "${STAGE_DIR}/crates/" "${NAS_USER}@${NAS_HOST}:${APPDATA}/crates/"
 
 # Cargo.toml + Cargo.lock + LICENSE live at the repo root and are
 # required for `cargo build` inside the rust-builder stage. The earlier
 # rsync block ships Dockerfile/compose/package*.json but not these.
 echo "→ Syncing Cargo workspace manifest"
-rsync -av Cargo.toml Cargo.lock LICENSE "${NAS_USER}@${NAS_HOST}:${APPDATA}/"
+rsync -av "${STAGE_DIR}/Cargo.toml" "${STAGE_DIR}/Cargo.lock" "${STAGE_DIR}/LICENSE" \
+  "${NAS_USER}@${NAS_HOST}:${APPDATA}/"
 
 echo "→ Shipping env"
 rsync -av "$LOCAL_ENV" "${NAS_USER}@${NAS_HOST}:${APPDATA}/.env"
@@ -202,11 +281,19 @@ ssh "${NAS_USER}@${NAS_HOST}" "\
   chown -R 10001:10001 ${APPDATA}/recommender-db && \
   chown -R 10002:10002 ${APPDATA}/media-core-db"
 
-# Snapshot the currently-deployed backend image as :rollback BEFORE the build
+# Snapshot every currently-deployed image as :rollback BEFORE the build
 # overwrites :latest, so an unhealthy deploy can be reverted (see post-deploy
-# healthcheck below). Best-effort: the first-ever deploy has no prior image.
-echo "→ Tagging current backend image as :rollback (revert target)"
-ssh "${NAS_USER}@${NAS_HOST}" "docker image inspect theemeraldexchange-backend:latest >/dev/null 2>&1 && docker tag theemeraldexchange-backend:latest theemeraldexchange-backend:rollback || echo '[deploy] no prior backend image to tag (first deploy)'"
+# healthcheck below). Best-effort: the first-ever deploy has no prior images.
+echo "→ Tagging current images as :rollback (revert targets)"
+ssh "${NAS_USER}@${NAS_HOST}" '
+  for img in theemeraldexchange-backend theemeraldexchange-recommender theemeraldexchange-media-core theemeraldexchange-transcoder; do
+    if docker image inspect "$img:latest" >/dev/null 2>&1; then
+      docker tag "$img:latest" "$img:rollback"
+      echo "[deploy] tagged $img:rollback"
+    else
+      echo "[deploy] no prior $img image to tag (first deploy)"
+    fi
+  done'
 
 echo "→ Building and starting containers"
 # Unraid occasionally loses both docker compose forms (plugin + standalone)
@@ -221,7 +308,13 @@ echo "→ Building and starting containers"
 # USE_LOCAL_RECOMMENDER=1 to trending. When that env is set, refuse
 # to fall back: hard-fail so the operator installs docker compose
 # instead of shipping a broken-but-running deploy.
+# EEX_RELEASE is interpolated by docker-compose.yml into the backend image's
+# build args (Dockerfile ARG → ENV → env.ts → /api/version `release`), so the
+# deployed API self-reports the exact commit this script shipped — that's the
+# drift detection /api/version exists for. Exported in the remote shell so
+# compose interpolation sees it (the shipped .env deliberately doesn't pin it).
 ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && \
+  export EEX_RELEASE=${DEPLOY_SHA_SHORT} && \
   if docker compose version >/dev/null 2>&1; then \
     docker compose up -d --build; \
   elif command -v docker-compose >/dev/null 2>&1; then \
@@ -236,7 +329,7 @@ ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && \
   else \
     echo '[deploy] compose unavailable — rebuilding backend directly'; \
     echo '         (recommender disabled by env, so single-container is OK)'; \
-    docker build -t theemeraldexchange-backend:latest . && \
+    docker build --build-arg EEX_RELEASE=${DEPLOY_SHA_SHORT} -t theemeraldexchange-backend:latest . && \
     docker stop exchange-backend 2>/dev/null || true; \
     docker rm exchange-backend 2>/dev/null || true; \
     docker run -d \
@@ -273,22 +366,45 @@ ssh "${NAS_USER}@${NAS_HOST}" "docker restart exchange-cloudflared >/dev/null 2>
 # Glitchtip you need to mint the DSN from. Detect the unset DSN and, in that
 # window only, skip the rollback with guidance instead.
 telemetry_dsn="$(env_value EEX_TELEMETRY_DSN 2>/dev/null || true)"
-echo "→ Waiting for backend to report healthy (up to ~90s)"
+# Gate on the WHOLE service stack, not just the backend: recommender,
+# media-core and transcoder all carry docker healthchecks (compose +
+# image HEALTHCHECK), so a sidecar that crash-loops (bad migration,
+# missing INTERNAL_PRINCIPAL_SECRET, torch OOM) fails the deploy instead
+# of silently degrading suggestions/playback. The recommender's first
+# boot loads a sentence-transformer model (start_period 60s), hence the
+# generous ~150s ceiling. A MISSING sidecar is a warning, not a failure —
+# the direct-docker fallback path runs the backend alone by design.
+echo "→ Waiting for backend + sidecars to report healthy (up to ~150s)"
 set +e
 ssh "${NAS_USER}@${NAS_HOST}" '
-  last=unknown
-  for i in $(seq 1 30); do
-    s=$(docker inspect --format "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}" exchange-backend 2>/dev/null || echo missing)
-    last="$s"
-    if [ "$s" = "healthy" ]; then echo "[deploy] backend healthy"; exit 0; fi
-    if [ "$s" = "none" ]; then
-      # Direct-docker fallback container has no docker healthcheck — probe the port.
-      if curl -fsS http://127.0.0.1:3001/api/health >/dev/null 2>&1; then echo "[deploy] backend healthy (port probe)"; exit 0; fi
+  containers="exchange-backend exchange-recommender exchange-media-core exchange-transcoder"
+  summary=""
+  for i in $(seq 1 50); do
+    all_ok=1
+    summary=""
+    for c in $containers; do
+      s=$(docker inspect --format "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}" "$c" 2>/dev/null || echo missing)
+      if [ "$s" = "none" ] && [ "$c" = "exchange-backend" ]; then
+        # Direct-docker fallback container has no docker healthcheck — probe the port.
+        if curl -fsS http://127.0.0.1:3001/api/health >/dev/null 2>&1; then s="healthy(port-probe)"; fi
+      fi
+      summary="$summary $c=$s"
+      case "$s" in
+        healthy|"healthy(port-probe)") : ;;
+        missing)
+          if [ "$c" = "exchange-backend" ]; then echo "[deploy] exchange-backend container is missing"; exit 2; fi
+          ;; # missing sidecar: direct-docker fallback / partial stack — warn at the end
+        *) all_ok=0 ;;
+      esac
+    done
+    if [ "$all_ok" = "1" ]; then
+      echo "[deploy] stack healthy:$summary"
+      case "$summary" in *=missing*) echo "[deploy] WARN: some sidecars are missing (direct-docker fallback?):$summary" ;; esac
+      exit 0
     fi
-    if [ "$s" = "missing" ]; then echo "[deploy] exchange-backend container is missing"; exit 2; fi
     sleep 3
   done
-  echo "[deploy] backend never became healthy (last status: $last)"; exit 3
+  echo "[deploy] stack never became healthy:$summary"; exit 3
 '
 health_rc=$?
 set -e
@@ -300,18 +416,36 @@ if [ "$health_rc" -ne 0 ] && [ -z "$telemetry_dsn" ]; then
   echo "  set EEX_TELEMETRY_DSN in .env.production, then re-run this deploy — the" >&2
   echo "  next run health-gates the backend normally. Skipping rollback." >&2
 elif [ "$health_rc" -ne 0 ]; then
-  echo "✗ Backend unhealthy after deploy (rc=$health_rc) — rolling back to previous image" >&2
+  echo "✗ Stack unhealthy after deploy (rc=$health_rc) — rolling back to previous images" >&2
   ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && \
-    if docker image inspect theemeraldexchange-backend:rollback >/dev/null 2>&1; then \
-      docker tag theemeraldexchange-backend:rollback theemeraldexchange-backend:latest && \
-      ( docker compose up -d --no-build backend 2>/dev/null || docker compose up -d --no-build 2>/dev/null || true ) && \
+    rolled=0; \
+    for img in theemeraldexchange-backend theemeraldexchange-recommender theemeraldexchange-media-core theemeraldexchange-transcoder; do \
+      if docker image inspect \"\$img:rollback\" >/dev/null 2>&1; then \
+        docker tag \"\$img:rollback\" \"\$img:latest\"; \
+        echo \"[deploy] restored \$img:latest from :rollback\"; \
+        rolled=1; \
+      else \
+        echo \"[deploy] WARN: no \$img:rollback image to restore\" >&2; \
+      fi; \
+    done; \
+    if [ \"\$rolled\" = \"1\" ]; then \
+      ( docker compose up -d --no-build 2>/dev/null || docker-compose up -d --no-build 2>/dev/null || true ) && \
       docker restart exchange-cloudflared >/dev/null 2>&1 || true; \
-      echo '[deploy] rolled back to previous backend image'; \
+      echo '[deploy] rolled back to previous images'; \
     else \
-      echo '[deploy] FATAL: no :rollback image to restore — backend is down, manual intervention required' >&2; \
+      echo '[deploy] FATAL: no :rollback images to restore — stack is down, manual intervention required' >&2; \
     fi"
-  echo "✗ Deploy FAILED and was rolled back. Investigate before retrying:" >&2
+  echo "✗ Deploy of ${DEPLOY_SHA} FAILED and was rolled back. Investigate before retrying:" >&2
+  echo "    ssh ${NAS_USER}@${NAS_HOST} 'docker ps -a --format \"table {{.Names}}\\t{{.Status}}\"'" >&2
   echo "    ssh ${NAS_USER}@${NAS_HOST} 'docker logs --tail=80 exchange-backend'" >&2
+  echo "    ssh ${NAS_USER}@${NAS_HOST} 'docker logs --tail=80 exchange-recommender'" >&2
+  echo "    ssh ${NAS_USER}@${NAS_HOST} 'docker logs --tail=80 exchange-media-core'" >&2
+  echo "    ssh ${NAS_USER}@${NAS_HOST} 'docker logs --tail=80 exchange-transcoder'" >&2
+  echo "  Manual rollback (already attempted automatically), per image:" >&2
+  for img in theemeraldexchange-backend theemeraldexchange-recommender theemeraldexchange-media-core theemeraldexchange-transcoder; do
+    echo "    ssh ${NAS_USER}@${NAS_HOST} 'docker tag ${img}:rollback ${img}:latest'" >&2
+  done
+  echo "    ssh ${NAS_USER}@${NAS_HOST} 'cd ${APPDATA} && docker compose up -d --no-build && docker restart exchange-cloudflared'" >&2
   exit 1
 fi
 
@@ -319,5 +453,8 @@ echo "→ Reclaiming BuildKit cache + dangling images (the docker vdisk creeps ~
 ssh "${NAS_USER}@${NAS_HOST}" "docker builder prune -f >/dev/null 2>&1 || true; docker image prune -f >/dev/null 2>&1 || true"
 
 echo
-echo "✓ Deployed and verified healthy. Public endpoint:"
+echo "✓ Deployed commit ${DEPLOY_SHA} (release tag: ${DEPLOY_SHA_SHORT}) and verified healthy."
+echo "  Verify the deployed release matches:"
+echo "    curl -s https://api.theemeraldexchange.com/api/version | grep ${DEPLOY_SHA_SHORT}"
+echo "  Public health endpoint:"
 echo "    curl -s https://api.theemeraldexchange.com/api/health"
