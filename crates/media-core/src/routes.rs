@@ -979,7 +979,15 @@ async fn trigger_scan(
 
     let bg = state.clone();
     tokio::spawn(async move {
-        let result = scanner::scan_once(&bg.db, &bg.config.library_roots, &bg.tmdb).await;
+        // scan_once_isolated contains a panic in the scan pass as an Err, so
+        // the state/flag resets below always run — otherwise one bad file
+        // would leave `scanning` true and 409 every future POST /scan.
+        let result = scanner::scan_once_isolated(
+            bg.db.clone(),
+            bg.config.library_roots.clone(),
+            bg.tmdb.clone(),
+        )
+        .await;
         match result {
             Ok(report) => {
                 let json = serde_json::to_string(&report).unwrap_or_else(|_| "{}".into());

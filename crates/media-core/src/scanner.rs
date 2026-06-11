@@ -162,6 +162,32 @@ pub async fn scan_once(
     Ok(report)
 }
 
+/// Run [`scan_once`] on its own spawned task so a panic anywhere in the pass
+/// (e.g. a pathological filename) surfaces as an `Err` instead of unwinding
+/// the caller — the `scanning` guard in `run_guarded_scan`/`trigger_scan` then
+/// always resets rather than wedging every future scan behind a stale flag.
+pub async fn scan_once_isolated(
+    db: Db,
+    roots: Vec<LibraryRoot>,
+    tmdb: TmdbClient,
+) -> Result<ScanReport, AppError> {
+    join_scan(tokio::spawn(async move {
+        scan_once(&db, &roots, &tmdb).await
+    }))
+    .await
+}
+
+/// Map a scan task's `JoinError` (panic or cancellation) onto the normal
+/// error path so callers' cleanup always runs.
+async fn join_scan(
+    handle: tokio::task::JoinHandle<Result<ScanReport, AppError>>,
+) -> Result<ScanReport, AppError> {
+    match handle.await {
+        Ok(result) => result,
+        Err(e) => Err(AppError::Internal(format!("scan task panicked: {e}"))),
+    }
+}
+
 /// Read `(size_bytes, mtime_rfc3339)` from the filesystem.
 fn file_stat(path: &Path) -> Result<(i64, String), std::io::Error> {
     let meta = std::fs::metadata(path)?;
@@ -1245,6 +1271,21 @@ mod tests {
             .unwrap();
         assert!(!did);
         assert_eq!(count(&db, "episodes").await, 0);
+    }
+
+    #[tokio::test]
+    async fn join_scan_contains_a_panicking_task() {
+        // A panic inside the scan pass must come back as a plain Err so the
+        // callers' `scanning`-flag cleanup always runs (it would otherwise
+        // wedge `POST /scan` at 409 forever).
+        let handle = tokio::spawn(async { panic!("synthetic scan panic") });
+        let err = join_scan(handle)
+            .await
+            .expect_err("a panicking scan task must surface as Err");
+        assert!(
+            err.to_string().contains("panicked"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
