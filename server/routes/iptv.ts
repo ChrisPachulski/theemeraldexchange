@@ -53,49 +53,11 @@ import {
   stopRemuxSession,
 } from '../services/iptvRemux.js'
 import { env } from '../env.js'
+import { parseLimitedJson } from '../services/parseLimitedJson.js'
 
 export const iptv = new Hono<Env>()
 
 const PLAYLIST_TOKEN_MAX_BODY_BYTES = 1024
-
-async function parseLimitedJson(c: Context, maxBytes: number): Promise<{ tooLarge: boolean; body: unknown }> {
-  const contentLength = c.req.header('content-length')
-  if (contentLength) {
-    const n = Number(contentLength)
-    if (Number.isFinite(n) && n > maxBytes) return { tooLarge: true, body: {} }
-  }
-  const stream = c.req.raw.body
-  if (!stream) return { tooLarge: false, body: {} }
-  const reader = stream.getReader()
-  const chunks: Uint8Array[] = []
-  let total = 0
-  try {
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      if (!value) continue
-      total += value.byteLength
-      if (total > maxBytes) {
-        await reader.cancel().catch(() => undefined)
-        return { tooLarge: true, body: {} }
-      }
-      chunks.push(value)
-    }
-  } catch {
-    return { tooLarge: false, body: {} }
-  }
-  const bytes = new Uint8Array(total)
-  let offset = 0
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset)
-    offset += chunk.byteLength
-  }
-  try {
-    return { tooLarge: false, body: JSON.parse(new TextDecoder().decode(bytes)) }
-  } catch {
-    return { tooLarge: false, body: {} }
-  }
-}
 
 function firstHeaderValue(value: string | undefined): string {
   return value?.split(',')[0]?.trim() ?? ''
@@ -442,7 +404,9 @@ iptv.post('/playlist/token', requireAuth, async (c) => {
   // response so the admin list can show "iPhone 15 (kitchen)" next to the jti.
   const parsed = await parseLimitedJson(c, PLAYLIST_TOKEN_MAX_BODY_BYTES)
   if (parsed.tooLarge) return c.json({ error: 'body_too_large' }, 413)
-  const body = parsed.body as { deviceName?: unknown }
+  // The shared reader reports "no parseable body" as null; an absent body is
+  // fine here (deviceName is optional), so normalize to an empty object.
+  const body = (parsed.body ?? {}) as { deviceName?: unknown }
   const deviceName = typeof body.deviceName === 'string'
     ? body.deviceName.trim().slice(0, 120)
     : undefined
