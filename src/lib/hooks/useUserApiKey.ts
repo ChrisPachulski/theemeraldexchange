@@ -1,138 +1,140 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../auth'
+import {
+  deleteAnthropicKey,
+  getAnthropicKeyInfo,
+  putAnthropicKey,
+  type AnthropicKeyInfo,
+} from '../api/settings'
 
-// Per-user Anthropic API key. Stored in localStorage under a
-// sub-scoped key so a shared device (e.g. AppleTV in the living room
-// that's been signed in as different family members across the week)
-// reads the right key per member.
+// Per-user Anthropic API key, stored SERVER-SIDE (encrypted at rest,
+// scoped by sub — see server/services/userApiKeys.ts). The browser
+// never holds the key after save: this hook exposes only a set flag
+// plus the masked last-4 fingerprint, and the suggestions backend reads
+// the stored key itself when the request carries no key header.
 //
-// Key shape: 'eex.apiKey.<sub>'. Plus a legacy unscoped fallback
-// ('eex.apiKey') for migrations from the prior global model — read on
-// first mount, copied into the sub-scoped slot, then cleared.
+// History: the key used to live in plaintext localStorage
+// ('eex.apiKey.<sub>', with an older unscoped 'eex.apiKey' before
+// that) and rode every /api/suggestions request as a header from the
+// browser. Plaintext localStorage is readable by any same-origin
+// script and lingers on shared devices, so both slots are now
+// MIGRATION SOURCES ONLY: on first authenticated mount, a key found
+// there is silently PUT to the server and removed locally. Never write
+// new keys to localStorage.
 
 const SCOPED_PREFIX = 'eex.apiKey.'
 const LEGACY_KEY = 'eex.apiKey'
 
-// The localStorage key for a given sub. The cross-tab listener compares
-// incoming StorageEvent.key against this exact string.
-export function scopedKeyName(sub: string): string {
-  return SCOPED_PREFIX + sub
-}
+export const KEY_INFO_QUERY_KEY = ['settings', 'anthropic-key'] as const
 
-function readScoped(sub: string | undefined): string | null {
-  if (!sub) return null
-  if (typeof localStorage === 'undefined') return null
-  return localStorage.getItem(SCOPED_PREFIX + sub)
-}
+type MigrationStorage = Pick<Storage, 'getItem' | 'removeItem'>
 
-// Pure form of the one-time legacy migration the mount effect runs.
-// Reads the sub-scoped value; if absent, falls back to the legacy
-// unscoped key and (best-effort) copies it into the scoped slot, then
-// clears the legacy key — matching the original effect exactly: the
-// `current = legacy` assignment lives INSIDE the try, so a setItem
-// failure (private mode / quota) is swallowed and leaves `current`
-// null rather than adopting the un-persisted legacy value. Returns the
-// resolved key, or null when neither slot holds a value.
-export function migrateLegacyKey(
-  storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>,
+/** Pure: the locally-stored key eligible for migration — the sub-scoped
+ *  slot first, then the legacy unscoped slot. Null when neither holds
+ *  a value. */
+export function readLocalKeyForMigration(
+  storage: MigrationStorage,
   sub: string,
 ): string | null {
-  let current = storage.getItem(SCOPED_PREFIX + sub)
-  if (!current) {
-    const legacy = storage.getItem(LEGACY_KEY)
-    if (legacy) {
-      try {
-        storage.setItem(SCOPED_PREFIX + sub, legacy)
-        storage.removeItem(LEGACY_KEY)
-        current = legacy
-      } catch {
-        // private mode / quota — non-fatal
-      }
-    }
-  }
-  return current
+  return storage.getItem(SCOPED_PREFIX + sub) ?? storage.getItem(LEGACY_KEY)
 }
 
-// Non-secret fingerprint of an API key, suitable for use inside a
-// TanStack Query key. The full key MUST never appear in a query key
-// (the cache is in-memory but query keys are easy to log/dump). djb2
-// over the full key, base36-encoded — deterministic per key value,
-// one-way at this width (32-bit truncation hides the source), and
-// collision-resistant across the small set of keys a single household
-// uses. Previous last-4-characters approach was non-deterministic:
-// two different keys sharing a trailing slice would collide and let
-// the new key read the old key's cached suggestions.
-export function keyFingerprint(key: string | null): string {
-  if (!key) return 'none'
-  let h = 5381
-  for (let i = 0; i < key.length; i++) {
-    h = ((h << 5) + h) ^ key.charCodeAt(i)
+/** Pure: best-effort removal of BOTH local slots once the key is safely
+ *  on the server (or the server already had one). */
+export function clearLocalKey(storage: MigrationStorage, sub: string): void {
+  try {
+    storage.removeItem(SCOPED_PREFIX + sub)
+    storage.removeItem(LEGACY_KEY)
+  } catch {
+    // private mode — non-fatal, the next mount retries
   }
-  return (h >>> 0).toString(36)
 }
 
 export function useUserApiKey(): {
-  key: string | null
+  /** True when a key is stored server-side for this user. */
   hasKey: boolean
-  setKey: (v: string) => void
-  clearKey: () => void
+  /** Masked, non-secret display fragment (last 4 chars), or null. */
+  fingerprint: string | null
+  /** True while the initial server read is in flight. */
+  loading: boolean
+  setKey: (v: string) => Promise<void>
+  clearKey: () => Promise<void>
 } {
   const { user } = useAuth()
   const sub = user?.sub
-  const [key, setKeyState] = useState<string | null>(() => readScoped(sub))
+  const qc = useQueryClient()
 
-  // Re-read whenever sub changes (login / sign-out / user switch).
-  // Also handle the one-time legacy migration so a user who set the
-  // key before this PR doesn't lose it. Syncing local state to
-  // localStorage (an external source) is the intended exception to
-  // the setState-in-effect rule.
-  useEffect(() => {
-    if (!sub || typeof localStorage === 'undefined') {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setKeyState(null)
-      return
-    }
-    setKeyState(migrateLegacyKey(localStorage, sub))
-  }, [sub])
+  const info = useQuery({
+    queryKey: KEY_INFO_QUERY_KEY,
+    queryFn: getAnthropicKeyInfo,
+    enabled: !!sub,
+    // The set/last4 pair only changes through the mutations below (which
+    // update the cache directly), so a short staleTime just avoids
+    // refetch chatter across the surfaces that mount this hook.
+    staleTime: 60_000,
+  })
 
-  // Sync across tabs.
-  useEffect(() => {
-    if (!sub) return
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === scopedKeyName(sub)) setKeyState(e.newValue)
-    }
-    window.addEventListener('storage', onStorage)
-    return () => window.removeEventListener('storage', onStorage)
-  }, [sub])
-
-  const setKey = (v: string) => {
-    const trimmed = v.trim()
-    if (!sub) return
-    try {
-      localStorage.setItem(SCOPED_PREFIX + sub, trimmed)
-    } catch {
-      // ignore quota errors — in-memory state still tracks it
-    }
-    setKeyState(trimmed)
+  const applyInfo = (next: AnthropicKeyInfo) => {
+    qc.setQueryData(KEY_INFO_QUERY_KEY, next)
+    // The suggestions lineups were fetched under the previous key state;
+    // invalidate so the strip refetches with the new one (matches the
+    // old localStorage flow's invalidation in ApiKeySettings).
+    void qc.invalidateQueries({ queryKey: ['suggestions'] })
   }
 
-  const clearKey = () => {
-    if (!sub) {
-      setKeyState(null)
+  // One-time silent migration: a key found in either legacy localStorage
+  // slot is PUT to the server and then removed locally. If the server
+  // ALREADY has a key (set on another device after this one last synced),
+  // the server copy wins and the local one is simply discarded — both are
+  // the same user's key, and overwriting a deliberate replacement with a
+  // stale local copy would be worse. On PUT failure the local key is kept
+  // and the migration retries on the next mount.
+  const migrating = useRef(false)
+  useEffect(() => {
+    if (migrating.current) return
+    if (!sub || typeof localStorage === 'undefined' || !info.isSuccess) return
+    const local = readLocalKeyForMigration(localStorage, sub)
+    if (!local) return
+    if (info.data.set) {
+      clearLocalKey(localStorage, sub)
       return
     }
-    try {
-      localStorage.removeItem(SCOPED_PREFIX + sub)
-    } catch {
-      // ignore
-    }
-    setKeyState(null)
-  }
+    migrating.current = true
+    putAnthropicKey(local.trim())
+      .then((next) => {
+        clearLocalKey(localStorage, sub)
+        applyInfo(next)
+      })
+      .catch(() => {
+        // leave the local copy; retry next mount
+      })
+      .finally(() => {
+        migrating.current = false
+      })
+    // applyInfo is stable enough for this once-per-state effect; the deps
+    // that matter are the sub and the resolved server state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sub, info.isSuccess, info.data?.set])
+
+  const setMutation = useMutation({
+    mutationFn: (key: string) => putAnthropicKey(key),
+    onSuccess: applyInfo,
+  })
+  const clearMutation = useMutation({
+    mutationFn: deleteAnthropicKey,
+    onSuccess: applyInfo,
+  })
 
   return {
-    key,
-    hasKey: !!key && key.startsWith('sk-ant-'),
-    setKey,
-    clearKey,
+    hasKey: info.data?.set === true,
+    fingerprint: info.data?.set ? (info.data.last4 ?? null) : null,
+    loading: !!sub && info.isPending,
+    setKey: async (v: string) => {
+      await setMutation.mutateAsync(v.trim())
+    },
+    clearKey: async () => {
+      await clearMutation.mutateAsync()
+    },
   }
 }

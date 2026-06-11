@@ -334,6 +334,28 @@ type WatchUpsertBody = {
   completed: boolean
 }
 
+export type WatchSaveEntry = {
+  kind: PlayableKind
+  id: number
+  positionSecs: number
+  durationSecs?: number | null
+  completed?: boolean
+}
+
+/** Shared body builder for saveWatch (in-session upsert) and flushWatch
+ *  (keepalive unload flush) so the two can't drift. */
+function watchUpsertBody(entry: WatchSaveEntry): WatchUpsertBody {
+  return {
+    media_kind: entry.kind,
+    media_id: entry.id,
+    position_secs: Math.max(0, Math.floor(entry.positionSecs)),
+    ...(entry.durationSecs != null && Number.isFinite(entry.durationSecs)
+      ? { duration_secs: Math.floor(entry.durationSecs) }
+      : {}),
+    completed: entry.completed ?? false,
+  }
+}
+
 // media-core's list routes clamp `limit` to 1..=200 and default to 50 when
 // it's omitted. The "Play Direct" tmdbId index needs EVERY local title, not
 // the first page — calling /movies with no limit only ever indexed 50 titles,
@@ -407,22 +429,28 @@ export const mediaApi = {
     ),
 
   /** Upsert watch progress for one title. */
-  saveWatch: (entry: {
-    kind: PlayableKind
-    id: number
-    positionSecs: number
-    durationSecs?: number | null
-    completed?: boolean
-  }) =>
-    post<{ ok: boolean }, WatchUpsertBody>('/watch', {
-      media_kind: entry.kind,
-      media_id: entry.id,
-      position_secs: Math.max(0, Math.floor(entry.positionSecs)),
-      ...(entry.durationSecs != null && Number.isFinite(entry.durationSecs)
-        ? { duration_secs: Math.floor(entry.durationSecs) }
-        : {}),
-      completed: entry.completed ?? false,
-    }),
+  saveWatch: (entry: WatchSaveEntry) =>
+    post<{ ok: boolean }, WatchUpsertBody>('/watch', watchUpsertBody(entry)),
+
+  /** Final watch-progress flush for page unload (tab close / navigation)
+   *  and visibility loss. fetch keepalive (the mediaApi.stop pattern)
+   *  rather than navigator.sendBeacon: the upstream media-core handler
+   *  is an axum Json extractor that REQUIRES Content-Type
+   *  application/json, and a cross-origin beacon with a JSON Blob needs
+   *  a CORS preflight the Beacon API cannot perform — it would silently
+   *  fail on the Netlify-SPA-to-NAS-API split. keepalive fetches survive
+   *  document teardown and support credentials + preflight in every
+   *  current browser. Fire-and-forget; no timeout signal (unload-time
+   *  timers don't reliably run). */
+  flushWatch: (entry: WatchSaveEntry): void => {
+    void fetch(apiUrl(`${BASE}/watch`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(watchUpsertBody(entry)),
+      keepalive: true,
+    }).catch(() => undefined)
+  },
 
   /** Keep a transcode session alive. The absolute heartbeatUrl already carries
    *  its ?t= token, so no credentials are needed. Resolves to the HTTP status

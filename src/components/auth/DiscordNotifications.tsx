@@ -65,7 +65,7 @@ export function DiscordNotifications({ onClose }: Props) {
         const body = (await res.json().catch(() => ({}))) as { error?: string }
         throw new Error(body.error ?? `test failed ${res.status}`)
       }
-      setMessage('Test ping sent — check your Discord channel.')
+      setMessage('Test ping sent; check your Discord channel.')
     } catch (e) {
       setMessage(e instanceof Error ? e.message : String(e))
     } finally {

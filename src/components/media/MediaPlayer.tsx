@@ -139,7 +139,7 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
           // surface a re-grant-able error instead of a frozen video.
           setGrant(null)
           setSessionLost(true)
-          setError('Playback session expired — the transcoder shut it down.')
+          setError('Playback session expired; the transcoder shut it down.')
         },
       },
     })
@@ -170,13 +170,34 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
   }, [report])
 
   // A hard page unload (tab close / navigation) doesn't run React cleanup, so
-  // free the transcoder slot there too. mediaApi.stop uses keepalive to flush
-  // on unload.
+  // the unmount flush above never fires and the last resume point was lost.
+  // Flush via mediaApi.flushWatch (fetch keepalive — see its doc for why not
+  // sendBeacon) on pagehide, and also free the transcoder slot there
+  // (mediaApi.stop keepalives too). visibilitychange→hidden additionally
+  // flushes progress — it's the last event mobile browsers reliably fire
+  // before killing a background tab — but must NOT stop the session: a
+  // backgrounded tab may keep playing audio or come right back.
   useEffect(() => {
-    const onHide = () => sessionRef.current?.stop()
-    window.addEventListener('pagehide', onHide)
-    return () => window.removeEventListener('pagehide', onHide)
-  }, [])
+    const flushProgress = () => {
+      const { pos, dur } = latest.current
+      if (pos <= 0) return
+      const completed = dur != null && pos >= Math.max(0, dur - COMPLETE_TAIL_SECS)
+      mediaApi.flushWatch({ kind, id, positionSecs: pos, durationSecs: dur, completed })
+    }
+    const onPageHide = () => {
+      flushProgress()
+      sessionRef.current?.stop()
+    }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') flushProgress()
+    }
+    window.addEventListener('pagehide', onPageHide)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      window.removeEventListener('pagehide', onPageHide)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [kind, id])
 
   // Stable StreamGrant reference: a new object each render would make
   // IptvPlayer tear down and rebuild its (HLS) engine on every render.

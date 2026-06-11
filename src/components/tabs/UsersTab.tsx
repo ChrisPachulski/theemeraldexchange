@@ -65,7 +65,7 @@ export function UsersTab() {
           <div className="users-tab__stale">
             <p className="users-tab__stale-title">Your session is from an earlier build.</p>
             <p className="users-tab__stale-body">
-              The Users tab needs a Plex token attached to your session — sessions
+              The Users tab needs a Plex token attached to your session; sessions
               issued before this feature shipped don't have one. Sign out and sign
               back in to refresh it.
             </p>
@@ -147,7 +147,7 @@ export function UsersTab() {
               {u.status === 'pending' && (
                 <span
                   className="users-tab__badge users-tab__badge--pending"
-                  title="Invitation sent — they haven't accepted on plex.tv yet"
+                  title="Invitation sent; they haven't accepted on plex.tv yet"
                 >
                   pending
                 </span>

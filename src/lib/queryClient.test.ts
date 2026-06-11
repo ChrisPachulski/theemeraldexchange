@@ -114,13 +114,53 @@ describe('queryClient session-expiry dispatch', () => {
     expect(listener).not.toHaveBeenCalled()
   })
 
-  it('does NOT dispatch for a non-ApiError (plain Error)', async () => {
+  it('does NOT dispatch for a status-less error (plain Error)', async () => {
     const { mod } = await freshModule()
     addListener(win, mod.SESSION_EXPIRED_EVENT)
 
     fireQueryError(mod, new Error('network down'))
 
     expect(listener).not.toHaveBeenCalled()
+  })
+
+  it('dispatches for a private status-carrying error class (duck-typed, not instanceof ApiError)', async () => {
+    // Regression guard: modules like useSuggested throw their own error
+    // classes carrying `.status`. The session-expiry detector must catch
+    // them — it used to require `instanceof ApiError`, so these bypassed
+    // the expired-session logout entirely.
+    class PrivateError extends Error {
+      status: number
+      constructor(status: number) {
+        super(`private ${status}`)
+        this.status = status
+      }
+    }
+    const { mod } = await freshModule()
+    addListener(win, mod.SESSION_EXPIRED_EVENT)
+
+    fireQueryError(mod, new PrivateError(401))
+
+    expect(listener).toHaveBeenCalledTimes(1)
+  })
+
+  it('does NOT dispatch for a duck-typed non-auth status (500) or a non-numeric status', async () => {
+    const { mod } = await freshModule()
+    addListener(win, mod.SESSION_EXPIRED_EVENT)
+
+    fireQueryError(mod, Object.assign(new Error('boom'), { status: 500 }))
+    fireQueryError(mod, Object.assign(new Error('weird'), { status: '401' }))
+
+    expect(listener).not.toHaveBeenCalled()
+  })
+
+  it('retry treats duck-typed 401/403 as non-retryable too', async () => {
+    const { mod } = await freshModule()
+    const retry = mod.queryClient.getDefaultOptions().queries?.retry
+    const fn = retry as (failureCount: number, error: unknown) => boolean
+
+    expect(fn(0, Object.assign(new Error('x'), { status: 401 }))).toBe(false)
+    expect(fn(0, Object.assign(new Error('x'), { status: 403 }))).toBe(false)
+    expect(fn(0, Object.assign(new Error('x'), { status: 500 }))).toBe(true)
   })
 
   it('debounces a burst: two 401s within 2000ms dispatch only once', async () => {

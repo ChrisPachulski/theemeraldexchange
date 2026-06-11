@@ -3,7 +3,7 @@
    unit-tested directly; fast-refresh is irrelevant for these pure functions. */
 import { useEffect, useRef, useState } from 'react'
 import type { StreamGrant } from '../../lib/api/iptv'
-import styles from './IptvPlayer.module.css'
+import './IptvPlayer.css'
 
 export type TrackOption = {
   id: number
@@ -200,7 +200,7 @@ export function createFatalHlsErrorHandler(opts: {
     if (isCancelled()) return
     if (kind === 'network') {
       if (netRetries >= MAX_NET_RETRIES) {
-        setError('Couldn’t start playback. The transcoder may still be warming up — try again in a moment.')
+        setError('Couldn’t start playback. The transcoder may still be warming up; try again in a moment.')
         hls.destroy()
         return
       }
@@ -222,7 +222,7 @@ export function createFatalHlsErrorHandler(opts: {
         hls.swapAudioCodec()
         hls.recoverMediaError()
       } else {
-        setError('Playback failed — this stream couldn’t be decoded. Close and re-open to retry.')
+        setError('Playback failed; this stream couldn’t be decoded. Close and re-open to retry.')
         hls.destroy()
       }
       return
@@ -563,11 +563,11 @@ export default function IptvPlayer({
   }
 
   return (
-    <div className={styles.player}>
+    <div className="iptv-player">
       <video
         ref={videoRef}
         data-testid="iptv-player-video"
-        className={styles.video}
+        className="iptv-player__video"
         src={grant.delivery === 'progressive' ? grant.url : undefined}
         controls
         playsInline
@@ -575,9 +575,9 @@ export default function IptvPlayer({
       />
 
       {(audioTracks.length > 0 || subtitleTracks.length > 0) && (
-        <div className={styles.controls}>
+        <div className="iptv-player__controls">
           {audioTracks.length > 0 && (
-            <label className={styles.selector}>
+            <label className="iptv-player__selector">
               Audio
               <select value={selectedAudio} onChange={(e) => chooseAudioTrack(Number(e.target.value))}>
                 {audioTracks.map((track) => (
@@ -588,7 +588,7 @@ export default function IptvPlayer({
           )}
 
           {subtitleTracks.length > 0 && (
-            <label className={styles.selector}>
+            <label className="iptv-player__selector">
               Subtitles
               <select value={selectedSubtitle} onChange={(e) => chooseSubtitleTrack(Number(e.target.value))}>
                 <option value={-1}>Off</option>
@@ -601,7 +601,7 @@ export default function IptvPlayer({
         </div>
       )}
 
-      {error && <p className={styles.error}>{error}</p>}
+      {error && <p className="iptv-player__error">{error}</p>}
     </div>
   )
 }

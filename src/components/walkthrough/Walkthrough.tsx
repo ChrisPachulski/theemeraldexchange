@@ -68,7 +68,7 @@ function SignInBlock({ placement }: { placement: 'hero' | 'foot' }) {
       </div>
       <p className="walkthrough__signin-hint">
         Invitation-only. Returning members can sign in with a passkey, Apple,
-        or the Plex account the library was shared to — no code needed.
+        or the Plex account the library was shared to; no code needed.
         First-time guests: paste your invite code above, then set up a passkey
         or sign in with Plex/Apple.
       </p>
@@ -78,7 +78,7 @@ function SignInBlock({ placement }: { placement: 'hero' | 'foot' }) {
       {discoveredServers && discoveredServers.length > 0 && (
         <div className="walkthrough__discovery">
           <p className="walkthrough__discovery-title">
-            First-run setup — set <code>PLEX_SERVER_ID</code> to lock this down:
+            First-run setup. Set <code>PLEX_SERVER_ID</code> to lock this down:
           </p>
           <ul className="walkthrough__discovery-list">
             {discoveredServers.map((s) => (
@@ -156,7 +156,7 @@ function AtmospherePair() {
         </video>
         <figcaption className="walkthrough__atmos-caption">
           <span className="walkthrough__eyebrow">Home</span>
-          <span>kraken — graded toward emerald</span>
+          <span>kraken (graded toward emerald)</span>
         </figcaption>
       </figure>
       <figure className="walkthrough__atmos-panel">
@@ -173,7 +173,7 @@ function AtmospherePair() {
         </video>
         <figcaption className="walkthrough__atmos-caption">
           <span className="walkthrough__eyebrow">Anywhere else</span>
-          <span>resting — emerald grade baked in</span>
+          <span>resting (emerald grade baked in)</span>
         </figcaption>
       </figure>
     </div>
@@ -289,7 +289,7 @@ export function Walkthrough() {
       id: 'beacon',
       eyebrow: 'The gem',
       title: 'A rotating brilliant cut pinned to the HUD.',
-      caption: 'The same WebGL gem you see in the corner glyph and the favicon — same shader, same scene, scaled up.',
+      caption: 'The same WebGL gem you see in the corner glyph and the favicon; same shader, same scene, scaled up.',
       render: () => <BeaconStage />,
     },
   ]

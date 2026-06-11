@@ -1,5 +1,5 @@
 import { QueryClient, QueryCache, MutationCache } from '@tanstack/react-query'
-import { ApiError } from './api/errors'
+import { errorStatus } from './api/errors'
 
 /**
  * Dispatched once (debounced) when a query/mutation fails with HTTP 401/403, so
@@ -12,7 +12,12 @@ import { ApiError } from './api/errors'
 export const SESSION_EXPIRED_EVENT = 'exchange:session-expired'
 
 function isAuthError(error: unknown): boolean {
-  return error instanceof ApiError && (error.status === 401 || error.status === 403)
+  // Duck-type on a numeric `status` field rather than `instanceof ApiError`:
+  // modules with their own error classes (SuggestionsError in useSuggested,
+  // or any future status-carrying error) must trip the session-expired
+  // dispatch too, not silently bypass it.
+  const status = errorStatus(error)
+  return status === 401 || status === 403
 }
 
 let lastDispatch = 0

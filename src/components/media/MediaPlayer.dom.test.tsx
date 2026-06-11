@@ -17,27 +17,46 @@ import { MediaPlayer } from './MediaPlayer'
 import { HEARTBEAT_INTERVAL_MS } from './playbackSession'
 import type { PlaybackGrant } from '../../lib/api/media'
 
-const { playbackMock, heartbeatMock, stopMock, reportMock } = vi.hoisted(() => ({
+const { playbackMock, heartbeatMock, stopMock, flushWatchMock, reportMock, engineProps } = vi.hoisted(() => ({
   playbackMock: vi.fn(),
   heartbeatMock: vi.fn(),
   stopMock: vi.fn(),
+  flushWatchMock: vi.fn(),
   reportMock: vi.fn(),
+  engineProps: {
+    current: null as null | {
+      grant: { url: string; delivery: string }
+      onPositionUpdate?: (positionSecs: number, durationSecs: number | null) => void
+    },
+  },
 }))
 
 // Module-boundary mocks: the api client (network) and the watch-progress
 // hook (react-query). IptvPlayer is stubbed too — the engine wiring has its
 // own mounted suite (../player/IptvPlayer.dom.test.tsx); here we only need
-// to see WHICH grant the player was handed.
+// the grant the player was handed plus its onPositionUpdate callback (so the
+// final-flush tests can place a known position into the player's ref).
 vi.mock('../../lib/api/media', () => ({
-  mediaApi: { playback: playbackMock, heartbeat: heartbeatMock, stop: stopMock },
+  mediaApi: {
+    playback: playbackMock,
+    heartbeat: heartbeatMock,
+    stop: stopMock,
+    flushWatch: flushWatchMock,
+  },
 }))
 vi.mock('../../lib/hooks/useMediaLibrary', () => ({
   useReportWatch: () => reportMock,
 }))
 vi.mock('../player/IptvPlayer', () => ({
-  default: ({ grant }: { grant: { url: string; delivery: string } }) => (
-    <div data-testid="player-engine" data-delivery={grant.delivery} data-url={grant.url} />
-  ),
+  default: (props: {
+    grant: { url: string; delivery: string }
+    onPositionUpdate?: (positionSecs: number, durationSecs: number | null) => void
+  }) => {
+    engineProps.current = props
+    return (
+      <div data-testid="player-engine" data-delivery={props.grant.delivery} data-url={props.grant.url} />
+    )
+  },
 }))
 
 function hlsGrant(overrides: Partial<PlaybackGrant> = {}): PlaybackGrant {
@@ -73,7 +92,9 @@ beforeEach(() => {
   playbackMock.mockReset()
   heartbeatMock.mockReset()
   stopMock.mockReset()
+  flushWatchMock.mockReset()
   reportMock.mockReset()
+  engineProps.current = null
 })
 
 afterEach(() => {
@@ -224,6 +245,82 @@ describe('MediaPlayer (mounted) — stop lifecycle', () => {
 
     expect(stopMock).toHaveBeenCalledTimes(1)
     expect(stopMock).toHaveBeenCalledWith(grant.stopUrl)
+  })
+
+  it('pagehide flushes the final watch position via keepalive before stopping the session', async () => {
+    playbackMock.mockResolvedValue(progressiveGrant())
+
+    render(<MediaPlayer kind="movie" id={9} title="300" onClose={() => {}} />)
+    await flush()
+
+    // Drive a position through the engine so the player's latest-position
+    // ref holds a real resume point (progressive: absolute = reported).
+    act(() => engineProps.current?.onPositionUpdate?.(540, 7200))
+
+    fireEvent(window, new Event('pagehide'))
+
+    expect(flushWatchMock).toHaveBeenCalledTimes(1)
+    expect(flushWatchMock).toHaveBeenCalledWith({
+      kind: 'movie',
+      id: 9,
+      positionSecs: 540,
+      durationSecs: 7200,
+      completed: false,
+    })
+  })
+
+  it('pagehide marks the flush completed inside the completion tail', async () => {
+    playbackMock.mockResolvedValue(progressiveGrant())
+
+    render(<MediaPlayer kind="movie" id={9} title="300" onClose={() => {}} />)
+    await flush()
+
+    act(() => engineProps.current?.onPositionUpdate?.(7195, 7200))
+    fireEvent(window, new Event('pagehide'))
+
+    expect(flushWatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({ completed: true }),
+    )
+  })
+
+  it('pagehide does not flush when nothing has played yet (position 0)', async () => {
+    playbackMock.mockResolvedValue(progressiveGrant())
+
+    render(<MediaPlayer kind="movie" id={9} title="300" onClose={() => {}} />)
+    await flush()
+
+    fireEvent(window, new Event('pagehide'))
+
+    expect(flushWatchMock).not.toHaveBeenCalled()
+  })
+
+  it('visibilitychange→hidden flushes progress but does NOT stop the session', async () => {
+    const grant = hlsGrant()
+    playbackMock.mockResolvedValue(grant)
+    heartbeatMock.mockResolvedValue(200)
+
+    render(<MediaPlayer kind="movie" id={9} title="300" onClose={() => {}} />)
+    await flush()
+
+    // HLS: the engine reports relative position; with no -ss baked here the
+    // absolute position equals the reported one. The exact value matters less
+    // than the contract: flush yes, stop no.
+    act(() => engineProps.current?.onPositionUpdate?.(120, null))
+
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'hidden',
+    })
+    fireEvent(document, new Event('visibilitychange'))
+
+    expect(flushWatchMock).toHaveBeenCalledTimes(1)
+    expect(stopMock).not.toHaveBeenCalled()
+
+    // restore for other tests
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'visible',
+    })
   })
 
   it('stops a grant that resolves after close instead of leaking the slot', async () => {

@@ -19,8 +19,8 @@ export function AiToggle({ enabled, onToggle }: Props) {
       aria-checked={enabled}
       aria-label={
         enabled
-          ? 'AI personalization on — tap to switch to free TMDB trending'
-          : 'AI personalization off — tap to enable personalized picks (uses API tokens)'
+          ? 'AI personalization on; tap to switch to free TMDB trending'
+          : 'AI personalization off; tap to enable personalized picks (uses API tokens)'
       }
       title={
         enabled
