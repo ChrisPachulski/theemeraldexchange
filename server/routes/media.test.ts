@@ -351,6 +351,54 @@ describe('media playback grant', () => {
     expect(mockFetch).not.toHaveBeenCalled()
   })
 
+  it('readiness poll is bounded by wall-clock, not iteration count', async () => {
+    // Each probe consumes 5s (slow-but-responding transcoder, under its own
+    // LAN timeout) and never reports a segment. The 12s wall-clock deadline
+    // must end the loop after ~3 probes; the old 24-iteration bound would
+    // have stretched this request to ~2 minutes (24 × (5s + 0.5s sleep)).
+    vi.useFakeTimers()
+    try {
+      mockFetchTimed
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ directPlay: false }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              sessionId: 'sess-slow',
+              manifestUrl: '/api/transcode/session/sess-slow/index.m3u8',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          ),
+        )
+        .mockImplementation(
+          () =>
+            new Promise((resolve) =>
+              setTimeout(() => resolve(new Response('not ready', { status: 503 })), 5_000),
+            ),
+        )
+
+      const pending = media.request('/playback/movie/7', {
+        method: 'POST',
+        headers: { host: 'localhost', 'content-type': 'application/json' },
+        body: '{}',
+      })
+      await vi.runAllTimersAsync()
+      const res = await pending
+      // The grant still returns (a not-yet-ready manifest is the client's
+      // retry problem past the deadline) — the loop just must not run away.
+      expect(res.status).toBe(200)
+      const probeCalls = mockFetchTimed.mock.calls.length - 2
+      expect(probeCalls).toBeGreaterThanOrEqual(1)
+      expect(probeCalls).toBeLessThanOrEqual(4)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('502 media_core_unreachable when the grant body read fails', async () => {
     // fetchWithTimeout itself never throws on network errors (it synthesizes a
     // 504), so the catch covers a body/JSON failure on the buffered replay.
