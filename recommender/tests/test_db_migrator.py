@@ -16,7 +16,6 @@ from __future__ import annotations
 import hashlib
 import logging
 import sqlite3
-import textwrap
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -28,7 +27,6 @@ import pytest
 # tests running without a real exchange.db on disk.
 # ---------------------------------------------------------------------------
 from app.db import (
-    _auto_backup,
     _bootstrap_schema_migrations,
     _check_backup_gate,
     _has_drop_table,
