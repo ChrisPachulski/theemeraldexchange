@@ -152,7 +152,14 @@ pub fn parse_ffprobe_json(doc: &Value) -> FileProbe {
         .cloned()
         .unwrap_or_default();
 
-    let video = streams.iter().find(|s| stream_type(s) == Some("video"));
+    // The main video stream: the first codec_type=="video" that is NOT
+    // embedded cover art. MKVs frequently carry an mjpeg/png poster (an
+    // attached_pic stream) ahead of the real movie stream; selecting it would
+    // record video_codec='mjpeg' and force a pointless transcode of a file
+    // whose actual video direct-plays.
+    let video = streams
+        .iter()
+        .find(|s| stream_type(s) == Some("video") && !is_attached_pic(s));
 
     let video_codec = video
         .and_then(|s| s.get("codec_name"))
@@ -218,6 +225,17 @@ pub fn parse_ffprobe_json(doc: &Value) -> FileProbe {
 /// `codec_type` of a stream, if present.
 fn stream_type(stream: &Value) -> Option<&str> {
     stream.get("codec_type").and_then(Value::as_str)
+}
+
+/// `disposition.attached_pic == 1` → the stream is embedded cover art (an
+/// album/poster image muxed as a video stream), not playable video.
+fn is_attached_pic(stream: &Value) -> bool {
+    stream
+        .get("disposition")
+        .and_then(|d| d.get("attached_pic"))
+        .and_then(parse_i64)
+        .map(|v| v == 1)
+        .unwrap_or(false)
 }
 
 /// Read a value from a stream's `tags` object as a string.
@@ -541,12 +559,12 @@ mod tests {
         assert_eq!(probe.hdr_format, None);
     }
 
-    // MKV with an embedded poster (mjpeg attached_pic) ahead of the real HEVC video.
-    // CURRENT behavior: attached_pic cover art is mis-selected as the main video
-    // stream because parse_ffprobe_json takes the first codec_type=="video".
-    // Pinned so any future attached_pic skip is an intentional, test-driven change.
+    // MKV with an embedded poster (mjpeg attached_pic) ahead of the real HEVC
+    // video: the cover art must be skipped and the actual movie stream
+    // selected. Previously the first codec_type=="video" won, recording
+    // video_codec='mjpeg' and forcing a needless transcode.
     #[test]
-    fn attached_pic_coverart_is_selected_as_video_this_pins_current_behavior() {
+    fn attached_pic_coverart_is_skipped_for_main_video() {
         let doc = json!({
             "streams": [
                 {
@@ -572,9 +590,53 @@ mod tests {
             ]
         });
         let probe = parse_ffprobe_json(&doc);
-        assert_eq!(probe.video_codec.as_deref(), Some("mjpeg"));
-        assert_eq!(probe.video_height, Some(600));
+        assert_eq!(probe.video_codec.as_deref(), Some("hevc"));
+        assert_eq!(probe.video_height, Some(2160));
+        assert_eq!(probe.hdr_format.as_deref(), Some("HDR10"));
+    }
+
+    // ffprobe sometimes emits attached_pic as a string-numeric ("1"); the
+    // disposition check must parse it like every other numeric field.
+    #[test]
+    fn attached_pic_string_numeric_disposition_is_skipped() {
+        let doc = json!({
+            "streams": [
+                {
+                    "index": 0,
+                    "codec_type": "video",
+                    "codec_name": "png",
+                    "height": 1000,
+                    "disposition": { "attached_pic": "1" }
+                },
+                { "index": 1, "codec_type": "video", "codec_name": "h264", "height": 1080 }
+            ]
+        });
+        let probe = parse_ffprobe_json(&doc);
+        assert_eq!(probe.video_codec.as_deref(), Some("h264"));
+        assert_eq!(probe.video_height, Some(1080));
+    }
+
+    // A file whose ONLY video stream is cover art (e.g. an audio container
+    // with embedded artwork) has no playable video: all video fields None.
+    #[test]
+    fn only_attached_pic_yields_no_video_fields() {
+        let doc = json!({
+            "streams": [
+                {
+                    "index": 0,
+                    "codec_type": "video",
+                    "codec_name": "mjpeg",
+                    "height": 600,
+                    "disposition": { "attached_pic": 1 }
+                },
+                { "index": 1, "codec_type": "audio", "codec_name": "flac", "channels": 2 }
+            ]
+        });
+        let probe = parse_ffprobe_json(&doc);
+        assert_eq!(probe.video_codec, None);
+        assert_eq!(probe.video_height, None);
         assert_eq!(probe.hdr_format, None);
+        assert_eq!(probe.audio_tracks.len(), 1);
     }
 
     // Dolby Vision profile 5/8 where DV side-data is present but the stream carries
