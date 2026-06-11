@@ -11,6 +11,12 @@ import {
   createReservationLedger,
   type RootFolderSpaceSnapshot,
 } from '../services/arrGrab.js'
+import {
+  gateRootFolderSpace,
+  materializeFailurePayload,
+  materializeNonAdminAddBody,
+  type Release,
+} from '../services/arrAdd.js'
 import { postFeedback } from '../services/recommender.js'
 import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
 import { env } from '../env.js'
@@ -119,19 +125,6 @@ async function grabTvUnderCap(
 
   // Brief delay so Sonarr finishes wiring the new series record.
   await new Promise((r) => setTimeout(r, 2000))
-
-  type Release = {
-    guid: string
-    indexerId: number
-    size: number
-    qualityWeight: number
-    title: string
-    seasonNumber?: number
-    episodeNumbers?: number[]
-    fullSeason?: boolean
-    rejected?: boolean
-    temporarilyRejected?: boolean
-  }
 
   // Episode counts per season — used to evaluate full-season packs.
   // Sonarr's /episode endpoint is populated lazily after series add;
@@ -279,40 +272,43 @@ async function grabTvUnderCap(
     return
   }
 
-  let grabbedBytes = 0
-  for (const pick of finalPicks) {
-    let grabRes: Awaited<ReturnType<typeof sonarrFetch>>
-    try {
-      grabRes = await sonarrFetch('/api/v3/release', {
+  // The reservation guards the PLANNING window only — the gap where a second
+  // concurrent add could clear the free-space gate against the same stale
+  // snapshot. Once every grab POST has a final outcome, SAB/Sonarr own the
+  // real on-disk accounting (mirrors grabBestUnderCap in radarr.ts), so the
+  // FULL reservation settles in `finally` whatever happened. The prior code
+  // only released when grabbedBytes < plannedBytes: a fully-successful grab
+  // released nothing and the leaked reservation 409'd every later add to the
+  // same root folder until restart.
+  try {
+    for (const pick of finalPicks) {
+      const grabRes = await sonarrFetch('/api/v3/release', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ guid: pick.guid, indexerId: pick.indexerId }),
       })
-    } catch (err) {
-      if (rootFolder) sonarrReservations.release(rootFolder, plannedBytes - grabbedBytes)
-      throw err
+      const ec = effectiveEpisodeCount(pick) ?? 1
+      console.log(
+        `[tv-cap] grab "${pick.title.slice(0, 80)}" ${(pick.size / 1024 ** 3).toFixed(2)}GB ` +
+          `(~${(pick.size / ec / 1024 ** 3).toFixed(2)}GB/ep, ${ec} ep) ` +
+          `series=${seriesId} → ${grabRes.status}`,
+      )
+      await recordSonarrGrabEvent({
+        ...base,
+        type: grabRes.ok ? 'grab_succeeded' : 'grab_failed',
+        status: grabRes.status,
+        release: {
+          title: pick.title,
+          sizeBytes: pick.size,
+          qualityWeight: pick.qualityWeight,
+          seasonNumber: pick.seasonNumber,
+        },
+      })
     }
-    if (grabRes.ok) grabbedBytes += pick.size
-    const ec = effectiveEpisodeCount(pick) ?? 1
-    console.log(
-      `[tv-cap] grab "${pick.title.slice(0, 80)}" ${(pick.size / 1024 ** 3).toFixed(2)}GB ` +
-        `(~${(pick.size / ec / 1024 ** 3).toFixed(2)}GB/ep, ${ec} ep) ` +
-        `series=${seriesId} → ${grabRes.status}`,
-    )
-    await recordSonarrGrabEvent({
-      ...base,
-      type: grabRes.ok ? 'grab_succeeded' : 'grab_failed',
-      status: grabRes.status,
-      release: {
-        title: pick.title,
-        sizeBytes: pick.size,
-        qualityWeight: pick.qualityWeight,
-        seasonNumber: pick.seasonNumber,
-      },
-    })
-  }
-  if (rootFolder && grabbedBytes < plannedBytes) {
-    sonarrReservations.release(rootFolder, plannedBytes - grabbedBytes)
+  } finally {
+    // Always settle the whole reservation — success, partial failure, or a
+    // thrown egress error. release() floors at zero, so this is idempotent.
+    if (rootFolder) sonarrReservations.release(rootFolder, plannedBytes)
   }
 }
 
@@ -358,171 +354,104 @@ type SonarrAddBody = {
   [key: string]: unknown
 }
 
-function normalizePath(p: string): string {
-  return p.replace(/[\\/]+$/, '').toLowerCase()
+// STEP: non-admin policy materialization. The allowlist + policy stamping is
+// Sonarr's; the folder/profile resolution machinery (incl. pickProfile's
+// preference chain) is shared with Radarr in services/arrAdd.ts. Profile
+// selection prefers env.defaultProfileName (defaults to "choose me" to
+// mirror the frontend modal). For TV this matters even more than for movies
+// — Sonarr's ongoing RSS sweep against monitored series is gated by the
+// quality profile, NOT by our per-episode size cap (defense in depth lives
+// in the profile's own size restrictions). Landing on Sonarr's default Any
+// profile would silently let 4K HDR packs through on RSS auto-grabs.
+function materializeNonAdminSeriesBody(raw: SonarrAddBody) {
+  return materializeNonAdminAddBody({
+    app: 'sonarr',
+    raw,
+    allowKeys: NON_ADMIN_SONARR_ALLOW,
+    loadFolders: sonarrRootFolders,
+    fetchProfiles: () => sonarrFetch('/api/v3/qualityprofile', { method: 'GET' }),
+    configuredFolderPath: env.defaultSonarrRootFolderPath,
+    applyPolicy: (safe, picked) => {
+      safe.rootFolderPath = picked.folderPath
+      safe.qualityProfileId = picked.profileId
+      safe.monitored = true
+      safe.seasonFolder = true
+      // monitor: 'firstSeason' = Sonarr marks only season 1 monitored at
+      // add-time (or, for shows without a season 1, the lowest-numbered
+      // season — Sonarr's own resolution). Two reasons over the prior
+      // 'future':
+      //
+      // 1. 'future' leaves zero historical seasons monitored, which means
+      //    grabTvUnderCap (the cap-aware downloader gated on
+      //    `monitored.length > 0`) never fires for a completed show. The
+      //    user gets an apparently-successful add with nothing
+      //    downloaded — silent failure.
+      //
+      // 2. The HomeTab copy and the AddSeriesModal default both promise
+      //    "Season 1 by default." Non-admins don't see the picker, so
+      //    the server-materialized default IS the user-facing default.
+      //    'firstSeason' makes the docs match reality.
+      //
+      // Sonarr's RSS sweep against monitored seasons still respects the
+      // quality profile (load-bearing — that's why we mirrored Choose Me
+      // above), so this doesn't open a 4K HDR sluice; it just makes the
+      // first season actually get fetched.
+      safe.addOptions = {
+        searchForMissingEpisodes: true,
+        searchForCutoffUnmetEpisodes: false,
+        monitor: 'firstSeason',
+      }
+      safe.tags = []
+    },
+  })
 }
 
-/**
- * Pick a quality profile by preference order:
- *   1. exact name match against env.defaultProfileName (e.g. "Choose Me")
- *   2. a profile whose name contains "1080p" (the typical curated default)
- *   3. a profile whose name starts with "HD"
- *   4. any profile other than "Any" (Any is uncapped — last-resort)
- *   5. profiles[0] if literally only "Any" exists
- *
- * Returns undefined only if the profiles list is empty.
- *
- * The operator can pin a specific profile by setting DEFAULT_PROFILE_NAME
- * to a name that exists upstream. Otherwise the fallback chain prefers a
- * size-capped HD profile over the uncapped "Any" default, which keeps RSS
- * auto-grabs sane without requiring a curated "Choose Me" profile.
- */
-function pickProfile(
-  profiles: Array<{ id: number; name?: string }>,
-  defaultName: string,
-): { id: number; name?: string } | undefined {
-  if (profiles.length === 0) return undefined
-  const norm = (n?: string) => (n ?? '').trim().toLowerCase()
-  const named = profiles.find((p) => norm(p.name) === defaultName)
-  if (named) return named
-  const has1080p = profiles.find((p) => norm(p.name).includes('1080p'))
-  if (has1080p) return has1080p
-  const startsHd = profiles.find((p) => norm(p.name).startsWith('hd'))
-  if (startsHd) return startsHd
-  const notAny = profiles.find((p) => norm(p.name) !== 'any')
-  if (notAny) return notAny
-  return profiles[0]
-}
-
-async function materializeNonAdminSeriesBody(raw: SonarrAddBody): Promise<
-  | { ok: true; body: SonarrAddBody }
-  | {
-      ok: false
-      reason: string
-      expected_name?: string
-      available_names?: string[]
-      expected_path?: string
-      available_paths?: string[]
-    }
-> {
-  // Profile selection prefers env.defaultProfileName (defaults to
-  // "choose me" to mirror the frontend modal). For TV this matters
-  // even more than for movies — Sonarr's ongoing RSS sweep against
-  // monitored series is gated by the quality profile, NOT by our
-  // per-episode size cap (defense in depth lives in the profile's
-  // own size restrictions). Landing on Sonarr's default Any profile
-  // would silently let 4K HDR packs through on RSS auto-grabs.
-  const [foldersResult, profileRes] = await Promise.all([
-    loadSonarrRootFolders(),
-    sonarrFetch('/api/v3/qualityprofile', { method: 'GET' }),
-  ])
-  if (!foldersResult.ok) {
-    return { ok: false, reason: 'rootfolder_unreachable' }
+// STEP: parse + policy (mirrors radarr's resolveMovieAddBody). Pass through
+// full admin policy only when the client actually sent policy fields. An
+// admin previewing-as-user (auth.tsx makes isAdmin viewAs-aware) sends the
+// slim user-shape body through AddSeriesModal — without this branch that body
+// would skip materialize and trip the rootFolderPath_required gate in 2ms,
+// surfacing as the cryptic "Sonarr /series: 400" toast. Non-admins (and
+// admins-in-preview) can't dictate policy: materialization replaces policy
+// fields with server-derived defaults so a direct-POST can't bypass the
+// curated quality profile, root folder, or monitor mode.
+async function resolveSeriesAddBody(
+  session: { role: string },
+  parsedBody: unknown,
+): Promise<{ ok: true; body: SonarrAddBody } | { ok: false; payload: Record<string, unknown>; status: 400 | 503 }> {
+  if (!parsedBody || typeof parsedBody !== 'object' || Array.isArray(parsedBody)) {
+    return { ok: false, payload: { error: 'invalid_body' }, status: 400 }
   }
-  if (!profileRes.ok) {
-    return { ok: false, reason: 'qualityprofile_unreachable' }
+  const rawBody = parsedBody as SonarrAddBody
+  const adminSuppliedPolicy = session.role === 'admin' && rawBody.rootFolderPath !== undefined
+  if (adminSuppliedPolicy) {
+    return { ok: true, body: rawBody }
   }
-  const profiles = (await profileRes.json()) as Array<{ id: number; name?: string }>
-  const folders = foldersResult.folders
-  const configuredFolder = env.defaultSonarrRootFolderPath
-  const folder = configuredFolder
-    ? folders.find((f) => normalizePath(f.path) === normalizePath(configuredFolder))
-    : folders[0]
-  const profile = pickProfile(profiles, env.defaultProfileName)
-  if (!folder) {
-    return {
-      ok: false,
-      reason: configuredFolder ? 'default_root_folder_missing' : 'admin_must_configure_upstream',
-      expected_path: configuredFolder ?? undefined,
-      available_paths: folders.map((f) => f.path),
-    }
+  const materialized = await materializeNonAdminSeriesBody(rawBody)
+  if (!materialized.ok) {
+    return { ok: false, payload: materializeFailurePayload(materialized), status: 503 }
   }
-  if (!profile) {
-    return {
-      ok: false,
-      reason: 'default_quality_profile_missing',
-      expected_name: env.defaultProfileName,
-      available_names: profiles.map((p) => p.name).filter((n): n is string => typeof n === 'string'),
-    }
-  }
-  const safe: SonarrAddBody = {}
-  for (const key of NON_ADMIN_SONARR_ALLOW) {
-    if (raw[key] !== undefined) safe[key] = raw[key]
-  }
-  safe.rootFolderPath = folder.path
-  safe.qualityProfileId = profile.id
-  safe.monitored = true
-  safe.seasonFolder = true
-  // monitor: 'firstSeason' = Sonarr marks only season 1 monitored at
-  // add-time (or, for shows without a season 1, the lowest-numbered
-  // season — Sonarr's own resolution). Two reasons over the prior
-  // 'future':
-  //
-  // 1. 'future' leaves zero historical seasons monitored, which means
-  //    grabTvUnderCap (the cap-aware downloader gated on
-  //    `monitored.length > 0`) never fires for a completed show. The
-  //    user gets an apparently-successful add with nothing
-  //    downloaded — silent failure.
-  //
-  // 2. The HomeTab copy and the AddSeriesModal default both promise
-  //    "Season 1 by default." Non-admins don't see the picker, so
-  //    the server-materialized default IS the user-facing default.
-  //    'firstSeason' makes the docs match reality.
-  //
-  // Sonarr's RSS sweep against monitored seasons still respects the
-  // quality profile (load-bearing — that's why we mirrored Choose Me
-  // above), so this doesn't open a 4K HDR sluice; it just makes the
-  // first season actually get fetched.
-  safe.addOptions = {
-    searchForMissingEpisodes: true,
-    searchForCutoffUnmetEpisodes: false,
-    monitor: 'firstSeason',
-  }
-  safe.tags = []
-  return { ok: true, body: safe }
+  return { ok: true, body: materialized.body }
 }
 
 sonarr.post('/api/v3/series', sonarrMutateLimit, async (c) => {
   const session = c.get('session')
-  const parsedBody = await c.req.json().catch(() => null)
-  if (!parsedBody || typeof parsedBody !== 'object' || Array.isArray(parsedBody)) {
-    return c.json({ error: 'invalid_body' }, 400)
+  // STEP 1 — parse + policy.
+  const resolved = await resolveSeriesAddBody(session, await c.req.json().catch(() => null))
+  if (!resolved.ok) {
+    return c.json(resolved.payload, resolved.status)
   }
-  const rawBody = parsedBody as SonarrAddBody
-  let body: SonarrAddBody
-  // Pass through full admin policy only when the client actually sent
-  // policy fields. An admin previewing-as-user (auth.tsx makes isAdmin
-  // viewAs-aware) sends the slim user-shape body through AddSeriesModal
-  // — without this branch that body would skip materialize and trip the
-  // rootFolderPath_required gate below in 2ms, surfacing as the cryptic
-  // "Sonarr /series: 400" toast.
-  const adminSuppliedPolicy = session.role === 'admin' && rawBody.rootFolderPath !== undefined
-  if (adminSuppliedPolicy) {
-    body = rawBody
-  } else {
-    // Non-admins (and admins-in-preview) can't dictate policy. Replace
-    // policy fields with server-derived defaults so a direct-POST can't
-    // bypass the curated quality profile, root folder, or monitor mode.
-    const materialized = await materializeNonAdminSeriesBody(rawBody)
-    if (!materialized.ok) {
-      const payload: Record<string, unknown> = { error: materialized.reason }
-      if (materialized.expected_name) payload.expected_name = materialized.expected_name
-      if (materialized.available_names) payload.available_names = materialized.available_names
-      if (materialized.expected_path) payload.expected_path = materialized.expected_path
-      if (materialized.available_paths) payload.available_paths = materialized.available_paths
-      return c.json(payload, 503)
-    }
-    body = materialized.body
-  }
+  const body = resolved.body
   const wantedSearch =
     body.addOptions?.searchForMissingEpisodes !== false ||
     body.addOptions?.searchForCutoffUnmetEpisodes === true
 
-  // Hard disk-space gate. Fail closed on every "we couldn't actually
-  // measure free space" case — the prior implementation only blocked
-  // when rootFolderPath was supplied AND the folder matched AND
-  // freeSpace was a number, so a missing path, an unknown path, or a
-  // Sonarr response without freeSpace all silently bypassed the cap.
+  // STEP 2 — hard disk-space gate. Fail closed on every "we couldn't
+  // actually measure free space" case (missing path, unknown path, response
+  // without freeSpace) — shared logic in services/arrAdd.ts — plus Sonarr's
+  // own reservation-in-flight refusal (the TV grab is asynchronous, so a
+  // second search-bearing add against the same folder must wait for the
+  // in-flight plan to settle rather than double-spend the same headroom).
   if (!body.rootFolderPath) {
     return c.json(
       { error: 'rootFolderPath_required' },
@@ -531,46 +460,30 @@ sonarr.post('/api/v3/series', sonarrMutateLimit, async (c) => {
   }
   const rootFolders = await loadSonarrRootFolders()
   if (!rootFolders.ok) return rootFolders.response
-  const folders = rootFolders.folders
-  const folder = folders.find((f) => f.path === body.rootFolderPath)
-  if (!folder) {
-    return c.json(
-      { error: 'unknown_root_folder', path: body.rootFolderPath },
-      400,
-    )
+  const gate = gateRootFolderSpace({
+    rootFolderPath: body.rootFolderPath,
+    folders: rootFolders.folders,
+    ledger: sonarrReservations,
+  })
+  if (!gate.ok) {
+    return c.json(gate.failure.body, gate.failure.status)
   }
-  if (typeof folder.freeSpace !== 'number' || !Number.isFinite(folder.freeSpace)) {
-    return c.json(
-      { error: 'free_space_unknown', path: folder.path },
-      507,
-    )
-  }
-  const folderSnapshot: RootFolderSpaceSnapshot = { path: folder.path, freeSpace: folder.freeSpace }
-  const availableBytes = sonarrReservations.availableBytes(folderSnapshot)
-  if (availableBytes < env.minFreeBytes) {
-    return c.json(
-      {
-        error: 'insufficient_disk_space',
-        free_bytes: availableBytes,
-        threshold_bytes: env.minFreeBytes,
-        path: folderSnapshot.path,
-      },
-      507,
-    )
-  }
+  const folderSnapshot = gate.folder
   const reservedBytes = sonarrReservations.pendingBytes(folderSnapshot)
   if (wantedSearch && reservedBytes > 0) {
     return c.json(
       {
         error: 'root_folder_reservation_in_flight',
         reserved_bytes: reservedBytes,
-        free_bytes: availableBytes,
+        free_bytes: gate.availableBytes,
         path: folderSnapshot.path,
       },
       409,
     )
   }
 
+  // STEP 3 — create upstream with search-on-add forced off, so the cap
+  // filter is the only path that starts a download.
   const cappedBody = {
     ...body,
     addOptions: {
@@ -609,130 +522,10 @@ sonarr.post('/api/v3/series', sonarrMutateLimit, async (c) => {
     }
   }
 
+  // STEP 4+5 — reconcile what Sonarr actually monitored, then spawn the
+  // cap-enforced grab in the background.
   if (r.ok && wantedSearch) {
-    try {
-      type CreatedSeries = {
-        id?: number
-        monitored?: boolean
-        seasons?: Array<{ seasonNumber: number; monitored: boolean }>
-        title?: string
-        [key: string]: unknown
-      }
-      const created = JSON.parse(out) as CreatedSeries
-      const id = created.id
-      let monitored =
-        body.addOptions?.monitor === 'all' && body.seasons
-          ? body.seasons.map((s) => s.seasonNumber)
-          : (body.seasons ?? created.seasons ?? [])
-              .filter((s) => s.monitored)
-              .map((s) => s.seasonNumber)
-
-      // Race-tolerant re-read for the non-admin / 'monitor': 'firstSeason'
-      // path. The non-admin body has no explicit seasons[] — we rely on
-      // created.seasons to know what Sonarr actually monitored after the
-      // add pipeline applied addOptions.monitor. For shows whose metadata
-      // is still being fetched at POST-response time (especially brand-new
-      // series), Sonarr can echo an empty or pre-monitor seasons array,
-      // leaving monitored.length === 0 even though firstSeason will land
-      // S1 monitored a moment later. Without this re-read, grabTvUnderCap
-      // is silently skipped and the user gets an apparently-successful
-      // add with no download — exactly the regression Round 23's fix
-      // was meant to close.
-      //
-      // Guard: only re-read when body.seasons is undefined (no explicit
-      // admin intent) AND monitored.length is 0 (we have nothing to act
-      // on yet). Single GET, no retry loop — if Sonarr still hasn't
-      // resolved metadata, skipping the grab is the safer outcome than
-      // looping in the request handler.
-      if (id && monitored.length === 0 && !body.seasons) {
-        try {
-          const fresh = await sonarrFetch(`/api/v3/series/${id}`, { method: 'GET' })
-          if (fresh.ok) {
-            const refreshed = (await fresh.json()) as {
-              seasons?: Array<{ seasonNumber: number; monitored: boolean }>
-            }
-            monitored = (refreshed.seasons ?? [])
-              .filter((s) => s.monitored)
-              .map((s) => s.seasonNumber)
-          }
-        } catch (e) {
-          console.warn(
-            `[tv-monitor] re-read series ${id} for monitored seasons failed: ` +
-              (e instanceof Error ? e.message : String(e)),
-          )
-        }
-      }
-
-      // The modal's single-season picker sends
-      // `addOptions.monitor: 'none'` plus an explicit seasons[] with
-      // only the chosen season monitored. Sonarr's add pipeline applies
-      // `addOptions.monitor` *after* the seasons[] array, so 'none'
-      // ends up wiping every season's monitored flag — even the one
-      // the user picked. Without this PUT-back, the series is silently
-      // dropped from Sonarr's RSS sweep: our initial cap grab fires
-      // once (because we use body.seasons below), but on failure
-      // there's nothing monitored to recover, and the user sees a
-      // permanently empty library entry. Detect the case and reconcile.
-      if (
-        id &&
-        monitored.length > 0 &&
-        body.addOptions?.monitor === 'none'
-      ) {
-        let seriesForPatch = created
-        if (!seriesForPatch.seasons || seriesForPatch.seasons.length === 0) {
-          try {
-            const fresh = await sonarrFetch(`/api/v3/series/${id}`, { method: 'GET' })
-            if (fresh.ok) {
-              const refreshed = (await fresh.json()) as CreatedSeries
-              if (refreshed.seasons && refreshed.seasons.length > 0) {
-                seriesForPatch = refreshed
-              }
-            }
-          } catch (e) {
-            console.warn(
-              `[tv-monitor] re-read series ${id} for season reconciliation failed: ` +
-                (e instanceof Error ? e.message : String(e)),
-            )
-          }
-        }
-        if (seriesForPatch.seasons && seriesForPatch.seasons.length > 0) {
-          const desired = new Set(monitored)
-          const patched = {
-            ...seriesForPatch,
-            monitored: true,
-            seasons: seriesForPatch.seasons.map((s) => ({
-              ...s,
-              monitored: desired.has(s.seasonNumber),
-            })),
-          }
-          const putRes = await sonarrFetch(`/api/v3/series/${id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(patched),
-          })
-          if (!putRes.ok) {
-            console.error(`[tv-monitor] PUT series ${id} failed: ${putRes.status}`)
-          }
-        }
-      }
-
-      if (id && monitored.length > 0) {
-        const itemId = id
-        const itemTitle = created.title
-        void grabTvUnderCap(itemId, monitored, itemTitle, folderSnapshot, session.sub).catch((e) => {
-          console.error('[tv-cap] grab failed:', e)
-          void recordSonarrGrabEvent({
-            itemId,
-            title: itemTitle,
-            sub: session.sub,
-            type: 'grab_failed',
-            error: e instanceof Error ? e.message : String(e),
-          })
-        })
-      }
-    } catch {
-      // Pass through; series was added if r.ok.
-    }
+    await reconcileMonitorsAndSpawnGrab(out, body, folderSnapshot, session.sub)
   }
 
   return new Response(out, {
@@ -740,6 +533,171 @@ sonarr.post('/api/v3/series', sonarrMutateLimit, async (c) => {
     headers: { 'Content-Type': r.headers.get('Content-Type') ?? 'application/json' },
   })
 })
+
+type CreatedSeries = {
+  id?: number
+  monitored?: boolean
+  seasons?: Array<{ seasonNumber: number; monitored: boolean }>
+  title?: string
+  [key: string]: unknown
+}
+
+// STEP 4 — resolve which seasons ended up monitored, with a race-tolerant
+// re-read for the non-admin / 'monitor': 'firstSeason' path. The non-admin
+// body has no explicit seasons[] — we rely on created.seasons to know what
+// Sonarr actually monitored after the add pipeline applied
+// addOptions.monitor. For shows whose metadata is still being fetched at
+// POST-response time (especially brand-new series), Sonarr can echo an empty
+// or pre-monitor seasons array, leaving monitored.length === 0 even though
+// firstSeason will land S1 monitored a moment later. Without this re-read,
+// grabTvUnderCap is silently skipped and the user gets an apparently-
+// successful add with no download — exactly the regression Round 23's fix
+// was meant to close.
+//
+// Guard: only re-read when body.seasons is undefined (no explicit admin
+// intent) AND monitored.length is 0 (we have nothing to act on yet). Single
+// GET, no retry loop — if Sonarr still hasn't resolved metadata, skipping
+// the grab is the safer outcome than looping in the request handler.
+async function resolveMonitoredSeasons(body: SonarrAddBody, created: CreatedSeries): Promise<number[]> {
+  const id = created.id
+  let monitored =
+    body.addOptions?.monitor === 'all' && body.seasons
+      ? body.seasons.map((s) => s.seasonNumber)
+      : (body.seasons ?? created.seasons ?? [])
+          .filter((s) => s.monitored)
+          .map((s) => s.seasonNumber)
+
+  if (id && monitored.length === 0 && !body.seasons) {
+    try {
+      const fresh = await sonarrFetch(`/api/v3/series/${id}`, { method: 'GET' })
+      if (fresh.ok) {
+        const refreshed = (await fresh.json()) as {
+          seasons?: Array<{ seasonNumber: number; monitored: boolean }>
+        }
+        monitored = (refreshed.seasons ?? [])
+          .filter((s) => s.monitored)
+          .map((s) => s.seasonNumber)
+      }
+    } catch (e) {
+      console.warn(
+        `[tv-monitor] re-read series ${id} for monitored seasons failed: ` +
+          (e instanceof Error ? e.message : String(e)),
+      )
+    }
+  }
+  return monitored
+}
+
+// STEP 5 (reconcile leg) — the modal's single-season picker sends
+// `addOptions.monitor: 'none'` plus an explicit seasons[] with only the
+// chosen season monitored. Sonarr's add pipeline applies
+// `addOptions.monitor` *after* the seasons[] array, so 'none' ends up wiping
+// every season's monitored flag — even the one the user picked. Without this
+// PUT-back, the series is silently dropped from Sonarr's RSS sweep: our
+// initial cap grab fires once (because we use body.seasons), but on failure
+// there's nothing monitored to recover, and the user sees a permanently
+// empty library entry. Detect the case and reconcile.
+async function reconcileExplicitSeasonPick(
+  id: number,
+  monitored: number[],
+  created: CreatedSeries,
+): Promise<void> {
+  let seriesForPatch = created
+  if (!seriesForPatch.seasons || seriesForPatch.seasons.length === 0) {
+    try {
+      const fresh = await sonarrFetch(`/api/v3/series/${id}`, { method: 'GET' })
+      if (fresh.ok) {
+        const refreshed = (await fresh.json()) as CreatedSeries
+        if (refreshed.seasons && refreshed.seasons.length > 0) {
+          seriesForPatch = refreshed
+        }
+      }
+    } catch (e) {
+      console.warn(
+        `[tv-monitor] re-read series ${id} for season reconciliation failed: ` +
+          (e instanceof Error ? e.message : String(e)),
+      )
+    }
+  }
+  if (seriesForPatch.seasons && seriesForPatch.seasons.length > 0) {
+    const desired = new Set(monitored)
+    const patched = {
+      ...seriesForPatch,
+      monitored: true,
+      seasons: seriesForPatch.seasons.map((s) => ({
+        ...s,
+        monitored: desired.has(s.seasonNumber),
+      })),
+    }
+    const putRes = await sonarrFetch(`/api/v3/series/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patched),
+    })
+    if (!putRes.ok) {
+      console.error(`[tv-monitor] PUT series ${id} failed: ${putRes.status}`)
+    }
+  }
+}
+
+// STEP 5 (spawn leg) — fire the cap-enforced grab WITHOUT awaiting it.
+//
+// DELIBERATE divergence from Radarr (which awaits grabBestUnderCap and maps
+// the outcome to 424/rollback responses): a TV grab runs one interactive
+// indexer search PER monitored season plus Sonarr metadata polling, with
+// multi-second settle delays baked in — awaiting it would pin the add
+// request for tens of seconds and time out at proxies, and there is no
+// rollback semantic on this path (the series is kept and monitored whatever
+// the grab outcome). The SPA matches this contract: movie adds surface
+// synchronous capped_grab_* toasts (src/lib/api/errors.ts), while TV
+// outcomes arrive via the GrabActivityPanel's 10s /api/grabs/by-item
+// polling of the grab-event log this function writes to.
+function spawnCappedTvGrab(opts: {
+  itemId: number
+  monitored: number[]
+  title?: string
+  folder: RootFolderSpaceSnapshot
+  sub: string
+}): void {
+  const { itemId, monitored, title, folder, sub } = opts
+  void grabTvUnderCap(itemId, monitored, title, folder, sub).catch((e) => {
+    console.error('[tv-cap] grab failed:', e)
+    void recordSonarrGrabEvent({
+      itemId,
+      title,
+      sub,
+      type: 'grab_failed',
+      error: e instanceof Error ? e.message : String(e),
+    })
+  })
+}
+
+// STEPs 4+5 composed: parse the created series, work out the monitored
+// seasons, repair the monitor:'none' wipe, then spawn the background grab.
+// Never throws — a parse failure passes through (the series was added if
+// the upstream call was ok).
+async function reconcileMonitorsAndSpawnGrab(
+  out: string,
+  body: SonarrAddBody,
+  folderSnapshot: RootFolderSpaceSnapshot,
+  sub: string,
+): Promise<void> {
+  try {
+    const created = JSON.parse(out) as CreatedSeries
+    const id = created.id
+    const monitored = await resolveMonitoredSeasons(body, created)
+
+    if (id && monitored.length > 0 && body.addOptions?.monitor === 'none') {
+      await reconcileExplicitSeasonPick(id, monitored, created)
+    }
+
+    if (id && monitored.length > 0) {
+      spawnCappedTvGrab({ itemId: id, monitored, title: created.title, folder: folderSnapshot, sub })
+    }
+  } catch {
+    // Pass through; series was added if the upstream POST was ok.
+  }
+}
 
 // Flip a single season on an existing series to monitored=true, then
 // auto-grab it under the per-episode size cap. Admin only.
@@ -787,40 +745,24 @@ sonarr.post('/api/v3/series/:id/seasons/:n/monitor', requireAdmin, sonarrMutateL
   }
   const rootFolders = await loadSonarrRootFolders()
   if (!rootFolders.ok) return rootFolders.response
-  const folders = rootFolders.folders
-  const folder = folders.find((f) => f.path === series.rootFolderPath)
-  if (!folder) {
-    return c.json(
-      { error: 'unknown_root_folder', path: series.rootFolderPath },
-      400,
-    )
+  // Shared fail-closed space gate + Sonarr's reservation-in-flight refusal
+  // (same pair as the add route).
+  const gate = gateRootFolderSpace({
+    rootFolderPath: series.rootFolderPath,
+    folders: rootFolders.folders,
+    ledger: sonarrReservations,
+  })
+  if (!gate.ok) {
+    return c.json(gate.failure.body, gate.failure.status)
   }
-  if (typeof folder.freeSpace !== 'number' || !Number.isFinite(folder.freeSpace)) {
-    return c.json(
-      { error: 'free_space_unknown', path: folder.path },
-      507,
-    )
-  }
-  const folderSnapshot: RootFolderSpaceSnapshot = { path: folder.path, freeSpace: folder.freeSpace }
-  const availableBytes = sonarrReservations.availableBytes(folderSnapshot)
-  if (availableBytes < env.minFreeBytes) {
-    return c.json(
-      {
-        error: 'insufficient_disk_space',
-        free_bytes: availableBytes,
-        threshold_bytes: env.minFreeBytes,
-        path: folderSnapshot.path,
-      },
-      507,
-    )
-  }
+  const folderSnapshot = gate.folder
   const reservedBytes = sonarrReservations.pendingBytes(folderSnapshot)
   if (reservedBytes > 0) {
     return c.json(
       {
         error: 'root_folder_reservation_in_flight',
         reserved_bytes: reservedBytes,
-        free_bytes: availableBytes,
+        free_bytes: gate.availableBytes,
         path: folderSnapshot.path,
       },
       409,
@@ -841,17 +783,15 @@ sonarr.post('/api/v3/series/:id/seasons/:n/monitor', requireAdmin, sonarrMutateL
   if (!putRes.ok) {
     return new Response(await putRes.text(), { status: putRes.status })
   }
-  // Fire the cap-enforced grab in the background — same path the add
-  // flow uses, so the new season comes in via the same size gate.
-  void grabTvUnderCap(id, [n], series.title, folderSnapshot, c.get('session').sub).catch((e) => {
-    console.error('[tv-monitor-season] grab failed:', e)
-    void recordSonarrGrabEvent({
-      itemId: id,
-      title: series.title,
-      sub: c.get('session').sub,
-      type: 'grab_failed',
-      error: e instanceof Error ? e.message : String(e),
-    })
+  // Fire the cap-enforced grab in the background — same spawn path the add
+  // flow uses (see spawnCappedTvGrab for why TV grabs are deliberately
+  // fire-and-forget), so the new season comes in via the same size gate.
+  spawnCappedTvGrab({
+    itemId: id,
+    monitored: [n],
+    title: series.title,
+    folder: folderSnapshot,
+    sub: c.get('session').sub,
   })
   return c.json({ ok: true, seriesId: id, seasonNumber: n })
 })

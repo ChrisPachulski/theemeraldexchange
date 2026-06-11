@@ -5,7 +5,7 @@
 // tries to start a stream.
 
 import { Hono, type Context } from 'hono'
-import { randomUUID, timingSafeEqual } from 'node:crypto'
+import { timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { gzip } from 'node:zlib'
@@ -18,7 +18,6 @@ const gzipAsync = promisify(gzip)
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { getAccountInfo, credsFromEnv } from '../services/xtream.js'
 import { nodeReadableToWebStream } from '../services/streamBridge.js'
-import { syncOnce, type SyncResult } from '../services/iptvSync.js'
 import { iptvDb } from '../services/iptvDbSingleton.js'
 import {
   listCategories,
@@ -34,24 +33,42 @@ import { checkReplay } from '../services/tokenReplayCache.js'
 import { parseSub } from '../services/sub.js'
 import { resolveSourcePrecedence } from '../services/sourcePrecedence.js'
 import { streamConcurrency, type SessionView, type SessionKind } from '../services/iptvConcurrency.js'
-import { rewriteManifest } from '../services/iptvHlsRewrite.js'
 import { postFeedback } from '../services/recommender.js'
 import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
 import { type Session } from '../session.js'
 import { crossedWatchThreshold, type WatchPoint } from '../services/watchSignal.js'
-import { memberStatus } from '../services/membership.js'
 import {
   isPublicHttpsUpstream,
   guardedFetch,
   guardedFetchTrustedOrigin,
   SsrfBlockedError,
 } from '../services/ssrfGuard.js'
+import { heartbeatRemuxSession } from '../services/iptvRemux.js'
 import {
-  heartbeatRemuxSession,
-  listRemuxSessions,
-  startRemuxSession,
-  stopRemuxSession,
-} from '../services/iptvRemux.js'
+  ensureLiveRemuxEntry,
+  forgetLiveRemuxEntry,
+  getActiveLiveRemuxEntry,
+  remuxSegmentResource,
+  rewriteRemuxManifest,
+} from '../services/iptvLiveRemuxMap.js'
+import {
+  authorizePlaylistToken,
+  buildPlaylistM3u,
+  listPlaylistTokens,
+  mintPlaylistToken,
+  revokePlaylistToken,
+} from '../services/iptvPlaylist.js'
+import {
+  fetchAndRewriteHlsPlaylist,
+  proxyRangeableUpstream,
+} from '../services/iptvHlsProxy.js'
+import { getSyncJob, startSyncJob } from '../services/iptvSyncJobs.js'
+import {
+  channelArchiveRow,
+  containerExtensionRow,
+  episodeTitleRow,
+  nameRow,
+} from '../services/iptvRows.js'
 import { env } from '../env.js'
 import { parseLimitedJson } from '../services/parseLimitedJson.js'
 
@@ -156,33 +173,25 @@ function sessionTitle(kind: SessionKind, resourceId: string): string | null {
   const db = iptvDb().raw
   try {
     if (kind === 'live' || kind === 'remux') {
-      const row = db
-        .prepare('SELECT name FROM channels WHERE stream_id = ?')
-        .get(Number(resourceId)) as { name: string } | undefined
+      const row = nameRow(db.prepare('SELECT name FROM channels WHERE stream_id = ?').get(Number(resourceId)))
       return row?.name ?? null
     }
     if (kind === 'vod') {
-      const row = db
-        .prepare('SELECT name FROM vod WHERE stream_id = ?')
-        .get(Number(resourceId)) as { name: string } | undefined
+      const row = nameRow(db.prepare('SELECT name FROM vod WHERE stream_id = ?').get(Number(resourceId)))
       return row?.name ?? null
     }
     if (kind === 'series') {
-      const row = db
-        .prepare('SELECT title, series_id FROM series_episodes WHERE episode_id = ?')
-        .get(resourceId) as { title: string | null; series_id: number } | undefined
+      const row = episodeTitleRow(
+        db.prepare('SELECT title, series_id FROM series_episodes WHERE episode_id = ?').get(resourceId),
+      )
       if (!row) return null
-      const series = db
-        .prepare('SELECT name FROM series WHERE series_id = ?')
-        .get(row.series_id) as { name: string } | undefined
+      const series = nameRow(db.prepare('SELECT name FROM series WHERE series_id = ?').get(row.series_id))
       return series ? `${series.name}${row.title ? ` — ${row.title}` : ''}` : row.title
     }
     if (kind === 'catchup') {
       // catchup resourceId encoded as streamId|startUtc|durationMin
       const sid = Number(resourceId.split('|')[0])
-      const row = db
-        .prepare('SELECT name FROM channels WHERE stream_id = ?')
-        .get(sid) as { name: string } | undefined
+      const row = nameRow(db.prepare('SELECT name FROM channels WHERE stream_id = ?').get(sid))
       return row?.name ?? null
     }
   } catch {
@@ -381,14 +390,6 @@ function userOf(c: Context<Env>): { sub: string } {
   throw new Error('missing_user')
 }
 
-function escapeM3uAttr(value: string): string {
-  // Provider-controlled fields (channel name, group title, tvg-id/logo) are
-  // interpolated into a quoted #EXTINF attribute and the trailing display name.
-  // Collapse CR/LF/tab (which would otherwise inject new playlist lines, e.g. a
-  // rogue #EXTINF + stream URL) to a space and neutralize the attribute quote.
-  return value.replace(/[\r\n\t]+/g, ' ').replace(/"/g, '\'').trim()
-}
-
 // Constant-time secret comparison (length-prefixed) so a shared-secret check
 // doesn't leak via response timing. Mirrors how the other auth secrets compare.
 function secretsEqual(a: string, b: string): boolean {
@@ -398,6 +399,8 @@ function secretsEqual(a: string, b: string): boolean {
   return timingSafeEqual(ab, bb)
 }
 
+// Playlist-token lifecycle + M3U generation live in services/iptvPlaylist.ts;
+// these handlers only parse the HTTP shape and map outcomes to statuses.
 iptv.post('/playlist/token', requireAuth, async (c) => {
   const { sub } = userOf(c)
   // Optional device label — free-form string, max 120 chars. Returned in the
@@ -410,138 +413,37 @@ iptv.post('/playlist/token', requireAuth, async (c) => {
   const deviceName = typeof body.deviceName === 'string'
     ? body.deviceName.trim().slice(0, 120)
     : undefined
-  // 90-day TTL per §5.6 / D12. M1 used 30 days; updated to contract value.
-  const ttl = 90 * 24 * 3600
-  const jti = randomUUID()
-  const now = new Date()
-  const expiresAt = new Date(now.getTime() + ttl * 1000)
-  const token = signStreamToken(env.streamTokenSecret, {
-    kind: 'playlist', resourceId: 'iptv-channels-all', sub, ttlSecs: ttl, jti,
-  })
-  // Persist the token row so the verifier can check revocation (§6.2).
-  iptvDb().stmts.insertPlaylistToken.run({
-    jti,
-    sub,
-    device_name: deviceName ?? null,
-    issued_at: now.toISOString(),
-    expires_at: expiresAt.toISOString(),
-  })
-  const baseUrl = publicBaseUrl(c)
-  return c.json({
-    jti,
-    deviceName: deviceName ?? null,
-    url: `${baseUrl}/api/iptv/playlist.m3u?t=${token}`,
-    expiresAt: expiresAt.toISOString(),
-  })
+  return c.json(mintPlaylistToken({ sub, deviceName, baseUrl: publicBaseUrl(c) }))
 })
-
-type PlaylistTokenRow = {
-  jti: string
-  sub: string
-  device_name: string | null
-  issued_at: string
-  expires_at: string
-  revoked_at: string | null
-}
-
-function playlistTokenView(row: PlaylistTokenRow) {
-  return {
-    jti: row.jti,
-    sub: row.sub,
-    deviceName: row.device_name,
-    issuedAt: row.issued_at,
-    expiresAt: row.expires_at,
-    revokedAt: row.revoked_at,
-    revoked: row.revoked_at != null,
-  }
-}
 
 iptv.get('/playlist/tokens', requireAuth, (c) => {
   const { sub } = userOf(c)
-  const rows = iptvDb().stmts.listPlaylistTokensBySub.all(sub) as PlaylistTokenRow[]
-  return c.json({ tokens: rows.map(playlistTokenView) })
+  return c.json({ tokens: listPlaylistTokens(sub) })
 })
 
 iptv.delete('/playlist/tokens/:jti', requireAuth, (c) => {
   const session = c.get('session')
-  const jti = c.req.param('jti')
-  const row = iptvDb().stmts.getPlaylistToken.get(jti) as PlaylistTokenRow | undefined
-  if (!row) return c.json({ error: 'not_found' }, 404)
-  if (row.sub !== session.sub && session.role !== 'admin') {
-    return c.json({ error: 'forbidden' }, 403)
-  }
-  const info = iptvDb().stmts.revokePlaylistToken.run(new Date().toISOString(), jti)
-  if (info.changes === 0 && row.revoked_at != null) return c.json({ error: 'already_revoked' }, 409)
+  const outcome = revokePlaylistToken(c.req.param('jti'), {
+    sub: session.sub,
+    isAdmin: session.role === 'admin',
+  })
+  if (outcome === 'not_found') return c.json({ error: 'not_found' }, 404)
+  if (outcome === 'forbidden') return c.json({ error: 'forbidden' }, 403)
+  if (outcome === 'already_revoked') return c.json({ error: 'already_revoked' }, 409)
   return c.json({ ok: true })
 })
 
 // Hit by external players (VLC, iPlayTV, TiviMate) that have no session
 // cookie. Token-in-URL is the auth; see comment on /stream/live/:id.ts.
 iptv.get('/playlist.m3u', (c) => {
-  const t = c.req.query('t') ?? ''
-  let claims: ReturnType<typeof verifyStreamToken>
-  try {
-    claims = verifyStreamToken(env.streamTokenSecret, t)
-    if (claims.k !== 'playlist') throw new Error('kind_mismatch')
-    // §16 D-row: canonical rid is 'iptv-channels-all'. The M1-era 'all'
-    // fallback (D2a migration window) is gone — those tokens have expired.
-    if (claims.rid !== 'iptv-channels-all') {
-      throw new Error('resource_mismatch')
-    }
-  } catch (err) {
-    return c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401)
+  const auth = authorizePlaylistToken(c.req.query('t') ?? '')
+  if (!auth.ok) {
+    return c.json(
+      auth.detail ? { error: auth.error, detail: auth.detail } : { error: auth.error },
+      401,
+    )
   }
-
-  // Persistent revocation check (§6.2 / D12). Every playlist token minted
-  // since D12 persists its jti in iptv_playlist_tokens at mint time, so the
-  // row lookup is unconditional: no row → reject (pre-D12 tokens have expired
-  // naturally), revoked_at IS NOT NULL → hard reject regardless of the HMAC
-  // signature being valid.
-  const row = iptvDb().stmts.getPlaylistToken.get(claims.jti) as
-    | { jti: string; sub: string; issued_at: string; expires_at: string; revoked_at: string | null }
-    | undefined
-  if (!row) {
-    return c.json({ error: 'token_not_found' }, 401)
-  }
-  if (row.revoked_at != null) {
-    return c.json({ error: 'token_revoked' }, 401)
-  }
-
-  const status = memberStatus(claims.sub)
-  if (status !== 'allowed') {
-    if (status === 'revoked') {
-      iptvDb().stmts.revokePlaylistToken.run(new Date().toISOString(), claims.jti)
-    }
-    return c.json({ error: 'access_revoked' }, 401)
-  }
-
-  const channels = iptvDb().raw
-    .prepare(`SELECT stream_id, num, name, stream_icon, epg_channel_id, category_id FROM channels ORDER BY num, name`)
-    .all() as Array<{ stream_id: number; num: number; name: string; stream_icon: string | null; epg_channel_id: string | null; category_id: number | null }>
-  const catNames = new Map<number, string>()
-  for (const row of iptvDb().raw.prepare(`SELECT category_id, name FROM categories WHERE kind='live'`).all() as Array<{ category_id: number; name: string }>) {
-    catNames.set(row.category_id, row.name)
-  }
-
-  // Per-channel segment grants: 300-second TTL per §5.6 / D12.
-  // M1 used 30 days here; that was wrong — external players re-fetch the M3U
-  // frequently enough that 300 s is fine, and shorter TTL limits credential
-  // exposure if the M3U body leaks.
-  const baseUrl = publicBaseUrl(c)
-  const chTtl = 300
-  const lines: string[] = ['#EXTM3U']
-  for (const ch of channels) {
-    const chToken = signStreamToken(env.streamTokenSecret, {
-      kind: 'live', resourceId: String(ch.stream_id), sub: claims.sub, ttlSecs: chTtl,
-    })
-    const url = `${baseUrl}/api/iptv/stream/live/${ch.stream_id}.ts?t=${chToken}`
-    const groupTitle = ch.category_id != null ? (catNames.get(ch.category_id) ?? 'Other') : 'Other'
-    const tvgId = escapeM3uAttr(ch.epg_channel_id ?? '')
-    const tvgLogo = escapeM3uAttr(ch.stream_icon ?? '')
-    lines.push(`#EXTINF:-1 tvg-id="${tvgId}" tvg-name="${escapeM3uAttr(ch.name)}" tvg-logo="${tvgLogo}" group-title="${escapeM3uAttr(groupTitle)}",${escapeM3uAttr(ch.name)}`)
-    lines.push(url)
-  }
-  return new Response(lines.join('\n') + '\n', {
+  return new Response(buildPlaylistM3u(auth.sub, publicBaseUrl(c)), {
     status: 200,
     headers: {
       'Content-Type': 'audio/x-mpegurl',
@@ -758,9 +660,11 @@ iptv.post('/stream/catchup/:streamId/grant', requireAuth, async (c) => {
     return c.json({ error: 'rid_invalid' }, 400)
   }
 
-  const channel = iptvDb().raw
-    .prepare(`SELECT tv_archive, tv_archive_duration FROM channels WHERE stream_id = ?`)
-    .get(Number(streamId)) as { tv_archive: number; tv_archive_duration: number | null } | undefined
+  const channel = channelArchiveRow(
+    iptvDb().raw
+      .prepare(`SELECT tv_archive, tv_archive_duration FROM channels WHERE stream_id = ?`)
+      .get(Number(streamId)),
+  )
   if (!channel) return c.json({ error: 'not_found' }, 404)
   if (channel.tv_archive !== 1) return c.json({ error: 'catchup_unavailable' }, 400)
 
@@ -840,171 +744,16 @@ function checkToken(c: Context<Env>, expectKind: StreamKind, resourceId: string)
   }
 }
 
-type LiveRemuxEntry = { sessionId: string; dir: string; manifestPath: string }
-const liveRemuxIndex = new Map<string, LiveRemuxEntry>()
-
-function remuxKey(streamId: string, sub: string): string {
-  return `${streamId}:${sub}`
-}
+// The live remux session index (which viewer owns which ffmpeg session,
+// manifest/segment URL rewriting) lives in services/iptvLiveRemuxMap.ts.
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function isRemuxSessionActive(sessionId: string): boolean {
-  return listRemuxSessions().some((s) => s.sessionId === sessionId)
-}
-
-function forgetRemuxSession(key: string, sessionId: string): void {
-  liveRemuxIndex.delete(key)
-  stopRemuxSession(sessionId)
-}
-
-function rewriteRemuxManifest(text: string, streamId: string, sessionId: string, sub: string): string {
-  return text
-    .split(/\r?\n/)
-    .map((line) => {
-      if (!line || line.startsWith('#')) return line
-      const segFile = path.basename(line.trim())
-      if (!/^seg_\d{5}\.ts$/.test(segFile)) return line
-      const token = signStreamToken(env.streamTokenSecret, {
-        kind: 'remux',
-        resourceId: `${sessionId}/${segFile}`,
-        sub,
-        ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
-      })
-      return `/api/iptv/stream/live/${streamId}/remux/seg?t=${encodeURIComponent(token)}`
-    })
-    .join('\n')
-}
-
-function remuxSegmentResource(resourceId: string): { sessionId: string; segFile: string } | null {
-  const slash = resourceId.lastIndexOf('/')
-  if (slash <= 0 || slash === resourceId.length - 1) return null
-  const sessionId = resourceId.slice(0, slash)
-  const segFile = resourceId.slice(slash + 1)
-  if (!/^seg_\d{5}\.ts$/.test(segFile)) return null
-  return { sessionId, segFile }
-}
-
-async function proxyRangeable(c: Context, upstreamUrl: string, mime: string): Promise<Response> {
-  const controller = new AbortController()
-  c.req.raw.signal.addEventListener('abort', () => controller.abort(), { once: true })
-  const headers: Record<string, string> = {}
-  const range = c.req.header('range')
-  if (range) headers.Range = range
-
-  // SSRF: the creds host is operator-trusted, but an upstream-issued redirect
-  // is not — guardedFetchTrustedOrigin re-validates every 30x target so a
-  // panel can't bounce us into the internal network (findings 8-0/16-0).
-  let upstream: Response
-  try {
-    upstream = await guardedFetchTrustedOrigin(upstreamUrl, { signal: controller.signal, headers })
-  } catch (err) {
-    if (err instanceof SsrfBlockedError) return c.json({ error: 'bad_upstream' }, 400)
-    throw err
-  }
-  if (!upstream.ok || !upstream.body) return c.json({ error: `upstream_${upstream.status}` }, 502)
-
-  const responseHeaders = new Headers({
-    'Content-Type': mime,
-    'Cache-Control': 'no-store',
-  })
-  const contentLength = upstream.headers.get('content-length')
-  if (contentLength) responseHeaders.set('Content-Length', contentLength)
-  const contentRange = upstream.headers.get('content-range')
-  if (contentRange) responseHeaders.set('Content-Range', contentRange)
-  const acceptRanges = upstream.headers.get('accept-ranges')
-  if (acceptRanges) responseHeaders.set('Accept-Ranges', acceptRanges)
-
-  return new Response(upstream.body, { status: upstream.status, headers: responseHeaders })
-}
-
-// Read a response body as text, refusing past `maxBytes` (null = too large).
-// HLS manifests are small; an attacker-influenceable upstream must not be able
-// to balloon the proxy's memory with an unbounded .text() buffer.
-async function readBoundedText(res: Response, maxBytes: number): Promise<string | null> {
-  if (!res.body) return ''
-  const declared = Number(res.headers.get('content-length') ?? '')
-  if (Number.isFinite(declared) && declared > maxBytes) {
-    await res.body.cancel().catch(() => undefined)
-    return null
-  }
-  const reader = res.body.getReader()
-  const chunks: Uint8Array[] = []
-  let total = 0
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    if (!value) continue
-    total += value.byteLength
-    if (total > maxBytes) {
-      await reader.cancel().catch(() => undefined)
-      return null
-    }
-    chunks.push(value)
-  }
-  return Buffer.concat(chunks).toString('utf-8')
-}
-
-function isAbortError(err: unknown): boolean {
-  return err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')
-}
-
-async function rewriteHlsPlaylist(c: Context, upstreamUrl: string, sub: string): Promise<Response> {
-  // Defense-in-depth: this is reached via the segment handler (which already
-  // SSRF-checks) but also fetches a sub-playlist URL directly, so re-validate
-  // before egress rather than trust the caller.
-  let parsed: URL
-  try {
-    parsed = new URL(upstreamUrl)
-  } catch {
-    return c.json({ error: 'bad_upstream' }, 400)
-  }
-  if (!isPublicHttpsUpstream(parsed)) return c.json({ error: 'bad_upstream' }, 400)
-
-  // guardedFetch re-validates the host's resolved IPs and every redirect hop
-  // (DNS-rebinding + redirect-SSRF). The isPublicHttpsUpstream check above is
-  // the cheap up-front string reject; resolve-and-validate happens inside.
-  //
-  // Deadline + abort propagation: the manifest fetch (headers AND body)
-  // is bounded by a whole-transfer timeout composed with the client's own
-  // signal, and egress() adds a fresh per-hop timeout — a hung or
-  // drip-feeding upstream cannot pin this request open, and a client that
-  // gives up tears the upstream fetch down with it (matching the live/
-  // segment byte paths, which propagate c.req.raw.signal).
-  const signal = AbortSignal.any([
-    c.req.raw.signal,
-    AbortSignal.timeout(env.IPTV_MANIFEST_FETCH_TIMEOUT_MS),
-  ])
-  let upstream: Response
-  let text: string | null
-  try {
-    upstream = await guardedFetch(upstreamUrl, { signal }, {
-      hopTimeoutMs: env.IPTV_MANIFEST_FETCH_TIMEOUT_MS,
-    })
-    if (!upstream.ok) return c.json({ error: `upstream_${upstream.status}` }, 502)
-    text = await readBoundedText(upstream, env.IPTV_MANIFEST_MAX_BYTES)
-  } catch (err) {
-    if (err instanceof SsrfBlockedError) return c.json({ error: 'bad_upstream' }, 400)
-    if (isAbortError(err)) return c.json({ error: 'upstream_timeout' }, 504)
-    throw err
-  }
-  if (text == null) return c.json({ error: 'manifest_too_large' }, 502)
-  const sign = (url: string) =>
-    signStreamToken(env.streamTokenSecret, {
-      kind: 'segment', resourceId: url, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
-    })
-  const rewritten = rewriteManifest(text, upstreamUrl, sign, '/api/iptv/stream/segment')
-
-  return new Response(rewritten, {
-    status: 200,
-    headers: {
-      'Content-Type': 'application/vnd.apple.mpegurl',
-      'Cache-Control': 'no-store',
-    },
-  })
-}
+// Upstream HLS rewrite + rangeable progressive proxying live in
+// services/iptvHlsProxy.ts (Hono-free, unit-testable); the handlers below
+// pass the request signal/range through explicitly.
 
 // Stream-bytes endpoints are token-authed via the URL-signed HMAC, not
 // cookie-authed. The grant POSTs above still require session auth so
@@ -1089,19 +838,9 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
   // concurrent AVPlayer viewers each held an unaccounted upstream connection.
   streamConcurrency().heartbeatByResource(v.sub, 'remux', streamId)
 
-  const key = remuxKey(streamId, v.sub)
-  let entry = liveRemuxIndex.get(key)
-  if (entry && !isRemuxSessionActive(entry.sessionId)) {
-    liveRemuxIndex.delete(key)
-    entry = undefined
-  }
-  if (!entry) {
-    const creds = credsFromEnv()
-    const upstreamUrl = `${creds.host}/live/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${streamId}.ts`
-    const session = startRemuxSession({ streamId, sub: v.sub, upstreamUrl })
-    entry = { sessionId: session.sessionId, dir: session.dir, manifestPath: session.manifestPath }
-    liveRemuxIndex.set(key, entry)
-  }
+  const creds = credsFromEnv()
+  const upstreamUrl = `${creds.host}/live/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${streamId}.ts`
+  const entry = ensureLiveRemuxEntry({ streamId, sub: v.sub, upstreamUrl })
 
   heartbeatRemuxSession(entry.sessionId)
   const deadline = Date.now() + 8_000
@@ -1110,7 +849,7 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
     heartbeatRemuxSession(entry.sessionId)
   }
   if (!fs.existsSync(entry.manifestPath)) {
-    forgetRemuxSession(key, entry.sessionId)
+    forgetLiveRemuxEntry(streamId, v.sub, entry.sessionId)
     return c.json({ error: 'remux_manifest_timeout' }, 504)
   }
 
@@ -1148,13 +887,8 @@ iptv.get('/stream/live/:streamId/remux/seg', (c) => {
   const resource = remuxSegmentResource(claims.rid)
   if (!resource) return c.json({ error: 'bad_resource' }, 400)
 
-  const key = remuxKey(streamId, claims.sub)
-  const entry = liveRemuxIndex.get(key)
+  const entry = getActiveLiveRemuxEntry(streamId, claims.sub)
   if (!entry || entry.sessionId !== resource.sessionId) return c.json({ error: 'session_gone' }, 410)
-  if (!isRemuxSessionActive(entry.sessionId)) {
-    liveRemuxIndex.delete(key)
-    return c.json({ error: 'session_gone' }, 410)
-  }
 
   const filePath = path.join(entry.dir, resource.segFile)
   if (!fs.existsSync(filePath)) return c.json({ error: 'segment_gone' }, 404)
@@ -1286,19 +1020,30 @@ iptv.get('/stream/vod/:streamId/:ext', async (c) => {
 
   const creds = credsFromEnv()
   const upstreamUrl = `${creds.host}/movie/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${streamId}.${ext}`
-  if (ext === 'm3u8') return await rewriteHlsPlaylist(c, upstreamUrl, v.sub)
+  if (ext === 'm3u8') {
+    return await fetchAndRewriteHlsPlaylist({ upstreamUrl, sub: v.sub, clientSignal: c.req.raw.signal })
+  }
 
   const mime = ext === 'mkv' ? 'video/x-matroska' : 'video/mp4'
-  return await proxyRangeable(c, upstreamUrl, mime)
+  return await proxyRangeableUpstream({
+    upstreamUrl,
+    mime,
+    range: c.req.header('range') ?? null,
+    clientSignal: c.req.raw.signal,
+    // Client gone mid-stream → free the slot now (same as live/catchup).
+    onClientAbort: () => streamConcurrency().releaseByResource(v.sub, 'vod', streamId),
+  })
 })
 
 iptv.post('/stream/series/:episodeId/grant', requireAuth, async (c) => {
   const episodeId = c.req.param('episodeId')
   if (!/^[\w-]+$/.test(episodeId)) return c.json({ error: 'invalid_id' }, 400)
   const { sub } = userOf(c)
-  const row = iptvDb().raw
-    .prepare('SELECT container_extension FROM series_episodes WHERE episode_id = ?')
-    .get(episodeId) as { container_extension: string | null } | undefined
+  const row = containerExtensionRow(
+    iptvDb().raw
+      .prepare('SELECT container_extension FROM series_episodes WHERE episode_id = ?')
+      .get(episodeId),
+  )
   if (!row) return c.json({ error: 'not_found' }, 404)
 
   // §9 Resolution A: probe sources before acquiring a concurrency slot.
@@ -1350,10 +1095,19 @@ iptv.get('/stream/series/:episodeId/:ext', async (c) => {
 
   const creds = credsFromEnv()
   const upstreamUrl = `${creds.host}/series/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${episodeId}.${ext}`
-  if (ext === 'm3u8') return await rewriteHlsPlaylist(c, upstreamUrl, v.sub)
+  if (ext === 'm3u8') {
+    return await fetchAndRewriteHlsPlaylist({ upstreamUrl, sub: v.sub, clientSignal: c.req.raw.signal })
+  }
 
   const mime = ext === 'mkv' ? 'video/x-matroska' : 'video/mp4'
-  return await proxyRangeable(c, upstreamUrl, mime)
+  return await proxyRangeableUpstream({
+    upstreamUrl,
+    mime,
+    range: c.req.header('range') ?? null,
+    clientSignal: c.req.raw.signal,
+    // Client gone mid-stream → free the slot now (same as live/catchup).
+    onClientAbort: () => streamConcurrency().releaseByResource(v.sub, 'series', episodeId),
+  })
 })
 
 iptv.get('/stream/segment', async (c) => {
@@ -1392,7 +1146,11 @@ iptv.get('/stream/segment', async (c) => {
   }
 
   if (url.pathname.toLowerCase().endsWith('.m3u8')) {
-    return await rewriteHlsPlaylist(c, upstream, claims.sub)
+    return await fetchAndRewriteHlsPlaylist({
+      upstreamUrl: upstream,
+      sub: claims.sub,
+      clientSignal: c.req.raw.signal,
+    })
   }
 
   const controller = new AbortController()
@@ -1420,35 +1178,6 @@ iptv.get('/stream/segment', async (c) => {
 
   return new Response(upstreamRes.body, { status: upstreamRes.status, headers })
 })
-
-type Job = {
-  id: string
-  // 'rejected' = the sync runner refused to start (another sync already in
-  // flight — syncOnce returned busy). Distinct from 'done' so the admin
-  // poller is never told a skipped run completed.
-  state: 'running' | 'done' | 'rejected' | 'error'
-  startedAt: string
-  finishedAt?: string
-  result?: SyncResult
-  error?: string
-}
-const jobs = new Map<string, Job>()
-const MAX_REMEMBERED_JOBS = 20
-function rememberJob(job: Job): void {
-  jobs.set(job.id, job)
-  if (jobs.size > MAX_REMEMBERED_JOBS) {
-    // Evict the oldest FINISHED job. A running job's status must survive the
-    // cap — evicting it would 404 the admin poller mid-run and orphan the
-    // job's eventual result. If every remembered job is somehow still
-    // running, nothing is evicted; the map shrinks again as they settle.
-    for (const [id, j] of jobs) {
-      if (j.state !== 'running') {
-        jobs.delete(id)
-        break
-      }
-    }
-  }
-}
 
 iptv.get('/export/recommender', (c) => {
   const secret = c.req.header('x-iptv-export-secret') ?? ''
@@ -1482,31 +1211,14 @@ iptv.get('/export/recommender', (c) => {
   return c.json({ vod, series })
 })
 
-iptv.post('/admin/sync', requireAuth, requireAdmin, async (c) => {
-  const id = randomUUID()
-  const job: Job = { id, state: 'running', startedAt: new Date().toISOString() }
-  rememberJob(job)
-  void (async () => {
-    try {
-      const result = await syncOnce(iptvDb())
-      // A busy refusal (another sync already running) is NOT a completed
-      // sync — surface it as 'rejected' so the poller doesn't read stale
-      // "done with no stats" as success.
-      job.state = result.busy ? 'rejected' : 'done'
-      job.result = result
-      job.finishedAt = new Date().toISOString()
-    } catch (err) {
-      job.state = 'error'
-      job.error = err instanceof Error ? err.message : String(err)
-      job.finishedAt = new Date().toISOString()
-    }
-  })()
-  return c.json({ jobId: id }, 202)
+// Background sync job lifecycle (start / poll / eviction) lives in
+// services/iptvSyncJobs.ts.
+iptv.post('/admin/sync', requireAuth, requireAdmin, (c) => {
+  return c.json({ jobId: startSyncJob() }, 202)
 })
 
 iptv.get('/admin/sync/:id', requireAuth, requireAdmin, (c) => {
-  const id = c.req.param('id')
-  const job = jobs.get(id)
+  const job = getSyncJob(c.req.param('id'))
   if (!job) return c.json({ error: 'not_found' }, 404)
   return c.json(job)
 })

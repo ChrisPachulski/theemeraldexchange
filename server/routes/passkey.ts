@@ -25,7 +25,11 @@ import {
   beginLogin,
   verifyLogin,
 } from '../services/webauthn.js'
-import { authorizeOrRedeem, enforceAuthRateLimit } from '../auth.js'
+import {
+  authorizeOrRedeem,
+  enforceAuthRateLimit,
+  enforceAuthIdentityRateLimit,
+} from '../auth.js'
 import { isMember, recordMemberLogin } from '../services/members.js'
 import { setSessionCookie } from '../session.js'
 
@@ -42,6 +46,16 @@ function cleanHandle(v: unknown): string | null {
   return h
 }
 
+/** WebAuthn credential id from a ceremony response body — rate-limit keying
+ *  only (the signature is verified later in the handler). The id is the
+ *  client-asserted base64url credential id; hammering one credential lands
+ *  in one identity bucket regardless of source IP / IP-header trust. */
+function credentialIdOf(response: unknown): string | null {
+  if (typeof response !== 'object' || response === null) return null
+  const id = (response as { id?: unknown }).id
+  return typeof id === 'string' && id.length > 0 ? id : null
+}
+
 // ── registration ────────────────────────────────────────────────────────────
 
 passkey.post('/register/options', async (c) => {
@@ -50,6 +64,10 @@ passkey.post('/register/options', async (c) => {
   const body = await c.req.json().catch(() => null)
   const handle = cleanHandle(body?.handle)
   if (!handle) return c.json({ error: 'invalid_handle' }, 400)
+  // Identity-keyed bucket (per attempted handle): blunts challenge-table burn
+  // targeted at one handle even when per-client IP buckets are not engaged.
+  const identityLimited = enforceAuthIdentityRateLimit(c, 'passkey', `handle:${handle}`)
+  if (identityLimited) return identityLimited
 
   const { options, challengeId } = await beginRegistration(handle)
   return c.json({ options, challengeId })
@@ -67,6 +85,11 @@ passkey.post('/register/verify', async (c) => {
   if (!challengeId || !response || typeof response !== 'object') {
     return c.json({ error: 'invalid_request' }, 400)
   }
+  // Identity-keyed bucket (per attempted credential id) — applies regardless
+  // of IP-header trust; see enforceAuthIdentityRateLimit.
+  const credId = credentialIdOf(response)
+  const identityLimited = enforceAuthIdentityRateLimit(c, 'passkey', credId ? `cred:${credId}` : null)
+  if (identityLimited) return identityLimited
 
   let verified
   try {
@@ -114,6 +137,13 @@ passkey.post('/login/verify', async (c) => {
   if (!challengeId || !response || typeof response !== 'object') {
     return c.json({ error: 'invalid_request' }, 400)
   }
+  // Identity-keyed bucket (per attempted credential id): credential stuffing
+  // against /login/verify hits one bucket per credential no matter the source
+  // IP — the per-client buckets are skipped entirely unless
+  // TRUST_CLIENT_IP_HEADERS=1, which is off on the tunnel default.
+  const credId = credentialIdOf(response)
+  const identityLimited = enforceAuthIdentityRateLimit(c, 'passkey', credId ? `cred:${credId}` : null)
+  if (identityLimited) return identityLimited
 
   let sub: string
   try {
