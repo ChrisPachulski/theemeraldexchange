@@ -159,7 +159,7 @@ async function fetchSuggested(
   }
 }
 
-export function useSuggestedMovies(forceTrending: boolean, apiKey: string | null) {
+export function useSuggested(kind: 'movie' | 'tv', forceTrending: boolean, apiKey: string | null) {
   // Third segment is the resolved feed (trending vs recommended) so
   // flipping the toggle is a distinct query that refetches. Fourth is a
   // non-secret fingerprint of the API key: when the key changes (same
@@ -168,8 +168,8 @@ export function useSuggestedMovies(forceTrending: boolean, apiKey: string | null
   // as a different query and refetches — closing the cross-tab
   // cache-staleness gap.
   return useQuery({
-    queryKey: ['suggestions', 'movie', forceTrending ? 'trending' : 'recommended', keyFingerprint(apiKey)],
-    queryFn: () => fetchSuggested('movie', forceTrending, apiKey),
+    queryKey: ['suggestions', kind, forceTrending ? 'trending' : 'recommended', keyFingerprint(apiKey)],
+    queryFn: () => fetchSuggested(kind, forceTrending, apiKey),
     // Cache the lineup for the session; refresh only on explicit action
     // (Refresh button refetch / dislike low-water invalidation). See the
     // module header for why mount/toggle must NOT re-fetch.
@@ -183,18 +183,12 @@ export function useSuggestedMovies(forceTrending: boolean, apiKey: string | null
   })
 }
 
+export function useSuggestedMovies(forceTrending: boolean, apiKey: string | null) {
+  return useSuggested('movie', forceTrending, apiKey)
+}
+
 export function useSuggestedTv(forceTrending: boolean, apiKey: string | null) {
-  // See useSuggestedMovies for the query-key rationale.
-  return useQuery({
-    queryKey: ['suggestions', 'tv', forceTrending ? 'trending' : 'recommended', keyFingerprint(apiKey)],
-    queryFn: () => fetchSuggested('tv', forceTrending, apiKey),
-    // See useSuggestedMovies / the module header for the caching rationale.
-    staleTime: Infinity,
-    retry: (failureCount, err) => {
-      if (err instanceof SuggestionsError && err.status >= 400 && err.status < 500) return false
-      return failureCount < 1
-    },
-  })
+  return useSuggested('tv', forceTrending, apiKey)
 }
 
 // useDismissSuggestion is superseded by useSetFeedback in

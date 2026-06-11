@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { SearchInput } from '../search/SearchInput'
 import { ResultGrid } from '../search/ResultGrid'
@@ -15,15 +15,11 @@ import { useAuth } from '../../lib/auth'
 import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useMovieSearch } from '../../lib/hooks/useMovieSearch'
 import { useRadarrLibrary } from '../../lib/hooks/useRadarrLibrary'
-import { useSuggestedMovies } from '../../lib/hooks/useSuggested'
-import { useSuggestionMode } from '../../lib/hooks/useSuggestionMode'
-import { useUserApiKey } from '../../lib/hooks/useUserApiKey'
+import { useSuggestionStrip } from '../../lib/hooks/useSuggestionStrip'
 import { useLimits } from '../../lib/hooks/useLimits'
-import { useFeedback, useSetFeedback } from '../../lib/hooks/useUserFeedback'
 import { usePlexLinks } from '../../lib/hooks/usePlexLinks'
 import { resumePosition, useLocalMovieIndex, useMediaWatch } from '../../lib/hooks/useMediaLibrary'
 import { MediaPlayer } from '../media/MediaPlayer'
-import type { DotState } from '../search/FeedbackDots'
 import { TrendingRow } from '../search/TrendingRow'
 import { useCast } from '../../lib/hooks/useCast'
 import { useConfirm } from '../confirm/useConfirm'
@@ -147,7 +143,6 @@ export function MoviesTab() {
     return map
   }, [library.data])
 
-  const userKey = useUserApiKey()
   const limits = useLimits()
   // Match the viewed title to a locally-available file so the detail modal can
   // offer in-browser playback. Gated on mediaEnabled (no media-core → no fetch).
@@ -158,66 +153,17 @@ export function MoviesTab() {
     viewing && typeof viewing.tmdbId === 'number'
       ? localMovieIdx.data?.get(viewing.tmdbId)
       : undefined
-  const localRecommender = limits.data?.useLocalRecommender === true
-  // Personalization is achievable when the free on-NAS recommender runs,
-  // or the user supplied a BYO Anthropic key. The Recommended ⇄ Trending
-  // toggle is only meaningful when it is. Default to Recommended only when
-  // it's free (local recommender); BYO-key-only deployments default to
-  // Trending so they don't spend tokens until the user opts in.
-  const personalizedAchievable = localRecommender || userKey.hasKey
-  const { mode: suggestionMode, setMode: setSuggestionMode } = useSuggestionMode(
-    localRecommender ? 'recommended' : 'trending',
-  )
-  const forceTrending = !personalizedAchievable || suggestionMode === 'trending'
-  const suggested = useSuggestedMovies(forceTrending, userKey.key)
-  const feedback = useFeedback()
-  const setFeedback = useSetFeedback('movie')
-  const stateFor = (id: number): DotState => {
-    const fb = feedback.data?.movie
-    if (!fb) return 'unset'
-    if (fb.liked.some((e) => e.id === id)) return 'liked'
-    if (fb.disliked.some((e) => e.id === id)) return 'disliked'
-    return 'unset'
-  }
   const [trendingPending, setTrendingPending] = useState<number | null>(null)
-  // Defense in depth — backend already filters by library/rejections,
-  // but client-side filter catches any race (just-added title, etc.).
-  // Also dedupe by id: TrendingRow keys on item.id, so a duplicate
-  // would render twice and emit a React warning.
-  const trendingFiltered = useMemo(() => {
-    const seen = new Set<number>()
-    return (suggested.data?.items ?? []).filter((t) => {
-      if (libraryByTmdb.has(t.id)) return false
-      if (seen.has(t.id)) return false
-      seen.add(t.id)
-      return true
-    })
-  }, [suggested.data, libraryByTmdb])
-  // Manual refresh trigger = a fresh recommender run. refetch() re-hits
-  // /api/suggestions/movie, which (local recommender on) re-scores.
-  // Depend on the stable `refetch` function, not the whole query result:
-  // the result object is a fresh reference every render, which made this
-  // useCallback a memo no-op (new handler each render, defeating any
-  // downstream React.memo / effect-dep usage).
-  const refresh = suggested.refetch
-  const refreshSuggestions = useCallback(() => {
-    void refresh()
-  }, [refresh])
-  // No auto-refresh on judgement. The strip is only ever replaced by an
-  // explicit refresh (the header button), a dislike draining it to the
-  // low-water mark (useSetFeedback lazy-refill), or a natural remount.
-  // A *like* must NEVER swap the lineup: liking the last unjudged card
-  // used to flip "every card judged" → auto-refetch, yanking the picks
-  // the user just accepted out from under them (the repeated complaint).
-  // Label adjusts based on whether the backend served personalized
-  // recs or fell back to TMDB trending (cold start or no API key).
-  // 'recommender' is the local-model source — also a personalized
-  // pick, just from the on-NAS model rather than Claude.
-  const src = suggested.data?.source
-  const trendingLabel =
-    src && (src.startsWith('personalized') || src === 'recommender')
-      ? 'Picked for you'
-      : 'Trending movies this week'
+  // All strip orchestration (personalization gating, mode toggle, library
+  // filtering, feedback dots, refresh, labels — and the owner-mandated
+  // never-auto-refresh-on-like rule) lives in useSuggestionStrip, shared
+  // with TvTab. Only the pick flow below stays tab-specific.
+  const libraryTmdbIds = useMemo(
+    () => new Set(libraryByTmdb.keys()),
+    [libraryByTmdb],
+  )
+  const strip = useSuggestionStrip('movie', libraryTmdbIds)
+  const suggested = strip.suggested
   // Trending shows TMDB items; clicking one resolves through Radarr's
   // lookup (it accepts tmdb:NNN) so the same DetailModal flow handles
   // it as a regular search result.
@@ -359,33 +305,18 @@ export function MoviesTab() {
           {debouncedQuery.length < 2 && (
             <div className="tv-tab__trending-below-fold">
               <TrendingRow
-                items={trendingFiltered}
+                items={strip.items}
                 loading={suggested.isPending}
                 error={suggested.error}
                 source={suggested.data?.source ?? null}
                 diag={suggested.data?.diag ?? null}
                 onPick={handleTrendingPick}
                 pendingId={trendingPending}
-                label={trendingLabel}
-                onRefresh={refreshSuggestions}
+                label={strip.label}
+                onRefresh={strip.refresh}
                 refreshing={suggested.isFetching}
-                feedback={{
-                  stateFor,
-                  onLike: (id, title) => {
-                    const current = stateFor(id)
-                    setFeedback.mutate({ tmdbId: id, title, signal: current === 'liked' ? null : 'like' })
-                  },
-                  onDislike: (id, title) => {
-                    const current = stateFor(id)
-                    setFeedback.mutate({ tmdbId: id, title, signal: current === 'disliked' ? null : 'dislike' })
-                  },
-                  // Feedback store unreachable → dots render disabled
-                  // with a tooltip + inline label hint. Otherwise
-                  // dots silently appear "unset," indistinguishable
-                  // from a clean first-run.
-                  unavailable: !!feedback.error,
-                }}
-                mode={personalizedAchievable ? { value: suggestionMode, onChange: setSuggestionMode } : undefined}
+                feedback={strip.feedback}
+                mode={strip.mode}
               />
             </div>
           )}
