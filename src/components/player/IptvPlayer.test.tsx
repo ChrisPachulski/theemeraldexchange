@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import IptvPlayer, {
   audioOptionsFromVideo,
   subtitleOptionsFromVideo,
@@ -10,6 +10,10 @@ import IptvPlayer, {
   labelForTrack,
   applyAudioTrack,
   applySubtitleTrack,
+  createFatalHlsErrorHandler,
+  MAX_NET_RETRIES,
+  MEDIA_RECOVERY_WINDOW_MS,
+  type RecoverableHls,
 } from './IptvPlayer'
 import type { StreamGrant } from '../../lib/api/iptv'
 
@@ -289,6 +293,145 @@ describe('applyAudioTrack', () => {
 
   it('returns null when there is no engine at all', () => {
     expect(applyAudioTrack(null, null, 0)).toBeNull()
+  })
+})
+
+describe('createFatalHlsErrorHandler', () => {
+  function harness(startAt = 0) {
+    const hls: RecoverableHls = {
+      startLoad: vi.fn(),
+      recoverMediaError: vi.fn(),
+      swapAudioCodec: vi.fn(),
+      destroy: vi.fn(),
+    }
+    const setError = vi.fn()
+    // Deterministic clock + a schedule that captures (fn, delay) so tests can
+    // fire the retry callback explicitly — no real timers in the node env.
+    let clock = startAt
+    const scheduled: Array<{ fn: () => void; delayMs: number }> = []
+    let cancelled = false
+    const handler = createFatalHlsErrorHandler({
+      hls,
+      isCancelled: () => cancelled,
+      setError,
+      schedule: (fn, delayMs) => scheduled.push({ fn, delayMs }),
+      now: () => clock,
+    })
+    return {
+      hls,
+      setError,
+      scheduled,
+      handler,
+      cancel: () => {
+        cancelled = true
+      },
+      advance: (ms: number) => {
+        clock += ms
+      },
+    }
+  }
+
+  it('first fatal media error → recoverMediaError() only', () => {
+    const h = harness()
+
+    h.handler('media')
+
+    expect(h.hls.recoverMediaError).toHaveBeenCalledTimes(1)
+    expect(h.hls.swapAudioCodec).not.toHaveBeenCalled()
+    expect(h.hls.destroy).not.toHaveBeenCalled()
+    expect(h.setError).not.toHaveBeenCalled()
+  })
+
+  it('second fatal media error inside the window → swapAudioCodec() + recoverMediaError()', () => {
+    const h = harness()
+
+    h.handler('media')
+    h.advance(MEDIA_RECOVERY_WINDOW_MS - 1)
+    h.handler('media')
+
+    expect(h.hls.swapAudioCodec).toHaveBeenCalledTimes(1)
+    expect(h.hls.recoverMediaError).toHaveBeenCalledTimes(2)
+    expect(h.hls.destroy).not.toHaveBeenCalled()
+  })
+
+  it('third fatal media error inside the window → destroy + visible error, no more recovery', () => {
+    const h = harness()
+
+    h.handler('media')
+    h.advance(100)
+    h.handler('media')
+    h.advance(100)
+    h.handler('media')
+
+    expect(h.hls.destroy).toHaveBeenCalledTimes(1)
+    expect(h.setError).toHaveBeenCalledTimes(1)
+    expect(h.setError.mock.calls[0][0]).toMatch(/Playback failed/)
+    // The ladder stopped — no third recover attempt on the dead instance.
+    expect(h.hls.recoverMediaError).toHaveBeenCalledTimes(2)
+  })
+
+  it('media errors spaced wider than the window reset the ladder (no false give-up)', () => {
+    const h = harness()
+
+    h.handler('media')
+    h.advance(MEDIA_RECOVERY_WINDOW_MS + 1)
+    h.handler('media')
+    h.advance(MEDIA_RECOVERY_WINDOW_MS + 1)
+    h.handler('media')
+
+    // Each error was treated as a fresh transient glitch.
+    expect(h.hls.recoverMediaError).toHaveBeenCalledTimes(3)
+    expect(h.hls.swapAudioCodec).not.toHaveBeenCalled()
+    expect(h.hls.destroy).not.toHaveBeenCalled()
+  })
+
+  it('network errors schedule startLoad with capped backoff', () => {
+    const h = harness()
+
+    h.handler('network')
+    h.handler('network')
+
+    expect(h.scheduled.map((s) => s.delayMs)).toEqual([500, 1000])
+    h.scheduled[0].fn()
+    expect(h.hls.startLoad).toHaveBeenCalledTimes(1)
+
+    // Delay caps at 3000ms regardless of retry count.
+    for (let i = 0; i < 5; i += 1) h.handler('network')
+    expect(h.scheduled[h.scheduled.length - 1].delayMs).toBe(3000)
+  })
+
+  it('gives up with a visible error after MAX_NET_RETRIES network errors', () => {
+    const h = harness()
+
+    for (let i = 0; i < MAX_NET_RETRIES; i += 1) h.handler('network')
+    expect(h.setError).not.toHaveBeenCalled()
+
+    h.handler('network')
+
+    expect(h.setError).toHaveBeenCalledTimes(1)
+    expect(h.setError.mock.calls[0][0]).toMatch(/warming up/)
+    expect(h.hls.destroy).toHaveBeenCalledTimes(1)
+  })
+
+  it('other fatal errors destroy immediately with a message', () => {
+    const h = harness()
+
+    h.handler('other')
+
+    expect(h.setError).toHaveBeenCalledWith('Playback failed.')
+    expect(h.hls.destroy).toHaveBeenCalledTimes(1)
+  })
+
+  it('does nothing once cancelled — including pending network retries', () => {
+    const h = harness()
+
+    h.handler('network')
+    h.cancel()
+    h.scheduled[0].fn()
+    h.handler('media')
+
+    expect(h.hls.startLoad).not.toHaveBeenCalled()
+    expect(h.hls.recoverMediaError).not.toHaveBeenCalled()
   })
 })
 
