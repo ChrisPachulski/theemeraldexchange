@@ -1,8 +1,12 @@
 // Vector-driven tests for the §15.3 PII scrubber.
 //
 // The test vectors live at tests/vectors/telemetry-pii-scrub.json and are
-// the single source of truth for what the scrubber must redact. When the
-// Rust port ships in M2 the same vector file will be used by the Rust tests.
+// the single source of truth for what the scrubber must redact. The same
+// vector file is executed by the Rust harness
+// (crates/emerald-contracts/tests/vectors.rs) and the Python parity suite
+// (recommender/tests/test_emerald_contracts_parity.py); this suite runs it
+// through the production module, which delegates the deep walk to the
+// canonical Rust implementation via the N-API binding.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -17,6 +21,7 @@ vi.mock('@sentry/node', () => ({
 }))
 
 import { piiBreadcrumbScrub, piiScrub, setSentryUser } from './telemetryPiiScrub.js'
+import { contracts } from './contractsBinding.js'
 import * as Sentry from '@sentry/node'
 
 interface ScrubVector {
@@ -51,6 +56,34 @@ describe('piiScrub — §15.3 contract vectors', () => {
       expect(result).toEqual(vec.expected)
     })
   }
+})
+
+describe('binding-backed scrubber — N-API is the engine', () => {
+  it('piiScrubKeys covers every §15.3 EEX-specific key (lowercase denylist)', () => {
+    const keys = contracts.piiScrubKeys()
+    for (const must of [
+      'plexauthtoken',
+      'verifiedplexserverid',
+      'xtream_username',
+      'xtream_password',
+      'password',
+      'token',
+      'session',
+      'cookie',
+    ]) {
+      expect(keys, `denylist missing ${must}`).toContain(must)
+    }
+  })
+
+  it('raw piiScrubValue agrees with the module on a vector case (no TS-side drift)', () => {
+    // Run the first vector input through the binding directly and through
+    // piiScrub — both must land on the vector's expected output, proving
+    // the module adds no divergent walker of its own.
+    const vec = vectors.cases[0]
+    const viaBinding = JSON.parse(contracts.piiScrubValue(JSON.stringify(vec.input))) as unknown
+    expect(viaBinding).toEqual(vec.expected)
+    expect(piiScrub(asEvent(vec.input))).toEqual(vec.expected)
+  })
 })
 
 // Extra unit tests not covered by the vector file — edge cases that are
