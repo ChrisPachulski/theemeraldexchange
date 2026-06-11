@@ -1,7 +1,7 @@
 # Monetization & Publishing Decision Document
 
 **Status:** Decision-ready planning doc. No code or prod changes made.
-**Date:** 2026-05-30
+**Date:** 2026-05-30 (file:line citations and the ffmpeg licensing locus re-verified against the tree 2026-06-10, after the transcoder's switch to Debian ffmpeg + VAAPI)
 **Audience:** Owner (Chris Pachulski)
 **Scope:** Can theemeraldexchange be monetized and published to the App Store, what blocks it, and the concrete path through.
 
@@ -19,7 +19,7 @@ The codebase is also unusually ready. Security is mature (no committed secrets, 
 
 **The three hardest obstacles, in order:**
 
-1. **FFmpeg GPL contamination (hard blocker).** Every shipped image bundles a GPL-3.0+ static ffmpeg (`mwader/static-ffmpeg:7.1`, built with libx264/libx265 `--enable-gpl`). GPL-3.0 is **incompatible with the App Store** (Apple's DPLA imposes terms GPLv3 §7 forbids), and you currently redistribute it with **zero** source offer or attribution. This blocks both TestFlight (M2) and any binary distribution. Must be fixed before anything ships.
+1. **FFmpeg GPL contamination (hard blocker).** The backend and media-core images bundle a GPL-3.0+ static ffmpeg (`mwader/static-ffmpeg:7.1`, built with libx264/libx265 `--enable-gpl`); the transcoder image now instead installs Debian's stock dynamically-linked ffmpeg + `intel-media-va-driver` (the VAAPI hardware path, `h264_vaapi` primary), i.e. unmodified Debian packages whose corresponding source Debian itself publishes. GPL-3.0 is **incompatible with the App Store** (Apple's DPLA imposes terms GPLv3 §7 forbids), and the static-build images are redistributed with **zero** source offer or attribution. This blocks both TestFlight (M2) and any binary distribution. Must be fixed before anything ships.
 2. **IPTV viewer (product decision + App Store risk).** An open IPTV viewer fails App Review Guideline 5.2.3 (cannot prove rights to third-party streams) and creates DMCA exposure. M6 monetization makes it worse. This is the single feature most likely to get the app rejected.
 3. **Apple's IAP cut is structural, not dodgeable long-term.** The external-payment "loophole" is a temporary, US-only, closing window (Dec 2025 appeals ruling restored Apple's right to a commission; remanded Apr 2026 to set the rate). The clean answer is to sell on your own web storefront and ship a **purchase-silent free companion app** — but that requires discipline (zero buy UI in-app) and is itself a decision.
 
@@ -29,23 +29,24 @@ None of these are fatal. All are resolvable before launch. The rest of this doc 
 
 ## 2. BLOCKERS — must be resolved before publishing/monetizing
 
-### BLOCKER 1 — FFmpeg GPL-3.0+ contaminates every shipped image, and is App-Store-incompatible
+### BLOCKER 1 — FFmpeg GPL-3.0+ contaminates the backend and media-core images, and is App-Store-incompatible
 
-**Evidence (verified):**
-- `Dockerfile:77`, `crates/media-core/Dockerfile:30`, `crates/transcoder/Dockerfile:30` each: `COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /ffprobe /usr/local/bin/`. That static build is compiled `gpl/version3/libx264/libx265` → **GPL-3.0+**.
-- The transcoder's CPU fallback **is** libx264 (`crates/transcoder/src/args.rs:46`), so the GPL encoder is on a live code path, not dormant.
-- Baking the binary into a shipped image means the image **conveys** a GPL work. GPLv2/3 §3 then obligates you to (a) ship a written offer for the complete corresponding ffmpeg source, and (b) carry the GPL license text + attribution. **The project ships none of this.**
-- **App Store incompatibility:** GPL-3.0 cannot ship via the App Store. Apple's Developer Program License Agreement imposes use/device restrictions that GPLv3 §7 forbids. This is independently flagged in `docs/03-section-14-license.md:10` and `:68`. This blocks M5 (native clients) outright if ffmpeg ships inside the app bundle.
+**Evidence (verified 2026-06-10, per-image):**
+- `Dockerfile:91` and `crates/media-core/Dockerfile:30` each: `COPY --from=mwader/static-ffmpeg:7.1@sha256:… /ffmpeg /ffprobe /usr/local/bin/` (digest-pinned). That static build is compiled `gpl/version3/libx264/libx265` → **GPL-3.0+**, vendored as a bare binary with no accompanying source offer.
+- `crates/transcoder/Dockerfile` no longer uses the static build: it `apt-get install`s Debian's stock dynamically-linked `ffmpeg` plus `intel-media-va-driver`/`libva` (the VAAPI hardware-encode stack; `TRANSCODER_FFMPEG_BIN=/usr/bin/ffmpeg`). Debian's ffmpeg is also GPL-enabled, but the image distributes **unmodified Debian packages** whose complete corresponding source Debian publishes through its standard mechanisms (`apt-get source`, snapshot.debian.org) — a materially easier compliance posture than a vendored static binary, though shipped notices/attribution are still owed (see §6).
+- The transcoder's production video path is hardware `h264_vaapi`; libx264 remains the always-available CPU fallback (`HwEncoder::Cpu => "libx264"`, `crates/transcoder/src/args.rs`), so a GPL encoder is still on a live code path, not dormant.
+- Baking a GPL binary into a shipped image means the image **conveys** a GPL work. GPLv2/3 §3 then obligates you to (a) ship a written offer for the complete corresponding ffmpeg source, and (b) carry the GPL license text + attribution. **The static-ffmpeg images ship none of this** (THIRD-PARTY-LICENSES.md still describes all three images as static-ffmpeg and needs the per-image update).
+- **App Store incompatibility:** GPL-3.0 cannot ship via the App Store. Apple's Developer Program License Agreement imposes use/device restrictions that GPLv3 §7 forbids. This is independently flagged in `docs/superpowers/specs/2026-05-25-m15-decision-briefs/03-section-14-license.md:10` and `:68`. This blocks M5 (native clients) outright if ffmpeg ships inside the app bundle.
 - Internal contradiction: `LICENSE:5-8` claims proprietary control over "all compiled binaries," which is directly contradicted by the bundled GPL ffmpeg.
 
 **Why the Rust code itself is safe (the key enabler):** the transcoder invokes ffmpeg as a **separate process** via `tokio::process` (no FFI/linking — explicit in `crates/transcoder/Cargo.toml` and `crates/transcoder/src/session.rs`). Per the FSF GPL FAQ (https://www.gnu.org/licenses/gpl-faq.html#GPLInProprietarySystem), arms-length CLI/pipe communication does **not** trigger GPL on your proprietary code. So the contamination is **only** the bundled binary, not your source. That makes the fix surgical.
 
 **Fix options (pick one — see Decision 2):**
-- **(A) Rebuild ffmpeg LGPL-only** (drop `--enable-gpl`, drop libx264/libx265; use libopenh264 or hardware encoders / a separately-licensed x264). Escapes the GPL source-offer entirely and clears the App Store path. **Trade-off:** loses x264/x265 software encoders — you must lean on hardware encode (VideoToolbox on Apple, VAAPI/NVENC on NAS) and/or openh264. This is the recommended path for App-Store-bound shipping.
+- **(A) Rebuild ffmpeg LGPL-only** (drop `--enable-gpl`, drop libx264/libx265; use libopenh264 or hardware encoders / a separately-licensed x264). Escapes the GPL source-offer entirely and clears the App Store path. **Trade-off:** loses x264/x265 software encoders — you must lean on hardware encode (VideoToolbox on Apple, VAAPI/NVENC on NAS) and/or openh264. This is the recommended path for App-Store-bound shipping, and it got easier: the NAS transcoder's primary encode is already hardware VAAPI (`h264_vaapi`, shipped 2026-06-08), so the software encoder is only a fallback to replace.
 - **(B) Keep GPL ffmpeg but distribute it separately** (not baked into the app bundle; downloaded/installed alongside on the NAS), host the exact matching source tarball + GPL text + build config, and add an in-app "Open Source Notices" page. Works for the **self-hosted server**, does **not** work for the iOS bundle.
 - **Hard avoid:** `libfdk_aac` — requires `--enable-nonfree`, which makes the binary legally non-redistributable.
 
-**Practically:** the NAS server can ship GPL ffmpeg via path (B) with proper notices; the iOS/tvOS client cannot contain GPL ffmpeg at all and should use VideoToolbox (Apple's native hardware decode/encode) — which it should anyway for performance.
+**Practically:** the NAS server can ship GPL ffmpeg via path (B) with proper notices — the transcoder image's move to Debian packages (source available via Debian) is a step in exactly that direction, and the backend/media-core images should follow it or carry a source offer; the iOS/tvOS client cannot contain GPL ffmpeg at all and should use VideoToolbox (Apple's native hardware decode/encode) — which it should anyway for performance.
 
 ---
 
@@ -54,7 +55,7 @@ None of these are fatal. All are resolvable before launch. The rest of this doc 
 **Evidence:**
 - App Review Guideline 5.2.3 / 5.2 rejects apps that provide "potentially unauthorized access to third-party audio/video streaming." An open IPTV viewer cannot prove rights to the streams it plays. Developers bear all IP-infringement liability.
 - M6 monetization **worsens** this: gating or selling around third-party IPTV content moves you from "neutral player" toward "profiting from unauthorized access."
-- The audit also surfaced an operational exposure (lower severity, but worth noting): Xtream credentials are embedded in upstream URL paths — `server/services/xtream.ts:64`, `server/routes/iptv.ts:715/759` build `${host}/live/${username}/${password}/${streamId}.ts`. The token-proxy correctly hides this from end-clients, and `xtream.ts` does not log these URLs, but the shared credential is visible to the upstream provider and any TLS-terminating intermediary.
+- The audit also surfaced an operational exposure (lower severity, but worth noting): Xtream credentials are embedded in upstream URL paths — `server/routes/iptv.ts:1032/1100/1288/1352` build `${host}/live|movie|series/${username}/${password}/${id}.…` from the creds `server/services/xtream.ts` holds. The token-proxy correctly hides this from end-clients, and these URLs are not logged, but the shared credential is visible to the upstream provider and any TLS-terminating intermediary. (This is Xtream's own URL scheme — the exposure is structural to the protocol.)
 
 **Resolution path (must choose — see Decision 3):**
 - The IPTV feature, **if it ships in the App Store build at all**, must be a **bring-your-own-playlist player only**: no bundled, curated, or discoverable channel lists; an explicit in-EULA disclaimer that all streams are user-supplied and you neither host nor endorse them; off-by-default.
@@ -96,10 +97,10 @@ None of these are fatal. All are resolvable before launch. The rest of this doc 
 
 | Feature | Free | Paid "Pass" | Enforcement seam (file:line) |
 |---|---|---|---|
-| Library scan + local stream | ✅ | ✅ | already role-gated `crates/media-core/src/routes.rs:760` (scan = admin) |
+| Library scan + local stream | ✅ | ✅ | already role-gated `crates/media-core/src/routes.rs:945` (scan = admin) |
 | **Remote streaming of own media** | ✅ (never paywalled) | ✅ | — (explicit anti-Plex) |
 | Single user | ✅ | ✅ | — |
-| Hardware transcoding / advanced profiles | ❌ (or capped 1080p) | ✅ | `crates/transcoder/src/plan.rs:160` (clamp ladder); `crates/media-core/src/routes.rs:498` (deny handoff for free) |
+| Hardware transcoding / advanced profiles | ❌ (or capped 1080p) | ✅ | `crates/transcoder/src/plan.rs:206` (clamp ladder); `crates/media-core/src/routes.rs:585` (deny handoff for free) |
 | Concurrent streams (N per account) | 1 | N | `crates/transcoder/src/concurrency.rs:101` (needs per-`sub` dimension — see §4) |
 | Multi-user / household / managed accounts | ❌ | ✅ | `server/services/members.ts:81` addMember (cap at mint) |
 | Downloads / offline sync | ❌ | ✅ | **new** media-core route (offline manifest) — unbuilt today |
@@ -119,7 +120,7 @@ None of these are fatal. All are resolvable before launch. The rest of this doc 
 
 ### New crate: `crates/entitlements` (workspace name `emerald-entitlements`)
 
-A **pure** crate depending only on `emerald-contracts` (the established leaf-dependency pattern — `Cargo.toml:3-9`; transcoder already does `use media_core::capability/auth/...`). No DB, no IO — exactly like `crates/media-core/src/capability.rs:47` `decide()` (pure, exhaustively unit-tested) and `crates/transcoder/src/concurrency.rs`.
+A **pure** crate depending only on `emerald-contracts` (the established leaf-dependency pattern — `Cargo.toml:3-9`; transcoder already does `use media_core::capability/auth/...`). No DB, no IO — exactly like `crates/media-core/src/capability.rs:50` `decide()` (pure, exhaustively unit-tested) and `crates/transcoder/src/concurrency.rs`.
 
 **What it stores / defines:**
 ```
@@ -134,20 +135,20 @@ Mirror `capability.rs`'s pure-decision-function style. **Do NOT scatter `if plan
 
 **The seam — add the entitlement field to `InternalClaims`:**
 
-`InternalClaims` is THE identity object crossing every internal boundary (`internal_principal.rs:20-31`, verified — currently `{iss,sub,role,auth_mode,server_id,device_id,req_id,iat,exp}`, **no entitlement field**). Hono mints it (`server/services/internalPrincipal.ts:79`), media-core verifies it (`crates/media-core/src/auth.rs:21` + `principal_layer` at `:33`), the transcoder reuses the same verifier (`crates/transcoder/src/routes.rs:111`). It is a 60s JWE — the single trust-propagation path.
+`InternalClaims` is THE identity object crossing every internal boundary (`internal_principal.rs:20-31`, verified — currently `{iss,sub,role,auth_mode,server_id,device_id,req_id,iat,exp}`, **no entitlement field**). Hono mints it (`server/services/internalPrincipal.ts:79`), media-core verifies it (`crates/media-core/src/auth.rs:21` + `principal_layer` at `:33`), the transcoder reuses the same verifier (its own `principal_layer`, `crates/transcoder/src/routes.rs:113`). It is a 60s JWE — the single trust-propagation path.
 
 Add a compact capability field (e.g. `ent: Vec<String>` or a `plan` enum) to the struct. Because the N-API binding (`crates/emerald-contracts-napi`) and PyO3 binding (`crates/emerald-contracts-pyo3`) regenerate from the same struct, **Hono and the recommender pick it up for free**, already-verified, at every downstream gate, with **zero new network calls**.
 
 **Enforcement integration points (verified file:lines):**
 
-1. **media-core `play_grant`** — `crates/media-core/src/routes.rs:320`. After `capability::decide()` returns `!direct_play`, check the entitlement before proxying to the transcoder. **Note:** `play_grant` does **not** currently extract claims; widen its signature to `claims: Option<Extension<InternalClaims>>` (like `trigger_scan` does). Deny → return 402/403 grant instead of handing off. The handoff itself is `handoff_to_transcoder` (`routes.rs:498`); `mint_transcoder_principal` (`routes.rs:419`, copies role/auth_mode/sub at `:426-427`) must **also forward the new entitlement field**.
+1. **media-core `play_grant`** — `crates/media-core/src/routes.rs:394`. After `capability::decide()` returns `!direct_play`, check the entitlement before proxying to the transcoder. **Note:** `play_grant` does **not** currently extract claims; widen its signature to `claims: Option<Extension<InternalClaims>>` (like `trigger_scan` does). Deny → return 402/403 grant instead of handing off. The handoff itself is `handoff_to_transcoder` (`routes.rs:585`); `mint_transcoder_principal` (`routes.rs:505`, copies sub/role/auth_mode into the fresh claims) must **also forward the new entitlement field**.
 
-2. **transcoder `grant` + concurrency `Limiter`** — `crates/transcoder/src/routes.rs:248` builds a `TranscodePlan` and calls `sessions.start()`. **Structural gap (the one piece of real work):** caps are per-**server** globals — `Caps{max_total:4, max_cpu:1}` (`crates/transcoder/src/concurrency.rs:32-33`), and `try_acquire` (`concurrency.rs:101`) has **no per-`sub` dimension**. Plex-Pass "N simultaneous streams per account" cannot be expressed today. The data is present — `GrantRequest` carries `sub` (`routes.rs:239`), threaded through `StartOpts` (`routes.rs:271`, `session.rs:80`) — the limiter just ignores it. Fix: extend `Limiter` with a per-`sub` counter map, read the per-sub cap from the entitlement. The 503 `transcoder_busy` path (`routes.rs:289`) is the template for "concurrency limit reached for your plan." **Quality caps** (Free = 1080p) gate earlier, in `plan_transcode` (`crates/transcoder/src/plan.rs:160`) by clamping the ladder.
-   - **Copy the existing model:** `server/services/iptvConcurrency.ts:56` `createConcurrencyTracker` already keys live sessions per `sub` (`:88-97`) and returns `reason:'iptv_concurrency_limit'` with limit/current (`:79-85`). It is the design template for the transcoder's missing per-sub limiter — its cap is just a single env global (`IPTV_MAX_CONCURRENT_STREAMS`, `:115`) and would become `cap = entitlement.concurrent_streams(sub)`.
+2. **transcoder `grant` + concurrency `Limiter`** — the grant handler (`crates/transcoder/src/routes.rs:282`) builds a `TranscodePlan` and calls `sessions.start()`. **Structural gap (the one piece of real work):** caps are per-**server** globals — `Caps{max_total:4, max_cpu:1}` (`crates/transcoder/src/concurrency.rs:32-33`), and `try_acquire` (`concurrency.rs:101`) has **no per-`sub` dimension**. Plex-Pass "N simultaneous streams per account" cannot be expressed today. The data is present — `GrantRequest` carries `sub` (`routes.rs:263`), threaded through `StartOpts` (`session.rs:90`) and now persisted as the session's owner (the owner-or-admin gate, `routes.rs` `session_authorized`) — the limiter just ignores it. Fix: extend `Limiter` with a per-`sub` counter map, read the per-sub cap from the entitlement. The 503 `transcoder_busy` path (`routes.rs:335`) is the template for "concurrency limit reached for your plan." **Quality caps** (Free = 1080p) gate earlier, in `plan_transcode` (`crates/transcoder/src/plan.rs:206`) by clamping the ladder.
+   - **Copy the existing model:** `server/services/iptvConcurrency.ts:67` `createConcurrencyTracker` already keys live sessions per `sub` and returns `reason:'iptv_concurrency_limit'` with limit/current (`:104`). It is the design template for the transcoder's missing per-sub limiter — its cap is just a single env global (`IPTV_MAX_CONCURRENT_STREAMS`, `:168`) and would become `cap = entitlement.concurrent_streams(sub)`.
 
 3. **Hono `memberStatus()` resolves the plan** — `server/services/membership.ts:46` (verified) is "the single authoritative authZ decision," shared by both login paths and the per-request `sessionGate` (`server/services/sessionGate.ts:132`). Resolve the plan/tier here (read a new `members.plan` column or a `subscriptions` table), attach to the Session. It flows into `recommenderCallerFromSession` (`server/services/recommenderCaller.ts:69`) and into `mintInternalPrincipal` (`server/services/internalPrincipal.ts:88` — add the field to the claims object at `:88-108`, mirroring how `role` is passed). Every internal call site already funnels through `recommenderCallerFromSession`, so this is a one-place change.
 
-**Persistence (Hono/TS side, new migration `server/migrations/server/0005_*.sql`):** prefer a dedicated `subscriptions(sub, plan, source, apple_txn_id, stripe_customer_id, expires_at, ...)` table over a bare `members.plan` column — StoreKit/Stripe need a verification + expiry record distinct from the membership allowlist.
+**Persistence (Hono/TS side, new migration `server/migrations/server/0006_*.sql` — 0005 is taken by `0005_device_token_username.sql`):** prefer a dedicated `subscriptions(sub, plan, source, apple_txn_id, stripe_customer_id, expires_at, ...)` table over a bare `members.plan` column — StoreKit/Stripe need a verification + expiry record distinct from the membership allowlist.
 
 **App Store IAP (StoreKit 2) + web path (Stripe):**
 - Receipt verification belongs **server-side on the Hono/TS side**, never in Rust. A new `server/services/entitlements.ts` validates **Apple App Store Server API** receipts (StoreKit 2) and writes to the `subscriptions` table. The SIWA identity and HTTPS-to-Apple already live on the Hono side (`server/services/appleAuth.ts`). The intent is documented: `docs/superpowers/specs/2026-05-25-apple-multiplatform-and-rust-pivot.md:63` ("one App Store listing and one in-app entitlement").
@@ -197,8 +198,10 @@ Add a compact capability field (e.g. `ent: Vec<String>` or a `plan` enum) to the
 - **DMCA §512 designated agent** — register **only if/when** users can upload/store content others can fetch on your hosted systems (https://www.copyright.gov/512). A pure self-hosted owner streaming to invitees is **not** hosting third-party UGC — likely unnecessary there. The real App Store liability is the IPTV viewer (Blocker 2), not the personal library.
 
 ### FFmpeg compliance (ties to Blocker 1)
-- For any GPL ffmpeg you distribute (NAS path): host the **exact matching** ffmpeg source tarball + GPL license text + build config, and add an in-app/in-image "Open Source Notices" page.
-- Add a **NOTICE / THIRD-PARTY** file (none exists today — only `./LICENSE`). Apache-2.0 deps also need NOTICE propagation.
+- For the GPL **static** ffmpeg the backend and media-core images distribute: host the **exact matching** ffmpeg source tarball + GPL license text + build config, and add an in-app/in-image "Open Source Notices" page.
+- For the transcoder image's **Debian-packaged** ffmpeg + VAAPI stack: the corresponding source is published by Debian (`apt-get source`, snapshot.debian.org) — pin/record the image digest so the exact package versions are reconstructable, and carry the GPL text + attribution in the notices alongside the others.
+- A `THIRD-PARTY-LICENSES.md` exists at the repo root but predates the transcoder's switch to Debian ffmpeg (it still describes all three images as static-ffmpeg) — update it to the per-image reality above.
+- Apache-2.0 deps also need NOTICE propagation.
 
 ### CI license gate (half-day, do before publishing source)
 - No `deny.toml` exists. Add it: `cargo deny check licenses` with GPL-2.0/GPL-3.0/AGPL set to **deny**.
@@ -210,7 +213,7 @@ Add a compact capability field (e.g. `ent: Vec<String>` or a `plan` enum) to the
 ## 7. Prioritized Roadmap
 
 **Phase 0 — Unblock (must precede any distribution). BUILDABLE NOW.**
-- Rebuild/repackage ffmpeg (Blocker 1): LGPL-only for the iOS bundle (VideoToolbox), GPL-with-compliance for the NAS server. *Blocks everything.*
+- Rebuild/repackage ffmpeg (Blocker 1): LGPL-only for the iOS bundle (VideoToolbox), GPL-with-compliance for the NAS server. The transcoder image already moved off the static build to Debian packages + hardware VAAPI (2026-06-08); the backend and media-core images still vendor the static binary. *Blocks everything.*
 - Decide + implement IPTV fate (Blocker 2 / Decision 3): web-only or BYO-player-off-by-default.
 - Add NOTICE/THIRD-PARTY file + `deny.toml` + CI license gate.
 - Choose product LICENSE (Decision 1) and re-license the repo.
@@ -219,8 +222,8 @@ Add a compact capability field (e.g. `ent: Vec<String>` or a `plan` enum) to the
 - New `crates/entitlements` (pure crate) — `Plan`, `EntitlementSet`, `allows()`, caps.
 - Add entitlement field to `InternalClaims` (`internal_principal.rs`); regenerate N-API/PyO3 bindings.
 - Resolve plan in `memberStatus()` (`membership.ts:46`); inject at mint (`internalPrincipal.ts:88`).
-- Migration `0005_*.sql`: `subscriptions` table.
-- Wire pure gates at `play_grant` (`routes.rs:320`), `plan_transcode` (`plan.rs:160`), `handoff` (`routes.rs:498`).
+- Migration `0006_*.sql`: `subscriptions` table.
+- Wire pure gates at `play_grant` (`routes.rs:394`), `plan_transcode` (`plan.rs:206`), `handoff` (`routes.rs:585`).
 - **Per-sub concurrency limiter** (the one structural piece) — extend `concurrency.rs` `Limiter` with a per-`sub` map, copying `iptvConcurrency.ts`.
 
 **Phase 2 — Web payment path. BUILDABLE NOW (independent of Apple).**
