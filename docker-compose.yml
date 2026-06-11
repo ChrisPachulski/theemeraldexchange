@@ -507,6 +507,22 @@ services:
     ports:
       # Port changed from 8080 → 8000 in v6.0 (Granian replaces Gunicorn).
       - "127.0.0.1:8100:8000"
+    # Readiness probe (telemetry is mandatory per §15 — a silently-dead
+    # Glitchtip drops crash reports with no signal). Glitchtip routes
+    # GET /_health/ (glitchtip/urls.py) for exactly this. The image ships no
+    # curl/wget, but it IS a Python app, so probe with the stdlib. The deploy
+    # gate (scripts/deploy-nas.sh) reads this status WARN-not-fail: rolling
+    # back app images over a telemetry blip — or during the DSN bootstrap
+    # window — would be worse than the warning.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/_health/', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      # First boot runs migrate + maintain_partitions (command above) before
+      # Granian ever listens — generous start_period so that window doesn't
+      # mark a working boot unhealthy.
+      start_period: 90s
+      retries: 3
     environment:
       SECRET_KEY: "${GLITCHTIP_SECRET_KEY}"
       DATABASE_URL: "postgres://glitchtip:${GLITCHTIP_DB_PASSWORD}@glitchtip-db:5432/glitchtip"
@@ -613,6 +629,14 @@ services:
       - "no-new-privileges:true"
     cap_drop:
       - ALL
+    # NO healthcheck, deliberately (decision, not omission): the worker role
+    # serves no HTTP, and django-vtasks (which replaced Celery in v6.0) ships
+    # no ping/inspect CLI. The only probe available would be "can python open
+    # a socket to valkey", which proves network reachability — not task
+    # consumption — and would report a wedged consumer as healthy (worse than
+    # no signal). Real worker failures present as process death → restart
+    # loop, so the deploy gate (scripts/deploy-nas.sh) checks this container's
+    # running-state instead and warns on restarting/exited.
     environment:
       SERVER_ROLE: worker
       SECRET_KEY: "${GLITCHTIP_SECRET_KEY}"

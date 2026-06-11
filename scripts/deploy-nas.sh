@@ -420,6 +420,26 @@ echo "→ Waiting for backend + sidecars to report healthy (up to ~150s)"
 health_poll_remote='
   containers="exchange-backend exchange-recommender exchange-media-core exchange-transcoder"
   summary=""
+  # Telemetry stack status (§15: telemetry is MANDATORY, but it is not in the
+  # request path). Reported as WARN-not-fail, deliberately: hard-failing here
+  # would roll back the app images over a telemetry blip and — in the DSN
+  # bootstrap window — tear down the very Glitchtip instance the operator
+  # needs to mint the DSN from. glitchtip web carries a compose healthcheck
+  # (/_health/); the worker has none by design (see docker-compose.yml), so
+  # for it the running-state is the signal (a crashed/restarting worker is
+  # what real failure looks like).
+  report_telemetry() {
+    warn_summary=""
+    for tc in exchange-glitchtip exchange-glitchtip-worker; do
+      ts=$(docker inspect --format "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}" "$tc" 2>/dev/null || echo missing)
+      warn_summary="$warn_summary $tc=$ts"
+    done
+    case "$warn_summary" in
+      *=unhealthy*|*=restarting*|*=exited*|*=dead*|*=missing*|*=created*|*=paused*)
+        echo "[deploy] WARN: telemetry stack not fully healthy (crash reports may be dropping):$warn_summary" ;;
+      *) echo "[deploy] telemetry stack:$warn_summary" ;;
+    esac
+  }
   for i in $(seq 1 50); do
     all_ok=1
     summary=""
@@ -441,11 +461,14 @@ health_poll_remote='
     if [ "$all_ok" = "1" ]; then
       echo "[deploy] stack healthy:$summary"
       case "$summary" in *=missing*) echo "[deploy] WARN: some sidecars are missing (direct-docker fallback?):$summary" ;; esac
+      report_telemetry
       exit 0
     fi
     sleep 3
   done
-  echo "[deploy] stack never became healthy:$summary"; exit 3
+  echo "[deploy] stack never became healthy:$summary"
+  report_telemetry
+  exit 3
 '
 set +e
 ssh "${NAS_USER}@${NAS_HOST}" "$health_poll_remote"
