@@ -1,5 +1,5 @@
 // src/components/tabs/IptvSeriesTab.tsx
-import { type KeyboardEvent, useState } from 'react'
+import { type KeyboardEvent, type ReactNode, useState } from 'react'
 import IptvPlayer from '../player/IptvPlayer'
 import { iptvApi, type SeriesDto, type SeriesEpisodeDto, type StreamGrant } from '../../lib/api/iptv'
 import { useIptvCategories } from '../../lib/hooks/useIptvCategories'
@@ -7,6 +7,7 @@ import { useIptvSeries, useIptvSeriesDetail } from '../../lib/hooks/useIptvSerie
 import { useIptvFavoriteSet, useToggleIptvFavorite } from '../../lib/hooks/useIptvFavorites'
 import { useIptvHistoryIndex, useReportPosition } from '../../lib/hooks/useIptvHistory'
 import { useDebounced } from '../../lib/hooks/useDebounced'
+import { useModalA11y } from '../../lib/hooks/useModalA11y'
 import { ConcurrencyLimitModal } from '../iptv/ConcurrencyLimitModal'
 import {
   concurrencyPayloadFromError,
@@ -28,6 +29,81 @@ function resumePercent(row: ResumeRow | undefined): number | null {
 function resumePosition(row: ResumeRow | undefined): number | undefined {
   if (!row || row.completed || row.position_secs <= 0) return undefined
   return row.position_secs
+}
+
+// Both dialogs below are plain divs (role=dialog/aria-modal), so useModalA11y
+// supplies the focus trap, Escape-to-close, and focus restoration that
+// aria-modal="true" promises (LiveTab pattern). Each lives in its own
+// component so the hook's open/close effect runs when the dialog mounts.
+
+function SeriesDetailModal({
+  title,
+  onClose,
+  children,
+}: {
+  title: string
+  onClose: () => void
+  children: ReactNode
+}) {
+  const modalRef = useModalA11y<HTMLDivElement>(onClose)
+  return (
+    <div
+      ref={modalRef}
+      className="iptv-player-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      tabIndex={-1}
+    >
+      <div className="iptv-player-modal__header">
+        <h2>{title}</h2>
+        <button
+          className="iptv-player-modal__close"
+          type="button"
+          onClick={onClose}
+          aria-label="Close series details"
+        >
+          ×
+        </button>
+      </div>
+      {children}
+    </div>
+  )
+}
+
+function PlayerModal({
+  playing,
+  onClose,
+  onPositionUpdate,
+}: {
+  playing: { grant: StreamGrant; title: string; startPositionSecs?: number }
+  onClose: () => void
+  onPositionUpdate: (positionSecs: number, durationSecs: number | null) => void
+}) {
+  const modalRef = useModalA11y<HTMLDivElement>(onClose)
+  return (
+    <div
+      ref={modalRef}
+      className="iptv-player-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label={playing.title}
+      tabIndex={-1}
+    >
+      <div className="iptv-player-modal__header">
+        <h2>{playing.title}</h2>
+        <button className="iptv-player-modal__close" type="button" onClick={onClose} aria-label="Close player">
+          ×
+        </button>
+      </div>
+      <IptvPlayer
+        grant={playing.grant}
+        autoPlay
+        startPositionSecs={playing.startPositionSecs}
+        onPositionUpdate={onPositionUpdate}
+      />
+    </div>
+  )
 }
 
 export default function IptvSeriesTab() {
@@ -179,19 +255,7 @@ export default function IptvSeriesTab() {
       </footer>
 
       {selectedSeriesId != null && (
-        <div className="iptv-player-modal" role="dialog" aria-modal="true" aria-label={selectedSeriesTitle}>
-          <div className="iptv-player-modal__header">
-            <h2>{selectedSeriesTitle}</h2>
-            <button
-              className="iptv-player-modal__close"
-              type="button"
-              onClick={() => setSelectedSeriesId(null)}
-              aria-label="Close series details"
-            >
-              ×
-            </button>
-          </div>
-
+        <SeriesDetailModal title={selectedSeriesTitle} onClose={() => setSelectedSeriesId(null)}>
           <div className="iptv-series-detail">
             {detail.isLoading && <p className="iptv-tab__status">Loading…</p>}
             {detail.error && <p className="iptv-tab__status iptv-tab__status--error">Failed to load episodes.</p>}
@@ -221,27 +285,18 @@ export default function IptvSeriesTab() {
               </section>
             ))}
           </div>
-        </div>
+        </SeriesDetailModal>
       )}
 
       {playing && (
-        <div className="iptv-player-modal" role="dialog" aria-modal="true" aria-label={playing.title}>
-          <div className="iptv-player-modal__header">
-            <h2>{playing.title}</h2>
-            <button className="iptv-player-modal__close" type="button" onClick={() => setPlaying(null)} aria-label="Close player">
-              ×
-            </button>
-          </div>
-          <IptvPlayer
-            grant={playing.grant}
-            autoPlay
-            startPositionSecs={playing.startPositionSecs}
-            onPositionUpdate={(positionSecs, durationSecs) => {
-              const completed = durationSecs != null && positionSecs >= Math.max(0, durationSecs - 30)
-              reportPosition(positionSecs, durationSecs, completed)
-            }}
-          />
-        </div>
+        <PlayerModal
+          playing={playing}
+          onClose={() => setPlaying(null)}
+          onPositionUpdate={(positionSecs, durationSecs) => {
+            const completed = durationSecs != null && positionSecs >= Math.max(0, durationSecs - 30)
+            reportPosition(positionSecs, durationSecs, completed)
+          }}
+        />
       )}
 
       {concurrencyError && (

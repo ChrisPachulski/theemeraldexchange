@@ -152,6 +152,86 @@ export function applySubtitleTrack(
   return trackId
 }
 
+// ── Fatal hls.js error recovery ──────────────────────────────────────
+//
+// hls.js fatal errors fall into three classes with different recovery
+// contracts (https://github.com/video-dev/hls.js/blob/master/docs/API.md):
+//   network — reload the source (startLoad), with backoff + a retry cap;
+//   media   — the documented ladder: recoverMediaError(), then
+//             swapAudioCodec()+recoverMediaError() if a second fatal media
+//             error lands inside MEDIA_RECOVERY_WINDOW_MS, then give up.
+//             Without the ladder a persistent MSE append rejection (the
+//             5.1-AAC grey-box class) loops recoverMediaError() forever on
+//             a frozen player. Errors spaced wider than the window reset
+//             the ladder so an occasional transient glitch never kills a
+//             long session.
+//   other   — unrecoverable; destroy and surface a message.
+
+export type FatalHlsErrorKind = 'network' | 'media' | 'other'
+
+// Minimal structural slice of the hls.js instance the handler drives; kept
+// local so tests need no hls.js import (same convention as HlsTrackController).
+export type RecoverableHls = {
+  startLoad: () => void
+  recoverMediaError: () => void
+  swapAudioCodec: () => void
+  destroy: () => void
+}
+
+export const MAX_NET_RETRIES = 8
+export const MEDIA_RECOVERY_WINDOW_MS = 3000
+
+export function createFatalHlsErrorHandler(opts: {
+  hls: RecoverableHls
+  isCancelled: () => boolean
+  setError: (message: string) => void
+  schedule?: (fn: () => void, delayMs: number) => void
+  now?: () => number
+}): (kind: FatalHlsErrorKind) => void {
+  const { hls, isCancelled, setError } = opts
+  const schedule = opts.schedule ?? ((fn, delayMs) => window.setTimeout(fn, delayMs))
+  const now = opts.now ?? (() => Date.now())
+
+  let netRetries = 0
+  let mediaRecoverStep = 0
+  let lastMediaErrorAt = 0
+
+  return (kind) => {
+    if (isCancelled()) return
+    if (kind === 'network') {
+      if (netRetries >= MAX_NET_RETRIES) {
+        setError('Couldn’t start playback. The transcoder may still be warming up — try again in a moment.')
+        hls.destroy()
+        return
+      }
+      netRetries += 1
+      // Backoff a touch so a warm-up 503 has time to resolve.
+      schedule(() => {
+        if (!isCancelled()) hls.startLoad()
+      }, Math.min(500 * netRetries, 3000))
+      return
+    }
+    if (kind === 'media') {
+      const t = now()
+      if (t - lastMediaErrorAt > MEDIA_RECOVERY_WINDOW_MS) mediaRecoverStep = 0
+      lastMediaErrorAt = t
+      mediaRecoverStep += 1
+      if (mediaRecoverStep === 1) {
+        hls.recoverMediaError()
+      } else if (mediaRecoverStep === 2) {
+        hls.swapAudioCodec()
+        hls.recoverMediaError()
+      } else {
+        setError('Playback failed — this stream couldn’t be decoded. Close and re-open to retry.')
+        hls.destroy()
+      }
+      return
+    }
+    setError('Playback failed.')
+    hls.destroy()
+  }
+}
+
 export default function IptvPlayer({
   grant,
   autoPlay = false,
@@ -293,29 +373,23 @@ export default function IptvPlayer({
         // Fatal-error recovery. Without this a transient manifest/segment error
         // — e.g. a transcoder still emitting its first segment (HTTP 503 during
         // warm-up) — leaves a blank <video> with no feedback. Retry network
-        // errors (reloading the manifest), recover media errors, and only give
-        // up with a visible message after a bounded number of attempts.
-        let netRetries = 0
-        const MAX_NET_RETRIES = 8
+        // errors (reloading the manifest), run the documented media-error
+        // recovery ladder, and only give up with a visible message after a
+        // bounded number of attempts.
+        const onFatalError = createFatalHlsErrorHandler({
+          hls,
+          isCancelled: () => cancelled,
+          setError,
+        })
         hls.on(Hls.Events.ERROR, (_evt, data) => {
           if (cancelled || !data.fatal) return
-          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-            if (netRetries >= MAX_NET_RETRIES) {
-              setError('Couldn’t start playback. The transcoder may still be warming up — try again in a moment.')
-              hls.destroy()
-              return
-            }
-            netRetries += 1
-            // Backoff a touch so a warm-up 503 has time to resolve.
-            window.setTimeout(() => {
-              if (!cancelled) hls.startLoad()
-            }, Math.min(500 * netRetries, 3000))
-          } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-            hls.recoverMediaError()
-          } else {
-            setError('Playback failed.')
-            hls.destroy()
-          }
+          onFatalError(
+            data.type === Hls.ErrorTypes.NETWORK_ERROR
+              ? 'network'
+              : data.type === Hls.ErrorTypes.MEDIA_ERROR
+                ? 'media'
+                : 'other',
+          )
         })
 
         hls.loadSource(grant.url)

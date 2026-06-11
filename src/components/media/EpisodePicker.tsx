@@ -1,4 +1,5 @@
 import { useMediaEpisodes } from '../../lib/hooks/useMediaLibrary'
+import { useModalA11y } from '../../lib/hooks/useModalA11y'
 import type { MediaEpisode } from '../../lib/api/media'
 import './EpisodePicker.css'
 
@@ -23,12 +24,17 @@ type Props = {
  */
 export function EpisodePicker({ showId, showTitle, onClose, onPlay }: Props) {
   const episodes = useMediaEpisodes(showId)
+  // Plain-div dialog: useModalA11y supplies the focus trap, Escape-to-close,
+  // and focus restoration that aria-modal="true" promises (LiveTab pattern).
+  const modalRef = useModalA11y<HTMLDivElement>(onClose)
   return (
     <div
+      ref={modalRef}
       className="iptv-player-modal"
       role="dialog"
       aria-modal="true"
       aria-label={`${showTitle} episodes`}
+      tabIndex={-1}
     >
       <div className="iptv-player-modal__header">
         <h2>{showTitle}</h2>
