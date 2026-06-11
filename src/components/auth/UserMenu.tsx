@@ -127,7 +127,7 @@ export function UserMenu() {
                         rel="noreferrer noopener"
                       >
                         <span className="user-menu__app-name">{app.name}</span>
-                        <span className="user-menu__app-arrow" aria-hidden="true">→</span>
+                        <span className="user-menu__app-arrow" aria-hidden="true">-&gt;</span>
                       </a>
                     </li>
                   ))}

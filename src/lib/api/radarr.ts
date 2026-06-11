@@ -27,7 +27,7 @@ async function post<T, B>(path: string, body: B): Promise<T> {
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') {
       throw new Error(
-        `Radarr ${path}: request timed out after 60s — the server is taking too long. Check Radarr is reachable from the dashboard server.`,
+        `Radarr ${path}: request timed out after 60s; the server is taking too long. Check Radarr is reachable from the dashboard server.`,
         { cause: err },
       )
     }

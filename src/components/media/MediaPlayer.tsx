@@ -139,7 +139,7 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
           // surface a re-grant-able error instead of a frozen video.
           setGrant(null)
           setSessionLost(true)
-          setError('Playback session expired — the transcoder shut it down.')
+          setError('Playback session expired; the transcoder shut it down.')
         },
       },
     })

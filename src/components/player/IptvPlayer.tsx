@@ -200,7 +200,7 @@ export function createFatalHlsErrorHandler(opts: {
     if (isCancelled()) return
     if (kind === 'network') {
       if (netRetries >= MAX_NET_RETRIES) {
-        setError('Couldn’t start playback. The transcoder may still be warming up — try again in a moment.')
+        setError('Couldn’t start playback. The transcoder may still be warming up; try again in a moment.')
         hls.destroy()
         return
       }
@@ -222,7 +222,7 @@ export function createFatalHlsErrorHandler(opts: {
         hls.swapAudioCodec()
         hls.recoverMediaError()
       } else {
-        setError('Playback failed — this stream couldn’t be decoded. Close and re-open to retry.')
+        setError('Playback failed; this stream couldn’t be decoded. Close and re-open to retry.')
         hls.destroy()
       }
       return

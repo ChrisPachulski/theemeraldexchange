@@ -134,7 +134,7 @@ export default function EpgGuide({
     return (
       <p className="iptv-tab__status">
         No guide data for {q.trim() ? `“${q.trim()}”` : categoryId != null ? 'this category' : 'these channels'}.
-        Most channels from this provider don’t publish a schedule — try a major network, or switch back to Channels.
+        Most channels from this provider don’t publish a schedule; try a major network, or switch back to Channels.
       </p>
     )
   }

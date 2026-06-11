@@ -126,14 +126,14 @@ function describeError(error: unknown): { headline: string; hint: string } {
     }
   }
   if (status === 429) {
-    return { headline: 'Rate limited', hint: 'Too many requests — try again in a minute.' }
+    return { headline: 'Rate limited', hint: 'Too many requests; try again in a minute.' }
   }
   if (typeof status === 'number' && status >= 500) {
     return { headline: 'Suggestions service errored', hint: 'Check the server logs and refresh.' }
   }
   return {
     headline: 'Couldn’t load suggestions',
-    hint: e?.message ?? 'Network or backend error — refresh to retry.',
+    hint: e?.message ?? 'Network or backend error; refresh to retry.',
   }
 }
 
@@ -159,13 +159,13 @@ function dominantDropReason(
   if (topN / total < 0.5) return null
   switch (top) {
     case 'library':
-      return 'Most picks were already in your library — try a wider library or be patient as Claude rotates.'
+      return 'Most picks were already in your library; try a wider library or be patient as Claude rotates.'
     case 'rejected':
-      return 'Most picks were on your NEVER list — try clearing a few red dots.'
+      return 'Most picks were on your NEVER list; try clearing a few red dots.'
     case 'lookup':
       return 'Most picks didn’t resolve on TMDB (rate-limit or unknown title). Try again in a moment.'
     case 'year':
-      return 'Most picks were dropped on year mismatch — likely a Claude/TMDB year disagreement.'
+      return 'Most picks were dropped on year mismatch; likely a Claude/TMDB year disagreement.'
     case 'dedupe':
       return 'Most picks were duplicates of each other. Refresh to get a new batch.'
     default:
@@ -180,7 +180,7 @@ function describeEmptySource(
   // Cold-start path: library too small for meaningful taste signal.
   // Surface the actionable hint so the user knows exactly what to do.
   if (source === 'trending' && diag?.reason === 'library_below_threshold') {
-    return diag.hint ?? `Your library needs ${diag.threshold ?? 10}+ titles for personalized picks — showing trending for now.`
+    return diag.hint ?? `Your library needs ${diag.threshold ?? 10}+ titles for personalized picks; showing trending for now.`
   }
   if (source === 'trending_fallback') {
     if (diag?.reason === 'claude_threw') {
@@ -193,9 +193,9 @@ function describeEmptySource(
         : status === 413 ? 'Prompt too large (413)'
         : typeof status === 'number' && status >= 500 ? `Anthropic outage (${status})`
         : 'Claude errored'
-      return msg ? `${prefix}: ${msg.slice(0, 200)} — showing trending.` : `${prefix} — showing trending.`
+      return msg ? `${prefix}: ${msg.slice(0, 200)}; showing trending.` : `${prefix}; showing trending.`
     }
-    return 'Claude was unreachable — showing trending instead.'
+    return 'Claude was unreachable; showing trending instead.'
   }
   if (source === 'personalized_empty_trending_fallback') {
     const specific = dominantDropReason(diag?.lastCounters)
@@ -273,7 +273,7 @@ export function TrendingRow({
     // must stay on screen so the user can re-run it.
     const emptyHint =
       describeEmptySource(source, diag) ??
-      (onRefresh ? 'No fresh picks this round — refresh to run the recommender again.' : null)
+      (onRefresh ? 'No fresh picks this round; refresh to run the recommender again.' : null)
     if (!mode && !emptyHint && !onRefresh) return null
     return (
       <section className="trending">
@@ -301,14 +301,14 @@ export function TrendingRow({
   // when it happens motivates them to check their library/rejection lists.
   const droppedWarning =
     (diag?.droppedPicks ?? 0) > 10
-      ? ` (${diag!.droppedPicks} picks filtered — some API credit was used on invalid suggestions)`
+      ? ` (${diag!.droppedPicks} picks filtered; some API credit was used on invalid suggestions)`
       : ''
   // When Claude hit max_tokens the JSON was truncated and the strip may
   // be shorter than expected. Surface an honest hint so the user isn't
   // confused by a partial strip.
   const truncatedHint =
     diag?.claudeTruncated
-      ? ' (AI response was cut short — refresh for a full strip)'
+      ? ' (AI response was cut short; refresh for a full strip)'
       : ''
   // When source=trending and no AI context is shown (no toggle rendered),
   // the strip is operating in no-key or AI-off mode. Show a quiet nudge
@@ -325,15 +325,15 @@ export function TrendingRow({
       : null
   const sourceHint =
     source === 'trending_fallback'
-      ? 'AI was unreachable — showing trending.'
+      ? 'AI was unreachable; showing trending.'
       : isRecommenderFallback
-        ? 'Recommender is catching its breath — showing trending while it recovers.'
+        ? 'Recommender is catching its breath; showing trending while it recovers.'
         : source === 'trending' && diag?.reason === 'library_below_threshold'
-          ? (diag.hint ?? 'Library too small for personalized picks — showing trending.')
+          ? (diag.hint ?? 'Library too small for personalized picks; showing trending.')
           : noAiNudge
             ? noAiNudge
             : source === 'personalized_filled' || source === 'personalized_empty_trending_fallback'
-              ? `A few picks are from trending — not enough personalized matches this round.${droppedWarning}${truncatedHint}`
+              ? `A few picks are from trending; not enough personalized matches this round.${droppedWarning}${truncatedHint}`
               : source === 'personalized' && (droppedWarning || truncatedHint)
                 ? `${droppedWarning}${truncatedHint}`.trim()
                 : null
@@ -362,7 +362,7 @@ export function TrendingRow({
           const provClass = item.provenance ? ` trending__card--${item.provenance}` : ''
           const tipParts = [item.title]
           if (item.reason) tipParts.push(item.reason)
-          const tooltip = tipParts.join(' — ')
+          const tooltip = tipParts.join(' · ')
           return (
             <div key={item.id} className="trending__card-wrap">
               <button
@@ -419,7 +419,7 @@ export function TrendingRow({
                   title={item.title}
                   disabledReason={
                     feedback.unavailable
-                      ? "Feedback unavailable — couldn't reach the server"
+                      ? "Feedback unavailable; couldn't reach the server"
                       : undefined
                   }
                 />
