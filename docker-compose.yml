@@ -325,7 +325,7 @@ services:
   # Fallback path when a client cannot direct-play a library file. media-core
   # proxies POST /api/transcode/grant here (MEDIA_TRANSCODER_URL) and hands the
   # client the returned HLS manifest URL. Spawns ffmpeg per session; segments
-  # live in the scratch tmpfs. Same read-only /media mount as media-core so
+  # live on the durable /scratch disk. Same read-only /media mount as media-core so
   # ffmpeg can read source bytes by the path media-core reports. Never exposed
   # publicly; binds 0.0.0.0 in-container, published to the NAS loopback only.
   transcoder:
@@ -339,13 +339,20 @@ services:
     build:
       context: .
       dockerfile: ./crates/transcoder/Dockerfile
+      args:
+        # Cap the Rust compile to ≤2 of the NAS's 5 cores so a rebuild can't pin
+        # the CPU and starve Plex (a real incident: uncapped build → load 73 →
+        # ~13 min Plex brown-out). Default empty = cargo's all-core default for
+        # CI/dev builders that don't share the box. Set CARGO_BUILD_JOBS=2 in the
+        # deploy shell so compose interpolates it here.
+        CARGO_BUILD_JOBS: "${CARGO_BUILD_JOBS:-}"
     image: theemeraldexchange-transcoder:latest
     container_name: exchange-transcoder
     restart: unless-stopped
     # Hardening (audit 9-4): the highest-value target (root + ffmpeg + mounted
     # media). No privilege escalation, drop all Linux caps, read-only root fs.
-    # ffmpeg writes only to /scratch (the tmpfs declared below) and media is
-    # mounted :ro, so read_only is safe here.
+    # ffmpeg writes only to /scratch (the durable bind mount below) + /tmp
+    # (tmpfs) and media is mounted :ro, so read_only is safe here.
     security_opt:
       - "no-new-privileges:true"
     cap_drop:
