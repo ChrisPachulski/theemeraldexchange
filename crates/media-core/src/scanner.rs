@@ -59,6 +59,13 @@ struct WalkOutcome {
     files: Vec<WalkedFile>,
     files_seen: usize,
     errors: usize,
+    /// Roots whose directory existed AND whose walk completed without a single
+    /// I/O error. Only paths under these roots are eligible for the
+    /// missing-file prune: an unmounted/failed root yields 0 files, and
+    /// pruning against that view would wipe the whole catalog (cascading
+    /// movies/episodes and then the watch-state GC) for a transient mount
+    /// hiccup.
+    prunable_roots: Vec<std::path::PathBuf>,
 }
 
 /// Enumerate every video file under `roots`. Pure blocking FS work (WalkDir +
@@ -69,16 +76,33 @@ fn walk_roots(roots: &[LibraryRoot]) -> WalkOutcome {
         files: Vec::new(),
         files_seen: 0,
         errors: 0,
+        prunable_roots: Vec::new(),
     };
 
     for root in roots {
+        // A configured root whose directory is missing (unmounted volume,
+        // typo'd MEDIA_LIBRARY_PATHS) must NOT be treated as "everything was
+        // deleted". Skip it loudly and keep it out of the prune set.
+        if !root.path.is_dir() {
+            tracing::error!(
+                root = %root.path.display(),
+                "library root missing or not a directory; skipping walk AND \
+                 excluding it from the missing-file prune (its rows are kept)"
+            );
+            out.errors += 1;
+            continue;
+        }
+
         let root_kind = root.kind;
+        // I/O errors local to THIS root; any error disqualifies the root from
+        // the prune pass (an incomplete enumeration cannot prove deletion).
+        let mut root_errors = 0usize;
         for entry in WalkDir::new(&root.path).follow_links(true) {
             let entry = match entry {
                 Ok(e) => e,
                 Err(e) => {
                     tracing::warn!("walk error under {}: {e}", root.path.display());
-                    out.errors += 1;
+                    root_errors += 1;
                     continue;
                 }
             };
@@ -100,7 +124,7 @@ fn walk_roots(roots: &[LibraryRoot]) -> WalkOutcome {
                 Some(p) => p.to_string(),
                 None => {
                     tracing::warn!("non-utf8 path skipped: {}", entry_path.display());
-                    out.errors += 1;
+                    root_errors += 1;
                     continue;
                 }
             };
@@ -111,7 +135,7 @@ fn walk_roots(roots: &[LibraryRoot]) -> WalkOutcome {
                 Ok(stat) => stat,
                 Err(e) => {
                     tracing::warn!("stat failed for {path_str}: {e}");
-                    out.errors += 1;
+                    root_errors += 1;
                     continue;
                 }
             };
@@ -125,6 +149,18 @@ fn walk_roots(roots: &[LibraryRoot]) -> WalkOutcome {
                 mtime,
             });
         }
+
+        if root_errors == 0 {
+            out.prunable_roots.push(root.path.clone());
+        } else {
+            tracing::error!(
+                root = %root.path.display(),
+                errors = root_errors,
+                "walk of library root hit I/O errors; excluding it from the \
+                 missing-file prune this pass (its rows are kept)"
+            );
+        }
+        out.errors += root_errors;
     }
 
     out
@@ -230,8 +266,13 @@ pub async fn scan_once(
     // reap watch-state orphans (the polymorphic media_kind/media_id pair has
     // no SQL FK, so a cascade cannot do this). Skipped entirely when no roots
     // are configured (dev/tests) — an empty config must never empty the DB.
+    // Pruning is further restricted to roots whose walk was HEALTHY (directory
+    // existed, zero I/O errors): an unmounted MEDIA_LIBRARY_PATHS volume
+    // enumerates as 0 files, and pruning against that view would delete every
+    // media_files row, cascade-destroy movies/episodes, and let the
+    // watch-state GC reap all progress — for a transient mount failure.
     if !roots.is_empty() {
-        match prune_missing_files(db).await {
+        match prune_missing_files(db, &walk.prunable_roots).await {
             Ok(removed) => report.files_removed = removed,
             Err(e) => {
                 tracing::warn!("prune of deleted files failed: {e}");
@@ -255,15 +296,33 @@ pub async fn scan_once(
 /// CASCADE); shows left with zero episodes are swept afterwards so the
 /// library never lists an empty series. Returns the number of file rows
 /// removed.
-async fn prune_missing_files(db: &Db) -> Result<usize, AppError> {
+///
+/// Only rows under `prunable_roots` — roots whose directory existed and whose
+/// walk completed without I/O errors — are candidates. Rows under a missing or
+/// errored root are deliberately retained: an unmounted volume looks exactly
+/// like "every file was deleted", and acting on that view destroys the catalog
+/// and all watch state. With no healthy roots, nothing is pruned.
+async fn prune_missing_files(
+    db: &Db,
+    prunable_roots: &[std::path::PathBuf],
+) -> Result<usize, AppError> {
+    if prunable_roots.is_empty() {
+        tracing::warn!("no healthy library roots this pass; skipping missing-file prune");
+        return Ok(0);
+    }
+
     let rows: Vec<(i64, String)> = sqlx::query_as("SELECT id, path FROM media_files")
         .fetch_all(&db.pool)
         .await?;
 
     // Existence probes are blocking FS I/O; batch them off the runtime.
+    let roots = prunable_roots.to_vec();
     let missing: Vec<i64> = tokio::task::spawn_blocking(move || {
         rows.into_iter()
-            .filter(|(_, path)| !std::path::Path::new(path).exists())
+            .filter(|(_, path)| {
+                let p = std::path::Path::new(path);
+                roots.iter().any(|root| p.starts_with(root)) && !p.exists()
+            })
             .map(|(id, _)| id)
             .collect()
     })
@@ -1743,6 +1802,94 @@ mod tests {
             surviving_watch, kept_movie,
             "the surviving title's watch state stays"
         );
+    }
+
+    #[tokio::test]
+    async fn scan_with_missing_root_never_prunes() {
+        // REGRESSION: an unmounted/missing MEDIA_LIBRARY_PATHS volume must not
+        // be read as "every file was deleted". A configured root whose
+        // directory does not exist enumerates 0 files; pruning against that
+        // view used to delete EVERY media_files row, cascade movies/episodes,
+        // and let the watch-state GC reap all progress.
+        let db = Db::connect_memory().await.unwrap();
+        let gone_root = std::path::PathBuf::from("/definitely-not-mounted-eex-test");
+        let file_id =
+            seed_media_file(&db, "/definitely-not-mounted-eex-test/Movie (2020).mkv").await;
+        upsert_movie(&db, "Movie", Some(2020), file_id, "t", None)
+            .await
+            .unwrap();
+        let movie_id: i64 = sqlx::query_scalar("SELECT id FROM movies WHERE file_id = ?")
+            .bind(file_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO media_watch_state \
+             (sub, media_kind, media_id, position_secs, watched_at, completed) \
+             VALUES ('plex:1', 'movie', ?, 10, 't', 0)",
+        )
+        .bind(movie_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        let roots = vec![LibraryRoot {
+            path: gone_root,
+            kind: RootKind::Movies,
+        }];
+        let report = scan_once(&db, &roots, &no_tmdb()).await.unwrap();
+
+        assert_eq!(report.files_removed, 0, "missing root must prune nothing");
+        assert_eq!(report.watch_orphans_removed, 0, "watch state must survive");
+        assert!(report.errors >= 1, "the skipped root is surfaced as an error");
+        assert_eq!(count(&db, "media_files").await, 1);
+        assert_eq!(count(&db, "movies").await, 1);
+        assert_eq!(count(&db, "media_watch_state").await, 1);
+    }
+
+    #[tokio::test]
+    async fn scan_prunes_only_under_healthy_roots() {
+        // Mixed config: one healthy root with a genuinely deleted file, one
+        // missing root with intact rows. Exactly the healthy root's vanished
+        // file is pruned; the missing root's catalog is untouched.
+        let tmp = tempdir().unwrap();
+        let db = Db::connect_memory().await.unwrap();
+
+        // Healthy root: one row whose file was deleted.
+        let gone_path = tmp.path().join("Deleted (2019).mkv");
+        let gone_file = seed_media_file(&db, gone_path.to_str().unwrap()).await;
+        upsert_movie(&db, "Deleted", Some(2019), gone_file, "t", None)
+            .await
+            .unwrap();
+
+        // Missing root: a row that must survive.
+        let kept_file = seed_media_file(&db, "/unmounted-eex-test/Kept (2021).mkv").await;
+        upsert_movie(&db, "Kept", Some(2021), kept_file, "t", None)
+            .await
+            .unwrap();
+
+        let roots = vec![
+            LibraryRoot {
+                path: tmp.path().to_path_buf(),
+                kind: RootKind::Movies,
+            },
+            LibraryRoot {
+                path: std::path::PathBuf::from("/unmounted-eex-test"),
+                kind: RootKind::Movies,
+            },
+        ];
+        let report = scan_once(&db, &roots, &no_tmdb()).await.unwrap();
+
+        assert_eq!(
+            report.files_removed, 1,
+            "exactly the healthy root's deleted file is pruned"
+        );
+        let remaining: Vec<String> = sqlx::query_scalar("SELECT path FROM media_files")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(remaining, vec!["/unmounted-eex-test/Kept (2021).mkv"]);
+        assert_eq!(count(&db, "movies").await, 1);
     }
 
     #[tokio::test]
