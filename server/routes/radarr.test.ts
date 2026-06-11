@@ -170,7 +170,11 @@ describe('radarr — allow-list and gates', () => {
     stub('/api/v3/rootfolder', [
       { id: 1, path: '/data/movies', freeSpace: 500 * 1024 ** 3 },
     ])
-    stub('/api/v3/movie', { id: 99 }, 201)
+    stub('/api/v3/movie', { id: 99, title: 'Foo' }, 201)
+    stub('/api/v3/release?movieId=99', [
+      { guid: 'g-99', indexerId: 1, size: 2 * 1024 ** 3, qualityWeight: 100, title: 'Foo 1080p' },
+    ])
+    stub('/api/v3/release', { ok: true })
     const r = await appUnderTest().request('/api/v3/movie', {
       method: 'POST',
       headers: {
@@ -340,7 +344,18 @@ describe('radarr POST /api/v3/movie — non-admin add policy', () => {
         }
         if (url.endsWith('/api/v3/movie') && init?.method === 'POST') {
           capturedAddBody = JSON.parse(init.body as string)
-          return new Response(JSON.stringify({ id: 999 }), { status: 201 })
+          return new Response(JSON.stringify({ id: 999, title: 'X' }), { status: 201 })
+        }
+        if (url.includes('/api/v3/release?movieId=999')) {
+          return new Response(
+            JSON.stringify([
+              { guid: 'g-999', indexerId: 1, size: 2 * 1024 ** 3, qualityWeight: 100, title: 'X 1080p' },
+            ]),
+            { status: 200 },
+          )
+        }
+        if (url.endsWith('/api/v3/release') && init?.method === 'POST') {
+          return new Response(JSON.stringify({ ok: true }), { status: 200 })
         }
         return new Response('[]', { status: 200 })
       }),
@@ -453,8 +468,10 @@ async function captureForwardedAdd(
       }
       if (url.endsWith('/api/v3/movie') && init?.method === 'POST') {
         captured = JSON.parse(String(init.body))
-        // id:0 + no addOptions in upstream response → we won't kick the
-        // background grab path (id check guards it).
+        // id:0 in the upstream response → the created movie is unusable and
+        // the request body carries no tmdbId to recover by, so the route
+        // takes the add_unverified path after forwarding. The forwarded body
+        // (this helper's only output) is captured before that.
         return new Response(JSON.stringify({ id: 0, title: 'Foo' }), {
           status: 201,
           headers: { 'Content-Type': 'application/json' },
@@ -819,6 +836,160 @@ describe('radarr POST /movie — grab events attributed to the caller sub', () =
   })
 })
 
+// A 201 create whose body is unparseable/untitled used to silently skip the
+// cap grab while still returning success — leaving a dead movie that the cap
+// rewrite had forced to monitored:false (no RSS sweep would ever fetch it).
+// The route now recovers the canonical record by tmdbId, and when that fails
+// it rolls back + surfaces a distinct error instead of claiming success.
+describe('radarr POST /movie — unparseable create body recovery', () => {
+  it('recovers id+title via tmdbId re-fetch and runs the cap grab', async () => {
+    let grabPosted = false
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(JSON.stringify([{ id: 1, path: '/data/movies', freeSpace: 500 * 1024 ** 3 }]), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/movie') && init?.method === 'POST') {
+          // Radarr 201s but the body is not JSON (proxy interjection).
+          return new Response('<html>gateway said ok</html>', { status: 201 })
+        }
+        if (url.includes('/api/v3/movie?tmdbId=777')) {
+          return new Response(JSON.stringify([{ id: 777, title: 'Recovered Movie', monitored: false }]), { status: 200 })
+        }
+        if (url.includes('/api/v3/release?movieId=777')) {
+          return new Response(
+            JSON.stringify([
+              { guid: 'g-777', indexerId: 1, size: 2 * 1024 ** 3, qualityWeight: 100, title: 'Recovered 1080p' },
+            ]),
+            { status: 200 },
+          )
+        }
+        if (url.endsWith('/api/v3/release') && init?.method === 'POST') {
+          grabPosted = true
+          return new Response(JSON.stringify({ ok: true }), { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/movie', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: 'Recovered Movie',
+        tmdbId: 777,
+        rootFolderPath: '/data/movies',
+        qualityProfileId: 7,
+        monitored: true,
+        addOptions: { searchForMovie: true },
+      }),
+    })
+    expect(r.status).toBe(201)
+    expect(grabPosted).toBe(true)
+    // The SPA gets the recovered movie record, not the raw upstream bytes.
+    const body = (await r.json()) as { id: number; title: string }
+    expect(body.id).toBe(777)
+    expect(body.title).toBe('Recovered Movie')
+  })
+
+  it('502 add_unverified + grab-log event when recovery also fails (no success claim)', async () => {
+    const appendSpy = vi.spyOn(grabLog, 'appendGrabEvent').mockResolvedValue(undefined)
+    try {
+      let grabPosted = false
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+          const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+          if (url.includes('/api/v3/rootfolder')) {
+            return new Response(JSON.stringify([{ id: 1, path: '/data/movies', freeSpace: 500 * 1024 ** 3 }]), { status: 200 })
+          }
+          if (url.endsWith('/api/v3/movie') && init?.method === 'POST') {
+            return new Response('not-json', { status: 201 })
+          }
+          if (url.includes('/api/v3/movie?tmdbId=778')) {
+            return new Response('[]', { status: 200 }) // recovery finds nothing
+          }
+          if (url.endsWith('/api/v3/release') && init?.method === 'POST') {
+            grabPosted = true
+            return new Response(JSON.stringify({ ok: true }), { status: 200 })
+          }
+          return new Response('[]', { status: 200 })
+        }),
+      )
+      const r = await appUnderTest().request('/api/v3/movie', {
+        method: 'POST',
+        headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: 'Ghost Movie',
+          tmdbId: 778,
+          rootFolderPath: '/data/movies',
+          qualityProfileId: 7,
+          monitored: true,
+          addOptions: { searchForMovie: true },
+        }),
+      })
+      expect(r.status).toBe(502)
+      const body = (await r.json()) as { error: string }
+      expect(body.error).toBe('add_unverified')
+      expect(grabPosted).toBe(false)
+      // The why is preserved for the admin panel, attributed to the caller.
+      expect(appendSpy).toHaveBeenCalledTimes(1)
+      expect(appendSpy.mock.calls[0][0]).toMatchObject({
+        app: 'radarr',
+        type: 'grab_failed',
+        title: 'Ghost Movie',
+        sub: 'plex:1',
+      })
+      expect((appendSpy.mock.calls[0][0] as { error?: string }).error).toMatch(/could not be identified/)
+    } finally {
+      appendSpy.mockRestore()
+    }
+  })
+
+  it('rolls back a created-but-untitled movie when recovery fails', async () => {
+    // The create body parsed and carried an id, but no usable title — and the
+    // tmdbId re-fetch errored. With an id in hand the route deletes the dead
+    // unmonitored record rather than stranding it.
+    let deleteCalled = false
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(JSON.stringify([{ id: 1, path: '/data/movies', freeSpace: 500 * 1024 ** 3 }]), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/movie') && init?.method === 'POST') {
+          return new Response(JSON.stringify({ id: 779 }), { status: 201 }) // no title
+        }
+        if (url.includes('/api/v3/movie?tmdbId=779')) {
+          return new Response('{}', { status: 500 }) // recovery lookup fails
+        }
+        if (url.endsWith('/api/v3/movie/779') && init?.method === 'DELETE') {
+          deleteCalled = true
+          return new Response('', { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/movie', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: 'Untitled Echo',
+        tmdbId: 779,
+        rootFolderPath: '/data/movies',
+        qualityProfileId: 7,
+        monitored: true,
+        addOptions: { searchForMovie: true },
+      }),
+    })
+    expect(r.status).toBe(502)
+    expect(((await r.json()) as { error: string }).error).toBe('add_unverified')
+    expect(deleteCalled).toBe(true)
+  })
+})
+
 // POST /api/v3/movie/:id/upgrade — admin-only manual upgrade trigger.
 // Reuses the same cap-filter chain as the add flow (so it can't
 // download a 50 GB rip even though it's logically an upgrade request)
@@ -999,7 +1170,18 @@ describe('radarr non-admin add — path matching tolerance (burn-it-all fixes)',
         }
         if (url.endsWith('/api/v3/movie') && init?.method === 'POST') {
           captured = JSON.parse(init.body as string)
-          return new Response(JSON.stringify({ id: 999 }), { status: 201 })
+          return new Response(JSON.stringify({ id: 999, title: 'X' }), { status: 201 })
+        }
+        if (url.includes('/api/v3/release?movieId=999')) {
+          return new Response(
+            JSON.stringify([
+              { guid: 'g-999', indexerId: 1, size: 2 * 1024 ** 3, qualityWeight: 100, title: 'X 1080p' },
+            ]),
+            { status: 200 },
+          )
+        }
+        if (url.endsWith('/api/v3/release') && init?.method === 'POST') {
+          return new Response(JSON.stringify({ ok: true }), { status: 200 })
         }
         return new Response('[]', { status: 200 })
       }),
@@ -1034,7 +1216,18 @@ describe('radarr non-admin add — path matching tolerance (burn-it-all fixes)',
         }
         if (url.endsWith('/api/v3/movie') && init?.method === 'POST') {
           captured = JSON.parse(init.body as string)
-          return new Response(JSON.stringify({ id: 999 }), { status: 201 })
+          return new Response(JSON.stringify({ id: 999, title: 'X' }), { status: 201 })
+        }
+        if (url.includes('/api/v3/release?movieId=999')) {
+          return new Response(
+            JSON.stringify([
+              { guid: 'g-999', indexerId: 1, size: 2 * 1024 ** 3, qualityWeight: 100, title: 'X 1080p' },
+            ]),
+            { status: 200 },
+          )
+        }
+        if (url.endsWith('/api/v3/release') && init?.method === 'POST') {
+          return new Response(JSON.stringify({ ok: true }), { status: 200 })
         }
         return new Response('[]', { status: 200 })
       }),
@@ -1066,7 +1259,18 @@ describe('radarr non-admin add — path matching tolerance (burn-it-all fixes)',
         }
         if (url.endsWith('/api/v3/movie') && init?.method === 'POST') {
           captured = JSON.parse(init.body as string)
-          return new Response(JSON.stringify({ id: 999 }), { status: 201 })
+          return new Response(JSON.stringify({ id: 999, title: 'X' }), { status: 201 })
+        }
+        if (url.includes('/api/v3/release?movieId=999')) {
+          return new Response(
+            JSON.stringify([
+              { guid: 'g-999', indexerId: 1, size: 2 * 1024 ** 3, qualityWeight: 100, title: 'X 1080p' },
+            ]),
+            { status: 200 },
+          )
+        }
+        if (url.endsWith('/api/v3/release') && init?.method === 'POST') {
+          return new Response(JSON.stringify({ ok: true }), { status: 200 })
         }
         return new Response('[]', { status: 200 })
       }),

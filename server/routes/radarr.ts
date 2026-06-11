@@ -320,6 +320,32 @@ async function setMovieMonitored(
   return { ok: res.ok, status: res.status }
 }
 
+// Radarr can 201 the add while returning a body we can't use (non-JSON
+// proxy interjection, or a record echoed without a title). The movie DOES
+// exist upstream — created unmonitored by the cap rewrite — so skipping the
+// grab on a bad body would strand a dead movie that neither downloads nor
+// monitors. Recover the canonical record by tmdbId before giving up.
+// Radarr's /movie?tmdbId= filter returns at most one record.
+async function lookupMovieByTmdbId(tmdbId: unknown): Promise<CreatedRadarrMovie | null> {
+  if (typeof tmdbId !== 'number' || !Number.isSafeInteger(tmdbId) || tmdbId <= 0) return null
+  try {
+    const res = await radarrFetch(`/api/v3/movie?tmdbId=${tmdbId}`, { method: 'GET' })
+    if (!res.ok) return null
+    const list = (await res.json()) as CreatedRadarrMovie[]
+    const movie = Array.isArray(list) ? list[0] : undefined
+    return movie?.id ? movie : null
+  } catch (err) {
+    console.error('[movie-cap] tmdbId recovery lookup failed:', err)
+    return null
+  }
+}
+
+function isUsableCreatedMovie(
+  m: CreatedRadarrMovie | null,
+): m is CreatedRadarrMovie & { id: number; title: string } {
+  return Boolean(m?.id && typeof m.title === 'string' && m.title.trim().length > 0)
+}
+
 function normalizePath(p: string): string {
   return p.replace(/[\\/]+$/, '').toLowerCase()
 }
@@ -510,18 +536,35 @@ radarr.post('/api/v3/movie', radarrMutateLimit, async (c) => {
     )
   }
 
+  // Body returned to the SPA on the keep paths below. Replaced by the
+  // re-fetched record when the 201 body was unparseable, so the client always
+  // receives the movie JSON it expects rather than the raw upstream bytes.
+  let keepBody = out
+  let keepContentType = r.headers.get('Content-Type') ?? 'application/json'
+
   // Wait for the size-capped grab before returning ordinary success.
   // The movie is intentionally added unmonitored on this path, so a failed
   // capped search has no Radarr retry safety net unless we surface it here.
   if (r.ok && wantedSearch) {
-    const created = (() => {
+    let created = (() => {
       try {
         return JSON.parse(out) as CreatedRadarrMovie
       } catch {
         return null
       }
     })()
-    if (created?.id && typeof created.title === 'string' && created.title.trim().length > 0) {
+    if (!isUsableCreatedMovie(created)) {
+      // 201 with an unparseable or untitled body. cappedBody forced
+      // monitored:false, so silently skipping the grab here used to leave a
+      // dead unmonitored movie while the response still read as success.
+      const refetched = await lookupMovieByTmdbId(body.tmdbId)
+      if (refetched) {
+        created = refetched
+        keepBody = JSON.stringify(refetched)
+        keepContentType = 'application/json'
+      }
+    }
+    if (isUsableCreatedMovie(created)) {
       const itemId = created.id
       const itemTitle = created.title
       try {
@@ -612,17 +655,41 @@ radarr.post('/api/v3/movie', radarrMutateLimit, async (c) => {
           424,
         )
       }
+    } else {
+      // The 201 body was unusable AND the tmdbId re-fetch couldn't identify
+      // the movie. The cap grab and the monitor fallback are both impossible,
+      // so don't claim success: roll back if an id survived parsing, record
+      // why for the admin panel, and surface a distinct error to the UI.
+      const rollback = created?.id ? await deleteCreatedMovie(created) : null
+      await recordRadarrGrabEvent({
+        itemId: created?.id ?? 0,
+        title: typeof body.title === 'string' ? body.title : undefined,
+        sub: session.sub,
+        type: 'grab_failed',
+        error:
+          'Radarr add returned success but the created movie could not be identified ' +
+          '(unparseable/untitled response body and tmdbId re-fetch failed); cap-aware grab skipped',
+      })
+      return c.json(
+        {
+          error: 'add_unverified',
+          message:
+            'Radarr accepted the add but did not identify the created movie, so no download was started. ' +
+            'Check Radarr directly, then retry.',
+          rollbackStatus: rollback && !rollback.ok ? rollback.status || undefined : undefined,
+        },
+        502,
+      )
     }
   }
 
-  // Reached on: a successful capped grab (grab_succeeded), the "Just monitor"
-  // path (!wantedSearch), or r.ok with an unparseable add body — all KEEP the
-  // movie, so the conversion signal is real. (Every rollback path above
-  // returned a 424 before here.)
+  // Reached on: a successful capped grab (grab_succeeded) or the "Just
+  // monitor" path (!wantedSearch) — both KEEP the movie, so the conversion
+  // signal is real. (Every rollback path above returned before here.)
   signalAdded()
-  return new Response(out, {
+  return new Response(keepBody, {
     status: r.status,
-    headers: { 'Content-Type': r.headers.get('Content-Type') ?? 'application/json' },
+    headers: { 'Content-Type': keepContentType },
   })
 })
 
