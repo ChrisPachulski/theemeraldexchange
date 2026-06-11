@@ -358,6 +358,32 @@ def decode_vec_rowid(rowid: int, expected_kind: str | None = None) -> tuple[str,
     return (kind, rowid & ~_KIND_BIT if kind == "tv" else rowid)
 
 
+_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def table_generation(
+    conn: sqlite3.Connection, *tables: str | tuple[str, str]
+) -> tuple[tuple, ...]:
+    """Cheap fingerprint of catalog tables for module-level cache invalidation.
+
+    Each entry is a table name, optionally paired with a timestamp column the
+    ingest stamps on every write. (COUNT(*), MAX(rowid)) catches the
+    DELETE+INSERT rehydration pattern (title_cast/title_crew/title_genres get
+    fresh rowids); the timestamp catches in-place upserts that keep rowids
+    stable (titles / title_features use ON CONFLICT DO UPDATE).
+    """
+    parts: list[tuple] = []
+    for spec in tables:
+        table, ts_col = spec if isinstance(spec, tuple) else (spec, None)
+        if not _IDENT_RE.match(table) or (ts_col is not None and not _IDENT_RE.match(ts_col)):
+            raise ValueError(f"invalid identifier in table_generation spec: {spec!r}")
+        cols = "COUNT(*), COALESCE(MAX(rowid), 0)"
+        if ts_col is not None:
+            cols += f", COALESCE(MAX({ts_col}), '')"
+        parts.append(tuple(conn.execute(f"SELECT {cols} FROM {table}").fetchone()))
+    return tuple(parts)
+
+
 def serialize_f32(vec: np.ndarray) -> bytes:
     if vec.dtype != np.float32:
         vec = vec.astype(np.float32)
