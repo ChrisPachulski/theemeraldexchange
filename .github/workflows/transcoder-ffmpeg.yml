@@ -50,6 +50,11 @@ on:
       - ".github/workflows/transcoder-ffmpeg.yml"
   workflow_dispatch: {}
 
+# Least-privilege token: the job checks out code, compiles, and runs tests —
+# it never writes to the repo, packages, or PRs.
+permissions:
+  contents: read
+
 jobs:
   real-ffmpeg:
     runs-on: ubuntu-latest
