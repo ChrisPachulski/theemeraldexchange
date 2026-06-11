@@ -389,3 +389,108 @@ def test_check_backup_gate_passes_with_fresh_backup(
 
     # Should not raise.
     _check_backup_gate(db, "0099_drop_foo.sql")
+
+
+# ---------------------------------------------------------------------------
+# (f) 0005 retroactive -- DESTRUCTIVE annotation + checksum amnesty
+# ---------------------------------------------------------------------------
+
+
+def test_fresh_db_applies_real_migrations_including_destructive_0005(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh DB must boot through the REAL migrations dir end-to-end.
+
+    Regression: 0005 contains DROP TABLE; before it carried the
+    -- DESTRUCTIVE annotation, the destructive gate aborted every fresh-DB
+    boot (prod DBs predated the gate and skipped it, masking the bug).
+    """
+    from dataclasses import replace
+
+    import app.db as db_mod
+    from app.db import migrate
+
+    real_migrations = Path(__file__).resolve().parents[1] / "migrations"
+    monkeypatch.setattr(
+        db_mod, "CONFIG", replace(db_mod.CONFIG, migrations_dir=real_migrations)
+    )
+    applied = migrate(db_path=tmp_path / "exchange.db")
+    assert "0005_iptv_kinds.sql" in applied
+
+
+def test_amnesty_constants_match_the_real_0005_file() -> None:
+    """If 0005 is edited again, the amnesty's 'new' hash goes stale — fail here."""
+    import app.db as db_mod
+
+    real_0005 = Path(__file__).resolve().parents[1] / "migrations" / "0005_iptv_kinds.sql"
+    assert (
+        _sha256(real_0005.read_text(encoding="utf-8")) == db_mod._CHECKSUM_AMNESTY[5][1]
+    ), "0005 changed after the amnesty was recorded — add a new amnesty entry or restore the file"
+
+
+def _db_with_stored_0005_checksum(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stored_checksum: str
+) -> Path:
+    """Create a DB whose schema_migrations claims 0005 was applied with
+    *stored_checksum*, with the REAL (annotated) 0005 file on disk."""
+    from dataclasses import replace
+
+    import app.db as db_mod
+    from app.db import _bootstrap_schema_migrations
+
+    real_0005 = Path(__file__).resolve().parents[1] / "migrations" / "0005_iptv_kinds.sql"
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    (migrations_dir / "0005_iptv_kinds.sql").write_text(
+        real_0005.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        db_mod, "CONFIG", replace(db_mod.CONFIG, migrations_dir=migrations_dir)
+    )
+    db = tmp_path / "exchange.db"
+    conn = _make_conn(db)
+    _bootstrap_schema_migrations(conn, migrations_dir)
+    conn.execute(
+        "DELETE FROM schema_migrations WHERE version = 5",
+    )
+    conn.execute(
+        "INSERT INTO schema_migrations(version, applied_at, checksum) VALUES (5, ?, ?)",
+        (datetime.now(tz=timezone.utc).isoformat(), stored_checksum),
+    )
+    conn.commit()
+    conn.close()
+    return db
+
+
+def test_checksum_amnesty_rewrites_known_0005_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import app.db as db_mod
+    from app.db import migrate
+
+    old_hash, new_hash = db_mod._CHECKSUM_AMNESTY[5]
+    db = _db_with_stored_0005_checksum(tmp_path, monkeypatch, old_hash)
+    monkeypatch.delenv("ALLOW_MIGRATION_CHECKSUM_MISMATCH", raising=False)
+
+    with caplog.at_level(logging.INFO, logger="app.db"):
+        applied = migrate(db_path=db)
+
+    assert "0005_iptv_kinds.sql" not in applied  # tolerated, not re-applied
+    assert any("checksum amnesty" in r.message for r in caplog.records)
+    conn = _make_conn(db)
+    row = conn.execute(
+        "SELECT checksum FROM schema_migrations WHERE version = 5"
+    ).fetchone()
+    conn.close()
+    assert row[0] == new_hash
+
+
+def test_checksum_amnesty_does_not_cover_unknown_edits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.db import migrate
+
+    db = _db_with_stored_0005_checksum(tmp_path, monkeypatch, "deadbeef" * 8)
+    monkeypatch.delenv("ALLOW_MIGRATION_CHECKSUM_MISMATCH", raising=False)
+    with pytest.raises(RuntimeError, match="checksum mismatch"):
+        migrate(db_path=db)

@@ -1,6 +1,10 @@
 -- 0005_iptv_kinds.sql
+-- DESTRUCTIVE
 -- Widen titles.kind to accept IPTV catalog rows. SQLite cannot alter a
 -- CHECK constraint in place, so rebuild the table and restore indexes.
+-- The annotation above was added retroactively (the table rebuild drops the
+-- old titles table); DBs that applied the pre-annotation file are migrated
+-- via the checksum amnesty in app/db.py.
 
 PRAGMA foreign_keys = OFF;
 
