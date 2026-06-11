@@ -15,6 +15,9 @@ import { env } from '../env.js'
 import { fetchWithTimeout } from './upstream.js'
 import { mintInternalPrincipal, type InternalPrincipalInput } from './internalPrincipal.js'
 import { reportServerEvent } from './serverTelemetry.js'
+import { createLogger } from './logger.js'
+
+const log = createLogger('recommender')
 
 export type RecommenderKind = 'movie' | 'tv'
 
@@ -100,7 +103,7 @@ function recommenderHeaders(caller?: RecommenderCaller): Record<string, string> 
       // mintInternalPrincipal only throws on missing secret, which we
       // already guarded above. Log and proceed without the header so a
       // transient mint failure doesn't break the call.
-      console.warn('[recommender] failed to mint internal-principal:', e)
+      log.warn('failed to mint internal-principal', { error: e })
     }
   }
   return headers
@@ -112,43 +115,36 @@ async function mirrorPost(
   label: string,
   caller?: RecommenderCaller,
 ): Promise<void> {
-  let res: Response
-  try {
-    res = await fetchWithTimeout(
-      `${env.recommenderUrl}${path}`,
-      {
-        method: 'POST',
-        headers: recommenderHeaders(caller),
-        body: JSON.stringify(body),
-      },
-      MIRROR_TIMEOUT_MS,
-      label,
-    )
-  } catch (err) {
-    // Timeout / network error — the sidecar is unreachable. This mirror
-    // is the only path for click/feedback attribution, so a drop is
-    // silent training-signal loss. Emit to the mandatory (§15) telemetry
-    // pipeline before re-throwing so callers' existing error handling is
-    // unchanged.
-    void reportServerEvent({
-      level: 'warning',
-      message: `recommender mirror error: ${label}`,
-      context: { label, path, error: err instanceof Error ? err.message : String(err) },
-    })
-    throw err
-  }
+  // fetchWithTimeout NEVER rejects: per its contract (services/upstream.ts)
+  // it maps timeouts AND network/DNS errors to a synthesized 504 Response,
+  // so the only failure surface here is the non-ok branch below — which
+  // therefore covers reachable-but-rejecting (4xx/5xx from the sidecar) and
+  // unreachable/timed-out (synthesized 504) alike. An earlier revision
+  // carried a catch/re-throw "network error" path around this call; it was
+  // dead code against that contract and is intentionally gone.
+  const res = await fetchWithTimeout(
+    `${env.recommenderUrl}${path}`,
+    {
+      method: 'POST',
+      headers: recommenderHeaders(caller),
+      body: JSON.stringify(body),
+    },
+    MIRROR_TIMEOUT_MS,
+    label,
+  )
   const responseBody = await res.text().catch(() => '')
   if (!res.ok) {
-    console.warn('[recommender] mirror POST failed', {
+    // This mirror is the only path for click/feedback attribution, so a
+    // drop is silent training-signal loss. Log it AND emit to the mandatory
+    // (§15) telemetry pipeline; handling it here covers every caller
+    // (click, /feedback, radarr added, impressions, library sync) in one
+    // place. Mirrors stay fire-and-forget — nothing is thrown.
+    log.warn('mirror POST failed', {
       label,
       path,
       status: res.status,
       body: responseBody.slice(0, 200),
     })
-    // Non-ok HTTP response (sidecar reachable but rejected the event).
-    // Same silent-signal-loss concern; route it through telemetry too.
-    // Handling both branches in mirrorPost covers every caller (click,
-    // /feedback, radarr added, impressions, library sync) in one place.
     void reportServerEvent({
       level: 'warning',
       message: `recommender mirror non-ok: ${label}`,

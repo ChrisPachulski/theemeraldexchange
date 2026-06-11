@@ -13,6 +13,7 @@ import {
   postImpressions,
   RecommenderError,
 } from './recommender.js'
+import * as serverTelemetry from './serverTelemetry.js'
 import { env } from '../env.js'
 
 beforeEach(() => {
@@ -156,6 +157,32 @@ describe('postFeedback (fire-and-forget)', () => {
     await expect(
       postFeedback({ sub: 'u', kind: 'tv', tmdb_id: 1, signal: 'shown' }),
     ).resolves.toBeUndefined()
+  })
+
+  it('a network failure flows through the synthesized-504 non-ok branch: telemetry fires, nothing throws', async () => {
+    // fetchWithTimeout never rejects — it synthesizes a 504 Response on
+    // timeout/network error. mirrorPost therefore has exactly one failure
+    // surface (the non-ok branch); this pins that the unreachable-sidecar
+    // case still lands in telemetry through it.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const telemetrySpy = vi
+      .spyOn(serverTelemetry, 'reportServerEvent')
+      .mockResolvedValue(undefined)
+    ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('ECONNREFUSED'),
+    )
+    await expect(
+      postFeedback({ sub: 'u', kind: 'tv', tmdb_id: 1, signal: 'shown' }),
+    ).resolves.toBeUndefined()
+    expect(telemetrySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warning',
+        message: expect.stringContaining('mirror non-ok'),
+        context: expect.objectContaining({ status: 504 }),
+      }),
+    )
+    telemetrySpy.mockRestore()
+    warnSpy.mockRestore()
   })
 })
 
