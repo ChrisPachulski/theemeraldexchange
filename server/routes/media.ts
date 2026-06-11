@@ -1,7 +1,7 @@
 import { Hono, type Context, type Next } from 'hono'
 import { requireAuth, type Env } from '../middleware/auth.js'
 import { env } from '../env.js'
-import { fetchStreamWithConnectTimeout, LAN_TIMEOUT_MS } from '../services/upstream.js'
+import { fetchStreamWithConnectTimeout, fetchWithTimeout, LAN_TIMEOUT_MS } from '../services/upstream.js'
 import { mintInternalPrincipal } from '../services/internalPrincipal.js'
 import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
 import type { Session } from '../session.js'
@@ -128,13 +128,18 @@ media.post('/playback/:kind/:id', async (c) => {
     auth = principalHeader(session)
   } catch (e) {
     console.error('[media] playback grant: mint failed, failing closed:', e)
-    return c.json({ error: 'internal-principal mint failed' }, 502)
+    return c.json({ error: 'principal_mint_failed' }, 502)
   }
 
-  // 1. Capability decision (+ file metadata for duration).
+  // 1. Capability decision (+ file metadata for duration). This is a small
+  // JSON control-plane response, so it goes through fetchWithTimeout (whole-
+  // transfer deadline + buffered body) — the streaming wrapper only bounds
+  // TTFB, leaving the r.json() read below unbounded against a stalled
+  // upstream. Only the actual media bytes (the catch-all proxy at the bottom)
+  // belong on the streaming wrapper.
   let grant: { directPlay?: boolean; file?: { duration_secs?: number | null } }
   try {
-    const r = await fetchStreamWithConnectTimeout(
+    const r = await fetchWithTimeout(
       `${env.mediaCoreUrl}/api/media/play/${kind}/${id}/grant`,
       {
         method: 'POST',
@@ -153,7 +158,7 @@ media.post('/playback/:kind/:id', async (c) => {
     if (!r.ok) return c.json({ error: 'grant_failed' }, 502)
     grant = (await r.json()) as typeof grant
   } catch {
-    return c.json({ error: 'media-core unreachable' }, 502)
+    return c.json({ error: 'media_core_unreachable' }, 502)
   }
 
   const durationSecs = grant.file?.duration_secs ?? null
@@ -177,7 +182,8 @@ media.post('/playback/:kind/:id', async (c) => {
   // rewrites the manifest's segment lines to carry the same token.
   let handoff: { sessionId?: string; manifestUrl?: string; heartbeatUrl?: string }
   try {
-    const r = await fetchStreamWithConnectTimeout(
+    // Small JSON handoff — whole-transfer deadline, same as the grant above.
+    const r = await fetchWithTimeout(
       `${env.mediaCoreUrl}/api/media/stream/${kind}/${id}?${capsQuery(caps, startSecs)}`,
       { method: 'GET', headers: auth },
       LAN_TIMEOUT_MS,
@@ -187,7 +193,7 @@ media.post('/playback/:kind/:id', async (c) => {
     if (!r.ok) return c.json({ error: 'transcode_start_failed' }, 502)
     handoff = (await r.json()) as typeof handoff
   } catch {
-    return c.json({ error: 'transcoder unreachable' }, 502)
+    return c.json({ error: 'transcoder_unreachable' }, 502)
   }
 
   const sid = handoff.sessionId
@@ -207,7 +213,9 @@ media.post('/playback/:kind/:id', async (c) => {
   const READY_POLLS = 24 // × 500ms = up to 12s
   for (let i = 0; i < READY_POLLS; i++) {
     try {
-      const m = await fetchStreamWithConnectTimeout(
+      // The manifest is a small text playlist — whole-transfer deadline so
+      // the m.text() read below can't pin the poll loop on a stalled socket.
+      const m = await fetchWithTimeout(
         manifestProbe,
         { method: 'GET', headers: auth },
         LAN_TIMEOUT_MS,
@@ -264,7 +272,7 @@ media.all('/*', async (c) => {
     headers = principalHeader(session)
   } catch (e) {
     console.error('[media] failed to mint internal-principal, failing closed:', e)
-    return c.json({ error: 'internal-principal mint failed' }, 502)
+    return c.json({ error: 'principal_mint_failed' }, 502)
   }
 
   for (const name of FORWARD_REQUEST_HEADERS) {

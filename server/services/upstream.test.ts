@@ -220,6 +220,23 @@ describe('fetchJsonWithTimeout', () => {
     await expect(fetchJsonWithTimeout('http://upstream', {}, 1000, 'plex')).rejects.toThrow('plex_404')
   })
 
+  it('cancels the unread body on a non-ok response (socket can return to the pool)', async () => {
+    // A thrown `${label}_${status}` used to leave response.body unconsumed,
+    // forcing undici to tear down the connection instead of reusing it.
+    let cancelled = false
+    const body = new ReadableStream({
+      cancel() {
+        cancelled = true
+      },
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(body, { status: 502 })),
+    )
+    await expect(fetchJsonWithTimeout('http://upstream', {}, 1000, 'plex')).rejects.toThrow('plex_502')
+    expect(cancelled).toBe(true)
+  })
+
   it('throws `${label}_upstream_timeout` when fetch aborts', async () => {
     vi.stubGlobal(
       'fetch',
