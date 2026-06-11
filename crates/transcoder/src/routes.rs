@@ -13,14 +13,14 @@
 
 use std::sync::Arc;
 
-use axum::Json;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::StatusCode;
 use axum::http::header::AUTHORIZATION;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::{Router, middleware};
+use axum::{Extension, Json, Router, middleware};
+use emerald_contracts::internal_principal::InternalClaims;
 use media_core::auth::verify_principal;
 use media_core::capability::ClientCaps;
 use media_core::config::PrincipalMode;
@@ -107,8 +107,10 @@ pub fn router(state: AppState) -> Router {
 
 /// Internal-principal gate. Off → skip; Log → warn+allow; Enforce → reject.
 /// Self-contained (no DB) so the transcoder doesn't depend on media-core's
-/// `AppState`.
-async fn principal_layer(State(state): State<AppState>, req: Request, next: Next) -> Response {
+/// `AppState`. Verified claims are inserted into request extensions (mirroring
+/// media-core's layer) so handlers can bind sessions to — and authorize
+/// per-session operations against — the acting principal.
+async fn principal_layer(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
     if state.principal_mode == PrincipalMode::Off {
         return next.run(req).await;
     }
@@ -127,7 +129,10 @@ async fn principal_layer(State(state): State<AppState>, req: Request, next: Next
         (Some(tok), Some(sec)) => {
             let now = chrono_now();
             match verify_principal(sec, &tok, now) {
-                Ok(_claims) => next.run(req).await,
+                Ok(claims) => {
+                    req.extensions_mut().insert(claims);
+                    next.run(req).await
+                }
                 Err(e) => {
                     if state.principal_mode == PrincipalMode::Enforce {
                         unauthorized(&format!("internal-principal verify failed: {e}"))
@@ -147,6 +152,32 @@ async fn principal_layer(State(state): State<AppState>, req: Request, next: Next
             }
         }
     }
+}
+
+/// Owner-or-admin authorization for per-session operations (stop/seek/
+/// heartbeat), mirroring the IPTV precedent in `server/routes/iptv.ts`. No
+/// verified principal (Off mode, or log mode with a missing/bad token) means
+/// there is no identity to enforce against — the principal layer already chose
+/// to admit the request. With a verified principal, admins may touch any
+/// session; everyone else only sessions owned by their own sub. A session with
+/// no recorded owner is admin-only to a verified caller (fail closed).
+fn session_authorized(claims: &Option<InternalClaims>, owner: Option<&str>) -> bool {
+    match claims {
+        None => true,
+        Some(c) => c.role == "admin" || (owner.is_some() && owner == Some(c.sub.as_str())),
+    }
+}
+
+fn forbidden() -> Response {
+    (StatusCode::FORBIDDEN, Json(json!({ "error": "forbidden" }))).into_response()
+}
+
+fn session_not_found() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({ "error": "no such session" })),
+    )
+        .into_response()
 }
 
 /// `chrono`-free unix timestamp (media-core uses chrono; we avoid the dep).
@@ -245,7 +276,14 @@ pub struct GrantRequest {
 /// with no session (the caller streams directly from media-core); transcode
 /// files start a session and return its `index.m3u8` URL. A cap hit yields
 /// `503 transcoder_busy`.
-async fn grant(State(state): State<AppState>, Json(req): Json<GrantRequest>) -> Response {
+async fn grant(
+    State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
+    Json(req): Json<GrantRequest>,
+) -> Response {
+    // Bind the session to the VERIFIED principal (not the body's free-text
+    // `sub`), so per-session ops can enforce owner-or-admin.
+    let owner = claims.as_ref().map(|Extension(c)| c.sub.clone());
     let GrantRequest {
         file,
         caps,
@@ -278,6 +316,7 @@ async fn grant(State(state): State<AppState>, Json(req): Json<GrantRequest>) -> 
         plan: plan.clone(),
         start_secs,
         source_codec,
+        owner,
     };
 
     match state.sessions.start(opts).await {
@@ -381,10 +420,25 @@ async fn session_segment(
 
 async fn session_heartbeat(
     State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
     Path(id): Path<String>,
-) -> impl IntoResponse {
-    state.sessions.heartbeat(&id).await;
-    Json(json!({ "ok": true }))
+) -> Response {
+    let claims = claims.map(|Extension(c)| c);
+    // 404 for an unknown/reaped session so the client can detect the session
+    // died (idle-reaped, crashed past the restart cap) instead of receiving an
+    // eternal 200 for a ghost. The SPA treats heartbeat as fire-and-forget, so
+    // this is non-breaking for it today.
+    let Some(owner) = state.sessions.session_owner(&id).await else {
+        return session_not_found();
+    };
+    if !session_authorized(&claims, owner.as_deref()) {
+        return forbidden();
+    }
+    if state.sessions.heartbeat(&id).await {
+        Json(json!({ "ok": true })).into_response()
+    } else {
+        session_not_found() // reaped between the owner check and the beat
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -394,28 +448,63 @@ pub struct SeekQuery {
 
 async fn session_seek(
     State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
     Path(id): Path<String>,
     Query(q): Query<SeekQuery>,
 ) -> Response {
+    let claims = claims.map(|Extension(c)| c);
+    let Some(owner) = state.sessions.session_owner(&id).await else {
+        return session_not_found();
+    };
+    if !session_authorized(&claims, owner.as_deref()) {
+        return forbidden();
+    }
     if state.sessions.seek(&id, q.to).await {
         Json(json!({ "ok": true, "to": q.to })).into_response()
-    } else {
+    } else if state.sessions.session_owner(&id).await.is_some() {
+        // Still registered but the respawn failed — the supervisor retries
+        // under its restart cap; surface a retryable error, not a 404.
         (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "no such session" })),
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "seek_respawn_failed" })),
         )
             .into_response()
+    } else {
+        session_not_found() // torn down while we seeked
     }
 }
 
-async fn session_stop(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
-    state.sessions.stop(&id).await;
-    Json(json!({ "ok": true }))
+async fn session_stop(
+    State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
+    Path(id): Path<String>,
+) -> Response {
+    let claims = claims.map(|Extension(c)| c);
+    // Unknown id stays 200 ok (stop is idempotent); a live session requires
+    // owner-or-admin.
+    if let Some(owner) = state.sessions.session_owner(&id).await {
+        if !session_authorized(&claims, owner.as_deref()) {
+            return forbidden();
+        }
+        state.sessions.stop(&id).await;
+    }
+    Json(json!({ "ok": true })).into_response()
 }
 
-/// Admin inventory (§4.5 phase 7).
-async fn list_sessions(State(state): State<AppState>) -> Json<Value> {
-    let sessions = state.sessions.list().await;
+/// Session inventory (§4.5 phase 7). Admins (and the unverified Off/log
+/// postures) see everything; any other verified principal sees only their own
+/// sessions — the inventory leaks who is watching what otherwise.
+async fn list_sessions(
+    State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
+) -> Json<Value> {
+    let claims = claims.map(|Extension(c)| c);
+    let mut sessions = state.sessions.list().await;
+    if let Some(c) = &claims
+        && c.role != "admin"
+    {
+        sessions.retain(|s| s.owner.as_deref() == Some(c.sub.as_str()));
+    }
     let (total, cpu) = state.sessions.limiter().active();
     Json(json!({
         "sessions": sessions,
@@ -778,6 +867,202 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         state.sessions.stop(&session_id).await;
+    }
+
+    #[tokio::test]
+    async fn heartbeat_is_200_for_live_session_404_for_dead() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = state_with(
+            &tmp,
+            Caps {
+                max_total: 4,
+                max_cpu: 4,
+            },
+            PrincipalMode::Off,
+        );
+        let app = router(state.clone());
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/transcode/grant")
+                    .header("content-type", "application/json")
+                    .body(Body::from(grant_body(&h264_file())))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        let session_id = v["sessionId"].as_str().unwrap().to_string();
+
+        let heartbeat = |sid: String| {
+            let state = state.clone();
+            async move {
+                router(state)
+                    .oneshot(
+                        HttpRequest::builder()
+                            .method("POST")
+                            .uri(format!("/api/transcode/session/{sid}/heartbeat"))
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap()
+            }
+        };
+
+        let live = heartbeat(session_id.clone()).await;
+        assert_eq!(live.status(), StatusCode::OK);
+
+        // Once the session is gone, heartbeat must say so — a 200 here left
+        // the client heart-beating a reaped session forever.
+        state.sessions.stop(&session_id).await;
+        let dead = heartbeat(session_id).await;
+        assert_eq!(dead.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// Mint a verifiable internal-principal Bearer for `sub`/`role` — the same
+    /// shape media-core's `mint_transcoder_principal` produces.
+    fn mint(secret: &str, sub: &str, role: &str) -> String {
+        let now = chrono_now();
+        let claims = InternalClaims {
+            iss: "eex".into(),
+            sub: sub.into(),
+            role: role.into(),
+            auth_mode: "plex".into(),
+            server_id: "srv".into(),
+            device_id: None,
+            req_id: "req-test".into(),
+            iat: now,
+            exp: now + 60,
+        };
+        emerald_contracts::internal_principal::encrypt_with_secret(secret.as_bytes(), &claims)
+    }
+
+    const TEST_SECRET: &str = "a-secret";
+
+    fn enforce_state(tmp: &tempfile::TempDir) -> AppState {
+        let mut state = state_with(
+            tmp,
+            Caps {
+                max_total: 4,
+                max_cpu: 4,
+            },
+            PrincipalMode::Enforce,
+        );
+        state.internal_principal_secret = Some(Arc::new(TEST_SECRET.into()));
+        state
+    }
+
+    async fn authed(state: &AppState, method: &str, uri: &str, bearer: &str) -> Response {
+        let mut builder = HttpRequest::builder()
+            .method(method)
+            .uri(uri)
+            .header("authorization", format!("Bearer {bearer}"));
+        let body = if method == "POST" && uri.ends_with("/grant") {
+            builder = builder.header("content-type", "application/json");
+            Body::from(grant_body(&h264_file()))
+        } else {
+            Body::empty()
+        };
+        router(state.clone())
+            .oneshot(builder.body(body).unwrap())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn session_ops_enforce_owner_or_admin() {
+        // Sessions are bound to the VERIFIED principal at grant time; stop/
+        // seek/heartbeat from a different non-admin sub must 403, the owner and
+        // an admin must succeed. (Regression: the layer used to discard the
+        // verified claims, so any authenticated caller could stop anyone's
+        // playback by id.)
+        let tmp = tempfile::tempdir().unwrap();
+        let state = enforce_state(&tmp);
+        let owner_tok = mint(TEST_SECRET, "plex:42", "user");
+        let intruder_tok = mint(TEST_SECRET, "plex:99", "user");
+        let admin_tok = mint(TEST_SECRET, "plex:1", "admin");
+
+        let resp = authed(&state, "POST", "/api/transcode/grant", &owner_tok).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        let sid = v["sessionId"].as_str().unwrap().to_string();
+
+        // A different (non-admin) sub is locked out of every session op.
+        for (method, uri) in [
+            ("POST", format!("/api/transcode/session/{sid}/heartbeat")),
+            ("POST", format!("/api/transcode/session/{sid}/seek?to=30")),
+            ("POST", format!("/api/transcode/session/{sid}/stop")),
+        ] {
+            let resp = authed(&state, method, &uri, &intruder_tok).await;
+            assert_eq!(resp.status(), StatusCode::FORBIDDEN, "{uri}");
+        }
+        assert_eq!(state.sessions.len().await, 1, "intruder stop must be a no-op");
+
+        // The owner can heartbeat and seek their own session.
+        let resp = authed(
+            &state,
+            "POST",
+            &format!("/api/transcode/session/{sid}/heartbeat"),
+            &owner_tok,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let resp = authed(
+            &state,
+            "POST",
+            &format!("/api/transcode/session/{sid}/seek?to=30"),
+            &owner_tok,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // An admin may stop anyone's session.
+        let resp = authed(
+            &state,
+            "POST",
+            &format!("/api/transcode/session/{sid}/stop"),
+            &admin_tok,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(state.sessions.is_empty().await);
+    }
+
+    #[tokio::test]
+    async fn session_list_is_scoped_to_owner_for_non_admins() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = enforce_state(&tmp);
+        let owner_tok = mint(TEST_SECRET, "plex:42", "user");
+        let other_tok = mint(TEST_SECRET, "plex:99", "user");
+        let admin_tok = mint(TEST_SECRET, "plex:1", "admin");
+
+        let resp = authed(&state, "POST", "/api/transcode/grant", &owner_tok).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let count = |tok: String| {
+            let state = state.clone();
+            async move {
+                let resp = authed(&state, "GET", "/api/transcode/sessions", &tok).await;
+                assert_eq!(resp.status(), StatusCode::OK);
+                let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+                    .await
+                    .unwrap();
+                let v: Value = serde_json::from_slice(&body).unwrap();
+                v["sessions"].as_array().unwrap().len()
+            }
+        };
+
+        assert_eq!(count(owner_tok).await, 1, "owner sees their session");
+        assert_eq!(count(other_tok).await, 0, "stranger sees nothing");
+        assert_eq!(count(admin_tok).await, 1, "admin sees everything");
     }
 
     #[tokio::test]

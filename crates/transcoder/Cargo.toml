@@ -27,6 +27,10 @@ requires-ffmpeg = []
 
 [dependencies]
 media-core = { path = "../media-core" }
+# InternalClaims for session ownership (already a transitive dep via media-core).
+emerald-contracts = { path = "../emerald-contracts" }
+# SIGTERM for the supervisor's graceful kill path (tokio only exposes SIGKILL).
+libc = "0.2"
 axum = { version = "0.8", features = ["json", "query", "macros"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "fs", "signal", "net", "time", "sync"] }
 tower-http = { version = "0.6", features = ["trace"] }
