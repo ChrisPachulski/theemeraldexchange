@@ -393,6 +393,17 @@ jobs:
         # Verified against the production compose file on the deploy host.
         run: docker compose config -q
 
+      - name: Image-pin staleness guard (best-effort)
+        # Flags compose image pins whose Docker Hub tag was last pushed >12
+        # months ago (the cloudflared pin once sat ~18 months stale with
+        # nothing watching it). Self-test first (offline parser assertions),
+        # then the live check. The script treats network/Hub-API failures as
+        # warnings (exit 0) so a registry blip can never fail CI — only a
+        # CONFIRMED stale tag does.
+        run: |
+          node scripts/check-image-pin-staleness.mjs --self-test
+          node scripts/check-image-pin-staleness.mjs docker-compose.yml
+
       - name: Build backend image
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
