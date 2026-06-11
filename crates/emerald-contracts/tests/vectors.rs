@@ -77,6 +77,35 @@ fn stream_token_canonical_vector_parity() {
 }
 
 #[test]
+fn sub_namespace_vector() {
+    let v = load_vector("sub-namespace.json");
+    let cases = v.as_array().expect("top-level array");
+    assert!(cases.len() >= 13, "vector file lost cases");
+    for case in cases {
+        let name = case["name"].as_str().unwrap();
+        let input = case["input"].as_str().unwrap();
+        if case["valid"].as_bool().unwrap() {
+            let got = emerald_contracts::parse_sub(input)
+                .unwrap_or_else(|e| panic!("vector {}: parse failed: {:?}", name, e));
+            let provider = match got.provider {
+                emerald_contracts::Provider::Plex => "plex",
+                emerald_contracts::Provider::Local => "local",
+                emerald_contracts::Provider::Apple => "apple",
+            };
+            assert_eq!(provider, case["provider"].as_str().unwrap(), "vector {}", name);
+            assert_eq!(got.id, case["id"].as_str().unwrap(), "vector {}", name);
+            assert_eq!(got.raw, input, "vector {}", name);
+        } else {
+            assert!(
+                emerald_contracts::parse_sub(input).is_err(),
+                "vector {}: invalid input was accepted",
+                name,
+            );
+        }
+    }
+}
+
+#[test]
 fn telemetry_pii_scrub_vector() {
     let v = load_vector("telemetry-pii-scrub.json");
     let cases = v["cases"].as_array().expect("cases");
