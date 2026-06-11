@@ -922,6 +922,37 @@ async function proxyRangeable(c: Context, upstreamUrl: string, mime: string): Pr
   return new Response(upstream.body, { status: upstream.status, headers: responseHeaders })
 }
 
+// Read a response body as text, refusing past `maxBytes` (null = too large).
+// HLS manifests are small; an attacker-influenceable upstream must not be able
+// to balloon the proxy's memory with an unbounded .text() buffer.
+async function readBoundedText(res: Response, maxBytes: number): Promise<string | null> {
+  if (!res.body) return ''
+  const declared = Number(res.headers.get('content-length') ?? '')
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await res.body.cancel().catch(() => undefined)
+    return null
+  }
+  const reader = res.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (!value) continue
+    total += value.byteLength
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined)
+      return null
+    }
+    chunks.push(value)
+  }
+  return Buffer.concat(chunks).toString('utf-8')
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')
+}
+
 async function rewriteHlsPlaylist(c: Context, upstreamUrl: string, sub: string): Promise<Response> {
   // Defense-in-depth: this is reached via the segment handler (which already
   // SSRF-checks) but also fetches a sub-playlist URL directly, so re-validate
@@ -937,16 +968,31 @@ async function rewriteHlsPlaylist(c: Context, upstreamUrl: string, sub: string):
   // guardedFetch re-validates the host's resolved IPs and every redirect hop
   // (DNS-rebinding + redirect-SSRF). The isPublicHttpsUpstream check above is
   // the cheap up-front string reject; resolve-and-validate happens inside.
+  //
+  // Deadline + abort propagation: the manifest fetch (headers AND body)
+  // is bounded by a whole-transfer timeout composed with the client's own
+  // signal, and egress() adds a fresh per-hop timeout — a hung or
+  // drip-feeding upstream cannot pin this request open, and a client that
+  // gives up tears the upstream fetch down with it (matching the live/
+  // segment byte paths, which propagate c.req.raw.signal).
+  const signal = AbortSignal.any([
+    c.req.raw.signal,
+    AbortSignal.timeout(env.IPTV_MANIFEST_FETCH_TIMEOUT_MS),
+  ])
   let upstream: Response
+  let text: string | null
   try {
-    upstream = await guardedFetch(upstreamUrl)
+    upstream = await guardedFetch(upstreamUrl, { signal }, {
+      hopTimeoutMs: env.IPTV_MANIFEST_FETCH_TIMEOUT_MS,
+    })
+    if (!upstream.ok) return c.json({ error: `upstream_${upstream.status}` }, 502)
+    text = await readBoundedText(upstream, env.IPTV_MANIFEST_MAX_BYTES)
   } catch (err) {
     if (err instanceof SsrfBlockedError) return c.json({ error: 'bad_upstream' }, 400)
+    if (isAbortError(err)) return c.json({ error: 'upstream_timeout' }, 504)
     throw err
   }
-  if (!upstream.ok) return c.json({ error: `upstream_${upstream.status}` }, 502)
-
-  const text = await upstream.text()
+  if (text == null) return c.json({ error: 'manifest_too_large' }, 502)
   const sign = (url: string) =>
     signStreamToken(env.streamTokenSecret, {
       kind: 'segment', resourceId: url, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,

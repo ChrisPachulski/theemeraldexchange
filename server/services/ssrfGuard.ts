@@ -192,6 +192,21 @@ interface EgressOptions {
    * internal address.
    */
   guardInitial: boolean
+  /**
+   * Per-hop deadline in ms. Each hop's fetch gets a FRESH
+   * AbortSignal.timeout composed (AbortSignal.any) with the caller's
+   * `init.signal`, so a hung upstream cannot pin the egress loop open
+   * forever. The timeout signal also governs the final response's body
+   * read, so ONLY small-bodied fetches (HLS manifests) may opt in —
+   * long-lived byte streams (live .ts, VOD ranges) must stay un-timed or
+   * the timer would abort them mid-stream.
+   */
+  hopTimeoutMs?: number
+}
+
+export interface GuardedFetchOptions {
+  /** See EgressOptions.hopTimeoutMs. Small-bodied fetches only. */
+  hopTimeoutMs?: number
 }
 
 async function guardHop(rawUrl: string): Promise<void> {
@@ -227,7 +242,18 @@ async function egress(
       await guardHop(currentUrl)
     }
 
-    const res = await fetch(currentUrl, { ...init, redirect: 'manual' })
+    // Compose the caller's signal (client disconnect / whole-transfer
+    // deadline) with a fresh per-hop timeout so neither can be starved by
+    // the other. Redirect hops each get a full hopTimeoutMs budget; the
+    // total is still bounded by MAX_REDIRECTS × hopTimeoutMs plus whatever
+    // whole-transfer deadline the caller composed into init.signal.
+    const signals: AbortSignal[] = []
+    if (init?.signal) signals.push(init.signal)
+    if (opts.hopTimeoutMs != null) signals.push(AbortSignal.timeout(opts.hopTimeoutMs))
+    const signal =
+      signals.length === 0 ? undefined : signals.length === 1 ? signals[0] : AbortSignal.any(signals)
+
+    const res = await fetch(currentUrl, { ...init, ...(signal ? { signal } : {}), redirect: 'manual' })
 
     if (res.status >= 300 && res.status < 400) {
       const location = res.headers.get('location')
@@ -247,8 +273,12 @@ async function egress(
  * attacker-influenceable (HLS manifest sub-playlist / segment `rid`). The
  * initial URL and every redirect hop must be https + public + resolve-public.
  */
-export function guardedFetch(initialUrl: string, init?: RequestInit): Promise<Response> {
-  return egress(initialUrl, init, { guardInitial: true })
+export function guardedFetch(
+  initialUrl: string,
+  init?: RequestInit,
+  opts?: GuardedFetchOptions,
+): Promise<Response> {
+  return egress(initialUrl, init, { guardInitial: true, hopTimeoutMs: opts?.hopTimeoutMs })
 }
 
 /**
@@ -257,6 +287,10 @@ export function guardedFetch(initialUrl: string, init?: RequestInit): Promise<Re
  * against an upstream-issued redirect into the internal network. The initial
  * URL is fetched as-is; every redirect target is fully guarded.
  */
-export function guardedFetchTrustedOrigin(initialUrl: string, init?: RequestInit): Promise<Response> {
-  return egress(initialUrl, init, { guardInitial: false })
+export function guardedFetchTrustedOrigin(
+  initialUrl: string,
+  init?: RequestInit,
+  opts?: GuardedFetchOptions,
+): Promise<Response> {
+  return egress(initialUrl, init, { guardInitial: false, hopTimeoutMs: opts?.hopTimeoutMs })
 }

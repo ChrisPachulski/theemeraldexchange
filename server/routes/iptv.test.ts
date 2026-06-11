@@ -582,6 +582,57 @@ describe('vod stream grant + proxy', () => {
   })
 })
 
+describe('HLS manifest egress deadline + body bound', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+  const envRw = env as unknown as {
+    IPTV_MANIFEST_FETCH_TIMEOUT_MS: number
+    IPTV_MANIFEST_MAX_BYTES: number
+  }
+
+  it('aborts a hung manifest upstream within the configured deadline (504 upstream_timeout)', async () => {
+    const prevTimeout = envRw.IPTV_MANIFEST_FETCH_TIMEOUT_MS
+    envRw.IPTV_MANIFEST_FETCH_TIMEOUT_MS = 50
+    // Never settles on its own; rejects only when the composed abort signal
+    // (whole-transfer timeout / per-hop timeout / client disconnect) fires.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      (_input, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          const s = init?.signal
+          if (!s) return
+          if (s.aborted) return reject(s.reason)
+          s.addEventListener('abort', () => reject(s.reason), { once: true })
+        }),
+    )
+    try {
+      const res = await app.request(`/api/iptv/stream/vod/20/m3u8?t=${fakeToken('vod', '20')}`)
+      expect(res.status).toBe(504)
+      expect(((await res.json()) as { error: string }).error).toBe('upstream_timeout')
+      // The fetch must have carried the composed abort signal.
+      const init = fetchSpy.mock.calls[0][1] as RequestInit
+      expect(init.signal).toBeInstanceOf(AbortSignal)
+    } finally {
+      envRw.IPTV_MANIFEST_FETCH_TIMEOUT_MS = prevTimeout
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it('refuses a manifest body larger than the cap (502 manifest_too_large)', async () => {
+    const prevMax = envRw.IPTV_MANIFEST_MAX_BYTES
+    envRw.IPTV_MANIFEST_MAX_BYTES = 64
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response('#EXTM3U\n' + 'X'.repeat(1024), { status: 200 }),
+    )
+    try {
+      const res = await app.request(`/api/iptv/stream/vod/20/m3u8?t=${fakeToken('vod', '20')}`)
+      expect(res.status).toBe(502)
+      expect(((await res.json()) as { error: string }).error).toBe('manifest_too_large')
+    } finally {
+      envRw.IPTV_MANIFEST_MAX_BYTES = prevMax
+      fetchSpy.mockRestore()
+    }
+  })
+})
+
 describe('series stream grant', () => {
   const app = new Hono().route('/api/iptv', iptv)
 
