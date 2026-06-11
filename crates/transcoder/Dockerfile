@@ -33,7 +33,14 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock LICENSE ./
 COPY crates ./crates
 
-RUN cargo build --release -p transcoder
+# Compile-parallelism cap for constrained / shared hosts. The NAS deploy passes
+# --build-arg CARGO_BUILD_JOBS=2 (via docker-compose build.args) so a rebuild
+# uses at most 2 of the box's 5 cores and CANNOT pin the CPU and starve
+# co-tenant services (Plex shares this host). Unset (CI / dev) = cargo's default
+# (all cores). A real prior incident: an uncapped rebuild drove load to 73 on the
+# 5-core NAS and brown-outed Plex for ~13 minutes.
+ARG CARGO_BUILD_JOBS
+RUN cargo build --release -p transcoder ${CARGO_BUILD_JOBS:+--jobs ${CARGO_BUILD_JOBS}}
 
 # ---------------------------------------------------------------------------
 FROM debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb AS runtime
