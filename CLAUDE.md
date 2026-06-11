@@ -77,6 +77,41 @@ progress). The root causes and the hard rules that prevent them:
    a concurrent `git add -A`. Commit each fix immediately, staging ONLY your own
    paths (`git add -- <path>`), never `git add -A`/`.`.
 
+## NAS Build Safety — NEVER overwhelm the box (it also runs Plex)
+
+The NAS hosts the entire stack **and** the user's Plex Media Server on a weak
+6-thread CPU. A raw compile there has TWICE brown-outed Plex: an uncapped
+`docker compose up --build` drove load to ~73 (12× the core count) and starved
+Plex + SSH for ~13 min; a CPU-capped retry then I/O-stormed the box just as
+badly. SSH starvation makes the runaway *unkillable*, compounding it.
+
+Hard rules:
+
+1. **Never run a raw compile against the NAS.** Not `docker compose build`,
+   `docker compose up --build`, `docker build`, or `cargo build` over SSH to
+   `theemeraldexchange`. A PreToolUse hook (`~/.claude/hooks/guard-nas-build.sh`)
+   blocks these — but don't rely on the block; use the safe path.
+
+2. **Use `scripts/nas-safe-build.sh <service> [critical-container]`.** It
+   DISCOVERS the box's spare cores at run time and caps the compile
+   (`CARGO_BUILD_JOBS`), runs DETACHED (a dropped/starved SSH can't orphan it),
+   prints a PROGRESS HEARTBEAT, and AUTO-ABORTS if Plex degrades or load/core
+   exceeds the ceiling. Slow is fine; overwhelming is not. See the
+   `nas-safe-build` skill for the full playbook.
+
+3. **Recreate is cheap and always safe:** after a build, swap the image in with
+   `docker compose up -d --no-build <service>` (no compile, seconds).
+
+4. **Keep builds incremental.** Compiled services use BuildKit cache mounts
+   (`target/` + cargo registry) so a rebuild recompiles only changed crates, not
+   the whole workspace cold. Any new compiled service must add the same cache
+   mounts + a `CARGO_BUILD_JOBS` build-arg. Do NOT remove them.
+
+5. **Watch via the public API, not SSH.** `https://api.theemeraldexchange.com/api/health`
+   answers even when the box is busy (no SSH needed); a 502/530 there means the
+   box is wedged. Never tight-poll SSH on a loaded box — each login competes for
+   the very cycles you're trying to free.
+
 ## Environment Cheat-Sheet
 
 These gotchas were re-hit across multiple sessions. Treat them as invariants:
