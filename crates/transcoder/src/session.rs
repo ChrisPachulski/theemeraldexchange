@@ -34,6 +34,10 @@ const SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 const KILL_GRACE: Duration = Duration::from_secs(5);
 /// Supervisor restart cap before a session is declared failed.
 const MAX_RESTARTS: u32 = 3;
+/// A child that ran at least this long before dying is considered to have been
+/// HEALTHY: its crash is treated as a fresh incident, not part of a crash-loop,
+/// so the restart budget resets (see [`effective_restart_count`]).
+const HEALTHY_RUN_RESET: Duration = Duration::from_secs(60);
 /// Bound on waiting for a supervisor ack: [`KILL_GRACE`] for the TERM→KILL
 /// escalation plus slack for the respawn itself. A closed channel (the
 /// supervisor exited because the session was torn down) resolves immediately.
@@ -315,6 +319,24 @@ async fn max_segment_index(dir: &PathBuf) -> Option<u64> {
         }
     }
     max
+}
+
+/// Restart budget carried into the next crash, given how long the child that
+/// just died had been running.
+///
+/// `MAX_RESTARTS` was session-LIFETIME: three transient hiccups spread over a
+/// two-hour movie (each followed by a long healthy run) permanently tore the
+/// session down on the third, exactly like a tight crash-loop. A child that
+/// ran for [`HEALTHY_RUN_RESET`] or longer proves the respawn recipe works, so
+/// its crash starts a fresh budget; only consecutive SHORT-lived children
+/// (the real crash-loop signature) accumulate toward the cap. Pure so the
+/// decision is unit-testable without 60s waits.
+///
+/// A failed RESPAWN (no child ever ran) must pass `ran_for = 0` — counting
+/// time since the last successful spawn would reset the budget on every retry
+/// and livelock a permanently-broken respawn.
+fn effective_restart_count(prev: u32, ran_for: Duration) -> u32 {
+    if ran_for >= HEALTHY_RUN_RESET { 0 } else { prev }
 }
 
 /// Approximate furthest-encoded position for a crash respawn: the offset the
@@ -886,6 +908,13 @@ impl SessionManager {
         let this = self.clone();
         tokio::spawn(async move {
             let mut slot = ChildSlot::Running(child);
+            // When the CURRENT child was spawned, and how long the child that
+            // most recently CRASHED had run. A long-enough run resets the
+            // restart budget (see effective_restart_count); failed respawns
+            // record ZERO so a permanently-broken respawn can never reset its
+            // own budget into a retry livelock.
+            let mut spawned_at = std::time::Instant::now();
+            let mut last_run = Duration::ZERO;
             loop {
                 slot = match slot {
                     ChildSlot::Running(mut child) => {
@@ -906,6 +935,7 @@ impl SessionManager {
                                 } else {
                                     let code = status.as_ref().ok().and_then(|st| st.code());
                                     tracing::warn!(session = %id, ?code, "ffmpeg exited unexpectedly");
+                                    last_run = spawned_at.elapsed();
                                     ChildSlot::Crashed
                                 }
                             }
@@ -915,10 +945,12 @@ impl SessionManager {
                                     match this.respawn(&id, RespawnMode::Seek).await {
                                         Respawn::Ok(new) => {
                                             let _ = ack.send(true);
+                                            spawned_at = std::time::Instant::now();
                                             ChildSlot::Running(new)
                                         }
                                         Respawn::Failed => {
                                             let _ = ack.send(false);
+                                            last_run = Duration::ZERO;
                                             ChildSlot::Crashed
                                         }
                                         Respawn::Gone => {
@@ -953,10 +985,12 @@ impl SessionManager {
                         {
                             Respawn::Ok(new) => {
                                 let _ = ack.send(true);
+                                spawned_at = std::time::Instant::now();
                                 ChildSlot::Running(new)
                             }
                             Respawn::Failed => {
                                 let _ = ack.send(false);
+                                last_run = Duration::ZERO;
                                 ChildSlot::Crashed
                             }
                             Respawn::Gone => {
@@ -978,6 +1012,18 @@ impl SessionManager {
                         let attempt = {
                             let mut guard = this.sessions.lock().await;
                             let Some(s) = guard.get_mut(&id) else { return };
+                            // A sustained healthy run before this crash resets
+                            // the budget: only consecutive short-lived children
+                            // (a real crash-loop) accumulate toward the cap.
+                            let reset = effective_restart_count(s.restarts, last_run);
+                            if reset != s.restarts {
+                                tracing::info!(
+                                    session = %id,
+                                    ran_secs = last_run.as_secs(),
+                                    "child ran healthily before crashing; resetting restart budget"
+                                );
+                                s.restarts = reset;
+                            }
                             if s.restarts >= MAX_RESTARTS {
                                 tracing::warn!(
                                     session = %id,
@@ -992,6 +1038,9 @@ impl SessionManager {
                             s.restarts += 1;
                             s.restarts
                         };
+                        // Consume the run measurement: a failed RESPAWN below
+                        // re-enters this branch and must not reuse it.
+                        last_run = Duration::ZERO;
                         // Exponential backoff: 100ms * 2^(attempt-1), capped at
                         // ~2s — but stay responsive to commands while waiting.
                         let backoff = Duration::from_millis(
@@ -1025,7 +1074,10 @@ impl SessionManager {
                             let _ = ack.send(matches!(outcome, Respawn::Ok(_)));
                         }
                         match outcome {
-                            Respawn::Ok(new) => ChildSlot::Running(new),
+                            Respawn::Ok(new) => {
+                                spawned_at = std::time::Instant::now();
+                                ChildSlot::Running(new)
+                            }
                             Respawn::Failed => ChildSlot::Crashed,
                             Respawn::Gone => return,
                         }
@@ -1414,6 +1466,30 @@ mod tests {
         assert_eq!(segment_index("args.txt"), None);
         assert_eq!(segment_index("seg_.ts"), None);
         assert_eq!(segment_index("seg_abc.ts"), None);
+    }
+
+    #[test]
+    fn restart_budget_resets_after_sustained_healthy_run() {
+        // Regression: MAX_RESTARTS was session-lifetime — three transient
+        // hiccups spread across a two-hour movie tore the session down exactly
+        // like a tight crash-loop. A child that ran >= HEALTHY_RUN_RESET
+        // resets the budget; short-lived children keep accumulating.
+        let healthy = HEALTHY_RUN_RESET;
+        let almost = HEALTHY_RUN_RESET - Duration::from_secs(1);
+        // At the cap, but the dead child ran healthily → budget resets to 0.
+        assert_eq!(effective_restart_count(MAX_RESTARTS, healthy), 0);
+        assert_eq!(
+            effective_restart_count(MAX_RESTARTS, healthy + Duration::from_secs(3600)),
+            0
+        );
+        // A short-lived child keeps the accumulated count (crash-loop).
+        assert_eq!(effective_restart_count(2, almost), 2);
+        assert_eq!(effective_restart_count(MAX_RESTARTS, Duration::ZERO), MAX_RESTARTS);
+        // A failed respawn reports ZERO run time and must never reset —
+        // otherwise a permanently-broken respawn retries forever.
+        assert_eq!(effective_restart_count(1, Duration::ZERO), 1);
+        // Fresh sessions are unaffected.
+        assert_eq!(effective_restart_count(0, almost), 0);
     }
 
     #[test]
