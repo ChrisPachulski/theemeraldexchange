@@ -128,7 +128,7 @@ media.post('/playback/:kind/:id', async (c) => {
     auth = principalHeader(session)
   } catch (e) {
     console.error('[media] playback grant: mint failed, failing closed:', e)
-    return c.json({ error: 'internal-principal mint failed' }, 502)
+    return c.json({ error: 'principal_mint_failed' }, 502)
   }
 
   // 1. Capability decision (+ file metadata for duration). This is a small
@@ -158,7 +158,7 @@ media.post('/playback/:kind/:id', async (c) => {
     if (!r.ok) return c.json({ error: 'grant_failed' }, 502)
     grant = (await r.json()) as typeof grant
   } catch {
-    return c.json({ error: 'media-core unreachable' }, 502)
+    return c.json({ error: 'media_core_unreachable' }, 502)
   }
 
   const durationSecs = grant.file?.duration_secs ?? null
@@ -193,7 +193,7 @@ media.post('/playback/:kind/:id', async (c) => {
     if (!r.ok) return c.json({ error: 'transcode_start_failed' }, 502)
     handoff = (await r.json()) as typeof handoff
   } catch {
-    return c.json({ error: 'transcoder unreachable' }, 502)
+    return c.json({ error: 'transcoder_unreachable' }, 502)
   }
 
   const sid = handoff.sessionId
@@ -272,7 +272,7 @@ media.all('/*', async (c) => {
     headers = principalHeader(session)
   } catch (e) {
     console.error('[media] failed to mint internal-principal, failing closed:', e)
-    return c.json({ error: 'internal-principal mint failed' }, 502)
+    return c.json({ error: 'principal_mint_failed' }, 502)
   }
 
   for (const name of FORWARD_REQUEST_HEADERS) {
