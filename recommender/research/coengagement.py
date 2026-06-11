@@ -86,7 +86,6 @@ def build_cooccurrence(catalog_ids: set[int], *, min_rating: float = 4.0,
     # Stream ratings, binarize positives, keep only kept movies. Vectorized:
     # accumulate filtered (user, tmdb) arrays per chunk, factorize once at the end.
     keep_arr = np.fromiter(keep_movie_ids, dtype=np.int64)
-    keep_set = keep_movie_ids
     users_parts: list[np.ndarray] = []
     tmdb_parts: list[np.ndarray] = []
     reader = pd.read_csv(ML_DIR / "ratings.csv",
@@ -165,8 +164,8 @@ def coengagement_scores(graph: dict, cand_ids: list[int], lib_ids: set[int]) -> 
     out = np.zeros(len(cand_ids), dtype=np.float32)
     # reverse: lib item -> {neighbor: ppmi}
     lib_edges: dict[int, float] = {}
-    for l in lib_ids:
-        for (nb, p) in nbr.get(l, []):
+    for lib_item in lib_ids:
+        for (nb, p) in nbr.get(lib_item, []):
             if p > lib_edges.get(nb, 0.0):
                 lib_edges[nb] = p
     for idx, c in enumerate(cand_ids):
@@ -205,12 +204,14 @@ def coverage_and_retrieval_gate(conn, graph: dict, *, kind: str = "movie",
         return d
     cast = fetch("title_cast", "AND order_idx<?", (F.CAST_TOPN,))
     crew = fetch("title_crew", f"AND job IN ({','.join('?' for _ in F.KEY_CREW_JOBS)})", F.KEY_CREW_JOBS)
-    twin = lambda t: any(t != l and (len(cast.get(t, set()) & cast.get(l, set())) >= 2
-                                     or len(crew.get(t, set()) & crew.get(l, set())) >= 1) for l in lib_set)
+    def twin(t):
+        return any(t != lib_item and (len(cast.get(t, set()) & cast.get(lib_item, set())) >= 2
+                                      or len(crew.get(t, set()) & crew.get(lib_item, set())) >= 1)
+                   for lib_item in lib_set)
     def has_edge(t):
         if any(b in lib_set for b, _ in nbr.get(t, [])):
             return True
-        return any(t == b for l in lib_set for b, _ in nbr.get(l, []))
+        return any(t == b for lib_item in lib_set for b, _ in nbr.get(lib_item, []))
 
     novel = [t for t in lib if not twin(t)]
     novel_edge = [t for t in novel if has_edge(t)]
@@ -260,9 +261,9 @@ def coengagement_candidates(graph: dict, rev: dict, lib_ids: set[int],
     """
     out: set[int] = set()
     nbr = graph["neighbors"]
-    for l in lib_ids:
-        fwd = nbr.get(l, [])
-        rv = rev.get(l, [])
+    for lib_item in lib_ids:
+        fwd = nbr.get(lib_item, [])
+        rv = rev.get(lib_item, [])
         if cap is not None:
             fwd = fwd[:cap]
             rv = sorted(rv, key=lambda x: x[1], reverse=True)[:cap]
@@ -307,7 +308,9 @@ def evaluate_latefusion(conn, *, kind: str, content_weights: dict, beta: float,
     crew = fetch_sets("title_crew", f"AND job IN ({','.join('?' for _ in F.KEY_CREW_JOBS)})", F.KEY_CREW_JOBS)
     def is_twin(t):
         ct, kt = cast.get(t, set()), crew.get(t, set())
-        return any(t != l and (len(ct & cast.get(l, set())) >= 2 or len(kt & crew.get(l, set())) >= 1) for l in pos_set)
+        return any(t != lib_item and (len(ct & cast.get(lib_item, set())) >= 2
+                                      or len(kt & crew.get(lib_item, set())) >= 1)
+                   for lib_item in pos_set)
 
     strat = {"creator_twin": [], "novel": [], "all": []}
     leak = 0
@@ -405,7 +408,9 @@ def evaluate_retrieval_union(conn, *, kind: str, content_weights: dict, graph: d
     crew = fetch_sets("title_crew", f"AND job IN ({','.join('?' for _ in F.KEY_CREW_JOBS)})", F.KEY_CREW_JOBS)
     def is_twin(t):
         ct, kt = cast.get(t, set()), crew.get(t, set())
-        return any(t != l and (len(ct & cast.get(l, set())) >= 2 or len(kt & crew.get(l, set())) >= 1) for l in pos_set)
+        return any(t != lib_item and (len(ct & cast.get(lib_item, set())) >= 2
+                                      or len(kt & crew.get(lib_item, set())) >= 1)
+                   for lib_item in pos_set)
 
     strat = {"creator_twin": [], "novel": [], "all": []}
     leak = 0

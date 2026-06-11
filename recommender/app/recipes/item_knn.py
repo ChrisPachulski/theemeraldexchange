@@ -36,7 +36,7 @@ import sqlite3
 import numpy as np
 
 from ..context import Candidate, TitleRow, UserContext, title_key_variants
-from ..db import deserialize_f32
+from ..db import deserialize_f32, table_generation
 from ..reasons import discover_reason, personalized_reason, trending_reason
 from ..retrieval import AVAILABLE_TITLE_PREDICATE, cold_start_pool, retrieve_candidates
 from ..schemas import ScoredItem
@@ -63,11 +63,20 @@ DEFAULTS: dict[str, float | int | str] = {
 
 EMBED_EPS = 1e-9
 
+# The default candidate_pool="full" scores the ENTIRE eligible catalog per
+# request ("brute-force, offline-only" — see DEFAULTS above). The optimizer
+# checks this flag so a nightly proposal can never promote this recipe into
+# the serve path, where the DEFAULTS re-merge would resurrect "full".
+OFFLINE_ONLY = True
+
 # Module-level catalog cache keyed by (kind, min_vote_count). Loading the full
 # eligible-catalog embedding matrix once and reusing it across calls is what
 # makes the leave-one-out eval (hundreds of folds) tractable. Production would
 # hold this in the ANN index instead; here it is an in-process numpy matrix.
-_CATALOG: dict[tuple[str, int], dict] = {}
+# Entries carry the table_generation fingerprint they were built against so an
+# ingest mutation (new titles, re-featurized embeddings) invalidates them; the
+# timestamp columns catch in-place upserts that keep counts/rowids stable.
+_CATALOG: dict[tuple[str, int], tuple[tuple, dict]] = {}
 
 
 def _normalize_rows(mat: np.ndarray) -> np.ndarray:
@@ -78,9 +87,10 @@ def _normalize_rows(mat: np.ndarray) -> np.ndarray:
 
 def _load_catalog(conn: sqlite3.Connection, kind: str, min_votes: int) -> dict:
     key = (kind, min_votes)
+    gen = table_generation(conn, ("titles", "fetched_at"), ("title_features", "computed_at"))
     cached = _CATALOG.get(key)
-    if cached is not None:
-        return cached
+    if cached is not None and cached[0] == gen:
+        return cached[1]
     rows = conn.execute(
         f"""SELECT t.tmdb_id, t.title, t.year, t.poster_path, t.overview,
                   COALESCE(t.popularity, 0) AS popularity, t.vote_average,
@@ -132,7 +142,7 @@ def _load_catalog(conn: sqlite3.Connection, kind: str, min_votes: int) -> dict:
         "titles": titles,
         "keys": keys,
     }
-    _CATALOG[key] = cat
+    _CATALOG[key] = (gen, cat)
     return cat
 
 

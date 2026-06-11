@@ -23,7 +23,6 @@ import argparse
 import hashlib
 import json
 import logging
-import math
 import sqlite3
 from datetime import datetime, timezone
 

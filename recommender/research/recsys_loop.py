@@ -463,7 +463,8 @@ def section4_ablations() -> dict:
     for kind in KINDS:
         print(f"\n===== STABILITY fused_balanced:{kind} (expect iter-3 numbers) =====")
         r = FUSE.evaluate_fused(conn, kind=kind, weights=balanced, mode="ann", label="fused_balanced")
-        print(json.dumps(r, indent=2)); results[f"stability_fused_balanced:{kind}"] = r
+        print(json.dumps(r, indent=2))
+        results[f"stability_fused_balanced:{kind}"] = r
 
     # (b) clean feature isolation (movie, ann) -- one block at a time over text.
     iso = {
@@ -477,13 +478,15 @@ def section4_ablations() -> dict:
     for name, w in iso.items():
         print(f"\n===== ISOLATION {name}:movie =====")
         r = FUSE.evaluate_fused(conn, kind="movie", weights=w, mode="ann", label=name)
-        print(json.dumps(r, indent=2)); results[f"{name}:movie"] = r
+        print(json.dumps(r, indent=2))
+        results[f"{name}:movie"] = r
 
     # (c) retrieval-vs-ranking: fused balanced full-catalog scan (sampled folds).
-    print(f"\n===== ABLATION fused_balanced FULL (movie, sampled) =====")
+    print("\n===== ABLATION fused_balanced FULL (movie, sampled) =====")
     r = FUSE.evaluate_fused(conn, kind="movie", weights=balanced, mode="full",
                             label="fused_balanced_full", sample=250)
-    print(json.dumps(r, indent=2)); results["fused_balanced_full:movie"] = r
+    print(json.dumps(r, indent=2))
+    results["fused_balanced_full:movie"] = r
     return results
 
 

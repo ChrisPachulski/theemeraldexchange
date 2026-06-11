@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, StrictInt, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from .sub_validation import validate_sub
 
@@ -70,10 +70,14 @@ class ScoreResponse(BaseModel):
     diag: dict[str, object] = Field(default_factory=dict)
 
 
+# Every event schema enforces tmdb_id > 0 (PositiveStrictInt): Sonarr emits
+# tmdbId: 0 for unmapped shows, and a zero id written into the PERMANENT
+# household_rejections table is an unremovable junk veto. The backend filters
+# non-positive ids before posting; this is the recommender-side contract.
 class FeedbackEventRequest(BaseModel):
     sub: str
     kind: Kind
-    tmdb_id: int
+    tmdb_id: PositiveStrictInt
     signal: Literal["like", "dislike", "reject", "shown", "clicked", "added", "watched"]
 
     _validate_sub = field_validator("sub")(_check_sub)
@@ -82,14 +86,14 @@ class FeedbackEventRequest(BaseModel):
 class ClearFeedbackRequest(BaseModel):
     sub: str
     kind: Kind
-    tmdb_id: StrictInt
+    tmdb_id: PositiveStrictInt
     signal: Literal["like", "dislike", "reject"] | None = None
 
     _validate_sub = field_validator("sub")(_check_sub)
 
 
 class LibrarySyncItem(BaseModel):
-    tmdb_id: StrictInt
+    tmdb_id: PositiveStrictInt
     source: str | None = None
 
 
@@ -103,13 +107,13 @@ class LibrarySyncRequest(BaseModel):
 class ShownEventRequest(BaseModel):
     sub: str
     kind: Kind
-    tmdb_ids: list[StrictInt] = Field(default_factory=list, max_length=200)
+    tmdb_ids: list[PositiveStrictInt] = Field(default_factory=list, max_length=200)
 
     _validate_sub = field_validator("sub")(_check_sub)
 
 
 class ImpressionItem(BaseModel):
-    tmdb_id: StrictInt
+    tmdb_id: PositiveStrictInt
     rank: int = Field(..., ge=0)
     score: float
     provenance: Provenance
@@ -126,7 +130,7 @@ class ImpressionEventRequest(BaseModel):
 
 class RejectionEventRequest(BaseModel):
     kind: Kind
-    tmdb_id: StrictInt
+    tmdb_id: PositiveStrictInt
 
 
 class HealthResponse(BaseModel):

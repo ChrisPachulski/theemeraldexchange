@@ -3,7 +3,8 @@
 Covers:
   (a) fresh-DB → canonical schema_migrations table created on first boot
   (b) legacy filename-TEXT schema → backfilled to canonical (version + checksum)
-  (c) checksum mismatch → WARN emitted, boot continues (no exception)
+  (c) checksum mismatch → RuntimeError by default; WARN + continue only under
+      the ALLOW_MIGRATION_CHECKSUM_MISMATCH=1 escape hatch
   (d) _lf_normalize handles non-ASCII text correctly (byte-safe CRLF replacement)
   (e) _has_drop_table detects multi-line DROP TABLE (DROP\nTABLE)
   (f) _check_backup_gate raises RuntimeError when server.db is absent
@@ -15,7 +16,6 @@ from __future__ import annotations
 import hashlib
 import logging
 import sqlite3
-import textwrap
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -27,7 +27,6 @@ import pytest
 # tests running without a real exchange.db on disk.
 # ---------------------------------------------------------------------------
 from app.db import (
-    _auto_backup,
     _bootstrap_schema_migrations,
     _check_backup_gate,
     _has_drop_table,
@@ -165,82 +164,63 @@ def test_bootstrap_backfills_missing_file_with_empty_checksum(
 
 
 # ---------------------------------------------------------------------------
-# (c) Checksum mismatch → WARN, no exception
+# (c) Checksum mismatch → RuntimeError (loud), unless the operator escape
+#     hatch ALLOW_MIGRATION_CHECKSUM_MISMATCH=1 is set (WARN + continue)
 # ---------------------------------------------------------------------------
 
 
-def test_checksum_mismatch_warns_and_does_not_raise(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    """A checksum mismatch on an already-applied migration logs WARNING and continues."""
-    from app.db import _migrate
+def _mismatched_migrations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Apply 0001 for real via migrate(), then edit the file so its checksum
+    no longer matches what schema_migrations recorded. Returns the db path."""
+    from dataclasses import replace
+
+    import app.db as db_mod
+    from app.db import migrate
 
     db = tmp_path / "exchange.db"
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
-
-    sql_content = "CREATE TABLE bar (id INTEGER PRIMARY KEY);\n"
     sql_file = migrations_dir / "0001_bar.sql"
-    sql_file.write_text(sql_content, encoding="utf-8")
-    wrong_checksum = "deadbeef" * 8  # 64 hex chars, deliberately wrong
+    sql_file.write_text("CREATE TABLE bar (id INTEGER PRIMARY KEY);\n", encoding="utf-8")
 
-    # Pre-create the DB and mark version 1 as applied with a wrong checksum.
-    conn = _make_conn(db)
-    conn.execute(
-        """
-        CREATE TABLE schema_migrations (
-          version    INTEGER NOT NULL PRIMARY KEY,
-          applied_at TEXT,
-          checksum   TEXT NOT NULL
-        )
-        """
+    monkeypatch.setattr(
+        db_mod, "CONFIG", replace(db_mod.CONFIG, migrations_dir=migrations_dir)
     )
-    conn.execute(
-        "INSERT INTO schema_migrations(version, applied_at, checksum) VALUES (?, ?, ?)",
-        (1, "2026-01-01T00:00:00", wrong_checksum),
-    )
-    conn.close()
+    applied = migrate(db_path=db)
+    assert "0001_bar.sql" in applied
 
+    # Simulate a post-apply edit of the migration file.
+    sql_file.write_text(
+        "CREATE TABLE bar (id INTEGER PRIMARY KEY, sneaky TEXT);\n", encoding="utf-8"
+    )
+    return db
+
+
+def test_checksum_mismatch_raises_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.db import migrate
+
+    db = _mismatched_migrations(tmp_path, monkeypatch)
+    monkeypatch.delenv("ALLOW_MIGRATION_CHECKSUM_MISMATCH", raising=False)
+    with pytest.raises(RuntimeError, match="checksum mismatch"):
+        migrate(db_path=db)
+
+
+def test_checksum_mismatch_escape_hatch_warns_and_continues(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from app.db import migrate
+
+    db = _mismatched_migrations(tmp_path, monkeypatch)
+    monkeypatch.setenv("ALLOW_MIGRATION_CHECKSUM_MISMATCH", "1")
     with caplog.at_level(logging.WARNING, logger="app.db"):
-        # _migrate requires a live sqlite_vec connection; call with the real connect path
-        # but skip the vec0 load for this test by going through _bootstrap + the seen-dict
-        # branch directly via patching.
-        # Instead, test _migrate end-to-end via the public migrate() helper.
-        import os
-        os.environ["RECOMMENDER_DB_PATH"] = str(db)
-        os.environ["RECOMMENDER_MIGRATIONS_DIR"] = str(migrations_dir)
-
-        # Re-load CONFIG with patched env vars.
-        import importlib
-        import app.config as cfg_mod
-        import app.db as db_mod
-        importlib.reload(cfg_mod)
-        importlib.reload(db_mod)
-        from app.db import _bootstrap_schema_migrations as bsm, _sha256 as sha
-
-        # Directly exercise the checksum comparison logic in isolation.
-        conn2 = _make_conn(db)
-        seen: dict[int, str] = {}
-        for row in conn2.execute("SELECT version, checksum FROM schema_migrations").fetchall():
-            seen[row["version"]] = row["checksum"]
-
-        current_checksum = sha(sql_content)
-        # Simulate the comparison the migrator does.
-        import logging as _logging
-        _log = _logging.getLogger("app.db")
-        version = 1
-        if version in seen and current_checksum != seen[version]:
-            _log.warning(
-                "[migration] checksum mismatch on %d: file may have been edited",
-                version,
-            )
-
-    mismatch_warnings = [
-        r for r in caplog.records
-        if "checksum mismatch" in r.message and r.levelno == logging.WARNING
-    ]
-    assert mismatch_warnings, "expected at least one checksum-mismatch WARNING"
-    conn2.close()
+        applied = migrate(db_path=db)
+    assert "0001_bar.sql" not in applied  # not re-applied, just tolerated
+    assert any(
+        "checksum mismatch" in r.message and r.levelno == logging.WARNING
+        for r in caplog.records
+    ), "expected a checksum-mismatch WARNING under the escape hatch"
 
 
 # ---------------------------------------------------------------------------

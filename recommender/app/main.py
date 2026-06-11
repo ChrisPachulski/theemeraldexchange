@@ -16,7 +16,6 @@ from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from typing import Any
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import Depends, FastAPI, Header, HTTPException
 
 from .config import CONFIG
@@ -82,13 +81,10 @@ async def lifespan(_app: FastAPI):
     applied = migrate()
     if applied:
         log.info("applied migrations: %s", applied)
-    scheduler = AsyncIOScheduler()
-    scheduler.start()
     sweep_task = asyncio.create_task(retention_sweeper())
     try:
         yield
     finally:
-        scheduler.shutdown(wait=False)
         sweep_task.cancel()
         with suppress(asyncio.CancelledError):
             await sweep_task
