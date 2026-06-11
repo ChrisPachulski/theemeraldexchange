@@ -135,6 +135,44 @@ fn contains_ci(haystack: &[String], needle: &str) -> bool {
     haystack.iter().any(|c| c.eq_ignore_ascii_case(needle))
 }
 
+/// Is this codec+profile pair safe to COPY (`-c:v copy`) for the client?
+///
+/// The codec STRING alone is not enough: browsers advertise/decode only the
+/// 8-bit 4:2:0 profiles. A 10-bit H.264 (Hi10P — ffprobe profile "High 10")
+/// stream is still `h264`, so a codec-only gate video-copies it straight into
+/// an HLS session no browser can decode — the player demuxes it, MSE rejects
+/// (or renders garbage on) the append, and the user gets the grey-box-at-0:00
+/// failure class with a "successful" session on the server.
+///
+/// This mirrors the AAC-copy-only-≤2ch pattern in [`plan_audio`]: copy is the
+/// CONSERVATIVE branch (only profiles proven browser-decodable), re-encode is
+/// the permissive fallback (a needless re-encode costs some GPU/CPU; a wrong
+/// copy is a total playback failure).
+///
+/// * h264 — allowlist of the 8-bit 4:2:0 profiles every target browser
+///   decodes. "High 10", "High 10 Intra", "High 4:2:2", "High 4:4:4
+///   Predictive" all fall through to re-encode.
+/// * hevc — "Main" only. `ClientCaps` carries no 10-bit/HEVC-Main-10
+///   capability bit, so even an hevc-capable client gets Main 10 re-encoded
+///   rather than risking an undecodable copy (fail closed until caps grow
+///   hevc10 semantics).
+/// * unknown/empty profile on h264/hevc — re-encode. Mirrors the
+///   unknown-channel-count audio rule: we cannot prove the copy is safe.
+/// * other codecs (vp9/av1/…) — no profile gate. They only ever copy when the
+///   client explicitly advertised the codec, and we have no profile hazard
+///   catalogued for them; the codec acceptance stays the gate.
+fn video_profile_copy_safe(codec: &str, profile: Option<&str>) -> bool {
+    let profile = profile.map(str::trim).unwrap_or("").to_ascii_lowercase();
+    match codec.trim().to_ascii_lowercase().as_str() {
+        "h264" | "avc" | "avc1" => matches!(
+            profile.as_str(),
+            "baseline" | "constrained baseline" | "main" | "high" | "constrained high"
+        ),
+        "hevc" | "h265" => profile == "main",
+        _ => true,
+    }
+}
+
 fn is_text_subtitle(codec: &str) -> bool {
     TEXT_SUBTITLE_CODECS
         .iter()
@@ -218,6 +256,9 @@ pub fn plan_transcode(file: &MediaFileRow, caps: &ClientCaps) -> TranscodePlan {
     // ── Video ──────────────────────────────────────────────────────────────
     let video_codec = file.video_codec.as_deref().map(str::trim).unwrap_or("");
     let codec_ok = !video_codec.is_empty() && contains_ci(&caps.video_codecs, video_codec);
+    // Profile gate: an accepted codec STRING can still hide an undecodable
+    // stream (Hi10P is "h264"); see video_profile_copy_safe.
+    let profile_ok = video_profile_copy_safe(video_codec, file.video_profile.as_deref());
 
     let needs_scale =
         matches!((caps.max_height, file.video_height), (Some(max), Some(h)) if h > max);
@@ -239,10 +280,11 @@ pub fn plan_transcode(file: &MediaFileRow, caps: &ClientCaps) -> TranscodePlan {
         .is_some_and(|h| !h.is_empty());
     let tone_map = is_hdr && !caps.hdr;
 
-    // Copy the video only when the codec is accepted, no scale is needed, no
-    // tone-map is needed, and there is no burn-in to composite. Otherwise
-    // re-encode to H.264 — the smallest re-encode that satisfies the client.
-    let video = if codec_ok && !needs_scale && !tone_map && burn_index.is_none() {
+    // Copy the video only when the codec is accepted, the PROFILE is a
+    // known-decodable one for that codec, no scale is needed, no tone-map is
+    // needed, and there is no burn-in to composite. Otherwise re-encode to
+    // H.264 — the smallest re-encode that satisfies the client.
+    let video = if codec_ok && profile_ok && !needs_scale && !tone_map && burn_index.is_none() {
         VideoOp::Copy
     } else {
         VideoOp::EncodeH264 {
@@ -793,6 +835,165 @@ mod tests {
                 assert_eq!(subtitle, SubtitleOp::None);
             }
             other => panic!("expected transcode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hi10p_h264_is_reencoded_not_copied() {
+        // Failure class: 10-bit H.264 ("High 10" / Hi10P) is still codec
+        // string "h264", so a codec-only copy gate video-copied it to browsers
+        // that can only decode 8-bit profiles → grey box with a "healthy"
+        // session. The profile gate must force a re-encode. (mkv container so
+        // decide() denies and the planner — not direct-play — is exercised.)
+        let mut f = file(
+            Some("mkv"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![aac(1)],
+            vec![],
+        );
+        f.video_profile = Some("High 10".into());
+        let plan = plan_transcode(&f, &caps_h264_1080_sdr());
+        match plan {
+            TranscodePlan::Transcode { video, .. } => assert_eq!(
+                video,
+                VideoOp::EncodeH264 {
+                    scale_to_height: None,
+                    tone_map: false,
+                    burn_subtitle_index: None,
+                    source_height: Some(1080),
+                },
+                "Hi10P must re-encode, never copy"
+            ),
+            other => panic!("expected transcode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_browser_h264_profiles_all_reencode() {
+        // Every non-8-bit-4:2:0 h264 profile ffprobe can report must fall to
+        // the re-encode branch — the allowlist, not a '10'-substring check, is
+        // the gate (High 4:2:2 / High 4:4:4 contain no "10" but are equally
+        // undecodable in browsers).
+        for profile in [
+            "High 10",
+            "High 10 Intra",
+            "High 4:2:2",
+            "High 4:4:4 Predictive",
+        ] {
+            let mut f = file(
+                Some("mkv"),
+                Some("h264"),
+                Some(1080),
+                None,
+                vec![aac(1)],
+                vec![],
+            );
+            f.video_profile = Some(profile.into());
+            let plan = plan_transcode(&f, &caps_h264_1080_sdr());
+            match plan {
+                TranscodePlan::Transcode { video, .. } => assert!(
+                    matches!(video, VideoOp::EncodeH264 { .. }),
+                    "profile {profile:?} must re-encode, got {video:?}"
+                ),
+                other => panic!("expected transcode, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn browser_safe_h264_profiles_still_copy() {
+        // The conservative gate must NOT regress the common case: the 8-bit
+        // 4:2:0 profiles keep the copy-remux fast path.
+        for profile in ["Baseline", "Constrained Baseline", "Main", "High"] {
+            let mut f = file(
+                Some("mkv"),
+                Some("h264"),
+                Some(1080),
+                None,
+                vec![aac(1)],
+                vec![],
+            );
+            f.video_profile = Some(profile.into());
+            let plan = plan_transcode(&f, &caps_h264_1080_sdr());
+            match plan {
+                TranscodePlan::Transcode { video, .. } => assert_eq!(
+                    video,
+                    VideoOp::Copy,
+                    "browser-safe profile {profile:?} must copy"
+                ),
+                other => panic!("expected transcode, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn hevc_main10_reencodes_even_for_hevc_capable_client() {
+        // ClientCaps has no hevc10/10-bit capability bit, so even a client
+        // that advertises hevc must get Main 10 re-encoded (fail closed).
+        let mut f = file(
+            Some("mkv"),
+            Some("hevc"),
+            Some(1080),
+            None,
+            vec![aac(1)],
+            vec![],
+        );
+        f.video_profile = Some("Main 10".into());
+        let caps = ClientCaps {
+            video_codecs: vec!["h264".into(), "hevc".into()],
+            ..caps_h264_1080_sdr()
+        };
+        let plan = plan_transcode(&f, &caps);
+        match plan {
+            TranscodePlan::Transcode { video, .. } => assert!(
+                matches!(video, VideoOp::EncodeH264 { .. }),
+                "hevc Main 10 must re-encode, got {video:?}"
+            ),
+            other => panic!("expected transcode, got {other:?}"),
+        }
+
+        // Plain Main (8-bit) for the same hevc-capable client still copies.
+        let mut f8 = file(
+            Some("mkv"),
+            Some("hevc"),
+            Some(1080),
+            None,
+            vec![aac(1)],
+            vec![],
+        );
+        f8.video_profile = Some("Main".into());
+        match plan_transcode(&f8, &caps) {
+            TranscodePlan::Transcode { video, .. } => {
+                assert_eq!(video, VideoOp::Copy, "hevc Main must still copy")
+            }
+            other => panic!("expected transcode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_h264_profile_reencodes_conservatively() {
+        // Unknown profile → we cannot prove the copy is browser-safe, so
+        // re-encode (mirrors the unknown-channel-count audio rule).
+        for profile in [None, Some("")] {
+            let mut f = file(
+                Some("mkv"),
+                Some("h264"),
+                Some(1080),
+                None,
+                vec![aac(1)],
+                vec![],
+            );
+            f.video_profile = profile.map(str::to_string);
+            let plan = plan_transcode(&f, &caps_h264_1080_sdr());
+            match plan {
+                TranscodePlan::Transcode { video, .. } => assert!(
+                    matches!(video, VideoOp::EncodeH264 { .. }),
+                    "unknown profile must re-encode, got {video:?}"
+                ),
+                other => panic!("expected transcode, got {other:?}"),
+            }
         }
     }
 
