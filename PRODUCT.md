@@ -62,6 +62,16 @@ Voice: short, confident, no jargon. No "successfully added!" exclamations; just
 1. **The app is the experience.** No links to the underlying services inside it.
    No "open in full app" fallback. If the client can't do something a member
    reasonably needs, that's a bug to fix, not a link to add.
+
+   *Recorded exception (2026-06-10, owner-approved):* the **Watch** entry in the
+   nav (`HomeNav`/`TopNav`) opens Plex's hosted web client (app.plex.tv) in a
+   new tab. Native in-browser playback has shipped (transcoded HLS through
+   media-core and the transcoder, played by `MediaPlayer`) but has not yet
+   reached parity with Plex's client. Watch stays as a deliberate,
+   transitional affordance until native playback reaches feature parity —
+   resume everywhere, subtitle support, and downloads-in-progress visibility —
+   at which point it is removed. This exception is bounded to the Watch entry;
+   it licenses no other link to an underlying service.
 2. **One unified UI.** No admin/family toggle on the consumption surface.
    Owner-only administration lives behind authorized routes, gated by the members
    allowlist — never by a hidden client mode.
@@ -80,16 +90,23 @@ Voice: short, confident, no jargon. No "successfully added!" exclamations; just
 ## Surface map
 
 ```
-Home   ·   TV   ·   Movies   ·   Media   ·   Live   ·   Downloads   ·   Users
+Home   ·   TV   ·   Movies   ·   Live   ·   Downloads   ·   Users
 ```
 
 The consumption tabs are shared; **Users** (invites/members/devices) is
-owner-only and bounces non-admins home. **Media** appears when media-core is
-mounted (`USE_MEDIA_CORE=1`); **Live** when IPTV is enabled.
+owner-only and bounces non-admins home; **Live** appears only when IPTV is
+enabled. There is no separate "Media" tab: the local-library experience is
+folded into **TV** and **Movies** (the `useMediaLibrary` hooks plus
+`MediaPlayer`), which light up in-browser playback affordances when
+media-core is mounted (`USE_MEDIA_CORE=1`). One catalog surface per content
+type — a member never has to know whether a title plays from the local
+library or is merely tracked.
 
 ## Roadmap
 
-M1 (IPTV core) shipped. M1.5 is the cross-service contract gate. M2 brings the
-Apple clients (the App-Store target), M3 the Rust media-core, M4 the transcoder,
-M5 the native clients. The repository stays private until the first binary is
-distributed; redistribution is not granted (see LICENSE).
+M1 (IPTV core) and M1.5 (the cross-service contract gate) shipped. M3 (the
+Rust media-core) is live in enforce mode and M4 (the transcoder) is deployed
+with hardware VAAPI encode — the web SPA already plays the local library
+through them. M2 brings the Apple clients (the App-Store target) and M5 the
+native media clients; both remain ahead. The repository stays private until
+the first binary is distributed; redistribution is not granted (see LICENSE).
