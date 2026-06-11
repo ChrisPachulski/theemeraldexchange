@@ -61,6 +61,19 @@ _SLOW_MIGRATION_THRESHOLD_S = 30
 # How recent the last backup must be to permit a DESTRUCTIVE migration (seconds).
 _BACKUP_MAX_AGE_S = 600  # 10 minutes
 
+# Deliberate retroactive edits to already-applied migration files:
+# version → (sha256 stored at original apply time, sha256 of the edited file).
+# A DB whose stored checksum matches the old hash while the file matches the
+# new one gets its stored checksum rewritten instead of failing the boot.
+_CHECKSUM_AMNESTY: dict[int, tuple[str, str]] = {
+    # 0005 gained the "-- DESTRUCTIVE" annotation (it rebuilds + drops titles)
+    # after prod DBs had already applied the unannotated file.
+    5: (
+        "2f8ad2fbdca1e32e1a0dbca561bd4eb49b8594c84ea6dc8d95061a0d396a7fec",
+        "e0e43a41fc581e05b405de2fe6ad45b4e6257fb2178c36a7c05cb2d0f045a6f4",
+    ),
+}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -449,6 +462,11 @@ def _migrate(conn: sqlite3.Connection, *, db_path: Path) -> list[str]:
             c = row[1] if isinstance(row, (list, tuple)) else row["checksum"]
             seen[v] = c
 
+        # title_vec must exist BEFORE the .sql migrations run: 0007 issues
+        # DELETE FROM title_vec, which fails on a fresh DB if the vec0 table
+        # is only created after the loop (prod DBs predated 0007, masking it).
+        cur.execute(VEC_TABLE_DDL.format(dim=CONFIG.embed_dim))
+
         files = sorted(p for p in CONFIG.migrations_dir.glob("*.sql"))
         for f in files:
             version = int(f.name[:4])
@@ -464,6 +482,22 @@ def _migrate(conn: sqlite3.Connection, *, db_path: Path) -> list[str]:
                 # escape hatch for deliberate repairs (after which the stored
                 # checksum should be fixed up to match the file).
                 if checksum != seen[version]:
+                    amnesty = _CHECKSUM_AMNESTY.get(version)
+                    if amnesty and seen[version] == amnesty[0] and checksum == amnesty[1]:
+                        # Known retroactive edit (e.g. adding the -- DESTRUCTIVE
+                        # annotation to 0005): rewrite the stored checksum so the
+                        # fail-loud guard keeps protecting against unknown edits.
+                        cur.execute(
+                            "UPDATE schema_migrations SET checksum = ? WHERE version = ?",
+                            (checksum, version),
+                        )
+                        log.info(
+                            "[migration] checksum amnesty applied for %d (%s): "
+                            "known retroactive annotation edit",
+                            version,
+                            f.name,
+                        )
+                        continue
                     if os.environ.get("ALLOW_MIGRATION_CHECKSUM_MISMATCH") == "1":
                         log.warning(
                             "[migration] checksum mismatch on %d allowed by "
