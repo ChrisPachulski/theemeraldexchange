@@ -52,6 +52,24 @@ pub fn hkdf_internal_principal(secret: Buffer) -> DerivedKey {
     }
 }
 
+/// Generic HKDF-Extract+Expand (RFC 5869, SHA-256, zero-length salt,
+/// 32-byte OKM) with a caller-supplied info label. This backs the
+/// production `deriveKey(secret, info)` in
+/// `server/services/keyDerivation.ts` so TS has no parallel HKDF
+/// implementation. Callers MUST pass one of the frozen `INFO_*` labels —
+/// the label is part of the wire contract and changing it silently
+/// rotates every key derived under it (see `emerald_contracts::hkdf`).
+/// The fixed-label wrappers above remain for surfaces (PyO3 parity,
+/// cross-binding tests) that want the label locked at the binding edge.
+#[napi]
+pub fn hkdf_derive(secret: Buffer, info: String) -> DerivedKey {
+    DerivedKey {
+        bytes: ec_derive_key(secret.as_ref(), info.as_bytes())
+            .to_vec()
+            .into(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Stream tokens
 // ---------------------------------------------------------------------------

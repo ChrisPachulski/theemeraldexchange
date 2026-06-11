@@ -147,6 +147,32 @@ describe('contract vectors (tests/vectors/hkdf-parity.json)', () => {
   }
 })
 
+describe('binding-backed deriveKey vs node:crypto oracle', () => {
+  // deriveKey delegates to the Rust crate (contracts.hkdfDerive). This
+  // block recomputes every derivation with node:crypto's independent
+  // HKDF so a bug in the crate cannot self-certify through the vectors
+  // alone — the same dual-oracle pattern as the stream-token suite.
+  it('matches hkdfSync for every INFO_* label and several secrets', () => {
+    const infos = [
+      INFO_SESSION,
+      INFO_DEVICE_TOKEN,
+      INFO_STREAM_TOKEN,
+      INFO_INTERNAL_PRINCIPAL,
+    ]
+    const secrets = ['mysecret', 'TEST_SECRET_32_CHARS_FIXED_VALUE_X', '']
+    for (const secret of secrets) {
+      for (const info of infos) {
+        const independent = Buffer.from(
+          hkdfSync('sha256', secret, '', info, 32),
+        ).toString('hex')
+        expect(deriveKey(secret, info).toString('hex'), `${secret}/${info}`).toBe(
+          independent,
+        )
+      }
+    }
+  })
+})
+
 describe('RFC 5869 conformance', () => {
   it('matches RFC 5869 Appendix A.1 (SHA-256) test vector', () => {
     const ikm = Buffer.alloc(22, 0x0b)

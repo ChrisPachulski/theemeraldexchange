@@ -17,6 +17,14 @@ export function hkdfSession(secret: Buffer): DerivedKey
 export function hkdfDeviceToken(secret: Buffer): DerivedKey
 /** HKDF-Expand(secret, INFO_INTERNAL_PRINCIPAL, 32) per contract §4. */
 export function hkdfInternalPrincipal(secret: Buffer): DerivedKey
+/**
+ * Generic HKDF-Extract+Expand (RFC 5869, SHA-256, zero-length salt,
+ * 32-byte OKM) with a caller-supplied info label. Backs the production
+ * `deriveKey()` in server/services/keyDerivation.ts. `info` MUST be one
+ * of the frozen INFO_* labels — it is a wire-contract value, not a
+ * free-form string.
+ */
+export function hkdfDerive(secret: Buffer, info: string): DerivedKey
 
 // ---------------------------------------------------------------------------
 // Stream tokens (HMAC-SHA256, raw env-var bytes — see contract D18)
