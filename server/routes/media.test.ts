@@ -22,6 +22,7 @@ vi.mock('../services/internalPrincipal.js', () => ({
 
 vi.mock('../services/upstream.js', () => ({
   fetchStreamWithConnectTimeout: vi.fn(),
+  fetchWithTimeout: vi.fn(),
   LAN_TIMEOUT_MS: 5000,
 }))
 
@@ -46,11 +47,15 @@ vi.mock('../services/recommenderCaller.js', () => ({
 }))
 
 import { media } from './media.js'
-import { fetchStreamWithConnectTimeout } from '../services/upstream.js'
+import { fetchStreamWithConnectTimeout, fetchWithTimeout } from '../services/upstream.js'
 import { mintInternalPrincipal } from '../services/internalPrincipal.js'
 import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
 
+// The media route deliberately splits wrappers: control-plane JSON (grant,
+// transcode handoff, readiness probe) goes through fetchWithTimeout (whole-
+// transfer deadline); only the streaming proxy uses the TTFB-only wrapper.
 const mockFetch = vi.mocked(fetchStreamWithConnectTimeout)
+const mockFetchTimed = vi.mocked(fetchWithTimeout)
 const mockMint = vi.mocked(mintInternalPrincipal)
 const mockCaller = vi.mocked(recommenderCallerFromSession)
 
@@ -98,6 +103,8 @@ describe('media proxy route', () => {
     })
 
     expect(res.status).toBe(502)
+    // Machine-readable snake_case token (errors.ts convention).
+    expect((await res.json()) as { error: string }).toEqual({ error: 'principal_mint_failed' })
     // upstream must never be hit unauthenticated
     expect(mockFetch).not.toHaveBeenCalled()
   })
@@ -226,11 +233,12 @@ describe('media playback grant', () => {
     })
     expect(res.status).toBe(400)
     expect(mockFetch).not.toHaveBeenCalled()
+    expect(mockFetchTimed).not.toHaveBeenCalled()
   })
 
   it('direct-play → progressive grant with a tokenised stream url', async () => {
     // media-core returns directPlay:true.
-    mockFetch.mockResolvedValueOnce(
+    mockFetchTimed.mockResolvedValueOnce(
       new Response(JSON.stringify({ directPlay: true, file: { duration_secs: 1200 } }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -248,13 +256,16 @@ describe('media playback grant', () => {
     expect(body.delivery).toBe('progressive')
     expect(body.url).toMatch(/^\/api\/media\/stream\/movie\/7\?t=.+/)
     expect(body.durationSecs).toBe(1200)
-    // Only the capability grant was called (no transcode handoff).
-    expect(mockFetch).toHaveBeenCalledOnce()
-    expect(String(mockFetch.mock.calls[0][0])).toContain('/api/media/play/movie/7/grant')
+    // Only the capability grant was called (no transcode handoff) — and it
+    // went through the whole-transfer wrapper, NOT the TTFB-only streaming
+    // wrapper (whose cleared deadline would leave r.json() unbounded).
+    expect(mockFetchTimed).toHaveBeenCalledOnce()
+    expect(String(mockFetchTimed.mock.calls[0][0])).toContain('/api/media/play/movie/7/grant')
+    expect(mockFetch).not.toHaveBeenCalled()
   })
 
   it('rejects a direct-play stream token after membership revocation', async () => {
-    mockFetch.mockResolvedValueOnce(
+    mockFetchTimed.mockResolvedValueOnce(
       new Response(JSON.stringify({ directPlay: true, file: { duration_secs: 1200 } }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -282,7 +293,7 @@ describe('media playback grant', () => {
   it('transcode → hls grant with tokenised manifest + heartbeat urls', async () => {
     // First call: capability grant denies direct play. Second: media-core
     // /stream handoff returns a transcoder session.
-    mockFetch
+    mockFetchTimed
       .mockResolvedValueOnce(
         new Response(JSON.stringify({ directPlay: false, file: { duration_secs: 5400 } }), {
           status: 200,
@@ -332,13 +343,51 @@ describe('media playback grant', () => {
     expect(body.stopUrl).toMatch(/^\/api\/transcode\/session\/sess-1\/stop\?t=.+/)
     expect(body.sessionId).toBe('sess-1')
     expect(body.durationSecs).toBe(5400)
-    // Second call hit the media-core /stream handoff with the caps query.
-    expect(String(mockFetch.mock.calls[1][0])).toContain('/api/media/stream/episode/99?')
-    expect(String(mockFetch.mock.calls[1][0])).toContain('start_secs=95')
+    // Second call hit the media-core /stream handoff with the caps query —
+    // grant, handoff AND readiness probe all stayed on the whole-transfer
+    // wrapper; the streaming wrapper was never touched.
+    expect(String(mockFetchTimed.mock.calls[1][0])).toContain('/api/media/stream/episode/99?')
+    expect(String(mockFetchTimed.mock.calls[1][0])).toContain('start_secs=95')
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('502 media_core_unreachable when the grant body read fails', async () => {
+    // fetchWithTimeout itself never throws on network errors (it synthesizes a
+    // 504), so the catch covers a body/JSON failure on the buffered replay.
+    mockFetchTimed.mockResolvedValueOnce(
+      new Response('not-json', { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    )
+    const res = await media.request('/playback/movie/7', {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: '{}',
+    })
+    expect(res.status).toBe(502)
+    expect((await res.json()) as { error: string }).toEqual({ error: 'media_core_unreachable' })
+  })
+
+  it('502 transcoder_unreachable when the handoff body read fails', async () => {
+    mockFetchTimed
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ directPlay: false }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response('not-json', { status: 200, headers: { 'Content-Type': 'application/json' } }),
+      )
+    const res = await media.request('/playback/movie/7', {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: '{}',
+    })
+    expect(res.status).toBe(502)
+    expect((await res.json()) as { error: string }).toEqual({ error: 'transcoder_unreachable' })
   })
 
   it('propagates a media-core 404 as 404', async () => {
-    mockFetch.mockResolvedValueOnce(new Response('{}', { status: 404 }))
+    mockFetchTimed.mockResolvedValueOnce(new Response('{}', { status: 404 }))
     const res = await media.request('/playback/movie/123456', {
       method: 'POST',
       headers: { host: 'localhost', 'content-type': 'application/json' },

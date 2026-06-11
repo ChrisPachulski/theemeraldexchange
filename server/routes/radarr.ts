@@ -4,7 +4,11 @@ import { Hono } from 'hono'
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { rateLimit } from '../middleware/rateLimit.js'
 import { radarrFetch, radarrRootFolders, type RootFolder } from '../services/radarr.js'
-import { appendGrabEvent } from '../services/grabLog.js'
+import {
+  createGrabEventRecorder,
+  createReservationLedger,
+  type CappedGrabResult,
+} from '../services/arrGrab.js'
 import { postFeedback } from '../services/recommender.js'
 import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
 import { env } from '../env.js'
@@ -24,63 +28,18 @@ const radarrMutateLimit = rateLimit({
   intervalMs: env.arrMutateRateIntervalMs,
 })
 
-type RadarrGrabEvent = Parameters<typeof appendGrabEvent>[0]
 type RadarrSpaceGateFailure = {
   status: 400 | 502 | 507
   body: Record<string, unknown>
 }
 type RadarrFolderWithFreeSpace = RootFolder & { freeSpace: number }
 
-// Finding 4-1: in-flight disk-space reservations keyed by root-folder path,
-// mirroring sonarr.ts's pendingRootFolderReservations. Without this, two
-// near-simultaneous movie adds both read the SAME stale folder.freeSpace
-// snapshot, both clear the MIN_FREE_GB gate, and both grab up to
-// env.maxMovieBytes — driving the disk below the reserve. We subtract the
-// planned grab bytes from available space the moment a grab is committed and
-// release the unused remainder afterward, so the second concurrent add sees
-// the reduced figure and 507s when only one fits.
-//
-// SCOPE: in-process Map, single-instance (same caveat as the Sonarr
-// reservation and the concurrency tracker). A restart drops reservations;
-// at the M5 multi-replica work this moves to a shared DB-backed reservation
-// reconciled against the SAB queue. Documented single-instance on purpose.
-const pendingRadarrReservations = new Map<string, number>()
+// Finding 4-1: in-flight disk-space reservations against root-folder
+// free space. Mechanism + rationale live in services/arrGrab.ts; this
+// instance is Radarr's own ledger (Sonarr keeps a separate one).
+const radarrReservations = createReservationLedger()
 
-function availableRadarrFolderBytes(folder: RadarrFolderWithFreeSpace): number {
-  return folder.freeSpace - (pendingRadarrReservations.get(folder.path) ?? 0)
-}
-
-function reserveRadarrFolderBytes(folder: RadarrFolderWithFreeSpace, bytes: number): boolean {
-  if (!Number.isFinite(bytes) || bytes <= 0) return false
-  const reserved = pendingRadarrReservations.get(folder.path) ?? 0
-  if (folder.freeSpace - reserved - bytes < env.minFreeBytes) return false
-  pendingRadarrReservations.set(folder.path, reserved + bytes)
-  return true
-}
-
-function releaseRadarrFolderReservation(folder: RadarrFolderWithFreeSpace, bytes: number): void {
-  if (!Number.isFinite(bytes) || bytes <= 0) return
-  const reserved = pendingRadarrReservations.get(folder.path) ?? 0
-  const next = Math.max(0, reserved - bytes)
-  if (next === 0) pendingRadarrReservations.delete(folder.path)
-  else pendingRadarrReservations.set(folder.path, next)
-}
-type CappedGrabResult =
-  | { status: 'grab_succeeded' }
-  | { status: 'search_failed'; upstreamStatus: number }
-  | { status: 'no_releases'; scanned: number }
-  // Releases existed but Radarr rejected every one (parse/title/quality),
-  // so the size cap never applied. Handled like no_releases (monitor),
-  // not like all_rejected_by_cap (roll back).
-  | { status: 'no_matching_releases'; scanned: number }
-  | { status: 'all_rejected_by_cap'; scanned: number }
-  | { status: 'grab_failed'; upstreamStatus: number }
-
-async function recordRadarrGrabEvent(event: RadarrGrabEvent): Promise<void> {
-  await appendGrabEvent(event).catch((err) => {
-    console.error('[radarr] grab log write failed:', err)
-  })
-}
+const recordRadarrGrabEvent = createGrabEventRecorder('radarr')
 
 async function validateRadarrRootFolderSpace(rootFolderPath?: string): Promise<
   { ok: true; folder: RadarrFolderWithFreeSpace } | { ok: false; failure: RadarrSpaceGateFailure }
@@ -106,7 +65,7 @@ async function validateRadarrRootFolderSpace(rootFolderPath?: string): Promise<
   // Finding 4-1: gate against free space MINUS in-flight reservations so a
   // second concurrent add can't clear the gate against the same stale snapshot
   // the first add is already spending.
-  const available = availableRadarrFolderBytes(typedFolder)
+  const available = radarrReservations.availableBytes(typedFolder)
   if (available < env.minFreeBytes) {
     return {
       ok: false,
@@ -166,8 +125,13 @@ async function grabBestUnderCap(
   movieId: number,
   rootFolder: RadarrFolderWithFreeSpace,
   title?: string,
+  sub?: string,
 ): Promise<CappedGrabResult> {
-  const base = { app: 'radarr' as const, itemId: movieId, title, capGb: env.maxMovieGb }
+  // `sub` rides on `base` so every {...base} event below is attributed to
+  // the user who triggered the add — mirrors grabTvUnderCap. Without it,
+  // readEventsForItem's legacy allowance (undefined sub matches everyone)
+  // made every Radarr grab event visible to every caller of /by-item.
+  const base = { itemId: movieId, title, capGb: env.maxMovieGb, sub }
   await recordRadarrGrabEvent({ ...base, type: 'grab_started' })
 
   // Brief delay so Radarr finishes wiring the new movie record before
@@ -194,7 +158,7 @@ async function grabBestUnderCap(
   // Finding 4-1: filter against free space MINUS in-flight reservations, not
   // the raw snapshot, so two concurrent adds don't both pass against the same
   // figure.
-  const availableBytes = availableRadarrFolderBytes(rootFolder)
+  const availableBytes = radarrReservations.availableBytes(rootFolder)
   // Releases Radarr ITSELF accepts: parsed, title-matched, wanted quality,
   // not rejected. A release Radarr marks rejected/temporarilyRejected (e.g.
   // "Unable to parse release", wrong movie) is not grabbable for reasons
@@ -241,7 +205,7 @@ async function grabBestUnderCap(
   // concurrent add sees the reduced availability immediately. If the reserve
   // itself fails (another in-flight add already committed the remaining
   // headroom in the race window), refuse rather than overcommit the disk.
-  if (!reserveRadarrFolderBytes(rootFolder, best.size)) {
+  if (!radarrReservations.reserve(rootFolder, best.size)) {
     await recordRadarrGrabEvent({
       ...base,
       type: 'all_rejected_by_cap',
@@ -260,7 +224,7 @@ async function grabBestUnderCap(
     })
   } catch (err) {
     // Egress failed entirely — nothing was grabbed, so free the reservation.
-    releaseRadarrFolderReservation(rootFolder, best.size)
+    radarrReservations.release(rootFolder, best.size)
     throw err
   }
   // The grab is queued; SAB/Radarr now owns the on-disk accounting. Release
@@ -268,7 +232,7 @@ async function grabBestUnderCap(
   // downstream (and the next add's gate will reflect them once SAB reports
   // them), and on failure nothing landed. Holding the reservation past this
   // point would leak headroom until restart.
-  releaseRadarrFolderReservation(rootFolder, best.size)
+  radarrReservations.release(rootFolder, best.size)
   console.log(
     `[movie-cap] grab "${best.title}" ${(best.size / 1024 ** 3).toFixed(2)}GB ` +
       `for movie ${movieId} → ${grabRes.status}`,
@@ -354,6 +318,32 @@ async function setMovieMonitored(
     console.error(`[movie-cap] failed to set monitored on movie ${movie.id}: ${res.status}`)
   }
   return { ok: res.ok, status: res.status }
+}
+
+// Radarr can 201 the add while returning a body we can't use (non-JSON
+// proxy interjection, or a record echoed without a title). The movie DOES
+// exist upstream — created unmonitored by the cap rewrite — so skipping the
+// grab on a bad body would strand a dead movie that neither downloads nor
+// monitors. Recover the canonical record by tmdbId before giving up.
+// Radarr's /movie?tmdbId= filter returns at most one record.
+async function lookupMovieByTmdbId(tmdbId: unknown): Promise<CreatedRadarrMovie | null> {
+  if (typeof tmdbId !== 'number' || !Number.isSafeInteger(tmdbId) || tmdbId <= 0) return null
+  try {
+    const res = await radarrFetch(`/api/v3/movie?tmdbId=${tmdbId}`, { method: 'GET' })
+    if (!res.ok) return null
+    const list = (await res.json()) as CreatedRadarrMovie[]
+    const movie = Array.isArray(list) ? list[0] : undefined
+    return movie?.id ? movie : null
+  } catch (err) {
+    console.error('[movie-cap] tmdbId recovery lookup failed:', err)
+    return null
+  }
+}
+
+function isUsableCreatedMovie(
+  m: CreatedRadarrMovie | null,
+): m is CreatedRadarrMovie & { id: number; title: string } {
+  return Boolean(m?.id && typeof m.title === 'string' && m.title.trim().length > 0)
 }
 
 function normalizePath(p: string): string {
@@ -546,22 +536,39 @@ radarr.post('/api/v3/movie', radarrMutateLimit, async (c) => {
     )
   }
 
+  // Body returned to the SPA on the keep paths below. Replaced by the
+  // re-fetched record when the 201 body was unparseable, so the client always
+  // receives the movie JSON it expects rather than the raw upstream bytes.
+  let keepBody = out
+  let keepContentType = r.headers.get('Content-Type') ?? 'application/json'
+
   // Wait for the size-capped grab before returning ordinary success.
   // The movie is intentionally added unmonitored on this path, so a failed
   // capped search has no Radarr retry safety net unless we surface it here.
   if (r.ok && wantedSearch) {
-    const created = (() => {
+    let created = (() => {
       try {
         return JSON.parse(out) as CreatedRadarrMovie
       } catch {
         return null
       }
     })()
-    if (created?.id && typeof created.title === 'string' && created.title.trim().length > 0) {
+    if (!isUsableCreatedMovie(created)) {
+      // 201 with an unparseable or untitled body. cappedBody forced
+      // monitored:false, so silently skipping the grab here used to leave a
+      // dead unmonitored movie while the response still read as success.
+      const refetched = await lookupMovieByTmdbId(body.tmdbId)
+      if (refetched) {
+        created = refetched
+        keepBody = JSON.stringify(refetched)
+        keepContentType = 'application/json'
+      }
+    }
+    if (isUsableCreatedMovie(created)) {
       const itemId = created.id
       const itemTitle = created.title
       try {
-        const grab = await grabBestUnderCap(itemId, spaceGate.folder, itemTitle)
+        const grab = await grabBestUnderCap(itemId, spaceGate.folder, itemTitle, session.sub)
         if (grab.status === 'search_failed' || grab.status === 'grab_failed') {
           const rollback = await deleteCreatedMovie(created)
           return c.json(
@@ -631,9 +638,9 @@ radarr.post('/api/v3/movie', radarrMutateLimit, async (c) => {
       } catch (e) {
         console.error('[movie-cap] grab failed:', e)
         await recordRadarrGrabEvent({
-          app: 'radarr',
           itemId,
           title: itemTitle,
+          sub: session.sub,
           type: 'grab_failed',
           error: e instanceof Error ? e.message : String(e),
         })
@@ -648,17 +655,41 @@ radarr.post('/api/v3/movie', radarrMutateLimit, async (c) => {
           424,
         )
       }
+    } else {
+      // The 201 body was unusable AND the tmdbId re-fetch couldn't identify
+      // the movie. The cap grab and the monitor fallback are both impossible,
+      // so don't claim success: roll back if an id survived parsing, record
+      // why for the admin panel, and surface a distinct error to the UI.
+      const rollback = created?.id ? await deleteCreatedMovie(created) : null
+      await recordRadarrGrabEvent({
+        itemId: created?.id ?? 0,
+        title: typeof body.title === 'string' ? body.title : undefined,
+        sub: session.sub,
+        type: 'grab_failed',
+        error:
+          'Radarr add returned success but the created movie could not be identified ' +
+          '(unparseable/untitled response body and tmdbId re-fetch failed); cap-aware grab skipped',
+      })
+      return c.json(
+        {
+          error: 'add_unverified',
+          message:
+            'Radarr accepted the add but did not identify the created movie, so no download was started. ' +
+            'Check Radarr directly, then retry.',
+          rollbackStatus: rollback && !rollback.ok ? rollback.status || undefined : undefined,
+        },
+        502,
+      )
     }
   }
 
-  // Reached on: a successful capped grab (grab_succeeded), the "Just monitor"
-  // path (!wantedSearch), or r.ok with an unparseable add body — all KEEP the
-  // movie, so the conversion signal is real. (Every rollback path above
-  // returned a 424 before here.)
+  // Reached on: a successful capped grab (grab_succeeded) or the "Just
+  // monitor" path (!wantedSearch) — both KEEP the movie, so the conversion
+  // signal is real. (Every rollback path above returned before here.)
   signalAdded()
-  return new Response(out, {
+  return new Response(keepBody, {
     status: r.status,
-    headers: { 'Content-Type': r.headers.get('Content-Type') ?? 'application/json' },
+    headers: { 'Content-Type': keepContentType },
   })
 })
 
@@ -716,7 +747,7 @@ radarr.post('/api/v3/movie/:id/upgrade', requireAdmin, radarrMutateLimit, async 
   // Finding 4-1: reservation-aware availability on the upgrade path too, so a
   // concurrent add + upgrade against the same root folder can't both pass the
   // gate against one stale snapshot.
-  const availableUpgradeBytes = availableRadarrFolderBytes(spaceGate.folder)
+  const availableUpgradeBytes = radarrReservations.availableBytes(spaceGate.folder)
   const eligible = all
     .filter((r) =>
       !r.rejected &&
@@ -734,7 +765,7 @@ radarr.post('/api/v3/movie/:id/upgrade', requireAdmin, radarrMutateLimit, async 
     })
   }
   const best = eligible[0]
-  if (!reserveRadarrFolderBytes(spaceGate.folder, best.size)) {
+  if (!radarrReservations.reserve(spaceGate.folder, best.size)) {
     return c.json({
       status: 'no_upgrade_available',
       scanned: all.length,
@@ -749,10 +780,10 @@ radarr.post('/api/v3/movie/:id/upgrade', requireAdmin, radarrMutateLimit, async 
       body: JSON.stringify({ guid: best.guid, indexerId: best.indexerId }),
     })
   } catch (err) {
-    releaseRadarrFolderReservation(spaceGate.folder, best.size)
+    radarrReservations.release(spaceGate.folder, best.size)
     throw err
   }
-  releaseRadarrFolderReservation(spaceGate.folder, best.size)
+  radarrReservations.release(spaceGate.folder, best.size)
   if (!grabRes.ok) {
     return c.json({ error: 'grab_failed', status: grabRes.status }, 502)
   }

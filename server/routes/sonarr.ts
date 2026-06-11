@@ -6,7 +6,11 @@ import { Hono } from 'hono'
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { rateLimit } from '../middleware/rateLimit.js'
 import { sonarrFetch, sonarrRootFolders } from '../services/sonarr.js'
-import { appendGrabEvent } from '../services/grabLog.js'
+import {
+  createGrabEventRecorder,
+  createReservationLedger,
+  type RootFolderSpaceSnapshot,
+} from '../services/arrGrab.js'
 import { postFeedback } from '../services/recommender.js'
 import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
 import { env } from '../env.js'
@@ -27,39 +31,12 @@ const sonarrMutateLimit = rateLimit({
   intervalMs: env.arrMutateRateIntervalMs,
 })
 
-type SonarrGrabEvent = Parameters<typeof appendGrabEvent>[0]
-type RootFolderSpaceSnapshot = { path: string; freeSpace: number }
+// In-flight disk-space reservations against root-folder free space.
+// Mechanism + rationale live in services/arrGrab.ts; this instance is
+// Sonarr's own ledger (Radarr keeps a separate one).
+const sonarrReservations = createReservationLedger()
 
-const pendingRootFolderReservations = new Map<string, number>()
-
-function availableRootFolderBytes(folder: RootFolderSpaceSnapshot): number {
-  return folder.freeSpace - (pendingRootFolderReservations.get(folder.path) ?? 0)
-}
-
-function pendingRootFolderBytes(folder: RootFolderSpaceSnapshot): number {
-  return pendingRootFolderReservations.get(folder.path) ?? 0
-}
-
-function reserveRootFolderBytes(folder: RootFolderSpaceSnapshot, bytes: number): boolean {
-  if (!Number.isFinite(bytes) || bytes <= 0) return false
-  const reserved = pendingRootFolderReservations.get(folder.path) ?? 0
-  if (folder.freeSpace - reserved - bytes < env.minFreeBytes) return false
-  pendingRootFolderReservations.set(folder.path, reserved + bytes)
-  return true
-}
-
-function releaseRootFolderReservation(folder: RootFolderSpaceSnapshot, bytes: number): void {
-  const reserved = pendingRootFolderReservations.get(folder.path) ?? 0
-  const next = Math.max(0, reserved - bytes)
-  if (next === 0) pendingRootFolderReservations.delete(folder.path)
-  else pendingRootFolderReservations.set(folder.path, next)
-}
-
-async function recordSonarrGrabEvent(event: SonarrGrabEvent): Promise<void> {
-  await appendGrabEvent(event).catch((err) => {
-    console.error('[sonarr] grab log write failed:', err)
-  })
-}
+const recordSonarrGrabEvent = createGrabEventRecorder('sonarr')
 
 async function loadSonarrRootFolders(): Promise<
   | { ok: true; folders: Awaited<ReturnType<typeof sonarrRootFolders>> }
@@ -137,7 +114,7 @@ async function grabTvUnderCap(
   // `sub` rides on `base` so every {...base} event below is attributed
   // to the user who triggered the add (enables /by-item per-user scoping
   // in grabs.ts without threading the field through each call site).
-  const base = { app: 'sonarr' as const, itemId: seriesId, title, capGb: env.maxTvGbPerEpisode, sub }
+  const base = { itemId: seriesId, title, capGb: env.maxTvGbPerEpisode, sub }
   await recordSonarrGrabEvent({ ...base, type: 'grab_started' })
 
   // Brief delay so Sonarr finishes wiring the new series record.
@@ -275,27 +252,27 @@ async function grabTvUnderCap(
     coveredEpisodes.set(seasonNumber, covered)
   }
   const plannedBytes = finalPicks.reduce((sum, pick) => sum + pick.size, 0)
-  if (rootFolder && availableRootFolderBytes(rootFolder) - plannedBytes < env.minFreeBytes) {
+  if (rootFolder && sonarrReservations.availableBytes(rootFolder) - plannedBytes < env.minFreeBytes) {
     await recordSonarrGrabEvent({
       ...base,
       type: 'planned_size_exceeds_free_space',
       scanned: all.length,
       eligible: accepted.length,
       plannedBytes,
-      freeBytes: availableRootFolderBytes(rootFolder),
+      freeBytes: sonarrReservations.availableBytes(rootFolder),
       thresholdBytes: env.minFreeBytes,
       error: `planned TV grab would leave ${rootFolder.path} below minimum free-space reserve`,
     })
     return
   }
-  if (rootFolder && !reserveRootFolderBytes(rootFolder, plannedBytes)) {
+  if (rootFolder && !sonarrReservations.reserve(rootFolder, plannedBytes)) {
     await recordSonarrGrabEvent({
       ...base,
       type: 'planned_size_exceeds_free_space',
       scanned: all.length,
       eligible: accepted.length,
       plannedBytes,
-      freeBytes: availableRootFolderBytes(rootFolder),
+      freeBytes: sonarrReservations.availableBytes(rootFolder),
       thresholdBytes: env.minFreeBytes,
       error: `planned TV grab would overcommit pending reservations for ${rootFolder.path}`,
     })
@@ -312,7 +289,7 @@ async function grabTvUnderCap(
         body: JSON.stringify({ guid: pick.guid, indexerId: pick.indexerId }),
       })
     } catch (err) {
-      if (rootFolder) releaseRootFolderReservation(rootFolder, plannedBytes - grabbedBytes)
+      if (rootFolder) sonarrReservations.release(rootFolder, plannedBytes - grabbedBytes)
       throw err
     }
     if (grabRes.ok) grabbedBytes += pick.size
@@ -335,7 +312,7 @@ async function grabTvUnderCap(
     })
   }
   if (rootFolder && grabbedBytes < plannedBytes) {
-    releaseRootFolderReservation(rootFolder, plannedBytes - grabbedBytes)
+    sonarrReservations.release(rootFolder, plannedBytes - grabbedBytes)
   }
 }
 
@@ -569,7 +546,7 @@ sonarr.post('/api/v3/series', sonarrMutateLimit, async (c) => {
     )
   }
   const folderSnapshot: RootFolderSpaceSnapshot = { path: folder.path, freeSpace: folder.freeSpace }
-  const availableBytes = availableRootFolderBytes(folderSnapshot)
+  const availableBytes = sonarrReservations.availableBytes(folderSnapshot)
   if (availableBytes < env.minFreeBytes) {
     return c.json(
       {
@@ -581,7 +558,7 @@ sonarr.post('/api/v3/series', sonarrMutateLimit, async (c) => {
       507,
     )
   }
-  const reservedBytes = pendingRootFolderBytes(folderSnapshot)
+  const reservedBytes = sonarrReservations.pendingBytes(folderSnapshot)
   if (wantedSearch && reservedBytes > 0) {
     return c.json(
       {
@@ -745,7 +722,6 @@ sonarr.post('/api/v3/series', sonarrMutateLimit, async (c) => {
         void grabTvUnderCap(itemId, monitored, itemTitle, folderSnapshot, session.sub).catch((e) => {
           console.error('[tv-cap] grab failed:', e)
           void recordSonarrGrabEvent({
-            app: 'sonarr',
             itemId,
             title: itemTitle,
             sub: session.sub,
@@ -826,7 +802,7 @@ sonarr.post('/api/v3/series/:id/seasons/:n/monitor', requireAdmin, sonarrMutateL
     )
   }
   const folderSnapshot: RootFolderSpaceSnapshot = { path: folder.path, freeSpace: folder.freeSpace }
-  const availableBytes = availableRootFolderBytes(folderSnapshot)
+  const availableBytes = sonarrReservations.availableBytes(folderSnapshot)
   if (availableBytes < env.minFreeBytes) {
     return c.json(
       {
@@ -838,7 +814,7 @@ sonarr.post('/api/v3/series/:id/seasons/:n/monitor', requireAdmin, sonarrMutateL
       507,
     )
   }
-  const reservedBytes = pendingRootFolderBytes(folderSnapshot)
+  const reservedBytes = sonarrReservations.pendingBytes(folderSnapshot)
   if (reservedBytes > 0) {
     return c.json(
       {
@@ -870,9 +846,9 @@ sonarr.post('/api/v3/series/:id/seasons/:n/monitor', requireAdmin, sonarrMutateL
   void grabTvUnderCap(id, [n], series.title, folderSnapshot, c.get('session').sub).catch((e) => {
     console.error('[tv-monitor-season] grab failed:', e)
     void recordSonarrGrabEvent({
-      app: 'sonarr',
       itemId: id,
       title: series.title,
+      sub: c.get('session').sub,
       type: 'grab_failed',
       error: e instanceof Error ? e.message : String(e),
     })

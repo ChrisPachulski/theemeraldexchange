@@ -106,6 +106,34 @@ describe('GET /by-item (any authed role)', () => {
     expect(r.status).toBe(400)
   })
 
+  it('scopes radarr events to the caller sub; legacy undefined-sub events stay visible to all', async () => {
+    // adminCookie() resolves to sub 'plex:1', userCookie() to 'plex:2'.
+    // Radarr's add pipeline now attributes every event (it previously wrote
+    // no sub at all, so the legacy allowance matched EVERY radarr event to
+    // EVERY caller). Pre-attribution rows (no sub) must remain visible so
+    // old household history isn't lost.
+    await appendGrabEvent({ app: 'radarr', itemId: 9, sub: 'plex:1', type: 'grab_started' })
+    await appendGrabEvent({ app: 'radarr', itemId: 9, sub: 'plex:1', type: 'grab_succeeded' })
+    await appendGrabEvent({ app: 'radarr', itemId: 9, sub: 'plex:2', type: 'grab_started' })
+    await appendGrabEvent({ app: 'radarr', itemId: 9, type: 'no_releases' }) // legacy, no sub
+
+    const asUser1 = await appUnderTest().request('/by-item?app=radarr&itemId=9', {
+      headers: { Cookie: await adminCookie() },
+    })
+    const user1Events = (await asUser1.json()) as Array<{ sub?: string; type: string }>
+    expect(user1Events).toHaveLength(3)
+    expect(user1Events.every((e) => e.sub === 'plex:1' || e.sub === undefined)).toBe(true)
+
+    const asUser2 = await appUnderTest().request('/by-item?app=radarr&itemId=9', {
+      headers: { Cookie: await userCookie() },
+    })
+    const user2Events = (await asUser2.json()) as Array<{ sub?: string; type: string }>
+    expect(user2Events).toHaveLength(2)
+    expect(user2Events.every((e) => e.sub === 'plex:2' || e.sub === undefined)).toBe(true)
+    // User 2 never sees user 1's events.
+    expect(user2Events.some((e) => e.sub === 'plex:1')).toBe(false)
+  })
+
   it('filters by app + itemId', async () => {
     await appendGrabEvent({ app: 'sonarr', itemId: 1, type: 'grab_started' })
     await appendGrabEvent({ app: 'sonarr', itemId: 1, type: 'grab_succeeded' })
