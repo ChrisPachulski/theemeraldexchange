@@ -22,7 +22,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, mpsc, oneshot};
 
-use crate::args::{HwEncoder, ffmpeg_args_hw};
+use crate::args::{ArgSpec, HwEncoder, ffmpeg_args_for};
 use crate::concurrency::{Busy, Caps, Limiter, Permit};
 use crate::plan::TranscodePlan;
 
@@ -34,6 +34,10 @@ const SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 const KILL_GRACE: Duration = Duration::from_secs(5);
 /// Supervisor restart cap before a session is declared failed.
 const MAX_RESTARTS: u32 = 3;
+/// A child that ran at least this long before dying is considered to have been
+/// HEALTHY: its crash is treated as a fresh incident, not part of a crash-loop,
+/// so the restart budget resets (see [`effective_restart_count`]).
+const HEALTHY_RUN_RESET: Duration = Duration::from_secs(60);
 /// Bound on waiting for a supervisor ack: [`KILL_GRACE`] for the TERM→KILL
 /// escalation plus slack for the respawn itself. A closed channel (the
 /// supervisor exited because the session was torn down) resolves immediately.
@@ -134,6 +138,11 @@ struct Session {
     started_at: u64,
     last_seen: u64,
     start_secs: u64,
+    /// First segment number (`-start_number`) of the CURRENT ffmpeg child.
+    /// 0 for the initial spawn; each respawn advances it past the furthest
+    /// segment already written so numbering stays monotonic for the session's
+    /// whole lifetime (see [`SessionManager::respawn`]).
+    start_number: u64,
     restarts: u32,
     /// Command channel to the supervisor (kill/respawn the real ffmpeg).
     ctl: mpsc::UnboundedSender<SessionCmd>,
@@ -280,6 +289,65 @@ fn is_vaapi_hw_decodable(codec: &str) -> bool {
     )
 }
 
+/// Why a supervisor respawn is happening — drives the resume position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RespawnMode {
+    /// A user seek: the session's `start_secs` was just set to the seek target
+    /// and the respawn must honor it exactly.
+    Seek,
+    /// Crash recovery: the child died mid-encode. Resume at the approximate
+    /// FURTHEST-ENCODED position, not the stale grant/seek offset — otherwise
+    /// every crash silently rewinds playback to where the session started.
+    Crash,
+}
+
+/// Parse a segment file name (`seg_%05d.ts`) into its index.
+fn segment_index(name: &str) -> Option<u64> {
+    name.strip_prefix("seg_")?.strip_suffix(".ts")?.parse().ok()
+}
+
+/// The highest segment index present in a session dir, or `None` when the dir
+/// is unreadable or holds no segments. The HLS sliding window
+/// (`delete_segments`) prunes from the OLDEST end, so the max index present is
+/// the furthest segment the previous child wrote — even after pruning.
+async fn max_segment_index(dir: &PathBuf) -> Option<u64> {
+    let mut rd = tokio::fs::read_dir(dir).await.ok()?;
+    let mut max: Option<u64> = None;
+    while let Ok(Some(entry)) = rd.next_entry().await {
+        if let Some(idx) = entry.file_name().to_str().and_then(segment_index) {
+            max = Some(max.map_or(idx, |m| m.max(idx)));
+        }
+    }
+    max
+}
+
+/// Restart budget carried into the next crash, given how long the child that
+/// just died had been running.
+///
+/// `MAX_RESTARTS` was session-LIFETIME: three transient hiccups spread over a
+/// two-hour movie (each followed by a long healthy run) permanently tore the
+/// session down on the third, exactly like a tight crash-loop. A child that
+/// ran for [`HEALTHY_RUN_RESET`] or longer proves the respawn recipe works, so
+/// its crash starts a fresh budget; only consecutive SHORT-lived children
+/// (the real crash-loop signature) accumulate toward the cap. Pure so the
+/// decision is unit-testable without 60s waits.
+///
+/// A failed RESPAWN (no child ever ran) must pass `ran_for = 0` — counting
+/// time since the last successful spawn would reset the budget on every retry
+/// and livelock a permanently-broken respawn.
+fn effective_restart_count(prev: u32, ran_for: Duration) -> u32 {
+    if ran_for >= HEALTHY_RUN_RESET { 0 } else { prev }
+}
+
+/// Approximate furthest-encoded position for a crash respawn: the offset the
+/// crashed child was spawned at (`spawn_secs`, its baked `-ss`) plus the
+/// segments it wrote (`next_number - prev_number`) times the segment length.
+/// Pure so the math is unit-testable without a real crash.
+fn crash_resume_secs(spawn_secs: u64, prev_number: u64, next_number: u64) -> u64 {
+    spawn_secs
+        + next_number.saturating_sub(prev_number) * u64::from(crate::args::HLS_SEGMENT_SECS)
+}
+
 /// Shared, cheap-to-clone manager (Arc'd map + config).
 #[derive(Clone)]
 pub struct SessionManager {
@@ -399,11 +467,41 @@ impl SessionManager {
         &self.limiter
     }
 
+    /// Does this session run the FULL-hardware VAAPI pipeline (GPU decode →
+    /// VPP → encode, no CPU round-trip)? Mirrors `spawn_child`'s `hw_decode`
+    /// gate AND `ffmpeg_args_for`'s burn-in restriction, so the concurrency
+    /// accounting and the actual ffmpeg invocation can never drift.
+    ///
+    /// Everything else — including a VAAPI-ENCODE session whose decode/
+    /// tone-map/scale run in software (full-HW probe failed, or the source
+    /// codec isn't iGPU-decodable, or a subtitle burn forces CPU frames) —
+    /// loads the CPU materially and must be charged against the CPU cap. A 4K
+    /// HDR software decode+tonemap saturates cores even when the final encode
+    /// is on the GPU; charging by encoder family alone let several of those
+    /// stack up and starve the box.
+    fn uses_full_hw_pipeline(&self, plan: &TranscodePlan, source_codec: Option<&str>) -> bool {
+        use crate::plan::VideoOp;
+        self.vaapi_hw_decode
+            && matches!(self.encoder, HwEncoder::Vaapi)
+            && source_codec.is_some_and(is_vaapi_hw_decodable)
+            && matches!(
+                plan,
+                TranscodePlan::Transcode {
+                    video: VideoOp::EncodeH264 {
+                        burn_subtitle_index: None,
+                        ..
+                    },
+                    ..
+                }
+            )
+    }
+
     /// Spawn one ffmpeg child for a session directory. Shared by `start` and the
     /// supervisor respawn path so the argument vector is computed identically.
     /// The child's stderr is drained into `tracing::warn` (tagged by session id)
     /// on a detached task so a full pipe buffer never stalls ffmpeg — mirroring
     /// `proc.stderr.on('data', …)` in iptvRemux.ts.
+    #[allow(clippy::too_many_arguments)]
     fn spawn_child(
         &self,
         session_id: &str,
@@ -412,25 +510,28 @@ impl SessionManager {
         dir: &PathBuf,
         start_secs: u64,
         source_codec: Option<&str>,
+        media_kind: &str,
+        start_number: u64,
     ) -> Result<Child, StartError> {
         let dir_str = dir.to_string_lossy();
         // Full-hardware VAAPI decode is gated on: the resolved encoder being
         // VAAPI, the boot probe having confirmed the VPP+encode chain
-        // (`vaapi_hw_decode`), and the SOURCE codec being one the iGPU can decode
-        // — `-hwaccel_output_format vaapi` hard-fails with no software fallback on
-        // an undecodable codec (e.g. MPEG-4/DivX). `ffmpeg_args_hw` further
-        // restricts it to a video re-encode without subtitle burn-in.
-        let hw_decode = self.vaapi_hw_decode
-            && matches!(self.encoder, HwEncoder::Vaapi)
-            && source_codec.is_some_and(is_vaapi_hw_decodable);
-        let args = ffmpeg_args_hw(
+        // (`vaapi_hw_decode`), the SOURCE codec being one the iGPU can decode
+        // — `-hwaccel_output_format vaapi` hard-fails with no software fallback
+        // on an undecodable codec (e.g. MPEG-4/DivX) — and the plan being a
+        // video re-encode without subtitle burn-in. The shared helper is also
+        // what the CPU-cap accounting keys on, so they cannot drift.
+        let hw_decode = self.uses_full_hw_pipeline(plan, source_codec);
+        let args = ffmpeg_args_for(&ArgSpec {
             plan,
-            opts_input,
-            &dir_str,
+            input: opts_input,
+            session_dir: &dir_str,
             start_secs,
-            self.encoder,
+            encoder: self.encoder,
             hw_decode,
-        );
+            media_kind,
+            start_number,
+        });
         let mut child = Command::new(&self.ffmpeg_bin)
             .args(&args)
             .current_dir(dir)
@@ -470,18 +571,26 @@ impl SessionManager {
         if !self.media_roots.is_empty() && !path_within_roots(&opts.input_path, &self.media_roots) {
             return Err(StartError::Forbidden(opts.input_path.clone()));
         }
-        // Charge the stricter CPU cap ONLY when this session actually
-        // re-encodes video on the CPU encoder. A copy-remux (most local titles —
-        // they transcode only because the container/audio isn't browser-safe)
-        // uses ~no CPU, so it should count against the global cap alone.
-        // Without this, a box with no HW encoder resolves EVERY session to the
-        // CPU encoder, so the CPU cap of 1 lets only a single stream play at a
-        // time — opening a second title (or reopening within the 30s idle-reap
-        // window) returns 503 transcoder_unavailable.
-        let cpu_reencode = matches!(self.encoder, HwEncoder::Cpu) && opts.plan.reencodes_video();
+        // Charge the stricter CPU cap for every session that does REAL work on
+        // the CPU. Two rules, both load-based (not encoder-family-based):
+        //
+        // * A copy-remux (most local titles — they transcode only because the
+        //   container/audio isn't browser-safe) uses ~no CPU regardless of
+        //   encoder, so it counts against the global cap alone. Without this,
+        //   a box with no HW encoder throttled the household to ONE stream and
+        //   a second title 503'd.
+        // * A video re-encode charges the CPU cap UNLESS it runs the full-HW
+        //   VAAPI pipeline (GPU decode + VPP + encode). Keying on the encoder
+        //   family alone under-counted: a VAAPI-encode session whose
+        //   decode/tone-map/scale run in software (probe failed, source codec
+        //   not iGPU-decodable, subtitle burn) still hammers the CPU — a 4K
+        //   HDR software decode+tonemap saturates cores even though `-c:v` is
+        //   h264_vaapi.
+        let cpu_charge = opts.plan.reencodes_video()
+            && !self.uses_full_hw_pipeline(&opts.plan, opts.source_codec.as_deref());
         let permit = self
             .limiter
-            .try_acquire(cpu_reencode)
+            .try_acquire(cpu_charge)
             .map_err(StartError::Busy)?;
 
         let now = now_secs();
@@ -513,6 +622,8 @@ impl SessionManager {
             &dir,
             opts.start_secs,
             opts.source_codec.as_deref(),
+            &opts.media_kind,
+            0,
         )?;
 
         let (ctl_tx, ctl_rx) = mpsc::unbounded_channel();
@@ -524,6 +635,7 @@ impl SessionManager {
             started_at: now,
             last_seen: now,
             start_secs: opts.start_secs,
+            start_number: 0,
             restarts: 0,
             ctl: ctl_tx,
             _permit: permit,
@@ -688,18 +800,32 @@ impl SessionManager {
         })
     }
 
-    /// Kill the current ffmpeg (if any) and respawn a fresh one for `id`,
-    /// re-reading the session's CURRENT params (so a seek's updated
-    /// `start_secs` takes effect). Used by the supervisor for both crash
-    /// recovery and seek restarts; it is the ONLY respawn path, keeping the
-    /// supervisor the sole Child owner.
+    /// Kill the current ffmpeg (if any) and respawn a fresh one for `id`.
+    /// Used by the supervisor for both crash recovery and seek restarts; it is
+    /// the ONLY respawn path, keeping the supervisor the sole Child owner.
+    ///
+    /// The resume position depends on `mode`:
+    /// * [`RespawnMode::Seek`] — the session's `start_secs` was just set to
+    ///   the seek target by `seek()`; honor it exactly.
+    /// * [`RespawnMode::Crash`] — resume at the approximate FURTHEST-ENCODED
+    ///   position (`spawn offset + segments_written × segment length`, derived
+    ///   from the highest segment index in the session dir). Respawning at the
+    ///   stale grant/seek offset silently rewound playback to the session's
+    ///   start on every crash.
+    ///
+    /// Either way segment numbering continues from the furthest segment
+    /// (`-start_number`), so numbering is MONOTONIC across respawns and a
+    /// stale cached playlist can never alias an old segment name onto new
+    /// media. The new spawn params are persisted to the session BEFORE the
+    /// spawn so a further crash compounds from them and `SessionInfo` reports
+    /// the real position.
     ///
     /// The session map is re-checked immediately before the dir is cleared AND
     /// again after the spawn, so a `stop()` racing this never has its removed
     /// dir recreated behind it (a leak on the bounded /scratch tmpfs) and never
     /// leaves an unsupervised encoder.
-    async fn respawn(&self, id: &str) -> Respawn {
-        let (input, plan, dir, start_secs, source_codec) = {
+    async fn respawn(&self, id: &str, mode: RespawnMode) -> Respawn {
+        let (input, plan, dir, start_secs, source_codec, media_kind, prev_number) = {
             let guard = self.sessions.lock().await;
             let Some(s) = guard.get(id) else {
                 return Respawn::Gone;
@@ -710,18 +836,46 @@ impl SessionManager {
                 s.dir.clone(),
                 s.start_secs,
                 s.source_codec.clone(),
+                s.info_kind.clone(),
+                s.start_number,
             )
         };
-        // Clear the dir so the fresh ffmpeg restarts segment numbering at
-        // seg_00000 against a clean playlist. Without this, `append_list`
-        // re-writes index.m3u8 referencing a brand-new seg_00000 while the
-        // player may still hold the old one — stale media on every restart.
+        // Derive the furthest-written segment BEFORE clearing the dir.
+        let next_number = max_segment_index(&dir)
+            .await
+            .map_or(prev_number, |m| m.saturating_add(1).max(prev_number));
+        let spawn_secs = match mode {
+            RespawnMode::Seek => start_secs,
+            RespawnMode::Crash => crash_resume_secs(start_secs, prev_number, next_number),
+        };
+        {
+            let mut guard = self.sessions.lock().await;
+            let Some(s) = guard.get_mut(id) else {
+                return Respawn::Gone;
+            };
+            s.start_secs = spawn_secs;
+            s.start_number = next_number;
+        }
+        // Clear the dir so the fresh ffmpeg writes against a clean playlist.
+        // Without this, `append_list` re-writes index.m3u8 referencing new
+        // segments while the player may still hold the old list — stale media
+        // on every restart. (Numbering continuity is preserved by
+        // `-start_number` above, not by keeping old files around.)
         remove_dir_logged(&dir, id, "pre-respawn clear").await;
         if let Err(e) = tokio::fs::create_dir_all(&dir).await {
             tracing::warn!(session = %id, error = %e, "failed to recreate session dir for respawn");
             return Respawn::Failed;
         }
-        match self.spawn_child(id, &input, &plan, &dir, start_secs, source_codec.as_deref()) {
+        match self.spawn_child(
+            id,
+            &input,
+            &plan,
+            &dir,
+            spawn_secs,
+            source_codec.as_deref(),
+            &media_kind,
+            next_number,
+        ) {
             Ok(mut child) => {
                 // A stop() may have removed the session while we spawned; kill
                 // the fresh child and clean the recreated dir rather than
@@ -754,6 +908,13 @@ impl SessionManager {
         let this = self.clone();
         tokio::spawn(async move {
             let mut slot = ChildSlot::Running(child);
+            // When the CURRENT child was spawned, and how long the child that
+            // most recently CRASHED had run. A long-enough run resets the
+            // restart budget (see effective_restart_count); failed respawns
+            // record ZERO so a permanently-broken respawn can never reset its
+            // own budget into a retry livelock.
+            let mut spawned_at = std::time::Instant::now();
+            let mut last_run = Duration::ZERO;
             loop {
                 slot = match slot {
                     ChildSlot::Running(mut child) => {
@@ -774,19 +935,22 @@ impl SessionManager {
                                 } else {
                                     let code = status.as_ref().ok().and_then(|st| st.code());
                                     tracing::warn!(session = %id, ?code, "ffmpeg exited unexpectedly");
+                                    last_run = spawned_at.elapsed();
                                     ChildSlot::Crashed
                                 }
                             }
                             cmd = ctl.recv() => match cmd {
                                 Some(SessionCmd::Restart { ack }) => {
                                     kill_child(&mut child, &id).await;
-                                    match this.respawn(&id).await {
+                                    match this.respawn(&id, RespawnMode::Seek).await {
                                         Respawn::Ok(new) => {
                                             let _ = ack.send(true);
+                                            spawned_at = std::time::Instant::now();
                                             ChildSlot::Running(new)
                                         }
                                         Respawn::Failed => {
                                             let _ = ack.send(false);
+                                            last_run = Duration::ZERO;
                                             ChildSlot::Crashed
                                         }
                                         Respawn::Gone => {
@@ -815,13 +979,18 @@ impl SessionManager {
                     // change anything: a seek revives the session, a stop (or
                     // the session being dropped) ends it.
                     ChildSlot::Completed => match ctl.recv().await {
-                        Some(SessionCmd::Restart { ack }) => match this.respawn(&id).await {
+                        Some(SessionCmd::Restart { ack }) => match this
+                            .respawn(&id, RespawnMode::Seek)
+                            .await
+                        {
                             Respawn::Ok(new) => {
                                 let _ = ack.send(true);
+                                spawned_at = std::time::Instant::now();
                                 ChildSlot::Running(new)
                             }
                             Respawn::Failed => {
                                 let _ = ack.send(false);
+                                last_run = Duration::ZERO;
                                 ChildSlot::Crashed
                             }
                             Respawn::Gone => {
@@ -843,6 +1012,18 @@ impl SessionManager {
                         let attempt = {
                             let mut guard = this.sessions.lock().await;
                             let Some(s) = guard.get_mut(&id) else { return };
+                            // A sustained healthy run before this crash resets
+                            // the budget: only consecutive short-lived children
+                            // (a real crash-loop) accumulate toward the cap.
+                            let reset = effective_restart_count(s.restarts, last_run);
+                            if reset != s.restarts {
+                                tracing::info!(
+                                    session = %id,
+                                    ran_secs = last_run.as_secs(),
+                                    "child ran healthily before crashing; resetting restart budget"
+                                );
+                                s.restarts = reset;
+                            }
                             if s.restarts >= MAX_RESTARTS {
                                 tracing::warn!(
                                     session = %id,
@@ -857,6 +1038,9 @@ impl SessionManager {
                             s.restarts += 1;
                             s.restarts
                         };
+                        // Consume the run measurement: a failed RESPAWN below
+                        // re-enters this branch and must not reuse it.
+                        last_run = Duration::ZERO;
                         // Exponential backoff: 100ms * 2^(attempt-1), capped at
                         // ~2s — but stay responsive to commands while waiting.
                         let backoff = Duration::from_millis(
@@ -877,12 +1061,23 @@ impl SessionManager {
                                 None => return,
                             }
                         }
-                        let outcome = this.respawn(&id).await;
+                        // A seek that landed during the backoff already updated
+                        // start_secs to its target — honor it. A plain crash
+                        // recovery resumes at the furthest-encoded position.
+                        let mode = if pending_ack.is_some() {
+                            RespawnMode::Seek
+                        } else {
+                            RespawnMode::Crash
+                        };
+                        let outcome = this.respawn(&id, mode).await;
                         if let Some(ack) = pending_ack {
                             let _ = ack.send(matches!(outcome, Respawn::Ok(_)));
                         }
                         match outcome {
-                            Respawn::Ok(new) => ChildSlot::Running(new),
+                            Respawn::Ok(new) => {
+                                spawned_at = std::time::Instant::now();
+                                ChildSlot::Running(new)
+                            }
                             Respawn::Failed => ChildSlot::Crashed,
                             Respawn::Gone => return,
                         }
@@ -944,6 +1139,7 @@ mod tests {
              d=$(dirname \"$last\")\n\
              mkdir -p \"$d\"\n\
              printf '%s' \"$$\" > \"$d/pid.txt\"\n\
+             printf '%s\\n' \"$@\" > \"$d/args.txt\"\n\
              printf '#EXTM3U\\n#EXT-X-VERSION:3\\n' > \"$last\"\n\
              printf 'seg' > \"$d/seg_00000.ts\"\n\
              if [ \"{mode}\" = crash ]; then exit 1; fi\n\
@@ -1261,6 +1457,176 @@ mod tests {
         assert!(mgr.is_empty().await);
     }
 
+    #[test]
+    fn segment_index_parses_only_segment_names() {
+        assert_eq!(segment_index("seg_00000.ts"), Some(0));
+        assert_eq!(segment_index("seg_00042.ts"), Some(42));
+        assert_eq!(segment_index("seg_123456.ts"), Some(123456));
+        assert_eq!(segment_index("index.m3u8"), None);
+        assert_eq!(segment_index("args.txt"), None);
+        assert_eq!(segment_index("seg_.ts"), None);
+        assert_eq!(segment_index("seg_abc.ts"), None);
+    }
+
+    #[test]
+    fn restart_budget_resets_after_sustained_healthy_run() {
+        // Regression: MAX_RESTARTS was session-lifetime — three transient
+        // hiccups spread across a two-hour movie tore the session down exactly
+        // like a tight crash-loop. A child that ran >= HEALTHY_RUN_RESET
+        // resets the budget; short-lived children keep accumulating.
+        let healthy = HEALTHY_RUN_RESET;
+        let almost = HEALTHY_RUN_RESET - Duration::from_secs(1);
+        // At the cap, but the dead child ran healthily → budget resets to 0.
+        assert_eq!(effective_restart_count(MAX_RESTARTS, healthy), 0);
+        assert_eq!(
+            effective_restart_count(MAX_RESTARTS, healthy + Duration::from_secs(3600)),
+            0
+        );
+        // A short-lived child keeps the accumulated count (crash-loop).
+        assert_eq!(effective_restart_count(2, almost), 2);
+        assert_eq!(effective_restart_count(MAX_RESTARTS, Duration::ZERO), MAX_RESTARTS);
+        // A failed respawn reports ZERO run time and must never reset —
+        // otherwise a permanently-broken respawn retries forever.
+        assert_eq!(effective_restart_count(1, Duration::ZERO), 1);
+        // Fresh sessions are unaffected.
+        assert_eq!(effective_restart_count(0, almost), 0);
+    }
+
+    #[test]
+    fn crash_resume_math() {
+        // 2 segments (idx 0,1) written from a fresh start → resume at 2×4s.
+        assert_eq!(crash_resume_secs(0, 0, 2), 8);
+        // Compounds from the crashed child's own spawn offset + numbering.
+        assert_eq!(crash_resume_secs(100, 5, 10), 120);
+        // No segments written → stay at the spawn offset.
+        assert_eq!(crash_resume_secs(50, 3, 3), 50);
+        // Defensive: never rewind even on an impossible numbering regression.
+        assert_eq!(crash_resume_secs(50, 3, 2), 50);
+    }
+
+    #[tokio::test]
+    async fn max_segment_index_finds_furthest_segment() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        assert_eq!(max_segment_index(&dir).await, None, "no segments yet");
+        for name in ["seg_00003.ts", "seg_00007.ts", "index.m3u8", "args.txt"] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        assert_eq!(max_segment_index(&dir).await, Some(7));
+        // Unreadable/missing dir → None, not a panic.
+        assert_eq!(
+            max_segment_index(&tmp.path().join("nope")).await,
+            None
+        );
+    }
+
+    /// A stub that CRASHES on its first invocation after writing two segments
+    /// (simulating an encode that died ~8s in), then behaves like a healthy
+    /// long-running ffmpeg on every later invocation, recording its argv.
+    fn write_crash_once_stub(dir: &std::path::Path) -> PathBuf {
+        let path = dir.join("ffmpeg_crash_once.sh");
+        let flag = dir.join("crashed.flag");
+        let mut f = std::fs::File::create(&path).unwrap();
+        let script = format!(
+            "#!/bin/sh\n\
+             for a in \"$@\"; do last=\"$a\"; done\n\
+             d=$(dirname \"$last\")\n\
+             mkdir -p \"$d\"\n\
+             if [ ! -f \"{flag}\" ]; then\n\
+               : > \"{flag}\"\n\
+               printf 'seg' > \"$d/seg_00000.ts\"\n\
+               printf 'seg' > \"$d/seg_00001.ts\"\n\
+               exit 1\n\
+             fi\n\
+             printf '%s\\n' \"$@\" > \"$d/args.txt\"\n\
+             printf '#EXTM3U\\n' > \"$last\"\n\
+             sleep 30\n",
+            flag = flag.display()
+        );
+        f.write_all(script.as_bytes()).unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+        path
+    }
+
+    /// Poll the respawned child's recorded argv until `pred` matches.
+    async fn wait_for_args<F>(path: &std::path::Path, mut pred: F) -> Vec<String>
+    where
+        F: FnMut(&[String]) -> bool,
+    {
+        for _ in 0..200 {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                let args: Vec<String> = text.lines().map(str::to_string).collect();
+                if pred(&args) {
+                    return args;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("expected argv never appeared at {}", path.display());
+    }
+
+    #[tokio::test]
+    async fn crash_respawn_resumes_at_furthest_position_with_monotonic_numbering() {
+        // Regression: a crash respawn re-used the stale grant/seek offset and
+        // reset segment numbering to 0 — playback silently rewound to the
+        // session start and new seg_00000.ts aliased the old one. The
+        // supervisor must resume at ~the furthest-encoded position
+        // (spawn offset + segments_written × 4s) and continue numbering.
+        let tmp = tempfile::tempdir().unwrap();
+        let stub = write_crash_once_stub(tmp.path());
+        let mgr = manager_with_stub(&tmp, stub);
+        let id = mgr.start(opts("/lib/a.mkv")).await.unwrap();
+        let dir = mgr.manifest_path(&id).await.unwrap();
+        let dir = dir.parent().unwrap().to_path_buf();
+
+        // The first child wrote seg_00000+seg_00001 then crashed; the healthy
+        // respawn records its argv.
+        let args = wait_for_args(&dir.join("args.txt"), |_| true).await;
+        let ss = args
+            .iter()
+            .position(|s| s == "-ss")
+            .expect("crash respawn must bake a resume -ss");
+        assert_eq!(args[ss + 1], "8", "2 segments × 4s past offset 0: {args:?}");
+        let sn = args
+            .iter()
+            .position(|s| s == "-start_number")
+            .expect("crash respawn must continue segment numbering");
+        assert_eq!(args[sn + 1], "2", "numbering continues after seg_00001");
+
+        // The session reports the resumed position, not the stale offset.
+        assert_eq!(mgr.list().await[0].start_secs, 8);
+        mgr.stop(&id).await;
+    }
+
+    #[tokio::test]
+    async fn seek_respawn_honors_target_but_keeps_numbering_monotonic() {
+        // A seek must land exactly on its target (NOT the crash-resume
+        // estimate), while segment numbering still advances past everything
+        // already written so stale playlist entries can't alias new media.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
+        let id = mgr.start(opts("/lib/a.mkv")).await.unwrap();
+        let manifest = mgr.manifest_path(&id).await.unwrap();
+        wait_for(|| manifest.exists()).await;
+        let dir = manifest.parent().unwrap().to_path_buf();
+
+        assert!(mgr.seek(&id, 120).await, "seek must succeed");
+        let args = wait_for_args(&dir.join("args.txt"), |a| {
+            a.iter().any(|s| s == "120")
+        })
+        .await;
+        let ss = args.iter().position(|s| s == "-ss").expect("-ss");
+        assert_eq!(args[ss + 1], "120", "seek target honored exactly");
+        let sn = args
+            .iter()
+            .position(|s| s == "-start_number")
+            .expect("seek respawn must keep numbering monotonic");
+        assert_eq!(args[sn + 1], "1", "first child wrote seg_00000: {args:?}");
+        mgr.stop(&id).await;
+    }
+
     #[tokio::test]
     async fn idle_sweep_reaps_stale_session() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1410,6 +1776,110 @@ mod tests {
             matches!(err, StartError::Busy(_)),
             "second CPU re-encode past the cpu cap must be Busy"
         );
+    }
+
+    /// Manager with a chosen encoder + caps {total 4, cpu 1} for the CPU-cap
+    /// accounting matrix.
+    fn cap_matrix_manager(
+        tmp: &tempfile::TempDir,
+        encoder: HwEncoder,
+        vaapi_hw_decode: bool,
+    ) -> SessionManager {
+        SessionManager::new(
+            Limiter::new(Caps {
+                max_total: 4,
+                max_cpu: 1,
+            }),
+            write_stub(tmp.path(), "run").to_string_lossy().into_owned(),
+            tmp.path().join("s"),
+            encoder,
+        )
+        .with_vaapi_hw_decode(vaapi_hw_decode)
+    }
+
+    #[tokio::test]
+    async fn full_hw_vaapi_reencode_does_not_charge_cpu_cap() {
+        // VAAPI with the full-HW pipeline confirmed + an iGPU-decodable source:
+        // decode, VPP and encode all run on the GPU, so two concurrent
+        // re-encodes must fit under max_cpu=1.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = cap_matrix_manager(&tmp, HwEncoder::Vaapi, true);
+        let _a = mgr.start(encode_opts_id("/lib/a.mkv", 7)).await.unwrap();
+        let _b = mgr
+            .start(encode_opts_id("/lib/b.mkv", 8))
+            .await
+            .expect("full-HW re-encodes must not charge the cpu cap");
+        assert_eq!(mgr.limiter().active(), (2, 0));
+    }
+
+    #[tokio::test]
+    async fn vaapi_encode_with_software_decode_charges_cpu_cap() {
+        // Same VAAPI encoder, but the SOURCE codec (mpeg4) has no iGPU decode:
+        // the session software-decodes (and would software-tonemap/scale), so
+        // it must be charged as CPU work even though -c:v is h264_vaapi.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = cap_matrix_manager(&tmp, HwEncoder::Vaapi, true);
+        let sw_opts = |path: &str, id: i64| StartOpts {
+            source_codec: Some("mpeg4".into()),
+            ..encode_opts_id(path, id)
+        };
+        let _a = mgr.start(sw_opts("/lib/a.avi", 7)).await.unwrap();
+        assert_eq!(mgr.limiter().active(), (1, 1), "sw-decode charges cpu");
+        let err = mgr.start(sw_opts("/lib/b.avi", 8)).await.unwrap_err();
+        assert!(
+            matches!(err, StartError::Busy(Busy { cpu_cap: true })),
+            "second software-decode re-encode must hit the cpu cap, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn vaapi_without_full_hw_probe_charges_cpu_cap() {
+        // Full-HW probe failed (vaapi_hw_decode=false): every VAAPI re-encode
+        // runs the software-decode path and must charge the CPU cap.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = cap_matrix_manager(&tmp, HwEncoder::Vaapi, false);
+        let _a = mgr.start(encode_opts_id("/lib/a.mkv", 7)).await.unwrap();
+        assert_eq!(mgr.limiter().active(), (1, 1));
+        let err = mgr
+            .start(encode_opts_id("/lib/b.mkv", 8))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, StartError::Busy(Busy { cpu_cap: true })));
+    }
+
+    #[tokio::test]
+    async fn non_vaapi_hw_encoder_reencode_charges_cpu_cap() {
+        // VideoToolbox/NVENC/QSV all software-decode and CPU-filter in this
+        // pipeline; only the final encode is offloaded. They charge the cap.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = cap_matrix_manager(&tmp, HwEncoder::VideoToolbox, false);
+        let _a = mgr.start(encode_opts_id("/lib/a.mkv", 7)).await.unwrap();
+        let err = mgr
+            .start(encode_opts_id("/lib/b.mkv", 8))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, StartError::Busy(Busy { cpu_cap: true })));
+    }
+
+    #[tokio::test]
+    async fn remux_never_charges_cpu_cap_regardless_of_pipeline() {
+        // A copy-remux does no encode work anywhere; it must stay off the CPU
+        // cap on every encoder/pipeline combination.
+        for (encoder, full_hw) in [
+            (HwEncoder::Cpu, false),
+            (HwEncoder::Vaapi, true),
+            (HwEncoder::Vaapi, false),
+            (HwEncoder::VideoToolbox, false),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let mgr = cap_matrix_manager(&tmp, encoder, full_hw);
+            let _a = mgr.start(remux_opts_id("/lib/a.mkv", 7)).await.unwrap();
+            let _b = mgr
+                .start(remux_opts_id("/lib/b.mkv", 8))
+                .await
+                .unwrap_or_else(|e| panic!("remux must not charge cpu ({encoder:?}): {e:?}"));
+            assert_eq!(mgr.limiter().active(), (2, 0), "{encoder:?}");
+        }
     }
 
     #[tokio::test]
