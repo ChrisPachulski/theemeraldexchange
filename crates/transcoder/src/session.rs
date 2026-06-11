@@ -16,10 +16,11 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::args::{HwEncoder, ffmpeg_args_hw};
 use crate::concurrency::{Busy, Caps, Limiter, Permit};
@@ -33,6 +34,17 @@ const SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 const KILL_GRACE: Duration = Duration::from_secs(5);
 /// Supervisor restart cap before a session is declared failed.
 const MAX_RESTARTS: u32 = 3;
+/// Bound on waiting for a supervisor ack: [`KILL_GRACE`] for the TERM→KILL
+/// escalation plus slack for the respawn itself. A closed channel (the
+/// supervisor exited because the session was torn down) resolves immediately.
+const CTL_ACK_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Process-wide monotonic sequence appended to session ids. The wall-clock
+/// component alone is 1s-granular, so two grants for the same title+user
+/// within a second (a double-click) would otherwise mint the SAME id — the
+/// second map insert would displace the first Session and orphan its running
+/// ffmpeg. The sequence makes every id unique for the process lifetime.
+static START_SEQ: AtomicU64 = AtomicU64::new(0);
 
 pub type SessionId = String;
 
@@ -84,6 +96,11 @@ pub struct StartOpts {
     /// vaapi` has NO software fallback, so we only enable it for codecs the iGPU
     /// can decode (see [`is_vaapi_hw_decodable`]). `None` → software decode.
     pub source_codec: Option<String>,
+    /// The VERIFIED principal's sub from the grant request, binding the session
+    /// to its creator so stop/seek/heartbeat can enforce owner-or-admin.
+    /// `None` only in the Off/log postures where no verified identity exists
+    /// (routes skip enforcement accordingly).
+    pub owner: Option<String>,
 }
 
 /// A point-in-time view of a session for the admin inventory (§4.5 phase 7).
@@ -98,9 +115,17 @@ pub struct SessionInfo {
     pub start_secs: u64,
     pub restarts: u32,
     pub manifest_path: String,
+    /// Verified-principal owner; `None` for sessions created without one.
+    pub owner: Option<String>,
 }
 
 /// Live session state. Not `Clone` — the manager holds it behind the map mutex.
+///
+/// Note there is NO `Child` here: the supervisor task is the sole owner of the
+/// ffmpeg process for the session's whole lifetime. Map-side code reaches the
+/// process only through `ctl` (see [`SessionCmd`]); a parked-in-the-map handle
+/// was a no-op kill target whenever the supervisor held the real one across
+/// `wait()`.
 struct Session {
     info_kind: String,
     info_id: i64,
@@ -110,15 +135,63 @@ struct Session {
     last_seen: u64,
     start_secs: u64,
     restarts: u32,
-    /// The current ffmpeg child. `None` between a kill and a respawn.
-    child: Option<Child>,
+    /// Command channel to the supervisor (kill/respawn the real ffmpeg).
+    ctl: mpsc::UnboundedSender<SessionCmd>,
     /// Held for the session's lifetime; dropping it frees the concurrency slot.
     _permit: Permit,
     plan: TranscodePlan,
     input_path: String,
-    /// Source video codec, carried for the supervisor/seek respawn so the
-    /// full-HW gate is recomputed identically on every spawn.
+    /// Source video codec, carried for the supervisor respawn so the full-HW
+    /// gate is recomputed identically on every spawn.
     source_codec: Option<String>,
+    /// Verified principal sub that created the session (owner-or-admin gate).
+    owner: Option<String>,
+}
+
+/// Control messages for a session's supervisor — the SOLE owner of the ffmpeg
+/// [`Child`]. `seek()`/`stop()` never hold a process handle; they ask the
+/// supervisor, which kills (and for seek, respawns) the child itself, so a kill
+/// always reaches the real process.
+enum SessionCmd {
+    /// Kill the current ffmpeg (if any), clear the session dir, and respawn at
+    /// the session's CURRENT `start_secs` (seek updates it before sending).
+    /// The ack reports whether the respawn produced a running child.
+    Restart { ack: oneshot::Sender<bool> },
+    /// Kill the current ffmpeg and exit the supervisor. The ack fires once the
+    /// process is confirmed dead, so the caller can safely remove the dir.
+    Shutdown { ack: oneshot::Sender<()> },
+}
+
+/// Terminate one ffmpeg child: SIGTERM (lets ffmpeg flush/finalize), then
+/// SIGKILL after [`KILL_GRACE`], then reap. tokio's [`Child`] only exposes
+/// SIGKILL (`start_kill`), so the polite TERM goes through `libc` with the raw
+/// pid; `id()` is `None` once the child has already been reaped, in which case
+/// there is nothing left to signal and `wait()` returns the cached status.
+async fn kill_child(child: &mut Child, id: &str) {
+    #[cfg(unix)]
+    if let Some(pid) = child.id() {
+        // SAFETY: plain kill(2) on a pid we spawned and have not yet reaped
+        // (the supervisor owns the Child); no pointers involved.
+        unsafe {
+            libc::kill(pid as i32, libc::SIGTERM);
+        }
+    }
+    if tokio::time::timeout(KILL_GRACE, child.wait()).await.is_err() {
+        tracing::warn!(session = %id, "ffmpeg ignored SIGTERM; escalating to SIGKILL");
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+    }
+}
+
+/// `remove_dir_all` with the failure LOGGED: a silently-failed removal on the
+/// bounded /scratch tmpfs is an invisible space leak. `NotFound` is the normal
+/// teardown race (another path already cleaned it) and stays quiet.
+async fn remove_dir_logged(dir: &PathBuf, id: &str, context: &str) {
+    if let Err(e) = tokio::fs::remove_dir_all(dir).await
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(session = %id, error = %e, "failed to remove session dir ({context})");
+    }
 }
 
 impl Session {
@@ -137,6 +210,7 @@ impl Session {
             start_secs: self.start_secs,
             restarts: self.restarts,
             manifest_path: self.manifest_path().to_string_lossy().into_owned(),
+            owner: self.owner.clone(),
         }
     }
 }
@@ -412,12 +486,21 @@ impl SessionManager {
 
         let now = now_secs();
         let session_id = format!(
-            "tx:{}:{}:{}:{}",
+            "tx:{}:{}:{}:{}-{}",
             sanitize(&opts.media_kind),
             opts.media_id,
             sanitize(&opts.sub),
-            now
+            now,
+            START_SEQ.fetch_add(1, Ordering::Relaxed),
         );
+        // Defensive same-key handling: the sequence suffix makes a collision
+        // unreachable, but if one ever appears anyway, fully stop (kill + reap
+        // + dir removal) the previous session BEFORE creating the dir — two
+        // encoders must never share a session dir.
+        if self.sessions.lock().await.contains_key(&session_id) {
+            tracing::warn!(session = %session_id, "session id collision; stopping previous session");
+            self.stop(&session_id).await;
+        }
         let dir = self.tmp_root.join(sanitize(&session_id));
         tokio::fs::create_dir_all(&dir)
             .await
@@ -432,6 +515,7 @@ impl SessionManager {
             opts.source_codec.as_deref(),
         )?;
 
+        let (ctl_tx, ctl_rx) = mpsc::unbounded_channel();
         let session = Session {
             info_kind: opts.media_kind,
             info_id: opts.media_id,
@@ -441,86 +525,87 @@ impl SessionManager {
             last_seen: now,
             start_secs: opts.start_secs,
             restarts: 0,
-            child: Some(child),
+            ctl: ctl_tx,
             _permit: permit,
             plan: opts.plan,
             input_path: opts.input_path,
             source_codec: opts.source_codec,
+            owner: opts.owner,
         };
 
         self.sessions
             .lock()
             .await
             .insert(session_id.clone(), session);
-        self.spawn_supervisor(session_id.clone());
+        self.spawn_supervisor(session_id.clone(), child, ctl_rx);
         Ok(session_id)
     }
 
-    /// Refresh a session's heartbeat. No-op for an unknown id.
-    pub async fn heartbeat(&self, id: &str) {
-        if let Some(s) = self.sessions.lock().await.get_mut(id) {
-            s.last_seen = now_secs();
+    /// Refresh a session's heartbeat. Returns `false` for an unknown id so the
+    /// route can answer 404 — a client whose session was reaped must be able
+    /// to detect the death instead of heart-beating a ghost forever.
+    pub async fn heartbeat(&self, id: &str) -> bool {
+        match self.sessions.lock().await.get_mut(id) {
+            Some(s) => {
+                s.last_seen = now_secs();
+                true
+            }
+            None => false,
         }
     }
 
-    /// Seek: kill the current ffmpeg and respawn it with a new `-ss` offset
-    /// (the supervisor pattern; ffmpeg can't seek a live HLS encode in place).
-    /// Returns `false` for an unknown session.
+    /// The owner (verified principal sub) of a session. Outer `None` = no such
+    /// session; `Some(None)` = the session exists but was created without a
+    /// verified principal (Off/log posture).
+    pub async fn session_owner(&self, id: &str) -> Option<Option<String>> {
+        self.sessions.lock().await.get(id).map(|s| s.owner.clone())
+    }
+
+    /// Seek: ask the supervisor to kill the current ffmpeg and respawn it with
+    /// a new `-ss` offset (ffmpeg can't seek a live HLS encode in place). The
+    /// supervisor — the sole owner of the Child — performs the kill, the dir
+    /// clear, and the respawn, so the old process is provably dead before the
+    /// new one writes into the dir (the old map-side `child.take()` found
+    /// `None` in steady state and left the first ffmpeg racing the second).
+    /// Returns `false` for an unknown session or a failed respawn.
     pub async fn seek(&self, id: &str, to_secs: u64) -> bool {
-        let mut guard = self.sessions.lock().await;
-        let Some(s) = guard.get_mut(id) else {
-            return false;
+        let ctl = {
+            let mut guard = self.sessions.lock().await;
+            let Some(s) = guard.get_mut(id) else {
+                return false;
+            };
+            s.start_secs = to_secs;
+            s.last_seen = now_secs();
+            s.ctl.clone()
         };
-        // Kill the running child; the supervisor will observe the exit and is
-        // told (via the updated start_secs + a manual respawn here) to restart
-        // at the new offset.
-        if let Some(mut child) = s.child.take() {
-            let _ = child.start_kill();
+        // Send + await OUTSIDE the map lock: the supervisor takes the lock to
+        // snapshot respawn params, so holding it here would deadlock.
+        let (ack_tx, ack_rx) = oneshot::channel();
+        if ctl.send(SessionCmd::Restart { ack: ack_tx }).is_err() {
+            return false; // supervisor already exited (session torn down)
         }
-        s.start_secs = to_secs;
-        s.last_seen = now_secs();
-        // Clear the temp segments so the player doesn't replay stale media.
-        // Use tokio::fs (not std::fs) so we never block an executor thread.
-        let _ = tokio::fs::remove_dir_all(&s.dir).await;
-        let _ = tokio::fs::create_dir_all(&s.dir).await;
-        match self.spawn_child(
-            id,
-            &s.input_path,
-            &s.plan,
-            &s.dir,
-            to_secs,
-            s.source_codec.as_deref(),
-        ) {
-            Ok(child) => {
-                s.child = Some(child);
-                true
-            }
-            Err(e) => {
-                tracing::warn!(session = id, error = %e, "seek respawn failed");
-                // Leave the session registered but childless; the supervisor
-                // will attempt its own restart on the next tick.
-                false
-            }
-        }
+        matches!(
+            tokio::time::timeout(CTL_ACK_TIMEOUT, ack_rx).await,
+            Ok(Ok(true))
+        )
     }
 
     /// Stop and remove a session: SIGTERM, then SIGKILL after a grace period,
     /// then remove the tmpdir. Idempotent. Mirrors `stopRemuxSession`.
     pub async fn stop(&self, id: &str) {
         let removed = self.sessions.lock().await.remove(id);
-        let Some(mut s) = removed else { return };
-        let dir = s.dir.clone();
-        if let Some(mut child) = s.child.take() {
-            // tokio's Child::kill sends SIGKILL; emulate the SIGTERM→SIGKILL
-            // escalation: start_kill (SIGKILL) immediately is acceptable here
-            // because the grace window is enforced by the kill_on_drop guard
-            // and the supervisor; for the explicit stop we go straight to a
-            // bounded wait then a hard kill.
-            let _ = child.start_kill();
-            let _ = tokio::time::timeout(KILL_GRACE, child.wait()).await;
+        let Some(s) = removed else { return };
+        // Ask the supervisor (sole Child owner) to kill the real ffmpeg and
+        // confirm it is dead BEFORE removing the dir — removing first would let
+        // a still-running encoder recreate segments (or pin tmpfs space via its
+        // open fds). A send/recv failure means the supervisor already exited,
+        // i.e. the process is already reaped.
+        let (ack_tx, ack_rx) = oneshot::channel();
+        if s.ctl.send(SessionCmd::Shutdown { ack: ack_tx }).is_ok() {
+            let _ = tokio::time::timeout(CTL_ACK_TIMEOUT, ack_rx).await;
         }
+        remove_dir_logged(&s.dir, id, "stop").await;
         // Permit drops with `s` here, freeing the concurrency slot.
-        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 
     /// Inventory of live sessions (§4.5 phase 7).
@@ -603,124 +688,229 @@ impl SessionManager {
         })
     }
 
-    /// Supervisor task: watch this session's ffmpeg child for an UNEXPECTED
-    /// exit and restart it with exponential backoff up to [`MAX_RESTARTS`].
-    /// A `seek`/`stop` removes the child or the session, which the supervisor
-    /// treats as an intentional teardown and does not fight.
-    fn spawn_supervisor(&self, id: SessionId) {
+    /// Kill the current ffmpeg (if any) and respawn a fresh one for `id`,
+    /// re-reading the session's CURRENT params (so a seek's updated
+    /// `start_secs` takes effect). Used by the supervisor for both crash
+    /// recovery and seek restarts; it is the ONLY respawn path, keeping the
+    /// supervisor the sole Child owner.
+    ///
+    /// The session map is re-checked immediately before the dir is cleared AND
+    /// again after the spawn, so a `stop()` racing this never has its removed
+    /// dir recreated behind it (a leak on the bounded /scratch tmpfs) and never
+    /// leaves an unsupervised encoder.
+    async fn respawn(&self, id: &str) -> Respawn {
+        let (input, plan, dir, start_secs, source_codec) = {
+            let guard = self.sessions.lock().await;
+            let Some(s) = guard.get(id) else {
+                return Respawn::Gone;
+            };
+            (
+                s.input_path.clone(),
+                s.plan.clone(),
+                s.dir.clone(),
+                s.start_secs,
+                s.source_codec.clone(),
+            )
+        };
+        // Clear the dir so the fresh ffmpeg restarts segment numbering at
+        // seg_00000 against a clean playlist. Without this, `append_list`
+        // re-writes index.m3u8 referencing a brand-new seg_00000 while the
+        // player may still hold the old one — stale media on every restart.
+        remove_dir_logged(&dir, id, "pre-respawn clear").await;
+        if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+            tracing::warn!(session = %id, error = %e, "failed to recreate session dir for respawn");
+            return Respawn::Failed;
+        }
+        match self.spawn_child(id, &input, &plan, &dir, start_secs, source_codec.as_deref()) {
+            Ok(mut child) => {
+                // A stop() may have removed the session while we spawned; kill
+                // the fresh child and clean the recreated dir rather than
+                // leaving either behind.
+                if !self.sessions.lock().await.contains_key(id) {
+                    kill_child(&mut child, id).await;
+                    remove_dir_logged(&dir, id, "respawn raced stop").await;
+                    return Respawn::Gone;
+                }
+                Respawn::Ok(child)
+            }
+            Err(e) => {
+                tracing::warn!(session = %id, error = %e, "ffmpeg respawn failed");
+                Respawn::Failed
+            }
+        }
+    }
+
+    /// Supervisor task: the SOLE owner of this session's ffmpeg child. It
+    /// watches for an UNEXPECTED exit and restarts with exponential backoff up
+    /// to [`MAX_RESTARTS`], and services [`SessionCmd`]s from `seek()`/`stop()`
+    /// — which never touch a process directly — killing/respawning the child
+    /// itself so a kill always reaches the real process.
+    fn spawn_supervisor(
+        &self,
+        id: SessionId,
+        child: Child,
+        mut ctl: mpsc::UnboundedReceiver<SessionCmd>,
+    ) {
         let this = self.clone();
         tokio::spawn(async move {
+            let mut slot = ChildSlot::Running(child);
             loop {
-                // Take the child out so we can await its exit without holding
-                // the map lock. If there's no child (seek in progress / stopped)
-                // back off briefly and re-check.
-                let child = {
-                    let mut guard = this.sessions.lock().await;
-                    match guard.get_mut(&id) {
-                        Some(s) => s.child.take(),
-                        None => return, // session stopped → supervisor exits
-                    }
-                };
-                let Some(mut child) = child else {
-                    // Childless but still registered (mid-seek). Re-check soon.
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                    // If a seek installed a new child, loop will pick it up.
-                    // If the session vanished, the next guard miss returns.
-                    if this.sessions.lock().await.contains_key(&id) {
-                        continue;
-                    }
-                    return;
-                };
-
-                let status = child.wait().await;
-
-                // Re-acquire and decide whether to restart.
-                let mut guard = this.sessions.lock().await;
-                let Some(s) = guard.get_mut(&id) else {
-                    return; // stopped while we awaited → done
-                };
-                // If a seek already installed a fresh child while we awaited the
-                // old one's exit, don't treat this as a crash — keep watching.
-                if s.child.is_some() {
-                    continue;
-                }
-
-                // A CLEAN exit (status 0) means ffmpeg reached EOF — the
-                // transcode is COMPLETE, not crashed. Restarting it would
-                // re-run the whole title from seg_00000 (and the dir-clear in
-                // the restart path would yank the segments the player is still
-                // draining). Leave the session and its segments in place with no
-                // child; the idle reaper collects it once the client stops
-                // heart-beating. Without this, a fast remux that finishes in
-                // seconds gets "restarted" repeatedly until the restart cap
-                // tears the session down mid-watch.
-                if matches!(status.as_ref(), Ok(st) if st.success()) {
-                    tracing::info!(
-                        session = %id,
-                        "ffmpeg completed (clean exit); keeping segments for drain"
-                    );
-                    s.child = None;
-                    return;
-                }
-
-                let code = status.as_ref().ok().and_then(|st| st.code());
-                if s.restarts >= MAX_RESTARTS {
-                    tracing::warn!(session = %id, ?code, "ffmpeg exceeded restart cap; tearing down session");
-                    let dir = s.dir.clone();
-                    guard.remove(&id);
-                    drop(guard);
-                    let _ = tokio::fs::remove_dir_all(&dir).await;
-                    return;
-                }
-
-                s.restarts += 1;
-                let attempt = s.restarts;
-                let input = s.input_path.clone();
-                let plan = s.plan.clone();
-                let dir = s.dir.clone();
-                let start_secs = s.start_secs;
-                let source_codec = s.source_codec.clone();
-                drop(guard);
-
-                // Exponential backoff: 100ms * 2^(attempt-1), capped at ~2s.
-                let backoff =
-                    Duration::from_millis(100u64.saturating_mul(1 << (attempt - 1)).min(2_000));
-                tracing::warn!(session = %id, attempt, ?code, ?backoff, "ffmpeg exited; restarting with backoff");
-                tokio::time::sleep(backoff).await;
-
-                // Clear the session dir before respawning so the fresh ffmpeg
-                // restarts segment numbering at seg_00000 against a clean
-                // playlist. Without this, `append_list` re-writes index.m3u8
-                // referencing a brand-new seg_00000 while the player may still
-                // hold the pre-crash one — a stale-media/discontinuity blip on
-                // every crash-recovery. (Mirrors the seek() dir-clear.)
-                let _ = tokio::fs::remove_dir_all(&dir).await;
-                let _ = tokio::fs::create_dir_all(&dir).await;
-
-                match this.spawn_child(
-                    &id,
-                    &input,
-                    &plan,
-                    &dir,
-                    start_secs,
-                    source_codec.as_deref(),
-                ) {
-                    Ok(new_child) => {
-                        let mut guard = this.sessions.lock().await;
-                        match guard.get_mut(&id) {
-                            Some(s) => s.child = Some(new_child),
-                            None => return, // stopped during backoff
+                slot = match slot {
+                    ChildSlot::Running(mut child) => {
+                        tokio::select! {
+                            status = child.wait() => {
+                                // A CLEAN exit (status 0) means ffmpeg reached
+                                // EOF — the transcode is COMPLETE, not crashed.
+                                // Restarting would re-run the whole title from
+                                // seg_00000 and yank the segments the player is
+                                // still draining; park instead and let the idle
+                                // reaper (or a later seek) collect the session.
+                                if matches!(status.as_ref(), Ok(st) if st.success()) {
+                                    tracing::info!(
+                                        session = %id,
+                                        "ffmpeg completed (clean exit); keeping segments for drain"
+                                    );
+                                    ChildSlot::Completed
+                                } else {
+                                    let code = status.as_ref().ok().and_then(|st| st.code());
+                                    tracing::warn!(session = %id, ?code, "ffmpeg exited unexpectedly");
+                                    ChildSlot::Crashed
+                                }
+                            }
+                            cmd = ctl.recv() => match cmd {
+                                Some(SessionCmd::Restart { ack }) => {
+                                    kill_child(&mut child, &id).await;
+                                    match this.respawn(&id).await {
+                                        Respawn::Ok(new) => {
+                                            let _ = ack.send(true);
+                                            ChildSlot::Running(new)
+                                        }
+                                        Respawn::Failed => {
+                                            let _ = ack.send(false);
+                                            ChildSlot::Crashed
+                                        }
+                                        Respawn::Gone => {
+                                            let _ = ack.send(false);
+                                            return;
+                                        }
+                                    }
+                                }
+                                Some(SessionCmd::Shutdown { ack }) => {
+                                    kill_child(&mut child, &id).await;
+                                    let _ = ack.send(());
+                                    return;
+                                }
+                                // Session dropped without a Shutdown (defensive
+                                // — stop() always sends one): don't orphan the
+                                // encoder.
+                                None => {
+                                    kill_child(&mut child, &id).await;
+                                    return;
+                                }
+                            }
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!(session = %id, error = %e, "ffmpeg respawn failed");
-                        // Loop again; the restart counter keeps climbing toward
-                        // the cap so a permanently broken input is reaped.
+
+                    // Transcode finished; nothing to watch. Only a command can
+                    // change anything: a seek revives the session, a stop (or
+                    // the session being dropped) ends it.
+                    ChildSlot::Completed => match ctl.recv().await {
+                        Some(SessionCmd::Restart { ack }) => match this.respawn(&id).await {
+                            Respawn::Ok(new) => {
+                                let _ = ack.send(true);
+                                ChildSlot::Running(new)
+                            }
+                            Respawn::Failed => {
+                                let _ = ack.send(false);
+                                ChildSlot::Crashed
+                            }
+                            Respawn::Gone => {
+                                let _ = ack.send(false);
+                                return;
+                            }
+                        },
+                        Some(SessionCmd::Shutdown { ack }) => {
+                            let _ = ack.send(());
+                            return;
+                        }
+                        None => return,
+                    },
+
+                    // Crashed (or a respawn failed): retry with backoff under
+                    // the restart cap, or tear the session down at the cap — a
+                    // childless session must never sit idle holding its Permit.
+                    ChildSlot::Crashed => {
+                        let attempt = {
+                            let mut guard = this.sessions.lock().await;
+                            let Some(s) = guard.get_mut(&id) else { return };
+                            if s.restarts >= MAX_RESTARTS {
+                                tracing::warn!(
+                                    session = %id,
+                                    "ffmpeg exceeded restart cap; tearing down session"
+                                );
+                                let dir = s.dir.clone();
+                                guard.remove(&id);
+                                drop(guard);
+                                remove_dir_logged(&dir, &id, "restart-cap teardown").await;
+                                return;
+                            }
+                            s.restarts += 1;
+                            s.restarts
+                        };
+                        // Exponential backoff: 100ms * 2^(attempt-1), capped at
+                        // ~2s — but stay responsive to commands while waiting.
+                        let backoff = Duration::from_millis(
+                            100u64.saturating_mul(1 << (attempt - 1)).min(2_000),
+                        );
+                        tracing::warn!(session = %id, attempt, ?backoff, "restarting ffmpeg with backoff");
+                        let mut pending_ack: Option<oneshot::Sender<bool>> = None;
+                        tokio::select! {
+                            _ = tokio::time::sleep(backoff) => {}
+                            cmd = ctl.recv() => match cmd {
+                                // A seek during backoff: respawn immediately
+                                // (below) and ack with the outcome.
+                                Some(SessionCmd::Restart { ack }) => pending_ack = Some(ack),
+                                Some(SessionCmd::Shutdown { ack }) => {
+                                    let _ = ack.send(());
+                                    return;
+                                }
+                                None => return,
+                            }
+                        }
+                        let outcome = this.respawn(&id).await;
+                        if let Some(ack) = pending_ack {
+                            let _ = ack.send(matches!(outcome, Respawn::Ok(_)));
+                        }
+                        match outcome {
+                            Respawn::Ok(new) => ChildSlot::Running(new),
+                            Respawn::Failed => ChildSlot::Crashed,
+                            Respawn::Gone => return,
+                        }
                     }
-                }
+                };
             }
         });
     }
+}
+
+/// Supervisor-local child state. The `Child` lives HERE (on the supervisor's
+/// stack), never in the session map — single ownership is what makes every
+/// kill reach the real process.
+enum ChildSlot {
+    Running(Child),
+    /// Clean EOF: segments kept for the player to drain; revivable by seek.
+    Completed,
+    /// Unexpected exit or failed respawn: retried under [`MAX_RESTARTS`].
+    Crashed,
+}
+
+/// Outcome of [`SessionManager::respawn`].
+enum Respawn {
+    Ok(Child),
+    /// Spawn failed; the session still exists (the restart cap will bound retries).
+    Failed,
+    /// The session was removed while respawning; nothing left to supervise.
+    Gone,
 }
 
 #[cfg(test)]
@@ -753,6 +943,7 @@ mod tests {
              for a in \"$@\"; do last=\"$a\"; done\n\
              d=$(dirname \"$last\")\n\
              mkdir -p \"$d\"\n\
+             printf '%s' \"$$\" > \"$d/pid.txt\"\n\
              printf '#EXTM3U\\n#EXT-X-VERSION:3\\n' > \"$last\"\n\
              printf 'seg' > \"$d/seg_00000.ts\"\n\
              if [ \"{mode}\" = crash ]; then exit 1; fi\n\
@@ -786,6 +977,7 @@ mod tests {
             plan: remux_plan(),
             start_secs: 0,
             source_codec: None,
+            owner: None,
         }
     }
 
@@ -800,6 +992,27 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!("condition not met within timeout");
+    }
+
+    /// Read the pid the stub wrote into the session dir (polling — the stub
+    /// writes it asynchronously after spawn).
+    async fn read_stub_pid(dir: &std::path::Path) -> i32 {
+        let path = dir.join("pid.txt");
+        for _ in 0..200 {
+            if let Ok(s) = std::fs::read_to_string(&path)
+                && let Ok(pid) = s.trim().parse::<i32>()
+            {
+                return pid;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("stub never wrote pid.txt");
+    }
+
+    /// True while `pid` is signalable. tokio reaps a killed child inside the
+    /// supervisor's `wait()`, so a dead stub disappears (ESRCH) promptly.
+    fn process_alive(pid: i32) -> bool {
+        unsafe { libc::kill(pid, 0) == 0 }
     }
 
     #[tokio::test]
@@ -883,10 +1096,12 @@ mod tests {
             let mut g = mgr.sessions.lock().await;
             g.get_mut(&id).unwrap().last_seen = before.saturating_sub(100);
         }
-        mgr.heartbeat(&id).await;
+        assert!(mgr.heartbeat(&id).await, "live session heartbeat succeeds");
         let after = mgr.list().await[0].last_seen;
         assert!(after >= before, "heartbeat must refresh last_seen");
         mgr.stop(&id).await;
+        // A reaped/unknown session reports the death instead of pretending ok.
+        assert!(!mgr.heartbeat(&id).await, "dead session heartbeat is false");
     }
 
     #[tokio::test]
@@ -906,6 +1121,144 @@ mod tests {
         // The respawned child rewrites the cleared playlist.
         wait_for(|| manifest.exists()).await;
         mgr.stop(&id).await;
+    }
+
+    #[tokio::test]
+    async fn seek_terminates_previous_ffmpeg() {
+        // Regression: seek used to take the Child out of the session map, but
+        // the supervisor held the real handle across wait() — so the "kill"
+        // found None and the OLD ffmpeg kept writing absolute-path segments
+        // into the freshly-cleared dir alongside the new one. The supervisor
+        // must kill the real process before the respawn touches the dir.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
+        let id = mgr.start(opts("/lib/a.mkv")).await.unwrap();
+        let dir = mgr.manifest_path(&id).await.unwrap();
+        let dir = dir.parent().unwrap().to_path_buf();
+
+        let old_pid = read_stub_pid(&dir).await;
+        assert!(process_alive(old_pid), "first ffmpeg must be running");
+
+        assert!(mgr.seek(&id, 90).await, "seek must succeed");
+        // The first ffmpeg is dead by the time seek returns (kill + reap happen
+        // before the respawn's ack); poll defensively for slow reaping.
+        wait_for(|| !process_alive(old_pid)).await;
+
+        // Exactly one fresh ffmpeg is running in the cleared dir.
+        let new_pid = read_stub_pid(&dir).await;
+        assert_ne!(new_pid, old_pid, "respawn must be a different process");
+        assert!(process_alive(new_pid), "respawned ffmpeg must be running");
+        assert_eq!(mgr.list().await[0].start_secs, 90);
+
+        mgr.stop(&id).await;
+    }
+
+    #[tokio::test]
+    async fn stop_terminates_ffmpeg_and_removes_dir() {
+        // Regression: stop() had the same take-from-the-map no-op kill, leaving
+        // the encoder running (GPU/CPU + tmpfs writes) with the session gone.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
+        let id = mgr.start(opts("/lib/a.mkv")).await.unwrap();
+        let dir = mgr.manifest_path(&id).await.unwrap();
+        let dir = dir.parent().unwrap().to_path_buf();
+        let pid = read_stub_pid(&dir).await;
+        assert!(process_alive(pid));
+
+        mgr.stop(&id).await;
+        wait_for(|| !process_alive(pid)).await;
+        assert!(!dir.exists(), "session dir must be removed after the kill");
+        assert!(mgr.is_empty().await);
+    }
+
+    #[tokio::test]
+    async fn failed_respawn_tears_down_session_at_restart_cap() {
+        // Regression: a childless session (failed seek respawn) used to spin at
+        // 50ms forever, holding its concurrency Permit. The supervisor must
+        // keep retrying under the restart cap and tear the session down at it.
+        let tmp = tempfile::tempdir().unwrap();
+        let stub = write_stub(tmp.path(), "run");
+        let mgr = manager_with_stub(&tmp, stub.clone());
+        let id = mgr.start(opts("/lib/a.mkv")).await.unwrap();
+        let manifest = mgr.manifest_path(&id).await.unwrap();
+        wait_for(|| manifest.exists()).await;
+
+        // Make every respawn fail: the ffmpeg binary vanishes.
+        std::fs::remove_file(&stub).unwrap();
+        assert!(
+            !mgr.seek(&id, 60).await,
+            "seek must report the failed respawn"
+        );
+        // Cap'd retries (100+200+400ms backoff) then teardown — not an
+        // immortal childless session. Poll generously.
+        for _ in 0..400 {
+            if mgr.is_empty().await {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            mgr.is_empty().await,
+            "childless session must be torn down at the restart cap"
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_during_crash_backoff_leaves_no_dir() {
+        // Regression: the crash-restart path used to clear + recreate the
+        // session dir BEFORE re-checking the map, so a stop() landing during
+        // the backoff had its dir resurrected behind it — a leak on the
+        // bounded /scratch tmpfs. The respawn now re-checks the map around the
+        // dir work and cleans up when it lost the race.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "crash"));
+        let id = mgr.start(opts("/lib/a.mkv")).await.unwrap();
+        let dir = mgr.manifest_path(&id).await.unwrap();
+        let dir = dir.parent().unwrap().to_path_buf();
+
+        // Stop while the crashing child's supervisor is somewhere in its
+        // crash → backoff → respawn cycle.
+        mgr.stop(&id).await;
+        assert!(mgr.is_empty().await);
+
+        // Give any in-flight respawn time to finish losing the race, then the
+        // dir must be gone (and stay gone).
+        tokio::time::sleep(Duration::from_millis(1_000)).await;
+        assert!(!dir.exists(), "stopped session's dir must not be recreated");
+    }
+
+    #[tokio::test]
+    async fn same_second_grants_get_distinct_sessions_with_no_orphan() {
+        // Regression: the id was tx:{kind}:{media_id}:{sub}:{now_secs} — a
+        // double-click within one second minted the SAME id, and the second
+        // map insert displaced the first Session, orphaning its ffmpeg (the
+        // permit dropped but the process kept encoding). The monotonic
+        // sequence suffix makes every id unique.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
+        // Identical opts (same kind/id/sub), started back-to-back in the same
+        // wall-clock second.
+        let a = mgr.start(opts("/lib/a.mkv")).await.unwrap();
+        let b = mgr.start(opts("/lib/a.mkv")).await.unwrap();
+        assert_ne!(a, b, "same-second grants must mint distinct ids");
+        assert_eq!(mgr.len().await, 2, "both sessions must be live");
+
+        // Both encoders are running in their own dirs — nothing orphaned.
+        let dir_a = mgr.manifest_path(&a).await.unwrap();
+        let dir_b = mgr.manifest_path(&b).await.unwrap();
+        assert_ne!(dir_a, dir_b);
+        let pid_a = read_stub_pid(dir_a.parent().unwrap()).await;
+        let pid_b = read_stub_pid(dir_b.parent().unwrap()).await;
+        assert_ne!(pid_a, pid_b);
+        assert!(process_alive(pid_a) && process_alive(pid_b));
+
+        // And both are individually stoppable — each kill reaches ITS process.
+        mgr.stop(&a).await;
+        wait_for(|| !process_alive(pid_a)).await;
+        assert!(process_alive(pid_b), "stopping a must not touch b");
+        mgr.stop(&b).await;
+        wait_for(|| !process_alive(pid_b)).await;
+        assert!(mgr.is_empty().await);
     }
 
     #[tokio::test]
@@ -958,9 +1311,6 @@ mod tests {
         );
     }
 
-    // Distinct media_id per call so two concurrent sessions get distinct ids
-    // (the id embeds media_id + a 1s-granular timestamp, so same-id starts in
-    // the same second would otherwise collide in the map).
     fn remux_opts_id(input: &str, media_id: i64) -> StartOpts {
         StartOpts {
             media_id,
@@ -979,6 +1329,7 @@ mod tests {
                     scale_to_height: None,
                     tone_map: false,
                     burn_subtitle_index: None,
+                    source_height: None,
                 },
                 audio: AudioOp::Copy,
                 subtitle: SubtitleOp::None,
@@ -986,6 +1337,7 @@ mod tests {
             },
             start_secs: 0,
             source_codec: Some("hevc".into()),
+            owner: None,
         }
     }
 
@@ -1140,6 +1492,7 @@ mod tests {
                 scale_to_height: None,
                 tone_map: false,
                 burn_subtitle_index: None,
+                source_height: None,
             },
             audio: AudioOp::Copy,
             subtitle: SubtitleOp::None,
