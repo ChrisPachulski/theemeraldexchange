@@ -433,7 +433,14 @@ services:
     # To upgrade: bump the tag + digest, docker compose pull, up -d. Resolve a
     # new digest with: docker buildx imagetools inspect cloudflare/cloudflared:<tag>
     # The docker ecosystem in .github/dependabot.yml surfaces bumps as PRs.
-    image: cloudflare/cloudflared:2024.12.2@sha256:12ff5c6992a9863db4da270746af7c244bcaee49353039af8104268a18d6c4f0
+    # LOCKSTEP: keep the human tag and the digest pointing at the SAME release.
+    # Docker pulls by DIGEST when both are given — the tag is only a label — so
+    # a digest-only (or tag-only) bump ships something other than what the file
+    # claims. A previous bump updated the digest but left the tag reading
+    # 2024.12.2, which made the pin look ~18 months stale while actually
+    # running 2026.5.2 bits. CI now runs scripts/check-image-pin-staleness.mjs
+    # against this file to flag pins whose tag is >12 months old.
+    image: cloudflare/cloudflared:2026.6.0@sha256:ba461b8aa9c042156dbd39c38657fe7431bafa063220eab8d5330a523863da9f
     container_name: exchange-cloudflared
     restart: unless-stopped
     # Hardening (audit 9-4): no privilege escalation, drop all Linux caps (the
