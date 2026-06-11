@@ -30,6 +30,7 @@ import { useConfirm } from '../confirm/useConfirm'
 import { radarr, type Movie, type MovieSearchResult } from '../../lib/api/radarr'
 import { postClickEvent } from '../../lib/api/recommenderEvents'
 import { stripArticle } from '../../lib/title'
+import { withViewTransition } from '../../lib/viewTransition'
 import './TvTab.css'
 
 function pickSearchPoster(item: MovieSearchResult): string | undefined {
@@ -438,8 +439,10 @@ export function MoviesTab() {
         <ModeToggle
           mode={mode}
           onChange={(next) => {
-            setMode(next)
-            if (next === 'discover') setLetter('all')
+            withViewTransition(() => {
+              setMode(next)
+              if (next === 'discover') setLetter('all')
+            })
           }}
           libraryCount={library.data?.length}
         />
@@ -543,7 +546,7 @@ function DiscoverResults({ query, loading, error, results, libraryByTmdb, onCard
   if (error) {
     return (
       <div className="tv-tab__error">
-        <p>Couldn't reach Radarr. Check that the dev server has RADARR_API_KEY in .env.local.</p>
+        <p>Couldn't reach Radarr — the server may be down or misconfigured.</p>
         <p className="tv-tab__error-detail">{String(error)}</p>
       </div>
     )

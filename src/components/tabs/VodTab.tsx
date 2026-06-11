@@ -7,6 +7,7 @@ import { useIptvVod } from '../../lib/hooks/useIptvVod'
 import { useIptvFavoriteSet, useToggleIptvFavorite } from '../../lib/hooks/useIptvFavorites'
 import { useIptvHistoryIndex, useReportPosition } from '../../lib/hooks/useIptvHistory'
 import { useDebounced } from '../../lib/hooks/useDebounced'
+import { useModalA11y } from '../../lib/hooks/useModalA11y'
 import { ConcurrencyLimitModal } from '../iptv/ConcurrencyLimitModal'
 import {
   concurrencyPayloadFromError,
@@ -28,6 +29,45 @@ function resumePercent(row: ResumeRow | undefined): number | null {
 function resumePosition(row: ResumeRow | undefined): number | undefined {
   if (!row || row.completed || row.position_secs <= 0) return undefined
   return row.position_secs
+}
+
+// The player dialog is a plain div (role=dialog/aria-modal), so useModalA11y
+// supplies the focus trap, Escape-to-close, and focus restoration that
+// aria-modal="true" promises (LiveTab pattern). It lives in its own component
+// so the hook's open/close effect runs when the dialog mounts.
+function PlayerModal({
+  playing,
+  onClose,
+  onPositionUpdate,
+}: {
+  playing: { grant: StreamGrant; title: string; startPositionSecs?: number }
+  onClose: () => void
+  onPositionUpdate: (positionSecs: number, durationSecs: number | null) => void
+}) {
+  const modalRef = useModalA11y<HTMLDivElement>(onClose)
+  return (
+    <div
+      ref={modalRef}
+      className="iptv-player-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label={playing.title}
+      tabIndex={-1}
+    >
+      <div className="iptv-player-modal__header">
+        <h2>{playing.title}</h2>
+        <button className="iptv-player-modal__close" type="button" onClick={onClose} aria-label="Close player">
+          ×
+        </button>
+      </div>
+      <IptvPlayer
+        grant={playing.grant}
+        autoPlay
+        startPositionSecs={playing.startPositionSecs}
+        onPositionUpdate={onPositionUpdate}
+      />
+    </div>
+  )
 }
 
 export default function VodTab() {
@@ -166,23 +206,14 @@ export default function VodTab() {
       </footer>
 
       {playing && (
-        <div className="iptv-player-modal" role="dialog" aria-modal="true" aria-label={playing.title}>
-          <div className="iptv-player-modal__header">
-            <h2>{playing.title}</h2>
-            <button className="iptv-player-modal__close" type="button" onClick={() => setPlaying(null)} aria-label="Close player">
-              ×
-            </button>
-          </div>
-          <IptvPlayer
-            grant={playing.grant}
-            autoPlay
-            startPositionSecs={playing.startPositionSecs}
-            onPositionUpdate={(positionSecs, durationSecs) => {
-              const completed = durationSecs != null && positionSecs >= Math.max(0, durationSecs - 30)
-              reportPosition(positionSecs, durationSecs, completed)
-            }}
-          />
-        </div>
+        <PlayerModal
+          playing={playing}
+          onClose={() => setPlaying(null)}
+          onPositionUpdate={(positionSecs, durationSecs) => {
+            const completed = durationSecs != null && positionSecs >= Math.max(0, durationSecs - 30)
+            reportPosition(positionSecs, durationSecs, completed)
+          }}
+        />
       )}
 
       {concurrencyError && (
