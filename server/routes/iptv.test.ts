@@ -967,6 +967,9 @@ describe('POST /api/iptv/admin/sync', () => {
       expect(res.status).toBe(202)
       const { jobId } = await res.json() as { jobId: string }
       jobIds.push(jobId)
+      // Let the mocked syncOnce settle so the job is finished (evictable)
+      // before the next insert — only finished jobs may be evicted.
+      await new Promise(r => setTimeout(r, 0))
     }
 
     await new Promise(r => setTimeout(r, 50))
@@ -978,6 +981,50 @@ describe('POST /api/iptv/admin/sync', () => {
     // Verify a newer job is still there
     const newerJobStatus = await app.request(`/api/iptv/admin/sync/${jobIds[20]}`)
     expect(newerJobStatus.status).toBe(200)
+  })
+
+  it('records a busy refusal as state "rejected", not "done"', async () => {
+    const { syncOnce } = await import('../services/iptvSync.js')
+    vi.mocked(syncOnce).mockResolvedValueOnce({ busy: true })
+
+    const app = new Hono().route('/api/iptv', iptv)
+    const res = await app.request('/api/iptv/admin/sync', { method: 'POST' })
+    expect(res.status).toBe(202)
+    const { jobId } = await res.json() as { jobId: string }
+
+    await new Promise(r => setTimeout(r, 30))
+    const status = await app.request(`/api/iptv/admin/sync/${jobId}`)
+    expect(status.status).toBe(200)
+    const body = await status.json() as { state: string }
+    expect(body.state).toBe('rejected')
+  })
+
+  it('never evicts a still-RUNNING job when the cap is exceeded', async () => {
+    const { syncOnce } = await import('../services/iptvSync.js')
+    // First job never settles — stays 'running' for the whole test.
+    vi.mocked(syncOnce).mockImplementationOnce(() => new Promise(() => {}))
+
+    const app = new Hono().route('/api/iptv', iptv)
+    const first = await app.request('/api/iptv/admin/sync', { method: 'POST' })
+    const { jobId: runningId } = await first.json() as { jobId: string }
+
+    // Flood past the 20-entry cap with jobs that finish normally.
+    const finishedIds: string[] = []
+    for (let i = 0; i < 21; i++) {
+      const res = await app.request('/api/iptv/admin/sync', { method: 'POST' })
+      const { jobId } = await res.json() as { jobId: string }
+      finishedIds.push(jobId)
+      await new Promise(r => setTimeout(r, 0))
+    }
+
+    // The running job is still queryable — eviction skipped over it…
+    const runningStatus = await app.request(`/api/iptv/admin/sync/${runningId}`)
+    expect(runningStatus.status).toBe(200)
+    expect(((await runningStatus.json()) as { state: string }).state).toBe('running')
+
+    // …and the oldest FINISHED job was evicted instead.
+    const evicted = await app.request(`/api/iptv/admin/sync/${finishedIds[0]}`)
+    expect(evicted.status).toBe(404)
   })
 })
 

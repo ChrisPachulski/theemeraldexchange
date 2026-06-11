@@ -1459,18 +1459,30 @@ iptv.get('/stream/segment', async (c) => {
 
 type Job = {
   id: string
-  state: 'running' | 'done' | 'error'
+  // 'rejected' = the sync runner refused to start (another sync already in
+  // flight — syncOnce returned busy). Distinct from 'done' so the admin
+  // poller is never told a skipped run completed.
+  state: 'running' | 'done' | 'rejected' | 'error'
   startedAt: string
   finishedAt?: string
   result?: SyncResult
   error?: string
 }
 const jobs = new Map<string, Job>()
+const MAX_REMEMBERED_JOBS = 20
 function rememberJob(job: Job): void {
   jobs.set(job.id, job)
-  if (jobs.size > 20) {
-    const oldest = [...jobs.keys()][0]
-    jobs.delete(oldest)
+  if (jobs.size > MAX_REMEMBERED_JOBS) {
+    // Evict the oldest FINISHED job. A running job's status must survive the
+    // cap — evicting it would 404 the admin poller mid-run and orphan the
+    // job's eventual result. If every remembered job is somehow still
+    // running, nothing is evicted; the map shrinks again as they settle.
+    for (const [id, j] of jobs) {
+      if (j.state !== 'running') {
+        jobs.delete(id)
+        break
+      }
+    }
   }
 }
 
@@ -1513,7 +1525,10 @@ iptv.post('/admin/sync', requireAuth, requireAdmin, async (c) => {
   void (async () => {
     try {
       const result = await syncOnce(iptvDb())
-      job.state = 'done'
+      // A busy refusal (another sync already running) is NOT a completed
+      // sync — surface it as 'rejected' so the poller doesn't read stale
+      // "done with no stats" as success.
+      job.state = result.busy ? 'rejected' : 'done'
       job.result = result
       job.finishedAt = new Date().toISOString()
     } catch (err) {
