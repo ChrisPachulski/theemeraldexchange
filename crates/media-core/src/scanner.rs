@@ -45,6 +45,11 @@ pub struct ScanReport {
     /// such paths (path_within_roots), so indexing them would create
     /// permanently unplayable rows.
     pub files_skipped_outside_roots: usize,
+    /// Video files skipped because their name/path is not valid UTF-8 (the
+    /// DB stores paths as TEXT, so they cannot be indexed). Surfaced so a
+    /// library gap is explainable from the scan report instead of the file
+    /// just silently never appearing.
+    pub files_skipped_non_utf8: usize,
     pub errors: usize,
 }
 
@@ -74,6 +79,9 @@ struct WalkOutcome {
     /// Files whose canonical path escapes every root (see
     /// [`ScanReport::files_skipped_outside_roots`]).
     files_outside_roots: usize,
+    /// Video files with a non-UTF-8 name/path (see
+    /// [`ScanReport::files_skipped_non_utf8`]).
+    files_non_utf8: usize,
 }
 
 /// Enumerate every video file under `roots`. Pure blocking FS work (WalkDir +
@@ -86,6 +94,7 @@ fn walk_roots(roots: &[LibraryRoot]) -> WalkOutcome {
         errors: 0,
         prunable_roots: Vec::new(),
         files_outside_roots: 0,
+        files_non_utf8: 0,
     };
 
     // Canonical forms of every existing root, for the symlink-containment
@@ -134,9 +143,28 @@ fn walk_roots(roots: &[LibraryRoot]) -> WalkOutcome {
                 continue;
             }
 
+            // Non-UTF-8 names/paths cannot be indexed (paths are stored as
+            // TEXT), but they used to vanish without a trace. Count them so a
+            // missing title is explainable from the scan report. They are NOT
+            // root errors: the condition is permanent (not a transient I/O
+            // failure), the path can never be in the DB, and treating it as an
+            // error would permanently disqualify the root from pruning.
             let name = match entry.file_name().to_str() {
                 Some(n) => n.to_string(),
-                None => continue,
+                None => {
+                    // Only count names that LOOK like video files (judged on
+                    // the lossy form) — arbitrary non-UTF-8 junk stays silent,
+                    // matching the is_video_file filter for UTF-8 names.
+                    let lossy = entry.file_name().to_string_lossy().into_owned();
+                    if is_video_file(&lossy) {
+                        tracing::warn!(
+                            "non-utf8 file name skipped (cannot be indexed): {}",
+                            entry.path().display()
+                        );
+                        out.files_non_utf8 += 1;
+                    }
+                    continue;
+                }
             };
             if !is_video_file(&name) {
                 continue;
@@ -146,8 +174,12 @@ fn walk_roots(roots: &[LibraryRoot]) -> WalkOutcome {
             let path_str = match entry_path.to_str() {
                 Some(p) => p.to_string(),
                 None => {
-                    tracing::warn!("non-utf8 path skipped: {}", entry_path.display());
-                    root_errors += 1;
+                    // Valid-UTF-8 video name under a non-UTF-8 directory.
+                    tracing::warn!(
+                        "non-utf8 path skipped (cannot be indexed): {}",
+                        entry_path.display()
+                    );
+                    out.files_non_utf8 += 1;
                     continue;
                 }
             };
@@ -235,6 +267,7 @@ pub async fn scan_once(
     report.files_seen = walk.files_seen;
     report.errors = walk.errors;
     report.files_skipped_outside_roots = walk.files_outside_roots;
+    report.files_skipped_non_utf8 = walk.files_non_utf8;
 
     for file in &walk.files {
         let path_str = &file.path_str;
@@ -1850,6 +1883,60 @@ mod tests {
         assert_eq!(
             surviving_watch, kept_movie,
             "the surviving title's watch state stays"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn scan_counts_non_utf8_video_names_without_failing_prune() {
+        // A video file with a non-UTF-8 name cannot be indexed (paths are
+        // stored as TEXT) but used to vanish silently. It must be counted in
+        // files_skipped_non_utf8, must NOT bump errors, and must NOT
+        // disqualify the root from the missing-file prune (the condition is
+        // permanent, not a transient I/O failure).
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let tmp = tempdir().unwrap();
+        // Invalid UTF-8 byte in the stem; extension still reads ".mkv".
+        // APFS/HFS+ (macOS) reject non-UTF-8 names outright (EILSEQ), so the
+        // full scenario is only constructible on Linux filesystems — exactly
+        // where prod (NAS, ext4/xfs in Docker) runs and where CI executes.
+        // On a UTF-8-enforcing FS, degrade to proving the healthy-prune half.
+        let bad_name = OsStr::from_bytes(b"caf\xff (2020).mkv");
+        let non_utf8_supported = std::fs::write(tmp.path().join(bad_name), b"bytes").is_ok();
+        if non_utf8_supported {
+            // Non-video non-UTF-8 junk stays silent (no count).
+            let bad_junk = OsStr::from_bytes(b"junk\xff.nfo");
+            std::fs::write(tmp.path().join(bad_junk), b"x").unwrap();
+        }
+
+        let db = Db::connect_memory().await.unwrap();
+        // A vanished row under the same root: prune must still fire.
+        let gone = tmp.path().join("Gone (2019).mkv");
+        let gone_file = seed_media_file(&db, gone.to_str().unwrap()).await;
+        upsert_movie(&db, "Gone", Some(2019), gone_file, "t", None)
+            .await
+            .unwrap();
+
+        let roots = vec![LibraryRoot {
+            path: tmp.path().to_path_buf(),
+            kind: RootKind::Movies,
+        }];
+        let report = scan_once(&db, &roots, &no_tmdb()).await.unwrap();
+
+        if non_utf8_supported {
+            assert_eq!(
+                report.files_skipped_non_utf8, 1,
+                "the non-utf8 VIDEO file is counted (junk is not)"
+            );
+        } else {
+            eprintln!("filesystem enforces UTF-8 names; non-utf8 half skipped");
+        }
+        assert_eq!(report.errors, 0, "non-utf8 is a skip stat, not an error");
+        assert_eq!(
+            report.files_removed, 1,
+            "the root stays prune-healthy despite the non-utf8 skip"
         );
     }
 
