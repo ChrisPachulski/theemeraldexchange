@@ -107,6 +107,27 @@ function safeHost(value: string, fallback: string): string {
   return value
 }
 
+// X-Forwarded-Host / Host are attacker-controlled on any deploy where the
+// backend is reachable without the trusted proxy in front, so a host is only
+// echoed into minted playlist URLs when it belongs to the operator's
+// configured ALLOWED_ORIGINS — either exactly, or as a subdomain (the API
+// lives at api.<spa-domain> in the Netlify ↔ NAS split, while ALLOWED_ORIGINS
+// carries the SPA origin). An attacker can't serve content from a subdomain
+// of the operator's domain without controlling its DNS.
+function isAllowedPublicHost(host: string): boolean {
+  const hostname = host.toLowerCase().replace(/:\d+$/, '')
+  for (const origin of env.allowedOrigins) {
+    let originHostname: string
+    try {
+      originHostname = new URL(origin).hostname.toLowerCase()
+    } catch {
+      continue // malformed allowlist entry can never match
+    }
+    if (hostname === originHostname || hostname.endsWith(`.${originHostname}`)) return true
+  }
+  return false
+}
+
 function publicBaseUrl(c: Context): string {
   const requestUrl = new URL(c.req.url)
   const forwardedProto = firstHeaderValue(c.req.header('x-forwarded-proto')).toLowerCase()
@@ -119,7 +140,20 @@ function publicBaseUrl(c: Context): string {
       requestUrl.host,
     requestUrl.host,
   )
-  return `${proto}//${host}`
+  // No allowlist configured (dev / direct-LAN deploys): header passthrough.
+  if (env.allowedOrigins.length === 0) return `${proto}//${host}`
+  if (isAllowedPublicHost(host)) return `${proto}//${host}`
+  // Forwarded host doesn't belong to the operator — never echo it into a
+  // minted URL. Fall back to the first parseable configured origin; if every
+  // entry is malformed, use the socket-level request host (not the headers).
+  for (const origin of env.allowedOrigins) {
+    try {
+      return new URL(origin).origin
+    } catch {
+      continue
+    }
+  }
+  return `${proto}//${requestUrl.host}`
 }
 
 iptv.get('/health', requireAuth, async (c) => {
