@@ -23,6 +23,12 @@ const membershipState = vi.hoisted(() => ({
   status: 'allowed' as 'allowed' | 'revoked' | 'not_member',
 }))
 
+// Sub claim the fake token decoder reports. Tests override it to exercise the
+// strict namespaced-sub requirement (the M1 bare-numeric grace is removed).
+const tokenState = vi.hoisted(() => ({
+  sub: 'plex:42',
+}))
+
 vi.mock('../middleware/auth.js', async () => {
   const requireTestAuth: MiddlewareHandler<TestAuthEnv> = async (c, next) => {
     c.set('session', authState.session)
@@ -59,7 +65,7 @@ vi.mock('../services/iptvStreamToken.js', () => {
       k: match[1],
       nbf: now,
       rid: Buffer.from(match[2], 'base64url').toString('utf-8'),
-      sub: 'plex:42',
+      sub: tokenState.sub,
       v: 1,
     }
   }
@@ -67,9 +73,6 @@ vi.mock('../services/iptvStreamToken.js', () => {
     signStreamToken: vi.fn((_secret: string, opts: { kind: string; resourceId: string; jti?: string }) =>
       `fake.${opts.kind}.${Buffer.from(opts.resourceId, 'utf-8').toString('base64url')}${opts.jti ? `.${opts.jti}` : ''}`),
     verifyStreamToken: vi.fn((_secret: string, t: string) => decodeFake(t)),
-    verifyStreamTokenDualKey: vi.fn(
-      (_primary: string, _fallback: string, t: string) => decodeFake(t),
-    ),
   }
 })
 
@@ -223,6 +226,7 @@ function fakeToken(kind: string, resourceId: string): string {
 beforeEach(() => {
   authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
   membershipState.status = 'allowed'
+  tokenState.sub = 'plex:42'
   concurrencyState.sessions.length = 0
   dbState.testDb?.raw.exec('DELETE FROM iptv_playlist_tokens;')
 })
@@ -289,6 +293,34 @@ describe('playlist token lifecycle', () => {
 
     const row = dbState.testDb!.stmts.getPlaylistToken.get(minted.jti) as { revoked_at: string | null }
     expect(row.revoked_at).not.toBeNull()
+  })
+
+  it('rejects the legacy M1 rid "all" (D2a fallback removed)', async () => {
+    const res = await app.request(`/api/iptv/playlist.m3u?t=${fakeToken('playlist', 'all')}`)
+    expect(res.status).toBe(401)
+    const body = (await res.json()) as { error: string; detail: string }
+    expect(body.error).toBe('invalid_token')
+    expect(body.detail).toBe('resource_mismatch')
+  })
+
+  it('rejects a playlist token whose jti has no persisted row (jti-less M1 bypass removed)', async () => {
+    // Valid HMAC + canonical rid, but the jti was never persisted at mint —
+    // the revocation-table lookup is now unconditional, so this must 401
+    // instead of bypassing the revocation check like pre-D12 tokens did.
+    const res = await app.request(
+      `/api/iptv/playlist.m3u?t=${fakeToken('playlist', 'iptv-channels-all')}`,
+    )
+    expect(res.status).toBe(401)
+    expect((await res.json()) as { error: string }).toEqual({ error: 'token_not_found' })
+  })
+
+  it('rejects a stream token carrying a bare-numeric legacy sub (grace window closed)', async () => {
+    tokenState.sub = '42'
+    const res = await app.request('/api/iptv/stream/live/10.ts?t=' + fakeToken('live', '10'))
+    expect(res.status).toBe(401)
+    const body = (await res.json()) as { error: string; detail: string }
+    expect(body.error).toBe('invalid_token')
+    expect(body.detail).toBe('sub_invalid_format')
   })
 
   it('caps playlist token request bodies', async () => {
@@ -731,7 +763,7 @@ describe('segment proxy', () => {
   })
 
   it('rejects a token whose kind is not "segment" (kind_mismatch → invalid_token 401)', async () => {
-    // verifyStreamTokenDualKey succeeds (valid HMAC) but the decoded kind is
+    // verifyStreamToken succeeds (valid HMAC) but the decoded kind is
     // "live", so the route throws kind_mismatch and returns 401 before any
     // replay/SSRF/fetch work. Covers the verify-try/catch branch (iptv.ts ~1142).
     const fetchSpy = vi.spyOn(globalThis, 'fetch')

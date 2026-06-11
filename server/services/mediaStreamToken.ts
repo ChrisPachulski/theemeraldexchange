@@ -18,7 +18,7 @@
 import { env } from '../env.js'
 import {
   signStreamToken,
-  verifyStreamTokenDualKey,
+  verifyStreamToken,
   type StreamKind,
 } from './iptvStreamToken.js'
 import { checkReplay } from './tokenReplayCache.js'
@@ -57,7 +57,8 @@ export type MediaTokenCheck =
 
 /**
  * Verify a `?t=` media stream token. Enforces, in order: valid signature +
- * time window (dual-key for rotation), the `media:` rid namespace, an optional
+ * time window (STREAM_TOKEN_SECRET only — the D2a SESSION_SECRET fallback is
+ * gone, preserving key separation), the `media:` rid namespace, an optional
  * expected kind set, an optional exact rid match (binds a token to one
  * resource), and replay policy (vod/remux are multi-use; only 'segment' is
  * single-use, which media never mints).
@@ -68,7 +69,7 @@ export function verifyMediaToken(
 ): MediaTokenCheck {
   let claims
   try {
-    claims = verifyStreamTokenDualKey(env.streamTokenSecret, env.sessionSecret, token)
+    claims = verifyStreamToken(env.streamTokenSecret, token)
   } catch {
     return { ok: false, error: 'invalid_token' }
   }

@@ -217,12 +217,15 @@ if (isProd && recommenderEventSecret) {
   }
 }
 
-// STREAM_TOKEN_SECRET is the dedicated signing secret for IPTV stream
-// tokens (§5.4).  Kept separate from SESSION_SECRET so a stream-token
-// compromise does not expose session cookies, and so key rotation is
-// scoped to the affected token class.  D2a: signer always uses this
-// key; verifier tries it first and falls back to SESSION_SECRET for
-// tokens issued before this deploy (see iptvStreamToken.ts).
+// STREAM_TOKEN_SECRET is the dedicated signing AND verifying secret for
+// IPTV/media stream tokens (§5.4).  Kept separate from SESSION_SECRET so
+// a stream-token compromise does not expose session cookies, and so key
+// rotation is scoped to the affected token class.  The D2a migration
+// fallback (verifier accepting SESSION_SECRET-signed tokens) is removed:
+// every verify site is single-key, so SESSION_SECRET can never forge a
+// stream token. Future rotations should dual-key OLD vs NEW
+// STREAM_TOKEN_SECRET values via verifyStreamTokenDualKey, never
+// SESSION_SECRET.
 const rawStreamTokenSecret = required('STREAM_TOKEN_SECRET')
 validateSecretStrength('STREAM_TOKEN_SECRET', rawStreamTokenSecret, isProd)
 
