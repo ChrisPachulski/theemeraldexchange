@@ -424,10 +424,15 @@ export const mediaApi = {
       completed: entry.completed ?? false,
     }),
 
-  /** Keep a transcode session alive. Fire-and-forget; the absolute heartbeatUrl
-   *  already carries its ?t= token, so no credentials are needed. */
-  heartbeat: (url: string) =>
-    fetch(url, { method: 'POST', keepalive: true }).catch(() => undefined),
+  /** Keep a transcode session alive. The absolute heartbeatUrl already carries
+   *  its ?t= token, so no credentials are needed. Resolves to the HTTP status
+   *  (undefined on network failure) so the player can tell a reaped session
+   *  (404 — stop and re-grant) from a transient blip (keep beating). */
+  heartbeat: (url: string): Promise<number | undefined> =>
+    fetch(url, { method: 'POST', keepalive: true }).then(
+      (res) => res.status,
+      () => undefined,
+    ),
 
   /** Stop a transcode session, freeing its concurrency slot immediately.
    *  Fire-and-forget with keepalive so it still flushes during page unload

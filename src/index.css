@@ -142,6 +142,13 @@
 .iptv-tab__category { padding: .5rem; }
 .iptv-tab__status { color: var(--text-dim, #888); padding: 1rem; }
 .iptv-tab__status--error { color: var(--text-error, #c33); }
+div.iptv-tab__status--error p { margin: 0 0 .5rem; }
+/* "Play again" after a transcode session was reaped (MediaPlayer). */
+.iptv-tab__retry {
+  padding: .4rem .9rem; border-radius: 4px; cursor: pointer;
+  border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.08); color: #f5f5f5;
+}
+.iptv-tab__retry:hover { background: rgba(255,255,255,.14); }
 .iptv-tab__pager {
   display: flex; gap: .5rem; align-items: center; justify-content: flex-end; margin-top: 1rem;
 }
