@@ -137,7 +137,10 @@ async function readTail(path: string, limit: number): Promise<string[]> {
   try {
     const stat = await fd.stat()
     let pos = stat.size
-    let leftover = Buffer.alloc(0)
+    // Annotated as the wide Buffer type: splitOnNewlineByte returns Buffer
+    // (Buffer<ArrayBufferLike>), and reassigning pieces[0] back into leftover
+    // must not narrow to Buffer.alloc's inferred Buffer<ArrayBuffer>.
+    let leftover: Buffer = Buffer.alloc(0)
     const lines: string[] = []
     while (pos > 0 && lines.length < limit) {
       const readSize = Math.min(CHUNK_SIZE, pos)

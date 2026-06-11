@@ -631,9 +631,11 @@ describe('vod stream grant + proxy', () => {
     )
     try {
       const ac = new AbortController()
-      const pending = app
-        .request('/api/iptv/stream/vod/20/mp4?t=fake.vod.MjA', { signal: ac.signal })
-        .catch(() => undefined) // the aborted request itself may reject
+      // app.request() is typed Response | Promise<Response>; normalize to a
+      // promise before .catch (the aborted request itself may reject).
+      const pending = Promise.resolve(
+        app.request('/api/iptv/stream/vod/20/mp4?t=fake.vod.MjA', { signal: ac.signal }),
+      ).catch(() => undefined)
       await new Promise((r) => setTimeout(r, 20))
       ac.abort()
       await pending
@@ -659,11 +661,11 @@ describe('vod stream grant + proxy', () => {
     )
     try {
       const ac = new AbortController()
-      const pending = app
-        .request(`/api/iptv/stream/series/ep-1/mkv?t=${fakeToken('series', 'ep-1')}`, {
+      const pending = Promise.resolve(
+        app.request(`/api/iptv/stream/series/ep-1/mkv?t=${fakeToken('series', 'ep-1')}`, {
           signal: ac.signal,
-        })
-        .catch(() => undefined)
+        }),
+      ).catch(() => undefined)
       await new Promise((r) => setTimeout(r, 20))
       ac.abort()
       await pending
