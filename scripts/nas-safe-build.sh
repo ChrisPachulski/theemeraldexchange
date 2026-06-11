@@ -74,9 +74,11 @@ nas() { timeout 25 ssh -o ConnectTimeout=12 -o BatchMode=yes "$NAS" "$@"; }
 # launches the throttled build under its own session (setsid) so it outlives
 # this SSH connection. The chosen numbers are echoed back for the operator.
 say "discovering capacity on ${NAS_HOST} and launching detached build of '${SERVICE}'…"
-launch_out=$(nas bash -s -- "$APPDATA" "$SERVICE" "$CRITICAL" "${CORES_RESERVED:-}" "$LOG" "$DONE" "$PIDF" <<'REMOTE'
+# Values go over as inline env assignments, NOT positional args: SSH joins argv
+# into one remote string, and an EMPTY positional (RES_OVERRIDE when unset)
+# collapses and shifts the rest, leaving later params unbound under `set -u`.
+launch_out=$(nas "APPDATA='$APPDATA' SERVICE='$SERVICE' CRITICAL='$CRITICAL' RES_OVERRIDE='${CORES_RESERVED:-}' LOG='$LOG' DONE='$DONE' PIDF='$PIDF' bash -s" <<'REMOTE'
 set -eu
-APPDATA="$1"; SERVICE="$2"; CRITICAL="$3"; RES_OVERRIDE="$4"; LOG="$5"; DONE="$6"; PIDF="$7"
 cd "$APPDATA" || { echo "ERR: appdata $APPDATA missing"; exit 5; }
 
 NPROC="$(nproc)"
@@ -134,7 +136,7 @@ bad=0
 miss=0
 while :; do
   sample=$(nas "
-    done='\$(cat $DONE 2>/dev/null)';
+    done=\$(cat $DONE 2>/dev/null);
     load1=\$(cut -d' ' -f1 /proc/loadavg);
     crit=\$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' $CRITICAL 2>/dev/null || echo absent);
     tail=\$(tail -n1 $LOG 2>/dev/null | tr -d '\r');
