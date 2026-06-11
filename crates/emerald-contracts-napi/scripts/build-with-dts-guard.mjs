@@ -8,13 +8,16 @@
 //      clobbered before the build starts — happens when prior runs left
 //      a dirty working copy).
 //   2. Invokes `napi build` with whatever args were passed through.
-//   3. If the post-build file is empty or shorter than the snapshot,
-//      writes the snapshot back.
+//   3. If the post-build file differs from the snapshot IN ANY WAY
+//      (deleted, truncated, OR rewritten to different content of any
+//      length), writes the snapshot back. A pure length comparison is
+//      not enough: a CLI that emits its own stub .d.ts could produce a
+//      LONGER file that still clobbers the hand-authored contract.
 //
 // Exit code matches the CLI's so CI fails honestly when the build fails.
 
 import { spawnSync, execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -59,13 +62,16 @@ const result = spawnSync('npx', ['--yes', 'napi', ...napiArgs], {
   stdio: 'inherit',
 })
 
-if (before && existsSync(DTS_PATH)) {
-  const after = statSync(DTS_PATH).size
-  if (after < beforeLen) {
+if (before) {
+  // Restore on ANY divergence from the snapshot: deletion, truncation, or a
+  // same/greater-length rewrite. The hand-authored .d.ts is the contract;
+  // nothing the CLI writes during a napi-2.16 build is ever an improvement.
+  const after = existsSync(DTS_PATH) ? readFileSync(DTS_PATH) : null
+  if (after === null || !after.equals(before)) {
     writeFileSync(DTS_PATH, before)
     console.warn(
       `[build-with-dts-guard] restored index.d.ts (${beforeLen} bytes) — ` +
-        `napi-rs CLI shrunk it to ${after} bytes during build.`,
+        `napi-rs CLI ${after === null ? 'deleted it' : `rewrote it to ${after.length} bytes`} during build.`,
     )
   }
 }
