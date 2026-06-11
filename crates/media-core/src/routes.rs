@@ -719,7 +719,7 @@ async fn stream_file(
         .stream_semaphore
         .clone()
         .try_acquire_owned()
-        .map_err(|_| AppError::TranscoderRequired)?;
+        .map_err(|_| AppError::StreamSlotsExhausted)?;
 
     let service = ServeFile::new(&file.path);
     let mut resp = service
@@ -1481,6 +1481,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        // The body must carry the DISTINCT capacity code, not the misleading
+        // "transcoder required (M4 offline)" outage message — ops/clients need
+        // to tell "retry shortly, at capacity" from "transcoder is down".
+        let v = body_json(resp).await;
+        assert_eq!(v["error"], "stream_slots_exhausted");
     }
 
     async fn seed_show_with_episodes(state: &AppState, n: i64) {
