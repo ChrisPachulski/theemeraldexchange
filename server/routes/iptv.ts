@@ -29,9 +29,9 @@ import {
   getSeriesDetail,
 } from '../services/iptvCatalog.js'
 import { epgChannelWindow, epgGrid, epgNow } from '../services/iptvEpgQuery.js'
-import { signStreamToken, verifyStreamToken, verifyStreamTokenDualKey, type StreamKind } from '../services/iptvStreamToken.js'
+import { signStreamToken, verifyStreamToken, type StreamKind } from '../services/iptvStreamToken.js'
 import { checkReplay } from '../services/tokenReplayCache.js'
-import { tryNormaliseLegacySub } from '../services/sub.js'
+import { parseSub } from '../services/sub.js'
 import { resolveSourcePrecedence } from '../services/sourcePrecedence.js'
 import { streamConcurrency, type SessionView, type SessionKind } from '../services/iptvConcurrency.js'
 import { rewriteManifest } from '../services/iptvHlsRewrite.js'
@@ -483,39 +483,35 @@ iptv.get('/playlist.m3u', (c) => {
   const t = c.req.query('t') ?? ''
   let claims: ReturnType<typeof verifyStreamToken>
   try {
-    claims = verifyStreamTokenDualKey(env.streamTokenSecret, env.sessionSecret, t)
+    claims = verifyStreamToken(env.streamTokenSecret, t)
     if (claims.k !== 'playlist') throw new Error('kind_mismatch')
-    // §16 D-row: canonical rid is 'iptv-channels-all'. M1-era tokens
-    // carry 'all'. Both are accepted during the D2a secret-migration window
-    // (90-day expiry window). Once all M1 tokens have expired naturally this
-    // fallback can be dropped.
-    if (claims.rid !== 'iptv-channels-all' && claims.rid !== 'all') {
+    // §16 D-row: canonical rid is 'iptv-channels-all'. The M1-era 'all'
+    // fallback (D2a migration window) is gone — those tokens have expired.
+    if (claims.rid !== 'iptv-channels-all') {
       throw new Error('resource_mismatch')
     }
   } catch (err) {
     return c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401)
   }
 
-  // Persistent revocation check (§6.2 / D12). Tokens issued by D12+ carry a
-  // jti claim that maps to a row in iptv_playlist_tokens. A revoked_at IS NOT
-  // NULL row is a hard reject regardless of the HMAC signature being valid.
-  // M1-era tokens without jti bypass this check (they will expire naturally;
-  // D2b removes the fallback path once the 90-day window closes).
-  if (claims.jti != null) {
-    const row = iptvDb().stmts.getPlaylistToken.get(claims.jti) as
-      | { jti: string; sub: string; issued_at: string; expires_at: string; revoked_at: string | null }
-      | undefined
-    if (!row) {
-      return c.json({ error: 'token_not_found' }, 401)
-    }
-    if (row.revoked_at != null) {
-      return c.json({ error: 'token_revoked' }, 401)
-    }
+  // Persistent revocation check (§6.2 / D12). Every playlist token minted
+  // since D12 persists its jti in iptv_playlist_tokens at mint time, so the
+  // row lookup is unconditional: no row → reject (pre-D12 tokens have expired
+  // naturally), revoked_at IS NOT NULL → hard reject regardless of the HMAC
+  // signature being valid.
+  const row = iptvDb().stmts.getPlaylistToken.get(claims.jti) as
+    | { jti: string; sub: string; issued_at: string; expires_at: string; revoked_at: string | null }
+    | undefined
+  if (!row) {
+    return c.json({ error: 'token_not_found' }, 401)
+  }
+  if (row.revoked_at != null) {
+    return c.json({ error: 'token_revoked' }, 401)
   }
 
   const status = memberStatus(claims.sub)
   if (status !== 'allowed') {
-    if (claims.jti != null && status === 'revoked') {
+    if (status === 'revoked') {
       iptvDb().stmts.revokePlaylistToken.run(new Date().toISOString(), claims.jti)
     }
     return c.json({ error: 'access_revoked' }, 401)
@@ -820,7 +816,7 @@ iptv.post('/stream/catchup/:streamId/grant', requireAuth, async (c) => {
 function checkToken(c: Context<Env>, expectKind: StreamKind, resourceId: string): { ok: true; sub: string } | { ok: false; resp: Response } {
   const t = c.req.query('t') ?? ''
   try {
-    const claims = verifyStreamTokenDualKey(env.streamTokenSecret, env.sessionSecret, t)
+    const claims = verifyStreamToken(env.streamTokenSecret, t)
     if (claims.k !== expectKind || claims.rid !== resourceId) {
       return { ok: false, resp: c.json({ error: 'token_mismatch' }, 401) }
     }
@@ -832,17 +828,15 @@ function checkToken(c: Context<Env>, expectKind: StreamKind, resourceId: string)
         return { ok: false, resp: c.json({ error: replay.reason }, 401) }
       }
     }
-    // Stream-token grace path (§8.2): M1 HMAC tokens may carry an
-    // unprefixed `sub`. Normalise bare numeric ids to `plex:<id>` during
-    // the 30-day grace window. Any sub written from this normalised
-    // value (e.g. into watch history on heartbeat) uses the prefixed
-    // form. Drop this block one cookie-TTL post-D7 alongside the
-    // verifySession grace path.
-    const parsed = tryNormaliseLegacySub(claims.sub)
-    if (!parsed) {
+    // The sub claim must be canonical namespaced form (§8). The M1
+    // bare-numeric grace normalization is gone — its 30-day window closed.
+    let sub: string
+    try {
+      sub = parseSub(claims.sub).raw
+    } catch {
       return { ok: false, resp: c.json({ error: 'invalid_token', detail: 'sub_invalid_format' }, 401) }
     }
-    return { ok: true, sub: parsed.raw }
+    return { ok: true, sub }
   } catch (err) {
     return { ok: false, resp: c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401) }
   }
@@ -1098,7 +1092,7 @@ iptv.get('/stream/live/:streamId/remux/seg', (c) => {
   const t = c.req.query('t') ?? ''
   let claims: ReturnType<typeof verifyStreamToken>
   try {
-    claims = verifyStreamTokenDualKey(env.streamTokenSecret, env.sessionSecret, t)
+    claims = verifyStreamToken(env.streamTokenSecret, t)
     if (claims.k !== 'remux') throw new Error('kind_mismatch')
   } catch (err) {
     return c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401)
@@ -1322,7 +1316,7 @@ iptv.get('/stream/segment', async (c) => {
   const t = c.req.query('u') ?? ''
   let claims: ReturnType<typeof verifyStreamToken>
   try {
-    claims = verifyStreamTokenDualKey(env.streamTokenSecret, env.sessionSecret, t)
+    claims = verifyStreamToken(env.streamTokenSecret, t)
     if (claims.k !== 'segment') throw new Error('kind_mismatch')
   } catch (err) {
     return c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401)
