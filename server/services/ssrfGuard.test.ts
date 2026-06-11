@@ -50,17 +50,32 @@ describe('isPublicHttpsUpstream', () => {
     expect(ok('https://100.64.0.1/seg.ts')).toBe(false) // CGNAT
   })
 
+  it('rejects special-purpose IPv4 ranges (benchmarking, IETF, 6to4 relay)', () => {
+    expect(ok('https://198.18.0.1/seg.ts')).toBe(false) // benchmarking 198.18/15
+    expect(ok('https://198.19.255.255/seg.ts')).toBe(false) // upper half of /15
+    expect(ok('https://192.0.0.1/seg.ts')).toBe(false) // IETF 192.0.0.0/24
+    expect(ok('https://192.88.99.1/seg.ts')).toBe(false) // 6to4 relay anycast
+  })
+
   it('allows public IPv4 that is adjacent to private ranges', () => {
     expect(ok('https://172.15.0.1/seg.ts')).toBe(true) // just below 172.16/12
     expect(ok('https://172.32.0.1/seg.ts')).toBe(true) // just above
     expect(ok('https://11.0.0.1/seg.ts')).toBe(true)
     expect(ok('https://8.8.8.8/seg.ts')).toBe(true)
+    expect(ok('https://198.17.255.255/seg.ts')).toBe(true) // just below 198.18/15
+    expect(ok('https://198.20.0.1/seg.ts')).toBe(true) // just above 198.18/15
+    expect(ok('https://192.0.1.1/seg.ts')).toBe(true) // adjacent to 192.0.0.0/24
+    expect(ok('https://192.88.100.1/seg.ts')).toBe(true) // adjacent to 192.88.99/24
   })
 
-  it('rejects loopback + unique-local + link-local IPv6', () => {
+  it('rejects loopback + unique-local + link-local + site-local + NAT64 IPv6', () => {
     expect(ok('https://[::1]/seg.ts')).toBe(false)
     expect(ok('https://[fd00::1]/seg.ts')).toBe(false)
     expect(ok('https://[fe80::1]/seg.ts')).toBe(false)
+    expect(ok('https://[fec0::1]/seg.ts')).toBe(false) // site-local (deprecated)
+    expect(ok('https://[feff::1]/seg.ts')).toBe(false) // top of fec0::/10
+    expect(ok('https://[64:ff9b::a00:1]/seg.ts')).toBe(false) // NAT64 → 10.0.0.1
+    expect(ok('https://[64:ff9b::808:808]/seg.ts')).toBe(false) // NAT64 even to public v4
     expect(ok('https://[::ffff:10.0.0.1]/seg.ts')).toBe(false) // IPv4-mapped private
   })
 

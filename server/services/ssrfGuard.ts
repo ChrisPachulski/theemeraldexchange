@@ -22,26 +22,34 @@ function isPrivateIPv4(host: string): boolean {
   if (!m) return false
   const o = m.slice(1).map(Number)
   if (o.some((n) => n > 255)) return true // malformed → treat as unsafe
-  const [a, b] = o
+  const [a, b, c] = o
   if (a === 10) return true // 10.0.0.0/8
   if (a === 127) return true // loopback
   if (a === 0) return true // 0.0.0.0/8 "this host"
   if (a === 169 && b === 254) return true // link-local incl. cloud metadata
   if (a === 172 && b >= 16 && b <= 31) return true // 172.16.0.0/12
   if (a === 192 && b === 168) return true // 192.168.0.0/16
+  if (a === 192 && b === 0 && c === 0) return true // IETF protocol assignments 192.0.0.0/24
+  if (a === 192 && b === 88 && c === 99) return true // 6to4 relay anycast 192.88.99.0/24
+  if (a === 198 && (b === 18 || b === 19)) return true // benchmarking 198.18.0.0/15
   if (a === 100 && b >= 64 && b <= 127) return true // CGNAT 100.64.0.0/10
   if (a >= 224) return true // multicast + reserved (224+)
   return false
 }
 
 // IPv6 (already unbracketed) → true for loopback, unspecified, unique-local
-// (fc00::/7), link-local (fe80::/10), and IPv4-mapped private addresses.
+// (fc00::/7), link-local (fe80::/10), deprecated site-local (fec0::/10),
+// NAT64 (64:ff9b::/96 — embeds an IPv4 target a NAT64 gateway would reach),
+// and IPv4-mapped private addresses.
 function isPrivateIPv6(host: string): boolean {
   const h = host.toLowerCase()
   if (h === '::1' || h === '::') return true
   if (h.startsWith('fc') || h.startsWith('fd')) return true // unique-local fc00::/7
   if (h.startsWith('fe8') || h.startsWith('fe9') || h.startsWith('fea') || h.startsWith('feb'))
     return true // link-local fe80::/10
+  if (h.startsWith('fec') || h.startsWith('fed') || h.startsWith('fee') || h.startsWith('fef'))
+    return true // site-local (deprecated) fec0::/10
+  if (h.startsWith('64:ff9b:')) return true // NAT64 64:ff9b::/96 (+ local-use 64:ff9b:1::/48)
   const mapped = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(h)
   if (mapped) return isPrivateIPv4(mapped[1])
   return false
