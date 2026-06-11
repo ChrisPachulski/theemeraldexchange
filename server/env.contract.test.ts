@@ -52,7 +52,6 @@ function topLevelKeys(source: string, openBrace: number): string[] | null {
   let depth = 0
   let i = openBrace
   let quote: string | null = null
-  let keyStart = -1
   while (i < source.length) {
     const ch = source[i]
     if (quote) {
@@ -66,7 +65,6 @@ function topLevelKeys(source: string, openBrace: number): string[] | null {
       depth--
       if (depth === 0 && ch === '}') {
         // End of the env object literal.
-        void keyStart
         return keys
       }
     } else if (depth === 1) {
