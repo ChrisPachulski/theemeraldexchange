@@ -26,6 +26,7 @@
 //   GET  /api/me                — current user, or 401.
 
 import { Hono, type Context } from 'hono'
+import { createHash } from 'node:crypto'
 import { env, isAppleConfigured } from './env.js'
 import {
   checkPin,
@@ -175,14 +176,9 @@ export function enforceAuthRateLimit(
   return null
 }
 
-function enforceAuthCheckPinRateLimit(c: Context, pinId: number): Response | null {
+function enforceSingleBucketRule(c: Context, rule: AuthRateLimitRule): Response | null {
   const now = Date.now()
   sweepAuthRateLimitBuckets(now)
-  const rule: AuthRateLimitRule = {
-    key: `check:pin:${pinId}`,
-    limit: AUTH_CHECK_PIN_RATE_LIMIT.limit,
-    windowMs: AUTH_CHECK_PIN_RATE_LIMIT.windowMs,
-  }
   const current = authRateLimitBuckets.get(rule.key)
   const bucket = current && current.resetAt > now ? current : { count: 0, resetAt: now + rule.windowMs }
   if (bucket.count >= rule.limit) {
@@ -193,6 +189,63 @@ function enforceAuthCheckPinRateLimit(c: Context, pinId: number): Response | nul
   bucket.count += 1
   authRateLimitBuckets.set(rule.key, bucket)
   return null
+}
+
+function enforceAuthCheckPinRateLimit(c: Context, pinId: number): Response | null {
+  return enforceSingleBucketRule(c, {
+    key: `check:pin:${pinId}`,
+    limit: AUTH_CHECK_PIN_RATE_LIMIT.limit,
+    windowMs: AUTH_CHECK_PIN_RATE_LIMIT.windowMs,
+  })
+}
+
+/**
+ * Identity-keyed rate-limit bucket, applied REGARDLESS of client-IP trust.
+ *
+ * The per-client buckets above only exist when TRUST_CLIENT_IP_HEADERS=1
+ * (off by default — behind the Cloudflare tunnel the operator must opt in),
+ * which left only the coarse global buckets biting on the default deploy.
+ * These buckets key on the ATTEMPTED identity instead (pinId / SIWA sub /
+ * passkey credential id / registration handle), so a stuffing or replay run
+ * against one credential is throttled at the per-client rate no matter which
+ * IP it arrives from or whether IP headers are trusted.
+ *
+ * The identity is attacker-supplied, so this is rate-limit keying ONLY —
+ * never an authN/authZ signal. An attacker who randomises identities per
+ * request merely splits their own traffic across buckets and is still capped
+ * by the global bucket; an attacker hammering ONE account cannot escape its
+ * bucket. Identities are SHA-256-hashed into the key so raw credential
+ * material never sits in the bucket map.
+ */
+export function enforceAuthIdentityRateLimit(
+  c: Context,
+  kind: AuthRateLimitKind,
+  identity: string | null | undefined,
+): Response | null {
+  if (!identity) return null
+  const cfg = AUTH_CLIENT_RATE_LIMITS[kind]
+  const digest = createHash('sha256').update(identity).digest('hex').slice(0, 16)
+  return enforceSingleBucketRule(c, {
+    key: `${kind}:identity:${digest}`,
+    limit: cfg.limit,
+    windowMs: cfg.windowMs,
+  })
+}
+
+/** UNVERIFIED `sub` claim of a compact JWT — for rate-limit keying only.
+ *  (Signature verification happens later in the handler; see the
+ *  enforceAuthIdentityRateLimit doc for why unverified is fine here.) */
+export function unverifiedJwtSub(token: string): string | null {
+  const parts = token.split('.')
+  if (parts.length !== 3) return null
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as {
+      sub?: unknown
+    }
+    return typeof payload.sub === 'string' && payload.sub.length > 0 ? payload.sub : null
+  } catch {
+    return null
+  }
 }
 
 async function parseLimitedJson(c: Context, maxBytes: number): Promise<{ tooLarge: boolean; body: unknown | null }> {
@@ -430,6 +483,11 @@ auth.post('/apple', async (c) => {
     | null
   const identityToken = typeof body?.identityToken === 'string' ? body.identityToken : undefined
   if (!identityToken) return c.json({ error: 'missing identity_token' }, 400)
+  // Identity-keyed bucket on the (unverified) SIWA sub: throttles a replay /
+  // stuffing run against one Apple account even on deploys where client-IP
+  // headers are untrusted and the per-client buckets never engage.
+  const identityLimited = enforceAuthIdentityRateLimit(c, 'apple', unverifiedJwtSub(identityToken))
+  if (identityLimited) return identityLimited
   const nonce = typeof body?.nonce === 'string' ? body.nonce : undefined
   const inviteCode = typeof body?.inviteCode === 'string' ? body.inviteCode : undefined
 
