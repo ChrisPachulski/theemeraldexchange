@@ -6,8 +6,15 @@
 //! Build (in this crate dir): `maturin develop --release`.
 //! Output: an `emerald_contracts` extension module on the active venv.
 //!
-//! Surface mirrors `crates/emerald-contracts-napi/src/lib.rs` so Hono +
-//! recommender call byte-identical code paths.
+//! The surface is intentionally NARROWER than the N-API binding
+//! (`crates/emerald-contracts-napi/src/lib.rs`): the recommender only
+//! needs HKDF, sub parsing, PII scrub, and the internal-principal
+//! verify side — stream tokens and device tokens are Hono/media-core
+//! concerns and are not exposed here. Conversely this binding exposes
+//! `internal_principal_decrypt`/`_enforce_time_window`, which N-API
+//! deliberately omits (Hono mints principals, never verifies them).
+//! Where the surfaces overlap, both bindings call the same canonical
+//! crate functions, so the shared paths are byte-identical.
 
 #![deny(clippy::all)]
 

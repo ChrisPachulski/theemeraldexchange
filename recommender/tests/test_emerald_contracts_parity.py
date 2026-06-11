@@ -83,45 +83,93 @@ def test_hkdf_internal_principal_vector(vec: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# PII scrub — denylist contents + scrub semantics
+# PII scrub — denylist contents + the §15.3 vector file (the same oracle
+# the Rust harness and the TS binding-backed scrubber execute)
 # ---------------------------------------------------------------------------
 
 
 def test_pii_scrub_keys_nonempty_and_lowercase() -> None:
     keys = emerald_contracts.pii_scrub_keys()
     assert len(keys) > 0
-    # Crate-level invariant: every denylist entry is already lowercase so
-    # the case-insensitive substring match works correctly. If a new entry
-    # slips in uppercase, the matcher will still work but the contract
-    # gets harder to reason about.
+    # Crate-level invariant: entries are stored lowercase — the matcher
+    # lowercases only the key, so an uppercase entry could never match.
     assert all(k == k.lower() for k in keys), [k for k in keys if k != k.lower()]
-    # Spot-check a few entries known to be in the contract.
-    for must_include in ("plex_token", "password", "authorization"):
+    # Spot-check entries pinned by the §15.3 contract.
+    for must_include in ("plexauthtoken", "password", "token", "cookie"):
         assert must_include in keys
 
 
 def test_pii_scrub_replaces_known_keys() -> None:
     payload = {
-        "plex_token": "abc",
+        "plexAuthToken": "abc",
         "password": "hunter2",
         "username": "alice",
     }
     scrubbed = json.loads(emerald_contracts.pii_scrub_value(json.dumps(payload)))
-    assert scrubbed["plex_token"] == "[Filtered]"
-    assert scrubbed["password"] == "[Filtered]"
+    assert scrubbed["plexAuthToken"] == "REDACTED"
+    assert scrubbed["password"] == "REDACTED"
     assert scrubbed["username"] == "alice"
 
 
-def test_pii_scrub_redacts_bearer_in_string_value() -> None:
-    payload = {"url": "GET /api/x with Bearer tok-123"}
-    scrubbed = json.loads(emerald_contracts.pii_scrub_value(json.dumps(payload)))
-    assert "Bearer" not in scrubbed["url"] or "[Filtered:bearer]" in scrubbed["url"]
+def _pii_scrub_cases() -> list[dict]:
+    return json.loads((VECTOR_DIR / "telemetry-pii-scrub.json").read_text())["cases"]
+
+
+@pytest.mark.parametrize("case", _pii_scrub_cases(), ids=lambda c: c["id"])
+def test_pii_scrub_vector(case: dict) -> None:
+    scrubbed = json.loads(
+        emerald_contracts.pii_scrub_value(json.dumps(case["input"]))
+    )
+    assert scrubbed == case["expected"], (
+        f"{case['id']}: scrubbed output diverged from vector"
+    )
 
 
 # ---------------------------------------------------------------------------
-# Internal-principal — recommender will *verify* inbound principals
-# minted by Hono. Round-trip test here proves the PyO3 surface can do it.
+# Internal-principal — recommender *verifies* inbound principals minted
+# by Hono. tests/vectors/internal-principal.json drives the round trip;
+# the Rust harness and the TS binding (mint side) execute the same file.
 # ---------------------------------------------------------------------------
+
+
+def _internal_principal_vector() -> dict:
+    return json.loads((VECTOR_DIR / "internal-principal.json").read_text())
+
+
+def test_internal_principal_vector_key_derivation() -> None:
+    rt = _internal_principal_vector()["round_trip_vector"]
+    derived = emerald_contracts.hkdf_internal_principal(
+        rt["secret_hex_utf8"].encode("utf-8")
+    )
+    assert derived.hex() == rt["derived_key_hex"]
+
+
+def test_internal_principal_vector_round_trip() -> None:
+    vec = _internal_principal_vector()
+    rt = vec["round_trip_vector"]
+    kid = vec["jwe_shape"]["protected_header"]["kid"]
+    key = bytes.fromhex(rt["derived_key_hex"])
+    claims = rt["claims_input"]
+
+    token = emerald_contracts.internal_principal_encrypt(key, kid, claims)
+    decoded = emerald_contracts.internal_principal_decrypt({kid: key}, token)
+    assert decoded == claims
+
+    # negative_checks.nonce-uniqueness: random IV per encrypt is mandatory.
+    token2 = emerald_contracts.internal_principal_encrypt(key, kid, claims)
+    assert token2 != token
+
+
+def test_internal_principal_vector_unknown_kid_rejects() -> None:
+    vec = _internal_principal_vector()
+    rt = vec["round_trip_vector"]
+    key = bytes.fromhex(rt["derived_key_hex"])
+    token = emerald_contracts.internal_principal_encrypt(
+        key, "internal-v99", rt["claims_input"]
+    )
+    # Verifier must miss the map — never brute-force all keys.
+    with pytest.raises(KeyError):
+        emerald_contracts.internal_principal_decrypt({"internal-v1": key}, token)
 
 
 def test_internal_principal_enforce_time_window_rejects_expired() -> None:
