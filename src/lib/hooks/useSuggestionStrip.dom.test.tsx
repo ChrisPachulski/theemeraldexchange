@@ -51,7 +51,7 @@ function suggestedResult(over: Record<string, unknown> = {}) {
 beforeEach(() => {
   suggestedMock.mockReturnValue(suggestedResult())
   limitsMock.mockReturnValue({ data: { useLocalRecommender: true } })
-  userApiKeyMock.mockReturnValue({ key: null, hasKey: false, setKey: vi.fn(), clearKey: vi.fn() })
+  userApiKeyMock.mockReturnValue({ hasKey: false, fingerprint: null, loading: false, setKey: vi.fn(), clearKey: vi.fn() })
   feedbackMock.mockReturnValue({ data: undefined, error: null })
   suggestionModeMock.mockReturnValue({ mode: 'recommended', setMode: vi.fn(), toggle: vi.fn() })
 })
@@ -97,7 +97,7 @@ describe('useSuggestionStrip — label', () => {
 describe('useSuggestionStrip — personalization gating', () => {
   it('omits the mode toggle when personalization is not achievable', () => {
     limitsMock.mockReturnValue({ data: { useLocalRecommender: false } })
-    userApiKeyMock.mockReturnValue({ key: null, hasKey: false, setKey: vi.fn(), clearKey: vi.fn() })
+    userApiKeyMock.mockReturnValue({ hasKey: false, fingerprint: null, loading: false, setKey: vi.fn(), clearKey: vi.fn() })
     const { result } = renderHook(() => useSuggestionStrip('movie', new Set()))
     expect(result.current.mode).toBeUndefined()
     expect(result.current.personalizedAchievable).toBe(false)
