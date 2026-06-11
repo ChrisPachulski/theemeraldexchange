@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { useUserApiKey } from '../../lib/hooks/useUserApiKey'
 import { apiUrl } from '../../lib/api/base'
 import './ApiKeySettings.css'
 
-// Per-user "Your AI key" card in the user menu. The key is stored in
-// localStorage on this device only (scoped by Plex user id) — it
-// never leaves the browser except as a request header on each
-// /api/suggestions call.
+// Per-user "Your AI key" card in the user menu. The key is stored
+// SERVER-SIDE, encrypted at rest and scoped to this account; the
+// browser only ever sees the masked last-4 fingerprint after save.
+// Replace/clear go through /api/settings/anthropic-key.
 //
 // Below the input we show the last-30-day usage summary pulled from
 // the server: calls + estimated cost. This is the "you can see what
@@ -37,9 +37,11 @@ function fmtCost(cents: number): string {
 }
 
 export function ApiKeySettings() {
-  const { key, hasKey, setKey, clearKey } = useUserApiKey()
-  const qc = useQueryClient()
+  const { hasKey, fingerprint, setKey, clearKey } = useUserApiKey()
   const [draft, setDraft] = useState('')
+  // "Replace" flow: show the entry form even while a key is set. The
+  // existing key is never displayed; the user pastes a fresh one.
+  const [replacing, setReplacing] = useState(false)
   // Show-on-type only — once a key is saved we never expose it again.
   // If the user forgot the key, they retrieve it from
   // console.anthropic.com, not from this UI. Eliminates a class of
@@ -47,17 +49,18 @@ export function ApiKeySettings() {
   // buttons reliably produce.
   const [typeReveal, setTypeReveal] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
 
-  // Reset the draft when the underlying key changes (e.g. set on
-  // another tab, cleared by the user). The setState-in-effect lint
-  // rule flags cascading renders; here we're synchronizing local UI
-  // state to an external source (cross-tab localStorage), which is
-  // the exception the rule's docs explicitly allow.
+  // Reset the entry state when the stored key changes (saved here,
+  // replaced elsewhere, cleared). Synchronizing local UI state to an
+  // external source is the exception the setState-in-effect lint
+  // rule's docs explicitly allow.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setDraft('')
     setTypeReveal(false)
-  }, [key])
+    setReplacing(false)
+  }, [hasKey, fingerprint])
 
   const usage = useQuery({
     queryKey: ['usage', 'me'],
@@ -74,26 +77,27 @@ export function ApiKeySettings() {
       return
     }
     setError(null)
+    setBusy(true)
+    // The suggestions queries re-key on the stored fingerprint, so the
+    // strip refetches with the new key (useUserApiKey invalidates).
     setKey(trimmed)
-    setDraft('')
-    // The suggestions queries cache by ai/trending mode but not by
-    // which key was used, so a key change otherwise leaves stale
-    // personalized picks (or api_key_required errors) on screen until
-    // a hard refresh. Wildcard-invalidate covers movie+tv, ai+trending.
-    qc.invalidateQueries({ queryKey: ['suggestions'] })
+      .then(() => setDraft(''))
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
   }
 
   const onClear = () => {
+    setBusy(true)
     clearKey()
-    // Same staleness path on clear: without this the Discover strip
-    // keeps showing AI picks that the backend will now reject for
-    // missing key.
-    qc.invalidateQueries({ queryKey: ['suggestions'] })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
   }
 
   const summaryStatus = hasKey
     ? `Set · ${usage.data?.calls ?? 0} calls · ${fmtCost(usage.data?.costCents ?? 0)}`
     : 'Not set'
+
+  const showForm = !hasKey || replacing
 
   return (
     <details className="api-key-settings user-menu__disclosure">
@@ -103,25 +107,37 @@ export function ApiKeySettings() {
       </summary>
       <p className="api-key-settings__hint">
         Personalized picks call the Anthropic API on each refresh. You bring
-        your own key so you only pay for what you use. The key stays on this
-        device — it never persists on the server.
+        your own key so you only pay for what you use. The key is encrypted
+        and stored with your account on this server; it is never shown again
+        after you save it.
       </p>
 
-      {hasKey ? (
+      {hasKey && (
         <div className="api-key-settings__live">
           <div className="api-key-settings__current">
-            {/* Last 4 chars only, no prefix. The key is fully opaque
-                from this UI once saved; "lost key" path is the
-                Anthropic console, not a reveal button. */}
-            <span className="api-key-settings__masked" aria-label="Key saved on this device">
+            {/* Masked fingerprint only (last 4 chars). The key is fully
+                opaque from this UI once saved; the "lost key" path is
+                the Anthropic console, not a reveal button. */}
+            <span className="api-key-settings__masked" aria-label="Key saved to your account">
               <span aria-hidden="true">••••••••••••</span>
-              <span className="api-key-settings__masked-tail">{key?.slice(-4)}</span>
-              <span className="api-key-settings__masked-tag">saved on this device</span>
+              <span className="api-key-settings__masked-tail">{fingerprint ?? ''}</span>
+              <span className="api-key-settings__masked-tag">saved to your account</span>
             </span>
+            {!replacing && (
+              <button
+                type="button"
+                className="api-key-settings__small-btn"
+                onClick={() => setReplacing(true)}
+                disabled={busy}
+              >
+                Replace
+              </button>
+            )}
             <button
               type="button"
               className="api-key-settings__small-btn api-key-settings__small-btn--danger"
               onClick={onClear}
+              disabled={busy}
             >
               Clear
             </button>
@@ -142,7 +158,9 @@ export function ApiKeySettings() {
             </div>
           </dl>
         </div>
-      ) : (
+      )}
+
+      {showForm && (
         <div className="api-key-settings__form">
           <label className="api-key-settings__label" htmlFor="api-key-input">
             Paste your <code>sk-ant-…</code> key
@@ -169,7 +187,7 @@ export function ApiKeySettings() {
             />
             {/* Reveal is only for the typing flow — verify your paste
                 before you hit Save. Disappears the moment the key is
-                saved (see hasKey branch above). */}
+                saved (see the masked block above). */}
             <button
               type="button"
               className="api-key-settings__small-btn"
@@ -182,22 +200,24 @@ export function ApiKeySettings() {
               type="button"
               className="api-key-settings__save"
               onClick={onSave}
-              disabled={draft.trim().length === 0}
+              disabled={busy || draft.trim().length === 0}
             >
-              Save
+              {hasKey ? 'Replace' : 'Save'}
             </button>
           </div>
           {error && <p className="api-key-settings__error">{error}</p>}
-          <p className="api-key-settings__cta">
-            Need one?{' '}
-            <a
-              href="https://console.anthropic.com/settings/keys"
-              target="_blank"
-              rel="noreferrer"
-            >
-              Create a key →
-            </a>
-          </p>
+          {!hasKey && (
+            <p className="api-key-settings__cta">
+              Need one?{' '}
+              <a
+                href="https://console.anthropic.com/settings/keys"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Create a key -&gt;
+              </a>
+            </p>
+          )}
         </div>
       )}
     </details>

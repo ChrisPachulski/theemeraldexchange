@@ -1,6 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
 import { apiUrl } from '../api/base'
-import { keyFingerprint } from './useUserApiKey'
 import type { TrendingItem } from './useTrending'
 
 // Library-aware personalized suggestions for the Discover surface. The
@@ -118,7 +117,6 @@ export class SuggestionsError extends Error {
 async function fetchSuggested(
   kind: 'movie' | 'tv',
   forceTrending: boolean,
-  apiKey: string | null,
 ): Promise<SuggestionResult> {
   // forceTrending is the caller's resolved decision (see the tabs): the
   // user picked "Trending", OR personalization isn't achievable (no local
@@ -128,12 +126,11 @@ async function fetchSuggested(
   const url = forceTrending
     ? apiUrl(`/api/suggestions/${kind}`, { force: 'trending' })
     : apiUrl(`/api/suggestions/${kind}`)
-  const headers: Record<string, string> = {}
-  // Attach the BYO key on the personalized path so the legacy Claude
-  // route can authenticate. Harmless when the local recommender wins
-  // (it ignores the header).
-  if (!forceTrending && apiKey) headers['X-Anthropic-Api-Key'] = apiKey
-  const r = await fetch(url, { credentials: 'include', headers })
+  // No key header: the BYO Anthropic key lives server-side now (PUT
+  // /api/settings/anthropic-key) and the legacy Claude path reads the
+  // stored key itself when the header is absent. The browser never
+  // holds the key post-migration.
+  const r = await fetch(url, { credentials: 'include' })
   if (!r.ok) {
     // Throw instead of returning empty so React Query surfaces
     // suggested.isError / suggested.error to the UI. Silently
@@ -159,17 +156,22 @@ async function fetchSuggested(
   }
 }
 
-export function useSuggested(kind: 'movie' | 'tv', forceTrending: boolean, apiKey: string | null) {
+export function useSuggested(
+  kind: 'movie' | 'tv',
+  forceTrending: boolean,
+  /** Masked server fingerprint of the user's stored key (useUserApiKey),
+   *  or null when no key is set. Non-secret cache discriminator only. */
+  keyFingerprint: string | null,
+) {
   // Third segment is the resolved feed (trending vs recommended) so
-  // flipping the toggle is a distinct query that refetches. Fourth is a
-  // non-secret fingerprint of the API key: when the key changes (same
-  // tab via setKey, or cross-tab via the `storage` event in
-  // useUserApiKey), the query key changes, so TanStack Query treats it
-  // as a different query and refetches — closing the cross-tab
-  // cache-staleness gap.
+  // flipping the toggle is a distinct query that refetches. Fourth is
+  // the non-secret masked fingerprint of the stored key: when the key
+  // changes (set/replace/clear via /api/settings/anthropic-key), the
+  // query key changes, so TanStack Query treats it as a different query
+  // and refetches instead of serving a lineup minted under the old key.
   return useQuery({
-    queryKey: ['suggestions', kind, forceTrending ? 'trending' : 'recommended', keyFingerprint(apiKey)],
-    queryFn: () => fetchSuggested(kind, forceTrending, apiKey),
+    queryKey: ['suggestions', kind, forceTrending ? 'trending' : 'recommended', keyFingerprint ?? 'none'],
+    queryFn: () => fetchSuggested(kind, forceTrending),
     // Cache the lineup for the session; refresh only on explicit action
     // (Refresh button refetch / dislike low-water invalidation). See the
     // module header for why mount/toggle must NOT re-fetch.
@@ -183,12 +185,12 @@ export function useSuggested(kind: 'movie' | 'tv', forceTrending: boolean, apiKe
   })
 }
 
-export function useSuggestedMovies(forceTrending: boolean, apiKey: string | null) {
-  return useSuggested('movie', forceTrending, apiKey)
+export function useSuggestedMovies(forceTrending: boolean, keyFingerprint: string | null) {
+  return useSuggested('movie', forceTrending, keyFingerprint)
 }
 
-export function useSuggestedTv(forceTrending: boolean, apiKey: string | null) {
-  return useSuggested('tv', forceTrending, apiKey)
+export function useSuggestedTv(forceTrending: boolean, keyFingerprint: string | null) {
+  return useSuggested('tv', forceTrending, keyFingerprint)
 }
 
 // useDismissSuggestion is superseded by useSetFeedback in

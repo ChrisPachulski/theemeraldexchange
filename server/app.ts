@@ -22,6 +22,7 @@ import { plexLinks } from './routes/plex-links.js'
 import { notifications } from './routes/notifications.js'
 import { grabs } from './routes/grabs.js'
 import { suggestions } from './routes/suggestions.js'
+import { settings } from './routes/settings.js'
 import { feedback } from './routes/feedback.js'
 import { usage } from './routes/usage.js'
 import { recommenderEvents } from './routes/recommenderEvents.js'
@@ -185,6 +186,9 @@ app.route('/api/grabs', grabs)
 // rejection list is now mutated exclusively through /api/feedback,
 // which applies the per-user-signal guards.
 app.route('/api/suggestions', suggestions)
+// Per-user settings (admin-free, sub-scoped) — currently the server-side
+// encrypted BYO Anthropic key that replaced SPA-localStorage storage.
+app.route('/api/settings', settings)
 app.route('/api/feedback', feedback)
 app.route('/api/usage', usage)
 // Narrow pass-through for client-side conversion signals (currently

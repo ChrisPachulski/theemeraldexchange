@@ -71,7 +71,10 @@ export function useSuggestionStrip(
     localRecommender ? 'recommended' : 'trending',
   )
   const forceTrending = !personalizedAchievable || suggestionMode === 'trending'
-  const suggested = useSuggested(kind, forceTrending, userKey.key)
+  // The fingerprint (masked last-4, non-secret) only discriminates the
+  // query cache — the actual key lives server-side and never rides a
+  // request from the browser.
+  const suggested = useSuggested(kind, forceTrending, userKey.fingerprint)
 
   const feedbackQuery = useFeedback()
   const setFeedback = useSetFeedback(kind)
