@@ -49,7 +49,9 @@ for arg in "$@"; do
   case "$arg" in
     --allow-dirty) ALLOW_DIRTY=1 ;;
     -h|--help)
-      sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+      # Print the header comment block (everything up to the first non-comment
+      # line) as the help text, so the docs above never drift from --help.
+      awk 'NR>1 && !/^#/ {exit} NR>1 {sub(/^# ?/,""); print}' "$0"
       exit 0
       ;;
     *)
