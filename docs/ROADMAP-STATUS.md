@@ -173,7 +173,7 @@ The 05-29 synthesis below predates two merges now on `main` (HEAD `155f73f`):
    fixed; ~63 medium/low open. See
    [docs/PRODUCTION-READINESS-2026-05-30.md](./PRODUCTION-READINESS-2026-05-30.md).
 
-The milestone table above (M1–M6 status/%) is unchanged and remains current.
+The milestone table above (M1–M6 status/%) was unchanged by this update and was current as of 2026-05-31; the 2026-06-10 update has since moved M3/M4.
 
 ## What Changed This Session (supersedes stale roadmap memory)
 
