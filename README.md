@@ -41,11 +41,12 @@ invite redemption is atomic and race-safe.
 
 ## Backend surface (`/api`)
 
-`auth`, `auth/device`, `auth/passkey`, `me`, `version`, `devices`,
+`auth`, `auth/device`, `auth/passkey`, `me`, `version`, `limits`, `devices`,
 `admin/devices`, `admin/invites`, `admin/members`, `sonarr`, `radarr`, `sab`,
 `tmdb`, `iptv`, `users`, `plex`, `notifications`, `grabs`, `suggestions`,
 `feedback`, `usage`, `recommender`, `telemetry`, and (when
-`USE_MEDIA_CORE=1`) `media`. CORS is an explicit allowlist
+`USE_MEDIA_CORE=1`) `media` + `transcode` (the HLS playback proxy for
+non-direct-play files). CORS is an explicit allowlist
 (`env.allowedOrigins`); state-changing requests are Origin-gated
 (`requireSafeOrigin`).
 
@@ -74,8 +75,9 @@ cargo test -p emerald-contracts -p media-core -p transcoder
 ## Deploy
 
 Self-hosted on the NAS (`root@theemeraldexchange.local`, Unraid) via
-`docker-compose` (~15 services) behind a Cloudflare Tunnel; the SPA ships to
-Netlify. Crash/error telemetry is per-self-hoster Glitchtip (§15), with the DSN
+`docker-compose` (9 services: backend, recommender, media-core, transcoder,
+cloudflared, and the 4-container Glitchtip telemetry stack) behind a
+Cloudflare Tunnel; the SPA ships to Netlify. Crash/error telemetry is per-self-hoster Glitchtip (§15), with the DSN
 distributed server → client at boot. See [DEPLOY.md](./DEPLOY.md).
 
 ## Project docs
@@ -100,8 +102,9 @@ percentages lives in [docs/ROADMAP-STATUS.md](./docs/ROADMAP-STATUS.md).
 - **M3 — Rust media-core:** live on the NAS in enforce mode (library
   scan / metadata / serve).
 - **M4 — transcoder:** deployed; real-library HEVC→H.264 transcode proven
-  end-to-end (serving + `ffprobe`-validated output). Remaining: a real client
-  player path and stress/bench evidence.
+  played end-to-end in a real browser over the public path, hardware-encoded
+  via Intel VAAPI on the NAS iGPU. Remaining: stress/bench evidence and a
+  seek-latency re-measurement.
 - **M2 / M5 / M6 — Apple clients, native playback + offline downloads, the
   Plex-Pass-equivalent tier:** not started, blocked on the Apple gate.
 
