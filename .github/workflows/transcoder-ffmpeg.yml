@@ -89,6 +89,31 @@ jobs:
 
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
+      # Prod-parity guard: this job's whole premise is "same digest-pinned
+      # debian:bookworm-slim base as crates/transcoder/Dockerfile's runtime
+      # stage". The two pins used to track each other by hand (a dependabot
+      # bump of one silently breaks the parity claim) — so extract the digest
+      # from BOTH files and fail loudly on drift. The `container:` image can't
+      # be introspected from job context, but it is defined in this very
+      # workflow file, which is in the checkout.
+      - name: Guard - container base matches the transcoder Dockerfile runtime stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          dockerfile_pin=$(grep -oE 'debian:bookworm-slim@sha256:[0-9a-f]{64}' crates/transcoder/Dockerfile | tail -n1)
+          workflow_pin=$(grep -oE 'debian:bookworm-slim@sha256:[0-9a-f]{64}' .github/workflows/transcoder-ffmpeg.yml | head -n1)
+          echo "Dockerfile runtime base: ${dockerfile_pin}"
+          echo "Workflow container:      ${workflow_pin}"
+          if [ -z "$dockerfile_pin" ] || [ -z "$workflow_pin" ]; then
+            echo "::error::Could not extract a debian:bookworm-slim digest pin from one of the files — the guard's grep needs updating."
+            exit 1
+          fi
+          if [ "$dockerfile_pin" != "$workflow_pin" ]; then
+            echo "::error::Base-image drift: this workflow's container digest no longer matches crates/transcoder/Dockerfile's runtime stage. Bump BOTH together — the job only proves prod parity when they are identical."
+            exit 1
+          fi
+          echo "Pins match — prod parity holds."
+
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27; explicit `toolchain` input pins the actual compiler
         with:
           toolchain: '1.96'
