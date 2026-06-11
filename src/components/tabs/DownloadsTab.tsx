@@ -40,6 +40,11 @@ function fmtSize(bytes: number): string {
   return `${n.toFixed(n < 10 && i > 0 ? 1 : 0)} ${units[i]}`
 }
 
+// COPY-LAW NOTE (DESIGN.md "Em dashes in copy"): the bare '—' returned by the
+// formatters below is an empty-VALUE placeholder glyph in the stat table, not
+// prose copy — the law governs sentence punctuation, and the dash-as-no-data
+// convention is the tabular-numeral idiom the stats row is designed around.
+// Prose strings in this file conform (semicolons/parens, no em dashes).
 function fmtSpeed(speedRaw: string | undefined): string {
   // SAB returns speed as a bare number in MB/s (e.g. "5.5" or "0").
   const v = parseFloat(speedRaw ?? '0')
@@ -82,7 +87,7 @@ export function DownloadsTab() {
     return (
       <section className="downloads-tab">
         <div className="downloads-tab__error">
-          <p>Couldn't reach SABnzbd — the server may be down or misconfigured.</p>
+          <p>Couldn't reach SABnzbd; the server may be down or misconfigured.</p>
           <p className="downloads-tab__error-detail">{String(queue.error)}</p>
         </div>
       </section>
@@ -126,7 +131,7 @@ export function DownloadsTab() {
     ? indexerWorking
       ? pendingCount === 1
         ? 'Searching for a release…'
-        : `Searching for releases — ${pendingCount} in flight`
+        : `Searching for releases (${pendingCount} in flight)`
       : 'Queue is Open.'
     : (activeSlot?.filename ?? 'Queue is Open.')
   // Active progress + ETA so the header card can render its own bar

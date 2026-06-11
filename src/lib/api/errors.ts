@@ -82,7 +82,7 @@ export async function throwApiError(res: Response, scope: string): Promise<never
     // was rolled back. Transient far more often than not.
     const phase = data.phase === 'search' ? 'searching for' : 'grabbing'
     message =
-      `Couldn't finish ${phase} a release for this title — Radarr returned an error, so it wasn't added. ` +
+      `Couldn't finish ${phase} a release for this title; Radarr returned an error, so it wasn't added. ` +
       `Try again in a moment.`
   } else if (code === 'monitor_enable_failed') {
     message =
@@ -102,7 +102,7 @@ export async function throwApiError(res: Response, scope: string): Promise<never
     code === 'transcoder unreachable'
   ) {
     message =
-      "Couldn't start playback for this title — the transcoder didn't respond. Try again in a moment."
+      "Couldn't start playback for this title; the transcoder didn't respond. Try again in a moment."
   } else if (code === 'media_core_unreachable') {
     message =
       "Couldn't reach the media library service. Try again in a moment."

@@ -170,7 +170,7 @@ export function InvitesPanel() {
       {justCreated && (
         <div className="invites-panel__reveal" role="status">
           <p className="invites-panel__reveal-title">
-            Copy this code now — it won&apos;t be shown again.
+            Copy this code now; it won&apos;t be shown again.
           </p>
           <div className="invites-panel__reveal-row">
             <code className="invites-panel__code">{justCreated.code}</code>

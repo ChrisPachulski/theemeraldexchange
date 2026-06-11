@@ -35,7 +35,7 @@ export function FeedbackDots({ state, onLike, onDislike, title, disabledReason }
         className={`feedback-dot feedback-dot--red${disliked ? ' feedback-dot--set' : ''}`}
         aria-pressed={disliked}
         aria-label={disliked ? `Undo: don't suggest ${title} again` : `Don't suggest ${title} again`}
-        title={disabled ? disabledReason : disliked ? 'Disliked — click to undo' : "Don't suggest again"}
+        title={disabled ? disabledReason : disliked ? 'Disliked; click to undo' : "Don't suggest again"}
         disabled={disabled}
         onClick={(e) => {
           e.stopPropagation()
@@ -47,7 +47,7 @@ export function FeedbackDots({ state, onLike, onDislike, title, disabledReason }
         className={`feedback-dot feedback-dot--green${liked ? ' feedback-dot--set' : ''}`}
         aria-pressed={liked}
         aria-label={liked ? `Undo: liked ${title}` : `Show me more like ${title}`}
-        title={disabled ? disabledReason : liked ? 'Liked — click to undo' : 'Show me more like this'}
+        title={disabled ? disabledReason : liked ? 'Liked; click to undo' : 'Show me more like this'}
         disabled={disabled}
         onClick={(e) => {
           e.stopPropagation()

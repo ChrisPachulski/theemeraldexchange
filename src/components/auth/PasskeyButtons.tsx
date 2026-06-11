@@ -92,7 +92,7 @@ export function PasskeyButtons({ inviteCode }: { inviteCode?: string }) {
           </div>
           <p className="passkey-signin__hint">
             Needs a valid invite code above. Works on this device with Face ID,
-            Touch ID, Windows Hello, or a security key — no Plex account required.
+            Touch ID, Windows Hello, or a security key; no Plex account required.
           </p>
         </div>
       )}

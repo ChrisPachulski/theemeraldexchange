@@ -63,7 +63,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         </h1>
         <p style={{ margin: 0, maxWidth: '32rem', lineHeight: 1.5 }}>
           Something went wrong while loading this view. Your session is still
-          active — try again, or reload the page.
+          active; try again, or reload the page.
         </p>
         <div
           style={{
