@@ -17,9 +17,17 @@
 #      that made the first incident unkillable).
 #   3. A PROGRESS HEARTBEAT prints every interval (a slow build is fine — a
 #      SILENT one is not).
-#   4. A WATCHDOG aborts the build the moment the critical container (Plex by
-#      default) goes unhealthy or load-per-core blows past the ceiling — early,
-#      before the box wedges, while SSH can still land the kill.
+#   4. TWO watchdogs abort the build the moment the critical container (Plex by
+#      default) goes unhealthy, load-per-core blows past the ceiling, or free
+#      memory collapses:
+#        a. an ON-NAS watchdog launched next to the build, whose hot path is
+#           fork-free (builtin reads of /proc + builtin kill), so it still
+#           fires when the box is so starved that fork()/sshd are failing —
+#           the 2026-06-11 incident proved the SSH abort path dies FIRST and
+#           a "detached and finite" build can thrash-lock the box for hours;
+#        b. this Mac-side watchdog over SSH as the outer, second layer.
+#   5. A LAUNCH-TIME memory floor: rustc link steps eat GBs; starting a build
+#      into low MemAvailable is how the OOM-thrash wedge begins.
 #
 # This pairs with the transcoder Dockerfile's BuildKit cache mounts: after the
 # first (cold) build, rebuilds are INCREMENTAL (only changed crates) and barely
@@ -37,6 +45,10 @@
 #   ABORT_SAMPLES (3)          consecutive bad samples before abort
 #   HEARTBEAT_SECS (20)        poll/heartbeat cadence
 #   MAX_BUILD_MINUTES (75)     hard wall-clock ceiling on the whole run
+#   MIN_MEM_AVAILABLE_KB (400000)   on-NAS watchdog aborts if MemAvailable
+#                                   stays below this (OOM-thrash precursor)
+#   MIN_LAUNCH_MEM_KB (1500000)     refuse to even start below this much
+#                                   MemAvailable (FORCE_LOW_MEM=1 overrides)
 #
 # Exit codes: 0 build ok · 2 build failed · 3 aborted (watchdog) · 4 timeout · 5 setup
 set -euo pipefail
@@ -55,6 +67,8 @@ ABORT_LOAD_PER_CORE="${ABORT_LOAD_PER_CORE:-2.0}"
 ABORT_SAMPLES="${ABORT_SAMPLES:-3}"
 HEARTBEAT_SECS="${HEARTBEAT_SECS:-20}"
 MAX_BUILD_MINUTES="${MAX_BUILD_MINUTES:-75}"
+MIN_MEM_AVAILABLE_KB="${MIN_MEM_AVAILABLE_KB:-400000}"
+MIN_LAUNCH_MEM_KB="${MIN_LAUNCH_MEM_KB:-1500000}"
 NAS="${NAS_USER}@${NAS_HOST}"
 
 # Unique-ish run id without Date.now()/random (zsh-safe): pid + epoch from NAS.
@@ -77,7 +91,7 @@ say "discovering capacity on ${NAS_HOST} and launching detached build of '${SERV
 # Values go over as inline env assignments, NOT positional args: SSH joins argv
 # into one remote string, and an EMPTY positional (RES_OVERRIDE when unset)
 # collapses and shifts the rest, leaving later params unbound under `set -u`.
-launch_out=$(nas "APPDATA='$APPDATA' SERVICE='$SERVICE' CRITICAL='$CRITICAL' RES_OVERRIDE='${CORES_RESERVED:-}' LOG='$LOG' DONE='$DONE' PIDF='$PIDF' bash -s" <<'REMOTE'
+launch_out=$(nas "APPDATA='$APPDATA' SERVICE='$SERVICE' CRITICAL='$CRITICAL' RES_OVERRIDE='${CORES_RESERVED:-}' LOG='$LOG' DONE='$DONE' PIDF='$PIDF' ABORT_LPC='$ABORT_LOAD_PER_CORE' WD_SAMPLES='$ABORT_SAMPLES' MAX_MIN='$MAX_BUILD_MINUTES' MIN_MEM_KB='$MIN_MEM_AVAILABLE_KB' MIN_LAUNCH_MEM_KB='$MIN_LAUNCH_MEM_KB' FORCE_LOW_MEM='${FORCE_LOW_MEM:-}' bash -s" <<'REMOTE'
 set -eu
 cd "$APPDATA" || { echo "ERR: appdata $APPDATA missing"; exit 5; }
 
@@ -96,7 +110,15 @@ JOBS=$(( NPROC - RESERVE ))
 
 crit_state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$CRITICAL" 2>/dev/null || echo absent)"
 
-echo "DISCOVERED nproc=$NPROC load1=$LOAD1 reserve=$RESERVE jobs=$JOBS critical=$CRITICAL:$crit_state"
+# Launch-time memory floor: a Rust build/link into low MemAvailable is how the
+# 2026-06-11 OOM-thrash wedge started (4h fork-starved, power-cycle territory).
+MEM_AVAIL_KB="$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)"
+if [ "$MEM_AVAIL_KB" -lt "$MIN_LAUNCH_MEM_KB" ] && [ -z "$FORCE_LOW_MEM" ]; then
+  echo "ERR: MemAvailable ${MEM_AVAIL_KB}kB < floor ${MIN_LAUNCH_MEM_KB}kB — free memory first or set FORCE_LOW_MEM=1"
+  exit 5
+fi
+
+echo "DISCOVERED nproc=$NPROC load1=$LOAD1 mem_avail_kb=$MEM_AVAIL_KB reserve=$RESERVE jobs=$JOBS critical=$CRITICAL:$crit_state"
 
 rm -f "$LOG" "$DONE" "$PIDF"
 # Detached, own session/process-group so the whole tree is killable by -PGID
@@ -111,7 +133,64 @@ setsid bash -c '
 ' >/dev/null 2>&1 &
 # Record the negative-able process-group id for a clean tree-kill on abort.
 echo "$!" > "$PIDF"
-echo "LAUNCHED pgid=$(cat "$PIDF")"
+
+# ── ON-NAS WATCHDOG ──────────────────────────────────────────────────────────
+# The abort must NOT depend on SSH: overload starves sshd first (2026-06-11),
+# so a Mac-side abort can never land exactly when it's needed. This watchdog
+# lives in the blast radius with a fork-free hot path — /proc via builtin
+# `read`, waits via `read -t` on a never-written fifo fd, abort via builtin
+# `kill` — so it still fires when fork() is failing box-wide. Killing the
+# compose client closes its BuildKit session, which cancels the actual solve.
+WDLOG="${LOG}.watchdog"
+WDFIFO="${LOG}.wdfifo"
+rm -f "$WDLOG" "$WDFIFO"
+mkfifo "$WDFIFO"
+LOAD_X100_MAX="$(awk -v n="$NPROC" -v c="$ABORT_LPC" 'BEGIN{printf "%d", n*c*100}')"
+MAX_SECS=$(( MAX_MIN * 60 ))
+BUILD_PGID="$(cat "$PIDF")"
+setsid env BUILD_PGID="$BUILD_PGID" DONE="$DONE" WDLOG="$WDLOG" WDFIFO="$WDFIFO" \
+    LOAD_X100_MAX="$LOAD_X100_MAX" MIN_MEM_KB="$MIN_MEM_KB" MAX_SECS="$MAX_SECS" \
+    SAMPLES="$WD_SAMPLES" bash -c '
+  exec 9<>"$WDFIFO"
+  bad=0 elapsed=0
+  abort() {
+    echo "WATCHDOG ABORT: $1 (elapsed=${elapsed}s)" >> "$WDLOG"
+    echo 3 > "$DONE"
+    kill -TERM -"$BUILD_PGID" 2>/dev/null
+    read -t 3 -u 9 _ 2>/dev/null
+    kill -KILL -"$BUILD_PGID" 2>/dev/null
+    # Best-effort remnant sweep (needs fork; the pgid kill above is the
+    # load-bearing one — client death cancels the BuildKit solve).
+    pkill -9 rustc 2>/dev/null; pkill -9 cargo 2>/dev/null
+    rm -f "$WDFIFO" 2>/dev/null
+    exit 0
+  }
+  while [ ! -s "$DONE" ]; do
+    read -r load1 _ < /proc/loadavg
+    f="${load1#*.}"
+    load_x100=$(( 10#${load1%.*} * 100 + 10#${f:0:2} ))
+    mem_kb=0
+    while read -r k v _; do
+      if [ "$k" = "MemAvailable:" ]; then mem_kb=$v; break; fi
+    done < /proc/meminfo
+    if [ "$load_x100" -gt "$LOAD_X100_MAX" ] || [ "$mem_kb" -lt "$MIN_MEM_KB" ]; then
+      bad=$((bad+1))
+      echo "strike $bad/$SAMPLES load_x100=$load_x100 mem_kb=$mem_kb t=${elapsed}s" >> "$WDLOG"
+      if [ "$bad" -ge "$SAMPLES" ]; then
+        abort "load_x100=$load_x100 (max $LOAD_X100_MAX) mem_kb=$mem_kb (min $MIN_MEM_KB)"
+      fi
+    else
+      bad=0
+    fi
+    if [ "$elapsed" -ge "$MAX_SECS" ]; then
+      abort "wall-clock ${elapsed}s >= ${MAX_SECS}s"
+    fi
+    read -t 10 -u 9 _ 2>/dev/null || true
+    elapsed=$((elapsed+10))
+  done
+  rm -f "$WDFIFO" 2>/dev/null
+' >/dev/null 2>&1 &
+echo "LAUNCHED pgid=$(cat "$PIDF") watchdog_pid=$!"
 REMOTE
 ) || { say "FAILED to launch build (ssh/setup error):"; printf '%s\n' "$launch_out" >&2; exit 5; }
 
@@ -171,6 +250,11 @@ while :; do
     if [ "$done_code" = "0" ]; then
       say "BUILD OK (exit 0). Recreate with: ssh $NAS 'cd $APPDATA && docker compose up -d --no-build $SERVICE'"
       exit 0
+    fi
+    if [ "$done_code" = "3" ]; then
+      say "BUILD ABORTED by the on-NAS watchdog:"
+      nas "tail -n 6 ${LOG}.watchdog" 2>/dev/null || true
+      exit 3
     fi
     say "BUILD FAILED (exit $done_code). Last log:"
     nas "tail -n 25 $LOG" 2>/dev/null || true
