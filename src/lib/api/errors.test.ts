@@ -248,14 +248,27 @@ describe('throwApiError', () => {
     expect(msg).not.toMatch(/503/)
   })
 
-  it('explains transcode_start_failed / transcoder unreachable', async () => {
+  it('explains transcode_start_failed / transcoder_unreachable (and the legacy spelling)', async () => {
+    for (const code of ['transcode_start_failed', 'transcoder_unreachable', 'transcoder unreachable']) {
+      let msg = ''
+      try {
+        await throwApiError(jsonResponse({ error: code }, 502), 'Media /playback/episode/9')
+      } catch (e) {
+        msg = (e as ApiError).message
+      }
+      expect(msg).toMatch(/couldn.t start playback/i)
+    }
+  })
+
+  it('explains media_core_unreachable instead of a raw 502', async () => {
     let msg = ''
     try {
-      await throwApiError(jsonResponse({ error: 'transcode_start_failed' }, 502), 'Media /playback/episode/9')
+      await throwApiError(jsonResponse({ error: 'media_core_unreachable' }, 502), 'Media /playback/movie/1')
     } catch (e) {
       msg = (e as ApiError).message
     }
-    expect(msg).toMatch(/couldn.t start playback/i)
+    expect(msg).toMatch(/media library service/i)
+    expect(msg).not.toMatch(/502/)
   })
 
   it('maps a 404 on a playback grant to "not available locally"', async () => {

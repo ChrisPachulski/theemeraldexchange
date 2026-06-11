@@ -103,6 +103,8 @@ describe('media proxy route', () => {
     })
 
     expect(res.status).toBe(502)
+    // Machine-readable snake_case token (errors.ts convention).
+    expect((await res.json()) as { error: string }).toEqual({ error: 'principal_mint_failed' })
     // upstream must never be hit unauthenticated
     expect(mockFetch).not.toHaveBeenCalled()
   })
@@ -347,6 +349,41 @@ describe('media playback grant', () => {
     expect(String(mockFetchTimed.mock.calls[1][0])).toContain('/api/media/stream/episode/99?')
     expect(String(mockFetchTimed.mock.calls[1][0])).toContain('start_secs=95')
     expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('502 media_core_unreachable when the grant body read fails', async () => {
+    // fetchWithTimeout itself never throws on network errors (it synthesizes a
+    // 504), so the catch covers a body/JSON failure on the buffered replay.
+    mockFetchTimed.mockResolvedValueOnce(
+      new Response('not-json', { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    )
+    const res = await media.request('/playback/movie/7', {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: '{}',
+    })
+    expect(res.status).toBe(502)
+    expect((await res.json()) as { error: string }).toEqual({ error: 'media_core_unreachable' })
+  })
+
+  it('502 transcoder_unreachable when the handoff body read fails', async () => {
+    mockFetchTimed
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ directPlay: false }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response('not-json', { status: 200, headers: { 'Content-Type': 'application/json' } }),
+      )
+    const res = await media.request('/playback/movie/7', {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: '{}',
+    })
+    expect(res.status).toBe(502)
+    expect((await res.json()) as { error: string }).toEqual({ error: 'transcoder_unreachable' })
   })
 
   it('propagates a media-core 404 as 404', async () => {

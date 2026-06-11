@@ -94,9 +94,18 @@ export async function throwApiError(res: Response, scope: string): Promise<never
     // "Media /playback/...: 503" before — now it's actionable.
     message =
       'All playback slots are busy right now. Close another stream and try again in a moment.'
-  } else if (code === 'transcode_start_failed' || code === 'transcoder unreachable') {
+  } else if (
+    code === 'transcode_start_failed' ||
+    code === 'transcoder_unreachable' ||
+    // Legacy spelling kept through the deploy window: the SPA (Netlify)
+    // ships before the backend, which emits the old token until rolled.
+    code === 'transcoder unreachable'
+  ) {
     message =
       "Couldn't start playback for this title — the transcoder didn't respond. Try again in a moment."
+  } else if (code === 'media_core_unreachable') {
+    message =
+      "Couldn't reach the media library service. Try again in a moment."
   } else if (scope.includes('/playback/') && res.status === 404) {
     message = "This title isn't available to play from your local library."
   } else if (typeof data.message === 'string') {
