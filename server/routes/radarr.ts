@@ -125,8 +125,13 @@ async function grabBestUnderCap(
   movieId: number,
   rootFolder: RadarrFolderWithFreeSpace,
   title?: string,
+  sub?: string,
 ): Promise<CappedGrabResult> {
-  const base = { itemId: movieId, title, capGb: env.maxMovieGb }
+  // `sub` rides on `base` so every {...base} event below is attributed to
+  // the user who triggered the add — mirrors grabTvUnderCap. Without it,
+  // readEventsForItem's legacy allowance (undefined sub matches everyone)
+  // made every Radarr grab event visible to every caller of /by-item.
+  const base = { itemId: movieId, title, capGb: env.maxMovieGb, sub }
   await recordRadarrGrabEvent({ ...base, type: 'grab_started' })
 
   // Brief delay so Radarr finishes wiring the new movie record before
@@ -520,7 +525,7 @@ radarr.post('/api/v3/movie', radarrMutateLimit, async (c) => {
       const itemId = created.id
       const itemTitle = created.title
       try {
-        const grab = await grabBestUnderCap(itemId, spaceGate.folder, itemTitle)
+        const grab = await grabBestUnderCap(itemId, spaceGate.folder, itemTitle, session.sub)
         if (grab.status === 'search_failed' || grab.status === 'grab_failed') {
           const rollback = await deleteCreatedMovie(created)
           return c.json(
@@ -592,6 +597,7 @@ radarr.post('/api/v3/movie', radarrMutateLimit, async (c) => {
         await recordRadarrGrabEvent({
           itemId,
           title: itemTitle,
+          sub: session.sub,
           type: 'grab_failed',
           error: e instanceof Error ? e.message : String(e),
         })
