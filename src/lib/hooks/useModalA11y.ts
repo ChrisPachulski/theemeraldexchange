@@ -9,6 +9,60 @@ const FOCUSABLE = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(',')
 
+/** Structural slice of an element the trap needs — lets tests drive the
+ *  handler with plain fakes (the vitest environment is node, not jsdom). */
+export type FocusableLike = { focus: () => void }
+
+export type ModalKeyEvent = {
+  key: string
+  shiftKey: boolean
+  preventDefault: () => void
+}
+
+/**
+ * The keydown contract behind useModalA11y, dependency-injected so it is
+ * unit-testable without a DOM:
+ *   Escape            → preventDefault + onClose;
+ *   Tab, none inside  → preventDefault + focus the container;
+ *   Shift+Tab on the first focusable (or the container) → wrap to the last;
+ *   Tab on the last focusable → wrap to the first.
+ */
+export function createModalKeydownHandler<E extends FocusableLike>(opts: {
+  container: E
+  focusables: () => E[]
+  activeElement: () => unknown
+  onClose: () => void
+}): (event: ModalKeyEvent) => void {
+  const { container, focusables, activeElement, onClose } = opts
+  return (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      onClose()
+      return
+    }
+    if (event.key !== 'Tab') return
+    const items = focusables()
+    if (items.length === 0) {
+      // Nothing focusable inside — keep focus on the container.
+      event.preventDefault()
+      container.focus()
+      return
+    }
+    const first = items[0]
+    const last = items[items.length - 1]
+    const active = activeElement()
+    if (event.shiftKey) {
+      if (active === first || active === container) {
+        event.preventDefault()
+        last.focus()
+      }
+    } else if (active === last) {
+      event.preventDefault()
+      first.focus()
+    }
+  }
+}
+
 /**
  * Accessibility behaviour for a `role="dialog" aria-modal="true"` container that
  * is a plain element (not a native <dialog>). Gives keyboard + screen-reader
@@ -48,33 +102,12 @@ export function useModalA11y<T extends HTMLElement>(onClose: () => void) {
     const initial = focusables()[0] ?? container
     initial.focus()
 
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        onCloseRef.current()
-        return
-      }
-      if (event.key !== 'Tab') return
-      const items = focusables()
-      if (items.length === 0) {
-        // Nothing focusable inside — keep focus on the container.
-        event.preventDefault()
-        container.focus()
-        return
-      }
-      const first = items[0]
-      const last = items[items.length - 1]
-      const active = document.activeElement
-      if (event.shiftKey) {
-        if (active === first || active === container) {
-          event.preventDefault()
-          last.focus()
-        }
-      } else if (active === last) {
-        event.preventDefault()
-        first.focus()
-      }
-    }
+    const onKeyDown = createModalKeydownHandler<HTMLElement>({
+      container,
+      focusables,
+      activeElement: () => document.activeElement,
+      onClose: () => onCloseRef.current(),
+    })
 
     container.addEventListener('keydown', onKeyDown)
     return () => {
