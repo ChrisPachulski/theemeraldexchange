@@ -19,18 +19,35 @@ from packaging.version import Version
 RECOMMENDER_DIR = Path(__file__).resolve().parents[1]
 
 
-def _locked_versions() -> dict[str, Version]:
-    out: dict[str, Version] = {}
+def _locked_entries() -> dict[str, tuple[Version, int]]:
+    """name -> (version, hash_count), parsed from the hash-pinned lock format:
+
+        name==version \\
+            --hash=sha256:... \\
+            --hash=sha256:...
+    """
+    out: dict[str, tuple[Version, int]] = {}
+    current: str | None = None
     for line in (RECOMMENDER_DIR / "requirements.lock").read_text(encoding="utf-8").splitlines():
-        line = line.strip()
+        line = line.strip().rstrip("\\").strip()
         if not line or line.startswith("#"):
+            continue
+        if line.startswith("--hash="):
+            assert current is not None, f"orphaned hash line: {line!r}"
+            version, hashes = out[current]
+            out[current] = (version, hashes + 1)
             continue
         name, _, version = line.partition("==")
         assert version, f"lock line is not an exact pin: {line!r}"
         # Local version labels (torch's +cpu) are equal to their public
         # version for floor comparison purposes.
-        out[canonicalize_name(name)] = Version(version.split("+", 1)[0])
+        current = canonicalize_name(name)
+        out[current] = (Version(version.split("+", 1)[0]), 0)
     return out
+
+
+def _locked_versions() -> dict[str, Version]:
+    return {name: version for name, (version, _) in _locked_entries().items()}
 
 
 def _pyproject_requirements() -> list[Requirement]:
@@ -61,6 +78,17 @@ def test_setuptools_security_floor_held() -> None:
     locked = _locked_versions()
     assert locked.get("setuptools") is not None, "setuptools pin missing from requirements.lock"
     assert locked["setuptools"] >= Version("78.1.1")
+
+
+def test_every_pin_is_hash_pinned() -> None:
+    # The lock is hash-pinned (supply-chain hardening): pip auto-enables
+    # hash-checking mode when ANY entry carries hashes, and that mode
+    # requires hashes on EVERY entry — a single hashless pin breaks the
+    # Docker/CI install. Regen per the lock-header recipe keeps this green.
+    entries = _locked_entries()
+    assert entries, "requirements.lock parsed to zero pins"
+    missing = [name for name, (_, hashes) in entries.items() if hashes == 0]
+    assert not missing, f"pins without --hash entries: {missing}"
 
 
 def test_removed_apscheduler_stays_out() -> None:
