@@ -30,6 +30,7 @@ import { useConfirm } from '../confirm/useConfirm'
 import { radarr, type Movie, type MovieSearchResult } from '../../lib/api/radarr'
 import { postClickEvent } from '../../lib/api/recommenderEvents'
 import { stripArticle } from '../../lib/title'
+import { withViewTransition } from '../../lib/viewTransition'
 import './TvTab.css'
 
 function pickSearchPoster(item: MovieSearchResult): string | undefined {
@@ -438,8 +439,10 @@ export function MoviesTab() {
         <ModeToggle
           mode={mode}
           onChange={(next) => {
-            setMode(next)
-            if (next === 'discover') setLetter('all')
+            withViewTransition(() => {
+              setMode(next)
+              if (next === 'discover') setLetter('all')
+            })
           }}
           libraryCount={library.data?.length}
         />
