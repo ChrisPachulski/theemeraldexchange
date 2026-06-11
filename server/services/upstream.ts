@@ -117,7 +117,13 @@ export async function fetchJsonWithTimeout(
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
     const response = await fetch(url, { ...init, signal: controller.signal })
-    if (!response.ok) throw new Error(`${label}_${response.status}`)
+    if (!response.ok) {
+      // Cancel the unread body before throwing so undici can return the
+      // socket to its pool instead of churning connections on every non-ok
+      // response (same pattern as ssrfGuard's redirect handling).
+      await response.body?.cancel().catch(() => {})
+      throw new Error(`${label}_${response.status}`)
+    }
     return response.json()
   } catch (err) {
     const name = (err as { name?: string }).name
