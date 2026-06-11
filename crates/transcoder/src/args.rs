@@ -3,8 +3,10 @@
 //! Pure string assembly from a [`TranscodePlan`] → a `Vec<String>` ready for
 //! `tokio::process::Command::args`. The HLS flags mirror the shipped
 //! `iptvRemux.ts` invocation (`-f hls -hls_time 4 -hls_list_size 8 -hls_flags
-//! delete_segments+append_list+omit_endlist`) so live and transcode sessions
-//! produce byte-identical playlist semantics. Snapshot-tested per plan.
+//! delete_segments+append_list`), with `omit_endlist` added ONLY for live
+//! media kinds — finite VOD (movies/episodes) must get `EXT-X-ENDLIST` on
+//! clean EOF so players treat a finished title as finished, not as a live
+//! stream forever. Snapshot-tested per plan and per kind.
 
 use crate::plan::{AudioOp, SubtitleOp, TranscodePlan, VideoOp};
 
@@ -100,14 +102,59 @@ pub(crate) const VAAPI_RENDER_NODE: &str = "/dev/dri/renderD128";
 /// keyframe — tens of seconds in. Under `-re` (real-time pacing) that pushes the
 /// first segment past the backend's manifest-readiness probe, and the player is
 /// handed a not-yet-written playlist (503) → a grey rectangle stuck at 0:00.
-const HLS_SEGMENT_SECS: u32 = 4;
+pub(crate) const HLS_SEGMENT_SECS: u32 = 4;
+
+/// Is this media kind a LIVE source (an unbounded stream with no EOF)?
+///
+/// Live streams must keep `omit_endlist`: ffmpeg only "ends" a live remux when
+/// the upstream dies, and writing `EXT-X-ENDLIST` then would make every player
+/// treat the outage as the programme ending instead of retrying. Finite VOD
+/// (movie/episode — everything the local-library grant path produces today)
+/// must NOT omit it: without `EXT-X-ENDLIST` a finished title looks like a
+/// stalled live stream, so players poll the manifest forever and never fire
+/// their natural "ended" handling.
+///
+/// Matching is by kind name so a future IPTV port onto this crate inherits the
+/// correct live semantics; anything unrecognized is treated as FINITE — the
+/// failure mode of a mislabeled live stream (premature ENDLIST on upstream
+/// death) is more recoverable than every movie ending in a livelocked player.
+fn is_live_media_kind(kind: &str) -> bool {
+    matches!(
+        kind.trim().to_ascii_lowercase().as_str(),
+        "live" | "iptv" | "channel"
+    )
+}
+
+/// Everything [`ffmpeg_args_for`] needs to assemble one ffmpeg invocation.
+#[derive(Clone, Copy)]
+/// Bundled as a struct so the session manager's growing per-session knobs
+/// (kind-dependent HLS flags, crash-resume segment numbering) don't balloon
+/// the positional-argument wrappers below.
+pub struct ArgSpec<'a> {
+    /// The resolved transcode plan (never `DirectPlay` in practice).
+    pub plan: &'a TranscodePlan,
+    /// Absolute source path.
+    pub input: &'a str,
+    /// Per-session tmpdir; the playlist and segments land here.
+    pub session_dir: &'a str,
+    /// Seek offset for resume/seek (`-ss`); 0 for a fresh start.
+    pub start_secs: u64,
+    /// Selected HW encoder family.
+    pub encoder: HwEncoder,
+    /// Full-hardware VAAPI decode (see [`ffmpeg_args_hw`] docs).
+    pub hw_decode: bool,
+    /// The session's media kind (`movie`/`episode`/…). Drives the HLS endlist
+    /// semantics: live kinds keep `omit_endlist`, finite VOD gets
+    /// `EXT-X-ENDLIST` on clean EOF (see [`is_live_media_kind`]).
+    pub media_kind: &'a str,
+}
 
 /// Build the ffmpeg argument vector for a transcode plan (software-decode path).
 ///
-/// Thin wrapper over [`ffmpeg_args_hw`] with hardware decode OFF — the historical
-/// 5-arg signature, kept for the call sites and tests that assert the CPU-decode
-/// behavior. The session manager calls [`ffmpeg_args_hw`] directly so it can flip
-/// on the full-hardware pipeline per session.
+/// Thin wrapper over [`ffmpeg_args_for`] with hardware decode OFF — the
+/// historical 5-arg signature, kept for the call sites and tests that assert
+/// the CPU-decode behavior. Defaults to a FINITE (vod) media kind; the session
+/// manager calls [`ffmpeg_args_for`] directly with the session's real kind.
 pub fn ffmpeg_args(
     plan: &TranscodePlan,
     input: &str,
@@ -118,12 +165,8 @@ pub fn ffmpeg_args(
     ffmpeg_args_hw(plan, input, session_dir, start_secs, encoder, false)
 }
 
-/// Build the full ffmpeg argument vector for a transcode plan.
+/// Historical 6-arg wrapper over [`ffmpeg_args_for`] (finite/vod media kind).
 ///
-/// * `input` — absolute source path.
-/// * `session_dir` — per-session tmpdir; the playlist and segments land here.
-/// * `start_secs` — seek offset for resume/seek (`-ss`); 0 for a fresh start.
-/// * `encoder` — selected HW family.
 /// * `hw_decode` — when set (and the family is VAAPI and the plan re-encodes
 ///   video with no subtitle burn-in), decode the source straight into VAAPI
 ///   surfaces (`-hwaccel vaapi -hwaccel_output_format vaapi`) and run tone-map +
@@ -134,9 +177,6 @@ pub fn ffmpeg_args(
 ///   encoder). Only enable `hw_decode` for a source codec the device can decode —
 ///   under `-hwaccel_output_format vaapi` an undecodable codec has no software
 ///   fallback and hard-fails the session.
-///
-/// Returns an empty vec for a [`TranscodePlan::DirectPlay`] (caller should
-/// never invoke ffmpeg in that case — this is a defensive no-op).
 pub fn ffmpeg_args_hw(
     plan: &TranscodePlan,
     input: &str,
@@ -145,6 +185,32 @@ pub fn ffmpeg_args_hw(
     encoder: HwEncoder,
     hw_decode: bool,
 ) -> Vec<String> {
+    ffmpeg_args_for(&ArgSpec {
+        plan,
+        input,
+        session_dir,
+        start_secs,
+        encoder,
+        hw_decode,
+        media_kind: "movie",
+    })
+}
+
+/// Build the full ffmpeg argument vector for a transcode plan (see [`ArgSpec`]
+/// for the per-field semantics).
+///
+/// Returns an empty vec for a [`TranscodePlan::DirectPlay`] (caller should
+/// never invoke ffmpeg in that case — this is a defensive no-op).
+pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
+    let ArgSpec {
+        plan,
+        input,
+        session_dir,
+        start_secs,
+        encoder,
+        hw_decode,
+        media_kind,
+    } = *spec;
     let (video, audio, subtitle) = match plan {
         TranscodePlan::DirectPlay { .. } => return Vec::new(),
         TranscodePlan::Transcode {
@@ -390,7 +456,25 @@ pub fn ffmpeg_args_hw(
     push(&mut a, "-hls_list_size");
     push(&mut a, "8");
     push(&mut a, "-hls_flags");
-    push(&mut a, "delete_segments+append_list+omit_endlist");
+    // `omit_endlist` is correct ONLY for live sources: a finite VOD title with
+    // it never gets `EXT-X-ENDLIST`, so when ffmpeg reaches EOF the player
+    // keeps treating the title as a live stream — polling the manifest forever
+    // and never firing its natural ended handling. For finite kinds we drop it
+    // so a CLEAN ffmpeg exit writes ENDLIST (the supervisor parks the session
+    // in `Completed` and keeps the segments for the player to drain).
+    //
+    // `delete_segments` + ENDLIST is an accepted combination here: the sliding
+    // window (hls_list_size 8) keeps pruning during playback, so the finished
+    // playlist holds only the LAST ~8 segments + ENDLIST. That is fine because
+    // a player paced by `-re` is already at the live edge when EOF lands, and
+    // any backward seek/resume goes through a FRESH grant (the server bakes
+    // `-ss` into a new session) by design — nothing ever re-reads pruned
+    // segments from a finished session.
+    if is_live_media_kind(media_kind) {
+        push(&mut a, "delete_segments+append_list+omit_endlist");
+    } else {
+        push(&mut a, "delete_segments+append_list");
+    }
     push(&mut a, "-hls_segment_filename");
     a.push(format!("{session_dir}/seg_%05d.ts"));
     a.push(format!("{session_dir}/index.m3u8"));
@@ -594,7 +678,7 @@ mod tests {
             joined,
             "-hide_banner -loglevel warning -nostdin -re -fflags +genpts -i /lib/m.mkv \
              -map 0:v:0 -map 0:a:0? -c:v copy -c:a copy \
-             -f hls -hls_time 4 -hls_list_size 8 -hls_flags delete_segments+append_list+omit_endlist \
+             -f hls -hls_time 4 -hls_list_size 8 -hls_flags delete_segments+append_list \
              -hls_segment_filename /tmp/sess/seg_%05d.ts /tmp/sess/index.m3u8"
         );
     }
@@ -1150,13 +1234,74 @@ mod tests {
         let plan = transcode(VideoOp::Copy, AudioOp::Copy, SubtitleOp::None);
         let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Cpu).join(" ");
         assert!(
-            j.contains("-hls_flags delete_segments+append_list+omit_endlist"),
+            j.contains("-hls_flags delete_segments+append_list"),
             "{j}"
         );
         assert!(
             j.ends_with("/tmp/s/index.m3u8"),
             "playlist is last arg: {j}"
         );
+    }
+
+    fn args_for_kind(kind: &str) -> Vec<String> {
+        let plan = transcode(VideoOp::Copy, AudioOp::Copy, SubtitleOp::None);
+        ffmpeg_args_for(&ArgSpec {
+            plan: &plan,
+            input: "/in.mkv",
+            session_dir: "/tmp/s",
+            start_secs: 0,
+            encoder: HwEncoder::Cpu,
+            hw_decode: false,
+            media_kind: kind,
+        })
+    }
+
+    #[test]
+    fn finite_vod_kinds_emit_endlist_on_eof() {
+        // Movies/episodes are FINITE: omit_endlist must NOT be set, so a clean
+        // ffmpeg EOF writes EXT-X-ENDLIST and the player ends the title instead
+        // of polling a "live" manifest forever. (Regression: omit_endlist was
+        // unconditional, copied from the live-IPTV invocation.) Unknown kinds
+        // are treated as finite too — the conservative default.
+        for kind in ["movie", "episode", "series", "show", "Movie", "whatever"] {
+            let j = args_for_kind(kind).join(" ");
+            assert!(
+                j.contains("-hls_flags delete_segments+append_list"),
+                "{kind}: {j}"
+            );
+            assert!(
+                !j.contains("omit_endlist"),
+                "finite kind {kind:?} must not omit ENDLIST: {j}"
+            );
+        }
+    }
+
+    #[test]
+    fn live_kinds_keep_omit_endlist() {
+        // A live source has no real EOF: ffmpeg exiting means the upstream
+        // died, and writing ENDLIST then would tell every player the programme
+        // ended (no retry). Live kinds keep the omit.
+        for kind in ["live", "iptv", "channel", "LIVE", " live "] {
+            let j = args_for_kind(kind).join(" ");
+            assert!(
+                j.contains("-hls_flags delete_segments+append_list+omit_endlist"),
+                "live kind {kind:?} must keep omit_endlist: {j}"
+            );
+        }
+    }
+
+    #[test]
+    fn ffmpeg_args_wrappers_default_to_finite_kind() {
+        // The historical wrappers (used by the bulk of the tests and any
+        // external caller) must default to the finite/vod semantics — the only
+        // sessions this crate starts today are local-library movies/episodes.
+        let plan = transcode(VideoOp::Copy, AudioOp::Copy, SubtitleOp::None);
+        for j in [
+            ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Cpu).join(" "),
+            ffmpeg_args_hw(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Cpu, false).join(" "),
+        ] {
+            assert!(!j.contains("omit_endlist"), "{j}");
+        }
     }
 
     // ── Full-hardware VAAPI pipeline (hw_decode=true) ───────────────────────

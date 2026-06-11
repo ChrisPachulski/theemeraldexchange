@@ -22,7 +22,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, mpsc, oneshot};
 
-use crate::args::{HwEncoder, ffmpeg_args_hw};
+use crate::args::{ArgSpec, HwEncoder, ffmpeg_args_for};
 use crate::concurrency::{Busy, Caps, Limiter, Permit};
 use crate::plan::TranscodePlan;
 
@@ -404,6 +404,7 @@ impl SessionManager {
     /// The child's stderr is drained into `tracing::warn` (tagged by session id)
     /// on a detached task so a full pipe buffer never stalls ffmpeg — mirroring
     /// `proc.stderr.on('data', …)` in iptvRemux.ts.
+    #[allow(clippy::too_many_arguments)]
     fn spawn_child(
         &self,
         session_id: &str,
@@ -412,25 +413,27 @@ impl SessionManager {
         dir: &PathBuf,
         start_secs: u64,
         source_codec: Option<&str>,
+        media_kind: &str,
     ) -> Result<Child, StartError> {
         let dir_str = dir.to_string_lossy();
         // Full-hardware VAAPI decode is gated on: the resolved encoder being
         // VAAPI, the boot probe having confirmed the VPP+encode chain
         // (`vaapi_hw_decode`), and the SOURCE codec being one the iGPU can decode
         // — `-hwaccel_output_format vaapi` hard-fails with no software fallback on
-        // an undecodable codec (e.g. MPEG-4/DivX). `ffmpeg_args_hw` further
+        // an undecodable codec (e.g. MPEG-4/DivX). `ffmpeg_args_for` further
         // restricts it to a video re-encode without subtitle burn-in.
         let hw_decode = self.vaapi_hw_decode
             && matches!(self.encoder, HwEncoder::Vaapi)
             && source_codec.is_some_and(is_vaapi_hw_decodable);
-        let args = ffmpeg_args_hw(
+        let args = ffmpeg_args_for(&ArgSpec {
             plan,
-            opts_input,
-            &dir_str,
+            input: opts_input,
+            session_dir: &dir_str,
             start_secs,
-            self.encoder,
+            encoder: self.encoder,
             hw_decode,
-        );
+            media_kind,
+        });
         let mut child = Command::new(&self.ffmpeg_bin)
             .args(&args)
             .current_dir(dir)
@@ -513,6 +516,7 @@ impl SessionManager {
             &dir,
             opts.start_secs,
             opts.source_codec.as_deref(),
+            &opts.media_kind,
         )?;
 
         let (ctl_tx, ctl_rx) = mpsc::unbounded_channel();
@@ -699,7 +703,7 @@ impl SessionManager {
     /// dir recreated behind it (a leak on the bounded /scratch tmpfs) and never
     /// leaves an unsupervised encoder.
     async fn respawn(&self, id: &str) -> Respawn {
-        let (input, plan, dir, start_secs, source_codec) = {
+        let (input, plan, dir, start_secs, source_codec, media_kind) = {
             let guard = self.sessions.lock().await;
             let Some(s) = guard.get(id) else {
                 return Respawn::Gone;
@@ -710,6 +714,7 @@ impl SessionManager {
                 s.dir.clone(),
                 s.start_secs,
                 s.source_codec.clone(),
+                s.info_kind.clone(),
             )
         };
         // Clear the dir so the fresh ffmpeg restarts segment numbering at
@@ -721,7 +726,15 @@ impl SessionManager {
             tracing::warn!(session = %id, error = %e, "failed to recreate session dir for respawn");
             return Respawn::Failed;
         }
-        match self.spawn_child(id, &input, &plan, &dir, start_secs, source_codec.as_deref()) {
+        match self.spawn_child(
+            id,
+            &input,
+            &plan,
+            &dir,
+            start_secs,
+            source_codec.as_deref(),
+            &media_kind,
+        ) {
             Ok(mut child) => {
                 // A stop() may have removed the session while we spawned; kill
                 // the fresh child and clean the recreated dir rather than
