@@ -24,6 +24,10 @@ describe('USE_MEDIA_CORE — media proxy mount gate', () => {
       const media = await app.request('/api/media/movies')
       expect(media.status).toBe(404)
 
+      // /api/transcode rides the same flag — unmounted too.
+      const transcode = await app.request('/api/transcode/sessions')
+      expect(transcode.status).toBe(404)
+
       // /api/limits surfaces the gate so the SPA can hide the tab.
       const limits = await app.request('/api/limits')
       expect(limits.status).toBe(200)
@@ -44,11 +48,19 @@ describe('USE_MEDIA_CORE — media proxy mount gate', () => {
     try {
       const { app } = await import('./app.js')
 
-      // Mounted: a request reaches the proxy router instead of the 404
-      // fallback. The handler may 5xx/4xx without a configured upstream,
-      // but it must NOT be Hono's unmounted-route 404.
+      // Mounted: a cookieless request reaches the proxy router instead of
+      // the 404 fallback — and the router's REAL auth gate rejects it with
+      // 401 unauthenticated. Asserting 401 specifically (not just "not 404")
+      // pins BOTH facts: the tree is mounted AND it is auth-gated. A 200
+      // here would mean requireAuth fell off the media proxy.
       const media = await app.request('/api/media/movies')
-      expect(media.status).not.toBe(404)
+      expect(media.status).toBe(401)
+      const mediaBody = (await media.json()) as { error?: string }
+      expect(mediaBody.error).toBe('unauthenticated')
+
+      // /api/transcode mounts on the same flag, with the same auth contract.
+      const transcode = await app.request('/api/transcode/sessions')
+      expect(transcode.status).toBe(401)
 
       const limits = await app.request('/api/limits')
       const body = (await limits.json()) as { mediaEnabled: boolean }
