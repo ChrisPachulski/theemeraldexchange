@@ -16,6 +16,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tokio::process::{Child, Command};
@@ -37,6 +38,13 @@ const MAX_RESTARTS: u32 = 3;
 /// escalation plus slack for the respawn itself. A closed channel (the
 /// supervisor exited because the session was torn down) resolves immediately.
 const CTL_ACK_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Process-wide monotonic sequence appended to session ids. The wall-clock
+/// component alone is 1s-granular, so two grants for the same title+user
+/// within a second (a double-click) would otherwise mint the SAME id — the
+/// second map insert would displace the first Session and orphan its running
+/// ffmpeg. The sequence makes every id unique for the process lifetime.
+static START_SEQ: AtomicU64 = AtomicU64::new(0);
 
 pub type SessionId = String;
 
@@ -468,12 +476,21 @@ impl SessionManager {
 
         let now = now_secs();
         let session_id = format!(
-            "tx:{}:{}:{}:{}",
+            "tx:{}:{}:{}:{}-{}",
             sanitize(&opts.media_kind),
             opts.media_id,
             sanitize(&opts.sub),
-            now
+            now,
+            START_SEQ.fetch_add(1, Ordering::Relaxed),
         );
+        // Defensive same-key handling: the sequence suffix makes a collision
+        // unreachable, but if one ever appears anyway, fully stop (kill + reap
+        // + dir removal) the previous session BEFORE creating the dir — two
+        // encoders must never share a session dir.
+        if self.sessions.lock().await.contains_key(&session_id) {
+            tracing::warn!(session = %session_id, "session id collision; stopping previous session");
+            self.stop(&session_id).await;
+        }
         let dir = self.tmp_root.join(sanitize(&session_id));
         tokio::fs::create_dir_all(&dir)
             .await
@@ -1184,6 +1201,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn same_second_grants_get_distinct_sessions_with_no_orphan() {
+        // Regression: the id was tx:{kind}:{media_id}:{sub}:{now_secs} — a
+        // double-click within one second minted the SAME id, and the second
+        // map insert displaced the first Session, orphaning its ffmpeg (the
+        // permit dropped but the process kept encoding). The monotonic
+        // sequence suffix makes every id unique.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
+        // Identical opts (same kind/id/sub), started back-to-back in the same
+        // wall-clock second.
+        let a = mgr.start(opts("/lib/a.mkv")).await.unwrap();
+        let b = mgr.start(opts("/lib/a.mkv")).await.unwrap();
+        assert_ne!(a, b, "same-second grants must mint distinct ids");
+        assert_eq!(mgr.len().await, 2, "both sessions must be live");
+
+        // Both encoders are running in their own dirs — nothing orphaned.
+        let dir_a = mgr.manifest_path(&a).await.unwrap();
+        let dir_b = mgr.manifest_path(&b).await.unwrap();
+        assert_ne!(dir_a, dir_b);
+        let pid_a = read_stub_pid(dir_a.parent().unwrap()).await;
+        let pid_b = read_stub_pid(dir_b.parent().unwrap()).await;
+        assert_ne!(pid_a, pid_b);
+        assert!(process_alive(pid_a) && process_alive(pid_b));
+
+        // And both are individually stoppable — each kill reaches ITS process.
+        mgr.stop(&a).await;
+        wait_for(|| !process_alive(pid_a)).await;
+        assert!(process_alive(pid_b), "stopping a must not touch b");
+        mgr.stop(&b).await;
+        wait_for(|| !process_alive(pid_b)).await;
+        assert!(mgr.is_empty().await);
+    }
+
+    #[tokio::test]
     async fn idle_sweep_reaps_stale_session() {
         let tmp = tempfile::tempdir().unwrap();
         let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
@@ -1233,9 +1284,6 @@ mod tests {
         );
     }
 
-    // Distinct media_id per call so two concurrent sessions get distinct ids
-    // (the id embeds media_id + a 1s-granular timestamp, so same-id starts in
-    // the same second would otherwise collide in the map).
     fn remux_opts_id(input: &str, media_id: i64) -> StartOpts {
         StartOpts {
             media_id,
