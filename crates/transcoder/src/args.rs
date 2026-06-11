@@ -453,12 +453,16 @@ fn build_vaapi_hw_filter(scale_to_height: Option<i64>, tone_map: bool) -> String
     }
 }
 
-/// Escape a path for use inside an ffmpeg filtergraph argument (single quotes,
-/// colons, backslashes are special to the filter parser).
+/// Escape a path for use inside a single-quoted ffmpeg filtergraph argument
+/// (colons and backslashes are special to the filter parser). Per ffmpeg's
+/// quoting rules there is NO escape FOR a quote INSIDE a quoted string — the
+/// quoting must be closed, the quote backslash-escaped outside it, and the
+/// string reopened (`'\''`), exactly like POSIX shell quoting; `\'` would
+/// terminate the string and leak the rest unquoted.
 fn escape_filter_path(p: &str) -> String {
     p.replace('\\', "\\\\")
-        .replace('\'', "\\'")
         .replace(':', "\\:")
+        .replace('\'', "'\\''")
 }
 
 #[cfg(test)]
@@ -862,6 +866,47 @@ mod tests {
         let j = ffmpeg_args(&plan, "/lib/show s01e01.mkv", "/tmp/s", 0, HwEncoder::Cpu).join(" ");
         assert!(j.contains("subtitles="), "{j}");
         assert!(j.contains(":si=2"), "{j}");
+    }
+
+    #[test]
+    fn escape_filter_path_quote_uses_close_escape_reopen() {
+        // Inside ffmpeg's single-quoted strings the ONLY way to express a
+        // literal quote is close-escape-reopen ('\''), shell-style; \' would
+        // end the quoted string early and leak the remainder unquoted.
+        // (Dormant path — burn-in is disabled — but it must stay correct.)
+        assert_eq!(
+            escape_filter_path("/lib/it's here.mkv"),
+            "/lib/it'\\''s here.mkv"
+        );
+        // Colons and backslashes are filter-parser specials: backslash-escaped.
+        assert_eq!(escape_filter_path("/lib/a:b.mkv"), "/lib/a\\:b.mkv");
+        assert_eq!(escape_filter_path("/lib/a\\b.mkv"), "/lib/a\\\\b.mkv");
+        // All three composed; the quote handling never re-escapes itself.
+        assert_eq!(
+            escape_filter_path("a'b:c\\d"),
+            "a'\\''b\\:c\\\\d"
+        );
+    }
+
+    #[test]
+    fn burn_in_filter_embeds_quoted_path_correctly() {
+        let plan = transcode(
+            VideoOp::EncodeH264 {
+                scale_to_height: None,
+                tone_map: false,
+                burn_subtitle_index: Some(1),
+                source_height: None,
+            },
+            AudioOp::Copy,
+            SubtitleOp::None,
+        );
+        let args = ffmpeg_args(&plan, "/lib/it's.mkv", "/tmp/s", 0, HwEncoder::Cpu);
+        let vf_idx = args.iter().position(|s| s == "-vf").expect("missing -vf");
+        assert_eq!(
+            args[vf_idx + 1],
+            "subtitles='/lib/it'\\''s.mkv':si=1",
+            "quote must close-escape-reopen inside the quoted filename"
+        );
     }
 
     #[test]
