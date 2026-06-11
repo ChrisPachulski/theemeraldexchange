@@ -369,12 +369,16 @@ jobs:
         # Audit the EXACT shipped dependency set — the committed lock the Docker
         # image installs from (recommender/requirements.lock) — instead of a
         # freshly re-resolved pyproject (which drifts from what actually ships).
-        # torch is pinned to the +cpu local build, which isn't a PyPI release the
-        # advisory DB keys on, so strip the +cpu suffix for the audit only: the
-        # CPU build is the same upstream 2.x.x release, just a different wheel.
+        # The lock is sha256 hash-pinned, but pip-audit only needs name==version
+        # to query the advisory DB, so reduce it to a versions-only file: keep the
+        # `name==version` pin lines, drop the `--hash=` continuations (otherwise
+        # pip enters hash-checking mode and the +cpu torch wheel's hashes can't be
+        # satisfied once the local tag is stripped), and strip the +cpu suffix
+        # (the advisory DB keys on the plain upstream 2.x.x release, not the wheel).
         working-directory: recommender
         run: |
-          sed 's/+cpu//' requirements.lock > /tmp/recommender-audit.txt
+          grep -E '^[a-zA-Z0-9._-]+==' requirements.lock \
+            | sed 's/[[:space:]]*\\$//; s/+cpu//' > /tmp/recommender-audit.txt
           pip-audit -r /tmp/recommender-audit.txt
 
   docker-build:

@@ -302,7 +302,13 @@ async fn grant(
     // restart budget on the guaranteed-fatal respawn loop, and the caller sees
     // an opaque late 503. Reject it up front with a typed, client-readable
     // error instead — nothing downstream can ever make such a grant playable.
-    if row.video_codec.as_deref().map(str::trim).unwrap_or("").is_empty() {
+    if row
+        .video_codec
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("")
+        .is_empty()
+    {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(json!({ "error": "no_video_stream" })),
@@ -1126,7 +1132,11 @@ mod tests {
             let resp = authed(&state, method, &uri, &intruder_tok).await;
             assert_eq!(resp.status(), StatusCode::FORBIDDEN, "{uri}");
         }
-        assert_eq!(state.sessions.len().await, 1, "intruder stop must be a no-op");
+        assert_eq!(
+            state.sessions.len().await,
+            1,
+            "intruder stop must be a no-op"
+        );
 
         // The owner can heartbeat and seek their own session.
         let resp = authed(

@@ -458,9 +458,9 @@ pub async fn scan_once_isolated(
     roots: Vec<LibraryRoot>,
     tmdb: TmdbClient,
 ) -> Result<ScanReport, AppError> {
-    join_scan(tokio::spawn(async move {
-        scan_once(&db, &roots, &tmdb).await
-    }))
+    join_scan(tokio::spawn(
+        async move { scan_once(&db, &roots, &tmdb).await },
+    ))
     .await
 }
 
@@ -2039,7 +2039,10 @@ mod tests {
 
         assert_eq!(report.files_removed, 0, "missing root must prune nothing");
         assert_eq!(report.watch_orphans_removed, 0, "watch state must survive");
-        assert!(report.errors >= 1, "the skipped root is surfaced as an error");
+        assert!(
+            report.errors >= 1,
+            "the skipped root is surfaced as an error"
+        );
         assert_eq!(count(&db, "media_files").await, 1);
         assert_eq!(count(&db, "movies").await, 1);
         assert_eq!(count(&db, "media_watch_state").await, 1);
@@ -2118,7 +2121,8 @@ mod tests {
         std::fs::write(&new_path, b"bytes").unwrap();
         let db = Db::connect_memory().await.unwrap();
 
-        let old_file = seed_media_file(&db, tmp.path().join("Old (2021).mkv").to_str().unwrap()).await;
+        let old_file =
+            seed_media_file(&db, tmp.path().join("Old (2021).mkv").to_str().unwrap()).await;
         upsert_movie(&db, "Old", Some(2021), old_file, "t", None)
             .await
             .unwrap();
@@ -2130,10 +2134,11 @@ mod tests {
         let report = scan_once(&db, &roots, &no_tmdb()).await.unwrap();
         assert_eq!(report.files_seen, 1, "the renamed file is walked");
         assert_eq!(report.files_removed, 1, "the old path's row is pruned");
-        let old_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM media_files WHERE path LIKE '%Old%'")
-            .fetch_one(&db.pool)
-            .await
-            .unwrap();
+        let old_rows: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM media_files WHERE path LIKE '%Old%'")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
         assert_eq!(old_rows, 0);
     }
 

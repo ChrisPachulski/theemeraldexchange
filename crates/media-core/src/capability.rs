@@ -231,7 +231,11 @@ mod tests {
         // these direct-play; without it NO mp4 in the library ever did.
         let f = file(Some("mov"), Some("h264"), Some(1080), None);
         let d = decide(&f, &h264_client());
-        assert!(d.direct_play, "mov-family must match mp4 caps: {}", d.reason);
+        assert!(
+            d.direct_play,
+            "mov-family must match mp4 caps: {}",
+            d.reason
+        );
     }
 
     #[test]
@@ -293,7 +297,12 @@ mod tests {
     fn h264_8bit_profiles_and_unknown_profile_direct_play() {
         // The usual 8-bit profiles pass, and a missing profile is not gated
         // (nothing to gate on — matches the unknown-audio leniency).
-        for profile in [Some("High"), Some("Main"), Some("Constrained Baseline"), None] {
+        for profile in [
+            Some("High"),
+            Some("Main"),
+            Some("Constrained Baseline"),
+            None,
+        ] {
             let mut f = file(Some("mp4"), Some("h264"), Some(1080), None);
             f.video_profile = profile.map(str::to_string);
             assert!(
