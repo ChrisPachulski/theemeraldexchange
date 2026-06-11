@@ -36,7 +36,8 @@ import sqlite3
 
 import numpy as np
 
-from ..context import Candidate, UserContext
+from ..context import UserContext
+from ..db import table_generation
 from ..reasons import discover_reason, personalized_reason, trending_reason
 from ..retrieval import cold_start_pool, retrieve_candidates
 from ..schemas import ScoredItem
@@ -57,9 +58,12 @@ DEFAULTS: dict[str, float | int | str] = {
 KEY_CREW_JOBS = ("Director", "Writer", "Screenplay", "Story", "Creator", "Author", "Novel")
 EMBED_EPS = 1e-9
 
-# Global IDF over the catalog, computed once per (kind, key) and cached. df is
-# the number of titles a person appears in (top-billed cast / key crew).
-_IDF: dict[tuple[str, str], dict[int, float]] = {}
+# Global IDF over the catalog, cached per (kind, key). df is the number of
+# titles a person appears in (top-billed cast / key crew). The nightly ingest
+# rehydrates title_cast/title_crew via DELETE+INSERT, so each entry carries the
+# table_generation fingerprint it was computed against and is recomputed when
+# the underlying tables move.
+_IDF: dict[tuple[str, str], tuple[tuple, dict[int, float]]] = {}
 
 
 def _normalize(v: np.ndarray) -> np.ndarray:
@@ -69,9 +73,10 @@ def _normalize(v: np.ndarray) -> np.ndarray:
 
 def _idf_map(conn: sqlite3.Connection, kind: str, which: str) -> dict[int, float]:
     key = (kind, which)
+    gen = table_generation(conn, "titles", "title_cast" if which == "cast" else "title_crew")
     cached = _IDF.get(key)
-    if cached is not None:
-        return cached
+    if cached is not None and cached[0] == gen:
+        return cached[1]
     if which == "cast":
         rows = conn.execute(
             "SELECT person_id, COUNT(DISTINCT tmdb_id) AS df FROM title_cast "
@@ -89,7 +94,7 @@ def _idf_map(conn: sqlite3.Connection, kind: str, which: str) -> dict[int, float
         "SELECT COUNT(*) FROM titles WHERE kind = ?", (kind,)
     ).fetchone()[0] or 1
     idf = {r["person_id"]: math.log((1.0 + n_titles) / (1.0 + r["df"])) + 1.0 for r in rows}
-    _IDF[key] = idf
+    _IDF[key] = (gen, idf)
     return idf
 
 
