@@ -25,6 +25,7 @@ import { drainRemuxSessions } from './services/iptvRemux.js'
 import { closeIptvDb } from './services/iptvDbSingleton.js'
 import { ensureServerId, closeServerDb } from './services/serverDb.js'
 import { createLogger } from './services/logger.js'
+import { warnExpiredCompatWindows } from './services/compatWindows.js'
 
 const log = createLogger('boot')
 const shutdownLog = createLogger('shutdown')
@@ -62,6 +63,10 @@ if (env.EEX_TELEMETRY_DSN) {
 // first boot (INSERT OR IGNORE — safe to call on every subsequent boot).
 const serverId = ensureServerId()
 log.info('server_id resolved', { serverId })
+
+// Surface any dated backward-compat shim whose removal date has passed —
+// expiry becomes a boot log line instead of a manual calendar sweep.
+warnExpiredCompatWindows()
 
 // Capture the http.Server handle so graceful shutdown can stop accepting new
 // connections and drain in-flight requests (finding 14-2) — the prior code
