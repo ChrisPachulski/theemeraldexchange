@@ -19,7 +19,9 @@ typographic family. We're stealing the chrome, not the chrome's prerequisites.
 
 What we don't take: WebGL hero scenes, scroll-hijacking, brand wordmarks at
 40vw. This is a tool used nightly, not a portfolio reel — the chrome carries
-the reference; the function stays instant.
+the reference; the function stays instant. (Two narrow, owner-approved
+atmosphere exceptions — the WebGL brand mark and the kraken video — are
+recorded under "Recorded exceptions" below.)
 
 ## Physical scene (forces theme)
 
@@ -31,7 +33,7 @@ Both ends of the day exist. Evening is the heavier traffic. **Theme: dark defaul
 
 **Committed and locked.** The product's name commits us — *Emerald* in the URL is a promise. Restrained would betray it. Drenched would suffocate. **The palette never changes.**
 
-One saturated emerald carries the accent — primary buttons, the "In Library" badge, the active tab indicator, the progress-bar fill, the focus ring. Everything else is a tinted neutral built from the same hue family.
+One saturated emerald carries the accent — primary buttons, the "In Library" badge, the mode toggle's active segment, the progress-bar fill, the focus ring. Everything else is a tinted neutral built from the same hue family.
 
 ### OKLCH palette
 
@@ -74,9 +76,11 @@ font-family-mono:    ui-monospace, "SF Mono", "JetBrains Mono", "Menlo", monospa
 ```
 
 Space Grotesk is the canonical free analogue to NB Architekt — geometric
-proportions, slightly condensed feel, holds up bold. Loaded via the static
-`/fonts/space-grotesk-*.woff2` files we self-host (no Google Fonts request,
-no CLS, font-display:swap).
+proportions, slightly condensed feel, holds up bold. Loaded today from
+Google Fonts (`index.html` preconnects to fonts.googleapis.com/gstatic and
+pulls weights 400–700 with `display=swap`). Self-hosting the woff2 files
+remains the intended end state — it drops the third-party request before
+any public or native ship — and is recorded debt, not a settled choice.
 
 Display is reserved for: brand wordmark, search hero prompt, modal eyebrow
 labels, tab labels in the HUD pod, large empty-state titles. Everywhere else
@@ -142,7 +146,8 @@ Vary, do not repeat. Same padding everywhere reads as monotony.
 - **Card-to-card gaps**: `s-4`
 - **Inside cards**: `s-3`
 - **Modal**: `s-6` outer, `s-4` between fields
-- **Search hero pad**: `s-9` above on first paint (declarative space)
+- **Search dock pad**: `s-7` above the input inside the fixed bottom dock
+  (`s-5` below), tightening one step on narrow viewports
 
 ## Radii — pill where it can pill
 
@@ -163,22 +168,29 @@ rounding (the ice-block silhouette).
 - **Floating HUD pod** for the top nav. Not a sticky bar — a pill-shaped
   capsule, centered, with internal hairline dividers between brand · tabs ·
   Watch. Pinned to the viewport top with a small inset, gets a subtle
-  backdrop-blur (the ONE earned glassmorphism — this surface warrants it).
+  backdrop-blur (earned glassmorphism — see the glassmorphism law under
+  anti-patterns for where else blur is permitted).
 - **No card-grid monotony.** Search result cards: poster-led, asymmetric.
   Title and metadata flow alongside the poster, not stacked uniformly under
   it. The "In Library" badge breaks the card edge slightly — small visual
   interrupt that earns attention. Cards have an **ice-block silhouette**: top
   edge picks up a frost highlight, bottom drops a cool shadow.
-- **Search-as-hero on TV/Movies tabs.** A large display-weight prompt
-  ("What are you tracking?") sits above the input with generous space. The
-  input itself is a panel (rounded `--r-lg`), not a hairline-bottomed text
-  field.
+- **Search-as-dock on TV/Movies tabs.** The search input lives in a fixed
+  dock at the viewport bottom (`tv-tab__dock`), floating over the result
+  grid on a soft top-fading gradient so the kraken atmosphere bleeds
+  through instead of being cut by a hard chrome edge. The input itself is a
+  panel (rounded `--r-lg`), not a hairline-bottomed text field. The
+  original top-hero treatment (a large display-weight prompt above the
+  input) survives as `SearchInput`'s optional `prompt`, currently unused.
 - **No nested cards.** Modals sit on `--surface`; their content sits directly
   on it, not in nested boxes.
-- **Atmospheric overlay**: a fixed-position decorative SVG renders a faint
-  constellation/network of dots and lines at ~6% opacity, drifts via
-  transform over 80s. Behind everything, no pointer-events. Adds depth
-  without weight. Disabled at `prefers-reduced-motion`.
+- **Atmospheric overlay**: the live atmosphere is the kraken video loop
+  (recorded exception below) playing behind everything, no pointer-events.
+  The original static-SVG constellation (faint network of dots and lines,
+  CSS-only 80s drift, drift removed at `prefers-reduced-motion`) remains in
+  the tree (`Constellation.tsx` + the `.constellation` rules in
+  `global.css`) but is currently unmounted — it is the fallback atmosphere
+  if the video ever has to go, not a second simultaneous layer.
 
 ## Motion — atmospheric, still subtle
 
@@ -186,7 +198,8 @@ Slightly slower than V1 to feel cinematic, never theatrical.
 
 - **Easing:** `cubic-bezier(0.16, 1, 0.3, 1)` (ease-out-quint) for everything
 - **Duration:** 180–280ms for state changes (hover, modal open, toast slide-in)
-- **Constellation drift:** 80s linear translateX, infinite, alternates
+- **Constellation drift:** 80s translateX, infinite, alternates (spec kept
+  for the dormant SVG fallback; the shipped atmosphere is the kraken loop)
 - **No animation of layout properties.** Use opacity and transform only
 - **No bounce, no spring, no elastic**
 
@@ -195,13 +208,18 @@ Slightly slower than V1 to feel cinematic, never theatrical.
 - **HUD pod nav**: floating pill (`--r-pod`), `surface` with `backdrop-filter:
   blur(14px)` and a hairline `border` at low alpha. Brand wordmark left in
   display weight 700 with very tight tracking. Tab labels uppercase tracked
-  wide. Active tab marker = an emerald **dot** below the label, animated on
-  the X axis. Watch sits at the right with a 1px hairline divider before it,
-  the gem glyph + "Watch" label, and a small `->` mono glyph trailing.
-- **Search hero**: prompt + input. Prompt in display 700 at `--t-2xl`,
-  generous letter-spacing-tight, `--text` color. Input below in a panel
-  (rounded `--r-lg`), no bottom-border-only treatment. Empty input shows
-  `letter-spacing: 0.04em` placeholder.
+  wide. The active tab is not marked — it is removed from the pill entirely
+  (the page you are already on is not a navigation action), with a quiet
+  "you are here" label under the brand wordmark for wayfinding. Watch sits
+  at the right with a 1px hairline divider before it, the gem glyph +
+  "Watch" label, and a small `->` mono glyph trailing (a recorded PRODUCT.md
+  exception: it opens Plex's web client until native playback reaches
+  parity).
+- **Search panel**: input in a panel (rounded `--r-lg`), no
+  bottom-border-only treatment, docked at the viewport bottom on the
+  catalog tabs. Empty input shows `letter-spacing: 0.04em` placeholder.
+  The optional display-700 `--t-2xl` prompt above the input is retained in
+  the component (`SearchInput`'s `prompt`) but not currently rendered.
 - **Result card / ice block**: poster (3:4) left, title + meta + overview
   right. Outer container has the ice-block treatment: subtle inset top
   highlight via box-shadow (`inset 0 1px 0 var(--frost)`) plus an outer cool
@@ -230,24 +248,57 @@ Slightly slower than V1 to feel cinematic, never theatrical.
 
 - Side-stripe borders (`border-left: 4px solid` accent on cards/list rows). Never.
 - Gradient text. Never.
-- **Glassmorphism by default.** Backdrop-blur is allowed on the HUD pod
-  ONLY (it's the navigation that floats over content; frost-on-glass is the
-  literal metaphor). Modals use a solid scrim, not blur.
+- **Glassmorphism by default.** Backdrop-blur is reserved for floating
+  chrome that sits over the moving kraken atmosphere — the HUD pod, the user
+  menu, the replay button, the alphabet rail, sticky toolbars — and for
+  modal scrims at low radius (frost-on-glass over live video is the literal
+  metaphor). Never as a default card or content-surface treatment.
 - Hero-metric template (big number, small label, sparkline). Has no place here.
 - Identical card grids. Search results vary by content; the chrome should not standardize them into sameness.
-- Modal-as-first-thought. Add and Confirm are the only two modals. Everything else inlines or doesn't exist.
+- Modal-as-first-thought. Modals are the exception, never the default — a
+  surface earns one only when its task is genuinely modal (committing an
+  add, confirming a destructive action, focused detail/selection/playback).
+  Every modal must take the shared a11y contract: focus trap + Escape via
+  `useModalA11y`, `role="dialog"`/`aria-modal`, and a scrim. Current roster:
+  Add (movie/series), Confirm, DetailModal, EpisodePicker, MediaPlayer,
+  ConcurrencyLimitModal, and the IPTV connections panel
+  (`ConnectionsWidget`). Recorded debt, not silent license: the connections
+  panel still lacks the `useModalA11y` trap, and the IPTV modal styles
+  (`iptv-conn-*` rules in `src/index.css`) carry raw hex values instead of
+  the OKLCH tokens. Both are to be paid down, neither permits more.
 - Em dashes in copy. (Comma, semicolon, period, parens.)
-- WebGL hero scenes. The constellation overlay is a static SVG with one
-  transform animation. Three.js stays out.
+- WebGL hero scenes. Three.js stays out of layout and content surfaces. The
+  two owner-approved atmosphere exceptions below (the three-emerald brand
+  mark, the kraken video) are the ceiling, not a wedge — no scroll scenes,
+  no WebGL heroes.
+
+## Recorded exceptions (owner-approved)
+
+The laws above describe the system this doc locks; these are the deliberate,
+bounded departures the owner has approved. They are recorded so doc and tree
+agree — they set ceilings, not precedents.
+
+- **WebGL three-emerald brand mark.** The brand mark is a live Three.js
+  brilliant-cut gem scene (`src/lib/gemScene.ts`, rendered by `EmeraldMark`
+  in both navs and driving the animated favicon). It earns its WebGL: the
+  product's name promises a jewel, and a static SVG read as clip-art.
+  Scope: the mark and favicon only.
+- **Kraken video atmosphere.** The page background is a full-screen video
+  loop (`Kraken.tsx`: `kraken.webm`/`.mp4` on Home, a calmer `resting`
+  variant on inner tabs), playing behind everything with no pointer-events.
+  It supersedes the static-SVG constellation as the live atmosphere; the
+  constellation stays in the tree as the fallback. Floating chrome over the
+  moving video is also why backdrop-blur extends beyond the HUD pod (see
+  the glassmorphism law above).
 
 ## What "done" looks like visually
 
-A first-time visitor on a phone, opens the dashboard. A floating emerald-
-flecked HUD pod hovers at the top — `THE EMERALD EXCHANGE · TV · MOVIES ·
-DOWNLOADS · WATCH ->`. The body asks `What are you tracking?` in big
-display type. They start typing — three poster cards land quietly, ice-block
-silhouette, frost catching their top edges. One has a pill `[ IN LIBRARY ]`
-badge breaking its corner. They tap it. A confirmation panel lifts off the
-surface. Behind everything, a constellation of pinpoints drifts at the speed
-of moss. The interaction took 14 seconds and felt like the only natural
-thing to have happened.
+A first-time visitor on a phone, opens the dashboard. The kraken drifts in
+the dark behind everything. A floating emerald-flecked pod hovers at the
+top — the live gem turning beside `EMERALD EXCHANGE`, `TV SHOWS · MOVIES ·
+DOWNLOADS`, `WATCH ->` at the right. They tap into TV Shows; the search
+panel waits in a dock at the bottom of the scene. They start typing —
+three poster cards land quietly, ice-block silhouette, frost catching their
+top edges. One has a pill `[ IN LIBRARY ]` badge breaking its corner. They
+tap it. A confirmation panel lifts off the surface. The interaction took 14
+seconds and felt like the only natural thing to have happened.
