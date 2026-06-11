@@ -52,6 +52,13 @@ jobs:
       - name: Test + coverage
         run: npm run test:coverage
 
+      # Recommendation-quality eval gate (vitest.eval.config.ts). Fully
+      # offline — Anthropic + TMDB are mocked — so it is deterministic and
+      # cheap. It rotted once already (vitest.env.ts drift) precisely because
+      # nothing ran it in CI; this step keeps it alive.
+      - name: Recommendation eval gate (offline)
+        run: npm run eval:recs
+
       - name: Build (Vite + server tsc)
         run: npm run build
 
