@@ -11,6 +11,14 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Least-privilege token (production-readiness re-review): every job here only
+# checks out code and uploads workflow artifacts (artifact upload uses the
+# Actions service, not the repo-scoped token) — none needs write access to
+# contents, packages, PRs, or anything else. Raise per-job if a future job
+# provably needs more.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
