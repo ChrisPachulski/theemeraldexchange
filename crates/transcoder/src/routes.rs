@@ -379,12 +379,20 @@ async fn session_segment(
     }
 }
 
-async fn session_heartbeat(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
-    state.sessions.heartbeat(&id).await;
-    Json(json!({ "ok": true }))
+async fn session_heartbeat(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    // 404 for an unknown/reaped session so the client can detect the session
+    // died (idle-reaped, crashed past the restart cap) instead of receiving an
+    // eternal 200 for a ghost. The SPA treats heartbeat as fire-and-forget, so
+    // this is non-breaking for it today.
+    if state.sessions.heartbeat(&id).await {
+        Json(json!({ "ok": true })).into_response()
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "no such session" })),
+        )
+            .into_response()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -778,6 +786,61 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         state.sessions.stop(&session_id).await;
+    }
+
+    #[tokio::test]
+    async fn heartbeat_is_200_for_live_session_404_for_dead() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = state_with(
+            &tmp,
+            Caps {
+                max_total: 4,
+                max_cpu: 4,
+            },
+            PrincipalMode::Off,
+        );
+        let app = router(state.clone());
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/transcode/grant")
+                    .header("content-type", "application/json")
+                    .body(Body::from(grant_body(&h264_file())))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        let session_id = v["sessionId"].as_str().unwrap().to_string();
+
+        let heartbeat = |sid: String| {
+            let state = state.clone();
+            async move {
+                router(state)
+                    .oneshot(
+                        HttpRequest::builder()
+                            .method("POST")
+                            .uri(format!("/api/transcode/session/{sid}/heartbeat"))
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap()
+            }
+        };
+
+        let live = heartbeat(session_id.clone()).await;
+        assert_eq!(live.status(), StatusCode::OK);
+
+        // Once the session is gone, heartbeat must say so — a 200 here left
+        // the client heart-beating a reaped session forever.
+        state.sessions.stop(&session_id).await;
+        let dead = heartbeat(session_id).await;
+        assert_eq!(dead.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

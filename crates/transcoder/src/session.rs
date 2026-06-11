@@ -530,10 +530,16 @@ impl SessionManager {
         Ok(session_id)
     }
 
-    /// Refresh a session's heartbeat. No-op for an unknown id.
-    pub async fn heartbeat(&self, id: &str) {
-        if let Some(s) = self.sessions.lock().await.get_mut(id) {
-            s.last_seen = now_secs();
+    /// Refresh a session's heartbeat. Returns `false` for an unknown id so the
+    /// route can answer 404 — a client whose session was reaped must be able
+    /// to detect the death instead of heart-beating a ghost forever.
+    pub async fn heartbeat(&self, id: &str) -> bool {
+        match self.sessions.lock().await.get_mut(id) {
+            Some(s) => {
+                s.last_seen = now_secs();
+                true
+            }
+            None => false,
         }
     }
 
@@ -1071,10 +1077,12 @@ mod tests {
             let mut g = mgr.sessions.lock().await;
             g.get_mut(&id).unwrap().last_seen = before.saturating_sub(100);
         }
-        mgr.heartbeat(&id).await;
+        assert!(mgr.heartbeat(&id).await, "live session heartbeat succeeds");
         let after = mgr.list().await[0].last_seen;
         assert!(after >= before, "heartbeat must refresh last_seen");
         mgr.stop(&id).await;
+        // A reaped/unknown session reports the death instead of pretending ok.
+        assert!(!mgr.heartbeat(&id).await, "dead session heartbeat is false");
     }
 
     #[tokio::test]
