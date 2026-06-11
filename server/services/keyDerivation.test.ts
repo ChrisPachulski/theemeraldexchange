@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { hkdfSync } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import {
   deriveKey,
   INFO_SESSION,
@@ -94,6 +96,55 @@ describe('INFO_* label invariants', () => {
       ).toBe(true)
     }
   })
+})
+
+describe('contract vectors (tests/vectors/hkdf-parity.json)', () => {
+  // The same vector file is executed by the Rust harness
+  // (crates/emerald-contracts/tests/vectors.rs) and the Python parity
+  // suite (recommender/tests/test_emerald_contracts_parity.py). Running
+  // it through the production deriveKey closes the TS leg of the
+  // cross-language byte-equality proof.
+  interface HkdfVectorFile {
+    vectors: Array<{
+      name: string
+      ikm_utf8: string
+      derivations: Record<string, { info: string; okm_hex: string }>
+    }>
+  }
+
+  const vectorPath = resolve(
+    new URL('../../tests/vectors/hkdf-parity.json', import.meta.url).pathname,
+  )
+  const file = JSON.parse(readFileSync(vectorPath, 'utf-8')) as HkdfVectorFile
+
+  const INFO_BY_LABEL: Record<string, string> = {
+    session: INFO_SESSION,
+    device_token: INFO_DEVICE_TOKEN,
+    internal_principal: INFO_INTERNAL_PRINCIPAL,
+  }
+
+  it('has vectors covering every derivation label', () => {
+    expect(file.vectors.length).toBeGreaterThan(0)
+    for (const vec of file.vectors) {
+      expect(Object.keys(vec.derivations).sort()).toEqual(
+        Object.keys(INFO_BY_LABEL).sort(),
+      )
+    }
+  })
+
+  for (const vec of file.vectors) {
+    for (const label of Object.keys(INFO_BY_LABEL)) {
+      it(`[${vec.name}] deriveKey(ikm, ${label}) matches okm_hex`, () => {
+        const derivation = vec.derivations[label]
+        // The vector pins the info string too — a drifted INFO_* constant
+        // is a silent key rotation and must fail here, not in prod.
+        expect(INFO_BY_LABEL[label]).toBe(derivation.info)
+        expect(deriveKey(vec.ikm_utf8, INFO_BY_LABEL[label]).toString('hex')).toBe(
+          derivation.okm_hex,
+        )
+      })
+    }
+  }
 })
 
 describe('RFC 5869 conformance', () => {
