@@ -29,6 +29,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Least-privilege token: the build job only checks out code and runs local
+# (push: false) docker builds — GHA layer cache auth comes from the runtime's
+# ACTIONS_RUNTIME_TOKEN, not this repo-scoped token. Nothing here writes.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest

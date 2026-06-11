@@ -1,6 +1,26 @@
 # Netlify build for the SPA only. The Hono backend lives on the NAS
 # behind a Cloudflare Tunnel at api.theemeraldexchange.com — Netlify
 # never sees server code.
+#
+# ACCEPTED RISK (decision, not omission): Netlify deploys on every push to
+# main regardless of GitHub CI status. Gating on CI was evaluated and
+# rejected as not robustly possible without secrets:
+#   - Netlify's only hook for skipping a deploy is the `ignore` command
+#     ([build] ignore = "..."), which runs AT BUILD START — at that moment
+#     the GitHub CI run for the same commit is still pending, so there is
+#     no completed status to gate on. The command can't wait for CI.
+#   - Polling the GitHub Checks API from `ignore` would need a repo token
+#     stored in Netlify env plus a sleep-loop inside the ignore command —
+#     a fragile, secret-bearing hack that times out builds when CI is slow.
+# Mitigations that make the residual risk small and LOUD rather than silent:
+#   - ci.yml type-checks and builds the SPA (`npm run build:spa` is part of
+#     `npm run build`) on every push, so a broken SPA build turns main red
+#     even though Netlify already deployed it.
+#   - The same Vite build runs here; a compile-broken SPA fails the NETLIFY
+#     build too and Netlify keeps serving the last good deploy (failed
+#     builds never publish). The true gap is therefore only changes that
+#     BUILD fine but fail tests — accepted for a personal-scale SPA where
+#     main is the deploy branch by choice.
 
 [build]
   command = "npm run build:spa"

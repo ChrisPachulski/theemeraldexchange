@@ -89,6 +89,13 @@ fi
 DEPLOY_SHA=$(git rev-parse HEAD)
 DEPLOY_SHA_SHORT=$(git rev-parse --short HEAD)
 
+# Per-run rollback generation id. Both the image revert tags and the config
+# snapshots below carry this timestamp so (a) a re-run can never clobber the
+# only good rollback generation and (b) the rollback path restores the image
+# set AND the compose/.env config from the SAME pre-deploy moment. UTC,
+# zero-padded → lexical sort == chronological sort.
+ROLLBACK_TS=$(date -u +%Y%m%d-%H%M%S)
+
 # Ad-hoc branch deploys are legitimate (hotfix soaks), but flag the drift so a
 # stale local main or a forgotten feature branch never ships silently.
 if git rev-parse --verify origin/main >/dev/null 2>&1; then
@@ -212,6 +219,25 @@ git archive HEAD | tar -x -C "$STAGE_DIR"
 echo "→ Ensuring ${APPDATA} exists on ${NAS_HOST}"
 ssh "${NAS_USER}@${NAS_HOST}" "mkdir -p ${APPDATA}"
 
+# ── Rollback config snapshot ────────────────────────────────────────────────
+# Image-only rollback is insufficient: the rsync below overwrites
+# docker-compose.yml and the env ship overwrites .env, so a deploy broken BY
+# the new compose file or env values would "roll back" the images and then
+# `compose up` from the still-broken config. Snapshot both BEFORE the
+# overwrite, tagged with this run's generation id; keep the last 2 generations
+# (mirroring the image-tag retention below) and prune older ones. First-ever
+# deploy: neither file exists yet — nothing to snapshot, the rollback path
+# warns instead.
+echo "→ Snapshotting current compose + env for rollback (generation ${ROLLBACK_TS})"
+ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && \
+  for f in docker-compose.yml .env; do \
+    if [ -f \"\$f\" ]; then \
+      cp -p \"\$f\" \"\$f.rollback-${ROLLBACK_TS}\"; \
+      echo \"[deploy] snapshotted \$f → \$f.rollback-${ROLLBACK_TS}\"; \
+    fi; \
+    ls -1 \"\$f\".rollback-* 2>/dev/null | sort | head -n -2 | xargs -r rm -f; \
+  done"
+
 echo "→ Syncing build context (from stage, commit ${DEPLOY_SHA_SHORT})"
 rsync -av \
   "${STAGE_DIR}/Dockerfile" "${STAGE_DIR}/docker-compose.yml" "${STAGE_DIR}/.dockerignore" \
@@ -283,19 +309,29 @@ ssh "${NAS_USER}@${NAS_HOST}" "\
   chown -R 10001:10001 ${APPDATA}/recommender-db && \
   chown -R 10002:10002 ${APPDATA}/media-core-db"
 
-# Snapshot every currently-deployed image as :rollback BEFORE the build
-# overwrites :latest, so an unhealthy deploy can be reverted (see post-deploy
-# healthcheck below). Best-effort: the first-ever deploy has no prior images.
-echo "→ Tagging current images as :rollback (revert targets)"
-ssh "${NAS_USER}@${NAS_HOST}" '
+# Snapshot every currently-deployed image as :rollback-${ROLLBACK_TS} BEFORE
+# the build overwrites :latest, so an unhealthy deploy can be reverted (see
+# post-deploy healthcheck below). Timestamped per run — a single :rollback tag
+# was clobbered by any re-run, so a failed deploy followed by a second failed
+# deploy would have re-tagged the BROKEN images as the revert target. Keep the
+# newest 2 generations, prune older (including the legacy un-timestamped
+# :rollback tag, which sorts first). Best-effort: the first-ever deploy has no
+# prior images.
+echo "→ Tagging current images as :rollback-${ROLLBACK_TS} (revert targets; keeping last 2 generations)"
+ssh "${NAS_USER}@${NAS_HOST}" "
   for img in theemeraldexchange-backend theemeraldexchange-recommender theemeraldexchange-media-core theemeraldexchange-transcoder; do
-    if docker image inspect "$img:latest" >/dev/null 2>&1; then
-      docker tag "$img:latest" "$img:rollback"
-      echo "[deploy] tagged $img:rollback"
+    if docker image inspect \"\$img:latest\" >/dev/null 2>&1; then
+      docker tag \"\$img:latest\" \"\$img:rollback-${ROLLBACK_TS}\"
+      echo \"[deploy] tagged \$img:rollback-${ROLLBACK_TS}\"
     else
-      echo "[deploy] no prior $img image to tag (first deploy)"
+      echo \"[deploy] no prior \$img image to tag (first deploy)\"
     fi
-  done'
+    docker image ls --format '{{.Tag}}' \"\$img\" | grep '^rollback' | sort | head -n -2 | \
+      while read -r t; do
+        docker rmi \"\$img:\$t\" >/dev/null 2>&1 && echo \"[deploy] pruned stale rollback tag \$img:\$t\"
+      done
+  done
+  exit 0"
 
 echo "→ Building and starting containers"
 # Unraid occasionally loses both docker compose forms (plugin + standalone)
@@ -377,10 +413,33 @@ telemetry_dsn="$(env_value EEX_TELEMETRY_DSN 2>/dev/null || true)"
 # generous ~150s ceiling. A MISSING sidecar is a warning, not a failure —
 # the direct-docker fallback path runs the backend alone by design.
 echo "→ Waiting for backend + sidecars to report healthy (up to ~150s)"
-set +e
-ssh "${NAS_USER}@${NAS_HOST}" '
+# The poll body lives in a variable because it runs TWICE: once after the
+# deploy and — if that fails — once more after the rollback, so the script
+# never reports "rolled back" without re-verifying the restored stack with
+# the exact same gate.
+health_poll_remote='
   containers="exchange-backend exchange-recommender exchange-media-core exchange-transcoder"
   summary=""
+  # Telemetry stack status (§15: telemetry is MANDATORY, but it is not in the
+  # request path). Reported as WARN-not-fail, deliberately: hard-failing here
+  # would roll back the app images over a telemetry blip and — in the DSN
+  # bootstrap window — tear down the very Glitchtip instance the operator
+  # needs to mint the DSN from. glitchtip web carries a compose healthcheck
+  # (/_health/); the worker has none by design (see docker-compose.yml), so
+  # for it the running-state is the signal (a crashed/restarting worker is
+  # what real failure looks like).
+  report_telemetry() {
+    warn_summary=""
+    for tc in exchange-glitchtip exchange-glitchtip-worker; do
+      ts=$(docker inspect --format "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}" "$tc" 2>/dev/null || echo missing)
+      warn_summary="$warn_summary $tc=$ts"
+    done
+    case "$warn_summary" in
+      *=unhealthy*|*=restarting*|*=exited*|*=dead*|*=missing*|*=created*|*=paused*)
+        echo "[deploy] WARN: telemetry stack not fully healthy (crash reports may be dropping):$warn_summary" ;;
+      *) echo "[deploy] telemetry stack:$warn_summary" ;;
+    esac
+  }
   for i in $(seq 1 50); do
     all_ok=1
     summary=""
@@ -402,12 +461,17 @@ ssh "${NAS_USER}@${NAS_HOST}" '
     if [ "$all_ok" = "1" ]; then
       echo "[deploy] stack healthy:$summary"
       case "$summary" in *=missing*) echo "[deploy] WARN: some sidecars are missing (direct-docker fallback?):$summary" ;; esac
+      report_telemetry
       exit 0
     fi
     sleep 3
   done
-  echo "[deploy] stack never became healthy:$summary"; exit 3
+  echo "[deploy] stack never became healthy:$summary"
+  report_telemetry
+  exit 3
 '
+set +e
+ssh "${NAS_USER}@${NAS_HOST}" "$health_poll_remote"
 health_rc=$?
 set -e
 
@@ -418,26 +482,53 @@ if [ "$health_rc" -ne 0 ] && [ -z "$telemetry_dsn" ]; then
   echo "  set EEX_TELEMETRY_DSN in .env.production, then re-run this deploy — the" >&2
   echo "  next run health-gates the backend normally. Skipping rollback." >&2
 elif [ "$health_rc" -ne 0 ]; then
-  echo "✗ Stack unhealthy after deploy (rc=$health_rc) — rolling back to previous images" >&2
+  echo "✗ Stack unhealthy after deploy (rc=$health_rc) — rolling back images AND config" >&2
+  # Restore the compose file + .env snapshotted at the top of THIS run (the
+  # last-healthy generation) before `compose up`, so a deploy broken by the
+  # new config — not just a new image — actually reverts. Then bring the
+  # stack up from the RESTORED config.
   ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && \
-    rolled=0; \
-    for img in theemeraldexchange-backend theemeraldexchange-recommender theemeraldexchange-media-core theemeraldexchange-transcoder; do \
-      if docker image inspect \"\$img:rollback\" >/dev/null 2>&1; then \
-        docker tag \"\$img:rollback\" \"\$img:latest\"; \
-        echo \"[deploy] restored \$img:latest from :rollback\"; \
-        rolled=1; \
+    restored_cfg=0; \
+    for f in docker-compose.yml .env; do \
+      if [ -f \"\$f.rollback-${ROLLBACK_TS}\" ]; then \
+        cp -p \"\$f.rollback-${ROLLBACK_TS}\" \"\$f\"; \
+        echo \"[deploy] restored \$f from \$f.rollback-${ROLLBACK_TS}\"; \
+        restored_cfg=1; \
       else \
-        echo \"[deploy] WARN: no \$img:rollback image to restore\" >&2; \
+        echo \"[deploy] WARN: no \$f.rollback-${ROLLBACK_TS} snapshot to restore (first deploy?)\" >&2; \
       fi; \
     done; \
-    if [ \"\$rolled\" = \"1\" ]; then \
+    rolled=0; \
+    for img in theemeraldexchange-backend theemeraldexchange-recommender theemeraldexchange-media-core theemeraldexchange-transcoder; do \
+      if docker image inspect \"\$img:rollback-${ROLLBACK_TS}\" >/dev/null 2>&1; then \
+        docker tag \"\$img:rollback-${ROLLBACK_TS}\" \"\$img:latest\"; \
+        echo \"[deploy] restored \$img:latest from :rollback-${ROLLBACK_TS}\"; \
+        rolled=1; \
+      else \
+        echo \"[deploy] WARN: no \$img:rollback-${ROLLBACK_TS} image to restore\" >&2; \
+      fi; \
+    done; \
+    if [ \"\$rolled\" = \"1\" ] || [ \"\$restored_cfg\" = \"1\" ]; then \
       ( docker compose up -d --no-build 2>/dev/null || docker-compose up -d --no-build 2>/dev/null || true ) && \
       docker restart exchange-cloudflared >/dev/null 2>&1 || true; \
-      echo '[deploy] rolled back to previous images'; \
+      echo '[deploy] rollback applied (images + config) — re-verifying health'; \
     else \
-      echo '[deploy] FATAL: no :rollback images to restore — stack is down, manual intervention required' >&2; \
+      echo '[deploy] FATAL: nothing to roll back to (no snapshot images or config) — stack is down, manual intervention required' >&2; \
     fi"
-  echo "✗ Deploy of ${DEPLOY_SHA} FAILED and was rolled back. Investigate before retrying:" >&2
+  # Re-verify with the SAME gate the deploy uses. A rollback that does not
+  # come back healthy must be reported as an outage, not as a recovery.
+  echo "→ Re-verifying stack health after rollback (same gate, up to ~150s)"
+  set +e
+  ssh "${NAS_USER}@${NAS_HOST}" "$health_poll_remote"
+  rollback_health_rc=$?
+  set -e
+  if [ "$rollback_health_rc" -eq 0 ]; then
+    echo "✗ Deploy of ${DEPLOY_SHA} FAILED; rolled back to generation ${ROLLBACK_TS} and the restored stack re-verified HEALTHY." >&2
+  else
+    echo "✗ Deploy of ${DEPLOY_SHA} FAILED and the ROLLBACK IS ALSO UNHEALTHY (rc=${rollback_health_rc})." >&2
+    echo "  THE STACK IS DOWN — manual intervention required NOW." >&2
+  fi
+  echo "  Investigate before retrying:" >&2
   echo "    ssh ${NAS_USER}@${NAS_HOST} 'docker ps -a --format \"table {{.Names}}\\t{{.Status}}\"'" >&2
   echo "    ssh ${NAS_USER}@${NAS_HOST} 'docker logs --tail=80 exchange-backend'" >&2
   echo "    ssh ${NAS_USER}@${NAS_HOST} 'docker logs --tail=80 exchange-recommender'" >&2
@@ -445,18 +536,56 @@ elif [ "$health_rc" -ne 0 ]; then
   echo "    ssh ${NAS_USER}@${NAS_HOST} 'docker logs --tail=80 exchange-transcoder'" >&2
   echo "  Manual rollback (already attempted automatically), per image:" >&2
   for img in theemeraldexchange-backend theemeraldexchange-recommender theemeraldexchange-media-core theemeraldexchange-transcoder; do
-    echo "    ssh ${NAS_USER}@${NAS_HOST} 'docker tag ${img}:rollback ${img}:latest'" >&2
+    echo "    ssh ${NAS_USER}@${NAS_HOST} 'docker tag ${img}:rollback-${ROLLBACK_TS} ${img}:latest'" >&2
   done
+  echo "  Manual config restore:" >&2
+  echo "    ssh ${NAS_USER}@${NAS_HOST} 'cd ${APPDATA} && cp -p docker-compose.yml.rollback-${ROLLBACK_TS} docker-compose.yml && cp -p .env.rollback-${ROLLBACK_TS} .env'" >&2
   echo "    ssh ${NAS_USER}@${NAS_HOST} 'cd ${APPDATA} && docker compose up -d --no-build && docker restart exchange-cloudflared'" >&2
   exit 1
+fi
+
+# ── Release drift check (executed, not printed) ────────────────────────────
+# /api/version exists precisely so a deploy can prove the serving container
+# was built from the commit it shipped (EEX_RELEASE build arg → env.ts →
+# `release` field). Query it via the NAS loopback publish (curl exists on the
+# NAS; deliberately NOT the public URL, so this verifies the container we just
+# deployed independent of Cloudflare edge state — the tunnel path is covered
+# by the cloudflared restart above). Only meaningful when the health gate
+# passed; the bootstrap window (health_rc != 0, no DSN) has a crash-looping
+# backend by design, so the check is skipped there.
+if [ "$health_rc" -eq 0 ]; then
+  echo "→ Verifying deployed release via /api/version (drift check)"
+  deployed_release=$(ssh "${NAS_USER}@${NAS_HOST}" \
+    "curl -fsS --max-time 10 http://127.0.0.1:3001/api/version" 2>/dev/null \
+    | sed -n 's/.*"release":"\([^"]*\)".*/\1/p')
+  if [ -z "$deployed_release" ]; then
+    # The health gate just proved /api/health serves, so an unreadable
+    # /api/version is transport noise (ssh blip), not drift evidence — warn,
+    # don't fail a verified-healthy deploy on it.
+    echo "[deploy] WARN: could not read /api/version for the drift check — verify manually:" >&2
+    echo "         ssh ${NAS_USER}@${NAS_HOST} 'curl -s http://127.0.0.1:3001/api/version'" >&2
+  elif [ "$deployed_release" != "$DEPLOY_SHA_SHORT" ]; then
+    echo "✗ RELEASE DRIFT: /api/version reports release '${deployed_release}' but this run shipped ${DEPLOY_SHA_SHORT}." >&2
+    echo "  The stack is healthy but serving the WRONG build — the new image did not" >&2
+    echo "  actually take (stale compose cache? container not recreated?). NOT rolling" >&2
+    echo "  back (the running code IS the previous build); investigate on the NAS:" >&2
+    echo "    ssh ${NAS_USER}@${NAS_HOST} 'cd ${APPDATA} && docker compose up -d --build --force-recreate backend'" >&2
+    exit 1
+  else
+    echo "[deploy] /api/version release matches ${DEPLOY_SHA_SHORT} — no drift."
+  fi
 fi
 
 echo "→ Reclaiming BuildKit cache + dangling images (the docker vdisk creeps ~1GB/deploy otherwise)"
 ssh "${NAS_USER}@${NAS_HOST}" "docker builder prune -f >/dev/null 2>&1 || true; docker image prune -f >/dev/null 2>&1 || true"
 
 echo
-echo "✓ Deployed commit ${DEPLOY_SHA} (release tag: ${DEPLOY_SHA_SHORT}) and verified healthy."
-echo "  Verify the deployed release matches:"
-echo "    curl -s https://api.theemeraldexchange.com/api/version | grep ${DEPLOY_SHA_SHORT}"
+if [ "$health_rc" -eq 0 ]; then
+  echo "✓ Deployed commit ${DEPLOY_SHA} (release tag: ${DEPLOY_SHA_SHORT}) — health-gated and release-verified."
+else
+  # Only reachable in the Glitchtip bootstrap window (rollback skipped above).
+  echo "⚠ Deployed commit ${DEPLOY_SHA} (release tag: ${DEPLOY_SHA_SHORT}) — backend NOT healthy yet"
+  echo "  (expected: EEX_TELEMETRY_DSN bootstrap window — mint the DSN and re-deploy)."
+fi
 echo "  Public health endpoint:"
 echo "    curl -s https://api.theemeraldexchange.com/api/health"
