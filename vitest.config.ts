@@ -82,15 +82,17 @@ export default defineConfig({
           functions: 65,
           lines: 65,
         },
-        // SPA — starts low (mostly untested today); ratchet as hook/player tests
-        // land. Floors are set just below the current measured numbers
-        // (branches ~14.6%) so the gate bites on a real regression without
-        // breaking the current green build. Raise as SPA tests come in.
+        // SPA — ratcheted as the mounted-DOM player/modal suites landed
+        // (MediaPlayer/IptvPlayer/EpisodePicker *.dom.test.tsx). Floors sit
+        // just below the measured numbers (stmts 22.2% / branches 19.0% /
+        // fns 18.1% / lines 23.1%) so the gate bites on a real regression
+        // without flaking on a small refactor. Keep raising as SPA tests
+        // come in; never lower.
         'src/**/*.{ts,tsx}': {
-          statements: 5,
-          branches: 12,
-          functions: 5,
-          lines: 5,
+          statements: 21,
+          branches: 17,
+          functions: 17,
+          lines: 22,
         },
       },
     },
