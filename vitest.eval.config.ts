@@ -3,9 +3,11 @@ import { TEST_ENV } from './vitest.env'
 
 // Separate vitest config for the AI-recommendation-section eval harness.
 // Runs only under `npm run eval:recs` so the regular `npm test` flow
-// stays fast and deterministic. The eval suite is order-sensitive: the
-// final "writes consolidated report" test depends on the prior scenario
-// tests populating the REPORT buffer.
+// stays fast and deterministic. Scenario tests are order-independent
+// (each stands alone; the consolidated report is written from an
+// afterAll hook for whichever scenarios ran). `concurrent: false` is
+// kept only because the scenarios share the module-level mock-Anthropic
+// state — they must not interleave, but any sequential ORDER works.
 
 export default defineConfig({
   test: {
