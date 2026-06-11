@@ -14,6 +14,8 @@ commit explicitly says otherwise:
   (`scripts/media-playback-proof.sh`); see `docs/ROADMAP-STATUS.md` M4.
 - `docs/MONETIZATION-AND-PUBLISHING.md`: current monetization and pre-paid
   launch constraints.
+- `docs/recommendations.md`: current recommendation-pipeline reference (the
+  local recommender sidecar as primary, the Claude BYO-key path as fallback).
 - `docs/operations/*`: operational runbooks (Cloudflare tunnel, Glitchtip
   setup, EPG, internal-principal rollout, incident records).
 
@@ -23,6 +25,15 @@ findings inside them do not automatically mean the current tree is still broken:
 
 - `docs/AUDIT-2026-05-28-honesty-and-best-practice.md`
 - `docs/PRODUCTION-READINESS-2026-05-30.md`
+- `docs/DECISION-grant-source-precedence.md` — M1.5-era decision record
+  ("deferred to M3"; M3 has since shipped, so read it as the historical
+  rationale, not the current grant-path behavior).
+- `docs/IPTV-QUALITY-DIAGNOSIS.md` — 2026-05-30 root-cause diagnosis of the
+  live-playback transport ceiling; point-in-time findings.
+- `docs/UI-IMPROVEMENTS.md` — owner-facing UI audit + remediation plan;
+  several findings have since been fixed, so re-verify rows before acting.
+- `docs/ui/cutting-edge-spec.md` — implementation spec for the UI-upgrade
+  pass; a plan document, not a description of the shipped tree.
 - `docs/superpowers/specs/*`
 - `docs/superpowers/plans/*`
 
