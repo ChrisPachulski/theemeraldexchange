@@ -63,6 +63,12 @@ DEFAULTS: dict[str, float | int | str] = {
 
 EMBED_EPS = 1e-9
 
+# The default candidate_pool="full" scores the ENTIRE eligible catalog per
+# request ("brute-force, offline-only" — see DEFAULTS above). The optimizer
+# checks this flag so a nightly proposal can never promote this recipe into
+# the serve path, where the DEFAULTS re-merge would resurrect "full".
+OFFLINE_ONLY = True
+
 # Module-level catalog cache keyed by (kind, min_vote_count). Loading the full
 # eligible-catalog embedding matrix once and reusing it across calls is what
 # makes the leave-one-out eval (hundreds of folds) tractable. Production would

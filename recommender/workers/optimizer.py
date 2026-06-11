@@ -52,8 +52,19 @@ MIN_HOLDOUT_SIZE = 30
 # zero (e.g. a degenerate holdout) and the margin is noise.
 MIN_CANDIDATE_SCORE = 0.05
 ORCHESTRATION_ONLY_RECIPES = {"cold_start_trending"}
+
+
+def _is_offline_only(recipe_name: str) -> bool:
+    """A recipe module may declare OFFLINE_ONLY = True (e.g. item_knn, whose
+    candidate_pool default "full" is documented as "brute-force, offline-only"
+    and would survive promotion via the serve-time DEFAULTS re-merge)."""
+    return bool(getattr(recipes.get(recipe_name), "OFFLINE_ONLY", False))
+
+
 OPTIMIZER_ELIGIBLE_RECIPES = tuple(
-    recipe for recipe in recipes.REGISTRY if recipe not in ORCHESTRATION_ONLY_RECIPES
+    recipe
+    for recipe in recipes.REGISTRY
+    if recipe not in ORCHESTRATION_ONLY_RECIPES and not _is_offline_only(recipe)
 )
 
 
@@ -268,6 +279,14 @@ def validate_proposal(proposed: Any, active_recipe: str, active_params: dict) ->
     candidate_recipe = proposed.get("recipe") or active_recipe
     if not isinstance(candidate_recipe, str) or candidate_recipe not in OPTIMIZER_ELIGIBLE_RECIPES:
         log.warning("optimizer proposed unknown recipe %r; keeping active config", candidate_recipe)
+        return None
+    # Belt-and-braces: even if the eligibility list regresses, never promote a
+    # recipe whose module declares itself offline-only.
+    if _is_offline_only(candidate_recipe):
+        log.warning(
+            "optimizer proposed offline-only recipe %r; keeping active config",
+            candidate_recipe,
+        )
         return None
 
     raw_params = proposed.get("params", {})
