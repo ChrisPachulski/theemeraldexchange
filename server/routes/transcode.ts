@@ -98,7 +98,7 @@ transcode.all('/*', async (c) => {
       headers['authorization'] = `Bearer ${mintInternalPrincipal(caller)}`
     } catch (e) {
       console.error('[transcode] failed to mint internal-principal, failing closed:', e)
-      return c.json({ error: 'internal-principal mint failed' }, 502)
+      return c.json({ error: 'principal_mint_failed' }, 502)
     }
   }
 

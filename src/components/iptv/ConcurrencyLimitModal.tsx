@@ -1,5 +1,6 @@
 import type { SessionRow } from '../../lib/api/iptv'
 import { useKillIptvSession } from '../../lib/hooks/useIptvSessions'
+import { useModalA11y } from '../../lib/hooks/useModalA11y'
 import type { ConcurrencyLimitPayload } from './concurrencyLimit'
 
 // Shown when a stream grant 429s because the upstream's connection cap
@@ -38,8 +39,11 @@ export function ConcurrencyLimitModal({
   onClose: () => void
   onAfterKick?: () => void
 }) {
+  // Plain-div dialog: useModalA11y supplies the focus trap, Escape-to-close,
+  // and focus restore that aria-modal promises.
+  const modalRef = useModalA11y<HTMLDivElement>(onClose)
   return (
-    <div className="iptv-conn-modal" role="dialog" aria-modal="true" aria-label="Connection limit reached">
+    <div ref={modalRef} className="iptv-conn-modal" role="dialog" aria-modal="true" aria-label="Connection limit reached">
       <div className="iptv-conn-modal__panel">
         <header className="iptv-conn-modal__header iptv-conn-modal__header--alert">
           <h2>Connection limit reached</h2>
