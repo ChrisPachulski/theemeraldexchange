@@ -445,6 +445,35 @@ impl SessionManager {
         &self.limiter
     }
 
+    /// Does this session run the FULL-hardware VAAPI pipeline (GPU decode →
+    /// VPP → encode, no CPU round-trip)? Mirrors `spawn_child`'s `hw_decode`
+    /// gate AND `ffmpeg_args_for`'s burn-in restriction, so the concurrency
+    /// accounting and the actual ffmpeg invocation can never drift.
+    ///
+    /// Everything else — including a VAAPI-ENCODE session whose decode/
+    /// tone-map/scale run in software (full-HW probe failed, or the source
+    /// codec isn't iGPU-decodable, or a subtitle burn forces CPU frames) —
+    /// loads the CPU materially and must be charged against the CPU cap. A 4K
+    /// HDR software decode+tonemap saturates cores even when the final encode
+    /// is on the GPU; charging by encoder family alone let several of those
+    /// stack up and starve the box.
+    fn uses_full_hw_pipeline(&self, plan: &TranscodePlan, source_codec: Option<&str>) -> bool {
+        use crate::plan::VideoOp;
+        self.vaapi_hw_decode
+            && matches!(self.encoder, HwEncoder::Vaapi)
+            && source_codec.is_some_and(is_vaapi_hw_decodable)
+            && matches!(
+                plan,
+                TranscodePlan::Transcode {
+                    video: VideoOp::EncodeH264 {
+                        burn_subtitle_index: None,
+                        ..
+                    },
+                    ..
+                }
+            )
+    }
+
     /// Spawn one ffmpeg child for a session directory. Shared by `start` and the
     /// supervisor respawn path so the argument vector is computed identically.
     /// The child's stderr is drained into `tracing::warn` (tagged by session id)
@@ -465,13 +494,12 @@ impl SessionManager {
         let dir_str = dir.to_string_lossy();
         // Full-hardware VAAPI decode is gated on: the resolved encoder being
         // VAAPI, the boot probe having confirmed the VPP+encode chain
-        // (`vaapi_hw_decode`), and the SOURCE codec being one the iGPU can decode
-        // — `-hwaccel_output_format vaapi` hard-fails with no software fallback on
-        // an undecodable codec (e.g. MPEG-4/DivX). `ffmpeg_args_for` further
-        // restricts it to a video re-encode without subtitle burn-in.
-        let hw_decode = self.vaapi_hw_decode
-            && matches!(self.encoder, HwEncoder::Vaapi)
-            && source_codec.is_some_and(is_vaapi_hw_decodable);
+        // (`vaapi_hw_decode`), the SOURCE codec being one the iGPU can decode
+        // — `-hwaccel_output_format vaapi` hard-fails with no software fallback
+        // on an undecodable codec (e.g. MPEG-4/DivX) — and the plan being a
+        // video re-encode without subtitle burn-in. The shared helper is also
+        // what the CPU-cap accounting keys on, so they cannot drift.
+        let hw_decode = self.uses_full_hw_pipeline(plan, source_codec);
         let args = ffmpeg_args_for(&ArgSpec {
             plan,
             input: opts_input,
@@ -521,18 +549,26 @@ impl SessionManager {
         if !self.media_roots.is_empty() && !path_within_roots(&opts.input_path, &self.media_roots) {
             return Err(StartError::Forbidden(opts.input_path.clone()));
         }
-        // Charge the stricter CPU cap ONLY when this session actually
-        // re-encodes video on the CPU encoder. A copy-remux (most local titles —
-        // they transcode only because the container/audio isn't browser-safe)
-        // uses ~no CPU, so it should count against the global cap alone.
-        // Without this, a box with no HW encoder resolves EVERY session to the
-        // CPU encoder, so the CPU cap of 1 lets only a single stream play at a
-        // time — opening a second title (or reopening within the 30s idle-reap
-        // window) returns 503 transcoder_unavailable.
-        let cpu_reencode = matches!(self.encoder, HwEncoder::Cpu) && opts.plan.reencodes_video();
+        // Charge the stricter CPU cap for every session that does REAL work on
+        // the CPU. Two rules, both load-based (not encoder-family-based):
+        //
+        // * A copy-remux (most local titles — they transcode only because the
+        //   container/audio isn't browser-safe) uses ~no CPU regardless of
+        //   encoder, so it counts against the global cap alone. Without this,
+        //   a box with no HW encoder throttled the household to ONE stream and
+        //   a second title 503'd.
+        // * A video re-encode charges the CPU cap UNLESS it runs the full-HW
+        //   VAAPI pipeline (GPU decode + VPP + encode). Keying on the encoder
+        //   family alone under-counted: a VAAPI-encode session whose
+        //   decode/tone-map/scale run in software (probe failed, source codec
+        //   not iGPU-decodable, subtitle burn) still hammers the CPU — a 4K
+        //   HDR software decode+tonemap saturates cores even though `-c:v` is
+        //   h264_vaapi.
+        let cpu_charge = opts.plan.reencodes_video()
+            && !self.uses_full_hw_pipeline(&opts.plan, opts.source_codec.as_deref());
         let permit = self
             .limiter
-            .try_acquire(cpu_reencode)
+            .try_acquire(cpu_charge)
             .map_err(StartError::Busy)?;
 
         let now = now_secs();
@@ -1664,6 +1700,110 @@ mod tests {
             matches!(err, StartError::Busy(_)),
             "second CPU re-encode past the cpu cap must be Busy"
         );
+    }
+
+    /// Manager with a chosen encoder + caps {total 4, cpu 1} for the CPU-cap
+    /// accounting matrix.
+    fn cap_matrix_manager(
+        tmp: &tempfile::TempDir,
+        encoder: HwEncoder,
+        vaapi_hw_decode: bool,
+    ) -> SessionManager {
+        SessionManager::new(
+            Limiter::new(Caps {
+                max_total: 4,
+                max_cpu: 1,
+            }),
+            write_stub(tmp.path(), "run").to_string_lossy().into_owned(),
+            tmp.path().join("s"),
+            encoder,
+        )
+        .with_vaapi_hw_decode(vaapi_hw_decode)
+    }
+
+    #[tokio::test]
+    async fn full_hw_vaapi_reencode_does_not_charge_cpu_cap() {
+        // VAAPI with the full-HW pipeline confirmed + an iGPU-decodable source:
+        // decode, VPP and encode all run on the GPU, so two concurrent
+        // re-encodes must fit under max_cpu=1.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = cap_matrix_manager(&tmp, HwEncoder::Vaapi, true);
+        let _a = mgr.start(encode_opts_id("/lib/a.mkv", 7)).await.unwrap();
+        let _b = mgr
+            .start(encode_opts_id("/lib/b.mkv", 8))
+            .await
+            .expect("full-HW re-encodes must not charge the cpu cap");
+        assert_eq!(mgr.limiter().active(), (2, 0));
+    }
+
+    #[tokio::test]
+    async fn vaapi_encode_with_software_decode_charges_cpu_cap() {
+        // Same VAAPI encoder, but the SOURCE codec (mpeg4) has no iGPU decode:
+        // the session software-decodes (and would software-tonemap/scale), so
+        // it must be charged as CPU work even though -c:v is h264_vaapi.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = cap_matrix_manager(&tmp, HwEncoder::Vaapi, true);
+        let sw_opts = |path: &str, id: i64| StartOpts {
+            source_codec: Some("mpeg4".into()),
+            ..encode_opts_id(path, id)
+        };
+        let _a = mgr.start(sw_opts("/lib/a.avi", 7)).await.unwrap();
+        assert_eq!(mgr.limiter().active(), (1, 1), "sw-decode charges cpu");
+        let err = mgr.start(sw_opts("/lib/b.avi", 8)).await.unwrap_err();
+        assert!(
+            matches!(err, StartError::Busy(Busy { cpu_cap: true })),
+            "second software-decode re-encode must hit the cpu cap, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn vaapi_without_full_hw_probe_charges_cpu_cap() {
+        // Full-HW probe failed (vaapi_hw_decode=false): every VAAPI re-encode
+        // runs the software-decode path and must charge the CPU cap.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = cap_matrix_manager(&tmp, HwEncoder::Vaapi, false);
+        let _a = mgr.start(encode_opts_id("/lib/a.mkv", 7)).await.unwrap();
+        assert_eq!(mgr.limiter().active(), (1, 1));
+        let err = mgr
+            .start(encode_opts_id("/lib/b.mkv", 8))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, StartError::Busy(Busy { cpu_cap: true })));
+    }
+
+    #[tokio::test]
+    async fn non_vaapi_hw_encoder_reencode_charges_cpu_cap() {
+        // VideoToolbox/NVENC/QSV all software-decode and CPU-filter in this
+        // pipeline; only the final encode is offloaded. They charge the cap.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = cap_matrix_manager(&tmp, HwEncoder::VideoToolbox, false);
+        let _a = mgr.start(encode_opts_id("/lib/a.mkv", 7)).await.unwrap();
+        let err = mgr
+            .start(encode_opts_id("/lib/b.mkv", 8))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, StartError::Busy(Busy { cpu_cap: true })));
+    }
+
+    #[tokio::test]
+    async fn remux_never_charges_cpu_cap_regardless_of_pipeline() {
+        // A copy-remux does no encode work anywhere; it must stay off the CPU
+        // cap on every encoder/pipeline combination.
+        for (encoder, full_hw) in [
+            (HwEncoder::Cpu, false),
+            (HwEncoder::Vaapi, true),
+            (HwEncoder::Vaapi, false),
+            (HwEncoder::VideoToolbox, false),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let mgr = cap_matrix_manager(&tmp, encoder, full_hw);
+            let _a = mgr.start(remux_opts_id("/lib/a.mkv", 7)).await.unwrap();
+            let _b = mgr
+                .start(remux_opts_id("/lib/b.mkv", 8))
+                .await
+                .unwrap_or_else(|e| panic!("remux must not charge cpu ({encoder:?}): {e:?}"));
+            assert_eq!(mgr.limiter().active(), (2, 0), "{encoder:?}");
+        }
     }
 
     #[tokio::test]
