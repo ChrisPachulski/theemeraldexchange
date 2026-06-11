@@ -428,3 +428,25 @@ jobs:
           docker build -f ./recommender/Dockerfile .
           docker build -f ./crates/media-core/Dockerfile .
           docker build -f ./crates/transcoder/Dockerfile .
+
+  shellcheck:
+    # The ~500-line deploy script (scripts/deploy-nas.sh) snapshots, rsyncs,
+    # rolls back, and health-gates the production stack — exactly the kind of
+    # shell where an unquoted variable or masked exit code ships an outage.
+    # Nothing linted it before this job. shellcheck is preinstalled on
+    # ubuntu-latest runner images (no apt/container needed).
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: shellcheck scripts/*.sh
+        # --severity=warning: gate on warnings+errors. Info-level findings are
+        # dominated by SC2029 ("expands on the client side") on the ssh
+        # one-liners — which is the deploy script's INTENT (local values like
+        # $APPDATA/$ROLLBACK_TS are deliberately interpolated before the
+        # remote shell runs), so info stays advisory.
+        run: |
+          shellcheck --version
+          shellcheck --severity=warning scripts/*.sh
