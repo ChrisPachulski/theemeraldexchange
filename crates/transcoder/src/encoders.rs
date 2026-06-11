@@ -58,12 +58,29 @@ impl AvailableEncoders {
 
     /// Resolve the encoder to actually use: honor `preferred` when present,
     /// otherwise fall back to CPU. Returns `(resolved, fell_back)`.
+    ///
+    /// NOTE: the CPU fallback is assumed, not verified, by this method — pair
+    /// it with [`cpu_fallback_missing`](Self::cpu_fallback_missing) at boot so
+    /// an ffmpeg built WITHOUT libx264 is flagged loudly instead of silently
+    /// "resolving" to an encoder that fails on the first re-encode.
     pub fn resolve(&self, preferred: HwEncoder) -> (HwEncoder, bool) {
         if self.supports(preferred) {
             (preferred, false)
         } else {
             (HwEncoder::Cpu, preferred != HwEncoder::Cpu)
         }
+    }
+
+    /// True when the ffmpeg build lacks even `libx264` — the encoder every
+    /// fallback path assumes exists. [`resolve`](Self::resolve) demotes an
+    /// unavailable HW family to `Cpu` unconditionally, so on such a build the
+    /// "fallback" is itself broken: every video re-encode session would spawn
+    /// ffmpeg with `-c:v libx264`, die instantly, and crash-loop to the
+    /// restart cap (copy-remuxes, which use no encoder, still work). Boot
+    /// (`main.rs`) checks this right after detection and logs an ERROR so the
+    /// misbuilt image is obvious at deploy time, not at first playback.
+    pub fn cpu_fallback_missing(&self) -> bool {
+        !self.libx264
     }
 
     /// Smoke-test each *detected* hardware encoder with a tiny null transcode and
@@ -278,6 +295,64 @@ Encoders:
         let e = AvailableEncoders::default();
         assert!(!e.supports(HwEncoder::Cpu));
         assert_eq!(e.resolve(HwEncoder::VideoToolbox), (HwEncoder::Cpu, true));
+    }
+
+    // An ffmpeg build with HW encoders but NO libx264 (a misbuilt/minimal
+    // image): resolve() still demotes to Cpu, so the missing fallback must be
+    // detectable for the boot-time loud failure.
+    const FIXTURE_NO_LIBX264: &str = "\
+Encoders:
+ V....D h264_vaapi           VAAPI H.264 encoder
+ A....D aac                  AAC (Advanced Audio Coding)
+";
+
+    #[test]
+    fn missing_libx264_is_flagged_as_missing_cpu_fallback() {
+        let e = AvailableEncoders::parse(FIXTURE_NO_LIBX264);
+        assert!(e.vaapi);
+        assert!(e.cpu_fallback_missing(), "no libx264 → fallback missing");
+        // resolve() still blindly demotes an absent family to Cpu — the pair
+        // (resolved == Cpu, cpu_fallback_missing()) is what boot must check.
+        assert_eq!(e.resolve(HwEncoder::Nvenc), (HwEncoder::Cpu, true));
+        // Builds WITH libx264 are fine.
+        assert!(!AvailableEncoders::parse(FIXTURE).cpu_fallback_missing());
+    }
+
+    /// Write a fake `ffmpeg` whose `-encoders` output is `body`, for driving
+    /// the REAL detect() probe end-to-end without a real ffmpeg.
+    fn write_fake_probe(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("fake_ffmpeg.sh");
+        let mut f = std::fs::File::create(&path).unwrap();
+        write!(f, "#!/bin/sh\ncat <<'EOF'\n{body}\nEOF\n").unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn detect_flags_missing_libx264_via_fake_probe() {
+        // End-to-end through the real boot probe: a binary that reports only
+        // HW encoders must come back with cpu_fallback_missing() so main.rs
+        // can fail loudly instead of resolving to a libx264 that isn't there.
+        let tmp = tempfile::tempdir().unwrap();
+        let fake = write_fake_probe(tmp.path(), FIXTURE_NO_LIBX264);
+        let detected = detect(fake.to_str().unwrap()).await;
+        assert!(detected.vaapi, "fake probe output must be parsed");
+        assert!(detected.cpu_fallback_missing());
+
+        // And a healthy build through the same path is NOT flagged.
+        let ok = write_fake_probe(tmp.path(), FIXTURE);
+        // (second file: distinct name to avoid clobbering the running script)
+        let ok = {
+            let renamed = tmp.path().join("fake_ffmpeg_ok.sh");
+            std::fs::rename(&ok, &renamed).unwrap();
+            renamed
+        };
+        let detected_ok = detect(ok.to_str().unwrap()).await;
+        assert!(!detected_ok.cpu_fallback_missing());
     }
 
     #[tokio::test]
