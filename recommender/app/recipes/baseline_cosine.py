@@ -11,7 +11,7 @@ import sqlite3
 
 import numpy as np
 
-from ..context import UserContext
+from ..context import Candidate, UserContext
 from ..reasons import discover_reason, neighbors_for, personalized_reason, trending_reason
 from ..retrieval import cold_start_pool, retrieve_candidates
 from ..schemas import ScoredItem
@@ -76,7 +76,7 @@ def score(ctx: UserContext, conn: sqlite3.Connection, *, n: int, params: dict) -
     # back to sim and add a tiny popularity prior so two near-identical
     # neighbors don't surface a no-name title above a beloved one.
     pop_max = max((c.title.popularity for c in batch.candidates), default=1.0) or 1.0
-    scored: list[tuple[float, float, "Candidate"]] = []
+    scored: list[tuple[float, float, Candidate]] = []
     for cand, dist in zip(batch.candidates, batch.distances, strict=True):
         sim = 1.0 - dist
         pop_prior = (cand.title.popularity / pop_max) if pop_max else 0.0

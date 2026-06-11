@@ -52,8 +52,19 @@ MIN_HOLDOUT_SIZE = 30
 # zero (e.g. a degenerate holdout) and the margin is noise.
 MIN_CANDIDATE_SCORE = 0.05
 ORCHESTRATION_ONLY_RECIPES = {"cold_start_trending"}
+
+
+def _is_offline_only(recipe_name: str) -> bool:
+    """A recipe module may declare OFFLINE_ONLY = True (e.g. item_knn, whose
+    candidate_pool default "full" is documented as "brute-force, offline-only"
+    and would survive promotion via the serve-time DEFAULTS re-merge)."""
+    return bool(getattr(recipes.get(recipe_name), "OFFLINE_ONLY", False))
+
+
 OPTIMIZER_ELIGIBLE_RECIPES = tuple(
-    recipe for recipe in recipes.REGISTRY if recipe not in ORCHESTRATION_ONLY_RECIPES
+    recipe
+    for recipe in recipes.REGISTRY
+    if recipe not in ORCHESTRATION_ONLY_RECIPES and not _is_offline_only(recipe)
 )
 
 
@@ -269,6 +280,14 @@ def validate_proposal(proposed: Any, active_recipe: str, active_params: dict) ->
     if not isinstance(candidate_recipe, str) or candidate_recipe not in OPTIMIZER_ELIGIBLE_RECIPES:
         log.warning("optimizer proposed unknown recipe %r; keeping active config", candidate_recipe)
         return None
+    # Belt-and-braces: even if the eligibility list regresses, never promote a
+    # recipe whose module declares itself offline-only.
+    if _is_offline_only(candidate_recipe):
+        log.warning(
+            "optimizer proposed offline-only recipe %r; keeping active config",
+            candidate_recipe,
+        )
+        return None
 
     raw_params = proposed.get("params", {})
     if not isinstance(raw_params, dict):
@@ -324,7 +343,7 @@ def validate_proposal(proposed: Any, active_recipe: str, active_params: dict) ->
     return candidate_recipe, candidate_params, notes[:200]
 
 
-def load_holdout() -> list[dict]:
+def _resolve_holdout_path() -> Path | None:
     # Path resolution prefers the operator-supplied env var so the
     # holdout can live on the persistent /data volume that's already
     # mounted into the recommender container — the Dockerfile does NOT
@@ -334,8 +353,8 @@ def load_holdout() -> list[dict]:
     # repo-relative path, which doesn't exist inside the container,
     # so load_holdout() always returned [] and the auto-promotion gate
     # silently degraded to "record candidate as inactive proposal" on
-    # every run (see line ~340 below). Falls back to the repo path so
-    # local pytest / a hand-run on the dev box still works.
+    # every run. Falls back to the repo path so local pytest / a
+    # hand-run on the dev box still works.
     eval_dir = Path(__file__).resolve().parent.parent / "eval"
     candidates: list[Path] = []
     env_path = os.environ.get("RECOMMENDER_HOLDOUT_PATH")
@@ -346,7 +365,11 @@ def load_holdout() -> list[dict]:
     # provisioned holdout the learning loop would otherwise sit record-only
     # forever; the seed gives it a baseline signal. See eval/holdout.seed.jsonl.
     candidates.append(eval_dir / "holdout.seed.jsonl")
-    p = next((c for c in candidates if c.exists()), None)
+    return next((c for c in candidates if c.exists()), None)
+
+
+def load_holdout() -> list[dict]:
+    p = _resolve_holdout_path()
     if p is None:
         return []
     out: list[dict] = []
@@ -436,6 +459,13 @@ def load_holdout() -> list[dict]:
     return out
 
 
+# /health calls holdout_status() on every probe; re-parsing the whole holdout
+# file each time is wasted work. Cache the computed status keyed on the
+# resolved file's (path, mtime_ns, size) so an operator swap or rewrite
+# invalidates it. (key, status) — None until the first computation.
+_HOLDOUT_STATUS_CACHE: tuple[tuple[str, int, int], dict[str, Any]] | None = None
+
+
 def holdout_status() -> dict[str, Any]:
     """Summarize holdout health for the /health payload.
 
@@ -443,12 +473,26 @@ def holdout_status() -> dict[str, Any]:
     "record-only" otherwise, so operators can see at a glance that the optimizer
     is not promoting candidates.
     """
+    global _HOLDOUT_STATUS_CACHE
+    p = _resolve_holdout_path()
+    key: tuple[str, int, int] | None = None
+    if p is not None:
+        try:
+            st = p.stat()
+            key = (str(p), st.st_mtime_ns, st.st_size)
+        except OSError:
+            key = None  # racing deletion — fall through to a fresh parse
+    if key is not None and _HOLDOUT_STATUS_CACHE is not None and _HOLDOUT_STATUS_CACHE[0] == key:
+        return dict(_HOLDOUT_STATUS_CACHE[1])
     size = len(load_holdout())
-    return {
+    status = {
         "mode": "active" if size >= MIN_HOLDOUT_SIZE else "record-only",
         "holdout_size": size,
         "min_holdout_size": MIN_HOLDOUT_SIZE,
     }
+    if key is not None:
+        _HOLDOUT_STATUS_CACHE = (key, status)
+    return dict(status)
 
 
 def _evaluate_entries(

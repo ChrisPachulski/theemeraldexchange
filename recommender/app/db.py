@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import logging
+import os
 import re
 import sqlite3
 import struct
@@ -358,6 +359,32 @@ def decode_vec_rowid(rowid: int, expected_kind: str | None = None) -> tuple[str,
     return (kind, rowid & ~_KIND_BIT if kind == "tv" else rowid)
 
 
+_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def table_generation(
+    conn: sqlite3.Connection, *tables: str | tuple[str, str]
+) -> tuple[tuple, ...]:
+    """Cheap fingerprint of catalog tables for module-level cache invalidation.
+
+    Each entry is a table name, optionally paired with a timestamp column the
+    ingest stamps on every write. (COUNT(*), MAX(rowid)) catches the
+    DELETE+INSERT rehydration pattern (title_cast/title_crew/title_genres get
+    fresh rowids); the timestamp catches in-place upserts that keep rowids
+    stable (titles / title_features use ON CONFLICT DO UPDATE).
+    """
+    parts: list[tuple] = []
+    for spec in tables:
+        table, ts_col = spec if isinstance(spec, tuple) else (spec, None)
+        if not _IDENT_RE.match(table) or (ts_col is not None and not _IDENT_RE.match(ts_col)):
+            raise ValueError(f"invalid identifier in table_generation spec: {spec!r}")
+        cols = "COUNT(*), COALESCE(MAX(rowid), 0)"
+        if ts_col is not None:
+            cols += f", COALESCE(MAX({ts_col}), '')"
+        parts.append(tuple(conn.execute(f"SELECT {cols} FROM {table}").fetchone()))
+    return tuple(parts)
+
+
 def serialize_f32(vec: np.ndarray) -> bytes:
     if vec.dtype != np.float32:
         vec = vec.astype(np.float32)
@@ -430,11 +457,25 @@ def _migrate(conn: sqlite3.Connection, *, db_path: Path) -> list[str]:
             checksum = _sha256(raw_text)
 
             if version in seen:
-                # Already applied — verify checksum.
+                # Already applied — verify checksum. An edited migration file
+                # means the DB schema no longer matches what the file would
+                # produce, so fail the boot rather than run against an unknown
+                # schema. ALLOW_MIGRATION_CHECKSUM_MISMATCH=1 is the operator
+                # escape hatch for deliberate repairs (after which the stored
+                # checksum should be fixed up to match the file).
                 if checksum != seen[version]:
-                    log.warning(
-                        "[migration] checksum mismatch on %d: file may have been edited",
-                        version,
+                    if os.environ.get("ALLOW_MIGRATION_CHECKSUM_MISMATCH") == "1":
+                        log.warning(
+                            "[migration] checksum mismatch on %d allowed by "
+                            "ALLOW_MIGRATION_CHECKSUM_MISMATCH=1: file may have been edited",
+                            version,
+                        )
+                        continue
+                    raise RuntimeError(
+                        f"[migration] ABORT: checksum mismatch on applied migration "
+                        f"{version} ({f.name}): the file no longer matches what was "
+                        "applied to this database. Restore the original file, or set "
+                        "ALLOW_MIGRATION_CHECKSUM_MISMATCH=1 for a deliberate repair."
                     )
                 continue
 
