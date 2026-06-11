@@ -335,4 +335,55 @@ describe('egress (guardedFetch / guardedFetchTrustedOrigin)', () => {
     expect(res.status).toBe(500)
     expect(calls).toHaveLength(1)
   })
+
+  // A fetch stub that never settles on its own — it only rejects when the
+  // composed signal egress() passes in fires. Models a hung upstream.
+  function hangingFetch(): void {
+    globalThis.fetch = ((input: string | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      calls.push({ url, init })
+      return new Promise((_resolve, reject) => {
+        const s = init?.signal
+        if (!s) return // hang forever — the test would time out, proving the bug
+        if (s.aborted) return reject(s.reason)
+        s.addEventListener('abort', () => reject(s.reason), { once: true })
+      })
+    }) as typeof globalThis.fetch
+  }
+
+  // (j) per-hop deadline: a hung upstream is aborted within hopTimeoutMs
+  // instead of pinning the egress loop open forever.
+  it('guardedFetch aborts a hung upstream within the per-hop deadline', async () => {
+    hangingFetch()
+    await expect(
+      guardedFetch('https://cdn.example.com/index.m3u8', undefined, { hopTimeoutMs: 25 }),
+    ).rejects.toMatchObject({ name: 'TimeoutError' })
+    expect(calls).toHaveLength(1)
+  })
+
+  // (k) the caller's signal (client disconnect) is composed with the per-hop
+  // timer, so an aborted client tears the upstream fetch down immediately.
+  it('guardedFetch propagates the caller signal alongside the per-hop deadline', async () => {
+    hangingFetch()
+    const caller = new AbortController()
+    const pending = expect(
+      guardedFetch(
+        'https://cdn.example.com/index.m3u8',
+        { signal: caller.signal },
+        { hopTimeoutMs: 60_000 },
+      ),
+    ).rejects.toMatchObject({ name: 'AbortError' })
+    caller.abort()
+    await pending
+    expect(calls).toHaveLength(1)
+  })
+
+  // (l) without hopTimeoutMs and without a caller signal, no signal is
+  // injected — long-lived byte streams must not pick up a surprise timer.
+  it('guardedFetch passes NO signal when neither caller signal nor hop timeout is set', async () => {
+    scriptFetch([{ kind: 'terminal', status: 200, body: 'OK' }])
+    const res = await guardedFetch('https://cdn.example.com/live.ts')
+    expect(res.status).toBe(200)
+    expect((calls[0].init as RequestInit).signal).toBeUndefined()
+  })
 })

@@ -578,6 +578,13 @@ export const env = {
   // room for pauses; it scopes one user to one title, so a leak is low-impact.
   MEDIA_STREAM_TOKEN_TTL_SECS: positiveInt('MEDIA_STREAM_TOKEN_TTL_SECS', 21_600),
   IPTV_LIST_TIMEOUT_MS: positiveInt('IPTV_LIST_TIMEOUT_MS', 30_000),
+  // Whole-transfer deadline + body cap for proxied HLS MANIFEST fetches
+  // (rewriteHlsPlaylist). Manifests are small text files, so a hung or
+  // drip-feeding upstream must not pin a request open indefinitely — unlike
+  // the live/segment byte paths, which legitimately stream for hours and are
+  // bounded by client-abort propagation instead.
+  IPTV_MANIFEST_FETCH_TIMEOUT_MS: positiveInt('IPTV_MANIFEST_FETCH_TIMEOUT_MS', 10_000),
+  IPTV_MANIFEST_MAX_BYTES: positiveInt('IPTV_MANIFEST_MAX_BYTES', 2 * 1024 * 1024),
   IPTV_SYNC_CRON: process.env.IPTV_SYNC_CRON ?? '0 */6 * * *',
   IPTV_RECOMMENDER_EXPORT_SECRET: opt('IPTV_RECOMMENDER_EXPORT_SECRET') ?? null,
   IPTV_REMUX_TMP_DIR: process.env.IPTV_REMUX_TMP_DIR ?? '/tmp/iptv-remux',
