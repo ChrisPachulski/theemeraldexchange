@@ -1115,6 +1115,29 @@ describe('sonarr season-grab in-flight reservation', () => {
     expect(grabPostCount(calls2)).toBe(1)
   })
 
+  it('RESERVATION SETTLED ON FULL SUCCESS: two sequential fully-successful grabs against the same root folder both succeed', async () => {
+    // Regression: the ledger release used to be conditional on
+    // grabbedBytes < plannedBytes, so a FULLY successful grab released
+    // nothing — the leaked reservation made every later add/monitor against
+    // the same root folder 409 root_folder_reservation_in_flight until
+    // restart. The reservation must settle once the grab outcome is final
+    // (the reservation guards planning; SAB owns real disk accounting).
+    const path = '/data/tv-fullsuccess'
+    const calls1: Array<{ url: string; method: string }> = []
+    stubSeasonMonitor(calls1, { path, grabStatus: 200 })
+    const r1 = await monitorAndFlushGrab(await adminCookie())
+    expect(r1.status).toBe(200)
+    expect(grabPostCount(calls1)).toBe(1)
+
+    const calls2: Array<{ url: string; method: string }> = []
+    stubSeasonMonitor(calls2, { path, grabStatus: 200 })
+    const r2 = await monitorAndFlushGrab(await adminCookie())
+    expect(r2.status).toBe(200)
+    // No leftover reservation: the second grab cleared the gate and fired.
+    expect(plannedSizeEvents().length).toBe(0)
+    expect(grabPostCount(calls2)).toBe(1)
+  })
+
   it('RESERVE GUARD: a planned grab summing to 0 bytes does not reserve and does not wedge the folder', async () => {
     // No eligible releases → bestByChunk is empty → the route returns BEFORE
     // reserveRootFolderBytes (which would itself refuse bytes <= 0). Nothing

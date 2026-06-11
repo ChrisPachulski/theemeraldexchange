@@ -63,6 +63,60 @@ describe('appendGrabEvent + readRecentGrabEvents', () => {
     expect(events.map((e) => e.itemId)).toEqual([2, 1])
   })
 
+  it('decodes a multi-byte character that straddles the 64KB chunk boundary', async () => {
+    // The tail reader walks the file backward in 64 KB blocks. Construct a
+    // file where a 4-byte emoji in the FIRST line sits exactly across the
+    // (size - 64K) boundary, so the backward reader's first chunk starts
+    // mid-character. Per-chunk decoding (the old bug) yields U+FFFD
+    // replacement characters on both sides of the split; byte-carrying
+    // decoding must reproduce the title intact.
+    const CHUNK = 64 * 1024
+    const title = '🎬'.repeat(10) // 4 bytes each in UTF-8
+    const lineA =
+      JSON.stringify({
+        ts: '2026-01-01T00:00:00.000Z',
+        app: 'sonarr',
+        itemId: 7,
+        type: 'grab_started',
+        title,
+      }) + '\n'
+    const lineABytes = Buffer.byteLength(lineA)
+    // Byte offset of the first emoji within lineA.
+    const emojiByteOffset = Buffer.byteLength(lineA.slice(0, lineA.indexOf('🎬')))
+    // Want the boundary (fileSize - CHUNK) to land 2 bytes INTO the emoji:
+    //   fileSize = emojiByteOffset + 2 + CHUNK
+    // lineA is first, so the suffix line must contribute the remainder.
+    const suffixTarget = emojiByteOffset + 2 + CHUNK - lineABytes
+    const suffixBase =
+      JSON.stringify({
+        ts: '2026-01-01T00:00:01.000Z',
+        app: 'radarr',
+        itemId: 8,
+        type: 'no_releases',
+        title: '',
+      }) + '\n'
+    const padLen = suffixTarget - Buffer.byteLength(suffixBase)
+    expect(padLen).toBeGreaterThan(0)
+    const suffixLine =
+      JSON.stringify({
+        ts: '2026-01-01T00:00:01.000Z',
+        app: 'radarr',
+        itemId: 8,
+        type: 'no_releases',
+        title: 'a'.repeat(padLen),
+      }) + '\n'
+    await fs.writeFile(logPath, lineA + suffixLine)
+    // Sanity: the boundary really does land inside the emoji.
+    const fileSize = (await fs.stat(logPath)).size
+    expect(fileSize - CHUNK).toBe(emojiByteOffset + 2)
+
+    const events = await readRecentGrabEvents(10)
+    expect(events).toHaveLength(2)
+    const first = events.find((e) => e.itemId === 7)
+    expect(first?.title).toBe(title)
+    expect(first?.title?.includes('�')).toBe(false)
+  })
+
   it('survives a tail spanning multiple 64KB chunks', async () => {
     // Each event line is ~80 bytes; 2000 events ≈ 160KB which forces
     // the tail reader to walk 3+ chunks backward.

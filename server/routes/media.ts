@@ -209,9 +209,16 @@ media.post('/playback/:kind/:id', async (c) => {
   // (the internal principal is shared across services) until the manifest is
   // ready, capped so a stuck encode can't hang the request. The internal
   // principal Bearer in `auth` is accepted by the transcoder too.
+  //
+  // The cap is WALL-CLOCK, not iteration count: each probe can itself take up
+  // to LAN_TIMEOUT_MS against a slow transcoder, so the previous
+  // "24 polls × 500ms sleep" bound only capped the sleeps — a transcoder that
+  // answered slowly (but under its own timeout) stretched the loop from the
+  // intended 12s toward minutes while the SPA's grant request hung.
   const manifestProbe = `${env.transcoderUrl}${handoff.manifestUrl}`
-  const READY_POLLS = 24 // × 500ms = up to 12s
-  for (let i = 0; i < READY_POLLS; i++) {
+  const READY_DEADLINE_MS = 12_000
+  const readyDeadline = Date.now() + READY_DEADLINE_MS
+  while (Date.now() < readyDeadline) {
     try {
       // The manifest is a small text playlist — whole-transfer deadline so
       // the m.text() read below can't pin the poll loop on a stalled socket.
@@ -226,7 +233,7 @@ media.post('/playback/:kind/:id', async (c) => {
         if (/\.ts(\?|\s|$)/m.test(body)) break // a segment is listed → ready
       }
     } catch {
-      // transient — keep polling until the cap
+      // transient — keep polling until the deadline
     }
     await new Promise((r) => setTimeout(r, 500))
   }

@@ -99,10 +99,34 @@ async function writeLine(line: string): Promise<void> {
   await fs.appendFile(logPath, line, { encoding: 'utf8' })
 }
 
+// Split a buffer on the newline BYTE (0x0A). Byte-domain splitting is
+// always UTF-8-safe: 0x0A can never appear inside a multi-byte sequence
+// (continuation bytes are 0x80-0xBF), so every piece holds whole
+// characters of its line even when the line itself was read across
+// multiple chunks.
+function splitOnNewlineByte(buf: Buffer): Buffer[] {
+  const pieces: Buffer[] = []
+  let start = 0
+  for (let i = 0; i < buf.length; i++) {
+    if (buf[i] === 0x0a) {
+      pieces.push(buf.subarray(start, i))
+      start = i + 1
+    }
+  }
+  pieces.push(buf.subarray(start))
+  return pieces
+}
+
 // Read the last `limit` newline-terminated chunks from `path`, newest
 // first. Returns raw string lines (parsing happens in parseEvents). On
 // ENOENT returns []. Reads backward in 64 KB blocks so we don't load
 // the whole file when callers want just the recent tail.
+//
+// UTF-8 boundary safety: the partial first line of each chunk is carried
+// to the next (earlier) iteration as BYTES and only decoded once the
+// line is complete. Decoding per 64 KB chunk — as this used to — split
+// any multi-byte character straddling a chunk boundary into replacement
+// characters (U+FFFD), silently corrupting that line's title/error text.
 async function readTail(path: string, limit: number): Promise<string[]> {
   let fd
   try {
@@ -113,7 +137,7 @@ async function readTail(path: string, limit: number): Promise<string[]> {
   try {
     const stat = await fd.stat()
     let pos = stat.size
-    let leftover = ''
+    let leftover = Buffer.alloc(0)
     const lines: string[] = []
     while (pos > 0 && lines.length < limit) {
       const readSize = Math.min(CHUNK_SIZE, pos)
@@ -121,21 +145,22 @@ async function readTail(path: string, limit: number): Promise<string[]> {
       const buf = Buffer.alloc(readSize)
       await fd.read(buf, 0, readSize, pos)
       // Earlier chunk's tail abuts the previous (later) chunk's head, so
-      // the leftover-partial-line goes on the END of the new buffer.
-      const combined = buf.toString('utf8') + leftover
-      const pieces = combined.split('\n')
+      // the leftover-partial-line bytes go on the END of the new buffer.
+      const combined = Buffer.concat([buf, leftover])
+      const pieces = splitOnNewlineByte(combined)
       // pieces[0] is potentially partial — it was the start of this
-      // (earlier) chunk. Keep it as leftover for the next iteration.
+      // (earlier) chunk. Keep its raw bytes as leftover for the next
+      // iteration; decode only complete lines.
       leftover = pieces[0]
       // Walk pieces[1..] right-to-left: those are complete lines, newest
-      // last in the chunk. Skip empty strings (trailing newlines).
+      // last in the chunk. Skip empty pieces (trailing newlines).
       for (let i = pieces.length - 1; i >= 1 && lines.length < limit; i--) {
         const piece = pieces[i]
-        if (piece.length > 0) lines.push(piece)
+        if (piece.length > 0) lines.push(piece.toString('utf8'))
       }
     }
     if (pos === 0 && leftover.length > 0 && lines.length < limit) {
-      lines.push(leftover)
+      lines.push(leftover.toString('utf8'))
     }
     return lines.slice(0, limit)
   } finally {

@@ -17,12 +17,17 @@ const webauthn = vi.hoisted(() => ({
 }))
 vi.mock('../services/webauthn.js', () => webauthn)
 
-const { authorizeOrRedeem, enforceAuthRateLimit } = vi.hoisted(() => ({
+const { authorizeOrRedeem, enforceAuthRateLimit, enforceAuthIdentityRateLimit } = vi.hoisted(() => ({
   authorizeOrRedeem: vi.fn(),
   // Default: never rate-limited (returns null). Individual tests can override.
   enforceAuthRateLimit: vi.fn(() => null),
+  enforceAuthIdentityRateLimit: vi.fn(() => null),
 }))
-vi.mock('../auth.js', () => ({ authorizeOrRedeem, enforceAuthRateLimit }))
+vi.mock('../auth.js', () => ({
+  authorizeOrRedeem,
+  enforceAuthRateLimit,
+  enforceAuthIdentityRateLimit,
+}))
 
 const members = vi.hoisted(() => ({ isMember: vi.fn(), recordMemberLogin: vi.fn() }))
 vi.mock('../services/members.js', () => members)
@@ -154,5 +159,48 @@ describe('passkey login/verify', () => {
     const res = await post('/login/verify', { challengeId: 'cid', response: { id: 'c' } })
     expect(res.status).toBe(400)
     expect(members.isMember).not.toHaveBeenCalled()
+  })
+})
+
+describe('passkey identity-keyed rate limiting', () => {
+  it('login/verify keys an identity bucket on the attempted credential id BEFORE verification', async () => {
+    webauthn.verifyLogin.mockResolvedValue({ sub: 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV' })
+    members.isMember.mockReturnValue({ role: 'user', display_name: 'Chris' })
+    await post('/login/verify', { challengeId: 'cid', response: { id: 'cred-xyz' } })
+    expect(enforceAuthIdentityRateLimit).toHaveBeenCalledWith(
+      expect.anything(),
+      'passkey',
+      'cred:cred-xyz',
+    )
+  })
+
+  it('register/verify keys an identity bucket on the attempted credential id', async () => {
+    webauthn.verifyRegistration.mockRejectedValue(new Error('challenge_invalid'))
+    await post('/register/verify', { challengeId: 'cid', response: { id: 'cred-abc' } })
+    expect(enforceAuthIdentityRateLimit).toHaveBeenCalledWith(
+      expect.anything(),
+      'passkey',
+      'cred:cred-abc',
+    )
+  })
+
+  it('register/options keys an identity bucket on the attempted handle', async () => {
+    webauthn.beginRegistration.mockResolvedValue({ options: {}, challengeId: 'cid' })
+    await post('/register/options', { handle: 'Chris' })
+    expect(enforceAuthIdentityRateLimit).toHaveBeenCalledWith(
+      expect.anything(),
+      'passkey',
+      'handle:Chris',
+    )
+  })
+
+  it('a limited identity short-circuits login/verify before the ceremony runs', async () => {
+    enforceAuthIdentityRateLimit.mockImplementationOnce(
+      (c: { json: (b: unknown, s: number) => Response }) =>
+        c.json({ error: 'rate_limited' }, 429),
+    )
+    const res = await post('/login/verify', { challengeId: 'cid', response: { id: 'cred-xyz' } })
+    expect(res.status).toBe(429)
+    expect(webauthn.verifyLogin).not.toHaveBeenCalled()
   })
 })
