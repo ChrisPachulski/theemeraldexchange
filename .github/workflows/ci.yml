@@ -173,8 +173,27 @@ jobs:
       - name: Syntax check (recommender)
         run: python3 -m compileall -q recommender/app recommender/workers
 
-      - name: Install maturin + pytest
-        run: pip install maturin pytest pydantic fastapi
+      # Install the EXACT dependency set the production image ships
+      # (recommender/requirements.lock) minus torch: the +cpu torch wheel is
+      # heavyweight and only workers/featurize.py imports it (lazily, inside
+      # the embed function) — no test under tests/ or eval/ reaches it. The
+      # lock is the full transitive closure, so --no-deps keeps pip from
+      # re-resolving (and from pulling CUDA torch via sentence-transformers).
+      # Tooling pins: maturin within the Dockerfile's >=1.7,<2.0 range; ruff
+      # pinned so lint results are reproducible; pytest satisfies pyproject's
+      # dev floor (>=8.3).
+      - name: Install recommender deps (requirements.lock minus torch) + pinned tooling
+        working-directory: recommender
+        run: |
+          grep -v '^torch==' requirements.lock > /tmp/ci-requirements.txt
+          pip install --no-deps -r /tmp/ci-requirements.txt
+          pip install maturin==1.8.1 pytest==8.3.5 ruff==0.15.15
+
+      # ruff is the lint gate used locally (pyproject [tool.ruff]); without
+      # this step it was never enforced in CI.
+      - name: Lint (ruff)
+        working-directory: recommender
+        run: ruff check .
 
       # Build once into a wheel, then install it into BOTH the bare job
       # interpreter (for the pytest parity step) and a recommender/.venv
@@ -196,15 +215,15 @@ jobs:
           recommender/.venv/bin/python -m pip install crates/emerald-contracts-pyo3/wheels/*.whl
           recommender/.venv/bin/python -c "import emerald_contracts; print('emerald_contracts OK')"
 
-      - name: Cross-language parity tests (recommender ↔ Rust ↔ TS)
+      - name: Recommender test suite (tests/ + eval/, full lock minus torch)
         working-directory: recommender
-        # Scoped to the tests runnable with this job's minimal dep set
-        # (emerald_contracts wheel + pydantic/fastapi). Whole-directory
-        # collection (tests/ eval/) needs the FULL recommender environment
-        # (anthropic, httpx, torch, …) which this job intentionally does not
-        # install — broadening it requires installing recommender deps first
-        # (tracked alongside the parked requirements.lock work).
-        run: pytest tests/test_emerald_contracts_parity.py tests/test_sub_validation.py tests/test_internal_principal.py -v
+        # The full suite — scoring path, retrieval, optimizer, migrator,
+        # telemetry, schemas, parity — runs against the lock-pinned
+        # environment installed above. Only torch is absent; its sole import
+        # is lazy (workers/featurize.py inside the embed function) and no
+        # collected test reaches it, so collection is clean. eval/ carries
+        # test_build_holdout.py for the operator holdout tooling.
+        run: pytest tests/ eval/test_build_holdout.py -v
 
       # Node side of the gate: install JS deps + build the napi addon,
       # then run the N-API→PyO3 cross-binding test with the require flag
