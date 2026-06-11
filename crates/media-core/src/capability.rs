@@ -98,6 +98,26 @@ pub fn decide(file: &MediaFileRow, caps: &ClientCaps) -> PlayDecision {
         return deny(format!("codec {codec} not supported by client"));
     }
 
+    // Profile/bit-depth gate: a client advertising "h264" means 8-bit
+    // Baseline/Main/High — the profiles every browser and hardware decoder
+    // ships. 10-bit H.264 ("High 10"/Hi10P, the anime-rip profile) has NO
+    // hardware decoder anywhere and no browser support, so it must transcode
+    // even though the codec string matches. This is a fixed hard-deny in the
+    // same style as the AAC audio baseline below: ClientCaps carries no
+    // `video_profiles` set yet, and no shipped client could meaningfully
+    // advertise Hi10P support. 10-bit HEVC (Main 10) is deliberately NOT
+    // gated here: it is broadly hardware-decoded wherever HEVC itself is
+    // supported (a client advertising "hevc" implies Main 10), and 10-bit
+    // HDR HEVC is already routed by the hdr gate below.
+    if codec.eq_ignore_ascii_case("h264")
+        && let Some(profile) = file.video_profile.as_deref().map(str::trim)
+        && profile.contains("10")
+    {
+        return deny(format!(
+            "h264 profile {profile} (10-bit) not supported by client"
+        ));
+    }
+
     if let (Some(max), Some(height)) = (caps.max_height, file.video_height)
         && height > max
     {
@@ -255,6 +275,44 @@ mod tests {
         // tell webm from mkv, so a webm-only client never receives matroska.
         caps.containers = vec!["webm".to_string()];
         assert!(!decide(&f, &caps).direct_play);
+    }
+
+    #[test]
+    fn h264_high10_transcodes_despite_codec_match() {
+        // An H.264 High-10 (Hi10P) file matches caps ["h264"] on the codec
+        // string but no browser or hardware decoder can play it; it must be
+        // denied direct play on profile.
+        let mut f = file(Some("mp4"), Some("h264"), Some(1080), None);
+        f.video_profile = Some("High 10".to_string());
+        let d = decide(&f, &h264_client());
+        assert!(!d.direct_play, "Hi10P must not direct-play");
+        assert!(d.reason.contains("10-bit"), "reason: {}", d.reason);
+    }
+
+    #[test]
+    fn h264_8bit_profiles_and_unknown_profile_direct_play() {
+        // The usual 8-bit profiles pass, and a missing profile is not gated
+        // (nothing to gate on — matches the unknown-audio leniency).
+        for profile in [Some("High"), Some("Main"), Some("Constrained Baseline"), None] {
+            let mut f = file(Some("mp4"), Some("h264"), Some(1080), None);
+            f.video_profile = profile.map(str::to_string);
+            assert!(
+                decide(&f, &h264_client()).direct_play,
+                "profile {profile:?} must direct-play"
+            );
+        }
+    }
+
+    #[test]
+    fn hevc_main10_is_not_profile_gated() {
+        // Main 10 is the normal HEVC profile wherever HEVC is supported at
+        // all; a client advertising hevc implies it. (HDR Main 10 is routed
+        // by the hdr gate, exercised elsewhere.)
+        let mut caps = h264_client();
+        caps.video_codecs = vec!["hevc".to_string()];
+        let mut f = file(Some("mp4"), Some("hevc"), Some(1080), None);
+        f.video_profile = Some("Main 10".to_string());
+        assert!(decide(&f, &caps).direct_play);
     }
 
     #[test]
