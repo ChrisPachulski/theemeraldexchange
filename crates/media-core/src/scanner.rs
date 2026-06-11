@@ -35,6 +35,11 @@ pub struct ScanReport {
     /// Unchanged files whose movie/episode row still lacked TMDB metadata and
     /// was successfully backfilled this pass (no reprobe).
     pub backfilled: usize,
+    /// `media_files` rows removed because their file vanished from disk (the
+    /// delete cascades the backing movies/episodes rows).
+    pub files_removed: usize,
+    /// Watch-state rows reaped because their movie/episode no longer exists.
+    pub watch_orphans_removed: usize,
     pub errors: usize,
 }
 
@@ -128,6 +133,9 @@ fn walk_roots(roots: &[LibraryRoot]) -> WalkOutcome {
 /// Run one full scan pass over `roots`, mutating `db`. The current root's
 /// [`RootKind`](crate::filename::RootKind) is authoritative for classification,
 /// and `tmdb` is consulted best-effort for enrichment (never fails the scan).
+/// Ends with a reconciliation pass: rows whose file vanished from disk are
+/// removed (a rename is the old row pruned + the new path indexed) and
+/// orphaned watch-state rows are reaped.
 pub async fn scan_once(
     db: &Db,
     roots: &[LibraryRoot],
@@ -218,7 +226,86 @@ pub async fn scan_once(
         }
     }
 
+    // Reconciliation: prune rows whose backing file no longer exists, then
+    // reap watch-state orphans (the polymorphic media_kind/media_id pair has
+    // no SQL FK, so a cascade cannot do this). Skipped entirely when no roots
+    // are configured (dev/tests) — an empty config must never empty the DB.
+    if !roots.is_empty() {
+        match prune_missing_files(db).await {
+            Ok(removed) => report.files_removed = removed,
+            Err(e) => {
+                tracing::warn!("prune of deleted files failed: {e}");
+                report.errors += 1;
+            }
+        }
+        match gc_orphan_watch_state(db).await {
+            Ok(reaped) => report.watch_orphans_removed = reaped as usize,
+            Err(e) => {
+                tracing::warn!("watch-state GC failed: {e}");
+                report.errors += 1;
+            }
+        }
+    }
+
     Ok(report)
+}
+
+/// Delete every `media_files` row whose path no longer exists on disk. The
+/// delete cascades the backing `movies`/`episodes` rows (file_id ON DELETE
+/// CASCADE); shows left with zero episodes are swept afterwards so the
+/// library never lists an empty series. Returns the number of file rows
+/// removed.
+async fn prune_missing_files(db: &Db) -> Result<usize, AppError> {
+    let rows: Vec<(i64, String)> = sqlx::query_as("SELECT id, path FROM media_files")
+        .fetch_all(&db.pool)
+        .await?;
+
+    // Existence probes are blocking FS I/O; batch them off the runtime.
+    let missing: Vec<i64> = tokio::task::spawn_blocking(move || {
+        rows.into_iter()
+            .filter(|(_, path)| !std::path::Path::new(path).exists())
+            .map(|(id, _)| id)
+            .collect()
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("prune task failed: {e}")))?;
+
+    let mut removed = 0usize;
+    for id in missing {
+        removed += sqlx::query("DELETE FROM media_files WHERE id = ?")
+            .bind(id)
+            .execute(&db.pool)
+            .await?
+            .rows_affected() as usize;
+    }
+
+    if removed > 0 {
+        // Shows are not file-backed, so the cascade cannot reach them; sweep
+        // any series whose last episode was just pruned.
+        sqlx::query("DELETE FROM shows WHERE id NOT IN (SELECT DISTINCT show_id FROM episodes)")
+            .execute(&db.pool)
+            .await?;
+        tracing::info!(removed, "pruned media_files rows for deleted files");
+    }
+    Ok(removed)
+}
+
+/// Remove watch-state rows whose `(media_kind, media_id)` no longer resolves to
+/// an existing movie/episode (orphans left by title deletion, or pre-existing
+/// forged rows). Returns the number of rows removed. The relationship is
+/// polymorphic (media_kind ∈ {movie, episode}), so a SQL foreign key cannot
+/// enforce it (§7-8); this GC — wired into the end of every scan pass — is how
+/// orphans are reaped.
+pub async fn gc_orphan_watch_state(db: &Db) -> Result<u64, sqlx::Error> {
+    let res = sqlx::query(
+        "DELETE FROM media_watch_state \
+         WHERE (media_kind = 'movie'   AND media_id NOT IN (SELECT id FROM movies)) \
+            OR (media_kind = 'episode' AND media_id NOT IN (SELECT id FROM episodes)) \
+            OR media_kind NOT IN ('movie', 'episode')",
+    )
+    .execute(&db.pool)
+    .await?;
+    Ok(res.rows_affected())
 }
 
 /// Run [`scan_once`] on its own spawned task so a panic anywhere in the pass
@@ -1565,6 +1652,144 @@ mod tests {
         // No new files were probed/indexed on this all-unchanged pass.
         assert_eq!(report.files_added, 0);
         assert_eq!(report.files_updated, 0);
+    }
+
+    #[tokio::test]
+    async fn scan_prunes_deleted_files_and_reaps_orphan_watch_state() {
+        // A row whose file vanished from disk must be removed at the end of
+        // the pass (cascading its movie), and the watch state that pointed at
+        // it reaped — while the surviving title's row and watch state stay.
+        let tmp = tempdir().unwrap();
+        let kept_path = tmp.path().join("Kept Movie (2020).mkv");
+        std::fs::write(&kept_path, b"bytes").unwrap();
+        let db = Db::connect_memory().await.unwrap();
+
+        // Seed the surviving file with its EXACT on-disk stat so the scan
+        // takes the probe-free skip branch (no real ffprobe needed).
+        let (size, mtime) = file_stat(&kept_path).unwrap();
+        sqlx::query(
+            "INSERT INTO media_files \
+             (path, size_bytes, mtime, container, duration_secs, video_codec, \
+              video_height, video_profile, hdr_format, audio_tracks_json, \
+              subtitle_tracks_json, scanned_at) \
+             VALUES (?, ?, ?, 'mkv', 1, 'h264', 1080, NULL, NULL, '[]', '[]', 't')",
+        )
+        .bind(kept_path.to_str().unwrap())
+        .bind(size)
+        .bind(&mtime)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let kept_file: i64 = sqlx::query_scalar("SELECT id FROM media_files WHERE path = ?")
+            .bind(kept_path.to_str().unwrap())
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        upsert_movie(&db, "Kept Movie", Some(2020), kept_file, "t", None)
+            .await
+            .unwrap();
+
+        // A second row whose path never existed on disk (a deleted file).
+        let gone_path = tmp.path().join("Gone Movie (2019).mkv");
+        let gone_file = seed_media_file(&db, gone_path.to_str().unwrap()).await;
+        upsert_movie(&db, "Gone Movie", Some(2019), gone_file, "t", None)
+            .await
+            .unwrap();
+
+        let (kept_movie, gone_movie): (i64, i64) = {
+            let k: i64 = sqlx::query_scalar("SELECT id FROM movies WHERE file_id = ?")
+                .bind(kept_file)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+            let g: i64 = sqlx::query_scalar("SELECT id FROM movies WHERE file_id = ?")
+                .bind(gone_file)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+            (k, g)
+        };
+        for movie_id in [kept_movie, gone_movie] {
+            sqlx::query(
+                "INSERT INTO media_watch_state \
+                 (sub, media_kind, media_id, position_secs, watched_at, completed) \
+                 VALUES ('plex:1', 'movie', ?, 10, 't', 0)",
+            )
+            .bind(movie_id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
+
+        let roots = vec![LibraryRoot {
+            path: tmp.path().to_path_buf(),
+            kind: RootKind::Movies,
+        }];
+        let report = scan_once(&db, &roots, &no_tmdb()).await.unwrap();
+
+        assert_eq!(report.files_removed, 1, "the deleted file's row is pruned");
+        assert_eq!(
+            report.watch_orphans_removed, 1,
+            "the orphaned watch row is reaped"
+        );
+        assert_eq!(count(&db, "media_files").await, 1);
+        assert_eq!(count(&db, "movies").await, 1, "cascade removed the movie");
+        let surviving_watch: i64 =
+            sqlx::query_scalar("SELECT media_id FROM media_watch_state WHERE media_kind='movie'")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            surviving_watch, kept_movie,
+            "the surviving title's watch state stays"
+        );
+    }
+
+    #[tokio::test]
+    async fn scan_with_no_roots_never_prunes() {
+        // Empty roots (dev/tests) must never trigger the reconciliation pass —
+        // otherwise a misconfigured deploy with MEDIA_LIBRARY_PATHS unset
+        // would empty the entire library DB on its first scan.
+        let db = Db::connect_memory().await.unwrap();
+        let file_id = seed_media_file(&db, "/lib/not-on-this-machine.mkv").await;
+        upsert_movie(&db, "Phantom", None, file_id, "t", None)
+            .await
+            .unwrap();
+
+        let report = scan_once(&db, &[], &no_tmdb()).await.unwrap();
+        assert_eq!(report.files_removed, 0);
+        assert_eq!(count(&db, "media_files").await, 1);
+        assert_eq!(count(&db, "movies").await, 1);
+    }
+
+    #[tokio::test]
+    async fn scan_handles_rename_as_prune_plus_add() {
+        // A rename is the old row pruned + the new path seen by the walk. With
+        // empty placeholder files ffprobe fails (or is absent), so the new
+        // path lands in `errors` rather than `files_added` — the assertion
+        // here is that the OLD path's row is gone and the new path was seen.
+        let tmp = tempdir().unwrap();
+        let new_path = tmp.path().join("Renamed (2021).mkv");
+        std::fs::write(&new_path, b"bytes").unwrap();
+        let db = Db::connect_memory().await.unwrap();
+
+        let old_file = seed_media_file(&db, tmp.path().join("Old (2021).mkv").to_str().unwrap()).await;
+        upsert_movie(&db, "Old", Some(2021), old_file, "t", None)
+            .await
+            .unwrap();
+
+        let roots = vec![LibraryRoot {
+            path: tmp.path().to_path_buf(),
+            kind: RootKind::Movies,
+        }];
+        let report = scan_once(&db, &roots, &no_tmdb()).await.unwrap();
+        assert_eq!(report.files_seen, 1, "the renamed file is walked");
+        assert_eq!(report.files_removed, 1, "the old path's row is pruned");
+        let old_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM media_files WHERE path LIKE '%Old%'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(old_rows, 0);
     }
 
     #[tokio::test]
