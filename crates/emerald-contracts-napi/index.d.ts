@@ -17,6 +17,14 @@ export function hkdfSession(secret: Buffer): DerivedKey
 export function hkdfDeviceToken(secret: Buffer): DerivedKey
 /** HKDF-Expand(secret, INFO_INTERNAL_PRINCIPAL, 32) per contract §4. */
 export function hkdfInternalPrincipal(secret: Buffer): DerivedKey
+/**
+ * Generic HKDF-Extract+Expand (RFC 5869, SHA-256, zero-length salt,
+ * 32-byte OKM) with a caller-supplied info label. Backs the production
+ * `deriveKey()` in server/services/keyDerivation.ts. `info` MUST be one
+ * of the frozen INFO_* labels — it is a wire-contract value, not a
+ * free-form string.
+ */
+export function hkdfDerive(secret: Buffer, info: string): DerivedKey
 
 // ---------------------------------------------------------------------------
 // Stream tokens (HMAC-SHA256, raw env-var bytes — see contract D18)
@@ -26,7 +34,14 @@ export interface StreamClaimsJs {
   exp: number
   iat: number
   jti: string
-  /** Stream kind tag: 'live' | 'segment' | 'playlist' | 'recording' (M6). */
+  /**
+   * Stream kind tag per §5.3 — the full wire enum is
+   * 'live' | 'vod' | 'series' | 'catchup' | 'segment' | 'remux' |
+   * 'playlist' | 'recording'. 'recording' is M6-reserved (DVR): verifiers
+   * accept it but no current path mints it. Mirrors Rust
+   * `stream_token::StreamKind` and the TS `StreamKind` union in
+   * server/services/iptvStreamToken.ts.
+   */
   k: string
   nbf: number
   rid: string
