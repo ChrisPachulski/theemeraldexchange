@@ -40,7 +40,11 @@ MIN_VOTE_COUNT = 50
 TMDB_MAX_PAGES = 500
 CONCURRENCY = 8
 DEFAULT_MAX_REQUEUE_ATTEMPTS = 8
-MAX_LOCKED_NO_PROGRESS_BATCHES = 3
+# A batch that flips no row out of status='pending' (every worker came back
+# locked/deferred or crashed) re-selects the SAME rows on the next loop pass.
+# Back off between such batches and abort after this many in a row — without
+# the bound the drain loop hot-spins forever on a persistent failure.
+MAX_STALLED_NO_PROGRESS_BATCHES = 3
 
 
 def _is_database_locked(exc: sqlite3.OperationalError) -> bool:
@@ -309,7 +313,7 @@ async def _hydrate_loop(
                 return "skipped"
 
     batch_size = max(concurrency * 4, 64)
-    locked_no_progress_batches = 0
+    stalled_no_progress_batches = 0
     while True:
         batch_limit = batch_size
         if limit is not None:
@@ -338,22 +342,33 @@ async def _hydrate_loop(
                     exc_info=(type(result), result, result.__traceback__),
                 )
         progress_count = sum(1 for result in results if result in {"done", "skipped", "error"})
-        locked_count = sum(1 for result in results if result == "locked")
-        if progress_count == 0 and locked_count > 0:
-            locked_no_progress_batches += 1
-            if locked_no_progress_batches >= MAX_LOCKED_NO_PROGRESS_BATCHES:
+        if progress_count == 0:
+            # Every outcome other than done/skipped/error ("locked", "deferred",
+            # or an unexpected worker crash surfaced by gather) leaves its row
+            # at status='pending', so the next SELECT re-fetches the exact same
+            # batch. Back off and bail out after a few consecutive stalls —
+            # previously only "locked" was counted, so an all-"deferred" batch
+            # (e.g. a persistent non-locked open-db failure) hot-spun forever.
+            stalled_no_progress_batches += 1
+            stalled = {
+                "locked": sum(1 for r in results if r == "locked"),
+                "deferred": sum(1 for r in results if r == "deferred"),
+                "crashed": sum(1 for r in results if isinstance(r, BaseException)),
+            }
+            if stalled_no_progress_batches >= MAX_STALLED_NO_PROGRESS_BATCHES:
                 raise RuntimeError(
-                    f"hydrate made no SQLite progress for {locked_no_progress_batches} consecutive locked batches"
+                    f"hydrate made no progress for {stalled_no_progress_batches} "
+                    f"consecutive batches ({stalled})"
                 )
-            delay = min(2 ** locked_no_progress_batches, 30)
+            delay = min(2 ** stalled_no_progress_batches, 30)
             log.warning(
-                "hydrate batch made no SQLite progress (%d locked rows); backing off %.1fs",
-                locked_count,
+                "hydrate batch made no progress (%s); backing off %.1fs",
+                stalled,
                 delay,
             )
             await asyncio.sleep(delay)
-        elif progress_count > 0:
-            locked_no_progress_batches = 0
+        else:
+            stalled_no_progress_batches = 0
         if limit is not None and (done + skipped) >= limit:
             break
         log.info("hydrate progress: done=%d skipped=%d", done, skipped)
