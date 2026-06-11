@@ -117,10 +117,12 @@ async fn version(State(state): State<AppState>) -> impl IntoResponse {
     }))
 }
 
+/// List-endpoint query params. Every field here is evaluated — do not add
+/// accepted-but-ignored params (a `genre` filter was once deserialized and
+/// silently dropped; nothing in server/ or the SPA ever sent it).
 #[derive(Debug, Deserialize)]
 pub struct ListQuery {
     pub q: Option<String>,
-    pub genre: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
@@ -442,13 +444,17 @@ async fn path_within_roots(path: &std::path::Path, roots: &[crate::config::Libra
 
 /// Optional client capabilities advertised on the stream request as query
 /// params, so a GET can carry the same direct-play contract that `play_grant`
-/// computes from a JSON body. All fields are optional; absent caps mean "no
-/// constraints advertised" and the file streams directly (back-compat).
+/// computes from a JSON body — including `max_bitrate` (bits/second). All
+/// fields are optional; absent caps mean "no constraints advertised" and the
+/// file streams directly (back-compat). Audio caps are intentionally absent:
+/// `ClientCaps` carries no `audio_codecs` set yet, so `decide()` applies a
+/// fixed browser-safe AAC baseline (see capability.rs TODO(M4+)).
 #[derive(Debug, Deserialize, Default)]
 struct StreamCapsQuery {
     containers: Option<String>,
     video_codecs: Option<String>,
     max_height: Option<i64>,
+    max_bitrate: Option<i64>,
     #[serde(default)]
     hdr: bool,
     #[serde(default)]
@@ -461,6 +467,7 @@ impl StreamCapsQuery {
         self.containers.is_some()
             || self.video_codecs.is_some()
             || self.max_height.is_some()
+            || self.max_bitrate.is_some()
             || self.hdr
     }
 
@@ -481,7 +488,7 @@ impl StreamCapsQuery {
             video_codecs: split(&self.video_codecs),
             max_height: self.max_height,
             hdr: self.hdr,
-            max_bitrate: None,
+            max_bitrate: self.max_bitrate,
         }
     }
 }
@@ -1423,7 +1430,6 @@ mod tests {
                 State(state.clone()),
                 Query(ListQuery {
                     q: Some(term.to_string()),
-                    genre: None,
                     limit: None,
                     offset: None,
                 }),
@@ -1602,6 +1608,44 @@ mod tests {
                 HttpRequest::builder()
                     .uri(format!(
                         "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn stream_refuses_when_bitrate_exceeds_client_max() {
+        // The GET stream path must honor ?max_bitrate just like the JSON grant
+        // body — previously the param could not be expressed and the cap was
+        // silently ignored. 9GB/3600s ≈ 20 Mbps > a 10 Mbps client cap → 503.
+        let state = test_state().await;
+        sqlx::query(
+            "INSERT INTO media_files \
+             (path, size_bytes, mtime, container, duration_secs, video_codec, video_height, \
+             video_profile, hdr_format, audio_tracks_json, subtitle_tracks_json, scanned_at) \
+             VALUES (?, 9000000000, 't', 'mp4', 3600, 'h264', 1080, NULL, NULL, '[]', '[]', 't')",
+        )
+        .bind("/lib/huge.mp4")
+        .execute(&state.db.pool)
+        .await
+        .unwrap();
+        let file_id: i64 = sqlx::query_scalar("SELECT id FROM media_files WHERE path = ?")
+            .bind("/lib/huge.mp4")
+            .fetch_one(&state.db.pool)
+            .await
+            .unwrap();
+        let movie_id = seed_movie_for_file(&state, file_id).await;
+
+        let app = crate::build_router(state);
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!(
+                        "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=h264&max_bitrate=10000000"
                     ))
                     .body(Body::empty())
                     .unwrap(),
