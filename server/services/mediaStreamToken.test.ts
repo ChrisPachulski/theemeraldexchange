@@ -18,6 +18,7 @@ import {
   MEDIA_DIRECT_KIND,
   MEDIA_HLS_KIND,
 } from './mediaStreamToken.js'
+import { signStreamToken } from './iptvStreamToken.js'
 
 describe('mediaStreamToken', () => {
   beforeEach(() => {
@@ -66,6 +67,21 @@ describe('mediaStreamToken', () => {
 
   it('rejects garbage', () => {
     const v = verifyMediaToken('not-a-token')
+    expect(v).toEqual({ ok: false, error: 'invalid_token' })
+  })
+
+  it('rejects a token forged with SESSION_SECRET (D2a dual-key fallback removed)', () => {
+    // Verification is single-key on STREAM_TOKEN_SECRET: a valid HMAC under
+    // the session secret must NOT verify, or SESSION_SECRET would remain a
+    // permanent stream-token forgery key (defeating §5.4 key separation).
+    const rid = mediaResourceId('movie', 123)
+    const forged = signStreamToken('session-fallback-secret-bbbbbbbbbbbbbbbbbbbb', {
+      kind: MEDIA_DIRECT_KIND,
+      resourceId: rid,
+      sub: 'plex:42',
+      ttlSecs: 300,
+    })
+    const v = verifyMediaToken(forged, { kinds: [MEDIA_DIRECT_KIND], rid })
     expect(v).toEqual({ ok: false, error: 'invalid_token' })
   })
 })

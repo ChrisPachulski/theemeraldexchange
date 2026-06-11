@@ -217,12 +217,15 @@ if (isProd && recommenderEventSecret) {
   }
 }
 
-// STREAM_TOKEN_SECRET is the dedicated signing secret for IPTV stream
-// tokens (§5.4).  Kept separate from SESSION_SECRET so a stream-token
-// compromise does not expose session cookies, and so key rotation is
-// scoped to the affected token class.  D2a: signer always uses this
-// key; verifier tries it first and falls back to SESSION_SECRET for
-// tokens issued before this deploy (see iptvStreamToken.ts).
+// STREAM_TOKEN_SECRET is the dedicated signing AND verifying secret for
+// IPTV/media stream tokens (§5.4).  Kept separate from SESSION_SECRET so
+// a stream-token compromise does not expose session cookies, and so key
+// rotation is scoped to the affected token class.  The D2a migration
+// fallback (verifier accepting SESSION_SECRET-signed tokens) is removed:
+// every verify site is single-key, so SESSION_SECRET can never forge a
+// stream token. Future rotations should dual-key OLD vs NEW
+// STREAM_TOKEN_SECRET values via verifyStreamTokenDualKey, never
+// SESSION_SECRET.
 const rawStreamTokenSecret = required('STREAM_TOKEN_SECRET')
 validateSecretStrength('STREAM_TOKEN_SECRET', rawStreamTokenSecret, isProd)
 
@@ -575,6 +578,13 @@ export const env = {
   // room for pauses; it scopes one user to one title, so a leak is low-impact.
   MEDIA_STREAM_TOKEN_TTL_SECS: positiveInt('MEDIA_STREAM_TOKEN_TTL_SECS', 21_600),
   IPTV_LIST_TIMEOUT_MS: positiveInt('IPTV_LIST_TIMEOUT_MS', 30_000),
+  // Whole-transfer deadline + body cap for proxied HLS MANIFEST fetches
+  // (rewriteHlsPlaylist). Manifests are small text files, so a hung or
+  // drip-feeding upstream must not pin a request open indefinitely — unlike
+  // the live/segment byte paths, which legitimately stream for hours and are
+  // bounded by client-abort propagation instead.
+  IPTV_MANIFEST_FETCH_TIMEOUT_MS: positiveInt('IPTV_MANIFEST_FETCH_TIMEOUT_MS', 10_000),
+  IPTV_MANIFEST_MAX_BYTES: positiveInt('IPTV_MANIFEST_MAX_BYTES', 2 * 1024 * 1024),
   IPTV_SYNC_CRON: process.env.IPTV_SYNC_CRON ?? '0 */6 * * *',
   IPTV_RECOMMENDER_EXPORT_SECRET: opt('IPTV_RECOMMENDER_EXPORT_SECRET') ?? null,
   IPTV_REMUX_TMP_DIR: process.env.IPTV_REMUX_TMP_DIR ?? '/tmp/iptv-remux',

@@ -29,9 +29,9 @@ import {
   getSeriesDetail,
 } from '../services/iptvCatalog.js'
 import { epgChannelWindow, epgGrid, epgNow } from '../services/iptvEpgQuery.js'
-import { signStreamToken, verifyStreamToken, verifyStreamTokenDualKey, type StreamKind } from '../services/iptvStreamToken.js'
+import { signStreamToken, verifyStreamToken, type StreamKind } from '../services/iptvStreamToken.js'
 import { checkReplay } from '../services/tokenReplayCache.js'
-import { tryNormaliseLegacySub } from '../services/sub.js'
+import { parseSub } from '../services/sub.js'
 import { resolveSourcePrecedence } from '../services/sourcePrecedence.js'
 import { streamConcurrency, type SessionView, type SessionKind } from '../services/iptvConcurrency.js'
 import { rewriteManifest } from '../services/iptvHlsRewrite.js'
@@ -53,49 +53,11 @@ import {
   stopRemuxSession,
 } from '../services/iptvRemux.js'
 import { env } from '../env.js'
+import { parseLimitedJson } from '../services/parseLimitedJson.js'
 
 export const iptv = new Hono<Env>()
 
 const PLAYLIST_TOKEN_MAX_BODY_BYTES = 1024
-
-async function parseLimitedJson(c: Context, maxBytes: number): Promise<{ tooLarge: boolean; body: unknown }> {
-  const contentLength = c.req.header('content-length')
-  if (contentLength) {
-    const n = Number(contentLength)
-    if (Number.isFinite(n) && n > maxBytes) return { tooLarge: true, body: {} }
-  }
-  const stream = c.req.raw.body
-  if (!stream) return { tooLarge: false, body: {} }
-  const reader = stream.getReader()
-  const chunks: Uint8Array[] = []
-  let total = 0
-  try {
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      if (!value) continue
-      total += value.byteLength
-      if (total > maxBytes) {
-        await reader.cancel().catch(() => undefined)
-        return { tooLarge: true, body: {} }
-      }
-      chunks.push(value)
-    }
-  } catch {
-    return { tooLarge: false, body: {} }
-  }
-  const bytes = new Uint8Array(total)
-  let offset = 0
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset)
-    offset += chunk.byteLength
-  }
-  try {
-    return { tooLarge: false, body: JSON.parse(new TextDecoder().decode(bytes)) }
-  } catch {
-    return { tooLarge: false, body: {} }
-  }
-}
 
 function firstHeaderValue(value: string | undefined): string {
   return value?.split(',')[0]?.trim() ?? ''
@@ -105,6 +67,27 @@ function safeHost(value: string, fallback: string): string {
   if (!value) return fallback
   if (/[\s/\\]/.test(value)) return fallback
   return value
+}
+
+// X-Forwarded-Host / Host are attacker-controlled on any deploy where the
+// backend is reachable without the trusted proxy in front, so a host is only
+// echoed into minted playlist URLs when it belongs to the operator's
+// configured ALLOWED_ORIGINS — either exactly, or as a subdomain (the API
+// lives at api.<spa-domain> in the Netlify ↔ NAS split, while ALLOWED_ORIGINS
+// carries the SPA origin). An attacker can't serve content from a subdomain
+// of the operator's domain without controlling its DNS.
+function isAllowedPublicHost(host: string): boolean {
+  const hostname = host.toLowerCase().replace(/:\d+$/, '')
+  for (const origin of env.allowedOrigins) {
+    let originHostname: string
+    try {
+      originHostname = new URL(origin).hostname.toLowerCase()
+    } catch {
+      continue // malformed allowlist entry can never match
+    }
+    if (hostname === originHostname || hostname.endsWith(`.${originHostname}`)) return true
+  }
+  return false
 }
 
 function publicBaseUrl(c: Context): string {
@@ -119,7 +102,20 @@ function publicBaseUrl(c: Context): string {
       requestUrl.host,
     requestUrl.host,
   )
-  return `${proto}//${host}`
+  // No allowlist configured (dev / direct-LAN deploys): header passthrough.
+  if (env.allowedOrigins.length === 0) return `${proto}//${host}`
+  if (isAllowedPublicHost(host)) return `${proto}//${host}`
+  // Forwarded host doesn't belong to the operator — never echo it into a
+  // minted URL. Fall back to the first parseable configured origin; if every
+  // entry is malformed, use the socket-level request host (not the headers).
+  for (const origin of env.allowedOrigins) {
+    try {
+      return new URL(origin).origin
+    } catch {
+      continue
+    }
+  }
+  return `${proto}//${requestUrl.host}`
 }
 
 iptv.get('/health', requireAuth, async (c) => {
@@ -408,7 +404,9 @@ iptv.post('/playlist/token', requireAuth, async (c) => {
   // response so the admin list can show "iPhone 15 (kitchen)" next to the jti.
   const parsed = await parseLimitedJson(c, PLAYLIST_TOKEN_MAX_BODY_BYTES)
   if (parsed.tooLarge) return c.json({ error: 'body_too_large' }, 413)
-  const body = parsed.body as { deviceName?: unknown }
+  // The shared reader reports "no parseable body" as null; an absent body is
+  // fine here (deviceName is optional), so normalize to an empty object.
+  const body = (parsed.body ?? {}) as { deviceName?: unknown }
   const deviceName = typeof body.deviceName === 'string'
     ? body.deviceName.trim().slice(0, 120)
     : undefined
@@ -483,39 +481,35 @@ iptv.get('/playlist.m3u', (c) => {
   const t = c.req.query('t') ?? ''
   let claims: ReturnType<typeof verifyStreamToken>
   try {
-    claims = verifyStreamTokenDualKey(env.streamTokenSecret, env.sessionSecret, t)
+    claims = verifyStreamToken(env.streamTokenSecret, t)
     if (claims.k !== 'playlist') throw new Error('kind_mismatch')
-    // §16 D-row: canonical rid is 'iptv-channels-all'. M1-era tokens
-    // carry 'all'. Both are accepted during the D2a secret-migration window
-    // (90-day expiry window). Once all M1 tokens have expired naturally this
-    // fallback can be dropped.
-    if (claims.rid !== 'iptv-channels-all' && claims.rid !== 'all') {
+    // §16 D-row: canonical rid is 'iptv-channels-all'. The M1-era 'all'
+    // fallback (D2a migration window) is gone — those tokens have expired.
+    if (claims.rid !== 'iptv-channels-all') {
       throw new Error('resource_mismatch')
     }
   } catch (err) {
     return c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401)
   }
 
-  // Persistent revocation check (§6.2 / D12). Tokens issued by D12+ carry a
-  // jti claim that maps to a row in iptv_playlist_tokens. A revoked_at IS NOT
-  // NULL row is a hard reject regardless of the HMAC signature being valid.
-  // M1-era tokens without jti bypass this check (they will expire naturally;
-  // D2b removes the fallback path once the 90-day window closes).
-  if (claims.jti != null) {
-    const row = iptvDb().stmts.getPlaylistToken.get(claims.jti) as
-      | { jti: string; sub: string; issued_at: string; expires_at: string; revoked_at: string | null }
-      | undefined
-    if (!row) {
-      return c.json({ error: 'token_not_found' }, 401)
-    }
-    if (row.revoked_at != null) {
-      return c.json({ error: 'token_revoked' }, 401)
-    }
+  // Persistent revocation check (§6.2 / D12). Every playlist token minted
+  // since D12 persists its jti in iptv_playlist_tokens at mint time, so the
+  // row lookup is unconditional: no row → reject (pre-D12 tokens have expired
+  // naturally), revoked_at IS NOT NULL → hard reject regardless of the HMAC
+  // signature being valid.
+  const row = iptvDb().stmts.getPlaylistToken.get(claims.jti) as
+    | { jti: string; sub: string; issued_at: string; expires_at: string; revoked_at: string | null }
+    | undefined
+  if (!row) {
+    return c.json({ error: 'token_not_found' }, 401)
+  }
+  if (row.revoked_at != null) {
+    return c.json({ error: 'token_revoked' }, 401)
   }
 
   const status = memberStatus(claims.sub)
   if (status !== 'allowed') {
-    if (claims.jti != null && status === 'revoked') {
+    if (status === 'revoked') {
       iptvDb().stmts.revokePlaylistToken.run(new Date().toISOString(), claims.jti)
     }
     return c.json({ error: 'access_revoked' }, 401)
@@ -820,7 +814,7 @@ iptv.post('/stream/catchup/:streamId/grant', requireAuth, async (c) => {
 function checkToken(c: Context<Env>, expectKind: StreamKind, resourceId: string): { ok: true; sub: string } | { ok: false; resp: Response } {
   const t = c.req.query('t') ?? ''
   try {
-    const claims = verifyStreamTokenDualKey(env.streamTokenSecret, env.sessionSecret, t)
+    const claims = verifyStreamToken(env.streamTokenSecret, t)
     if (claims.k !== expectKind || claims.rid !== resourceId) {
       return { ok: false, resp: c.json({ error: 'token_mismatch' }, 401) }
     }
@@ -832,17 +826,15 @@ function checkToken(c: Context<Env>, expectKind: StreamKind, resourceId: string)
         return { ok: false, resp: c.json({ error: replay.reason }, 401) }
       }
     }
-    // Stream-token grace path (§8.2): M1 HMAC tokens may carry an
-    // unprefixed `sub`. Normalise bare numeric ids to `plex:<id>` during
-    // the 30-day grace window. Any sub written from this normalised
-    // value (e.g. into watch history on heartbeat) uses the prefixed
-    // form. Drop this block one cookie-TTL post-D7 alongside the
-    // verifySession grace path.
-    const parsed = tryNormaliseLegacySub(claims.sub)
-    if (!parsed) {
+    // The sub claim must be canonical namespaced form (§8). The M1
+    // bare-numeric grace normalization is gone — its 30-day window closed.
+    let sub: string
+    try {
+      sub = parseSub(claims.sub).raw
+    } catch {
       return { ok: false, resp: c.json({ error: 'invalid_token', detail: 'sub_invalid_format' }, 401) }
     }
-    return { ok: true, sub: parsed.raw }
+    return { ok: true, sub }
   } catch (err) {
     return { ok: false, resp: c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401) }
   }
@@ -928,6 +920,37 @@ async function proxyRangeable(c: Context, upstreamUrl: string, mime: string): Pr
   return new Response(upstream.body, { status: upstream.status, headers: responseHeaders })
 }
 
+// Read a response body as text, refusing past `maxBytes` (null = too large).
+// HLS manifests are small; an attacker-influenceable upstream must not be able
+// to balloon the proxy's memory with an unbounded .text() buffer.
+async function readBoundedText(res: Response, maxBytes: number): Promise<string | null> {
+  if (!res.body) return ''
+  const declared = Number(res.headers.get('content-length') ?? '')
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await res.body.cancel().catch(() => undefined)
+    return null
+  }
+  const reader = res.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (!value) continue
+    total += value.byteLength
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined)
+      return null
+    }
+    chunks.push(value)
+  }
+  return Buffer.concat(chunks).toString('utf-8')
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')
+}
+
 async function rewriteHlsPlaylist(c: Context, upstreamUrl: string, sub: string): Promise<Response> {
   // Defense-in-depth: this is reached via the segment handler (which already
   // SSRF-checks) but also fetches a sub-playlist URL directly, so re-validate
@@ -943,16 +966,31 @@ async function rewriteHlsPlaylist(c: Context, upstreamUrl: string, sub: string):
   // guardedFetch re-validates the host's resolved IPs and every redirect hop
   // (DNS-rebinding + redirect-SSRF). The isPublicHttpsUpstream check above is
   // the cheap up-front string reject; resolve-and-validate happens inside.
+  //
+  // Deadline + abort propagation: the manifest fetch (headers AND body)
+  // is bounded by a whole-transfer timeout composed with the client's own
+  // signal, and egress() adds a fresh per-hop timeout — a hung or
+  // drip-feeding upstream cannot pin this request open, and a client that
+  // gives up tears the upstream fetch down with it (matching the live/
+  // segment byte paths, which propagate c.req.raw.signal).
+  const signal = AbortSignal.any([
+    c.req.raw.signal,
+    AbortSignal.timeout(env.IPTV_MANIFEST_FETCH_TIMEOUT_MS),
+  ])
   let upstream: Response
+  let text: string | null
   try {
-    upstream = await guardedFetch(upstreamUrl)
+    upstream = await guardedFetch(upstreamUrl, { signal }, {
+      hopTimeoutMs: env.IPTV_MANIFEST_FETCH_TIMEOUT_MS,
+    })
+    if (!upstream.ok) return c.json({ error: `upstream_${upstream.status}` }, 502)
+    text = await readBoundedText(upstream, env.IPTV_MANIFEST_MAX_BYTES)
   } catch (err) {
     if (err instanceof SsrfBlockedError) return c.json({ error: 'bad_upstream' }, 400)
+    if (isAbortError(err)) return c.json({ error: 'upstream_timeout' }, 504)
     throw err
   }
-  if (!upstream.ok) return c.json({ error: `upstream_${upstream.status}` }, 502)
-
-  const text = await upstream.text()
+  if (text == null) return c.json({ error: 'manifest_too_large' }, 502)
   const sign = (url: string) =>
     signStreamToken(env.streamTokenSecret, {
       kind: 'segment', resourceId: url, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
@@ -1098,7 +1136,7 @@ iptv.get('/stream/live/:streamId/remux/seg', (c) => {
   const t = c.req.query('t') ?? ''
   let claims: ReturnType<typeof verifyStreamToken>
   try {
-    claims = verifyStreamTokenDualKey(env.streamTokenSecret, env.sessionSecret, t)
+    claims = verifyStreamToken(env.streamTokenSecret, t)
     if (claims.k !== 'remux') throw new Error('kind_mismatch')
   } catch (err) {
     return c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401)
@@ -1322,7 +1360,7 @@ iptv.get('/stream/segment', async (c) => {
   const t = c.req.query('u') ?? ''
   let claims: ReturnType<typeof verifyStreamToken>
   try {
-    claims = verifyStreamTokenDualKey(env.streamTokenSecret, env.sessionSecret, t)
+    claims = verifyStreamToken(env.streamTokenSecret, t)
     if (claims.k !== 'segment') throw new Error('kind_mismatch')
   } catch (err) {
     return c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401)
@@ -1385,18 +1423,30 @@ iptv.get('/stream/segment', async (c) => {
 
 type Job = {
   id: string
-  state: 'running' | 'done' | 'error'
+  // 'rejected' = the sync runner refused to start (another sync already in
+  // flight — syncOnce returned busy). Distinct from 'done' so the admin
+  // poller is never told a skipped run completed.
+  state: 'running' | 'done' | 'rejected' | 'error'
   startedAt: string
   finishedAt?: string
   result?: SyncResult
   error?: string
 }
 const jobs = new Map<string, Job>()
+const MAX_REMEMBERED_JOBS = 20
 function rememberJob(job: Job): void {
   jobs.set(job.id, job)
-  if (jobs.size > 20) {
-    const oldest = [...jobs.keys()][0]
-    jobs.delete(oldest)
+  if (jobs.size > MAX_REMEMBERED_JOBS) {
+    // Evict the oldest FINISHED job. A running job's status must survive the
+    // cap — evicting it would 404 the admin poller mid-run and orphan the
+    // job's eventual result. If every remembered job is somehow still
+    // running, nothing is evicted; the map shrinks again as they settle.
+    for (const [id, j] of jobs) {
+      if (j.state !== 'running') {
+        jobs.delete(id)
+        break
+      }
+    }
   }
 }
 
@@ -1439,7 +1489,10 @@ iptv.post('/admin/sync', requireAuth, requireAdmin, async (c) => {
   void (async () => {
     try {
       const result = await syncOnce(iptvDb())
-      job.state = 'done'
+      // A busy refusal (another sync already running) is NOT a completed
+      // sync — surface it as 'rejected' so the poller doesn't read stale
+      // "done with no stats" as success.
+      job.state = result.busy ? 'rejected' : 'done'
       job.result = result
       job.finishedAt = new Date().toISOString()
     } catch (err) {
