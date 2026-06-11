@@ -243,14 +243,16 @@ def post_feedback(
             conn.execute(
                 """DELETE FROM user_feedback
                    WHERE sub=? AND kind=? AND tmdb_id=?
-                     AND signal IN ('like', 'dislike', 'shown', 'clicked', 'added', 'watched')""",
+                     AND signal IN ('like', 'dislike', 'clicked', 'added', 'watched')""",
                 (ev.sub, ev.kind, ev.tmdb_id),
             )
         elif ev.signal == "shown":
-            conn.execute(
-                "DELETE FROM user_feedback WHERE sub=? AND kind=? AND tmdb_id=? AND signal='shown'",
-                (ev.sub, ev.kind, ev.tmdb_id),
-            )
+            # 'shown' never lands in user_feedback — impressions are tracked in
+            # recently_shown only (the bulk path is POST /events/shown; this
+            # single-id form is kept for schema compat with old callers, and
+            # the user_feedback CHECK constraint still lists 'shown' so legacy
+            # DBs validate). A legacy DELETE of signal='shown' rows lived here;
+            # nothing has written such rows, so it was removed.
             conn.execute(
                 """INSERT INTO recently_shown(sub, kind, tmdb_id, ts)
                    VALUES (?, ?, ?, ?)
