@@ -86,6 +86,7 @@ export function MediaPlayerView({
           grant={streamGrant}
           autoPlay
           startPositionSecs={playerStartPosition(streamGrant.delivery, startPositionSecs)}
+          vodHls
           onPositionUpdate={onPositionUpdate}
           onEnded={onEnded}
         />
