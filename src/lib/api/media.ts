@@ -157,6 +157,14 @@ export type PlaybackCaps = {
   video_codecs: string[]
   max_height?: number
   hdr: boolean
+  /** Audio codecs this client can decode (backend default: ['aac']). */
+  audio_codecs?: string[]
+  /** Max AAC channels the MSE path can append (backend default: 2 — Chrome
+   *  and Firefox reject a >2-channel AAC SourceBuffer append). */
+  aac_max_channels?: number
+  /** This client's HLS player can play HEVC carried in fMP4 segments, so the
+   *  transcoder may copy-remux HEVC instead of re-encoding it. */
+  hls_fmp4_hevc?: boolean
 }
 
 type PlaybackRequest = PlaybackCaps & {
@@ -201,19 +209,195 @@ type RawWatchRow = {
   completed: number | boolean
 }
 
-/** Conservative browser playback capabilities. The backend already defaults to
- *  mp4/h264 (routing everything else through the transcoder); we advertise the
- *  same explicitly and cap height to the display so a 4K source isn't
- *  direct-played to a 1080p screen. */
+/** Conservative fallback playback capabilities — the canonical web-safe
+ *  profile (mp4 + h264 + SDR + stereo AAC) every browser plays. Used when the
+ *  MediaCapabilities probe is unavailable (old browsers, node tests) or
+ *  rejects. NOTE: deliberately NO screen-height gate — browsers downscale a
+ *  4K source on a smaller display natively, and forcing those titles through
+ *  the transcoder traded a perfect picture for a 1080p re-encode. */
 export function browserCaps(): PlaybackCaps {
-  const screenH =
-    typeof window !== 'undefined' && window.screen?.height ? window.screen.height : 1080
   return {
     containers: ['mp4'],
     video_codecs: ['h264'],
-    max_height: Math.max(screenH, 720),
+    max_height: 2160,
     hdr: false,
+    audio_codecs: ['aac'],
+    aac_max_channels: 2,
+    hls_fmp4_hevc: false,
   }
+}
+
+// ── Real capability probing ──────────────────────────────────────────
+//
+// `navigator.mediaCapabilities.decodingInfo` is the only probe that is
+// resolution-, bit-depth- and CHANNEL-aware. The legacy checks lie in exactly
+// the ways that used to grey-box this app: `isTypeSupported('mp4a.40.2')`
+// says yes while Chrome's MSE rejects the 6-channel AAC append, and codec
+// strings say yes for HEVC on machines with no hardware decoder. Everything
+// below resolves to the conservative `browserCaps()` baseline on any error,
+// so a probe failure can only ever cost quality, never playback.
+
+/** The HDR members of VideoConfiguration as literal unions (typed locally so
+ *  both tsconfig DOM libs — one predates the fields, one ships them as enums —
+ *  accept the same code). Browsers that don't know a member ignore it per
+ *  WebIDL; unknown VALUES reject, which the catch maps to false. */
+type ProbeTransferFunction = 'srgb' | 'hlg' | 'pq'
+type ProbeHdrMetadataType = 'smpteSt2086' | 'smpteSt2094-10' | 'smpteSt2094-40'
+type ProbeColorGamut = 'srgb' | 'p3' | 'rec2020'
+
+type HdrVideoConfiguration = VideoConfiguration & {
+  transferFunction?: ProbeTransferFunction
+  hdrMetadataType?: ProbeHdrMetadataType
+  colorGamut?: ProbeColorGamut
+}
+
+/** decodingInfo for a video config; false on rejection/absence. */
+function probeVideo(
+  contentType: string,
+  opts: {
+    type: 'media-source' | 'file'
+    width?: number
+    height?: number
+    bitrate?: number
+    transferFunction?: ProbeTransferFunction
+    hdrMetadataType?: ProbeHdrMetadataType
+    colorGamut?: ProbeColorGamut
+  },
+): Promise<boolean> {
+  try {
+    const video: HdrVideoConfiguration = {
+      contentType,
+      width: opts.width ?? 1920,
+      height: opts.height ?? 1080,
+      bitrate: opts.bitrate ?? 8_000_000,
+      framerate: 30,
+    }
+    if (opts.transferFunction) video.transferFunction = opts.transferFunction
+    if (opts.hdrMetadataType) video.hdrMetadataType = opts.hdrMetadataType
+    if (opts.colorGamut) video.colorGamut = opts.colorGamut
+    return navigator.mediaCapabilities
+      .decodingInfo({ type: opts.type, video })
+      .then((r) => r.supported)
+      .catch(() => false)
+  } catch {
+    return Promise.resolve(false)
+  }
+}
+
+/** decodingInfo for an audio config; false on rejection/absence. */
+function probeAudio(
+  contentType: string,
+  channels: number,
+  type: 'media-source' | 'file',
+): Promise<boolean> {
+  try {
+    return navigator.mediaCapabilities
+      .decodingInfo({
+        type,
+        audio: {
+          contentType,
+          // The spec types `channels` as a DOMString.
+          channels: String(channels),
+          bitrate: 256_000,
+          samplerate: 48_000,
+        },
+      })
+      .then((r) => r.supported)
+      .catch(() => false)
+  } catch {
+    return Promise.resolve(false)
+  }
+}
+
+async function buildProbedCaps(): Promise<PlaybackCaps> {
+  if (typeof navigator === 'undefined' || !navigator.mediaCapabilities?.decodingInfo) {
+    return browserCaps()
+  }
+  // Canonical strings (Jellyfin-web/StaZhu): hev1.* = in-band parameter sets
+  // (the MSE/hls.js form), hvc1.* = out-of-band (the progressive-mp4 form
+  // Apple requires). HEVC is advertised only when BOTH Main and Main 10 pass
+  // — the backend treats "hevc" as implying Main 10 (it is the normal HEVC
+  // profile wherever HEVC is hardware-decoded at all).
+  const [
+    hevcMseMain,
+    hevcMse10,
+    hevcFile10,
+    av1File,
+    hdr10,
+    aac6,
+    eac3Mse,
+    eac3File,
+    ac3Mse,
+    ac3File,
+  ] = await Promise.all([
+    probeVideo('video/mp4; codecs="hev1.1.6.L120.90"', { type: 'media-source' }),
+    probeVideo('video/mp4; codecs="hev1.2.4.L153.B0"', {
+      type: 'media-source',
+      width: 3840,
+      height: 2160,
+      bitrate: 40_000_000,
+    }),
+    probeVideo('video/mp4; codecs="hvc1.2.4.L153.B0"', {
+      type: 'file',
+      width: 3840,
+      height: 2160,
+      bitrate: 40_000_000,
+    }),
+    probeVideo('video/mp4; codecs="av01.0.08M.08"', { type: 'file' }),
+    // hdr=true means "send me the 10-bit PQ stream untouched; I decode the
+    // metadata and tone-map for my own display" — NOT "I have an HDR panel".
+    probeVideo('video/mp4; codecs="hvc1.2.4.L153.B0"', {
+      type: 'file',
+      width: 3840,
+      height: 2160,
+      bitrate: 40_000_000,
+      transferFunction: 'pq',
+      hdrMetadataType: 'smpteSt2086',
+      colorGamut: 'rec2020',
+    }),
+    // The Chrome 6-channel-AAC liar-catcher: isTypeSupported says yes, the
+    // actual SourceBuffer append fails. decodingInfo knows the truth.
+    probeAudio('audio/mp4; codecs="mp4a.40.2"', 6, 'media-source'),
+    probeAudio('audio/mp4; codecs="ec-3"', 6, 'media-source'),
+    probeAudio('audio/mp4; codecs="ec-3"', 6, 'file'),
+    probeAudio('audio/mp4; codecs="ac-3"', 6, 'media-source'),
+    probeAudio('audio/mp4; codecs="ac-3"', 6, 'file'),
+  ])
+
+  const hevc = hevcMseMain && hevcMse10 && hevcFile10
+  // audio_codecs drives BOTH direct play (progressive file) AND the
+  // transcoder's copy-into-HLS decision, so a codec is advertised only when
+  // both delivery paths can decode it (Safari/Edge yes; Chrome/Firefox no).
+  const eac3 = eac3Mse && eac3File
+  const ac3 = ac3Mse && ac3File
+  return {
+    // Never 'mkv': no browser progressive-plays matroska (the backend
+    // hard-denies it too — defense in depth).
+    containers: ['mp4'],
+    video_codecs: ['h264', ...(hevc ? ['hevc'] : []), ...(av1File ? ['av1'] : [])],
+    max_height: 2160,
+    hdr: hdr10,
+    audio_codecs: ['aac', ...(eac3 ? ['eac3'] : []), ...(ac3 ? ['ac3'] : [])],
+    aac_max_channels: aac6 ? 6 : 2,
+    // HEVC fMP4 segments need the MSE-side decode (hls.js appends them raw).
+    hls_fmp4_hevc: hevcMseMain && hevcMse10,
+  }
+}
+
+let probedCapsPromise: Promise<PlaybackCaps> | null = null
+
+/** The real, probed capabilities of this browser — resolved once per page
+ *  load and cached (the probes are pure feature detection; nothing about
+ *  them changes within a session). Falls back to `browserCaps()` on any
+ *  failure, so callers can always await this safely. */
+export function probedCaps(): Promise<PlaybackCaps> {
+  probedCapsPromise ??= buildProbedCaps().catch(() => browserCaps())
+  return probedCapsPromise
+}
+
+/** Test seam: reset the probe cache (vitest re-runs with fresh mocks). */
+export function resetProbedCapsForTest(): void {
+  probedCapsPromise = null
 }
 
 // ── Normalizers ──────────────────────────────────────────────────────
@@ -408,14 +592,18 @@ export const mediaApi = {
     ),
   scan: () => post<ScanResponse, Record<string, never>>('/scan', {}),
 
-  /** Request a playback grant. Returns a tokenised URL the player loads. */
-  playback: (
+  /** Request a playback grant. Returns a tokenised URL the player loads.
+   *  With no explicit caps, the REAL probed capabilities of this browser are
+   *  advertised (cached after the first call), so HEVC/HDR/E-AC-3 titles
+   *  direct-play or copy-remux wherever the browser proved it can decode
+   *  them instead of being blanket re-encoded. */
+  playback: async (
     kind: PlayableKind,
     id: number,
-    caps: PlaybackCaps = browserCaps(),
+    caps?: PlaybackCaps,
     startPositionSecs?: number,
   ) => {
-    const body: PlaybackRequest = { ...caps }
+    const body: PlaybackRequest = { ...(caps ?? (await probedCaps())) }
     if (startPositionSecs != null && Number.isFinite(startPositionSecs) && startPositionSecs > 0) {
       body.start_secs = Math.floor(startPositionSecs)
     }
