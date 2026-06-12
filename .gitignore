@@ -31,6 +31,8 @@ dist-ssr
 # Local tooling
 .claude/
 .graphify/
+.agents/
+skills-lock.json
 
 # Scratch scripts (underscore-prefixed in scripts/ are local-only)
 scripts/_*
