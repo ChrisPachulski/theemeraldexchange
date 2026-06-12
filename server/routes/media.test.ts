@@ -351,6 +351,68 @@ describe('media playback grant', () => {
     expect(mockFetch).not.toHaveBeenCalled()
   })
 
+  it('force_hls overrides a direct-play grant with buffered (hls) delivery', async () => {
+    // Stall escalation: media-core says directPlay:true, but the client
+    // demanded buffered delivery — the route must skip the progressive
+    // early-return and run the stream handoff with force_transcode=true.
+    mockFetchTimed
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ directPlay: true, file: { duration_secs: 5400 } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            transcode: true,
+            sessionId: 'sess-esc',
+            manifestUrl: '/api/transcode/session/sess-esc/index.m3u8',
+            heartbeatUrl: '/api/transcode/session/sess-esc/heartbeat',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response('#EXTM3U\n#EXTINF:6.0,\nseg_00000.ts\n', {
+          status: 200,
+          headers: { 'Content-Type': 'application/vnd.apple.mpegurl' },
+        }),
+      )
+
+    const res = await media.request('/playback/movie/7', {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: JSON.stringify({ force_hls: true, start_secs: 612 }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { delivery: string; url: string }
+    expect(body.delivery).toBe('hls')
+    expect(body.url).toMatch(/^\/api\/transcode\/session\/sess-esc\/index\.m3u8\?t=.+/)
+    const handoffUrl = String(mockFetchTimed.mock.calls[1][0])
+    expect(handoffUrl).toContain('/api/media/stream/movie/7?')
+    expect(handoffUrl).toContain('force_transcode=true')
+    expect(handoffUrl).toContain('start_secs=612')
+  })
+
+  it('force_hls absent → a direct-play grant stays progressive (no handoff)', async () => {
+    mockFetchTimed.mockResolvedValueOnce(
+      new Response(JSON.stringify({ directPlay: true, file: { duration_secs: 1200 } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const res = await media.request('/playback/movie/7', {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: JSON.stringify({ force_hls: false }),
+    })
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as { delivery: string }).delivery).toBe('progressive')
+    expect(mockFetchTimed).toHaveBeenCalledOnce()
+  })
+
   it('readiness poll is bounded by wall-clock, not iteration count', async () => {
     // Each probe consumes 5s (slow-but-responding transcoder, under its own
     // LAN timeout) and never reports a segment. The 12s wall-clock deadline
