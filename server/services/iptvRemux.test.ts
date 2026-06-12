@@ -67,7 +67,8 @@ describe('iptv remux session', () => {
     expect(args).toContain('-hls_time')
     expect(args).toContain('4')
     expect(args).toContain('-hls_list_size')
-    expect(args).toContain('8')
+    // ~64s window: a briefly-lagging player must still find its segments.
+    expect(args).toContain('16')
     expect(args).toContain('-hls_flags')
     expect(args).toContain('delete_segments+append_list+omit_endlist')
     expect(args).toContain('-hls_segment_filename')

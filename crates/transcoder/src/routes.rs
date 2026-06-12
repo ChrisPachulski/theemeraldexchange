@@ -411,12 +411,21 @@ async fn session_manifest(
         return session_not_found(); // reaped between the owner check and here
     };
     match tokio::fs::read(&path).await {
+        // The manifest is a small, live document (EVENT playlist grows until
+        // ENDLIST): never cache it, and never let the tunnel edge hold it.
         Ok(bytes) => (
             StatusCode::OK,
-            [(
-                axum::http::header::CONTENT_TYPE,
-                "application/vnd.apple.mpegurl",
-            )],
+            [
+                (
+                    axum::http::header::CONTENT_TYPE,
+                    "application/vnd.apple.mpegurl",
+                ),
+                (axum::http::header::CACHE_CONTROL, "no-store"),
+                (
+                    axum::http::HeaderName::from_static("x-accel-buffering"),
+                    "no",
+                ),
+            ],
             bytes,
         )
             .into_response(),
@@ -469,13 +478,37 @@ async fn session_segment(
     } else {
         "video/mp2t"
     };
-    match tokio::fs::read(&path).await {
-        Ok(bytes) => (
-            StatusCode::OK,
-            [(axum::http::header::CONTENT_TYPE, content_type)],
-            bytes,
-        )
-            .into_response(),
+    // STREAM the segment instead of buffering it whole: ffmpeg has finished
+    // writing a segment before the playlist lists it, so the read is racing
+    // nothing — but a 10-20 MB fMP4 copy segment buffered in memory is also
+    // accumulated AGAIN by cloudflared (tunnel responses are edge-buffered by
+    // default) before the player sees byte one. A chunked body + the
+    // `X-Accel-Buffering: no` hint (honored on the tunnel path — proven by
+    // the live IPTV .ts proxy) keeps bytes flowing client-ward immediately.
+    // Segments are IMMUTABLE once written: names are monotonic across
+    // supervisor respawns (never reused for different bytes), so the browser
+    // may cache them forever — a seek-back/replay stops re-crossing the
+    // tunnel entirely.
+    match tokio::fs::File::open(&path).await {
+        Ok(file) => {
+            let stream = tokio_util::io::ReaderStream::new(file);
+            (
+                StatusCode::OK,
+                [
+                    (axum::http::header::CONTENT_TYPE, content_type),
+                    (
+                        axum::http::header::CACHE_CONTROL,
+                        "public, max-age=31536000, immutable",
+                    ),
+                    (
+                        axum::http::HeaderName::from_static("x-accel-buffering"),
+                        "no",
+                    ),
+                ],
+                axum::body::Body::from_stream(stream),
+            )
+                .into_response()
+        }
         // The session exists but ffmpeg has not written (or has rotated out)
         // this segment yet. delete_segments means old segments vanish; the
         // player should only ask for segments the live playlist still lists.
@@ -946,6 +979,15 @@ mod tests {
                 .unwrap(),
             "video/mp2t"
         );
+        // Segments are immutable (monotonic numbering — a name is never
+        // reused for different bytes) and must defeat the tunnel edge buffer.
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CACHE_CONTROL)
+                .unwrap(),
+            "public, max-age=31536000, immutable"
+        );
+        assert_eq!(resp.headers().get("x-accel-buffering").unwrap(), "no");
         let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
             .await
             .unwrap();
