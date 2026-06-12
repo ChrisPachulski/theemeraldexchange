@@ -56,6 +56,13 @@ export type IptvPlayerProps = {
    *  pins startPosition to 0 (a resume offset is baked server-side via -ss,
    *  so the session timeline always begins at the intended position). */
   vodHls?: boolean
+  /** The session's known total media duration (secs). An HLS transcode grows
+   *  its playlist as ffmpeg writes segments, so the element's duration — the
+   *  total time the native controls render — creeps from ~a minute up to the
+   *  full title over the first ~30 s of a session. The grant already knows
+   *  the real total: pin MediaSource.duration to it at attach so the
+   *  timeline reads full-length from the first frame. */
+  pinnedDurationSecs?: number | null
   onPositionUpdate?: (pos: number, durationSecs: number | null) => void
   onEnded?: () => void
   /** Progressive delivery only: fired ONCE when the stream has genuinely
@@ -375,6 +382,60 @@ export function createProgressiveStallEscalator(opts: {
   return { onStall, onProgress, cleanup }
 }
 
+// ── HLS known-duration pin ───────────────────────────────────────────
+//
+// A VOD transcode session serves an EVENT playlist that GROWS as ffmpeg
+// writes segments, and hls.js derives MediaSource.duration from the
+// playlist — so the native controls' total time creeps upward until the
+// transcode finishes (ENDLIST). The grant carries the probed full-title
+// duration, so pin MediaSource.duration to it the moment the source
+// attaches. hls.js only ever GROWS the duration (BufferController skips
+// the update when the element already reports a larger finite duration),
+// so a single early pin holds; re-asserting on each playlist refresh
+// covers the attach-races and the recoverMediaError() re-attach path
+// (which builds a fresh, unpinned MediaSource). Once ENDLIST lands the
+// pin stops: hls.js + MSE endOfStream() snap the duration to the exact
+// muxed total, which is authoritative over the probe estimate.
+export type PinnableMediaSource = { duration: number; readyState: string }
+
+export function createHlsDurationPin(opts: {
+  durationSecs: number
+  isCancelled: () => boolean
+}): {
+  onMediaAttached: (evt: unknown, data: { mediaSource?: PinnableMediaSource | null }) => void
+  onLevelUpdated: (evt: unknown, data: { details: { live: boolean } }) => void
+} {
+  const { durationSecs, isCancelled } = opts
+  let mediaSource: PinnableMediaSource | null = null
+
+  const pin = () => {
+    if (isCancelled() || !mediaSource) return
+    // Setting duration is only legal on an open MediaSource; 'ended' means
+    // endOfStream() already fixed the true total — never fight that.
+    if (mediaSource.readyState !== 'open') return
+    // NaN (nothing buffered yet) fails this comparison too, so a fresh
+    // MediaSource always takes the pin. Never shrink an already-larger
+    // duration: if the playlist outgrows the probe estimate, it wins.
+    if (mediaSource.duration >= durationSecs) return
+    try {
+      mediaSource.duration = durationSecs
+    } catch {
+      // A SourceBuffer append was mid-flight (setting duration then throws
+      // InvalidStateError); the next playlist refresh retries.
+    }
+  }
+
+  return {
+    onMediaAttached: (_evt, data) => {
+      mediaSource = data.mediaSource ?? null
+      pin()
+    },
+    onLevelUpdated: (_evt, data) => {
+      if (data.details.live) pin()
+    },
+  }
+}
+
 export const MAX_NET_RETRIES = 8
 export const MEDIA_RECOVERY_WINDOW_MS = 3000
 
@@ -434,6 +495,7 @@ export default function IptvPlayer({
   autoPlay = false,
   startPositionSecs,
   vodHls = false,
+  pinnedDurationSecs,
   onPositionUpdate,
   onEnded,
   onDeliveryStruggling,
@@ -672,6 +734,18 @@ export default function IptvPlayer({
           video,
           isCancelled: () => cancelled,
         })
+
+        // Full-length timeline from the first frame: pin MediaSource.duration
+        // to the grant's known total instead of letting it creep up with the
+        // growing transcode playlist (see createHlsDurationPin).
+        if (pinnedDurationSecs != null && Number.isFinite(pinnedDurationSecs) && pinnedDurationSecs > 0) {
+          const durationPin = createHlsDurationPin({
+            durationSecs: pinnedDurationSecs,
+            isCancelled: () => cancelled,
+          })
+          hls.on(Hls.Events.MEDIA_ATTACHED, durationPin.onMediaAttached)
+          hls.on(Hls.Events.LEVEL_UPDATED, durationPin.onLevelUpdated)
+        }
         video.addEventListener('waiting', stallWatchdog.onStall)
         video.addEventListener('stalled', stallWatchdog.onStall)
         video.addEventListener('playing', stallWatchdog.onProgress)
@@ -838,7 +912,7 @@ export default function IptvPlayer({
       resetVideo()
       resetTracks()
     }
-  }, [autoPlay, grant, vodHls, onDeliveryStruggling])
+  }, [autoPlay, grant, vodHls, pinnedDurationSecs, onDeliveryStruggling])
 
   const chooseAudioTrack = (trackId: number) => {
     const applied = applyAudioTrack(

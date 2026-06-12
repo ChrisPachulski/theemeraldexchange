@@ -3,6 +3,7 @@ import {
   absoluteProgress,
   COMPLETE_TAIL_SECS,
   HEARTBEAT_INTERVAL_MS,
+  hlsPinnedDurationSecs,
   playerStartPosition,
   startPlaybackSession,
   type PlaybackSessionApi,
@@ -297,5 +298,33 @@ describe('absoluteProgress', () => {
     })
 
     expect(r.dur).toBe(5400)
+  })
+})
+
+describe('hlsPinnedDurationSecs', () => {
+  it('returns the remaining-title length for an HLS grant with a resume offset', () => {
+    expect(
+      hlsPinnedDurationSecs({ delivery: 'hls', grantDurationSecs: 7679, startPositionSecs: 600 }),
+    ).toBe(7079)
+  })
+
+  it('returns the full title length when starting from the top', () => {
+    expect(hlsPinnedDurationSecs({ delivery: 'hls', grantDurationSecs: 7679 })).toBe(7679)
+  })
+
+  it('never pins progressive delivery (the file reports its own duration)', () => {
+    expect(
+      hlsPinnedDurationSecs({ delivery: 'progressive', grantDurationSecs: 7679 }),
+    ).toBeNull()
+  })
+
+  it('returns null when the grant carries no duration', () => {
+    expect(hlsPinnedDurationSecs({ delivery: 'hls', grantDurationSecs: null })).toBeNull()
+  })
+
+  it('returns null when the resume offset consumes the whole title', () => {
+    expect(
+      hlsPinnedDurationSecs({ delivery: 'hls', grantDurationSecs: 600, startPositionSecs: 600 }),
+    ).toBeNull()
   })
 })

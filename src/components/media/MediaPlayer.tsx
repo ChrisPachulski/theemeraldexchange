@@ -7,6 +7,7 @@ import { useModalA11y } from '../../lib/hooks/useModalA11y'
 import {
   absoluteProgress,
   COMPLETE_TAIL_SECS,
+  hlsPinnedDurationSecs,
   playerStartPosition,
   startPlaybackSession,
   type PlaybackSession,
@@ -28,6 +29,9 @@ export type MediaPlayerViewProps = {
   sessionLost: boolean
   streamGrant: StreamGrant | null
   startPositionSecs?: number
+  /** Known total session duration for HLS grants — pins the player timeline
+   *  to full length immediately (see hlsPinnedDurationSecs). */
+  pinnedDurationSecs?: number | null
   containerRef?: Ref<HTMLDivElement>
   onClose: () => void
   onRetry: () => void
@@ -47,6 +51,7 @@ export function MediaPlayerView({
   sessionLost,
   streamGrant,
   startPositionSecs,
+  pinnedDurationSecs,
   containerRef,
   onClose,
   onRetry,
@@ -90,6 +95,7 @@ export function MediaPlayerView({
           grant={streamGrant}
           autoPlay
           startPositionSecs={playerStartPosition(streamGrant.delivery, startPositionSecs)}
+          pinnedDurationSecs={pinnedDurationSecs}
           vodHls
           onPositionUpdate={onPositionUpdate}
           onEnded={onEnded}
@@ -129,6 +135,10 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
   // read them without extra dependencies — the sessionKey bump re-runs it.
   const forceHlsRef = useRef(false)
   const escalateStartRef = useRef<number | null>(null)
+  // Render-readable mirror of escalateStartRef (refs must not be read during
+  // render): feeds the pinned-duration math below. Set alongside the ref in
+  // onDeliveryStruggling, inside the same batch as the sessionKey bump.
+  const [escalatedStartSecs, setEscalatedStartSecs] = useState<number | null>(null)
 
   // Plain-div dialog: useModalA11y supplies Escape-to-close, the focus trap,
   // and focus restoration that aria-modal="true" promises (LiveTab pattern).
@@ -182,6 +192,7 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
     if (forceHlsRef.current) return
     forceHlsRef.current = true
     escalateStartRef.current = Math.floor(latest.current.pos)
+    setEscalatedStartSecs(escalateStartRef.current)
     setGrant(null)
     setSessionKey((key) => key + 1)
   }, [])
@@ -262,6 +273,18 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
     sessionRef.current?.stop()
   }, [report, grant?.durationSecs])
 
+  // Known total session duration so the HLS timeline reads full-length from
+  // the first frame (the grant's probed duration minus the server-baked -ss
+  // offset — after escalation that's the captured playhead, same effective
+  // start absoluteProgress uses, read from the render-safe state mirror).
+  const pinnedDurationSecs = grant
+    ? hlsPinnedDurationSecs({
+        delivery: grant.delivery,
+        grantDurationSecs: grant.durationSecs ?? null,
+        startPositionSecs: escalatedStartSecs ?? startPositionSecs,
+      })
+    : null
+
   return (
     <MediaPlayerView
       title={title}
@@ -269,6 +292,7 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
       sessionLost={sessionLost}
       streamGrant={streamGrant}
       startPositionSecs={startPositionSecs}
+      pinnedDurationSecs={pinnedDurationSecs}
       containerRef={modalRef}
       onClose={onClose}
       onRetry={retry}

@@ -130,6 +130,24 @@ export function playerStartPosition(
   return delivery === 'progressive' ? startPositionSecs : undefined
 }
 
+/** Session-local timeline length for a transcoded (HLS) grant, used to pin
+ *  MediaSource.duration so the player's total time reads full-length from the
+ *  first frame instead of creeping up with the growing transcode playlist
+ *  (see IptvPlayer's createHlsDurationPin). A resume offset is baked
+ *  server-side via ffmpeg -ss, so the session's timeline covers only the
+ *  REMAINDER of the title: grant duration minus the effective start. Null
+ *  (no pin) for progressive delivery — the original file already reports its
+ *  true duration — and whenever the grant carries no duration. */
+export function hlsPinnedDurationSecs(args: {
+  delivery: PlaybackGrant['delivery']
+  grantDurationSecs: number | null
+  startPositionSecs?: number
+}): number | null {
+  if (args.delivery !== 'hls' || args.grantDurationSecs == null) return null
+  const remaining = args.grantDurationSecs - (args.startPositionSecs ?? 0)
+  return Number.isFinite(remaining) && remaining > 0 ? remaining : null
+}
+
 /** Map the <video> element's (position, duration) to absolute title progress.
  *  For a transcoded (HLS) resume the backend bakes the offset into ffmpeg
  *  (-ss start_secs), so the element timeline restarts near 0 — the real
