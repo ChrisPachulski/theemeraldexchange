@@ -278,34 +278,6 @@ describe('absoluteProgress', () => {
     expect(r).toEqual({ pos: 642, dur: 7200, completed: false })
   })
 
-  it("never adds the offset on an 'absolute' timeline (hls.js timelineOffset)", () => {
-    // The hls.js engine already presents the -ss session at title time —
-    // adding the resume offset again would double-count every heartbeat.
-    const r = absoluteProgress({
-      delivery: 'hls',
-      grantDurationSecs: 7200,
-      startPositionSecs: 600,
-      positionSecs: 642,
-      durationSecs: 30,
-      timelineMode: 'absolute',
-    })
-
-    expect(r).toEqual({ pos: 642, dur: 7200, completed: false })
-  })
-
-  it("keeps the offset on an explicit 'session' timeline (native HLS engine)", () => {
-    const r = absoluteProgress({
-      delivery: 'hls',
-      grantDurationSecs: 7200,
-      startPositionSecs: 600,
-      positionSecs: 42,
-      durationSecs: 30,
-      timelineMode: 'session',
-    })
-
-    expect(r.pos).toBe(642)
-  })
-
   it('marks the title complete inside the credits tail', () => {
     const r = absoluteProgress({
       delivery: 'hls',
@@ -331,11 +303,23 @@ describe('absoluteProgress', () => {
 })
 
 describe('hlsPinnedDurationSecs', () => {
-  it('pins the FULL title length — the absolute timeline ends at the real end', () => {
-    // The hls.js engine shifts a resumed session to absolute time via
-    // timelineOffset, so the pinned end is always the full duration; a
-    // remaining-length pin would truncate the visible timeline.
+  it('pins the full length for a fresh session', () => {
     expect(hlsPinnedDurationSecs({ delivery: 'hls', grantDurationSecs: 7679 })).toBe(7679)
+  })
+
+  it('pins the REMAINING length for a resumed session (-ss media timeline starts at 0)', () => {
+    // The media timeline is the raw session; MediaControls adds the offset
+    // back for display. Pinning the full length would let the playhead seek
+    // into the offset-worth of timeline past the session's real end.
+    expect(
+      hlsPinnedDurationSecs({ delivery: 'hls', grantDurationSecs: 7679, startPositionSecs: 600 }),
+    ).toBe(7079)
+  })
+
+  it('returns null when the offset consumes the whole duration', () => {
+    expect(
+      hlsPinnedDurationSecs({ delivery: 'hls', grantDurationSecs: 600, startPositionSecs: 600 }),
+    ).toBeNull()
   })
 
   it('never pins progressive delivery (the file reports its own duration)', () => {

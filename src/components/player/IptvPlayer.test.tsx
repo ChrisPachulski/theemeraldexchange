@@ -14,11 +14,8 @@ import IptvPlayer, {
   createHlsDurationPin,
   createHlsStallWatchdog,
   createProgressiveStallEscalator,
-  createHlsStartAnchor,
-  createSeekFloorGuard,
   selectHlsEngine,
   HLS_PLAYLIST_LOAD_POLICY,
-  SEEK_FLOOR_TOLERANCE_SECS,
   ESCALATE_CONFIRM_MS,
   ESCALATE_WINDOW_MS,
   MAX_NET_RETRIES,
@@ -93,100 +90,6 @@ describe('IptvPlayer', () => {
     const html = renderToStaticMarkup(<IptvPlayer grant={grant} />)
 
     expect(html).toContain('<video')
-  })
-})
-
-describe('createHlsStartAnchor', () => {
-  // hls.js edge-starts growing EVENT playlists and ignores startPosition
-  // when timelineOffset is set — the anchor pins playback to the session's
-  // real start (first fragment) exactly once.
-  it('anchors the playhead to the first fragment start, once', () => {
-    const video = { currentTime: 0 }
-    const anchor = createHlsStartAnchor({ video, isCancelled: () => false })
-
-    anchor.onLevelUpdated(null, { details: { fragments: [{ start: 2036 }, { start: 2040 }] } })
-    expect(video.currentTime).toBe(2036)
-
-    // Later refreshes (sliding details, growing playlist) must not re-seek.
-    anchor.onLevelUpdated(null, { details: { fragments: [{ start: 2036 }] } })
-    video.currentTime = 2100
-    anchor.onLevelUpdated(null, { details: { fragments: [{ start: 2036 }] } })
-    expect(video.currentTime).toBe(2100)
-  })
-
-  it('waits through an empty playlist and anchors on the next refresh', () => {
-    const video = { currentTime: 0 }
-    const anchor = createHlsStartAnchor({ video, isCancelled: () => false })
-
-    anchor.onLevelUpdated(null, { details: { fragments: [] } })
-    expect(video.currentTime).toBe(0)
-    anchor.onLevelUpdated(null, { details: { fragments: [{ start: 600 }] } })
-    expect(video.currentTime).toBe(600)
-  })
-
-  it('does nothing after the engine effect is cancelled', () => {
-    const video = { currentTime: 0 }
-    const anchor = createHlsStartAnchor({ video, isCancelled: () => true })
-
-    anchor.onLevelUpdated(null, { details: { fragments: [{ start: 2036 }] } })
-    expect(video.currentTime).toBe(0)
-  })
-})
-
-describe('createSeekFloorGuard', () => {
-  // A resumed -ss session presented at absolute time (timelineOffset) shows
-  // the pre-resume title region on the seekbar but has no media for it; the
-  // guard hands such seeks to the owner for a re-grant.
-  it('fires once with the floored target when seeking below the session floor', () => {
-    const onSeekBelowFloor = vi.fn()
-    const guard = createSeekFloorGuard({
-      floorSecs: 772,
-      isCancelled: () => false,
-      onSeekBelowFloor,
-    })
-
-    guard.onSeeking(300.7)
-    expect(onSeekBelowFloor).toHaveBeenCalledExactlyOnceWith(300)
-
-    guard.onSeeking(100) // already fired — the re-grant remounts the engine
-    expect(onSeekBelowFloor).toHaveBeenCalledOnce()
-  })
-
-  it('tolerates keyframe snapping just below the floor and any seek above it', () => {
-    const onSeekBelowFloor = vi.fn()
-    const guard = createSeekFloorGuard({
-      floorSecs: 772,
-      isCancelled: () => false,
-      onSeekBelowFloor,
-    })
-
-    guard.onSeeking(772 - SEEK_FLOOR_TOLERANCE_SECS) // boundary: not below
-    guard.onSeeking(900)
-    expect(onSeekBelowFloor).not.toHaveBeenCalled()
-  })
-
-  it('never fires after the engine effect is cancelled', () => {
-    const onSeekBelowFloor = vi.fn()
-    const guard = createSeekFloorGuard({
-      floorSecs: 772,
-      isCancelled: () => true,
-      onSeekBelowFloor,
-    })
-
-    guard.onSeeking(10)
-    expect(onSeekBelowFloor).not.toHaveBeenCalled()
-  })
-
-  it('clamps targets to zero (no negative re-grant offsets)', () => {
-    const onSeekBelowFloor = vi.fn()
-    const guard = createSeekFloorGuard({
-      floorSecs: 5,
-      isCancelled: () => false,
-      onSeekBelowFloor,
-    })
-
-    guard.onSeeking(-1)
-    expect(onSeekBelowFloor).toHaveBeenCalledExactlyOnceWith(0)
   })
 })
 

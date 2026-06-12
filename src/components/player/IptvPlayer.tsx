@@ -63,21 +63,19 @@ export type IptvPlayerProps = {
    *  the real total: pin MediaSource.duration to it at attach so the
    *  timeline reads full-length from the first frame. */
   pinnedDurationSecs?: number | null
-  /** HLS resume: present the -ss session at ABSOLUTE title time. The hls.js
-   *  engine applies this as `timelineOffset` (fragment starts and the initial
-   *  position shift by the offset), so the native controls read the real
-   *  elapsed time instead of restarting at 0:00. MSE branch only — the
-   *  native-HLS engine (iOS) plays the raw session timeline. */
-  timelineOffsetSecs?: number | null
-  /** Reports which timeline the <video> exposes for this engine — 'absolute'
-   *  (hls.js + timelineOffset) or 'session' (native HLS, raw -ss session) —
-   *  so the owner's progress math adds the resume offset exactly once. */
-  onTimelineMode?: (mode: 'absolute' | 'session') => void
-  /** With an absolute timeline the seekbar shows the title region BEFORE the
-   *  session's -ss start, which this session has no media for. Fired once
-   *  when the user seeks below that floor; the owner is expected to re-grant
-   *  the session at the target position. */
-  onSeekBeforeStart?: (targetSecs: number) => void
+  /** Render the browser's native control bar (default). MediaPlayer passes
+   *  false and draws its own controls instead: a resumed HLS session's media
+   *  timeline is the raw -ss session (starts at 0:00), so only an app-drawn
+   *  bar can present absolute title time. (hls.js's `timelineOffset` — the
+   *  one mechanism that could shift the MEDIA timeline — is broken on the
+   *  growing EVENT playlists these sessions serve: its live code paths mix
+   *  offset and playlist coordinates, discarding startPosition, double-adding
+   *  the offset, and refusing seeks behind the live-sync point. Lab- and
+   *  production-verified; do not reintroduce it.) */
+  nativeControls?: boolean
+  /** Hands the owner the underlying <video> element on mount (null on
+   *  unmount) so custom controls can drive play/pause/seek/volume directly. */
+  onVideoElement?: (video: HTMLVideoElement | null) => void
   onPositionUpdate?: (pos: number, durationSecs: number | null) => void
   onEnded?: () => void
   /** Progressive delivery only: fired ONCE when the stream has genuinely
@@ -204,66 +202,6 @@ export function selectHlsEngine(mseSupported: boolean, nativeHlsCanPlay: string)
   if (mseSupported) return 'mse'
   if (nativeHlsCanPlay) return 'native' // 'maybe' | 'probably' — any non-empty string
   return 'unsupported'
-}
-
-// ── VOD start anchor ─────────────────────────────────────────────────
-//
-// hls.js treats a growing EVENT playlist as live and picks its own start
-// position near the live edge — and with `timelineOffset` set it ignores
-// `startPosition` outright (lab-verified: configured 2036, started 400+ s
-// off as the edge grew). A faster-than-realtime transcode is minutes ahead
-// by attach time, so an edge start opens the title minutes past the resume
-// point. Anchor deterministically instead: on the FIRST level details, seek
-// the <video> to the playlist's first fragment start (the -ss session start
-// on the shifted timeline — always servable, so the de9411c "never client-
-// seek HLS past the window" hazard doesn't apply). Side benefit: startup
-// stops wandering the edge first (measured 8.5 s → 1.2 s to first frame).
-export function createHlsStartAnchor(opts: {
-  video: { currentTime: number }
-  isCancelled: () => boolean
-}): {
-  onLevelUpdated: (
-    evt: unknown,
-    data: { details: { fragments: Array<{ start: number }> } },
-  ) => void
-} {
-  let anchored = false
-  return {
-    onLevelUpdated: (_evt, data) => {
-      if (anchored || opts.isCancelled()) return
-      const first = data.details.fragments[0]
-      if (!first) return // empty playlist — wait for the next refresh
-      anchored = true
-      opts.video.currentTime = first.start
-    },
-  }
-}
-
-// ── Seek-below-session-floor guard ───────────────────────────────────
-//
-// A resumed HLS session is served from ffmpeg -ss, so with the absolute
-// timeline (`timelineOffset`) the seekbar shows the part of the title BEFORE
-// the resume point — a region this session has no media for; seeking into it
-// would spin forever. Detect it and hand the target to the owner for a
-// re-grant. Fires at most once: the re-grant remounts the engine with a new
-// floor. A small tolerance absorbs keyframe snapping right at the floor.
-export const SEEK_FLOOR_TOLERANCE_SECS = 2
-
-export function createSeekFloorGuard(opts: {
-  floorSecs: number
-  isCancelled: () => boolean
-  onSeekBelowFloor: (targetSecs: number) => void
-}): { onSeeking: (currentTimeSecs: number) => void } {
-  let fired = false
-  return {
-    onSeeking: (currentTimeSecs) => {
-      if (fired || opts.isCancelled()) return
-      if (currentTimeSecs < opts.floorSecs - SEEK_FLOOR_TOLERANCE_SECS) {
-        fired = true
-        opts.onSeekBelowFloor(Math.max(0, Math.floor(currentTimeSecs)))
-      }
-    },
-  }
 }
 
 // ── Playlist load policy ─────────────────────────────────────────────
@@ -593,9 +531,8 @@ export default function IptvPlayer({
   startPositionSecs,
   vodHls = false,
   pinnedDurationSecs,
-  timelineOffsetSecs,
-  onTimelineMode,
-  onSeekBeforeStart,
+  nativeControls = true,
+  onVideoElement,
   onPositionUpdate,
   onEnded,
   onDeliveryStruggling,
@@ -607,6 +544,13 @@ export default function IptvPlayer({
   const [selectedAudio, setSelectedAudio] = useState(0)
   const [selectedSubtitle, setSelectedSubtitle] = useState(-1)
   const [error, setError] = useState<string | null>(null)
+
+  // Hand the element to the owner (custom controls). Mount-scoped: the
+  // <video> itself persists across engine swaps, so this fires once.
+  useEffect(() => {
+    onVideoElement?.(videoRef.current)
+    return () => onVideoElement?.(null)
+  }, [onVideoElement])
 
   useEffect(() => {
     const video = videoRef.current
@@ -707,9 +651,6 @@ export default function IptvPlayer({
 
         const engine = selectHlsEngine(Hls.isSupported(), video.canPlayType('application/vnd.apple.mpegurl'))
         if (engine === 'native') {
-          // Raw -ss session timeline (starts at 0): progress math must add
-          // the resume offset back.
-          onTimelineMode?.('session')
           video.src = grant.url
           updateNativeTracks()
           if (autoPlay) safePlay(video)
@@ -720,15 +661,6 @@ export default function IptvPlayer({
           return
         }
         // engine === 'mse' — drive the <video> through hls.js below.
-
-        // hls.js shifts the timeline by `timelineOffset`, so a resumed -ss
-        // session presents at ABSOLUTE title time (currentTime starts at the
-        // resume offset, not 0:00).
-        const timelineOffset =
-          vodHls && timelineOffsetSecs != null && Number.isFinite(timelineOffsetSecs) && timelineOffsetSecs > 0
-            ? timelineOffsetSecs
-            : 0
-        onTimelineMode?.('absolute')
 
         // Live HLS (the remux path) over the same proxy → cloudflared →
         // edge transport as mpegts. Default hls.js sits near the live edge
@@ -766,9 +698,8 @@ export default function IptvPlayer({
           //  * the default live-edge START — a faster-than-realtime encode
           //    (copy-remuxes run at I/O speed) is minutes ahead by attach
           //    time, so the movie opened minutes in → pin startPosition 0
-          //    (any resume offset is baked server-side via ffmpeg -ss and
-          //    re-applied to the timeline via timelineOffset, so playback
-          //    starts at startPosition + offset = the absolute resume point);
+          //    (any resume offset is baked server-side via ffmpeg -ss, so
+          //    session position 0 IS the resume point);
           //  * the max-latency CATCH-UP SEEK — with a finite cap, hls.js
           //    force-seeks the playhead toward the runaway "edge" mid-watch
           //    (observed: playback jumped 0:00 → 7:48 as the remux outran
@@ -787,7 +718,6 @@ export default function IptvPlayer({
           ...(vodHls
             ? {
                 startPosition: 0,
-                timelineOffset,
                 liveMaxLatencyDurationCount: Infinity,
                 maxBufferLength: 60,
                 maxMaxBufferLength: 120,
@@ -869,31 +799,6 @@ export default function IptvPlayer({
         video.addEventListener('playing', stallWatchdog.onProgress)
         video.addEventListener('timeupdate', stallWatchdog.onProgress)
 
-        // Deterministic start for VOD sessions: hls.js's live-edge default
-        // opens minutes past the -ss start (see createHlsStartAnchor).
-        if (vodHls) {
-          const startAnchor = createHlsStartAnchor({
-            video,
-            isCancelled: () => cancelled,
-          })
-          hls.on(Hls.Events.LEVEL_UPDATED, startAnchor.onLevelUpdated)
-        }
-
-        // The absolute timeline exposes the title region BEFORE this
-        // session's -ss start — media this session can never serve. A seek
-        // below that floor hands the target to the owner for a re-grant
-        // (createSeekFloorGuard fires once; the re-grant remounts the engine).
-        let onFloorSeeking: (() => void) | undefined
-        if (timelineOffset > 0 && onSeekBeforeStart) {
-          const seekFloor = createSeekFloorGuard({
-            floorSecs: timelineOffset,
-            isCancelled: () => cancelled,
-            onSeekBelowFloor: onSeekBeforeStart,
-          })
-          onFloorSeeking = () => seekFloor.onSeeking(video.currentTime)
-          video.addEventListener('seeking', onFloorSeeking)
-        }
-
         hls.loadSource(grant.url)
         hls.attachMedia(video)
         cleanupEngine = () => {
@@ -902,7 +807,6 @@ export default function IptvPlayer({
           video.removeEventListener('stalled', stallWatchdog.onStall)
           video.removeEventListener('playing', stallWatchdog.onProgress)
           video.removeEventListener('timeupdate', stallWatchdog.onProgress)
-          if (onFloorSeeking) video.removeEventListener('seeking', onFloorSeeking)
           hls.destroy()
         }
         updateHlsTracks()
@@ -1056,7 +960,7 @@ export default function IptvPlayer({
       resetVideo()
       resetTracks()
     }
-  }, [autoPlay, grant, vodHls, pinnedDurationSecs, timelineOffsetSecs, onTimelineMode, onSeekBeforeStart, onDeliveryStruggling])
+  }, [autoPlay, grant, vodHls, pinnedDurationSecs, onDeliveryStruggling])
 
   const chooseAudioTrack = (trackId: number) => {
     const applied = applyAudioTrack(
@@ -1079,7 +983,7 @@ export default function IptvPlayer({
         data-testid="iptv-player-video"
         className="iptv-player__video"
         src={grant.delivery === 'progressive' ? grant.url : undefined}
-        controls
+        controls={nativeControls}
         playsInline
         // Progressive direct play streams the ORIGINAL file over the tunnel;
         // the browser's readahead is the only buffer it gets, and with
