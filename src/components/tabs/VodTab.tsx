@@ -5,31 +5,20 @@ import { iptvApi, type StreamGrant, type VodDto } from '../../lib/api/iptv'
 import { useIptvCategories } from '../../lib/hooks/useIptvCategories'
 import { useIptvVod } from '../../lib/hooks/useIptvVod'
 import { useIptvFavoriteSet, useToggleIptvFavorite } from '../../lib/hooks/useIptvFavorites'
-import { useIptvHistoryIndex, useReportPosition } from '../../lib/hooks/useIptvHistory'
+import {
+  resumePercent,
+  resumePosition,
+  useIptvHistoryIndex,
+  useReportPosition,
+} from '../../lib/hooks/useIptvHistory'
 import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useModalA11y } from '../../lib/hooks/useModalA11y'
+import { ResumePrompt } from '../media/ResumePrompt'
 import { ConcurrencyLimitModal } from '../iptv/ConcurrencyLimitModal'
 import {
   concurrencyPayloadFromError,
   type ConcurrencyLimitPayload,
 } from '../iptv/concurrencyLimit'
-
-type ResumeRow = {
-  position_secs: number
-  duration_secs: number | null
-  completed: number
-}
-
-function resumePercent(row: ResumeRow | undefined): number | null {
-  if (!row || row.completed) return null
-  if (!row.duration_secs || row.duration_secs <= 0) return 0
-  return Math.min(100, Math.max(0, (row.position_secs / row.duration_secs) * 100))
-}
-
-function resumePosition(row: ResumeRow | undefined): number | undefined {
-  if (!row || row.completed || row.position_secs <= 0) return undefined
-  return row.position_secs
-}
 
 // The player dialog is a plain div (role=dialog/aria-modal), so useModalA11y
 // supplies the focus trap, Escape-to-close, and focus restoration that
@@ -70,6 +59,44 @@ function PlayerModal({
   )
 }
 
+// The resume-or-start-over prompt, in the same dialog chrome the player uses
+// (so focus trapping and Escape behave) but NO grant yet — the slot is claimed
+// only after the choice. Mirrors the local-media MediaPlayer's prompt-first
+// order via the shared ResumePrompt.
+function ResumeChoiceModal({
+  title,
+  resumeSecs,
+  onResume,
+  onStartOver,
+  onClose,
+}: {
+  title: string
+  resumeSecs: number
+  onResume: () => void
+  onStartOver: () => void
+  onClose: () => void
+}) {
+  const modalRef = useModalA11y<HTMLDivElement>(onClose)
+  return (
+    <div
+      ref={modalRef}
+      className="iptv-player-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      tabIndex={-1}
+    >
+      <div className="iptv-player-modal__header">
+        <h2>{title}</h2>
+        <button className="iptv-player-modal__close" type="button" onClick={onClose} aria-label="Close player">
+          ×
+        </button>
+      </div>
+      <ResumePrompt resumeSecs={resumeSecs} onResume={onResume} onStartOver={onStartOver} />
+    </div>
+  )
+}
+
 export default function VodTab() {
   const [q, setQ] = useState('')
   const [categoryId, setCategoryId] = useState<number | undefined>(undefined)
@@ -82,6 +109,9 @@ export default function VodTab() {
   } | null>(null)
   const [concurrencyError, setConcurrencyError] = useState<ConcurrencyLimitPayload | null>(null)
   const [pendingPlay, setPendingPlay] = useState<(() => Promise<void>) | null>(null)
+  // A saved resume point awaiting the user's resume-or-start-over choice. No
+  // grant is minted (no concurrency slot held) while this prompt is on screen.
+  const [resumeChoice, setResumeChoice] = useState<{ vod: VodDto; resumeSecs: number } | null>(null)
   const debounced = useDebounced(q, 250)
   const cats = useIptvCategories('vod')
   const limit = 100
@@ -96,16 +126,15 @@ export default function VodTab() {
   const pageStart = total > 0 ? offset + 1 : 0
   const pageEnd = Math.min(offset + count, total)
 
-  const playVod = async (vod: VodDto) => {
+  // Mint the grant and start playback at the chosen offset. The concurrency
+  // slot is claimed HERE — only after the resume choice (or immediately when
+  // there's no resume point). The retry re-attempts with the SAME chosen
+  // offset, never re-reading history (which may have changed since).
+  const startPlayback = async (vod: VodDto, startPositionSecs: number | undefined) => {
     const itemId = vod.stream_id.toString()
     const attempt = async () => {
       const grant = await iptvApi.grantVod(itemId)
-      setPlaying({
-        grant,
-        title: vod.name,
-        itemId,
-        startPositionSecs: resumePosition(history.get(`vod:${itemId}`)),
-      })
+      setPlaying({ grant, title: vod.name, itemId, startPositionSecs })
     }
     try {
       await attempt()
@@ -118,6 +147,19 @@ export default function VodTab() {
       }
       throw err
     }
+  }
+
+  const playVod = async (vod: VodDto) => {
+    const itemId = vod.stream_id.toString()
+    // Prompt resume-or-start-over BEFORE granting (no slot burned while the
+    // user reads it). resumePosition returns undefined for completed/0 rows, so
+    // those start fresh immediately.
+    const resumeSecs = resumePosition(history.get(`vod:${itemId}`))
+    if (resumeSecs != null) {
+      setResumeChoice({ vod, resumeSecs })
+      return
+    }
+    await startPlayback(vod, undefined)
   }
 
   const handleCardKeyDown = (event: KeyboardEvent, vod: VodDto) => {
@@ -204,6 +246,24 @@ export default function VodTab() {
           {(cats.data ?? []).map((c) => <option key={c.category_id} value={c.category_id}>{c.name}</option>)}
         </select>
       </footer>
+
+      {resumeChoice && (
+        <ResumeChoiceModal
+          title={resumeChoice.vod.name}
+          resumeSecs={resumeChoice.resumeSecs}
+          onResume={() => {
+            const { vod, resumeSecs } = resumeChoice
+            setResumeChoice(null)
+            void startPlayback(vod, resumeSecs)
+          }}
+          onStartOver={() => {
+            const { vod } = resumeChoice
+            setResumeChoice(null)
+            void startPlayback(vod, undefined)
+          }}
+          onClose={() => setResumeChoice(null)}
+        />
+      )}
 
       {playing && (
         <PlayerModal
