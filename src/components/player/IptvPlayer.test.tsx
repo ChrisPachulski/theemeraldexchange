@@ -11,6 +11,7 @@ import IptvPlayer, {
   applyAudioTrack,
   applySubtitleTrack,
   createFatalHlsErrorHandler,
+  createHlsDurationPin,
   createHlsStallWatchdog,
   createProgressiveStallEscalator,
   selectHlsEngine,
@@ -797,5 +798,88 @@ describe('createProgressiveStallEscalator', () => {
     h.scheduled[h.scheduled.length - 1].fn()
 
     expect(h.onEscalate).not.toHaveBeenCalled()
+  })
+})
+
+describe('createHlsDurationPin', () => {
+  const harness = (durationSecs = 7679) => {
+    let cancelled = false
+    const pin = createHlsDurationPin({ durationSecs, isCancelled: () => cancelled })
+    const mediaSource = { duration: Number.NaN, readyState: 'open' }
+    return { pin, mediaSource, cancel: () => (cancelled = true) }
+  }
+
+  it('pins the full duration on attach (fresh MediaSource reports NaN)', () => {
+    const h = harness()
+    h.pin.onMediaAttached(undefined, { mediaSource: h.mediaSource })
+
+    expect(h.mediaSource.duration).toBe(7679)
+  })
+
+  it('re-asserts the pin while the playlist is still growing (live details)', () => {
+    const h = harness()
+    h.pin.onMediaAttached(undefined, { mediaSource: h.mediaSource })
+    // Something (an hls.js code path) shrank it back to the playlist extent.
+    h.mediaSource.duration = 92
+    h.pin.onLevelUpdated(undefined, { details: { live: true } })
+
+    expect(h.mediaSource.duration).toBe(7679)
+  })
+
+  it('stops asserting once ENDLIST lands (live=false) — the muxed total wins', () => {
+    const h = harness()
+    h.pin.onMediaAttached(undefined, { mediaSource: h.mediaSource })
+    h.mediaSource.duration = 7675.4 // endOfStream() snapped to the real total
+    h.pin.onLevelUpdated(undefined, { details: { live: false } })
+
+    expect(h.mediaSource.duration).toBe(7675.4)
+  })
+
+  it('never shrinks a duration that already exceeds the probe estimate', () => {
+    const h = harness(7679)
+    h.mediaSource.duration = 7700
+    h.pin.onMediaAttached(undefined, { mediaSource: h.mediaSource })
+
+    expect(h.mediaSource.duration).toBe(7700)
+  })
+
+  it('leaves a non-open MediaSource alone (setting duration would throw)', () => {
+    const h = harness()
+    h.mediaSource.readyState = 'ended'
+    h.mediaSource.duration = 7675.4
+    h.pin.onMediaAttached(undefined, { mediaSource: h.mediaSource })
+
+    expect(h.mediaSource.duration).toBe(7675.4)
+  })
+
+  it('swallows a mid-append InvalidStateError and retries on the next refresh', () => {
+    const h = harness()
+    let blocked = true
+    let value = Number.NaN
+    const throwing = {
+      readyState: 'open',
+      get duration() {
+        return value
+      },
+      set duration(v: number) {
+        if (blocked) throw new Error('InvalidStateError: SourceBuffer updating')
+        value = v
+      },
+    }
+    h.pin.onMediaAttached(undefined, { mediaSource: throwing })
+    expect(Number.isNaN(throwing.duration)).toBe(true)
+
+    blocked = false
+    h.pin.onLevelUpdated(undefined, { details: { live: true } })
+    expect(throwing.duration).toBe(7679)
+  })
+
+  it('does nothing once cancelled or without a MediaSource handle', () => {
+    const h = harness()
+    h.pin.onLevelUpdated(undefined, { details: { live: true } }) // no attach yet
+    h.cancel()
+    h.pin.onMediaAttached(undefined, { mediaSource: h.mediaSource })
+
+    expect(Number.isNaN(h.mediaSource.duration)).toBe(true)
   })
 })
