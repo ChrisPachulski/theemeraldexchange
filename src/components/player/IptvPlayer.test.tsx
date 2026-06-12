@@ -12,7 +12,10 @@ import IptvPlayer, {
   applySubtitleTrack,
   createFatalHlsErrorHandler,
   createHlsStallWatchdog,
+  createProgressiveStallEscalator,
   selectHlsEngine,
+  ESCALATE_CONFIRM_MS,
+  ESCALATE_WINDOW_MS,
   MAX_NET_RETRIES,
   MEDIA_RECOVERY_WINDOW_MS,
   type RecoverableHls,
@@ -606,5 +609,193 @@ describe('createHlsStallWatchdog', () => {
     h.scheduled[0].fn()
 
     expect(h.hls.startLoad).not.toHaveBeenCalled()
+  })
+})
+
+describe('createProgressiveStallEscalator', () => {
+  function harness() {
+    const onEscalate = vi.fn()
+    const scheduled: Array<{ fn: () => void; delayMs: number }> = []
+    let cancelled = false
+    let currentTime = 0
+    let seeking = false
+    let nowMs = 0
+    const video = {
+      get currentTime() { return currentTime },
+      get seeking() { return seeking },
+    }
+    const esc = createProgressiveStallEscalator({
+      video: video as unknown as { currentTime: number; seeking: boolean },
+      onEscalate,
+      isCancelled: () => cancelled,
+      schedule: (fn: () => void, delayMs: number) => {
+        scheduled.push({ fn, delayMs })
+        return scheduled.length - 1
+      },
+      clearScheduled: (id: number) => {
+        scheduled[id] = { fn: () => {}, delayMs: -1 }
+      },
+      now: () => nowMs,
+    })
+    const activeTimers = () => scheduled.filter((s) => s.delayMs >= 0)
+    return {
+      onEscalate,
+      scheduled,
+      esc,
+      activeTimers,
+      cancel: () => { cancelled = true },
+      setSeeking: (v: boolean) => { seeking = v },
+      /** Advance the playhead AND the wall clock, then report progress. */
+      play: (secs: number) => {
+        currentTime += secs
+        nowMs += secs * 1000
+        esc.onProgress()
+      },
+      wait: (ms: number) => { nowMs += ms },
+      /** Fire the most recently scheduled still-active timer (consuming it,
+       *  as a real timeout would). */
+      fireLast: () => {
+        const active = activeTimers()
+        const entry = active[active.length - 1]
+        const fn = entry.fn
+        entry.delayMs = -1
+        fn()
+      },
+      /** Produce one CONFIRMED stall episode (playback must have begun). */
+      confirmedEpisode: () => {
+        esc.onStall()
+        nowMs += ESCALATE_CONFIRM_MS
+        const active = activeTimers()
+        const entry = active[active.length - 1]
+        const fn = entry.fn
+        entry.delayMs = -1
+        fn() // playhead unchanged → counts
+      },
+      /** ≥5 s of continuous progress to close the open episode. */
+      closeEpisode: () => {
+        currentTime += 1; nowMs += 1000; esc.onProgress()
+        currentTime += 5; nowMs += 5000; esc.onProgress()
+      },
+    }
+  }
+
+  it('escalates exactly once on the second confirmed episode', () => {
+    const h = harness()
+    h.play(2) // playback has begun
+
+    h.confirmedEpisode()
+    expect(h.onEscalate).not.toHaveBeenCalled()
+    h.closeEpisode()
+    h.confirmedEpisode()
+
+    expect(h.onEscalate).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores stalls before playback has begun', () => {
+    const h = harness()
+
+    h.esc.onStall()
+
+    expect(h.activeTimers().length).toBe(0)
+  })
+
+  it('ignores stalls while the user is seeking', () => {
+    const h = harness()
+    h.play(2)
+    h.setSeeking(true)
+
+    h.esc.onStall()
+
+    expect(h.activeTimers().length).toBe(0)
+    expect(h.onEscalate).not.toHaveBeenCalled()
+  })
+
+  it('a stall that recovers before the confirm window never counts', () => {
+    const h = harness()
+    h.play(2)
+
+    h.esc.onStall()
+    h.play(1) // playhead advanced → confirm cleared
+    h.closeEpisode()
+    h.confirmedEpisode() // only the FIRST confirmed episode
+
+    expect(h.onEscalate).not.toHaveBeenCalled()
+  })
+
+  it('repeated stall events inside one open episode count once', () => {
+    const h = harness()
+    h.play(2)
+
+    h.confirmedEpisode()
+    h.esc.onStall()
+    h.esc.onStall()
+
+    expect(h.activeTimers().length).toBe(0) // no new confirm timers stacked
+    expect(h.onEscalate).not.toHaveBeenCalled() // still just 1 episode
+  })
+
+  it('an episode only closes after 5s of continuous progress', () => {
+    const h = harness()
+    h.play(2)
+    h.confirmedEpisode()
+
+    // 2s of progress is NOT enough to close the episode…
+    h.play(1)
+    h.play(1)
+    // …so this stall is absorbed by the open episode, not counted as #2.
+    h.esc.onStall()
+
+    expect(h.onEscalate).not.toHaveBeenCalled()
+  })
+
+  it('episodes outside the rolling 120s window do not pair up', () => {
+    const h = harness()
+    h.play(2)
+
+    h.confirmedEpisode()
+    h.closeEpisode()
+    h.wait(ESCALATE_WINDOW_MS + 1000)
+    h.confirmedEpisode() // first episode expired → still only 1 in window
+    expect(h.onEscalate).not.toHaveBeenCalled()
+
+    h.closeEpisode()
+    h.confirmedEpisode() // 2 within the window now
+    expect(h.onEscalate).toHaveBeenCalledTimes(1)
+  })
+
+  it('disarms permanently after escalating', () => {
+    const h = harness()
+    h.play(2)
+    h.confirmedEpisode()
+    h.closeEpisode()
+    h.confirmedEpisode()
+    expect(h.onEscalate).toHaveBeenCalledTimes(1)
+
+    h.closeEpisode()
+    h.esc.onStall()
+
+    expect(h.activeTimers().length).toBe(0)
+    expect(h.onEscalate).toHaveBeenCalledTimes(1)
+  })
+
+  it('does nothing once cancelled', () => {
+    const h = harness()
+    h.play(2)
+    h.esc.onStall()
+    h.cancel()
+    h.wait(ESCALATE_CONFIRM_MS)
+    h.fireLast()
+
+    expect(h.onEscalate).not.toHaveBeenCalled()
+  })
+
+  it('cleanup cancels a pending confirm timer', () => {
+    const h = harness()
+    h.play(2)
+    h.esc.onStall()
+    h.esc.cleanup()
+    h.scheduled[h.scheduled.length - 1].fn()
+
+    expect(h.onEscalate).not.toHaveBeenCalled()
   })
 })

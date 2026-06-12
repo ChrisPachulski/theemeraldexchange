@@ -66,9 +66,27 @@ describe('startPlaybackSession — grant flow', () => {
     startPlaybackSession({ kind: 'movie', id: 9, startPositionSecs: 120, api, handlers })
     await vi.advanceTimersByTimeAsync(0)
 
-    expect(api.playback).toHaveBeenCalledExactlyOnceWith('movie', 9, undefined, 120)
+    expect(api.playback).toHaveBeenCalledExactlyOnceWith('movie', 9, undefined, 120, undefined)
     expect(handlers.onGrant).toHaveBeenCalledExactlyOnceWith(grant)
     expect(handlers.onGrantError).not.toHaveBeenCalled()
+  })
+
+  it('threads forceHls (stall escalation) through to the api grant call', async () => {
+    const grant = hlsGrant()
+    const { api, handlers } = harness(grant)
+
+    startPlaybackSession({
+      kind: 'movie',
+      id: 9,
+      startPositionSecs: 612,
+      forceHls: true,
+      api,
+      handlers,
+    })
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(api.playback).toHaveBeenCalledExactlyOnceWith('movie', 9, undefined, 612, true)
+    expect(handlers.onGrant).toHaveBeenCalledExactlyOnceWith(grant)
   })
 
   it('surfaces a grant failure as a readable error', async () => {

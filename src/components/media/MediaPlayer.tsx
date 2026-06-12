@@ -33,6 +33,9 @@ export type MediaPlayerViewProps = {
   onRetry: () => void
   onPositionUpdate: (positionSecs: number, durationSecs: number | null) => void
   onEnded: () => void
+  /** Progressive playback genuinely struggled — re-grant with buffered (HLS)
+   *  delivery at the current position (stall-escalation, see IptvPlayer). */
+  onDeliveryStruggling?: () => void
 }
 
 /** Presentational half of the player modal, exported so the node vitest env
@@ -49,6 +52,7 @@ export function MediaPlayerView({
   onRetry,
   onPositionUpdate,
   onEnded,
+  onDeliveryStruggling,
 }: MediaPlayerViewProps) {
   return (
     <div
@@ -89,6 +93,7 @@ export function MediaPlayerView({
           vodHls
           onPositionUpdate={onPositionUpdate}
           onEnded={onEnded}
+          onDeliveryStruggling={onDeliveryStruggling}
         />
       )}
     </div>
@@ -117,6 +122,13 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
   // The live session in a ref so onEnded/pagehide can stop it without
   // re-subscribing on every grant change.
   const sessionRef = useRef<PlaybackSession | null>(null)
+  // Stall escalation (one-way, once per mount): when progressive playback
+  // genuinely struggles, re-grant with buffered (HLS) delivery resumed at the
+  // captured position. Refs, not state, so the handler stays referentially
+  // stable (IptvPlayer's engine effect lists it) and the session effect can
+  // read them without extra dependencies — the sessionKey bump re-runs it.
+  const forceHlsRef = useRef(false)
+  const escalateStartRef = useRef<number | null>(null)
 
   // Plain-div dialog: useModalA11y supplies Escape-to-close, the focus trap,
   // and focus restoration that aria-modal="true" promises (LiveTab pattern).
@@ -130,7 +142,10 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
     const session = startPlaybackSession({
       kind,
       id,
-      startPositionSecs,
+      // After escalation the new session resumes at the captured playhead
+      // (server-baked -ss), not the original resume point.
+      startPositionSecs: escalateStartRef.current ?? startPositionSecs,
+      forceHls: forceHlsRef.current,
       api: mediaApi,
       handlers: {
         onGrant: setGrant,
@@ -154,6 +169,20 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
   const retry = useCallback(() => {
     setError(null)
     setSessionLost(false)
+    setSessionKey((key) => key + 1)
+  }, [])
+
+  // Progressive playback proved unhealthy (≥2 confirmed stall episodes —
+  // IptvPlayer's escalator fires this at most once). Capture the playhead,
+  // flip the session to forced-HLS, and remount via the existing sessionKey
+  // machinery. setGrant(null) shows "Starting playback…" during the ~2-5 s
+  // swap. Empty deps keep the identity stable across renders so IptvPlayer's
+  // engine effect doesn't tear down on unrelated re-renders.
+  const onDeliveryStruggling = useCallback(() => {
+    if (forceHlsRef.current) return
+    forceHlsRef.current = true
+    escalateStartRef.current = Math.floor(latest.current.pos)
+    setGrant(null)
     setSessionKey((key) => key + 1)
   }, [])
 
@@ -212,7 +241,11 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
       const { pos, dur, completed } = absoluteProgress({
         delivery: grant?.delivery ?? 'progressive',
         grantDurationSecs: grant?.durationSecs ?? null,
-        startPositionSecs,
+        // After escalation the HLS timeline restarts at the CAPTURED position
+        // (server-baked -ss), so the offset must be the effective start —
+        // using the original resume prop would regress every saved resume
+        // point to the pre-escalation offset.
+        startPositionSecs: escalateStartRef.current ?? startPositionSecs,
         positionSecs,
         durationSecs,
       })
@@ -241,6 +274,7 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
       onRetry={retry}
       onPositionUpdate={onPositionUpdate}
       onEnded={onEnded}
+      onDeliveryStruggling={onDeliveryStruggling}
     />
   )
 }
