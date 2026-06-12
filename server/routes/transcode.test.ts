@@ -232,4 +232,26 @@ describe('appendTokenToManifest', () => {
     const out = appendTokenToManifest('https://cdn.example/seg_0.ts', 'TOK')
     expect(out).toBe('https://cdn.example/seg_0.ts')
   })
+
+  it('tokenizes the EXT-X-MAP init segment URI (fMP4 sessions)', () => {
+    // fMP4 (HEVC copy) playlists reference an init segment via #EXT-X-MAP;
+    // the player fetches it like any other asset, so an untokenized URI 401s
+    // and the whole session grey-boxes.
+    const manifest = [
+      '#EXTM3U',
+      '#EXT-X-MAP:URI="init.mp4"',
+      '#EXTINF:4.0,',
+      'seg_00000.m4s',
+      '',
+    ].join('\n')
+    const out = appendTokenToManifest(manifest, 'TOK')
+    const lines = out.split('\n')
+    expect(lines[1]).toBe('#EXT-X-MAP:URI="init.mp4?t=TOK"')
+    expect(lines[3]).toBe('seg_00000.m4s?t=TOK')
+    // Other tags stay untouched.
+    expect(lines[0]).toBe('#EXTM3U')
+    // An absolute init URI is left alone (mirrors the segment-line rule).
+    const abs = appendTokenToManifest('#EXT-X-MAP:URI="https://cdn.example/init.mp4"', 'TOK')
+    expect(abs).toBe('#EXT-X-MAP:URI="https://cdn.example/init.mp4"')
+  })
 })

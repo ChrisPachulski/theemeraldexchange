@@ -156,14 +156,24 @@ transcode.all('/*', async (c) => {
 })
 
 /** Append `?t=<token>` to each segment/variant URI line in an HLS manifest.
- *  Comment/tag lines (`#…`), blank lines, and absolute URLs are left untouched;
- *  the transcoder emits relative segment names (`seg_00000.ts`) with no query,
- *  so a plain `?t=` is always correct. Exported for unit testing. */
+ *  Comment/tag lines (`#…`), blank lines, and absolute URLs are left untouched
+ *  — EXCEPT `#EXT-X-MAP`, whose quoted `URI="init.mp4"` attribute is the fMP4
+ *  init segment the player fetches like any other asset and must carry the
+ *  same token (an untokenized init.mp4 401s and the whole session grey-boxes).
+ *  The transcoder emits relative segment names (`seg_00000.ts`/`.m4s`) with no
+ *  query, so a plain `?t=` is always correct. Exported for unit testing. */
 export function appendTokenToManifest(manifest: string, token: string): string {
   return manifest
     .split('\n')
     .map((line) => {
       const trimmed = line.trim()
+      if (trimmed.startsWith('#EXT-X-MAP')) {
+        return line.replace(/URI="([^"]+)"/, (_m, uri: string) => {
+          if (/^https?:\/\//i.test(uri)) return `URI="${uri}"`
+          const sep = uri.includes('?') ? '&' : '?'
+          return `URI="${uri}${sep}t=${token}"`
+        })
+      }
       if (trimmed === '' || trimmed.startsWith('#')) return line
       if (/^https?:\/\//i.test(trimmed)) return line
       const sep = trimmed.includes('?') ? '&' : '?'

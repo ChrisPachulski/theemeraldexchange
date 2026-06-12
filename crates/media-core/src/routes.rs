@@ -444,11 +444,11 @@ async fn path_within_roots(path: &std::path::Path, roots: &[crate::config::Libra
 
 /// Optional client capabilities advertised on the stream request as query
 /// params, so a GET can carry the same direct-play contract that `play_grant`
-/// computes from a JSON body — including `max_bitrate` (bits/second). All
-/// fields are optional; absent caps mean "no constraints advertised" and the
-/// file streams directly (back-compat). Audio caps are intentionally absent:
-/// `ClientCaps` carries no `audio_codecs` set yet, so `decide()` applies a
-/// fixed browser-safe AAC baseline (see capability.rs TODO(M4+)).
+/// computes from a JSON body — including `max_bitrate` (bits/second) and the
+/// audio/fmp4 fields. All fields are optional; absent caps mean "no
+/// constraints advertised" and the file streams directly (back-compat).
+/// Absent `audio_codecs`/`aac_max_channels` fall back to the browser-safe
+/// defaults `ClientCaps` carries (AAC-only, ≤2ch).
 #[derive(Debug, Deserialize, Default)]
 struct StreamCapsQuery {
     containers: Option<String>,
@@ -457,6 +457,10 @@ struct StreamCapsQuery {
     max_bitrate: Option<i64>,
     #[serde(default)]
     hdr: bool,
+    audio_codecs: Option<String>,
+    aac_max_channels: Option<i64>,
+    #[serde(default)]
+    hls_fmp4_hevc: bool,
     #[serde(default)]
     start_secs: Option<u64>,
 }
@@ -469,6 +473,9 @@ impl StreamCapsQuery {
             || self.max_height.is_some()
             || self.max_bitrate.is_some()
             || self.hdr
+            || self.audio_codecs.is_some()
+            || self.aac_max_channels.is_some()
+            || self.hls_fmp4_hevc
     }
 
     fn to_caps(&self) -> ClientCaps {
@@ -483,12 +490,19 @@ impl StreamCapsQuery {
                 })
                 .unwrap_or_default()
         };
+        let defaults = ClientCaps::default();
         ClientCaps {
             containers: split(&self.containers),
             video_codecs: split(&self.video_codecs),
             max_height: self.max_height,
             hdr: self.hdr,
             max_bitrate: self.max_bitrate,
+            audio_codecs: match split(&self.audio_codecs) {
+                v if v.is_empty() => defaults.audio_codecs,
+                v => v,
+            },
+            aac_max_channels: self.aac_max_channels.unwrap_or(defaults.aac_max_channels),
+            hls_fmp4_hevc: self.hls_fmp4_hevc,
         }
     }
 }
@@ -552,6 +566,9 @@ impl TranscodeHandoff<'_> {
             "file": {
                 "path": self.file.path,
                 "container": self.file.container,
+                // size powers the transcoder's source-relative bitrate cap
+                // (avg bps = size_bytes * 8 / duration_secs).
+                "size_bytes": self.file.size_bytes,
                 "duration_secs": self.file.duration_secs,
                 "video_codec": self.file.video_codec,
                 "video_height": self.file.video_height,
@@ -566,6 +583,9 @@ impl TranscodeHandoff<'_> {
                 "max_height": self.caps.max_height,
                 "hdr": self.caps.hdr,
                 "max_bitrate": self.caps.max_bitrate,
+                "audio_codecs": self.caps.audio_codecs,
+                "aac_max_channels": self.caps.aac_max_channels,
+                "hls_fmp4_hevc": self.caps.hls_fmp4_hevc,
             },
             "media_kind": self.kind,
             "media_id": self.id,

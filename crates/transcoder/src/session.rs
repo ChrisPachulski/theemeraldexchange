@@ -100,6 +100,11 @@ pub struct StartOpts {
     /// vaapi` has NO software fallback, so we only enable it for codecs the iGPU
     /// can decode (see [`is_vaapi_hw_decodable`]). `None` → software decode.
     pub source_codec: Option<String>,
+    /// Whole-container average bitrate of the SOURCE file (kbps), derived from
+    /// size/duration by the grant route. Caps the re-encode bitrate ladder so a
+    /// low-bitrate source is never inflated past its own quality (see
+    /// [`crate::args`]'s ladder). `None` → ladder applies uncapped.
+    pub source_avg_kbps: Option<u32>,
     /// The VERIFIED principal's sub from the grant request, binding the session
     /// to its creator so stop/seek/heartbeat can enforce owner-or-admin.
     /// `None` only in the Off/log postures where no verified identity exists
@@ -153,6 +158,8 @@ struct Session {
     /// Source video codec, carried for the supervisor respawn so the full-HW
     /// gate is recomputed identically on every spawn.
     source_codec: Option<String>,
+    /// Source average bitrate (kbps), carried for respawn arg parity.
+    source_avg_kbps: Option<u32>,
     /// Verified principal sub that created the session (owner-or-admin gate).
     owner: Option<String>,
 }
@@ -306,7 +313,12 @@ enum RespawnMode {
 
 /// Parse a segment file name (`seg_%05d.ts`) into its index.
 fn segment_index(name: &str) -> Option<u64> {
-    name.strip_prefix("seg_")?.strip_suffix(".ts")?.parse().ok()
+    // `.ts` for MPEG-TS sessions, `.m4s` for fMP4 (HEVC copy) sessions.
+    let stem = name.strip_prefix("seg_")?;
+    let stem = stem
+        .strip_suffix(".ts")
+        .or_else(|| stem.strip_suffix(".m4s"))?;
+    stem.parse().ok()
 }
 
 /// The highest segment index present in a session dir, or `None` when the dir
@@ -558,6 +570,7 @@ impl SessionManager {
         dir: &PathBuf,
         start_secs: u64,
         source_codec: Option<&str>,
+        source_avg_kbps: Option<u32>,
         media_kind: &str,
         start_number: u64,
     ) -> Result<Child, StartError> {
@@ -579,6 +592,7 @@ impl SessionManager {
             hw_decode,
             media_kind,
             start_number,
+            source_avg_kbps,
         });
         let mut child = Command::new(&self.ffmpeg_bin)
             .args(&args)
@@ -670,6 +684,7 @@ impl SessionManager {
             &dir,
             opts.start_secs,
             opts.source_codec.as_deref(),
+            opts.source_avg_kbps,
             &opts.media_kind,
             0,
         )?;
@@ -690,6 +705,7 @@ impl SessionManager {
             plan: opts.plan,
             input_path: opts.input_path,
             source_codec: opts.source_codec,
+            source_avg_kbps: opts.source_avg_kbps,
             owner: opts.owner,
         };
 
@@ -873,7 +889,7 @@ impl SessionManager {
     /// dir recreated behind it (a leak on the bounded /scratch tmpfs) and never
     /// leaves an unsupervised encoder.
     async fn respawn(&self, id: &str, mode: RespawnMode) -> Respawn {
-        let (input, plan, dir, start_secs, source_codec, media_kind, prev_number) = {
+        let (input, plan, dir, start_secs, source_codec, source_avg_kbps, media_kind, prev_number) = {
             let guard = self.sessions.lock().await;
             let Some(s) = guard.get(id) else {
                 return Respawn::Gone;
@@ -884,6 +900,7 @@ impl SessionManager {
                 s.dir.clone(),
                 s.start_secs,
                 s.source_codec.clone(),
+                s.source_avg_kbps,
                 s.info_kind.clone(),
                 s.start_number,
             )
@@ -921,6 +938,7 @@ impl SessionManager {
             &dir,
             spawn_secs,
             source_codec.as_deref(),
+            source_avg_kbps,
             &media_kind,
             next_number,
         ) {
@@ -1167,6 +1185,7 @@ mod tests {
             video: VideoOp::Copy,
             audio: AudioOp::Copy,
             subtitle: SubtitleOp::None,
+            segment_format: crate::plan::SegmentFormat::MpegTs,
             reason: "test".into(),
         }
     }
@@ -1213,6 +1232,7 @@ mod tests {
 
     fn opts(input: &str) -> StartOpts {
         StartOpts {
+            source_avg_kbps: None,
             media_kind: "movie".into(),
             media_id: 7,
             sub: "plex:42".into(),
@@ -1723,6 +1743,7 @@ mod tests {
 
     fn remux_opts_id(input: &str, media_id: i64) -> StartOpts {
         StartOpts {
+            source_avg_kbps: None,
             media_id,
             ..opts(input)
         }
@@ -1730,11 +1751,13 @@ mod tests {
 
     fn encode_opts_id(input: &str, media_id: i64) -> StartOpts {
         StartOpts {
+            source_avg_kbps: None,
             media_kind: "movie".into(),
             media_id,
             sub: "plex:42".into(),
             input_path: input.into(),
             plan: TranscodePlan::Transcode {
+                segment_format: crate::plan::SegmentFormat::MpegTs,
                 video: VideoOp::EncodeH264 {
                     scale_to_height: None,
                     tone_map: false,
@@ -2002,6 +2025,7 @@ mod tests {
         );
         assert_eq!(mgr.encoder(), HwEncoder::Cpu);
         let plan = TranscodePlan::Transcode {
+            segment_format: crate::plan::SegmentFormat::MpegTs,
             video: VideoOp::EncodeH264 {
                 scale_to_height: None,
                 tone_map: false,
