@@ -48,6 +48,14 @@ export type IptvPlayerProps = {
   grant: StreamGrant
   autoPlay?: boolean
   startPositionSecs?: number
+  /** A finite VOD title (local-media transcode), not a live channel. hls.js
+   *  treats the session's growing EVENT playlist as LIVE until ENDLIST and
+   *  by default starts at the live edge — fine for IPTV, but a faster-than-
+   *  realtime transcode (a copy-remux runs at I/O speed) is MINUTES ahead by
+   *  the time the player attaches, so a movie would open minutes in. VOD
+   *  pins startPosition to 0 (a resume offset is baked server-side via -ss,
+   *  so the session timeline always begins at the intended position). */
+  vodHls?: boolean
   onPositionUpdate?: (pos: number, durationSecs: number | null) => void
   onEnded?: () => void
 }
@@ -255,6 +263,7 @@ export default function IptvPlayer({
   grant,
   autoPlay = false,
   startPositionSecs,
+  vodHls = false,
   onPositionUpdate,
   onEnded,
 }: IptvPlayerProps) {
@@ -376,6 +385,12 @@ export default function IptvPlayer({
           fragLoadingMaxRetryTimeout: 8000,
           manifestLoadingMaxRetry: 4,
           levelLoadingMaxRetry: 4,
+          // Local-media VOD sessions grow an EVENT playlist that hls.js
+          // treats as live until ENDLIST; the default live-edge start would
+          // open a faster-than-realtime transcode (copy-remuxes especially)
+          // minutes into the title. Pin VOD to position 0 — the server bakes
+          // any resume offset into the session itself (ffmpeg -ss).
+          ...(vodHls ? { startPosition: 0 } : {}),
         })
         hlsRef.current = hls
 
@@ -567,7 +582,7 @@ export default function IptvPlayer({
       resetVideo()
       resetTracks()
     }
-  }, [autoPlay, grant])
+  }, [autoPlay, grant, vodHls])
 
   const chooseAudioTrack = (trackId: number) => {
     const applied = applyAudioTrack(
