@@ -5,6 +5,27 @@ import { iptvApi, type HistoryRow, type IptvHistoryKind, type PutHistoryInput } 
 const KEY = ['iptv', 'history'] as const
 const REPORT_INTERVAL_MS = 5000
 
+/** The history-row fields the resume helpers read — a structural subset of
+ *  HistoryRow so any row (or a hand-built test row) satisfies it. */
+export type ResumeFields = Pick<HistoryRow, 'position_secs' | 'duration_secs' | 'completed'>
+
+/** Resume progress as a 0-100 percentage for the card/episode resume bars, or
+ *  null when there's nothing to show (no row, or already completed). A row with
+ *  no known duration shows an empty bar (0) rather than hiding it. */
+export function resumePercent(row: ResumeFields | undefined): number | null {
+  if (!row || row.completed) return null
+  if (!row.duration_secs || row.duration_secs <= 0) return 0
+  return Math.min(100, Math.max(0, (row.position_secs / row.duration_secs) * 100))
+}
+
+/** The seconds offset to resume from, or undefined when there's no resume point
+ *  (no row, completed, or position at/below 0). undefined — never 0 — so the
+ *  player treats it as a fresh start. */
+export function resumePosition(row: ResumeFields | undefined): number | undefined {
+  if (!row || row.completed || row.position_secs <= 0) return undefined
+  return row.position_secs
+}
+
 export function useIptvHistory(limit = 50) {
   return useQuery({
     queryKey: [...KEY, limit],
