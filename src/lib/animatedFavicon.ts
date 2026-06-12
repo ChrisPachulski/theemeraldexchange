@@ -7,7 +7,7 @@
 // the icon link at that file, so no-JS contexts (RSS, bots, social previews)
 // get the 2D version. This module hijacks the link once the scene is rendering.
 
-import { GemScene } from './gemScene'
+import type { GemScene } from './gemScene'
 
 const FAVICON_SIZE = 64
 const FPS = 14
@@ -38,81 +38,94 @@ export function mountAnimatedFavicon(): void {
   if ((window as unknown as { __teeFaviconMounted?: boolean }).__teeFaviconMounted) return
   ;(window as unknown as { __teeFaviconMounted?: boolean }).__teeFaviconMounted = true
 
-  // Square WebGL canvas — single gem framed centre. Matches the inline glyph
-  // used next to "Watch" in the nav, just rendered in 3D instead of as a flat
-  // SVG path so it sparkles in the tab strip.
-  const renderCanvas = document.createElement('canvas')
-  const renderSize = 192
-  renderCanvas.width = renderSize
-  renderCanvas.height = renderSize
+  // three.js is ~600KB and only the brand mark uses it, so the GemScene module
+  // is split into its own lazy chunk and pulled in here AFTER first paint. The
+  // <link rel="icon"> keeps the static SVG fallback (set in index.html) until
+  // the first PNG frame is pumped below, so deferring this download is free —
+  // the tab glyph simply starts sparkling one network round-trip later. The
+  // idempotency flag above is set synchronously, before this await, so a
+  // double call to mountAnimatedFavicon() can never double-boot the scene.
+  void import('./gemScene')
+    .then(({ GemScene }) => {
+      // Square WebGL canvas — single gem framed centre. Matches the inline glyph
+      // used next to "Watch" in the nav, just rendered in 3D instead of as a flat
+      // SVG path so it sparkles in the tab strip.
+      const renderCanvas = document.createElement('canvas')
+      const renderSize = 192
+      renderCanvas.width = renderSize
+      renderCanvas.height = renderSize
 
-  let scene: GemScene
-  try {
-    scene = new GemScene({
-      canvas: renderCanvas,
-      width: renderSize,
-      height: renderSize,
-      pixelRatio: 1,
-      gemCount: 1,
-      fov: 32,
+      let scene: GemScene
+      try {
+        scene = new GemScene({
+          canvas: renderCanvas,
+          width: renderSize,
+          height: renderSize,
+          pixelRatio: 1,
+          gemCount: 1,
+          fov: 32,
+        })
+        // Crank exposure so the highlights survive the 12x downsample browsers
+        // do when rendering at 16x16. Looks "too bright" at 64x64 but reads
+        // correctly at favicon scale.
+        scene.renderer.toneMappingExposure = 1.85
+      } catch (err) {
+        // WebGL unavailable (headless, old hardware, blocked) — leave the static
+        // SVG fallback alone and bail. No favicon downgrade.
+        console.warn('[favicon] WebGL init failed; static SVG fallback stays', err)
+        return
+      }
+
+      const faviconCanvas = document.createElement('canvas')
+      faviconCanvas.width = FAVICON_SIZE
+      faviconCanvas.height = FAVICON_SIZE
+      const maybeCtx = faviconCanvas.getContext('2d')
+      if (!maybeCtx) return
+      const fctx: CanvasRenderingContext2D = maybeCtx
+
+      const link = getFaviconLink()
+      // The link currently points at the static SVG fallback. Once we start
+      // pumping PNG frames the browser will use the PNG instead. We don't strip
+      // the SVG-fallback href so a JS-disabled refresh still shows the brand mark.
+      link.type = 'image/png'
+
+      const tickMs = 1000 / FPS
+      let lastTick = 0
+      let rafId = 0
+      let startedAt = 0
+
+      function pump(now: number) {
+        if (document.hidden) return
+        if (!startedAt) startedAt = now
+        if (now - lastTick >= tickMs) {
+          const t = (now - startedAt) / 1000
+          scene.renderAt(t)
+
+          // Just the gem on transparent. Browser tab strips composite over their
+          // own background — no rounded plate.
+          fctx.clearRect(0, 0, FAVICON_SIZE, FAVICON_SIZE)
+          fctx.drawImage(renderCanvas, 0, 0, FAVICON_SIZE, FAVICON_SIZE)
+
+          link.href = faviconCanvas.toDataURL('image/png')
+          lastTick = now
+        }
+        rafId = requestAnimationFrame(pump)
+      }
+
+      function startLoop() {
+        cancelAnimationFrame(rafId)
+        lastTick = 0
+        startedAt = 0
+        rafId = requestAnimationFrame(pump)
+      }
+
+      startLoop()
+
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) startLoop()
+      })
     })
-    // Crank exposure so the highlights survive the 12x downsample browsers
-    // do when rendering at 16x16. Looks "too bright" at 64x64 but reads
-    // correctly at favicon scale.
-    scene.renderer.toneMappingExposure = 1.85
-  } catch (err) {
-    // WebGL unavailable (headless, old hardware, blocked) — leave the static
-    // SVG fallback alone and bail. No favicon downgrade.
-    console.warn('[favicon] WebGL init failed; static SVG fallback stays', err)
-    return
-  }
-
-  const faviconCanvas = document.createElement('canvas')
-  faviconCanvas.width = FAVICON_SIZE
-  faviconCanvas.height = FAVICON_SIZE
-  const maybeCtx = faviconCanvas.getContext('2d')
-  if (!maybeCtx) return
-  const fctx: CanvasRenderingContext2D = maybeCtx
-
-  const link = getFaviconLink()
-  // The link currently points at the static SVG fallback. Once we start
-  // pumping PNG frames the browser will use the PNG instead. We don't strip
-  // the SVG-fallback href so a JS-disabled refresh still shows the brand mark.
-  link.type = 'image/png'
-
-  const tickMs = 1000 / FPS
-  let lastTick = 0
-  let rafId = 0
-  let startedAt = 0
-
-  function pump(now: number) {
-    if (document.hidden) return
-    if (!startedAt) startedAt = now
-    if (now - lastTick >= tickMs) {
-      const t = (now - startedAt) / 1000
-      scene.renderAt(t)
-
-      // Just the gem on transparent. Browser tab strips composite over their
-      // own background — no rounded plate.
-      fctx.clearRect(0, 0, FAVICON_SIZE, FAVICON_SIZE)
-      fctx.drawImage(renderCanvas, 0, 0, FAVICON_SIZE, FAVICON_SIZE)
-
-      link.href = faviconCanvas.toDataURL('image/png')
-      lastTick = now
-    }
-    rafId = requestAnimationFrame(pump)
-  }
-
-  function startLoop() {
-    cancelAnimationFrame(rafId)
-    lastTick = 0
-    startedAt = 0
-    rafId = requestAnimationFrame(pump)
-  }
-
-  startLoop()
-
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) startLoop()
-  })
+    .catch((err) => {
+      console.warn('[favicon] gem scene chunk failed to load; static SVG fallback stays', err)
+    })
 }
