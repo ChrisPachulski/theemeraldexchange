@@ -157,3 +157,13 @@ This is the entire napi binding — 332 lines that expose ~20 functions. It's a 
 
 ---
 
+## See also
+
+For the boundary traced end-to-end — the three marshalling DTOs (`DerivedKey`,
+`StreamClaimsJs`, `DualKeyVerifyResult`) as a set, the mint→header→verify→route
+request flow, the TS-mints/Rust-verifies asymmetry, and the enforcement call sites —
+see [`docs/architecture/internal-auth-boundary.md`](../../architecture/internal-auth-boundary.md).
+This module teaches the *binding mechanism*; that doc maps the *whole trust boundary*.
+
+---
+
