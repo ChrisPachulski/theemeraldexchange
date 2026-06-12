@@ -266,6 +266,27 @@ export async function syncOnce(db: IptvDb): Promise<SyncResult> {
       console.error('[iptv-sync] external epg failed:', err)
     }
 
+    // Refresh query-planner statistics now that epg_programs (and the catalog
+    // tables) have been fully rewritten this sync. The guide grid query
+    // (/api/iptv/epg/grid) filters epg_programs by time window only, with no
+    // channel predicate — without sqlite_stat1 the planner has no selectivity
+    // estimate and full-SCANs the ~10^5–10^6-row table on the synchronous
+    // better-sqlite3 driver, blocking the same event loop that proxies live
+    // segments. With stats present it instead range-SEARCHes via the
+    // (channel_id, start_utc) primary-key index (which also serves the
+    // ORDER BY channel_id for free), turning the per-request full scan into a
+    // bounded lookup. PRAGMA optimize self-limits to tables that changed enough
+    // to warrant re-analysis (~15ms at 600k rows) and is the SQLite-recommended
+    // periodic call — running it here, after the table is populated, is the
+    // only place stats are meaningful (it is empty at migration/boot time).
+    try {
+      db.raw.pragma('optimize')
+    } catch (err) {
+      // Stats are an optimization, never a correctness requirement — a failed
+      // optimize must not fail the sync.
+      console.error('[iptv-sync] pragma optimize failed:', err)
+    }
+
     const finishedAt = new Date()
     db.stmts.putSyncState.run({ key: 'last_sync', value: 'ok', ts: finishedAt.toISOString() })
     return {
