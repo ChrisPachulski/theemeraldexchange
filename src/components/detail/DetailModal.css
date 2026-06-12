@@ -725,6 +725,18 @@
   outline-offset: 2px;
 }
 
+/* Non-interactive availability note ("Not released yet") — sits in the
+   footer where a play button would, but must read as a status, not an
+   action: muted text, dashed border, no pointer affordance. */
+.detail__btn--note {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-subtle);
+  background: transparent;
+  border: 1px dashed var(--border);
+  cursor: default;
+}
+
 /* Anchor-as-button — `.detail__btn` is used on both <button> and <a>
    (the "Play in Plex →" link). Anchors carry default text-decoration
    and inline display from the browser; normalize them here so they

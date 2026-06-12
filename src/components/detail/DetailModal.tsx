@@ -105,6 +105,11 @@ type Props = {
   /** Label for the direct-play button (e.g. "Play Direct here" for a movie,
    *  "Watch episodes" for a show). Defaults to "Play Direct here". */
   playDirectLabel?: string
+  /** In library but nothing exists to play yet (unreleased title, or
+   *  released but not downloaded). Rendered as a non-interactive status
+   *  note in the footer where a play button would otherwise sit — callers
+   *  are expected to suppress playUrl/onPlayDirect alongside setting it. */
+  unavailableNote?: string | null
 }
 
 export function DetailModal({
@@ -134,6 +139,7 @@ export function DetailModal({
   playUrl,
   onPlayDirect,
   playDirectLabel,
+  unavailableNote,
 }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const closeBtnRef = useRef<HTMLButtonElement>(null)
@@ -413,6 +419,11 @@ export function DetailModal({
             >
               Add to library
             </button>
+          )}
+          {inLibrary && unavailableNote && (
+            <span className="detail__btn detail__btn--note" role="status">
+              {unavailableNote}
+            </span>
           )}
           {onPlayDirect && (
             <button
