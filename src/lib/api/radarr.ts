@@ -99,11 +99,16 @@ export type MovieAvailability = 'playable' | 'not_released' | 'missing'
 export function movieAvailability(
   m: Pick<Movie, 'hasFile' | 'isAvailable' | 'status'>,
 ): MovieAvailability {
-  if (m.hasFile !== false) return 'playable'
-  if (m.isAvailable === false || (m.status != null && m.status !== 'released')) {
-    return 'not_released'
-  }
-  return 'missing'
+  if (m.hasFile === true) return 'playable'
+  const notReleased =
+    m.isAvailable === false || (m.status != null && m.status !== 'released')
+  if (m.hasFile === false) return notReleased ? 'not_released' : 'missing'
+  // hasFile null/undefined — Radarr /movie/lookup returns in-library matches
+  // WITH the library id but hasFile:null, and that object reaches the modal
+  // whenever a discover card is clicked before the library query resolves.
+  // The release state alone still proves a future title can't have a file;
+  // only a released title fails open as playable here.
+  return notReleased ? 'not_released' : 'playable'
 }
 
 export type QualityProfile = { id: number; name: string }
