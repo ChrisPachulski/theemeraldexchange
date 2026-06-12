@@ -58,6 +58,11 @@ export type IptvPlayerProps = {
   vodHls?: boolean
   onPositionUpdate?: (pos: number, durationSecs: number | null) => void
   onEnded?: () => void
+  /** Progressive delivery only: fired ONCE when the stream has genuinely
+   *  struggled (≥2 confirmed stall episodes in 120 s, user seeks excluded).
+   *  The owner is expected to re-grant with buffered (HLS) delivery at the
+   *  current position. Absent prop = no escalation (IPTV unaffected). */
+  onDeliveryStruggling?: () => void
 }
 
 export function labelForTrack(track: { name?: string; lang?: string; label?: string; language?: string }, index: number): string {
@@ -263,6 +268,113 @@ export function createHlsStallWatchdog(opts: {
   return { onStall, onProgress, cleanup }
 }
 
+// ── Progressive stall escalator ──────────────────────────────────────
+//
+// Progressive direct play hands the ORIGINAL file to the native <video>;
+// the browser owns the readahead (~2 s over the tunnel) and nothing
+// server-side deepens it. When THIS stream on THIS connection genuinely
+// struggles, the player escalates once into the managed HLS pipeline
+// (lossless copy-remux + the tuned hls.js buffer) via `onEscalate`.
+//
+// Scoring: a stall EPISODE is a `waiting`/`stalled` event after playback
+// has begun while the user is NOT seeking (seeks fire `waiting` on this
+// path and say nothing about delivery health), confirmed by ~1 s of a
+// non-advancing playhead (a refill that recovers faster never counts).
+// One rebuffer = one episode: an open episode absorbs further stall
+// events and only closes after ≥5 s of continuous progress. The SECOND
+// counted episode inside a rolling 120 s window fires `onEscalate()`
+// exactly once, then the escalator disarms permanently — escalation is a
+// one-way, once-per-mount decision.
+export const ESCALATE_EPISODE_THRESHOLD = 2
+export const ESCALATE_WINDOW_MS = 120_000
+export const ESCALATE_CONFIRM_MS = 1000
+export const ESCALATE_EPISODE_CLOSE_MS = 5000
+
+export function createProgressiveStallEscalator(opts: {
+  video: { currentTime: number; seeking: boolean }
+  onEscalate: () => void
+  isCancelled: () => boolean
+  schedule?: (fn: () => void, delayMs: number) => number
+  clearScheduled?: (id: number) => void
+  now?: () => number
+}): { onStall: () => void; onProgress: () => void; cleanup: () => void } {
+  const { video, onEscalate, isCancelled } = opts
+  const schedule =
+    opts.schedule ?? ((fn, delayMs) => window.setTimeout(fn, delayMs) as unknown as number)
+  const clearScheduled = opts.clearScheduled ?? ((id) => window.clearTimeout(id))
+  const now = opts.now ?? (() => Date.now())
+
+  let begun = false
+  let disarmed = false
+  let confirmTimer: number | null = null
+  let episodeOpen = false
+  let progressSince: number | null = null
+  let lastTime = 0
+  let episodeTimes: number[] = []
+
+  const clearConfirm = () => {
+    if (confirmTimer !== null) {
+      clearScheduled(confirmTimer)
+      confirmTimer = null
+    }
+  }
+
+  const countEpisode = () => {
+    const t = now()
+    episodeTimes = episodeTimes.filter((at) => t - at <= ESCALATE_WINDOW_MS)
+    episodeTimes.push(t)
+    episodeOpen = true
+    progressSince = null
+    if (episodeTimes.length >= ESCALATE_EPISODE_THRESHOLD) {
+      disarmed = true
+      clearConfirm()
+      onEscalate()
+    }
+  }
+
+  const onStall = () => {
+    if (disarmed || isCancelled()) return
+    if (!begun || video.seeking) return
+    if (episodeOpen) {
+      // Same rebuffer — restart the close clock, don't count again.
+      progressSince = null
+      return
+    }
+    if (confirmTimer !== null) return
+    const stallMark = video.currentTime
+    confirmTimer = schedule(() => {
+      confirmTimer = null
+      if (disarmed || isCancelled() || video.seeking) return
+      if (video.currentTime <= stallMark + 0.1) countEpisode()
+    }, ESCALATE_CONFIRM_MS)
+  }
+
+  const onProgress = () => {
+    if (disarmed || isCancelled()) return
+    const t = video.currentTime
+    const advanced = t > lastTime + 0.01
+    lastTime = t
+    if (!advanced) return
+    if (!begun && t > 0) begun = true
+    clearConfirm()
+    if (episodeOpen) {
+      const ts = now()
+      if (progressSince === null) {
+        progressSince = ts
+      } else if (ts - progressSince >= ESCALATE_EPISODE_CLOSE_MS) {
+        episodeOpen = false
+        progressSince = null
+      }
+    }
+  }
+
+  const cleanup = () => {
+    clearConfirm()
+  }
+
+  return { onStall, onProgress, cleanup }
+}
+
 export const MAX_NET_RETRIES = 8
 export const MEDIA_RECOVERY_WINDOW_MS = 3000
 
@@ -324,6 +436,7 @@ export default function IptvPlayer({
   vodHls = false,
   onPositionUpdate,
   onEnded,
+  onDeliveryStruggling,
 }: IptvPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const hlsRef = useRef<HlsPlayer | null>(null)
@@ -404,6 +517,24 @@ export default function IptvPlayer({
       if (grant.delivery === 'progressive') {
         video.src = grant.url
         updateNativeTracks()
+        if (onDeliveryStruggling) {
+          const escalator = createProgressiveStallEscalator({
+            video,
+            onEscalate: onDeliveryStruggling,
+            isCancelled: () => cancelled,
+          })
+          video.addEventListener('waiting', escalator.onStall)
+          video.addEventListener('stalled', escalator.onStall)
+          video.addEventListener('playing', escalator.onProgress)
+          video.addEventListener('timeupdate', escalator.onProgress)
+          cleanupEngine = () => {
+            escalator.cleanup()
+            video.removeEventListener('waiting', escalator.onStall)
+            video.removeEventListener('stalled', escalator.onStall)
+            video.removeEventListener('playing', escalator.onProgress)
+            video.removeEventListener('timeupdate', escalator.onProgress)
+          }
+        }
         if (autoPlay) safePlay(video)
         return
       }
@@ -707,7 +838,7 @@ export default function IptvPlayer({
       resetVideo()
       resetTracks()
     }
-  }, [autoPlay, grant, vodHls])
+  }, [autoPlay, grant, vodHls, onDeliveryStruggling])
 
   const chooseAudioTrack = (trackId: number) => {
     const applied = applyAudioTrack(

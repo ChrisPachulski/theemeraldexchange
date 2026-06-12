@@ -18,6 +18,7 @@ export type PlaybackSessionApi = {
     id: number,
     caps?: PlaybackCaps,
     startPositionSecs?: number,
+    forceHls?: boolean,
   ) => Promise<PlaybackGrant>
   /** Resolves to the HTTP status, or undefined on network failure. */
   heartbeat: (url: string) => Promise<number | undefined>
@@ -46,6 +47,8 @@ export function startPlaybackSession(args: {
   kind: PlayableKind
   id: number
   startPositionSecs?: number
+  /** Demand buffered (HLS) delivery — the stall-escalation re-grant path. */
+  forceHls?: boolean
   api: PlaybackSessionApi
   handlers: PlaybackSessionHandlers
   heartbeatIntervalMs?: number
@@ -73,7 +76,7 @@ export function startPlaybackSession(args: {
   }
 
   void api
-    .playback(args.kind, args.id, undefined, args.startPositionSecs)
+    .playback(args.kind, args.id, undefined, args.startPositionSecs, args.forceHls)
     .then((grant) => {
       if (disposed || stopped) {
         // Closed before the grant resolved — free the slot it just claimed

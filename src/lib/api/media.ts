@@ -170,6 +170,10 @@ export type PlaybackCaps = {
 type PlaybackRequest = PlaybackCaps & {
   /** Optional resume offset. The backend forwards this to the HLS transcoder. */
   start_secs?: number
+  /** Demand buffered (HLS) delivery even for a direct-play-eligible file.
+   *  The transcoder resolves these to a lossless copy-remux session; sent by
+   *  the player's stall-escalation path. */
+  force_hls?: boolean
 }
 
 /** What the backend hands back: a tokenised URL the <video>/hls.js player can
@@ -602,11 +606,13 @@ export const mediaApi = {
     id: number,
     caps?: PlaybackCaps,
     startPositionSecs?: number,
+    forceHls?: boolean,
   ) => {
     const body: PlaybackRequest = { ...(caps ?? (await probedCaps())) }
     if (startPositionSecs != null && Number.isFinite(startPositionSecs) && startPositionSecs > 0) {
       body.start_secs = Math.floor(startPositionSecs)
     }
+    if (forceHls) body.force_hls = true
     return post<RawPlaybackGrant, PlaybackRequest>(`/playback/${kind}/${id}`, body).then(absolutizeGrant)
   },
 
