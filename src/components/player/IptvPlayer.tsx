@@ -206,6 +206,39 @@ export function selectHlsEngine(mseSupported: boolean, nativeHlsCanPlay: string)
   return 'unsupported'
 }
 
+// ── VOD start anchor ─────────────────────────────────────────────────
+//
+// hls.js treats a growing EVENT playlist as live and picks its own start
+// position near the live edge — and with `timelineOffset` set it ignores
+// `startPosition` outright (lab-verified: configured 2036, started 400+ s
+// off as the edge grew). A faster-than-realtime transcode is minutes ahead
+// by attach time, so an edge start opens the title minutes past the resume
+// point. Anchor deterministically instead: on the FIRST level details, seek
+// the <video> to the playlist's first fragment start (the -ss session start
+// on the shifted timeline — always servable, so the de9411c "never client-
+// seek HLS past the window" hazard doesn't apply). Side benefit: startup
+// stops wandering the edge first (measured 8.5 s → 1.2 s to first frame).
+export function createHlsStartAnchor(opts: {
+  video: { currentTime: number }
+  isCancelled: () => boolean
+}): {
+  onLevelUpdated: (
+    evt: unknown,
+    data: { details: { fragments: Array<{ start: number }> } },
+  ) => void
+} {
+  let anchored = false
+  return {
+    onLevelUpdated: (_evt, data) => {
+      if (anchored || opts.isCancelled()) return
+      const first = data.details.fragments[0]
+      if (!first) return // empty playlist — wait for the next refresh
+      anchored = true
+      opts.video.currentTime = first.start
+    },
+  }
+}
+
 // ── Seek-below-session-floor guard ───────────────────────────────────
 //
 // A resumed HLS session is served from ffmpeg -ss, so with the absolute
@@ -835,6 +868,16 @@ export default function IptvPlayer({
         video.addEventListener('stalled', stallWatchdog.onStall)
         video.addEventListener('playing', stallWatchdog.onProgress)
         video.addEventListener('timeupdate', stallWatchdog.onProgress)
+
+        // Deterministic start for VOD sessions: hls.js's live-edge default
+        // opens minutes past the -ss start (see createHlsStartAnchor).
+        if (vodHls) {
+          const startAnchor = createHlsStartAnchor({
+            video,
+            isCancelled: () => cancelled,
+          })
+          hls.on(Hls.Events.LEVEL_UPDATED, startAnchor.onLevelUpdated)
+        }
 
         // The absolute timeline exposes the title region BEFORE this
         // session's -ss start — media this session can never serve. A seek

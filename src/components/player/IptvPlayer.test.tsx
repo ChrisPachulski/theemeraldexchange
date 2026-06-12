@@ -14,6 +14,7 @@ import IptvPlayer, {
   createHlsDurationPin,
   createHlsStallWatchdog,
   createProgressiveStallEscalator,
+  createHlsStartAnchor,
   createSeekFloorGuard,
   selectHlsEngine,
   HLS_PLAYLIST_LOAD_POLICY,
@@ -92,6 +93,43 @@ describe('IptvPlayer', () => {
     const html = renderToStaticMarkup(<IptvPlayer grant={grant} />)
 
     expect(html).toContain('<video')
+  })
+})
+
+describe('createHlsStartAnchor', () => {
+  // hls.js edge-starts growing EVENT playlists and ignores startPosition
+  // when timelineOffset is set — the anchor pins playback to the session's
+  // real start (first fragment) exactly once.
+  it('anchors the playhead to the first fragment start, once', () => {
+    const video = { currentTime: 0 }
+    const anchor = createHlsStartAnchor({ video, isCancelled: () => false })
+
+    anchor.onLevelUpdated(null, { details: { fragments: [{ start: 2036 }, { start: 2040 }] } })
+    expect(video.currentTime).toBe(2036)
+
+    // Later refreshes (sliding details, growing playlist) must not re-seek.
+    anchor.onLevelUpdated(null, { details: { fragments: [{ start: 2036 }] } })
+    video.currentTime = 2100
+    anchor.onLevelUpdated(null, { details: { fragments: [{ start: 2036 }] } })
+    expect(video.currentTime).toBe(2100)
+  })
+
+  it('waits through an empty playlist and anchors on the next refresh', () => {
+    const video = { currentTime: 0 }
+    const anchor = createHlsStartAnchor({ video, isCancelled: () => false })
+
+    anchor.onLevelUpdated(null, { details: { fragments: [] } })
+    expect(video.currentTime).toBe(0)
+    anchor.onLevelUpdated(null, { details: { fragments: [{ start: 600 }] } })
+    expect(video.currentTime).toBe(600)
+  })
+
+  it('does nothing after the engine effect is cancelled', () => {
+    const video = { currentTime: 0 }
+    const anchor = createHlsStartAnchor({ video, isCancelled: () => true })
+
+    anchor.onLevelUpdated(null, { details: { fragments: [{ start: 2036 }] } })
+    expect(video.currentTime).toBe(0)
   })
 })
 
