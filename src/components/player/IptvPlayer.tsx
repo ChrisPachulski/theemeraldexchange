@@ -191,6 +191,28 @@ export function selectHlsEngine(mseSupported: boolean, nativeHlsCanPlay: string)
   return 'unsupported'
 }
 
+// ── Playlist load policy ─────────────────────────────────────────────
+//
+// hls.js's default manifest/playlist policy waits maxLoadTimeMs = 20 s
+// before abandoning a load whose headers arrived but whose body never
+// completes — and that exact failure recurs on the tunnel path (the
+// edge intermittently drops a manifest response mid-body), so every
+// fresh transcode session risked a silent 20 s spinner before the
+// instant-retry succeeded. A playlist is a few KB: once the first byte
+// lands the body must follow within seconds, so time out fast and lean
+// on free immediate retries instead. Applies to live IPTV too — a
+// stalled level reload mid-watch otherwise eats the same 20 s.
+// (Segments keep their own generous fragLoadPolicy: big bodies on a
+// modest uplink legitimately take tens of seconds.)
+export const HLS_PLAYLIST_LOAD_POLICY = {
+  default: {
+    maxTimeToFirstByteMs: 6000,
+    maxLoadTimeMs: 8000,
+    timeoutRetry: { maxNumRetry: 4, retryDelayMs: 0, maxRetryDelayMs: 0 },
+    errorRetry: { maxNumRetry: 4, retryDelayMs: 1000, maxRetryDelayMs: 4000 },
+  },
+} as const
+
 // ── Fatal hls.js error recovery ──────────────────────────────────────
 //
 // hls.js fatal errors fall into three classes with different recovery
@@ -630,8 +652,11 @@ export default function IptvPlayer({
           liveSyncDurationCount: 4,
           maxBufferHole: 0.5,
           enableWorker: true,
-          manifestLoadingMaxRetry: 4,
-          levelLoadingMaxRetry: 4,
+          // Fast-failing playlist loads (see HLS_PLAYLIST_LOAD_POLICY): the
+          // default 20 s body timeout turned an edge-dropped manifest
+          // response into a 20 s startup spinner on fresh sessions.
+          manifestLoadPolicy: HLS_PLAYLIST_LOAD_POLICY,
+          playlistLoadPolicy: HLS_PLAYLIST_LOAD_POLICY,
           // Generous fragment retries over the tunnel path: cloudflared TTFB
           // can be seconds, and a 10-20 MB fMP4 copy segment at a modest
           // uplink legitimately takes tens of seconds — bailing early turns

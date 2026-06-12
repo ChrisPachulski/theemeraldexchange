@@ -84,6 +84,34 @@ describe('transcode proxy route', () => {
     expect(res.headers.get('content-type')).toBe('application/vnd.apple.mpegurl')
   })
 
+  it('sends the rewritten manifest fixed-length with edge no-buffer headers', async () => {
+    const token = signMediaToken({
+      kind: MEDIA_HLS_KIND,
+      rid: mediaSessionResourceId('abc'),
+      sub: 'plex:42',
+    })
+    // Multibyte title: content-length must be the BYTE length, not the string length.
+    const manifest = '#EXTM3U\n#EXTINF:4.000000,Ωmega\nseg_00000.m4s\n'
+    mockFetch.mockResolvedValue(
+      new Response(manifest, {
+        status: 200,
+        headers: { 'Content-Type': 'application/vnd.apple.mpegurl' },
+      }),
+    )
+
+    const res = await transcode.request(`/session/abc/index.m3u8?t=${token}`, {
+      method: 'GET',
+      headers: { host: 'localhost' },
+    })
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toContain(`seg_00000.m4s?t=${token}`)
+    expect(res.headers.get('content-length')).toBe(String(Buffer.byteLength(body)))
+    expect(res.headers.get('cache-control')).toBe('no-store')
+    expect(res.headers.get('x-accel-buffering')).toBe('no')
+  })
+
   it('rejects an HLS stream token after membership revocation', async () => {
     const token = signMediaToken({
       kind: MEDIA_HLS_KIND,
