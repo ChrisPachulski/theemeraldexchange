@@ -747,6 +747,14 @@ async fn stream_file(
         .await
         .map_err(|e| AppError::Internal(format!("stream serve failed: {e}")))?
         .into_response();
+    // cloudflared buffers tunnel responses by default, which turns each range
+    // request of a progressive direct-play into edge-accumulate-then-burst.
+    // `X-Accel-Buffering: no` is honored on the tunnel path (proven by the
+    // live IPTV .ts proxy) and keeps the bytes streaming client-ward.
+    resp.headers_mut().insert(
+        axum::http::HeaderName::from_static("x-accel-buffering"),
+        axum::http::HeaderValue::from_static("no"),
+    );
     // Hold the permit for the lifetime of the response (and its streaming body):
     // it drops when the response is dropped after the client finishes or
     // disconnects, freeing the slot.

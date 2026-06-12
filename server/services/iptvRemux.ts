@@ -183,7 +183,11 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult {
     '-c', 'copy',
     '-f', 'hls',
     '-hls_time', '4',
-    '-hls_list_size', '8',
+    // 16 segments ≈ a ~64 s window. The old 8-segment (~32 s) window meant a
+    // player that fell briefly behind (tunnel jitter, provider hiccup) could
+    // find its next segment already deleted — hls.js then skips/errors
+    // instead of recovering. Disk cost is ~8 extra segments per live session.
+    '-hls_list_size', '16',
     '-hls_flags', 'delete_segments+append_list+omit_endlist',
     '-hls_segment_filename', 'seg_%05d.ts',
     manifestPath,

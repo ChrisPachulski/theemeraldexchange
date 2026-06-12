@@ -36,6 +36,10 @@ const FORWARD_RESPONSE_HEADERS = [
   'etag',
   'last-modified',
   'cache-control',
+  // cloudflared buffers tunnel responses by default; the origin's
+  // X-Accel-Buffering: no opt-out must survive this proxy hop or segments/
+  // range responses are edge-accumulated before the player sees byte one.
+  'x-accel-buffering',
 ] as const
 
 // Browser playback caps when the SPA does not advertise its own. The capability
