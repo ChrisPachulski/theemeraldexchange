@@ -142,3 +142,13 @@ describe('movieAvailability', () => {
     expect(movieAvailability({ hasFile: false, isAvailable: true, status: 'released' })).toBe('missing')
   })
 })
+
+describe('movieAvailability — lookup payloads (hasFile null)', () => {
+  it('is not_released for an announced lookup match (Radarr lookup keeps the id but nulls hasFile)', () => {
+    expect(movieAvailability({ hasFile: null as unknown as boolean, isAvailable: false, status: 'announced' })).toBe('not_released')
+  })
+
+  it('fails open as playable for a released lookup match', () => {
+    expect(movieAvailability({ hasFile: null as unknown as boolean, isAvailable: true, status: 'released' })).toBe('playable')
+  })
+})
