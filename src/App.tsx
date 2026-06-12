@@ -19,7 +19,10 @@ import './styles/transitions.css'
 
 // Non-home tabs are lazy-loaded so the initial JS bundle ships only the
 // always-visible shell (Kraken atmosphere, nav, brand mark, HomeTab) plus
-// three.js / react-dom. Each non-home tab pulls in its own modals
+// react-dom. three.js no longer rides in the entry chunk — the brand mark's
+// GemScene is pulled in via a dynamic import (see animatedFavicon.ts and
+// EmeraldMark.tsx), so WebGL downloads in its own lazy chunk after first
+// paint. Each non-home tab pulls in its own modals
 // (DetailModal, AddSeries/MovieModal) transitively, so visiting `/tv` for
 // the first time downloads the tv chunk including its modal subtree, etc.
 const TvTab = lazy(() =>
