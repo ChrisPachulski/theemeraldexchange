@@ -16,5 +16,5 @@ crate-type = ["cdylib"]
 # Imported as `ec` to avoid colliding with the `#[pymodule] fn emerald_contracts`
 # this crate exposes.
 ec = { package = "emerald-contracts", path = "../emerald-contracts" }
-pyo3 = { version = "0.28", features = ["extension-module", "abi3-py312"] }
+pyo3 = { version = "0.29", features = ["extension-module", "abi3-py312"] }
 serde_json = { workspace = true }
