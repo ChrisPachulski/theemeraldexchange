@@ -11,6 +11,7 @@
     "dev": "concurrently -n vite,api -c cyan,magenta \"npm:dev:vite\" \"npm:dev:server\"",
     "dev:vite": "vite",
     "dev:server": "tsx watch server/index.ts",
+    "dev:media-mock": "tsx watch server/mocks/mediaCoreMock.ts",
     "build": "tsc -b && vite build && tsc -p server/tsconfig.json",
     "build:spa": "tsc -b && vite build",
     "build:server": "tsc -p server/tsconfig.json",
