@@ -11,6 +11,7 @@ import IptvPlayer, {
   applyAudioTrack,
   applySubtitleTrack,
   createFatalHlsErrorHandler,
+  createHlsStallWatchdog,
   selectHlsEngine,
   MAX_NET_RETRIES,
   MEDIA_RECOVERY_WINDOW_MS,
@@ -500,5 +501,110 @@ describe('applySubtitleTrack', () => {
 
   it('returns null when there is no engine at all', () => {
     expect(applySubtitleTrack(null, null, 0)).toBeNull()
+  })
+})
+
+describe('createHlsStallWatchdog', () => {
+  function harness() {
+    const hls = { startLoad: vi.fn() }
+    const scheduled: Array<{ fn: () => void; delayMs: number }> = []
+    let cancelled = false
+    let currentTime = 0
+    const video = {
+      get currentTime() { return currentTime },
+    }
+    const watchdog = createHlsStallWatchdog({
+      hls,
+      video: video as unknown as { currentTime: number },
+      isCancelled: () => cancelled,
+      schedule: (fn: () => void, delayMs: number) => {
+        const entry = { fn, delayMs }
+        scheduled.push(entry)
+        return scheduled.length - 1
+      },
+      clearScheduled: (id: number) => {
+        scheduled[id] = { fn: () => {}, delayMs: -1 }
+      },
+    })
+    return {
+      hls,
+      scheduled,
+      watchdog,
+      cancel: () => { cancelled = true },
+      advanceTime: (secs: number) => { currentTime += secs },
+    }
+  }
+
+  it('does not call startLoad when onStall fires and playhead advances before the timer fires', () => {
+    const h = harness()
+
+    h.watchdog.onStall()
+    h.advanceTime(1)
+    // fire the timer that was scheduled
+    h.scheduled[0].fn()
+
+    expect(h.hls.startLoad).not.toHaveBeenCalled()
+  })
+
+  it('calls startLoad when onStall fires and playhead has not advanced after the stall window', () => {
+    const h = harness()
+
+    h.watchdog.onStall()
+    // playhead stays at 0 — deliberate no advanceTime
+    h.scheduled[0].fn()
+
+    expect(h.hls.startLoad).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not call startLoad if already cancelled when timer fires', () => {
+    const h = harness()
+
+    h.watchdog.onStall()
+    h.cancel()
+    h.scheduled[0].fn()
+
+    expect(h.hls.startLoad).not.toHaveBeenCalled()
+  })
+
+  it('onProgress clears a pending stall timer so startLoad is not called', () => {
+    const h = harness()
+
+    h.watchdog.onStall()
+    h.watchdog.onProgress()
+    h.scheduled[0].fn()
+
+    expect(h.hls.startLoad).not.toHaveBeenCalled()
+  })
+
+  it('successive onStall calls do not stack multiple timers', () => {
+    const h = harness()
+    const activeScheduled: number[] = []
+
+    h.watchdog.onStall()
+    activeScheduled.push(h.scheduled.length - 1)
+    h.watchdog.onStall()
+
+    // Only one timer entry with a positive delayMs should exist (the second
+    // onStall is a no-op because one is already pending).
+    const active = h.scheduled.filter((s) => s.delayMs >= 0)
+    expect(active.length).toBe(1)
+  })
+
+  it('schedules the stall timer with a 4000ms delay', () => {
+    const h = harness()
+
+    h.watchdog.onStall()
+
+    expect(h.scheduled[0].delayMs).toBe(4000)
+  })
+
+  it('cleanup cancels a pending stall timer', () => {
+    const h = harness()
+
+    h.watchdog.onStall()
+    h.watchdog.cleanup()
+    h.scheduled[0].fn()
+
+    expect(h.hls.startLoad).not.toHaveBeenCalled()
   })
 })
