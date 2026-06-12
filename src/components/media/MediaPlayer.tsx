@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Ref } from 'react'
 import IptvPlayer from '../player/IptvPlayer'
+import { MediaControls } from './MediaControls'
 import type { StreamGrant } from '../../lib/api/iptv'
 import { mediaApi, type PlayableKind, type PlaybackGrant } from '../../lib/api/media'
 import { useReportWatch } from '../../lib/hooks/useMediaLibrary'
@@ -12,7 +13,6 @@ import {
   playerStartPosition,
   startPlaybackSession,
   type PlaybackSession,
-  type PlayerTimelineMode,
 } from './playbackSession'
 
 type Props = {
@@ -38,15 +38,18 @@ export type MediaPlayerViewProps = {
   /** Saved resume point awaiting a user choice: render the
    *  resume-or-start-over prompt instead of starting playback. */
   resumePromptSecs?: number | null
-  /** HLS resume offset — the hls.js engine presents the session at absolute
-   *  title time (see IptvPlayer timelineOffsetSecs). */
-  timelineOffsetSecs?: number | null
+  /** Title time where the session's media timeline starts (-ss offset; 0 for
+   *  fresh starts and progressive delivery). MediaControls adds it to the
+   *  element position to display absolute title time. */
+  sessionOffsetSecs?: number
+  /** Full title length for the controls' scrubber/total readout. */
+  titleDurationSecs?: number | null
   containerRef?: Ref<HTMLDivElement>
   onClose: () => void
   onRetry: () => void
   onResume?: () => void
   onStartOver?: () => void
-  onTimelineMode?: (mode: PlayerTimelineMode) => void
+  /** A scrub below the session's -ss floor — re-grant at the target. */
   onSeekBeforeStart?: (targetSecs: number) => void
   onPositionUpdate: (positionSecs: number, durationSecs: number | null) => void
   onEnded: () => void
@@ -66,19 +69,22 @@ export function MediaPlayerView({
   startPositionSecs,
   pinnedDurationSecs,
   resumePromptSecs,
-  timelineOffsetSecs,
+  sessionOffsetSecs,
+  titleDurationSecs,
   containerRef,
   onClose,
   onRetry,
   onResume,
   onStartOver,
-  onTimelineMode,
   onSeekBeforeStart,
   onPositionUpdate,
   onEnded,
   onDeliveryStruggling,
 }: MediaPlayerViewProps) {
   const promptingResume = !error && !streamGrant && resumePromptSecs != null
+  // The engine's <video> element, surfaced by IptvPlayer so the app-drawn
+  // control bar (absolute timeline — see MediaControls) can drive it.
+  const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null)
   return (
     <div
       ref={containerRef}
@@ -126,19 +132,28 @@ export function MediaPlayerView({
         <p className="iptv-tab__status">Starting playback…</p>
       )}
       {streamGrant && (
-        <IptvPlayer
-          grant={streamGrant}
-          autoPlay
-          startPositionSecs={playerStartPosition(streamGrant.delivery, startPositionSecs)}
-          pinnedDurationSecs={pinnedDurationSecs}
-          timelineOffsetSecs={timelineOffsetSecs}
-          vodHls
-          onTimelineMode={onTimelineMode}
-          onSeekBeforeStart={onSeekBeforeStart}
-          onPositionUpdate={onPositionUpdate}
-          onEnded={onEnded}
-          onDeliveryStruggling={onDeliveryStruggling}
-        />
+        <>
+          <IptvPlayer
+            grant={streamGrant}
+            autoPlay
+            startPositionSecs={playerStartPosition(streamGrant.delivery, startPositionSecs)}
+            pinnedDurationSecs={pinnedDurationSecs}
+            vodHls
+            nativeControls={false}
+            onVideoElement={setVideoEl}
+            onPositionUpdate={onPositionUpdate}
+            onEnded={onEnded}
+            onDeliveryStruggling={onDeliveryStruggling}
+          />
+          {videoEl && (
+            <MediaControls
+              video={videoEl}
+              offsetSecs={sessionOffsetSecs ?? 0}
+              totalDurationSecs={titleDurationSecs ?? null}
+              onSeekBelowOffset={onSeekBeforeStart ?? (() => undefined)}
+            />
+          )}
+        </>
       )}
     </div>
   )
@@ -180,10 +195,6 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
   // genuinely struggles, re-grant with buffered (HLS) delivery resumed at the
   // captured position.
   const forceHlsRef = useRef(false)
-  // Which timeline the engine reports (see PlayerTimelineMode). A ref: it is
-  // only read inside callbacks (progress math), never during render, and the
-  // engine sets it before the first position update of a session.
-  const timelineModeRef = useRef<PlayerTimelineMode>('session')
   // Ref twin of effectiveStartSecs for the stable callbacks below (they must
   // keep their identity across renders — IptvPlayer's engine effect lists
   // them — so they can't close over state).
@@ -245,10 +256,6 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
   )
   const onStartOver = useCallback(() => chooseStart(0), [chooseStart])
 
-  const onTimelineMode = useCallback((mode: PlayerTimelineMode) => {
-    timelineModeRef.current = mode
-  }, [])
-
   // Progressive playback proved unhealthy (≥2 confirmed stall episodes —
   // IptvPlayer's escalator fires this at most once). Capture the playhead,
   // flip the session to forced-HLS, and remount via the existing sessionKey
@@ -265,9 +272,10 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
     setSessionKey((key) => key + 1)
   }, [])
 
-  // A back-seek below the session's -ss floor (absolute HLS timeline only —
-  // see IptvPlayer's createSeekFloorGuard): re-grant the session at the
-  // target so the whole seekbar is genuinely playable.
+  // A scrub below the session's -ss floor (the MediaControls scrubber spans
+  // the whole title, including the region before this session's start):
+  // re-grant the session at the target so the whole seekbar is genuinely
+  // playable.
   const onSeekBeforeStart = useCallback((targetSecs: number) => {
     effectiveStartRef.current = targetSecs
     latest.current.pos = targetSecs
@@ -336,9 +344,6 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
         startPositionSecs: effectiveStartRef.current ?? startPositionSecs,
         positionSecs,
         durationSecs,
-        // 'absolute' (hls.js timelineOffset): currentTime is already title
-        // time; 'session' (native HLS): add the -ss offset back.
-        timelineMode: timelineModeRef.current,
       })
       latest.current = { pos, dur }
       report(pos, dur, completed)
@@ -353,15 +358,21 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
     sessionRef.current?.stop()
   }, [report, grant?.durationSecs])
 
-  // Pin the HLS timeline to the full title length: the hls.js engine presents
-  // the session at absolute time (timelineOffset = the effective start), so
-  // the pinned end is the grant's probed duration itself.
+  // Pin the HLS media timeline to the session's REMAINING length (the -ss
+  // session starts at 0); MediaControls re-adds the offset for display.
   const pinnedDurationSecs = grant
     ? hlsPinnedDurationSecs({
         delivery: grant.delivery,
         grantDurationSecs: grant.durationSecs ?? null,
+        startPositionSecs: effectiveStartSecs ?? 0,
       })
     : null
+
+  // Where the session's media 0 sits in title time, for the control bar's
+  // absolute display. Only HLS sessions are offset (-ss); progressive serves
+  // the whole file, its element timeline is already absolute.
+  const sessionOffsetSecs =
+    grant?.delivery === 'hls' ? Math.max(0, effectiveStartSecs ?? 0) : 0
 
   return (
     <MediaPlayerView
@@ -372,13 +383,13 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
       startPositionSecs={effectiveStartSecs ?? startPositionSecs}
       pinnedDurationSecs={pinnedDurationSecs}
       resumePromptSecs={effectiveStartSecs == null ? (startPositionSecs ?? null) : null}
-      timelineOffsetSecs={effectiveStartSecs}
+      sessionOffsetSecs={sessionOffsetSecs}
+      titleDurationSecs={grant?.durationSecs ?? null}
       containerRef={modalRef}
       onClose={onClose}
       onRetry={retry}
       onResume={onResume}
       onStartOver={onStartOver}
-      onTimelineMode={onTimelineMode}
       onSeekBeforeStart={onSeekBeforeStart}
       onPositionUpdate={onPositionUpdate}
       onEnded={onEnded}

@@ -133,47 +133,39 @@ export function playerStartPosition(
 /** Timeline length for a transcoded (HLS) grant, used to pin
  *  MediaSource.duration so the player's total time reads full-length from the
  *  first frame instead of creeping up with the growing transcode playlist
- *  (see IptvPlayer's createHlsDurationPin). The hls.js engine presents the
- *  session at ABSOLUTE title time (`timelineOffset` shifts the -ss session to
- *  its real start), so the pin is the FULL title duration — the absolute end
- *  of the timeline — regardless of any resume offset. Null (no pin) for
- *  progressive delivery — the original file already reports its true
- *  duration — and whenever the grant carries no duration. */
+ *  (see IptvPlayer's createHlsDurationPin). The session timeline is the RAW
+ *  -ss session (starts at 0), so the pin is the REMAINING length: full title
+ *  minus the resume offset. (The absolute display lives in MediaControls,
+ *  which adds the offset back — never in the media timeline itself: hls.js's
+ *  `timelineOffset` was tried and is broken on growing EVENT playlists, see
+ *  MediaControls' doc.) Null (no pin) for progressive delivery — the original
+ *  file already reports its true duration — and whenever the grant carries no
+ *  duration. */
 export function hlsPinnedDurationSecs(args: {
   delivery: PlaybackGrant['delivery']
   grantDurationSecs: number | null
+  startPositionSecs?: number
 }): number | null {
   if (args.delivery !== 'hls' || args.grantDurationSecs == null) return null
-  const dur = args.grantDurationSecs
+  const dur = args.grantDurationSecs - Math.max(0, args.startPositionSecs ?? 0)
   return Number.isFinite(dur) && dur > 0 ? dur : null
 }
 
-/** Which timeline the <video> element reports for an HLS session:
- *  'absolute' — the hls.js (MSE) engine applies `timelineOffset`, so
- *  currentTime is already real title time; 'session' — the native-HLS engine
- *  (iOS Safari, no hls.js) plays the raw -ss session, whose timeline restarts
- *  at 0 and needs the resume offset added back. */
-export type PlayerTimelineMode = 'absolute' | 'session'
-
 /** Map the <video> element's (position, duration) to absolute title progress.
- *  For a transcoded (HLS) session the offset handling depends on the engine's
- *  timeline mode (see PlayerTimelineMode): in 'session' mode the real content
- *  position is start_secs + currentTime; in 'absolute' mode currentTime is
- *  already title time and adding the offset would double-count. Either way
- *  the element "duration" is only the live window (or Infinity), so the
- *  grant's full-title duration is authoritative. Direct-play (progressive)
- *  serves the whole file with a true timeline, so currentTime is already
- *  absolute. */
+ *  A transcoded (HLS) session starts at the server-side -ss offset, so the
+ *  real content position is start_secs + currentTime — and the element
+ *  "duration" is only the session window (or Infinity), so the grant's
+ *  full-title duration is authoritative. Direct-play (progressive) serves the
+ *  whole file with a true timeline, so currentTime is already absolute. */
 export function absoluteProgress(args: {
   delivery: PlaybackGrant['delivery']
   grantDurationSecs: number | null
   startPositionSecs?: number
   positionSecs: number
   durationSecs: number | null
-  timelineMode?: PlayerTimelineMode
 }): { pos: number; dur: number | null; completed: boolean } {
   const isHls = args.delivery === 'hls'
-  const offset = isHls && args.timelineMode !== 'absolute' ? (args.startPositionSecs ?? 0) : 0
+  const offset = isHls ? (args.startPositionSecs ?? 0) : 0
   const pos = offset + args.positionSecs
   const dur = isHls
     ? args.grantDurationSecs
