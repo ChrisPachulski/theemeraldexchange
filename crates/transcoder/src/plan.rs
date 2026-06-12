@@ -1101,10 +1101,7 @@ mod tests {
                 segment_format,
                 ..
             } => {
-                assert!(matches!(
-                    video,
-                    VideoOp::EncodeH264 { tone_map: true, .. }
-                ));
+                assert!(matches!(video, VideoOp::EncodeH264 { tone_map: true, .. }));
                 assert_eq!(segment_format, SegmentFormat::MpegTs);
             }
             other => panic!("expected transcode, got {other:?}"),
