@@ -30,7 +30,7 @@ use std::path::Path;
 use std::process::Command;
 
 use transcoder::args::{HwEncoder, ffmpeg_args};
-use transcoder::plan::{AudioOp, SubtitleOp, TranscodePlan, VideoOp};
+use transcoder::plan::{AudioOp, SegmentFormat, SubtitleOp, TranscodePlan, VideoOp};
 
 /// Resolve an ffmpeg-family binary: honor the same `TRANSCODER_FFMPEG_BIN`
 /// override the service uses for `ffmpeg`; fall back to the bare name on PATH.
@@ -138,6 +138,9 @@ fn production_argv_produces_playable_hls() {
         video: VideoOp::Copy,
         audio: AudioOp::Copy,
         subtitle: SubtitleOp::None,
+        // MPEG-TS to match the `.ts` playlist/segment assertions below (the
+        // h264-copy production path; fMP4 is the HEVC-copy variant).
+        segment_format: SegmentFormat::MpegTs,
         reason: "real-ffmpeg integration: remux to HLS".into(),
     };
     let argv = ffmpeg_args(
