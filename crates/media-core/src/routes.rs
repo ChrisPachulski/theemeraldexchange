@@ -463,6 +463,11 @@ struct StreamCapsQuery {
     hls_fmp4_hevc: bool,
     #[serde(default)]
     start_secs: Option<u64>,
+    /// Client explicitly requested buffered (HLS) delivery: bypass the
+    /// direct-play decision and hand off to the transcoder, which resolves a
+    /// direct-play-eligible file to a lossless copy-remux session.
+    #[serde(default)]
+    force_transcode: bool,
 }
 
 impl StreamCapsQuery {
@@ -476,6 +481,7 @@ impl StreamCapsQuery {
             || self.audio_codecs.is_some()
             || self.aac_max_channels.is_some()
             || self.hls_fmp4_hevc
+            || self.force_transcode
     }
 
     fn to_caps(&self) -> ClientCaps {
@@ -548,6 +554,9 @@ struct TranscodeHandoff<'a> {
     start_secs: u64,
     /// The capability decision reason, echoed back in the grant for the client.
     reason: &'a str,
+    /// Forward the client's explicit buffered-delivery request so the
+    /// transcoder skips its own DirectPlay short-circuit.
+    force_transcode: bool,
 }
 
 impl TranscodeHandoff<'_> {
@@ -591,6 +600,7 @@ impl TranscodeHandoff<'_> {
             "media_id": self.id,
             "sub": sub,
             "start_secs": self.start_secs,
+            "force_transcode": self.force_transcode,
         })
     }
 }
@@ -705,11 +715,19 @@ async fn stream_file(
     if caps_q.advertised() {
         let caps = caps_q.to_caps();
         let decision = capability::decide(&file, &caps);
-        if !decision.direct_play {
+        // `force_transcode` bypasses the decision: decide() WILL say
+        // direct_play for these files, but the client has asked for buffered
+        // (HLS) delivery, so the handoff must be explicit.
+        if caps_q.force_transcode || !decision.direct_play {
+            let reason = if caps_q.force_transcode {
+                "client requested buffered delivery".to_string()
+            } else {
+                decision.reason
+            };
             let claims = claims.map(|Extension(c)| c);
             match state.config.transcoder_url.as_deref() {
                 Some(transcoder_url) => {
-                    tracing::info!(path = %file.path, reason = %decision.reason, "transcode required; handing off to transcoder");
+                    tracing::info!(path = %file.path, reason = %reason, "transcode required; handing off to transcoder");
                     let handoff = TranscodeHandoff {
                         file: &file,
                         caps: &caps,
@@ -717,12 +735,13 @@ async fn stream_file(
                         id,
                         claims: &claims,
                         start_secs: caps_q.start_secs.unwrap_or(0),
-                        reason: &decision.reason,
+                        reason: &reason,
+                        force_transcode: caps_q.force_transcode,
                     };
                     return handoff_to_transcoder(&state, transcoder_url, &handoff).await;
                 }
                 None => {
-                    tracing::info!(path = %file.path, reason = %decision.reason, "transcode required; no transcoder configured, returning 503");
+                    tracing::info!(path = %file.path, reason = %reason, "transcode required; no transcoder configured, returning 503");
                     return Err(AppError::TranscoderRequired);
                 }
             }
@@ -1898,6 +1917,53 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = seen.lock().await.clone().expect("transcoder grant body");
         assert_eq!(body["start_secs"], 95);
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn stream_force_transcode_bypasses_direct_play() {
+        // The stall-escalation contract: a file the caps WOULD direct-play
+        // must, with ?force_transcode=true, hand off to the transcoder (which
+        // resolves it to a lossless copy-remux) instead of serving bytes —
+        // and the grant body must carry force_transcode so the transcoder
+        // skips its own DirectPlay short-circuit.
+        let grant = json!({
+            "directPlay": false,
+            "transcode": true,
+            "sessionId": "sess-forced",
+            "manifestUrl": "/api/transcode/session/sess-forced/index.m3u8",
+            "heartbeatUrl": "/api/transcode/session/sess-forced/heartbeat",
+        });
+        let seen = Arc::new(tokio::sync::Mutex::new(None));
+        let (base, handle) =
+            spawn_mock_transcoder_capture(grant, StatusCode::OK, seen.clone()).await;
+        let state = test_state_with_transcoder(&base).await;
+        // seed_media_file stores container=mp4, codec=h264, height=1080 — the
+        // caps below match exactly, so without the flag this direct-plays
+        // (proven by stream_direct_play_serves_bytes_when_caps_match).
+        let file_id = seed_media_file(&state, "/lib/direct-eligible.mp4").await;
+        let movie_id = seed_movie_for_file(&state, file_id).await;
+
+        let app = crate::build_router(state);
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!(
+                        "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=h264&max_height=1080&start_secs=42&force_transcode=true"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["transcode"], true);
+        assert_eq!(v["sessionId"], "sess-forced");
+        assert_eq!(v["reason"], "client requested buffered delivery");
+        let body = seen.lock().await.clone().expect("transcoder grant body");
+        assert_eq!(body["force_transcode"], true);
+        assert_eq!(body["start_secs"], 42);
         handle.abort();
     }
 
