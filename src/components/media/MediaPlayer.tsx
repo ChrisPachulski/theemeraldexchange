@@ -5,10 +5,10 @@ import type { StreamGrant } from '../../lib/api/iptv'
 import { mediaApi, type PlayableKind, type PlaybackGrant } from '../../lib/api/media'
 import { useReportWatch } from '../../lib/hooks/useMediaLibrary'
 import { useModalA11y } from '../../lib/hooks/useModalA11y'
+import { ResumePrompt } from './ResumePrompt'
 import {
   absoluteProgress,
   COMPLETE_TAIL_SECS,
-  formatPlaybackTime,
   hlsPinnedDurationSecs,
   playerStartPosition,
   startPlaybackSession,
@@ -116,17 +116,11 @@ export function MediaPlayerView({
         </div>
       )}
       {promptingResume && (
-        <div className="iptv-tab__status media-resume" role="group" aria-label="Resume playback">
-          <p>You were partway through this title.</p>
-          <div className="media-resume__choices">
-            <button className="iptv-tab__retry" type="button" onClick={onResume}>
-              Resume from {formatPlaybackTime(resumePromptSecs)}
-            </button>
-            <button className="iptv-tab__retry" type="button" onClick={onStartOver}>
-              Start from beginning
-            </button>
-          </div>
-        </div>
+        <ResumePrompt
+          resumeSecs={resumePromptSecs}
+          onResume={onResume ?? (() => undefined)}
+          onStartOver={onStartOver ?? (() => undefined)}
+        />
       )}
       {!error && !streamGrant && !promptingResume && (
         <p className="iptv-tab__status">Starting playback…</p>
