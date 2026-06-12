@@ -7,17 +7,20 @@ import { useModalA11y } from '../../lib/hooks/useModalA11y'
 import {
   absoluteProgress,
   COMPLETE_TAIL_SECS,
+  formatPlaybackTime,
   hlsPinnedDurationSecs,
   playerStartPosition,
   startPlaybackSession,
   type PlaybackSession,
+  type PlayerTimelineMode,
 } from './playbackSession'
 
 type Props = {
   kind: PlayableKind
   id: number
   title: string
-  /** Resume point from prior watch state (direct-play seeks here on load). */
+  /** Resume point from prior watch state. A positive value shows the
+   *  resume-or-start-over prompt before any playback session starts. */
   startPositionSecs?: number
   onClose: () => void
 }
@@ -32,9 +35,19 @@ export type MediaPlayerViewProps = {
   /** Known total session duration for HLS grants — pins the player timeline
    *  to full length immediately (see hlsPinnedDurationSecs). */
   pinnedDurationSecs?: number | null
+  /** Saved resume point awaiting a user choice: render the
+   *  resume-or-start-over prompt instead of starting playback. */
+  resumePromptSecs?: number | null
+  /** HLS resume offset — the hls.js engine presents the session at absolute
+   *  title time (see IptvPlayer timelineOffsetSecs). */
+  timelineOffsetSecs?: number | null
   containerRef?: Ref<HTMLDivElement>
   onClose: () => void
   onRetry: () => void
+  onResume?: () => void
+  onStartOver?: () => void
+  onTimelineMode?: (mode: PlayerTimelineMode) => void
+  onSeekBeforeStart?: (targetSecs: number) => void
   onPositionUpdate: (positionSecs: number, durationSecs: number | null) => void
   onEnded: () => void
   /** Progressive playback genuinely struggled — re-grant with buffered (HLS)
@@ -52,13 +65,20 @@ export function MediaPlayerView({
   streamGrant,
   startPositionSecs,
   pinnedDurationSecs,
+  resumePromptSecs,
+  timelineOffsetSecs,
   containerRef,
   onClose,
   onRetry,
+  onResume,
+  onStartOver,
+  onTimelineMode,
+  onSeekBeforeStart,
   onPositionUpdate,
   onEnded,
   onDeliveryStruggling,
 }: MediaPlayerViewProps) {
+  const promptingResume = !error && !streamGrant && resumePromptSecs != null
   return (
     <div
       ref={containerRef}
@@ -89,14 +109,32 @@ export function MediaPlayerView({
           )}
         </div>
       )}
-      {!error && !streamGrant && <p className="iptv-tab__status">Starting playback…</p>}
+      {promptingResume && (
+        <div className="iptv-tab__status media-resume" role="group" aria-label="Resume playback">
+          <p>You were partway through this title.</p>
+          <div className="media-resume__choices">
+            <button className="iptv-tab__retry" type="button" onClick={onResume}>
+              Resume from {formatPlaybackTime(resumePromptSecs)}
+            </button>
+            <button className="iptv-tab__retry" type="button" onClick={onStartOver}>
+              Start from beginning
+            </button>
+          </div>
+        </div>
+      )}
+      {!error && !streamGrant && !promptingResume && (
+        <p className="iptv-tab__status">Starting playback…</p>
+      )}
       {streamGrant && (
         <IptvPlayer
           grant={streamGrant}
           autoPlay
           startPositionSecs={playerStartPosition(streamGrant.delivery, startPositionSecs)}
           pinnedDurationSecs={pinnedDurationSecs}
+          timelineOffsetSecs={timelineOffsetSecs}
           vodHls
+          onTimelineMode={onTimelineMode}
+          onSeekBeforeStart={onSeekBeforeStart}
           onPositionUpdate={onPositionUpdate}
           onEnded={onEnded}
           onDeliveryStruggling={onDeliveryStruggling}
@@ -107,11 +145,13 @@ export function MediaPlayerView({
 }
 
 /**
- * Local-media player modal. Fetches a playback grant (direct-play or
- * transcoded HLS), reuses the shared IptvPlayer engine, persists watch progress
- * (throttled, with a final flush on close), and heartbeats transcode sessions
- * so they aren't reaped mid-watch. The grant/heartbeat/stop lifecycle lives in
- * startPlaybackSession (./playbackSession.ts) where it is unit-tested.
+ * Local-media player modal. With a saved resume point it first asks
+ * resume-or-start-over (nothing plays until the user picks); then fetches a
+ * playback grant (direct-play or transcoded HLS), reuses the shared
+ * IptvPlayer engine, persists watch progress (throttled, with a final flush
+ * on close), and heartbeats transcode sessions so they aren't reaped
+ * mid-watch. The grant/heartbeat/stop lifecycle lives in startPlaybackSession
+ * (./playbackSession.ts) where it is unit-tested.
  */
 export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Props) {
   const [grant, setGrant] = useState<PlaybackGrant | null>(null)
@@ -120,6 +160,14 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
   // Bumped by "Play again" after a session-lost 404 to re-run the grant flow.
   const [sessionKey, setSessionKey] = useState(0)
   const report = useReportWatch(kind, id)
+  // Where the CURRENT session starts in title time. null = a saved resume
+  // point exists and the user hasn't chosen resume-or-start-over yet (no
+  // session runs). Set by the prompt choice, then overwritten by stall
+  // escalation or a below-floor back-seek (both re-grant at a new start).
+  const hasResumePoint = (startPositionSecs ?? 0) > 0
+  const [effectiveStartSecs, setEffectiveStartSecs] = useState<number | null>(
+    hasResumePoint ? null : 0,
+  )
   // Latest (position, duration) so unmount/close can flush an exact resume point.
   const latest = useRef<{ pos: number; dur: number | null }>({
     pos: startPositionSecs ?? 0,
@@ -130,31 +178,34 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
   const sessionRef = useRef<PlaybackSession | null>(null)
   // Stall escalation (one-way, once per mount): when progressive playback
   // genuinely struggles, re-grant with buffered (HLS) delivery resumed at the
-  // captured position. Refs, not state, so the handler stays referentially
-  // stable (IptvPlayer's engine effect lists it) and the session effect can
-  // read them without extra dependencies — the sessionKey bump re-runs it.
+  // captured position.
   const forceHlsRef = useRef(false)
-  const escalateStartRef = useRef<number | null>(null)
-  // Render-readable mirror of escalateStartRef (refs must not be read during
-  // render): feeds the pinned-duration math below. Set alongside the ref in
-  // onDeliveryStruggling, inside the same batch as the sessionKey bump.
-  const [escalatedStartSecs, setEscalatedStartSecs] = useState<number | null>(null)
+  // Which timeline the engine reports (see PlayerTimelineMode). A ref: it is
+  // only read inside callbacks (progress math), never during render, and the
+  // engine sets it before the first position update of a session.
+  const timelineModeRef = useRef<PlayerTimelineMode>('session')
+  // Ref twin of effectiveStartSecs for the stable callbacks below (they must
+  // keep their identity across renders — IptvPlayer's engine effect lists
+  // them — so they can't close over state).
+  const effectiveStartRef = useRef<number | null>(hasResumePoint ? null : 0)
 
   // Plain-div dialog: useModalA11y supplies Escape-to-close, the focus trap,
   // and focus restoration that aria-modal="true" promises (LiveTab pattern).
   const modalRef = useModalA11y<HTMLDivElement>(onClose)
 
-  // One playback session per (title, retry attempt). Callers key the player by
-  // title, so a new selection remounts it fresh; "Play again" bumps sessionKey
-  // to re-grant after the transcoder reaped the previous session.
+  // One playback session per (title, chosen start, retry attempt). Callers
+  // key the player by title, so a new selection remounts it fresh; the resume
+  // prompt gates the first session (null = still asking); "Play again" bumps
+  // sessionKey to re-grant after the transcoder reaped the previous session.
   useEffect(() => {
     void sessionKey
+    if (effectiveStartSecs == null) return undefined
     const session = startPlaybackSession({
       kind,
       id,
-      // After escalation the new session resumes at the captured playhead
-      // (server-baked -ss), not the original resume point.
-      startPositionSecs: escalateStartRef.current ?? startPositionSecs,
+      // 0 (fresh start / start-over) goes as "no offset" so the grant wire
+      // shape stays identical to a non-resumable title.
+      startPositionSecs: effectiveStartSecs > 0 ? effectiveStartSecs : undefined,
       forceHls: forceHlsRef.current,
       api: mediaApi,
       handlers: {
@@ -174,12 +225,28 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
       sessionRef.current = null
       session.dispose()
     }
-  }, [kind, id, startPositionSecs, sessionKey])
+  }, [kind, id, effectiveStartSecs, sessionKey])
 
   const retry = useCallback(() => {
     setError(null)
     setSessionLost(false)
     setSessionKey((key) => key + 1)
+  }, [])
+
+  // Resume prompt choices. Both set the session start; the session effect
+  // takes it from there.
+  const chooseStart = useCallback((startSecs: number) => {
+    effectiveStartRef.current = startSecs
+    setEffectiveStartSecs(startSecs)
+  }, [])
+  const onResume = useCallback(
+    () => chooseStart(Math.floor(startPositionSecs ?? 0)),
+    [chooseStart, startPositionSecs],
+  )
+  const onStartOver = useCallback(() => chooseStart(0), [chooseStart])
+
+  const onTimelineMode = useCallback((mode: PlayerTimelineMode) => {
+    timelineModeRef.current = mode
   }, [])
 
   // Progressive playback proved unhealthy (≥2 confirmed stall episodes —
@@ -191,9 +258,21 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
   const onDeliveryStruggling = useCallback(() => {
     if (forceHlsRef.current) return
     forceHlsRef.current = true
-    escalateStartRef.current = Math.floor(latest.current.pos)
-    setEscalatedStartSecs(escalateStartRef.current)
+    const captured = Math.floor(latest.current.pos)
+    effectiveStartRef.current = captured
     setGrant(null)
+    setEffectiveStartSecs(captured)
+    setSessionKey((key) => key + 1)
+  }, [])
+
+  // A back-seek below the session's -ss floor (absolute HLS timeline only —
+  // see IptvPlayer's createSeekFloorGuard): re-grant the session at the
+  // target so the whole seekbar is genuinely playable.
+  const onSeekBeforeStart = useCallback((targetSecs: number) => {
+    effectiveStartRef.current = targetSecs
+    latest.current.pos = targetSecs
+    setGrant(null)
+    setEffectiveStartSecs(targetSecs)
     setSessionKey((key) => key + 1)
   }, [])
 
@@ -252,13 +331,14 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
       const { pos, dur, completed } = absoluteProgress({
         delivery: grant?.delivery ?? 'progressive',
         grantDurationSecs: grant?.durationSecs ?? null,
-        // After escalation the HLS timeline restarts at the CAPTURED position
-        // (server-baked -ss), so the offset must be the effective start —
-        // using the original resume prop would regress every saved resume
-        // point to the pre-escalation offset.
-        startPositionSecs: escalateStartRef.current ?? startPositionSecs,
+        // The session starts at the EFFECTIVE start (prompt choice, then
+        // escalation/back-seek re-grants), not the original resume prop.
+        startPositionSecs: effectiveStartRef.current ?? startPositionSecs,
         positionSecs,
         durationSecs,
+        // 'absolute' (hls.js timelineOffset): currentTime is already title
+        // time; 'session' (native HLS): add the -ss offset back.
+        timelineMode: timelineModeRef.current,
       })
       latest.current = { pos, dur }
       report(pos, dur, completed)
@@ -273,15 +353,13 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
     sessionRef.current?.stop()
   }, [report, grant?.durationSecs])
 
-  // Known total session duration so the HLS timeline reads full-length from
-  // the first frame (the grant's probed duration minus the server-baked -ss
-  // offset — after escalation that's the captured playhead, same effective
-  // start absoluteProgress uses, read from the render-safe state mirror).
+  // Pin the HLS timeline to the full title length: the hls.js engine presents
+  // the session at absolute time (timelineOffset = the effective start), so
+  // the pinned end is the grant's probed duration itself.
   const pinnedDurationSecs = grant
     ? hlsPinnedDurationSecs({
         delivery: grant.delivery,
         grantDurationSecs: grant.durationSecs ?? null,
-        startPositionSecs: escalatedStartSecs ?? startPositionSecs,
       })
     : null
 
@@ -291,11 +369,17 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
       error={error}
       sessionLost={sessionLost}
       streamGrant={streamGrant}
-      startPositionSecs={startPositionSecs}
+      startPositionSecs={effectiveStartSecs ?? startPositionSecs}
       pinnedDurationSecs={pinnedDurationSecs}
+      resumePromptSecs={effectiveStartSecs == null ? (startPositionSecs ?? null) : null}
+      timelineOffsetSecs={effectiveStartSecs}
       containerRef={modalRef}
       onClose={onClose}
       onRetry={retry}
+      onResume={onResume}
+      onStartOver={onStartOver}
+      onTimelineMode={onTimelineMode}
+      onSeekBeforeStart={onSeekBeforeStart}
       onPositionUpdate={onPositionUpdate}
       onEnded={onEnded}
       onDeliveryStruggling={onDeliveryStruggling}

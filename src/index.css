@@ -149,6 +149,9 @@ div.iptv-tab__status--error p { margin: 0 0 .5rem; }
   border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.08); color: #f5f5f5;
 }
 .iptv-tab__retry:hover { background: rgba(255,255,255,.14); }
+/* Resume-or-start-over prompt before a resumable title plays (MediaPlayer). */
+.media-resume p { margin: 0 0 .75rem; }
+.media-resume__choices { display: flex; gap: .5rem; flex-wrap: wrap; }
 .iptv-tab__pager {
   display: flex; gap: .5rem; align-items: center; justify-content: flex-end; margin-top: 1rem;
 }

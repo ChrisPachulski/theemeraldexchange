@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   absoluteProgress,
+  formatPlaybackTime,
   COMPLETE_TAIL_SECS,
   HEARTBEAT_INTERVAL_MS,
   hlsPinnedDurationSecs,
@@ -277,6 +278,34 @@ describe('absoluteProgress', () => {
     expect(r).toEqual({ pos: 642, dur: 7200, completed: false })
   })
 
+  it("never adds the offset on an 'absolute' timeline (hls.js timelineOffset)", () => {
+    // The hls.js engine already presents the -ss session at title time —
+    // adding the resume offset again would double-count every heartbeat.
+    const r = absoluteProgress({
+      delivery: 'hls',
+      grantDurationSecs: 7200,
+      startPositionSecs: 600,
+      positionSecs: 642,
+      durationSecs: 30,
+      timelineMode: 'absolute',
+    })
+
+    expect(r).toEqual({ pos: 642, dur: 7200, completed: false })
+  })
+
+  it("keeps the offset on an explicit 'session' timeline (native HLS engine)", () => {
+    const r = absoluteProgress({
+      delivery: 'hls',
+      grantDurationSecs: 7200,
+      startPositionSecs: 600,
+      positionSecs: 42,
+      durationSecs: 30,
+      timelineMode: 'session',
+    })
+
+    expect(r.pos).toBe(642)
+  })
+
   it('marks the title complete inside the credits tail', () => {
     const r = absoluteProgress({
       delivery: 'hls',
@@ -302,13 +331,10 @@ describe('absoluteProgress', () => {
 })
 
 describe('hlsPinnedDurationSecs', () => {
-  it('returns the remaining-title length for an HLS grant with a resume offset', () => {
-    expect(
-      hlsPinnedDurationSecs({ delivery: 'hls', grantDurationSecs: 7679, startPositionSecs: 600 }),
-    ).toBe(7079)
-  })
-
-  it('returns the full title length when starting from the top', () => {
+  it('pins the FULL title length — the absolute timeline ends at the real end', () => {
+    // The hls.js engine shifts a resumed session to absolute time via
+    // timelineOffset, so the pinned end is always the full duration; a
+    // remaining-length pin would truncate the visible timeline.
     expect(hlsPinnedDurationSecs({ delivery: 'hls', grantDurationSecs: 7679 })).toBe(7679)
   })
 
@@ -322,9 +348,21 @@ describe('hlsPinnedDurationSecs', () => {
     expect(hlsPinnedDurationSecs({ delivery: 'hls', grantDurationSecs: null })).toBeNull()
   })
 
-  it('returns null when the resume offset consumes the whole title', () => {
-    expect(
-      hlsPinnedDurationSecs({ delivery: 'hls', grantDurationSecs: 600, startPositionSecs: 600 }),
-    ).toBeNull()
+  it('returns null for a zero/invalid duration', () => {
+    expect(hlsPinnedDurationSecs({ delivery: 'hls', grantDurationSecs: 0 })).toBeNull()
+    expect(hlsPinnedDurationSecs({ delivery: 'hls', grantDurationSecs: NaN })).toBeNull()
+  })
+})
+
+describe('formatPlaybackTime', () => {
+  it('renders M:SS under an hour and H:MM:SS past it (native-controls style)', () => {
+    expect(formatPlaybackTime(42)).toBe('0:42')
+    expect(formatPlaybackTime(13 * 60 + 24)).toBe('13:24')
+    expect(formatPlaybackTime(3600 + 2 * 60 + 5)).toBe('1:02:05')
+  })
+
+  it('clamps negatives and fractions sanely', () => {
+    expect(formatPlaybackTime(-5)).toBe('0:00')
+    expect(formatPlaybackTime(59.9)).toBe('0:59')
   })
 })
