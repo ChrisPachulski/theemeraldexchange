@@ -27,6 +27,7 @@ const { playbackMock, heartbeatMock, stopMock, flushWatchMock, reportMock, engin
     current: null as null | {
       grant: { url: string; delivery: string }
       onPositionUpdate?: (positionSecs: number, durationSecs: number | null) => void
+      onDeliveryStruggling?: () => void
     },
   },
 }))
@@ -51,6 +52,7 @@ vi.mock('../player/IptvPlayer', () => ({
   default: (props: {
     grant: { url: string; delivery: string }
     onPositionUpdate?: (positionSecs: number, durationSecs: number | null) => void
+    onDeliveryStruggling?: () => void
   }) => {
     engineProps.current = props
     return (
@@ -116,7 +118,7 @@ describe('MediaPlayer (mounted) — grant flow', () => {
     await flush()
 
     expect(playbackMock).toHaveBeenCalledTimes(1)
-    expect(playbackMock).toHaveBeenCalledWith('movie', 9, undefined, undefined)
+    expect(playbackMock).toHaveBeenCalledWith('movie', 9, undefined, undefined, false)
     const engine = screen.getByTestId('player-engine')
     expect(engine).toHaveAttribute('data-url', grant.url)
     expect(engine).toHaveAttribute('data-delivery', 'progressive')
@@ -129,7 +131,46 @@ describe('MediaPlayer (mounted) — grant flow', () => {
     render(<MediaPlayer kind="episode" id={42} title="S01E07" startPositionSecs={300} onClose={() => {}} />)
     await flush()
 
-    expect(playbackMock).toHaveBeenCalledWith('episode', 42, undefined, 300)
+    expect(playbackMock).toHaveBeenCalledWith('episode', 42, undefined, 300, false)
+  })
+
+  it('escalates once: onDeliveryStruggling re-grants with forceHls at the captured position', async () => {
+    // Progressive grant first; the escalated re-grant returns HLS.
+    playbackMock
+      .mockResolvedValueOnce(progressiveGrant())
+      .mockResolvedValueOnce(hlsGrant())
+
+    render(<MediaPlayer kind="movie" id={9} title="300" onClose={() => {}} />)
+    await flush()
+    expect(screen.getByTestId('player-engine')).toHaveAttribute('data-delivery', 'progressive')
+
+    // The player reports the playhead, then the escalator fires.
+    act(() => {
+      engineProps.current?.onPositionUpdate?.(612.7, 7200)
+      engineProps.current?.onDeliveryStruggling?.()
+    })
+    // Mid-swap: engine torn down, starting state shown.
+    expect(screen.getByText('Starting playback…')).toBeInTheDocument()
+    await flush()
+
+    expect(playbackMock).toHaveBeenCalledTimes(2)
+    expect(playbackMock).toHaveBeenLastCalledWith('movie', 9, undefined, 612, true)
+    expect(screen.getByTestId('player-engine')).toHaveAttribute('data-delivery', 'hls')
+
+    // Post-escalation progress must be offset by the captured position so
+    // resume points don't regress (the HLS timeline restarts at the -ss bake).
+    reportMock.mockClear()
+    act(() => {
+      engineProps.current?.onPositionUpdate?.(10, null)
+    })
+    expect(reportMock).toHaveBeenCalledWith(622, 5400, false)
+
+    // One-way and once: a second call must not re-grant again.
+    act(() => {
+      engineProps.current?.onDeliveryStruggling?.()
+    })
+    await flush()
+    expect(playbackMock).toHaveBeenCalledTimes(2)
   })
 
   it('shows a readable error (and no engine, no retry) when the grant fails', async () => {
