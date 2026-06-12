@@ -29,7 +29,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::concurrency::Busy;
-use crate::plan::{TranscodePlan, plan_transcode};
+use crate::plan::{TranscodePlan, plan_transcode, plan_transcode_forced};
 use crate::session::{SessionManager, StartError, StartOpts};
 
 /// Transcoder app state — the session manager + principal posture.
@@ -274,6 +274,12 @@ pub struct GrantRequest {
     pub sub: String,
     #[serde(default)]
     pub start_secs: u64,
+    /// Client asked for buffered (HLS) delivery: skip the DirectPlay
+    /// short-circuit and plan a session even for direct-play-eligible files
+    /// (resolves to a lossless copy-remux). Lives on the request, not on
+    /// `ClientCaps` — it's a per-grant mode, not a capability.
+    #[serde(default)]
+    pub force_transcode: bool,
 }
 
 /// `POST /api/transcode/grant` — plan + start. Direct-play files return a plan
@@ -295,6 +301,7 @@ async fn grant(
         media_id,
         sub,
         start_secs,
+        force_transcode,
     } = req;
     let input_path = file.path.clone();
     let row = file.into_row();
@@ -331,7 +338,11 @@ async fn grant(
         }
         _ => None,
     };
-    let plan = plan_transcode(&row, &caps);
+    let plan = if force_transcode {
+        plan_transcode_forced(&row, &caps)
+    } else {
+        plan_transcode(&row, &caps)
+    };
 
     if let TranscodePlan::DirectPlay { reason } = &plan {
         return Json(json!({

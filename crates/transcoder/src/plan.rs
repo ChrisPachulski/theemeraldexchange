@@ -270,7 +270,18 @@ pub fn plan_transcode(file: &MediaFileRow, caps: &ClientCaps) -> TranscodePlan {
             reason: decision.reason,
         };
     }
+    plan_transcode_ops(file, caps, decision.reason)
+}
 
+/// Like [`plan_transcode`] but never returns `DirectPlay`: the client has
+/// explicitly asked for buffered (HLS) delivery, so a direct-play-eligible
+/// file resolves to a lossless copy-remux (h264→TS, hevc→fMP4) instead of a
+/// progressive grant. Per-stream copy-vs-reencode safety gates are unchanged.
+pub fn plan_transcode_forced(file: &MediaFileRow, caps: &ClientCaps) -> TranscodePlan {
+    plan_transcode_ops(file, caps, "forced buffered delivery".to_string())
+}
+
+fn plan_transcode_ops(file: &MediaFileRow, caps: &ClientCaps, reason: String) -> TranscodePlan {
     // ── Subtitles. burn_index is always None now (image subs are dropped, not
     // burned), so subtitles no longer force a video re-encode on their own. ──
     let (subtitle, burn_index) = plan_subtitle(file);
@@ -357,7 +368,7 @@ pub fn plan_transcode(file: &MediaFileRow, caps: &ClientCaps) -> TranscodePlan {
         audio,
         subtitle,
         segment_format,
-        reason: decision.reason,
+        reason,
     }
 }
 
@@ -1218,6 +1229,97 @@ mod tests {
             TranscodePlan::Transcode { video, audio, .. } => {
                 assert_eq!(video, VideoOp::Copy);
                 assert_eq!(audio, AudioOp::Copy);
+            }
+            other => panic!("expected transcode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn forced_direct_play_eligible_resolves_to_lossless_copy_remux() {
+        // The stall-escalation contract: a file decide() would direct-play
+        // must, under force_transcode, become a pure container change —
+        // copy/copy into MPEG-TS — never a re-encode and never DirectPlay.
+        let f = file(
+            Some("mp4"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![aac(1)],
+            vec![],
+        );
+        let caps = caps_h264_1080_sdr();
+        assert!(plan_transcode(&f, &caps).is_direct_play(), "precondition");
+        match plan_transcode_forced(&f, &caps) {
+            TranscodePlan::Transcode {
+                video,
+                audio,
+                segment_format,
+                reason,
+                ..
+            } => {
+                assert_eq!(video, VideoOp::Copy);
+                assert_eq!(audio, AudioOp::Copy);
+                assert_eq!(segment_format, SegmentFormat::MpegTs);
+                assert_eq!(reason, "forced buffered delivery");
+            }
+            other => panic!("expected forced copy-remux, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn forced_hevc_with_fmp4_caps_copies_into_fmp4() {
+        let f = file(
+            Some("mp4"),
+            Some("hevc"),
+            Some(1080),
+            None,
+            vec![aac(1)],
+            vec![],
+        );
+        let caps = ClientCaps {
+            video_codecs: vec!["h264".into(), "hevc".into()],
+            hls_fmp4_hevc: true,
+            ..caps_h264_1080_sdr()
+        };
+        match plan_transcode_forced(&f, &caps) {
+            TranscodePlan::Transcode {
+                video,
+                audio,
+                segment_format,
+                ..
+            } => {
+                assert_eq!(video, VideoOp::Copy);
+                assert_eq!(audio, AudioOp::Copy);
+                assert_eq!(segment_format, SegmentFormat::Fmp4);
+            }
+            other => panic!("expected forced hevc fmp4 copy, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn forced_still_reencodes_when_copy_is_unsafe() {
+        // Forcing buffered delivery must NOT bypass per-stream safety gates:
+        // Hi10P (undecodable profile) still re-encodes video, and 5.1 AAC on
+        // a 2ch client still downmixes.
+        let mut f = file(
+            Some("mp4"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![aac_51(1)],
+            vec![],
+        );
+        f.video_profile = Some("high 10".into());
+        match plan_transcode_forced(&f, &caps_h264_1080_sdr()) {
+            TranscodePlan::Transcode { video, audio, .. } => {
+                assert!(
+                    matches!(video, VideoOp::EncodeH264 { .. }),
+                    "Hi10P must re-encode even when forced, got {video:?}"
+                );
+                assert!(
+                    matches!(audio, AudioOp::EncodeAac { .. }),
+                    "5.1 AAC on a 2ch client must re-encode even when forced, got {audio:?}"
+                );
             }
             other => panic!("expected transcode, got {other:?}"),
         }
