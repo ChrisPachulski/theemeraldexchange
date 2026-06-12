@@ -205,6 +205,64 @@ export type RecoverableHls = {
   destroy: () => void
 }
 
+
+// ── HLS stall watchdog ───────────────────────────────────────────────
+//
+// hls.js does not fire its own ERROR event on a simple buffer underrun —
+// it just stops advancing and the <video> emits `waiting`. Without a
+// watchdog on the hls path, the player freezes silently until hls.js
+// exhausts fragLoadingMaxRetry (up to 8 × 8 s = 64 s) and surfaces a
+// fatal error. This watchdog mirrors the mpegts stall recovery: on a
+// `waiting`/`stalled` event, wait 4 s for the buffer to refill on its
+// own; if the playhead still hasn't moved, call startLoad() to re-issue
+// the stalled segment request. `onProgress` (bound to `playing` +
+// `timeupdate`) cancels a pending stall timer.
+export type HlsStallRecoverer = { startLoad: () => void }
+
+export function createHlsStallWatchdog(opts: {
+  hls: HlsStallRecoverer
+  video: { currentTime: number }
+  isCancelled: () => boolean
+  schedule?: (fn: () => void, delayMs: number) => number
+  clearScheduled?: (id: number) => void
+}): { onStall: () => void; onProgress: () => void; cleanup: () => void } {
+  const { hls, video, isCancelled } = opts
+  const schedule =
+    opts.schedule ?? ((fn, delayMs) => window.setTimeout(fn, delayMs) as unknown as number)
+  const clearScheduled = opts.clearScheduled ?? ((id) => window.clearTimeout(id))
+
+  const STALL_WINDOW_MS = 4000
+  let stallTimer: number | null = null
+  let stallMark = 0
+
+  const clearStall = () => {
+    if (stallTimer !== null) {
+      clearScheduled(stallTimer)
+      stallTimer = null
+    }
+  }
+
+  const onStall = () => {
+    if (stallTimer !== null) return // already waiting
+    stallMark = video.currentTime
+    stallTimer = schedule(() => {
+      stallTimer = null
+      if (isCancelled()) return
+      if (video.currentTime <= stallMark + 0.1) hls.startLoad()
+    }, STALL_WINDOW_MS)
+  }
+
+  const onProgress = () => {
+    clearStall()
+  }
+
+  const cleanup = () => {
+    clearStall()
+  }
+
+  return { onStall, onProgress, cleanup }
+}
+
 export const MAX_NET_RETRIES = 8
 export const MEDIA_RECOVERY_WINDOW_MS = 3000
 
@@ -436,9 +494,33 @@ export default function IptvPlayer({
           )
         })
 
+        // Buffer-underrun stall watchdog for the hls.js path. hls.js does
+        // not surface a fatal ERROR on a simple underrun — it just stalls
+        // and fires `waiting` on the <video>. Without this, a brief
+        // cloudflared jitter can freeze the player silently for up to 64 s
+        // (fragLoadingMaxRetry × fragLoadingMaxRetryTimeout) before a fatal
+        // error surfaces. The watchdog calls startLoad() after 4 s of
+        // no-progress, matching the mpegts recovery pattern.
+        const stallWatchdog = createHlsStallWatchdog({
+          hls,
+          video,
+          isCancelled: () => cancelled,
+        })
+        video.addEventListener('waiting', stallWatchdog.onStall)
+        video.addEventListener('stalled', stallWatchdog.onStall)
+        video.addEventListener('playing', stallWatchdog.onProgress)
+        video.addEventListener('timeupdate', stallWatchdog.onProgress)
+
         hls.loadSource(grant.url)
         hls.attachMedia(video)
-        cleanupEngine = () => hls.destroy()
+        cleanupEngine = () => {
+          stallWatchdog.cleanup()
+          video.removeEventListener('waiting', stallWatchdog.onStall)
+          video.removeEventListener('stalled', stallWatchdog.onStall)
+          video.removeEventListener('playing', stallWatchdog.onProgress)
+          video.removeEventListener('timeupdate', stallWatchdog.onProgress)
+          hls.destroy()
+        }
         updateHlsTracks()
         if (autoPlay) safePlay(video)
         return
