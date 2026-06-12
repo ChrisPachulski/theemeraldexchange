@@ -62,7 +62,7 @@ for svc in "$@"; do
 done
 
 # ── 2. Ship: one gzipped stream over SSH (no compile, trivial I/O) ───────────
-say "shipping ${#images[@]} image(s) to $NAS…"
+say "shipping ${#images[@]} image(s) to ${NAS}…"
 "$DOCKER" save "${images[@]}" | gzip | ssh "$NAS" 'gunzip | docker load' \
   || { say "ship FAILED"; exit 4; }
 
