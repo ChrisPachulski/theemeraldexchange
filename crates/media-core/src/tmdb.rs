@@ -503,18 +503,16 @@ impl TmdbClient {
         // wrong-era candidate, so a remake can never fall back to the original.
         let found = match first {
             Some(m) => Some(m),
-            None if year.is_some() => {
-                match self.search(url, title, None, year, is_movie).await {
-                    Ok(m) => m,
-                    Err(e) => {
-                        tracing::warn!(
-                            target: "media_core::tmdb",
-                            "year-relaxed retry failed for {title:?}: {e}"
-                        );
-                        None
-                    }
+            None if year.is_some() => match self.search(url, title, None, year, is_movie).await {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::warn!(
+                        target: "media_core::tmdb",
+                        "year-relaxed retry failed for {title:?}: {e}"
+                    );
+                    None
                 }
-            }
+            },
             None => None,
         };
         let mut found = found?;
@@ -664,7 +662,10 @@ mod tests {
             "results": [ { "id": 99, "title": "Completely Unrelated Film",
                            "release_date": "2010-01-01" } ]
         });
-        assert_eq!(parse_search_response(&doc, true, "Interstellar", None), None);
+        assert_eq!(
+            parse_search_response(&doc, true, "Interstellar", None),
+            None
+        );
     }
 
     #[test]
