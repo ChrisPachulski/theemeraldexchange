@@ -15,6 +15,7 @@ import IptvPlayer, {
   createHlsStallWatchdog,
   createProgressiveStallEscalator,
   selectHlsEngine,
+  HLS_PLAYLIST_LOAD_POLICY,
   ESCALATE_CONFIRM_MS,
   ESCALATE_WINDOW_MS,
   MAX_NET_RETRIES,
@@ -89,6 +90,23 @@ describe('IptvPlayer', () => {
     const html = renderToStaticMarkup(<IptvPlayer grant={grant} />)
 
     expect(html).toContain('<video')
+  })
+})
+
+describe('HLS_PLAYLIST_LOAD_POLICY', () => {
+  // Regression guard: hls.js's DEFAULT manifest policy waits 20 s on a load
+  // whose headers arrived but whose body never completes — the edge drops a
+  // chunked manifest response often enough that fresh sessions showed a
+  // silent 20 s startup spinner. A playlist is a few KB; fail fast and lean
+  // on immediate retries. Loosening these back toward the defaults
+  // reintroduces the stall.
+  it('times out a stalled playlist body fast with immediate retries', () => {
+    const p = HLS_PLAYLIST_LOAD_POLICY.default
+    expect(p.maxTimeToFirstByteMs).toBeLessThanOrEqual(6000)
+    expect(p.maxLoadTimeMs).toBeLessThanOrEqual(8000)
+    expect(p.timeoutRetry.maxNumRetry).toBeGreaterThanOrEqual(4)
+    expect(p.timeoutRetry.retryDelayMs).toBe(0)
+    expect(p.errorRetry.maxNumRetry).toBeGreaterThanOrEqual(4)
   })
 })
 

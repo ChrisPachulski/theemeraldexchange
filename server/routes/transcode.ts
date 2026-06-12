@@ -144,7 +144,17 @@ transcode.all('/*', async (c) => {
   if (token && r.ok && subpath.endsWith('.m3u8')) {
     const text = await r.text()
     const rewritten = appendTokenToManifest(text, token)
-    outHeaders.delete('content-length')
+    // An exact length keeps the response a single fixed-size frame instead of
+    // chunked: the chunked manifest's terminating chunk was intermittently
+    // lost between the edge and the browser (headers arrived, body never
+    // completed), and hls.js sat out its full 20 s manifest timeout before
+    // retrying — the "buffering loop" on every fresh session.
+    outHeaders.set('content-length', String(Buffer.byteLength(rewritten)))
+    // Pinned here, not just forwarded: a growing EVENT playlist must never be
+    // edge-cached or tunnel-buffered, even if the transcoder's own headers
+    // change.
+    outHeaders.set('cache-control', 'no-store')
+    outHeaders.set('x-accel-buffering', 'no')
     return new Response(rewritten, {
       status: r.status,
       statusText: r.statusText,
