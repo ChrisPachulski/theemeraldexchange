@@ -39,6 +39,9 @@ COPY crates ./crates
 # services (Plex shares this host). Unset (CI / dev) = cargo's default (all
 # cores). A real prior incident: an uncapped rebuild drove load to 73 on the
 # 6-thread NAS and brown-outed Plex for ~13 minutes.
+# NOTE: compose interpolates an unset CARGO_BUILD_JOBS to an EMPTY string, and
+# cargo reads this env var natively — empty is a parse error, so the RUN below
+# normalizes empty → unset (cargo default) before building.
 ARG CARGO_BUILD_JOBS
 # BuildKit cache mounts make rebuilds INCREMENTAL: the compiled-dependency
 # `target/` and the downloaded crate `registry/` persist across builds, so a
@@ -49,7 +52,8 @@ ARG CARGO_BUILD_JOBS
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/build/target,sharing=locked \
-    cargo build --release -p transcoder ${CARGO_BUILD_JOBS:+--jobs ${CARGO_BUILD_JOBS}} \
+    if [ -z "${CARGO_BUILD_JOBS:-}" ]; then unset CARGO_BUILD_JOBS; fi \
+ && cargo build --release -p transcoder \
  && cp /build/target/release/transcoder /usr/local/bin/transcoder-bin
 
 # ---------------------------------------------------------------------------
