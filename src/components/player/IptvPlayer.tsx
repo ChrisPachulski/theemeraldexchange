@@ -63,6 +63,21 @@ export type IptvPlayerProps = {
    *  the real total: pin MediaSource.duration to it at attach so the
    *  timeline reads full-length from the first frame. */
   pinnedDurationSecs?: number | null
+  /** HLS resume: present the -ss session at ABSOLUTE title time. The hls.js
+   *  engine applies this as `timelineOffset` (fragment starts and the initial
+   *  position shift by the offset), so the native controls read the real
+   *  elapsed time instead of restarting at 0:00. MSE branch only — the
+   *  native-HLS engine (iOS) plays the raw session timeline. */
+  timelineOffsetSecs?: number | null
+  /** Reports which timeline the <video> exposes for this engine — 'absolute'
+   *  (hls.js + timelineOffset) or 'session' (native HLS, raw -ss session) —
+   *  so the owner's progress math adds the resume offset exactly once. */
+  onTimelineMode?: (mode: 'absolute' | 'session') => void
+  /** With an absolute timeline the seekbar shows the title region BEFORE the
+   *  session's -ss start, which this session has no media for. Fired once
+   *  when the user seeks below that floor; the owner is expected to re-grant
+   *  the session at the target position. */
+  onSeekBeforeStart?: (targetSecs: number) => void
   onPositionUpdate?: (pos: number, durationSecs: number | null) => void
   onEnded?: () => void
   /** Progressive delivery only: fired ONCE when the stream has genuinely
@@ -189,6 +204,33 @@ export function selectHlsEngine(mseSupported: boolean, nativeHlsCanPlay: string)
   if (mseSupported) return 'mse'
   if (nativeHlsCanPlay) return 'native' // 'maybe' | 'probably' — any non-empty string
   return 'unsupported'
+}
+
+// ── Seek-below-session-floor guard ───────────────────────────────────
+//
+// A resumed HLS session is served from ffmpeg -ss, so with the absolute
+// timeline (`timelineOffset`) the seekbar shows the part of the title BEFORE
+// the resume point — a region this session has no media for; seeking into it
+// would spin forever. Detect it and hand the target to the owner for a
+// re-grant. Fires at most once: the re-grant remounts the engine with a new
+// floor. A small tolerance absorbs keyframe snapping right at the floor.
+export const SEEK_FLOOR_TOLERANCE_SECS = 2
+
+export function createSeekFloorGuard(opts: {
+  floorSecs: number
+  isCancelled: () => boolean
+  onSeekBelowFloor: (targetSecs: number) => void
+}): { onSeeking: (currentTimeSecs: number) => void } {
+  let fired = false
+  return {
+    onSeeking: (currentTimeSecs) => {
+      if (fired || opts.isCancelled()) return
+      if (currentTimeSecs < opts.floorSecs - SEEK_FLOOR_TOLERANCE_SECS) {
+        fired = true
+        opts.onSeekBelowFloor(Math.max(0, Math.floor(currentTimeSecs)))
+      }
+    },
+  }
 }
 
 // ── Playlist load policy ─────────────────────────────────────────────
@@ -518,6 +560,9 @@ export default function IptvPlayer({
   startPositionSecs,
   vodHls = false,
   pinnedDurationSecs,
+  timelineOffsetSecs,
+  onTimelineMode,
+  onSeekBeforeStart,
   onPositionUpdate,
   onEnded,
   onDeliveryStruggling,
@@ -629,6 +674,9 @@ export default function IptvPlayer({
 
         const engine = selectHlsEngine(Hls.isSupported(), video.canPlayType('application/vnd.apple.mpegurl'))
         if (engine === 'native') {
+          // Raw -ss session timeline (starts at 0): progress math must add
+          // the resume offset back.
+          onTimelineMode?.('session')
           video.src = grant.url
           updateNativeTracks()
           if (autoPlay) safePlay(video)
@@ -639,6 +687,15 @@ export default function IptvPlayer({
           return
         }
         // engine === 'mse' — drive the <video> through hls.js below.
+
+        // hls.js shifts the timeline by `timelineOffset`, so a resumed -ss
+        // session presents at ABSOLUTE title time (currentTime starts at the
+        // resume offset, not 0:00).
+        const timelineOffset =
+          vodHls && timelineOffsetSecs != null && Number.isFinite(timelineOffsetSecs) && timelineOffsetSecs > 0
+            ? timelineOffsetSecs
+            : 0
+        onTimelineMode?.('absolute')
 
         // Live HLS (the remux path) over the same proxy → cloudflared →
         // edge transport as mpegts. Default hls.js sits near the live edge
@@ -676,7 +733,9 @@ export default function IptvPlayer({
           //  * the default live-edge START — a faster-than-realtime encode
           //    (copy-remuxes run at I/O speed) is minutes ahead by attach
           //    time, so the movie opened minutes in → pin startPosition 0
-          //    (any resume offset is baked server-side via ffmpeg -ss);
+          //    (any resume offset is baked server-side via ffmpeg -ss and
+          //    re-applied to the timeline via timelineOffset, so playback
+          //    starts at startPosition + offset = the absolute resume point);
           //  * the max-latency CATCH-UP SEEK — with a finite cap, hls.js
           //    force-seeks the playhead toward the runaway "edge" mid-watch
           //    (observed: playback jumped 0:00 → 7:48 as the remux outran
@@ -695,6 +754,7 @@ export default function IptvPlayer({
           ...(vodHls
             ? {
                 startPosition: 0,
+                timelineOffset,
                 liveMaxLatencyDurationCount: Infinity,
                 maxBufferLength: 60,
                 maxMaxBufferLength: 120,
@@ -776,6 +836,21 @@ export default function IptvPlayer({
         video.addEventListener('playing', stallWatchdog.onProgress)
         video.addEventListener('timeupdate', stallWatchdog.onProgress)
 
+        // The absolute timeline exposes the title region BEFORE this
+        // session's -ss start — media this session can never serve. A seek
+        // below that floor hands the target to the owner for a re-grant
+        // (createSeekFloorGuard fires once; the re-grant remounts the engine).
+        let onFloorSeeking: (() => void) | undefined
+        if (timelineOffset > 0 && onSeekBeforeStart) {
+          const seekFloor = createSeekFloorGuard({
+            floorSecs: timelineOffset,
+            isCancelled: () => cancelled,
+            onSeekBelowFloor: onSeekBeforeStart,
+          })
+          onFloorSeeking = () => seekFloor.onSeeking(video.currentTime)
+          video.addEventListener('seeking', onFloorSeeking)
+        }
+
         hls.loadSource(grant.url)
         hls.attachMedia(video)
         cleanupEngine = () => {
@@ -784,6 +859,7 @@ export default function IptvPlayer({
           video.removeEventListener('stalled', stallWatchdog.onStall)
           video.removeEventListener('playing', stallWatchdog.onProgress)
           video.removeEventListener('timeupdate', stallWatchdog.onProgress)
+          if (onFloorSeeking) video.removeEventListener('seeking', onFloorSeeking)
           hls.destroy()
         }
         updateHlsTracks()
@@ -937,7 +1013,7 @@ export default function IptvPlayer({
       resetVideo()
       resetTracks()
     }
-  }, [autoPlay, grant, vodHls, pinnedDurationSecs, onDeliveryStruggling])
+  }, [autoPlay, grant, vodHls, pinnedDurationSecs, timelineOffsetSecs, onTimelineMode, onSeekBeforeStart, onDeliveryStruggling])
 
   const chooseAudioTrack = (trackId: number) => {
     const applied = applyAudioTrack(

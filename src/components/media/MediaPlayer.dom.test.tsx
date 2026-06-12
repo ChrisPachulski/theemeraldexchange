@@ -125,13 +125,31 @@ describe('MediaPlayer (mounted) — grant flow', () => {
     expect(screen.queryByText('Starting playback…')).not.toBeInTheDocument()
   })
 
-  it('forwards the resume offset to the grant request', async () => {
+  it('gates a resumable title behind the prompt, then forwards the chosen offset', async () => {
     playbackMock.mockResolvedValue(hlsGrant())
 
     render(<MediaPlayer kind="episode" id={42} title="S01E07" startPositionSecs={300} onClose={() => {}} />)
     await flush()
 
+    // Nothing plays until the user picks resume-or-start-over.
+    expect(playbackMock).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('player-engine')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resume from 5:00' }))
+    await flush()
+
     expect(playbackMock).toHaveBeenCalledWith('episode', 42, undefined, 300, false)
+    expect(screen.getByTestId('player-engine')).toBeInTheDocument()
+  })
+
+  it('start-from-beginning grants a fresh session with no offset', async () => {
+    playbackMock.mockResolvedValue(hlsGrant())
+
+    render(<MediaPlayer kind="episode" id={42} title="S01E07" startPositionSecs={300} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Start from beginning' }))
+    await flush()
+
+    expect(playbackMock).toHaveBeenCalledWith('episode', 42, undefined, undefined, false)
   })
 
   it('escalates once: onDeliveryStruggling re-grants with forceHls at the captured position', async () => {

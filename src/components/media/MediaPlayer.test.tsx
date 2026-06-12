@@ -107,6 +107,31 @@ describe('MediaPlayerView', () => {
     expect(html).toContain('<video')
     expect(html).not.toContain('src=')
   })
+
+  it('asks resume-or-start-over (with the formatted offset) before anything plays', () => {
+    const html = renderToStaticMarkup(
+      <MediaPlayerView {...viewProps({ resumePromptSecs: 13 * 60 + 24 })} />,
+    )
+
+    expect(html).toContain('Resume from 13:24')
+    expect(html).toContain('Start from beginning')
+    expect(html).not.toContain('Starting playback…')
+    expect(html).not.toContain('<video')
+  })
+
+  it('never shows the prompt once a grant is live or after an error', () => {
+    const playing = renderToStaticMarkup(
+      <MediaPlayerView
+        {...viewProps({ resumePromptSecs: 60, streamGrant: hlsStreamGrant() })}
+      />,
+    )
+    expect(playing).not.toContain('Start from beginning')
+
+    const failed = renderToStaticMarkup(
+      <MediaPlayerView {...viewProps({ resumePromptSecs: 60, error: 'boom' })} />,
+    )
+    expect(failed).not.toContain('Start from beginning')
+  })
 })
 
 describe('MediaPlayer', () => {
@@ -118,5 +143,15 @@ describe('MediaPlayer', () => {
     expect(html).toContain('role="dialog"')
     expect(html).toContain('aria-label="300"')
     expect(html).toContain('Starting playback…')
+  })
+
+  it('gates a resumable title behind the prompt — no session until a choice', () => {
+    const html = renderToStaticMarkup(
+      <MediaPlayer kind="movie" id={9} title="300" startPositionSecs={772} onClose={noop} />,
+    )
+
+    expect(html).toContain('Resume from 12:52')
+    expect(html).toContain('Start from beginning')
+    expect(html).not.toContain('Starting playback…')
   })
 })

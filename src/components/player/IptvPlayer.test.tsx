@@ -14,8 +14,10 @@ import IptvPlayer, {
   createHlsDurationPin,
   createHlsStallWatchdog,
   createProgressiveStallEscalator,
+  createSeekFloorGuard,
   selectHlsEngine,
   HLS_PLAYLIST_LOAD_POLICY,
+  SEEK_FLOOR_TOLERANCE_SECS,
   ESCALATE_CONFIRM_MS,
   ESCALATE_WINDOW_MS,
   MAX_NET_RETRIES,
@@ -90,6 +92,63 @@ describe('IptvPlayer', () => {
     const html = renderToStaticMarkup(<IptvPlayer grant={grant} />)
 
     expect(html).toContain('<video')
+  })
+})
+
+describe('createSeekFloorGuard', () => {
+  // A resumed -ss session presented at absolute time (timelineOffset) shows
+  // the pre-resume title region on the seekbar but has no media for it; the
+  // guard hands such seeks to the owner for a re-grant.
+  it('fires once with the floored target when seeking below the session floor', () => {
+    const onSeekBelowFloor = vi.fn()
+    const guard = createSeekFloorGuard({
+      floorSecs: 772,
+      isCancelled: () => false,
+      onSeekBelowFloor,
+    })
+
+    guard.onSeeking(300.7)
+    expect(onSeekBelowFloor).toHaveBeenCalledExactlyOnceWith(300)
+
+    guard.onSeeking(100) // already fired — the re-grant remounts the engine
+    expect(onSeekBelowFloor).toHaveBeenCalledOnce()
+  })
+
+  it('tolerates keyframe snapping just below the floor and any seek above it', () => {
+    const onSeekBelowFloor = vi.fn()
+    const guard = createSeekFloorGuard({
+      floorSecs: 772,
+      isCancelled: () => false,
+      onSeekBelowFloor,
+    })
+
+    guard.onSeeking(772 - SEEK_FLOOR_TOLERANCE_SECS) // boundary: not below
+    guard.onSeeking(900)
+    expect(onSeekBelowFloor).not.toHaveBeenCalled()
+  })
+
+  it('never fires after the engine effect is cancelled', () => {
+    const onSeekBelowFloor = vi.fn()
+    const guard = createSeekFloorGuard({
+      floorSecs: 772,
+      isCancelled: () => true,
+      onSeekBelowFloor,
+    })
+
+    guard.onSeeking(10)
+    expect(onSeekBelowFloor).not.toHaveBeenCalled()
+  })
+
+  it('clamps targets to zero (no negative re-grant offsets)', () => {
+    const onSeekBelowFloor = vi.fn()
+    const guard = createSeekFloorGuard({
+      floorSecs: 5,
+      isCancelled: () => false,
+      onSeekBelowFloor,
+    })
+
+    guard.onSeeking(-1)
+    expect(onSeekBelowFloor).toHaveBeenCalledExactlyOnceWith(0)
   })
 })
 
