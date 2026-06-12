@@ -377,7 +377,6 @@ export default function IptvPlayer({
         const hls = new Hls({
           lowLatencyMode: false,
           liveSyncDurationCount: 4,
-          liveMaxLatencyDurationCount: 16,
           maxBufferLength: 30,
           maxMaxBufferLength: 120,
           maxBufferHole: 0.5,
@@ -386,11 +385,20 @@ export default function IptvPlayer({
           manifestLoadingMaxRetry: 4,
           levelLoadingMaxRetry: 4,
           // Local-media VOD sessions grow an EVENT playlist that hls.js
-          // treats as live until ENDLIST; the default live-edge start would
-          // open a faster-than-realtime transcode (copy-remuxes especially)
-          // minutes into the title. Pin VOD to position 0 — the server bakes
-          // any resume offset into the session itself (ffmpeg -ss).
-          ...(vodHls ? { startPosition: 0 } : {}),
+          // treats as live until ENDLIST, which trips TWO live behaviors a
+          // finite title must not get:
+          //  * the default live-edge START — a faster-than-realtime encode
+          //    (copy-remuxes run at I/O speed) is minutes ahead by attach
+          //    time, so the movie opened minutes in → pin startPosition 0
+          //    (any resume offset is baked server-side via ffmpeg -ss);
+          //  * the max-latency CATCH-UP SEEK — with a finite cap, hls.js
+          //    force-seeks the playhead toward the runaway "edge" mid-watch
+          //    (observed: playback jumped 0:00 → 7:48 as the remux outran
+          //    it) → Infinity disables the forced seek for VOD while IPTV
+          //    keeps the bounded latency window it needs.
+          ...(vodHls
+            ? { startPosition: 0, liveMaxLatencyDurationCount: Infinity }
+            : { liveMaxLatencyDurationCount: 16 }),
         })
         hlsRef.current = hls
 
