@@ -95,6 +95,21 @@ the SPA + backend (auth, search, *arr bridges pointed at whatever
   `off`, so no shared secret is needed in dev (prod runs `enforce` with
   `INTERNAL_PRINCIPAL_SECRET`).
 
+- **media-core mock** (no Rust, fixtures only — the fastest path for SPA/UI
+  work on the library, continue-watching, and playback flows):
+
+  ```bash
+  npm run dev:media-mock        # localhost:8095, run alongside npm run dev
+  ```
+
+  A fixture-backed stub that speaks media-core's HTTP surface (12 movies,
+  3 shows, a seeded watch store; direct-play only). Backend wiring:
+  `USE_MEDIA_CORE=1`, `MEDIA_CORE_URL=http://127.0.0.1:8095`, and any 32+ char
+  `INTERNAL_PRINCIPAL_SECRET` placeholder — the proxy fails closed without one,
+  the mock ignores it. Builds the library UI without the Rust binary or a real
+  `/media` library. The real proxy is unchanged; the mock is reached purely
+  through `MEDIA_CORE_URL`.
+
 - **Transcoder** (Rust, port 8003; needs `ffmpeg` on PATH, or set
   `TRANSCODER_FFMPEG_BIN`):
 
