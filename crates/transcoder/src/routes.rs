@@ -217,6 +217,10 @@ pub struct GrantFile {
     pub path: String,
     #[serde(default)]
     pub container: Option<String>,
+    /// File size in bytes; with `duration_secs` it derives the source's
+    /// whole-container average bitrate, which caps the re-encode ladder.
+    #[serde(default)]
+    pub size_bytes: i64,
     #[serde(default)]
     pub duration_secs: Option<i64>,
     #[serde(default)]
@@ -243,7 +247,7 @@ impl GrantFile {
         MediaFileRow {
             id: 0,
             path: self.path,
-            size_bytes: 0,
+            size_bytes: self.size_bytes,
             mtime: String::new(),
             container: self.container,
             duration_secs: self.duration_secs,
@@ -319,6 +323,14 @@ async fn grant(
     // Source codec gates the full-hardware VAAPI decode path (see
     // SessionManager::spawn_child); carry it through to StartOpts.
     let source_codec = row.video_codec.clone();
+    // Whole-container average bitrate (kbps) caps the re-encode ladder so a
+    // low-bitrate source is never inflated past its own quality.
+    let source_avg_kbps = match (row.size_bytes, row.duration_secs) {
+        (size, Some(dur)) if size > 0 && dur > 0 => {
+            u32::try_from(size.saturating_mul(8) / dur / 1000).ok()
+        }
+        _ => None,
+    };
     let plan = plan_transcode(&row, &caps);
 
     if let TranscodePlan::DirectPlay { reason } = &plan {
@@ -338,6 +350,7 @@ async fn grant(
         plan: plan.clone(),
         start_secs,
         source_codec,
+        source_avg_kbps,
         owner,
     };
 
@@ -446,10 +459,20 @@ async fn session_segment(
         )
             .into_response();
     };
+    // fMP4 sessions (HEVC copy) serve `init.mp4` + `seg_*.m4s`; everything
+    // else is MPEG-TS. hls.js fetches as arraybuffer regardless, but native
+    // HLS (Safari) and intermediaries deserve a truthful content type.
+    let content_type = if segment.ends_with(".m4s") {
+        "video/iso.segment"
+    } else if segment.ends_with(".mp4") {
+        "video/mp4"
+    } else {
+        "video/mp2t"
+    };
     match tokio::fs::read(&path).await {
         Ok(bytes) => (
             StatusCode::OK,
-            [(axum::http::header::CONTENT_TYPE, "video/mp2t")],
+            [(axum::http::header::CONTENT_TYPE, content_type)],
             bytes,
         )
             .into_response(),

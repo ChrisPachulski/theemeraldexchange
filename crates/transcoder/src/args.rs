@@ -15,7 +15,7 @@
 //!
 //! Snapshot-tested per plan and per kind.
 
-use crate::plan::{AudioOp, SubtitleOp, TranscodePlan, VideoOp};
+use crate::plan::{AudioOp, SegmentFormat, SubtitleOp, TranscodePlan, VideoOp};
 
 /// Hardware encoder family, selected from `TRANSCODER_HW_ENCODER`, with
 /// `TRANSCODER_FORCE_CPU=1` pinning `Cpu` regardless of that value (§4.4).
@@ -85,14 +85,28 @@ impl HwEncoder {
 }
 
 /// Bitrate target (kbps) for an H.264 re-encode at the given OUTPUT height
-/// (the scale target when scaling, else the source height). Conservative VBR
-/// ladder; `maxrate`/`bufsize` are derived from this.
-fn h264_bitrate_kbps(height: Option<i64>) -> u32 {
-    match height.unwrap_or(1080) {
-        h if h <= 480 => 1_500,
-        h if h <= 720 => 3_000,
-        h if h <= 1080 => 6_000,
-        _ => 12_000,
+/// (the scale target when scaling, else the source height), capped at ~90% of
+/// the SOURCE's whole-container average so a low-bitrate source is never
+/// inflated past its own quality. `maxrate`/`bufsize` are derived from this.
+///
+/// The ladder is sized for the deployed encoder, Gen12 VDEnc (h264_vaapi
+/// low_power), which needs ~25-40% more bitrate than x264 for equal quality:
+/// the old 6 Mbps 1080p arm produced visible blocking/banding ("looked like
+/// mud"), worst on tone-mapped HDR. 10 Mbps tracks the Jellyfin 1080p
+/// sweet spot (8-10 Mbps) plus the VDEnc penalty.
+fn h264_bitrate_kbps(height: Option<i64>, source_avg_kbps: Option<u32>) -> u32 {
+    let ladder = match height.unwrap_or(1080) {
+        h if h <= 480 => 2_000,
+        h if h <= 720 => 4_000,
+        h if h <= 1080 => 10_000,
+        _ => 14_000,
+    };
+    match source_avg_kbps {
+        // 90% of the container average approximates the video stream's share
+        // (audio + mux overhead eat the rest); floor at 1 Mbps so a corrupt/
+        // tiny probe value can't starve the encode into garbage.
+        Some(src) if src > 0 => ladder.min((src.saturating_mul(9) / 10).max(1_000)),
+        _ => ladder,
     }
 }
 
@@ -162,6 +176,10 @@ pub struct ArgSpec<'a> {
     /// pre-respawn playlist can then never alias a stale `seg_00000.ts` name
     /// onto new media.
     pub start_number: u64,
+    /// Whole-container average bitrate of the SOURCE (kbps), when known. Caps
+    /// the re-encode bitrate ladder (see [`h264_bitrate_kbps`]); `None` leaves
+    /// the ladder uncapped.
+    pub source_avg_kbps: Option<u32>,
 }
 
 /// Build the ffmpeg argument vector for a transcode plan (software-decode path).
@@ -209,6 +227,7 @@ pub fn ffmpeg_args_hw(
         hw_decode,
         media_kind: "movie",
         start_number: 0,
+        source_avg_kbps: None,
     })
 }
 
@@ -227,16 +246,19 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
         hw_decode,
         media_kind,
         start_number,
+        source_avg_kbps,
     } = *spec;
-    let (video, audio, subtitle) = match plan {
+    let (video, audio, subtitle, segment_format) = match plan {
         TranscodePlan::DirectPlay { .. } => return Vec::new(),
         TranscodePlan::Transcode {
             video,
             audio,
             subtitle,
+            segment_format,
             ..
-        } => (video, audio, subtitle),
+        } => (video, audio, subtitle, *segment_format),
     };
+    let fmp4 = segment_format == SegmentFormat::Fmp4;
 
     let mut a: Vec<String> = Vec::new();
     let push = |a: &mut Vec<String>, s: &str| a.push(s.to_string());
@@ -337,6 +359,15 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
         VideoOp::Copy => {
             push(&mut a, "-c:v");
             push(&mut a, "copy");
+            // fMP4 segments only ever carry an HEVC copy (see plan.rs). Tag
+            // the sample entry `hvc1` (out-of-band parameter sets): Apple's
+            // HLS spec requires hvc1 — Safari refuses hev1 — and hls.js/
+            // Chrome accept hvc1 fine since the extradata rides the init
+            // segment. ffmpeg's mov muxer defaults to hev1 for HEVC copies.
+            if fmp4 {
+                push(&mut a, "-tag:v");
+                push(&mut a, "hvc1");
+            }
         }
         VideoOp::EncodeH264 {
             scale_to_height,
@@ -357,23 +388,61 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
             if matches!(encoder, HwEncoder::Vaapi) {
                 push(&mut a, "-low_power");
                 push(&mut a, "1");
+                // Quality knobs for the VDEnc fixed-function pipe (every flag
+                // here is a VAAPI option — never emit them for libx264/NVENC/
+                // VideoToolbox, whose option namespaces differ):
+                // * QVBR: quality-targeted rate control inside the -b:v/
+                //   -maxrate envelope — right for VOD HLS, where dumb VBR
+                //   over-spends flat scenes and starves action. global_quality
+                //   23 ≈ the x264-crf-like sweet spot for this mode.
+                // * -profile:v high: CABAC entropy coding, ~10-15% efficiency
+                //   over the driver's default at zero cost.
+                // * -compression_level 2: pin target-usage to a quality tier;
+                //   unset, the iHD driver default (TU4, historically silently
+                //   promoted toward TU7) trades quality for speed we don't
+                //   need on a faster-than-realtime VOD encode.
+                // * -bf 2: Gen12 VDEnc supports Low-Delay-B references —
+                //   modest efficiency gain; >2 risks driver rejection.
+                push(&mut a, "-rc_mode");
+                push(&mut a, "QVBR");
+                push(&mut a, "-global_quality");
+                push(&mut a, "23");
+                push(&mut a, "-profile:v");
+                push(&mut a, "high");
+                push(&mut a, "-compression_level");
+                push(&mut a, "2");
+                push(&mut a, "-bf");
+                push(&mut a, "2");
             } else {
+                // CPU encodes: `veryfast` only where wall-clock matters (live
+                // -re pacing); a finite VOD title encodes faster than realtime
+                // anyway, so spend the headroom on quality with `fast`.
                 push(&mut a, "-preset");
-                push(&mut a, if encoder.is_cpu() { "veryfast" } else { "fast" });
+                push(
+                    &mut a,
+                    if encoder.is_cpu() && !is_live_media_kind(media_kind) {
+                        "fast"
+                    } else if encoder.is_cpu() {
+                        "veryfast"
+                    } else {
+                        "fast"
+                    },
+                );
             }
 
             // Key the ladder on the OUTPUT height: the scale target when
             // down-scaling, else the source's own height (an unscaled re-encode
             // keeps it). Keying on scale_to_height alone (capped at 1080/None)
             // made the >1080p arm unreachable — an unscaled 4K re-encode got
-            // the 1080p 6000k and looked like mud.
-            let br = h264_bitrate_kbps(scale_to_height.or(*source_height));
+            // the 1080p rate and looked like mud. The source's own average
+            // bitrate caps the ladder so a lean source isn't inflated.
+            let br = h264_bitrate_kbps(scale_to_height.or(*source_height), source_avg_kbps);
             push(&mut a, "-b:v");
             a.push(format!("{br}k"));
             push(&mut a, "-maxrate");
             a.push(format!("{}k", br + br / 2));
             push(&mut a, "-bufsize");
-            a.push(format!("{}k", br * 2));
+            a.push(format!("{}k", br * 3));
 
             // Force a keyframe at every HLS segment boundary. The encoder's
             // native GOP can be far longer than a segment (h264_vaapi defaults to
@@ -505,8 +574,22 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
         push(&mut a, "-start_number");
         a.push(start_number.to_string());
     }
+    // fMP4 segments (HEVC copy only — see plan.rs SegmentFormat): hls.js's TS
+    // transmuxer demuxes only H.264, so HEVC must arrive already in fMP4. The
+    // muxer then also writes an `init.mp4` carrying the parameter sets, which
+    // the playlist references via #EXT-X-MAP. Everything else stays MPEG-TS,
+    // the smallest-blast-radius default the whole serving path is proven on.
+    if fmp4 {
+        push(&mut a, "-hls_segment_type");
+        push(&mut a, "fmp4");
+        push(&mut a, "-hls_fmp4_init_filename");
+        push(&mut a, "init.mp4");
+    }
     push(&mut a, "-hls_segment_filename");
-    a.push(format!("{session_dir}/seg_%05d.ts"));
+    a.push(format!(
+        "{session_dir}/seg_%05d.{}",
+        if fmp4 { "m4s" } else { "ts" }
+    ));
     a.push(format!("{session_dir}/index.m3u8"));
 
     a
@@ -665,6 +748,7 @@ mod tests {
             video,
             audio,
             subtitle,
+            segment_format: SegmentFormat::MpegTs,
             reason: "test".into(),
         }
     }
@@ -746,6 +830,7 @@ mod tests {
         // A live resume carries both -ss and -re before -i.
         let plan = transcode(VideoOp::Copy, AudioOp::Copy, SubtitleOp::None);
         let args = ffmpeg_args_for(&ArgSpec {
+            source_avg_kbps: None,
             plan: &plan,
             input: "/in.mkv",
             session_dir: "/tmp/s",
@@ -798,9 +883,9 @@ mod tests {
         let args = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::VideoToolbox);
         let j = args.join(" ");
         assert!(j.contains("-c:v h264_videotoolbox"), "{j}");
-        assert!(j.contains("-b:v 6000k"), "1080p default ladder: {j}");
-        assert!(j.contains("-maxrate 9000k"), "{j}");
-        assert!(j.contains("-bufsize 12000k"), "{j}");
+        assert!(j.contains("-b:v 10000k"), "1080p default ladder: {j}");
+        assert!(j.contains("-maxrate 15000k"), "{j}");
+        assert!(j.contains("-bufsize 30000k"), "{j}");
         // AAC re-encode is forced to stereo (-ac 2) so the browser MSE path can
         // append it — a multichannel append fails ("audio SourceBuffer error").
         assert!(j.contains("-c:a aac -ac 2 -b:a 192k"), "{j}");
@@ -885,7 +970,9 @@ mod tests {
         );
         let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Cpu).join(" ");
         assert!(j.contains("-c:v libx264"), "{j}");
-        assert!(j.contains("-preset veryfast"), "{j}");
+        // VOD CPU encodes run faster than realtime, so spend the headroom
+        // on quality: `fast`, not `veryfast` (live -re keeps veryfast).
+        assert!(j.contains("-preset fast"), "{j}");
     }
 
     #[test]
@@ -905,9 +992,9 @@ mod tests {
             SubtitleOp::None,
         );
         let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Cpu).join(" ");
-        assert!(j.contains("-b:v 12000k"), "4K arm must apply: {j}");
-        assert!(j.contains("-maxrate 18000k"), "{j}");
-        assert!(j.contains("-bufsize 24000k"), "{j}");
+        assert!(j.contains("-b:v 14000k"), "4K arm must apply: {j}");
+        assert!(j.contains("-maxrate 21000k"), "{j}");
+        assert!(j.contains("-bufsize 42000k"), "{j}");
     }
 
     #[test]
@@ -926,7 +1013,7 @@ mod tests {
         );
         let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Cpu).join(" ");
         assert!(
-            j.contains("-b:v 6000k"),
+            j.contains("-b:v 10000k"),
             "scaled output keys the ladder: {j}"
         );
     }
@@ -946,7 +1033,7 @@ mod tests {
             SubtitleOp::None,
         );
         let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Cpu).join(" ");
-        assert!(j.contains("-b:v 3000k"), "720p arm must apply: {j}");
+        assert!(j.contains("-b:v 4000k"), "720p arm must apply: {j}");
     }
 
     #[test]
@@ -964,7 +1051,7 @@ mod tests {
         let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Cpu).join(" ");
         assert!(j.contains("-vf scale=-2:1080"), "{j}");
         // 1080p ladder applies to the scaled target.
-        assert!(j.contains("-b:v 6000k"), "{j}");
+        assert!(j.contains("-b:v 10000k"), "{j}");
     }
 
     #[test]
@@ -1242,6 +1329,120 @@ mod tests {
     }
 
     #[test]
+    fn vaapi_reencode_emits_qvbr_quality_flags() {
+        // The VDEnc quality pack: QVBR rate control inside the -b:v envelope,
+        // High profile (CABAC), a pinned target-usage tier, and LDB B-frames.
+        let plan = transcode(
+            VideoOp::EncodeH264 {
+                scale_to_height: None,
+                tone_map: false,
+                burn_subtitle_index: None,
+                source_height: Some(1080),
+            },
+            AudioOp::Copy,
+            SubtitleOp::None,
+        );
+        let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Vaapi).join(" ");
+        assert!(j.contains("-rc_mode QVBR"), "{j}");
+        assert!(j.contains("-global_quality 23"), "{j}");
+        assert!(j.contains("-profile:v high"), "{j}");
+        assert!(j.contains("-compression_level 2"), "{j}");
+        assert!(j.contains("-bf 2"), "{j}");
+    }
+
+    #[test]
+    fn non_vaapi_encoders_never_emit_vaapi_quality_flags() {
+        // -rc_mode/-global_quality/-compression_level live in the VAAPI option
+        // namespace; libx264 (and VT/NVENC) reject or misread them.
+        let plan = transcode(
+            VideoOp::EncodeH264 {
+                scale_to_height: None,
+                tone_map: false,
+                burn_subtitle_index: None,
+                source_height: Some(1080),
+            },
+            AudioOp::Copy,
+            SubtitleOp::None,
+        );
+        for enc in [HwEncoder::Cpu, HwEncoder::VideoToolbox, HwEncoder::Nvenc] {
+            let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, enc).join(" ");
+            assert!(!j.contains("-rc_mode"), "{enc:?}: {j}");
+            assert!(!j.contains("-global_quality"), "{enc:?}: {j}");
+            assert!(!j.contains("-compression_level"), "{enc:?}: {j}");
+        }
+    }
+
+    #[test]
+    fn source_bitrate_caps_the_ladder() {
+        // A 1080p re-encode of a 4 Mbps source must not be inflated to the
+        // 10 Mbps ladder arm: 90% of the source average wins.
+        let plan = transcode(
+            VideoOp::EncodeH264 {
+                scale_to_height: None,
+                tone_map: false,
+                burn_subtitle_index: None,
+                source_height: Some(1080),
+            },
+            AudioOp::Copy,
+            SubtitleOp::None,
+        );
+        let j = ffmpeg_args_for(&ArgSpec {
+            plan: &plan,
+            input: "/in.mkv",
+            session_dir: "/tmp/s",
+            start_secs: 0,
+            encoder: HwEncoder::Cpu,
+            hw_decode: false,
+            media_kind: "movie",
+            start_number: 0,
+            source_avg_kbps: Some(4_000),
+        })
+        .join(" ");
+        assert!(j.contains("-b:v 3600k"), "source cap must apply: {j}");
+
+        // A rich source (40 Mbps remux) keeps the full ladder arm.
+        let j = ffmpeg_args_for(&ArgSpec {
+            plan: &plan,
+            input: "/in.mkv",
+            session_dir: "/tmp/s",
+            start_secs: 0,
+            encoder: HwEncoder::Cpu,
+            hw_decode: false,
+            media_kind: "movie",
+            start_number: 0,
+            source_avg_kbps: Some(40_000),
+        })
+        .join(" ");
+        assert!(j.contains("-b:v 10000k"), "rich source keeps ladder: {j}");
+    }
+
+    #[test]
+    fn fmp4_plan_emits_fmp4_muxer_and_hvc1_tag() {
+        // HEVC copy rides fMP4: segment type fmp4, an explicit init segment,
+        // .m4s segment names, and the Apple-required hvc1 sample entry tag.
+        let plan = TranscodePlan::Transcode {
+            video: VideoOp::Copy,
+            audio: AudioOp::Copy,
+            subtitle: SubtitleOp::None,
+            segment_format: SegmentFormat::Fmp4,
+            reason: "container mkv not supported by client".into(),
+        };
+        let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Vaapi).join(" ");
+        assert!(j.contains("-hls_segment_type fmp4"), "{j}");
+        assert!(j.contains("-hls_fmp4_init_filename init.mp4"), "{j}");
+        assert!(j.contains("/tmp/s/seg_%05d.m4s"), "{j}");
+        assert!(j.contains("-tag:v hvc1"), "{j}");
+        assert!(!j.contains("seg_%05d.ts"), "{j}");
+
+        // And the default TS plan emits none of it.
+        let ts = transcode(VideoOp::Copy, AudioOp::Copy, SubtitleOp::None);
+        let j = ffmpeg_args(&ts, "/in.mkv", "/tmp/s", 0, HwEncoder::Vaapi).join(" ");
+        assert!(!j.contains("fmp4"), "{j}");
+        assert!(!j.contains("-tag:v"), "{j}");
+        assert!(j.contains("/tmp/s/seg_%05d.ts"), "{j}");
+    }
+
+    #[test]
     fn vaapi_appends_upload_after_scale() {
         let plan = transcode(
             VideoOp::EncodeH264 {
@@ -1314,6 +1515,7 @@ mod tests {
     fn args_for_kind(kind: &str) -> Vec<String> {
         let plan = transcode(VideoOp::Copy, AudioOp::Copy, SubtitleOp::None);
         ffmpeg_args_for(&ArgSpec {
+            source_avg_kbps: None,
             plan: &plan,
             input: "/in.mkv",
             session_dir: "/tmp/s",
@@ -1329,6 +1531,7 @@ mod tests {
     fn start_number_emitted_only_when_nonzero() {
         let plan = transcode(VideoOp::Copy, AudioOp::Copy, SubtitleOp::None);
         let spec = |n: u64| ArgSpec {
+            source_avg_kbps: None,
             plan: &plan,
             input: "/in.mkv",
             session_dir: "/tmp/s",

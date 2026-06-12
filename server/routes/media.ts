@@ -43,9 +43,28 @@ const FORWARD_RESPONSE_HEADERS = [
 // set direct-plays the canonical web-safe profile (mp4 + h264) and routes
 // everything else (mkv, hevc, hdr) to the transcoder rather than risk shipping
 // an undecodable container to a <video> element.
-type Caps = { containers: string[]; video_codecs: string[]; max_height?: number; hdr: boolean }
+type Caps = {
+  containers: string[]
+  video_codecs: string[]
+  max_height?: number
+  hdr: boolean
+  /** Audio codecs the client can decode (default browser-safe AAC-only). */
+  audio_codecs: string[]
+  /** Max AAC channels the client's MSE path can append (Chrome/Firefox: 2). */
+  aac_max_channels: number
+  /** Client's HLS player handles HEVC in fMP4 segments (enables HEVC copy-remux). */
+  hls_fmp4_hevc: boolean
+}
 type PlaybackRequest = Partial<Caps> & { start_secs?: unknown }
-const DEFAULT_CAPS: Caps = { containers: ['mp4'], video_codecs: ['h264'], max_height: 2160, hdr: false }
+const DEFAULT_CAPS: Caps = {
+  containers: ['mp4'],
+  video_codecs: ['h264'],
+  max_height: 2160,
+  hdr: false,
+  audio_codecs: ['aac'],
+  aac_max_channels: 2,
+  hls_fmp4_hevc: false,
+}
 
 function capsQuery(caps: Caps, startSecs?: number): string {
   const p = new URLSearchParams()
@@ -53,6 +72,9 @@ function capsQuery(caps: Caps, startSecs?: number): string {
   if (caps.video_codecs.length) p.set('video_codecs', caps.video_codecs.join(','))
   if (typeof caps.max_height === 'number') p.set('max_height', String(caps.max_height))
   p.set('hdr', String(Boolean(caps.hdr)))
+  if (caps.audio_codecs.length) p.set('audio_codecs', caps.audio_codecs.join(','))
+  p.set('aac_max_channels', String(caps.aac_max_channels))
+  p.set('hls_fmp4_hevc', String(Boolean(caps.hls_fmp4_hevc)))
   if (startSecs !== undefined) p.set('start_secs', String(startSecs))
   return p.toString()
 }
@@ -115,6 +137,12 @@ media.post('/playback/:kind/:id', async (c) => {
     video_codecs: reqCaps.video_codecs?.length ? reqCaps.video_codecs : DEFAULT_CAPS.video_codecs,
     max_height: typeof reqCaps.max_height === 'number' ? reqCaps.max_height : DEFAULT_CAPS.max_height,
     hdr: Boolean(reqCaps.hdr),
+    audio_codecs: reqCaps.audio_codecs?.length ? reqCaps.audio_codecs : DEFAULT_CAPS.audio_codecs,
+    aac_max_channels:
+      typeof reqCaps.aac_max_channels === 'number' && reqCaps.aac_max_channels >= 2
+        ? Math.floor(reqCaps.aac_max_channels)
+        : DEFAULT_CAPS.aac_max_channels,
+    hls_fmp4_hevc: Boolean(reqCaps.hls_fmp4_hevc),
   }
   const startSecs =
     typeof reqCaps.start_secs === 'number' &&
@@ -149,6 +177,9 @@ media.post('/playback/:kind/:id', async (c) => {
           video_codecs: caps.video_codecs,
           max_height: caps.max_height,
           hdr: caps.hdr,
+          audio_codecs: caps.audio_codecs,
+          aac_max_channels: caps.aac_max_channels,
+          hls_fmp4_hevc: caps.hls_fmp4_hevc,
         }),
       },
       LAN_TIMEOUT_MS,
@@ -230,7 +261,8 @@ media.post('/playback/:kind/:id', async (c) => {
       )
       if (m.ok) {
         const body = await m.text()
-        if (/\.ts(\?|\s|$)/m.test(body)) break // a segment is listed → ready
+        // `.ts` for MPEG-TS sessions, `.m4s` for fMP4 (HEVC copy) sessions.
+        if (/\.(?:ts|m4s)(\?|\s|$)/m.test(body)) break // a segment is listed → ready
       }
     } catch {
       // transient — keep polling until the deadline

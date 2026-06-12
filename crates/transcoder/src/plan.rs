@@ -91,6 +91,25 @@ pub enum SubtitleOp {
 /// Default AAC bitrate when we have to re-encode audio (§4.3).
 pub const DEFAULT_AAC_BITRATE_KBPS: u32 = 192;
 
+/// AAC bitrate when the re-encode is a multichannel → stereo DOWNMIX. A 5.1
+/// mix folded to 2.0 carries more spectral content than a native stereo
+/// track; 192k audibly smears it, 256k is transparent for AAC-LC stereo.
+pub const DOWNMIX_AAC_BITRATE_KBPS: u32 = 256;
+
+/// HLS segment container for the session's output.
+///
+/// MPEG-TS is the default (H.264-only delivery: hls.js transmuxes TS→fMP4
+/// itself but its transmuxer DEMUXES ONLY H.264). fMP4 is selected when (and
+/// only when) the plan copies an HEVC stream — HEVC must arrive already in
+/// fMP4 for hls.js/MSE (and Apple's HLS spec requires fMP4 for HEVC too).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SegmentFormat {
+    #[default]
+    MpegTs,
+    Fmp4,
+}
+
 /// The resolved plan. `DirectPlay` short-circuits the whole pipeline.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -102,6 +121,9 @@ pub enum TranscodePlan {
         video: VideoOp,
         audio: AudioOp,
         subtitle: SubtitleOp,
+        /// HLS segment container (TS for H.264 delivery, fMP4 for HEVC copy).
+        #[serde(default)]
+        segment_format: SegmentFormat,
         /// Echo of why direct-play was denied — useful for telemetry/inventory.
         reason: String,
     },
@@ -152,15 +174,15 @@ fn contains_ci(haystack: &[String], needle: &str) -> bool {
 /// * h264 — allowlist of the 8-bit 4:2:0 profiles every target browser
 ///   decodes. "High 10", "High 10 Intra", "High 4:2:2", "High 4:4:4
 ///   Predictive" all fall through to re-encode.
-/// * hevc — "Main" only. `ClientCaps` carries no 10-bit/HEVC-Main-10
-///   capability bit, so even an hevc-capable client gets Main 10 re-encoded
-///   rather than risking an undecodable copy (fail closed until caps grow
-///   hevc10 semantics).
+/// * hevc — "Main" and "Main 10". An hevc copy is additionally gated on the
+///   client's `hls_fmp4_hevc` bit in [`plan_transcode`] (HEVC can only be
+///   delivered in fMP4 segments); a client setting that bit probed real
+///   Main 10 hardware decode, so both 8- and 10-bit profiles are copy-safe.
 /// * unknown/empty profile on h264/hevc — re-encode. Mirrors the
 ///   unknown-channel-count audio rule: we cannot prove the copy is safe.
-/// * other codecs (vp9/av1/…) — no profile gate. They only ever copy when the
-///   client explicitly advertised the codec, and we have no profile hazard
-///   catalogued for them; the codec acceptance stays the gate.
+/// * other codecs (vp9/av1/…) — never copied; see `hls_copy_deliverable` in
+///   [`plan_transcode`]: there is no HLS segment container the shipped player
+///   stack demuxes them from, so the codec gate alone is not enough.
 fn video_profile_copy_safe(codec: &str, profile: Option<&str>) -> bool {
     let profile = profile.map(str::trim).unwrap_or("").to_ascii_lowercase();
     match codec.trim().to_ascii_lowercase().as_str() {
@@ -168,7 +190,7 @@ fn video_profile_copy_safe(codec: &str, profile: Option<&str>) -> bool {
             profile.as_str(),
             "baseline" | "constrained baseline" | "main" | "high" | "constrained high"
         ),
-        "hevc" | "h265" => profile == "main",
+        "hevc" | "h265" => matches!(profile.as_str(), "main" | "main 10"),
         _ => true,
     }
 }
@@ -259,6 +281,22 @@ pub fn plan_transcode(file: &MediaFileRow, caps: &ClientCaps) -> TranscodePlan {
     // Profile gate: an accepted codec STRING can still hide an undecodable
     // stream (Hi10P is "h264"); see video_profile_copy_safe.
     let profile_ok = video_profile_copy_safe(video_codec, file.video_profile.as_deref());
+    // Delivery gate: a copied stream must be playable inside the HLS segments
+    // we actually emit. H.264 rides MPEG-TS (hls.js's transmuxer demuxes only
+    // H.264 from TS). HEVC is playable ONLY as fMP4 segments, so it copies
+    // exclusively when the client advertised `hls_fmp4_hevc` (probed hardware
+    // decode + an fMP4-capable player). Everything else (vp9/av1/…) has no
+    // deliverable HLS container in the shipped player stack — re-encode.
+    // Fixes the latent failure where an hevc-advertising client got an HEVC
+    // elementary stream copied into .ts segments: hls.js rejects the append
+    // and the player sits grey at 0:00 with a "healthy" session.
+    let codec_lc = video_codec.trim().to_ascii_lowercase();
+    let is_hevc = matches!(codec_lc.as_str(), "hevc" | "h265");
+    let hls_copy_deliverable = match codec_lc.as_str() {
+        "h264" | "avc" | "avc1" => true,
+        "hevc" | "h265" => caps.hls_fmp4_hevc,
+        _ => false,
+    };
 
     let needs_scale =
         matches!((caps.max_height, file.video_height), (Some(max), Some(h)) if h > max);
@@ -281,10 +319,17 @@ pub fn plan_transcode(file: &MediaFileRow, caps: &ClientCaps) -> TranscodePlan {
     let tone_map = is_hdr && !caps.hdr;
 
     // Copy the video only when the codec is accepted, the PROFILE is a
-    // known-decodable one for that codec, no scale is needed, no tone-map is
-    // needed, and there is no burn-in to composite. Otherwise re-encode to
+    // known-decodable one for that codec, the copy is DELIVERABLE in an HLS
+    // segment container the player demuxes, no scale is needed, no tone-map
+    // is needed, and there is no burn-in to composite. Otherwise re-encode to
     // H.264 — the smallest re-encode that satisfies the client.
-    let video = if codec_ok && profile_ok && !needs_scale && !tone_map && burn_index.is_none() {
+    let video = if codec_ok
+        && profile_ok
+        && hls_copy_deliverable
+        && !needs_scale
+        && !tone_map
+        && burn_index.is_none()
+    {
         VideoOp::Copy
     } else {
         VideoOp::EncodeH264 {
@@ -295,6 +340,15 @@ pub fn plan_transcode(file: &MediaFileRow, caps: &ClientCaps) -> TranscodePlan {
         }
     };
 
+    // An HEVC copy is only legal in fMP4 segments; every other plan (H.264
+    // copy or any re-encode) stays on MPEG-TS, the smallest-blast-radius
+    // default the whole serving path is proven on.
+    let segment_format = if is_hevc && video == VideoOp::Copy {
+        SegmentFormat::Fmp4
+    } else {
+        SegmentFormat::MpegTs
+    };
+
     // ── Audio ────────────────────────────────────────────────────────────
     let audio = plan_audio(file, caps);
 
@@ -302,28 +356,31 @@ pub fn plan_transcode(file: &MediaFileRow, caps: &ClientCaps) -> TranscodePlan {
         video,
         audio,
         subtitle,
+        segment_format,
         reason: decision.reason,
     }
 }
 
-/// Audio op: copy only when the primary track is an accepted codec AND stereo/
-/// mono; otherwise re-encode to AAC (the args builder downmixes to stereo).
+/// Audio op: copy only when the primary track is a codec the CLIENT advertised
+/// AND (for AAC) within the client's appendable channel count; otherwise
+/// re-encode to AAC (the args builder downmixes to stereo).
 fn plan_audio(file: &MediaFileRow, caps: &ClientCaps) -> AudioOp {
-    // media-core's ClientCaps has no audio_codecs field yet, so accepted is a
-    // fixed browser-safe baseline (AAC only — see accepted_audio_codecs).
+    // The accepted set is the client's advertised `audio_codecs` (default
+    // ["aac"], the only codec every browser MSE path decodes — Chrome and
+    // Firefox reject AC-3/E-AC-3 appends, so passthrough of those is opt-in
+    // for clients that probed real system decode, e.g. Safari/Edge).
     //
-    // Copy requires TWO conditions, not one:
-    //   1. the codec is accepted (AAC), and
-    //   2. the track is stereo or mono (≤ 2 channels).
-    // A multichannel (5.1/7.1) AAC source must STILL be re-encoded. The HLS
-    // output feeds hls.js, which transmuxes the TS audio to fMP4 for MSE; Chrome
-    // and Firefox REJECT the SourceBuffer append of a >2-channel AAC track
-    // ("audio SourceBuffer error. MediaSource readyState: ended"), which fails
-    // the whole fragment and freezes the player grey at 0:00 — even though the
-    // codec STRING (mp4a.40.2) reports as supported. Re-encoding forces the
-    // stereo downmix (args adds `-ac 2`). When channel count is unknown we
-    // re-encode: a wrongly-copied 5.1 track is a silent total playback failure,
-    // whereas a needless stereo re-encode merely costs a little CPU.
+    // AAC copy requires a second, independent gate: the channel count must be
+    // within `caps.aac_max_channels` (default 2). Chrome/Firefox MSE REJECT
+    // the SourceBuffer append of a >2-channel AAC track ("audio SourceBuffer
+    // error. MediaSource readyState: ended"), failing the whole fragment and
+    // freezing the player grey at 0:00 — even though the codec STRING
+    // (mp4a.40.2) reports as supported. A client whose decodingInfo probe
+    // proved a 6-channel AAC append raises the cap and keeps its surround
+    // track. When channel count is unknown we re-encode: a wrongly-copied 5.1
+    // track is a silent total playback failure, whereas a needless stereo
+    // re-encode merely costs a little CPU. A multichannel source downmixed to
+    // stereo gets the higher DOWNMIX bitrate so the fold-down isn't smeared.
     let tracks = file.audio_tracks();
     let Some(track) = tracks.first() else {
         // No audio at all: nothing to encode; ffmpeg_args guards on -map, so a
@@ -336,36 +393,32 @@ fn plan_audio(file: &MediaFileRow, caps: &ClientCaps) -> AudioOp {
         .unwrap_or("")
         .trim()
         .to_ascii_lowercase();
-    let browser_safe_channels = track.channels.is_some_and(|c| c <= 2);
-    if accepted_audio_codecs(caps).contains(&codec) && browser_safe_channels {
+    let codec_accepted = caps
+        .audio_codecs
+        .iter()
+        .any(|c| c.eq_ignore_ascii_case(&codec));
+    let channels_safe = if codec == "aac" {
+        track
+            .channels
+            .is_some_and(|c| c <= caps.aac_max_channels.max(2))
+    } else {
+        // Non-AAC codecs only reach copy when the client explicitly probed
+        // them; those are native system decoders, not MSE transmux paths, so
+        // the AAC append hazard does not apply.
+        true
+    };
+    if codec_accepted && channels_safe {
         AudioOp::Copy
     } else {
+        let is_downmix = track.channels.is_none_or(|c| c > 2);
         AudioOp::EncodeAac {
-            bitrate_kbps: DEFAULT_AAC_BITRATE_KBPS,
+            bitrate_kbps: if is_downmix {
+                DOWNMIX_AAC_BITRATE_KBPS
+            } else {
+                DEFAULT_AAC_BITRATE_KBPS
+            },
         }
     }
-}
-
-/// Audio codecs we copy through instead of re-encoding. The shipped delivery
-/// path is HLS into a browser `<video>` — hls.js/MSE on Chrome & Firefox, native
-/// HLS on Safari — and **AAC is the only audio codec all three can decode**.
-/// Chrome's and Firefox's MSE reject AC-3/E-AC-3, so a passthrough copy of those
-/// hands the player a stream it renders with dead audio (or fails outright — a
-/// grey 0:00). So only AAC copies; everything else (AC-3, E-AC-3, DTS, TrueHD,
-/// FLAC, …) is re-encoded to AAC.
-///
-/// This is a CODEC test only. [`plan_audio`] adds a second, independent gate on
-/// channel count: even an accepted AAC track is re-encoded (downmixed) when it
-/// carries >2 channels, because MSE also rejects a multichannel AAC append.
-///
-/// `caps.audio_codecs` does not exist in the M3 `ClientCaps` contract yet, so
-/// this is a fixed browser-safe baseline rather than the client's advertised set.
-/// TODO(M4+): when `ClientCaps` grows an `audio_codecs` field, key off the
-/// client's real set so a native Apple client (AVPlayer can pass AC-3/E-AC-3 to a
-/// receiver) gets passthrough while browsers keep AAC. Note also that only the
-/// first audio track is mapped (`-map 0:a:0?` in `args::ffmpeg_args`).
-fn accepted_audio_codecs(_caps: &ClientCaps) -> Vec<String> {
-    vec!["aac".to_string()]
 }
 
 #[cfg(test)]
@@ -378,8 +431,7 @@ mod tests {
             containers: vec!["mp4".into()],
             video_codecs: vec!["h264".into()],
             max_height: Some(1080),
-            hdr: false,
-            max_bitrate: None,
+            ..ClientCaps::default()
         }
     }
 
@@ -474,6 +526,7 @@ mod tests {
             video: VideoOp::Copy,
             audio: AudioOp::EncodeAac { bitrate_kbps: 192 },
             subtitle: SubtitleOp::None,
+            segment_format: SegmentFormat::MpegTs,
             reason: "container".into(),
         };
         assert!(
@@ -489,6 +542,7 @@ mod tests {
             },
             audio: AudioOp::Copy,
             subtitle: SubtitleOp::None,
+            segment_format: SegmentFormat::MpegTs,
             reason: "hevc".into(),
         };
         assert!(encode.reencodes_video());
@@ -642,7 +696,8 @@ mod tests {
         let plan = plan_transcode(&f, &caps_h264_1080_sdr());
         match plan {
             TranscodePlan::Transcode { audio, .. } => {
-                assert_eq!(audio, AudioOp::EncodeAac { bitrate_kbps: 192 });
+                // 8-channel DTS folds down to stereo → the downmix bitrate.
+                assert_eq!(audio, AudioOp::EncodeAac { bitrate_kbps: 256 });
             }
             other => panic!("expected transcode, got {other:?}"),
         }
@@ -665,7 +720,8 @@ mod tests {
         let plan = plan_transcode(&f, &caps_h264_1080_sdr());
         match plan {
             TranscodePlan::Transcode { audio, .. } => {
-                assert_eq!(audio, AudioOp::EncodeAac { bitrate_kbps: 192 })
+                // 5.1 E-AC-3 → stereo AAC downmix at the higher bitrate.
+                assert_eq!(audio, AudioOp::EncodeAac { bitrate_kbps: 256 })
             }
             other => panic!("expected transcode, got {other:?}"),
         }
@@ -696,8 +752,8 @@ mod tests {
                 );
                 assert_eq!(
                     audio,
-                    AudioOp::EncodeAac { bitrate_kbps: 192 },
-                    "5.1 AAC must re-encode (downmix), not copy"
+                    AudioOp::EncodeAac { bitrate_kbps: 256 },
+                    "5.1 AAC must re-encode (downmix at 256k), not copy"
                 );
             }
             other => panic!("expected transcode, got {other:?}"),
@@ -719,7 +775,8 @@ mod tests {
         let plan = plan_transcode(&f, &caps_h264_1080_sdr());
         match plan {
             TranscodePlan::Transcode { audio, .. } => {
-                assert_eq!(audio, AudioOp::EncodeAac { bitrate_kbps: 192 });
+                // Unknown channel count → conservative downmix path (256k).
+                assert_eq!(audio, AudioOp::EncodeAac { bitrate_kbps: 256 });
             }
             other => panic!("expected transcode, got {other:?}"),
         }
@@ -929,44 +986,191 @@ mod tests {
     }
 
     #[test]
-    fn hevc_main10_reencodes_even_for_hevc_capable_client() {
-        // ClientCaps has no hevc10/10-bit capability bit, so even a client
-        // that advertises hevc must get Main 10 re-encoded (fail closed).
+    fn hevc_never_copies_without_fmp4_capability() {
+        // THE latent grey-box bug: an hevc-advertising client without the
+        // `hls_fmp4_hevc` bit must get a RE-ENCODE, never a copy — hls.js's
+        // TS transmuxer demuxes only H.264, so an HEVC elementary stream in
+        // .ts segments is rejected at the MSE append (grey 0:00 with a
+        // "healthy" session). Both Main and Main 10 must re-encode.
+        for profile in ["Main", "Main 10"] {
+            let mut f = file(
+                Some("mkv"),
+                Some("hevc"),
+                Some(1080),
+                None,
+                vec![aac(1)],
+                vec![],
+            );
+            f.video_profile = Some(profile.into());
+            let caps = ClientCaps {
+                video_codecs: vec!["h264".into(), "hevc".into()],
+                hls_fmp4_hevc: false,
+                ..caps_h264_1080_sdr()
+            };
+            let plan = plan_transcode(&f, &caps);
+            match plan {
+                TranscodePlan::Transcode {
+                    video,
+                    segment_format,
+                    ..
+                } => {
+                    assert!(
+                        matches!(video, VideoOp::EncodeH264 { .. }),
+                        "hevc {profile} without fmp4 caps must re-encode, got {video:?}"
+                    );
+                    assert_eq!(segment_format, SegmentFormat::MpegTs);
+                }
+                other => panic!("expected transcode, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn hevc_copies_into_fmp4_for_fmp4_capable_client() {
+        // The zero-loss path this work exists for: MKV + HEVC (Main or
+        // Main 10) to a client that probed HEVC hardware decode and an
+        // fMP4-capable player → video COPY, fMP4 segments.
+        for profile in ["Main", "Main 10"] {
+            let mut f = file(
+                Some("mkv"),
+                Some("hevc"),
+                Some(1080),
+                None,
+                vec![aac(1)],
+                vec![],
+            );
+            f.video_profile = Some(profile.into());
+            let caps = ClientCaps {
+                video_codecs: vec!["h264".into(), "hevc".into()],
+                hls_fmp4_hevc: true,
+                ..caps_h264_1080_sdr()
+            };
+            let plan = plan_transcode(&f, &caps);
+            match plan {
+                TranscodePlan::Transcode {
+                    video,
+                    segment_format,
+                    ..
+                } => {
+                    assert_eq!(video, VideoOp::Copy, "hevc {profile} must copy");
+                    assert_eq!(
+                        segment_format,
+                        SegmentFormat::Fmp4,
+                        "hevc copy must ride fMP4 segments"
+                    );
+                }
+                other => panic!("expected transcode, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn hevc_reencode_keeps_mpegts_even_with_fmp4_caps() {
+        // fMP4 is selected by the COPY, not by the caps bit alone: an HEVC
+        // source that still needs a re-encode (tone-map for an SDR client)
+        // outputs H.264 and stays on the proven MPEG-TS path.
         let mut f = file(
             Some("mkv"),
             Some("hevc"),
             Some(1080),
-            None,
+            Some("HDR10"),
             vec![aac(1)],
             vec![],
         );
         f.video_profile = Some("Main 10".into());
         let caps = ClientCaps {
             video_codecs: vec!["h264".into(), "hevc".into()],
+            hls_fmp4_hevc: true,
+            hdr: false,
             ..caps_h264_1080_sdr()
         };
-        let plan = plan_transcode(&f, &caps);
-        match plan {
-            TranscodePlan::Transcode { video, .. } => assert!(
-                matches!(video, VideoOp::EncodeH264 { .. }),
-                "hevc Main 10 must re-encode, got {video:?}"
-            ),
+        match plan_transcode(&f, &caps) {
+            TranscodePlan::Transcode {
+                video,
+                segment_format,
+                ..
+            } => {
+                assert!(matches!(
+                    video,
+                    VideoOp::EncodeH264 { tone_map: true, .. }
+                ));
+                assert_eq!(segment_format, SegmentFormat::MpegTs);
+            }
             other => panic!("expected transcode, got {other:?}"),
         }
+    }
 
-        // Plain Main (8-bit) for the same hevc-capable client still copies.
-        let mut f8 = file(
+    #[test]
+    fn vp9_never_copies_even_when_advertised() {
+        // No HLS segment container in the shipped player stack demuxes VP9;
+        // an advertised vp9 cap affects direct-play only — the transcode
+        // path must re-encode.
+        let f = file(
             Some("mkv"),
-            Some("hevc"),
+            Some("vp9"),
             Some(1080),
             None,
             vec![aac(1)],
             vec![],
         );
-        f8.video_profile = Some("Main".into());
-        match plan_transcode(&f8, &caps) {
-            TranscodePlan::Transcode { video, .. } => {
-                assert_eq!(video, VideoOp::Copy, "hevc Main must still copy")
+        let caps = ClientCaps {
+            video_codecs: vec!["h264".into(), "vp9".into()],
+            hls_fmp4_hevc: true,
+            ..caps_h264_1080_sdr()
+        };
+        match plan_transcode(&f, &caps) {
+            TranscodePlan::Transcode { video, .. } => assert!(
+                matches!(video, VideoOp::EncodeH264 { .. }),
+                "vp9 must re-encode on the HLS path, got {video:?}"
+            ),
+            other => panic!("expected transcode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn aac_51_copies_when_client_raised_channel_cap() {
+        // A client whose decodingInfo probe proved a 6-channel AAC append
+        // (Safari/Edge/Firefox) advertises aac_max_channels: 6 and keeps the
+        // surround track via copy instead of a stereo downmix.
+        let f = file(
+            Some("mkv"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![aac_51(1)],
+            vec![],
+        );
+        let caps = ClientCaps {
+            aac_max_channels: 6,
+            ..caps_h264_1080_sdr()
+        };
+        match plan_transcode(&f, &caps) {
+            TranscodePlan::Transcode { audio, .. } => {
+                assert_eq!(audio, AudioOp::Copy, "5.1 AAC must copy at cap 6");
+            }
+            other => panic!("expected transcode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn advertised_eac3_copies_instead_of_reencoding() {
+        // Safari/Edge probe real system E-AC-3 decode and advertise it; the
+        // track passes through untouched instead of a lossy AAC re-encode.
+        let f = file(
+            Some("mkv"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![eac3(1)],
+            vec![],
+        );
+        let caps = ClientCaps {
+            audio_codecs: vec!["aac".into(), "eac3".into()],
+            ..caps_h264_1080_sdr()
+        };
+        match plan_transcode(&f, &caps) {
+            TranscodePlan::Transcode { audio, .. } => {
+                assert_eq!(audio, AudioOp::Copy, "advertised eac3 must copy");
             }
             other => panic!("expected transcode, got {other:?}"),
         }

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::models::MediaFileRow;
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ClientCaps {
     #[serde(default)]
     pub containers: Vec<String>,
@@ -27,6 +27,51 @@ pub struct ClientCaps {
     /// [`decide`]; a file over the cap is routed to the transcoder.
     #[serde(default)]
     pub max_bitrate: Option<i64>,
+    /// Audio codecs the client can decode. Defaults to the browser-safe AAC
+    /// baseline so a client that predates this field keeps the old behavior.
+    /// A Safari/Edge client may add `eac3`/`ac3` (system decoders) and have
+    /// those tracks direct-play/copy instead of being re-encoded.
+    #[serde(default = "default_audio_codecs")]
+    pub audio_codecs: Vec<String>,
+    /// Maximum AAC channel count the client's MEDIA-SOURCE path can append.
+    /// Chrome/Firefox MSE reject a >2-channel AAC SourceBuffer append even
+    /// though the codec string reports as supported, so the conservative
+    /// default is 2. Native <video> direct-play is NOT gated on this — every
+    /// browser decodes (downmixes) 5.1 AAC progressively; it only drives the
+    /// transcoder's copy-vs-downmix choice.
+    #[serde(default = "default_aac_max_channels")]
+    pub aac_max_channels: i64,
+    /// True when the client's HLS player can play HEVC carried in fMP4
+    /// segments (hls.js ≥1.5 with hardware decode, or native HLS on Safari).
+    /// Gates the transcoder's HEVC copy-remux path: hls.js's TS transmuxer is
+    /// H.264-only, so HEVC must NEVER be copied into MPEG-TS segments.
+    #[serde(default)]
+    pub hls_fmp4_hevc: bool,
+}
+
+fn default_audio_codecs() -> Vec<String> {
+    vec!["aac".to_string()]
+}
+
+fn default_aac_max_channels() -> i64 {
+    2
+}
+
+impl Default for ClientCaps {
+    /// Matches the serde field defaults (the derive would give an EMPTY
+    /// `audio_codecs`, denying all audio — not the browser-safe baseline).
+    fn default() -> Self {
+        ClientCaps {
+            containers: Vec::new(),
+            video_codecs: Vec::new(),
+            max_height: None,
+            hdr: false,
+            max_bitrate: None,
+            audio_codecs: default_audio_codecs(),
+            aac_max_channels: default_aac_max_channels(),
+            hls_fmp4_hevc: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -90,6 +135,18 @@ pub fn decide(file: &MediaFileRow, caps: &ClientCaps) -> PlayDecision {
         return deny(format!("container {container} not supported by client"));
     }
 
+    // Matroska NEVER direct-plays, no matter what the client advertises. A
+    // direct-play grant hands the raw file to a progressive <video src> — and
+    // no shipped browser engine demuxes matroska there (Chrome/Edge/Safari:
+    // none; WebM is a constrained sibling, not an alias). A client that lists
+    // "mkv" is describing what its *transcode/remux* path can accept, but a
+    // misadvertised or future-optimistic cap here would be a silent total
+    // playback failure (MEDIA_ERR_SRC_NOT_SUPPORTED with no error UI), so the
+    // server fails closed and routes mkv to the remux path instead.
+    if container_family(container) == "mkv" {
+        return deny("matroska cannot progressive-play in browsers; remux required");
+    }
+
     let codec = match file.video_codec.as_deref().map(str::trim) {
         Some(c) if !c.is_empty() => c,
         _ => return deny("unknown codec"),
@@ -149,18 +206,18 @@ pub fn decide(file: &MediaFileRow, caps: &ClientCaps) -> PlayDecision {
     }
 
     // The primary audio must be decodable by the client too. A direct-play hands
-    // the raw file to the client's <video> element; the shipped client is a
-    // browser (hls.js/native HLS), which decodes AAC universally but NOT
-    // AC-3/E-AC-3/DTS — those direct-play with dead audio. So a non-AAC primary
-    // track denies direct-play, routing the file to the transcode path which
-    // re-encodes audio to AAC (mirrors transcoder::plan::accepted_audio_codecs).
+    // the raw file to the client's <video> element; a codec outside the client's
+    // advertised set direct-plays with dead audio, so it denies and routes to the
+    // transcode path which re-encodes audio to AAC. The set defaults to the
+    // browser-safe AAC baseline; a client whose probe proves system E-AC-3/AC-3
+    // decode (Safari, Edge-on-Windows) advertises those and gets passthrough.
     // An unknown/absent audio codec is left to direct-play (nothing to gate on).
-    // TODO(M4+): when ClientCaps carries an `audio_codecs` set, gate on the
-    // client's real capabilities (Apple AVPlayer can pass AC-3/E-AC-3 through and
-    // should direct-play them) instead of this fixed browser-safe baseline.
+    // Channel count is deliberately NOT gated here: progressive <video> decodes
+    // (downmixes) 5.1 AAC natively everywhere — the multichannel MSE hazard is a
+    // transcode-path concern (see transcoder::plan::plan_audio).
     if let Some(track) = file.audio_tracks().first() {
         let acodec = track.codec.as_deref().map(str::trim).unwrap_or("");
-        if !acodec.is_empty() && !acodec.eq_ignore_ascii_case("aac") {
+        if !acodec.is_empty() && !contains_ci(&caps.audio_codecs, acodec) {
             return deny(format!("audio codec {acodec} not supported by client"));
         }
     }
@@ -203,8 +260,7 @@ mod tests {
             containers: vec!["mp4".to_string()],
             video_codecs: vec!["h264".to_string()],
             max_height: Some(1080),
-            hdr: false,
-            max_bitrate: None,
+            ..ClientCaps::default()
         }
     }
 
@@ -268,15 +324,19 @@ mod tests {
     }
 
     #[test]
-    fn stored_matroska_matches_mkv_caps_but_not_webm() {
-        // A client advertising "mkv" plays the stored "matroska" token…
+    fn matroska_never_direct_plays_even_when_advertised() {
+        // No browser progressive-plays matroska in a <video src>; a client
+        // listing "mkv" must still be routed to the remux path (fail closed —
+        // a wrong direct-play grant is a silent MEDIA_ERR_SRC_NOT_SUPPORTED).
         let mut caps = h264_client();
         caps.containers = vec!["mkv".to_string()];
         let f = file(Some("matroska"), Some("h264"), Some(1080), None);
-        assert!(decide(&f, &caps).direct_play);
+        let d = decide(&f, &caps);
+        assert!(!d.direct_play, "matroska must never direct-play");
+        assert!(d.reason.contains("remux"), "reason: {}", d.reason);
 
-        // …but webm is NOT folded into the matroska family: ffprobe cannot
-        // tell webm from mkv, so a webm-only client never receives matroska.
+        // webm is NOT folded into the matroska family: ffprobe cannot tell
+        // webm from mkv, so a webm-only client never receives matroska either.
         caps.containers = vec!["webm".to_string()];
         assert!(!decide(&f, &caps).direct_play);
     }
@@ -407,6 +467,37 @@ mod tests {
     fn aac_audio_match_is_case_insensitive() {
         let f = with_audio(file(Some("mp4"), Some("h264"), Some(1080), None), "AAC");
         assert!(decide(&f, &h264_client()).direct_play);
+    }
+
+    #[test]
+    fn advertised_eac3_direct_plays_but_dts_still_denies() {
+        // A client whose probe proved system E-AC-3 decode (Safari/Edge)
+        // advertises it and the track passes; codecs outside the advertised
+        // set (DTS) still deny.
+        let mut caps = h264_client();
+        caps.audio_codecs = vec!["aac".to_string(), "eac3".to_string()];
+        let f = with_audio(file(Some("mp4"), Some("h264"), Some(1080), None), "eac3");
+        assert!(
+            decide(&f, &caps).direct_play,
+            "advertised eac3 must direct-play"
+        );
+        let f = with_audio(file(Some("mp4"), Some("h264"), Some(1080), None), "dts");
+        assert!(!decide(&f, &caps).direct_play, "dts must still deny");
+    }
+
+    #[test]
+    fn default_caps_keep_aac_only_audio_baseline() {
+        // Back-compat: a caps body that never mentions audio_codecs must keep
+        // the old fixed AAC-only behavior (serde + Default both supply it).
+        let caps: ClientCaps = serde_json::from_str(
+            r#"{"containers":["mp4"],"video_codecs":["h264"],"max_height":1080,"hdr":false}"#,
+        )
+        .unwrap();
+        assert_eq!(caps.audio_codecs, vec!["aac".to_string()]);
+        assert_eq!(caps.aac_max_channels, 2);
+        assert!(!caps.hls_fmp4_hevc);
+        let f = with_audio(file(Some("mp4"), Some("h264"), Some(1080), None), "eac3");
+        assert!(!decide(&f, &caps).direct_play, "eac3 must deny by default");
     }
 
     #[test]
