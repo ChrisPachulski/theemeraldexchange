@@ -59,7 +59,7 @@ type Caps = {
   /** Client's HLS player handles HEVC in fMP4 segments (enables HEVC copy-remux). */
   hls_fmp4_hevc: boolean
 }
-type PlaybackRequest = Partial<Caps> & { start_secs?: unknown }
+type PlaybackRequest = Partial<Caps> & { start_secs?: unknown; force_hls?: unknown }
 const DEFAULT_CAPS: Caps = {
   containers: ['mp4'],
   video_codecs: ['h264'],
@@ -70,7 +70,7 @@ const DEFAULT_CAPS: Caps = {
   hls_fmp4_hevc: false,
 }
 
-function capsQuery(caps: Caps, startSecs?: number): string {
+function capsQuery(caps: Caps, startSecs?: number, forceTranscode = false): string {
   const p = new URLSearchParams()
   if (caps.containers.length) p.set('containers', caps.containers.join(','))
   if (caps.video_codecs.length) p.set('video_codecs', caps.video_codecs.join(','))
@@ -80,6 +80,7 @@ function capsQuery(caps: Caps, startSecs?: number): string {
   p.set('aac_max_channels', String(caps.aac_max_channels))
   p.set('hls_fmp4_hevc', String(Boolean(caps.hls_fmp4_hevc)))
   if (startSecs !== undefined) p.set('start_secs', String(startSecs))
+  if (forceTranscode) p.set('force_transcode', 'true')
   return p.toString()
 }
 
@@ -154,6 +155,10 @@ media.post('/playback/:kind/:id', async (c) => {
     reqCaps.start_secs > 0
       ? Math.floor(reqCaps.start_secs)
       : undefined
+  // The client may demand buffered (HLS) delivery even for a direct-play-
+  // eligible file — the player escalates when progressive playback stalls.
+  // The transcoder resolves these to a lossless copy-remux session.
+  const forceHls = Boolean(reqCaps.force_hls)
 
   let auth: Record<string, string>
   try {
@@ -198,8 +203,10 @@ media.post('/playback/:kind/:id', async (c) => {
 
   const durationSecs = grant.file?.duration_secs ?? null
 
-  // 2a. Direct play → a vod token on the proxied stream URL.
-  if (grant.directPlay) {
+  // 2a. Direct play → a vod token on the proxied stream URL. Skipped when the
+  // client forced HLS: fall through to the stream handoff, which carries
+  // force_transcode so media-core/transcoder bypass their direct-play paths.
+  if (grant.directPlay && !forceHls) {
     const token = signMediaToken({
       sub: session.sub,
       rid: mediaResourceId(kind, id),
@@ -219,7 +226,7 @@ media.post('/playback/:kind/:id', async (c) => {
   try {
     // Small JSON handoff — whole-transfer deadline, same as the grant above.
     const r = await fetchWithTimeout(
-      `${env.mediaCoreUrl}/api/media/stream/${kind}/${id}?${capsQuery(caps, startSecs)}`,
+      `${env.mediaCoreUrl}/api/media/stream/${kind}/${id}?${capsQuery(caps, startSecs, forceHls)}`,
       { method: 'GET', headers: auth },
       LAN_TIMEOUT_MS,
       'media-core',
