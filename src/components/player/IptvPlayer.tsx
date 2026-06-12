@@ -435,13 +435,23 @@ export default function IptvPlayer({
         const hls = new Hls({
           lowLatencyMode: false,
           liveSyncDurationCount: 4,
-          maxBufferLength: 30,
-          maxMaxBufferLength: 120,
           maxBufferHole: 0.5,
-          fragLoadingMaxRetry: 8,
-          fragLoadingMaxRetryTimeout: 8000,
+          enableWorker: true,
           manifestLoadingMaxRetry: 4,
           levelLoadingMaxRetry: 4,
+          // Generous fragment retries over the tunnel path: cloudflared TTFB
+          // can be seconds, and a 10-20 MB fMP4 copy segment at a modest
+          // uplink legitimately takes tens of seconds — bailing early turns
+          // a slow fetch into a fatal error. (fragLoadPolicy supersedes the
+          // deprecated fragLoadingMaxRetry* keys.)
+          fragLoadPolicy: {
+            default: {
+              maxTimeToFirstByteMs: 15000,
+              maxLoadTimeMs: 65000,
+              timeoutRetry: { maxNumRetry: 3, retryDelayMs: 500, maxRetryDelayMs: 4000 },
+              errorRetry: { maxNumRetry: 4, retryDelayMs: 2000, maxRetryDelayMs: 16000 },
+            },
+          },
           // Local-media VOD sessions grow an EVENT playlist that hls.js
           // treats as live until ENDLIST, which trips TWO live behaviors a
           // finite title must not get:
@@ -454,9 +464,34 @@ export default function IptvPlayer({
           //    (observed: playback jumped 0:00 → 7:48 as the remux outran
           //    it) → Infinity disables the forced seek for VOD while IPTV
           //    keeps the bounded latency window it needs.
+          //
+          // Buffer budgets are split VOD vs live because the BYTE cap is the
+          // real governor: hls.js stops fetching at maxBufferSize regardless
+          // of the time targets, and the default 60 MB held only 3-6 of the
+          // 10-20 MB fMP4 copy segments — one slow tunnel fetch from an
+          // underrun. 120 MB stays under Chrome's ~150 MB SourceBuffer
+          // ceiling (drop it first if QuotaExceededError ever appears).
+          // backBufferLength must be FINITE: the default (Infinity) grows the
+          // SourceBuffer until the browser evicts mid-play — the documented
+          // stall-an-hour-into-a-movie failure mode.
           ...(vodHls
-            ? { startPosition: 0, liveMaxLatencyDurationCount: Infinity }
-            : { liveMaxLatencyDurationCount: 16 }),
+            ? {
+                startPosition: 0,
+                liveMaxLatencyDurationCount: Infinity,
+                maxBufferLength: 60,
+                maxMaxBufferLength: 120,
+                maxBufferSize: 120 * 1024 * 1024,
+                backBufferLength: 60,
+              }
+            : {
+                liveMaxLatencyDurationCount: 16,
+                maxBufferLength: 30,
+                maxMaxBufferLength: 120,
+                backBufferLength: 10,
+                // Gentle rate-based catch-up (default 1 = none): drifting
+                // slowly back to the sync window beats a hard seek.
+                maxLiveSyncPlaybackRate: 1.05,
+              }),
         })
         hlsRef.current = hls
 
@@ -697,7 +732,13 @@ export default function IptvPlayer({
         src={grant.delivery === 'progressive' ? grant.url : undefined}
         controls
         playsInline
-        preload="metadata"
+        // Progressive direct play streams the ORIGINAL file over the tunnel;
+        // the browser's readahead is the only buffer it gets, and with
+        // preload="metadata" Chrome trickles shallow range requests that
+        // underrun on any jitter. "auto" tells it to buffer ahead
+        // aggressively. MSE deliveries ignore preload (hls.js/mpegts.js own
+        // the SourceBuffer), so gating on delivery is about intent, not need.
+        preload={grant.delivery === 'progressive' ? 'auto' : 'metadata'}
       />
 
       {(audioTracks.length > 0 || subtitleTracks.length > 0) && (
