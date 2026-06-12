@@ -58,14 +58,15 @@ npm run dev        # vite + tsx backend (concurrently)
 ```
 
 `npm run dev` runs the SPA (Vite, port 5173) and the backend together; Vite
-proxies `/api/*` to the backend so requests are same-origin in dev. Backend
-secrets live in `.env` (gitignored) — never commit API keys, tokens, or DSNs.
+proxies `/api/*` to the backend so requests are same-origin in dev. The
+backend loads its config from `.env.local` (gitignored); copy `.env.example`
+to `.env.local` and fill it in — never commit API keys, tokens, or DSNs.
 
 ### Local full-stack development
 
 The sidecars are opt-in: with their flags off, `npm run dev` alone gives you
-the SPA + backend (auth, search, *arr bridges pointed at whatever `.env`
-says). To run the full stack locally alongside it:
+the SPA + backend (auth, search, *arr bridges pointed at whatever
+`.env.local` says). To run the full stack locally alongside it:
 
 - **Recommender** (FastAPI, port 8000):
 
@@ -77,7 +78,7 @@ says). To run the full stack locally alongside it:
   RECOMMENDER_EVENT_SECRET=local-dev-secret make serve
   ```
 
-  Then wire the backend via `.env`: `USE_LOCAL_RECOMMENDER=1`,
+  Then wire the backend via `.env.local`: `USE_LOCAL_RECOMMENDER=1`,
   `RECOMMENDER_URL=http://localhost:8000`, and the same
   `RECOMMENDER_EVENT_SECRET` (required whenever the flag is on).
 
