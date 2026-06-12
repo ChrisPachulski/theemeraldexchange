@@ -72,10 +72,12 @@ ssh "$NAS" "cd '$APPDATA' && docker compose up -d --no-build $*" \
   || { say "recreate FAILED"; exit 4; }
 
 # cloudflared joins the backend container's network namespace; a backend
-# recreate strands its netns ref and the public site 502s until it restarts.
+# RECREATE (new container id) strands its netns ref, and a plain
+# `docker restart` then fails with "No such container: <old-backend-id>" —
+# only a force-recreate re-resolves the netns to the new backend container.
 case " $* " in *" backend "*)
-  say "backend recreated → restarting exchange-cloudflared (netns)…"
-  ssh "$NAS" 'docker restart exchange-cloudflared' >/dev/null
+  say "backend recreated → force-recreating exchange-cloudflared (netns)…"
+  ssh "$NAS" "cd '$APPDATA' && docker compose up -d --force-recreate --no-build cloudflared" >/dev/null
   ;;
 esac
 

@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ApiError } from './errors'
-import { mediaApi, posterFor, browserCaps } from './media'
+import { mediaApi, posterFor, browserCaps, probedCaps, resetProbedCapsForTest } from './media'
 
 const fetchMock = vi.fn()
 
@@ -317,7 +317,93 @@ describe('browserCaps', () => {
     expect(caps.containers).toEqual(['mp4'])
     expect(caps.video_codecs).toEqual(['h264'])
     expect(caps.hdr).toBe(false)
-    expect(caps.max_height).toBeGreaterThanOrEqual(720)
+    expect(caps.audio_codecs).toEqual(['aac'])
+    expect(caps.aac_max_channels).toBe(2)
+    expect(caps.hls_fmp4_hevc).toBe(false)
+    // NO screen-height gate: browsers downscale 4K natively; forcing those
+    // titles through the transcoder traded a perfect picture for a re-encode.
+    expect(caps.max_height).toBe(2160)
+  })
+})
+
+describe('probedCaps', () => {
+  afterEach(() => {
+    resetProbedCapsForTest()
+    vi.unstubAllGlobals()
+  })
+
+  /** Install a mediaCapabilities stub that answers per-config. */
+  function stubDecoding(
+    answer: (cfg: {
+      type: string
+      video?: { contentType: string; height: number }
+      audio?: { contentType: string; channels: string }
+    }) => boolean,
+  ) {
+    vi.stubGlobal('navigator', {
+      mediaCapabilities: {
+        decodingInfo: (cfg: never) =>
+          Promise.resolve({ supported: answer(cfg), smooth: true, powerEfficient: true }),
+      },
+    })
+  }
+
+  it('falls back to the web-safe baseline without mediaCapabilities', async () => {
+    vi.stubGlobal('navigator', {})
+    const caps = await probedCaps()
+    expect(caps).toEqual(browserCaps())
+  })
+
+  it('advertises hevc + fmp4 + hdr + surround when every probe passes', async () => {
+    stubDecoding(() => true)
+    const caps = await probedCaps()
+    expect(caps.video_codecs).toEqual(['h264', 'hevc', 'av1'])
+    expect(caps.hls_fmp4_hevc).toBe(true)
+    expect(caps.hdr).toBe(true)
+    expect(caps.aac_max_channels).toBe(6)
+    expect(caps.audio_codecs).toEqual(['aac', 'eac3', 'ac3'])
+    expect(caps.containers).toEqual(['mp4']) // never mkv
+  })
+
+  it('stays h264/stereo when hevc and 6ch probes fail (Chrome-on-no-HW shape)', async () => {
+    stubDecoding((cfg) => {
+      if (cfg.video?.contentType.includes('hev1') || cfg.video?.contentType.includes('hvc1'))
+        return false
+      if (cfg.video?.contentType.includes('av01')) return false
+      if (cfg.audio && cfg.audio.contentType.includes('mp4a') && cfg.audio.channels === '6')
+        return false
+      if (cfg.audio && !cfg.audio.contentType.includes('mp4a')) return false
+      return true
+    })
+    const caps = await probedCaps()
+    expect(caps.video_codecs).toEqual(['h264'])
+    expect(caps.hls_fmp4_hevc).toBe(false)
+    expect(caps.hdr).toBe(false)
+    expect(caps.aac_max_channels).toBe(2)
+    expect(caps.audio_codecs).toEqual(['aac'])
+  })
+
+  it('requires BOTH file and media-source decode before advertising eac3', async () => {
+    // audio_codecs drives direct play AND the transcoder's copy-into-HLS
+    // decision, so one-sided support (e.g. progressive-only) must not pass.
+    stubDecoding((cfg) => {
+      if (cfg.audio?.contentType.includes('ec-3')) return cfg.type === 'file'
+      if (cfg.audio?.contentType.includes('ac-3')) return false
+      return true
+    })
+    const caps = await probedCaps()
+    expect(caps.audio_codecs).toEqual(['aac'])
+  })
+
+  it('is cached: a second call does not re-probe', async () => {
+    const spy = vi.fn(() =>
+      Promise.resolve({ supported: true, smooth: true, powerEfficient: true }),
+    )
+    vi.stubGlobal('navigator', { mediaCapabilities: { decodingInfo: spy } })
+    await probedCaps()
+    const callsAfterFirst = spy.mock.calls.length
+    await probedCaps()
+    expect(spy.mock.calls.length).toBe(callsAfterFirst)
   })
 })
 
