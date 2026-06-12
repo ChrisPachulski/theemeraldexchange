@@ -197,9 +197,16 @@ fn parse_movie(stem: &str) -> ParsedName {
     let bytes = stem.as_bytes();
     let mut chosen: Option<(usize, i64)> = None;
     let mut i = 0;
+    // A year token must not touch a letter on either side: release-group tags
+    // like `-EDGE2020` or version markers like `v2021` embed a year-shaped run
+    // that the old digit-only boundary accepted — every `…-edge2020` rip got
+    // year 2020 and a title still containing the real year, which then never
+    // matched TMDB. Standalone years are always delimited by `. _ - ( )` or
+    // whitespace.
+    let boundary_ok = |b: u8| !b.is_ascii_digit() && !b.is_ascii_alphabetic();
     while i + 4 <= bytes.len() {
-        let before_ok = i == 0 || !bytes[i - 1].is_ascii_digit();
-        let after_ok = i + 4 == bytes.len() || !bytes[i + 4].is_ascii_digit();
+        let before_ok = i == 0 || boundary_ok(bytes[i - 1]);
+        let after_ok = i + 4 == bytes.len() || boundary_ok(bytes[i + 4]);
         let run = &bytes[i..i + 4];
         let is_year = before_ok
             && after_ok
@@ -566,6 +573,36 @@ mod tests {
                 show: "Élite".to_string(),
                 season: 1,
                 episode: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn release_group_year_tag_is_not_the_year() {
+        // The live `-EDGE2020` failure class: a year-shaped run embedded in a
+        // release-group tag must not win over the real standalone year. The
+        // old parse yielded title "WarGames 1983" + year 2020 → no TMDB match
+        // → no playback button for every rip from this group.
+        assert_eq!(
+            parse_filename("WarGames.1983.1080p.BluRay.DDP.5.1.x265-edge2020.mkv"),
+            ParsedName::Movie {
+                title: "WarGames".to_string(),
+                year: Some(1983),
+            }
+        );
+        assert_eq!(
+            parse_filename("Tag.2018.1080p.BluRay.DDP.5.1.x265-edge2020.mkv"),
+            ParsedName::Movie {
+                title: "Tag".to_string(),
+                year: Some(2018),
+            }
+        );
+        // Version markers (`v2021`) are equally not years.
+        assert_eq!(
+            parse_filename("Pokemon - Mewtwo Returns 2000 [WEB-DL.1080p.v2021.09].mkv"),
+            ParsedName::Movie {
+                title: "Pokemon Mewtwo Returns".to_string(),
+                year: Some(2000),
             }
         );
     }

@@ -171,6 +171,16 @@ fn walk_roots(roots: &[LibraryRoot]) -> WalkOutcome {
             }
 
             let entry_path = entry.path();
+
+            // Bonus-content directories (Plex local-extras conventions, plus
+            // Plex's own "Plex Versions" transcode cache) never hold a movie
+            // or episode of their own. Indexing them filled the catalog with
+            // TMDB-matched phantoms ("Trailer.mkv" → 'Trailer Thrills' 1937)
+            // and pointed real titles at Optimized-for-TV copies.
+            if in_extras_dir(entry_path, &root.path) {
+                continue;
+            }
+
             let path_str = match entry_path.to_str() {
                 Some(p) => p.to_string(),
                 None => {
@@ -990,6 +1000,40 @@ pub fn is_video_file(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Bonus-content directory names (matched case-insensitively as whole path
+/// components below the library root). The list is Plex's local-extras
+/// folder convention plus "Plex Versions" (Plex's optimized-transcode cache).
+/// "Specials" is deliberately absent — it is the season-0 convention for TV.
+const EXTRAS_DIRS: &[&str] = &[
+    "featurettes",
+    "behind the scenes",
+    "deleted scenes",
+    "interviews",
+    "scenes",
+    "shorts",
+    "trailers",
+    "extras",
+    "other",
+    "sample",
+    "samples",
+    "plex versions",
+];
+
+/// `true` when any directory component of `path` below `root` is a known
+/// bonus-content folder. The filename itself is not checked.
+pub fn in_extras_dir(path: &Path, root: &Path) -> bool {
+    let rel = path.strip_prefix(root).unwrap_or(path);
+    let Some(dir) = rel.parent() else {
+        return false;
+    };
+    dir.components().any(|c| match c {
+        std::path::Component::Normal(os) => os
+            .to_str()
+            .is_some_and(|s| EXTRAS_DIRS.contains(&s.to_lowercase().as_str())),
+        _ => false,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1646,6 +1690,35 @@ mod tests {
             err.to_string().contains("panicked"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn extras_dirs_are_skipped_by_path_component() {
+        let root = Path::new("/media/Movies");
+        for p in [
+            "/media/Movies/Forgetting Sarah Marshall (2008)/Featurettes/Trailer.mkv",
+            "/media/Movies/Some Movie (2002)/Plex Versions/Optimized for TV/Some Movie.mp4",
+            "/media/Movies/Some Movie (2002)/Behind The Scenes/clip.mkv",
+            "/media/Movies/Some Movie (2002)/extras/thing.mkv",
+        ] {
+            assert!(in_extras_dir(Path::new(p), root), "should skip: {p}");
+        }
+        for p in [
+            "/media/Movies/Aladdin (2019)/Aladdin.2019.2160p.mkv",
+            // The filename itself is never checked — only directories.
+            "/media/Movies/Trailers (2021)/Trailer.mkv",
+            "/media/Movies/The Sample Movie (1999)/sample movie.mkv",
+        ] {
+            // "Trailers (2021)" is not an exact component match; a title dir
+            // merely CONTAINING an extras word must not be skipped.
+            assert!(!in_extras_dir(Path::new(p), root), "should keep: {p}");
+        }
+        // TV: season-0 "Specials" must never be skipped.
+        let tv_root = Path::new("/media/tv_shows");
+        assert!(!in_extras_dir(
+            Path::new("/media/tv_shows/Doctor Who/Specials/ep.mkv"),
+            tv_root
+        ));
     }
 
     #[test]
