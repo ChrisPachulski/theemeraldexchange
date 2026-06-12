@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { GemScene } from '../../lib/gemScene'
+import type { GemScene } from '../../lib/gemScene'
 import './EmeraldMark.css'
 
 interface EmeraldMarkProps {
@@ -36,37 +36,61 @@ export function EmeraldMark({ width = 64, variant = 'single', className }: Emera
     // have webdriver set, so production is unaffected — the canvas
     // still renders with its aria-label as a graceful fallback.
     if (typeof navigator !== 'undefined' && navigator.webdriver) return
-    let scene: GemScene
-    try {
-      scene = new GemScene({
-        canvas,
-        width,
-        height,
-        gemCount: variant === 'single' ? 1 : 3,
-        fov: variant === 'single' ? 30 : 22,
+
+    // three.js is ~600KB and only the brand mark uses it, so GemScene lives in
+    // its own lazy chunk pulled in here after mount. The <canvas> below already
+    // renders (blank, with its aria-label) as the pre-boot frame — identical to
+    // the WebGL-unavailable fallback — so deferring the scene boot is invisible.
+    // `cancelled` guards the unmount-before-import-resolves race: if the effect
+    // tears down before the chunk lands we never construct a scene, and `scene`
+    // / `teardown` stay null so the cleanup below is a no-op.
+    let cancelled = false
+    let scene: GemScene | null = null
+    let teardown: (() => void) | null = null
+
+    void import('../../lib/gemScene')
+      .then(({ GemScene: GemSceneCtor }) => {
+        if (cancelled) return
+        try {
+          scene = new GemSceneCtor({
+            canvas,
+            width,
+            height,
+            gemCount: variant === 'single' ? 1 : 3,
+            fov: variant === 'single' ? 30 : 22,
+          })
+        } catch (err) {
+          console.warn('[EmeraldMark] WebGL init failed', err)
+          return
+        }
+        const activeScene = scene
+        const reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
+        const syncMotion = () => {
+          if (reducedMotionQuery.matches) {
+            activeScene.stop()
+            activeScene.renderAt(0)
+          } else if (document.hidden) {
+            activeScene.stop()
+          } else {
+            activeScene.start()
+          }
+        }
+        syncMotion()
+        document.addEventListener('visibilitychange', syncMotion)
+        reducedMotionQuery.addEventListener('change', syncMotion)
+        teardown = () => {
+          document.removeEventListener('visibilitychange', syncMotion)
+          reducedMotionQuery.removeEventListener('change', syncMotion)
+        }
       })
-    } catch (err) {
-      console.warn('[EmeraldMark] WebGL init failed', err)
-      return
-    }
-    const reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
-    const syncMotion = () => {
-      if (reducedMotionQuery.matches) {
-        scene.stop()
-        scene.renderAt(0)
-      } else if (document.hidden) {
-        scene.stop()
-      } else {
-        scene.start()
-      }
-    }
-    syncMotion()
-    document.addEventListener('visibilitychange', syncMotion)
-    reducedMotionQuery.addEventListener('change', syncMotion)
+      .catch((err) => {
+        console.warn('[EmeraldMark] gem scene chunk failed to load', err)
+      })
+
     return () => {
-      document.removeEventListener('visibilitychange', syncMotion)
-      reducedMotionQuery.removeEventListener('change', syncMotion)
-      scene.dispose()
+      cancelled = true
+      teardown?.()
+      scene?.dispose()
     }
   }, [width, height, variant])
 
