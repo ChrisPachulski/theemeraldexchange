@@ -25,7 +25,7 @@ import { EpisodePicker } from '../media/EpisodePicker'
 import { TrendingRow } from '../search/TrendingRow'
 import { useCast } from '../../lib/hooks/useCast'
 import { useConfirm } from '../confirm/useConfirm'
-import { sonarr, type Series, type SeriesSearchResult } from '../../lib/api/sonarr'
+import { seriesAvailability, sonarr, type Series, type SeriesSearchResult } from '../../lib/api/sonarr'
 import { postClickEvent } from '../../lib/api/recommenderEvents'
 import { withViewTransition } from '../../lib/viewTransition'
 import { stripArticle } from '../../lib/title'
@@ -143,6 +143,11 @@ export function TvTab() {
     viewing && typeof viewing.tmdbId === 'number'
       ? localShowIdx.data?.get(viewing.tmdbId)
       : undefined
+  // Whether the viewed IN-LIBRARY show has anything to play at all. A
+  // tracked-but-unaired show has zero episode files — play affordances
+  // give way to an availability note for it (movieAvailability twin).
+  const viewingAvailability =
+    viewing && 'id' in viewing ? seriesAvailability(viewing) : 'playable'
   const [trendingPending, setTrendingPending] = useState<number | null>(null)
   // Library set keyed by TMDB id — used to strip items the household
   // already has from suggestions (backend filters too; this is defense
@@ -419,7 +424,10 @@ export function TvTab() {
         inLibrary={viewing !== null && 'id' in viewing}
         canRemove={isAdmin}
         playUrl={
-          viewing
+          // No play affordance for an in-library show with zero downloaded
+          // episodes — Plex can't have it either, and the title-search
+          // fallback link would render a dead "Play in Plex" button.
+          viewing && viewingAvailability === 'playable'
             ? plexLinkFor('tv', {
                 tmdbId: viewing.tmdbId ?? null,
                 tvdbId: viewing.tvdbId,
@@ -427,6 +435,13 @@ export function TvTab() {
                 title: viewing.title,
               })
             : null
+        }
+        unavailableNote={
+          viewingAvailability === 'not_released'
+            ? 'Not aired yet'
+            : viewingAvailability === 'missing'
+              ? 'No episodes downloaded yet'
+              : null
         }
         onPlayDirect={
           viewing && localShowId != null

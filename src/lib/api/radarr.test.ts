@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ApiError } from './errors'
-import { radarr } from './radarr'
+import { movieAvailability, radarr } from './radarr'
 
 const fetchMock = vi.fn()
 
@@ -118,5 +118,27 @@ describe('radarr get() helper', () => {
       expect.stringContaining('/api/radarr/api/v3/qualityprofile'),
       expect.objectContaining({ credentials: 'include' }),
     )
+  })
+})
+
+describe('movieAvailability', () => {
+  it('is playable when a file exists on disk', () => {
+    expect(movieAvailability({ hasFile: true, isAvailable: true, status: 'released' })).toBe('playable')
+  })
+
+  it('fails open as playable when the payload has no hasFile field', () => {
+    expect(movieAvailability({})).toBe('playable')
+  })
+
+  it('is not_released for an announced title with no file (the Aang 2026 case)', () => {
+    expect(movieAvailability({ hasFile: false, isAvailable: false, status: 'announced' })).toBe('not_released')
+  })
+
+  it('is not_released while only in cinemas, even past the availability gate', () => {
+    expect(movieAvailability({ hasFile: false, isAvailable: true, status: 'inCinemas' })).toBe('not_released')
+  })
+
+  it('is missing when released but not downloaded yet', () => {
+    expect(movieAvailability({ hasFile: false, isAvailable: true, status: 'released' })).toBe('missing')
   })
 })

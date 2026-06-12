@@ -77,6 +77,33 @@ export type Movie = MovieSearchResult & {
   rootFolderPath: string
   monitored: boolean
   added: string
+  /** True once Radarr has an actual file on disk for this movie. */
+  hasFile?: boolean
+  /** Radarr's minimum-availability gate (announced/inCinemas/released)
+   *  has been met — the movie is at least theoretically obtainable. */
+  isAvailable?: boolean
+}
+
+/** Playability of an in-library Radarr movie. "In library" only means
+ *  TRACKED — an announced future title sits in the library with no file
+ *  for months, and no play affordance can work for it: Plex can't have a
+ *  file Radarr never downloaded (the Plex title-search fallback link
+ *  would render a dead "Play in Plex" button for it).
+ *    'playable'     — a file exists on disk
+ *    'not_released' — no file, and the title isn't released yet
+ *    'missing'      — released, but no file downloaded yet
+ *  A payload without hasFile counts as playable so the buttons fail open
+ *  exactly as they did before this gate existed. */
+export type MovieAvailability = 'playable' | 'not_released' | 'missing'
+
+export function movieAvailability(
+  m: Pick<Movie, 'hasFile' | 'isAvailable' | 'status'>,
+): MovieAvailability {
+  if (m.hasFile !== false) return 'playable'
+  if (m.isAvailable === false || (m.status != null && m.status !== 'released')) {
+    return 'not_released'
+  }
+  return 'missing'
 }
 
 export type QualityProfile = { id: number; name: string }

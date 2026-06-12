@@ -95,6 +95,20 @@ export type Series = SeriesSearchResult & {
   added: string
 }
 
+/** Playability of an in-library Sonarr series — the TV counterpart of
+ *  radarr's movieAvailability. A show with zero downloaded episodes has
+ *  nothing to play anywhere (Plex included), so play affordances must
+ *  not render for it. Missing statistics fail open as playable. */
+export type SeriesAvailability = 'playable' | 'not_released' | 'missing'
+
+export function seriesAvailability(
+  s: Pick<Series, 'status' | 'statistics'>,
+): SeriesAvailability {
+  const files = s.statistics?.episodeFileCount
+  if (files == null || files > 0) return 'playable'
+  return s.status === 'upcoming' ? 'not_released' : 'missing'
+}
+
 export type QualityProfile = { id: number; name: string }
 export type RootFolder = { id: number; path: string; freeSpace?: number }
 

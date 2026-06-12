@@ -23,7 +23,7 @@ import { MediaPlayer } from '../media/MediaPlayer'
 import { TrendingRow } from '../search/TrendingRow'
 import { useCast } from '../../lib/hooks/useCast'
 import { useConfirm } from '../confirm/useConfirm'
-import { radarr, type Movie, type MovieSearchResult } from '../../lib/api/radarr'
+import { movieAvailability, radarr, type Movie, type MovieSearchResult } from '../../lib/api/radarr'
 import { postClickEvent } from '../../lib/api/recommenderEvents'
 import { stripArticle } from '../../lib/title'
 import { withViewTransition } from '../../lib/viewTransition'
@@ -153,6 +153,11 @@ export function MoviesTab() {
     viewing && typeof viewing.tmdbId === 'number'
       ? localMovieIdx.data?.get(viewing.tmdbId)
       : undefined
+  // Whether the viewed IN-LIBRARY movie has anything to play at all. An
+  // announced/unreleased title is tracked by Radarr with no file — every
+  // play affordance must give way to an availability note for it.
+  const viewingAvailability =
+    viewing && 'id' in viewing ? movieAvailability(viewing) : 'playable'
   const [trendingPending, setTrendingPending] = useState<number | null>(null)
   // All strip orchestration (personalization gating, mode toggle, library
   // filtering, feedback dots, refresh, labels — and the owner-mandated
@@ -416,13 +421,23 @@ export function MoviesTab() {
         inLibrary={viewing !== null && 'id' in viewing}
         canRemove={isAdmin}
         playUrl={
-          viewing
+          // No play affordance for an in-library title with no file on
+          // disk — Plex can't have it either, and the title-search
+          // fallback link would render a dead "Play in Plex" button.
+          viewing && viewingAvailability === 'playable'
             ? plexLinkFor('movie', {
                 tmdbId: viewing.tmdbId,
                 imdbId: viewing.imdbId ?? null,
                 title: viewing.title,
               })
             : null
+        }
+        unavailableNote={
+          viewingAvailability === 'not_released'
+            ? 'Not released yet'
+            : viewingAvailability === 'missing'
+              ? 'Awaiting download'
+              : null
         }
         onPlayDirect={
           viewing && localMovieId != null
@@ -439,7 +454,9 @@ export function MoviesTab() {
           setViewing(null)
           setAdding(item)
         } : undefined}
-        onUpgrade={isAdmin && viewing && 'id' in viewing ? () => {
+        onUpgrade={isAdmin && viewing && 'id' in viewing && viewingAvailability === 'playable' ? () => {
+          // "Better version" implies a version exists — suppressed alongside
+          // the play buttons when there is no file yet.
           const m = viewing as Movie
           upgradeMutation.mutate(m.id)
         } : undefined}

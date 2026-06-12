@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ApiError } from './errors'
-import { sonarr } from './sonarr'
+import { seriesAvailability, sonarr } from './sonarr'
 
 const fetchMock = vi.fn()
 
@@ -118,5 +118,23 @@ describe('sonarr get() helper', () => {
       expect.stringContaining('/api/sonarr/api/v3/qualityprofile'),
       expect.objectContaining({ credentials: 'include' }),
     )
+  })
+})
+
+describe('seriesAvailability', () => {
+  it('is playable when any episode file exists', () => {
+    expect(seriesAvailability({ status: 'continuing', statistics: { episodeFileCount: 3 } })).toBe('playable')
+  })
+
+  it('fails open as playable without statistics', () => {
+    expect(seriesAvailability({ status: 'upcoming' })).toBe('playable')
+  })
+
+  it('is not_released for an upcoming show with zero files', () => {
+    expect(seriesAvailability({ status: 'upcoming', statistics: { episodeFileCount: 0 } })).toBe('not_released')
+  })
+
+  it('is missing for an aired show with zero files', () => {
+    expect(seriesAvailability({ status: 'continuing', statistics: { episodeFileCount: 0 } })).toBe('missing')
   })
 })
