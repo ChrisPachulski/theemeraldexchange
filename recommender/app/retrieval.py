@@ -22,6 +22,16 @@ log = logging.getLogger(__name__)
 AVAILABLE_TITLE_PREDICATE = """(t.release_date IS NULL OR t.release_date = '' OR date(t.release_date) <= date('now'))
                      AND (t.status IS NULL OR lower(t.status) IN ('released', 'returning series', 'ended', 'canceled'))"""
 
+# sqlite-vec caps a KNN query's `k` at 4096 (a hard limit in the vec0 virtual
+# table); asking for more raises "k value in knn query too large". The
+# over-fetch below scales with the household's excluded set (library +
+# rejections + recently-shown + dislikes), which grows without bound — so it
+# crept past 4096 and crashed EVERY /score call. Clamp k to the limit: the
+# nearest 4096 titles of a kind hold far more than pool_size survivors after
+# the anti-join at household scale, so the recommendation quality is unaffected
+# while the query stops throwing.
+VEC_KNN_MAX_K = 4096
+
 
 @dataclass
 class CandidateBatch:
@@ -45,7 +55,9 @@ def retrieve_candidates(
     ~3x the requested pool size to leave room for the anti-join drops.
     """
     excluded = user.library_ids | user.rejected_ids | user.recently_shown_ids | user.disliked_ids
-    overfetch = max(pool_size * 3, pool_size + len(excluded), 200)
+    # Clamp to VEC_KNN_MAX_K — sqlite-vec rejects a larger k outright (the bug
+    # that broke every /score once the excluded set passed ~4096).
+    overfetch = min(max(pool_size * 3, pool_size + len(excluded), 200), VEC_KNN_MAX_K)
 
     rows = conn.execute(
         """SELECT v.rowid AS vec_rowid, v.distance AS distance

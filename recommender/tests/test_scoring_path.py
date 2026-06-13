@@ -234,6 +234,20 @@ def test_retrieval_preserves_distance_order_and_pool_size(conn) -> None:
     assert ids_small == ids[:2], "pool_size truncation must keep the closest candidates"
 
 
+def test_retrieval_clamps_knn_k_to_sqlite_vec_limit(conn) -> None:
+    # sqlite-vec hard-caps a KNN query's k at 4096; retrieve_candidates over-
+    # fetches by ~(pool_size + len(excluded)), and the household's excluded set
+    # (library + permanent rejections + recently-shown + dislikes) grows without
+    # bound. Once it crossed 4096, sqlite-vec raised "k value in knn query too
+    # large" and EVERY /score 500'd. A large excluded set must clamp k and still
+    # return real candidates — never throw.
+    ctx = _ctx(conn)
+    ctx.rejected_ids.update(range(500_000, 504_200))  # > 4096 exclusions, in place
+    assert len(ctx.rejected_ids) > 4096
+    ids, _ = _retrieved_ids(conn, ctx)  # must not raise sqlite3.OperationalError
+    assert CAND_NEAR in ids, "real candidates still returned after k is clamped"
+
+
 def test_cold_start_pool_orders_by_popularity_and_excludes(conn) -> None:
     conn.execute("UPDATE titles SET popularity = 99 WHERE tmdb_id = ?", (CAND_FAR,))
     ctx = _ctx(conn)
