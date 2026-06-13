@@ -124,7 +124,16 @@ pub(crate) const VAAPI_RENDER_NODE: &str = "/dev/dri/renderD128";
 /// backend's manifest-readiness probe, and the player is handed a not-yet-written
 /// playlist (503) → a grey rectangle stuck at 0:00. (Most acute for live `-re`
 /// pacing, but the cadence pin matters for full-speed VOD re-encodes too.)
-pub(crate) const HLS_SEGMENT_SECS: u32 = 4;
+///
+/// 2s, not 4s: the first frame can't show until the first segment closes (one
+/// full segment of CONTENT), so the segment length is a hard floor on startup
+/// latency AND on the rebuffer after a forward-seek re-grant. Measured on the
+/// NAS iGPU (4K HDR HEVC -> 1080p h264_vaapi, ~2.2x realtime): time-to-first-
+/// segment dropped 1792ms -> 942ms (-47%) going 4->2, seg0 45KB vs 90KB. The
+/// cost is ~2x segment count / playlist length — negligible at household scale.
+/// Copy-remux is unaffected (it cuts at the source's own keyframes, so a 2s
+/// target just floors at the source GOP).
+pub(crate) const HLS_SEGMENT_SECS: u32 = 2;
 
 /// Is this media kind a LIVE source (an unbounded stream with no EOF)?
 ///
@@ -795,7 +804,7 @@ mod tests {
             joined,
             "-hide_banner -loglevel warning -nostdin -fflags +genpts -i /lib/m.mkv \
              -map 0:v:0 -map 0:a:0? -c:v copy -c:a copy \
-             -f hls -hls_time 4 -hls_list_size 0 -hls_flags append_list \
+             -f hls -hls_time 2 -hls_list_size 0 -hls_flags append_list \
              -hls_playlist_type event \
              -hls_segment_filename /tmp/sess/seg_%05d.ts /tmp/sess/index.m3u8"
         );
