@@ -1,11 +1,13 @@
 /* MediaControls — app-drawn playback bar for local-media sessions (the media
  * timeline is session-relative, so only an app bar can show absolute title
- * time; see the doc block in MediaControls.tsx). Visual language follows the
- * IptvPlayer selector bar: same dark surface, same recorded raw-hex debt. */
+ * time; see the doc block in MediaControls.tsx). Built on the design tokens
+ * (src/styles/tokens.css): a floating emerald-flecked glass capsule echoing the
+ * HUD-pod chrome, ghost icon buttons, and a custom emerald scrubber — replacing
+ * the old raw-hex bordered-box bar (paid down the recorded hex debt here). */
 
 .media-controls {
   display: flex;
-  gap: .75rem;
+  gap: var(--s-3);
   align-items: center;
   /* Match the player's width (.iptv-player is min(100%, 960px)). The bar is a
    * direct flex child of the centered modal (align-items:center), so without an
@@ -13,46 +15,165 @@
    * collapses to its ~129px intrinsic size — the bar looked scrunched under the
    * full-width video. Spanning the player width lets the scrubber fill. */
   width: min(100%, 960px);
-  padding: .5rem .75rem;
-  margin-top: .5rem;
-  color: #f5f5f5;
-  background: #171717;
-  border: 1px solid rgba(255, 255, 255, .18);
-  border-radius: 6px;
+  padding: var(--s-2) var(--s-3);
+  margin-top: var(--s-3);
+  color: var(--text);
+  /* Earned glass: this bar floats over moving video, the one sanctioned
+   * backdrop-blur case in DESIGN ("frost-on-glass over live video"). */
+  background: color-mix(in oklch, var(--surface) 72%, transparent);
+  -webkit-backdrop-filter: blur(16px) saturate(1.3);
+  backdrop-filter: blur(16px) saturate(1.3);
+  border: 1px solid color-mix(in oklch, var(--border) 65%, transparent);
+  border-radius: var(--r-pod);
+  box-shadow: var(--elev-card);
 }
 
+/* Ghost circular icon buttons — no chrome at rest, a soft frost wash on hover. */
 .media-controls__button {
   flex: none;
-  min-width: 2.25rem;
-  padding: .3rem .5rem;
-  font-size: .95rem;
-  line-height: 1;
-  color: #f5f5f5;
+  display: inline-grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+  color: var(--text-muted);
   cursor: pointer;
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, .28);
-  border-radius: 4px;
+  border: 0;
+  border-radius: var(--r-pod);
+  transition:
+    color var(--dur-fast) var(--ease),
+    background-color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
 }
 
 .media-controls__button:hover {
-  background: rgba(255, 255, 255, .08);
+  color: var(--text);
+  background: var(--frost-stronger);
+}
+
+.media-controls__button:active {
+  transform: scale(0.92);
+}
+
+.media-controls__button:focus-visible {
+  outline: 2px solid var(--emerald);
+  outline-offset: 2px;
+}
+
+/* Play/pause is the primary action — brighter at rest, emerald on hover. */
+.media-controls__button--primary {
+  color: var(--text);
+}
+.media-controls__button--primary:hover {
+  color: var(--emerald-hover);
+  background: var(--emerald-ghost);
+}
+
+.media-controls__icon {
+  width: 1.3rem;
+  height: 1.3rem;
+  display: block;
 }
 
 .media-controls__time {
   flex: none;
-  font-size: .85rem;
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  letter-spacing: var(--tr-hud);
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
 .media-controls__time-total {
-  color: rgba(245, 245, 245, .6);
+  color: var(--text-subtle);
 }
 
+/* ── Scrubber ────────────────────────────────────────────────────────────
+ * Fully custom range. A thin emerald-fill track (left of the thumb) that
+ * thickens on hover, with a 1px-brighter leading edge (DESIGN: "emerald fill
+ * with a 1px brighter leading edge, no glow halo") and a thumb that grows on
+ * hover/focus. --progress is set inline from React; --track-h / --thumb cascade
+ * into the vendor pseudo-elements so a single :hover resizes both at once. */
 .media-controls__scrubber {
   flex: 1 1 auto;
   min-width: 0;
-  accent-color: #34d399;
+  height: 1.75rem;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  --track-h: 4px;
+  --thumb: 12px;
+}
+
+.media-controls__scrubber:hover {
+  --track-h: 6px;
+  --thumb: 15px;
+}
+
+.media-controls__scrubber:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.media-controls__scrubber:focus { outline: none; }
+.media-controls__scrubber:focus-visible { outline: none; }
+
+/* WebKit / Blink */
+.media-controls__scrubber::-webkit-slider-runnable-track {
+  height: var(--track-h);
+  border-radius: var(--r-pod);
+  background: linear-gradient(
+    to right,
+    var(--emerald) 0 calc(var(--progress, 0%) - 1px),
+    var(--emerald-hover) calc(var(--progress, 0%) - 1px) var(--progress, 0%),
+    var(--surface-2) var(--progress, 0%) 100%
+  );
+  transition: height var(--dur-fast) var(--ease);
+}
+.media-controls__scrubber::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: var(--thumb);
+  height: var(--thumb);
+  margin-top: calc((var(--track-h) - var(--thumb)) / 2);
+  border-radius: var(--r-pod);
+  background: var(--emerald);
+  border: 0;
+  transition:
+    width var(--dur-fast) var(--ease),
+    height var(--dur-fast) var(--ease),
+    margin-top var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+.media-controls__scrubber:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px var(--emerald-ghost);
+}
+
+/* Firefox */
+.media-controls__scrubber::-moz-range-track {
+  height: var(--track-h);
+  border-radius: var(--r-pod);
+  background: var(--surface-2);
+}
+.media-controls__scrubber::-moz-range-progress {
+  height: var(--track-h);
+  border-radius: var(--r-pod);
+  background: var(--emerald);
+}
+.media-controls__scrubber::-moz-range-thumb {
+  width: var(--thumb);
+  height: var(--thumb);
+  border-radius: var(--r-pod);
+  background: var(--emerald);
+  border: 0;
+}
+.media-controls__scrubber:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 4px var(--emerald-ghost);
 }
 
 /* Inside fullscreen the modal goes edge-to-edge; the video fills, so let the bar
