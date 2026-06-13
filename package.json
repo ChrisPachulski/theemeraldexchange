@@ -29,7 +29,7 @@
     "build:napi": "npm --prefix crates/emerald-contracts-napi run build"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "0.100.1",
+    "@anthropic-ai/sdk": "0.104.1",
     "@emerald/contracts-napi": "file:./crates/emerald-contracts-napi",
     "@hono/node-server": "^2.0.4",
     "@sentry/node": "10.55.0",
