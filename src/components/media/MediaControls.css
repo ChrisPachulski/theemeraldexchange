@@ -7,6 +7,12 @@
   display: flex;
   gap: .75rem;
   align-items: center;
+  /* Match the player's width (.iptv-player is min(100%, 960px)). The bar is a
+   * direct flex child of the centered modal (align-items:center), so without an
+   * explicit width it shrink-wraps to its content and the flex:1 scrubber
+   * collapses to its ~129px intrinsic size — the bar looked scrunched under the
+   * full-width video. Spanning the player width lets the scrubber fill. */
+  width: min(100%, 960px);
   padding: .5rem .75rem;
   margin-top: .5rem;
   color: #f5f5f5;
@@ -49,11 +55,16 @@
   accent-color: #34d399;
 }
 
-/* Inside fullscreen the modal goes edge-to-edge; keep the bar legible. */
+/* Inside fullscreen the modal goes edge-to-edge; the video fills, so let the bar
+ * span the full width too (override the min(…,960px) cap via stretch). */
 .iptv-player-modal:fullscreen .media-controls {
+  width: auto;
+  align-self: stretch;
   margin: .5rem;
 }
 .iptv-player-modal:-webkit-full-screen .media-controls {
+  width: auto;
+  align-self: stretch;
   margin: .5rem;
 }
 
