@@ -83,15 +83,33 @@ function FullscreenExitIcon() {
 /** Map a scrubber commit (absolute title secs) onto the session: an element
  *  seek when the session has the media, a re-grant when it's before the
  *  session's -ss floor. */
+// A forward seek that lands within this many seconds of the produced edge is
+// still an element seek — the encoder is about to reach it, so a brief buffer
+// wait beats tearing down and re-granting the whole session.
+const SEEK_REGRANT_EPSILON_SECS = 5
+
 export function resolveSeekTarget(args: {
   targetSecs: number
   offsetSecs: number
+  /** Session-relative end of what the transcoder has PRODUCED so far (the
+   *  growing EVENT playlist's edge). A forward seek past it can't be served by
+   *  an element seek — the segments don't exist yet — so it re-grants instead.
+   *  Omitted/null means "edge unknown" → behave as a plain in-session seek. */
+  seekableEndSecs?: number | null
 }): { kind: 'element'; sessionSecs: number } | { kind: 'regrant'; targetSecs: number } {
   const target = Math.max(0, args.targetSecs)
   if (target < args.offsetSecs) {
     return { kind: 'regrant', targetSecs: Math.floor(target) }
   }
-  return { kind: 'element', sessionSecs: target - args.offsetSecs }
+  const sessionSecs = target - args.offsetSecs
+  // Forward past the produced edge: an element seek would stall or snap back
+  // (hls.js has no segment there), so re-grant a fresh session at the target —
+  // the same machinery as a below-floor back-seek (server bakes -ss).
+  const edge = args.seekableEndSecs
+  if (edge != null && Number.isFinite(edge) && sessionSecs > edge + SEEK_REGRANT_EPSILON_SECS) {
+    return { kind: 'regrant', targetSecs: Math.floor(target) }
+  }
+  return { kind: 'element', sessionSecs }
 }
 
 type Props = {
@@ -102,11 +120,22 @@ type Props = {
   /** Full title length for the scrubber range. Null = unknown (the scrubber
    *  falls back to the element's own duration plus the offset). */
   totalDurationSecs: number | null
-  /** A scrub below the session floor — re-grant at this absolute target. */
+  /** Session-relative produced edge (HLS sessions only) so a forward seek past
+   *  what ffmpeg has transcoded re-grants instead of dying. Null/undefined for
+   *  progressive direct play (the whole file is already seekable). */
+  seekableEndSecs?: number | null
+  /** A scrub outside the session's produced range (below the -ss floor, or
+   *  forward past the produced edge) — re-grant at this absolute target. */
   onSeekBelowOffset: (targetSecs: number) => void
 }
 
-export function MediaControls({ video, offsetSecs, totalDurationSecs, onSeekBelowOffset }: Props) {
+export function MediaControls({
+  video,
+  offsetSecs,
+  totalDurationSecs,
+  seekableEndSecs,
+  onSeekBelowOffset,
+}: Props) {
   const [paused, setPaused] = useState(video.paused)
   const [muted, setMuted] = useState(video.muted)
   const [positionSecs, setPositionSecs] = useState(offsetSecs + video.currentTime)
@@ -167,7 +196,7 @@ export function MediaControls({ video, offsetSecs, totalDurationSecs, onSeekBelo
     totalDurationSecs ?? (elementDurationSecs != null ? offsetSecs + elementDurationSecs : null)
 
   const commitSeek = (targetSecs: number) => {
-    const resolved = resolveSeekTarget({ targetSecs, offsetSecs })
+    const resolved = resolveSeekTarget({ targetSecs, offsetSecs, seekableEndSecs })
     if (resolved.kind === 'regrant') {
       onSeekBelowOffset(resolved.targetSecs)
     } else {

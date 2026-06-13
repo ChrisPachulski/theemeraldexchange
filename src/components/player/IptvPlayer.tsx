@@ -77,6 +77,11 @@ export type IptvPlayerProps = {
    *  unmount) so custom controls can drive play/pause/seek/volume directly. */
   onVideoElement?: (video: HTMLVideoElement | null) => void
   onPositionUpdate?: (pos: number, durationSecs: number | null) => void
+  /** HLS only: session-relative end of what the transcoder has PRODUCED so far
+   *  (the growing EVENT playlist's edge), reported on each playlist refresh.
+   *  Lets app controls re-grant a forward seek past the produced edge instead
+   *  of dying on a segment that doesn't exist yet. */
+  onSeekableEndUpdate?: (sessionSecs: number) => void
   onEnded?: () => void
   /** Progressive delivery only: fired ONCE when the stream has genuinely
    *  struggled (≥2 confirmed stall episodes in 120 s, user seeks excluded).
@@ -534,6 +539,7 @@ export default function IptvPlayer({
   nativeControls = true,
   onVideoElement,
   onPositionUpdate,
+  onSeekableEndUpdate,
   onEnded,
   onDeliveryStruggling,
 }: IptvPlayerProps) {
@@ -794,6 +800,19 @@ export default function IptvPlayer({
           hls.on(Hls.Events.MEDIA_ATTACHED, durationPin.onMediaAttached)
           hls.on(Hls.Events.LEVEL_UPDATED, durationPin.onLevelUpdated)
         }
+        // Report the produced edge (last fragment end) so app controls can
+        // re-grant a forward seek past what ffmpeg has transcoded. totalduration
+        // is the sum of fragment durations — the produced length of the 0-based
+        // VOD EVENT playlist. hls.destroy() in cleanupEngine drops this listener.
+        if (onSeekableEndUpdate) {
+          hls.on(
+            Hls.Events.LEVEL_UPDATED,
+            (_evt: unknown, data: { details: { totalduration?: number } }) => {
+              const edge = data.details.totalduration
+              if (typeof edge === 'number' && Number.isFinite(edge)) onSeekableEndUpdate(edge)
+            },
+          )
+        }
         video.addEventListener('waiting', stallWatchdog.onStall)
         video.addEventListener('stalled', stallWatchdog.onStall)
         video.addEventListener('playing', stallWatchdog.onProgress)
@@ -960,7 +979,7 @@ export default function IptvPlayer({
       resetVideo()
       resetTracks()
     }
-  }, [autoPlay, grant, vodHls, pinnedDurationSecs, onDeliveryStruggling])
+  }, [autoPlay, grant, vodHls, pinnedDurationSecs, onDeliveryStruggling, onSeekableEndUpdate])
 
   const chooseAudioTrack = (trackId: number) => {
     const applied = applyAudioTrack(

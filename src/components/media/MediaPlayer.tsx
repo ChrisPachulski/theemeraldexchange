@@ -85,6 +85,10 @@ export function MediaPlayerView({
   // The engine's <video> element, surfaced by IptvPlayer so the app-drawn
   // control bar (absolute timeline — see MediaControls) can drive it.
   const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null)
+  // Session-relative produced edge of the growing HLS transcode, reported by
+  // IptvPlayer — lets the control bar re-grant a forward seek past what ffmpeg
+  // has produced (a plain element seek there stalls / snaps back).
+  const [seekableEndSecs, setSeekableEndSecs] = useState<number | null>(null)
   return (
     <div
       ref={containerRef}
@@ -135,6 +139,7 @@ export function MediaPlayerView({
             vodHls
             nativeControls={false}
             onVideoElement={setVideoEl}
+            onSeekableEndUpdate={setSeekableEndSecs}
             onPositionUpdate={onPositionUpdate}
             onEnded={onEnded}
             onDeliveryStruggling={onDeliveryStruggling}
@@ -144,6 +149,7 @@ export function MediaPlayerView({
               video={videoEl}
               offsetSecs={sessionOffsetSecs ?? 0}
               totalDurationSecs={titleDurationSecs ?? null}
+              seekableEndSecs={seekableEndSecs}
               onSeekBelowOffset={onSeekBeforeStart ?? (() => undefined)}
             />
           )}

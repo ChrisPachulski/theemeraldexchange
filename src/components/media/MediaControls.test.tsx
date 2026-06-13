@@ -42,4 +42,37 @@ describe('resolveSeekTarget', () => {
       sessionSecs: 4200,
     })
   })
+
+  it('re-grants a forward seek past the produced edge (segments not made yet)', () => {
+    // Session offset 600, only 100 s produced so far; a jump to 2000 (1400 s
+    // into the session) is far past the edge → re-grant at the absolute target.
+    expect(
+      resolveSeekTarget({ targetSecs: 2000, offsetSecs: 600, seekableEndSecs: 100 }),
+    ).toEqual({ kind: 'regrant', targetSecs: 2000 })
+  })
+
+  it('element-seeks a forward target still within the produced edge', () => {
+    expect(
+      resolveSeekTarget({ targetSecs: 650, offsetSecs: 600, seekableEndSecs: 100 }),
+    ).toEqual({ kind: 'element', sessionSecs: 50 })
+  })
+
+  it('does not re-grant within the edge epsilon (encoder is about to reach it)', () => {
+    // sessionSecs 102 is just past a 100 s edge but within the 5 s tolerance.
+    expect(
+      resolveSeekTarget({ targetSecs: 102, offsetSecs: 0, seekableEndSecs: 100 }),
+    ).toEqual({ kind: 'element', sessionSecs: 102 })
+  })
+
+  it('ignores the edge when it is unknown (null) — plain in-session seek', () => {
+    expect(
+      resolveSeekTarget({ targetSecs: 4200, offsetSecs: 0, seekableEndSecs: null }),
+    ).toEqual({ kind: 'element', sessionSecs: 4200 })
+  })
+
+  it('below-offset re-grant wins regardless of the produced edge', () => {
+    expect(
+      resolveSeekTarget({ targetSecs: 300, offsetSecs: 600, seekableEndSecs: 100 }),
+    ).toEqual({ kind: 'regrant', targetSecs: 300 })
+  })
 })
