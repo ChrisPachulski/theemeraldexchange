@@ -31,6 +31,15 @@ updates:
           - "@vitejs/*"
           - "@playwright/*"
           - "playwright"
+      # Everything else: bundle non-breaking runtime bumps into ONE PR so a
+      # week stops producing a branch-per-package (sentry, hono, sdk, …).
+      # Majors stay individual — they get scrutiny, not a silent group merge.
+      runtime-minor:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
   # napi binding package (pins @napi-rs/cli — keep on the same cadence).
   - package-ecosystem: "npm"
@@ -45,6 +54,16 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    groups:
+      # PATCH-only grouping. Deliberately NOT minor: for 0.x crates a minor
+      # bump (e.g. sha2 0.10->0.11) is API-breaking and byte-compat-sensitive
+      # for the cross-language crypto crate — those must land as individual,
+      # reviewed PRs, never swept into a group merge.
+      cargo-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
 
   # Python recommender sidecar.
   - package-ecosystem: "pip"
