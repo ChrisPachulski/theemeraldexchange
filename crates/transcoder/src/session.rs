@@ -1564,10 +1564,13 @@ mod tests {
 
     #[test]
     fn crash_resume_math() {
-        // 2 segments (idx 0,1) written from a fresh start → resume at 2×4s.
-        assert_eq!(crash_resume_secs(0, 0, 2), 8);
+        // Derive from the segment-length constant so a perf bump to
+        // HLS_SEGMENT_SECS can't silently rot these literals (it did once).
+        let secs = u64::from(crate::args::HLS_SEGMENT_SECS);
+        // 2 segments (idx 0,1) written from a fresh start → resume at 2×seglen.
+        assert_eq!(crash_resume_secs(0, 0, 2), 2 * secs);
         // Compounds from the crashed child's own spawn offset + numbering.
-        assert_eq!(crash_resume_secs(100, 5, 10), 120);
+        assert_eq!(crash_resume_secs(100, 5, 10), 100 + 5 * secs);
         // No segments written → stay at the spawn offset.
         assert_eq!(crash_resume_secs(50, 3, 3), 50);
         // Defensive: never rewind even on an impossible numbering regression.
@@ -1640,7 +1643,7 @@ mod tests {
         // reset segment numbering to 0 — playback silently rewound to the
         // session start and new seg_00000.ts aliased the old one. The
         // supervisor must resume at ~the furthest-encoded position
-        // (spawn offset + segments_written × 4s) and continue numbering.
+        // (spawn offset + segments_written × seglen) and continue numbering.
         let tmp = tempfile::tempdir().unwrap();
         let stub = write_crash_once_stub(tmp.path());
         let mgr = manager_with_stub(&tmp, stub);
@@ -1655,7 +1658,13 @@ mod tests {
             .iter()
             .position(|s| s == "-ss")
             .expect("crash respawn must bake a resume -ss");
-        assert_eq!(args[ss + 1], "8", "2 segments × 4s past offset 0: {args:?}");
+        // 2 segments past offset 0, derived from the segment-length constant.
+        let resume_secs = 2 * u64::from(crate::args::HLS_SEGMENT_SECS);
+        assert_eq!(
+            args[ss + 1],
+            resume_secs.to_string(),
+            "2 segments × seglen past offset 0: {args:?}"
+        );
         let sn = args
             .iter()
             .position(|s| s == "-start_number")
@@ -1663,7 +1672,7 @@ mod tests {
         assert_eq!(args[sn + 1], "2", "numbering continues after seg_00001");
 
         // The session reports the resumed position, not the stale offset.
-        assert_eq!(mgr.list().await[0].start_secs, 8);
+        assert_eq!(mgr.list().await[0].start_secs, resume_secs);
         mgr.stop(&id).await;
     }
 
