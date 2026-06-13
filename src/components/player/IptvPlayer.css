@@ -22,6 +22,27 @@
   background: #000;
 }
 
+/* In native (browser-controls) fullscreen — IPTV Live/VOD/Series, where the
+ * <video> element itself becomes the fullscreen element — our author
+ * max-height:72vh kept clamping it, so it sat letterboxed at 72vh on a black
+ * screen instead of filling. Lift the cap and let it fill; object-fit:contain
+ * preserves aspect (no stretch). :fullscreen and :-webkit-full-screen are split
+ * into separate rules on purpose: a selector list containing a pseudo the
+ * engine can't parse drops the ENTIRE list, so combining them would silently
+ * kill the standard rule in WebKit and vice-versa. */
+.iptv-player__video:fullscreen {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: contain;
+}
+.iptv-player__video:-webkit-full-screen {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: contain;
+}
+
 .iptv-player__controls {
   display: flex;
   flex-wrap: wrap;
