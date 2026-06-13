@@ -198,6 +198,12 @@
  * :-webkit-full-screen forms are split into separate rules because an
  * unparseable pseudo in a selector list voids the whole list (see IptvPlayer.css). */
 .iptv-player-modal:fullscreen { justify-content: flex-start; }
+/* The header is capped at 960px for the windowed modal; in fullscreen let the
+ * title and close button reach the actual corners. */
+.iptv-player-modal:fullscreen .iptv-player-modal__header {
+  max-width: none;
+  padding: var(--s-4) var(--s-5);
+}
 .iptv-player-modal:fullscreen .iptv-player {
   width: 100%;
   flex: 1 1 auto;
@@ -216,6 +222,10 @@
 }
 
 .iptv-player-modal:-webkit-full-screen { justify-content: flex-start; }
+.iptv-player-modal:-webkit-full-screen .iptv-player-modal__header {
+  max-width: none;
+  padding: var(--s-4) var(--s-5);
+}
 .iptv-player-modal:-webkit-full-screen .iptv-player {
   width: 100%;
   flex: 1 1 auto;
