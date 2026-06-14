@@ -116,6 +116,9 @@ export type StreamGrant = {
   delivery: StreamDelivery
   sessionId?: string
   mime?: string
+  /** Optional sidecar subtitle (local-media transcode path only) rendered as a
+   *  `<track>`. Live/IPTV grants leave it unset. `url` is absolute + token-bearing. */
+  subtitle?: { url: string; language: string | null; forced: boolean } | null
 }
 
 export type SessionKind = 'live' | 'vod' | 'series' | 'catchup' | 'remux'

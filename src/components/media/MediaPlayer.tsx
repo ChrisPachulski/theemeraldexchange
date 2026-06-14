@@ -330,7 +330,10 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
   // Stable StreamGrant reference: a new object each render would make
   // IptvPlayer tear down and rebuild its (HLS) engine on every render.
   const streamGrant = useMemo<StreamGrant | null>(
-    () => (grant ? { url: grant.url, delivery: grant.delivery } : null),
+    () =>
+      grant
+        ? { url: grant.url, delivery: grant.delivery, subtitle: grant.subtitle ?? null }
+        : null,
     [grant],
   )
 

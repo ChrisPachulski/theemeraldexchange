@@ -179,6 +179,18 @@ type PlaybackRequest = PlaybackCaps & {
 /** What the backend hands back: a tokenised URL the <video>/hls.js player can
  *  load cross-origin, plus playback metadata. Mirrors the IPTV StreamGrant
  *  ({ delivery, url }) so the shared IptvPlayer consumes it directly. */
+/** A pre-extracted sidecar subtitle for the HLS (transcode) path: a complete
+ *  WebVTT served alongside the session and loaded as a `<track>`. Present only
+ *  when the title carried a text subtitle. */
+export type PlaybackSubtitle = {
+  /** Absolute, token-bearing `.vtt` URL (same stream token as the segments). */
+  url: string
+  /** ISO language tag for `<track srclang>`, when known. */
+  language: string | null
+  /** Whether this is a forced/narrative track (shown by default). */
+  forced: boolean
+}
+
 export type PlaybackGrant = {
   delivery: 'progressive' | 'hls'
   /** Absolute, token-bearing stream/manifest URL. */
@@ -192,6 +204,8 @@ export type PlaybackGrant = {
    *  30s idle reaper). */
   stopUrl?: string | null
   sessionId?: string
+  /** Sidecar subtitle for the transcode path; `null` when the title has none. */
+  subtitle?: PlaybackSubtitle | null
 }
 
 /** A persisted watch-progress row (camelCase-normalised from media-core). */
@@ -479,6 +493,7 @@ type RawPlaybackGrant = {
   heartbeatUrl?: string | null
   stopUrl?: string | null
   sessionId?: string
+  subtitle?: { url: string; language?: string | null; forced?: boolean } | null
 }
 
 // The grant's url/heartbeatUrl are returned root-relative; resolve them through
@@ -500,6 +515,17 @@ function absolutizeGrant(g: RawPlaybackGrant): PlaybackGrant {
         : g.stopUrl
       : null,
     sessionId: g.sessionId,
+    // The sidecar `.vtt` URL is root-relative like the manifest; resolve it
+    // through apiUrl so the <track> loads from the API origin (cross-origin in
+    // prod). The embedded ?t= stream token is preserved.
+    subtitle:
+      g.subtitle && g.subtitle.url
+        ? {
+            url: g.subtitle.url.startsWith('/') ? apiUrl(g.subtitle.url) : g.subtitle.url,
+            language: g.subtitle.language ?? null,
+            forced: g.subtitle.forced ?? false,
+          }
+        : null,
   }
 }
 
