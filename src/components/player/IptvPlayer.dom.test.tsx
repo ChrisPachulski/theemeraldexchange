@@ -13,7 +13,7 @@
 import '@testing-library/jest-dom/vitest'
 import { act, render, screen, waitFor, cleanup } from '@testing-library/react'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import IptvPlayer from './IptvPlayer'
+import IptvPlayer, { SidecarSubtitleTrack, subtitleRetryDelayMs } from './IptvPlayer'
 import type { StreamGrant } from '../../lib/api/iptv'
 
 // ── hls.js module mock ───────────────────────────────────────────────
@@ -228,5 +228,97 @@ describe('IptvPlayer (mounted) — NETWORK_ERROR retry', () => {
     expect(hls.startLoad).toHaveBeenCalledTimes(1)
     expect(hls.destroy).not.toHaveBeenCalled()
     expect(screen.queryByText(/Couldn’t start playback/)).not.toBeInTheDocument()
+  })
+})
+
+// ── Sidecar subtitle <track> reload retry ────────────────────────────
+//
+// The .vtt is produced by a slow one-shot ffmpeg pass that demuxes the whole
+// container, so it lands tens of seconds AFTER the grant; the transcoder
+// publishes it atomically, so the asset 404s until every cue is present. A bare
+// <track> fetches once and would give up on that early 404, leaving subtitles
+// permanently empty on large files. SidecarSubtitleTrack re-mounts the <track>
+// on each failed load (backoff) so the browser re-fetches until the cues land.
+// jsdom does not fetch <track> srcs, so we drive error/load by hand.
+
+const SUB = { url: 'http://api.test/s/sid/subtitles.vtt?t=TOK', language: 'eng', forced: true }
+
+describe('SidecarSubtitleTrack reload retry', () => {
+  function renderTrack(subtitle = SUB) {
+    // A <track> is only valid inside a media element; wrap it for jsdom.
+    const utils = render(
+      <video>
+        <SidecarSubtitleTrack subtitle={subtitle} />
+      </video>,
+    )
+    return { ...utils, track: () => utils.container.querySelector('track') }
+  }
+
+  it('renders the track with the sidecar src and forced default', () => {
+    const { track } = renderTrack()
+    const el = track()
+    expect(el).not.toBeNull()
+    expect(el).toHaveAttribute('src', SUB.url)
+    expect(el).toHaveAttribute('srclang', 'eng')
+    expect(el?.hasAttribute('default')).toBe(true)
+  })
+
+  it('re-mounts the track after a failed load so the browser re-fetches', () => {
+    vi.useFakeTimers()
+    const { track } = renderTrack()
+    const first = track()
+
+    // Still 404 (extraction in flight) → the element errors; the reload is
+    // scheduled on a backoff, so nothing changes immediately.
+    act(() => {
+      first?.dispatchEvent(new Event('error'))
+    })
+    expect(track()).toBe(first)
+
+    act(() => {
+      vi.advanceTimersByTime(subtitleRetryDelayMs(0))
+    })
+    // A fresh <track> node mounted (key bumped) → a new fetch of the same src,
+    // which now (atomically published) can succeed.
+    const second = track()
+    expect(second).not.toBe(first)
+    expect(second).toHaveAttribute('src', SUB.url)
+  })
+
+  it('stops retrying once the track loads', () => {
+    vi.useFakeTimers()
+    const { track } = renderTrack()
+    const first = track()
+
+    act(() => {
+      first?.dispatchEvent(new Event('load'))
+    })
+    act(() => {
+      vi.advanceTimersByTime(10_000)
+    })
+    expect(track()).toBe(first)
+  })
+
+  it('gives up after the bounded attempt budget (no runaway)', () => {
+    vi.useFakeTimers()
+    const { track } = renderTrack()
+
+    // Drive well past the cap: every error is followed by its full backoff.
+    for (let i = 0; i < 40; i += 1) {
+      const el = track()
+      act(() => {
+        el?.dispatchEvent(new Event('error'))
+      })
+      act(() => {
+        vi.advanceTimersByTime(5000)
+      })
+    }
+    // A further error no longer schedules a reload: the node is now stable.
+    const settled = track()
+    act(() => {
+      settled?.dispatchEvent(new Event('error'))
+      vi.advanceTimersByTime(60_000)
+    })
+    expect(track()).toBe(settled)
   })
 })
