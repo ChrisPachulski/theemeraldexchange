@@ -839,4 +839,66 @@ mod tests {
         );
         assert_eq!(retry_after_duration(&h), Duration::from_secs(1));
     }
+
+    /// Crit-3 measurement: corpus-driven matcher-accuracy eval. Drives the pure
+    /// `parse_search_response` selection logic over a labeled fixture set of
+    /// real-world failure modes (remake collapse, token-subset traps, year
+    /// off-by-one, fuzzy-legit, zero-overlap rejection, TV) and asserts a
+    /// measured accuracy floor. Hermetic — no network, no TMDB key. Raise the
+    /// floor when the matcher improves; never lower it to paper over a
+    /// regression.
+    #[test]
+    fn tmdb_match_accuracy_eval() {
+        #[derive(serde::Deserialize)]
+        struct Case {
+            name: String,
+            is_movie: bool,
+            query_title: String,
+            query_year: Option<i64>,
+            expected_tmdb_id: Option<i64>,
+            results: serde_json::Value,
+        }
+        let raw = include_str!("../tests/fixtures/tmdb-match-accuracy.json");
+        let cases: Vec<Case> = serde_json::from_str(raw).expect("accuracy fixture parses");
+        assert!(
+            cases.len() >= 20,
+            "corpus too small ({}) to be a meaningful eval",
+            cases.len()
+        );
+
+        let mut correct = 0usize;
+        let mut misses: Vec<String> = Vec::new();
+        for c in &cases {
+            let doc = json!({ "results": c.results });
+            let got = parse_search_response(&doc, c.is_movie, &c.query_title, c.query_year)
+                .map(|m| m.tmdb_id);
+            if got == c.expected_tmdb_id {
+                correct += 1;
+            } else {
+                misses.push(format!(
+                    "{}: expected {:?}, got {:?}",
+                    c.name, c.expected_tmdb_id, got
+                ));
+            }
+        }
+        let total = cases.len();
+        let accuracy = correct as f64 / total as f64;
+        eprintln!(
+            "TMDB match accuracy: {correct}/{total} = {:.1}%",
+            accuracy * 100.0
+        );
+        for m in &misses {
+            eprintln!("  MISS {m}");
+        }
+
+        // Regression floor for the matcher's selection accuracy (crit-3).
+        const ACCURACY_FLOOR: f64 = 1.0;
+        assert!(
+            accuracy >= ACCURACY_FLOOR,
+            "TMDB match accuracy {:.1}% fell below the {:.0}% floor:\n{}",
+            accuracy * 100.0,
+            ACCURACY_FLOOR * 100.0,
+            misses.join("\n")
+        );
+    }
 }
