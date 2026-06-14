@@ -31,11 +31,15 @@ The server has to decide — before a single byte of video is sent — whether t
 
 - `src/components/media/playbackSession.ts` — framework-free session controller. Lines 45–113: `startPlaybackSession()` — calls `api.playback()`, sets up the heartbeat `setInterval`, and handles 404 (session reaped → `onSessionLost`). Lines 123–128: `playerStartPosition()` — only the progressive path gets a client-side seek; HLS resumes via server-baked `-ss`. Lines 137–152: `absoluteProgress()` — translates the HLS `<video>` element's timeline (which restarts near 0 for every resume) back to absolute title position.
 
+- `src/components/media/ResumePrompt.tsx` — the resume-or-start-over prompt (extracted to be shared by local media and IPTV VOD). When a saved resume point exists, `MediaPlayer` renders this FIRST and starts no playback session until the user chooses Resume (the offset is sent with the grant so the server bakes it into ffmpeg's `-ss`) or Start over.
+
+- `src/components/media/MediaControls.tsx` — the app-drawn playback bar (redesigned on the emerald design system). It owns the ABSOLUTE timeline/scrubber: hls.js `timelineOffset` was tried for resume and is broken on growing EVENT playlists (it mixes coordinate spaces and black-screens), so the app draws its own scrub bar from `absoluteProgress()` rather than trusting the `<video>` element's clock.
+
 - `src/lib/api/media.ts` — the thin fetch client. Lines 218–228: `browserCaps()` conservative fallback. Lines 255–385: the MediaCapabilities probe functions (`probeVideo`, `probeAudio`, `buildProbedCaps`). Lines 393–396: `probedCaps()` singleton. Lines 598–611: `mediaApi.playback()` — awaits `probedCaps()` and sends the result as the grant request body.
 
 **Playback walkthrough (click to segments rendering):**
 
-1. User clicks "Play" on a movie card. `MediaPlayer` mounts and its `useEffect` fires `startPlaybackSession`.
+1. User clicks "Play" on a movie card. `MediaPlayer` mounts. **If a saved resume point exists it renders `ResumePrompt` and starts NO session** until the user picks Resume or Start over; otherwise (or once they pick) its `useEffect` fires `startPlaybackSession`. On Resume, the chosen offset rides along with the grant request so the server bakes it into ffmpeg's `-ss` (the player never client-seeks an HLS resume).
 2. `startPlaybackSession` calls `mediaApi.playback('movie', id)`.
 3. `mediaApi.playback` first awaits `probedCaps()` — this runs `buildProbedCaps()` which fires ~10 `decodingInfo()` probes in parallel (HEVC MSE, HEVC 4K, AV1, HDR10, 6-ch AAC, E-AC-3, AC-3). All results are cached.
 4. The probed `PlaybackCaps` object (e.g. `{ video_codecs: ['h264','hevc'], hls_fmp4_hevc: true, aac_max_channels: 2, ... }`) is POSTed to `/api/media/playback/movie/{id}`.

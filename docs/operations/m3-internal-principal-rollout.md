@@ -196,16 +196,21 @@ The `x-recommender-secret` HMAC continues to gate as defense in depth.
 
 ### Verify enforce is live
 
-From the NAS itself (bypasses the JWE entirely — should 401):
+From the NAS itself, call a protected route with NO event secret and no JWE —
+the recommender's auth gate (`require_event_secret`) must reject it. Use
+`/metrics/funnel`: it's protected and takes no request body, so the response is
+an unambiguous `401` (a route like `/score` would 422 on the missing body
+first). `/suggestions` does not exist on the recommender — its real routes are
+`/score`, `/health`, `/events/*`, and `/metrics/funnel`.
 
 ```bash
 ssh root@theemeraldexchange.local \
   "docker exec exchange-recommender curl -s -o /dev/null -w '%{http_code}\n' \
-   -H 'x-recommender-secret: $(grep RECOMMENDER_SECRET /mnt/user/appdata/exchange-backend/.env | cut -d= -f2)' \
-   http://localhost:8000/suggestions"
+   http://localhost:8000/metrics/funnel"
 ```
 
-Expected: `401`.
+Expected: `401` (the recommender refuses an unauthenticated internal call). The
+event secret lives in `RECOMMENDER_EVENT_SECRET`, not `RECOMMENDER_SECRET`.
 
 From the backend container (with a real Hono-minted JWE in the path):
 hit any suggestion-returning user-facing endpoint in the browser and

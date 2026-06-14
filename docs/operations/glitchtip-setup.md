@@ -203,11 +203,11 @@ A `200` response and a new event in the Glitchtip UI confirms the pipeline is wo
 The `glitchtip-worker` container runs retention sweeps automatically using
 django-vtasks (Celery was replaced in v6.0). Default retention is 90 days.
 
-Crash events are stored in the `glitchtip-postgres` Docker volume. On a busy deployment
+Crash events are stored in the `glitchtip-pgdata` Docker volume. On a busy deployment
 this can grow; check disk usage periodically:
 
 ```bash
-docker system df -v | grep glitchtip-postgres
+docker system df -v | grep glitchtip-pgdata
 ```
 
 To adjust retention, log in to the Glitchtip UI and go to Organization Settings →
@@ -260,6 +260,6 @@ is required for minor upgrades.
 
 **`glitchtip-worker` crashes with `FATAL: database "glitchtip" does not exist`**
 - The Postgres volume may be corrupted or the password changed since the volume was
-  created. Stop the stack, delete the `glitchtip-postgres` volume
-  (`docker volume rm <project>_glitchtip-postgres`), and restart — Glitchtip will
+  created. Stop the stack, delete the `glitchtip-pgdata` volume
+  (`docker volume rm <project>_glitchtip-pgdata`), and restart — Glitchtip will
   recreate the schema on next boot. **This deletes all stored crash data.**

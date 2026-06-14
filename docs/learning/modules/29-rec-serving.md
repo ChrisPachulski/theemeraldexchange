@@ -116,7 +116,7 @@ query_vec = _normalize(pos - neg_w * neg) if neg is not None else _normalize(pos
 The positive centroid points toward liked titles. Subtracting a fraction of the negative centroid (default 0.30) steers the query *away* from disliked content. If the user has no dislikes, `neg` is `None` and the query is just the normalized positive centroid.
 
 **Step 4 — Retrieve candidates (line 200):**
-`retrieve_candidates()` runs a sqlite-vec ANN query. It returns a `CandidateBatch` where each `Candidate` carries a `TitleRow` (metadata) and its pre-stored embedding vector. The ANN query over-fetches (`pool_size * 3`) because the subsequent anti-join will drop titles already in the library, vetoed, or recently seen.
+`retrieve_candidates()` runs a sqlite-vec ANN query. It returns a `CandidateBatch` where each `Candidate` carries a `TitleRow` (metadata) and its pre-stored embedding vector. The ANN query over-fetches (`pool_size * 3`) because the subsequent anti-join will drop titles already in the library, vetoed, or recently seen. The over-fetch `k` is clamped to sqlite-vec's hard 4096 ceiling (`VEC_KNN_MAX_K`, `retrieval.py`); before that clamp (fixed `46f8a20`), a household whose excluded set pushed `pool_size * 3` past 4096 made every `/score` 500 with "k value in knn query too large."
 
 **Step 5 — Content similarity matrix (line 218):**
 ```python

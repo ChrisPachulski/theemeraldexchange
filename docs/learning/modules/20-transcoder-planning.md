@@ -107,7 +107,7 @@ TranscodePlan::Transcode {
 
 `reencodes_video()` → true. This session charges the CPU cap (or GPU cap if hw encoder is available) AND the global cap.
 
-In `args.rs`, this plan produces: `-c:v h264_vaapi -low_power 1 ...` (or `libx264 -preset fast`), `-b:v 10000k`, `-force_key_frames expr:gte(t,n_forced*4)`, `-c:a aac -ac 2 -b:a 256k`, no subtitle flags, MPEG-TS segments.
+In `args.rs`, this plan produces: `-c:v h264_vaapi -low_power 1 ...` (or `libx264 -preset fast`), `-b:v 10000k`, `-force_key_frames expr:gte(t,n_forced*2)`, `-c:a aac -ac 2 -b:a 256k`, no subtitle flags, MPEG-TS segments.
 
 ---
 
@@ -123,7 +123,7 @@ A codec is an algorithm for compressing video or audio. H.264 has several profil
 Browsers play adaptive streaming (HLS) through the Media Source Extensions API. JavaScript (hls.js) fetches segments, appends them to a `SourceBuffer`, and the browser's built-in decoder plays from that buffer. The browser can only append formats it knows how to decode. If an append is rejected, the `SourceBuffer` goes into an error state, hls.js triggers error recovery, and the player often freezes or turns grey.
 
 **What is HLS?**
-HTTP Live Streaming. The server writes many short video files (segments, typically 4s each) plus a text playlist file (`.m3u8`) that lists them. The player fetches the playlist, then fetches segments in order. The playlist can be a live sliding window (old segments deleted) or an EVENT playlist (segments accumulate; player can seek backward).
+HTTP Live Streaming. The server writes many short video files (segments, typically 2–4s each — 2s in this repo) plus a text playlist file (`.m3u8`) that lists them. The player fetches the playlist, then fetches segments in order. The playlist can be a live sliding window (old segments deleted) or an EVENT playlist (segments accumulate; player can seek backward).
 
 **What is a keyframe?**
 In compressed video, most frames are stored as differences from a prior frame. A keyframe (I-frame) is stored completely. Seek points must be keyframes. The HLS muxer can only start a new segment at a keyframe. If keyframes are sparse, segments are long.
@@ -140,7 +140,7 @@ Fragmented MP4. Instead of one monolithic `.mp4` file, the video is stored in sm
 The grey-box-at-0:00 failure class was hit four separate times on American Dad! episodes, each exposing a different planning bug.
 
 **Fix 1 — Keyframe cadence** (commit 0cda2f4).
-S01E07 greyed out. Root cause: re-encode with no `-force_key_frames`. h264_vaapi's default GOP is ~14s. Under `-re` (live pacing), the HLS muxer could not close the first segment until the first native keyframe at 14s wall-clock. The backend polls for manifest readiness 24 times at 500ms (12s total). The first segment was still open — poll timed out, manifest not yet written, SPA got a 503, hls.js refused to retry. Fix: `-force_key_frames expr:gte(t,n_forced*N)` pinned to `HLS_SEGMENT_SECS` (4s). The const is shared between `-hls_time` and the keyframe forcing so they cannot drift.
+S01E07 greyed out. Root cause: re-encode with no `-force_key_frames`. h264_vaapi's default GOP is ~14s. Under `-re` (live pacing), the HLS muxer could not close the first segment until the first native keyframe at 14s wall-clock. The backend polls for manifest readiness 24 times at 500ms (12s total). The first segment was still open — poll timed out, manifest not yet written, SPA got a 503, hls.js refused to retry. Fix: `-force_key_frames expr:gte(t,n_forced*N)` pinned to `HLS_SEGMENT_SECS` (2s). The const is shared between `-hls_time` and the keyframe forcing so they cannot drift.
 
 **Fix 2 — Non-AAC audio** (commit 977f892).
 Some titles had silent audio. Root cause: the audio plan was copying EAC3 because `decide()` in media-core checked only container and video codec — never audio. EAC3 is not decodable by Chrome or Firefox MSE. Fix: `plan_audio` now gates copy on whether the codec appears in `caps.audio_codecs` (default `["aac"]`).
@@ -204,7 +204,7 @@ Line 346. `is_hevc = true` BUT `video != VideoOp::Copy` (it is EncodeH264) → `
 Line 353, jump to `plan_audio` at line 367. First track: `dts`, 8 channels. `codec_accepted`: is "dts" in `["aac"]`? No. Go directly to the else: `is_downmix`: channels is `Some(8) > 2` → true → `AudioOp::EncodeAac { bitrate_kbps: 256 }`.
 
 **Step 6: what the args builder does.**
-In `args.rs`, EncodeH264 with VAAPI encoder: `-c:v h264_vaapi -low_power 1 -rc_mode QVBR -global_quality 23 -profile:v high ...`. Then at line 456: `-force_key_frames expr:gte(t,n_forced*4)` and `-hls_time 4` (both keyed on `HLS_SEGMENT_SECS = 4`). Audio at line 507: `-c:a aac -ac 2 -b:a 256k`. No subtitle flags.
+In `args.rs`, EncodeH264 with VAAPI encoder: `-c:v h264_vaapi -low_power 1 -rc_mode QVBR -global_quality 23 -profile:v high ...`. Then at line 456: `-force_key_frames expr:gte(t,n_forced*2)` and `-hls_time 2` (both keyed on `HLS_SEGMENT_SECS = 2`). Audio at line 507: `-c:a aac -ac 2 -b:a 256k`. No subtitle flags.
 
 **Step 7: does this charge the CPU cap?**
 `plan.reencodes_video()` at line 145: matches `TranscodePlan::Transcode { video: VideoOp::EncodeH264 { .. }, .. }` → true. `try_acquire(is_cpu = encoder.is_cpu())`. If VAAPI, `is_cpu() = false` → global cap only. If CPU (libx264) → charges both.

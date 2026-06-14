@@ -28,12 +28,31 @@ Continuous Integration (CI) is a robot that springs to life every time you push 
 | **Transcoder FFmpeg** | `transcoder-ffmpeg.yml` | Changes to transcoder, media-core, contracts, or Cargo files | `test-real-ffmpeg-fixture` | Proves the transcoder actually compiles valid HLS with REAL ffmpeg (not just state machine tests) |
 | **E2E Integration** | `e2e-integration.yml` | Backend/SPA/test/contract changes | `integration`, `playback-chrome` | Real Hono server + real Chrome playback (not mocked): catches MSE append bugs that unit tests miss |
 | **Sidecar Images** | `sidecar-images.yml` | Manual trigger + main branch | `recommender-image`, `media-core-image`, `transcoder-image` | Builds heavy Docker images (recommender w/ torch, transcoder w/ Rust) only on deploy branch to keep PR feedback fast |
+| **Dependabot auto-merge** | `dependabot-auto-merge.yml` | Dependabot PRs to `main` | `auto-merge` | Enables GitHub auto-merge for low-risk Dependabot bumps; the PR still waits for the 7 required checks before it merges |
+
+## 3.1 MERGE GOVERNANCE — what actually gates `main`
+
+The jobs above only matter if something *enforces* them. Three pieces do that, and they're configured on GitHub (not in the repo), so they're invisible if you only read the YAML:
+
+**The ruleset.** A repository ruleset named **`main: CI must pass (owner bypass)`** requires seven status checks to be green before a PR can merge to `main`: `test`, `test-no-iptv`, `recommender`, `rust`, `audit`, `docker-build`, `shellcheck` — the seven jobs in `ci.yml`. A red check blocks the merge. (Only the 7 always-run `ci.yml` jobs are required; the path-filtered workflows — `transcoder-ffmpeg`, `e2e-integration`, `sidecar-images` — are NOT required, because a PR that doesn't touch their paths never runs them, and a required-but-never-run check would deadlock the merge forever.)
+
+**The owner bypass.** The repo owner is listed as a *bypass actor* on that ruleset. This means the owner's **direct pushes to `main` are not blocked** by the gate — an intentional escape hatch for a solo homelab where the owner sometimes commits straight to `main`. It does NOT exempt Dependabot or any PR: a Dependabot PR must still go green to merge.
+
+**Auto-merge for dependency bumps.** Repo-level "allow auto-merge" is enabled, and `dependabot-auto-merge.yml` turns it on for low-risk Dependabot PRs. The policy (mirrors `.github/dependabot.yml`):
+
+- **majors** → never auto-merge; a human reviews them.
+- **cargo minors** → never auto-merge. A `0.x` minor (e.g. `sha2 0.10→0.11`) is API-breaking and byte-compat-sensitive for the cross-language crypto crate, so these land as individual, reviewed PRs.
+- **everything else** (any patch; npm/docker/pip/actions minor) → auto-merge **once the 7 checks pass**. Auto-merge only *enables* the merge; it never bypasses CI. A red PR sits until someone fixes it.
+
+This pairs with the Dependabot grouping in `.github/dependabot.yml`, which keeps PR volume sane rather than one-branch-per-package: npm bundles `@types/*` + eslint/typescript/vite/vitest tooling into a **`dev-tooling`** group and other runtime minor/patch bumps into a **`runtime-minor`** group; cargo uses a **patch-only `cargo-patch`** group (minors stay individual for the byte-compat reason above). So a typical week produces a small handful of grouped PRs, most of which auto-merge themselves once green.
+
+**Why this shape?** The repo is private until M2 TestFlight, so the gate is about catching regressions and keeping dependencies current with minimal babysitting — not defending against malicious PRs (there are no outside contributors). The owner bypass keeps a solo workflow fast; the auto-merge routine keeps low-risk bumps from piling up; the 7-check requirement guarantees nothing merges (Dependabot or otherwise) without the full cross-language suite passing. _(Added 2026-06-13, after a stale 4→2s-segment test had silently left `main` red and a dozen Dependabot PRs piled up dead behind it.)_
 
 ## 4. PREREQUISITES — Fundamentals First
 
 Before this makes sense, you need to understand:
 
-1. **Push vs. PR**: When you `git push` to `main`, CI runs. When you open a pull request *from* another branch *to* `main`, CI also runs. Merging the PR is blocked until CI goes green.
+1. **Push vs. PR**: When you `git push` to `main`, CI runs. When you open a pull request *from* another branch *to* `main`, CI also runs. Merging a PR is blocked until CI goes green — enforced by a ruleset, with the repo owner able to bypass on direct pushes (see §3.1).
 
 2. **GitHub Actions**: GitHub's CI/CD service. A workflow is a YAML file in `.github/workflows/`. Each workflow has jobs; jobs have steps (e.g., "install Node", "run tests"). Steps can run in parallel or depend on each other.
 

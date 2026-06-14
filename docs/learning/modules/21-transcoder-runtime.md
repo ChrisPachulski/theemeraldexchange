@@ -106,7 +106,7 @@ lightweight stream.
    - For VOD: `ffmpeg -fflags +genpts -i /media/movie.mkv -map 0:v:0 … -f hls
      -hls_list_size 0 -hls_flags append_list -hls_playlist_type event
      -hls_segment_filename /scratch/…/seg_%05d.ts /scratch/…/index.m3u8`
-   - Segments appear as ffmpeg finishes encoding each 4-second chunk.
+   - Segments appear as ffmpeg finishes encoding each 2-second chunk.
    - ffmpeg stderr is drained into `tracing::warn!` on a detached task so a
      full stderr pipe never blocks ffmpeg.
 
@@ -333,8 +333,8 @@ pictures) can be tens of seconds long. Under the real-time `-re` pace, a 10-14
 second GOP means the FIRST segment can't close for 10-14 seconds of wall-clock
 time, which is longer than the backend's manifest-readiness probe window
 (24 × 500ms = 12s). The player gets a 503 "manifest not ready" and shows a grey
-rectangle. `force_key_frames expr:gte(t,n_forced*4)` forces a keyframe every 4
-seconds (matching `-hls_time 4`), so the first segment always closes in under 4
+rectangle. `force_key_frames expr:gte(t,n_forced*2)` forces a keyframe every 2
+seconds (matching `-hls_time 2`), so the first segment always closes in under 2
 seconds. Copy-remux uses `-c:v copy` — it passes through the source's compressed
 bitstream unchanged, so there is no encoder to instruct about keyframe cadence;
 HLS cuts at whatever keyframes the source already has.
