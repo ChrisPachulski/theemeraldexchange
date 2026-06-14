@@ -1,6 +1,6 @@
 # theemeraldexchange — Roadmap Status
 
-_Generated 2026-05-29. Updated 2026-06-07 to remove stale source/CI assumptions found during a full-project review; updated 2026-06-10 for web playback, the VAAPI hardware pipeline, and the wave-1 hardening campaign._
+_Generated 2026-05-29. Updated 2026-06-07 to remove stale source/CI assumptions found during a full-project review; updated 2026-06-10 for web playback, the VAAPI hardware pipeline, and the wave-1 hardening campaign; updated 2026-06-13 for the 06-11/12 streaming-stability wave and the 06-13 CI governance (see §Update 2026-06-13)._
 
 ## Bottom Line
 
@@ -85,7 +85,7 @@ The backend half of the project is real and largely shipped: M1 (IPTV viewer), M
 - Crit 3 PARTIALLY EVIDENCED: VAAPI sessions are not CPU-charged, so 4 concurrent re-encodes are now *permitted*; 3 concurrent HEVC→H.264 GPU sessions were proven (2026-06-08), but the formal 4-concurrent-under-80%-CPU capture still doesn't exist.
 - Crit 4 PARTIAL: reap/cleanup unit-tested, and deployed children have now served real library sessions through the playback-fix campaign (idle reap + stop-on-close exercised live), but no formal long-running soak has been recorded.
 - Crit 5 MET: `TRANSCODER_FORCE_CPU=1` forces libx264 regardless of `TRANSCODER_HW_ENCODER`.
-- Crit 6 STALE MEASUREMENT: the ~23–27s post-seek figure was taken on the CPU/libx264 pipeline and predates both VAAPI hardware encode and the forced-keyframe segment cadence (`0cda2f4`); current grants reach first segment in ~2.6–4.5s. Seek latency must be re-measured against the "<2s" target before claiming pass or fail.
+- Crit 6 STALE MEASUREMENT: the ~23–27s post-seek figure was taken on the CPU/libx264 pipeline and predates VAAPI hardware encode, the forced-keyframe segment cadence (`0cda2f4`), AND the 06-12 segment-length halving 4→2s (`25d84da`, shipped explicitly for faster startup); current grants reach first segment in ~2.6–4.5s. Seek latency must be re-measured against the "<2s" target before claiming pass or fail.
 - HW-encoder breadth: VAAPI (encode + full-HW decode/tone-map) is real and proven; VideoToolbox/NVENC/QSV still exist only as arg strings, never run. PGS burn-in is planner-dropped (a sidecar-subtitle path is a known follow-up). audio_codecs capability gap: planner uses a browser-safe stereo-AAC baseline rather than `ClientCaps.audio_codecs`; only first audio track mapped (per-client 5.1 passthrough deferred).
 
 **BLOCKERS**
@@ -139,6 +139,33 @@ The project splits cleanly into a **buildable-now backend track** and an **Apple
 - **IPTV legal/compliance risk:** the M5.5 policy already makes the **IPTV-disabled compile-flag build the default public artifact** (good), but the IPTV feature's distributability is the structural reason that policy exists; treat any monetized build's IPTV surface as a standing risk.
 
 ---
+
+## Update 2026-06-13 — streaming-stability wave + CI governance
+
+No milestone percentages moved; M4 stays in-progress (~75%) — this was playback
+hardening and infra, not new criteria met:
+
+- **Streaming-stability wave (06-11/12, ~15 commits).** Playback-bar redesign on
+  the emerald design system; fullscreen fixes; resume-or-start-over prompt +
+  absolute-timeline-on-resume; 20 s fresh-HLS startup-stall fix (`5e95faa`); HLS
+  timeline pinned to the grant's known duration (`53ed1f4`); forward-seek past
+  the produced edge re-grants instead of dying (`a8f3c09`); HLS segment length
+  halved 4→2 s for faster startup (`25d84da`). The M4 player path was *working*
+  on 06-08 but kept being stabilized through 06-12 — the four grey-box fixes were
+  not the end of it.
+- **Recommender:** KNN `k` clamped to sqlite-vec's 4096 cap — every `/score` was
+  500ing (`46f8a20`).
+- **Scanner:** TMDB remake-collapse + year-token-boundary + extras-dir ingestion
+  fixed (`11b2454`).
+- **CI governance (06-13).** Dependabot bumps grouped to cut weekly branch churn;
+  an auto-merge routine merges low-risk bumps once green (majors + cargo-minors
+  stay manual for crypto byte-compat review); a `main` CI-gate ruleset (required
+  status checks, owner as bypass actor) now stops a red commit from silently
+  landing on `main` — the gap that had briefly left `main` red. Two process-spawn
+  flaky tests (media-core probe ETXTBSY, transcoder `crash_respawn` arg race) were
+  de-flaked so the gate is reliable.
+- **Gate counts** (vitest 1793 / cargo 310 / pytest 189) are a 06-10 snapshot and
+  have drifted with tests added since; re-run before quoting.
 
 ## Update 2026-06-10 — hardening campaign (wave 1)
 

@@ -1,6 +1,6 @@
 # theemeraldexchange — High-Level TODO
 
-_Last updated: 2026-06-10. The single at-a-glance worklist. Detail lives in the
+_Last updated: 2026-06-13. The single at-a-glance worklist. Detail lives in the
 linked docs; this file is the map, not the territory. Keep it short — promote
 items here, demote detail to the source docs._
 
@@ -8,6 +8,34 @@ items here, demote detail to the source docs._
 - [docs/ROADMAP-STATUS.md](./docs/ROADMAP-STATUS.md) — honest per-milestone state (M1–M6).
 - [docs/PRODUCTION-READINESS-2026-05-30.md](./docs/PRODUCTION-READINESS-2026-05-30.md) — historical 80-finding review ledger. Re-verify against code/CI before treating any row as current.
 - [README.md](./README.md) · [PRODUCT.md](./PRODUCT.md) · [DESIGN.md](./DESIGN.md) · [DEPLOY.md](./DEPLOY.md)
+
+---
+
+## Update 2026-06-13 — landed since the 06-10 freeze (not yet folded into the lists below)
+
+The milestone skeleton below is still directionally correct, but it predates
+~35 commits. None of the open P0/P1 items got done; what shipped is polish,
+stability, and infra:
+
+- **Streaming-stability wave (06-11/12, ~15 commits).** Playback-bar redesign on
+  the emerald design system; fullscreen fixes; resume-or-start-over prompt +
+  absolute-timeline-on-resume; 20 s fresh-HLS startup-stall fix (`5e95faa`); HLS
+  timeline pinned to the grant's known duration (`53ed1f4`); forward-seek past
+  the produced edge re-grants instead of dying (`a8f3c09`); HLS segment length
+  halved 4→2 s for faster startup (`25d84da`). ⇒ The P0 "real player — DONE
+  (2026-06-08)" line is true but predates this wave — read it as *working,
+  hardened over the following 4 days*, not *settled on the 8th*.
+- **Recommender:** KNN `k` clamped to sqlite-vec's 4096 cap — every `/score` was
+  500ing (`46f8a20`).
+- **Scanner:** TMDB remake-collapse + year-token + extras-dir ingestion fixed
+  (`11b2454`).
+- **CI/infra (06-13):** Dependabot grouped to cut weekly branch churn; auto-merge
+  routine for low-risk bumps (majors + cargo-minors stay manual); `main` CI-gate
+  ruleset added with owner-bypass so a red commit can't silently land; two
+  process-spawn flaky tests de-flaked.
+- **Re-measure before trusting:** the gate counts below (vitest 1793 / cargo 310 /
+  pytest 189) are a 06-10 snapshot, and the crit-6 ~23–27 s seek figure now also
+  predates the 4→2 s segment halving. Both need a fresh run, not a copy-forward.
 
 ---
 
