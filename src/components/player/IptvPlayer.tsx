@@ -995,6 +995,15 @@ export default function IptvPlayer({
     if (applied !== null) setSelectedSubtitle(applied)
   }
 
+  // This selector is hls.js-first: chooseSubtitleTrack drives hls.subtitleTrack
+  // (in-manifest HLS subs), which is correct for IPTV but cannot reach a native
+  // sidecar <track> on the MSE path. When the app draws its own controls
+  // (nativeControls=false — the local-media MediaPlayer), MediaControls owns the
+  // sidecar subtitle toggle via the native textTracks API, so suppress this
+  // duplicate, non-functional-for-sidecar selector. IPTV (nativeControls=true)
+  // keeps it for genuine in-manifest subtitle tracks.
+  const showSubtitleSelect = nativeControls && subtitleTracks.length > 0
+
   return (
     <div className="iptv-player">
       <video
@@ -1033,7 +1042,7 @@ export default function IptvPlayer({
         )}
       </video>
 
-      {(audioTracks.length > 0 || subtitleTracks.length > 0) && (
+      {(audioTracks.length > 0 || showSubtitleSelect) && (
         <div className="iptv-player__controls">
           {audioTracks.length > 0 && (
             <label className="iptv-player__selector">
@@ -1046,7 +1055,7 @@ export default function IptvPlayer({
             </label>
           )}
 
-          {subtitleTracks.length > 0 && (
+          {showSubtitleSelect && (
             <label className="iptv-player__selector">
               Subtitles
               <select value={selectedSubtitle} onChange={(e) => chooseSubtitleTrack(Number(e.target.value))}>
