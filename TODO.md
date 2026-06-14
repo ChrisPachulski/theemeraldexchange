@@ -94,11 +94,16 @@ now; it is the only thing the Apple gate does not block.
       (2026-06-08), but the formal measurement evidence still doesn't exist —
       and the crit-6 seek number (~23–27 s) predates the VAAPI pipeline and
       needs re-measuring.
-- [ ] **Add the M3 scan-timing harness (crit 2).** A 100-file `<5s` scan-timing
-      fixture is still missing. **(crit 3 DONE 2026-06-13** — the TMDB
-      match-accuracy eval now exists: a 24-case corpus drives the real selection
-      logic in `crates/media-core/tmdb.rs` and asserts a 100% accuracy floor,
-      `2c19038`.)
+- [x] **M3 scan-timing harness (crit 2) DONE (2026-06-14, `65e3fc3`).** The
+      `scan_once_100_file_library_under_5s` test now drives the REAL `scan_once`
+      orchestration over a 100-file fixture (walk + stat + classify + the
+      movie/episode upserts + prune/GC) via a deterministic ffprobe stub, so all
+      100 files actually probe + index and the test asserts `files_added == 100`,
+      `errors == 0`, and `<5s` — exercising the DB write path, not just the
+      walk-then-error path the prior empty-file guard took. Measured well under
+      1s locally. **(crit 3 DONE 2026-06-13** — the TMDB match-accuracy eval now
+      exists: a 24-case corpus drives the real selection logic in
+      `crates/media-core/tmdb.rs` and asserts a 100% accuracy floor, `2c19038`.)
 
 ## P1 — Close the contract & infra loose ends
 
@@ -112,11 +117,14 @@ now; it is the only thing the Apple gate does not block.
       `docker-compose.yml` now defaults media-core + transcoder to
       `MEDIA_INTERNAL_PRINCIPAL_MODE=enforce` (fail-closed, matching the
       recommender); prod confirmed already running enforce.
-- [ ] **HIGH-3 (partial): recommender entrypoint `chown` under `cap_drop: ALL`.**
-      Two mitigations have since landed — `scripts/deploy-nas.sh` pre-creates +
-      pre-chowns the sidecar DB bind-mount dirs (uid 10001/10002) before
-      `compose up`, and `29d85be` fixed the fresh-DB migration ordering — but an
-      actual fresh-volume boot has still not been run to confirm no crash-loop.
+- [x] **HIGH-3 DONE (2026-06-13/14): recommender fresh-volume cold-boot.** Three
+      mitigations landed — `scripts/deploy-nas.sh` pre-creates + pre-chowns the
+      sidecar DB bind-mount dirs (uid 10001/10002) before `compose up`, `29d85be`
+      fixed the fresh-DB migration ordering, and `939ddce` fixed the actual
+      cold `/data`-volume crash-loop (entrypoint needed `DAC_OVERRIDE` to chown
+      under `cap_drop: ALL`). A fresh-volume cold-boot regression test + docker
+      proof now pin it (`13ed8b5`, `c3ae48f`), reading the freshly-migrated DB as
+      the recommender uid — so the crash-loop can't silently return.
 - [ ] **Refresh the readiness tail** — the 2026-05-30 ledger is historical and
       contains stale rows now closed by code/CI. Re-run a current review before
       using its medium/low counts for planning.
