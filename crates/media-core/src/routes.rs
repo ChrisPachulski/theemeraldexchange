@@ -661,6 +661,11 @@ async fn handoff_to_transcoder(
             .and_then(Value::as_str)
             .map(str::to_string)
             .or_else(|| session_id.map(|s| format!("/api/transcode/session/{s}/heartbeat")));
+        // Forward the transcoder's sidecar-subtitle descriptor verbatim
+        // ({ url, language, forced } | null). Its `url` is a transcoder-relative
+        // asset path; the Node grant layer stream-token-wraps it like the
+        // manifest before the player loads it as a <track>.
+        let subtitle = payload.get("subtitle").cloned().unwrap_or(Value::Null);
 
         return Ok(Json(json!({
             "transcode": true,
@@ -668,6 +673,7 @@ async fn handoff_to_transcoder(
             "sessionId": session_id,
             "manifestUrl": manifest_url,
             "heartbeatUrl": heartbeat_url,
+            "subtitle": subtitle,
             "reason": reason,
         }))
         .into_response());
@@ -1852,6 +1858,11 @@ mod tests {
             "sessionId": "sess-abc",
             "manifestUrl": "/api/transcode/session/sess-abc/index.m3u8",
             "heartbeatUrl": "/api/transcode/session/sess-abc/heartbeat",
+            "subtitle": {
+                "url": "/api/transcode/session/sess-abc/subtitles.vtt",
+                "language": "eng",
+                "forced": false,
+            },
         });
         let (base, handle) = spawn_mock_transcoder(grant, StatusCode::OK).await;
         let state = test_state_with_transcoder(&base).await;
@@ -1879,6 +1890,14 @@ mod tests {
             v["manifestUrl"],
             "/api/transcode/session/sess-abc/index.m3u8"
         );
+        // The sidecar-subtitle descriptor is forwarded verbatim for the Node
+        // grant layer to stream-token-wrap and the player to load as a <track>.
+        assert_eq!(
+            v["subtitle"]["url"],
+            "/api/transcode/session/sess-abc/subtitles.vtt"
+        );
+        assert_eq!(v["subtitle"]["language"], "eng");
+        assert_eq!(v["subtitle"]["forced"], false);
         assert!(
             v["reason"].as_str().is_some(),
             "handoff must carry the decision reason"

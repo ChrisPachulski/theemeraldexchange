@@ -257,6 +257,42 @@ describe('mediaApi playback + watch', () => {
     expect(grant.stopUrl).toBeNull()
   })
 
+  it('absolutizes the sidecar subtitle url and keeps its language/forced', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({
+        delivery: 'hls',
+        url: '/api/transcode/session/sid/index.m3u8?t=TOK',
+        heartbeatUrl: '/api/transcode/session/sid/heartbeat?t=TOK',
+        sessionId: 'sid',
+        durationSecs: null,
+        subtitle: {
+          url: '/api/transcode/session/sid/subtitles.vtt?t=TOK',
+          language: 'eng',
+          forced: true,
+        },
+      }),
+    )
+    const grant = await mediaApi.playback('movie', 7)
+    expect(grant.subtitle).toEqual({
+      url: 'http://localhost/api/transcode/session/sid/subtitles.vtt?t=TOK',
+      language: 'eng',
+      forced: true,
+    })
+  })
+
+  it('grant without a sidecar subtitle reports subtitle: null', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({
+        delivery: 'hls',
+        url: '/api/transcode/session/sid/index.m3u8?t=TOK',
+        sessionId: 'sid',
+        durationSecs: null,
+      }),
+    )
+    const grant = await mediaApi.playback('movie', 7)
+    expect(grant.subtitle).toBeNull()
+  })
+
   it('stop() POSTs the tokenised stop url with keepalive', async () => {
     fetchMock.mockResolvedValueOnce(new Response('', { status: 200 }))
     await mediaApi.stop('http://localhost/api/transcode/session/sid/stop?t=TOK')

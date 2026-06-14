@@ -307,6 +307,11 @@ describe('media playback grant', () => {
             sessionId: 'sess-1',
             manifestUrl: '/api/transcode/session/sess-1/index.m3u8',
             heartbeatUrl: '/api/transcode/session/sess-1/heartbeat',
+            subtitle: {
+              url: '/api/transcode/session/sess-1/subtitles.vtt',
+              language: 'eng',
+              forced: false,
+            },
           }),
           { status: 200, headers: { 'Content-Type': 'application/json' } },
         ),
@@ -334,10 +339,16 @@ describe('media playback grant', () => {
       stopUrl: string
       sessionId: string
       durationSecs: number
+      subtitle: { url: string; language: string | null; forced: boolean } | null
     }
     expect(body.delivery).toBe('hls')
     expect(body.url).toMatch(/^\/api\/transcode\/session\/sess-1\/index\.m3u8\?t=.+/)
     expect(body.heartbeatUrl).toMatch(/^\/api\/transcode\/session\/sess-1\/heartbeat\?t=.+/)
+    // The sidecar .vtt is token-wrapped with the SAME session token as the
+    // manifest/segments so the owner-bound asset route admits the <track> fetch.
+    expect(body.subtitle?.url).toMatch(/^\/api\/transcode\/session\/sess-1\/subtitles\.vtt\?t=.+/)
+    expect(body.subtitle?.language).toBe('eng')
+    expect(body.subtitle?.forced).toBe(false)
     // Stop URL is derived from the manifest path (index.m3u8 -> stop) and
     // carries the same session token so the client can free the slot on close.
     expect(body.stopUrl).toMatch(/^\/api\/transcode\/session\/sess-1\/stop\?t=.+/)

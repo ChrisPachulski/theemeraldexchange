@@ -91,6 +91,40 @@ describe('IptvPlayer', () => {
 
     expect(html).toContain('<video')
   })
+
+  it('renders a sidecar subtitle <track> (cross-origin, forced auto-shows)', () => {
+    const grant: StreamGrant = {
+      url: '/api/transcode/session/sid/index.m3u8?t=TOK',
+      delivery: 'hls',
+      subtitle: {
+        url: 'http://api.test/api/transcode/session/sid/subtitles.vtt?t=TOK',
+        language: 'eng',
+        forced: true,
+      },
+    }
+
+    const html = renderToStaticMarkup(<IptvPlayer grant={grant} />)
+
+    expect(html).toContain('<track')
+    expect(html).toContain('src="http://api.test/api/transcode/session/sid/subtitles.vtt?t=TOK"')
+    expect(html).toContain('srcLang="eng"')
+    // The media element must opt into CORS so the cross-origin .vtt can load.
+    expect(html).toContain('crossorigin="anonymous"')
+    // A forced track is shown by default.
+    expect(html).toMatch(/<track[^>]*\bdefault\b/)
+  })
+
+  it('omits the <track> and crossorigin when the grant has no sidecar subtitle', () => {
+    const grant: StreamGrant = {
+      url: '/api/transcode/session/sid/index.m3u8?t=TOK',
+      delivery: 'hls',
+    }
+
+    const html = renderToStaticMarkup(<IptvPlayer grant={grant} />)
+
+    expect(html).not.toContain('<track')
+    expect(html).not.toContain('crossorigin')
+  })
 })
 
 describe('HLS_PLAYLIST_LOAD_POLICY', () => {

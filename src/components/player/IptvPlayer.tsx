@@ -1011,7 +1011,27 @@ export default function IptvPlayer({
         // aggressively. MSE deliveries ignore preload (hls.js/mpegts.js own
         // the SourceBuffer), so gating on delivery is about intent, not need.
         preload={grant.delivery === 'progressive' ? 'auto' : 'metadata'}
-      />
+        // A cross-origin <track> (the sidecar .vtt on the local-media transcode
+        // path) only loads when the media element opts into CORS. MSE (hls.js)
+        // drives the video through a same-origin blob URL, so this governs ONLY
+        // the track fetch; left unset when there's no sidecar so the progressive
+        // and no-subtitle paths stay byte-identical to before.
+        crossOrigin={grant.subtitle ? 'anonymous' : undefined}
+      >
+        {grant.subtitle && (
+          // Forced/narrative tracks auto-show (default); a full subtitle track
+          // is loaded but off until a control toggles it (follow-up). The app
+          // draws its own controls (nativeControls=false), so there is no native
+          // menu yet — forced subs are the immediately-visible case.
+          <track
+            kind="subtitles"
+            src={grant.subtitle.url}
+            srcLang={grant.subtitle.language ?? undefined}
+            label={grant.subtitle.language ?? 'Subtitles'}
+            default={grant.subtitle.forced}
+          />
+        )}
+      </video>
 
       {(audioTracks.length > 0 || subtitleTracks.length > 0) && (
         <div className="iptv-player__controls">

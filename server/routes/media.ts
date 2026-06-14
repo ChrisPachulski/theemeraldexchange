@@ -222,7 +222,12 @@ media.post('/playback/:kind/:id', async (c) => {
   // 2b. Transcode required → start a session (media-core hands off) and return
   // a remux token on the HLS manifest + heartbeat URLs. The transcode proxy
   // rewrites the manifest's segment lines to carry the same token.
-  let handoff: { sessionId?: string; manifestUrl?: string; heartbeatUrl?: string }
+  let handoff: {
+    sessionId?: string
+    manifestUrl?: string
+    heartbeatUrl?: string
+    subtitle?: { url: string; language?: string | null; forced?: boolean } | null
+  }
   try {
     // Small JSON handoff — whole-transfer deadline, same as the grant above.
     const r = await fetchWithTimeout(
@@ -294,6 +299,18 @@ media.post('/playback/:kind/:id', async (c) => {
   // immediately instead of pinning the (CPU-only → single) slot until the 30s
   // idle reaper runs — which otherwise 503s the next title the user opens.
   const stopPath = handoff.manifestUrl.replace(/\/index\.m3u8$/, '/stop')
+  // Sidecar subtitle (transcode path only): the transcoder pre-extracts a
+  // complete subtitles.vtt and media-core forwards its descriptor. The asset
+  // is served by the same owner-bound /session/<id>/* route as the segments,
+  // so it carries the SAME stream token; the player loads it as a <track>.
+  const subtitle =
+    handoff.subtitle && handoff.subtitle.url
+      ? {
+          url: withToken(handoff.subtitle.url),
+          language: handoff.subtitle.language ?? null,
+          forced: handoff.subtitle.forced ?? false,
+        }
+      : null
   return c.json({
     delivery: 'hls',
     url: withToken(handoff.manifestUrl),
@@ -301,6 +318,7 @@ media.post('/playback/:kind/:id', async (c) => {
     stopUrl: withToken(stopPath),
     sessionId: sid,
     durationSecs,
+    subtitle,
   })
 })
 
