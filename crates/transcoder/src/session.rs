@@ -1212,6 +1212,9 @@ mod tests {
              sleep 30\n"
         );
         f.write_all(script.as_bytes()).unwrap();
+        // Close the fd before chmod/exec to avoid an ETXTBSY race on exec.
+        f.sync_all().unwrap();
+        drop(f);
         let mut perms = std::fs::metadata(&path).unwrap().permissions();
         perms.set_mode(0o755);
         std::fs::set_permissions(&path, perms).unwrap();
@@ -1614,6 +1617,9 @@ mod tests {
             flag = flag.display()
         );
         f.write_all(script.as_bytes()).unwrap();
+        // Close the fd before chmod/exec to avoid an ETXTBSY race on exec.
+        f.sync_all().unwrap();
+        drop(f);
         let mut perms = std::fs::metadata(&path).unwrap().permissions();
         perms.set_mode(0o755);
         std::fs::set_permissions(&path, perms).unwrap();
@@ -1652,8 +1658,13 @@ mod tests {
         let dir = dir.parent().unwrap().to_path_buf();
 
         // The first child wrote seg_00000+seg_00001 then crashed; the healthy
-        // respawn records its argv.
-        let args = wait_for_args(&dir.join("args.txt"), |_| true).await;
+        // respawn records its argv. Wait for a COMPLETE argv (both markers
+        // present) — `> args.txt` truncates before the shell flushes content,
+        // so a bare `|_| true` could read an empty/partial file and flake.
+        let args = wait_for_args(&dir.join("args.txt"), |a| {
+            a.iter().any(|s| s == "-ss") && a.iter().any(|s| s == "-start_number")
+        })
+        .await;
         let ss = args
             .iter()
             .position(|s| s == "-ss")

@@ -330,6 +330,11 @@ mod tests {
         let mut f = std::fs::File::create(&p).unwrap();
         // Single-quote the heredoc delimiter so the shell does not interpolate.
         writeln!(f, "#!/bin/sh\ncat <<'EOF'\n{json}\nEOF").unwrap();
+        // Sync + close the fd BEFORE chmod/exec. Exec'ing a file still held
+        // open for writing intermittently fails with ETXTBSY ("text file
+        // busy") on a loaded runner — the source of this test's flake.
+        f.sync_all().unwrap();
+        drop(f);
         let mut perms = std::fs::metadata(&p).unwrap().permissions();
         perms.set_mode(0o755);
         std::fs::set_permissions(&p, perms).unwrap();
