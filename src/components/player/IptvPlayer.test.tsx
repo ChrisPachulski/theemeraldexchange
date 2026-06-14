@@ -20,6 +20,8 @@ import IptvPlayer, {
   ESCALATE_WINDOW_MS,
   MAX_NET_RETRIES,
   MEDIA_RECOVERY_WINDOW_MS,
+  MAX_SUBTITLE_LOAD_ATTEMPTS,
+  subtitleRetryDelayMs,
   type RecoverableHls,
 } from './IptvPlayer'
 import type { StreamGrant } from '../../lib/api/iptv'
@@ -112,6 +114,22 @@ describe('IptvPlayer', () => {
     expect(html).toContain('crossorigin="anonymous"')
     // A forced track is shown by default.
     expect(html).toMatch(/<track[^>]*\bdefault\b/)
+  })
+
+  it('backs off the sidecar .vtt reload exponentially, capped at 5s', () => {
+    // The .vtt lands tens of seconds after the grant (slow one-shot extract),
+    // so the <track> retries: 0.5s → 1 → 2 → 4 → capped 5s, and the attempt
+    // budget covers comfortably more than the worst observed extraction.
+    expect(subtitleRetryDelayMs(0)).toBe(500)
+    expect(subtitleRetryDelayMs(1)).toBe(1000)
+    expect(subtitleRetryDelayMs(2)).toBe(2000)
+    expect(subtitleRetryDelayMs(3)).toBe(4000)
+    expect(subtitleRetryDelayMs(4)).toBe(5000)
+    expect(subtitleRetryDelayMs(10)).toBe(5000)
+    // ~54s worst-case extraction must sit inside the retry budget.
+    let total = 0
+    for (let a = 0; a < MAX_SUBTITLE_LOAD_ATTEMPTS; a += 1) total += subtitleRetryDelayMs(a)
+    expect(total).toBeGreaterThan(60_000)
   })
 
   it('omits the <track> and crossorigin when the grant has no sidecar subtitle', () => {

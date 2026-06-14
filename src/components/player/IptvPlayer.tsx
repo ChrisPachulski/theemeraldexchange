@@ -530,6 +530,59 @@ export function createFatalHlsErrorHandler(opts: {
   }
 }
 
+// The sidecar .vtt is extracted by a SEPARATE one-shot ffmpeg pass that demuxes
+// the whole container, so on a large remux it lands tens of seconds AFTER the
+// grant (≈54s on a UHD BluRay). The transcoder now publishes it atomically, so
+// the asset 404s until every cue is present rather than serving a 0-byte file.
+// A bare <track> fetches its src exactly once and would give up on that early
+// 404 — leaving the track permanently empty. So retry the load with backoff
+// until the cues arrive (or the budget runs out). Bounded: no runaway.
+export const MAX_SUBTITLE_LOAD_ATTEMPTS = 30
+export function subtitleRetryDelayMs(attempt: number): number {
+  // 0.5s → 1 → 2 → 4 → capped 5s. ~30 attempts ≈ 2.5 min — comfortably past
+  // the worst observed extraction while still terminating if it never lands.
+  return Math.min(500 * 2 ** attempt, 5000)
+}
+
+/** The sidecar subtitle <track>, re-mounted on each failed load so the browser
+ *  re-fetches once the atomically-published .vtt becomes available. A forced
+ *  track keeps `default`, so it auto-shows the moment its cues finally load. */
+export function SidecarSubtitleTrack({
+  subtitle,
+}: {
+  subtitle: NonNullable<StreamGrant['subtitle']>
+}) {
+  const [attempt, setAttempt] = useState(0)
+  const trackRef = useRef<HTMLTrackElement>(null)
+  useEffect(() => {
+    const el = trackRef.current
+    if (!el || attempt >= MAX_SUBTITLE_LOAD_ATTEMPTS) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    // `error` fires when the .vtt is still 404 (extraction in flight). `load`
+    // fires when the complete file parses — then we stop. No-op cleanup once
+    // loaded keeps the showing/forced cues untouched.
+    const onError = () => {
+      timer = setTimeout(() => setAttempt((a) => a + 1), subtitleRetryDelayMs(attempt))
+    }
+    el.addEventListener('error', onError)
+    return () => {
+      el.removeEventListener('error', onError)
+      if (timer) clearTimeout(timer)
+    }
+  }, [attempt, subtitle.url])
+  return (
+    <track
+      key={attempt}
+      ref={trackRef}
+      kind="subtitles"
+      src={subtitle.url}
+      srcLang={subtitle.language ?? undefined}
+      label={subtitle.language ?? 'Subtitles'}
+      default={subtitle.forced}
+    />
+  )
+}
+
 export default function IptvPlayer({
   grant,
   autoPlay = false,
@@ -1029,16 +1082,10 @@ export default function IptvPlayer({
       >
         {grant.subtitle && (
           // Forced/narrative tracks auto-show (default); a full subtitle track
-          // is loaded but off until a control toggles it (follow-up). The app
-          // draws its own controls (nativeControls=false), so there is no native
-          // menu yet — forced subs are the immediately-visible case.
-          <track
-            kind="subtitles"
-            src={grant.subtitle.url}
-            srcLang={grant.subtitle.language ?? undefined}
-            label={grant.subtitle.language ?? 'Subtitles'}
-            default={grant.subtitle.forced}
-          />
+          // is loaded but off until the MediaControls CC button toggles it.
+          // SidecarSubtitleTrack retries the load until the .vtt — extracted by
+          // a slow one-shot pass — is actually published.
+          <SidecarSubtitleTrack subtitle={grant.subtitle} />
         )}
       </video>
 
