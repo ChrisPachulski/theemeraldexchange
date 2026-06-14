@@ -239,22 +239,19 @@ fn is_image_subtitle(codec: &str) -> bool {
 ///    never shown by the player anyway.
 ///
 /// So removing inline extraction costs no working feature and fixes the stall.
-/// Subtitles will return as a pre-extracted **sidecar WebVTT** (`<track>`,
-/// decoupled from the live stream) — see TODO below. Until then a transcoded
-/// title plays WITHOUT in-player subtitles rather than not playing at all.
+/// Subtitles return instead as a pre-extracted **sidecar WebVTT** (`<track>`,
+/// decoupled from the live stream) — IMPLEMENTED by [`plan_sidecar_subtitle`] +
+/// [`crate::args::sidecar_vtt_args`] + the session manager's one-shot extraction.
+/// This live-stream disposition therefore stays `None` on purpose.
 ///
 /// Returns `(op, burn_index)`; both are `None`. Detection is still run for the
 /// log trail (and to keep the text/image classifiers + the `ExtractWebVtt` op
-/// live for the sidecar follow-up and the args-builder test).
+/// live for the args-builder test).
 ///
 /// Image subtitles (PGS/VOBSUB/DVD) were already dropped: the libass `subtitles`
 /// filter cannot decode bitmaps and would abort the session ("Only text based
 /// subtitles are currently supported"); a correct burn needs an `overlay`-based
 /// filtergraph fed by the decoded subtitle stream.
-///
-/// TODO(M4+): pre-extract the chosen subtitle to a complete sidecar `.vtt`
-/// (one-shot, no `-re`) served alongside the session and loaded by the SPA as a
-/// `<track>`, restoring selectable subs without the live-stream coupling.
 fn plan_subtitle(file: &MediaFileRow) -> (SubtitleOp, Option<i64>) {
     let tracks = file.subtitle_tracks();
     let is_text = |t: &&SubtitleTrack| is_text_subtitle(t.codec.as_deref().unwrap_or("").trim());

@@ -33,6 +33,15 @@ stability, and infra:
   routine for low-risk bumps (majors + cargo-minors stay manual); `main` CI-gate
   ruleset added with owner-bypass so a red commit can't silently land; two
   process-spawn flaky tests de-flaked.
+- **Backend feature wave (06-13).** (a) Device-token contract drift fixed (live
+  tokens would have failed to decode). (b) **TMDB match-accuracy eval shipped
+  (M3 crit-3)** — 24-case corpus driving the real selection logic, 24/24, as a
+  regression floor (`2c19038`). (c) **Sidecar `subtitles.vtt` shipped end-to-end**
+  (`735294b`+`40c3147`): a one-shot ffmpeg extraction writes a complete WebVTT
+  served by the owner-bound asset route; media-core/Node/SPA thread it through
+  and the player renders a `<track>` (forced auto-shows). Remaining: a non-forced
+  in-player toggle + live NAS/browser proof (CORS on the `.vtt` at the edge, cue
+  rendering) — both browser-bound.
 - **Re-measure before trusting:** the gate counts below (vitest 1793 / cargo 310 /
   pytest 189) are a 06-10 snapshot, and the crit-6 ~23–27 s seek figure now also
   predates the 4→2 s segment halving. Both need a fresh run, not a copy-forward.
@@ -85,11 +94,11 @@ now; it is the only thing the Apple gate does not block.
       (2026-06-08), but the formal measurement evidence still doesn't exist —
       and the crit-6 seek number (~23–27 s) predates the VAAPI pipeline and
       needs re-measuring.
-- [ ] **Add M3 measurement harnesses.** 100-file `<5s` scan-timing fixture
-      (crit 2) and a TMDB match-accuracy eval (crit 3). The matcher now scores
-      candidates by stopword-aware title similarity and rejects zero-overlap hits
-      (crates/media-core `tmdb.rs`), but the accuracy eval that would actually
-      falsify crit 3 still doesn't exist.
+- [ ] **Add the M3 scan-timing harness (crit 2).** A 100-file `<5s` scan-timing
+      fixture is still missing. **(crit 3 DONE 2026-06-13** — the TMDB
+      match-accuracy eval now exists: a 24-case corpus drives the real selection
+      logic in `crates/media-core/tmdb.rs` and asserts a 100% accuracy floor,
+      `2c19038`.)
 
 ## P1 — Close the contract & infra loose ends
 
