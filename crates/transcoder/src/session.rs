@@ -679,8 +679,20 @@ impl SessionManager {
         dir: &std::path::Path,
         source_index: i64,
     ) {
+        // Extract to a `.partial` sibling and atomically rename to the final
+        // name only on a clean exit. A subtitle-only `-map` still demuxes the
+        // WHOLE container to collect every cue, so on a large remux this pass
+        // takes tens of seconds (≈54s on a UHD BluRay) — far longer than the
+        // "near-instant" the name implies. Without the rename the asset route
+        // would stream the still-growing (often 0-byte) file as a 200, the
+        // player's one-shot <track> would load it empty, and — because segments
+        // and this asset carry an `immutable` cache header — never recover. With
+        // the rename, `subtitles.vtt` simply 404s until the cues are complete,
+        // which the player retries through. (Per-session token ⇒ a prior
+        // session's empty cache entry can never alias a new session's URL.)
         let out_path = dir.join(SIDECAR_SUBTITLE_NAME);
-        let args = sidecar_vtt_args(input, source_index, &out_path.to_string_lossy());
+        let partial_path = dir.join(format!("{SIDECAR_SUBTITLE_NAME}.partial"));
+        let args = sidecar_vtt_args(input, source_index, &partial_path.to_string_lossy());
         let mut cmd = Command::new(&self.ffmpeg_bin);
         cmd.args(&args)
             .current_dir(dir)
@@ -711,7 +723,18 @@ impl SessionManager {
             // Reap the one-shot child so it cannot linger as a zombie.
             match child.wait().await {
                 Ok(status) if status.success() => {
-                    tracing::debug!(session = %id, "sidecar subtitle extracted")
+                    // Atomic publish: the complete .vtt becomes visible to the
+                    // asset route in a single rename. A failed rename leaves the
+                    // `.partial` behind (never served — clients only ask for the
+                    // final name), so the worst case is "no subtitles", never a
+                    // truncated track.
+                    match tokio::fs::rename(&partial_path, &out_path).await {
+                        Ok(()) => tracing::debug!(session = %id, "sidecar subtitle extracted"),
+                        Err(e) => tracing::warn!(
+                            session = %id, error = %e,
+                            "sidecar subtitle extracted but could not be published"
+                        ),
+                    }
                 }
                 Ok(status) => {
                     tracing::warn!(session = %id, %status, "sidecar subtitle extraction exited non-zero")
@@ -1324,7 +1347,7 @@ mod tests {
              mkdir -p \"$d\"\n\
              printf '%s' \"$$\" > \"$d/pid.txt\"\n\
              printf '%s\\n' \"$@\" > \"$d/args.txt\"\n\
-             case \"$last\" in *subtitles.vtt)\n\
+             case \"$last\" in *subtitles.vtt.partial)\n\
                printf 'WEBVTT\\n' > \"$last\"; exit 0;; esac\n\
              printf '#EXTM3U\\n#EXT-X-VERSION:3\\n' > \"$last\"\n\
              printf 'seg' > \"$d/seg_00000.ts\"\n\

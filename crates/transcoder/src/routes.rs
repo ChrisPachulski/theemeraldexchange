@@ -699,7 +699,7 @@ mod tests {
              for a in \"$@\"; do last=\"$a\"; done\n\
              d=$(dirname \"$last\")\n\
              mkdir -p \"$d\"\n\
-             case \"$last\" in *subtitles.vtt)\n\
+             case \"$last\" in *subtitles.vtt.partial)\n\
                printf 'WEBVTT\\n' > \"$last\"; exit 0;; esac\n\
              printf '#EXTM3U\\n' > \"$last\"\n\
              printf 'seg' > \"$d/seg_00000.ts\"\n\
