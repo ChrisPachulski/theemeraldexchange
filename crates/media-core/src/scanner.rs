@@ -2257,7 +2257,10 @@ mod tests {
         let elapsed = start.elapsed();
         assert_eq!(report.files_seen, 100, "all 100 videos walked");
         assert_eq!(report.files_added, 100, "all 100 videos probed + indexed");
-        assert_eq!(report.errors, 0, "no probe/index errors on the clean fixture");
+        assert_eq!(
+            report.errors, 0,
+            "no probe/index errors on the clean fixture"
+        );
         assert!(
             elapsed < std::time::Duration::from_secs(5),
             "100-file scan took {elapsed:?} (crit-2 bar: <5s)"
