@@ -92,8 +92,12 @@ echo "$BODY" | grep -q '"title_vectors":0' || fail "fresh volume should report t
 say "DB MATERIALISED ON THE COLD VOLUME"
 [ -f "$DATA_DIR/exchange.db" ] || fail "boot did not create exchange.db on the mounted volume"
 echo "exchange.db present: $(ls -l "$DATA_DIR/exchange.db" | awk '{print $5" bytes"}')"
-# Every on-disk migration must be recorded as applied.
-APPLIED="$(docker exec "$NAME" python -c "import sqlite3,glob,os; c=sqlite3.connect('/data/exchange.db'); a={r[0] for r in c.execute('SELECT version FROM schema_migrations')}; d={int(os.path.basename(p)[:4]) for p in glob.glob('/srv/migrations/*.sql')}; print('OK' if a==d else f'MISMATCH applied={sorted(a)} on_disk={sorted(d)}')" 2>&1)"
+# Every on-disk migration must be recorded as applied. Run the check AS the
+# recommender user: the entrypoint chowns /data to recommender, and the hardened
+# container has cap_drop ALL (no DAC_OVERRIDE), so a root `docker exec` cannot
+# even open the recommender-owned exchange.db ("unable to open database file").
+# The app reads it fine because it runs as recommender (via gosu).
+APPLIED="$(docker exec -u recommender "$NAME" python -c "import sqlite3,glob,os; c=sqlite3.connect('/data/exchange.db'); a={r[0] for r in c.execute('SELECT version FROM schema_migrations')}; d={int(os.path.basename(p)[:4]) for p in glob.glob('/srv/migrations/*.sql')}; print('OK' if a==d else f'MISMATCH applied={sorted(a)} on_disk={sorted(d)}')" 2>&1)"
 echo "migrations: $APPLIED"
 echo "$APPLIED" | grep -q '^OK$' || fail "not every migration applied on fresh boot: $APPLIED"
 
