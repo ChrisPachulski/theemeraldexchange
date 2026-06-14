@@ -130,6 +130,33 @@ impl AvailableEncoders {
 /// device and upload the synthetic frames exactly as production does (VAAPI also
 /// pins `-low_power 1`), making a passing smoke test genuinely imply a working
 /// encode.
+/// Run a `Command` to completion, retrying the rare transient ETXTBSY
+/// ("text file busy"). See `session::spawn_retrying_etxtbsy` for the fork→exec
+/// race this guards (another thread's `fork()` momentarily inherits a
+/// just-written executable's write fd). No-op for the installed ffmpeg in
+/// production; removes the flake where the detection tests write+exec a fresh
+/// stub per case. `Command::output` borrows `&mut self`, so the same builder is
+/// retried in place. Errno-specific and bounded.
+async fn output_retrying_etxtbsy(
+    cmd: &mut tokio::process::Command,
+) -> std::io::Result<std::process::Output> {
+    let mut attempt = 0u8;
+    loop {
+        match cmd.output().await {
+            Ok(out) => return Ok(out),
+            Err(e)
+                if attempt < 5
+                    && (e.kind() == std::io::ErrorKind::ExecutableFileBusy
+                        || e.raw_os_error() == Some(26)) =>
+            {
+                attempt += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 async fn smoke_test(ffmpeg_bin: &str, encoder: &str) -> bool {
     let mut args: Vec<&str> = vec!["-hide_banner", "-loglevel", "error"];
     match encoder {
@@ -148,10 +175,9 @@ async fn smoke_test(ffmpeg_bin: &str, encoder: &str) -> bool {
         args.extend(["-low_power", "1"]);
     }
     args.extend(["-f", "null", "-"]);
-    let result = tokio::process::Command::new(ffmpeg_bin)
-        .args(&args)
-        .output()
-        .await;
+    let mut cmd = tokio::process::Command::new(ffmpeg_bin);
+    cmd.args(&args);
+    let result = output_retrying_etxtbsy(&mut cmd).await;
     matches!(result, Ok(out) if out.status.success())
 }
 
@@ -189,20 +215,18 @@ pub async fn vaapi_full_hw_supported(ffmpeg_bin: &str) -> bool {
         "null",
         "-",
     ];
-    let result = tokio::process::Command::new(ffmpeg_bin)
-        .args(args)
-        .output()
-        .await;
+    let mut cmd = tokio::process::Command::new(ffmpeg_bin);
+    cmd.args(args);
+    let result = output_retrying_etxtbsy(&mut cmd).await;
     matches!(result, Ok(out) if out.status.success())
 }
 
 /// Run `ffmpeg -encoders` and parse the result. Best-effort: any failure to
 /// launch ffmpeg yields an empty set (caller falls back to CPU and logs).
 pub async fn detect(ffmpeg_bin: &str) -> AvailableEncoders {
-    let output = tokio::process::Command::new(ffmpeg_bin)
-        .args(["-hide_banner", "-encoders"])
-        .output()
-        .await;
+    let mut cmd = tokio::process::Command::new(ffmpeg_bin);
+    cmd.args(["-hide_banner", "-encoders"]);
+    let output = output_retrying_etxtbsy(&mut cmd).await;
     match output {
         Ok(o) => {
             let text = String::from_utf8_lossy(&o.stdout);

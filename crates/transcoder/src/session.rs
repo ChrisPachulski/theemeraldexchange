@@ -190,6 +190,37 @@ enum SessionCmd {
     Shutdown { ack: oneshot::Sender<()> },
 }
 
+/// Spawn a `Command`, retrying the rare transient ETXTBSY ("text file busy").
+///
+/// On a loaded, multi-threaded host another thread's `fork()` (every concurrent
+/// `Command::spawn`) can momentarily inherit a just-written executable's write
+/// fd — `O_CLOEXEC` closes it only at THAT child's `exec`, so an `execve` racing
+/// the fork→exec window fails with ETXTBSY. This never fires for the stable,
+/// installed ffmpeg in production (it is never freshly written); it removes a
+/// flake in the session tests, which write+exec a fresh stub per case. tokio's
+/// `Command::spawn` borrows `&mut self`, so the same builder is retried in place.
+/// Errno-specific and bounded; the backoff is a NON-blocking `tokio::time::sleep`
+/// (never `std::thread::sleep`) so a retry under heavy test concurrency yields to
+/// the runtime instead of stalling the worker and starving the timing-sensitive
+/// poll tests. Mirrors the same guard in `media-core`'s `ffprobe` spawn.
+async fn spawn_retrying_etxtbsy(cmd: &mut Command) -> std::io::Result<Child> {
+    let mut attempt = 0u8;
+    loop {
+        match cmd.spawn() {
+            Ok(child) => return Ok(child),
+            Err(e)
+                if attempt < 5
+                    && (e.kind() == std::io::ErrorKind::ExecutableFileBusy
+                        || e.raw_os_error() == Some(26)) =>
+            {
+                attempt += 1;
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 /// Terminate one ffmpeg child: SIGTERM (lets ffmpeg flush/finalize), then
 /// SIGKILL after [`KILL_GRACE`], then reap. tokio's [`Child`] only exposes
 /// SIGKILL (`start_kill`), so the polite TERM goes through `libc` with the raw
@@ -574,7 +605,7 @@ impl SessionManager {
     /// on a detached task so a full pipe buffer never stalls ffmpeg — mirroring
     /// `proc.stderr.on('data', …)` in iptvRemux.ts.
     #[allow(clippy::too_many_arguments)]
-    fn spawn_child(
+    async fn spawn_child(
         &self,
         session_id: &str,
         opts_input: &str,
@@ -606,14 +637,15 @@ impl SessionManager {
             start_number,
             source_avg_kbps,
         });
-        let mut child = Command::new(&self.ffmpeg_bin)
-            .args(&args)
+        let mut cmd = Command::new(&self.ffmpeg_bin);
+        cmd.args(&args)
             .current_dir(dir)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
+            .kill_on_drop(true);
+        let mut child = spawn_retrying_etxtbsy(&mut cmd)
+            .await
             .map_err(|e| StartError::Spawn(e.to_string()))?;
 
         if let Some(stderr) = child.stderr.take() {
@@ -640,7 +672,7 @@ impl SessionManager {
     /// child this is a short pass (no `-re`, no HLS), so it does not go through
     /// the supervisor and is not restarted: a failed extraction simply leaves
     /// the title playing without selectable subs.
-    fn spawn_sidecar_subtitle(
+    async fn spawn_sidecar_subtitle(
         &self,
         session_id: &str,
         input: &str,
@@ -649,15 +681,14 @@ impl SessionManager {
     ) {
         let out_path = dir.join(SIDECAR_SUBTITLE_NAME);
         let args = sidecar_vtt_args(input, source_index, &out_path.to_string_lossy());
-        let spawn = Command::new(&self.ffmpeg_bin)
-            .args(&args)
+        let mut cmd = Command::new(&self.ffmpeg_bin);
+        cmd.args(&args)
             .current_dir(dir)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn();
-        let mut child = match spawn {
+            .kill_on_drop(true);
+        let mut child = match spawn_retrying_etxtbsy(&mut cmd).await {
             Ok(child) => child,
             Err(e) => {
                 tracing::warn!(session = %session_id, error = %e, "failed to spawn sidecar subtitle extraction");
@@ -755,20 +786,23 @@ impl SessionManager {
         // segment (the stall that killed inline extraction). A failure just means
         // the title plays without selectable subs — start never blocks on it.
         if let Some(idx) = opts.subtitle_source_index {
-            self.spawn_sidecar_subtitle(&session_id, &opts.input_path, &dir, idx);
+            self.spawn_sidecar_subtitle(&session_id, &opts.input_path, &dir, idx)
+                .await;
         }
 
-        let child = self.spawn_child(
-            &session_id,
-            &opts.input_path,
-            &opts.plan,
-            &dir,
-            opts.start_secs,
-            opts.source_codec.as_deref(),
-            opts.source_avg_kbps,
-            &opts.media_kind,
-            0,
-        )?;
+        let child = self
+            .spawn_child(
+                &session_id,
+                &opts.input_path,
+                &opts.plan,
+                &dir,
+                opts.start_secs,
+                opts.source_codec.as_deref(),
+                opts.source_avg_kbps,
+                &opts.media_kind,
+                0,
+            )
+            .await?;
 
         let (ctl_tx, ctl_rx) = mpsc::unbounded_channel();
         let session = Session {
@@ -1012,17 +1046,20 @@ impl SessionManager {
             tracing::warn!(session = %id, error = %e, "failed to recreate session dir for respawn");
             return Respawn::Failed;
         }
-        match self.spawn_child(
-            id,
-            &input,
-            &plan,
-            &dir,
-            spawn_secs,
-            source_codec.as_deref(),
-            source_avg_kbps,
-            &media_kind,
-            next_number,
-        ) {
+        match self
+            .spawn_child(
+                id,
+                &input,
+                &plan,
+                &dir,
+                spawn_secs,
+                source_codec.as_deref(),
+                source_avg_kbps,
+                &media_kind,
+                next_number,
+            )
+            .await
+        {
             Ok(mut child) => {
                 // A stop() may have removed the session while we spawned; kill
                 // the fresh child and clean the recreated dir rather than
