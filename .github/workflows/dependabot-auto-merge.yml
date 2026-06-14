@@ -1,0 +1,53 @@
+# Auto-merge low-risk Dependabot PRs once CI is green.
+#
+# Safe by construction: this only ENABLES GitHub auto-merge, which waits for
+# the required status checks (the ci.yml gate — see the `main` ruleset) to pass
+# before merging. A red PR never merges; it just sits until someone fixes it.
+#
+# Policy (mirrors .github/dependabot.yml DEP-003):
+#   - majors                  -> NEVER auto-merge (human review).
+#   - cargo minors            -> NEVER (0.x minors break the crypto crate;
+#                                byte-compat across TS/Python/Swift).
+#   - everything else (patch, npm/docker/pip/actions minor) -> auto-merge.
+name: Dependabot auto-merge
+
+on:
+  pull_request_target:
+    branches: [main]
+
+# One run per PR; new pushes supersede in-flight runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+
+      - name: Enable auto-merge for low-risk bumps
+        env:
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+          ECOSYSTEM: ${{ steps.meta.outputs.package-ecosystem }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "$UPDATE_TYPE" = "version-update:semver-major" ]; then
+            echo "::notice::$ECOSYSTEM major bump → leaving for manual review"
+            exit 0
+          fi
+          if [ "$ECOSYSTEM" = "cargo" ] && [ "$UPDATE_TYPE" = "version-update:semver-minor" ]; then
+            echo "::notice::cargo minor → manual review (crypto crate byte-compat)"
+            exit 0
+          fi
+          gh pr merge --auto --squash "$PR_URL"
+          echo "::notice::auto-merge enabled — merges once required checks pass"
