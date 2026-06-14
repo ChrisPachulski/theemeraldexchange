@@ -51,10 +51,11 @@ pub async fn ffprobe(path: &Path) -> Result<FileProbe, ProbeError> {
     ffprobe_with_bin("ffprobe", path).await
 }
 
-/// Inner implementation with an injectable binary so the timeout/kill behavior
-/// can be exercised against a stub that sleeps (see tests). Production always
-/// goes through [`ffprobe`] with the real `ffprobe` binary.
-async fn ffprobe_with_bin(bin: &str, path: &Path) -> Result<FileProbe, ProbeError> {
+/// Implementation with an injectable binary. Production passes the real
+/// `ffprobe`; the scanner threads a custom bin so the crit-2 100-file timing
+/// harness (and the timeout/throughput tests) can drive scan_once against a
+/// deterministic stub instead of shelling out to the installed binary.
+pub(crate) async fn ffprobe_with_bin(bin: &str, path: &Path) -> Result<FileProbe, ProbeError> {
     ffprobe_with_bin_timeout(bin, path, Duration::from_secs(PROBE_TIMEOUT_SECS)).await
 }
 
