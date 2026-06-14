@@ -88,6 +88,23 @@ pub enum SubtitleOp {
     ExtractWebVtt { source_index: i64 },
 }
 
+/// A subtitle track selected for **sidecar** WebVTT extraction. Unlike
+/// [`SubtitleOp`] — which governs the LIVE HLS output and stays `None` — this
+/// drives a SEPARATE one-shot ffmpeg pass (no `-re`, no HLS) that writes a
+/// COMPLETE `subtitles.vtt` beside the session, loaded by the player as a
+/// `<track>`. Decoupled from the segment stream, it reintroduces selectable
+/// subs without the first-segment stall that killed inline extraction (see
+/// [`plan_subtitle`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SidecarSubtitle {
+    /// Absolute source stream index to extract (`-map 0:<index>`).
+    pub source_index: i64,
+    /// ISO language tag from the probe, when known (for `<track srclang>`).
+    pub language: Option<String>,
+    /// Whether the chosen track is a forced/narrative track.
+    pub forced: bool,
+}
+
 /// Default AAC bitrate when we have to re-encode audio (§4.3).
 pub const DEFAULT_AAC_BITRATE_KBPS: u32 = 192;
 
@@ -258,6 +275,33 @@ fn plan_subtitle(file: &MediaFileRow) -> (SubtitleOp, Option<i64>) {
         tracing::debug!(path = %file.path, "dropping image-only subtitles (burn-in not yet supported)");
     }
     (SubtitleOp::None, None)
+}
+
+/// Choose the best TEXT subtitle track to pre-extract to a sidecar WebVTT, or
+/// `None` when the file carries no text subtitle.
+///
+/// Selection mirrors the (now dormant) inline picker in [`plan_subtitle`]: a
+/// FORCED text track wins (foreign-dialogue subs the viewer almost always wants
+/// burned on), else the FIRST text track in probe order. Image subtitles
+/// (PGS/VOBSUB/DVD) are never eligible — WebVTT is text-only, and a bitmap
+/// track can only be shown by compositing onto the video (the dropped burn-in
+/// path) — so they are skipped here exactly as in [`plan_subtitle`].
+///
+/// Pure over the file's probe metadata. The actual extraction command is
+/// [`crate::args::sidecar_vtt_args`]; the one-shot run is wired into the session
+/// manager's start path (decoupled from the live HLS child).
+pub fn plan_sidecar_subtitle(file: &MediaFileRow) -> Option<SidecarSubtitle> {
+    let tracks = file.subtitle_tracks();
+    let is_text = |t: &&SubtitleTrack| is_text_subtitle(t.codec.as_deref().unwrap_or("").trim());
+    let chosen = tracks
+        .iter()
+        .find(|t| t.forced && is_text(t))
+        .or_else(|| tracks.iter().find(is_text))?;
+    Some(SidecarSubtitle {
+        source_index: chosen.index,
+        language: chosen.language.clone(),
+        forced: chosen.forced,
+    })
 }
 
 /// Compute the transcode plan for `file` against `caps`.
@@ -904,6 +948,87 @@ mod tests {
             }
             other => panic!("expected transcode, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn sidecar_subtitle_prefers_forced_text_track() {
+        // A forced text track wins over an earlier non-forced one — it carries
+        // the foreign-dialogue lines the viewer almost always wants shown.
+        let f = file(
+            Some("mkv"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![aac(1)],
+            vec![sub(2, "subrip", false), sub(3, "ass", true)],
+        );
+        let pick = plan_sidecar_subtitle(&f).expect("a text track must be chosen");
+        assert_eq!(pick.source_index, 3, "forced track wins");
+        assert!(pick.forced);
+        assert_eq!(pick.language.as_deref(), Some("eng"));
+    }
+
+    #[test]
+    fn sidecar_subtitle_falls_back_to_first_text_track() {
+        // No forced track → the first text track in probe order is extracted.
+        let f = file(
+            Some("mkv"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![aac(1)],
+            vec![sub(4, "mov_text", false), sub(5, "subrip", false)],
+        );
+        let pick = plan_sidecar_subtitle(&f).expect("a text track must be chosen");
+        assert_eq!(
+            pick.source_index, 4,
+            "first text track wins absent a forced one"
+        );
+        assert!(!pick.forced);
+    }
+
+    #[test]
+    fn sidecar_subtitle_skips_image_only_tracks() {
+        // WebVTT is text-only: a file whose ONLY subtitle is bitmap (PGS) has no
+        // sidecar candidate (it would need burn-in, which is dropped).
+        let f = file(
+            Some("mkv"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![aac(1)],
+            vec![sub(2, "hdmv_pgs_subtitle", false)],
+        );
+        assert_eq!(plan_sidecar_subtitle(&f), None);
+    }
+
+    #[test]
+    fn sidecar_subtitle_none_when_no_subtitles() {
+        let f = file(
+            Some("mkv"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![aac(1)],
+            vec![],
+        );
+        assert_eq!(plan_sidecar_subtitle(&f), None);
+    }
+
+    #[test]
+    fn sidecar_subtitle_picks_text_over_image_when_both_present() {
+        // A bitmap track present alongside a text track must not shadow it: the
+        // text track is the sidecar candidate, image tracks are simply ignored.
+        let f = file(
+            Some("mkv"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![aac(1)],
+            vec![sub(2, "hdmv_pgs_subtitle", false), sub(3, "subrip", false)],
+        );
+        let pick = plan_sidecar_subtitle(&f).expect("the text track must be chosen");
+        assert_eq!(pick.source_index, 3);
     }
 
     #[test]

@@ -29,8 +29,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::concurrency::Busy;
-use crate::plan::{TranscodePlan, plan_transcode, plan_transcode_forced};
-use crate::session::{SessionManager, StartError, StartOpts};
+use crate::plan::{TranscodePlan, plan_sidecar_subtitle, plan_transcode, plan_transcode_forced};
+use crate::session::{SIDECAR_SUBTITLE_NAME, SessionManager, StartError, StartOpts};
 
 /// Transcoder app state — the session manager + principal posture.
 #[derive(Clone)]
@@ -353,6 +353,13 @@ async fn grant(
         .into_response();
     }
 
+    // Sidecar subtitle: pick a TEXT track to pre-extract to subtitles.vtt (a
+    // decoupled one-shot at session start; see plan_sidecar_subtitle). `None`
+    // when the title has no text subtitle. Only meaningful on the transcode
+    // path — a direct-play file streams the original, whose embedded subs the
+    // native player renders itself.
+    let sidecar = plan_sidecar_subtitle(&row);
+
     let opts = StartOpts {
         media_kind,
         media_id,
@@ -363,18 +370,32 @@ async fn grant(
         source_codec,
         source_avg_kbps,
         owner,
+        subtitle_source_index: sidecar.as_ref().map(|s| s.source_index),
     };
 
     match state.sessions.start(opts).await {
-        Ok(session_id) => Json(json!({
-            "directPlay": false,
-            "transcode": true,
-            "sessionId": session_id,
-            "plan": plan,
-            "manifestUrl": format!("/api/transcode/session/{session_id}/index.m3u8"),
-            "heartbeatUrl": format!("/api/transcode/session/{session_id}/heartbeat"),
-        }))
-        .into_response(),
+        Ok(session_id) => {
+            // Advertise the sidecar so the player can attach a <track>. The file
+            // is written best-effort by the detached extraction; the URL is the
+            // same asset route the segments use.
+            let subtitle = sidecar.as_ref().map(|s| {
+                json!({
+                    "url": format!("/api/transcode/session/{session_id}/{SIDECAR_SUBTITLE_NAME}"),
+                    "language": s.language,
+                    "forced": s.forced,
+                })
+            });
+            Json(json!({
+                "directPlay": false,
+                "transcode": true,
+                "sessionId": session_id,
+                "plan": plan,
+                "manifestUrl": format!("/api/transcode/session/{session_id}/index.m3u8"),
+                "heartbeatUrl": format!("/api/transcode/session/{session_id}/heartbeat"),
+                "subtitle": subtitle,
+            }))
+            .into_response()
+        }
         Err(StartError::Busy(Busy { cpu_cap })) => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({
@@ -486,6 +507,9 @@ async fn session_segment(
         "video/iso.segment"
     } else if segment.ends_with(".mp4") {
         "video/mp4"
+    } else if segment.ends_with(".vtt") {
+        // The pre-extracted sidecar subtitle, loaded by the player as a <track>.
+        "text/vtt"
     } else {
         "video/mp2t"
     };
@@ -675,6 +699,8 @@ mod tests {
              for a in \"$@\"; do last=\"$a\"; done\n\
              d=$(dirname \"$last\")\n\
              mkdir -p \"$d\"\n\
+             case \"$last\" in *subtitles.vtt)\n\
+               printf 'WEBVTT\\n' > \"$last\"; exit 0;; esac\n\
              printf '#EXTM3U\\n' > \"$last\"\n\
              printf 'seg' > \"$d/seg_00000.ts\"\n\
              sleep 30\n";
@@ -825,6 +851,56 @@ mod tests {
         assert_eq!(v["transcode"], true);
         assert!(v["sessionId"].as_str().unwrap().starts_with("tx:"));
         assert!(v["manifestUrl"].as_str().unwrap().ends_with("/index.m3u8"));
+        // No text subtitle on this file → no sidecar advertised.
+        assert!(v["subtitle"].is_null(), "no subtitle track ⇒ null sidecar");
+    }
+
+    #[tokio::test]
+    async fn grant_with_text_subtitle_advertises_sidecar() {
+        // A transcode grant for a file carrying a text subtitle returns a
+        // `subtitle` object pointing at the session's subtitles.vtt asset, with
+        // the track's language + forced flag for the player's <track>.
+        let tmp = tempfile::tempdir().unwrap();
+        let app = router(state_with(
+            &tmp,
+            Caps {
+                max_total: 4,
+                max_cpu: 4,
+            },
+            PrincipalMode::Off,
+        ));
+        let mut file = h264_file();
+        file.subtitle_tracks_json =
+            "[{\"index\":2,\"codec\":\"subrip\",\"language\":\"eng\",\"forced\":false}]".into();
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/transcode/grant")
+                    .header("content-type", "application/json")
+                    .body(Body::from(grant_body(&file)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["transcode"], true);
+        let sub = &v["subtitle"];
+        assert!(
+            !sub.is_null(),
+            "text subtitle ⇒ a sidecar must be advertised"
+        );
+        let session_id = v["sessionId"].as_str().unwrap();
+        assert_eq!(
+            sub["url"].as_str().unwrap(),
+            format!("/api/transcode/session/{session_id}/subtitles.vtt")
+        );
+        assert_eq!(sub["language"], "eng");
+        assert_eq!(sub["forced"], false);
     }
 
     #[tokio::test]

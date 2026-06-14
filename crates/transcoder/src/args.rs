@@ -604,6 +604,44 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
     a
 }
 
+/// Build the ffmpeg argument vector for the **sidecar subtitle** one-shot
+/// extraction (the §4.3 follow-up to the disabled inline path).
+///
+/// This is a SEPARATE, short invocation from the live HLS transcode: it maps
+/// ONLY the chosen subtitle stream and writes a COMPLETE WebVTT file in one
+/// pass — no `-re` (so it never paces to wall-clock; it finishes in well under
+/// a second), no HLS muxer, no video or audio. The player loads the result as a
+/// `<track>`, fully decoupled from the segment stream — which is exactly why
+/// inline extraction (which held the first HLS segment open ~9s under `-re`,
+/// grey-boxing the player at 0:00) was removed. See [`crate::plan::plan_subtitle`]
+/// for that history and [`crate::plan::plan_sidecar_subtitle`] for the selector.
+///
+/// * `input` — absolute source path (same file the live transcode reads).
+/// * `source_index` — absolute stream index to extract (`-map 0:<index>`).
+/// * `out_path` — the sidecar file to write (the session dir's `subtitles.vtt`).
+pub fn sidecar_vtt_args(input: &str, source_index: i64, out_path: &str) -> Vec<String> {
+    vec![
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "warning".into(),
+        "-nostdin".into(),
+        "-i".into(),
+        input.to_string(),
+        // Map ONLY the chosen subtitle stream — the output carries no video or
+        // audio, so the pass is trivially cheap and finishes near-instantly.
+        "-map".into(),
+        format!("0:{source_index}"),
+        "-c:s".into(),
+        "webvtt".into(),
+        "-f".into(),
+        "webvtt".into(),
+        // -y avoids ffmpeg's interactive overwrite prompt hanging the detached,
+        // stdin-null child (session ids are unique, so a real clash is unreachable).
+        "-y".into(),
+        out_path.to_string(),
+    ]
+}
+
 /// Compose the `-vf` filtergraph from scale / tone-map / burn-in. Returns
 /// `None` when no filter is needed (e.g. an encode driven solely by an audio
 /// or container change).
@@ -1172,6 +1210,30 @@ mod tests {
         let j = args.join(" ");
         assert!(j.contains("-map 0:3"), "{j}");
         assert!(j.contains("-c:s webvtt"), "{j}");
+    }
+
+    #[test]
+    fn sidecar_vtt_args_one_shot_maps_only_the_subtitle() {
+        let args = sidecar_vtt_args("/lib/movie.mkv", 3, "/tmp/sess/subtitles.vtt");
+        let j = args.join(" ");
+        assert!(j.contains("-i /lib/movie.mkv"), "{j}");
+        assert!(j.contains("-map 0:3"), "extract the chosen stream: {j}");
+        assert!(j.contains("-c:s webvtt"), "{j}");
+        assert!(
+            j.contains("-f webvtt"),
+            "one-shot webvtt muxer, not hls: {j}"
+        );
+        assert!(
+            j.ends_with("/tmp/sess/subtitles.vtt"),
+            "output path is last: {j}"
+        );
+        // The whole point of the sidecar: it is NOT paced (-re) and NOT an HLS
+        // stream — those are what stalled the inline path. It must also carry no
+        // video/audio map (subtitle-only output).
+        assert!(!args.iter().any(|s| s == "-re"), "no -re pacing: {j}");
+        assert!(!args.iter().any(|s| s == "hls"), "no hls muxer: {j}");
+        assert!(!j.contains("0:v"), "no video map: {j}");
+        assert!(!j.contains("0:a"), "no audio map: {j}");
     }
 
     #[test]
