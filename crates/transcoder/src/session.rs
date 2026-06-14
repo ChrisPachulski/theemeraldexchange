@@ -22,7 +22,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, mpsc, oneshot};
 
-use crate::args::{ArgSpec, HwEncoder, ffmpeg_args_for};
+use crate::args::{ArgSpec, HwEncoder, ffmpeg_args_for, sidecar_vtt_args};
 use crate::concurrency::{Busy, Caps, Limiter, Permit};
 use crate::plan::TranscodePlan;
 
@@ -51,6 +51,12 @@ const CTL_ACK_TIMEOUT: Duration = Duration::from_secs(10);
 static START_SEQ: AtomicU64 = AtomicU64::new(0);
 
 pub type SessionId = String;
+
+/// Filename of the pre-extracted sidecar WebVTT inside a session dir. Written by
+/// the one-shot extraction at start (see [`SessionManager::spawn_sidecar_subtitle`]),
+/// served by the same `{segment}` asset route as the segments, and loaded by the
+/// player as a `<track>`. Passes [`is_safe_segment_name`] (alnum + `.`).
+pub const SIDECAR_SUBTITLE_NAME: &str = "subtitles.vtt";
 
 fn now_secs() -> u64 {
     SystemTime::now()
@@ -110,6 +116,12 @@ pub struct StartOpts {
     /// `None` only in the Off/log postures where no verified identity exists
     /// (routes skip enforcement accordingly).
     pub owner: Option<String>,
+    /// Absolute source stream index of a TEXT subtitle to pre-extract to a
+    /// sidecar `subtitles.vtt` (from [`crate::plan::plan_sidecar_subtitle`]), or
+    /// `None` when the title has no text subtitle. Drives a one-shot, detached
+    /// ffmpeg pass at session start, fully decoupled from the live HLS stream
+    /// (see [`SessionManager::spawn_sidecar_subtitle`]).
+    pub subtitle_source_index: Option<i64>,
 }
 
 /// A point-in-time view of a session for the admin inventory (§4.5 phase 7).
@@ -620,6 +632,66 @@ impl SessionManager {
         Ok(child)
     }
 
+    /// Spawn the detached, best-effort one-shot subtitle extraction for a
+    /// session, writing `<dir>/subtitles.vtt`. Fire-and-forget: the handle is
+    /// moved onto a task that drains stderr and reaps the child (so it never
+    /// lingers as a zombie), and any failure is LOGGED, never surfaced — the
+    /// live transcode is wholly independent of the sidecar. Unlike the live HLS
+    /// child this is a short pass (no `-re`, no HLS), so it does not go through
+    /// the supervisor and is not restarted: a failed extraction simply leaves
+    /// the title playing without selectable subs.
+    fn spawn_sidecar_subtitle(
+        &self,
+        session_id: &str,
+        input: &str,
+        dir: &std::path::Path,
+        source_index: i64,
+    ) {
+        let out_path = dir.join(SIDECAR_SUBTITLE_NAME);
+        let args = sidecar_vtt_args(input, source_index, &out_path.to_string_lossy());
+        let spawn = Command::new(&self.ffmpeg_bin)
+            .args(&args)
+            .current_dir(dir)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn();
+        let mut child = match spawn {
+            Ok(child) => child,
+            Err(e) => {
+                tracing::warn!(session = %session_id, error = %e, "failed to spawn sidecar subtitle extraction");
+                return;
+            }
+        };
+        let id = session_id.to_string();
+        let stderr = child.stderr.take();
+        tokio::spawn(async move {
+            if let Some(stderr) = stderr {
+                use tokio::io::{AsyncBufReadExt, BufReader};
+                let mut lines = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty() {
+                        tracing::warn!(session = %id, "sidecar ffmpeg: {trimmed}");
+                    }
+                }
+            }
+            // Reap the one-shot child so it cannot linger as a zombie.
+            match child.wait().await {
+                Ok(status) if status.success() => {
+                    tracing::debug!(session = %id, "sidecar subtitle extracted")
+                }
+                Ok(status) => {
+                    tracing::warn!(session = %id, %status, "sidecar subtitle extraction exited non-zero")
+                }
+                Err(e) => {
+                    tracing::warn!(session = %id, error = %e, "sidecar subtitle extraction could not be awaited")
+                }
+            }
+        });
+    }
+
     /// Start a session. Acquires a concurrency permit (mapping a cap hit to
     /// [`StartError::Busy`] → 503 transcoder_busy), creates the tmpdir, spawns
     /// ffmpeg, and registers the session. Returns the session id.
@@ -676,6 +748,15 @@ impl SessionManager {
         tokio::fs::create_dir_all(&dir)
             .await
             .map_err(|e| StartError::Io(e.to_string()))?;
+
+        // Kick the one-shot sidecar subtitle extraction (best-effort, detached):
+        // a SEPARATE short ffmpeg pass writes a complete subtitles.vtt beside the
+        // segments without -re/HLS, so it never delays the live stream's first
+        // segment (the stall that killed inline extraction). A failure just means
+        // the title plays without selectable subs — start never blocks on it.
+        if let Some(idx) = opts.subtitle_source_index {
+            self.spawn_sidecar_subtitle(&session_id, &opts.input_path, &dir, idx);
+        }
 
         let child = self.spawn_child(
             &session_id,
@@ -1206,6 +1287,8 @@ mod tests {
              mkdir -p \"$d\"\n\
              printf '%s' \"$$\" > \"$d/pid.txt\"\n\
              printf '%s\\n' \"$@\" > \"$d/args.txt\"\n\
+             case \"$last\" in *subtitles.vtt)\n\
+               printf 'WEBVTT\\n' > \"$last\"; exit 0;; esac\n\
              printf '#EXTM3U\\n#EXT-X-VERSION:3\\n' > \"$last\"\n\
              printf 'seg' > \"$d/seg_00000.ts\"\n\
              if [ \"{mode}\" = crash ]; then exit 1; fi\n\
@@ -1244,6 +1327,7 @@ mod tests {
             start_secs: 0,
             source_codec: None,
             owner: None,
+            subtitle_source_index: None,
         }
     }
 
@@ -1300,6 +1384,44 @@ mod tests {
         assert!(mgr.is_empty().await);
         // Tmpdir is cleaned on stop.
         assert!(!manifest.exists());
+    }
+
+    #[tokio::test]
+    async fn start_extracts_sidecar_subtitle_when_index_present() {
+        // With a selected subtitle index, start kicks the detached one-shot
+        // extraction; the stub (invoked with subtitles.vtt as its last/output
+        // arg) writes that file into the session dir. It is served by the same
+        // asset route as the segments (subtitles.vtt passes the safe-name gate).
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
+
+        let mut o = opts("/lib/movie.mkv");
+        o.subtitle_source_index = Some(2);
+        let id = mgr.start(o).await.unwrap();
+
+        let vtt = mgr.asset_path(&id, SIDECAR_SUBTITLE_NAME).await.unwrap();
+        wait_for(|| vtt.exists()).await;
+
+        mgr.stop(&id).await;
+    }
+
+    #[tokio::test]
+    async fn start_without_subtitle_index_writes_no_sidecar() {
+        // No selected subtitle → no extraction is spawned, so subtitles.vtt is
+        // never created even though the main session is fully up.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
+
+        let id = mgr.start(opts("/lib/movie.mkv")).await.unwrap();
+        let vtt = mgr.asset_path(&id, SIDECAR_SUBTITLE_NAME).await.unwrap();
+
+        // Once the main manifest is up the session is fully started; the sidecar
+        // must NOT exist (nothing was asked to extract).
+        let manifest = mgr.manifest_path(&id).await.unwrap();
+        wait_for(|| manifest.exists()).await;
+        assert!(!vtt.exists(), "no sidecar without a selected subtitle");
+
+        mgr.stop(&id).await;
     }
 
     #[tokio::test]
@@ -1791,6 +1913,7 @@ mod tests {
             start_secs: 0,
             source_codec: Some("hevc".into()),
             owner: None,
+            subtitle_source_index: None,
         }
     }
 
