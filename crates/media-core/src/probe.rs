@@ -84,26 +84,54 @@ async fn ffprobe_with_bin_timeout(
     path: &Path,
     deadline: Duration,
 ) -> Result<FileProbe, ProbeError> {
-    let child = Command::new(bin)
-        .arg("-v")
-        .arg("quiet")
-        .arg("-print_format")
-        .arg("json")
-        .arg("-show_format")
-        .arg("-show_streams")
-        // Bound the bytes/μs ffprobe will analyze on pathologically large but
-        // valid inputs (10s / 50MB are well above what stream metadata needs).
-        .arg("-analyzeduration")
-        .arg("10000000")
-        .arg("-probesize")
-        .arg("50000000")
-        .arg(path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| ProbeError::Spawn(e.to_string()))?;
+    let build = || {
+        let mut cmd = Command::new(bin);
+        cmd.arg("-v")
+            .arg("quiet")
+            .arg("-print_format")
+            .arg("json")
+            .arg("-show_format")
+            .arg("-show_streams")
+            // Bound the bytes/μs ffprobe will analyze on pathologically large but
+            // valid inputs (10s / 50MB are well above what stream metadata needs).
+            .arg("-analyzeduration")
+            .arg("10000000")
+            .arg("-probesize")
+            .arg("50000000")
+            .arg(path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        cmd
+    };
+
+    // Spawn, retrying the rare transient ETXTBSY ("text file busy"). On a loaded,
+    // multi-threaded host another thread's `fork()` (every concurrent
+    // `Command::spawn`) can momentarily inherit a just-written executable's
+    // write fd — `O_CLOEXEC` closes it only at THAT child's `exec`, so an
+    // `execve` racing the fork→exec window fails with ETXTBSY. This never fires
+    // for the stable, installed `ffprobe` in production (it is never freshly
+    // written), but it flaked tests that write+exec a fresh stub per case.
+    // Errno-specific and bounded, with a short backoff.
+    let mut child = None;
+    for attempt in 0..6u8 {
+        match build().spawn() {
+            Ok(c) => {
+                child = Some(c);
+                break;
+            }
+            Err(e)
+                if attempt < 5
+                    && (e.kind() == std::io::ErrorKind::ExecutableFileBusy
+                        || e.raw_os_error() == Some(26)) =>
+            {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            Err(e) => return Err(ProbeError::Spawn(e.to_string())),
+        }
+    }
+    let child = child.expect("spawn loop either returns a child or an error");
 
     let output = match tokio::time::timeout(deadline, child.wait_with_output()).await {
         Ok(Ok(output)) => output,
