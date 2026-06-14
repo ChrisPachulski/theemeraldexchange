@@ -59,6 +59,18 @@ function FullscreenExitIcon() {
     </svg>
   )
 }
+function SubtitlesIcon() {
+  // A captions glyph: rounded frame with two stroked "subtitle" lines. The
+  // active/inactive distinction is carried by the button's --active class +
+  // aria-pressed, not the icon, so one glyph serves both states.
+  return (
+    <svg className="media-controls__icon" viewBox="0 0 24 24" aria-hidden="true" fill="none"
+      stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="5" width="18" height="14" rx="2.5" />
+      <path d="M7 14h5M14.5 14h2.5M7 10.5h2.5M11.5 10.5h5.5" />
+    </svg>
+  )
+}
 
 // ── Why an app-drawn control bar ─────────────────────────────────────
 //
@@ -112,6 +124,74 @@ export function resolveSeekTarget(args: {
   return { kind: 'element', sessionSecs }
 }
 
+// ── Sidecar subtitle toggle ──────────────────────────────────────────
+//
+// Local-media transcodes ship a sidecar WebVTT as a native <track> on the
+// <video> (rendered by IptvPlayer). Forced/narrative tracks auto-show
+// (the <track default>); a non-forced track is LOADED but off. This bar — the
+// app-drawn controls for local media — owns the on/off toggle, driven entirely
+// through the NATIVE textTracks API.
+//
+// This deliberately sidesteps IptvPlayer's own track <select>, which is
+// hls.js-first: on the MSE path it drives `hls.subtitleTrack` (in-manifest HLS
+// subs) and cannot reach a native sidecar <track> at all — toggling it there is
+// a no-op for local media. Reading/writing `video.textTracks[i].mode` works
+// regardless of the playback engine because the sidecar <track> is a real DOM
+// child of the <video>, independent of the MSE pipeline.
+
+type TextTrackLike = { kind: string; mode: string; label?: string; language?: string }
+export type TextTrackListLike = {
+  length: number
+  [index: number]: TextTrackLike
+}
+type VideoWithTextTracks = HTMLVideoElement & { textTracks?: TextTrackListLike }
+
+// Only subtitle/caption tracks are user-toggleable here; metadata/chapters
+// tracks share the textTracks list but must never be flipped to 'showing'.
+const SUBTITLE_TRACK_KINDS = new Set(['subtitles', 'captions'])
+
+/** Indexes (into the textTracks list) of the subtitle/caption tracks, in
+ *  document order. Empty when there are none — the button stays hidden. */
+export function subtitleTrackIndexes(tracks: TextTrackListLike | undefined | null): number[] {
+  if (!tracks) return []
+  const out: number[] = []
+  for (let i = 0; i < tracks.length; i += 1) {
+    if (SUBTITLE_TRACK_KINDS.has(tracks[i].kind)) out.push(i)
+  }
+  return out
+}
+
+/** Index of the subtitle track currently 'showing', or -1 when subtitles are
+ *  off (a forced track ships as 'showing'; a non-forced one as 'disabled'). */
+export function showingSubtitleIndex(tracks: TextTrackListLike | undefined | null): number {
+  for (const i of subtitleTrackIndexes(tracks)) {
+    if (tracks![i].mode === 'showing') return i
+  }
+  return -1
+}
+
+/** Next target for a plain on/off toggle: if a subtitle is showing, turn
+ *  everything off (-1); otherwise show the first subtitle track. null when
+ *  there is nothing to toggle (so the caller can no-op). */
+export function nextSubtitleToggleIndex(
+  tracks: TextTrackListLike | undefined | null,
+): number | null {
+  const subs = subtitleTrackIndexes(tracks)
+  if (subs.length === 0) return null
+  return showingSubtitleIndex(tracks) === -1 ? subs[0] : -1
+}
+
+/** Apply a selection: the chosen subtitle index 'showing', every other
+ *  subtitle track 'disabled'. index === -1 turns all subtitle tracks off.
+ *  Non-subtitle tracks are left untouched. */
+export function applySubtitleSelection(video: VideoWithTextTracks, index: number): void {
+  const tracks = video.textTracks
+  if (!tracks) return
+  for (const i of subtitleTrackIndexes(tracks)) {
+    tracks[i].mode = i === index ? 'showing' : 'disabled'
+  }
+}
+
 type Props = {
   video: HTMLVideoElement
   /** Title time where the session's media 0 sits (the -ss offset). 0 for
@@ -143,6 +223,15 @@ export function MediaControls({
     Number.isFinite(video.duration) ? video.duration : null,
   )
   const [fullscreen, setFullscreen] = useState(false)
+  // Sidecar subtitle state, derived from the <video>'s native textTracks.
+  // `available` gates the CC button (no track → no button); `on` reflects
+  // whether a subtitle track is currently showing (a forced track ships on).
+  const [subtitleAvailable, setSubtitleAvailable] = useState(
+    () => subtitleTrackIndexes((video as VideoWithTextTracks).textTracks).length > 0,
+  )
+  const [subtitleOn, setSubtitleOn] = useState(
+    () => showingSubtitleIndex((video as VideoWithTextTracks).textTracks) !== -1,
+  )
   // While dragging, the scrubber shows the drag target, not the playhead.
   const [dragSecs, setDragSecs] = useState<number | null>(null)
   const dragRef = useRef<number | null>(null)
@@ -192,6 +281,30 @@ export function MediaControls({
     }
   }, [video, offsetSecs])
 
+  // Keep the CC button + its on/off state in sync with the native textTracks.
+  // The sidecar <track> loads asynchronously, so subtitles can appear after
+  // the bar mounts ('addtrack'); 'change' covers mode flips (ours or native).
+  // jsdom and older engines don't fire these reliably, so the toggle handler
+  // also sets state optimistically — this effect is the backstop, not the
+  // sole source of truth.
+  useEffect(() => {
+    const tracks = (video as VideoWithTextTracks).textTracks
+    const sync = () => {
+      setSubtitleAvailable(subtitleTrackIndexes(tracks).length > 0)
+      setSubtitleOn(showingSubtitleIndex(tracks) !== -1)
+    }
+    sync()
+    const list = tracks as unknown as EventTarget | undefined
+    list?.addEventListener?.('addtrack', sync)
+    list?.addEventListener?.('removetrack', sync)
+    list?.addEventListener?.('change', sync)
+    return () => {
+      list?.removeEventListener?.('addtrack', sync)
+      list?.removeEventListener?.('removetrack', sync)
+      list?.removeEventListener?.('change', sync)
+    }
+  }, [video])
+
   const totalSecs =
     totalDurationSecs ?? (elementDurationSecs != null ? offsetSecs + elementDurationSecs : null)
 
@@ -212,6 +325,14 @@ export function MediaControls({
   const toggleMute = () => {
     const el = videoElRef.current
     el.muted = !el.muted
+  }
+  const toggleSubtitles = () => {
+    const el = videoElRef.current as VideoWithTextTracks
+    const next = nextSubtitleToggleIndex(el.textTracks)
+    if (next === null) return
+    applySubtitleSelection(el, next)
+    // Optimistic: don't wait for the (engine-dependent) 'change' event.
+    setSubtitleOn(next !== -1)
   }
   const toggleFullscreen = () => {
     if (document.fullscreenElement) {
@@ -291,6 +412,20 @@ export function MediaControls({
       >
         {muted ? <VolumeOffIcon /> : <VolumeOnIcon />}
       </button>
+      {subtitleAvailable && (
+        <button
+          className={
+            'media-controls__button' +
+            (subtitleOn ? ' media-controls__button--active' : '')
+          }
+          type="button"
+          onClick={toggleSubtitles}
+          aria-label={subtitleOn ? 'Turn off subtitles' : 'Turn on subtitles'}
+          aria-pressed={subtitleOn}
+        >
+          <SubtitlesIcon />
+        </button>
+      )}
       <button
         className="media-controls__button"
         type="button"

@@ -61,6 +61,15 @@
   outline-offset: 2px;
 }
 
+/* Subtitles toggled ON — emerald so the active state reads at a glance
+   (mirrors the scrubber/thumb accent), distinct from the muted rest color. */
+.media-controls__button--active {
+  color: var(--emerald);
+}
+.media-controls__button--active:hover {
+  color: var(--emerald-hover);
+}
+
 /* Play/pause is the primary action — brighter at rest, emerald on hover. */
 .media-controls__button--primary {
   color: var(--text);
