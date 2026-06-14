@@ -267,6 +267,18 @@ pub async fn scan_once(
     roots: &[LibraryRoot],
     tmdb: &TmdbClient,
 ) -> Result<ScanReport, AppError> {
+    // Production probes with the installed `ffprobe`. The binary is threaded so
+    // the crit-2 100-file timing harness can drive scan_once end-to-end against
+    // a deterministic stub (see `scan_once_100_file_library_under_5s`).
+    scan_once_with_probe_bin(db, roots, tmdb, "ffprobe").await
+}
+
+async fn scan_once_with_probe_bin(
+    db: &Db,
+    roots: &[LibraryRoot],
+    tmdb: &TmdbClient,
+    ffprobe_bin: &str,
+) -> Result<ScanReport, AppError> {
     let mut report = ScanReport::default();
 
     // The walk + per-file stat is blocking FS I/O; run it off the runtime.
@@ -305,7 +317,7 @@ pub async fn scan_once(
             }
             Ok(existing) => {
                 let is_update = existing.is_some();
-                let probe_result = probe::ffprobe(&file.path).await;
+                let probe_result = probe::ffprobe_with_bin(ffprobe_bin, &file.path).await;
                 let probed = match probe_result {
                     Ok(p) => p,
                     Err(e) => {
@@ -2216,11 +2228,21 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(unix)]
     async fn scan_once_100_file_library_under_5s() {
-        // Coarse regression guard for the stated success criterion (scanner.rs
-        // line 11: "a 100-file fixture library scans in < 5s"). NOT a benchmark:
-        // empty files fail ffprobe fast (or ffprobe is absent), so the walk +
-        // stat + lookup loop dominates and should be well under the ceiling.
+        // Regression guard for the stated success criterion (scanner.rs line 11:
+        // "a 100-file fixture library scans in < 5s"). Drives the REAL scan_once
+        // orchestration end-to-end — walk + stat + skip-check + classify + the
+        // movie/episode upserts + prune/GC reconciliation — over a 100-file
+        // library. A deterministic ffprobe stub stands in for the binary so
+        // every file actually PROBES + INDEXES (the bar then covers the DB write
+        // path, not just the walk-then-error path empty files would take), and
+        // the figure reflects scan_once's own overhead rather than ffprobe's
+        // variable decode cost. Runs without real media files or an installed
+        // ffprobe, as CI does.
+        let stub_dir = tempfile::tempdir().unwrap();
+        let stub = crate::probe::write_echoing_stub_path(stub_dir.path());
+
         let tmp = tempdir().unwrap();
         build_synthetic_library(tmp.path(), 100, 0);
         let db = Db::connect_memory().await.unwrap();
@@ -2229,12 +2251,16 @@ mod tests {
             kind: RootKind::Movies,
         }];
         let start = std::time::Instant::now();
-        let report = scan_once(&db, &roots, &no_tmdb()).await.unwrap();
+        let report = scan_once_with_probe_bin(&db, &roots, &no_tmdb(), stub.to_str().unwrap())
+            .await
+            .unwrap();
         let elapsed = start.elapsed();
-        assert_eq!(report.files_seen, 100);
+        assert_eq!(report.files_seen, 100, "all 100 videos walked");
+        assert_eq!(report.files_added, 100, "all 100 videos probed + indexed");
+        assert_eq!(report.errors, 0, "no probe/index errors on the clean fixture");
         assert!(
             elapsed < std::time::Duration::from_secs(5),
-            "scan took {elapsed:?}"
+            "100-file scan took {elapsed:?} (crit-2 bar: <5s)"
         );
     }
 
