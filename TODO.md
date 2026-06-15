@@ -88,12 +88,14 @@ now; it is the only thing the Apple gate does not block.
       libx264 when no GPU), with a full-HW decode→tone-map→scale pipeline behind
       a source-codec allowlist + boot probe (`8d4c373`). 3 concurrent
       HEVC→H.264 GPU sessions proven on the NAS iGPU.
-- [ ] **Build the M4 stress/bench harness on NAS hardware** (non-optional per
-      spec) → capture CPU/latency for crit 2/3/6. `TRANSCODER_FORCE_CPU=1`
-      already exists and 3 concurrent GPU sessions were proven informally
-      (2026-06-08), but the formal measurement evidence still doesn't exist —
-      and the crit-6 seek number (~23–27 s) predates the VAAPI pipeline and
-      needs re-measuring.
+- [x] **M4 stress/bench harness DONE (2026-06-14).** `scripts/m4-stress-bench.sh`
+      runs N concurrent real HEVC→H.264 re-encodes on the NAS under a Plex-safety
+      watchdog and captured the formal crit-2/3/6 evidence (N=4/60s): crit-3 peak
+      **48% box CPU** @ 4 concurrent (ceiling 80%, Plex healthy), crit-2 **3.2–4.0×
+      real-time sustain** per session, crit-6 **0.54 s** post-seek TTFS (was the
+      stale ~23–27 s). Detail + reproduce in docs/M4-TRANSCODE-VERIFICATION.md
+      §Stress / bench. Remaining M4: the Apple-Silicon (VideoToolbox) crit-2
+      variant (no AS host) + a formal long soak (crit-4).
 - [x] **M3 scan-timing harness (crit 2) DONE (2026-06-14, `65e3fc3`).** The
       `scan_once_100_file_library_under_5s` test now drives the REAL `scan_once`
       orchestration over a 100-file fixture (walk + stat + classify + the

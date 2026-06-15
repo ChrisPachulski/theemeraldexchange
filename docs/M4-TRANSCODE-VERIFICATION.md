@@ -120,3 +120,38 @@ the SIGTERM -> grace -> SIGKILL child escalation (KILL_GRACE = 5s in
 > NOTE: `crates/media-core/src/main.rs` has the identical SIGINT-only
 > `shutdown_signal()` defect. It is a separate subsystem and is intentionally
 > **not** touched here; flag it to the media-core owner.
+
+## Stress / bench on NAS hardware (2026-06-14)
+
+The "non-optional per spec" stress/bench evidence now exists. Harness:
+`scripts/m4-stress-bench.sh [concurrency] [duration_secs]` — runs ON the NAS,
+auto-selects N real HEVC files from `media.db`, grants N **concurrent
+HEVC→H.264 re-encode** sessions through the authenticated transcoder surface
+(forced `h264/mp4/SDR` caps so none degrade to a copy-remux), heartbeats each
+session like a real player, samples box CPU (`/proc/stat` deltas) + load + Plex
+health every few seconds under a watchdog that stops every session the instant
+the box or Plex degrades, and reports per-session real-time sustain + post-seek
+TTFS. An EXIT trap stops all sessions on any exit so a `-re` session can't leak.
+
+**Run: `N=4`, 60 s sustained window, NAS = 6-thread x86 + Intel VAAPI iGPU, 2 s
+segments. Plex stayed `healthy` the entire run; box load peaked 0.56 (0.09/core).**
+
+| Criterion | Target | Measured | Verdict |
+|---|---|---|---|
+| crit-3 concurrency cost | 4 concurrent under 80% box CPU | **peak 48% / avg 18%** box CPU; transcoder container 92.6% (≈<1 core — VAAPI offloads encode to the iGPU) | **PASS** |
+| crit-2 real-time sustain (NAS-side) | ≥ 1.0× playback | **3.17×–4.00×** per session across all 4 | **PASS** |
+| crit-6 seek latency | < 2 s | **0.54 s** post-seek time-to-first-segment | **PASS** |
+| cold concurrent startup | — | **1.72–1.74 s** TTFS, 4 concurrent cold starts | — |
+
+This supersedes the stale single-session `~23–27 s` seek figure above (CPU
+libx264 pipeline, pre-VAAPI, pre-2 s-segments): on the VAAPI pipeline a seek
+reaches first segment in **~0.5 s**. A 2-concurrent smoke run measured 7.4×
+sustain; per-session throughput settles toward 3–4× at 4 concurrent as the
+sessions share the iGPU, still comfortably above real-time.
+
+**Still open (not closed by this run):** the *Apple-Silicon* variant of crit-2
+(VideoToolbox) is untestable — the deployed target is x86 VAAPI with no AS
+transcode host — and a formal long-running soak (crit-4) is not yet recorded.
+
+Reproduce: `scp scripts/m4-stress-bench.sh root@<nas>:/tmp/ && ssh root@<nas>
+'bash /tmp/m4-stress-bench.sh 4 60'`.
