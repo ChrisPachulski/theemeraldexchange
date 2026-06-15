@@ -36,7 +36,7 @@ import sqlite3
 import numpy as np
 
 from ..context import Candidate, TitleRow, UserContext, title_key_variants
-from ..db import deserialize_f32, table_generation
+from ..db import GENRE_AGG_SQL, deserialize_f32, table_generation
 from ..reasons import discover_reason, personalized_reason, trending_reason
 from ..retrieval import AVAILABLE_TITLE_PREDICATE, cold_start_pool, retrieve_candidates
 from ..schemas import ScoredItem
@@ -92,11 +92,7 @@ def _load_catalog(conn: sqlite3.Connection, kind: str, min_votes: int) -> dict:
     rows = conn.execute(
         f"""SELECT t.tmdb_id, t.title, t.year, t.poster_path, t.overview,
                   COALESCE(t.popularity, 0) AS popularity, t.vote_average,
-                  (SELECT GROUP_CONCAT(genre_id) FROM (
-                     SELECT g.genre_id FROM title_genres g
-                     WHERE g.kind = t.kind AND g.tmdb_id = t.tmdb_id
-                     ORDER BY g.genre_id
-                   )) AS genres,
+                  {GENRE_AGG_SQL},
                   f.embedding AS embedding, f.dim AS dim
            FROM titles t
            JOIN title_features f ON f.kind = t.kind AND f.tmdb_id = t.tmdb_id
