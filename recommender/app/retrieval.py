@@ -14,7 +14,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .context import IN_BATCH_SIZE, Candidate, TitleRow, UserContext, title_key_variants
-from .db import decode_vec_rowid, deserialize_f32, serialize_f32
+from .db import GENRE_AGG_SQL, decode_vec_rowid, deserialize_f32, serialize_f32
 from .schemas import Kind
 
 log = logging.getLogger(__name__)
@@ -91,11 +91,7 @@ def retrieve_candidates(
                 f"""SELECT t.tmdb_id, t.kind, t.title, t.year, t.poster_path, t.overview,
                           COALESCE(t.popularity, 0) AS popularity, t.vote_average,
                           COALESCE(t.vote_count, 0) AS vote_count,
-                          (SELECT GROUP_CONCAT(genre_id) FROM (
-                             SELECT g.genre_id FROM title_genres g
-                             WHERE g.kind = t.kind AND g.tmdb_id = t.tmdb_id
-                             ORDER BY g.genre_id
-                           )) AS genres,
+                          {GENRE_AGG_SQL},
                           f.embedding AS embedding, f.dim AS dim
                    FROM titles t
                    JOIN title_features f ON f.kind = t.kind AND f.tmdb_id = t.tmdb_id
@@ -161,11 +157,7 @@ def cold_start_pool(
     rows = conn.execute(
         f"""SELECT t.tmdb_id, t.title, t.year, t.poster_path, t.overview,
                   COALESCE(t.popularity, 0) AS popularity, t.vote_average,
-                  (SELECT GROUP_CONCAT(genre_id) FROM (
-                     SELECT g.genre_id FROM title_genres g
-                     WHERE g.kind = t.kind AND g.tmdb_id = t.tmdb_id
-                     ORDER BY g.genre_id
-                   )) AS genres
+                  {GENRE_AGG_SQL}
            FROM titles t
            WHERE t.kind = ?
              AND COALESCE(t.vote_count, 0) >= ?

@@ -47,6 +47,17 @@ from .config import CONFIG
 log = logging.getLogger(__name__)
 
 
+# Correlated genre-aggregation subquery, identical across every title SELECT
+# (retrieval, context, item_knn). Splice into a SELECT column list whose
+# titles table is aliased ``t``; yields a comma-joined, genre_id-ordered
+# string column ``genres``.
+GENRE_AGG_SQL = """(SELECT GROUP_CONCAT(genre_id) FROM (
+                     SELECT g.genre_id FROM title_genres g
+                     WHERE g.kind = t.kind AND g.tmdb_id = t.tmdb_id
+                     ORDER BY g.genre_id
+                   )) AS genres"""
+
+
 VEC_TABLE_DDL = """
 CREATE VIRTUAL TABLE IF NOT EXISTS title_vec USING vec0(
   rowid         INTEGER PRIMARY KEY,
