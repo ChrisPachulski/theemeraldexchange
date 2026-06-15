@@ -41,7 +41,7 @@ from ..db import table_generation
 from ..reasons import discover_reason, personalized_reason, trending_reason
 from ..retrieval import cold_start_pool, retrieve_candidates
 from ..schemas import ScoredItem
-from . import RecipeResult
+from . import RecipeResult, _normalize, EMBED_EPS
 
 DEFAULTS: dict[str, float | int | str] = {
     "pool_size": 800,
@@ -56,7 +56,6 @@ DEFAULTS: dict[str, float | int | str] = {
 }
 
 KEY_CREW_JOBS = ("Director", "Writer", "Screenplay", "Story", "Creator", "Author", "Novel")
-EMBED_EPS = 1e-9
 
 # Global IDF over the catalog, cached per (kind, which, cast_topn). df is the
 # number of titles a person appears in (top-billed cast / key crew). cast_topn
@@ -66,11 +65,6 @@ EMBED_EPS = 1e-9
 # table_generation fingerprint it was computed against and is recomputed when
 # the underlying tables move.
 _IDF: dict[tuple[str, str, int], tuple[tuple, dict[int, float]]] = {}
-
-
-def _normalize(v: np.ndarray) -> np.ndarray:
-    n = np.linalg.norm(v)
-    return v / n if n > 0 else v
 
 
 def _idf_map(

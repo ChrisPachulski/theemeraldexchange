@@ -5,22 +5,8 @@ import { useSonarrProfiles, useSonarrRootFolders } from '../../lib/hooks/useSona
 import { useAuth } from '../../lib/auth'
 import { useLimits } from '../../lib/hooks/useLimits'
 import { useDialogDismiss } from '../../lib/useDialogDismiss'
+import { pickDefaultProfileId } from '../../lib/pickDefaultProfileId'
 import './AddSeriesModal.css'
-
-// Pick the household's curated profile by name (case-insensitive)
-// when present; otherwise fall back to whatever Sonarr returns first.
-// The name comes from /api/limits.defaultProfileName — see
-// AddMovieModal for the full rationale. Hardcoding "choose me" used
-// to silently disagree with the server whenever the operator set
-// DEFAULT_PROFILE_NAME to something else.
-function pickDefaultProfileId(
-  profiles: { id: number; name: string }[] | undefined,
-  preferredName: string,
-): number | null {
-  if (!profiles || profiles.length === 0) return null
-  const preferred = profiles.find((p) => p.name.toLowerCase() === preferredName)
-  return (preferred ?? profiles[0]).id
-}
 
 type Props = {
   series: SeriesSearchResult | null

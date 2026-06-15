@@ -40,7 +40,7 @@ from ..db import deserialize_f32, table_generation
 from ..reasons import discover_reason, personalized_reason, trending_reason
 from ..retrieval import AVAILABLE_TITLE_PREDICATE, cold_start_pool, retrieve_candidates
 from ..schemas import ScoredItem
-from . import RecipeResult
+from . import RecipeResult, EMBED_EPS
 
 DEFAULTS: dict[str, float | int | str] = {
     "popularity_weight": 0.05,
@@ -60,8 +60,6 @@ DEFAULTS: dict[str, float | int | str] = {
     "candidate_pool": "full",
     "pool_size": 800,
 }
-
-EMBED_EPS = 1e-9
 
 # The default candidate_pool="full" scores the ENTIRE eligible catalog per
 # request ("brute-force, offline-only" — see DEFAULTS above). The optimizer

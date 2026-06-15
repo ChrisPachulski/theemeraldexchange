@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { apiUrl } from '../../lib/api/base'
 import { useDocumentVisible } from '../../lib/hooks/useVisibility'
+import { fmtCost } from '../../lib/fmtCost'
 import './UsageDashboard.css'
 
 // Admin-only roster of per-user Anthropic API spend. Mirrors the
@@ -25,12 +26,6 @@ async function fetchAdminUsage(): Promise<UsageRow[]> {
   const r = await fetch(apiUrl('/api/usage/admin'), { credentials: 'include' })
   if (!r.ok) throw new Error(`usage admin failed: ${r.status}`)
   return (await r.json()) as UsageRow[]
-}
-
-function fmtCost(cents: number): string {
-  if (cents <= 0) return '$0.00'
-  if (cents < 1) return `~$${(cents / 100).toFixed(4)}`
-  return `~$${(cents / 100).toFixed(2)}`
 }
 
 function fmtTokens(n: number): string {

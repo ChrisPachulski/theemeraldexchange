@@ -23,7 +23,7 @@
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { serverDb } from './serverDb.js'
-import { parseSub } from './sub.js'
+import { parseSub, isValidSub } from './sub.js'
 import type { Member } from './members.js'
 import type { AuthMode } from '../session.js'
 
@@ -314,15 +314,6 @@ function escapeLike(s: string): string {
   return s.replace(/[\\%_]/g, m => `\\${m}`)
 }
 
-/** True when `sub` is a syntactically valid namespaced sub. */
-function isValidSub(sub: string): boolean {
-  try {
-    parseSub(sub)
-    return true
-  } catch {
-    return false
-  }
-}
 
 // Re-export Member so consumers importing the redeem surface can type the
 // resulting allowlist row without a second import.
