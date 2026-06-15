@@ -857,17 +857,27 @@ mod tests {
             query_year: Option<i64>,
             expected_tmdb_id: Option<i64>,
             results: serde_json::Value,
+            /// A case the matcher is KNOWN not to resolve today — it documents a
+            /// real limitation (e.g. a filename in a film's original/romaji title
+            /// vs TMDB's English `title`, or a stylized numeral like "Se7en"),
+            /// i.e. the "language filter absent" gap. Allowed to miss so the
+            /// corpus stays representative instead of cherry-picked to 100%; a
+            /// gap case that starts PASSING (matcher improved) simply lifts the
+            /// score. Clean (non-gap) cases must always match.
+            #[serde(default)]
+            known_gap: bool,
         }
         let raw = include_str!("../tests/fixtures/tmdb-match-accuracy.json");
         let cases: Vec<Case> = serde_json::from_str(raw).expect("accuracy fixture parses");
         assert!(
-            cases.len() >= 20,
-            "corpus too small ({}) to be a meaningful eval",
+            cases.len() >= 45,
+            "corpus too small ({}) for a representative ≥95% eval",
             cases.len()
         );
 
         let mut correct = 0usize;
-        let mut misses: Vec<String> = Vec::new();
+        let mut clean_misses: Vec<String> = Vec::new();
+        let mut gap_misses: Vec<String> = Vec::new();
         for c in &cases {
             let doc = json!({ "results": c.results });
             let got = parse_search_response(&doc, c.is_movie, &c.query_title, c.query_year)
@@ -875,30 +885,45 @@ mod tests {
             if got == c.expected_tmdb_id {
                 correct += 1;
             } else {
-                misses.push(format!(
+                let line = format!(
                     "{}: expected {:?}, got {:?}",
                     c.name, c.expected_tmdb_id, got
-                ));
+                );
+                if c.known_gap {
+                    gap_misses.push(line);
+                } else {
+                    clean_misses.push(line);
+                }
             }
         }
         let total = cases.len();
         let accuracy = correct as f64 / total as f64;
         eprintln!(
-            "TMDB match accuracy: {correct}/{total} = {:.1}%",
-            accuracy * 100.0
+            "TMDB match accuracy: {correct}/{total} = {:.1}% ({} known-gap miss(es))",
+            accuracy * 100.0,
+            gap_misses.len()
         );
-        for m in &misses {
+        for m in gap_misses.iter().chain(clean_misses.iter()) {
             eprintln!("  MISS {m}");
         }
 
-        // Regression floor for the matcher's selection accuracy (crit-3).
-        const ACCURACY_FLOOR: f64 = 1.0;
+        // Two gates. (1) Every CLEAN case must resolve — a regression on a case
+        // the matcher is supposed to handle fails immediately, regardless of the
+        // distributional score. (2) The whole corpus must clear the crit-3 bar
+        // of ≥95% accuracy. Known-gap cases are permitted to miss under (2) but
+        // are still reported, so the documented limitation stays visible.
+        assert!(
+            clean_misses.is_empty(),
+            "matcher regressed on case(s) it must handle:\n{}",
+            clean_misses.join("\n")
+        );
+        const ACCURACY_FLOOR: f64 = 0.95; // M3 crit-3 success criterion
         assert!(
             accuracy >= ACCURACY_FLOOR,
-            "TMDB match accuracy {:.1}% fell below the {:.0}% floor:\n{}",
+            "TMDB match accuracy {:.1}% fell below the {:.0}% crit-3 floor:\n{}",
             accuracy * 100.0,
             ACCURACY_FLOOR * 100.0,
-            misses.join("\n")
+            gap_misses.join("\n")
         );
     }
 }
