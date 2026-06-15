@@ -467,9 +467,14 @@ async fn session_manifest(
     }
 
     // Native players (AVKit) read the playlist directly and render an
-    // ENDLIST-less EVENT playlist as a LIVE stream (no scrubber). Serve them a
-    // complete VOD playlist synthesized from the known duration instead; web
-    // (hls.js) falls through to the on-disk EVENT playlist below, unchanged.
+    // ENDLIST-less EVENT playlist as a LIVE stream (no scrubber). For RE-ENCODE
+    // sessions, serve them a complete VOD playlist synthesized from the known
+    // duration instead (segments are keyframe-forced and uniform, so the
+    // synthesized list matches what ffmpeg writes). COPY-remux sessions return
+    // None from `vod_manifest` (ragged, unpredictable segments — a synthesized
+    // uniform manifest would mismatch the real files and fail AVPlayer with
+    // CoreMediaErrorDomain -4) and fall through to the on-disk playlist below,
+    // exactly like web (hls.js).
     if is_native_hls_client(&headers)
         && let Some(body) = state.sessions.vod_manifest(&id).await
     {

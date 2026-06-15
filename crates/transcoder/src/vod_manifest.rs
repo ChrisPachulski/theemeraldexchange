@@ -7,13 +7,21 @@
 //! and cannot be scrubbed. hls.js (the web player) handles `EVENT` fine, but a
 //! native player needs a finite VOD timeline up front.
 //!
-//! The source duration is known at grant time and the encoder forces a keyframe
-//! on every `HLS_SEGMENT_SECS` boundary, so the segment count is deterministic:
-//! `ceil(remaining / HLS_SEGMENT_SECS)`. That lets us emit a COMPLETE VOD
-//! playlist — full segment list + `#EXT-X-ENDLIST` — before a single segment
-//! exists. The native player gets a real scrubber immediately; segments are
-//! served on demand as the (faster-than-realtime) encoder produces them, with a
-//! short wait-for-segment in `routes::session_segment` covering the frontier.
+//! This applies ONLY to RE-ENCODE sessions. There the encoder forces a keyframe
+//! on every `HLS_SEGMENT_SECS` boundary (`-force_key_frames`), so the segment
+//! count is deterministic — `ceil(remaining / HLS_SEGMENT_SECS)` — and every
+//! segment is exactly `HLS_SEGMENT_SECS` long except a short final one. That
+//! lets us emit a COMPLETE VOD playlist — full segment list + `#EXT-X-ENDLIST` —
+//! before a single segment exists. The native player gets a real scrubber
+//! immediately; segments are served on demand as the (faster-than-realtime)
+//! encoder produces them, with a short wait-for-segment in
+//! `routes::session_segment` covering the frontier.
+//!
+//! A COPY-remux (HEVC→fMP4 / H264→TS) does NOT force keyframes — ffmpeg cuts at
+//! the source's own keyframes into ragged, variable-length segments whose count
+//! and durations cannot be predicted up front. So `SessionManager::vod_manifest`
+//! does NOT call this for copy sessions; they serve ffmpeg's real on-disk
+//! playlist (correct segments; gains `#EXT-X-ENDLIST` when the remux finishes).
 //!
 //! This is served ONLY to native clients; web keeps the proven `EVENT` playlist.
 
