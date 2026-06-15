@@ -12,7 +12,6 @@ writes new rows here on each nightly run.
 from __future__ import annotations
 
 from importlib import import_module
-from typing import Protocol
 
 import numpy as np
 
@@ -28,11 +27,6 @@ EMBED_EPS = 1e-9
 def _normalize(v: np.ndarray) -> np.ndarray:
     n = np.linalg.norm(v)
     return v / n if n > 0 else v
-
-
-class RecipeScore(Protocol):
-    def __call__(self, ctx, conn, *, n: int, params: dict) -> "RecipeResult":  # noqa: D401
-        ...
 
 
 class RecipeResult:

@@ -1,4 +1,5 @@
 import { useEffect, useState, type RefObject } from 'react'
+import { prefersReducedMotion } from './viewTransition'
 
 // Deferred-unmount lifecycle for a native <dialog> so its exit transition
 // (the `:not([open])` + allow-discrete CSS from b23ebaa) can actually play
@@ -40,11 +41,7 @@ export function useDialogDismiss(
     // open === false: begin the closing transition by dropping `[open]`.
     if (d.open) d.close()
 
-    const reduce =
-      typeof window.matchMedia === 'function' &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches
-
-    if (reduce) {
+    if (prefersReducedMotion()) {
       // No transition is playing — unmount on the next tick. Deferred (not a
       // synchronous setState in the effect body) to avoid a cascading render.
       const t = window.setTimeout(() => setRendered(false), 0)

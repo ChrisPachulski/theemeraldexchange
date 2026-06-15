@@ -1,49 +1,6 @@
-import { throwApiError } from './errors'
-import { apiUrl } from './base'
+import { createArrClient } from './arrClient'
 
-const BASE = '/api/sonarr/api/v3'
-
-async function get<T>(path: string, params?: Record<string, string | number | boolean>): Promise<T> {
-  const res = await fetch(apiUrl(`${BASE}${path}`, params), {
-    credentials: 'include',
-  })
-  if (!res.ok) await throwApiError(res, `Sonarr ${path}`)
-  return res.json() as Promise<T>
-}
-
-async function post<T, B>(path: string, body: B): Promise<T> {
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), 60_000)
-  try {
-    const res = await fetch(apiUrl(`${BASE}${path}`), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify(body),
-      signal: ctrl.signal,
-    })
-    if (!res.ok) await throwApiError(res, `Sonarr ${path}`)
-    return res.json() as Promise<T>
-  } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
-      throw new Error(
-        `Sonarr ${path}: request timed out after 60s; the server is taking too long. Check Sonarr is reachable from the dashboard server.`,
-        { cause: err },
-      )
-    }
-    throw err
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
-async function del(path: string, params?: Record<string, string | number | boolean>): Promise<void> {
-  const res = await fetch(apiUrl(`${BASE}${path}`, params), {
-    method: 'DELETE',
-    credentials: 'include',
-  })
-  if (!res.ok) await throwApiError(res, `Sonarr ${path}`)
-}
+const { get, post, del } = createArrClient('Sonarr', '/api/sonarr/api/v3')
 
 export type SystemStatus = {
   version: string

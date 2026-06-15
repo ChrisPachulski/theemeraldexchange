@@ -14,11 +14,12 @@ import math
 import re
 import sqlite3
 from dataclasses import dataclass, field
+from itertools import batched
 from datetime import datetime, timezone
 
 import numpy as np
 
-from .db import deserialize_f32, transaction
+from .db import GENRE_AGG_SQL, deserialize_f32, transaction
 from .schemas import Kind, ScoreRequest
 
 log = logging.getLogger(__name__)
@@ -126,25 +127,16 @@ def title_key_variants(title: str | None) -> set[str]:
     return out
 
 
-def _chunks(ids: list[int], size: int = IN_BATCH_SIZE):
-    for i in range(0, len(ids), size):
-        yield ids[i : i + size]
-
-
 def _load_title_rows(conn: sqlite3.Connection, kind: Kind, ids: list[int]) -> dict[int, TitleRow]:
     if not ids:
         return {}
     out: dict[int, TitleRow] = {}
-    for batch in _chunks(sorted(set(ids))):
+    for batch in batched(sorted(set(ids)), IN_BATCH_SIZE):
         placeholders = ",".join("?" for _ in batch)
         rows = conn.execute(
             f"""SELECT t.tmdb_id, t.kind, t.title, t.year, t.poster_path, t.overview,
                       COALESCE(t.popularity, 0) AS popularity, t.vote_average,
-                      (SELECT GROUP_CONCAT(genre_id) FROM (
-                         SELECT g.genre_id FROM title_genres g
-                         WHERE g.kind = t.kind AND g.tmdb_id = t.tmdb_id
-                         ORDER BY g.genre_id
-                       )) AS genres
+                      {GENRE_AGG_SQL}
                FROM titles t
                WHERE t.kind = ? AND t.tmdb_id IN ({placeholders})""",
             (kind, *batch),
@@ -174,7 +166,7 @@ def _load_embeddings(
 ) -> dict[int, np.ndarray]:
     out: dict[int, np.ndarray] = {}
     ordered = sorted(ids)
-    for batch in _chunks(ordered):
+    for batch in batched(ordered, IN_BATCH_SIZE):
         placeholders = ",".join("?" for _ in batch)
         rows = conn.execute(
             f"""SELECT tmdb_id, embedding, dim
