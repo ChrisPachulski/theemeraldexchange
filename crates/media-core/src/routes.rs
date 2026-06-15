@@ -969,18 +969,20 @@ async fn fetch_episode_meta(
     let rows = query.fetch_all(&state.db.pool).await?;
     Ok(rows
         .into_iter()
-        .map(|(id, episode_title, show_title, poster_path, season, episode)| {
-            (
-                id,
-                EpisodeMeta {
-                    episode_title,
-                    show_title,
-                    poster_path,
-                    season,
-                    episode,
-                },
-            )
-        })
+        .map(
+            |(id, episode_title, show_title, poster_path, season, episode)| {
+                (
+                    id,
+                    EpisodeMeta {
+                        episode_title,
+                        show_title,
+                        poster_path,
+                        season,
+                        episode,
+                    },
+                )
+            },
+        )
         .collect())
 }
 
