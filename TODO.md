@@ -103,9 +103,15 @@ now; it is the only thing the Apple gate does not block.
       100 files actually probe + index and the test asserts `files_added == 100`,
       `errors == 0`, and `<5s` — exercising the DB write path, not just the
       walk-then-error path the prior empty-file guard took. Measured well under
-      1s locally. **(crit 3 DONE 2026-06-13** — the TMDB match-accuracy eval now
-      exists: a 24-case corpus drives the real selection logic in
-      `crates/media-core/tmdb.rs` and asserts a 100% accuracy floor, `2c19038`.)
+      1s locally.
+- [x] **M3 match-accuracy eval (crit 3) DONE (2026-06-14).** `tmdb_match_accuracy_eval`
+      drives the real `parse_search_response` selection over a representative
+      **51-case** labeled corpus and measures **49/51 = 96.1%**, clearing the
+      ≥95% crit-3 bar. Two gates: every *clean* case must resolve (immediate
+      regression catch) **and** overall ≥95%. The only misses are the documented
+      language-filter gap (original/romaji title vs TMDB English `title`; stylized
+      "Se7en"), flagged `known_gap` so the corpus is representative, not
+      cherry-picked to 100% (the prior 24-case/100% eval `2c19038` was circular).
 
 ## P1 — Close the contract & infra loose ends
 
