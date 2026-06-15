@@ -856,7 +856,132 @@ async fn get_watch(
     .bind(&sub)
     .fetch_all(&state.db.pool)
     .await?;
-    Ok(Json(json!({ "items": rows })))
+
+    // Enrich each row with display metadata (title / poster / season / episode)
+    // so the client's "continue watching" shelf renders a real title and poster
+    // without a second round-trip or a local library join — the Home tab has
+    // neither the show nor episode catalogs loaded, so an un-enriched episode row
+    // could only show a generic "Episode" with no art. Extra fields are additive;
+    // existing consumers ignore them.
+    let movie_ids: Vec<i64> = rows
+        .iter()
+        .filter(|r| r.media_kind == "movie")
+        .map(|r| r.media_id)
+        .collect();
+    let episode_ids: Vec<i64> = rows
+        .iter()
+        .filter(|r| r.media_kind == "episode")
+        .map(|r| r.media_id)
+        .collect();
+    let movie_meta = fetch_movie_meta(&state, &movie_ids).await?;
+    let episode_meta = fetch_episode_meta(&state, &episode_ids).await?;
+
+    let items: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            let mut v = json!({
+                "sub": r.sub,
+                "media_kind": r.media_kind,
+                "media_id": r.media_id,
+                "position_secs": r.position_secs,
+                "duration_secs": r.duration_secs,
+                "watched_at": r.watched_at,
+                "completed": r.completed,
+            });
+            let obj = v.as_object_mut().expect("json object");
+            match r.media_kind.as_str() {
+                "movie" => {
+                    if let Some((title, poster)) = movie_meta.get(&r.media_id) {
+                        obj.insert("title".into(), json!(title));
+                        obj.insert("poster_path".into(), json!(poster));
+                    }
+                }
+                "episode" => {
+                    if let Some(e) = episode_meta.get(&r.media_id) {
+                        obj.insert("title".into(), json!(e.episode_title));
+                        obj.insert("show_title".into(), json!(e.show_title));
+                        obj.insert("poster_path".into(), json!(e.poster_path));
+                        obj.insert("season".into(), json!(e.season));
+                        obj.insert("episode".into(), json!(e.episode));
+                    }
+                }
+                _ => {}
+            }
+            v
+        })
+        .collect();
+
+    Ok(Json(json!({ "items": items })))
+}
+
+/// Show + episode display metadata for one watched episode (Bug: Home "continue
+/// watching" rows showed a bare "Episode" with no art because the client had no
+/// episode→show catalog to join against).
+struct EpisodeMeta {
+    episode_title: Option<String>,
+    show_title: String,
+    poster_path: Option<String>,
+    season: i64,
+    episode: i64,
+}
+
+/// Batch-resolve `movies.id → (title, poster_path)` for the watch shelf.
+async fn fetch_movie_meta(
+    state: &AppState,
+    ids: &[i64],
+) -> AppResult<std::collections::HashMap<i64, (String, Option<String>)>> {
+    if ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!("SELECT id, title, poster_path FROM movies WHERE id IN ({placeholders})");
+    let mut query = sqlx::query_as::<_, (i64, String, Option<String>)>(sqlx::AssertSqlSafe(sql));
+    for id in ids {
+        query = query.bind(id);
+    }
+    let rows = query.fetch_all(&state.db.pool).await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, title, poster)| (id, (title, poster)))
+        .collect())
+}
+
+/// Batch-resolve `episodes.id → EpisodeMeta` (joined to the parent show for its
+/// title + poster) for the watch shelf.
+async fn fetch_episode_meta(
+    state: &AppState,
+    ids: &[i64],
+) -> AppResult<std::collections::HashMap<i64, EpisodeMeta>> {
+    if ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT e.id, e.title, s.title, s.poster_path, e.season, e.episode \
+         FROM episodes e JOIN shows s ON e.show_id = s.id WHERE e.id IN ({placeholders})"
+    );
+    let mut query = sqlx::query_as::<_, (i64, Option<String>, String, Option<String>, i64, i64)>(
+        sqlx::AssertSqlSafe(sql),
+    );
+    for id in ids {
+        query = query.bind(id);
+    }
+    let rows = query.fetch_all(&state.db.pool).await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, episode_title, show_title, poster_path, season, episode)| {
+            (
+                id,
+                EpisodeMeta {
+                    episode_title,
+                    show_title,
+                    poster_path,
+                    season,
+                    episode,
+                },
+            )
+        })
+        .collect())
 }
 
 /// True iff `(media_kind, media_id)` names a row that currently exists. Used to
