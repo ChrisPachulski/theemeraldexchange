@@ -16,9 +16,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{Path, Query, Request, State};
+use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::http::header::{AUTHORIZATION, USER_AGENT};
-use axum::http::HeaderMap;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
