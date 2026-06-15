@@ -951,12 +951,34 @@ impl SessionManager {
 
     /// Build a complete VOD playlist for `id`, for serving to native (AVPlayer)
     /// clients instead of the growing on-disk EVENT playlist (which AVKit renders
-    /// as a live stream). `None` when the session is unknown, is direct-play, or
-    /// has no known duration — callers fall back to the on-disk playlist.
+    /// as a live stream). `None` when the session is unknown, has no known
+    /// duration, OR is a COPY-remux — callers then fall back to the on-disk
+    /// playlist.
+    ///
+    /// Synthesis assumes uniform `HLS_SEGMENT_SECS` segments. That holds ONLY
+    /// when the video is RE-ENCODED: `-force_key_frames` then pins a keyframe
+    /// (and thus a segment cut) to every boundary, so the on-disk segments line
+    /// up one-for-one with the synthesized list. A COPY-remux — HEVC→fMP4 or
+    /// H264→TS — has nothing to force: ffmpeg cuts at the SOURCE's own
+    /// keyframes, yielding ragged, variable-length segments whose count and
+    /// durations can't be predicted up front (a 43-min HEVC copy produces ~587
+    /// uneven segments, not the `ceil(dur/2)`=1304 uniform ones synthesis would
+    /// claim). A synthesized manifest then disagrees with the real files on BOTH
+    /// count and per-segment `EXTINF`, and AVPlayer aborts with
+    /// `CoreMediaErrorDomain -4`. For copy sessions we therefore return `None`:
+    /// the caller serves ffmpeg's REAL on-disk playlist, which always matches
+    /// the segments and gains `#EXT-X-ENDLIST` (LIVE badge → finite scrubber)
+    /// once the faster-than-realtime remux completes.
     pub async fn vod_manifest(&self, id: &str) -> Option<String> {
         let guard = self.sessions.lock().await;
         let session = guard.get(id)?;
+        if !session.plan.reencodes_video() {
+            return None;
+        }
         let duration = session.duration_secs.filter(|d| *d > 0)? as f64;
+        // A re-encode always targets MPEG-TS today (fMP4 is HEVC-copy-only), but
+        // derive the flag from the plan so synthesis stays correct if that ever
+        // changes.
         let fmp4 = matches!(
             &session.plan,
             TranscodePlan::Transcode {
@@ -2013,6 +2035,75 @@ mod tests {
             owner: None,
             subtitle_source_index: None,
         }
+    }
+
+    #[tokio::test]
+    async fn vod_manifest_synthesized_only_for_reencode_not_copy() {
+        // Regression: Arcane S1E1 (HEVC Main 10 mkv) failed on AVPlayer with
+        // CoreMediaErrorDomain -4 because the HEVC-copy fMP4 path got a
+        // synthesized UNIFORM manifest (ceil(dur/2) equal-length segments) while
+        // ffmpeg actually cut at source keyframes into far fewer, ragged
+        // segments. Copy sessions MUST serve the real on-disk playlist
+        // (vod_manifest → None); only a re-encode (forced keyframes) may
+        // synthesize.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = SessionManager::new(
+            Limiter::new(Caps {
+                max_total: 4,
+                max_cpu: 4,
+            }),
+            write_stub(tmp.path(), "run").to_string_lossy().into_owned(),
+            tmp.path().join("s"),
+            HwEncoder::Cpu,
+        );
+
+        // H264 copy → TS remux: variable segments → no synthesis.
+        let copy_ts = mgr
+            .start(StartOpts {
+                duration_secs: Some(600),
+                ..remux_opts_id("/lib/copy_ts.mkv", 1)
+            })
+            .await
+            .unwrap();
+        assert!(
+            mgr.vod_manifest(&copy_ts).await.is_none(),
+            "copy-to-TS remux must serve the real playlist, not a synthesized uniform one"
+        );
+
+        // HEVC copy → fMP4: the Arcane case. Variable segments → no synthesis.
+        let hevc_fmp4 = mgr
+            .start(StartOpts {
+                duration_secs: Some(600),
+                plan: TranscodePlan::Transcode {
+                    video: VideoOp::Copy,
+                    audio: AudioOp::Copy,
+                    subtitle: SubtitleOp::None,
+                    segment_format: crate::plan::SegmentFormat::Fmp4,
+                    reason: "hevc copy".into(),
+                },
+                ..remux_opts_id("/lib/arcane.mkv", 2)
+            })
+            .await
+            .unwrap();
+        assert!(
+            mgr.vod_manifest(&hevc_fmp4).await.is_none(),
+            "HEVC-copy fMP4 must serve the real playlist (Arcane -4 regression)"
+        );
+
+        // Re-encode → forced keyframes → uniform segments → synthesis is correct.
+        let encode = mgr
+            .start(StartOpts {
+                duration_secs: Some(600),
+                ..encode_opts_id("/lib/encode.mkv", 3)
+            })
+            .await
+            .unwrap();
+        let m = mgr
+            .vod_manifest(&encode)
+            .await
+            .expect("a re-encode synthesizes a finite VOD playlist");
+        assert!(m.contains("#EXT-X-PLAYLIST-TYPE:VOD"));
+        assert!(m.trim_end().ends_with("#EXT-X-ENDLIST"));
     }
 
     #[test]
