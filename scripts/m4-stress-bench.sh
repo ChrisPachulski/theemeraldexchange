@@ -172,6 +172,12 @@ while [ "$elapsed" -lt "$DURATION" ]; do
   [ "$cpu" -gt "$peak_cpu" ] && peak_cpu="$cpu"
   cpu_sum=$((cpu_sum+cpu)); cpu_n=$((cpu_n+1))
   elapsed=$(( $(date +%s) - ts_start ))
+  # Keep every session alive: the transcoder reaps a session after 30s with no
+  # heartbeat (session.rs IDLE_TIMEOUT), exactly as a real player beats. Without
+  # this, sessions die mid-window and the sustain/seek measurements read ghosts.
+  for hb in "${SESSIONS[@]}"; do
+    [ -n "$hb" ] && curl -s -X POST -H "$AUTH" "$T/api/transcode/session/$hb/heartbeat" >/dev/null 2>&1
+  done
   printf '     t=%3ss  cpu=%3s%%  load=%-5s (%s/core)  plex=%s\n' "$elapsed" "$cpu" "$load1" "$lpc" "$crit"
 
   over=$(awk -v v="$lpc" -v c="$ABORT_LOAD_PER_CORE" 'BEGIN{print (v>c)?1:0}')
