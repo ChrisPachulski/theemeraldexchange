@@ -1,10 +1,14 @@
 # theemeraldexchange — Roadmap Status
 
-_Generated 2026-05-29. Updated 2026-06-07 to remove stale source/CI assumptions found during a full-project review; updated 2026-06-10 for web playback, the VAAPI hardware pipeline, and the wave-1 hardening campaign; updated 2026-06-13 for the 06-11/12 streaming-stability wave and the 06-13 CI governance (see §Update 2026-06-13)._
+_Generated 2026-05-29. Updated 2026-06-07 to remove stale source/CI assumptions found during a full-project review; updated 2026-06-10 for web playback, the VAAPI hardware pipeline, and the wave-1 hardening campaign; updated 2026-06-13 for the 06-11/12 streaming-stability wave and the 06-13 CI governance (see §Update 2026-06-13); **updated 2026-06-14 to reconcile the Apple client track against the sibling `theemeraldexchange-apple` repo — the "Apple gate" blocker was a measurement artifact (this repo is blind to the sibling by design), and M2/M5 are in fact built and hardened (see §Update 2026-06-14).**_
 
 ## Bottom Line
 
-The backend half of the project is real and largely shipped: M1 (IPTV viewer), M1.5 (cross-service contract) and the M3 media-core are live on the NAS, and the M4 transcoder is deployed with real-library transcode **proven end-to-end in a real browser over the public path** (2026-06-08): the web SPA's `MediaPlayer` consumes media-core grants and plays transcoded HLS, hardware-encoded on the NAS iGPU via Intel VAAPI. The entire client half — every native Apple target (M2, M5) and the whole monetization tail (M6) — is unbuilt and **hard-blocked on Apple tooling**: Xcode is not installed and the Apple Developer Program membership (purchased 2026-05-29) is pending activation. **The single critical-path blocker is the Apple gate**; what remains buildable now is M4 stress/bench measurement evidence and the M3 match-accuracy harness (the M3 scan-timing/perf harness landed 2026-06-14, `65e3fc3`).
+The backend half of the project is real and largely shipped: M1 (IPTV viewer), M1.5 (cross-service contract) and the M3 media-core are live on the NAS, and the M4 transcoder is deployed with real-library transcode **proven end-to-end in a real browser over the public path** (2026-06-08): the web SPA's `MediaPlayer` consumes media-core grants and plays transcoded HLS, hardware-encoded on the NAS iGPU via Intel VAAPI.
+
+**The "Apple gate" is no longer the dominant blocker — it was opened on 2026-05-30, and this repo simply could not see it.** The native Apple client work (M2, M5) lives in the **sibling repo `theemeraldexchange-apple`** by design — Xcode artifacts are kept out of the server monorepo, so this repo's "zero `.swift` files" is correct but does **not** mean the work is unstarted. As of 2026-06-14 the sibling repo holds **Xcode 26.5 + Swift 6.3.2 live, ~197 Swift files, 589 test cases across 36 suites, an active Apple Developer membership** (App Store provisioning profiles for both bundle IDs minted 2026-05-30, valid to 2027-05-30), the **EmeraldContracts Swift port** (the 4th binding, parity-tested against the frozen Rust/TS vectors), the **EmeraldKit SDK**, the **`EmeraldExchange.xcodeproj`** with EmeraldTV (tvOS) + EmeraldMobile (iOS) shells, and **fastlane + TestFlight tooling**. Its audit-derived hardening loop has merged every confirmed bug (B1–B3), latent parity risk (R1–R6), coverage gap (C1–C6), and frontier feature (F1–F9), each red→green with a skeptic gate. So M2 is code-complete-and-hardened and M5 is largely shipped (browse/playback/offline downloads), not "near zero."
+
+What genuinely remains: **an actual TestFlight build upload is unconfirmed**, and App-Store-quality polish (Dynamic Type / VoiceOver, iPad adaptive layout, player loading/stall states) is open in the sibling repo. On the backend, the M4 stress/bench evidence landed 2026-06-14 (crit-2/3/6 PASS on the NAS — `scripts/m4-stress-bench.sh`), so the remaining open item is the M3 match-accuracy harness (the M3 scan-timing/perf harness landed 2026-06-14, `65e3fc3`). The remaining work is bug-fix/polish/submission and measurement — not greenfield.
 
 ## Milestone Table
 
@@ -12,11 +16,11 @@ The backend half of the project is real and largely shipped: M1 (IPTV viewer), M
 |----|-------|--------|---|---------------|
 | M1 | mybunny IPTV viewer + shared backbone | done | 98% | Shipped + live; cosmetic naming drift, a couple runtime facts trusted not re-proven |
 | M1.5 | Cross-service compatibility contract | done | 98% | RATIFIED/LOCKED; Rust↔TS↔Python byte parity in CI; /version schemas + repo .gitattributes present |
-| M2 | Swift SDK + tvOS/iOS apps + TestFlight | not-started | 5% | Spec-complete, zero Swift code; blocked on Xcode + Apple account + missing sibling repo |
-| M3 | Media server core (Rust media-core) | mostly-done | 85% | Live in enforce mode, 793 movies/292 shows/20k episodes; web SPA now consumes grant/watch/stop (crit 4/5 demonstrated on web, 2026-06-07/08); scan-timing harness DONE 2026-06-14, match-accuracy harness still missing |
-| M4 | Transcoder + capability matching | in-progress | 75% | Deployed; real-library transcode PROVEN played in a real browser over the public path (2026-06-08); Intel VAAPI hardware encode + full-HW decode/tone-map live on the NAS iGPU; remaining = stress/bench evidence + seek re-measurement |
-| M5 | Native clients (browse + playback + offline downloads) | not-started | 3% | Spec-only; extends the non-existent M2 EmeraldKit; offline downloads has zero code |
-| M6 | Plex-Pass equivalent (DVR/intro/music/photos/sharing) | not-started | 3% | A menu, not a plan; one reserved enum line; correctly gated behind M5 |
+| M2 | Swift SDK + tvOS/iOS apps + TestFlight | mostly-done | 80% | Built + hardened in sibling repo `theemeraldexchange-apple` (~197 Swift files, 589 tests): EmeraldContracts port, EmeraldKit SDK, EmeraldTV/EmeraldMobile shells, fastlane/TestFlight tooling, active Developer membership + App Store profiles (2026-05-30); all audit bugs/risks merged red→green. Remaining = confirmed TestFlight upload + App-Store-quality polish |
+| M3 | Media server core (Rust media-core) | mostly-done | 85% | Live in enforce mode, 793 movies/292 shows/20k episodes; web SPA consumes grant/watch/stop (crit 4/5 on web, 2026-06-07/08); tvOS now exists in sibling repo so cross-platform crit 4/5 is demonstrable; scan-timing harness DONE 2026-06-14, match-accuracy harness still missing |
+| M4 | Transcoder + capability matching | mostly-done | 90% | Deployed; real-library transcode PROVEN played in a real browser over the public path (2026-06-08); Intel VAAPI hardware encode + full-HW decode/tone-map live on the NAS iGPU; stress/bench DONE 2026-06-14 (crit-2/3/6 PASS on NAS: 4 concurrent @ 48% box CPU, 3.2-4.0x sustain, 0.54s seek); remaining = Apple-Silicon (VideoToolbox) variant (no AS host) + formal long soak |
+| M5 | Native clients (browse + playback + offline downloads) | mostly-done | 75% | Built in sibling repo (`theemeraldexchange-apple` README: "M5 shipped") — media-core browse/playback, downloaded-library affordance, `DownloadsAPI`/`DownloadsStore`, continue-watching shelf, codec-fallback (forced HLS). Remaining = on-device verification, offline edge cases, polish |
+| M6 | Plex-Pass equivalent (DVR/intro/music/photos/sharing) | not-started | 5% | A menu, not a plan; one reserved enum line. Gate now OPEN (M5 client effectively shipped) but the five feature buckets remain unbuilt |
 
 ---
 
@@ -49,17 +53,20 @@ The backend half of the project is real and largely shipped: M1 (IPTV viewer), M
 
 **BLOCKERS** — none.
 
-### M2 — Swift SDK + tvOS/iOS apps + TestFlight — not-started (5%)
+### M2 — Swift SDK + tvOS/iOS apps + TestFlight — mostly-done (80%)
+> **2026-06-14 reconciliation.** The prior "not-started (5%) / zero Swift code" status was a **measurement artifact**: this monorepo is blind by design to the sibling Apple repo where the work lives. The corrected status reads against `/Users/cujo253/Documents/theemeraldexchange-apple` (README, AUDIT.md 2026-06-13, `.autoloop/GOALS.md`, `Sources/`, `Apps/EmeraldExchange.xcodeproj`, the two App Store `.mobileprovision` profiles, and its `git log` — last commit 2026-06-14, 69 commits since June 1).
+
 **DONE**
-- Fully specced and plan-ready (10-phase execution spec, Pre-execution status). Backend substrate the Apple client consumes is built+tested (M1, not M2): VOD direct-HLS grant, live `?client=avplayer` remux grant, device PIN pairing + Bearer device-token middleware. Wire-format vectors carrying tvos/ios platforms exist and are CI-guarded. One pre-staged `PrivacyInfo.xcprivacy`.
+- Fully specced and plan-ready (10-phase execution spec). Backend substrate the Apple client consumes is built+tested (M1): VOD direct-HLS grant, live `?client=avplayer` remux grant, device PIN pairing + Bearer device-token middleware. Wire-format vectors carrying tvos/ios platforms exist and are CI-guarded.
+- **Toolchain + account live (sibling repo):** Xcode 26.5 / Swift 6.3.2 installed; Apple Developer membership **active** — App Store provisioning profiles for both bundle IDs minted **2026-05-30** (valid to 2027-05-30, team "CHRISTOPHER JOSEPH PACHULSKI"); you cannot mint App Store profiles without an active paid membership.
+- **Swift code built (sibling repo):** ~197 `.swift` files, `swift build` green, **589 test cases across 36 suites**. The **EmeraldContracts Swift port** (the 4th binding — HKDF, StreamToken, DeviceToken/JWE verify, CanonicalJSON, Base64URL, sub-namespace parsing) is done and parity-tested against the frozen Rust/TS wire vectors. **EmeraldKit SDK** (auth/device-flow, IPTV catalog, sessions, player grants, Library/Discover, Downloads + Users admin), **`Apps/EmeraldExchange.xcodeproj`** with EmeraldTV (tvOS) + EmeraldMobile (iOS) shells and schemes, plus **fastlane + TestFlight tooling**.
+- **Hardened:** the audit-derived autoloop (`.autoloop/GOALS.md`) has merged every confirmed bug **B1–B3** (stale error banners, continue-watching sort, IPTV fail-open), every latent parity risk **R1–R6** (regex anchoring, fractional-number token parse, pagination truncation, concurrent-favorites/history wipe, strict Base64), every coverage gap **C1–C6**, and frontier features **F1–F9** — each red→green with a skeptic VALID gate. (F10 PlaybackCaps-by-device-class was deliberately REJECTED as unsound, not skipped.)
 
 **REMAINING**
-- **Everything that is the deliverable.** Zero Swift lines (`find -name '*.swift'` = 0), no Package.swift, no SPM workspace, no Xcode project. EmeraldContracts Swift port, EmeraldKit SDK, EmeraldTV (tvOS), EmeraldMobile (iOS) — all not started. No end-to-end PIN→Keychain→browse, no AVPlayer consuming any grant. No TestFlight pipeline (no sibling repo, no apple-ci.yml, no Fastlane/ExportOptions). No archive ever produced. App Store Connect prereqs unconfigured.
+- **No confirmed TestFlight build upload** — the fastlane tooling and signing profiles exist, but an actual archive submission to App Store Connect is not evidenced.
+- App-Store-quality polish open in the sibling repo's AUDIT: no Dynamic Type / VoiceOver labels, no iPad adaptive layout, no player loading/stall state, an AI key still in plain `UserDefaults` instead of Keychain, write-only Favorites, and README/api-contract doc drift.
 
-**BLOCKERS**
-- **Xcode not installed** — hard gate on every M2 criterion.
-- **Apple Developer Program membership pending activation** (purchased 2026-05-29) — no App Store Connect, signing, TestFlight, or Universal Purchase bundle ID.
-- Mandated Apple code home (sibling `theemeraldexchange-apple/` repo) not created — Swift work has nowhere to live.
+**BLOCKERS** — none structural. The Xcode/account gate that previously pinned this milestone was opened 2026-05-30. Remaining work is submission + polish, not greenfield.
 
 ### M3 — Media server core (Rust media-core) — mostly-done (85%)
 **DONE**
@@ -72,20 +79,20 @@ The backend half of the project is real and largely shipped: M1 (IPTV viewer), M
 - Crit 5 WEB HALF MET: the web client reads and writes `/api/media/watch` (progress rows + heartbeat persistence). Same-sub web↔tvOS sync is still undemonstrated — there is no second platform to sync against.
 
 **BLOCKERS**
-- tvOS (the second platform for crit 4/5 cross-platform claims) blocked on Xcode; the web half is done.
-- No measurement harness for crit 2/3 — both bars currently unfalsifiable in-repo.
+- ~~tvOS (the second platform for crit 4/5 cross-platform claims) blocked on Xcode~~ — **stale.** tvOS (EmeraldTV) now exists and is tested in the sibling `theemeraldexchange-apple` repo, so the cross-platform crit 4/5 claim is now *demonstrable* (web ↔ tvOS same-sub sync). What remains is running that demonstration, not building the second platform.
+- No match-accuracy measurement harness for crit 3 — that bar is still unfalsifiable in-repo (the crit 2 scan-timing harness landed 2026-06-14, `65e3fc3`).
 
 ### M4 — Transcoder + capability matching (the long pole) — in-progress (75%)
 **DONE**
 - Real Rust crate, tests green (310 across the cargo workspace as of 2026-06-10). Capability-matching planner delegates to media-core decide then computes smallest per-stream re-encode (hevc→h264, 4K→1080p, HDR→SDR, codec copy/remux). Complete snapshot-tested ffmpeg arg assembly (HLS, HW encoder selection, scale/tonemap filtergraph). Boot-time `ffmpeg -encoders` probe + per-encoder smoke test with libx264 fallback. 30s heartbeat-loss reap + SIGTERM→SIGKILL + tmpdir cleanup; sessions bound to the verified principal (owner-or-admin enforced, wave 1). Seek/resume = kill+respawn with server-baked `-ss`. Concurrency caps with leak-safe permits → 503 transcoder_busy; hardware sessions charge the global cap (4), only true CPU re-encodes charge the CPU cap. **media-core→transcoder handoff fully wired** (mints internal-principal bearer; degrades to 503 on outage). **Intel VAAPI hardware encode LIVE on the NAS iGPU (2026-06-08):** the image ships Debian's stock ffmpeg + `intel-media-va-driver`, `h264_vaapi -low_power 1` is the primary encoder, and a full-HW decode→`tonemap_vaapi`→`scale_vaapi` pipeline (`8d4c373`) is gated by a source-codec allowlist + boot probe, with software fallback proven. 4K HDR10→1080p-class H.264 tone-mapped on GPU; 3 concurrent HEVC→H.264 GPU sessions proven. Browser-audio planning fixed (wave of 2026-06-08 playback fixes): non-AAC audio re-encodes to stereo AAC, AAC copied only at ≤2ch.
 
 **REMAINING / NOT MET**
-- **Crit 1 MET (playback): real-library transcode proven PLAYED end-to-end (2026-06-08).** Beyond the 2026-06-07 serving proof (`scripts/m4-transcode-proof.sh`, docs/M4-TRANSCODE-VERIFICATION.md), the web SPA's `MediaPlayer` played the transcoded HLS stream in a real Chrome over the full public path — laptop → Cloudflare → cloudflared → backend `/api/transcode` proxy → media-core → transcoder — including resume (`scripts/media-playback-proof.sh`). Stress-test phase (non-optional per spec) still not performed; no bench artifacts exist.
-- Crit 2 UNMEASURED: no evidence h264 1080p sustains real-time on Apple Silicon — the deployed NAS target is x86 with Intel VAAPI (no VideoToolbox), so the Apple-Silicon claim is untestable on the current deployment. NAS-side real-time encode is informally evidenced (live sessions play without stalling) but not formally measured.
-- Crit 3 PARTIALLY EVIDENCED: VAAPI sessions are not CPU-charged, so 4 concurrent re-encodes are now *permitted*; 3 concurrent HEVC→H.264 GPU sessions were proven (2026-06-08), but the formal 4-concurrent-under-80%-CPU capture still doesn't exist.
+- **Crit 1 MET (playback): real-library transcode proven PLAYED end-to-end (2026-06-08).** Beyond the 2026-06-07 serving proof (`scripts/m4-transcode-proof.sh`, docs/M4-TRANSCODE-VERIFICATION.md), the web SPA's `MediaPlayer` played the transcoded HLS stream in a real Chrome over the full public path — laptop → Cloudflare → cloudflared → backend `/api/transcode` proxy → media-core → transcoder — including resume (`scripts/media-playback-proof.sh`). Stress-test phase (non-optional per spec) DONE 2026-06-14 — `scripts/m4-stress-bench.sh` captured the N=4/60s bench on the NAS (see docs/M4-TRANSCODE-VERIFICATION.md §Stress / bench).
+- Crit 2 MET NAS-side (2026-06-14): the bench formally measured **3.17×–4.00× real-time sustain** per session across 4 concurrent HEVC→H.264 re-encodes on the x86 VAAPI iGPU — comfortably above playback rate. The *Apple-Silicon* (VideoToolbox) variant remains untestable: the deployed target is x86 VAAPI and there is no AS transcode host.
+- Crit 3 MET (2026-06-14): the formal 4-concurrent capture now exists — **peak 48% / avg 18% box CPU** (ceiling 80%) on the 6-thread box, Plex `healthy` throughout, load ≤0.56. VAAPI offloads encode to the iGPU (transcoder container ~92% ≈ <1 core), which is why 4 concurrent re-encodes stay well under the box ceiling.
 - Crit 4 PARTIAL: reap/cleanup unit-tested, and deployed children have now served real library sessions through the playback-fix campaign (idle reap + stop-on-close exercised live), but no formal long-running soak has been recorded.
 - Crit 5 MET: `TRANSCODER_FORCE_CPU=1` forces libx264 regardless of `TRANSCODER_HW_ENCODER`.
-- Crit 6 STALE MEASUREMENT: the ~23–27s post-seek figure was taken on the CPU/libx264 pipeline and predates VAAPI hardware encode, the forced-keyframe segment cadence (`0cda2f4`), AND the 06-12 segment-length halving 4→2s (`25d84da`, shipped explicitly for faster startup); current grants reach first segment in ~2.6–4.5s. Seek latency must be re-measured against the "<2s" target before claiming pass or fail.
+- Crit 6 MET (2026-06-14): re-measured on the VAAPI + 2s-segment pipeline, post-seek time-to-first-segment is **0.54s** (target <2s) — the stale ~23–27s figure was the old CPU/libx264 pipeline before forced-keyframe cadence (`0cda2f4`) and the 4→2s segment halving (`25d84da`). Cold concurrent startup TTFS measured 1.72–1.74s at 4 concurrent.
 - HW-encoder breadth: VAAPI (encode + full-HW decode/tone-map) is real and proven; VideoToolbox/NVENC/QSV still exist only as arg strings, never run. PGS burn-in is planner-dropped (a sidecar-subtitle path is a known follow-up). audio_codecs capability gap: planner uses a browser-safe stereo-AAC baseline rather than `ClientCaps.audio_codecs`; only first audio track mapped (per-client 5.1 passthrough deferred).
 
 **BLOCKERS**
@@ -93,19 +100,22 @@ The backend half of the project is real and largely shipped: M1 (IPTV viewer), M
 - Remaining M4 proof is measurement, not function: stress/bench CPU evidence, a formal soak, and seek re-measurement are the open items.
 - No stress harness; building/running one on NAS hardware is the gating non-optional step.
 
-### M5 — Native clients for media server — not-started (3%)
+### M5 — Native clients for media server — mostly-done (75%)
+> **2026-06-14 reconciliation.** Same measurement artifact as M2: the M5 native-client work lives in the sibling `theemeraldexchange-apple` repo, whose README states **"M5 is shipped."** The prior "not-started (3%) / zero code" status reflected only this server monorepo's (correct) absence of Swift files.
+
 **DONE**
-- Spec fully written + reconciled (phases, success outputs, sequencing). Criterion 3/4/5 met as documentation facts (verification deferred to own brainstorm cycle; hard M3+M4 dependency documented; M5.5 compile-flag-IPTV-disabled-default policy detailed). Prereqs M3 (live) + M4 (deployed today) exist in source. One `PrivacyInfo.xcprivacy` stub.
+- Spec fully written + reconciled (phases, success outputs, sequencing; M5.5 compile-flag-IPTV-disabled-default policy detailed). Prereqs M3 (live) + M4 (deployed) exist in source.
+- **Built in the sibling repo:** media-core browse/playback, the downloaded-library watch affordance, `DownloadsAPI` / `DownloadsStore`, the Home "Jump back in" continue-watching shelf, and codec-fallback (forced HLS). The EmeraldKit `MediaService` + models, library browse, player/transcoder grants, and unified suggestions the M5 phases call for are present (the SDK M5 extends now exists — ~197 Swift files, 589 tests). Offline downloads — the headline M5 capability — has a real client manager and store, not the prior "zero implementation."
 
 **REMAINING**
-- Crit 2 NOT MET: the EmeraldKit Swift package M5 extends does not exist (0 .swift files). All phases (MediaService + models, continue-watching/library browse, player+transcoder grants, unified suggestions) unimplemented.
-- **Offline downloads — the headline M5 capability — has ZERO implementation:** no download UI, no client manager, no `/api/media/download` endpoint. ("offline" in source = transcoder 503 degradation + source precedence only.)
+- On-device / TestFlight verification of the shipped client (tied to M2's unconfirmed TestFlight upload).
+- Offline-download edge cases and the App-Store-quality polish tracked in the sibling AUDIT (a11y, iPad layout, player stall states) apply here too.
 
-**BLOCKERS**
-- Xcode not installed; Apple Developer membership pending — neither the M2 EmeraldKit foundation nor the M5 extension can be built.
-- Hard sequencing: M5 needs M3 (live) AND M4's playback proof — both now exist: the web SPA's `MediaPlayer` consumes the grant path end-to-end (2026-06-08), so the native clients have a working reference implementation to mirror. M2 (the EmeraldKit SDK M5 extends) is unbuilt — though UI can develop in parallel against a mocked media-core API.
+**BLOCKERS** — none structural. M5 needs M3 (live) AND M4's playback proof — both exist (web `MediaPlayer` consumes the grant path end-to-end, 2026-06-08) — and the M2 EmeraldKit foundation it extends is now built. The Apple-tooling gate is open.
 
-### M6 — Plex-Pass equivalent — not-started (3%)
+### M6 — Plex-Pass equivalent — not-started (5%)
+> **2026-06-14 note.** The sequencing gate ("M6 is selectable only after M5 ships") is now **open** — the M5 native client is shipped in the sibling repo. M6 stays low because its five feature buckets are genuinely unbuilt, not because it is blocked; it is now correctly *available to start*, not gated.
+
 **DONE**
 - Documented as a portfolio menu (DVR, intro/credits, music, photos, sharing) — the criterion-6 deliverable exists. One line of M6 code: `StreamKind::Recording` reserved in the stream-token contract (accepted by verifiers, minted by nothing). DVR reuse-infra from M1 exists (epg_programs table, MIN_FREE_GB gate, max-concurrent-streams, transcoder arg builder). Rust-stability precondition trending true.
 
@@ -119,7 +129,7 @@ The backend half of the project is real and largely shipped: M1 (IPTV viewer), M
 
 ## Critical Path (dependency-ordered)
 
-The project splits cleanly into a **buildable-now backend track** and an **Apple-blocked client track**. The Apple gate is the dominant constraint.
+The project splits into a **backend track** (this repo) and a **native-client track** (sibling `theemeraldexchange-apple` repo). **As of 2026-06-14 the Apple gate is no longer the dominant constraint** — Xcode is installed, the Developer membership is active, and the client track (M2, most of M5) is built and being hardened in the sibling repo. The remaining critical-path work is measurement/proof on the backend and submission/polish on the client.
 
 **Buildable now (no Apple dependency):**
 1. ~~Exercise a real player against the M4 path~~ — **DONE 2026-06-08.** The web SPA's `MediaPlayer` plays the transcoded stream in a real Chrome over the full public path (laptop → Cloudflare → cloudflared → backend `/api/transcode` proxy → media-core → transcoder), including resume; harness `scripts/media-playback-proof.sh`.
@@ -129,16 +139,65 @@ The project splits cleanly into a **buildable-now backend track** and an **Apple
 5. ~~Unblock `/media/Movies` for service uids~~ — **DONE 2026-06-07.** Share loosened `0700` → `0755`; media-core (10002) and transcoder (10003) read the full movie library.
 6. **M5 UI in parallel against a mocked media-core API** — the only M5 work possible pre-Apple, per spec.
 
-**Blocked on the Apple gate (Xcode install + Developer Program activation + sibling `theemeraldexchange-apple/` repo):**
-7. **M2** in full: EmeraldContracts Swift port (4th binding against the frozen vectors) → EmeraldKit SDK → EmeraldTV/EmeraldMobile → TestFlight pipeline. **Nothing here can start until Xcode is installed and the account activates.** Create the sibling repo the moment those land.
-8. **M5** native media-server clients + offline downloads (needs M2 shipped AND M4 proven).
-9. **M6** monetization menu — selectable only after M5 ships.
+**Formerly "blocked on the Apple gate" — now unblocked and largely built (sibling `theemeraldexchange-apple` repo):**
+7. ~~**M2** in full: EmeraldContracts Swift port → EmeraldKit SDK → EmeraldTV/EmeraldMobile → TestFlight pipeline; blocked until Xcode + account~~ — **DONE except the final TestFlight upload.** Xcode 26.5 installed, membership active (App Store profiles 2026-05-30), sibling repo created and active. EmeraldContracts port, EmeraldKit SDK, EmeraldTV/EmeraldMobile shells, and fastlane/TestFlight tooling all exist; ~197 Swift files, 589 tests, all audit bugs/risks merged. **Remaining: confirm an actual archive upload + App-Store polish.**
+8. ~~**M5** native media-server clients + offline downloads~~ — **largely DONE** (sibling README: "M5 shipped"): browse/playback, `DownloadsAPI`/`DownloadsStore`, continue-watching shelf, codec-fallback. Remaining: on-device verification + edge cases.
+9. **M6** monetization menu — gate is now **open** (M5 client shipped); the five feature buckets are still unbuilt and are the next greenfield target.
 
 **Monetization / M6 risk flags:**
 - **ffmpeg licensing:** the transcoder image now ships Debian's apt ffmpeg + the Intel VAAPI stack (`h264_vaapi` primary; libx264 only as the boot-probe fallback), while the backend and media-core images still copy the static `mwader/static-ffmpeg` binary. Every variant enables GPL x264, so for App-Store/paid distribution the licensing question must be resolved before any binary ships commercially — not yet addressed anywhere in the repo.
 - **IPTV legal/compliance risk:** the M5.5 policy already makes the **IPTV-disabled compile-flag build the default public artifact** (good), but the IPTV feature's distributability is the structural reason that policy exists; treat any monetized build's IPTV surface as a standing risk.
 
 ---
+
+## Update 2026-06-14 — Apple client track reconciled against the sibling repo (headline % 52 → ~74)
+
+**Why the headline number jumped without a line of feature code in this repo.** The
+dashboard scores "Emerald Exchange" as the average of the milestone-table `%` column.
+M2 (5%) and M5 (3%) were dragging that average down on the premise that the native
+Apple client was *unbuilt and hard-blocked on Apple tooling*. That premise was a
+**measurement artifact**: this server monorepo is blind by design to the sibling
+repo `/Users/cujo253/Documents/theemeraldexchange-apple`, where the Apple work
+actually lives (Xcode artifacts are deliberately kept out of the server repo). So
+"zero `.swift` files here" was true but did not mean "not started."
+
+**What is actually true as of 2026-06-14** (verified against the sibling repo's
+README, AUDIT.md 2026-06-13, `.autoloop/GOALS.md`, `Sources/`,
+`Apps/EmeraldExchange.xcodeproj`, both App Store `.mobileprovision` profiles, and its
+`git log`):
+
+- **The Apple gate opened on 2026-05-30.** Xcode 26.5 / Swift 6.3.2 are live; the
+  Apple Developer membership is **active** (App Store provisioning profiles for both
+  bundle IDs minted 2026-05-30, valid to 2027-05-30 — impossible without a paid
+  membership). The "purchased 2026-05-29, pending activation" story is stale.
+- **M2 is built and hardened**, not 5%: ~197 Swift files, 589 test cases / 36 suites,
+  the EmeraldContracts Swift port (4th binding, parity-tested against the frozen
+  Rust/TS vectors), the EmeraldKit SDK, the `EmeraldExchange.xcodeproj` with EmeraldTV
+  (tvOS) + EmeraldMobile (iOS) shells, and fastlane/TestFlight tooling. The audit
+  autoloop has merged every B1–B3 bug, R1–R6 parity risk, C1–C6 coverage gap, and
+  F1–F9 feature, each red→green with a skeptic gate. **Rescored 5% → 80%** (remaining:
+  confirmed TestFlight upload + App-Store polish).
+- **M5 is largely shipped**, not 3%: the sibling README states "M5 is shipped" —
+  browse/playback, `DownloadsAPI`/`DownloadsStore`, downloaded-library affordance,
+  continue-watching shelf, codec-fallback. **Rescored 3% → 75%** (remaining: on-device
+  verification + offline edge cases).
+- **M3**: the tvOS second platform now exists, so the cross-platform crit 4/5 claim is
+  demonstrable; the "blocked on Xcode" blocker is struck. % unchanged (85%) pending the
+  actual web↔tvOS sync demonstration + the still-missing match-accuracy harness.
+- **M6**: its sequencing gate is now **open** (M5 client shipped). Nudged 3% → 5% to
+  reflect "available to start" vs "blocked"; the five feature buckets remain unbuilt.
+
+**Net:** milestone-table average moves from **~52%** (98, 98, 5, 85, 75, 3, 3) to
+**~74%** (98, 98, 80, 85, 75, 75, 5). This is a *reconciliation*, not progress — the
+work was always there; the server repo just couldn't see it. The companion dashboard
+metric "Emerald Exchange (Apple)" (a checkbox count over the sibling repo's
+`.autoloop/GOALS.md`) already reflects this — every objective is `[x]` except the one
+deliberately-rejected F10 — so that project correctly reads as essentially complete.
+
+**Honest caveat:** "built" ≠ "on the App Store." No TestFlight upload is confirmed, and
+the sibling AUDIT lists real App-Store-quality gaps (Dynamic Type/VoiceOver, iPad
+layout, player stall states, an AI key in `UserDefaults`). The accurate framing is
+*bug-fix / polish / submission*, not greenfield.
 
 ## Update 2026-06-13 — streaming-stability wave + CI governance
 
