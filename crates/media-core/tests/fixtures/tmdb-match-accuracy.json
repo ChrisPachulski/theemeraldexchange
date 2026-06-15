@@ -1,210 +1,912 @@
 [
   {
     "name": "exact-single-movie",
-    "is_movie": true, "query_title": "Interstellar", "query_year": 2014,
+    "is_movie": true,
+    "query_title": "Interstellar",
+    "query_year": 2014,
     "expected_tmdb_id": 157336,
     "results": [
-      { "id": 157336, "title": "Interstellar", "release_date": "2014-11-07" },
-      { "id": 9999, "title": "Interstellar Wars", "release_date": "2016-01-01" }
+      {
+        "id": 157336,
+        "title": "Interstellar",
+        "release_date": "2014-11-07"
+      },
+      {
+        "id": 9999,
+        "title": "Interstellar Wars",
+        "release_date": "2016-01-01"
+      }
     ]
   },
   {
     "name": "remake-year-guard-new: Aladdin 2019 must not collapse to 1992",
-    "is_movie": true, "query_title": "Aladdin", "query_year": 2019,
+    "is_movie": true,
+    "query_title": "Aladdin",
+    "query_year": 2019,
     "expected_tmdb_id": 420817,
     "results": [
-      { "id": 812, "title": "Aladdin", "release_date": "1992-11-25" },
-      { "id": 420817, "title": "Aladdin", "release_date": "2019-05-22" }
+      {
+        "id": 812,
+        "title": "Aladdin",
+        "release_date": "1992-11-25"
+      },
+      {
+        "id": 420817,
+        "title": "Aladdin",
+        "release_date": "2019-05-22"
+      }
     ]
   },
   {
     "name": "remake-year-guard-old: Aladdin 1992 stays 1992",
-    "is_movie": true, "query_title": "Aladdin", "query_year": 1992,
+    "is_movie": true,
+    "query_title": "Aladdin",
+    "query_year": 1992,
     "expected_tmdb_id": 812,
     "results": [
-      { "id": 812, "title": "Aladdin", "release_date": "1992-11-25" },
-      { "id": 420817, "title": "Aladdin", "release_date": "2019-05-22" }
+      {
+        "id": 812,
+        "title": "Aladdin",
+        "release_date": "1992-11-25"
+      },
+      {
+        "id": 420817,
+        "title": "Aladdin",
+        "release_date": "2019-05-22"
+      }
     ]
   },
   {
     "name": "batman-remake: The Batman 2022 not Batman 1989",
-    "is_movie": true, "query_title": "The Batman", "query_year": 2022,
+    "is_movie": true,
+    "query_title": "The Batman",
+    "query_year": 2022,
     "expected_tmdb_id": 414906,
     "results": [
-      { "id": 268, "title": "Batman", "release_date": "1989-06-23" },
-      { "id": 414906, "title": "The Batman", "release_date": "2022-03-01" }
+      {
+        "id": 268,
+        "title": "Batman",
+        "release_date": "1989-06-23"
+      },
+      {
+        "id": 414906,
+        "title": "The Batman",
+        "release_date": "2022-03-01"
+      }
     ]
   },
   {
     "name": "franchise-root: Batman Begins 2005 not Batman 1989",
-    "is_movie": true, "query_title": "Batman Begins", "query_year": 2005,
+    "is_movie": true,
+    "query_title": "Batman Begins",
+    "query_year": 2005,
     "expected_tmdb_id": 272,
     "results": [
-      { "id": 268, "title": "Batman", "release_date": "1989-06-23" },
-      { "id": 272, "title": "Batman Begins", "release_date": "2005-06-15" }
+      {
+        "id": 268,
+        "title": "Batman",
+        "release_date": "1989-06-23"
+      },
+      {
+        "id": 272,
+        "title": "Batman Begins",
+        "release_date": "2005-06-15"
+      }
     ]
   },
   {
     "name": "token-subset-trap: Spirited 2022 not Spirited Away 2001",
-    "is_movie": true, "query_title": "Spirited", "query_year": 2022,
+    "is_movie": true,
+    "query_title": "Spirited",
+    "query_year": 2022,
     "expected_tmdb_id": 758009,
     "results": [
-      { "id": 129, "title": "Spirited Away", "release_date": "2001-07-20" },
-      { "id": 758009, "title": "Spirited", "release_date": "2022-11-18" }
+      {
+        "id": 129,
+        "title": "Spirited Away",
+        "release_date": "2001-07-20"
+      },
+      {
+        "id": 758009,
+        "title": "Spirited",
+        "release_date": "2022-11-18"
+      }
     ]
   },
   {
     "name": "subtitle-only-query: Maverick 2022 picks Top Gun Maverick over 1994",
-    "is_movie": true, "query_title": "Maverick", "query_year": 2022,
+    "is_movie": true,
+    "query_title": "Maverick",
+    "query_year": 2022,
     "expected_tmdb_id": 361743,
     "results": [
-      { "id": 8400, "title": "Maverick", "release_date": "1994-05-20" },
-      { "id": 361743, "title": "Top Gun: Maverick", "release_date": "2022-05-27" }
+      {
+        "id": 8400,
+        "title": "Maverick",
+        "release_date": "1994-05-20"
+      },
+      {
+        "id": 361743,
+        "title": "Top Gun: Maverick",
+        "release_date": "2022-05-27"
+      }
     ]
   },
   {
     "name": "sequel-disambig: Top Gun Maverick not Top Gun 1986",
-    "is_movie": true, "query_title": "Top Gun Maverick", "query_year": 2022,
+    "is_movie": true,
+    "query_title": "Top Gun Maverick",
+    "query_year": 2022,
     "expected_tmdb_id": 361743,
     "results": [
-      { "id": 744, "title": "Top Gun", "release_date": "1986-05-16" },
-      { "id": 361743, "title": "Top Gun: Maverick", "release_date": "2022-05-27" }
+      {
+        "id": 744,
+        "title": "Top Gun",
+        "release_date": "1986-05-16"
+      },
+      {
+        "id": 361743,
+        "title": "Top Gun: Maverick",
+        "release_date": "2022-05-27"
+      }
     ]
   },
   {
     "name": "fuzzy-legit: LOTR Fellowship maps to full title",
-    "is_movie": true, "query_title": "LOTR Fellowship", "query_year": 2001,
+    "is_movie": true,
+    "query_title": "LOTR Fellowship",
+    "query_year": 2001,
     "expected_tmdb_id": 120,
     "results": [
-      { "id": 120, "title": "The Lord of the Rings: The Fellowship of the Ring", "release_date": "2001-12-19" },
-      { "id": 9988, "title": "Fellowship", "release_date": "2010-01-01" }
+      {
+        "id": 120,
+        "title": "The Lord of the Rings: The Fellowship of the Ring",
+        "release_date": "2001-12-19"
+      },
+      {
+        "id": 9988,
+        "title": "Fellowship",
+        "release_date": "2010-01-01"
+      }
     ]
   },
   {
     "name": "year-off-by-one: festival 2022 vs query 2023 accepted",
-    "is_movie": true, "query_title": "Tar", "query_year": 2023,
+    "is_movie": true,
+    "query_title": "Tar",
+    "query_year": 2023,
     "expected_tmdb_id": 817758,
     "results": [
-      { "id": 817758, "title": "Tar", "release_date": "2022-09-23" }
+      {
+        "id": 817758,
+        "title": "Tar",
+        "release_date": "2022-09-23"
+      }
     ]
   },
   {
     "name": "wrong-era-only: Dune 2021 query, only 1984 candidate -> reject",
-    "is_movie": true, "query_title": "Dune", "query_year": 2021,
+    "is_movie": true,
+    "query_title": "Dune",
+    "query_year": 2021,
     "expected_tmdb_id": null,
     "results": [
-      { "id": 841, "title": "Dune", "release_date": "1984-12-14" }
+      {
+        "id": 841,
+        "title": "Dune",
+        "release_date": "1984-12-14"
+      }
     ]
   },
   {
     "name": "dune-pick-new: Dune 2021 over 1984",
-    "is_movie": true, "query_title": "Dune", "query_year": 2021,
+    "is_movie": true,
+    "query_title": "Dune",
+    "query_year": 2021,
     "expected_tmdb_id": 438631,
     "results": [
-      { "id": 841, "title": "Dune", "release_date": "1984-12-14" },
-      { "id": 438631, "title": "Dune", "release_date": "2021-09-15" }
+      {
+        "id": 841,
+        "title": "Dune",
+        "release_date": "1984-12-14"
+      },
+      {
+        "id": 438631,
+        "title": "Dune",
+        "release_date": "2021-09-15"
+      }
     ]
   },
   {
     "name": "zero-overlap-reject: confident-but-wrong top hit dropped",
-    "is_movie": true, "query_title": "Oldboy", "query_year": 2003,
+    "is_movie": true,
+    "query_title": "Oldboy",
+    "query_year": 2003,
     "expected_tmdb_id": null,
     "results": [
-      { "id": 5555, "title": "Breaking Bad The Movie", "release_date": "2003-01-01" }
+      {
+        "id": 5555,
+        "title": "Breaking Bad The Movie",
+        "release_date": "2003-01-01"
+      }
     ]
   },
   {
     "name": "blade-runner-2049-numeric: not 1982",
-    "is_movie": true, "query_title": "Blade Runner 2049", "query_year": 2017,
+    "is_movie": true,
+    "query_title": "Blade Runner 2049",
+    "query_year": 2017,
     "expected_tmdb_id": 335984,
     "results": [
-      { "id": 78, "title": "Blade Runner", "release_date": "1982-06-25" },
-      { "id": 335984, "title": "Blade Runner 2049", "release_date": "2017-10-04" }
+      {
+        "id": 78,
+        "title": "Blade Runner",
+        "release_date": "1982-06-25"
+      },
+      {
+        "id": 335984,
+        "title": "Blade Runner 2049",
+        "release_date": "2017-10-04"
+      }
     ]
   },
   {
     "name": "godfather-part2-year: picks Part II at 1974",
-    "is_movie": true, "query_title": "The Godfather Part II", "query_year": 1974,
+    "is_movie": true,
+    "query_title": "The Godfather Part II",
+    "query_year": 1974,
     "expected_tmdb_id": 240,
     "results": [
-      { "id": 238, "title": "The Godfather", "release_date": "1972-03-14" },
-      { "id": 240, "title": "The Godfather Part II", "release_date": "1974-12-20" }
+      {
+        "id": 238,
+        "title": "The Godfather",
+        "release_date": "1972-03-14"
+      },
+      {
+        "id": 240,
+        "title": "The Godfather Part II",
+        "release_date": "1974-12-20"
+      }
     ]
   },
   {
     "name": "colon-punctuation: Mission Impossible tokens",
-    "is_movie": true, "query_title": "Mission Impossible", "query_year": 1996,
+    "is_movie": true,
+    "query_title": "Mission Impossible",
+    "query_year": 1996,
     "expected_tmdb_id": 954,
     "results": [
-      { "id": 954, "title": "Mission: Impossible", "release_date": "1996-05-22" },
-      { "id": 9001, "title": "Impossible", "release_date": "2012-01-01" }
+      {
+        "id": 954,
+        "title": "Mission: Impossible",
+        "release_date": "1996-05-22"
+      },
+      {
+        "id": 9001,
+        "title": "Impossible",
+        "release_date": "2012-01-01"
+      }
     ]
   },
   {
     "name": "stopword-only-diff: The Thing 1982",
-    "is_movie": true, "query_title": "The Thing", "query_year": 1982,
+    "is_movie": true,
+    "query_title": "The Thing",
+    "query_year": 1982,
     "expected_tmdb_id": 1091,
     "results": [
-      { "id": 1091, "title": "The Thing", "release_date": "1982-06-25" },
-      { "id": 27031, "title": "The Thing", "release_date": "2011-10-13" }
+      {
+        "id": 1091,
+        "title": "The Thing",
+        "release_date": "1982-06-25"
+      },
+      {
+        "id": 27031,
+        "title": "The Thing",
+        "release_date": "2011-10-13"
+      }
     ]
   },
   {
     "name": "no-year-tiebreak-popularity: first valid wins",
-    "is_movie": true, "query_title": "Up", "query_year": null,
+    "is_movie": true,
+    "query_title": "Up",
+    "query_year": null,
     "expected_tmdb_id": 14160,
     "results": [
-      { "id": 14160, "title": "Up", "release_date": "2009-05-28" },
-      { "id": 70074, "title": "Up", "release_date": "1984-01-01" }
+      {
+        "id": 14160,
+        "title": "Up",
+        "release_date": "2009-05-28"
+      },
+      {
+        "id": 70074,
+        "title": "Up",
+        "release_date": "1984-01-01"
+      }
     ]
   },
   {
     "name": "tv-exact: Severance 2022",
-    "is_movie": false, "query_title": "Severance", "query_year": 2022,
+    "is_movie": false,
+    "query_title": "Severance",
+    "query_year": 2022,
     "expected_tmdb_id": 95396,
     "results": [
-      { "id": 95396, "name": "Severance", "first_air_date": "2022-02-18" },
-      { "id": 12345, "name": "Severance Pay", "first_air_date": "2018-01-01" }
+      {
+        "id": 95396,
+        "name": "Severance",
+        "first_air_date": "2022-02-18"
+      },
+      {
+        "id": 12345,
+        "name": "Severance Pay",
+        "first_air_date": "2018-01-01"
+      }
     ]
   },
   {
     "name": "tv-remake-region: The Office US 2005 not UK 2001",
-    "is_movie": false, "query_title": "The Office", "query_year": 2005,
+    "is_movie": false,
+    "query_title": "The Office",
+    "query_year": 2005,
     "expected_tmdb_id": 2316,
     "results": [
-      { "id": 2996, "name": "The Office", "first_air_date": "2001-07-09" },
-      { "id": 2316, "name": "The Office", "first_air_date": "2005-03-24" }
+      {
+        "id": 2996,
+        "name": "The Office",
+        "first_air_date": "2001-07-09"
+      },
+      {
+        "id": 2316,
+        "name": "The Office",
+        "first_air_date": "2005-03-24"
+      }
     ]
   },
   {
     "name": "tv-fuzzy: Always Sunny maps to full title",
-    "is_movie": false, "query_title": "Its Always Sunny", "query_year": 2005,
+    "is_movie": false,
+    "query_title": "Its Always Sunny",
+    "query_year": 2005,
     "expected_tmdb_id": 2710,
     "results": [
-      { "id": 2710, "name": "It's Always Sunny in Philadelphia", "first_air_date": "2005-08-04" }
+      {
+        "id": 2710,
+        "name": "It's Always Sunny in Philadelphia",
+        "first_air_date": "2005-08-04"
+      }
     ]
   },
   {
     "name": "tv-zero-overlap-reject",
-    "is_movie": false, "query_title": "Severance", "query_year": 2022,
+    "is_movie": false,
+    "query_title": "Severance",
+    "query_year": 2022,
     "expected_tmdb_id": null,
     "results": [
-      { "id": 1396, "name": "Breaking Bad", "first_air_date": "2022-01-01" }
+      {
+        "id": 1396,
+        "name": "Breaking Bad",
+        "first_air_date": "2022-01-01"
+      }
     ]
   },
   {
     "name": "two-towers-acronym-partial: picks LOTR over Two Brothers",
-    "is_movie": true, "query_title": "LOTR Two Towers", "query_year": 2002,
+    "is_movie": true,
+    "query_title": "LOTR Two Towers",
+    "query_year": 2002,
     "expected_tmdb_id": 121,
     "results": [
-      { "id": 121, "title": "The Lord of the Rings: The Two Towers", "release_date": "2002-12-18" },
-      { "id": 9876, "title": "Two Brothers", "release_date": "2004-04-07" }
+      {
+        "id": 121,
+        "title": "The Lord of the Rings: The Two Towers",
+        "release_date": "2002-12-18"
+      },
+      {
+        "id": 9876,
+        "title": "Two Brothers",
+        "release_date": "2004-04-07"
+      }
     ]
   },
   {
     "name": "empty-results-reject",
-    "is_movie": true, "query_title": "Nonexistent Film", "query_year": 2020,
+    "is_movie": true,
+    "query_title": "Nonexistent Film",
+    "query_year": 2020,
     "expected_tmdb_id": null,
     "results": []
+  },
+  {
+    "name": "dark-knight-year-guard: TDK 2008 not Begins/Rises",
+    "is_movie": true,
+    "query_title": "The Dark Knight",
+    "query_year": 2008,
+    "expected_tmdb_id": 155,
+    "results": [
+      {
+        "id": 272,
+        "title": "Batman Begins",
+        "release_date": "2005-06-10"
+      },
+      {
+        "id": 155,
+        "title": "The Dark Knight",
+        "release_date": "2008-07-16"
+      },
+      {
+        "id": 49026,
+        "title": "The Dark Knight Rises",
+        "release_date": "2012-07-16"
+      }
+    ]
+  },
+  {
+    "name": "inception-exact",
+    "is_movie": true,
+    "query_title": "Inception",
+    "query_year": 2010,
+    "expected_tmdb_id": 27205,
+    "results": [
+      {
+        "id": 27205,
+        "title": "Inception",
+        "release_date": "2010-07-15"
+      }
+    ]
+  },
+  {
+    "name": "parasite-english-title-year-guard",
+    "is_movie": true,
+    "query_title": "Parasite",
+    "query_year": 2019,
+    "expected_tmdb_id": 496243,
+    "results": [
+      {
+        "id": 496243,
+        "title": "Parasite",
+        "release_date": "2019-05-30"
+      },
+      {
+        "id": 81230,
+        "title": "Parasite",
+        "release_date": "1982-03-12"
+      }
+    ]
+  },
+  {
+    "name": "oldboy-foreign-remake-by-year",
+    "is_movie": true,
+    "query_title": "Oldboy",
+    "query_year": 2003,
+    "expected_tmdb_id": 670,
+    "results": [
+      {
+        "id": 670,
+        "title": "Oldboy",
+        "release_date": "2003-11-21"
+      },
+      {
+        "id": 77199,
+        "title": "Oldboy",
+        "release_date": "2013-11-27"
+      }
+    ]
+  },
+  {
+    "name": "spiderman-no-way-home-sequel-year",
+    "is_movie": true,
+    "query_title": "Spider-Man: No Way Home",
+    "query_year": 2021,
+    "expected_tmdb_id": 634649,
+    "results": [
+      {
+        "id": 557,
+        "title": "Spider-Man",
+        "release_date": "2002-05-01"
+      },
+      {
+        "id": 315635,
+        "title": "Spider-Man: Homecoming",
+        "release_date": "2017-07-05"
+      },
+      {
+        "id": 634649,
+        "title": "Spider-Man: No Way Home",
+        "release_date": "2021-12-15"
+      }
+    ]
+  },
+  {
+    "name": "mad-max-fury-road-not-1979",
+    "is_movie": true,
+    "query_title": "Mad Max: Fury Road",
+    "query_year": 2015,
+    "expected_tmdb_id": 76341,
+    "results": [
+      {
+        "id": 9659,
+        "title": "Mad Max",
+        "release_date": "1979-04-12"
+      },
+      {
+        "id": 8810,
+        "title": "Mad Max 2",
+        "release_date": "1981-12-24"
+      },
+      {
+        "id": 76341,
+        "title": "Mad Max: Fury Road",
+        "release_date": "2015-05-13"
+      }
+    ]
+  },
+  {
+    "name": "blade-subset-trap-saved-by-year",
+    "is_movie": true,
+    "query_title": "Blade",
+    "query_year": 1998,
+    "expected_tmdb_id": 36647,
+    "results": [
+      {
+        "id": 78,
+        "title": "Blade Runner",
+        "release_date": "1982-06-25"
+      },
+      {
+        "id": 36647,
+        "title": "Blade",
+        "release_date": "1998-08-21"
+      },
+      {
+        "id": 11949,
+        "title": "Blade II",
+        "release_date": "2002-03-22"
+      }
+    ]
+  },
+  {
+    "name": "dune-part-two-2024-not-2021-or-1984",
+    "is_movie": true,
+    "query_title": "Dune: Part Two",
+    "query_year": 2024,
+    "expected_tmdb_id": 693134,
+    "results": [
+      {
+        "id": 841,
+        "title": "Dune",
+        "release_date": "1984-12-14"
+      },
+      {
+        "id": 438631,
+        "title": "Dune",
+        "release_date": "2021-09-15"
+      },
+      {
+        "id": 693134,
+        "title": "Dune: Part Two",
+        "release_date": "2024-02-27"
+      }
+    ]
+  },
+  {
+    "name": "top-gun-original-not-maverick",
+    "is_movie": true,
+    "query_title": "Top Gun",
+    "query_year": 1986,
+    "expected_tmdb_id": 744,
+    "results": [
+      {
+        "id": 361743,
+        "title": "Top Gun: Maverick",
+        "release_date": "2022-05-24"
+      },
+      {
+        "id": 744,
+        "title": "Top Gun",
+        "release_date": "1986-05-16"
+      }
+    ]
+  },
+  {
+    "name": "lion-king-1994-animated",
+    "is_movie": true,
+    "query_title": "The Lion King",
+    "query_year": 1994,
+    "expected_tmdb_id": 8587,
+    "results": [
+      {
+        "id": 8587,
+        "title": "The Lion King",
+        "release_date": "1994-06-23"
+      },
+      {
+        "id": 420818,
+        "title": "The Lion King",
+        "release_date": "2019-07-12"
+      }
+    ]
+  },
+  {
+    "name": "lion-king-2019-remake",
+    "is_movie": true,
+    "query_title": "The Lion King",
+    "query_year": 2019,
+    "expected_tmdb_id": 420818,
+    "results": [
+      {
+        "id": 8587,
+        "title": "The Lion King",
+        "release_date": "1994-06-23"
+      },
+      {
+        "id": 420818,
+        "title": "The Lion King",
+        "release_date": "2019-07-12"
+      }
+    ]
+  },
+  {
+    "name": "little-women-2019-not-1994",
+    "is_movie": true,
+    "query_title": "Little Women",
+    "query_year": 2019,
+    "expected_tmdb_id": 331482,
+    "results": [
+      {
+        "id": 331482,
+        "title": "Little Women",
+        "release_date": "2019-12-25"
+      },
+      {
+        "id": 9587,
+        "title": "Little Women",
+        "release_date": "1994-12-21"
+      }
+    ]
+  },
+  {
+    "name": "joker-2019",
+    "is_movie": true,
+    "query_title": "Joker",
+    "query_year": 2019,
+    "expected_tmdb_id": 475557,
+    "results": [
+      {
+        "id": 475557,
+        "title": "Joker",
+        "release_date": "2019-10-02"
+      }
+    ]
+  },
+  {
+    "name": "numeric-title-1917",
+    "is_movie": true,
+    "query_title": "1917",
+    "query_year": 2019,
+    "expected_tmdb_id": 530915,
+    "results": [
+      {
+        "id": 530915,
+        "title": "1917",
+        "release_date": "2019-12-04"
+      },
+      {
+        "id": 99001,
+        "title": "1918",
+        "release_date": "2018-01-01"
+      }
+    ]
+  },
+  {
+    "name": "wall-e-punctuation-tokenizes",
+    "is_movie": true,
+    "query_title": "WALL·E",
+    "query_year": 2008,
+    "expected_tmdb_id": 10681,
+    "results": [
+      {
+        "id": 10681,
+        "title": "WALL·E",
+        "release_date": "2008-06-22"
+      }
+    ]
+  },
+  {
+    "name": "amelie-accented-english-title",
+    "is_movie": true,
+    "query_title": "Amélie",
+    "query_year": 2001,
+    "expected_tmdb_id": 194,
+    "results": [
+      {
+        "id": 194,
+        "title": "Amélie",
+        "release_date": "2001-04-25"
+      }
+    ]
+  },
+  {
+    "name": "spirited-away-legit-english",
+    "is_movie": true,
+    "query_title": "Spirited Away",
+    "query_year": 2001,
+    "expected_tmdb_id": 129,
+    "results": [
+      {
+        "id": 129,
+        "title": "Spirited Away",
+        "release_date": "2001-07-20"
+      },
+      {
+        "id": 674324,
+        "title": "The Boy and the Heron",
+        "release_date": "2023-07-14"
+      }
+    ]
+  },
+  {
+    "name": "avengers-endgame-jaccard-over-infinity-war",
+    "is_movie": true,
+    "query_title": "Avengers Endgame",
+    "query_year": 2019,
+    "expected_tmdb_id": 299534,
+    "results": [
+      {
+        "id": 299536,
+        "title": "Avengers: Infinity War",
+        "release_date": "2018-04-25"
+      },
+      {
+        "id": 299534,
+        "title": "Avengers: Endgame",
+        "release_date": "2019-04-24"
+      }
+    ]
+  },
+  {
+    "name": "no-country-jaccard-partial",
+    "is_movie": true,
+    "query_title": "No Country for Old Men",
+    "query_year": 2007,
+    "expected_tmdb_id": 6977,
+    "results": [
+      {
+        "id": 6977,
+        "title": "No Country for Old Men",
+        "release_date": "2007-11-08"
+      },
+      {
+        "id": 9999001,
+        "title": "Old Men",
+        "release_date": "2010-01-01"
+      }
+    ]
+  },
+  {
+    "name": "GAP-stylized-numeral-seven-vs-se7en",
+    "is_movie": true,
+    "query_title": "Seven",
+    "query_year": 1995,
+    "expected_tmdb_id": 807,
+    "results": [
+      {
+        "id": 807,
+        "title": "Se7en",
+        "release_date": "1995-09-22"
+      }
+    ],
+    "known_gap": true
+  },
+  {
+    "name": "GAP-foreign-original-title-not-english",
+    "is_movie": true,
+    "query_title": "Sen to Chihiro no Kamikakushi",
+    "query_year": 2001,
+    "expected_tmdb_id": 129,
+    "results": [
+      {
+        "id": 129,
+        "title": "Spirited Away",
+        "release_date": "2001-07-20"
+      }
+    ],
+    "known_gap": true
+  },
+  {
+    "name": "tv-breaking-bad",
+    "is_movie": false,
+    "query_title": "Breaking Bad",
+    "query_year": 2008,
+    "expected_tmdb_id": 1396,
+    "results": [
+      {
+        "id": 1396,
+        "name": "Breaking Bad",
+        "first_air_date": "2008-01-20"
+      }
+    ]
+  },
+  {
+    "name": "tv-the-wire-stopword",
+    "is_movie": false,
+    "query_title": "The Wire",
+    "query_year": 2002,
+    "expected_tmdb_id": 1438,
+    "results": [
+      {
+        "id": 1438,
+        "name": "The Wire",
+        "first_air_date": "2002-06-02"
+      }
+    ]
+  },
+  {
+    "name": "tv-better-call-saul-not-breaking-bad",
+    "is_movie": false,
+    "query_title": "Better Call Saul",
+    "query_year": 2015,
+    "expected_tmdb_id": 60059,
+    "results": [
+      {
+        "id": 1396,
+        "name": "Breaking Bad",
+        "first_air_date": "2008-01-20"
+      },
+      {
+        "id": 60059,
+        "name": "Better Call Saul",
+        "first_air_date": "2015-02-08"
+      }
+    ]
+  },
+  {
+    "name": "tv-foundation-2021-not-1973",
+    "is_movie": false,
+    "query_title": "Foundation",
+    "query_year": 2021,
+    "expected_tmdb_id": 93740,
+    "results": [
+      {
+        "id": 93740,
+        "name": "Foundation",
+        "first_air_date": "2021-09-24"
+      },
+      {
+        "id": 99002,
+        "name": "Foundation",
+        "first_air_date": "1973-01-01"
+      }
+    ]
+  },
+  {
+    "name": "reject-wrong-era-tv-only-old-candidate",
+    "is_movie": false,
+    "query_title": "Foundation",
+    "query_year": 2021,
+    "expected_tmdb_id": null,
+    "results": [
+      {
+        "id": 99002,
+        "name": "Foundation",
+        "first_air_date": "1973-01-01"
+      }
+    ]
+  },
+  {
+    "name": "reject-zero-overlap-sequel-title-absent",
+    "is_movie": true,
+    "query_title": "Glass Onion",
+    "query_year": 2022,
+    "expected_tmdb_id": null,
+    "results": [
+      {
+        "id": 546554,
+        "title": "Knives Out",
+        "release_date": "2019-11-27"
+      }
+    ]
   }
 ]
