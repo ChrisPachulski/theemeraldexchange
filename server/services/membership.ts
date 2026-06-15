@@ -13,7 +13,7 @@
 
 import { env } from '../env.js'
 import { serverDb } from './serverDb.js'
-import { parseSub } from './sub.js'
+import { isValidSub } from './sub.js'
 
 // Re-export the invite-redeem surface unchanged so callers can import the
 // authZ decision (`memberStatus`) and the membership-minting side
@@ -94,12 +94,3 @@ function isAuthzBootstrapped(): boolean {
   return anyMember !== undefined
 }
 
-/** True when `sub` is a syntactically valid namespaced sub. */
-function isValidSub(sub: string): boolean {
-  try {
-    parseSub(sub)
-    return true
-  } catch {
-    return false
-  }
-}

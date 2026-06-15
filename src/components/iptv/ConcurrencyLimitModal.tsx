@@ -2,6 +2,7 @@ import type { SessionRow } from '../../lib/api/iptv'
 import { useKillIptvSession } from '../../lib/hooks/useIptvSessions'
 import { useModalA11y } from '../../lib/hooks/useModalA11y'
 import type { ConcurrencyLimitPayload } from './concurrencyLimit'
+import { relativeTime, kindLabel } from './sessionFormatting'
 
 // Shown when a stream grant 429s because the upstream's connection cap
 // is full. The 429 body now embeds the active sessions so we can render
@@ -11,24 +12,6 @@ import type { ConcurrencyLimitPayload } from './concurrencyLimit'
 // ConcurrencyLimitPayload + concurrencyPayloadFromError live in
 // ./concurrencyLimit.ts so this file is component-only (react-refresh
 // requirement).
-
-function relativeTime(ms: number): string {
-  const diff = Date.now() - ms
-  if (diff < 60_000) return `${Math.floor(diff / 1000)}s ago`
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
-  return `${Math.floor(diff / 3_600_000)}h ago`
-}
-
-function kindLabel(kind: SessionRow['kind']): string {
-  switch (kind) {
-    case 'live': return 'Live'
-    case 'remux': return 'Live (Apple)'
-    case 'vod': return 'Movie'
-    case 'series': return 'Episode'
-    case 'catchup': return 'Catchup'
-    default: return kind
-  }
-}
 
 export function ConcurrencyLimitModal({
   payload,

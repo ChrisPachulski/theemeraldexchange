@@ -8,6 +8,7 @@ import {
 } from 'react'
 import { useRoute, type Route } from './router'
 import { useAuth } from './auth'
+import { prefersReducedMotion } from './viewTransition'
 import './navTransition.css'
 
 // One-shot nav transition + on-demand replay.
@@ -39,11 +40,6 @@ function markPlayed() {
     // localStorage unavailable — fall back to in-memory only via the
     // "playing" check; user will get the transition each session.
   }
-}
-
-function prefersReducedMotion(): boolean {
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
-  return window.matchMedia('(prefers-reduced-motion: reduce)').matches
 }
 
 type Mode = 'transition' | 'replay'

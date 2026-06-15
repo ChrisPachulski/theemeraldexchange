@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { SessionRow } from '../../lib/api/iptv'
 import { useIptvSessions, useKillIptvSession } from '../../lib/hooks/useIptvSessions'
 import { useModalA11y } from '../../lib/hooks/useModalA11y'
+import { relativeTime, kindLabel } from './sessionFormatting'
 
 // Pill at the top-right of the IPTV shell showing "N / M slots" against
 // the mybunny upstream account cap. Tap to open the sessions panel; from
@@ -9,25 +10,6 @@ import { useModalA11y } from '../../lib/hooks/useModalA11y'
 // from other IPTV apps using the same mybunny credentials directly (e.g.
 // KSPlayer on a phone) are invisible to us — the panel explains that and
 // surfaces the upstream's reported active_cons so the gap is visible.
-
-function relativeTime(ms: number): string {
-  const diff = Date.now() - ms
-  if (diff < 60_000) return `${Math.floor(diff / 1000)}s ago`
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`
-  return `${Math.floor(diff / 86_400_000)}d ago`
-}
-
-function kindLabel(kind: SessionRow['kind']): string {
-  switch (kind) {
-    case 'live': return 'Live'
-    case 'remux': return 'Live (Apple)'
-    case 'vod': return 'Movie'
-    case 'series': return 'Episode'
-    case 'catchup': return 'Catchup'
-    default: return kind
-  }
-}
 
 export function ConnectionsWidget() {
   const [open, setOpen] = useState(false)

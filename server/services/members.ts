@@ -13,7 +13,7 @@
 // Schema: server/migrations/server/0003_members_invites.sql.
 
 import { serverDb } from './serverDb.js'
-import { parseSub } from './sub.js'
+import { parseSub, isValidSub } from './sub.js'
 import type { AuthMode } from '../session.js'
 
 /** A row in the `members` allowlist. */
@@ -183,12 +183,3 @@ function getMemberRow(sub: string): Member | null {
   return row ?? null
 }
 
-/** True when `sub` is a syntactically valid namespaced sub. */
-function isValidSub(sub: string): boolean {
-  try {
-    parseSub(sub)
-    return true
-  } catch {
-    return false
-  }
-}

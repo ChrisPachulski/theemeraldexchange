@@ -14,7 +14,20 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Protocol
 
+import numpy as np
+
 from ..schemas import ScoredItem
+
+# Shared embedding helpers used across recipe modules. EMBED_EPS is the
+# floor used when normalising rows so a zero-norm vector doesn't divide by
+# zero; _normalize unit-normalises a single query vector (no-op on a zero
+# vector). Previously copied verbatim into each recipe.
+EMBED_EPS = 1e-9
+
+
+def _normalize(v: np.ndarray) -> np.ndarray:
+    n = np.linalg.norm(v)
+    return v / n if n > 0 else v
 
 
 class RecipeScore(Protocol):

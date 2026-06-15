@@ -4,24 +4,8 @@ import { radarr, type MovieSearchResult } from '../../lib/api/radarr'
 import { useRadarrProfiles, useRadarrRootFolders } from '../../lib/hooks/useRadarrLibrary'
 import { useAuth } from '../../lib/auth'
 import { useLimits } from '../../lib/hooks/useLimits'
+import { pickDefaultProfileId } from '../../lib/pickDefaultProfileId'
 import './AddSeriesModal.css'
-
-// Pick the household's curated profile by name (case-insensitive)
-// when present; otherwise fall back to whatever Radarr returns first.
-// The name comes from /api/limits.defaultProfileName so the admin
-// modal default agrees with what the server enforces for non-admin
-// direct-POSTs (materializeNonAdminMovieBody). Pre-fix this was
-// hard-coded to "choose me" client-side, which silently disagreed
-// with the server whenever the operator set DEFAULT_PROFILE_NAME to
-// something else.
-function pickDefaultProfileId(
-  profiles: { id: number; name: string }[] | undefined,
-  preferredName: string,
-): number | null {
-  if (!profiles || profiles.length === 0) return null
-  const preferred = profiles.find((p) => p.name.toLowerCase() === preferredName)
-  return (preferred ?? profiles[0]).id
-}
 
 type Props = {
   movie: MovieSearchResult | null

@@ -15,7 +15,7 @@ from ..context import Candidate, UserContext
 from ..reasons import discover_reason, neighbors_for, personalized_reason, trending_reason
 from ..retrieval import cold_start_pool, retrieve_candidates
 from ..schemas import ScoredItem
-from . import RecipeResult
+from . import RecipeResult, _normalize, EMBED_EPS
 
 DEFAULTS: dict[str, float | int | str] = {
     "pool_size": 800,
@@ -26,13 +26,6 @@ DEFAULTS: dict[str, float | int | str] = {
     "mmr_lambda": 0.70,
     "mmr_input_k": 200,
 }
-
-EMBED_EPS = 1e-9
-
-
-def _normalize(v: np.ndarray) -> np.ndarray:
-    n = np.linalg.norm(v)
-    return v / n if n > 0 else v
 
 
 def _mmr(

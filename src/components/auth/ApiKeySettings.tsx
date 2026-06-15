@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useUserApiKey } from '../../lib/hooks/useUserApiKey'
 import { apiUrl } from '../../lib/api/base'
+import { fmtCost } from '../../lib/fmtCost'
 import './ApiKeySettings.css'
 
 // Per-user "Your AI key" card in the user menu. The key is stored
@@ -28,12 +29,6 @@ async function fetchUsageMe(): Promise<UsageMe | null> {
   const r = await fetch(apiUrl('/api/usage/me'), { credentials: 'include' })
   if (!r.ok) return null
   return (await r.json()) as UsageMe
-}
-
-function fmtCost(cents: number): string {
-  if (cents <= 0) return '$0.00'
-  if (cents < 1) return `~$${(cents / 100).toFixed(4)}`
-  return `~$${(cents / 100).toFixed(2)}`
 }
 
 export function ApiKeySettings() {

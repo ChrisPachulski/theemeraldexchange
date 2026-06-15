@@ -104,6 +104,16 @@ export function parseSub(s: string): Sub {
   return { provider: parsed.provider as SubProvider, id: parsed.id, raw: parsed.raw }
 }
 
+/** True when `sub` is a syntactically valid namespaced sub. */
+export function isValidSub(sub: string): boolean {
+  try {
+    parseSub(sub)
+    return true
+  } catch {
+    return false
+  }
+}
+
 /**
  * Attempt to normalise a legacy (M1) bare `sub` value to the prefixed
  * form during the 30-day grace window.
