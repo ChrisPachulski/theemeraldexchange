@@ -13,9 +13,12 @@
 
 use std::sync::Arc;
 
+use std::time::Duration;
+
 use axum::extract::{Path, Query, Request, State};
 use axum::http::StatusCode;
-use axum::http::header::AUTHORIZATION;
+use axum::http::header::{AUTHORIZATION, USER_AGENT};
+use axum::http::HeaderMap;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -30,7 +33,7 @@ use serde_json::{Value, json};
 
 use crate::concurrency::Busy;
 use crate::plan::{TranscodePlan, plan_sidecar_subtitle, plan_transcode, plan_transcode_forced};
-use crate::session::{SIDECAR_SUBTITLE_NAME, SessionManager, StartError, StartOpts};
+use crate::session::{SIDECAR_SUBTITLE_NAME, SessionManager, StartError, StartOpts, segment_index};
 
 /// Transcoder app state — the session manager + principal posture.
 #[derive(Clone)]
@@ -369,6 +372,7 @@ async fn grant(
         start_secs,
         source_codec,
         source_avg_kbps,
+        duration_secs: row.duration_secs,
         owner,
         subtitle_source_index: sidecar.as_ref().map(|s| s.source_index),
     };
@@ -427,9 +431,31 @@ async fn grant(
 /// stream token's sub on every forwarded request, so the player always arrives
 /// as the session's owner. Fail-closed: an ownerless session under a verified
 /// principal is admin-only (same posture as `session_authorized`).
+/// Longest a native segment request waits for the on-demand encoder to produce
+/// a not-yet-written segment before giving up with 404. Generous enough to cover
+/// the faster-than-realtime encoder reaching a freshly-requested frontier
+/// segment; bounded so a request for a segment that will never exist (e.g. a
+/// far-forward seek past where the encoder will reach in time) can't hang.
+const NATIVE_SEGMENT_WAIT: Duration = Duration::from_secs(20);
+const NATIVE_SEGMENT_POLL: Duration = Duration::from_millis(500);
+
+/// True for native Apple HLS clients (AVPlayer / AVKit on iOS, tvOS, Safari),
+/// which set a `AppleCoreMedia`/`CoreMedia` User-Agent. The backend proxy now
+/// forwards User-Agent to the transcoder (see server/routes/transcode.ts), so
+/// this distinguishes native players — which need a finite VOD playlist — from
+/// hls.js in a browser, which keeps the proven growing EVENT playlist.
+fn is_native_hls_client(headers: &HeaderMap) -> bool {
+    headers
+        .get(USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(|ua| ua.contains("AppleCoreMedia") || ua.contains("CoreMedia"))
+        .unwrap_or(false)
+}
+
 async fn session_manifest(
     State(state): State<AppState>,
     claims: Option<Extension<InternalClaims>>,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
     let claims = claims.map(|Extension(c)| c);
@@ -439,6 +465,32 @@ async fn session_manifest(
     if !session_authorized(&claims, owner.as_deref()) {
         return forbidden();
     }
+
+    // Native players (AVKit) read the playlist directly and render an
+    // ENDLIST-less EVENT playlist as a LIVE stream (no scrubber). Serve them a
+    // complete VOD playlist synthesized from the known duration instead; web
+    // (hls.js) falls through to the on-disk EVENT playlist below, unchanged.
+    if is_native_hls_client(&headers)
+        && let Some(body) = state.sessions.vod_manifest(&id).await
+    {
+        return (
+            StatusCode::OK,
+            [
+                (
+                    axum::http::header::CONTENT_TYPE,
+                    "application/vnd.apple.mpegurl",
+                ),
+                (axum::http::header::CACHE_CONTROL, "no-store"),
+                (
+                    axum::http::HeaderName::from_static("x-accel-buffering"),
+                    "no",
+                ),
+            ],
+            body,
+        )
+            .into_response();
+    }
+
     let Some(path) = state.sessions.manifest_path(&id).await else {
         return session_not_found(); // reaped between the owner check and here
     };
@@ -483,6 +535,7 @@ async fn session_manifest(
 async fn session_segment(
     State(state): State<AppState>,
     claims: Option<Extension<InternalClaims>>,
+    headers: HeaderMap,
     Path((id, segment)): Path<(String, String)>,
 ) -> Response {
     let claims = claims.map(|Extension(c)| c);
@@ -500,6 +553,30 @@ async fn session_segment(
         )
             .into_response();
     };
+
+    // Native players walk a COMPLETE VOD playlist (see `session_manifest`) whose
+    // tail segments may not be encoded yet — the on-demand encoder is producing
+    // them. Briefly wait for the requested segment to appear instead of 404ing a
+    // segment the manifest legitimately lists, then fall through to the normal
+    // read (which 404s if it never arrives within the bound). Web (hls.js) only
+    // ever requests already-listed segments, so it never enters this wait.
+    if is_native_hls_client(&headers)
+        && segment_index(&segment).is_some()
+        && !tokio::fs::try_exists(&path).await.unwrap_or(false)
+    {
+        let mut waited = Duration::ZERO;
+        while waited < NATIVE_SEGMENT_WAIT {
+            tokio::time::sleep(NATIVE_SEGMENT_POLL).await;
+            waited += NATIVE_SEGMENT_POLL;
+            // Stop waiting if the session was reaped out from under us.
+            if state.sessions.session_owner(&id).await.is_none() {
+                return session_not_found();
+            }
+            if state.sessions.segment_exists(&id, &segment).await {
+                break;
+            }
+        }
+    }
     // fMP4 sessions (HEVC copy) serve `init.mp4` + `seg_*.m4s`; everything
     // else is MPEG-TS. hls.js fetches as arraybuffer regardless, but native
     // HLS (Safari) and intermediaries deserve a truthful content type.

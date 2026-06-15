@@ -19,6 +19,7 @@ pub mod encoders;
 pub mod plan;
 pub mod routes;
 pub mod session;
+mod vod_manifest;
 
 pub use routes::{AppState, router};
 

@@ -30,6 +30,11 @@ const FORWARD_REQUEST_HEADERS = [
   'if-range',
   'if-none-match',
   'if-modified-since',
+  // The transcoder serves native Apple HLS clients (AppleCoreMedia User-Agent)
+  // a finite VOD playlist instead of the growing EVENT playlist, so AVKit shows
+  // a real scrubber rather than a LIVE badge. That decision needs the original
+  // client's User-Agent to survive this proxy hop.
+  'user-agent',
 ] as const
 
 // Upstream response headers copied back so byte-range streaming (206),

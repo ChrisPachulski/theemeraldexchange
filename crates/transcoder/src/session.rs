@@ -24,7 +24,7 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::args::{ArgSpec, HwEncoder, ffmpeg_args_for, sidecar_vtt_args};
 use crate::concurrency::{Busy, Caps, Limiter, Permit};
-use crate::plan::TranscodePlan;
+use crate::plan::{SegmentFormat, TranscodePlan};
 
 /// 30s with no heartbeat → reap (mirrors `IDLE_MS` in iptvRemux.ts).
 const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -111,6 +111,11 @@ pub struct StartOpts {
     /// low-bitrate source is never inflated past its own quality (see
     /// [`crate::args`]'s ladder). `None` → ladder applies uncapped.
     pub source_avg_kbps: Option<u32>,
+    /// Full source duration in seconds (from the file probe), or `None` when the
+    /// probe found none. Lets native (AVPlayer) clients be served a complete VOD
+    /// playlist with a finite timeline instead of the growing EVENT playlist
+    /// (which AVKit renders as a live stream). See [`crate::vod_manifest`].
+    pub duration_secs: Option<i64>,
     /// The VERIFIED principal's sub from the grant request, binding the session
     /// to its creator so stop/seek/heartbeat can enforce owner-or-admin.
     /// `None` only in the Off/log postures where no verified identity exists
@@ -172,6 +177,8 @@ struct Session {
     source_codec: Option<String>,
     /// Source average bitrate (kbps), carried for respawn arg parity.
     source_avg_kbps: Option<u32>,
+    /// Full source duration (secs) for the native VOD-manifest synthesis.
+    duration_secs: Option<i64>,
     /// Verified principal sub that created the session (owner-or-admin gate).
     owner: Option<String>,
 }
@@ -355,7 +362,7 @@ enum RespawnMode {
 }
 
 /// Parse a segment file name (`seg_%05d.ts`) into its index.
-fn segment_index(name: &str) -> Option<u64> {
+pub(crate) fn segment_index(name: &str) -> Option<u64> {
     // `.ts` for MPEG-TS sessions, `.m4s` for fMP4 (HEVC copy) sessions.
     let stem = name.strip_prefix("seg_")?;
     let stem = stem
@@ -844,6 +851,7 @@ impl SessionManager {
             input_path: opts.input_path,
             source_codec: opts.source_codec,
             source_avg_kbps: opts.source_avg_kbps,
+            duration_secs: opts.duration_secs,
             owner: opts.owner,
         };
 
@@ -939,6 +947,34 @@ impl SessionManager {
             .await
             .get(id)
             .map(|s| s.manifest_path())
+    }
+
+    /// Build a complete VOD playlist for `id`, for serving to native (AVPlayer)
+    /// clients instead of the growing on-disk EVENT playlist (which AVKit renders
+    /// as a live stream). `None` when the session is unknown, is direct-play, or
+    /// has no known duration — callers fall back to the on-disk playlist.
+    pub async fn vod_manifest(&self, id: &str) -> Option<String> {
+        let guard = self.sessions.lock().await;
+        let session = guard.get(id)?;
+        let duration = session.duration_secs.filter(|d| *d > 0)? as f64;
+        let fmp4 = matches!(
+            &session.plan,
+            TranscodePlan::Transcode {
+                segment_format: SegmentFormat::Fmp4,
+                ..
+            }
+        );
+        crate::vod_manifest::synthesize(duration, session.start_secs, fmp4)
+    }
+
+    /// True when a segment file for `id` exists on disk right now. Used by the
+    /// native wait-for-segment path to poll for the encoder frontier without
+    /// holding the sessions lock across the wait.
+    pub async fn segment_exists(&self, id: &str, name: &str) -> bool {
+        match self.asset_path(id, name).await {
+            Some(path) => tokio::fs::try_exists(&path).await.unwrap_or(false),
+            None => false,
+        }
     }
 
     /// Resolve a named asset (an HLS segment or the playlist) inside a session's
@@ -1386,6 +1422,7 @@ mod tests {
             plan: remux_plan(),
             start_secs: 0,
             source_codec: None,
+            duration_secs: None,
             owner: None,
             subtitle_source_index: None,
         }
@@ -1972,6 +2009,7 @@ mod tests {
             },
             start_secs: 0,
             source_codec: Some("hevc".into()),
+            duration_secs: None,
             owner: None,
             subtitle_source_index: None,
         }
