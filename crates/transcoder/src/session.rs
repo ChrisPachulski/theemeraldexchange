@@ -435,6 +435,15 @@ pub struct SessionManager {
     /// encode chain works (see [`crate::encoders::vaapi_full_hw_supported`]); off
     /// by default so the manager falls back to the proven software-decode path.
     vaapi_hw_decode: bool,
+    /// Per-identity async gates that serialize same-title `start` calls so a
+    /// duplicate / rapid-retry grant coalesces onto one session instead of each
+    /// racing for a slot. Keyed by [`SessionManager::coalesce_key`]; entries are
+    /// pruned in the idle sweep once no `start` holds a key. Without this, a user
+    /// replaying a title whose previous (CPU-capped) session is still draining
+    /// 503'd against the single CPU slot — surfaced in the app as "temporarily
+    /// unavailable". See [`SessionManager::start`] for the coalesce/supersede
+    /// policy.
+    start_gates: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
 }
 
 impl SessionManager {
@@ -454,6 +463,7 @@ impl SessionManager {
             encoder,
             media_roots: Vec::new(),
             vaapi_hw_decode: false,
+            start_gates: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -759,9 +769,54 @@ impl SessionManager {
         });
     }
 
+    /// Identity key for grant coalescing: a new grant matching a live session's
+    /// (owner, media kind/id, sub, source path) is the same logical playback —
+    /// the same title the same principal is already streaming — regardless of
+    /// resume offset. The offset decides reuse-vs-supersede inside [`start`].
+    ///
+    /// [`start`]: SessionManager::start
+    fn coalesce_key(opts: &StartOpts) -> String {
+        // \u{1} (SOH) cannot appear in a filesystem path or these id fields, so
+        // it is an unambiguous, collision-free field separator.
+        format!(
+            "{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}",
+            opts.owner.as_deref().unwrap_or(""),
+            opts.media_kind,
+            opts.media_id,
+            opts.sub,
+            opts.input_path,
+        )
+    }
+
+    /// Find a live session for the same coalesce identity as `opts`. Returns its
+    /// id and whether it sits at the SAME resume offset (`true` → a duplicate to
+    /// reuse; `false` → a stale session at a different offset, to supersede).
+    /// Only heartbeat-fresh sessions (within the idle window) qualify, so we
+    /// never hand back one the sweeper is about to reap.
+    async fn find_owner_title_session(&self, opts: &StartOpts) -> Option<(SessionId, bool)> {
+        let now = now_secs();
+        let sessions = self.sessions.lock().await;
+        sessions.iter().find_map(|(id, s)| {
+            let same_title = s.info_kind == opts.media_kind
+                && s.info_id == opts.media_id
+                && s.sub == opts.sub
+                && s.owner.as_deref() == opts.owner.as_deref()
+                && s.input_path == opts.input_path
+                && now.saturating_sub(s.last_seen) <= IDLE_TIMEOUT.as_secs();
+            same_title.then(|| (id.clone(), s.start_secs == opts.start_secs))
+        })
+    }
+
     /// Start a session. Acquires a concurrency permit (mapping a cap hit to
     /// [`StartError::Busy`] → 503 transcoder_busy), creates the tmpdir, spawns
     /// ffmpeg, and registers the session. Returns the session id.
+    ///
+    /// Duplicate / rapid-retry grants are COALESCED: a per-identity gate
+    /// serializes same-title starts, and inside it a grant that matches a live
+    /// session at the same resume offset reuses that session (no second slot),
+    /// while one at a DIFFERENT offset supersedes the stale session (stops it so
+    /// its slot frees) before starting fresh. This is what turns a re-tap of a
+    /// still-draining CPU-capped title from a 503 into instant playback.
     pub async fn start(&self, opts: StartOpts) -> Result<SessionId, StartError> {
         // Defense-in-depth path confinement (§ audit 1-3). When media roots are
         // configured, the source path MUST lexically resolve (incl. `..`) under
@@ -772,6 +827,51 @@ impl SessionManager {
         if !self.media_roots.is_empty() && !path_within_roots(&opts.input_path, &self.media_roots) {
             return Err(StartError::Forbidden(opts.input_path.clone()));
         }
+
+        // Grant coalescing / supersede (CPU-cap relief). Acquire the per-identity
+        // gate FIRST so two SIMULTANEOUS grants for the same title can't both
+        // race past the cap: the second blocks here until the first has
+        // registered its session, then coalesces onto it below.
+        let gate = {
+            let mut gates = self.start_gates.lock().await;
+            gates
+                .entry(Self::coalesce_key(&opts))
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone()
+        };
+        let _gate = gate.lock().await;
+
+        match self.find_owner_title_session(&opts).await {
+            // Same title, same offset → duplicate/retry: reuse the live session.
+            // The client gets the same manifest and we burn no second (scarce,
+            // CPU-capped) slot — the fix for the "temporarily unavailable" 503 a
+            // re-tap of a still-draining title produced.
+            Some((existing, true)) => {
+                tracing::info!(
+                    session = %existing,
+                    media_kind = %opts.media_kind,
+                    media_id = opts.media_id,
+                    "coalescing duplicate grant onto live session (no new slot)"
+                );
+                return Ok(existing);
+            }
+            // Same title, DIFFERENT offset → the prior session is stale (the user
+            // re-opened at a new resume point; its abandoned client otherwise
+            // lingers until the 30s idle reap). Stop it so its slot frees for the
+            // fresh start instead of the new grant 503ing against the single CPU
+            // slot the dead session still pins.
+            Some((stale, false)) => {
+                tracing::info!(
+                    session = %stale,
+                    media_kind = %opts.media_kind,
+                    media_id = opts.media_id,
+                    "superseding stale same-title session at a new resume offset"
+                );
+                self.stop(&stale).await;
+            }
+            None => {}
+        }
+
         // Charge the stricter CPU cap for every session that does REAL work on
         // the CPU. Two rules, both load-based (not encoder-family-based):
         //
@@ -1048,6 +1148,14 @@ impl SessionManager {
             tracing::info!(session = %id, "reaping idle transcode session");
             self.stop(id).await;
         }
+        // Prune coalesce gates no `start` is currently holding (strong_count==1
+        // means only the map's own Arc remains). Bounds the gate map — which
+        // otherwise accrues one entry per distinct title/owner over the process
+        // lifetime — without ever dropping a gate an in-flight start depends on.
+        self.start_gates
+            .lock()
+            .await
+            .retain(|_, g| Arc::strong_count(g) > 1);
         stale
     }
 
@@ -1741,22 +1849,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn same_second_grants_get_distinct_sessions_with_no_orphan() {
-        // Regression: the id was tx:{kind}:{media_id}:{sub}:{now_secs} — a
-        // double-click within one second minted the SAME id, and the second
-        // map insert displaced the first Session, orphaning its ffmpeg (the
-        // permit dropped but the process kept encoding). The monotonic
-        // sequence suffix makes every id unique.
+    async fn duplicate_grant_coalesces_onto_one_session_no_orphan() {
+        // Two IDENTICAL grants (same kind/id/sub/path/offset) back-to-back —
+        // e.g. a double-tap, or the app re-requesting a title whose previous
+        // session is still draining. They must COALESCE onto a single live
+        // session: the second returns the first's id, spawns no second ffmpeg,
+        // and burns no second concurrency slot. (Previously they minted two
+        // distinct sessions; with DV on the single CPU slot that 503'd the
+        // user's own re-tap as "temporarily unavailable".)
         let tmp = tempfile::tempdir().unwrap();
         let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
-        // Identical opts (same kind/id/sub), started back-to-back in the same
-        // wall-clock second.
         let a = mgr.start(opts("/lib/a.mkv")).await.unwrap();
         let b = mgr.start(opts("/lib/a.mkv")).await.unwrap();
-        assert_ne!(a, b, "same-second grants must mint distinct ids");
+        assert_eq!(a, b, "identical grants must coalesce to the same session");
+        assert_eq!(mgr.len().await, 1, "no second session is created");
+
+        // One encoder, one slot — nothing orphaned.
+        let dir_a = mgr.manifest_path(&a).await.unwrap();
+        let pid_a = read_stub_pid(dir_a.parent().unwrap()).await;
+        assert!(process_alive(pid_a));
+        assert_eq!(mgr.limiter().active().0, 1, "exactly one slot held");
+
+        mgr.stop(&a).await;
+        wait_for(|| !process_alive(pid_a)).await;
+        assert!(mgr.is_empty().await);
+        assert_eq!(mgr.limiter().active(), (0, 0), "the single slot is freed");
+    }
+
+    #[tokio::test]
+    async fn distinct_titles_in_same_second_get_distinct_sessions_no_orphan() {
+        // The orphan-prevention property still holds for genuinely DIFFERENT
+        // titles started in the same wall-clock second: the monotonic sequence
+        // suffix makes their ids unique, so neither map insert displaces the
+        // other (which would orphan a still-encoding ffmpeg).
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
+        let a = mgr.start(opts("/lib/a.mkv")).await.unwrap();
+        let b = mgr.start(opts("/lib/b.mkv")).await.unwrap();
+        assert_ne!(a, b, "distinct titles must mint distinct ids");
         assert_eq!(mgr.len().await, 2, "both sessions must be live");
 
-        // Both encoders are running in their own dirs — nothing orphaned.
         let dir_a = mgr.manifest_path(&a).await.unwrap();
         let dir_b = mgr.manifest_path(&b).await.unwrap();
         assert_ne!(dir_a, dir_b);
@@ -1765,13 +1897,48 @@ mod tests {
         assert_ne!(pid_a, pid_b);
         assert!(process_alive(pid_a) && process_alive(pid_b));
 
-        // And both are individually stoppable — each kill reaches ITS process.
         mgr.stop(&a).await;
         wait_for(|| !process_alive(pid_a)).await;
         assert!(process_alive(pid_b), "stopping a must not touch b");
         mgr.stop(&b).await;
         wait_for(|| !process_alive(pid_b)).await;
         assert!(mgr.is_empty().await);
+    }
+
+    #[tokio::test]
+    async fn regrant_at_new_offset_supersedes_stale_session_freeing_the_slot() {
+        // A re-open of the SAME title at a DIFFERENT resume offset (the user
+        // backed out mid-watch, then resumed) must SUPERSEDE the stale session:
+        // stop it (freeing its slot) and start fresh at the new offset — never
+        // 503 against a single CPU slot the abandoned session still pins. Use
+        // max_cpu=1 with a CPU re-encode so a leaked slot would force Busy.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = SessionManager::new(
+            Limiter::new(Caps {
+                max_total: 4,
+                max_cpu: 1,
+            }),
+            write_stub(tmp.path(), "run").to_string_lossy().into_owned(),
+            tmp.path().join("s"),
+            HwEncoder::Cpu,
+        );
+        let first = mgr.start(encode_opts_id("/lib/a.mkv", 7)).await.unwrap();
+        let resumed = StartOpts {
+            start_secs: 120,
+            ..encode_opts_id("/lib/a.mkv", 7)
+        };
+        let second = mgr
+            .start(resumed)
+            .await
+            .expect("resume at a new offset must supersede, not 503");
+        assert_ne!(first, second, "supersede starts a fresh session");
+        assert_eq!(mgr.len().await, 1, "the stale session was stopped");
+        assert_eq!(
+            mgr.limiter().active(),
+            (1, 1),
+            "exactly one CPU slot held after supersede"
+        );
+        mgr.stop(&second).await;
     }
 
     #[test]
