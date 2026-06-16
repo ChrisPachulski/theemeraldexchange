@@ -332,6 +332,16 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
         }
     }
 
+    // Dolby Vision re-encode runs through libplacebo — a VULKAN filter — which
+    // applies the DV RPU. Initialize a Vulkan device (Mesa ANV on the iGPU)
+    // BEFORE -i. Decode stays on the CPU (libplacebo `hwupload`s CPU frames into
+    // Vulkan), so this path deliberately uses NO `-hwaccel`; full_hw /
+    // hw_surface_reencode above never fire for it (they match only EncodeH264).
+    if matches!(video, VideoOp::EncodeDolbyVision { .. }) {
+        push(&mut a, "-init_hw_device");
+        push(&mut a, "vulkan");
+    }
+
     // Seek BEFORE input for fast keyframe seek (§4.2). Omit at 0.
     if start_secs > 0 {
         push(&mut a, "-ss");
@@ -504,6 +514,51 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
                 push(&mut a, "-vf");
                 a.push(filter);
             }
+        }
+        VideoOp::EncodeDolbyVision {
+            scale_to_height,
+            source_height,
+        } => {
+            // libplacebo (Vulkan) applies the DV RPU and tone-maps to BT.709
+            // SDR; the iGPU's VAAPI encoder can't consume Vulkan frames, so the
+            // encode lands on the CPU (libx264). Forced keyframes keep segments
+            // exactly HLS_SEGMENT_SECS long, so the synthesized native VOD
+            // manifest still matches the on-disk segments one-for-one.
+            push(&mut a, "-c:v");
+            push(&mut a, "libx264");
+            push(&mut a, "-preset");
+            push(
+                &mut a,
+                if is_live_media_kind(media_kind) {
+                    "veryfast"
+                } else {
+                    "fast"
+                },
+            );
+            let br = h264_bitrate_kbps(scale_to_height.or(*source_height), source_avg_kbps);
+            push(&mut a, "-b:v");
+            a.push(format!("{br}k"));
+            push(&mut a, "-maxrate");
+            a.push(format!("{}k", br + br / 2));
+            push(&mut a, "-bufsize");
+            a.push(format!("{}k", br * 3));
+            push(&mut a, "-force_key_frames");
+            a.push(format!("expr:gte(t,n_forced*{HLS_SEGMENT_SECS})"));
+
+            // CPU-decode → hwupload to Vulkan → libplacebo (apply RPU + tonemap
+            // to BT.709 SDR) → hwdownload → optional CPU down-scale. p010le feeds
+            // libplacebo the 10-bit source; yuv420p is the 8-bit SDR output for
+            // libx264. Validated against the deployed ffmpeg on the iGPU.
+            let mut vf = String::from(
+                "format=p010le,hwupload,\
+                 libplacebo=apply_dolbyvision=true:colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv:format=yuv420p,\
+                 hwdownload,format=yuv420p",
+            );
+            if let Some(h) = scale_to_height {
+                vf.push_str(&format!(",scale=-2:{h}"));
+            }
+            push(&mut a, "-vf");
+            a.push(vf);
         }
     }
 
@@ -845,6 +900,51 @@ mod tests {
              -f hls -hls_time 2 -hls_list_size 0 -hls_flags append_list \
              -hls_playlist_type event \
              -hls_segment_filename /tmp/sess/seg_%05d.ts /tmp/sess/index.m3u8"
+        );
+    }
+
+    #[test]
+    fn dolby_vision_uses_vulkan_libplacebo_libx264() {
+        // Even with a VAAPI encoder configured, DV must take the Vulkan/libplacebo
+        // path (the iGPU VAAPI encoder can't consume Vulkan frames), NOT -hwaccel.
+        let plan = transcode(
+            VideoOp::EncodeDolbyVision {
+                scale_to_height: None,
+                source_height: Some(1080),
+            },
+            AudioOp::EncodeAac { bitrate_kbps: 192 },
+            SubtitleOp::None,
+        );
+        let joined = ffmpeg_args(&plan, "/lib/dv.mkv", "/tmp/s", 0, HwEncoder::Vaapi).join(" ");
+        assert!(joined.contains("-init_hw_device vulkan"), "{joined}");
+        assert!(
+            joined.contains("libplacebo=apply_dolbyvision=true"),
+            "{joined}"
+        );
+        assert!(joined.contains("-c:v libx264"), "{joined}");
+        assert!(
+            joined.contains("-force_key_frames expr:gte(t,n_forced*2)"),
+            "{joined}"
+        );
+        assert!(!joined.contains("-hwaccel vaapi"), "{joined}");
+        assert!(!joined.contains("h264_vaapi"), "{joined}");
+        assert!(joined.contains("/tmp/s/seg_%05d.ts"), "{joined}");
+    }
+
+    #[test]
+    fn dolby_vision_4k_appends_cpu_downscale() {
+        let plan = transcode(
+            VideoOp::EncodeDolbyVision {
+                scale_to_height: Some(1080),
+                source_height: Some(2160),
+            },
+            AudioOp::Copy,
+            SubtitleOp::None,
+        );
+        let joined = ffmpeg_args(&plan, "/lib/dv.mkv", "/tmp/s", 0, HwEncoder::Cpu).join(" ");
+        assert!(
+            joined.contains("hwdownload,format=yuv420p,scale=-2:1080"),
+            "{joined}"
         );
     }
 

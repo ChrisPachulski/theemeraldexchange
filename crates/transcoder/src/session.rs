@@ -577,6 +577,12 @@ impl SessionManager {
         &self.limiter
     }
 
+    /// The resolved ffmpeg binary path. The grant-time Dolby Vision probe derives
+    /// `ffprobe` from it (same install prefix).
+    pub fn ffmpeg_bin(&self) -> &str {
+        &self.ffmpeg_bin
+    }
+
     /// Does this session run the FULL-hardware VAAPI pipeline (GPU decode →
     /// VPP → encode, no CPU round-trip)? Mirrors `spawn_child`'s `hw_decode`
     /// gate AND `ffmpeg_args_for`'s burn-in restriction, so the concurrency

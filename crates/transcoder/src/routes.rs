@@ -285,6 +285,45 @@ pub struct GrantRequest {
     pub force_transcode: bool,
 }
 
+/// Derive the `ffprobe` path from the configured ffmpeg path (same install
+/// prefix); falls back to a bare `ffprobe` on `PATH`.
+fn ffprobe_bin(ffmpeg_bin: &str) -> String {
+    match ffmpeg_bin.strip_suffix("ffmpeg") {
+        Some(prefix) => format!("{prefix}ffprobe"),
+        None => "ffprobe".to_string(),
+    }
+}
+
+/// Best-effort Dolby Vision probe of `path`'s first video frame + streams.
+/// Returns true when the source carries DV (RPU side-data or a DOVI config
+/// record). Bounded by a timeout; ANY failure returns false (worst case is the
+/// prior copy behavior, never a panic). See the grant-time back-fill for why
+/// this is needed beyond media-core's stream-only scan probe.
+async fn probe_dolby_vision(ffmpeg_bin: &str, path: &str) -> bool {
+    let mut cmd = tokio::process::Command::new(ffprobe_bin(ffmpeg_bin));
+    cmd.args([
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-read_intervals",
+        "%+#1",
+        "-show_frames",
+        "-show_streams",
+        "-print_format",
+        "json",
+        path,
+    ]);
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::null());
+    let output = match tokio::time::timeout(Duration::from_secs(10), cmd.output()).await {
+        Ok(Ok(o)) if o.status.success() => o,
+        _ => return false,
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.contains("Dolby Vision") || text.contains("DOVI configuration")
+}
+
 /// `POST /api/transcode/grant` — plan + start. Direct-play files return a plan
 /// with no session (the caller streams directly from media-core); transcode
 /// files start a session and return its `index.m3u8` URL. A cap hit yields
@@ -307,7 +346,7 @@ async fn grant(
         force_transcode,
     } = req;
     let input_path = file.path.clone();
-    let row = file.into_row();
+    let mut row = file.into_row();
 
     // A file with NO video stream (audio-only, or a probe that found none —
     // either way `video_codec` is empty) can never satisfy the mandatory
@@ -328,6 +367,33 @@ async fn grant(
             Json(json!({ "error": "no_video_stream" })),
         )
             .into_response();
+    }
+
+    // Back-fill Dolby Vision that media-core's scan-time probe missed. That probe
+    // reads only STREAM side-data, which misses Profile 5 in Matroska (DV RPU is
+    // in-band per-frame, with no stream box and no PQ color transfer) — so such a
+    // file arrives with an empty `hdr_format` and, without this, would be
+    // stream-copied into an HLS that AVPlayer can't decode (CoreMediaErrorDomain
+    // -4). A one-frame probe (only for HEVC with no HDR label — the ambiguous
+    // case) catches it; the plan then routes DV to the libplacebo RPU re-encode.
+    let is_hevc_src = row
+        .video_codec
+        .as_deref()
+        .map(|c| {
+            let c = c.trim().to_ascii_lowercase();
+            c == "hevc" || c == "h265"
+        })
+        .unwrap_or(false);
+    let hdr_unlabeled = row
+        .hdr_format
+        .as_deref()
+        .map(|h| h.trim().is_empty())
+        .unwrap_or(true);
+    if is_hevc_src
+        && hdr_unlabeled
+        && probe_dolby_vision(state.sessions.ffmpeg_bin(), &input_path).await
+    {
+        row.hdr_format = Some("Dolby Vision".to_string());
     }
 
     // Source codec gates the full-hardware VAAPI decode path (see

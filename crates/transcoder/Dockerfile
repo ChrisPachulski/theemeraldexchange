@@ -62,14 +62,22 @@ FROM debian:bookworm-slim@sha256:96e378d7e6531ac9a15ad505478fcc2e69f371b10f5cdf8
 WORKDIR /srv
 
 # ffmpeg + the Intel VAAPI runtime, all from the official Debian repos:
-#   ffmpeg                 — built with --enable-vaapi (provides h264_vaapi)
+#   ffmpeg                 — built with --enable-vaapi AND --enable-libplacebo
 #   intel-media-va-driver  — the iHD VA driver for Gen graphics (Alder Lake)
 #   libva2 / libva-drm2    — the VAAPI userspace the driver plugs into
+#   mesa-vulkan-drivers    — Intel ANV Vulkan ICD (/usr/share/vulkan/icd.d) +
+#                            libvulkan1 loader; REQUIRED by the libplacebo filter,
+#                            which is how Dolby Vision (esp. Profile 5) gets its
+#                            RPU applied (`apply_dolbyvision`) so it tone-maps to
+#                            correct SDR instead of green/magenta garbage. The
+#                            iGPU render node (/dev/dri/renderD128, already mapped
+#                            for VAAPI) backs both VAAPI and Vulkan.
 # curl is retained for the container HEALTHCHECK (audit 9-0). Then create a
 # non-root user that owns /scratch (where ffmpeg writes HLS segments).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl ffmpeg intel-media-va-driver libva2 libva-drm2 \
+      mesa-vulkan-drivers libvulkan1 \
  && rm -rf /var/lib/apt/lists/* \
  && mkdir -p /scratch \
  && groupadd --system --gid 10003 transcoder \
@@ -88,6 +96,13 @@ ENV TRANSCODER_HOST=0.0.0.0
 ENV TRANSCODER_PORT=8003
 ENV TRANSCODER_FFMPEG_BIN=/usr/bin/ffmpeg
 ENV TRANSCODER_TMP_DIR=/scratch
+# libplacebo (DV re-encode path) writes a Vulkan shader cache under $XDG_CACHE_HOME
+# (default $HOME/.cache = /srv/.cache, which is read-only here → a per-session
+# "Failed to create … shader cache … disabling" warning + a shader recompile on
+# every DV session). Point it at /scratch, which EXISTS and is writable at runtime
+# (the compose mount); a non-existent dir here makes libplacebo hard-fail instead
+# of gracefully disabling. Non-DV sessions never touch libplacebo, so this is inert.
+ENV XDG_CACHE_HOME=/scratch
 # Pin the Intel iHD VA driver (the package also ships the legacy i965). VAAPI
 # device open fails closed → the boot smoke-test demotes to libx264 if absent.
 ENV LIBVA_DRIVER_NAME=iHD
