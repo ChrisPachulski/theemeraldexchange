@@ -893,11 +893,18 @@ mod tests {
     }
 
     fn grant_body(file: &MediaFileRow) -> String {
+        grant_body_id(file, 7)
+    }
+
+    /// Grant body for a specific `media_id` — lets a test request a SECOND,
+    /// genuinely distinct title (grants are now coalesced by identity, so two
+    /// byte-identical grants reuse one session instead of racing for a slot).
+    fn grant_body_id(file: &MediaFileRow, media_id: i64) -> String {
         json!({
             "file": file,
             "caps": { "containers": ["mp4"], "video_codecs": ["h264"], "max_height": 1080, "hdr": false },
             "media_kind": "movie",
-            "media_id": 7,
+            "media_id": media_id,
             "sub": "plex:42",
             "start_secs": 0
         })
@@ -1106,7 +1113,10 @@ mod tests {
     #[tokio::test]
     async fn grant_returns_503_transcoder_busy_at_cap() {
         let tmp = tempfile::tempdir().unwrap();
-        // 1 total slot: the first transcode grant consumes it; the second 503s.
+        // 1 total slot: the first transcode grant consumes it; a second grant
+        // for a DIFFERENT title 503s. (Two grants for the SAME title coalesce —
+        // covered in session::tests — so the cap is only reached by distinct
+        // titles, exactly as in production where (kind,id) maps to one file.)
         let state = state_with(
             &tmp,
             Caps {
@@ -1131,6 +1141,12 @@ mod tests {
         assert_eq!(first.status(), StatusCode::OK);
 
         // Re-build a router over the SAME state (oneshot consumes the router).
+        // A distinct title (different media_id + path) so it cannot coalesce.
+        let other = MediaFileRow {
+            id: 2,
+            path: "/lib/m2.mkv".into(),
+            ..h264_file()
+        };
         let app2 = router(state.clone());
         let second = app2
             .oneshot(
@@ -1138,7 +1154,7 @@ mod tests {
                     .method("POST")
                     .uri("/api/transcode/grant")
                     .header("content-type", "application/json")
-                    .body(Body::from(grant_body(&h264_file())))
+                    .body(Body::from(grant_body_id(&other, 8)))
                     .unwrap(),
             )
             .await
