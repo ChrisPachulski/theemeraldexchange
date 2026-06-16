@@ -68,6 +68,22 @@ pub enum VideoOp {
         burn_subtitle_index: Option<i64>,
         source_height: Option<i64>,
     },
+    /// Re-encode a **Dolby Vision** source to H.264 SDR via libplacebo, which
+    /// APPLIES the DV RPU metadata (`apply_dolbyvision`) before tone-mapping to
+    /// BT.709. Profile 5 (single-layer, no HDR10-compatible base) is the reason
+    /// this exists: stream-copying it hands AVPlayer an undecodable elementary
+    /// stream (CoreMediaErrorDomain -4), and a plain re-encode without the RPU
+    /// produces grossly wrong colors (green skies, magenta skin). libplacebo
+    /// needs a Vulkan device (Mesa ANV on the iGPU) — a separate pipeline from
+    /// the VAAPI path, so it is its own op. Always caps output at
+    /// `DEFAULT_TARGET_HEIGHT` so the (CPU libx264) encode stays tractable.
+    EncodeDolbyVision {
+        /// `Some(h)` to down-scale to height `h` (CPU scale after libplacebo);
+        /// `None` keeps the source resolution.
+        scale_to_height: Option<i64>,
+        /// Probe height of the source — keys the H.264 bitrate ladder.
+        source_height: Option<i64>,
+    },
 }
 
 /// What to do with the audio stream.
@@ -163,7 +179,7 @@ impl TranscodePlan {
         matches!(
             self,
             TranscodePlan::Transcode {
-                video: VideoOp::EncodeH264 { .. },
+                video: VideoOp::EncodeH264 { .. } | VideoOp::EncodeDolbyVision { .. },
                 ..
             }
         )
@@ -322,10 +338,47 @@ pub fn plan_transcode_forced(file: &MediaFileRow, caps: &ClientCaps) -> Transcod
     plan_transcode_ops(file, caps, "forced buffered delivery".to_string())
 }
 
+/// True when the probed HDR label marks the source as Dolby Vision. media-core's
+/// probe sets `hdr_format = "Dolby Vision"` from stream side-data; the transcoder
+/// grant additionally back-fills it after a frame-level probe for in-band RPU
+/// (Profile 5 in Matroska carries no stream-level DV box). See
+/// [`crate::routes`] grant DV detection.
+pub fn is_dolby_vision(hdr_format: Option<&str>) -> bool {
+    hdr_format
+        .map(str::trim)
+        .map(|h| h.to_ascii_lowercase().contains("dolby vision") || h.eq_ignore_ascii_case("dovi"))
+        .unwrap_or(false)
+}
+
 fn plan_transcode_ops(file: &MediaFileRow, caps: &ClientCaps, reason: String) -> TranscodePlan {
     // ── Subtitles. burn_index is always None now (image subs are dropped, not
     // burned), so subtitles no longer force a video re-encode on their own. ──
     let (subtitle, burn_index) = plan_subtitle(file);
+
+    // ── Dolby Vision ─────────────────────────────────────────────────────────
+    // DV (especially Profile 5: single-layer, no HDR10-compatible base) cannot
+    // be stream-copied into a plain HLS that AVPlayer decodes — it fails with
+    // CoreMediaErrorDomain -4 — and a naive re-encode that ignores the RPU
+    // produces grossly wrong colors. Route it to the libplacebo path, which
+    // APPLIES the RPU before tone-mapping to SDR. Capped at DEFAULT_TARGET_HEIGHT
+    // because that encode runs on the CPU (libx264) — libplacebo is a Vulkan
+    // filter that can't hand frames straight to the iGPU's VAAPI encoder.
+    if is_dolby_vision(file.hdr_format.as_deref()) {
+        let scale_to_height = match file.video_height {
+            Some(h) if h > DEFAULT_TARGET_HEIGHT => Some(DEFAULT_TARGET_HEIGHT),
+            _ => None,
+        };
+        return TranscodePlan::Transcode {
+            video: VideoOp::EncodeDolbyVision {
+                scale_to_height,
+                source_height: file.video_height,
+            },
+            audio: plan_audio(file, caps),
+            subtitle,
+            segment_format: SegmentFormat::MpegTs,
+            reason: format!("{reason} (dolby vision: libplacebo RPU re-encode)"),
+        };
+    }
 
     // ── Video ──────────────────────────────────────────────────────────────
     let video_codec = file.video_codec.as_deref().map(str::trim).unwrap_or("");
@@ -612,6 +665,86 @@ mod tests {
         );
         let plan = plan_transcode(&f, &caps_h264_1080_sdr());
         assert!(plan.is_direct_play(), "got {plan:?}");
+    }
+
+    fn caps_apple_hevc_hdr() -> ClientCaps {
+        ClientCaps {
+            containers: vec!["mp4".into()],
+            video_codecs: vec!["h264".into(), "hevc".into()],
+            max_height: Some(2160),
+            hdr: true,
+            hls_fmp4_hevc: true,
+            ..ClientCaps::default()
+        }
+    }
+
+    #[test]
+    fn is_dolby_vision_matches_label() {
+        assert!(is_dolby_vision(Some("Dolby Vision")));
+        assert!(is_dolby_vision(Some("dolby vision")));
+        assert!(is_dolby_vision(Some("DOVI")));
+        assert!(!is_dolby_vision(Some("HDR10")));
+        assert!(!is_dolby_vision(Some("")));
+        assert!(!is_dolby_vision(None));
+    }
+
+    #[test]
+    fn dolby_vision_reencodes_via_libplacebo_even_for_hdr_client() {
+        // A DV source must NOT be stream-copied even when the client advertises
+        // HEVC+HDR+fMP4 (which otherwise copies): copied DV P5 fails AVPlayer
+        // (-4). It routes to the libplacebo RPU re-encode (EncodeDolbyVision).
+        let f = file(
+            Some("matroska"),
+            Some("hevc"),
+            Some(1080),
+            Some("Dolby Vision"),
+            vec![aac(1)],
+            vec![],
+        );
+        let plan = plan_transcode_ops(&f, &caps_apple_hevc_hdr(), "test".into());
+        match &plan {
+            TranscodePlan::Transcode {
+                video,
+                segment_format,
+                ..
+            } => {
+                assert!(
+                    matches!(video, VideoOp::EncodeDolbyVision { .. }),
+                    "DV must use the libplacebo encode path, got {video:?}"
+                );
+                assert_eq!(*segment_format, SegmentFormat::MpegTs);
+            }
+            other => panic!("expected Transcode, got {other:?}"),
+        }
+        // Re-encode → forced keyframes → uniform segments → CPU-charged AND the
+        // native VOD manifest may be synthesized.
+        assert!(plan.reencodes_video());
+    }
+
+    #[test]
+    fn dolby_vision_4k_capped_to_target_height() {
+        let f = file(
+            Some("matroska"),
+            Some("hevc"),
+            Some(2160),
+            Some("Dolby Vision"),
+            vec![aac(1)],
+            vec![],
+        );
+        match plan_transcode_ops(&f, &caps_apple_hevc_hdr(), "t".into()) {
+            TranscodePlan::Transcode {
+                video:
+                    VideoOp::EncodeDolbyVision {
+                        scale_to_height,
+                        source_height,
+                    },
+                ..
+            } => {
+                assert_eq!(scale_to_height, Some(DEFAULT_TARGET_HEIGHT));
+                assert_eq!(source_height, Some(2160));
+            }
+            other => panic!("expected EncodeDolbyVision, got {other:?}"),
+        }
     }
 
     #[test]
