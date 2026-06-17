@@ -14,6 +14,8 @@
 # (cargo-deny does not compile the workspace — it reads Cargo.lock only.)
 
 [licenses]
+# Current cargo-deny schema (allow-list only; unmatched license => error).
+version = 2
 # Permissive + weak-permissive licenses actually present in the resolved tree
 # (derived from `cargo metadata` on 2026-06-17). GPL-2.0/GPL-3.0/AGPL are
 # deliberately absent → denied. LGPL appears only inside an `OR` expression
