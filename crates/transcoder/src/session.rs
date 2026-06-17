@@ -1159,12 +1159,8 @@ impl SessionManager {
             if !warming.lock().await.insert(path.clone()) {
                 return;
             }
-            let _ = crate::keyframes::ensure(
-                &cache_root,
-                &ffmpeg_bin,
-                std::path::Path::new(&path),
-            )
-            .await;
+            let _ = crate::keyframes::ensure(&cache_root, &ffmpeg_bin, std::path::Path::new(&path))
+                .await;
             warming.lock().await.remove(&path);
         });
     }
