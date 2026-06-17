@@ -16,7 +16,7 @@
 > | Critical | 2  | **2** | 0 |
 > | High     | 7  | **7** | 0 |
 > | Medium   | 26 | **26** | 0 |
-> | Low      | 45 | (sweep in progress — see below) | — |
+> | Low      | 45 | **42** | 3 accepted (by design/risk) |
 >
 > **High:** all 7 now closed. HIGH-3 (recommender chown crash-loop under
 > `cap_drop: ALL` on a fresh volume) was the last "🟡 partial" — closed by the
@@ -55,7 +55,42 @@
 >   token-in-URL auth (`?t=`/`?u=`/`?token=`) leaked into stdout. Added
 >   `redactStreamTokens` and a redacting logger print function (`server/app.ts`).
 >
-> The 45 Low findings are the remaining sweep (in progress).
+> **Low — swept 2026-06-17.** 42 of 45 closed; the 3 remaining are accepted by
+> design/risk, not open defects.
+>
+> - **Newly fixed this pass (8):** LOW-9 (nightly sweep of expired
+>   device_tokens + webauthn_challenges, `tokenSweepScheduler.ts`), LOW-17
+>   (non-blocking M3U export + error handling, `LiveTab.tsx`), LOW-24 (validate
+>   raw-interpolated vod streamId/ext before the upstream URL), LOW-29
+>   (request-id correlation across logs + telemetry via hono `requestId()`),
+>   LOW-31 (reject empty sub even in the no-binding fallback,
+>   `sub_validation.py`), LOW-37 (test-pinned: comma/bracket subtitle paths stay
+>   one quoted filter), LOW-38 (memoize internal-principal HKDF key), LOW-45
+>   (deterministic GC-sweep test via fake timers).
+> - **Already-closed-but-mis-flagged / verified closed (31):** incl. LOW-5
+>   (role type strict), LOW-7 (`sabCall` uses URLSearchParams → values are
+>   URL-encoded; admin-gated; not an injection), LOW-25 (`secretsEqual` uses
+>   `timingSafeEqual`), LOW-27 (runbook already says `glitchtip-pgdata`, matches
+>   compose), LOW-33 (`set().union()` over an empty generator returns `set()` —
+>   valid), LOW-35 (graceful shutdown wired for SIGTERM+SIGINT + `/scratch`
+>   tmpfs), plus the agent-confirmed closed set (2,3,4,6,8,11,12,13,14,15,16,18,
+>   19,20,21,28,36,42,43,44).
+> - **Accepted by design/risk — not fixed (3):**
+>   - **LOW-10** (migration 0003 not `IF NOT EXISTS`): editing a *shipped*
+>     migration trips the migrator's checksum-drift warning on every existing DB,
+>     and SQLite has no `ADD COLUMN IF NOT EXISTS`. The migrator's append-only
+>     ledger already guarantees once-only; editing applied migrations is against
+>     this codebase's discipline.
+>   - **LOW-30** (optimizer scores against the live DB): the recipe optimizer
+>     *needs* production outcome data to evaluate, and already guards against
+>     writing holdout ids into prod (`optimizer.py:525`). SQLite WAL handles
+>     concurrent reads on a single-household nightly job; a refuse-on-prod guard
+>     would break the feature.
+>   - **LOW-39** (serial TMDB enrichment in the scan loop): a one-time
+>     *initial-scan* cost — incremental scans skip already-enriched files
+>     (`scanner.rs:302`). Bounded concurrency would be a risky refactor of the
+>     load-bearing scan loop (DB-write ordering, dedup, prune/GC) for a one-time
+>     gain that TMDB rate limits cap anyway. Deferred.
 
 **Date:** 2026-05-30  
 **Method:** 12-dimension read-only review (auth, backend, IPTV, data, frontend, Rust, Python, infra, observability, testing, deps, prior-audit follow-up), each finding adversarially re-verified against the live code (refute-by-default).  
