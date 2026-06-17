@@ -15,8 +15,8 @@
 > |----------|-----------------|--------|-----------|
 > | Critical | 2  | **2** | 0 |
 > | High     | 7  | **7** | 0 |
-> | Medium   | 26 | **22** | 4 |
-> | Low      | 45 | (not swept this pass) | — |
+> | Medium   | 26 | **26** | 0 |
+> | Low      | 45 | (sweep in progress — see below) | — |
 >
 > **High:** all 7 now closed. HIGH-3 (recommender chown crash-loop under
 > `cap_drop: ALL` on a fresh volume) was the last "🟡 partial" — closed by the
@@ -37,21 +37,25 @@
 > MED-25/26 (device-token `exp`/`nbf` enforced on both Rust and TS verify paths,
 > with tests).
 >
-> **Medium — genuinely still open (4), none release-blocking on their own:**
-> - **MED-14** — M3U attribute escaping for provider-controlled channel fields:
->   the `escapeM3uAttr` helper is not locatable in the current `iptv.ts`; the M3U
->   export path needs a re-grep to confirm whether escaping moved or is absent.
-> - **MED-16** — synchronous gzip of the EPG grid (event-loop block): the
->   `gzipSync` call wasn't found at the old locus; verify the current compression
->   point is async/streamed before closing.
-> - **MED-17** — strict single-use segment tokens break legitimate HLS
->   seek-back/buffer-recovery refetch (IPTV path). Needs a replay-window decision,
->   not just a fix.
-> - **MED-18** — stream/segment bearer tokens can still reach stdout via
->   `hono/logger()`; add URL/token redaction middleware.
+> **Medium — all 26 now closed.** The four that were flagged still-open were
+> resolved 2026-06-17 (`f65db96`), two of them already-closed-but-mis-flagged:
+> - **MED-14** — CLOSED (already): `escapeM3uAttr` lives in
+>   `server/services/iptvPlaylist.ts` (the M3U export was refactored out of
+>   `iptv.ts`); it collapses CR/LF/tab → space and neutralizes the attribute
+>   quote, applied to every provider field. The earlier re-verify grepped only
+>   `iptv.ts` and missed it.
+> - **MED-16** — CLOSED (already): the EPG grid uses `gzipAsync =
+>   promisify(gzip)` on the libuv threadpool (`server/routes/iptv.ts`), not
+>   `gzipSync`. Mis-flagged for the same reason.
+> - **MED-17** — FIXED: strict single-use segment tokens broke HLS
+>   seek-back/buffer-recovery. Segment tokens are bound to one segment URL and
+>   live 300s, so they now follow the same multi-use-within-TTL rule as the other
+>   kinds (the TTL is the abuse bound). `server/services/tokenReplayCache.ts`.
+> - **MED-18** — FIXED: hono's logger emits the full path incl. query string, so
+>   token-in-URL auth (`?t=`/`?u=`/`?token=`) leaked into stdout. Added
+>   `redactStreamTokens` and a redacting logger print function (`server/app.ts`).
 >
-> The 45 Low findings were **not** re-swept in this pass; treat their counts as
-> unverified until a dedicated low-tier review runs.
+> The 45 Low findings are the remaining sweep (in progress).
 
 **Date:** 2026-05-30  
 **Method:** 12-dimension read-only review (auth, backend, IPTV, data, frontend, Rust, Python, infra, observability, testing, deps, prior-audit follow-up), each finding adversarially re-verified against the live code (refute-by-default).  
