@@ -58,8 +58,9 @@ export type Role = 'admin' | 'user'
  *  enabled) lives in /api/version, not in the token. Clients branch on
  *  the presence of each mode independently.
  *  'apple' is added now (zero cost) so D17 changes are not reopened
- *  when Sign in with Apple lands in M2. */
-export type AuthMode = 'plex' | 'local' | 'apple'
+ *  when Sign in with Apple lands in M2. 'google' joins the union for the
+ *  native non-Plex login workstream (Google OIDC, `google:` subs). */
+export type AuthMode = 'plex' | 'local' | 'apple' | 'google'
 
 export type Session = {
   sub: string // plex user id (string for jwt sub claim)
@@ -101,6 +102,7 @@ export type Session = {
 export function authModeFromSession(session: Pick<Session, 'sub'>): AuthMode {
   if (session.sub.startsWith('local:')) return 'local'
   if (session.sub.startsWith('apple:')) return 'apple'
+  if (session.sub.startsWith('google:')) return 'google'
   return 'plex'
 }
 
@@ -398,7 +400,10 @@ async function tryDecrypt(token: string, key: Uint8Array): Promise<Session | nul
     // which boot-warns once the date passes. Remove the fallback then.
     const rawAuthMode = payload.auth_mode
     const auth_mode: AuthMode =
-      rawAuthMode === 'plex' || rawAuthMode === 'local' || rawAuthMode === 'apple'
+      rawAuthMode === 'plex' ||
+      rawAuthMode === 'local' ||
+      rawAuthMode === 'apple' ||
+      rawAuthMode === 'google'
         ? rawAuthMode
         : 'plex'
 
