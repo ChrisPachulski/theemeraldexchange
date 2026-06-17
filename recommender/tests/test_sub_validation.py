@@ -141,3 +141,8 @@ def test_module_import_soft_disables_when_not_required(
     assert mod.is_available() is False
     # Pass-through behavior: validation is skipped, value returned untouched.
     assert mod.validate_sub("garbage") == "garbage"
+    # LOW-31: but an empty/whitespace sub must still be rejected even in the
+    # no-binding fallback — otherwise it acts as a wildcard principal.
+    for empty in ("", "   ", "\t"):
+        with pytest.raises(ValueError):
+            mod.validate_sub(empty)
