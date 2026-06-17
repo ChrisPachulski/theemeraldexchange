@@ -81,6 +81,11 @@ def validate_sub(value: str) -> str:
     untouched — see module docstring for rationale.
     """
     if not _AVAILABLE:
+        # Dev-only fallback (prod sets EEX_REQUIRE_BINDING=1 and refuses to boot
+        # here). Even without the namespace parser, an empty/whitespace sub must
+        # never pass — it would otherwise act as a wildcard principal (LOW-31).
+        if not value or not value.strip():
+            raise ValueError("sub must be a non-empty namespaced identifier")
         return value
     # Pydantic field validators run before the model handler, so we
     # surface the same `ValueError` the binding raises. FastAPI maps
