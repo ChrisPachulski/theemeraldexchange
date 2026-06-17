@@ -142,7 +142,6 @@ grant_one() {
 # ── Always stop every session we started, on any exit path ────────────────────
 SESSIONS=()           # steady, heartbeated
 cleanup() {
-  local n="${#SESSIONS[@]}"
   [ -n "${REAP_PENDING:-}" ] && SESSIONS+=("$REAP_PENDING")
   [ "${#SESSIONS[@]}" -eq 0 ] && return 0
   printf '\n     stopping %d session(s)…\n' "${#SESSIONS[@]}"
@@ -189,7 +188,7 @@ info "baseline (min over readings): ffmpeg procs=$BASE_PROCS  transcoder mem=${M
 # ── 4. Soak window: sample + heartbeat + repeated reap proof (watchdog armed) ──
 say "SOAK ${DURATION}s @ $STEADY_N concurrent — sampling every ${SAMPLE_SECS}s, reap proof every ${REAP_EVERY}s"
 peak_cpu=0; cpu_sum=0; cpu_n=0; bad=0; elapsed=0; aborted=0
-peak_procs="$BASE_PROCS"; peak_mem="$MEM_START"; mem_end="$MEM_START"
+peak_procs="$BASE_PROCS"; peak_mem="$MEM_START"
 # Leak signal = does the steady-mem FLOOR rise across the window? Track the min
 # mem (ignoring warmup ramp + any ephemeral-in-flight sample) in the first vs
 # second half. A real leak raises the floor; activity spikes and the cold-start
@@ -216,7 +215,6 @@ while [ "$elapsed" -lt "$DURATION" ]; do
   [ "$cpu" -gt "$peak_cpu" ] && peak_cpu="$cpu"
   [ "${procs:-0}" -gt "$peak_procs" ] && peak_procs="$procs"
   [ "${mem:-0}" -gt "$peak_mem" ] && peak_mem="$mem"
-  mem_end="$mem"
   cpu_sum=$((cpu_sum+cpu)); cpu_n=$((cpu_n+1))
   elapsed=$(( $(date +%s) - ts_start ))
 
