@@ -30,6 +30,17 @@ use crate::plan::{SegmentFormat, TranscodePlan};
 const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Idle sweep cadence.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(5);
+/// Pause the keyframe warmer leaves between full-file demuxes so it never pins
+/// the library disk (gentle, Plex-co-tenant-safe).
+const WARM_FILE_DELAY: Duration = Duration::from_secs(3);
+/// How long the warmer waits before re-scanning the library for new titles after
+/// a full pass.
+const WARM_RESCAN_INTERVAL: Duration = Duration::from_secs(3600);
+/// Poll cadence while the warmer waits for the box to go idle (no live session).
+const WARM_IDLE_POLL: Duration = Duration::from_secs(10);
+/// Container extensions the warmer pre-probes (keyframes are codec-agnostic, so
+/// any of these could back a copy-remux HLS session).
+const WARM_EXTS: &[&str] = &["mkv", "mp4", "m4v", "mov", "ts", "webm", "avi"];
 /// Grace period between SIGTERM and SIGKILL.
 const KILL_GRACE: Duration = Duration::from_secs(5);
 /// Supervisor restart cap before a session is declared failed.
@@ -444,6 +455,15 @@ pub struct SessionManager {
     /// unavailable". See [`SessionManager::start`] for the coalesce/supersede
     /// policy.
     start_gates: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    /// Durable directory (under the scratch root) holding per-file keyframe
+    /// caches, so a COPY-remux session can synthesize a finite VOD playlist
+    /// without a ~17s probe on the manifest path. See [`crate::keyframes`].
+    cache_root: PathBuf,
+    /// Source paths whose keyframe probe is in flight, so concurrent manifest
+    /// polls (AVPlayer re-reads an EVENT playlist every few seconds) and the
+    /// warmer never launch a second full-file demux for the same file — which
+    /// would be a redundant I/O storm against the library disk.
+    warming: Arc<Mutex<std::collections::HashSet<String>>>,
 }
 
 impl SessionManager {
@@ -455,6 +475,7 @@ impl SessionManager {
         tmp_root: PathBuf,
         encoder: HwEncoder,
     ) -> Self {
+        let cache_root = tmp_root.join(crate::keyframes::KFCACHE_DIRNAME);
         SessionManager {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             limiter,
@@ -464,6 +485,8 @@ impl SessionManager {
             media_roots: Vec::new(),
             vaapi_hw_decode: false,
             start_gates: Arc::new(Mutex::new(HashMap::new())),
+            cache_root,
+            warming: Arc::new(Mutex::new(std::collections::HashSet::new())),
         }
     }
 
@@ -556,6 +579,11 @@ impl SessionManager {
         };
         let mut removed = 0u32;
         while let Ok(Some(entry)) = rd.next_entry().await {
+            // The keyframe cache lives under the scratch root but is DURABLE —
+            // it is not a session dir and must survive a restart.
+            if entry.file_name() == crate::keyframes::KFCACHE_DIRNAME {
+                continue;
+            }
             if entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
                 let path = entry.path();
                 match tokio::fs::remove_dir_all(&path).await {
@@ -1076,23 +1104,150 @@ impl SessionManager {
     /// the segments and gains `#EXT-X-ENDLIST` (LIVE badge → finite scrubber)
     /// once the faster-than-realtime remux completes.
     pub async fn vod_manifest(&self, id: &str) -> Option<String> {
-        let guard = self.sessions.lock().await;
-        let session = guard.get(id)?;
-        if !session.plan.reencodes_video() {
-            return None;
+        // Snapshot what synthesis needs, then drop the map lock — the copy path
+        // touches the keyframe cache (disk IO) and must not hold it across that.
+        let (reencodes, fmp4, duration_opt, start_secs, input_path) = {
+            let guard = self.sessions.lock().await;
+            let s = guard.get(id)?;
+            let fmp4 = matches!(
+                &s.plan,
+                TranscodePlan::Transcode {
+                    segment_format: SegmentFormat::Fmp4,
+                    ..
+                }
+            );
+            (
+                s.plan.reencodes_video(),
+                fmp4,
+                s.duration_secs.filter(|d| *d > 0),
+                s.start_secs,
+                s.input_path.clone(),
+            )
+        };
+        let duration = duration_opt? as f64;
+
+        if reencodes {
+            // RE-ENCODE: `-force_key_frames` makes segments uniform, so the list
+            // is derivable from the duration alone.
+            return crate::vod_manifest::synthesize(duration, start_secs, fmp4);
         }
-        let duration = session.duration_secs.filter(|d| *d > 0)? as f64;
-        // A re-encode always targets MPEG-TS today (fMP4 is HEVC-copy-only), but
-        // derive the flag from the plan so synthesis stays correct if that ever
-        // changes.
-        let fmp4 = matches!(
-            &session.plan,
-            TranscodePlan::Transcode {
-                segment_format: SegmentFormat::Fmp4,
-                ..
+
+        // COPY-remux: segments are cut at the SOURCE's own (irregular) keyframes,
+        // so the finite VOD list can only come from the keyframe map. On a cache
+        // HIT, synthesize a real scrubber; on a MISS, return None (caller serves
+        // the on-disk EVENT playlist) and warm the cache in the background so the
+        // next play is a scrubber from 0:00 instead of "live".
+        match crate::keyframes::load(&self.cache_root, std::path::Path::new(&input_path)).await {
+            Some(kf) => crate::vod_manifest::synthesize_copy(&kf, duration, start_secs, fmp4),
+            None => {
+                self.spawn_keyframe_warm(input_path);
+                None
             }
-        );
-        crate::vod_manifest::synthesize(duration, session.start_secs, fmp4)
+        }
+    }
+
+    /// Probe + cache `path`'s keyframes in the background, deduped against any
+    /// in-flight probe for the same file. Used on a copy-session manifest miss
+    /// and by the boot warmer. Returns immediately; the cache is populated for a
+    /// later play.
+    pub fn spawn_keyframe_warm(&self, path: String) {
+        let cache_root = self.cache_root.clone();
+        let ffmpeg_bin = self.ffmpeg_bin.clone();
+        let warming = self.warming.clone();
+        tokio::spawn(async move {
+            // Claim the path; bail if another probe already owns it.
+            if !warming.lock().await.insert(path.clone()) {
+                return;
+            }
+            let _ = crate::keyframes::ensure(
+                &cache_root,
+                &ffmpeg_bin,
+                std::path::Path::new(&path),
+            )
+            .await;
+            warming.lock().await.remove(&path);
+        });
+    }
+
+    /// Proactively populate the keyframe cache for the whole confined library so
+    /// even a FIRST play of a copy-remux movie gets a finite VOD scrubber instead
+    /// of the "live" badge. Deliberately gentle so it can never brown-out a
+    /// co-tenant (Plex): it probes ONE file at a time, ONLY while no session is
+    /// active (so it never competes with live playback for the library disk), and
+    /// pauses between files. A full first pass over a large library takes hours
+    /// but each file is cached once on durable scratch; thereafter copy movies
+    /// are VOD from 0:00. Re-scans hourly to catch newly-added titles. Detached;
+    /// runs for the process lifetime. No-op when no media roots are confined
+    /// (dev/tests).
+    pub async fn run_keyframe_warmer(&self) {
+        if self.media_roots.is_empty() {
+            return;
+        }
+        loop {
+            let files = self.collect_video_files().await;
+            let total = files.len();
+            let mut warmed = 0u32;
+            for path in files {
+                let p = std::path::Path::new(&path);
+                // Cheap skip for already-cached files (a stat + small read).
+                if crate::keyframes::load(&self.cache_root, p).await.is_some() {
+                    continue;
+                }
+                // Yield the disk entirely to live playback: wait until idle.
+                while !self.is_empty().await {
+                    tokio::time::sleep(WARM_IDLE_POLL).await;
+                }
+                if crate::keyframes::ensure(&self.cache_root, &self.ffmpeg_bin, p)
+                    .await
+                    .is_some()
+                {
+                    warmed += 1;
+                }
+                tokio::time::sleep(WARM_FILE_DELAY).await;
+            }
+            if warmed > 0 {
+                tracing::info!(warmed, total, "keyframe warmer: pass complete");
+            }
+            tokio::time::sleep(WARM_RESCAN_INTERVAL).await;
+        }
+    }
+
+    /// Spawn [`run_keyframe_warmer`] as a detached background task. Returns the
+    /// handle (tests may abort it).
+    pub fn spawn_keyframe_warmer(&self) -> tokio::task::JoinHandle<()> {
+        let this = self.clone();
+        tokio::spawn(async move { this.run_keyframe_warmer().await })
+    }
+
+    /// Recursively list video files under the confined media roots (by extension;
+    /// keyframes are codec-agnostic). Best-effort: unreadable dirs are skipped.
+    async fn collect_video_files(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut stack: Vec<PathBuf> = self.media_roots.clone();
+        while let Some(dir) = stack.pop() {
+            let mut rd = match tokio::fs::read_dir(&dir).await {
+                Ok(rd) => rd,
+                Err(_) => continue,
+            };
+            while let Ok(Some(entry)) = rd.next_entry().await {
+                let Ok(ft) = entry.file_type().await else {
+                    continue;
+                };
+                let path = entry.path();
+                if ft.is_dir() {
+                    stack.push(path);
+                } else if ft.is_file()
+                    && path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| WARM_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+                        .unwrap_or(false)
+                {
+                    out.push(path.to_string_lossy().into_owned());
+                }
+            }
+        }
+        out
     }
 
     /// True when a segment file for `id` exists on disk right now. Used by the
@@ -2216,9 +2371,10 @@ mod tests {
         // CoreMediaErrorDomain -4 because the HEVC-copy fMP4 path got a
         // synthesized UNIFORM manifest (ceil(dur/2) equal-length segments) while
         // ffmpeg actually cut at source keyframes into far fewer, ragged
-        // segments. Copy sessions MUST serve the real on-disk playlist
-        // (vod_manifest → None); only a re-encode (forced keyframes) may
-        // synthesize.
+        // segments. A copy session may ONLY synthesize from the real keyframe
+        // map; with NO cached keyframes (as here — the inputs don't exist) it
+        // must fall back to the on-disk playlist (vod_manifest → None). The
+        // cache-HIT path is covered by `copy_vod_synthesized_when_keyframes_cached`.
         let tmp = tempfile::tempdir().unwrap();
         let mgr = SessionManager::new(
             Limiter::new(Caps {
@@ -2277,6 +2433,63 @@ mod tests {
             .expect("a re-encode synthesizes a finite VOD playlist");
         assert!(m.contains("#EXT-X-PLAYLIST-TYPE:VOD"));
         assert!(m.trim_end().ends_with("#EXT-X-ENDLIST"));
+    }
+
+    #[tokio::test]
+    async fn copy_vod_synthesized_when_keyframes_cached() {
+        // With a warm keyframe cache, an HEVC-copy fMP4 session DOES synthesize a
+        // finite VOD playlist from the source keyframes — a real scrubber, never
+        // "live". (Cold cache → None is covered above.)
+        let tmp = tempfile::tempdir().unwrap();
+        let tmp_root = tmp.path().join("s");
+        let mgr = SessionManager::new(
+            Limiter::new(Caps {
+                max_total: 4,
+                max_cpu: 4,
+            }),
+            write_stub(tmp.path(), "run").to_string_lossy().into_owned(),
+            tmp_root.clone(),
+            HwEncoder::Cpu,
+        );
+
+        // A real source file so the cache's (mtime,size) identity check passes.
+        let src = tmp.path().join("movie.mkv");
+        std::fs::write(&src, b"not really a video, just an identity anchor").unwrap();
+        let src_str = src.to_string_lossy().into_owned();
+        crate::keyframes::seed_for_test(
+            &tmp_root.join(crate::keyframes::KFCACHE_DIRNAME),
+            &src,
+            // A few ragged keyframes spanning [0, 30) (cf. the Goofy golden data).
+            vec![0.0, 1.084, 11.511, 13.347, 23.774, 25.943],
+        )
+        .await;
+
+        let sid = mgr
+            .start(StartOpts {
+                duration_secs: Some(30),
+                plan: TranscodePlan::Transcode {
+                    video: VideoOp::Copy,
+                    audio: AudioOp::Copy,
+                    subtitle: SubtitleOp::None,
+                    segment_format: crate::plan::SegmentFormat::Fmp4,
+                    reason: "hevc copy".into(),
+                },
+                ..remux_opts_id(&src_str, 7)
+            })
+            .await
+            .unwrap();
+
+        let m = mgr
+            .vod_manifest(&sid)
+            .await
+            .expect("cached keyframes → a synthesized VOD playlist");
+        assert!(m.contains("#EXT-X-PLAYLIST-TYPE:VOD"));
+        assert!(m.trim_end().ends_with("#EXT-X-ENDLIST"));
+        assert!(!m.contains("EVENT"));
+        assert!(m.contains("seg_00000.m4s\n"), "fMP4 copy segments: {m}");
+        // First segment runs to the first keyframe past the 2s grid (11.511s),
+        // proving the ragged copy algorithm (not uniform 2s) drove synthesis.
+        assert!(m.contains("#EXTINF:11.511000,\n"), "{m}");
     }
 
     #[test]
