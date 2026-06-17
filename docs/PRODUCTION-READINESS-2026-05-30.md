@@ -6,6 +6,53 @@
 > changes even when the row text still says open. Use `TODO.md`,
 > `docs/ROADMAP-STATUS.md`, and a fresh grep/test pass for current planning.
 
+> ## Re-verification — 2026-06-17
+>
+> The open rows below were re-checked against the current tree (branch `main`,
+> HEAD ~`1df06ab`) via an adversarial read-only pass. Net state now:
+>
+> | Severity | Total confirmed | Closed | Still open |
+> |----------|-----------------|--------|-----------|
+> | Critical | 2  | **2** | 0 |
+> | High     | 7  | **7** | 0 |
+> | Medium   | 26 | **22** | 4 |
+> | Low      | 45 | (not swept this pass) | — |
+>
+> **High:** all 7 now closed. HIGH-3 (recommender chown crash-loop under
+> `cap_drop: ALL` on a fresh volume) was the last "🟡 partial" — closed by the
+> `cap_add: [SETUID, SETGID, CHOWN, DAC_OVERRIDE]` wiring + fresh-volume cold-boot
+> regression test (`939ddce`/`13ed8b5`/`c3ae48f`).
+>
+> **Medium — newly closed since the ledger (12):** MED-4 (TMDB lookup concurrency
+> bounded at 8, `suggestionsTmdb.ts`/`suggestionsValidation.ts`), MED-8 (GPL
+> ffmpeg now recorded in `THIRD-PARTY-LICENSES.md` + written source offer,
+> guard-tested by `server/licensing.test.ts`; a `deny.toml` + CI `license` gate
+> now keeps GPL/AGPL out of the linked trees), MED-9 (all sidecar Dockerfile bases
+> now `@sha256` digest-pinned), MED-11 (LiveTab grant errors surfaced, no silent
+> rejection), MED-12 (root `ErrorBoundary` in `main.tsx`), MED-13 (deploy
+> direct-docker fallback fails hard instead of shipping unhardened), MED-15
+> (EPG sniff buffer bounded at 1 MB), MED-22 (recommender Glitchtip/Sentry wired
+> via `telemetry.py`), MED-23 (`require_event_secret` fail-closed + compose
+> defines the secret), MED-24 (transcoder duplicate-grant coalescing, `e7a4524`),
+> MED-25/26 (device-token `exp`/`nbf` enforced on both Rust and TS verify paths,
+> with tests).
+>
+> **Medium — genuinely still open (4), none release-blocking on their own:**
+> - **MED-14** — M3U attribute escaping for provider-controlled channel fields:
+>   the `escapeM3uAttr` helper is not locatable in the current `iptv.ts`; the M3U
+>   export path needs a re-grep to confirm whether escaping moved or is absent.
+> - **MED-16** — synchronous gzip of the EPG grid (event-loop block): the
+>   `gzipSync` call wasn't found at the old locus; verify the current compression
+>   point is async/streamed before closing.
+> - **MED-17** — strict single-use segment tokens break legitimate HLS
+>   seek-back/buffer-recovery refetch (IPTV path). Needs a replay-window decision,
+>   not just a fix.
+> - **MED-18** — stream/segment bearer tokens can still reach stdout via
+>   `hono/logger()`; add URL/token redaction middleware.
+>
+> The 45 Low findings were **not** re-swept in this pass; treat their counts as
+> unverified until a dedicated low-tier review runs.
+
 **Date:** 2026-05-30  
 **Method:** 12-dimension read-only review (auth, backend, IPTV, data, frontend, Rust, Python, infra, observability, testing, deps, prior-audit follow-up), each finding adversarially re-verified against the live code (refute-by-default).  
 **Raw findings:** 90 → **confirmed:** 80, refuted: 10.

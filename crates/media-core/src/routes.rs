@@ -1776,6 +1776,93 @@ mod tests {
         );
     }
 
+    /// Cross-platform continue-watching contract (M3 crit 4/5): resume position
+    /// is scoped to the ACCOUNT (`sub`), never the device. Two device tokens for
+    /// the same account — e.g. the web SPA and the native tvOS client — both
+    /// resolve to the same `sub`, so progress written from one device is the
+    /// resume point on the other; a different account sees none of it. This is
+    /// the backend half of the sync the Apple client (sibling repo, native
+    /// continue-watching) consumes over `/api/media/watch`.
+    #[tokio::test]
+    async fn resume_state_is_account_scoped_across_devices() {
+        use emerald_contracts::internal_principal::{DEFAULT_TTL_SECS, InternalClaims};
+
+        let now = 1_748_000_000;
+        let device = |sub: &str, device_id: &str| {
+            Some(InternalClaims {
+                iss: "eex".into(),
+                sub: sub.into(),
+                role: "user".into(),
+                auth_mode: "plex".into(),
+                server_id: "srv".into(),
+                device_id: Some(device_id.into()),
+                req_id: "r1".into(),
+                iat: now,
+                exp: now + DEFAULT_TTL_SECS,
+            })
+        };
+
+        // (1) Auth layer: the SAME account on two DIFFERENT devices resolves to
+        // one identity; a different account is isolated. Device id is irrelevant
+        // to the resume key by construction.
+        let web = device("plex:42", "web-session-A");
+        let tv = device("plex:42", "appletv-B");
+        let other = device("plex:99", "web-session-C");
+        assert_eq!(
+            acting_sub(&web, None, &PrincipalMode::Enforce).unwrap(),
+            acting_sub(&tv, None, &PrincipalMode::Enforce).unwrap(),
+            "same account, different device → same resume identity"
+        );
+        assert_eq!(
+            acting_sub(&tv, None, &PrincipalMode::Enforce).unwrap(),
+            "plex:42"
+        );
+        assert_ne!(
+            acting_sub(&other, None, &PrincipalMode::Enforce).unwrap(),
+            "plex:42",
+            "a different account must not share the resume identity"
+        );
+
+        // (2) Store layer: write progress as the resolved sub (web), read it back
+        // as the same sub (tvOS) → same position. A different account reads none.
+        // This is exactly the SQL the get/post_watch handlers run, keyed only on
+        // `sub` — there is no device column in media_watch_state.
+        let state = test_state().await;
+        let watched_at = "2026-06-17T00:00:00Z";
+        sqlx::query(
+            "INSERT INTO media_watch_state \
+             (sub, media_kind, media_id, position_secs, duration_secs, watched_at, completed) \
+             VALUES (?, 'movie', 7, 1800, 5400, ?, 0)",
+        )
+        .bind("plex:42")
+        .bind(watched_at)
+        .execute(&state.db.pool)
+        .await
+        .unwrap();
+
+        let resume_on_tv: Option<i64> = sqlx::query_scalar(
+            "SELECT position_secs FROM media_watch_state WHERE sub = ? AND media_id = 7",
+        )
+        .bind("plex:42")
+        .fetch_optional(&state.db.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            resume_on_tv,
+            Some(1800),
+            "progress written by web is the resume point on tvOS (same account)"
+        );
+
+        let leak: Option<i64> = sqlx::query_scalar(
+            "SELECT position_secs FROM media_watch_state WHERE sub = ? AND media_id = 7",
+        )
+        .bind("plex:99")
+        .fetch_optional(&state.db.pool)
+        .await
+        .unwrap();
+        assert_eq!(leak, None, "a different account sees no resume state");
+    }
+
     #[tokio::test]
     async fn stream_refuses_when_client_caps_require_transcode() {
         // A file the advertised client cannot direct-play must 503, not stream.

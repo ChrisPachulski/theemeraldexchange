@@ -48,14 +48,17 @@ stability, and infra:
 
 ---
 
-## The one constraint that orders everything
+## Two repos, one product (updated 2026-06-17)
 
-The project splits into a **buildable-now backend track** and an
-**Apple-blocked client track**. Xcode is not installed and the Apple Developer
-Program membership (purchased 2026-05-29) is pending activation. Until that
-gate clears, **every native target (M2, M5) and the monetization tail (M6) are
-hard-blocked** — there are zero `.swift` files in the repo. Do the backend work
-now; it is the only thing the Apple gate does not block.
+The earlier "Apple is hard-blocked, zero `.swift` files" framing is **obsolete**.
+The Apple gate cleared: the Developer Program membership is active and the Swift
+work lives in the **sibling repo `theemeraldexchange-apple/`** (244 `.swift`
+files as of 2026-06-17, App Store provisioning profiles checked in, TestFlight
+builds shipping, including a native continue-watching client against this
+backend's `/api/media/watch`). This repo (`theemeraldexchange`) is the
+**server/backend track**; the native iOS/tvOS clients (M2/M5) advance in the
+sibling repo. Neither track is blocked on the other anymore. The backend gaps
+below are what remain *here*.
 
 ---
 
@@ -137,27 +140,38 @@ now; it is the only thing the Apple gate does not block.
       contains stale rows now closed by code/CI. Re-run a current review before
       using its medium/low counts for planning.
 
-## Apple-blocked — cannot start until Xcode installs + Developer Program activates
+## Apple client track — lives in sibling repo `theemeraldexchange-apple/`
 
-- [ ] **Create the sibling `theemeraldexchange-apple/` repo** the moment the gate
-      clears — Swift work has nowhere to live today.
-- [ ] **M2 in full:** EmeraldContracts Swift port (4th binding against the frozen
+Gate cleared; the sibling repo exists and is active (244 `.swift` files,
+TestFlight builds). These items are tracked **there**, not here — listed for
+cross-repo visibility only:
+
+- [~] **M2:** EmeraldContracts Swift port (4th binding against the frozen
       vectors) → EmeraldKit SDK → EmeraldTV (tvOS) / EmeraldMobile (iOS) →
-      TestFlight pipeline.
-- [ ] **M5 native media clients + offline downloads** (needs M2 shipped AND M4
-      proven). Offline downloads — the headline M5 capability — has **zero code**.
-      M5 UI can develop in parallel now against a mocked media-core API.
+      TestFlight pipeline. In progress in the sibling repo.
+- [ ] **M5 native media clients + offline downloads** (needs M4 proven — it is).
+      Offline downloads — the headline M5 capability — is the main open native
+      gap; track in the sibling repo.
 - [ ] **M6 Plex-Pass menu** (DVR / intro-credits / music / photos / sharing) —
-      selectable only after M5 ships. Correctly not-started.
+      0% built, correctly not-started (next milestone after M5, not behind).
+      Five feature buckets; none have backend scaffolding here yet either.
 
 ## Standing risk flags (resolve before any monetized binary ships)
 
-- [ ] **ffmpeg / GPL licensing.** The transcoder now ships Debian's apt ffmpeg +
-      the Intel VAAPI stack (`h264_vaapi` primary, libx264 boot-probe fallback);
-      the backend and media-core images still `COPY` the static
-      `mwader/static-ffmpeg:7.1` binary. Both builds enable GPL x264, so for
-      App-Store/paid distribution the licensing question is unresolved either
-      way — not yet addressed anywhere in the repo.
+- [x] **ffmpeg / GPL licensing — server-side posture RESOLVED (2026-06-17).**
+      `THIRD-PARTY-LICENSES.md` now carries the per-image GPL record (backend +
+      media-core static `mwader/static-ffmpeg` = GPL-3.0+; transcoder = Debian
+      apt ffmpeg GPL-2.0+), the process-isolation argument (ffmpeg is spawned as
+      a child process, never linked — so first-party code stays proprietary), and
+      a written corresponding-source offer. `server/licensing.test.ts` guards the
+      table against Dockerfile drift. A `deny.toml` + CI `license` job now denies
+      GPL/AGPL in the *linked* Rust/JS/Python dependency trees, so the only
+      copyleft in the product stays the process-isolated ffmpeg binary and can't
+      silently creep into linked code. The App-Store path is unaffected: the
+      native clients (sibling repo) use VideoToolbox and bundle **no** ffmpeg, so
+      the GPL binary never enters an App Store artifact. Remaining (not blocking):
+      product LICENSE choice (PolyForm Shield recommended) for community
+      self-hosting — see docs/MONETIZATION-AND-PUBLISHING.md Decision 1.
 - [ ] **IPTV distributability.** The M5.5 policy already makes the
       IPTV-disabled compile-flag build the default public artifact (good); treat
       any monetized build's IPTV surface as a standing legal/compliance risk.

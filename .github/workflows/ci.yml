@@ -318,9 +318,13 @@ jobs:
     # Runs npm audit, cargo audit, and pip-audit in parallel sub-steps so a
     # known CVE in any layer blocks the merge before it reaches main.
     # pip-audit scans recommender/pyproject.toml via --requirement to avoid
-    # needing a full venv install.
+    # needing a full venv install. This job also hosts the LICENSE gate
+    # (deny.toml + license-checker) — it already has all three toolchains, so
+    # no duplicate setup. The license gate keeps GPL/AGPL out of the *linked*
+    # dependency trees; the only deliberate copyleft (process-isolated ffmpeg)
+    # is tracked separately in THIRD-PARTY-LICENSES.md.
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -386,6 +390,24 @@ jobs:
           grep -E '^[a-zA-Z0-9._-]+==' requirements.lock \
             | sed 's/[[:space:]]*\\$//; s/+cpu//' > /tmp/recommender-audit.txt
           pip-audit -r /tmp/recommender-audit.txt --ignore-vuln CVE-2025-3000
+
+      # ── License gate (deny.toml) ──────────────────────────────────────────
+      # Keep GPL/AGPL out of the LINKED dependency trees. The only deliberate
+      # copyleft in the product is the process-isolated ffmpeg binary, recorded
+      # in THIRD-PARTY-LICENSES.md with a written source offer — never linked,
+      # so it cannot contaminate first-party code. cargo-deny reads Cargo.lock
+      # (no compile); license-checker scans the production JS tree.
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: cargo deny check licenses (Rust)
+        run: cargo deny check licenses
+
+      - name: license-checker (production JS tree, fail on GPL/AGPL)
+        # Explicit SPDX ids (not bare "GPL") so LGPL/MPL permissive-copyleft
+        # deps don't false-trip. The production tree is currently GPL/AGPL-free
+        # (verified 2026-06-17); this keeps it that way.
+        run: npx --yes license-checker --production --failOn 'GPL-2.0;GPL-2.0-only;GPL-2.0-or-later;GPL-3.0;GPL-3.0-only;GPL-3.0-or-later;AGPL-1.0;AGPL-3.0;AGPL-3.0-only;AGPL-3.0-or-later'
 
   docker-build:
     # Every other job runs on the host runner via npm/cargo/pytest — nothing
