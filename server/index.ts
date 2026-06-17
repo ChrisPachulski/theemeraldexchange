@@ -21,6 +21,7 @@ import { validateFfmpegOrExit } from './services/ffmpeg.js'
 import { piiBreadcrumbScrub, piiScrub } from './services/telemetryPiiScrub.js'
 import { registerIptvSchedule } from './services/iptvScheduler.js'
 import { registerDbBackupSchedule } from './services/dbBackupScheduler.js'
+import { registerTokenSweepSchedule } from './services/tokenSweepScheduler.js'
 import { drainRemuxSessions } from './services/iptvRemux.js'
 import { closeIptvDb } from './services/iptvDbSingleton.js'
 import { ensureServerId, closeServerDb } from './services/serverDb.js'
@@ -83,6 +84,9 @@ const server = serve(
 // durability matters even on IPTV_DISABLED builds, finding 14-4).
 const cronTasks: ScheduledTask[] = []
 cronTasks.push(registerDbBackupSchedule(env.DB_BACKUP_CRON))
+// Hygiene sweep of expired auth rows (device_tokens + webauthn_challenges,
+// LOW-9). Not IPTV-gated — server.db grows on every build.
+cronTasks.push(registerTokenSweepSchedule(env.TOKEN_SWEEP_CRON))
 
 // IPTV sync is opt-in: only register the cron when all three Xtream creds
 // are configured AND the reviewer-insurance gate is not set. Keeps the
