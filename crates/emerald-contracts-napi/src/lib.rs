@@ -305,6 +305,7 @@ pub fn parse_sub(s: String) -> Result<SubJs> {
         Provider::Plex => "plex",
         Provider::Local => "local",
         Provider::Apple => "apple",
+        Provider::Google => "google",
     };
     Ok(SubJs {
         provider: provider.to_string(),

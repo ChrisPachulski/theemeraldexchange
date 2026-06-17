@@ -302,8 +302,28 @@ if (isProd && enableAppleSignIn && !appleClientId) {
   )
 }
 
+// GOOGLE_CLIENT_ID — comma-separated Google OAuth client id(s) accepted as
+// the `aud` claim when verifying a Google ID token against Google's JWKS
+// (server/services/googleAuth.ts). A native iOS sign-in and a web sign-in
+// use DIFFERENT client ids but the SAME Google account/`sub`, so the
+// verifier accepts any configured id. Like SIWA, identity-token
+// verification needs NO client secret (the JWKS is public) — consistent
+// with the "no new credential store" constraint. Optional in dev; required
+// in production only when Google is enabled via ENABLE_GOOGLE_SIGN_IN=1.
+const googleClientIds = csv('GOOGLE_CLIENT_ID')
+const enableGoogleSignIn = process.env.ENABLE_GOOGLE_SIGN_IN === '1'
+if (isProd && enableGoogleSignIn && googleClientIds.length === 0) {
+  throw new Error(
+    'Missing required env var in production when ENABLE_GOOGLE_SIGN_IN=1: ' +
+      'GOOGLE_CLIENT_ID (comma-separated Google OAuth client id(s) used as ' +
+      'the ID-token aud). Set it, or unset ENABLE_GOOGLE_SIGN_IN to run ' +
+      'without Google.',
+  )
+}
+
 // ADMIN_SUBS — comma-separated, namespaced subs (apple:<subject> |
-// plex:<id>) that are admins AND implicitly allowed without an invite.
+// plex:<id> | google:<sub>) that are admins AND implicitly allowed without
+// an invite.
 // This is the owner-bootstrap: the operator's own Apple/Plex sub goes
 // here so their very first login on a fresh install needs no invite and
 // lands them as admin even when their Plex username isn't in ADMINS
@@ -372,6 +392,15 @@ export function isAppleConfigured(): boolean {
   return Boolean(env.appleClientId)
 }
 
+/** True when Google sign-in is configured (≥1 GOOGLE_CLIENT_ID set).
+ *  Mirrors isAppleConfigured so /api/auth/google can fail fast with a 503
+ *  when Google isn't configured rather than verifying tokens against an
+ *  empty aud, and so /api/auth/methods can advertise it. Read through the
+ *  exported env object so tests can flip env.googleClientIds. */
+export function isGoogleConfigured(): boolean {
+  return env.googleClientIds.length > 0
+}
+
 export const env = {
   // .trim() is load-bearing for the plex.tv PIN flow: this value flows
   // into BOTH the X-Plex-Client-Identifier header (server → plex.tv)
@@ -395,6 +424,8 @@ export const env = {
   adminSubs,
   /** SIWA `aud` — Apple Services ID / bundle id. null when unconfigured. */
   appleClientId,
+  /** Google ID-token `aud` allow-list — OAuth client id(s). [] when unconfigured. */
+  googleClientIds,
   /** WebAuthn Relying Party id (registrable domain the passkey binds to). */
   webauthnRpId,
   /** Human-facing name shown in the OS passkey prompt. */

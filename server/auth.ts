@@ -27,7 +27,7 @@
 
 import { Hono, type Context } from 'hono'
 import { createHash } from 'node:crypto'
-import { env, isAppleConfigured } from './env.js'
+import { env, isPlexConfigured, isAppleConfigured, isGoogleConfigured } from './env.js'
 import {
   checkPin,
   getUser,
@@ -50,10 +50,12 @@ import {
 import { memberStatus, redeemInvite } from './services/membership.js'
 import { addMember } from './services/members.js'
 import { verifyAppleIdentityToken } from './services/appleAuth.js'
+import { verifyGoogleIdentityToken } from './services/googleAuth.js'
+import { maybeMintDeviceToken } from './services/devicePair.js'
 
 export const auth = new Hono()
 
-type AuthRateLimitKind = 'pin' | 'check' | 'apple' | 'passkey'
+type AuthRateLimitKind = 'pin' | 'check' | 'apple' | 'passkey' | 'google'
 type AuthRateLimitBucket = { count: number; resetAt: number }
 type AuthRateLimitRule = { key: string; limit: number; windowMs: number }
 
@@ -71,12 +73,16 @@ const AUTH_CLIENT_RATE_LIMITS: Record<AuthRateLimitKind, { limit: number; window
   // apple. Blunts credential-stuffing against /login/verify and challenge-
   // table burn against /register/options.
   passkey: { limit: 20, windowMs: 60_000 },
+  // Google Sign-In: same posture as apple — every request is a JWKS verify
+  // + authZ decision, no innocuous polling.
+  google: { limit: 20, windowMs: 60_000 },
 }
 const AUTH_GLOBAL_RATE_LIMITS: Record<AuthRateLimitKind, { limit: number; windowMs: number }> = {
   pin: { limit: 120, windowMs: 60_000 },
   check: { limit: 600, windowMs: 60_000 },
   apple: { limit: 200, windowMs: 60_000 },
   passkey: { limit: 200, windowMs: 60_000 },
+  google: { limit: 200, windowMs: 60_000 },
 }
 const AUTH_CHECK_PIN_RATE_LIMIT = { limit: 90, windowMs: 60_000 }
 const AUTH_RATE_LIMIT_MAX_BUCKETS = 256
@@ -301,10 +307,11 @@ async function parseLimitedJson(c: Context, maxBytes: number): Promise<{ tooLarg
 // The sub passed here MUST already be the signature/PIN-verified,
 // parseSub-validated namespaced form. authZ never trusts a client sub.
 //
-// authMode spans all three identity providers — 'plex' | 'apple' | 'local'
-// (passkey/WebAuthn) — because the allowlist is the single shared authZ gate
-// for every login path. Exported so the passkey route reuses the exact same
-// admit/redeem decision rather than reimplementing it.
+// authMode spans every identity provider — 'plex' | 'apple' | 'local'
+// (passkey/WebAuthn) | 'google' — because the allowlist is the single shared
+// authZ gate for every login path. Exported so the passkey/apple/google
+// routes reuse the exact same admit/redeem decision rather than
+// reimplementing it.
 export function authorizeOrRedeem(
   sub: string,
   inviteCode: string | undefined,
@@ -328,6 +335,20 @@ export function authorizeOrRedeem(
 // with the SAME clientId, so the authorized token is still found.
 auth.get('/plex/config', (c) =>
   c.json({ clientId: env.plexClientId, product: PLEX_PRODUCT }),
+)
+
+// Public, auth-free: which login methods this install offers, so the native
+// app (and SPA) render only the providers that are actually configured. plex
+// is always present (PLEX_CLIENT_ID is required to boot); apple/google are
+// flag+config gated; passkeys are always mounted (WebAuthn has dev defaults).
+// The app reads this on the unpaired screen to build the provider button list.
+auth.get('/methods', (c) =>
+  c.json({
+    plex: isPlexConfigured(),
+    apple: isAppleConfigured(),
+    google: isGoogleConfigured(),
+    passkey: true,
+  }),
 )
 
 // Is this Plex token a member (owner OR shared invitee) of the configured home
@@ -520,6 +541,18 @@ auth.post('/apple', async (c) => {
     return c.json({ status: 'denied', reason: 'no_invite' }, 403)
   }
 
+  // Native app pairing: when the body carries the device-pair triple, mint a
+  // device-token Bearer JWE (same wire shape as routes/device.ts) instead of
+  // a browser session cookie. Returns null for browser sign-ins, which fall
+  // through to the cookie path below.
+  const deviceResponse = await maybeMintDeviceToken(c, body, {
+    sub: namespacedSub,
+    role,
+    auth_mode: 'apple',
+    username: displayName,
+  })
+  if (deviceResponse) return deviceResponse
+
   // Mint the session. NO plexAuthToken / verifiedPlexServerId — Apple
   // carries no Plex credential, and reconcileSession skips the plex.tv
   // probe entirely for apple: subs.
@@ -532,6 +565,97 @@ auth.post('/apple', async (c) => {
 
   // Prime the membership cache as 'member' so the next protected request
   // skips re-work. No plexAuthToken/serverId fields for apple.
+  _primeSessionGateCache(namespacedSub, 'member')
+
+  return c.json({
+    status: 'authorized',
+    user: {
+      sub: namespacedSub,
+      username: displayName,
+      email: verified.email,
+      role,
+    },
+  })
+})
+
+// POST /api/auth/google — Google Sign-In. The Google parallel of
+// /api/auth/apple: prove identity via the Google ID token (verified against
+// Google's JWKS, never trusting a client-sent sub) and converge on the SAME
+// invite/members authZ gate. Device-pair body → device-token Bearer JWE;
+// browser body → session cookie. POST-only so requireSafeOrigin gates it.
+auth.post('/google', async (c) => {
+  const preLimit = enforceAuthRateLimit(c, 'google')
+  if (preLimit) return preLimit
+
+  if (!isGoogleConfigured()) {
+    return c.json({ error: 'google_not_configured' }, 503)
+  }
+
+  const parsed = await parseLimitedJson(c, AUTH_APPLE_MAX_BODY_BYTES)
+  if (parsed.tooLarge) return c.json({ error: 'body_too_large' }, 413)
+  const body = parsed.body as
+    | { identityToken?: unknown; nonce?: unknown; inviteCode?: unknown }
+    | null
+  // Accept identityToken (parity with the apple route) or idToken (Google's
+  // own claim name) — clients in the wild send either.
+  const identityToken =
+    typeof body?.identityToken === 'string'
+      ? body.identityToken
+      : typeof (body as { idToken?: unknown })?.idToken === 'string'
+        ? (body as { idToken: string }).idToken
+        : undefined
+  if (!identityToken) return c.json({ error: 'missing identity_token' }, 400)
+  // Identity-keyed bucket on the (unverified) Google sub: throttles a replay
+  // run against one Google account even where client-IP headers are untrusted.
+  const identityLimited = enforceAuthIdentityRateLimit(c, 'google', unverifiedJwtSub(identityToken))
+  if (identityLimited) return identityLimited
+  const nonce = typeof body?.nonce === 'string' ? body.nonce : undefined
+  const inviteCode = typeof body?.inviteCode === 'string' ? body.inviteCode : undefined
+
+  // authN: verify the Google identity token. The only sub we trust comes
+  // from the signature-verified payload (parseSub-validated google pattern).
+  const verified = await verifyGoogleIdentityToken(identityToken, { expectedNonce: nonce })
+  if (!verified.ok) {
+    // jwks_unavailable is OUR problem (transient Google outage) → 503 so a
+    // login isn't reported to the user as "your token is bad." Else 401.
+    const httpStatus = verified.error === 'jwks_unavailable' ? 503 : 401
+    return c.json({ error: 'invalid_identity_token', reason: verified.error }, httpStatus)
+  }
+
+  const namespacedSub = verified.sub.raw
+  // Prefer Google's `name`, then the email local-part, then the sub. The sub
+  // is the stable key; the username is advisory chrome for the members row.
+  const displayName =
+    verified.name ?? (verified.email ? verified.email.split('@')[0] : namespacedSub)
+  // roleFor refuses to match a google: sub's id against ADMINS (Plex
+  // usernames); a Google admin must be listed by stable sub in ADMIN_SUBS.
+  const role = roleFor(displayName, namespacedSub)
+
+  // SHARED authZ gate (identical to /plex/check and /apple).
+  const authz = authorizeOrRedeem(namespacedSub, inviteCode, displayName, 'google')
+  if (!authz.allowed) {
+    return c.json({ status: 'denied', reason: 'no_invite' }, 403)
+  }
+
+  // Native app pairing: device-pair triple → device-token Bearer JWE instead
+  // of a browser session cookie. Returns null for browser sign-ins.
+  const deviceResponse = await maybeMintDeviceToken(c, body, {
+    sub: namespacedSub,
+    role,
+    auth_mode: 'google',
+    username: displayName,
+  })
+  if (deviceResponse) return deviceResponse
+
+  // Mint the session. NO plexAuthToken — Google carries no Plex credential,
+  // and reconcileSession skips the plex.tv probe for google: subs.
+  await setSessionCookie(c, {
+    sub: namespacedSub,
+    username: displayName,
+    role,
+    auth_mode: 'google',
+  })
+
   _primeSessionGateCache(namespacedSub, 'member')
 
   return c.json({

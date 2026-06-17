@@ -1,8 +1,8 @@
 //! Subject (`sub`) namespace parsing per §8 of the cross-service contract.
 //!
-//! Three provider namespaces: `plex:`, `local:`, `apple:`. The format is
-//! `<provider>:<id>`. Regex literals are the contract — Rust + TS + Swift
-//! implementations MUST match exactly. Verified against
+//! Four provider namespaces: `plex:`, `local:`, `apple:`, `google:`. The
+//! format is `<provider>:<id>`. Regex literals are the contract — Rust + TS +
+//! Swift implementations MUST match exactly. Verified against
 //! `tests/vectors/sub-namespace.json`.
 
 use regex::Regex;
@@ -20,11 +20,16 @@ pub const LOCAL_REGEX: &str = r"^local:[0-9A-HJKMNP-TV-Z]{26}$";
 /// `apple:` — Sign in with Apple identifier: `<6digit>.<32hex>.<4digit>`.
 pub const APPLE_REGEX: &str = r"^apple:[0-9]{6}\.[0-9a-f]{32}\.[0-9]{4}$";
 
+/// `google:` — Google OIDC `sub` claim: an opaque decimal string (in
+/// practice ~21 digits, never reused). Numeric-only, generous length.
+pub const GOOGLE_REGEX: &str = r"^google:[0-9]{1,32}$";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Provider {
     Plex,
     Local,
     Apple,
+    Google,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,7 +44,7 @@ pub struct Sub {
 pub enum SubError {
     /// Sub is not in `<provider>:<id>` shape at all.
     Unprefixed,
-    /// Provider prefix is unknown (not plex/local/apple).
+    /// Provider prefix is unknown (not plex/local/apple/google).
     UnknownProvider,
     /// Provider matches but the id portion fails the regex.
     InvalidFormat,
@@ -56,6 +61,10 @@ fn local_re() -> &'static Regex {
 fn apple_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| Regex::new(APPLE_REGEX).expect("static regex"))
+}
+fn google_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(GOOGLE_REGEX).expect("static regex"))
 }
 
 /// Parse a namespaced `sub` string. The string MUST already carry a
@@ -94,6 +103,17 @@ pub fn parse_sub(s: &str) -> Result<Sub, SubError> {
             if apple_re().is_match(s) {
                 Ok(Sub {
                     provider: Provider::Apple,
+                    id: rest.to_string(),
+                    raw: s.to_string(),
+                })
+            } else {
+                Err(SubError::InvalidFormat)
+            }
+        }
+        "google" => {
+            if google_re().is_match(s) {
+                Ok(Sub {
+                    provider: Provider::Google,
                     id: rest.to_string(),
                     raw: s.to_string(),
                 })
@@ -148,6 +168,22 @@ mod tests {
     }
 
     #[test]
+    fn valid_google() {
+        let s = parse_sub("google:104223294318414512345").unwrap();
+        assert_eq!(s.provider, Provider::Google);
+        assert_eq!(s.id, "104223294318414512345");
+        assert_eq!(s.raw, "google:104223294318414512345");
+    }
+
+    #[test]
+    fn google_rejects_non_numeric() {
+        assert_eq!(
+            parse_sub("google:abc").unwrap_err(),
+            SubError::InvalidFormat,
+        );
+    }
+
+    #[test]
     fn rejects_unprefixed() {
         assert_eq!(parse_sub("12345").unwrap_err(), SubError::Unprefixed);
     }
@@ -155,7 +191,7 @@ mod tests {
     #[test]
     fn rejects_unknown_provider() {
         assert_eq!(
-            parse_sub("google:abc").unwrap_err(),
+            parse_sub("github:abc").unwrap_err(),
             SubError::UnknownProvider
         );
     }
