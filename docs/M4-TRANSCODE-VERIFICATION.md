@@ -151,7 +151,56 @@ sessions share the iGPU, still comfortably above real-time.
 
 **Still open (not closed by this run):** the *Apple-Silicon* variant of crit-2
 (VideoToolbox) is untestable — the deployed target is x86 VAAPI with no AS
-transcode host — and a formal long-running soak (crit-4) is not yet recorded.
+transcode host. ~~a formal long-running soak (crit-4) is not yet recorded.~~
+**CLOSED 2026-06-16 — see §Long-running soak below.**
 
 Reproduce: `scp scripts/m4-stress-bench.sh root@<nas>:/tmp/ && ssh root@<nas>
 'bash /tmp/m4-stress-bench.sh 4 60'`.
+
+## Long-running soak (crit-4) — 2026-06-16
+
+The last open M4 functional bar — a **formal long-running soak** proving
+*sustained reap/cleanup under load over time, with no leak* — is now recorded.
+The 60 s stress/bench above does **not** prove crit-4: it heartbeats every
+session for its whole window, so nothing is ever idle-reaped mid-run and no
+slow leak has time to surface. A dedicated harness was built for this:
+`scripts/m4-soak.sh`. Full run log: [`docs/m4-soak-2026-06-16.log`](./m4-soak-2026-06-16.log).
+
+What the soak does over a **30-minute** window on the NAS (3 concurrent forced
+HEVC→H.264 VAAPI re-encodes):
+
+- **Sustains load continuously.** VAAPI runs ~3–4× realtime with no `-re` cap,
+  so a session's ffmpeg *exits* when it finishes the whole file (~8 min for a
+  30-min movie). The harness **refreshes the pool every 240 s** so N encoders
+  are always running — and that recycling is itself repeated grant→stop
+  lifecycle churn under load.
+- **Forces the idle reaper to fire repeatedly under load.** Every 300 s it
+  grants one extra session under a *distinct* `sub` (`local:m4soak-ephem`, so
+  the transcoder's `coalesce_key = owner∥kind∥id∥sub∥path` can't fold it onto a
+  heartbeated steady session) and then **never heartbeats it** — the 30 s idle
+  reaper must kill it. ~45 s later it confirms the session 404s.
+- **Watches for leaks.** Samples box CPU/load, Plex health, transcoder RSS and
+  the host-side ffmpeg process count every 5 s under a watchdog that stops
+  everything the instant Plex or load/core degrades.
+
+**Result — all PASS** (`scripts/m4-soak.sh 3 1800`, NAS = 6-thread x86 + Intel
+VAAPI iGPU, 2 s segments):
+
+| Criterion | Target | Measured | Verdict |
+|---|---|---|---|
+| crit-4 duration held | full window, no abort | **1802 s of 1800 s** sustained, watchdog never fired | **PASS** |
+| crit-4 reap under load | idle reaper cleans up every time | **5 / 5 idle-reap cycles** dropped their session (index 404), **0 failed** | **PASS** |
+| crit-4 zero leak (procs) | no accumulation; clean teardown | steady baseline 3 ffmpeg, peak 5 w/ ephemeral, **post-stop 0** | **PASS** |
+| crit-4 zero leak (memory) | steady-mem floor does not climb | floor **776 MiB → 809 MiB (+4%)** across the two halves (ceiling 25%); peak 1497 MiB | **PASS** |
+| lifecycle churn | sustained throughput | **24 sessions** granted+stopped under load over **7 pool refreshes** | — |
+| box headroom | Plex stays healthy | box CPU **peak 57% / avg 15%**, load ≤0.69/core, **Plex `healthy` throughout** | **PASS** |
+
+The memory "floor" metric is the leak signal: the *minimum* steady RSS
+(warmup-ramp and any ephemeral-in-flight sample excluded) in the first half vs
+the second half. A real leak raises the floor; here it moved +4 %, i.e. flat —
+no creep over 30 minutes of continuous transcode + 24 session lifecycles + 5
+idle-reap cycles, and every ffmpeg child was gone after teardown.
+
+Reproduce: `scp scripts/m4-soak.sh root@<nas>:/tmp/ && ssh root@<nas> 'setsid
+bash /tmp/m4-soak.sh 3 1800 > /tmp/soak.log 2>&1 < /dev/null &'` (detached; it
+ignores SIGHUP so a dropped monitoring SSH can't kill it).

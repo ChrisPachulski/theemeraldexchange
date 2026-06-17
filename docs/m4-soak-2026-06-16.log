@@ -1,0 +1,337 @@
+     minted internal-principal token (len 323)
+     candidate files (media_files.id): 7019 20916 3980 6982 12650 6709 14524 19166 15448 18028 15382 14155
+
+==== STEADY LOAD: 3 concurrent forced HEVC→H.264 re-encodes ====
+     id=7019 -> session tx:movie:7019:local_m4soak:1781668103-7
+     id=20916 -> session tx:movie:20916:local_m4soak:1781668103-8
+     id=3980 -> session tx:movie:3980:local_m4soak:1781668103-9
+     3/3 steady sessions running
+     warming up (waiting for first segments)…
+     baseline (min over readings): ffmpeg procs=3  transcoder mem=860MiB
+
+==== SOAK 1800s @ 3 concurrent — sampling every 5s, reap proof every 300s ====
+     t=   6s  cpu= 18%  load=4.14 (0.69/c)  plex=healthy  procs=3  mem= 858MiB  refr=0 reap=0/0
+     t=  12s  cpu= 13%  load=3.81 (0.64/c)  plex=healthy  procs=3  mem= 857MiB  refr=0 reap=0/0
+     t=  18s  cpu= 22%  load=3.90 (0.65/c)  plex=healthy  procs=3  mem= 842MiB  refr=0 reap=0/0
+     t=  24s  cpu= 15%  load=3.30 (0.55/c)  plex=healthy  procs=3  mem= 843MiB  refr=0 reap=0/0
+     t=  30s  cpu= 16%  load=3.12 (0.52/c)  plex=healthy  procs=3  mem= 837MiB  refr=0 reap=0/0
+     t=  37s  cpu= 15%  load=2.95 (0.49/c)  plex=healthy  procs=3  mem= 847MiB  refr=0 reap=0/0
+     t=  43s  cpu= 16%  load=2.71 (0.45/c)  plex=healthy  procs=3  mem= 849MiB  refr=0 reap=0/0
+     t=  49s  cpu= 16%  load=2.61 (0.43/c)  plex=healthy  procs=3  mem= 849MiB  refr=0 reap=0/0
+     t=  55s  cpu= 15%  load=2.40 (0.40/c)  plex=healthy  procs=3  mem= 844MiB  refr=0 reap=0/0
+     t=  61s  cpu= 35%  load=2.53 (0.42/c)  plex=healthy  procs=3  mem= 840MiB  refr=0 reap=0/0
+     t=  67s  cpu= 28%  load=2.89 (0.48/c)  plex=healthy  procs=3  mem= 839MiB  refr=0 reap=0/0
+     t=  73s  cpu= 14%  load=2.74 (0.46/c)  plex=healthy  procs=3  mem= 831MiB  refr=0 reap=0/0
+     t=  79s  cpu= 13%  load=2.48 (0.41/c)  plex=healthy  procs=3  mem= 825MiB  refr=0 reap=0/0
+     t=  86s  cpu= 12%  load=2.28 (0.38/c)  plex=healthy  procs=3  mem= 825MiB  refr=0 reap=0/0
+     t=  92s  cpu= 17%  load=2.18 (0.36/c)  plex=healthy  procs=3  mem= 821MiB  refr=0 reap=0/0
+     t=  98s  cpu= 16%  load=2.00 (0.33/c)  plex=healthy  procs=3  mem= 819MiB  refr=0 reap=0/0
+     t= 104s  cpu= 14%  load=1.85 (0.31/c)  plex=healthy  procs=3  mem= 819MiB  refr=0 reap=0/0
+     t= 110s  cpu= 15%  load=1.70 (0.28/c)  plex=healthy  procs=3  mem= 817MiB  refr=0 reap=0/0
+     t= 116s  cpu= 15%  load=1.64 (0.27/c)  plex=healthy  procs=3  mem= 814MiB  refr=0 reap=0/0
+     t= 122s  cpu= 17%  load=1.51 (0.25/c)  plex=healthy  procs=3  mem= 812MiB  refr=0 reap=0/0
+     t= 128s  cpu= 19%  load=1.55 (0.26/c)  plex=healthy  procs=3  mem= 803MiB  refr=0 reap=0/0
+     t= 134s  cpu= 14%  load=1.63 (0.27/c)  plex=healthy  procs=3  mem= 803MiB  refr=0 reap=0/0
+     t= 140s  cpu= 14%  load=1.58 (0.26/c)  plex=healthy  procs=3  mem= 804MiB  refr=0 reap=0/0
+     t= 147s  cpu= 13%  load=1.45 (0.24/c)  plex=healthy  procs=3  mem= 801MiB  refr=0 reap=0/0
+     t= 153s  cpu= 44%  load=1.65 (0.27/c)  plex=healthy  procs=3  mem= 801MiB  refr=0 reap=0/0
+     t= 159s  cpu= 19%  load=1.68 (0.28/c)  plex=healthy  procs=3  mem= 801MiB  refr=0 reap=0/0
+     t= 165s  cpu= 14%  load=1.57 (0.26/c)  plex=healthy  procs=3  mem= 798MiB  refr=0 reap=0/0
+     t= 171s  cpu= 11%  load=1.52 (0.25/c)  plex=healthy  procs=3  mem= 797MiB  refr=0 reap=0/0
+     t= 177s  cpu= 12%  load=1.48 (0.25/c)  plex=healthy  procs=3  mem= 793MiB  refr=0 reap=0/0
+     t= 183s  cpu= 14%  load=1.36 (0.23/c)  plex=healthy  procs=3  mem= 792MiB  refr=0 reap=0/0
+     t= 189s  cpu= 14%  load=1.39 (0.23/c)  plex=healthy  procs=3  mem= 792MiB  refr=0 reap=0/0
+     t= 195s  cpu= 13%  load=1.36 (0.23/c)  plex=healthy  procs=3  mem= 789MiB  refr=0 reap=0/0
+     t= 201s  cpu= 12%  load=1.25 (0.21/c)  plex=healthy  procs=3  mem= 787MiB  refr=0 reap=0/0
+     t= 207s  cpu= 13%  load=1.15 (0.19/c)  plex=healthy  procs=3  mem= 784MiB  refr=0 reap=0/0
+     t= 213s  cpu= 14%  load=1.05 (0.18/c)  plex=healthy  procs=3  mem= 784MiB  refr=0 reap=0/0
+     t= 220s  cpu= 13%  load=0.97 (0.16/c)  plex=healthy  procs=3  mem= 785MiB  refr=0 reap=0/0
+     t= 226s  cpu= 11%  load=0.97 (0.16/c)  plex=healthy  procs=3  mem= 782MiB  refr=0 reap=0/0
+     t= 232s  cpu= 13%  load=0.97 (0.16/c)  plex=healthy  procs=3  mem= 779MiB  refr=0 reap=0/0
+     t= 238s  cpu= 18%  load=1.05 (0.18/c)  plex=healthy  procs=3  mem= 776MiB  refr=0 reap=0/0
+       refresh #1: pool recycled → 3 fresh sessions (lifecycles=6)
+     t= 244s  cpu= 41%  load=1.20 (0.20/c)  plex=healthy  procs=3  mem= 782MiB  refr=1 reap=0/0
+     t= 252s  cpu= 34%  load=1.58 (0.26/c)  plex=healthy  procs=4  mem= 854MiB  refr=1 reap=0/0
+     t= 258s  cpu= 16%  load=1.62 (0.27/c)  plex=healthy  procs=3  mem= 853MiB  refr=1 reap=0/0
+     t= 264s  cpu= 12%  load=1.52 (0.25/c)  plex=healthy  procs=3  mem= 849MiB  refr=1 reap=0/0
+     t= 270s  cpu= 11%  load=1.48 (0.25/c)  plex=healthy  procs=3  mem= 848MiB  refr=1 reap=0/0
+     t= 276s  cpu= 13%  load=1.36 (0.23/c)  plex=healthy  procs=3  mem= 848MiB  refr=1 reap=0/0
+     t= 282s  cpu= 13%  load=1.33 (0.22/c)  plex=healthy  procs=3  mem= 846MiB  refr=1 reap=0/0
+     t= 289s  cpu= 11%  load=1.31 (0.22/c)  plex=healthy  procs=3  mem= 843MiB  refr=1 reap=0/0
+     t= 295s  cpu= 12%  load=1.10 (0.18/c)  plex=healthy  procs=3  mem= 842MiB  refr=1 reap=0/0
+       reap-proof: granted ephemeral tx:movie:12650:local_m4soak-ephem:1781668417-13 (id=12650), NOT heartbeating — must be reaped by t=346s
+     t= 301s  cpu= 12%  load=1.02 (0.17/c)  plex=healthy  procs=3  mem= 842MiB  refr=1 reap=0/0
+     t= 307s  cpu= 21%  load=1.18 (0.20/c)  plex=healthy  procs=5  mem=1057MiB  refr=1 reap=0/0
+     t= 313s  cpu= 14%  load=1.24 (0.21/c)  plex=healthy  procs=4  mem=1059MiB  refr=1 reap=0/0
+     t= 319s  cpu= 12%  load=1.12 (0.19/c)  plex=healthy  procs=4  mem=1066MiB  refr=1 reap=0/0
+     t= 326s  cpu= 13%  load=1.19 (0.20/c)  plex=healthy  procs=4  mem=1070MiB  refr=1 reap=0/0
+     t= 332s  cpu= 46%  load=1.50 (0.25/c)  plex=healthy  procs=4  mem=1076MiB  refr=1 reap=0/0
+     t= 338s  cpu= 28%  load=1.94 (0.32/c)  plex=healthy  procs=3  mem= 873MiB  refr=1 reap=0/0
+     t= 344s  cpu= 14%  load=1.64 (0.27/c)  plex=healthy  procs=3  mem= 879MiB  refr=1 reap=0/0
+       reap-proof OK: tx:movie:12650:local_m4soak-ephem:1781668417-13 reaped (http=404, procs=3)
+     t= 350s  cpu= 12%  load=1.51 (0.25/c)  plex=healthy  procs=3  mem= 878MiB  refr=1 reap=1/0
+     t= 356s  cpu= 12%  load=1.47 (0.24/c)  plex=healthy  procs=3  mem= 878MiB  refr=1 reap=1/0
+     t= 362s  cpu= 12%  load=1.51 (0.25/c)  plex=healthy  procs=3  mem= 880MiB  refr=1 reap=1/0
+     t= 368s  cpu= 13%  load=1.47 (0.24/c)  plex=healthy  procs=3  mem= 882MiB  refr=1 reap=1/0
+     t= 374s  cpu= 13%  load=1.32 (0.22/c)  plex=healthy  procs=3  mem= 880MiB  refr=1 reap=1/0
+     t= 381s  cpu= 12%  load=1.38 (0.23/c)  plex=healthy  procs=3  mem= 878MiB  refr=1 reap=1/0
+     t= 387s  cpu= 12%  load=1.27 (0.21/c)  plex=healthy  procs=3  mem= 878MiB  refr=1 reap=1/0
+     t= 393s  cpu= 12%  load=1.17 (0.19/c)  plex=healthy  procs=3  mem= 874MiB  refr=1 reap=1/0
+     t= 399s  cpu= 12%  load=1.15 (0.19/c)  plex=healthy  procs=3  mem= 873MiB  refr=1 reap=1/0
+     t= 405s  cpu= 12%  load=1.28 (0.21/c)  plex=healthy  procs=3  mem= 873MiB  refr=1 reap=1/0
+     t= 411s  cpu= 13%  load=1.25 (0.21/c)  plex=healthy  procs=3  mem= 870MiB  refr=1 reap=1/0
+     t= 417s  cpu= 15%  load=1.15 (0.19/c)  plex=healthy  procs=3  mem= 867MiB  refr=1 reap=1/0
+     t= 423s  cpu= 41%  load=1.22 (0.20/c)  plex=healthy  procs=3  mem= 866MiB  refr=1 reap=1/0
+     t= 429s  cpu= 14%  load=1.42 (0.24/c)  plex=healthy  procs=3  mem= 864MiB  refr=1 reap=1/0
+     t= 435s  cpu= 17%  load=1.31 (0.22/c)  plex=healthy  procs=3  mem= 861MiB  refr=1 reap=1/0
+     t= 442s  cpu= 17%  load=1.36 (0.23/c)  plex=healthy  procs=3  mem= 857MiB  refr=1 reap=1/0
+     t= 448s  cpu= 16%  load=1.33 (0.22/c)  plex=healthy  procs=3  mem= 851MiB  refr=1 reap=1/0
+     t= 454s  cpu= 13%  load=1.31 (0.22/c)  plex=healthy  procs=3  mem= 848MiB  refr=1 reap=1/0
+     t= 460s  cpu= 12%  load=1.33 (0.22/c)  plex=healthy  procs=3  mem= 853MiB  refr=1 reap=1/0
+     t= 466s  cpu= 15%  load=1.39 (0.23/c)  plex=healthy  procs=3  mem= 851MiB  refr=1 reap=1/0
+     t= 472s  cpu= 12%  load=1.28 (0.21/c)  plex=healthy  procs=3  mem= 849MiB  refr=1 reap=1/0
+     t= 478s  cpu= 14%  load=1.25 (0.21/c)  plex=healthy  procs=3  mem= 846MiB  refr=1 reap=1/0
+       refresh #2: pool recycled → 3 fresh sessions (lifecycles=9)
+     t= 484s  cpu= 13%  load=1.13 (0.19/c)  plex=healthy  procs=3  mem= 847MiB  refr=2 reap=1/0
+     t= 491s  cpu= 13%  load=1.12 (0.19/c)  plex=healthy  procs=3  mem= 795MiB  refr=2 reap=1/0
+     t= 498s  cpu= 10%  load=1.11 (0.19/c)  plex=healthy  procs=3  mem= 799MiB  refr=2 reap=1/0
+     t= 504s  cpu= 10%  load=1.02 (0.17/c)  plex=healthy  procs=3  mem= 805MiB  refr=2 reap=1/0
+     t= 510s  cpu= 28%  load=1.18 (0.20/c)  plex=healthy  procs=3  mem= 805MiB  refr=2 reap=1/0
+     t= 516s  cpu= 27%  load=1.16 (0.19/c)  plex=healthy  procs=3  mem= 805MiB  refr=2 reap=1/0
+     t= 522s  cpu= 11%  load=1.07 (0.18/c)  plex=healthy  procs=3  mem= 803MiB  refr=2 reap=1/0
+     t= 528s  cpu= 12%  load=0.99 (0.17/c)  plex=healthy  procs=3  mem= 801MiB  refr=2 reap=1/0
+     t= 534s  cpu= 11%  load=1.07 (0.18/c)  plex=healthy  procs=3  mem= 801MiB  refr=2 reap=1/0
+     t= 540s  cpu=  9%  load=0.98 (0.16/c)  plex=healthy  procs=3  mem= 798MiB  refr=2 reap=1/0
+     t= 546s  cpu= 11%  load=0.90 (0.15/c)  plex=healthy  procs=3  mem= 798MiB  refr=2 reap=1/0
+     t= 552s  cpu= 11%  load=0.83 (0.14/c)  plex=healthy  procs=3  mem= 795MiB  refr=2 reap=1/0
+     t= 559s  cpu= 13%  load=0.84 (0.14/c)  plex=healthy  procs=3  mem= 795MiB  refr=2 reap=1/0
+     t= 565s  cpu= 10%  load=0.79 (0.13/c)  plex=healthy  procs=3  mem= 794MiB  refr=2 reap=1/0
+     t= 571s  cpu= 11%  load=0.73 (0.12/c)  plex=healthy  procs=3  mem= 794MiB  refr=2 reap=1/0
+     t= 577s  cpu= 10%  load=0.75 (0.12/c)  plex=healthy  procs=3  mem= 795MiB  refr=2 reap=1/0
+     t= 583s  cpu= 11%  load=0.77 (0.13/c)  plex=healthy  procs=3  mem= 794MiB  refr=2 reap=1/0
+     t= 589s  cpu= 12%  load=0.73 (0.12/c)  plex=healthy  procs=3  mem= 792MiB  refr=2 reap=1/0
+     t= 595s  cpu= 11%  load=0.67 (0.11/c)  plex=healthy  procs=3  mem= 791MiB  refr=2 reap=1/0
+       reap-proof: granted ephemeral tx:movie:6709:local_m4soak-ephem:1781668718-17 (id=6709), NOT heartbeating — must be reaped by t=646s
+     t= 601s  cpu= 37%  load=0.86 (0.14/c)  plex=healthy  procs=3  mem= 790MiB  refr=2 reap=1/0
+     t= 608s  cpu= 30%  load=1.35 (0.23/c)  plex=healthy  procs=4  mem= 994MiB  refr=2 reap=1/0
+     t= 614s  cpu= 12%  load=1.44 (0.24/c)  plex=healthy  procs=4  mem= 996MiB  refr=2 reap=1/0
+     t= 620s  cpu= 11%  load=1.32 (0.22/c)  plex=healthy  procs=4  mem= 997MiB  refr=2 reap=1/0
+     t= 626s  cpu= 11%  load=1.29 (0.21/c)  plex=healthy  procs=4  mem=1002MiB  refr=2 reap=1/0
+     t= 632s  cpu= 10%  load=1.19 (0.20/c)  plex=healthy  procs=4  mem=1004MiB  refr=2 reap=1/0
+     t= 639s  cpu= 11%  load=1.17 (0.19/c)  plex=healthy  procs=3  mem= 835MiB  refr=2 reap=1/0
+     t= 645s  cpu= 11%  load=1.15 (0.19/c)  plex=healthy  procs=3  mem= 836MiB  refr=2 reap=1/0
+       reap-proof OK: tx:movie:6709:local_m4soak-ephem:1781668718-17 reaped (http=404, procs=3)
+     t= 651s  cpu= 11%  load=1.14 (0.19/c)  plex=healthy  procs=3  mem= 836MiB  refr=2 reap=2/0
+     t= 657s  cpu= 10%  load=1.12 (0.19/c)  plex=healthy  procs=3  mem= 835MiB  refr=2 reap=2/0
+     t= 663s  cpu= 13%  load=1.11 (0.19/c)  plex=healthy  procs=3  mem= 835MiB  refr=2 reap=2/0
+     t= 669s  cpu= 11%  load=1.02 (0.17/c)  plex=healthy  procs=3  mem= 836MiB  refr=2 reap=2/0
+     t= 675s  cpu= 12%  load=1.09 (0.18/c)  plex=healthy  procs=3  mem= 835MiB  refr=2 reap=2/0
+     t= 681s  cpu= 10%  load=1.17 (0.19/c)  plex=healthy  procs=3  mem= 834MiB  refr=2 reap=2/0
+     t= 687s  cpu= 18%  load=1.07 (0.18/c)  plex=healthy  procs=3  mem= 830MiB  refr=2 reap=2/0
+     t= 693s  cpu= 57%  load=1.39 (0.23/c)  plex=healthy  procs=3  mem= 837MiB  refr=2 reap=2/0
+     t= 699s  cpu= 11%  load=1.56 (0.26/c)  plex=healthy  procs=3  mem= 834MiB  refr=2 reap=2/0
+     t= 706s  cpu= 10%  load=1.51 (0.25/c)  plex=healthy  procs=3  mem= 831MiB  refr=2 reap=2/0
+     t= 712s  cpu= 11%  load=1.47 (0.24/c)  plex=healthy  procs=3  mem= 830MiB  refr=2 reap=2/0
+     t= 718s  cpu= 10%  load=1.35 (0.23/c)  plex=healthy  procs=3  mem= 828MiB  refr=2 reap=2/0
+       refresh #3: pool recycled → 3 fresh sessions (lifecycles=12)
+     t= 724s  cpu= 17%  load=1.40 (0.23/c)  plex=healthy  procs=3  mem= 826MiB  refr=3 reap=2/0
+     t= 733s  cpu= 31%  load=2.12 (0.35/c)  plex=healthy  procs=4  mem=1278MiB  refr=3 reap=2/0
+     t= 739s  cpu= 31%  load=2.17 (0.36/c)  plex=healthy  procs=3  mem=1318MiB  refr=3 reap=2/0
+     t= 745s  cpu= 13%  load=2.15 (0.36/c)  plex=healthy  procs=3  mem=1320MiB  refr=3 reap=2/0
+     t= 751s  cpu= 13%  load=2.30 (0.38/c)  plex=healthy  procs=3  mem=1324MiB  refr=3 reap=2/0
+     t= 757s  cpu= 18%  load=2.20 (0.37/c)  plex=healthy  procs=3  mem=1326MiB  refr=3 reap=2/0
+     t= 763s  cpu= 20%  load=2.10 (0.35/c)  plex=healthy  procs=3  mem=1325MiB  refr=3 reap=2/0
+     t= 769s  cpu= 20%  load=2.08 (0.35/c)  plex=healthy  procs=3  mem=1325MiB  refr=3 reap=2/0
+     t= 776s  cpu= 17%  load=1.92 (0.32/c)  plex=healthy  procs=3  mem=1325MiB  refr=3 reap=2/0
+     t= 782s  cpu= 36%  load=2.00 (0.33/c)  plex=healthy  procs=3  mem=1325MiB  refr=3 reap=2/0
+     t= 788s  cpu= 27%  load=2.16 (0.36/c)  plex=healthy  procs=3  mem=1329MiB  refr=3 reap=2/0
+     t= 794s  cpu= 13%  load=1.90 (0.32/c)  plex=healthy  procs=3  mem=1329MiB  refr=3 reap=2/0
+     t= 800s  cpu= 14%  load=1.83 (0.30/c)  plex=healthy  procs=3  mem=1326MiB  refr=3 reap=2/0
+     t= 806s  cpu= 12%  load=1.68 (0.28/c)  plex=healthy  procs=3  mem=1323MiB  refr=3 reap=2/0
+     t= 812s  cpu= 13%  load=1.55 (0.26/c)  plex=healthy  procs=3  mem=1323MiB  refr=3 reap=2/0
+     t= 819s  cpu= 12%  load=1.59 (0.27/c)  plex=healthy  procs=3  mem=1324MiB  refr=3 reap=2/0
+     t= 825s  cpu= 12%  load=1.41 (0.23/c)  plex=healthy  procs=3  mem=1321MiB  refr=3 reap=2/0
+     t= 831s  cpu= 13%  load=1.38 (0.23/c)  plex=healthy  procs=3  mem=1320MiB  refr=3 reap=2/0
+     t= 837s  cpu= 12%  load=1.27 (0.21/c)  plex=healthy  procs=3  mem=1318MiB  refr=3 reap=2/0
+     t= 843s  cpu= 11%  load=1.25 (0.21/c)  plex=healthy  procs=3  mem=1316MiB  refr=3 reap=2/0
+     t= 849s  cpu= 13%  load=1.14 (0.19/c)  plex=healthy  procs=3  mem=1316MiB  refr=3 reap=2/0
+     t= 855s  cpu= 13%  load=1.04 (0.17/c)  plex=healthy  procs=3  mem=1315MiB  refr=3 reap=2/0
+     t= 861s  cpu= 14%  load=1.04 (0.17/c)  plex=healthy  procs=3  mem=1314MiB  refr=3 reap=2/0
+     t= 868s  cpu= 15%  load=0.96 (0.16/c)  plex=healthy  procs=3  mem=1309MiB  refr=3 reap=2/0
+     t= 874s  cpu= 41%  load=1.12 (0.19/c)  plex=healthy  procs=3  mem=1309MiB  refr=3 reap=2/0
+     t= 880s  cpu= 14%  load=1.32 (0.22/c)  plex=healthy  procs=3  mem=1307MiB  refr=3 reap=2/0
+     t= 886s  cpu= 11%  load=1.30 (0.22/c)  plex=healthy  procs=3  mem=1307MiB  refr=3 reap=2/0
+     t= 892s  cpu= 14%  load=1.19 (0.20/c)  plex=healthy  procs=3  mem=1308MiB  refr=3 reap=2/0
+     t= 898s  cpu= 11%  load=1.10 (0.18/c)  plex=healthy  procs=3  mem=1307MiB  refr=3 reap=2/0
+       reap-proof: granted ephemeral tx:movie:14524:local_m4soak-ephem:1781669021-21 (id=14524), NOT heartbeating — must be reaped by t=949s
+     t= 904s  cpu= 11%  load=0.93 (0.15/c)  plex=healthy  procs=3  mem=1308MiB  refr=3 reap=2/0
+     t= 911s  cpu= 13%  load=0.93 (0.15/c)  plex=healthy  procs=4  mem=1493MiB  refr=3 reap=2/0
+     t= 917s  cpu= 10%  load=1.10 (0.18/c)  plex=healthy  procs=4  mem=1497MiB  refr=3 reap=2/0
+     t= 923s  cpu= 12%  load=1.25 (0.21/c)  plex=healthy  procs=4  mem=1492MiB  refr=3 reap=2/0
+     t= 929s  cpu= 12%  load=1.22 (0.20/c)  plex=healthy  procs=4  mem=1494MiB  refr=3 reap=2/0
+     t= 936s  cpu= 12%  load=1.12 (0.19/c)  plex=healthy  procs=4  mem=1495MiB  refr=3 reap=2/0
+     t= 942s  cpu= 14%  load=1.11 (0.19/c)  plex=healthy  procs=3  mem=1313MiB  refr=3 reap=2/0
+     t= 948s  cpu= 12%  load=1.10 (0.18/c)  plex=healthy  procs=3  mem=1313MiB  refr=3 reap=2/0
+       reap-proof OK: tx:movie:14524:local_m4soak-ephem:1781669021-21 reaped (http=404, procs=3)
+     t= 954s  cpu= 14%  load=1.09 (0.18/c)  plex=healthy  procs=3  mem=1312MiB  refr=3 reap=3/0
+       refresh #4: pool recycled → 3 fresh sessions (lifecycles=15)
+     t= 960s  cpu= 28%  load=1.63 (0.27/c)  plex=healthy  procs=3  mem=1311MiB  refr=4 reap=3/0
+     t= 968s  cpu= 35%  load=2.46 (0.41/c)  plex=healthy  procs=3  mem= 890MiB  refr=4 reap=3/0
+     t= 974s  cpu= 23%  load=2.98 (0.50/c)  plex=healthy  procs=3  mem= 898MiB  refr=4 reap=3/0
+     t= 980s  cpu= 13%  load=2.60 (0.43/c)  plex=healthy  procs=3  mem= 905MiB  refr=4 reap=3/0
+     t= 986s  cpu= 14%  load=2.47 (0.41/c)  plex=healthy  procs=3  mem= 917MiB  refr=4 reap=3/0
+     t= 992s  cpu= 21%  load=2.35 (0.39/c)  plex=healthy  procs=3  mem= 910MiB  refr=4 reap=3/0
+     t= 998s  cpu= 12%  load=2.32 (0.39/c)  plex=healthy  procs=3  mem= 918MiB  refr=4 reap=3/0
+     t=1004s  cpu= 15%  load=2.19 (0.36/c)  plex=healthy  procs=3  mem= 914MiB  refr=4 reap=3/0
+     t=1010s  cpu= 13%  load=2.10 (0.35/c)  plex=healthy  procs=3  mem= 908MiB  refr=4 reap=3/0
+     t=1016s  cpu= 13%  load=2.01 (0.33/c)  plex=healthy  procs=3  mem= 904MiB  refr=4 reap=3/0
+     t=1022s  cpu= 14%  load=1.93 (0.32/c)  plex=healthy  procs=3  mem= 902MiB  refr=4 reap=3/0
+     t=1029s  cpu= 12%  load=2.17 (0.36/c)  plex=healthy  procs=3  mem= 906MiB  refr=4 reap=3/0
+     t=1035s  cpu= 13%  load=1.84 (0.31/c)  plex=healthy  procs=3  mem= 898MiB  refr=4 reap=3/0
+     t=1041s  cpu= 13%  load=1.77 (0.29/c)  plex=healthy  procs=3  mem= 894MiB  refr=4 reap=3/0
+     t=1047s  cpu= 15%  load=1.71 (0.28/c)  plex=healthy  procs=3  mem= 893MiB  refr=4 reap=3/0
+     t=1053s  cpu= 39%  load=2.53 (0.42/c)  plex=healthy  procs=3  mem= 894MiB  refr=4 reap=3/0
+     t=1059s  cpu= 20%  load=2.76 (0.46/c)  plex=healthy  procs=3  mem= 895MiB  refr=4 reap=3/0
+     t=1065s  cpu= 13%  load=2.54 (0.42/c)  plex=healthy  procs=3  mem= 891MiB  refr=4 reap=3/0
+     t=1071s  cpu= 14%  load=2.42 (0.40/c)  plex=healthy  procs=3  mem= 887MiB  refr=4 reap=3/0
+     t=1077s  cpu= 16%  load=2.38 (0.40/c)  plex=healthy  procs=3  mem= 883MiB  refr=4 reap=3/0
+     t=1083s  cpu= 16%  load=2.27 (0.38/c)  plex=healthy  procs=3  mem= 881MiB  refr=4 reap=3/0
+     t=1090s  cpu= 15%  load=2.00 (0.33/c)  plex=healthy  procs=3  mem= 878MiB  refr=4 reap=3/0
+     t=1096s  cpu= 16%  load=1.92 (0.32/c)  plex=healthy  procs=3  mem= 874MiB  refr=4 reap=3/0
+     t=1102s  cpu= 14%  load=1.77 (0.29/c)  plex=healthy  procs=3  mem= 868MiB  refr=4 reap=3/0
+     t=1108s  cpu= 16%  load=1.95 (0.33/c)  plex=healthy  procs=3  mem= 862MiB  refr=4 reap=3/0
+     t=1114s  cpu= 15%  load=1.81 (0.30/c)  plex=healthy  procs=3  mem= 860MiB  refr=4 reap=3/0
+     t=1120s  cpu= 15%  load=1.74 (0.29/c)  plex=healthy  procs=3  mem= 860MiB  refr=4 reap=3/0
+     t=1126s  cpu= 16%  load=1.60 (0.27/c)  plex=healthy  procs=3  mem= 856MiB  refr=4 reap=3/0
+     t=1132s  cpu= 15%  load=1.63 (0.27/c)  plex=healthy  procs=3  mem= 850MiB  refr=4 reap=3/0
+     t=1138s  cpu= 21%  load=1.74 (0.29/c)  plex=healthy  procs=3  mem= 844MiB  refr=4 reap=3/0
+     t=1145s  cpu= 41%  load=2.16 (0.36/c)  plex=healthy  procs=3  mem= 846MiB  refr=4 reap=3/0
+     t=1151s  cpu= 13%  load=2.07 (0.34/c)  plex=healthy  procs=3  mem= 843MiB  refr=4 reap=3/0
+     t=1157s  cpu= 16%  load=1.98 (0.33/c)  plex=healthy  procs=3  mem= 841MiB  refr=4 reap=3/0
+     t=1163s  cpu= 13%  load=1.90 (0.32/c)  plex=healthy  procs=3  mem= 840MiB  refr=4 reap=3/0
+     t=1169s  cpu= 20%  load=1.84 (0.31/c)  plex=healthy  procs=3  mem= 839MiB  refr=4 reap=3/0
+     t=1175s  cpu= 13%  load=1.70 (0.28/c)  plex=healthy  procs=3  mem= 839MiB  refr=4 reap=3/0
+     t=1181s  cpu= 15%  load=1.64 (0.27/c)  plex=healthy  procs=3  mem= 842MiB  refr=4 reap=3/0
+     t=1187s  cpu= 15%  load=1.51 (0.25/c)  plex=healthy  procs=3  mem= 837MiB  refr=4 reap=3/0
+     t=1193s  cpu= 13%  load=1.47 (0.24/c)  plex=healthy  procs=3  mem= 838MiB  refr=4 reap=3/0
+     t=1199s  cpu= 15%  load=1.40 (0.23/c)  plex=healthy  procs=3  mem= 833MiB  refr=4 reap=3/0
+       refresh #5: pool recycled → 3 fresh sessions (lifecycles=18)
+       reap-proof: granted ephemeral tx:movie:19166:local_m4soak-ephem:1781669323-28 (id=19166), NOT heartbeating — must be reaped by t=1251s
+     t=1206s  cpu= 14%  load=1.29 (0.21/c)  plex=healthy  procs=3  mem= 832MiB  refr=5 reap=3/0
+     t=1213s  cpu= 36%  load=1.67 (0.28/c)  plex=healthy  procs=5  mem=1103MiB  refr=5 reap=3/0
+     t=1219s  cpu= 13%  load=2.23 (0.37/c)  plex=healthy  procs=4  mem=1099MiB  refr=5 reap=3/0
+     t=1226s  cpu= 12%  load=2.05 (0.34/c)  plex=healthy  procs=4  mem=1099MiB  refr=5 reap=3/0
+     t=1232s  cpu= 39%  load=2.37 (0.40/c)  plex=healthy  procs=4  mem=1096MiB  refr=5 reap=3/0
+     t=1238s  cpu= 23%  load=2.50 (0.42/c)  plex=healthy  procs=4  mem=1094MiB  refr=5 reap=3/0
+     t=1244s  cpu= 14%  load=2.38 (0.40/c)  plex=healthy  procs=3  mem= 906MiB  refr=5 reap=3/0
+     t=1250s  cpu= 13%  load=2.54 (0.42/c)  plex=healthy  procs=3  mem= 906MiB  refr=5 reap=3/0
+       reap-proof OK: tx:movie:19166:local_m4soak-ephem:1781669323-28 reaped (http=404, procs=3)
+     t=1256s  cpu= 13%  load=2.41 (0.40/c)  plex=healthy  procs=3  mem= 904MiB  refr=5 reap=4/0
+     t=1262s  cpu= 20%  load=2.30 (0.38/c)  plex=healthy  procs=3  mem= 904MiB  refr=5 reap=4/0
+     t=1268s  cpu= 12%  load=2.12 (0.35/c)  plex=healthy  procs=3  mem= 907MiB  refr=5 reap=4/0
+     t=1275s  cpu= 14%  load=1.86 (0.31/c)  plex=healthy  procs=3  mem= 910MiB  refr=5 reap=4/0
+     t=1281s  cpu= 11%  load=1.71 (0.28/c)  plex=healthy  procs=3  mem= 911MiB  refr=5 reap=4/0
+     t=1287s  cpu= 14%  load=1.74 (0.29/c)  plex=healthy  procs=3  mem= 913MiB  refr=5 reap=4/0
+     t=1293s  cpu= 13%  load=1.68 (0.28/c)  plex=healthy  procs=3  mem= 913MiB  refr=5 reap=4/0
+     t=1299s  cpu= 13%  load=1.78 (0.30/c)  plex=healthy  procs=3  mem= 914MiB  refr=5 reap=4/0
+     t=1305s  cpu= 14%  load=1.58 (0.26/c)  plex=healthy  procs=3  mem= 912MiB  refr=5 reap=4/0
+     t=1311s  cpu= 13%  load=1.46 (0.24/c)  plex=healthy  procs=3  mem= 912MiB  refr=5 reap=4/0
+     t=1317s  cpu= 16%  load=1.42 (0.24/c)  plex=healthy  procs=3  mem= 912MiB  refr=5 reap=4/0
+     t=1323s  cpu= 45%  load=1.63 (0.27/c)  plex=healthy  procs=3  mem= 911MiB  refr=5 reap=4/0
+     t=1329s  cpu= 13%  load=1.60 (0.27/c)  plex=healthy  procs=3  mem= 918MiB  refr=5 reap=4/0
+     t=1336s  cpu= 15%  load=1.56 (0.26/c)  plex=healthy  procs=3  mem= 916MiB  refr=5 reap=4/0
+     t=1342s  cpu= 12%  load=1.51 (0.25/c)  plex=healthy  procs=3  mem= 914MiB  refr=5 reap=4/0
+     t=1348s  cpu= 14%  load=1.63 (0.27/c)  plex=healthy  procs=3  mem= 909MiB  refr=5 reap=4/0
+     t=1354s  cpu= 12%  load=1.66 (0.28/c)  plex=healthy  procs=3  mem= 904MiB  refr=5 reap=4/0
+     t=1360s  cpu= 12%  load=1.88 (0.31/c)  plex=healthy  procs=3  mem= 901MiB  refr=5 reap=4/0
+     t=1366s  cpu= 12%  load=2.05 (0.34/c)  plex=healthy  procs=3  mem= 896MiB  refr=5 reap=4/0
+     t=1372s  cpu= 14%  load=1.88 (0.31/c)  plex=healthy  procs=3  mem= 892MiB  refr=5 reap=4/0
+     t=1378s  cpu= 15%  load=1.89 (0.32/c)  plex=healthy  procs=3  mem= 890MiB  refr=5 reap=4/0
+     t=1384s  cpu= 13%  load=1.76 (0.29/c)  plex=healthy  procs=3  mem= 886MiB  refr=5 reap=4/0
+     t=1390s  cpu= 12%  load=1.62 (0.27/c)  plex=healthy  procs=3  mem= 886MiB  refr=5 reap=4/0
+     t=1397s  cpu= 14%  load=1.57 (0.26/c)  plex=healthy  procs=3  mem= 884MiB  refr=5 reap=4/0
+     t=1403s  cpu= 13%  load=1.53 (0.26/c)  plex=healthy  procs=3  mem= 884MiB  refr=5 reap=4/0
+     t=1409s  cpu= 22%  load=1.48 (0.25/c)  plex=healthy  procs=3  mem= 881MiB  refr=5 reap=4/0
+     t=1415s  cpu= 41%  load=1.72 (0.29/c)  plex=healthy  procs=3  mem= 880MiB  refr=5 reap=4/0
+     t=1421s  cpu= 12%  load=1.66 (0.28/c)  plex=healthy  procs=3  mem= 880MiB  refr=5 reap=4/0
+     t=1427s  cpu= 14%  load=1.61 (0.27/c)  plex=healthy  procs=3  mem= 877MiB  refr=5 reap=4/0
+     t=1433s  cpu= 12%  load=1.56 (0.26/c)  plex=healthy  procs=3  mem= 876MiB  refr=5 reap=4/0
+     t=1439s  cpu= 15%  load=1.69 (0.28/c)  plex=healthy  procs=3  mem= 874MiB  refr=5 reap=4/0
+       refresh #6: pool recycled → 3 fresh sessions (lifecycles=21)
+     t=1445s  cpu= 14%  load=1.64 (0.27/c)  plex=healthy  procs=3  mem= 875MiB  refr=6 reap=4/0
+     t=1452s  cpu= 11%  load=1.50 (0.25/c)  plex=healthy  procs=3  mem= 833MiB  refr=6 reap=4/0
+     t=1458s  cpu= 10%  load=1.46 (0.24/c)  plex=healthy  procs=3  mem= 837MiB  refr=6 reap=4/0
+     t=1465s  cpu= 11%  load=1.39 (0.23/c)  plex=healthy  procs=3  mem= 843MiB  refr=6 reap=4/0
+     t=1471s  cpu= 14%  load=1.44 (0.24/c)  plex=healthy  procs=3  mem= 829MiB  refr=6 reap=4/0
+     t=1477s  cpu= 11%  load=1.49 (0.25/c)  plex=healthy  procs=3  mem= 830MiB  refr=6 reap=4/0
+     t=1483s  cpu= 15%  load=1.45 (0.24/c)  plex=healthy  procs=3  mem= 830MiB  refr=6 reap=4/0
+     t=1489s  cpu= 11%  load=1.33 (0.22/c)  plex=healthy  procs=3  mem= 828MiB  refr=6 reap=4/0
+     t=1495s  cpu= 12%  load=1.43 (0.24/c)  plex=healthy  procs=3  mem= 823MiB  refr=6 reap=4/0
+       reap-proof: granted ephemeral tx:movie:15448:local_m4soak-ephem:1781669617-32 (id=15448), NOT heartbeating — must be reaped by t=1546s
+     t=1501s  cpu= 34%  load=1.72 (0.29/c)  plex=healthy  procs=3  mem= 819MiB  refr=6 reap=4/0
+     t=1507s  cpu= 25%  load=1.66 (0.28/c)  plex=healthy  procs=4  mem=1094MiB  refr=6 reap=4/0
+     t=1514s  cpu= 11%  load=1.69 (0.28/c)  plex=healthy  procs=4  mem=1094MiB  refr=6 reap=4/0
+     t=1520s  cpu= 12%  load=1.66 (0.28/c)  plex=healthy  procs=4  mem=1093MiB  refr=6 reap=4/0
+     t=1526s  cpu= 12%  load=1.69 (0.28/c)  plex=healthy  procs=4  mem=1090MiB  refr=6 reap=4/0
+     t=1532s  cpu= 16%  load=1.72 (0.29/c)  plex=healthy  procs=4  mem= 849MiB  refr=6 reap=4/0
+     t=1538s  cpu= 11%  load=1.74 (0.29/c)  plex=healthy  procs=3  mem= 852MiB  refr=6 reap=4/0
+     t=1544s  cpu= 11%  load=1.60 (0.27/c)  plex=healthy  procs=3  mem= 852MiB  refr=6 reap=4/0
+       reap-proof OK: tx:movie:15448:local_m4soak-ephem:1781669617-32 reaped (http=404, procs=3)
+     t=1550s  cpu= 12%  load=1.81 (0.30/c)  plex=healthy  procs=3  mem= 851MiB  refr=6 reap=5/0
+     t=1556s  cpu= 10%  load=1.66 (0.28/c)  plex=healthy  procs=3  mem= 850MiB  refr=6 reap=5/0
+     t=1562s  cpu= 12%  load=1.61 (0.27/c)  plex=healthy  procs=3  mem= 851MiB  refr=6 reap=5/0
+     t=1568s  cpu= 11%  load=1.48 (0.25/c)  plex=healthy  procs=3  mem= 844MiB  refr=6 reap=5/0
+     t=1575s  cpu= 14%  load=1.33 (0.22/c)  plex=healthy  procs=3  mem= 841MiB  refr=6 reap=5/0
+     t=1581s  cpu= 11%  load=1.22 (0.20/c)  plex=healthy  procs=3  mem= 839MiB  refr=6 reap=5/0
+     t=1587s  cpu= 12%  load=1.12 (0.19/c)  plex=healthy  procs=3  mem= 836MiB  refr=6 reap=5/0
+     t=1593s  cpu= 46%  load=1.35 (0.23/c)  plex=healthy  procs=3  mem= 831MiB  refr=6 reap=5/0
+     t=1599s  cpu= 14%  load=1.56 (0.26/c)  plex=healthy  procs=3  mem= 829MiB  refr=6 reap=5/0
+     t=1605s  cpu= 13%  load=1.56 (0.26/c)  plex=healthy  procs=3  mem= 825MiB  refr=6 reap=5/0
+     t=1611s  cpu= 13%  load=1.52 (0.25/c)  plex=healthy  procs=3  mem= 823MiB  refr=6 reap=5/0
+     t=1617s  cpu= 12%  load=1.48 (0.25/c)  plex=healthy  procs=3  mem= 822MiB  refr=6 reap=5/0
+     t=1623s  cpu= 13%  load=1.44 (0.24/c)  plex=healthy  procs=3  mem= 820MiB  refr=6 reap=5/0
+     t=1629s  cpu= 11%  load=1.52 (0.25/c)  plex=healthy  procs=3  mem= 822MiB  refr=6 reap=5/0
+     t=1636s  cpu= 14%  load=1.72 (0.29/c)  plex=healthy  procs=3  mem= 820MiB  refr=6 reap=5/0
+     t=1642s  cpu= 11%  load=1.58 (0.26/c)  plex=healthy  procs=3  mem= 819MiB  refr=6 reap=5/0
+     t=1648s  cpu= 13%  load=1.45 (0.24/c)  plex=healthy  procs=3  mem= 818MiB  refr=6 reap=5/0
+     t=1654s  cpu= 12%  load=1.50 (0.25/c)  plex=healthy  procs=3  mem= 820MiB  refr=6 reap=5/0
+     t=1660s  cpu= 11%  load=1.35 (0.23/c)  plex=healthy  procs=3  mem= 818MiB  refr=6 reap=5/0
+     t=1666s  cpu= 12%  load=1.32 (0.22/c)  plex=healthy  procs=3  mem= 816MiB  refr=6 reap=5/0
+     t=1672s  cpu= 11%  load=1.21 (0.20/c)  plex=healthy  procs=3  mem= 813MiB  refr=6 reap=5/0
+     t=1678s  cpu= 13%  load=1.12 (0.19/c)  plex=healthy  procs=3  mem= 810MiB  refr=6 reap=5/0
+       refresh #7: pool recycled → 3 fresh sessions (lifecycles=24)
+     t=1684s  cpu= 37%  load=1.40 (0.23/c)  plex=healthy  procs=3  mem= 809MiB  refr=7 reap=5/0
+     t=1692s  cpu= 31%  load=1.85 (0.31/c)  plex=healthy  procs=4  mem=1323MiB  refr=7 reap=5/0
+     t=1698s  cpu= 24%  load=2.02 (0.34/c)  plex=healthy  procs=3  mem=1346MiB  refr=7 reap=5/0
+     t=1704s  cpu= 12%  load=2.01 (0.33/c)  plex=healthy  procs=3  mem=1349MiB  refr=7 reap=5/0
+     t=1710s  cpu= 16%  load=1.85 (0.31/c)  plex=healthy  procs=3  mem=1346MiB  refr=7 reap=5/0
+     t=1716s  cpu= 14%  load=1.78 (0.30/c)  plex=healthy  procs=3  mem=1346MiB  refr=7 reap=5/0
+     t=1722s  cpu= 12%  load=1.80 (0.30/c)  plex=healthy  procs=3  mem=1342MiB  refr=7 reap=5/0
+     t=1729s  cpu= 12%  load=1.73 (0.29/c)  plex=healthy  procs=3  mem=1339MiB  refr=7 reap=5/0
+     t=1735s  cpu= 12%  load=1.70 (0.28/c)  plex=healthy  procs=3  mem=1339MiB  refr=7 reap=5/0
+     t=1741s  cpu= 13%  load=1.64 (0.27/c)  plex=healthy  procs=3  mem=1340MiB  refr=7 reap=5/0
+     t=1747s  cpu= 14%  load=1.59 (0.27/c)  plex=healthy  procs=3  mem=1341MiB  refr=7 reap=5/0
+     t=1753s  cpu= 11%  load=1.63 (0.27/c)  plex=healthy  procs=3  mem=1341MiB  refr=7 reap=5/0
+     t=1759s  cpu= 12%  load=1.67 (0.28/c)  plex=healthy  procs=3  mem=1342MiB  refr=7 reap=5/0
+     t=1765s  cpu= 11%  load=1.54 (0.26/c)  plex=healthy  procs=3  mem=1343MiB  refr=7 reap=5/0
+     t=1772s  cpu= 35%  load=1.81 (0.30/c)  plex=healthy  procs=3  mem=1343MiB  refr=7 reap=5/0
+     t=1778s  cpu= 32%  load=2.15 (0.36/c)  plex=healthy  procs=3  mem=1345MiB  refr=7 reap=5/0
+     t=1784s  cpu= 11%  load=2.06 (0.34/c)  plex=healthy  procs=3  mem=1347MiB  refr=7 reap=5/0
+     t=1790s  cpu= 12%  load=2.05 (0.34/c)  plex=healthy  procs=3  mem=1347MiB  refr=7 reap=5/0
+     t=1796s  cpu= 11%  load=1.88 (0.31/c)  plex=healthy  procs=3  mem=1348MiB  refr=7 reap=5/0
+       reap-proof: granted ephemeral tx:movie:18028:local_m4soak-ephem:1781669919-36 (id=18028), NOT heartbeating — must be reaped by t=1847s
+     t=1802s  cpu= 11%  load=1.89 (0.32/c)  plex=healthy  procs=3  mem=1349MiB  refr=7 reap=5/0
+
+==== TEARDOWN — stopping 3 steady sessions (+ any in-flight ephemeral), then checking for leaked ffmpeg ====
+
+==== SOAK REPORT CARD (3 concurrent · held 1802s · 6 cores) ====
+  duration held            : 1802s of 1800s target  -> COMPLETE
+  box CPU                   : peak 57% / avg 15%
+  transcoder mem floor      : 1st-half 776MiB / 2nd-half 809MiB (rise 4%, ceiling 25%); peak 1497MiB
+  session lifecycle churn   : 7 pool refreshes, 24 total sessions granted+stopped under load
+  ffmpeg procs              : steady baseline 3 / peak-w/ephemeral 5 / post-stop 0 (leak gate = post-stop==0)
+  crit-4 reap under load    : 5 reaped clean, 0 failed              -> PASS
+  crit-4 zero leak          : post-stop procs=0, mem floor rise 4%   -> PASS
+  Plex health               : healthy throughout (watchdog did not fire)
+
+==== DONE ====
