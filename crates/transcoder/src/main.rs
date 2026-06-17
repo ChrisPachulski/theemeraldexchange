@@ -95,6 +95,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Idle-session sweeper (5s cadence; 30s no-heartbeat → reap).
     let _sweeper = state.sessions.spawn_sweeper();
 
+    // Keyframe warmer: pre-builds the per-file keyframe cache so copy-remux
+    // movies play as finite VOD (a real scrubber) instead of "live", even on a
+    // first play. Gentle (one file at a time, only while idle); disable with
+    // TRANSCODER_KEYFRAME_WARM=0 if it ever needs to be parked.
+    let _warmer = if std::env::var("TRANSCODER_KEYFRAME_WARM").as_deref() != Ok("0") {
+        Some(state.sessions.spawn_keyframe_warmer())
+    } else {
+        tracing::info!("keyframe warmer disabled via TRANSCODER_KEYFRAME_WARM=0");
+        None
+    };
+
     let host = std::env::var("TRANSCODER_HOST").unwrap_or_else(|_| "127.0.0.1".into());
     let port: u16 = std::env::var("TRANSCODER_PORT")
         .ok()

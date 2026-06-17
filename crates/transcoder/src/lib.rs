@@ -16,6 +16,7 @@
 pub mod args;
 pub mod concurrency;
 pub mod encoders;
+pub mod keyframes;
 pub mod plan;
 pub mod routes;
 pub mod session;
