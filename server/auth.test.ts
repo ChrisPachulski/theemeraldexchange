@@ -22,7 +22,7 @@ const redeemSpy = vi.fn(
     code: string,
     sub: string,
     _displayName: string | null,
-    _authMode: 'plex' | 'apple',
+    _authMode: 'plex' | 'apple' | 'local' | 'google',
   ): { ok: true; created: boolean } | { ok: false; reason: string } => {
     const inv = invites.get(code)
     if (!inv || inv.uses <= 0) return { ok: false, reason: 'invalid' }
@@ -37,7 +37,7 @@ vi.mock('./services/membership.js', () => ({
     code: string,
     sub: string,
     displayName: string | null,
-    authMode: 'plex' | 'apple',
+    authMode: 'plex' | 'apple' | 'local' | 'google',
   ) => redeemSpy(code, sub, displayName, authMode),
 }))
 
@@ -73,6 +73,34 @@ const appleVerifyImpl: {
 vi.mock('./services/appleAuth.js', () => ({
   verifyAppleIdentityToken: (idToken: string, opts: { expectedNonce?: string }) =>
     appleVerifyImpl.fn(idToken, opts),
+}))
+
+// Google verifier: success keyed on a fixed valid-token sentinel; otherwise a
+// typed failure. Mirrors the Apple mock so the /google route wiring (rate
+// limit, 503, authZ gate, session) is testable without googleapis.com.
+const GOOGLE_SUB = 'google:104223294318414512345'
+const googleVerifyImpl: {
+  fn: (idToken: string, opts: { expectedNonce?: string }) => Promise<
+    | { ok: true; sub: { raw: string; provider: 'google'; id: string }; email?: string; emailVerified?: boolean; name?: string }
+    | { ok: false; error: string }
+  >
+} = {
+  fn: async (idToken) => {
+    if (idToken === 'valid-google-token') {
+      return {
+        ok: true,
+        sub: { raw: GOOGLE_SUB, provider: 'google', id: '104223294318414512345' },
+        email: 'gary@example.com',
+        emailVerified: true,
+        name: 'Gary G',
+      }
+    }
+    return { ok: false, error: 'invalid_signature' }
+  },
+}
+vi.mock('./services/googleAuth.js', () => ({
+  verifyGoogleIdentityToken: (idToken: string, opts: { expectedNonce?: string }) =>
+    googleVerifyImpl.fn(idToken, opts),
 }))
 
 import { auth, me, _resetAuthRateLimitsForTests } from './auth.js'
@@ -113,6 +141,19 @@ beforeEach(() => {
         sub: { raw: APPLE_SUB, provider: 'apple', id: '000000.0123456789abcdef0123456789abcdef.0000' },
         email: 'mom@example.com',
         emailVerified: true,
+      }
+    }
+    return { ok: false, error: 'invalid_signature' }
+  }
+  ;(env as Record<string, unknown>).googleClientIds = []
+  googleVerifyImpl.fn = async (idToken) => {
+    if (idToken === 'valid-google-token') {
+      return {
+        ok: true,
+        sub: { raw: GOOGLE_SUB, provider: 'google', id: '104223294318414512345' },
+        email: 'gary@example.com',
+        emailVerified: true,
+        name: 'Gary G',
       }
     }
     return { ok: false, error: 'invalid_signature' }
@@ -635,6 +676,146 @@ describe('POST /auth/apple (Sign in with Apple)', () => {
       const body = (await r2.json()) as { user: { sub: string; auth_mode: string } }
       expect(body.user.sub).toBe(APPLE_SUB)
       expect(body.user.auth_mode).toBe('apple')
+    })
+  })
+})
+
+describe('POST /auth/google (Google Sign-In)', () => {
+  // Gated on GOOGLE_CLIENT_ID; configured-path tests set env.googleClientIds.
+  async function withGoogle<T>(fn: () => Promise<T>): Promise<T> {
+    const before = (env as Record<string, unknown>).googleClientIds
+    ;(env as Record<string, unknown>).googleClientIds = ['123-abc.apps.googleusercontent.com']
+    try {
+      return await fn()
+    } finally {
+      ;(env as Record<string, unknown>).googleClientIds = before
+    }
+  }
+
+  it('503s when Google is not configured', async () => {
+    const r = await app().request('/auth/google', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identityToken: 'valid-google-token' }),
+    })
+    expect(r.status).toBe(503)
+    expect(await r.json()).toEqual({ error: 'google_not_configured' })
+  })
+
+  it('400s a missing identity token', async () => {
+    await withGoogle(async () => {
+      const r = await app().request('/auth/google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      expect(r.status).toBe(400)
+      expect(await r.json()).toEqual({ error: 'missing identity_token' })
+    })
+  })
+
+  it('accepts Google\'s own idToken claim name (not just identityToken)', async () => {
+    await withGoogle(async () => {
+      allowlist.set(GOOGLE_SUB, 'allowed')
+      const r = await app().request('/auth/google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idToken: 'valid-google-token' }),
+      })
+      expect(r.status).toBe(200)
+      expect(((await r.json()) as { status?: string }).status).toBe('authorized')
+    })
+  })
+
+  it('401s an invalid identity token', async () => {
+    await withGoogle(async () => {
+      const r = await app().request('/auth/google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identityToken: 'forged' }),
+      })
+      expect(r.status).toBe(401)
+      const body = (await r.json()) as { error: string; reason: string }
+      expect(body.error).toBe('invalid_identity_token')
+      expect(body.reason).toBe('invalid_signature')
+    })
+  })
+
+  it('503s when Google JWKS is unavailable (transient, not the user\'s fault)', async () => {
+    await withGoogle(async () => {
+      googleVerifyImpl.fn = async () => ({ ok: false, error: 'jwks_unavailable' })
+      const r = await app().request('/auth/google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identityToken: 'valid-google-token' }),
+      })
+      expect(r.status).toBe(503)
+    })
+  })
+
+  it('verified Google identity with a valid invite creates a member and mints a session', async () => {
+    await withGoogle(async () => {
+      invites.set('GOOGCODE', { uses: 1 })
+      const r = await app().request('/auth/google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identityToken: 'valid-google-token', inviteCode: 'GOOGCODE' }),
+      })
+      expect(r.status).toBe(200)
+      const body = (await r.json()) as { status: string; user: { sub: string; email?: string } }
+      expect(body.status).toBe('authorized')
+      expect(body.user.sub).toBe(GOOGLE_SUB)
+      expect(body.user.email).toBe('gary@example.com')
+      expect(redeemSpy).toHaveBeenCalledWith('GOOGCODE', GOOGLE_SUB, 'Gary G', 'google')
+      expect(r.headers.get('set-cookie')).toContain('eex.session=')
+    })
+  })
+
+  it('verified Google member re-login is allowed without an invite', async () => {
+    await withGoogle(async () => {
+      allowlist.set(GOOGLE_SUB, 'allowed')
+      const r = await app().request('/auth/google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identityToken: 'valid-google-token' }),
+      })
+      expect(r.status).toBe(200)
+      expect(redeemSpy).not.toHaveBeenCalled()
+    })
+  })
+
+  it('verified Google identity with no member row and no invite is denied (403 no_invite)', async () => {
+    await withGoogle(async () => {
+      const r = await app().request('/auth/google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identityToken: 'valid-google-token' }),
+      })
+      expect(r.status).toBe(403)
+      expect(await r.json()).toEqual({ status: 'denied', reason: 'no_invite' })
+    })
+  })
+
+  it('mints a session cookie for a verified Google member', async () => {
+    // NOTE: the /me round-trip (read the cookie back, assert auth_mode
+    // 'google') is intentionally NOT asserted here. readSession →
+    // tryNormaliseLegacySub → parseSub goes through the compiled N-API
+    // contracts addon, and the checked-in addon predates the google: sub
+    // contract — it rejects google: until rebuilt at deploy
+    // (`npm --prefix crates/emerald-contracts-napi run build`). The WRITE
+    // side (this test) is addon-independent; the read-back is verified once
+    // the addon is rebuilt. The google: contract itself is proven by the
+    // Rust + Swift sub-namespace suites.
+    await withGoogle(async () => {
+      allowlist.set(GOOGLE_SUB, 'allowed')
+      const r = await app().request('/auth/google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identityToken: 'valid-google-token' }),
+      })
+      expect(r.status).toBe(200)
+      expect(((await r.json()) as { status?: string }).status).toBe('authorized')
+      expect(r.headers.get('set-cookie')).toContain('eex.session=')
     })
   })
 })

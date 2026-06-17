@@ -28,6 +28,19 @@
     "id": "001126.d3c6971f4faa4ccd80027e3654fa404a.1616"
   },
   {
+    "name": "valid-google-sub",
+    "input": "google:104223294318414512345",
+    "valid": true,
+    "provider": "google",
+    "id": "104223294318414512345"
+  },
+  {
+    "name": "invalid-google-non-numeric",
+    "input": "google:abc",
+    "valid": false,
+    "error": "sub_invalid_format"
+  },
+  {
     "name": "invalid-plex-leading-zero",
     "input": "plex:007",
     "valid": false,

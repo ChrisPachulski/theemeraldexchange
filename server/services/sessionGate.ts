@@ -113,10 +113,14 @@ export function roleFor(username: string, sub?: string): Role {
   // a self-chosen handle — matching either against ADMINS would let any invited
   // apple:/local: user whose name collides with an admin entry escalate to
   // admin, and reconcileSession would re-grant it on every request. Block the
-  // username match for the two non-Plex providers; plex: and legacy bare-numeric
-  // Plex subs keep the historical behavior. Apple/passkey admins must instead be
-  // named explicitly by stable sub in ADMIN_SUBS (handled above).
-  if (sub && (sub.startsWith('apple:') || sub.startsWith('local:'))) return 'user'
+  // username match for the non-Plex providers; plex: and legacy bare-numeric
+  // Plex subs keep the historical behavior. Apple/passkey/Google admins must
+  // instead be named explicitly by stable sub in ADMIN_SUBS (handled above).
+  if (
+    sub &&
+    (sub.startsWith('apple:') || sub.startsWith('local:') || sub.startsWith('google:'))
+  )
+    return 'user'
   const lower = username.toLowerCase()
   return env.admins.some((a) => a.toLowerCase() === lower) ? 'admin' : 'user'
 }

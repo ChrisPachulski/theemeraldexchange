@@ -32,6 +32,7 @@ import {
 } from '../auth.js'
 import { isMember, recordMemberLogin } from '../services/members.js'
 import { setSessionCookie } from '../session.js'
+import { maybeMintDeviceToken } from '../services/devicePair.js'
 
 export const passkey = new Hono<Env>()
 
@@ -115,6 +116,17 @@ passkey.post('/register/verify', async (c) => {
 
   const member = isMember(sub)
   const role = member?.role ?? 'user'
+
+  // Native app pairing: device-pair triple in the body → device-token
+  // Bearer JWE (routes/device.ts wire shape) instead of a session cookie.
+  const deviceResponse = await maybeMintDeviceToken(c, body, {
+    sub,
+    role,
+    auth_mode: 'local',
+    username: handle,
+  })
+  if (deviceResponse) return deviceResponse
+
   await setSessionCookie(c, { sub, username: handle, role, auth_mode: 'local' })
   return c.json({ ok: true, user: { sub, username: handle, role } })
 })
@@ -159,6 +171,17 @@ passkey.post('/login/verify', async (c) => {
 
   recordMemberLogin(sub, member.display_name)
   const username = member.display_name ?? ''
+
+  // Native app pairing: device-pair triple in the body → device-token
+  // Bearer JWE (routes/device.ts wire shape) instead of a session cookie.
+  const deviceResponse = await maybeMintDeviceToken(c, body, {
+    sub,
+    role: member.role,
+    auth_mode: 'local',
+    username,
+  })
+  if (deviceResponse) return deviceResponse
+
   await setSessionCookie(c, { sub, username, role: member.role, auth_mode: 'local' })
   return c.json({ ok: true, user: { sub, username, role: member.role } })
 })
