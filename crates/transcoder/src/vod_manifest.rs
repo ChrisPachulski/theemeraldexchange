@@ -98,16 +98,24 @@ pub(crate) fn synthesize(total_duration_secs: f64, start_secs: u64, fmp4: bool) 
 /// source duration. Returned cut points are ABSOLUTE source PTS, in
 /// `(base, total_abs)`.
 ///
-/// IMPORTANT: the `target` grid is on the ABSOLUTE source timeline (multiples of
-/// `hls_time`), NOT rebased to `base`. ffmpeg keeps the original packet PTS when
-/// segmenting a `-ss`-seeked copy, so a rebased grid picks the wrong keyframes
-/// once `base` is not a multiple of `hls_time` (verified against `ffmpeg -ss 600
-/// -c copy` on the NAS: a rebased grid diverged after ~5 segments). For a fresh
-/// start (`base == 0`) the two grids coincide.
+/// Reproduces ffmpeg's `hlsenc` split EXACTLY: the running boundary `end` starts
+/// at `base + hls_time` and, after each cut, advances by `hls_time` with NO
+/// catch-up to the actual cut time. So `end` quickly falls behind the keyframes
+/// (usually spaced several seconds apart) and every subsequent keyframe becomes a
+/// segment — yet a burst of keyframes closer than `hls_time` early on (before
+/// `end` falls behind) is still merged into one segment. (`hlsenc` compares
+/// `pkt.pts - start_pts` against `end_pts`, where `end_pts += hls_time` per
+/// segment; `start_pts` is the first packet, i.e. `base`.) Verified to match real
+/// `ffmpeg -c copy` output EXACTLY for H.264-to-TS and HEVC-to-fMP4 at `-ss`
+/// 0/37/600/1234 on the NAS — an earlier catch-up grid diverged on dense
+/// keyframes.
+///
+/// `keyframes` are absolute source PTS; `base` is where copy begins (the keyframe
+/// `-ss` seeks to — 0 for a fresh start); `total_abs` is the full duration.
+/// Returned cut points are ABSOLUTE source PTS, in `(base, total_abs)`.
 fn copy_cut_points(keyframes: &[f64], base: f64, total_abs: f64, hls_time: f64) -> Vec<f64> {
     let mut cuts = Vec::new();
-    // First boundary target: the first multiple of hls_time strictly past base.
-    let mut target = ((base / hls_time).floor() + 1.0) * hls_time;
+    let mut end = base + hls_time;
     for &p in keyframes {
         if p <= base {
             continue; // the seek keyframe itself starts segment 0, never a cut
@@ -115,9 +123,9 @@ fn copy_cut_points(keyframes: &[f64], base: f64, total_abs: f64, hls_time: f64) 
         if p >= total_abs {
             break; // a keyframe at/after EOF never opens another segment
         }
-        if p >= target {
+        if p >= end {
             cuts.push(p);
-            target = ((p / hls_time).floor() + 1.0) * hls_time;
+            end += hls_time; // advance ONE step; no catch-up (matches hlsenc)
         }
     }
     cuts
@@ -129,17 +137,16 @@ fn copy_cut_points(keyframes: &[f64], base: f64, total_abs: f64, hls_time: f64) 
 /// ragged keyframes and so cannot be derived from the duration alone.
 ///
 /// `keyframes` is the full source video keyframe PTS list (absolute seconds,
-/// ascending). Only a FRESH start is synthesized (`start_secs` at/before the
-/// first keyframe → output begins at 0); a real resume returns `None` (see the
-/// `base > 0` guard below) so the caller serves the on-disk playlist, because
-/// ffmpeg's `-ss` stream-copy segmentation is not reliably predictable.
+/// ascending). `start_secs` is the resume offset: `-ss` (before `-i`) seeks to
+/// the keyframe at/before it; `copy_cut_points` rebases segment 0 to that
+/// keyframe (`base`), exactly matching what ffmpeg writes for both a fresh start
+/// AND a resume (verified on the NAS at multiple offsets).
 ///
 /// Returns `None` (→ caller falls back to the on-disk playlist) when the
-/// duration is unusable, the keyframe list is empty, the resume offset is past
-/// the first keyframe, or the span is empty. Unlike [`synthesize`],
-/// `#EXT-X-TARGETDURATION` is computed from the LONGEST segment (copy segments
-/// can be ~5× `HLS_SEGMENT_SECS` between sparse keyframes), since a too-small
-/// TARGETDURATION makes AVPlayer reject the VOD.
+/// duration is unusable, the keyframe list is empty, or the span is empty.
+/// Unlike [`synthesize`], `#EXT-X-TARGETDURATION` is computed from the LONGEST
+/// segment (copy segments can be ~5× `HLS_SEGMENT_SECS` between sparse
+/// keyframes), since a too-small TARGETDURATION makes AVPlayer reject the VOD.
 pub(crate) fn synthesize_copy(
     keyframes: &[f64],
     total_duration_secs: f64,
@@ -158,17 +165,6 @@ pub(crate) fn synthesize_copy(
         .copied()
         .filter(|&k| k <= start)
         .fold(0.0, f64::max);
-    // Resume past the first keyframe (`base > 0`): ffmpeg's `-ss` stream-copy
-    // rebases output timestamps in a way that does NOT follow the simple
-    // absolute/relative `hls_time` grid (verified on the NAS: synthesis diverged
-    // from real `-ss 600`/`-ss 1234` output after a few segments). A mismatched
-    // manifest is a `CoreMediaErrorDomain -4`, so we DECLINE to synthesize for a
-    // real resume and let the caller serve the on-disk playlist instead — no
-    // worse than today, and never a crash. A fresh play (`base == 0`, including a
-    // seek that lands within the first GOP) is exact and gets the scrubber.
-    if base > 0.0 {
-        return None;
-    }
     if total_duration_secs - base <= 0.0 {
         return None;
     }
@@ -347,17 +343,36 @@ mod tests {
     }
 
     #[test]
-    fn copy_resume_past_first_keyframe_declines_to_synthesize() {
-        // A real resume (-ss 30 → seek keyframe 25.943, base>0) is NOT reliably
-        // predictable for stream-copy, so synthesis DECLINES (caller serves the
-        // on-disk playlist) rather than risk a CoreMediaErrorDomain -4.
-        assert!(synthesize_copy(GOOFY_KF, 79.830, 30, true).is_none());
+    fn copy_cuts_at_every_keyframe_once_end_falls_behind() {
+        // Locks the no-catch-up rule: keyframes at 5,6,7 over a 2s grid. ffmpeg's
+        // `end_pts` advances 2→4→6→… (one step per cut, never catching up to the
+        // actual cut time), so once it lags it cuts at EVERY keyframe: segments
+        // 5,1,1 + a 1s tail. A buggy absolute/catch-up grid would instead merge
+        // 6→7 and yield 5,1,2. Real ffmpeg does the former.
+        let m = synthesize_copy(&[0.0, 5.0, 6.0, 7.0], 8.0, 0, false).unwrap();
+        assert_eq!(m.matches("#EXTINF:").count(), 4, "{m}");
+        for inf in ["#EXTINF:5.000000,", "#EXTINF:1.000000,"] {
+            assert!(m.contains(inf), "missing {inf}\n{m}");
+        }
+        assert!(!m.contains("#EXTINF:2.000000,"), "must not merge 6→7: {m}");
+    }
+
+    #[test]
+    fn copy_resume_synthesizes_rebased_to_the_seek_keyframe() {
+        // -ss 30 seeks to the keyframe at/before 30s (25.943); output rebases
+        // there, so segment 0 runs to the next keyframe (36.370 → 10.427s). Resume
+        // is exact for stream-copy (verified on the NAS), so it DOES synthesize.
+        let m = synthesize_copy(GOOFY_KF, 79.830, 30, true).unwrap();
+        assert!(m.contains("#EXT-X-PLAYLIST-TYPE:VOD\n"));
+        assert!(m.trim_end().ends_with("#EXT-X-ENDLIST"));
+        assert!(m.contains("#EXTINF:10.427000,\n"), "{m}"); // 36.370 - 25.943
+        assert!(m.matches("#EXTINF:").count() < 12); // shorter timeline than fresh
     }
 
     #[test]
     fn copy_seek_within_first_gop_is_still_a_fresh_synthesis() {
         // A tiny offset that lands at/before the first keyframe (base==0) is
-        // output-equivalent to a fresh start, so it still synthesizes.
+        // output-equivalent to a fresh start.
         let m = synthesize_copy(GOOFY_KF, 79.830, 1, true).unwrap();
         assert!(m.trim_end().ends_with("#EXT-X-ENDLIST"));
         assert!(m.contains("#EXTINF:11.511000,\n"), "{m}");
