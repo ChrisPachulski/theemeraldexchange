@@ -1321,7 +1321,10 @@ mod tests {
         let vf_idx = args.iter().position(|s| s == "-vf").expect("missing -vf");
         let vf = &args[vf_idx + 1];
         // One filter, comma/brackets inside the quotes (only the quote is escaped).
-        assert_eq!(vf, "subtitles='/lib/Movie (2020), [Dir]'\\''s Cut/s.mkv':si=2");
+        assert_eq!(
+            vf,
+            "subtitles='/lib/Movie (2020), [Dir]'\\''s Cut/s.mkv':si=2"
+        );
         assert!(
             vf.contains("(2020), [Dir]"),
             "comma + brackets stay literal inside the quoted path: {vf}"
