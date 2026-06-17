@@ -1,0 +1,52 @@
+Cross-platform continue-watching sync — live demonstration
+===========================================================
+Date:    2026-06-17
+Target:  deployed exchange-media-core on the NAS, 127.0.0.1:8002,
+         MEDIA_INTERNAL_PRINCIPAL_MODE=enforce (fail-closed, real auth boundary)
+Crit:    M3 crit 4/5 — same-account continue-watching across platforms (web + tvOS)
+
+What this proves
+----------------
+Watch/resume state is scoped to the ACCOUNT (`sub`), never the device. The
+media-core route resolves the acting user from the *verified internal principal*
+(`acting_sub`, crates/media-core/src/routes.rs) — `?sub=` is ignored outside Off
+mode (IDOR guard). Two device tokens minted for the SAME account (different
+`device_id`) therefore read/write the SAME watch row; a different account is
+isolated. This is the backend half of the sync the native iOS/tvOS client
+(sibling repo theemeraldexchange-apple, commit 46c2265 "fix(apple): …
+continue-watching") consumes over /api/media/watch.
+
+Method
+------
+- Mint 3 internal principals via `exchange-recommender` (shared
+  INTERNAL_PRINCIPAL_SECRET, internal-v1):
+    WEB   = sub local:xdevsync,       device_id web-session-A
+    TV    = sub local:xdevsync,       device_id appletv-B      (same account, 2nd device)
+    OTHER = sub local:xdevsync-other, device_id web-session-C  (different account)
+- Drive the real deployed /api/media/watch (POST then GET) as each principal.
+
+Transcript
+----------
+minted 3 internal principals (web/tvOS same sub local:xdevsync; other=local:xdevsync-other)
+movie id under test: 779
+--- device A (web) POSTs progress: position_secs=1234 ---
+POST http=200
+device B (tvOS, same account) sees position_secs = 1234  (expect 1234)
+different account sees 0 rows for this movie  (expect 0)
+device A (web) re-reads position_secs = 4000  (expect 4000 — tvOS progress synced back)
+--- VERDICT ---
+PASS: cross-device same-account resume sync + account isolation proven on deployed media-core (enforce mode)
+
+Result
+------
+PASS. web→tvOS resume (1234 read back on the second device), account isolation
+(0 rows for a different account), and bidirectional sync (tvOS advance to 4000
+read back by web). Enforce mode, so the identity came from a verified principal,
+not a client-supplied sub.
+
+Durable regression floor: the same contract is pinned in CI by
+`resume_state_is_account_scoped_across_devices` (crates/media-core/src/routes.rs)
+— this live run is the deployed-infra confirmation of that test.
+
+Note: test rows are under throwaway subs (local:xdevsync*), not real accounts —
+inert, they never surface on any real user's shelf.
