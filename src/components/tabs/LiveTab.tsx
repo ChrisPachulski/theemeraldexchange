@@ -47,6 +47,7 @@ export default function LiveTab() {
   const [guideFor, setGuideFor] = useState<GuideChannel | null>(null)
   const [concurrencyError, setConcurrencyError] = useState<ConcurrencyLimitPayload | null>(null)
   const [pendingPlay, setPendingPlay] = useState<(() => Promise<void>) | null>(null)
+  const [exportMsg, setExportMsg] = useState<string | null>(null)
   const debounced = useDebounced(q, 250)
   const cats = useIptvCategories('live')
   const limit = 100
@@ -271,10 +272,20 @@ export default function LiveTab() {
           ))}
         </select>
         <button type="button" onClick={async () => {
-          const { url, expiresAt } = await iptvApi.generatePlaylist()
-          await navigator.clipboard.writeText(url).catch(() => undefined)
-          alert(`M3U URL copied. Expires ${new Date(expiresAt).toLocaleString()}.\n\n${url}`)
+          // LOW-17: no blocking alert(); surface success/failure inline so a
+          // failed generatePlaylist() isn't a silent unhandled rejection.
+          setExportMsg('Generating…')
+          try {
+            const { url, expiresAt } = await iptvApi.generatePlaylist()
+            await navigator.clipboard.writeText(url).catch(() => undefined)
+            setExportMsg(`M3U URL copied to clipboard. Expires ${new Date(expiresAt).toLocaleString()}.`)
+          } catch {
+            setExportMsg('Could not generate the M3U playlist — try again.')
+          }
         }}>Export M3U</button>
+        {exportMsg && (
+          <span className="iptv-tab__status" role="status">{exportMsg}</span>
+        )}
         <ConnectionsWidget />
       </footer>
 
