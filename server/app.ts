@@ -6,7 +6,7 @@
 import * as Sentry from '@sentry/node'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
-import { logger } from 'hono/logger'
+import { requestId } from 'hono/request-id'
 import { env } from './env.js'
 import { serverDb } from './services/serverDb.js'
 import { requireSafeOrigin } from './middleware/csrf.js'
@@ -44,26 +44,38 @@ export const app = new Hono()
 // no PII leaves the box. captureException is a no-op when Sentry.init was never
 // called (dev without EEX_TELEMETRY_DSN), so this is safe in every environment.
 app.onError((err, c) => {
-  Sentry.captureException(err)
+  // LOW-29: tag the exception with the request id so a Glitchtip event can be
+  // tied back to the matching `[<id>]` log line (and the client's X-Request-Id).
+  Sentry.captureException(err, { tags: { request_id: c.get('requestId') } })
   console.error('[app] unhandled error:', err instanceof Error ? err.stack ?? err.message : err)
   return c.json({ error: 'internal' }, 500)
 })
 
-// MED-18: hono's logger emits the FULL request path including the query string
-// (`url.slice(url.indexOf('/', 8))`), and stream/segment/playlist auth is
-// token-in-URL (`?t=`, `?u=`, `?token=`). The bare logger would therefore write
-// live bearer tokens into stdout/container logs. Redact those query values
-// before logging. Exported pure for test.
+// LOW-29: assign a correlation id to every request (or honor an inbound
+// X-Request-Id), exposed to handlers via c.get('requestId') and echoed in the
+// X-Request-Id response header. Must run before the logger so the id is logged.
+app.use('*', requestId())
+
+// MED-18: stream/segment/playlist auth is token-in-URL (`?t=`, `?u=`, `?token=`),
+// so any logger that prints the query string would write live bearer tokens into
+// stdout/container logs. Redact those query values. Exported pure for test.
 const TOKEN_QUERY_RE = /([?&](?:t|u|token)=)[^&\s]+/gi
 export function redactStreamTokens(line: string): string {
   return line.replace(TOKEN_QUERY_RE, '$1[redacted]')
 }
-app.use(
-  '*',
-  logger((message: string, ...rest: string[]) =>
-    console.log(redactStreamTokens(message), ...rest),
-  ),
-)
+
+// Request logger: method + redacted path + status + elapsed + request id. Custom
+// (not hono/logger) so the log line carries the correlation id (LOW-29) that ties
+// it to telemetry, and so the token redaction (MED-18) is applied to the path.
+app.use('*', async (c, next) => {
+  const url = new URL(c.req.url)
+  const path = redactStreamTokens(url.pathname + url.search)
+  const rid = c.get('requestId')
+  const start = Date.now()
+  console.log(`<-- ${c.req.method} ${path} [${rid}]`)
+  await next()
+  console.log(`--> ${c.req.method} ${path} ${c.res.status} ${Date.now() - start}ms [${rid}]`)
+})
 
 // CORS — only matters in prod, where SPA is on a different origin.
 // In dev, Vite proxies /api/* so requests are same-origin and CORS
