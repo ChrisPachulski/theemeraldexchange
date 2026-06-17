@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll } from 'vitest'
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest'
 import {
   checkReplay,
   clearReplayCache,
@@ -81,24 +81,27 @@ describe('tokenReplayCache – playlist (excluded)', () => {
 })
 
 describe('tokenReplayCache – GC sweep', () => {
+  // LOW-45: deterministic via fake timers — no real wall-clock wait, no CI flake.
   it('removes expired entries on sweep', () => {
-    stopGcSweep()
-    const jti = 'JTI_GC_SEG'
-    const pastExp = Math.floor(Date.now() / 1000) - 10
-    // Record a segment entry with an already-expired exp.
-    checkReplay(jti, pastExp, 'segment')
-    // Run a one-shot sweep by restarting with a very short interval and waiting.
-    // Instead, directly invoke what the sweep does: restart sweep with 1ms interval.
-    startGcSweep(1)
-    return new Promise<void>((resolve) => {
-      setTimeout(() => {
-        stopGcSweep()
-        // After GC, the entry is gone. A fresh presentation should be allowed again.
-        const result = checkReplay(jti, future(), 'segment')
-        expect(result.allowed).toBe(true)
-        resolve()
-      }, 50)
-    })
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+    try {
+      stopGcSweep()
+      const jti = 'JTI_GC_SEG'
+      const pastExp = Math.floor(Date.now() / 1000) - 10
+      // Record a segment entry whose exp is already in the past.
+      checkReplay(jti, pastExp, 'segment')
+      startGcSweep(1000)
+      vi.advanceTimersByTime(1100) // fire the sweep at least once
+      stopGcSweep()
+      // If GC removed the entry, a fresh presentation records a new (unexpired)
+      // entry and is allowed. If GC had NOT removed it, the stale expired entry
+      // would make checkReplay return token_expired — so this asserts the sweep.
+      const result = checkReplay(jti, Math.floor(Date.now() / 1000) + 300, 'segment')
+      expect(result.allowed).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
