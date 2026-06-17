@@ -599,6 +599,8 @@ export const env = {
   DB_BACKUP_DIR: process.env.DB_BACKUP_DIR ?? './data/backups',
   DB_BACKUP_KEEP: positiveInt('DB_BACKUP_KEEP', 7),
   DB_BACKUP_CRON: process.env.DB_BACKUP_CRON ?? '30 3 * * *',
+  // Nightly sweep of expired device_tokens + webauthn_challenges (LOW-9).
+  TOKEN_SWEEP_CRON: process.env.TOKEN_SWEEP_CRON ?? '15 3 * * *',
   IPTV_EPG_PATH: opt('IPTV_EPG_PATH') ?? '/xmltv.php',
   IPTV_MAX_CONCURRENT_STREAMS: positiveInt('IPTV_MAX_CONCURRENT_STREAMS', 4),
   IPTV_STREAM_TOKEN_TTL_SECS: positiveInt('IPTV_STREAM_TOKEN_TTL_SECS', 300),
