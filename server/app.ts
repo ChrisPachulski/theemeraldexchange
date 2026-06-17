@@ -49,7 +49,21 @@ app.onError((err, c) => {
   return c.json({ error: 'internal' }, 500)
 })
 
-app.use('*', logger())
+// MED-18: hono's logger emits the FULL request path including the query string
+// (`url.slice(url.indexOf('/', 8))`), and stream/segment/playlist auth is
+// token-in-URL (`?t=`, `?u=`, `?token=`). The bare logger would therefore write
+// live bearer tokens into stdout/container logs. Redact those query values
+// before logging. Exported pure for test.
+const TOKEN_QUERY_RE = /([?&](?:t|u|token)=)[^&\s]+/gi
+export function redactStreamTokens(line: string): string {
+  return line.replace(TOKEN_QUERY_RE, '$1[redacted]')
+}
+app.use(
+  '*',
+  logger((message: string, ...rest: string[]) =>
+    console.log(redactStreamTokens(message), ...rest),
+  ),
+)
 
 // CORS — only matters in prod, where SPA is on a different origin.
 // In dev, Vite proxies /api/* so requests are same-origin and CORS
