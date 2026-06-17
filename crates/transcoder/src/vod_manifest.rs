@@ -290,8 +290,8 @@ mod tests {
     /// The first 14 keyframe PTS of a real HEVC BluRay rip ("A Goofy Movie",
     /// `…H.265-EDGE2020.mkv`), captured from `ffprobe -show_entries packet`.
     const GOOFY_KF: &[f64] = &[
-        0.000, 1.084, 11.511, 13.347, 23.774, 25.943, 36.370, 46.797, 55.722,
-        59.601, 69.361, 74.157, 77.911, 79.830,
+        0.000, 1.084, 11.511, 13.347, 23.774, 25.943, 36.370, 46.797, 55.722, 59.601, 69.361,
+        74.157, 77.911, 79.830,
     ];
 
     #[test]
