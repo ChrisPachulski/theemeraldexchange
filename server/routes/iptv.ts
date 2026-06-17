@@ -1119,7 +1119,10 @@ iptv.get('/stream/segment', async (c) => {
   } catch (err) {
     return c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401)
   }
-  // Segment tokens are strict single-use; replay here is a security violation.
+  // Segment tokens are multi-use within their 300s TTL (MED-17): HLS players
+  // legitimately re-fetch a segment on seek-back / buffer recovery. The token is
+  // bound to one segment URL and short-lived, so this is a secondary expiry
+  // check, not a single-use gate.
   const segReplay = checkReplay(claims.jti, claims.exp, 'segment')
   if (!segReplay.allowed) return c.json({ error: segReplay.reason }, 401)
 

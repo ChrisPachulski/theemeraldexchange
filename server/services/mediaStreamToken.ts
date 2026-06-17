@@ -60,8 +60,8 @@ export type MediaTokenCheck =
  * time window (STREAM_TOKEN_SECRET only — the D2a SESSION_SECRET fallback is
  * gone, preserving key separation), the `media:` rid namespace, an optional
  * expected kind set, an optional exact rid match (binds a token to one
- * resource), and replay policy (vod/remux are multi-use; only 'segment' is
- * single-use, which media never mints).
+ * resource), and replay policy (all tracked kinds — vod/remux/segment — are
+ * multi-use within TTL; media only ever mints vod/remux).
  */
 export function verifyMediaToken(
   token: string,

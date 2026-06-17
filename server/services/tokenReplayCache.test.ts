@@ -18,27 +18,31 @@ beforeEach(() => {
 
 const future = () => Math.floor(Date.now() / 1000) + 300
 
-describe('tokenReplayCache – segment (single-use)', () => {
+describe('tokenReplayCache – segment (multi-use within TTL; MED-17)', () => {
+  // Segment tokens were strict single-use, which broke HLS seek-back / buffer
+  // recovery (the player re-fetches the same segment). They are now multi-use
+  // within TTL like every other kind — a segment token is bound to one segment
+  // URL and lives only 300s, so re-presentation re-fetches the same segment.
   it('allows the first presentation', () => {
     const result = checkReplay('JTI_SEG_1', future(), 'segment')
     expect(result.allowed).toBe(true)
   })
 
-  it('rejects the second presentation with token_replay', () => {
+  it('allows repeated presentations within TTL (seek-back / buffer recovery)', () => {
     const jti = 'JTI_SEG_2'
-    checkReplay(jti, future(), 'segment')
-    const second = checkReplay(jti, future(), 'segment')
-    expect(second.allowed).toBe(false)
-    if (!second.allowed) expect(second.reason).toBe('token_replay')
+    const exp = future()
+    expect(checkReplay(jti, exp, 'segment').allowed).toBe(true)
+    expect(checkReplay(jti, exp, 'segment').allowed).toBe(true)
+    expect(checkReplay(jti, exp, 'segment').allowed).toBe(true)
   })
 
-  it('rejects a third presentation with token_replay', () => {
+  it('rejects a segment token re-presented after exp', () => {
     const jti = 'JTI_SEG_3'
-    checkReplay(jti, future(), 'segment')
-    checkReplay(jti, future(), 'segment')
-    const third = checkReplay(jti, future(), 'segment')
-    expect(third.allowed).toBe(false)
-    if (!third.allowed) expect(third.reason).toBe('token_replay')
+    const pastExp = Math.floor(Date.now() / 1000) - 10
+    checkReplay(jti, pastExp, 'segment')
+    const second = checkReplay(jti, pastExp, 'segment')
+    expect(second.allowed).toBe(false)
+    if (!second.allowed) expect(second.reason).toBe('token_expired')
   })
 })
 
@@ -98,18 +102,17 @@ describe('tokenReplayCache – GC sweep', () => {
   })
 })
 
-describe('tokenReplayCache – jti uniqueness across kinds', () => {
-  it('treats the same jti string independently per kind (different jti values)', () => {
+describe('tokenReplayCache – distinct jtis are independent', () => {
+  it('records each jti separately and allows re-presentation within TTL', () => {
     const jti1 = 'JTI_UNIQ_1'
     const jti2 = 'JTI_UNIQ_2'
     const exp = future()
-    // First jti used for segment.
+    // Segment jti: first presentation records it, re-presentation still allowed
+    // within TTL (multi-use).
     checkReplay(jti1, exp, 'segment')
-    const replay1 = checkReplay(jti1, exp, 'segment')
-    expect(replay1.allowed).toBe(false)
+    expect(checkReplay(jti1, exp, 'segment').allowed).toBe(true)
 
-    // Different jti for live — fresh, allowed.
-    const first2 = checkReplay(jti2, exp, 'live')
-    expect(first2.allowed).toBe(true)
+    // A different jti for live is independent — fresh, allowed.
+    expect(checkReplay(jti2, exp, 'live').allowed).toBe(true)
   })
 })
