@@ -47,7 +47,7 @@ export function isGraceWindowOpen(): boolean {
   return Math.floor(Date.now() / 1000) < D7_DEPLOYED_AT_SECS + GRACE_WINDOW_SECS
 }
 
-export type SubProvider = 'plex' | 'local' | 'apple'
+export type SubProvider = 'plex' | 'local' | 'apple' | 'google'
 
 export type Sub = {
   provider: SubProvider
