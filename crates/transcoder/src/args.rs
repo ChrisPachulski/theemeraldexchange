@@ -1295,6 +1295,40 @@ mod tests {
     }
 
     #[test]
+    fn burn_in_filter_protects_comma_and_bracket_paths() {
+        // LOW-37: filtergraph graph-level specials — comma (filter separator),
+        // brackets (pad labels), semicolon (chain separator) — are protected by
+        // the single quotes around the path, NOT by per-char escaping. A path
+        // like "Movie (2020), [Dir]'s Cut" must stay ONE well-formed subtitles
+        // filter, with the specials literal inside the quotes.
+        let plan = transcode(
+            VideoOp::EncodeH264 {
+                scale_to_height: None,
+                tone_map: false,
+                burn_subtitle_index: Some(2),
+                source_height: None,
+            },
+            AudioOp::Copy,
+            SubtitleOp::None,
+        );
+        let args = ffmpeg_args(
+            &plan,
+            "/lib/Movie (2020), [Dir]'s Cut/s.mkv",
+            "/tmp/s",
+            0,
+            HwEncoder::Cpu,
+        );
+        let vf_idx = args.iter().position(|s| s == "-vf").expect("missing -vf");
+        let vf = &args[vf_idx + 1];
+        // One filter, comma/brackets inside the quotes (only the quote is escaped).
+        assert_eq!(vf, "subtitles='/lib/Movie (2020), [Dir]'\\''s Cut/s.mkv':si=2");
+        assert!(
+            vf.contains("(2020), [Dir]"),
+            "comma + brackets stay literal inside the quoted path: {vf}"
+        );
+    }
+
+    #[test]
     fn webvtt_extract_maps_subtitle_stream() {
         let plan = transcode(
             VideoOp::EncodeH264 {
