@@ -4,6 +4,7 @@
 //! recommender: off (skip) → log (warn, allow) → enforce (reject).
 
 use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 
 use axum::extract::{Request, State};
 use axum::http::header::AUTHORIZATION;
@@ -17,9 +18,27 @@ use crate::AppState;
 use crate::config::PrincipalMode;
 use crate::error::AppError;
 
+/// HKDF is deterministic in the secret, and the secret is process-stable, so the
+/// derived key is memoized to avoid re-running HKDF-Extract+Expand on every auth
+/// request (LOW-38). Keyed by secret to stay correct across tests that use
+/// several. ponytail: global memo, fine for a single-household server (one secret
+/// in prod → one entry); switch to a per-Config derived field if the secret ever
+/// becomes per-request.
+static KEY_CACHE: LazyLock<Mutex<HashMap<String, [u8; 32]>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn derived_key(secret: &str) -> [u8; 32] {
+    if let Some(k) = KEY_CACHE.lock().unwrap().get(secret) {
+        return *k;
+    }
+    let k = derive_key(secret.as_bytes(), INFO_INTERNAL_PRINCIPAL);
+    KEY_CACHE.lock().unwrap().insert(secret.to_string(), k);
+    k
+}
+
 /// Verify a Bearer internal-principal token against the shared secret.
 pub fn verify_principal(secret: &str, token: &str, now: i64) -> Result<InternalClaims, String> {
-    let key = derive_key(secret.as_bytes(), INFO_INTERNAL_PRINCIPAL);
+    let key = derived_key(secret);
     let mut keys = HashMap::new();
     keys.insert(DEFAULT_KID.to_string(), key);
     let claims = internal_principal::decrypt(&keys, token).map_err(|e| format!("{e:?}"))?;
