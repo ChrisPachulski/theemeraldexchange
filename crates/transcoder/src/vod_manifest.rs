@@ -81,38 +81,26 @@ pub(crate) fn synthesize(total_duration_secs: f64, start_secs: u64, fmp4: bool) 
     Some(m)
 }
 
-/// Compute the copy-remux segment CUT POINTS (presentation times, in the output
-/// timeline) from the source video keyframe PTS list, reproducing ffmpeg's HLS
-/// stream-copy segmenter exactly.
+/// Compute the copy-remux segment CUT POINTS from the source video keyframe PTS
+/// list, reproducing ffmpeg's `hlsenc` stream-copy segmenter EXACTLY.
 ///
-/// ffmpeg with `-c copy -hls_time T` cannot insert keyframes, so it cuts a new
-/// segment at the first KEYFRAME whose pts has reached the running target. The
-/// target starts at `T` and, after each cut at `p`, jumps to the next multiple
-/// of `T` strictly past `p` (`(floor(p/T)+1)*T`) — so segments are ~`T` but snap
-/// to the source's (irregular, scene-cut) keyframes and the boundaries never
-/// drift off the absolute `T` grid. Verified to match ffmpeg byte-for-byte on a
-/// real HEVC BluRay rip (see `golden_boundaries_match_real_ffmpeg`).
+/// ffmpeg with `-c copy -hls_time T` cannot insert keyframes, so it can only cut
+/// at the source's own (irregular, scene-cut) keyframes. The running boundary
+/// `end` starts at `base + T` and, after each cut, advances by `T` with NO
+/// catch-up to the actual cut time (`hlsenc` compares `pkt.pts - start_pts`
+/// against `end_pts`, with `end_pts += T` per segment and `start_pts` = the first
+/// packet, i.e. `base`). Because `end` advances by only `T` while keyframes are
+/// usually spaced several seconds apart, `end` quickly falls behind and then
+/// EVERY keyframe becomes a segment boundary — yet a burst of keyframes closer
+/// than `T` early on (before `end` falls behind) is still merged into one
+/// segment. Verified to match real `ffmpeg -c copy` output EXACTLY for H.264→TS
+/// and HEVC→fMP4 at `-ss` 0/37/600/1234 on the NAS; an earlier catch-up grid
+/// (`(floor(p/T)+1)*T`) diverged in dense-keyframe regions and on resume.
 ///
 /// `keyframes` are absolute source PTS (seconds); `base` is where copy begins
 /// (the keyframe `-ss` seeks to — 0 for a fresh start); `total_abs` is the full
 /// source duration. Returned cut points are ABSOLUTE source PTS, in
 /// `(base, total_abs)`.
-///
-/// Reproduces ffmpeg's `hlsenc` split EXACTLY: the running boundary `end` starts
-/// at `base + hls_time` and, after each cut, advances by `hls_time` with NO
-/// catch-up to the actual cut time. So `end` quickly falls behind the keyframes
-/// (usually spaced several seconds apart) and every subsequent keyframe becomes a
-/// segment — yet a burst of keyframes closer than `hls_time` early on (before
-/// `end` falls behind) is still merged into one segment. (`hlsenc` compares
-/// `pkt.pts - start_pts` against `end_pts`, where `end_pts += hls_time` per
-/// segment; `start_pts` is the first packet, i.e. `base`.) Verified to match real
-/// `ffmpeg -c copy` output EXACTLY for H.264-to-TS and HEVC-to-fMP4 at `-ss`
-/// 0/37/600/1234 on the NAS — an earlier catch-up grid diverged on dense
-/// keyframes.
-///
-/// `keyframes` are absolute source PTS; `base` is where copy begins (the keyframe
-/// `-ss` seeks to — 0 for a fresh start); `total_abs` is the full duration.
-/// Returned cut points are ABSOLUTE source PTS, in `(base, total_abs)`.
 fn copy_cut_points(keyframes: &[f64], base: f64, total_abs: f64, hls_time: f64) -> Vec<f64> {
     let mut cuts = Vec::new();
     let mut end = base + hls_time;
