@@ -1,0 +1,55 @@
+# cargo-deny license gate (production-readiness MED-8 follow-up; ffmpeg/GPL
+# standing-risk flag in TODO.md).
+#
+# Intent: the ONLY copyleft component in the product is the ffmpeg/ffprobe
+# binary, which every service invokes as a SEPARATE PROCESS (never linked).
+# That binary's GPL obligation is tracked in THIRD-PARTY-LICENSES.md with a
+# written corresponding-source offer. This gate makes sure no GPL/AGPL license
+# ever creeps into the *linked* Rust dependency tree — where it WOULD
+# contaminate the proprietary first-party code. It is allow-list based: any
+# license not enumerated below (which includes every GPL/AGPL variant) fails
+# the gate, so a new copyleft dep turns CI red instead of shipping silently.
+#
+# Run locally:  cargo deny check licenses
+# (cargo-deny does not compile the workspace — it reads Cargo.lock only.)
+
+[licenses]
+# Permissive + weak-permissive licenses actually present in the resolved tree
+# (derived from `cargo metadata` on 2026-06-17). GPL-2.0/GPL-3.0/AGPL are
+# deliberately absent → denied. LGPL appears only inside an `OR` expression
+# (r-efi = "MIT OR Apache-2.0 OR LGPL-2.1-or-later"), which resolves to MIT.
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "0BSD",
+    "Zlib",
+    "Unlicense",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+
+# First-party workspace crates carry the proprietary LICENSE file (no SPDX id),
+# which would otherwise read as "unlicensed". Skip them — the gate is about
+# third-party deps, not our own code.
+private = { ignore = true }
+
+[bans]
+# License gate only for now; dependency-ban policy can be added later if needed.
+multiple-versions = "allow"
+
+[advisories]
+# Vulnerability scanning is already covered by the `audit` job (cargo audit).
+# Keep this file licenses-focused; do not duplicate advisory gating here.
+version = 2
+
+[sources]
+unknown-registry = "allow"
+unknown-git = "allow"
