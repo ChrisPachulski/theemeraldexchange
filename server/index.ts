@@ -23,7 +23,8 @@ import { registerIptvSchedule } from './services/iptvScheduler.js'
 import { registerDbBackupSchedule } from './services/dbBackupScheduler.js'
 import { registerTokenSweepSchedule } from './services/tokenSweepScheduler.js'
 import { drainRemuxSessions } from './services/iptvRemux.js'
-import { closeIptvDb } from './services/iptvDbSingleton.js'
+import { iptvDb, closeIptvDb } from './services/iptvDbSingleton.js'
+import { startDvrScheduler, type DvrScheduler } from './services/dvrRecorder.js'
 import { ensureServerId, closeServerDb } from './services/serverDb.js'
 import { createLogger } from './services/logger.js'
 import { warnExpiredCompatWindows } from './services/compatWindows.js'
@@ -104,6 +105,13 @@ if (
   })
 }
 
+// DVR (M6) recorder scheduler — ticks the engine that starts/stops ffmpeg
+// recordings of IPTV live channels. Off unless DVR_ENABLED (and IPTV mounted).
+let dvrScheduler: DvrScheduler | null = null
+if (env.DVR_ENABLED && !env.IPTV_DISABLED) {
+  dvrScheduler = startDvrScheduler(iptvDb().raw, env.DVR_DIR)
+}
+
 let shuttingDown = false
 
 /**
@@ -142,6 +150,10 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
     await new Promise<void>((resolve) => {
       server.close(() => resolve())
     })
+
+    // Stop the DVR scheduler + SIGTERM any in-flight recordings before the
+    // remux drain and the iptv DB close (the recorder writes files + reads that DB).
+    dvrScheduler?.stop()
 
     await drainRemuxSessions()
 
