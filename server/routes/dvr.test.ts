@@ -12,7 +12,7 @@ const dbHolder = vi.hoisted(() => ({ raw: null as unknown }))
 vi.mock('../services/iptvDbSingleton.js', () => ({ iptvDb: () => dbHolder }))
 
 import { openIptvDb, type IptvDb } from '../services/iptvDb.js'
-import { scheduleRecording, markStatus, getRecording } from '../services/dvrRecordings.js'
+import { scheduleRecording, markStatus } from '../services/dvrRecordings.js'
 import { dvr } from './dvr.js'
 
 const FUTURE_START = '2099-01-01T10:00:00.000Z'
@@ -56,13 +56,13 @@ describe('dvr routes', () => {
   it('POST rejects an already-ended window (400)', async () => {
     const res = await post({ ...validBody, start_utc: '2000-01-01T00:00:00.000Z', stop_utc: '2000-01-01T01:00:00.000Z' })
     expect(res.status).toBe(400)
-    expect((await res.json()).error).toBe('already_ended')
+    expect(((await res.json()) as { error: string }).error).toBe('already_ended')
   })
 
   it('POST rejects malformed JSON (400)', async () => {
     const res = await post('{not json')
     expect(res.status).toBe(400)
-    expect((await res.json()).error).toBe('invalid_json')
+    expect(((await res.json()) as { error: string }).error).toBe('invalid_json')
   })
 
   it('GET lists recordings', async () => {
@@ -84,7 +84,7 @@ describe('dvr routes', () => {
   it('DELETE cancels a scheduled recording / 404s unknown', async () => {
     const created = (await (await post(validBody)).json()) as { recording: { id: string } }
     const del = await dvr.request(`/recordings/${created.recording.id}`, { method: 'DELETE' })
-    expect((await del.json()).status).toBe('cancelled')
+    expect(((await del.json()) as { status: string }).status).toBe('cancelled')
     const gone = await dvr.request('/recordings/nope', { method: 'DELETE' })
     expect(gone.status).toBe(404)
   })
@@ -97,7 +97,7 @@ describe('dvr routes', () => {
     markStatus(db.raw, r.id, 'completed', { file_path: path.join(tmpDir, 'gone.ts') })
     const res = await dvr.request(`/recordings/${r.id}/play`)
     expect(res.status).toBe(404)
-    expect((await res.json()).error).toBe('file_missing')
+    expect(((await res.json()) as { error: string }).error).toBe('file_missing')
   })
 
   it('play serves the file (200 full, 206 range, 416 unsatisfiable)', async () => {
