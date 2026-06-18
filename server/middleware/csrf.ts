@@ -41,6 +41,35 @@ function isBearerOnly(c: Parameters<MiddlewareHandler>[0]): boolean {
   return !c.req.header('cookie')
 }
 
+// The native iOS/tvOS app BOOTSTRAPS by POSTing to the login/pair endpoints to
+// MINT its bearer device token — before it has any token, and (being a native
+// URLSession client, not a browser) with no Cookie and no Origin header. That
+// trips the generic "missing Origin → fail closed" branch and 403s `bad_origin`,
+// so first-time TestFlight setup could not pair at all. These specific
+// token-minting endpoints are safe to admit cookieless:
+//   - No ambient credential rides them (no cookie), so the cookie-CSRF threat
+//     this gate defends simply does not apply.
+//   - The cookie-SETTING variants (apple/google/passkey-verify also set the web
+//     session cookie) are still protected from login-CSRF / session fixation by
+//     CORS: cors() allows only env.allowedOrigins, so a hostile origin can never
+//     have its Set-Cookie applied by the victim's browser.
+// Everything else stays gated — including /api/auth/plex/check (the cookie web
+// flow, deliberately Origin-gated against session fixation) and ANY cookie-
+// bearing request to these same paths.
+const NATIVE_BOOTSTRAP_PATHS = new Set([
+  '/api/auth/device/poll',
+  '/api/auth/apple',
+  '/api/auth/google',
+  '/api/auth/passkey/login/options',
+  '/api/auth/passkey/login/verify',
+  '/api/auth/passkey/register/options',
+  '/api/auth/passkey/register/verify',
+])
+
+function isNativeBootstrap(c: Parameters<MiddlewareHandler>[0]): boolean {
+  return !c.req.header('cookie') && NATIVE_BOOTSTRAP_PATHS.has(c.req.path)
+}
+
 function checkOrigin(origin: string | undefined): { ok: true } | { ok: false; reason: string } {
   if (env.allowedOrigins.length === 0) {
     // Dev / unconfigured: same-origin via Vite proxy. In prod env.ts
@@ -63,7 +92,7 @@ export const requireSafeOrigin: MiddlewareHandler = async (c, next) => {
     await next()
     return
   }
-  if (isBearerOnly(c)) {
+  if (isBearerOnly(c) || isNativeBootstrap(c)) {
     await next()
     return
   }
