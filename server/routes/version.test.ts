@@ -19,6 +19,7 @@ process.env.EEX_RELEASE = 'test-release'
 
 const { version } = await import('./version.js')
 const { closeServerDb } = await import('../services/serverDb.js')
+const { env } = await import('../env.js')
 
 const app = new Hono()
 app.route('/api/version', version)
@@ -95,7 +96,9 @@ describe('GET /api/version', () => {
     expect(body).toMatchObject({
       server_id: expect.any(String),
       release: 'test-release',
-      auth_modes: ['plex'],
+      // No APPLE_CLIENT_ID / GOOGLE_CLIENT_ID in this env → plex + the
+      // always-on passkey login only.
+      auth_modes: ['plex', 'passkey'],
       accepting_device_pairs: true,
       schemas: {
         iptv: { current: 6 },
@@ -103,6 +106,27 @@ describe('GET /api/version', () => {
         media: { current: 3 },
       },
     })
+  })
+
+  it('advertises apple and google in auth_modes when their client IDs are configured', async () => {
+    writeMigratedDb(iptvDbPath, [6])
+    writeMigratedDb(exchangeDbPath, [7])
+    writeMigratedDb(mediaDbPath, [3])
+
+    // env is built once at import; isAppleConfigured/isGoogleConfigured read
+    // through the exported env object, so flip the fields directly (same way
+    // auth.test.ts exercises the SIWA/Google paths).
+    const beforeApple = (env as Record<string, unknown>).appleClientId
+    const beforeGoogle = (env as Record<string, unknown>).googleClientIds
+    ;(env as Record<string, unknown>).appleClientId = 'com.example.app'
+    ;(env as Record<string, unknown>).googleClientIds = ['example.apps.googleusercontent.com']
+    try {
+      const body = await getVersion()
+      expect(body.auth_modes).toEqual(['plex', 'apple', 'google', 'passkey'])
+    } finally {
+      ;(env as Record<string, unknown>).appleClientId = beforeApple
+      ;(env as Record<string, unknown>).googleClientIds = beforeGoogle
+    }
   })
 
   it('reports a missing media DB as not present without creating it', async () => {

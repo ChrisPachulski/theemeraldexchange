@@ -10,7 +10,7 @@
 
 import { Hono } from 'hono'
 import Database from 'better-sqlite3'
-import { env } from '../env.js'
+import { env, isAppleConfigured, isGoogleConfigured } from '../env.js'
 import { ensureServerId } from '../session.js'
 
 export const version = new Hono()
@@ -38,12 +38,15 @@ function schemaState(dbPath: string): SchemaState {
 }
 
 version.get('/', (c) => {
-  const auth_modes: string[] = []
-  // Plex is the only mode supported today; isPlexConfigured() always
-  // returns true because PLEX_CLIENT_ID is `required()` at boot. The
-  // shape is an array so M2+ work (local-auth, Sign in with Apple) can
-  // add entries without a contract break.
-  auth_modes.push('plex')
+  // Mirror /api/auth/methods so the unpaired screen and the version probe
+  // agree on which logins this install offers. plex is always present
+  // (PLEX_CLIENT_ID is required to boot); passkey is always mounted
+  // (WebAuthn has dev defaults, so it's a real no-Plex login for anyone in
+  // the allowlist); apple/google appear only when their client IDs are set.
+  const auth_modes: string[] = ['plex']
+  if (isAppleConfigured()) auth_modes.push('apple')
+  if (isGoogleConfigured()) auth_modes.push('google')
+  auth_modes.push('passkey')
 
   return c.json({
     server_id: ensureServerId(),
