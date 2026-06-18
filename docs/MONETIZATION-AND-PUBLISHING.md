@@ -246,7 +246,7 @@ Add a compact capability field (e.g. `ent: Vec<String>` or a `plan` enum) to the
 
 **Security hardening (parallel, before monetized launch — from audit, not blockers but close-before-paid):**
 - **Closed 2026-06-07:** media-core/transcoder compose defaults now run `MEDIA_INTERNAL_PRINCIPAL_MODE=enforce` and fail closed without `INTERNAL_PRINCIPAL_SECRET`; prod was verified in enforce mode. Keep this invariant before charging money.
-- **Partially closed:** media-core and transcoder now drop to non-root users (`mediacore`/`transcoder`) and compose adds `no-new-privileges`, `cap_drop: ALL`, read-only roots, and loopback-only published ports. The remaining container hardening gap is the Hono backend `Dockerfile`, which still has no runtime `USER`.
+- **Closed 2026-06-18:** all three app containers now drop to non-root users — media-core (`mediacore`/10002), transcoder (`transcoder`), and the Hono backend (`emerald`/10001, the last holdout: `Dockerfile` `USER emerald`, host `/app/data` chowned to 10001, write-verified live). Compose carries `no-new-privileges`, `cap_drop: ALL`, read-only roots, and loopback-only published ports across all three.
 - Resolve-then-recheck the SSRF guard (DNS-rebinding hole, `server/services/ssrfGuard.ts:62-71`).
 - Add a per-principal rate limiter (no global limiter today, `server/app.ts:36-66`; auth limiter trusts spoofable `cf-connecting-ip`).
 
@@ -271,5 +271,5 @@ Six genuine choices, each with a recommended default. Everything else is executi
 5. **Pricing.** Subscription and lifetime numbers.
    **Recommended default:** sub ~$30-40/yr (or ~$3-5/mo), lifetime ~$100-150 — deliberately under Plex's $749.99, in the Infuse/Emby range, timed to the July 1 2026 Plex hike.
 
-6. **Pre-paid security posture.** Keep the now-enforced internal-principal defaults, and finish container hardening by dropping root in the Hono backend image.
-   **Recommended default:** treat enforce/fail-closed internal-principal as non-negotiable for paid builds; add a non-root runtime `USER` to the backend Dockerfile before monetized launch.
+6. **Pre-paid security posture.** Keep the now-enforced internal-principal defaults. Container hardening is now COMPLETE — the backend dropped to non-root (`emerald`/10001) on 2026-06-18, so all three app containers run non-root under read-only roots + `cap_drop: ALL`.
+   **Recommended default:** treat enforce/fail-closed internal-principal as non-negotiable for paid builds. (Backend non-root `USER`: DONE.)
