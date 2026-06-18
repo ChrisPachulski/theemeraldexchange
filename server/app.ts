@@ -16,6 +16,7 @@ import { radarr } from './routes/radarr.js'
 import { sab } from './routes/sab.js'
 import { tmdb } from './routes/tmdb.js'
 import { iptv } from './routes/iptv.js'
+import { dvr } from './routes/dvr.js'
 import { users } from './routes/users.js'
 import { plexAdmin } from './routes/plex-admin.js'
 import { plexLinks } from './routes/plex-links.js'
@@ -195,6 +196,11 @@ app.route('/api/tmdb', tmdb)
 // never use IPTV.
 if (!env.IPTV_DISABLED) {
   app.route('/api/iptv', iptv)
+}
+// DVR (M6 phase 1) records IPTV live channels, so it requires IPTV mounted and
+// is off by default until the phase-2 recorder ships (see routes/dvr.ts).
+if (env.DVR_ENABLED && !env.IPTV_DISABLED) {
+  app.route('/api/dvr', dvr)
 }
 app.route('/api/users', users)
 // Order matters: plexLinks (auth-only) is mounted BEFORE plexAdmin

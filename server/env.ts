@@ -630,6 +630,9 @@ export const env = {
   // household never uses IPTV or as a fallback insurance build for the
   // App Review submission.
   IPTV_DISABLED: process.env.IPTV_DISABLED === '1' || process.env.IPTV_DISABLED === 'true',
+  // DVR (M6) — off by default until the phase-2 recorder lands, so the
+  // /api/dvr scheduling surface isn't exposed while it records nothing yet.
+  DVR_ENABLED: process.env.DVR_ENABLED === '1' || process.env.DVR_ENABLED === 'true',
 
   // §15 Telemetry. EEX_TELEMETRY_DSN is the Sentry-compatible DSN for the
   // self-hoster's Glitchtip project. Distributed to clients at boot via
