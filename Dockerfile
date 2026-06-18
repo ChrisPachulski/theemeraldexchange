@@ -136,6 +136,18 @@ COPY tsconfig.json ./
 # container.
 RUN mkdir -p /app/data
 
+# Drop root — parity with the media-core/transcoder images (the last container
+# still running as root; audit 9-4 / publishing checklist §8.6). The compose
+# hardening is already identical to media-core's working non-root setup
+# (read_only rootfs + tmpfs /tmp + cap_drop ALL); only the USER was missing.
+# /app is owned here so tsx can read the server code + compiled native modules
+# under a read-only rootfs; the /app/data bind mount is chowned to this uid on
+# the NAS host so sqlite + the grab log stay writable.
+RUN groupadd --system --gid 10001 emerald \
+ && useradd --system --uid 10001 --gid emerald --home-dir /app --no-create-home emerald \
+ && chown -R emerald:emerald /app
+USER emerald
+
 ENV NODE_ENV=production
 ENV PORT=3001
 
