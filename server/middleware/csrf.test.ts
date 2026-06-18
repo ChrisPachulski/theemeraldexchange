@@ -31,6 +31,10 @@ async function buildApp(opts: {
   const app = new Hono()
   app.use('*', opts.middleware === 'trusted' ? requireTrustedOrigin : requireSafeOrigin)
   app.all('/echo', (c) => c.json({ ok: true }))
+  // A native-bootstrap token-minting path and the cookie web-login path, so the
+  // path-scoped cookieless exemption can be exercised against real route paths.
+  app.all('/api/auth/device/poll', (c) => c.json({ ok: true }))
+  app.all('/api/auth/plex/check', (c) => c.json({ ok: true }))
   return app
 }
 
@@ -149,6 +153,52 @@ describe('requireSafeOrigin — bearer-only (native app) exemption', () => {
   })
 
   it('still rejects a cookieless POST with no Authorization at all', async () => {
+    const app = await buildApp({ allowedOrigins: ['https://app.example'], isProd: true })
+    const r = await app.request('/echo', { method: 'POST' })
+    expect(r.status).toBe(403)
+  })
+})
+
+describe('requireSafeOrigin — native bootstrap (cookieless token-mint) exemption', () => {
+  it('allows a cookieless, originless POST to /api/auth/device/poll (first-time TestFlight pair)', async () => {
+    // The exact failing case: native app pairing BEFORE it has a token — no
+    // cookie, no bearer yet, no browser Origin. Must pass the gate.
+    const app = await buildApp({ allowedOrigins: ['https://app.example'], isProd: true })
+    const r = await app.request('/api/auth/device/poll', { method: 'POST' })
+    expect(r.status).toBe(200)
+  })
+
+  it('allows a cookieless POST to a bootstrap path even with a HOSTILE Origin', async () => {
+    // A native client may still emit an Origin in some stacks; cookieless means
+    // no CSRF vector regardless, and CORS guards any Set-Cookie.
+    const app = await buildApp({ allowedOrigins: ['https://app.example'], isProd: true })
+    const r = await app.request('/api/auth/device/poll', {
+      method: 'POST',
+      headers: { Origin: 'https://attacker.example' },
+    })
+    expect(r.status).toBe(200)
+  })
+
+  it('STILL gates a bootstrap path when a Cookie is present (cookie = CSRF vector)', async () => {
+    const app = await buildApp({ allowedOrigins: ['https://app.example'], isProd: true })
+    const r = await app.request('/api/auth/device/poll', {
+      method: 'POST',
+      headers: { Cookie: 'eex.session=abc', Origin: 'https://attacker.example' },
+    })
+    expect(r.status).toBe(403)
+    expect(await r.json()).toEqual({ error: 'forbidden', reason: 'bad_origin' })
+  })
+
+  it('does NOT exempt the cookie web-login path /api/auth/plex/check (session-fixation defense intact)', async () => {
+    // plex/check sets the web session cookie; it is deliberately NOT in the
+    // bootstrap allowlist, so a cookieless cross-origin POST stays gated.
+    const app = await buildApp({ allowedOrigins: ['https://app.example'], isProd: true })
+    const r = await app.request('/api/auth/plex/check', { method: 'POST' })
+    expect(r.status).toBe(403)
+    expect(await r.json()).toEqual({ error: 'forbidden', reason: 'bad_origin' })
+  })
+
+  it('does NOT exempt an unrelated cookieless POST (global fail-closed preserved)', async () => {
     const app = await buildApp({ allowedOrigins: ['https://app.example'], isProd: true })
     const r = await app.request('/echo', { method: 'POST' })
     expect(r.status).toBe(403)
