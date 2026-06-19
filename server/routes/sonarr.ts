@@ -88,6 +88,47 @@ forwardRead('/api/v3/episode')
 // the active card can label totals as Season Size + Episode Size.
 forwardRead('/api/v3/queue')
 
+// Admin-only: clear downloads jammed in Sonarr's import stage
+// (trackedDownloadState importPending/importBlocked). These are completed
+// downloads Sonarr can't move into the library; left alone they pile up in
+// the queue forever and the Downloads tab can't act on them. Removes from
+// the client, blocklists the bad release, and lets Sonarr re-search for a
+// parseable replacement. Rate-limited because each removal kicks a search.
+sonarr.post('/api/v3/queue/clear-stuck', requireAdmin, sonarrMutateLimit, async (c) => {
+  const qr = await sonarrFetch(
+    '/api/v3/queue',
+    { method: 'GET' },
+    new URLSearchParams({ pageSize: '2000' }),
+  )
+  if (!qr.ok) return c.json({ error: 'queue_unreachable' }, 502)
+  const page = (await qr.json()) as {
+    records?: Array<{ id: number; trackedDownloadState?: string }>
+  }
+  const ids = (page.records ?? [])
+    .filter(
+      (r) =>
+        r.trackedDownloadState === 'importPending' ||
+        r.trackedDownloadState === 'importBlocked',
+    )
+    .map((r) => r.id)
+  if (ids.length === 0) return c.json({ removed: 0 })
+  const del = await sonarrFetch(
+    '/api/v3/queue/bulk',
+    {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    },
+    new URLSearchParams({
+      removeFromClient: 'true',
+      blocklist: 'true',
+      skipRedownload: 'false',
+    }),
+  )
+  if (!del.ok) return c.json({ error: 'bulk_delete_failed', status: del.status }, 502)
+  return c.json({ removed: ids.length })
+})
+
 // Per-episode size cap for TV grabs. Mirrors the movie cap. A release
 // passes when (size / episodeCount) ≤ maxTvBytesPerEpisode. We disable
 // Sonarr's built-in search-on-add so the initial grab is forced through

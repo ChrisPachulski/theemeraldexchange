@@ -1156,3 +1156,61 @@ describe('sonarr season-grab in-flight reservation', () => {
     expect(grabPostCount(calls2)).toBe(1)
   })
 })
+
+describe('sonarr clear-stuck', () => {
+  it('rejects user role with 403', async () => {
+    const r = await appUnderTest().request('/api/v3/queue/clear-stuck', {
+      method: 'POST',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    expect(r.status).toBe(403)
+  })
+
+  it('removes + blocklists only import-jammed records, leaving active ones', async () => {
+    // Stub bulk first so its suffix wins over the broader /api/v3/queue match.
+    stub('/api/v3/queue/bulk', {})
+    stub('/api/v3/queue', {
+      records: [
+        { id: 1, trackedDownloadState: 'importBlocked' },
+        { id: 2, trackedDownloadState: 'downloading' }, // healthy — must NOT be touched
+        { id: 3, trackedDownloadState: 'importPending' },
+      ],
+    })
+    const r = await appUnderTest().request('/api/v3/queue/clear-stuck', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual({ removed: 2 })
+    const bulk = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.find(([u]) =>
+      String(u).includes('/api/v3/queue/bulk'),
+    )
+    expect(bulk).toBeTruthy()
+    const [bulkUrl, init] = bulk as [string, RequestInit]
+    expect(String(bulkUrl)).toContain('removeFromClient=true')
+    expect(String(bulkUrl)).toContain('blocklist=true')
+    expect(String(bulkUrl)).toContain('skipRedownload=false')
+    expect(init.method).toBe('DELETE')
+    expect(JSON.parse(init.body as string)).toEqual({ ids: [1, 3] })
+  })
+
+  it('returns removed:0 and skips the bulk call when nothing is jammed', async () => {
+    stub('/api/v3/queue/bulk', {})
+    stub('/api/v3/queue', {
+      records: [{ id: 1, trackedDownloadState: 'downloading' }],
+    })
+    const r = await appUnderTest().request('/api/v3/queue/clear-stuck', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual({ removed: 0 })
+    const calledBulk = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.some(([u]) =>
+      String(u).includes('/api/v3/queue/bulk'),
+    )
+    expect(calledBulk).toBe(false)
+  })
+})
