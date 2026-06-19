@@ -32,6 +32,12 @@ pub mod cipher;
 pub mod jsengine;
 pub mod player_js;
 
+// Phase 4: PoToken (BotGuard / Proof-of-Origin) provider. Also purely additive —
+// `resolve()` (iOS path) needs no PoToken for public videos. The web/cipher path
+// attaches a token when an external minter is configured (env EEX_POT_PROVIDER_URL);
+// returns None and proceeds tokenless otherwise. See potoken.rs + POTOKEN.md.
+pub mod potoken;
+
 const PLAYER_ENDPOINT: &str =
     "https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false";
 
