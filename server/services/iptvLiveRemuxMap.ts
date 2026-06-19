@@ -77,28 +77,47 @@ export function forgetLiveRemuxEntry(streamId: string, sub: string, sessionId: s
 }
 
 /** Rewrite the on-disk manifest's segment lines into tokenised
- *  `/remux/seg` proxy URLs bound to this session + viewer. */
+ *  `/remux/seg` proxy URLs bound to this session + viewer, and drop the
+ *  spurious cold-start discontinuity (see below). */
 export function rewriteRemuxManifest(
   text: string,
   streamId: string,
   sessionId: string,
   sub: string,
 ): string {
-  return text
-    .split(/\r?\n/)
-    .map((line) => {
-      if (!line || line.startsWith('#')) return line
-      const segFile = path.basename(line.trim())
-      if (!/^seg_\d{5}\.ts$/.test(segFile)) return line
-      const token = signStreamToken(env.streamTokenSecret, {
-        kind: 'remux',
-        resourceId: `${sessionId}/${segFile}`,
-        sub,
-        ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
-      })
-      return `/api/iptv/stream/live/${streamId}/remux/seg?t=${encodeURIComponent(token)}`
+  let seenSegment = false
+  const out: string[] = []
+  for (const line of text.split(/\r?\n/)) {
+    // A `#EXT-X-DISCONTINUITY` before the FIRST segment is meaningless — the tag
+    // describes a change BETWEEN two segments, and there is nothing before the
+    // first. ffmpeg emits one at cold start from the initial PTS jump
+    // (`+genpts`/`+discardcorrupt`). Apple's native HLS engine (AVPlayer on
+    // tvOS/iOS) plays segment 0 then stalls on it FOREVER — the live channel
+    // shows a single frozen frame and never advances; browsers' hls.js tolerates
+    // it, which is why the web client works and Apple TV did not. The sliding
+    // window eventually deletes segment 0 and the tag with it (~48 s), but a
+    // viewer never waits that long. Drop the pre-first-segment discontinuity;
+    // keep genuine mid-stream ones (provider splices/ad markers).
+    if (!seenSegment && line.trim() === '#EXT-X-DISCONTINUITY') continue
+    if (!line || line.startsWith('#')) {
+      out.push(line)
+      continue
+    }
+    const segFile = path.basename(line.trim())
+    if (!/^seg_\d{5}\.ts$/.test(segFile)) {
+      out.push(line)
+      continue
+    }
+    seenSegment = true
+    const token = signStreamToken(env.streamTokenSecret, {
+      kind: 'remux',
+      resourceId: `${sessionId}/${segFile}`,
+      sub,
+      ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
     })
-    .join('\n')
+    out.push(`/api/iptv/stream/live/${streamId}/remux/seg?t=${encodeURIComponent(token)}`)
+  }
+  return out.join('\n')
 }
 
 /** Parse a remux segment token's resource id (`<sessionId>/<segFile>`).

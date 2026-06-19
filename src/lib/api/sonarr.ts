@@ -93,6 +93,10 @@ export type SonarrQueueRecord = {
   size?: number
   title?: string
   status?: string
+  // Sonarr's import-pipeline state. 'importPending'/'importBlocked' mean the
+  // download finished but Sonarr can't move it into the library — these jam
+  // the queue and are what the Downloads tab surfaces + clears.
+  trackedDownloadState?: string
 }
 
 export type SonarrQueuePage = {
@@ -122,4 +126,7 @@ export const sonarr = {
   // downloadId + seriesId + seasonNumber, but Sonarr always returns
   // the full record shape.
   queue: () => get<SonarrQueuePage>('/queue', { pageSize: 200 }),
+  // Admin: remove + blocklist + re-search every import-jammed record.
+  clearStuck: () =>
+    post<{ removed: number }, Record<string, never>>('/queue/clear-stuck', {}),
 }
