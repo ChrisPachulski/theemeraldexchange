@@ -39,9 +39,10 @@ BIN="$APPDATA/bin/eex-ytresolve"
 VERFILE="$APPDATA/bin/eex-ytresolve.version"
 LOG="${EEX_CANARY_LOG:-$APPDATA/nas-canary-deploy.log}"
 COMPOSE_DIR="$APPDATA"
-BACKEND_SVC="backend"
-BACKEND_CTR="exchange-backend"
-CF_CTR="exchange-cloudflared"
+BACKEND_SVC="backend"          # compose service name
+BACKEND_CTR="exchange-backend" # container_name
+CF_SVC="cloudflared"           # compose service name (NOT the container name)
+CF_CTR="exchange-cloudflared"  # container_name
 CRITICAL="${CRITICAL:-Plex-Media-Server}"
 CANARY_ID="${CANARY_ID:-dQw4w9WgXcQ}"
 PROOF_ID="${PROOF_ID:-uYPbbksJxIg}"        # adaptive-only (forces the mux path)
@@ -160,7 +161,7 @@ wait "$build_pid" || die "image build failed; old image still live" 2
 
 log "swapping backend + recreating cloudflared (shared netns)"
 ( cd "$COMPOSE_DIR" && docker compose up -d --no-build "$BACKEND_SVC" ) >>"$LOG" 2>&1 || die "swap failed" 2
-( cd "$COMPOSE_DIR" && docker compose up -d --no-build --force-recreate "$CF_CTR" ) >>"$LOG" 2>&1 \
+( cd "$COMPOSE_DIR" && docker compose up -d --no-build --force-recreate "$CF_SVC" ) >>"$LOG" 2>&1 \
   || log "WARN: cloudflared recreate failed — public path may 502 until fixed"
 
 # Post-deploy proof: health, then a real /trailer mux on the adaptive id.
@@ -168,7 +169,7 @@ rollback() {
   log "ROLLING BACK to previous image"
   if docker image inspect theemeraldexchange-backend:rollback >/dev/null 2>&1; then
     docker tag theemeraldexchange-backend:rollback theemeraldexchange-backend:latest
-    ( cd "$COMPOSE_DIR" && docker compose up -d --no-build --force-recreate "$BACKEND_SVC" "$CF_CTR" ) >>"$LOG" 2>&1
+    ( cd "$COMPOSE_DIR" && docker compose up -d --no-build --force-recreate "$BACKEND_SVC" "$CF_SVC" ) >>"$LOG" 2>&1
     log "rolled back"
   else
     log "WARN: no rollback image tagged — manual intervention needed"
