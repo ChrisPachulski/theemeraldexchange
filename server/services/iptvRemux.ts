@@ -182,12 +182,18 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult {
     '-i', opts.upstreamUrl,
     '-c', 'copy',
     '-f', 'hls',
-    '-hls_time', '4',
-    // 16 segments ≈ a ~64 s window. The old 8-segment (~32 s) window meant a
-    // player that fell briefly behind (tunnel jitter, provider hiccup) could
-    // find its next segment already deleted — hls.js then skips/errors
-    // instead of recovering. Disk cost is ~8 extra segments per live session.
-    '-hls_list_size', '16',
+    // 2 s segments (matching the VOD transcode path): a player buffers ~3
+    // segments before showing a frame, so 4 s segments meant ~12 s of "stuck
+    // buffering" at startup and AVPlayer began ~12 s behind the live edge. At
+    // 2 s that startup/edge latency roughly halves — the dominant live-buffering
+    // symptom on Apple TV. Smaller segments also let a player recover at finer
+    // granularity after a hiccup.
+    '-hls_time', '2',
+    // 24 segments ≈ a ~48 s sliding window. A player that briefly falls behind
+    // (tunnel jitter, provider hiccup) must still find its next segment present
+    // before delete_segments reaps it; 48 s keeps that recovery margin at the
+    // smaller segment size. Disk cost ≈ 24 × ~2.4 MB per live session.
+    '-hls_list_size', '24',
     '-hls_flags', 'delete_segments+append_list+omit_endlist',
     '-hls_segment_filename', 'seg_%05d.ts',
     manifestPath,
