@@ -96,6 +96,14 @@ export async function getOrFetchResolved(videoId: string): Promise<YtResolveResu
 }
 
 /**
+ * PARKED — not wired into the /trailer route. A single-segment (or byte-range)
+ * HLS manifest pointing straight at the iOS adaptive googlevideo URLs does NOT
+ * play on AVPlayer: those URLs 403 on plain/over-cap GETs (they require bounded
+ * sub-cap byte ranges) and AVPlayer is HLS-only over non-fragmented mp4. Native
+ * delivery of the adaptive-only case needs a proxy+remux service (future phase);
+ * until then the route falls back to yt-dlp. Kept (with tests) as the manifest
+ * scaffold that phase will build on.
+ *
  * Build the three HLS playlist strings from a resolved adaptive pair.
  * Returns null when either the video or audio stream is absent.
  *
