@@ -53,13 +53,35 @@ video+audio URLs so AVPlayer plays *every* video (not just the ~1-in-8 that ship
 HLS), and wire it behind the backend `/api/tmdb/trailer` route with the yt-dlp
 fallback retained.
 
-Phase 3: the **web/cipher path** — for videos the iOS client can't serve
-(age-gated, region/login-locked). This needs YouTube's obfuscated player `base.js`
-run in a real JS engine (`boa_engine`, pure Rust) to solve the signature cipher
-and the `n` throttle function. Even yt-dlp now delegates this to an external JS
-runtime (its `jsc` provider subsystem), which validates the engine approach over
-hand-porting an interpreter. The function-name extraction regexes get ported from
-yt-dlp's `_video.py`/`jsc` and refreshed by the same weekly canary.
+Phase 3 (**machinery built; live extraction pending pattern-tuning**): the
+**web/cipher path** — for videos the iOS client can't serve (age-gated,
+region/login-locked). This runs YouTube's obfuscated player `base.js` in a real
+JS engine (`boa_engine`, pure Rust) to solve the signature cipher and the `n`
+throttle. What's shipped:
+
+- `src/jsengine.rs` — a thin `boa_engine` wrapper (`eval_call(prelude, fn, arg)`),
+  unit-tested.
+- `src/cipher.rs` — SIG + NSIG **extraction** (function name + body + helper
+  object via ported yt-dlp regexes and balanced-brace slicing the `regex` crate
+  can't do), plus `resolve_web(id, &client)` and the signatureCipher/`n` URL
+  assembly. Proven by **pinned fixture tests** (`tests/fixtures/*.js`): a classic
+  sig descrambler and a modern-shape nsig (global-array prelude + `nfunc[idx]`
+  indirection + `"nn"[+x]` obfuscation) are both extracted and executed in boa.
+- `src/player_js.rs` — watch-page → base.js URL/id + the WEB Innertube player
+  call (which carries `signatureCipher` formats), plus `signatureTimestamp`.
+- `signatures.json` — the volatile extraction patterns, embedded via
+  `include_str!`, documented per-pattern with their yt-dlp origin, refreshable by
+  the weekly canary (same rot model as `clients.json`).
+
+**Live status (player `ac678d18`/`player_es6`, probed 2026-06):** the global
+prelude and `signatureTimestamp` extract cleanly on the live player, but the
+classic SIG descrambler and the query-param `&n=` NSIG site are **gone** — the
+player now inlines them behind a `g.oH` URL class and a `/n/<val>` path-rewrite,
+so anchored regexes (ours *and* yt-dlp's) miss. This is precisely why yt-dlp
+itself moved to handing the whole base.js to an external JS solver (its `jsc`/EJS
+subsystem). Closing the live gap is a follow-up: either tune `signatures.json` to
+the new `es6` shapes, or load the entire base.js into boa and call its dispatch
+entrypoint. See the `#[ignore]`d `live_player_cipher_status` test for a re-probe.
 
 Phase 4: PoToken (botguard) provider, for clients/videos that now require it.
 
