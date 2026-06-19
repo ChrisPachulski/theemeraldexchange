@@ -57,7 +57,7 @@ for a in "$@"; do case "$a" in
 esac; done
 
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$LOG" >&2; }
-die() { log "FATAL: $*"; exit "${2:-3}"; }
+die() { log "FATAL: $1"; exit "${2:-3}"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 have docker || die "docker not found"
