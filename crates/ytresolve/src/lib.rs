@@ -24,6 +24,14 @@ pub use manifest::{build_hls, HlsBundle};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+// Phase 3: the web/signature-cipher path (age/region/login-gated videos the iOS
+// client can't serve). These are PURELY ADDITIVE — `resolve()` below is the iOS
+// fast path and is untouched. The orchestrator chains `cipher::resolve_web` after
+// `resolve()` returns `NotPlayable`/`NoStream`; see `cipher.rs` for the snippet.
+pub mod cipher;
+pub mod jsengine;
+pub mod player_js;
+
 const PLAYER_ENDPOINT: &str =
     "https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false";
 
