@@ -499,3 +499,66 @@
     width: 108px;
   }
 }
+
+/* Import-jam banner — finished downloads Sonarr couldn't add to the library.
+   The SAB-only queue view above can't see these, so without this they pile
+   up invisibly. Uses --danger as an attention accent, not the emerald the
+   panel uses for healthy state. */
+.downloads-tab__stuck {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  margin: var(--s-3) var(--s-5) 0;
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--r-card, 12px);
+  background: color-mix(in oklch, var(--danger) 10%, #14181c);
+  border: 1px solid var(--danger-dim, var(--danger));
+}
+
+.downloads-tab__stuck-text {
+  margin: 0;
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  color: var(--text-muted);
+}
+
+.downloads-tab__stuck-text strong {
+  color: var(--text);
+}
+
+.downloads-tab__stuck-btn {
+  flex: none;
+  font-family: var(--font-display);
+  font-size: 0.6875rem;
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-pod);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.downloads-tab__stuck-btn:hover:not(:disabled) {
+  color: var(--danger);
+  border-color: var(--danger-dim, var(--danger));
+}
+
+.downloads-tab__stuck-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (max-width: 720px) {
+  .downloads-tab__stuck {
+    flex-direction: column;
+    align-items: stretch;
+    margin: var(--s-3) var(--s-3) 0;
+  }
+}
