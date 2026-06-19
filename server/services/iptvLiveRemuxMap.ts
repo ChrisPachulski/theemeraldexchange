@@ -11,7 +11,13 @@ import { env } from '../env.js'
 import { signStreamToken } from './iptvStreamToken.js'
 import { listRemuxSessions, startRemuxSession, stopRemuxSession } from './iptvRemux.js'
 
-export type LiveRemuxEntry = { sessionId: string; dir: string; manifestPath: string }
+export type LiveRemuxEntry = {
+  sessionId: string
+  dir: string
+  manifestPath: string
+  streamId: string
+  sub: string
+}
 
 const liveRemuxIndex = new Map<string, LiveRemuxEntry>()
 
@@ -51,7 +57,13 @@ export function ensureLiveRemuxEntry(opts: {
       sub: opts.sub,
       upstreamUrl: opts.upstreamUrl,
     })
-    entry = { sessionId: session.sessionId, dir: session.dir, manifestPath: session.manifestPath }
+    entry = {
+      sessionId: session.sessionId,
+      dir: session.dir,
+      manifestPath: session.manifestPath,
+      streamId: opts.streamId,
+      sub: opts.sub,
+    }
     liveRemuxIndex.set(key, entry)
   }
   return entry
@@ -74,6 +86,31 @@ export function getActiveLiveRemuxEntry(streamId: string, sub: string): LiveRemu
 export function forgetLiveRemuxEntry(streamId: string, sub: string, sessionId: string): void {
   liveRemuxIndex.delete(remuxKey(streamId, sub))
   stopRemuxSession(sessionId)
+}
+
+/**
+ * Stop every active live remux session for `sub` whose channel differs from
+ * `keepStreamId`, freeing their upstream provider connections NOW instead of
+ * waiting on the 30s/15s idle sweep. A viewer has one live tuner: tuning
+ * channel X means any other live channel they had open (a channel switch, or a
+ * ghost left by an app-close that an idle sweep hasn't reaped yet) must release
+ * its upstream connection — on a 1–2 connection IPTV plan a lingering ghost is
+ * exactly what triggers the provider's "max simultaneous connections" wall.
+ * Returns the streamIds it stopped so the caller can also release their
+ * concurrency slots.
+ * ponytail: one live channel per sub; the provider's connection cap is the real
+ * wall, so two live channels on one sub can't both stream regardless.
+ */
+export function dropOtherLiveRemuxSessions(sub: string, keepStreamId: string): string[] {
+  const stopped: string[] = []
+  for (const [key, entry] of liveRemuxIndex) {
+    if (entry.sub === sub && entry.streamId !== keepStreamId) {
+      liveRemuxIndex.delete(key)
+      stopRemuxSession(entry.sessionId)
+      stopped.push(entry.streamId)
+    }
+  }
+  return stopped
 }
 
 /** Rewrite the on-disk manifest's segment lines into tokenised
