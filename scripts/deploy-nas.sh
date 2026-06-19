@@ -216,8 +216,30 @@ trap cleanup_stage EXIT
 echo "→ Staging payload from git archive ${DEPLOY_SHA_SHORT} (${STAGE_DIR})"
 git archive HEAD | tar -x -C "$STAGE_DIR"
 
+# ── Stage the prebuilt eex-ytresolve binary into the build context ──────────
+# Our native YouTube resolver is built in its OWN repo's CI (never compiled on
+# the NAS — it pulls boa_engine, a heavy compile that has brown-outed Plex). The
+# backend Dockerfile COPYs bin/eex-ytresolve; it's .gitignored, so the git
+# archive above doesn't carry it. Fetch the release asset (default) or use a
+# local file via EEX_YTRESOLVE_BIN_SRC (e.g. a CI workflow_dispatch artifact
+# before the first release tag exists).
+YTRESOLVE_REPO="${YTRESOLVE_REPO:-ChrisPachulski/rust-yt-extractor}"
+mkdir -p "${STAGE_DIR}/bin"
+if [ -n "${EEX_YTRESOLVE_BIN_SRC:-}" ]; then
+  echo "→ Staging eex-ytresolve from local ${EEX_YTRESOLVE_BIN_SRC}"
+  cp "${EEX_YTRESOLVE_BIN_SRC}" "${STAGE_DIR}/bin/eex-ytresolve"
+else
+  echo "→ Fetching eex-ytresolve release asset from ${YTRESOLVE_REPO}"
+  gh release download --repo "$YTRESOLVE_REPO" \
+    --pattern 'eex-ytresolve-x86_64-linux' \
+    --output "${STAGE_DIR}/bin/eex-ytresolve" --clobber
+fi
+chmod +x "${STAGE_DIR}/bin/eex-ytresolve"
+test -s "${STAGE_DIR}/bin/eex-ytresolve" \
+  || { echo "ERROR: eex-ytresolve binary missing/empty after staging" >&2; exit 1; }
+
 echo "→ Ensuring ${APPDATA} exists on ${NAS_HOST}"
-ssh "${NAS_USER}@${NAS_HOST}" "mkdir -p ${APPDATA}"
+ssh "${NAS_USER}@${NAS_HOST}" "mkdir -p ${APPDATA} ${APPDATA}/bin"
 
 # ── Rollback config snapshot ────────────────────────────────────────────────
 # Image-only rollback is insufficient: the rsync below overwrites
@@ -288,6 +310,9 @@ rsync -av --delete \
 echo "→ Syncing Cargo workspace manifest"
 rsync -av "${STAGE_DIR}/Cargo.toml" "${STAGE_DIR}/Cargo.lock" "${STAGE_DIR}/LICENSE" \
   "${NAS_USER}@${NAS_HOST}:${APPDATA}/"
+
+echo "→ Syncing eex-ytresolve binary"
+rsync -av "${STAGE_DIR}/bin/eex-ytresolve" "${NAS_USER}@${NAS_HOST}:${APPDATA}/bin/"
 
 echo "→ Shipping env"
 rsync -av "$LOCAL_ENV" "${NAS_USER}@${NAS_HOST}:${APPDATA}/.env"

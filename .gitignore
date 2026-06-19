@@ -54,6 +54,11 @@ data/
 # Rust workspace build artifacts (emerald-contracts crate)
 /target/
 
+# Prebuilt eex-ytresolve binary, fetched from the rust-yt-extractor release at
+# deploy time into the Docker build context (Dockerfile COPYs bin/eex-ytresolve).
+# 11.9 MB; built in CI, never committed — the source lives in its own repo.
+/bin/eex-ytresolve
+
 # napi-rs build artifacts — produced by `npm run build:napi` (or the napi
 # crate's `prepare` script). One .node per host triple; not portable, not
 # checked in. The Planning agent's M2 deploy plan compiles these in the
