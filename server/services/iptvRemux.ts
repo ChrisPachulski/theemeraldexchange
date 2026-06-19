@@ -51,7 +51,13 @@ export interface StartRemuxResult {
   manifestPath: string
 }
 
-const IDLE_MS = 30_000
+// AVPlayer reloads a live HLS playlist roughly every target-duration (~2s) and
+// fetches segments faster still, so a session that hasn't been polled for 15s is
+// a torn-down/backgrounded player, not a slow one. Reaping at 15s (was 30s)
+// halves how long a closed-app ghost keeps holding its upstream provider
+// connection — the channel-switch case is handled eagerly by
+// dropOtherLiveRemuxSessions; this is the backstop for an outright app close.
+const IDLE_MS = 15_000
 const sessions = new Map<string, RemuxSession>()
 
 // Only http(s) upstreams are valid IPTV inputs. Reject anything else

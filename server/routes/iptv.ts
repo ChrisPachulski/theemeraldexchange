@@ -46,6 +46,7 @@ import {
 import { heartbeatRemuxSession } from '../services/iptvRemux.js'
 import {
   ensureLiveRemuxEntry,
+  dropOtherLiveRemuxSessions,
   forgetLiveRemuxEntry,
   getActiveLiveRemuxEntry,
   remuxSegmentResource,
@@ -840,6 +841,16 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
 
   const creds = credsFromEnv()
   const upstreamUrl = `${creds.host}/live/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${streamId}.ts`
+
+  // One live tuner per viewer: tear down this user's OTHER live channels (a
+  // channel switch, or a ghost from a prior app-close) and free their slots
+  // BEFORE spawning this channel's ffmpeg — so a 1–2 connection provider sees
+  // the old upstream connection close first instead of momentarily needing two
+  // and rejecting us with "max simultaneous connections" (Apple TV symptom).
+  for (const goneStreamId of dropOtherLiveRemuxSessions(v.sub, streamId)) {
+    streamConcurrency().releaseByResource(v.sub, 'remux', goneStreamId)
+  }
+
   const entry = ensureLiveRemuxEntry({ streamId, sub: v.sub, upstreamUrl })
 
   heartbeatRemuxSession(entry.sessionId)

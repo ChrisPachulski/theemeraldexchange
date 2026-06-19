@@ -33,6 +33,7 @@ vi.mock('../env.js', () => ({
 
 import {
   ensureLiveRemuxEntry,
+  dropOtherLiveRemuxSessions,
   getActiveLiveRemuxEntry,
   forgetLiveRemuxEntry,
   rewriteRemuxManifest,
@@ -140,5 +141,27 @@ describe('ensureLiveRemuxEntry / getActiveLiveRemuxEntry / forgetLiveRemuxEntry'
     forgetLiveRemuxEntry('3', 'u', e.sessionId)
     expect(h.stop).toHaveBeenCalledWith(e.sessionId)
     expect(getActiveLiveRemuxEntry('3', 'u')).toBeNull()
+  })
+
+  it('dropOtherLiveRemuxSessions stops the same sub\'s other channels, keeps the tuned one', () => {
+    const old = ensureLiveRemuxEntry({ streamId: '1', sub: 'u', upstreamUrl: 'http://x' })
+    const keep = ensureLiveRemuxEntry({ streamId: '2', sub: 'u', upstreamUrl: 'http://x' })
+    const other = ensureLiveRemuxEntry({ streamId: '1', sub: 'other', upstreamUrl: 'http://x' })
+
+    const stopped = dropOtherLiveRemuxSessions('u', '2')
+
+    expect(stopped).toEqual(['1'])
+    expect(h.stop).toHaveBeenCalledWith(old.sessionId)
+    expect(h.stop).not.toHaveBeenCalledWith(keep.sessionId)
+    expect(h.stop).not.toHaveBeenCalledWith(other.sessionId) // different sub untouched
+    expect(getActiveLiveRemuxEntry('1', 'u')).toBeNull()
+    expect(getActiveLiveRemuxEntry('2', 'u')?.sessionId).toBe(keep.sessionId)
+    expect(getActiveLiveRemuxEntry('1', 'other')?.sessionId).toBe(other.sessionId)
+  })
+
+  it('dropOtherLiveRemuxSessions is a no-op when the sub has only the tuned channel', () => {
+    ensureLiveRemuxEntry({ streamId: '5', sub: 'u', upstreamUrl: 'http://x' })
+    expect(dropOtherLiveRemuxSessions('u', '5')).toEqual([])
+    expect(h.stop).not.toHaveBeenCalled()
   })
 })
