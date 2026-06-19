@@ -1,0 +1,22 @@
+[package]
+name = "ytresolve"
+version = "0.1.0"
+edition.workspace = true
+license-file.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Minimal native YouTube stream resolver (video id -> AVPlayer-ready stream refs) for trailer/extras playback. iOS Innertube client: pre-signed URLs, no JS engine / nsig / PoToken. Replaces the yt-dlp subprocess for the common path; yt-dlp stays the long-tail fallback."
+
+[[bin]]
+name = "eex-ytresolve"
+path = "src/main.rs"
+
+[lib]
+name = "ytresolve"
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
