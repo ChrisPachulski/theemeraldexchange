@@ -22,7 +22,24 @@ async fn main() {
         }
     };
 
-    match ytresolve::resolve(&id, &client, &ytresolve::ios_client()).await {
+    // Fast path: the iOS Innertube client (pre-signed URLs, no JS engine).
+    let ios = ytresolve::resolve(&id, &client, &ytresolve::ios_client()).await;
+
+    let resolved = match ios {
+        Ok(r) => Ok(r),
+        // The iOS client can't serve this video (age/region/login-gated) or it
+        // returned no deliverable stream — fall through to the Phase 3 web/cipher
+        // path, which runs the player base.js sig+nsig functions in boa. Genuine
+        // network/usage errors that aren't "iOS can't serve it" still fall
+        // through; resolve_web reports its own distinct error if it also fails.
+        Err(ytresolve::ResolveError::NotPlayable(_))
+        | Err(ytresolve::ResolveError::NoStream) => {
+            ytresolve::cipher::resolve_web(&id, &client).await
+        }
+        Err(e) => Err(e),
+    };
+
+    match resolved {
         Ok(r) => {
             // One JSON line on stdout; the caller (ytdlp.ts) parses it.
             println!("{}", serde_json::to_string(&r).expect("Resolved serializes"));
