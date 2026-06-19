@@ -125,6 +125,49 @@ describe('iptv remux session', () => {
     for (const s of listRemuxSessions()) stopRemuxSession(s.sessionId)
     await expect(drainRemuxSessions(100)).resolves.toBeUndefined()
   })
+
+  it('scrubs credentials out of ffmpeg stderr before logging it', () => {
+    const proc = fakeProcess()
+    spawnMock.mockReturnValueOnce(proc)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    startRemuxSession({ streamId: '30', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })
+
+    proc.stderr.emit('data', Buffer.from('https://h/live/testuser/secret123/30.ts: 404'))
+    proc.stderr.emit('data', Buffer.from('   ')) // whitespace-only → trimmed away, not logged
+
+    const logged = warn.mock.calls.map((c) => String(c[0])).join('\n')
+    expect(warn).toHaveBeenCalledTimes(1) // the blank line is dropped by the `if (line)` guard
+    expect(logged).not.toContain('secret123')
+    expect(logged).toContain('REDACTED')
+    warn.mockRestore()
+  })
+
+  it('removes the session and cleans up when ffmpeg emits an error', () => {
+    const proc = fakeProcess()
+    spawnMock.mockReturnValueOnce(proc)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const s = startRemuxSession({ streamId: '31', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })
+
+    proc.emit('error', new Error('spawn ffmpeg ENOENT'))
+
+    expect(listRemuxSessions().some((x) => x.sessionId === s.sessionId)).toBe(false)
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('rejects a non-http(s) upstream before spawning ffmpeg', () => {
+    expect(() =>
+      startRemuxSession({ streamId: '32', sub: 'p', upstreamUrl: 'file:///etc/passwd' }),
+    ).toThrow(/protocol not allowed/)
+    expect(spawnMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects a malformed upstream URL before spawning ffmpeg', () => {
+    expect(() =>
+      startRemuxSession({ streamId: '33', sub: 'p', upstreamUrl: 'not a url' }),
+    ).toThrow(/not a valid URL/)
+    expect(spawnMock).not.toHaveBeenCalled()
+  })
 })
 
 describe('scrubXtreamCreds', () => {
