@@ -139,6 +139,18 @@ RUN apt-get update \
 COPY server ./server
 COPY tsconfig.json ./
 
+# Our native Rust YouTube resolver — the eex-ytresolve binary, prebuilt in CI
+# (github.com/ChrisPachulski/rust-yt-extractor) so the NAS never compiles
+# boa_engine. server/services/ytresolve.ts execs it to resolve a trailer/extra
+# id to adaptive googlevideo streams, which server/services/ytmux.ts muxes into
+# a served mp4; on any failure the caller falls back to yt-dlp. The binary is
+# glibc x86_64 (built in rust:1.96-slim-bookworm), forward-compatible with this
+# node:24-slim runtime. Staged into the build context at bin/ by the deploy
+# (scripts/deploy-nas.sh fetches the release asset; .gitignored, never committed).
+# --chmod guarantees the exec bit regardless of the staged file's mode.
+COPY --chmod=0755 bin/eex-ytresolve /usr/local/bin/eex-ytresolve
+ENV EEX_YTRESOLVE_BIN=/usr/local/bin/eex-ytresolve
+
 # Bind-mount target for the grab-event log + sqlite DBs. Created here
 # so a fresh host directory still has the right ownership inside the
 # container.
