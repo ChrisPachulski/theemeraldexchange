@@ -123,9 +123,17 @@ COPY package.json package-lock.json ./
 # dep's prepare script still runs but short-circuits on the pre-staged
 # .node above (plain `node -e`, no devDeps required).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 make g++ \
+ && apt-get install -y --no-install-recommends python3 python3-pip make g++ \
  && npm ci --omit=dev \
- && apt-get purge -y --auto-remove python3 make g++ \
+ # yt-dlp resolves a YouTube trailer/extra id to a directly-playable progressive
+ # URL for AVPlayer (tvOS has no WebKit to embed the YouTube player);
+ # server/services/ytdlp.ts shells to it (`yt-dlp -g`). Installed via pip (not
+ # the PyInstaller standalone) so it runs under the system python on the exec
+ # rootfs — the standalone self-extracts to /tmp, which the compose tmpfs mounts
+ # noexec, so it can't map its libs there. python3 is KEPT (not purged) for it.
+ # Unpinned: a YouTube extractor must track YouTube's changes; pinning rots fast.
+ && pip3 install --no-cache-dir --break-system-packages -U yt-dlp \
+ && apt-get purge -y --auto-remove make g++ \
  && rm -rf /var/lib/apt/lists/*
 
 COPY server ./server

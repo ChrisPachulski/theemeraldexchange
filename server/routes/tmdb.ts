@@ -11,6 +11,7 @@ import { Hono } from 'hono'
 import { requireAuth, type Env } from '../middleware/auth.js'
 import { env } from '../env.js'
 import { fetchWithTimeout, WAN_TIMEOUT_MS } from '../services/upstream.js'
+import { resolveTrailerUrl, isValidYouTubeId } from '../services/ytdlp.js'
 
 export const tmdb = new Hono<Env>()
 
@@ -119,4 +120,120 @@ tmdb.get('/trending/:type', async (c) => {
   }
   const data = (await res.json()) as { results?: unknown[] }
   return c.json(data)
+})
+
+// Resolve a Sonarr TVDB id to its TMDB tv id (Sonarr tracks by TVDB; TMDB's
+// /videos etc. key by TMDB id). Mirrors the /credits TV branch.
+async function tvTmdbId(tvdbId: number): Promise<number | null> {
+  const findRes = await tmdbFetch(`/find/${tvdbId}`, { external_source: 'tvdb_id' })
+  if (!findRes || !findRes.ok) return null
+  const data = (await findRes.json()) as { tv_results?: Array<{ id: number }> }
+  return data.tv_results?.[0]?.id ?? null
+}
+
+// Resolve a (type, id-or-tvdbId) request to the TMDB id + media-type path
+// segment, or an error tuple. Shared by /videos and /related.
+async function resolveTmdb(
+  type: string | undefined,
+  movieId: number | null,
+  tvdbId: number | null,
+): Promise<{ id: number; path: 'movie' | 'tv' } | { error: string; status: 400 | 502 }> {
+  if (type === 'movie') {
+    if (movieId === null) return { error: 'invalid_tmdbId', status: 400 }
+    return { id: movieId, path: 'movie' }
+  }
+  if (type === 'tv') {
+    if (tvdbId === null) return { error: 'invalid_tvdbId', status: 400 }
+    const id = await tvTmdbId(tvdbId)
+    if (id === null) return { error: 'tmdb_find_failed', status: 502 }
+    return { id, path: 'tv' }
+  }
+  return { error: 'invalid_query', status: 400 }
+}
+
+// Trailers + extras for a title. TMDB /videos returns YouTube keys (trailers,
+// teasers, featurettes, clips, behind-the-scenes). We surface the YouTube ones,
+// official trailers first, so the app can show a "Trailer" action + an extras
+// shelf. Playback is resolved separately via /trailer (the app can't embed
+// YouTube on tvOS, so the key alone isn't playable).
+tmdb.get('/videos', async (c) => {
+  if (!(env.tmdbReadAccessToken ?? env.tmdbApiKey)) {
+    return c.json({ error: 'tmdb_not_configured' }, 503)
+  }
+  const resolved = await resolveTmdb(
+    c.req.query('type'),
+    positiveIntId(c.req.query('tmdbId')),
+    positiveIntId(c.req.query('tvdbId')),
+  )
+  if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status)
+
+  const res = await tmdbFetch(`/${resolved.path}/${resolved.id}/videos`)
+  if (!res || !res.ok) {
+    return c.json({ error: 'tmdb_videos_failed', status: res?.status }, 502)
+  }
+  const data = (await res.json()) as {
+    results?: Array<{ key: string; name: string; site: string; type: string; official?: boolean }>
+  }
+  const rank = (v: { type: string; official?: boolean }) => {
+    if (v.type === 'Trailer') return v.official ? 0 : 1
+    if (v.type === 'Teaser') return 2
+    return 3
+  }
+  const videos = (data.results ?? [])
+    .filter((v) => v.site === 'YouTube' && isValidYouTubeId(v.key))
+    .map((v) => ({ key: v.key, name: v.name, type: v.type, official: v.official ?? false }))
+    .sort((a, b) => rank(a) - rank(b))
+  return c.json({ videos })
+})
+
+// "More like this" — TMDB recommendations (falls back to /similar when TMDB has
+// no curated recommendations for the title). Returns the poster/title/year/id
+// the app needs to render a related-titles shelf.
+tmdb.get('/related', async (c) => {
+  if (!(env.tmdbReadAccessToken ?? env.tmdbApiKey)) {
+    return c.json({ error: 'tmdb_not_configured' }, 503)
+  }
+  const resolved = await resolveTmdb(
+    c.req.query('type'),
+    positiveIntId(c.req.query('tmdbId')),
+    positiveIntId(c.req.query('tvdbId')),
+  )
+  if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status)
+
+  type Row = { id: number; title?: string; name?: string; poster_path?: string | null; release_date?: string; first_air_date?: string }
+  const fetchList = async (kind: 'recommendations' | 'similar'): Promise<Row[]> => {
+    const res = await tmdbFetch(`/${resolved.path}/${resolved.id}/${kind}`)
+    if (!res || !res.ok) return []
+    const data = (await res.json()) as { results?: Row[] }
+    return data.results ?? []
+  }
+  let rows = await fetchList('recommendations')
+  if (rows.length === 0) rows = await fetchList('similar')
+
+  const items = rows
+    .filter((r) => r.poster_path)
+    .slice(0, 20)
+    .map((r) => ({
+      tmdbId: r.id,
+      title: r.title ?? r.name ?? '',
+      year: Number((r.release_date ?? r.first_air_date ?? '').slice(0, 4)) || null,
+      posterPath: r.poster_path ?? null,
+    }))
+  return c.json({ items })
+})
+
+// Resolve a YouTube video id (trailer/extra) to a directly-playable URL for
+// AVPlayer. Server-side because tvOS has no WebKit/YouTube embed. yt-dlp does
+// the resolution; a missing binary or a YouTube-side failure returns 502 so the
+// app can show "Trailer unavailable" rather than a dead player.
+tmdb.get('/trailer', async (c) => {
+  const key = c.req.query('key') ?? ''
+  if (!isValidYouTubeId(key)) {
+    return c.json({ error: 'invalid_key' }, 400)
+  }
+  const url = await resolveTrailerUrl(key)
+  if (!url) {
+    return c.json({ error: 'trailer_unavailable' }, 502)
+  }
+  return c.json({ url })
 })
