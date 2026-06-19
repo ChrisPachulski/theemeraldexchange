@@ -18,6 +18,9 @@
 //! response — we read five fields out of it, defining structs for the rest is
 //! pure liability against a schema we don't control.
 
+pub mod manifest;
+pub use manifest::{build_hls, HlsBundle};
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
