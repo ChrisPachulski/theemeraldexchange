@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { sab } from '../../lib/api/sab'
+import { sonarr } from '../../lib/api/sonarr'
 import {
   useDownloadQueue,
   useRadarrQueue,
@@ -82,6 +83,11 @@ export function DownloadsTab() {
     mutationFn: (nzoId: string) => sab.deleteItem(nzoId),
     onSettled: () => qc.invalidateQueries({ queryKey: ['sab', 'queue'] }),
   })
+  // Remove + blocklist + re-search every import-jammed Sonarr record.
+  const clearStuck = useMutation({
+    mutationFn: () => sonarr.clearStuck(),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['sonarr', 'queue'] }),
+  })
 
   if (queue.error) {
     return (
@@ -122,6 +128,14 @@ export function DownloadsTab() {
   )
   const pendingCount = sonarrPending.length + radarrPending.length
   const indexerWorking = idle && pendingCount > 0
+  // Finished downloads jammed in Sonarr's import stage: downloaded but never
+  // added to the library. The SAB-only queue view above can't see these, so
+  // they pile up invisibly. Surface the count + an admin clear-and-retry.
+  const stuckCount = (sonarrQueue.data?.records ?? []).filter(
+    (r) =>
+      r.trackedDownloadState === 'importPending' ||
+      r.trackedDownloadState === 'importBlocked',
+  ).length
   // The "present" item: whatever SAB is actively downloading right now.
   // Falls back to the first slot when the queue is paused / nothing has
   // started yet so the heading still surfaces the next-up filename
@@ -363,6 +377,35 @@ export function DownloadsTab() {
             ))}
           </ul>
         </header>
+
+        {stuckCount > 0 && (
+          <div className="downloads-tab__stuck" role="status">
+            <p className="downloads-tab__stuck-text">
+              <strong>{stuckCount}</strong> finished{' '}
+              {stuckCount === 1 ? 'download is' : 'downloads are'} stuck in import
+              (downloaded, but Sonarr couldn't add them to the library).
+            </p>
+            {isAdmin && (
+              <button
+                type="button"
+                className="downloads-tab__stuck-btn"
+                disabled={clearStuck.isPending}
+                onClick={() =>
+                  confirm({
+                    title: `Clear ${stuckCount} stuck ${stuckCount === 1 ? 'download' : 'downloads'}?`,
+                    body: 'Removes them from the queue, blocklists the bad releases, and re-searches for replacements. This re-spends bandwidth; releases with no parseable version may jam again.',
+                    confirmLabel: 'Clear and retry',
+                    onConfirm: async () => {
+                      await clearStuck.mutateAsync()
+                    },
+                  })
+                }
+              >
+                {clearStuck.isPending ? 'Clearing…' : 'Clear blocked'}
+              </button>
+            )}
+          </div>
+        )}
 
         {queuedSlots.length > 0 && (
           <div className="downloads-tab__queue">
