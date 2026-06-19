@@ -6,8 +6,11 @@ members = [
   "crates/emerald-contracts-pyo3",
   "crates/media-core",
   "crates/transcoder",
-  "crates/ytresolve",
 ]
+# ytresolve (our native Rust YouTube extractor) now lives in its own repo:
+#   https://github.com/ChrisPachulski/rust-yt-extractor
+# The backend consumes only its `eex-ytresolve` binary (built from a pinned
+# commit in the Dockerfile), so it is no longer a workspace member here.
 
 [workspace.package]
 edition = "2024"
