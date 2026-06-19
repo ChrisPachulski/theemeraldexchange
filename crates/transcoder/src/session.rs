@@ -1216,7 +1216,9 @@ impl SessionManager {
                 let hot = self.hot_dirs.lock().await;
                 if !hot.is_empty() {
                     files.sort_by_key(|p| {
-                        let parent = std::path::Path::new(p).parent().map(std::path::Path::to_path_buf);
+                        let parent = std::path::Path::new(p)
+                            .parent()
+                            .map(std::path::Path::to_path_buf);
                         parent
                             .and_then(|pp| hot.iter().position(|h| *h == pp))
                             .map_or(usize::MAX, |idx| idx)
@@ -1775,13 +1777,19 @@ mod tests {
         {
             let hot = mgr.hot_dirs.lock().await;
             assert_eq!(hot.front().unwrap(), &PathBuf::from("/media/A"));
-            assert_eq!(hot.iter().filter(|d| *d == &PathBuf::from("/media/A")).count(), 1);
+            assert_eq!(
+                hot.iter()
+                    .filter(|d| *d == &PathBuf::from("/media/A"))
+                    .count(),
+                1
+            );
             assert_eq!(hot.len(), 2);
         }
 
         // Bounded so an unbounded play history can't grow the queue without limit.
         for i in 0..20 {
-            mgr.note_hot_dir(PathBuf::from(format!("/media/s{i}"))).await;
+            mgr.note_hot_dir(PathBuf::from(format!("/media/s{i}")))
+                .await;
         }
         let hot = mgr.hot_dirs.lock().await;
         assert_eq!(hot.len(), 12);
