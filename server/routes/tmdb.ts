@@ -12,6 +12,7 @@ import { requireAuth, type Env } from '../middleware/auth.js'
 import { env } from '../env.js'
 import { fetchWithTimeout, WAN_TIMEOUT_MS } from '../services/upstream.js'
 import { resolveTrailerUrl, isValidYouTubeId } from '../services/ytdlp.js'
+import { getOrFetchResolved, buildHlsBundle } from '../services/ytresolve.js'
 
 export const tmdb = new Hono<Env>()
 
@@ -223,17 +224,130 @@ tmdb.get('/related', async (c) => {
 })
 
 // Resolve a YouTube video id (trailer/extra) to a directly-playable URL for
-// AVPlayer. Server-side because tvOS has no WebKit/YouTube embed. yt-dlp does
-// the resolution; a missing binary or a YouTube-side failure returns 502 so the
-// app can show "Trailer unavailable" rather than a dead player.
+// AVPlayer. Server-side because tvOS has no WebKit/YouTube embed.
+//
+// Resolution priority (first that succeeds wins):
+//   1. eex-ytresolve (native Rust binary, no Python) — tries the iOS
+//      Innertube client to get pre-signed stream URLs directly.
+//      a. resolved.hls  → return it as-is (AVPlayer / hls.js plays natively).
+//      b. resolved.progressive → single muxed mp4, return the direct URL.
+//      c. resolved.video + resolved.audio → synthesise a 3-playlist HLS
+//         bundle and return our /trailer/:key/master.m3u8 URL.
+//   2. yt-dlp fallback — shelled Python process that handles age-gated,
+//      region-locked, and cipher-encrypted formats the Rust path can't serve.
+//
+// A missing binary or a total failure on both paths → 502 so the app shows
+// "Trailer unavailable" rather than a dead player.
 tmdb.get('/trailer', async (c) => {
   const key = c.req.query('key') ?? ''
   if (!isValidYouTubeId(key)) {
     return c.json({ error: 'invalid_key' }, 400)
   }
+
+  // ── 1. Try the native Rust resolver ──────────────────────────────────────
+  try {
+    const resolved = await getOrFetchResolved(key)
+
+    // 1a. Ready-made HLS manifest (AVPlayer / hls.js plays it natively).
+    if (resolved.hls) {
+      return c.json({ url: resolved.hls })
+    }
+
+    // 1b. Progressive muxed mp4 (single file, no manifest needed).
+    if (resolved.progressive) {
+      return c.json({ url: resolved.progressive })
+    }
+
+    // 1c. Adaptive pair — synthesise a 3-playlist HLS bundle served in-process.
+    const baseUrl = new URL(c.req.url)
+    const masterPath = `/api/tmdb/trailer/${key}/master.m3u8`
+    if (buildHlsBundle(resolved, `${baseUrl.origin}${masterPath.replace('master.m3u8', 'video.m3u8')}`, `${baseUrl.origin}${masterPath.replace('master.m3u8', 'audio.m3u8')}`)) {
+      // The bundle is served by the sub-routes below; return the master URL.
+      return c.json({ url: `${baseUrl.origin}${masterPath}` })
+    }
+  } catch {
+    // Binary absent or YouTube-side rejection — fall through to yt-dlp.
+  }
+
+  // ── 2. yt-dlp fallback ───────────────────────────────────────────────────
   const url = await resolveTrailerUrl(key)
   if (!url) {
     return c.json({ error: 'trailer_unavailable' }, 502)
   }
   return c.json({ url })
+})
+
+// ── Synthesised HLS manifest routes ─────────────────────────────────────────
+// Served only when the Rust resolver delivered an adaptive pair (no native HLS
+// or progressive URL). The resolved streams are read from the same in-memory
+// cache that getOrFetchResolved manages, so no second network round-trip is
+// needed — the /trailer call above has already populated it.
+
+tmdb.get('/trailer/:key/master.m3u8', async (c) => {
+  const key = c.req.param('key')
+  if (!isValidYouTubeId(key)) return c.json({ error: 'invalid_key' }, 400)
+
+  let resolved
+  try {
+    resolved = await getOrFetchResolved(key)
+  } catch {
+    return c.json({ error: 'trailer_unavailable' }, 502)
+  }
+
+  const baseUrl = new URL(c.req.url)
+  const origin = baseUrl.origin
+  const bundle = buildHlsBundle(
+    resolved,
+    `${origin}/api/tmdb/trailer/${key}/video.m3u8`,
+    `${origin}/api/tmdb/trailer/${key}/audio.m3u8`,
+  )
+  if (!bundle) return c.json({ error: 'no_adaptive_streams' }, 502)
+
+  return c.text(bundle.master, 200, { 'Content-Type': 'application/vnd.apple.mpegurl' })
+})
+
+tmdb.get('/trailer/:key/video.m3u8', async (c) => {
+  const key = c.req.param('key')
+  if (!isValidYouTubeId(key)) return c.json({ error: 'invalid_key' }, 400)
+
+  let resolved
+  try {
+    resolved = await getOrFetchResolved(key)
+  } catch {
+    return c.json({ error: 'trailer_unavailable' }, 502)
+  }
+
+  const baseUrl = new URL(c.req.url)
+  const origin = baseUrl.origin
+  const bundle = buildHlsBundle(
+    resolved,
+    `${origin}/api/tmdb/trailer/${key}/video.m3u8`,
+    `${origin}/api/tmdb/trailer/${key}/audio.m3u8`,
+  )
+  if (!bundle) return c.json({ error: 'no_adaptive_streams' }, 502)
+
+  return c.text(bundle.video, 200, { 'Content-Type': 'application/vnd.apple.mpegurl' })
+})
+
+tmdb.get('/trailer/:key/audio.m3u8', async (c) => {
+  const key = c.req.param('key')
+  if (!isValidYouTubeId(key)) return c.json({ error: 'invalid_key' }, 400)
+
+  let resolved
+  try {
+    resolved = await getOrFetchResolved(key)
+  } catch {
+    return c.json({ error: 'trailer_unavailable' }, 502)
+  }
+
+  const baseUrl = new URL(c.req.url)
+  const origin = baseUrl.origin
+  const bundle = buildHlsBundle(
+    resolved,
+    `${origin}/api/tmdb/trailer/${key}/video.m3u8`,
+    `${origin}/api/tmdb/trailer/${key}/audio.m3u8`,
+  )
+  if (!bundle) return c.json({ error: 'no_adaptive_streams' }, 502)
+
+  return c.text(bundle.audio, 200, { 'Content-Type': 'application/vnd.apple.mpegurl' })
 })
