@@ -284,19 +284,17 @@ tmdb.get('/trailer', async (c) => {
   try {
     const resolved = await getOrFetchResolved(key)
 
-    // 1a. Ready-made HLS manifest (AVPlayer / hls.js plays it natively).
+    // 1a. Ready-made HLS manifest (AVPlayer / hls.js plays it natively) — best:
+    // adaptive bitrate, zero backend work.
     if (resolved.hls) {
       return c.json({ url: resolved.hls })
     }
 
-    // 1b. Progressive muxed mp4 (single file, no manifest needed).
-    if (resolved.progressive) {
-      return c.json({ url: resolved.progressive })
-    }
-
-    // 1c. Adaptive-only (split video + audio): mux into one faststart mp4 we
-    // serve ourselves, then hand AVPlayer a tokenised URL to it. On any mux
-    // failure (range/ffmpeg), fall through to yt-dlp.
+    // 1b. Adaptive video+audio: mux into one faststart mp4 we serve ourselves
+    // and hand AVPlayer a tokenised URL. Preferred OVER the progressive fallback
+    // below: the adaptive video stream is full-resolution (up to 1080p), whereas
+    // the only progressive (pre-muxed) format YouTube still serves is capped at
+    // 360p. On any mux failure (range/ffmpeg) fall through to progressive/yt-dlp.
     if (resolved.video && resolved.audio) {
       try {
         await ensureMuxedTrailer(key, resolved)
@@ -310,8 +308,15 @@ tmdb.get('/trailer', async (c) => {
           url: `${publicBaseUrl(c)}/api/tmdb/trailer/${key}/stream.mp4?t=${token}`,
         })
       } catch {
-        // Mux failed — fall through to yt-dlp.
+        // Mux failed — try progressive, then yt-dlp.
       }
+    }
+
+    // 1c. Progressive muxed mp4 (single file, AVPlayer-native, no backend work)
+    // — 360p on modern YouTube, so it's the fallback when there's no muxable
+    // adaptive pair (or the mux failed above).
+    if (resolved.progressive) {
+      return c.json({ url: resolved.progressive })
     }
   } catch {
     // Binary absent or YouTube-side rejection — fall through to yt-dlp.
