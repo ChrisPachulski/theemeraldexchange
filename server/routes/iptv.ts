@@ -107,7 +107,7 @@ function isAllowedPublicHost(host: string): boolean {
   return false
 }
 
-function publicBaseUrl(c: Context): string {
+export function publicBaseUrl(c: Context): string {
   const requestUrl = new URL(c.req.url)
   const forwardedProto = firstHeaderValue(c.req.header('x-forwarded-proto')).toLowerCase()
   const proto = forwardedProto === 'http' || forwardedProto === 'https'

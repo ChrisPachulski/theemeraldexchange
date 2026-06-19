@@ -8,15 +8,46 @@
 // omits the cast section.
 
 import { Hono } from 'hono'
+import type { Context, Next } from 'hono'
+import { createReadStream } from 'node:fs'
+import { stat } from 'node:fs/promises'
+import { Readable } from 'node:stream'
 import { requireAuth, type Env } from '../middleware/auth.js'
 import { env } from '../env.js'
 import { fetchWithTimeout, WAN_TIMEOUT_MS } from '../services/upstream.js'
 import { resolveTrailerUrl, isValidYouTubeId } from '../services/ytdlp.js'
 import { getOrFetchResolved } from '../services/ytresolve.js'
+import { ensureMuxedTrailer, muxedTrailerPath } from '../services/ytmux.js'
+import {
+  signMediaToken,
+  verifyMediaToken,
+  mediaResourceId,
+  MEDIA_DIRECT_KIND,
+} from '../services/mediaStreamToken.js'
+import { memberStatus } from '../services/membership.js'
+import { publicBaseUrl } from './iptv.js'
 
 export const tmdb = new Hono<Env>()
 
-tmdb.use('*', requireAuth)
+// Auth gate: the muxed-trailer stream (`/trailer/<id>/stream.mp4`) authenticates
+// via a signed `?t=` token bound to that video id, so AVPlayer can fetch it
+// cookielessly (same machinery as local-media `/stream/*`). Every other tmdb
+// subpath requires the session cookie/bearer. Mirrors media.ts mediaAuth.
+async function trailerStreamAuth(c: Context<Env>, next: Next) {
+  const subpath = new URL(c.req.url).pathname.replace(/^\/api\/tmdb/, '') || '/'
+  const m = subpath.match(/^\/trailer\/([A-Za-z0-9_-]{11})\/stream\.mp4/)
+  const token = c.req.query('t')
+  if (m && token) {
+    const rid = mediaResourceId('trailer', m[1])
+    const v = verifyMediaToken(token, { kinds: [MEDIA_DIRECT_KIND], rid })
+    if (!v.ok) return c.json({ error: v.error }, 401)
+    if (memberStatus(v.sub) !== 'allowed') return c.json({ error: 'access_revoked' }, 401)
+    return next()
+  }
+  return requireAuth(c, next)
+}
+
+tmdb.use('*', trailerStreamAuth)
 
 const TMDB_BASE = 'https://api.themoviedb.org/3'
 
@@ -231,15 +262,15 @@ tmdb.get('/related', async (c) => {
 //      Innertube client to get pre-signed stream URLs directly.
 //      a. resolved.hls  → return it as-is (AVPlayer / hls.js plays natively).
 //      b. resolved.progressive → single muxed mp4, return the direct URL.
-//      c. resolved.video + resolved.audio (adaptive-only) → fall through to
-//         yt-dlp. We can NOT serve these by synthesising a manifest: the iOS
-//         googlevideo URLs reject plain/over-cap GETs (403 — they require
-//         bounded, sub-cap byte ranges) and AVPlayer is HLS-only over
-//         non-fragmented mp4, so neither a single-segment nor a byte-range
-//         manifest pointing straight at them plays. Native delivery of this
-//         case needs a proxy+remux service (a future phase).
+//      c. resolved.video + resolved.audio (adaptive-only) → proxy+remux: pull
+//         both streams down in sub-cap `&range=` chunks and `ffmpeg -c copy`
+//         them into one faststart mp4 we serve ourselves (services/ytmux.ts),
+//         handing AVPlayer a tokenised URL to our /stream.mp4 route. A manifest
+//         pointing straight at the googlevideo URLs can't work (they 403 plain/
+//         over-cap GETs), which is why we localise + mux instead.
 //   2. yt-dlp fallback — shelled Python process that downloads with proper
-//      ranges + muxes; also handles age/region/cipher cases the Rust path can't.
+//      ranges + muxes; also handles age/region/cipher cases the Rust path can't
+//      (and the adaptive mux above if it fails).
 //
 // A missing binary or a total failure on both paths → 502 so the app shows
 // "Trailer unavailable" rather than a dead player.
@@ -263,9 +294,25 @@ tmdb.get('/trailer', async (c) => {
       return c.json({ url: resolved.progressive })
     }
 
-    // 1c. Adaptive-only: no manifest we can synthesise plays on AVPlayer (see
-    // the header note — googlevideo range-cap + AVPlayer HLS-only/plain-mp4).
-    // Fall through to yt-dlp, which downloads with proper ranges and muxes.
+    // 1c. Adaptive-only (split video + audio): mux into one faststart mp4 we
+    // serve ourselves, then hand AVPlayer a tokenised URL to it. On any mux
+    // failure (range/ffmpeg), fall through to yt-dlp.
+    if (resolved.video && resolved.audio) {
+      try {
+        await ensureMuxedTrailer(key, resolved)
+        const session = c.get('session')
+        const token = signMediaToken({
+          sub: session.sub,
+          rid: mediaResourceId('trailer', key),
+          kind: MEDIA_DIRECT_KIND,
+        })
+        return c.json({
+          url: `${publicBaseUrl(c)}/api/tmdb/trailer/${key}/stream.mp4?t=${token}`,
+        })
+      } catch {
+        // Mux failed — fall through to yt-dlp.
+      }
+    }
   } catch {
     // Binary absent or YouTube-side rejection — fall through to yt-dlp.
   }
@@ -276,5 +323,57 @@ tmdb.get('/trailer', async (c) => {
     return c.json({ error: 'trailer_unavailable' }, 502)
   }
   return c.json({ url })
+})
+
+// Serve a muxed adaptive trailer (services/ytmux.ts). Authed by the `?t=` token
+// in trailerStreamAuth above (cookieless, so AVPlayer can fetch it). Supports
+// Range so AVPlayer can seek; the file is faststart so playback starts early.
+tmdb.get('/trailer/:key/stream.mp4', async (c) => {
+  const key = c.req.param('key')
+  if (!isValidYouTubeId(key)) return c.json({ error: 'invalid_key' }, 400)
+
+  const path = muxedTrailerPath(key)
+  let size: number
+  try {
+    size = (await stat(path)).size
+  } catch {
+    // Evicted/expired between the /trailer call and playback — the app re-taps.
+    return c.json({ error: 'trailer_not_ready' }, 404)
+  }
+
+  const baseHeaders: Record<string, string> = {
+    'content-type': 'video/mp4',
+    'accept-ranges': 'bytes',
+    'cache-control': 'private, max-age=3600',
+  }
+
+  const range = c.req.header('range')
+  if (range) {
+    const m = /^bytes=(\d*)-(\d*)$/.exec(range.trim())
+    if (m && !(m[1] === '' && m[2] === '')) {
+      let start: number
+      let end: number
+      if (m[1] === '') {
+        // suffix range: bytes=-N → last N bytes
+        start = Math.max(0, size - Number(m[2]))
+        end = size - 1
+      } else {
+        start = Number(m[1])
+        end = m[2] === '' ? size - 1 : Math.min(Number(m[2]), size - 1)
+      }
+      if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= size) {
+        return c.body(null, 416, { 'content-range': `bytes */${size}` })
+      }
+      const webStream = Readable.toWeb(createReadStream(path, { start, end })) as ReadableStream
+      return c.body(webStream, 206, {
+        ...baseHeaders,
+        'content-range': `bytes ${start}-${end}/${size}`,
+        'content-length': String(end - start + 1),
+      })
+    }
+  }
+
+  const webStream = Readable.toWeb(createReadStream(path)) as ReadableStream
+  return c.body(webStream, 200, { ...baseHeaders, 'content-length': String(size) })
 })
 
