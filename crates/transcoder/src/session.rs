@@ -464,6 +464,13 @@ pub struct SessionManager {
     /// warmer never launch a second full-file demux for the same file — which
     /// would be a redundant I/O storm against the library disk.
     warming: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Directories of recently-played titles, newest-first and bounded. The
+    /// keyframe warmer drains these BEFORE the alphabetical library scan so the
+    /// show you're actively watching (and its sibling episodes) get a finite VOD
+    /// scrubber instead of the "live" badge + edge-stall — without that, on a
+    /// 20k-episode library the gentle warmer reaches new episodes only after
+    /// hours/days, so a first play serves ffmpeg's still-growing EVENT playlist.
+    hot_dirs: Arc<Mutex<std::collections::VecDeque<PathBuf>>>,
 }
 
 impl SessionManager {
@@ -487,7 +494,19 @@ impl SessionManager {
             start_gates: Arc::new(Mutex::new(HashMap::new())),
             cache_root,
             warming: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            hot_dirs: Arc::new(Mutex::new(std::collections::VecDeque::new())),
         }
+    }
+
+    /// Record `dir` as a recently-played source directory (newest-first, deduped,
+    /// bounded). Consumed by [`run_keyframe_warmer`] to prioritize the show the
+    /// user is actually watching.
+    async fn note_hot_dir(&self, dir: PathBuf) {
+        const MAX_HOT_DIRS: usize = 12;
+        let mut hot = self.hot_dirs.lock().await;
+        hot.retain(|d| d != &dir);
+        hot.push_front(dir);
+        hot.truncate(MAX_HOT_DIRS);
     }
 
     /// Restrict source media to the given root directories. Returns `self` for
@@ -856,6 +875,14 @@ impl SessionManager {
             return Err(StartError::Forbidden(opts.input_path.clone()));
         }
 
+        // Remember this title's directory so the keyframe warmer prioritizes it
+        // (and its sibling episodes — a season folder) over the rest of the
+        // library. Makes the NEXT episode of what you're watching a VOD scrubber
+        // instead of a "live"/stalling EVENT playlist.
+        if let Some(parent) = std::path::Path::new(&opts.input_path).parent() {
+            self.note_hot_dir(parent.to_path_buf()).await;
+        }
+
         // Grant coalescing / supersede (CPU-cap relief). Acquire the per-identity
         // gate FIRST so two SIMULTANEOUS grants for the same title can't both
         // race past the cap: the second blocks here until the first has
@@ -1180,7 +1207,22 @@ impl SessionManager {
             return;
         }
         loop {
-            let files = self.collect_video_files().await;
+            let mut files = self.collect_video_files().await;
+            // Prioritize the directories of recently-played titles so the show
+            // you're actively bingeing warms first, ahead of a large library's
+            // alphabetical tail. Pure reordering — the gentle one-at-a-time,
+            // idle-gated throttling below is unchanged (Plex-safe).
+            {
+                let hot = self.hot_dirs.lock().await;
+                if !hot.is_empty() {
+                    files.sort_by_key(|p| {
+                        let parent = std::path::Path::new(p).parent().map(std::path::Path::to_path_buf);
+                        parent
+                            .and_then(|pp| hot.iter().position(|h| *h == pp))
+                            .map_or(usize::MAX, |idx| idx)
+                    });
+                }
+            }
             let total = files.len();
             let mut warmed = 0u32;
             for path in files {
@@ -1713,6 +1755,37 @@ mod tests {
             owner: None,
             subtitle_source_index: None,
         }
+    }
+
+    #[tokio::test]
+    async fn hot_dirs_are_newest_first_deduped_and_bounded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
+
+        mgr.note_hot_dir(PathBuf::from("/media/A")).await;
+        mgr.note_hot_dir(PathBuf::from("/media/B")).await;
+        assert_eq!(
+            mgr.hot_dirs.lock().await.front().unwrap(),
+            &PathBuf::from("/media/B"),
+            "most-recent dir is warmed first"
+        );
+
+        // Re-playing A promotes it to the front WITHOUT a duplicate entry.
+        mgr.note_hot_dir(PathBuf::from("/media/A")).await;
+        {
+            let hot = mgr.hot_dirs.lock().await;
+            assert_eq!(hot.front().unwrap(), &PathBuf::from("/media/A"));
+            assert_eq!(hot.iter().filter(|d| *d == &PathBuf::from("/media/A")).count(), 1);
+            assert_eq!(hot.len(), 2);
+        }
+
+        // Bounded so an unbounded play history can't grow the queue without limit.
+        for i in 0..20 {
+            mgr.note_hot_dir(PathBuf::from(format!("/media/s{i}"))).await;
+        }
+        let hot = mgr.hot_dirs.lock().await;
+        assert_eq!(hot.len(), 12);
+        assert_eq!(hot.front().unwrap(), &PathBuf::from("/media/s19"));
     }
 
     async fn wait_for<F>(mut cond: F)
