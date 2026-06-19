@@ -6,6 +6,7 @@ members = [
   "crates/emerald-contracts-pyo3",
   "crates/media-core",
   "crates/transcoder",
+  "crates/ytresolve",
 ]
 
 [workspace.package]
