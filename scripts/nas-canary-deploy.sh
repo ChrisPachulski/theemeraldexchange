@@ -32,6 +32,10 @@
 #       (rolled back) · 3 setup error.
 set -uo pipefail
 
+# cron runs with a minimal PATH; pin it so docker/curl/node resolve under the
+# Unraid crond the same as in an interactive shell.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 REPO="${YTRESOLVE_REPO:-ChrisPachulski/rust-yt-extractor}"
 APPDATA="${APPDATA:-/mnt/user/appdata/exchange-backend}"
 TOKEN_FILE="${EEX_GH_TOKEN_FILE:-$APPDATA/.gh-token}"
