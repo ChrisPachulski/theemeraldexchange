@@ -258,3 +258,113 @@ describe('tmdb — /trending/:type', () => {
     expect(body.status).toBe(500)
   })
 })
+
+describe('tmdb — /videos', () => {
+  it('401 unauthenticated; 503 when not configured', async () => {
+    const r1 = await appUnderTest().request('/videos?type=movie&tmdbId=550')
+    expect(r1.status).toBe(401)
+    ;(env as { tmdbApiKey: string | null }).tmdbApiKey = null
+    const r2 = await appUnderTest().request('/videos?type=movie&tmdbId=550', {
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r2.status).toBe(503)
+    expect(await r2.json()).toEqual({ error: 'tmdb_not_configured' })
+  })
+
+  it('movie: returns only valid YouTube videos, official trailer first', async () => {
+    stub('/movie/550/videos', {
+      results: [
+        { key: '9bZkp7q19f0', name: 'Featurette', site: 'YouTube', type: 'Featurette' },
+        { key: 'kJQP7kiw5Fk', name: 'Teaser', site: 'YouTube', type: 'Teaser' },
+        { key: 'abc123ABC_-', name: 'Fan Trailer', site: 'YouTube', type: 'Trailer', official: false },
+        { key: 'dQw4w9WgXcQ', name: 'Official Trailer', site: 'YouTube', type: 'Trailer', official: true },
+        { key: '12345678901', name: 'Vimeo clip', site: 'Vimeo', type: 'Trailer' },
+        { key: 'short', name: 'Bad id', site: 'YouTube', type: 'Trailer' },
+      ],
+    })
+    const r = await appUnderTest().request('/videos?type=movie&tmdbId=550', {
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r.status).toBe(200)
+    const { videos } = (await r.json()) as { videos: Array<{ key: string; official: boolean }> }
+    expect(videos.map((v) => v.key)).toEqual(['dQw4w9WgXcQ', 'abc123ABC_-', 'kJQP7kiw5Fk', '9bZkp7q19f0'])
+    expect(videos[0].official).toBe(true)
+  })
+
+  it('tv: resolves tvdbId via /find then fetches /tv/<id>/videos', async () => {
+    stub('/find/77777', { tv_results: [{ id: 1396 }] })
+    stub('/tv/1396/videos', { results: [{ key: 'dQw4w9WgXcQ', name: 'T', site: 'YouTube', type: 'Trailer', official: true }] })
+    const r = await appUnderTest().request('/videos?type=tv&tvdbId=77777', {
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r.status).toBe(200)
+    const { videos } = (await r.json()) as { videos: unknown[] }
+    expect(videos).toHaveLength(1)
+  })
+
+  it('rejects bad queries: invalid_query / invalid_tmdbId / invalid_tvdbId', async () => {
+    const cookie = await userCookie()
+    const noType = await appUnderTest().request('/videos?tmdbId=550', { headers: { Cookie: cookie } })
+    expect(noType.status).toBe(400)
+    expect((await noType.json() as { error: string }).error).toBe('invalid_query')
+    const noMovie = await appUnderTest().request('/videos?type=movie', { headers: { Cookie: cookie } })
+    expect((await noMovie.json() as { error: string }).error).toBe('invalid_tmdbId')
+    const noTv = await appUnderTest().request('/videos?type=tv', { headers: { Cookie: cookie } })
+    expect((await noTv.json() as { error: string }).error).toBe('invalid_tvdbId')
+  })
+
+  it('502 tmdb_find_failed when the tv lookup has no results; 502 tmdb_videos_failed on upstream error', async () => {
+    stub('/find/77777', { tv_results: [] })
+    const findFail = await appUnderTest().request('/videos?type=tv&tvdbId=77777', {
+      headers: { Cookie: await userCookie() },
+    })
+    expect(findFail.status).toBe(502)
+    expect((await findFail.json() as { error: string }).error).toBe('tmdb_find_failed')
+
+    stub('/movie/550/videos', { error: 'boom' }, 500)
+    const vidFail = await appUnderTest().request('/videos?type=movie&tmdbId=550', {
+      headers: { Cookie: await userCookie() },
+    })
+    expect(vidFail.status).toBe(502)
+    expect((await vidFail.json() as { error: string }).error).toBe('tmdb_videos_failed')
+  })
+})
+
+describe('tmdb — /related', () => {
+  it('maps recommendations (poster-filtered, year-parsed, capped at 20)', async () => {
+    const rows: Array<Record<string, unknown>> = Array.from({ length: 25 }, (_, i) => ({
+      id: i + 1,
+      title: `Movie ${i + 1}`,
+      poster_path: `/p${i + 1}.jpg`,
+      release_date: '2021-05-04',
+    }))
+    rows.push({ id: 999, title: 'No poster', poster_path: null, release_date: '2020-01-01' })
+    stub('/movie/550/recommendations', { results: rows })
+    const r = await appUnderTest().request('/related?type=movie&tmdbId=550', {
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r.status).toBe(200)
+    const { items } = (await r.json()) as { items: Array<{ tmdbId: number; year: number | null }> }
+    expect(items).toHaveLength(20)
+    expect(items.every((i) => i.tmdbId !== 999)).toBe(true)
+    expect(items[0].year).toBe(2021)
+  })
+
+  it('falls back to /similar when recommendations are empty', async () => {
+    stub('/movie/550/recommendations', { results: [] })
+    stub('/movie/550/similar', { results: [{ id: 12, title: 'Similar', poster_path: '/s.jpg', release_date: '2019-01-01' }] })
+    const r = await appUnderTest().request('/related?type=movie&tmdbId=550', {
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r.status).toBe(200)
+    const { items } = (await r.json()) as { items: unknown[] }
+    expect(items).toEqual([{ tmdbId: 12, title: 'Similar', year: 2019, posterPath: '/s.jpg' }])
+  })
+
+  it('401 unauthenticated; 400 invalid_query', async () => {
+    expect((await appUnderTest().request('/related?type=movie&tmdbId=550')).status).toBe(401)
+    const badQuery = await appUnderTest().request('/related?tmdbId=550', { headers: { Cookie: await userCookie() } })
+    expect(badQuery.status).toBe(400)
+    expect((await badQuery.json() as { error: string }).error).toBe('invalid_query')
+  })
+})

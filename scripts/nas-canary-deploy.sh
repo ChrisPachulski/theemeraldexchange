@@ -46,7 +46,6 @@ COMPOSE_DIR="$APPDATA"
 BACKEND_SVC="backend"          # compose service name
 BACKEND_CTR="exchange-backend" # container_name
 CF_SVC="cloudflared"           # compose service name (NOT the container name)
-CF_CTR="exchange-cloudflared"  # container_name
 CRITICAL="${CRITICAL:-Plex-Media-Server}"
 CANARY_ID="${CANARY_ID:-dQw4w9WgXcQ}"
 PROOF_ID="${PROOF_ID:-uYPbbksJxIg}"        # adaptive-only (forces the mux path)

@@ -1213,4 +1213,28 @@ describe('sonarr clear-stuck', () => {
     )
     expect(calledBulk).toBe(false)
   })
+
+  it('502 queue_unreachable when the queue read fails', async () => {
+    stub('/api/v3/queue', { error: 'boom' }, 502)
+    const r = await appUnderTest().request('/api/v3/queue/clear-stuck', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    expect(r.status).toBe(502)
+    expect(await r.json()).toEqual({ error: 'queue_unreachable' })
+  })
+
+  it('502 bulk_delete_failed when the bulk DELETE fails', async () => {
+    // bulk stub first so its suffix wins over the broader /api/v3/queue match.
+    stub('/api/v3/queue/bulk', { error: 'nope' }, 500)
+    stub('/api/v3/queue', { records: [{ id: 7, trackedDownloadState: 'importBlocked' }] })
+    const r = await appUnderTest().request('/api/v3/queue/clear-stuck', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    expect(r.status).toBe(502)
+    expect(await r.json()).toEqual({ error: 'bulk_delete_failed', status: 500 })
+  })
 })
