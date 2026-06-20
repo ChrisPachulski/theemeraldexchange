@@ -626,6 +626,17 @@ iptv.post('/stream/live/:streamId/grant', requireAuth, async (c) => {
   }
 
   if (clientWantsAvplayer(c)) {
+    // One live tuner per viewer: selecting a channel tears down this user's
+    // OTHER live remux channels (the channel they were on, or a ghost from a
+    // prior app-close) and frees their upstream provider connections + slots
+    // NOW, instead of waiting on the idle sweep — so a 1–2 connection provider
+    // sees the old connection close first rather than momentarily needing two.
+    // This runs ONCE per channel selection (here), never on the manifest poll:
+    // a lingering poll from the channel being left can respawn its own ffmpeg
+    // but can no longer kill the freshly-tuned one, so the two never ping-pong.
+    for (const goneStreamId of dropOtherLiveRemuxSessions(sub, streamId)) {
+      streamConcurrency().releaseByResource(sub, 'remux', goneStreamId)
+    }
     const token = signStreamToken(env.streamTokenSecret, {
       kind: 'remux', resourceId: streamId, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
     })
@@ -842,15 +853,13 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
   const creds = credsFromEnv()
   const upstreamUrl = `${creds.host}/live/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${streamId}.ts`
 
-  // One live tuner per viewer: tear down this user's OTHER live channels (a
-  // channel switch, or a ghost from a prior app-close) and free their slots
-  // BEFORE spawning this channel's ffmpeg — so a 1–2 connection provider sees
-  // the old upstream connection close first instead of momentarily needing two
-  // and rejecting us with "max simultaneous connections" (Apple TV symptom).
-  for (const goneStreamId of dropOtherLiveRemuxSessions(v.sub, streamId)) {
-    streamConcurrency().releaseByResource(v.sub, 'remux', goneStreamId)
-  }
-
+  // NOTE: freeing the viewer's OTHER live channels happens once at GRANT time
+  // (see the avplayer branch of POST .../grant), NOT here. AVPlayer re-fetches
+  // this manifest every ~2s; doing the teardown on this hot path made two
+  // overlapping live sessions for one sub (a channel switch where the old
+  // player fires one more poll, or a second device) mutually annihilate — each
+  // poll killed the other's ffmpeg, so neither ever built a segment window and
+  // every channel showed infinite buffering / black screen.
   const entry = ensureLiveRemuxEntry({ streamId, sub: v.sub, upstreamUrl })
 
   heartbeatRemuxSession(entry.sessionId)
