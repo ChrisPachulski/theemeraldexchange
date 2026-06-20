@@ -37,7 +37,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "fs
 # whole-file-buffered in memory (a 10-20 MB fMP4 copy segment otherwise sits
 # fully in RAM AND is edge-buffered by cloudflared before the player sees it).
 tokio-util = { version = "0.7", features = ["io"] }
-tower-http = { version = "0.6", features = ["trace"] }
+tower-http = { version = "0.7", features = ["trace"] }
 serde.workspace = true
 serde_json.workspace = true
 tracing = "0.1"
