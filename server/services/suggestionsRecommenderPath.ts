@@ -10,6 +10,19 @@ import { scoreOnce, postShown, postImpressions, type RecommenderScoredItem } fro
 import { recommenderCallerFromSession } from './recommenderCaller.js'
 import { reportServerEvent } from './serverTelemetry.js'
 import { TARGET_COUNT, type SuggestionItem } from './suggestionsShared.js'
+
+// Over-fetch from the sidecar so the strip still nets ~TARGET_COUNT after
+// filterRecommenderSafe strips the picks the household already owns or vetoed.
+// The sidecar excludes owned/rejected titles BY ID, but it can't catch a title
+// the household owns under a DIFFERENT TMDB id (duplicate TMDB entries) — its
+// title-key normalization disagrees with the backend's authoritative
+// normalizeTitle. For a large, franchise-dense MOVIE library this attrition hit
+// ~55% (20 picks → 9 survived; TV, with fewer title dupes, kept ~11), which is
+// why movies capped at ~8. The fused recipe already scores its full ~800-cand
+// pool regardless of n, so asking for 3× costs only a few extra reason strings.
+// Real picks only — still NO trending tail-padding (see below); a short strip
+// after this over-fetch means the household genuinely has few fresh neighbours.
+const RECOMMENDER_OVERFETCH = TARGET_COUNT * 3
 import { tmdbKeyConfigured, tmdbTrending } from './suggestionsTmdb.js'
 import { tagIptvAvailability } from './iptvAvailability.js'
 import { tagLocalAvailability } from './localAvailability.js'
@@ -74,7 +87,7 @@ export async function runRecommenderSuggestionPath(
     const resp = await scoreOnce({
       sub: session.sub,
       kind: type,
-      n: TARGET_COUNT,
+      n: RECOMMENDER_OVERFETCH,
       exclude_recently_shown: true,
       library: library
         .map((it) => ({
