@@ -22,7 +22,10 @@ import { TARGET_COUNT, type SuggestionItem } from './suggestionsShared.js'
 // pool regardless of n, so asking for 3× costs only a few extra reason strings.
 // Real picks only — still NO trending tail-padding (see below); a short strip
 // after this over-fetch means the household genuinely has few fresh neighbours.
-const RECOMMENDER_OVERFETCH = TARGET_COUNT * 3
+// Capped at the sidecar's ScoreRequest `n` ceiling (Field(le=50)); exceeding it
+// 422s the whole call and silently degrades every refresh to trending. 50 ≈ 2.5×
+// TARGET_COUNT, which clears the observed ~55% movie attrition (50×0.45 ≈ 22 ≥ 20).
+const RECOMMENDER_OVERFETCH = Math.min(TARGET_COUNT * 3, 50)
 import { tmdbKeyConfigured, tmdbTrending } from './suggestionsTmdb.js'
 import { tagIptvAvailability } from './iptvAvailability.js'
 import { tagLocalAvailability } from './localAvailability.js'
