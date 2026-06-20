@@ -444,6 +444,18 @@ jobs:
           node scripts/check-image-pin-staleness.mjs --self-test
           node scripts/check-image-pin-staleness.mjs docker-compose.yml
 
+      - name: Stage eex-ytresolve placeholder
+        # The Dockerfile COPYs bin/eex-ytresolve (the prebuilt Rust YouTube
+        # resolver). That binary is .gitignored — scripts/deploy-nas.sh fetches
+        # the real release asset at deploy time, so a clean CI checkout lacks it
+        # and the COPY fails. This job only VALIDATES the image build (push/load
+        # false), not the resolver itself, so an executable placeholder at the
+        # expected path is sufficient to exercise the rest of the Dockerfile.
+        run: |
+          mkdir -p bin
+          printf '#!/bin/sh\nexit 0\n' > bin/eex-ytresolve
+          chmod +x bin/eex-ytresolve
+
       - name: Build backend image
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
