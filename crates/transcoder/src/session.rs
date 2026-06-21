@@ -981,17 +981,34 @@ impl SessionManager {
                 .await;
         }
 
+        // Native full-timeline VOD alignment: a RE-ENCODE session writes its first
+        // segment at the ABSOLUTE grid index so the synthesized [0,total] manifest
+        // (`vod_manifest::synthesize`) references on-disk files one-for-one. Quantize
+        // the seek DOWN to the segment grid so the first output segment begins
+        // exactly on a boundary (accurate_seek lands output at the requested time,
+        // rebased to t=0), and number it `⌊start/seg⌋`. `#EXT-X-START` carries the
+        // resume point; playback is at most one segment (HLS_SEGMENT_SECS) early —
+        // imperceptible. Copy-remux keeps raw `-ss` + start_number 0 until its
+        // absolute-ordinal indexing lands (see plans/resume-scrubber-fix.md, Phase 2).
+        let seg = u64::from(crate::args::HLS_SEGMENT_SECS);
+        let (eff_start, eff_start_number) = if opts.plan.reencodes_video() && opts.start_secs > 0 {
+            let n = opts.start_secs / seg;
+            (n * seg, n)
+        } else {
+            (opts.start_secs, 0)
+        };
+
         let child = self
             .spawn_child(
                 &session_id,
                 &opts.input_path,
                 &opts.plan,
                 &dir,
-                opts.start_secs,
+                eff_start,
                 opts.source_codec.as_deref(),
                 opts.source_avg_kbps,
                 &opts.media_kind,
-                0,
+                eff_start_number,
             )
             .await?;
 
@@ -1003,8 +1020,8 @@ impl SessionManager {
             dir,
             started_at: now,
             last_seen: now,
-            start_secs: opts.start_secs,
-            start_number: 0,
+            start_secs: eff_start,
+            start_number: eff_start_number,
             restarts: 0,
             ctl: ctl_tx,
             _permit: permit,
