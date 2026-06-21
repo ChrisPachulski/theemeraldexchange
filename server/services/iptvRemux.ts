@@ -186,7 +186,15 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult {
     '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
     '-fflags', '+discardcorrupt+genpts',
     '-i', opts.upstreamUrl,
-    '-c', 'copy',
+    // Video is copied losslessly. Audio is RE-ENCODED to AAC-LC even though the
+    // provider already sends AAC: the provider's profile is HE-AAC (AAC+SBR),
+    // whose SBR decoder delay AVPlayer doesn't compensate, so on iOS/tvOS the
+    // audio lands a hair behind the video (lip-sync). The container PTS are
+    // otherwise aligned (measured ~0.6 ms A/V), so transcoding to plain AAC-LC
+    // stereo — not retiming — removes the offset. One stereo AAC-LC encode is a
+    // few % of a core, so it doesn't threaten the Plex box; video stays a copy.
+    '-c:v', 'copy',
+    '-c:a', 'aac', '-ac', '2', '-b:a', '160k',
     '-f', 'hls',
     // 2 s segments (matching the VOD transcode path): a player buffers ~3
     // segments before showing a frame, so 4 s segments meant ~12 s of "stuck

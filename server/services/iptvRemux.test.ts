@@ -55,13 +55,19 @@ describe('iptv remux session', () => {
     fs.rmSync(remuxTmpDir, { recursive: true, force: true })
   })
 
-  it('starts ffmpeg with copy codec + hls sliding-window flags', () => {
+  it('copies video, re-encodes audio to AAC-LC, + hls sliding-window flags', () => {
     const s = startRemuxSession({ streamId: '10', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })
 
     expect(spawnMock).toHaveBeenCalledWith('ffmpeg', expect.any(Array), expect.objectContaining({ cwd: s.dir }))
     const args = spawnMock.mock.calls[0][1] as string[]
-    expect(args).toContain('-c')
+    // Video copied losslessly; audio re-encoded HE-AAC(SBR) -> AAC-LC stereo so
+    // AVPlayer doesn't play it a hair behind the video (SBR decoder delay).
+    expect(args).toContain('-c:v')
     expect(args).toContain('copy')
+    expect(args).toContain('-c:a')
+    expect(args).toContain('aac')
+    expect(args).toContain('-ac')
+    expect(args).toContain('2')
     expect(args).toContain('-f')
     expect(args).toContain('hls')
     expect(args).toContain('-hls_time')
