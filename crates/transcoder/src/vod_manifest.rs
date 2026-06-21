@@ -42,11 +42,14 @@ pub(crate) fn synthesize(total_duration_secs: f64, start_secs: u64, fmp4: bool) 
     if !total_duration_secs.is_finite() || total_duration_secs <= 0.0 {
         return None;
     }
-    let remaining = total_duration_secs - start_secs as f64;
-    if remaining <= 0.0 {
-        return None;
-    }
-    let count = (remaining / seg).ceil() as u64;
+    // FULL [0, total] timeline, numbered by ABSOLUTE index. The transcode is
+    // still `-ss`-seeked (to a grid-quantized start) and writes its first segment
+    // at absolute index ⌊start/seg⌋ via `-start_number`, but the playlist always
+    // declares the WHOLE title so AVPlayer's native VOD scrubber reports the true
+    // position and full duration (not 0:00 / remaining). `#EXT-X-START` positions
+    // playback at the resume point; the segments before it are produced on demand
+    // when the viewer scrubs back (see on-demand backfill in session_segment).
+    let count = (total_duration_secs / seg).ceil() as u64;
     if count == 0 {
         return None;
     }
@@ -55,12 +58,19 @@ pub(crate) fn synthesize(total_duration_secs: f64, start_secs: u64, fmp4: bool) 
     // fMP4 needs `#EXT-X-MAP`, which requires HLS v7; plain TS rides v3.
     let version = if fmp4 { 7 } else { 3 };
 
-    let mut m = String::with_capacity(96 + count as usize * 28);
+    let mut m = String::with_capacity(112 + count as usize * 28);
     m.push_str("#EXTM3U\n");
     m.push_str(&format!("#EXT-X-VERSION:{version}\n"));
     m.push_str(&format!("#EXT-X-TARGETDURATION:{HLS_SEGMENT_SECS}\n"));
     m.push_str("#EXT-X-MEDIA-SEQUENCE:0\n");
     m.push_str("#EXT-X-PLAYLIST-TYPE:VOD\n");
+    // Resume point. Omitted at 0 so a fresh start keeps the proven manifest
+    // byte-for-byte. Clamped just inside the timeline so a near-end offset stays
+    // a legal TIME-OFFSET.
+    if start_secs > 0 {
+        let off = (start_secs as f64).min((total_duration_secs - 0.001).max(0.0));
+        m.push_str(&format!("#EXT-X-START:TIME-OFFSET={off:.6}\n"));
+    }
     if fmp4 {
         m.push_str("#EXT-X-MAP:URI=\"init.mp4\"\n");
     }
@@ -68,9 +78,9 @@ pub(crate) fn synthesize(total_duration_secs: f64, start_secs: u64, fmp4: bool) 
         // Every segment is HLS_SEGMENT_SECS long except the last, which carries
         // the remainder. The encoder's forced keyframes anchor each cut to an
         // absolute multiple of HLS_SEGMENT_SECS, so on-disk segments line up
-        // with this list one-for-one.
+        // with this absolute-indexed list one-for-one.
         let dur = if i + 1 == count {
-            remaining - seg * (count - 1) as f64
+            total_duration_secs - seg * (count - 1) as f64
         } else {
             seg
         };
@@ -211,9 +221,13 @@ mod tests {
     }
 
     #[test]
-    fn start_at_or_past_end_yields_none() {
-        assert!(synthesize(100.0, 100, false).is_none());
-        assert!(synthesize(100.0, 200, false).is_none());
+    fn start_at_or_past_end_still_lists_full_timeline_with_clamped_offset() {
+        // A degenerate offset >= duration shouldn't happen (a completed title
+        // resumes at 0), but if it does we still serve the full timeline with a
+        // legal (clamped, just-inside) TIME-OFFSET rather than a dead manifest.
+        let m = synthesize(100.0, 200, false).unwrap();
+        assert_eq!(m.matches("#EXTINF:").count(), 50); // 100 / 2
+        assert!(m.contains("#EXT-X-START:TIME-OFFSET=99.999000\n"), "{m}");
     }
 
     #[test]
@@ -248,12 +262,24 @@ mod tests {
     }
 
     #[test]
-    fn resume_offset_shortens_the_timeline() {
-        // duration 20s, resume at 10s -> 10s remaining -> 5 segments from 0.
+    fn resume_keeps_full_timeline_and_sets_ext_x_start() {
+        // duration 20s, resume at 10s. The playlist still declares the WHOLE
+        // title (20 / 2 = 10 absolute segments seg_00000..seg_00009) so the
+        // native scrubber shows 0:10 / 0:20, with EXT-X-START at the resume point.
         let m = synthesize(20.0, 10, false).unwrap();
-        assert_eq!(m.matches("#EXTINF:").count(), 5);
+        assert_eq!(m.matches("#EXTINF:").count(), 10);
         assert!(m.contains("seg_00000.ts\n"));
-        assert!(!m.contains("seg_00005"));
+        assert!(m.contains("seg_00009.ts\n"));
+        assert!(!m.contains("seg_00010"));
+        assert!(m.contains("#EXT-X-START:TIME-OFFSET=10.000000\n"), "{m}");
+    }
+
+    #[test]
+    fn fresh_start_omits_ext_x_start() {
+        // A from-zero session keeps the proven manifest: no EXT-X-START line.
+        let m = synthesize(20.0, 0, false).unwrap();
+        assert!(!m.contains("#EXT-X-START"), "{m}");
+        assert_eq!(m.matches("#EXTINF:").count(), 10);
     }
 
     #[test]
