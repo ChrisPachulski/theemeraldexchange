@@ -520,7 +520,10 @@ mod tests {
             suffix.push(tail);
         }
         for d in &suffix {
-            assert!(m.contains(&format!("#EXTINF:{d:.6},\n")), "missing suffix {d}\n{m}");
+            assert!(
+                m.contains(&format!("#EXTINF:{d:.6},\n")),
+                "missing suffix {d}\n{m}"
+            );
         }
 
         // Full count = prefix (start_idx) + suffix, contiguous seg_ numbering.
@@ -528,7 +531,10 @@ mod tests {
         assert_eq!(m.matches("#EXTINF:").count(), total_segs, "{m}");
         assert_eq!(m.matches("seg_").count(), total_segs, "{m}");
         for i in 0..total_segs {
-            assert!(m.contains(&format!("seg_{i:05}.m4s\n")), "missing seg {i}\n{m}");
+            assert!(
+                m.contains(&format!("seg_{i:05}.m4s\n")),
+                "missing seg {i}\n{m}"
+            );
         }
         assert!(!m.contains(&format!("seg_{total_segs:05}")), "{m}");
 
