@@ -85,7 +85,7 @@ export function getActiveLiveRemuxEntry(streamId: string, sub: string): LiveRemu
 /** Drop the index entry AND stop the underlying remux session. */
 export function forgetLiveRemuxEntry(streamId: string, sub: string, sessionId: string): void {
   liveRemuxIndex.delete(remuxKey(streamId, sub))
-  stopRemuxSession(sessionId)
+  stopRemuxSession(sessionId, 'forget')
 }
 
 /**
@@ -106,7 +106,7 @@ export function dropOtherLiveRemuxSessions(sub: string, keepStreamId: string): s
   for (const [key, entry] of liveRemuxIndex) {
     if (entry.sub === sub && entry.streamId !== keepStreamId) {
       liveRemuxIndex.delete(key)
-      stopRemuxSession(entry.sessionId)
+      stopRemuxSession(entry.sessionId, 'drop-other')
       stopped.push(entry.streamId)
     }
   }
