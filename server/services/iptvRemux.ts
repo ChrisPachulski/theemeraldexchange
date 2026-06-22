@@ -116,10 +116,17 @@ export function heartbeatRemuxSession(sessionId: string): void {
   if (s) s.lastSeen = Date.now()
 }
 
-export function stopRemuxSession(sessionId: string): void {
+export function stopRemuxSession(sessionId: string, reason = 'manual'): void {
   const s = sessions.get(sessionId)
   if (!s) return
   sessions.delete(sessionId)
+  // Diagnostic: record WHY a live session was torn down and how long it ran /
+  // how long since it was last polled. A mid-watch stop (small sinceSeenMs while
+  // a viewer is active) is the signature of the "plays then stalls" report.
+  const now = Date.now()
+  console.log(
+    `[iptv-remux ${sessionId}] stop reason=${reason} ageMs=${now - s.startedAt} sinceSeenMs=${now - s.lastSeen}`,
+  )
   try {
     s.proc.kill('SIGTERM')
   } catch {
@@ -133,7 +140,12 @@ export function stopRemuxSession(sessionId: string): void {
     }
   }, 5_000)
   killTimer.unref?.()
-  removeDir(s.dir)
+  // Do NOT removeDir here. ffmpeg is still alive for a beat after SIGTERM and
+  // keeps writing its current segment + renaming index.m3u8.tmp; deleting the
+  // dir out from under it makes that write fail ("No such file or directory")
+  // and ffmpeg aborts with code 255 — truncating the stream mid-segment, which
+  // a viewer sees as a hard stall. The proc 'exit' handler removes the dir once
+  // ffmpeg has actually exited, so cleanup still happens, just without the race.
 }
 
 /**
@@ -149,7 +161,7 @@ export function stopRemuxSession(sessionId: string): void {
 export async function drainRemuxSessions(graceMs = 5_000): Promise<void> {
   const ids = [...sessions.keys()]
   if (ids.length === 0) return
-  for (const id of ids) stopRemuxSession(id)
+  for (const id of ids) stopRemuxSession(id, 'drain')
   const deadline = Date.now() + graceMs
   while (sessions.size > 0 && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 50))
@@ -159,7 +171,7 @@ export async function drainRemuxSessions(graceMs = 5_000): Promise<void> {
 function sweepIdleSessions(): void {
   const now = Date.now()
   for (const s of sessions.values()) {
-    if (now - s.lastSeen > IDLE_MS) stopRemuxSession(s.sessionId)
+    if (now - s.lastSeen > IDLE_MS) stopRemuxSession(s.sessionId, 'idle-sweep')
   }
 }
 
