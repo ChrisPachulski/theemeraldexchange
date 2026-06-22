@@ -17,6 +17,14 @@ export type LiveRemuxEntry = {
   manifestPath: string
   streamId: string
   sub: string
+  // segFile -> the fully-tokenised /remux/seg URL minted the FIRST time that
+  // segment appeared in the manifest. Reused on every later poll so a given
+  // segment's URL is byte-identical across playlist reloads (HLS / RFC 8216
+  // §6.3.4: a Media Segment's URI must not change for the same Media Sequence
+  // Number, or AVPlayer rejects the reloaded live playlist with
+  // "-12312 Media Entry URL not match previous playlist" and stalls forever).
+  // Self-pruned to the live window by rewriteRemuxManifest.
+  segUrlCache: Map<string, string>
 }
 
 const liveRemuxIndex = new Map<string, LiveRemuxEntry>()
@@ -63,6 +71,7 @@ export function ensureLiveRemuxEntry(opts: {
       manifestPath: session.manifestPath,
       streamId: opts.streamId,
       sub: opts.sub,
+      segUrlCache: new Map(),
     }
     liveRemuxIndex.set(key, entry)
   }
@@ -85,7 +94,7 @@ export function getActiveLiveRemuxEntry(streamId: string, sub: string): LiveRemu
 /** Drop the index entry AND stop the underlying remux session. */
 export function forgetLiveRemuxEntry(streamId: string, sub: string, sessionId: string): void {
   liveRemuxIndex.delete(remuxKey(streamId, sub))
-  stopRemuxSession(sessionId)
+  stopRemuxSession(sessionId, 'forget')
 }
 
 /**
@@ -106,7 +115,7 @@ export function dropOtherLiveRemuxSessions(sub: string, keepStreamId: string): s
   for (const [key, entry] of liveRemuxIndex) {
     if (entry.sub === sub && entry.streamId !== keepStreamId) {
       liveRemuxIndex.delete(key)
-      stopRemuxSession(entry.sessionId)
+      stopRemuxSession(entry.sessionId, 'drop-other')
       stopped.push(entry.streamId)
     }
   }
@@ -121,9 +130,14 @@ export function rewriteRemuxManifest(
   streamId: string,
   sessionId: string,
   sub: string,
+  // Per-session segFile -> tokenised URL cache. Pass the session's
+  // entry.segUrlCache so a segment keeps one stable URL across polls. Omitted
+  // by unit tests (whose signStreamToken mock is already deterministic).
+  segUrlCache?: Map<string, string>,
 ): string {
   let seenSegment = false
   const out: string[] = []
+  const present = new Set<string>()
   for (const line of text.split(/\r?\n/)) {
     // A `#EXT-X-DISCONTINUITY` before the FIRST segment is meaningless — the tag
     // describes a change BETWEEN two segments, and there is nothing before the
@@ -146,13 +160,29 @@ export function rewriteRemuxManifest(
       continue
     }
     seenSegment = true
-    const token = signStreamToken(env.streamTokenSecret, {
-      kind: 'remux',
-      resourceId: `${sessionId}/${segFile}`,
-      sub,
-      ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
-    })
-    out.push(`/api/iptv/stream/live/${streamId}/remux/seg?t=${encodeURIComponent(token)}`)
+    present.add(segFile)
+    // Reuse the URL minted on this segment's first appearance so it stays
+    // byte-identical across reloads (see segUrlCache doc on LiveRemuxEntry).
+    let url = segUrlCache?.get(segFile)
+    if (!url) {
+      const token = signStreamToken(env.streamTokenSecret, {
+        kind: 'remux',
+        resourceId: `${sessionId}/${segFile}`,
+        sub,
+        ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
+      })
+      url = `/api/iptv/stream/live/${streamId}/remux/seg?t=${encodeURIComponent(token)}`
+      segUrlCache?.set(segFile, url)
+    }
+    out.push(url)
+  }
+  // Drop cache entries for segments that have rolled off the sliding window so
+  // the map stays bounded to the live set (≤ hls_list_size), not the whole
+  // session history.
+  if (segUrlCache) {
+    for (const key of segUrlCache.keys()) {
+      if (!present.has(key)) segUrlCache.delete(key)
+    }
   }
   return out.join('\n')
 }

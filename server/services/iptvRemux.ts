@@ -51,13 +51,19 @@ export interface StartRemuxResult {
   manifestPath: string
 }
 
-// AVPlayer reloads a live HLS playlist roughly every target-duration (~2s) and
-// fetches segments faster still, so a session that hasn't been polled for 15s is
-// a torn-down/backgrounded player, not a slow one. Reaping at 15s (was 30s)
-// halves how long a closed-app ghost keeps holding its upstream provider
-// connection — the channel-switch case is handled eagerly by
-// dropOtherLiveRemuxSessions; this is the backstop for an outright app close.
-const IDLE_MS = 15_000
+// A live HLS player does NOT poll continuously. AVPlayer buffers a chunk of the
+// sliding window (up to ~48s here: hls_list_size 24 × hls_time 2) and then goes
+// SILENT while it drains that buffer — measured fetch gaps of ~17s on tvOS. The
+// old 15s reap mistook that buffered silence for a closed app and SIGKILLed the
+// ffmpeg of an actively-watched channel mid-stream: the player drains its buffer,
+// comes back for the next segment, finds the session gone, and stalls forever
+// (confirmed in prod: `stop reason=idle-sweep sinceSeenMs=16808` on a live view).
+// The idle reap is only the backstop for an outright app-close that skipped the
+// client's session DELETE; channel switches are freed eagerly by
+// dropOtherLiveRemuxSessions. So the timeout must sit safely ABOVE the buffer-
+// drain gap (well past the 48s window). A ghost lingering this long is fine;
+// reaping a live viewer is not.
+const IDLE_MS = 90_000
 const sessions = new Map<string, RemuxSession>()
 
 // Only http(s) upstreams are valid IPTV inputs. Reject anything else
@@ -116,10 +122,17 @@ export function heartbeatRemuxSession(sessionId: string): void {
   if (s) s.lastSeen = Date.now()
 }
 
-export function stopRemuxSession(sessionId: string): void {
+export function stopRemuxSession(sessionId: string, reason = 'manual'): void {
   const s = sessions.get(sessionId)
   if (!s) return
   sessions.delete(sessionId)
+  // Diagnostic: record WHY a live session was torn down and how long it ran /
+  // how long since it was last polled. A mid-watch stop (small sinceSeenMs while
+  // a viewer is active) is the signature of the "plays then stalls" report.
+  const now = Date.now()
+  console.log(
+    `[iptv-remux ${sessionId}] stop reason=${reason} ageMs=${now - s.startedAt} sinceSeenMs=${now - s.lastSeen}`,
+  )
   try {
     s.proc.kill('SIGTERM')
   } catch {
@@ -133,7 +146,12 @@ export function stopRemuxSession(sessionId: string): void {
     }
   }, 5_000)
   killTimer.unref?.()
-  removeDir(s.dir)
+  // Do NOT removeDir here. ffmpeg is still alive for a beat after SIGTERM and
+  // keeps writing its current segment + renaming index.m3u8.tmp; deleting the
+  // dir out from under it makes that write fail ("No such file or directory")
+  // and ffmpeg aborts with code 255 — truncating the stream mid-segment, which
+  // a viewer sees as a hard stall. The proc 'exit' handler removes the dir once
+  // ffmpeg has actually exited, so cleanup still happens, just without the race.
 }
 
 /**
@@ -149,7 +167,7 @@ export function stopRemuxSession(sessionId: string): void {
 export async function drainRemuxSessions(graceMs = 5_000): Promise<void> {
   const ids = [...sessions.keys()]
   if (ids.length === 0) return
-  for (const id of ids) stopRemuxSession(id)
+  for (const id of ids) stopRemuxSession(id, 'drain')
   const deadline = Date.now() + graceMs
   while (sessions.size > 0 && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 50))
@@ -159,7 +177,7 @@ export async function drainRemuxSessions(graceMs = 5_000): Promise<void> {
 function sweepIdleSessions(): void {
   const now = Date.now()
   for (const s of sessions.values()) {
-    if (now - s.lastSeen > IDLE_MS) stopRemuxSession(s.sessionId)
+    if (now - s.lastSeen > IDLE_MS) stopRemuxSession(s.sessionId, 'idle-sweep')
   }
 }
 
@@ -170,6 +188,30 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult {
   // Defense in depth: refuse non-http(s) inputs before any side effects
   // (temp dir creation, ffmpeg spawn).
   assertHttpUpstream(opts.upstreamUrl)
+
+  // HARD SAFETY: never hold more than IPTV_MAX_UPSTREAM_CONNECTIONS live upstream
+  // connections to the provider at once. This is the single choke point where an
+  // upstream connection is opened, so the cap cannot be bypassed by any caller
+  // (grant, a direct manifest poll, a test probe, or a future bug). The provider
+  // trips an abuse block on too many simultaneous connections and then feeds
+  // CORRUPT, undecodable video to everyone until it cools down — so we bound the
+  // count here rather than trust every caller to behave. At the cap, evict the
+  // least-recently-seen session (a channel-switch ghost or an abandoned viewer)
+  // to free a slot, so a fresh tune always succeeds while the connection count
+  // stays bounded no matter how many requests pile in.
+  const cap = env.IPTV_MAX_UPSTREAM_CONNECTIONS
+  while (cap > 0 && sessions.size >= cap) {
+    let lru: RemuxSession | undefined
+    for (const s of sessions.values()) {
+      if (!lru || s.lastSeen < lru.lastSeen) lru = s
+    }
+    if (!lru) break
+    console.warn(
+      `[iptv-remux] upstream cap ${cap} reached — evicting LRU ${lru.sessionId} ` +
+        `(idle ${Date.now() - lru.lastSeen}ms) to free a provider connection`,
+    )
+    stopRemuxSession(lru.sessionId, 'upstream-cap')
+  }
 
   const sessionId = `remux:${opts.streamId}:${safeIdPart(opts.sub)}:${Date.now()}`
   const dir = path.join(env.IPTV_REMUX_TMP_DIR, sessionId.replace(/[:/]/g, '_'))
