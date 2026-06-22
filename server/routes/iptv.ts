@@ -878,6 +878,7 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
     streamId,
     entry.sessionId,
     v.sub,
+    entry.segUrlCache,
   )
   return new Response(rewritten, {
     status: 200,

@@ -14,6 +14,9 @@ vi.mock('../env.js', () => ({
     IPTV_REMUX_TMP_DIR: remuxTmpDir,
     XTREAM_USERNAME: 'testuser',
     XTREAM_PASSWORD: 'secret123',
+    // High by default so existing tests never trip the cap; the cap test lowers
+    // it temporarily.
+    IPTV_MAX_UPSTREAM_CONNECTIONS: 10,
   },
 }))
 
@@ -25,6 +28,7 @@ import {
   drainRemuxSessions,
   scrubXtreamCreds,
 } from './iptvRemux.js'
+import { env } from '../env.js'
 
 type FakeProcess = EventEmitter & {
   stdout: EventEmitter
@@ -124,6 +128,27 @@ describe('iptv remux session', () => {
 
     for (const p of procs) expect(p.kill).toHaveBeenCalledWith('SIGTERM')
     expect(listRemuxSessions()).toHaveLength(0)
+  })
+
+  it('caps simultaneous upstream connections, evicting the least-recently-seen', () => {
+    const prev = env.IPTV_MAX_UPSTREAM_CONNECTIONS
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    ;(env as { IPTV_MAX_UPSTREAM_CONNECTIONS: number }).IPTV_MAX_UPSTREAM_CONNECTIONS = 2
+    try {
+      const a = startRemuxSession({ streamId: '40', sub: 'plex:a', upstreamUrl: 'https://x/a.ts' })
+      const b = startRemuxSession({ streamId: '41', sub: 'plex:b', upstreamUrl: 'https://x/b.ts' })
+      heartbeatRemuxSession(b.sessionId) // keep b fresher than a so a is the LRU
+      // Third tune is at the cap → the oldest (a) is evicted, never exceeding 2.
+      const c = startRemuxSession({ streamId: '42', sub: 'plex:c', upstreamUrl: 'https://x/c.ts' })
+      const ids = listRemuxSessions().map((s) => s.sessionId)
+      expect(ids).toHaveLength(2)
+      expect(ids).not.toContain(a.sessionId)
+      expect(ids).toContain(b.sessionId)
+      expect(ids).toContain(c.sessionId)
+    } finally {
+      ;(env as { IPTV_MAX_UPSTREAM_CONNECTIONS: number }).IPTV_MAX_UPSTREAM_CONNECTIONS = prev
+      warn.mockRestore()
+    }
   })
 
   it('drainRemuxSessions is a no-op with no active sessions', async () => {
