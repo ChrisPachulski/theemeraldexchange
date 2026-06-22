@@ -189,6 +189,30 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult {
   // (temp dir creation, ffmpeg spawn).
   assertHttpUpstream(opts.upstreamUrl)
 
+  // HARD SAFETY: never hold more than IPTV_MAX_UPSTREAM_CONNECTIONS live upstream
+  // connections to the provider at once. This is the single choke point where an
+  // upstream connection is opened, so the cap cannot be bypassed by any caller
+  // (grant, a direct manifest poll, a test probe, or a future bug). The provider
+  // trips an abuse block on too many simultaneous connections and then feeds
+  // CORRUPT, undecodable video to everyone until it cools down — so we bound the
+  // count here rather than trust every caller to behave. At the cap, evict the
+  // least-recently-seen session (a channel-switch ghost or an abandoned viewer)
+  // to free a slot, so a fresh tune always succeeds while the connection count
+  // stays bounded no matter how many requests pile in.
+  const cap = env.IPTV_MAX_UPSTREAM_CONNECTIONS
+  while (cap > 0 && sessions.size >= cap) {
+    let lru: RemuxSession | undefined
+    for (const s of sessions.values()) {
+      if (!lru || s.lastSeen < lru.lastSeen) lru = s
+    }
+    if (!lru) break
+    console.warn(
+      `[iptv-remux] upstream cap ${cap} reached — evicting LRU ${lru.sessionId} ` +
+        `(idle ${Date.now() - lru.lastSeen}ms) to free a provider connection`,
+    )
+    stopRemuxSession(lru.sessionId, 'upstream-cap')
+  }
+
   const sessionId = `remux:${opts.streamId}:${safeIdPart(opts.sub)}:${Date.now()}`
   const dir = path.join(env.IPTV_REMUX_TMP_DIR, sessionId.replace(/[:/]/g, '_'))
   fs.mkdirSync(dir, { recursive: true })
