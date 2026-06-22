@@ -51,13 +51,19 @@ export interface StartRemuxResult {
   manifestPath: string
 }
 
-// AVPlayer reloads a live HLS playlist roughly every target-duration (~2s) and
-// fetches segments faster still, so a session that hasn't been polled for 15s is
-// a torn-down/backgrounded player, not a slow one. Reaping at 15s (was 30s)
-// halves how long a closed-app ghost keeps holding its upstream provider
-// connection — the channel-switch case is handled eagerly by
-// dropOtherLiveRemuxSessions; this is the backstop for an outright app close.
-const IDLE_MS = 15_000
+// A live HLS player does NOT poll continuously. AVPlayer buffers a chunk of the
+// sliding window (up to ~48s here: hls_list_size 24 × hls_time 2) and then goes
+// SILENT while it drains that buffer — measured fetch gaps of ~17s on tvOS. The
+// old 15s reap mistook that buffered silence for a closed app and SIGKILLed the
+// ffmpeg of an actively-watched channel mid-stream: the player drains its buffer,
+// comes back for the next segment, finds the session gone, and stalls forever
+// (confirmed in prod: `stop reason=idle-sweep sinceSeenMs=16808` on a live view).
+// The idle reap is only the backstop for an outright app-close that skipped the
+// client's session DELETE; channel switches are freed eagerly by
+// dropOtherLiveRemuxSessions. So the timeout must sit safely ABOVE the buffer-
+// drain gap (well past the 48s window). A ghost lingering this long is fine;
+// reaping a live viewer is not.
+const IDLE_MS = 90_000
 const sessions = new Map<string, RemuxSession>()
 
 // Only http(s) upstreams are valid IPTV inputs. Reject anything else
