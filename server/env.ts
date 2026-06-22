@@ -603,6 +603,14 @@ export const env = {
   TOKEN_SWEEP_CRON: process.env.TOKEN_SWEEP_CRON ?? '15 3 * * *',
   IPTV_EPG_PATH: opt('IPTV_EPG_PATH') ?? '/xmltv.php',
   IPTV_MAX_CONCURRENT_STREAMS: positiveInt('IPTV_MAX_CONCURRENT_STREAMS', 4),
+  // HARD ceiling on simultaneous live-remux upstream connections to the IPTV
+  // provider. The provider plan allows only a few at once and trips an abuse
+  // block on excess or rapid churn — once tripped it serves CORRUPT, undecodable
+  // video to everyone until it cools down. Enforced inside startRemuxSession
+  // (the single point where an upstream connection opens), so NO caller path —
+  // grant, a direct manifest poll, a test probe, or a future bug — can exceed
+  // it. Set this to your provider's real max simultaneous connections; default 2.
+  IPTV_MAX_UPSTREAM_CONNECTIONS: positiveInt('IPTV_MAX_UPSTREAM_CONNECTIONS', 2),
   IPTV_STREAM_TOKEN_TTL_SECS: positiveInt('IPTV_STREAM_TOKEN_TTL_SECS', 300),
   // TTL for local-media playback stream tokens (routes/media.ts). Unlike IPTV's
   // short-lived per-request tokens, a movie token must outlast a whole sitting:
