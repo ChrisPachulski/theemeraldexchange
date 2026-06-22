@@ -19,8 +19,14 @@ const h = vi.hoisted(() => {
   return { state, start, stop }
 })
 
+// Non-deterministic by design: the real signer embeds a random jti + current
+// iat, so every call yields a DIFFERENT token even for the same resourceId.
+// The mock mirrors that with a monotonic nonce — only the segUrlCache can make
+// a segment's URL stable across polls (the -12312 invariant under test).
+const sign = vi.hoisted(() => ({ nonce: 0 }))
 vi.mock('./iptvStreamToken.js', () => ({
-  signStreamToken: (_secret: string, opts: { resourceId: string }) => `TOK(${opts.resourceId})`,
+  signStreamToken: (_secret: string, opts: { resourceId: string }) =>
+    `TOK(${opts.resourceId}#${++sign.nonce})`,
 }))
 vi.mock('./iptvRemux.js', () => ({
   listRemuxSessions: () => h.state.active,
@@ -68,9 +74,44 @@ describe('rewriteRemuxManifest', () => {
   it('drops the discontinuity that precedes the first segment', () => {
     const out = rewriteRemuxManifest(cold, '42', 'sess', 'subA')
     expect(out).not.toContain('#EXT-X-DISCONTINUITY')
-    expect(out).toContain('/api/iptv/stream/live/42/remux/seg?t=TOK(sess%2Fseg_00000.ts)')
-    expect(out).toContain('/api/iptv/stream/live/42/remux/seg?t=TOK(sess%2Fseg_00001.ts)')
+    expect(out).toContain('/api/iptv/stream/live/42/remux/seg?t=TOK(sess%2Fseg_00000.ts')
+    expect(out).toContain('/api/iptv/stream/live/42/remux/seg?t=TOK(sess%2Fseg_00001.ts')
     expect(out).toContain('#EXT-X-MEDIA-SEQUENCE:0')
+  })
+
+  // RFC 8216 §6.3.4: a Media Segment's URI must not change across playlist
+  // reloads, or AVPlayer rejects the live playlist with "-12312 Media Entry URL
+  // not match previous playlist" and stalls forever. Each manifest poll re-signs
+  // tokens (random jti + iat), so without the per-session cache a segment's URL
+  // rotates every ~2s reload. The cache pins it.
+  it('keeps each segment URL stable across polls via the segUrlCache', () => {
+    const cache = new Map<string, string>()
+    const poll1 = rewriteRemuxManifest(cold, '42', 'sess', 'subA', cache)
+    const poll2 = rewriteRemuxManifest(cold, '42', 'sess', 'subA', cache)
+    const urlOf = (m: string, seg: string) =>
+      m.split('\n').find((l) => l.includes(`%2F${seg}`))
+    expect(urlOf(poll1, 'seg_00000.ts')).toBe(urlOf(poll2, 'seg_00000.ts'))
+    expect(urlOf(poll1, 'seg_00001.ts')).toBe(urlOf(poll2, 'seg_00001.ts'))
+    // Sanity: WITHOUT a cache the same segment rotates (proves the mock is
+    // non-deterministic and the cache is what fixes it).
+    const noCacheA = rewriteRemuxManifest(cold, '42', 'sess', 'subA')
+    const noCacheB = rewriteRemuxManifest(cold, '42', 'sess', 'subA')
+    expect(urlOf(noCacheA, 'seg_00000.ts')).not.toBe(urlOf(noCacheB, 'seg_00000.ts'))
+  })
+
+  it('prunes cache entries for segments that have rolled off the window', () => {
+    const cache = new Map<string, string>()
+    rewriteRemuxManifest(
+      '#EXTINF:2.0,\nseg_00000.ts\n#EXTINF:2.0,\nseg_00001.ts\n',
+      '42', 'sess', 'subA', cache,
+    )
+    expect([...cache.keys()].sort()).toEqual(['seg_00000.ts', 'seg_00001.ts'])
+    // Window slides forward: 00000 rolls off, 00002 appears.
+    rewriteRemuxManifest(
+      '#EXTINF:2.0,\nseg_00001.ts\n#EXTINF:2.0,\nseg_00002.ts\n',
+      '42', 'sess', 'subA', cache,
+    )
+    expect([...cache.keys()].sort()).toEqual(['seg_00001.ts', 'seg_00002.ts'])
   })
 
   it('keeps a genuine mid-stream discontinuity (between two segments)', () => {
