@@ -9,6 +9,13 @@ import { TEST_ENV } from './vitest.env'
 export default defineConfig({
   test: {
     environment: 'node',
+    // Restore any vi.stubGlobal() after every test, unconditionally. Files that
+    // stub globals (fetch, etc.) already unstub in afterEach, but an async leak
+    // — a handler touching fetch after the per-file restore, or a throw before
+    // teardown — can let a stub escape into another file sharing the worker and
+    // surface as a spurious cross-file failure (e.g. a "socket hang up"/599 in an
+    // unrelated suite). This closes that class globally.
+    unstubGlobals: true,
     // Per-worker DB isolation (server.db / media.db / iptv.db). vitest runs test
     // files in parallel workers; files that don't set their own *_DB_PATH shared
     // ./data/*.db and raced the sqlite migrator (intermittent `UNIQUE constraint
