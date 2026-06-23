@@ -68,6 +68,30 @@ describe('radarrFetch', () => {
     expect(r.status).toBe(200)
     expect(await r.text()).toBe('[]')
   })
+
+  it('honors a custom timeout override — aborts at timeoutMs, not the 15s LAN default', async () => {
+    // Interactive search (GET /release) passes SEARCH_TIMEOUT_MS so a 20–60s
+    // indexer query is not killed at 15s. Prove the 4th arg drives the abort
+    // timer: a 50ms override aborts a hanging fetch → synthesized 504.
+    vi.useFakeTimers()
+    try {
+      mockFetch.mockImplementation(
+        (_url: string, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () =>
+              reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+            )
+          }),
+      )
+      const p = radarrFetch('/api/v3/release', { method: 'GET' }, undefined, 50)
+      await vi.advanceTimersByTimeAsync(60)
+      const r = await p
+      expect(r.status).toBe(504)
+      expect(((await r.json()) as { error?: string }).error).toBe('upstream_timeout')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('radarrRootFolders', () => {

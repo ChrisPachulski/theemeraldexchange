@@ -6,6 +6,7 @@ import { Hono } from 'hono'
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { rateLimit } from '../middleware/rateLimit.js'
 import { sonarrFetch, sonarrRootFolders } from '../services/sonarr.js'
+import { SEARCH_TIMEOUT_MS } from '../services/upstream.js'
 import {
   createGrabEventRecorder,
   createReservationLedger,
@@ -224,7 +225,7 @@ sonarr.get('/api/v3/release', requireAdmin, sonarrMutateLimit, async (c) => {
     query.set('seasonNumber', String(n))
   }
   const [releaseRes, counts] = await Promise.all([
-    sonarrFetch('/api/v3/release', { method: 'GET' }, query),
+    sonarrFetch('/api/v3/release', { method: 'GET' }, query, SEARCH_TIMEOUT_MS),
     seasonEpisodeCounts(seriesId),
   ])
   if (!releaseRes.ok) {
@@ -260,7 +261,7 @@ sonarr.post('/api/v3/release', requireAdmin, sonarrMutateLimit, async (c) => {
     capGb: env.maxTvGbPerEpisode,
     capBytesFor: (rel) => tvCapBytesFor(rel, counts),
     listReleases: async () => {
-      const res = await sonarrFetch('/api/v3/release', { method: 'GET' }, query)
+      const res = await sonarrFetch('/api/v3/release', { method: 'GET' }, query, SEARCH_TIMEOUT_MS)
       if (!res.ok) return null
       return (await res.json().catch(() => [])) as UpstreamRelease[]
     },

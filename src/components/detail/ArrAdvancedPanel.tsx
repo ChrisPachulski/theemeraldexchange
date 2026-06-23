@@ -626,7 +626,7 @@ function RenameSection({
 }
 
 // --- Manage episodes (TV only). -------------------------------------------
-function ManageEpisodesSection({
+export function ManageEpisodesSection({
   itemId,
   episodes,
   onToast,
@@ -639,6 +639,20 @@ function ManageEpisodesSection({
         .sort((a, b) => a.seasonNumber - b.seasonNumber || a.episodeNumber - b.episodeNumber),
     [episodes],
   )
+  // A series can have 100+ episodes across many seasons; show one season at a
+  // time behind a selector (same affordance as the interactive-search section)
+  // rather than a flat scroll that hides everything past the first season.
+  const seasonNumbers = useMemo(
+    () => [...new Set(sorted.map((e) => e.seasonNumber))].sort((a, b) => a - b),
+    [sorted],
+  )
+  const [season, setSeason] = useState<number | undefined>(undefined)
+  const activeSeason = season ?? seasonNumbers[0]
+  const visible = useMemo(
+    () => sorted.filter((e) => e.seasonNumber === activeSeason),
+    [sorted, activeSeason],
+  )
+  const seasonLabel = (n: number) => (n === 0 ? 'Specials' : `Season ${n}`)
 
   const monitor = useMutation({
     mutationFn: ({ ids, next }: { ids: number[]; next: boolean }) =>
@@ -667,9 +681,26 @@ function ManageEpisodesSection({
 
   return (
     <section className="arr-adv__section">
-      <h4 className="arr-adv__heading">Manage episodes</h4>
+      <div className="arr-adv__controls">
+        <h4 className="arr-adv__heading">Manage episodes</h4>
+        {seasonNumbers.length > 1 && (
+          <label className="arr-adv__control">
+            <span>Season</span>
+            <select
+              value={activeSeason ?? ''}
+              onChange={(e) => setSeason(Number(e.target.value))}
+            >
+              {seasonNumbers.map((n) => (
+                <option key={n} value={n}>
+                  {seasonLabel(n)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
       <ul className="arr-adv__episodes">
-        {sorted.map((ep) => (
+        {visible.map((ep) => (
           <li key={ep.id} className="arr-adv__episode">
             <label className="arr-adv__toggle">
               <input
