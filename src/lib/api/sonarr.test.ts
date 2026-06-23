@@ -121,6 +121,99 @@ describe('sonarr get() helper', () => {
   })
 })
 
+describe('sonarr advanced — request wiring (S1–S7)', () => {
+  it('S1 command() POSTs name+fields as JSON to /command', async () => {
+    fetchMock.mockResolvedValueOnce(jsonRes({ id: 1, name: 'RefreshSeries', status: 'queued' }))
+    await sonarr.command({ name: 'RefreshSeries', seriesId: 42 })
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/sonarr/api/v3/command')
+    expect(init.method).toBe('POST')
+    expect(init.credentials).toBe('include')
+    expect(JSON.parse(init.body as string)).toEqual({ name: 'RefreshSeries', seriesId: 42 })
+  })
+
+  it('S2 releases() GETs /release with seriesId + seasonNumber query', async () => {
+    fetchMock.mockResolvedValueOnce(jsonRes([]))
+    await sonarr.releases(7, 2)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/sonarr/api/v3/release')
+    expect(url).toContain('seriesId=7')
+    expect(url).toContain('seasonNumber=2')
+    expect(init.credentials).toBe('include')
+  })
+
+  it('S2 releases() omits seasonNumber from the query when not provided', async () => {
+    fetchMock.mockResolvedValueOnce(jsonRes([]))
+    await sonarr.releases(7)
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('seriesId=7')
+    expect(url).not.toContain('seasonNumber')
+  })
+
+  it('S3 grabRelease() POSTs the body with the seriesId query for the cap re-search', async () => {
+    fetchMock.mockResolvedValueOnce(jsonRes({ status: 'grabbed', title: 'X', sizeGb: 3 }))
+    await sonarr.grabRelease(7, { guid: 'g', indexerId: 9, allowOverCap: true }, 2)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/sonarr/api/v3/release')
+    expect(url).toContain('seriesId=7')
+    expect(url).toContain('seasonNumber=2')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body as string)).toEqual({ guid: 'g', indexerId: 9, allowOverCap: true })
+  })
+
+  it('S3 grabRelease() maps a 424 over-cap response to a typed ApiError', async () => {
+    fetchMock.mockResolvedValueOnce(jsonRes({ error: 'over_cap' }, { status: 424 }))
+    await expect(sonarr.grabRelease(7, { guid: 'g', indexerId: 9 })).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 424,
+      code: 'over_cap',
+    } satisfies Partial<ApiError>)
+  })
+
+  it('S4 renamePreview() GETs /rename with seriesId', async () => {
+    fetchMock.mockResolvedValueOnce(jsonRes([]))
+    await sonarr.renamePreview(7)
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/sonarr/api/v3/rename')
+    expect(url).toContain('seriesId=7')
+  })
+
+  it('S5 monitorEpisodes() PUTs the batch toggle to /episode/monitor', async () => {
+    fetchMock.mockResolvedValueOnce(jsonRes({ ok: true, updated: 2 }))
+    await sonarr.monitorEpisodes([10, 11], false)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/sonarr/api/v3/episode/monitor')
+    expect(init.method).toBe('PUT')
+    expect(JSON.parse(init.body as string)).toEqual({ episodeIds: [10, 11], monitored: false })
+  })
+
+  it('S6 history() GETs /history/series with seriesId', async () => {
+    fetchMock.mockResolvedValueOnce(jsonRes([]))
+    await sonarr.history(7)
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/sonarr/api/v3/history/series')
+    expect(url).toContain('seriesId=7')
+  })
+
+  it('S7 editSeries() PUTs only the patch fields to /series/:id', async () => {
+    fetchMock.mockResolvedValueOnce(jsonRes({ id: 7 }))
+    await sonarr.editSeries(7, { monitored: false, qualityProfileId: 3 })
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/sonarr/api/v3/series/7')
+    expect(init.method).toBe('PUT')
+    expect(JSON.parse(init.body as string)).toEqual({ monitored: false, qualityProfileId: 3 })
+  })
+
+  it('S7 editSeries() maps a 403 admin-only response to a typed ApiError', async () => {
+    fetchMock.mockResolvedValueOnce(jsonRes({ error: 'forbidden', reason: 'admin_only' }, { status: 403 }))
+    await expect(sonarr.editSeries(7, { monitored: false })).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 403,
+      code: 'forbidden',
+    } satisfies Partial<ApiError>)
+  })
+})
+
 describe('seriesAvailability', () => {
   it('is playable when any episode file exists', () => {
     expect(seriesAvailability({ status: 'continuing', statistics: { episodeFileCount: 3 } })).toBe('playable')
