@@ -1,0 +1,328 @@
+/* Advanced power-user actions panel inside the detail modal. Uses the same
+   design tokens as DetailModal.css so it reads as part of the same surface. */
+
+.arr-adv {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.arr-adv__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+}
+
+.arr-adv__section {
+  border-top: 1px solid var(--border);
+  padding-top: var(--s-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.arr-adv__heading {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-subtle);
+}
+
+/* A heading that is itself a disclosure toggle. */
+.arr-adv__disclosure {
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.arr-adv__disclosure:hover {
+  color: var(--text);
+}
+
+.arr-adv__disclosure:focus-visible {
+  outline: 2px solid var(--emerald);
+  outline-offset: 2px;
+}
+
+/* Buttons — mirror .detail__btn--secondary at a smaller scale. */
+.arr-adv__btn {
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  padding: var(--s-2) var(--s-4);
+  border-radius: var(--r-pod);
+  cursor: pointer;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.arr-adv__btn:hover:not(:disabled) {
+  border-color: var(--text-subtle);
+}
+
+.arr-adv__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.arr-adv__btn:focus-visible {
+  outline: 2px solid var(--emerald);
+  outline-offset: 2px;
+}
+
+.arr-adv__btn--grab {
+  background: var(--emerald-bg);
+  border-color: var(--emerald);
+  flex: 0 0 auto;
+}
+
+.arr-adv__btn--small {
+  padding: var(--s-1) var(--s-3);
+}
+
+/* Toggles. */
+.arr-adv__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: var(--t-sm);
+  color: var(--text);
+  cursor: pointer;
+}
+
+/* Controls (selects, regex input). */
+.arr-adv__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.arr-adv__control {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: var(--t-sm);
+  color: var(--text-subtle);
+}
+
+.arr-adv__control--grow {
+  flex: 1 1 12rem;
+}
+
+.arr-adv__control select,
+.arr-adv__control input {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pod);
+  padding: var(--s-2) var(--s-3);
+  width: 100%;
+}
+
+/* Filter chips. */
+.arr-adv__chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.arr-adv__chip {
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  padding: var(--s-1) var(--s-3);
+  border-radius: var(--r-pod);
+  cursor: pointer;
+  color: var(--text-subtle);
+  background: transparent;
+  border: 1px solid var(--border);
+}
+
+.arr-adv__chip--on {
+  color: var(--text);
+  background: var(--emerald-bg);
+  border-color: var(--emerald);
+}
+
+.arr-adv__chip:focus-visible {
+  outline: 2px solid var(--emerald);
+  outline-offset: 2px;
+}
+
+/* Empty / loading / error states. */
+.arr-adv__state {
+  margin: 0;
+  font-size: var(--t-sm);
+  color: var(--text-subtle);
+}
+
+.arr-adv__state--error {
+  color: var(--danger);
+}
+
+/* Release browser. */
+.arr-adv__releases,
+.arr-adv__history,
+.arr-adv__rename,
+.arr-adv__episodes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  max-height: 18rem;
+  overflow-y: auto;
+}
+
+.arr-adv__release {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-3);
+  background: var(--surface-2);
+  border-radius: var(--r-pod);
+}
+
+.arr-adv__release-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.arr-adv__release-title {
+  color: var(--text);
+  font-size: var(--t-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arr-adv__release-meta {
+  color: var(--text-subtle);
+  font-size: var(--t-xs);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+
+.arr-adv__release-rej {
+  color: var(--danger);
+  font-size: var(--t-xs);
+}
+
+.arr-adv__badge {
+  font-size: var(--t-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tr-eyebrow);
+  padding: 0 var(--s-2);
+  border-radius: var(--r-pod);
+}
+
+.arr-adv__badge--over {
+  color: var(--danger);
+  border: 1px solid var(--danger);
+}
+
+/* Rename diff. */
+.arr-adv__rename-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: var(--t-xs);
+  color: var(--text-subtle);
+}
+
+.arr-adv__rename-new {
+  color: var(--text);
+}
+
+.arr-adv__rename-arrow {
+  color: var(--emerald);
+}
+
+/* Episodes. */
+.arr-adv__episode {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+
+/* History. */
+.arr-adv__history-row {
+  display: grid;
+  grid-template-columns: 7rem 1fr auto;
+  gap: var(--s-3);
+  align-items: baseline;
+  font-size: var(--t-sm);
+}
+
+.arr-adv__history-event {
+  color: var(--emerald);
+  font-size: var(--t-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tr-eyebrow);
+}
+
+.arr-adv__history-title {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arr-adv__history-date {
+  color: var(--text-subtle);
+  font-size: var(--t-xs);
+  text-align: right;
+}
+
+/* Edit form. */
+.arr-adv__edit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.arr-adv__edit .arr-adv__control {
+  display: flex;
+}
+
+.arr-adv__edit .arr-adv__control span {
+  flex: 0 0 4rem;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
