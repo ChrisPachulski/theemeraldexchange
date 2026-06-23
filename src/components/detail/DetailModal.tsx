@@ -82,6 +82,11 @@ type Props = {
   canRemove: boolean
   /** Triggered when the user clicks 'Add to library'. */
   onAdd?: () => void
+  /** Admin-only discover-time action: add the title transiently (monitored,
+   *  auto-grab off) and drop into the interactive release browser. When
+   *  provided alongside a not-in-library item, the footer gains a primary
+   *  "Find release" button next to Add. */
+  onFindRelease?: () => void
   /** Triggered when the user clicks 'Remove from library'. */
   onRemove?: () => void
   /** TV-only: per-season rows for the library view. */
@@ -117,6 +122,11 @@ type Props = {
    *  manages the open/closed reveal so the panel doesn't crowd the default
    *  view. Pass undefined for non-admins / out-of-library items to hide it. */
   advanced?: ReactNode
+  /** Force the Advanced surface open without a footer-toggle click. The
+   *  discover-time Find-release flow sets it so the auto-added item drops
+   *  straight into the release browser. Only forces open on the rising edge;
+   *  the user can still hide it afterward. */
+  autoShowAdvanced?: boolean
 }
 
 export function DetailModal({
@@ -137,6 +147,7 @@ export function DetailModal({
   inLibrary,
   canRemove,
   onAdd,
+  onFindRelease,
   onRemove,
   seasons,
   onAddSeason,
@@ -148,6 +159,7 @@ export function DetailModal({
   playDirectLabel,
   unavailableNote,
   advanced,
+  autoShowAdvanced,
 }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const closeBtnRef = useRef<HTMLButtonElement>(null)
@@ -157,11 +169,18 @@ export function DetailModal({
   // using the adjust-state-during-render pattern the rest of this codebase
   // uses for derived resets (see Toast.tsx) — an effect here trips the
   // set-state-in-effect lint and causes a needless cascading render.
-  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [showAdvanced, setShowAdvanced] = useState(autoShowAdvanced === true)
   const [wasOpen, setWasOpen] = useState(open)
   if (wasOpen !== open) {
     setWasOpen(open)
     if (!open && showAdvanced) setShowAdvanced(false)
+  }
+  // Force the panel open on autoShowAdvanced's rising edge (the Find-release
+  // flow), tracking the prior value so we don't override a later manual hide.
+  const [wasAutoShow, setWasAutoShow] = useState(autoShowAdvanced === true)
+  if (wasAutoShow !== (autoShowAdvanced === true)) {
+    setWasAutoShow(autoShowAdvanced === true)
+    if (autoShowAdvanced && !showAdvanced) setShowAdvanced(true)
   }
 
   // useDialogDismiss owns showModal()/close() + the deferred unmount so the
@@ -448,10 +467,20 @@ export function DetailModal({
               {showAdvanced ? 'Hide advanced' : 'Advanced'}
             </button>
           )}
-          {!inLibrary && onAdd && (
+          {!inLibrary && onFindRelease && (
             <button
               type="button"
               className="detail__btn detail__btn--primary"
+              onClick={onFindRelease}
+              title="Add this title and browse releases to grab one by hand"
+            >
+              Find release
+            </button>
+          )}
+          {!inLibrary && onAdd && (
+            <button
+              type="button"
+              className={`detail__btn ${onFindRelease ? 'detail__btn--secondary' : 'detail__btn--primary'}`}
               onClick={onAdd}
             >
               Add to library
