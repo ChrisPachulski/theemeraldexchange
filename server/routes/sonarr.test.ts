@@ -1563,6 +1563,25 @@ describe('sonarr advanced — S6 GET /api/v3/history/series', () => {
     expect(rows[1].quality).toBe('WEBDL-1080p')
     expect(rows[1].seasonNumber).toBeUndefined()
   })
+
+  it('sorts newest-first regardless of upstream order', async () => {
+    // Upstream rows deliberately oldest-first — the backend must reorder so
+    // the "newest-first" contract guarantee holds and the clients can render
+    // as-received without re-sorting.
+    stub('/api/v3/history/series', {
+      records: [
+        { date: '2026-06-01T00:00:00Z', eventType: 'grabbed', sourceTitle: 'old', quality: { quality: { name: 'WEBDL-1080p' } } },
+        { date: '2026-06-20T00:00:00Z', eventType: 'grabbed', sourceTitle: 'new', quality: { quality: { name: 'WEBDL-1080p' } } },
+        { date: '2026-06-10T00:00:00Z', eventType: 'grabbed', sourceTitle: 'mid', quality: { quality: { name: 'WEBDL-1080p' } } },
+      ],
+    })
+    const r = await appUnderTest().request('/api/v3/history/series?seriesId=5', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(200)
+    const rows = (await r.json()) as Array<{ sourceTitle: string }>
+    expect(rows.map((x) => x.sourceTitle)).toEqual(['new', 'mid', 'old'])
+  })
 })
 
 describe('sonarr advanced — S7 PUT /api/v3/series/:id (edit)', () => {

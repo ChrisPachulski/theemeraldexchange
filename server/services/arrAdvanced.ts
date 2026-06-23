@@ -225,22 +225,32 @@ type UpstreamHistoryRecord = {
 
 /** Sonarr/Radarr history is paged: `{ records: [...] }`. Radarr's
  *  /history/movie and Sonarr's /history/series both return a bare array.
- *  Accept either and project to the slim client shape, newest first
- *  preserved from upstream order (already newest-first). */
+ *  Accept either, project to the slim client shape, and sort newest-first by
+ *  date. We sort here rather than relying on the upstream default order so
+ *  the "newest-first" contract guarantee holds regardless of how the *arr
+ *  paged the records — both clients render as-received without re-sorting. */
 export function mapHistory(raw: unknown): HistoryRecord[] {
   const records: UpstreamHistoryRecord[] = Array.isArray(raw)
     ? (raw as UpstreamHistoryRecord[])
     : raw && typeof raw === 'object' && Array.isArray((raw as { records?: unknown }).records)
       ? ((raw as { records: UpstreamHistoryRecord[] }).records)
       : []
-  return records.map((r) => ({
-    date: typeof r.date === 'string' ? r.date : '',
-    eventType: typeof r.eventType === 'string' ? r.eventType : 'unknown',
-    sourceTitle: typeof r.sourceTitle === 'string' ? r.sourceTitle : '',
-    quality: r.quality?.quality?.name ?? 'Unknown',
-    ...(typeof r.seasonNumber === 'number' ? { seasonNumber: r.seasonNumber } : {}),
-    ...(typeof r.episodeId === 'number' ? { episodeId: r.episodeId } : {}),
-  }))
+  return records
+    .map((r) => ({
+      date: typeof r.date === 'string' ? r.date : '',
+      eventType: typeof r.eventType === 'string' ? r.eventType : 'unknown',
+      sourceTitle: typeof r.sourceTitle === 'string' ? r.sourceTitle : '',
+      quality: r.quality?.quality?.name ?? 'Unknown',
+      ...(typeof r.seasonNumber === 'number' ? { seasonNumber: r.seasonNumber } : {}),
+      ...(typeof r.episodeId === 'number' ? { episodeId: r.episodeId } : {}),
+    }))
+    .sort((a, b) => {
+      // Newest first. Missing/unparseable dates sort to the bottom so a bad
+      // row never jumps to the head of the list.
+      const ta = Date.parse(a.date)
+      const tb = Date.parse(b.date)
+      return (Number.isNaN(tb) ? -Infinity : tb) - (Number.isNaN(ta) ? -Infinity : ta)
+    })
 }
 
 // ---------------------------------------------------------------------------
