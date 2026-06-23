@@ -6,7 +6,46 @@ import type { ArrRelease, ArrHistoryRecord } from '../../lib/api/arrAdvanced'
 import { useConfirm } from '../confirm/useConfirm'
 import { useSonarrProfiles, useSonarrRootFolders } from '../../lib/hooks/useSonarrLibrary'
 import { useRadarrProfiles, useRadarrRootFolders } from '../../lib/hooks/useRadarrLibrary'
+import { useLimits } from '../../lib/hooks/useLimits'
 import './ArrAdvancedPanel.css'
+
+// --- Display helpers (humanized per the UX checklist). ---------------------
+function humanGb(sizeGb: number): string {
+  if (!Number.isFinite(sizeGb)) return '—'
+  if (sizeGb >= 1) return `${sizeGb.toFixed(sizeGb >= 10 ? 1 : 2)} GB`
+  return `${Math.round(sizeGb * 1000)} MB`
+}
+
+function humanAge(hours?: number): string {
+  if (hours == null || !Number.isFinite(hours)) return '—'
+  if (hours < 1) return '<1h'
+  if (hours < 48) return `${Math.round(hours)}h`
+  return `${Math.round(hours / 24)}d`
+}
+
+// Sort columns for the release browser. Default = seeders desc (torrent) or
+// quality weight desc — both surface the "best" release first, matching the
+// *arr convention the checklist cites.
+type SortKey = 'seeders' | 'quality' | 'size' | 'age'
+type SortState = { key: SortKey; dir: 'asc' | 'desc' }
+type ReleaseFilter = 'all' | 'season-pack' | 'not-season-pack' | 'english'
+
+// Persist the last sort + filter across modal opens (the checklist calls out
+// *arr's reset-every-time as a pain point). Module-scoped, per item-kind, so
+// it survives DetailModal unmount/remount within a session without a store.
+// Accessed via getView/setView functions so components never assign the
+// module variable directly (the react-hooks/immutability lint).
+type ReleaseView = { sort: SortState; filter: ReleaseFilter; regex: string }
+const releaseViews: Record<Kind, ReleaseView> = {
+  tv: { sort: { key: 'quality', dir: 'desc' }, filter: 'all', regex: '' },
+  movie: { sort: { key: 'seeders', dir: 'desc' }, filter: 'all', regex: '' },
+}
+function getView(kind: Kind): ReleaseView {
+  return releaseViews[kind]
+}
+function setView(kind: Kind, next: Partial<ReleaseView>): void {
+  releaseViews[kind] = { ...releaseViews[kind], ...next }
+}
 
 // Admin-only Advanced power-user actions for an in-library Sonarr series or
 // Radarr movie. One component drives both apps via a small adapter so the TV
@@ -72,12 +111,14 @@ export function ArrAdvancedPanel(props: Props) {
 
   return (
     <div className="arr-adv">
-      <div className="arr-adv__row">
+      {/* [Update] group — reversible, no confirm needed. */}
+      <div className="arr-adv__row" role="group" aria-label="Update">
         <button
           type="button"
           className="arr-adv__btn"
           onClick={refreshAndScan}
           disabled={command.isPending}
+          aria-busy={command.isPending}
         >
           Refresh &amp; scan
         </button>
@@ -86,6 +127,7 @@ export function ArrAdvancedPanel(props: Props) {
           className="arr-adv__btn"
           onClick={searchMonitored}
           disabled={command.isPending}
+          aria-busy={command.isPending}
         >
           Search monitored
         </button>
@@ -93,7 +135,7 @@ export function ArrAdvancedPanel(props: Props) {
 
       <MonitoringSection {...props} libraryKey={libraryKey} />
       <InteractiveSearchSection {...props} confirm={confirm} />
-      <RenameSection {...props} qc={qc} />
+      <RenameSection {...props} qc={qc} confirm={confirm} />
       {kind === 'tv' && <ManageEpisodesSection {...props} qc={qc} />}
       <HistorySection kind={kind} itemId={itemId} />
       <EditSection {...props} libraryKey={libraryKey} qc={qc} />
@@ -138,7 +180,11 @@ function MonitoringSection({
 }
 
 // --- Interactive search (release browser). ---------------------------------
-type ReleaseFilter = 'all' | 'season-pack' | 'not-season-pack' | 'english'
+// Semantic <table> with sortable header buttons, a VISIBLE rejection column
+// (the #1 documented *arr pain point — not hover-only), humanized size/age,
+// additive filter chips with an active count + Clear filters + result count,
+// persisted sort/filter across opens, skeleton rows while searching, and an
+// over-cap "Grab anyway" confirm that states the size-vs-cap specifics.
 
 function InteractiveSearchSection({
   kind,
@@ -149,27 +195,35 @@ function InteractiveSearchSection({
 }: Props & { confirm: ReturnType<typeof useConfirm> }) {
   const [open, setOpen] = useState(false)
   const [season, setSeason] = useState<number | undefined>(undefined)
-  const [filter, setFilter] = useState<ReleaseFilter>('all')
-  const [regex, setRegex] = useState('')
+  // Seed from the persisted view so a reopen keeps the admin's last sort/filter.
+  const [filter, setFilter] = useState<ReleaseFilter>(() => getView(kind).filter)
+  const [regex, setRegex] = useState(() => getView(kind).regex)
+  const [sort, setSort] = useState<SortState>(() => getView(kind).sort)
+  const limits = useLimits()
+  const capGb = kind === 'tv' ? (limits.data?.maxTvGbPerEpisode ?? 5) : (limits.data?.maxMovieGb ?? 10)
+  const capLabel = kind === 'tv' ? `${capGb} GB/episode` : `${capGb} GB`
 
-  // Distinct season numbers (TV) so the admin can scope the search. Sonarr's
-  // release search MUST be season-scoped to actually hit the indexer.
+  // Persist on every change so it survives the modal unmount/remount.
+  const setFilterP = (f: ReleaseFilter) => { setFilter(f); setView(kind, { filter: f }) }
+  const setRegexP = (r: string) => { setRegex(r); setView(kind, { regex: r }) }
+  const setSortP = (key: SortKey) =>
+    setSort((prev) => {
+      const next: SortState =
+        prev.key === key ? { key, dir: prev.dir === 'desc' ? 'asc' : 'desc' } : { key, dir: 'desc' }
+      setView(kind, { sort: next })
+      return next
+    })
+
   const seasonNumbers = useMemo(() => {
     if (kind !== 'tv' || !episodes) return []
-    return [...new Set(episodes.map((e) => e.seasonNumber).filter((n) => n > 0))].sort(
-      (a, b) => a - b,
-    )
+    return [...new Set(episodes.map((e) => e.seasonNumber).filter((n) => n > 0))].sort((a, b) => a - b)
   }, [kind, episodes])
-
-  // Default the TV season to the first available so the first search is scoped.
   const effectiveSeason = kind === 'tv' ? (season ?? seasonNumbers[0]) : undefined
 
   const releases = useQuery({
     queryKey: ['arr-releases', kind, itemId, effectiveSeason],
     queryFn: () =>
-      kind === 'tv'
-        ? sonarr.releases(itemId, effectiveSeason)
-        : radarr.releases(itemId),
+      kind === 'tv' ? sonarr.releases(itemId, effectiveSeason) : radarr.releases(itemId),
     enabled: open && (kind === 'movie' || effectiveSeason !== undefined),
     staleTime: 0,
     gcTime: 0,
@@ -184,39 +238,64 @@ function InteractiveSearchSection({
             { guid: r.guid, indexerId: r.indexerId, allowOverCap: r.allowOverCap },
             effectiveSeason,
           )
-        : radarr.grabRelease(itemId, {
-            guid: r.guid,
-            indexerId: r.indexerId,
-            allowOverCap: r.allowOverCap,
-          }),
-    onSuccess: (res) => onToast(`Grabbed ${res.title} (${res.sizeGb.toFixed(2)} GB)`),
+        : radarr.grabRelease(itemId, { guid: r.guid, indexerId: r.indexerId, allowOverCap: r.allowOverCap }),
+    onSuccess: (res) => onToast(`Grabbed ${res.title} (${humanGb(res.sizeGb)})`),
     onError: (e) => onToast(e instanceof Error ? e.message : String(e)),
   })
+  // Which row's Grab is in flight — so only that button shows the spinner.
+  const [grabbingGuid, setGrabbingGuid] = useState<string | null>(null)
+
+  const doGrab = (r: ArrRelease, allowOverCap: boolean) => {
+    setGrabbingGuid(`${r.indexerId}:${r.guid}`)
+    grab.mutate(
+      { ...r, allowOverCap },
+      { onSettled: () => setGrabbingGuid(null) },
+    )
+  }
 
   const onGrab = (r: ArrRelease) => {
     if (r.overCap) {
+      // State the specifics (checklist): actual size vs the cap, verb+noun CTA.
       confirm({
         title: 'Grab over-cap release?',
-        body: `${r.title} is ${r.sizeGb.toFixed(2)} GB, above the size cap. Grab it anyway?`,
+        body: `${r.title} is ${humanGb(r.sizeGb)}, over the ${capLabel} size limit. Grab it anyway?`,
         confirmLabel: 'Grab anyway',
         onConfirm: async () => {
-          await grab.mutateAsync({ ...r, allowOverCap: true })
+          await new Promise<void>((resolve) => {
+            setGrabbingGuid(`${r.indexerId}:${r.guid}`)
+            grab.mutate(
+              { ...r, allowOverCap: true },
+              { onSettled: () => { setGrabbingGuid(null); resolve() } },
+            )
+          })
         },
       })
       return
     }
-    grab.mutate(r)
+    doGrab(r, false)
   }
+
+  const regexValid = useMemo(() => {
+    if (!regex.trim()) return true
+    try { new RegExp(regex.trim(), 'i'); return true } catch { return false }
+  }, [regex])
 
   const filtered = useMemo(() => {
     const rows = releases.data ?? []
     let re: RegExp | null = null
     if (regex.trim()) {
-      try {
-        re = new RegExp(regex.trim(), 'i')
-      } catch {
-        re = null // invalid regex → ignore the filter rather than crash
-      }
+      try { re = new RegExp(regex.trim(), 'i') } catch { re = null }
+    }
+    const primary = (a: ArrRelease, b: ArrRelease): number => {
+      if (sort.key === 'seeders') return (a.seeders ?? -1) - (b.seeders ?? -1)
+      if (sort.key === 'quality') return a.qualityWeight - b.qualityWeight
+      if (sort.key === 'size') return a.size - b.size
+      return (a.ageHours ?? Infinity) - (b.ageHours ?? Infinity)
+    }
+    const cmp = (a: ArrRelease, b: ArrRelease): number => {
+      // Stable secondary key so equal primaries keep "best" first.
+      const d = primary(a, b) || a.qualityWeight - b.qualityWeight || a.size - b.size
+      return sort.dir === 'desc' ? -d : d
     }
     return rows
       .filter((r) => {
@@ -227,18 +306,33 @@ function InteractiveSearchSection({
       })
       .filter((r) => (re ? re.test(r.title) : true))
       .slice()
-      .sort((a, b) => b.qualityWeight - a.qualityWeight || b.size - a.size)
-  }, [releases.data, filter, regex])
+      .sort(cmp)
+  }, [releases.data, filter, regex, sort])
+
+  const total = releases.data?.length ?? 0
+  const activeFilters = (filter !== 'all' ? 1 : 0) + (regex.trim() ? 1 : 0)
+  const filterChips: ReadonlyArray<readonly [ReleaseFilter, string]> = [
+    ['all', 'All'],
+    ...(kind === 'tv'
+      ? ([['season-pack', 'Season Pack'], ['not-season-pack', 'Not Season Pack']] as const)
+      : []),
+    ['english', 'English'],
+  ]
+  const clearFilters = () => { setFilterP('all'); setRegexP('') }
+
+  const sortHeader = (key: SortKey, label: string, numeric = false) => (
+    <th scope="col" className={numeric ? 'arr-adv__th arr-adv__th--num' : 'arr-adv__th'} aria-sort={sort.key === key ? (sort.dir === 'desc' ? 'descending' : 'ascending') : 'none'}>
+      <button type="button" className="arr-adv__th-btn" onClick={() => setSortP(key)}>
+        {label}
+        {sort.key === key && <span aria-hidden="true">{sort.dir === 'desc' ? ' ↓' : ' ↑'}</span>}
+      </button>
+    </th>
+  )
 
   return (
     <section className="arr-adv__section">
       <h4 className="arr-adv__heading">
-        <button
-          type="button"
-          className="arr-adv__disclosure"
-          aria-expanded={open}
-          onClick={() => setOpen((v) => !v)}
-        >
+        <button type="button" className="arr-adv__disclosure" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
           Interactive search {open ? '▾' : '▸'}
         </button>
       </h4>
@@ -248,94 +342,186 @@ function InteractiveSearchSection({
             {kind === 'tv' && seasonNumbers.length > 0 && (
               <label className="arr-adv__control">
                 <span>Season</span>
-                <select
-                  value={effectiveSeason ?? ''}
-                  onChange={(e) => setSeason(Number(e.target.value))}
-                >
+                <select value={effectiveSeason ?? ''} onChange={(e) => setSeason(Number(e.target.value))}>
                   {seasonNumbers.map((n) => (
-                    <option key={n} value={n}>
-                      Season {n}
-                    </option>
+                    <option key={n} value={n}>Season {n}</option>
                   ))}
                 </select>
               </label>
             )}
             <div className="arr-adv__chips" role="group" aria-label="Release filters">
-              {(
-                [
-                  ['all', 'All'],
-                  ...(kind === 'tv'
-                    ? ([
-                        ['season-pack', 'Season Pack'],
-                        ['not-season-pack', 'Not Season Pack'],
-                      ] as const)
-                    : []),
-                  ['english', 'English'],
-                ] as ReadonlyArray<readonly [ReleaseFilter, string]>
-              ).map(([value, label]) => (
+              {filterChips.map(([value, label]) => (
                 <button
                   key={value}
                   type="button"
                   className={`arr-adv__chip${filter === value ? ' arr-adv__chip--on' : ''}`}
                   aria-pressed={filter === value}
-                  onClick={() => setFilter(value)}
+                  onClick={() => setFilterP(value)}
                 >
                   {label}
                 </button>
               ))}
             </div>
             <label className="arr-adv__control arr-adv__control--grow">
-              <span className="sr-only">Title regex</span>
+              <span className="sr-only">Title regex filter</span>
               <input
                 type="text"
                 placeholder="Filter titles (regex)…"
                 value={regex}
-                onChange={(e) => setRegex(e.target.value)}
+                aria-invalid={!regexValid}
+                onChange={(e) => setRegexP(e.target.value)}
               />
             </label>
+            {activeFilters > 0 && (
+              <button type="button" className="arr-adv__btn arr-adv__btn--small" onClick={clearFilters}>
+                Clear filters ({activeFilters})
+              </button>
+            )}
           </div>
 
+          {/* Result count, announced to assistive tech when it changes. */}
+          {!releases.isPending && !releases.error && (
+            <p className="arr-adv__count" aria-live="polite">
+              {filtered.length === total
+                ? `${total} release${total === 1 ? '' : 's'}`
+                : `${filtered.length} of ${total}`}
+              {!regexValid && <span className="arr-adv__count-warn"> · invalid regex ignored</span>}
+            </p>
+          )}
+
           {releases.isPending ? (
-            <p className="arr-adv__state" aria-busy="true">
-              Searching the indexer…
-            </p>
+            <ReleaseSkeleton />
           ) : releases.error ? (
-            <p className="arr-adv__state arr-adv__state--error" role="alert">
-              {releases.error instanceof Error ? releases.error.message : 'Search failed.'}
-            </p>
+            <div className="arr-adv__state arr-adv__state--error" role="alert">
+              <span>{releases.error instanceof Error ? releases.error.message : 'Search failed.'}</span>
+              <button type="button" className="arr-adv__btn arr-adv__btn--small" onClick={() => releases.refetch()}>
+                Retry
+              </button>
+            </div>
           ) : filtered.length === 0 ? (
-            <p className="arr-adv__state">No releases match.</p>
+            <div className="arr-adv__state">
+              <span>{total === 0 ? 'No releases found.' : 'No releases match the active filters.'}</span>
+              {activeFilters > 0 && (
+                <button type="button" className="arr-adv__btn arr-adv__btn--small" onClick={clearFilters}>
+                  Clear filters
+                </button>
+              )}
+            </div>
           ) : (
-            <ul className="arr-adv__releases">
-              {filtered.map((r) => (
-                <li key={`${r.indexerId}:${r.guid}`} className="arr-adv__release">
-                  <div className="arr-adv__release-main">
-                    <span className="arr-adv__release-title">{r.title}</span>
-                    <span className="arr-adv__release-meta">
-                      {r.quality} · {r.sizeGb.toFixed(2)} GB
-                      {r.overCap && <span className="arr-adv__badge arr-adv__badge--over">over cap</span>}
-                      {typeof r.seeders === 'number' && ` · ${r.seeders} seeders`}
-                      {r.indexer && ` · ${r.indexer}`}
-                    </span>
-                    {r.rejected && r.rejections.length > 0 && (
-                      <span className="arr-adv__release-rej">{r.rejections.join('; ')}</span>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    className="arr-adv__btn arr-adv__btn--grab"
-                    onClick={() => onGrab(r)}
-                    disabled={grab.isPending}
-                  >
-                    Grab
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <div className="arr-adv__table-wrap">
+              <table className="arr-adv__table">
+                <thead>
+                  <tr>
+                    <th scope="col" className="arr-adv__th">Indexer</th>
+                    {sortHeader('age', 'Age', true)}
+                    <th scope="col" className="arr-adv__th">Title</th>
+                    {sortHeader('quality', 'Quality')}
+                    <th scope="col" className="arr-adv__th">Lang</th>
+                    {sortHeader('size', 'Size', true)}
+                    {sortHeader('seeders', 'Peers', true)}
+                    <th scope="col" className="arr-adv__th">Status</th>
+                    <th scope="col" className="arr-adv__th"><span className="sr-only">Grab</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((r) => {
+                    const id = `${r.indexerId}:${r.guid}`
+                    const busy = grabbingGuid === id
+                    return (
+                      <tr key={id} className={r.rejected ? 'arr-adv__tr arr-adv__tr--rejected' : 'arr-adv__tr'}>
+                        <td className="arr-adv__td">{r.indexer ?? '—'}</td>
+                        <td className="arr-adv__td arr-adv__td--num">{humanAge(r.ageHours)}</td>
+                        <td className="arr-adv__td arr-adv__td--title">
+                          <span>{r.title}</span>
+                          {r.fullSeason && <span className="arr-adv__tag">Season pack</span>}
+                        </td>
+                        <td className="arr-adv__td">{r.quality}</td>
+                        <td className="arr-adv__td">{r.languages.join(', ') || '—'}</td>
+                        <td className="arr-adv__td arr-adv__td--num">
+                          {humanGb(r.sizeGb)}
+                          {r.overCap && <span className="arr-adv__badge arr-adv__badge--over" title={`Over the ${capLabel} cap`}>Over cap</span>}
+                        </td>
+                        <td className="arr-adv__td arr-adv__td--num">
+                          {typeof r.seeders === 'number' ? r.seeders : '—'}
+                        </td>
+                        <td className="arr-adv__td arr-adv__td--status">
+                          {r.rejected ? (
+                            <span className="arr-adv__reject" title={r.rejections.join('; ')}>
+                              {r.rejections[0] ?? 'Rejected'}
+                              {r.rejections.length > 1 && ` (+${r.rejections.length - 1})`}
+                            </span>
+                          ) : (
+                            <span className="arr-adv__ok">OK</span>
+                          )}
+                        </td>
+                        <td className="arr-adv__td arr-adv__td--action">
+                          <button
+                            type="button"
+                            className="arr-adv__btn arr-adv__btn--grab"
+                            onClick={() => onGrab(r)}
+                            disabled={grab.isPending}
+                            aria-busy={busy}
+                            aria-label={r.overCap ? `Grab ${r.title} (over cap)` : `Grab ${r.title}`}
+                          >
+                            {busy ? '…' : 'Grab'}
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </>
       )}
     </section>
+  )
+}
+
+// Skeleton rows that mirror the release table columns (checklist: skeletons,
+// not a centered spinner, for table-heavy async surfaces).
+function ReleaseSkeleton() {
+  return (
+    <div className="arr-adv__table-wrap" aria-busy="true" aria-label="Searching the indexer">
+      <table className="arr-adv__table arr-adv__table--skeleton">
+        <tbody>
+          {[0, 1, 2, 3, 4].map((i) => (
+            <tr key={i} className="arr-adv__tr">
+              {[0, 1, 2, 3, 4, 5, 6, 7].map((c) => (
+                <td key={c} className="arr-adv__td">
+                  <span className="arr-adv__skel" />
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// A few skeleton list rows for the loading state of list-shaped sections
+// (rename, history) — skeletons over spinners per the checklist.
+function ListSkeleton({ rows = 4, label }: { rows?: number; label: string }) {
+  return (
+    <div className="arr-adv__list-skel" aria-busy="true" aria-label={label}>
+      {Array.from({ length: rows }, (_, i) => (
+        <span key={i} className="arr-adv__skel arr-adv__skel--row" />
+      ))}
+    </div>
+  )
+}
+
+// Inline error with a Retry button — distinct from the empty state.
+function ErrorState({ error, onRetry }: { error: unknown; onRetry: () => void }) {
+  return (
+    <div className="arr-adv__state arr-adv__state--error" role="alert">
+      <span>{error instanceof Error ? error.message : 'Something went wrong.'}</span>
+      <button type="button" className="arr-adv__btn arr-adv__btn--small" onClick={onRetry}>
+        Retry
+      </button>
+    </div>
   )
 }
 
@@ -345,7 +531,8 @@ function RenameSection({
   itemId,
   onToast,
   qc,
-}: Props & { qc: ReturnType<typeof useQueryClient> }) {
+  confirm,
+}: Props & { qc: ReturnType<typeof useQueryClient>; confirm: ReturnType<typeof useConfirm> }) {
   const [open, setOpen] = useState(false)
   const preview = useQuery({
     queryKey: ['arr-rename', kind, itemId],
@@ -378,6 +565,21 @@ function RenameSection({
     onError: (e) => onToast(e instanceof Error ? e.message : String(e)),
   })
 
+  const rows = preview.data ?? []
+  // Apply rename renames files on disk — confirm with a verb+noun CTA
+  // (checklist: irreversible/heavy actions get a real-consequence confirm).
+  const onApply = () => {
+    confirm({
+      title: `Rename ${rows.length} file${rows.length === 1 ? '' : 's'}?`,
+      body: 'This renames the files on disk to match your naming scheme. Plex re-indexes them afterward.',
+      confirmLabel: 'Apply rename',
+      cancelLabel: 'Keep current names',
+      onConfirm: async () => {
+        await apply.mutateAsync()
+      },
+    })
+  }
+
   return (
     <section className="arr-adv__section">
       <h4 className="arr-adv__heading">
@@ -392,24 +594,18 @@ function RenameSection({
       </h4>
       {open &&
         (preview.isPending ? (
-          <p className="arr-adv__state" aria-busy="true">
-            Loading rename preview…
-          </p>
+          <ListSkeleton label="Loading rename preview" />
         ) : preview.error ? (
-          <p className="arr-adv__state arr-adv__state--error" role="alert">
-            {preview.error instanceof Error ? preview.error.message : 'Preview failed.'}
-          </p>
-        ) : (preview.data ?? []).length === 0 ? (
+          <ErrorState error={preview.error} onRetry={() => preview.refetch()} />
+        ) : rows.length === 0 ? (
           <p className="arr-adv__state">Nothing to rename.</p>
         ) : (
           <>
             <ul className="arr-adv__rename">
-              {(preview.data ?? []).map((row, i) => (
+              {rows.map((row, i) => (
                 <li key={i} className="arr-adv__rename-row">
                   <span className="arr-adv__rename-old">{row.existingPath}</span>
-                  <span className="arr-adv__rename-arrow" aria-hidden="true">
-                    →
-                  </span>
+                  <span className="arr-adv__rename-arrow" aria-hidden="true">→</span>
                   <span className="arr-adv__rename-new">{row.newPath}</span>
                 </li>
               ))}
@@ -417,10 +613,11 @@ function RenameSection({
             <button
               type="button"
               className="arr-adv__btn"
-              onClick={() => apply.mutate()}
+              onClick={onApply}
               disabled={apply.isPending}
+              aria-busy={apply.isPending}
             >
-              Apply rename
+              {apply.isPending ? 'Applying…' : 'Apply rename'}
             </button>
           </>
         ))}
@@ -541,23 +738,20 @@ function HistorySection({ kind, itemId }: { kind: Kind; itemId: number }) {
       </h4>
       {open &&
         (history.isPending ? (
-          <p className="arr-adv__state" aria-busy="true">
-            Loading history…
-          </p>
+          <ListSkeleton label="Loading history" />
         ) : history.error ? (
-          <p className="arr-adv__state arr-adv__state--error" role="alert">
-            {history.error instanceof Error ? history.error.message : 'History failed.'}
-          </p>
+          <ErrorState error={history.error} onRetry={() => history.refetch()} />
         ) : (history.data ?? []).length === 0 ? (
           <p className="arr-adv__state">No history yet.</p>
         ) : (
           <ul className="arr-adv__history">
             {(history.data ?? []).map((h, i) => (
               <li key={i} className="arr-adv__history-row">
-                <span className="arr-adv__history-event">
+                <span className="arr-adv__history-event" data-event={h.eventType}>
                   {EVENT_LABEL[h.eventType] ?? h.eventType}
                 </span>
                 <span className="arr-adv__history-title">{h.sourceTitle}</span>
+                <span className="arr-adv__history-quality">{h.quality}</span>
                 <span className="arr-adv__history-date">{fmt(h.date)}</span>
               </li>
             ))}

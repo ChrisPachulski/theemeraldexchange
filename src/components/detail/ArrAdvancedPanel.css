@@ -173,14 +173,15 @@
   margin: 0;
   font-size: var(--t-sm);
   color: var(--text-subtle);
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
 }
 
 .arr-adv__state--error {
   color: var(--danger);
 }
 
-/* Release browser. */
-.arr-adv__releases,
 .arr-adv__history,
 .arr-adv__rename,
 .arr-adv__episodes {
@@ -194,46 +195,140 @@
   overflow-y: auto;
 }
 
-.arr-adv__release {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s-3);
-  padding: var(--s-2) var(--s-3);
-  background: var(--surface-2);
+/* Result count + invalid-regex notice. */
+.arr-adv__count {
+  margin: 0;
+  font-size: var(--t-xs);
+  color: var(--text-subtle);
+}
+
+.arr-adv__count-warn {
+  color: var(--danger);
+}
+
+/* Release browser — semantic table. */
+.arr-adv__table-wrap {
+  max-height: 20rem;
+  overflow-y: auto;
   border-radius: var(--r-pod);
 }
 
-.arr-adv__release-main {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
+.arr-adv__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--t-sm);
 }
 
-.arr-adv__release-title {
-  color: var(--text);
-  font-size: var(--t-sm);
-  overflow: hidden;
-  text-overflow: ellipsis;
+.arr-adv__th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  text-align: left;
+  background: var(--surface-2);
+  color: var(--text-subtle);
+  font-size: var(--t-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tr-eyebrow);
+  padding: var(--s-2) var(--s-3);
   white-space: nowrap;
 }
 
-.arr-adv__release-meta {
-  color: var(--text-subtle);
-  font-size: var(--t-xs);
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-2);
-  flex-wrap: wrap;
+.arr-adv__th--num {
+  text-align: right;
 }
 
-.arr-adv__release-rej {
+.arr-adv__th-btn {
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.arr-adv__th-btn:hover {
+  color: var(--text);
+}
+
+.arr-adv__th-btn:focus-visible {
+  outline: 2px solid var(--emerald);
+  outline-offset: 2px;
+}
+
+.arr-adv__tr {
+  border-top: 1px solid var(--border);
+}
+
+.arr-adv__tr--rejected {
+  opacity: 0.55;
+}
+
+.arr-adv__td {
+  padding: var(--s-2) var(--s-3);
+  color: var(--text);
+  vertical-align: top;
+}
+
+.arr-adv__td--num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.arr-adv__td--title {
+  max-width: 22rem;
+}
+
+.arr-adv__td--title span:first-child {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.arr-adv__td--status {
+  max-width: 12rem;
+}
+
+.arr-adv__td--action {
+  text-align: right;
+}
+
+.arr-adv__tag {
+  display: inline-block;
+  margin-left: var(--s-2);
+  font-size: var(--t-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tr-eyebrow);
+  color: var(--text-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pod);
+  padding: 0 var(--s-2);
+}
+
+/* Status text — never color-alone; the words carry the meaning. */
+.arr-adv__ok {
+  color: var(--text-subtle);
+  font-size: var(--t-xs);
+}
+
+.arr-adv__reject {
   color: var(--danger);
   font-size: var(--t-xs);
+  display: inline-block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
 
 .arr-adv__badge {
+  display: inline-block;
+  margin-left: var(--s-2);
   font-size: var(--t-xs);
   text-transform: uppercase;
   letter-spacing: var(--tr-eyebrow);
@@ -244,6 +339,47 @@
 .arr-adv__badge--over {
   color: var(--danger);
   border: 1px solid var(--danger);
+}
+
+/* Skeletons — table rows and list rows. */
+.arr-adv__skel {
+  display: block;
+  height: 0.9rem;
+  width: 100%;
+  border-radius: var(--r-pod);
+  background: linear-gradient(
+    90deg,
+    var(--surface-2) 25%,
+    color-mix(in oklch, var(--surface-2) 60%, var(--text-subtle) 40%) 50%,
+    var(--surface-2) 75%
+  );
+  background-size: 200% 100%;
+  animation: arr-adv-shimmer 1.2s ease-in-out infinite;
+}
+
+.arr-adv__skel--row {
+  height: 1.4rem;
+}
+
+.arr-adv__list-skel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.arr-adv__table--skeleton .arr-adv__td {
+  border-top: 1px solid var(--border);
+}
+
+@keyframes arr-adv-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .arr-adv__skel {
+    animation: none;
+  }
 }
 
 /* Rename diff. */
@@ -274,7 +410,7 @@
 /* History. */
 .arr-adv__history-row {
   display: grid;
-  grid-template-columns: 7rem 1fr auto;
+  grid-template-columns: 7rem 1fr auto auto;
   gap: var(--s-3);
   align-items: baseline;
   font-size: var(--t-sm);
@@ -287,6 +423,15 @@
   letter-spacing: var(--tr-eyebrow);
 }
 
+/* Failure/deletion events read in the danger hue, but the text label still
+   carries the meaning (never color-alone). */
+.arr-adv__history-event[data-event='downloadFailed'],
+.arr-adv__history-event[data-event='episodeFileDeleted'],
+.arr-adv__history-event[data-event='movieFileDeleted'],
+.arr-adv__history-event[data-event='downloadIgnored'] {
+  color: var(--danger);
+}
+
 .arr-adv__history-title {
   color: var(--text);
   overflow: hidden;
@@ -294,10 +439,17 @@
   white-space: nowrap;
 }
 
+.arr-adv__history-quality {
+  color: var(--text-subtle);
+  font-size: var(--t-xs);
+  white-space: nowrap;
+}
+
 .arr-adv__history-date {
   color: var(--text-subtle);
   font-size: var(--t-xs);
   text-align: right;
+  white-space: nowrap;
 }
 
 /* Edit form. */
