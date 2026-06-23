@@ -2118,3 +2118,105 @@ describe('radarr advanced — error-path branches', () => {
     expect(await r.json()).toEqual({ id: undefined, name: undefined, status: undefined })
   })
 })
+
+describe('radarr advanced — malformed body & non-JSON upstream branches', () => {
+  // A 200 from Radarr whose body is not JSON: the handler must fall back
+  // (empty projection / empty history), never throw.
+  function stubNonJson(suffix: string) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes(suffix)) {
+          return new Response('<<garbage not json>>', { status: 200, headers: { 'Content-Type': 'text/plain' } })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+  }
+
+  it('R1 400 invalid_command when the request body is not JSON', async () => {
+    const r = await appUnderTest().request('/api/v3/command', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: '{not valid json',
+    })
+    expect(r.status).toBe(400)
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  it('R2 returns [] when the upstream release body is not JSON (200)', async () => {
+    stubNonJson('/api/v3/release')
+    const r = await appUnderTest().request('/api/v3/release?movieId=7', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual([])
+  })
+
+  it('R3 400 invalid_body when the grab request body is not JSON', async () => {
+    const r = await appUnderTest().request('/api/v3/release?movieId=7', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: 'definitely-not-json',
+    })
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'invalid_body' })
+  })
+
+  it('R3 404 release_not_found when the upstream release list is not JSON', async () => {
+    stubNonJson('/api/v3/release')
+    const r = await appUnderTest().request('/api/v3/release?movieId=7', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ guid: 'g', indexerId: 1 }),
+    })
+    expect(r.status).toBe(404)
+    expect(await r.json()).toEqual({ error: 'release_not_found' })
+  })
+
+  it('R4 returns [] when the upstream rename body is not JSON (200)', async () => {
+    stubNonJson('/api/v3/rename')
+    const r = await appUnderTest().request('/api/v3/rename?movieId=7', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual([])
+  })
+
+  it('R5 returns [] when the upstream history body is not JSON (200)', async () => {
+    stubNonJson('/api/v3/history/movie')
+    const r = await appUnderTest().request('/api/v3/history/movie?movieId=7', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual([])
+  })
+
+  it('R6 treats a non-JSON edit body as an empty patch (full object preserved)', async () => {
+    let putBody: Record<string, unknown> | null = null
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        if (url.includes('/api/v3/movie/9') && method === 'GET') {
+          return new Response(JSON.stringify({ id: 9, title: 'X', monitored: true, qualityProfileId: 4 }), { status: 200 })
+        }
+        if (url.includes('/api/v3/movie/9') && method === 'PUT') {
+          putBody = JSON.parse(init?.body as string)
+          return new Response(JSON.stringify(putBody), { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/movie/9', {
+      method: 'PUT',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: 'not-json-at-all',
+    })
+    expect(r.status).toBe(200)
+    // Empty patch → upstream object round-trips unchanged.
+    expect(putBody).toEqual({ id: 9, title: 'X', monitored: true, qualityProfileId: 4 })
+  })
+})
