@@ -2019,4 +2019,102 @@ describe('radarr advanced — R4 GET /api/v3/rename', () => {
     const rows = (await r.json()) as Array<Record<string, unknown>>
     expect(rows[0]).toEqual({ movieFileId: 1, existingPath: '/old/m.mkv', newPath: '/new/m.mkv' })
   })
+
+  it('400 bad_movieId without a valid movieId', async () => {
+    const r = await appUnderTest().request('/api/v3/rename?movieId=0', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'bad_movieId' })
+  })
+
+  it('502 rename_preview_failed when upstream errors', async () => {
+    stub('/api/v3/rename', { error: 'boom' }, 500)
+    const r = await appUnderTest().request('/api/v3/rename?movieId=5', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(502)
+    expect(await r.json()).toEqual({ error: 'rename_preview_failed', status: 500 })
+  })
+})
+
+// Error-path coverage for the new advanced handlers (upstream-failure 502
+// branches + remaining bad-param 400s the happy-path tests don't reach).
+describe('radarr advanced — error-path branches', () => {
+  it('R5 400 bad_movieId and 502 history_failed', async () => {
+    const bad = await appUnderTest().request('/api/v3/history/movie?movieId=x', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(bad.status).toBe(400)
+
+    stub('/api/v3/history/movie', { error: 'boom' }, 503)
+    const fail = await appUnderTest().request('/api/v3/history/movie?movieId=5', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(fail.status).toBe(502)
+    expect(await fail.json()).toEqual({ error: 'history_failed', status: 503 })
+  })
+
+  it('R6 400 bad_id and 502 movie_update_failed', async () => {
+    const bad = await appUnderTest().request('/api/v3/movie/0', {
+      method: 'PUT',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ monitored: false }),
+    })
+    expect(bad.status).toBe(400)
+    expect(await bad.json()).toEqual({ error: 'bad_id' })
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        if (url.includes('/api/v3/movie/9') && method === 'GET') {
+          return new Response(JSON.stringify({ id: 9, title: 'X', monitored: true }), { status: 200 })
+        }
+        if (url.includes('/api/v3/movie/9') && method === 'PUT') {
+          return new Response('{"error":"validation"}', { status: 400 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const fail = await appUnderTest().request('/api/v3/movie/9', {
+      method: 'PUT',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ monitored: false }),
+    })
+    expect(fail.status).toBe(502)
+    expect(await fail.json()).toEqual({ error: 'movie_update_failed', status: 400 })
+  })
+
+  it('R6 502 movie_lookup_failed when the upstream GET fails', async () => {
+    stub('/api/v3/movie/9', { error: 'no' }, 404)
+    const r = await appUnderTest().request('/api/v3/movie/9', {
+      method: 'PUT',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ monitored: false }),
+    })
+    expect(r.status).toBe(502)
+    expect(await r.json()).toEqual({ error: 'movie_lookup_failed', status: 404 })
+  })
+
+  it('R1 ack tolerates a non-JSON upstream body via the catch path', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.endsWith('/api/v3/command') && init?.method === 'POST') {
+          return new Response('not json', { status: 200, headers: { 'Content-Type': 'text/plain' } })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/command', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'RefreshMovie', movieIds: [1] }),
+    })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual({ id: undefined, name: undefined, status: undefined })
+  })
 })
