@@ -1157,6 +1157,802 @@ describe('sonarr season-grab in-flight reservation', () => {
   })
 })
 
+// ===========================================================================
+// Advanced options (S1–S7). These assert real behavior: the admin gate, the
+// command allowlist, the PUT field allowlist (extras ignored, full object
+// PUT back), the interactive-grab cap + allowOverCap override + grab-event
+// logging, and upstream-error mapping.
+// ===========================================================================
+describe('sonarr advanced — S1 POST /api/v3/command', () => {
+  it('rejects user role with 403 and does not forward', async () => {
+    const r = await appUnderTest().request('/api/v3/command', {
+      method: 'POST',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'RefreshSeries', seriesId: 1 }),
+    })
+    expect(r.status).toBe(403)
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  it('400 command_not_allowed for a disallowed name, never reaches upstream', async () => {
+    const r = await appUnderTest().request('/api/v3/command', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Backup', seriesId: 1 }),
+    })
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'command_not_allowed' })
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  it('400 missing_required_field when EpisodeSearch arrives without episodeIds', async () => {
+    const r = await appUnderTest().request('/api/v3/command', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'EpisodeSearch' }),
+    })
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'missing_required_field' })
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  it('forwards only allowlisted fields and returns the upstream command ack', async () => {
+    let captured: Record<string, unknown> | null = null
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.endsWith('/api/v3/command') && init?.method === 'POST') {
+          captured = JSON.parse(init.body as string)
+          return new Response(JSON.stringify({ id: 7, name: 'RefreshSeries', status: 'queued' }), { status: 201 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/command', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      // seriesId is allowlisted; the bogus extra must be scrubbed.
+      body: JSON.stringify({ name: 'RefreshSeries', seriesId: 42, evil: 'rm -rf' }),
+    })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual({ id: 7, name: 'RefreshSeries', status: 'queued' })
+    expect(captured).toEqual({ name: 'RefreshSeries', seriesId: 42 })
+  })
+
+  it('502 command_failed when upstream rejects the command', async () => {
+    stub('/api/v3/command', { error: 'nope' }, 500)
+    const r = await appUnderTest().request('/api/v3/command', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'SeriesSearch', seriesId: 3 }),
+    })
+    expect(r.status).toBe(502)
+    expect(await r.json()).toEqual({ error: 'command_failed', status: 500 })
+  })
+})
+
+describe('sonarr advanced — S2 GET /api/v3/release (interactive search)', () => {
+  it('rejects user role with 403', async () => {
+    const r = await appUnderTest().request('/api/v3/release?seriesId=1', {
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r.status).toBe(403)
+  })
+
+  it('400 bad_seriesId without a valid seriesId', async () => {
+    const r = await appUnderTest().request('/api/v3/release?seriesId=0', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'bad_seriesId' })
+  })
+
+  it('projects releases with sizeGb + overCap computed against the per-episode cap', async () => {
+    // maxTvBytesPerEpisode default = 5 GB. A 12 GB single-episode release is
+    // over cap; a 3 GB single-episode release is within cap. A 24 GB full
+    // season of 6 episodes = 4 GB/ep, within cap.
+    const GB = 1024 ** 3
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        if (url.includes('/api/v3/episode')) {
+          return new Response(
+            JSON.stringify([
+              { seasonNumber: 1, episodeNumber: 1 },
+              { seasonNumber: 1, episodeNumber: 2 },
+              { seasonNumber: 1, episodeNumber: 3 },
+              { seasonNumber: 1, episodeNumber: 4 },
+              { seasonNumber: 1, episodeNumber: 5 },
+              { seasonNumber: 1, episodeNumber: 6 },
+            ]),
+            { status: 200 },
+          )
+        }
+        if (url.includes('/api/v3/release') && method === 'GET') {
+          return new Response(
+            JSON.stringify([
+              {
+                guid: 'big', indexerId: 1, title: 'Big Ep', size: 12 * GB, qualityWeight: 80,
+                seasonNumber: 1, episodeNumbers: [1], protocol: 'usenet', indexer: 'Eweka',
+                quality: { quality: { name: 'WEBDL-2160p' } }, languages: [{ name: 'English' }],
+                rejected: false, rejections: [],
+              },
+              {
+                guid: 'small', indexerId: 1, title: 'Small Ep', size: 3 * GB, qualityWeight: 40,
+                seasonNumber: 1, episodeNumbers: [2], protocol: 'usenet',
+                quality: { quality: { name: 'WEBDL-1080p' } }, languages: [{ name: 'English' }],
+                rejected: false, rejections: [],
+              },
+              {
+                guid: 'pack', indexerId: 1, title: 'Full Season', size: 24 * GB, qualityWeight: 60,
+                seasonNumber: 1, fullSeason: true, protocol: 'usenet',
+                quality: { quality: { name: 'WEBDL-1080p' } }, languages: [{ name: 'English' }],
+                rejected: false, rejections: [],
+              },
+            ]),
+            { status: 200 },
+          )
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/release?seriesId=5&seasonNumber=1', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(200)
+    const rows = (await r.json()) as Array<{
+      guid: string; sizeGb: number; overCap: boolean; quality: string; languages: string[]
+    }>
+    const byGuid = Object.fromEntries(rows.map((x) => [x.guid, x]))
+    expect(byGuid.big.overCap).toBe(true) // 12 GB > 5 GB/ep
+    expect(byGuid.big.sizeGb).toBeCloseTo(12.88, 1)
+    expect(byGuid.big.quality).toBe('WEBDL-2160p')
+    expect(byGuid.big.languages).toEqual(['English'])
+    expect(byGuid.small.overCap).toBe(false) // 3 GB < 5 GB/ep
+    expect(byGuid.pack.overCap).toBe(false) // 24 GB / 6 ep = 4 GB/ep < 5
+  })
+
+  it('502 release_search_failed when upstream search errors', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        if (url.includes('/api/v3/episode')) return new Response('[]', { status: 200 })
+        if (url.includes('/api/v3/release') && method === 'GET') {
+          return new Response('{"error":"boom"}', { status: 500 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/release?seriesId=5', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(502)
+    expect(await r.json()).toEqual({ error: 'release_search_failed', status: 500 })
+  })
+})
+
+describe('sonarr advanced — S3 POST /api/v3/release (interactive grab)', () => {
+  const GB = 1024 ** 3
+
+  function stubGrab(opts: {
+    releaseSize: number
+    episodes?: number
+    grabStatus?: number
+    onGrab?: (body: Record<string, unknown>) => void
+  }) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        if (url.includes('/api/v3/episode')) {
+          return new Response(
+            JSON.stringify(
+              Array.from({ length: opts.episodes ?? 1 }, (_, i) => ({ seasonNumber: 1, episodeNumber: i + 1 })),
+            ),
+            { status: 200 },
+          )
+        }
+        if (url.includes('/api/v3/release') && method === 'GET') {
+          return new Response(
+            JSON.stringify([
+              {
+                guid: 'pick', indexerId: 9, title: 'Picked Release', size: opts.releaseSize,
+                qualityWeight: 50, seasonNumber: 1, episodeNumbers: [1], protocol: 'usenet',
+                quality: { quality: { name: 'WEBDL-1080p' } }, languages: [{ name: 'English' }],
+                rejected: false, rejections: [],
+              },
+            ]),
+            { status: 200 },
+          )
+        }
+        if (url.includes('/api/v3/release') && method === 'POST') {
+          if (opts.onGrab) opts.onGrab(JSON.parse(init!.body as string))
+          return new Response(JSON.stringify({ ok: true }), { status: opts.grabStatus ?? 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+  }
+
+  let appendSpy: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    appendSpy = vi.spyOn(grabLog, 'appendGrabEvent').mockResolvedValue(undefined)
+  })
+  afterEach(() => {
+    appendSpy.mockRestore()
+  })
+
+  function eventTypes() {
+    return (grabLog.appendGrabEvent as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([e]) => (e as { type?: string }).type,
+    )
+  }
+  // Full recorded events (not just their types) so we can assert the grab was
+  // logged with the right item/release/attribution fields — the property the
+  // audit flagged as untested on the interactive-grab path.
+  function recordedEvents() {
+    return (grabLog.appendGrabEvent as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([e]) => e as Record<string, unknown>,
+    )
+  }
+
+  it('rejects user role with 403', async () => {
+    const r = await appUnderTest().request('/api/v3/release?seriesId=5', {
+      method: 'POST',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ guid: 'pick', indexerId: 9 }),
+    })
+    expect(r.status).toBe(403)
+  })
+
+  it('424 over_cap when the picked release exceeds the cap and allowOverCap is not set; logs a cap event, no grab POST', async () => {
+    let grabPosted = false
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        if (url.includes('/api/v3/episode')) {
+          return new Response(JSON.stringify([{ seasonNumber: 1, episodeNumber: 1 }]), { status: 200 })
+        }
+        if (url.includes('/api/v3/release') && method === 'GET') {
+          return new Response(
+            JSON.stringify([
+              { guid: 'pick', indexerId: 9, title: 'Huge', size: 30 * GB, qualityWeight: 50, seasonNumber: 1, episodeNumbers: [1] },
+            ]),
+            { status: 200 },
+          )
+        }
+        if (url.includes('/api/v3/release') && method === 'POST') {
+          grabPosted = true
+          return new Response('{}', { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/release?seriesId=5', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ guid: 'pick', indexerId: 9 }),
+    })
+    expect(r.status).toBe(424)
+    expect(((await r.json()) as { error: string }).error).toBe('over_cap')
+    expect(grabPosted).toBe(false)
+    expect(eventTypes()).toContain('all_rejected_by_cap')
+  })
+
+  it('grabs an over-cap release when allowOverCap:true, and logs grab_started + grab_succeeded', async () => {
+    let grabBody: Record<string, unknown> | null = null
+    stubGrab({ releaseSize: 30 * GB, onGrab: (b) => { grabBody = b } })
+    const r = await appUnderTest().request('/api/v3/release?seriesId=5', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ guid: 'pick', indexerId: 9, allowOverCap: true }),
+    })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { status: string; title: string; sizeGb: number }
+    expect(body.status).toBe('grabbed')
+    expect(body.title).toBe('Picked Release')
+    // Grab body forwards exactly guid+indexerId — not the client's size/extras.
+    expect(grabBody).toEqual({ guid: 'pick', indexerId: 9 })
+    expect(eventTypes()).toEqual(expect.arrayContaining(['grab_started', 'grab_succeeded']))
+    // The override grab MUST be recorded through the grab-event log with the
+    // right item/release/attribution fields (audit gap closed here).
+    const succeeded = recordedEvents().find((e) => e.type === 'grab_succeeded')
+    expect(succeeded, 'expected a grab_succeeded event recorded for the override grab').toBeDefined()
+    expect(succeeded!.itemId).toBe(5) // seriesId from the query scope
+    expect(succeeded!.title).toBe('Picked Release')
+    expect(succeeded!.capGb).toBe(env.maxTvGbPerEpisode)
+    // sub is the session subject — present so the grab is attributable in the
+    // audit log / /by-item scoping (exact value is session-derived).
+    expect(typeof succeeded!.sub).toBe('string')
+    expect(succeeded!.sub).toBeTruthy()
+    expect((succeeded!.release as { sizeBytes?: number }).sizeBytes).toBe(30 * GB)
+  })
+
+  it('grabs a within-cap release without override and returns sizeGb; records the grab event', async () => {
+    stubGrab({ releaseSize: 3 * GB })
+    const r = await appUnderTest().request('/api/v3/release?seriesId=5', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ guid: 'pick', indexerId: 9 }),
+    })
+    expect(r.status).toBe(200)
+    expect(((await r.json()) as { status: string }).status).toBe('grabbed')
+    // appendGrabEvent must have been called with a grab_succeeded event for
+    // this series — directly asserting the recorder ran, not just the status.
+    const succeeded = recordedEvents().find((e) => e.type === 'grab_succeeded')
+    expect(succeeded, 'expected appendGrabEvent to record a grab_succeeded event').toBeDefined()
+    expect(succeeded!.itemId).toBe(5)
+    expect(succeeded!.title).toBe('Picked Release')
+    expect((succeeded!.release as { sizeBytes?: number }).sizeBytes).toBe(3 * GB)
+  })
+
+  it('404 release_not_found when the guid+indexerId is not in the re-search', async () => {
+    stubGrab({ releaseSize: 3 * GB })
+    const r = await appUnderTest().request('/api/v3/release?seriesId=5', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ guid: 'ghost', indexerId: 9 }),
+    })
+    expect(r.status).toBe(404)
+    expect(((await r.json()) as { error: string }).error).toBe('release_not_found')
+  })
+
+  it('502 grab_failed and logs grab_failed when the upstream grab POST errors', async () => {
+    stubGrab({ releaseSize: 3 * GB, grabStatus: 500 })
+    const r = await appUnderTest().request('/api/v3/release?seriesId=5', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ guid: 'pick', indexerId: 9 }),
+    })
+    expect(r.status).toBe(502)
+    expect(((await r.json()) as { error: string }).error).toBe('grab_failed')
+    expect(eventTypes()).toContain('grab_failed')
+  })
+})
+
+describe('sonarr advanced — S5 PUT /api/v3/episode/monitor', () => {
+  it('rejects user role with 403', async () => {
+    const r = await appUnderTest().request('/api/v3/episode/monitor', {
+      method: 'PUT',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ episodeIds: [1], monitored: true }),
+    })
+    expect(r.status).toBe(403)
+  })
+
+  it('400 invalid_body when episodeIds is empty', async () => {
+    const r = await appUnderTest().request('/api/v3/episode/monitor', {
+      method: 'PUT',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ episodeIds: [], monitored: true }),
+    })
+    expect(r.status).toBe(400)
+  })
+
+  it('forwards the batch toggle and returns the updated count', async () => {
+    let body: Record<string, unknown> | null = null
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes('/api/v3/episode/monitor') && init?.method === 'PUT') {
+          body = JSON.parse(init.body as string)
+          return new Response('[]', { status: 202 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/episode/monitor', {
+      method: 'PUT',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ episodeIds: [10, 11, 12], monitored: false }),
+    })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual({ ok: true, updated: 3 })
+    expect(body).toEqual({ episodeIds: [10, 11, 12], monitored: false })
+  })
+})
+
+describe('sonarr advanced — S6 GET /api/v3/history/series', () => {
+  it('rejects user role with 403', async () => {
+    const r = await appUnderTest().request('/api/v3/history/series?seriesId=1', {
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r.status).toBe(403)
+  })
+
+  it('maps paged upstream history to the slim newest-first shape', async () => {
+    stub('/api/v3/history/series', {
+      records: [
+        { date: '2026-06-22T00:00:00Z', eventType: 'grabbed', sourceTitle: 'S01E01', quality: { quality: { name: 'WEBDL-1080p' } }, seasonNumber: 1, episodeId: 5 },
+        { date: '2026-06-21T00:00:00Z', eventType: 'downloadFolderImported', sourceTitle: 'S01E01', quality: { quality: { name: 'WEBDL-1080p' } } },
+      ],
+    })
+    const r = await appUnderTest().request('/api/v3/history/series?seriesId=5', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(200)
+    const rows = (await r.json()) as Array<Record<string, unknown>>
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toEqual({
+      date: '2026-06-22T00:00:00Z', eventType: 'grabbed', sourceTitle: 'S01E01',
+      quality: 'WEBDL-1080p', seasonNumber: 1, episodeId: 5,
+    })
+    expect(rows[1].quality).toBe('WEBDL-1080p')
+    expect(rows[1].seasonNumber).toBeUndefined()
+  })
+
+  it('sorts newest-first regardless of upstream order', async () => {
+    // Upstream rows deliberately oldest-first — the backend must reorder so
+    // the "newest-first" contract guarantee holds and the clients can render
+    // as-received without re-sorting.
+    stub('/api/v3/history/series', {
+      records: [
+        { date: '2026-06-01T00:00:00Z', eventType: 'grabbed', sourceTitle: 'old', quality: { quality: { name: 'WEBDL-1080p' } } },
+        { date: '2026-06-20T00:00:00Z', eventType: 'grabbed', sourceTitle: 'new', quality: { quality: { name: 'WEBDL-1080p' } } },
+        { date: '2026-06-10T00:00:00Z', eventType: 'grabbed', sourceTitle: 'mid', quality: { quality: { name: 'WEBDL-1080p' } } },
+      ],
+    })
+    const r = await appUnderTest().request('/api/v3/history/series?seriesId=5', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(200)
+    const rows = (await r.json()) as Array<{ sourceTitle: string }>
+    expect(rows.map((x) => x.sourceTitle)).toEqual(['new', 'mid', 'old'])
+  })
+})
+
+describe('sonarr advanced — S7 PUT /api/v3/series/:id (edit)', () => {
+  it('rejects user role with 403', async () => {
+    const r = await appUnderTest().request('/api/v3/series/5', {
+      method: 'PUT',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ monitored: false }),
+    })
+    expect(r.status).toBe(403)
+  })
+
+  it('fetches the full series, overlays ONLY allowlisted fields (extras ignored), PUTs the whole object back', async () => {
+    let putBody: Record<string, unknown> | null = null
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        if (url.includes('/api/v3/series/5') && method === 'GET') {
+          return new Response(
+            JSON.stringify({
+              id: 5, title: 'Existing', monitored: true, qualityProfileId: 1,
+              rootFolderPath: '/data/tv', path: '/data/tv/Existing', seasons: [{ seasonNumber: 1, monitored: true }],
+            }),
+            { status: 200 },
+          )
+        }
+        if (url.includes('/api/v3/series/5') && method === 'PUT') {
+          putBody = JSON.parse(init!.body as string)
+          return new Response(JSON.stringify(putBody), { status: 202 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/series/5', {
+      method: 'PUT',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        monitored: false, qualityProfileId: 7, rootFolderPath: '/data/tv2',
+        // Non-allowlisted fields must be ignored, NOT forwarded.
+        title: 'HACKED', path: '/etc/passwd', id: 999, seasons: [],
+      }),
+    })
+    expect(r.status).toBe(202)
+    // Allowlisted fields applied.
+    expect(putBody!.monitored).toBe(false)
+    expect(putBody!.qualityProfileId).toBe(7)
+    expect(putBody!.rootFolderPath).toBe('/data/tv2')
+    // Full upstream object preserved; client attempts to overwrite ignored.
+    expect(putBody!.title).toBe('Existing')
+    expect(putBody!.path).toBe('/data/tv/Existing')
+    expect(putBody!.id).toBe(5)
+    expect(putBody!.seasons).toEqual([{ seasonNumber: 1, monitored: true }])
+  })
+
+  it('502 series_lookup_failed when the upstream GET fails (no PUT attempted)', async () => {
+    let putAttempted = false
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        if (url.includes('/api/v3/series/5') && method === 'GET') {
+          return new Response('{"error":"no"}', { status: 404 })
+        }
+        if (url.includes('/api/v3/series/5') && method === 'PUT') {
+          putAttempted = true
+          return new Response('{}', { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/series/5', {
+      method: 'PUT',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ monitored: false }),
+    })
+    expect(r.status).toBe(502)
+    expect(((await r.json()) as { error: string }).error).toBe('series_lookup_failed')
+    expect(putAttempted).toBe(false)
+  })
+})
+
+describe('sonarr advanced — S4 GET /api/v3/rename', () => {
+  it('rejects user role with 403', async () => {
+    const r = await appUnderTest().request('/api/v3/rename?seriesId=1', {
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r.status).toBe(403)
+  })
+
+  it('projects the rename diff rows', async () => {
+    stub('/api/v3/rename', [
+      { episodeFileId: 1, seasonNumber: 1, existingPath: '/old/a.mkv', newPath: '/new/a.mkv', extra: 'drop' },
+    ])
+    const r = await appUnderTest().request('/api/v3/rename?seriesId=5', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(200)
+    const rows = (await r.json()) as Array<Record<string, unknown>>
+    expect(rows[0]).toEqual({ episodeFileId: 1, seasonNumber: 1, existingPath: '/old/a.mkv', newPath: '/new/a.mkv' })
+    expect(rows[0].extra).toBeUndefined()
+  })
+
+  it('400 bad_seriesId without a valid seriesId', async () => {
+    const r = await appUnderTest().request('/api/v3/rename?seriesId=0', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'bad_seriesId' })
+  })
+
+  it('502 rename_preview_failed when upstream errors', async () => {
+    stub('/api/v3/rename', { error: 'boom' }, 500)
+    const r = await appUnderTest().request('/api/v3/rename?seriesId=5', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(502)
+    expect(await r.json()).toEqual({ error: 'rename_preview_failed', status: 500 })
+  })
+})
+
+// Error-path coverage for the new advanced handlers: the upstream-failure
+// (502) branches and the remaining bad-param 400s that the happy-path tests
+// above don't reach. These exercise real code paths (each maps a distinct
+// upstream failure to a distinct client error), not coverage padding.
+describe('sonarr advanced — error-path branches', () => {
+  it('S2 400 bad_seasonNumber for a negative seasonNumber', async () => {
+    const r = await appUnderTest().request('/api/v3/release?seriesId=5&seasonNumber=-1', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'bad_seasonNumber' })
+  })
+
+  it('S5 400 invalid_body when monitored is missing', async () => {
+    const r = await appUnderTest().request('/api/v3/episode/monitor', {
+      method: 'PUT',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ episodeIds: [1] }),
+    })
+    expect(r.status).toBe(400)
+  })
+
+  it('S5 502 monitor_update_failed when upstream errors', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes('/api/v3/episode/monitor') && init?.method === 'PUT') {
+          return new Response('{"error":"no"}', { status: 500 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/episode/monitor', {
+      method: 'PUT',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ episodeIds: [1, 2], monitored: true }),
+    })
+    expect(r.status).toBe(502)
+    expect(await r.json()).toEqual({ error: 'monitor_update_failed', status: 500 })
+  })
+
+  it('S6 400 bad_seriesId and 502 history_failed', async () => {
+    const bad = await appUnderTest().request('/api/v3/history/series?seriesId=x', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(bad.status).toBe(400)
+
+    stub('/api/v3/history/series', { error: 'boom' }, 503)
+    const fail = await appUnderTest().request('/api/v3/history/series?seriesId=5', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(fail.status).toBe(502)
+    expect(await fail.json()).toEqual({ error: 'history_failed', status: 503 })
+  })
+
+  it('S7 400 bad_id and 502 series_update_failed', async () => {
+    const bad = await appUnderTest().request('/api/v3/series/0', {
+      method: 'PUT',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ monitored: false }),
+    })
+    expect(bad.status).toBe(400)
+    expect(await bad.json()).toEqual({ error: 'bad_id' })
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        if (url.includes('/api/v3/series/9') && method === 'GET') {
+          return new Response(JSON.stringify({ id: 9, title: 'X', monitored: true }), { status: 200 })
+        }
+        if (url.includes('/api/v3/series/9') && method === 'PUT') {
+          return new Response('{"error":"validation"}', { status: 400 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const fail = await appUnderTest().request('/api/v3/series/9', {
+      method: 'PUT',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ monitored: false }),
+    })
+    expect(fail.status).toBe(502)
+    expect(await fail.json()).toEqual({ error: 'series_update_failed', status: 400 })
+  })
+
+  it('S1 502 command_failed surfaced via the catch path on a non-JSON ack', async () => {
+    // Upstream returns 200 but a non-JSON body — the .catch(()=>({})) fallback
+    // must still produce a well-formed ack (undefined fields), not throw.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.endsWith('/api/v3/command') && init?.method === 'POST') {
+          return new Response('not json', { status: 200, headers: { 'Content-Type': 'text/plain' } })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/command', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'RefreshSeries', seriesId: 1 }),
+    })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual({ id: undefined, name: undefined, status: undefined })
+  })
+})
+
+describe('sonarr advanced — malformed body & non-JSON upstream branches', () => {
+  // A 200 from Sonarr whose body is not JSON: the handler must fall back
+  // (empty projection / empty history), never throw.
+  function stubNonJson(suffix: string) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes(suffix)) {
+          return new Response('<<garbage not json>>', { status: 200, headers: { 'Content-Type': 'text/plain' } })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+  }
+
+  it('S1 400 invalid_command when the request body is not JSON', async () => {
+    const r = await appUnderTest().request('/api/v3/command', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: '{not valid json',
+    })
+    expect(r.status).toBe(400)
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  it('S2 returns [] when the upstream release body is not JSON (200)', async () => {
+    stubNonJson('/api/v3/release')
+    const r = await appUnderTest().request('/api/v3/release?seriesId=5', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual([])
+  })
+
+  it('S3 400 invalid_body when the grab request body is not JSON', async () => {
+    const r = await appUnderTest().request('/api/v3/release?seriesId=5', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: 'definitely-not-json',
+    })
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'invalid_body' })
+  })
+
+  it('S3 404 release_not_found when the upstream release list is not JSON', async () => {
+    stubNonJson('/api/v3/release')
+    const r = await appUnderTest().request('/api/v3/release?seriesId=5', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ guid: 'g', indexerId: 1 }),
+    })
+    expect(r.status).toBe(404)
+    expect(await r.json()).toEqual({ error: 'release_not_found' })
+  })
+
+  it('S4 returns [] when the upstream rename body is not JSON (200)', async () => {
+    stubNonJson('/api/v3/rename')
+    const r = await appUnderTest().request('/api/v3/rename?seriesId=5', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual([])
+  })
+
+  it('S5 400 invalid_body when the monitor request body is not JSON', async () => {
+    const r = await appUnderTest().request('/api/v3/episode/monitor', {
+      method: 'PUT',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: 'not-json',
+    })
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'invalid_body' })
+  })
+
+  it('S6 returns [] when the upstream history body is not JSON (200)', async () => {
+    stubNonJson('/api/v3/history/series')
+    const r = await appUnderTest().request('/api/v3/history/series?seriesId=5', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual([])
+  })
+
+  it('S7 treats a non-JSON edit body as an empty patch (full object preserved)', async () => {
+    let putBody: Record<string, unknown> | null = null
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        if (url.includes('/api/v3/series/9') && method === 'GET') {
+          return new Response(JSON.stringify({ id: 9, title: 'X', monitored: true, qualityProfileId: 4 }), { status: 200 })
+        }
+        if (url.includes('/api/v3/series/9') && method === 'PUT') {
+          putBody = JSON.parse(init?.body as string)
+          return new Response(JSON.stringify(putBody), { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/series/9', {
+      method: 'PUT',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: 'not-json-at-all',
+    })
+    expect(r.status).toBe(200)
+    expect(putBody).toEqual({ id: 9, title: 'X', monitored: true, qualityProfileId: 4 })
+  })
+})
+
 describe('sonarr clear-stuck', () => {
   it('rejects user role with 403', async () => {
     const r = await appUnderTest().request('/api/v3/queue/clear-stuck', {

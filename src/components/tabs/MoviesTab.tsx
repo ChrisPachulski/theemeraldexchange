@@ -7,6 +7,7 @@ import { ModeToggle, type Mode } from '../search/ModeToggle'
 import { LibraryAlphabet, libraryBucket, type LibraryLetter } from '../library/LibraryAlphabet'
 import { LibraryFilters, type FilterOption } from '../library/LibraryFilters'
 import { DetailModal, type DetailMeta } from '../detail/DetailModal'
+import { ArrAdvancedPanel } from '../detail/ArrAdvancedPanel'
 import { AddMovieModal } from '../add/AddMovieModal'
 import { Toast } from '../toast/Toast'
 import { LoadingPulse } from '../feedback/LoadingPulse'
@@ -466,6 +467,16 @@ export function MoviesTab() {
           setViewing(null)
           confirmRemove(m)
         } : undefined}
+        advanced={isAdmin && viewing && 'id' in viewing ? (
+          <ArrAdvancedPanel
+            kind="movie"
+            itemId={(viewing as Movie).id}
+            monitored={(viewing as Movie).monitored}
+            qualityProfileId={(viewing as Movie).qualityProfileId}
+            rootFolderPath={(viewing as Movie).rootFolderPath}
+            onToast={setToast}
+          />
+        ) : undefined}
       />
 
       {playingLocal && (
