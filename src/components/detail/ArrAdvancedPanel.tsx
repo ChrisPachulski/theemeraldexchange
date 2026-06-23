@@ -73,6 +73,13 @@ type Props = {
   episodes?: Episode[]
   /** Surface a one-line status message to the host (rendered as a toast). */
   onToast: (message: string) => void
+  /** Open the interactive-search section on mount (release list auto-opened).
+   *  Used by the discover-time "Find release" flow, which adds the item with
+   *  auto-grab off and drops straight into the release browser. */
+  autoOpenSearch?: boolean
+  /** Fired when the user grabs a release (alongside the toast). The host uses
+   *  it to commit a transiently-added item so closing won't auto-remove it. */
+  onGrabbed?: () => void
 }
 
 const COMMAND_NAMES = {
@@ -191,9 +198,13 @@ function InteractiveSearchSection({
   itemId,
   episodes,
   onToast,
+  onGrabbed,
+  autoOpenSearch,
   confirm,
 }: Props & { confirm: ReturnType<typeof useConfirm> }) {
-  const [open, setOpen] = useState(false)
+  // Auto-open when the host requests it (the discover-time Find-release flow
+  // drops straight into the release browser); otherwise collapsed by default.
+  const [open, setOpen] = useState(autoOpenSearch === true)
   const [season, setSeason] = useState<number | undefined>(undefined)
   // Seed from the persisted view so a reopen keeps the admin's last sort/filter.
   const [filter, setFilter] = useState<ReleaseFilter>(() => getView(kind).filter)
@@ -239,7 +250,10 @@ function InteractiveSearchSection({
             effectiveSeason,
           )
         : radarr.grabRelease(itemId, { guid: r.guid, indexerId: r.indexerId, allowOverCap: r.allowOverCap }),
-    onSuccess: (res) => onToast(`Grabbed ${res.title} (${humanGb(res.sizeGb)})`),
+    onSuccess: (res) => {
+      onToast(`Grabbed ${res.title} (${humanGb(res.sizeGb)})`)
+      onGrabbed?.()
+    },
     onError: (e) => onToast(e instanceof Error ? e.message : String(e)),
   })
   // Which row's Grab is in flight — so only that button shows the spinner.
