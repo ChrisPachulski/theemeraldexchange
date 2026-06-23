@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { SearchInput } from '../search/SearchInput'
 import { ResultGrid } from '../search/ResultGrid'
@@ -15,7 +15,7 @@ import { EmeraldMark } from '../atmosphere/EmeraldMark'
 import { useAuth } from '../../lib/auth'
 import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useSeriesSearch } from '../../lib/hooks/useSeriesSearch'
-import { useSonarrLibrary } from '../../lib/hooks/useSonarrLibrary'
+import { useSonarrLibrary, useSonarrProfiles, useSonarrRootFolders } from '../../lib/hooks/useSonarrLibrary'
 import { useSonarrEpisodes } from '../../lib/hooks/useSonarrEpisodes'
 import { useSuggestionStrip } from '../../lib/hooks/useSuggestionStrip'
 import { useLimits } from '../../lib/hooks/useLimits'
@@ -30,6 +30,7 @@ import { seriesAvailability, sonarr, type Series, type SeriesSearchResult } from
 import { postClickEvent } from '../../lib/api/recommenderEvents'
 import { withViewTransition } from '../../lib/viewTransition'
 import { stripArticle } from '../../lib/title'
+import { pickDefaultProfileId } from '../../lib/pickDefaultProfileId'
 import './TvTab.css'
 
 function pickSearchPoster(item: SeriesSearchResult): string | undefined {
@@ -114,6 +115,16 @@ export function TvTab() {
   const [adding, setAdding] = useState<SeriesSearchResult | null>(null)
   const [viewing, setViewing] = useState<SeriesSearchResult | Series | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  // Find-release flow: a title added transiently (monitored, auto-grab off)
+  // purely so the interactive release browser can open on it. If the admin
+  // closes the modal without grabbing, we remove it again so nothing is left
+  // behind. `transient` holds the just-added series id; `grabbed` commits it.
+  const [transient, setTransient] = useState<{ id: number } | null>(null)
+  const grabbedRef = useRef(false)
+  // Profile + root folder for the transient add body (same source the Add
+  // modal uses), loaded only when admin so non-admins pay nothing.
+  const sonarrProfiles = useSonarrProfiles()
+  const sonarrFolders = useSonarrRootFolders()
   // In-browser playback of a locally-available show: pick an episode, then play.
   const [pickShow, setPickShow] = useState<{ id: number; title: string } | null>(null)
   const [playingEpisode, setPlayingEpisode] = useState<{
@@ -262,6 +273,59 @@ export function TvTab() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['sonarr', 'series'] }),
   })
 
+  // Find-release: add the title monitored with auto-grab OFF so the release
+  // endpoint (which requires the series to exist) has a real seriesId to query,
+  // then view the returned Series so the Advanced panel renders with the
+  // release browser auto-opened. Closing without a grab removes it again.
+  const findReleaseMutation = useMutation({
+    mutationFn: (item: SeriesSearchResult) => {
+      const profileId = pickDefaultProfileId(
+        sonarrProfiles.data,
+        (limits.data?.defaultProfileName ?? 'choose me').toLowerCase(),
+      )
+      const rootFolder = sonarrFolders.data?.[0]?.path ?? null
+      const body = {
+        tvdbId: item.tvdbId,
+        ...(item.tmdbId !== undefined ? { tmdbId: item.tmdbId } : {}),
+        title: item.title,
+        qualityProfileId: profileId,
+        rootFolderPath: rootFolder,
+        monitored: true,
+        seasonFolder: true,
+        addOptions: {
+          monitor: 'all',
+          searchForMissingEpisodes: false,
+        },
+        seasons: item.seasons,
+      }
+      return sonarr.addSeries(body)
+    },
+    onSuccess: (series) => {
+      qc.invalidateQueries({ queryKey: ['sonarr', 'series'] })
+      grabbedRef.current = false
+      setTransient({ id: series.id })
+      setViewing(series)
+    },
+    onError: (e) => {
+      setViewing(null)
+      setToast(e instanceof Error ? e.message : String(e))
+    },
+  })
+
+  // Tear down the transient add when the modal closes without a grab. Errors
+  // are swallowed (best-effort cleanup) so a failed remove never surfaces.
+  const handleDetailClose = () => {
+    const t = transient
+    if (t && !grabbedRef.current) {
+      sonarr
+        .removeSeries(t.id, false)
+        .catch(() => {})
+        .finally(() => qc.invalidateQueries({ queryKey: ['sonarr', 'series'] }))
+    }
+    setTransient(null)
+    setViewing(null)
+  }
+
   const monitorSeasonMutation = useMutation({
     mutationFn: ({ seriesId, seasonNumber }: { seriesId: number; seasonNumber: number }) =>
       sonarr.monitorSeason(seriesId, seasonNumber),
@@ -403,7 +467,7 @@ export function TvTab() {
 
       <DetailModal
         open={viewing !== null}
-        onClose={() => setViewing(null)}
+        onClose={handleDetailClose}
         kind="TV Show"
         title={viewing?.title ?? ''}
         year={viewing?.year}
@@ -482,6 +546,9 @@ export function TvTab() {
           setViewing(null)
           setAdding(item)
         } : undefined}
+        onFindRelease={isAdmin && viewing && !('id' in viewing) ? () => {
+          findReleaseMutation.mutate(viewing as SeriesSearchResult)
+        } : undefined}
         onRemove={viewing && 'id' in viewing ? () => {
           const s = viewing as Series
           setViewing(null)
@@ -496,8 +563,14 @@ export function TvTab() {
             rootFolderPath={(viewing as Series).rootFolderPath}
             episodes={episodes.data}
             onToast={setToast}
+            autoOpenSearch={transient?.id === (viewing as Series).id}
+            onGrabbed={() => {
+              grabbedRef.current = true
+              setTransient(null)
+            }}
           />
         ) : undefined}
+        autoShowAdvanced={viewing !== null && 'id' in viewing && transient?.id === viewing.id}
       />
 
       {pickShow && (
