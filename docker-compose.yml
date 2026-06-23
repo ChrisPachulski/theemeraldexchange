@@ -495,6 +495,11 @@ services:
     image: glitchtip/glitchtip:6.1@sha256:7e497103d3694e95fce232e83193cc2ef6865569314c66eb577b97c7c651008b
     container_name: exchange-glitchtip
     restart: unless-stopped
+    # Resource ceiling: Glitchtip shares this 7.5GB box with Plex. Uncapped, a
+    # Granian/Django surge (or a boot-time migrate spike) can OOM the host and
+    # take Plex down — the exact failure the other services' limits prevent.
+    mem_limit: 640m
+    cpus: 1.0
     # Hardening (audit 9-4): no privilege escalation, drop all Linux caps.
     # read_only is intentionally omitted — glitchtip's web/worker entrypoints
     # write to internal paths beyond a single data volume.
@@ -565,6 +570,10 @@ services:
     image: postgres:15@sha256:1b92e7a80c021647bf70f5d3eb66066a998e4f5cf43c07bb9dc9f729782cf88e
     container_name: exchange-glitchtip-db
     restart: unless-stopped
+    # Resource ceiling (Plex co-tenancy): cap Postgres so autovacuum / the
+    # boot-time migrate + maintain_partitions pass can't balloon and starve the host.
+    mem_limit: 768m
+    cpus: 1.0
     # Hardening (audit 9-4): no privilege escalation, drop all Linux caps.
     # read_only omitted — the official postgres image writes to several internal
     # paths beyond its data volume.
@@ -605,6 +614,10 @@ services:
     image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     container_name: exchange-glitchtip-redis
     restart: unless-stopped
+    # Resource ceiling (Plex co-tenancy): Valkey is a small cache/broker here;
+    # cap it so an unbounded keyspace can't grow into Plex's memory.
+    mem_limit: 256m
+    cpus: 0.5
     # Hardening (audit 9-4): no privilege escalation, drop all Linux caps.
     security_opt:
       - "no-new-privileges:true"
@@ -635,6 +648,10 @@ services:
     container_name: exchange-glitchtip-worker
     command: ./bin/start.sh
     restart: unless-stopped
+    # Resource ceiling (Plex co-tenancy): cap the async task worker so a backlog
+    # sweep / event-ingest burst can't OOM the host.
+    mem_limit: 512m
+    cpus: 1.0
     # Hardening (audit 9-4): no privilege escalation, drop all Linux caps.
     # read_only omitted — same internal-write behavior as the glitchtip web role.
     security_opt:
