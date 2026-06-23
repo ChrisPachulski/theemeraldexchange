@@ -4,6 +4,7 @@ import { Hono, type Context } from 'hono'
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { rateLimit } from '../middleware/rateLimit.js'
 import { radarrFetch, radarrRootFolders } from '../services/radarr.js'
+import { SEARCH_TIMEOUT_MS } from '../services/upstream.js'
 import {
   createGrabEventRecorder,
   createReservationLedger,
@@ -142,6 +143,7 @@ radarr.get('/api/v3/release', requireAdmin, radarrMutateLimit, async (c) => {
     '/api/v3/release',
     { method: 'GET' },
     new URLSearchParams({ movieId: String(movieId) }),
+    SEARCH_TIMEOUT_MS,
   )
   if (!r.ok) return c.json({ error: 'release_search_failed', status: r.status }, 502)
   const releases = (await r.json().catch(() => [])) as UpstreamRelease[]
@@ -165,7 +167,7 @@ radarr.post('/api/v3/release', requireAdmin, radarrMutateLimit, async (c) => {
     capGb: env.maxMovieGb,
     capBytesFor: movieCapBytesFor,
     listReleases: async () => {
-      const res = await radarrFetch('/api/v3/release', { method: 'GET' }, query)
+      const res = await radarrFetch('/api/v3/release', { method: 'GET' }, query, SEARCH_TIMEOUT_MS)
       if (!res.ok) return null
       return (await res.json().catch(() => [])) as UpstreamRelease[]
     },
