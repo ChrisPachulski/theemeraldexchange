@@ -20,6 +20,14 @@
 
 export const LAN_TIMEOUT_MS = 15_000
 export const WAN_TIMEOUT_MS = 10_000
+//   - SEARCH_TIMEOUT_MS (50s) for Sonarr/Radarr *interactive search*
+//     (GET /release). Unlike every other arr call — fast local DB reads —
+//     interactive search makes the indexer(s) run a live query, which
+//     routinely takes 20–60s (Sonarr's own UI waits this long). The 15s LAN
+//     budget aborts it mid-flight (observed: `release 502 15180ms`). Kept
+//     under the client's 60s abort so the backend returns a real result or
+//     error before the client gives up.
+export const SEARCH_TIMEOUT_MS = 50_000
 
 export async function fetchWithTimeout(
   url: string | URL,

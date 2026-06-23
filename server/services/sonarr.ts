@@ -15,6 +15,7 @@ export async function sonarrFetch(
   path: string,
   init: RequestInit = {},
   query?: URLSearchParams,
+  timeoutMs: number = LAN_TIMEOUT_MS,
 ): Promise<Response> {
   const url = new URL(`${env.sonarrUrl}${path}`)
   if (query) {
@@ -30,7 +31,7 @@ export async function sonarrFetch(
         Accept: 'application/json',
       },
     },
-    LAN_TIMEOUT_MS,
+    timeoutMs,
     'sonarr',
   )
 }
