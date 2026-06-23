@@ -1,6 +1,14 @@
 import { createArrClient } from './arrClient'
+import type {
+  ArrCommandResult,
+  ArrEditPatch,
+  ArrGrabResult,
+  ArrHistoryRecord,
+  ArrRelease,
+  RadarrRenameRow,
+} from './arrAdvanced'
 
-const { get, post, del } = createArrClient('Radarr', '/api/radarr/api/v3')
+const { get, post, put, del } = createArrClient('Radarr', '/api/radarr/api/v3')
 
 export type MovieSearchResult = {
   tmdbId: number
@@ -106,4 +114,34 @@ export const radarr = {
       | { status: 'no_releases_found' },
       Record<string, never>
     >(`/movie/${id}/upgrade`, {}),
+
+  // --- Advanced options (admin-only). Contract: R1–R6. ---
+
+  // R1: fire an allowlisted command (RefreshMovie / MoviesSearch /
+  // RenameMovie). The backend rejects any other name (400).
+  command: (body: {
+    name: 'RefreshMovie' | 'MoviesSearch' | 'RenameMovie'
+    movieIds?: number[]
+    files?: number[]
+  }) => post<ArrCommandResult, typeof body>('/command', body),
+
+  // R2: interactive search — release list for a movie.
+  releases: (movieId: number) => get<ArrRelease[]>('/release', { movieId }),
+
+  // R3: grab a hand-picked release. movieId scopes the upstream re-search the
+  // backend uses to validate the pick + cap.
+  grabRelease: (
+    movieId: number,
+    body: { guid: string; indexerId: number; allowOverCap?: boolean },
+  ) => post<ArrGrabResult, typeof body>('/release', body, { movieId }),
+
+  // R4: preview the rename diff for a movie.
+  renamePreview: (movieId: number) => get<RadarrRenameRow[]>('/rename', { movieId }),
+
+  // R5: movie download/import history, newest first.
+  history: (movieId: number) => get<ArrHistoryRecord[]>('/history/movie', { movieId }),
+
+  // R6: edit allowlisted fields (monitored / qualityProfileId / rootFolderPath).
+  editMovie: (id: number, patch: ArrEditPatch) =>
+    put<Movie, ArrEditPatch>(`/movie/${id}`, patch),
 }
