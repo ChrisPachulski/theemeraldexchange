@@ -1784,6 +1784,13 @@ describe('radarr advanced — R3 POST /api/v3/release (interactive grab)', () =>
       ([e]) => (e as { type?: string }).type,
     )
   }
+  // Full recorded events so we can assert the grab was logged with the right
+  // item/release/attribution fields (the audit-flagged gap on this path).
+  function recordedEvents() {
+    return (grabLog.appendGrabEvent as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([e]) => e as Record<string, unknown>,
+    )
+  }
 
   it('rejects user role with 403', async () => {
     const r = await appUnderTest().request('/api/v3/release?movieId=5', {
@@ -1837,6 +1844,34 @@ describe('radarr advanced — R3 POST /api/v3/release (interactive grab)', () =>
     expect(((await r.json()) as { status: string }).status).toBe('grabbed')
     expect(grabBody).toEqual({ guid: 'pick', indexerId: 9 })
     expect(eventTypes()).toEqual(expect.arrayContaining(['grab_started', 'grab_succeeded']))
+    // The override grab MUST be recorded through the grab-event log with the
+    // right item/release/attribution fields (audit gap closed here).
+    const succeeded = recordedEvents().find((e) => e.type === 'grab_succeeded')
+    expect(succeeded, 'expected a grab_succeeded event recorded for the override grab').toBeDefined()
+    expect(succeeded!.itemId).toBe(5) // movieId from the query scope
+    expect(succeeded!.title).toBe('Picked Movie')
+    expect(succeeded!.capGb).toBe(env.maxMovieGb)
+    // sub is the session subject — present so the grab is attributable in the
+    // audit log / /by-item scoping (exact value is session-derived).
+    expect(typeof succeeded!.sub).toBe('string')
+    expect(succeeded!.sub).toBeTruthy()
+    expect((succeeded!.release as { sizeBytes?: number }).sizeBytes).toBe(30 * GB)
+  })
+
+  it('grabs a within-cap release without override and records the grab event', async () => {
+    stubGrab({ size: 4 * GB })
+    const r = await appUnderTest().request('/api/v3/release?movieId=5', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ guid: 'pick', indexerId: 9 }),
+    })
+    expect(r.status).toBe(200)
+    expect(((await r.json()) as { status: string }).status).toBe('grabbed')
+    const succeeded = recordedEvents().find((e) => e.type === 'grab_succeeded')
+    expect(succeeded, 'expected appendGrabEvent to record a grab_succeeded event').toBeDefined()
+    expect(succeeded!.itemId).toBe(5)
+    expect(succeeded!.title).toBe('Picked Movie')
+    expect((succeeded!.release as { sizeBytes?: number }).sizeBytes).toBe(4 * GB)
   })
 
   it('404 release_not_found when guid+indexerId is not in the re-search', async () => {
