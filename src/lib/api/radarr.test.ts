@@ -121,6 +121,80 @@ describe('radarr get() helper', () => {
   })
 })
 
+describe('radarr advanced — request wiring (R1–R6)', () => {
+  it('R1 command() POSTs name+movieIds as JSON to /command', async () => {
+    fetchMock.mockResolvedValueOnce(jsonRes({ id: 1, name: 'RefreshMovie', status: 'queued' }))
+    await radarr.command({ name: 'RefreshMovie', movieIds: [42] })
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/radarr/api/v3/command')
+    expect(init.method).toBe('POST')
+    expect(init.credentials).toBe('include')
+    expect(JSON.parse(init.body as string)).toEqual({ name: 'RefreshMovie', movieIds: [42] })
+  })
+
+  it('R2 releases() GETs /release with movieId query', async () => {
+    fetchMock.mockResolvedValueOnce(jsonRes([]))
+    await radarr.releases(5)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/radarr/api/v3/release')
+    expect(url).toContain('movieId=5')
+    expect(init.credentials).toBe('include')
+  })
+
+  it('R3 grabRelease() POSTs the body with the movieId query for the cap re-search', async () => {
+    fetchMock.mockResolvedValueOnce(jsonRes({ status: 'grabbed', title: 'X', sizeGb: 4 }))
+    await radarr.grabRelease(5, { guid: 'g', indexerId: 9, allowOverCap: true })
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/radarr/api/v3/release')
+    expect(url).toContain('movieId=5')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body as string)).toEqual({ guid: 'g', indexerId: 9, allowOverCap: true })
+  })
+
+  it('R3 grabRelease() maps a 424 over-cap response to a typed ApiError', async () => {
+    fetchMock.mockResolvedValueOnce(jsonRes({ error: 'over_cap' }, { status: 424 }))
+    await expect(radarr.grabRelease(5, { guid: 'g', indexerId: 9 })).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 424,
+      code: 'over_cap',
+    } satisfies Partial<ApiError>)
+  })
+
+  it('R4 renamePreview() GETs /rename with movieId', async () => {
+    fetchMock.mockResolvedValueOnce(jsonRes([]))
+    await radarr.renamePreview(5)
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/radarr/api/v3/rename')
+    expect(url).toContain('movieId=5')
+  })
+
+  it('R5 history() GETs /history/movie with movieId', async () => {
+    fetchMock.mockResolvedValueOnce(jsonRes([]))
+    await radarr.history(5)
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/radarr/api/v3/history/movie')
+    expect(url).toContain('movieId=5')
+  })
+
+  it('R6 editMovie() PUTs only the patch fields to /movie/:id', async () => {
+    fetchMock.mockResolvedValueOnce(jsonRes({ id: 5 }))
+    await radarr.editMovie(5, { monitored: true, rootFolderPath: '/data/movies' })
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/radarr/api/v3/movie/5')
+    expect(init.method).toBe('PUT')
+    expect(JSON.parse(init.body as string)).toEqual({ monitored: true, rootFolderPath: '/data/movies' })
+  })
+
+  it('R6 editMovie() maps a 403 admin-only response to a typed ApiError', async () => {
+    fetchMock.mockResolvedValueOnce(jsonRes({ error: 'forbidden', reason: 'admin_only' }, { status: 403 }))
+    await expect(radarr.editMovie(5, { monitored: false })).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 403,
+      code: 'forbidden',
+    } satisfies Partial<ApiError>)
+  })
+})
+
 describe('movieAvailability', () => {
   it('is playable when a file exists on disk', () => {
     expect(movieAvailability({ hasFile: true, isAvailable: true, status: 'released' })).toBe('playable')

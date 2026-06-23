@@ -1621,3 +1621,602 @@ describe('radarr movie-add in-flight reservation', () => {
     expect(grabPostCount(calls2)).toBe(1)
   })
 })
+
+// ===========================================================================
+// Advanced options (R1–R6). Mirror the Sonarr S1–S7 assertions: admin gate,
+// command allowlist, PUT field allowlist, interactive-grab cap + allowOverCap
+// override + grab-event logging, upstream-error mapping.
+// ===========================================================================
+describe('radarr advanced — R1 POST /api/v3/command', () => {
+  it('rejects user role with 403 and does not forward', async () => {
+    const r = await appUnderTest().request('/api/v3/command', {
+      method: 'POST',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'RefreshMovie', movieIds: [1] }),
+    })
+    expect(r.status).toBe(403)
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  it('400 command_not_allowed for a disallowed name', async () => {
+    const r = await appUnderTest().request('/api/v3/command', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Backup' }),
+    })
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'command_not_allowed' })
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  it('400 missing_required_field when RefreshMovie has no movieIds', async () => {
+    const r = await appUnderTest().request('/api/v3/command', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'RefreshMovie' }),
+    })
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'missing_required_field' })
+  })
+
+  it('forwards only allowlisted fields and returns the upstream ack', async () => {
+    let captured: Record<string, unknown> | null = null
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.endsWith('/api/v3/command') && init?.method === 'POST') {
+          captured = JSON.parse(init.body as string)
+          return new Response(JSON.stringify({ id: 3, name: 'MoviesSearch', status: 'started' }), { status: 201 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/command', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'MoviesSearch', movieIds: [42], evil: 'x' }),
+    })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual({ id: 3, name: 'MoviesSearch', status: 'started' })
+    expect(captured).toEqual({ name: 'MoviesSearch', movieIds: [42] })
+  })
+
+  it('502 command_failed when upstream rejects', async () => {
+    stub('/api/v3/command', { error: 'nope' }, 500)
+    const r = await appUnderTest().request('/api/v3/command', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'RefreshMovie', movieIds: [1] }),
+    })
+    expect(r.status).toBe(502)
+    expect(await r.json()).toEqual({ error: 'command_failed', status: 500 })
+  })
+})
+
+describe('radarr advanced — R2 GET /api/v3/release', () => {
+  it('rejects user role with 403', async () => {
+    const r = await appUnderTest().request('/api/v3/release?movieId=1', {
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r.status).toBe(403)
+  })
+
+  it('400 bad_movieId without a valid movieId', async () => {
+    const r = await appUnderTest().request('/api/v3/release?movieId=0', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'bad_movieId' })
+  })
+
+  it('projects releases with sizeGb + overCap against the flat movie cap (10 GB default)', async () => {
+    const GB = 1024 ** 3
+    stub('/api/v3/release', [
+      {
+        guid: 'big', indexerId: 1, title: 'Big', size: 30 * GB, qualityWeight: 80, protocol: 'torrent',
+        seeders: 50, indexer: 'IPT', quality: { quality: { name: 'Bluray-2160p' } },
+        languages: [{ name: 'English' }], rejected: false, rejections: [],
+      },
+      {
+        guid: 'small', indexerId: 1, title: 'Small', size: 4 * GB, qualityWeight: 40, protocol: 'usenet',
+        quality: { quality: { name: 'WEBDL-1080p' } }, languages: [{ name: 'English' }],
+        rejected: true, rejections: ['Not an upgrade'],
+      },
+    ])
+    const r = await appUnderTest().request('/api/v3/release?movieId=5', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(200)
+    const rows = (await r.json()) as Array<Record<string, unknown>>
+    const byGuid = Object.fromEntries(rows.map((x) => [x.guid as string, x]))
+    expect(byGuid.big.overCap).toBe(true) // 30 GB > 10 GB cap
+    expect(byGuid.big.seeders).toBe(50)
+    expect(byGuid.big.protocol).toBe('torrent')
+    expect(byGuid.small.overCap).toBe(false) // 4 GB < 10 GB
+    expect(byGuid.small.rejected).toBe(true)
+    expect(byGuid.small.rejections).toEqual(['Not an upgrade'])
+  })
+
+  it('502 release_search_failed when upstream errors', async () => {
+    stub('/api/v3/release', { error: 'boom' }, 500)
+    const r = await appUnderTest().request('/api/v3/release?movieId=5', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(502)
+    expect(await r.json()).toEqual({ error: 'release_search_failed', status: 500 })
+  })
+})
+
+describe('radarr advanced — R3 POST /api/v3/release (interactive grab)', () => {
+  const GB = 1024 ** 3
+
+  function stubGrab(opts: { size: number; grabStatus?: number; onGrab?: (b: Record<string, unknown>) => void }) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        if (url.includes('/api/v3/release') && method === 'GET') {
+          return new Response(
+            JSON.stringify([
+              { guid: 'pick', indexerId: 9, title: 'Picked Movie', size: opts.size, qualityWeight: 50, protocol: 'usenet' },
+            ]),
+            { status: 200 },
+          )
+        }
+        if (url.includes('/api/v3/release') && method === 'POST') {
+          if (opts.onGrab) opts.onGrab(JSON.parse(init!.body as string))
+          return new Response(JSON.stringify({ ok: true }), { status: opts.grabStatus ?? 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+  }
+
+  let appendSpy: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    appendSpy = vi.spyOn(grabLog, 'appendGrabEvent').mockResolvedValue(undefined)
+  })
+  afterEach(() => appendSpy.mockRestore())
+  function eventTypes() {
+    return (grabLog.appendGrabEvent as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([e]) => (e as { type?: string }).type,
+    )
+  }
+  // Full recorded events so we can assert the grab was logged with the right
+  // item/release/attribution fields (the audit-flagged gap on this path).
+  function recordedEvents() {
+    return (grabLog.appendGrabEvent as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([e]) => e as Record<string, unknown>,
+    )
+  }
+
+  it('rejects user role with 403', async () => {
+    const r = await appUnderTest().request('/api/v3/release?movieId=5', {
+      method: 'POST',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ guid: 'pick', indexerId: 9 }),
+    })
+    expect(r.status).toBe(403)
+  })
+
+  it('424 over_cap without override; no grab POST, logs a cap event', async () => {
+    let grabbed = false
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        if (url.includes('/api/v3/release') && method === 'GET') {
+          return new Response(
+            JSON.stringify([{ guid: 'pick', indexerId: 9, title: 'Huge', size: 30 * GB, qualityWeight: 50 }]),
+            { status: 200 },
+          )
+        }
+        if (url.includes('/api/v3/release') && method === 'POST') {
+          grabbed = true
+          return new Response('{}', { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/release?movieId=5', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ guid: 'pick', indexerId: 9 }),
+    })
+    expect(r.status).toBe(424)
+    expect(((await r.json()) as { error: string }).error).toBe('over_cap')
+    expect(grabbed).toBe(false)
+    expect(eventTypes()).toContain('all_rejected_by_cap')
+  })
+
+  it('grabs an over-cap release with allowOverCap:true and forwards only guid+indexerId', async () => {
+    let grabBody: Record<string, unknown> | null = null
+    stubGrab({ size: 30 * GB, onGrab: (b) => { grabBody = b } })
+    const r = await appUnderTest().request('/api/v3/release?movieId=5', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ guid: 'pick', indexerId: 9, allowOverCap: true }),
+    })
+    expect(r.status).toBe(200)
+    expect(((await r.json()) as { status: string }).status).toBe('grabbed')
+    expect(grabBody).toEqual({ guid: 'pick', indexerId: 9 })
+    expect(eventTypes()).toEqual(expect.arrayContaining(['grab_started', 'grab_succeeded']))
+    // The override grab MUST be recorded through the grab-event log with the
+    // right item/release/attribution fields (audit gap closed here).
+    const succeeded = recordedEvents().find((e) => e.type === 'grab_succeeded')
+    expect(succeeded, 'expected a grab_succeeded event recorded for the override grab').toBeDefined()
+    expect(succeeded!.itemId).toBe(5) // movieId from the query scope
+    expect(succeeded!.title).toBe('Picked Movie')
+    expect(succeeded!.capGb).toBe(env.maxMovieGb)
+    // sub is the session subject — present so the grab is attributable in the
+    // audit log / /by-item scoping (exact value is session-derived).
+    expect(typeof succeeded!.sub).toBe('string')
+    expect(succeeded!.sub).toBeTruthy()
+    expect((succeeded!.release as { sizeBytes?: number }).sizeBytes).toBe(30 * GB)
+  })
+
+  it('grabs a within-cap release without override and records the grab event', async () => {
+    stubGrab({ size: 4 * GB })
+    const r = await appUnderTest().request('/api/v3/release?movieId=5', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ guid: 'pick', indexerId: 9 }),
+    })
+    expect(r.status).toBe(200)
+    expect(((await r.json()) as { status: string }).status).toBe('grabbed')
+    const succeeded = recordedEvents().find((e) => e.type === 'grab_succeeded')
+    expect(succeeded, 'expected appendGrabEvent to record a grab_succeeded event').toBeDefined()
+    expect(succeeded!.itemId).toBe(5)
+    expect(succeeded!.title).toBe('Picked Movie')
+    expect((succeeded!.release as { sizeBytes?: number }).sizeBytes).toBe(4 * GB)
+  })
+
+  it('404 release_not_found when guid+indexerId is not in the re-search', async () => {
+    stubGrab({ size: 4 * GB })
+    const r = await appUnderTest().request('/api/v3/release?movieId=5', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ guid: 'ghost', indexerId: 9 }),
+    })
+    expect(r.status).toBe(404)
+  })
+
+  it('502 grab_failed and logs grab_failed on upstream grab error', async () => {
+    stubGrab({ size: 4 * GB, grabStatus: 500 })
+    const r = await appUnderTest().request('/api/v3/release?movieId=5', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ guid: 'pick', indexerId: 9 }),
+    })
+    expect(r.status).toBe(502)
+    expect(((await r.json()) as { error: string }).error).toBe('grab_failed')
+    expect(eventTypes()).toContain('grab_failed')
+  })
+})
+
+describe('radarr advanced — R5 GET /api/v3/history/movie', () => {
+  it('rejects user role with 403', async () => {
+    const r = await appUnderTest().request('/api/v3/history/movie?movieId=1', {
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r.status).toBe(403)
+  })
+
+  it('maps a bare-array upstream history to the slim shape', async () => {
+    stub('/api/v3/history/movie', [
+      { date: '2026-06-22T00:00:00Z', eventType: 'grabbed', sourceTitle: 'Movie 2026', quality: { quality: { name: 'WEBDL-1080p' } } },
+    ])
+    const r = await appUnderTest().request('/api/v3/history/movie?movieId=5', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(200)
+    const rows = (await r.json()) as Array<Record<string, unknown>>
+    expect(rows[0]).toEqual({
+      date: '2026-06-22T00:00:00Z', eventType: 'grabbed', sourceTitle: 'Movie 2026', quality: 'WEBDL-1080p',
+    })
+  })
+})
+
+describe('radarr advanced — R6 PUT /api/v3/movie/:id (edit)', () => {
+  it('rejects user role with 403', async () => {
+    const r = await appUnderTest().request('/api/v3/movie/5', {
+      method: 'PUT',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ monitored: false }),
+    })
+    expect(r.status).toBe(403)
+  })
+
+  it('overlays ONLY allowlisted fields onto the full movie, ignoring extras', async () => {
+    let putBody: Record<string, unknown> | null = null
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        if (url.includes('/api/v3/movie/5') && method === 'GET') {
+          return new Response(
+            JSON.stringify({
+              id: 5, title: 'Existing Movie', monitored: true, qualityProfileId: 1,
+              rootFolderPath: '/data/movies', path: '/data/movies/Existing', tmdbId: 999,
+            }),
+            { status: 200 },
+          )
+        }
+        if (url.includes('/api/v3/movie/5') && method === 'PUT') {
+          putBody = JSON.parse(init!.body as string)
+          return new Response(JSON.stringify(putBody), { status: 202 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/movie/5', {
+      method: 'PUT',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        monitored: false, qualityProfileId: 7, rootFolderPath: '/data/movies2',
+        title: 'HACKED', tmdbId: 1, path: '/etc/passwd',
+      }),
+    })
+    expect(r.status).toBe(202)
+    expect(putBody!.monitored).toBe(false)
+    expect(putBody!.qualityProfileId).toBe(7)
+    expect(putBody!.rootFolderPath).toBe('/data/movies2')
+    // Full object preserved; client overwrite attempts ignored.
+    expect(putBody!.title).toBe('Existing Movie')
+    expect(putBody!.tmdbId).toBe(999)
+    expect(putBody!.path).toBe('/data/movies/Existing')
+    expect(putBody!.id).toBe(5)
+  })
+
+  it('502 movie_lookup_failed when the upstream GET fails (no PUT attempted)', async () => {
+    let putAttempted = false
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        if (url.includes('/api/v3/movie/5') && method === 'GET') {
+          return new Response('{"error":"no"}', { status: 404 })
+        }
+        if (url.includes('/api/v3/movie/5') && method === 'PUT') {
+          putAttempted = true
+          return new Response('{}', { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/movie/5', {
+      method: 'PUT',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ monitored: false }),
+    })
+    expect(r.status).toBe(502)
+    expect(((await r.json()) as { error: string }).error).toBe('movie_lookup_failed')
+    expect(putAttempted).toBe(false)
+  })
+})
+
+describe('radarr advanced — R4 GET /api/v3/rename', () => {
+  it('rejects user role with 403', async () => {
+    const r = await appUnderTest().request('/api/v3/rename?movieId=1', {
+      headers: { Cookie: await userCookie() },
+    })
+    expect(r.status).toBe(403)
+  })
+
+  it('projects the rename diff rows', async () => {
+    stub('/api/v3/rename', [
+      { movieFileId: 1, existingPath: '/old/m.mkv', newPath: '/new/m.mkv', extra: 'drop' },
+    ])
+    const r = await appUnderTest().request('/api/v3/rename?movieId=5', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(200)
+    const rows = (await r.json()) as Array<Record<string, unknown>>
+    expect(rows[0]).toEqual({ movieFileId: 1, existingPath: '/old/m.mkv', newPath: '/new/m.mkv' })
+  })
+
+  it('400 bad_movieId without a valid movieId', async () => {
+    const r = await appUnderTest().request('/api/v3/rename?movieId=0', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'bad_movieId' })
+  })
+
+  it('502 rename_preview_failed when upstream errors', async () => {
+    stub('/api/v3/rename', { error: 'boom' }, 500)
+    const r = await appUnderTest().request('/api/v3/rename?movieId=5', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(502)
+    expect(await r.json()).toEqual({ error: 'rename_preview_failed', status: 500 })
+  })
+})
+
+// Error-path coverage for the new advanced handlers (upstream-failure 502
+// branches + remaining bad-param 400s the happy-path tests don't reach).
+describe('radarr advanced — error-path branches', () => {
+  it('R5 400 bad_movieId and 502 history_failed', async () => {
+    const bad = await appUnderTest().request('/api/v3/history/movie?movieId=x', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(bad.status).toBe(400)
+
+    stub('/api/v3/history/movie', { error: 'boom' }, 503)
+    const fail = await appUnderTest().request('/api/v3/history/movie?movieId=5', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(fail.status).toBe(502)
+    expect(await fail.json()).toEqual({ error: 'history_failed', status: 503 })
+  })
+
+  it('R6 400 bad_id and 502 movie_update_failed', async () => {
+    const bad = await appUnderTest().request('/api/v3/movie/0', {
+      method: 'PUT',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ monitored: false }),
+    })
+    expect(bad.status).toBe(400)
+    expect(await bad.json()).toEqual({ error: 'bad_id' })
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        if (url.includes('/api/v3/movie/9') && method === 'GET') {
+          return new Response(JSON.stringify({ id: 9, title: 'X', monitored: true }), { status: 200 })
+        }
+        if (url.includes('/api/v3/movie/9') && method === 'PUT') {
+          return new Response('{"error":"validation"}', { status: 400 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const fail = await appUnderTest().request('/api/v3/movie/9', {
+      method: 'PUT',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ monitored: false }),
+    })
+    expect(fail.status).toBe(502)
+    expect(await fail.json()).toEqual({ error: 'movie_update_failed', status: 400 })
+  })
+
+  it('R6 502 movie_lookup_failed when the upstream GET fails', async () => {
+    stub('/api/v3/movie/9', { error: 'no' }, 404)
+    const r = await appUnderTest().request('/api/v3/movie/9', {
+      method: 'PUT',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ monitored: false }),
+    })
+    expect(r.status).toBe(502)
+    expect(await r.json()).toEqual({ error: 'movie_lookup_failed', status: 404 })
+  })
+
+  it('R1 ack tolerates a non-JSON upstream body via the catch path', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.endsWith('/api/v3/command') && init?.method === 'POST') {
+          return new Response('not json', { status: 200, headers: { 'Content-Type': 'text/plain' } })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/command', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'RefreshMovie', movieIds: [1] }),
+    })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual({ id: undefined, name: undefined, status: undefined })
+  })
+})
+
+describe('radarr advanced — malformed body & non-JSON upstream branches', () => {
+  // A 200 from Radarr whose body is not JSON: the handler must fall back
+  // (empty projection / empty history), never throw.
+  function stubNonJson(suffix: string) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes(suffix)) {
+          return new Response('<<garbage not json>>', { status: 200, headers: { 'Content-Type': 'text/plain' } })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+  }
+
+  it('R1 400 invalid_command when the request body is not JSON', async () => {
+    const r = await appUnderTest().request('/api/v3/command', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: '{not valid json',
+    })
+    expect(r.status).toBe(400)
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  it('R2 returns [] when the upstream release body is not JSON (200)', async () => {
+    stubNonJson('/api/v3/release')
+    const r = await appUnderTest().request('/api/v3/release?movieId=7', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual([])
+  })
+
+  it('R3 400 invalid_body when the grab request body is not JSON', async () => {
+    const r = await appUnderTest().request('/api/v3/release?movieId=7', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: 'definitely-not-json',
+    })
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'invalid_body' })
+  })
+
+  it('R3 404 release_not_found when the upstream release list is not JSON', async () => {
+    stubNonJson('/api/v3/release')
+    const r = await appUnderTest().request('/api/v3/release?movieId=7', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ guid: 'g', indexerId: 1 }),
+    })
+    expect(r.status).toBe(404)
+    expect(await r.json()).toEqual({ error: 'release_not_found' })
+  })
+
+  it('R4 returns [] when the upstream rename body is not JSON (200)', async () => {
+    stubNonJson('/api/v3/rename')
+    const r = await appUnderTest().request('/api/v3/rename?movieId=7', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual([])
+  })
+
+  it('R5 returns [] when the upstream history body is not JSON (200)', async () => {
+    stubNonJson('/api/v3/history/movie')
+    const r = await appUnderTest().request('/api/v3/history/movie?movieId=7', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual([])
+  })
+
+  it('R6 treats a non-JSON edit body as an empty patch (full object preserved)', async () => {
+    let putBody: Record<string, unknown> | null = null
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        if (url.includes('/api/v3/movie/9') && method === 'GET') {
+          return new Response(JSON.stringify({ id: 9, title: 'X', monitored: true, qualityProfileId: 4 }), { status: 200 })
+        }
+        if (url.includes('/api/v3/movie/9') && method === 'PUT') {
+          putBody = JSON.parse(init?.body as string)
+          return new Response(JSON.stringify(putBody), { status: 200 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/movie/9', {
+      method: 'PUT',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: 'not-json-at-all',
+    })
+    expect(r.status).toBe(200)
+    // Empty patch → upstream object round-trips unchanged.
+    expect(putBody).toEqual({ id: 9, title: 'X', monitored: true, qualityProfileId: 4 })
+  })
+})

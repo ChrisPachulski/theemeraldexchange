@@ -1,6 +1,14 @@
 import { createArrClient } from './arrClient'
+import type {
+  ArrCommandResult,
+  ArrEditPatch,
+  ArrGrabResult,
+  ArrHistoryRecord,
+  ArrRelease,
+  SonarrRenameRow,
+} from './arrAdvanced'
 
-const { get, post, del } = createArrClient('Sonarr', '/api/sonarr/api/v3')
+const { get, post, put, del } = createArrClient('Sonarr', '/api/sonarr/api/v3')
 
 export type SystemStatus = {
   version: string
@@ -129,4 +137,52 @@ export const sonarr = {
   // Admin: remove + blocklist + re-search every import-jammed record.
   clearStuck: () =>
     post<{ removed: number }, Record<string, never>>('/queue/clear-stuck', {}),
+
+  // --- Advanced options (admin-only). Contract: S1–S7. ---
+
+  // S1: fire an allowlisted command (RefreshSeries / SeriesSearch /
+  // EpisodeSearch / RenameFiles). The backend rejects any other name (400).
+  command: (body: {
+    name: 'RefreshSeries' | 'SeriesSearch' | 'EpisodeSearch' | 'RenameFiles'
+    seriesId?: number
+    episodeIds?: number[]
+    files?: number[]
+  }) => post<ArrCommandResult, typeof body>('/command', body),
+
+  // S2: interactive search — release list for a series/season.
+  releases: (seriesId: number, seasonNumber?: number) =>
+    get<ArrRelease[]>(
+      '/release',
+      seasonNumber === undefined ? { seriesId } : { seriesId, seasonNumber },
+    ),
+
+  // S3: grab a hand-picked release. seriesId (+ optional seasonNumber) scope
+  // the upstream re-search the backend uses to validate the pick + cap.
+  grabRelease: (
+    seriesId: number,
+    body: { guid: string; indexerId: number; allowOverCap?: boolean },
+    seasonNumber?: number,
+  ) =>
+    post<ArrGrabResult, typeof body>(
+      '/release',
+      body,
+      seasonNumber === undefined ? { seriesId } : { seriesId, seasonNumber },
+    ),
+
+  // S4: preview the rename diff for a series.
+  renamePreview: (seriesId: number) => get<SonarrRenameRow[]>('/rename', { seriesId }),
+
+  // S5: batch episode monitor toggle.
+  monitorEpisodes: (episodeIds: number[], monitored: boolean) =>
+    put<{ ok: boolean; updated: number }, { episodeIds: number[]; monitored: boolean }>(
+      '/episode/monitor',
+      { episodeIds, monitored },
+    ),
+
+  // S6: series download/import history, newest first.
+  history: (seriesId: number) => get<ArrHistoryRecord[]>('/history/series', { seriesId }),
+
+  // S7: edit allowlisted fields (monitored / qualityProfileId / rootFolderPath).
+  editSeries: (id: number, patch: ArrEditPatch) =>
+    put<Series, ArrEditPatch>(`/series/${id}`, patch),
 }

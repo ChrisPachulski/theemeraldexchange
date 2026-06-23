@@ -13,12 +13,20 @@ export function createArrClient(label: string, base: string) {
     return res.json() as Promise<T>
   }
 
-  async function post<T, B>(path: string, body: B): Promise<T> {
+  // Shared body-bearing request with the 60s abort guard. POST and PUT
+  // differ only by verb; `params` rides on the URL so a grab endpoint can
+  // carry its scoping id (e.g. ?movieId=) alongside a JSON body.
+  async function sendBody<T, B>(
+    method: 'POST' | 'PUT',
+    path: string,
+    body: B,
+    params?: Params,
+  ): Promise<T> {
     const ctrl = new AbortController()
     const timer = setTimeout(() => ctrl.abort(), 60_000)
     try {
-      const res = await fetch(apiUrl(`${base}${path}`), {
-        method: 'POST',
+      const res = await fetch(apiUrl(`${base}${path}`, params), {
+        method,
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify(body),
@@ -39,6 +47,14 @@ export function createArrClient(label: string, base: string) {
     }
   }
 
+  function post<T, B>(path: string, body: B, params?: Params): Promise<T> {
+    return sendBody<T, B>('POST', path, body, params)
+  }
+
+  function put<T, B>(path: string, body: B, params?: Params): Promise<T> {
+    return sendBody<T, B>('PUT', path, body, params)
+  }
+
   async function del(path: string, params?: Params): Promise<void> {
     const res = await fetch(apiUrl(`${base}${path}`, params), {
       method: 'DELETE',
@@ -47,5 +63,5 @@ export function createArrClient(label: string, base: string) {
     if (!res.ok) await throwApiError(res, `${label} ${path}`)
   }
 
-  return { get, post, del }
+  return { get, post, put, del }
 }

@@ -7,6 +7,7 @@ import { ModeToggle, type Mode } from '../search/ModeToggle'
 import { LibraryAlphabet, libraryBucket, type LibraryLetter } from '../library/LibraryAlphabet'
 import { LibraryFilters, type FilterOption } from '../library/LibraryFilters'
 import { DetailModal, type DetailMeta } from '../detail/DetailModal'
+import { ArrAdvancedPanel } from '../detail/ArrAdvancedPanel'
 import { AddSeriesModal } from '../add/AddSeriesModal'
 import { Toast } from '../toast/Toast'
 import { LoadingPulse } from '../feedback/LoadingPulse'
@@ -486,6 +487,17 @@ export function TvTab() {
           setViewing(null)
           confirmRemove(s)
         } : undefined}
+        advanced={isAdmin && viewing && 'id' in viewing ? (
+          <ArrAdvancedPanel
+            kind="tv"
+            itemId={(viewing as Series).id}
+            monitored={(viewing as Series).monitored}
+            qualityProfileId={(viewing as Series).qualityProfileId}
+            rootFolderPath={(viewing as Series).rootFolderPath}
+            episodes={episodes.data}
+            onToast={setToast}
+          />
+        ) : undefined}
       />
 
       {pickShow && (
