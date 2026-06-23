@@ -1712,6 +1712,134 @@ describe('sonarr advanced — S4 GET /api/v3/rename', () => {
     expect(rows[0]).toEqual({ episodeFileId: 1, seasonNumber: 1, existingPath: '/old/a.mkv', newPath: '/new/a.mkv' })
     expect(rows[0].extra).toBeUndefined()
   })
+
+  it('400 bad_seriesId without a valid seriesId', async () => {
+    const r = await appUnderTest().request('/api/v3/rename?seriesId=0', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'bad_seriesId' })
+  })
+
+  it('502 rename_preview_failed when upstream errors', async () => {
+    stub('/api/v3/rename', { error: 'boom' }, 500)
+    const r = await appUnderTest().request('/api/v3/rename?seriesId=5', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(502)
+    expect(await r.json()).toEqual({ error: 'rename_preview_failed', status: 500 })
+  })
+})
+
+// Error-path coverage for the new advanced handlers: the upstream-failure
+// (502) branches and the remaining bad-param 400s that the happy-path tests
+// above don't reach. These exercise real code paths (each maps a distinct
+// upstream failure to a distinct client error), not coverage padding.
+describe('sonarr advanced — error-path branches', () => {
+  it('S2 400 bad_seasonNumber for a negative seasonNumber', async () => {
+    const r = await appUnderTest().request('/api/v3/release?seriesId=5&seasonNumber=-1', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'bad_seasonNumber' })
+  })
+
+  it('S5 400 invalid_body when monitored is missing', async () => {
+    const r = await appUnderTest().request('/api/v3/episode/monitor', {
+      method: 'PUT',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ episodeIds: [1] }),
+    })
+    expect(r.status).toBe(400)
+  })
+
+  it('S5 502 monitor_update_failed when upstream errors', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes('/api/v3/episode/monitor') && init?.method === 'PUT') {
+          return new Response('{"error":"no"}', { status: 500 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/episode/monitor', {
+      method: 'PUT',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ episodeIds: [1, 2], monitored: true }),
+    })
+    expect(r.status).toBe(502)
+    expect(await r.json()).toEqual({ error: 'monitor_update_failed', status: 500 })
+  })
+
+  it('S6 400 bad_seriesId and 502 history_failed', async () => {
+    const bad = await appUnderTest().request('/api/v3/history/series?seriesId=x', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(bad.status).toBe(400)
+
+    stub('/api/v3/history/series', { error: 'boom' }, 503)
+    const fail = await appUnderTest().request('/api/v3/history/series?seriesId=5', {
+      headers: { Cookie: await adminCookie() },
+    })
+    expect(fail.status).toBe(502)
+    expect(await fail.json()).toEqual({ error: 'history_failed', status: 503 })
+  })
+
+  it('S7 400 bad_id and 502 series_update_failed', async () => {
+    const bad = await appUnderTest().request('/api/v3/series/0', {
+      method: 'PUT',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ monitored: false }),
+    })
+    expect(bad.status).toBe(400)
+    expect(await bad.json()).toEqual({ error: 'bad_id' })
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = init?.method ?? 'GET'
+        if (url.includes('/api/v3/series/9') && method === 'GET') {
+          return new Response(JSON.stringify({ id: 9, title: 'X', monitored: true }), { status: 200 })
+        }
+        if (url.includes('/api/v3/series/9') && method === 'PUT') {
+          return new Response('{"error":"validation"}', { status: 400 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const fail = await appUnderTest().request('/api/v3/series/9', {
+      method: 'PUT',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ monitored: false }),
+    })
+    expect(fail.status).toBe(502)
+    expect(await fail.json()).toEqual({ error: 'series_update_failed', status: 400 })
+  })
+
+  it('S1 502 command_failed surfaced via the catch path on a non-JSON ack', async () => {
+    // Upstream returns 200 but a non-JSON body — the .catch(()=>({})) fallback
+    // must still produce a well-formed ack (undefined fields), not throw.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.endsWith('/api/v3/command') && init?.method === 'POST') {
+          return new Response('not json', { status: 200, headers: { 'Content-Type': 'text/plain' } })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/command', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'RefreshSeries', seriesId: 1 }),
+    })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual({ id: undefined, name: undefined, status: undefined })
+  })
 })
 
 describe('sonarr clear-stuck', () => {
