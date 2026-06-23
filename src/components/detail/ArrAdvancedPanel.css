@@ -213,6 +213,13 @@
   border-radius: var(--r-pod);
 }
 
+/* Results table: square the corners so the rounded radius + overflow clip
+ * never cuts off cell text at the edges. The loading skeleton keeps the
+ * rounded wrap (the "blinking pill" look). */
+.arr-adv__table-wrap--flush {
+  border-radius: 0;
+}
+
 .arr-adv__table {
   width: 100%;
   border-collapse: collapse;

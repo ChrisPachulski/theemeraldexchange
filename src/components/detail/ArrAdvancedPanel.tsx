@@ -408,7 +408,7 @@ function InteractiveSearchSection({
               )}
             </div>
           ) : (
-            <div className="arr-adv__table-wrap">
+            <div className="arr-adv__table-wrap arr-adv__table-wrap--flush">
               <table className="arr-adv__table">
                 <thead>
                   <tr>
