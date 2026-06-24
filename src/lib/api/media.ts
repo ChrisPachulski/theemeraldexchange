@@ -457,22 +457,6 @@ function normList<R, T>(
   return { items, total: raw.total ?? items.length }
 }
 
-// ── Poster resolver seam ─────────────────────────────────────────────
-//
-// media-core does not yet populate poster_path (NULL on every row until
-// a TMDB re-scan lands). Returning undefined here makes MediaCard render
-// its first-letter fallback. When enrichment ships we change ONLY this
-// function — e.g. build a TMDB image URL from posterPath — not every
-// call site.
-export function posterFor(item: {
-  posterPath?: string | null
-}): string | undefined {
-  if (!item.posterPath) return undefined
-  // poster_path is a TMDB relative path like "/abc.jpg"; resolve to the
-  // public TMDB image CDN at a card-appropriate width.
-  return `https://image.tmdb.org/t/p/w342${item.posterPath}`
-}
-
 type RawPlaybackGrant = {
   delivery: 'progressive' | 'hls'
   url: string
