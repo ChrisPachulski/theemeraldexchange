@@ -43,6 +43,9 @@ export interface StartRemuxOpts {
   streamId: string
   sub: string
   upstreamUrl: string
+  /** Re-encode video to H.264 instead of copying it. Set for channels whose
+   *  upstream video isn't Apple-TS-playable (e.g. HEVC) — see `needsReencode`. */
+  reencodeVideo?: boolean
 }
 
 export interface StartRemuxResult {
@@ -65,6 +68,31 @@ export interface StartRemuxResult {
 // reaping a live viewer is not.
 const IDLE_MS = 90_000
 const sessions = new Map<string, RemuxSession>()
+
+// Channels whose upstream video isn't H.264 and so can't be COPIED into a
+// playable Apple HLS stream (Apple won't play HEVC — or MPEG-2/AV1/VP9 — from
+// MPEG-TS segments). We learn this from the remux ffmpeg's own input stream info
+// (the stderr handler below), then remember it with a TTL so later tunes skip
+// the doomed copy attempt and go straight to re-encode. TTL'd because a channel
+// can change codec over time.
+const REENCODE_MEMORY_MS = 6 * 60 * 60_000
+const needsReencode = new Map<string, number>() // streamId -> expiresAt (ms)
+
+/** True if this channel was seen serving non-H.264 video recently and should be
+ *  re-encoded rather than copied. Read by ensureLiveRemuxEntry when (re)starting. */
+export function channelNeedsReencode(streamId: string): boolean {
+  const exp = needsReencode.get(streamId)
+  if (exp === undefined) return false
+  if (exp <= Date.now()) {
+    needsReencode.delete(streamId)
+    return false
+  }
+  return true
+}
+
+function markChannelNeedsReencode(streamId: string): void {
+  needsReencode.set(streamId, Date.now() + REENCODE_MEMORY_MS)
+}
 
 // Only http(s) upstreams are valid IPTV inputs. Reject anything else
 // (file:, concat:, pipe:, data:, …) before it reaches ffmpeg's '-i'.
@@ -218,15 +246,44 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult {
   fs.mkdirSync(dir, { recursive: true })
 
   const manifestPath = path.join(dir, 'index.m3u8')
+  // Video path: copy (free, the H.264 majority) OR re-encode to H.264 for a
+  // non-Apple-TS-playable upstream (HEVC etc.). Re-encode is capped (preset +
+  // threads + max height) and only the rare non-H.264 channels reach it, so the
+  // encode load on the Plex-sharing box stays bounded by the upstream-conn cap.
+  const videoArgs = opts.reencodeVideo
+    ? [
+        '-c:v', 'libx264',
+        '-preset', env.IPTV_REENCODE_PRESET,
+        '-pix_fmt', 'yuv420p',
+        '-g', '48',
+        '-force_key_frames', 'expr:gte(t,n_forced*2)',
+        '-threads', String(env.IPTV_REENCODE_THREADS),
+        // Downscale only if taller than the cap (never upscale); -2 keeps an even
+        // width at the source aspect. Comma escaped so the filtergraph parser
+        // doesn't read min(a,b) as two filters.
+        '-vf', `scale=-2:min(${env.IPTV_REENCODE_MAX_HEIGHT}\\,ih)`,
+      ]
+    : ['-c:v', 'copy']
   const args = [
     '-hide_banner',
-    '-loglevel', 'warning',
+    // info (+ -nostats) so ffmpeg prints the input stream's codec, which the
+    // stderr handler reads to decide copy-vs-re-encode. -nostats keeps the
+    // per-second progress line out of the logs.
+    '-loglevel', 'info', '-nostats',
     '-nostdin',
     // Constrain ffmpeg to the protocols a real upstream stream needs so
     // neither the '-i' input nor a nested manifest can reach
     // file:/concat:/etc. Pairs with assertHttpUpstream() above.
     '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
     '-fflags', '+discardcorrupt+genpts',
+    // Some channels (e.g. 24/7 HEVC feeds) declare their video parameters
+    // (VPS/SPS/PPS + resolution) later in the stream than the H.264 channels do.
+    // ffmpeg's default probe window can expire first, leaving "Could not find
+    // codec parameters ... unspecified size" — the HLS muxer then can't start, so
+    // ffmpeg exits 255 and the channel never loads. A larger probe ceiling fixes
+    // that. These are ceilings, not fixed waits: ffmpeg stops as soon as it has
+    // the parameters, so the H.264 channels that declare quickly are unaffected.
+    '-probesize', '10M', '-analyzeduration', '10M',
     '-i', opts.upstreamUrl,
     // Video is copied losslessly. Audio is RE-ENCODED to AAC-LC even though the
     // provider already sends AAC: the provider's profile is HE-AAC (AAC+SBR),
@@ -235,7 +292,7 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult {
     // otherwise aligned (measured ~0.6 ms A/V), so transcoding to plain AAC-LC
     // stereo — not retiming — removes the offset. One stereo AAC-LC encode is a
     // few % of a core, so it doesn't threaten the Plex box; video stays a copy.
-    '-c:v', 'copy',
+    ...videoArgs,
     '-c:a', 'aac', '-ac', '2', '-b:a', '160k',
     '-f', 'hls',
     // 2 s segments (matching the VOD transcode path): a player buffers ~3
@@ -256,9 +313,36 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult {
   ]
   const proc = spawn('ffmpeg', args, { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] })
 
+  let sawOutput = false
+  let codecDecided = false
   proc.stderr?.on('data', (chunk: Buffer) => {
-    const line = scrubXtreamCreds(chunk.toString().trim())
-    if (line) console.warn(`[iptv-remux ${sessionId}] ${line}`)
+    const text = scrubXtreamCreds(chunk.toString())
+    for (const raw of text.split('\n')) {
+      const line = raw.trim()
+      if (!line) continue
+      // The Output dump also has a "Video:" line; only the INPUT codec matters.
+      if (line.startsWith('Output #')) sawOutput = true
+      // Decide copy-vs-re-encode from the INPUT video codec ffmpeg reports for
+      // the connection it actually opened (robust to channels that flip codec
+      // per connection). If a COPY session's input isn't H.264, it can't produce
+      // playable Apple HLS: remember the channel and kill this session so the
+      // next manifest poll respawns it as a re-encode. (A re-encode session's
+      // input is expected to be HEVC, so don't act on it.)
+      if (!codecDecided && !sawOutput && !opts.reencodeVideo) {
+        const m = line.match(/Stream #\d+:\d+.*: Video: (\w+)/)
+        if (m) {
+          codecDecided = true
+          const codec = m[1].toLowerCase()
+          if (codec !== 'h264' && codec !== 'avc') {
+            markChannelNeedsReencode(opts.streamId)
+            console.warn(`[iptv-remux ${sessionId}] input video is ${codec}, not H.264 — re-encoding`)
+            proc.kill('SIGKILL')
+            return
+          }
+        }
+      }
+      console.warn(`[iptv-remux ${sessionId}] ${line}`)
+    }
   })
   proc.on('error', (err) => {
     console.warn(`[iptv-remux ${sessionId}] ffmpeg error: ${scrubXtreamCreds(err.message)}`)
