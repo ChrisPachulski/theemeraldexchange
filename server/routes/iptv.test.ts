@@ -1353,8 +1353,8 @@ describe('remux live delivery (AVPlayer)', () => {
       const p = app.request(
         `/api/iptv/stream/live/10/remux/index.m3u8?t=${fakeToken('remux', '10')}`,
       )
-      // Drive the handler's 8s Date.now() deadline + 200ms sleep() loop.
-      await vi.advanceTimersByTimeAsync(8200)
+      // Drive the handler's 15s Date.now() deadline + 200ms sleep() loop.
+      await vi.advanceTimersByTimeAsync(15200)
       const res = await p
       expect(res.status).toBe(504)
       const body = (await res.json()) as { error: string }
