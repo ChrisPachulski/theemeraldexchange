@@ -66,6 +66,11 @@ describe('iptv remux session', () => {
     const args = spawnMock.mock.calls[0][1] as string[]
     // Video copied losslessly; audio re-encoded HE-AAC(SBR) -> AAC-LC stereo so
     // AVPlayer doesn't play it a hair behind the video (SBR decoder delay).
+    // Larger probe ceiling so late-declaring HEVC channels resolve their codec
+    // parameters before the HLS muxer needs them (H.264 unaffected — it's a cap).
+    expect(args).toContain('-probesize')
+    expect(args).toContain('-analyzeduration')
+    expect(args).toContain('10M')
     expect(args).toContain('-c:v')
     expect(args).toContain('copy')
     expect(args).toContain('-c:a')

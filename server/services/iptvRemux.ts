@@ -227,6 +227,14 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult {
     // file:/concat:/etc. Pairs with assertHttpUpstream() above.
     '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
     '-fflags', '+discardcorrupt+genpts',
+    // Some channels (e.g. 24/7 HEVC feeds) declare their video parameters
+    // (VPS/SPS/PPS + resolution) later in the stream than the H.264 channels do.
+    // ffmpeg's default probe window can expire first, leaving "Could not find
+    // codec parameters ... unspecified size" — the HLS muxer then can't start, so
+    // ffmpeg exits 255 and the channel never loads. A larger probe ceiling fixes
+    // that. These are ceilings, not fixed waits: ffmpeg stops as soon as it has
+    // the parameters, so the H.264 channels that declare quickly are unaffected.
+    '-probesize', '10M', '-analyzeduration', '10M',
     '-i', opts.upstreamUrl,
     // Video is copied losslessly. Audio is RE-ENCODED to AAC-LC even though the
     // provider already sends AAC: the provider's profile is HE-AAC (AAC+SBR),

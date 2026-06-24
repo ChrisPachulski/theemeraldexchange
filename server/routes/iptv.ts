@@ -863,7 +863,11 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
   const entry = ensureLiveRemuxEntry({ streamId, sub: v.sub, upstreamUrl })
 
   heartbeatRemuxSession(entry.sessionId)
-  const deadline = Date.now() + 8_000
+  // 15s, not 8s: a larger ffmpeg probe ceiling (see iptvRemux's -analyzeduration
+  // 10M, needed for late-declaring HEVC channels) can push the first segment past
+  // 8s, and an initial-load 504 is fatal to AVPlayer. The client's own readiness
+  // watchdog still gives up at 25s, so this stays well inside that.
+  const deadline = Date.now() + 15_000
   while (!fs.existsSync(entry.manifestPath) && Date.now() < deadline) {
     await sleep(200)
     heartbeatRemuxSession(entry.sessionId)
