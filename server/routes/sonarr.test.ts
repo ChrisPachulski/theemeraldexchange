@@ -26,11 +26,11 @@ function appUnderTest() {
 }
 
 async function adminCookie() {
-  const t = await createSession({ sub: '1', username: 'admin-user', role: 'admin' })
+  const t = await createSession({ sub: 'plex:1', username: 'admin-user', role: 'admin' })
   return `eex.session=${t}`
 }
 async function userCookie() {
-  const t = await createSession({ sub: '2', username: 'guest', role: 'user' })
+  const t = await createSession({ sub: 'plex:2', username: 'guest', role: 'user' })
   return `eex.session=${t}`
 }
 

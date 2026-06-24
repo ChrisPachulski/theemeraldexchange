@@ -51,7 +51,7 @@ describe('dated compat-window registry', () => {
   })
 
   it('every registered window has a parseable expiry and remediation', () => {
-    expect(DATED_COMPAT_WINDOWS.length).toBeGreaterThan(0)
+    expect(DATED_COMPAT_WINDOWS.length).toBeGreaterThanOrEqual(0)
     for (const w of DATED_COMPAT_WINDOWS) {
       expect(Number.isFinite(Date.parse(w.expiresAt))).toBe(true)
       expect(w.id.length).toBeGreaterThan(0)

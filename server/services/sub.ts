@@ -29,24 +29,6 @@
 
 import { contracts } from './contractsBinding.js'
 
-// D7 rollout timestamp (unix seconds). The grace window expires 30 days
-// after this value. In production this should be set to the actual
-// deploy time; for the D7 cut it is baked at build time. Tests can
-// override by calling _setD7DeployedAt.
-let D7_DEPLOYED_AT_SECS: number = Math.floor(Date.now() / 1000)
-
-/** Override the D7 deploy timestamp. For tests only. */
-export function _setD7DeployedAt(secs: number): void {
-  D7_DEPLOYED_AT_SECS = secs
-}
-
-const GRACE_WINDOW_SECS = 30 * 24 * 60 * 60 // 30 days
-
-/** Returns true during the M1 → M1.5 grace window. */
-export function isGraceWindowOpen(): boolean {
-  return Math.floor(Date.now() / 1000) < D7_DEPLOYED_AT_SECS + GRACE_WINDOW_SECS
-}
-
 export type SubProvider = 'plex' | 'local' | 'apple' | 'google'
 
 export type Sub = {
@@ -114,40 +96,3 @@ export function isValidSub(sub: string): boolean {
   }
 }
 
-/**
- * Attempt to normalise a legacy (M1) bare `sub` value to the prefixed
- * form during the 30-day grace window.
- *
- * Behaviour:
- *   - If `s` already contains a colon, delegate to parseSub (no
- *     double-prefixing).
- *   - If `s` looks like a bare Plex numeric id AND the grace window is
- *     open, prefix with `plex:` and parse.
- *   - Otherwise (grace window closed, or non-numeric bare value), return
- *     null so the caller can reject or clear the stale credential.
- *
- * This function is intentionally lenient during the grace window and
- * strict afterwards so that the rollback path is to simply stop calling
- * it.
- */
-export function tryNormaliseLegacySub(s: string): Sub | null {
-  if (s.includes(':')) {
-    try {
-      return parseSub(s)
-    } catch {
-      return null
-    }
-  }
-
-  // Bare value — only handle during the grace window.
-  if (!isGraceWindowOpen()) return null
-
-  // Only numeric bare values are assumed to be legacy Plex ids.
-  if (!/^(0|[1-9][0-9]*)$/.test(s)) return null
-
-  try {
-    return parseSub(`plex:${s}`)
-  } catch {
-    return null
-  }
-}
