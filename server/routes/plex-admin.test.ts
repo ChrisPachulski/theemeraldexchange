@@ -21,7 +21,7 @@ function appUnderTest() {
 
 async function adminCookie(opts: { withPlexToken?: boolean } = {}) {
   const t = await createSession({
-    sub: '1',
+    sub: 'plex:1',
     username: 'admin-user',
     role: 'admin',
     plexAuthToken: opts.withPlexToken === false ? undefined : 'plex-admin-token',
@@ -30,7 +30,7 @@ async function adminCookie(opts: { withPlexToken?: boolean } = {}) {
 }
 async function userCookie() {
   const t = await createSession({
-    sub: '2',
+    sub: 'plex:2',
     username: 'guest',
     role: 'user',
     plexAuthToken: 'plex-user-token',

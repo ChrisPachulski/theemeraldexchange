@@ -101,7 +101,7 @@ async function sessionCookie(role: 'admin' | 'user' = 'admin') {
   // only DELETE/POST handlers return 403.
   const { createSession } = await import('./session.js')
   const username = role === 'admin' ? 'admin-user' : 'user'
-  const token = await createSession({ sub: '1', username, role })
+  const token = await createSession({ sub: 'plex:1', username, role })
   return `eex.session=${token}`
 }
 
