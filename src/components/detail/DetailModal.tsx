@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { castCharacter, TMDB_IMAGE_BASE, type CastMember } from '../../lib/api/tmdb'
 import { useDialogDismiss } from '../../lib/useDialogDismiss'
 import './DetailModal.css'
@@ -82,6 +82,11 @@ type Props = {
   canRemove: boolean
   /** Triggered when the user clicks 'Add to library'. */
   onAdd?: () => void
+  /** Admin-only discover-time action: add the title transiently (monitored,
+   *  auto-grab off) and drop into the interactive release browser. When
+   *  provided alongside a not-in-library item, the footer gains a primary
+   *  "Find release" button next to Add. */
+  onFindRelease?: () => void
   /** Triggered when the user clicks 'Remove from library'. */
   onRemove?: () => void
   /** TV-only: per-season rows for the library view. */
@@ -110,6 +115,18 @@ type Props = {
    *  note in the footer where a play button would otherwise sit — callers
    *  are expected to suppress playUrl/onPlayDirect alongside setting it. */
   unavailableNote?: string | null
+  /** Admin-only "Advanced" power-user actions surface (Sonarr/Radarr). When
+   *  provided, the footer gains an "Advanced" toggle that reveals this node
+   *  as a body section. The caller (a tab) owns all the queries/mutations/
+   *  loading-empty-error states inside it; DetailModal only hosts it and
+   *  manages the open/closed reveal so the panel doesn't crowd the default
+   *  view. Pass undefined for non-admins / out-of-library items to hide it. */
+  advanced?: ReactNode
+  /** Force the Advanced surface open without a footer-toggle click. The
+   *  discover-time Find-release flow sets it so the auto-added item drops
+   *  straight into the release browser. Only forces open on the rising edge;
+   *  the user can still hide it afterward. */
+  autoShowAdvanced?: boolean
 }
 
 export function DetailModal({
@@ -130,6 +147,7 @@ export function DetailModal({
   inLibrary,
   canRemove,
   onAdd,
+  onFindRelease,
   onRemove,
   seasons,
   onAddSeason,
@@ -140,9 +158,30 @@ export function DetailModal({
   onPlayDirect,
   playDirectLabel,
   unavailableNote,
+  advanced,
+  autoShowAdvanced,
 }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const closeBtnRef = useRef<HTMLButtonElement>(null)
+  // Advanced surface is collapsed by default so it never crowds the normal
+  // detail view; the footer button reveals it. Reset to collapsed whenever
+  // the modal closes (so a fresh title doesn't inherit the prior open state)
+  // using the adjust-state-during-render pattern the rest of this codebase
+  // uses for derived resets (see Toast.tsx) — an effect here trips the
+  // set-state-in-effect lint and causes a needless cascading render.
+  const [showAdvanced, setShowAdvanced] = useState(autoShowAdvanced === true)
+  const [wasOpen, setWasOpen] = useState(open)
+  if (wasOpen !== open) {
+    setWasOpen(open)
+    if (!open && showAdvanced) setShowAdvanced(false)
+  }
+  // Force the panel open on autoShowAdvanced's rising edge (the Find-release
+  // flow), tracking the prior value so we don't override a later manual hide.
+  const [wasAutoShow, setWasAutoShow] = useState(autoShowAdvanced === true)
+  if (wasAutoShow !== (autoShowAdvanced === true)) {
+    setWasAutoShow(autoShowAdvanced === true)
+    if (autoShowAdvanced && !showAdvanced) setShowAdvanced(true)
+  }
 
   // useDialogDismiss owns showModal()/close() + the deferred unmount so the
   // exit transition can play. We keep the open->focus side effect here.
@@ -401,6 +440,13 @@ export function DetailModal({
               <p className="detail__cast-empty">Cast information unavailable.</p>
             )}
           </details>
+
+          {advanced && showAdvanced && (
+            <section className="detail__section detail__advanced" aria-label="Advanced actions">
+              <h3 className="detail__section-title">Advanced</h3>
+              {advanced}
+            </section>
+          )}
         </div>
 
         <footer className="detail__actions">
@@ -411,10 +457,30 @@ export function DetailModal({
           >
             Close
           </button>
-          {!inLibrary && onAdd && (
+          {advanced && (
+            <button
+              type="button"
+              className="detail__btn detail__btn--secondary"
+              onClick={() => setShowAdvanced((v) => !v)}
+              aria-expanded={showAdvanced}
+            >
+              {showAdvanced ? 'Hide advanced' : 'Advanced'}
+            </button>
+          )}
+          {!inLibrary && onFindRelease && (
             <button
               type="button"
               className="detail__btn detail__btn--primary"
+              onClick={onFindRelease}
+              title="Add this title and browse releases to grab one by hand"
+            >
+              Find release
+            </button>
+          )}
+          {!inLibrary && onAdd && (
+            <button
+              type="button"
+              className={`detail__btn ${onFindRelease ? 'detail__btn--secondary' : 'detail__btn--primary'}`}
               onClick={onAdd}
             >
               Add to library

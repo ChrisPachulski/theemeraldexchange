@@ -981,17 +981,74 @@ impl SessionManager {
                 .await;
         }
 
+        // Native full-timeline VOD alignment: a session writes its first segment at
+        // the ABSOLUTE grid index so the synthesized [0,total] manifest references
+        // on-disk files one-for-one and AVPlayer's scrubber shows true position /
+        // full duration. `#EXT-X-START` (in the manifest) carries the resume point.
+        //
+        // RE-ENCODE: `-force_key_frames` puts cuts on a clean grid, so quantize the
+        // seek DOWN to the segment grid and number it `⌊start/seg⌋`; playback is at
+        // most one segment early — imperceptible.
+        //
+        // COPY-remux: segments are cut at the source's RAGGED keyframes. The same
+        // `vod_manifest::copy_resume_base` the manifest uses maps the offset to
+        // (start_idx, base) on the full-title cut grid; we spawn `-ss base` +
+        // `-start_number start_idx` so the suffix segments land at their absolute
+        // slots. Requires a keyframe-cache HIT and a known duration (the manifest
+        // path needs both too); on a MISS / unknown duration we fall back to raw
+        // `-ss` + start_number 0, exactly matching the manifest's MISS→on-disk
+        // (EVENT) fallback, so the two stay consistent — the next play after the
+        // cache warms gets the full-timeline scrubber.
+        let seg = u64::from(crate::args::HLS_SEGMENT_SECS);
+        let (eff_start, eff_start_number) = if opts.start_secs == 0 {
+            (0, 0)
+        } else if opts.plan.reencodes_video() {
+            let n = opts.start_secs / seg;
+            (n * seg, n)
+        } else {
+            // COPY-remux resume: align to the full-title keyframe grid iff we can
+            // (cache hit + known duration). Mirrors `vod_manifest`'s copy branch.
+            let duration = opts.duration_secs.filter(|d| *d > 0).map(|d| d as f64);
+            match duration {
+                Some(total) => match crate::keyframes::load(
+                    &self.cache_root,
+                    std::path::Path::new(&opts.input_path),
+                )
+                .await
+                {
+                    Some(kf) if !kf.is_empty() => {
+                        let (start_idx, base) =
+                            crate::vod_manifest::copy_resume_base(&kf, total, opts.start_secs);
+                        // `-ss eff` + `-start_number start_idx`. session.start_secs is
+                        // set to `eff` below, and the manifest re-derives (start_idx,
+                        // base) from it via the SAME helper, so the two must agree.
+                        // `base` is a fractional keyframe PTS; storing it truncated
+                        // (`base as u64`) would re-derive a SMALLER index (the helper
+                        // picks the largest bound <= start_secs), so use CEIL — it
+                        // sits in [base, next_bound) and round-trips to the same
+                        // start_idx. ffmpeg's `-ss` before `-i` snaps to the keyframe
+                        // at/before `eff`, i.e. `base`, so the on-disk suffix still
+                        // starts exactly at `base`.
+                        let eff = base.ceil() as u64;
+                        (eff, start_idx)
+                    }
+                    _ => (opts.start_secs, 0),
+                },
+                None => (opts.start_secs, 0),
+            }
+        };
+
         let child = self
             .spawn_child(
                 &session_id,
                 &opts.input_path,
                 &opts.plan,
                 &dir,
-                opts.start_secs,
+                eff_start,
                 opts.source_codec.as_deref(),
                 opts.source_avg_kbps,
                 &opts.media_kind,
-                0,
+                eff_start_number,
             )
             .await?;
 
@@ -1003,8 +1060,8 @@ impl SessionManager {
             dir,
             started_at: now,
             last_seen: now,
-            start_secs: opts.start_secs,
-            start_number: 0,
+            start_secs: eff_start,
+            start_number: eff_start_number,
             restarts: 0,
             ctl: ctl_tx,
             _permit: permit,

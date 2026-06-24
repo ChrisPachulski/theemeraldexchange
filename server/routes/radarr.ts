@@ -4,6 +4,7 @@ import { Hono, type Context } from 'hono'
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { rateLimit } from '../middleware/rateLimit.js'
 import { radarrFetch, radarrRootFolders } from '../services/radarr.js'
+import { SEARCH_TIMEOUT_MS } from '../services/upstream.js'
 import {
   createGrabEventRecorder,
   createReservationLedger,
@@ -17,6 +18,19 @@ import {
   type Release,
   type SpaceGateFailure,
 } from '../services/arrAdd.js'
+import {
+  buildCommandBody,
+  executeInteractiveGrab,
+  extractEditPatch,
+  interactiveGrabResponse,
+  mapHistory,
+  mergeEdit,
+  parseInteractiveGrab,
+  projectRelease,
+  type ClientRelease,
+  type CommandSpec,
+  type UpstreamRelease,
+} from '../services/arrAdvanced.js'
 import { postFeedback } from '../services/recommender.js'
 import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
 import { env } from '../env.js'
@@ -82,6 +96,159 @@ forwardRead('/api/v3/movie/lookup')
 // the SPA polled /api/radarr/api/v3/queue every few seconds and
 // silently 404'd in prod, leaving movie pending states invisible.
 forwardRead('/api/v3/queue')
+
+// ===========================================================================
+// Advanced options (admin-only power-user actions). Contract: R1–R6 in
+// docs/superpowers/specs/2026-06-22-arr-advanced-options-design.md. Mirrors
+// the Sonarr S1–S7 surface (no episode/monitor — movies have no episodes).
+// ===========================================================================
+
+// R1 allowlist. RefreshMovie/MoviesSearch operate on movie ids; RenameMovie
+// applies a rename for the movie's files. Any other name → 400.
+const RADARR_COMMANDS: Record<string, CommandSpec> = {
+  RefreshMovie: { requires: ['movieIds'], passthrough: ['movieIds'] },
+  MoviesSearch: { requires: ['movieIds'], passthrough: ['movieIds'] },
+  RenameMovie: { requires: ['movieIds'], passthrough: ['movieIds', 'files'] },
+}
+
+// Per-release movie byte ceiling: a flat cap (env.maxMovieBytes) for every
+// movie release.
+const movieCapBytesFor = (): number => env.maxMovieBytes
+
+// R1: POST /api/v3/command — fire an allowlisted Radarr command.
+radarr.post('/api/v3/command', requireAdmin, radarrMutateLimit, async (c) => {
+  const built = buildCommandBody(await c.req.json().catch(() => null), RADARR_COMMANDS)
+  if (!built.ok) {
+    return c.json({ error: built.error }, 400)
+  }
+  const r = await radarrFetch('/api/v3/command', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(built.body),
+  })
+  if (!r.ok) {
+    return c.json({ error: 'command_failed', status: r.status }, 502)
+  }
+  const cmd = (await r.json().catch(() => ({}))) as { id?: number; name?: string; status?: string }
+  return c.json({ id: cmd.id, name: cmd.name, status: cmd.status })
+})
+
+// R2: GET /api/v3/release?movieId= — interactive search.
+radarr.get('/api/v3/release', requireAdmin, radarrMutateLimit, async (c) => {
+  const movieId = Number(c.req.query('movieId'))
+  if (!Number.isSafeInteger(movieId) || movieId <= 0) {
+    return c.json({ error: 'bad_movieId' }, 400)
+  }
+  const r = await radarrFetch(
+    '/api/v3/release',
+    { method: 'GET' },
+    new URLSearchParams({ movieId: String(movieId) }),
+    SEARCH_TIMEOUT_MS,
+  )
+  if (!r.ok) return c.json({ error: 'release_search_failed', status: r.status }, 502)
+  const releases = (await r.json().catch(() => [])) as UpstreamRelease[]
+  const projected: ClientRelease[] = releases.map((rel) => projectRelease(rel, movieCapBytesFor))
+  return c.json(projected)
+})
+
+// R3: POST /api/v3/release — grab a hand-picked movie release.
+radarr.post('/api/v3/release', requireAdmin, radarrMutateLimit, async (c) => {
+  const parsed = parseInteractiveGrab(await c.req.json().catch(() => null))
+  if (!parsed.ok) return c.json({ error: 'invalid_body' }, 400)
+  const movieId = Number(c.req.query('movieId'))
+  if (!Number.isSafeInteger(movieId) || movieId <= 0) {
+    return c.json({ error: 'bad_movieId' }, 400)
+  }
+  const query = new URLSearchParams({ movieId: String(movieId) })
+  const result = await executeInteractiveGrab({
+    itemId: movieId,
+    sub: c.get('session').sub,
+    req: parsed.req,
+    capGb: env.maxMovieGb,
+    capBytesFor: movieCapBytesFor,
+    listReleases: async () => {
+      const res = await radarrFetch('/api/v3/release', { method: 'GET' }, query, SEARCH_TIMEOUT_MS)
+      if (!res.ok) return null
+      return (await res.json().catch(() => [])) as UpstreamRelease[]
+    },
+    postGrab: async (guid, indexerId) => {
+      const res = await radarrFetch('/api/v3/release', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ guid, indexerId }),
+      })
+      return { ok: res.ok, status: res.status }
+    },
+    recordEvent: recordRadarrGrabEvent,
+  })
+  return interactiveGrabResponse(c, result)
+})
+
+// R4: GET /api/v3/rename?movieId= — preview the rename diff.
+radarr.get('/api/v3/rename', requireAdmin, async (c) => {
+  const movieId = Number(c.req.query('movieId'))
+  if (!Number.isSafeInteger(movieId) || movieId <= 0) {
+    return c.json({ error: 'bad_movieId' }, 400)
+  }
+  const r = await radarrFetch(
+    '/api/v3/rename',
+    { method: 'GET' },
+    new URLSearchParams({ movieId: String(movieId) }),
+  )
+  if (!r.ok) return c.json({ error: 'rename_preview_failed', status: r.status }, 502)
+  const rows = (await r.json().catch(() => [])) as Array<{
+    movieFileId?: number
+    existingPath?: string
+    newPath?: string
+  }>
+  return c.json(
+    rows.map((row) => ({
+      movieFileId: row.movieFileId,
+      existingPath: row.existingPath,
+      newPath: row.newPath,
+    })),
+  )
+})
+
+// R5: GET /api/v3/history/movie?movieId= — newest-first history.
+radarr.get('/api/v3/history/movie', requireAdmin, async (c) => {
+  const movieId = Number(c.req.query('movieId'))
+  if (!Number.isSafeInteger(movieId) || movieId <= 0) {
+    return c.json({ error: 'bad_movieId' }, 400)
+  }
+  const r = await radarrFetch(
+    '/api/v3/history/movie',
+    { method: 'GET' },
+    new URLSearchParams({ movieId: String(movieId) }),
+  )
+  if (!r.ok) return c.json({ error: 'history_failed', status: r.status }, 502)
+  return c.json(mapHistory(await r.json().catch(() => [])))
+})
+
+// R6: PUT /api/v3/movie/:id — edit (monitored/qualityProfileId/
+// rootFolderPath only). Fetch the full movie, overlay the allowlisted fields,
+// PUT the whole object back. Never blind-passthrough the client body.
+radarr.put('/api/v3/movie/:id', requireAdmin, radarrMutateLimit, async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    return c.json({ error: 'bad_id' }, 400)
+  }
+  const patch = extractEditPatch(await c.req.json().catch(() => null))
+  const getRes = await radarrFetch(`/api/v3/movie/${id}`, { method: 'GET' })
+  if (!getRes.ok) return c.json({ error: 'movie_lookup_failed', status: getRes.status }, 502)
+  const full = (await getRes.json()) as Record<string, unknown>
+  const merged = mergeEdit(full, patch)
+  const putRes = await radarrFetch(`/api/v3/movie/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(merged),
+  })
+  if (!putRes.ok) return c.json({ error: 'movie_update_failed', status: putRes.status }, 502)
+  return new Response(await putRes.text(), {
+    status: putRes.status,
+    headers: { 'Content-Type': putRes.headers.get('Content-Type') ?? 'application/json' },
+  })
+})
 
 // Hard size cap. Radarr's auto-search and RSS sync can grab whatever
 // wins profile scoring — that includes 50 GB 4K HDR rips. We force

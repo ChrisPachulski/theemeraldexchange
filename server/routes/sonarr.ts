@@ -6,6 +6,7 @@ import { Hono } from 'hono'
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { rateLimit } from '../middleware/rateLimit.js'
 import { sonarrFetch, sonarrRootFolders } from '../services/sonarr.js'
+import { SEARCH_TIMEOUT_MS } from '../services/upstream.js'
 import {
   createGrabEventRecorder,
   createReservationLedger,
@@ -17,6 +18,19 @@ import {
   materializeNonAdminAddBody,
   type Release,
 } from '../services/arrAdd.js'
+import {
+  buildCommandBody,
+  executeInteractiveGrab,
+  extractEditPatch,
+  interactiveGrabResponse,
+  mapHistory,
+  mergeEdit,
+  parseInteractiveGrab,
+  projectRelease,
+  type ClientRelease,
+  type CommandSpec,
+  type UpstreamRelease,
+} from '../services/arrAdvanced.js'
 import { postFeedback } from '../services/recommender.js'
 import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
 import { env } from '../env.js'
@@ -127,6 +141,229 @@ sonarr.post('/api/v3/queue/clear-stuck', requireAdmin, sonarrMutateLimit, async 
   )
   if (!del.ok) return c.json({ error: 'bulk_delete_failed', status: del.status }, 502)
   return c.json({ removed: ids.length })
+})
+
+// ===========================================================================
+// Advanced options (admin-only power-user actions). Contract: S1–S7 in
+// docs/superpowers/specs/2026-06-22-arr-advanced-options-design.md. The web
+// SPA and the Apple client are thin consumers of these handlers.
+// ===========================================================================
+
+// S1 allowlist. RefreshSeries/SeriesSearch operate on the series as a whole;
+// EpisodeSearch needs the episode ids; RenameFiles needs the series id + the
+// episode-file ids. Any other name → 400 (command_not_allowed).
+const SONARR_COMMANDS: Record<string, CommandSpec> = {
+  RefreshSeries: { passthrough: ['seriesId'] },
+  SeriesSearch: { passthrough: ['seriesId'] },
+  EpisodeSearch: { requires: ['episodeIds'], passthrough: ['episodeIds'] },
+  RenameFiles: { requires: ['seriesId', 'files'], passthrough: ['seriesId', 'files'] },
+}
+
+// Per-season episode counts for a series, used to compute the per-release TV
+// cap (maxTvBytesPerEpisode × episodeCount). Returns an empty map on failure
+// — callers fail open (treat the release as within cap) rather than block an
+// admin's hand-picked grab on a metadata hiccup.
+async function seasonEpisodeCounts(seriesId: number): Promise<Map<number, number>> {
+  const counts = new Map<number, number>()
+  const res = await sonarrFetch(`/api/v3/episode?seriesId=${seriesId}`, { method: 'GET' })
+  if (!res.ok) return counts
+  const eps = (await res.json().catch(() => [])) as Array<{ seasonNumber?: number }>
+  for (const e of eps) {
+    if (typeof e.seasonNumber === 'number') {
+      counts.set(e.seasonNumber, (counts.get(e.seasonNumber) ?? 0) + 1)
+    }
+  }
+  return counts
+}
+
+// Per-release TV byte ceiling: maxTvBytesPerEpisode × the release's episode
+// count (full-season packs use the season episode count; otherwise the
+// number of episodes in the release, defaulting to 1). null when we can't
+// determine the count — projectRelease treats null as "not over cap".
+function tvCapBytesFor(r: UpstreamRelease, counts: Map<number, number>): number | null {
+  let epCount: number | null
+  if (r.fullSeason && typeof r.seasonNumber === 'number') {
+    epCount = counts.get(r.seasonNumber) ?? null
+  } else if (r.episodeNumbers && r.episodeNumbers.length > 0) {
+    epCount = r.episodeNumbers.length
+  } else {
+    epCount = 1
+  }
+  return epCount === null ? null : env.maxTvBytesPerEpisode * epCount
+}
+
+// S1: POST /api/v3/command — fire an allowlisted Sonarr command.
+sonarr.post('/api/v3/command', requireAdmin, sonarrMutateLimit, async (c) => {
+  const built = buildCommandBody(await c.req.json().catch(() => null), SONARR_COMMANDS)
+  if (!built.ok) {
+    return c.json({ error: built.error }, 400)
+  }
+  const r = await sonarrFetch('/api/v3/command', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(built.body),
+  })
+  if (!r.ok) {
+    return c.json({ error: 'command_failed', status: r.status }, 502)
+  }
+  const cmd = (await r.json().catch(() => ({}))) as { id?: number; name?: string; status?: string }
+  return c.json({ id: cmd.id, name: cmd.name, status: cmd.status })
+})
+
+// S2: GET /api/v3/release?seriesId=&seasonNumber= — interactive search.
+// Projects upstream releases to the client shape, computing sizeGb + overCap.
+sonarr.get('/api/v3/release', requireAdmin, sonarrMutateLimit, async (c) => {
+  const seriesId = Number(c.req.query('seriesId'))
+  if (!Number.isSafeInteger(seriesId) || seriesId <= 0) {
+    return c.json({ error: 'bad_seriesId' }, 400)
+  }
+  const seasonNumber = c.req.query('seasonNumber')
+  const query = new URLSearchParams({ seriesId: String(seriesId) })
+  if (seasonNumber !== undefined && seasonNumber !== '') {
+    const n = Number(seasonNumber)
+    if (!Number.isSafeInteger(n) || n < 0) return c.json({ error: 'bad_seasonNumber' }, 400)
+    query.set('seasonNumber', String(n))
+  }
+  const [releaseRes, counts] = await Promise.all([
+    sonarrFetch('/api/v3/release', { method: 'GET' }, query, SEARCH_TIMEOUT_MS),
+    seasonEpisodeCounts(seriesId),
+  ])
+  if (!releaseRes.ok) {
+    return c.json({ error: 'release_search_failed', status: releaseRes.status }, 502)
+  }
+  const releases = (await releaseRes.json().catch(() => [])) as UpstreamRelease[]
+  const projected: ClientRelease[] = releases.map((r) =>
+    projectRelease(r, (rel) => tvCapBytesFor(rel, counts)),
+  )
+  return c.json(projected)
+})
+
+// S3: POST /api/v3/release — grab a hand-picked release under (or over, with
+// allowOverCap) the per-episode cap. Reuses the grab-event recorder.
+sonarr.post('/api/v3/release', requireAdmin, sonarrMutateLimit, async (c) => {
+  const parsed = parseInteractiveGrab(await c.req.json().catch(() => null))
+  if (!parsed.ok) return c.json({ error: 'invalid_body' }, 400)
+  const seriesId = Number(c.req.query('seriesId'))
+  if (!Number.isSafeInteger(seriesId) || seriesId <= 0) {
+    return c.json({ error: 'bad_seriesId' }, 400)
+  }
+  const seasonNumber = c.req.query('seasonNumber')
+  const query = new URLSearchParams({ seriesId: String(seriesId) })
+  if (seasonNumber !== undefined && seasonNumber !== '') {
+    const n = Number(seasonNumber)
+    if (Number.isSafeInteger(n) && n >= 0) query.set('seasonNumber', String(n))
+  }
+  const counts = await seasonEpisodeCounts(seriesId)
+  const result = await executeInteractiveGrab({
+    itemId: seriesId,
+    sub: c.get('session').sub,
+    req: parsed.req,
+    capGb: env.maxTvGbPerEpisode,
+    capBytesFor: (rel) => tvCapBytesFor(rel, counts),
+    listReleases: async () => {
+      const res = await sonarrFetch('/api/v3/release', { method: 'GET' }, query, SEARCH_TIMEOUT_MS)
+      if (!res.ok) return null
+      return (await res.json().catch(() => [])) as UpstreamRelease[]
+    },
+    postGrab: async (guid, indexerId) => {
+      const res = await sonarrFetch('/api/v3/release', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ guid, indexerId }),
+      })
+      return { ok: res.ok, status: res.status }
+    },
+    recordEvent: recordSonarrGrabEvent,
+  })
+  return interactiveGrabResponse(c, result)
+})
+
+// S4: GET /api/v3/rename?seriesId= — preview the rename diff.
+sonarr.get('/api/v3/rename', requireAdmin, async (c) => {
+  const seriesId = Number(c.req.query('seriesId'))
+  if (!Number.isSafeInteger(seriesId) || seriesId <= 0) {
+    return c.json({ error: 'bad_seriesId' }, 400)
+  }
+  const r = await sonarrFetch(
+    '/api/v3/rename',
+    { method: 'GET' },
+    new URLSearchParams({ seriesId: String(seriesId) }),
+  )
+  if (!r.ok) return c.json({ error: 'rename_preview_failed', status: r.status }, 502)
+  const rows = (await r.json().catch(() => [])) as Array<{
+    episodeFileId?: number
+    seasonNumber?: number
+    existingPath?: string
+    newPath?: string
+  }>
+  return c.json(
+    rows.map((row) => ({
+      episodeFileId: row.episodeFileId,
+      seasonNumber: row.seasonNumber,
+      existingPath: row.existingPath,
+      newPath: row.newPath,
+    })),
+  )
+})
+
+// S5: PUT /api/v3/episode/monitor — batch monitor toggle.
+sonarr.put('/api/v3/episode/monitor', requireAdmin, sonarrMutateLimit, async (c) => {
+  const raw = (await c.req.json().catch(() => null)) as
+    | { episodeIds?: unknown; monitored?: unknown }
+    | null
+  const episodeIds = Array.isArray(raw?.episodeIds)
+    ? raw!.episodeIds.filter((n): n is number => typeof n === 'number' && Number.isSafeInteger(n))
+    : []
+  if (episodeIds.length === 0 || typeof raw?.monitored !== 'boolean') {
+    return c.json({ error: 'invalid_body' }, 400)
+  }
+  const r = await sonarrFetch('/api/v3/episode/monitor', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ episodeIds, monitored: raw.monitored }),
+  })
+  if (!r.ok) return c.json({ error: 'monitor_update_failed', status: r.status }, 502)
+  return c.json({ ok: true, updated: episodeIds.length })
+})
+
+// S6: GET /api/v3/history/series?seriesId= — newest-first history.
+sonarr.get('/api/v3/history/series', requireAdmin, async (c) => {
+  const seriesId = Number(c.req.query('seriesId'))
+  if (!Number.isSafeInteger(seriesId) || seriesId <= 0) {
+    return c.json({ error: 'bad_seriesId' }, 400)
+  }
+  const r = await sonarrFetch(
+    '/api/v3/history/series',
+    { method: 'GET' },
+    new URLSearchParams({ seriesId: String(seriesId) }),
+  )
+  if (!r.ok) return c.json({ error: 'history_failed', status: r.status }, 502)
+  return c.json(mapHistory(await r.json().catch(() => [])))
+})
+
+// S7: PUT /api/v3/series/:id — edit (monitored/qualityProfileId/
+// rootFolderPath only). Fetch the full series, overlay the allowlisted
+// fields, PUT the whole object back. Never blind-passthrough the client body.
+sonarr.put('/api/v3/series/:id', requireAdmin, sonarrMutateLimit, async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    return c.json({ error: 'bad_id' }, 400)
+  }
+  const patch = extractEditPatch(await c.req.json().catch(() => null))
+  const getRes = await sonarrFetch(`/api/v3/series/${id}`, { method: 'GET' })
+  if (!getRes.ok) return c.json({ error: 'series_lookup_failed', status: getRes.status }, 502)
+  const full = (await getRes.json()) as Record<string, unknown>
+  const merged = mergeEdit(full, patch)
+  const putRes = await sonarrFetch(`/api/v3/series/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(merged),
+  })
+  if (!putRes.ok) return c.json({ error: 'series_update_failed', status: putRes.status }, 502)
+  return new Response(await putRes.text(), {
+    status: putRes.status,
+    headers: { 'Content-Type': putRes.headers.get('Content-Type') ?? 'application/json' },
+  })
 })
 
 // Per-episode size cap for TV grabs. Mirrors the movie cap. A release

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { SearchInput } from '../search/SearchInput'
 import { ResultGrid } from '../search/ResultGrid'
@@ -7,6 +7,7 @@ import { ModeToggle, type Mode } from '../search/ModeToggle'
 import { LibraryAlphabet, libraryBucket, type LibraryLetter } from '../library/LibraryAlphabet'
 import { LibraryFilters, type FilterOption } from '../library/LibraryFilters'
 import { DetailModal, type DetailMeta } from '../detail/DetailModal'
+import { ArrAdvancedPanel } from '../detail/ArrAdvancedPanel'
 import { AddMovieModal } from '../add/AddMovieModal'
 import { Toast } from '../toast/Toast'
 import { LoadingPulse } from '../feedback/LoadingPulse'
@@ -14,7 +15,7 @@ import { EmeraldMark } from '../atmosphere/EmeraldMark'
 import { useAuth } from '../../lib/auth'
 import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useMovieSearch } from '../../lib/hooks/useMovieSearch'
-import { useRadarrLibrary } from '../../lib/hooks/useRadarrLibrary'
+import { useRadarrLibrary, useRadarrProfiles, useRadarrRootFolders } from '../../lib/hooks/useRadarrLibrary'
 import { useSuggestionStrip } from '../../lib/hooks/useSuggestionStrip'
 import { useLimits } from '../../lib/hooks/useLimits'
 import { usePlexLinks } from '../../lib/hooks/usePlexLinks'
@@ -27,6 +28,7 @@ import { movieAvailability, radarr, type Movie, type MovieSearchResult } from '.
 import { postClickEvent } from '../../lib/api/recommenderEvents'
 import { stripArticle } from '../../lib/title'
 import { withViewTransition } from '../../lib/viewTransition'
+import { pickDefaultProfileId } from '../../lib/pickDefaultProfileId'
 import './TvTab.css'
 
 function pickSearchPoster(item: MovieSearchResult): string | undefined {
@@ -124,6 +126,16 @@ export function MoviesTab() {
   const [adding, setAdding] = useState<MovieSearchResult | null>(null)
   const [viewing, setViewing] = useState<MovieSearchResult | Movie | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  // Find-release flow: a title added transiently (monitored, auto-grab off)
+  // purely so the interactive release browser can open on it. If the admin
+  // closes the modal without grabbing, we remove it again so nothing is left
+  // behind. `transient` holds the just-added movie id; `grabbed` commits it.
+  const [transient, setTransient] = useState<{ id: number } | null>(null)
+  const grabbedRef = useRef(false)
+  // Profile + root folder for the transient add body (same source the Add
+  // modal uses), loaded only when admin so non-admins pay nothing.
+  const radarrProfiles = useRadarrProfiles()
+  const radarrFolders = useRadarrRootFolders()
   // In-browser playback of a locally-available title (media-core).
   const [playingLocal, setPlayingLocal] = useState<{
     id: number
@@ -252,6 +264,54 @@ export function MoviesTab() {
       radarr.removeMovie(id, deleteFiles),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['radarr', 'movie'] }),
   })
+
+  // Find-release: add the title monitored with auto-grab OFF so the release
+  // endpoint (which requires the movie to exist) has a real movieId to query,
+  // then view the returned Movie so the Advanced panel renders with the
+  // release browser auto-opened. Closing without a grab removes it again.
+  const findReleaseMutation = useMutation({
+    mutationFn: (item: MovieSearchResult) => {
+      const profileId = pickDefaultProfileId(
+        radarrProfiles.data,
+        (limits.data?.defaultProfileName ?? 'choose me').toLowerCase(),
+      )
+      const rootFolder = radarrFolders.data?.[0]?.path ?? null
+      const body = {
+        tmdbId: item.tmdbId,
+        title: item.title,
+        year: item.year,
+        qualityProfileId: profileId,
+        rootFolderPath: rootFolder,
+        monitored: true,
+        addOptions: { searchForMovie: false },
+      }
+      return radarr.addMovie(body)
+    },
+    onSuccess: (movie) => {
+      qc.invalidateQueries({ queryKey: ['radarr', 'movie'] })
+      grabbedRef.current = false
+      setTransient({ id: movie.id })
+      setViewing(movie)
+    },
+    onError: (e) => {
+      setViewing(null)
+      setToast(e instanceof Error ? e.message : String(e))
+    },
+  })
+
+  // Tear down the transient add when the modal closes without a grab. Errors
+  // are swallowed (best-effort cleanup) so a failed remove never surfaces.
+  const handleDetailClose = () => {
+    const t = transient
+    if (t && !grabbedRef.current) {
+      radarr
+        .removeMovie(t.id, false)
+        .catch(() => {})
+        .finally(() => qc.invalidateQueries({ queryKey: ['radarr', 'movie'] }))
+    }
+    setTransient(null)
+    setViewing(null)
+  }
 
   const upgradeMutation = useMutation({
     mutationFn: (id: number) => radarr.upgrade(id),
@@ -398,7 +458,7 @@ export function MoviesTab() {
 
       <DetailModal
         open={viewing !== null}
-        onClose={() => setViewing(null)}
+        onClose={handleDetailClose}
         kind="Movie"
         title={viewing?.title ?? ''}
         year={viewing?.year}
@@ -454,6 +514,9 @@ export function MoviesTab() {
           setViewing(null)
           setAdding(item)
         } : undefined}
+        onFindRelease={isAdmin && viewing && !('id' in viewing) ? () => {
+          findReleaseMutation.mutate(viewing as MovieSearchResult)
+        } : undefined}
         onUpgrade={isAdmin && viewing && 'id' in viewing && viewingAvailability === 'playable' ? () => {
           // "Better version" implies a version exists — suppressed alongside
           // the play buttons when there is no file yet.
@@ -466,6 +529,22 @@ export function MoviesTab() {
           setViewing(null)
           confirmRemove(m)
         } : undefined}
+        advanced={isAdmin && viewing && 'id' in viewing ? (
+          <ArrAdvancedPanel
+            kind="movie"
+            itemId={(viewing as Movie).id}
+            monitored={(viewing as Movie).monitored}
+            qualityProfileId={(viewing as Movie).qualityProfileId}
+            rootFolderPath={(viewing as Movie).rootFolderPath}
+            onToast={setToast}
+            autoOpenSearch={transient?.id === (viewing as Movie).id}
+            onGrabbed={() => {
+              grabbedRef.current = true
+              setTransient(null)
+            }}
+          />
+        ) : undefined}
+        autoShowAdvanced={viewing !== null && 'id' in viewing && transient?.id === viewing.id}
       />
 
       {playingLocal && (

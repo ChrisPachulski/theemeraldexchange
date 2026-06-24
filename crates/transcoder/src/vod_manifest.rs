@@ -42,11 +42,14 @@ pub(crate) fn synthesize(total_duration_secs: f64, start_secs: u64, fmp4: bool) 
     if !total_duration_secs.is_finite() || total_duration_secs <= 0.0 {
         return None;
     }
-    let remaining = total_duration_secs - start_secs as f64;
-    if remaining <= 0.0 {
-        return None;
-    }
-    let count = (remaining / seg).ceil() as u64;
+    // FULL [0, total] timeline, numbered by ABSOLUTE index. The transcode is
+    // still `-ss`-seeked (to a grid-quantized start) and writes its first segment
+    // at absolute index ⌊start/seg⌋ via `-start_number`, but the playlist always
+    // declares the WHOLE title so AVPlayer's native VOD scrubber reports the true
+    // position and full duration (not 0:00 / remaining). `#EXT-X-START` positions
+    // playback at the resume point; the segments before it are produced on demand
+    // when the viewer scrubs back (see on-demand backfill in session_segment).
+    let count = (total_duration_secs / seg).ceil() as u64;
     if count == 0 {
         return None;
     }
@@ -55,12 +58,19 @@ pub(crate) fn synthesize(total_duration_secs: f64, start_secs: u64, fmp4: bool) 
     // fMP4 needs `#EXT-X-MAP`, which requires HLS v7; plain TS rides v3.
     let version = if fmp4 { 7 } else { 3 };
 
-    let mut m = String::with_capacity(96 + count as usize * 28);
+    let mut m = String::with_capacity(112 + count as usize * 28);
     m.push_str("#EXTM3U\n");
     m.push_str(&format!("#EXT-X-VERSION:{version}\n"));
     m.push_str(&format!("#EXT-X-TARGETDURATION:{HLS_SEGMENT_SECS}\n"));
     m.push_str("#EXT-X-MEDIA-SEQUENCE:0\n");
     m.push_str("#EXT-X-PLAYLIST-TYPE:VOD\n");
+    // Resume point. Omitted at 0 so a fresh start keeps the proven manifest
+    // byte-for-byte. Clamped just inside the timeline so a near-end offset stays
+    // a legal TIME-OFFSET.
+    if start_secs > 0 {
+        let off = (start_secs as f64).min((total_duration_secs - 0.001).max(0.0));
+        m.push_str(&format!("#EXT-X-START:TIME-OFFSET={off:.6}\n"));
+    }
     if fmp4 {
         m.push_str("#EXT-X-MAP:URI=\"init.mp4\"\n");
     }
@@ -68,9 +78,9 @@ pub(crate) fn synthesize(total_duration_secs: f64, start_secs: u64, fmp4: bool) 
         // Every segment is HLS_SEGMENT_SECS long except the last, which carries
         // the remainder. The encoder's forced keyframes anchor each cut to an
         // absolute multiple of HLS_SEGMENT_SECS, so on-disk segments line up
-        // with this list one-for-one.
+        // with this absolute-indexed list one-for-one.
         let dur = if i + 1 == count {
-            remaining - seg * (count - 1) as f64
+            total_duration_secs - seg * (count - 1) as f64
         } else {
             seg
         };
@@ -119,22 +129,78 @@ fn copy_cut_points(keyframes: &[f64], base: f64, total_abs: f64, hls_time: f64) 
     cuts
 }
 
+/// Resume anchor for a COPY-remux session: the absolute segment grid of the
+/// WHOLE title, indexed so the synthesized manifest and the `-ss`/`-start_number`
+/// spawn agree on segment numbering.
+///
+/// `bounds` are the segment START points of the full `[0, total]` timeline —
+/// `[0.0, ...copy_cut_points(keyframes, 0, total, hls)]` — so segment `i` covers
+/// `[bounds[i], bounds[i+1])` (the last segment ends at `total`). The resume
+/// `base` is `bounds[start_idx]` for the largest `start_idx` with
+/// `bounds[start_idx] <= start_secs`; that is exactly the keyframe `-ss` seeks to
+/// (the keyframe at/before the offset that ALSO opens a segment), so a resume
+/// re-roots the suffix list at `base` and numbers it from `start_idx`.
+///
+/// This is the SINGLE source of truth shared by [`synthesize_copy`] and the
+/// session spawn (`session::start`'s copy branch): both call it so the manifest's
+/// `seg_NNNNN` numbering matches ffmpeg's `-start_number`. Callers guarantee
+/// `keyframes` is non-empty and `total_duration_secs` is finite/positive.
+pub(crate) fn copy_resume_base(
+    keyframes: &[f64],
+    total_duration_secs: f64,
+    start_secs: u64,
+) -> (u64, f64) {
+    let hls = f64::from(HLS_SEGMENT_SECS);
+    let full_cuts = copy_cut_points(keyframes, 0.0, total_duration_secs, hls);
+    // Segment boundaries of the WHOLE title: bounds[0]=0, then each cut point.
+    // Segment i = [bounds[i], bounds[i+1]); the final segment ends at total.
+    let start = start_secs as f64;
+    let mut start_idx = 0u64;
+    let mut base = 0.0;
+    // bounds = [0.0, ...full_cuts]; find the largest index whose bound <= start.
+    for (offset, &cut) in full_cuts.iter().enumerate() {
+        if cut <= start {
+            // index in bounds is offset+1 (bounds[0] is the leading 0.0)
+            start_idx = offset as u64 + 1;
+            base = cut;
+        } else {
+            break;
+        }
+    }
+    (start_idx, base)
+}
+
 /// Build a complete VOD playlist for a COPY-remux session from the source's
 /// keyframe list — the analogue of [`synthesize`] for sessions that do NOT
 /// re-encode (HEVC→fMP4 / H264→TS), whose segments are cut at the source's own
 /// ragged keyframes and so cannot be derived from the duration alone.
 ///
 /// `keyframes` is the full source video keyframe PTS list (absolute seconds,
-/// ascending). `start_secs` is the resume offset: `-ss` (before `-i`) seeks to
-/// the keyframe at/before it; `copy_cut_points` rebases segment 0 to that
-/// keyframe (`base`), exactly matching what ffmpeg writes for both a fresh start
-/// AND a resume (verified on the NAS at multiple offsets).
+/// ascending). `start_secs` is the resume offset. Like [`synthesize`], this
+/// emits the FULL `[0, total]` timeline so AVPlayer's native VOD scrubber shows
+/// the true position and full duration (not 0:00 / remaining):
+///
+/// - PREFIX segments `0..start_idx` cover `[0, base)` (durations = consecutive
+///   diffs of the full-title boundaries). They are produced on demand if the
+///   viewer scrubs back before the resume point (Phase 3); until then they 404,
+///   which the native client tolerates as long as playback starts at/after
+///   `#EXT-X-START`.
+/// - SUFFIX segments `start_idx..` cover `[base, total)` — the exact ragged
+///   segments ffmpeg's `-ss base` stream-copy writes (`copy_cut_points` rooted
+///   at `base`), verified on the NAS at multiple offsets.
+///
+/// `(start_idx, base)` come from [`copy_resume_base`], the same helper the
+/// session spawn uses, so `seg_NNNNN` numbering matches ffmpeg's `-start_number`.
+/// `#EXT-X-START:TIME-OFFSET=base` is emitted ONLY on a resume (`start_idx > 0`);
+/// a fresh start (`start_idx == 0`, `base == 0`) keeps the proven from-0 manifest
+/// byte-for-byte.
 ///
 /// Returns `None` (→ caller falls back to the on-disk playlist) when the
 /// duration is unusable, the keyframe list is empty, or the span is empty.
 /// Unlike [`synthesize`], `#EXT-X-TARGETDURATION` is computed from the LONGEST
-/// segment (copy segments can be ~5× `HLS_SEGMENT_SECS` between sparse
-/// keyframes), since a too-small TARGETDURATION makes AVPlayer reject the VOD.
+/// segment over ALL prefix + suffix durations (copy segments can be ~5×
+/// `HLS_SEGMENT_SECS` between sparse keyframes), since a too-small TARGETDURATION
+/// makes AVPlayer reject the VOD.
 pub(crate) fn synthesize_copy(
     keyframes: &[f64],
     total_duration_secs: f64,
@@ -145,23 +211,29 @@ pub(crate) fn synthesize_copy(
         return None;
     }
     let hls = f64::from(HLS_SEGMENT_SECS);
-    let start = start_secs as f64;
-    // -ss before -i seeks to the keyframe AT OR BEFORE the offset; the output
-    // re-bases time so that keyframe is t=0. (Fresh start → base 0.)
-    let base = keyframes
-        .iter()
-        .copied()
-        .filter(|&k| k <= start)
-        .fold(0.0, f64::max);
+    let (start_idx, base) = copy_resume_base(keyframes, total_duration_secs, start_secs);
     if total_duration_secs - base <= 0.0 {
         return None;
     }
 
-    let cuts = copy_cut_points(keyframes, base, total_duration_secs, hls);
+    // PREFIX: segments [0, start_idx) covering [0, base). Their durations are the
+    // consecutive diffs of the full-title boundaries up to `base`. Re-derive the
+    // SAME boundary list `copy_resume_base` used so the prefix lines up exactly.
+    let full_cuts = copy_cut_points(keyframes, 0.0, total_duration_secs, hls);
+    let mut durs = Vec::with_capacity(full_cuts.len() + 1);
+    {
+        // bounds = [0.0, ...full_cuts]; emit diffs bounds[i+1]-bounds[i] for the
+        // first `start_idx` segments (these all end at or before `base`).
+        let mut prev = 0.0;
+        for &c in full_cuts.iter().take(start_idx as usize) {
+            durs.push(c - prev);
+            prev = c;
+        }
+    }
 
-    // Absolute cut PTS → per-segment durations, the first measured from `base`:
-    // [base,c0),[c0,c1),…,[c_last,total_duration).
-    let mut durs = Vec::with_capacity(cuts.len() + 1);
+    // SUFFIX: segments [start_idx, ..) covering [base, total). Computed EXACTLY as
+    // before, just rooted at `base` — this is what the `-ss base` session writes.
+    let cuts = copy_cut_points(keyframes, base, total_duration_secs, hls);
     let mut prev = base;
     for &c in &cuts {
         durs.push(c - prev);
@@ -187,9 +259,16 @@ pub(crate) fn synthesize_copy(
     m.push_str(&format!("#EXT-X-TARGETDURATION:{target_dur}\n"));
     m.push_str("#EXT-X-MEDIA-SEQUENCE:0\n");
     m.push_str("#EXT-X-PLAYLIST-TYPE:VOD\n");
+    // Resume point. Omitted at a fresh start (start_idx 0 / base 0) so a from-0
+    // session keeps the proven manifest byte-for-byte.
+    if start_idx > 0 {
+        m.push_str(&format!("#EXT-X-START:TIME-OFFSET={base:.6}\n"));
+    }
     if fmp4 {
         m.push_str("#EXT-X-MAP:URI=\"init.mp4\"\n");
     }
+    // Segments are numbered contiguously from 0 over prefix THEN suffix, matching
+    // the absolute grid `copy_resume_base` defines.
     for (i, dur) in durs.iter().enumerate() {
         m.push_str(&format!("#EXTINF:{dur:.6},\n"));
         m.push_str(&format!("seg_{i:05}.{ext}\n"));
@@ -211,9 +290,13 @@ mod tests {
     }
 
     #[test]
-    fn start_at_or_past_end_yields_none() {
-        assert!(synthesize(100.0, 100, false).is_none());
-        assert!(synthesize(100.0, 200, false).is_none());
+    fn start_at_or_past_end_still_lists_full_timeline_with_clamped_offset() {
+        // A degenerate offset >= duration shouldn't happen (a completed title
+        // resumes at 0), but if it does we still serve the full timeline with a
+        // legal (clamped, just-inside) TIME-OFFSET rather than a dead manifest.
+        let m = synthesize(100.0, 200, false).unwrap();
+        assert_eq!(m.matches("#EXTINF:").count(), 50); // 100 / 2
+        assert!(m.contains("#EXT-X-START:TIME-OFFSET=99.999000\n"), "{m}");
     }
 
     #[test]
@@ -248,12 +331,24 @@ mod tests {
     }
 
     #[test]
-    fn resume_offset_shortens_the_timeline() {
-        // duration 20s, resume at 10s -> 10s remaining -> 5 segments from 0.
+    fn resume_keeps_full_timeline_and_sets_ext_x_start() {
+        // duration 20s, resume at 10s. The playlist still declares the WHOLE
+        // title (20 / 2 = 10 absolute segments seg_00000..seg_00009) so the
+        // native scrubber shows 0:10 / 0:20, with EXT-X-START at the resume point.
         let m = synthesize(20.0, 10, false).unwrap();
-        assert_eq!(m.matches("#EXTINF:").count(), 5);
+        assert_eq!(m.matches("#EXTINF:").count(), 10);
         assert!(m.contains("seg_00000.ts\n"));
-        assert!(!m.contains("seg_00005"));
+        assert!(m.contains("seg_00009.ts\n"));
+        assert!(!m.contains("seg_00010"));
+        assert!(m.contains("#EXT-X-START:TIME-OFFSET=10.000000\n"), "{m}");
+    }
+
+    #[test]
+    fn fresh_start_omits_ext_x_start() {
+        // A from-zero session keeps the proven manifest: no EXT-X-START line.
+        let m = synthesize(20.0, 0, false).unwrap();
+        assert!(!m.contains("#EXT-X-START"), "{m}");
+        assert_eq!(m.matches("#EXTINF:").count(), 10);
     }
 
     #[test]
@@ -346,23 +441,33 @@ mod tests {
     }
 
     #[test]
-    fn copy_resume_synthesizes_rebased_to_the_seek_keyframe() {
-        // -ss 30 seeks to the keyframe at/before 30s (25.943); output rebases
-        // there, so segment 0 runs to the next keyframe (36.370 → 10.427s). Resume
-        // is exact for stream-copy (verified on the NAS), so it DOES synthesize.
+    fn copy_resume_serves_full_timeline_rebased_to_the_seek_keyframe() {
+        // -ss 30 → copy_resume_base anchors at 25.943 (start_idx 4). The manifest
+        // now declares the WHOLE title (4 prefix + 8 suffix = 12 segments) so the
+        // native scrubber shows the absolute position / full duration, with the
+        // SUFFIX still cut exactly as the -ss session writes: the segment at the
+        // resume point runs to the next keyframe (36.370 → 10.427s).
         let m = synthesize_copy(GOOFY_KF, 79.830, 30, true).unwrap();
         assert!(m.contains("#EXT-X-PLAYLIST-TYPE:VOD\n"));
         assert!(m.trim_end().ends_with("#EXT-X-ENDLIST"));
         assert!(m.contains("#EXTINF:10.427000,\n"), "{m}"); // 36.370 - 25.943
-        assert!(m.matches("#EXTINF:").count() < 12); // shorter timeline than fresh
+        // EXT-X-START sits at the resume base (25.943), not the raw offset.
+        assert!(m.contains("#EXT-X-START:TIME-OFFSET=25.943000\n"), "{m}");
+        // Full timeline: 4 prefix + 8 suffix = 12 contiguous segments.
+        assert_eq!(m.matches("#EXTINF:").count(), 12, "{m}");
+        assert!(m.contains("seg_00000.m4s\n"));
+        assert!(m.contains("seg_00011.m4s\n"));
+        assert!(!m.contains("seg_00012"));
     }
 
     #[test]
     fn copy_seek_within_first_gop_is_still_a_fresh_synthesis() {
-        // A tiny offset that lands at/before the first keyframe (base==0) is
-        // output-equivalent to a fresh start.
+        // A tiny offset that lands at/before the first segment boundary (base==0,
+        // start_idx==0) is output-equivalent to a fresh start: no EXT-X-START, the
+        // first segment is the from-0 one (11.511s).
         let m = synthesize_copy(GOOFY_KF, 79.830, 1, true).unwrap();
         assert!(m.trim_end().ends_with("#EXT-X-ENDLIST"));
+        assert!(!m.contains("#EXT-X-START"), "{m}");
         assert!(m.contains("#EXTINF:11.511000,\n"), "{m}");
     }
 
@@ -371,7 +476,96 @@ mod tests {
         assert!(synthesize_copy(&[], 100.0, 0, true).is_none());
         assert!(synthesize_copy(GOOFY_KF, 0.0, 0, true).is_none());
         assert!(synthesize_copy(GOOFY_KF, -1.0, 0, true).is_none());
-        // Resume at/after the end → nothing to play.
-        assert!(synthesize_copy(GOOFY_KF, 79.830, 80, true).is_none());
+    }
+
+    #[test]
+    fn copy_resume_base_anchors_to_the_full_title_grid() {
+        // The full-title boundaries for GOOFY_KF (from copy_cut_points(.,0,79.830,2)):
+        // bounds = [0, 11.511, 13.347, 23.774, 25.943, 36.370, 46.797, 55.722,
+        //           59.601, 69.361, 74.157, 77.911]. copy_resume_base picks the
+        // largest bound <= offset, with its index.
+        // offset 30 → bound 25.943 at index 4.
+        assert_eq!(copy_resume_base(GOOFY_KF, 79.830, 30), (4, 25.943));
+        // offset 50 → bound 46.797 at index 6.
+        assert_eq!(copy_resume_base(GOOFY_KF, 79.830, 50), (6, 46.797));
+        // offset 0 → fresh start: index 0, base 0.
+        assert_eq!(copy_resume_base(GOOFY_KF, 79.830, 0), (0, 0.0));
+        // offset below the first cut (1 < 11.511) is still the fresh grid.
+        assert_eq!(copy_resume_base(GOOFY_KF, 79.830, 1), (0, 0.0));
+    }
+
+    #[test]
+    fn copy_resume_full_timeline_numbering_and_suffix_match() {
+        // Resume at offset 50 → base 46.797, start_idx 6. The manifest is the FULL
+        // timeline: 6 prefix + the suffix from copy_cut_points rooted at base.
+        const OFFSET: u64 = 50;
+        let m = synthesize_copy(GOOFY_KF, 79.830, OFFSET, true).unwrap();
+
+        let (start_idx, base) = copy_resume_base(GOOFY_KF, 79.830, OFFSET);
+        assert_eq!((start_idx, base), (6, 46.797));
+
+        // EXT-X-START carries the resume base.
+        assert!(m.contains("#EXT-X-START:TIME-OFFSET=46.797000\n"), "{m}");
+
+        // SUFFIX EXTINFs == those derived from copy_cut_points rooted at base.
+        let cuts = copy_cut_points(GOOFY_KF, base, 79.830, f64::from(HLS_SEGMENT_SECS));
+        let mut suffix = Vec::new();
+        let mut prev = base;
+        for &c in &cuts {
+            suffix.push(c - prev);
+            prev = c;
+        }
+        let tail = 79.830 - prev;
+        if tail > 1e-3 {
+            suffix.push(tail);
+        }
+        for d in &suffix {
+            assert!(
+                m.contains(&format!("#EXTINF:{d:.6},\n")),
+                "missing suffix {d}\n{m}"
+            );
+        }
+
+        // Full count = prefix (start_idx) + suffix, contiguous seg_ numbering.
+        let total_segs = start_idx as usize + suffix.len();
+        assert_eq!(m.matches("#EXTINF:").count(), total_segs, "{m}");
+        assert_eq!(m.matches("seg_").count(), total_segs, "{m}");
+        for i in 0..total_segs {
+            assert!(
+                m.contains(&format!("seg_{i:05}.m4s\n")),
+                "missing seg {i}\n{m}"
+            );
+        }
+        assert!(!m.contains(&format!("seg_{total_segs:05}")), "{m}");
+
+        // Total EXTINF sum ≈ full duration (prefix + suffix span [0, total]).
+        let sum: f64 = m
+            .lines()
+            .filter_map(|l| l.strip_prefix("#EXTINF:"))
+            .filter_map(|s| s.strip_suffix(",").unwrap_or(s).parse::<f64>().ok())
+            .sum();
+        assert!((sum - 79.830).abs() < 1e-3, "sum {sum} != 79.830\n{m}");
+    }
+
+    #[test]
+    fn copy_resume_targetduration_covers_longest_of_all_segments() {
+        // At offset 50 the longest segment over ALL prefix+suffix is the from-0
+        // prefix opener (11.511s), so TARGETDURATION must round up to 12 even
+        // though the suffix's longest is only 9.760s. A TARGETDURATION below the
+        // longest segment is spec-illegal and AVPlayer rejects the VOD.
+        let m = synthesize_copy(GOOFY_KF, 79.830, 50, true).unwrap();
+        assert!(m.contains("#EXT-X-TARGETDURATION:12\n"), "{m}");
+    }
+
+    #[test]
+    fn copy_resume_past_last_boundary_clamps_to_full_timeline() {
+        // An offset beyond the last segment boundary (80 > 77.911) anchors at the
+        // LAST boundary (start_idx 11, base 77.911) rather than dying: the full
+        // timeline still serves so the scrubber shows the whole title. base stays
+        // strictly inside [0,total) so EXT-X-START is legal.
+        let m = synthesize_copy(GOOFY_KF, 79.830, 80, true).unwrap();
+        assert!(m.contains("#EXT-X-START:TIME-OFFSET=77.911000\n"), "{m}");
+        // 11 prefix + 1 suffix (the [77.911, 79.830) tail) = 12 segments.
+        assert_eq!(m.matches("#EXTINF:").count(), 12, "{m}");
     }
 }
