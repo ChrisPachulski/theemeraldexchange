@@ -185,13 +185,22 @@ function unescapeXml(s: string): string {
     .replace(/&apos;/g, "'")
 }
 
-function parseUserElements(xml: string): PlexFriend[] {
-  const out: PlexFriend[] = []
-  for (const match of xml.matchAll(/<User\s+([^>]+?)\/?>/g)) {
+// Yield the unescaped attribute map of every <tag .../> element in a Plex
+// XML payload. The three friend-list endpoints (User/SharedServer/Account)
+// all parse the same attribute shape; only the per-element mapping differs.
+function* xmlElementAttrs(xml: string, tag: string): Generator<Record<string, string>> {
+  for (const match of xml.matchAll(new RegExp(`<${tag}\\s+([^>]+?)\\/?>`, 'g'))) {
     const attrs: Record<string, string> = {}
     for (const a of match[1].matchAll(/(\w+)="([^"]*)"/g)) {
       attrs[a[1]] = unescapeXml(a[2])
     }
+    yield attrs
+  }
+}
+
+function parseUserElements(xml: string): PlexFriend[] {
+  const out: PlexFriend[] = []
+  for (const attrs of xmlElementAttrs(xml, 'User')) {
     const id = Number(attrs.id)
     if (!Number.isFinite(id)) continue
     out.push({
@@ -300,11 +309,7 @@ export async function listPendingInvites(authToken: string): Promise<PlexFriend[
 // endpoint catches them.
 function parseSharedServerElements(xml: string): PlexFriend[] {
   const out: PlexFriend[] = []
-  for (const match of xml.matchAll(/<SharedServer\s+([^>]+?)\/?>/g)) {
-    const attrs: Record<string, string> = {}
-    for (const a of match[1].matchAll(/(\w+)="([^"]*)"/g)) {
-      attrs[a[1]] = unescapeXml(a[2])
-    }
+  for (const attrs of xmlElementAttrs(xml, 'SharedServer')) {
     // Identity: prefer userID (Plex account id), fall back to id.
     const id = Number(attrs.userID || attrs.id)
     if (!Number.isFinite(id)) continue
@@ -362,11 +367,7 @@ function stableHash(s: string): number {
 // playback still attributed to them).
 function parseAccountElements(xml: string): PlexFriend[] {
   const out: PlexFriend[] = []
-  for (const match of xml.matchAll(/<Account\s+([^>]+?)\/?>/g)) {
-    const attrs: Record<string, string> = {}
-    for (const a of match[1].matchAll(/(\w+)="([^"]*)"/g)) {
-      attrs[a[1]] = unescapeXml(a[2])
-    }
+  for (const attrs of xmlElementAttrs(xml, 'Account')) {
     const id = Number(attrs.id)
     if (!Number.isFinite(id)) continue
     // The PMS /accounts/0 "Local" account represents anonymous/local

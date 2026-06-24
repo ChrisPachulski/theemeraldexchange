@@ -94,7 +94,7 @@ export const MOVIES: MockMovieRow[] = [
   },
   {
     // No tmdb / no poster metadata — exercises the MediaCard first-letter
-    // fallback and posterFor() returning undefined.
+    // fallback.
     id: 3,
     tmdb_id: null,
     imdb_id: null,

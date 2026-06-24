@@ -30,8 +30,8 @@
 
 import { createRemoteJWKSet, jwtVerify, errors as joseErrors } from 'jose'
 import type { JWTVerifyGetKey } from 'jose'
-import { timingSafeEqual } from 'node:crypto'
 import { parseSub, type Sub } from './sub.js'
+import { constantTimeEqual } from './secrets.js'
 import { env } from '../env.js'
 
 // Google publishes both forms of the issuer claim depending on the flow;
@@ -165,14 +165,6 @@ function classifyJoseError(err: unknown): GoogleVerifyError {
   // TypeError — a transient Google-side outage, NOT an auth failure.
   if (err instanceof TypeError) return 'jwks_unavailable'
   return 'unknown_error'
-}
-
-/** Constant-time string compare; false on length mismatch. */
-function constantTimeEqual(a: string, b: string): boolean {
-  const ab = Buffer.from(a, 'utf8')
-  const bb = Buffer.from(b, 'utf8')
-  if (ab.length !== bb.length) return false
-  return timingSafeEqual(ab, bb)
 }
 
 // ── Test seams ──────────────────────────────────────────────────────────

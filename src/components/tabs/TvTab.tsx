@@ -29,7 +29,13 @@ import { useConfirm } from '../confirm/useConfirm'
 import { seriesAvailability, sonarr, type Series, type SeriesSearchResult } from '../../lib/api/sonarr'
 import { postClickEvent } from '../../lib/api/recommenderEvents'
 import { withViewTransition } from '../../lib/viewTransition'
-import { stripArticle } from '../../lib/title'
+import {
+  filterAndSortLibrary,
+  byTitleAsc,
+  byTitleDesc,
+  byYearAsc,
+  byYearDesc,
+} from '../../lib/librarySort'
 import { pickDefaultProfileId } from '../../lib/pickDefaultProfileId'
 import './TvTab.css'
 
@@ -82,6 +88,15 @@ function fmtSeriesRating(item: SeriesSearchResult): string | undefined {
 
 type TvSort = 'title-asc' | 'title-desc' | 'year-desc' | 'year-asc' | 'network'
 type TvStatus = 'all' | 'continuing' | 'ended' | 'upcoming'
+
+const TV_COMPARATORS: Record<TvSort, (a: Series, b: Series) => number> = {
+  'title-asc': byTitleAsc,
+  'title-desc': byTitleDesc,
+  'year-desc': byYearDesc,
+  'year-asc': byYearAsc,
+  network: (a, b) =>
+    (a.network ?? '~').localeCompare(b.network ?? '~') || byTitleAsc(a, b),
+}
 
 const TV_SORT_OPTIONS: ReadonlyArray<FilterOption<TvSort>> = [
   { value: 'title-asc',  label: 'Title (A–Z)' },
@@ -224,38 +239,10 @@ export function TvTab() {
   // Text + status filter, then sort. Article-stripped sort key is used
   // for title sorts (Plex behavior — "The Mandalorian" sorts under M).
   // Alphabet bucket runs against the same key so the bar matches the sort.
-  const textFilteredLibrary = useMemo(() => {
-    if (!library.data) return []
-    const q = query.trim().toLowerCase()
-    let items = q
-      ? library.data.filter((s) => s.title.toLowerCase().includes(q))
-      : library.data.slice()
-    if (status !== 'all') {
-      items = items.filter((s) => (s.status ?? '').toLowerCase() === status)
-    }
-    const sorted = items.slice()
-    switch (sort) {
-      case 'title-asc':
-        sorted.sort((a, b) => stripArticle(a.title).localeCompare(stripArticle(b.title)))
-        break
-      case 'title-desc':
-        sorted.sort((a, b) => stripArticle(b.title).localeCompare(stripArticle(a.title)))
-        break
-      case 'year-desc':
-        sorted.sort((a, b) => (b.year ?? 0) - (a.year ?? 0) || stripArticle(a.title).localeCompare(stripArticle(b.title)))
-        break
-      case 'year-asc':
-        sorted.sort((a, b) => (a.year ?? 0) - (b.year ?? 0) || stripArticle(a.title).localeCompare(stripArticle(b.title)))
-        break
-      case 'network':
-        sorted.sort((a, b) =>
-          (a.network ?? '~').localeCompare(b.network ?? '~') ||
-          stripArticle(a.title).localeCompare(stripArticle(b.title))
-        )
-        break
-    }
-    return sorted
-  }, [library.data, query, status, sort])
+  const textFilteredLibrary = useMemo(
+    () => filterAndSortLibrary(library.data, { query, status, comparator: TV_COMPARATORS[sort] }),
+    [library.data, query, status, sort],
+  )
 
   const availableLetters = useMemo(
     () => new Set(textFilteredLibrary.map((s) => libraryBucket(s.title))),

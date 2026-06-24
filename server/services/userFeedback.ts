@@ -29,7 +29,7 @@
 import { promises as fs } from 'fs'
 import { dirname } from 'path'
 import { env } from '../env.js'
-import { sanitizeTitle } from './sanitize.js'
+import { sanitizeTitle, normalizeIdTitleList } from './sanitize.js'
 
 export type FeedbackKind = 'movie' | 'tv'
 export type FeedbackSignal = 'like' | 'dislike'
@@ -56,44 +56,12 @@ export function _setUserFeedbackPathForTests(p: string): void {
   cached = null
 }
 
-function normalizeEntry(raw: unknown): FeedbackEntry | null {
-  if (typeof raw === 'number' && Number.isInteger(raw) && raw > 0) {
-    return { id: raw, title: '' }
-  }
-  if (raw && typeof raw === 'object') {
-    const o = raw as { id?: unknown; title?: unknown }
-    if (typeof o.id === 'number' && Number.isInteger(o.id) && o.id > 0) {
-      // Sanitize on read, not only on write. Defends against rows that
-      // were persisted before sanitizeTitle was introduced or wrote
-      // through a path we hadn't covered — those raw newlines / control
-      // chars would otherwise reach Claude's prompt verbatim the next
-      // time suggestions.ts renders them into the "you have liked"
-      // block. Cheap and idempotent.
-      return { id: o.id, title: sanitizeTitle(o.title) }
-    }
-  }
-  return null
-}
-
-function normalizeList(raw: unknown): FeedbackEntry[] {
-  if (!Array.isArray(raw)) return []
-  const out: FeedbackEntry[] = []
-  const seen = new Set<number>()
-  for (const r of raw) {
-    const e = normalizeEntry(r)
-    if (e && !seen.has(e.id)) {
-      seen.add(e.id)
-      out.push(e)
-    }
-  }
-  return out
-}
 
 function sanitizeBucket(raw: unknown): KindBucket {
   const r = (raw ?? {}) as Partial<{ liked: unknown; disliked: unknown }>
   return {
-    liked: normalizeList(r.liked),
-    disliked: normalizeList(r.disliked),
+    liked: normalizeIdTitleList(r.liked),
+    disliked: normalizeIdTitleList(r.disliked),
   }
 }
 

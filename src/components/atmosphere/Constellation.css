@@ -1,0 +1,17 @@
+.constellation__lines line {
+  stroke: var(--emerald);
+  stroke-width: 0.4;
+  stroke-opacity: 0.18;
+}
+
+.constellation__dots circle {
+  fill: var(--emerald);
+  fill-opacity: 0.45;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .constellation {
+    /* Static at low opacity is still fine; only the drift is removed. */
+    opacity: 0.4;
+  }
+}

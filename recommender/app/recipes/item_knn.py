@@ -35,7 +35,7 @@ import sqlite3
 
 import numpy as np
 
-from ..context import Candidate, TitleRow, UserContext, title_key_variants
+from ..context import Candidate, TitleRow, UserContext, title_key_variants, title_row_from
 from ..db import GENRE_AGG_SQL, deserialize_f32, table_generation
 from ..reasons import discover_reason, personalized_reason, trending_reason
 from ..retrieval import AVAILABLE_TITLE_PREDICATE, cold_start_pool, retrieve_candidates
@@ -108,19 +108,8 @@ def _load_catalog(conn: sqlite3.Connection, kind: str, min_votes: int) -> dict:
     vecs: list[np.ndarray] = []
     pops: list[float] = []
     for r in rows:
-        gids = tuple(int(g) for g in r["genres"].split(",")) if r["genres"] else ()
         ids.append(r["tmdb_id"])
-        titles[r["tmdb_id"]] = TitleRow(
-            tmdb_id=r["tmdb_id"],
-            kind=kind,
-            title=r["title"],
-            year=r["year"],
-            poster_path=r["poster_path"],
-            overview=r["overview"],
-            popularity=r["popularity"] or 0.0,
-            vote_average=r["vote_average"],
-            genre_ids=gids,
-        )
+        titles[r["tmdb_id"]] = title_row_from(r, kind)
         keys[r["tmdb_id"]] = title_key_variants(r["title"])
         vecs.append(deserialize_f32(r["embedding"], dim=r["dim"]))
         pops.append(float(r["popularity"] or 0.0))

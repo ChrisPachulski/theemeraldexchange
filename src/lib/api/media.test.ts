@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ApiError } from './errors'
-import { mediaApi, posterFor, browserCaps, probedCaps, resetProbedCapsForTest } from './media'
+import { mediaApi, browserCaps, probedCaps, resetProbedCapsForTest } from './media'
 
 const fetchMock = vi.fn()
 
@@ -443,15 +443,3 @@ describe('probedCaps', () => {
   })
 })
 
-describe('posterFor', () => {
-  it('returns undefined when posterPath is null (fallback path)', () => {
-    expect(posterFor({ posterPath: null })).toBeUndefined()
-    expect(posterFor({})).toBeUndefined()
-  })
-
-  it('builds a TMDB image URL when posterPath is present', () => {
-    expect(posterFor({ posterPath: '/abc.jpg' })).toBe(
-      'https://image.tmdb.org/t/p/w342/abc.jpg',
-    )
-  })
-})

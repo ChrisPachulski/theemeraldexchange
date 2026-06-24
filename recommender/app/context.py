@@ -55,6 +55,23 @@ class TitleRow:
     genre_ids: tuple[int, ...]
 
 
+def title_row_from(r: sqlite3.Row, kind: Kind) -> TitleRow:
+    """Build a TitleRow from a catalog query row carrying the GENRE_AGG_SQL
+    `genres` CSV column. Shared by the four catalog-loading paths."""
+    gids = tuple(int(g) for g in r["genres"].split(",")) if r["genres"] else ()
+    return TitleRow(
+        tmdb_id=r["tmdb_id"],
+        kind=kind,
+        title=r["title"],
+        year=r["year"],
+        poster_path=r["poster_path"],
+        overview=r["overview"],
+        popularity=r["popularity"] or 0.0,
+        vote_average=r["vote_average"],
+        genre_ids=gids,
+    )
+
+
 @dataclass
 class Candidate:
     title: TitleRow
@@ -142,20 +159,7 @@ def _load_title_rows(conn: sqlite3.Connection, kind: Kind, ids: list[int]) -> di
             (kind, *batch),
         ).fetchall()
         for r in rows:
-            gids = (
-                tuple(int(g) for g in r["genres"].split(",")) if r["genres"] else ()
-            )
-            out[r["tmdb_id"]] = TitleRow(
-                tmdb_id=r["tmdb_id"],
-                kind=kind,
-                title=r["title"],
-                year=r["year"],
-                poster_path=r["poster_path"],
-                overview=r["overview"],
-                popularity=r["popularity"] or 0.0,
-                vote_average=r["vote_average"],
-                genre_ids=gids,
-            )
+            out[r["tmdb_id"]] = title_row_from(r, kind)
     return out
 
 
