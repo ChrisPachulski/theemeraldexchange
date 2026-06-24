@@ -29,6 +29,7 @@ vi.mock('./iptvStreamToken.js', () => ({
     `TOK(${opts.resourceId}#${++sign.nonce})`,
 }))
 vi.mock('./iptvRemux.js', () => ({
+  channelNeedsReencode: () => false,
   listRemuxSessions: () => h.state.active,
   startRemuxSession: () => h.start(),
   stopRemuxSession: (sessionId: string) => h.stop(sessionId),
