@@ -74,20 +74,25 @@ function renderEntryBullets(entries: Array<{ id: number; title: string }>): stri
 // genre tags (not titles), so a title tagged Drama+Crime contributes
 // to both buckets — that matches how taste actually works (you don't
 // have to pick one).
+// Tally how many times each genre tag appears across a library. A title
+// tagged Drama+Crime contributes to both buckets.
+function countGenres(library: Array<{ genres?: string[] }>): Map<string, number> {
+  const counts = new Map<string, number>()
+  for (const item of library) {
+    for (const g of item.genres ?? []) {
+      if (g) counts.set(g, (counts.get(g) ?? 0) + 1)
+    }
+  }
+  return counts
+}
+
 export function computeGenreDistribution(
   library: Array<{ genres?: string[] }>,
   topN: number,
 ): string[] {
-  const counts = new Map<string, number>()
+  const counts = countGenres(library)
   let total = 0
-  for (const item of library) {
-    if (!item.genres) continue
-    for (const g of item.genres) {
-      if (!g) continue
-      counts.set(g, (counts.get(g) ?? 0) + 1)
-      total++
-    }
-  }
+  for (const n of counts.values()) total += n
   if (total === 0) return []
   return Array.from(counts.entries())
     .sort((a, b) => b[1] - a[1])
@@ -188,14 +193,7 @@ export function buildPriorityTasteBlock(
 ): string {
   if (library.length < PRIORITY_TASTE_TRIGGER) return ''
   // Compute genre rank (most-common = rank 1).
-  const counts = new Map<string, number>()
-  for (const item of library) {
-    if (!item.genres) continue
-    for (const g of item.genres) {
-      if (!g) continue
-      counts.set(g, (counts.get(g) ?? 0) + 1)
-    }
-  }
+  const counts = countGenres(library)
   const rankedGenres = Array.from(counts.entries())
     .sort((a, b) => b[1] - a[1])
     .map(([g], i) => [g, 1 / (i + 1)] as [string, number])
