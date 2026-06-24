@@ -9,7 +9,7 @@
 import path from 'node:path'
 import { env } from '../env.js'
 import { signStreamToken } from './iptvStreamToken.js'
-import { listRemuxSessions, startRemuxSession, stopRemuxSession } from './iptvRemux.js'
+import { channelNeedsReencode, listRemuxSessions, startRemuxSession, stopRemuxSession } from './iptvRemux.js'
 
 export type LiveRemuxEntry = {
   sessionId: string
@@ -64,6 +64,9 @@ export function ensureLiveRemuxEntry(opts: {
       streamId: opts.streamId,
       sub: opts.sub,
       upstreamUrl: opts.upstreamUrl,
+      // Skip the doomed copy attempt if this channel was already seen as
+      // non-H.264; the first such tune starts as copy, detects it, and respawns.
+      reencodeVideo: channelNeedsReencode(opts.streamId),
     })
     entry = {
       sessionId: session.sessionId,

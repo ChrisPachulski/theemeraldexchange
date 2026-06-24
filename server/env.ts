@@ -629,6 +629,16 @@ export const env = {
   IPTV_SYNC_CRON: process.env.IPTV_SYNC_CRON ?? '0 */6 * * *',
   IPTV_RECOMMENDER_EXPORT_SECRET: opt('IPTV_RECOMMENDER_EXPORT_SECRET') ?? null,
   IPTV_REMUX_TMP_DIR: process.env.IPTV_REMUX_TMP_DIR ?? '/tmp/iptv-remux',
+  // Live re-encode safety net (iptvRemux). A channel whose upstream video isn't
+  // H.264 — e.g. an HEVC 24/7 feed, which Apple can't play from MPEG-TS HLS — is
+  // re-encoded to H.264 so it plays everywhere. Only non-H.264 channels pay this
+  // cost and at most IPTV_MAX_UPSTREAM_CONNECTIONS run at once, so the encode
+  // load on the Plex-sharing box stays bounded. PRESET trades CPU for quality;
+  // THREADS caps cores per encode; MAX_HEIGHT downscales tall sources so the
+  // encode holds realtime on a weak CPU.
+  IPTV_REENCODE_PRESET: process.env.IPTV_REENCODE_PRESET ?? 'veryfast',
+  IPTV_REENCODE_THREADS: positiveInt('IPTV_REENCODE_THREADS', 2),
+  IPTV_REENCODE_MAX_HEIGHT: positiveInt('IPTV_REENCODE_MAX_HEIGHT', 1080),
   // Reviewer-insurance gate per contract §13. Set IPTV_DISABLED=1 (or
   // 'true') to build an instance with no IPTV surface — the /api/iptv
   // routes 404 and the IPTV sync cron never registers. The Apple-side

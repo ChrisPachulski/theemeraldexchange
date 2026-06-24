@@ -176,6 +176,7 @@ vi.mock('../services/iptvRemux.js', () => ({
     remuxState.activeSessions.delete(sessionId)
   }),
   heartbeatRemuxSession: vi.fn(),
+  channelNeedsReencode: vi.fn(() => false),
 }))
 
 // node:fs is shared with better-sqlite3 migrations (which readFileSync the .sql
