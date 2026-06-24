@@ -28,7 +28,7 @@
 import { promises as fs } from 'fs'
 import { dirname } from 'path'
 import { env } from '../env.js'
-import { sanitizeTitle } from './sanitize.js'
+import { sanitizeTitle, normalizeIdTitleList } from './sanitize.js'
 
 export type RejectionsKind = 'movie' | 'tv'
 export type RejectionEntry = { id: number; title: string }
@@ -48,39 +48,6 @@ export function _setRejectionsPathForTests(p: string): void {
 let cached: RejectionsFile | null = null
 let writeQueue: Promise<void> = Promise.resolve()
 
-function normalizeEntry(raw: unknown): RejectionEntry | null {
-  if (typeof raw === 'number' && Number.isInteger(raw) && raw > 0) {
-    return { id: raw, title: '' }
-  }
-  if (raw && typeof raw === 'object') {
-    const o = raw as { id?: unknown; title?: unknown }
-    if (typeof o.id === 'number' && Number.isInteger(o.id) && o.id > 0) {
-      // Sanitize on read, not only on write. Defends against rows that
-      // were persisted before sanitizeTitle was introduced or wrote
-      // through a path we hadn't covered — those raw newlines / control
-      // chars would otherwise reach Claude's prompt verbatim the next
-      // time suggestions.ts renders them into a bullet list. Cheap
-      // (string-only) and idempotent, so re-sanitizing fresh-write data
-      // is harmless.
-      return { id: o.id, title: sanitizeTitle(o.title) }
-    }
-  }
-  return null
-}
-
-function normalizeList(raw: unknown): RejectionEntry[] {
-  if (!Array.isArray(raw)) return []
-  const out: RejectionEntry[] = []
-  const seen = new Set<number>()
-  for (const r of raw) {
-    const e = normalizeEntry(r)
-    if (e && !seen.has(e.id)) {
-      seen.add(e.id)
-      out.push(e)
-    }
-  }
-  return out
-}
 
 async function load(): Promise<RejectionsFile> {
   if (cached) return cached
@@ -101,8 +68,8 @@ async function load(): Promise<RejectionsFile> {
   try {
     const parsed = JSON.parse(raw) as Partial<{ movie: unknown; tv: unknown }>
     cached = {
-      movie: normalizeList(parsed.movie),
-      tv: normalizeList(parsed.tv),
+      movie: normalizeIdTitleList(parsed.movie),
+      tv: normalizeIdTitleList(parsed.tv),
     }
   } catch (parseErr) {
     // File exists but doesn't parse — likely a torn write from a prior

@@ -30,3 +30,39 @@ export function sanitizeTitle(raw: unknown): string {
   const collapsed = stripped.replace(/\s+/g, ' ').trim()
   return collapsed.slice(0, MAX_TITLE_LEN)
 }
+
+export type IdTitle = { id: number; title: string }
+
+// Coerce a persisted feedback/rejection entry — a bare positive-int id, or a
+// { id, title } object — into a sanitized {id, title}, or null when the id is
+// missing/invalid. Sanitizing on READ (not only on write) defends against rows
+// persisted before sanitizeTitle existed: raw newlines / control chars would
+// otherwise reach Claude's prompt verbatim the next time suggestions.ts renders
+// them. Cheap (string-only) and idempotent, so re-sanitizing fresh data is safe.
+export function normalizeIdTitleEntry(raw: unknown): IdTitle | null {
+  if (typeof raw === 'number' && Number.isInteger(raw) && raw > 0) {
+    return { id: raw, title: '' }
+  }
+  if (raw && typeof raw === 'object') {
+    const o = raw as { id?: unknown; title?: unknown }
+    if (typeof o.id === 'number' && Number.isInteger(o.id) && o.id > 0) {
+      return { id: o.id, title: sanitizeTitle(o.title) }
+    }
+  }
+  return null
+}
+
+// Normalize a persisted array, dropping invalid entries and deduping by id.
+export function normalizeIdTitleList(raw: unknown): IdTitle[] {
+  if (!Array.isArray(raw)) return []
+  const out: IdTitle[] = []
+  const seen = new Set<number>()
+  for (const r of raw) {
+    const e = normalizeIdTitleEntry(r)
+    if (e && !seen.has(e.id)) {
+      seen.add(e.id)
+      out.push(e)
+    }
+  }
+  return out
+}

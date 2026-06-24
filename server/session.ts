@@ -106,13 +106,6 @@ export function authModeFromSession(session: Pick<Session, 'sub'>): AuthMode {
   return 'plex'
 }
 
-/** Type-guard: true when a mint request should carry auth_mode 'plex'.
- *  Convenience wrapper over authModeFromSession for callers that only
- *  need the boolean. */
-export function isPlexSession(session: Pick<Session, 'sub'>): boolean {
-  return authModeFromSession(session) === 'plex'
-}
-
 /** Input to mintDeviceToken. The caller (device-mint endpoint, D13)
  *  reads the validated session and the client-supplied pairing body,
  *  then passes this to mint the JWE bearer token.
