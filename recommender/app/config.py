@@ -61,34 +61,27 @@ def _path(env_name: str, default: str) -> Path:
     return Path(os.environ.get(env_name, default)).resolve()
 
 
-def _event_secret() -> str | None:
-    raw = os.environ.get("RECOMMENDER_EVENT_SECRET")
+def _validate_secret(env_name: str) -> str | None:
+    raw = os.environ.get(env_name)
     if raw is None or raw.strip() == "":
         return None
     if os.environ.get("NODE_ENV") != "production":
         return raw
     if raw.lower() in EVENT_SECRET_PLACEHOLDERS:
-        raise ValueError("RECOMMENDER_EVENT_SECRET looks like a placeholder value")
+        raise ValueError(f"{env_name} looks like a placeholder value")
     if len(raw) < EVENT_SECRET_MIN_LEN:
         raise ValueError(
-            f"RECOMMENDER_EVENT_SECRET must be at least {EVENT_SECRET_MIN_LEN} characters"
+            f"{env_name} must be at least {EVENT_SECRET_MIN_LEN} characters"
         )
     return raw
+
+
+def _event_secret() -> str | None:
+    return _validate_secret("RECOMMENDER_EVENT_SECRET")
 
 
 def _internal_principal_secret() -> str | None:
-    raw = os.environ.get("INTERNAL_PRINCIPAL_SECRET")
-    if raw is None or raw.strip() == "":
-        return None
-    if os.environ.get("NODE_ENV") != "production":
-        return raw
-    if raw.lower() in EVENT_SECRET_PLACEHOLDERS:
-        raise ValueError("INTERNAL_PRINCIPAL_SECRET looks like a placeholder value")
-    if len(raw) < EVENT_SECRET_MIN_LEN:
-        raise ValueError(
-            f"INTERNAL_PRINCIPAL_SECRET must be at least {EVENT_SECRET_MIN_LEN} characters"
-        )
-    return raw
+    return _validate_secret("INTERNAL_PRINCIPAL_SECRET")
 
 
 def _internal_principal_mode() -> str:

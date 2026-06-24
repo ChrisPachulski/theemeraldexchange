@@ -13,7 +13,14 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .context import IN_BATCH_SIZE, Candidate, TitleRow, UserContext, title_key_variants
+from .context import (
+    IN_BATCH_SIZE,
+    Candidate,
+    TitleRow,
+    UserContext,
+    title_key_variants,
+    title_row_from,
+)
 from .db import GENRE_AGG_SQL, decode_vec_rowid, deserialize_f32, serialize_f32
 from .schemas import Kind
 
@@ -118,18 +125,7 @@ def retrieve_candidates(
             continue
         if user.library_title_keys and title_key_variants(r["title"]) & user.library_title_keys:
             continue
-        gids = tuple(int(g) for g in r["genres"].split(",")) if r["genres"] else ()
-        title = TitleRow(
-            tmdb_id=r["tmdb_id"],
-            kind=kind,
-            title=r["title"],
-            year=r["year"],
-            poster_path=r["poster_path"],
-            overview=r["overview"],
-            popularity=r["popularity"] or 0.0,
-            vote_average=r["vote_average"],
-            genre_ids=gids,
-        )
+        title = title_row_from(r, kind)
         emb = deserialize_f32(r["embedding"], dim=r["dim"])
         candidates.append(Candidate(title=title, embedding=emb))
         distances.append(float(keep_distances[tid]))
@@ -173,20 +169,7 @@ def cold_start_pool(
             continue
         if user.library_title_keys and title_key_variants(r["title"]) & user.library_title_keys:
             continue
-        gids = tuple(int(g) for g in r["genres"].split(",")) if r["genres"] else ()
-        out.append(
-            TitleRow(
-                tmdb_id=r["tmdb_id"],
-                kind=kind,
-                title=r["title"],
-                year=r["year"],
-                poster_path=r["poster_path"],
-                overview=r["overview"],
-                popularity=r["popularity"] or 0.0,
-                vote_average=r["vote_average"],
-                genre_ids=gids,
-            )
-        )
+        out.append(title_row_from(r, kind))
         if len(out) >= pool_size:
             break
     return out

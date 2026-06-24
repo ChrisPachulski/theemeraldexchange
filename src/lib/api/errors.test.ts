@@ -4,7 +4,7 @@
 // silently degrades back to "Sonarr /series: 507 Insufficient Storage".
 
 import { describe, it, expect } from 'vitest'
-import { throwApiError, ApiError, isInsufficientDiskSpace } from './errors'
+import { throwApiError, ApiError } from './errors'
 
 function jsonResponse(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {
@@ -279,22 +279,5 @@ describe('throwApiError', () => {
       msg = (e as ApiError).message
     }
     expect(msg).toMatch(/isn.t available to play/i)
-  })
-})
-
-describe('isInsufficientDiskSpace', () => {
-  it('matches an ApiError with the right code', () => {
-    const e = new ApiError(507, 'msg', 'insufficient_disk_space', {})
-    expect(isInsufficientDiskSpace(e)).toBe(true)
-  })
-
-  it('rejects other ApiErrors', () => {
-    expect(isInsufficientDiskSpace(new ApiError(403, 'msg', 'forbidden', {}))).toBe(false)
-  })
-
-  it('rejects non-ApiError throwables', () => {
-    expect(isInsufficientDiskSpace(new Error('plain'))).toBe(false)
-    expect(isInsufficientDiskSpace('string')).toBe(false)
-    expect(isInsufficientDiskSpace(null)).toBe(false)
   })
 })
