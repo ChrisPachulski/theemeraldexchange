@@ -5,6 +5,22 @@
 //   - rejection of known placeholder strings
 //   - pairwise distinctness across SESSION_SECRET, STREAM_TOKEN_SECRET,
 //     and DEVICE_TOKEN_SECRET (contract §3.1 / §5.4)
+//
+// Also the canonical constant-time string compare used by the auth nonce
+// checks (apple/google) and the invite-code-hash check.
+
+import { timingSafeEqual } from 'node:crypto'
+
+// Constant-time string compare. Returns false on length mismatch — the early
+// return is not itself constant-time w.r.t. length, but timingSafeEqual
+// REQUIRES equal-length buffers (comparing unequal lengths throws). For the
+// hex digests / nonces this guards, byte length equals string length.
+export function constantTimeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a, 'utf8')
+  const bb = Buffer.from(b, 'utf8')
+  if (ab.length !== bb.length) return false
+  return timingSafeEqual(ab, bb)
+}
 
 export const SECRET_MIN_LEN = 32
 

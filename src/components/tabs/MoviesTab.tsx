@@ -26,7 +26,13 @@ import { useCast } from '../../lib/hooks/useCast'
 import { useConfirm } from '../confirm/useConfirm'
 import { movieAvailability, radarr, type Movie, type MovieSearchResult } from '../../lib/api/radarr'
 import { postClickEvent } from '../../lib/api/recommenderEvents'
-import { stripArticle } from '../../lib/title'
+import {
+  filterAndSortLibrary,
+  byTitleAsc,
+  byTitleDesc,
+  byYearAsc,
+  byYearDesc,
+} from '../../lib/librarySort'
 import { withViewTransition } from '../../lib/viewTransition'
 import { pickDefaultProfileId } from '../../lib/pickDefaultProfileId'
 import './TvTab.css'
@@ -90,6 +96,17 @@ function fmtMovieRating(item: MovieSearchResult): string | undefined {
 
 type MovieSort = 'title-asc' | 'title-desc' | 'year-desc' | 'year-asc' | 'runtime-desc' | 'runtime-asc' | 'studio'
 type MovieStatus = 'all' | 'released' | 'announced' | 'inCinemas' | 'tba'
+
+const MOVIE_COMPARATORS: Record<MovieSort, (a: Movie, b: Movie) => number> = {
+  'title-asc': byTitleAsc,
+  'title-desc': byTitleDesc,
+  'year-desc': byYearDesc,
+  'year-asc': byYearAsc,
+  'runtime-desc': (a, b) => (b.runtime ?? 0) - (a.runtime ?? 0) || byTitleAsc(a, b),
+  'runtime-asc': (a, b) => (a.runtime ?? 0) - (b.runtime ?? 0) || byTitleAsc(a, b),
+  studio: (a, b) =>
+    (a.studio ?? '~').localeCompare(b.studio ?? '~') || byTitleAsc(a, b),
+}
 
 const MOVIE_SORT_OPTIONS: ReadonlyArray<FilterOption<MovieSort>> = [
   { value: 'title-asc',    label: 'Title (A–Z)' },
@@ -210,44 +227,10 @@ export function MoviesTab() {
     }
   }
 
-  const textFilteredLibrary = useMemo(() => {
-    if (!library.data) return []
-    const q = query.trim().toLowerCase()
-    let items = q
-      ? library.data.filter((m) => m.title.toLowerCase().includes(q))
-      : library.data.slice()
-    if (status !== 'all') {
-      items = items.filter((m) => (m.status ?? '').toLowerCase() === status.toLowerCase())
-    }
-    const sorted = items.slice()
-    switch (sort) {
-      case 'title-asc':
-        sorted.sort((a, b) => stripArticle(a.title).localeCompare(stripArticle(b.title)))
-        break
-      case 'title-desc':
-        sorted.sort((a, b) => stripArticle(b.title).localeCompare(stripArticle(a.title)))
-        break
-      case 'year-desc':
-        sorted.sort((a, b) => (b.year ?? 0) - (a.year ?? 0) || stripArticle(a.title).localeCompare(stripArticle(b.title)))
-        break
-      case 'year-asc':
-        sorted.sort((a, b) => (a.year ?? 0) - (b.year ?? 0) || stripArticle(a.title).localeCompare(stripArticle(b.title)))
-        break
-      case 'runtime-desc':
-        sorted.sort((a, b) => (b.runtime ?? 0) - (a.runtime ?? 0) || stripArticle(a.title).localeCompare(stripArticle(b.title)))
-        break
-      case 'runtime-asc':
-        sorted.sort((a, b) => (a.runtime ?? 0) - (b.runtime ?? 0) || stripArticle(a.title).localeCompare(stripArticle(b.title)))
-        break
-      case 'studio':
-        sorted.sort((a, b) =>
-          (a.studio ?? '~').localeCompare(b.studio ?? '~') ||
-          stripArticle(a.title).localeCompare(stripArticle(b.title))
-        )
-        break
-    }
-    return sorted
-  }, [library.data, query, status, sort])
+  const textFilteredLibrary = useMemo(
+    () => filterAndSortLibrary(library.data, { query, status, comparator: MOVIE_COMPARATORS[sort] }),
+    [library.data, query, status, sort],
+  )
 
   const availableLetters = useMemo(
     () => new Set(textFilteredLibrary.map((m) => libraryBucket(m.title))),

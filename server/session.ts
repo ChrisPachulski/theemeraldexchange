@@ -38,7 +38,7 @@ import { getCookie, setCookie, deleteCookie } from 'hono/cookie'
 import { contracts, type ContractsTypes } from './services/contractsBinding.js'
 import { env } from './env.js'
 import { deriveKey, INFO_SESSION, INFO_DEVICE_TOKEN } from './services/keyDerivation.js'
-import { tryNormaliseLegacySub } from './services/sub.js'
+import { parseSub } from './services/sub.js'
 import { generateUlid } from './services/iptvStreamToken.js'
 import { serverDb, ensureServerId } from './services/serverDb.js'
 
@@ -104,13 +104,6 @@ export function authModeFromSession(session: Pick<Session, 'sub'>): AuthMode {
   if (session.sub.startsWith('apple:')) return 'apple'
   if (session.sub.startsWith('google:')) return 'google'
   return 'plex'
-}
-
-/** Type-guard: true when a mint request should carry auth_mode 'plex'.
- *  Convenience wrapper over authModeFromSession for callers that only
- *  need the boolean. */
-export function isPlexSession(session: Pick<Session, 'sub'>): boolean {
-  return authModeFromSession(session) === 'plex'
 }
 
 /** Input to mintDeviceToken. The caller (device-mint endpoint, D13)
@@ -364,7 +357,11 @@ export { ensureServerId }
 const hkdfKey = deriveKey(env.sessionSecret, INFO_SESSION)
 
 export async function createSession(payload: Session): Promise<string> {
-  return await new EncryptJWT({ ...payload })
+  // Backfill auth_mode at mint time (derived from the sub's provider prefix)
+  // so every cookie carries an explicit mode and the verifier can be strict —
+  // no read-time default to assume. Callers that already set it win.
+  const auth_mode = payload.auth_mode ?? authModeFromSession(payload)
+  return await new EncryptJWT({ ...payload, auth_mode })
     // No `kid` in this header: v1 has a single active session key, so there
     // is no ambiguity about which key to use. At v2 key rotation, add a
     // `kid` here (and in verifySession) before deploying two concurrent keys;
@@ -393,31 +390,22 @@ async function tryDecrypt(token: string, key: Uint8Array): Promise<Session | nul
       typeof payload.plexAuthToken === 'string' ? payload.plexAuthToken : undefined
     const verifiedPlexServerId =
       typeof payload.verifiedPlexServerId === 'string' ? payload.verifiedPlexServerId : undefined
-    // Backward-compat default: cookies issued before D17 have no auth_mode
-    // field. All M1 sessions are Plex-authenticated, so 'plex' is the safe
-    // fallback. Dated window — expiry (2026-06-25, 30 days post-D17 deploy)
-    // is tracked as 'session-auth-mode-default' in services/compatWindows.ts,
-    // which boot-warns once the date passes. Remove the fallback then.
-    const rawAuthMode = payload.auth_mode
-    const auth_mode: AuthMode =
-      rawAuthMode === 'plex' ||
-      rawAuthMode === 'local' ||
-      rawAuthMode === 'apple' ||
-      rawAuthMode === 'google'
-        ? rawAuthMode
-        : 'plex'
+    // auth_mode is written at mint time (createSession backfills it from the
+    // sub), so every live cookie carries an explicit mode. Reject a
+    // missing/invalid one rather than assuming 'plex'.
+    const auth_mode = payload.auth_mode
+    if (
+      auth_mode !== 'plex' &&
+      auth_mode !== 'local' &&
+      auth_mode !== 'apple' &&
+      auth_mode !== 'google'
+    ) {
+      return null
+    }
 
-    // Grace-window normalisation (§8.2 D): M1 cookies carry an unprefixed
-    // Plex user id as `sub`. Normalise bare numeric ids to `plex:<id>` in
-    // memory for the 30-day grace period post-D7. The cookie on disk is NOT
-    // re-encrypted — the rewrite re-applies on every request until the
-    // cookie expires or the user re-authenticates. Dated window — expiry
-    // (2026-06-25, 30 days post-D7) is tracked as
-    // 'legacy-bare-plex-sub-normalisation' in services/compatWindows.ts,
-    // which boot-warns once the date passes. Replace with strict parseSub
-    // then.
-    const parsed = tryNormaliseLegacySub(payload.sub)
-    if (!parsed) return null
+    // Subs are namespaced (`<provider>:<id>`); parse strictly. A bare/legacy
+    // value throws → caught by the outer catch → null (session rejected).
+    const parsed = parseSub(payload.sub)
 
     return {
       sub: parsed.raw,

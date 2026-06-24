@@ -54,14 +54,12 @@ describe('session — round trip', () => {
     expect(out).toEqual(withToken)
   })
 
-  it('normalises a legacy bare-numeric sub to plex: during the grace window (§8.2 D)', async () => {
-    // Simulate an M1 cookie that carries sub: '42' (no namespace prefix).
-    const legacySession: Session = { sub: '42', username: 'someone', role: 'user', auth_mode: 'plex' }
-    const token = await createSession(legacySession)
-    const out = await verifySession(token)
-    // verifySession normalises in-memory; cookie on disk is not re-encrypted.
-    expect(out).not.toBeNull()
-    expect(out!.sub).toBe('plex:42')
+  it('rejects a cookie carrying a bare (non-namespaced) sub', async () => {
+    // A legacy M1 cookie with an un-prefixed Plex id. The verifier parses subs
+    // strictly now (the grace-window normalisation was removed), so the bare
+    // sub is rejected and the user must re-authenticate.
+    const token = await mintJwe({ sub: '42', username: 'someone', role: 'user', auth_mode: 'plex' })
+    expect(await verifySession(token)).toBeNull()
   })
 })
 
@@ -87,13 +85,20 @@ describe('session — token confidentiality', () => {
   })
 })
 
-describe('session — auth_mode backward compat', () => {
-  it('defaults missing auth_mode to plex (pre-D17 cookies)', async () => {
-    // Simulate a cookie issued before D17: no auth_mode field in the payload.
-    const token = await mintJwe({ sub: '42', username: 'someone', role: 'user' })
+describe('session — auth_mode', () => {
+  it('backfills auth_mode from the sub when the caller omits it', async () => {
+    // createSession derives auth_mode from the sub prefix at mint time, so the
+    // cookie is fully specified and the strict verifier accepts it.
+    const token = await createSession({ sub: 'plex:42', username: 'someone', role: 'user' })
     const out = await verifySession(token)
-    expect(out).not.toBeNull()
     expect(out!.auth_mode).toBe('plex')
+  })
+
+  it('rejects a cookie with no auth_mode field', async () => {
+    // Pre-D17 cookies lacked auth_mode. The grace-window default was removed;
+    // the verifier now requires an explicit, valid mode.
+    const token = await mintJwe({ sub: 'plex:42', username: 'someone', role: 'user' })
+    expect(await verifySession(token)).toBeNull()
   })
 
   it('round-trips auth_mode local', async () => {
@@ -112,19 +117,17 @@ describe('session — auth_mode backward compat', () => {
     expect(out!.auth_mode).toBe('apple')
   })
 
-  it('defaults unknown auth_mode value to plex (future-compat)', async () => {
-    // A token from a future server version with an auth_mode we do not
-    // recognize should fall back to 'plex' rather than letting bad data
-    // through unchecked.
-    const token = await mintJwe({ sub: '42', username: 'someone', role: 'user', auth_mode: 'webauthn' })
-    const out = await verifySession(token)
-    expect(out!.auth_mode).toBe('plex')
+  it('rejects a cookie with an unrecognized auth_mode value', async () => {
+    // A token carrying an auth_mode we do not recognize is rejected rather than
+    // coerced — bad data never passes the gate.
+    const token = await mintJwe({ sub: 'plex:42', username: 'someone', role: 'user', auth_mode: 'webauthn' })
+    expect(await verifySession(token)).toBeNull()
   })
 })
 
 describe('session — authModeFromSession', () => {
   it('returns plex for bare (M1) plex ids', () => {
-    expect(authModeFromSession({ sub: '12345' })).toBe('plex')
+    expect(authModeFromSession({ sub: 'plex:12345' })).toBe('plex')
   })
 
   it('returns plex for plex: prefixed ids', () => {
@@ -180,7 +183,7 @@ describe('session — rejection cases', () => {
   })
 
   it('rejects a JWE missing the username claim', async () => {
-    const partial = await mintJwe({ sub: '42', role: 'user' })
+    const partial = await mintJwe({ sub: 'plex:42', role: 'user' })
     expect(await verifySession(partial)).toBeNull()
   })
 

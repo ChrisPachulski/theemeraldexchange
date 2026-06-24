@@ -864,7 +864,7 @@ describe('GET /me + POST /auth/logout', () => {
     // confirms /me returns 401 with access_revoked AND drops the cookie.
     ;(env as Record<string, unknown>).plexServerId = 'home-machine-id'
     const token = await createSession({
-      sub: '777',
+      sub: 'plex:777',
       username: 'admin-user',
       role: 'admin',
       plexAuthToken: 'still-valid-but-no-longer-a-member',
@@ -890,7 +890,7 @@ describe('GET /me + POST /auth/logout', () => {
     // stale role from the cookie.
     allowlist.set('plex:555', 'allowed')
     const token = await createSession({
-      sub: '555',
+      sub: 'plex:555',
       username: 'admin-user',
       role: 'admin',
       plexAuthToken: 'token-555',

@@ -21,9 +21,10 @@
 //
 // Schema: server/migrations/server/0003_members_invites.sql.
 
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { serverDb } from './serverDb.js'
 import { parseSub, isValidSub } from './sub.js'
+import { constantTimeEqual } from './secrets.js'
 import type { Member } from './members.js'
 import type { AuthMode } from '../session.js'
 
@@ -171,7 +172,7 @@ export function redeemInvite(
 
     // Constant-time confirm of the hash match (PK lookup already matched; this
     // is belt-and-suspenders against any future non-PK lookup path).
-    if (!constantTimeEqualHex(invite.code_hash, codeHash)) {
+    if (!constantTimeEqual(invite.code_hash, codeHash)) {
       return { ok: false, reason: 'invalid' }
     }
 
@@ -301,12 +302,6 @@ function statusOf(r: Invite, nowIso: string): InviteStatus {
   if (r.expires_at !== null && r.expires_at < nowIso) return 'expired'
   if (r.used_count >= r.max_uses) return 'exhausted'
   return 'active'
-}
-
-/** Constant-time compare of two equal-length hex strings. */
-function constantTimeEqualHex(a: string, b: string): boolean {
-  if (a.length !== b.length) return false
-  return timingSafeEqual(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'))
 }
 
 /** Escape SQLite LIKE wildcards in a (validated-hex) prefix. Defensive. */

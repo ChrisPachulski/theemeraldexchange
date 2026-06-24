@@ -28,33 +28,12 @@ export type CompatWindow = {
   remediation: string
 }
 
-export const DATED_COMPAT_WINDOWS: ReadonlyArray<CompatWindow> = [
-  {
-    // D17 shipped 2026-05-26; session cookies live 30 days, so every
-    // active cookie carries an explicit auth_mode after 2026-06-25.
-    id: 'session-auth-mode-default',
-    expiresAt: '2026-06-25T00:00:00Z',
-    location: 'server/session.ts (tryDecrypt)',
-    remediation:
-      "Remove the auth_mode 'plex' fallback for cookies without the field; " +
-      'treat a missing/invalid auth_mode as an invalid session.',
-  },
-  {
-    // §8.2 D: M1 cookies carry bare numeric Plex ids. D7 (namespaced
-    // subs) shipped 2026-05-26; one 30-day cookie TTL later every live
-    // cookie was minted with a namespaced sub. NOTE the in-code gate
-    // (sub.ts isGraceWindowOpen) bakes its start time at PROCESS START,
-    // so it re-arms on every boot and would never close by itself —
-    // this registry entry carries the real calendar expiry.
-    id: 'legacy-bare-plex-sub-normalisation',
-    expiresAt: '2026-06-25T00:00:00Z',
-    location: 'server/session.ts (tryDecrypt) → server/services/sub.ts (tryNormaliseLegacySub)',
-    remediation:
-      'Replace the tryNormaliseLegacySub call in tryDecrypt with a strict parseSub ' +
-      '(reject bare subs), then delete tryNormaliseLegacySub/isGraceWindowOpen and ' +
-      'migrate tests that still mint sessions with bare numeric subs.',
-  },
-]
+// No active dated compat windows. (The session auth_mode default and the
+// legacy bare-Plex-sub normalisation were removed ahead of their 2026-06-25
+// expiry: auth_mode is now backfilled at mint time and tryDecrypt parses subs
+// strictly.) When you add a temporary shim with a calendar expiry, register it
+// here so warnExpiredCompatWindows() boot-warns once it lapses.
+export const DATED_COMPAT_WINDOWS: ReadonlyArray<CompatWindow> = []
 
 /**
  * Log a WARN for every dated compat window past its expiry and return the

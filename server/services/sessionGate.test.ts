@@ -51,7 +51,7 @@ vi.mock('./membership.js', () => ({
 }))
 
 const baseSession: Session = {
-  sub: '42',
+  sub: 'plex:42',
   username: 'someone',
   role: 'user',
   plexAuthToken: 'token-xyz',

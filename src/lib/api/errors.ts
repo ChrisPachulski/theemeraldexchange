@@ -115,10 +115,6 @@ export async function throwApiError(res: Response, scope: string): Promise<never
   throw new ApiError(res.status, message, code, data)
 }
 
-export function isInsufficientDiskSpace(e: unknown): e is ApiError {
-  return e instanceof ApiError && e.code === 'insufficient_disk_space'
-}
-
 /**
  * Duck-typed HTTP status of any thrown error, or undefined when the value
  * carries none. Several modules throw their own status-carrying error

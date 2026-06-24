@@ -177,45 +177,39 @@ const SESSION_SECRET_PLACEHOLDERS = new Set([
   'your-secret-here',
   'session-secret',
 ])
+// Reject weak/placeholder secrets in production. Placeholder check runs
+// first so `changeme` is rejected for BEING a placeholder (clearer error)
+// rather than merely for being short. `note` appends secret-specific stakes
+// to each message; same policy applies to every prod secret added later.
+function assertProdSecret(
+  name: string,
+  value: string | null | undefined,
+  note: { placeholder?: string; short?: string } = {},
+): void {
+  if (!isProd || !value) return
+  if (SESSION_SECRET_PLACEHOLDERS.has(value.toLowerCase())) {
+    throw new Error(
+      `${name} looks like a placeholder value. Generate a real secret with ` +
+        `\`openssl rand -base64 48\` and redeploy.${note.placeholder ?? ''}`,
+    )
+  }
+  if (value.length < SESSION_SECRET_MIN_LEN) {
+    throw new Error(
+      `${name} is too short for production (${value.length} chars). Use at least ` +
+        `${SESSION_SECRET_MIN_LEN} bytes — generate one with \`openssl rand -base64 48\`.${note.short ?? ''}`,
+    )
+  }
+}
+
 const rawSessionSecret = process.env.SESSION_SECRET ?? ''
-if (isProd && rawSessionSecret) {
-  // Placeholder check first so `changeme` (8 chars) is rejected for
-  // BEING a placeholder, not just for being short — a clearer error
-  // message and the only way the rule catches its target.
-  if (SESSION_SECRET_PLACEHOLDERS.has(rawSessionSecret.toLowerCase())) {
-    throw new Error(
-      'SESSION_SECRET looks like a placeholder value. ' +
-        'Generate a real secret with `openssl rand -base64 48` and ' +
-        'redeploy — leaving the placeholder in prod is equivalent to ' +
-        'publishing the AES key in the repo.',
-    )
-  }
-  if (rawSessionSecret.length < SESSION_SECRET_MIN_LEN) {
-    throw new Error(
-      `SESSION_SECRET is too short for production (${rawSessionSecret.length} chars). ` +
-        `Use at least ${SESSION_SECRET_MIN_LEN} bytes — generate one with ` +
-        `\`openssl rand -base64 48\`. The value is fed through SHA-256 to ` +
-        `derive the A256GCM key that encrypts session cookies; a weak ` +
-        `secret puts every user's Plex auth token at risk.`,
-    )
-  }
-}
-if (isProd && recommenderEventSecret) {
-  const lower = recommenderEventSecret.toLowerCase()
-  if (SESSION_SECRET_PLACEHOLDERS.has(lower)) {
-    throw new Error(
-      'RECOMMENDER_EVENT_SECRET looks like a placeholder value. ' +
-        'Generate a real secret with `openssl rand -base64 48` and redeploy.',
-    )
-  }
-  if (recommenderEventSecret.length < SESSION_SECRET_MIN_LEN) {
-    throw new Error(
-      `RECOMMENDER_EVENT_SECRET is too short for production (${recommenderEventSecret.length} chars). ` +
-        `Use at least ${SESSION_SECRET_MIN_LEN} bytes — generate one with ` +
-        '`openssl rand -base64 48`.',
-    )
-  }
-}
+assertProdSecret('SESSION_SECRET', rawSessionSecret, {
+  placeholder:
+    ' Leaving the placeholder in prod is equivalent to publishing the AES key in the repo.',
+  short:
+    ' The value is fed through SHA-256 to derive the A256GCM key that encrypts session' +
+    " cookies; a weak secret puts every user's Plex auth token at risk.",
+})
+assertProdSecret('RECOMMENDER_EVENT_SECRET', recommenderEventSecret)
 
 // STREAM_TOKEN_SECRET is the dedicated signing AND verifying secret for
 // IPTV/media stream tokens (§5.4).  Kept separate from SESSION_SECRET so

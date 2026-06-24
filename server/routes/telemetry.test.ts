@@ -30,7 +30,7 @@ function appUnderTest() {
 // (`!session.plexAuthToken`) is skipped entirely. This mirrors the
 // working pattern in notifications.test.ts.
 async function authCookie() {
-  const t = await createSession({ sub: '1', username: 'admin-user', role: 'admin' })
+  const t = await createSession({ sub: 'plex:1', username: 'admin-user', role: 'admin' })
   return `eex.session=${t}`
 }
 

@@ -11,6 +11,7 @@ writes new rows here on each nightly run.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from importlib import import_module
 
 import numpy as np
@@ -29,10 +30,10 @@ def _normalize(v: np.ndarray) -> np.ndarray:
     return v / n if n > 0 else v
 
 
+@dataclass
 class RecipeResult:
-    def __init__(self, items: list[ScoredItem], diag: dict[str, object] | None = None):
-        self.items = items
-        self.diag = diag or {}
+    items: list[ScoredItem]
+    diag: dict[str, object] = field(default_factory=dict)
 
 
 REGISTRY: dict[str, str] = {
