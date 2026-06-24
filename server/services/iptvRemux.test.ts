@@ -17,6 +17,9 @@ vi.mock('../env.js', () => ({
     // High by default so existing tests never trip the cap; the cap test lowers
     // it temporarily.
     IPTV_MAX_UPSTREAM_CONNECTIONS: 10,
+    IPTV_REENCODE_PRESET: 'veryfast',
+    IPTV_REENCODE_THREADS: 2,
+    IPTV_REENCODE_MAX_HEIGHT: 1080,
   },
 }))
 
@@ -27,6 +30,7 @@ import {
   listRemuxSessions,
   drainRemuxSessions,
   scrubXtreamCreds,
+  channelNeedsReencode,
 } from './iptvRemux.js'
 import { env } from '../env.js'
 
@@ -66,6 +70,11 @@ describe('iptv remux session', () => {
     const args = spawnMock.mock.calls[0][1] as string[]
     // Video copied losslessly; audio re-encoded HE-AAC(SBR) -> AAC-LC stereo so
     // AVPlayer doesn't play it a hair behind the video (SBR decoder delay).
+    // Larger probe ceiling so late-declaring HEVC channels resolve their codec
+    // parameters before the HLS muxer needs them (H.264 unaffected — it's a cap).
+    expect(args).toContain('-probesize')
+    expect(args).toContain('-analyzeduration')
+    expect(args).toContain('10M')
     expect(args).toContain('-c:v')
     expect(args).toContain('copy')
     expect(args).toContain('-c:a')
@@ -86,6 +95,50 @@ describe('iptv remux session', () => {
     expect(args).toContain('seg_%05d.ts')
     expect(s.sessionId).toMatch(/^remux:10:/)
     expect(s.manifestPath).toMatch(/index\.m3u8$/)
+  })
+
+  it('default video path copies; reencodeVideo uses libx264 + governance flags', () => {
+    const a = startRemuxSession({ streamId: '50', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })
+    const copyArgs = spawnMock.mock.calls[0][1] as string[]
+    expect(copyArgs).toContain('copy')
+    expect(copyArgs).not.toContain('libx264')
+    stopRemuxSession(a.sessionId)
+
+    startRemuxSession({ streamId: '51', sub: 'plex:test', upstreamUrl: 'https://x/z.ts', reencodeVideo: true })
+    const reArgs = spawnMock.mock.calls[1][1] as string[]
+    expect(reArgs).toContain('libx264')
+    expect(reArgs).toContain('-preset')
+    expect(reArgs).toContain('veryfast')
+    expect(reArgs).toContain('-threads')
+    // Video is encoded, not copied (audio AAC re-encode is separate).
+    expect(reArgs).not.toContain('copy')
+  })
+
+  it('a copy session whose INPUT video is non-H.264 marks the channel + kills ffmpeg', () => {
+    const proc = fakeProcess()
+    spawnMock.mockReturnValueOnce(proc)
+    startRemuxSession({ streamId: '60', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })
+
+    expect(channelNeedsReencode('60')).toBe(false)
+    proc.stderr.emit(
+      'data',
+      Buffer.from('  Stream #0:0[0x100]: Video: hevc (Main), yuv420p(tv), 1920x1080\n'),
+    )
+    expect(channelNeedsReencode('60')).toBe(true)
+    expect(proc.kill).toHaveBeenCalledWith('SIGKILL')
+  })
+
+  it('a copy session whose INPUT video IS H.264 leaves the channel on the copy path', () => {
+    const proc = fakeProcess()
+    spawnMock.mockReturnValueOnce(proc)
+    startRemuxSession({ streamId: '61', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })
+
+    proc.stderr.emit(
+      'data',
+      Buffer.from('  Stream #0:0[0x100]: Video: h264 (High), yuv420p, 1920x1080\n'),
+    )
+    expect(channelNeedsReencode('61')).toBe(false)
+    expect(proc.kill).not.toHaveBeenCalled()
   })
 
   it('heartbeat extends lifetime; stop removes the entry', () => {

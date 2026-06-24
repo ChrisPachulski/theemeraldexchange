@@ -860,12 +860,21 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
   // player fires one more poll, or a second device) mutually annihilate — each
   // poll killed the other's ffmpeg, so neither ever built a segment window and
   // every channel showed infinite buffering / black screen.
-  const entry = ensureLiveRemuxEntry({ streamId, sub: v.sub, upstreamUrl })
+  let entry = ensureLiveRemuxEntry({ streamId, sub: v.sub, upstreamUrl })
 
   heartbeatRemuxSession(entry.sessionId)
-  const deadline = Date.now() + 8_000
+  // 15s, not 8s: a larger ffmpeg probe ceiling (see iptvRemux's -analyzeduration
+  // 10M, needed for late-declaring HEVC channels) can push the first segment past
+  // 8s, and an initial-load 504 is fatal to AVPlayer. The client's own readiness
+  // watchdog still gives up at 25s, so this stays well inside that.
+  const deadline = Date.now() + 15_000
   while (!fs.existsSync(entry.manifestPath) && Date.now() < deadline) {
     await sleep(200)
+    // A copy session can kill itself on detecting a non-H.264 input (it can't
+    // produce playable Apple HLS then). Re-ensure each tick so it respawns as a
+    // re-encode session and we wait on the NEW manifest — all in this request.
+    // ensureLiveRemuxEntry returns the same entry while the session is alive.
+    entry = ensureLiveRemuxEntry({ streamId, sub: v.sub, upstreamUrl })
     heartbeatRemuxSession(entry.sessionId)
   }
   if (!fs.existsSync(entry.manifestPath)) {
