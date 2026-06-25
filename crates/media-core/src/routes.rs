@@ -929,25 +929,46 @@ struct EpisodeMeta {
     episode: i64,
 }
 
+/// Batch-resolve `id → T` for an `id IN (...)` lookup, sharing the empty-guard,
+/// placeholder build, and per-id bind. `sql_for` receives the comma-joined `?`
+/// placeholders; `map` turns each decoded row into its `(id, value)` entry.
+async fn fetch_by_ids<R, T>(
+    state: &AppState,
+    ids: &[i64],
+    sql_for: impl FnOnce(&str) -> String,
+    map: impl Fn(R) -> (i64, T),
+) -> AppResult<std::collections::HashMap<i64, T>>
+where
+    R: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> + Send + Unpin,
+{
+    if ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let mut query = sqlx::query_as::<_, R>(sqlx::AssertSqlSafe(sql_for(&placeholders)));
+    for id in ids {
+        query = query.bind(id);
+    }
+    Ok(query
+        .fetch_all(&state.db.pool)
+        .await?
+        .into_iter()
+        .map(map)
+        .collect())
+}
+
 /// Batch-resolve `movies.id → (title, poster_path)` for the watch shelf.
 async fn fetch_movie_meta(
     state: &AppState,
     ids: &[i64],
 ) -> AppResult<std::collections::HashMap<i64, (String, Option<String>)>> {
-    if ids.is_empty() {
-        return Ok(std::collections::HashMap::new());
-    }
-    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let sql = format!("SELECT id, title, poster_path FROM movies WHERE id IN ({placeholders})");
-    let mut query = sqlx::query_as::<_, (i64, String, Option<String>)>(sqlx::AssertSqlSafe(sql));
-    for id in ids {
-        query = query.bind(id);
-    }
-    let rows = query.fetch_all(&state.db.pool).await?;
-    Ok(rows
-        .into_iter()
-        .map(|(id, title, poster)| (id, (title, poster)))
-        .collect())
+    fetch_by_ids(
+        state,
+        ids,
+        |ph| format!("SELECT id, title, poster_path FROM movies WHERE id IN ({ph})"),
+        |(id, title, poster): (i64, String, Option<String>)| (id, (title, poster)),
+    )
+    .await
 }
 
 /// Batch-resolve `episodes.id → EpisodeMeta` (joined to the parent show for its
@@ -956,38 +977,36 @@ async fn fetch_episode_meta(
     state: &AppState,
     ids: &[i64],
 ) -> AppResult<std::collections::HashMap<i64, EpisodeMeta>> {
-    if ids.is_empty() {
-        return Ok(std::collections::HashMap::new());
-    }
-    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let sql = format!(
-        "SELECT e.id, e.title, s.title, s.poster_path, e.season, e.episode \
-         FROM episodes e JOIN shows s ON e.show_id = s.id WHERE e.id IN ({placeholders})"
-    );
-    let mut query = sqlx::query_as::<_, (i64, Option<String>, String, Option<String>, i64, i64)>(
-        sqlx::AssertSqlSafe(sql),
-    );
-    for id in ids {
-        query = query.bind(id);
-    }
-    let rows = query.fetch_all(&state.db.pool).await?;
-    Ok(rows
-        .into_iter()
-        .map(
-            |(id, episode_title, show_title, poster_path, season, episode)| {
-                (
-                    id,
-                    EpisodeMeta {
-                        episode_title,
-                        show_title,
-                        poster_path,
-                        season,
-                        episode,
-                    },
-                )
-            },
-        )
-        .collect())
+    fetch_by_ids(
+        state,
+        ids,
+        |ph| {
+            format!(
+                "SELECT e.id, e.title, s.title, s.poster_path, e.season, e.episode \
+                 FROM episodes e JOIN shows s ON e.show_id = s.id WHERE e.id IN ({ph})"
+            )
+        },
+        |(id, episode_title, show_title, poster_path, season, episode): (
+            i64,
+            Option<String>,
+            String,
+            Option<String>,
+            i64,
+            i64,
+        )| {
+            (
+                id,
+                EpisodeMeta {
+                    episode_title,
+                    show_title,
+                    poster_path,
+                    season,
+                    episode,
+                },
+            )
+        },
+    )
+    .await
 }
 
 /// True iff `(media_kind, media_id)` names a row that currently exists. Used to
@@ -1502,6 +1521,25 @@ mod tests {
         .last_insert_rowid()
     }
 
+    /// GET/DELETE/etc. with an empty body.
+    fn req(method: &str, uri: impl AsRef<str>) -> HttpRequest<Body> {
+        HttpRequest::builder()
+            .method(method)
+            .uri(uri.as_ref())
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    /// Method + JSON body (sets content-type: application/json).
+    fn json_req(method: &str, uri: impl AsRef<str>, body: impl Into<String>) -> HttpRequest<Body> {
+        HttpRequest::builder()
+            .method(method)
+            .uri(uri.as_ref())
+            .header("content-type", "application/json")
+            .body(Body::from(body.into()))
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn list_movies_returns_seeded_movie() {
         let state = test_state().await;
@@ -1516,15 +1554,7 @@ mod tests {
             .unwrap();
 
         let app = crate::build_router(state);
-        let resp = app
-            .oneshot(
-                HttpRequest::builder()
-                    .uri("/api/media/movies")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp = app.oneshot(req("GET", "/api/media/movies")).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let v = body_json(resp).await;
         assert_eq!(v["total"], 1);
@@ -1537,12 +1567,7 @@ mod tests {
         let state = test_state().await;
         let app = crate::build_router(state);
         let resp = app
-            .oneshot(
-                HttpRequest::builder()
-                    .uri("/api/media/movies/9999")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(req("GET", "/api/media/movies/9999"))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
@@ -1586,12 +1611,7 @@ mod tests {
 
         let app = crate::build_router(state);
         let resp = app
-            .oneshot(
-                HttpRequest::builder()
-                    .uri(format!("/api/media/shows/{show_id}/episodes"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(req("GET", format!("/api/media/shows/{show_id}/episodes")))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -1612,34 +1632,24 @@ mod tests {
 
         let post = app
             .clone()
-            .oneshot(
-                HttpRequest::builder()
-                    .method("POST")
-                    .uri("/api/media/watch?sub=plex:1")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        json!({
-                            "media_kind": "movie",
-                            "media_id": movie_id,
-                            "position_secs": 120,
-                            "duration_secs": 3600,
-                            "completed": false
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
+            .oneshot(json_req(
+                "POST",
+                "/api/media/watch?sub=plex:1",
+                json!({
+                    "media_kind": "movie",
+                    "media_id": movie_id,
+                    "position_secs": 120,
+                    "duration_secs": 3600,
+                    "completed": false
+                })
+                .to_string(),
+            ))
             .await
             .unwrap();
         assert_eq!(post.status(), StatusCode::OK);
 
         let get = app
-            .oneshot(
-                HttpRequest::builder()
-                    .uri("/api/media/watch?sub=plex:1")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(req("GET", "/api/media/watch?sub=plex:1"))
             .await
             .unwrap();
         assert_eq!(get.status(), StatusCode::OK);
@@ -1705,23 +1715,18 @@ mod tests {
         let app = crate::build_router(state);
 
         let put = |kind: &str, start: i64, end: i64| {
-            app.clone().oneshot(
-                HttpRequest::builder()
-                    .method("PUT")
-                    .uri("/api/media/markers")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        json!({
-                            "media_kind": "movie",
-                            "media_id": movie_id,
-                            "marker_type": kind,
-                            "start_secs": start,
-                            "end_secs": end
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
+            app.clone().oneshot(json_req(
+                "PUT",
+                "/api/media/markers",
+                json!({
+                    "media_kind": "movie",
+                    "media_id": movie_id,
+                    "marker_type": kind,
+                    "start_secs": start,
+                    "end_secs": end
+                })
+                .to_string(),
+            ))
         };
 
         assert_eq!(put("intro", 0, 90).await.unwrap().status(), StatusCode::OK);
@@ -1732,14 +1737,10 @@ mod tests {
 
         let get = app
             .clone()
-            .oneshot(
-                HttpRequest::builder()
-                    .uri(format!(
-                        "/api/media/markers?media_kind=movie&media_id={movie_id}"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(req(
+                "GET",
+                format!("/api/media/markers?media_kind=movie&media_id={movie_id}"),
+            ))
             .await
             .unwrap();
         assert_eq!(get.status(), StatusCode::OK);
@@ -1758,23 +1759,18 @@ mod tests {
         // Unknown media_id → 404.
         let put404 = app
             .clone()
-            .oneshot(
-                HttpRequest::builder()
-                    .method("PUT")
-                    .uri("/api/media/markers")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        json!({
-                            "media_kind": "movie",
-                            "media_id": 9999,
-                            "marker_type": "intro",
-                            "start_secs": 0,
-                            "end_secs": 90
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
+            .oneshot(json_req(
+                "PUT",
+                "/api/media/markers",
+                json!({
+                    "media_kind": "movie",
+                    "media_id": 9999,
+                    "marker_type": "intro",
+                    "start_secs": 0,
+                    "end_secs": 90
+                })
+                .to_string(),
+            ))
             .await
             .unwrap();
         assert_eq!(put404.status(), StatusCode::NOT_FOUND);
@@ -1782,28 +1778,21 @@ mod tests {
         // Delete the intro marker.
         let del = app
             .clone()
-            .oneshot(
-                HttpRequest::builder()
-                    .method("DELETE")
-                    .uri(format!(
-                        "/api/media/markers?media_kind=movie&media_id={movie_id}&marker_type=intro"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(req(
+                "DELETE",
+                format!(
+                    "/api/media/markers?media_kind=movie&media_id={movie_id}&marker_type=intro"
+                ),
+            ))
             .await
             .unwrap();
         assert_eq!(del.status(), StatusCode::OK);
 
         let get2 = app
-            .oneshot(
-                HttpRequest::builder()
-                    .uri(format!(
-                        "/api/media/markers?media_kind=movie&media_id={movie_id}"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(req(
+                "GET",
+                format!("/api/media/markers?media_kind=movie&media_id={movie_id}"),
+            ))
             .await
             .unwrap();
         let v2 = body_json(get2).await;
@@ -1817,22 +1806,17 @@ mod tests {
         let state = test_state().await;
         let app = crate::build_router(state.clone());
         let resp = app
-            .oneshot(
-                HttpRequest::builder()
-                    .method("POST")
-                    .uri("/api/media/watch?sub=plex:1")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        json!({
-                            "media_kind": "movie",
-                            "media_id": 9999,
-                            "position_secs": 10,
-                            "completed": false
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
+            .oneshot(json_req(
+                "POST",
+                "/api/media/watch?sub=plex:1",
+                json!({
+                    "media_kind": "movie",
+                    "media_id": 9999,
+                    "position_secs": 10,
+                    "completed": false
+                })
+                .to_string(),
+            ))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
@@ -1848,22 +1832,17 @@ mod tests {
         let state = test_state().await;
         let app = crate::build_router(state);
         let resp = app
-            .oneshot(
-                HttpRequest::builder()
-                    .method("POST")
-                    .uri("/api/media/watch?sub=plex:1")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        json!({
-                            "media_kind": "playlist",
-                            "media_id": 1,
-                            "position_secs": 10,
-                            "completed": false
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
+            .oneshot(json_req(
+                "POST",
+                "/api/media/watch?sub=plex:1",
+                json!({
+                    "media_kind": "playlist",
+                    "media_id": 1,
+                    "position_secs": 10,
+                    "completed": false
+                })
+                .to_string(),
+            ))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -1974,12 +1953,7 @@ mod tests {
 
         let app = crate::build_router(state);
         let resp = app
-            .oneshot(
-                HttpRequest::builder()
-                    .uri(format!("/api/media/stream/movie/{movie_id}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(req("GET", format!("/api/media/stream/movie/{movie_id}")))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -2023,12 +1997,7 @@ mod tests {
         seed_show_with_episodes(&state, 3).await;
         let app = crate::build_router(state);
         let resp = app
-            .oneshot(
-                HttpRequest::builder()
-                    .uri("/api/media/episodes")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(req("GET", "/api/media/episodes"))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -2043,12 +2012,7 @@ mod tests {
         seed_show_with_episodes(&state, 3).await;
         let app = crate::build_router(state);
         let resp = app
-            .oneshot(
-                HttpRequest::builder()
-                    .uri("/api/media/episodes?limit=1")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(req("GET", "/api/media/episodes?limit=1"))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -2206,14 +2170,10 @@ mod tests {
 
         let app = crate::build_router(state);
         let resp = app
-            .oneshot(
-                HttpRequest::builder()
-                    .uri(format!(
-                        "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(req(
+                "GET",
+                format!("/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"),
+            ))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -2245,12 +2205,12 @@ mod tests {
         let app = crate::build_router(state);
         let resp = app
             .oneshot(
-                HttpRequest::builder()
-                    .uri(format!(
+                req(
+                    "GET",
+                    format!(
                         "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=h264&max_bitrate=10000000"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
+                    ),
+                ),
             )
             .await
             .unwrap();
@@ -2365,12 +2325,12 @@ mod tests {
         let app = crate::build_router(state);
         let resp = app
             .oneshot(
-                HttpRequest::builder()
-                    .uri(format!(
+                req(
+                    "GET",
+                    format!(
                         "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=h264&max_height=1080"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
+                    ),
+                ),
             )
             .await
             .unwrap();
@@ -2405,14 +2365,10 @@ mod tests {
 
         let app = crate::build_router(state);
         let resp = app
-            .oneshot(
-                HttpRequest::builder()
-                    .uri(format!(
-                        "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(req(
+                "GET",
+                format!("/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"),
+            ))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -2458,12 +2414,12 @@ mod tests {
         let app = crate::build_router(state);
         let resp = app
             .oneshot(
-                HttpRequest::builder()
-                    .uri(format!(
+                req(
+                    "GET",
+                    format!(
                         "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1&start_secs=95"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
+                    ),
+                ),
             )
             .await
             .unwrap();
@@ -2500,12 +2456,12 @@ mod tests {
         let app = crate::build_router(state);
         let resp = app
             .oneshot(
-                HttpRequest::builder()
-                    .uri(format!(
+                req(
+                    "GET",
+                    format!(
                         "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=h264&max_height=1080&start_secs=42&force_transcode=true"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
+                    ),
+                ),
             )
             .await
             .unwrap();
@@ -2534,14 +2490,10 @@ mod tests {
 
         let app = crate::build_router(state);
         let resp = app
-            .oneshot(
-                HttpRequest::builder()
-                    .uri(format!(
-                        "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(req(
+                "GET",
+                format!("/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"),
+            ))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -2562,14 +2514,10 @@ mod tests {
 
         let app = crate::build_router(state);
         let resp = app
-            .oneshot(
-                HttpRequest::builder()
-                    .uri(format!(
-                        "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(req(
+                "GET",
+                format!("/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"),
+            ))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -2589,14 +2537,10 @@ mod tests {
 
         let app = crate::build_router(state);
         let resp = app
-            .oneshot(
-                HttpRequest::builder()
-                    .uri(format!(
-                        "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(req(
+                "GET",
+                format!("/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"),
+            ))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -2608,13 +2552,7 @@ mod tests {
         let app = crate::build_router(state.clone());
         let resp = app
             .clone()
-            .oneshot(
-                HttpRequest::builder()
-                    .method("POST")
-                    .uri("/api/media/scan")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(req("POST", "/api/media/scan"))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::ACCEPTED);
@@ -2628,12 +2566,7 @@ mod tests {
         for _ in 0..50 {
             let st = app
                 .clone()
-                .oneshot(
-                    HttpRequest::builder()
-                        .uri("/api/media/scan/status")
-                        .body(Body::empty())
-                        .unwrap(),
-                )
+                .oneshot(req("GET", "/api/media/scan/status"))
                 .await
                 .unwrap();
             let sv = body_json(st).await;
@@ -2688,16 +2621,7 @@ mod tests {
 
         // And a follow-up scan can start: 202, not 409.
         let app = crate::build_router(state);
-        let resp = app
-            .oneshot(
-                HttpRequest::builder()
-                    .method("POST")
-                    .uri("/api/media/scan")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp = app.oneshot(req("POST", "/api/media/scan")).await.unwrap();
         assert_eq!(resp.status(), StatusCode::ACCEPTED);
     }
 
@@ -2773,16 +2697,7 @@ mod tests {
         let secret = "test-scan-secret";
         let state = test_state_enforce(secret).await;
         let app = crate::build_router(state);
-        let resp = app
-            .oneshot(
-                HttpRequest::builder()
-                    .method("POST")
-                    .uri("/api/media/scan")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp = app.oneshot(req("POST", "/api/media/scan")).await.unwrap();
         assert!(
             resp.status() == StatusCode::FORBIDDEN || resp.status() == StatusCode::UNAUTHORIZED,
             "missing principal must not be allowed to scan; got {}",

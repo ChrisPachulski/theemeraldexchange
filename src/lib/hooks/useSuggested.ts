@@ -185,14 +185,6 @@ export function useSuggested(
   })
 }
 
-export function useSuggestedMovies(forceTrending: boolean, keyFingerprint: string | null) {
-  return useSuggested('movie', forceTrending, keyFingerprint)
-}
-
-export function useSuggestedTv(forceTrending: boolean, keyFingerprint: string | null) {
-  return useSuggested('tv', forceTrending, keyFingerprint)
-}
-
 // useDismissSuggestion is superseded by useSetFeedback in
 // useUserFeedback.ts. The dot-click flow there handles the same
 // "hide this card forever" path via the per-user dislike signal,
