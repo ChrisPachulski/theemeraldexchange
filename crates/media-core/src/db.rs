@@ -192,11 +192,7 @@ fn checksum(sql: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(normalized.as_bytes());
     let digest = hasher.finalize();
-    let mut hex = String::with_capacity(64);
-    for b in digest {
-        hex.push_str(&format!("{b:02x}"));
-    }
-    hex
+    digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[cfg(test)]

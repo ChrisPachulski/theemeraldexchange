@@ -929,25 +929,41 @@ struct EpisodeMeta {
     episode: i64,
 }
 
+/// Batch-resolve `id → T` for an `id IN (...)` lookup, sharing the empty-guard,
+/// placeholder build, and per-id bind. `sql_for` receives the comma-joined `?`
+/// placeholders; `map` turns each decoded row into its `(id, value)` entry.
+async fn fetch_by_ids<R, T>(
+    state: &AppState,
+    ids: &[i64],
+    sql_for: impl FnOnce(&str) -> String,
+    map: impl Fn(R) -> (i64, T),
+) -> AppResult<std::collections::HashMap<i64, T>>
+where
+    R: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> + Send + Unpin,
+{
+    if ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let mut query = sqlx::query_as::<_, R>(sqlx::AssertSqlSafe(sql_for(&placeholders)));
+    for id in ids {
+        query = query.bind(id);
+    }
+    Ok(query.fetch_all(&state.db.pool).await?.into_iter().map(map).collect())
+}
+
 /// Batch-resolve `movies.id → (title, poster_path)` for the watch shelf.
 async fn fetch_movie_meta(
     state: &AppState,
     ids: &[i64],
 ) -> AppResult<std::collections::HashMap<i64, (String, Option<String>)>> {
-    if ids.is_empty() {
-        return Ok(std::collections::HashMap::new());
-    }
-    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let sql = format!("SELECT id, title, poster_path FROM movies WHERE id IN ({placeholders})");
-    let mut query = sqlx::query_as::<_, (i64, String, Option<String>)>(sqlx::AssertSqlSafe(sql));
-    for id in ids {
-        query = query.bind(id);
-    }
-    let rows = query.fetch_all(&state.db.pool).await?;
-    Ok(rows
-        .into_iter()
-        .map(|(id, title, poster)| (id, (title, poster)))
-        .collect())
+    fetch_by_ids(
+        state,
+        ids,
+        |ph| format!("SELECT id, title, poster_path FROM movies WHERE id IN ({ph})"),
+        |(id, title, poster): (i64, String, Option<String>)| (id, (title, poster)),
+    )
+    .await
 }
 
 /// Batch-resolve `episodes.id → EpisodeMeta` (joined to the parent show for its
@@ -956,38 +972,36 @@ async fn fetch_episode_meta(
     state: &AppState,
     ids: &[i64],
 ) -> AppResult<std::collections::HashMap<i64, EpisodeMeta>> {
-    if ids.is_empty() {
-        return Ok(std::collections::HashMap::new());
-    }
-    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let sql = format!(
-        "SELECT e.id, e.title, s.title, s.poster_path, e.season, e.episode \
-         FROM episodes e JOIN shows s ON e.show_id = s.id WHERE e.id IN ({placeholders})"
-    );
-    let mut query = sqlx::query_as::<_, (i64, Option<String>, String, Option<String>, i64, i64)>(
-        sqlx::AssertSqlSafe(sql),
-    );
-    for id in ids {
-        query = query.bind(id);
-    }
-    let rows = query.fetch_all(&state.db.pool).await?;
-    Ok(rows
-        .into_iter()
-        .map(
-            |(id, episode_title, show_title, poster_path, season, episode)| {
-                (
-                    id,
-                    EpisodeMeta {
-                        episode_title,
-                        show_title,
-                        poster_path,
-                        season,
-                        episode,
-                    },
-                )
-            },
-        )
-        .collect())
+    fetch_by_ids(
+        state,
+        ids,
+        |ph| {
+            format!(
+                "SELECT e.id, e.title, s.title, s.poster_path, e.season, e.episode \
+                 FROM episodes e JOIN shows s ON e.show_id = s.id WHERE e.id IN ({ph})"
+            )
+        },
+        |(id, episode_title, show_title, poster_path, season, episode): (
+            i64,
+            Option<String>,
+            String,
+            Option<String>,
+            i64,
+            i64,
+        )| {
+            (
+                id,
+                EpisodeMeta {
+                    episode_title,
+                    show_title,
+                    poster_path,
+                    season,
+                    episode,
+                },
+            )
+        },
+    )
+    .await
 }
 
 /// True iff `(media_kind, media_id)` names a row that currently exists. Used to
