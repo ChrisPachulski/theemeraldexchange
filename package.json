@@ -17,7 +17,6 @@
     "build:server": "tsc -p server/tsconfig.json",
     "start": "tsx server/index.ts",
     "lint": "eslint .",
-    "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
