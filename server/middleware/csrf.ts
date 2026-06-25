@@ -70,6 +70,20 @@ function isNativeBootstrap(c: Parameters<MiddlewareHandler>[0]): boolean {
   return !c.req.header('cookie') && NATIVE_BOOTSTRAP_PATHS.has(c.req.path)
 }
 
+// A request authenticated SOLELY by a `?t=` stream token (and NO cookie) carries
+// no ambient credential a forged cross-origin page could ride: the token lives in
+// the URL, is never auto-attached by the browser, and is unguessable per session
+// — the route's own token check rejects a wrong one. So, exactly like a
+// bearer-only request, the Origin check is moot. This is what lets the
+// cross-origin <video>/hls.js HEARTBEAT and STOP POSTs (token-authed, cookieless)
+// keep / free a transcode session from the SPA origin even when it is not in
+// allowedOrigins — the same trust model under which the token-authed GET
+// segment/manifest requests already serve cross-origin. A request presenting BOTH
+// a `?t=` and a cookie stays gated: the cookie is still a CSRF vector.
+function isStreamTokenOnly(c: Parameters<MiddlewareHandler>[0]): boolean {
+  return !!c.req.query('t') && !c.req.header('cookie')
+}
+
 function checkOrigin(origin: string | undefined): { ok: true } | { ok: false; reason: string } {
   if (env.allowedOrigins.length === 0) {
     // Dev / unconfigured: same-origin via Vite proxy. In prod env.ts
@@ -92,7 +106,7 @@ export const requireSafeOrigin: MiddlewareHandler = async (c, next) => {
     await next()
     return
   }
-  if (isBearerOnly(c) || isNativeBootstrap(c)) {
+  if (isBearerOnly(c) || isStreamTokenOnly(c) || isNativeBootstrap(c)) {
     await next()
     return
   }

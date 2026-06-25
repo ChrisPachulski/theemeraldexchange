@@ -81,6 +81,37 @@ describe('requireSafeOrigin — unconfigured allowlist', () => {
   })
 })
 
+describe('requireSafeOrigin — stream-token cookieless exemption', () => {
+  // Regression: a transcode session's keepalive is a token-authed (?t=) POST
+  // /heartbeat sent cross-origin by hls.js with NO cookie. It was 403'd whenever
+  // the SPA origin wasn't in allowedOrigins, so the session idle-reaped mid-play
+  // (segments deleted under the player → ~3min stall). A `?t=` token is an
+  // unforgeable, non-ambient credential — like a bearer, the Origin check is moot.
+  it('lets a token-authed (?t=) cookieless POST through despite a non-allowlisted Origin', async () => {
+    const app = await buildApp({ allowedOrigins: ['https://app.example'], isProd: true })
+    const r = await app.request('/echo?t=streamtoken', {
+      method: 'POST',
+      headers: { Origin: 'https://www.app.example' },
+    })
+    expect(r.status).toBe(200)
+  })
+
+  it('lets a token-authed cookieless POST through with no Origin header', async () => {
+    const app = await buildApp({ allowedOrigins: ['https://app.example'], isProd: true })
+    const r = await app.request('/echo?t=streamtoken', { method: 'POST' })
+    expect(r.status).toBe(200)
+  })
+
+  it('STILL gates a ?t= POST that also carries a cookie (cookie remains a CSRF vector)', async () => {
+    const app = await buildApp({ allowedOrigins: ['https://app.example'], isProd: true })
+    const r = await app.request('/echo?t=streamtoken', {
+      method: 'POST',
+      headers: { Origin: 'https://attacker.example', Cookie: 'eex.session=x' },
+    })
+    expect(r.status).toBe(403)
+  })
+})
+
 describe('requireSafeOrigin — allowlist enforcement', () => {
   it.each(['POST', 'PUT', 'PATCH', 'DELETE'])(
     'rejects %s with mismatched Origin (403 bad_origin)',
