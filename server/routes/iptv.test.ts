@@ -3,6 +3,7 @@ import { Hono, type MiddlewareHandler } from 'hono'
 import { openIptvDb, type IptvDb } from '../services/iptvDb.js'
 import { iptv, __test } from './iptv.js'
 import { __setSsrfLookupForTests } from '../services/ssrfGuard.js'
+import { signStreamToken } from '../services/iptvStreamToken.js'
 import { env } from '../env.js'
 
 const dbState = vi.hoisted(() => ({
@@ -453,6 +454,33 @@ describe('live stream grant + proxy', () => {
   it('rejects bad tokens on the .ts endpoint', async () => {
     const res = await app.request('/api/iptv/stream/live/10.ts?t=bogus')
     expect(res.status).toBe(401)
+  })
+
+  // Regression: live grant tokens used the 300s finite-asset TTL. A live session
+  // is unbounded and the player re-fetches the SAME tokenized manifest URL
+  // forever — the handler re-checks exp each poll, so live cable froze at exactly
+  // 5 minutes. Live tokens must outlast a sitting; finite kinds stay short.
+  async function grantTtl(path: string, kind: string): Promise<number> {
+    const mock = vi.mocked(signStreamToken)
+    mock.mockClear()
+    const res = await app.request(path, { method: 'POST' })
+    expect(res.status).toBe(200)
+    const call = mock.mock.calls.find(([, o]) => (o as { kind: string }).kind === kind)
+    expect(call, `grant should mint a ${kind} token`).toBeDefined()
+    return (call![1] as { ttlSecs: number }).ttlSecs
+  }
+
+  it('live remux (AVPlayer/HLS) grant token uses the long live TTL', async () => {
+    expect(await grantTtl('/api/iptv/stream/live/10/grant?client=avplayer', 'remux')).toBe(
+      env.IPTV_LIVE_TOKEN_TTL_SECS,
+    )
+    expect(env.IPTV_LIVE_TOKEN_TTL_SECS).toBeGreaterThan(env.IPTV_STREAM_TOKEN_TTL_SECS)
+  })
+
+  it('live .ts grant token uses the long live TTL', async () => {
+    expect(await grantTtl('/api/iptv/stream/live/10/grant', 'live')).toBe(
+      env.IPTV_LIVE_TOKEN_TTL_SECS,
+    )
   })
 })
 

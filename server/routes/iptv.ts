@@ -638,7 +638,7 @@ iptv.post('/stream/live/:streamId/grant', requireAuth, async (c) => {
       streamConcurrency().releaseByResource(sub, 'remux', goneStreamId)
     }
     const token = signStreamToken(env.streamTokenSecret, {
-      kind: 'remux', resourceId: streamId, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
+      kind: 'remux', resourceId: streamId, sub, ttlSecs: env.IPTV_LIVE_TOKEN_TTL_SECS,
     })
     return c.json({
       url: `/api/iptv/stream/live/${streamId}/remux/index.m3u8?t=${token}`,
@@ -647,7 +647,7 @@ iptv.post('/stream/live/:streamId/grant', requireAuth, async (c) => {
   }
 
   const token = signStreamToken(env.streamTokenSecret, {
-    kind: 'live', resourceId: streamId, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
+    kind: 'live', resourceId: streamId, sub, ttlSecs: env.IPTV_LIVE_TOKEN_TTL_SECS,
   })
   return c.json({
     url: `/api/iptv/stream/live/${streamId}.ts?t=${token}`,
