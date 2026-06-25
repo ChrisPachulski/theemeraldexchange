@@ -10,10 +10,10 @@ from __future__ import annotations
 import sqlite3
 
 from ..context import Candidate, UserContext
-from ..reasons import discover_reason, neighbors_for, personalized_reason, trending_reason
-from ..retrieval import cold_start_pool, retrieve_candidates
+from ..reasons import discover_reason, neighbors_for, personalized_reason
+from ..retrieval import retrieve_candidates
 from ..schemas import ScoredItem
-from . import RecipeResult, _normalize
+from . import RecipeResult, _normalize, cold_start_result
 
 DEFAULTS: dict[str, float | int | str] = {
     "pool_size": 500,
@@ -35,21 +35,7 @@ def score(ctx: UserContext, conn: sqlite3.Connection, *, n: int, params: dict) -
     # Cold start: no positive signal at all — fall back to popularity.
     pos = ctx.positive_centroid()
     if pos is None:
-        rows = cold_start_pool(conn, kind=ctx.kind, user=ctx, pool_size=n, min_vote_count=min_votes)
-        items = [
-            ScoredItem(
-                tmdb_id=r.tmdb_id,
-                title=r.title,
-                year=r.year,
-                poster_path=r.poster_path,
-                overview=r.overview,
-                score=float(r.popularity or 0.0),
-                provenance="trending",
-                reason=trending_reason(r),
-            )
-            for r in rows
-        ]
-        return RecipeResult(items=items, diag={"path": "cold_start", "pool": len(items)})
+        return cold_start_result(conn, ctx, n=n, min_vote_count=min_votes)
 
     neg = ctx.negative_centroid()
     query_vec = _normalize(pos - neg_w * neg) if neg is not None else _normalize(pos)
