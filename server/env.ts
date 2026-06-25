@@ -606,6 +606,16 @@ export const env = {
   // it. Set this to your provider's real max simultaneous connections; default 2.
   IPTV_MAX_UPSTREAM_CONNECTIONS: positiveInt('IPTV_MAX_UPSTREAM_CONNECTIONS', 2),
   IPTV_STREAM_TOKEN_TTL_SECS: positiveInt('IPTV_STREAM_TOKEN_TTL_SECS', 300),
+  // TTL for LIVE grant tokens (the `live` .ts and `remux` index.m3u8 URLs). A
+  // live session is UNBOUNDED and the player re-fetches the SAME tokenized
+  // manifest URL forever; the handler re-checks `exp` on every poll, so the
+  // short finite-asset TTL above froze live cable after exactly 5 minutes. A
+  // live token must outlast a viewing sitting — like MEDIA_STREAM_TOKEN_TTL_SECS
+  // for local media. It is rid-bound to one channel + sub and only yields a
+  // stream while the upstream session is alive (idle-reaped 30s after the viewer
+  // stops), so a long TTL is low-impact. Per-segment remux tokens stay on the
+  // short TTL above (re-minted each segment, consumed within the live window).
+  IPTV_LIVE_TOKEN_TTL_SECS: positiveInt('IPTV_LIVE_TOKEN_TTL_SECS', 43_200),
   // TTL for local-media playback stream tokens (routes/media.ts). Unlike IPTV's
   // short-lived per-request tokens, a movie token must outlast a whole sitting:
   // the same token is presented on every byte-range (direct play) or HLS
