@@ -1516,6 +1516,25 @@ mod tests {
         .last_insert_rowid()
     }
 
+    /// GET/DELETE/etc. with an empty body.
+    fn req(method: &str, uri: impl AsRef<str>) -> HttpRequest<Body> {
+        HttpRequest::builder()
+            .method(method)
+            .uri(uri.as_ref())
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    /// Method + JSON body (sets content-type: application/json).
+    fn json_req(method: &str, uri: impl AsRef<str>, body: impl Into<String>) -> HttpRequest<Body> {
+        HttpRequest::builder()
+            .method(method)
+            .uri(uri.as_ref())
+            .header("content-type", "application/json")
+            .body(Body::from(body.into()))
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn list_movies_returns_seeded_movie() {
         let state = test_state().await;
@@ -1532,10 +1551,7 @@ mod tests {
         let app = crate::build_router(state);
         let resp = app
             .oneshot(
-                HttpRequest::builder()
-                    .uri("/api/media/movies")
-                    .body(Body::empty())
-                    .unwrap(),
+                req("GET", "/api/media/movies"),
             )
             .await
             .unwrap();
@@ -1552,10 +1568,7 @@ mod tests {
         let app = crate::build_router(state);
         let resp = app
             .oneshot(
-                HttpRequest::builder()
-                    .uri("/api/media/movies/9999")
-                    .body(Body::empty())
-                    .unwrap(),
+                req("GET", "/api/media/movies/9999"),
             )
             .await
             .unwrap();
@@ -1601,10 +1614,7 @@ mod tests {
         let app = crate::build_router(state);
         let resp = app
             .oneshot(
-                HttpRequest::builder()
-                    .uri(format!("/api/media/shows/{show_id}/episodes"))
-                    .body(Body::empty())
-                    .unwrap(),
+                req("GET", format!("/api/media/shows/{show_id}/episodes")),
             )
             .await
             .unwrap();
@@ -1627,21 +1637,18 @@ mod tests {
         let post = app
             .clone()
             .oneshot(
-                HttpRequest::builder()
-                    .method("POST")
-                    .uri("/api/media/watch?sub=plex:1")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        json!({
-                            "media_kind": "movie",
-                            "media_id": movie_id,
-                            "position_secs": 120,
-                            "duration_secs": 3600,
-                            "completed": false
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
+                json_req(
+                    "POST",
+                    "/api/media/watch?sub=plex:1",
+                    json!({
+                        "media_kind": "movie",
+                        "media_id": movie_id,
+                        "position_secs": 120,
+                        "duration_secs": 3600,
+                        "completed": false
+                    })
+                    .to_string(),
+                ),
             )
             .await
             .unwrap();
@@ -1649,10 +1656,7 @@ mod tests {
 
         let get = app
             .oneshot(
-                HttpRequest::builder()
-                    .uri("/api/media/watch?sub=plex:1")
-                    .body(Body::empty())
-                    .unwrap(),
+                req("GET", "/api/media/watch?sub=plex:1"),
             )
             .await
             .unwrap();
@@ -1720,21 +1724,18 @@ mod tests {
 
         let put = |kind: &str, start: i64, end: i64| {
             app.clone().oneshot(
-                HttpRequest::builder()
-                    .method("PUT")
-                    .uri("/api/media/markers")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        json!({
-                            "media_kind": "movie",
-                            "media_id": movie_id,
-                            "marker_type": kind,
-                            "start_secs": start,
-                            "end_secs": end
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
+                json_req(
+                    "PUT",
+                    "/api/media/markers",
+                    json!({
+                        "media_kind": "movie",
+                        "media_id": movie_id,
+                        "marker_type": kind,
+                        "start_secs": start,
+                        "end_secs": end
+                    })
+                    .to_string(),
+                ),
             )
         };
 
@@ -1747,12 +1748,10 @@ mod tests {
         let get = app
             .clone()
             .oneshot(
-                HttpRequest::builder()
-                    .uri(format!(
-                        "/api/media/markers?media_kind=movie&media_id={movie_id}"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
+                req(
+                    "GET",
+                    format!("/api/media/markers?media_kind=movie&media_id={movie_id}"),
+                ),
             )
             .await
             .unwrap();
@@ -1773,21 +1772,18 @@ mod tests {
         let put404 = app
             .clone()
             .oneshot(
-                HttpRequest::builder()
-                    .method("PUT")
-                    .uri("/api/media/markers")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        json!({
-                            "media_kind": "movie",
-                            "media_id": 9999,
-                            "marker_type": "intro",
-                            "start_secs": 0,
-                            "end_secs": 90
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
+                json_req(
+                    "PUT",
+                    "/api/media/markers",
+                    json!({
+                        "media_kind": "movie",
+                        "media_id": 9999,
+                        "marker_type": "intro",
+                        "start_secs": 0,
+                        "end_secs": 90
+                    })
+                    .to_string(),
+                ),
             )
             .await
             .unwrap();
@@ -1797,13 +1793,12 @@ mod tests {
         let del = app
             .clone()
             .oneshot(
-                HttpRequest::builder()
-                    .method("DELETE")
-                    .uri(format!(
+                req(
+                    "DELETE",
+                    format!(
                         "/api/media/markers?media_kind=movie&media_id={movie_id}&marker_type=intro"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
+                    ),
+                ),
             )
             .await
             .unwrap();
@@ -1811,12 +1806,10 @@ mod tests {
 
         let get2 = app
             .oneshot(
-                HttpRequest::builder()
-                    .uri(format!(
-                        "/api/media/markers?media_kind=movie&media_id={movie_id}"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
+                req(
+                    "GET",
+                    format!("/api/media/markers?media_kind=movie&media_id={movie_id}"),
+                ),
             )
             .await
             .unwrap();
@@ -1832,20 +1825,17 @@ mod tests {
         let app = crate::build_router(state.clone());
         let resp = app
             .oneshot(
-                HttpRequest::builder()
-                    .method("POST")
-                    .uri("/api/media/watch?sub=plex:1")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        json!({
-                            "media_kind": "movie",
-                            "media_id": 9999,
-                            "position_secs": 10,
-                            "completed": false
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
+                json_req(
+                    "POST",
+                    "/api/media/watch?sub=plex:1",
+                    json!({
+                        "media_kind": "movie",
+                        "media_id": 9999,
+                        "position_secs": 10,
+                        "completed": false
+                    })
+                    .to_string(),
+                ),
             )
             .await
             .unwrap();
@@ -1863,20 +1853,17 @@ mod tests {
         let app = crate::build_router(state);
         let resp = app
             .oneshot(
-                HttpRequest::builder()
-                    .method("POST")
-                    .uri("/api/media/watch?sub=plex:1")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        json!({
-                            "media_kind": "playlist",
-                            "media_id": 1,
-                            "position_secs": 10,
-                            "completed": false
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
+                json_req(
+                    "POST",
+                    "/api/media/watch?sub=plex:1",
+                    json!({
+                        "media_kind": "playlist",
+                        "media_id": 1,
+                        "position_secs": 10,
+                        "completed": false
+                    })
+                    .to_string(),
+                ),
             )
             .await
             .unwrap();
@@ -1989,10 +1976,7 @@ mod tests {
         let app = crate::build_router(state);
         let resp = app
             .oneshot(
-                HttpRequest::builder()
-                    .uri(format!("/api/media/stream/movie/{movie_id}"))
-                    .body(Body::empty())
-                    .unwrap(),
+                req("GET", format!("/api/media/stream/movie/{movie_id}")),
             )
             .await
             .unwrap();
@@ -2038,10 +2022,7 @@ mod tests {
         let app = crate::build_router(state);
         let resp = app
             .oneshot(
-                HttpRequest::builder()
-                    .uri("/api/media/episodes")
-                    .body(Body::empty())
-                    .unwrap(),
+                req("GET", "/api/media/episodes"),
             )
             .await
             .unwrap();
@@ -2058,10 +2039,7 @@ mod tests {
         let app = crate::build_router(state);
         let resp = app
             .oneshot(
-                HttpRequest::builder()
-                    .uri("/api/media/episodes?limit=1")
-                    .body(Body::empty())
-                    .unwrap(),
+                req("GET", "/api/media/episodes?limit=1"),
             )
             .await
             .unwrap();
@@ -2221,12 +2199,10 @@ mod tests {
         let app = crate::build_router(state);
         let resp = app
             .oneshot(
-                HttpRequest::builder()
-                    .uri(format!(
-                        "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
+                req(
+                    "GET",
+                    format!("/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"),
+                ),
             )
             .await
             .unwrap();
@@ -2259,12 +2235,12 @@ mod tests {
         let app = crate::build_router(state);
         let resp = app
             .oneshot(
-                HttpRequest::builder()
-                    .uri(format!(
+                req(
+                    "GET",
+                    format!(
                         "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=h264&max_bitrate=10000000"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
+                    ),
+                ),
             )
             .await
             .unwrap();
@@ -2379,12 +2355,12 @@ mod tests {
         let app = crate::build_router(state);
         let resp = app
             .oneshot(
-                HttpRequest::builder()
-                    .uri(format!(
+                req(
+                    "GET",
+                    format!(
                         "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=h264&max_height=1080"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
+                    ),
+                ),
             )
             .await
             .unwrap();
@@ -2420,12 +2396,10 @@ mod tests {
         let app = crate::build_router(state);
         let resp = app
             .oneshot(
-                HttpRequest::builder()
-                    .uri(format!(
-                        "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
+                req(
+                    "GET",
+                    format!("/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"),
+                ),
             )
             .await
             .unwrap();
@@ -2472,12 +2446,12 @@ mod tests {
         let app = crate::build_router(state);
         let resp = app
             .oneshot(
-                HttpRequest::builder()
-                    .uri(format!(
+                req(
+                    "GET",
+                    format!(
                         "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1&start_secs=95"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
+                    ),
+                ),
             )
             .await
             .unwrap();
@@ -2514,12 +2488,12 @@ mod tests {
         let app = crate::build_router(state);
         let resp = app
             .oneshot(
-                HttpRequest::builder()
-                    .uri(format!(
+                req(
+                    "GET",
+                    format!(
                         "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=h264&max_height=1080&start_secs=42&force_transcode=true"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
+                    ),
+                ),
             )
             .await
             .unwrap();
@@ -2549,12 +2523,10 @@ mod tests {
         let app = crate::build_router(state);
         let resp = app
             .oneshot(
-                HttpRequest::builder()
-                    .uri(format!(
-                        "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
+                req(
+                    "GET",
+                    format!("/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"),
+                ),
             )
             .await
             .unwrap();
@@ -2577,12 +2549,10 @@ mod tests {
         let app = crate::build_router(state);
         let resp = app
             .oneshot(
-                HttpRequest::builder()
-                    .uri(format!(
-                        "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
+                req(
+                    "GET",
+                    format!("/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"),
+                ),
             )
             .await
             .unwrap();
@@ -2604,12 +2574,10 @@ mod tests {
         let app = crate::build_router(state);
         let resp = app
             .oneshot(
-                HttpRequest::builder()
-                    .uri(format!(
-                        "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
+                req(
+                    "GET",
+                    format!("/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1"),
+                ),
             )
             .await
             .unwrap();
@@ -2623,11 +2591,7 @@ mod tests {
         let resp = app
             .clone()
             .oneshot(
-                HttpRequest::builder()
-                    .method("POST")
-                    .uri("/api/media/scan")
-                    .body(Body::empty())
-                    .unwrap(),
+                req("POST", "/api/media/scan"),
             )
             .await
             .unwrap();
@@ -2643,10 +2607,7 @@ mod tests {
             let st = app
                 .clone()
                 .oneshot(
-                    HttpRequest::builder()
-                        .uri("/api/media/scan/status")
-                        .body(Body::empty())
-                        .unwrap(),
+                    req("GET", "/api/media/scan/status"),
                 )
                 .await
                 .unwrap();
@@ -2704,11 +2665,7 @@ mod tests {
         let app = crate::build_router(state);
         let resp = app
             .oneshot(
-                HttpRequest::builder()
-                    .method("POST")
-                    .uri("/api/media/scan")
-                    .body(Body::empty())
-                    .unwrap(),
+                req("POST", "/api/media/scan"),
             )
             .await
             .unwrap();
@@ -2789,11 +2746,7 @@ mod tests {
         let app = crate::build_router(state);
         let resp = app
             .oneshot(
-                HttpRequest::builder()
-                    .method("POST")
-                    .uri("/api/media/scan")
-                    .body(Body::empty())
-                    .unwrap(),
+                req("POST", "/api/media/scan"),
             )
             .await
             .unwrap();
