@@ -13,10 +13,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from importlib import import_module
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from ..schemas import ScoredItem
+
+if TYPE_CHECKING:
+    import sqlite3
+
+    from ..context import UserContext
 
 # Shared embedding helpers used across recipe modules. EMBED_EPS is the
 # floor used when normalising rows so a zero-norm vector doesn't divide by
@@ -34,6 +40,32 @@ def _normalize(v: np.ndarray) -> np.ndarray:
 class RecipeResult:
     items: list[ScoredItem]
     diag: dict[str, object] = field(default_factory=dict)
+
+
+def cold_start_result(
+    conn: sqlite3.Connection, ctx: UserContext, *, n: int, min_vote_count: int
+) -> RecipeResult:
+    """Popularity fallback shared by recipes when the user has no positive
+    signal — returns the trending cold-start pool as ScoredItems. Imports are
+    function-local to keep the package init free of the retrieval/reasons cycle."""
+    from ..reasons import trending_reason
+    from ..retrieval import cold_start_pool
+
+    rows = cold_start_pool(conn, kind=ctx.kind, user=ctx, pool_size=n, min_vote_count=min_vote_count)
+    items = [
+        ScoredItem(
+            tmdb_id=r.tmdb_id,
+            title=r.title,
+            year=r.year,
+            poster_path=r.poster_path,
+            overview=r.overview,
+            score=float(r.popularity or 0.0),
+            provenance="trending",
+            reason=trending_reason(r),
+        )
+        for r in rows
+    ]
+    return RecipeResult(items=items, diag={"path": "cold_start", "pool": len(items)})
 
 
 REGISTRY: dict[str, str] = {
