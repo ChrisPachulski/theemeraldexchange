@@ -1328,8 +1328,11 @@ describe('§9 source_unavailable propagation on grant endpoints', () => {
 describe('remux live delivery (AVPlayer)', () => {
   const app = new Hono().route('/api/iptv', iptv)
   const manifestPath = '/tmp/remux/sess-1/index.m3u8'
+  // ≥ START_SEGMENTS (4) so the handler's readiness gate is satisfied at once;
+  // a thinner window makes a live player error on first load (see the route).
   const sampleManifest =
-    '#EXTM3U\n#EXTINF:6,\nseg_00000.ts\n#EXTINF:6,\nseg_00001.ts\n'
+    '#EXTM3U\n#EXTINF:6,\nseg_00000.ts\n#EXTINF:6,\nseg_00001.ts\n' +
+    '#EXTINF:6,\nseg_00002.ts\n#EXTINF:6,\nseg_00003.ts\n'
 
   beforeEach(() => {
     remuxState.activeSessions.clear()
