@@ -784,8 +784,17 @@ export default function IptvPlayer({
                 backBufferLength: 60,
               }
             : {
-                liveMaxLatencyDurationCount: 16,
-                maxBufferLength: 30,
+                // Duration-based, NOT count-based. This provider's keyframes are
+                // wildly irregular, so the remux emits 0.5–3.7 s segments; a
+                // 4-SEGMENT sync window could be as little as ~4 s of cushion and
+                // underran constantly (freeze every few seconds after ~10 min).
+                // Sit a fixed ~15 s back and don't force a catch-up seek until
+                // ~60 s behind, matched to the server's ~80 s window
+                // (hls_list_size 40). liveSyncDuration overrides the shared
+                // liveSyncDurationCount (duration wins in hls.js).
+                liveSyncDuration: 15,
+                liveMaxLatencyDuration: 60,
+                maxBufferLength: 40,
                 maxMaxBufferLength: 120,
                 backBufferLength: 10,
                 // Gentle rate-based catch-up (default 1 = none): drifting
