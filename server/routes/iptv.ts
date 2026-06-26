@@ -49,6 +49,7 @@ import {
   dropOtherLiveRemuxSessions,
   forgetLiveRemuxEntry,
   getActiveLiveRemuxEntry,
+  remuxManifestReady,
   remuxSegmentResource,
   rewriteRemuxManifest,
 } from '../services/iptvLiveRemuxMap.js'
@@ -867,8 +868,13 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
   // 10M, needed for late-declaring HEVC channels) can push the first segment past
   // 8s, and an initial-load 504 is fatal to AVPlayer. The client's own readiness
   // watchdog still gives up at 25s, so this stays well inside that.
+  // Wait for a small STARTING WINDOW, not just for index.m3u8 to appear: a
+  // one-segment playlist makes hls.js error on the first load (the "first click
+  // fails, second works" report). 15s ceiling, well inside the client's 25s
+  // readiness watchdog and enough for ~4 × 2s segments plus a slow cold probe.
+  const START_SEGMENTS = 4
   const deadline = Date.now() + 15_000
-  while (!fs.existsSync(entry.manifestPath) && Date.now() < deadline) {
+  while (!remuxManifestReady(entry.manifestPath, START_SEGMENTS) && Date.now() < deadline) {
     await sleep(200)
     // A copy session can kill itself on detecting a non-H.264 input (it can't
     // produce playable Apple HLS then). Re-ensure each tick so it respawns as a
@@ -877,6 +883,8 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
     entry = ensureLiveRemuxEntry({ streamId, sub: v.sub, upstreamUrl })
     heartbeatRemuxSession(entry.sessionId)
   }
+  // A slow channel may have <START_SEGMENTS at the deadline; serve whatever it
+  // has rather than fail. Only a manifest that never appeared at all is a 504.
   if (!fs.existsSync(entry.manifestPath)) {
     forgetLiveRemuxEntry(streamId, v.sub, entry.sessionId)
     return c.json({ error: 'remux_manifest_timeout' }, 504)
