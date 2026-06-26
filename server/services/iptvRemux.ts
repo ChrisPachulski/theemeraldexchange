@@ -275,7 +275,13 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult {
     // neither the '-i' input nor a nested manifest can reach
     // file:/concat:/etc. Pairs with assertHttpUpstream() above.
     '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
-    '-fflags', '+discardcorrupt+genpts',
+    // +igndts is the load-bearing one: this provider's MPEG-TS carries badly
+    // broken decode timestamps (observed dts ≫ pts, multi-billion-tick jumps
+    // mid-stream). +genpts alone only fills in MISSING pts; it does nothing for
+    // a present-but-wrong dts, so with -c:v copy the garbage propagated into the
+    // segments and the player's timeline broke down over a long sitting. +igndts
+    // discards the bogus input dts and lets the muxer regenerate sane ones.
+    '-fflags', '+discardcorrupt+genpts+igndts',
     // Some channels (e.g. 24/7 HEVC feeds) declare their video parameters
     // (VPS/SPS/PPS + resolution) later in the stream than the H.264 channels do.
     // ffmpeg's default probe window can expire first, leaving "Could not find
@@ -294,6 +300,12 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult {
     // few % of a core, so it doesn't threaten the Plex box; video stays a copy.
     ...videoArgs,
     '-c:a', 'aac', '-ac', '2', '-b:a', '160k',
+    // Rebase the (now igndts-cleaned) output to a zero-based monotonic timeline
+    // so each segment carries sane, continuous timestamps the player can stitch
+    // without a flush. Paired with +igndts above this removed the periodic ~30 s
+    // back-jumps and the every-few-seconds freeze that set in after ~10 min.
+    '-avoid_negative_ts', 'make_zero',
+    '-max_muxing_queue_size', '1024',
     '-f', 'hls',
     // 2 s segments (matching the VOD transcode path): a player buffers ~3
     // segments before showing a frame, so 4 s segments meant ~12 s of "stuck
@@ -302,11 +314,14 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult {
     // symptom on Apple TV. Smaller segments also let a player recover at finer
     // granularity after a hiccup.
     '-hls_time', '2',
-    // 24 segments ≈ a ~48 s sliding window. A player that briefly falls behind
-    // (tunnel jitter, provider hiccup) must still find its next segment present
-    // before delete_segments reaps it; 48 s keeps that recovery margin at the
-    // smaller segment size. Disk cost ≈ 24 × ~2.4 MB per live session.
-    '-hls_list_size', '24',
+    // 40 segments ≈ an ~80 s sliding window. This provider's keyframes are wildly
+    // irregular (GOP deltas 0.03–2.5 s), so -c:v copy emits irregular segments
+    // (0.5–3.7 s) that a shallow client buffer underruns on. The deep window lets
+    // the player sit ~15 s back and tolerate up to ~60 s of latency (see the
+    // hls.js liveSyncDuration/liveMaxLatencyDuration on the client) so jittery,
+    // realtime-but-bursty production never starves it. Disk ≈ 40 × ~2.4 MB per
+    // session on a 3.8 GB tmpfs, bounded by the upstream-connection cap.
+    '-hls_list_size', '40',
     '-hls_flags', 'delete_segments+append_list+omit_endlist',
     '-hls_segment_filename', 'seg_%05d.ts',
     manifestPath,

@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
 // Keep the unit hermetic: stub the token signer (the real one calls a native
 // crate), the env, and the process-lifecycle module the map delegates to. The
@@ -44,6 +47,7 @@ import {
   getActiveLiveRemuxEntry,
   forgetLiveRemuxEntry,
   rewriteRemuxManifest,
+  remuxManifestReady,
   remuxSegmentResource,
   _resetLiveRemuxIndexForTests,
 } from './iptvLiveRemuxMap.js'
@@ -133,6 +137,32 @@ describe('rewriteRemuxManifest', () => {
   it('passes through an unrecognised non-tag, non-segment line untouched', () => {
     const out = rewriteRemuxManifest('#EXTINF:2.0,\nseg_00000.ts\nnot-a-segment.bin\n', '7', 's', 'u')
     expect(out).toContain('not-a-segment.bin')
+  })
+})
+
+describe('remuxManifestReady', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'remux-ready-'))
+  const write = (name: string, body: string) => {
+    const p = path.join(tmp, name)
+    fs.writeFileSync(p, body)
+    return p
+  }
+
+  it('false when the manifest does not exist yet', () => {
+    expect(remuxManifestReady(path.join(tmp, 'nope.m3u8'), 4)).toBe(false)
+  })
+
+  it('false with fewer than minSegments, true once it reaches the starting window', () => {
+    const two = '#EXTM3U\n#EXTINF:2,\nseg_00000.ts\n#EXTINF:2,\nseg_00001.ts\n'
+    expect(remuxManifestReady(write('two.m3u8', two), 4)).toBe(false)
+    const four = two + '#EXTINF:2,\nseg_00002.ts\n#EXTINF:2,\nseg_00003.ts\n'
+    expect(remuxManifestReady(write('four.m3u8', four), 4)).toBe(true)
+  })
+
+  it('counts only real segment lines, not tags or stray text', () => {
+    const m = '#EXTM3U\n#EXT-X-DISCONTINUITY\nnot-a-seg.bin\n#EXTINF:2,\nseg_00000.ts\n'
+    expect(remuxManifestReady(write('mixed.m3u8', m), 1)).toBe(true)
+    expect(remuxManifestReady(write('mixed.m3u8', m), 2)).toBe(false)
   })
 })
 

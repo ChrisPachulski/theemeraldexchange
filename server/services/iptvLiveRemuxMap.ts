@@ -6,6 +6,7 @@
 // (spawn / heartbeat / idle-reap) lives in iptvRemux.ts; this module
 // only owns the lookup index and the manifest/segment naming glue.
 
+import fs from 'node:fs'
 import path from 'node:path'
 import { env } from '../env.js'
 import { signStreamToken } from './iptvStreamToken.js'
@@ -188,6 +189,26 @@ export function rewriteRemuxManifest(
     }
   }
   return out.join('\n')
+}
+
+/** True once the on-disk manifest lists at least `minSegments` media segments.
+ *  Returning the manifest the instant index.m3u8 first appears hands the player a
+ *  one-segment playlist, and hls.js needs a few segments to establish the live
+ *  edge or it errors on the very first load — the "first channel click fails, a
+ *  second click works" report (the retry found the window already filled). Gate
+ *  the first response on a small starting window instead. */
+export function remuxManifestReady(manifestPath: string, minSegments: number): boolean {
+  let text: string
+  try {
+    text = fs.readFileSync(manifestPath, 'utf-8')
+  } catch {
+    return false // not written yet
+  }
+  let count = 0
+  for (const line of text.split(/\r?\n/)) {
+    if (/^seg_\d{5}\.ts$/.test(line.trim()) && ++count >= minSegments) return true
+  }
+  return false
 }
 
 /** Parse a remux segment token's resource id (`<sessionId>/<segFile>`).

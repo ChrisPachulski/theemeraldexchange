@@ -87,8 +87,14 @@ describe('iptv remux session', () => {
     // 2s segments (matches VOD): halves Apple TV live startup/buffering latency.
     expect(args).toContain('2')
     expect(args).toContain('-hls_list_size')
-    // ~48s window: a briefly-lagging player must still find its segments.
-    expect(args).toContain('24')
+    // ~80s window: deep enough for the client to sit ~15s back and tolerate the
+    // irregular-keyframe segment sizes this provider emits without underrunning.
+    expect(args).toContain('40')
+    // Broken-timestamp hardening: drop the provider's bogus input DTS and rebase
+    // the output to a clean monotonic timeline so segments stitch without flushes.
+    expect(args).toContain('+discardcorrupt+genpts+igndts')
+    expect(args).toContain('-avoid_negative_ts')
+    expect(args).toContain('make_zero')
     expect(args).toContain('-hls_flags')
     expect(args).toContain('delete_segments+append_list+omit_endlist')
     expect(args).toContain('-hls_segment_filename')
