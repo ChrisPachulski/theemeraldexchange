@@ -414,8 +414,15 @@ ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && \
 # `depends_on` orders the first start but does NOT re-gate a recreate — so the
 # public site 502s until cloudflared is restarted. Always restart it after a
 # deploy (cheap, idempotent). This has caused a real prod outage before.
-echo "→ Restarting cloudflared (re-joins the recreated backend netns; else public 502)"
-ssh "${NAS_USER}@${NAS_HOST}" "docker restart exchange-cloudflared >/dev/null 2>&1 || echo '[deploy] WARN: could not restart exchange-cloudflared (not running?)'"
+echo "→ Force-recreating cloudflared (re-joins the recreated backend netns; else public 530/502)"
+# MUST be `compose up --force-recreate`, NOT `docker restart`. cloudflared's
+# network_mode: service:backend is resolved to the backend's CONTAINER ID and
+# frozen in its HostConfig at create time. `compose up --build` gives the
+# backend a NEW container id, so a plain restart relaunches cloudflared still
+# bound to the OLD (removed) netns → "network is unreachable", tunnel down,
+# public 530. Recreating re-resolves service:backend to the live backend.
+# (A `docker restart` here caused a real total outage — every panel 530'd.)
+ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && docker compose up -d --no-deps --force-recreate cloudflared >/dev/null 2>&1 || echo '[deploy] WARN: could not recreate exchange-cloudflared (not running?)'"
 
 # Post-deploy healthcheck. The 5s log tail this replaces was shorter than the
 # container's 20s health start_period, so a crash-looping or boot-failing
@@ -535,7 +542,7 @@ elif [ "$health_rc" -ne 0 ]; then
     done; \
     if [ \"\$rolled\" = \"1\" ] || [ \"\$restored_cfg\" = \"1\" ]; then \
       ( docker compose up -d --no-build 2>/dev/null || docker-compose up -d --no-build 2>/dev/null || true ) && \
-      docker restart exchange-cloudflared >/dev/null 2>&1 || true; \
+      ( docker compose up -d --no-deps --force-recreate cloudflared >/dev/null 2>&1 || docker restart exchange-cloudflared >/dev/null 2>&1 ) || true; \
       echo '[deploy] rollback applied (images + config) — re-verifying health'; \
     else \
       echo '[deploy] FATAL: nothing to roll back to (no snapshot images or config) — stack is down, manual intervention required' >&2; \
@@ -565,7 +572,7 @@ elif [ "$health_rc" -ne 0 ]; then
   done
   echo "  Manual config restore:" >&2
   echo "    ssh ${NAS_USER}@${NAS_HOST} 'cd ${APPDATA} && cp -p docker-compose.yml.rollback-${ROLLBACK_TS} docker-compose.yml && cp -p .env.rollback-${ROLLBACK_TS} .env'" >&2
-  echo "    ssh ${NAS_USER}@${NAS_HOST} 'cd ${APPDATA} && docker compose up -d --no-build && docker restart exchange-cloudflared'" >&2
+  echo "    ssh ${NAS_USER}@${NAS_HOST} 'cd ${APPDATA} && docker compose up -d --no-build && docker compose up -d --no-deps --force-recreate cloudflared'" >&2
   exit 1
 fi
 
