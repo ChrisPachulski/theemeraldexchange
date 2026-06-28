@@ -348,7 +348,15 @@ iptv.get('/epg/grid', requireAuth, async (c) => {
   const rawQ = c.req.query('q')
   const q = rawQ && rawQ.trim() ? rawQ.trim().slice(0, 100) : undefined
   const hasEpgOnly = c.req.query('hasEpg') === '1' || c.req.query('hasEpg') === 'true'
-  const json = JSON.stringify(epgGrid(iptvDb(), from, to, { categoryId, q, hasEpgOnly }))
+  // Channel cap. Native clients (tvOS especially) OOM on the full ~17k-channel
+  // has-EPG set — a 40 MB payload that decodes to GBs of objects. They send
+  // `limit` to bound it; the web client virtualizes and omits it for the full grid.
+  const rawLimit = c.req.query('limit')
+  const limit = rawLimit != null && rawLimit !== '' ? Number(rawLimit) : undefined
+  if (limit != null && (!Number.isInteger(limit) || limit <= 0)) {
+    return c.json({ error: 'invalid_limit' }, 400)
+  }
+  const json = JSON.stringify(epgGrid(iptvDb(), from, to, { categoryId, q, hasEpgOnly, limit }))
   // The full has-EPG guide is ~28 MB of JSON (~14k channels x ~7 programmes).
   // gzip it (~12x → ~2 MB) so the client isn't pulling tens of MB on every
   // 30-min window refetch. Done inline (not as global middleware) so the
