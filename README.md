@@ -20,7 +20,7 @@ owner curates and administers. The plumbing underneath — the \*arr stack, SAB,
 the transcoder — is implementation detail, never visible from inside the experience.
 
 <!-- screenshot: add a hero screenshot of the web client here once captured —
-     ![The Emerald Exchange](docs/screenshot.png) -->
+     ![The Emerald Exchange](public/screenshot.png) -->
 
 ## Features
 
