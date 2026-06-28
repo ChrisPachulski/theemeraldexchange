@@ -289,6 +289,7 @@ async fn get_show(State(state): State<AppState>, Path(id): Path<i64>) -> AppResu
 
 async fn list_episodes(
     State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
     Path(show_id): Path<i64>,
 ) -> AppResult<Json<Value>> {
     let rows = sqlx::query_as::<_, EpisodeRow>(
@@ -298,7 +299,71 @@ async fn list_episodes(
     .bind(show_id)
     .fetch_all(&state.db.pool)
     .await?;
+    // Fire-and-forget: warm the continue episode's keyframes while the user reads
+    // this detail page, so a copy-remux first play scrubs instead of showing the
+    // LIVE badge — no latency on the play path. Best-effort; never blocks the list.
+    tokio::spawn(prewarm_continue_episode(
+        state.clone(),
+        claims.map(|Extension(c)| c),
+        show_id,
+    ));
     Ok(Json(json!({ "items": rows })))
+}
+
+/// Browse-time keyframe prewarm (best-effort, fire-and-forget). The client calls
+/// `list_episodes` when a show's detail page opens; we use that as the signal to
+/// warm the keyframe cache for the episode the user is most likely to play — the
+/// lowest-numbered in-progress episode (resume), else the first downloaded one
+/// (fresh start) — mirroring the client's hero "continue episode". The ~17s probe
+/// runs while the user reads the page, so by the time Play is pressed the
+/// copy-remux manifest is a finite VOD (real scrubber) instead of AVPlayer's LIVE
+/// chrome — with NO added latency on the play path. Any failure (no transcoder,
+/// no downloaded file, DB/network error) is swallowed: this only ever makes the
+/// next play nicer. See `POST /api/transcode/warm`.
+async fn prewarm_continue_episode(state: AppState, claims: Option<InternalClaims>, show_id: i64) {
+    let Some(transcoder_url) = state.config.transcoder_url.as_deref() else {
+        return;
+    };
+    // Downloaded episodes for this show, in play order, with their backing path.
+    let eps = sqlx::query_as::<_, (i64, i64, i64, String)>(
+        "SELECT e.id, e.season, e.episode, m.path \
+         FROM episodes e JOIN media_files m ON m.id = e.file_id \
+         WHERE e.show_id = ? AND e.file_id IS NOT NULL \
+         ORDER BY e.season, e.episode",
+    )
+    .bind(show_id)
+    .fetch_all(&state.db.pool)
+    .await
+    .unwrap_or_default();
+    let Some(first) = eps.first() else {
+        return;
+    };
+
+    // Prefer the lowest-numbered in-progress episode for this user (eps is already
+    // in play order, so the first match is the lowest), else the first downloaded.
+    let mut chosen = first;
+    if let Some(c) = claims.as_ref() {
+        let in_progress: Vec<i64> = sqlx::query_scalar(
+            "SELECT media_id FROM media_watch_state \
+             WHERE sub = ? AND media_kind = 'episode' AND position_secs > 0 AND completed = 0",
+        )
+        .bind(&c.sub)
+        .fetch_all(&state.db.pool)
+        .await
+        .unwrap_or_default();
+        if let Some(resume) = eps.iter().find(|(id, ..)| in_progress.contains(id)) {
+            chosen = resume;
+        }
+    }
+
+    let url = format!("{}/api/transcode/warm", transcoder_url.trim_end_matches('/'));
+    let mut request = transcoder_http().post(&url).json(&json!({ "path": chosen.3 }));
+    if let Some(bearer) = mint_transcoder_principal(&state, &claims) {
+        request = request.bearer_auth(bearer);
+    }
+    if let Err(e) = request.send().await {
+        tracing::debug!(error = %e, "keyframe prewarm request failed (best-effort)");
+    }
 }
 
 /// Flat, paginated episodes feed (mirrors `list_movies`): returns
