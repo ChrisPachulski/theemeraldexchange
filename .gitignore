@@ -28,6 +28,10 @@ dist-ssr
 *.sln
 *.sw?
 
+# Python bytecode (recommender app + parity tests)
+__pycache__/
+*.pyc
+
 # Internal-only docs & planning — kept locally, never published to the public repo
 docs/
 plans/
