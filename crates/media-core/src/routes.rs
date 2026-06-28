@@ -408,7 +408,10 @@ async fn warm_path(state: &AppState, claims: &Option<InternalClaims>, path: &str
     let Some(transcoder_url) = state.config.transcoder_url.as_deref() else {
         return;
     };
-    let url = format!("{}/api/transcode/warm", transcoder_url.trim_end_matches('/'));
+    let url = format!(
+        "{}/api/transcode/warm",
+        transcoder_url.trim_end_matches('/')
+    );
     let mut request = transcoder_http().post(&url).json(&json!({ "path": path }));
     if let Some(bearer) = mint_transcoder_principal(state, claims) {
         request = request.bearer_auth(bearer);
