@@ -308,15 +308,6 @@ agree — they set ceilings, not precedents.
   constellation stays in the tree as the fallback. Floating chrome over the
   moving video is also why backdrop-blur extends beyond the HUD pod (see
   the glassmorphism law above).
-- **Beacon gem video (dormant).** A live-action alpha-cutout emerald loop
-  (`src/components/atmosphere/Beacon.tsx`, `public/gem.webm` — two phase-
-  offset `<video>` elements cross-faded so the loop seam never shows),
-  originally pinned top-right as the prize the kraken reaches for. It is
-  **currently unmounted**: the App mount was dropped in the home-page
-  redesign (`faf29ca`) and its walkthrough stage was replaced by the
-  single WebGL gem (`36fc64c`). Like the constellation, it stays in the
-  tree (component + shipped assets) as recorded atmosphere inventory —
-  remounting it is an owner decision, not a license this doc grants.
 
 ## What "done" looks like visually
 
