@@ -47,7 +47,6 @@ import { heartbeatRemuxSession } from '../services/iptvRemux.js'
 import {
   ensureLiveRemuxEntry,
   dropOtherLiveRemuxSessions,
-  forgetLiveRemuxEntry,
   getActiveLiveRemuxEntry,
   remuxManifestReady,
   remuxSegmentResource,
@@ -862,6 +861,15 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
   // poll killed the other's ffmpeg, so neither ever built a segment window and
   // every channel showed infinite buffering / black screen.
   let entry = ensureLiveRemuxEntry({ streamId, sub: v.sub, upstreamUrl })
+  // null = the channel is in its reconnect-throttle cooldown after a recent fast
+  // failure (a corrupt feed / provider abuse block). Do NOT dial again — answer
+  // with a short Retry-After so the client polls again without opening a new
+  // upstream connection, giving the provider time to cool. Re-dialing here is
+  // exactly the churn that triggered the abuse block in the first place.
+  if (!entry) {
+    c.header('Retry-After', '3')
+    return c.json({ error: 'remux_warming' }, 503)
+  }
 
   heartbeatRemuxSession(entry.sessionId)
   // 15s, not 8s: a larger ffmpeg probe ceiling (see iptvRemux's -analyzeduration
@@ -879,15 +887,22 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
     // A copy session can kill itself on detecting a non-H.264 input (it can't
     // produce playable Apple HLS then). Re-ensure each tick so it respawns as a
     // re-encode session and we wait on the NEW manifest — all in this request.
-    // ensureLiveRemuxEntry returns the same entry while the session is alive.
-    entry = ensureLiveRemuxEntry({ streamId, sub: v.sub, upstreamUrl })
+    // ensureLiveRemuxEntry returns the same entry while the session is alive,
+    // and null while a just-died session is in reconnect cooldown — in which
+    // case stop waiting rather than busy-loop, and let the client retry.
+    const next = ensureLiveRemuxEntry({ streamId, sub: v.sub, upstreamUrl })
+    if (!next) break
+    entry = next
     heartbeatRemuxSession(entry.sessionId)
   }
   // A slow channel may have <START_SEGMENTS at the deadline; serve whatever it
-  // has rather than fail. Only a manifest that never appeared at all is a 504.
-  if (!fs.existsSync(entry.manifestPath)) {
-    forgetLiveRemuxEntry(streamId, v.sub, entry.sessionId)
-    return c.json({ error: 'remux_manifest_timeout' }, 504)
+  // has rather than fail. Only a manifest that never appeared at all is a retry.
+  // Do NOT forget/stop the session here: it may still be slowly producing, and
+  // forgetting it just feeds the respawn churn. Answer 503+Retry-After so the
+  // client polls again (the reconnect throttle gates any actual re-dial).
+  if (!entry || !fs.existsSync(entry.manifestPath)) {
+    c.header('Retry-After', '3')
+    return c.json({ error: 'remux_warming' }, 503)
   }
 
   const rewritten = rewriteRemuxManifest(

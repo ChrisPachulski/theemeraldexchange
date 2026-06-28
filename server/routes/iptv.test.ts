@@ -4,6 +4,7 @@ import { openIptvDb, type IptvDb } from '../services/iptvDb.js'
 import { iptv, __test } from './iptv.js'
 import { __setSsrfLookupForTests } from '../services/ssrfGuard.js'
 import { signStreamToken } from '../services/iptvStreamToken.js'
+import { _resetLiveRemuxIndexForTests } from '../services/iptvLiveRemuxMap.js'
 import { env } from '../env.js'
 
 const dbState = vi.hoisted(() => ({
@@ -1338,6 +1339,9 @@ describe('remux live delivery (AVPlayer)', () => {
     remuxState.activeSessions.clear()
     remuxState.files.clear()
     remuxState.startCalls.length = 0
+    // Clear the live-remux index AND the reconnect-throttle state so a prior
+    // test's "recent dial / fast death" can't throttle this test's first tune.
+    _resetLiveRemuxIndexForTests()
   })
 
   // ── index.m3u8 ──────────────────────────────────────────────────────────
@@ -1378,7 +1382,7 @@ describe('remux live delivery (AVPlayer)', () => {
     expect(remuxState.startCalls[0].upstreamUrl).toContain('/live/u/p/10.ts')
   })
 
-  it('index.m3u8 returns 504 remux_manifest_timeout when the manifest never appears', async () => {
+  it('index.m3u8 returns 503 remux_warming + Retry-After when the manifest never appears', async () => {
     vi.useFakeTimers()
     try {
       // No file seeded -> existsSync stays false through the whole poll window.
@@ -1388,9 +1392,12 @@ describe('remux live delivery (AVPlayer)', () => {
       // Drive the handler's 15s Date.now() deadline + 200ms sleep() loop.
       await vi.advanceTimersByTimeAsync(15200)
       const res = await p
-      expect(res.status).toBe(504)
+      // 503 (not 504) so the client backs off and retries WITHOUT forcing a new
+      // upstream dial — the reconnect throttle owns when a re-dial may happen.
+      expect(res.status).toBe(503)
+      expect(res.headers.get('Retry-After')).toBe('3')
       const body = (await res.json()) as { error: string }
-      expect(body.error).toBe('remux_manifest_timeout')
+      expect(body.error).toBe('remux_warming')
     } finally {
       vi.useRealTimers()
     }

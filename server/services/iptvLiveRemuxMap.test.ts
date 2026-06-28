@@ -186,17 +186,32 @@ describe('ensureLiveRemuxEntry / getActiveLiveRemuxEntry / forgetLiveRemuxEntry'
   it('starts a session on first call and reuses it while active', () => {
     const a = ensureLiveRemuxEntry({ streamId: '1', sub: 'u', upstreamUrl: 'http://x' })
     const b = ensureLiveRemuxEntry({ streamId: '1', sub: 'u', upstreamUrl: 'http://x' })
-    expect(a.sessionId).toBe('sess-1')
-    expect(b.sessionId).toBe('sess-1')
+    expect(a?.sessionId).toBe('sess-1')
+    expect(b?.sessionId).toBe('sess-1')
     expect(h.start).toHaveBeenCalledTimes(1)
   })
 
-  it('restarts when the recorded session has exited (stale entry dropped)', () => {
-    const a = ensureLiveRemuxEntry({ streamId: '1', sub: 'u', upstreamUrl: 'http://x' })
-    h.state.active = [] // simulate ffmpeg exit
-    const b = ensureLiveRemuxEntry({ streamId: '1', sub: 'u', upstreamUrl: 'http://x' })
-    expect(a.sessionId).toBe('sess-1')
-    expect(b.sessionId).toBe('sess-2')
+  it('throttles re-dial after a fast failure, then restarts once cooldown elapses', () => {
+    // t=1000: first dial (immediate, streak 0).
+    const a = ensureLiveRemuxEntry({ streamId: '1', sub: 'u', upstreamUrl: 'http://x' }, 1_000)
+    expect(a?.sessionId).toBe('sess-1')
+    h.state.active = [] // ffmpeg exits young (corrupt feed / abuse block)
+    // t=1500: died after 500ms → fast fail → 5s backoff → re-dial REFUSED (null).
+    expect(ensureLiveRemuxEntry({ streamId: '1', sub: 'u', upstreamUrl: 'http://x' }, 1_500)).toBeNull()
+    expect(h.start).toHaveBeenCalledTimes(1) // no new upstream connection opened
+    // t=6500: 5s after the last dial → cooldown elapsed → re-dial allowed.
+    const b = ensureLiveRemuxEntry({ streamId: '1', sub: 'u', upstreamUrl: 'http://x' }, 6_500)
+    expect(b?.sessionId).toBe('sess-2')
+    expect(h.start).toHaveBeenCalledTimes(2)
+  })
+
+  it('re-dials immediately when a healthy long-lived session exits (no backoff)', () => {
+    const a = ensureLiveRemuxEntry({ streamId: '1', sub: 'u', upstreamUrl: 'http://x' }, 1_000)
+    expect(a?.sessionId).toBe('sess-1')
+    h.state.active = [] // exits after a long, healthy run (e.g. idle sweep)
+    // Lived 60s (≥ FAST_FAIL_MS) → streak cleared → next tune is immediate.
+    const b = ensureLiveRemuxEntry({ streamId: '1', sub: 'u', upstreamUrl: 'http://x' }, 61_000)
+    expect(b?.sessionId).toBe('sess-2')
     expect(h.start).toHaveBeenCalledTimes(2)
   })
 
@@ -209,16 +224,16 @@ describe('ensureLiveRemuxEntry / getActiveLiveRemuxEntry / forgetLiveRemuxEntry'
   })
 
   it('forgetLiveRemuxEntry drops the index entry and stops the session', () => {
-    const e = ensureLiveRemuxEntry({ streamId: '3', sub: 'u', upstreamUrl: 'http://x' })
+    const e = ensureLiveRemuxEntry({ streamId: '3', sub: 'u', upstreamUrl: 'http://x' })!
     forgetLiveRemuxEntry('3', 'u', e.sessionId)
     expect(h.stop).toHaveBeenCalledWith(e.sessionId)
     expect(getActiveLiveRemuxEntry('3', 'u')).toBeNull()
   })
 
   it('dropOtherLiveRemuxSessions stops the same sub\'s other channels, keeps the tuned one', () => {
-    const old = ensureLiveRemuxEntry({ streamId: '1', sub: 'u', upstreamUrl: 'http://x' })
-    const keep = ensureLiveRemuxEntry({ streamId: '2', sub: 'u', upstreamUrl: 'http://x' })
-    const other = ensureLiveRemuxEntry({ streamId: '1', sub: 'other', upstreamUrl: 'http://x' })
+    const old = ensureLiveRemuxEntry({ streamId: '1', sub: 'u', upstreamUrl: 'http://x' })!
+    const keep = ensureLiveRemuxEntry({ streamId: '2', sub: 'u', upstreamUrl: 'http://x' })!
+    const other = ensureLiveRemuxEntry({ streamId: '1', sub: 'other', upstreamUrl: 'http://x' })!
 
     const stopped = dropOtherLiveRemuxSessions('u', '2')
 
