@@ -28,6 +28,14 @@ dist-ssr
 *.sln
 *.sw?
 
+# Internal-only docs & planning — kept locally, never published to the public repo
+docs/
+plans/
+.planning/
+
+# Netlify CLI state (machine-local; hardcodes an absolute publish path)
+.netlify/
+
 # Local tooling
 .claude/
 .graphify/
