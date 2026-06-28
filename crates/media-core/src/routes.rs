@@ -310,20 +310,29 @@ async fn list_episodes(
     Ok(Json(json!({ "items": rows })))
 }
 
+/// Index of the "continue" episode in a play-ordered episode list: the first the
+/// user hasn't completed (a mid-episode resume AND the fresh next episode after
+/// finishing one). Falls back to 0 (the first) when all are completed or there is
+/// no watch history. `eps` tuples are `(id, season, episode, path)`.
+fn continue_episode_index(eps: &[(i64, i64, i64, String)], completed: &[i64]) -> usize {
+    eps.iter()
+        .position(|(id, ..)| !completed.contains(id))
+        .unwrap_or(0)
+}
+
 /// Browse-time keyframe prewarm (best-effort, fire-and-forget). The client calls
 /// `list_episodes` when a show's detail page opens; we use that as the signal to
 /// warm the keyframe cache for the episode the user is most likely to play — the
-/// lowest-numbered in-progress episode (resume), else the first downloaded one
-/// (fresh start) — mirroring the client's hero "continue episode". The ~17s probe
-/// runs while the user reads the page, so by the time Play is pressed the
-/// copy-remux manifest is a finite VOD (real scrubber) instead of AVPlayer's LIVE
-/// chrome — with NO added latency on the play path. Any failure (no transcoder,
-/// no downloaded file, DB/network error) is swallowed: this only ever makes the
-/// next play nicer. See `POST /api/transcode/warm`.
+/// "continue" episode: the first episode in play order they haven't completed
+/// (covers both a mid-episode resume AND the fresh next episode after finishing
+/// one — the common binge case), else the first downloaded (fresh start). This
+/// mirrors the client's hero "continue episode". The ~17s probe runs while the
+/// user reads the page, so by the time Play is pressed the copy-remux manifest is
+/// a finite VOD (real scrubber) instead of AVPlayer's LIVE chrome — with NO added
+/// latency on the play path. Any failure (no transcoder, no downloaded file,
+/// DB/network error) is swallowed: this only ever makes the next play nicer. See
+/// `POST /api/transcode/warm`.
 async fn prewarm_continue_episode(state: AppState, claims: Option<InternalClaims>, show_id: i64) {
-    let Some(transcoder_url) = state.config.transcoder_url.as_deref() else {
-        return;
-    };
     // Downloaded episodes for this show, in play order, with their backing path.
     let eps = sqlx::query_as::<_, (i64, i64, i64, String)>(
         "SELECT e.id, e.season, e.episode, m.path \
@@ -335,34 +344,77 @@ async fn prewarm_continue_episode(state: AppState, claims: Option<InternalClaims
     .fetch_all(&state.db.pool)
     .await
     .unwrap_or_default();
-    let Some(first) = eps.first() else {
+    if eps.is_empty() {
         return;
-    };
+    }
 
-    // Prefer the lowest-numbered in-progress episode for this user (eps is already
-    // in play order, so the first match is the lowest), else the first downloaded.
-    let mut chosen = first;
-    if let Some(c) = claims.as_ref() {
-        let in_progress: Vec<i64> = sqlx::query_scalar(
+    // The continue episode = the first in play order the user hasn't completed.
+    // (`position_secs > 0` alone missed the just-finished-an-episode → next-fresh
+    // case, the most common binge flow.) No claims → the first downloaded.
+    let completed: Vec<i64> = if let Some(c) = claims.as_ref() {
+        sqlx::query_scalar(
             "SELECT media_id FROM media_watch_state \
-             WHERE sub = ? AND media_kind = 'episode' AND position_secs > 0 AND completed = 0",
+             WHERE sub = ? AND media_kind = 'episode' AND completed = 1",
         )
         .bind(&c.sub)
         .fetch_all(&state.db.pool)
         .await
-        .unwrap_or_default();
-        if let Some(resume) = eps.iter().find(|(id, ..)| in_progress.contains(id)) {
-            chosen = resume;
-        }
-    }
+        .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let chosen = &eps[continue_episode_index(&eps, &completed)];
+    warm_path(&state, &claims, &chosen.3).await;
+}
 
+/// On an episode play grant, warm the NEXT downloaded episode's keyframes so
+/// autoplay-next also scrubs from its first play (same copy-remux EVENT-vs-VOD
+/// reason as the browse prewarm). Best-effort, fire-and-forget; a no-op for the
+/// last episode (or a movie, whose grant never calls this).
+async fn prewarm_next_episode(state: AppState, claims: Option<InternalClaims>, episode_id: i64) {
+    let Ok(Some((show_id, season, episode))) = sqlx::query_as::<_, (i64, i64, i64)>(
+        "SELECT show_id, season, episode FROM episodes WHERE id = ?",
+    )
+    .bind(episode_id)
+    .fetch_optional(&state.db.pool)
+    .await
+    else {
+        return;
+    };
+    // First downloaded episode strictly after this one in play order.
+    let next = sqlx::query_as::<_, (String,)>(
+        "SELECT m.path FROM episodes e JOIN media_files m ON m.id = e.file_id \
+         WHERE e.show_id = ? AND e.file_id IS NOT NULL \
+         AND (e.season > ? OR (e.season = ? AND e.episode > ?)) \
+         ORDER BY e.season, e.episode LIMIT 1",
+    )
+    .bind(show_id)
+    .bind(season)
+    .bind(season)
+    .bind(episode)
+    .fetch_optional(&state.db.pool)
+    .await
+    .ok()
+    .flatten();
+    if let Some((path,)) = next {
+        warm_path(&state, &claims, &path).await;
+    }
+}
+
+/// Fire `POST /api/transcode/warm` for one file (best-effort). Shared by the
+/// browse prewarm and the autoplay-next grant warm. Swallows every failure — a
+/// warm only ever makes the next play nicer, it never blocks one.
+async fn warm_path(state: &AppState, claims: &Option<InternalClaims>, path: &str) {
+    let Some(transcoder_url) = state.config.transcoder_url.as_deref() else {
+        return;
+    };
     let url = format!("{}/api/transcode/warm", transcoder_url.trim_end_matches('/'));
-    let mut request = transcoder_http().post(&url).json(&json!({ "path": chosen.3 }));
-    if let Some(bearer) = mint_transcoder_principal(&state, &claims) {
+    let mut request = transcoder_http().post(&url).json(&json!({ "path": path }));
+    if let Some(bearer) = mint_transcoder_principal(state, claims) {
         request = request.bearer_auth(bearer);
     }
     if let Err(e) = request.send().await {
-        tracing::debug!(error = %e, "keyframe prewarm request failed (best-effort)");
+        tracing::debug!(error = %e, "keyframe warm request failed (best-effort)");
     }
 }
 
@@ -462,12 +514,23 @@ async fn resolve_media_file(state: &AppState, kind: &str, id: i64) -> AppResult<
 
 async fn play_grant(
     State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
     Path((kind, id)): Path<(String, i64)>,
     body: Option<Json<ClientCaps>>,
 ) -> AppResult<Json<Value>> {
     let file = resolve_media_file(&state, &kind, id).await?;
     let caps = body.map(|Json(c)| c).unwrap_or_default();
     let decision = capability::decide(&file, &caps);
+
+    // Autoplay-next: warm the next episode's keyframes now so its first play scrubs
+    // too (best-effort, fire-and-forget; no-op for movies / the last episode).
+    if kind == "episode" {
+        tokio::spawn(prewarm_next_episode(
+            state.clone(),
+            claims.map(|Extension(c)| c),
+            id,
+        ));
+    }
 
     Ok(Json(json!({
         "directPlay": decision.direct_play,
@@ -1475,6 +1538,24 @@ mod tests {
     use axum::http::Request as HttpRequest;
     use std::sync::Arc;
     use tower::ServiceExt;
+
+    fn ep(id: i64, season: i64, episode: i64) -> (i64, i64, i64, String) {
+        (id, season, episode, format!("/lib/s{season}e{episode}.mkv"))
+    }
+
+    #[test]
+    fn continue_episode_is_first_uncompleted_not_just_in_progress() {
+        let eps = [ep(101, 1, 1), ep(102, 1, 2), ep(103, 1, 3)];
+        // Regression: just finished E1 & E2 (completed), E3 fresh (no watch row).
+        // The old `position_secs > 0` logic warmed E1; the continue episode is E3.
+        assert_eq!(continue_episode_index(&eps, &[101, 102]), 2);
+        // Mid-episode resume: E2 in progress (not completed) → E2.
+        assert_eq!(continue_episode_index(&eps, &[101]), 1);
+        // No history → the first downloaded.
+        assert_eq!(continue_episode_index(&eps, &[]), 0);
+        // Whole show completed → fall back to the first (rewatch from the top).
+        assert_eq!(continue_episode_index(&eps, &[101, 102, 103]), 0);
+    }
 
     async fn test_state() -> AppState {
         // Off-mode: no principal secret/mode wired → principal_layer skips
