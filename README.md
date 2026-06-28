@@ -41,14 +41,13 @@ invite redemption is atomic and race-safe.
 
 ## Backend surface (`/api`)
 
-`auth`, `auth/device`, `auth/passkey`, `me`, `version`, `limits`, `devices`,
-`admin/devices`, `admin/invites`, `admin/members`, `sonarr`, `radarr`, `sab`,
-`tmdb`, `iptv`, `users`, `plex`, `notifications`, `grabs`, `suggestions`,
-`feedback`, `usage`, `recommender`, `telemetry`, and (when
-`USE_MEDIA_CORE=1`) `media` + `transcode` (the HLS playback proxy for
-non-direct-play files). CORS is an explicit allowlist
-(`env.allowedOrigins`); state-changing requests are Origin-gated
-(`requireSafeOrigin`).
+Everything the SPA needs hangs off `/api`, mounted in `server/app.ts` (the
+authoritative route list): auth (`auth`, `auth/passkey`, `auth/device`) and
+identity (`me`, `devices`, `admin/*`), the *arr / SAB / IPTV / DVR bridges,
+TMDB and recommender proxies, telemetry, and — when `USE_MEDIA_CORE=1` —
+`media` + `transcode` (the HLS playback proxy for non-direct-play files). CORS
+is an explicit allowlist (`env.allowedOrigins`); state-changing requests are
+Origin-gated (`requireSafeOrigin`).
 
 ## Local development
 
@@ -144,36 +143,24 @@ cargo test -p emerald-contracts -p media-core -p transcoder
 Self-hosted on the NAS (`root@theemeraldexchange.local`, Unraid) via
 `docker-compose` (9 services: backend, recommender, media-core, transcoder,
 cloudflared, and the 4-container Glitchtip telemetry stack) behind a
-Cloudflare Tunnel; the SPA ships to Netlify. Crash/error telemetry is per-self-hoster Glitchtip (§15), with the DSN
-distributed server → client at boot. See [DEPLOY.md](./DEPLOY.md).
+Cloudflare Tunnel; the SPA ships to Netlify. Crash/error telemetry is
+per-self-hoster Glitchtip, with the DSN distributed server → client at boot.
+See [DEPLOY.md](./DEPLOY.md).
 
 ## Project docs
 
-- [docs/README.md](./docs/README.md) — the doc map: which docs are current source-of-truth vs historical archive. Start here when unsure.
-- [TODO.md](./TODO.md) — high-level worklist; start here for what's outstanding.
-- [docs/ROADMAP-STATUS.md](./docs/ROADMAP-STATUS.md) — honest per-milestone state (M1–M6).
 - [PRODUCT.md](./PRODUCT.md) — audience, principles, scope.
-- [DESIGN.md](./DESIGN.md) — Impeccable design contract (palette, type, motion).
+- [DESIGN.md](./DESIGN.md) — the design contract (palette, type, motion).
 - [DEPLOY.md](./DEPLOY.md) — NAS setup and ongoing deploys.
-- [docs/PRODUCTION-READINESS-2026-05-30.md](./docs/PRODUCTION-READINESS-2026-05-30.md) — historical review ledger; re-verify rows before planning.
 
-## Roadmap
+## Status
 
-The backend track is largely shipped; the client track is hard-blocked on Apple
-tooling (Xcode + Developer Program). Honest per-milestone detail with status and
-percentages lives in [docs/ROADMAP-STATUS.md](./docs/ROADMAP-STATUS.md).
-
-- **M1 — IPTV core:** shipped and live.
-- **M1.5 — cross-service contract:** ratified/locked; Rust↔TS↔Python byte
-  parity enforced in CI.
-- **M3 — Rust media-core:** live on the NAS in enforce mode (library
-  scan / metadata / serve).
-- **M4 — transcoder:** deployed; real-library HEVC→H.264 transcode proven
-  played end-to-end in a real browser over the public path, hardware-encoded
-  via Intel VAAPI on the NAS iGPU. Remaining: stress/bench evidence and a
-  seek-latency re-measurement.
-- **M2 / M5 / M6 — Apple clients, native playback + offline downloads, the
-  Plex-Pass-equivalent tier:** not started, blocked on the Apple gate.
+The backend track is shipped and running on the NAS: the IPTV core, the locked
+cross-service contract (Rust↔TS↔Python byte parity enforced in CI), the Rust
+media-core (library scan / metadata / serve), and the ffmpeg transcoder
+(HEVC→H.264, hardware-encoded via Intel VAAPI on the NAS iGPU). The Apple client
+track — native playback, offline downloads, the Plex-Pass-equivalent tier — is
+hard-blocked on Apple tooling (Xcode + Developer Program) and not started.
 
 Until the first binary is distributed the repository stays private; third-party
 redistribution is not granted.
