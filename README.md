@@ -19,10 +19,8 @@ Members sign in, browse the library, watch live and on-demand, and request new t
 owner curates and administers. The plumbing underneath — the \*arr stack, SAB, IPTV providers,
 the transcoder — is implementation detail, never visible from inside the experience.
 
-<!-- TODO(screenshot): the single highest-impact addition to this README. Capture the running
-     web client (library grid or a playback view), save it to docs/screenshot.png, and replace
-     the placeholder line below with:  ![The Emerald Exchange](docs/screenshot.png) -->
-<div align="center"><sub>▢ &nbsp;screenshot of the web client goes here — capture the library or playback view</sub></div>
+<!-- screenshot: add a hero screenshot of the web client here once captured —
+     ![The Emerald Exchange](docs/screenshot.png) -->
 
 ## Features
 
