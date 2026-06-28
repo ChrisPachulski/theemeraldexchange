@@ -90,6 +90,7 @@ impl AppState {
 pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/grant", post(grant))
+        .route("/warm", post(warm))
         .route("/session/{id}/index.m3u8", get(session_manifest))
         .route("/session/{id}/{segment}", get(session_segment))
         .route("/session/{id}/heartbeat", post(session_heartbeat))
@@ -283,6 +284,36 @@ pub struct GrantRequest {
     /// `ClientCaps` — it's a per-grant mode, not a capability.
     #[serde(default)]
     pub force_transcode: bool,
+}
+
+/// Browse-time keyframe prewarm. media-core fires this (fire-and-forget) when a
+/// show's detail page opens, for the episode the user is most likely to play (the
+/// resume/continue episode) — and for the NEXT episode on a grant, so autoplay-
+/// next scrubs too. Running the ~17s keyframe probe DURING browsing means the
+/// cache is hot by the time Play is pressed, so the copy-remux manifest is a
+/// finite VOD (real scrubber) from the first play instead of the ENDLIST-less
+/// EVENT playlist AVPlayer renders as a LIVE stream — WITHOUT adding any latency
+/// to the play path itself. Deduped against in-flight probes inside
+/// `spawn_keyframe_warm`; a no-op for an already-cached file. Returns 202 at once.
+#[derive(Debug, Deserialize)]
+pub struct WarmRequest {
+    pub path: String,
+}
+
+async fn warm(
+    State(state): State<AppState>,
+    _claims: Option<Extension<InternalClaims>>,
+    Json(req): Json<WarmRequest>,
+) -> Response {
+    if req.path.trim().is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "error": "empty_path" })),
+        )
+            .into_response();
+    }
+    state.sessions.spawn_keyframe_warm(req.path);
+    StatusCode::ACCEPTED.into_response()
 }
 
 /// Derive the `ffprobe` path from the configured ffmpeg path (same install

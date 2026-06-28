@@ -1220,7 +1220,11 @@ impl SessionManager {
         // so the finite VOD list can only come from the keyframe map. On a cache
         // HIT, synthesize a real scrubber; on a MISS, return None (caller serves
         // the on-disk EVENT playlist) and warm the cache in the background so the
-        // next play is a scrubber from 0:00 instead of "live".
+        // next play is a scrubber from 0:00 instead of "live". The hot path NEVER
+        // blocks — first-play scrubbing is handled ahead of time by the browse
+        // prewarm (media-core fires `POST /api/transcode/warm` for the continue
+        // episode on detail open), using the seconds the user spends on the detail
+        // page so the cache is hot by the time Play is pressed.
         match crate::keyframes::load(&self.cache_root, std::path::Path::new(&input_path)).await {
             Some(kf) => crate::vod_manifest::synthesize_copy(&kf, duration, start_secs, fmp4),
             None => {
