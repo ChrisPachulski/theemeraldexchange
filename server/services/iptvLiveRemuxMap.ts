@@ -30,6 +30,38 @@ export type LiveRemuxEntry = {
 
 const liveRemuxIndex = new Map<string, LiveRemuxEntry>()
 
+// ── Reconnect throttle (provider abuse-block guard) ──────────────────────────
+//
+// The provider caps simultaneous connections (a 1–2 connection plan) and, far
+// worse, PUNISHES rapid re-dialing: open upstream connections too fast and it
+// starts feeding CORRUPT, undecodable video to everyone until it cools down.
+// The old failure mode: a corrupt feed makes ffmpeg exit 255 before it can build
+// a starting window → the route forgets the session → the client retries → a NEW
+// upstream connection opens within ~15s → more abuse → more corruption (a self-
+// sustaining 255→respawn→corrupt→255 cycle that reads to the viewer as constant
+// stutter / replay / eject / "can't find source").
+//
+// So: never re-dial a given channel faster than a backoff that WIDENS with each
+// fast failure. The first connect is immediate (no added tune latency); a
+// session that dies young (< FAST_FAIL_MS) escalates the gap; a session that ran
+// healthily resets it. While a channel is in cooldown, ensureLiveRemuxEntry
+// returns null and the caller serves a graceful retry instead of dialing again.
+const RECONNECT_BASE_MS = 5_000
+const RECONNECT_MAX_MS = 30_000
+const FAST_FAIL_MS = 20_000
+
+const lastConnectAt = new Map<string, number>() // key -> ms of the last upstream dial
+const sessionSpawnAt = new Map<string, number>() // key -> ms the live session was spawned
+const failStreak = new Map<string, number>() // key -> consecutive fast-fail count
+
+/** Backoff before the next upstream re-dial for a channel, by consecutive
+ *  fast-failure count. 0 failures → 0 (immediate); then 5s, 10s, 20s, capped at
+ *  30s. Pure so the throttle is unit-testable without a real clock. */
+export function reconnectDelayMs(streak: number): number {
+  if (streak <= 0) return 0
+  return Math.min(RECONNECT_BASE_MS * 2 ** (streak - 1), RECONNECT_MAX_MS)
+}
+
 function remuxKey(streamId: string, sub: string): string {
   return `${streamId}:${sub}`
 }
@@ -42,25 +74,49 @@ function isRemuxSessionActive(sessionId: string): boolean {
  *  process state; this drops the route-layer lookup entries). */
 export function _resetLiveRemuxIndexForTests(): void {
   liveRemuxIndex.clear()
+  lastConnectAt.clear()
+  sessionSpawnAt.clear()
+  failStreak.clear()
 }
 
 /**
- * Return the live entry for (streamId, sub), starting a new remux
- * session when none exists or the recorded one's ffmpeg has exited
- * (stale entries are dropped on sight).
+ * Return the live entry for (streamId, sub), starting a new remux session when
+ * none exists or the recorded one's ffmpeg has exited (stale entries are dropped
+ * on sight).
+ *
+ * Returns null when the channel is in its reconnect-throttle cooldown after a
+ * recent fast failure — the caller must NOT treat that as a hard error or dial
+ * again; it serves a short retry so the provider's abuse block can cool (see the
+ * reconnect-throttle block above). `now` is injectable for tests.
  */
-export function ensureLiveRemuxEntry(opts: {
-  streamId: string
-  sub: string
-  upstreamUrl: string
-}): LiveRemuxEntry {
+export function ensureLiveRemuxEntry(
+  opts: {
+    streamId: string
+    sub: string
+    upstreamUrl: string
+  },
+  now: number = Date.now(),
+): LiveRemuxEntry | null {
   const key = remuxKey(opts.streamId, opts.sub)
   let entry = liveRemuxIndex.get(key)
   if (entry && !isRemuxSessionActive(entry.sessionId)) {
+    // The session's ffmpeg has exited. Classify it: a young death (corrupt feed
+    // / abuse block) widens the reconnect backoff; a session that ran a healthy
+    // while clears it so a normal re-tune is immediate again.
+    const lived = now - (sessionSpawnAt.get(key) ?? now)
+    if (lived < FAST_FAIL_MS) failStreak.set(key, (failStreak.get(key) ?? 0) + 1)
+    else failStreak.delete(key)
     liveRemuxIndex.delete(key)
+    sessionSpawnAt.delete(key)
     entry = undefined
   }
   if (!entry) {
+    // Throttle: refuse to re-dial the provider faster than this channel's
+    // backoff. First connect (streak 0) is immediate.
+    const delay = reconnectDelayMs(failStreak.get(key) ?? 0)
+    if (delay > 0 && now - (lastConnectAt.get(key) ?? 0) < delay) return null
+    lastConnectAt.set(key, now)
+    sessionSpawnAt.set(key, now)
     const session = startRemuxSession({
       streamId: opts.streamId,
       sub: opts.sub,
