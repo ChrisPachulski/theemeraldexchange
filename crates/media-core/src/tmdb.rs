@@ -173,6 +173,31 @@ fn year_compatible(want: Option<i64>, got: Option<i64>) -> bool {
     }
 }
 
+/// The `(query_title, year)` actually sent to the TV search for a parsed show
+/// name. Scene episode releases bake a release year into the name before the
+/// `SxxExx` marker ("The American Experiment 2026"), but TMDB's TV name is
+/// year-less — querying with the year suffix returns ZERO results, so the show
+/// was stored with NULL `tmdb_id`/`tvdb_id` even though TMDB has it. Strip a
+/// trailing 1900–2099 token for the query and surface it as the year hint
+/// (`year_compatible` ±1 still rejects a wrong-era remake). A title that is
+/// *only* a year ("1923") is left intact so the query is never emptied; an
+/// explicit `year` always wins over the stripped hint.
+fn show_search_terms(title: &str, year: Option<i64>) -> (String, Option<i64>) {
+    let trimmed = title.trim_end();
+    if let Some(last) = trimmed.rsplit(' ').next()
+        && last.len() == 4
+        && last.chars().all(|c| c.is_ascii_digit())
+        && let Ok(y) = last.parse::<i64>()
+        && (1900..=2099).contains(&y)
+    {
+        let stripped = trimmed[..trimmed.len() - last.len()].trim_end();
+        if !stripped.is_empty() {
+            return (stripped.to_string(), year.or(Some(y)));
+        }
+    }
+    (trimmed.to_string(), year)
+}
+
 /// Pure parser over a TMDB search response. Instead of blindly trusting
 /// `results[0]`, it scores every candidate's title against `query_title` and
 /// returns the best-scoring one, breaking ties toward TMDB's own ordering
@@ -475,7 +500,8 @@ impl TmdbClient {
     /// Search TMDB for a TV show. Returns `None` if no key, no match, or any
     /// error (logged). On a hit, also fetches `imdb_id`.
     pub async fn match_show(&self, title: &str, year: Option<i64>) -> Option<TmdbMatch> {
-        self.match_with(SEARCH_TV_URL, "tv", title, year, false)
+        let (title, year) = show_search_terms(title, year);
+        self.match_with(SEARCH_TV_URL, "tv", &title, year, false)
             .await
     }
 
@@ -533,6 +559,32 @@ mod tests {
         let client = TmdbClient::new(None);
         assert_eq!(client.match_movie("Interstellar", Some(2014)).await, None);
         assert_eq!(client.match_show("Severance", None).await, None);
+    }
+
+    // Regression: a scene episode release ("The American Experiment 2026") was
+    // parsed as a year-suffixed show name and searched on TMDB verbatim, which
+    // returns ZERO results (TMDB's name is "The American Experiment"), so the
+    // show was stored with NULL tmdb_id/tvdb_id and the apps lost its Play
+    // button. The search must drop the trailing release year and feed it as the
+    // year hint instead. Fails if `show_search_terms` stops stripping.
+    #[test]
+    fn show_search_strips_scene_release_year() {
+        assert_eq!(
+            show_search_terms("The American Experiment 2026", None),
+            ("The American Experiment".to_string(), Some(2026))
+        );
+        // An explicit year wins over the stripped suffix.
+        assert_eq!(
+            show_search_terms("Doctor Who 2005", Some(1963)),
+            ("Doctor Who".to_string(), Some(1963))
+        );
+        // A show literally named for a year is NOT emptied.
+        assert_eq!(show_search_terms("1923", None), ("1923".to_string(), None));
+        // A year-less name is untouched.
+        assert_eq!(
+            show_search_terms("Severance", None),
+            ("Severance".to_string(), None)
+        );
     }
 
     #[test]
