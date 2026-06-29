@@ -246,11 +246,12 @@ describe('radarr — allow-list and gates', () => {
 })
 
 describe('radarr POST /api/v3/movie — non-admin add policy', () => {
-  // Non-admin add requests cannot dictate qualityProfileId,
-  // rootFolderPath, monitored, tags, addOptions, etc. The server
-  // materializes those from upstream defaults — a direct-POST can't
-  // bypass the admin's curated profile or pin a different folder.
-  it('replaces a malicious rootFolderPath / qualityProfileId with server defaults', async () => {
+  // The Add dialog now shows every household member the quality/folder/search
+  // controls, so a non-admin's choices ARE honored — but each is validated
+  // against the live upstream lists first (an unknown folder/profile is
+  // rejected, no path injection), tags stay admin-only, and the per-title size
+  // caps still apply downstream.
+  it('honors a non-admin\'s valid folder + quality choice (validated against live lists)', async () => {
     let capturedAddBody: Record<string, unknown> | null = null
     vi.stubGlobal(
       'fetch',
@@ -292,7 +293,8 @@ describe('radarr POST /api/v3/movie — non-admin add policy', () => {
       body: JSON.stringify({
         title: 'Hostile',
         tmdbId: 42,
-        // Caller-supplied admin-policy fields — must all be ignored.
+        // Valid folder + profile (both in the live lists) → honored. tags +
+        // minimumAvailability are not exposed controls → dropped.
         rootFolderPath: '/data/movies-mirror',
         qualityProfileId: 8,
         monitored: false,
@@ -304,8 +306,8 @@ describe('radarr POST /api/v3/movie — non-admin add policy', () => {
     expect(r.status).toBe(201)
     expect(capturedAddBody).not.toBeNull()
     const fwd = capturedAddBody as unknown as Record<string, unknown>
-    expect(fwd.rootFolderPath).toBe('/data/movies')
-    expect(fwd.qualityProfileId).toBe(7)
+    expect(fwd.rootFolderPath).toBe('/data/movies-mirror')
+    expect(fwd.qualityProfileId).toBe(8)
     expect(fwd.tags).toEqual([])
     // After the cap rewrite: monitored:false (searchForMovie:true was
     // server-supplied, so the existing cap path unmonitors and runs
@@ -315,6 +317,38 @@ describe('radarr POST /api/v3/movie — non-admin add policy', () => {
     // Identifying metadata preserved.
     expect(fwd.title).toBe('Hostile')
     expect(fwd.tmdbId).toBe(42)
+  })
+
+  it('rejects a non-admin rootFolderPath that is not a real upstream folder (400, no add)', async () => {
+    let addPosted = false
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(JSON.stringify([
+            { id: 1, path: '/data/movies', freeSpace: 500 * 1024 ** 3 },
+          ]), { status: 200 })
+        }
+        if (url.includes('/api/v3/qualityprofile')) {
+          return new Response(JSON.stringify([{ id: 7, name: 'Choose Me' }]), { status: 200 })
+        }
+        if (url.endsWith('/api/v3/movie') && init?.method === 'POST') {
+          addPosted = true
+          return new Response(JSON.stringify({ id: 1, title: 'X' }), { status: 201 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    const r = await appUnderTest().request('/api/v3/movie', {
+      method: 'POST',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'X', tmdbId: 7, rootFolderPath: '/etc/passwd', qualityProfileId: 7 }),
+    })
+    expect(r.status).toBe(400)
+    const body = (await r.json()) as { error: string }
+    expect(body.error).toBe('unknown_root_folder')
+    expect(addPosted).toBe(false) // never forwarded to Radarr
   })
 
   it('prefers a "Choose Me" profile over profiles[0] for non-admin adds', async () => {

@@ -7,6 +7,13 @@ import { useConfirm } from '../confirm/useConfirm'
 import { useSonarrProfiles, useSonarrRootFolders } from '../../lib/hooks/useSonarrLibrary'
 import { useRadarrProfiles, useRadarrRootFolders } from '../../lib/hooks/useRadarrLibrary'
 import { useLimits } from '../../lib/hooks/useLimits'
+import {
+  getReleaseView as getView,
+  setReleaseView as setView,
+  type ReleaseFilter,
+  type SortState,
+  type SortKey,
+} from '../../lib/releaseView'
 import './ArrAdvancedPanel.css'
 
 // --- Display helpers (humanized per the UX checklist). ---------------------
@@ -23,29 +30,10 @@ function humanAge(hours?: number): string {
   return `${Math.round(hours / 24)}d`
 }
 
-// Sort columns for the release browser. Default = seeders desc (torrent) or
-// quality weight desc — both surface the "best" release first, matching the
-// *arr convention the checklist cites.
-type SortKey = 'seeders' | 'quality' | 'size' | 'age'
-type SortState = { key: SortKey; dir: 'asc' | 'desc' }
-type ReleaseFilter = 'all' | 'season-pack' | 'not-season-pack' | 'english'
-
-// Persist the last sort + filter across modal opens (the checklist calls out
-// *arr's reset-every-time as a pain point). Module-scoped, per item-kind, so
-// it survives DetailModal unmount/remount within a session without a store.
-// Accessed via getView/setView functions so components never assign the
-// module variable directly (the react-hooks/immutability lint).
-type ReleaseView = { sort: SortState; filter: ReleaseFilter; regex: string }
-const releaseViews: Record<Kind, ReleaseView> = {
-  tv: { sort: { key: 'quality', dir: 'desc' }, filter: 'all', regex: '' },
-  movie: { sort: { key: 'seeders', dir: 'desc' }, filter: 'all', regex: '' },
-}
-function getView(kind: Kind): ReleaseView {
-  return releaseViews[kind]
-}
-function setView(kind: Kind, next: Partial<ReleaseView>): void {
-  releaseViews[kind] = { ...releaseViews[kind], ...next }
-}
+// Release-browser sort/filter view state (sort columns, language/season filter,
+// regex) lives in lib/releaseView so the Add dialogs' Language control shares
+// the same filter — imported (aliased) above as getView/setView. The filter
+// defaults to 'english' there (household wants English releases by default).
 
 // Admin-only Advanced power-user actions for an in-library Sonarr series or
 // Radarr movie. One component drives both apps via a small adapter so the TV

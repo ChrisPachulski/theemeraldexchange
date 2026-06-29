@@ -12,9 +12,11 @@ import {
   type RootFolderSpaceSnapshot,
 } from '../services/arrGrab.js'
 import {
+  addResolveStatus,
   gateRootFolderSpace,
   materializeFailurePayload,
   materializeNonAdminAddBody,
+  validateHonoredAddBody,
   type Release,
   type SpaceGateFailure,
 } from '../services/arrAdd.js'
@@ -411,6 +413,16 @@ const NON_ADMIN_RADARR_ALLOW: ReadonlyArray<string> = [
   'originalLanguage',
 ]
 
+// Honoured-policy allow-list: identifying metadata PLUS the controls the Add
+// dialog now exposes to every household member (monitored + searchForMovie via
+// addOptions). rootFolderPath + qualityProfileId are validated against the live
+// lists and stamped by validateHonoredAddBody; tags stay admin-only.
+const HONORED_RADARR_ALLOW: ReadonlyArray<string> = [
+  ...NON_ADMIN_RADARR_ALLOW,
+  'monitored',
+  'addOptions',
+]
+
 type RadarrAddBody = {
   rootFolderPath?: string
   qualityProfileId?: number
@@ -527,10 +539,29 @@ async function resolveMovieAddBody(
     return { ok: false, payload: { error: 'invalid_body' }, status: 400 }
   }
   const rawBody = parsedBody as RadarrAddBody
-  const adminSuppliedPolicy = session.role === 'admin' && rawBody.rootFolderPath !== undefined
-  if (adminSuppliedPolicy) {
+  // Admin sending policy → trusted, pass the full body through verbatim.
+  if (session.role === 'admin' && rawBody.rootFolderPath !== undefined) {
     return { ok: true, body: rawBody }
   }
+  // Non-admin sending policy: the Add dialog now shows EVERY household member
+  // the quality/folder/search controls, so honour their choices — but validate
+  // each field against the live upstream lists first (no path/profile
+  // injection). Per-title size caps are enforced downstream regardless.
+  if (rawBody.rootFolderPath !== undefined) {
+    const honored = await validateHonoredAddBody({
+      app: 'radarr',
+      raw: rawBody,
+      allowKeys: HONORED_RADARR_ALLOW,
+      loadFolders: radarrRootFolders,
+      fetchProfiles: () => radarrFetch('/api/v3/qualityprofile', { method: 'GET' }),
+      configuredFolderPath: env.defaultRadarrRootFolderPath,
+    })
+    if (!honored.ok) {
+      return { ok: false, payload: materializeFailurePayload(honored), status: addResolveStatus(honored.reason) }
+    }
+    return { ok: true, body: honored.body }
+  }
+  // No policy fields at all (legacy slim body / admin-preview) → curated defaults.
   const materialized = await materializeNonAdminMovieBody(rawBody)
   if (!materialized.ok) {
     return { ok: false, payload: materializeFailurePayload(materialized), status: 503 }

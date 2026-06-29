@@ -155,6 +155,133 @@ export async function materializeNonAdminAddBody<T extends Record<string, unknow
   return { ok: true, body: safe }
 }
 
+/**
+ * Honour a caller-supplied add body from a NON-admin, safely.
+ *
+ * The Add dialogs now show every household member the quality / folder /
+ * monitor controls (owner request), so their picks must be respected — but a
+ * non-admin is untrusted at the wire, so each policy value is validated against
+ * the LIVE upstream lists before it's honoured:
+ *   - rootFolderPath must match a real Sonarr/Radarr root folder (path is
+ *     compared normalised) — an unknown path is rejected, so a direct-POST
+ *     can't steer the add at an arbitrary filesystem location.
+ *   - qualityProfileId must be a real upstream profile id — an unknown id is
+ *     rejected, so it can't pin a profile that doesn't exist.
+ * A value the caller OMITS falls back to the curated default (same chain
+ * materializeNonAdminAddBody uses). Everything else (monitored, addOptions,
+ * seasons) is the caller's own choice and passes through; tags are forced empty
+ * (tag curation stays admin-only). Disk-size caps are enforced DOWNSTREAM by the
+ * free-space gate + cap-aware grab regardless of the chosen profile, so
+ * honouring a pick can never be used to flood the box.
+ */
+export async function validateHonoredAddBody<
+  T extends Record<string, unknown> & {
+    rootFolderPath?: unknown
+    qualityProfileId?: unknown
+  },
+>(opts: {
+  app: 'sonarr' | 'radarr'
+  raw: T
+  /** Caller fields that survive into the forwarded body (identifying metadata
+   *  + the now-exposed policy controls: monitored, addOptions, seasons…).
+   *  rootFolderPath / qualityProfileId are validated + stamped separately;
+   *  anything not listed (e.g. tags, minimumAvailability) is dropped, so a
+   *  non-admin direct-POST still can't set arbitrary policy. */
+  allowKeys: ReadonlyArray<string>
+  loadFolders: () => Promise<Array<{ path: string }>>
+  fetchProfiles: () => Promise<Response>
+  configuredFolderPath: string | null | undefined
+}): Promise<NonAdminMaterializeResult<T>> {
+  const [folderResult, profileRes] = await Promise.all([
+    opts
+      .loadFolders()
+      .then((folders) => ({ ok: true as const, folders }))
+      .catch((err) => {
+        log.error(`${opts.app} rootfolder lookup failed`, { error: err })
+        return { ok: false as const }
+      }),
+    opts.fetchProfiles(),
+  ])
+  if (!folderResult.ok) return { ok: false, reason: 'rootfolder_unreachable' }
+  if (!profileRes.ok) return { ok: false, reason: 'qualityprofile_unreachable' }
+  const profiles = (await profileRes.json()) as QualityProfile[]
+  const folders = folderResult.folders
+
+  // ----- root folder
+  const rawFolder = opts.raw.rootFolderPath
+  let folderPath: string
+  if (typeof rawFolder === 'string' && rawFolder.length > 0) {
+    const match = folders.find((f) => normalizePath(f.path) === normalizePath(rawFolder))
+    if (!match) {
+      return {
+        ok: false,
+        reason: 'unknown_root_folder',
+        expected_path: rawFolder,
+        available_paths: folders.map((f) => f.path),
+      }
+    }
+    folderPath = match.path
+  } else {
+    const fallback = opts.configuredFolderPath
+      ? folders.find((f) => normalizePath(f.path) === normalizePath(opts.configuredFolderPath!))
+      : folders[0]
+    if (!fallback) {
+      return {
+        ok: false,
+        reason: opts.configuredFolderPath ? 'default_root_folder_missing' : 'admin_must_configure_upstream',
+        expected_path: opts.configuredFolderPath ?? undefined,
+        available_paths: folders.map((f) => f.path),
+      }
+    }
+    folderPath = fallback.path
+  }
+
+  // ----- quality profile
+  const rawProfile = opts.raw.qualityProfileId
+  let profileId: number
+  if (typeof rawProfile === 'number') {
+    const match = profiles.find((p) => p.id === rawProfile)
+    if (!match) {
+      return {
+        ok: false,
+        reason: 'unknown_quality_profile',
+        available_names: profiles.map((p) => p.name).filter((n): n is string => typeof n === 'string'),
+      }
+    }
+    profileId = match.id
+  } else {
+    const fallback = pickProfile(profiles, env.defaultProfileName)
+    if (!fallback) {
+      return {
+        ok: false,
+        reason: 'default_quality_profile_missing',
+        expected_name: env.defaultProfileName,
+        available_names: profiles.map((p) => p.name).filter((n): n is string => typeof n === 'string'),
+      }
+    }
+    profileId = fallback.id
+  }
+
+  // Whitelist: copy only the allowed caller fields, then stamp the validated
+  // folder + profile and force tags empty (tag curation stays admin-only).
+  const safe = {} as T
+  for (const key of opts.allowKeys) {
+    if (opts.raw[key] !== undefined) safe[key as keyof T] = opts.raw[key] as T[keyof T]
+  }
+  const out = safe as Record<string, unknown>
+  out.rootFolderPath = folderPath
+  out.qualityProfileId = profileId
+  out.tags = []
+  return { ok: true, body: safe }
+}
+
+/** HTTP status for a validateHonoredAddBody failure: an unknown caller-supplied
+ *  folder/profile is a client error (400 — fix the request); an unreachable
+ *  upstream or a missing server-side default is a 503 (transient/config). */
+export function addResolveStatus(reason: string): 400 | 503 {
+  return reason.startsWith('unknown_') ? 400 : 503
+}
+
 /** Assemble the 503 payload for a failed materialization — identical in
  *  both routes before extraction. */
 export function materializeFailurePayload(m: {

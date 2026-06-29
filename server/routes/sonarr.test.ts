@@ -312,11 +312,11 @@ describe('sonarr POST /api/v3/series disk-space gate', () => {
 })
 
 describe('sonarr POST /api/v3/series — non-admin add policy', () => {
-  // Non-admin add requests can't dictate qualityProfileId, rootFolderPath,
-  // monitored, tags, seasons[].monitored, seasonFolder, monitor mode, etc.
-  // The server materializes those from upstream defaults so a direct-POST
-  // can't bypass the admin's curated profile or pin a different folder.
-  it('replaces a malicious rootFolderPath / qualityProfileId with server defaults', async () => {
+  // The Add dialog now shows every household member the quality/folder/monitor
+  // controls, so a non-admin's choices ARE honored — validated against the live
+  // upstream lists (unknown folder/profile rejected), with tags + languageProfileId
+  // stripped (not exposed controls) and the per-episode size caps still applied.
+  it('honors a non-admin\'s valid folder + quality + season choice (validated)', async () => {
     stub('/api/v3/rootfolder', [
       { id: 1, path: '/data/tv', freeSpace: 500 * 1024 ** 3 },
       { id: 2, path: '/data/tv-mirror', freeSpace: 500 * 1024 ** 3 },
@@ -351,7 +351,8 @@ describe('sonarr POST /api/v3/series — non-admin add policy', () => {
       body: JSON.stringify({
         title: 'Hostile',
         tvdbId: 42,
-        // Caller tries to pin admin-policy fields — all must be ignored.
+        // Valid folder + profile (both in the live lists) + season pick →
+        // honored. languageProfileId + tags are not exposed controls → dropped.
         rootFolderPath: '/data/tv-mirror',
         qualityProfileId: 22,
         monitored: false,
@@ -368,18 +369,46 @@ describe('sonarr POST /api/v3/series — non-admin add policy', () => {
     expect(r.status).toBe(201)
     expect(capturedAddBody).not.toBeNull()
     const fwd = capturedAddBody as unknown as Record<string, unknown>
-    // Server-derived from FIRST upstream entries, not caller-supplied.
-    expect(fwd.rootFolderPath).toBe('/data/tv')
-    expect(fwd.qualityProfileId).toBe(11)
+    // Caller's valid choices honored (validated against the live lists).
+    expect(fwd.rootFolderPath).toBe('/data/tv-mirror')
+    expect(fwd.qualityProfileId).toBe(22)
     expect(fwd.tags).toEqual([])
-    expect(fwd.monitored).toBe(true)
-    expect(fwd.seasonFolder).toBe(true)
-    // Caller-supplied admin fields scrubbed entirely (not just overridden).
+    expect(fwd.monitored).toBe(false)
+    expect(fwd.seasonFolder).toBe(false)
+    expect(fwd.seasons).toEqual([{ seasonNumber: 1, monitored: true }])
+    // Non-exposed fields scrubbed entirely (not an Add-dialog control).
     expect(fwd.languageProfileId).toBeUndefined()
-    expect(fwd.seasons).toBeUndefined()
     // Identifying metadata preserved.
     expect(fwd.title).toBe('Hostile')
     expect(fwd.tvdbId).toBe(42)
+  })
+
+  it('rejects a non-admin rootFolderPath that is not a real upstream folder (400, no add)', async () => {
+    let addPosted = false
+    const fetchSpy = globalThis.fetch as ReturnType<typeof vi.fn>
+    fetchSpy.mockImplementation(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (url.includes('/api/v3/rootfolder')) {
+        return new Response(JSON.stringify([{ id: 1, path: '/data/tv', freeSpace: 500 * 1024 ** 3 }]), { status: 200 })
+      }
+      if (url.includes('/api/v3/qualityprofile')) {
+        return new Response(JSON.stringify([{ id: 11, name: 'Choose Me' }]), { status: 200 })
+      }
+      if (url.endsWith('/api/v3/series') && init?.method === 'POST') {
+        addPosted = true
+        return new Response(JSON.stringify({ id: 1, title: 'X', seasons: [] }), { status: 201 })
+      }
+      return new Response('[]', { status: 200 })
+    })
+    const r = await appUnderTest().request('/api/v3/series', {
+      method: 'POST',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'X', tvdbId: 7, rootFolderPath: '/etc/passwd', qualityProfileId: 11 }),
+    })
+    expect(r.status).toBe(400)
+    const body = (await r.json()) as { error: string }
+    expect(body.error).toBe('unknown_root_folder')
+    expect(addPosted).toBe(false)
   })
 
   it('prefers a "Choose Me" profile over profiles[0] for non-admin adds', async () => {
