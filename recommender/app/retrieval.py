@@ -10,6 +10,7 @@ from __future__ import annotations
 import sqlite3
 import logging
 from dataclasses import dataclass
+from itertools import islice
 
 import numpy as np
 
@@ -40,6 +41,32 @@ AVAILABLE_TITLE_PREDICATE = """(t.release_date IS NULL OR t.release_date = '' OR
 VEC_KNN_MAX_K = 4096
 
 
+def bounded_exclusions(user: UserContext, pool_size: int) -> set[int]:
+    """Retrieval exclusion id-set, bounded so it can't starve the KNN pool.
+
+    HARD exclusions (owned / disliked / explicitly rejected) must never be
+    shown and are always kept. recently_shown is SOFT — it only avoids
+    short-term repeats. sqlite-vec caps the KNN at VEC_KNN_MAX_K, and a heavy
+    household's exclusions are all NEAR its taste centroid, so once they
+    approach that cap the nearest-neighbour fetch is made almost entirely of
+    excluded rows and the anti-join leaves ~nothing — the "recommender catching
+    its breath" empty-strip bug (observed at ~5.4k exclusions: 858 library +
+    751 dislikes + 3.7k recently-shown vs the 4096 cap). Trim the soft set so
+    the hard set plus KNN headroom for the requested pool always fits under the
+    cap; an occasional older repeat beats an empty strip.
+
+    islice over a set trims in arbitrary (not oldest-first) order — the only
+    cost is occasionally re-showing a still-recent title, not worth threading
+    recency ordering through UserContext for.
+    """
+    hard = user.library_ids | user.rejected_ids | user.disliked_ids
+    soft = user.recently_shown_ids - hard
+    keep_soft = max(0, VEC_KNN_MAX_K - max(pool_size * 3, 200) - len(hard))
+    if len(soft) > keep_soft:
+        soft = set(islice(soft, keep_soft))
+    return hard | soft
+
+
 @dataclass
 class CandidateBatch:
     candidates: list[Candidate]
@@ -61,9 +88,7 @@ def retrieve_candidates(
     sqlite-vec's MATCH operator needs a ``k`` parameter — we over-fetch by
     ~3x the requested pool size to leave room for the anti-join drops.
     """
-    excluded = user.library_ids | user.rejected_ids | user.recently_shown_ids | user.disliked_ids
-    # Clamp to VEC_KNN_MAX_K — sqlite-vec rejects a larger k outright (the bug
-    # that broke every /score once the excluded set passed ~4096).
+    excluded = bounded_exclusions(user, pool_size)
     overfetch = min(max(pool_size * 3, pool_size + len(excluded), 200), VEC_KNN_MAX_K)
 
     rows = conn.execute(
