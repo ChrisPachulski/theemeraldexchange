@@ -18,13 +18,33 @@ export function useIptvEpgNow(channelIds: number[]) {
 export function useIptvEpgGrid(
   fromIso: string,
   toIso: string,
-  opts: { categoryId?: number; q?: string; hasEpg?: boolean } = {},
+  opts: {
+    categoryId?: number
+    categoryIds?: number[]
+    q?: string
+    hasEpg?: boolean
+    limit?: number
+    enabled?: boolean
+  } = {},
 ) {
-  const { categoryId, q, hasEpg } = opts
+  const { categoryId, categoryIds, q, hasEpg, limit, enabled = true } = opts
   return useQuery({
-    queryKey: ['iptv', 'epg', 'grid', fromIso, toIso, categoryId ?? null, q ?? '', hasEpg ?? false],
-    queryFn: () => iptvApi.epgGrid(fromIso, toIso, opts),
+    queryKey: [
+      'iptv',
+      'epg',
+      'grid',
+      fromIso,
+      toIso,
+      categoryId ?? null,
+      (categoryIds ?? []).join(','),
+      q ?? '',
+      hasEpg ?? false,
+      limit ?? null,
+    ],
+    // `enabled` is a react-query knob, not a fetch param.
+    queryFn: () => iptvApi.epgGrid(fromIso, toIso, { categoryId, categoryIds, q, hasEpg, limit }),
     staleTime: 60_000,
+    enabled,
   })
 }
 
