@@ -92,6 +92,13 @@ export function epgChannelWindow(db: IptvDb, streamId: number, fromIso: string, 
 
 export interface EpgGridOptions {
   categoryId?: number
+  /**
+   * Restrict to a SET of categories (`category_id IN (...)`). Takes precedence
+   * over the single `categoryId`. Native clients use this to pull only the
+   * curated guide set (e.g. US + sports) in one request instead of the full
+   * ~17k-channel catalog — smaller payload, relevant grid.
+   */
+  categoryIds?: number[]
   /** Channel-name substring filter (case-insensitive LIKE). */
   q?: string
   /**
@@ -143,7 +150,10 @@ export function epgGrid(
 
   const where: string[] = []
   const args: Array<string | number> = []
-  if (opts.categoryId != null) {
+  if (opts.categoryIds && opts.categoryIds.length) {
+    where.push(`category_id IN (${opts.categoryIds.map(() => '?').join(',')})`)
+    args.push(...opts.categoryIds)
+  } else if (opts.categoryId != null) {
     where.push('category_id = ?')
     args.push(opts.categoryId)
   }

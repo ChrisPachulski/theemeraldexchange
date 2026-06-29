@@ -126,6 +126,19 @@ describe('epg queries', () => {
     expect(rows[0].programmes.map((row) => row.title)).toEqual(['Other Channel'])
   })
 
+  it('epgGrid filters by a set of categoryIds (IN-list, precedence over single)', () => {
+    // [1, 2] spans every seeded channel; [2] alone is just stream 20.
+    const both = epgGrid(db, '2026-05-24T10:00:00Z', '2026-05-24T13:00:00Z', { categoryIds: [1, 2] })
+    expect(both.map((r) => r.stream_id).sort()).toEqual([10, 20, 30])
+
+    const one = epgGrid(db, '2026-05-24T10:00:00Z', '2026-05-24T13:00:00Z', { categoryIds: [2] })
+    expect(one.map((r) => r.stream_id)).toEqual([20])
+
+    // categoryIds wins when both are supplied.
+    const wins = epgGrid(db, '2026-05-24T10:00:00Z', '2026-05-24T13:00:00Z', { categoryId: 1, categoryIds: [2] })
+    expect(wins.map((r) => r.stream_id)).toEqual([20])
+  })
+
   it('epgGrid hasEpgOnly drops channels without programmes in the window', () => {
     // C1 + C2 have programmes; "No EPG" (stream 30, null tvg-id) does not.
     const all = epgGrid(db, '2026-05-24T10:00:00Z', '2026-05-24T13:00:00Z')
