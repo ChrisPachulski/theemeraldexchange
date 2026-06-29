@@ -2,9 +2,15 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { radarr, type MovieSearchResult } from '../../lib/api/radarr'
 import { useRadarrProfiles, useRadarrRootFolders } from '../../lib/hooks/useRadarrLibrary'
-import { useAuth } from '../../lib/auth'
 import { useLimits } from '../../lib/hooks/useLimits'
 import { pickDefaultProfileId } from '../../lib/pickDefaultProfileId'
+import {
+  getReleaseView,
+  setReleaseView,
+  languageFromFilter,
+  filterForLanguage,
+  type AddLanguage,
+} from '../../lib/releaseView'
 import './AddSeriesModal.css'
 
 type Props = {
@@ -19,7 +25,6 @@ export function AddMovieModal({ movie, onClose, onAdded, onError }: Props) {
   const profiles = useRadarrProfiles()
   const folders = useRadarrRootFolders()
   const qc = useQueryClient()
-  const { isAdmin } = useAuth()
   const limits = useLimits()
   const maxGb = limits.data?.maxMovieGb ?? 10
 
@@ -27,6 +32,15 @@ export function AddMovieModal({ movie, onClose, onAdded, onError }: Props) {
   const [profileChoice, setProfileChoice] = useState<number | null>(null)
   const [folderChoice, setFolderChoice] = useState<string | null>(null)
   const [searchOnAdd, setSearchOnAdd] = useState(true)
+  // Language preference (defaults to English). Shared with the Advanced release
+  // browser's filter via releaseView, so picking a language here is the same
+  // setting the release browser uses. Not sent to Radarr (it has no add-time
+  // language field) — it drives release filtering.
+  const [language, setLanguage] = useState<AddLanguage>(() => languageFromFilter(getReleaseView('movie').filter))
+  const chooseLanguage = (l: AddLanguage) => {
+    setLanguage(l)
+    setReleaseView('movie', { filter: filterForLanguage(l, getReleaseView('movie').filter) })
+  }
   const [error, setError] = useState<string | null>(null)
 
   const profileId =
@@ -62,39 +76,23 @@ export function AddMovieModal({ movie, onClose, onAdded, onError }: Props) {
 
   if (!movie) return null
 
-  // Admins wait on the profile + folder dropdowns to populate before
-  // Add enables (those are the inputs they're choosing from). Non-
-  // admins don't see those controls, so gating on them would leave
-  // the button mysteriously disabled — the server fills in policy
-  // either way, so just gate on the pending mutation.
-  const canAdd = isAdmin
-    ? profileId !== null && rootFolder !== null && !mutation.isPending
-    : !mutation.isPending
+  // Everyone now picks quality/folder/search, so wait on the dropdowns to
+  // populate before enabling Add. The server validates a non-admin's choices
+  // against the live profile/folder lists (and the size caps still apply).
+  const canAdd = profileId !== null && rootFolder !== null && !mutation.isPending
 
   const handleAdd = () => {
     if (!canAdd) return
     setError(null)
-    // Non-admins can't configure quality / folder / monitor / search
-    // mode — the server materializes those from upstream defaults +
-    // the curated Choose Me profile (see materializeNonAdminMovieBody).
-    // Send only identifying fields so the modal payload visibly
-    // matches the server contract; admin path still passes the full
-    // policy body through verbatim.
-    const body = isAdmin
-      ? {
-          tmdbId: movie.tmdbId,
-          title: movie.title,
-          year: movie.year,
-          qualityProfileId: profileId,
-          rootFolderPath: rootFolder,
-          monitored: true,
-          addOptions: { searchForMovie: searchOnAdd },
-        }
-      : {
-          tmdbId: movie.tmdbId,
-          title: movie.title,
-          year: movie.year,
-        }
+    const body = {
+      tmdbId: movie.tmdbId,
+      title: movie.title,
+      year: movie.year,
+      qualityProfileId: profileId,
+      rootFolderPath: rootFolder,
+      monitored: true,
+      addOptions: { searchForMovie: searchOnAdd },
+    }
     mutation.mutate(body, {
       onSuccess: () => {
         onAdded?.(movie.title)
@@ -136,51 +134,57 @@ export function AddMovieModal({ movie, onClose, onAdded, onError }: Props) {
         </header>
 
         <div className="add-series__fields">
-          {isAdmin && (
-            <>
-              <label className="add-series__field">
-                <span className="add-series__label">Quality</span>
-                <select
-                  className="add-series__select"
-                  value={profileId ?? ''}
-                  onChange={(e) => setProfileChoice(Number(e.target.value))}
-                  disabled={!profiles.data}
-                >
-                  {profiles.data?.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
-              </label>
+          <label className="add-series__field">
+            <span className="add-series__label">Quality</span>
+            <select
+              className="add-series__select"
+              value={profileId ?? ''}
+              onChange={(e) => setProfileChoice(Number(e.target.value))}
+              disabled={!profiles.data}
+            >
+              {profiles.data?.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          </label>
 
-              <label className="add-series__field">
-                <span className="add-series__label">Folder</span>
-                <select
-                  className="add-series__select"
-                  value={rootFolder ?? ''}
-                  onChange={(e) => setFolderChoice(e.target.value)}
-                  disabled={!folders.data}
-                >
-                  {folders.data?.map((f) => (
-                    <option key={f.id} value={f.path}>{f.path}</option>
-                  ))}
-                </select>
-              </label>
-            </>
-          )}
+          <label className="add-series__field">
+            <span className="add-series__label">Folder</span>
+            <select
+              className="add-series__select"
+              value={rootFolder ?? ''}
+              onChange={(e) => setFolderChoice(e.target.value)}
+              disabled={!folders.data}
+            >
+              {folders.data?.map((f) => (
+                <option key={f.id} value={f.path}>{f.path}</option>
+              ))}
+            </select>
+          </label>
 
-          {isAdmin && (
-            <label className="add-series__field">
-              <span className="add-series__label">Search</span>
-              <select
-                className="add-series__select"
-                value={searchOnAdd ? 'now' : 'later'}
-                onChange={(e) => setSearchOnAdd(e.target.value === 'now')}
-              >
-                <option value="now">Start search now</option>
-                <option value="later">Just monitor</option>
-              </select>
-            </label>
-          )}
+          <label className="add-series__field">
+            <span className="add-series__label">Language</span>
+            <select
+              className="add-series__select"
+              value={language}
+              onChange={(e) => chooseLanguage(e.target.value as AddLanguage)}
+            >
+              <option value="english">English</option>
+              <option value="any">Any language</option>
+            </select>
+          </label>
+
+          <label className="add-series__field">
+            <span className="add-series__label">Search</span>
+            <select
+              className="add-series__select"
+              value={searchOnAdd ? 'now' : 'later'}
+              onChange={(e) => setSearchOnAdd(e.target.value === 'now')}
+            >
+              <option value="now">Start search now</option>
+              <option value="later">Just monitor</option>
+            </select>
+          </label>
         </div>
 
         {error && <p className="add-series__error" role="alert">{error}</p>}

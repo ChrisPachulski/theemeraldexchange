@@ -13,9 +13,11 @@ import {
   type RootFolderSpaceSnapshot,
 } from '../services/arrGrab.js'
 import {
+  addResolveStatus,
   gateRootFolderSpace,
   materializeFailurePayload,
   materializeNonAdminAddBody,
+  validateHonoredAddBody,
   type Release,
 } from '../services/arrAdd.js'
 import {
@@ -613,6 +615,18 @@ const NON_ADMIN_SONARR_ALLOW: ReadonlyArray<string> = [
   'originalLanguage',
 ]
 
+// Honoured-policy allow-list: identifying metadata PLUS the controls the Add
+// dialog now exposes to every household member (monitored, addOptions, the
+// season selection). rootFolderPath + qualityProfileId are validated against
+// the live lists and stamped by validateHonoredAddBody; tags stay admin-only.
+const HONORED_SONARR_ALLOW: ReadonlyArray<string> = [
+  ...NON_ADMIN_SONARR_ALLOW,
+  'monitored',
+  'addOptions',
+  'seasons',
+  'seasonFolder',
+]
+
 type SonarrAddBody = {
   rootFolderPath?: string
   qualityProfileId?: number
@@ -701,10 +715,29 @@ async function resolveSeriesAddBody(
     return { ok: false, payload: { error: 'invalid_body' }, status: 400 }
   }
   const rawBody = parsedBody as SonarrAddBody
-  const adminSuppliedPolicy = session.role === 'admin' && rawBody.rootFolderPath !== undefined
-  if (adminSuppliedPolicy) {
+  // Admin sending policy → trusted, pass the full body through verbatim.
+  if (session.role === 'admin' && rawBody.rootFolderPath !== undefined) {
     return { ok: true, body: rawBody }
   }
+  // Non-admin sending policy: the Add dialog now shows EVERY household member
+  // the quality/folder/monitor controls, so honour their choices — but validate
+  // each field against the live upstream lists first (no path/profile
+  // injection). Per-episode size caps are enforced downstream regardless.
+  if (rawBody.rootFolderPath !== undefined) {
+    const honored = await validateHonoredAddBody({
+      app: 'sonarr',
+      raw: rawBody,
+      allowKeys: HONORED_SONARR_ALLOW,
+      loadFolders: sonarrRootFolders,
+      fetchProfiles: () => sonarrFetch('/api/v3/qualityprofile', { method: 'GET' }),
+      configuredFolderPath: env.defaultSonarrRootFolderPath,
+    })
+    if (!honored.ok) {
+      return { ok: false, payload: materializeFailurePayload(honored), status: addResolveStatus(honored.reason) }
+    }
+    return { ok: true, body: honored.body }
+  }
+  // No policy fields at all (legacy slim body / admin-preview) → curated defaults.
   const materialized = await materializeNonAdminSeriesBody(rawBody)
   if (!materialized.ok) {
     return { ok: false, payload: materializeFailurePayload(materialized), status: 503 }

@@ -2,10 +2,16 @@ import { useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { sonarr, type SeriesSearchResult } from '../../lib/api/sonarr'
 import { useSonarrProfiles, useSonarrRootFolders } from '../../lib/hooks/useSonarrLibrary'
-import { useAuth } from '../../lib/auth'
 import { useLimits } from '../../lib/hooks/useLimits'
 import { useDialogDismiss } from '../../lib/useDialogDismiss'
 import { pickDefaultProfileId } from '../../lib/pickDefaultProfileId'
+import {
+  getReleaseView,
+  setReleaseView,
+  languageFromFilter,
+  filterForLanguage,
+  type AddLanguage,
+} from '../../lib/releaseView'
 import './AddSeriesModal.css'
 
 type Props = {
@@ -20,9 +26,16 @@ export function AddSeriesModal({ series, onClose, onAdded, onError }: Props) {
   const profiles = useSonarrProfiles()
   const folders = useSonarrRootFolders()
   const qc = useQueryClient()
-  const { isAdmin } = useAuth()
   const limits = useLimits()
   const maxTvGb = limits.data?.maxTvGbPerEpisode ?? 5
+  // Language preference (defaults to English). Shared with the Advanced release
+  // browser's filter via releaseView. Not sent to Sonarr (no add-time language
+  // field on v4) — it drives release filtering.
+  const [language, setLanguage] = useState<AddLanguage>(() => languageFromFilter(getReleaseView('tv').filter))
+  const chooseLanguage = (l: AddLanguage) => {
+    setLanguage(l)
+    setReleaseView('tv', { filter: filterForLanguage(l, getReleaseView('tv').filter) })
+  }
 
   // useDialogDismiss owns showModal()/close() + deferred unmount so the exit
   // transition can play. The dialog stays mounted while closing, so we render
@@ -102,53 +115,14 @@ export function AddSeriesModal({ series, onClose, onAdded, onError }: Props) {
 
   if (!rendered || !shownSeries) return null
 
-  // Admins wait on the profile + folder dropdowns to populate before
-  // Add enables. Non-admins don't see those controls — the server
-  // fills in policy from upstream defaults — so just gate on the
-  // pending mutation instead of leaving the button mysteriously
-  // disabled while hidden dropdowns load.
-  const canAdd = isAdmin
-    ? profileId !== null && rootFolder !== null && !mutation.isPending
-    : !mutation.isPending
+  // Everyone now picks quality/folder/monitor, so wait on the dropdowns to
+  // populate before enabling Add. The server validates a non-admin's choices
+  // against the live profile/folder lists (and the per-episode caps apply).
+  const canAdd = profileId !== null && rootFolder !== null && !mutation.isPending
 
   const handleAdd = () => {
     if (!canAdd) return
     setError(null)
-
-    // Non-admins can't configure quality / folder / monitor / seasons —
-    // the server materializes those from upstream defaults + the
-    // curated Choose Me profile (see materializeNonAdminSeriesBody).
-    // Send only identifying fields so the modal payload visibly
-    // matches the server contract; admin path still passes the full
-    // policy body through verbatim.
-    if (!isAdmin) {
-      mutation.mutate(
-        {
-          tvdbId: shownSeries.tvdbId,
-          // tmdbId is the recommender's catalog key — without it the
-          // server-side conversion mirror (sonarr.ts → postFeedback
-          // signal:'added') drops every TV add on the floor, leaving
-          // the optimizer to learn from dot-feedback alone. Sonarr's
-          // own add API uses tvdbId as primary; tmdbId is along for
-          // the recommender ride. NON_ADMIN_SONARR_ALLOW lets it
-          // through the materialize step.
-          ...(shownSeries.tmdbId !== undefined ? { tmdbId: shownSeries.tmdbId } : {}),
-          title: shownSeries.title,
-        },
-        {
-          onSuccess: () => {
-            onAdded?.(shownSeries.title)
-            onClose()
-          },
-          onError: (e) => {
-            const msg = e instanceof Error ? e.message : String(e)
-            setError(msg)
-            onError?.(msg)
-          },
-        },
-      )
-      return
-    }
 
     // Translate the dropdown value into Sonarr's add-series shape:
     //   "all"        → addOptions.monitor:'all', leave seasons[] alone.
@@ -187,7 +161,11 @@ export function AddSeriesModal({ series, onClose, onAdded, onError }: Props) {
         onAdded?.(shownSeries.title)
         onClose()
       },
-      onError: (e) => setError(e instanceof Error ? e.message : String(e)),
+      onError: (e) => {
+        const msg = e instanceof Error ? e.message : String(e)
+        setError(msg)
+        onError?.(msg)
+      },
     })
   }
 
@@ -219,59 +197,65 @@ export function AddSeriesModal({ series, onClose, onAdded, onError }: Props) {
         </header>
 
         <div className="add-series__fields">
-          {isAdmin && (
-            <>
-              <label className="add-series__field">
-                <span className="add-series__label">Quality</span>
-                <select
-                  className="add-series__select"
-                  value={profileId ?? ''}
-                  onChange={(e) => setProfileChoice(Number(e.target.value))}
-                  disabled={!profiles.data}
-                >
-                  {profiles.data?.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
-              </label>
+          <label className="add-series__field">
+            <span className="add-series__label">Quality</span>
+            <select
+              className="add-series__select"
+              value={profileId ?? ''}
+              onChange={(e) => setProfileChoice(Number(e.target.value))}
+              disabled={!profiles.data}
+            >
+              {profiles.data?.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          </label>
 
-              <label className="add-series__field">
-                <span className="add-series__label">Folder</span>
-                <select
-                  className="add-series__select"
-                  value={rootFolder ?? ''}
-                  onChange={(e) => setFolderChoice(e.target.value)}
-                  disabled={!folders.data}
-                >
-                  {folders.data?.map((f) => (
-                    <option key={f.id} value={f.path}>{f.path}</option>
-                  ))}
-                </select>
-              </label>
-            </>
-          )}
+          <label className="add-series__field">
+            <span className="add-series__label">Folder</span>
+            <select
+              className="add-series__select"
+              value={rootFolder ?? ''}
+              onChange={(e) => setFolderChoice(e.target.value)}
+              disabled={!folders.data}
+            >
+              {folders.data?.map((f) => (
+                <option key={f.id} value={f.path}>{f.path}</option>
+              ))}
+            </select>
+          </label>
 
-          {isAdmin && (
-            <label className="add-series__field">
-              <span className="add-series__label">Monitor</span>
-              <select
-                className="add-series__select"
-                value={monitor}
-                onChange={(e) => setMonitorChoice({ seriesId: shownSeries.tvdbId, value: e.target.value })}
-              >
-                {/* All Seasons stays pinned at the top so it's always
-                    visible in the menu, regardless of how many seasons
-                    the show has. The default-selected option is Season 1
-                    (or the lowest-numbered season if there is no S1). */}
-                <option value="all">All seasons</option>
-                {showSeasons.map((n) => (
-                  <option key={n} value={`season:${n}`}>
-                    Season {n}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
+          <label className="add-series__field">
+            <span className="add-series__label">Language</span>
+            <select
+              className="add-series__select"
+              value={language}
+              onChange={(e) => chooseLanguage(e.target.value as AddLanguage)}
+            >
+              <option value="english">English</option>
+              <option value="any">Any language</option>
+            </select>
+          </label>
+
+          <label className="add-series__field">
+            <span className="add-series__label">Monitor</span>
+            <select
+              className="add-series__select"
+              value={monitor}
+              onChange={(e) => setMonitorChoice({ seriesId: shownSeries.tvdbId, value: e.target.value })}
+            >
+              {/* All Seasons stays pinned at the top so it's always
+                  visible in the menu, regardless of how many seasons
+                  the show has. The default-selected option is Season 1
+                  (or the lowest-numbered season if there is no S1). */}
+              <option value="all">All seasons</option>
+              {showSeasons.map((n) => (
+                <option key={n} value={`season:${n}`}>
+                  Season {n}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
 
         {error && <p className="add-series__error" role="alert">{error}</p>}
