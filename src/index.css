@@ -293,6 +293,50 @@ div.iptv-tab__status--error p { margin: 0 0 .5rem; }
 .epg-guide__prog:not(.epg-guide__prog--static):hover { border-color:rgba(255,255,255,.3); }
 .epg-guide__prog:focus-visible { outline:2px solid #79d7ff; outline-offset:1px; }
 
+/* Guide wrapper: pinned now/next detail pane above, scrollable grid below. */
+.epg-guide-wrap { display:flex; flex-direction:column; height:calc(100dvh - 12.5rem); min-height:380px; gap:.5rem; }
+.epg-guide-wrap .epg-guide { flex:1; height:auto; min-height:0; }
+
+/* Pinned detail pane (Apple-guide now/next slab, hover/focus driven). */
+.epg-detail {
+  flex-shrink:0; min-height:96px;
+  background:#101814; border:1px solid rgba(255,255,255,.1); border-radius:6px;
+  padding:.55rem .8rem; display:flex; flex-direction:column; gap:.3rem;
+}
+.epg-detail--empty { flex-direction:row; align-items:center; justify-content:space-between; color:var(--text-dim,#9a9a9a); }
+.epg-detail__hint { font-size:.9rem; }
+.epg-detail__head { display:flex; align-items:center; gap:.5rem; }
+.epg-detail__chan-num { font-variant-numeric:tabular-nums; font-weight:700; color:#7fe0b0; font-size:.85rem; }
+.epg-detail__chan-name { font-weight:600; color:#cfeede; font-size:.9rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:40%; }
+.epg-detail__time { font-variant-numeric:tabular-nums; color:var(--text-dim,#9a9a9a); font-size:.8rem; }
+.epg-detail__live { color:#7fe0b0; font-size:.72rem; font-weight:700; letter-spacing:.06em; }
+.epg-detail__spacer { flex:1; }
+.epg-detail__jump {
+  flex-shrink:0; padding:.3rem .75rem; border-radius:999px; cursor:pointer; white-space:nowrap;
+  border:1px solid rgba(127,224,176,.4); background:rgba(29,92,64,.4); color:#7fe0b0; font-size:.8rem; font-weight:600;
+}
+.epg-detail__jump:hover { background:rgba(35,112,73,.55); }
+.epg-detail__title { font-size:1.02rem; font-weight:700; color:#f5f5f5; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.epg-detail__bar { height:4px; border-radius:2px; background:rgba(255,255,255,.12); overflow:hidden; }
+.epg-detail__bar > span { display:block; height:100%; background:#3ddc97; box-shadow:0 0 6px rgba(61,220,151,.6); }
+.epg-detail__desc {
+  margin:0; color:var(--text-dim,#bdbdbd); font-size:.84rem; line-height:1.3;
+  display:-webkit-box; -webkit-line-clamp:2; line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+}
+.epg-detail__next { display:flex; align-items:center; gap:.5rem; font-size:.8rem; color:var(--text-dim,#9a9a9a); min-width:0; }
+.epg-detail__next strong { color:#5bbf90; font-size:.68rem; letter-spacing:.1em; }
+.epg-detail__next-time { font-variant-numeric:tabular-nums; flex-shrink:0; }
+.epg-detail__next-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* Active (hovered/focused) cell highlight + a live emerald rail on the now block. */
+.epg-guide__chan--active { background:#22302a; }
+.epg-guide__prog--active { border-color:#79d7ff !important; box-shadow:0 0 0 1px rgba(121,215,255,.5); }
+.epg-guide__prog--live { padding-left:.65rem; }
+.epg-guide__prog--live::before {
+  content:''; position:absolute; left:0; top:6px; bottom:6px; width:3px; border-radius:2px;
+  background:#3ddc97; box-shadow:0 0 5px rgba(61,220,151,.7);
+}
+
 .iptv-series-detail { width:min(100%,960px); max-height:72vh; overflow:auto; color:#fff; padding:0 1rem 1rem; }
 .iptv-series-detail__season { margin-bottom:1rem; }
 .iptv-series-detail__episodes { list-style:none; padding:0; margin:0; display:grid; gap:.4rem; }
