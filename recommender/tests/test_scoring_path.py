@@ -248,6 +248,49 @@ def test_retrieval_clamps_knn_k_to_sqlite_vec_limit(conn) -> None:
     assert CAND_NEAR in ids, "real candidates still returned after k is clamped"
 
 
+def test_bounded_exclusions_trims_soft_recently_shown_to_fit_knn() -> None:
+    # Regression for the "recommender catching its breath" empty strip: a heavy
+    # household's recently_shown grew past the point where library + dislikes +
+    # rejects + recently_shown exceeded the sqlite-vec KNN cap, so the anti-join
+    # left nothing. recently_shown is SOFT and must be trimmed; the must-not-show
+    # HARD set (library / disliked / rejected) is always preserved.
+    from types import SimpleNamespace
+    from app.retrieval import bounded_exclusions, VEC_KNN_MAX_K
+
+    hard_lib = set(range(0, 858))
+    hard_dis = set(range(10_000, 10_751))
+    hard_rej = set(range(20_000, 20_050))
+    user = SimpleNamespace(
+        library_ids=hard_lib,
+        disliked_ids=hard_dis,
+        rejected_ids=hard_rej,
+        recently_shown_ids=set(range(100_000, 103_768)),  # 3768 soft, the bloat
+    )
+    pool_size = 500
+    excluded = bounded_exclusions(user, pool_size)
+    hard = hard_lib | hard_dis | hard_rej
+
+    assert hard <= excluded, "hard exclusions (owned/disliked/rejected) must never be dropped"
+    # Bounded so the clamped KNN (<= VEC_KNN_MAX_K) keeps headroom for the pool.
+    assert len(excluded) <= VEC_KNN_MAX_K - max(pool_size * 3, 200)
+    # The soft set WAS trimmed (not all 3768 recently-shown survived).
+    assert len(excluded) < len(hard) + len(user.recently_shown_ids)
+
+
+def test_bounded_exclusions_keeps_everything_when_it_already_fits() -> None:
+    # Light household: nothing is trimmed — recently_shown still suppresses repeats.
+    from types import SimpleNamespace
+    from app.retrieval import bounded_exclusions
+
+    user = SimpleNamespace(
+        library_ids={1, 2, 3},
+        disliked_ids={4},
+        rejected_ids={5},
+        recently_shown_ids={6, 7, 8},
+    )
+    assert bounded_exclusions(user, pool_size=50) == {1, 2, 3, 4, 5, 6, 7, 8}
+
+
 def test_cold_start_pool_orders_by_popularity_and_excludes(conn) -> None:
     conn.execute("UPDATE titles SET popularity = 99 WHERE tmdb_id = ?", (CAND_FAR,))
     ctx = _ctx(conn)
