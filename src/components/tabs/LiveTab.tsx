@@ -10,6 +10,13 @@ import { useIptvFavoriteSet, useToggleIptvFavorite } from '../../lib/hooks/useIp
 import { useReportPosition } from '../../lib/hooks/useIptvHistory'
 import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useModalA11y } from '../../lib/hooks/useModalA11y'
+import {
+  effectiveGuideCategoryIds,
+  formatGuideCategoryCsv,
+  readGuideCategoryCsv,
+  writeGuideCategoryCsv,
+} from '../../lib/guideCategories'
+import type { CategoryDto } from '../../lib/api/iptv'
 import { ConcurrencyLimitModal } from '../iptv/ConcurrencyLimitModal'
 import { ConnectionsWidget } from '../iptv/ConnectionsWidget'
 import {
@@ -48,6 +55,10 @@ export default function LiveTab() {
   const [concurrencyError, setConcurrencyError] = useState<ConcurrencyLimitPayload | null>(null)
   const [pendingPlay, setPendingPlay] = useState<(() => Promise<void>) | null>(null)
   const [exportMsg, setExportMsg] = useState<string | null>(null)
+  // Persisted curated guide-category selection (CSV of ids). Empty = the US+sports
+  // default. Held in state so toggling re-renders the guide immediately.
+  const [guideCsv, setGuideCsv] = useState(() => readGuideCategoryCsv())
+  const [showGuideCats, setShowGuideCats] = useState(false)
   const debounced = useDebounced(q, 250)
   const cats = useIptvCategories('live')
   const limit = 100
@@ -74,6 +85,16 @@ export default function LiveTab() {
   }, [playing?.grant.sessionId])
 
   const sortedCats = useMemo(() => (cats.data ?? []).slice().sort((a, b) => a.name.localeCompare(b.name)), [cats.data])
+  // The category set the default ("All") guide loads — curated to US+sports unless
+  // the viewer customized it. A single category pick from the dropdown overrides it.
+  const guideIds = useMemo(
+    () => effectiveGuideCategoryIds(guideCsv, cats.data ?? []),
+    [guideCsv, cats.data],
+  )
+  const saveGuideCsv = (csv: string) => {
+    setGuideCsv(csv)
+    writeGuideCategoryCsv(csv)
+  }
   const visibleChannels = useMemo(() => list.data?.items ?? [], [list.data])
   const visibleIds = useMemo(() => visibleChannels.map((c) => c.stream_id), [visibleChannels])
   const nowEpg = useIptvEpgNow(visibleIds)
@@ -144,6 +165,8 @@ export default function LiveTab() {
       {view === 'guide' ? (
         <EpgGuide
           categoryId={categoryId}
+          categoryIds={guideIds}
+          categoriesLoaded={!!cats.data}
           q={debounced}
           onPlayLive={(channel) => void playChannel(channel)}
           onPlayCatchup={(channel, programme) => void playCatchup(channel, programme).catch(() => undefined)}
@@ -271,6 +294,16 @@ export default function LiveTab() {
             <option key={c.category_id} value={c.category_id}>{c.name}</option>
           ))}
         </select>
+        {view === 'guide' && categoryId === undefined && (
+          <button
+            type="button"
+            className="iptv-tab__guide-cats"
+            onClick={() => setShowGuideCats(true)}
+            title="Choose which categories the guide shows"
+          >
+            Guide categories
+          </button>
+        )}
         <button type="button" onClick={async () => {
           // LOW-17: no blocking alert(); surface success/failure inline so a
           // failed generatePlaylist() isn't a silent unhandled rejection.
@@ -288,6 +321,16 @@ export default function LiveTab() {
         )}
         <ConnectionsWidget />
       </footer>
+
+      {showGuideCats && (
+        <GuideCategorySettings
+          categories={sortedCats}
+          allCategories={cats.data ?? []}
+          csv={guideCsv}
+          onChange={saveGuideCsv}
+          onClose={() => setShowGuideCats(false)}
+        />
+      )}
 
       {guideFor && (
         <ChannelGuide
@@ -357,6 +400,77 @@ function PlayerModal({
         </button>
       </div>
       <IptvPlayer grant={playing.grant} autoPlay onPositionUpdate={onPositionUpdate} />
+    </div>
+  )
+}
+
+// The Guide-categories picker — a port of the Apple app's SettingsScreen "Guide
+// channels" section. Choosing fewer categories means a smaller, faster guide;
+// emptying the selection reverts to the US+sports default rather than blanking it.
+function GuideCategorySettings({
+  categories,
+  allCategories,
+  csv,
+  onChange,
+  onClose,
+}: {
+  categories: CategoryDto[] // display order (sorted by name)
+  allCategories: CategoryDto[] // catalog order — for a stable CSV
+  csv: string
+  onChange: (csv: string) => void
+  onClose: () => void
+}) {
+  const modalRef = useModalA11y<HTMLDivElement>(onClose)
+  const selected = new Set(effectiveGuideCategoryIds(csv, allCategories))
+
+  const toggle = (id: number) => {
+    const ids = new Set(effectiveGuideCategoryIds(csv, allCategories))
+    if (ids.has(id)) ids.delete(id)
+    else ids.add(id)
+    // Preserve catalog order for a stable, readable CSV.
+    const ordered = allCategories.map((c) => c.category_id).filter((x) => ids.has(x))
+    onChange(formatGuideCategoryCsv(ordered))
+  }
+
+  return (
+    <div
+      ref={modalRef}
+      className="iptv-guide-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Guide categories"
+      tabIndex={-1}
+    >
+      <div className="iptv-guide-modal__panel">
+        <header className="iptv-guide-modal__header">
+          <h2>Guide categories</h2>
+          <button className="iptv-guide-modal__close" type="button" onClick={onClose} aria-label="Close">
+            ×
+          </button>
+        </header>
+
+        <p className="iptv-guide-modal__status">
+          Categories shown in the guide. Fewer categories means a smaller, faster guide.
+          Default: US channels + Sports.
+        </p>
+        <button type="button" className="iptv-guide-cats__reset" onClick={() => onChange('')}>
+          Reset to default (US + Sports)
+        </button>
+
+        <ul className="iptv-guide-cats__list">
+          {categories.map((cat) => {
+            const isOn = selected.has(cat.category_id)
+            return (
+              <li key={cat.category_id} className="iptv-guide-cats__item">
+                <label>
+                  <input type="checkbox" checked={isOn} onChange={() => toggle(cat.category_id)} />
+                  <span>{cat.name}</span>
+                </label>
+              </li>
+            )
+          })}
+        </ul>
+      </div>
     </div>
   )
 }

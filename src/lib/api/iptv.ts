@@ -312,14 +312,18 @@ export const iptvApi = Object.assign({
   epgGrid: (
     fromIso: string,
     toIso: string,
-    opts: { categoryId?: number; q?: string; hasEpg?: boolean } = {},
+    opts: { categoryId?: number; categoryIds?: number[]; q?: string; hasEpg?: boolean; limit?: number } = {},
   ) => {
     // Build params conditionally — apiUrl stringifies undefined into the literal
     // "undefined", which the backend would reject as an invalid category.
     const params: Record<string, string | number> = { from: fromIso, to: toIso }
-    if (opts.categoryId != null) params.categoryId = opts.categoryId
+    // categoryIds (a curated SET, e.g. US + sports) takes precedence over a
+    // single categoryId — same as the backend's epgGrid().
+    if (opts.categoryIds && opts.categoryIds.length) params.categoryIds = opts.categoryIds.join(',')
+    else if (opts.categoryId != null) params.categoryId = opts.categoryId
     if (opts.q && opts.q.trim()) params.q = opts.q.trim()
     if (opts.hasEpg) params.hasEpg = '1'
+    if (opts.limit != null) params.limit = opts.limit
     return get<EpgGridDto[]>('/epg/grid', params)
   },
   grantLive: (streamId: string, opts?: { avplayer?: boolean }) => {
