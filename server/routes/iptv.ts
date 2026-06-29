@@ -345,6 +345,12 @@ iptv.get('/epg/grid', requireAuth, async (c) => {
   if (categoryId != null && (!Number.isInteger(categoryId) || categoryId <= 0)) {
     return c.json({ error: 'invalid_category' }, 400)
   }
+  // Multi-category filter (e.g. the tvOS guide's curated US+sports set). CSV of
+  // ids; drop anything non-positive, cap the count so the IN-list can't blow up.
+  const rawCategoryIds = c.req.query('categoryIds')
+  const categoryIds = rawCategoryIds
+    ? rawCategoryIds.split(',').map((s) => Number(s.trim())).filter((n) => Number.isInteger(n) && n > 0).slice(0, 500)
+    : undefined
   const rawQ = c.req.query('q')
   const q = rawQ && rawQ.trim() ? rawQ.trim().slice(0, 100) : undefined
   const hasEpgOnly = c.req.query('hasEpg') === '1' || c.req.query('hasEpg') === 'true'
@@ -356,7 +362,7 @@ iptv.get('/epg/grid', requireAuth, async (c) => {
   if (limit != null && (!Number.isInteger(limit) || limit <= 0)) {
     return c.json({ error: 'invalid_limit' }, 400)
   }
-  const json = JSON.stringify(epgGrid(iptvDb(), from, to, { categoryId, q, hasEpgOnly, limit }))
+  const json = JSON.stringify(epgGrid(iptvDb(), from, to, { categoryId, categoryIds, q, hasEpgOnly, limit }))
   // The full has-EPG guide is ~28 MB of JSON (~14k channels x ~7 programmes).
   // gzip it (~12x → ~2 MB) so the client isn't pulling tens of MB on every
   // 30-min window refetch. Done inline (not as global middleware) so the
