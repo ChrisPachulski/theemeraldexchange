@@ -51,6 +51,45 @@ function programmeDurationMin(p: EpgProgrammeDto): number {
   return Math.max(1, Math.round((stop - start) / 60_000))
 }
 
+const ms = (iso: string): number => new Date(iso).getTime()
+
+// The programme airing right now on a channel (for the detail pane when a whole
+// channel row, rather than a single block, is hovered).
+function currentProgramme(row: EpgGridDto, nowMs: number): EpgProgrammeDto | null {
+  return (
+    row.programmes.find((p) => {
+      const s = ms(p.start_utc)
+      const e = ms(p.stop_utc)
+      return Number.isFinite(s) && Number.isFinite(e) && s <= nowMs && e > nowMs
+    }) ?? null
+  )
+}
+
+// The next programme to start after a given one (for the pane's "NEXT" line).
+function nextProgramme(row: EpgGridDto, afterIso: string): EpgProgrammeDto | null {
+  const after = ms(afterIso)
+  let best: EpgProgrammeDto | null = null
+  let bestMs = Infinity
+  for (const p of row.programmes) {
+    const s = ms(p.start_utc)
+    if (Number.isFinite(s) && s > after && s < bestMs) {
+      best = p
+      bestMs = s
+    }
+  }
+  return best
+}
+
+// How far into a live programme we are now, 0..1 (null if not yet started/bad data).
+function progressFraction(p: EpgProgrammeDto, nowMs: number): number | null {
+  const s = ms(p.start_utc)
+  const e = ms(p.stop_utc)
+  if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) return null
+  return clamp((nowMs - s) / (e - s), 0, 1)
+}
+
+type ActiveCell = { streamId: number; progIndex: number | null }
+
 export default function EpgGuide({
   categoryId,
   categoryIds,
@@ -117,6 +156,20 @@ export default function EpgGuide({
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportH, setViewportH] = useState(600)
+
+  // The cell the pointer/keyboard is over — drives the pinned now/next detail
+  // pane (the Channels-DVR / Apple-guide pattern) so the cells stay compact and
+  // never balloon to reveal a synopsis.
+  const [active, setActive] = useState<ActiveCell | null>(null)
+  const activeDetail = useMemo(() => {
+    if (!active) return null
+    const row = rows.find((r) => r.stream_id === active.streamId)
+    if (!row) return null
+    const prog =
+      active.progIndex != null ? row.programmes[active.progIndex] ?? null : currentProgramme(row, nowMs)
+    const live = prog ? ms(prog.start_utc) <= nowMs && ms(prog.stop_utc) > nowMs : false
+    return { row, prog, live }
+  }, [active, rows, nowMs])
   // The scroll container only mounts AFTER data loads — the loading/empty/error
   // states render a <p> instead, so on first mount scrollRef.current is null.
   // With [] deps this effect ran exactly once (during "Loading…"), bailed on the
@@ -158,6 +211,14 @@ export default function EpgGuide({
 
   const nowOffsetPx = clamp((nowMs - windowStartMs) / 60_000 * PX_PER_MIN, 0, trackWidth)
   const contentWidth = CHANNEL_COL + trackWidth
+
+  // Re-scroll the track so the now-line sits ~12% from the left (a little history
+  // visible). The channel column is sticky, so scrollLeft is measured in track px.
+  const jumpToLive = () => {
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollTo({ left: Math.max(0, nowOffsetPx - el.clientWidth * 0.12), behavior: 'smooth' })
+  }
   // Spacer-based windowing: the rows stay in normal flow (so the sticky channel
   // column actually pins against the scroll container — a sticky child of an
   // absolutely-positioned row would resolve against the row, not the viewport),
@@ -181,7 +242,9 @@ export default function EpgGuide({
   }
 
   return (
-    <div className="epg-guide" ref={scrollRef} role="grid" aria-label="Programme guide">
+    <div className="epg-guide-wrap">
+      <GuideDetailPane detail={activeDetail} nowMs={nowMs} onJumpToLive={jumpToLive} />
+      <div className="epg-guide" ref={scrollRef} role="grid" aria-label="Programme guide">
       <div className="epg-guide__content" style={{ width: contentWidth }}>
         {/* sticky header: top-left corner + scrollable time axis */}
         <div className="epg-guide__header" style={{ height: HEADER_H }}>
@@ -213,6 +276,8 @@ export default function EpgGuide({
               row={row}
               windowStartMs={windowStartMs}
               nowMs={nowMs}
+              active={active}
+              onActivate={setActive}
               onPlayLive={onPlayLive}
               onPlayCatchup={onPlayCatchup}
             />
@@ -220,6 +285,69 @@ export default function EpgGuide({
           <div style={{ height: bottomPad }} aria-hidden />
         </div>
       </div>
+      </div>
+    </div>
+  )
+}
+
+// Pinned now/next detail above the grid. Mirrors the Apple guide's focus-driven
+// pane: hovering a programme (or a channel row) fills it with the show, time,
+// live progress, synopsis, and what's NEXT — so the grid cells stay compact.
+function GuideDetailPane({
+  detail,
+  nowMs,
+  onJumpToLive,
+}: {
+  detail: { row: EpgGridDto; prog: EpgProgrammeDto | null; live: boolean } | null
+  nowMs: number
+  onJumpToLive: () => void
+}) {
+  const jump = (
+    <button type="button" className="epg-detail__jump" onClick={onJumpToLive}>
+      Jump to live
+    </button>
+  )
+  if (!detail || !detail.prog) {
+    return (
+      <div className="epg-detail epg-detail--empty">
+        <span className="epg-detail__hint">Hover a programme to see what’s on.</span>
+        {jump}
+      </div>
+    )
+  }
+  const { row, prog, live } = detail
+  const frac = live ? progressFraction(prog, nowMs) : null
+  const next = nextProgramme(row, prog.start_utc)
+  const startMs = ms(prog.start_utc)
+  const stopMs = ms(prog.stop_utc)
+  return (
+    <div className="epg-detail">
+      <div className="epg-detail__head">
+        <span className="epg-detail__chan-num">{row.num}</span>
+        <span className="epg-detail__chan-name">{row.name}</span>
+        {Number.isFinite(startMs) && Number.isFinite(stopMs) && (
+          <span className="epg-detail__time">
+            {formatTick(startMs)}–{formatTick(stopMs)}
+          </span>
+        )}
+        {live && <span className="epg-detail__live">● LIVE</span>}
+        <span className="epg-detail__spacer" />
+        {jump}
+      </div>
+      <div className="epg-detail__title">{prog.title ?? '—'}</div>
+      {frac != null && (
+        <div className="epg-detail__bar" aria-hidden>
+          <span style={{ width: `${Math.round(frac * 100)}%` }} />
+        </div>
+      )}
+      <p className="epg-detail__desc">{prog.description?.trim() || 'No description available.'}</p>
+      {next && Number.isFinite(ms(next.start_utc)) && (
+        <div className="epg-detail__next">
+          <strong>NEXT</strong>
+          <span className="epg-detail__next-time">{formatTick(ms(next.start_utc))}</span>
+          <span className="epg-detail__next-title">{next.title ?? '—'}</span>
+        </div>
+      )}
     </div>
   )
 }
@@ -228,12 +356,16 @@ function GuideRow({
   row,
   windowStartMs,
   nowMs,
+  active,
+  onActivate,
   onPlayLive,
   onPlayCatchup,
 }: {
   row: EpgGridDto
   windowStartMs: number
   nowMs: number
+  active: ActiveCell | null
+  onActivate: (cell: ActiveCell) => void
   onPlayLive: (channel: { stream_id: number; name: string }) => void
   onPlayCatchup: (channel: GuideChannel, programme: EpgProgrammeDto) => void
 }) {
@@ -244,14 +376,17 @@ function GuideRow({
     canCatchup: row.tv_archive === 1,
   }
   const archiveCutoff = nowMs - channel.archiveDays * 24 * 3600_000
+  const rowActive = active?.streamId === row.stream_id
 
   return (
     <div className="epg-guide__row" style={{ height: ROW_H, width: CHANNEL_COL + trackWidth }}>
       <button
         type="button"
-        className="epg-guide__chan"
+        className={'epg-guide__chan' + (rowActive ? ' epg-guide__chan--active' : '')}
         style={{ width: CHANNEL_COL, height: ROW_H }}
         onClick={() => onPlayLive({ stream_id: row.stream_id, name: row.name })}
+        onMouseEnter={() => onActivate({ streamId: row.stream_id, progIndex: null })}
+        onFocus={() => onActivate({ streamId: row.stream_id, progIndex: null })}
         title={`Watch ${row.name} live`}
       >
         <span className="epg-guide__chan-num">{row.num}</span>
@@ -290,11 +425,18 @@ function GuideRow({
                 'epg-guide__prog' +
                 (isLive ? ' epg-guide__prog--live' : '') +
                 (isPast ? ' epg-guide__prog--past' : '') +
-                (interactive ? '' : ' epg-guide__prog--static')
+                (interactive ? '' : ' epg-guide__prog--static') +
+                (rowActive && active?.progIndex === i ? ' epg-guide__prog--active' : '')
               }
               style={{ left, width }}
-              disabled={!interactive}
+              // aria-disabled (not `disabled`) for non-interactive blocks: a truly
+              // disabled button fires no hover/focus, which would stop the detail
+              // pane from updating when you move over a past programme. onClick
+              // already no-ops unless live/catch-up.
+              aria-disabled={!interactive}
               title={`${p.title ?? 'Programme'} · ${programmeDurationMin(p)} min${canCatchup ? ' · catch up' : ''}`}
+              onMouseEnter={() => onActivate({ streamId: row.stream_id, progIndex: i })}
+              onFocus={() => onActivate({ streamId: row.stream_id, progIndex: i })}
               onClick={() => {
                 if (isLive) onPlayLive({ stream_id: row.stream_id, name: row.name })
                 else if (canCatchup) onPlayCatchup(channel, p)
