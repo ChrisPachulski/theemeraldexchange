@@ -519,7 +519,10 @@ fn plan_audio(file: &MediaFileRow, caps: &ClientCaps) -> AudioOp {
     // stereo gets the higher DOWNMIX bitrate so the fold-down isn't smeared.
     let tracks = file.audio_tracks();
     // The track the `-map` will select (English-preferred), not blindly the first.
-    let Some(track) = tracks.get(preferred_audio_index(file)).or_else(|| tracks.first()) else {
+    let Some(track) = tracks
+        .get(preferred_audio_index(file))
+        .or_else(|| tracks.first())
+    else {
         // No audio at all: nothing to encode; ffmpeg_args guards on -map, so a
         // copy op is a harmless no-op.
         return AudioOp::Copy;
@@ -613,35 +616,63 @@ mod tests {
         // "Hoppers": track 0 is Italian (flagged DEFAULT upstream), track 1 is
         // English. Mapping 0:a:0 blindly played Italian; we must select English
         // (audio-relative index 1), matching Plex/Jellyfin.
-        let f = file(Some("mkv"), Some("h264"), Some(1080), None,
-                     vec![audio_lang(0, Some("ita")), audio_lang(1, Some("eng"))], vec![]);
+        let f = file(
+            Some("mkv"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![audio_lang(0, Some("ita")), audio_lang(1, Some("eng"))],
+            vec![],
+        );
         assert_eq!(preferred_audio_index(&f), 1);
     }
 
     #[test]
     fn preferred_audio_index_matches_regional_and_named_english_but_not_bengali() {
-        let regional = file(Some("mkv"), Some("h264"), Some(1080), None,
-                            vec![audio_lang(0, Some("fra")), audio_lang(1, Some("en-US"))], vec![]);
+        let regional = file(
+            Some("mkv"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![audio_lang(0, Some("fra")), audio_lang(1, Some("en-US"))],
+            vec![],
+        );
         assert_eq!(preferred_audio_index(&regional), 1);
         // No English → leave the file's first track. "bn" must not read as English.
-        let none = file(Some("mkv"), Some("h264"), Some(1080), None,
-                        vec![audio_lang(0, Some("ita")), audio_lang(1, Some("bn"))], vec![]);
+        let none = file(
+            Some("mkv"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![audio_lang(0, Some("ita")), audio_lang(1, Some("bn"))],
+            vec![],
+        );
         assert_eq!(preferred_audio_index(&none), 0);
     }
 
     #[test]
     fn transcode_plan_maps_the_english_audio_track() {
         // The plan carries the English index and the ffmpeg args map 0:a:1.
-        let f = file(Some("mkv"), Some("av1"), Some(1080), None,
-                     vec![audio_lang(0, Some("ita")), audio_lang(1, Some("eng"))], vec![]);
+        let f = file(
+            Some("mkv"),
+            Some("av1"),
+            Some(1080),
+            None,
+            vec![audio_lang(0, Some("ita")), audio_lang(1, Some("eng"))],
+            vec![],
+        );
         let plan = plan_transcode(&f, &caps_h264_1080_sdr());
         match &plan {
             TranscodePlan::Transcode { audio_index, .. } => assert_eq!(*audio_index, 1),
             other => panic!("expected transcode, got {other:?}"),
         }
         let args =
-            crate::args::ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, crate::args::HwEncoder::Cpu).join(" ");
-        assert!(args.contains("-map 0:a:1?"), "english track not mapped; args: {args}");
+            crate::args::ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, crate::args::HwEncoder::Cpu)
+                .join(" ");
+        assert!(
+            args.contains("-map 0:a:1?"),
+            "english track not mapped; args: {args}"
+        );
     }
 
     /// Stereo AAC — the browser-safe, copyable baseline.
