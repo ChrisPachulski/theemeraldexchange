@@ -257,15 +257,16 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
         start_number,
         source_avg_kbps,
     } = *spec;
-    let (video, audio, subtitle, segment_format) = match plan {
+    let (video, audio, subtitle, segment_format, audio_index) = match plan {
         TranscodePlan::DirectPlay { .. } => return Vec::new(),
         TranscodePlan::Transcode {
             video,
             audio,
             subtitle,
             segment_format,
+            audio_index,
             ..
-        } => (video, audio, subtitle, *segment_format),
+        } => (video, audio, subtitle, *segment_format, *audio_index),
     };
     let fmp4 = segment_format == SegmentFormat::Fmp4;
 
@@ -368,10 +369,12 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
     a.push(input.to_string());
 
     // ── Stream mapping ─────────────────────────────────────────────────────
+    // Audio map is the English-preferred track (see `plan::preferred_audio_index`)
+    // — not blindly `0:a:0`, which played a DEFAULT-flagged foreign track.
     push(&mut a, "-map");
     push(&mut a, "0:v:0");
     push(&mut a, "-map");
-    push(&mut a, "0:a:0?");
+    a.push(format!("0:a:{audio_index}?"));
 
     // ── Video ────────────────────────────────────────────────────────────
     match video {
@@ -851,6 +854,7 @@ mod tests {
             audio,
             subtitle,
             segment_format: SegmentFormat::MpegTs,
+            audio_index: 0,
             reason: "test".into(),
         }
     }
@@ -1633,6 +1637,7 @@ mod tests {
             audio: AudioOp::Copy,
             subtitle: SubtitleOp::None,
             segment_format: SegmentFormat::Fmp4,
+            audio_index: 0,
             reason: "container mkv not supported by client".into(),
         };
         let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Vaapi).join(" ");
