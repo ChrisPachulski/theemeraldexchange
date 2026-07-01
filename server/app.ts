@@ -26,6 +26,7 @@ import { suggestions } from './routes/suggestions.js'
 import { settings } from './routes/settings.js'
 import { feedback } from './routes/feedback.js'
 import { watchlist } from './routes/watchlist.js'
+import { syncplay } from './routes/syncplay.js'
 import { policy, adminPolicy } from './routes/policy.js'
 import { usage } from './routes/usage.js'
 import { recommenderEvents } from './routes/recommenderEvents.js'
@@ -236,6 +237,9 @@ app.route('/api/feedback', feedback)
 // Per-user watchlist (admin-free, sub-scoped) — each member's private
 // "want to watch" list. Always-on, so no /api/limits capability flag.
 app.route('/api/watchlist', watchlist)
+// SyncPlay watch-together groups: shared transport state (play/pause/seek)
+// that member clients poll to stay in lockstep. In-memory, ephemeral.
+app.route('/api/syncplay', syncplay)
 // Per-user policy read (admin-free, sub-scoped) — the caller's own
 // parental-control/section policy. Always-on, so no /api/limits flag.
 app.route('/api/policy', policy)
