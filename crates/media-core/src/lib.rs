@@ -122,7 +122,13 @@ pub async fn run_guarded_scan(state: &AppState, trigger: &str) -> bool {
     // Music library scan (independent of the video roots + prune above; reuses
     // the same `scanning` guard so it never overlaps a manual scan). A no-op
     // when MUSIC_LIBRARY_PATHS is unset. Best-effort — never aborts the loop.
-    match scanner::scan_music_isolated(state.db.clone(), state.config.music_roots.clone()).await {
+    match scanner::scan_music_isolated(
+        state.db.clone(),
+        state.config.music_roots.clone(),
+        state.config.artwork_dir.clone(),
+    )
+    .await
+    {
         Ok(report) => tracing::info!(
             trigger,
             files_seen = report.files_seen,

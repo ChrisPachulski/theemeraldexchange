@@ -130,6 +130,9 @@ pub struct Config {
     /// Where downloaded/generated sidecar subtitles live
     /// (`MEDIA_SUBTITLES_DIR`; default `<db dir>/subtitles`).
     pub subtitles_dir: PathBuf,
+    /// Where scan-extracted album art lives (`<db dir>/artwork`; folder art
+    /// found beside the tracks is referenced in place instead).
+    pub artwork_dir: PathBuf,
 }
 
 impl Config {
@@ -211,6 +214,7 @@ impl Config {
             .filter(|s| !s.is_empty())
             .map(PathBuf::from)
             .unwrap_or_else(|| default_subtitles_dir(&db_path));
+        let artwork_dir = data_sibling_dir(&db_path, "artwork");
 
         // Fail-fast safety gates (pure, unit-tested via `validate_posture`).
         validate_posture(&host, &principal_mode, internal_principal_secret.is_some())?;
@@ -234,6 +238,7 @@ impl Config {
             whisper_bin,
             whisper_model,
             subtitles_dir,
+            artwork_dir,
         })
     }
 
@@ -246,12 +251,18 @@ impl Config {
 /// Sidecar subtitle store beside the database (`<db dir>/subtitles`). An
 /// in-memory or bare-filename db path falls back to `./data/subtitles`.
 fn default_subtitles_dir(db_path: &str) -> PathBuf {
+    data_sibling_dir(db_path, "subtitles")
+}
+
+/// A named directory beside the database (`<db dir>/<name>`); in-memory or
+/// bare-filename db paths fall back to `./data/<name>`.
+fn data_sibling_dir(db_path: &str, name: &str) -> PathBuf {
     std::path::Path::new(db_path)
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("./data"))
-        .join("subtitles")
+        .join(name)
 }
 
 /// The outcome of a posture check: refuse to boot, boot with a warning, or

@@ -1266,13 +1266,15 @@ fn walk_matching_roots(
 pub async fn scan_music_once(
     db: &Db,
     roots: &[std::path::PathBuf],
+    art_dir: &std::path::Path,
 ) -> Result<MusicScanReport, AppError> {
-    scan_music_once_with_probe_bin(db, roots, "ffprobe").await
+    scan_music_once_with_probe_bin(db, roots, art_dir, "ffprobe").await
 }
 
 async fn scan_music_once_with_probe_bin(
     db: &Db,
     roots: &[std::path::PathBuf],
+    art_dir: &std::path::Path,
     ffprobe_bin: &str,
 ) -> Result<MusicScanReport, AppError> {
     let mut report = MusicScanReport::default();
@@ -1313,6 +1315,7 @@ async fn scan_music_once_with_probe_bin(
                     &file.mtime,
                     &probed,
                     &file.stem,
+                    Some(art_dir),
                 )
                 .await
                 {
@@ -1353,8 +1356,9 @@ async fn scan_music_once_with_probe_bin(
 pub async fn scan_music_isolated(
     db: Db,
     roots: Vec<std::path::PathBuf>,
+    art_dir: std::path::PathBuf,
 ) -> Result<MusicScanReport, AppError> {
-    match tokio::spawn(async move { scan_music_once(&db, &roots).await }).await {
+    match tokio::spawn(async move { scan_music_once(&db, &roots, &art_dir).await }).await {
         Ok(result) => result,
         Err(e) => Err(AppError::Internal(format!("music scan task panicked: {e}"))),
     }
@@ -1363,6 +1367,9 @@ pub async fn scan_music_isolated(
 /// Upsert one audio file into `media_files` + artists/albums/tracks. The track
 /// is keyed on its backing `media_file_id`, so a rescan of the same file never
 /// duplicates it; the artist/album upserts dedup on name / (artist, title).
+/// With `art_dir`, albums without art get it resolved (folder image first,
+/// embedded cover extraction second); `None` skips art entirely (tests).
+#[allow(clippy::too_many_arguments)]
 async fn index_music_file(
     db: &Db,
     path: &str,
@@ -1370,6 +1377,7 @@ async fn index_music_file(
     mtime: &str,
     probe: &FileProbe,
     stem: &str,
+    art_dir: Option<&std::path::Path>,
 ) -> Result<(), AppError> {
     let (file_id, _scanned_at) = upsert_media_file(db, path, size_bytes, mtime, probe).await?;
     let meta = classify_music(&probe.format_tags, stem);
@@ -1384,7 +1392,107 @@ async fn index_music_file(
         probe.duration_secs,
     )
     .await?;
+    if let Some(art_dir) = art_dir {
+        resolve_album_art(db, album_id, path, probe, art_dir).await?;
+    }
     Ok(())
+}
+
+/// Fill `albums.art_path` for `album_id` if it is still NULL: a folder image
+/// beside the track wins (referenced in place, no copy); otherwise an
+/// embedded attached_pic is extracted once into `art_dir/album_{id}.jpg`.
+/// Best-effort — an extraction failure just leaves the album artless.
+async fn resolve_album_art(
+    db: &Db,
+    album_id: i64,
+    track_path: &str,
+    probe: &FileProbe,
+    art_dir: &std::path::Path,
+) -> Result<(), AppError> {
+    let current: Option<Option<String>> =
+        sqlx::query_scalar("SELECT art_path FROM albums WHERE id = ?")
+            .bind(album_id)
+            .fetch_optional(&db.pool)
+            .await?;
+    if !matches!(current, Some(None)) {
+        return Ok(()); // already has art (or the album vanished)
+    }
+
+    let track_dir = std::path::Path::new(track_path)
+        .parent()
+        .map(std::path::PathBuf::from);
+    let folder_art = match track_dir {
+        Some(dir) => tokio::task::spawn_blocking(move || find_folder_art(&dir))
+            .await
+            .unwrap_or(None),
+        None => None,
+    };
+
+    let art_path: Option<String> = if let Some(p) = folder_art {
+        p.to_str().map(str::to_string)
+    } else if probe.has_embedded_art {
+        let dest = art_dir.join(format!("album_{album_id}.jpg"));
+        if tokio::fs::create_dir_all(art_dir).await.is_ok()
+            && extract_embedded_art(std::path::Path::new(track_path), &dest).await
+        {
+            dest.to_str().map(str::to_string)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    if let Some(art) = art_path {
+        sqlx::query("UPDATE albums SET art_path = ? WHERE id = ? AND art_path IS NULL")
+            .bind(art)
+            .bind(album_id)
+            .execute(&db.pool)
+            .await?;
+    }
+    Ok(())
+}
+
+/// A conventional album image in `dir`: {cover,folder,front,album} ×
+/// {jpg,jpeg,png,webp}, case-insensitive. Blocking FS — call off-runtime.
+pub fn find_folder_art(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    const STEMS: &[&str] = &["cover", "folder", "front", "album"];
+    const EXTS: &[&str] = &["jpg", "jpeg", "png", "webp"];
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let Some(name) = entry.file_name().to_str().map(str::to_ascii_lowercase) else {
+            continue;
+        };
+        if let Some((stem, ext)) = name.rsplit_once('.')
+            && STEMS.contains(&stem)
+            && EXTS.contains(&ext)
+            && entry.file_type().map(|t| t.is_file()).unwrap_or(false)
+        {
+            return Some(entry.path());
+        }
+    }
+    None
+}
+
+/// One-shot embedded-cover extraction: first attached video stream → a JPEG
+/// at `dest`. Re-encodes to mjpeg so a PNG cover still lands as .jpg. Returns
+/// success; failures are logged by the caller's silence (artless album).
+async fn extract_embedded_art(input: &std::path::Path, dest: &std::path::Path) -> bool {
+    let ffmpeg_bin = std::env::var("MEDIA_FFMPEG_BIN").unwrap_or_else(|_| "ffmpeg".to_string());
+    let output = tokio::process::Command::new(ffmpeg_bin)
+        .arg("-y")
+        .arg("-v")
+        .arg("error")
+        .arg("-i")
+        .arg(input)
+        .arg("-map")
+        .arg("0:v:0")
+        .arg("-frames:v")
+        .arg("1")
+        .arg(dest)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .await;
+    matches!(output, Ok(o) if o.status.success()) && dest.exists()
 }
 
 /// Get-or-create an artist by its UNIQUE name, returning its id.
@@ -1927,6 +2035,7 @@ mod tests {
             }],
             format_tags: Default::default(),
             chapters: Vec::new(),
+            has_embedded_art: false,
         }
     }
 
@@ -3223,6 +3332,7 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             chapters: Vec::new(),
+            has_embedded_art: false,
         }
     }
 
@@ -3315,6 +3425,66 @@ mod tests {
     }
 
     #[test]
+    fn folder_art_found_case_insensitively() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Cover.JPG"), b"img").unwrap();
+        std::fs::write(dir.path().join("notes.txt"), b"x").unwrap();
+        let found = find_folder_art(dir.path()).unwrap();
+        assert_eq!(found.file_name().unwrap().to_str().unwrap(), "Cover.JPG");
+
+        let empty = tempfile::tempdir().unwrap();
+        assert!(find_folder_art(empty.path()).is_none());
+    }
+
+    #[tokio::test]
+    async fn music_index_records_folder_art_once() {
+        let db = Db::connect_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let art = dir.path().join("cover.jpg");
+        std::fs::write(&art, b"img").unwrap();
+        let track = dir.path().join("01 Song.flac");
+        std::fs::write(&track, b"audio").unwrap();
+
+        let probe = music_probe(&[("artist", "Ghost"), ("album", "Haunt")], 100);
+        let art_dir = tempfile::tempdir().unwrap();
+        index_music_file(
+            &db,
+            track.to_str().unwrap(),
+            5,
+            "t",
+            &probe,
+            "01 Song",
+            Some(art_dir.path()),
+        )
+        .await
+        .unwrap();
+
+        let stored: Option<String> = sqlx::query_scalar("SELECT art_path FROM albums LIMIT 1")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(stored.as_deref(), art.to_str());
+        // No embedded art + already-set art → a rescan never overwrites.
+        index_music_file(
+            &db,
+            track.to_str().unwrap(),
+            6,
+            "t2",
+            &probe,
+            "01 Song",
+            Some(art_dir.path()),
+        )
+        .await
+        .unwrap();
+        let count_art: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM albums WHERE art_path IS NOT NULL")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(count_art, 1);
+    }
+
+    #[test]
     fn is_audio_file_recognizes_extensions() {
         assert!(is_audio_file("song.mp3"));
         assert!(is_audio_file("Track 01.FLAC"));
@@ -3391,6 +3561,7 @@ mod tests {
                 "t",
                 &probe,
                 "01 Airbag",
+                None,
             )
             .await
             .unwrap();
@@ -3426,6 +3597,7 @@ mod tests {
             "t",
             &probe2,
             "01 15 Step",
+            None,
         )
         .await
         .unwrap();
@@ -3467,9 +3639,14 @@ mod tests {
         let db = Db::connect_memory().await.unwrap();
         let roots = vec![tmp.path().to_path_buf()];
 
-        let report = scan_music_once_with_probe_bin(&db, &roots, stub.to_str().unwrap())
-            .await
-            .unwrap();
+        let report = scan_music_once_with_probe_bin(
+            &db,
+            &roots,
+            std::env::temp_dir().as_path(),
+            stub.to_str().unwrap(),
+        )
+        .await
+        .unwrap();
         assert_eq!(report.files_seen, 8, "only the 8 audio files are walked");
         assert_eq!(report.files_added, 8, "all 8 probed + indexed");
         assert_eq!(report.tracks, 8);
@@ -3480,9 +3657,14 @@ mod tests {
         assert_eq!(count(&db, "albums").await, 1);
 
         // A second scan is all-skips (unchanged): no new files, no errors.
-        let again = scan_music_once_with_probe_bin(&db, &roots, stub.to_str().unwrap())
-            .await
-            .unwrap();
+        let again = scan_music_once_with_probe_bin(
+            &db,
+            &roots,
+            std::env::temp_dir().as_path(),
+            stub.to_str().unwrap(),
+        )
+        .await
+        .unwrap();
         assert_eq!(again.files_seen, 8);
         assert_eq!(again.files_added, 0, "unchanged files take the skip path");
         assert_eq!(again.tracks, 0);
@@ -3492,7 +3674,9 @@ mod tests {
     #[tokio::test]
     async fn scan_music_empty_roots_is_noop() {
         let db = Db::connect_memory().await.unwrap();
-        let report = scan_music_once(&db, &[]).await.unwrap();
+        let report = scan_music_once(&db, &[], std::env::temp_dir().as_path())
+            .await
+            .unwrap();
         assert_eq!(report.files_seen, 0);
         assert_eq!(report.files_added, 0);
         assert_eq!(count(&db, "tracks").await, 0);
@@ -3511,14 +3695,22 @@ mod tests {
         std::fs::write(&kept, b"bytes").unwrap();
         let (ksize, kmtime) = file_stat(&kept).unwrap();
         let kp = music_probe(&[("album_artist", "Keeper"), ("album", "Stays")], 100);
-        index_music_file(&db, kept.to_str().unwrap(), ksize, &kmtime, &kp, "keep")
-            .await
-            .unwrap();
+        index_music_file(
+            &db,
+            kept.to_str().unwrap(),
+            ksize,
+            &kmtime,
+            &kp,
+            "keep",
+            None,
+        )
+        .await
+        .unwrap();
 
         // Gone: a track pointing at a path that does not exist under the root.
         let gone = tmp.path().join("gone.flac");
         let gp = music_probe(&[("album_artist", "Goner"), ("album", "Vanishes")], 100);
-        index_music_file(&db, gone.to_str().unwrap(), 5, "t", &gp, "gone")
+        index_music_file(&db, gone.to_str().unwrap(), 5, "t", &gp, "gone", None)
             .await
             .unwrap();
 
@@ -3526,7 +3718,9 @@ mod tests {
         assert_eq!(count(&db, "artists").await, 2);
 
         let roots = vec![tmp.path().to_path_buf()];
-        let report = scan_music_once(&db, &roots).await.unwrap();
+        let report = scan_music_once(&db, &roots, std::env::temp_dir().as_path())
+            .await
+            .unwrap();
         assert_eq!(
             report.files_removed, 1,
             "the deleted track's file is pruned"
@@ -3559,6 +3753,7 @@ mod tests {
             "t",
             &probe,
             "song",
+            None,
         )
         .await
         .unwrap();
@@ -3566,7 +3761,9 @@ mod tests {
         let roots = vec![std::path::PathBuf::from(
             "/definitely-not-mounted-eex-music",
         )];
-        let report = scan_music_once(&db, &roots).await.unwrap();
+        let report = scan_music_once(&db, &roots, std::env::temp_dir().as_path())
+            .await
+            .unwrap();
         assert_eq!(report.files_removed, 0, "missing root prunes nothing");
         assert!(
             report.errors >= 1,
