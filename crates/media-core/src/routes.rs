@@ -596,6 +596,10 @@ struct StreamCapsQuery {
     aac_max_channels: Option<i64>,
     #[serde(default)]
     hls_fmp4_hevc: bool,
+    /// Native HLS player (AVPlayer) — opt into multi-audio muxing for in-band
+    /// language switching. Browser/MSE clients omit it (single English track).
+    #[serde(default)]
+    native_hls: bool,
     #[serde(default)]
     start_secs: Option<u64>,
     /// Client explicitly requested buffered (HLS) delivery: bypass the
@@ -644,6 +648,7 @@ impl StreamCapsQuery {
             },
             aac_max_channels: self.aac_max_channels.unwrap_or(defaults.aac_max_channels),
             hls_fmp4_hevc: self.hls_fmp4_hevc,
+            native_hls: self.native_hls,
         }
     }
 }

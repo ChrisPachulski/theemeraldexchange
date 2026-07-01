@@ -25,7 +25,7 @@
 //! invocation. No real transcode happens here.
 
 use media_core::capability::{ClientCaps, decide};
-use media_core::models::{MediaFileRow, SubtitleTrack};
+use media_core::models::{AudioTrack, MediaFileRow, SubtitleTrack};
 use serde::Serialize;
 
 /// Target H.264 height once we re-encode. The capability matrix only ever
@@ -164,6 +164,14 @@ pub enum TranscodePlan {
         /// Plex/Jellyfin. See [`preferred_audio_index`].
         #[serde(default)]
         audio_index: usize,
+        /// ADDITIONAL audio tracks to mux in after the primary `audio_index`, as
+        /// `(audio-relative source index, per-track op)`, in menu order. Non-empty
+        /// ONLY for a `native_hls` client (AVPlayer), which exposes them as
+        /// switchable in-band renditions; the primary stays first so it's the
+        /// default. Empty for browser/MSE (single track) — the single-audio arg
+        /// path is then byte-identical to before. See [`plan_extra_audio`].
+        #[serde(default)]
+        extra_audio: Vec<(usize, AudioOp)>,
         /// Echo of why direct-play was denied — useful for telemetry/inventory.
         reason: String,
     },
@@ -384,6 +392,7 @@ fn plan_transcode_ops(file: &MediaFileRow, caps: &ClientCaps, reason: String) ->
             subtitle,
             segment_format: SegmentFormat::MpegTs,
             audio_index: preferred_audio_index(file),
+            extra_audio: plan_extra_audio(file, caps),
             reason: format!("{reason} (dolby vision: libplacebo RPU re-encode)"),
         };
     }
@@ -471,6 +480,7 @@ fn plan_transcode_ops(file: &MediaFileRow, caps: &ClientCaps, reason: String) ->
         subtitle,
         segment_format,
         audio_index: preferred_audio_index(file),
+        extra_audio: plan_extra_audio(file, caps),
         reason,
     }
 }
@@ -527,6 +537,14 @@ fn plan_audio(file: &MediaFileRow, caps: &ClientCaps) -> AudioOp {
         // copy op is a harmless no-op.
         return AudioOp::Copy;
     };
+    audio_op_for(track, caps)
+}
+
+/// Copy-vs-re-encode decision for ONE audio track: copy when its codec is a set
+/// the client advertised AND (for AAC) within the appendable channel count;
+/// otherwise re-encode to stereo AAC. Extracted so every muxed track (primary
+/// and each `extra_audio` rendition) is gated identically.
+fn audio_op_for(track: &AudioTrack, caps: &ClientCaps) -> AudioOp {
     let codec = track
         .codec
         .as_deref()
@@ -559,6 +577,28 @@ fn plan_audio(file: &MediaFileRow, caps: &ClientCaps) -> AudioOp {
             },
         }
     }
+}
+
+/// The ADDITIONAL audio tracks to mux after the primary (English-preferred) one,
+/// as `(audio-relative index, per-track op)` in menu order. Empty unless the
+/// client is a `native_hls` player (AVPlayer exposes in-band alt-audio) AND the
+/// file actually has a second track — so browser/MSE and single-track titles are
+/// unchanged. The primary index is skipped (it's mapped first, as the default).
+pub fn plan_extra_audio(file: &MediaFileRow, caps: &ClientCaps) -> Vec<(usize, AudioOp)> {
+    if !caps.native_hls {
+        return Vec::new();
+    }
+    let tracks = file.audio_tracks();
+    if tracks.len() < 2 {
+        return Vec::new();
+    }
+    let primary = preferred_audio_index(file);
+    tracks
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != primary)
+        .map(|(i, t)| (i, audio_op_for(t, caps)))
+        .collect()
 }
 
 #[cfg(test)]
@@ -648,6 +688,65 @@ mod tests {
             vec![],
         );
         assert_eq!(preferred_audio_index(&none), 0);
+    }
+
+    #[test]
+    fn native_client_muxes_all_audio_english_first() {
+        // native_hls: primary = English (idx 1); extras = the others in order.
+        let mut caps = caps_h264_1080_sdr();
+        caps.native_hls = true;
+        let f = file(
+            Some("mkv"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![
+                audio_lang(0, Some("ita")),
+                audio_lang(1, Some("eng")),
+                audio_lang(2, Some("fra")),
+            ],
+            vec![],
+        );
+        match plan_transcode(&f, &caps) {
+            TranscodePlan::Transcode {
+                audio_index,
+                extra_audio,
+                ..
+            } => {
+                assert_eq!(audio_index, 1, "English is the default/primary");
+                assert_eq!(
+                    extra_audio.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+                    vec![0, 2],
+                    "the other tracks are muxed in, primary excluded"
+                );
+            }
+            other => panic!("expected transcode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn browser_client_stays_single_english_track() {
+        // Default caps (native_hls false): no extra tracks — the web path is
+        // unchanged, so a capable browser can't regress to the foreign default.
+        let f = file(
+            Some("mkv"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![audio_lang(0, Some("ita")), audio_lang(1, Some("eng"))],
+            vec![],
+        );
+        match plan_transcode(&f, &caps_h264_1080_sdr()) {
+            TranscodePlan::Transcode {
+                audio_index,
+                extra_audio,
+                ..
+            } => {
+                assert_eq!(audio_index, 1);
+                assert!(extra_audio.is_empty(), "browser gets English only");
+            }
+            other => panic!("expected transcode, got {other:?}"),
+        }
     }
 
     #[test]
@@ -743,6 +842,7 @@ mod tests {
             subtitle: SubtitleOp::None,
             segment_format: SegmentFormat::MpegTs,
             audio_index: 0,
+            extra_audio: Vec::new(),
             reason: "container".into(),
         };
         assert!(
@@ -760,6 +860,7 @@ mod tests {
             subtitle: SubtitleOp::None,
             segment_format: SegmentFormat::MpegTs,
             audio_index: 0,
+            extra_audio: Vec::new(),
             reason: "hevc".into(),
         };
         assert!(encode.reencodes_video());

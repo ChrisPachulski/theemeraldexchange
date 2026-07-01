@@ -47,6 +47,14 @@ pub struct ClientCaps {
     /// H.264-only, so HEVC must NEVER be copied into MPEG-TS segments.
     #[serde(default)]
     pub hls_fmp4_hevc: bool,
+    /// True for a NATIVE HLS player (AVPlayer on the Apple apps) that exposes
+    /// multiple in-band audio tracks as switchable renditions. Only such clients
+    /// get ALL audio tracks muxed in (for language switching, English defaulted);
+    /// hls.js/MSE clients (the web SPA) can't select in-band alt-audio, so they
+    /// keep the single English-preferred track. Defaults false so any client that
+    /// predates this field — and the whole browser path — is unaffected.
+    #[serde(default)]
+    pub native_hls: bool,
 }
 
 fn default_audio_codecs() -> Vec<String> {
@@ -70,6 +78,7 @@ impl Default for ClientCaps {
             audio_codecs: default_audio_codecs(),
             aac_max_channels: default_aac_max_channels(),
             hls_fmp4_hevc: false,
+            native_hls: false,
         }
     }
 }

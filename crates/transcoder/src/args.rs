@@ -257,7 +257,7 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
         start_number,
         source_avg_kbps,
     } = *spec;
-    let (video, audio, subtitle, segment_format, audio_index) = match plan {
+    let (video, audio, subtitle, segment_format, audio_index, extra_audio) = match plan {
         TranscodePlan::DirectPlay { .. } => return Vec::new(),
         TranscodePlan::Transcode {
             video,
@@ -265,8 +265,16 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
             subtitle,
             segment_format,
             audio_index,
+            extra_audio,
             ..
-        } => (video, audio, subtitle, *segment_format, *audio_index),
+        } => (
+            video,
+            audio,
+            subtitle,
+            *segment_format,
+            *audio_index,
+            extra_audio,
+        ),
     };
     let fmp4 = segment_format == SegmentFormat::Fmp4;
 
@@ -375,6 +383,14 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
     push(&mut a, "0:v:0");
     push(&mut a, "-map");
     a.push(format!("0:a:{audio_index}?"));
+    // Native (AVPlayer) clients also get the remaining audio tracks muxed in for
+    // in-band language switching; the primary above stays first, so it's default.
+    // Empty for browser/MSE (single track) — the single-audio path below is then
+    // byte-for-byte what it always was.
+    for (idx, _) in extra_audio.iter() {
+        push(&mut a, "-map");
+        a.push(format!("0:a:{idx}?"));
+    }
 
     // ── Video ────────────────────────────────────────────────────────────
     match video {
@@ -566,30 +582,62 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
     }
 
     // ── Audio ────────────────────────────────────────────────────────────
-    match audio {
-        AudioOp::Copy => {
-            push(&mut a, "-c:a");
-            push(&mut a, "copy");
+    if extra_audio.is_empty() {
+        // Single audio track (browser/MSE, or a native single-track title): the
+        // proven, output-stream-unqualified per-codec path — byte-for-byte as
+        // before, so the common path carries zero risk.
+        match audio {
+            AudioOp::Copy => {
+                push(&mut a, "-c:a");
+                push(&mut a, "copy");
+            }
+            AudioOp::EncodeAac { bitrate_kbps } => {
+                push(&mut a, "-c:a");
+                push(&mut a, "aac");
+                // Downmix to stereo. The HLS output is consumed by hls.js, which
+                // transmuxes the TS audio to fMP4 for MSE; Chrome and Firefox FAIL
+                // the SourceBuffer append of a >2-channel (5.1/7.1) AAC track
+                // ("audio SourceBuffer error. MediaSource readyState: ended"),
+                // which fails the whole fragment and freezes the player grey at
+                // 0:00 — even though the codec string (mp4a.40.2) reports as
+                // supported. Stereo appends and plays in every target browser
+                // (proven by an in-browser A/B on a real 5.1 title). Mono upmixes
+                // harmlessly; an already-stereo source is a no-op. TODO(M4+): when
+                // ClientCaps grows an audio-channel capability, pass multichannel
+                // through for native clients (AVPlayer handles 5.1) and downmix
+                // only for browser/MSE consumers.
+                push(&mut a, "-ac");
+                push(&mut a, "2");
+                push(&mut a, "-b:a");
+                a.push(format!("{bitrate_kbps}k"));
+            }
         }
-        AudioOp::EncodeAac { bitrate_kbps } => {
-            push(&mut a, "-c:a");
-            push(&mut a, "aac");
-            // Downmix to stereo. The HLS output is consumed by hls.js, which
-            // transmuxes the TS audio to fMP4 for MSE; Chrome and Firefox FAIL
-            // the SourceBuffer append of a >2-channel (5.1/7.1) AAC track
-            // ("audio SourceBuffer error. MediaSource readyState: ended"),
-            // which fails the whole fragment and freezes the player grey at
-            // 0:00 — even though the codec string (mp4a.40.2) reports as
-            // supported. Stereo appends and plays in every target browser
-            // (proven by an in-browser A/B on a real 5.1 title). Mono upmixes
-            // harmlessly; an already-stereo source is a no-op. TODO(M4+): when
-            // ClientCaps grows an audio-channel capability, pass multichannel
-            // through for native clients (AVPlayer handles 5.1) and downmix
-            // only for browser/MSE consumers.
-            push(&mut a, "-ac");
-            push(&mut a, "2");
-            push(&mut a, "-b:a");
-            a.push(format!("{bitrate_kbps}k"));
+    } else {
+        // Multiple audio tracks (native in-band switching): the primary is output
+        // audio stream a:0, each extra follows in menu order. PER-STREAM codec
+        // specifiers so a copyable track passes through while an undecodable one
+        // (e.g. DTS) is re-encoded to stereo AAC on its own — the language menu
+        // never has a dead entry. Native clients decode 5.1 natively, so copied
+        // surround stays surround (the MSE downmix hazard is browser-only, and
+        // this branch is native-only).
+        for (i, op) in std::iter::once(audio)
+            .chain(extra_audio.iter().map(|(_, op)| op))
+            .enumerate()
+        {
+            match op {
+                AudioOp::Copy => {
+                    a.push(format!("-c:a:{i}"));
+                    push(&mut a, "copy");
+                }
+                AudioOp::EncodeAac { bitrate_kbps } => {
+                    a.push(format!("-c:a:{i}"));
+                    push(&mut a, "aac");
+                    a.push(format!("-ac:a:{i}"));
+                    push(&mut a, "2");
+                    a.push(format!("-b:a:{i}"));
+                    a.push(format!("{bitrate_kbps}k"));
+                }
+            }
         }
     }
 
@@ -855,6 +903,7 @@ mod tests {
             subtitle,
             segment_format: SegmentFormat::MpegTs,
             audio_index: 0,
+            extra_audio: Vec::new(),
             reason: "test".into(),
         }
     }
@@ -1638,6 +1687,7 @@ mod tests {
             subtitle: SubtitleOp::None,
             segment_format: SegmentFormat::Fmp4,
             audio_index: 0,
+            extra_audio: Vec::new(),
             reason: "container mkv not supported by client".into(),
         };
         let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Vaapi).join(" ");
