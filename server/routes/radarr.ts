@@ -2,6 +2,7 @@
 
 import { Hono, type Context } from 'hono'
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
+import { requireSection } from '../services/userPolicies.js'
 import { rateLimit } from '../middleware/rateLimit.js'
 import { radarrFetch, radarrRootFolders } from '../services/radarr.js'
 import { SEARCH_TIMEOUT_MS } from '../services/upstream.js'
@@ -40,6 +41,9 @@ import { env } from '../env.js'
 export const radarr = new Hono<Env>()
 
 radarr.use('*', requireAuth)
+// Section gate: a policy that denies `arr` blocks add/manage mutations
+// (POST/PUT/DELETE) while leaving reads open. Admins are never blocked.
+radarr.use('*', requireSection('arr', { mutationsOnly: true }))
 
 // Per-session token bucket on the release-search-bearing mutate routes
 // (finding 4-0). Each add/upgrade triggers a real upstream indexer search;

@@ -1,10 +1,14 @@
-import { afterAll, beforeAll, beforeEach, describe, it, expect, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, it, expect, vi } from 'vitest'
 import { Hono, type MiddlewareHandler } from 'hono'
+import { promises as fsp } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import { openIptvDb, type IptvDb } from '../services/iptvDb.js'
 import { iptv, __test } from './iptv.js'
 import { __setSsrfLookupForTests } from '../services/ssrfGuard.js'
 import { signStreamToken } from '../services/iptvStreamToken.js'
 import { _resetLiveRemuxIndexForTests } from '../services/iptvLiveRemuxMap.js'
+import { _setUserPoliciesPathForTests } from '../services/userPolicies.js'
 import { env } from '../env.js'
 
 const dbState = vi.hoisted(() => ({
@@ -482,6 +486,75 @@ describe('live stream grant + proxy', () => {
     expect(await grantTtl('/api/iptv/stream/live/10/grant', 'live')).toBe(
       env.IPTV_LIVE_TOKEN_TTL_SECS,
     )
+  })
+
+  // Per-user policy section gate (requireSection('live')). A member whose
+  // policy denies the `live` section gets 403 before any concurrency slot
+  // is acquired; allowed members and admins reach the normal grant path.
+  describe('live section policy', () => {
+    let policyDir: string
+    let policyPath: string
+    beforeEach(async () => {
+      policyDir = await fsp.mkdtemp(join(tmpdir(), 'iptv-policy-'))
+      policyPath = join(policyDir, 'user-policies.json')
+      _setUserPoliciesPathForTests(policyPath)
+    })
+    afterEach(async () => {
+      _setUserPoliciesPathForTests(env.userPoliciesPath)
+      await fsp.rm(policyDir, { recursive: true, force: true })
+    })
+
+    it('403 section_blocked for a non-admin whose policy denies live', async () => {
+      authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+      await fsp.writeFile(
+        policyPath,
+        JSON.stringify({
+          'plex:99': {
+            maxContentRating: null,
+            allowedSections: { live: false, downloads: true, arr: true },
+            kid: true,
+          },
+        }),
+      )
+      _setUserPoliciesPathForTests(policyPath)
+      const res = await app.request('/api/iptv/stream/live/10/grant', { method: 'POST' })
+      expect(res.status).toBe(403)
+      expect(await res.json()).toEqual({ error: 'section_blocked' })
+    })
+
+    it('allows a non-admin whose policy permits live', async () => {
+      authState.session = { sub: 'plex:99', username: 'Teen', role: 'user' }
+      await fsp.writeFile(
+        policyPath,
+        JSON.stringify({
+          'plex:99': {
+            maxContentRating: null,
+            allowedSections: { live: true, downloads: false, arr: false },
+            kid: false,
+          },
+        }),
+      )
+      _setUserPoliciesPathForTests(policyPath)
+      const res = await app.request('/api/iptv/stream/live/10/grant', { method: 'POST' })
+      expect(res.status).toBe(200)
+    })
+
+    it('admin is never blocked even under a live:false policy', async () => {
+      authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
+      await fsp.writeFile(
+        policyPath,
+        JSON.stringify({
+          'plex:42': {
+            maxContentRating: null,
+            allowedSections: { live: false, downloads: false, arr: false },
+            kid: false,
+          },
+        }),
+      )
+      _setUserPoliciesPathForTests(policyPath)
+      const res = await app.request('/api/iptv/stream/live/10/grant', { method: 'POST' })
+      expect(res.status).toBe(200)
+    })
   })
 })
 
