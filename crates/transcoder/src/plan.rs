@@ -56,6 +56,13 @@ const IMAGE_SUBTITLE_CODECS: &[&str] = &[
 pub enum VideoOp {
     /// `-c:v copy` — keep the elementary stream untouched.
     Copy,
+    /// `-c:v copy` of a **Dolby Vision** HEVC stream, DV metadata intact, for
+    /// a client that advertised `dolby_vision` (its pipeline applies the RPU).
+    /// Only single-layer profiles ride this path (5 and 8 — P7's enhancement
+    /// layer cannot be carried in HLS), always in fMP4 segments. `dv_profile`
+    /// picks the sample-entry tag: P5 is DV-only (`dvh1`), P8 has a
+    /// cross-compatible base layer (`hvc1`).
+    CopyDolbyVision { dv_profile: u8 },
     /// Re-encode to H.264. `scale_to_height` is `Some` when we down-scale,
     /// `tone_map` is set when collapsing HDR → SDR, and `burn_subtitle_index`
     /// carries the absolute stream index of an image subtitle to burn in.
@@ -365,7 +372,42 @@ pub fn is_dolby_vision(hdr_format: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
+/// DV profile parsed from the probe's label ("Dolby Vision P5" → 5). `None`
+/// for a bare "Dolby Vision" (stream-level config box absent or predates the
+/// profile capture) — unknown profile fails closed to the RPU re-encode.
+pub fn dolby_vision_profile(hdr_format: Option<&str>) -> Option<u8> {
+    let label = hdr_format?.trim().to_ascii_lowercase();
+    let rest = label.strip_prefix("dolby vision p")?;
+    rest.split_whitespace().next()?.parse().ok()
+}
+
+/// `TRANSCODER_DV_PASSTHROUGH` gate (default OFF, same truthy convention as
+/// TRANSCODER_TRICKPLAY). DV copy has real client-matrix risk — a mistagged
+/// or misadvertised client shows wrong colors — so it ships dark until the
+/// living-room devices prove it.
+fn dv_passthrough_enabled() -> bool {
+    matches!(
+        std::env::var("TRANSCODER_DV_PASSTHROUGH")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
 fn plan_transcode_ops(file: &MediaFileRow, caps: &ClientCaps, reason: String) -> TranscodePlan {
+    plan_transcode_ops_with(file, caps, reason, dv_passthrough_enabled())
+}
+
+/// The env-independent core — `dv_passthrough` is threaded as a parameter so
+/// the test matrix never mutates process env (tests run in parallel).
+fn plan_transcode_ops_with(
+    file: &MediaFileRow,
+    caps: &ClientCaps,
+    reason: String,
+    dv_passthrough: bool,
+) -> TranscodePlan {
     // ── Subtitles. burn_index is always None now (image subs are dropped, not
     // burned), so subtitles no longer force a video re-encode on their own. ──
     let (subtitle, burn_index) = plan_subtitle(file);
@@ -378,7 +420,40 @@ fn plan_transcode_ops(file: &MediaFileRow, caps: &ClientCaps, reason: String) ->
     // APPLIES the RPU before tone-mapping to SDR. Capped at DEFAULT_TARGET_HEIGHT
     // because that encode runs on the CPU (libx264) — libplacebo is a Vulkan
     // filter that can't hand frames straight to the iGPU's VAAPI encoder.
+    //
+    // EXCEPTION — DV passthrough (TRANSCODER_DV_PASSTHROUGH, default off): a
+    // client that advertised `dolby_vision` (RPU-applying pipeline) AND
+    // fMP4-HEVC delivery gets the stream copied with DV metadata intact,
+    // provided the profile is a known single-layer one (5/8 — P7's
+    // enhancement layer cannot ride HLS) and no down-scale is needed.
     if is_dolby_vision(file.hdr_format.as_deref()) {
+        let codec_lc = file
+            .video_codec
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let needs_scale =
+            matches!((caps.max_height, file.video_height), (Some(max), Some(h)) if h > max);
+        let dv_profile = dolby_vision_profile(file.hdr_format.as_deref());
+        if dv_passthrough
+            && caps.dolby_vision
+            && caps.hls_fmp4_hevc
+            && matches!(codec_lc.as_str(), "hevc" | "h265")
+            && matches!(dv_profile, Some(5 | 8))
+            && !needs_scale
+        {
+            let dv_profile = dv_profile.expect("matched Some above");
+            return TranscodePlan::Transcode {
+                video: VideoOp::CopyDolbyVision { dv_profile },
+                audio: plan_audio(file, caps),
+                subtitle,
+                segment_format: SegmentFormat::Fmp4,
+                audio_index: preferred_audio_index(file),
+                extra_audio: plan_extra_audio(file, caps),
+                reason: format!("{reason} (dolby vision P{dv_profile} passthrough)"),
+            };
+        }
         let scale_to_height = match file.video_height {
             Some(h) if h > DEFAULT_TARGET_HEIGHT => Some(DEFAULT_TARGET_HEIGHT),
             _ => None,
@@ -958,6 +1033,119 @@ mod tests {
             }
             other => panic!("expected EncodeDolbyVision, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn dolby_vision_profile_parses_label() {
+        assert_eq!(dolby_vision_profile(Some("Dolby Vision P5")), Some(5));
+        assert_eq!(dolby_vision_profile(Some("dolby vision p8")), Some(8));
+        assert_eq!(dolby_vision_profile(Some("Dolby Vision")), None);
+        assert_eq!(dolby_vision_profile(Some("HDR10")), None);
+        assert_eq!(dolby_vision_profile(None), None);
+    }
+
+    fn caps_dv() -> ClientCaps {
+        ClientCaps {
+            dolby_vision: true,
+            ..caps_apple_hevc_hdr()
+        }
+    }
+
+    #[test]
+    fn dv_passthrough_copies_for_dv_capable_client() {
+        // Flag on + dolby_vision cap + fMP4 HEVC + known single-layer profile
+        // + no scale → the stream copies with DV intact, in fMP4, uncharged
+        // against the CPU-transcode cap.
+        let f = file(
+            Some("matroska"),
+            Some("hevc"),
+            Some(2160),
+            Some("Dolby Vision P5"),
+            vec![aac(1)],
+            vec![],
+        );
+        let plan = plan_transcode_ops_with(&f, &caps_dv(), "t".into(), true);
+        match &plan {
+            TranscodePlan::Transcode {
+                video,
+                segment_format,
+                reason,
+                ..
+            } => {
+                assert_eq!(*video, VideoOp::CopyDolbyVision { dv_profile: 5 });
+                assert_eq!(*segment_format, SegmentFormat::Fmp4);
+                assert!(reason.contains("passthrough"), "reason: {reason}");
+            }
+            other => panic!("expected Transcode, got {other:?}"),
+        }
+        assert!(!plan.reencodes_video());
+    }
+
+    #[test]
+    fn dv_passthrough_gates_fail_closed_to_rpu_reencode() {
+        let dv_file = |label: &str, height: i64| {
+            file(
+                Some("matroska"),
+                Some("hevc"),
+                Some(height),
+                Some(label),
+                vec![aac(1)],
+                vec![],
+            )
+        };
+        let is_rpu_reencode = |plan: &TranscodePlan| {
+            matches!(
+                plan,
+                TranscodePlan::Transcode {
+                    video: VideoOp::EncodeDolbyVision { .. },
+                    ..
+                }
+            )
+        };
+
+        // Flag off (the shipped default) — even a fully capable client re-encodes.
+        let p = plan_transcode_ops_with(
+            &dv_file("Dolby Vision P5", 2160),
+            &caps_dv(),
+            "t".into(),
+            false,
+        );
+        assert!(is_rpu_reencode(&p), "flag off must re-encode");
+
+        // Client lacks the dolby_vision cap.
+        let p = plan_transcode_ops_with(
+            &dv_file("Dolby Vision P5", 2160),
+            &caps_apple_hevc_hdr(),
+            "t".into(),
+            true,
+        );
+        assert!(is_rpu_reencode(&p), "no dv cap must re-encode");
+
+        // Unknown profile (bare label — pre-profile scans, in-band-RPU backfill).
+        let p =
+            plan_transcode_ops_with(&dv_file("Dolby Vision", 2160), &caps_dv(), "t".into(), true);
+        assert!(is_rpu_reencode(&p), "unknown profile must re-encode");
+
+        // P7 dual-layer can never ride HLS.
+        let p = plan_transcode_ops_with(
+            &dv_file("Dolby Vision P7", 2160),
+            &caps_dv(),
+            "t".into(),
+            true,
+        );
+        assert!(is_rpu_reencode(&p), "P7 must re-encode");
+
+        // Down-scale needed (client max below source) — copy can't scale.
+        let mut caps = caps_dv();
+        caps.max_height = Some(1080);
+        let p = plan_transcode_ops_with(&dv_file("Dolby Vision P5", 2160), &caps, "t".into(), true);
+        assert!(is_rpu_reencode(&p), "scale must re-encode");
+
+        // No fMP4-HEVC delivery path.
+        let mut caps = caps_dv();
+        caps.hls_fmp4_hevc = false;
+        let p = plan_transcode_ops_with(&dv_file("Dolby Vision P5", 2160), &caps, "t".into(), true);
+        assert!(is_rpu_reencode(&p), "no fmp4 must re-encode");
     }
 
     #[test]

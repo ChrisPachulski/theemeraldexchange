@@ -55,6 +55,14 @@ pub struct ClientCaps {
     /// predates this field — and the whole browser path — is unaffected.
     #[serde(default)]
     pub native_hls: bool,
+    /// True when the client's decode+display pipeline handles Dolby Vision
+    /// AS-IS (applies the RPU itself — e.g. AVPlayer on a DV-capable Apple
+    /// device). Gates both DV direct-play and the transcoder's DV copy
+    /// passthrough; to every other client DV is routed to the libplacebo
+    /// RPU re-encode. Defaults false: a plain `hdr:true` client must NOT
+    /// receive raw DV (Profile 5 shows grossly wrong colors without the RPU).
+    #[serde(default)]
+    pub dolby_vision: bool,
 }
 
 fn default_audio_codecs() -> Vec<String> {
@@ -79,6 +87,7 @@ impl Default for ClientCaps {
             aac_max_channels: default_aac_max_channels(),
             hls_fmp4_hevc: false,
             native_hls: false,
+            dolby_vision: false,
         }
     }
 }
@@ -205,12 +214,18 @@ pub fn decide(file: &MediaFileRow, caps: &ClientCaps) -> PlayDecision {
         }
     }
 
-    let is_hdr = file
-        .hdr_format
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|h| !h.is_empty());
-    if is_hdr && !caps.hdr {
+    let hdr_label = file.hdr_format.as_deref().map(str::trim).unwrap_or("");
+    // Dolby Vision is gated separately from generic HDR: an `hdr:true` client
+    // can present HDR10/HLG, but raw DV (Profile 5 especially) needs an
+    // RPU-applying pipeline or the colors are grossly wrong. Only a client
+    // that explicitly advertises `dolby_vision` may receive DV as-is; everyone
+    // else routes to the transcoder's RPU-aware re-encode.
+    let is_dv = hdr_label.to_ascii_lowercase().contains("dolby vision")
+        || hdr_label.eq_ignore_ascii_case("dovi");
+    if is_dv && !caps.dolby_vision {
+        return deny("dolby vision requires rpu-aware handling");
+    }
+    if !hdr_label.is_empty() && !caps.hdr {
         return deny("hdr requires tone-map");
     }
 
@@ -562,5 +577,47 @@ mod tests {
     fn empty_hdr_format_is_treated_as_sdr() {
         let f = file(Some("mp4"), Some("h264"), Some(1080), Some(""));
         assert!(decide(&f, &h264_client()).direct_play);
+    }
+
+    #[test]
+    fn dolby_vision_denies_hdr_client_without_dv_cap() {
+        // hdr:true is NOT enough for DV: without an RPU-applying pipeline the
+        // presentation is wrong (green skies), so it must fail closed to the
+        // transcoder even though the generic hdr gate would have passed.
+        let mut caps = h264_client();
+        caps.video_codecs = vec!["hevc".to_string()];
+        caps.hdr = true;
+        caps.max_height = Some(2160);
+        for label in ["Dolby Vision", "Dolby Vision P5", "dovi"] {
+            let f = file(Some("mp4"), Some("hevc"), Some(2160), Some(label));
+            let d = decide(&f, &caps);
+            assert!(!d.direct_play, "{label} must not direct-play without cap");
+            assert!(d.reason.contains("dolby vision"), "reason: {}", d.reason);
+        }
+    }
+
+    #[test]
+    fn dolby_vision_direct_plays_with_dv_cap() {
+        let mut caps = h264_client();
+        caps.video_codecs = vec!["hevc".to_string()];
+        caps.hdr = true;
+        caps.dolby_vision = true;
+        caps.max_height = Some(2160);
+        let f = file(
+            Some("mp4"),
+            Some("hevc"),
+            Some(2160),
+            Some("Dolby Vision P5"),
+        );
+        let d = decide(&f, &caps);
+        assert!(d.direct_play, "reason: {}", d.reason);
+    }
+
+    #[test]
+    fn dolby_vision_cap_defaults_false_in_serde() {
+        let caps: ClientCaps =
+            serde_json::from_str(r#"{"containers":["mp4"],"video_codecs":["hevc"],"hdr":true}"#)
+                .unwrap();
+        assert!(!caps.dolby_vision);
     }
 }

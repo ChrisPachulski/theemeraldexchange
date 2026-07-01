@@ -783,6 +783,10 @@ struct StreamCapsQuery {
     /// language switching. Browser/MSE clients omit it (single English track).
     #[serde(default)]
     native_hls: bool,
+    /// Client pipeline applies Dolby Vision RPUs itself — gates DV
+    /// direct-play and the transcoder's DV copy passthrough.
+    #[serde(default)]
+    dolby_vision: bool,
     #[serde(default)]
     start_secs: Option<u64>,
     /// Client explicitly requested buffered (HLS) delivery: bypass the
@@ -803,6 +807,7 @@ impl StreamCapsQuery {
             || self.audio_codecs.is_some()
             || self.aac_max_channels.is_some()
             || self.hls_fmp4_hevc
+            || self.dolby_vision
             || self.force_transcode
     }
 
@@ -832,6 +837,7 @@ impl StreamCapsQuery {
             aac_max_channels: self.aac_max_channels.unwrap_or(defaults.aac_max_channels),
             hls_fmp4_hevc: self.hls_fmp4_hevc,
             native_hls: self.native_hls,
+            dolby_vision: self.dolby_vision,
         }
     }
 }
@@ -918,6 +924,7 @@ impl TranscodeHandoff<'_> {
                 "audio_codecs": self.caps.audio_codecs,
                 "aac_max_channels": self.caps.aac_max_channels,
                 "hls_fmp4_hevc": self.caps.hls_fmp4_hevc,
+                "dolby_vision": self.caps.dolby_vision,
             },
             "media_kind": self.kind,
             "media_id": self.id,
