@@ -92,6 +92,12 @@ pub struct Config {
     /// classification, so these are plain paths, not typed [`LibraryRoot`]s. An
     /// empty list disables the music scan entirely (the M3-only posture).
     pub music_roots: Vec<PathBuf>,
+    /// Photo library roots (`PHOTO_LIBRARY_PATHS`, colon-separated). Empty →
+    /// photo scan disabled.
+    pub photo_roots: Vec<PathBuf>,
+    /// Audiobook roots (`AUDIOBOOK_LIBRARY_PATHS`, colon-separated). Empty →
+    /// audiobook scan disabled.
+    pub audiobook_roots: Vec<PathBuf>,
     pub internal_principal_secret: Option<String>,
     pub principal_mode: PrincipalMode,
     pub server_id: String,
@@ -154,6 +160,16 @@ impl Config {
             .filter(|s| !s.is_empty())
             .map(PathBuf::from)
             .collect();
+        let colon_paths = |key: &str| -> Vec<PathBuf> {
+            std::env::var(key)
+                .unwrap_or_default()
+                .split(':')
+                .filter(|s| !s.is_empty())
+                .map(PathBuf::from)
+                .collect()
+        };
+        let photo_roots = colon_paths("PHOTO_LIBRARY_PATHS");
+        let audiobook_roots = colon_paths("AUDIOBOOK_LIBRARY_PATHS");
         let internal_principal_secret = std::env::var("INTERNAL_PRINCIPAL_SECRET")
             .ok()
             .filter(|s| !s.is_empty());
@@ -205,6 +221,8 @@ impl Config {
             db_path,
             library_roots,
             music_roots,
+            photo_roots,
+            audiobook_roots,
             internal_principal_secret,
             principal_mode,
             server_id,

@@ -86,6 +86,14 @@ pub fn router(state: AppState) -> Router {
             "/collections/{id}/items",
             post(add_collection_item).delete(delete_collection_item),
         )
+        .route("/photos", get(list_photos))
+        .route("/photos/{id}/file", get(photo_file))
+        .route("/audiobooks", get(list_audiobooks))
+        .route("/audiobooks/{id}", get(get_audiobook))
+        .route("/podcasts", get(list_podcasts).post(add_podcast))
+        .route("/podcasts/{id}", axum::routing::delete(delete_podcast))
+        .route("/podcasts/{id}/refresh", post(refresh_podcast_route))
+        .route("/podcasts/{id}/episodes", get(list_podcast_episodes))
         .route("/subtitles/status", get(subtitle_job_status))
         .route("/subtitles/{kind}/{id}", get(list_subtitles))
         .route("/subtitles/{kind}/{id}/file", get(subtitle_file))
@@ -685,6 +693,12 @@ async fn resolve_media_file(state: &AppState, kind: &str, id: i64) -> AppResult<
             .fetch_optional(&state.db.pool)
             .await?
             .ok_or(AppError::NotFound)?,
+        // Audiobooks are keyed the same way (same probe, same range path).
+        "audiobook" => sqlx::query_scalar("SELECT media_file_id FROM audiobooks WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&state.db.pool)
+            .await?
+            .ok_or(AppError::NotFound)?,
         _ => return Err(AppError::BadRequest(format!("unknown media kind: {kind}"))),
     };
 
@@ -709,7 +723,7 @@ async fn play_grant(
     let caps = body.map(|Json(c)| c).unwrap_or_default();
     // Audio always direct-plays (never transcoded); video runs the capability
     // decision against the advertised client caps.
-    let (direct_play, reason) = if kind == "track" {
+    let (direct_play, reason) = if kind == "track" || kind == "audiobook" {
         (true, "audio direct play".to_string())
     } else {
         let decision = capability::decide(&file, &caps);
@@ -1042,11 +1056,12 @@ async fn stream_file(
     let file = resolve_media_file(&state, &kind, id).await?;
 
     // Containment: never serve a file outside the configured roots. A track
-    // lives under a MUSIC root; movies/episodes under the video library roots.
-    let allowed_roots: Vec<std::path::PathBuf> = if kind == "track" {
-        state.config.music_roots.clone()
-    } else {
-        state.config.library_paths()
+    // lives under a MUSIC root, an audiobook under an AUDIOBOOK root;
+    // movies/episodes under the video library roots.
+    let allowed_roots: Vec<std::path::PathBuf> = match kind.as_str() {
+        "track" => state.config.music_roots.clone(),
+        "audiobook" => state.config.audiobook_roots.clone(),
+        _ => state.config.library_paths(),
     };
     if !path_within_roots(std::path::Path::new(&file.path), &allowed_roots).await {
         tracing::warn!(path = %file.path, "refusing to stream file outside library roots");
@@ -1057,9 +1072,9 @@ async fn stream_file(
     // the file can't direct-play, hand off to the M4 transcoder when one is
     // configured (MEDIA_TRANSCODER_URL). Without a transcoder this is the
     // M3-only posture, so return 503 rather than shipping undecodable bytes.
-    // Audio (`track`) is ALWAYS direct play — never engage the transcoder — so
-    // the capability/handoff branch is skipped entirely for it.
-    if kind != "track" && caps_q.advertised() {
+    // Audio (`track`/`audiobook`) is ALWAYS direct play — never engage the
+    // transcoder — so the capability/handoff branch is skipped entirely for it.
+    if kind != "track" && kind != "audiobook" && caps_q.advertised() {
         let caps = caps_q.to_caps();
         let decision = capability::decide(&file, &caps);
         // `force_transcode` bypasses the decision: decide() WILL say
@@ -1360,6 +1375,9 @@ async fn media_exists(
     let table = match media_kind {
         "movie" => "movies",
         "episode" => "episodes",
+        "track" => "tracks",
+        "audiobook" => "audiobooks",
+        "podcast_episode" => "podcast_episodes",
         _ => return Ok(None),
     };
     // `table` is from the fixed allow-list above (never user input), so the
@@ -1392,7 +1410,8 @@ async fn post_watch(
         Some(false) => return Err(AppError::NotFound),
         None => {
             return Err(AppError::BadRequest(
-                "media_kind must be 'movie' or 'episode'".into(),
+                "media_kind must be one of movie, episode, track, audiobook, podcast_episode"
+                    .into(),
             ));
         }
     }
@@ -1621,7 +1640,8 @@ async fn store_delete(
     sub: &str,
 ) -> AppResult<Json<Value>> {
     store_owned(state, store, id, sub).await?;
-    // Items first: no PRAGMA foreign_keys on this pool, so cascade by hand.
+    // Items first: the item tables carry no FK to the parent (polymorphic
+    // store, see the migration header), so cascade by hand.
     let mut tx = state.db.pool.begin().await?;
     let del_items = format!(
         "DELETE FROM {} WHERE {} = ?",
@@ -2092,6 +2112,310 @@ async fn delete_collection_item(
         q.media_id,
     )
     .await
+}
+
+// ── Photos ────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct PageQuery {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+/// `(id, width, height, taken_at, mtime)` from `photos`.
+type PhotoListRow = (i64, Option<i64>, Option<i64>, Option<String>, String);
+/// `(id, feed_url, title, description, image_url, added_at, refreshed_at,
+/// episode_count)` from `podcasts`.
+type PodcastListRow = (
+    i64,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    String,
+    Option<String>,
+    i64,
+);
+/// `(id, title, audio_url, published_at, duration_secs, description)` from
+/// `podcast_episodes`.
+type PodcastEpisodeRow = (
+    i64,
+    String,
+    String,
+    Option<String>,
+    Option<i64>,
+    Option<String>,
+);
+
+async fn list_photos(
+    State(state): State<AppState>,
+    Query(q): Query<PageQuery>,
+) -> AppResult<Json<Value>> {
+    let (limit, offset) = paginate(q.limit, q.offset);
+    // Timeline order: EXIF taken-at when present, file mtime otherwise (both
+    // stored in lexicographically-chronological shapes).
+    let rows: Vec<PhotoListRow> = sqlx::query_as(
+        "SELECT id, width, height, taken_at, mtime FROM photos \
+         ORDER BY COALESCE(taken_at, mtime) DESC LIMIT ? OFFSET ?",
+    )
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.db.pool)
+    .await?;
+    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM photos")
+        .fetch_one(&state.db.pool)
+        .await?;
+    let items: Vec<Value> = rows
+        .into_iter()
+        .map(|(id, width, height, taken_at, mtime)| {
+            json!({
+                "id": id,
+                "width": width,
+                "height": height,
+                "taken_at": taken_at,
+                "mtime": mtime,
+                "url": format!("/api/media/photos/{id}/file"),
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "items": items, "total": total })))
+}
+
+/// Content type by extension for the photo file endpoint.
+fn image_content_type(path: &str) -> &'static str {
+    match path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()) {
+        Some(ext) => match ext.as_str() {
+            "jpg" | "jpeg" => "image/jpeg",
+            "png" => "image/png",
+            "gif" => "image/gif",
+            "webp" => "image/webp",
+            "heic" | "heif" => "image/heic",
+            "tif" | "tiff" => "image/tiff",
+            "bmp" => "image/bmp",
+            _ => "application/octet-stream",
+        },
+        None => "application/octet-stream",
+    }
+}
+
+async fn photo_file(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> AppResult<axum::response::Response> {
+    let path: Option<String> = sqlx::query_scalar("SELECT path FROM photos WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db.pool)
+        .await?;
+    let path = path.ok_or(AppError::NotFound)?;
+    // Same defense-in-depth as stream_file: only serve inside the photo roots.
+    if !path_within_roots(std::path::Path::new(&path), &state.config.photo_roots).await {
+        tracing::warn!(path = %path, "refusing to serve photo outside photo roots");
+        return Err(AppError::NotFound);
+    }
+    // ponytail: originals only, read fully (photos are MBs, not GBs). Add an
+    // ffmpeg-scaled thumbnail cache when the grid UI needs one.
+    let bytes = tokio::fs::read(&path)
+        .await
+        .map_err(|_| AppError::NotFound)?;
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, image_content_type(&path)),
+            (axum::http::header::CACHE_CONTROL, "private, max-age=86400"),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
+// ── Audiobooks ────────────────────────────────────────────────────────────
+
+async fn list_audiobooks(
+    State(state): State<AppState>,
+    Query(q): Query<PageQuery>,
+) -> AppResult<Json<Value>> {
+    let (limit, offset) = paginate(q.limit, q.offset);
+    let rows: Vec<(i64, String, String, Option<i64>)> = sqlx::query_as(
+        "SELECT id, author, title, duration_secs FROM audiobooks \
+         ORDER BY author COLLATE NOCASE, title COLLATE NOCASE LIMIT ? OFFSET ?",
+    )
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.db.pool)
+    .await?;
+    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audiobooks")
+        .fetch_one(&state.db.pool)
+        .await?;
+    let items: Vec<Value> = rows
+        .into_iter()
+        .map(|(id, author, title, duration_secs)| {
+            json!({
+                "id": id,
+                "author": author,
+                "title": title,
+                "duration_secs": duration_secs,
+                "streamUrl": format!("/api/media/stream/audiobook/{id}"),
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "items": items, "total": total })))
+}
+
+async fn get_audiobook(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> AppResult<Json<Value>> {
+    let row: Option<(String, String, Option<i64>, String)> = sqlx::query_as(
+        "SELECT author, title, duration_secs, chapters_json FROM audiobooks WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(&state.db.pool)
+    .await?;
+    let (author, title, duration_secs, chapters_json) = row.ok_or(AppError::NotFound)?;
+    let chapters: Value = serde_json::from_str(&chapters_json).unwrap_or_else(|_| json!([]));
+    Ok(Json(json!({
+        "id": id,
+        "author": author,
+        "title": title,
+        "duration_secs": duration_secs,
+        "chapters": chapters,
+        "streamUrl": format!("/api/media/stream/audiobook/{id}"),
+    })))
+}
+
+// ── Podcasts ──────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct PodcastAddBody {
+    pub feed_url: String,
+}
+
+async fn list_podcasts(State(state): State<AppState>) -> AppResult<Json<Value>> {
+    let rows: Vec<PodcastListRow> = sqlx::query_as(
+        "SELECT p.id, p.feed_url, p.title, p.description, p.image_url, p.added_at, \
+         p.refreshed_at, \
+         (SELECT COUNT(*) FROM podcast_episodes e WHERE e.podcast_id = p.id) \
+         FROM podcasts p ORDER BY p.title COLLATE NOCASE",
+    )
+    .fetch_all(&state.db.pool)
+    .await?;
+    let items: Vec<Value> = rows
+        .into_iter()
+        .map(
+            |(id, feed_url, title, description, image_url, added_at, refreshed_at, count)| {
+                json!({
+                    "id": id,
+                    "feed_url": feed_url,
+                    "title": title,
+                    "description": description,
+                    "image_url": image_url,
+                    "added_at": added_at,
+                    "refreshed_at": refreshed_at,
+                    "episode_count": count,
+                })
+            },
+        )
+        .collect();
+    Ok(Json(json!({ "items": items })))
+}
+
+async fn add_podcast(
+    State(state): State<AppState>,
+    Json(body): Json<PodcastAddBody>,
+) -> AppResult<Json<Value>> {
+    let feed_url = body.feed_url.trim().to_string();
+    if !(feed_url.starts_with("http://") || feed_url.starts_with("https://")) {
+        return Err(AppError::BadRequest("feed_url must be http(s)".into()));
+    }
+    // Fetch first: a subscription that never parsed is not worth storing.
+    let feed = crate::podcasts::fetch_feed(&feed_url)
+        .await
+        .map_err(AppError::BadRequest)?;
+
+    let id = sqlx::query("INSERT INTO podcasts (feed_url, title, added_at) VALUES (?, ?, ?)")
+        .bind(&feed_url)
+        .bind(&feed.title)
+        .bind(chrono::Utc::now().to_rfc3339())
+        .execute(&state.db.pool)
+        .await
+        .map_err(|e| unique_to_bad_request(e, "already subscribed to that feed"))?
+        .last_insert_rowid();
+    let episodes = crate::podcasts::store_feed(&state.db, id, &feed).await?;
+
+    Ok(Json(json!({
+        "id": id,
+        "title": feed.title,
+        "episodes": episodes,
+    })))
+}
+
+async fn refresh_podcast_route(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> AppResult<Json<Value>> {
+    let episodes = crate::podcasts::refresh_podcast(&state.db, id).await?;
+    Ok(Json(json!({ "ok": true, "episodes": episodes })))
+}
+
+async fn delete_podcast(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> AppResult<Json<Value>> {
+    // Episodes cascade via their FK (foreign_keys is ON for this pool).
+    let affected = sqlx::query("DELETE FROM podcasts WHERE id = ?")
+        .bind(id)
+        .execute(&state.db.pool)
+        .await?
+        .rows_affected();
+    if affected == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn list_podcast_episodes(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Query(q): Query<PageQuery>,
+) -> AppResult<Json<Value>> {
+    let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM podcasts WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db.pool)
+        .await?;
+    if exists.is_none() {
+        return Err(AppError::NotFound);
+    }
+    let (limit, offset) = paginate(q.limit, q.offset);
+    let rows: Vec<PodcastEpisodeRow> = sqlx::query_as(
+        "SELECT id, title, audio_url, published_at, duration_secs, description \
+         FROM podcast_episodes WHERE podcast_id = ? \
+         ORDER BY published_at IS NULL, published_at DESC LIMIT ? OFFSET ?",
+    )
+    .bind(id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.db.pool)
+    .await?;
+    let total: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM podcast_episodes WHERE podcast_id = ?")
+            .bind(id)
+            .fetch_one(&state.db.pool)
+            .await?;
+    let items: Vec<Value> = rows
+        .into_iter()
+        .map(
+            |(id, title, audio_url, published_at, duration_secs, description)| {
+                json!({
+                    "id": id,
+                    "title": title,
+                    "audio_url": audio_url,
+                    "published_at": published_at,
+                    "duration_secs": duration_secs,
+                    "description": description,
+                })
+            },
+        )
+        .collect();
+    Ok(Json(json!({ "items": items, "total": total })))
 }
 
 // ── Sidecar subtitles: OpenSubtitles download + Whisper transcription ────
@@ -2847,6 +3171,8 @@ mod tests {
             db_path: ":memory:".into(),
             library_roots: Vec::new(),
             music_roots: Vec::new(),
+            photo_roots: Vec::new(),
+            audiobook_roots: Vec::new(),
             internal_principal_secret: Some(secret.to_string()),
             principal_mode: PrincipalMode::Enforce,
             server_id: "srv-test".into(),
@@ -3360,6 +3686,194 @@ mod tests {
             config: Arc::new(config),
             ..state
         }
+    }
+
+    #[tokio::test]
+    async fn watch_state_accepts_track_kind() {
+        // Migration 0007 widened the kind CHECK; per-track resume must round-trip.
+        let state = test_state().await;
+        let (_, _, track_id) =
+            seed_track(&state, "Artist", "Album", "Song", 1, "/music/a.flac").await;
+        let app = crate::build_router(state);
+        let post = app
+            .clone()
+            .oneshot(json_req(
+                "POST",
+                "/api/media/watch?sub=plex:1",
+                json!({
+                    "media_kind": "track",
+                    "media_id": track_id,
+                    "position_secs": 42,
+                    "duration_secs": 200,
+                    "completed": false
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(post.status(), StatusCode::OK);
+        let v = body_json(
+            app.oneshot(req("GET", "/api/media/watch?sub=plex:1"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(v["items"][0]["media_kind"], "track");
+        assert_eq!(v["items"][0]["position_secs"], 42);
+    }
+
+    #[tokio::test]
+    async fn photos_list_and_file_round_trip() {
+        let state = test_state().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let photo_path = tmp.path().join("sunset.jpg");
+        std::fs::write(&photo_path, b"jpegish-bytes").unwrap();
+        sqlx::query(
+            "INSERT INTO photos (path, size_bytes, mtime, width, height, taken_at, scanned_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(photo_path.to_str().unwrap())
+        .bind(13_i64)
+        .bind("2026-01-01T00:00:00Z")
+        .bind(4032_i64)
+        .bind(3024_i64)
+        .bind("2025-12-25T10:00:00")
+        .bind("2026-01-01T00:00:00Z")
+        .execute(&state.db.pool)
+        .await
+        .unwrap();
+        let app = crate::build_router(state);
+
+        let list = body_json(
+            app.clone()
+                .oneshot(req("GET", "/api/media/photos?sub=plex:1"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(list["total"], 1);
+        let id = list["items"][0]["id"].as_i64().unwrap();
+        assert_eq!(list["items"][0]["taken_at"], "2025-12-25T10:00:00");
+
+        // photo_roots is empty in tests → containment skipped → file serves.
+        let file = app
+            .clone()
+            .oneshot(req(
+                "GET",
+                format!("/api/media/photos/{id}/file?sub=plex:1"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(file.status(), StatusCode::OK);
+        assert_eq!(
+            file.headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .unwrap(),
+            "image/jpeg"
+        );
+
+        let missing = app
+            .oneshot(req("GET", "/api/media/photos/9999/file?sub=plex:1"))
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn audiobooks_list_and_detail_with_chapters() {
+        let state = test_state().await;
+        let file_id = seed_media_file(&state, "/books/dispossessed.m4b").await;
+        sqlx::query(
+            "INSERT INTO audiobooks (media_file_id, author, title, duration_secs, chapters_json) \
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(file_id)
+        .bind("Le Guin")
+        .bind("The Dispossessed")
+        .bind(41_000_i64)
+        .bind(r#"[{"title":"Chapter 1","start_secs":0,"end_secs":1800}]"#)
+        .execute(&state.db.pool)
+        .await
+        .unwrap();
+        let app = crate::build_router(state);
+
+        let list = body_json(
+            app.clone()
+                .oneshot(req("GET", "/api/media/audiobooks?sub=plex:1"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(list["total"], 1);
+        let id = list["items"][0]["id"].as_i64().unwrap();
+        assert_eq!(list["items"][0]["author"], "Le Guin");
+
+        let detail = body_json(
+            app.clone()
+                .oneshot(req("GET", format!("/api/media/audiobooks/{id}?sub=plex:1")))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(detail["chapters"][0]["title"], "Chapter 1");
+        assert_eq!(
+            detail["streamUrl"],
+            format!("/api/media/stream/audiobook/{id}")
+        );
+
+        // The grant path treats an audiobook as direct-play audio.
+        let grant = body_json(
+            app.oneshot(json_req(
+                "POST",
+                format!("/api/media/play/audiobook/{id}/grant?sub=plex:1"),
+                "{}",
+            ))
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(grant["directPlay"], true);
+    }
+
+    #[tokio::test]
+    async fn podcast_endpoints_validate_without_network() {
+        let state = test_state().await;
+        let app = crate::build_router(state);
+
+        // Empty list to start.
+        let list = body_json(
+            app.clone()
+                .oneshot(req("GET", "/api/media/podcasts?sub=plex:1"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(list["items"].as_array().unwrap().len(), 0);
+
+        // Non-http(s) scheme is rejected before any fetch.
+        let bad = app
+            .clone()
+            .oneshot(json_req(
+                "POST",
+                "/api/media/podcasts?sub=plex:1",
+                json!({ "feed_url": "file:///etc/passwd" }).to_string(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+
+        // Episodes of an unknown podcast → 404; deleting one → 404.
+        let eps = app
+            .clone()
+            .oneshot(req("GET", "/api/media/podcasts/42/episodes?sub=plex:1"))
+            .await
+            .unwrap();
+        assert_eq!(eps.status(), StatusCode::NOT_FOUND);
+        let del = app
+            .oneshot(req("DELETE", "/api/media/podcasts/42?sub=plex:1"))
+            .await
+            .unwrap();
+        assert_eq!(del.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

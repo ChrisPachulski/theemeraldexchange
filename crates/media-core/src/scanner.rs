@@ -1181,6 +1181,17 @@ struct AudioWalkOutcome {
 /// Walk every audio file under `roots`. Pure blocking FS work — run inside
 /// `spawn_blocking`, never directly on the async runtime.
 fn walk_audio_roots(roots: &[std::path::PathBuf]) -> AudioWalkOutcome {
+    walk_matching_roots(roots, is_audio_file, "music")
+}
+
+/// Walk every file matching `matches` under `roots` (shared by the music,
+/// audiobook, and photo scans). Pure blocking FS work — run inside
+/// `spawn_blocking`, never directly on the async runtime.
+fn walk_matching_roots(
+    roots: &[std::path::PathBuf],
+    matches: fn(&str) -> bool,
+    label: &str,
+) -> AudioWalkOutcome {
     let mut out = AudioWalkOutcome {
         files: Vec::new(),
         errors: 0,
@@ -1190,7 +1201,7 @@ fn walk_audio_roots(roots: &[std::path::PathBuf]) -> AudioWalkOutcome {
         if !root.is_dir() {
             tracing::error!(
                 root = %root.display(),
-                "music root missing or not a directory; skipping walk AND excluding \
+                "{label} root missing or not a directory; skipping walk AND excluding \
                  it from the missing-file prune (its rows are kept)"
             );
             out.errors += 1;
@@ -1201,7 +1212,7 @@ fn walk_audio_roots(roots: &[std::path::PathBuf]) -> AudioWalkOutcome {
             let entry = match entry {
                 Ok(e) => e,
                 Err(e) => {
-                    tracing::warn!("music walk error under {}: {e}", root.display());
+                    tracing::warn!("{label} walk error under {}: {e}", root.display());
                     root_errors += 1;
                     continue;
                 }
@@ -1212,7 +1223,7 @@ fn walk_audio_roots(roots: &[std::path::PathBuf]) -> AudioWalkOutcome {
             let Some(name) = entry.file_name().to_str() else {
                 continue;
             };
-            if !is_audio_file(name) {
+            if !matches(name) {
                 continue;
             }
             let path = entry.path();
@@ -1494,6 +1505,393 @@ async fn prune_missing_music(
     Ok(removed)
 }
 
+// ── Photo library ───────────────────────────────────────────────────────
+//
+// Photos never touch ffprobe or media_files: the scan stats + reads EXIF
+// (kamadak-exif, pure Rust) and indexes straight into the `photos` table.
+// ponytail: no thumbnail generation yet — the file endpoint serves originals;
+// add an ffmpeg-scaled thumb cache when the Photos tab needs a fast grid.
+
+/// Image extensions the photo scanner considers.
+pub const IMAGE_EXTENSIONS: &[&str] = &[
+    "jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "tif", "tiff", "bmp",
+];
+
+pub fn is_image_file(name: &str) -> bool {
+    name.rsplit_once('.')
+        .map(|(_, ext)| IMAGE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct PhotoScanReport {
+    pub files_seen: usize,
+    pub files_added: usize,
+    pub files_updated: usize,
+    pub files_removed: usize,
+    pub errors: usize,
+}
+
+/// EXIF-derived photo metadata; every field best-effort.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct PhotoMeta {
+    pub taken_at: Option<String>,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+}
+
+/// EXIF datetimes are `"YYYY:MM:DD HH:MM:SS"`; swap the date colons for
+/// dashes and the space for `T` so the stored string sorts chronologically
+/// alongside RFC3339 mtimes. Anything that doesn't look like that shape is
+/// dropped rather than stored unsortable.
+pub fn exif_datetime_to_sortable(raw: &str) -> Option<String> {
+    let s = raw.trim();
+    let bytes = s.as_bytes();
+    if s.len() < 19 || bytes[4] != b':' || bytes[7] != b':' || bytes[10] != b' ' {
+        return None;
+    }
+    if !s[..4].chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(format!(
+        "{}-{}-{}T{}",
+        &s[..4],
+        &s[5..7],
+        &s[8..10],
+        &s[11..19]
+    ))
+}
+
+/// Read EXIF taken-at + pixel dimensions. Blocking I/O — call inside
+/// `spawn_blocking`. Any failure (no EXIF, unsupported container) → defaults.
+pub fn read_photo_meta(path: &std::path::Path) -> PhotoMeta {
+    let Ok(file) = std::fs::File::open(path) else {
+        return PhotoMeta::default();
+    };
+    let mut reader = std::io::BufReader::new(file);
+    let Ok(exif) = exif::Reader::new().read_from_container(&mut reader) else {
+        return PhotoMeta::default();
+    };
+    let field_str = |tag: exif::Tag| {
+        exif.get_field(tag, exif::In::PRIMARY)
+            .map(|f| f.display_value().to_string())
+    };
+    let field_uint = |tag: exif::Tag| {
+        exif.get_field(tag, exif::In::PRIMARY)
+            .and_then(|f| f.value.get_uint(0))
+            .map(i64::from)
+    };
+    PhotoMeta {
+        taken_at: field_str(exif::Tag::DateTimeOriginal)
+            .or_else(|| field_str(exif::Tag::DateTime))
+            .and_then(|s| exif_datetime_to_sortable(&s)),
+        width: field_uint(exif::Tag::PixelXDimension),
+        height: field_uint(exif::Tag::PixelYDimension),
+    }
+}
+
+/// One photo scan pass: stat-skip unchanged files, EXIF-index new/changed
+/// ones, prune vanished rows under healthy roots. Empty `roots` is a no-op.
+pub async fn scan_photos_once(
+    db: &Db,
+    roots: &[std::path::PathBuf],
+) -> Result<PhotoScanReport, AppError> {
+    let mut report = PhotoScanReport::default();
+    if roots.is_empty() {
+        return Ok(report);
+    }
+
+    let roots_owned = roots.to_vec();
+    let walk = tokio::task::spawn_blocking(move || {
+        walk_matching_roots(&roots_owned, is_image_file, "photo")
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("photo walk task failed: {e}")))?;
+    report.files_seen = walk.files.len();
+    report.errors = walk.errors;
+
+    for file in &walk.files {
+        let existing: Option<(i64, String)> =
+            sqlx::query_as("SELECT size_bytes, mtime FROM photos WHERE path = ?")
+                .bind(&file.path_str)
+                .fetch_optional(&db.pool)
+                .await?;
+        if let Some((prev_size, prev_mtime)) = &existing
+            && *prev_size == file.size_bytes
+            && *prev_mtime == file.mtime
+        {
+            continue;
+        }
+        let path = file.path.clone();
+        let meta = tokio::task::spawn_blocking(move || read_photo_meta(&path))
+            .await
+            .unwrap_or_default();
+        sqlx::query(
+            "INSERT INTO photos (path, size_bytes, mtime, width, height, taken_at, scanned_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?) \
+             ON CONFLICT(path) DO UPDATE SET size_bytes = excluded.size_bytes, \
+             mtime = excluded.mtime, width = excluded.width, height = excluded.height, \
+             taken_at = excluded.taken_at, scanned_at = excluded.scanned_at",
+        )
+        .bind(&file.path_str)
+        .bind(file.size_bytes)
+        .bind(&file.mtime)
+        .bind(meta.width)
+        .bind(meta.height)
+        .bind(&meta.taken_at)
+        .bind(chrono::Utc::now().to_rfc3339())
+        .execute(&db.pool)
+        .await?;
+        if existing.is_some() {
+            report.files_updated += 1;
+        } else {
+            report.files_added += 1;
+        }
+    }
+
+    // Prune vanished photos under roots that walked cleanly.
+    if !walk.prunable_roots.is_empty() {
+        let rows: Vec<(i64, String)> = sqlx::query_as("SELECT id, path FROM photos")
+            .fetch_all(&db.pool)
+            .await?;
+        let roots = walk.prunable_roots.clone();
+        let missing: Vec<i64> = tokio::task::spawn_blocking(move || {
+            rows.into_iter()
+                .filter(|(_, path)| {
+                    let p = std::path::Path::new(path);
+                    roots.iter().any(|root| p.starts_with(root)) && !p.exists()
+                })
+                .map(|(id, _)| id)
+                .collect()
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("photo prune task failed: {e}")))?;
+        for id in missing {
+            report.files_removed += sqlx::query("DELETE FROM photos WHERE id = ?")
+                .bind(id)
+                .execute(&db.pool)
+                .await?
+                .rows_affected() as usize;
+        }
+    }
+
+    Ok(report)
+}
+
+/// [`scan_photos_once`] isolated on its own task (mirrors the other scans).
+pub async fn scan_photos_isolated(
+    db: Db,
+    roots: Vec<std::path::PathBuf>,
+) -> Result<PhotoScanReport, AppError> {
+    match tokio::spawn(async move { scan_photos_once(&db, &roots).await }).await {
+        Ok(result) => result,
+        Err(e) => Err(AppError::Internal(format!("photo scan task panicked: {e}"))),
+    }
+}
+
+// ── Audiobooks ──────────────────────────────────────────────────────────
+//
+// Audiobooks ride the music machinery: the same media_files upsert (probed by
+// the same ffprobe call, which now also captures container chapters), plus a
+// thin `audiobooks` catalog row per file. m4b is the canonical container but
+// any audio extension under an AUDIOBOOK_LIBRARY_PATHS root counts.
+
+pub fn is_audiobook_file(name: &str) -> bool {
+    is_audio_file(name)
+        || name
+            .rsplit_once('.')
+            .map(|(_, ext)| ext.eq_ignore_ascii_case("m4b"))
+            .unwrap_or(false)
+}
+
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct AudiobookScanReport {
+    pub files_seen: usize,
+    pub files_added: usize,
+    pub files_updated: usize,
+    pub files_removed: usize,
+    pub errors: usize,
+}
+
+/// Author/title classification for an audiobook file. Tags first (author →
+/// album_artist → artist), then the parent directory name, then fallbacks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudiobookMeta {
+    pub author: String,
+    pub title: String,
+}
+
+pub fn classify_audiobook(
+    tags: &std::collections::BTreeMap<String, String>,
+    stem: &str,
+    parent_dir: Option<&str>,
+) -> AudiobookMeta {
+    let get = |k: &str| tags.get(k).map(|s| s.trim()).filter(|s| !s.is_empty());
+    let author = get("author")
+        .or_else(|| get("album_artist"))
+        .or_else(|| get("albumartist"))
+        .or_else(|| get("artist"))
+        .map(str::to_string)
+        .or_else(|| {
+            parent_dir
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "Unknown Author".to_string());
+    let title = get("album")
+        .or_else(|| get("title"))
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            let s = stem.trim();
+            if s.is_empty() {
+                "Unknown Audiobook".to_string()
+            } else {
+                s.to_string()
+            }
+        });
+    AudiobookMeta { author, title }
+}
+
+/// One audiobook scan pass over `roots` (mirrors [`scan_music_once`]).
+pub async fn scan_audiobooks_once(
+    db: &Db,
+    roots: &[std::path::PathBuf],
+) -> Result<AudiobookScanReport, AppError> {
+    scan_audiobooks_once_with_probe_bin(db, roots, "ffprobe").await
+}
+
+async fn scan_audiobooks_once_with_probe_bin(
+    db: &Db,
+    roots: &[std::path::PathBuf],
+    ffprobe_bin: &str,
+) -> Result<AudiobookScanReport, AppError> {
+    let mut report = AudiobookScanReport::default();
+    if roots.is_empty() {
+        return Ok(report);
+    }
+
+    let roots_owned = roots.to_vec();
+    let walk = tokio::task::spawn_blocking(move || {
+        walk_matching_roots(&roots_owned, is_audiobook_file, "audiobook")
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("audiobook walk task failed: {e}")))?;
+    report.files_seen = walk.files.len();
+    report.errors = walk.errors;
+
+    for file in &walk.files {
+        let path_str = &file.path_str;
+        match existing_stat(db, path_str).await {
+            Ok(Some((prev_size, prev_mtime)))
+                if prev_size == file.size_bytes && prev_mtime == file.mtime =>
+            {
+                continue;
+            }
+            Ok(existing) => {
+                let is_update = existing.is_some();
+                let probed = match probe::ffprobe_with_bin(ffprobe_bin, &file.path).await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::warn!("ffprobe failed for {path_str}: {e}");
+                        report.errors += 1;
+                        continue;
+                    }
+                };
+                let parent_dir = file
+                    .path
+                    .parent()
+                    .and_then(|p| p.file_name())
+                    .and_then(|s| s.to_str());
+                let meta = classify_audiobook(&probed.format_tags, &file.stem, parent_dir);
+                let index = async {
+                    let (file_id, _) =
+                        upsert_media_file(db, path_str, file.size_bytes, &file.mtime, &probed)
+                            .await?;
+                    let chapters_json = serde_json::to_string(&probed.chapters)
+                        .unwrap_or_else(|_| "[]".to_string());
+                    sqlx::query(
+                        "INSERT INTO audiobooks (media_file_id, author, title, duration_secs, chapters_json) \
+                         VALUES (?, ?, ?, ?, ?) \
+                         ON CONFLICT(media_file_id) DO UPDATE SET author = excluded.author, \
+                         title = excluded.title, duration_secs = excluded.duration_secs, \
+                         chapters_json = excluded.chapters_json",
+                    )
+                    .bind(file_id)
+                    .bind(&meta.author)
+                    .bind(&meta.title)
+                    .bind(probed.duration_secs)
+                    .bind(&chapters_json)
+                    .execute(&db.pool)
+                    .await?;
+                    Ok::<(), AppError>(())
+                };
+                match index.await {
+                    Ok(()) => {
+                        if is_update {
+                            report.files_updated += 1;
+                        } else {
+                            report.files_added += 1;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("audiobook index failed for {path_str}: {e}");
+                        report.errors += 1;
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("audiobook lookup failed for {path_str}: {e}");
+                report.errors += 1;
+            }
+        }
+    }
+
+    // Prune media_files rows backing audiobooks whose file vanished (cascades
+    // the audiobooks row), restricted to healthy roots — same guard as music.
+    if !walk.prunable_roots.is_empty() {
+        let rows: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT mf.id, mf.path FROM media_files mf JOIN audiobooks a ON a.media_file_id = mf.id",
+        )
+        .fetch_all(&db.pool)
+        .await?;
+        let roots = walk.prunable_roots.clone();
+        let missing: Vec<i64> = tokio::task::spawn_blocking(move || {
+            rows.into_iter()
+                .filter(|(_, path)| {
+                    let p = std::path::Path::new(path);
+                    roots.iter().any(|root| p.starts_with(root)) && !p.exists()
+                })
+                .map(|(id, _)| id)
+                .collect()
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("audiobook prune task failed: {e}")))?;
+        for id in missing {
+            report.files_removed += sqlx::query("DELETE FROM media_files WHERE id = ?")
+                .bind(id)
+                .execute(&db.pool)
+                .await?
+                .rows_affected() as usize;
+        }
+    }
+
+    Ok(report)
+}
+
+/// [`scan_audiobooks_once`] isolated on its own task.
+pub async fn scan_audiobooks_isolated(
+    db: Db,
+    roots: Vec<std::path::PathBuf>,
+) -> Result<AudiobookScanReport, AppError> {
+    match tokio::spawn(async move { scan_audiobooks_once(&db, &roots).await }).await {
+        Ok(result) => result,
+        Err(e) => Err(AppError::Internal(format!(
+            "audiobook scan task panicked: {e}"
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1528,6 +1926,7 @@ mod tests {
                 forced: false,
             }],
             format_tags: Default::default(),
+            chapters: Vec::new(),
         }
     }
 
@@ -2823,7 +3222,96 @@ mod tests {
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
+            chapters: Vec::new(),
         }
+    }
+
+    // ── Photos & audiobooks ────────────────────────────────────────────
+
+    #[test]
+    fn image_and_audiobook_extensions_recognized() {
+        assert!(is_image_file("IMG_0001.JPG"));
+        assert!(is_image_file("pic.heic"));
+        assert!(!is_image_file("movie.mkv"));
+        assert!(!is_image_file("noext"));
+        // m4b is audiobook-only; plain audio counts for audiobooks too.
+        assert!(is_audiobook_file("book.m4b"));
+        assert!(is_audiobook_file("book.mp3"));
+        assert!(!is_audio_file("book.m4b"));
+    }
+
+    #[test]
+    fn exif_datetime_converts_to_sortable() {
+        assert_eq!(
+            exif_datetime_to_sortable("2023:06:14 10:20:30"),
+            Some("2023-06-14T10:20:30".to_string())
+        );
+        assert_eq!(exif_datetime_to_sortable("garbage"), None);
+        assert_eq!(exif_datetime_to_sortable("2023-06-14 10:20:30"), None);
+        assert_eq!(exif_datetime_to_sortable(""), None);
+    }
+
+    #[test]
+    fn classify_audiobook_prefers_tags_then_parent_dir() {
+        let tags = |pairs: &[(&str, &str)]| -> std::collections::BTreeMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        let m = classify_audiobook(
+            &tags(&[
+                ("artist", "Ursula K. Le Guin"),
+                ("album", "The Dispossessed"),
+            ]),
+            "part1",
+            Some("SomeDir"),
+        );
+        assert_eq!(m.author, "Ursula K. Le Guin");
+        assert_eq!(m.title, "The Dispossessed");
+
+        // No tags: author falls to the parent dir, title to the stem.
+        let m = classify_audiobook(&tags(&[]), "The Left Hand of Darkness", Some("Le Guin"));
+        assert_eq!(m.author, "Le Guin");
+        assert_eq!(m.title, "The Left Hand of Darkness");
+
+        // Nothing at all: explicit unknowns, never empty strings.
+        let m = classify_audiobook(&tags(&[]), "", None);
+        assert_eq!(m.author, "Unknown Author");
+        assert_eq!(m.title, "Unknown Audiobook");
+    }
+
+    #[tokio::test]
+    async fn photo_scan_indexes_skips_and_prunes() {
+        let db = Db::connect_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        // Not a real JPEG — EXIF read fails gracefully → NULL meta columns.
+        std::fs::write(root.join("a.jpg"), b"not-really-a-jpeg").unwrap();
+        std::fs::write(root.join("b.png"), b"fake-png").unwrap();
+        std::fs::write(root.join("notes.txt"), b"skipped").unwrap();
+
+        let report = scan_photos_once(&db, &[root.clone()]).await.unwrap();
+        assert_eq!(report.files_seen, 2);
+        assert_eq!(report.files_added, 2);
+        assert_eq!(count(&db, "photos").await, 2);
+
+        // Unchanged rescan is a no-op.
+        let report = scan_photos_once(&db, &[root.clone()]).await.unwrap();
+        assert_eq!(report.files_added, 0);
+        assert_eq!(report.files_updated, 0);
+
+        // Deleting a file prunes its row (root still healthy).
+        std::fs::remove_file(root.join("b.png")).unwrap();
+        let report = scan_photos_once(&db, &[root.clone()]).await.unwrap();
+        assert_eq!(report.files_removed, 1);
+        assert_eq!(count(&db, "photos").await, 1);
+
+        // A vanished ROOT must not wipe the catalog.
+        drop(dir);
+        let report = scan_photos_once(&db, &[root]).await.unwrap();
+        assert_eq!(report.files_removed, 0);
+        assert_eq!(count(&db, "photos").await, 1);
     }
 
     #[test]

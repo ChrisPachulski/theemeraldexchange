@@ -47,6 +47,19 @@ pub struct FileProbe {
     /// artist/album/title/track/year from these tags (see `scanner::classify_music`).
     #[serde(default)]
     pub format_tags: std::collections::BTreeMap<String, String>,
+    /// Container chapters (`-show_chapters`). Only the audiobook scanner reads
+    /// these; video/music ignore them.
+    #[serde(default)]
+    pub chapters: Vec<Chapter>,
+}
+
+/// One container chapter, seconds-granular (audiobook navigation needs no
+/// finer resolution, and whole seconds keep [`FileProbe`] `Eq`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Chapter {
+    pub title: Option<String>,
+    pub start_secs: i64,
+    pub end_secs: i64,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]

@@ -13,6 +13,7 @@ pub mod db;
 pub mod error;
 pub mod filename;
 pub mod models;
+pub mod podcasts;
 pub mod probe;
 pub mod routes;
 pub mod scanner;
@@ -131,6 +132,31 @@ pub async fn run_guarded_scan(state: &AppState, trigger: &str) -> bool {
             "music scan complete"
         ),
         Err(e) => tracing::warn!(trigger, "music scan failed: {e}"),
+    }
+
+    // Photo + audiobook passes: same guard, same best-effort posture, each a
+    // no-op when its roots env is unset.
+    match scanner::scan_photos_isolated(state.db.clone(), state.config.photo_roots.clone()).await {
+        Ok(report) => tracing::info!(
+            trigger,
+            files_seen = report.files_seen,
+            files_added = report.files_added,
+            errors = report.errors,
+            "photo scan complete"
+        ),
+        Err(e) => tracing::warn!(trigger, "photo scan failed: {e}"),
+    }
+    match scanner::scan_audiobooks_isolated(state.db.clone(), state.config.audiobook_roots.clone())
+        .await
+    {
+        Ok(report) => tracing::info!(
+            trigger,
+            files_seen = report.files_seen,
+            files_added = report.files_added,
+            errors = report.errors,
+            "audiobook scan complete"
+        ),
+        Err(e) => tracing::warn!(trigger, "audiobook scan failed: {e}"),
     }
 
     state.scanning.store(false, Ordering::SeqCst);
