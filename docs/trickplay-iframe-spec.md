@@ -142,6 +142,37 @@ Wiring:
     segments are served by the existing on-disk asset read and 404 gracefully
     until the sampler writes them (a momentary blank preview, which AVPlayer
     tolerates on an I-frame rendition).
+- `server/routes/transcode.ts` — the backend TS proxy that fronts the Rust
+  transcoder rewrites each manifest to append the per-session stream token to
+  every asset URL (`appendTokenToManifest`), because the token rides as `?t=` and
+  hls.js/AVPlayer drop the query when resolving relative URLs. It tokenized bare
+  segment/variant lines and the `#EXT-X-MAP` `URI=` attribute, but treated every
+  other `#`-prefixed tag as an untouchable comment — so the master's
+  `#EXT-X-I-FRAME-STREAM-INF:…,URI="iframe.m3u8"` would have gone out
+  **untokenized**, and AVPlayer's request for `iframe.m3u8` would 401 at the
+  proxy (silently: no thumbnails, playback fine). Fixed by making the `URI=`
+  rewrite **tag-agnostic** — it now tokenizes a quoted `URI="…"`/`URI='…'`
+  attribute on ANY `#` tag line (both quote styles, all occurrences), mirroring
+  `server/services/iptvHlsRewrite.ts` rather than a hardcoded tag list, so
+  `#EXT-X-MAP`, `#EXT-X-I-FRAME-STREAM-INF`, and any future `#EXT-X-MEDIA`
+  rendition are all covered with no further change. The sibling video variant is
+  a BARE line (`media.m3u8`), already tokenized by the relative-line rule.
+  Absolute URIs keep their own auth (untouched). Covered by new unit tests
+  (both-rendition tokenization; single-quote + absolute cases). With the flag OFF
+  no master is emitted, so these tags never appear in prod today — zero risk.
+
+### End-to-end token-auth flow (native, flag ON, re-encode)
+
+1. Client → proxy `GET …/index.m3u8?t=TOK`. Proxy authenticates `TOK`, forwards
+   as the session owner, receives the MASTER, and `appendTokenToManifest` rewrites
+   both `media.m3u8` → `media.m3u8?t=TOK` (bare line) and the
+   `#EXT-X-I-FRAME-STREAM-INF` `URI="iframe.m3u8"` → `URI="iframe.m3u8?t=TOK"`
+   (the fix above).
+2. AVPlayer → proxy `GET …/media.m3u8?t=TOK` and `…/iframe.m3u8?t=TOK`. Each is a
+   `.m3u8`, so the proxy tokenizes their segment lines too (`seg_*.ts?t=TOK`,
+   `thumb_*.ts?t=TOK`, and the `#EXT-X-MAP init.mp4?t=TOK` if present).
+3. AVPlayer → proxy `GET …/seg_*.ts?t=TOK` / `…/thumb_*.ts?t=TOK`. Streamed
+   straight through, authenticated by the token.
 
 ### URL shape after the change (native, flag ON, re-encode)
 
