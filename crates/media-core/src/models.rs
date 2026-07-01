@@ -42,6 +42,11 @@ pub struct FileProbe {
     pub hdr_format: Option<String>,
     pub audio_tracks: Vec<AudioTrack>,
     pub subtitle_tracks: Vec<SubtitleTrack>,
+    /// Container-level (`format.tags`) metadata, keys lowercased. Empty for the
+    /// video path, which never reads it; the music scanner classifies a track's
+    /// artist/album/title/track/year from these tags (see `scanner::classify_music`).
+    #[serde(default)]
+    pub format_tags: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]

@@ -87,6 +87,11 @@ pub struct Config {
     pub port: u16,
     pub db_path: String,
     pub library_roots: Vec<LibraryRoot>,
+    /// Audio library roots, parsed from `MUSIC_LIBRARY_PATHS` (colon-separated,
+    /// same shape as `MEDIA_LIBRARY_PATHS`). Music has no movie/episode
+    /// classification, so these are plain paths, not typed [`LibraryRoot`]s. An
+    /// empty list disables the music scan entirely (the M3-only posture).
+    pub music_roots: Vec<PathBuf>,
     pub internal_principal_secret: Option<String>,
     pub principal_mode: PrincipalMode,
     pub server_id: String,
@@ -128,6 +133,14 @@ impl Config {
             .filter(|s| !s.is_empty())
             .map(|s| LibraryRoot::from_path(PathBuf::from(s)))
             .collect();
+        // Music roots share MEDIA_LIBRARY_PATHS' colon-separated shape but carry
+        // no RootKind (audio needs no movie/episode classification).
+        let music_roots = std::env::var("MUSIC_LIBRARY_PATHS")
+            .unwrap_or_default()
+            .split(':')
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .collect();
         let internal_principal_secret = std::env::var("INTERNAL_PRINCIPAL_SECRET")
             .ok()
             .filter(|s| !s.is_empty());
@@ -161,6 +174,7 @@ impl Config {
             port,
             db_path,
             library_roots,
+            music_roots,
             internal_principal_secret,
             principal_mode,
             server_id,
@@ -350,6 +364,32 @@ mod tests {
         assert_eq!(parse(Some("not-a-number")), DEFAULT_SCAN_INTERVAL_SECS);
         assert_eq!(parse(Some("0")), 0);
         assert_eq!(parse(Some(" 900 ")), 900);
+    }
+
+    #[test]
+    fn parses_music_roots_colon_separated() {
+        // MUSIC_LIBRARY_PATHS mirrors MEDIA_LIBRARY_PATHS' shape: colon-joined,
+        // empty segments dropped, order preserved, plain paths (no RootKind).
+        let roots: Vec<PathBuf> = "/media/Music:/mnt/flac::/media/Music2"
+            .split(':')
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .collect();
+        assert_eq!(
+            roots,
+            vec![
+                PathBuf::from("/media/Music"),
+                PathBuf::from("/mnt/flac"),
+                PathBuf::from("/media/Music2"),
+            ]
+        );
+        // Unset → empty (music scan disabled).
+        let empty: Vec<PathBuf> = ""
+            .split(':')
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .collect();
+        assert!(empty.is_empty());
     }
 
     #[test]

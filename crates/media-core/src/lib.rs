@@ -116,6 +116,22 @@ pub async fn run_guarded_scan(state: &AppState, trigger: &str) -> bool {
             tracing::warn!(trigger, "scheduled scan failed: {e}");
         }
     }
+
+    // Music library scan (independent of the video roots + prune above; reuses
+    // the same `scanning` guard so it never overlaps a manual scan). A no-op
+    // when MUSIC_LIBRARY_PATHS is unset. Best-effort — never aborts the loop.
+    match scanner::scan_music_isolated(state.db.clone(), state.config.music_roots.clone()).await {
+        Ok(report) => tracing::info!(
+            trigger,
+            files_seen = report.files_seen,
+            files_added = report.files_added,
+            tracks = report.tracks,
+            errors = report.errors,
+            "music scan complete"
+        ),
+        Err(e) => tracing::warn!(trigger, "music scan failed: {e}"),
+    }
+
     state.scanning.store(false, Ordering::SeqCst);
     true
 }
