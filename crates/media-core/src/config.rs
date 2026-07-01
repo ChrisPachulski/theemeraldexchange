@@ -111,6 +111,19 @@ pub struct Config {
     /// path keeps returning `503 transcoder required` — so leaving the env unset
     /// preserves the pre-M4 behavior exactly. An empty string is treated as unset.
     pub transcoder_url: Option<String>,
+    /// OpenSubtitles REST API key (`OPENSUBTITLES_API_KEY`). Unset → the
+    /// subtitle download endpoint answers 503 feature-disabled.
+    pub opensubtitles_api_key: Option<String>,
+    /// Whisper CLI binary (`WHISPER_BIN`) honoring the openai-whisper argument
+    /// convention (whisper.cpp users point this at a wrapper script). Unset →
+    /// the transcription endpoint answers 503 feature-disabled.
+    pub whisper_bin: Option<String>,
+    /// Whisper model name (`WHISPER_MODEL`, e.g. `small`); omitted → the
+    /// CLI's own default.
+    pub whisper_model: Option<String>,
+    /// Where downloaded/generated sidecar subtitles live
+    /// (`MEDIA_SUBTITLES_DIR`; default `<db dir>/subtitles`).
+    pub subtitles_dir: PathBuf,
 }
 
 impl Config {
@@ -165,6 +178,23 @@ impl Config {
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
+        let opensubtitles_api_key = std::env::var("OPENSUBTITLES_API_KEY")
+            .ok()
+            .filter(|s| !s.trim().is_empty());
+        let whisper_bin = std::env::var("WHISPER_BIN")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let whisper_model = std::env::var("WHISPER_MODEL")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let subtitles_dir = std::env::var("MEDIA_SUBTITLES_DIR")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| default_subtitles_dir(&db_path));
 
         // Fail-fast safety gates (pure, unit-tested via `validate_posture`).
         validate_posture(&host, &principal_mode, internal_principal_secret.is_some())?;
@@ -182,6 +212,10 @@ impl Config {
             scan_interval_secs,
             boot_scan,
             transcoder_url,
+            opensubtitles_api_key,
+            whisper_bin,
+            whisper_model,
+            subtitles_dir,
         })
     }
 
@@ -189,6 +223,17 @@ impl Config {
     pub fn library_paths(&self) -> Vec<PathBuf> {
         self.library_roots.iter().map(|r| r.path.clone()).collect()
     }
+}
+
+/// Sidecar subtitle store beside the database (`<db dir>/subtitles`). An
+/// in-memory or bare-filename db path falls back to `./data/subtitles`.
+fn default_subtitles_dir(db_path: &str) -> PathBuf {
+    std::path::Path::new(db_path)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("./data"))
+        .join("subtitles")
 }
 
 /// The outcome of a posture check: refuse to boot, boot with a warning, or

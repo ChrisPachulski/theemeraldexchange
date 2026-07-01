@@ -20,6 +20,11 @@ pub enum AppError {
     /// busy server look like an M4 outage.
     #[error("stream_slots_exhausted")]
     StreamSlotsExhausted,
+    /// An optional feature (subtitle download, Whisper transcription) whose
+    /// prerequisite env (API key / binary) is not configured. 503 with the
+    /// feature named so the client can explain what to wire up.
+    #[error("feature_disabled: {0}")]
+    FeatureDisabled(String),
     #[error(transparent)]
     Db(#[from] sqlx::Error),
     #[error("{0}")]
@@ -46,6 +51,7 @@ impl IntoResponse for AppError {
                 StatusCode::SERVICE_UNAVAILABLE,
                 "stream_slots_exhausted".to_string(),
             ),
+            AppError::FeatureDisabled(_) => (StatusCode::SERVICE_UNAVAILABLE, self.to_string()),
             AppError::Db(e) => {
                 tracing::error!("db error: {e}");
                 (
