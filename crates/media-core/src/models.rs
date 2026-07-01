@@ -51,6 +51,10 @@ pub struct FileProbe {
     /// these; video/music ignore them.
     #[serde(default)]
     pub chapters: Vec<Chapter>,
+    /// True when any stream is an attached_pic (embedded cover art). The music
+    /// scanner extracts it as album art when no folder image exists.
+    #[serde(default)]
+    pub has_embedded_art: bool,
 }
 
 /// One container chapter, seconds-granular (audiobook navigation needs no
