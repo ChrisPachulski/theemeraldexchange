@@ -13,6 +13,9 @@ vi.mock('../env.js', () => ({
     streamTokenSecret: 'media-grant-test-secret-aaaaaaaaaaaaaaaa',
     sessionSecret: 'session-fallback-secret-bbbbbbbbbbbbbbbb',
     MEDIA_STREAM_TOKEN_TTL_SECS: 21_600,
+    // The playback grant consults the per-user policy store (rating cap);
+    // point it at a nonexistent file so every caller is default-open here.
+    userPoliciesPath: '/tmp/eex-media-test-user-policies.json',
   },
 }))
 

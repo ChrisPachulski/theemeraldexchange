@@ -134,6 +134,18 @@ say "SHIP source @ $TO_SHA → NAS appdata"
 git -C "$REPO" archive "$TO_SHA" crates server recommender Cargo.lock Cargo.toml package.json package-lock.json Dockerfile \
   | nas "tar -x -C '$APPDATA'" || { fail "source ship failed"; exit 2; }
 
+# Stamp the release into the NAS-side .env so compose interpolates the
+# EEX_RELEASE build arg during nas-safe-build (which runs in its OWN remote
+# shell — deploy-nas.sh's `export EEX_RELEASE` never reaches it, which is why
+# /api/version reported 'dev' after eex deploys). compose reads .env for
+# interpolation, so this survives any later ad-hoc `compose up` too.
+TO_SHORT="$(git -C "$REPO" rev-parse --short "$TO_SHA")"
+say "STAMP EEX_RELEASE=$TO_SHORT in NAS .env"
+nas "cd '$APPDATA' && if grep -q '^EEX_RELEASE=' .env 2>/dev/null; then \
+      sed -i 's/^EEX_RELEASE=.*/EEX_RELEASE=$TO_SHORT/' .env; \
+    else printf 'EEX_RELEASE=%s\n' '$TO_SHORT' >> .env; fi" \
+  || note "release stamp failed (cosmetic — /api/version will report 'dev')"
+
 # ── 4. Build (safe) + recreate each service ──────────────────────────────────
 deploy_failed=0
 for svc in "${SERVICES[@]}"; do
