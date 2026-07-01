@@ -264,6 +264,32 @@ describe('media playback grant', () => {
     expect(mockFetch).not.toHaveBeenCalled()
   })
 
+  it('track → progressive grant (audio is always direct play)', async () => {
+    // media-core reports directPlay:true for a track regardless of caps.
+    mockFetchTimed.mockResolvedValueOnce(
+      new Response(JSON.stringify({ directPlay: true, file: { duration_secs: 215 } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const res = await media.request('/playback/track/42', {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { delivery: string; url: string; durationSecs: number }
+    expect(body.delivery).toBe('progressive')
+    expect(body.url).toMatch(/^\/api\/media\/stream\/track\/42\?t=.+/)
+    expect(body.durationSecs).toBe(215)
+    // Only the grant is called — never a transcode handoff for audio.
+    expect(mockFetchTimed).toHaveBeenCalledOnce()
+    expect(String(mockFetchTimed.mock.calls[0][0])).toContain('/api/media/play/track/42/grant')
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
   it('rejects a direct-play stream token after membership revocation', async () => {
     mockFetchTimed.mockResolvedValueOnce(
       new Response(JSON.stringify({ directPlay: true, file: { duration_secs: 1200 } }), {

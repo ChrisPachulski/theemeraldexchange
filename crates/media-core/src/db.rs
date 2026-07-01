@@ -27,6 +27,11 @@ pub const MIGRATIONS: &[(i64, &str, &str)] = &[
         "0004_media_markers",
         include_str!("../migrations/0004_media_markers.sql"),
     ),
+    (
+        5,
+        "0005_music",
+        include_str!("../migrations/0005_music.sql"),
+    ),
 ];
 
 #[derive(Clone)]

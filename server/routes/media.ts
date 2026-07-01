@@ -137,7 +137,7 @@ media.post('/playback/:kind/:id', async (c) => {
   const session = c.get('session')
   const kind = c.req.param('kind')
   const id = c.req.param('id')
-  if (kind !== 'movie' && kind !== 'episode') {
+  if (kind !== 'movie' && kind !== 'episode' && kind !== 'track') {
     return c.json({ error: 'unknown media kind' }, 400)
   }
 
@@ -162,8 +162,9 @@ media.post('/playback/:kind/:id', async (c) => {
       : undefined
   // The client may demand buffered (HLS) delivery even for a direct-play-
   // eligible file — the player escalates when progressive playback stalls.
-  // The transcoder resolves these to a lossless copy-remux session.
-  const forceHls = Boolean(reqCaps.force_hls)
+  // The transcoder resolves these to a lossless copy-remux session. Audio
+  // ('track') is always direct play (never transcoded), so HLS is never forced.
+  const forceHls = kind !== 'track' && Boolean(reqCaps.force_hls)
 
   let auth: Record<string, string>
   try {

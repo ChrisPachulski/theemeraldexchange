@@ -63,11 +63,60 @@ describe('USE_MEDIA_CORE — media proxy mount gate', () => {
       expect(transcode.status).toBe(401)
 
       const limits = await app.request('/api/limits')
-      const body = (await limits.json()) as { mediaEnabled: boolean }
+      const body = (await limits.json()) as { mediaEnabled: boolean; musicEnabled: boolean }
       expect(body.mediaEnabled).toBe(true)
+      // Music needs BOTH the proxy AND a music root; MUSIC_LIBRARY_PATHS is
+      // unset here, so music stays disabled even with the proxy mounted.
+      expect(body.musicEnabled).toBe(false)
     } finally {
       if (prev === undefined) delete process.env.USE_MEDIA_CORE
       else process.env.USE_MEDIA_CORE = prev
+      vi.resetModules()
+    }
+  })
+
+  it('reports musicEnabled:true only when USE_MEDIA_CORE=1 AND MUSIC_LIBRARY_PATHS is set', async () => {
+    const { vi } = await import('vitest')
+    vi.resetModules()
+    const prevMedia = process.env.USE_MEDIA_CORE
+    const prevMusic = process.env.MUSIC_LIBRARY_PATHS
+    process.env.USE_MEDIA_CORE = '1'
+    process.env.MUSIC_LIBRARY_PATHS = '/media/Music'
+    try {
+      const { app } = await import('./app.js')
+      const limits = await app.request('/api/limits')
+      const body = (await limits.json()) as { mediaEnabled: boolean; musicEnabled: boolean }
+      expect(body.mediaEnabled).toBe(true)
+      expect(body.musicEnabled).toBe(true)
+    } finally {
+      if (prevMedia === undefined) delete process.env.USE_MEDIA_CORE
+      else process.env.USE_MEDIA_CORE = prevMedia
+      if (prevMusic === undefined) delete process.env.MUSIC_LIBRARY_PATHS
+      else process.env.MUSIC_LIBRARY_PATHS = prevMusic
+      vi.resetModules()
+    }
+  })
+
+  it('reports musicEnabled:false when a music root is set but the proxy is off', async () => {
+    const { vi } = await import('vitest')
+    vi.resetModules()
+    const prevMedia = process.env.USE_MEDIA_CORE
+    const prevMusic = process.env.MUSIC_LIBRARY_PATHS
+    delete process.env.USE_MEDIA_CORE
+    process.env.MUSIC_LIBRARY_PATHS = '/media/Music'
+    try {
+      const { app } = await import('./app.js')
+      const limits = await app.request('/api/limits')
+      const body = (await limits.json()) as { mediaEnabled: boolean; musicEnabled: boolean }
+      // No proxy mounted → music unreachable, so the flag must stay false even
+      // though a root is configured (both facts are required).
+      expect(body.mediaEnabled).toBe(false)
+      expect(body.musicEnabled).toBe(false)
+    } finally {
+      if (prevMedia === undefined) delete process.env.USE_MEDIA_CORE
+      else process.env.USE_MEDIA_CORE = prevMedia
+      if (prevMusic === undefined) delete process.env.MUSIC_LIBRARY_PATHS
+      else process.env.MUSIC_LIBRARY_PATHS = prevMusic
       vi.resetModules()
     }
   })

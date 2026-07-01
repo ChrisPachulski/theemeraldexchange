@@ -136,6 +136,12 @@ if (isProd && !plexServerId && !allowUnscopedPlexLogin) {
 
 const useLocalRecommender = process.env.USE_LOCAL_RECOMMENDER === '1'
 const useMediaCore = process.env.USE_MEDIA_CORE === '1'
+// Music capability signal. media-core scans audio only when MUSIC_LIBRARY_PATHS
+// is set, so that one env var is the single source of truth for "music is
+// configured" — no separate flag to drift. The backend must be given the same
+// value as media-core (they share the config) so /api/limits can honestly gate
+// the SPA's music tab. Empty/unset → music disabled (the M3-only posture).
+const musicRootsConfigured = Boolean((opt('MUSIC_LIBRARY_PATHS') ?? '').trim())
 const trustClientIpHeaders = process.env.TRUST_CLIENT_IP_HEADERS === '1'
 const recommenderEventSecret = opt('RECOMMENDER_EVENT_SECRET') ?? null
 if (useLocalRecommender && !recommenderEventSecret) {
@@ -556,6 +562,7 @@ export const env = {
   RECOMMENDER_DB_PATH: process.env.RECOMMENDER_DB_PATH ?? './data/exchange.db',
 
   useMediaCore,
+  musicRootsConfigured,
   mediaCoreUrl:
     opt('MEDIA_CORE_URL') ??
     (process.env.NODE_ENV === 'production'

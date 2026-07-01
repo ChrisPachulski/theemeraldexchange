@@ -550,15 +550,18 @@ async fn existing_stat(db: &Db, path: &str) -> Result<Option<(i64, String)>, App
 /// autoincrement movie/episode ids, and silently orphans every
 /// `media_watch_state` row keyed on the old ids. The stable file id then
 /// drives the movie/episode upserts.
-async fn index_file(
+/// Upsert one `media_files` row from a probe, keyed on the UNIQUE `path`
+/// (`ON CONFLICT(path) DO UPDATE`, never REPLACE — see the [`index_file`] note
+/// on why REPLACE would orphan watch state). Returns the stable `(file_id,
+/// scanned_at)`. Shared by the video ([`index_file`]) and audio
+/// ([`index_music_file`]) paths so both persist the exact same columns.
+async fn upsert_media_file(
     db: &Db,
     path: &str,
     size_bytes: i64,
     mtime: &str,
     probe: &FileProbe,
-    parsed: &ParsedName,
-    tmdb: &TmdbClient,
-) -> Result<bool, AppError> {
+) -> Result<(i64, String), AppError> {
     let audio_json = serde_json::to_string(&probe.audio_tracks)
         .map_err(|e| AppError::Internal(format!("serialize audio tracks: {e}")))?;
     let subtitle_json = serde_json::to_string(&probe.subtitle_tracks)
@@ -599,6 +602,19 @@ async fn index_file(
         .bind(path)
         .fetch_one(&db.pool)
         .await?;
+    Ok((file_id, scanned_at))
+}
+
+async fn index_file(
+    db: &Db,
+    path: &str,
+    size_bytes: i64,
+    mtime: &str,
+    probe: &FileProbe,
+    parsed: &ParsedName,
+    tmdb: &TmdbClient,
+) -> Result<bool, AppError> {
+    let (file_id, scanned_at) = upsert_media_file(db, path, size_bytes, mtime, probe).await?;
 
     let enriched = match parsed {
         ParsedName::Movie { title, year } => {
@@ -1046,6 +1062,438 @@ pub fn in_extras_dir(path: &Path, root: &Path) -> bool {
     })
 }
 
+// ── Music library ─────────────────────────────────────────────────────────
+//
+// Audio reuses every existing mechanism: the same `media_files` rows (probed by
+// the same ffprobe path, served by the same range-capable `stream_file`), plus
+// three thin catalog tables (artists/albums/tracks). Classification is pure
+// tag-reading — no TMDB, no filename regex — so a music scan is far simpler than
+// the video pass and stays wholly independent of its prune/GC logic.
+
+/// Audio extensions the music scanner considers. Shared so tests and the walker
+/// agree.
+pub const AUDIO_EXTENSIONS: &[&str] = &["mp3", "m4a", "aac", "flac", "ogg", "opus", "wav"];
+
+pub fn is_audio_file(name: &str) -> bool {
+    name.rsplit_once('.')
+        .map(|(_, ext)| AUDIO_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct MusicScanReport {
+    pub files_seen: usize,
+    pub files_added: usize,
+    pub files_updated: usize,
+    pub tracks: usize,
+    /// `media_files` rows removed because their audio file vanished from disk
+    /// (the delete cascades the backing tracks; empty albums/artists are swept).
+    pub files_removed: usize,
+    pub errors: usize,
+}
+
+/// Classified music metadata for one file: artist (album_artist ?? artist ??
+/// "Unknown Artist"), album ?? "Unknown Album", title ?? filename stem, plus an
+/// optional track number and release year parsed from the tags.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MusicMeta {
+    pub artist: String,
+    pub album: String,
+    pub title: String,
+    pub track_no: Option<i64>,
+    pub year: Option<i64>,
+}
+
+/// The leading integer of a tag like `"1/12"` or `" 03 "` → `1` / `3`.
+fn parse_leading_int(s: &str) -> Option<i64> {
+    let digits: String = s.trim().chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}
+
+/// A 4-digit 1900–2099 year prefixing a `date`/`year` tag (`"1959-08-17"` →
+/// `1959`). Anything shorter or out of range yields `None`.
+fn parse_leading_year(s: &str) -> Option<i64> {
+    let digits: String = s.trim().chars().take_while(char::is_ascii_digit).collect();
+    if digits.len() >= 4
+        && let Ok(y) = digits[..4].parse::<i64>()
+        && (1900..=2099).contains(&y)
+    {
+        return Some(y);
+    }
+    None
+}
+
+/// Classify a track from its container-level tags plus the filename stem.
+/// Pure and exhaustively unit-testable (mirrors [`filename::parse_filename`]).
+pub fn classify_music(tags: &std::collections::BTreeMap<String, String>, stem: &str) -> MusicMeta {
+    let get = |k: &str| tags.get(k).map(|s| s.trim()).filter(|s| !s.is_empty());
+    let artist = get("album_artist")
+        .or_else(|| get("albumartist"))
+        .or_else(|| get("artist"))
+        .unwrap_or("Unknown Artist")
+        .to_string();
+    let album = get("album").unwrap_or("Unknown Album").to_string();
+    let title = match get("title") {
+        Some(t) => t.to_string(),
+        None => {
+            let s = stem.trim();
+            if s.is_empty() {
+                "Unknown Track".to_string()
+            } else {
+                s.to_string()
+            }
+        }
+    };
+    let track_no = get("track")
+        .or_else(|| get("tracknumber"))
+        .and_then(parse_leading_int);
+    let year = get("date")
+        .or_else(|| get("year"))
+        .or_else(|| get("originaldate"))
+        .and_then(parse_leading_year);
+    MusicMeta {
+        artist,
+        album,
+        title,
+        track_no,
+        year,
+    }
+}
+
+/// One audio file collected by the blocking walk phase.
+struct WalkedAudio {
+    path: std::path::PathBuf,
+    path_str: String,
+    stem: String,
+    size_bytes: i64,
+    mtime: String,
+}
+
+/// Enumerating outcome for the music roots: candidate files, error tally, and
+/// the roots healthy enough to prune against (same guard as the video walk — a
+/// missing/errored root must never look like "every track was deleted").
+struct AudioWalkOutcome {
+    files: Vec<WalkedAudio>,
+    errors: usize,
+    prunable_roots: Vec<std::path::PathBuf>,
+}
+
+/// Walk every audio file under `roots`. Pure blocking FS work — run inside
+/// `spawn_blocking`, never directly on the async runtime.
+fn walk_audio_roots(roots: &[std::path::PathBuf]) -> AudioWalkOutcome {
+    let mut out = AudioWalkOutcome {
+        files: Vec::new(),
+        errors: 0,
+        prunable_roots: Vec::new(),
+    };
+    for root in roots {
+        if !root.is_dir() {
+            tracing::error!(
+                root = %root.display(),
+                "music root missing or not a directory; skipping walk AND excluding \
+                 it from the missing-file prune (its rows are kept)"
+            );
+            out.errors += 1;
+            continue;
+        }
+        let mut root_errors = 0usize;
+        for entry in WalkDir::new(root).follow_links(true) {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::warn!("music walk error under {}: {e}", root.display());
+                    root_errors += 1;
+                    continue;
+                }
+            };
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let Some(name) = entry.file_name().to_str() else {
+                continue;
+            };
+            if !is_audio_file(name) {
+                continue;
+            }
+            let path = entry.path();
+            let Some(path_str) = path.to_str().map(str::to_string) else {
+                continue;
+            };
+            let (size_bytes, mtime) = match file_stat(path) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!("stat failed for {path_str}: {e}");
+                    root_errors += 1;
+                    continue;
+                }
+            };
+            let stem = name
+                .rsplit_once('.')
+                .map(|(s, _)| s)
+                .unwrap_or(name)
+                .to_string();
+            out.files.push(WalkedAudio {
+                path: path.to_path_buf(),
+                path_str,
+                stem,
+                size_bytes,
+                mtime,
+            });
+        }
+        if root_errors == 0 {
+            out.prunable_roots.push(root.clone());
+        }
+        out.errors += root_errors;
+    }
+    out
+}
+
+/// Run one music scan pass over `roots`. Probes new/changed audio files (skips
+/// files whose `(path, size, mtime)` are unchanged, exactly like the video
+/// pass), upserts artists/albums/tracks, then prunes vanished tracks under
+/// healthy roots. Empty `roots` is a no-op (the M3-only posture).
+pub async fn scan_music_once(
+    db: &Db,
+    roots: &[std::path::PathBuf],
+) -> Result<MusicScanReport, AppError> {
+    scan_music_once_with_probe_bin(db, roots, "ffprobe").await
+}
+
+async fn scan_music_once_with_probe_bin(
+    db: &Db,
+    roots: &[std::path::PathBuf],
+    ffprobe_bin: &str,
+) -> Result<MusicScanReport, AppError> {
+    let mut report = MusicScanReport::default();
+    if roots.is_empty() {
+        return Ok(report);
+    }
+
+    let roots_owned = roots.to_vec();
+    let walk = tokio::task::spawn_blocking(move || walk_audio_roots(&roots_owned))
+        .await
+        .map_err(|e| AppError::Internal(format!("music walk task failed: {e}")))?;
+    report.files_seen = walk.files.len();
+    report.errors = walk.errors;
+
+    for file in &walk.files {
+        let path_str = &file.path_str;
+        match existing_stat(db, path_str).await {
+            // Unchanged since last scan → already indexed; skip the reprobe.
+            Ok(Some((prev_size, prev_mtime)))
+                if prev_size == file.size_bytes && prev_mtime == file.mtime =>
+            {
+                continue;
+            }
+            Ok(existing) => {
+                let is_update = existing.is_some();
+                let probed = match probe::ffprobe_with_bin(ffprobe_bin, &file.path).await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::warn!("ffprobe failed for {path_str}: {e}");
+                        report.errors += 1;
+                        continue;
+                    }
+                };
+                match index_music_file(
+                    db,
+                    path_str,
+                    file.size_bytes,
+                    &file.mtime,
+                    &probed,
+                    &file.stem,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        if is_update {
+                            report.files_updated += 1;
+                        } else {
+                            report.files_added += 1;
+                        }
+                        report.tracks += 1;
+                    }
+                    Err(e) => {
+                        tracing::warn!("music index failed for {path_str}: {e}");
+                        report.errors += 1;
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("music lookup failed for {path_str}: {e}");
+                report.errors += 1;
+            }
+        }
+    }
+
+    match prune_missing_music(db, &walk.prunable_roots).await {
+        Ok(removed) => report.files_removed = removed,
+        Err(e) => {
+            tracing::warn!("music prune failed: {e}");
+            report.errors += 1;
+        }
+    }
+
+    Ok(report)
+}
+
+/// [`scan_music_once`] on its own spawned task so a panic surfaces as `Err`
+/// rather than unwinding the caller (mirrors [`scan_once_isolated`]).
+pub async fn scan_music_isolated(
+    db: Db,
+    roots: Vec<std::path::PathBuf>,
+) -> Result<MusicScanReport, AppError> {
+    match tokio::spawn(async move { scan_music_once(&db, &roots).await }).await {
+        Ok(result) => result,
+        Err(e) => Err(AppError::Internal(format!("music scan task panicked: {e}"))),
+    }
+}
+
+/// Upsert one audio file into `media_files` + artists/albums/tracks. The track
+/// is keyed on its backing `media_file_id`, so a rescan of the same file never
+/// duplicates it; the artist/album upserts dedup on name / (artist, title).
+async fn index_music_file(
+    db: &Db,
+    path: &str,
+    size_bytes: i64,
+    mtime: &str,
+    probe: &FileProbe,
+    stem: &str,
+) -> Result<(), AppError> {
+    let (file_id, _scanned_at) = upsert_media_file(db, path, size_bytes, mtime, probe).await?;
+    let meta = classify_music(&probe.format_tags, stem);
+    let artist_id = upsert_artist(db, &meta.artist).await?;
+    let album_id = upsert_album(db, artist_id, &meta.album, meta.year).await?;
+    upsert_track(
+        db,
+        album_id,
+        file_id,
+        &meta.title,
+        meta.track_no,
+        probe.duration_secs,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Get-or-create an artist by its UNIQUE name, returning its id.
+async fn upsert_artist(db: &Db, name: &str) -> Result<i64, AppError> {
+    sqlx::query("INSERT INTO artists (name) VALUES (?) ON CONFLICT(name) DO NOTHING")
+        .bind(name)
+        .execute(&db.pool)
+        .await?;
+    let id = sqlx::query_scalar("SELECT id FROM artists WHERE name = ?")
+        .bind(name)
+        .fetch_one(&db.pool)
+        .await?;
+    Ok(id)
+}
+
+/// Get-or-create an album by UNIQUE `(artist_id, title)`, backfilling `year`
+/// when a later scan supplies one. Returns its id.
+async fn upsert_album(
+    db: &Db,
+    artist_id: i64,
+    title: &str,
+    year: Option<i64>,
+) -> Result<i64, AppError> {
+    sqlx::query(
+        "INSERT INTO albums (artist_id, title, year) VALUES (?, ?, ?) \
+         ON CONFLICT(artist_id, title) DO UPDATE SET year = COALESCE(excluded.year, year)",
+    )
+    .bind(artist_id)
+    .bind(title)
+    .bind(year)
+    .execute(&db.pool)
+    .await?;
+    let id = sqlx::query_scalar("SELECT id FROM albums WHERE artist_id = ? AND title = ?")
+        .bind(artist_id)
+        .bind(title)
+        .fetch_one(&db.pool)
+        .await?;
+    Ok(id)
+}
+
+/// Upsert a track keyed on its backing `media_file_id` (UNIQUE), so a rescan of
+/// the same file updates in place instead of inserting a duplicate.
+async fn upsert_track(
+    db: &Db,
+    album_id: i64,
+    file_id: i64,
+    title: &str,
+    track_no: Option<i64>,
+    duration_secs: Option<i64>,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO tracks (album_id, media_file_id, title, track_no, duration_secs) \
+         VALUES (?, ?, ?, ?, ?) \
+         ON CONFLICT(media_file_id) DO UPDATE SET \
+         album_id = excluded.album_id, title = excluded.title, \
+         track_no = excluded.track_no, duration_secs = excluded.duration_secs",
+    )
+    .bind(album_id)
+    .bind(file_id)
+    .bind(title)
+    .bind(track_no)
+    .bind(duration_secs)
+    .execute(&db.pool)
+    .await?;
+    Ok(())
+}
+
+/// Delete `media_files` rows backing a track whose audio file vanished from
+/// disk, restricted to healthy `prunable_roots` (a missing/unmounted music root
+/// must never wipe the catalog). The delete cascades tracks; now-empty albums
+/// then artists are swept. The `JOIN tracks` guarantees only audio rows are
+/// touched — video `media_files` are never in scope. Returns rows removed.
+async fn prune_missing_music(
+    db: &Db,
+    prunable_roots: &[std::path::PathBuf],
+) -> Result<usize, AppError> {
+    if prunable_roots.is_empty() {
+        tracing::warn!("no healthy music roots this pass; skipping music prune");
+        return Ok(0);
+    }
+    let rows: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT mf.id, mf.path FROM media_files mf JOIN tracks t ON t.media_file_id = mf.id",
+    )
+    .fetch_all(&db.pool)
+    .await?;
+
+    let roots = prunable_roots.to_vec();
+    let missing: Vec<i64> = tokio::task::spawn_blocking(move || {
+        rows.into_iter()
+            .filter(|(_, path)| {
+                let p = std::path::Path::new(path);
+                roots.iter().any(|root| p.starts_with(root)) && !p.exists()
+            })
+            .map(|(id, _)| id)
+            .collect()
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("music prune task failed: {e}")))?;
+
+    let mut removed = 0usize;
+    for id in missing {
+        removed += sqlx::query("DELETE FROM media_files WHERE id = ?")
+            .bind(id)
+            .execute(&db.pool)
+            .await?
+            .rows_affected() as usize;
+    }
+    if removed > 0 {
+        // tracks cascade via media_file_id; sweep the now-empty catalog rows.
+        sqlx::query("DELETE FROM albums WHERE id NOT IN (SELECT DISTINCT album_id FROM tracks)")
+            .execute(&db.pool)
+            .await?;
+        sqlx::query("DELETE FROM artists WHERE id NOT IN (SELECT DISTINCT artist_id FROM albums)")
+            .execute(&db.pool)
+            .await?;
+        tracing::info!(removed, "pruned media_files rows for deleted audio files");
+    }
+    Ok(removed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1079,6 +1527,7 @@ mod tests {
                 title: None,
                 forced: false,
             }],
+            format_tags: Default::default(),
         }
     }
 
@@ -2348,5 +2797,293 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ── Music ─────────────────────────────────────────────────────────────
+
+    /// A `FileProbe` for an audio file: a duration + the given container-level
+    /// tags, no video stream (mirrors what ffprobe reports for a real track).
+    fn music_probe(tags: &[(&str, &str)], duration: i64) -> FileProbe {
+        FileProbe {
+            container: Some("flac".into()),
+            duration_secs: Some(duration),
+            video_codec: None,
+            video_height: None,
+            video_profile: None,
+            hdr_format: None,
+            audio_tracks: vec![AudioTrack {
+                index: 0,
+                codec: Some("flac".into()),
+                channels: Some(2),
+                language: None,
+                title: None,
+            }],
+            subtitle_tracks: vec![],
+            format_tags: tags
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn is_audio_file_recognizes_extensions() {
+        assert!(is_audio_file("song.mp3"));
+        assert!(is_audio_file("Track 01.FLAC"));
+        assert!(is_audio_file("a.m4a"));
+        assert!(is_audio_file("b.opus"));
+        assert!(!is_audio_file("movie.mkv"));
+        assert!(!is_audio_file("cover.jpg"));
+        assert!(!is_audio_file("noext"));
+        // A trailing suffix means the real extension is not audio.
+        assert!(!is_audio_file("song.mp3.part"));
+    }
+
+    #[test]
+    fn classify_music_prefers_album_artist_and_parses_track_and_year() {
+        let tags: std::collections::BTreeMap<String, String> = [
+            ("artist", "Track Artist"),
+            ("album_artist", "Album Artist"),
+            ("album", "Kind of Blue"),
+            ("title", "So What"),
+            ("track", "1/5"),
+            ("date", "1959-08-17"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let meta = classify_music(&tags, "01 - So What");
+        assert_eq!(meta.artist, "Album Artist", "album_artist wins over artist");
+        assert_eq!(meta.album, "Kind of Blue");
+        assert_eq!(meta.title, "So What");
+        assert_eq!(meta.track_no, Some(1), "track '1/5' → 1");
+        assert_eq!(meta.year, Some(1959), "date '1959-08-17' → 1959");
+    }
+
+    #[test]
+    fn classify_music_falls_back_to_unknowns_and_stem() {
+        // No tags at all → Unknown Artist/Album, title from the filename stem.
+        let tags = std::collections::BTreeMap::new();
+        let meta = classify_music(&tags, "Untitled Demo");
+        assert_eq!(meta.artist, "Unknown Artist");
+        assert_eq!(meta.album, "Unknown Album");
+        assert_eq!(meta.title, "Untitled Demo");
+        assert_eq!(meta.track_no, None);
+        assert_eq!(meta.year, None);
+        // artist present but blank album_artist → falls through to artist.
+        let tags: std::collections::BTreeMap<String, String> =
+            [("album_artist", "  "), ("artist", "Real Artist")]
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+        assert_eq!(classify_music(&tags, "x").artist, "Real Artist");
+    }
+
+    #[tokio::test]
+    async fn music_index_is_idempotent_no_duplicate_artist_album_track() {
+        // Rescanning the same file must not duplicate the artist, album, or
+        // track — the whole point of the (name)/(artist,title)/(media_file_id)
+        // uniqueness. Runs index_music_file directly (no ffprobe needed).
+        let db = Db::connect_memory().await.unwrap();
+        let probe = music_probe(
+            &[
+                ("album_artist", "Radiohead"),
+                ("album", "OK Computer"),
+                ("title", "Airbag"),
+                ("track", "1"),
+                ("date", "1997"),
+            ],
+            260,
+        );
+        for _ in 0..3 {
+            index_music_file(
+                &db,
+                "/music/Radiohead/OK Computer/01 Airbag.flac",
+                1,
+                "t",
+                &probe,
+                "01 Airbag",
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(count(&db, "artists").await, 1);
+        assert_eq!(count(&db, "albums").await, 1);
+        assert_eq!(count(&db, "tracks").await, 1);
+        assert_eq!(count(&db, "media_files").await, 1);
+
+        let (title, track_no, dur): (String, Option<i64>, Option<i64>) =
+            sqlx::query_as("SELECT title, track_no, duration_secs FROM tracks LIMIT 1")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(title, "Airbag");
+        assert_eq!(track_no, Some(1));
+        assert_eq!(dur, Some(260));
+
+        // A second album by the same artist reuses the one artist row.
+        let probe2 = music_probe(
+            &[
+                ("album_artist", "Radiohead"),
+                ("album", "In Rainbows"),
+                ("title", "15 Step"),
+                ("track", "1"),
+            ],
+            238,
+        );
+        index_music_file(
+            &db,
+            "/music/Radiohead/In Rainbows/01 15 Step.flac",
+            1,
+            "t",
+            &probe2,
+            "01 15 Step",
+        )
+        .await
+        .unwrap();
+        assert_eq!(count(&db, "artists").await, 1, "same artist, one row");
+        assert_eq!(count(&db, "albums").await, 2, "two albums");
+        assert_eq!(count(&db, "tracks").await, 2);
+    }
+
+    /// Build a synthetic music library: `n` audio files across two artist/album
+    /// dirs, cycling `AUDIO_EXTENSIONS`, plus a couple of non-audio decoys.
+    fn build_music_library(dir: &std::path::Path, n: usize) {
+        use std::fs::{File, create_dir_all};
+        use std::io::Write;
+        let a = dir.join("Artist A").join("Album One");
+        let b = dir.join("Artist B").join("Album Two");
+        create_dir_all(&a).unwrap();
+        create_dir_all(&b).unwrap();
+        for i in 0..n {
+            let ext = AUDIO_EXTENSIONS[i % AUDIO_EXTENSIONS.len()];
+            let target = if i % 2 == 0 { &a } else { &b };
+            let mut f = File::create(target.join(format!("{:02} Track.{ext}", i + 1))).unwrap();
+            f.write_all(b"audio bytes").unwrap();
+        }
+        // Decoys the is_audio_file filter must exclude.
+        File::create(a.join("cover.jpg")).unwrap();
+        File::create(a.join("notes.txt")).unwrap();
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn scan_music_once_walks_audio_and_indexes_via_stub() {
+        // Drives the real scan_music_once walk end-to-end against a deterministic
+        // ffprobe stub (the echoing stub reports a valid probe with no music
+        // tags → classify_music falls back to Unknown Artist/Album + stem title).
+        let stub_dir = tempfile::tempdir().unwrap();
+        let stub = crate::probe::write_echoing_stub_path(stub_dir.path());
+        let tmp = tempdir().unwrap();
+        build_music_library(tmp.path(), 8);
+        let db = Db::connect_memory().await.unwrap();
+        let roots = vec![tmp.path().to_path_buf()];
+
+        let report = scan_music_once_with_probe_bin(&db, &roots, stub.to_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(report.files_seen, 8, "only the 8 audio files are walked");
+        assert_eq!(report.files_added, 8, "all 8 probed + indexed");
+        assert_eq!(report.tracks, 8);
+        assert_eq!(report.errors, 0);
+        assert_eq!(count(&db, "tracks").await, 8);
+        // No tags → one Unknown Artist / Unknown Album collecting every track.
+        assert_eq!(count(&db, "artists").await, 1);
+        assert_eq!(count(&db, "albums").await, 1);
+
+        // A second scan is all-skips (unchanged): no new files, no errors.
+        let again = scan_music_once_with_probe_bin(&db, &roots, stub.to_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(again.files_seen, 8);
+        assert_eq!(again.files_added, 0, "unchanged files take the skip path");
+        assert_eq!(again.tracks, 0);
+        assert_eq!(count(&db, "tracks").await, 8, "no duplication on rescan");
+    }
+
+    #[tokio::test]
+    async fn scan_music_empty_roots_is_noop() {
+        let db = Db::connect_memory().await.unwrap();
+        let report = scan_music_once(&db, &[]).await.unwrap();
+        assert_eq!(report.files_seen, 0);
+        assert_eq!(report.files_added, 0);
+        assert_eq!(count(&db, "tracks").await, 0);
+    }
+
+    #[tokio::test]
+    async fn scan_music_prunes_deleted_track_and_sweeps_empty_album_artist() {
+        // A track whose file vanished is pruned (cascading the track), and the
+        // now-empty album + artist are swept — while a surviving track stays.
+        let tmp = tempdir().unwrap();
+        let db = Db::connect_memory().await.unwrap();
+
+        // Kept: a real on-disk file seeded with its EXACT stat so the walk takes
+        // the probe-free skip path (no dependency on a real ffprobe binary).
+        let kept = tmp.path().join("keep.flac");
+        std::fs::write(&kept, b"bytes").unwrap();
+        let (ksize, kmtime) = file_stat(&kept).unwrap();
+        let kp = music_probe(&[("album_artist", "Keeper"), ("album", "Stays")], 100);
+        index_music_file(&db, kept.to_str().unwrap(), ksize, &kmtime, &kp, "keep")
+            .await
+            .unwrap();
+
+        // Gone: a track pointing at a path that does not exist under the root.
+        let gone = tmp.path().join("gone.flac");
+        let gp = music_probe(&[("album_artist", "Goner"), ("album", "Vanishes")], 100);
+        index_music_file(&db, gone.to_str().unwrap(), 5, "t", &gp, "gone")
+            .await
+            .unwrap();
+
+        assert_eq!(count(&db, "tracks").await, 2);
+        assert_eq!(count(&db, "artists").await, 2);
+
+        let roots = vec![tmp.path().to_path_buf()];
+        let report = scan_music_once(&db, &roots).await.unwrap();
+        assert_eq!(
+            report.files_removed, 1,
+            "the deleted track's file is pruned"
+        );
+        assert_eq!(
+            count(&db, "tracks").await,
+            1,
+            "only the surviving track remains"
+        );
+        // The Goner artist/album are swept; only Keeper survives.
+        assert_eq!(count(&db, "albums").await, 1);
+        assert_eq!(count(&db, "artists").await, 1);
+        let name: String = sqlx::query_scalar("SELECT name FROM artists LIMIT 1")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(name, "Keeper");
+    }
+
+    #[tokio::test]
+    async fn scan_music_missing_root_never_prunes() {
+        // An unmounted music root enumerates 0 files; it must NOT be read as
+        // "every track was deleted" (same guard as the video scan).
+        let db = Db::connect_memory().await.unwrap();
+        let probe = music_probe(&[("album_artist", "Ghost"), ("album", "Haunt")], 100);
+        index_music_file(
+            &db,
+            "/definitely-not-mounted-eex-music/song.flac",
+            5,
+            "t",
+            &probe,
+            "song",
+        )
+        .await
+        .unwrap();
+
+        let roots = vec![std::path::PathBuf::from(
+            "/definitely-not-mounted-eex-music",
+        )];
+        let report = scan_music_once(&db, &roots).await.unwrap();
+        assert_eq!(report.files_removed, 0, "missing root prunes nothing");
+        assert!(
+            report.errors >= 1,
+            "the skipped root is surfaced as an error"
+        );
+        assert_eq!(count(&db, "tracks").await, 1, "the track survives");
     }
 }

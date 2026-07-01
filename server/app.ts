@@ -158,6 +158,11 @@ app.get('/api/limits', (c) =>
     // gated on iptvEnabled. Public boolean — the same fact is implied by
     // the /api/media 404 when the proxy is unmounted.
     mediaEnabled: env.useMediaCore,
+    // True when the media proxy is mounted AND a music root is configured
+    // (MUSIC_LIBRARY_PATHS). The SPA gates its Music tab on this — browse
+    // (/api/media/music/*) and audio playback ride the same proxy, so both
+    // facts are required. Public boolean — no secret leakage.
+    musicEnabled: env.useMediaCore && env.musicRootsConfigured,
   }),
 )
 

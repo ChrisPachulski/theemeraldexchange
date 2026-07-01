@@ -239,6 +239,18 @@ pub fn parse_ffprobe_json(doc: &Value) -> FileProbe {
         })
         .collect();
 
+    // Container-level tags (`format.tags`), keys lowercased. The video path
+    // ignores this; the music scanner reads artist/album/title/track/date here.
+    let format_tags = format
+        .and_then(|f| f.get("tags"))
+        .and_then(Value::as_object)
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.to_ascii_lowercase(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+
     FileProbe {
         container,
         duration_secs,
@@ -248,6 +260,7 @@ pub fn parse_ffprobe_json(doc: &Value) -> FileProbe {
         hdr_format,
         audio_tracks,
         subtitle_tracks,
+        format_tags,
     }
 }
 
@@ -839,6 +852,59 @@ mod tests {
         });
         let probe = parse_ffprobe_json(&doc);
         assert_eq!(probe.container.as_deref(), Some("flac"));
+    }
+
+    // A music file's container-level tags (format.tags) are captured with
+    // lowercased keys; per-stream tags stay out of this map. Drives the music
+    // scanner's artist/album/title classification.
+    #[test]
+    fn format_tags_are_captured_lowercased() {
+        let doc = json!({
+            "format": {
+                "format_name": "flac",
+                "duration": "215.0",
+                "tags": {
+                    "ARTIST": "Miles Davis",
+                    "album_artist": "Miles Davis",
+                    "ALBUM": "Kind of Blue",
+                    "title": "So What",
+                    "track": "1/5",
+                    "date": "1959"
+                }
+            },
+            "streams": [
+                { "index": 0, "codec_type": "audio", "codec_name": "flac", "channels": 2,
+                  "tags": { "language": "eng" } }
+            ]
+        });
+        let probe = parse_ffprobe_json(&doc);
+        assert_eq!(
+            probe.format_tags.get("artist").map(String::as_str),
+            Some("Miles Davis")
+        );
+        assert_eq!(
+            probe.format_tags.get("album_artist").map(String::as_str),
+            Some("Miles Davis")
+        );
+        assert_eq!(
+            probe.format_tags.get("album").map(String::as_str),
+            Some("Kind of Blue")
+        );
+        assert_eq!(
+            probe.format_tags.get("title").map(String::as_str),
+            Some("So What")
+        );
+        assert_eq!(
+            probe.format_tags.get("track").map(String::as_str),
+            Some("1/5")
+        );
+        assert_eq!(
+            probe.format_tags.get("date").map(String::as_str),
+            Some("1959")
+        );
+        // Per-stream tags (language) are NOT hoisted into the format map.
+        assert!(!probe.format_tags.contains_key("language"));
+        assert_eq!(probe.duration_secs, Some(215));
     }
 
     // A whitespace-only format_name trims to empty and is dropped.

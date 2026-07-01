@@ -54,6 +54,9 @@ pub fn router(state: AppState) -> Router {
         .route("/shows/{id}/episodes", get(list_episodes))
         .route("/episodes", get(list_episodes_all))
         .route("/episodes/{id}", get(get_episode))
+        .route("/music/artists", get(list_artists))
+        .route("/music/albums", get(list_albums))
+        .route("/music/tracks", get(list_tracks))
         .route("/play/{kind}/{id}/grant", post(play_grant))
         .route("/watch", get(get_watch).post(post_watch))
         .route(
@@ -485,6 +488,145 @@ async fn get_episode(State(state): State<AppState>, Path(id): Path<i64>) -> AppR
     Ok(Json(json!(row)))
 }
 
+// ── Music library ─────────────────────────────────────────────────────────
+//
+// Browse endpoints mirroring the movie/episode list shape ({items, total} with
+// limit/offset pagination). Each query struct evaluates every field it accepts
+// (no accepted-but-ignored params — see the ListQuery note above); music does
+// not carry a `?q=` search box, so these deliberately omit it.
+
+#[derive(Debug, Deserialize)]
+struct ArtistsQuery {
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AlbumsQuery {
+    artist_id: Option<i64>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TracksQuery {
+    album_id: Option<i64>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+/// GET /music/artists → `{ items: [{id, name, album_count}], total }`.
+async fn list_artists(
+    State(state): State<AppState>,
+    Query(q): Query<ArtistsQuery>,
+) -> AppResult<Json<Value>> {
+    let (limit, offset) = paginate(q.limit, q.offset);
+    let rows = sqlx::query_as::<_, (i64, String, i64)>(
+        "SELECT a.id, a.name, COUNT(al.id) AS album_count \
+         FROM artists a LEFT JOIN albums al ON al.artist_id = a.id \
+         GROUP BY a.id, a.name ORDER BY a.name LIMIT ? OFFSET ?",
+    )
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.db.pool)
+    .await?;
+    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM artists")
+        .fetch_one(&state.db.pool)
+        .await?;
+    let items: Vec<Value> = rows
+        .iter()
+        .map(
+            |(id, name, album_count)| json!({ "id": id, "name": name, "album_count": album_count }),
+        )
+        .collect();
+    Ok(Json(json!({ "items": items, "total": total })))
+}
+
+/// GET /music/albums?artist_id= →
+/// `{ items: [{id, artist_id, artist_name, title, year, track_count}], total }`.
+/// `artist_id` optional (omit to list every album).
+async fn list_albums(
+    State(state): State<AppState>,
+    Query(q): Query<AlbumsQuery>,
+) -> AppResult<Json<Value>> {
+    let (limit, offset) = paginate(q.limit, q.offset);
+    // One SQL shape; `artist_id IS NULL OR al.artist_id = ?` lets the same query
+    // serve both the filtered and unfiltered listing without duplication.
+    let rows = sqlx::query_as::<_, (i64, i64, String, String, Option<i64>, i64)>(
+        "SELECT al.id, al.artist_id, ar.name, al.title, al.year, COUNT(t.id) AS track_count \
+         FROM albums al JOIN artists ar ON ar.id = al.artist_id \
+         LEFT JOIN tracks t ON t.album_id = al.id \
+         WHERE (? IS NULL OR al.artist_id = ?) \
+         GROUP BY al.id ORDER BY ar.name, al.title LIMIT ? OFFSET ?",
+    )
+    .bind(q.artist_id)
+    .bind(q.artist_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.db.pool)
+    .await?;
+    let total: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM albums WHERE (? IS NULL OR artist_id = ?)")
+            .bind(q.artist_id)
+            .bind(q.artist_id)
+            .fetch_one(&state.db.pool)
+            .await?;
+    let items: Vec<Value> = rows
+        .iter()
+        .map(|(id, artist_id, artist_name, title, year, track_count)| {
+            json!({
+                "id": id,
+                "artist_id": artist_id,
+                "artist_name": artist_name,
+                "title": title,
+                "year": year,
+                "track_count": track_count,
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "items": items, "total": total })))
+}
+
+/// GET /music/tracks?album_id= →
+/// `{ items: [{id, album_id, title, track_no, duration_secs}], total }`.
+/// `album_id` optional (omit to list every track).
+async fn list_tracks(
+    State(state): State<AppState>,
+    Query(q): Query<TracksQuery>,
+) -> AppResult<Json<Value>> {
+    let (limit, offset) = paginate(q.limit, q.offset);
+    let rows = sqlx::query_as::<_, (i64, i64, String, Option<i64>, Option<i64>)>(
+        "SELECT id, album_id, title, track_no, duration_secs FROM tracks \
+         WHERE (? IS NULL OR album_id = ?) \
+         ORDER BY track_no, title LIMIT ? OFFSET ?",
+    )
+    .bind(q.album_id)
+    .bind(q.album_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.db.pool)
+    .await?;
+    let total: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM tracks WHERE (? IS NULL OR album_id = ?)")
+            .bind(q.album_id)
+            .bind(q.album_id)
+            .fetch_one(&state.db.pool)
+            .await?;
+    let items: Vec<Value> = rows
+        .iter()
+        .map(|(id, album_id, title, track_no, duration_secs)| {
+            json!({
+                "id": id,
+                "album_id": album_id,
+                "title": title,
+                "track_no": track_no,
+                "duration_secs": duration_secs,
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "items": items, "total": total })))
+}
+
 // ── Playback ────────────────────────────────────────────────────────────
 
 /// Resolve the backing `media_files` row for a `(kind, id)` pair. `movie`
@@ -497,6 +639,13 @@ async fn resolve_media_file(state: &AppState, kind: &str, id: i64) -> AppResult<
             .await?
             .ok_or(AppError::NotFound)?,
         "episode" => sqlx::query_scalar("SELECT file_id FROM episodes WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&state.db.pool)
+            .await?
+            .ok_or(AppError::NotFound)?,
+        // A track's backing file lives in `tracks.media_file_id`; from here on
+        // it flows through the identical media_files → ServeFile range path.
+        "track" => sqlx::query_scalar("SELECT media_file_id FROM tracks WHERE id = ?")
             .bind(id)
             .fetch_optional(&state.db.pool)
             .await?
@@ -523,7 +672,14 @@ async fn play_grant(
 ) -> AppResult<Json<Value>> {
     let file = resolve_media_file(&state, &kind, id).await?;
     let caps = body.map(|Json(c)| c).unwrap_or_default();
-    let decision = capability::decide(&file, &caps);
+    // Audio always direct-plays (never transcoded); video runs the capability
+    // decision against the advertised client caps.
+    let (direct_play, reason) = if kind == "track" {
+        (true, "audio direct play".to_string())
+    } else {
+        let decision = capability::decide(&file, &caps);
+        (decision.direct_play, decision.reason)
+    };
 
     // Autoplay-next: warm the next episode's keyframes now so its first play scrubs
     // too (best-effort, fire-and-forget; no-op for movies / the last episode).
@@ -536,9 +692,9 @@ async fn play_grant(
     }
 
     Ok(Json(json!({
-        "directPlay": decision.direct_play,
-        "transcoderRequired": !decision.direct_play,
-        "reason": decision.reason,
+        "directPlay": direct_play,
+        "transcoderRequired": !direct_play,
+        "reason": reason,
         "file": {
             "container": file.container,
             "duration_secs": file.duration_secs,
@@ -560,7 +716,7 @@ async fn play_grant(
 /// (dev/tests), containment is skipped. Uses `tokio::fs` so the canonicalize
 /// syscalls (blocking FS I/O, possibly against a stalled mount) run off the
 /// async runtime instead of pinning a request worker.
-async fn path_within_roots(path: &std::path::Path, roots: &[crate::config::LibraryRoot]) -> bool {
+async fn path_within_roots(path: &std::path::Path, roots: &[std::path::PathBuf]) -> bool {
     if roots.is_empty() {
         return true;
     }
@@ -568,7 +724,7 @@ async fn path_within_roots(path: &std::path::Path, roots: &[crate::config::Libra
         return false;
     };
     for r in roots {
-        if let Ok(root) = tokio::fs::canonicalize(&r.path).await
+        if let Ok(root) = tokio::fs::canonicalize(r).await
             && canon.starts_with(&root)
         {
             return true;
@@ -843,13 +999,14 @@ async fn stream_file(
 ) -> Result<axum::response::Response, AppError> {
     let file = resolve_media_file(&state, &kind, id).await?;
 
-    // Containment: never serve a file outside the configured library roots.
-    if !path_within_roots(
-        std::path::Path::new(&file.path),
-        &state.config.library_roots,
-    )
-    .await
-    {
+    // Containment: never serve a file outside the configured roots. A track
+    // lives under a MUSIC root; movies/episodes under the video library roots.
+    let allowed_roots: Vec<std::path::PathBuf> = if kind == "track" {
+        state.config.music_roots.clone()
+    } else {
+        state.config.library_paths()
+    };
+    if !path_within_roots(std::path::Path::new(&file.path), &allowed_roots).await {
         tracing::warn!(path = %file.path, "refusing to stream file outside library roots");
         return Err(AppError::NotFound);
     }
@@ -858,7 +1015,9 @@ async fn stream_file(
     // the file can't direct-play, hand off to the M4 transcoder when one is
     // configured (MEDIA_TRANSCODER_URL). Without a transcoder this is the
     // M3-only posture, so return 503 rather than shipping undecodable bytes.
-    if caps_q.advertised() {
+    // Audio (`track`) is ALWAYS direct play — never engage the transcoder — so
+    // the capability/handoff branch is skipped entirely for it.
+    if kind != "track" && caps_q.advertised() {
         let caps = caps_q.to_caps();
         let decision = capability::decide(&file, &caps);
         // `force_transcode` bypasses the decision: decide() WILL say
@@ -1504,6 +1663,26 @@ async fn trigger_scan(
                 .await;
             }
         }
+
+        // Music library scan in the same background task (a no-op when
+        // MUSIC_LIBRARY_PATHS is unset). Its summary lands in `last_music_report`
+        // for observability; the video report above still drives /scan/status.
+        match scanner::scan_music_isolated(bg.db.clone(), bg.config.music_roots.clone()).await {
+            Ok(report) => {
+                let json = serde_json::to_string(&report).unwrap_or_else(|_| "{}".into());
+                set_scan_state(&bg.db, "last_music_report", &json).await;
+            }
+            Err(e) => {
+                tracing::warn!("background music scan failed: {e}");
+                set_scan_state(
+                    &bg.db,
+                    "last_music_report",
+                    &json!({ "error": e.to_string() }).to_string(),
+                )
+                .await;
+            }
+        }
+
         set_scan_state(&bg.db, "finished_at", &chrono::Utc::now().to_rfc3339()).await;
         set_scan_state(&bg.db, "state", "idle").await;
         bg.scanning.store(false, Ordering::SeqCst);
@@ -1597,6 +1776,7 @@ mod tests {
             port: 0,
             db_path: ":memory:".into(),
             library_roots: Vec::new(),
+            music_roots: Vec::new(),
             internal_principal_secret: Some(secret.to_string()),
             principal_mode: PrincipalMode::Enforce,
             server_id: "srv-test".into(),
@@ -1813,6 +1993,186 @@ mod tests {
         assert_eq!(items[0]["sub"], "plex:1");
         assert_eq!(items[0]["media_id"], movie_id);
         assert_eq!(items[0]["position_secs"], 120);
+    }
+
+    /// Seed one artist → album → track backed by a fresh media_files row.
+    /// Returns `(artist_id, album_id, track_id)`.
+    async fn seed_track(
+        state: &AppState,
+        artist: &str,
+        album: &str,
+        title: &str,
+        track_no: i64,
+        path: &str,
+    ) -> (i64, i64, i64) {
+        let file_id = seed_media_file(state, path).await;
+        // ON CONFLICT DO NOTHING makes last_insert_rowid unreliable (a skipped
+        // insert leaves it pointing at the prior row), so always resolve by key.
+        sqlx::query("INSERT INTO artists (name) VALUES (?) ON CONFLICT(name) DO NOTHING")
+            .bind(artist)
+            .execute(&state.db.pool)
+            .await
+            .unwrap();
+        let artist_id: i64 = sqlx::query_scalar("SELECT id FROM artists WHERE name = ?")
+            .bind(artist)
+            .fetch_one(&state.db.pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO albums (artist_id, title, year) VALUES (?, ?, 2020) \
+             ON CONFLICT(artist_id, title) DO NOTHING",
+        )
+        .bind(artist_id)
+        .bind(album)
+        .execute(&state.db.pool)
+        .await
+        .unwrap();
+        let album_id: i64 =
+            sqlx::query_scalar("SELECT id FROM albums WHERE artist_id = ? AND title = ?")
+                .bind(artist_id)
+                .bind(album)
+                .fetch_one(&state.db.pool)
+                .await
+                .unwrap();
+        let track_id: i64 = sqlx::query(
+            "INSERT INTO tracks (album_id, media_file_id, title, track_no, duration_secs) \
+             VALUES (?, ?, ?, ?, 200)",
+        )
+        .bind(album_id)
+        .bind(file_id)
+        .bind(title)
+        .bind(track_no)
+        .execute(&state.db.pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+        (artist_id, album_id, track_id)
+    }
+
+    #[tokio::test]
+    async fn music_list_endpoints_return_expected_shapes() {
+        let state = test_state().await;
+        let (artist_id, album_id, _t1) = seed_track(
+            &state,
+            "Miles Davis",
+            "Kind of Blue",
+            "So What",
+            1,
+            "/music/a1.flac",
+        )
+        .await;
+        seed_track(
+            &state,
+            "Miles Davis",
+            "Kind of Blue",
+            "Freddie Freeloader",
+            2,
+            "/music/a2.flac",
+        )
+        .await;
+        // A second artist, so artist filtering is exercised.
+        seed_track(
+            &state,
+            "John Coltrane",
+            "Giant Steps",
+            "Giant Steps",
+            1,
+            "/music/b1.flac",
+        )
+        .await;
+
+        let app = crate::build_router(state);
+
+        // Artists: {id, name, album_count}, total.
+        let resp = app
+            .clone()
+            .oneshot(req("GET", "/api/media/music/artists"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["total"], 2);
+        let artists = v["items"].as_array().unwrap();
+        assert_eq!(artists.len(), 2);
+        // Ordered by name → Coltrane, then Davis.
+        assert_eq!(artists[0]["name"], "John Coltrane");
+        assert_eq!(artists[0]["album_count"], 1);
+        assert_eq!(artists[1]["name"], "Miles Davis");
+        assert_eq!(artists[1]["album_count"], 1);
+
+        // Albums filtered by artist: {id, artist_id, artist_name, title, year, track_count}.
+        let resp = app
+            .clone()
+            .oneshot(req(
+                "GET",
+                format!("/api/media/music/albums?artist_id={artist_id}"),
+            ))
+            .await
+            .unwrap();
+        let v = body_json(resp).await;
+        assert_eq!(v["total"], 1);
+        let album = &v["items"][0];
+        assert_eq!(album["id"], album_id);
+        assert_eq!(album["artist_id"], artist_id);
+        assert_eq!(album["artist_name"], "Miles Davis");
+        assert_eq!(album["title"], "Kind of Blue");
+        assert_eq!(album["year"], 2020);
+        assert_eq!(album["track_count"], 2);
+
+        // Tracks filtered by album: {id, album_id, title, track_no, duration_secs}, ordered by track_no.
+        let resp = app
+            .oneshot(req(
+                "GET",
+                format!("/api/media/music/tracks?album_id={album_id}"),
+            ))
+            .await
+            .unwrap();
+        let v = body_json(resp).await;
+        assert_eq!(v["total"], 2);
+        let tracks = v["items"].as_array().unwrap();
+        assert_eq!(tracks.len(), 2);
+        assert_eq!(tracks[0]["track_no"], 1);
+        assert_eq!(tracks[0]["title"], "So What");
+        assert_eq!(tracks[0]["album_id"], album_id);
+        assert_eq!(tracks[0]["duration_secs"], 200);
+        assert_eq!(tracks[1]["track_no"], 2);
+        assert_eq!(tracks[1]["title"], "Freddie Freeloader");
+    }
+
+    #[tokio::test]
+    async fn play_grant_track_is_always_direct_play() {
+        // A track grant must report directPlay:true (audio is never transcoded),
+        // regardless of container, and hand back the media stream URL.
+        let state = test_state().await;
+        let (_a, _al, track_id) =
+            seed_track(&state, "Artist", "Album", "Song", 1, "/music/song.flac").await;
+        let app = crate::build_router(state);
+        let resp = app
+            .oneshot(req(
+                "POST",
+                format!("/api/media/play/track/{track_id}/grant"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["directPlay"], true);
+        assert_eq!(v["transcoderRequired"], false);
+        assert_eq!(
+            v["streamUrl"],
+            format!("/api/media/stream/track/{track_id}")
+        );
+    }
+
+    #[tokio::test]
+    async fn play_grant_unknown_track_is_404() {
+        let state = test_state().await;
+        let app = crate::build_router(state);
+        let resp = app
+            .oneshot(req("POST", "/api/media/play/track/9999/grant"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[test]
