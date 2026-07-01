@@ -7,14 +7,12 @@
 import cron, { type ScheduledTask } from 'node-cron'
 import { runScheduledBackup } from './dbBackup.js'
 import { reportServerEvent } from './serverTelemetry.js'
+import { resolveCronExpr } from './cronConfig.js'
 
 const DEFAULT_DB_BACKUP_CRON = '30 3 * * *'
 
 export function registerDbBackupSchedule(cronExpr: string): ScheduledTask {
-  const expr = cron.validate(cronExpr) ? cronExpr : DEFAULT_DB_BACKUP_CRON
-  if (expr !== cronExpr) {
-    console.error(`[backup] invalid DB_BACKUP_CRON ${JSON.stringify(cronExpr)}; using ${DEFAULT_DB_BACKUP_CRON}`)
-  }
+  const expr = resolveCronExpr('backup', 'DB_BACKUP_CRON', cronExpr, DEFAULT_DB_BACKUP_CRON)
   return cron.schedule(expr, () => {
     try {
       const result = runScheduledBackup()

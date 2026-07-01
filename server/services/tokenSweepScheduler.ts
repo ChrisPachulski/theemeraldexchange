@@ -15,6 +15,7 @@
 import cron, { type ScheduledTask } from 'node-cron'
 import { serverDb } from './serverDb.js'
 import { reportServerEvent } from './serverTelemetry.js'
+import { resolveCronExpr } from './cronConfig.js'
 
 const DEFAULT_TOKEN_SWEEP_CRON = '15 3 * * *'
 
@@ -33,12 +34,7 @@ export function sweepExpiredAuthRows(nowIso: string = new Date().toISOString()):
 }
 
 export function registerTokenSweepSchedule(cronExpr: string): ScheduledTask {
-  const expr = cron.validate(cronExpr) ? cronExpr : DEFAULT_TOKEN_SWEEP_CRON
-  if (expr !== cronExpr) {
-    console.error(
-      `[token-sweep] invalid TOKEN_SWEEP_CRON ${JSON.stringify(cronExpr)}; using ${DEFAULT_TOKEN_SWEEP_CRON}`,
-    )
-  }
+  const expr = resolveCronExpr('token-sweep', 'TOKEN_SWEEP_CRON', cronExpr, DEFAULT_TOKEN_SWEEP_CRON)
   return cron.schedule(expr, () => {
     try {
       const { deviceTokens, challenges } = sweepExpiredAuthRows()

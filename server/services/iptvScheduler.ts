@@ -9,6 +9,7 @@ import cron, { type ScheduledTask } from 'node-cron'
 import { syncOnce } from './iptvSync.js'
 import { iptvDb } from './iptvDbSingleton.js'
 import { reportServerEvent } from './serverTelemetry.js'
+import { resolveCronExpr } from './cronConfig.js'
 
 // Surface a scheduler failure to the mandatory §15 telemetry pipeline in
 // addition to console — a sync/sweep that quietly stops makes the catalog go
@@ -37,10 +38,7 @@ export async function registerIptvSchedule(cronExpr: string): Promise<ScheduledT
     void syncOnce(db).catch((err) => reportSchedulerFailure('bootstrap sync failed', err))
   }
 
-  const scheduleExpr = cron.validate(cronExpr) ? cronExpr : DEFAULT_IPTV_SYNC_CRON
-  if (scheduleExpr !== cronExpr) {
-    console.error(`[iptv] invalid IPTV_SYNC_CRON ${JSON.stringify(cronExpr)}; using ${DEFAULT_IPTV_SYNC_CRON}`)
-  }
+  const scheduleExpr = resolveCronExpr('iptv', 'IPTV_SYNC_CRON', cronExpr, DEFAULT_IPTV_SYNC_CRON)
 
   const syncTask = cron.schedule(scheduleExpr, () => {
     void syncOnce(db).catch((err) => reportSchedulerFailure('scheduled sync failed', err))
