@@ -16,6 +16,7 @@ pub mod models;
 pub mod probe;
 pub mod routes;
 pub mod scanner;
+pub mod subtitles;
 pub mod tmdb;
 
 use std::sync::Arc;
