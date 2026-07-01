@@ -17,6 +17,7 @@ import { promisify } from 'node:util'
 const gzipAsync = promisify(gzip)
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { requireSection } from '../services/userPolicies.js'
+import { capBlocksUnrated } from '../services/parentalRating.js'
 import { getAccountInfo, credsFromEnv } from '../services/xtream.js'
 import { nodeReadableToWebStream } from '../services/streamBridge.js'
 import { iptvDb } from '../services/iptvDbSingleton.js'
@@ -671,6 +672,12 @@ iptv.post('/stream/live/:streamId/grant', requireAuth, requireSection('live'), a
 })
 
 iptv.post('/stream/catchup/:streamId/grant', requireAuth, async (c) => {
+  // IPTV provider content is UNRATED (star ratings, never certifications) —
+  // a parental rating cap therefore blocks these grants wholesale (fail
+  // closed, same rule the clients apply to unrated titles).
+  if (await capBlocksUnrated(c.get('session'))) {
+    return c.json({ error: 'rating_blocked' }, 403)
+  }
   const streamId = c.req.param('streamId')
   if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
 
@@ -1032,6 +1039,12 @@ iptv.get('/stream/catchup/:streamId/:startUtc/:durationMin.ts', async (c) => {
 })
 
 iptv.post('/stream/vod/:streamId/grant', requireAuth, async (c) => {
+  // IPTV provider content is UNRATED (star ratings, never certifications) —
+  // a parental rating cap therefore blocks these grants wholesale (fail
+  // closed, same rule the clients apply to unrated titles).
+  if (await capBlocksUnrated(c.get('session'))) {
+    return c.json({ error: 'rating_blocked' }, 403)
+  }
   const streamId = c.req.param('streamId')
   if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
   const { sub } = userOf(c)
@@ -1112,6 +1125,12 @@ iptv.get('/stream/vod/:streamId/:ext', async (c) => {
 })
 
 iptv.post('/stream/series/:episodeId/grant', requireAuth, async (c) => {
+  // IPTV provider content is UNRATED (star ratings, never certifications) —
+  // a parental rating cap therefore blocks these grants wholesale (fail
+  // closed, same rule the clients apply to unrated titles).
+  if (await capBlocksUnrated(c.get('session'))) {
+    return c.json({ error: 'rating_blocked' }, 403)
+  }
   const episodeId = c.req.param('episodeId')
   if (!/^[\w-]+$/.test(episodeId)) return c.json({ error: 'invalid_id' }, 400)
   const { sub } = userOf(c)

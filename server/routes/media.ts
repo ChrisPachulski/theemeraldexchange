@@ -14,6 +14,7 @@ import {
   MEDIA_HLS_KIND,
 } from '../services/mediaStreamToken.js'
 import { memberStatus } from '../services/membership.js'
+import { ratingBlocked } from '../services/parentalRating.js'
 
 export const media = new Hono<Env>()
 
@@ -139,6 +140,12 @@ media.post('/playback/:kind/:id', async (c) => {
   const id = c.req.param('id')
   if (kind !== 'movie' && kind !== 'episode' && kind !== 'track') {
     return c.json({ error: 'unknown media kind' }, 400)
+  }
+
+  // Parental rating cap, enforced where it can't be bypassed: no grant for a
+  // title above (or without) a certification when the caller is capped.
+  if (await ratingBlocked(session, kind, Number(id))) {
+    return c.json({ error: 'rating_blocked' }, 403)
   }
 
   const reqCaps = await c.req.json<PlaybackRequest>().catch(() => ({}) as PlaybackRequest)
