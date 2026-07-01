@@ -1859,11 +1859,15 @@ mod tests {
         assert_eq!(hot.front().unwrap(), &PathBuf::from("/media/s19"));
     }
 
+    // ponytail: 1000x10ms (10s) ceiling, not the prior 200x10ms (2s) — real
+    // subprocess scheduling under `cargo test`'s full-suite parallelism can
+    // exceed 2s and flake these polls even though the code under test is
+    // correct; widen if a loaded CI box still flakes.
     async fn wait_for<F>(mut cond: F)
     where
         F: FnMut() -> bool,
     {
-        for _ in 0..200 {
+        for _ in 0..1000 {
             if cond() {
                 return;
             }
@@ -1876,7 +1880,7 @@ mod tests {
     /// writes it asynchronously after spawn).
     async fn read_stub_pid(dir: &std::path::Path) -> i32 {
         let path = dir.join("pid.txt");
-        for _ in 0..200 {
+        for _ in 0..1000 {
             if let Ok(s) = std::fs::read_to_string(&path)
                 && let Ok(pid) = s.trim().parse::<i32>()
             {
