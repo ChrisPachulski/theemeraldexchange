@@ -13,8 +13,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 emerald-contracts = { path = "../emerald-contracts" }
-napi = { version = "2.16", default-features = false, features = ["napi6", "serde-json"] }
-napi-derive = "2.16"
+napi = { version = "3.9", default-features = false, features = ["napi6", "serde-json"] }
+napi-derive = "3.5"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
