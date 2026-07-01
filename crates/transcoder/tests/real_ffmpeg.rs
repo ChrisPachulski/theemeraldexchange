@@ -142,6 +142,7 @@ fn production_argv_produces_playable_hls() {
         // h264-copy production path; fMP4 is the HEVC-copy variant).
         segment_format: SegmentFormat::MpegTs,
         audio_index: 0,
+        extra_audio: Vec::new(),
         reason: "real-ffmpeg integration: remux to HLS".into(),
     };
     let argv = ffmpeg_args(
