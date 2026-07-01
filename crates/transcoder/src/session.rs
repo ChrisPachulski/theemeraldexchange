@@ -981,6 +981,16 @@ impl SessionManager {
                 .await;
         }
 
+        // Trick-play thumbnails (experimental; TRANSCODER_TRICKPLAY, default OFF):
+        // a detached one-shot samples the source into tiny all-keyframe segments
+        // for AVPlayer's scrubbing preview. Re-encode only — the synthesized VOD
+        // media playlist + uniform keyframe grid is what makes the master's
+        // rendition coherent (a copy-remux session has no encoder to add one
+        // cheaply). See [`crate::trickplay`].
+        if crate::trickplay::enabled() && opts.plan.reencodes_video() {
+            self.spawn_trickplay_thumbs(&session_id, &opts.input_path, &dir);
+        }
+
         // Native full-timeline VOD alignment: a session writes its first segment at
         // the ABSOLUTE grid index so the synthesized [0,total] manifest references
         // on-disk files one-for-one and AVPlayer's scrubber shows true position /
@@ -1232,6 +1242,105 @@ impl SessionManager {
                 None
             }
         }
+    }
+
+    /// Build the trick-play MASTER playlist for `id` (native + re-encode only),
+    /// or `None` when the session is unknown, is a COPY-remux, or has no known
+    /// duration — the caller then serves the plain (synthesized) media playlist.
+    ///
+    /// Gated identically to [`vod_manifest`](Self::vod_manifest)'s re-encode
+    /// branch: only a RE-ENCODE session gets uniform, keyframe-aligned segments
+    /// and a thumbnail rendition (the sampling pass in
+    /// [`spawn_trickplay_thumbs`](Self::spawn_trickplay_thumbs) runs on the same
+    /// gate). The env flag itself is checked in the route so this stays a pure
+    /// data transform. `RESOLUTION` is omitted rather than fabricated (the source
+    /// aspect isn't carried here); the variant plays fine without it.
+    pub async fn trickplay_master(&self, id: &str) -> Option<String> {
+        let guard = self.sessions.lock().await;
+        let s = guard.get(id)?;
+        if !s.plan.reencodes_video() || s.duration_secs.filter(|d| *d > 0).is_none() {
+            return None;
+        }
+        // Advertise the source's average bitrate as the variant BANDWIDTH (a
+        // required attribute); fall back to a sane default when the grant didn't
+        // carry one.
+        let bandwidth_bps = s
+            .source_avg_kbps
+            .map(|kbps| kbps.saturating_mul(1000))
+            .unwrap_or(6_000_000);
+        Some(crate::trickplay::master(bandwidth_bps, None))
+    }
+
+    /// Build the trick-play I-FRAMES-ONLY playlist for `id` (native + re-encode
+    /// only), or `None` on the same gate as [`trickplay_master`](Self::trickplay_master).
+    /// Pure function of the known duration — the thumbnail segments it lists are
+    /// produced asynchronously by the sampling pass and 404 gracefully until
+    /// written (see [`crate::trickplay::iframe_playlist`]).
+    pub async fn trickplay_iframe(&self, id: &str) -> Option<String> {
+        let duration = {
+            let guard = self.sessions.lock().await;
+            let s = guard.get(id)?;
+            if !s.plan.reencodes_video() {
+                return None;
+            }
+            s.duration_secs.filter(|d| *d > 0)? as f64
+        };
+        crate::trickplay::iframe_playlist(duration)
+    }
+
+    /// Kick the detached, one-shot THUMBNAIL sampling pass for a re-encode
+    /// session (best-effort; mirrors [`spawn_sidecar_subtitle`](Self::spawn_sidecar_subtitle)).
+    /// A SEPARATE short ffmpeg process samples the source into tiny all-keyframe
+    /// `thumb_%05d.ts` segments beside the main stream, with no `-re`/main-HLS
+    /// coupling, so it never delays the live stream's first segment. A failure
+    /// just means the title plays without scrubbing thumbnails — `start` never
+    /// blocks on it. Only spawned when `TRANSCODER_TRICKPLAY` is enabled.
+    fn spawn_trickplay_thumbs(&self, session_id: &str, input: &str, dir: &std::path::Path) {
+        let args = crate::trickplay::thumb_args(
+            input,
+            &dir.to_string_lossy(),
+            crate::trickplay::TRICKPLAY_INTERVAL_SECS,
+            crate::trickplay::THUMB_WIDTH,
+        );
+        let mut cmd = Command::new(&self.ffmpeg_bin);
+        cmd.args(&args)
+            .current_dir(dir)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+        let id = session_id.to_string();
+        tokio::spawn(async move {
+            let mut child = match spawn_retrying_etxtbsy(&mut cmd).await {
+                Ok(child) => child,
+                Err(e) => {
+                    tracing::warn!(session = %id, error = %e, "failed to spawn trickplay thumbnail pass");
+                    return;
+                }
+            };
+            let stderr = child.stderr.take();
+            if let Some(stderr) = stderr {
+                use tokio::io::{AsyncBufReadExt, BufReader};
+                let mut lines = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty() {
+                        tracing::warn!(session = %id, "trickplay ffmpeg: {trimmed}");
+                    }
+                }
+            }
+            match child.wait().await {
+                Ok(status) if status.success() => {
+                    tracing::debug!(session = %id, "trickplay thumbnails complete")
+                }
+                Ok(status) => {
+                    tracing::warn!(session = %id, %status, "trickplay thumbnail pass exited non-zero")
+                }
+                Err(e) => {
+                    tracing::warn!(session = %id, error = %e, "trickplay thumbnail pass could not be awaited")
+                }
+            }
+        });
     }
 
     /// Probe + cache `path`'s keyframes in the background, deduped against any

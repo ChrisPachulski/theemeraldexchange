@@ -20,6 +20,7 @@ pub mod keyframes;
 pub mod plan;
 pub mod routes;
 pub mod session;
+mod trickplay;
 mod vod_manifest;
 
 pub use routes::{AppState, router};

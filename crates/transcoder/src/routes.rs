@@ -549,6 +549,29 @@ fn is_native_hls_client(headers: &HeaderMap) -> bool {
         .unwrap_or(false)
 }
 
+/// Serve an HLS playlist document (master, media, or I-frame) with the same
+/// no-cache / no-edge-buffer headers a live media playlist gets. Playlists are
+/// small, live-until-ENDLIST documents; never cache them, never let the tunnel
+/// edge hold them.
+fn m3u8_response(body: String) -> Response {
+    (
+        StatusCode::OK,
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "application/vnd.apple.mpegurl",
+            ),
+            (axum::http::header::CACHE_CONTROL, "no-store"),
+            (
+                axum::http::HeaderName::from_static("x-accel-buffering"),
+                "no",
+            ),
+        ],
+        body,
+    )
+        .into_response()
+}
+
 async fn session_manifest(
     State(state): State<AppState>,
     claims: Option<Extension<InternalClaims>>,
@@ -563,6 +586,19 @@ async fn session_manifest(
         return forbidden();
     }
 
+    // Trick-play (TRANSCODER_TRICKPLAY, default OFF): a native re-encode session
+    // gets a MASTER playlist here instead of the media playlist, advertising an
+    // I-frame rendition (iframe.m3u8) for AVPlayer's scrubbing thumbnails plus
+    // the synthesized VOD media playlist (media.m3u8) as its video variant —
+    // both served by `session_segment`. Web (no AppleCoreMedia UA) and copy-remux
+    // never reach this and keep the proven media playlist below byte-for-byte.
+    if crate::trickplay::enabled()
+        && is_native_hls_client(&headers)
+        && let Some(master) = state.sessions.trickplay_master(&id).await
+    {
+        return m3u8_response(master);
+    }
+
     // Native players (AVKit) read the playlist directly and render an
     // ENDLIST-less EVENT playlist as a LIVE stream (no scrubber). For RE-ENCODE
     // sessions, serve them a complete VOD playlist synthesized from the known
@@ -575,22 +611,7 @@ async fn session_manifest(
     if is_native_hls_client(&headers)
         && let Some(body) = state.sessions.vod_manifest(&id).await
     {
-        return (
-            StatusCode::OK,
-            [
-                (
-                    axum::http::header::CONTENT_TYPE,
-                    "application/vnd.apple.mpegurl",
-                ),
-                (axum::http::header::CACHE_CONTROL, "no-store"),
-                (
-                    axum::http::HeaderName::from_static("x-accel-buffering"),
-                    "no",
-                ),
-            ],
-            body,
-        )
-            .into_response();
+        return m3u8_response(body);
     }
 
     let Some(path) = state.sessions.manifest_path(&id).await else {
@@ -647,6 +668,28 @@ async fn session_segment(
     if !session_authorized(&claims, owner.as_deref()) {
         return forbidden();
     }
+
+    // Trick-play sub-playlists (TRANSCODER_TRICKPLAY): the MASTER served at
+    // index.m3u8 references these two siblings. Neither is a file on disk — both
+    // are synthesized in-memory here (the video variant is the same VOD media
+    // playlist the native index.m3u8 serves; the I-frame playlist indexes the
+    // thumbnail segments the detached sampler writes). Gated on the flag so with
+    // it off these names fall through to the normal on-disk asset read (404).
+    if crate::trickplay::enabled() {
+        if segment == crate::trickplay::MEDIA_PLAYLIST_NAME {
+            return match state.sessions.vod_manifest(&id).await {
+                Some(body) => m3u8_response(body),
+                None => session_not_found(),
+            };
+        }
+        if segment == crate::trickplay::IFRAME_PLAYLIST_NAME {
+            return match state.sessions.trickplay_iframe(&id).await {
+                Some(body) => m3u8_response(body),
+                None => session_not_found(),
+            };
+        }
+    }
+
     // `asset_path` rejects unknown sessions and any traversal-unsafe name.
     let Some(path) = state.sessions.asset_path(&id, &segment).await else {
         return (

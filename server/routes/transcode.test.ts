@@ -282,4 +282,38 @@ describe('appendTokenToManifest', () => {
     const abs = appendTokenToManifest('#EXT-X-MAP:URI="https://cdn.example/init.mp4"', 'TOK')
     expect(abs).toBe('#EXT-X-MAP:URI="https://cdn.example/init.mp4"')
   })
+
+  it('tokenizes both renditions of a trick-play master playlist', () => {
+    // The trick-play master (TRANSCODER_TRICKPLAY) references two siblings the
+    // player fetches: the video variant as a BARE line (media.m3u8) and the
+    // I-frame rendition via a quoted URI= on #EXT-X-I-FRAME-STREAM-INF. Both must
+    // carry the token or AVPlayer 401s — silently dropping scrubbing thumbnails
+    // (I-frame) or failing playback (variant).
+    const manifest = [
+      '#EXTM3U',
+      '#EXT-X-VERSION:4',
+      '#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=120000,URI="iframe.m3u8"',
+      '#EXT-X-STREAM-INF:BANDWIDTH=6000000',
+      'media.m3u8',
+    ].join('\n')
+    const out = appendTokenToManifest(manifest, 'TOK')
+    const lines = out.split('\n')
+    expect(lines[2]).toBe('#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=120000,URI="iframe.m3u8?t=TOK"')
+    // The STREAM-INF tag itself carries no URI= and stays untouched…
+    expect(lines[3]).toBe('#EXT-X-STREAM-INF:BANDWIDTH=6000000')
+    // …while its bare variant line is tokenized by the relative-line rule.
+    expect(lines[4]).toBe('media.m3u8?t=TOK')
+  })
+
+  it('tokenizes a single-quoted URI= attribute and leaves an absolute one alone', () => {
+    // The rewrite is tag-agnostic and handles both quote styles (mirrors
+    // iptvHlsRewrite); an absolute rendition URI carries its own auth.
+    const rel = appendTokenToManifest("#EXT-X-I-FRAME-STREAM-INF:URI='iframe.m3u8'", 'TOK')
+    expect(rel).toBe("#EXT-X-I-FRAME-STREAM-INF:URI='iframe.m3u8?t=TOK'")
+    const abs = appendTokenToManifest(
+      '#EXT-X-I-FRAME-STREAM-INF:URI="https://cdn.example/iframe.m3u8"',
+      'TOK',
+    )
+    expect(abs).toBe('#EXT-X-I-FRAME-STREAM-INF:URI="https://cdn.example/iframe.m3u8"')
+  })
 })

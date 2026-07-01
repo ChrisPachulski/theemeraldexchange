@@ -174,29 +174,45 @@ transcode.all('/*', async (c) => {
   })
 })
 
-/** Append `?t=<token>` to each segment/variant URI line in an HLS manifest.
- *  Comment/tag lines (`#…`), blank lines, and absolute URLs are left untouched
- *  — EXCEPT `#EXT-X-MAP`, whose quoted `URI="init.mp4"` attribute is the fMP4
- *  init segment the player fetches like any other asset and must carry the
- *  same token (an untokenized init.mp4 401s and the whole session grey-boxes).
- *  The transcoder emits relative segment names (`seg_00000.ts`/`.m4s`) with no
- *  query, so a plain `?t=` is always correct. Exported for unit testing. */
+/** Append `?t=<token>` to each fetchable URI in an HLS manifest so a relative
+ *  asset carries auth on the follow-up request (hls.js/AVPlayer drop the `?t=`
+ *  query when resolving a relative URI against the manifest URL).
+ *
+ *  Two kinds of URI are tokenized; blank lines and absolute URLs are left alone:
+ *   * BARE relative lines — segments (`seg_00000.ts`/`.m4s`, `thumb_00000.ts`)
+ *     AND variant/rendition playlist references (`media.m3u8`).
+ *   * A quoted `URI="…"`/`URI='…'` attribute on ANY `#` tag line — the fMP4 init
+ *     map (`#EXT-X-MAP`), the trick-play I-frame playlist
+ *     (`#EXT-X-I-FRAME-STREAM-INF` → `iframe.m3u8`), and any future rendition
+ *     (`#EXT-X-MEDIA`). An untokenized asset 401s at the proxy: init.mp4 or a
+ *     variant grey-boxes the session; the I-frame playlist silently drops
+ *     AVPlayer's scrubbing thumbnails.
+ *
+ *  Mirrors the URI-attribute rewrite in `server/services/iptvHlsRewrite.ts`
+ *  (tag-agnostic, both quote styles, all occurrences) rather than a hardcoded
+ *  tag list, so a new rendition tag needs no change here. The transcoder emits
+ *  relative names with no query, so a plain `?t=` is always correct. Exported
+ *  for unit testing. */
 export function appendTokenToManifest(manifest: string, token: string): string {
+  const tokenize = (uri: string): string => {
+    if (/^https?:\/\//i.test(uri)) return uri // absolute URLs carry their own auth
+    const sep = uri.includes('?') ? '&' : '?'
+    return `${uri}${sep}t=${token}`
+  }
   return manifest
     .split('\n')
     .map((line) => {
       const trimmed = line.trim()
-      if (trimmed.startsWith('#EXT-X-MAP')) {
-        return line.replace(/URI="([^"]+)"/, (_m, uri: string) => {
-          if (/^https?:\/\//i.test(uri)) return `URI="${uri}"`
-          const sep = uri.includes('?') ? '&' : '?'
-          return `URI="${uri}${sep}t=${token}"`
-        })
+      // Quoted URI="…"/URI='…' attribute(s) on a tag line (any tag).
+      if (trimmed.startsWith('#') && /URI=(["'])[^"']+\1/.test(trimmed)) {
+        return line.replace(
+          /URI=(["'])([^"']+)\1/g,
+          (_m, quote: string, uri: string) => `URI=${quote}${tokenize(uri)}${quote}`,
+        )
       }
+      // Other tags and blank lines are untouched; bare lines are asset URIs.
       if (trimmed === '' || trimmed.startsWith('#')) return line
-      if (/^https?:\/\//i.test(trimmed)) return line
-      const sep = trimmed.includes('?') ? '&' : '?'
-      return `${trimmed}${sep}t=${token}`
+      return tokenize(trimmed)
     })
     .join('\n')
 }
