@@ -59,6 +59,33 @@ pub fn router(state: AppState) -> Router {
         .route("/music/tracks", get(list_tracks))
         .route("/play/{kind}/{id}/grant", post(play_grant))
         .route("/watch", get(get_watch).post(post_watch))
+        .route("/playlists", get(list_playlists).post(create_playlist))
+        .route(
+            "/playlists/{id}",
+            get(get_playlist)
+                .put(rename_playlist)
+                .delete(delete_playlist),
+        )
+        .route(
+            "/playlists/{id}/items",
+            post(add_playlist_item)
+                .put(reorder_playlist)
+                .delete(delete_playlist_item),
+        )
+        .route(
+            "/collections",
+            get(list_collections).post(create_collection),
+        )
+        .route(
+            "/collections/{id}",
+            get(get_collection)
+                .put(rename_collection)
+                .delete(delete_collection),
+        )
+        .route(
+            "/collections/{id}/items",
+            post(add_collection_item).delete(delete_collection_item),
+        )
         .route(
             "/markers",
             get(get_markers).put(put_marker).delete(delete_marker),
@@ -1381,6 +1408,677 @@ async fn post_watch(
     Ok(Json(json!({ "ok": true, "watched_at": watched_at })))
 }
 
+// ── Playlists & collections ──────────────────────────────────────────────
+
+/// The two user-curated list stores share one shape: a named per-user parent
+/// row plus polymorphic `(media_kind, media_id)` item rows. Playlists keep a
+/// `position` column (ordered); collections are unordered. Table names come
+/// only from these two consts (never user input), so the `format!`-built SQL
+/// below is injection-safe; all values are still bound parameters.
+struct ListStore {
+    /// Human noun for error messages ("playlist" / "collection").
+    noun: &'static str,
+    table: &'static str,
+    items_table: &'static str,
+    parent_fk: &'static str,
+    /// `media_kind` → catalog table: the fixed allow-list for item validation
+    /// (polymorphic ids can't be FK-enforced, same as media_watch_state).
+    kinds: &'static [(&'static str, &'static str)],
+    /// Ordered stores carry a `position` column on their item rows.
+    ordered: bool,
+}
+
+const PLAYLIST_STORE: ListStore = ListStore {
+    noun: "playlist",
+    table: "playlists",
+    items_table: "playlist_items",
+    parent_fk: "playlist_id",
+    kinds: &[("movie", "movies"), ("episode", "episodes")],
+    ordered: true,
+};
+
+const COLLECTION_STORE: ListStore = ListStore {
+    noun: "collection",
+    table: "collections",
+    items_table: "collection_items",
+    parent_fk: "collection_id",
+    kinds: &[("movie", "movies"), ("show", "shows")],
+    ordered: false,
+};
+
+#[derive(Debug, Deserialize)]
+pub struct NameBody {
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListItemBody {
+    pub media_kind: String,
+    pub media_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReorderBody {
+    pub items: Vec<ListItemBody>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListItemQuery {
+    pub sub: Option<String>,
+    pub media_kind: String,
+    pub media_id: i64,
+}
+
+/// Map an sqlx error to 400 on UNIQUE violation (duplicate `(sub, name)`),
+/// otherwise pass it through as a 500-class DB error.
+fn unique_to_bad_request(e: sqlx::Error, msg: &str) -> AppError {
+    match &e {
+        sqlx::Error::Database(db)
+            if matches!(db.kind(), sqlx::error::ErrorKind::UniqueViolation) =>
+        {
+            AppError::BadRequest(msg.into())
+        }
+        _ => AppError::Db(e),
+    }
+}
+
+/// 404 unless `id` names a parent row owned by `sub`. Scoping every statement
+/// by owner keeps one user's playlist ids useless to another (no IDOR).
+async fn store_owned(state: &AppState, store: &ListStore, id: i64, sub: &str) -> AppResult<()> {
+    let sql = format!("SELECT 1 FROM {} WHERE id = ? AND sub = ?", store.table);
+    let found: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .bind(sub)
+        .fetch_optional(&state.db.pool)
+        .await?;
+    if found.is_none() {
+        return Err(AppError::NotFound);
+    }
+    Ok(())
+}
+
+async fn store_touch(state: &AppState, store: &ListStore, id: i64) -> AppResult<()> {
+    let sql = format!("UPDATE {} SET updated_at = ? WHERE id = ?", store.table);
+    sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(id)
+        .execute(&state.db.pool)
+        .await?;
+    Ok(())
+}
+
+async fn store_list(state: &AppState, store: &ListStore, sub: &str) -> AppResult<Json<Value>> {
+    let sql = format!(
+        "SELECT p.id, p.name, p.created_at, p.updated_at, \
+         (SELECT COUNT(*) FROM {items} i WHERE i.{fk} = p.id) \
+         FROM {table} p WHERE p.sub = ? ORDER BY p.name COLLATE NOCASE",
+        items = store.items_table,
+        fk = store.parent_fk,
+        table = store.table,
+    );
+    let rows: Vec<(i64, String, String, String, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(sub)
+        .fetch_all(&state.db.pool)
+        .await?;
+    let items: Vec<Value> = rows
+        .into_iter()
+        .map(|(id, name, created_at, updated_at, item_count)| {
+            json!({
+                "id": id,
+                "name": name,
+                "created_at": created_at,
+                "updated_at": updated_at,
+                "item_count": item_count,
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "items": items })))
+}
+
+async fn store_create(
+    state: &AppState,
+    store: &ListStore,
+    sub: &str,
+    name: &str,
+) -> AppResult<Json<Value>> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(AppError::BadRequest("name required".into()));
+    }
+    let now = chrono::Utc::now().to_rfc3339();
+    let sql = format!(
+        "INSERT INTO {} (sub, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+        store.table
+    );
+    let id = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(sub)
+        .bind(name)
+        .bind(&now)
+        .bind(&now)
+        .execute(&state.db.pool)
+        .await
+        .map_err(|e| {
+            unique_to_bad_request(
+                e,
+                &format!("a {} with that name already exists", store.noun),
+            )
+        })?
+        .last_insert_rowid();
+    Ok(Json(json!({ "id": id, "name": name, "created_at": now })))
+}
+
+async fn store_rename(
+    state: &AppState,
+    store: &ListStore,
+    id: i64,
+    sub: &str,
+    name: &str,
+) -> AppResult<Json<Value>> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(AppError::BadRequest("name required".into()));
+    }
+    store_owned(state, store, id, sub).await?;
+    let sql = format!(
+        "UPDATE {} SET name = ?, updated_at = ? WHERE id = ? AND sub = ?",
+        store.table
+    );
+    sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(name)
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(id)
+        .bind(sub)
+        .execute(&state.db.pool)
+        .await
+        .map_err(|e| {
+            unique_to_bad_request(
+                e,
+                &format!("a {} with that name already exists", store.noun),
+            )
+        })?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn store_delete(
+    state: &AppState,
+    store: &ListStore,
+    id: i64,
+    sub: &str,
+) -> AppResult<Json<Value>> {
+    store_owned(state, store, id, sub).await?;
+    // Items first: no PRAGMA foreign_keys on this pool, so cascade by hand.
+    let mut tx = state.db.pool.begin().await?;
+    let del_items = format!(
+        "DELETE FROM {} WHERE {} = ?",
+        store.items_table, store.parent_fk
+    );
+    sqlx::query(sqlx::AssertSqlSafe(del_items))
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    let del_parent = format!("DELETE FROM {} WHERE id = ? AND sub = ?", store.table);
+    sqlx::query(sqlx::AssertSqlSafe(del_parent))
+        .bind(id)
+        .bind(sub)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// Validate `(media_kind, media_id)` against the store's catalog allow-list.
+/// Unknown kind → 400, known kind with absent id → 404 (same contract as
+/// watch-state's `media_exists`).
+async fn store_item_valid(
+    state: &AppState,
+    store: &ListStore,
+    media_kind: &str,
+    media_id: i64,
+) -> AppResult<()> {
+    let Some((_, table)) = store.kinds.iter().find(|(k, _)| *k == media_kind) else {
+        let allowed = store
+            .kinds
+            .iter()
+            .map(|(k, _)| format!("'{k}'"))
+            .collect::<Vec<_>>()
+            .join(" or ");
+        return Err(AppError::BadRequest(format!(
+            "media_kind must be {allowed}"
+        )));
+    };
+    let sql = format!("SELECT 1 FROM {table} WHERE id = ? LIMIT 1");
+    let found: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind(media_id)
+        .fetch_optional(&state.db.pool)
+        .await?;
+    if found.is_none() {
+        return Err(AppError::NotFound);
+    }
+    Ok(())
+}
+
+async fn store_add_item(
+    state: &AppState,
+    store: &ListStore,
+    id: i64,
+    sub: &str,
+    item: &ListItemBody,
+) -> AppResult<Json<Value>> {
+    store_owned(state, store, id, sub).await?;
+    store_item_valid(state, store, &item.media_kind, item.media_id).await?;
+    let now = chrono::Utc::now().to_rfc3339();
+    // Re-adding an existing item is a no-op (idempotent), not an error.
+    let sql = if store.ordered {
+        format!(
+            "INSERT INTO {items} ({fk}, media_kind, media_id, position, added_at) \
+             VALUES (?, ?, ?, \
+             (SELECT COALESCE(MAX(position) + 1, 0) FROM {items} WHERE {fk} = ?), ?) \
+             ON CONFLICT DO NOTHING",
+            items = store.items_table,
+            fk = store.parent_fk,
+        )
+    } else {
+        format!(
+            "INSERT INTO {items} ({fk}, media_kind, media_id, added_at) \
+             VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
+            items = store.items_table,
+            fk = store.parent_fk,
+        )
+    };
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .bind(&item.media_kind)
+        .bind(item.media_id);
+    if store.ordered {
+        query = query.bind(id);
+    }
+    query.bind(&now).execute(&state.db.pool).await?;
+    store_touch(state, store, id).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn store_remove_item(
+    state: &AppState,
+    store: &ListStore,
+    id: i64,
+    sub: &str,
+    media_kind: &str,
+    media_id: i64,
+) -> AppResult<Json<Value>> {
+    store_owned(state, store, id, sub).await?;
+    let sql = format!(
+        "DELETE FROM {} WHERE {} = ? AND media_kind = ? AND media_id = ?",
+        store.items_table, store.parent_fk
+    );
+    sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .bind(media_kind)
+        .bind(media_id)
+        .execute(&state.db.pool)
+        .await?;
+    store_touch(state, store, id).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// Fetch the parent row `(name, created_at, updated_at)` for a detail view.
+async fn store_meta(
+    state: &AppState,
+    store: &ListStore,
+    id: i64,
+    sub: &str,
+) -> AppResult<(String, String, String)> {
+    let sql = format!(
+        "SELECT name, created_at, updated_at FROM {} WHERE id = ? AND sub = ?",
+        store.table
+    );
+    sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .bind(sub)
+        .fetch_optional(&state.db.pool)
+        .await?
+        .ok_or(AppError::NotFound)
+}
+
+async fn list_playlists(
+    State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
+    Query(q): Query<WatchQuery>,
+) -> AppResult<Json<Value>> {
+    let claims = claims.map(|Extension(c)| c);
+    let sub = acting_sub(&claims, q.sub, &state.config.principal_mode)?;
+    store_list(&state, &PLAYLIST_STORE, &sub).await
+}
+
+async fn create_playlist(
+    State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
+    Query(q): Query<WatchQuery>,
+    Json(body): Json<NameBody>,
+) -> AppResult<Json<Value>> {
+    let claims = claims.map(|Extension(c)| c);
+    let sub = acting_sub(&claims, q.sub, &state.config.principal_mode)?;
+    store_create(&state, &PLAYLIST_STORE, &sub, &body.name).await
+}
+
+async fn get_playlist(
+    State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
+    Path(id): Path<i64>,
+    Query(q): Query<WatchQuery>,
+) -> AppResult<Json<Value>> {
+    let claims = claims.map(|Extension(c)| c);
+    let sub = acting_sub(&claims, q.sub, &state.config.principal_mode)?;
+    let (name, created_at, updated_at) = store_meta(&state, &PLAYLIST_STORE, id, &sub).await?;
+    let rows: Vec<(String, i64, i64, String)> = sqlx::query_as(
+        "SELECT media_kind, media_id, position, added_at FROM playlist_items \
+         WHERE playlist_id = ? ORDER BY position",
+    )
+    .bind(id)
+    .fetch_all(&state.db.pool)
+    .await?;
+
+    let movie_ids: Vec<i64> = rows
+        .iter()
+        .filter(|r| r.0 == "movie")
+        .map(|r| r.1)
+        .collect();
+    let episode_ids: Vec<i64> = rows
+        .iter()
+        .filter(|r| r.0 == "episode")
+        .map(|r| r.1)
+        .collect();
+    let movie_meta = fetch_movie_meta(&state, &movie_ids).await?;
+    let episode_meta = fetch_episode_meta(&state, &episode_ids).await?;
+
+    let items: Vec<Value> = rows
+        .iter()
+        .map(|(media_kind, media_id, position, added_at)| {
+            let mut v = json!({
+                "media_kind": media_kind,
+                "media_id": media_id,
+                "position": position,
+                "added_at": added_at,
+            });
+            let obj = v.as_object_mut().expect("json object");
+            match media_kind.as_str() {
+                "movie" => {
+                    if let Some((title, poster)) = movie_meta.get(media_id) {
+                        obj.insert("title".into(), json!(title));
+                        obj.insert("poster_path".into(), json!(poster));
+                    }
+                }
+                "episode" => {
+                    if let Some(e) = episode_meta.get(media_id) {
+                        obj.insert("title".into(), json!(e.episode_title));
+                        obj.insert("show_title".into(), json!(e.show_title));
+                        obj.insert("poster_path".into(), json!(e.poster_path));
+                        obj.insert("season".into(), json!(e.season));
+                        obj.insert("episode".into(), json!(e.episode));
+                    }
+                }
+                _ => {}
+            }
+            v
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "id": id,
+        "name": name,
+        "created_at": created_at,
+        "updated_at": updated_at,
+        "items": items,
+    })))
+}
+
+async fn rename_playlist(
+    State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
+    Path(id): Path<i64>,
+    Query(q): Query<WatchQuery>,
+    Json(body): Json<NameBody>,
+) -> AppResult<Json<Value>> {
+    let claims = claims.map(|Extension(c)| c);
+    let sub = acting_sub(&claims, q.sub, &state.config.principal_mode)?;
+    store_rename(&state, &PLAYLIST_STORE, id, &sub, &body.name).await
+}
+
+async fn delete_playlist(
+    State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
+    Path(id): Path<i64>,
+    Query(q): Query<WatchQuery>,
+) -> AppResult<Json<Value>> {
+    let claims = claims.map(|Extension(c)| c);
+    let sub = acting_sub(&claims, q.sub, &state.config.principal_mode)?;
+    store_delete(&state, &PLAYLIST_STORE, id, &sub).await
+}
+
+async fn add_playlist_item(
+    State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
+    Path(id): Path<i64>,
+    Query(q): Query<WatchQuery>,
+    Json(body): Json<ListItemBody>,
+) -> AppResult<Json<Value>> {
+    let claims = claims.map(|Extension(c)| c);
+    let sub = acting_sub(&claims, q.sub, &state.config.principal_mode)?;
+    store_add_item(&state, &PLAYLIST_STORE, id, &sub, &body).await
+}
+
+async fn delete_playlist_item(
+    State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
+    Path(id): Path<i64>,
+    Query(q): Query<ListItemQuery>,
+) -> AppResult<Json<Value>> {
+    let claims = claims.map(|Extension(c)| c);
+    let sub = acting_sub(&claims, q.sub, &state.config.principal_mode)?;
+    store_remove_item(&state, &PLAYLIST_STORE, id, &sub, &q.media_kind, q.media_id).await
+}
+
+/// Full reorder: the body must list every current item exactly once; each
+/// item's new `position` is its index in the array. Partial reorders are
+/// rejected so positions can never silently collide or gap.
+async fn reorder_playlist(
+    State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
+    Path(id): Path<i64>,
+    Query(q): Query<WatchQuery>,
+    Json(body): Json<ReorderBody>,
+) -> AppResult<Json<Value>> {
+    let claims = claims.map(|Extension(c)| c);
+    let sub = acting_sub(&claims, q.sub, &state.config.principal_mode)?;
+    store_owned(&state, &PLAYLIST_STORE, id, &sub).await?;
+
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM playlist_items WHERE playlist_id = ?")
+            .bind(id)
+            .fetch_one(&state.db.pool)
+            .await?;
+    let unique: std::collections::HashSet<(&str, i64)> = body
+        .items
+        .iter()
+        .map(|i| (i.media_kind.as_str(), i.media_id))
+        .collect();
+    if body.items.len() as i64 != count || unique.len() != body.items.len() {
+        return Err(AppError::BadRequest(
+            "reorder must list every playlist item exactly once".into(),
+        ));
+    }
+
+    let mut tx = state.db.pool.begin().await?;
+    let mut updated: u64 = 0;
+    for (position, item) in body.items.iter().enumerate() {
+        let res = sqlx::query(
+            "UPDATE playlist_items SET position = ? \
+             WHERE playlist_id = ? AND media_kind = ? AND media_id = ?",
+        )
+        .bind(position as i64)
+        .bind(id)
+        .bind(&item.media_kind)
+        .bind(item.media_id)
+        .execute(&mut *tx)
+        .await?;
+        updated += res.rows_affected();
+    }
+    if updated != count as u64 {
+        // Body named an item that is not in the playlist; tx drop = rollback.
+        return Err(AppError::BadRequest(
+            "reorder must list every playlist item exactly once".into(),
+        ));
+    }
+    tx.commit().await?;
+    store_touch(&state, &PLAYLIST_STORE, id).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn list_collections(
+    State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
+    Query(q): Query<WatchQuery>,
+) -> AppResult<Json<Value>> {
+    let claims = claims.map(|Extension(c)| c);
+    let sub = acting_sub(&claims, q.sub, &state.config.principal_mode)?;
+    store_list(&state, &COLLECTION_STORE, &sub).await
+}
+
+async fn create_collection(
+    State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
+    Query(q): Query<WatchQuery>,
+    Json(body): Json<NameBody>,
+) -> AppResult<Json<Value>> {
+    let claims = claims.map(|Extension(c)| c);
+    let sub = acting_sub(&claims, q.sub, &state.config.principal_mode)?;
+    store_create(&state, &COLLECTION_STORE, &sub, &body.name).await
+}
+
+async fn get_collection(
+    State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
+    Path(id): Path<i64>,
+    Query(q): Query<WatchQuery>,
+) -> AppResult<Json<Value>> {
+    let claims = claims.map(|Extension(c)| c);
+    let sub = acting_sub(&claims, q.sub, &state.config.principal_mode)?;
+    let (name, created_at, updated_at) = store_meta(&state, &COLLECTION_STORE, id, &sub).await?;
+    let rows: Vec<(String, i64, String)> = sqlx::query_as(
+        "SELECT media_kind, media_id, added_at FROM collection_items \
+         WHERE collection_id = ? ORDER BY added_at",
+    )
+    .bind(id)
+    .fetch_all(&state.db.pool)
+    .await?;
+
+    let movie_ids: Vec<i64> = rows
+        .iter()
+        .filter(|r| r.0 == "movie")
+        .map(|r| r.1)
+        .collect();
+    let show_ids: Vec<i64> = rows.iter().filter(|r| r.0 == "show").map(|r| r.1).collect();
+    let movie_meta = fetch_movie_meta(&state, &movie_ids).await?;
+    let show_meta = fetch_show_meta(&state, &show_ids).await?;
+
+    let items: Vec<Value> = rows
+        .iter()
+        .map(|(media_kind, media_id, added_at)| {
+            let mut v = json!({
+                "media_kind": media_kind,
+                "media_id": media_id,
+                "added_at": added_at,
+            });
+            let obj = v.as_object_mut().expect("json object");
+            let meta = match media_kind.as_str() {
+                "movie" => movie_meta.get(media_id),
+                "show" => show_meta.get(media_id),
+                _ => None,
+            };
+            if let Some((title, poster)) = meta {
+                obj.insert("title".into(), json!(title));
+                obj.insert("poster_path".into(), json!(poster));
+            }
+            v
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "id": id,
+        "name": name,
+        "created_at": created_at,
+        "updated_at": updated_at,
+        "items": items,
+    })))
+}
+
+/// Batch-resolve `shows.id → (title, poster_path)` for collection detail.
+async fn fetch_show_meta(
+    state: &AppState,
+    ids: &[i64],
+) -> AppResult<std::collections::HashMap<i64, (String, Option<String>)>> {
+    fetch_by_ids(
+        state,
+        ids,
+        |ph| format!("SELECT id, title, poster_path FROM shows WHERE id IN ({ph})"),
+        |(id, title, poster): (i64, String, Option<String>)| (id, (title, poster)),
+    )
+    .await
+}
+
+async fn rename_collection(
+    State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
+    Path(id): Path<i64>,
+    Query(q): Query<WatchQuery>,
+    Json(body): Json<NameBody>,
+) -> AppResult<Json<Value>> {
+    let claims = claims.map(|Extension(c)| c);
+    let sub = acting_sub(&claims, q.sub, &state.config.principal_mode)?;
+    store_rename(&state, &COLLECTION_STORE, id, &sub, &body.name).await
+}
+
+async fn delete_collection(
+    State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
+    Path(id): Path<i64>,
+    Query(q): Query<WatchQuery>,
+) -> AppResult<Json<Value>> {
+    let claims = claims.map(|Extension(c)| c);
+    let sub = acting_sub(&claims, q.sub, &state.config.principal_mode)?;
+    store_delete(&state, &COLLECTION_STORE, id, &sub).await
+}
+
+async fn add_collection_item(
+    State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
+    Path(id): Path<i64>,
+    Query(q): Query<WatchQuery>,
+    Json(body): Json<ListItemBody>,
+) -> AppResult<Json<Value>> {
+    let claims = claims.map(|Extension(c)| c);
+    let sub = acting_sub(&claims, q.sub, &state.config.principal_mode)?;
+    store_add_item(&state, &COLLECTION_STORE, id, &sub, &body).await
+}
+
+async fn delete_collection_item(
+    State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
+    Path(id): Path<i64>,
+    Query(q): Query<ListItemQuery>,
+) -> AppResult<Json<Value>> {
+    let claims = claims.map(|Extension(c)| c);
+    let sub = acting_sub(&claims, q.sub, &state.config.principal_mode)?;
+    store_remove_item(
+        &state,
+        &COLLECTION_STORE,
+        id,
+        &sub,
+        &q.media_kind,
+        q.media_id,
+    )
+    .await
+}
+
 // ── Markers (intro / credits — M6 "Skip Intro") ──────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -1993,6 +2691,288 @@ mod tests {
         assert_eq!(items[0]["sub"], "plex:1");
         assert_eq!(items[0]["media_id"], movie_id);
         assert_eq!(items[0]["position_secs"], 120);
+    }
+
+    #[tokio::test]
+    async fn playlist_crud_ordering_and_reorder() {
+        let state = test_state().await;
+        let f1 = seed_media_file(&state, "/lib/p1.mp4").await;
+        let f2 = seed_media_file(&state, "/lib/p2.mp4").await;
+        let m1 = seed_movie_for_file(&state, f1).await;
+        let m2 = seed_movie_for_file(&state, f2).await;
+        let app = crate::build_router(state);
+
+        let created = app
+            .clone()
+            .oneshot(json_req(
+                "POST",
+                "/api/media/playlists?sub=plex:1",
+                json!({ "name": "Friday Night" }).to_string(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::OK);
+        let pid = body_json(created).await["id"].as_i64().unwrap();
+
+        for m in [m1, m2] {
+            let add = app
+                .clone()
+                .oneshot(json_req(
+                    "POST",
+                    format!("/api/media/playlists/{pid}/items?sub=plex:1"),
+                    json!({ "media_kind": "movie", "media_id": m }).to_string(),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(add.status(), StatusCode::OK);
+        }
+
+        let detail = app
+            .clone()
+            .oneshot(req("GET", format!("/api/media/playlists/{pid}?sub=plex:1")))
+            .await
+            .unwrap();
+        let v = body_json(detail).await;
+        let items = v["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        // Insertion order preserved, and enrichment carries the movie title.
+        assert_eq!(items[0]["media_id"], m1);
+        assert_eq!(items[1]["media_id"], m2);
+        assert!(items[0]["title"].is_string());
+
+        // Full reorder: reversed body order becomes the new positions.
+        let reorder = app
+            .clone()
+            .oneshot(json_req(
+                "PUT",
+                format!("/api/media/playlists/{pid}/items?sub=plex:1"),
+                json!({ "items": [
+                    { "media_kind": "movie", "media_id": m2 },
+                    { "media_kind": "movie", "media_id": m1 },
+                ]})
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(reorder.status(), StatusCode::OK);
+        let v = body_json(
+            app.clone()
+                .oneshot(req("GET", format!("/api/media/playlists/{pid}?sub=plex:1")))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(v["items"][0]["media_id"], m2);
+
+        // Partial reorder must be rejected (positions could collide).
+        let partial = app
+            .clone()
+            .oneshot(json_req(
+                "PUT",
+                format!("/api/media/playlists/{pid}/items?sub=plex:1"),
+                json!({ "items": [{ "media_kind": "movie", "media_id": m1 }] }).to_string(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(partial.status(), StatusCode::BAD_REQUEST);
+
+        // Remove one item, then delete the playlist entirely.
+        let remove = app
+            .clone()
+            .oneshot(req(
+                "DELETE",
+                format!(
+                    "/api/media/playlists/{pid}/items?sub=plex:1&media_kind=movie&media_id={m1}"
+                ),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(remove.status(), StatusCode::OK);
+        let del = app
+            .clone()
+            .oneshot(req(
+                "DELETE",
+                format!("/api/media/playlists/{pid}?sub=plex:1"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(del.status(), StatusCode::OK);
+        let gone = app
+            .oneshot(req("GET", format!("/api/media/playlists/{pid}?sub=plex:1")))
+            .await
+            .unwrap();
+        assert_eq!(gone.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn playlists_are_scoped_per_user() {
+        let state = test_state().await;
+        let app = crate::build_router(state);
+        let created = app
+            .clone()
+            .oneshot(json_req(
+                "POST",
+                "/api/media/playlists?sub=plex:owner",
+                json!({ "name": "Mine" }).to_string(),
+            ))
+            .await
+            .unwrap();
+        let pid = body_json(created).await["id"].as_i64().unwrap();
+
+        // Another user neither lists nor reads nor deletes it.
+        let list = body_json(
+            app.clone()
+                .oneshot(req("GET", "/api/media/playlists?sub=plex:other"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(list["items"].as_array().unwrap().len(), 0);
+        let read = app
+            .clone()
+            .oneshot(req(
+                "GET",
+                format!("/api/media/playlists/{pid}?sub=plex:other"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(read.status(), StatusCode::NOT_FOUND);
+        let del = app
+            .oneshot(req(
+                "DELETE",
+                format!("/api/media/playlists/{pid}?sub=plex:other"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(del.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn playlist_item_validation_rejects_bad_refs() {
+        let state = test_state().await;
+        let app = crate::build_router(state);
+        let pid = body_json(
+            app.clone()
+                .oneshot(json_req(
+                    "POST",
+                    "/api/media/playlists?sub=plex:1",
+                    json!({ "name": "Checks" }).to_string(),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["id"]
+            .as_i64()
+            .unwrap();
+
+        // 'show' is a collection kind, not a playlist kind → 400.
+        let bad_kind = app
+            .clone()
+            .oneshot(json_req(
+                "POST",
+                format!("/api/media/playlists/{pid}/items?sub=plex:1"),
+                json!({ "media_kind": "show", "media_id": 1 }).to_string(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(bad_kind.status(), StatusCode::BAD_REQUEST);
+
+        // Known kind, nonexistent id → 404.
+        let bad_id = app
+            .clone()
+            .oneshot(json_req(
+                "POST",
+                format!("/api/media/playlists/{pid}/items?sub=plex:1"),
+                json!({ "media_kind": "movie", "media_id": 9999 }).to_string(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(bad_id.status(), StatusCode::NOT_FOUND);
+
+        // Duplicate playlist name for the same user → 400.
+        let dup = app
+            .oneshot(json_req(
+                "POST",
+                "/api/media/playlists?sub=plex:1",
+                json!({ "name": "Checks" }).to_string(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(dup.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn collection_round_trips_with_show_enrichment() {
+        let state = test_state().await;
+        let f = seed_media_file(&state, "/lib/c1.mp4").await;
+        let movie_id = seed_movie_for_file(&state, f).await;
+        let show_id: i64 =
+            sqlx::query("INSERT INTO shows (title, added_at, poster_path) VALUES (?, ?, ?)")
+                .bind("Show Piece")
+                .bind("2026-01-01T00:00:00Z")
+                .bind("/poster.jpg")
+                .execute(&state.db.pool)
+                .await
+                .unwrap()
+                .last_insert_rowid();
+        let app = crate::build_router(state);
+
+        let cid = body_json(
+            app.clone()
+                .oneshot(json_req(
+                    "POST",
+                    "/api/media/collections?sub=plex:1",
+                    json!({ "name": "Favorites" }).to_string(),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["id"]
+            .as_i64()
+            .unwrap();
+
+        for (kind, id) in [("movie", movie_id), ("show", show_id)] {
+            let add = app
+                .clone()
+                .oneshot(json_req(
+                    "POST",
+                    format!("/api/media/collections/{cid}/items?sub=plex:1"),
+                    json!({ "media_kind": kind, "media_id": id }).to_string(),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(add.status(), StatusCode::OK);
+        }
+
+        let v = body_json(
+            app.clone()
+                .oneshot(req(
+                    "GET",
+                    format!("/api/media/collections/{cid}?sub=plex:1"),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let items = v["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        let show_item = items
+            .iter()
+            .find(|i| i["media_kind"] == "show")
+            .expect("show item present");
+        assert_eq!(show_item["title"], "Show Piece");
+        assert_eq!(show_item["poster_path"], "/poster.jpg");
+
+        // Episodes are not a collection kind → 400.
+        let bad = app
+            .oneshot(json_req(
+                "POST",
+                format!("/api/media/collections/{cid}/items?sub=plex:1"),
+                json!({ "media_kind": "episode", "media_id": 1 }).to_string(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
     }
 
     /// Seed one artist → album → track backed by a fresh media_files row.
