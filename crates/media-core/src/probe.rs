@@ -93,6 +93,7 @@ async fn ffprobe_with_bin_timeout(
             .arg("json")
             .arg("-show_format")
             .arg("-show_streams")
+            .arg("-show_chapters")
             // Bound the bytes/μs ffprobe will analyze on pathologically large but
             // valid inputs (10s / 50MB are well above what stream metadata needs).
             .arg("-analyzeduration")
@@ -251,6 +252,34 @@ pub fn parse_ffprobe_json(doc: &Value) -> FileProbe {
         })
         .unwrap_or_default();
 
+    // Container chapters (audiobooks). ffprobe reports fractional-second
+    // strings; whole seconds are plenty for chapter navigation.
+    let chapters = doc
+        .get("chapters")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|ch| {
+                    let start_secs = ch.get("start_time").and_then(parse_f64)?.round() as i64;
+                    let end_secs = ch
+                        .get("end_time")
+                        .and_then(parse_f64)
+                        .map(|t| t.round() as i64)
+                        .unwrap_or(start_secs);
+                    Some(crate::models::Chapter {
+                        title: ch
+                            .get("tags")
+                            .and_then(|t| t.get("title"))
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        start_secs,
+                        end_secs,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     FileProbe {
         container,
         duration_secs,
@@ -261,6 +290,7 @@ pub fn parse_ffprobe_json(doc: &Value) -> FileProbe {
         audio_tracks,
         subtitle_tracks,
         format_tags,
+        chapters,
     }
 }
 

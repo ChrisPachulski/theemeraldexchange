@@ -33,6 +33,10 @@ chrono = { version = "0.4", features = ["serde"] }
 walkdir = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 sha2.workspace = true
+# Photo scan: EXIF taken-at/dimensions without spawning ffprobe per image.
+kamadak-exif = "0.6"
+# Podcast RSS parsing (pull parser; serde mode fights itunes: namespaces).
+quick-xml = "0.37"
 
 [dev-dependencies]
 tempfile = "3"

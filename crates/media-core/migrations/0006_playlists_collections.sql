@@ -1,8 +1,8 @@
 -- Per-user video playlists (ordered) and collections (unordered groupings).
 -- Item rows are polymorphic (media_kind + media_id) like media_watch_state, so
 -- referential integrity to movies/episodes/shows is enforced in the handlers,
--- not by SQL FKs. Parent FKs get explicit cleanup in the DELETE handlers
--- because the pool does not enable PRAGMA foreign_keys.
+-- not by SQL FKs. The parent link is likewise plain (no REFERENCES), so the
+-- DELETE handlers remove item rows explicitly before the parent.
 
 CREATE TABLE IF NOT EXISTS playlists (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
