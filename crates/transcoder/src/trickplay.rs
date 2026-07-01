@@ -115,7 +115,9 @@ pub(crate) fn master(variant_bandwidth_bps: u32, resolution: Option<(u32, u32)>)
         Some((w, h)) => m.push_str(&format!(
             "#EXT-X-STREAM-INF:BANDWIDTH={variant_bandwidth_bps},RESOLUTION={w}x{h}\n"
         )),
-        None => m.push_str(&format!("#EXT-X-STREAM-INF:BANDWIDTH={variant_bandwidth_bps}\n")),
+        None => m.push_str(&format!(
+            "#EXT-X-STREAM-INF:BANDWIDTH={variant_bandwidth_bps}\n"
+        )),
     }
     m.push_str(MEDIA_PLAYLIST_NAME);
     m.push('\n');
@@ -152,7 +154,9 @@ pub(crate) fn iframe_playlist(total_duration_secs: f64) -> Option<String> {
     let mut m = String::with_capacity(96 + count as usize * 32);
     m.push_str("#EXTM3U\n");
     m.push_str("#EXT-X-VERSION:4\n");
-    m.push_str(&format!("#EXT-X-TARGETDURATION:{TRICKPLAY_INTERVAL_SECS}\n"));
+    m.push_str(&format!(
+        "#EXT-X-TARGETDURATION:{TRICKPLAY_INTERVAL_SECS}\n"
+    ));
     m.push_str("#EXT-X-MEDIA-SEQUENCE:0\n");
     m.push_str("#EXT-X-PLAYLIST-TYPE:VOD\n");
     m.push_str("#EXT-X-I-FRAMES-ONLY\n");
@@ -295,7 +299,9 @@ mod tests {
         assert!(m.contains("#EXT-X-PLAYLIST-TYPE:VOD\n"));
         // The tag that tells AVPlayer every segment is a single I-frame.
         assert!(m.contains("#EXT-X-I-FRAMES-ONLY\n"), "{m}");
-        assert!(m.contains(&format!("#EXT-X-TARGETDURATION:{TRICKPLAY_INTERVAL_SECS}\n")));
+        assert!(m.contains(&format!(
+            "#EXT-X-TARGETDURATION:{TRICKPLAY_INTERVAL_SECS}\n"
+        )));
         assert!(m.trim_end().ends_with("#EXT-X-ENDLIST"));
         assert!(!m.contains("EVENT"));
     }
@@ -343,7 +349,12 @@ mod tests {
 
     #[test]
     fn thumb_args_sample_one_keyframe_per_segment() {
-        let a = thumb_args("/media/movie.mkv", "/scratch/sess", TRICKPLAY_INTERVAL_SECS, THUMB_WIDTH);
+        let a = thumb_args(
+            "/media/movie.mkv",
+            "/scratch/sess",
+            TRICKPLAY_INTERVAL_SECS,
+            THUMB_WIDTH,
+        );
         let j = a.join(" ");
         // One frame per interval, scaled to the thumbnail width (even height).
         assert!(j.contains("-vf fps=1/10,scale=320:-2"), "{j}");
@@ -357,6 +368,9 @@ mod tests {
         // Thumbnails cover the WHOLE title: never seek.
         assert!(!j.contains("-ss"), "thumbnails must not seek: {j}");
         assert!(j.contains("/scratch/sess/thumb_%05d.ts"), "{j}");
-        assert!(j.trim_end().ends_with("/scratch/sess/thumb_index.m3u8"), "{j}");
+        assert!(
+            j.trim_end().ends_with("/scratch/sess/thumb_index.m3u8"),
+            "{j}"
+        );
     }
 }
