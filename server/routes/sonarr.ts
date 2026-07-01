@@ -4,6 +4,7 @@
 
 import { Hono } from 'hono'
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
+import { requireSection } from '../services/userPolicies.js'
 import { rateLimit } from '../middleware/rateLimit.js'
 import { sonarrFetch, sonarrRootFolders } from '../services/sonarr.js'
 import { SEARCH_TIMEOUT_MS } from '../services/upstream.js'
@@ -41,6 +42,9 @@ export const sonarr = new Hono<Env>()
 
 // Reads — both roles
 sonarr.use('*', requireAuth)
+// Section gate: a policy that denies `arr` blocks add/manage mutations
+// (POST/PUT/DELETE) while leaving reads open. Admins are never blocked.
+sonarr.use('*', requireSection('arr', { mutationsOnly: true }))
 
 // Per-session token bucket on the release-search-bearing mutate routes
 // (finding 4-0). Series add + season-monitor each kick a real per-season

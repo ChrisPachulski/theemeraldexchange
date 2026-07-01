@@ -16,6 +16,7 @@ import { promisify } from 'node:util'
 // the full synchronous compress.
 const gzipAsync = promisify(gzip)
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
+import { requireSection } from '../services/userPolicies.js'
 import { getAccountInfo, credsFromEnv } from '../services/xtream.js'
 import { nodeReadableToWebStream } from '../services/streamBridge.js'
 import { iptvDb } from '../services/iptvDbSingleton.js'
@@ -603,7 +604,7 @@ function parsePositiveInt(value: string | undefined): number | null {
   return parsed
 }
 
-iptv.post('/stream/live/:streamId/grant', requireAuth, async (c) => {
+iptv.post('/stream/live/:streamId/grant', requireAuth, requireSection('live'), async (c) => {
   const streamId = c.req.param('streamId')
   if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
 

@@ -58,6 +58,8 @@ beforeAll(async () => {
       maxTvGbPerEpisode: 5,
       rejectionsPath: './data/rejections.json',
       userFeedbackPath: './data/user-feedback.json',
+      userWatchlistPath: './data/user-watchlist.json',
+      userPoliciesPath: './data/user-policies.json',
       usageLogPath: './data/usage.jsonl',
       grabLogPath: './data/grabs.jsonl',
       tmdbApiKey: null,

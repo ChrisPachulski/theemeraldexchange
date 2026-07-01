@@ -15,6 +15,7 @@
 
 import { Hono, type Context } from 'hono'
 import { requireAuth, type Env } from '../middleware/auth.js'
+import { requireSection } from '../services/userPolicies.js'
 import { rateLimit } from '../middleware/rateLimit.js'
 import { sabCall } from '../services/sab.js'
 import { env } from '../env.js'
@@ -24,6 +25,10 @@ const DEFAULT_HISTORY_LIMIT = 10
 const MAX_HISTORY_LIMIT = 100
 
 sab.use('*', requireAuth)
+// Section gate: a policy that denies `downloads` hides SAB entirely —
+// both the queue/history reads and the pause/resume/cancel mutations.
+// Admins are never blocked (requireSection short-circuits on admin).
+sab.use('*', requireSection('downloads'))
 
 // Per-session token bucket on the queue-mutating routes (finding 4-0).
 // Reuses the shared *arr mutate budget shape; these hit SAB queue + disk I/O,

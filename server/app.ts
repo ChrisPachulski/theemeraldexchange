@@ -26,6 +26,7 @@ import { suggestions } from './routes/suggestions.js'
 import { settings } from './routes/settings.js'
 import { feedback } from './routes/feedback.js'
 import { watchlist } from './routes/watchlist.js'
+import { policy, adminPolicy } from './routes/policy.js'
 import { usage } from './routes/usage.js'
 import { recommenderEvents } from './routes/recommenderEvents.js'
 import { telemetry } from './routes/telemetry.js'
@@ -204,6 +205,10 @@ if (env.DVR_ENABLED && !env.IPTV_DISABLED) {
   app.route('/api/dvr', dvr)
 }
 app.route('/api/users', users)
+// Admin-only per-user policy management (parental controls + section
+// scoping), mounted beside the admin user listing. Distinct subpaths
+// (/policies, /:sub/policy) so it coexists with `users` on this prefix.
+app.route('/api/users', adminPolicy)
 // Order matters: plexLinks (auth-only) is mounted BEFORE plexAdmin
 // (admin-only). Hono's first-match-wins routing means the admin
 // middleware on plexAdmin would otherwise leak onto /library-links and
@@ -226,6 +231,9 @@ app.route('/api/feedback', feedback)
 // Per-user watchlist (admin-free, sub-scoped) — each member's private
 // "want to watch" list. Always-on, so no /api/limits capability flag.
 app.route('/api/watchlist', watchlist)
+// Per-user policy read (admin-free, sub-scoped) — the caller's own
+// parental-control/section policy. Always-on, so no /api/limits flag.
+app.route('/api/policy', policy)
 app.route('/api/usage', usage)
 // Narrow pass-through for client-side conversion signals (currently
 // 'clicked' only) that the SPA fires when a user interacts with a

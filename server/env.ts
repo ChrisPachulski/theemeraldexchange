@@ -505,6 +505,11 @@ export const env = {
   // the other per-user JSON data files.
   userWatchlistPath: process.env.USER_WATCHLIST_PATH ?? './data/user-watchlist.json',
 
+  // Per-user policy store (parental controls + section scoping). Keyed by
+  // sub; holds each member's max content rating, allowed sections, and
+  // kid flag. Shares the bind-mount with the other per-user data files.
+  userPoliciesPath: process.env.USER_POLICIES_PATH ?? './data/user-policies.json',
+
   // Per-Claude-call usage log. JSONL like the grab log; one row per
   // Anthropic call with token counts + estimated cost, keyed by user
   // for the per-user usage view and the admin dashboard.
