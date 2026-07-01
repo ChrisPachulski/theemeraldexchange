@@ -407,6 +407,20 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
                 push(&mut a, "hvc1");
             }
         }
+        VideoOp::CopyDolbyVision { dv_profile } => {
+            push(&mut a, "-c:v");
+            push(&mut a, "copy");
+            // Sample entry per Apple's HLS authoring spec: Profile 5 is
+            // DV-only (`dvh1`); Profile 8 carries a cross-compatible HDR10
+            // base layer, so it keeps `hvc1` and non-DV decoders can still
+            // play the BL. The mov muxer writes the dvcC/dvvC config box from
+            // the copied DOVI side data; `-strict unofficial` keeps that
+            // path open on ffmpeg builds that gate it behind compliance.
+            push(&mut a, "-tag:v");
+            push(&mut a, if *dv_profile == 5 { "dvh1" } else { "hvc1" });
+            push(&mut a, "-strict");
+            push(&mut a, "unofficial");
+        }
         VideoOp::EncodeH264 {
             scale_to_height,
             tone_map,
@@ -1703,6 +1717,30 @@ mod tests {
         assert!(!j.contains("fmp4"), "{j}");
         assert!(!j.contains("-tag:v"), "{j}");
         assert!(j.contains("/tmp/s/seg_%05d.ts"), "{j}");
+    }
+
+    #[test]
+    fn dv_copy_tags_dvh1_for_p5_and_hvc1_for_p8() {
+        // DV passthrough always rides fMP4. Profile 5 (DV-only) must present
+        // as dvh1; profile 8 keeps hvc1 so non-DV decoders play the base layer.
+        for (profile, tag) in [(5u8, "dvh1"), (8u8, "hvc1")] {
+            let plan = TranscodePlan::Transcode {
+                video: VideoOp::CopyDolbyVision {
+                    dv_profile: profile,
+                },
+                audio: AudioOp::Copy,
+                subtitle: SubtitleOp::None,
+                segment_format: SegmentFormat::Fmp4,
+                audio_index: 0,
+                extra_audio: Vec::new(),
+                reason: "dv passthrough".into(),
+            };
+            let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Vaapi).join(" ");
+            assert!(j.contains("-c:v copy"), "{j}");
+            assert!(j.contains(&format!("-tag:v {tag}")), "P{profile}: {j}");
+            assert!(j.contains("-strict unofficial"), "{j}");
+            assert!(j.contains("-hls_segment_type fmp4"), "{j}");
+        }
     }
 
     #[test]

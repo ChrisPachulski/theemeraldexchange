@@ -62,6 +62,9 @@ type Caps = {
   /** Native HLS player (AVPlayer): opt into multi-audio muxing for in-band
    *  language switching. Browser/MSE clients omit it (single English track). */
   native_hls?: boolean
+  /** Client pipeline applies Dolby Vision RPUs itself (DV-capable Apple
+   *  device). Gates DV direct-play and the transcoder's DV copy passthrough. */
+  dolby_vision?: boolean
 }
 type PlaybackRequest = Partial<Caps> & { start_secs?: unknown; force_hls?: unknown }
 const DEFAULT_CAPS: Caps = {
@@ -73,6 +76,7 @@ const DEFAULT_CAPS: Caps = {
   aac_max_channels: 2,
   hls_fmp4_hevc: false,
   native_hls: false,
+  dolby_vision: false,
 }
 
 function capsQuery(caps: Caps, startSecs?: number, forceTranscode = false): string {
@@ -85,6 +89,7 @@ function capsQuery(caps: Caps, startSecs?: number, forceTranscode = false): stri
   p.set('aac_max_channels', String(caps.aac_max_channels))
   p.set('hls_fmp4_hevc', String(Boolean(caps.hls_fmp4_hevc)))
   if (caps.native_hls) p.set('native_hls', 'true')
+  if (caps.dolby_vision) p.set('dolby_vision', 'true')
   if (startSecs !== undefined) p.set('start_secs', String(startSecs))
   if (forceTranscode) p.set('force_transcode', 'true')
   return p.toString()
@@ -160,6 +165,7 @@ media.post('/playback/:kind/:id', async (c) => {
         ? Math.floor(reqCaps.aac_max_channels)
         : DEFAULT_CAPS.aac_max_channels,
     hls_fmp4_hevc: Boolean(reqCaps.hls_fmp4_hevc),
+    dolby_vision: Boolean(reqCaps.dolby_vision),
   }
   const startSecs =
     typeof reqCaps.start_secs === 'number' &&
@@ -202,6 +208,7 @@ media.post('/playback/:kind/:id', async (c) => {
           audio_codecs: caps.audio_codecs,
           aac_max_channels: caps.aac_max_channels,
           hls_fmp4_hevc: caps.hls_fmp4_hevc,
+          dolby_vision: caps.dolby_vision,
         }),
       },
       LAN_TIMEOUT_MS,

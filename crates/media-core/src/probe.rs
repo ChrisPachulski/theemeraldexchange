@@ -292,21 +292,26 @@ fn tag(stream: &Value, key: &str) -> Option<String> {
 /// Derive an HDR label from the video stream. Dolby Vision is detected via a
 /// side-data entry; otherwise the transfer characteristics decide HDR10/HLG.
 fn detect_hdr(video: &Value) -> Option<String> {
-    let dolby_vision = video
-        .get("side_data_list")
-        .and_then(Value::as_array)
-        .map(|list| {
-            list.iter().any(|sd| {
-                sd.get("side_data_type")
-                    .and_then(Value::as_str)
-                    .map(|t| t.contains("Dolby Vision"))
-                    .unwrap_or(false)
-            })
-        })
-        .unwrap_or(false);
-
-    if dolby_vision {
-        return Some("Dolby Vision".to_string());
+    // A "DOVI configuration record" entry (the stream-level DV box) carries
+    // `dv_profile`; append it ("Dolby Vision P5") so the transcoder can gate
+    // profile-dependent handling (P5/P8 may pass through to a DV-capable
+    // client, P7 dual-layer never can). Frame-level "Dolby Vision Metadata"
+    // entries carry no profile → the bare label, which downstream treats as
+    // unknown-profile (fails closed to the RPU re-encode).
+    if let Some(list) = video.get("side_data_list").and_then(Value::as_array) {
+        for sd in list {
+            let sd_type = sd
+                .get("side_data_type")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if !(sd_type.contains("Dolby Vision") || sd_type.contains("DOVI")) {
+                continue;
+            }
+            if let Some(profile) = sd.get("dv_profile").and_then(parse_i64) {
+                return Some(format!("Dolby Vision P{profile}"));
+            }
+            return Some("Dolby Vision".to_string());
+        }
     }
 
     match video.get("color_transfer").and_then(Value::as_str) {
@@ -562,6 +567,29 @@ mod tests {
         });
         let probe = parse_ffprobe_json(&doc);
         assert_eq!(probe.hdr_format.as_deref(), Some("Dolby Vision"));
+    }
+
+    #[test]
+    fn dovi_config_record_profile_is_captured() {
+        // A stream-level DOVI configuration record spells out dv_profile;
+        // the label carries it so the transcoder can gate P5/P8 passthrough
+        // vs P7 (dual-layer, never passable). ffprobe emits dv_profile as a
+        // number; a string is tolerated (parse_i64 handles both).
+        let doc = json!({
+            "streams": [
+                {
+                    "index": 0,
+                    "codec_type": "video",
+                    "codec_name": "hevc",
+                    "color_transfer": "smpte2084",
+                    "side_data_list": [
+                        { "side_data_type": "DOVI configuration record", "dv_profile": 5 }
+                    ]
+                }
+            ]
+        });
+        let probe = parse_ffprobe_json(&doc);
+        assert_eq!(probe.hdr_format.as_deref(), Some("Dolby Vision P5"));
     }
 
     #[test]
