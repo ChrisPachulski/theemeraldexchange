@@ -3,9 +3,9 @@ import { concurrencyPayloadFromError } from './concurrencyLimit'
 import { ApiError } from '../../lib/api/errors'
 import type { SessionRow } from '../../lib/api/iptv'
 
-// concurrencyPayloadFromError is the pure parser that 4 IPTV components
-// (VodTab, IptvSeriesTab, LiveTab x2) feed a thrown error into to decide
-// whether to surface the concurrency-limit modal on a 429. It has several
+// concurrencyPayloadFromError is the pure parser that IPTV components
+// (LiveTab x2) feed a thrown error into to decide whether to surface the
+// concurrency-limit modal on a 429. It has several
 // silent guard branches (null/non-object, non-429, wrong/missing reason,
 // garbage fields). A regression here silently breaks the modal, so each
 // guard and fallback is pinned below.

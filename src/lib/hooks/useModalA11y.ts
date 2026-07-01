@@ -6,9 +6,9 @@ import { useEffect, useRef } from 'react'
 //   1. Plain-div modals (`role="dialog"` + `aria-modal`) MUST take this hook
 //      for the focus trap, Escape-to-close, and focus restoration the role
 //      promises. Current roster: MediaPlayer, EpisodePicker, the IPTV player
-//      modals (LiveTab/VodTab/IptvSeriesTab), ConcurrencyLimitModal, and
-//      ConnectionsWidget. These render inline (no top-layer) because they
-//      host <video> engines or anchor to surrounding layout.
+//      modals (LiveTab), ConcurrencyLimitModal, and ConnectionsWidget. These
+//      render inline (no top-layer) because they host <video> engines or
+//      anchor to surrounding layout.
 //
 //   2. Native `<dialog>` modals (DetailModal, AddMovieModal, AddSeriesModal,
 //      ConfirmModal — see useDialogDismiss) do NOT take this hook: the
