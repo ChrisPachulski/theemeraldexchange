@@ -1755,6 +1755,8 @@ mod tests {
             audio: AudioOp::Copy,
             subtitle: SubtitleOp::None,
             segment_format: crate::plan::SegmentFormat::MpegTs,
+            audio_index: 0,
+            extra_audio: Vec::new(),
             reason: "test".into(),
         }
     }
@@ -2493,6 +2495,8 @@ mod tests {
                 },
                 audio: AudioOp::Copy,
                 subtitle: SubtitleOp::None,
+                audio_index: 0,
+                extra_audio: Vec::new(),
                 reason: "test".into(),
             },
             start_secs: 0,
@@ -2546,6 +2550,8 @@ mod tests {
                     audio: AudioOp::Copy,
                     subtitle: SubtitleOp::None,
                     segment_format: crate::plan::SegmentFormat::Fmp4,
+                    audio_index: 0,
+                    extra_audio: Vec::new(),
                     reason: "hevc copy".into(),
                 },
                 ..remux_opts_id("/lib/arcane.mkv", 2)
@@ -2610,6 +2616,8 @@ mod tests {
                     audio: AudioOp::Copy,
                     subtitle: SubtitleOp::None,
                     segment_format: crate::plan::SegmentFormat::Fmp4,
+                    audio_index: 0,
+                    extra_audio: Vec::new(),
                     reason: "hevc copy".into(),
                 },
                 ..remux_opts_id(&src_str, 7)
@@ -2890,6 +2898,8 @@ mod tests {
             },
             audio: AudioOp::Copy,
             subtitle: SubtitleOp::None,
+            audio_index: 0,
+            extra_audio: Vec::new(),
             reason: "test".into(),
         };
         let args = crate::args::ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, mgr.encoder());

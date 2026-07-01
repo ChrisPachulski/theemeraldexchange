@@ -25,7 +25,7 @@
 //! invocation. No real transcode happens here.
 
 use media_core::capability::{ClientCaps, decide};
-use media_core::models::{MediaFileRow, SubtitleTrack};
+use media_core::models::{AudioTrack, MediaFileRow, SubtitleTrack};
 use serde::Serialize;
 
 /// Target H.264 height once we re-encode. The capability matrix only ever
@@ -157,6 +157,21 @@ pub enum TranscodePlan {
         /// HLS segment container (TS for H.264 delivery, fMP4 for HEVC copy).
         #[serde(default)]
         segment_format: SegmentFormat,
+        /// Audio-relative index (`-map 0:a:<n>`) of the track to play: the first
+        /// English-tagged audio, else the file's first audio. Some releases flag a
+        /// foreign track DEFAULT (e.g. Italian on "Hoppers"), so taking `0:a:0`
+        /// blindly played the wrong language; this lands on English like
+        /// Plex/Jellyfin. See [`preferred_audio_index`].
+        #[serde(default)]
+        audio_index: usize,
+        /// ADDITIONAL audio tracks to mux in after the primary `audio_index`, as
+        /// `(audio-relative source index, per-track op)`, in menu order. Non-empty
+        /// ONLY for a `native_hls` client (AVPlayer), which exposes them as
+        /// switchable in-band renditions; the primary stays first so it's the
+        /// default. Empty for browser/MSE (single track) — the single-audio arg
+        /// path is then byte-identical to before. See [`plan_extra_audio`].
+        #[serde(default)]
+        extra_audio: Vec<(usize, AudioOp)>,
         /// Echo of why direct-play was denied — useful for telemetry/inventory.
         reason: String,
     },
@@ -376,6 +391,8 @@ fn plan_transcode_ops(file: &MediaFileRow, caps: &ClientCaps, reason: String) ->
             audio: plan_audio(file, caps),
             subtitle,
             segment_format: SegmentFormat::MpegTs,
+            audio_index: preferred_audio_index(file),
+            extra_audio: plan_extra_audio(file, caps),
             reason: format!("{reason} (dolby vision: libplacebo RPU re-encode)"),
         };
     }
@@ -462,13 +479,37 @@ fn plan_transcode_ops(file: &MediaFileRow, caps: &ClientCaps, reason: String) ->
         audio,
         subtitle,
         segment_format,
+        audio_index: preferred_audio_index(file),
+        extra_audio: plan_extra_audio(file, caps),
         reason,
     }
 }
 
-/// Audio op: copy only when the primary track is a codec the CLIENT advertised
-/// AND (for AAC) within the client's appendable channel count; otherwise
-/// re-encode to AAC (the args builder downmixes to stereo).
+/// True for a BCP-47 / ISO-639 English audio language tag ("en", "eng",
+/// "en-US", or the bare word "english"). Tag-only, like the client's
+/// `AudioPreference.isEnglish`, so "bn"/"Bengali" never reads as English.
+fn is_english_lang(tag: &str) -> bool {
+    let t = tag.trim().to_ascii_lowercase();
+    t == "en" || t == "eng" || t == "english" || t.starts_with("en-") || t.starts_with("en_")
+}
+
+/// Audio-relative index (`-map 0:a:<n>`) of the track to play: the first
+/// English-tagged audio track, else 0 (the file's first audio). Some releases
+/// flag a foreign track DEFAULT (e.g. Italian on "Hoppers"), so `0:a:0` blindly
+/// played the wrong language; this forces English — the same default-to-English
+/// correction Plex/Jellyfin apply, and the client's `AudioPreference` mirrors.
+pub fn preferred_audio_index(file: &MediaFileRow) -> usize {
+    file.audio_tracks()
+        .iter()
+        .position(|t| t.language.as_deref().map(is_english_lang).unwrap_or(false))
+        .unwrap_or(0)
+}
+
+/// Audio op: copy only when the chosen track (see [`preferred_audio_index`]) is
+/// a codec the CLIENT advertised AND (for AAC) within the client's appendable
+/// channel count; otherwise re-encode to AAC (the args builder downmixes to
+/// stereo). Gating on the SAME track the `-map` selects keeps the copy/encode
+/// decision consistent with the audio that's actually delivered.
 fn plan_audio(file: &MediaFileRow, caps: &ClientCaps) -> AudioOp {
     // The accepted set is the client's advertised `audio_codecs` (default
     // ["aac"], the only codec every browser MSE path decodes — Chrome and
@@ -487,11 +528,23 @@ fn plan_audio(file: &MediaFileRow, caps: &ClientCaps) -> AudioOp {
     // re-encode merely costs a little CPU. A multichannel source downmixed to
     // stereo gets the higher DOWNMIX bitrate so the fold-down isn't smeared.
     let tracks = file.audio_tracks();
-    let Some(track) = tracks.first() else {
+    // The track the `-map` will select (English-preferred), not blindly the first.
+    let Some(track) = tracks
+        .get(preferred_audio_index(file))
+        .or_else(|| tracks.first())
+    else {
         // No audio at all: nothing to encode; ffmpeg_args guards on -map, so a
         // copy op is a harmless no-op.
         return AudioOp::Copy;
     };
+    audio_op_for(track, caps)
+}
+
+/// Copy-vs-re-encode decision for ONE audio track: copy when its codec is a set
+/// the client advertised AND (for AAC) within the appendable channel count;
+/// otherwise re-encode to stereo AAC. Extracted so every muxed track (primary
+/// and each `extra_audio` rendition) is gated identically.
+fn audio_op_for(track: &AudioTrack, caps: &ClientCaps) -> AudioOp {
     let codec = track
         .codec
         .as_deref()
@@ -524,6 +577,28 @@ fn plan_audio(file: &MediaFileRow, caps: &ClientCaps) -> AudioOp {
             },
         }
     }
+}
+
+/// The ADDITIONAL audio tracks to mux after the primary (English-preferred) one,
+/// as `(audio-relative index, per-track op)` in menu order. Empty unless the
+/// client is a `native_hls` player (AVPlayer exposes in-band alt-audio) AND the
+/// file actually has a second track — so browser/MSE and single-track titles are
+/// unchanged. The primary index is skipped (it's mapped first, as the default).
+pub fn plan_extra_audio(file: &MediaFileRow, caps: &ClientCaps) -> Vec<(usize, AudioOp)> {
+    if !caps.native_hls {
+        return Vec::new();
+    }
+    let tracks = file.audio_tracks();
+    if tracks.len() < 2 {
+        return Vec::new();
+    }
+    let primary = preferred_audio_index(file);
+    tracks
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != primary)
+        .map(|(i, t)| (i, audio_op_for(t, caps)))
+        .collect()
 }
 
 #[cfg(test)]
@@ -563,6 +638,140 @@ mod tests {
             subtitle_tracks_json: serde_json::to_string(&subs).unwrap(),
             scanned_at: "0".into(),
         }
+    }
+
+    /// An audio track with an explicit language tag (for audio-selection tests).
+    fn audio_lang(index: i64, lang: Option<&str>) -> AudioTrack {
+        AudioTrack {
+            index,
+            codec: Some("aac".into()),
+            channels: Some(2),
+            language: lang.map(str::to_string),
+            title: None,
+        }
+    }
+
+    #[test]
+    fn preferred_audio_index_lands_on_english_over_a_defaulted_foreign_track() {
+        // "Hoppers": track 0 is Italian (flagged DEFAULT upstream), track 1 is
+        // English. Mapping 0:a:0 blindly played Italian; we must select English
+        // (audio-relative index 1), matching Plex/Jellyfin.
+        let f = file(
+            Some("mkv"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![audio_lang(0, Some("ita")), audio_lang(1, Some("eng"))],
+            vec![],
+        );
+        assert_eq!(preferred_audio_index(&f), 1);
+    }
+
+    #[test]
+    fn preferred_audio_index_matches_regional_and_named_english_but_not_bengali() {
+        let regional = file(
+            Some("mkv"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![audio_lang(0, Some("fra")), audio_lang(1, Some("en-US"))],
+            vec![],
+        );
+        assert_eq!(preferred_audio_index(&regional), 1);
+        // No English → leave the file's first track. "bn" must not read as English.
+        let none = file(
+            Some("mkv"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![audio_lang(0, Some("ita")), audio_lang(1, Some("bn"))],
+            vec![],
+        );
+        assert_eq!(preferred_audio_index(&none), 0);
+    }
+
+    #[test]
+    fn native_client_muxes_all_audio_english_first() {
+        // native_hls: primary = English (idx 1); extras = the others in order.
+        let mut caps = caps_h264_1080_sdr();
+        caps.native_hls = true;
+        let f = file(
+            Some("mkv"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![
+                audio_lang(0, Some("ita")),
+                audio_lang(1, Some("eng")),
+                audio_lang(2, Some("fra")),
+            ],
+            vec![],
+        );
+        match plan_transcode(&f, &caps) {
+            TranscodePlan::Transcode {
+                audio_index,
+                extra_audio,
+                ..
+            } => {
+                assert_eq!(audio_index, 1, "English is the default/primary");
+                assert_eq!(
+                    extra_audio.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+                    vec![0, 2],
+                    "the other tracks are muxed in, primary excluded"
+                );
+            }
+            other => panic!("expected transcode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn browser_client_stays_single_english_track() {
+        // Default caps (native_hls false): no extra tracks — the web path is
+        // unchanged, so a capable browser can't regress to the foreign default.
+        let f = file(
+            Some("mkv"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![audio_lang(0, Some("ita")), audio_lang(1, Some("eng"))],
+            vec![],
+        );
+        match plan_transcode(&f, &caps_h264_1080_sdr()) {
+            TranscodePlan::Transcode {
+                audio_index,
+                extra_audio,
+                ..
+            } => {
+                assert_eq!(audio_index, 1);
+                assert!(extra_audio.is_empty(), "browser gets English only");
+            }
+            other => panic!("expected transcode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn transcode_plan_maps_the_english_audio_track() {
+        // The plan carries the English index and the ffmpeg args map 0:a:1.
+        let f = file(
+            Some("mkv"),
+            Some("av1"),
+            Some(1080),
+            None,
+            vec![audio_lang(0, Some("ita")), audio_lang(1, Some("eng"))],
+            vec![],
+        );
+        let plan = plan_transcode(&f, &caps_h264_1080_sdr());
+        match &plan {
+            TranscodePlan::Transcode { audio_index, .. } => assert_eq!(*audio_index, 1),
+            other => panic!("expected transcode, got {other:?}"),
+        }
+        let args =
+            crate::args::ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, crate::args::HwEncoder::Cpu)
+                .join(" ");
+        assert!(
+            args.contains("-map 0:a:1?"),
+            "english track not mapped; args: {args}"
+        );
     }
 
     /// Stereo AAC — the browser-safe, copyable baseline.
@@ -632,6 +841,8 @@ mod tests {
             audio: AudioOp::EncodeAac { bitrate_kbps: 192 },
             subtitle: SubtitleOp::None,
             segment_format: SegmentFormat::MpegTs,
+            audio_index: 0,
+            extra_audio: Vec::new(),
             reason: "container".into(),
         };
         assert!(
@@ -648,6 +859,8 @@ mod tests {
             audio: AudioOp::Copy,
             subtitle: SubtitleOp::None,
             segment_format: SegmentFormat::MpegTs,
+            audio_index: 0,
+            extra_audio: Vec::new(),
             reason: "hevc".into(),
         };
         assert!(encode.reencodes_video());

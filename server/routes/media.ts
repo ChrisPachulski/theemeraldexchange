@@ -58,6 +58,9 @@ type Caps = {
   aac_max_channels: number
   /** Client's HLS player handles HEVC in fMP4 segments (enables HEVC copy-remux). */
   hls_fmp4_hevc: boolean
+  /** Native HLS player (AVPlayer): opt into multi-audio muxing for in-band
+   *  language switching. Browser/MSE clients omit it (single English track). */
+  native_hls?: boolean
 }
 type PlaybackRequest = Partial<Caps> & { start_secs?: unknown; force_hls?: unknown }
 const DEFAULT_CAPS: Caps = {
@@ -68,6 +71,7 @@ const DEFAULT_CAPS: Caps = {
   audio_codecs: ['aac'],
   aac_max_channels: 2,
   hls_fmp4_hevc: false,
+  native_hls: false,
 }
 
 function capsQuery(caps: Caps, startSecs?: number, forceTranscode = false): string {
@@ -79,6 +83,7 @@ function capsQuery(caps: Caps, startSecs?: number, forceTranscode = false): stri
   if (caps.audio_codecs.length) p.set('audio_codecs', caps.audio_codecs.join(','))
   p.set('aac_max_channels', String(caps.aac_max_channels))
   p.set('hls_fmp4_hevc', String(Boolean(caps.hls_fmp4_hevc)))
+  if (caps.native_hls) p.set('native_hls', 'true')
   if (startSecs !== undefined) p.set('start_secs', String(startSecs))
   if (forceTranscode) p.set('force_transcode', 'true')
   return p.toString()
