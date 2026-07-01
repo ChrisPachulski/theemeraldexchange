@@ -25,6 +25,7 @@ import { grabs } from './routes/grabs.js'
 import { suggestions } from './routes/suggestions.js'
 import { settings } from './routes/settings.js'
 import { feedback } from './routes/feedback.js'
+import { watchlist } from './routes/watchlist.js'
 import { usage } from './routes/usage.js'
 import { recommenderEvents } from './routes/recommenderEvents.js'
 import { telemetry } from './routes/telemetry.js'
@@ -222,6 +223,9 @@ app.route('/api/suggestions', suggestions)
 // encrypted BYO Anthropic key that replaced SPA-localStorage storage.
 app.route('/api/settings', settings)
 app.route('/api/feedback', feedback)
+// Per-user watchlist (admin-free, sub-scoped) — each member's private
+// "want to watch" list. Always-on, so no /api/limits capability flag.
+app.route('/api/watchlist', watchlist)
 app.route('/api/usage', usage)
 // Narrow pass-through for client-side conversion signals (currently
 // 'clicked' only) that the SPA fires when a user interacts with a
