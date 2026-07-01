@@ -267,8 +267,10 @@ Slightly slower than V1 to feel cinematic, never theatrical.
   - **`role="dialog"` div + `useModalA11y`** (the shared hook supplies the
     trap + Escape + focus restore): EpisodePicker, MediaPlayer,
     ConcurrencyLimitModal, the IPTV connections panel
-    (`ConnectionsWidget`), and the fullscreen IPTV players in
-    VodTab / LiveTab / IptvSeriesTab. As of the 2026-06 hardening wave
+    (`ConnectionsWidget`), and the fullscreen IPTV player in LiveTab
+    (VodTab/IptvSeriesTab were deleted as dead code in 2026-07 — the
+    Live-tab nav collapse had orphaned them weeks earlier). As of the
+    2026-06 hardening wave
     every `role="dialog"` surface in the tree takes `useModalA11y` —
     including the connections panel, whose missing trap was the previously
     recorded debt (paid down in `628a7ac`).
