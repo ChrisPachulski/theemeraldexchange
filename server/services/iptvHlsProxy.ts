@@ -9,7 +9,7 @@ import { env } from '../env.js'
 import { rewriteManifest } from './iptvHlsRewrite.js'
 import { signStreamToken } from './iptvStreamToken.js'
 import {
-  isPublicHttpsUpstream,
+  isPublicUpstream,
   guardedFetch,
   guardedFetchTrustedOrigin,
   SsrfBlockedError,
@@ -81,7 +81,7 @@ export async function fetchAndRewriteHlsPlaylist(opts: {
   } catch {
     return jsonError('bad_upstream', 400)
   }
-  if (!isPublicHttpsUpstream(parsed)) return jsonError('bad_upstream', 400)
+  if (!isPublicUpstream(parsed)) return jsonError('bad_upstream', 400)
 
   const signal = AbortSignal.any([
     opts.clientSignal,

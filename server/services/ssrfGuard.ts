@@ -98,13 +98,6 @@ export function isPublicUpstream(url: URL): boolean {
   return true
 }
 
-/**
- * Back-compat alias. The original name implied https-only; the guard now
- * accepts http to public hosts too (see `isPublicUpstream`). Kept so existing
- * import sites (routes/iptv.ts) need no change.
- */
-export const isPublicHttpsUpstream = isPublicUpstream
-
 import { lookup as nodeDnsLookup } from 'node:dns/promises'
 
 /** Minimal shape of dns.promises.lookup(host, { all: true }). */
@@ -128,7 +121,7 @@ function isPrivateAddress(address: string): boolean {
 /**
  * Resolve `host` to all A/AAAA records and reject if ANY of them is a
  * private / loopback / link-local / reserved address. This closes the
- * DNS-rebinding gap that `isPublicHttpsUpstream` (string-only) leaves open:
+ * DNS-rebinding gap that `isPublicUpstream` (string-only) leaves open:
  * a public name whose A record points at 169.254.169.254 / 127.0.0.1 /
  * RFC-1918 is refused before we connect.
  *
@@ -231,7 +224,7 @@ async function guardHop(rawUrl: string): Promise<void> {
   } catch {
     throw new SsrfBlockedError(`malformed upstream url: ${rawUrl}`)
   }
-  if (!isPublicHttpsUpstream(parsed)) {
+  if (!isPublicUpstream(parsed)) {
     throw new SsrfBlockedError(`blocked non-public upstream: ${parsed.protocol}//${parsed.hostname}`)
   }
   await assertResolvesPublic(parsed.hostname)

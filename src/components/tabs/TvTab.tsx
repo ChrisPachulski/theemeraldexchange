@@ -45,6 +45,8 @@ function pickSearchPoster(item: SeriesSearchResult): string | undefined {
   return img?.remoteUrl ?? img?.url
 }
 
+// ponytail: same 3-line pickers exist in MoviesTab with Movie types —
+// duplicated on purpose; a shared generic isn't worth the coupling.
 function pickLibraryPoster(item: Series): string | undefined {
   const img = item.images?.find((i) => i.coverType === 'poster')
   return img?.remoteUrl ?? img?.url
