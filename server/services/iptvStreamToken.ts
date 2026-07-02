@@ -53,6 +53,8 @@ export interface StreamClaims {
 // service has zero non-crypto external surface.
 // ---------------------------------------------------------------------------
 
+// ponytail: same alphabet as ulid.ts's ENC, duplicated on purpose — one
+// shared line isn't worth coupling the two token modules.
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
 
 function encodeBase32Crockford(bytes: Buffer, bits: number): string {

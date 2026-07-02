@@ -42,7 +42,8 @@ export type ModalKeyEvent = {
 
 /**
  * The keydown contract behind useModalA11y, dependency-injected so it is
- * unit-testable without a DOM:
+ * unit-testable without a DOM. ponytail: exported for the node-env unit
+ * tests only; useModalA11y is the only production caller.
  *   Escape            → preventDefault + onClose;
  *   Tab, none inside  → preventDefault + focus the container;
  *   Shift+Tab on the first focusable (or the container) → wrap to the last;

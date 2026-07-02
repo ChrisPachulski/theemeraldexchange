@@ -6,6 +6,8 @@ export const DEFAULT_DEBOUNCE_MS = 300
 // non-negative millisecond value. A NaN/negative/Infinity delay would
 // otherwise produce a broken setTimeout; fall back to the default. Zero
 // is a valid intentional delay and is preserved.
+// ponytail: exported for the node-env unit tests (the hook itself can't
+// render there); useDebounced is the only production caller.
 export function normalizeDelay(delay: number | undefined): number {
   return typeof delay === 'number' && Number.isFinite(delay) && delay >= 0
     ? delay

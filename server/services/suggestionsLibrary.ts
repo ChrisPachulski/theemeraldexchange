@@ -7,8 +7,7 @@
 // request (the suggestions route is the only consumer); tests reset it
 // via the _reset*ForTests escape hatches.
 
-import { sonarrFetch } from './sonarr.js'
-import { radarrFetch } from './radarr.js'
+import { radarrFetch, sonarrFetch } from './arr.js'
 
 type SonarrSeries = { title: string; year?: number; tmdbId?: number; genres?: string[] }
 type RadarrMovie = { title: string; year?: number; tmdbId?: number; genres?: string[] }

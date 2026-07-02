@@ -13,8 +13,7 @@
 
 import { Hono } from 'hono'
 import { requireAdmin, type Env } from '../middleware/auth.js'
-import { sonarrFetch } from '../services/sonarr.js'
-import { radarrFetch } from '../services/radarr.js'
+import { radarrFetch, sonarrFetch } from '../services/arr.js'
 
 export const notifications = new Hono<Env>()
 

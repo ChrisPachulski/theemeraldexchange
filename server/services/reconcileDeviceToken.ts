@@ -107,7 +107,3 @@ export function cascadeRevokeForSub(sub: string, reason: string): number {
   tx(jtis)
   return jtis.length
 }
-
-// roleFor is re-exported so middleware that builds a Session-shaped
-// view from a device token has a single import surface.
-export { roleFor }
