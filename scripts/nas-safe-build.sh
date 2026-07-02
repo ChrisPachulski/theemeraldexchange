@@ -71,6 +71,11 @@ MIN_MEM_AVAILABLE_KB="${MIN_MEM_AVAILABLE_KB:-400000}"
 MIN_LAUNCH_MEM_KB="${MIN_LAUNCH_MEM_KB:-1500000}"
 NAS="${NAS_USER}@${NAS_HOST}"
 
+# Release stamp baked into the image (compose build.args → Dockerfile ARG →
+# /api/version `release`). Mirrors deploy-nas.sh; without it every safe-build
+# image reports 'dev' and drift detection goes blind. Overridable via env.
+EEX_RELEASE_VAL="${EEX_RELEASE:-$(git rev-parse --short HEAD 2>/dev/null || echo dev)}"
+
 # Unique-ish run id without Date.now()/random (zsh-safe): pid + epoch from NAS.
 RUN_TAG="eex-safe-build-${SERVICE}"
 LOG="/tmp/${RUN_TAG}.log"
@@ -91,7 +96,7 @@ say "discovering capacity on ${NAS_HOST} and launching detached build of '${SERV
 # Values go over as inline env assignments, NOT positional args: SSH joins argv
 # into one remote string, and an EMPTY positional (RES_OVERRIDE when unset)
 # collapses and shifts the rest, leaving later params unbound under `set -u`.
-launch_out=$(nas "APPDATA='$APPDATA' SERVICE='$SERVICE' CRITICAL='$CRITICAL' RES_OVERRIDE='${CORES_RESERVED:-}' LOG='$LOG' DONE='$DONE' PIDF='$PIDF' ABORT_LPC='$ABORT_LOAD_PER_CORE' WD_SAMPLES='$ABORT_SAMPLES' MAX_MIN='$MAX_BUILD_MINUTES' MIN_MEM_KB='$MIN_MEM_AVAILABLE_KB' MIN_LAUNCH_MEM_KB='$MIN_LAUNCH_MEM_KB' FORCE_LOW_MEM='${FORCE_LOW_MEM:-}' bash -s" <<'REMOTE'
+launch_out=$(nas "APPDATA='$APPDATA' SERVICE='$SERVICE' CRITICAL='$CRITICAL' RES_OVERRIDE='${CORES_RESERVED:-}' LOG='$LOG' DONE='$DONE' PIDF='$PIDF' ABORT_LPC='$ABORT_LOAD_PER_CORE' WD_SAMPLES='$ABORT_SAMPLES' MAX_MIN='$MAX_BUILD_MINUTES' MIN_MEM_KB='$MIN_MEM_AVAILABLE_KB' MIN_LAUNCH_MEM_KB='$MIN_LAUNCH_MEM_KB' FORCE_LOW_MEM='${FORCE_LOW_MEM:-}' EEX_RELEASE='$EEX_RELEASE_VAL' bash -s" <<'REMOTE'
 set -eu
 cd "$APPDATA" || { echo "ERR: appdata $APPDATA missing"; exit 5; }
 
@@ -127,7 +132,7 @@ rm -f "$LOG" "$DONE" "$PIDF"
 # the Dockerfile cache mounts that keep rebuilds incremental).
 setsid bash -c '
   echo "build start $(date -u +%H:%M:%S)" >> "'"$LOG"'"
-  CARGO_BUILD_JOBS='"$JOBS"' ionice -c3 nice -n19 \
+  CARGO_BUILD_JOBS='"$JOBS"' EEX_RELEASE='"$EEX_RELEASE"' ionice -c3 nice -n19 \
     docker compose build '"$SERVICE"' >> "'"$LOG"'" 2>&1
   echo $? > "'"$DONE"'"
 ' >/dev/null 2>&1 &

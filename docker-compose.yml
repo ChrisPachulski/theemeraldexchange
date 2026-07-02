@@ -62,6 +62,12 @@ services:
       # Grab-event log lives here so it survives container rebuilds and
       # admin can tail it directly on the NAS if the dashboard is down.
       - "/mnt/user/appdata/exchange-backend/data:/app/data"
+      # media-core's live media.db, for the read-only availability tagger
+      # (mediaLibraryDbSingleton) and /api/version's schema probe. Without
+      # this mount the backend's MEDIA_DB_PATH default resolved to a STALE
+      # copy at /app/data/media.db — availability tags silently aged. Not
+      # :ro because WAL readers take read-locks in the -shm file.
+      - "/mnt/user/appdata/exchange-backend/media-core-db:/media-core-db"
     environment:
       NODE_ENV: production
       PORT: "3001"
@@ -142,6 +148,8 @@ services:
       # until then the backend never proxies to it (no behavior change).
       USE_MEDIA_CORE: "${USE_MEDIA_CORE:-0}"
       MEDIA_CORE_URL: "${MEDIA_CORE_URL:-http://media-core:8002}"
+      # The mount above; keep in lockstep with media-core's MEDIA_DB_PATH.
+      MEDIA_DB_PATH: "/media-core-db/media.db"
       # When a file can't direct-play, media-core hands the client an HLS
       # session on the transcoder; the SPA reaches those manifest/segment
       # URLs through the backend's /api/transcode proxy. Same service URL
