@@ -193,6 +193,7 @@ export type EpgGridDto = {
   stream_id: number
   num: number
   name: string
+  stream_icon: string | null
   epg_channel_id: string | null
   tv_archive: number
   tv_archive_duration: number | null
