@@ -262,6 +262,16 @@ fn parse_external_ids(doc: &serde_json::Value) -> ExternalIds {
     ExternalIds { imdb_id, tvdb_id }
 }
 
+/// `true` when `(season, episode)` can exist on TMDB at all. TMDB episode
+/// numbering starts at 1 (season 0 — "Specials" — is real, episode 0 is
+/// not). Filename parses that land S0E0 (unnumbered specials/extras) can
+/// never resolve, and because their rows stay untitled, the backfill pass
+/// re-issued the identical doomed lookup for EVERY such file on EVERY scan —
+/// dozens of serial 404s per boot for one anime dir. Gate before the network.
+fn episode_lookupable(season: i64, episode: i64) -> bool {
+    season >= 0 && episode >= 1
+}
+
 /// Pure parser over a `/tv/{id}/season/{s}/episode/{e}` response: pulls the
 /// episode `name` and `air_date`. Returns `None` only when both are absent so
 /// callers do not bother binding an all-empty row.
@@ -432,6 +442,9 @@ impl TmdbClient {
         season: i64,
         episode: i64,
     ) -> Option<TmdbEpisode> {
+        if !episode_lookupable(season, episode) {
+            return None;
+        }
         let api_key = self.api_key.as_deref()?;
         let url = format!("{API_BASE}/tv/{show_tmdb_id}/season/{season}/episode/{episode}");
         let send = || async { self.authed_get(&url, api_key).send().await };
@@ -664,6 +677,18 @@ mod tests {
         let doc = json!({ "name": "", "air_date": "" });
         assert_eq!(parse_episode_response(&doc), None);
         assert_eq!(parse_episode_response(&json!({ "id": 1 })), None);
+    }
+
+    #[test]
+    fn episode_zero_is_never_lookupable() {
+        // E0 does not exist on TMDB; S0 ("Specials") does. The guard is what
+        // stops the backfill pass from re-firing an identical doomed lookup
+        // for every unnumbered-special file on every scan.
+        assert!(!episode_lookupable(0, 0));
+        assert!(!episode_lookupable(3, 0));
+        assert!(!episode_lookupable(-1, 5));
+        assert!(episode_lookupable(0, 1)); // real special
+        assert!(episode_lookupable(5, 10));
     }
 
     #[test]
