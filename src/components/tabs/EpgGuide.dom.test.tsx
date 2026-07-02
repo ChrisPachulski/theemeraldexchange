@@ -29,6 +29,7 @@ function rowWithLiveAndNext(): EpgGridDto {
     stream_id: 1,
     num: 101,
     name: 'US ESPN',
+    stream_icon: null,
     epg_channel_id: 'espn',
     tv_archive: 0,
     tv_archive_duration: null,

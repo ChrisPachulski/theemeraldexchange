@@ -17,7 +17,7 @@ describe('epg queries', () => {
       stream_id: 10,
       num: 1,
       name: 'C1',
-      stream_icon: null,
+      stream_icon: 'https://logos.example/c1.png',
       epg_channel_id: 'c1',
       category_id: 1,
       is_adult: 0,
@@ -112,6 +112,7 @@ describe('epg queries', () => {
     expect(rows[0]).toEqual(expect.objectContaining({
       stream_id: 10,
       name: 'C1',
+      stream_icon: 'https://logos.example/c1.png',
       tv_archive: 1,
       tv_archive_duration: 7,
     }))

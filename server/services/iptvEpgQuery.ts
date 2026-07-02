@@ -18,6 +18,9 @@ export interface EpgGridRow {
   stream_id: number
   num: number
   name: string
+  /** Channel logo URL from the provider — lets clients paint a branded card
+   *  in the guide's focused-channel preview instead of a bare name. */
+  stream_icon: string | null
   epg_channel_id: string | null
   tv_archive: number
   tv_archive_duration: number | null
@@ -172,7 +175,7 @@ export function epgGrid(
   // epg_channel_id here is the RESOLVED join id (name-matched or tvg), so the
   // programme lookup below joins the same id the hasEpgOnly filter used.
   const channels = db.raw.prepare(`
-    SELECT stream_id, COALESCE(num, 0) AS num, name, ${EPG_JOIN_ID} AS epg_channel_id, tv_archive, tv_archive_duration
+    SELECT stream_id, COALESCE(num, 0) AS num, name, stream_icon, ${EPG_JOIN_ID} AS epg_channel_id, tv_archive, tv_archive_duration
     FROM channels
     ${whereSql}
     ORDER BY num, name
