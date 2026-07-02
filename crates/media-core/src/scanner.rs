@@ -3401,19 +3401,25 @@ mod tests {
         std::fs::write(root.join("b.png"), b"fake-png").unwrap();
         std::fs::write(root.join("notes.txt"), b"skipped").unwrap();
 
-        let report = scan_photos_once(&db, &[root.clone()]).await.unwrap();
+        let report = scan_photos_once(&db, std::slice::from_ref(&root))
+            .await
+            .unwrap();
         assert_eq!(report.files_seen, 2);
         assert_eq!(report.files_added, 2);
         assert_eq!(count(&db, "photos").await, 2);
 
         // Unchanged rescan is a no-op.
-        let report = scan_photos_once(&db, &[root.clone()]).await.unwrap();
+        let report = scan_photos_once(&db, std::slice::from_ref(&root))
+            .await
+            .unwrap();
         assert_eq!(report.files_added, 0);
         assert_eq!(report.files_updated, 0);
 
         // Deleting a file prunes its row (root still healthy).
         std::fs::remove_file(root.join("b.png")).unwrap();
-        let report = scan_photos_once(&db, &[root.clone()]).await.unwrap();
+        let report = scan_photos_once(&db, std::slice::from_ref(&root))
+            .await
+            .unwrap();
         assert_eq!(report.files_removed, 1);
         assert_eq!(count(&db, "photos").await, 1);
 

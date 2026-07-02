@@ -96,12 +96,16 @@ enum Field {
 /// skipped (nothing to play); a missing guid falls back to the audio URL.
 pub fn parse_rss(xml: &str) -> Result<Feed, String> {
     let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
 
     let mut feed = Feed::default();
     let mut item: Option<FeedEpisode> = None;
     let mut in_channel_image = false;
     let mut field = Field::None;
+    // quick-xml ≥0.38 emits entity references as separate GeneralRef events, so
+    // one element's text arrives fragmented ("Tom " / &amp; / " Jerry"). Fragments
+    // accumulate here (untrimmed, so interior spaces around entities survive)
+    // and flush as one trimmed string at the element's End tag.
+    let mut pending = String::new();
     let mut buf = Vec::new();
 
     loop {
@@ -112,10 +116,15 @@ pub fn parse_rss(xml: &str) -> Result<Feed, String> {
                 let attr = |key: &[u8]| -> Option<String> {
                     e.attributes().flatten().find_map(|a| {
                         (a.key.as_ref() == key)
-                            .then(|| a.unescape_value().ok().map(|v| v.into_owned()))
+                            .then(|| {
+                                a.normalized_value(quick_xml::XmlVersion::Implicit1_0)
+                                    .ok()
+                                    .map(|v| v.into_owned())
+                            })
                             .flatten()
                     })
                 };
+                pending.clear();
                 match name {
                     b"item" => item = Some(FeedEpisode::default()),
                     b"title" => field = Field::Title,
@@ -144,17 +153,28 @@ pub fn parse_rss(xml: &str) -> Result<Feed, String> {
                 }
             }
             Ok(Event::Text(t)) => {
-                let text = t
-                    .unescape()
-                    .map(|c| c.trim().to_string())
-                    .unwrap_or_default();
-                apply_text(&mut feed, &mut item, &mut field, text);
+                if let Ok(text) = t.decode() {
+                    pending.push_str(&text);
+                }
             }
             Ok(Event::CData(t)) => {
-                let text = String::from_utf8_lossy(t.as_ref()).trim().to_string();
-                apply_text(&mut feed, &mut item, &mut field, text);
+                pending.push_str(&String::from_utf8_lossy(t.as_ref()));
+            }
+            Ok(Event::GeneralRef(r)) => {
+                // Resolve &amp; / &#38; etc. through the crate's own resolver;
+                // an unknown entity keeps its raw form rather than vanishing.
+                if let Ok(name) = r.decode() {
+                    let raw = format!("&{name};");
+                    match quick_xml::escape::unescape(&raw) {
+                        Ok(resolved) => pending.push_str(&resolved),
+                        Err(_) => pending.push_str(&raw),
+                    }
+                }
             }
             Ok(Event::End(e)) => {
+                let text = pending.trim().to_string();
+                pending.clear();
+                apply_text(&mut feed, &mut item, &mut field, text);
                 match e.name().as_ref() {
                     b"item" => {
                         if let Some(mut ep) = item.take()
@@ -330,6 +350,19 @@ mod tests {
         </channel></rss>"#;
         let feed = parse_rss(xml).unwrap();
         assert_eq!(feed.image_url.as_deref(), Some("https://example.com/i.jpg"));
+    }
+
+    /// quick-xml ≥0.38 splits entity refs out of Text into GeneralRef events —
+    /// this pins that fragmented text ("Tom " / &amp; / " Jerry") reassembles
+    /// with the entity resolved and interior spacing intact.
+    #[test]
+    fn entities_in_text_reassemble() {
+        let xml = r#"<rss><channel><title>Tom &amp; Jerry &#38; Friends</title>
+            <item><title>Q&apos;s &lt;pick&gt;</title><enclosure url="https://e.com/a.mp3"/></item>
+        </channel></rss>"#;
+        let feed = parse_rss(xml).unwrap();
+        assert_eq!(feed.title, "Tom & Jerry & Friends");
+        assert_eq!(feed.episodes[0].title, "Q's <pick>");
     }
 
     #[test]

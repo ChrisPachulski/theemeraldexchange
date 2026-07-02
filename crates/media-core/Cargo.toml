@@ -36,7 +36,7 @@ sha2.workspace = true
 # Photo scan: EXIF taken-at/dimensions without spawning ffprobe per image.
 kamadak-exif = "0.6"
 # Podcast RSS parsing (pull parser; serde mode fights itunes: namespaces).
-quick-xml = "0.37"
+quick-xml = "0.41"
 
 [dev-dependencies]
 tempfile = "3"
