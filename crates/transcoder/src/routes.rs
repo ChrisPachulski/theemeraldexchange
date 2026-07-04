@@ -471,7 +471,7 @@ async fn grant(
         source_avg_kbps,
         duration_secs: row.duration_secs,
         owner,
-        subtitle_source_index: sidecar.as_ref().map(|s| s.source_index),
+        subtitle: sidecar.clone(),
     };
 
     match state.sessions.start(opts).await {
@@ -599,6 +599,18 @@ async fn session_manifest(
         return m3u8_response(master);
     }
 
+    // Sidecar-subtitle sessions: native players only render subtitles they
+    // discover INSIDE the manifest (the grant's sidecar URL feeds the web
+    // <track>, which AVPlayer ignores), so serve a MASTER advertising the
+    // extracted WebVTT as a SUBTITLES rendition over the same VOD media
+    // playlist (media.m3u8 → vod_manifest, subs.m3u8 → the whole sidecar).
+    // None (no subtitle / no finite media playlist) falls through unchanged.
+    if is_native_hls_client(&headers)
+        && let Some(master) = state.sessions.native_master(&id).await
+    {
+        return m3u8_response(master);
+    }
+
     // Native players (AVKit) read the playlist directly and render an
     // ENDLIST-less EVENT playlist as a LIVE stream (no scrubber). For RE-ENCODE
     // sessions, serve them a complete VOD playlist synthesized from the known
@@ -675,19 +687,28 @@ async fn session_segment(
     // playlist the native index.m3u8 serves; the I-frame playlist indexes the
     // thumbnail segments the detached sampler writes). Gated on the flag so with
     // it off these names fall through to the normal on-disk asset read (404).
-    if crate::trickplay::enabled() {
-        if segment == crate::trickplay::MEDIA_PLAYLIST_NAME {
-            return match state.sessions.vod_manifest(&id).await {
-                Some(body) => m3u8_response(body),
-                None => session_not_found(),
-            };
-        }
-        if segment == crate::trickplay::IFRAME_PLAYLIST_NAME {
-            return match state.sessions.trickplay_iframe(&id).await {
-                Some(body) => m3u8_response(body),
-                None => session_not_found(),
-            };
-        }
+    // media.m3u8 is referenced by BOTH masters (trick-play and the subtitle
+    // one in `session_manifest`), so it resolves regardless of the trick-play
+    // flag; the I-frame rendition stays flag-gated with the master that
+    // advertises it.
+    if segment == crate::trickplay::MEDIA_PLAYLIST_NAME {
+        return match state.sessions.vod_manifest(&id).await {
+            Some(body) => m3u8_response(body),
+            None => session_not_found(),
+        };
+    }
+    // The subtitle media playlist referenced by the masters' subs group.
+    if segment == crate::subs_manifest::SUBS_PLAYLIST_NAME {
+        return match state.sessions.subs_playlist(&id).await {
+            Some(body) => m3u8_response(body),
+            None => session_not_found(),
+        };
+    }
+    if crate::trickplay::enabled() && segment == crate::trickplay::IFRAME_PLAYLIST_NAME {
+        return match state.sessions.trickplay_iframe(&id).await {
+            Some(body) => m3u8_response(body),
+            None => session_not_found(),
+        };
     }
 
     // `asset_path` rejects unknown sessions and any traversal-unsafe name.
@@ -705,8 +726,11 @@ async fn session_segment(
     // segment the manifest legitimately lists, then fall through to the normal
     // read (which 404s if it never arrives within the bound). Web (hls.js) only
     // ever requests already-listed segments, so it never enters this wait.
+    // The sidecar VTT gets the same brief wait as frontier segments: AVPlayer
+    // fetches it as soon as the master advertises the subs rendition, which can
+    // race the detached one-shot extraction on session start.
     if is_native_hls_client(&headers)
-        && segment_index(&segment).is_some()
+        && (segment_index(&segment).is_some() || segment == SIDECAR_SUBTITLE_NAME)
         && !tokio::fs::try_exists(&path).await.unwrap_or(false)
     {
         let mut waited = Duration::ZERO;
@@ -1130,6 +1154,154 @@ mod tests {
         );
         assert_eq!(sub["language"], "eng");
         assert_eq!(sub["forced"], false);
+    }
+
+    #[tokio::test]
+    async fn native_manifest_advertises_subtitle_rendition() {
+        // A native (AppleCoreMedia) client on a re-encode session with a text
+        // subtitle gets a MASTER at index.m3u8 advertising the sidecar as an
+        // HLS SUBTITLES rendition, and subs.m3u8 resolves to a whole-file VOD
+        // playlist over subtitles.vtt — that is what makes the tvOS/iOS
+        // subtitle picker populate at all.
+        let tmp = tempfile::tempdir().unwrap();
+        let app = router(state_with(
+            &tmp,
+            Caps {
+                max_total: 4,
+                max_cpu: 4,
+            },
+            PrincipalMode::Off,
+        ));
+        let mut file = h264_file();
+        file.subtitle_tracks_json =
+            "[{\"index\":2,\"codec\":\"subrip\",\"language\":\"eng\",\"forced\":false}]".into();
+        let resp = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/transcode/grant")
+                    .header("content-type", "application/json")
+                    .body(Body::from(grant_body(&file)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        let session_id = v["sessionId"].as_str().unwrap();
+
+        let resp = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!("/api/transcode/session/{session_id}/index.m3u8"))
+                    .header("user-agent", "AppleCoreMedia/1.0.0 (Apple TV)")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let master = String::from_utf8(
+            axum::body::to_bytes(resp.into_body(), 64 * 1024)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(
+            master.contains("#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\""),
+            "master must advertise the subs rendition: {master}"
+        );
+        assert!(master.contains("SUBTITLES=\"subs\""), "{master}");
+        assert!(master.contains("media.m3u8"), "{master}");
+
+        let resp = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!("/api/transcode/session/{session_id}/subs.m3u8"))
+                    .header("user-agent", "AppleCoreMedia/1.0.0 (Apple TV)")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let subs = String::from_utf8(
+            axum::body::to_bytes(resp.into_body(), 64 * 1024)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(subs.contains("subtitles.vtt\n"), "{subs}");
+        assert!(subs.ends_with("#EXT-X-ENDLIST\n"), "{subs}");
+    }
+
+    #[tokio::test]
+    async fn web_manifest_untouched_by_subtitle_rendition() {
+        // hls.js (no native UA) must keep the on-disk EVENT playlist path
+        // byte-for-byte — the master is a native-only affordance.
+        let tmp = tempfile::tempdir().unwrap();
+        let app = router(state_with(
+            &tmp,
+            Caps {
+                max_total: 4,
+                max_cpu: 4,
+            },
+            PrincipalMode::Off,
+        ));
+        let mut file = h264_file();
+        file.subtitle_tracks_json =
+            "[{\"index\":2,\"codec\":\"subrip\",\"language\":\"eng\",\"forced\":false}]".into();
+        let resp = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/transcode/grant")
+                    .header("content-type", "application/json")
+                    .body(Body::from(grant_body(&file)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        let session_id = v["sessionId"].as_str().unwrap();
+
+        let resp = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!("/api/transcode/session/{session_id}/index.m3u8"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        if resp.status() == StatusCode::OK {
+            let body = String::from_utf8(
+                axum::body::to_bytes(resp.into_body(), 64 * 1024)
+                    .await
+                    .unwrap()
+                    .to_vec(),
+            )
+            .unwrap();
+            assert!(
+                !body.contains("#EXT-X-MEDIA:TYPE=SUBTITLES"),
+                "web must never see the master: {body}"
+            );
+        }
+        // (Non-200 = ffmpeg stub hasn't written the on-disk playlist yet —
+        // equally proves the master was not served.)
     }
 
     #[tokio::test]

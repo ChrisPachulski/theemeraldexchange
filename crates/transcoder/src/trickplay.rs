@@ -98,7 +98,14 @@ fn is_truthy(v: &str) -> bool {
 /// * `resolution` — `Some((w, h))` adds a `RESOLUTION` attribute (recommended
 ///   but optional); `None` omits it (AVPlayer plays a `RESOLUTION`-less variant
 ///   fine — it just can't pre-annotate the rendition).
-pub(crate) fn master(variant_bandwidth_bps: u32, resolution: Option<(u32, u32)>) -> String {
+/// * `subs` — the session's sidecar subtitle, when one is being extracted;
+///   advertised as the same `subs` group the subtitle-only master
+///   (`crate::subs_manifest::master`) uses, so native pickers see it here too.
+pub(crate) fn master(
+    variant_bandwidth_bps: u32,
+    resolution: Option<(u32, u32)>,
+    subs: Option<&crate::plan::SidecarSubtitle>,
+) -> String {
     let mut m = String::with_capacity(256);
     m.push_str("#EXTM3U\n");
     // v4 is the floor for EXT-X-I-FRAME-STREAM-INF / EXT-X-I-FRAMES-ONLY.
@@ -110,13 +117,21 @@ pub(crate) fn master(variant_bandwidth_bps: u32, resolution: Option<(u32, u32)>)
         "#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH={IFRAME_BANDWIDTH_BPS},URI=\"{IFRAME_PLAYLIST_NAME}\"\n"
     ));
 
+    let subs_attr = match subs {
+        Some(s) => {
+            m.push_str(&crate::subs_manifest::media_tag(s));
+            ",SUBTITLES=\"subs\""
+        }
+        None => "",
+    };
+
     // The one video variant → the synthesized VOD media playlist.
     match resolution {
         Some((w, h)) => m.push_str(&format!(
-            "#EXT-X-STREAM-INF:BANDWIDTH={variant_bandwidth_bps},RESOLUTION={w}x{h}\n"
+            "#EXT-X-STREAM-INF:BANDWIDTH={variant_bandwidth_bps},RESOLUTION={w}x{h}{subs_attr}\n"
         )),
         None => m.push_str(&format!(
-            "#EXT-X-STREAM-INF:BANDWIDTH={variant_bandwidth_bps}\n"
+            "#EXT-X-STREAM-INF:BANDWIDTH={variant_bandwidth_bps}{subs_attr}\n"
         )),
     }
     m.push_str(MEDIA_PLAYLIST_NAME);
@@ -255,7 +270,7 @@ mod tests {
 
     #[test]
     fn master_lists_video_variant_and_iframe_rendition() {
-        let m = master(6_000_000, Some((1920, 1080)));
+        let m = master(6_000_000, Some((1920, 1080)), None);
         assert!(m.starts_with("#EXTM3U\n"));
         assert!(m.contains("#EXT-X-VERSION:4\n"));
         // The I-frame rendition drives AVPlayer's scrubbing thumbnails.
@@ -275,10 +290,28 @@ mod tests {
 
     #[test]
     fn master_omits_resolution_when_unknown() {
-        let m = master(3_000_000, None);
+        let m = master(3_000_000, None, None);
         assert!(m.contains("#EXT-X-STREAM-INF:BANDWIDTH=3000000\n"), "{m}");
         assert!(!m.contains("RESOLUTION="), "{m}");
         assert!(m.trim_end().ends_with("media.m3u8"), "{m}");
+    }
+
+    #[test]
+    fn master_advertises_subs_group_when_sidecar_present() {
+        let subs = crate::plan::SidecarSubtitle {
+            source_index: 2,
+            language: Some("eng".into()),
+            forced: false,
+        };
+        let m = master(3_000_000, None, Some(&subs));
+        assert!(
+            m.contains("#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\""),
+            "{m}"
+        );
+        assert!(
+            m.contains("#EXT-X-STREAM-INF:BANDWIDTH=3000000,SUBTITLES=\"subs\"\n"),
+            "{m}"
+        );
     }
 
     // ── iframe_playlist() ───────────────────────────────────────────────────
