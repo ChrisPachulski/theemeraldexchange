@@ -67,6 +67,19 @@ sign-in, owner-controlled invites, and local-first recommendations. Passkey note
 hostname (`http://localhost:3001` on the box, the `.local` mDNS name, or the Tailscale https
 URL) — WebAuthn doesn't work on a bare `192.168.x.x` address.
 
+**Platforms.** Images are multi-arch (linux/amd64 + linux/arm64) and boot-verified on both
+after every publish (`verify-images`):
+
+- **Linux** (Ubuntu, Debian, …) — amd64 and arm64 (Raspberry Pi 5 class), native.
+- **macOS** — Docker Desktop; Apple Silicon runs the arm64 images at native speed, Intel Macs
+  the amd64 ones. Claim at `http://localhost:3001` on the Mac itself.
+- **Windows** — Docker Desktop with the WSL2 backend; run the installer **inside a WSL
+  (Ubuntu) shell**, not PowerShell — it's a POSIX script. `MEDIA_PATH` can point at
+  `/mnt/c/...`, though a path inside WSL's own filesystem scans faster.
+
+arm64 boxes transcode on CPU (Intel VAAPI hardware encode is x86-only) and fall back to
+yt-dlp for trailers — everything else is identical across platforms.
+
 ## Quick start (development)
 
 ```bash
