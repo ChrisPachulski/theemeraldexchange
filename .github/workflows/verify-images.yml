@@ -1,0 +1,125 @@
+# Runtime smoke of the PUBLISHED images on BOTH architectures (plan 006).
+#
+# Manifest lists existing for linux/amd64+arm64 proves the builds ran, not
+# that the images RUN: a wrong-arch napi .node, an x86-only apt package, or
+# a mis-resolved wheel all surface only at boot. This workflow pulls the
+# published images on native runners (amd64 = ubuntu-latest, arm64 =
+# ubuntu-24.04-arm) and boots each with a bare env until its health
+# endpoint answers — the same "docker compose up just works" contract the
+# self-host quickstart promises.
+#
+# Runs automatically after every successful publish-images run, and on
+# demand (workflow_dispatch) with a tag to verify.
+
+name: verify-images
+
+on:
+  workflow_run:
+    workflows: [publish-images]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to verify"
+        default: "latest"
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  smoke:
+    # On workflow_run, only bother when the publish actually succeeded.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 20
+    env:
+      TAG: ${{ inputs.tag || 'latest' }}
+    steps:
+      - name: Resolve image base (lowercased owner)
+        id: img
+        run: echo "base=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/theemeraldexchange" >> "$GITHUB_OUTPUT"
+
+      - name: Assert runner arch matches the matrix
+        run: |
+          want="${{ matrix.platform.arch }}"
+          got="$(uname -m)"
+          case "$want:$got" in
+            amd64:x86_64|arm64:aarch64) echo "native $got runner ✓";;
+            *) echo "runner arch $got != matrix $want" >&2; exit 1;;
+          esac
+
+      - name: Backend boots bare and serves the SPA
+        run: |
+          B="${{ steps.img.outputs.base }}"
+          secret() { head -c 48 /dev/urandom | base64 | tr -d '\n'; }
+          docker run -d --name backend --network host \
+            -e NODE_ENV=production \
+            -e SESSION_SECRET="$(secret)" \
+            -e STREAM_TOKEN_SECRET="$(secret)" \
+            -e DEVICE_TOKEN_SECRET="$(secret)" \
+            -e INTERNAL_PRINCIPAL_SECRET="$(secret)" \
+            "$B-backend:$TAG"
+          for i in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:3001/api/health && break || sleep 2
+            [ "$i" = 60 ] && { docker logs backend; exit 1; }
+          done
+          # In-container arch is the matrix arch (manifest resolved correctly)
+          docker exec backend uname -m
+          # Phase 0/1/2 contract on this arch: claimable + SPA HTML + typed 503
+          curl -fsS http://127.0.0.1:3001/api/setup/status | grep -q '"claimable":true'
+          curl -fsS http://127.0.0.1:3001/ | grep -qi '<!doctype html'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3001/api/auth/plex/config)" = "503"
+          echo "backend ✓"
+
+      - name: media-core boots and answers /health
+        run: |
+          B="${{ steps.img.outputs.base }}"
+          mkdir -p /tmp/media
+          docker run -d --name media-core --network host \
+            -e MEDIA_CORE_HOST=0.0.0.0 -e MEDIA_CORE_PORT=8002 \
+            -e MEDIA_DB_PATH=/tmp/media.db -e MEDIA_LIBRARY_PATHS=/tmp \
+            -e INTERNAL_PRINCIPAL_SECRET="$(head -c 48 /dev/urandom | base64 | tr -d '\n')" \
+            "$B-media-core:$TAG"
+          for i in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:8002/health && break || sleep 2
+            [ "$i" = 60 ] && { docker logs media-core; exit 1; }
+          done
+          echo "media-core ✓"
+
+      - name: transcoder boots (CPU encoder) and answers /health
+        run: |
+          B="${{ steps.img.outputs.base }}"
+          docker run -d --name transcoder --network host \
+            -e TRANSCODER_HOST=0.0.0.0 -e TRANSCODER_PORT=8003 \
+            -e TRANSCODER_TMP_DIR=/tmp -e TRANSCODER_HW_ENCODER=cpu \
+            -e INTERNAL_PRINCIPAL_SECRET="$(head -c 48 /dev/urandom | base64 | tr -d '\n')" \
+            "$B-transcoder:$TAG"
+          for i in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:8003/health && break || sleep 2
+            [ "$i" = 60 ] && { docker logs transcoder; exit 1; }
+          done
+          echo "transcoder ✓"
+
+      - name: recommender boots and answers /health
+        run: |
+          B="${{ steps.img.outputs.base }}"
+          docker run -d --name recommender --network host \
+            -e RECOMMENDER_HOST=0.0.0.0 -e RECOMMENDER_PORT=8000 \
+            -e RECOMMENDER_DB_PATH=/tmp/exchange.db \
+            -e RECOMMENDER_EVENT_SECRET="$(head -c 48 /dev/urandom | base64 | tr -d '\n')" \
+            -e INTERNAL_PRINCIPAL_SECRET="$(head -c 48 /dev/urandom | base64 | tr -d '\n')" \
+            "$B-recommender:$TAG"
+          for i in $(seq 1 90); do
+            curl -fsS http://127.0.0.1:8000/health && break || sleep 2
+            [ "$i" = 90 ] && { docker logs recommender; exit 1; }
+          done
+          echo "recommender ✓"
