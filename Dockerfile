@@ -127,17 +127,19 @@ WORKDIR /app
 #   docker buildx imagetools inspect mwader/static-ffmpeg:7.1
 COPY --from=mwader/static-ffmpeg:7.1@sha256:a8090df5f5608daef387e1b2e93b98aaacb4d92153ad904e7d715c725724fca4 /ffmpeg /ffprobe /usr/local/bin/
 
-# Pre-stage the napi crate's JS surface + the linux-x64-gnu .node so the
+# Pre-stage the napi crate's JS surface + the platform .node so the
 # file: dep resolves and the prepare-script's existence check finds the
 # binary and short-circuits the rebuild. .dockerignore excludes
 # crates/*/target and **/*.node from the build context — the .node copy
-# from the napi-builder stage bypasses that.
+# from the napi-builder stage bypasses that. Glob (not the x64 name): the
+# napi-builder emits linux-x64-gnu.node on amd64 and linux-arm64-gnu.node
+# on arm64 (plan 006 Phase 5 multi-arch); index.js loads by platform.
 COPY crates/emerald-contracts-napi/package.json \
      crates/emerald-contracts-napi/index.js \
      crates/emerald-contracts-napi/index.d.ts \
      ./crates/emerald-contracts-napi/
 COPY --from=napi-builder \
-     /build/crates/emerald-contracts-napi/emerald-contracts-napi.linux-x64-gnu.node \
+     /build/crates/emerald-contracts-napi/*.node \
      ./crates/emerald-contracts-napi/
 
 COPY package.json package-lock.json ./

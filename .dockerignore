@@ -65,18 +65,14 @@ tmp
 .cache
 
 # ---- Frontend sources (backend image doesn't need them) ---------------------
-# The root Dockerfile only builds the Node backend. The SPA is built by
-# Netlify, not Docker. Keeping these out of the daemon context shaves
-# noticeable upload time on the laptop->NAS rsync path.
-src
-public
-index.html
-vite.config.ts
+# Plan 006 Phase 5: the GHCR publish builds the SPA inside the image
+# (Dockerfile spa-on stage), so src/, public/, index.html, vite.config.ts
+# and the tsconfigs MUST stay in the context. The owner's NAS path is
+# unaffected: deploy-nas.sh ships a curated file set (no src/) and builds
+# with BUNDLE_SPA=off, so the spa-on stage never evaluates there.
 eslint.config.js
 netlify.toml
 nginx
-tsconfig.app.json
-tsconfig.node.json
 
 # ---- Rust build artifacts (recommender stage-1 + napi build) ----------------
 # Local cargo target dirs are huge (~hundreds of MB) and the rust-builder
