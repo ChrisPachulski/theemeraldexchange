@@ -23,7 +23,7 @@ authors = ["ChrisPachulski"]
 rust-version = "1.96"
 
 [workspace.dependencies]
-aes-gcm = "0.10.3"
+aes-gcm = "0.11.0"
 base64 = "0.22"
 hkdf = "0.12"
 hmac = "0.12"
