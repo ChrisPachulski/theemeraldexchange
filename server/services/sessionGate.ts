@@ -30,6 +30,7 @@ import type { Role, Session } from '../session.js'
 import { authModeFromSession } from '../session.js'
 import { cascadeRevokeForSub } from './reconcileDeviceToken.js'
 import { memberStatus } from './membership.js'
+import { isMember } from './members.js'
 
 // Cascade-revocation contract (§3.4): when Plex definitively denies the
 // cookie user (auth_revoked or not_member), ALSO revoke every paired
@@ -143,7 +144,17 @@ export async function reconcileSession(session: Session): Promise<Session | null
   // Pass the sub so the provider guard applies on every request — an apple:/
   // local: session can never be re-escalated to admin via an ADMINS username
   // collision, and ADMIN_SUBS admins keep admin without a username match.
-  const role = roleFor(session.username, session.sub)
+  let role = roleFor(session.username, session.sub)
+  // DB-backed admin (plan 006 Phase 1): a members row with role='admin' —
+  // the first-owner claim mints one — grants admin without an env edit.
+  // roleFor's provider guard still blocks USERNAME-based escalation for
+  // non-Plex subs; this is an exact-sub row match, so it is as unguessable
+  // as ADMIN_SUBS. Revocation stays live: demoting the row demotes the
+  // session on its next request, same as an env.admins edit.
+  if (role !== 'admin') {
+    const m = isMember(session.sub)
+    if (m?.role === 'admin') role = 'admin'
+  }
 
   // AuthZ gate — the FIRST and AUTHORITATIVE decision, before any
   // provider-specific work. With the invite/members model the per-request

@@ -83,8 +83,13 @@ export function memberStatus(sub: string): MemberStatus {
  * Plex server scope, an ADMIN_SUBS owner-bootstrap, Sign in with Apple, or at
  * least one members row. Until then the install is un-bootstrapped and
  * memberStatus falls open (see the note in memberStatus).
+ *
+ * Exported for the first-owner claim flow (plan 006 Phase 1): the setup
+ * token is only minted — and the claim endpoint only answers — while the
+ * install is un-bootstrapped, i.e. while the fall-open window above is
+ * actually open and needs securing.
  */
-function isAuthzBootstrapped(): boolean {
+export function isAuthzBootstrapped(): boolean {
   if (env.plexServerId) return true
   if ((env.adminSubs ?? []).length > 0) return true
   if (env.appleClientId) return true

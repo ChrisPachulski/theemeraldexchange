@@ -74,7 +74,7 @@ describe('invites service', () => {
     expect(() => issueInvite('garbage')).toThrow()
   })
 
-  it('redeem of a valid code creates a member', () => {
+  it('redeem of a valid code creates a member attributed to the issuing admin', () => {
     const { code } = issueInvite(ADMIN)
     const r = redeemInvite(code, ALICE, 'Alice', 'apple')
     expect(r).toEqual({ ok: true, created: true })
@@ -84,6 +84,12 @@ describe('invites service', () => {
     expect(m?.display_name).toBe('Alice')
     expect(m?.auth_mode).toBe('apple')
     expect(m?.role).toBe('user')
+    // Verdict A7: invited_by was provisioned+indexed but hardcoded NULL —
+    // the redeem must attribute the member to the invite's issuer.
+    const row = serverDb()
+      .raw.prepare(`SELECT invited_by FROM members WHERE sub = ?`)
+      .get(ALICE) as { invited_by: string | null }
+    expect(row.invited_by).toBe(ADMIN)
   })
 
   it('redeem of an unknown code is invalid and creates no member', () => {

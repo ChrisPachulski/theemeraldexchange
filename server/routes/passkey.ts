@@ -30,9 +30,17 @@ import {
   enforceAuthRateLimit,
   enforceAuthIdentityRateLimit,
 } from '../auth.js'
-import { isMember, recordMemberLogin } from '../services/members.js'
+import { addMember, isMember, recordMemberLogin } from '../services/members.js'
 import { setSessionCookie } from '../session.js'
 import { maybeMintDeviceToken } from '../services/devicePair.js'
+import {
+  isClaimable,
+  verifySetupToken,
+  markClaimed,
+  claimSourceAllowed,
+} from '../services/setupState.js'
+import { serverDb } from '../services/serverDb.js'
+import { getConnInfo } from '@hono/node-server/conninfo'
 
 export const passkey = new Hono<Env>()
 
@@ -101,6 +109,60 @@ passkey.post('/register/verify', async (c) => {
   }
 
   const { sub, handle, credential } = verified
+
+  // ── first-owner claim (plan 006 Phase 1) ─────────────────────────────────
+  // A claimable install's memberStatus falls OPEN (membership.ts), so this
+  // registration would be admitted anyway — but as a row-less role-'user'
+  // that never seeds the allowlist. Presenting the boot-minted setup token
+  // upgrades the registration into the OWNER claim: role 'admin', a real
+  // members row (which closes the fall-open gate for everyone after), and
+  // the token burned. Source-gated to private/loopback socket addresses
+  // unless SETUP_ALLOW_REMOTE=1 (GHSA-mxqh-q9h6-v8pq: never leave first-run
+  // ownership claimable by whoever shows up first).
+  const setupToken = typeof body?.setupToken === 'string' ? body.setupToken : undefined
+  if (setupToken !== undefined) {
+    let remoteAddr: string | undefined
+    try {
+      remoteAddr = getConnInfo(c).remote.address
+    } catch {
+      remoteAddr = undefined // fail closed below unless SETUP_ALLOW_REMOTE=1
+    }
+    if (!claimSourceAllowed(remoteAddr)) {
+      return c.json({ error: 'claim_source_blocked' }, 403)
+    }
+    if (!verifySetupToken(setupToken)) {
+      return c.json({ error: 'invalid_setup_token' }, 403)
+    }
+    // One transaction: re-check claimable (two racing claims serialize on
+    // SQLite's write lock — the loser sees claimable=false), mint the admin
+    // member, persist the credential, burn the token. All-or-nothing so a
+    // failure can never leave a claimed-but-credential-less owner.
+    const claimed = serverDb().raw.transaction(() => {
+      if (!isClaimable()) return false
+      addMember({
+        sub,
+        displayName: handle,
+        role: 'admin',
+        authMode: 'local',
+        invitedBy: 'setup:claim',
+      })
+      persistCredential(sub, credential, deviceLabel ?? handle)
+      markClaimed(sub)
+      return true
+    })()
+    if (!claimed) return c.json({ error: 'already_claimed' }, 403)
+    await setSessionCookie(c, { sub, username: handle, role: 'admin', auth_mode: 'local' })
+    return c.json({ ok: true, claimed: true, user: { sub, username: handle, role: 'admin' } })
+  }
+
+  // While the install is claimable there is no admin, therefore no invite
+  // can legitimately exist — an un-tokened registration reaching this point
+  // could only be riding the fall-open window as an anonymous role-'user'.
+  // Close it: pre-claim, passkey registration REQUIRES the setup token.
+  // (The SPA sees claimable via /api/setup/status and shows the claim flow.)
+  if (isClaimable()) {
+    return c.json({ error: 'server_unclaimed' }, 403)
+  }
 
   // SHARED authZ gate — identical decision to the Plex/Apple paths. A fresh
   // local: sub is never already a member, so this requires a valid invite.

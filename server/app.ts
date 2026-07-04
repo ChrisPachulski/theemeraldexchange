@@ -38,6 +38,7 @@ import { transcode } from './routes/transcode.js'
 import { devices, adminDevices } from './routes/devices.js'
 import { adminInvites, adminMembers } from './routes/adminInvites.js'
 import { passkey } from './routes/passkey.js'
+import { setup } from './routes/setup.js'
 import { version } from './routes/version.js'
 
 export const app = new Hono()
@@ -182,6 +183,10 @@ app.route('/api/auth/device', device)
 // identity path. Public (these endpoints ARE the login); self-owned local:
 // users gated by the same invite/members allowlist as Plex/Apple.
 app.route('/api/auth/passkey', passkey)
+// First-owner claim status (plan 006 Phase 1). Public: the SPA walkthrough
+// asks this once to decide whether to render the claim panel. The claim
+// itself is the passkey registration path + setup token.
+app.route('/api/setup', setup)
 app.route('/api/me', me)
 // /api/version is public — discovers server_id + auth_modes for Apple
 // PIN-pair (Keychain keying + UI gating). Mounted last under /api/v.

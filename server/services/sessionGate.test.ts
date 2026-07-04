@@ -50,6 +50,16 @@ vi.mock('./membership.js', () => ({
   memberStatus: (sub: string) => memberStatusImpl.fn(sub),
 }))
 
+// DB-backed admin (plan 006 Phase 1): reconcileSession honors an active
+// members row with role='admin' (the first-owner claim mints one). Default
+// null = no row, so every legacy test keeps its roleFor-driven role.
+const isMemberImpl: { fn: (sub: string) => { role: 'admin' | 'user' } | null } = {
+  fn: () => null,
+}
+vi.mock('./members.js', () => ({
+  isMember: (sub: string) => isMemberImpl.fn(sub),
+}))
+
 const baseSession: Session = {
   sub: 'plex:42',
   username: 'someone',
@@ -62,11 +72,52 @@ beforeEach(() => {
   _resetSessionGateCacheForTests()
   probeImpl.fn = async () => ({ kind: 'network_error' })
   memberStatusImpl.fn = () => 'allowed'
+  isMemberImpl.fn = () => null
   cascadeSpy.mockClear()
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
+})
+
+describe('DB-backed admin role (plan 006 Phase 1 first-owner claim)', () => {
+  it('a local: session with a members-row admin KEEPS admin across reconcile', async () => {
+    // The claimed owner: local: sub, not in ADMIN_SUBS/ADMINS, but their
+    // claim minted a members row with role='admin'. Without the DB-role
+    // check, reconcileSession would demote them to 'user' on their very
+    // first protected request.
+    isMemberImpl.fn = () => ({ role: 'admin' })
+    const s = await reconcileSession({
+      sub: 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV',
+      username: 'Owner',
+      role: 'admin',
+      auth_mode: 'local',
+    } as Session)
+    expect(s).not.toBeNull()
+    expect(s?.role).toBe('admin')
+  })
+
+  it('a members-row user role does NOT escalate (row must say admin)', async () => {
+    isMemberImpl.fn = () => ({ role: 'user' })
+    const s = await reconcileSession({
+      sub: 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV',
+      username: 'admin-user', // ADMINS collision — must still be blocked for local:
+      role: 'user',
+      auth_mode: 'local',
+    } as Session)
+    expect(s?.role).toBe('user')
+  })
+
+  it('demoting the members row demotes the session on its next request', async () => {
+    isMemberImpl.fn = () => null // row deleted/demoted
+    const s = await reconcileSession({
+      sub: 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV',
+      username: 'Owner',
+      role: 'admin', // stale cookie claim
+      auth_mode: 'local',
+    } as Session)
+    expect(s?.role).toBe('user')
+  })
 })
 
 describe('roleFor', () => {

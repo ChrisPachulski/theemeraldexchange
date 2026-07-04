@@ -160,12 +160,12 @@ export function redeemInvite(
   const tx = db.raw.transaction((): RedeemResult => {
     const invite = db.raw
       .prepare(
-        `SELECT code_hash, expires_at, max_uses, used_count, revoked_at
+        `SELECT code_hash, issued_by, expires_at, max_uses, used_count, revoked_at
            FROM invites
           WHERE code_hash = ?`,
       )
       .get(codeHash) as
-      | Pick<Invite, 'code_hash' | 'expires_at' | 'max_uses' | 'used_count' | 'revoked_at'>
+      | Pick<Invite, 'code_hash' | 'issued_by' | 'expires_at' | 'max_uses' | 'used_count' | 'revoked_at'>
       | undefined
 
     if (!invite) return { ok: false, reason: 'invalid' }
@@ -196,24 +196,28 @@ export function redeemInvite(
     }
 
     if (member) {
-      // Previously revoked member: this invite re-grants access.
+      // Previously revoked member: this invite re-grants access. Attribute
+      // the re-grant to this invite's issuer (verdict A7: the schema
+      // provisioned + indexed members.invited_by but the redeem path left
+      // it NULL forever).
       db.raw
         .prepare(
           `UPDATE members
               SET revoked_at = NULL,
                   joined_at = ?,
                   display_name = ?,
-                  auth_mode = ?
+                  auth_mode = ?,
+                  invited_by = ?
             WHERE sub = ?`,
         )
-        .run(nowIso, displayName, authMode, sub)
+        .run(nowIso, displayName, authMode, invite.issued_by, sub)
     } else {
       db.raw
         .prepare(
           `INSERT INTO members (sub, display_name, role, auth_mode, invited_by, joined_at, revoked_at)
-           VALUES (?, ?, 'user', ?, NULL, ?, NULL)`,
+           VALUES (?, ?, 'user', ?, ?, ?, NULL)`,
         )
-        .run(sub, displayName, authMode, nowIso)
+        .run(sub, displayName, authMode, invite.issued_by, nowIso)
     }
 
     // Burn one use, guarded so a concurrent redeem cannot over-spend.

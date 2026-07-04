@@ -350,8 +350,10 @@ if (isProd && enableGoogleSignIn && googleClientIds.length === 0) {
 }
 
 // ADMIN_SUBS — comma-separated, namespaced subs (apple:<subject> |
-// plex:<id> | google:<sub>) that are admins AND implicitly allowed without
-// an invite.
+// plex:<id> | google:<sub> | local:<ulid>) that are admins AND implicitly
+// allowed without an invite. parseSub accepts all four providers — a
+// passkey-only install can bootstrap its owner with a local: entry
+// (verdict A6: this always worked; only these docs hid it).
 // This is the owner-bootstrap: the operator's own Apple/Plex sub goes
 // here so their very first login on a fresh install needs no invite and
 // lands them as admin even when their Plex username isn't in ADMINS
@@ -366,8 +368,8 @@ const adminSubs = csv('ADMIN_SUBS').map((s) => {
   } catch {
     throw new Error(
       `Invalid entry in ADMIN_SUBS: ${JSON.stringify(s)}. Each entry must ` +
-        'be a namespaced sub like "plex:12345" or ' +
-        '"apple:000000.<32 hex>.0000".',
+        'be a namespaced sub like "plex:12345", ' +
+        '"apple:000000.<32 hex>.0000", "google:<sub>", or "local:<ulid>".',
     )
   }
 })
@@ -631,6 +633,12 @@ export const env = {
   // a new server_id and silently revokes all device tokens. Default
   // matches the NAS data bind-mount used by iptv.db and other data files.
   SERVER_DB_PATH: process.env.SERVER_DB_PATH ?? './data/server.db',
+  // First-owner claim (plan 006 Phase 1): by default the claim endpoint
+  // only accepts requests whose SOCKET address is loopback/private (the
+  // nginx-ui advisory's bind-local recommendation, widened to LAN so a
+  // laptop can claim the NAS). Set to 1 only when deliberately claiming
+  // through a tunnel/proxy — the setup token is still required either way.
+  setupAllowRemote: process.env.SETUP_ALLOW_REMOTE === '1',
   IPTV_DB_PATH: process.env.IPTV_DB_PATH ?? './data/iptv.db',
   // Scheduled DB-snapshot retention dir + count + cadence (finding 14-4).
   // VACUUM INTO snapshots of server.db + iptv.db land here on a cron and on
