@@ -2,7 +2,7 @@
 // the X-Api-Key — it never leaves this process.
 
 import { env } from '../env.js'
-import { fetchWithTimeout, LAN_TIMEOUT_MS } from './upstream.js'
+import { fetchWithTimeout, LAN_TIMEOUT_MS, NotConfiguredError } from './upstream.js'
 
 export type RootFolder = {
   id: number
@@ -17,6 +17,9 @@ export async function sonarrFetch(
   query?: URLSearchParams,
   timeoutMs: number = LAN_TIMEOUT_MS,
 ): Promise<Response> {
+  // Sonarr is optional (plan 006 Phase 0): unset key → typed 503 via onError.
+  const apiKey = env.sonarrApiKey
+  if (!apiKey) throw new NotConfiguredError('sonarr')
   const url = new URL(`${env.sonarrUrl}${path}`)
   if (query) {
     for (const [k, v] of query.entries()) url.searchParams.set(k, v)
@@ -27,7 +30,7 @@ export async function sonarrFetch(
       ...init,
       headers: {
         ...(init.headers ?? {}),
-        'X-Api-Key': env.sonarrApiKey,
+        'X-Api-Key': apiKey,
         Accept: 'application/json',
       },
     },

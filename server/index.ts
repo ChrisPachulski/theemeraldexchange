@@ -57,7 +57,8 @@ if (env.EEX_TELEMETRY_DSN) {
 } else {
   log.warn(
     'EEX_TELEMETRY_DSN is not set. Sentry SDK will not be initialized. ' +
-      'Telemetry is mandatory in production (§15.1).',
+      'Telemetry is opt-in (§15.1 amended by plan 006); set TELEMETRY_ENABLED=1 ' +
+      'in deployments that run the telemetry stack so a lost DSN fails loudly.',
   )
 }
 

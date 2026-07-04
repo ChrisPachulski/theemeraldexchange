@@ -5,7 +5,7 @@
 
 import { createHash } from 'node:crypto'
 import { env } from './env.js'
-import { fetchWithTimeout, WAN_TIMEOUT_MS } from './services/upstream.js'
+import { fetchWithTimeout, WAN_TIMEOUT_MS, NotConfiguredError } from './services/upstream.js'
 
 const PLEX_BASE = 'https://plex.tv/api/v2'
 
@@ -18,10 +18,19 @@ const PLEX_BASE = 'https://plex.tv/api/v2'
 // server-side createPin leaked the host's IP onto plex.tv's auth page.
 export const PLEX_PRODUCT = 'The Emerald Exchange'
 
+// Plex login is optional (plan 006 Phase 0): unset PLEX_CLIENT_ID →
+// typed 503 plex_not_configured via onError instead of a boot failure.
+// Every plex.tv call funnels its client identifier through here.
+export function requirePlexClientId(): string {
+  const clientId = env.plexClientId
+  if (!clientId) throw new NotConfiguredError('plex')
+  return clientId
+}
+
 const baseHeaders = (): Record<string, string> => ({
   Accept: 'application/json',
   'X-Plex-Product': PLEX_PRODUCT,
-  'X-Plex-Client-Identifier': env.plexClientId,
+  'X-Plex-Client-Identifier': requirePlexClientId(),
   'X-Plex-Version': '0.1.0',
   'X-Plex-Platform': 'Web',
   'X-Plex-Device': PLEX_PRODUCT,
@@ -224,7 +233,7 @@ export async function listAcceptedUsers(authToken: string): Promise<PlexFriend[]
     {
       headers: {
         'X-Plex-Product': 'The Emerald Exchange',
-        'X-Plex-Client-Identifier': env.plexClientId,
+        'X-Plex-Client-Identifier': requirePlexClientId(),
         'X-Plex-Token': authToken,
         Accept: 'application/xml',
       },
@@ -338,7 +347,7 @@ export async function listSharedServerInvitees(authToken: string): Promise<PlexF
     res = await fetch(url, {
       headers: {
         'X-Plex-Product': 'The Emerald Exchange',
-        'X-Plex-Client-Identifier': env.plexClientId,
+        'X-Plex-Client-Identifier': requirePlexClientId(),
         'X-Plex-Token': authToken,
         Accept: 'application/xml',
       },
@@ -424,7 +433,7 @@ export async function listHomeUsers(authToken: string): Promise<PlexFriend[]> {
     res = await fetch(url, {
       headers: {
         'X-Plex-Product': 'The Emerald Exchange',
-        'X-Plex-Client-Identifier': env.plexClientId,
+        'X-Plex-Client-Identifier': requirePlexClientId(),
         'X-Plex-Token': authToken,
         Accept: 'application/xml',
       },

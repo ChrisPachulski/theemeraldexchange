@@ -2,7 +2,7 @@
 // this process only.
 
 import { env } from '../env.js'
-import { fetchWithTimeout, LAN_TIMEOUT_MS } from './upstream.js'
+import { fetchWithTimeout, LAN_TIMEOUT_MS, NotConfiguredError } from './upstream.js'
 
 export type RootFolder = {
   id: number
@@ -17,6 +17,9 @@ export async function radarrFetch(
   query?: URLSearchParams,
   timeoutMs: number = LAN_TIMEOUT_MS,
 ): Promise<Response> {
+  // Radarr is optional (plan 006 Phase 0): unset key → typed 503 via onError.
+  const apiKey = env.radarrApiKey
+  if (!apiKey) throw new NotConfiguredError('radarr')
   const url = new URL(`${env.radarrUrl}${path}`)
   if (query) {
     for (const [k, v] of query.entries()) url.searchParams.set(k, v)
@@ -27,7 +30,7 @@ export async function radarrFetch(
       ...init,
       headers: {
         ...(init.headers ?? {}),
-        'X-Api-Key': env.radarrApiKey,
+        'X-Api-Key': apiKey,
         Accept: 'application/json',
       },
     },

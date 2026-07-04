@@ -111,6 +111,14 @@ if (isProd && allowedOrigins.length === 0) {
   )
 }
 
+// PLEX_CLIENT_ID — stable UUID identifying this app to plex.tv. Optional
+// since Phase 0 (plan 006): unset means Plex login is simply not
+// configured on this install (self-host without a Plex account); the
+// Plex auth routes 503 with plex_not_configured instead of the server
+// refusing to boot. opt() trims, which is load-bearing for the plex.tv
+// PIN flow (see the note on the env object below).
+const plexClientId = opt('PLEX_CLIENT_ID') ?? null
+
 // PLEX_SERVER_ID is the machineIdentifier of the home Plex server.
 // When set, only members of that server can sign in. When unset, the
 // auth flow accepts any authenticated Plex user — that's the
@@ -119,10 +127,12 @@ if (isProd && allowedOrigins.length === 0) {
 // blank silently turns the invitation-only app into "any Plex user can
 // sign in," so we hard-fail unless the operator explicitly opts in
 // via ALLOW_UNSCOPED_PLEX_LOGIN=1 (intended only for the brief
-// first-deploy window).
+// first-deploy window). Only enforced when Plex login is configured at
+// all (PLEX_CLIENT_ID set) — a Plex-free install has no Plex sign-in
+// path to scope.
 const plexServerId = opt('PLEX_SERVER_ID') ?? null
 const allowUnscopedPlexLogin = process.env.ALLOW_UNSCOPED_PLEX_LOGIN === '1'
-if (isProd && !plexServerId && !allowUnscopedPlexLogin) {
+if (isProd && plexClientId && !plexServerId && !allowUnscopedPlexLogin) {
   throw new Error(
     'Missing required env var in production: PLEX_SERVER_ID ' +
       '(your home Plex server\'s machineIdentifier — required to scope ' +
@@ -149,10 +159,21 @@ if (useLocalRecommender && !recommenderEventSecret) {
     'Missing required env var when USE_LOCAL_RECOMMENDER=1: RECOMMENDER_EVENT_SECRET',
   )
 }
+// *arr / SAB integrations — optional since Phase 0 (plan 006). Unset key
+// means the integration is not configured: the service helpers throw
+// NotConfiguredError, which app.onError maps to a typed 503 (mirroring
+// tmdb_not_configured) instead of the server refusing to boot.
+const sonarrApiKey = opt('SONARR_API_KEY') ?? null
+const radarrApiKey = opt('RADARR_API_KEY') ?? null
+const sabApiKey = opt('SAB_API_KEY') ?? null
+
 const defaultRootFolderPath = opt('DEFAULT_ROOT_FOLDER_PATH') ?? null
 const defaultSonarrRootFolderPath = opt('DEFAULT_SONARR_ROOT_FOLDER_PATH') ?? defaultRootFolderPath
 const defaultRadarrRootFolderPath = opt('DEFAULT_RADARR_ROOT_FOLDER_PATH') ?? defaultRootFolderPath
-if (isProd && (!defaultSonarrRootFolderPath || !defaultRadarrRootFolderPath)) {
+// Root-folder paths guard non-admin adds, so they only matter for an *arr
+// that is actually configured — a request-less install shouldn't fail boot
+// over them.
+if (isProd && ((sonarrApiKey && !defaultSonarrRootFolderPath) || (radarrApiKey && !defaultRadarrRootFolderPath))) {
   throw new Error(
     'Missing required env var in production: DEFAULT_SONARR_ROOT_FOLDER_PATH ' +
       'and/or DEFAULT_RADARR_ROOT_FOLDER_PATH (exact upstream root folder paths for non-admin adds)',
@@ -268,17 +289,24 @@ assertSecretsDistinct({
 })
 
 // EEX_TELEMETRY_DSN — Sentry-compatible DSN for the self-hoster's Glitchtip
-// instance. Required in production (telemetry is mandatory per §15.1).
-// Optional in dev: if absent a warning is logged at startup but the server
-// boots so developers without a local Glitchtip don't get blocked.
+// instance. Since Phase 0 (plan 006) telemetry is opt-in: the boot
+// requirement only applies when TELEMETRY_ENABLED=1 (the owner's full
+// deployment sets it; a basic self-host leaves the whole telemetry
+// profile off). With a DSN set, telemetry works regardless of the flag;
+// with neither, Sentry.init is never called and captureException is a
+// no-op (§15.1 amended by plan 006 / verdict C4).
+const telemetryEnabled = process.env.TELEMETRY_ENABLED === '1'
 const telemetryDsn = opt('EEX_TELEMETRY_DSN') ?? null
-if (isProd && !telemetryDsn) {
+if (isProd && telemetryEnabled && !telemetryDsn) {
   throw new Error(
-    'Missing required env var in production: EEX_TELEMETRY_DSN ' +
-      '(Sentry-compatible DSN for your self-hosted Glitchtip project). ' +
-      'Telemetry is mandatory in the EEX stack (§15.1). Create an EEX ' +
-      'project in Glitchtip, copy the DSN, and set EEX_TELEMETRY_DSN.',
+    'Missing required env var in production when TELEMETRY_ENABLED=1: ' +
+      'EEX_TELEMETRY_DSN (Sentry-compatible DSN for your self-hosted ' +
+      'Glitchtip project). Create an EEX project in Glitchtip, copy the ' +
+      'DSN, and set EEX_TELEMETRY_DSN — or unset TELEMETRY_ENABLED.',
   )
+}
+if (isProd && !telemetryDsn) {
+  console.warn('[env] EEX_TELEMETRY_DSN not set — telemetry disabled for this deployment')
 }
 
 // APPLE_CLIENT_ID — the Apple Services ID / app bundle id used as the
@@ -367,17 +395,15 @@ const webauthnOrigins = (() => {
 
 /** True when Plex OAuth is configured for this installation.
  *
- *  PLEX_CLIENT_ID is required for boot (validated by `required()` below),
- *  so if the server started, Plex is configured. This helper exists so the
- *  device-token mint path and /api/version can expose which auth providers
- *  are active without re-reading process.env at call time.
- *
- *  Future local-auth support will expose an analogous `isLocalAuthConfigured()`
- *  gated on LOCAL_AUTH_SECRET (or similar) once that deliverable lands.
+ *  PLEX_CLIENT_ID is optional since Phase 0 (plan 006): a self-host
+ *  without a Plex account leaves it unset and the Plex auth routes 503
+ *  with plex_not_configured. This helper exists so the device-token mint
+ *  path and /api/version can expose which auth providers are active
+ *  without re-reading process.env at call time. Read through the exported
+ *  env object (like isAppleConfigured) so tests can flip it.
  */
 export function isPlexConfigured(): boolean {
-  // PLEX_CLIENT_ID is required — if we booted, it is set and non-empty.
-  return true
+  return Boolean(env.plexClientId)
 }
 
 /** True when Sign in with Apple is configured (APPLE_CLIENT_ID set).
@@ -402,16 +428,17 @@ export function isGoogleConfigured(): boolean {
 }
 
 export const env = {
-  // .trim() is load-bearing for the plex.tv PIN flow: this value flows
-  // into BOTH the X-Plex-Client-Identifier header (server → plex.tv)
-  // AND the clientID URL param on the popup auth URL (browser →
-  // plex.tv). plex.tv matches them as exact strings when reconciling
-  // the authorized PIN; a stray trailing newline (common when copying
-  // from a generator into .env) makes the header carry "\n" and the
-  // URLSearchParams version carry "%0A", which plex.tv treats as two
-  // different clients — the user authorizes one, the server polls the
-  // other, and check returns {authToken: null} forever.
-  plexClientId: required('PLEX_CLIENT_ID').trim(),
+  // Trimming (done by opt() at the hoisted const above) is load-bearing
+  // for the plex.tv PIN flow: this value flows into BOTH the
+  // X-Plex-Client-Identifier header (server → plex.tv) AND the clientID
+  // URL param on the popup auth URL (browser → plex.tv). plex.tv matches
+  // them as exact strings when reconciling the authorized PIN; a stray
+  // trailing newline (common when copying from a generator into .env)
+  // makes the header carry "\n" and the URLSearchParams version carry
+  // "%0A", which plex.tv treats as two different clients — the user
+  // authorizes one, the server polls the other, and check returns
+  // {authToken: null} forever. null when Plex login is not configured.
+  plexClientId,
   sessionSecret: required('SESSION_SECRET'),
   streamTokenSecret: rawStreamTokenSecret,
   /** Empty string in dev when not configured; D13 mint paths assert non-empty. */
@@ -449,11 +476,14 @@ export const env = {
   plexServerUrl: opt('PLEX_SERVER_URL') ?? `http://${NAS_HOST}:32400`,
 
   sonarrUrl: opt('SONARR_URL') ?? `http://${NAS_HOST}:8989/tv`,
-  sonarrApiKey: required('SONARR_API_KEY'),
+  /** null when Sonarr is not configured — sonarrFetch throws NotConfiguredError. */
+  sonarrApiKey,
   radarrUrl: opt('RADARR_URL') ?? `http://${NAS_HOST}:7878/movies`,
-  radarrApiKey: required('RADARR_API_KEY'),
+  /** null when Radarr is not configured — radarrFetch throws NotConfiguredError. */
+  radarrApiKey,
   sabUrl: opt('SAB_URL') ?? `http://${NAS_HOST}:8080`,
-  sabApiKey: required('SAB_API_KEY'),
+  /** null when SAB is not configured — sab helpers throw NotConfiguredError. */
+  sabApiKey,
 
   // Preferred quality-profile name for non-admin adds. The frontend
   // already prefers "Choose Me" by name (AddMovieModal /

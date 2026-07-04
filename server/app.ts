@@ -8,6 +8,7 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { requestId } from 'hono/request-id'
 import { env } from './env.js'
+import { NotConfiguredError } from './services/upstream.js'
 import { serverDb } from './services/serverDb.js'
 import { requireSafeOrigin } from './middleware/csrf.js'
 import { auth, me } from './auth.js'
@@ -48,6 +49,12 @@ export const app = new Hono()
 // no PII leaves the box. captureException is a no-op when Sentry.init was never
 // called (dev without EEX_TELEMETRY_DSN), so this is safe in every environment.
 app.onError((err, c) => {
+  // Optional integrations (plan 006 Phase 0): an unconfigured service is an
+  // expected state, not an incident — typed 503 mirroring tmdb_not_configured,
+  // no telemetry capture.
+  if (err instanceof NotConfiguredError) {
+    return c.json({ error: `${err.service}_not_configured` }, 503)
+  }
   // LOW-29: tag the exception with the request id so a Glitchtip event can be
   // tied back to the matching `[<id>]` log line (and the client's X-Request-Id).
   Sentry.captureException(err, { tags: { request_id: c.get('requestId') } })
