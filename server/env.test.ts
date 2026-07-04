@@ -39,6 +39,7 @@ const PRESERVED_KEYS = [
   'USE_LOCAL_RECOMMENDER',
   'EEX_TELEMETRY_DSN',
   'TELEMETRY_ENABLED',
+  'SERVE_SPA',
   'STREAM_TOKEN_SECRET',
   'DEVICE_TOKEN_SECRET',
   'INTERNAL_PRINCIPAL_SECRET',
@@ -65,6 +66,10 @@ afterEach(() => {
 
 function setBaselineEnv() {
   // The required-in-all-modes set. Tests override specific keys on top.
+  // SERVE_SPA pinned off: unset auto-detects on ./dist/index.html, which
+  // exists on any machine that ever ran a vite build — tests must not
+  // depend on that. Phase 2 tests flip it explicitly.
+  process.env.SERVE_SPA = '0'
   process.env.PLEX_CLIENT_ID = 'test-client'
   process.env.SESSION_SECRET = 'test-secret-test-secret-test-secret-test-secret'
   process.env.SONARR_API_KEY = 'k'
@@ -276,6 +281,32 @@ describe('env — Phase 0 (plan 006): optional integrations boot on a bare env',
     setBareProdEnv()
     const env = await loadEnv()
     expect(env.sonarrApiKey).toBeNull()
+  })
+
+  // ── Phase 2: SERVE_SPA + ALLOWED_ORIGINS relaxation ──
+  it('SERVE_SPA=1 → serveSpa on; production boots without ALLOWED_ORIGINS', async () => {
+    setBareProdEnv()
+    delete process.env.ALLOWED_ORIGINS
+    process.env.SERVE_SPA = '1'
+    const env = await loadEnv()
+    expect(env.serveSpa).toBe(true)
+    expect(env.allowedOrigins).toEqual([])
+  })
+
+  it('SERVE_SPA=0 → serveSpa off; production still requires ALLOWED_ORIGINS', async () => {
+    setBareProdEnv()
+    delete process.env.ALLOWED_ORIGINS
+    process.env.SERVE_SPA = '0'
+    await expect(loadEnv()).rejects.toThrow(/ALLOWED_ORIGINS/)
+  })
+
+  it('WEBAUTHN_RP_ID set → webauthnRpIdExplicit (disables request-derived RP)', async () => {
+    setBaselineEnv()
+    process.env.SERVE_SPA = '1'
+    process.env.WEBAUTHN_RP_ID = 'exchange.example'
+    const env = await loadEnv()
+    expect(env.webauthnRpIdExplicit).toBe(true)
+    delete process.env.WEBAUTHN_RP_ID
   })
 })
 

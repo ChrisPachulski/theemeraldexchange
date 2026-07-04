@@ -112,14 +112,23 @@ function takeChallenge(challengeId: string, ceremony: 'register' | 'login'): Cha
 /** Begin a registration ceremony for a NEW self-owned user. Mints a fresh
  *  `local:<ulid>` sub and returns creation options + an opaque challengeId the
  *  client echoes back at verify time. No member/credential is written yet. */
+/** Request-derived Relying Party (plan 006 Phase 2): when the backend
+ *  serves the SPA same-origin and the operator hasn't pinned
+ *  WEBAUTHN_RP_ID, the passkey routes derive the RP from the request's
+ *  own (same-host-verified) Origin so a LAN/tailnet self-host works with
+ *  zero WebAuthn env. Both ceremony halves derive it the same way, so
+ *  begin/verify agree as long as the client talks to one hostname. */
+export type RpOverride = { rpId: string; origin: string }
+
 export async function beginRegistration(
   handle: string,
+  rp?: RpOverride,
 ): Promise<{ options: PublicKeyCredentialCreationOptionsJSON; challengeId: string }> {
   const sub = newLocalSub()
   const userID = new TextEncoder().encode(sub) // 32 bytes for local:<26> — well under 64
   const options = await generateRegistrationOptions({
     rpName: env.webauthnRpName,
-    rpID: env.webauthnRpId,
+    rpID: rp?.rpId ?? env.webauthnRpId,
     userName: handle,
     userDisplayName: handle,
     userID,
@@ -139,6 +148,7 @@ export async function beginRegistration(
 export async function verifyRegistration(
   challengeId: string,
   response: RegistrationResponseJSON,
+  rp?: RpOverride,
 ): Promise<{ sub: string; handle: string; credential: VerifiedCredential }> {
   const ch = takeChallenge(challengeId, 'register')
   if (!ch || !ch.pending_sub) throw new Error('challenge_invalid')
@@ -146,8 +156,8 @@ export async function verifyRegistration(
   const verification = await verifyRegistrationResponse({
     response,
     expectedChallenge: ch.challenge,
-    expectedOrigin: env.webauthnOrigins,
-    expectedRPID: env.webauthnRpId,
+    expectedOrigin: rp ? [rp.origin] : env.webauthnOrigins,
+    expectedRPID: rp?.rpId ?? env.webauthnRpId,
     requireUserVerification: false,
   })
   if (!verification.verified || !verification.registrationInfo) {
@@ -197,12 +207,12 @@ export function persistCredential(
 // ── authentication ──────────────────────────────────────────────────────────
 
 /** Begin a usernameless (discoverable-credential) login ceremony. */
-export async function beginLogin(): Promise<{
+export async function beginLogin(rp?: RpOverride): Promise<{
   options: PublicKeyCredentialRequestOptionsJSON
   challengeId: string
 }> {
   const options = await generateAuthenticationOptions({
-    rpID: env.webauthnRpId,
+    rpID: rp?.rpId ?? env.webauthnRpId,
     userVerification: 'preferred',
     allowCredentials: [], // discoverable: the authenticator offers its resident keys
   })
@@ -215,6 +225,7 @@ export async function beginLogin(): Promise<{
 export async function verifyLogin(
   challengeId: string,
   response: AuthenticationResponseJSON,
+  rp?: RpOverride,
 ): Promise<{ sub: string }> {
   const ch = takeChallenge(challengeId, 'login')
   if (!ch) throw new Error('challenge_invalid')
@@ -230,8 +241,8 @@ export async function verifyLogin(
   const verification = await verifyAuthenticationResponse({
     response,
     expectedChallenge: ch.challenge,
-    expectedOrigin: env.webauthnOrigins,
-    expectedRPID: env.webauthnRpId,
+    expectedOrigin: rp ? [rp.origin] : env.webauthnOrigins,
+    expectedRPID: rp?.rpId ?? env.webauthnRpId,
     requireUserVerification: false,
     credential: {
       id: row.credential_id,

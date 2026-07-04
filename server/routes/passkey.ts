@@ -17,6 +17,7 @@
 // user is denied even though their signature is valid.
 
 import { Hono } from 'hono'
+import type { Context } from 'hono'
 import type { Env } from '../middleware/auth.js'
 import {
   beginRegistration,
@@ -24,7 +25,9 @@ import {
   persistCredential,
   beginLogin,
   verifyLogin,
+  type RpOverride,
 } from '../services/webauthn.js'
+import { env } from '../env.js'
 import {
   authorizeOrRedeem,
   enforceAuthRateLimit,
@@ -65,6 +68,29 @@ function credentialIdOf(response: unknown): string | null {
   return typeof id === 'string' && id.length > 0 ? id : null
 }
 
+/** Request-derived WebAuthn Relying Party (plan 006 Phase 2).
+ *
+ *  Only when (a) the backend serves the SPA same-origin (SERVE_SPA) and
+ *  (b) the operator did NOT pin WEBAUTHN_RP_ID. Then the RP is the
+ *  request's own Origin — but ONLY if its host equals the Host header
+ *  (same-host guard), so a cross-origin page can never steer the RP.
+ *  Phishing resistance is intact: the browser enforces that the rpId is a
+ *  registrable suffix of the page's own host, and here both derive from
+ *  the same request. Falls back to the env-configured RP everywhere else. */
+function rpForRequest(c: Context): RpOverride | undefined {
+  if (env.webauthnRpIdExplicit || !env.serveSpa) return undefined
+  const origin = c.req.header('origin')
+  const host = c.req.header('host')
+  if (!origin || !host) return undefined
+  try {
+    const u = new URL(origin)
+    if (u.host !== host) return undefined
+    return { rpId: u.hostname, origin }
+  } catch {
+    return undefined
+  }
+}
+
 // ── registration ────────────────────────────────────────────────────────────
 
 passkey.post('/register/options', async (c) => {
@@ -78,7 +104,7 @@ passkey.post('/register/options', async (c) => {
   const identityLimited = enforceAuthIdentityRateLimit(c, 'passkey', `handle:${handle}`)
   if (identityLimited) return identityLimited
 
-  const { options, challengeId } = await beginRegistration(handle)
+  const { options, challengeId } = await beginRegistration(handle, rpForRequest(c))
   return c.json({ options, challengeId })
 })
 
@@ -102,7 +128,7 @@ passkey.post('/register/verify', async (c) => {
 
   let verified
   try {
-    verified = await verifyRegistration(challengeId, response)
+    verified = await verifyRegistration(challengeId, response, rpForRequest(c))
   } catch {
     // Wrong/expired challenge or a failed attestation — never leak which.
     return c.json({ error: 'registration_failed' }, 400)
@@ -198,7 +224,7 @@ passkey.post('/register/verify', async (c) => {
 passkey.post('/login/options', async (c) => {
   const limited = enforceAuthRateLimit(c, 'passkey')
   if (limited) return limited
-  const { options, challengeId } = await beginLogin()
+  const { options, challengeId } = await beginLogin(rpForRequest(c))
   return c.json({ options, challengeId })
 })
 
@@ -221,7 +247,7 @@ passkey.post('/login/verify', async (c) => {
 
   let sub: string
   try {
-    ;({ sub } = await verifyLogin(challengeId, response))
+    ;({ sub } = await verifyLogin(challengeId, response, rpForRequest(c)))
   } catch {
     return c.json({ error: 'login_failed' }, 400)
   }

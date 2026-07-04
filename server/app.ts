@@ -6,6 +6,7 @@
 import * as Sentry from '@sentry/node'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
+import { serveStatic } from '@hono/node-server/serve-static'
 import { requestId } from 'hono/request-id'
 import { env } from './env.js'
 import { NotConfiguredError } from './services/upstream.js'
@@ -272,4 +273,17 @@ if (env.useMediaCore) {
   // this proxy. Gated on the same flag as /api/media — without media-core
   // there is nothing to hand off.
   app.route('/api/transcode', transcode)
+}
+
+// ── SPA serving (plan 006 Phase 2) ─────────────────────────────────────────
+// A LAN self-host has no Netlify: the backend serves the built SPA from
+// ./dist same-origin. Auto-on when the image ships a dist (env.serveSpa),
+// off in the owner's split Netlify+API deployment. /api/* never falls
+// through to index.html — an unknown API path must stay a JSON 404, not a
+// 200 text/html that confuses every client.
+if (env.serveSpa) {
+  const spaStatic = serveStatic({ root: './dist' })
+  const spaIndex = serveStatic({ path: './dist/index.html' })
+  app.get('*', (c, next) => (c.req.path.startsWith('/api') ? next() : spaStatic(c, next)))
+  app.get('*', (c, next) => (c.req.path.startsWith('/api') ? next() : spaIndex(c, next)))
 }

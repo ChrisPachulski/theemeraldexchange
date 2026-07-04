@@ -422,10 +422,17 @@ async function tryDecrypt(token: string, key: Uint8Array): Promise<Session | nul
 
 export async function setSessionCookie(c: Context, session: Session): Promise<void> {
   const token = await createSession(session)
+  // Same-origin posture (plan 006 Phase 2, SERVE_SPA): the SPA is served
+  // by this backend, so SameSite=Lax suffices (and is stricter than None)
+  // and Secure must NOT be forced — a plain-http LAN login would otherwise
+  // have its cookie silently dropped by the browser. Secure still applies
+  // when the request itself arrived over https. The owner's split
+  // Netlify+API deployment keeps the historical None+Secure pair.
+  const sameOrigin = env.serveSpa
   setCookie(c, COOKIE_NAME, token, {
     httpOnly: true,
-    secure: env.isProd,
-    sameSite: env.isProd ? 'None' : 'Lax',
+    secure: sameOrigin ? c.req.url.startsWith('https:') : env.isProd,
+    sameSite: sameOrigin ? 'Lax' : env.isProd ? 'None' : 'Lax',
     path: '/',
     maxAge: SESSION_TTL_DAYS * 24 * 60 * 60,
   })

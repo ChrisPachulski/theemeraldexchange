@@ -72,6 +72,10 @@ services:
       NODE_ENV: production
       PORT: "3001"
       GRAB_LOG_PATH: "/app/data/grabs.jsonl"
+      # Owner deployment serves the SPA from Netlify — keep backend SPA
+      # serving OFF (plan 006 Phase 2; the self-host compose leaves this
+      # unset so the bundled dist auto-enables it).
+      SERVE_SPA: "${SERVE_SPA:-0}"
       # Optional since plan 006 Phase 0: unset means Plex login is not
       # configured (Plex auth routes 503 plex_not_configured).
       PLEX_CLIENT_ID: "${PLEX_CLIENT_ID:-}"

@@ -91,7 +91,9 @@ describe('passkey register/options', () => {
     const res = await post('/register/options', { handle: 'Chris' })
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ options: { challenge: 'abc' }, challengeId: 'cid-1' })
-    expect(webauthn.beginRegistration).toHaveBeenCalledWith('Chris')
+    // Second arg is the request-derived RP override (plan 006 Phase 2) —
+    // undefined here because the test request has no same-host Origin.
+    expect(webauthn.beginRegistration).toHaveBeenCalledWith('Chris', undefined)
   })
 })
 

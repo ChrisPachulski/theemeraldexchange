@@ -40,6 +40,23 @@ function ClaimBlock({ placement }: { placement: 'hero' | 'foot' }) {
   const pending = signInState === 'pending' || signInState === 'opening'
   const nameId = `walkthrough-claim-name-${placement}`
   const tokenId = `walkthrough-claim-token-${placement}`
+  // WebAuthn needs a secure context: https, or the localhost exception. On
+  // plain http over a LAN IP the passkey ceremony is refused by the BROWSER
+  // before the server ever sees it — show the fix instead of a doomed form.
+  if (typeof window !== 'undefined' && !window.isSecureContext) {
+    return (
+      <div className={`walkthrough__signin walkthrough__signin--${placement}`}>
+        <p className="walkthrough__eyebrow">Claim this server</p>
+        <p className="walkthrough__signin-hint" role="alert">
+          Passkeys need a secure page and this one isn&apos;t
+          (http over the network). Open the app as{' '}
+          <code>http://localhost:3001</code> on the server itself (or an SSH
+          tunnel: <code>ssh -L 3001:localhost:3001 &lt;server&gt;</code>), or
+          use an https address (e.g. Tailscale Serve), then claim from there.
+        </p>
+      </div>
+    )
+  }
   return (
     <div className={`walkthrough__signin walkthrough__signin--${placement}`}>
       <p className="walkthrough__eyebrow">Claim this server</p>

@@ -50,11 +50,21 @@ beforeAll(async () => {
       tmdbApiKey: null,
       useLocalRecommender: false,
       recommenderUrl: 'http://recommender:8000',
+      // Phase 2: backend-served SPA posture (LAN self-host).
+      serveSpa: true,
+      webauthnRpIdExplicit: false,
     },
     isPlexConfigured: () => false,
     isAppleConfigured: () => false,
     isGoogleConfigured: () => false,
   }))
+  // The SPA fallback serves ./dist/index.html relative to cwd; guarantee it
+  // exists (CI may not have run a vite build).
+  const fs = await import('node:fs')
+  if (!fs.existsSync('./dist/index.html')) {
+    fs.mkdirSync('./dist', { recursive: true })
+    fs.writeFileSync('./dist/index.html', '<!doctype html><title>eex test</title>')
+  }
   const mod = await import('./app.js')
   app = mod.app
 })
@@ -99,5 +109,25 @@ describe('unconfigured integrations → typed 503 (never 500, never boot-fail)',
     const r = await app.request('/api/auth/plex/config')
     expect(r.status).toBe(503)
     expect(await r.json()).toEqual({ error: 'plex_not_configured' })
+  })
+})
+
+describe('backend-served SPA (plan 006 Phase 2)', () => {
+  it('GET / serves the SPA index (same-origin, no Netlify)', async () => {
+    const r = await app.request('/')
+    expect(r.status).toBe(200)
+    expect(r.headers.get('content-type') ?? '').toContain('text/html')
+  })
+
+  it('client-side routes fall back to index.html (SPA deep link)', async () => {
+    const r = await app.request('/settings/some/deep/route')
+    expect(r.status).toBe(200)
+    expect(r.headers.get('content-type') ?? '').toContain('text/html')
+  })
+
+  it('unknown /api paths do NOT fall through to index.html', async () => {
+    const r = await app.request('/api/definitely-not-a-route')
+    expect(r.status).toBe(404)
+    expect(r.headers.get('content-type') ?? '').not.toContain('text/html')
   })
 })

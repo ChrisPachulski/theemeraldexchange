@@ -37,6 +37,7 @@
 //                       through a trusted proxy/tunnel that owns CF/Forwarded
 //                       client IP headers.
 
+import { existsSync } from 'node:fs'
 import { config as dotenvConfig } from 'dotenv'
 import { validateSecretStrength, assertSecretsDistinct } from './services/secrets.js'
 import { parseSub } from './services/sub.js'
@@ -99,15 +100,29 @@ const NAS_HOST = 'theemeraldexchange.local'
 const GB = 1024 * 1024 * 1024
 
 const isProd = process.env.NODE_ENV === 'production'
+
+// SERVE_SPA (plan 006 Phase 2): the backend serves the built SPA from
+// ./dist so a LAN self-host needs no Netlify. '1' forces on, '0' forces
+// off, unset auto-detects (on iff dist/index.html shipped in the image) —
+// auto keeps the owner's split Netlify+API deployment untouched (their
+// backend image carries no dist).
+const serveSpa =
+  process.env.SERVE_SPA === '1' ||
+  (process.env.SERVE_SPA !== '0' && existsSync('./dist/index.html'))
+
 const allowedOrigins = csv('ALLOWED_ORIGINS')
 // In prod, session cookies are SameSite=None for the Netlify ↔ NAS
 // split, which means the CSRF middleware relies on the Origin header
 // matching this list to distinguish trusted SPA tabs from attacker
 // pages. An empty list would fail open, so require it explicitly.
-if (isProd && allowedOrigins.length === 0) {
+// With SERVE_SPA on the SPA is same-origin: the CSRF gate accepts
+// same-host Origins and the cookie is SameSite=Lax, so the list is
+// optional (plan 006 Phase 2).
+if (isProd && allowedOrigins.length === 0 && !serveSpa) {
   throw new Error(
     'Missing required env var in production: ALLOWED_ORIGINS ' +
-      '(comma-separated SPA origins, needed for CSRF defense with SameSite=None cookies)',
+      '(comma-separated SPA origins, needed for CSRF defense with SameSite=None cookies). ' +
+      'Not required when SERVE_SPA serves the SPA same-origin.',
   )
 }
 
@@ -464,6 +479,11 @@ export const env = {
   plexServerId,
   port: positiveInt('PORT', 3001),
   isProd,
+  /** Backend serves the built SPA from ./dist (plan 006 Phase 2). */
+  serveSpa,
+  /** True when the operator pinned WEBAUTHN_RP_ID explicitly — disables
+   *  the same-origin request-derived RP fallback (plan 006 Phase 2). */
+  webauthnRpIdExplicit: Boolean(opt('WEBAUTHN_RP_ID')),
   allowedOrigins,
   /** Trust Cloudflare/proxy client IP headers for per-client auth rate limits.
    *  Keep off unless the backend is reachable only through that proxy. */
