@@ -333,14 +333,18 @@ export function authorizeOrRedeem(
 // home location onto Plex's "Security Alert" page for every person signing in.
 // The browser creates the PIN with THIS clientId; the backend's checkPin polls
 // with the SAME clientId, so the authorized token is still found.
-auth.get('/plex/config', (c) =>
-  c.json({ clientId: env.plexClientId, product: PLEX_PRODUCT }),
-)
+auth.get('/plex/config', (c) => {
+  // Plex login is optional (plan 006 Phase 0) — typed 503 mirrors the
+  // apple/google fail-fast pattern so clients hide the Plex button.
+  if (!env.plexClientId) return c.json({ error: 'plex_not_configured' }, 503)
+  return c.json({ clientId: env.plexClientId, product: PLEX_PRODUCT })
+})
 
 // Public, auth-free: which login methods this install offers, so the native
 // app (and SPA) render only the providers that are actually configured. plex
-// is always present (PLEX_CLIENT_ID is required to boot); apple/google are
-// flag+config gated; passkeys are always mounted (WebAuthn has dev defaults).
+// is config-gated on PLEX_CLIENT_ID (optional since plan 006 Phase 0);
+// apple/google are flag+config gated; passkeys are always mounted (WebAuthn
+// has dev defaults).
 // The app reads this on the unpaired screen to build the provider button list.
 auth.get('/methods', (c) =>
   c.json({

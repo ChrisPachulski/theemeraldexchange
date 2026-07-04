@@ -84,6 +84,23 @@ function isStreamTokenOnly(c: Parameters<MiddlewareHandler>[0]): boolean {
   return !!c.req.query('t') && !c.req.header('cookie')
 }
 
+// Same-origin pass (plan 006 Phase 2): a request whose Origin host equals
+// its own Host header is definitionally not cross-site — a hostile page
+// cannot make a victim's browser send the TARGET's origin (browsers stamp
+// the ATTACKER's origin). This is what lets the backend-served SPA
+// (SERVE_SPA) mutate without the operator enumerating ALLOWED_ORIGINS,
+// and it is safe to apply unconditionally. Host-only compare (scheme
+// ignored) so a TLS-terminating sidecar (Tailscale Serve) in front of the
+// plain-http backend still matches.
+function isSameHostOrigin(origin: string | undefined, host: string | undefined): boolean {
+  if (!origin || !host) return false
+  try {
+    return new URL(origin).host === host
+  } catch {
+    return false
+  }
+}
+
 function checkOrigin(origin: string | undefined): { ok: true } | { ok: false; reason: string } {
   if (env.allowedOrigins.length === 0) {
     // Dev / unconfigured: same-origin via Vite proxy. In prod env.ts
@@ -110,6 +127,10 @@ export const requireSafeOrigin: MiddlewareHandler = async (c, next) => {
     await next()
     return
   }
+  if (isSameHostOrigin(c.req.header('origin'), c.req.header('host'))) {
+    await next()
+    return
+  }
   const verdict = checkOrigin(c.req.header('origin'))
   if (!verdict.ok) {
     return c.json({ error: 'forbidden', reason: verdict.reason }, 403)
@@ -124,6 +145,10 @@ export const requireSafeOrigin: MiddlewareHandler = async (c, next) => {
 // like the recommender's recently_shown rotation.
 export const requireTrustedOrigin: MiddlewareHandler = async (c, next) => {
   if (isBearerOnly(c)) {
+    await next()
+    return
+  }
+  if (isSameHostOrigin(c.req.header('origin'), c.req.header('host'))) {
     await next()
     return
   }

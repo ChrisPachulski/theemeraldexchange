@@ -1,0 +1,68 @@
+/* First-run setup checklist (plan 006 Phase 3) — matches the app's dark
+   panel language without importing tab-specific styles. */
+.setup-checklist {
+  margin: 1rem auto;
+  max-width: 720px;
+  padding: 1rem 1.25rem;
+  border: 1px solid rgba(80, 220, 160, 0.35);
+  border-radius: 12px;
+  background: rgba(16, 32, 24, 0.72);
+  color: inherit;
+}
+.setup-checklist__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.setup-checklist__title {
+  margin: 0;
+  font-size: 1.05rem;
+}
+.setup-checklist__dismiss {
+  flex: none;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid rgba(80, 220, 160, 0.5);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.setup-checklist__hint {
+  margin: 0.5rem 0 0.75rem;
+  opacity: 0.8;
+  font-size: 0.9rem;
+}
+.setup-checklist__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.4rem;
+}
+.setup-checklist__row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.setup-checklist__state {
+  flex: none;
+  width: 2.4rem;
+  text-align: center;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  padding: 0.1rem 0;
+}
+.setup-checklist__state--on {
+  background: rgba(80, 220, 160, 0.25);
+}
+.setup-checklist__state--off {
+  background: rgba(255, 255, 255, 0.08);
+  opacity: 0.7;
+}
+.setup-checklist__how {
+  font-size: 0.8rem;
+  opacity: 0.75;
+  overflow-wrap: anywhere;
+}

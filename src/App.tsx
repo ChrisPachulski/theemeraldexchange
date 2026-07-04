@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect } from 'react'
 import { TopNav } from './components/nav/TopNav'
 import { HomeNav } from './components/nav/HomeNav'
+import { SetupChecklist } from './components/setup/SetupChecklist'
 import { HomeTab } from './components/tabs/HomeTab'
 import { Kraken } from './components/atmosphere/Kraken'
 import { LoadingPulse } from './components/feedback/LoadingPulse'
@@ -66,13 +67,24 @@ function Shell() {
   // The Live tab is gated by IPTV_DISABLED — bounce on stale links too
   // (the route still exists in the enum so old bookmarks don't 404 the
   // SPA itself; they just round-trip to home).
+  // Optional integrations (plan 006 Phase 3): a tab whose backing service
+  // is unconfigured bounces home, same as the IPTV gate.
+  const sonarrEnabled = limits.data?.sonarrEnabled !== false
+  const radarrEnabled = limits.data?.radarrEnabled !== false
+  const sabEnabled = limits.data?.sabEnabled !== false
   useEffect(() => {
     if (route === 'users' && !isAdmin) navigate('home')
     if (route === 'live' && !iptvEnabled) navigate('home')
-  }, [route, isAdmin, iptvEnabled, navigate])
+    if (route === 'tv' && !sonarrEnabled) navigate('home')
+    if (route === 'movies' && !radarrEnabled) navigate('home')
+    if (route === 'downloads' && !sabEnabled) navigate('home')
+  }, [route, isAdmin, iptvEnabled, sonarrEnabled, radarrEnabled, sabEnabled, navigate])
   const blocked =
     (route === 'users' && !isAdmin) ||
-    (route === 'live' && !iptvEnabled)
+    (route === 'live' && !iptvEnabled) ||
+    (route === 'tv' && !sonarrEnabled) ||
+    (route === 'movies' && !radarrEnabled) ||
+    (route === 'downloads' && !sabEnabled)
   const effectiveRoute: Route = blocked ? 'home' : route
   const ActiveTab = TABS[effectiveRoute]
   const krakenVariant = effectiveRoute === 'home' ? 'kraken' : 'resting'
@@ -81,6 +93,9 @@ function Shell() {
     <>
       <Kraken variant={krakenVariant} />
       {effectiveRoute === 'home' ? <HomeNav /> : <TopNav active={effectiveRoute} />}
+      {/* First-run setup checklist (plan 006 Phase 3): admin-only, appears
+          once after claiming a fresh server, dismissible forever. */}
+      {effectiveRoute === 'home' && <SetupChecklist />}
       <main role="main">
         <Suspense fallback={<LoadingPulse>Loading</LoadingPulse>}>
           <ActiveTab />

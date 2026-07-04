@@ -1,5 +1,16 @@
 # Deploying The Emerald Exchange (V2)
 
+Two tracks (plan 006):
+
+- **Self-host (LAN, easy)** — anyone standing up their own Emerald server. Pull-based
+  multi-arch images, no accounts/domain/build, browser claim flow. Lives in
+  [`selfhost/`](./selfhost/) — the quickstart is at the top of the README. Nothing below
+  applies to you.
+- **Owner full deployment** — this document: the original operator setup with every profile
+  on (Cloudflare Tunnel, Netlify SPA, Plex login, IPTV, Glitchtip telemetry). It is ONE
+  configuration of the same product; the self-host track gives up none of the member
+  experience.
+
 V2 splits the dashboard across two hosts. The SPA lives on Netlify; the Hono backend lives on the NAS behind a Cloudflare Tunnel.
 
 ```
@@ -17,8 +28,11 @@ api.theemeraldexchange.com       ──▶ Cloudflare Tunnel
 ```
 
 `docker-compose.yml` defines **9 services**: `backend`, `recommender`,
-`media-core`, `transcoder`, `cloudflared`, `glitchtip`, `glitchtip-db`,
-`glitchtip-redis`, `glitchtip-worker`. One deploy script
+`media-core`, `transcoder`, plus the profile-gated `cloudflared`
+(`remote-cloudflare`), `tailscale` (`remote`), and the Glitchtip four
+(`telemetry`). The owner deployment sets
+`COMPOSE_PROFILES=remote-cloudflare,telemetry` in `.env.production`
+(deploy-nas.sh appends it if missing). One deploy script
 (`scripts/deploy-nas.sh`) ships and health-gates the whole stack.
 
 ---

@@ -60,6 +60,50 @@ describe('requireSafeOrigin — safe methods bypass the gate', () => {
   })
 })
 
+describe('requireSafeOrigin — same-host origin pass (plan 006 Phase 2)', () => {
+  it('a POST whose Origin host equals its Host header passes with an empty allowlist (SERVE_SPA posture)', async () => {
+    const app = await buildApp({ allowedOrigins: [], isProd: true })
+    const r = await app.request('/echo', {
+      method: 'POST',
+      headers: { Origin: 'http://nas.local:3001', Host: 'nas.local:3001' },
+    })
+    expect(r.status).toBe(200)
+  })
+
+  it('scheme is ignored (TLS-terminating sidecar in front of plain-http backend)', async () => {
+    const app = await buildApp({ allowedOrigins: [], isProd: true })
+    const r = await app.request('/echo', {
+      method: 'POST',
+      headers: { Origin: 'https://name.tail-net.ts.net', Host: 'name.tail-net.ts.net' },
+    })
+    expect(r.status).toBe(200)
+  })
+
+  it('SECURITY: a cross-host Origin still fails closed even with matching-looking values', async () => {
+    const app = await buildApp({ allowedOrigins: [], isProd: true })
+    for (const origin of [
+      'https://attacker.example', // plain cross-site
+      'http://nas.local:5173', // same host, different port ⇒ different origin host
+      'null', // sandboxed-iframe serialization
+    ]) {
+      const r = await app.request('/echo', {
+        method: 'POST',
+        headers: { Origin: origin, Host: 'nas.local:3001' },
+      })
+      expect(r.status, origin).toBe(403)
+    }
+  })
+
+  it('same-host pass also applies to requireTrustedOrigin (side-effectful GETs)', async () => {
+    const app = await buildApp({ allowedOrigins: [], isProd: true, middleware: 'trusted' })
+    const r = await app.request('/echo', {
+      method: 'GET',
+      headers: { Origin: 'http://nas.local:3001', Host: 'nas.local:3001' },
+    })
+    expect(r.status).toBe(200)
+  })
+})
+
 describe('requireSafeOrigin — unconfigured allowlist', () => {
   it('dev (isProd:false) passes through state-changing requests', async () => {
     const app = await buildApp({ allowedOrigins: [], isProd: false })

@@ -31,11 +31,34 @@ vi.mock('../auth.js', () => ({
   enforceAuthIdentityRateLimit,
 }))
 
-const members = vi.hoisted(() => ({ isMember: vi.fn(), recordMemberLogin: vi.fn() }))
+const members = vi.hoisted(() => ({
+  isMember: vi.fn(),
+  recordMemberLogin: vi.fn(),
+  addMember: vi.fn(),
+}))
 vi.mock('../services/members.js', () => members)
 
 const { setSessionCookie } = vi.hoisted(() => ({ setSessionCookie: vi.fn() }))
 vi.mock('../session.js', () => ({ setSessionCookie }))
+
+// First-owner claim collaborators (plan 006 Phase 1). Default posture is a
+// CLAIMED install (isClaimable false) so the legacy invite-flow tests keep
+// exercising the shared authZ gate; the claim tests flip these per-case.
+const setupState = vi.hoisted(() => ({
+  isClaimable: vi.fn(() => false),
+  verifySetupToken: vi.fn(() => false),
+  markClaimed: vi.fn(),
+  claimSourceAllowed: vi.fn(() => true),
+  ensureSetupToken: vi.fn(),
+}))
+vi.mock('../services/setupState.js', () => setupState)
+
+// The claim path wraps its mint in a serverDb transaction; a pass-through
+// keeps these tests at route-orchestration level (setupState/members are
+// already mocked, so there is no real db work to make atomic).
+vi.mock('../services/serverDb.js', () => ({
+  serverDb: () => ({ raw: { transaction: (fn: (...a: unknown[]) => unknown) => fn } }),
+}))
 
 import { passkey } from './passkey.js'
 
@@ -68,7 +91,9 @@ describe('passkey register/options', () => {
     const res = await post('/register/options', { handle: 'Chris' })
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ options: { challenge: 'abc' }, challengeId: 'cid-1' })
-    expect(webauthn.beginRegistration).toHaveBeenCalledWith('Chris')
+    // Second arg is the request-derived RP override (plan 006 Phase 2) —
+    // undefined here because the test request has no same-host Origin.
+    expect(webauthn.beginRegistration).toHaveBeenCalledWith('Chris', undefined)
   })
 })
 
@@ -125,6 +150,95 @@ describe('passkey register/verify', () => {
   it('400s a malformed request body', async () => {
     expect((await post('/register/verify', { challengeId: 'x' })).status).toBe(400)
     expect((await post('/register/verify', { response: {} })).status).toBe(400)
+  })
+})
+
+describe('first-owner claim (plan 006 Phase 1)', () => {
+  const verified = {
+    sub: 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV',
+    handle: 'Owner',
+    credential: { id: 'cred1', publicKey: new Uint8Array([1]), counter: 0, transports: [], backedUp: true },
+  }
+  const claimBody = {
+    challengeId: 'cid-1',
+    response: { id: 'cred1' },
+    setupToken: 'a'.repeat(64),
+  }
+
+  it('valid token claims the server: admin member row + credential + burned token + admin session', async () => {
+    webauthn.verifyRegistration.mockResolvedValue(verified)
+    setupState.isClaimable.mockReturnValue(true)
+    setupState.verifySetupToken.mockReturnValue(true)
+
+    const res = await post('/register/verify', claimBody)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({
+      ok: true,
+      claimed: true,
+      user: { sub: verified.sub, username: 'Owner', role: 'admin' },
+    })
+    expect(members.addMember).toHaveBeenCalledWith(
+      expect.objectContaining({ sub: verified.sub, role: 'admin', authMode: 'local' }),
+    )
+    expect(webauthn.persistCredential).toHaveBeenCalledTimes(1)
+    expect(setupState.markClaimed).toHaveBeenCalledWith(verified.sub)
+    expect(setSessionCookie).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ role: 'admin', auth_mode: 'local' }),
+    )
+    // The claim never consults the invite gate.
+    expect(authorizeOrRedeem).not.toHaveBeenCalled()
+  })
+
+  it('SECURITY: bad token → 403, no member, no credential, no session', async () => {
+    webauthn.verifyRegistration.mockResolvedValue(verified)
+    setupState.isClaimable.mockReturnValue(true)
+    setupState.verifySetupToken.mockReturnValue(false)
+
+    const res = await post('/register/verify', claimBody)
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: 'invalid_setup_token' })
+    expect(members.addMember).not.toHaveBeenCalled()
+    expect(webauthn.persistCredential).not.toHaveBeenCalled()
+    expect(setSessionCookie).not.toHaveBeenCalled()
+  })
+
+  it('SECURITY: blocked source address → 403 before the token is even checked', async () => {
+    webauthn.verifyRegistration.mockResolvedValue(verified)
+    setupState.isClaimable.mockReturnValue(true)
+    setupState.claimSourceAllowed.mockReturnValue(false)
+
+    const res = await post('/register/verify', claimBody)
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: 'claim_source_blocked' })
+    expect(setupState.verifySetupToken).not.toHaveBeenCalled()
+    expect(webauthn.persistCredential).not.toHaveBeenCalled()
+    setupState.claimSourceAllowed.mockReturnValue(true)
+  })
+
+  it('SECURITY: race — claim already taken inside the transaction → 403 already_claimed', async () => {
+    webauthn.verifyRegistration.mockResolvedValue(verified)
+    setupState.verifySetupToken.mockReturnValue(true)
+    // Token check passes (pre-transaction) but the transactional re-check
+    // sees another claim landed first.
+    setupState.isClaimable.mockReturnValue(false)
+
+    const res = await post('/register/verify', claimBody)
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: 'already_claimed' })
+    expect(setupState.markClaimed).not.toHaveBeenCalled()
+    expect(setSessionCookie).not.toHaveBeenCalled()
+  })
+
+  it('SECURITY: while claimable, an un-tokened registration is refused (fall-open closed)', async () => {
+    webauthn.verifyRegistration.mockResolvedValue(verified)
+    setupState.isClaimable.mockReturnValue(true)
+
+    const res = await post('/register/verify', { challengeId: 'cid-1', response: { id: 'cred1' } })
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: 'server_unclaimed' })
+    expect(authorizeOrRedeem).not.toHaveBeenCalled()
+    expect(webauthn.persistCredential).not.toHaveBeenCalled()
   })
 })
 

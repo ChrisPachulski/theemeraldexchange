@@ -23,6 +23,11 @@
 #   3. Image size delta is ~50 MB. Acceptable given the glibc
 #      compatibility and the new linux-x64-gnu .node payload.
 
+# BUNDLE_SPA (plan 006 Phase 2): 'on' bundles the vite-built SPA into the
+# image (self-host, GHCR publish); 'off' (default) skips the SPA stage
+# entirely so the owner's NAS deploy never runs a vite build on the box.
+ARG BUNDLE_SPA=off
+
 # Digest-pinned for reproducible builds. The human tag is kept for readability;
 # the digest is the source of truth. Resolve a new digest with:
 #   docker buildx imagetools inspect rust:1.96-slim-bookworm
@@ -73,6 +78,35 @@ WORKDIR /build/crates/emerald-contracts-napi
 # .node that the crypto/contracts wire boundary loads, so a floating major is a
 # reproducibility risk for the wire-format-sensitive binding.
 RUN npx --yes --package @napi-rs/cli@3.7.0 napi build --platform --release
+
+# ---------------------------------------------------------------------------
+# SPA build (plan 006 Phase 2): the SELF-HOST image serves the web client
+# same-origin from ./dist (env.serveSpa auto-detects it). Gated behind
+# BUNDLE_SPA so the owner's NAS deploy (BUNDLE_SPA=off, the default) never
+# runs a vite build on the weak NAS CPU — BuildKit skips unused stages, so
+# with 'off' the spa-on stage costs nothing. The GHCR self-host publish
+# passes --build-arg BUNDLE_SPA=on.
+#
+# --ignore-scripts skips the better-sqlite3/node-gyp compile and the napi
+# prepare — a vite build needs neither native module (rollup/esbuild ship
+# prebuilt platform packages). VITE_API_BASE_URL is deliberately UNSET:
+# apiUrl() then falls back to window.location.origin, which is exactly
+# right for same-origin serving.
+FROM node:24-slim@sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf AS spa-on
+WORKDIR /spa
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts
+COPY index.html vite.config.ts tsconfig.json tsconfig.app.json tsconfig.node.json ./
+COPY src ./src
+COPY public ./public
+RUN npx vite build
+
+# Empty stand-in: BUNDLE_SPA=off yields an empty /spa/dist (no index.html),
+# so env.serveSpa auto-detection stays off — today's owner posture.
+FROM node:24-slim@sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf AS spa-off
+RUN mkdir -p /spa/dist
+
+FROM spa-${BUNDLE_SPA} AS spa-dist
 
 # ---------------------------------------------------------------------------
 # Digest-pinned for reproducible builds. Resolve a new digest with:
@@ -150,6 +184,11 @@ COPY tsconfig.json ./
 # --chmod guarantees the exec bit regardless of the staged file's mode.
 COPY --chmod=0755 bin/eex-ytresolve /usr/local/bin/eex-ytresolve
 ENV EEX_YTRESOLVE_BIN=/usr/local/bin/eex-ytresolve
+
+# SPA bundle (plan 006 Phase 2): empty dir when BUNDLE_SPA=off (owner
+# posture → env.serveSpa auto-off), the vite build when 'on' (self-host
+# → backend serves it same-origin at /).
+COPY --from=spa-dist /spa/dist ./dist
 
 # Bind-mount target for the grab-event log + sqlite DBs. Created here
 # so a fresh host directory still has the right ownership inside the

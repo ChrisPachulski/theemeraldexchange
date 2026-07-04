@@ -318,6 +318,13 @@ echo "→ Shipping env"
 rsync -av "$LOCAL_ENV" "${NAS_USER}@${NAS_HOST}:${APPDATA}/.env"
 ssh "${NAS_USER}@${NAS_HOST}" "chmod 600 ${APPDATA}/.env"
 
+# Plan 006 Phase 4: cloudflared + glitchtip moved behind compose profiles
+# (remote-cloudflare / telemetry). The owner deployment runs BOTH; if the
+# shipped env predates the change, default the profiles here so a deploy
+# never silently drops the public tunnel or telemetry stack. Compose reads
+# COMPOSE_PROFILES from the project .env automatically.
+ssh "${NAS_USER}@${NAS_HOST}" "grep -qE '^COMPOSE_PROFILES=' ${APPDATA}/.env || { echo 'COMPOSE_PROFILES=remote-cloudflare,telemetry' >> ${APPDATA}/.env; echo '[deploy] NOTE: appended COMPOSE_PROFILES=remote-cloudflare,telemetry (owner default) — set it in .env.production to silence this'; }"
+
 ssh "${NAS_USER}@${NAS_HOST}" "test -f ${APPDATA}/.dockerignore || echo '[deploy] WARN: .dockerignore not present in build context — context will include .env, data/, recommender-db/'"
 
 # Pre-create + chown the sidecar DB bind-mount dirs to their in-container

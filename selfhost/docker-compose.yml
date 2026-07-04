@@ -1,0 +1,190 @@
+# The Emerald Exchange — SELF-HOST compose (plan 006 Phase 5).
+#
+# Pulls prebuilt multi-arch images from GHCR (amd64 + arm64) — no local
+# build, ever. The default `docker compose up -d` starts the core LAN
+# stack only:
+#
+#   backend      — API + the web app served same-origin at http://<host>:3001
+#   media-core   — library scanner/server (point MEDIA_PATH at your files)
+#   transcoder   — HLS transcoding (CPU by default; VAAPI opt-in below)
+#   recommender  — local-first recommendations (your taste never leaves the box)
+#
+# Optional capabilities are compose profiles (set COMPOSE_PROFILES in .env):
+#   remote     — private remote access via Tailscale Serve (TS_AUTHKEY)
+#
+# First run:  ./install.sh   (or: sh scripts/self-host-env.sh && docker compose up -d)
+# Then open http://<this-host>:3001 and claim the server with the setup
+# token printed in `docker compose logs backend`.
+
+services:
+  backend:
+    image: ghcr.io/chrispachulski/theemeraldexchange-backend:latest
+    container_name: emerald-backend
+    restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    ports:
+      # LAN-reachable on purpose (no tunnel in front). Change to
+      # "127.0.0.1:3001:3001" if you only ever access via the remote profile.
+      - "3001:3001"
+    volumes:
+      - backend-data:/app/data
+      - media-core-db:/media-core-db
+    environment:
+      NODE_ENV: production
+      PORT: "3001"
+      # The image bundles the web app (BUNDLE_SPA=on) — SERVE_SPA auto-detects
+      # it and serves same-origin. Secrets come from .env (install.sh
+      # generates them; never commit that file).
+      SESSION_SECRET: "${SESSION_SECRET}"
+      STREAM_TOKEN_SECRET: "${STREAM_TOKEN_SECRET}"
+      DEVICE_TOKEN_SECRET: "${DEVICE_TOKEN_SECRET}"
+      INTERNAL_PRINCIPAL_SECRET: "${INTERNAL_PRINCIPAL_SECRET}"
+      # ── everything below is OPTIONAL — leave blank to skip ──
+      # Plex login (a fresh install uses passkeys; Plex is one extra provider)
+      PLEX_CLIENT_ID: "${PLEX_CLIENT_ID:-}"
+      PLEX_SERVER_ID: "${PLEX_SERVER_ID:-}"
+      # Requests/downloads (Sonarr / Radarr / SAB) — tabs hide when unset
+      SONARR_URL: "${SONARR_URL:-}"
+      SONARR_API_KEY: "${SONARR_API_KEY:-}"
+      RADARR_URL: "${RADARR_URL:-}"
+      RADARR_API_KEY: "${RADARR_API_KEY:-}"
+      SAB_URL: "${SAB_URL:-}"
+      SAB_API_KEY: "${SAB_API_KEY:-}"
+      DEFAULT_ROOT_FOLDER_PATH: "${DEFAULT_ROOT_FOLDER_PATH:-}"
+      # Richer metadata/discovery (free key from themoviedb.org)
+      TMDB_READ_ACCESS_TOKEN: "${TMDB_READ_ACCESS_TOKEN:-}"
+      TMDB_API_KEY: "${TMDB_API_KEY:-}"
+      # Live TV (Xtream/IPTV provider) — Live tab hides when unset
+      XTREAM_HOST: "${XTREAM_HOST:-}"
+      XTREAM_USERNAME: "${XTREAM_USERNAME:-}"
+      XTREAM_PASSWORD: "${XTREAM_PASSWORD:-}"
+      IPTV_DB_PATH: "/app/data/iptv.db"
+      # Media library + local recommendations: on by default (the point of
+      # the product). MEDIA_PATH is set in .env by install.sh.
+      USE_MEDIA_CORE: "1"
+      MEDIA_CORE_URL: "http://media-core:8002"
+      MEDIA_DB_PATH: "/media-core-db/media.db"
+      MEDIA_TRANSCODER_URL: "http://transcoder:8003"
+      USE_LOCAL_RECOMMENDER: "1"
+      RECOMMENDER_URL: "http://recommender:8000"
+      RECOMMENDER_EVENT_SECRET: "${RECOMMENDER_EVENT_SECRET}"
+      SERVER_DB_PATH: "/app/data/server.db"
+      GRAB_LOG_PATH: "/app/data/grabs.jsonl"
+
+  media-core:
+    image: ghcr.io/chrispachulski/theemeraldexchange-media-core:latest
+    container_name: emerald-media-core
+    restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - media-core-db:/data
+      - "${MEDIA_PATH:?set MEDIA_PATH in .env to your media folder}:/media:ro"
+    environment:
+      MEDIA_CORE_HOST: "0.0.0.0"
+      MEDIA_CORE_PORT: "8002"
+      MEDIA_DB_PATH: "/data/media.db"
+      MEDIA_LIBRARY_PATHS: "/media"
+      INTERNAL_PRINCIPAL_SECRET: "${INTERNAL_PRINCIPAL_SECRET}"
+      MEDIA_INTERNAL_PRINCIPAL_MODE: "enforce"
+      TMDB_API_KEY: "${TMDB_API_KEY:-}"
+      MEDIA_TRANSCODER_URL: "http://transcoder:8003"
+      RUST_LOG: "media_core=info"
+
+  transcoder:
+    image: ghcr.io/chrispachulski/theemeraldexchange-transcoder:latest
+    container_name: emerald-transcoder
+    restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    volumes:
+      - "${MEDIA_PATH:?set MEDIA_PATH in .env to your media folder}:/media:ro"
+      - transcoder-scratch:/scratch
+    # Intel iGPU (VAAPI) hardware transcoding — uncomment on a box with
+    # /dev/dri and set TRANSCODER_HW_ENCODER=vaapi in .env. The default is
+    # CPU (libx264): works everywhere, just slower.
+    # devices:
+    #   - "/dev/dri/renderD128:/dev/dri/renderD128"
+    # group_add:
+    #   - "18"
+    environment:
+      TRANSCODER_HOST: "0.0.0.0"
+      TRANSCODER_PORT: "8003"
+      TRANSCODER_TMP_DIR: "/scratch"
+      TRANSCODER_HW_ENCODER: "${TRANSCODER_HW_ENCODER:-cpu}"
+      INTERNAL_PRINCIPAL_SECRET: "${INTERNAL_PRINCIPAL_SECRET}"
+      MEDIA_INTERNAL_PRINCIPAL_MODE: "enforce"
+      RUST_LOG: "transcoder=info"
+
+  recommender:
+    image: ghcr.io/chrispachulski/theemeraldexchange-recommender:latest
+    container_name: emerald-recommender
+    restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    volumes:
+      - recommender-db:/data
+    environment:
+      RECOMMENDER_DB_PATH: "/data/exchange.db"
+      RECOMMENDER_HOST: "0.0.0.0"
+      RECOMMENDER_PORT: "8000"
+      RECOMMENDER_EVENT_SECRET: "${RECOMMENDER_EVENT_SECRET}"
+      INTERNAL_PRINCIPAL_SECRET: "${INTERNAL_PRINCIPAL_SECRET}"
+      RECOMMENDER_INTERNAL_PRINCIPAL_MODE: "enforce"
+      HONO_HOST: "http://backend:3001"
+      TMDB_READ_ACCESS_TOKEN: "${TMDB_READ_ACCESS_TOKEN:-}"
+
+  # ── PRIVATE remote access (COMPOSE_PROFILES=remote) ──────────────────────
+  # Tailscale Serve: https://<TS_HOSTNAME>.<your-tailnet>.ts.net, visible to
+  # YOUR tailnet devices only — never the public internet. The https hostname
+  # also gives passkeys a proper secure context away from home.
+  tailscale:
+    image: tailscale/tailscale:v1.94.1@sha256:21df0b5a84efa35c0a507f4dd2340e1b1295683634a28968707354d5bd991d9c
+    container_name: emerald-tailscale
+    restart: unless-stopped
+    profiles: ["remote"]
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    network_mode: "service:backend"
+    environment:
+      TS_AUTHKEY: "${TS_AUTHKEY:-}"
+      TS_HOSTNAME: "${TS_HOSTNAME:-emerald}"
+      TS_STATE_DIR: "/var/lib/tailscale"
+      TS_SERVE_CONFIG: "/config/serve.json"
+      TS_USERSPACE: "true"
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - ./tailscale-serve.json:/config/serve.json:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  backend-data:
+  media-core-db:
+  recommender-db:
+  transcoder-scratch:
+  tailscale-state:

@@ -35,7 +35,39 @@ the transcoder — is implementation detail, never visible from inside the exper
 - **Built to ship native** — the web client is the reference surface; native iOS/tvOS is the
   distribution target.
 
-## Quick start
+## Run your own Emerald server
+
+Like running a Jellyfin server: prebuilt multi-arch images (amd64 + arm64), no accounts, no
+domain, no build. On any box with Docker:
+
+```bash
+mkdir emerald && cd emerald
+curl -fsSL https://raw.githubusercontent.com/ChrisPachulski/theemeraldexchange/main/selfhost/install.sh | sh
+docker compose up -d
+```
+
+The installer generates every secret and asks for your media folder. Then open
+`http://<host>:3001` and **claim the server**: register a passkey with the one-time setup token
+from `docker compose logs backend`. You're the owner — invite your household from the Users tab.
+
+Everything else is opt-in, one flag each:
+
+| Capability | Turn it on with |
+|---|---|
+| Remote access (private, via your [Tailscale](https://tailscale.com) tailnet) | `COMPOSE_PROFILES=remote` + `TS_AUTHKEY` |
+| Remote access (public, via Cloudflare Tunnel + your domain) | `COMPOSE_PROFILES=remote-cloudflare` + `TUNNEL_TOKEN` |
+| Richer metadata & discovery | `TMDB_READ_ACCESS_TOKEN` (free key) |
+| Requests & downloads (existing Sonarr / Radarr / SAB) | `SONARR_API_KEY` / `RADARR_API_KEY` / `SAB_API_KEY` |
+| Live TV (your Xtream/IPTV provider) | `XTREAM_HOST` / `XTREAM_USERNAME` / `XTREAM_PASSWORD` |
+| Plex login as an extra sign-in provider | `PLEX_CLIENT_ID` (+ `PLEX_SERVER_ID`) |
+| Error telemetry (self-hosted Glitchtip) | `COMPOSE_PROFILES=telemetry` + `TELEMETRY_ENABLED=1` |
+
+With everything off you still get the core product: library browsing + playback, passkey
+sign-in, owner-controlled invites, and local-first recommendations. Passkey note: use a
+hostname (`http://localhost:3001` on the box, the `.local` mDNS name, or the Tailscale https
+URL) — WebAuthn doesn't work on a bare `192.168.x.x` address.
+
+## Quick start (development)
 
 ```bash
 npm install
@@ -162,11 +194,15 @@ cargo test -p emerald-contracts -p media-core -p transcoder
 
 ## Deploy
 
-Self-hosted on the NAS (`root@theemeraldexchange.local`, Unraid) via `docker-compose` (9
-services: backend, recommender, media-core, transcoder, cloudflared, and the 4-container
-Glitchtip telemetry stack) behind a Cloudflare Tunnel; the SPA ships to Netlify. Crash/error
-telemetry is per-self-hoster Glitchtip, with the DSN distributed server → client at boot. See
-**[DEPLOY.md](./DEPLOY.md)**.
+Two tracks (see **[DEPLOY.md](./DEPLOY.md)**):
+
+- **Self-host (LAN, easy)** — `selfhost/`: pull-based multi-arch images, 4 core services,
+  optional profiles. The quickstart at the top of this README.
+- **Owner full deployment** — the same images/compose with every profile on: NAS
+  (`docker-compose` with `COMPOSE_PROFILES=remote-cloudflare,telemetry` → backend, recommender,
+  media-core, transcoder, cloudflared, and the 4-container Glitchtip stack) behind a Cloudflare
+  Tunnel, SPA on Netlify, Plex login enabled. One configuration of the same product — nothing
+  the self-host track gives up is lost here.
 
 ## Docs
 

@@ -26,6 +26,7 @@ import { drainRemuxSessions } from './services/iptvRemux.js'
 import { iptvDb, closeIptvDb } from './services/iptvDbSingleton.js'
 import { startDvrScheduler, type DvrScheduler } from './services/dvrRecorder.js'
 import { ensureServerId, closeServerDb } from './services/serverDb.js'
+import { ensureSetupToken } from './services/setupState.js'
 import { createLogger } from './services/logger.js'
 import { warnExpiredCompatWindows } from './services/compatWindows.js'
 
@@ -57,7 +58,8 @@ if (env.EEX_TELEMETRY_DSN) {
 } else {
   log.warn(
     'EEX_TELEMETRY_DSN is not set. Sentry SDK will not be initialized. ' +
-      'Telemetry is mandatory in production (§15.1).',
+      'Telemetry is opt-in (§15.1 amended by plan 006); set TELEMETRY_ENABLED=1 ' +
+      'in deployments that run the telemetry stack so a lost DSN fails loudly.',
   )
 }
 
@@ -65,6 +67,11 @@ if (env.EEX_TELEMETRY_DSN) {
 // first boot (INSERT OR IGNORE — safe to call on every subsequent boot).
 const serverId = ensureServerId()
 log.info('server_id resolved', { serverId })
+
+// First-owner claim (plan 006 Phase 1): while the install is un-gated and
+// unclaimed, mint the one-time setup token and print it — the token is the
+// proof-of-ownership the claim flow requires. No-op once claimed/gated.
+ensureSetupToken()
 
 // Surface any dated backward-compat shim whose removal date has passed —
 // expiry becomes a boot log line instead of a manual calendar sweep.

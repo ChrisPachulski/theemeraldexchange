@@ -1,0 +1,13 @@
+{
+  "__comment": "Tailscale Serve config (plan 006 Phase 4): serves the backend at https://<hostname>.<tailnet>.ts.net to TAILNET DEVICES ONLY. ${TS_CERT_DOMAIN} is substituted by the container at start. To expose PUBLICLY via Funnel (deliberate escalation), add  \"AllowFunnel\": { \"${TS_CERT_DOMAIN}:443\": true }  at the top level.",
+  "TCP": {
+    "443": { "HTTPS": true }
+  },
+  "Web": {
+    "${TS_CERT_DOMAIN}:443": {
+      "Handlers": {
+        "/": { "Proxy": "http://127.0.0.1:3001" }
+      }
+    }
+  }
+}

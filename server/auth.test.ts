@@ -47,6 +47,9 @@ vi.mock('./services/membership.js', () => ({
 const addMemberSpy = vi.fn()
 vi.mock('./services/members.js', () => ({
   addMember: (opts: unknown) => addMemberSpy(opts),
+  // sessionGate consults isMember for the DB-backed admin role (plan 006
+  // Phase 1); null = no members row, so roles stay env-driven here.
+  isMember: () => null,
 }))
 
 // Apple verifier: success keyed on a fixed valid-token sentinel; otherwise

@@ -6,8 +6,10 @@
 import * as Sentry from '@sentry/node'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
+import { serveStatic } from '@hono/node-server/serve-static'
 import { requestId } from 'hono/request-id'
 import { env } from './env.js'
+import { NotConfiguredError } from './services/upstream.js'
 import { serverDb } from './services/serverDb.js'
 import { requireSafeOrigin } from './middleware/csrf.js'
 import { auth, me } from './auth.js'
@@ -37,6 +39,7 @@ import { transcode } from './routes/transcode.js'
 import { devices, adminDevices } from './routes/devices.js'
 import { adminInvites, adminMembers } from './routes/adminInvites.js'
 import { passkey } from './routes/passkey.js'
+import { setup } from './routes/setup.js'
 import { version } from './routes/version.js'
 
 export const app = new Hono()
@@ -48,6 +51,12 @@ export const app = new Hono()
 // no PII leaves the box. captureException is a no-op when Sentry.init was never
 // called (dev without EEX_TELEMETRY_DSN), so this is safe in every environment.
 app.onError((err, c) => {
+  // Optional integrations (plan 006 Phase 0): an unconfigured service is an
+  // expected state, not an incident — typed 503 mirroring tmdb_not_configured,
+  // no telemetry capture.
+  if (err instanceof NotConfiguredError) {
+    return c.json({ error: `${err.service}_not_configured` }, 503)
+  }
   // LOW-29: tag the exception with the request id so a Glitchtip event can be
   // tied back to the matching `[<id>]` log line (and the client's X-Request-Id).
   Sentry.captureException(err, { tags: { request_id: c.get('requestId') } })
@@ -164,6 +173,13 @@ app.get('/api/limits', (c) =>
     // (/api/media/music/*) and audio playback ride the same proxy, so both
     // facts are required. Public boolean — no secret leakage.
     musicEnabled: env.useMediaCore && env.musicRootsConfigured,
+    // Optional integrations (plan 006 Phase 3): the SPA hides the
+    // request/download surfaces an unconfigured install can't serve
+    // (mirrors iptvEnabled — the same facts are implied by the typed
+    // 503 <service>_not_configured anyway). Public booleans only.
+    sonarrEnabled: Boolean(env.sonarrApiKey),
+    radarrEnabled: Boolean(env.radarrApiKey),
+    sabEnabled: Boolean(env.sabApiKey),
   }),
 )
 
@@ -175,6 +191,10 @@ app.route('/api/auth/device', device)
 // identity path. Public (these endpoints ARE the login); self-owned local:
 // users gated by the same invite/members allowlist as Plex/Apple.
 app.route('/api/auth/passkey', passkey)
+// First-owner claim status (plan 006 Phase 1). Public: the SPA walkthrough
+// asks this once to decide whether to render the claim panel. The claim
+// itself is the passkey registration path + setup token.
+app.route('/api/setup', setup)
 app.route('/api/me', me)
 // /api/version is public — discovers server_id + auth_modes for Apple
 // PIN-pair (Keychain keying + UI gating). Mounted last under /api/v.
@@ -260,4 +280,17 @@ if (env.useMediaCore) {
   // this proxy. Gated on the same flag as /api/media — without media-core
   // there is nothing to hand off.
   app.route('/api/transcode', transcode)
+}
+
+// ── SPA serving (plan 006 Phase 2) ─────────────────────────────────────────
+// A LAN self-host has no Netlify: the backend serves the built SPA from
+// ./dist same-origin. Auto-on when the image ships a dist (env.serveSpa),
+// off in the owner's split Netlify+API deployment. /api/* never falls
+// through to index.html — an unknown API path must stay a JSON 404, not a
+// 200 text/html that confuses every client.
+if (env.serveSpa) {
+  const spaStatic = serveStatic({ root: './dist' })
+  const spaIndex = serveStatic({ path: './dist/index.html' })
+  app.get('*', (c, next) => (c.req.path.startsWith('/api') ? next() : spaStatic(c, next)))
+  app.get('*', (c, next) => (c.req.path.startsWith('/api') ? next() : spaIndex(c, next)))
 }

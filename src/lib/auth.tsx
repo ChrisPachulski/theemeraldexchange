@@ -60,6 +60,15 @@ export function deniedMessage(reason: unknown): string {
       return 'Your access to this library has been revoked. Ask the owner to restore it.'
     case 'not_a_server_member':
       return "You aren't a member of this Plex server."
+    // First-owner claim (plan 006 Phase 1)
+    case 'invalid_setup_token':
+      return 'That setup token is wrong or expired. Copy it from the server log (or the .setup-token file) and try again.'
+    case 'claim_source_blocked':
+      return 'Claiming is only allowed from the local network. Connect to the same LAN as the server (or set SETUP_ALLOW_REMOTE=1).'
+    case 'already_claimed':
+      return 'Someone already claimed this server.'
+    case 'server_unclaimed':
+      return 'This server has not been claimed yet. Its owner must claim it with the setup token first.'
     default:
       return 'Access denied.'
   }
@@ -151,8 +160,21 @@ type AuthCtx = {
    * invite code (the invite is what authorizes the new identity onto the
    * members allowlist — same gate as Plex/Apple). Returns true on success.
    */
-  passkeyRegister: (args: { handle: string; inviteCode?: string }) => Promise<boolean>
+  passkeyRegister: (args: {
+    handle: string
+    inviteCode?: string
+    /** First-owner claim (plan 006 Phase 1): the boot-minted setup token. */
+    setupToken?: string
+  }) => Promise<boolean>
   signOut: () => Promise<void>
+  /**
+   * Which login providers this install actually offers (/api/auth/methods).
+   * null until fetched — render all buttons while unknown so a slow API
+   * never hides the way in.
+   */
+  authMethods: { plex: boolean; apple: boolean; google: boolean; passkey: boolean } | null
+  /** True while the server is unclaimed (plan 006 Phase 1 claim flow). */
+  setupClaimable: boolean
 }
 
 const AuthContext = createContext<AuthCtx | null>(null)
@@ -213,6 +235,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       alive = false
     }
   }, [applyUser])
+
+  // Provider discovery + first-owner claim state (plan 006 Phase 1).
+  // Best-effort: on failure authMethods stays null (all buttons render)
+  // and setupClaimable stays false (normal sign-in).
+  const [authMethods, setAuthMethods] = useState<AuthCtx['authMethods']>(null)
+  const [setupClaimable, setSetupClaimable] = useState(false)
+  useEffect(() => {
+    let alive = true
+    fetch(apiUrl('/api/auth/methods'))
+      .then(async (r) => {
+        if (alive && r.ok) setAuthMethods((await r.json()) as AuthCtx['authMethods'])
+      })
+      .catch(() => {})
+    fetch(apiUrl('/api/setup/status'))
+      .then(async (r) => {
+        if (alive && r.ok) {
+          const { claimable } = (await r.json()) as { claimable?: boolean }
+          setSetupClaimable(Boolean(claimable))
+        }
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [])
 
   // Centralised 401/403 handling. queryClient dispatches SESSION_EXPIRED_EVENT
   // (debounced) when any query/mutation fails auth, so an expired cookie clears
@@ -517,7 +564,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [applyUser])
 
   const passkeyRegister = useCallback(
-    async ({ handle, inviteCode }: { handle: string; inviteCode?: string }): Promise<boolean> => {
+    async ({
+      handle,
+      inviteCode,
+      setupToken,
+    }: {
+      handle: string
+      inviteCode?: string
+      setupToken?: string
+    }): Promise<boolean> => {
       if (signInInFlightRef.current) return false
       signInInFlightRef.current = true
       setSignInError(null)
@@ -557,6 +612,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             challengeId,
             response: attestation,
             inviteCode,
+            setupToken,
             deviceLabel: handle,
           }),
         })
@@ -571,10 +627,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setSignInError('Could not create the passkey. Try again.')
           return false
         }
-        const data = (await verifyRes.json()) as { ok?: boolean; user?: AuthUser }
+        const data = (await verifyRes.json()) as {
+          ok?: boolean
+          user?: AuthUser
+          claimed?: boolean
+        }
         if (data.ok && data.user) {
           applyUser(data.user)
           setDiscoveredServers(null)
+          if (data.claimed) {
+            setSetupClaimable(false)
+            // Surface the first-run setup checklist to the fresh owner
+            // (plan 006 Phase 3).
+            void import('./setupChecklistFlag').then((m) => m.requestSetupChecklist())
+          }
           setSignInState('idle')
           return true
         }
@@ -639,6 +705,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         passkeyLogin,
         passkeyRegister,
         signOut,
+        authMethods,
+        setupClaimable,
       }}
     >
       {children}

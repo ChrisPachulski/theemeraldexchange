@@ -1,0 +1,148 @@
+import { test, expect } from '@playwright/test'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
+// Plan 006 Phase 6 — the self-host smoke, end to end and UNMOCKED:
+// a bare production backend (no Plex, no *arr, no IPTV, no telemetry, no
+// ALLOWED_ORIGINS) serving the real built SPA same-origin, claimed through
+// the real browser UI with a REAL WebAuthn ceremony (CDP virtual
+// authenticator), then proving the fall-open gate closed and the owner can
+// mint invites. This is the "a stranger can run one" acceptance test.
+//
+// Spawns its OWN server (the shared integrationServer is a claimed,
+// arr-configured install — the opposite posture). http://localhost is a
+// secure context, and 'localhost' is a valid request-derived RP ID, so the
+// zero-WebAuthn-env path (plan 006 Phase 2) is what gets exercised.
+
+const PORT = 3199
+const BASE = `http://localhost:${PORT}`
+const HAS_DIST = fs.existsSync('dist/index.html')
+
+let server: ChildProcess | undefined
+let dataDir: string
+
+function secret(): string {
+  return randomBytes(48).toString('base64')
+}
+
+async function waitForHealth(): Promise<void> {
+  for (let i = 0; i < 60; i++) {
+    try {
+      const r = await fetch(`${BASE}/api/health`)
+      if (r.ok) return
+    } catch {
+      /* not up yet */
+    }
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  throw new Error('bare self-host server never became healthy')
+}
+
+test.describe('self-host: bare boot → claim → gate closed → invites', () => {
+  test.skip(!HAS_DIST, 'needs a vite build (dist/index.html) — run `npx vite build`')
+
+  test.beforeAll(async () => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eex-claim-'))
+    server = spawn('npx', ['tsx', 'server/index.ts'], {
+      env: {
+        PATH: process.env.PATH ?? '',
+        HOME: process.env.HOME ?? '',
+        // The Phase 0 contract: production boots on secrets alone.
+        NODE_ENV: 'production',
+        PORT: String(PORT),
+        SERVE_SPA: '1',
+        SESSION_SECRET: secret(),
+        STREAM_TOKEN_SECRET: secret(),
+        DEVICE_TOKEN_SECRET: secret(),
+        INTERNAL_PRINCIPAL_SECRET: secret(),
+        // Keep every data file in the throwaway dir, not the repo.
+        SERVER_DB_PATH: path.join(dataDir, 'server.db'),
+        IPTV_DB_PATH: path.join(dataDir, 'iptv.db'),
+        GRAB_LOG_PATH: path.join(dataDir, 'grabs.jsonl'),
+        USAGE_LOG_PATH: path.join(dataDir, 'usage.jsonl'),
+        REJECTIONS_PATH: path.join(dataDir, 'rejections.json'),
+        USER_FEEDBACK_PATH: path.join(dataDir, 'user-feedback.json'),
+        DB_BACKUP_DIR: path.join(dataDir, 'backups'),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    server.stderr?.on('data', (d: Buffer) => console.error('[claim-server]', d.toString()))
+    await waitForHealth()
+  })
+
+  test.afterAll(async () => {
+    server?.kill()
+    if (dataDir) fs.rmSync(dataDir, { recursive: true, force: true })
+  })
+
+  test('the full first-owner journey', async ({ page }) => {
+    // Real WebAuthn, virtual hardware: a CTAP2 resident-key authenticator.
+    const cdp = await page.context().newCDPSession(page)
+    await cdp.send('WebAuthn.enable')
+    await cdp.send('WebAuthn.addVirtualAuthenticator', {
+      options: {
+        protocol: 'ctap2',
+        transport: 'internal',
+        hasResidentKey: true,
+        hasUserVerification: true,
+        isUserVerified: true,
+        automaticPresenceSimulation: true,
+      },
+    })
+
+    // 1. Unclaimed server advertises claimability and the SPA shows the
+    //    claim panel instead of sign-in.
+    const status = await page.request.get(`${BASE}/api/setup/status`)
+    expect(await status.json()).toEqual({ claimable: true })
+
+    await page.goto(`${BASE}/`)
+    await expect(page.getByText('Claim this server').first()).toBeVisible({ timeout: 15_000 })
+
+    // 2. Claim with the boot-minted token (read from the 0600 file the
+    //    banner points at) + a passkey.
+    const token = fs.readFileSync(path.join(dataDir, '.setup-token'), 'utf8').trim()
+    await page.getByLabel('Your name').first().fill('Owner')
+    await page.getByLabel('Setup token').first().fill(token)
+    await page.getByRole('button', { name: /claim server/i }).first().click()
+
+    // 3. An admin session exists (cookie jar is shared with page.request).
+    await expect
+      .poll(async () => (await page.request.get(`${BASE}/api/me`)).status(), {
+        timeout: 15_000,
+      })
+      .toBe(200)
+    const me = (await (await page.request.get(`${BASE}/api/me`)).json()) as {
+      user: { role: string; username: string }
+    }
+    expect(me.user.role).toBe('admin')
+    expect(me.user.username).toBe('Owner')
+
+    // 4. The one-way door closed: no longer claimable, token burned.
+    const status2 = await page.request.get(`${BASE}/api/setup/status`)
+    expect(await status2.json()).toEqual({ claimable: false })
+
+    // 5. The owner can mint an invite for the next household member —
+    //    the native (Plex-free) onboarding path. Same-origin Origin header
+    //    satisfies the CSRF gate exactly like the SPA's own fetches.
+    const inv = await page.request.post(`${BASE}/api/admin/invites`, {
+      headers: { Origin: BASE },
+      data: { label: 'first household member' },
+    })
+    expect(inv.ok(), `invite mint failed: ${inv.status()}`).toBeTruthy()
+    const invite = (await inv.json()) as { code?: string }
+    expect(invite.code).toMatch(/^[A-Za-z0-9_-]{22}$/)
+
+    // 6. Optional integrations honestly absent: typed 503s, never 500s.
+    for (const [p, err] of [
+      ['/api/sonarr/api/v3/series', 'sonarr_not_configured'],
+      ['/api/auth/plex/config', 'plex_not_configured'],
+    ] as const) {
+      const r = await page.request.get(`${BASE}${p}`)
+      expect(r.status(), p).toBe(503)
+      expect((await r.json()).error, p).toBe(err)
+    }
+  })
+})

@@ -26,6 +26,11 @@ export type Limits = {
    *  /api/media proxy — the Media Library tab shows. Default true on
    *  older backends that predate the flag (mirrors iptvEnabled). */
   mediaEnabled?: boolean
+  /** Optional integrations (plan 006 Phase 3): false hides the matching
+   *  request/download surface. Default true on older backends. */
+  sonarrEnabled?: boolean
+  radarrEnabled?: boolean
+  sabEnabled?: boolean
 }
 
 const DEFAULT_LIMITS: Limits = {
@@ -36,6 +41,9 @@ const DEFAULT_LIMITS: Limits = {
   defaultProfileName: 'choose me',
   iptvEnabled: true,
   mediaEnabled: true,
+  sonarrEnabled: true,
+  radarrEnabled: true,
+  sabEnabled: true,
 }
 
 export function useLimits() {

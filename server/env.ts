@@ -37,6 +37,7 @@
 //                       through a trusted proxy/tunnel that owns CF/Forwarded
 //                       client IP headers.
 
+import { existsSync } from 'node:fs'
 import { config as dotenvConfig } from 'dotenv'
 import { validateSecretStrength, assertSecretsDistinct } from './services/secrets.js'
 import { parseSub } from './services/sub.js'
@@ -99,17 +100,39 @@ const NAS_HOST = 'theemeraldexchange.local'
 const GB = 1024 * 1024 * 1024
 
 const isProd = process.env.NODE_ENV === 'production'
+
+// SERVE_SPA (plan 006 Phase 2): the backend serves the built SPA from
+// ./dist so a LAN self-host needs no Netlify. '1' forces on, '0' forces
+// off, unset auto-detects (on iff dist/index.html shipped in the image) —
+// auto keeps the owner's split Netlify+API deployment untouched (their
+// backend image carries no dist).
+const serveSpa =
+  process.env.SERVE_SPA === '1' ||
+  (process.env.SERVE_SPA !== '0' && existsSync('./dist/index.html'))
+
 const allowedOrigins = csv('ALLOWED_ORIGINS')
 // In prod, session cookies are SameSite=None for the Netlify ↔ NAS
 // split, which means the CSRF middleware relies on the Origin header
 // matching this list to distinguish trusted SPA tabs from attacker
 // pages. An empty list would fail open, so require it explicitly.
-if (isProd && allowedOrigins.length === 0) {
+// With SERVE_SPA on the SPA is same-origin: the CSRF gate accepts
+// same-host Origins and the cookie is SameSite=Lax, so the list is
+// optional (plan 006 Phase 2).
+if (isProd && allowedOrigins.length === 0 && !serveSpa) {
   throw new Error(
     'Missing required env var in production: ALLOWED_ORIGINS ' +
-      '(comma-separated SPA origins, needed for CSRF defense with SameSite=None cookies)',
+      '(comma-separated SPA origins, needed for CSRF defense with SameSite=None cookies). ' +
+      'Not required when SERVE_SPA serves the SPA same-origin.',
   )
 }
+
+// PLEX_CLIENT_ID — stable UUID identifying this app to plex.tv. Optional
+// since Phase 0 (plan 006): unset means Plex login is simply not
+// configured on this install (self-host without a Plex account); the
+// Plex auth routes 503 with plex_not_configured instead of the server
+// refusing to boot. opt() trims, which is load-bearing for the plex.tv
+// PIN flow (see the note on the env object below).
+const plexClientId = opt('PLEX_CLIENT_ID') ?? null
 
 // PLEX_SERVER_ID is the machineIdentifier of the home Plex server.
 // When set, only members of that server can sign in. When unset, the
@@ -119,10 +142,12 @@ if (isProd && allowedOrigins.length === 0) {
 // blank silently turns the invitation-only app into "any Plex user can
 // sign in," so we hard-fail unless the operator explicitly opts in
 // via ALLOW_UNSCOPED_PLEX_LOGIN=1 (intended only for the brief
-// first-deploy window).
+// first-deploy window). Only enforced when Plex login is configured at
+// all (PLEX_CLIENT_ID set) — a Plex-free install has no Plex sign-in
+// path to scope.
 const plexServerId = opt('PLEX_SERVER_ID') ?? null
 const allowUnscopedPlexLogin = process.env.ALLOW_UNSCOPED_PLEX_LOGIN === '1'
-if (isProd && !plexServerId && !allowUnscopedPlexLogin) {
+if (isProd && plexClientId && !plexServerId && !allowUnscopedPlexLogin) {
   throw new Error(
     'Missing required env var in production: PLEX_SERVER_ID ' +
       '(your home Plex server\'s machineIdentifier — required to scope ' +
@@ -149,10 +174,21 @@ if (useLocalRecommender && !recommenderEventSecret) {
     'Missing required env var when USE_LOCAL_RECOMMENDER=1: RECOMMENDER_EVENT_SECRET',
   )
 }
+// *arr / SAB integrations — optional since Phase 0 (plan 006). Unset key
+// means the integration is not configured: the service helpers throw
+// NotConfiguredError, which app.onError maps to a typed 503 (mirroring
+// tmdb_not_configured) instead of the server refusing to boot.
+const sonarrApiKey = opt('SONARR_API_KEY') ?? null
+const radarrApiKey = opt('RADARR_API_KEY') ?? null
+const sabApiKey = opt('SAB_API_KEY') ?? null
+
 const defaultRootFolderPath = opt('DEFAULT_ROOT_FOLDER_PATH') ?? null
 const defaultSonarrRootFolderPath = opt('DEFAULT_SONARR_ROOT_FOLDER_PATH') ?? defaultRootFolderPath
 const defaultRadarrRootFolderPath = opt('DEFAULT_RADARR_ROOT_FOLDER_PATH') ?? defaultRootFolderPath
-if (isProd && (!defaultSonarrRootFolderPath || !defaultRadarrRootFolderPath)) {
+// Root-folder paths guard non-admin adds, so they only matter for an *arr
+// that is actually configured — a request-less install shouldn't fail boot
+// over them.
+if (isProd && ((sonarrApiKey && !defaultSonarrRootFolderPath) || (radarrApiKey && !defaultRadarrRootFolderPath))) {
   throw new Error(
     'Missing required env var in production: DEFAULT_SONARR_ROOT_FOLDER_PATH ' +
       'and/or DEFAULT_RADARR_ROOT_FOLDER_PATH (exact upstream root folder paths for non-admin adds)',
@@ -268,17 +304,24 @@ assertSecretsDistinct({
 })
 
 // EEX_TELEMETRY_DSN — Sentry-compatible DSN for the self-hoster's Glitchtip
-// instance. Required in production (telemetry is mandatory per §15.1).
-// Optional in dev: if absent a warning is logged at startup but the server
-// boots so developers without a local Glitchtip don't get blocked.
+// instance. Since Phase 0 (plan 006) telemetry is opt-in: the boot
+// requirement only applies when TELEMETRY_ENABLED=1 (the owner's full
+// deployment sets it; a basic self-host leaves the whole telemetry
+// profile off). With a DSN set, telemetry works regardless of the flag;
+// with neither, Sentry.init is never called and captureException is a
+// no-op (§15.1 amended by plan 006 / verdict C4).
+const telemetryEnabled = process.env.TELEMETRY_ENABLED === '1'
 const telemetryDsn = opt('EEX_TELEMETRY_DSN') ?? null
-if (isProd && !telemetryDsn) {
+if (isProd && telemetryEnabled && !telemetryDsn) {
   throw new Error(
-    'Missing required env var in production: EEX_TELEMETRY_DSN ' +
-      '(Sentry-compatible DSN for your self-hosted Glitchtip project). ' +
-      'Telemetry is mandatory in the EEX stack (§15.1). Create an EEX ' +
-      'project in Glitchtip, copy the DSN, and set EEX_TELEMETRY_DSN.',
+    'Missing required env var in production when TELEMETRY_ENABLED=1: ' +
+      'EEX_TELEMETRY_DSN (Sentry-compatible DSN for your self-hosted ' +
+      'Glitchtip project). Create an EEX project in Glitchtip, copy the ' +
+      'DSN, and set EEX_TELEMETRY_DSN — or unset TELEMETRY_ENABLED.',
   )
+}
+if (isProd && !telemetryDsn) {
+  console.warn('[env] EEX_TELEMETRY_DSN not set — telemetry disabled for this deployment')
 }
 
 // APPLE_CLIENT_ID — the Apple Services ID / app bundle id used as the
@@ -322,8 +365,10 @@ if (isProd && enableGoogleSignIn && googleClientIds.length === 0) {
 }
 
 // ADMIN_SUBS — comma-separated, namespaced subs (apple:<subject> |
-// plex:<id> | google:<sub>) that are admins AND implicitly allowed without
-// an invite.
+// plex:<id> | google:<sub> | local:<ulid>) that are admins AND implicitly
+// allowed without an invite. parseSub accepts all four providers — a
+// passkey-only install can bootstrap its owner with a local: entry
+// (verdict A6: this always worked; only these docs hid it).
 // This is the owner-bootstrap: the operator's own Apple/Plex sub goes
 // here so their very first login on a fresh install needs no invite and
 // lands them as admin even when their Plex username isn't in ADMINS
@@ -338,8 +383,8 @@ const adminSubs = csv('ADMIN_SUBS').map((s) => {
   } catch {
     throw new Error(
       `Invalid entry in ADMIN_SUBS: ${JSON.stringify(s)}. Each entry must ` +
-        'be a namespaced sub like "plex:12345" or ' +
-        '"apple:000000.<32 hex>.0000".',
+        'be a namespaced sub like "plex:12345", ' +
+        '"apple:000000.<32 hex>.0000", "google:<sub>", or "local:<ulid>".',
     )
   }
 })
@@ -367,17 +412,15 @@ const webauthnOrigins = (() => {
 
 /** True when Plex OAuth is configured for this installation.
  *
- *  PLEX_CLIENT_ID is required for boot (validated by `required()` below),
- *  so if the server started, Plex is configured. This helper exists so the
- *  device-token mint path and /api/version can expose which auth providers
- *  are active without re-reading process.env at call time.
- *
- *  Future local-auth support will expose an analogous `isLocalAuthConfigured()`
- *  gated on LOCAL_AUTH_SECRET (or similar) once that deliverable lands.
+ *  PLEX_CLIENT_ID is optional since Phase 0 (plan 006): a self-host
+ *  without a Plex account leaves it unset and the Plex auth routes 503
+ *  with plex_not_configured. This helper exists so the device-token mint
+ *  path and /api/version can expose which auth providers are active
+ *  without re-reading process.env at call time. Read through the exported
+ *  env object (like isAppleConfigured) so tests can flip it.
  */
 export function isPlexConfigured(): boolean {
-  // PLEX_CLIENT_ID is required — if we booted, it is set and non-empty.
-  return true
+  return Boolean(env.plexClientId)
 }
 
 /** True when Sign in with Apple is configured (APPLE_CLIENT_ID set).
@@ -402,16 +445,17 @@ export function isGoogleConfigured(): boolean {
 }
 
 export const env = {
-  // .trim() is load-bearing for the plex.tv PIN flow: this value flows
-  // into BOTH the X-Plex-Client-Identifier header (server → plex.tv)
-  // AND the clientID URL param on the popup auth URL (browser →
-  // plex.tv). plex.tv matches them as exact strings when reconciling
-  // the authorized PIN; a stray trailing newline (common when copying
-  // from a generator into .env) makes the header carry "\n" and the
-  // URLSearchParams version carry "%0A", which plex.tv treats as two
-  // different clients — the user authorizes one, the server polls the
-  // other, and check returns {authToken: null} forever.
-  plexClientId: required('PLEX_CLIENT_ID').trim(),
+  // Trimming (done by opt() at the hoisted const above) is load-bearing
+  // for the plex.tv PIN flow: this value flows into BOTH the
+  // X-Plex-Client-Identifier header (server → plex.tv) AND the clientID
+  // URL param on the popup auth URL (browser → plex.tv). plex.tv matches
+  // them as exact strings when reconciling the authorized PIN; a stray
+  // trailing newline (common when copying from a generator into .env)
+  // makes the header carry "\n" and the URLSearchParams version carry
+  // "%0A", which plex.tv treats as two different clients — the user
+  // authorizes one, the server polls the other, and check returns
+  // {authToken: null} forever. null when Plex login is not configured.
+  plexClientId,
   sessionSecret: required('SESSION_SECRET'),
   streamTokenSecret: rawStreamTokenSecret,
   /** Empty string in dev when not configured; D13 mint paths assert non-empty. */
@@ -435,6 +479,11 @@ export const env = {
   plexServerId,
   port: positiveInt('PORT', 3001),
   isProd,
+  /** Backend serves the built SPA from ./dist (plan 006 Phase 2). */
+  serveSpa,
+  /** True when the operator pinned WEBAUTHN_RP_ID explicitly — disables
+   *  the same-origin request-derived RP fallback (plan 006 Phase 2). */
+  webauthnRpIdExplicit: Boolean(opt('WEBAUTHN_RP_ID')),
   allowedOrigins,
   /** Trust Cloudflare/proxy client IP headers for per-client auth rate limits.
    *  Keep off unless the backend is reachable only through that proxy. */
@@ -449,11 +498,14 @@ export const env = {
   plexServerUrl: opt('PLEX_SERVER_URL') ?? `http://${NAS_HOST}:32400`,
 
   sonarrUrl: opt('SONARR_URL') ?? `http://${NAS_HOST}:8989/tv`,
-  sonarrApiKey: required('SONARR_API_KEY'),
+  /** null when Sonarr is not configured — sonarrFetch throws NotConfiguredError. */
+  sonarrApiKey,
   radarrUrl: opt('RADARR_URL') ?? `http://${NAS_HOST}:7878/movies`,
-  radarrApiKey: required('RADARR_API_KEY'),
+  /** null when Radarr is not configured — radarrFetch throws NotConfiguredError. */
+  radarrApiKey,
   sabUrl: opt('SAB_URL') ?? `http://${NAS_HOST}:8080`,
-  sabApiKey: required('SAB_API_KEY'),
+  /** null when SAB is not configured — sab helpers throw NotConfiguredError. */
+  sabApiKey,
 
   // Preferred quality-profile name for non-admin adds. The frontend
   // already prefers "Choose Me" by name (AddMovieModal /
@@ -601,6 +653,12 @@ export const env = {
   // a new server_id and silently revokes all device tokens. Default
   // matches the NAS data bind-mount used by iptv.db and other data files.
   SERVER_DB_PATH: process.env.SERVER_DB_PATH ?? './data/server.db',
+  // First-owner claim (plan 006 Phase 1): by default the claim endpoint
+  // only accepts requests whose SOCKET address is loopback/private (the
+  // nginx-ui advisory's bind-local recommendation, widened to LAN so a
+  // laptop can claim the NAS). Set to 1 only when deliberately claiming
+  // through a tunnel/proxy — the setup token is still required either way.
+  setupAllowRemote: process.env.SETUP_ALLOW_REMOTE === '1',
   IPTV_DB_PATH: process.env.IPTV_DB_PATH ?? './data/iptv.db',
   // Scheduled DB-snapshot retention dir + count + cadence (finding 14-4).
   // VACUUM INTO snapshots of server.db + iptv.db land here on a cron and on
