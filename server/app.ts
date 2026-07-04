@@ -173,6 +173,13 @@ app.get('/api/limits', (c) =>
     // (/api/media/music/*) and audio playback ride the same proxy, so both
     // facts are required. Public boolean — no secret leakage.
     musicEnabled: env.useMediaCore && env.musicRootsConfigured,
+    // Optional integrations (plan 006 Phase 3): the SPA hides the
+    // request/download surfaces an unconfigured install can't serve
+    // (mirrors iptvEnabled — the same facts are implied by the typed
+    // 503 <service>_not_configured anyway). Public booleans only.
+    sonarrEnabled: Boolean(env.sonarrApiKey),
+    radarrEnabled: Boolean(env.radarrApiKey),
+    sabEnabled: Boolean(env.sabApiKey),
   }),
 )
 

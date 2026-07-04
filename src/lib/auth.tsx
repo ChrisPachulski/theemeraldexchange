@@ -635,7 +635,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (data.ok && data.user) {
           applyUser(data.user)
           setDiscoveredServers(null)
-          if (data.claimed) setSetupClaimable(false)
+          if (data.claimed) {
+            setSetupClaimable(false)
+            // Surface the first-run setup checklist to the fresh owner
+            // (plan 006 Phase 3). Lazy import keeps auth free of UI deps.
+            void import('../components/setup/SetupChecklist').then((m) =>
+              m.requestSetupChecklist(),
+            )
+          }
           setSignInState('idle')
           return true
         }

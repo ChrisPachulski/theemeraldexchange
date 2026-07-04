@@ -112,6 +112,17 @@ describe('unconfigured integrations → typed 503 (never 500, never boot-fail)',
   })
 })
 
+describe('integration flags on /api/limits (plan 006 Phase 3)', () => {
+  it('unconfigured *arr/SAB surface as false so the SPA hides those tabs', async () => {
+    const r = await app.request('/api/limits')
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as Record<string, unknown>
+    expect(body.sonarrEnabled).toBe(false)
+    expect(body.radarrEnabled).toBe(false)
+    expect(body.sabEnabled).toBe(false)
+  })
+})
+
 describe('backend-served SPA (plan 006 Phase 2)', () => {
   it('GET / serves the SPA index (same-origin, no Netlify)', async () => {
     const r = await app.request('/')
