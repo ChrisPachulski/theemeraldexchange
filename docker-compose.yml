@@ -467,6 +467,11 @@ services:
     image: cloudflare/cloudflared:2026.6.0@sha256:ba461b8aa9c042156dbd39c38657fe7431bafa063220eab8d5330a523863da9f
     container_name: exchange-cloudflared
     restart: unless-stopped
+    # Opt-in (plan 006 Phase 4): the PUBLIC remote-access path. Off in a
+    # basic install; the owner deployment enables it via
+    # COMPOSE_PROFILES=remote-cloudflare[,telemetry]. Private remote access
+    # (no public exposure) is the `remote` profile (Tailscale Serve) below.
+    profiles: ["remote-cloudflare"]
     # Hardening (audit 9-4): no privilege escalation, drop all Linux caps (the
     # tunnel client needs none), read-only root fs (cloudflared persists nothing).
     security_opt:
@@ -497,15 +502,58 @@ services:
       backend:
         condition: service_healthy
 
+  # ── Tailscale Serve — PRIVATE remote access (plan 006 Phase 4) ───────────
+  # The default opt-in remote story: COMPOSE_PROFILES=remote. Tailscale
+  # Serve exposes the backend at https://<TS_HOSTNAME>.<tailnet>.ts.net to
+  # tailnet devices ONLY — never the public internet — and the real
+  # hostname + automatic HTTPS give passkeys a proper secure context on
+  # remote devices (the WebAuthn RP-ID constraint). Public exposure is a
+  # separate, deliberate escalation: Tailscale Funnel (edit serve.json) or
+  # the remote-cloudflare profile above.
+  #
+  # Userspace networking (container default): no /dev/net/tun, no
+  # NET_ADMIN — the same cap_drop ALL hardening as every other sidecar.
+  # Shares the backend netns so its 127.0.0.1:3001 proxy target is the
+  # backend listener (same pattern + same recreate caveat as cloudflared).
+  tailscale:
+    image: tailscale/tailscale:v1.94.1@sha256:21df0b5a84efa35c0a507f4dd2340e1b1295683634a28968707354d5bd991d9c
+    container_name: exchange-tailscale
+    restart: unless-stopped
+    profiles: ["remote"]
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    network_mode: "service:backend"
+    environment:
+      # One-time auth key from https://login.tailscale.com/admin/settings/keys
+      TS_AUTHKEY: "${TS_AUTHKEY:-}"
+      TS_HOSTNAME: "${TS_HOSTNAME:-emerald}"
+      TS_STATE_DIR: "/var/lib/tailscale"
+      TS_SERVE_CONFIG: "/config/serve.json"
+      TS_USERSPACE: "true"
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - ./deploy/tailscale-serve.json:/config/serve.json:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+
   # ── Glitchtip telemetry stack ─────────────────────────────────────────────
-  # MANDATORY: EEX does not support a telemetry-disabled build. Every
-  # self-hosted deployment runs its own Glitchtip instance so crash data
-  # remains a per-operator island — no third-party processor, no data
-  # leaves the self-hoster's infrastructure. See docs/operations/glitchtip-setup.md.
+  # OPT-IN (plan 006 Phase 4; §15.1 amended): COMPOSE_PROFILES=telemetry
+  # (+ TELEMETRY_ENABLED=1 so a lost DSN fails the backend boot loudly).
+  # Every telemetry-enabled deployment runs its own Glitchtip instance so
+  # crash data remains a per-operator island — no third-party processor, no
+  # data leaves the self-hoster's infrastructure. A basic install runs no
+  # telemetry containers at all. See docs/operations/glitchtip-setup.md.
   #
   # The admin UI binds 127.0.0.1:8100 only (LAN-invisible). Route it
   # through Tailscale or Caddy — see the setup guide for details. Do not
   # port-forward 8100 to the public internet.
+  #
+  # R3 invariant (plan 006): all four glitchtip services share the SAME
+  # `telemetry` profile so every depends_on edge stays intra-profile —
+  # never add a depends_on from an always-on service toward these.
   glitchtip:
     # Pin to a specific minor version. `latest` silently auto-upgrades through
     # breaking changes — v6.0 introduced TRUSTED_PROXIES, django-vtasks, and
@@ -513,6 +561,7 @@ services:
     # To upgrade: bump this tag, docker compose pull, docker compose up -d.
     image: glitchtip/glitchtip:6.1@sha256:7e497103d3694e95fce232e83193cc2ef6865569314c66eb577b97c7c651008b
     container_name: exchange-glitchtip
+    profiles: ["telemetry"]
     restart: unless-stopped
     # Resource ceiling: Glitchtip shares this 7.5GB box with Plex. Uncapped, a
     # Granian/Django surge (or a boot-time migrate spike) can OOM the host and
@@ -588,6 +637,7 @@ services:
     # digest with: docker buildx imagetools inspect postgres:15
     image: postgres:15@sha256:1b92e7a80c021647bf70f5d3eb66066a998e4f5cf43c07bb9dc9f729782cf88e
     container_name: exchange-glitchtip-db
+    profiles: ["telemetry"]
     restart: unless-stopped
     # Resource ceiling (Plex co-tenancy): cap Postgres so autovacuum / the
     # boot-time migrate + maintain_partitions pass can't balloon and starve the host.
@@ -632,6 +682,7 @@ services:
     # digest with: docker buildx imagetools inspect redis:7-alpine
     image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     container_name: exchange-glitchtip-redis
+    profiles: ["telemetry"]
     restart: unless-stopped
     # Resource ceiling (Plex co-tenancy): Valkey is a small cache/broker here;
     # cap it so an unbounded keyspace can't grow into Plex's memory.
@@ -665,6 +716,7 @@ services:
   glitchtip-worker:
     image: glitchtip/glitchtip:6.1@sha256:7e497103d3694e95fce232e83193cc2ef6865569314c66eb577b97c7c651008b
     container_name: exchange-glitchtip-worker
+    profiles: ["telemetry"]
     command: ./bin/start.sh
     restart: unless-stopped
     # Resource ceiling (Plex co-tenancy): cap the async task worker so a backlog
@@ -717,3 +769,6 @@ volumes:
   # volume held no application tables; it is left orphaned (harmless) rather
   # than deleted. Safe for fresh deployments — the name is arbitrary.
   glitchtip-pgdata:
+  # Tailscale node identity (plan 006 Phase 4). Losing it re-registers the
+  # node (a new machine appears in the tailnet admin) — persist it.
+  tailscale-state:
