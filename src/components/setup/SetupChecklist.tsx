@@ -1,6 +1,10 @@
 import { useState } from 'react'
 import { useAuth } from '../../lib/auth'
 import { useLimits } from '../../lib/hooks/useLimits'
+import {
+  shouldShowSetupChecklist,
+  dismissSetupChecklist,
+} from '../../lib/setupChecklistFlag'
 import './SetupChecklist.css'
 
 // First-run setup checklist (plan 006 Phase 3 — the "wizard"). Shown to the
@@ -12,32 +16,6 @@ import './SetupChecklist.css'
 // so the operator never spelunks a 300-line .env.example.
 // ponytail: read-only checklist, not an in-app config editor — add live
 // config mutation only if env-file round-trips prove too painful.
-
-const FLAG_KEY = 'eex.showSetupChecklist'
-
-export function shouldShowSetupChecklist(): boolean {
-  try {
-    return localStorage.getItem(FLAG_KEY) === '1'
-  } catch {
-    return false
-  }
-}
-
-export function requestSetupChecklist(): void {
-  try {
-    localStorage.setItem(FLAG_KEY, '1')
-  } catch {
-    /* private mode — checklist just won't auto-show */
-  }
-}
-
-function dismissSetupChecklist(): void {
-  try {
-    localStorage.removeItem(FLAG_KEY)
-  } catch {
-    /* ignore */
-  }
-}
 
 export function SetupChecklist() {
   const { isAdmin } = useAuth()
