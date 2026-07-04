@@ -71,11 +71,20 @@ URL) — WebAuthn doesn't work on a bare `192.168.x.x` address.
 after every publish (`verify-images`):
 
 - **Linux** (Ubuntu, Debian, …) — amd64 and arm64 (Raspberry Pi 5 class), native.
-- **macOS** — Docker Desktop; Apple Silicon runs the arm64 images at native speed, Intel Macs
-  the amd64 ones. Claim at `http://localhost:3001` on the Mac itself.
+- **macOS** — Docker Desktop (or OrbStack/colima); Apple Silicon runs the arm64 images at
+  native speed, Intel Macs the amd64 ones. Claim at `http://localhost:3001` on the Mac itself.
 - **Windows** — Docker Desktop with the WSL2 backend; run the installer **inside a WSL
   (Ubuntu) shell**, not PowerShell — it's a POSIX script. `MEDIA_PATH` can point at
   `/mnt/c/...`, though a path inside WSL's own filesystem scans faster.
+
+**Apple `container` and Microsoft WSL Containers (`wslc`).** Both new first-party runtimes
+run our images — they're standard OCI, and the backend is verified live on Apple `container`
+1.0 (macOS 26, Apple Silicon): `container run` of the GHCR image boots healthy with the SPA
+and claim flow working. What neither runtime has yet is **Compose**, which the multi-service
+bundle needs (inter-service DNS, health-ordered startup): Apple `container` resolves
+container names only after a sudo `container system dns` setup, and `wslc` (public preview,
+GA fall 2026) doesn't list Compose at all. Until they do, use a Compose-capable runtime for
+the full stack; single-image runs on either are fully supported.
 
 arm64 boxes transcode on CPU (Intel VAAPI hardware encode is x86-only) and fall back to
 yt-dlp for trailers — everything else is identical across platforms.
