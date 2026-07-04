@@ -24,7 +24,7 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::args::{ArgSpec, HwEncoder, ffmpeg_args_for, sidecar_vtt_args};
 use crate::concurrency::{Busy, Caps, Limiter, Permit};
-use crate::plan::{SegmentFormat, TranscodePlan};
+use crate::plan::{SegmentFormat, SidecarSubtitle, TranscodePlan};
 
 /// 30s with no heartbeat → reap (mirrors `IDLE_MS` in iptvRemux.ts).
 const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -132,12 +132,14 @@ pub struct StartOpts {
     /// `None` only in the Off/log postures where no verified identity exists
     /// (routes skip enforcement accordingly).
     pub owner: Option<String>,
-    /// Absolute source stream index of a TEXT subtitle to pre-extract to a
-    /// sidecar `subtitles.vtt` (from [`crate::plan::plan_sidecar_subtitle`]), or
-    /// `None` when the title has no text subtitle. Drives a one-shot, detached
-    /// ffmpeg pass at session start, fully decoupled from the live HLS stream
-    /// (see [`SessionManager::spawn_sidecar_subtitle`]).
-    pub subtitle_source_index: Option<i64>,
+    /// The TEXT subtitle to pre-extract to a sidecar `subtitles.vtt` (from
+    /// [`crate::plan::plan_sidecar_subtitle`]), or `None` when the title has no
+    /// text subtitle. Drives a one-shot, detached ffmpeg pass at session start,
+    /// fully decoupled from the live HLS stream (see
+    /// [`SessionManager::spawn_sidecar_subtitle`]); the language/forced flags
+    /// are kept on the session so native manifests can advertise the rendition
+    /// (see [`SessionManager::native_master`]).
+    pub subtitle: Option<SidecarSubtitle>,
 }
 
 /// A point-in-time view of a session for the admin inventory (§4.5 phase 7).
@@ -192,6 +194,9 @@ struct Session {
     duration_secs: Option<i64>,
     /// Verified principal sub that created the session (owner-or-admin gate).
     owner: Option<String>,
+    /// The sidecar subtitle being extracted for this session, if any — lets
+    /// native manifests advertise it as an HLS SUBTITLES rendition.
+    subtitle: Option<SidecarSubtitle>,
 }
 
 /// Control messages for a session's supervisor — the SOLE owner of the ffmpeg
@@ -976,7 +981,7 @@ impl SessionManager {
         // segments without -re/HLS, so it never delays the live stream's first
         // segment (the stall that killed inline extraction). A failure just means
         // the title plays without selectable subs — start never blocks on it.
-        if let Some(idx) = opts.subtitle_source_index {
+        if let Some(idx) = opts.subtitle.as_ref().map(|s| s.source_index) {
             self.spawn_sidecar_subtitle(&session_id, &opts.input_path, &dir, idx)
                 .await;
         }
@@ -1081,6 +1086,7 @@ impl SessionManager {
             source_avg_kbps: opts.source_avg_kbps,
             duration_secs: opts.duration_secs,
             owner: opts.owner,
+            subtitle: opts.subtitle,
         };
 
         self.sessions
@@ -1268,7 +1274,45 @@ impl SessionManager {
             .source_avg_kbps
             .map(|kbps| kbps.saturating_mul(1000))
             .unwrap_or(6_000_000);
-        Some(crate::trickplay::master(bandwidth_bps, None))
+        Some(crate::trickplay::master(
+            bandwidth_bps,
+            None,
+            s.subtitle.as_ref(),
+        ))
+    }
+
+    /// Build the subtitle-carrying MASTER playlist for `id`, or `None` when the
+    /// session is unknown, has no sidecar subtitle, or has no finite VOD media
+    /// playlist for `media.m3u8` to resolve to (copy-remux without a keyframe
+    /// cache) — the caller then falls through to the existing manifest paths.
+    /// Served to NATIVE clients only; web keeps the EVENT playlist + `<track>`.
+    pub async fn native_master(&self, id: &str) -> Option<String> {
+        let (subtitle, bandwidth_bps) = {
+            let guard = self.sessions.lock().await;
+            let s = guard.get(id)?;
+            let subtitle = s.subtitle.clone()?;
+            let bandwidth_bps = s
+                .source_avg_kbps
+                .map(|kbps| kbps.saturating_mul(1000))
+                .unwrap_or(6_000_000);
+            (subtitle, bandwidth_bps)
+        };
+        // The master's variant points at media.m3u8, which serves vod_manifest —
+        // only advertise the master when that will actually resolve.
+        self.vod_manifest(id).await?;
+        Some(crate::subs_manifest::master(bandwidth_bps, &subtitle))
+    }
+
+    /// Build the subtitle MEDIA playlist (`subs.m3u8`) for `id`, or `None` when
+    /// the session is unknown, has no sidecar subtitle, or no known duration.
+    pub async fn subs_playlist(&self, id: &str) -> Option<String> {
+        let duration = {
+            let guard = self.sessions.lock().await;
+            let s = guard.get(id)?;
+            s.subtitle.as_ref()?;
+            s.duration_secs.filter(|d| *d > 0)? as f64
+        };
+        crate::subs_manifest::subs_playlist(duration)
     }
 
     /// Build the trick-play I-FRAMES-ONLY playlist for `id` (native + re-encode
@@ -1927,7 +1971,7 @@ mod tests {
             source_codec: None,
             duration_secs: None,
             owner: None,
-            subtitle_source_index: None,
+            subtitle: None,
         }
     }
 
@@ -2037,7 +2081,11 @@ mod tests {
         let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
 
         let mut o = opts("/lib/movie.mkv");
-        o.subtitle_source_index = Some(2);
+        o.subtitle = Some(SidecarSubtitle {
+            source_index: 2,
+            language: None,
+            forced: false,
+        });
         let id = mgr.start(o).await.unwrap();
 
         let vtt = mgr.asset_path(&id, SIDECAR_SUBTITLE_NAME).await.unwrap();
@@ -2616,7 +2664,7 @@ mod tests {
             source_codec: Some("hevc".into()),
             duration_secs: None,
             owner: None,
-            subtitle_source_index: None,
+            subtitle: None,
         }
     }
 
