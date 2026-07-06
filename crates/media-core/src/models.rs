@@ -96,6 +96,10 @@ pub struct MovieRow {
     pub overview: Option<String>,
     #[serde(default)]
     pub poster_path: Option<String>,
+    /// US certification (e.g. "PG-13"), NULL when TMDB carried none or the row
+    /// is not yet enriched. The Apple parental gate filters on this.
+    #[serde(default)]
+    pub content_rating: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -112,6 +116,10 @@ pub struct ShowRow {
     pub overview: Option<String>,
     #[serde(default)]
     pub poster_path: Option<String>,
+    /// US content rating (e.g. "TV-MA"), NULL when TMDB carried none or the row
+    /// is not yet enriched. The Apple parental gate filters on this.
+    #[serde(default)]
+    pub content_rating: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]

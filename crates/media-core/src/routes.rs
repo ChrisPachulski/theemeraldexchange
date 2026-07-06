@@ -225,7 +225,7 @@ async fn list_movies(
         Some(expr) => {
             let rows = sqlx::query_as::<_, MovieRow>(
                 "SELECT m.id, m.tmdb_id, m.imdb_id, m.title, m.year, m.added_at, m.file_id, \
-                 m.overview, m.poster_path \
+                 m.overview, m.poster_path, m.content_rating \
                  FROM movies m JOIN movies_fts f ON f.rowid = m.id \
                  WHERE movies_fts MATCH ? ORDER BY m.title LIMIT ? OFFSET ?",
             )
@@ -245,7 +245,8 @@ async fn list_movies(
         }
         _ => {
             let rows = sqlx::query_as::<_, MovieRow>(
-                "SELECT id, tmdb_id, imdb_id, title, year, added_at, file_id, overview, poster_path \
+                "SELECT id, tmdb_id, imdb_id, title, year, added_at, file_id, overview, \
+                 poster_path, content_rating \
                  FROM movies ORDER BY title LIMIT ? OFFSET ?",
             )
             .bind(limit)
@@ -264,7 +265,8 @@ async fn list_movies(
 
 async fn get_movie(State(state): State<AppState>, Path(id): Path<i64>) -> AppResult<Json<Value>> {
     let row = sqlx::query_as::<_, MovieRow>(
-        "SELECT id, tmdb_id, imdb_id, title, year, added_at, file_id, overview, poster_path \
+        "SELECT id, tmdb_id, imdb_id, title, year, added_at, file_id, overview, poster_path, \
+         content_rating \
          FROM movies WHERE id = ?",
     )
     .bind(id)
@@ -285,7 +287,7 @@ async fn list_shows(
         Some(expr) => {
             let rows = sqlx::query_as::<_, ShowRow>(
                 "SELECT s.id, s.tmdb_id, s.tvdb_id, s.title, s.year, s.added_at, s.imdb_id, \
-                 s.overview, s.poster_path \
+                 s.overview, s.poster_path, s.content_rating \
                  FROM shows s JOIN shows_fts f ON f.rowid = s.id \
                  WHERE shows_fts MATCH ? ORDER BY s.title LIMIT ? OFFSET ?",
             )
@@ -305,7 +307,8 @@ async fn list_shows(
         }
         _ => {
             let rows = sqlx::query_as::<_, ShowRow>(
-                "SELECT id, tmdb_id, tvdb_id, title, year, added_at, imdb_id, overview, poster_path \
+                "SELECT id, tmdb_id, tvdb_id, title, year, added_at, imdb_id, overview, \
+                 poster_path, content_rating \
                  FROM shows ORDER BY title LIMIT ? OFFSET ?",
             )
             .bind(limit)
@@ -324,7 +327,8 @@ async fn list_shows(
 
 async fn get_show(State(state): State<AppState>, Path(id): Path<i64>) -> AppResult<Json<Value>> {
     let row = sqlx::query_as::<_, ShowRow>(
-        "SELECT id, tmdb_id, tvdb_id, title, year, added_at, imdb_id, overview, poster_path \
+        "SELECT id, tmdb_id, tvdb_id, title, year, added_at, imdb_id, overview, poster_path, \
+         content_rating \
          FROM shows WHERE id = ?",
     )
     .bind(id)
@@ -3341,6 +3345,101 @@ mod tests {
         assert_eq!(v["total"], 1);
         assert_eq!(v["items"].as_array().unwrap().len(), 1);
         assert_eq!(v["items"][0]["title"], "The Matrix");
+    }
+
+    #[tokio::test]
+    async fn list_and_get_movie_expose_content_rating() {
+        // S2 item S3: the /api/media movie payloads must carry the US
+        // certification the Apple parental gate filters on. Red on origin/main
+        // (no content_rating column, so the seed INSERT fails and the field is
+        // absent from the response); green once migration 0010 + the SELECT
+        // projection land.
+        let state = test_state().await;
+        let rated = seed_media_file(&state, "/lib/rated.mp4").await;
+        let unrated = seed_media_file(&state, "/lib/unrated.mp4").await;
+        sqlx::query(
+            "INSERT INTO movies (title, year, added_at, file_id, content_rating) \
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind("Restricted Film")
+        .bind(1999_i64)
+        .bind("2026-01-01T00:00:00Z")
+        .bind(rated)
+        .bind("R")
+        .execute(&state.db.pool)
+        .await
+        .unwrap();
+        // A row with no rating must serialize the field as JSON null (unknown),
+        // not omit it — the client decodes `content_rating: String?`.
+        let unrated_id: i64 =
+            sqlx::query("INSERT INTO movies (title, added_at, file_id) VALUES (?, ?, ?)")
+                .bind("Unknown Rating")
+                .bind("2026-01-01T00:00:00Z")
+                .bind(unrated)
+                .execute(&state.db.pool)
+                .await
+                .unwrap()
+                .last_insert_rowid();
+
+        let app = crate::build_router(state);
+
+        let list = body_json(
+            app.clone()
+                .oneshot(req("GET", "/api/media/movies"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let items = list["items"].as_array().unwrap();
+        let rated_item = items
+            .iter()
+            .find(|i| i["title"] == "Restricted Film")
+            .expect("rated movie present");
+        assert_eq!(rated_item["content_rating"], "R");
+        let unrated_item = items
+            .iter()
+            .find(|i| i["title"] == "Unknown Rating")
+            .expect("unrated movie present");
+        assert!(
+            unrated_item["content_rating"].is_null(),
+            "an un-enriched movie must expose content_rating: null, got {:?}",
+            unrated_item["content_rating"]
+        );
+
+        // The single-item detail route projects it too.
+        let detail = body_json(
+            app.oneshot(req("GET", format!("/api/media/movies/{unrated_id}")))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert!(detail["content_rating"].is_null());
+    }
+
+    #[tokio::test]
+    async fn list_shows_exposes_content_rating() {
+        // Show half of the S3 gate: the parental gate must see a show's rating
+        // too. Red on origin/main (no column / no projection).
+        let state = test_state().await;
+        sqlx::query(
+            "INSERT INTO shows (title, added_at, content_rating) VALUES (?, ?, ?)",
+        )
+        .bind("Mature Series")
+        .bind("2026-01-01T00:00:00Z")
+        .bind("TV-MA")
+        .execute(&state.db.pool)
+        .await
+        .unwrap();
+
+        let app = crate::build_router(state);
+        let list = body_json(app.oneshot(req("GET", "/api/media/shows")).await.unwrap()).await;
+        let item = list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["title"] == "Mature Series")
+            .expect("show present");
+        assert_eq!(item["content_rating"], "TV-MA");
     }
 
     #[tokio::test]

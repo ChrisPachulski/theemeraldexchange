@@ -52,6 +52,11 @@ pub const MIGRATIONS: &[(i64, &str, &str)] = &[
         "0009_episode_negcache",
         include_str!("../migrations/0009_episode_negcache.sql"),
     ),
+    (
+        10,
+        "0010_content_rating",
+        include_str!("../migrations/0010_content_rating.sql"),
+    ),
 ];
 
 #[derive(Clone)]
@@ -311,6 +316,44 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(default_attempts.as_deref(), Some("0"));
+    }
+
+    #[tokio::test]
+    async fn content_rating_columns_exist_after_migration() {
+        // S2 item S3: migration 0010 adds the US certification / content-rating
+        // column the parental gate filters on. Without it the scanner cannot
+        // persist a rating and the /api/media library exposes nothing a
+        // restricted profile can be blocked on.
+        let db = Db::connect_memory().await.unwrap();
+        let movie_cols: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('movies')")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+        assert!(
+            movie_cols.iter().any(|c| c == "content_rating"),
+            "movies must have content_rating; got {movie_cols:?}"
+        );
+        let show_cols: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('shows')")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+        assert!(
+            show_cols.iter().any(|c| c == "content_rating"),
+            "shows must have content_rating; got {show_cols:?}"
+        );
+        // Nullable with no default: an un-enriched row reads NULL ("unknown"),
+        // which the client treats like an unrated item rather than being
+        // mass-hidden until a rescan backfills it.
+        let default_rating: Option<String> = sqlx::query_scalar(
+            "SELECT dflt_value FROM pragma_table_info('movies') \
+             WHERE name = 'content_rating'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(default_rating, None);
     }
 
     #[tokio::test]
