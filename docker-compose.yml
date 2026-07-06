@@ -93,6 +93,12 @@ services:
       # works regardless. Provisioned from the self-hosted Glitchtip
       # instance (see docs/operations/glitchtip-setup.md §4).
       EEX_TELEMETRY_DSN: "${EEX_TELEMETRY_DSN:-}"
+      # Server-side DSN override (§S0-1): the public DSN above may use a host
+      # (e.g. a Tailscale MagicDNS name) the backend container cannot resolve
+      # — that exact misconfiguration made GlitchTip blind to all server
+      # errors. Point this at the GlitchTip container on the shared docker
+      # network (http://<key>@exchange-glitchtip:8000/<project>).
+      EEX_TELEMETRY_DSN_INTERNAL: "${EEX_TELEMETRY_DSN_INTERNAL:-}"
       TELEMETRY_ENABLED: "${TELEMETRY_ENABLED:-}"
       ADMINS: "${ADMINS:-}"
       # Owner-bootstrap + admin namespaced subs (apple:/plex:/local:). The

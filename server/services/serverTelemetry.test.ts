@@ -32,9 +32,14 @@ type ServerTelemetryModule = typeof import('./serverTelemetry.js')
 // Re-import serverTelemetry.ts with a specific DSN baked into the env mock.
 // resetModules() drops the cached frozen env + module instance so the new DSN
 // is the one read at load.
-async function loadWithDsn(dsn: string | undefined): Promise<ServerTelemetryModule> {
+async function loadWithDsn(
+  dsn: string | undefined,
+  internalDsn?: string,
+): Promise<ServerTelemetryModule> {
   vi.resetModules()
-  vi.doMock('../env.js', () => ({ env: { EEX_TELEMETRY_DSN: dsn } }))
+  vi.doMock('../env.js', () => ({
+    env: { EEX_TELEMETRY_DSN: dsn, EEX_TELEMETRY_DSN_INTERNAL: internalDsn ?? null },
+  }))
   vi.doMock('./upstream.js', () => ({ fetchWithTimeout }))
   return import('./serverTelemetry.js')
 }
@@ -256,5 +261,56 @@ describe('runTelemetryDsnSelfCheck (boot DSN self-check, §S0-1)', () => {
     expect(err).toHaveBeenCalledTimes(1)
     expect(fetchWithTimeout).not.toHaveBeenCalled()
     err.mockRestore()
+  })
+})
+
+// §S0-1 completion: the relay/self-check must actually DELIVER. Two gaps the
+// self-check alone can't fix: (1) Glitchtip's store API 422-rejects payloads
+// without an event_id — verified live against the production Glitchtip —
+// so even a reachable DSN dropped every event; (2) the public DSN's host may
+// be unresolvable in-container, so server-side senders need the INTERNAL DSN.
+describe('delivery completeness (event_id + internal DSN)', () => {
+  beforeEach(() => {
+    fetchWithTimeout.mockClear()
+    fetchWithTimeout.mockResolvedValue(new Response(null, { status: 200 }))
+  })
+
+  it('relay payload carries a spec-shaped event_id and a timestamp', async () => {
+    const { reportServerEvent } = await loadWithDsn('https://abc123@glitchtip.test/42')
+    await reportServerEvent({ message: 'x' })
+    const { body } = lastRelay()
+    expect(body.event_id).toMatch(/^[0-9a-f]{32}$/)
+    expect(typeof body.timestamp).toBe('string')
+  })
+
+  it('self-check probe payload carries event_id too (the probe must not 422)', async () => {
+    const { runTelemetryDsnSelfCheck } = await loadWithDsn('https://k@glitchtip.test/7')
+    await runTelemetryDsnSelfCheck(async () => [{ address: '10.0.0.9' }])
+    const { body } = lastRelay()
+    expect(body.event_id).toMatch(/^[0-9a-f]{32}$/)
+  })
+
+  it('relay prefers EEX_TELEMETRY_DSN_INTERNAL over the public DSN', async () => {
+    const { reportServerEvent } = await loadWithDsn(
+      'https://abc123@unresolvable.magicdns.ts.net/1',
+      'http://abc123@exchange-glitchtip:8000/1',
+    )
+    await reportServerEvent({ message: 'x' })
+    expect(lastRelay().url).toBe('http://exchange-glitchtip:8000/api/1/store/')
+  })
+
+  it('self-check resolves + probes the INTERNAL DSN host when set', async () => {
+    const { runTelemetryDsnSelfCheck } = await loadWithDsn(
+      'https://k@unresolvable.magicdns.ts.net/7',
+      'http://k@exchange-glitchtip:8000/7',
+    )
+    const resolved: string[] = []
+    const res = await runTelemetryDsnSelfCheck(async (host) => {
+      resolved.push(host)
+      return [{ address: '172.18.0.7' }]
+    })
+    expect(res).toEqual({ status: 'ok', hostname: 'exchange-glitchtip' })
+    expect(resolved).toEqual(['exchange-glitchtip'])
+    expect(lastRelay().url).toBe('http://exchange-glitchtip:8000/api/7/store/')
   })
 })

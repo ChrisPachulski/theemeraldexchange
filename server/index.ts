@@ -44,10 +44,12 @@ try {
 
 // §15 Telemetry — Sentry-compatible SDK init pointing at the self-hoster's
 // Glitchtip instance. The DSN is distributed to client apps at boot via
-// GET /api/telemetry/config; the server itself also reports crashes here.
-if (env.EEX_TELEMETRY_DSN) {
+// GET /api/telemetry/config; the server itself also reports crashes here —
+// via the INTERNAL DSN when set, because the public DSN's host may not
+// resolve from inside the docker network (§S0-1).
+if (env.EEX_TELEMETRY_DSN_INTERNAL || env.EEX_TELEMETRY_DSN) {
   Sentry.init({
-    dsn: env.EEX_TELEMETRY_DSN,
+    dsn: env.EEX_TELEMETRY_DSN_INTERNAL ?? env.EEX_TELEMETRY_DSN ?? undefined,
     environment: env.isProd ? 'production' : 'staging',
     release: env.EEX_RELEASE,
     beforeSend: piiScrub,

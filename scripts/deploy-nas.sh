@@ -431,6 +431,20 @@ echo "→ Force-recreating cloudflared (re-joins the recreated backend netns; el
 # (A `docker restart` here caused a real total outage — every panel 530'd.)
 ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && docker compose up -d --no-deps --force-recreate cloudflared >/dev/null 2>&1 || echo '[deploy] WARN: could not recreate exchange-cloudflared (not running?)'"
 
+# Install/refresh the cloudflared stale-netns watchdog (§S0-2). The
+# force-recreate above only protects THIS deploy path — a backend recreation
+# outside deploy-nas.sh (manual docker restart, OOM + restart policy) still
+# stales cloudflared's netns and 530s the public API until a human notices
+# (a real outage). scripts/nas-cloudflared-watchdog.sh detects the drift and
+# force-recreates cloudflared automatically; run it from Unraid's persistent
+# dynamix cron every 2 minutes (survives reboot, unlike a bare crontab edit).
+echo "→ Installing cloudflared watchdog (dynamix cron, every 2 min)"
+ssh "${NAS_USER}@${NAS_HOST}" "mkdir -p ${APPDATA}/scripts"
+scp -q "$(dirname "$0")/nas-cloudflared-watchdog.sh" "${NAS_USER}@${NAS_HOST}:${APPDATA}/scripts/nas-cloudflared-watchdog.sh"
+ssh "${NAS_USER}@${NAS_HOST}" "chmod +x ${APPDATA}/scripts/nas-cloudflared-watchdog.sh \
+  && printf '*/2 * * * * ${APPDATA}/scripts/nas-cloudflared-watchdog.sh >> /var/log/eex-cf-watchdog.log 2>&1\n' > /boot/config/plugins/dynamix/eex-cloudflared-watchdog.cron \
+  && update_cron" || echo '[deploy] WARN: could not install cloudflared watchdog cron'
+
 # Post-deploy healthcheck. The 5s log tail this replaces was shorter than the
 # container's 20s health start_period, so a crash-looping or boot-failing
 # backend (bad migration, env-gate crash, napi ABI mismatch) shipped with an
