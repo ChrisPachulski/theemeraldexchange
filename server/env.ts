@@ -760,6 +760,15 @@ export const env = {
   // self-hoster's Glitchtip project. Distributed to clients at boot via
   // GET /api/telemetry/config so crash reports land in the right project.
   EEX_TELEMETRY_DSN: telemetryDsn,
+  // Optional server-side DSN override for in-container delivery (§S0-1). The
+  // public DSN above is handed to client SDKs and may use a host clients can
+  // resolve but the backend's docker network cannot (e.g. a Tailscale
+  // MagicDNS name) — the exact misconfiguration that made GlitchTip blind to
+  // 100% of server-side errors. When set, @sentry/node, the serverTelemetry
+  // relay, and the boot self-check deliver to THIS DSN (e.g.
+  // http://<key>@exchange-glitchtip:8000/<project>); /api/telemetry/config
+  // keeps distributing the public one to clients.
+  EEX_TELEMETRY_DSN_INTERNAL: opt('EEX_TELEMETRY_DSN_INTERNAL') ?? null,
 
   // Semantic version or git SHA injected at image build time by the
   // container build (docker build --build-arg EEX_RELEASE=$(git describe)).

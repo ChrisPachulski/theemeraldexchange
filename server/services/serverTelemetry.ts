@@ -14,6 +14,7 @@
 // send now logs LOUDLY instead of vanishing.
 
 import { lookup as nodeDnsLookup } from 'node:dns/promises'
+import { randomUUID } from 'node:crypto'
 import { env } from '../env.js'
 import { fetchWithTimeout } from './upstream.js'
 import { scrubTelemetryValue } from './telemetryPiiScrub.js'
@@ -38,6 +39,24 @@ type ParsedDsn = {
   key: string
   /** Fully-qualified Glitchtip store endpoint the relay POSTs to. */
   storeUrl: string
+}
+
+/** The DSN SERVER-SIDE senders deliver to. The public EEX_TELEMETRY_DSN is
+ *  distributed to client SDKs and may use a host (e.g. a Tailscale MagicDNS
+ *  name) that clients resolve but the backend's docker network cannot — the
+ *  exact §S0-1 outage. EEX_TELEMETRY_DSN_INTERNAL points at a docker-
+ *  resolvable host (the GlitchTip container on the shared network) and, when
+ *  set, is preferred for the relay, the boot self-check, and @sentry/node. */
+export function serverSideDsn(): string | null {
+  return env.EEX_TELEMETRY_DSN_INTERNAL ?? env.EEX_TELEMETRY_DSN
+}
+
+/** Glitchtip's store API 422-rejects payloads without an `event_id` — with
+ *  the id absent, every relayed event was dropped even on a reachable DSN
+ *  (verified live: 422 `body.payload.event_id Field required`, then a 200 and
+ *  a row in issue_events_issue once supplied). 32 lowercase hex, per spec. */
+function newEventId(): string {
+  return randomUUID().replace(/-/g, '')
 }
 
 /**
@@ -67,12 +86,13 @@ function parseDsn(dsn: string | null | undefined): ParsedDsn | null {
 // Fire-and-forget by design: returns a promise so callers can await in
 // tests, but production callers `void` it. Never throws.
 export async function reportServerEvent(event: ServerEvent): Promise<void> {
-  // Same DSN the client SDKs fetch via /api/telemetry/config (§15.2), so
-  // server-side events land in the same self-hosted Glitchtip project as
-  // client crashes. Absent/malformed DSN (telemetry not yet provisioned)
-  // is a no-op — never a hard failure. A truly broken DSN is surfaced
-  // loudly at boot by runTelemetryDsnSelfCheck(), not once per event.
-  const parsed = parseDsn(env.EEX_TELEMETRY_DSN)
+  // Same Glitchtip project the client SDKs report to (§15.2), but via the
+  // server-side DSN (see serverSideDsn — the public DSN's host may not
+  // resolve from inside the docker network). Absent/malformed DSN (telemetry
+  // not yet provisioned) is a no-op — never a hard failure. A truly broken
+  // DSN is surfaced loudly at boot by runTelemetryDsnSelfCheck(), not once
+  // per event.
+  const parsed = parseDsn(serverSideDsn())
   if (!parsed) return
   try {
     const res = await fetchWithTimeout(
@@ -84,6 +104,9 @@ export async function reportServerEvent(event: ServerEvent): Promise<void> {
           'X-Sentry-Auth': `Sentry sentry_version=7, sentry_key=${parsed.key}`,
         },
         body: JSON.stringify({
+          // Required by Glitchtip's store API (422 without it — see newEventId).
+          event_id: newEventId(),
+          timestamp: new Date().toISOString(),
           level: event.level ?? 'error',
           // §15.3: hold the relay payload to the SAME PII redaction as the SDK
           // beforeSend path. The message may embed a stream-grant token / JWE,
@@ -152,7 +175,7 @@ export type TelemetrySelfCheckResult =
 export async function runTelemetryDsnSelfCheck(
   resolveHost: DnsResolver = (hostname) => nodeDnsLookup(hostname),
 ): Promise<TelemetrySelfCheckResult> {
-  const dsn = env.EEX_TELEMETRY_DSN
+  const dsn = serverSideDsn()
   if (!dsn) {
     // Telemetry not provisioned is a legitimate config (opt-in per plan 006).
     // env.ts already prints the "telemetry disabled" boot warning; stay quiet.
@@ -198,6 +221,9 @@ export async function runTelemetryDsnSelfCheck(
           'X-Sentry-Auth': `Sentry sentry_version=7, sentry_key=${parsed.key}`,
         },
         body: JSON.stringify({
+          // Required by Glitchtip's store API (422 without it — see newEventId).
+          event_id: newEventId(),
+          timestamp: new Date().toISOString(),
           level: 'info',
           message: 'eex telemetry self-check (boot)',
           platform: 'node',
