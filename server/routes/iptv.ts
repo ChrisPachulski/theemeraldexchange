@@ -50,10 +50,12 @@ import {
   ensureLiveRemuxEntry,
   dropOtherLiveRemuxSessions,
   getActiveLiveRemuxEntry,
+  isChannelOfflineUpstream,
   remuxManifestReady,
   remuxSegmentResource,
   rewriteRemuxManifest,
 } from '../services/iptvLiveRemuxMap.js'
+import { resolveSiblingFeeds } from '../services/iptvSiblingFeeds.js'
 import {
   authorizePlaylistToken,
   buildPlaylistM3u,
@@ -622,14 +624,23 @@ iptv.post('/stream/live/:streamId/grant', requireAuth, requireSection('live'), a
   }
 
   const { sub } = userOf(c)
+  const wantsRemux = clientWantsAvplayer(c)
   const sessionId = `live:${streamId}:${sub}:${Date.now()}`
   const acquired = streamConcurrency().tryAcquire({
     sub,
     sessionId,
-    kind: clientWantsAvplayer(c) ? 'remux' : 'live',
+    kind: wantsRemux ? 'remux' : 'live',
     resourceId: streamId,
     ip: clientIp(c),
     title: sessionTitle('live', streamId),
+    // A remux grant opens a live upstream connection that is HARD-capped at
+    // IPTV_MAX_UPSTREAM_CONNECTIONS (ffmpeg). Cap concurrent remux grants at
+    // that ceiling so the surplus viewer gets a clean iptv_concurrency_limit
+    // 429 here instead of being silently ffmpeg-evicted mid-stream once the
+    // upstream cap is exceeded. Must satisfy CONCURRENT ≤ UPSTREAM for remux.
+    kindCap: wantsRemux
+      ? Math.min(env.IPTV_MAX_CONCURRENT_STREAMS, env.IPTV_MAX_UPSTREAM_CONNECTIONS)
+      : undefined,
   })
   if (!acquired.ok) {
     // source_unavailable (503) is handled above by resolveSourcePrecedence before
@@ -641,7 +652,7 @@ iptv.post('/stream/live/:streamId/grant', requireAuth, requireSection('live'), a
     return c.json({ ...acquired, sessions: enrichSessions(acquired.sessions) }, 429)
   }
 
-  if (clientWantsAvplayer(c)) {
+  if (wantsRemux) {
     // One live tuner per viewer: selecting a channel tears down this user's
     // OTHER live remux channels (the channel they were on, or a ghost from a
     // prior app-close) and frees their upstream provider connections + slots
@@ -873,7 +884,23 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
   streamConcurrency().heartbeatByResource(v.sub, 'remux', streamId)
 
   const creds = credsFromEnv()
-  const upstreamUrl = `${creds.host}/live/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${streamId}.ts`
+  const upstreamUrlFor = (sid: string) =>
+    `${creds.host}/live/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${sid}.ts`
+  const upstreamUrl = upstreamUrlFor(streamId)
+
+  // Dead-feed failover (Fox Soccer Plus incident): the ordered candidate feeds
+  // for this channel (itself first, then siblings sharing epg_channel_id /
+  // normalized name). ensureLiveRemuxEntry skips any candidate remembered as a
+  // dead placeholder and dials a live sibling; if ALL candidates are dead the
+  // channel is offline upstream (terminal), which we surface distinctly below.
+  const candidateFeeds = resolveSiblingFeeds(iptvDb().raw, streamId)
+  const ensureOpts = {
+    streamId,
+    sub: v.sub,
+    upstreamUrl,
+    siblingFeeds: () => candidateFeeds,
+    upstreamUrlFor,
+  }
 
   // NOTE: freeing the viewer's OTHER live channels happens once at GRANT time
   // (see the avplayer branch of POST .../grant), NOT here. AVPlayer re-fetches
@@ -882,13 +909,18 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
   // player fires one more poll, or a second device) mutually annihilate — each
   // poll killed the other's ffmpeg, so neither ever built a segment window and
   // every channel showed infinite buffering / black screen.
-  let entry = ensureLiveRemuxEntry({ streamId, sub: v.sub, upstreamUrl })
-  // null = the channel is in its reconnect-throttle cooldown after a recent fast
-  // failure (a corrupt feed / provider abuse block). Do NOT dial again — answer
-  // with a short Retry-After so the client polls again without opening a new
-  // upstream connection, giving the provider time to cool. Re-dialing here is
-  // exactly the churn that triggered the abuse block in the first place.
+  let entry = ensureLiveRemuxEntry(ensureOpts)
+  // null has two causes, which the client must handle DIFFERENTLY:
+  //  - channel_offline_upstream (terminal): every candidate feed is a dead
+  //    placeholder — the channel is off the air upstream. No Retry-After; the
+  //    client should stop polling and offer the user an alternative, not spin.
+  //  - remux_warming (transient): the channel is merely in its reconnect-
+  //    throttle cooldown after a fast failure. Short Retry-After; re-dialing
+  //    here is the churn that trips the provider abuse block, so we don't.
   if (!entry) {
+    if (isChannelOfflineUpstream(candidateFeeds)) {
+      return c.json({ error: 'channel_offline_upstream' }, 503)
+    }
     c.header('Retry-After', '3')
     return c.json({ error: 'remux_warming' }, 503)
   }
@@ -912,7 +944,7 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
     // ensureLiveRemuxEntry returns the same entry while the session is alive,
     // and null while a just-died session is in reconnect cooldown — in which
     // case stop waiting rather than busy-loop, and let the client retry.
-    const next = ensureLiveRemuxEntry({ streamId, sub: v.sub, upstreamUrl })
+    const next = ensureLiveRemuxEntry(ensureOpts)
     if (!next) break
     entry = next
     heartbeatRemuxSession(entry.sessionId)
@@ -920,9 +952,14 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
   // A slow channel may have <START_SEGMENTS at the deadline; serve whatever it
   // has rather than fail. Only a manifest that never appeared at all is a retry.
   // Do NOT forget/stop the session here: it may still be slowly producing, and
-  // forgetting it just feeds the respawn churn. Answer 503+Retry-After so the
-  // client polls again (the reconnect throttle gates any actual re-dial).
+  // forgetting it just feeds the respawn churn. Answer 503 so the client polls
+  // again (the reconnect throttle gates any actual re-dial) — UNLESS every
+  // candidate feed is a dead placeholder, in which case surface the terminal
+  // channel_offline_upstream instead of an indistinguishable warming retry.
   if (!entry || !fs.existsSync(entry.manifestPath)) {
+    if (isChannelOfflineUpstream(candidateFeeds)) {
+      return c.json({ error: 'channel_offline_upstream' }, 503)
+    }
     c.header('Retry-After', '3')
     return c.json({ error: 'remux_warming' }, 503)
   }

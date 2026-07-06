@@ -94,6 +94,42 @@ function markChannelNeedsReencode(streamId: string): void {
   needsReencode.set(streamId, Date.now() + REENCODE_MEMORY_MS)
 }
 
+// Dead-channel-placeholder detection (Fox Soccer Plus incident, 2026-07-06).
+// A live remux whose ffmpeg EOFs CLEANLY (exit code 0) sooner than this never
+// carried a real live event: the upstream fed a dead-channel STUB (typically a
+// ~30s placeholder loop) and closed. A genuine live feed never ends on its own
+// — it is torn down by us (SIGTERM/SIGKILL, code null) or dies corrupt (255).
+// So `code === 0 && lifetime < DEAD_FEED_MAX_LIFETIME_MS` is the dead-feed
+// signature. We remember it briefly so ensureLiveRemuxEntry skips this variant
+// and fails over to a sibling feed on the immediate retry, then re-probes once
+// the memory expires (a channel can come back on air). TTL'd exactly like
+// needsReencode above.
+const DEAD_FEED_MAX_LIFETIME_MS = 60_000
+const DEAD_FEED_MEMORY_MS = 60_000
+const deadFeed = new Map<string, number>() // streamId -> expiresAt (ms)
+
+/** True if this channel's feed was seen EOFing cleanly-and-fast (a dead-channel
+ *  placeholder) recently, so ensureLiveRemuxEntry should skip it and fail over
+ *  to a sibling. Self-expiring so a recovered channel is re-probed. */
+export function channelIsDeadFeed(streamId: string): boolean {
+  const exp = deadFeed.get(streamId)
+  if (exp === undefined) return false
+  if (exp <= Date.now()) {
+    deadFeed.delete(streamId)
+    return false
+  }
+  return true
+}
+
+function markChannelDeadFeed(streamId: string): void {
+  deadFeed.set(streamId, Date.now() + DEAD_FEED_MEMORY_MS)
+}
+
+/** Test seam: drop all remembered dead feeds so cases don't cross-contaminate. */
+export function _clearDeadFeedMemoryForTests(): void {
+  deadFeed.clear()
+}
+
 // Only http(s) upstreams are valid IPTV inputs. Reject anything else
 // (file:, concat:, pipe:, data:, …) before it reaches ffmpeg's '-i'.
 // The URL is server-constructed from env creds today (low risk), but a
@@ -326,6 +362,7 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult {
     '-hls_segment_filename', 'seg_%05d.ts',
     manifestPath,
   ]
+  const spawnedAt = Date.now()
   const proc = spawn('ffmpeg', args, { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] })
 
   let sawOutput = false
@@ -365,12 +402,27 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult {
     removeDir(dir)
   })
   proc.on('exit', (code, signal) => {
-    console.log(`[iptv-remux ${sessionId}] ffmpeg exited code=${code} signal=${signal ?? ''}`)
+    const livedMs = Date.now() - spawnedAt
+    // A clean, fast EOF (code 0, not signalled, under the placeholder ceiling)
+    // is a dead-channel stub, not a real live feed — tag it so the next tune
+    // fails over to a sibling and the manifest route can answer a terminal
+    // channel_offline_upstream instead of an indistinguishable remux_warming.
+    // A corrupt feed (non-zero, e.g. 255) or our own teardown (SIGTERM/SIGKILL,
+    // code null) is NOT a dead feed and must not poison the failover path.
+    if (code === 0 && signal == null && livedMs < DEAD_FEED_MAX_LIFETIME_MS) {
+      markChannelDeadFeed(opts.streamId)
+      console.warn(
+        `[iptv-remux ${sessionId}] clean EOF after ${livedMs}ms — tagging stream ` +
+          `${opts.streamId} as a dead feed (fail over to a sibling)`,
+      )
+    }
+    console.log(
+      `[iptv-remux ${sessionId}] ffmpeg exited code=${code} signal=${signal ?? ''} livedMs=${livedMs}`,
+    )
     sessions.delete(sessionId)
     removeDir(dir)
   })
 
-  const now = Date.now()
   sessions.set(sessionId, {
     sessionId,
     streamId: opts.streamId,
@@ -378,8 +430,8 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult {
     dir,
     manifestPath,
     proc,
-    startedAt: now,
-    lastSeen: now,
+    startedAt: spawnedAt,
+    lastSeen: spawnedAt,
   })
   return { sessionId, dir, manifestPath }
 }

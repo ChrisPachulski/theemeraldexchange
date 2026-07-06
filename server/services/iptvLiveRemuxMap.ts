@@ -10,13 +10,27 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { env } from '../env.js'
 import { signStreamToken } from './iptvStreamToken.js'
-import { channelNeedsReencode, listRemuxSessions, startRemuxSession, stopRemuxSession } from './iptvRemux.js'
+import {
+  channelIsDeadFeed,
+  channelNeedsReencode,
+  listRemuxSessions,
+  startRemuxSession,
+  stopRemuxSession,
+} from './iptvRemux.js'
 
 export type LiveRemuxEntry = {
   sessionId: string
   dir: string
   manifestPath: string
+  // The channel the VIEWER tuned — the client-facing id. Stays constant across
+  // a dead-feed failover so the manifest/segment URLs, the (streamId, sub)
+  // index key, and dropOtherLiveRemuxSessions all keep referring to the tuned
+  // channel even when the underlying upstream is a sibling feed.
   streamId: string
+  // The feed stream_id we ACTUALLY dialed upstream. Equals `streamId` normally;
+  // a sibling id after a dead-feed failover. Used to attribute a dead-feed
+  // death to the right variant on the next ensure.
+  dialedStreamId: string
   sub: string
   // segFile -> the fully-tokenised /remux/seg URL minted the FIRST time that
   // segment appeared in the manifest. Reused on every later poll so a given
@@ -79,33 +93,84 @@ export function _resetLiveRemuxIndexForTests(): void {
   failStreak.clear()
 }
 
+export type EnsureLiveRemuxOpts = {
+  streamId: string
+  sub: string
+  upstreamUrl: string
+  // Dead-feed failover (optional; the route wires these, unit tests may not).
+  // `siblingFeeds` returns the ORDERED candidate feed stream_ids for the tuned
+  // channel — itself first, then siblings sharing epg_channel_id / normalized
+  // name (see resolveSiblingFeeds). `upstreamUrlFor` builds the upstream URL for
+  // a chosen candidate so a sibling can actually be dialed. Without them the
+  // behaviour is unchanged: only the tuned feed is ever dialed.
+  siblingFeeds?: () => string[]
+  upstreamUrlFor?: (streamId: string) => string
+}
+
+/** The ordered candidate feeds for these opts (tuned feed first). */
+function candidateFeeds(opts: EnsureLiveRemuxOpts): string[] {
+  const list = opts.siblingFeeds?.()
+  return list && list.length > 0 ? list : [opts.streamId]
+}
+
+/** Pick the first candidate feed NOT currently remembered as a dead placeholder,
+ *  or null when EVERY candidate is a known dead feed (the channel is offline
+ *  upstream — nothing left to dial). */
+function pickLiveFeed(opts: EnsureLiveRemuxOpts): string | null {
+  for (const cand of candidateFeeds(opts)) {
+    if (!channelIsDeadFeed(cand)) return cand
+  }
+  return null
+}
+
+/** True when every candidate feed for `candidates` is a known dead placeholder,
+ *  i.e. the channel is off the air upstream (terminal), as opposed to a session
+ *  that is merely still warming. The manifest route uses this to split the two
+ *  503s: `channel_offline_upstream` (terminal) vs `remux_warming` (retry). */
+export function isChannelOfflineUpstream(candidates: string[]): boolean {
+  return candidates.length > 0 && candidates.every((c) => channelIsDeadFeed(c))
+}
+
 /**
  * Return the live entry for (streamId, sub), starting a new remux session when
  * none exists or the recorded one's ffmpeg has exited (stale entries are dropped
  * on sight).
  *
- * Returns null when the channel is in its reconnect-throttle cooldown after a
- * recent fast failure — the caller must NOT treat that as a hard error or dial
- * again; it serves a short retry so the provider's abuse block can cool (see the
- * reconnect-throttle block above). `now` is injectable for tests.
+ * Dead-feed failover: when the feed we dialed EOF'd cleanly-and-fast (a
+ * dead-channel placeholder — see iptvRemux's channelIsDeadFeed), the next dial
+ * skips it and advances to a live sibling feed of the same channel. If every
+ * candidate feed is dead, this returns null and the caller distinguishes the
+ * terminal case via isChannelOfflineUpstream.
+ *
+ * Returns null when (a) the channel is in its reconnect-throttle cooldown after
+ * a recent fast failure, or (b) every candidate feed is a known dead placeholder
+ * (channel offline). The caller must NOT dial again on null — for (a) it serves a
+ * short retry so the provider's abuse block can cool; for (b) it surfaces a
+ * terminal channel_offline_upstream. `now` is injectable for tests.
  */
 export function ensureLiveRemuxEntry(
-  opts: {
-    streamId: string
-    sub: string
-    upstreamUrl: string
-  },
+  opts: EnsureLiveRemuxOpts,
   now: number = Date.now(),
 ): LiveRemuxEntry | null {
   const key = remuxKey(opts.streamId, opts.sub)
   let entry = liveRemuxIndex.get(key)
   if (entry && !isRemuxSessionActive(entry.sessionId)) {
-    // The session's ffmpeg has exited. Classify it: a young death (corrupt feed
-    // / abuse block) widens the reconnect backoff; a session that ran a healthy
-    // while clears it so a normal re-tune is immediate again.
-    const lived = now - (sessionSpawnAt.get(key) ?? now)
-    if (lived < FAST_FAIL_MS) failStreak.set(key, (failStreak.get(key) ?? 0) + 1)
-    else failStreak.delete(key)
+    // The session's ffmpeg has exited. Classify it.
+    if (channelIsDeadFeed(entry.dialedStreamId)) {
+      // A dead-channel placeholder EOF'd cleanly — NOT a corrupt-feed fast-fail.
+      // Don't widen the reconnect backoff (that guards rapid re-dials of the
+      // SAME corrupt upstream; a sibling is a different connection) and clear
+      // the last-dial gate so the immediate sibling dial isn't throttled. The
+      // dead-feed memory TTL is what stops us hammering the dead variant.
+      failStreak.delete(key)
+      lastConnectAt.delete(key)
+    } else {
+      // A young death (corrupt feed / abuse block) widens the reconnect backoff;
+      // a session that ran a healthy while clears it so a re-tune is immediate.
+      const lived = now - (sessionSpawnAt.get(key) ?? now)
+      if (lived < FAST_FAIL_MS) failStreak.set(key, (failStreak.get(key) ?? 0) + 1)
+      else failStreak.delete(key)
+    }
     liveRemuxIndex.delete(key)
     sessionSpawnAt.delete(key)
     entry = undefined
@@ -115,21 +180,30 @@ export function ensureLiveRemuxEntry(
     // backoff. First connect (streak 0) is immediate.
     const delay = reconnectDelayMs(failStreak.get(key) ?? 0)
     if (delay > 0 && now - (lastConnectAt.get(key) ?? 0) < delay) return null
+    // Choose the feed to dial, skipping any known dead-channel placeholder and
+    // failing over to a live sibling. Null = every candidate is dead (offline).
+    const dialStreamId = pickLiveFeed(opts)
+    if (dialStreamId === null) return null
+    const dialUrl =
+      dialStreamId === opts.streamId
+        ? opts.upstreamUrl
+        : (opts.upstreamUrlFor?.(dialStreamId) ?? opts.upstreamUrl)
     lastConnectAt.set(key, now)
     sessionSpawnAt.set(key, now)
     const session = startRemuxSession({
-      streamId: opts.streamId,
+      streamId: dialStreamId,
       sub: opts.sub,
-      upstreamUrl: opts.upstreamUrl,
+      upstreamUrl: dialUrl,
       // Skip the doomed copy attempt if this channel was already seen as
       // non-H.264; the first such tune starts as copy, detects it, and respawns.
-      reencodeVideo: channelNeedsReencode(opts.streamId),
+      reencodeVideo: channelNeedsReencode(dialStreamId),
     })
     entry = {
       sessionId: session.sessionId,
       dir: session.dir,
       manifestPath: session.manifestPath,
       streamId: opts.streamId,
+      dialedStreamId: dialStreamId,
       sub: opts.sub,
       segUrlCache: new Map(),
     }
