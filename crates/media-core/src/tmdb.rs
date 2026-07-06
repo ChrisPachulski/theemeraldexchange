@@ -25,6 +25,11 @@ pub struct TmdbMatch {
     pub tvdb_id: Option<i64>,
     pub overview: Option<String>,
     pub poster_path: Option<String>,
+    /// US certification / content rating (movie "PG-13", tv "TV-MA"), filled
+    /// by a second request after the search hit (the search endpoints never
+    /// return it). `None` when TMDB carried no US entry or the call failed —
+    /// enrichment is best-effort and never fails a scan.
+    pub content_rating: Option<String>,
 }
 
 /// External ids pulled from a TMDB `/external_ids` response. Both fields are
@@ -156,6 +161,9 @@ fn parse_one(result: &serde_json::Value, is_movie: bool) -> Option<TmdbMatch> {
         tvdb_id: None,
         overview,
         poster_path,
+        // The search endpoints never carry a certification; `match_with` fills
+        // it from a follow-up `/release_dates` or `/content_ratings` request.
+        content_rating: None,
     })
 }
 
@@ -260,6 +268,42 @@ fn parse_external_ids(doc: &serde_json::Value) -> ExternalIds {
         .map(str::to_string);
     let tvdb_id = doc.get("tvdb_id").and_then(serde_json::Value::as_i64);
     ExternalIds { imdb_id, tvdb_id }
+}
+
+/// The US entry of a TMDB `.results[]` array keyed by `iso_3166_1`. Both the
+/// movie `/release_dates` and tv `/content_ratings` responses nest their
+/// per-country rating under this same shape, so the country pick is shared.
+fn us_result(doc: &serde_json::Value) -> Option<&serde_json::Value> {
+    doc.get("results")?
+        .as_array()?
+        .iter()
+        .find(|r| r.get("iso_3166_1").and_then(serde_json::Value::as_str) == Some("US"))
+}
+
+/// Pure parser over a `/movie/{id}/release_dates` response: the US theatrical/
+/// digital certification (e.g. "PG-13", "R"). The US block lists one entry per
+/// release type (theatrical, digital, physical…) and only some carry a
+/// `certification`; return the first non-empty one. `None` when there is no US
+/// block or every entry's certification is blank.
+fn parse_movie_certification(doc: &serde_json::Value) -> Option<String> {
+    us_result(doc)?
+        .get("release_dates")?
+        .as_array()?
+        .iter()
+        .filter_map(|rd| rd.get("certification").and_then(serde_json::Value::as_str))
+        .find(|c| !c.is_empty())
+        .map(str::to_string)
+}
+
+/// Pure parser over a `/tv/{id}/content_ratings` response: the US `rating`
+/// (e.g. "TV-MA", "TV-14"). `None` when there is no US entry or its rating is
+/// blank.
+fn parse_tv_content_rating(doc: &serde_json::Value) -> Option<String> {
+    us_result(doc)?
+        .get("rating")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 /// `true` when `(season, episode)` can exist on TMDB at all. TMDB episode
@@ -433,6 +477,57 @@ impl TmdbClient {
         }
     }
 
+    /// Fetch the US certification / content rating for a title. Movies use
+    /// `/movie/{id}/release_dates` (nested per-release `certification`), tv uses
+    /// `/tv/{id}/content_ratings` (flat per-country `rating`). Logs and returns
+    /// `None` on any failure so enrichment stays best-effort — a missing rating
+    /// never fails a scan, it just leaves the column NULL (client treats it as
+    /// unrated). `kind` is "movie" or "tv" to mirror [`Self::external_ids`].
+    async fn content_rating(&self, kind: &str, id: i64) -> Option<String> {
+        let api_key = self.api_key.as_deref()?;
+        let endpoint = if kind == "movie" {
+            "release_dates"
+        } else {
+            "content_ratings"
+        };
+        let url = format!("{API_BASE}/{kind}/{id}/{endpoint}");
+        let resp = match self.authed_get(&url, api_key).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(
+                    target: "media_core::tmdb",
+                    "content_rating send failed: {}",
+                    e.without_url()
+                );
+                return None;
+            }
+        };
+        if !resp.status().is_success() {
+            tracing::warn!(
+                target: "media_core::tmdb",
+                "content_rating non-2xx for {kind} {id}: {}",
+                resp.status()
+            );
+            return None;
+        }
+        let doc = match resp.json::<serde_json::Value>().await {
+            Ok(doc) => doc,
+            Err(e) => {
+                tracing::warn!(
+                    target: "media_core::tmdb",
+                    "content_rating json failed: {}",
+                    e.without_url()
+                );
+                return None;
+            }
+        };
+        if kind == "movie" {
+            parse_movie_certification(&doc)
+        } else {
+            parse_tv_content_rating(&doc)
+        }
+    }
+
     /// Fetch per-episode metadata (title, air_date) via
     /// `/tv/{show_tmdb_id}/season/{season}/episode/{episode}`. Returns `None`
     /// if no key, no match, or any error (logged) — never fails the scan.
@@ -558,6 +653,7 @@ impl TmdbClient {
         let ext = self.external_ids(kind, found.tmdb_id).await;
         found.imdb_id = ext.imdb_id;
         found.tvdb_id = ext.tvdb_id;
+        found.content_rating = self.content_rating(kind, found.tmdb_id).await;
         Some(found)
     }
 }
@@ -654,6 +750,76 @@ mod tests {
     fn external_ids_missing_both_yields_default() {
         let doc = json!({ "page": 1 });
         assert_eq!(parse_external_ids(&doc), ExternalIds::default());
+    }
+
+    #[test]
+    fn movie_certification_picks_us_nonempty() {
+        // The US block lists several release types; only the theatrical one
+        // carries a certification. The first non-empty one must win, and a
+        // non-US block (GB) must be ignored.
+        let doc = json!({
+            "id": 550,
+            "results": [
+                { "iso_3166_1": "GB", "release_dates": [ { "certification": "18", "type": 3 } ] },
+                { "iso_3166_1": "US", "release_dates": [
+                    { "certification": "", "type": 1 },
+                    { "certification": "R", "type": 3 }
+                ] }
+            ]
+        });
+        assert_eq!(parse_movie_certification(&doc).as_deref(), Some("R"));
+    }
+
+    #[test]
+    fn movie_certification_absent_us_yields_none() {
+        // No US block at all, and an all-blank US block, both yield None so the
+        // column stays NULL rather than storing an empty string.
+        let no_us = json!({ "id": 1, "results": [
+            { "iso_3166_1": "FR", "release_dates": [ { "certification": "12" } ] }
+        ] });
+        assert_eq!(parse_movie_certification(&no_us), None);
+
+        let blank_us = json!({ "id": 1, "results": [
+            { "iso_3166_1": "US", "release_dates": [ { "certification": "" } ] }
+        ] });
+        assert_eq!(parse_movie_certification(&blank_us), None);
+
+        assert_eq!(parse_movie_certification(&json!({ "id": 1 })), None);
+    }
+
+    #[test]
+    fn tv_content_rating_picks_us() {
+        let doc = json!({
+            "id": 1396,
+            "results": [
+                { "iso_3166_1": "AU", "rating": "MA15+" },
+                { "iso_3166_1": "US", "rating": "TV-MA" }
+            ]
+        });
+        assert_eq!(parse_tv_content_rating(&doc).as_deref(), Some("TV-MA"));
+    }
+
+    #[test]
+    fn tv_content_rating_absent_or_blank_us_yields_none() {
+        let blank = json!({ "results": [ { "iso_3166_1": "US", "rating": "" } ] });
+        assert_eq!(parse_tv_content_rating(&blank), None);
+
+        let no_us = json!({ "results": [ { "iso_3166_1": "JP", "rating": "G" } ] });
+        assert_eq!(parse_tv_content_rating(&no_us), None);
+
+        assert_eq!(parse_tv_content_rating(&json!({ "id": 1 })), None);
+    }
+
+    #[test]
+    fn search_response_leaves_content_rating_unfilled() {
+        // The search endpoints never carry a certification; parse_one must
+        // default it to None so match_with's follow-up request is the only
+        // source of a rating (never a stale/blank guess from the search hit).
+        let doc = json!({
+            "results": [ { "id": 550, "title": "Fight Club", "release_date": "1999-10-15" } ]
+        });
+        let m = parse_search_response(&doc, true, "Fight Club", None).expect("a match");
+        assert_eq!(m.content_rating, None);
     }
 
     #[test]

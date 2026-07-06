@@ -920,6 +920,7 @@ async fn upsert_movie(
     let imdb_id = tmdb.and_then(|m| m.imdb_id.clone());
     let overview = tmdb.and_then(|m| m.overview.clone());
     let poster_path = tmdb.and_then(|m| m.poster_path.clone());
+    let content_rating = tmdb.and_then(|m| m.content_rating.clone());
 
     // Resolve the existing row to update. A movie is identified first by its
     // TMDB id (so multiple files for one film — a 1080p and a 4K rip — collapse
@@ -956,7 +957,8 @@ async fn upsert_movie(
             sqlx::query(
                 "UPDATE movies SET title = ?, year = ?, tmdb_id = COALESCE(?, tmdb_id), \
                  imdb_id = COALESCE(?, imdb_id), overview = COALESCE(?, overview), \
-                 poster_path = COALESCE(?, poster_path) WHERE id = ?",
+                 poster_path = COALESCE(?, poster_path), \
+                 content_rating = COALESCE(?, content_rating) WHERE id = ?",
             )
             .bind(final_title)
             .bind(final_year)
@@ -964,6 +966,7 @@ async fn upsert_movie(
             .bind(&imdb_id)
             .bind(&overview)
             .bind(&poster_path)
+            .bind(&content_rating)
             .bind(id)
             .execute(&db.pool)
             .await?;
@@ -971,8 +974,9 @@ async fn upsert_movie(
         None => {
             sqlx::query(
                 "INSERT INTO movies \
-                 (tmdb_id, imdb_id, title, year, overview, poster_path, added_at, file_id) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                 (tmdb_id, imdb_id, title, year, overview, poster_path, content_rating, \
+                  added_at, file_id) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(tmdb_id)
             .bind(&imdb_id)
@@ -980,6 +984,7 @@ async fn upsert_movie(
             .bind(final_year)
             .bind(&overview)
             .bind(&poster_path)
+            .bind(&content_rating)
             .bind(added_at)
             .bind(file_id)
             .execute(&db.pool)
@@ -1010,6 +1015,7 @@ async fn upsert_show(
     let tvdb_id = tmdb.and_then(|m| m.tvdb_id);
     let overview = tmdb.and_then(|m| m.overview.clone());
     let poster_path = tmdb.and_then(|m| m.poster_path.clone());
+    let content_rating = tmdb.and_then(|m| m.content_rating.clone());
 
     // Resolve the existing row to update: prefer the TMDB id (collapses
     // descriptive-suffix aliases onto one row and avoids the UNIQUE tmdb_id
@@ -1046,7 +1052,8 @@ async fn upsert_show(
                 "UPDATE shows SET tmdb_id = COALESCE(?, tmdb_id), \
                  imdb_id = COALESCE(?, imdb_id), tvdb_id = COALESCE(?, tvdb_id), \
                  year = COALESCE(?, year), overview = COALESCE(?, overview), \
-                 poster_path = COALESCE(?, poster_path) WHERE id = ?",
+                 poster_path = COALESCE(?, poster_path), \
+                 content_rating = COALESCE(?, content_rating) WHERE id = ?",
             )
             .bind(tmdb_id)
             .bind(&imdb_id)
@@ -1054,6 +1061,7 @@ async fn upsert_show(
             .bind(final_year)
             .bind(&overview)
             .bind(&poster_path)
+            .bind(&content_rating)
             .bind(id)
             .execute(&db.pool)
             .await?;
@@ -1063,8 +1071,9 @@ async fn upsert_show(
 
     sqlx::query(
         "INSERT INTO shows \
-         (tmdb_id, imdb_id, tvdb_id, title, norm_title, year, overview, poster_path, added_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         (tmdb_id, imdb_id, tvdb_id, title, norm_title, year, overview, poster_path, \
+          content_rating, added_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(tmdb_id)
     .bind(&imdb_id)
@@ -1074,6 +1083,7 @@ async fn upsert_show(
     .bind(final_year)
     .bind(&overview)
     .bind(&poster_path)
+    .bind(&content_rating)
     .bind(added_at)
     .execute(&db.pool)
     .await?;
@@ -2534,6 +2544,7 @@ mod tests {
             tvdb_id: None,
             overview: Some("A kindhearted street urchin...".into()),
             poster_path: Some("/poster.jpg".into()),
+            content_rating: Some("PG".into()),
         };
 
         let f1 = seed_file(&db, "/media/Movies/Aladdin (2019)/Aladdin.1080p.mkv").await;
@@ -2556,6 +2567,14 @@ mod tests {
                 .unwrap();
         assert_eq!(tmdb_id, Some(812));
         assert_eq!(title, "Aladdin");
+        // The US certification from the TMDB match must be persisted so the
+        // parental gate has a rating to filter the downloaded library on.
+        let content_rating: Option<String> =
+            sqlx::query_scalar("SELECT content_rating FROM movies LIMIT 1")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(content_rating.as_deref(), Some("PG"));
     }
 
     #[tokio::test]
@@ -2789,16 +2808,19 @@ mod tests {
             tvdb_id: Some(81189),
             overview: Some("A chemistry teacher...".into()),
             poster_path: Some("/bb.jpg".into()),
+            content_rating: Some("TV-MA".into()),
         };
         upsert_show(&db, "Breaking Bad", "t", Some(&m))
             .await
             .unwrap();
 
-        let tvdb_id: Option<i64> = sqlx::query_scalar("SELECT tvdb_id FROM shows LIMIT 1")
-            .fetch_one(&db.pool)
-            .await
-            .unwrap();
+        let (tvdb_id, content_rating): (Option<i64>, Option<String>) =
+            sqlx::query_as("SELECT tvdb_id, content_rating FROM shows LIMIT 1")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
         assert_eq!(tvdb_id, Some(81189));
+        assert_eq!(content_rating.as_deref(), Some("TV-MA"));
     }
 
     #[tokio::test]
@@ -2816,6 +2838,7 @@ mod tests {
             tvdb_id: Some(152831),
             overview: Some("Finn and Jake...".into()),
             poster_path: Some("/at.jpg".into()),
+            content_rating: None,
         };
 
         let id1 = upsert_show(&db, "Adventure Time", "t", Some(&m))
@@ -2845,6 +2868,7 @@ mod tests {
             tvdb_id: None,
             overview: None,
             poster_path: None,
+            content_rating: None,
         };
         let s1 = upsert_show(&db, "Adventure Time", "t", Some(&m))
             .await
