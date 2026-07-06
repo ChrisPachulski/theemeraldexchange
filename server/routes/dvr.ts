@@ -110,7 +110,7 @@ dvr.post('/recordings/:id/grant', requireAuth, (c) => {
 // this exact recording id) so a cookieless device-token client can play; any
 // tokenless request falls back to the session cookie/bearer. Mirrors the
 // `mediaAuth` seam in routes/media.ts (which does the same for /stream/*).
-async function dvrPlayAuth(c: Context<Env>, next: Next) {
+async function dvrPlayAuth(c: Context<Env, '/recordings/:id/play'>, next: Next) {
   const token = c.req.query('t')
   if (token) {
     const id = c.req.param('id')
