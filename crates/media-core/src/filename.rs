@@ -254,6 +254,18 @@ fn looks_reversed(stem: &str) -> bool {
     episode_re().is_match(&reversed)
 }
 
+/// `true` when `name` (with or without a file extension) is a byte/char-reversed
+/// basename that [`classify`]/[`parse_filename`] deliberately refuse to
+/// classify (returning [`ParsedName::Unknown`] under every root). Refusing is
+/// safe, but it left the affected files — e.g. Sons of Anarchy's byte-reversed
+/// final season — silently and permanently absent from the library, with the
+/// only trace a WARN in ephemeral container logs. Exposing the predicate lets
+/// the scanner COUNT and SURFACE these files as an actionable library-health
+/// item (rename on disk + rescan) instead of losing them to the log.
+pub fn is_corrupt_reversed(name: &str) -> bool {
+    looks_reversed(strip_extension(name))
+}
+
 /// Parse a file name (with or without extension) into a [`ParsedName`] using
 /// pure filename heuristics (no library-root authority).
 pub fn parse_filename(name: &str) -> ParsedName {
@@ -637,6 +649,22 @@ mod tests {
             normalize_show_name("2001 A Space Odyssey"),
             "2001 a space odyssey"
         );
+    }
+
+    #[test]
+    fn is_corrupt_reversed_flags_reversed_basenames_only() {
+        // S0 item 5: the predicate the scanner uses to SURFACE reversed/corrupt
+        // files as a library-health item. The live Sons of Anarchy corruption:
+        // stem byte-reversed, extension intact.
+        assert!(is_corrupt_reversed("010E70S yhcranA fo snoS.mkv"));
+        // ...and without an extension too (predicate strips it first).
+        assert!(is_corrupt_reversed("010E70S yhcranA fo snoS"));
+        // Healthy forward names (episode or movie) are never flagged.
+        assert!(!is_corrupt_reversed("Sons of Anarchy S07E010.mkv"));
+        assert!(!is_corrupt_reversed("The Wire - S02E05.mkv"));
+        assert!(!is_corrupt_reversed("Blade Runner (1982).mkv"));
+        // No episode marker in either direction: not "reversed", just unparsed.
+        assert!(!is_corrupt_reversed("random clip.mkv"));
     }
 
     #[test]

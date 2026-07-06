@@ -50,8 +50,24 @@ pub struct ScanReport {
     /// library gap is explainable from the scan report instead of the file
     /// just silently never appearing.
     pub files_skipped_non_utf8: usize,
+    /// Library candidates whose basename is byte/char-reversed by an upstream
+    /// renamer (see [`filename::is_corrupt_reversed`]). Classification refuses
+    /// to guess these — correctly — but that left whole seasons permanently
+    /// invisible with the only trace a WARN in ephemeral logs. Counted here so a
+    /// library-health view (`GET /scan/status` → `last_report`) can flag them.
+    pub files_refused_corrupt: usize,
+    /// The actual paths behind `files_refused_corrupt`, capped at
+    /// [`REFUSED_CORRUPT_PATHS_CAP`], so an operator can see exactly which files
+    /// to rename on disk and rescan rather than diffing the whole tree.
+    pub refused_corrupt_paths: Vec<String>,
     pub errors: usize,
 }
+
+/// Upper bound on how many refused-corrupt paths [`ScanReport`] carries. The
+/// count in `files_refused_corrupt` stays exact; the sampled path list is
+/// bounded so a pathological tree of reversed names can't bloat the scan-status
+/// row (mirrors the "warn on the first escapee only" restraint in the walk).
+const REFUSED_CORRUPT_PATHS_CAP: usize = 100;
 
 /// One candidate video file collected by the blocking walk phase.
 struct WalkedFile {
@@ -82,6 +98,12 @@ struct WalkOutcome {
     /// Video files with a non-UTF-8 name/path (see
     /// [`ScanReport::files_skipped_non_utf8`]).
     files_non_utf8: usize,
+    /// Reversed/corrupt-basename library candidates (see
+    /// [`ScanReport::files_refused_corrupt`]).
+    files_refused_corrupt: usize,
+    /// Sampled paths behind `files_refused_corrupt`, capped at
+    /// [`REFUSED_CORRUPT_PATHS_CAP`].
+    refused_corrupt_paths: Vec<String>,
 }
 
 /// Enumerate every video file under `roots`. Pure blocking FS work (WalkDir +
@@ -95,6 +117,8 @@ fn walk_roots(roots: &[LibraryRoot]) -> WalkOutcome {
         prunable_roots: Vec::new(),
         files_outside_roots: 0,
         files_non_utf8: 0,
+        files_refused_corrupt: 0,
+        refused_corrupt_paths: Vec::new(),
     };
 
     // Canonical forms of every existing root, for the symlink-containment
@@ -230,6 +254,20 @@ fn walk_roots(roots: &[LibraryRoot]) -> WalkOutcome {
                 }
             };
 
+            // A byte/char-reversed basename (upstream-renamer corruption) will
+            // be refused by classify() and never produce a movie/episode row —
+            // the file is a real library candidate that stays invisible. Count
+            // it (and sample its path) so a library-health view can surface the
+            // rename-and-rescan action instead of the loss being buried in logs.
+            // The file is still pushed so the normal pipeline (and prune) treat
+            // it exactly as before; this only ADDS the surfacing.
+            if filename::is_corrupt_reversed(&name) {
+                out.files_refused_corrupt += 1;
+                if out.refused_corrupt_paths.len() < REFUSED_CORRUPT_PATHS_CAP {
+                    out.refused_corrupt_paths.push(path_str.clone());
+                }
+            }
+
             out.files.push(WalkedFile {
                 root_kind,
                 path: entry_path.to_path_buf(),
@@ -290,6 +328,18 @@ async fn scan_once_with_probe_bin(
     report.errors = walk.errors;
     report.files_skipped_outside_roots = walk.files_outside_roots;
     report.files_skipped_non_utf8 = walk.files_non_utf8;
+    report.files_refused_corrupt = walk.files_refused_corrupt;
+    report.refused_corrupt_paths = walk.refused_corrupt_paths;
+    if report.files_refused_corrupt > 0 {
+        // One summary line per scan (not per-file): the actionable set also
+        // rides the ScanReport into `GET /scan/status` → `last_report`.
+        tracing::warn!(
+            refused = report.files_refused_corrupt,
+            sample = ?report.refused_corrupt_paths,
+            "library-health: reversed/corrupt basenames refused classification; \
+             rename them on disk and rescan to recover these titles"
+        );
+    }
 
     for file in &walk.files {
         let path_str = &file.path_str;
@@ -519,6 +569,106 @@ fn now_rfc3339() -> String {
     Utc::now().to_rfc3339()
 }
 
+/// How long a failed per-episode TMDB lookup is cached before it may be
+/// re-probed. Sized in days: the mis-numbered episodes that 404 are permanent
+/// (an absolute-numbered anime never renumbers), so a long cooldown all but
+/// eliminates the re-probe storm while still letting a rare renumber/backfill
+/// recover on a monthly cadence.
+const EPISODE_LOOKUP_COOLDOWN_DAYS: i64 = 30;
+
+/// After this many failed lookups (each at least one cooldown apart) the
+/// episode is treated as permanently unresolvable and never re-probed. Bounds
+/// the worst case for a genuinely dead id to ~6 monthly retries rather than
+/// forever.
+const EPISODE_LOOKUP_MAX_ATTEMPTS: i64 = 6;
+
+/// Pure negative-cache decision: should a fresh TMDB episode lookup be
+/// attempted for a row in this state? The historical short-circuit was only
+/// `title IS NOT NULL`; this broadens it so a permanently-unresolvable episode
+/// (title still NULL, prior failures recorded) is skipped until its cooldown
+/// elapses, and dropped entirely past the attempt cap.
+fn should_attempt_episode_lookup(
+    title_present: bool,
+    attempts: i64,
+    failed_at: Option<&str>,
+    now: DateTime<Utc>,
+) -> bool {
+    // Already enriched — nothing to look up (the pre-existing guard).
+    if title_present {
+        return false;
+    }
+    // Exhausted the retry budget: treat as permanently unresolvable.
+    if attempts >= EPISODE_LOOKUP_MAX_ATTEMPTS {
+        return false;
+    }
+    match failed_at {
+        // Never failed yet (or column NULL): a lookup is due.
+        None => true,
+        Some(ts) => match DateTime::parse_from_rfc3339(ts) {
+            // Due only once the cooldown since the last failure has elapsed.
+            Ok(t) => {
+                now.signed_duration_since(t.with_timezone(&Utc))
+                    >= chrono::Duration::days(EPISODE_LOOKUP_COOLDOWN_DAYS)
+            }
+            // Corrupt timestamp: don't wedge the episode as un-retryable.
+            Err(_) => true,
+        },
+    }
+}
+
+/// DB-backed wrapper over [`should_attempt_episode_lookup`]: reads the episode
+/// row's title + negative-cache columns and decides whether to hit TMDB. A
+/// missing row (first index of a brand-new file) is always due. Replaces the
+/// old `SELECT title IS NOT NULL` short-circuit at both call sites.
+async fn episode_lookup_due(
+    db: &Db,
+    show_id: i64,
+    season: i64,
+    episode: i64,
+    now: DateTime<Utc>,
+) -> Result<bool, AppError> {
+    let row: Option<(Option<String>, i64, Option<String>)> = sqlx::query_as(
+        "SELECT title, tmdb_lookup_attempts, tmdb_lookup_failed_at FROM episodes \
+         WHERE show_id = ? AND season = ? AND episode = ?",
+    )
+    .bind(show_id)
+    .bind(season)
+    .bind(episode)
+    .fetch_optional(&db.pool)
+    .await?;
+    Ok(match row {
+        None => true,
+        Some((title, attempts, failed_at)) => {
+            should_attempt_episode_lookup(title.is_some(), attempts, failed_at.as_deref(), now)
+        }
+    })
+}
+
+/// Stamp a failed per-episode TMDB lookup into the negative cache: bump the
+/// attempt count and record the failure time so the next scan honours the
+/// cooldown instead of re-probing a permanently-404 episode every pass. The
+/// episode row must already exist (both call sites upsert it first); a missing
+/// row is a harmless no-op.
+async fn record_episode_lookup_failure(
+    db: &Db,
+    show_id: i64,
+    season: i64,
+    episode: i64,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE episodes \
+         SET tmdb_lookup_attempts = tmdb_lookup_attempts + 1, tmdb_lookup_failed_at = ? \
+         WHERE show_id = ? AND season = ? AND episode = ?",
+    )
+    .bind(now_rfc3339())
+    .bind(show_id)
+    .bind(season)
+    .bind(episode)
+    .execute(&db.pool)
+    .await?;
+    Ok(())
+}
+
 /// The `video_height` recorded for a media file, if any. Used to pick the
 /// higher-resolution file when two rips back the same episode.
 async fn file_video_height(db: &Db, file_id: i64) -> Result<Option<i64>, AppError> {
@@ -632,30 +782,25 @@ async fn index_file(
             let m = tmdb.match_show(show, None).await;
             let show_id = upsert_show(db, show, &scanned_at, m.as_ref()).await?;
             // Best-effort per-episode enrichment: only when the show resolved to
-            // a TMDB id AND this episode is not already titled. Gating on a
-            // missing title keeps a rescan from re-issuing ~20k serial TMDB
-            // calls for episodes that are already enriched. Errors/None leave
-            // title/air_date NULL and never fail the scan.
-            let already_titled: Option<bool> = sqlx::query_scalar(
-                "SELECT title IS NOT NULL FROM episodes \
-                 WHERE show_id = ? AND season = ? AND episode = ?",
-            )
-            .bind(show_id)
-            .bind(*season)
-            .bind(*episode)
-            .fetch_optional(&db.pool)
-            .await?;
-            let ep = match (m.as_ref(), already_titled) {
-                (Some(found), Some(true)) => {
-                    // Show resolved but the episode is already enriched: skip
-                    // the per-episode round-trip, just keep the file pointer.
-                    let _ = found;
-                    None
-                }
-                (Some(found), _) => tmdb.episode(found.tmdb_id, *season, *episode).await,
-                (None, _) => None,
+            // a TMDB id AND the lookup is DUE. "Due" is the negative-cache-aware
+            // short-circuit (title still NULL, not in cooldown, under the
+            // attempt cap) — gating on `title IS NOT NULL` alone re-issued a live
+            // TMDB call every ~hourly scan for every permanently-404 episode.
+            // Errors/None leave title/air_date NULL and never fail the scan.
+            let due = episode_lookup_due(db, show_id, *season, *episode, Utc::now()).await?;
+            let ep = match (m.as_ref(), due) {
+                (Some(found), true) => tmdb.episode(found.tmdb_id, *season, *episode).await,
+                // Show unresolved, or already-titled / cached-negative: skip the
+                // per-episode round-trip, just keep the file pointer.
+                _ => None,
             };
             upsert_episode(db, show_id, *season, *episode, file_id, ep.as_ref()).await?;
+            // A due lookup against a resolved show that came back empty is a
+            // permanent 404 for a mis-numbered file: stamp the negative cache so
+            // the next scan honours the cooldown instead of re-probing forever.
+            if m.is_some() && due && ep.is_none() {
+                record_episode_lookup_failure(db, show_id, *season, *episode).await?;
+            }
             m.is_some()
         }
         ParsedName::Unknown => false,
@@ -717,20 +862,14 @@ async fn backfill_metadata(
         } => {
             let m = tmdb.match_show(show, None).await;
             let show_id = upsert_show(db, show, &scanned_at, m.as_ref()).await?;
-            // Already enriched? A non-NULL episode title means the per-episode
-            // fetch already landed; skip the network round-trip. (The show
-            // upsert above is cheap and idempotent and may have just backfilled
-            // the show's own metadata, so it always runs.)
-            let has_title: Option<bool> = sqlx::query_scalar(
-                "SELECT title IS NOT NULL FROM episodes \
-                 WHERE show_id = ? AND season = ? AND episode = ?",
-            )
-            .bind(show_id)
-            .bind(season)
-            .bind(episode)
-            .fetch_optional(&db.pool)
-            .await?;
-            if matches!(has_title, Some(true)) {
+            // Skip the network round-trip unless the per-episode lookup is DUE.
+            // "Due" folds in the old `title IS NOT NULL` guard AND the negative
+            // cache: a permanently-404 episode (mis-numbered anime/alt-cut) is
+            // skipped until its cooldown elapses instead of being re-probed on
+            // every ~hourly rescan. (The show upsert above is cheap/idempotent
+            // and may have just backfilled the show's own metadata, so it always
+            // runs.)
+            if !episode_lookup_due(db, show_id, *season, *episode, Utc::now()).await? {
                 return Ok(false);
             }
             let ep = match m.as_ref() {
@@ -738,6 +877,12 @@ async fn backfill_metadata(
                 None => None,
             };
             if ep.is_none() {
+                // A due lookup against a resolved show that came back empty is a
+                // permanent 404: stamp the negative cache so subsequent scans
+                // honour the cooldown rather than re-probing every pass.
+                if m.is_some() {
+                    record_episode_lookup_failure(db, show_id, *season, *episode).await?;
+                }
                 return Ok(false);
             }
             // The episode row already exists (unchanged file); reuse its file_id
@@ -2493,6 +2638,144 @@ mod tests {
         assert_eq!(title.as_deref(), Some("Good News About Hell"));
     }
 
+    // ── TMDB episode negative-result cache (S0 item 4) ────────────────────
+    //
+    // A permanently-unresolvable episode (file S/E doesn't line up with TMDB's
+    // numbering — absolute-numbered anime, alternate-cut sitcoms) 404s forever.
+    // The historical short-circuit was ONLY `title IS NOT NULL`, so every
+    // ~hourly scan re-probed it, burning tens of thousands of TMDB calls. These
+    // tests lock the broadened negative-cache short-circuit.
+
+    #[test]
+    fn should_attempt_episode_lookup_negative_cache_rules() {
+        let now = Utc::now();
+        let recent = (now - chrono::Duration::days(1)).to_rfc3339();
+        let stale = (now - chrono::Duration::days(EPISODE_LOOKUP_COOLDOWN_DAYS + 1)).to_rfc3339();
+
+        // Already titled: never re-probe (the pre-existing guard).
+        assert!(!should_attempt_episode_lookup(true, 0, None, now));
+        // Never attempted, still NULL: due.
+        assert!(should_attempt_episode_lookup(false, 0, None, now));
+        // Failed recently: suppressed for the whole cooldown — this is the
+        // storm the fix stops (no re-probe on the very next scan).
+        assert!(!should_attempt_episode_lookup(false, 1, Some(&recent), now));
+        // Failed long ago: the cooldown elapsed → due again (a renumber can
+        // still recover on a monthly cadence).
+        assert!(should_attempt_episode_lookup(false, 1, Some(&stale), now));
+        // Past the attempt cap: permanently skipped even after the cooldown.
+        assert!(!should_attempt_episode_lookup(
+            false,
+            EPISODE_LOOKUP_MAX_ATTEMPTS,
+            Some(&stale),
+            now
+        ));
+        // A corrupt timestamp must not wedge the episode as un-retryable.
+        assert!(should_attempt_episode_lookup(
+            false,
+            1,
+            Some("not-a-date"),
+            now
+        ));
+    }
+
+    #[tokio::test]
+    async fn episode_lookup_due_reads_negative_cache_state() {
+        let db = Db::connect_memory().await.unwrap();
+        let show_id = upsert_show(&db, "Bleach", "t", None).await.unwrap();
+        let file_id = seed_media_file(&db, "/lib/Bleach - S01E020.mkv").await;
+
+        // No row yet → a first-index lookup is due.
+        assert!(
+            episode_lookup_due(&db, show_id, 1, 20, Utc::now())
+                .await
+                .unwrap()
+        );
+
+        // Insert the episode with a NULL title (an unresolved mis-numbered ep).
+        upsert_episode(&db, show_id, 1, 20, file_id, None)
+            .await
+            .unwrap();
+        // NULL title, no failure recorded → still due.
+        assert!(
+            episode_lookup_due(&db, show_id, 1, 20, Utc::now())
+                .await
+                .unwrap()
+        );
+
+        // Record a failure → now inside the cooldown → NOT due (the second
+        // consecutive scan no longer re-probes it — the gate's core behavior).
+        record_episode_lookup_failure(&db, show_id, 1, 20)
+            .await
+            .unwrap();
+        assert!(
+            !episode_lookup_due(&db, show_id, 1, 20, Utc::now())
+                .await
+                .unwrap()
+        );
+
+        // ...but due again once the cooldown has elapsed (simulate a future now).
+        let later = Utc::now() + chrono::Duration::days(EPISODE_LOOKUP_COOLDOWN_DAYS + 1);
+        assert!(
+            episode_lookup_due(&db, show_id, 1, 20, later)
+                .await
+                .unwrap()
+        );
+
+        // A resolved title short-circuits regardless of the cache columns.
+        let ep = TmdbEpisode {
+            title: Some("The Death Trilogy Overture".into()),
+            air_date: None,
+        };
+        upsert_episode(&db, show_id, 1, 20, file_id, Some(&ep))
+            .await
+            .unwrap();
+        assert!(
+            !episode_lookup_due(&db, show_id, 1, 20, Utc::now())
+                .await
+                .unwrap()
+        );
+        assert!(
+            !episode_lookup_due(&db, show_id, 1, 20, later)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn record_episode_lookup_failure_bumps_attempts_and_stamps_time() {
+        let db = Db::connect_memory().await.unwrap();
+        let show_id = upsert_show(&db, "One Piece", "t", None).await.unwrap();
+        let file_id = seed_media_file(&db, "/lib/One Piece - S01E500.mkv").await;
+        upsert_episode(&db, show_id, 1, 500, file_id, None)
+            .await
+            .unwrap();
+
+        // Fresh row: attempts default 0, no failure stamp.
+        let (attempts, failed_at): (i64, Option<String>) = sqlx::query_as(
+            "SELECT tmdb_lookup_attempts, tmdb_lookup_failed_at FROM episodes LIMIT 1",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(attempts, 0);
+        assert_eq!(failed_at, None);
+
+        record_episode_lookup_failure(&db, show_id, 1, 500)
+            .await
+            .unwrap();
+        record_episode_lookup_failure(&db, show_id, 1, 500)
+            .await
+            .unwrap();
+        let (attempts, failed_at): (i64, Option<String>) = sqlx::query_as(
+            "SELECT tmdb_lookup_attempts, tmdb_lookup_failed_at FROM episodes LIMIT 1",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(attempts, 2, "each failure bumps the attempt count");
+        assert!(failed_at.is_some(), "the failure time is stamped");
+    }
+
     #[tokio::test]
     async fn upsert_show_binds_tvdb_id() {
         // M8: shows.tvdb_id must be written when the TMDB external_ids response
@@ -2979,6 +3262,50 @@ mod tests {
         assert_eq!(
             report.files_removed, 1,
             "the root stays prune-healthy despite the non-utf8 skip"
+        );
+    }
+
+    #[tokio::test]
+    async fn scan_surfaces_reversed_corrupt_basenames_for_library_health() {
+        // S0 item 5: a byte/char-reversed basename (upstream-renamer corruption,
+        // e.g. Sons of Anarchy's byte-reversed final season) is correctly
+        // refused by classify() and produces no episode row — but it used to
+        // vanish silently, the only trace a WARN in ephemeral container logs.
+        // The scan report must now COUNT it and sample its path so a
+        // library-health view (GET /scan/status → last_report) can surface the
+        // rename-on-disk-and-rescan action. Counted in the walk phase, so the
+        // assertion is ffprobe-independent (empty fixtures fail to probe, which
+        // only bumps `errors` — deliberately not asserted here).
+        let tmp = tempdir().unwrap();
+        let shows = tmp.path().join("Sons of Anarchy");
+        std::fs::create_dir_all(&shows).unwrap();
+        // "Sons of Anarchy S07E010.mkv" with the stem byte-reversed (extension
+        // left intact by the renamer): the forward name misses every episode
+        // regex, but the reversed stem matches SxxExx — exactly what
+        // is_corrupt_reversed detects.
+        let reversed = shows.join("010E70S yhcranA fo snoS.mkv");
+        std::fs::write(&reversed, b"bytes").unwrap();
+        // A healthy sibling proves only the corrupt file is flagged.
+        let healthy = shows.join("Sons of Anarchy S01E01.mkv");
+        std::fs::write(&healthy, b"bytes").unwrap();
+
+        let db = Db::connect_memory().await.unwrap();
+        let roots = vec![LibraryRoot {
+            path: tmp.path().to_path_buf(),
+            kind: RootKind::Shows,
+        }];
+        let report = scan_once(&db, &roots, &no_tmdb()).await.unwrap();
+
+        assert_eq!(report.files_seen, 2, "both files are walked");
+        assert_eq!(
+            report.files_refused_corrupt, 1,
+            "exactly the reversed basename is flagged as corrupt"
+        );
+        assert_eq!(report.refused_corrupt_paths.len(), 1);
+        assert!(
+            report.refused_corrupt_paths[0].contains("010E70S yhcranA fo snoS"),
+            "the offending path is surfaced for the operator: {:?}",
+            report.refused_corrupt_paths
         );
     }
 
