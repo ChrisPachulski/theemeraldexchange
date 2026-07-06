@@ -47,6 +47,11 @@ pub const MIGRATIONS: &[(i64, &str, &str)] = &[
         "0008_album_art",
         include_str!("../migrations/0008_album_art.sql"),
     ),
+    (
+        9,
+        "0009_episode_negcache",
+        include_str!("../migrations/0009_episode_negcache.sql"),
+    ),
 ];
 
 #[derive(Clone)]
@@ -273,6 +278,39 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(fts, 3, "FTS5 virtual tables must be created by 0003");
+    }
+
+    #[tokio::test]
+    async fn episode_negcache_columns_exist_after_migration() {
+        // S0 item 4: migration 0009 adds the negative-result cache columns the
+        // scanner uses to stop re-probing permanently-404 episodes. Without them
+        // `episode_lookup_due` / `record_episode_lookup_failure` can't persist
+        // state and the retry storm returns.
+        let db = Db::connect_memory().await.unwrap();
+        let cols: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('episodes')")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+        assert!(
+            cols.iter().any(|c| c == "tmdb_lookup_attempts"),
+            "episodes must have tmdb_lookup_attempts; got {cols:?}"
+        );
+        assert!(
+            cols.iter().any(|c| c == "tmdb_lookup_failed_at"),
+            "episodes must have tmdb_lookup_failed_at; got {cols:?}"
+        );
+        // The default keeps existing rows re-probeable (0 attempts, no failure
+        // stamp) rather than mass-suppressing the current library. `dflt_value`
+        // comes back as the raw SQL text, so compare as text.
+        let default_attempts: Option<String> = sqlx::query_scalar(
+            "SELECT dflt_value FROM pragma_table_info('episodes') \
+             WHERE name = 'tmdb_lookup_attempts'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(default_attempts.as_deref(), Some("0"));
     }
 
     #[tokio::test]
