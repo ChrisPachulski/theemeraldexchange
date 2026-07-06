@@ -17,6 +17,16 @@ export interface AcquireOpts {
   resourceId: string
   ip?: string | null
   title?: string | null
+  // Optional cap scoped to sessions of THIS kind, checked in ADDITION to the
+  // global cap. The remux path opens a HARD-capped live upstream connection
+  // (IPTV_MAX_UPSTREAM_CONNECTIONS ffmpeg sessions); granting more remux slots
+  // than that just gets the surplus viewer silently ffmpeg-evicted mid-stream
+  // when its session spawns past the ceiling. So the remux grant passes
+  // kindCap = min(concurrent, upstream) and the surplus grant is rejected HERE
+  // with the structured iptv_concurrency_limit 429 the client already renders,
+  // instead of the silent eviction. Scoped to same-kind sessions so VOD/series
+  // (which open no live upstream connection) are never limited by it.
+  kindCap?: number
 }
 // Closed `reason` enum values for grant-endpoint denials (§12.4).
 // Extend only with a contract bump — Swift Decodable switch-exhausts on
@@ -79,7 +89,7 @@ export function createConcurrencyTracker(opts: { cap: number; idleMs: number }):
     return Array.from(sessions.values()).sort((a, b) => b.startedAt - a.startedAt)
   }
 
-  function tryAcquire({ sub, sessionId, kind, resourceId, ip, title }: AcquireOpts): AcquireResult {
+  function tryAcquire({ sub, sessionId, kind, resourceId, ip, title, kindCap }: AcquireOpts): AcquireResult {
     sweep()
     const existing = sessions.get(sessionId)
     if (existing) {
@@ -96,6 +106,24 @@ export function createConcurrencyTracker(opts: { cap: number; idleMs: number }):
     for (const [id, s] of sessions) {
       if (s.sub === sub && s.kind === kind && s.resourceId === resourceId) {
         sessions.delete(id)
+      }
+    }
+    // Kind-scoped cap (remux ↔ upstream-connection ceiling). Checked after the
+    // dedupe above so a re-grant for a channel the same user already holds does
+    // not count itself. Reuses the iptv_concurrency_limit shape so the client
+    // renders "provider connection limit reached" instead of the silent
+    // mid-stream eviction it would get past the upstream cap.
+    if (kindCap !== undefined) {
+      let sameKind = 0
+      for (const s of sessions.values()) if (s.kind === kind) sameKind++
+      if (sameKind >= kindCap) {
+        return {
+          ok: false,
+          reason: 'iptv_concurrency_limit',
+          limit: kindCap,
+          current: sameKind,
+          sessions: Array.from(sessions.values()).sort((a, b) => b.startedAt - a.startedAt),
+        }
       }
     }
     if (sessions.size >= opts.cap) {

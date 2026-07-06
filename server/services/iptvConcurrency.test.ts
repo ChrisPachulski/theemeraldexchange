@@ -47,6 +47,51 @@ describe('iptv concurrency tracker', () => {
     expect(t.size()).toBe(2)
   })
 
+  // ── kind-scoped cap: remux ↔ upstream-connection ceiling (S1 item 9) ───────
+  it('kindCap 429s the surplus remux grant even when the global cap has room', () => {
+    // Global cap 4, but remux is clamped to the upstream-connection cap (2). The
+    // 3rd concurrent remux viewer must get a clean iptv_concurrency_limit here
+    // instead of being silently ffmpeg-evicted mid-stream past the upstream cap.
+    const t = createConcurrencyTracker({ cap: 4, idleMs: 30_000 })
+    const remux = (sub: string, sessionId: string, resourceId: string) => ({
+      sub, sessionId, kind: 'remux' as const, resourceId, ip: null, title: null, kindCap: 2,
+    })
+    expect(t.tryAcquire(remux('u1', 's1', '10')).ok).toBe(true)
+    expect(t.tryAcquire(remux('u2', 's2', '11')).ok).toBe(true)
+    const third = t.tryAcquire(remux('u3', 's3', '12'))
+    expect(third.ok).toBe(false)
+    if (!third.ok && third.reason === 'iptv_concurrency_limit') {
+      expect(third.limit).toBe(2)
+      expect(third.current).toBe(2)
+    } else {
+      throw new Error('expected iptv_concurrency_limit from the remux kindCap')
+    }
+    // The global cap still had two free slots — the reject came from the kindCap.
+    expect(t.size()).toBe(2)
+  })
+
+  it('kindCap is scoped to its own kind — VOD sessions do not consume the remux cap', () => {
+    const t = createConcurrencyTracker({ cap: 4, idleMs: 30_000 })
+    // Two VOD sessions (no live upstream connection) exist…
+    expect(t.tryAcquire({ sub: 'u1', sessionId: 'v1', kind: 'vod', resourceId: '20', ip: null, title: null }).ok).toBe(true)
+    expect(t.tryAcquire({ sub: 'u2', sessionId: 'v2', kind: 'vod', resourceId: '21', ip: null, title: null }).ok).toBe(true)
+    // …and the remux kindCap of 2 still admits two remux sessions on top.
+    expect(t.tryAcquire({ sub: 'u3', sessionId: 'r1', kind: 'remux', resourceId: '30', ip: null, title: null, kindCap: 2 }).ok).toBe(true)
+    expect(t.tryAcquire({ sub: 'u4', sessionId: 'r2', kind: 'remux', resourceId: '31', ip: null, title: null, kindCap: 2 }).ok).toBe(true)
+  })
+
+  it('a remux re-grant for the same channel supersedes rather than tripping the kindCap', () => {
+    // Dedupe runs before the kindCap check, so the same viewer re-selecting the
+    // SAME channel replaces its slot instead of counting a phantom second remux.
+    const t = createConcurrencyTracker({ cap: 4, idleMs: 30_000 })
+    const remux = (sessionId: string) => ({
+      sub: 'u1', sessionId, kind: 'remux' as const, resourceId: '10', ip: null, title: null, kindCap: 1,
+    })
+    expect(t.tryAcquire(remux('s1')).ok).toBe(true)
+    expect(t.tryAcquire(remux('s2')).ok).toBe(true) // re-grant, kindCap 1 not tripped
+    expect(t.size()).toBe(1)
+  })
+
   it('releases on heartbeat timeout', () => {
     const t = createConcurrencyTracker({ cap: 1, idleMs: 100 })
     t.tryAcquire(baseOpts('u1', 's1'))

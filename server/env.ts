@@ -671,6 +671,16 @@ export const env = {
   // Nightly sweep of expired device_tokens + webauthn_challenges (LOW-9).
   TOKEN_SWEEP_CRON: process.env.TOKEN_SWEEP_CRON ?? '15 3 * * *',
   IPTV_EPG_PATH: opt('IPTV_EPG_PATH') ?? '/xmltv.php',
+  // Global cap on concurrent IPTV streams of ANY kind (live/remux/vod/series/
+  // catchup). INVARIANT for the remux (live AVPlayer) path: the effective remux
+  // cap must satisfy CONCURRENT ≤ IPTV_MAX_UPSTREAM_CONNECTIONS — a remux grant
+  // opens a live upstream connection that is hard-capped below, so granting more
+  // remux slots than upstream connections would silently ffmpeg-evict the
+  // surplus viewer mid-stream. The live grant enforces this by clamping the
+  // remux grant to min(this, IPTV_MAX_UPSTREAM_CONNECTIONS), so this default may
+  // safely exceed the upstream cap for the non-remux kinds (VOD/series open no
+  // live upstream connection). Ops pins this to the provider's real connection
+  // count in production.
   IPTV_MAX_CONCURRENT_STREAMS: positiveInt('IPTV_MAX_CONCURRENT_STREAMS', 4),
   // HARD ceiling on simultaneous live-remux upstream connections to the IPTV
   // provider. The provider plan allows only a few at once and trips an abuse
