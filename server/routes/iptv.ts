@@ -739,7 +739,11 @@ iptv.post('/stream/catchup/:streamId/grant', requireAuth, async (c) => {
     kind: 'catchup',
     resourceId,
     sub,
-    ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
+    // On-demand (finite archive) playback re-presents this token on every
+    // seek/reconnect for the whole runtime — the 300s finite-asset TTL froze
+    // it at ~5min. Use the playback-duration TTL, like VOD/series and local
+    // media.
+    ttlSecs: env.IPTV_ONDEMAND_TOKEN_TTL_SECS,
   })
 
   return c.json({
@@ -1078,7 +1082,10 @@ iptv.post('/stream/vod/:streamId/grant', requireAuth, async (c) => {
   }
 
   const token = signStreamToken(env.streamTokenSecret, {
-    kind: 'vod', resourceId: streamId, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
+    // On-demand playback re-presents this token on every range GET / HLS
+    // segment fetch across the whole runtime — the 300s finite-asset TTL froze
+    // playback at ~5min. Playback-duration TTL, like local media.
+    kind: 'vod', resourceId: streamId, sub, ttlSecs: env.IPTV_ONDEMAND_TOKEN_TTL_SECS,
   })
   const delivery: 'hls' | 'progressive' = ext === 'm3u8' ? 'hls' : 'progressive'
 
@@ -1168,7 +1175,10 @@ iptv.post('/stream/series/:episodeId/grant', requireAuth, async (c) => {
   }
 
   const token = signStreamToken(env.streamTokenSecret, {
-    kind: 'series', resourceId: episodeId, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
+    // On-demand playback re-presents this token on every range GET / HLS
+    // segment fetch across the whole runtime — the 300s finite-asset TTL froze
+    // playback at ~5min. Playback-duration TTL, like local media.
+    kind: 'series', resourceId: episodeId, sub, ttlSecs: env.IPTV_ONDEMAND_TOKEN_TTL_SECS,
   })
   const delivery: 'hls' | 'progressive' = ext === 'm3u8' ? 'hls' : 'progressive'
 

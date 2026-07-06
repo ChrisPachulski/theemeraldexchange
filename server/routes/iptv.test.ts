@@ -805,6 +805,74 @@ describe('vod stream grant + proxy', () => {
   })
 })
 
+// Regression (S0-3): VOD / series / catch-up grant tokens — AND the HLS
+// segment tokens minted from their manifests — used the 300s finite-asset TTL.
+// On-demand playback re-presents the token on every range GET / seek / HLS
+// segment fetch across the whole runtime, and the byte/segment handlers
+// re-check `exp` each time, so any movie or episode past ~5 minutes 401'd and
+// stalled/ejected mid-play (identical failure class to the already-fixed
+// live-cable-froze-at-5min bug). On-demand tokens must outlast a sitting — the
+// playback-duration TTL local media uses — while live remux segments stay short.
+describe('on-demand grant token TTL (S0-3 regression)', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+
+  // Read the ttlSecs the grant passed to the (mocked) signStreamToken for the
+  // given kind — same technique as the live-TTL regression test above.
+  async function grantTtl(path: string, kind: string): Promise<number> {
+    const mock = vi.mocked(signStreamToken)
+    mock.mockClear()
+    const res = await app.request(path, { method: 'POST' })
+    expect(res.status).toBe(200)
+    const call = mock.mock.calls.find(([, o]) => (o as { kind: string }).kind === kind)
+    expect(call, `grant should mint a ${kind} token`).toBeDefined()
+    return (call![1] as { ttlSecs: number }).ttlSecs
+  }
+
+  it('VOD grant token uses the long on-demand TTL, not the 300s finite-asset TTL', async () => {
+    const ttl = await grantTtl('/api/iptv/stream/vod/20/grant', 'vod')
+    expect(ttl).toBe(env.IPTV_ONDEMAND_TOKEN_TTL_SECS)
+    // The bug: this equalled IPTV_STREAM_TOKEN_TTL_SECS (300) → froze at 5min.
+    expect(ttl).toBeGreaterThan(env.IPTV_STREAM_TOKEN_TTL_SECS)
+  })
+
+  it('series grant token uses the long on-demand TTL', async () => {
+    const ttl = await grantTtl('/api/iptv/stream/series/ep-1/grant', 'series')
+    expect(ttl).toBe(env.IPTV_ONDEMAND_TOKEN_TTL_SECS)
+    expect(ttl).toBeGreaterThan(env.IPTV_STREAM_TOKEN_TTL_SECS)
+  })
+
+  it('catch-up grant token uses the long on-demand TTL', async () => {
+    const startUtc = new Date(Date.now() - 60 * 60_000).toISOString()
+    const ttl = await grantTtl(
+      `/api/iptv/stream/catchup/10/grant?startUtc=${encodeURIComponent(startUtc)}&durationMin=30`,
+      'catchup',
+    )
+    expect(ttl).toBe(env.IPTV_ONDEMAND_TOKEN_TTL_SECS)
+    expect(ttl).toBeGreaterThan(env.IPTV_STREAM_TOKEN_TTL_SECS)
+  })
+
+  it('HLS segment tokens minted from a VOD manifest use the long on-demand TTL', async () => {
+    const mock = vi.mocked(signStreamToken)
+    mock.mockClear()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response([
+      '#EXTM3U',
+      '#EXTINF:6.0,',
+      'seg-001.ts',
+    ].join('\n'), { status: 200, headers: { 'content-type': 'application/vnd.apple.mpegurl' } }))
+    try {
+      const res = await app.request(`/api/iptv/stream/vod/20/m3u8?t=${fakeToken('vod', '20')}`)
+      expect(res.status).toBe(200)
+      const seg = mock.mock.calls.find(([, o]) => (o as { kind: string }).kind === 'segment')
+      expect(seg, 'manifest rewrite should mint a segment token').toBeDefined()
+      const ttl = (seg![1] as { ttlSecs: number }).ttlSecs
+      expect(ttl).toBe(env.IPTV_ONDEMAND_TOKEN_TTL_SECS)
+      expect(ttl).toBeGreaterThan(env.IPTV_STREAM_TOKEN_TTL_SECS)
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+})
+
 describe('HLS manifest egress deadline + body bound', () => {
   const app = new Hono().route('/api/iptv', iptv)
   const envRw = env as unknown as {

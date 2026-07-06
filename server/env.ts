@@ -691,6 +691,20 @@ export const env = {
   // stops), so a long TTL is low-impact. Per-segment remux tokens stay on the
   // short TTL above (re-minted each segment, consumed within the live window).
   IPTV_LIVE_TOKEN_TTL_SECS: positiveInt('IPTV_LIVE_TOKEN_TTL_SECS', 43_200),
+  // TTL for ON-DEMAND grant tokens (VOD, series, catch-up) and the HLS segment
+  // tokens minted from their manifests. On-demand playback is NOT a single
+  // request: AVPlayer (progressive MP4) issues fresh range GETs as playback
+  // advances and on every seek, and hls.js (VOD .m3u8) fetches segment URLs
+  // across the whole runtime — each carries the grant/segment token and the
+  // handler re-checks `exp` every time. The short finite-asset TTL above
+  // (IPTV_STREAM_TOKEN_TTL_SECS=300) therefore froze on-demand playback after
+  // exactly ~5 minutes with a 401, the same failure class already fixed for
+  // live. A movie/episode token must outlast a whole sitting — like
+  // MEDIA_STREAM_TOKEN_TTL_SECS for local media (default 6h, room for pauses).
+  // It is rid-bound to one title + sub, so a long TTL is low-impact. Live
+  // remux per-segment tokens stay on the short TTL above (re-minted each
+  // segment, consumed within the live window).
+  IPTV_ONDEMAND_TOKEN_TTL_SECS: positiveInt('IPTV_ONDEMAND_TOKEN_TTL_SECS', 21_600),
   // TTL for local-media playback stream tokens (routes/media.ts). Unlike IPTV's
   // short-lived per-request tokens, a movie token must outlast a whole sitting:
   // the same token is presented on every byte-range (direct play) or HLS
