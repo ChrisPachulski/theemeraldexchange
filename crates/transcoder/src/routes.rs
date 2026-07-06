@@ -472,6 +472,10 @@ async fn grant(
         duration_secs: row.duration_secs,
         owner,
         subtitle: sidecar.clone(),
+        // Source audio tracks (probe order) — the plan's `extra_audio` carries
+        // only indices; the native master reads language/title from here to NAME
+        // each alternate-audio rendition (Spec S4).
+        audio_tracks: row.audio_tracks(),
     };
 
     match state.sessions.start(opts).await {
@@ -586,7 +590,7 @@ async fn session_manifest(
         return forbidden();
     }
 
-    // Trick-play (TRANSCODER_TRICKPLAY, default OFF): a native re-encode session
+    // Trick-play (TRANSCODER_TRICKPLAY, default ON since S5): a native re-encode session
     // gets a MASTER playlist here instead of the media playlist, advertising an
     // I-frame rendition (iframe.m3u8) for AVPlayer's scrubbing thumbnails plus
     // the synthesized VOD media playlist (media.m3u8) as its video variant —
@@ -728,9 +732,13 @@ async fn session_segment(
     // ever requests already-listed segments, so it never enters this wait.
     // The sidecar VTT gets the same brief wait as frontier segments: AVPlayer
     // fetches it as soon as the master advertises the subs rendition, which can
-    // race the detached one-shot extraction on session start.
+    // race the detached one-shot extraction on session start. Alternate-audio
+    // rendition assets (audio_{n}.m3u8 + its segments) race their own detached
+    // pass the same way, so they get the same brief wait.
     if is_native_hls_client(&headers)
-        && (segment_index(&segment).is_some() || segment == SIDECAR_SUBTITLE_NAME)
+        && (segment_index(&segment).is_some()
+            || segment == SIDECAR_SUBTITLE_NAME
+            || crate::session::is_audio_rendition_asset(&segment))
         && !tokio::fs::try_exists(&path).await.unwrap_or(false)
     {
         let mut waited = Duration::ZERO;

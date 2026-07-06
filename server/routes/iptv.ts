@@ -29,7 +29,7 @@ import {
   getVodDetail,
   getSeriesDetail,
 } from '../services/iptvCatalog.js'
-import { epgChannelWindow, epgGrid, epgNow } from '../services/iptvEpgQuery.js'
+import { epgChannelWindow, epgGrid, epgNow, epgSearch } from '../services/iptvEpgQuery.js'
 import { signStreamToken, verifyStreamToken, type StreamKind } from '../services/iptvStreamToken.js'
 import { checkReplay } from '../services/tokenReplayCache.js'
 import { parseSub } from '../services/sub.js'
@@ -373,6 +373,43 @@ iptv.get('/epg/grid', requireAuth, async (c) => {
   // /stream/* video-proxy endpoints are never wrapped in compression. Browsers
   // always send Accept-Encoding: gzip and inflate transparently; fall back to
   // plain JSON for clients that don't, or for small bodies.
+  const acceptsGzip = (c.req.header('accept-encoding') ?? '').toLowerCase().includes('gzip')
+  if (acceptsGzip && json.length > 64 * 1024) {
+    return c.body(await gzipAsync(json), 200, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Encoding': 'gzip',
+      Vary: 'Accept-Encoding',
+    })
+  }
+  return c.body(json, 200, { 'Content-Type': 'application/json; charset=utf-8' })
+})
+
+// Server-side programme search over the ENTIRE synced EPG store — not just the
+// warm channels the tvOS guide pre-fetches. Replaces the client-side scan seam
+// (EmeraldKit EpgSearch.programHits, capped to CatalogStore.guideChannelLimit),
+// so searching 'Yankees' / 'news' now reaches every channel's schedule without
+// shipping the full ~28 MB grid to a memory-constrained device. Query parsing
+// (q slice, categoryIds cap-500) + gzip mirror /epg/grid above.
+iptv.get('/epg/search', requireAuth, async (c) => {
+  const rawQ = c.req.query('q')
+  const q = rawQ && rawQ.trim() ? rawQ.trim().slice(0, 100) : undefined
+  if (!q) return c.json({ error: 'invalid_query' }, 400)
+
+  const from = c.req.query('from') ?? new Date().toISOString()
+  const to = c.req.query('to') ?? new Date(Date.now() + 4 * 3600_000).toISOString()
+
+  const rawCategoryIds = c.req.query('categoryIds')
+  const categoryIds = rawCategoryIds
+    ? rawCategoryIds.split(',').map((s) => Number(s.trim())).filter((n) => Number.isInteger(n) && n > 0).slice(0, 500)
+    : undefined
+
+  const rawLimit = c.req.query('limit')
+  const limit = rawLimit != null && rawLimit !== '' ? Number(rawLimit) : undefined
+  if (limit != null && (!Number.isInteger(limit) || limit <= 0)) {
+    return c.json({ error: 'invalid_limit' }, 400)
+  }
+
+  const json = JSON.stringify(epgSearch(iptvDb(), from, to, { q, categoryIds, limit }))
   const acceptsGzip = (c.req.header('accept-encoding') ?? '').toLowerCase().includes('gzip')
   if (acceptsGzip && json.length > 64 * 1024) {
     return c.body(await gzipAsync(json), 200, {
