@@ -285,6 +285,7 @@ media.post('/playback/:kind/:id', async (c) => {
   const manifestProbe = `${env.transcoderUrl}${handoff.manifestUrl}`
   const READY_DEADLINE_MS = 12_000
   const readyDeadline = Date.now() + READY_DEADLINE_MS
+  let ready = false
   while (Date.now() < readyDeadline) {
     try {
       // The manifest is a small text playlist — whole-transfer deadline so
@@ -298,7 +299,10 @@ media.post('/playback/:kind/:id', async (c) => {
       if (m.ok) {
         const body = await m.text()
         // `.ts` for MPEG-TS sessions, `.m4s` for fMP4 (HEVC copy) sessions.
-        if (/\.(?:ts|m4s)(\?|\s|$)/m.test(body)) break // a segment is listed → ready
+        if (/\.(?:ts|m4s)(\?|\s|$)/m.test(body)) {
+          ready = true
+          break // a segment is listed → ready
+        }
       }
     } catch {
       // transient — keep polling until the deadline
@@ -331,6 +335,36 @@ media.post('/playback/:kind/:id', async (c) => {
           forced: handoff.subtitle.forced ?? false,
         }
       : null
+
+  // Trick-play (S5): a re-encode session with a known duration synthesizes an
+  // I-frame playlist at `iframe.m3u8` (the AVPlayer-native equivalent of a Plex
+  // BIF) — the master the client loads already advertises it, but we surface the
+  // URL explicitly so the player can bind the scrubbing-preview rendition
+  // directly. Ground-truth it with ONE probe: the transcoder's iframe route
+  // 404s for copy-remux / no-duration / flag-off sessions, so a hit means the
+  // rendition genuinely exists (never a dead URL) and the token-wrapped path
+  // rides the same owner-bound `/session/<id>/*` proxy as the manifest. Trick-
+  // play is a progressive enhancement — any probe failure yields null, never a
+  // failed grant — and we skip it entirely when the manifest never became ready
+  // (that session is already degraded; the master still carries the rendition).
+  const iframePath = handoff.manifestUrl.replace(/\/index\.m3u8$/, '/iframe.m3u8')
+  let trickplayUrl: string | null = null
+  if (ready && iframePath !== handoff.manifestUrl) {
+    try {
+      const tp = await fetchWithTimeout(
+        `${env.transcoderUrl}${iframePath}`,
+        { method: 'GET', headers: auth },
+        LAN_TIMEOUT_MS,
+        'transcoder',
+      )
+      if (tp.ok && /#EXT-X-I-FRAMES-ONLY/.test(await tp.text())) {
+        trickplayUrl = withToken(iframePath)
+      }
+    } catch {
+      // Probe failed — leave trickplayUrl null; scrubbing previews are optional.
+    }
+  }
+
   return c.json({
     delivery: 'hls',
     url: withToken(handoff.manifestUrl),
@@ -339,6 +373,7 @@ media.post('/playback/:kind/:id', async (c) => {
     sessionId: sid,
     durationSecs,
     subtitle,
+    trickplayUrl,
   })
 })
 

@@ -986,7 +986,7 @@ impl SessionManager {
                 .await;
         }
 
-        // Trick-play thumbnails (experimental; TRANSCODER_TRICKPLAY, default OFF):
+        // Trick-play thumbnails (TRANSCODER_TRICKPLAY, default ON since S5):
         // a detached one-shot samples the source into tiny all-keyframe segments
         // for AVPlayer's scrubbing preview. Re-encode only — the synthesized VOD
         // media playlist + uniform keyframe grid is what makes the master's

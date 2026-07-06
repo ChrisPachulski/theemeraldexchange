@@ -199,6 +199,36 @@ describe('media proxy route', () => {
     expect(mockMint).not.toHaveBeenCalled()
   })
 
+  it('proxies GET /music/artists to media-core and round-trips the {items,total} shape', async () => {
+    // S6: the music library ships as a flag-flip — media-core already serves
+    // /music/artists|albums|tracks and the catch-all proxy forwards them. Lock
+    // in the contract the client's musicArtists case decodes so a future proxy
+    // refactor can't silently drop the Music tab: authed with the internal
+    // principal, path preserved, body passed through verbatim.
+    const payload = JSON.stringify({
+      items: [{ id: 1, name: 'Miles Davis', album_count: 3 }],
+      total: 1,
+    })
+    mockFetch.mockResolvedValue(
+      new Response(payload, { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    )
+
+    const res = await media.request('/music/artists?limit=50', {
+      method: 'GET',
+      headers: { host: 'localhost' },
+    })
+
+    expect(res.status).toBe(200)
+    expect(mockFetch).toHaveBeenCalledOnce()
+    const [url, init] = mockFetch.mock.calls[0]
+    // Path (and query) preserved onto the media-core music route.
+    expect(url).toBe('http://media-core.test/api/media/music/artists?limit=50')
+    expect((init as FetchInitWithHeaders).headers['authorization']).toBe('Bearer minted-token')
+    const body = (await res.json()) as { items: { id: number; name: string }[]; total: number }
+    expect(body.total).toBe(1)
+    expect(body.items[0].name).toBe('Miles Davis')
+  })
+
   it('forwards POST body and content-type', async () => {
     mockFetch.mockResolvedValue(new Response('ok', { status: 200 }))
 
@@ -389,6 +419,100 @@ describe('media playback grant', () => {
     expect(String(mockFetchTimed.mock.calls[1][0])).toContain('/api/media/stream/episode/99?')
     expect(String(mockFetchTimed.mock.calls[1][0])).toContain('start_secs=95')
     expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('surfaces a token-wrapped trickplayUrl when the transcoder serves an I-frame rendition', async () => {
+    // S5: a re-encode session exposes iframe.m3u8; the grant probes it and, on a
+    // hit, surfaces the URL wrapped with the SAME session token as the manifest.
+    mockFetchTimed
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ directPlay: false, file: { duration_secs: 7200 } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            transcode: true,
+            sessionId: 'sess-tp',
+            manifestUrl: '/api/transcode/session/sess-tp/index.m3u8',
+            heartbeatUrl: '/api/transcode/session/sess-tp/heartbeat',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+      // Readiness probe: a segment is listed → ready.
+      .mockResolvedValueOnce(
+        new Response('#EXTM3U\n#EXTINF:6.0,\nseg_00000.ts\n', {
+          status: 200,
+          headers: { 'Content-Type': 'application/vnd.apple.mpegurl' },
+        }),
+      )
+      // Trick-play probe: the transcoder returns the synthesized I-frame playlist.
+      .mockResolvedValueOnce(
+        new Response(
+          '#EXTM3U\n#EXT-X-VERSION:4\n#EXT-X-I-FRAMES-ONLY\n#EXTINF:10.000000,\nthumb_00000.ts\n#EXT-X-ENDLIST\n',
+          { status: 200, headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } },
+        ),
+      )
+
+    const res = await media.request('/playback/movie/7', {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: JSON.stringify({ hls_fmp4_hevc: false }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { delivery: string; url: string; trickplayUrl: string | null }
+    expect(body.delivery).toBe('hls')
+    // Same session id + token class as the manifest, on the iframe.m3u8 sibling.
+    expect(body.trickplayUrl).toMatch(/^\/api\/transcode\/session\/sess-tp\/iframe\.m3u8\?t=.+/)
+    // The probe hit the transcoder's iframe route (derived from the manifest path).
+    const probeUrl = String(mockFetchTimed.mock.calls[3][0])
+    expect(probeUrl).toContain('/api/transcode/session/sess-tp/iframe.m3u8')
+  })
+
+  it('trickplayUrl is null when the transcoder has no I-frame rendition (copy-remux)', async () => {
+    // A copy-remux / no-duration session 404s the iframe route → null, not a
+    // dead URL. The grant otherwise succeeds unchanged.
+    mockFetchTimed
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ directPlay: false, file: { duration_secs: 7200 } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            transcode: true,
+            sessionId: 'sess-copy',
+            manifestUrl: '/api/transcode/session/sess-copy/index.m3u8',
+            heartbeatUrl: '/api/transcode/session/sess-copy/heartbeat',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response('#EXTM3U\n#EXTINF:6.0,\nseg_00000.m4s\n', {
+          status: 200,
+          headers: { 'Content-Type': 'application/vnd.apple.mpegurl' },
+        }),
+      )
+      // Trick-play probe: the iframe route is not available for this session.
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'no such session or segment' }), { status: 404 }))
+
+    const res = await media.request('/playback/movie/7', {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: JSON.stringify({ hls_fmp4_hevc: true }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { delivery: string; trickplayUrl: string | null }
+    expect(body.delivery).toBe('hls')
+    expect(body.trickplayUrl).toBeNull()
   })
 
   it('force_hls overrides a direct-play grant with buffered (hls) delivery', async () => {

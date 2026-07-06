@@ -7,9 +7,11 @@
 
 import { createReadStream, statSync } from 'node:fs'
 import { Readable } from 'node:stream'
-import { Hono } from 'hono'
+import { Hono, type Context, type Next } from 'hono'
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
+import { env } from '../env.js'
 import { iptvDb } from '../services/iptvDbSingleton.js'
+import { signStreamToken, verifyStreamToken, type StreamKind } from '../services/iptvStreamToken.js'
 import {
   validateNewRecording,
   scheduleRecording,
@@ -20,6 +22,19 @@ import {
 } from '../services/dvrRecordings.js'
 
 export const dvr = new Hono<Env>()
+
+// The DVR play token's kind. `'recording'` is the M6-reserved StreamKind that
+// verifiers already accept cross-language (see iptvStreamToken.ts §5.3) — this
+// is the first path to actually MINT it. Bound to a single recording id + sub
+// like the VOD idiom in routes/iptv.ts.
+const RECORDING_KIND: StreamKind = 'recording'
+
+// The stream token's `rid` for a recording — the bare recording id, mirroring
+// the VOD grant which binds to the bare streamId. Kind (`recording`) already
+// disambiguates it from any other token class, and rid pins it to this one file.
+function recordingResourceId(id: string): string {
+  return id
+}
 
 // Schedule a recording. Admin-gated (mutates the DVR queue + will consume disk).
 dvr.post('/recordings', requireAdmin, async (c) => {
@@ -61,10 +76,66 @@ dvr.delete('/recordings/:id', requireAdmin, (c) => {
   return c.json({ status: outcome })
 })
 
-// Play back a completed recording (range-serve the local .ts). requireAuth for
-// now; a cookieless stream-token path (the reserved 'recording' StreamKind) is
-// the follow-up when the DVR player UI lands.
-dvr.get('/recordings/:id/play', requireAuth, (c) => {
+// Mint a playback grant for a completed recording (S7). Cookie/bearer authed —
+// the caller must already be a logged-in member. Returns a `recording`-kind
+// stream token bound to this recording id + the caller's sub, on the cookieless
+// `?t=` play URL a device-token (tvOS/iOS) client can load. Mirrors the VOD
+// grant idiom in routes/iptv.ts: a finite-asset TTL (the on-demand TTL, ~6h —
+// NOT the 300s live TTL), so re-presenting the token on every range GET across
+// the whole recording never expires mid-playback.
+dvr.post('/recordings/:id/grant', requireAuth, (c) => {
+  const id = c.req.param('id')
+  const rec = getRecording(iptvDb().raw, id)
+  if (!rec) return c.json({ error: 'not_found' }, 404)
+  // Only a completed recording with a materialized file is playable — don't
+  // hand out a token that can only 404, mirroring the play route's own gate.
+  if (rec.status !== 'completed' || !rec.file_path) {
+    return c.json({ error: 'not_ready' }, 404)
+  }
+  const { sub } = c.get('session')
+  const token = signStreamToken(env.streamTokenSecret, {
+    kind: RECORDING_KIND,
+    resourceId: recordingResourceId(id),
+    sub,
+    ttlSecs: env.IPTV_ONDEMAND_TOKEN_TTL_SECS,
+  })
+  return c.json({
+    url: `/api/dvr/recordings/${id}/play?t=${token}`,
+    delivery: 'progressive',
+    mime: 'video/mp2t',
+  })
+})
+
+// Auth gate for the play route: accept a `?t=` recording stream token (bound to
+// this exact recording id) so a cookieless device-token client can play; any
+// tokenless request falls back to the session cookie/bearer. Mirrors the
+// `mediaAuth` seam in routes/media.ts (which does the same for /stream/*).
+async function dvrPlayAuth(c: Context<Env>, next: Next) {
+  const token = c.req.query('t')
+  if (token) {
+    const id = c.req.param('id')
+    let claims: ReturnType<typeof verifyStreamToken>
+    try {
+      claims = verifyStreamToken(env.streamTokenSecret, token)
+    } catch (err) {
+      return c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401)
+    }
+    // Kind + rid must both match: a token for another kind or another recording
+    // must not unlock this file (no replay tracking — a recording token is
+    // re-presented on every range GET, exactly like the VOD path).
+    if (claims.k !== RECORDING_KIND || claims.rid !== recordingResourceId(id)) {
+      return c.json({ error: 'token_mismatch' }, 401)
+    }
+    c.set('session', { sub: claims.sub, username: '', role: 'user' })
+    return next()
+  }
+  return requireAuth(c, next)
+}
+
+// Play back a completed recording (range-serve the local .ts). Accepts either a
+// session cookie/bearer OR a cookieless `?t=` recording stream token (S7), so a
+// device-token tvOS/iOS client — which never holds a cookie — can play.
+dvr.get('/recordings/:id/play', dvrPlayAuth, (c) => {
   const rec = getRecording(iptvDb().raw, c.req.param('id'))
   if (!rec || rec.status !== 'completed' || !rec.file_path) {
     return c.json({ error: 'not_ready' }, 404)

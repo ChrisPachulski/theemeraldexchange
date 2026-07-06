@@ -66,11 +66,27 @@ pub(crate) const IFRAME_PLAYLIST_NAME: &str = "iframe.m3u8";
 /// informational for the client's rendition selection; kept small and constant.
 const IFRAME_BANDWIDTH_BPS: u32 = 120_000;
 
-/// Whether trick-play is enabled. Reads `TRANSCODER_TRICKPLAY`; truthy values
-/// (`1`/`true`/`yes`/`on`, case-insensitive) turn it on. Default OFF, so an
-/// unconfigured deploy is byte-for-byte the proven serving path.
+/// Whether trick-play is enabled. Reads `TRANSCODER_TRICKPLAY`. **Default ON**
+/// (S5): the I-frame rendition has been validated on-device, so an unconfigured
+/// deploy now ships scrubbing thumbnails. An explicit falsy value
+/// (`0`/`false`/`no`/`off`, case-insensitive — anything non-truthy) still turns
+/// it OFF, so a deploy can opt back out without a code change.
 pub(crate) fn enabled() -> bool {
-    is_truthy(&std::env::var("TRANSCODER_TRICKPLAY").unwrap_or_default())
+    enabled_from(std::env::var("TRANSCODER_TRICKPLAY").ok().as_deref())
+}
+
+/// Pure resolution of the flag with a **default-ON** policy: an unset or blank
+/// value enables trick-play; a present, non-blank value is honored via
+/// [`is_truthy`] (so `0`/`false`/`off`/`no` disable it). Factored out of
+/// [`enabled`] so the default can be unit-tested WITHOUT mutating the
+/// process-global env — the same reason [`is_truthy`] is separate (a mid-test
+/// env flip would race concurrent session tests into spawning a stray thumbnail
+/// ffmpeg).
+fn enabled_from(v: Option<&str>) -> bool {
+    match v {
+        Some(s) if !s.trim().is_empty() => is_truthy(s),
+        _ => true,
+    }
 }
 
 /// Pure truthiness test for the flag value, factored out so it can be unit-tested
@@ -263,6 +279,27 @@ mod tests {
         }
         for v in ["0", "false", "", "nope", "off", "no"] {
             assert!(!is_truthy(v), "value {v:?} should NOT enable");
+        }
+    }
+
+    #[test]
+    fn enabled_defaults_on_when_unset_or_blank() {
+        // S5 flip: an unconfigured deploy (env absent) now ships trick-play,
+        // and a blank value is treated the same as absent.
+        assert!(enabled_from(None), "unset must default ON");
+        assert!(enabled_from(Some("")), "blank must default ON");
+        assert!(enabled_from(Some("   ")), "whitespace-only must default ON");
+    }
+
+    #[test]
+    fn enabled_honors_an_explicit_value() {
+        // A present, non-blank value is authoritative: truthy on, everything
+        // else off — so a deploy can opt back out without a code change.
+        for v in ["1", "true", "YES", " On "] {
+            assert!(enabled_from(Some(v)), "explicit {v:?} should stay ON");
+        }
+        for v in ["0", "false", "off", "no", "nope"] {
+            assert!(!enabled_from(Some(v)), "explicit {v:?} must turn it OFF");
         }
     }
 
