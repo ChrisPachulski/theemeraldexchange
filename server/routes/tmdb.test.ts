@@ -368,3 +368,91 @@ describe('tmdb — /related', () => {
     expect((await badQuery.json() as { error: string }).error).toBe('invalid_query')
   })
 })
+
+describe('tmdb — /person/:personId', () => {
+  it('401 unauthenticated; 503 when not configured', async () => {
+    const r1 = await appUnderTest().request('/person/287')
+    expect(r1.status).toBe(401)
+    ;(env as { tmdbApiKey: string | null }).tmdbApiKey = null
+    const r2 = await appUnderTest().request('/person/287', { headers: { Cookie: await userCookie() } })
+    expect(r2.status).toBe(503)
+    expect(await r2.json()).toEqual({ error: 'tmdb_not_configured' })
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  it('happy path: returns Brad Pitt person header + combined-credits cast list', async () => {
+    stub('/person/287/combined_credits', {
+      cast: [
+        { id: 550, media_type: 'movie', title: 'Fight Club', poster_path: '/fc.jpg', release_date: '1999-10-15', character: 'Tyler Durden', vote_average: 8.4, popularity: 42 },
+        { id: 1877, media_type: 'tv', name: 'True Detective', poster_path: '/td.jpg', first_air_date: '2014-01-12', character: 'Self', vote_average: 6.1, popularity: 9 },
+        { id: 999, media_type: 'movie', poster_path: '/x.jpg', character: 'no-title-dropped' },
+      ],
+    })
+    // /person/287 (bio) must be stubbed distinctly from the credits subpath;
+    // the mock matches by url.includes, and '/person/287/combined_credits' is
+    // registered first so the bare '/person/287' needle can't shadow it.
+    stub('/person/287?', { id: 287, name: 'Brad Pitt', profile_path: '/bp.jpg', biography: 'Actor.', known_for_department: 'Acting' })
+    const r = await appUnderTest().request('/person/287', { headers: { Cookie: await userCookie() } })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as {
+      id: number; name: string; profile_path: string | null; known_for_department: string | null
+      cast: Array<{ id: number; media_type: string; title: string | null; name: string | null }>
+    }
+    expect(body.id).toBe(287)
+    expect(body.name).toBe('Brad Pitt')
+    expect(body.known_for_department).toBe('Acting')
+    // Title-less credit dropped; popularity-sorted (movie 42 before tv 9).
+    expect(body.cast.map((x) => x.id)).toEqual([550, 1877])
+    expect(body.cast[0]).toMatchObject({ media_type: 'movie', title: 'Fight Club', name: null })
+    expect(body.cast[1]).toMatchObject({ media_type: 'tv', name: 'True Detective', title: null })
+  })
+
+  it('caps the filmography at 40, popularity-ranked', async () => {
+    const cast = Array.from({ length: 60 }, (_, i) => ({
+      id: i + 1, media_type: 'movie', title: `M${i + 1}`, poster_path: `/p${i}.jpg`, popularity: i + 1,
+    }))
+    stub('/person/287/combined_credits', { cast })
+    stub('/person/287?', { id: 287, name: 'Brad Pitt' })
+    const r = await appUnderTest().request('/person/287', { headers: { Cookie: await userCookie() } })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { cast: Array<{ id: number }> }
+    expect(body.cast).toHaveLength(40)
+    // Highest popularity first (id 60 has popularity 60).
+    expect(body.cast[0].id).toBe(60)
+  })
+
+  it('invalid personId → 400 invalid_personId (no upstream call)', async () => {
+    const r = await appUnderTest().request('/person/abc', { headers: { Cookie: await userCookie() } })
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'invalid_personId' })
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  it('person lookup upstream 500 → 502 tmdb_person_failed', async () => {
+    stub('/person/287?', { status_message: 'boom' }, 500)
+    const r = await appUnderTest().request('/person/287', { headers: { Cookie: await userCookie() } })
+    expect(r.status).toBe(502)
+    expect(((await r.json()) as { error: string }).error).toBe('tmdb_person_failed')
+  })
+
+  it('combined_credits upstream 500 → 502 tmdb_credits_failed', async () => {
+    stub('/person/287?', { id: 287, name: 'Brad Pitt' })
+    stub('/person/287/combined_credits', { status_message: 'nope' }, 500)
+    const r = await appUnderTest().request('/person/287', { headers: { Cookie: await userCookie() } })
+    expect(r.status).toBe(502)
+    expect(((await r.json()) as { error: string }).error).toBe('tmdb_credits_failed')
+  })
+
+  it('/person/:id/credits returns the cast list without a bio fetch', async () => {
+    stub('/person/287/combined_credits', {
+      cast: [{ id: 550, media_type: 'movie', title: 'Fight Club', poster_path: '/fc.jpg', popularity: 42 }],
+    })
+    const r = await appUnderTest().request('/person/287/credits', { headers: { Cookie: await userCookie() } })
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { cast: Array<{ id: number }> }
+    expect(body.cast.map((x) => x.id)).toEqual([550])
+    // Only the credits path was hit — no bare /person/287 bio request.
+    expect(requests.some((rq) => /\/person\/287\/combined_credits/.test(rq.url))).toBe(true)
+    expect(requests.some((rq) => /\/person\/287(\?|$)/.test(rq.url))).toBe(false)
+  })
+})

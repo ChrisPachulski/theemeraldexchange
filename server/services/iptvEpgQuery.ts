@@ -187,3 +187,126 @@ export function epgGrid(
     programmes: channel.epg_channel_id ? (byChannel.get(channel.epg_channel_id) ?? []) : [],
   }))
 }
+
+/** One programme-title/description search hit + the guide row it airs on. Mirrors
+ *  the Apple client's `ProgramHit` (EpgSearch.swift): `programme` reuses the exact
+ *  grid projection so it decodes into the same `EpgProgram` Swift type, and
+ *  `programIndex` is the hit's index within that channel's window-ordered
+ *  programme list (stable id `"<streamId>#<programIndex>"`). */
+export interface EpgSearchHit {
+  streamId: number
+  channelName: string
+  categoryId: number | null
+  programme: EpgProgramme
+  programIndex: number
+}
+
+export interface EpgSearchOptions {
+  /** Required search term; matched case-insensitively against title + description. */
+  q: string
+  /** Optional `category_id IN (...)` filter, mirroring the grid's curated-set filter. */
+  categoryIds?: number[]
+  /** Hard cap on returned hits (the client's own scan capped at 100). */
+  limit?: number
+}
+
+export interface EpgSearchResult {
+  hits: EpgSearchHit[]
+  total: number
+}
+
+// Ceiling on returned hits — mirrors the grid's cap philosophy so a broad term
+// ('news') can't build an unbounded result set. `total` still reports the full
+// match count so the client can show "showing N of M".
+const SEARCH_LIMIT_MAX = 500
+
+/**
+ * Server-side programme search over the whole synced EPG store — the endpoint
+ * that replaces the client's warm-window-only `EpgSearch.programHits` seam.
+ *
+ * Semantics deliberately mirror that seam: case-insensitive "contains" over
+ * title OR description, hits ordered by channel (num, name) then programme
+ * start, one hit per (channel, matching programme) so duplicate feeds sharing
+ * an EPG id each surface (exactly as the grid renders one row per channel).
+ */
+export function epgSearch(
+  db: IptvDb,
+  fromIso: string,
+  toIso: string,
+  opts: EpgSearchOptions,
+): EpgSearchResult {
+  const needle = opts.q.trim().toLowerCase()
+  if (!needle) return { hits: [], total: 0 }
+  const limit = Math.min(Math.max(opts.limit ?? 100, 1), SEARCH_LIMIT_MAX)
+
+  // All programmes overlapping the window, grouped by EPG channel_id using the
+  // grid's exact projection + ordering, so `programIndex` lines up with the
+  // client's `row.programmes`. Both sides are stored lowercase (0005), so this
+  // exact-id grouping joins correctly.
+  const progRows = db.raw.prepare(`
+    SELECT channel_id, start_utc, stop_utc, title, description
+    FROM epg_programs
+    WHERE start_utc < ? AND stop_utc > ?
+    ORDER BY channel_id, start_utc ASC
+  `).all(toIso, fromIso) as EpgProgramme[]
+
+  const byChannel = new Map<string, EpgProgramme[]>()
+  for (const row of progRows) {
+    const arr = byChannel.get(row.channel_id)
+    if (arr) arr.push(row)
+    else byChannel.set(row.channel_id, [row])
+  }
+
+  // Case-insensitive contains over title/description (mirrors the client's
+  // localizedCaseInsensitiveContains), carrying each match's index within its
+  // channel's window-ordered programme list.
+  const matchesByChannel = new Map<string, Array<{ programme: EpgProgramme; programIndex: number }>>()
+  const matchedIds: string[] = []
+  for (const [channelId, programmes] of byChannel) {
+    const matches: Array<{ programme: EpgProgramme; programIndex: number }> = []
+    programmes.forEach((programme, programIndex) => {
+      const titleHit = programme.title != null && programme.title.toLowerCase().includes(needle)
+      const descHit = programme.description != null && programme.description.toLowerCase().includes(needle)
+      if (titleHit || descHit) matches.push({ programme, programIndex })
+    })
+    if (matches.length) {
+      matchesByChannel.set(channelId, matches)
+      matchedIds.push(channelId)
+    }
+  }
+  if (matchedIds.length === 0) return { hits: [], total: 0 }
+
+  // Resolve the matched EPG ids back to channel rows (one EPG id can map to
+  // several duplicate feeds; each becomes its own hit). Optional category filter
+  // narrows the channel set exactly as the grid does.
+  const where: string[] = [`${EPG_JOIN_ID} IN (${matchedIds.map(() => '?').join(',')})`]
+  const args: Array<string | number> = [...matchedIds]
+  if (opts.categoryIds && opts.categoryIds.length) {
+    where.push(`category_id IN (${opts.categoryIds.map(() => '?').join(',')})`)
+    args.push(...opts.categoryIds)
+  }
+  const channels = db.raw.prepare(`
+    SELECT stream_id, name, category_id, ${EPG_JOIN_ID} AS epg_channel_id
+    FROM channels
+    WHERE ${where.join(' AND ')}
+    ORDER BY num, name
+  `).all(...args) as Array<{ stream_id: number; name: string; category_id: number | null; epg_channel_id: string | null }>
+
+  const allHits: EpgSearchHit[] = []
+  for (const channel of channels) {
+    if (!channel.epg_channel_id) continue
+    const matches = matchesByChannel.get(channel.epg_channel_id)
+    if (!matches) continue
+    for (const { programme, programIndex } of matches) {
+      allHits.push({
+        streamId: channel.stream_id,
+        channelName: channel.name,
+        categoryId: channel.category_id,
+        programme,
+        programIndex,
+      })
+    }
+  }
+
+  return { hits: allHits.slice(0, limit), total: allHits.length }
+}

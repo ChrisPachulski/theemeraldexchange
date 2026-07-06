@@ -1639,3 +1639,96 @@ describe('remux live delivery (AVPlayer)', () => {
     expect(body.error).toBe('segment_gone')
   })
 })
+
+describe('GET /api/iptv/epg/search — server-side programme search', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+  // A fixed window so the test never depends on wall-clock. The endpoint's
+  // default is now..now+4h; we pass explicit from/to to bound the seeded data.
+  const from = '2026-07-06T00:00:00Z'
+  const to = '2026-07-06T06:00:00Z'
+
+  beforeAll(() => {
+    const db = dbState.testDb!
+    // Two channels the tvOS guide would NOT pre-fetch (high num, beyond the warm
+    // cap) — the exact case the client-side scan could never reach.
+    db.stmts.upsertChannel.run({
+      stream_id: 700, num: 500, name: 'YES Network', stream_icon: null,
+      epg_channel_id: 'yes.us', category_id: 5, is_adult: 0,
+      tv_archive: 0, tv_archive_duration: null, added_ts: null, fetched_at: from,
+    })
+    db.stmts.upsertChannel.run({
+      stream_id: 701, num: 501, name: 'Food Net', stream_icon: null,
+      epg_channel_id: 'food.us', category_id: 6, is_adult: 0,
+      tv_archive: 0, tv_archive_duration: null, added_ts: null, fetched_at: from,
+    })
+    // YES: one description-match then one title-match (programIndex 0, then 1).
+    db.stmts.upsertEpg.run({
+      channel_id: 'yes.us', start_utc: '2026-07-06T01:00:00Z', stop_utc: '2026-07-06T02:00:00Z',
+      title: 'Pregame', description: 'Yankees preview',
+    })
+    db.stmts.upsertEpg.run({
+      channel_id: 'yes.us', start_utc: '2026-07-06T02:00:00Z', stop_utc: '2026-07-06T04:00:00Z',
+      title: 'Yankees vs Red Sox', description: 'MLB regular season',
+    })
+    // Food channel: no 'Yankees' anywhere — must never surface for that query.
+    db.stmts.upsertEpg.run({
+      channel_id: 'food.us', start_utc: '2026-07-06T01:00:00Z', stop_utc: '2026-07-06T02:00:00Z',
+      title: 'Cooking Show', description: 'recipes',
+    })
+  })
+
+  it('finds programmes on a channel absent from the warm grid, title + description', async () => {
+    const res = await app.request(
+      `/api/iptv/epg/search?q=Yankees&from=${from}&to=${to}`,
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      total: number
+      hits: Array<{
+        streamId: number; channelName: string; categoryId: number | null; programIndex: number
+        programme: { channel_id: string; start_utc: string; stop_utc: string; title: string | null; description: string | null }
+      }>
+    }
+    expect(body.total).toBe(2)
+    expect(body.hits).toHaveLength(2)
+    // Both hits are the non-warm YES channel; the Food channel never appears.
+    expect(body.hits.every((h) => h.streamId === 700 && h.channelName === 'YES Network' && h.categoryId === 5)).toBe(true)
+    // Ordered by programme start → description-match (idx 0) before title-match (idx 1).
+    expect(body.hits.map((h) => h.programIndex)).toEqual([0, 1])
+    expect(body.hits[1].programme.title).toBe('Yankees vs Red Sox')
+    // Programme reuses the grid projection (snake_case) so it decodes into the
+    // client's existing EpgProgram type.
+    expect(body.hits[0].programme).toMatchObject({
+      channel_id: 'yes.us',
+      start_utc: '2026-07-06T01:00:00Z',
+      stop_utc: '2026-07-06T02:00:00Z',
+    })
+  })
+
+  it('missing q → 400 invalid_query', async () => {
+    const res = await app.request(`/api/iptv/epg/search?from=${from}&to=${to}`)
+    expect(res.status).toBe(400)
+    expect((await res.json()) as { error: string }).toEqual({ error: 'invalid_query' })
+  })
+
+  it('categoryIds filter excludes channels outside the set', async () => {
+    // YES is category 5; filtering to category 6 (Food) yields no Yankees hit.
+    const res = await app.request(
+      `/api/iptv/epg/search?q=Yankees&from=${from}&to=${to}&categoryIds=6`,
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { total: number; hits: unknown[] }
+    expect(body.total).toBe(0)
+    expect(body.hits).toEqual([])
+  })
+
+  it('respects limit while total reports the full match count', async () => {
+    const res = await app.request(
+      `/api/iptv/epg/search?q=Yankees&from=${from}&to=${to}&limit=1`,
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { total: number; hits: unknown[] }
+    expect(body.hits).toHaveLength(1)
+    expect(body.total).toBe(2)
+  })
+})
