@@ -168,6 +168,9 @@ const remuxState = vi.hoisted(() => ({
   // virtual filesystem: path -> contents (manifest string, '' for segments)
   files: new Map<string, string>(),
   startCalls: [] as Array<{ streamId: string; sub: string; upstreamUrl: string }>,
+  // streamIds iptvRemux currently remembers as dead-channel placeholders, so a
+  // test can drive the dead-feed failover / channel_offline_upstream path.
+  deadFeeds: new Set<string>(),
 }))
 
 vi.mock('../services/iptvRemux.js', () => ({
@@ -183,6 +186,7 @@ vi.mock('../services/iptvRemux.js', () => ({
   }),
   heartbeatRemuxSession: vi.fn(),
   channelNeedsReencode: vi.fn(() => false),
+  channelIsDeadFeed: vi.fn((streamId: string) => remuxState.deadFeeds.has(streamId)),
 }))
 
 // node:fs is shared with better-sqlite3 migrations (which readFileSync the .sql
@@ -805,6 +809,74 @@ describe('vod stream grant + proxy', () => {
   })
 })
 
+// Regression (S0-3): VOD / series / catch-up grant tokens — AND the HLS
+// segment tokens minted from their manifests — used the 300s finite-asset TTL.
+// On-demand playback re-presents the token on every range GET / seek / HLS
+// segment fetch across the whole runtime, and the byte/segment handlers
+// re-check `exp` each time, so any movie or episode past ~5 minutes 401'd and
+// stalled/ejected mid-play (identical failure class to the already-fixed
+// live-cable-froze-at-5min bug). On-demand tokens must outlast a sitting — the
+// playback-duration TTL local media uses — while live remux segments stay short.
+describe('on-demand grant token TTL (S0-3 regression)', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+
+  // Read the ttlSecs the grant passed to the (mocked) signStreamToken for the
+  // given kind — same technique as the live-TTL regression test above.
+  async function grantTtl(path: string, kind: string): Promise<number> {
+    const mock = vi.mocked(signStreamToken)
+    mock.mockClear()
+    const res = await app.request(path, { method: 'POST' })
+    expect(res.status).toBe(200)
+    const call = mock.mock.calls.find(([, o]) => (o as { kind: string }).kind === kind)
+    expect(call, `grant should mint a ${kind} token`).toBeDefined()
+    return (call![1] as { ttlSecs: number }).ttlSecs
+  }
+
+  it('VOD grant token uses the long on-demand TTL, not the 300s finite-asset TTL', async () => {
+    const ttl = await grantTtl('/api/iptv/stream/vod/20/grant', 'vod')
+    expect(ttl).toBe(env.IPTV_ONDEMAND_TOKEN_TTL_SECS)
+    // The bug: this equalled IPTV_STREAM_TOKEN_TTL_SECS (300) → froze at 5min.
+    expect(ttl).toBeGreaterThan(env.IPTV_STREAM_TOKEN_TTL_SECS)
+  })
+
+  it('series grant token uses the long on-demand TTL', async () => {
+    const ttl = await grantTtl('/api/iptv/stream/series/ep-1/grant', 'series')
+    expect(ttl).toBe(env.IPTV_ONDEMAND_TOKEN_TTL_SECS)
+    expect(ttl).toBeGreaterThan(env.IPTV_STREAM_TOKEN_TTL_SECS)
+  })
+
+  it('catch-up grant token uses the long on-demand TTL', async () => {
+    const startUtc = new Date(Date.now() - 60 * 60_000).toISOString()
+    const ttl = await grantTtl(
+      `/api/iptv/stream/catchup/10/grant?startUtc=${encodeURIComponent(startUtc)}&durationMin=30`,
+      'catchup',
+    )
+    expect(ttl).toBe(env.IPTV_ONDEMAND_TOKEN_TTL_SECS)
+    expect(ttl).toBeGreaterThan(env.IPTV_STREAM_TOKEN_TTL_SECS)
+  })
+
+  it('HLS segment tokens minted from a VOD manifest use the long on-demand TTL', async () => {
+    const mock = vi.mocked(signStreamToken)
+    mock.mockClear()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response([
+      '#EXTM3U',
+      '#EXTINF:6.0,',
+      'seg-001.ts',
+    ].join('\n'), { status: 200, headers: { 'content-type': 'application/vnd.apple.mpegurl' } }))
+    try {
+      const res = await app.request(`/api/iptv/stream/vod/20/m3u8?t=${fakeToken('vod', '20')}`)
+      expect(res.status).toBe(200)
+      const seg = mock.mock.calls.find(([, o]) => (o as { kind: string }).kind === 'segment')
+      expect(seg, 'manifest rewrite should mint a segment token').toBeDefined()
+      const ttl = (seg![1] as { ttlSecs: number }).ttlSecs
+      expect(ttl).toBe(env.IPTV_ONDEMAND_TOKEN_TTL_SECS)
+      expect(ttl).toBeGreaterThan(env.IPTV_STREAM_TOKEN_TTL_SECS)
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+})
+
 describe('HLS manifest egress deadline + body bound', () => {
   const app = new Hono().route('/api/iptv', iptv)
   const envRw = env as unknown as {
@@ -1412,6 +1484,7 @@ describe('remux live delivery (AVPlayer)', () => {
     remuxState.activeSessions.clear()
     remuxState.files.clear()
     remuxState.startCalls.length = 0
+    remuxState.deadFeeds.clear()
     // Clear the live-remux index AND the reconnect-throttle state so a prior
     // test's "recent dial / fast death" can't throttle this test's first tune.
     _resetLiveRemuxIndexForTests()
@@ -1474,6 +1547,23 @@ describe('remux live delivery (AVPlayer)', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('index.m3u8 returns terminal channel_offline_upstream (no Retry-After) for a dead feed', async () => {
+    // Channel 10 (seeded in beforeAll, no live sibling) EOF'd cleanly as a
+    // dead-channel placeholder, so iptvRemux tagged it dead. Every candidate
+    // feed is now dead → the channel is offline upstream (terminal), which must
+    // be distinguishable from the transient remux_warming a client would retry.
+    remuxState.deadFeeds.add('10')
+    const res = await app.request(
+      `/api/iptv/stream/live/10/remux/index.m3u8?t=${fakeToken('remux', '10')}`,
+    )
+    expect(res.status).toBe(503)
+    expect(res.headers.get('Retry-After')).toBeNull()
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toBe('channel_offline_upstream')
+    // A known-dead feed is never re-dialed — no upstream connection is opened.
+    expect(remuxState.startCalls.length).toBe(0)
   })
 
   // ── seg ─────────────────────────────────────────────────────────────────

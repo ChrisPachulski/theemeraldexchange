@@ -106,7 +106,13 @@ export async function fetchAndRewriteHlsPlaylist(opts: {
       kind: 'segment',
       resourceId: url,
       sub: opts.sub,
-      ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
+      // This helper serves ONLY the on-demand HLS paths (VOD/series .m3u8 and
+      // their sub-playlist recursion via /stream/segment) — never live, which
+      // mints its own remux segment tokens in iptvLiveRemuxMap.ts on the short
+      // TTL. hls.js fetches these segment URLs across the whole runtime, so a
+      // VOD .m3u8 title froze at ~5min when segment tokens carried the 300s
+      // finite-asset TTL. Mirror the grant's playback-duration TTL.
+      ttlSecs: env.IPTV_ONDEMAND_TOKEN_TTL_SECS,
     })
   const rewritten = rewriteManifest(text, opts.upstreamUrl, sign, '/api/iptv/stream/segment')
 

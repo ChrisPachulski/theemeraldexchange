@@ -17,41 +17,69 @@
 
 import { authModeFromSession, type Session } from '../session.js'
 import { ensureServerId } from './serverDb.js'
+import { reportServerEvent } from './serverTelemetry.js'
 import type { RecommenderCaller } from './recommender.js'
 
 let cachedServerId: string | null = null
-let serverIdFailed = false
+// Epoch-ms of the last ensureServerId() failure (0 = none pending). We do NOT
+// latch the failure for the whole process lifetime. The observed failure mode
+// (§S0-6) is a boot-time volume-mount race: server.db is momentarily
+// unavailable on the FIRST recommender call right after a restart. A lifetime
+// latch turned that transient blip into a PERMANENT demotion — in the
+// recommender's enforce mode every subsequent /api/suggestions 401s until a
+// human restarts the process; in off/log mode users silently get generic TMDB
+// trending instead of personalized recs, and (with Glitchtip blind) no operator
+// ever learns. Instead we back off for a bounded cooldown and let the next call
+// past it retry, so the mount race self-heals on its own.
+let serverIdFailedAt = 0
+
+// Long enough to not re-hit the disk on every request while server.db is down,
+// short enough that a boot-time race heals within seconds of the mount settling.
+const SERVER_ID_RETRY_COOLDOWN_MS = 30_000
 
 function getServerId(): string | null {
   if (cachedServerId) return cachedServerId
-  if (serverIdFailed) return null
+  // Inside the post-failure cooldown: skip the disk-hitting retry and stay in
+  // no-Bearer degrade mode. This is a bounded pause, NOT a permanent latch —
+  // the next call once the cooldown lapses retries and can recover.
+  if (serverIdFailedAt !== 0 && Date.now() - serverIdFailedAt < SERVER_ID_RETRY_COOLDOWN_MS) {
+    return null
+  }
   try {
     cachedServerId = ensureServerId()
+    serverIdFailedAt = 0
     return cachedServerId
   } catch (e) {
-    // server.db unavailable (mis-mounted volume, mocked env in tests,
-    // etc.). Latch the failure so we don't retry on every request —
-    // ensureServerId hits the disk to migrate on first call, and if it
-    // failed once it will keep failing until the operator restarts the
-    // process. Returning null degrades the recommender call to no-Bearer
-    // mode rather than 500ing the user's request. In off/log mode the
-    // recommender accepts; enforce mode 401s, surfacing the operator
-    // misconfiguration loud and clear.
-    serverIdFailed = true
+    // server.db unavailable (mis-mounted volume, boot race, mocked env in
+    // tests, etc.). Start a retry cooldown rather than latching forever.
+    // Returning null degrades the recommender call to no-Bearer mode rather
+    // than 500ing the user's request. In off/log mode the recommender accepts;
+    // enforce mode 401s, surfacing the misconfiguration loud and clear.
+    serverIdFailedAt = Date.now()
+    const detail = e instanceof Error ? e.message : String(e)
     console.warn(
-      '[recommenderCaller] ensureServerId failed — falling back to ' +
-        'no-Bearer recommender calls until process restart:',
-      e instanceof Error ? e.message : String(e),
+      '[recommenderCaller] ensureServerId failed — degrading to no-Bearer ' +
+        `recommender calls; will retry after ${SERVER_ID_RETRY_COOLDOWN_MS}ms:`,
+      detail,
     )
+    // Make the demotion observable in the mandatory telemetry pipeline, not
+    // just console (§S0-6): if server.db never recovers, an operator can see
+    // the recommender was silently demoted instead of guessing why recs went
+    // generic. Fire-and-forget — telemetry must never break this hot path.
+    void reportServerEvent({
+      level: 'warning',
+      message: 'recommender demoted to no-Bearer: ensureServerId failed',
+      context: { error: detail, cooldownMs: SERVER_ID_RETRY_COOLDOWN_MS },
+    })
     return null
   }
 }
 
-/** Test-only: reset memoized server_id (and the failure latch) after
+/** Test-only: reset memoized server_id (and the failure cooldown) after
  *  a serverDb swap in tests. */
 export function _resetServerIdForTests(): void {
   cachedServerId = null
-  serverIdFailed = false
+  serverIdFailedAt = 0
 }
 
 /** Build the caller-identity payload that the internal-principal JWE

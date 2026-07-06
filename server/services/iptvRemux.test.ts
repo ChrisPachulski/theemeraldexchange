@@ -31,6 +31,8 @@ import {
   drainRemuxSessions,
   scrubXtreamCreds,
   channelNeedsReencode,
+  channelIsDeadFeed,
+  _clearDeadFeedMemoryForTests,
 } from './iptvRemux.js'
 import { env } from '../env.js'
 
@@ -54,6 +56,7 @@ describe('iptv remux session', () => {
   beforeEach(() => {
     for (const s of listRemuxSessions()) stopRemuxSession(s.sessionId)
     fs.rmSync(remuxTmpDir, { recursive: true, force: true })
+    _clearDeadFeedMemoryForTests()
     spawnMock.mockReset()
     spawnMock.mockImplementation(() => fakeProcess())
   })
@@ -168,6 +171,54 @@ describe('iptv remux session', () => {
     proc.emit('exit', 0, null)
 
     expect(listRemuxSessions().some((x) => x.sessionId === s.sessionId)).toBe(false)
+  })
+
+  // ── dead-feed detection (S1 item 7) ───────────────────────────────────────
+  it('tags a clean fast EOF (code 0 under 60s) as a dead feed', () => {
+    const proc = fakeProcess()
+    spawnMock.mockReturnValueOnce(proc)
+    startRemuxSession({ streamId: '70', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })
+    expect(channelIsDeadFeed('70')).toBe(false)
+
+    // ffmpeg copies the ~30s dead-channel stub then EOFs cleanly, almost at once.
+    proc.emit('exit', 0, null)
+
+    expect(channelIsDeadFeed('70')).toBe(true)
+  })
+
+  it('does NOT tag a non-zero exit (corrupt feed / 255) as a dead feed', () => {
+    const proc = fakeProcess()
+    spawnMock.mockReturnValueOnce(proc)
+    startRemuxSession({ streamId: '71', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })
+
+    proc.emit('exit', 255, null)
+
+    expect(channelIsDeadFeed('71')).toBe(false)
+  })
+
+  it('does NOT tag our own SIGKILL/SIGTERM teardown as a dead feed', () => {
+    const proc = fakeProcess()
+    spawnMock.mockReturnValueOnce(proc)
+    startRemuxSession({ streamId: '72', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })
+
+    proc.emit('exit', null, 'SIGKILL')
+
+    expect(channelIsDeadFeed('72')).toBe(false)
+  })
+
+  it('does NOT tag a code-0 exit AFTER a long healthy run as a dead feed', () => {
+    const proc = fakeProcess()
+    spawnMock.mockReturnValueOnce(proc)
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+    try {
+      startRemuxSession({ streamId: '73', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })
+      // Ran ~2 min: a clean EOF here is a normal end of a real feed, not a stub.
+      nowSpy.mockReturnValue(1_000_000 + 120_000)
+      proc.emit('exit', 0, null)
+    } finally {
+      nowSpy.mockRestore()
+    }
+    expect(channelIsDeadFeed('73')).toBe(false)
   })
 
   it('drainRemuxSessions SIGTERMs every active session and clears the registry (finding 14-2)', async () => {

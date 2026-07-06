@@ -26,6 +26,7 @@ import { drainRemuxSessions } from './services/iptvRemux.js'
 import { iptvDb, closeIptvDb } from './services/iptvDbSingleton.js'
 import { startDvrScheduler, type DvrScheduler } from './services/dvrRecorder.js'
 import { ensureServerId, closeServerDb } from './services/serverDb.js'
+import { runTelemetryDsnSelfCheck } from './services/serverTelemetry.js'
 import { ensureSetupToken } from './services/setupState.js'
 import { createLogger } from './services/logger.js'
 import { warnExpiredCompatWindows } from './services/compatWindows.js'
@@ -62,6 +63,14 @@ if (env.EEX_TELEMETRY_DSN) {
       'in deployments that run the telemetry stack so a lost DSN fails loudly.',
   )
 }
+
+// §S0-1: Glitchtip went blind for weeks because the DSN host was unresolvable
+// from inside this container — every send (SDK + background-job relay) threw
+// ENOTFOUND and was swallowed, so "no errors" silently meant "nothing
+// delivered". DNS-resolve + probe the DSN host once at boot and log LOUDLY on
+// failure so a broken telemetry pipeline can never again masquerade as healthy.
+// Fire-and-forget: it never throws and must not delay or block the listener.
+void runTelemetryDsnSelfCheck()
 
 // Boot sequence: open server.db, run migrations, generate server_id on
 // first boot (INSERT OR IGNORE — safe to call on every subsequent boot).
