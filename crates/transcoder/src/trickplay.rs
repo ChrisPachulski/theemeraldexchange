@@ -35,10 +35,22 @@
 //!
 //! With the flag OFF the serving path is byte-for-byte what it was: the master
 //! is never built and `is_native_hls_client` clients keep receiving the
-//! synthesized single MEDIA playlist. COPY-remux is deliberately NOT covered —
-//! a copy session runs no encoder, so a thumbnail rendition would need a fresh
-//! decode+scale+encode pass regardless, i.e. exactly the CPU the copy path
-//! exists to avoid.
+//! synthesized single MEDIA playlist. COPY-remux is deliberately NOT covered by
+//! the trick-play I-frame rendition — a copy session runs no encoder, so a
+//! thumbnail rendition would need a fresh decode+scale+encode pass regardless,
+//! i.e. exactly the CPU the copy path exists to avoid.
+//!
+//! [`master`] is also the shared MASTER builder for the two OTHER native-only
+//! rendition groups, each independently gated: the sidecar-subtitle
+//! `TYPE=SUBTITLES` group (see [`crate::subs_manifest`]) and — behind
+//! [`alt_audio_enabled`] (`TRANSCODER_ALT_AUDIO`, default OFF) — the alternate
+//! **audio** `TYPE=AUDIO` group (Spec S4). The latter surfaces multiple audio
+//! tracks to AVPlayer on the fMP4/HEVC-copy path, where in-band multiplexing
+//! alone does not: the primary stays muxed in-band (`DEFAULT=YES`, no URI) while
+//! each EXTRA track is segmented into its own `audio_{n}.m3u8` rendition by a
+//! detached [`audio_rendition_args`] pass (mirroring the sidecar/thumbnail
+//! passes). Like trick-play it is default-OFF pending on-device validation of
+//! the mixed in-band-default + separate-URI group on a real Apple TV.
 
 /// Thumbnail cadence (seconds): one preview frame every this many seconds of
 /// source. 10s is a coarse-but-useful scrub granularity that keeps the segment
@@ -66,11 +78,81 @@ pub(crate) const IFRAME_PLAYLIST_NAME: &str = "iframe.m3u8";
 /// informational for the client's rendition selection; kept small and constant.
 const IFRAME_BANDWIDTH_BPS: u32 = 120_000;
 
+/// `GROUP-ID` binding the video variant to its alternate-audio renditions. A
+/// single group holds every audio track for the title; the variant references
+/// it with `AUDIO="aud"` and each rendition advertises `GROUP-ID="aud"`.
+pub(crate) const AUDIO_GROUP_ID: &str = "aud";
+
 /// Whether trick-play is enabled. Reads `TRANSCODER_TRICKPLAY`; truthy values
 /// (`1`/`true`/`yes`/`on`, case-insensitive) turn it on. Default OFF, so an
 /// unconfigured deploy is byte-for-byte the proven serving path.
 pub(crate) fn enabled() -> bool {
     is_truthy(&std::env::var("TRANSCODER_TRICKPLAY").unwrap_or_default())
+}
+
+/// Whether ALTERNATE-AUDIO renditions are advertised. Reads
+/// `TRANSCODER_ALT_AUDIO`; truthy values turn it on. Default OFF for the same
+/// reason as trick-play: it adds a SECOND ffmpeg pass per extra audio track and
+/// changes the native master's shape (a mixed in-band-default + separate-URI
+/// audio group), which must be validated on a real Apple TV before default-on.
+/// With the flag OFF the native serving path is byte-for-byte the proven one —
+/// no audio group is emitted and no extra ffmpeg pass is spawned.
+pub(crate) fn alt_audio_enabled() -> bool {
+    is_truthy(&std::env::var("TRANSCODER_ALT_AUDIO").unwrap_or_default())
+}
+
+/// The `URI` (and on-disk playlist filename) for the alternate-audio rendition
+/// carrying the `n`-th (audio-relative) source track — resolves, relative to the
+/// master's `…/session/{id}/index.m3u8` URL, to `…/session/{id}/audio_{n}.m3u8`,
+/// the media playlist the detached audio pass ([`audio_rendition_args`]) writes.
+/// Passes `routes`' safe-name whitelist (alnum + `_` + `.`).
+pub(crate) fn audio_playlist_name(audio_index: usize) -> String {
+    format!("audio_{audio_index}.m3u8")
+}
+
+/// One alternate-audio rendition advertised by [`master`] as an
+/// `#EXT-X-MEDIA:TYPE=AUDIO` in the [`AUDIO_GROUP_ID`] group.
+///
+/// `uri` is `Some(audio_{n}.m3u8)` for a track delivered as its OWN media
+/// playlist (a separate segmented rendition produced by [`audio_rendition_args`])
+/// and `None` for the track already muxed IN-BAND into the video variant (the
+/// primary, `DEFAULT=YES`) — RFC 8216 §4.3.4.2.1 lets a rendition omit `URI` to
+/// mean "present in the referencing variant's Media Playlist", so keeping the
+/// primary in-band leaves the main transcode pipeline byte-for-byte unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AudioRendition {
+    /// Display name for the picker; the language tag when known, else the track
+    /// title, else a positional `Audio N` (never empty — `NAME` is required).
+    pub name: String,
+    /// ISO language tag from the probe, when known.
+    pub language: Option<String>,
+    /// `DEFAULT=YES` for the primary (English-preferred) track; the player
+    /// starts on it. Exactly one rendition in the group should carry this.
+    pub is_default: bool,
+    /// `Some(audio_{n}.m3u8)` for a separate rendition playlist; `None` for the
+    /// in-band primary (no `URI` attribute is emitted).
+    pub uri: Option<String>,
+}
+
+/// The `#EXT-X-MEDIA:TYPE=AUDIO` line advertising one [`AudioRendition`] in the
+/// [`AUDIO_GROUP_ID`] group. Mirrors [`crate::subs_manifest::media_tag`]'s shape:
+/// `NAME` is required; `LANGUAGE` is emitted only when known; `AUTOSELECT=YES`
+/// lets AVPlayer pick it by system-language preference; `DEFAULT` marks the
+/// primary; `URI` is present only for a separately-segmented rendition.
+pub(crate) fn audio_media_tag(rendition: &AudioRendition) -> String {
+    let language_attr = match rendition.language.as_deref().map(str::trim) {
+        Some(l) if !l.is_empty() => format!("LANGUAGE=\"{l}\","),
+        _ => String::new(),
+    };
+    let default = if rendition.is_default { "YES" } else { "NO" };
+    let uri_attr = match &rendition.uri {
+        Some(uri) => format!(",URI=\"{uri}\""),
+        None => String::new(),
+    };
+    format!(
+        "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"{AUDIO_GROUP_ID}\",NAME=\"{name}\",{language_attr}AUTOSELECT=YES,DEFAULT={default}{uri_attr}\n",
+        name = rendition.name,
+    )
 }
 
 /// Pure truthiness test for the flag value, factored out so it can be unit-tested
@@ -98,13 +180,23 @@ fn is_truthy(v: &str) -> bool {
 /// * `resolution` — `Some((w, h))` adds a `RESOLUTION` attribute (recommended
 ///   but optional); `None` omits it (AVPlayer plays a `RESOLUTION`-less variant
 ///   fine — it just can't pre-annotate the rendition).
+/// * `include_iframe` — emit the `#EXT-X-I-FRAME-STREAM-INF` thumbnail rendition.
+///   TRUE only for a RE-ENCODE session with the trick-play thumbnail pass
+///   running; FALSE for a copy-remux (no thumbnails exist) so the master never
+///   advertises an I-frame playlist that would 404.
 /// * `subs` — the session's sidecar subtitle, when one is being extracted;
-///   advertised as the same `subs` group the subtitle-only master
-///   (`crate::subs_manifest::master`) uses, so native pickers see it here too.
+///   advertised as the same `subs` group the subtitle rendition
+///   ([`crate::subs_manifest::media_tag`]) uses, so native pickers see it here.
+/// * `audio` — alternate-audio renditions (see [`AudioRendition`]). When
+///   non-empty the variant gains `AUDIO="aud"` and each rendition is emitted as
+///   an `#EXT-X-MEDIA:TYPE=AUDIO` line; empty leaves the variant's audio in-band
+///   exactly as before, so a single-audio title's master is unchanged.
 pub(crate) fn master(
     variant_bandwidth_bps: u32,
     resolution: Option<(u32, u32)>,
+    include_iframe: bool,
     subs: Option<&crate::plan::SidecarSubtitle>,
+    audio: &[AudioRendition],
 ) -> String {
     let mut m = String::with_capacity(256);
     m.push_str("#EXTM3U\n");
@@ -113,27 +205,39 @@ pub(crate) fn master(
 
     // I-frame rendition FIRST so a client that only reads the first I-frame line
     // still finds it; order is not significant to AVPlayer.
-    m.push_str(&format!(
-        "#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH={IFRAME_BANDWIDTH_BPS},URI=\"{IFRAME_PLAYLIST_NAME}\"\n"
-    ));
+    if include_iframe {
+        m.push_str(&format!(
+            "#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH={IFRAME_BANDWIDTH_BPS},URI=\"{IFRAME_PLAYLIST_NAME}\"\n"
+        ));
+    }
 
-    let subs_attr = match subs {
-        Some(s) => {
-            m.push_str(&crate::subs_manifest::media_tag(s));
-            ",SUBTITLES=\"subs\""
-        }
-        None => "",
-    };
+    // Alternate-audio group: one #EXT-X-MEDIA per track (primary in-band w/o URI,
+    // extras as separate rendition playlists). Emitted before the variant so the
+    // variant's AUDIO="aud" reference resolves.
+    for rendition in audio {
+        m.push_str(&audio_media_tag(rendition));
+    }
+
+    if let Some(s) = subs {
+        m.push_str(&crate::subs_manifest::media_tag(s));
+    }
+
+    // Variant attributes, in a stable order: RESOLUTION, AUDIO, SUBTITLES.
+    let mut attrs = String::new();
+    if let Some((w, h)) = resolution {
+        attrs.push_str(&format!(",RESOLUTION={w}x{h}"));
+    }
+    if !audio.is_empty() {
+        attrs.push_str(&format!(",AUDIO=\"{AUDIO_GROUP_ID}\""));
+    }
+    if subs.is_some() {
+        attrs.push_str(",SUBTITLES=\"subs\"");
+    }
 
     // The one video variant → the synthesized VOD media playlist.
-    match resolution {
-        Some((w, h)) => m.push_str(&format!(
-            "#EXT-X-STREAM-INF:BANDWIDTH={variant_bandwidth_bps},RESOLUTION={w}x{h}{subs_attr}\n"
-        )),
-        None => m.push_str(&format!(
-            "#EXT-X-STREAM-INF:BANDWIDTH={variant_bandwidth_bps}{subs_attr}\n"
-        )),
-    }
+    m.push_str(&format!(
+        "#EXT-X-STREAM-INF:BANDWIDTH={variant_bandwidth_bps}{attrs}\n"
+    ));
     m.push_str(MEDIA_PLAYLIST_NAME);
     m.push('\n');
     m
@@ -250,6 +354,78 @@ pub(crate) fn thumb_args(input: &str, session_dir: &str, interval: u32, width: u
     ]
 }
 
+/// ffmpeg argument vector for ONE alternate-audio rendition — a detached,
+/// one-shot pass that maps a single source audio track and segments it into its
+/// OWN HLS media playlist (`audio_{n}.m3u8` + `audio_{n}_%05d.ts`), the URI the
+/// [`master`] advertises for that rendition.
+///
+/// Mirrors the decoupled sidecar-subtitle / thumbnail passes: no `-re` (it
+/// finishes faster than realtime), video/subtitles stripped (`-vn -sn`), and NO
+/// `-ss` — the rendition covers the WHOLE title from 0 so its timeline aligns
+/// with the synthesized VOD video variant regardless of resume offset. A failure
+/// just means that one language is absent from the picker; it never blocks or
+/// couples the live video stream (the primary audio is still muxed in-band).
+///
+/// `op` gates copy-vs-encode identically to the in-band path
+/// ([`crate::plan::plan_extra_audio`]): a client-decodable track is copied,
+/// otherwise it is re-encoded to stereo AAC — so the rendition is always
+/// playable and the language menu never has a dead entry. MPEG-TS audio-only
+/// segments are the broadest-compatible container for an alternate rendition
+/// (the video variant's own segment type is independent of the audio group).
+pub(crate) fn audio_rendition_args(
+    input: &str,
+    session_dir: &str,
+    audio_index: usize,
+    op: &crate::plan::AudioOp,
+) -> Vec<String> {
+    let mut a: Vec<String> = vec![
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "warning".into(),
+        "-nostdin".into(),
+        "-fflags".into(),
+        "+genpts".into(),
+        "-i".into(),
+        input.into(),
+        "-map".into(),
+        format!("0:a:{audio_index}?"),
+        "-vn".into(),
+        "-sn".into(),
+    ];
+    match op {
+        crate::plan::AudioOp::Copy => {
+            a.push("-c:a".into());
+            a.push("copy".into());
+        }
+        crate::plan::AudioOp::EncodeAac { bitrate_kbps } => {
+            a.push("-c:a".into());
+            a.push("aac".into());
+            a.push("-ac".into());
+            a.push("2".into());
+            a.push("-b:a".into());
+            a.push(format!("{bitrate_kbps}k"));
+        }
+    }
+    a.extend([
+        "-f".into(),
+        "hls".into(),
+        "-hls_time".into(),
+        crate::args::HLS_SEGMENT_SECS.to_string(),
+        "-hls_list_size".into(),
+        "0".into(),
+        "-hls_flags".into(),
+        "append_list".into(),
+        "-hls_playlist_type".into(),
+        "vod".into(),
+        "-hls_segment_type".into(),
+        "mpegts".into(),
+        "-hls_segment_filename".into(),
+        format!("{session_dir}/audio_{audio_index}_%05d.ts"),
+        format!("{session_dir}/{}", audio_playlist_name(audio_index)),
+    ]);
+    a
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,9 +444,18 @@ mod tests {
 
     // ── master() ────────────────────────────────────────────────────────────
 
+    fn rendition(name: &str, lang: Option<&str>, default: bool, index: Option<usize>) -> AudioRendition {
+        AudioRendition {
+            name: name.into(),
+            language: lang.map(str::to_string),
+            is_default: default,
+            uri: index.map(audio_playlist_name),
+        }
+    }
+
     #[test]
     fn master_lists_video_variant_and_iframe_rendition() {
-        let m = master(6_000_000, Some((1920, 1080)), None);
+        let m = master(6_000_000, Some((1920, 1080)), true, None, &[]);
         assert!(m.starts_with("#EXTM3U\n"));
         assert!(m.contains("#EXT-X-VERSION:4\n"));
         // The I-frame rendition drives AVPlayer's scrubbing thumbnails.
@@ -290,10 +475,19 @@ mod tests {
 
     #[test]
     fn master_omits_resolution_when_unknown() {
-        let m = master(3_000_000, None, None);
+        let m = master(3_000_000, None, true, None, &[]);
         assert!(m.contains("#EXT-X-STREAM-INF:BANDWIDTH=3000000\n"), "{m}");
         assert!(!m.contains("RESOLUTION="), "{m}");
         assert!(m.trim_end().ends_with("media.m3u8"), "{m}");
+    }
+
+    #[test]
+    fn master_omits_iframe_rendition_when_not_requested() {
+        // A copy-remux session has no thumbnail pass; the master must not
+        // advertise an I-frame playlist that would 404.
+        let m = master(3_000_000, None, false, None, &[]);
+        assert!(!m.contains("#EXT-X-I-FRAME-STREAM-INF"), "{m}");
+        assert!(m.contains("#EXT-X-STREAM-INF:BANDWIDTH=3000000\n"), "{m}");
     }
 
     #[test]
@@ -303,7 +497,7 @@ mod tests {
             language: Some("eng".into()),
             forced: false,
         };
-        let m = master(3_000_000, None, Some(&subs));
+        let m = master(3_000_000, None, true, Some(&subs), &[]);
         assert!(
             m.contains("#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\""),
             "{m}"
@@ -312,6 +506,87 @@ mod tests {
             m.contains("#EXT-X-STREAM-INF:BANDWIDTH=3000000,SUBTITLES=\"subs\"\n"),
             "{m}"
         );
+    }
+
+    // ── master() alternate audio (Spec S4) ───────────────────────────────────
+
+    #[test]
+    fn master_advertises_audio_group_for_multiple_tracks() {
+        // The S4 gate: a dual-audio title on the fMP4/HEVC-copy path (no I-frame
+        // rendition) — the primary muxed in-band (no URI, DEFAULT=YES) and the
+        // second track as a separate rendition playlist.
+        let audio = [
+            rendition("eng", Some("eng"), true, None),
+            rendition("spa", Some("spa"), false, Some(1)),
+        ];
+        let m = master(6_000_000, None, false, None, &audio);
+        // The group itself and the variant's reference to it.
+        assert!(
+            m.contains("#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\""),
+            "{m}"
+        );
+        assert!(
+            m.contains("#EXT-X-STREAM-INF:BANDWIDTH=6000000,AUDIO=\"aud\"\n"),
+            "{m}"
+        );
+        // Primary: in-band (no URI), DEFAULT=YES.
+        assert!(
+            m.contains(
+                "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"eng\",LANGUAGE=\"eng\",AUTOSELECT=YES,DEFAULT=YES\n"
+            ),
+            "{m}"
+        );
+        // Alternate: a separate rendition playlist, DEFAULT=NO.
+        assert!(
+            m.contains(
+                "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"spa\",LANGUAGE=\"spa\",AUTOSELECT=YES,DEFAULT=NO,URI=\"audio_1.m3u8\"\n"
+            ),
+            "{m}"
+        );
+        assert!(m.trim_end().ends_with("media.m3u8"), "{m}");
+    }
+
+    #[test]
+    fn master_audio_group_composes_with_iframe_and_subs() {
+        // A re-encode session can carry ALL THREE rendition groups at once.
+        let subs = crate::plan::SidecarSubtitle {
+            source_index: 3,
+            language: Some("eng".into()),
+            forced: false,
+        };
+        let audio = [
+            rendition("eng", Some("eng"), true, None),
+            rendition("fra", Some("fra"), false, Some(2)),
+        ];
+        let m = master(5_000_000, Some((1920, 1080)), true, Some(&subs), &audio);
+        assert!(m.contains("#EXT-X-I-FRAME-STREAM-INF"), "{m}");
+        assert!(m.contains("#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\""), "{m}");
+        assert!(m.contains("#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\""), "{m}");
+        // Variant references both groups, attributes in a stable order.
+        assert!(
+            m.contains(
+                "#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080,AUDIO=\"aud\",SUBTITLES=\"subs\"\n"
+            ),
+            "{m}"
+        );
+    }
+
+    #[test]
+    fn master_without_audio_is_unchanged() {
+        // Empty renditions ⇒ no audio group, no AUDIO attribute — a single-audio
+        // title's master is byte-for-byte what it was before Spec S4.
+        let m = master(3_000_000, None, false, None, &[]);
+        assert!(!m.contains("TYPE=AUDIO"), "{m}");
+        assert!(!m.contains("AUDIO=\"aud\""), "{m}");
+    }
+
+    #[test]
+    fn audio_media_tag_omits_language_when_unknown() {
+        let tag = audio_media_tag(&rendition("Audio 2", None, false, Some(3)));
+        assert!(tag.contains("NAME=\"Audio 2\""), "{tag}");
+        assert!(!tag.contains("LANGUAGE="), "{tag}");
+        assert!(tag.contains("DEFAULT=NO"), "{tag}");
+        assert!(tag.contains("URI=\"audio_3.m3u8\""), "{tag}");
     }
 
     // ── iframe_playlist() ───────────────────────────────────────────────────
@@ -405,5 +680,52 @@ mod tests {
             j.trim_end().ends_with("/scratch/sess/thumb_index.m3u8"),
             "{j}"
         );
+    }
+
+    // ── audio_rendition_args() ───────────────────────────────────────────────
+
+    #[test]
+    fn audio_rendition_args_copies_a_client_decodable_track() {
+        let a = audio_rendition_args(
+            "/media/movie.mkv",
+            "/scratch/sess",
+            2,
+            &crate::plan::AudioOp::Copy,
+        );
+        let j = a.join(" ");
+        // Maps exactly the one (audio-relative) track, video/subs stripped.
+        assert!(j.contains("-map 0:a:2?"), "{j}");
+        assert!(j.contains("-vn -sn"), "{j}");
+        // A decodable track passes through untouched (no re-encode).
+        assert!(j.contains("-c:a copy"), "{j}");
+        assert!(!j.contains("aac"), "{j}");
+        // Never seek — the rendition covers the whole title from 0.
+        assert!(!j.contains("-ss"), "audio rendition must not seek: {j}");
+        // A finite VOD media playlist at the shared segment cadence.
+        assert!(j.contains("-hls_playlist_type vod"), "{j}");
+        assert!(
+            j.contains(&format!("-hls_time {}", crate::args::HLS_SEGMENT_SECS)),
+            "{j}"
+        );
+        // Writes its own rendition playlist + segments, named for the URI the
+        // master advertises.
+        assert!(j.contains("/scratch/sess/audio_2_%05d.ts"), "{j}");
+        assert!(j.trim_end().ends_with("/scratch/sess/audio_2.m3u8"), "{j}");
+    }
+
+    #[test]
+    fn audio_rendition_args_reencodes_an_undecodable_track_to_stereo_aac() {
+        let a = audio_rendition_args(
+            "/media/movie.mkv",
+            "/scratch/sess",
+            1,
+            &crate::plan::AudioOp::EncodeAac { bitrate_kbps: 192 },
+        );
+        let j = a.join(" ");
+        // An undecodable track (e.g. DTS) becomes stereo AAC so the menu entry
+        // is never dead — mirrors the in-band per-track op.
+        assert!(j.contains("-c:a aac -ac 2 -b:a 192k"), "{j}");
+        assert!(j.contains("/scratch/sess/audio_1_%05d.ts"), "{j}");
+        assert!(j.trim_end().ends_with("/scratch/sess/audio_1.m3u8"), "{j}");
     }
 }
