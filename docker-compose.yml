@@ -24,6 +24,9 @@ services:
         # EEX_RELEASE=<short sha of the archived HEAD> in the remote shell
         # before `compose up --build`; ad-hoc builds fall back to 'dev'.
         EEX_RELEASE: "${EEX_RELEASE:-dev}"
+        # Cap the napi-builder stage's Rust compile on the shared NAS (see the
+        # transcoder service's identical arg for the incident history).
+        CARGO_BUILD_JOBS: "${CARGO_BUILD_JOBS:-}"
     image: theemeraldexchange-backend:latest
     container_name: exchange-backend
     restart: unless-stopped
@@ -290,6 +293,10 @@ services:
     build:
       context: .
       dockerfile: ./crates/media-core/Dockerfile
+      args:
+        # Cap the Rust compile on the shared NAS (see the transcoder service's
+        # identical arg above for the incident history). Empty = cargo default.
+        CARGO_BUILD_JOBS: "${CARGO_BUILD_JOBS:-}"
     image: theemeraldexchange-media-core:latest
     container_name: exchange-media-core
     restart: unless-stopped
