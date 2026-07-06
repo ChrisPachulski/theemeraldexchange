@@ -590,7 +590,7 @@ async fn session_manifest(
         return forbidden();
     }
 
-    // Trick-play (TRANSCODER_TRICKPLAY, default OFF): a native re-encode session
+    // Trick-play (TRANSCODER_TRICKPLAY, default ON since S5): a native re-encode session
     // gets a MASTER playlist here instead of the media playlist, advertising an
     // I-frame rendition (iframe.m3u8) for AVPlayer's scrubbing thumbnails plus
     // the synthesized VOD media playlist (media.m3u8) as its video variant —
