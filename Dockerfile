@@ -77,7 +77,18 @@ WORKDIR /build/crates/emerald-contracts-napi
 # crates/emerald-contracts-napi/package.json — this CLI emits the ABI-critical
 # .node that the crypto/contracts wire boundary loads, so a floating major is a
 # reproducibility risk for the wire-format-sensitive binding.
-RUN npx --yes --package @napi-rs/cli@3.7.0 napi build --platform --release
+# Cap the cargo compile behind napi build on shared hosts (cargo reads
+# CARGO_BUILD_JOBS natively; empty would be a parse error, so normalize
+# empty → unset) and keep it incremental via BuildKit cache mounts — the
+# same NAS-safety pattern as crates/transcoder/Dockerfile. The .node output
+# is copied by the CLI into the crate dir, OUTSIDE the target cache mount,
+# so the later COPY --from=napi-builder still sees it.
+ARG CARGO_BUILD_JOBS
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/build/target,sharing=locked \
+    if [ -z "${CARGO_BUILD_JOBS:-}" ]; then unset CARGO_BUILD_JOBS; fi \
+ && npx --yes --package @napi-rs/cli@3.7.0 napi build --platform --release
 
 # ---------------------------------------------------------------------------
 # SPA build (plan 006 Phase 2): the SELF-HOST image serves the web client
