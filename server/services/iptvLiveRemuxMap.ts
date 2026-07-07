@@ -188,8 +188,6 @@ export function ensureLiveRemuxEntry(
       dialStreamId === opts.streamId
         ? opts.upstreamUrl
         : (opts.upstreamUrlFor?.(dialStreamId) ?? opts.upstreamUrl)
-    lastConnectAt.set(key, now)
-    sessionSpawnAt.set(key, now)
     const session = startRemuxSession({
       streamId: dialStreamId,
       sub: opts.sub,
@@ -198,6 +196,14 @@ export function ensureLiveRemuxEntry(
       // non-H.264; the first such tune starts as copy, detects it, and respawns.
       reencodeVideo: channelNeedsReencode(dialStreamId),
     })
+    // null = startRemuxSession is at the hard upstream-connection cap and evicted
+    // a session to free a slot; the new dial is deferred to the next poll (once
+    // the evicted child releases its provider connection) so we never briefly
+    // hold cap+1 connections. Nothing was dialed — record no connect and let the
+    // caller serve a transient remux_warming.
+    if (!session) return null
+    lastConnectAt.set(key, now)
+    sessionSpawnAt.set(key, now)
     entry = {
       sessionId: session.sessionId,
       dir: session.dir,

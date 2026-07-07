@@ -69,6 +69,30 @@ export interface StartRemuxResult {
 const IDLE_MS = 90_000
 const sessions = new Map<string, RemuxSession>()
 
+// SIGTERMed-but-not-yet-exited children. stopRemuxSession only SIGTERMs and
+// deletes the Map entry immediately, but the ffmpeg child keeps its upstream
+// provider connection open for a beat afterwards (see the comment at the bottom
+// of stopRemuxSession). Until that child actually exits it still counts against
+// the hard upstream-connection cap even though it is gone from `sessions`. Track
+// those draining children so the cap sees the TRUE live-connection count and
+// never spawns a fresh ffmpeg while an evicted one is still dialing the provider
+// — the transient cap+1 burst the provider punishes with corrupt video. Each
+// entry is cleared on the child's own exit/error.
+const draining = new Set<ChildProcess>()
+
+/** Live upstream connections right now: active sessions PLUS SIGTERMed children
+ *  that have not yet released their provider socket. This — not `sessions.size`
+ *  — is what the connection cap must bound. */
+function liveUpstreamCount(): number {
+  return sessions.size + draining.size
+}
+
+/** Test seam: drop draining-child tracking so cap accounting doesn't leak across
+ *  tests whose fake children never emit an 'exit'. */
+export function _clearDrainingForTests(): void {
+  draining.clear()
+}
+
 // Channels whose upstream video isn't H.264 and so can't be COPIED into a
 // playable Apple HLS stream (Apple won't play HEVC — or MPEG-2/AV1/VP9 — from
 // MPEG-TS segments). We learn this from the remux ffmpeg's own input stream info
@@ -100,12 +124,24 @@ function markChannelNeedsReencode(streamId: string): void {
 // ~30s placeholder loop) and closed. A genuine live feed never ends on its own
 // — it is torn down by us (SIGTERM/SIGKILL, code null) or dies corrupt (255).
 // So `code === 0 && lifetime < DEAD_FEED_MAX_LIFETIME_MS` is the dead-feed
-// signature. We remember it briefly so ensureLiveRemuxEntry skips this variant
-// and fails over to a sibling feed on the immediate retry, then re-probes once
-// the memory expires (a channel can come back on air). TTL'd exactly like
-// needsReencode above.
+// signature. We remember it so ensureLiveRemuxEntry skips this variant and fails
+// over to a sibling feed on the immediate retry, then re-probes once the memory
+// expires (a channel can come back on air). TTL'd like needsReencode above.
+//
+// The memory MUST outlast one full sibling walk. isChannelOfflineUpstream only
+// reports a channel offline when EVERY candidate feed is remembered dead at the
+// SAME instant. A dead placeholder lives up to DEAD_FEED_MAX_LIFETIME_MS before
+// its clean EOF tags it, so walking N siblings takes up to N × that ceiling. If
+// the memory expired sooner (the old 60s == the ceiling), the first sibling's
+// tag would lapse before the 3rd sibling died, isChannelOfflineUpstream could
+// never fire for a 3+-sibling channel, and pickLiveFeed would re-dial the
+// expired sibling #1 forever — an infinite ~30s-slate carousel that churns
+// provider connections (the exact Fox Soccer Plus failure). 10 min comfortably
+// spans a walk of up to ~10 siblings at the 60s ceiling; a genuinely-recovered
+// dead channel is simply re-probed 10 min later instead of 60s later, which is
+// harmless (a live sibling keeps its session alive regardless of dead-TTLs).
 const DEAD_FEED_MAX_LIFETIME_MS = 60_000
-const DEAD_FEED_MEMORY_MS = 60_000
+const DEAD_FEED_MEMORY_MS = 10 * 60_000
 const deadFeed = new Map<string, number>() // streamId -> expiresAt (ms)
 
 /** True if this channel's feed was seen EOFing cleanly-and-fast (a dead-channel
@@ -197,6 +233,15 @@ export function stopRemuxSession(sessionId: string, reason = 'manual'): void {
   console.log(
     `[iptv-remux ${sessionId}] stop reason=${reason} ageMs=${now - s.startedAt} sinceSeenMs=${now - s.lastSeen}`,
   )
+  // The child keeps its provider connection open until it actually exits, so it
+  // still counts against the upstream cap. Track it as draining and drop it on
+  // exit/error so startRemuxSession won't dial a replacement while it lingers.
+  draining.add(s.proc)
+  const undrain = (): void => {
+    draining.delete(s.proc)
+  }
+  s.proc.once('exit', undrain)
+  s.proc.once('error', undrain)
   try {
     s.proc.kill('SIGTERM')
   } catch {
@@ -248,7 +293,7 @@ function sweepIdleSessions(): void {
 const sweepHandle = setInterval(sweepIdleSessions, 5_000)
 sweepHandle.unref?.()
 
-export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult {
+export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult | null {
   // Defense in depth: refuse non-http(s) inputs before any side effects
   // (temp dir creation, ffmpeg spawn).
   assertHttpUpstream(opts.upstreamUrl)
@@ -259,22 +304,35 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult {
   // (grant, a direct manifest poll, a test probe, or a future bug). The provider
   // trips an abuse block on too many simultaneous connections and then feeds
   // CORRUPT, undecodable video to everyone until it cools down — so we bound the
-  // count here rather than trust every caller to behave. At the cap, evict the
-  // least-recently-seen session (a channel-switch ghost or an abandoned viewer)
-  // to free a slot, so a fresh tune always succeeds while the connection count
-  // stays bounded no matter how many requests pile in.
+  // count here rather than trust every caller to behave.
+  //
+  // At the cap, evict the least-recently-seen session (a channel-switch ghost or
+  // an abandoned viewer) to free a slot — but do NOT spawn the replacement in the
+  // same tick. stopRemuxSession only SIGTERMs; the evicted ffmpeg keeps its
+  // provider socket open for a beat (it becomes `draining`), so dialing now would
+  // momentarily hold cap+1 connections — the exact over-cap burst the provider
+  // punishes. Instead start the eviction and return null: the caller serves a
+  // transient remux_warming and the next manifest poll re-dials once the evicted
+  // child has actually exited and a real slot has freed. Only evict when nothing
+  // is already draining toward a free slot, so a stationary at-cap retry doesn't
+  // cascade-evict live viewers one after another.
   const cap = env.IPTV_MAX_UPSTREAM_CONNECTIONS
-  while (cap > 0 && sessions.size >= cap) {
-    let lru: RemuxSession | undefined
-    for (const s of sessions.values()) {
-      if (!lru || s.lastSeen < lru.lastSeen) lru = s
+  if (cap > 0 && liveUpstreamCount() >= cap) {
+    if (draining.size === 0) {
+      let lru: RemuxSession | undefined
+      for (const s of sessions.values()) {
+        if (!lru || s.lastSeen < lru.lastSeen) lru = s
+      }
+      if (lru) {
+        console.warn(
+          `[iptv-remux] upstream cap ${cap} reached — evicting LRU ${lru.sessionId} ` +
+            `(idle ${Date.now() - lru.lastSeen}ms); deferring the new dial until it ` +
+            `releases its provider connection`,
+        )
+        stopRemuxSession(lru.sessionId, 'upstream-cap')
+      }
     }
-    if (!lru) break
-    console.warn(
-      `[iptv-remux] upstream cap ${cap} reached — evicting LRU ${lru.sessionId} ` +
-        `(idle ${Date.now() - lru.lastSeen}ms) to free a provider connection`,
-    )
-    stopRemuxSession(lru.sessionId, 'upstream-cap')
+    return null
   }
 
   const sessionId = `remux:${opts.streamId}:${safeIdPart(opts.sub)}:${Date.now()}`
