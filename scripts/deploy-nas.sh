@@ -370,8 +370,12 @@ echo "→ Building and starting containers"
 # after system updates. To keep deploys working without manual NAS
 # intervention, we try them in order and fall back to a direct docker
 # build + run that mirrors the docker-compose.yml. Only the backend
-# service is recreated this way — cloudflared keeps running across the
-# rebuild since its config is in the container, not on the host.
+# service is recreated this way. WARNING: cloudflared's PROCESS survives the
+# rebuild but it is pinned (network_mode: service:backend) to the netns of the
+# backend container we just `docker rm`'d, so on this fallback path the PUBLIC
+# tunnel is DOWN and — with compose unavailable by construction here — neither
+# the force-recreate below nor the watchdog can heal it. The post-build guard
+# detects that and hard-fails the deploy instead of reporting success.
 #
 # The fallback CANNOT recreate the compose network where
 # `http://recommender:8000` resolves, so it would silently downgrade
@@ -435,7 +439,40 @@ echo "→ Force-recreating cloudflared (re-joins the recreated backend netns; el
 # bound to the OLD (removed) netns → "network is unreachable", tunnel down,
 # public 530. Recreating re-resolves service:backend to the live backend.
 # (A `docker restart` here caused a real total outage — every panel 530'd.)
-ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && docker compose up -d --no-deps --force-recreate cloudflared >/dev/null 2>&1 || echo '[deploy] WARN: could not recreate exchange-cloudflared (not running?)'"
+# The old form swallowed the recreate failure with `|| echo WARN` and marched
+# on to '✓ Deployed' even when the recreate could not run — precisely the
+# direct-docker fallback case above, where compose is gone, cloudflared is
+# pinned to the deleted backend netns, and the PUBLIC tunnel is down. Detect
+# that and hard-fail instead of reporting success. Try both compose forms
+# (plugin → standalone), and only WARN when cloudflared simply isn't deployed
+# here (e.g. COMPOSE_PROFILES excludes remote-cloudflare) — a genuinely absent
+# tunnel is not a failure.
+set +e
+cf_out="$(ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && \
+  CC=''; \
+  if docker compose version >/dev/null 2>&1; then CC='docker compose'; \
+  elif command -v docker-compose >/dev/null 2>&1; then CC='docker-compose'; fi; \
+  running=0; docker ps --format '{{.Names}}' 2>/dev/null | grep -qx exchange-cloudflared && running=1; \
+  if [ -n \"\$CC\" ]; then \
+    if \$CC up -d --no-deps --force-recreate cloudflared >/dev/null 2>&1; then echo CF_OK; \
+    elif [ \"\$running\" = '1' ]; then echo CF_RECREATE_FAILED; \
+    else echo CF_ABSENT; fi; \
+  elif [ \"\$running\" = '1' ]; then echo CF_TUNNEL_DOWN; \
+  else echo CF_ABSENT; fi" 2>/dev/null)"
+set -e
+case "$cf_out" in
+  *CF_OK*)     echo "[deploy] cloudflared force-recreated — public tunnel re-joined the new backend netns" ;;
+  *CF_ABSENT*) echo "[deploy] WARN: exchange-cloudflared not running — tunnel not deployed here (COMPOSE_PROFILES?); skipping recreate" ;;
+  *CF_TUNNEL_DOWN*|*CF_RECREATE_FAILED*)
+    echo "✗ PUBLIC TUNNEL DOWN: the backend was recreated but exchange-cloudflared could not" >&2
+    echo "  be force-recreated (docker compose unavailable — the direct-docker fallback path)." >&2
+    echo "  cloudflared is still pinned to the DELETED backend netns, so the public API (every" >&2
+    echo "  off-LAN Apple TV / web client) is serving Cloudflare 530/1033. The watchdog cannot" >&2
+    echo "  heal this either — it also needs compose. Restore docker compose on the NAS, then:" >&2
+    echo "    ssh ${NAS_USER}@${NAS_HOST} 'cd ${APPDATA} && docker compose up -d --no-deps --force-recreate cloudflared'" >&2
+    exit 1 ;;
+  *) echo "[deploy] WARN: unexpected cloudflared recreate result: ${cf_out:-<none>}" ;;
+esac
 
 # Install/refresh the cloudflared stale-netns watchdog (§S0-2). The
 # force-recreate above only protects THIS deploy path — a backend recreation

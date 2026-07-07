@@ -83,6 +83,16 @@ CF_SVC="${CF_SVC:-cloudflared}"
 COMPOSE_DIR="${COMPOSE_DIR:-/mnt/user/appdata/exchange-backend}"
 DOCKER_BIN="${DOCKER_BIN:-docker}"
 COMPOSE_CMD="${COMPOSE_CMD:-docker compose}"
+# Ordered compose invocations to try when recreating cloudflared, mirroring
+# deploy-nas.sh's fallback chain. Unraid has dropped one or BOTH compose forms
+# after system updates (documented in deploy-nas.sh); with only the hard-coded
+# plugin form this watchdog — the sole recovery for a non-deploy backend
+# restart — would fail on every tick and leave the public tunnel down until a
+# human noticed. Try the configured/plugin form first, then standalone
+# docker-compose. An explicit COMPOSE_CMD override is honored first; the
+# standalone form is still appended unless it already IS the override.
+COMPOSE_CMDS=("$COMPOSE_CMD")
+[[ "$COMPOSE_CMD" == "docker-compose" ]] || COMPOSE_CMDS+=("docker-compose")
 HEALTH_URL="${HEALTH_URL:-https://api.theemeraldexchange.com/api/health}"
 
 # ---------------------------------------------------------------------------
@@ -173,18 +183,24 @@ health_probe() {
 recreate_cloudflared() {
   local reason="$1"
   if [[ "$DRY_RUN" == "1" ]]; then
-    log "[dry-run] would run: (cd $COMPOSE_DIR && $COMPOSE_CMD up -d --no-deps --no-build --force-recreate $CF_SVC)  [reason: $reason]"
+    log "[dry-run] would run: (cd $COMPOSE_DIR && <${COMPOSE_CMDS[*]}> up -d --no-deps --no-build --force-recreate $CF_SVC)  [reason: $reason]"
     return 0
   fi
   log "ACTION: force-recreating $CF_SVC (reason: $reason)"
-  local out rc
-  out="$(cd "$COMPOSE_DIR" && $COMPOSE_CMD up -d --no-deps --no-build --force-recreate "$CF_SVC" 2>&1)" && rc=0 || rc=$?
-  if [[ "$rc" -eq 0 ]]; then
-    log "ACTION: force-recreate of $CF_SVC succeeded"
-    health_probe
-    return 0
-  fi
-  log "ERROR: force-recreate of $CF_SVC failed (rc=$rc): ${out:-<no output>}"
+  local out rc cc
+  # Try each compose form in turn: a box that has lost the plugin can still be
+  # healed by standalone docker-compose (and vice-versa).
+  for cc in "${COMPOSE_CMDS[@]}"; do
+    # shellcheck disable=SC2086  # $cc must word-split ("docker compose" -> 2 args)
+    out="$(cd "$COMPOSE_DIR" && $cc up -d --no-deps --no-build --force-recreate "$CF_SVC" 2>&1)" && rc=0 || rc=$?
+    if [[ "$rc" -eq 0 ]]; then
+      log "ACTION: force-recreate of $CF_SVC succeeded (via: $cc)"
+      health_probe
+      return 0
+    fi
+    log "WARN: '$cc up ... $CF_SVC' failed (rc=$rc): ${out:-<no output>} — trying next compose form"
+  done
+  log "ERROR: force-recreate of $CF_SVC failed via all compose forms (${COMPOSE_CMDS[*]})"
   return 1
 }
 
