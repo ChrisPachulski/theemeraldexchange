@@ -754,6 +754,26 @@ async fn session_segment(
             }
         }
     }
+    // Alternate-audio rendition PLAYLISTS (`audio_{n}.m3u8`) are, like every
+    // other HLS playlist, live-until-ENDLIST documents that ffmpeg grows in
+    // place (`append_list`): a mid-pass fetch sees a truncated TYPE:VOD list
+    // with no ENDLIST yet. They must NOT ride the segment path below, which
+    // would stamp them `video/mp2t` + `immutable, max-age=1y` — a cached
+    // partial list freezes the alternate track minutes into the title. Serve
+    // the on-disk file through `m3u8_response()` (application/vnd.apple.mpegurl
+    // + no-store), the same headers the media/subs/iframe playlists get. The
+    // rendition SEGMENTS (`audio_{n}_%05d.ts`) are written-once and stay on the
+    // immutable segment path below.
+    if segment.ends_with(".m3u8") && crate::session::is_audio_rendition_asset(&segment) {
+        return match tokio::fs::read_to_string(&path).await {
+            Ok(body) => m3u8_response(body),
+            Err(_) => (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "segment not available" })),
+            )
+                .into_response(),
+        };
+    }
     // fMP4 sessions (HEVC copy) serve `init.mp4` + `seg_*.m4s`; everything
     // else is MPEG-TS. hls.js fetches as arraybuffer regardless, but native
     // HLS (Safari) and intermediaries deserve a truthful content type.
@@ -1516,6 +1536,112 @@ mod tests {
                 .get(axum::http::header::CONTENT_TYPE)
                 .unwrap(),
             "application/vnd.apple.mpegurl"
+        );
+
+        state.sessions.stop(&session_id).await;
+    }
+
+    #[tokio::test]
+    async fn audio_rendition_playlist_served_as_uncached_hls() {
+        // audio_{n}.m3u8 is a live-until-ENDLIST playlist ffmpeg grows in place;
+        // it must be served application/vnd.apple.mpegurl + no-store, NOT with
+        // the generic segment path's video/mp2t + immutable headers (which would
+        // let an intermediary freeze a truncated partial list). The rendition
+        // SEGMENTS stay on the immutable path.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = state_with(
+            &tmp,
+            Caps {
+                max_total: 4,
+                max_cpu: 4,
+            },
+            PrincipalMode::Off,
+        );
+        let app = router(state.clone());
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/transcode/grant")
+                    .header("content-type", "application/json")
+                    .body(Body::from(grant_body(&h264_file())))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        let session_id = v["sessionId"].as_str().unwrap().to_string();
+
+        // Pre-write a growing (no ENDLIST) rendition playlist so the fetch does
+        // not enter the 20s frontier wait and 404 slowly.
+        let pl = state
+            .sessions
+            .asset_path(&session_id, "audio_1.m3u8")
+            .await
+            .unwrap();
+        std::fs::write(&pl, "#EXTM3U\n#EXT-X-PLAYLIST-TYPE:VOD\n").unwrap();
+
+        let app2 = router(state.clone());
+        let resp = app2
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!("/api/transcode/session/{session_id}/audio_1.m3u8"))
+                    .header("user-agent", "AppleCoreMedia/1.0.0 (Apple TV)")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .unwrap(),
+            "application/vnd.apple.mpegurl",
+            "rendition playlist must carry the HLS MIME, not video/mp2t"
+        );
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CACHE_CONTROL)
+                .unwrap(),
+            "no-store",
+            "a growing playlist must never be cached"
+        );
+        let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"#EXTM3U\n#EXT-X-PLAYLIST-TYPE:VOD\n");
+
+        // The rendition SEGMENTS remain on the immutable segment path.
+        let seg = state
+            .sessions
+            .asset_path(&session_id, "audio_1_00000.ts")
+            .await
+            .unwrap();
+        std::fs::write(&seg, "seg").unwrap();
+        let app3 = router(state.clone());
+        let resp = app3
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!(
+                        "/api/transcode/session/{session_id}/audio_1_00000.ts"
+                    ))
+                    .header("user-agent", "AppleCoreMedia/1.0.0 (Apple TV)")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CACHE_CONTROL)
+                .unwrap(),
+            "public, max-age=31536000, immutable",
+            "written-once rendition segments stay immutable"
         );
 
         state.sessions.stop(&session_id).await;
