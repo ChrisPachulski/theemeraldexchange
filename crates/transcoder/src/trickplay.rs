@@ -338,6 +338,17 @@ pub(crate) fn thumb_args(input: &str, session_dir: &str, interval: u32, width: u
         "-nostdin".into(),
         "-fflags".into(),
         "+genpts".into(),
+        // Bound the decode so this best-effort thumbnail pass can't starve the
+        // live encode (or Plex) on the weak NAS CPU. `-skip_frame nokey` decodes
+        // ONLY keyframes instead of walking every frame of the source — an
+        // order-of-magnitude cheaper software decode, and at the coarse 10s
+        // trick-play cadence the preview barely changes. `-threads 2` caps the
+        // decoder so it can never claim all cores. Both are INPUT (decoder)
+        // options, so they precede `-i`.
+        "-skip_frame".into(),
+        "nokey".into(),
+        "-threads".into(),
+        "2".into(),
         "-i".into(),
         input.into(),
         "-map".into(),
@@ -721,6 +732,19 @@ mod tests {
         // Video-only, no audio/subs.
         assert!(j.contains("-an -sn"), "{j}");
         assert!(j.contains("-c:v libx264"), "{j}");
+        // Decode is bounded so the thumbnail pass can't brown out the box:
+        // keyframe-only decode + a hard decoder thread cap, both before -i.
+        assert!(
+            j.contains("-skip_frame nokey"),
+            "thumb decode must skip non-keyframes: {j}"
+        );
+        assert!(j.contains("-threads 2"), "thumb decode must cap threads: {j}");
+        let skip_at = j.find("-skip_frame").unwrap();
+        let input_at = j.find("-i ").unwrap();
+        assert!(
+            skip_at < input_at,
+            "-skip_frame must precede -i to apply to the decoder: {j}"
+        );
         // Thumbnails cover the WHOLE title: never seek.
         assert!(!j.contains("-ss"), "thumbnails must not seek: {j}");
         assert!(j.contains("/scratch/sess/thumb_%05d.ts"), "{j}");
