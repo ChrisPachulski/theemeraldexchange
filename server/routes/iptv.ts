@@ -719,7 +719,11 @@ iptv.post('/stream/live/:streamId/grant', requireAuth, requireSection('live'), a
   })
 })
 
-iptv.post('/stream/catchup/:streamId/grant', requireAuth, async (c) => {
+iptv.post('/stream/catchup/:streamId/grant', requireAuth, requireSection('live'), async (c) => {
+  // Catchup is time-shifted live-channel content, so it belongs to the same
+  // `live` section as the live grant: a member whose policy denies Live TV must
+  // not be able to play a channel's last-7-days archive either. Enforced on the
+  // grant (the sole token-mint point) so a tampered client can't bypass it.
   // IPTV provider content is UNRATED (star ratings, never certifications) —
   // a parental rating cap therefore blocks these grants wholesale (fail
   // closed, same rule the clients apply to unrated titles).

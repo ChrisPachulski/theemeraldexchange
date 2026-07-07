@@ -595,6 +595,66 @@ describe('catchup stream grant + proxy', () => {
     )
     fetchSpy.mockRestore()
   })
+
+  // Catchup is time-shifted live content and shares the `live` section gate:
+  // a member whose policy denies Live TV must not get a catchup token either,
+  // even when no rating cap is set (capBlocksUnrated is a no-op when
+  // maxContentRating is null, so the section gate is the only thing that stops
+  // them). Mirrors the live-grant section-policy tests above.
+  describe('catchup section policy', () => {
+    let catchupPolicyDir: string
+    let catchupPolicyPath: string
+    beforeEach(async () => {
+      catchupPolicyDir = await fsp.mkdtemp(join(tmpdir(), 'iptv-catchup-policy-'))
+      catchupPolicyPath = join(catchupPolicyDir, 'user-policies.json')
+      _setUserPoliciesPathForTests(catchupPolicyPath)
+    })
+    afterEach(async () => {
+      _setUserPoliciesPathForTests(env.userPoliciesPath)
+      authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
+      await fsp.rm(catchupPolicyDir, { recursive: true, force: true })
+    })
+
+    const grantUrl = () => {
+      const startUtc = new Date(Date.now() - 60 * 60_000).toISOString()
+      return `/api/iptv/stream/catchup/10/grant?startUtc=${encodeURIComponent(startUtc)}&durationMin=30`
+    }
+
+    it('403 section_blocked for a non-admin whose policy denies live (no rating cap)', async () => {
+      authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+      await fsp.writeFile(
+        catchupPolicyPath,
+        JSON.stringify({
+          'plex:99': {
+            maxContentRating: null,
+            allowedSections: { live: false, downloads: true, arr: true },
+            kid: true,
+          },
+        }),
+      )
+      _setUserPoliciesPathForTests(catchupPolicyPath)
+      const res = await app.request(grantUrl(), { method: 'POST' })
+      expect(res.status).toBe(403)
+      expect(await res.json()).toEqual({ error: 'section_blocked' })
+    })
+
+    it('allows a non-admin whose policy permits live', async () => {
+      authState.session = { sub: 'plex:99', username: 'Teen', role: 'user' }
+      await fsp.writeFile(
+        catchupPolicyPath,
+        JSON.stringify({
+          'plex:99': {
+            maxContentRating: null,
+            allowedSections: { live: true, downloads: false, arr: false },
+            kid: false,
+          },
+        }),
+      )
+      _setUserPoliciesPathForTests(catchupPolicyPath)
+      const res = await app.request(grantUrl(), { method: 'POST' })
+      expect(res.status).toBe(200)
+    })
+  })
 })
 
 vi.mock('../services/iptvSync.js', () => ({
