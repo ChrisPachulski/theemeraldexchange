@@ -207,6 +207,20 @@ describe('IptvPlayer (mounted) — MEDIA_ERROR recovery ladder', () => {
     expect(hls.recoverMediaError).not.toHaveBeenCalled()
     expect(screen.getByText('Playback failed.')).toBeInTheDocument()
   })
+
+  it('renders a Retry affordance alongside a terminal error (not a dead-end message)', async () => {
+    const { hls } = await mountHlsPlayer()
+
+    act(() => {
+      hls.emit(FakeHls.Events.ERROR, fatalError(FakeHls.ErrorTypes.OTHER_ERROR))
+    })
+
+    // The error surfaces as an alert with an actionable Retry button, so the
+    // user can reconnect in place instead of only being able to close the modal.
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('Playback failed.')
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+  })
 })
 
 describe('IptvPlayer (mounted) — NETWORK_ERROR retry', () => {

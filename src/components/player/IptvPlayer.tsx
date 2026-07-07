@@ -478,6 +478,35 @@ export function createHlsDurationPin(opts: {
 
 export const MAX_NET_RETRIES = 8
 export const MEDIA_RECOVERY_WINDOW_MS = 3000
+// After this much continuous playback the fatal-network retry budget is
+// refilled (mirrors the mpegts stall-recovery stableTimer at 12s). Without it
+// the budget of 8 NEVER replenished across a session: a 2-hour movie over the
+// tunnel that surfaces an occasional edge-drop fatal every ~15 min would burn
+// the 9th and permanently kill playback with a misleading "warming up" dead end.
+export const NET_RETRY_RESET_MS = 12_000
+
+// hls.js surfaces the failed load's HTTP response on a fatal error. We inspect
+// only the status + body text, so keep a minimal structural slice.
+export type FatalHlsErrorResponse = { code?: number; text?: string } | undefined
+
+export type FatalHlsErrorHandler = {
+  onFatalError: (kind: FatalHlsErrorKind, response?: FatalHlsErrorResponse) => void
+  // Call on real playback progress (playing / timeupdate). Refills the network
+  // retry budget after a stable window and flips the exhaustion copy to the
+  // mid-watch "Stream interrupted" message.
+  notifyProgress: () => void
+}
+
+// Terminal server state: the channel is off the air upstream (every candidate
+// feed is a dead placeholder — server emits 503 {error:'channel_offline_upstream'}).
+// hls.js reports the 503 manifest load as a fatal NETWORK error; without
+// recognizing it the player burns all 8 retries (~20-60s spinner) and then
+// shows the misleading "transcoder warming up" copy instead of "off the air",
+// which the tvOS client surfaces immediately.
+function isChannelOfflineUpstream(response: FatalHlsErrorResponse): boolean {
+  if (!response || response.code !== 503) return false
+  return typeof response.text === 'string' && response.text.includes('channel_offline_upstream')
+}
 
 export function createFatalHlsErrorHandler(opts: {
   hls: RecoverableHls
@@ -485,7 +514,7 @@ export function createFatalHlsErrorHandler(opts: {
   setError: (message: string) => void
   schedule?: (fn: () => void, delayMs: number) => void
   now?: () => number
-}): (kind: FatalHlsErrorKind) => void {
+}): FatalHlsErrorHandler {
   const { hls, isCancelled, setError } = opts
   const schedule = opts.schedule ?? ((fn, delayMs) => window.setTimeout(fn, delayMs))
   const now = opts.now ?? (() => Date.now())
@@ -493,12 +522,37 @@ export function createFatalHlsErrorHandler(opts: {
   let netRetries = 0
   let mediaRecoverStep = 0
   let lastMediaErrorAt = 0
+  let hasPlayed = false
+  let stablePending = false
 
-  return (kind) => {
+  const notifyProgress = () => {
+    if (isCancelled()) return
+    hasPlayed = true
+    // One armed reset per stable window (mirrors the mpegts stableTimer guard).
+    if (stablePending) return
+    stablePending = true
+    schedule(() => {
+      stablePending = false
+      netRetries = 0
+    }, NET_RETRY_RESET_MS)
+  }
+
+  const onFatalError = (kind: FatalHlsErrorKind, response?: FatalHlsErrorResponse) => {
     if (isCancelled()) return
     if (kind === 'network') {
+      // Terminal off-air state: don't consume the retry budget or show the
+      // warming-up copy — surface the accurate, non-spinning message at once.
+      if (isChannelOfflineUpstream(response)) {
+        setError('This channel is off the air right now. Try another channel.')
+        hls.destroy()
+        return
+      }
       if (netRetries >= MAX_NET_RETRIES) {
-        setError('Couldn’t start playback. The transcoder may still be warming up; try again in a moment.')
+        setError(
+          hasPlayed
+            ? 'Stream interrupted. Retry to reconnect.'
+            : 'Couldn’t start playback. The transcoder may still be warming up; try again in a moment.',
+        )
         hls.destroy()
         return
       }
@@ -528,6 +582,8 @@ export function createFatalHlsErrorHandler(opts: {
     setError('Playback failed.')
     hls.destroy()
   }
+
+  return { onFatalError, notifyProgress }
 }
 
 // The sidecar .vtt is extracted by a SEPARATE one-shot ffmpeg pass that demuxes
@@ -603,6 +659,11 @@ export default function IptvPlayer({
   const [selectedAudio, setSelectedAudio] = useState(0)
   const [selectedSubtitle, setSelectedSubtitle] = useState(-1)
   const [error, setError] = useState<string | null>(null)
+  // Bumped by the in-player Retry button: re-runs the setup effect (a fresh
+  // engine on the same grant) so an exhausted-budget / interrupted stream has a
+  // recovery affordance instead of a dead-end message the user can only escape
+  // by closing the modal.
+  const [reloadNonce, setReloadNonce] = useState(0)
 
   // Hand the element to the owner (custom controls). Mount-scoped: the
   // <video> itself persists across engine swaps, so this fires once.
@@ -822,21 +883,31 @@ export default function IptvPlayer({
         // errors (reloading the manifest), run the documented media-error
         // recovery ladder, and only give up with a visible message after a
         // bounded number of attempts.
-        const onFatalError = createFatalHlsErrorHandler({
+        const fatal = createFatalHlsErrorHandler({
           hls,
           isCancelled: () => cancelled,
           setError,
         })
         hls.on(Hls.Events.ERROR, (_evt, data) => {
           if (cancelled || !data.fatal) return
-          onFatalError(
+          const rawResponse = (data as { response?: { code?: number; text?: string } }).response
+          const response = rawResponse
+            ? { code: rawResponse.code, text: rawResponse.text }
+            : undefined
+          fatal.onFatalError(
             data.type === Hls.ErrorTypes.NETWORK_ERROR
               ? 'network'
               : data.type === Hls.ErrorTypes.MEDIA_ERROR
                 ? 'media'
                 : 'other',
+            response,
           )
         })
+        // Refill the network-retry budget on real progress and switch the
+        // exhaustion copy to the mid-watch message once playback has begun.
+        const onFatalProgress = () => fatal.notifyProgress()
+        video.addEventListener('playing', onFatalProgress)
+        video.addEventListener('timeupdate', onFatalProgress)
 
         // Buffer-underrun stall watchdog for the hls.js path. hls.js does
         // not surface a fatal ERROR on a simple underrun — it just stalls
@@ -888,6 +959,8 @@ export default function IptvPlayer({
           video.removeEventListener('stalled', stallWatchdog.onStall)
           video.removeEventListener('playing', stallWatchdog.onProgress)
           video.removeEventListener('timeupdate', stallWatchdog.onProgress)
+          video.removeEventListener('playing', onFatalProgress)
+          video.removeEventListener('timeupdate', onFatalProgress)
           hls.destroy()
         }
         updateHlsTracks()
@@ -1041,7 +1114,7 @@ export default function IptvPlayer({
       resetVideo()
       resetTracks()
     }
-  }, [autoPlay, grant, vodHls, pinnedDurationSecs, onDeliveryStruggling, onSeekableEndUpdate])
+  }, [autoPlay, grant, vodHls, pinnedDurationSecs, onDeliveryStruggling, onSeekableEndUpdate, reloadNonce])
 
   const chooseAudioTrack = (trackId: number) => {
     const applied = applyAudioTrack(
@@ -1125,7 +1198,21 @@ export default function IptvPlayer({
         </div>
       )}
 
-      {error && <p className="iptv-player__error">{error}</p>}
+      {error && (
+        <div className="iptv-player__error" role="alert">
+          <p>{error}</p>
+          <button
+            type="button"
+            className="iptv-player__retry"
+            onClick={() => {
+              setError(null)
+              setReloadNonce((n) => n + 1)
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
     </div>
   )
 }

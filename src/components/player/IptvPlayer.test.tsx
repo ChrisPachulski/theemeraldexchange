@@ -20,6 +20,7 @@ import IptvPlayer, {
   ESCALATE_WINDOW_MS,
   MAX_NET_RETRIES,
   MEDIA_RECOVERY_WINDOW_MS,
+  NET_RETRY_RESET_MS,
   MAX_SUBTITLE_LOAD_ATTEMPTS,
   subtitleRetryDelayMs,
   type RecoverableHls,
@@ -406,7 +407,7 @@ describe('createFatalHlsErrorHandler', () => {
     let clock = startAt
     const scheduled: Array<{ fn: () => void; delayMs: number }> = []
     let cancelled = false
-    const handler = createFatalHlsErrorHandler({
+    const created = createFatalHlsErrorHandler({
       hls,
       isCancelled: () => cancelled,
       setError,
@@ -417,12 +418,18 @@ describe('createFatalHlsErrorHandler', () => {
       hls,
       setError,
       scheduled,
-      handler,
+      handler: created.onFatalError,
+      notifyProgress: created.notifyProgress,
       cancel: () => {
         cancelled = true
       },
       advance: (ms: number) => {
         clock += ms
+      },
+      // Fire every scheduled callback whose kind is the stable-window reset
+      // (the only zero-arg reset uses NET_RETRY_RESET_MS as its delay).
+      fireStableResets: () => {
+        for (const s of scheduled) if (s.delayMs === NET_RETRY_RESET_MS) s.fn()
       },
     }
   }
@@ -507,6 +514,57 @@ describe('createFatalHlsErrorHandler', () => {
     expect(h.setError).toHaveBeenCalledTimes(1)
     expect(h.setError.mock.calls[0][0]).toMatch(/warming up/)
     expect(h.hls.destroy).toHaveBeenCalledTimes(1)
+  })
+
+  it('a stable-playback window refills the retry budget: 8 network fatals interleaved with progress never give up', () => {
+    const h = harness()
+
+    // Eight fatal network errors, each followed by a stable window that fires
+    // the reset — the budget replenishes so it never reaches MAX_NET_RETRIES.
+    for (let i = 0; i < MAX_NET_RETRIES; i += 1) {
+      h.handler('network')
+      h.notifyProgress()
+      h.fireStableResets()
+    }
+    // Even a further burst short of the (now reset) cap stays alive.
+    h.handler('network')
+
+    expect(h.setError).not.toHaveBeenCalled()
+    expect(h.hls.destroy).not.toHaveBeenCalled()
+  })
+
+  it('once playback has begun, budget exhaustion shows the mid-watch "Stream interrupted" copy, not "warming up"', () => {
+    const h = harness()
+
+    h.notifyProgress() // playback started
+    for (let i = 0; i < MAX_NET_RETRIES; i += 1) h.handler('network')
+    h.handler('network') // the (MAX+1)th within one window → exhausted
+
+    expect(h.setError).toHaveBeenCalledTimes(1)
+    expect(h.setError.mock.calls[0][0]).toMatch(/Stream interrupted/)
+    expect(h.setError.mock.calls[0][0]).not.toMatch(/warming up/)
+  })
+
+  it('a 503 channel_offline_upstream is terminal: accurate off-air message, no retries consumed', () => {
+    const h = harness()
+
+    h.handler('network', { code: 503, text: JSON.stringify({ error: 'channel_offline_upstream' }) })
+
+    expect(h.setError).toHaveBeenCalledTimes(1)
+    expect(h.setError.mock.calls[0][0]).toMatch(/off the air/)
+    expect(h.setError.mock.calls[0][0]).not.toMatch(/warming up/)
+    expect(h.hls.destroy).toHaveBeenCalledTimes(1)
+    // It short-circuited before scheduling a startLoad retry.
+    expect(h.scheduled).toHaveLength(0)
+  })
+
+  it('a generic 503 (transient warm-up) still consumes a retry, not treated as offline', () => {
+    const h = harness()
+
+    h.handler('network', { code: 503, text: 'transcoder warming up' })
+
+    expect(h.setError).not.toHaveBeenCalled()
+    expect(h.scheduled).toHaveLength(1) // scheduled a backed-off startLoad
   })
 
   it('other fatal errors destroy immediately with a message', () => {
