@@ -21,6 +21,7 @@ beforeAll(() => {
   vi.resetModules()
   process.env.SERVER_DB_PATH = path.join(tmpDir, 'server.db')
   process.env.IPTV_DB_PATH = path.join(tmpDir, 'iptv.db')
+  process.env.MEDIA_DB_PATH = path.join(tmpDir, 'media.db')
   process.env.DB_BACKUP_DIR = path.join(tmpDir, 'backups')
   process.env.DB_BACKUP_KEEP = '3'
   // env.ts requires these at load; provide test values so the import succeeds.
@@ -35,6 +36,15 @@ beforeAll(() => {
   const iptv = new Database(process.env.IPTV_DB_PATH)
   iptv.exec('CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (1);')
   iptv.close()
+
+  // Pre-seed a minimal media.db carrying a media_watch_state row — the only
+  // home of watch progress, which the pass must snapshot too.
+  const media = new Database(process.env.MEDIA_DB_PATH)
+  media.exec(
+    'CREATE TABLE media_watch_state (media_id TEXT, position_secs INTEGER);' +
+      "INSERT INTO media_watch_state VALUES ('m1', 42);",
+  )
+  media.close()
 })
 
 afterAll(() => {
@@ -43,6 +53,7 @@ afterAll(() => {
   delete process.env.IPTV_DB_PATH
   delete process.env.DB_BACKUP_DIR
   delete process.env.DB_BACKUP_KEEP
+  delete process.env.MEDIA_DB_PATH
   vi.resetModules()
 })
 
@@ -62,8 +73,8 @@ describe('runScheduledBackup (finding 14-4)', () => {
     const before = Date.now()
     const result = runScheduledBackup()
 
-    // Two snapshot files exist on disk and are non-empty.
-    expect(result.files.length).toBe(2)
+    // Three snapshot files exist on disk and are non-empty.
+    expect(result.files.length).toBe(3)
     for (const f of result.files) {
       expect(fs.existsSync(f)).toBe(true)
       expect(fs.statSync(f).size).toBeGreaterThan(0)
@@ -71,6 +82,18 @@ describe('runScheduledBackup (finding 14-4)', () => {
     const names = fs.readdirSync(result.dir)
     expect(names.some((n) => n.startsWith('server-') && n.endsWith('.db'))).toBe(true)
     expect(names.some((n) => n.startsWith('iptv-') && n.endsWith('.db'))).toBe(true)
+    expect(names.some((n) => n.startsWith('media-') && n.endsWith('.db'))).toBe(true)
+
+    // The media.db snapshot is a valid SQLite DB that preserves the watch row —
+    // the whole point of covering it (media_watch_state is unrecoverable
+    // otherwise).
+    const mediaSnap = result.files.find((f) => path.basename(f).startsWith('media-'))!
+    const msnap = new Database(mediaSnap, { readonly: true })
+    const watch = msnap
+      .prepare(`SELECT position_secs FROM media_watch_state WHERE media_id = 'm1'`)
+      .get() as { position_secs: number } | undefined
+    msnap.close()
+    expect(watch?.position_secs).toBe(42)
 
     // A snapshot is itself a valid SQLite DB carrying the source schema.
     const serverSnap = result.files.find((f) => path.basename(f).startsWith('server-'))!
