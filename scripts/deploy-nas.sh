@@ -311,6 +311,15 @@ echo "→ Syncing Cargo workspace manifest"
 rsync -av "${STAGE_DIR}/Cargo.toml" "${STAGE_DIR}/Cargo.lock" "${STAGE_DIR}/LICENSE" \
   "${NAS_USER}@${NAS_HOST}:${APPDATA}/"
 
+# deploy/tailscale-serve.json is the bind source for the compose `remote`
+# profile (TS_SERVE_CONFIG=/config/serve.json). It was never in the rsync
+# payload, so enabling `remote` on the NAS made docker create an empty
+# DIRECTORY at the missing source and Tailscale Serve came up with no config.
+# Ship it here — same 'runtime dependency must be in the payload' class as the
+# bin/eex-ytresolve fix below.
+echo "→ Syncing deploy/ (tailscale-serve.json for the remote profile)"
+rsync -av "${STAGE_DIR}/deploy/" "${NAS_USER}@${NAS_HOST}:${APPDATA}/deploy/"
+
 echo "→ Syncing eex-ytresolve binary"
 rsync -av "${STAGE_DIR}/bin/eex-ytresolve" "${NAS_USER}@${NAS_HOST}:${APPDATA}/bin/"
 
