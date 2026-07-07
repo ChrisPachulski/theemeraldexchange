@@ -22,6 +22,7 @@ import {
   type Recorder,
 } from './dvrRecorder.js'
 import { scheduleRecording, markStatus, getRecording, type DvrRecording } from './dvrRecordings.js'
+import { streamConcurrency } from './iptvConcurrency.js'
 
 const NOW = '2026-06-17T12:00:00.000Z'
 
@@ -334,6 +335,87 @@ describe('FfmpegRecorder (mocked spawn)', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('FfmpegRecorder upstream-connection accounting (finding 118)', () => {
+  let tmpDir: string
+  let db: IptvDb
+  let dir: string
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvr-cap-'))
+    db = openIptvDb(path.join(tmpDir, 'iptv.db'))
+    dir = path.join(tmpDir, 'recordings')
+    spawnMock.mockReset()
+    spawnMock.mockImplementation(() => new FakeChild())
+    // Real concurrency singleton — clear any slots leaked by prior tests so the
+    // count starts honest.
+    for (const s of streamConcurrency().list()) streamConcurrency().release(s.sessionId)
+  })
+  afterEach(() => {
+    for (const s of streamConcurrency().list()) streamConcurrency().release(s.sessionId)
+    db.close()
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  const dueRecording = () => {
+    const r = scheduleRecording(
+      db.raw,
+      {
+        channel_stream_id: 9,
+        channel_name: 'ESPN',
+        title: 'game',
+        start_utc: '2026-06-17T11:00:00.000Z',
+        stop_utc: '2026-06-17T13:00:00.000Z',
+      },
+      NOW,
+    )
+    return getRecording(db.raw, r.id) as DvrRecording
+  }
+
+  it('defers a due recording when the single upstream slot is held by a live viewer, then records once it frees', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const row = dueRecording()
+      // A household member is watching live via remux — the one upstream slot.
+      streamConcurrency().tryAcquire({
+        sub: 'plex:viewer',
+        sessionId: 'live:1:plex:viewer:1',
+        kind: 'remux',
+        resourceId: '1',
+      })
+      // Recorder gated at IPTV_MAX_UPSTREAM_CONNECTIONS = 1.
+      const rec = new FfmpegRecorder(dir, db.raw, () => Date.parse(NOW), streamConcurrency(), () => 1)
+
+      // RED (pre-fix): ffmpeg spawns a 2nd provider connection over cap.
+      // GREEN: the recording is DEFERRED — no spawn, row stays 'scheduled'.
+      tick(db.raw, rec, NOW)
+      expect(spawnMock).not.toHaveBeenCalled()
+      expect(getRecording(db.raw, row.id)?.status).toBe('scheduled')
+
+      // The viewer stops; the slot frees.
+      streamConcurrency().release('live:1:plex:viewer:1')
+
+      tick(db.raw, rec, NOW)
+      expect(spawnMock).toHaveBeenCalledOnce()
+      expect(getRecording(db.raw, row.id)?.status).toBe('recording')
+      // The active recording is now visible in the sessions list + holds a slot.
+      const entry = streamConcurrency().list().find((s) => s.sessionId === `record:${row.id}`)
+      expect(entry?.kind).toBe('live')
+      expect(entry?.resourceId).toBe('9')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('releases the upstream slot when the recording ffmpeg exits', () => {
+    const row = dueRecording()
+    const rec = new FfmpegRecorder(dir, db.raw, () => Date.parse(NOW), streamConcurrency(), () => 1)
+    tick(db.raw, rec, NOW)
+    expect(streamConcurrency().list().some((s) => s.sessionId === `record:${row.id}`)).toBe(true)
+    const child = spawnMock.mock.results[0].value as FakeChild
+    child.emit('exit', 0, null)
+    expect(streamConcurrency().list().some((s) => s.sessionId === `record:${row.id}`)).toBe(false)
   })
 })
 
