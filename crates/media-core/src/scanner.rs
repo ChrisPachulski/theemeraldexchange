@@ -818,6 +818,10 @@ async fn index_file(
 /// enrichment existed: the unchanged-file skip used to `continue` outright, so
 /// those rows would stay NULL forever. An already-enriched row short-circuits
 /// before any network call, so a steady-state rescan does no TMDB work.
+/// One movie row's rating-backfill state:
+/// `(tmdb_id, content_rating, rating_lookup_attempts, rating_lookup_failed_at)`.
+type MovieRatingRow = (Option<i64>, Option<String>, i64, Option<String>);
+
 async fn backfill_metadata(
     db: &Db,
     path: &str,
