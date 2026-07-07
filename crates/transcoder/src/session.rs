@@ -348,7 +348,39 @@ impl Session {
                 Some(*idx),
             ));
         }
+        dedupe_rendition_names(&mut out);
         out
+    }
+}
+
+/// Force every rendition in an alternate-audio group to a DISTINCT `NAME`, as
+/// RFC 8216 §4.3.4.1.1 requires ("All EXT-X-MEDIA tags in the same Group MUST
+/// have different NAME attributes"). [`rendition_from`] derives `NAME` from the
+/// language tag, so the single most common multi-audio layout — an English main
+/// track plus an English commentary — would otherwise emit two `NAME="eng"`
+/// lines in the same group, which AVPlayer collapses into one picker entry (the
+/// commentary becomes unselectable) or mis-keys selection between. On a collision
+/// the later entries get a positional suffix (`"eng"`, `"eng (2)"`, …); the first
+/// keeps its bare name. Pure over the rendition list so it is unit-testable
+/// without touching the process-global `TRANSCODER_ALT_AUDIO` env or a Session.
+fn dedupe_rendition_names(renditions: &mut [AudioRendition]) {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for r in renditions.iter_mut() {
+        if seen.insert(r.name.clone()) {
+            continue;
+        }
+        // Name already taken; take the smallest positional suffix that is free
+        // (guarding against a suffixed candidate itself colliding).
+        let base = r.name.clone();
+        let mut n = 2u32;
+        let unique = loop {
+            let candidate = format!("{base} ({n})");
+            if seen.insert(candidate.clone()) {
+                break candidate;
+            }
+            n += 1;
+        };
+        r.name = unique;
     }
 }
 
@@ -2658,6 +2690,47 @@ mod tests {
         );
         assert_eq!(r.name, "Extra");
         assert!(r.language.is_none());
+    }
+
+    #[test]
+    fn dedupe_rendition_names_disambiguates_same_language_tracks() {
+        // The common dual-eng layout: an English main track + an English
+        // commentary. rendition_from names both "eng" (language wins), so the
+        // group would emit two NAME="eng" lines — an RFC 8216 §4.3.4.1.1 MUST
+        // violation. The dedupe pass must make every NAME pairwise-distinct.
+        let mut group = vec![
+            rendition_from(Some(&audio_track(Some("eng"), None)), 0, true, None),
+            rendition_from(
+                Some(&audio_track(Some("eng"), Some("Commentary"))),
+                1,
+                false,
+                Some(1),
+            ),
+        ];
+        dedupe_rendition_names(&mut group);
+        let names: Vec<&str> = group.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["eng", "eng (2)"], "names must be distinct");
+
+        // A triple collision (plus a candidate that itself pre-exists) still
+        // converges to pairwise-distinct names with no accidental re-collision.
+        let mut trip = vec![
+            rendition_from(Some(&audio_track(Some("eng"), None)), 0, true, None),
+            rendition_from(Some(&audio_track(Some("eng"), None)), 1, false, Some(1)),
+            rendition_from(Some(&audio_track(Some("eng"), None)), 2, false, Some(2)),
+        ];
+        dedupe_rendition_names(&mut trip);
+        let uniq: std::collections::HashSet<&str> =
+            trip.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(uniq.len(), 3, "all three NAMEs must be distinct: {trip:?}");
+
+        // Distinct languages are left untouched.
+        let mut mixed = vec![
+            rendition_from(Some(&audio_track(Some("eng"), None)), 0, true, None),
+            rendition_from(Some(&audio_track(Some("spa"), None)), 1, false, Some(1)),
+        ];
+        dedupe_rendition_names(&mut mixed);
+        assert_eq!(mixed[0].name, "eng");
+        assert_eq!(mixed[1].name, "spa");
     }
 
     #[test]
