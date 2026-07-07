@@ -878,9 +878,19 @@ async fn index_file(
 /// enrichment existed: the unchanged-file skip used to `continue` outright, so
 /// those rows would stay NULL forever. An already-enriched row short-circuits
 /// before any network call, so a steady-state rescan does no TMDB work.
-/// One movie row's rating-backfill state:
-/// `(tmdb_id, content_rating, rating_lookup_attempts, rating_lookup_failed_at)`.
-type MovieRatingRow = (Option<i64>, Option<String>, i64, Option<String>);
+/// One movie row's backfill state: `(tmdb_id, content_rating,
+/// rating_lookup_attempts, rating_lookup_failed_at, match_lookup_attempts,
+/// match_lookup_failed_at)`. The rating columns (0011) gate the rating backfill
+/// of a matched row; the match columns (0012) gate the re-search of an
+/// UNMATCHED (NULL tmdb_id) row.
+type MovieBackfillRow = (
+    Option<i64>,
+    Option<String>,
+    i64,
+    Option<String>,
+    i64,
+    Option<String>,
+);
 
 async fn backfill_metadata(
     db: &Db,
@@ -902,31 +912,33 @@ async fn backfill_metadata(
 
     match parsed {
         ParsedName::Movie { title, year } => {
-            // Three states for an unchanged file's movie row:
-            //   unmatched            → full TMDB match (the original backfill),
+            // Four states for an unchanged file's movie row:
             //   matched + rated      → fully enriched, zero network work,
             //   matched + UNRATED    → rating-only backfill. Rows matched before
             //     migration 0010 never carried content_rating, and the old
             //     `tmdb_id IS NOT NULL` short-circuit left them NULL forever.
-            //     Gated by the 0011 negative cache (same cooldown/cap rules as
-            //     the 0009 episode negcache) so titles with no US certification
-            //     aren't re-probed every ~hourly scan.
-            let row: Option<MovieRatingRow> = sqlx::query_as(
-                "SELECT tmdb_id, content_rating, rating_lookup_attempts, rating_lookup_failed_at \
-                 FROM movies WHERE file_id = ?",
+            //     Gated by the 0011 negcache (same cooldown/cap as the 0009
+            //     episode negcache) so titles with no US certification aren't
+            //     re-probed every ~hourly scan.
+            //   UNMATCHED, due       → full TMDB match; a definitive no-results
+            //     stamps the 0012 match negcache.
+            //   UNMATCHED, cooled    → skip the doomed re-search until cooldown.
+            let row: Option<MovieBackfillRow> = sqlx::query_as(
+                "SELECT tmdb_id, content_rating, rating_lookup_attempts, rating_lookup_failed_at, \
+                 match_lookup_attempts, match_lookup_failed_at FROM movies WHERE file_id = ?",
             )
             .bind(file_id)
             .fetch_optional(&db.pool)
             .await?;
-            if let Some((Some(tmdb_id), rating, attempts, failed_at)) = row {
+            if let Some((Some(tmdb_id), rating, attempts, failed_at, _, _)) = &row {
                 if rating.is_some() {
                     return Ok(false);
                 }
-                if !should_attempt_episode_lookup(false, attempts, failed_at.as_deref(), Utc::now())
+                if !should_attempt_episode_lookup(false, *attempts, failed_at.as_deref(), Utc::now())
                 {
                     return Ok(false);
                 }
-                return match tmdb.movie_content_rating(tmdb_id).await {
+                return match tmdb.movie_content_rating(*tmdb_id).await {
                     TmdbFetch::Found(r) => {
                         sqlx::query("UPDATE movies SET content_rating = ? WHERE file_id = ?")
                             .bind(&r)
@@ -954,12 +966,42 @@ async fn backfill_metadata(
                     TmdbFetch::Transient => Ok(false),
                 };
             }
-            let m = tmdb.match_movie(title, *year).await;
-            if m.is_none() {
+            // Unmatched (NULL tmdb_id) row: gate the re-search on the 0012 match
+            // negcache so an unmatchable title (home video, obscure/foreign rip)
+            // stops issuing a live /search/movie on every scan — the query
+            // cannot start succeeding without a file change.
+            let (match_attempts, match_failed_at) =
+                row.map(|(_, _, _, _, ma, mf)| (ma, mf)).unwrap_or((0, None));
+            if !should_attempt_episode_lookup(
+                false,
+                match_attempts,
+                match_failed_at.as_deref(),
+                Utc::now(),
+            ) {
                 return Ok(false);
             }
-            upsert_movie(db, title, *year, file_id, &scanned_at, m.as_ref()).await?;
-            Ok(true)
+            match tmdb.match_movie_outcome(title, *year).await {
+                TmdbFetch::Found(m) => {
+                    upsert_movie(db, title, *year, file_id, &scanned_at, Some(&m)).await?;
+                    Ok(true)
+                }
+                // Searched OK with no acceptable candidate: stamp so the same
+                // doomed query isn't re-issued every scan.
+                TmdbFetch::DefinitiveMiss => {
+                    sqlx::query(
+                        "UPDATE movies SET match_lookup_attempts = match_lookup_attempts + 1, \
+                         match_lookup_failed_at = ? WHERE file_id = ?",
+                    )
+                    .bind(now_rfc3339())
+                    .bind(file_id)
+                    .execute(&db.pool)
+                    .await?;
+                    Ok(false)
+                }
+                // Transient outage: leave the retry budget so the next scan
+                // retries instead of caching a false "unmatchable".
+                TmdbFetch::Transient => Ok(false),
+            }
         }
         ParsedName::Episode {
             show,
@@ -3226,6 +3268,83 @@ mod tests {
             .await
             .unwrap();
         (show_id, file_id)
+    }
+
+    #[tokio::test]
+    async fn backfill_unmatched_movie_negcaches_and_stops_re_searching() {
+        // Finding #86: a movie that never matches TMDB (NULL tmdb_id) used to
+        // issue a live /search/movie on every scan forever. After a definitive
+        // no-results it must stamp the 0012 match negcache and issue ZERO
+        // further search requests inside the cooldown.
+        let db = Db::connect_memory().await.unwrap();
+        let path = "/lib/Home Movies/birthday.mkv";
+        let file_id = seed_media_file(&db, path).await;
+        // An unmatched row: upsert_movie with no TMDB match (tmdb_id NULL).
+        upsert_movie(&db, "birthday", None, file_id, "t", None)
+            .await
+            .unwrap();
+        // Empty results = TMDB has no such title (a definitive no-results).
+        let stub =
+            crate::tmdb::stub::StubServer::start(|_| (200, r#"{"results":[]}"#.to_string()));
+        let tmdb = TmdbClient::with_base(Some("k".into()), stub.base.clone());
+        let parsed = ParsedName::Movie {
+            title: "birthday".into(),
+            year: None,
+        };
+
+        let did = backfill_metadata(&db, path, &parsed, &tmdb).await.unwrap();
+        assert!(!did);
+        let attempts: i64 =
+            sqlx::query_scalar("SELECT match_lookup_attempts FROM movies WHERE file_id = ?")
+                .bind(file_id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(attempts, 1, "definitive no-results must stamp the match negcache");
+        let searches_after_first = stub.hit_count_containing("/search/movie");
+        assert!(searches_after_first >= 1, "first pass must issue a search");
+
+        // Second pass inside the cooldown: ZERO further search requests.
+        let did2 = backfill_metadata(&db, path, &parsed, &tmdb).await.unwrap();
+        assert!(!did2);
+        assert_eq!(
+            stub.hit_count_containing("/search/movie"),
+            searches_after_first,
+            "cooldown must issue zero further /search/movie requests"
+        );
+        let attempts2: i64 =
+            sqlx::query_scalar("SELECT match_lookup_attempts FROM movies WHERE file_id = ?")
+                .bind(file_id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(attempts2, 1, "cooled-down row must not re-attempt");
+    }
+
+    #[tokio::test]
+    async fn backfill_unmatched_movie_transient_does_not_stamp() {
+        // A transient outage on the match search must NOT stamp the negcache, so
+        // a real title is not permanently suppressed by a passing 5xx window.
+        let db = Db::connect_memory().await.unwrap();
+        let path = "/lib/Movies/obscure.mkv";
+        let file_id = seed_media_file(&db, path).await;
+        upsert_movie(&db, "obscure", None, file_id, "t", None)
+            .await
+            .unwrap();
+        let stub = crate::tmdb::stub::StubServer::start(|_| (503, "{}".to_string()));
+        let tmdb = TmdbClient::with_base(Some("k".into()), stub.base.clone());
+        let parsed = ParsedName::Movie {
+            title: "obscure".into(),
+            year: None,
+        };
+        backfill_metadata(&db, path, &parsed, &tmdb).await.unwrap();
+        let attempts: i64 =
+            sqlx::query_scalar("SELECT match_lookup_attempts FROM movies WHERE file_id = ?")
+                .bind(file_id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(attempts, 0, "transient match failure must NOT stamp the negcache");
     }
 
     #[tokio::test]

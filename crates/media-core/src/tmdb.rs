@@ -810,6 +810,16 @@ impl TmdbClient {
         .await
     }
 
+    /// Search TMDB for a movie, surfacing the tri-state so the caller can
+    /// negcache a DEFINITIVE no-results search (a title TMDB genuinely doesn't
+    /// carry — home video, obscure rip) on the cooldown schedule without
+    /// stamping on a transient outage. On a Found hit, `imdb_id`/`tvdb_id`/
+    /// rating are enriched exactly as [`Self::match_movie`].
+    pub async fn match_movie_outcome(&self, title: &str, year: Option<i64>) -> TmdbFetch<TmdbMatch> {
+        self.match_with_outcome(&self.search_movie_url(), "movie", title, year, true, None)
+            .await
+    }
+
     async fn match_with(
         &self,
         url: &str,
@@ -819,6 +829,31 @@ impl TmdbClient {
         is_movie: bool,
         country_hint: Option<&str>,
     ) -> Option<TmdbMatch> {
+        match self
+            .match_with_outcome(url, kind, title, year, is_movie, country_hint)
+            .await
+        {
+            TmdbFetch::Found(m) => Some(m),
+            TmdbFetch::DefinitiveMiss | TmdbFetch::Transient => None,
+        }
+    }
+
+    async fn match_with_outcome(
+        &self,
+        url: &str,
+        kind: &str,
+        title: &str,
+        year: Option<i64>,
+        is_movie: bool,
+        country_hint: Option<&str>,
+    ) -> TmdbFetch<TmdbMatch> {
+        // No credential is a TRANSIENT state, not a definitive no-results: a
+        // keyless deploy window must never stamp a match negcache and suppress a
+        // title once the key returns. (search() collapses keyless to Ok(None),
+        // so guard here before that becomes an indistinguishable "no results".)
+        if self.api_key.is_none() {
+            return TmdbFetch::Transient;
+        }
         let first = match self.search(url, title, year, year, is_movie, country_hint).await {
             Ok(m) => m,
             Err(e) => {
@@ -826,7 +861,7 @@ impl TmdbClient {
                     target: "media_core::tmdb",
                     "search failed for {title:?}: {e}"
                 );
-                return None;
+                return TmdbFetch::Transient;
             }
         };
         // A strict primary_release_year filter can return nothing when the
@@ -845,12 +880,17 @@ impl TmdbClient {
                         target: "media_core::tmdb",
                         "year-relaxed retry failed for {title:?}: {e}"
                     );
-                    None
+                    return TmdbFetch::Transient;
                 }
             },
             None => None,
         };
-        let mut found = found?;
+        // Both searches completed but returned no acceptable candidate: a
+        // definitive no-results, safe for the caller to negcache.
+        let mut found = match found {
+            Some(m) => m,
+            None => return TmdbFetch::DefinitiveMiss,
+        };
         let ext = self.external_ids(kind, found.tmdb_id).await;
         found.imdb_id = ext.imdb_id;
         found.tvdb_id = ext.tvdb_id;
@@ -860,7 +900,7 @@ impl TmdbClient {
             // column NULL; the backfill path re-attempts with negcache gating.
             TmdbFetch::DefinitiveMiss | TmdbFetch::Transient => None,
         };
-        Some(found)
+        TmdbFetch::Found(found)
     }
 }
 

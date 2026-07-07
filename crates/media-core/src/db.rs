@@ -62,6 +62,11 @@ pub const MIGRATIONS: &[(i64, &str, &str)] = &[
         "0011_movie_rating_negcache",
         include_str!("../migrations/0011_movie_rating_negcache.sql"),
     ),
+    (
+        12,
+        "0012_movie_match_negcache",
+        include_str!("../migrations/0012_movie_match_negcache.sql"),
+    ),
 ];
 
 #[derive(Clone)]
@@ -359,6 +364,34 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(default_rating, None);
+    }
+
+    #[tokio::test]
+    async fn movie_match_negcache_columns_exist_after_migration() {
+        // Migration 0012 adds the match-search negative cache columns the scanner
+        // uses to stop re-searching unmatchable (NULL tmdb_id) movies every scan.
+        let db = Db::connect_memory().await.unwrap();
+        let cols: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('movies')")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+        assert!(
+            cols.iter().any(|c| c == "match_lookup_attempts"),
+            "movies must have match_lookup_attempts; got {cols:?}"
+        );
+        assert!(
+            cols.iter().any(|c| c == "match_lookup_failed_at"),
+            "movies must have match_lookup_failed_at; got {cols:?}"
+        );
+        // Default keeps the current library re-searchable (0 attempts).
+        let default_attempts: Option<String> = sqlx::query_scalar(
+            "SELECT dflt_value FROM pragma_table_info('movies') \
+             WHERE name = 'match_lookup_attempts'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(default_attempts.as_deref(), Some("0"));
     }
 
     #[tokio::test]
