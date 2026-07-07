@@ -1303,6 +1303,14 @@ iptv.post('/stream/series/:episodeId/grant', requireAuth, requireSection('live')
 iptv.get('/stream/series/:episodeId/:ext', async (c) => {
   const episodeId = c.req.param('episodeId')
   const ext = c.req.param('ext').toLowerCase()
+  // MED/LOW-24: episodeId and ext are interpolated RAW into the upstream provider
+  // URL (`${host}/series/${u}/${p}/${episodeId}.${ext}`). A `%3F`-decoded `?` (or
+  // other specials) in ext would inject query params into that request. Hono's
+  // single-segment param already blocks `/`, but constrain both to plain tokens
+  // before they reach the URL — the same guard the VOD byte route applies.
+  if (!/^[\w-]+$/.test(episodeId) || !/^[a-z0-9]{1,5}$/.test(ext)) {
+    return c.json({ error: 'invalid_id' }, 400)
+  }
   const v = checkToken(c, 'series', episodeId)
   if (!v.ok) return v.resp
   // Finding 8-1: heartbeat the grant slot on each series byte/range request.

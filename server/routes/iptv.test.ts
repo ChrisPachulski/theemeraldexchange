@@ -917,6 +917,20 @@ describe('vod stream grant + proxy', () => {
     }
   })
 
+  // MED/LOW-24: the series byte route interpolates `ext` raw into the upstream
+  // provider URL, so a `%3F`-decoded query string in ext must be rejected before
+  // any upstream fetch fires — the same guard the VOD byte route already applies.
+  it('rejects an injected query string in the series byte ext (invalid_id, no upstream fetch)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    const res = await app.request(
+      `/api/iptv/stream/series/ep-1/mp4%3Fdel%3D1?t=${fakeToken('series', 'ep-1')}`,
+    )
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toBe('invalid_id')
+    expect(fetchSpy).not.toHaveBeenCalled()
+    fetchSpy.mockRestore()
+  })
+
   it('rewrites HLS playlists to signed segment proxy URLs', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response([
       '#EXTM3U',
