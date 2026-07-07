@@ -80,6 +80,11 @@ describe('iptv remux session', () => {
     expect(args).toContain('-probesize')
     expect(args).toContain('-analyzeduration')
     expect(args).toContain('10M')
+    // Per-read input timeout so a half-open (dead-without-FIN) provider socket
+    // makes ffmpeg exit instead of blocking in read for the kernel TCP timeout,
+    // which would wedge the manifest and defeat every client reconnect.
+    expect(args).toContain('-rw_timeout')
+    expect(args[args.indexOf('-rw_timeout') + 1]).toBe('15000000')
     expect(args).toContain('-c:v')
     expect(args).toContain('copy')
     expect(args).toContain('-c:a')

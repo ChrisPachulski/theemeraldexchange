@@ -393,6 +393,18 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult | null
     // that. These are ceilings, not fixed waits: ffmpeg stops as soon as it has
     // the parameters, so the H.264 channels that declare quickly are unaffected.
     '-probesize', '10M', '-analyzeduration', '10M',
+    // Per-read I/O timeout on the input (microseconds). A provider socket that
+    // half-opens — dies without a FIN (NAT timeout / provider restart) — otherwise
+    // leaves ffmpeg blocked in read for the kernel's TCP timeout (hours): the
+    // manifest stops growing, the player starves, and every client reconnect
+    // re-joins the SAME wedged ffmpeg (ensureLiveRemuxEntry sees the session still
+    // "active"), so all attempts fail identically and blame the user's network for
+    // a server-side wedge. 15s well exceeds this provider's segment cadence (2s
+    // segments, bursty keyframes) so a slow-but-FLOWING feed is never killed —
+    // -rw_timeout is per-read, not a whole-session deadline — while a truly starved
+    // socket makes ffmpeg exit, letting the existing dead-feed/sibling failover and
+    // the client's reconnect actually re-dial a fresh connection.
+    '-rw_timeout', '15000000',
     '-i', opts.upstreamUrl,
     // Video is copied losslessly. Audio is RE-ENCODED to AAC-LC even though the
     // provider already sends AAC: the provider's profile is HE-AAC (AAC+SBR),
