@@ -68,6 +68,37 @@ const lastConnectAt = new Map<string, number>() // key -> ms of the last upstrea
 const sessionSpawnAt = new Map<string, number>() // key -> ms the live session was spawned
 const failStreak = new Map<string, number>() // key -> consecutive fast-fail count
 
+// ── Cross-session media-sequence continuity (sibling-failover -12312 guard) ───
+//
+// A session swap — dead-feed failover to a sibling, or any respawn — starts a
+// BRAND-NEW ffmpeg in a fresh dir whose HLS muxer restarts at
+// #EXT-X-MEDIA-SEQUENCE:0 with all-new segment files. Served naively at the SAME
+// manifest URL, the client-facing media sequence would jump BACKWARDS and every
+// segment URL would change at once — AVPlayer rejects that reloaded live playlist
+// ("-12312 Media Entry URL not match previous playlist") and freezes on a single
+// frame until the client's stall watchdog tears the whole item down (~12-36s),
+// even though a healthy sibling was already producing segments.
+//
+// So we keep the client-facing sequence MONOTONIC across swaps: per (streamId,
+// sub) we carry an offset added to ffmpeg's local MEDIA-SEQUENCE, advanced on each
+// swap to continue just past the highest sequence already served, plus an
+// EXT-X-DISCONTINUITY-SEQUENCE bumped per swap so the player re-inits its decode
+// timeline for the new feed instead of mis-splicing it. Steady state (no swap) is
+// byte-for-byte unchanged: offset 0 and no discontinuity-sequence tag emitted.
+type SequenceContinuity = {
+  sessionId: string // the session `offset` was computed for; a change = a swap
+  offset: number // added to ffmpeg's local MEDIA-SEQUENCE
+  discontinuitySeq: number // EXT-X-DISCONTINUITY-SEQUENCE (0 until the first swap)
+  lastServedMax: number // highest client-facing sequence served for this key (-1 = none)
+}
+const sequenceContinuity = new Map<string, SequenceContinuity>()
+
+/** ffmpeg's local first-segment media sequence for this manifest (0 if absent). */
+function parseLocalMediaSequence(text: string): number {
+  const m = text.match(/^#EXT-X-MEDIA-SEQUENCE:(\d+)/m)
+  return m ? Number(m[1]) : 0
+}
+
 /** Backoff before the next upstream re-dial for a channel, by consecutive
  *  fast-failure count. 0 failures → 0 (immediate); then 5s, 10s, 20s, capped at
  *  30s. Pure so the throttle is unit-testable without a real clock. */
@@ -91,6 +122,7 @@ export function _resetLiveRemuxIndexForTests(): void {
   lastConnectAt.clear()
   sessionSpawnAt.clear()
   failStreak.clear()
+  sequenceContinuity.clear()
 }
 
 export type EnsureLiveRemuxOpts = {
@@ -275,9 +307,40 @@ export function rewriteRemuxManifest(
   // by unit tests (whose signStreamToken mock is already deterministic).
   segUrlCache?: Map<string, string>,
 ): string {
+  // Cross-session media-sequence continuity: decide this manifest's client-facing
+  // first-segment sequence + discontinuity sequence BEFORE emitting the header, so
+  // a session swap never resets the sequence backwards (the -12312 stall). See the
+  // SequenceContinuity doc above. Keyed by the tuned (streamId, sub) so it survives
+  // a dead-feed failover, whose sessionId change is exactly the swap signal.
+  const contKey = remuxKey(streamId, sub)
+  const localSeq = parseLocalMediaSequence(text)
+  let cont = sequenceContinuity.get(contKey)
+  if (!cont) {
+    cont = { sessionId, offset: 0, discontinuitySeq: 0, lastServedMax: -1 }
+    sequenceContinuity.set(contKey, cont)
+  } else if (cont.sessionId !== sessionId) {
+    // Session swap: continue just past the highest sequence we already served so
+    // the client-facing sequence only ever increases, and bump the discontinuity
+    // sequence so the player treats the new feed as a fresh timeline.
+    cont.offset = Math.max(0, cont.lastServedMax + 1 - localSeq)
+    cont.discontinuitySeq += 1
+    cont.sessionId = sessionId
+  }
+  const adjustedFirst = localSeq + cont.offset
+
   let seenSegment = false
+  let mediaSeqEmitted = false
+  let segCount = 0
   const out: string[] = []
   const present = new Set<string>()
+  // Emit the (possibly rewritten) MEDIA-SEQUENCE header + a DISCONTINUITY-SEQUENCE
+  // when a swap has occurred. Idempotent via mediaSeqEmitted.
+  const emitSequenceHeader = (): void => {
+    if (mediaSeqEmitted) return
+    out.push(`#EXT-X-MEDIA-SEQUENCE:${adjustedFirst}`)
+    if (cont.discontinuitySeq > 0) out.push(`#EXT-X-DISCONTINUITY-SEQUENCE:${cont.discontinuitySeq}`)
+    mediaSeqEmitted = true
+  }
   for (const line of text.split(/\r?\n/)) {
     // A `#EXT-X-DISCONTINUITY` before the FIRST segment is meaningless — the tag
     // describes a change BETWEEN two segments, and there is nothing before the
@@ -290,6 +353,12 @@ export function rewriteRemuxManifest(
     // viewer never waits that long. Drop the pre-first-segment discontinuity;
     // keep genuine mid-stream ones (provider splices/ad markers).
     if (!seenSegment && line.trim() === '#EXT-X-DISCONTINUITY') continue
+    // Rewrite ffmpeg's local MEDIA-SEQUENCE to the monotonic client-facing value
+    // (and inject the discontinuity sequence right after it on a swap).
+    if (line.startsWith('#EXT-X-MEDIA-SEQUENCE:')) {
+      emitSequenceHeader()
+      continue
+    }
     if (!line || line.startsWith('#')) {
       out.push(line)
       continue
@@ -299,7 +368,11 @@ export function rewriteRemuxManifest(
       out.push(line)
       continue
     }
+    // Defensive: a manifest with no MEDIA-SEQUENCE header still needs the swap's
+    // sequence/discontinuity carried, so emit it just before the first segment.
+    if (!seenSegment && (adjustedFirst > 0 || cont.discontinuitySeq > 0)) emitSequenceHeader()
     seenSegment = true
+    segCount++
     present.add(segFile)
     // Reuse the URL minted on this segment's first appearance so it stays
     // byte-identical across reloads (see segUrlCache doc on LiveRemuxEntry).
@@ -323,6 +396,11 @@ export function rewriteRemuxManifest(
     for (const key of segUrlCache.keys()) {
       if (!present.has(key)) segUrlCache.delete(key)
     }
+  }
+  // Remember the highest client-facing sequence served so the NEXT session swap
+  // continues above it. Only advance when this manifest actually carried segments.
+  if (segCount > 0) {
+    cont.lastServedMax = Math.max(cont.lastServedMax, adjustedFirst + segCount - 1)
   }
   return out.join('\n')
 }

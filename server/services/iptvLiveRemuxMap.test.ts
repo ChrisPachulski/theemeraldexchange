@@ -151,6 +151,49 @@ describe('rewriteRemuxManifest', () => {
     const out = rewriteRemuxManifest('#EXTINF:2.0,\nseg_00000.ts\nnot-a-segment.bin\n', '7', 's', 'u')
     expect(out).toContain('not-a-segment.bin')
   })
+
+  // ── Cross-session media-sequence continuity (sibling-failover -12312) ────────
+  const seqOf = (m: string) => {
+    const line = m.split('\n').find((l) => l.startsWith('#EXT-X-MEDIA-SEQUENCE:'))
+    return line ? Number(line.split(':')[1]) : null
+  }
+  const discSeqOf = (m: string) => {
+    const line = m.split('\n').find((l) => l.startsWith('#EXT-X-DISCONTINUITY-SEQUENCE:'))
+    return line ? Number(line.split(':')[1]) : null
+  }
+  const window = (mediaSeq: number, first: number, count: number) => {
+    const lines = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-TARGETDURATION:3', `#EXT-X-MEDIA-SEQUENCE:${mediaSeq}`]
+    for (let i = 0; i < count; i++) {
+      lines.push('#EXTINF:2.0,', `seg_${String(first + i).padStart(5, '0')}.ts`)
+    }
+    return lines.join('\n') + '\n'
+  }
+
+  it('steady state (same session) leaves MEDIA-SEQUENCE untouched and emits no discontinuity sequence', () => {
+    const p1 = rewriteRemuxManifest(window(10, 10, 3), '42', 'sess-A', 'subZ')
+    const p2 = rewriteRemuxManifest(window(11, 11, 3), '42', 'sess-A', 'subZ')
+    expect(seqOf(p1)).toBe(10)
+    expect(seqOf(p2)).toBe(11)
+    expect(discSeqOf(p1)).toBeNull()
+    expect(discSeqOf(p2)).toBeNull()
+  })
+
+  it('a session swap keeps MEDIA-SEQUENCE monotonic and bumps the discontinuity sequence (fixes -12312)', () => {
+    // Session A serves a window up to sequence 14 (first 12, 3 segments).
+    const a = rewriteRemuxManifest(window(12, 12, 3), '42', 'sess-A', 'subZ')
+    expect(seqOf(a)).toBe(14 - 2) // first served sequence is 12
+    // A dead-feed failover swaps in sibling session B, whose ffmpeg restarts at
+    // MEDIA-SEQUENCE:0. Served naively this jumps BACKWARDS (12 -> 0) and stalls
+    // AVPlayer with -12312. The continuity carry must instead continue ABOVE 14.
+    const b = rewriteRemuxManifest(window(0, 0, 3), '42', 'sess-B', 'subZ')
+    expect(seqOf(b)).not.toBeNull()
+    expect(seqOf(b)!).toBeGreaterThan(14) // > the max sequence session A served
+    expect(discSeqOf(b)).toBe(1) // discontinuity-sequence bumped on the swap
+    // The new session's subsequent polls stay monotonic above the swap point.
+    const b2 = rewriteRemuxManifest(window(1, 1, 3), '42', 'sess-B', 'subZ')
+    expect(seqOf(b2)!).toBeGreaterThan(seqOf(b)!)
+    expect(discSeqOf(b2)).toBe(1)
+  })
 })
 
 describe('remuxManifestReady', () => {
