@@ -669,4 +669,87 @@ describe('media playback grant', () => {
     })
     expect(res.status).toBe(404)
   })
+
+  it('forwards the native_hls cap to the stream handoff (multi-audio activation)', async () => {
+    // goal-quality Tier S1 #1: the POST handler dropped native_hls from its caps
+    // object, so capsQuery never emitted it and the transcoder's EXT-X-MEDIA
+    // multi-audio renditions never activated for AVPlayer. The cap must reach the
+    // media-core /stream handoff.
+    mockFetchTimed
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ directPlay: false, file: { duration_secs: 5400 } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            transcode: true,
+            sessionId: 'sess-na',
+            manifestUrl: '/api/transcode/session/sess-na/index.m3u8',
+            heartbeatUrl: '/api/transcode/session/sess-na/heartbeat',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+      // Every post-handoff probe (readiness + optional I-frame) gets a ready,
+      // non-iframe manifest so the grant returns promptly; we assert on the
+      // handoff url (call[1]), not the probes.
+      .mockResolvedValue(
+        new Response('#EXTM3U\n#EXTINF:6.0,\nseg_00000.ts\n', {
+          status: 200,
+          headers: { 'Content-Type': 'application/vnd.apple.mpegurl' },
+        }),
+      )
+
+    const res = await media.request('/playback/movie/7', {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: JSON.stringify({ native_hls: true, hls_fmp4_hevc: true }),
+    })
+
+    expect(res.status).toBe(200)
+    const handoffUrl = String(mockFetchTimed.mock.calls[1][0])
+    expect(handoffUrl).toContain('/api/media/stream/movie/7?')
+    expect(handoffUrl).toContain('native_hls=true') // red before the fix (param absent)
+  })
+
+  it('omits native_hls from the handoff for a browser/MSE client that never sends it', async () => {
+    // The capsQuery guard keeps native_hls off single-track MSE clients — the fix
+    // must not force it on for everyone.
+    mockFetchTimed
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ directPlay: false, file: { duration_secs: 100 } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            transcode: true,
+            sessionId: 's',
+            manifestUrl: '/api/transcode/session/s/index.m3u8',
+            heartbeatUrl: '/api/transcode/session/s/heartbeat',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+      .mockResolvedValue(
+        new Response('#EXTM3U\n#EXTINF:6.0,\nseg_00000.ts\n', {
+          status: 200,
+          headers: { 'Content-Type': 'application/vnd.apple.mpegurl' },
+        }),
+      )
+
+    const res = await media.request('/playback/movie/7', {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+
+    expect(res.status).toBe(200)
+    expect(String(mockFetchTimed.mock.calls[1][0])).not.toContain('native_hls')
+  })
 })

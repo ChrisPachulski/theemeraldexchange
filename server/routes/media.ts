@@ -60,8 +60,11 @@ type Caps = {
   /** Client's HLS player handles HEVC in fMP4 segments (enables HEVC copy-remux). */
   hls_fmp4_hevc: boolean
   /** Native HLS player (AVPlayer): opt into multi-audio muxing for in-band
-   *  language switching. Browser/MSE clients omit it (single English track). */
-  native_hls?: boolean
+   *  language switching. Browser/MSE clients omit it (single English track).
+   *  Non-optional so the POST handler's caps object CANNOT silently drop it again
+   *  (it did: the field was added to the type + capsQuery but not the handler, so
+   *  every AVPlayer grant lost multi-audio). PlaybackRequest keeps it optional. */
+  native_hls: boolean
   /** Client pipeline applies Dolby Vision RPUs itself (DV-capable Apple
    *  device). Gates DV direct-play and the transcoder's DV copy passthrough. */
   dolby_vision?: boolean
@@ -165,6 +168,7 @@ media.post('/playback/:kind/:id', async (c) => {
         ? Math.floor(reqCaps.aac_max_channels)
         : DEFAULT_CAPS.aac_max_channels,
     hls_fmp4_hevc: Boolean(reqCaps.hls_fmp4_hevc),
+    native_hls: Boolean(reqCaps.native_hls),
     dolby_vision: Boolean(reqCaps.dolby_vision),
   }
   const startSecs =
