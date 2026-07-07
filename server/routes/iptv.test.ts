@@ -449,6 +449,77 @@ describe('DELETE /api/iptv/sessions/:sessionId', () => {
   })
 })
 
+describe('guide preview intent + remux session teardown (finding 89)', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+  const manifestPath = '/tmp/remux/sess-1/index.m3u8'
+  // ≥ START_SEGMENTS (4) so the manifest poll's readiness gate is satisfied at
+  // once and a live remux session is registered (see the remux delivery tests).
+  const sampleManifest =
+    '#EXTM3U\n#EXTINF:6,\nseg_00000.ts\n#EXTINF:6,\nseg_00001.ts\n' +
+    '#EXTINF:6,\nseg_00002.ts\n#EXTINF:6,\nseg_00003.ts\n'
+
+  beforeEach(() => {
+    remuxState.activeSessions.clear()
+    remuxState.files.clear()
+    remuxState.startCalls.length = 0
+    remuxState.deadFeeds.clear()
+    _resetLiveRemuxIndexForTests()
+  })
+
+  // Bring channel 10 up as a live remux session for the current account: grant it,
+  // then poll its manifest so ffmpeg (mock) + liveRemuxIndex both exist.
+  async function watchChannel10() {
+    await app.request('/api/iptv/stream/live/10/grant?client=avplayer', { method: 'POST' })
+    remuxState.files.set(manifestPath, sampleManifest)
+    const res = await app.request(
+      `/api/iptv/stream/live/10/remux/index.m3u8?t=${fakeToken('remux', '10')}`,
+    )
+    expect(res.status).toBe(200)
+    expect(remuxState.activeSessions.has('sess-1')).toBe(true)
+  }
+
+  it('a preview-intent grant does NOT evict the account\'s active watch session', async () => {
+    await watchChannel10()
+    // Same account focuses channel 20 in the guide → PREVIEW grant. It must NOT
+    // run the one-tuner teardown, so channel 10's live session survives.
+    const preview = await app.request(
+      '/api/iptv/stream/live/20/grant?client=avplayer&intent=preview',
+      { method: 'POST' },
+    )
+    expect(preview.status).toBe(200)
+    expect(remuxState.activeSessions.has('sess-1')).toBe(true)
+  })
+
+  it('a normal (non-preview) grant DOES evict the account\'s other live channel', async () => {
+    await watchChannel10()
+    // Contrast: without intent=preview, tuning a new channel tears the old down.
+    await app.request('/api/iptv/stream/live/20/grant?client=avplayer', { method: 'POST' })
+    expect(remuxState.activeSessions.has('sess-1')).toBe(false)
+  })
+
+  it('DELETE /sessions of a remux slot stops the underlying ffmpeg immediately', async () => {
+    await watchChannel10()
+    // The concurrency tracker holds the 'remux' slot minted at grant time
+    // (resourceId = the streamId). Killing that slot via the sessions widget must
+    // ALSO stop the remux ffmpeg so the provider connection releases now, not at
+    // the 90s idle sweep. Red before the DELETE fix: release() frees only the
+    // slot and leaves sess-1 active.
+    concurrencyState.sessions.push({
+      sessionId: 'grant-remux-10',
+      sub: 'plex:42',
+      kind: 'remux',
+      resourceId: '10',
+      title: 'CNN',
+      ip: null,
+      startedAt: 1,
+      lastSeen: 1,
+    })
+    const res = await app.request('/api/iptv/sessions/grant-remux-10', { method: 'DELETE' })
+    expect(res.status).toBe(200)
+    expect(remuxState.activeSessions.has('sess-1')).toBe(false)
+  })
+})
+
 describe('live stream grant + proxy', () => {
   const app = new Hono().route('/api/iptv', iptv)
 

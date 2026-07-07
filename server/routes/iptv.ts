@@ -50,6 +50,7 @@ import {
   ensureLiveRemuxEntry,
   dropOtherLiveRemuxSessions,
   getActiveLiveRemuxEntry,
+  forgetLiveRemuxEntry,
   isChannelOfflineUpstream,
   remuxManifestReady,
   remuxSegmentResource,
@@ -255,6 +256,16 @@ iptv.delete('/sessions/:sessionId', requireAuth, (c) => {
   if (!target) return c.json({ error: 'not_found' }, 404)
   if (!isAdmin && target.sub !== sub) return c.json({ error: 'forbidden' }, 403)
   streamConcurrency().release(sessionId)
+  // A remux (AVPlayer live) slot is backed by an ffmpeg process holding a live
+  // upstream provider connection, tracked SEPARATELY from the concurrency slot.
+  // Releasing the slot alone leaves that ffmpeg alive until the 90s idle sweep,
+  // so freeing a session in the sessions widget did not actually free the
+  // provider connection. Stop the matching remux session now (keyed by the
+  // slot's resourceId=streamId + sub) so the connection releases immediately.
+  if (target.kind === 'remux') {
+    const entry = getActiveLiveRemuxEntry(target.resourceId, target.sub)
+    if (entry) forgetLiveRemuxEntry(target.resourceId, target.sub, entry.sessionId)
+  }
   return c.json({ ok: true, released: sessionId })
 })
 
@@ -662,6 +673,13 @@ iptv.post('/stream/live/:streamId/grant', requireAuth, requireSection('live'), a
 
   const { sub } = userOf(c)
   const wantsRemux = clientWantsAvplayer(c)
+  // A guide PREVIEW grant (GuidePreview focuses a channel to paint a thumbnail)
+  // is NOT a watch: it must not run the one-tuner teardown below, or focusing a
+  // channel in the guide on one device would evict this same account's actively-
+  // watched channel on another device — which then respawns from its own poll
+  // and the two flap. Only a real watch grant tears the account's other tuners
+  // down. The client signals its intent via ?intent=preview (GuidePreview).
+  const isPreview = c.req.query('intent') === 'preview'
   const sessionId = `live:${streamId}:${sub}:${Date.now()}`
   const acquired = streamConcurrency().tryAcquire({
     sub,
@@ -698,8 +716,12 @@ iptv.post('/stream/live/:streamId/grant', requireAuth, requireSection('live'), a
     // This runs ONCE per channel selection (here), never on the manifest poll:
     // a lingering poll from the channel being left can respawn its own ffmpeg
     // but can no longer kill the freshly-tuned one, so the two never ping-pong.
-    for (const goneStreamId of dropOtherLiveRemuxSessions(sub, streamId)) {
-      streamConcurrency().releaseByResource(sub, 'remux', goneStreamId)
+    // Skipped for a preview grant (see isPreview above) so guide browsing never
+    // evicts the household's active watch.
+    if (!isPreview) {
+      for (const goneStreamId of dropOtherLiveRemuxSessions(sub, streamId)) {
+        streamConcurrency().releaseByResource(sub, 'remux', goneStreamId)
+      }
     }
     const token = signStreamToken(env.streamTokenSecret, {
       kind: 'remux', resourceId: streamId, sub, ttlSecs: env.IPTV_LIVE_TOKEN_TTL_SECS,
