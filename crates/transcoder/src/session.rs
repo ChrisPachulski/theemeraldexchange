@@ -290,6 +290,43 @@ async fn remove_dir_logged(dir: &PathBuf, id: &str, context: &str) {
     }
 }
 
+/// Remove ONLY the main video pipeline's outputs from a session dir, preserving
+/// the one-shot sidecar assets (`subtitles.vtt`, `thumb_*`, `audio_*`) that
+/// [`SessionManager::start`] spawns exactly once and a respawn never
+/// regenerates. Used by the pre-respawn clear: wiping the WHOLE dir on every
+/// Seek/Crash respawn deleted those assets permanently, so a subtitle toggle /
+/// scrub / alt-audio fetch after the first respawn hung the frontier wait and
+/// 404'd — subtitles, thumbnails and alt-audio silently died for the rest of the
+/// session. The main pipeline only ever writes `index.m3u8`, `seg_%05d.{ts,m4s}`
+/// and (fMP4) `init.mp4`, so a whitelist delete clears the stale playlist +
+/// segments (numbering continuity is held by `-start_number`, not by keeping old
+/// files) while leaving the sidecars — including an in-progress
+/// `subtitles.vtt.partial` — untouched.
+async fn clear_pipeline_outputs(dir: &PathBuf, id: &str) {
+    let mut entries = match tokio::fs::read_dir(dir).await {
+        Ok(e) => e,
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(session = %id, error = %e, "failed to read session dir for pre-respawn clear");
+            }
+            return;
+        }
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let is_pipeline_output = name == "index.m3u8"
+            || name == "init.mp4"
+            || (name.starts_with("seg_") && (name.ends_with(".ts") || name.ends_with(".m4s")));
+        if is_pipeline_output
+            && let Err(e) = tokio::fs::remove_file(entry.path()).await
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(session = %id, file = %name, error = %e, "failed to remove pipeline output in pre-respawn clear");
+        }
+    }
+}
+
 impl Session {
     fn manifest_path(&self) -> PathBuf {
         self.dir.join("index.m3u8")
@@ -1864,12 +1901,15 @@ impl SessionManager {
             s.start_secs = spawn_secs;
             s.start_number = next_number;
         }
-        // Clear the dir so the fresh ffmpeg writes against a clean playlist.
-        // Without this, `append_list` re-writes index.m3u8 referencing new
-        // segments while the player may still hold the old list — stale media
-        // on every restart. (Numbering continuity is preserved by
-        // `-start_number` above, not by keeping old files around.)
-        remove_dir_logged(&dir, id, "pre-respawn clear").await;
+        // Clear the main pipeline's outputs so the fresh ffmpeg writes against a
+        // clean playlist. Without this, `append_list` re-writes index.m3u8
+        // referencing new segments while the player may still hold the old list
+        // — stale media on every restart. (Numbering continuity is preserved by
+        // `-start_number` above, not by keeping old files around.) A SELECTIVE
+        // clear (not a whole-dir wipe) so the one-shot sidecar assets
+        // subtitles.vtt / thumb_* / audio_* — which only start() produces and a
+        // respawn never regenerates — survive the restart.
+        clear_pipeline_outputs(&dir, id).await;
         if let Err(e) = tokio::fs::create_dir_all(&dir).await {
             tracing::warn!(session = %id, error = %e, "failed to recreate session dir for respawn");
             return Respawn::Failed;
@@ -2422,6 +2462,58 @@ mod tests {
         assert_eq!(mgr.len().await, 1);
         // The respawned child rewrites the cleared playlist.
         wait_for(|| manifest.exists()).await;
+        mgr.stop(&id).await;
+    }
+
+    #[tokio::test]
+    async fn respawn_preserves_one_shot_sidecar_assets() {
+        // Regression: a Seek/Crash respawn wiped the WHOLE session dir, deleting
+        // the one-shot sidecar assets (subtitles.vtt, thumb_*, audio_*) that only
+        // start() produces and a respawn never regenerates — so subtitles /
+        // scrub thumbnails / alt-audio silently died for the rest of the session.
+        // The pre-respawn clear must remove only the main pipeline's outputs and
+        // leave every sidecar intact.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
+        let id = mgr.start(opts("/lib/a.mkv")).await.unwrap();
+        let manifest = mgr.manifest_path(&id).await.unwrap();
+        wait_for(|| manifest.exists()).await;
+        let dir = manifest.parent().unwrap().to_path_buf();
+
+        // The sidecar assets the one-shot passes would have written, plus a
+        // stale main-pipeline segment that the clear MUST remove.
+        let vtt = dir.join("subtitles.vtt");
+        let partial = dir.join("subtitles.vtt.partial");
+        let thumb = dir.join("thumb_00003.ts");
+        let audio_pl = dir.join("audio_1.m3u8");
+        let stale_seg = dir.join("seg_00009.ts");
+        std::fs::write(&vtt, "WEBVTT\n").unwrap();
+        std::fs::write(&partial, "WEBVTT partial\n").unwrap();
+        std::fs::write(&thumb, "iframe").unwrap();
+        std::fs::write(&audio_pl, "#EXTM3U\n").unwrap();
+        std::fs::write(&stale_seg, "old").unwrap();
+
+        assert!(mgr.seek(&id, 120).await, "seek must succeed");
+        // The respawn rewrites the playlist; poll until it reappears so the
+        // clear has definitely run before we assert.
+        wait_for(|| manifest.exists()).await;
+
+        assert!(vtt.exists(), "subtitles.vtt must survive the respawn");
+        assert!(
+            partial.exists(),
+            "an in-progress subtitles.vtt.partial must survive the respawn"
+        );
+        assert!(thumb.exists(), "trickplay thumb must survive the respawn");
+        assert!(
+            audio_pl.exists(),
+            "alt-audio rendition playlist must survive the respawn"
+        );
+        // The stale main-pipeline segment is still cleared.
+        assert!(
+            !stale_seg.exists(),
+            "a stale seg_*.ts must be removed by the pre-respawn clear"
+        );
+
         mgr.stop(&id).await;
     }
 
