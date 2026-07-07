@@ -851,7 +851,7 @@ async fn backfill_metadata(
             //     Gated by the 0011 negative cache (same cooldown/cap rules as
             //     the 0009 episode negcache) so titles with no US certification
             //     aren't re-probed every ~hourly scan.
-            let row: Option<(Option<i64>, Option<String>, i64, Option<String>)> = sqlx::query_as(
+            let row: Option<MovieRatingRow> = sqlx::query_as(
                 "SELECT tmdb_id, content_rating, rating_lookup_attempts, rating_lookup_failed_at \
                  FROM movies WHERE file_id = ?",
             )
