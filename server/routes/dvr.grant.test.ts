@@ -23,9 +23,18 @@ vi.mock('../middleware/auth.js', () => {
 const dbHolder = vi.hoisted(() => ({ raw: null as unknown }))
 vi.mock('../services/iptvDbSingleton.js', () => ({ iptvDb: () => dbHolder }))
 
+// Membership posture for the revocation gate on the cookieless ?t= play path.
+const membershipState = vi.hoisted(() => ({
+  status: 'allowed' as 'allowed' | 'revoked' | 'not_member',
+}))
+vi.mock('../services/membership.js', () => ({
+  memberStatus: vi.fn(() => membershipState.status),
+}))
+
 import { env } from '../env.js'
 import { openIptvDb, type IptvDb } from '../services/iptvDb.js'
 import { scheduleRecording, markStatus } from '../services/dvrRecordings.js'
+import { setPolicy, _setUserPoliciesPathForTests } from '../services/userPolicies.js'
 import { signStreamToken, verifyStreamToken, type StreamKind } from '../services/iptvStreamToken.js'
 import { dvr } from './dvr.js'
 
@@ -50,8 +59,12 @@ describe('dvr recording playback grant (S7)', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvr-grant-'))
     db = openIptvDb(path.join(tmpDir, 'iptv.db'))
     dbHolder.raw = db.raw
+    // Isolate the parental-policy store per test (fresh path resets the cache),
+    // default-open until a test seeds a capped/section-restricted policy.
+    _setUserPoliciesPathForTests(path.join(tmpDir, 'policies.json'))
     authState.reject = false
     authState.sub = 'plex:42'
+    membershipState.status = 'allowed'
   })
   afterEach(() => {
     db.close()
@@ -142,5 +155,51 @@ describe('dvr recording playback grant (S7)', () => {
     const res = await dvr.request(`/recordings/${id}/play?t=not-a-real-token`)
     expect(res.status).toBe(401)
     expect(((await res.json()) as { error: string }).error).toBe('invalid_token')
+  })
+
+  // Parental-cap parity with the IPTV grants (finding 76): DVR is recorded,
+  // unrated live-TV, so a rating-capped profile must not be able to mint a token.
+  it('grant is rating-blocked for a rating-capped profile', async () => {
+    const { id } = completedRecording()
+    await setPolicy('plex:42', { maxContentRating: 'PG-13', allowedSections: null, kid: false })
+    const res = await dvr.request(`/recordings/${id}/grant`, { method: 'POST' })
+    expect(res.status).toBe(403)
+    expect(((await res.json()) as { error: string }).error).toBe('rating_blocked')
+  })
+
+  it('grant is section-blocked when the profile denies the live section', async () => {
+    const { id } = completedRecording()
+    await setPolicy('plex:42', {
+      maxContentRating: null,
+      allowedSections: { live: false, downloads: true, arr: true },
+      kid: false,
+    })
+    const res = await dvr.request(`/recordings/${id}/grant`, { method: 'POST' })
+    expect(res.status).toBe(403)
+    expect(((await res.json()) as { error: string }).error).toBe('section_blocked')
+  })
+
+  // The session-cookie fallback on the play route must re-apply the same cap,
+  // else a capped profile streams straight through without ever minting a token.
+  it('session play is rating-blocked for a rating-capped profile', async () => {
+    const { id } = completedRecording(1000)
+    await setPolicy('plex:42', { maxContentRating: 'PG-13', allowedSections: null, kid: false })
+    const res = await dvr.request(`/recordings/${id}/play`) // no ?t= → cookie path
+    expect(res.status).toBe(403)
+    expect(((await res.json()) as { error: string }).error).toBe('rating_blocked')
+  })
+
+  // Revocation must take effect immediately on the cookieless token path
+  // (finding 77): a token minted while allowed stops working once revoked.
+  it('play rejects a valid token once the holder is revoked', async () => {
+    const { id } = completedRecording(1000)
+    authState.reject = true
+    const token = mintToken('recording', id)
+    expect((await dvr.request(`/recordings/${id}/play?t=${token}`)).status).toBe(200)
+
+    membershipState.status = 'revoked'
+    const res = await dvr.request(`/recordings/${id}/play?t=${token}`)
+    expect(res.status).toBe(401)
+    expect(((await res.json()) as { error: string }).error).toBe('access_revoked')
   })
 })

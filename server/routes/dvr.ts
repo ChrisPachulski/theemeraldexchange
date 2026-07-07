@@ -9,6 +9,9 @@ import { createReadStream, statSync, rmSync } from 'node:fs'
 import { Readable } from 'node:stream'
 import { Hono, type Context, type Next } from 'hono'
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
+import { requireSection } from '../services/userPolicies.js'
+import { capBlocksUnrated } from '../services/parentalRating.js'
+import { memberStatus } from '../services/membership.js'
 import { env } from '../env.js'
 import { iptvDb } from '../services/iptvDbSingleton.js'
 import { signStreamToken, verifyStreamToken, type StreamKind } from '../services/iptvStreamToken.js'
@@ -70,13 +73,16 @@ dvr.post('/recordings', requireAdmin, async (c) => {
   return c.json({ recording }, 201)
 })
 
-// List all recordings (newest scheduled first).
-dvr.get('/recordings', requireAuth, (c) => {
+// List all recordings (newest scheduled first). DVR content is recorded
+// live-TV, so the whole surface belongs to the `live` section: a member whose
+// policy denies Live TV must not even browse the recordings (admins exempt),
+// matching requireSection semantics on the IPTV grants.
+dvr.get('/recordings', requireAuth, requireSection('live'), (c) => {
   return c.json({ recordings: listRecordings(iptvDb().raw) })
 })
 
 // One recording by id.
-dvr.get('/recordings/:id', requireAuth, (c) => {
+dvr.get('/recordings/:id', requireAuth, requireSection('live'), (c) => {
   const recording = getRecording(iptvDb().raw, c.req.param('id'))
   if (!recording) return c.json({ error: 'not_found' }, 404)
   return c.json({ recording })
@@ -117,7 +123,15 @@ dvr.delete('/recordings/:id', requireAdmin, (c) => {
 // grant idiom in routes/iptv.ts: a finite-asset TTL (the on-demand TTL, ~6h —
 // NOT the 300s live TTL), so re-presenting the token on every range GET across
 // the whole recording never expires mid-playback.
-dvr.post('/recordings/:id/grant', requireAuth, (c) => {
+dvr.post('/recordings/:id/grant', requireAuth, requireSection('live'), async (c) => {
+  // DVR captures UNRATED IPTV provider content (no certification), so a rating
+  // cap forbids the grant wholesale — fail closed, exactly as the catchup / VOD
+  // / series grants do (routes/iptv.ts). Without this a rating-capped kid
+  // profile could mint a playable token for recorded live-TV it can't watch
+  // live. Checked before touching the row so existence never leaks either.
+  if (await capBlocksUnrated(c.get('session'))) {
+    return c.json({ error: 'rating_blocked' }, 403)
+  }
   const id = c.req.param('id')
   const rec = getRecording(iptvDb().raw, id)
   if (!rec) return c.json({ error: 'not_found' }, 404)
@@ -160,10 +174,33 @@ async function dvrPlayAuth(c: Context<Env, '/recordings/:id/play'>, next: Next) 
     if (claims.k !== RECORDING_KIND || claims.rid !== recordingResourceId(id)) {
       return c.json({ error: 'token_mismatch' }, 401)
     }
+    // Revocation must take effect immediately: the cookieless ?t= path bypasses
+    // requireAuth's membership reconciliation, so a token minted before the
+    // holder was revoked would otherwise keep streaming for the full on-demand
+    // TTL (~6h). Re-check membership here, matching media.ts / transcode.ts.
+    if (memberStatus(claims.sub) !== 'allowed') {
+      return c.json({ error: 'access_revoked' }, 401)
+    }
     c.set('session', { sub: claims.sub, username: '', role: 'user' })
     return next()
   }
-  return requireAuth(c, next)
+  // Tokenless → session cookie/bearer fallback. A session-authed caller never
+  // passed the grant's parental gates, so re-apply them here: a rating-capped or
+  // live-excluded profile must not stream a recorded live-TV asset via a plain
+  // cookie any more than via the live / catchup / vod paths. (The ?t= path above
+  // skips this — its token was already gated at grant time, so re-checking would
+  // add a policy read per range GET.)
+  const authDenied = await requireAuth(c, async () => {})
+  if (authDenied) return authDenied
+  let sectionOk = false
+  const sectionDenied = await requireSection('live')(c, async () => {
+    sectionOk = true
+  })
+  if (!sectionOk) return sectionDenied
+  if (await capBlocksUnrated(c.get('session'))) {
+    return c.json({ error: 'rating_blocked' }, 403)
+  }
+  return next()
 }
 
 // Play back a completed recording (range-serve the local .ts). Accepts either a
