@@ -4,8 +4,14 @@ import path from 'node:path'
 import os from 'node:os'
 
 // Pass-through auth so handlers are exercised directly; inject a temp iptv DB.
+// requireAuth sets the session (as the real one does) so the parental
+// requireSection('live') gate on the recording routes has a principal to read —
+// a plain user with no policy passes the live-section gate.
 vi.mock('../middleware/auth.js', () => ({
-  requireAuth: async (_c: unknown, next: () => Promise<void>) => next(),
+  requireAuth: async (c: { set: (k: string, v: unknown) => void }, next: () => Promise<void>) => {
+    c.set('session', { sub: 'plex:1', username: 'u1', role: 'user' })
+    return next()
+  },
   requireAdmin: async (_c: unknown, next: () => Promise<void>) => next(),
 }))
 const dbHolder = vi.hoisted(() => ({ raw: null as unknown }))
