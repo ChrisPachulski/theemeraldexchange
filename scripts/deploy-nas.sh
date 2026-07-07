@@ -383,8 +383,14 @@ echo "→ Building and starting containers"
 # deployed API self-reports the exact commit this script shipped — that's the
 # drift detection /api/version exists for. Exported in the remote shell so
 # compose interpolation sees it (the shipped .env deliberately doesn't pin it).
+# CARGO_BUILD_JOBS caps the Rust compiles this build runs on the shared 6-thread
+# NAS. Empty → the Dockerfiles unset it → cargo uses ALL threads, the cold-compile
+# that has twice brown-outed Plex (see scripts/nas-safe-build.sh). Export it here
+# so every compose build below is capped, regardless of whether .env pins it.
+# Shell-env interpolation takes precedence over the shipped .env for compose.
 ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && \
   export EEX_RELEASE=${DEPLOY_SHA_SHORT} && \
+  export CARGO_BUILD_JOBS=2 && \
   if docker compose version >/dev/null 2>&1; then \
     docker compose up -d --build; \
   elif command -v docker-compose >/dev/null 2>&1; then \
@@ -630,7 +636,14 @@ if [ "$health_rc" -eq 0 ]; then
 fi
 
 echo "→ Reclaiming BuildKit cache + dangling images (the docker vdisk creeps ~1GB/deploy otherwise)"
-ssh "${NAS_USER}@${NAS_HOST}" "docker builder prune -f >/dev/null 2>&1 || true; docker image prune -f >/dev/null 2>&1 || true"
+# --keep-storage retains up to 10GB of build cache so the cargo registry/git/target
+# cache mounts survive: without it, every deploy nuked them and the NEXT crate-
+# touching deploy was a cold, full-throttle Rust compile — the Plex brown-out
+# vector this reclaim was never meant to reintroduce. On a buildx too old for the
+# flag the prune is simply SKIPPED (|| true), erring toward preserving the cache
+# rather than falling back to the unbounded prune that caused the regression.
+# `docker image prune` still runs and reclaims most of the per-deploy vdisk creep.
+ssh "${NAS_USER}@${NAS_HOST}" "docker builder prune -f --keep-storage 10GB >/dev/null 2>&1 || true; docker image prune -f >/dev/null 2>&1 || true"
 
 echo
 if [ "$health_rc" -eq 0 ]; then
