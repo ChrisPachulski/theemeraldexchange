@@ -356,7 +356,7 @@ impl Session {
     /// [`SessionManager::spawn_audio_renditions`]. The two never collide —
     /// [`crate::plan::plan_extra_audio`] excludes the primary index.
     fn alt_audio_renditions(&self) -> Vec<AudioRendition> {
-        if !crate::trickplay::alt_audio_enabled() {
+        if !crate::trickplay::alt_audio_enabled() || !alt_audio_advertisable(self.start_secs) {
             return Vec::new();
         }
         let TranscodePlan::Transcode {
@@ -419,6 +419,25 @@ fn dedupe_rendition_names(renditions: &mut [AudioRendition]) {
         };
         r.name = unique;
     }
+}
+
+/// Whether an alternate-audio group is coherent to advertise for a session at
+/// this resume offset. The rendition passes ([`crate::trickplay::audio_rendition_args`])
+/// deliberately carry NO `-ss` — each covers the WHOLE title from 0 with
+/// source-rooted timestamps — but a RESUMED (`-ss`) video variant re-stamps its
+/// PTS from ~0 while sitting at an absolute playlist position, so at the resume
+/// point the video segment carries PTS ~0 and the audio rendition segment
+/// carries PTS ~`start_secs`. RFC 8216 requires renditions played together to
+/// share a timeline, so that full-resume-distance disagreement leaves AVPlayer
+/// no consistent cross-rendition sync anchor (offset audio / refused switch /
+/// stall). A from-start session (`start_secs == 0`) aligns because both pipelines
+/// then start their mux clocks identically. Until the main pipeline is taught to
+/// keep absolute PTS on resume (`-output_ts_offset`) AND that is validated on a
+/// real Apple TV, suppress the group on any resumed (or post-seek) session — the
+/// primary stays muxed in-band, so resume playback is unaffected; only the extra
+/// language picker is withheld until a from-start play.
+fn alt_audio_advertisable(start_secs: u64) -> bool {
+    start_secs == 0
 }
 
 /// Build one [`AudioRendition`] from an optional source [`AudioTrack`]. `NAME`
@@ -1163,7 +1182,12 @@ impl SessionManager {
         // muxed in-band, so the main stream is untouched; a failed pass just
         // drops that one language from the picker. Native + multi-track only
         // (empty `extra_audio` otherwise). See [`crate::trickplay`].
+        // Skip the passes entirely on a resumed session: the from-0 renditions
+        // would not align with the -ss video variant's re-stamped PTS, so the
+        // native master suppresses the group (alt_audio_advertisable) and the
+        // segments would just be wasted CPU on the NAS.
         if crate::trickplay::alt_audio_enabled()
+            && alt_audio_advertisable(opts.start_secs)
             && let TranscodePlan::Transcode { extra_audio, .. } = &opts.plan
         {
             self.spawn_audio_renditions(&session_id, &opts.input_path, &dir, extra_audio);
@@ -2309,6 +2333,25 @@ mod tests {
         panic!("stub never wrote pid.txt");
     }
 
+    /// Like [`read_stub_pid`] but waits until pid.txt holds a DIFFERENT pid than
+    /// `prev`. The pre-respawn clear is now selective (it preserves sidecars and
+    /// other non-pipeline files, pid.txt among them), so a respawn no longer
+    /// deletes the previous child's pid.txt before the fresh child overwrites it
+    /// — a bare re-read can catch the stale value. Poll for the change instead.
+    async fn read_stub_pid_changed(dir: &std::path::Path, prev: i32) -> i32 {
+        let path = dir.join("pid.txt");
+        for _ in 0..1000 {
+            if let Ok(s) = std::fs::read_to_string(&path)
+                && let Ok(pid) = s.trim().parse::<i32>()
+                && pid != prev
+            {
+                return pid;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("stub never wrote a new pid.txt");
+    }
+
     /// True while `pid` is signalable. tokio reaps a killed child inside the
     /// supervisor's `wait()`, so a dead stub disappears (ESRCH) promptly.
     fn process_alive(pid: i32) -> bool {
@@ -2539,7 +2582,7 @@ mod tests {
         wait_for(|| !process_alive(old_pid)).await;
 
         // Exactly one fresh ffmpeg is running in the cleared dir.
-        let new_pid = read_stub_pid(&dir).await;
+        let new_pid = read_stub_pid_changed(&dir, old_pid).await;
         assert_ne!(new_pid, old_pid, "respawn must be a different process");
         assert!(process_alive(new_pid), "respawned ffmpeg must be running");
         assert_eq!(mgr.list().await[0].start_secs, 90);
@@ -2782,6 +2825,20 @@ mod tests {
         );
         assert_eq!(r.name, "Extra");
         assert!(r.language.is_none());
+    }
+
+    #[test]
+    fn alt_audio_suppressed_on_resumed_sessions() {
+        // From-start plays advertise the group; any resumed (or post-seek)
+        // offset suppresses it, because the from-0 renditions' source-rooted
+        // timestamps disagree with the -ss video variant's re-stamped PTS by the
+        // full resume distance (no cross-rendition sync anchor for AVPlayer).
+        assert!(alt_audio_advertisable(0), "from-start must advertise alt-audio");
+        assert!(!alt_audio_advertisable(1), "any resume offset must suppress");
+        assert!(
+            !alt_audio_advertisable(2400),
+            "a 40min resume must suppress alt-audio"
+        );
     }
 
     #[test]
