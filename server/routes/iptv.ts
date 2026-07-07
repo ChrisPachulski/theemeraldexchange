@@ -46,7 +46,12 @@ import {
   guardedFetchTrustedOrigin,
   SsrfBlockedError,
 } from '../services/ssrfGuard.js'
-import { heartbeatRemuxSession } from '../services/iptvRemux.js'
+import {
+  heartbeatRemuxSession,
+  channelIsDeadFeed,
+  markChannelDeadFeed,
+  DEAD_FEED_CLEAN_EOF_MS,
+} from '../services/iptvRemux.js'
 import {
   ensureLiveRemuxEntry,
   dropOtherLiveRemuxSessions,
@@ -640,7 +645,13 @@ function clientWantsAvplayer(c: Context<Env>): boolean {
 // throttled to once per HEARTBEAT_THROTTLE_MS so a high-bitrate stream doesn't
 // hammer the tracker Map on every TS packet.
 const HEARTBEAT_THROTTLE_MS = 5_000
-function makeHeartbeatStream(onChunk: () => void): TransformStream<Uint8Array, Uint8Array> {
+function makeHeartbeatStream(
+  onChunk: () => void,
+  // Fires once when the UPSTREAM side closes cleanly (EOF), NOT on client abort
+  // or upstream error — the transform's flush() only runs on a normal readable
+  // completion. The live .ts proxy uses this to tag a dead-placeholder feed.
+  onUpstreamEof?: () => void,
+): TransformStream<Uint8Array, Uint8Array> {
   let lastBeat = 0
   return new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
@@ -654,6 +665,14 @@ function makeHeartbeatStream(onChunk: () => void): TransformStream<Uint8Array, U
         }
       }
       controller.enqueue(chunk)
+    },
+    flush() {
+      if (!onUpstreamEof) return
+      try {
+        onUpstreamEof()
+      } catch {
+        // Best-effort dead-feed bookkeeping; never let it break teardown.
+      }
     },
   })
 }
@@ -907,10 +926,22 @@ iptv.get('/stream/live/:streamId.ts', async (c) => {
   // sessionId (the stream token is crate-canonical and carries no sid claim).
   streamConcurrency().heartbeatByResource(v.sub, 'live', streamId)
   const creds = credsFromEnv()
-  const upstreamUrl = `${creds.host}/live/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${streamId}.ts`
+  const upstreamUrlFor = (sid: string) =>
+    `${creds.host}/live/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${sid}.ts`
+
+  // Dead-feed failover parity with the remux path (Fox Soccer Plus incident).
+  // Chrome/Firefox/Edge live viewers get this raw .ts proxy, never the remux
+  // manifest, so without candidate iteration a granted-but-dead feed could never
+  // fail over to a live sibling and re-opening the channel stayed permanently
+  // dead on the web while it worked on the TV. Walk the ordered candidate feeds
+  // (self first, then siblings sharing epg_channel_id / normalized name), skip
+  // any remembered as a dead placeholder, and dial the first that answers.
+  const candidateFeeds = resolveSiblingFeeds(iptvDb().raw, streamId)
 
   const controller = new AbortController()
+  let clientAborted = false
   c.req.raw.signal.addEventListener('abort', () => {
+    clientAborted = true
     controller.abort()
     // Client gone — free the slot now rather than waiting for the idle sweep.
     streamConcurrency().releaseByResource(v.sub, 'live', streamId)
@@ -918,19 +949,38 @@ iptv.get('/stream/live/:streamId.ts', async (c) => {
 
   // SSRF: trusted creds origin, but re-validate any upstream-issued redirect
   // so a panel can't bounce the live byte stream into the internal network.
-  let upstream: Response
-  try {
-    upstream = await guardedFetchTrustedOrigin(upstreamUrl, {
-      signal: controller.signal,
-      headers: { 'User-Agent': 'IPTVSmarters' },
-    })
-  } catch (err) {
-    if (err instanceof SsrfBlockedError) return c.json({ error: 'bad_upstream' }, 400)
-    throw err
+  let upstream: Response | null = null
+  let dialedFeed: string | null = null
+  for (const feed of candidateFeeds) {
+    if (channelIsDeadFeed(feed)) continue
+    let resp: Response
+    try {
+      resp = await guardedFetchTrustedOrigin(upstreamUrlFor(feed), {
+        signal: controller.signal,
+        headers: { 'User-Agent': 'IPTVSmarters' },
+      })
+    } catch (err) {
+      if (err instanceof SsrfBlockedError) continue // a bad candidate — try the next sibling
+      throw err
+    }
+    if (resp.ok && resp.body) {
+      upstream = resp
+      dialedFeed = feed
+      break
+    }
+    // Non-2xx / bodyless: this feed is down right now — fall through to the next
+    // sibling rather than surfacing a hard 502 the client can never recover from.
   }
-  if (!upstream.ok || !upstream.body) {
-    return c.json({ error: `upstream_${upstream.status}` }, 502)
+  if (!upstream || !upstream.body || !dialedFeed) {
+    // Every candidate feed is dead or down: the channel is off the air upstream,
+    // a TERMINAL state distinct from a transient per-feed hiccup. Emit the same
+    // channel_offline_upstream contract the remux path uses (503) so the client
+    // stops retrying and offers an alternative instead of the old 502 that
+    // looped mpegts.js into a frozen spinner.
+    return c.json({ error: 'channel_offline_upstream' }, 503)
   }
+  const feed = dialedFeed
+  const dialedAt = Date.now()
   // X-Accel-Buffering: no tells nginx-class reverse proxies not to
   // buffer the response. Cloudflare honors it on the tunnel path,
   // which keeps stream chunks flowing client-ward instead of waiting
@@ -940,8 +990,21 @@ iptv.get('/stream/live/:streamId.ts', async (c) => {
   // segmenting) the MPEG-TS bytes.
   // Heartbeat the grant slot on every streamed chunk so a multi-minute live
   // view holds its concurrency slot past the 30s idle window (finding 8-1).
+  //
+  // Dead-placeholder detection (byte-proxy analogue of the remux path's
+  // ffmpeg-exit-0-under-60s check): a real live feed streams unbounded, but a
+  // dead-channel placeholder plays a ~30s slate loop then EOFs cleanly. If the
+  // UPSTREAM closes cleanly within the clean-EOF window and the client did NOT
+  // disconnect, remember the dialed feed as dead so the client's next reload
+  // (mpegts.js recover()) skips it and fails over to a live sibling.
   const heartbeatBody = upstream.body.pipeThrough(
-    makeHeartbeatStream(() => streamConcurrency().heartbeatByResource(v.sub, 'live', streamId)),
+    makeHeartbeatStream(
+      () => streamConcurrency().heartbeatByResource(v.sub, 'live', streamId),
+      () => {
+        if (clientAborted) return
+        if (Date.now() - dialedAt <= DEAD_FEED_CLEAN_EOF_MS) markChannelDeadFeed(feed)
+      },
+    ),
   )
   return new Response(heartbeatBody, {
     status: 200,

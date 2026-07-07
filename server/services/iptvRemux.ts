@@ -157,9 +157,18 @@ export function channelIsDeadFeed(streamId: string): boolean {
   return true
 }
 
-function markChannelDeadFeed(streamId: string): void {
+/** Remember `streamId` as a dead-channel placeholder so subsequent dials skip
+ *  it and fail over to a sibling. Called by the remux path on a clean fast
+ *  ffmpeg EOF, and by the raw .ts byte proxy on a clean fast upstream EOF (a
+ *  ~30s slate loop) so Chrome/Firefox/Edge viewers get the same failover. */
+export function markChannelDeadFeed(streamId: string): void {
   deadFeed.set(streamId, Date.now() + DEAD_FEED_MEMORY_MS)
 }
+
+/** How fast a clean EOF must arrive to count as a dead-placeholder loop rather
+ *  than a genuine (unbounded) live feed. Shared with the raw .ts proxy so both
+ *  delivery paths tag placeholders on the same heuristic. */
+export const DEAD_FEED_CLEAN_EOF_MS = DEAD_FEED_MAX_LIFETIME_MS
 
 /** Test seam: drop all remembered dead feeds so cases don't cross-contaminate. */
 export function _clearDeadFeedMemoryForTests(): void {

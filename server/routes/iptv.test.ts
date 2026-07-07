@@ -188,6 +188,10 @@ vi.mock('../services/iptvRemux.js', () => ({
   heartbeatRemuxSession: vi.fn(),
   channelNeedsReencode: vi.fn(() => false),
   channelIsDeadFeed: vi.fn((streamId: string) => remuxState.deadFeeds.has(streamId)),
+  markChannelDeadFeed: vi.fn((streamId: string) => {
+    remuxState.deadFeeds.add(streamId)
+  }),
+  DEAD_FEED_CLEAN_EOF_MS: 60_000,
 }))
 
 // node:fs is shared with better-sqlite3 migrations (which readFileSync the .sql
@@ -1986,5 +1990,107 @@ describe('GET /api/iptv/epg/search — server-side programme search', () => {
     const body = (await res.json()) as { total: number; hits: unknown[] }
     expect(body.hits).toHaveLength(1)
     expect(body.total).toBe(2)
+  })
+})
+
+// Finding 95: dead-feed sibling failover on the RAW .ts byte proxy (the path
+// every Chrome/Firefox/Edge live viewer uses). The remux/HLS path already fails
+// over to a live sibling and reports channel_offline_upstream when all feeds are
+// dead; the .ts path dialed only the granted feed and returned a hard 502 that
+// mpegts.js could never recover from — same channel worked on the TV, stayed
+// permanently dead on the web. These drive the two mock upstreams + sibling the
+// verifier specified.
+describe('GET /api/iptv/stream/live/:id.ts — dead-feed sibling failover', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+  const tsUrl = (sid: string) => `https://panel.example.com/live/u/p/${sid}.ts`
+
+  beforeAll(() => {
+    const db = dbState.testDb!
+    // Two sibling feeds sharing an epg_channel_id — resolveSiblingFeeds('900')
+    // yields ['900','901']. A unique epg/name so they never fold into CNN et al.
+    db.stmts.upsertChannel.run({
+      stream_id: 900, num: 900, name: 'Gate95 Sports', stream_icon: null,
+      epg_channel_id: 'gate95.us', category_id: 9, is_adult: 0,
+      tv_archive: 0, tv_archive_duration: null, added_ts: null, fetched_at: '2026-07-06T00:00:00Z',
+    })
+    db.stmts.upsertChannel.run({
+      stream_id: 901, num: 901, name: 'Gate95 Sports', stream_icon: null,
+      epg_channel_id: 'gate95.us', category_id: 9, is_adult: 0,
+      tv_archive: 0, tv_archive_duration: null, added_ts: null, fetched_at: '2026-07-06T00:00:00Z',
+    })
+  })
+
+  beforeEach(() => {
+    remuxState.deadFeeds.clear()
+    __setSsrfLookupForTests(async () => [{ address: '203.0.113.7' }])
+  })
+
+  it('fails over to a live sibling when the granted feed is hard-down (was a 502 upstream_*)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: Parameters<typeof globalThis.fetch>[0]) => {
+      const url = String(input)
+      if (url.includes('/900.ts')) return new Response(null, { status: 404 })
+      if (url.includes('/901.ts')) return new Response('sibling-bytes', { status: 200 })
+      throw new Error(`unexpected fetch ${url}`)
+    })
+
+    const res = await app.request(`/api/iptv/stream/live/900.ts?t=${fakeToken('live', '900')}`)
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('video/mp2t')
+    expect(await res.text()).toBe('sibling-bytes')
+    // Dialed the dead feed first, then the live sibling.
+    expect(fetchSpy).toHaveBeenCalledWith(tsUrl('900'), expect.anything())
+    expect(fetchSpy).toHaveBeenCalledWith(tsUrl('901'), expect.anything())
+    fetchSpy.mockRestore()
+  })
+
+  it('returns 503 channel_offline_upstream when every candidate feed is down (not 502)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: Parameters<typeof globalThis.fetch>[0]) => {
+      const url = String(input)
+      if (url.includes('/900.ts') || url.includes('/901.ts')) return new Response(null, { status: 404 })
+      throw new Error(`unexpected fetch ${url}`)
+    })
+
+    const res = await app.request(`/api/iptv/stream/live/900.ts?t=${fakeToken('live', '900')}`)
+
+    expect(res.status).toBe(503)
+    expect((await res.json()) as { error: string }).toEqual({ error: 'channel_offline_upstream' })
+    fetchSpy.mockRestore()
+  })
+
+  it('skips a feed already remembered as a dead placeholder and dials the live sibling directly', async () => {
+    remuxState.deadFeeds.add('900')
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: Parameters<typeof globalThis.fetch>[0]) => {
+      const url = String(input)
+      if (url.includes('/901.ts')) return new Response('sibling-bytes', { status: 200 })
+      throw new Error(`unexpected fetch ${url}`)
+    })
+
+    const res = await app.request(`/api/iptv/stream/live/900.ts?t=${fakeToken('live', '900')}`)
+
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe('sibling-bytes')
+    // The remembered-dead granted feed is never dialed.
+    expect(fetchSpy).not.toHaveBeenCalledWith(tsUrl('900'), expect.anything())
+    expect(fetchSpy).toHaveBeenCalledWith(tsUrl('901'), expect.anything())
+    fetchSpy.mockRestore()
+  })
+
+  it('marks the dialed feed dead on a clean fast upstream EOF so the next reload fails over', async () => {
+    // A dead-channel placeholder plays a short slate loop then EOFs cleanly.
+    // Streaming it once must tag it dead (byte-proxy analogue of the remux
+    // ffmpeg-exit-0-under-60s check).
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: Parameters<typeof globalThis.fetch>[0]) => {
+      const url = String(input)
+      if (url.includes('/900.ts')) return new Response('slate', { status: 200 })
+      throw new Error(`unexpected fetch ${url}`)
+    })
+
+    const res = await app.request(`/api/iptv/stream/live/900.ts?t=${fakeToken('live', '900')}`)
+    expect(res.status).toBe(200)
+    // Drain the body so the transform's flush() (clean-EOF hook) runs.
+    await res.text()
+    expect(remuxState.deadFeeds.has('900')).toBe(true)
+    fetchSpy.mockRestore()
   })
 })
