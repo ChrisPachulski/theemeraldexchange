@@ -181,17 +181,51 @@ fn year_compatible(want: Option<i64>, got: Option<i64>) -> bool {
     }
 }
 
-/// The `(query_title, year)` actually sent to the TV search for a parsed show
-/// name. Scene episode releases bake a release year into the name before the
-/// `SxxExx` marker ("The American Experiment 2026"), but TMDB's TV name is
-/// year-less — querying with the year suffix returns ZERO results, so the show
-/// was stored with NULL `tmdb_id`/`tvdb_id` even though TMDB has it. Strip a
-/// trailing 1900–2099 token for the query and surface it as the year hint
-/// (`year_compatible` ±1 still rejects a wrong-era remake). A title that is
-/// *only* a year ("1923") is left intact so the query is never emptied; an
-/// explicit `year` always wins over the stripped hint.
-fn show_search_terms(title: &str, year: Option<i64>) -> (String, Option<i64>) {
-    let trimmed = title.trim_end();
+/// Detect and strip a trailing country marker from a show name, returning the
+/// remaining name plus an ISO 3166-1 alpha-2 hint. Same-name series that differ
+/// only by country ("The Office" UK vs US, "Ghosts" UK vs US, "Shameless" UK vs
+/// US) title-score 1.0 against BOTH TMDB rows, so the tie fell to TMDB's opaque
+/// relevance ordering — the UK rip could bind to the US show. Handles `(UK)`,
+/// `(US)`, a dangling `(UK` (the filename cleaner drops the trailing paren), and
+/// a bare trailing `UK`/`US` token. `UK` maps to TMDB's `GB`. Returns `None`
+/// (no strip) when the remainder would be empty, so the query is never emptied.
+fn strip_trailing_country(name: &str) -> Option<(String, String)> {
+    let trimmed = name.trim_end();
+    let last = trimmed.rsplit(' ').next()?;
+    let bare = last.trim_matches(|c| matches!(c, '(' | ')'));
+    let iso = match bare.to_ascii_uppercase().as_str() {
+        "UK" => "GB",
+        "US" => "US",
+        _ => return None,
+    };
+    let cut = trimmed.len() - last.len();
+    let rest = trimmed[..cut].trim_end();
+    if rest.is_empty() {
+        return None;
+    }
+    Some((rest.to_string(), iso.to_string()))
+}
+
+/// The `(query_title, year, country_hint)` actually sent to the TV search for a
+/// parsed show name. Two independent suffixes are peeled off:
+///
+/// * a trailing **country marker** ("The Office (UK)") → an ISO 3166-1 alpha-2
+///   hint (`GB`/`US`) that [`parse_search_response_scored`] uses to break the
+///   same-name popularity tie toward the matching `origin_country`; and
+/// * a trailing **scene release year** ("The American Experiment 2026"), which
+///   TMDB's year-less TV name never matches verbatim — strip it for the query
+///   and surface it as the year hint (`year_compatible` ±1 still rejects a
+///   wrong-era remake).
+///
+/// A title that is *only* a year ("1923") or *only* a country token is left
+/// intact so the query is never emptied; an explicit `year` always wins over
+/// the stripped hint.
+fn show_search_terms(title: &str, year: Option<i64>) -> (String, Option<i64>, Option<String>) {
+    let (trimmed, country) = match strip_trailing_country(title.trim_end()) {
+        Some((rest, iso)) => (rest, Some(iso)),
+        None => (title.trim_end().to_string(), None),
+    };
+    let trimmed = trimmed.trim_end();
     if let Some(last) = trimmed.rsplit(' ').next()
         && last.len() == 4
         && last.chars().all(|c| c.is_ascii_digit())
@@ -200,10 +234,24 @@ fn show_search_terms(title: &str, year: Option<i64>) -> (String, Option<i64>) {
     {
         let stripped = trimmed[..trimmed.len() - last.len()].trim_end();
         if !stripped.is_empty() {
-            return (stripped.to_string(), year.or(Some(y)));
+            return (stripped.to_string(), year.or(Some(y)), country);
         }
     }
-    (trimmed.to_string(), year)
+    (trimmed.to_string(), year, country)
+}
+
+/// `true` when a TMDB search result's `origin_country` array carries `hint`
+/// (case-insensitive). Absent/movie results (no `origin_country`) never match.
+fn origin_country_matches(result: &serde_json::Value, hint: &str) -> bool {
+    result
+        .get("origin_country")
+        .and_then(serde_json::Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(serde_json::Value::as_str)
+                .any(|c| c.eq_ignore_ascii_case(hint))
+        })
+        .unwrap_or(false)
 }
 
 /// Pure parser over a TMDB search response. Instead of blindly trusting
@@ -219,11 +267,32 @@ fn show_search_terms(title: &str, year: Option<i64>) -> (String, Option<i64>) {
 /// to accept, so legitimate fuzzy matches ("LOTR Fellowship" →
 /// "The Lord of the Rings: The Fellowship of the Ring") are preserved. When the
 /// query has no usable tokens, it falls back to the first valid result.
+/// Country-agnostic wrapper over [`parse_search_response_scored`]. Only the
+/// unit tests exercise the hint-free path directly; production always routes
+/// through `search`, which supplies the (possibly `None`) country hint.
+#[cfg(test)]
 fn parse_search_response(
     doc: &serde_json::Value,
     is_movie: bool,
     query_title: &str,
     year: Option<i64>,
+) -> Option<TmdbMatch> {
+    parse_search_response_scored(doc, is_movie, query_title, year, None)
+}
+
+/// [`parse_search_response`] with an optional `country_hint` (ISO 3166-1
+/// alpha-2, e.g. `GB`). When two candidates title-score equally — the exact
+/// same-name trap "The Office" UK vs US — a candidate whose `origin_country`
+/// matches the hint beats a non-matching one, instead of the tie silently
+/// falling to TMDB's popularity ordering (which bound UK rips to the US show).
+/// With no hint, or when neither ties-candidate matches, the earliest (most
+/// popular) result still wins, exactly as before.
+fn parse_search_response_scored(
+    doc: &serde_json::Value,
+    is_movie: bool,
+    query_title: &str,
+    year: Option<i64>,
+    country_hint: Option<&str>,
 ) -> Option<TmdbMatch> {
     let results = doc.get("results")?.as_array()?;
     let query = title_tokens(query_title);
@@ -238,7 +307,7 @@ fn parse_search_response(
             .find(|c| year_compatible(year, c.year));
     }
 
-    let mut best: Option<(f64, TmdbMatch)> = None;
+    let mut best: Option<(f64, bool, TmdbMatch)> = None;
     for result in results {
         let Some(candidate) = parse_one(result, is_movie) else {
             continue;
@@ -250,12 +319,30 @@ fn parse_search_response(
         if score <= 0.0 {
             continue;
         }
-        // Strictly-greater keeps the earliest (most popular) result on ties.
-        if best.as_ref().is_none_or(|(b, _)| score > *b) {
-            best = Some((score, candidate));
+        let country_match = country_hint
+            .map(|h| origin_country_matches(result, h))
+            .unwrap_or(false);
+        // Strictly-higher title score always wins; on an exact score tie a
+        // country-hint match beats a non-match (else keep the incumbent, i.e.
+        // the earliest/most-popular result). Only `<`/`>` comparisons so an
+        // exact-equality float compare never enters the decision.
+        let is_better = match best.as_ref() {
+            None => true,
+            Some((b_score, b_country, _)) => {
+                if score > *b_score {
+                    true
+                } else if score < *b_score {
+                    false
+                } else {
+                    country_match && !*b_country
+                }
+            }
+        };
+        if is_better {
+            best = Some((score, country_match, candidate));
         }
     }
-    best.map(|(_, m)| m)
+    best.map(|(_, _, m)| m)
 }
 
 /// Pure parser over an `/external_ids` response: pulls a non-empty `imdb_id`
@@ -384,6 +471,7 @@ impl TmdbClient {
         query_year: Option<i64>,
         want_year: Option<i64>,
         is_movie: bool,
+        country_hint: Option<&str>,
     ) -> Result<Option<TmdbMatch>, String> {
         let api_key = match self.api_key.as_deref() {
             Some(k) => k,
@@ -433,7 +521,13 @@ impl TmdbClient {
             .json::<serde_json::Value>()
             .await
             .map_err(|e| format!("json: {}", e.without_url()))?;
-        Ok(parse_search_response(&doc, is_movie, title, want_year))
+        Ok(parse_search_response_scored(
+            &doc,
+            is_movie,
+            title,
+            want_year,
+            country_hint,
+        ))
     }
 
     /// Fetch external ids (`imdb_id`, `tvdb_id`) for a TMDB title via
@@ -607,15 +701,17 @@ impl TmdbClient {
     /// Search TMDB for a movie. Returns `None` if no key, no match, or any
     /// error (logged). On a hit, also fetches `imdb_id`.
     pub async fn match_movie(&self, title: &str, year: Option<i64>) -> Option<TmdbMatch> {
-        self.match_with(SEARCH_MOVIE_URL, "movie", title, year, true)
+        self.match_with(SEARCH_MOVIE_URL, "movie", title, year, true, None)
             .await
     }
 
     /// Search TMDB for a TV show. Returns `None` if no key, no match, or any
-    /// error (logged). On a hit, also fetches `imdb_id`.
+    /// error (logged). On a hit, also fetches `imdb_id`. A trailing country
+    /// marker ("The Office (UK)") is peeled off and passed as an origin-country
+    /// hint so a same-name UK/US tie resolves to the right series.
     pub async fn match_show(&self, title: &str, year: Option<i64>) -> Option<TmdbMatch> {
-        let (title, year) = show_search_terms(title, year);
-        self.match_with(SEARCH_TV_URL, "tv", &title, year, false)
+        let (title, year, country) = show_search_terms(title, year);
+        self.match_with(SEARCH_TV_URL, "tv", &title, year, false, country.as_deref())
             .await
     }
 
@@ -626,8 +722,9 @@ impl TmdbClient {
         title: &str,
         year: Option<i64>,
         is_movie: bool,
+        country_hint: Option<&str>,
     ) -> Option<TmdbMatch> {
-        let first = match self.search(url, title, year, year, is_movie).await {
+        let first = match self.search(url, title, year, year, is_movie, country_hint).await {
             Ok(m) => m,
             Err(e) => {
                 tracing::warn!(
@@ -643,7 +740,10 @@ impl TmdbClient {
         // wrong-era candidate, so a remake can never fall back to the original.
         let found = match first {
             Some(m) => Some(m),
-            None if year.is_some() => match self.search(url, title, None, year, is_movie).await {
+            None if year.is_some() => match self
+                .search(url, title, None, year, is_movie, country_hint)
+                .await
+            {
                 Ok(m) => m,
                 Err(e) => {
                     tracing::warn!(
@@ -686,20 +786,77 @@ mod tests {
     fn show_search_strips_scene_release_year() {
         assert_eq!(
             show_search_terms("The American Experiment 2026", None),
-            ("The American Experiment".to_string(), Some(2026))
+            ("The American Experiment".to_string(), Some(2026), None)
         );
         // An explicit year wins over the stripped suffix.
         assert_eq!(
             show_search_terms("Doctor Who 2005", Some(1963)),
-            ("Doctor Who".to_string(), Some(1963))
+            ("Doctor Who".to_string(), Some(1963), None)
         );
         // A show literally named for a year is NOT emptied.
-        assert_eq!(show_search_terms("1923", None), ("1923".to_string(), None));
+        assert_eq!(
+            show_search_terms("1923", None),
+            ("1923".to_string(), None, None)
+        );
         // A year-less name is untouched.
         assert_eq!(
             show_search_terms("Severance", None),
-            ("Severance".to_string(), None)
+            ("Severance".to_string(), None, None)
         );
+    }
+
+    #[test]
+    fn show_search_strips_trailing_country_marker() {
+        // A trailing country marker is peeled off and surfaced as an ISO hint
+        // (UK → GB); the query is the bare name so it matches both same-name
+        // TMDB rows and the hint breaks the tie downstream.
+        assert_eq!(
+            show_search_terms("The Office (UK)", None),
+            ("The Office".to_string(), None, Some("GB".to_string()))
+        );
+        // The filename cleaner drops the trailing paren → a dangling "(UK".
+        assert_eq!(
+            show_search_terms("The Office (UK", None),
+            ("The Office".to_string(), None, Some("GB".to_string()))
+        );
+        // Bare trailing token, and US maps to itself.
+        assert_eq!(
+            show_search_terms("Shameless US", None),
+            ("Shameless".to_string(), None, Some("US".to_string()))
+        );
+        // A name that is ONLY a country token is not emptied.
+        assert_eq!(show_search_terms("UK", None), ("UK".to_string(), None, None));
+        // A non-country trailing token is left alone.
+        assert_eq!(
+            show_search_terms("Severance", None),
+            ("Severance".to_string(), None, None)
+        );
+    }
+
+    #[test]
+    fn country_hint_breaks_same_name_tie_to_matching_origin() {
+        // Both TMDB rows are titled "The Office" and title-score 1.0 against the
+        // query, so without a country hint the tie falls to results[0] (the US
+        // show). The GB hint must pull the UK row (origin_country ["GB"]).
+        let doc = json!({
+            "results": [
+                { "id": 2316, "name": "The Office", "first_air_date": "2005-03-24",
+                  "origin_country": ["US"] },
+                { "id": 2996, "name": "The Office", "first_air_date": "2001-07-09",
+                  "origin_country": ["GB"] }
+            ]
+        });
+        // No hint → the first (US) row, as before.
+        let us = parse_search_response(&doc, false, "The Office", None).expect("a match");
+        assert_eq!(us.tmdb_id, 2316);
+        // GB hint → the UK row, breaking the popularity tie.
+        let gb = parse_search_response_scored(&doc, false, "The Office UK", None, Some("GB"))
+            .expect("a match");
+        assert_eq!(gb.tmdb_id, 2996);
+        // US hint still selects the US row.
+        let us2 = parse_search_response_scored(&doc, false, "The Office US", None, Some("US"))
+            .expect("a match");
+        assert_eq!(us2.tmdb_id, 2316);
     }
 
     #[test]
