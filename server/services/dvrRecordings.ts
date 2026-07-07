@@ -60,7 +60,13 @@ export function validateNewRecording(input: NewRecordingInput, nowIso: string): 
 }
 
 export interface TransitionPlan {
-  /** scheduled rows whose window is open now (start <= now < stop) — start ffmpeg. */
+  /**
+   * Rows whose window is open now (start <= now < stop) and want ffmpeg running:
+   * `scheduled` rows that are due to begin, AND `recording` rows that are open
+   * but no longer have a live child (a backend restart/OOM mid-window orphans
+   * the row — its in-memory child is gone). The tick de-dupes the latter against
+   * the recorder's live set so a genuinely-running recording is never re-spawned.
+   */
   toStart: DvrRecording[]
   /** recording rows whose window has closed (stop <= now) — stop ffmpeg, complete. */
   toStop: DvrRecording[]
@@ -84,7 +90,12 @@ export function planTransitions(nowIso: string, rows: DvrRecording[]): Transitio
       if (stop <= now) plan.toMiss.push(r)
       else if (start <= now) plan.toStart.push(r)
     } else if (r.status === 'recording') {
+      // Window still open but the row says 'recording': either a live child is
+      // capturing it (the tick skips it via recorder.running()) or the backend
+      // restarted mid-window and orphaned it — in which case it belongs in
+      // toStart so capture RESUMES instead of the remaining window being lost.
       if (stop <= now) plan.toStop.push(r)
+      else plan.toStart.push(r)
     }
   }
   return plan

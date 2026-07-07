@@ -131,6 +131,31 @@ describe('tick (fake recorder, temp iptv DB)', () => {
     expect(rec.started).toEqual([])
   })
 
+  it('resumes an open recording orphaned by a restart (running() empty)', () => {
+    // A backend restart mid-window leaves the row 'recording' but the in-memory
+    // child is gone (fresh recorder → running() empty). tick must re-invoke
+    // start for the remaining window instead of abandoning it.
+    const a = sched('2026-06-17T11:00:00.000Z', '2026-06-17T13:00:00.000Z')
+    markStatus(db.raw, a.id, 'recording', { file_path: `/rec/${a.id}.ts` }, NOW)
+    const rec = new FakeRecorder() // running() is empty — simulates post-restart
+    tick(db.raw, rec, NOW)
+    expect(rec.started).toEqual([a.id])
+    expect(getRecording(db.raw, a.id)?.status).toBe('recording')
+  })
+
+  it('completes a resumed recording once its window finally closes', () => {
+    const a = sched('2026-06-17T11:00:00.000Z', '2026-06-17T13:00:00.000Z')
+    markStatus(db.raw, a.id, 'recording', {}, NOW)
+    const rec = new FakeRecorder()
+    // First tick (post-restart) resumes it…
+    tick(db.raw, rec, NOW)
+    expect(rec.started).toEqual([a.id])
+    // …a later tick past stop_utc stops + completes it.
+    tick(db.raw, rec, '2026-06-17T13:30:00.000Z')
+    expect(rec.stopped).toEqual([a.id])
+    expect(getRecording(db.raw, a.id)?.status).toBe('completed')
+  })
+
   it('marks a recording failed when the recorder throws on start', () => {
     const a = sched('2026-06-17T11:00:00.000Z', '2026-06-17T13:00:00.000Z')
     const rec = new FakeRecorder()
@@ -194,6 +219,29 @@ describe('FfmpegRecorder (mocked spawn)', () => {
     child.emit('exit', 0, null)
     expect(getRecording(db.raw, row.id)?.status).toBe('completed')
     expect(rec.running().has(row.id)).toBe(false)
+  })
+
+  it('does NOT complete on a mid-window SIGTERM — leaves it recording to resume', () => {
+    // Graceful shutdown / deploy SIGTERMs ffmpeg while stop_utc is still in the
+    // future. Finalizing 'completed' here would mask a partial file as a full
+    // recording; the row must stay 'recording' so the next tick resumes it.
+    const rec = new FfmpegRecorder(dir, db.raw, () => Date.parse(NOW))
+    const row = recordingRow() // stop_utc 13:00 > NOW 12:00 (mid-window)
+    rec.start(row)
+    const child = spawnMock.mock.results[0].value as FakeChild
+    child.emit('exit', null, 'SIGTERM')
+    expect(getRecording(db.raw, row.id)?.status).toBe('recording')
+  })
+
+  it('completes on a SIGTERM once the window has closed', () => {
+    // A deliberate stop at/after stop_utc: nowMs is past stop_utc, so a SIGTERM
+    // exit is a real completion, not an interruption.
+    const rec = new FfmpegRecorder(dir, db.raw, () => Date.parse('2026-06-17T13:30:00.000Z'))
+    const row = recordingRow() // stop_utc 13:00 < now 13:30 (window closed)
+    rec.start(row)
+    const child = spawnMock.mock.results[0].value as FakeChild
+    child.emit('exit', null, 'SIGTERM')
+    expect(getRecording(db.raw, row.id)?.status).toBe('completed')
   })
 
   it('marks failed on a non-zero, non-SIGTERM exit', () => {

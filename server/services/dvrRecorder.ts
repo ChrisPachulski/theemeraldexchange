@@ -65,11 +65,14 @@ export interface Recorder {
 
 /**
  * One scheduler pass. Pure control flow over the injected recorder + the DB:
- * start due 'scheduled' rows, stop 'recording' rows whose window closed, and
- * mark fully-elapsed-unstarted rows 'missed'. The real recorder's ffmpeg-exit
- * handler is what finalizes completed/failed; `tick` marking 'completed' on a
- * deliberate stop is idempotent with that (the exit handler only acts while the
- * row is still 'recording').
+ * start due 'scheduled' rows, RESUME open 'recording' rows orphaned by a restart
+ * (in toStart but skipped when the recorder is already running them), stop
+ * 'recording' rows whose window closed, and mark fully-elapsed-unstarted rows
+ * 'missed'. The real recorder's ffmpeg-exit handler is what finalizes
+ * completed/failed; `tick` marking 'completed' on a deliberate stop is
+ * idempotent with that (the exit handler only acts while the row is still
+ * 'recording'). A resumed recording re-captures the REMAINING window into a
+ * fresh file — the pre-restart partial is not stitched in (single-file design).
  */
 export function tick(
   db: Database.Database,
@@ -140,6 +143,16 @@ export class FfmpegRecorder implements Recorder {
       // already marked it completed, so we don't double-handle.
       const row = getRecording(this.db, rec.id)
       if (row?.status !== 'recording') return
+      // A SIGTERM while the window is STILL OPEN is an external interruption
+      // (graceful shutdown / deploy / OOM), NOT a finished recording. Marking it
+      // 'completed' here would finalize a partial file as a full recording and
+      // the scheduler could never resume it — silent data loss labeled success.
+      // Leave the row 'recording' so the next tick re-spawns ffmpeg for the
+      // remaining window (planTransitions routes an open 'recording' row with no
+      // live child back into toStart).
+      if (signal === 'SIGTERM' && Date.parse(row.stop_utc) > this.nowMs()) {
+        return
+      }
       if (signal === 'SIGTERM' || code === 0) {
         markStatus(this.db, rec.id, 'completed', {})
       } else {
