@@ -27,6 +27,11 @@ const NOW = '2026-06-17T12:00:00.000Z'
 
 class FakeChild extends EventEmitter {
   killed = false
+  // A real ChildProcess reports exit via these: exitCode set on a clean exit,
+  // signalCode set when killed by a signal; BOTH null while still running. A
+  // FakeChild that ignores SIGTERM keeps them null so the SIGKILL backstop fires.
+  exitCode: number | null = null
+  signalCode: NodeJS.Signals | null = null
   stderr = new EventEmitter()
   kill = vi.fn((_sig?: NodeJS.Signals) => {
     this.killed = true
@@ -282,6 +287,53 @@ describe('FfmpegRecorder (mocked spawn)', () => {
     expect(child.kill).toHaveBeenCalledWith('SIGTERM')
     rec.stop('unknown-id') // no throw on a missing child
     rec.stopAll()
+  })
+
+  it('removes the partial .ts when a cancelled recording exits', () => {
+    const rec = new FfmpegRecorder(dir, db.raw, () => Date.parse(NOW))
+    const row = recordingRow()
+    rec.start(row) // start() has already mkdir-ed `dir`
+    const file = rec.filePathFor(row.id)
+    fs.writeFileSync(file, Buffer.alloc(16)) // stand in for ffmpeg's partial write
+    // A DELETE flips the row to 'cancelled' and SIGTERMs ffmpeg; the exit
+    // handler must reclaim the junk file.
+    markStatus(db.raw, row.id, 'cancelled', {}, NOW)
+    const child = spawnMock.mock.results[0].value as FakeChild
+    child.emit('exit', null, 'SIGTERM')
+    expect(fs.existsSync(file)).toBe(false)
+  })
+
+  it('escalates to SIGKILL when the child ignores SIGTERM (exitCode stays null)', () => {
+    vi.useFakeTimers()
+    try {
+      const rec = new FfmpegRecorder(dir, db.raw, () => Date.parse(NOW))
+      const row = recordingRow()
+      rec.start(row)
+      const child = spawnMock.mock.results[0].value as FakeChild
+      rec.stop(row.id)
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM')
+      expect(child.kill).not.toHaveBeenCalledWith('SIGKILL')
+      vi.advanceTimersByTime(5000) // child never exited → exitCode/signalCode null
+      expect(child.kill).toHaveBeenCalledWith('SIGKILL')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does NOT SIGKILL a child that already exited on SIGTERM', () => {
+    vi.useFakeTimers()
+    try {
+      const rec = new FfmpegRecorder(dir, db.raw, () => Date.parse(NOW))
+      const row = recordingRow()
+      rec.start(row)
+      const child = spawnMock.mock.results[0].value as FakeChild
+      rec.stop(row.id)
+      child.signalCode = 'SIGTERM' // child obeyed the SIGTERM and exited
+      vi.advanceTimersByTime(5000)
+      expect(child.kill).not.toHaveBeenCalledWith('SIGKILL')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

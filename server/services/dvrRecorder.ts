@@ -142,6 +142,14 @@ export class FfmpegRecorder implements Recorder {
       // Finalize only if the row is still 'recording' — a deliberate tick-stop
       // already marked it completed, so we don't double-handle.
       const row = getRecording(this.db, rec.id)
+      // A DELETE of an in-flight recording flips the row to 'cancelled' and
+      // SIGTERMs us: the partial file is junk, so remove it now that ffmpeg has
+      // released the descriptor (removing it mid-write would race the still-open
+      // handle). This is where a cancel's disk is actually reclaimed.
+      if (row?.status === 'cancelled') {
+        this.removeFileQuietly(rec.id)
+        return
+      }
       if (row?.status !== 'recording') return
       // A SIGTERM while the window is STILL OPEN is an external interruption
       // (graceful shutdown / deploy / OOM), NOT a finished recording. Marking it
@@ -163,12 +171,26 @@ export class FfmpegRecorder implements Recorder {
     return filePath
   }
 
+  /** Best-effort removal of a recording's on-disk file (cancel cleanup). */
+  private removeFileQuietly(recId: string): void {
+    try {
+      fs.rmSync(this.filePathFor(recId), { force: true })
+    } catch {
+      // Best-effort: a stranded .ts is a leak, not a reason to crash the handler.
+    }
+  }
+
   stop(recId: string): void {
     const proc = this.children.get(recId)
     if (!proc) return
     proc.kill('SIGTERM')
     const killTimer = setTimeout(() => {
-      if (!proc.killed) proc.kill('SIGKILL')
+      // proc.killed only means a signal was SUCCESSFULLY SENT, not that the
+      // child exited — so it is true the instant SIGTERM is delivered and the
+      // SIGKILL backstop could never fire on a wedged ffmpeg. A child that has
+      // actually exited has a non-null exitCode (clean) or signalCode (killed);
+      // escalate to SIGKILL only while BOTH are still null (truly running).
+      if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL')
     }, 5_000)
     killTimer.unref?.()
   }

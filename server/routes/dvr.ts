@@ -5,7 +5,7 @@
 // this router is mounted only when env.DVR_ENABLED is set, so a half-feature
 // (a scheduler that records nothing yet) is never exposed by default.
 
-import { createReadStream, statSync } from 'node:fs'
+import { createReadStream, statSync, rmSync } from 'node:fs'
 import { Readable } from 'node:stream'
 import { Hono, type Context, type Next } from 'hono'
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
@@ -34,6 +34,19 @@ const RECORDING_KIND: StreamKind = 'recording'
 // disambiguates it from any other token class, and rid pins it to this one file.
 function recordingResourceId(id: string): string {
   return id
+}
+
+// The DVR scheduler owns the single FfmpegRecorder (it lives in index.ts,
+// created by startDvrScheduler). The DELETE route needs a handle to it to stop
+// an in-flight ffmpeg on cancel — without this a cancelled recording keeps
+// pulling a hard-capped provider connection and writing the .ts until its
+// window ends. index.ts registers the recorder after starting the scheduler;
+// null when DVR is disabled or in a unit test that doesn't register one.
+type DvrStopper = { stop: (id: string) => void }
+let dvrRecorder: DvrStopper | null = null
+/** Register (or clear) the live recorder so DELETE can stop an in-flight ffmpeg. */
+export function registerDvrRecorder(recorder: DvrStopper | null): void {
+  dvrRecorder = recorder
 }
 
 // Schedule a recording. Admin-gated (mutates the DVR queue + will consume disk).
@@ -69,10 +82,31 @@ dvr.get('/recordings/:id', requireAuth, (c) => {
   return c.json({ recording })
 })
 
-// Cancel a scheduled/in-flight recording, or delete a terminal one.
+// Cancel a scheduled/in-flight recording, or delete a terminal one. Both must
+// reclaim resources the DB row alone does not: an in-flight cancel has to stop
+// ffmpeg (the recorder's exit handler then removes the junk partial), and a
+// terminal delete has to remove the completed .ts (otherwise "deleting to free
+// space" frees nothing and DVR_DIR grows unbounded).
 dvr.delete('/recordings/:id', requireAdmin, (c) => {
-  const outcome = cancelRecording(iptvDb().raw, c.req.param('id'))
+  const id = c.req.param('id')
+  const rec = getRecording(iptvDb().raw, id)
+  if (!rec) return c.json({ error: 'not_found' }, 404)
+  const wasRecording = rec.status === 'recording'
+  const filePath = rec.file_path
+  const outcome = cancelRecording(iptvDb().raw, id)
   if (!outcome) return c.json({ error: 'not_found' }, 404)
+  if (wasRecording) {
+    // Stop the live ffmpeg NOW (frees the provider connection + slot); its exit
+    // handler removes the partial file once the descriptor is released.
+    dvrRecorder?.stop(id)
+  } else if (outcome === 'deleted' && filePath) {
+    // Terminal row deleted → ffmpeg is long gone, so remove the file directly.
+    try {
+      rmSync(filePath, { force: true })
+    } catch {
+      // Best-effort: a stranded file is a leak, not a delete failure to report.
+    }
+  }
   return c.json({ status: outcome })
 })
 

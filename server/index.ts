@@ -25,6 +25,7 @@ import { registerTokenSweepSchedule } from './services/tokenSweepScheduler.js'
 import { drainRemuxSessions } from './services/iptvRemux.js'
 import { iptvDb, closeIptvDb } from './services/iptvDbSingleton.js'
 import { startDvrScheduler, type DvrScheduler } from './services/dvrRecorder.js'
+import { registerDvrRecorder } from './routes/dvr.js'
 import { ensureServerId, closeServerDb } from './services/serverDb.js'
 import { runTelemetryDsnSelfCheck } from './services/serverTelemetry.js'
 import { ensureSetupToken } from './services/setupState.js'
@@ -128,6 +129,9 @@ if (
 let dvrScheduler: DvrScheduler | null = null
 if (env.DVR_ENABLED && !env.IPTV_DISABLED) {
   dvrScheduler = startDvrScheduler(iptvDb().raw, env.DVR_DIR)
+  // Hand the DELETE route a handle so cancelling an in-flight recording stops
+  // its ffmpeg instead of leaving it pulling a provider connection + disk.
+  registerDvrRecorder(dvrScheduler.recorder)
 }
 
 let shuttingDown = false

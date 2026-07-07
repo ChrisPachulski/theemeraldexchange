@@ -13,7 +13,7 @@ vi.mock('../services/iptvDbSingleton.js', () => ({ iptvDb: () => dbHolder }))
 
 import { openIptvDb, type IptvDb } from '../services/iptvDb.js'
 import { scheduleRecording, markStatus } from '../services/dvrRecordings.js'
-import { dvr } from './dvr.js'
+import { dvr, registerDvrRecorder } from './dvr.js'
 
 const FUTURE_START = '2099-01-01T10:00:00.000Z'
 const FUTURE_STOP = '2099-01-01T11:00:00.000Z'
@@ -34,6 +34,7 @@ describe('dvr routes', () => {
     dbHolder.raw = db.raw
   })
   afterEach(() => {
+    registerDvrRecorder(null) // clear any injected recorder between tests
     db.close()
     fs.rmSync(tmpDir, { recursive: true, force: true })
   })
@@ -87,6 +88,26 @@ describe('dvr routes', () => {
     expect(((await del.json()) as { status: string }).status).toBe('cancelled')
     const gone = await dvr.request('/recordings/nope', { method: 'DELETE' })
     expect(gone.status).toBe(404)
+  })
+
+  it('DELETE of an in-flight recording stops its ffmpeg', async () => {
+    const stopped: string[] = []
+    registerDvrRecorder({ stop: (id: string) => stopped.push(id) })
+    const r = scheduleRecording(db.raw, validBody)
+    markStatus(db.raw, r.id, 'recording', { file_path: path.join(tmpDir, `${r.id}.ts`) })
+    const del = await dvr.request(`/recordings/${r.id}`, { method: 'DELETE' })
+    expect(((await del.json()) as { status: string }).status).toBe('cancelled')
+    expect(stopped).toEqual([r.id]) // RED before the fix: stop() never called
+  })
+
+  it('DELETE of a completed recording removes the .ts file from disk', async () => {
+    const file = path.join(tmpDir, 'done.ts')
+    fs.writeFileSync(file, Buffer.alloc(1000, 1))
+    const r = scheduleRecording(db.raw, validBody)
+    markStatus(db.raw, r.id, 'completed', { file_path: file })
+    const del = await dvr.request(`/recordings/${r.id}`, { method: 'DELETE' })
+    expect(((await del.json()) as { status: string }).status).toBe('deleted')
+    expect(fs.existsSync(file)).toBe(false) // RED before the fix: file leaked
   })
 
   it('play 404s when not completed or the file is missing', async () => {
