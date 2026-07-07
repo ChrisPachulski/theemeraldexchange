@@ -50,6 +50,17 @@ fn episode_re() -> &'static Regex {
     })
 }
 
+/// Matches a *reversed* `(YYYY)` year group — a close-paren immediately
+/// wrapping four digits then an open-paren (`)5991(`) — left behind when a
+/// movie basename like `Heat (1995)` is byte/char-reversed upstream to
+/// `)5991( taeH`. A forward, healthy name never contains `)DDDD(` (years are
+/// written `(YYYY)`), so this catches reversed MOVIE names, which carry no
+/// episode marker in either direction and so slip past [`episode_re`].
+fn reversed_year_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\)\d{4}\(").unwrap())
+}
+
 /// Case-insensitive matcher for the first scene/quality/codec/audio/HDR noise
 /// token. Everything from that token to end-of-string is dropped.
 fn noise_re() -> &'static Regex {
@@ -251,7 +262,15 @@ fn looks_reversed(stem: &str) -> bool {
         return false;
     }
     let reversed: String = stem.chars().rev().collect();
-    episode_re().is_match(&reversed)
+    if episode_re().is_match(&reversed) {
+        return true;
+    }
+    // A reversed MOVIE name (`)5991( taeH`) has no episode marker in either
+    // direction, so the check above misses it — but its `(YYYY)` year group
+    // reversed to `)DDDD(`, a shape a forward/healthy basename never carries.
+    // Catch it so a corrupt movie name is refused (and counted) rather than
+    // silently indexed as a garbage-titled movie.
+    reversed_year_re().is_match(stem)
 }
 
 /// `true` when `name` (with or without a file extension) is a byte/char-reversed
@@ -665,6 +684,27 @@ mod tests {
         assert!(!is_corrupt_reversed("Blade Runner (1982).mkv"));
         // No episode marker in either direction: not "reversed", just unparsed.
         assert!(!is_corrupt_reversed("random clip.mkv"));
+    }
+
+    #[test]
+    fn is_corrupt_reversed_flags_reversed_movie_names() {
+        // A reversed MOVIE basename carries no S/E marker in either direction —
+        // the episode-only predicate missed it and it was silently indexed as a
+        // gibberish-titled movie while files_refused_corrupt stayed 0. Its
+        // reversed `(YYYY)` group (`)5991(` from `Heat (1995)`) is the tell.
+        assert!(is_corrupt_reversed(")5991( taeH.mkv"));
+        assert!(is_corrupt_reversed(")5991( taeH"));
+        assert!(is_corrupt_reversed(")9102( recalP eht"));
+        // Under a Movies root the corrupt name is refused, never a Movie row.
+        let path = PathBuf::from("/media/Movies/)5991( taeH.mkv");
+        let parsed = classify(RootKind::Movies, &path, ")5991( taeH.mkv");
+        assert_eq!(parsed, ParsedName::Unknown);
+        assert!(!matches!(parsed, ParsedName::Movie { .. }));
+        // Healthy forward movie names (year in `(YYYY)` form or bare) stay clean.
+        assert!(!is_corrupt_reversed("Blade Runner (1982).mkv"));
+        assert!(!is_corrupt_reversed("Heat (1995).mkv"));
+        assert!(!is_corrupt_reversed("1917.mkv"));
+        assert!(!is_corrupt_reversed("2001 A Space Odyssey (1968).mkv"));
     }
 
     #[test]
