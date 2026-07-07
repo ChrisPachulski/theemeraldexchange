@@ -1530,8 +1530,12 @@ impl SessionManager {
         extra_audio: &[(usize, crate::plan::AudioOp)],
     ) {
         for (audio_index, op) in extra_audio {
-            let args =
-                crate::trickplay::audio_rendition_args(input, &dir.to_string_lossy(), *audio_index, op);
+            let args = crate::trickplay::audio_rendition_args(
+                input,
+                &dir.to_string_lossy(),
+                *audio_index,
+                op,
+            );
             let mut cmd = Command::new(&self.ffmpeg_bin);
             cmd.args(&args)
                 .current_dir(dir)
@@ -2610,14 +2614,24 @@ mod tests {
     #[test]
     fn rendition_name_prefers_language_then_title_then_position() {
         // Language wins, and doubles as the display NAME (like the subs tag).
-        let r = rendition_from(Some(&audio_track(Some("spa"), Some("Commentary"))), 1, false, Some(1));
+        let r = rendition_from(
+            Some(&audio_track(Some("spa"), Some("Commentary"))),
+            1,
+            false,
+            Some(1),
+        );
         assert_eq!(r.name, "spa");
         assert_eq!(r.language.as_deref(), Some("spa"));
         assert_eq!(r.uri.as_deref(), Some("audio_1.m3u8"));
         assert!(!r.is_default);
 
         // No language ⇒ fall back to the track title; LANGUAGE is then omitted.
-        let r = rendition_from(Some(&audio_track(None, Some("Director"))), 2, false, Some(2));
+        let r = rendition_from(
+            Some(&audio_track(None, Some("Director"))),
+            2,
+            false,
+            Some(2),
+        );
         assert_eq!(r.name, "Director");
         assert!(r.language.is_none());
         assert_eq!(r.uri.as_deref(), Some("audio_2.m3u8"));
@@ -2636,7 +2650,12 @@ mod tests {
     #[test]
     fn blank_language_falls_through_to_title() {
         // A whitespace-only tag must not become an empty NAME/LANGUAGE.
-        let r = rendition_from(Some(&audio_track(Some("  "), Some("Extra"))), 1, false, Some(1));
+        let r = rendition_from(
+            Some(&audio_track(Some("  "), Some("Extra"))),
+            1,
+            false,
+            Some(1),
+        );
         assert_eq!(r.name, "Extra");
         assert!(r.language.is_none());
     }

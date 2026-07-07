@@ -3421,15 +3421,13 @@ mod tests {
         // Show half of the S3 gate: the parental gate must see a show's rating
         // too. Red on origin/main (no column / no projection).
         let state = test_state().await;
-        sqlx::query(
-            "INSERT INTO shows (title, added_at, content_rating) VALUES (?, ?, ?)",
-        )
-        .bind("Mature Series")
-        .bind("2026-01-01T00:00:00Z")
-        .bind("TV-MA")
-        .execute(&state.db.pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO shows (title, added_at, content_rating) VALUES (?, ?, ?)")
+            .bind("Mature Series")
+            .bind("2026-01-01T00:00:00Z")
+            .bind("TV-MA")
+            .execute(&state.db.pool)
+            .await
+            .unwrap();
 
         let app = crate::build_router(state);
         let list = body_json(app.oneshot(req("GET", "/api/media/shows")).await.unwrap()).await;

@@ -481,7 +481,12 @@ mod tests {
 
     // ── master() ────────────────────────────────────────────────────────────
 
-    fn rendition(name: &str, lang: Option<&str>, default: bool, index: Option<usize>) -> AudioRendition {
+    fn rendition(
+        name: &str,
+        lang: Option<&str>,
+        default: bool,
+        index: Option<usize>,
+    ) -> AudioRendition {
         AudioRendition {
             name: name.into(),
             language: lang.map(str::to_string),
@@ -597,8 +602,14 @@ mod tests {
         ];
         let m = master(5_000_000, Some((1920, 1080)), true, Some(&subs), &audio);
         assert!(m.contains("#EXT-X-I-FRAME-STREAM-INF"), "{m}");
-        assert!(m.contains("#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\""), "{m}");
-        assert!(m.contains("#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\""), "{m}");
+        assert!(
+            m.contains("#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\""),
+            "{m}"
+        );
+        assert!(
+            m.contains("#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\""),
+            "{m}"
+        );
         // Variant references both groups, attributes in a stable order.
         assert!(
             m.contains(

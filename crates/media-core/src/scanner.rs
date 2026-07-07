@@ -864,13 +864,11 @@ async fn backfill_metadata(
                 }
                 return match tmdb.movie_content_rating(tmdb_id).await {
                     Some(r) => {
-                        sqlx::query(
-                            "UPDATE movies SET content_rating = ? WHERE file_id = ?",
-                        )
-                        .bind(&r)
-                        .bind(file_id)
-                        .execute(&db.pool)
-                        .await?;
+                        sqlx::query("UPDATE movies SET content_rating = ? WHERE file_id = ?")
+                            .bind(&r)
+                            .bind(file_id)
+                            .execute(&db.pool)
+                            .await?;
                         Ok(true)
                     }
                     None => {
