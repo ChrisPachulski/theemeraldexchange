@@ -16,6 +16,7 @@ import { promisify } from 'node:util'
 // the full synchronous compress.
 const gzipAsync = promisify(gzip)
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
+import { rateLimit } from '../middleware/rateLimit.js'
 import { requireSection } from '../services/userPolicies.js'
 import { capBlocksUnrated } from '../services/parentalRating.js'
 import { getAccountInfo, credsFromEnv } from '../services/xtream.js'
@@ -395,16 +396,32 @@ iptv.get('/epg/grid', requireAuth, async (c) => {
   return c.body(json, 200, { 'Content-Type': 'application/json; charset=utf-8' })
 })
 
+// Programme search materializes a match set from the WHOLE EPG store, and once
+// the client wires per-keystroke search it fires in bursts. Cap it per-caller so
+// a scripted authed user (or a keystroke storm) can't pin the event loop with
+// back-to-back scans — the same 429 backstop the *arr mutate routes carry.
+// Literal 10 req/s config: this is a read, not an indexer-budget burn, so it
+// needs no operator knob.
+const epgSearchRateLimit = rateLimit({
+  name: 'iptv-epg-search',
+  capacity: 10,
+  refill: 10,
+  intervalMs: 1000,
+})
+
 // Server-side programme search over the ENTIRE synced EPG store — not just the
 // warm channels the tvOS guide pre-fetches. Replaces the client-side scan seam
 // (EmeraldKit EpgSearch.programHits, capped to CatalogStore.guideChannelLimit),
 // so searching 'Yankees' / 'news' now reaches every channel's schedule without
 // shipping the full ~28 MB grid to a memory-constrained device. Query parsing
 // (q slice, categoryIds cap-500) + gzip mirror /epg/grid above.
-iptv.get('/epg/search', requireAuth, async (c) => {
+iptv.get('/epg/search', requireAuth, epgSearchRateLimit, async (c) => {
   const rawQ = c.req.query('q')
   const q = rawQ && rawQ.trim() ? rawQ.trim().slice(0, 100) : undefined
   if (!q) return c.json({ error: 'invalid_query' }, 400)
+  // A 1-char query matches nearly every programme (q='e'), degrading the SQL
+  // LIKE into a whole-store scan; require >=2 chars so the filter narrows.
+  if (q.length < 2) return c.json({ error: 'invalid_query' }, 400)
 
   const from = c.req.query('from') ?? new Date().toISOString()
   const to = c.req.query('to') ?? new Date(Date.now() + 4 * 3600_000).toISOString()

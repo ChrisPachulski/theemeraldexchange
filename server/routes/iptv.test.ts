@@ -9,6 +9,7 @@ import { __setSsrfLookupForTests } from '../services/ssrfGuard.js'
 import { signStreamToken } from '../services/iptvStreamToken.js'
 import { _resetLiveRemuxIndexForTests } from '../services/iptvLiveRemuxMap.js'
 import { _setUserPoliciesPathForTests } from '../services/userPolicies.js'
+import { __resetRateLimitsForTests } from '../middleware/rateLimit.js'
 import { env } from '../env.js'
 
 const dbState = vi.hoisted(() => ({
@@ -1881,6 +1882,12 @@ describe('GET /api/iptv/epg/search — server-side programme search', () => {
   const from = '2026-07-06T00:00:00Z'
   const to = '2026-07-06T06:00:00Z'
 
+  // Fresh token bucket per test so the per-caller limiter (capacity 10) never
+  // starts pre-drained from a neighbouring case.
+  beforeEach(() => {
+    __resetRateLimitsForTests()
+  })
+
   beforeAll(() => {
     const db = dbState.testDb!
     // Two channels the tvOS guide would NOT pre-fetch (high num, beyond the warm
@@ -1943,6 +1950,21 @@ describe('GET /api/iptv/epg/search — server-side programme search', () => {
     const res = await app.request(`/api/iptv/epg/search?from=${from}&to=${to}`)
     expect(res.status).toBe(400)
     expect((await res.json()) as { error: string }).toEqual({ error: 'invalid_query' })
+  })
+
+  it('1-char q → 400 invalid_query (min length narrows the scan)', async () => {
+    const res = await app.request(`/api/iptv/epg/search?q=e&from=${from}&to=${to}`)
+    expect(res.status).toBe(400)
+    expect((await res.json()) as { error: string }).toEqual({ error: 'invalid_query' })
+  })
+
+  it('rate-limits a burst: the 11th request within 1s → 429', async () => {
+    const url = `/api/iptv/epg/search?q=Yankees&from=${from}&to=${to}`
+    for (let i = 0; i < 10; i++) {
+      expect((await app.request(url)).status).toBe(200)
+    }
+    const res = await app.request(url)
+    expect(res.status).toBe(429)
   })
 
   it('categoryIds filter excludes channels outside the set', async () => {
