@@ -22,7 +22,7 @@ use crate::error::AppError;
 use crate::filename::{self, ParsedName};
 use crate::models::FileProbe;
 use crate::probe;
-use crate::tmdb::{TmdbClient, TmdbEpisode, TmdbMatch};
+use crate::tmdb::{TmdbClient, TmdbEpisode, TmdbFetch, TmdbMatch};
 
 #[derive(Debug, Default, Clone, serde::Serialize)]
 pub struct ScanReport {
@@ -669,6 +669,61 @@ async fn record_episode_lookup_failure(
     Ok(())
 }
 
+/// The stored show row for a display title's normalized key: `(id, tmdb_id,
+/// has_content_rating)`. Drives the steady-state fast path in
+/// [`backfill_metadata`] that skips the per-file show re-match once a show is
+/// fully enriched (matched AND rated).
+async fn stored_show_match(
+    db: &Db,
+    display_title: &str,
+) -> Result<Option<(i64, Option<i64>, bool)>, AppError> {
+    let key = filename::normalize_show_name(display_title);
+    let row: Option<(i64, Option<i64>, Option<String>)> =
+        sqlx::query_as("SELECT id, tmdb_id, content_rating FROM shows WHERE norm_title = ?")
+            .bind(&key)
+            .fetch_optional(&db.pool)
+            .await?;
+    Ok(row.map(|(id, tmdb_id, rating)| (id, tmdb_id, rating.is_some())))
+}
+
+/// Shared tail of the episode backfill: bind a fetched episode, stamp the
+/// negative cache ONLY on a definitive miss (404 / resolved-but-empty), and for
+/// a real hit point the episode row at the best-quality file. A transient TMDB
+/// failure leaves the retry budget untouched. Returns whether a row was
+/// backfilled (drives `ScanReport::backfilled`).
+async fn apply_episode_backfill(
+    db: &Db,
+    show_id: i64,
+    season: i64,
+    episode: i64,
+    file_id: i64,
+    ep: TmdbFetch<TmdbEpisode>,
+) -> Result<bool, AppError> {
+    let ep_meta = match &ep {
+        TmdbFetch::Found(e) => Some(e),
+        _ => None,
+    };
+    if ep_meta.is_none() {
+        if matches!(ep, TmdbFetch::DefinitiveMiss) {
+            record_episode_lookup_failure(db, show_id, season, episode).await?;
+        }
+        return Ok(false);
+    }
+    // The episode row already exists (unchanged file); reuse its file_id so the
+    // quality-preference logic in upsert_episode is a no-op tie.
+    let existing_file_id: Option<i64> = sqlx::query_scalar(
+        "SELECT file_id FROM episodes WHERE show_id = ? AND season = ? AND episode = ?",
+    )
+    .bind(show_id)
+    .bind(season)
+    .bind(episode)
+    .fetch_optional(&db.pool)
+    .await?;
+    let fid = existing_file_id.unwrap_or(file_id);
+    upsert_episode(db, show_id, season, episode, fid, ep_meta).await?;
+    Ok(true)
+}
+
 /// The `video_height` recorded for a media file, if any. Used to pick the
 /// higher-resolution file when two rips back the same episode.
 async fn file_video_height(db: &Db, file_id: i64) -> Result<Option<i64>, AppError> {
@@ -792,13 +847,18 @@ async fn index_file(
                 (Some(found), true) => tmdb.episode(found.tmdb_id, *season, *episode).await,
                 // Show unresolved, or already-titled / cached-negative: skip the
                 // per-episode round-trip, just keep the file pointer.
+                _ => TmdbFetch::Transient,
+            };
+            let ep_meta = match &ep {
+                TmdbFetch::Found(e) => Some(e),
                 _ => None,
             };
-            upsert_episode(db, show_id, *season, *episode, file_id, ep.as_ref()).await?;
-            // A due lookup against a resolved show that came back empty is a
-            // permanent 404 for a mis-numbered file: stamp the negative cache so
-            // the next scan honours the cooldown instead of re-probing forever.
-            if m.is_some() && due && ep.is_none() {
+            upsert_episode(db, show_id, *season, *episode, file_id, ep_meta).await?;
+            // Only a DEFINITIVE miss (404 / empty body for a resolved, due
+            // episode) stamps the negcache; a transient TMDB/network failure
+            // leaves the retry budget so the next scan retries instead of
+            // suppressing a matchable title for 30 days.
+            if matches!(ep, TmdbFetch::DefinitiveMiss) {
                 record_episode_lookup_failure(db, show_id, *season, *episode).await?;
             }
             m.is_some()
@@ -867,7 +927,7 @@ async fn backfill_metadata(
                     return Ok(false);
                 }
                 return match tmdb.movie_content_rating(tmdb_id).await {
-                    Some(r) => {
+                    TmdbFetch::Found(r) => {
                         sqlx::query("UPDATE movies SET content_rating = ? WHERE file_id = ?")
                             .bind(&r)
                             .bind(file_id)
@@ -875,7 +935,9 @@ async fn backfill_metadata(
                             .await?;
                         Ok(true)
                     }
-                    None => {
+                    // The movie genuinely carries no US certification: stamp so
+                    // it re-probes on the cooldown schedule, not every scan.
+                    TmdbFetch::DefinitiveMiss => {
                         sqlx::query(
                             "UPDATE movies SET rating_lookup_attempts = rating_lookup_attempts + 1, \
                              rating_lookup_failed_at = ? WHERE file_id = ?",
@@ -886,6 +948,10 @@ async fn backfill_metadata(
                         .await?;
                         Ok(false)
                     }
+                    // Transient outage / rate-limit / keyless window: leave the
+                    // retry budget untouched so the next scan retries instead of
+                    // caching a false "unrated" for 30 days.
+                    TmdbFetch::Transient => Ok(false),
                 };
             }
             let m = tmdb.match_movie(title, *year).await;
@@ -900,44 +966,39 @@ async fn backfill_metadata(
             season,
             episode,
         } => {
+            // Steady-state fast path: a show that is ALREADY matched AND rated
+            // needs no re-search — issuing match_show (a live TMDB search +
+            // external_ids + content_ratings, ~3 requests) for every unchanged
+            // episode file on every hourly scan was the self-inflicted request
+            // storm that fed the 429/negcache poisoning. When the per-episode
+            // lookup is not due either, do ZERO network work; when it is due,
+            // reuse the STORED tmdb_id instead of re-searching.
+            if let Some((show_id, Some(tmdb_id), true)) = stored_show_match(db, show).await? {
+                if !episode_lookup_due(db, show_id, *season, *episode, Utc::now()).await? {
+                    return Ok(false);
+                }
+                let ep = tmdb.episode(tmdb_id, *season, *episode).await;
+                return apply_episode_backfill(db, show_id, *season, *episode, file_id, ep).await;
+            }
+
+            // Unmatched show, or a matched-but-unrated pre-0010 row: re-match to
+            // resolve the show / backfill its own metadata (the show upsert is
+            // idempotent). Shows are far fewer than episode files, so this
+            // residual per-file match only applies until the show is enriched.
             let m = tmdb.match_show(show, None).await;
             let show_id = upsert_show(db, show, &scanned_at, m.as_ref()).await?;
-            // Skip the network round-trip unless the per-episode lookup is DUE.
-            // "Due" folds in the old `title IS NOT NULL` guard AND the negative
-            // cache: a permanently-404 episode (mis-numbered anime/alt-cut) is
-            // skipped until its cooldown elapses instead of being re-probed on
-            // every ~hourly rescan. (The show upsert above is cheap/idempotent
-            // and may have just backfilled the show's own metadata, so it always
-            // runs.)
+            // Skip the per-episode round-trip unless the lookup is DUE. "Due"
+            // folds in the old `title IS NOT NULL` guard AND the negative cache:
+            // a permanently-404 episode (mis-numbered anime/alt-cut) is skipped
+            // until its cooldown elapses instead of being re-probed every scan.
             if !episode_lookup_due(db, show_id, *season, *episode, Utc::now()).await? {
                 return Ok(false);
             }
             let ep = match m.as_ref() {
                 Some(found) => tmdb.episode(found.tmdb_id, *season, *episode).await,
-                None => None,
+                None => TmdbFetch::Transient,
             };
-            if ep.is_none() {
-                // A due lookup against a resolved show that came back empty is a
-                // permanent 404: stamp the negative cache so subsequent scans
-                // honour the cooldown rather than re-probing every pass.
-                if m.is_some() {
-                    record_episode_lookup_failure(db, show_id, *season, *episode).await?;
-                }
-                return Ok(false);
-            }
-            // The episode row already exists (unchanged file); reuse its file_id
-            // so the quality-preference logic in upsert_episode is a no-op tie.
-            let existing_file_id: Option<i64> = sqlx::query_scalar(
-                "SELECT file_id FROM episodes WHERE show_id = ? AND season = ? AND episode = ?",
-            )
-            .bind(show_id)
-            .bind(season)
-            .bind(episode)
-            .fetch_optional(&db.pool)
-            .await?;
-            let fid = existing_file_id.unwrap_or(file_id);
-            upsert_episode(db, show_id, *season, *episode, fid, ep.as_ref()).await?;
-            Ok(true)
+            apply_episode_backfill(db, show_id, *season, *episode, file_id, ep).await
         }
         ParsedName::Unknown => Ok(false),
     }
@@ -2976,16 +3037,12 @@ mod tests {
         assert_eq!(count(&db, "movies").await, 1);
     }
 
-    #[tokio::test]
-    async fn backfill_rating_negcache_stamps_and_cools_down() {
-        // A matched-but-unrated movie (pre-0010 row) attempts a rating-only
-        // backfill; a keyless client yields no rating, which must stamp the
-        // 0011 negative cache — and the very next scan (inside the cooldown)
-        // must NOT re-attempt (attempts stays at 1).
-        let db = Db::connect_memory().await.unwrap();
-        let file_id = seed_media_file(&db, "/lib/Heat (1995).mkv").await;
+    /// Seed a matched-but-unrated movie (a pre-0010 row) backed by `file_id`,
+    /// the fixture the rating-backfill negcache tests share.
+    async fn seed_matched_unrated_movie(db: &Db, path: &str, tmdb_id: i64) -> i64 {
+        let file_id = seed_media_file(db, path).await;
         let matched = TmdbMatch {
-            tmdb_id: 949,
+            tmdb_id,
             title: "Heat".into(),
             year: Some(1995),
             overview: None,
@@ -2994,9 +3051,20 @@ mod tests {
             tvdb_id: None,
             content_rating: None,
         };
-        upsert_movie(&db, "Heat", Some(1995), file_id, "t", Some(&matched))
+        upsert_movie(db, "Heat", Some(1995), file_id, "t", Some(&matched))
             .await
             .unwrap();
+        file_id
+    }
+
+    #[tokio::test]
+    async fn backfill_rating_keyless_does_not_stamp_negcache() {
+        // Finding #1 (tri-state): a keyless deploy window is a TRANSIENT failure,
+        // not a definitive "no rating" — it must NOT stamp the 0011 negcache and
+        // burn the retry budget (the old code stamped attempts=1; this asserts
+        // the inverted, correct behavior of leaving it at 0).
+        let db = Db::connect_memory().await.unwrap();
+        let file_id = seed_matched_unrated_movie(&db, "/lib/Heat (1995).mkv", 949).await;
         let parsed = ParsedName::Movie {
             title: "Heat".into(),
             year: Some(1995),
@@ -3012,11 +3080,70 @@ mod tests {
         .fetch_one(&db.pool)
         .await
         .unwrap();
-        assert_eq!(attempts, 1, "failed rating lookup stamps the negcache");
+        assert_eq!(attempts, 0, "keyless (transient) must NOT stamp the negcache");
+        assert!(failed_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn backfill_rating_transient_outage_does_not_stamp() {
+        // A 5xx gateway blip (the NAS cloudflared netns outage class) is
+        // transient: the rating column stays NULL but the retry budget is
+        // untouched so the next scan retries.
+        let db = Db::connect_memory().await.unwrap();
+        let file_id = seed_matched_unrated_movie(&db, "/lib/Heat (1995).mkv", 949).await;
+        let stub = crate::tmdb::stub::StubServer::start(|_| (502, "{}".to_string()));
+        let tmdb = TmdbClient::with_base(Some("k".into()), stub.base.clone());
+        let parsed = ParsedName::Movie {
+            title: "Heat".into(),
+            year: Some(1995),
+        };
+        let did = backfill_metadata(&db, "/lib/Heat (1995).mkv", &parsed, &tmdb)
+            .await
+            .unwrap();
+        assert!(!did);
+        let attempts: i64 =
+            sqlx::query_scalar("SELECT rating_lookup_attempts FROM movies WHERE file_id = ?")
+                .bind(file_id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(attempts, 0, "transient 5xx must NOT burn the retry budget");
+        assert!(stub.hit_count_containing("/release_dates") >= 1);
+    }
+
+    #[tokio::test]
+    async fn backfill_rating_definitive_miss_stamps_and_cools_down() {
+        // A 200 with no US certification is a DEFINITIVE miss: stamp the negcache
+        // so the title re-probes on the cooldown schedule, and the very next scan
+        // inside the cooldown must not re-attempt (attempts stays at 1).
+        let db = Db::connect_memory().await.unwrap();
+        let file_id = seed_matched_unrated_movie(&db, "/lib/Heat (1995).mkv", 949).await;
+        // Empty results = the movie carries no US certification.
+        let stub =
+            crate::tmdb::stub::StubServer::start(|_| (200, r#"{"results":[]}"#.to_string()));
+        let tmdb = TmdbClient::with_base(Some("k".into()), stub.base.clone());
+        let parsed = ParsedName::Movie {
+            title: "Heat".into(),
+            year: Some(1995),
+        };
+        let did = backfill_metadata(&db, "/lib/Heat (1995).mkv", &parsed, &tmdb)
+            .await
+            .unwrap();
+        assert!(!did, "definitive miss backfills no rating");
+        let (attempts, failed_at): (i64, Option<String>) = sqlx::query_as(
+            "SELECT rating_lookup_attempts, rating_lookup_failed_at FROM movies WHERE file_id = ?",
+        )
+        .bind(file_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(attempts, 1, "definitive miss stamps the negcache");
         assert!(failed_at.is_some());
 
-        // Second pass inside the cooldown: skipped, attempts unchanged.
-        let did2 = backfill_metadata(&db, "/lib/Heat (1995).mkv", &parsed, &no_tmdb())
+        // Second pass inside the cooldown: skipped, attempts unchanged, and NO
+        // further TMDB request is issued.
+        let hits_before = stub.total_hits();
+        let did2 = backfill_metadata(&db, "/lib/Heat (1995).mkv", &parsed, &tmdb)
             .await
             .unwrap();
         assert!(!did2);
@@ -3027,6 +3154,11 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(attempts2, 1, "cooldown must suppress the re-probe");
+        assert_eq!(
+            stub.total_hits(),
+            hits_before,
+            "cooldown must issue zero further TMDB requests"
+        );
     }
 
     #[tokio::test]
@@ -3063,6 +3195,109 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(attempts, 0, "rated row must not touch the negcache");
+    }
+
+    /// Seed a fully-enriched show (matched + rated) with one titled episode
+    /// backed by `path`, and return `(show_id, file_id)`. The shared fixture for
+    /// the steady-state request-avoidance and episode-tri-state tests.
+    async fn seed_enriched_show_episode(
+        db: &Db,
+        show: &str,
+        path: &str,
+        titled: bool,
+    ) -> (i64, i64) {
+        let file_id = seed_media_file(db, path).await;
+        let matched = TmdbMatch {
+            tmdb_id: 2316,
+            title: show.into(),
+            year: Some(2005),
+            overview: None,
+            poster_path: None,
+            imdb_id: None,
+            tvdb_id: None,
+            content_rating: Some("TV-14".into()),
+        };
+        let show_id = upsert_show(db, show, "t", Some(&matched)).await.unwrap();
+        let ep = titled.then(|| TmdbEpisode {
+            title: Some("Pilot".into()),
+            air_date: Some("2005-03-24".into()),
+        });
+        upsert_episode(db, show_id, 1, 1, file_id, ep.as_ref())
+            .await
+            .unwrap();
+        (show_id, file_id)
+    }
+
+    #[tokio::test]
+    async fn backfill_enriched_show_episode_issues_zero_tmdb_requests() {
+        // Finding #2: a fully-enriched show (matched + rated) with a titled
+        // (not-due) episode must do ZERO network work on a steady-state rescan.
+        // Before the fix, match_show fired ~3 requests per unchanged episode file
+        // per scan — the self-inflicted storm. The stub returns 500 on any hit,
+        // so a single request would also fail loudly.
+        let db = Db::connect_memory().await.unwrap();
+        let path = "/lib/The Office/The Office S01E01.mkv";
+        seed_enriched_show_episode(&db, "The Office", path, true).await;
+        let stub = crate::tmdb::stub::StubServer::start(|_| (500, "{}".to_string()));
+        let tmdb = TmdbClient::with_base(Some("k".into()), stub.base.clone());
+        let parsed = ParsedName::Episode {
+            show: "The Office".into(),
+            season: 1,
+            episode: 1,
+        };
+        let did = backfill_metadata(&db, path, &parsed, &tmdb).await.unwrap();
+        assert!(!did);
+        assert_eq!(
+            stub.total_hits(),
+            0,
+            "fully-enriched show+episode must issue zero TMDB requests, got {:?}",
+            stub.hits()
+        );
+    }
+
+    #[tokio::test]
+    async fn backfill_episode_transient_does_not_stamp_definitive_does() {
+        // Finding #1 at the episode negcache: a matched+rated show with an
+        // untitled (DUE) episode. A 5xx on the per-episode fetch is transient and
+        // must leave tmdb_lookup_attempts at 0; a 404 is a definitive miss and
+        // stamps it to 1.
+        let path = "/lib/The Office/The Office S01E01.mkv";
+        let parsed = ParsedName::Episode {
+            show: "The Office".into(),
+            season: 1,
+            episode: 1,
+        };
+
+        // Transient 502 → no stamp.
+        let db = Db::connect_memory().await.unwrap();
+        let (show_id, _) = seed_enriched_show_episode(&db, "The Office", path, false).await;
+        let stub = crate::tmdb::stub::StubServer::start(|_| (502, "{}".to_string()));
+        let tmdb = TmdbClient::with_base(Some("k".into()), stub.base.clone());
+        backfill_metadata(&db, path, &parsed, &tmdb).await.unwrap();
+        let attempts: i64 = sqlx::query_scalar(
+            "SELECT tmdb_lookup_attempts FROM episodes WHERE show_id = ? AND season = 1 AND episode = 1",
+        )
+        .bind(show_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(attempts, 0, "transient episode 5xx must NOT stamp the negcache");
+        assert!(stub.hit_count_containing("/episode/") >= 1);
+
+        // Definitive 404 → stamp.
+        let db2 = Db::connect_memory().await.unwrap();
+        let (show_id2, _) = seed_enriched_show_episode(&db2, "The Office", path, false).await;
+        let stub2 = crate::tmdb::stub::StubServer::start(|_| (404, "{}".to_string()));
+        let tmdb2 = TmdbClient::with_base(Some("k".into()), stub2.base.clone());
+        backfill_metadata(&db2, path, &parsed, &tmdb2).await.unwrap();
+        let attempts2: i64 = sqlx::query_scalar(
+            "SELECT tmdb_lookup_attempts FROM episodes WHERE show_id = ? AND season = 1 AND episode = 1",
+        )
+        .bind(show_id2)
+        .fetch_one(&db2.pool)
+        .await
+        .unwrap();
+        assert_eq!(attempts2, 1, "definitive episode 404 must stamp the negcache");
     }
 
     #[tokio::test]

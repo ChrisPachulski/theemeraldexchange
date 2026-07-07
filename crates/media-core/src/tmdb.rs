@@ -51,15 +51,43 @@ pub struct TmdbEpisode {
 #[derive(Clone)]
 pub struct TmdbClient {
     pub api_key: Option<String>,
+    /// API base (`https://api.themoviedb.org/3` in production). Injectable so a
+    /// counting/failing local stub can drive the negative-cache and steady-state
+    /// request-avoidance tests without a hardcoded const to a live host.
+    base: String,
     /// One pooled HTTP client for the whole process (reqwest::Client is an Arc
     /// internally, cheap to clone). Building a fresh client per call defeated
     /// connection reuse and re-initialized TLS state on every TMDB hit.
     client: reqwest::Client,
 }
 
-const SEARCH_MOVIE_URL: &str = "https://api.themoviedb.org/3/search/movie";
-const SEARCH_TV_URL: &str = "https://api.themoviedb.org/3/search/tv";
 const API_BASE: &str = "https://api.themoviedb.org/3";
+
+/// Tri-state outcome of a best-effort TMDB enrichment fetch (content rating or
+/// per-episode metadata). The negative caches MUST distinguish a DEFINITIVE
+/// miss — HTTP 404, or a 200 whose body carried no matching entry (the title or
+/// episode genuinely has no such data) — from a TRANSIENT failure (send error,
+/// timeout, 5xx, 429-after-retry, JSON-decode error, or a missing API key).
+/// Only a [`TmdbFetch::DefinitiveMiss`] may be stamped into a negcache; a
+/// [`TmdbFetch::Transient`] leaves the retry budget untouched so the next scan
+/// retries instead of suppressing matchable metadata for 30 days (or
+/// permanently after the 6-attempt cap) because an outage happened to coincide
+/// with the scan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TmdbFetch<T> {
+    Found(T),
+    DefinitiveMiss,
+    Transient,
+}
+
+/// Split a non-success HTTP status into the definitive/transient buckets the
+/// enrichment negative caches key on. Only 404 Not Found is definitive (the id
+/// genuinely has no such resource); every other non-2xx — 5xx gateway blips
+/// (the NAS's documented cloudflared netns outages), 429, 403, 5xx — is
+/// transient and must NOT burn the retry budget.
+fn status_is_definitive_miss(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::NOT_FOUND
+}
 
 /// Hard cap on how long a single 429 back-off will sleep, so a hostile or
 /// misconfigured `Retry-After` can never wedge a scan for minutes.
@@ -441,7 +469,30 @@ impl TmdbClient {
             // Builder failure here means TLS init failed; the default client
             // keeps the scanner functional (requests will surface errors).
             .unwrap_or_default();
-        Self { api_key, client }
+        Self {
+            api_key,
+            base: API_BASE.to_string(),
+            client,
+        }
+    }
+
+    /// Test-only constructor pointing the client at an arbitrary API base (a
+    /// local counting/failing stub) so the negcache and request-avoidance tests
+    /// run hermetically. Never compiled into release.
+    #[cfg(test)]
+    pub(crate) fn with_base(api_key: Option<String>, base: String) -> Self {
+        Self {
+            base,
+            ..Self::new(api_key)
+        }
+    }
+
+    fn search_movie_url(&self) -> String {
+        format!("{}/search/movie", self.base)
+    }
+
+    fn search_tv_url(&self) -> String {
+        format!("{}/search/tv", self.base)
     }
 
     /// A GET on `url` carrying the TMDB credential: Bearer header for a v4
@@ -538,7 +589,7 @@ impl TmdbClient {
             Some(k) => k,
             None => return ExternalIds::default(),
         };
-        let url = format!("{API_BASE}/{kind}/{id}/external_ids");
+        let url = format!("{}/{kind}/{id}/external_ids", self.base);
         let resp = match self.authed_get(&url, api_key).send().await {
             Ok(r) => r,
             Err(e) => {
@@ -573,24 +624,31 @@ impl TmdbClient {
 
     /// Fetch the US certification / content rating for a title. Movies use
     /// `/movie/{id}/release_dates` (nested per-release `certification`), tv uses
-    /// `/tv/{id}/content_ratings` (flat per-country `rating`). Logs and returns
-    /// `None` on any failure so enrichment stays best-effort — a missing rating
-    /// never fails a scan, it just leaves the column NULL (client treats it as
-    /// unrated). `kind` is "movie" or "tv" to mirror [`Self::external_ids`].
-    /// Rating-only fetch for an already-matched movie (the backfill path re-
-    /// enriches pre-0010 rows without a full re-match round trip).
-    pub(crate) async fn movie_content_rating(&self, id: i64) -> Option<String> {
+    /// `/tv/{id}/content_ratings` (flat per-country `rating`). Returns a
+    /// [`TmdbFetch`] so the caller can tell a genuine "no US certification" (a
+    /// definitive miss, safe to negcache) apart from a transient outage (must
+    /// not burn the retry budget). Enrichment stays best-effort — a missing
+    /// rating never fails a scan, it just leaves the column NULL. `kind` is
+    /// "movie" or "tv" to mirror [`Self::external_ids`]. Rating-only fetch for
+    /// an already-matched movie (the backfill path re-enriches pre-0010 rows
+    /// without a full re-match round trip).
+    pub(crate) async fn movie_content_rating(&self, id: i64) -> TmdbFetch<String> {
         self.content_rating("movie", id).await
     }
 
-    async fn content_rating(&self, kind: &str, id: i64) -> Option<String> {
-        let api_key = self.api_key.as_deref()?;
+    async fn content_rating(&self, kind: &str, id: i64) -> TmdbFetch<String> {
+        // No credential is NOT a definitive miss — a keyless deploy window must
+        // not stamp the negcache and permanently suppress a real rating.
+        let api_key = match self.api_key.as_deref() {
+            Some(k) => k,
+            None => return TmdbFetch::Transient,
+        };
         let endpoint = if kind == "movie" {
             "release_dates"
         } else {
             "content_ratings"
         };
-        let url = format!("{API_BASE}/{kind}/{id}/{endpoint}");
+        let url = format!("{}/{kind}/{id}/{endpoint}", self.base);
         let resp = match self.authed_get(&url, api_key).send().await {
             Ok(r) => r,
             Err(e) => {
@@ -599,7 +657,7 @@ impl TmdbClient {
                     "content_rating send failed: {}",
                     e.without_url()
                 );
-                return None;
+                return TmdbFetch::Transient;
             }
         };
         if !resp.status().is_success() {
@@ -608,7 +666,11 @@ impl TmdbClient {
                 "content_rating non-2xx for {kind} {id}: {}",
                 resp.status()
             );
-            return None;
+            return if status_is_definitive_miss(resp.status()) {
+                TmdbFetch::DefinitiveMiss
+            } else {
+                TmdbFetch::Transient
+            };
         }
         let doc = match resp.json::<serde_json::Value>().await {
             Ok(doc) => doc,
@@ -618,30 +680,48 @@ impl TmdbClient {
                     "content_rating json failed: {}",
                     e.without_url()
                 );
-                return None;
+                return TmdbFetch::Transient;
             }
         };
-        if kind == "movie" {
+        let parsed = if kind == "movie" {
             parse_movie_certification(&doc)
         } else {
             parse_tv_content_rating(&doc)
+        };
+        match parsed {
+            Some(r) => TmdbFetch::Found(r),
+            // A 200 with no US entry: the title genuinely carries no US
+            // certification (foreign/indie) — a definitive miss, negcached on
+            // the cooldown schedule rather than re-probed every scan.
+            None => TmdbFetch::DefinitiveMiss,
         }
     }
 
     /// Fetch per-episode metadata (title, air_date) via
-    /// `/tv/{show_tmdb_id}/season/{season}/episode/{episode}`. Returns `None`
-    /// if no key, no match, or any error (logged) — never fails the scan.
+    /// `/tv/{show_tmdb_id}/season/{season}/episode/{episode}`. Returns a
+    /// [`TmdbFetch`] so the caller stamps the episode negcache ONLY on a
+    /// definitive miss (404, or a resolved-but-empty body — the mis-numbered
+    /// episode genuinely doesn't exist) and never on a transient outage/rate
+    /// limit. Never fails the scan.
     pub async fn episode(
         &self,
         show_tmdb_id: i64,
         season: i64,
         episode: i64,
-    ) -> Option<TmdbEpisode> {
+    ) -> TmdbFetch<TmdbEpisode> {
+        // S0E0 / negative numbering can never exist on TMDB — a definitive miss
+        // so the negcache stamps it and stops re-probing every scan.
         if !episode_lookupable(season, episode) {
-            return None;
+            return TmdbFetch::DefinitiveMiss;
         }
-        let api_key = self.api_key.as_deref()?;
-        let url = format!("{API_BASE}/tv/{show_tmdb_id}/season/{season}/episode/{episode}");
+        let api_key = match self.api_key.as_deref() {
+            Some(k) => k,
+            None => return TmdbFetch::Transient,
+        };
+        let url = format!(
+            "{}/tv/{show_tmdb_id}/season/{season}/episode/{episode}",
+            self.base
+        );
         let send = || async { self.authed_get(&url, api_key).send().await };
         let resp = match send().await {
             Ok(r) => r,
@@ -651,7 +731,7 @@ impl TmdbClient {
                     "episode send failed: {}",
                     e.without_url()
                 );
-                return None;
+                return TmdbFetch::Transient;
             }
         };
         // On 429, honour Retry-After once before giving up so a fresh full scan
@@ -671,7 +751,7 @@ impl TmdbClient {
                         "episode retry send failed: {}",
                         e.without_url()
                     );
-                    return None;
+                    return TmdbFetch::Transient;
                 }
             }
         } else {
@@ -683,17 +763,25 @@ impl TmdbClient {
                 "episode non-2xx for tv {show_tmdb_id} S{season}E{episode}: {}",
                 resp.status()
             );
-            return None;
+            return if status_is_definitive_miss(resp.status()) {
+                TmdbFetch::DefinitiveMiss
+            } else {
+                TmdbFetch::Transient
+            };
         }
         match resp.json::<serde_json::Value>().await {
-            Ok(doc) => parse_episode_response(&doc),
+            // A resolved 200 with no name/air_date is a definitive empty row.
+            Ok(doc) => match parse_episode_response(&doc) {
+                Some(ep) => TmdbFetch::Found(ep),
+                None => TmdbFetch::DefinitiveMiss,
+            },
             Err(e) => {
                 tracing::warn!(
                     target: "media_core::tmdb",
                     "episode json failed: {}",
                     e.without_url()
                 );
-                None
+                TmdbFetch::Transient
             }
         }
     }
@@ -701,7 +789,7 @@ impl TmdbClient {
     /// Search TMDB for a movie. Returns `None` if no key, no match, or any
     /// error (logged). On a hit, also fetches `imdb_id`.
     pub async fn match_movie(&self, title: &str, year: Option<i64>) -> Option<TmdbMatch> {
-        self.match_with(SEARCH_MOVIE_URL, "movie", title, year, true, None)
+        self.match_with(&self.search_movie_url(), "movie", title, year, true, None)
             .await
     }
 
@@ -711,8 +799,15 @@ impl TmdbClient {
     /// hint so a same-name UK/US tie resolves to the right series.
     pub async fn match_show(&self, title: &str, year: Option<i64>) -> Option<TmdbMatch> {
         let (title, year, country) = show_search_terms(title, year);
-        self.match_with(SEARCH_TV_URL, "tv", &title, year, false, country.as_deref())
-            .await
+        self.match_with(
+            &self.search_tv_url(),
+            "tv",
+            &title,
+            year,
+            false,
+            country.as_deref(),
+        )
+        .await
     }
 
     async fn match_with(
@@ -759,7 +854,12 @@ impl TmdbClient {
         let ext = self.external_ids(kind, found.tmdb_id).await;
         found.imdb_id = ext.imdb_id;
         found.tvdb_id = ext.tvdb_id;
-        found.content_rating = self.content_rating(kind, found.tmdb_id).await;
+        found.content_rating = match self.content_rating(kind, found.tmdb_id).await {
+            TmdbFetch::Found(r) => Some(r),
+            // A miss (definitive or transient) at match time just leaves the
+            // column NULL; the backfill path re-attempts with negcache gating.
+            TmdbFetch::DefinitiveMiss | TmdbFetch::Transient => None,
+        };
         Some(found)
     }
 }
@@ -1183,7 +1283,7 @@ mod tests {
         let token = "eyJhbGciOiJIUzI1NiJ9.fake.token";
         let c = TmdbClient::new(Some(token.into()));
         let req = c
-            .authed_get(SEARCH_MOVIE_URL, token)
+            .authed_get(&c.search_movie_url(), token)
             .query(&[("query", "Heat")])
             .build()
             .unwrap();
@@ -1207,7 +1307,7 @@ mod tests {
         // api_key query param (log redaction handles the leak vector instead).
         let key = "0123456789abcdef0123456789abcdef";
         let c = TmdbClient::new(Some(key.into()));
-        let req = c.authed_get(SEARCH_MOVIE_URL, key).build().unwrap();
+        let req = c.authed_get(&c.search_movie_url(), key).build().unwrap();
         assert!(req.url().query().unwrap().contains("api_key="));
         assert!(req.headers().get("authorization").is_none());
     }
@@ -1331,5 +1431,147 @@ mod tests {
             ACCURACY_FLOOR * 100.0,
             gap_misses.join("\n")
         );
+    }
+
+    #[test]
+    fn only_404_is_a_definitive_miss() {
+        // 404 = the id genuinely has no such resource → safe to negcache.
+        assert!(status_is_definitive_miss(reqwest::StatusCode::NOT_FOUND));
+        // Every transient/gateway/rate-limit status must NOT burn the budget.
+        for s in [
+            reqwest::StatusCode::BAD_GATEWAY,
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            reqwest::StatusCode::GATEWAY_TIMEOUT,
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            reqwest::StatusCode::FORBIDDEN,
+        ] {
+            assert!(!status_is_definitive_miss(s), "status {s} must be transient");
+        }
+    }
+
+    #[tokio::test]
+    async fn content_rating_502_is_transient_404_is_definitive_200_empty_is_definitive() {
+        // A 5xx gateway blip must be Transient (retryable); a 404 and a 200 with
+        // no US block must both be a DefinitiveMiss (safe to negcache).
+        let stub = stub::StubServer::start(|path| {
+            if path.contains("/movie/1/") {
+                (502, "{}".to_string())
+            } else if path.contains("/movie/2/") {
+                (404, "{}".to_string())
+            } else {
+                // 200 with an empty results array → no US certification.
+                (200, r#"{"results":[]}"#.to_string())
+            }
+        });
+        let c = TmdbClient::with_base(Some("k".into()), stub.base.clone());
+        assert_eq!(c.movie_content_rating(1).await, TmdbFetch::Transient);
+        assert_eq!(c.movie_content_rating(2).await, TmdbFetch::DefinitiveMiss);
+        assert_eq!(c.movie_content_rating(3).await, TmdbFetch::DefinitiveMiss);
+    }
+
+    #[tokio::test]
+    async fn keyless_content_rating_is_transient_not_definitive() {
+        // A keyless deploy window must NOT stamp the negcache (Transient), so a
+        // real rating is not permanently suppressed once the key returns.
+        let c = TmdbClient::new(None);
+        assert_eq!(c.movie_content_rating(550).await, TmdbFetch::Transient);
+    }
+
+    #[tokio::test]
+    async fn episode_502_is_transient_404_is_definitive() {
+        let stub = stub::StubServer::start(|path| {
+            if path.contains("/episode/1") {
+                (502, "{}".to_string())
+            } else {
+                (404, "{}".to_string())
+            }
+        });
+        let c = TmdbClient::with_base(Some("k".into()), stub.base.clone());
+        assert_eq!(c.episode(100, 1, 1).await, TmdbFetch::Transient);
+        assert_eq!(c.episode(100, 1, 2).await, TmdbFetch::DefinitiveMiss);
+        // S0E0 short-circuits to a definitive miss with no request at all.
+        assert_eq!(c.episode(100, 0, 0).await, TmdbFetch::DefinitiveMiss);
+    }
+}
+
+/// Test-only in-process HTTP stub for the TMDB API base, shared by the tmdb and
+/// scanner test modules. Records every request path so a test can assert an
+/// exact call count (the steady-state "zero requests on the second pass" gate)
+/// and returns a caller-chosen `(status, body)` per path (the transient-vs-
+/// definitive negcache gates). Never compiled into release.
+#[cfg(test)]
+pub(crate) mod stub {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+
+    pub(crate) struct StubServer {
+        /// `http://127.0.0.1:PORT/3` — hand straight to [`super::TmdbClient::with_base`].
+        pub base: String,
+        hits: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl StubServer {
+        /// Spawn a blocking HTTP/1.1 stub on an ephemeral loopback port. `handler`
+        /// maps a request path (with query) to `(status, json_body)`. Each
+        /// response carries `Connection: close` so reqwest opens a fresh
+        /// connection per request, keeping the recorded path list an accurate
+        /// call count. The accept thread is detached; tests are short-lived so it
+        /// dies with the process.
+        pub fn start<F>(handler: F) -> Self
+        where
+            F: Fn(&str) -> (u16, String) + Send + 'static,
+        {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback stub");
+            let addr = listener.local_addr().expect("stub local_addr");
+            let hits: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+            let hits_thread = Arc::clone(&hits);
+            std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    let Ok(mut stream) = stream else { continue };
+                    let mut buf = [0u8; 8192];
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n]);
+                    let path = req
+                        .lines()
+                        .next()
+                        .and_then(|line| line.split_whitespace().nth(1))
+                        .unwrap_or("/")
+                        .to_string();
+                    let (status, body) = handler(&path);
+                    hits_thread.lock().unwrap().push(path);
+                    let resp = format!(
+                        "HTTP/1.1 {status} STATUS\r\nContent-Type: application/json\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(resp.as_bytes());
+                    let _ = stream.flush();
+                }
+            });
+            StubServer {
+                base: format!("http://{addr}/3"),
+                hits,
+            }
+        }
+
+        /// Every request path recorded so far.
+        pub fn hits(&self) -> Vec<String> {
+            self.hits.lock().unwrap().clone()
+        }
+
+        /// How many recorded request paths contain `needle`.
+        pub fn hit_count_containing(&self, needle: &str) -> usize {
+            self.hits()
+                .iter()
+                .filter(|p| p.contains(needle))
+                .count()
+        }
+
+        /// Total recorded requests.
+        pub fn total_hits(&self) -> usize {
+            self.hits().len()
+        }
     }
 }
