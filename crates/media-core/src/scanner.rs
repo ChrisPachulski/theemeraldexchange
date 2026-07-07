@@ -60,6 +60,16 @@ pub struct ScanReport {
     /// [`REFUSED_CORRUPT_PATHS_CAP`], so an operator can see exactly which files
     /// to rename on disk and rescan rather than diffing the whole tree.
     pub refused_corrupt_paths: Vec<String>,
+    /// Files whose ffprobe failed this pass (fresh failure OR a still-cooling
+    /// prior failure). Unlike `errors` — which also aggregates walk/stat/backfill
+    /// failures — this isolates the probe-failure class so a library-health view
+    /// can name the exact files (e.g. the 11 Mandalorian/Wednesday rips) instead
+    /// of an anonymous count.
+    pub probe_failures: usize,
+    /// The actual paths behind `probe_failures`, capped at
+    /// [`PROBE_FAILED_PATHS_CAP`], each with its `ProbeError` variant so the root
+    /// cause (timeout vs non-zero exit) is diagnosable from `GET /scan/status`.
+    pub probe_failed_paths: Vec<String>,
     pub errors: usize,
 }
 
@@ -68,6 +78,23 @@ pub struct ScanReport {
 /// bounded so a pathological tree of reversed names can't bloat the scan-status
 /// row (mirrors the "warn on the first escapee only" restraint in the walk).
 const REFUSED_CORRUPT_PATHS_CAP: usize = 100;
+
+/// Upper bound on how many probe-failed paths [`ScanReport`] carries, mirroring
+/// [`REFUSED_CORRUPT_PATHS_CAP`]. The `probe_failures` count stays exact; the
+/// sampled path list is bounded so a pathological tree can't bloat scan-status.
+const PROBE_FAILED_PATHS_CAP: usize = 100;
+
+/// How long a failed ffprobe is cached before the file may be re-probed. Sized
+/// in days like the TMDB episode negcache: a corrupt/truncated container is
+/// effectively permanent (it never self-heals), so a long cooldown eliminates
+/// the per-scan re-probe storm while a rare repair still recovers on a monthly
+/// cadence — and a re-encode (new size/mtime) bypasses the cooldown entirely.
+const PROBE_LOOKUP_COOLDOWN_DAYS: i64 = 30;
+
+/// After this many failed probes (each at least a cooldown apart) the file is
+/// treated as permanently unprobeable and skipped, bounding the worst case to
+/// ~6 monthly retries rather than forever.
+const PROBE_LOOKUP_MAX_ATTEMPTS: i64 = 6;
 
 /// One candidate video file collected by the blocking walk phase.
 struct WalkedFile {
@@ -367,15 +394,51 @@ async fn scan_once_with_probe_bin(
             }
             Ok(existing) => {
                 let is_update = existing.is_some();
+                // Probe negative cache: a file whose ffprobe recently failed with
+                // the SAME (size, mtime) is not re-probed until the cooldown —
+                // this is what stops the 11 corrupt Mandalorian/Wednesday rips
+                // from costing up to 30s each on every scan forever. A re-encoded
+                // file (changed stat) probes immediately. Surface it either way.
+                if !probe_lookup_due(db, path_str, file.size_bytes, &file.mtime, Utc::now()).await? {
+                    report.probe_failures += 1;
+                    if report.probe_failed_paths.len() < PROBE_FAILED_PATHS_CAP {
+                        report.probe_failed_paths.push(path_str.clone());
+                    }
+                    continue;
+                }
                 let probe_result = probe::ffprobe_with_bin(ffprobe_bin, &file.path).await;
                 let probed = match probe_result {
                     Ok(p) => p,
                     Err(e) => {
-                        tracing::warn!("ffprobe failed for {path_str}: {e}");
+                        // Log the ProbeError variant (Timeout vs non-zero exit +
+                        // stderr) so the root cause is diagnosable, stamp the
+                        // negcache to stop the per-scan re-probe, and surface the
+                        // path in the library-health report.
+                        tracing::warn!(
+                            target: "media_core::scanner",
+                            path = %path_str,
+                            error = %e,
+                            "ffprobe failed; caching to skip re-probe until cooldown"
+                        );
+                        record_probe_failure(
+                            db,
+                            path_str,
+                            file.size_bytes,
+                            &file.mtime,
+                            &e.to_string(),
+                            Utc::now(),
+                        )
+                        .await?;
+                        report.probe_failures += 1;
+                        if report.probe_failed_paths.len() < PROBE_FAILED_PATHS_CAP {
+                            report.probe_failed_paths.push(path_str.clone());
+                        }
                         report.errors += 1;
                         continue;
                     }
                 };
+                // Successful probe: clear any stale probe-failure negcache row.
+                clear_probe_failure(db, path_str).await?;
                 let parsed = filename::classify(file.root_kind, &file.path, &file.name);
                 match index_file(
                     db,
@@ -440,6 +503,19 @@ async fn scan_once_with_probe_bin(
                 report.errors += 1;
             }
         }
+    }
+
+    if report.probe_failures > 0 {
+        // One summary line per scan: the actionable set (with per-file
+        // ProbeError variants) also rides the ScanReport into
+        // `GET /scan/status` → `last_report`.
+        tracing::warn!(
+            probe_failures = report.probe_failures,
+            sample = ?report.probe_failed_paths,
+            "library-health: files whose ffprobe failed are excluded from the \
+             library; inspect/re-encode them on disk (a re-encode is re-probed \
+             immediately, an unchanged file after the cooldown)"
+        );
     }
 
     Ok(report)
@@ -666,6 +742,86 @@ async fn record_episode_lookup_failure(
     .bind(episode)
     .execute(&db.pool)
     .await?;
+    Ok(())
+}
+
+/// Should a file whose ffprobe previously failed be re-probed this pass? A file
+/// with no cached failure is always due. A cached failure is bypassed (re-probed
+/// now) when the on-disk `(size_bytes, mtime)` differs from what was recorded —
+/// a re-encode/repair — otherwise the cooldown/attempt-cap rules apply exactly
+/// like the TMDB episode negcache: skip until the cooldown elapses, and drop
+/// permanently past the cap.
+async fn probe_lookup_due(
+    db: &Db,
+    path: &str,
+    size_bytes: i64,
+    mtime: &str,
+    now: DateTime<Utc>,
+) -> Result<bool, AppError> {
+    let row: Option<(i64, String, i64, String)> = sqlx::query_as(
+        "SELECT size_bytes, mtime, attempts, failed_at FROM probe_failures WHERE path = ?",
+    )
+    .bind(path)
+    .fetch_optional(&db.pool)
+    .await?;
+    Ok(match row {
+        // Never failed, or the file changed since the failure (re-encode): probe.
+        None => true,
+        Some((s, m, _, _)) if s != size_bytes || m != mtime => true,
+        Some((_, _, attempts, failed_at)) => {
+            if attempts >= PROBE_LOOKUP_MAX_ATTEMPTS {
+                false
+            } else {
+                match DateTime::parse_from_rfc3339(&failed_at) {
+                    Ok(t) => {
+                        now.signed_duration_since(t.with_timezone(&Utc))
+                            >= chrono::Duration::days(PROBE_LOOKUP_COOLDOWN_DAYS)
+                    }
+                    // Corrupt timestamp: don't wedge the file as un-probeable.
+                    Err(_) => true,
+                }
+            }
+        }
+    })
+}
+
+/// Record (or update) a probe failure in the negative cache. When the file is
+/// unchanged since the last failure the attempt count bumps; when it changed
+/// (re-encode) the count resets to 1 and the new stat/`error` are stored.
+async fn record_probe_failure(
+    db: &Db,
+    path: &str,
+    size_bytes: i64,
+    mtime: &str,
+    error: &str,
+    now: DateTime<Utc>,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO probe_failures (path, size_bytes, mtime, attempts, failed_at, error) \
+         VALUES (?, ?, ?, 1, ?, ?) \
+         ON CONFLICT(path) DO UPDATE SET \
+         attempts = CASE \
+             WHEN size_bytes = excluded.size_bytes AND mtime = excluded.mtime \
+             THEN attempts + 1 ELSE 1 END, \
+         size_bytes = excluded.size_bytes, mtime = excluded.mtime, \
+         failed_at = excluded.failed_at, error = excluded.error",
+    )
+    .bind(path)
+    .bind(size_bytes)
+    .bind(mtime)
+    .bind(now.to_rfc3339())
+    .bind(error)
+    .execute(&db.pool)
+    .await?;
+    Ok(())
+}
+
+/// Clear a path's cached probe failure after a successful probe.
+async fn clear_probe_failure(db: &Db, path: &str) -> Result<(), AppError> {
+    sqlx::query("DELETE FROM probe_failures WHERE path = ?")
+        .bind(path)
+        .execute(&db.pool)
+        .await?;
     Ok(())
 }
 
@@ -3625,6 +3781,95 @@ mod tests {
         // No new files were probed/indexed on this all-unchanged pass.
         assert_eq!(report.files_added, 0);
         assert_eq!(report.files_updated, 0);
+    }
+
+    /// A stub "ffprobe" that appends one line to `counter` per invocation and
+    /// exits 1, modeling a persistently-failing (corrupt/truncated) file so the
+    /// probe negcache can be observed by counting invocations across scans.
+    #[cfg(unix)]
+    fn write_counting_failing_probe_stub(
+        dir: &std::path::Path,
+        counter: &std::path::Path,
+    ) -> std::path::PathBuf {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        let p = dir.join("ffprobe_fail_stub.sh");
+        let mut f = std::fs::File::create(&p).unwrap();
+        writeln!(
+            f,
+            "#!/bin/sh\nprintf 'x\\n' >> \"{}\"\nexit 1",
+            counter.display()
+        )
+        .unwrap();
+        f.sync_all().unwrap();
+        drop(f);
+        let mut perms = std::fs::metadata(&p).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&p, perms).unwrap();
+        p
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn probe_failure_is_negcached_surfaced_and_reprobed_on_reencode() {
+        // Finding #84: a file whose ffprobe fails must (a) be surfaced by path in
+        // the ScanReport, (b) NOT be re-probed on the next unchanged scan (the
+        // per-scan storm on the 11 corrupt rips), and (c) be re-probed once it is
+        // re-encoded (changed size/mtime).
+        let lib = tempdir().unwrap();
+        let stubdir = tempdir().unwrap();
+        let counter = stubdir.path().join("invocations");
+        let video = lib.path().join("Corrupt Movie (2020).mkv");
+        std::fs::write(&video, b"bad").unwrap();
+        let stub = write_counting_failing_probe_stub(stubdir.path(), &counter);
+        let stub_bin = stub.to_str().unwrap();
+        let db = Db::connect_memory().await.unwrap();
+        let roots = vec![LibraryRoot {
+            path: lib.path().to_path_buf(),
+            kind: RootKind::Movies,
+        }];
+        let invocations = |c: &std::path::Path| -> usize {
+            std::fs::read_to_string(c).map(|s| s.lines().count()).unwrap_or(0)
+        };
+
+        // (1) First scan: probe fails, the path is surfaced, stub invoked once.
+        let r1 = scan_once_with_probe_bin(&db, &roots, &no_tmdb(), stub_bin)
+            .await
+            .unwrap();
+        assert_eq!(r1.probe_failures, 1, "probe failure must be counted");
+        assert!(
+            r1.probe_failed_paths
+                .iter()
+                .any(|p| p.ends_with("Corrupt Movie (2020).mkv")),
+            "the failing path must be surfaced, got {:?}",
+            r1.probe_failed_paths
+        );
+        assert_eq!(invocations(&counter), 1, "first scan probes once");
+
+        // (2) Second scan, file unchanged: NOT re-probed, but still surfaced.
+        let r2 = scan_once_with_probe_bin(&db, &roots, &no_tmdb(), stub_bin)
+            .await
+            .unwrap();
+        assert_eq!(
+            invocations(&counter),
+            1,
+            "an unchanged failing file must NOT be re-probed within the cooldown"
+        );
+        assert_eq!(
+            r2.probe_failures, 1,
+            "the file stays surfaced from the negcache even without a re-probe"
+        );
+
+        // (3) Re-encode (size changes) → probed again immediately.
+        std::fs::write(&video, b"a longer set of different bytes now").unwrap();
+        scan_once_with_probe_bin(&db, &roots, &no_tmdb(), stub_bin)
+            .await
+            .unwrap();
+        assert_eq!(
+            invocations(&counter),
+            2,
+            "a re-encoded file (new size/mtime) must be re-probed immediately"
+        );
     }
 
     #[tokio::test]
