@@ -96,11 +96,26 @@ describe('queryClient session-expiry dispatch', () => {
     expect(mod.SESSION_EXPIRED_EVENT).toBe('exchange:session-expired')
   })
 
-  it('dispatches for ApiError 403', async () => {
+  it('does NOT dispatch for a forbidden ApiError 403 (parental section_blocked, admin_only)', async () => {
+    // A 403 means the cookie is valid but the section/action is forbidden.
+    // Forcing a logout here dumps a signed-in family member to the login
+    // walkthrough the moment they touch a policy-blocked tab (e.g. Downloads),
+    // and re-login loops straight back into it. Must surface in place, never
+    // clear the session.
     const { mod, ApiError } = await freshModule()
     addListener(win, mod.SESSION_EXPIRED_EVENT)
 
-    fireQueryError(mod, new ApiError(403, 'forbidden'))
+    fireQueryError(mod, new ApiError(403, 'section blocked', 'section_blocked'))
+    fireQueryError(mod, new ApiError(403, 'admin only', 'forbidden'))
+
+    expect(listener).not.toHaveBeenCalled()
+  })
+
+  it('DOES dispatch for a 403 explicitly coded unauthenticated (expired session surfaced as 403)', async () => {
+    const { mod, ApiError } = await freshModule()
+    addListener(win, mod.SESSION_EXPIRED_EVENT)
+
+    fireQueryError(mod, new ApiError(403, 'session expired', 'unauthenticated'))
 
     expect(listener).toHaveBeenCalledTimes(1)
   })

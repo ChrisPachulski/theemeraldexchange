@@ -130,3 +130,18 @@ export function errorStatus(e: unknown): number | undefined {
   }
   return undefined
 }
+
+/**
+ * Duck-typed backend error code (the `error` field of the JSON envelope, e.g.
+ * 'unauthenticated', 'section_blocked', 'forbidden'), or undefined when the
+ * value carries none. Kept parallel to errorStatus so cross-cutting consumers
+ * can distinguish an expired session ('unauthenticated') from a merely
+ * forbidden-but-authenticated 403 without depending on `instanceof ApiError`.
+ */
+export function errorCode(e: unknown): string | undefined {
+  if (e && typeof e === 'object' && 'code' in e) {
+    const c = (e as { code?: unknown }).code
+    if (typeof c === 'string' && c.length > 0) return c
+  }
+  return undefined
+}
