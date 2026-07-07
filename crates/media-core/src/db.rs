@@ -57,6 +57,11 @@ pub const MIGRATIONS: &[(i64, &str, &str)] = &[
         "0010_content_rating",
         include_str!("../migrations/0010_content_rating.sql"),
     ),
+    (
+        11,
+        "0011_movie_rating_negcache",
+        include_str!("../migrations/0011_movie_rating_negcache.sql"),
+    ),
 ];
 
 #[derive(Clone)]

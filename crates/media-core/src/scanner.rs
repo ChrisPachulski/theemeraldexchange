@@ -838,15 +838,53 @@ async fn backfill_metadata(
 
     match parsed {
         ParsedName::Movie { title, year } => {
-            // Already enriched? A non-NULL tmdb_id means TMDB already resolved
-            // this film; skip the network round-trip entirely.
-            let has_meta: Option<bool> =
-                sqlx::query_scalar("SELECT tmdb_id IS NOT NULL FROM movies WHERE file_id = ?")
-                    .bind(file_id)
-                    .fetch_optional(&db.pool)
-                    .await?;
-            if matches!(has_meta, Some(true)) {
-                return Ok(false);
+            // Three states for an unchanged file's movie row:
+            //   unmatched            → full TMDB match (the original backfill),
+            //   matched + rated      → fully enriched, zero network work,
+            //   matched + UNRATED    → rating-only backfill. Rows matched before
+            //     migration 0010 never carried content_rating, and the old
+            //     `tmdb_id IS NOT NULL` short-circuit left them NULL forever.
+            //     Gated by the 0011 negative cache (same cooldown/cap rules as
+            //     the 0009 episode negcache) so titles with no US certification
+            //     aren't re-probed every ~hourly scan.
+            let row: Option<(Option<i64>, Option<String>, i64, Option<String>)> = sqlx::query_as(
+                "SELECT tmdb_id, content_rating, rating_lookup_attempts, rating_lookup_failed_at \
+                 FROM movies WHERE file_id = ?",
+            )
+            .bind(file_id)
+            .fetch_optional(&db.pool)
+            .await?;
+            if let Some((Some(tmdb_id), rating, attempts, failed_at)) = row {
+                if rating.is_some() {
+                    return Ok(false);
+                }
+                if !should_attempt_episode_lookup(false, attempts, failed_at.as_deref(), Utc::now())
+                {
+                    return Ok(false);
+                }
+                return match tmdb.movie_content_rating(tmdb_id).await {
+                    Some(r) => {
+                        sqlx::query(
+                            "UPDATE movies SET content_rating = ? WHERE file_id = ?",
+                        )
+                        .bind(&r)
+                        .bind(file_id)
+                        .execute(&db.pool)
+                        .await?;
+                        Ok(true)
+                    }
+                    None => {
+                        sqlx::query(
+                            "UPDATE movies SET rating_lookup_attempts = rating_lookup_attempts + 1, \
+                             rating_lookup_failed_at = ? WHERE file_id = ?",
+                        )
+                        .bind(now_rfc3339())
+                        .bind(file_id)
+                        .execute(&db.pool)
+                        .await?;
+                        Ok(false)
+                    }
+                };
             }
             let m = tmdb.match_movie(title, *year).await;
             if m.is_none() {
@@ -2934,6 +2972,95 @@ mod tests {
         assert!(!did, "no key → nothing backfilled");
         // Row untouched.
         assert_eq!(count(&db, "movies").await, 1);
+    }
+
+    #[tokio::test]
+    async fn backfill_rating_negcache_stamps_and_cools_down() {
+        // A matched-but-unrated movie (pre-0010 row) attempts a rating-only
+        // backfill; a keyless client yields no rating, which must stamp the
+        // 0011 negative cache — and the very next scan (inside the cooldown)
+        // must NOT re-attempt (attempts stays at 1).
+        let db = Db::connect_memory().await.unwrap();
+        let file_id = seed_media_file(&db, "/lib/Heat (1995).mkv").await;
+        let matched = TmdbMatch {
+            tmdb_id: 949,
+            title: "Heat".into(),
+            year: Some(1995),
+            overview: None,
+            poster_path: None,
+            imdb_id: None,
+            tvdb_id: None,
+            content_rating: None,
+        };
+        upsert_movie(&db, "Heat", Some(1995), file_id, "t", Some(&matched))
+            .await
+            .unwrap();
+        let parsed = ParsedName::Movie {
+            title: "Heat".into(),
+            year: Some(1995),
+        };
+        let did = backfill_metadata(&db, "/lib/Heat (1995).mkv", &parsed, &no_tmdb())
+            .await
+            .unwrap();
+        assert!(!did, "keyless rating fetch backfills nothing");
+        let (attempts, failed_at): (i64, Option<String>) = sqlx::query_as(
+            "SELECT rating_lookup_attempts, rating_lookup_failed_at FROM movies WHERE file_id = ?",
+        )
+        .bind(file_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(attempts, 1, "failed rating lookup stamps the negcache");
+        assert!(failed_at.is_some());
+
+        // Second pass inside the cooldown: skipped, attempts unchanged.
+        let did2 = backfill_metadata(&db, "/lib/Heat (1995).mkv", &parsed, &no_tmdb())
+            .await
+            .unwrap();
+        assert!(!did2);
+        let attempts2: i64 =
+            sqlx::query_scalar("SELECT rating_lookup_attempts FROM movies WHERE file_id = ?")
+                .bind(file_id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(attempts2, 1, "cooldown must suppress the re-probe");
+    }
+
+    #[tokio::test]
+    async fn backfill_skips_matched_and_rated_movie_entirely() {
+        // Fully-enriched row (tmdb_id + content_rating): zero work, zero
+        // negcache churn — the common steady-state must stay free.
+        let db = Db::connect_memory().await.unwrap();
+        let file_id = seed_media_file(&db, "/lib/Heat (1995).mkv").await;
+        let matched = TmdbMatch {
+            tmdb_id: 949,
+            title: "Heat".into(),
+            year: Some(1995),
+            overview: None,
+            poster_path: None,
+            imdb_id: None,
+            tvdb_id: None,
+            content_rating: Some("R".into()),
+        };
+        upsert_movie(&db, "Heat", Some(1995), file_id, "t", Some(&matched))
+            .await
+            .unwrap();
+        let parsed = ParsedName::Movie {
+            title: "Heat".into(),
+            year: Some(1995),
+        };
+        let did = backfill_metadata(&db, "/lib/Heat (1995).mkv", &parsed, &no_tmdb())
+            .await
+            .unwrap();
+        assert!(!did);
+        let attempts: i64 =
+            sqlx::query_scalar("SELECT rating_lookup_attempts FROM movies WHERE file_id = ?")
+                .bind(file_id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(attempts, 0, "rated row must not touch the negcache");
     }
 
     #[tokio::test]

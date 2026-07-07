@@ -483,6 +483,12 @@ impl TmdbClient {
     /// `None` on any failure so enrichment stays best-effort — a missing rating
     /// never fails a scan, it just leaves the column NULL (client treats it as
     /// unrated). `kind` is "movie" or "tv" to mirror [`Self::external_ids`].
+    /// Rating-only fetch for an already-matched movie (the backfill path re-
+    /// enriches pre-0010 rows without a full re-match round trip).
+    pub(crate) async fn movie_content_rating(&self, id: i64) -> Option<String> {
+        self.content_rating("movie", id).await
+    }
+
     async fn content_rating(&self, kind: &str, id: i64) -> Option<String> {
         let api_key = self.api_key.as_deref()?;
         let endpoint = if kind == "movie" {
