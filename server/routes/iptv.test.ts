@@ -1001,6 +1001,95 @@ describe('series stream grant', () => {
   })
 })
 
+// The whole IPTV catalog (VOD + Series) is surfaced under the client's Live
+// tab, so the vod and series grants share the `live` section gate with the
+// live/catchup grants: a member whose policy denies Live TV must not be able to
+// mint a VOD or series token either, even with no rating cap set
+// (capBlocksUnrated is a no-op when maxContentRating is null, so the section
+// gate is the only thing that stops them). Mirrors the catchup section-policy
+// tests above.
+describe('vod + series section policy', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+  let sectionPolicyDir: string
+  let sectionPolicyPath: string
+  beforeEach(async () => {
+    sectionPolicyDir = await fsp.mkdtemp(join(tmpdir(), 'iptv-vodseries-policy-'))
+    sectionPolicyPath = join(sectionPolicyDir, 'user-policies.json')
+    _setUserPoliciesPathForTests(sectionPolicyPath)
+  })
+  afterEach(async () => {
+    _setUserPoliciesPathForTests(env.userPoliciesPath)
+    authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
+    await fsp.rm(sectionPolicyDir, { recursive: true, force: true })
+  })
+
+  const denyLive = async (sub: string) => {
+    await fsp.writeFile(
+      sectionPolicyPath,
+      JSON.stringify({
+        [sub]: {
+          maxContentRating: null,
+          allowedSections: { live: false, downloads: true, arr: true },
+          kid: true,
+        },
+      }),
+    )
+    _setUserPoliciesPathForTests(sectionPolicyPath)
+  }
+  const allowLive = async (sub: string) => {
+    await fsp.writeFile(
+      sectionPolicyPath,
+      JSON.stringify({
+        [sub]: {
+          maxContentRating: null,
+          allowedSections: { live: true, downloads: false, arr: false },
+          kid: false,
+        },
+      }),
+    )
+    _setUserPoliciesPathForTests(sectionPolicyPath)
+  }
+
+  it('403 section_blocked on vod grant for a non-admin whose policy denies live', async () => {
+    authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+    await denyLive('plex:99')
+    const res = await app.request('/api/iptv/stream/vod/20/grant', { method: 'POST' })
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: 'section_blocked' })
+  })
+
+  it('403 section_blocked on series grant for a non-admin whose policy denies live', async () => {
+    authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+    await denyLive('plex:99')
+    const res = await app.request('/api/iptv/stream/series/ep-1/grant', { method: 'POST' })
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: 'section_blocked' })
+  })
+
+  it('allows the vod grant for a non-admin whose policy permits live', async () => {
+    authState.session = { sub: 'plex:99', username: 'Teen', role: 'user' }
+    await allowLive('plex:99')
+    const res = await app.request('/api/iptv/stream/vod/20/grant', { method: 'POST' })
+    expect(res.status).toBe(200)
+  })
+
+  it('allows the series grant for a non-admin whose policy permits live', async () => {
+    authState.session = { sub: 'plex:99', username: 'Teen', role: 'user' }
+    await allowLive('plex:99')
+    const res = await app.request('/api/iptv/stream/series/ep-1/grant', { method: 'POST' })
+    expect(res.status).toBe(200)
+  })
+
+  it('admin is never blocked on vod/series even under a live:false policy', async () => {
+    authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
+    await denyLive('plex:42')
+    const vodRes = await app.request('/api/iptv/stream/vod/20/grant', { method: 'POST' })
+    expect(vodRes.status).toBe(200)
+    const seriesRes = await app.request('/api/iptv/stream/series/ep-1/grant', { method: 'POST' })
+    expect(seriesRes.status).toBe(200)
+  })
+})
+
 describe('sessionTitle() series branches', () => {
   beforeAll(() => {
     // Episode whose own title is null → resolved title should be just the
