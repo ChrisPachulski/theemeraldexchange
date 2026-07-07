@@ -220,6 +220,13 @@ export interface EpgSearchResult {
 // match count so the client can show "showing N of M".
 const SEARCH_LIMIT_MAX = 500
 
+/** Escape LIKE metacharacters so a user term is matched LITERALLY: a `%`, `_`,
+ *  or `\` typed in the search box must not act as a wildcard/escape. Pairs with
+ *  `ESCAPE '\'` on the LIKE clause. */
+function escapeLike(term: string): string {
+  return term.replace(/[\\%_]/g, (ch) => `\\${ch}`)
+}
+
 /**
  * Server-side programme search over the whole synced EPG store — the endpoint
  * that replaces the client's warm-window-only `EpgSearch.programHits` seam.
@@ -235,44 +242,47 @@ export function epgSearch(
   toIso: string,
   opts: EpgSearchOptions,
 ): EpgSearchResult {
-  const needle = opts.q.trim().toLowerCase()
-  if (!needle) return { hits: [], total: 0 }
+  const term = opts.q.trim()
+  if (!term) return { hits: [], total: 0 }
   const limit = Math.min(Math.max(opts.limit ?? 100, 1), SEARCH_LIMIT_MAX)
 
-  // All programmes overlapping the window, grouped by EPG channel_id using the
-  // grid's exact projection + ordering, so `programIndex` lines up with the
-  // client's `row.programmes`. Both sides are stored lowercase (0005), so this
-  // exact-id grouping joins correctly.
-  const progRows = db.raw.prepare(`
-    SELECT channel_id, start_utc, stop_utc, title, description
-    FROM epg_programs
-    WHERE start_utc < ? AND stop_utc > ?
-    ORDER BY channel_id, start_utc ASC
-  `).all(toIso, fromIso) as EpgProgramme[]
+  // Push the case-insensitive "contains" into SQLite rather than materializing
+  // EVERY window-overlapping programme (hundreds of thousands of rows) into JS
+  // and substring-scanning there — a synchronous better-sqlite3 scan that blocks
+  // the event loop serving live segments. A window function still numbers each
+  // programme by its position in its channel's window-ordered list (so
+  // `programIndex` lines up with the grid's `row.programmes`), but the outer
+  // filter returns ONLY the matched rows, so JS materializes the match set, not
+  // the whole window. LIKE is ASCII case-insensitive by default (mirrors the
+  // client's localizedCaseInsensitiveContains for ASCII terms); metacharacters
+  // in the term are escaped so a literal % / _ can't widen the match. Both id
+  // sides are stored lowercase (0005), so the id grouping below still joins.
+  const likeArg = `%${escapeLike(term)}%`
+  const matchedRows = db.raw.prepare(`
+    SELECT channel_id, start_utc, stop_utc, title, description, program_index
+    FROM (
+      SELECT channel_id, start_utc, stop_utc, title, description,
+        ROW_NUMBER() OVER (PARTITION BY channel_id ORDER BY start_utc ASC) - 1 AS program_index,
+        (COALESCE(title, '') LIKE @like ESCAPE '\\'
+          OR COALESCE(description, '') LIKE @like ESCAPE '\\') AS is_match
+      FROM epg_programs
+      WHERE start_utc < @to AND stop_utc > @from
+    )
+    WHERE is_match
+    ORDER BY channel_id, program_index
+  `).all({ like: likeArg, to: toIso, from: fromIso }) as Array<EpgProgramme & { program_index: number }>
 
-  const byChannel = new Map<string, EpgProgramme[]>()
-  for (const row of progRows) {
-    const arr = byChannel.get(row.channel_id)
-    if (arr) arr.push(row)
-    else byChannel.set(row.channel_id, [row])
-  }
-
-  // Case-insensitive contains over title/description (mirrors the client's
-  // localizedCaseInsensitiveContains), carrying each match's index within its
-  // channel's window-ordered programme list.
   const matchesByChannel = new Map<string, Array<{ programme: EpgProgramme; programIndex: number }>>()
   const matchedIds: string[] = []
-  for (const [channelId, programmes] of byChannel) {
-    const matches: Array<{ programme: EpgProgramme; programIndex: number }> = []
-    programmes.forEach((programme, programIndex) => {
-      const titleHit = programme.title != null && programme.title.toLowerCase().includes(needle)
-      const descHit = programme.description != null && programme.description.toLowerCase().includes(needle)
-      if (titleHit || descHit) matches.push({ programme, programIndex })
-    })
-    if (matches.length) {
-      matchesByChannel.set(channelId, matches)
-      matchedIds.push(channelId)
+  for (const row of matchedRows) {
+    const { program_index, ...programme } = row
+    let matches = matchesByChannel.get(row.channel_id)
+    if (!matches) {
+      matches = []
+      matchesByChannel.set(row.channel_id, matches)
+      matchedIds.push(row.channel_id)
     }
+    matches.push({ programme, programIndex: program_index })
   }
   if (matchedIds.length === 0) return { hits: [], total: 0 }
 
