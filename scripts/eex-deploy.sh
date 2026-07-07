@@ -86,17 +86,47 @@ if [ -n "$SERVICES_OVERRIDE" ]; then
   SERVICES=($SERVICES_OVERRIDE)
 elif [ -n "$FROM" ]; then
   CHANGED="$(git -C "$REPO" diff --name-only "$FROM..$TO_SHA" 2>/dev/null)"
+  # emerald-contracts is a workspace-shared crate: the backend (napi .node),
+  # recommender (pyo3 wheel), media-core and transcoder ALL compile it into
+  # their images, so a change to it alters the wire contract every service
+  # emits/validates. Rebuild ALL four — rebuilding only the backend leaves the
+  # sidecars serving the OLD schema (the project's known backend↔sidecar wire
+  # drift bug class).
+  printf '%s\n' "$CHANGED" | grep -qE '^crates/emerald-contracts([/-]|$)' && SERVICES+=(backend recommender media-core transcoder)
   printf '%s\n' "$CHANGED" | grep -q '^crates/transcoder/'  && SERVICES+=(transcoder)
   printf '%s\n' "$CHANGED" | grep -q '^crates/media-core/'  && SERVICES+=(media-core)
   printf '%s\n' "$CHANGED" | grep -q '^recommender/'        && SERVICES+=(recommender)
-  printf '%s\n' "$CHANGED" | grep -qE '^(server/|package(-lock)?\.json|Dockerfile|crates/emerald-contracts)' && SERVICES+=(backend)
+  # tsconfig.json and .dockerignore are compiled into / govern the backend
+  # image build context (Dockerfile COPYs tsconfig.json), so a change to either
+  # must rebuild the backend or it ships stale.
+  printf '%s\n' "$CHANGED" | grep -qE '^(server/|package(-lock)?\.json|Dockerfile|tsconfig\.json|\.dockerignore)' && SERVICES+=(backend)
+  # A docker-compose.yml change cannot ship through this path: it only rebuilds
+  # + recreates individual services against whatever compose file the last
+  # deploy-nas.sh run left on the NAS, and it takes no rollback snapshot of the
+  # compose/env (deploy-nas.sh does). A compose-touching diff must go through
+  # deploy-nas.sh, or a new env passthrough / profile change silently never
+  # reaches any container while this reports "nothing to deploy" and exits 0.
+  # (Checked BEFORE the array is dereferenced below, and off CHANGED not
+  # SERVICES, so it fires regardless of what else the diff touched.)
+  if printf '%s\n' "$CHANGED" | grep -q '^docker-compose\.yml$'; then
+    fail "diff touches docker-compose.yml — this path cannot safely apply a compose/profile change (no rollback snapshot); run scripts/deploy-nas.sh instead"
+    exit 4
+  fi
+  # De-dupe: a diff touching emerald-contracts AND a sibling crate would list a
+  # service twice, which would double-build it. `${arr[*]:-}` keeps this safe
+  # under `set -u` when the array is still empty (bash treats an empty declared
+  # array's `[@]` as unbound).
+  if [ -n "${SERVICES[*]:-}" ]; then
+    # shellcheck disable=SC2207
+    SERVICES=($(printf '%s\n' "${SERVICES[@]}" | awk '!seen[$0]++'))
+  fi
   # NOTE: the SPA frontend deploys via Netlify on push to main — never from here.
 else
   note "no --from and no recorded last-deployed sha → cannot scope a diff; listing nothing."
 fi
 
 say "PLAN  to=$TO ($TO_SHA)  from=${FROM:-<none>}  arm=$ARM"
-if [ "${#SERVICES[@]}" -eq 0 ]; then say "No compiled services changed — nothing to deploy (frontend is Netlify)."; exit 0; fi
+if [ -z "${SERVICES[*]:-}" ]; then say "No compiled services changed — nothing to deploy (frontend is Netlify)."; exit 0; fi
 note "services: ${SERVICES[*]}"
 
 # ── 2. Guard: dry-run, rate limit, box health ────────────────────────────────
@@ -131,7 +161,14 @@ for svc in "${SERVICES[@]}"; do
 done
 
 say "SHIP source @ $TO_SHA → NAS appdata"
-git -C "$REPO" archive "$TO_SHA" crates server recommender Cargo.lock Cargo.toml package.json package-lock.json Dockerfile \
+# docker-compose.yml, tsconfig.json and .dockerignore are part of the build
+# context / recreate config but were previously omitted, so a service was
+# rebuilt+recreated against whatever stale copy the last deploy-nas.sh left on
+# the NAS (partial-payload drift). Ship them alongside the sources so the
+# recreate below always runs against the compose + tsconfig matching this
+# commit. (A diff that *changes* docker-compose.yml is still refused above —
+# applying a compose/profile change needs deploy-nas.sh's snapshot+rollback.)
+git -C "$REPO" archive "$TO_SHA" crates server recommender Cargo.lock Cargo.toml package.json package-lock.json Dockerfile docker-compose.yml tsconfig.json .dockerignore \
   | nas "tar -x -C '$APPDATA'" || { fail "source ship failed"; exit 2; }
 
 # Stamp the release into the NAS-side .env so compose interpolates the
