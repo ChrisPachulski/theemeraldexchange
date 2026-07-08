@@ -53,9 +53,49 @@ DEFAULTS: dict[str, float | int | str] = {
     "cast_weight": 0.7,
     "crew_weight": 0.5,
     "cast_topn": 10,                 # top-billed cast only (order_idx < cast_topn)
+    "kids_genre_cap": 0.35,          # max running share of kids-genre picks (see _cap_kids_share)
 }
 
 KEY_CREW_JOBS = ("Director", "Writer", "Screenplay", "Story", "Creator", "Author", "Novel")
+
+# TMDB genre ids for kids/animated content. A shared household profile pools a
+# preschooler's taste with the adults', and the catalog's animated cluster is
+# dense, so max-sim ranking collapses the strip to cartoons (observed: pool 80%
+# kids, output 90% — off a library that's only 32% kids). The running cap below
+# keeps every prefix of the returned strip — including the ~8 cards the UI
+# actually shows — under kids_genre_cap, so adult titles surface too.
+KIDS_GENRE_IDS = frozenset({16, 10751, 10762})  # Animation, Family, Kids
+
+
+def _cap_kids_share(order: list[int], candidates: list, n: int, cap: float) -> list[int]:
+    """Pick up to ``n`` candidate indices from ``order`` (already best-first),
+    keeping the RUNNING kids-genre share at or below ``cap`` at every prefix.
+
+    A plain total cap would let the highest-scored kids fill the head of the
+    list (so the ~8 cards the strip shows stay all-cartoon while adult titles
+    sit at rank 30+). Enforcing the ratio incrementally instead interleaves the
+    genres: a kid is admitted only while ``kids+1 <= cap*(len+1)``, otherwise
+    it's deferred. Deferred kids backfill the tail if non-kids run out, so the
+    strip is never shortened — an over-capped cartoon beats an empty slot.
+    """
+    if cap >= 1.0:
+        return [int(i) for i in order[:n]]
+    chosen: list[int] = []
+    deferred: list[int] = []
+    kids = 0
+    for raw in order:
+        i = int(raw)
+        is_kid = bool(KIDS_GENRE_IDS.intersection(candidates[i].title.genre_ids))
+        if is_kid and (kids + 1) > cap * (len(chosen) + 1):
+            deferred.append(i)
+            continue
+        chosen.append(i)
+        kids += is_kid
+        if len(chosen) >= n:
+            return chosen
+    if len(chosen) < n:
+        chosen.extend(deferred[: n - len(chosen)])
+    return chosen
 
 # Global IDF over the catalog, cached per (kind, which, cast_topn). df is the
 # number of titles a person appears in (top-billed cast / key crew). cast_topn
@@ -231,23 +271,28 @@ def score(ctx: UserContext, conn: sqlite3.Connection, *, n: int, params: dict) -
         dtype=np.float32,
     )
 
-    order = np.argsort(-combined)
+    order = np.argsort(-combined).tolist()
+    kids_cap = float(p["kids_genre_cap"])
+    chosen = _cap_kids_share(order, batch.candidates, n, kids_cap)
     items: list[ScoredItem] = []
-    for idx in order[:n]:
-        cand = batch.candidates[int(idx)]
-        fsim = float(fused_score[int(idx)])
+    kids_returned = 0
+    for idx in chosen:
+        cand = batch.candidates[idx]
+        fsim = float(fused_score[idx])
         provenance = "personalized" if fsim >= tau else "discover"
         reason = personalized_reason(cand, []) if provenance == "personalized" else discover_reason(cand)
+        kids_returned += bool(KIDS_GENRE_IDS.intersection(cand.title.genre_ids))
         items.append(
             ScoredItem(
                 tmdb_id=cand.title.tmdb_id, title=cand.title.title, year=cand.title.year,
                 poster_path=cand.title.poster_path, overview=cand.title.overview,
-                score=float(combined[int(idx)]), provenance=provenance, reason=reason,
+                score=float(combined[idx]), provenance=provenance, reason=reason,
             )
         )
 
     return RecipeResult(
         items=items,
         diag={"path": "fused", **batch.diag, "lib": len(lib_ids),
-              "weights": {"content": w_content, "cast": w_cast, "crew": w_crew}, "tau": tau},
+              "weights": {"content": w_content, "cast": w_cast, "crew": w_crew}, "tau": tau,
+              "kids_cap": kids_cap, "kids_returned": kids_returned, "returned": len(items)},
     )

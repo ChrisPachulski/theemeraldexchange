@@ -39,6 +39,7 @@ MODEL_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
     "popularity_weight": (0.0, 5.0),
     "personalized_threshold": (-1.0, 1.0),
     "mmr_lambda": (0.0, 1.0),
+    "kids_genre_cap": (0.0, 1.0),
 }
 
 

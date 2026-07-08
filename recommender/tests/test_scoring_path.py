@@ -325,6 +325,48 @@ def test_bounded_exclusions_keeps_everything_when_it_already_fits() -> None:
     assert bounded_exclusions(user, pool_size=50) == {1, 2, 3, 4, 5, 6, 7, 8}
 
 
+def _genre_cand(genre_ids):
+    from types import SimpleNamespace
+    return SimpleNamespace(title=SimpleNamespace(genre_ids=tuple(genre_ids)))
+
+
+def test_cap_kids_share_interleaves_so_every_prefix_respects_cap() -> None:
+    # 10 candidates, best-first, ALL kids-genre except indices 3, 7 (adult).
+    # A total-only cap would put the top kids first; the running cap must lead
+    # with the adult titles so the head of the strip isn't all cartoons.
+    from app.recipes.fused import _cap_kids_share
+    KID = (16,)
+    ADULT = (18,)
+    cands = [_genre_cand(ADULT if i in (3, 7) else KID) for i in range(10)]
+    order = list(range(10))  # already score-desc
+
+    chosen = _cap_kids_share(order, cands, n=4, cap=0.5)
+    # cap 0.5 over 4 slots => at most 2 kids; the two adults (3,7) must be pulled
+    # up ahead of the deferred kids so no prefix exceeds the ratio.
+    kids = [i for i in chosen if i not in (3, 7)]
+    assert len(chosen) == 4
+    assert len(kids) <= 2, "running cap exceeded"
+    assert 3 in chosen and 7 in chosen, "adult titles must be promoted into the strip"
+    # First card must be an adult title (a kid at pos 0 would be 1 > 0.5*1).
+    assert chosen[0] in (3, 7)
+
+
+def test_cap_kids_share_backfills_when_non_kids_exhausted() -> None:
+    # Pool is ALL kids: the cap can't be met, but the strip must NOT be short —
+    # deferred kids backfill to fill n.
+    from app.recipes.fused import _cap_kids_share
+    cands = [_genre_cand((16, 10751)) for _ in range(6)]
+    chosen = _cap_kids_share(list(range(6)), cands, n=5, cap=0.3)
+    assert len(chosen) == 5, "must never return a short strip"
+    assert len(set(chosen)) == 5, "no duplicate picks"
+
+
+def test_cap_kids_share_noop_when_cap_disabled() -> None:
+    from app.recipes.fused import _cap_kids_share
+    cands = [_genre_cand((16,)) for _ in range(5)]
+    assert _cap_kids_share(list(range(5)), cands, n=3, cap=1.0) == [0, 1, 2]
+
+
 def test_cold_start_pool_orders_by_popularity_and_excludes(conn) -> None:
     conn.execute("UPDATE titles SET popularity = 99 WHERE tmdb_id = ?", (CAND_FAR,))
     ctx = _ctx(conn)
