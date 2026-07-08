@@ -100,6 +100,11 @@ class UserContext:
     disliked_embedding_ids: list[int]
     rejected_ids: set[int]
     recently_shown_ids: set[int]
+    # recently_shown tmdb_ids in ts-DESC (most-recent-first) order, aligned to
+    # recently_shown_ids. bounded_exclusions keeps the most-recent slice when a
+    # heavy household's exclusions must be trimmed to fit the KNN cap, so the
+    # titles a user just saw are the ones we suppress.
+    recently_shown_order: list[int] = field(default_factory=list)
     diag: dict[str, object] = field(default_factory=dict)
 
     @property
@@ -343,8 +348,9 @@ def load_user_context(
 
     # ----- recently shown
     recently_shown_ids: set[int] = set()
+    recently_shown_order: list[int] = []
     if req.exclude_recently_shown:
-        recently_shown_ids = {
+        recently_shown_order = [
             r["tmdb_id"]
             for r in conn.execute(
                 """SELECT tmdb_id FROM recently_shown
@@ -353,7 +359,8 @@ def load_user_context(
                    ORDER BY ts DESC""",
                 (req.sub, kind, f"-{RECENTLY_SHOWN_RETENTION_DAYS} days"),
             ).fetchall()
-        }
+        ]
+        recently_shown_ids = set(recently_shown_order)
 
     return UserContext(
         sub=req.sub,
@@ -372,6 +379,7 @@ def load_user_context(
         disliked_embedding_ids=disliked_embedding_ids,
         rejected_ids=rejected_ids,
         recently_shown_ids=recently_shown_ids,
+        recently_shown_order=recently_shown_order,
         diag={
             "library_count": len(library_ids),
             "liked_count": len(liked_ids),

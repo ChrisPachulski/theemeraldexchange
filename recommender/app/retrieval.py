@@ -10,7 +10,6 @@ from __future__ import annotations
 import sqlite3
 import logging
 from dataclasses import dataclass
-from itertools import islice
 
 import numpy as np
 
@@ -55,15 +54,33 @@ def bounded_exclusions(user: UserContext, pool_size: int) -> set[int]:
     the hard set plus KNN headroom for the requested pool always fits under the
     cap; an occasional older repeat beats an empty strip.
 
-    islice over a set trims in arbitrary (not oldest-first) order — the only
-    cost is occasionally re-showing a still-recent title, not worth threading
-    recency ordering through UserContext for.
+    TWO invariants make the soft trim actually suppress repeats:
+
+    * Reserve only ``pool_size`` (not ``pool_size * 3``) headroom. The over-fetch
+      multiplier belongs in ``retrieve_candidates`` (where it survives anti-join
+      drops), NOT in the exclusion budget — reserving 3x here starved keep_soft
+      to ~96 for a heavy household, so ~2.2k already-shown titles stayed in the
+      pool and the KNN re-served the same nearest-centroid handful every call
+      (observed: distinct-title ratio collapsed to 0.035, i.e. ~22 titles on
+      endless repeat). Reserving 1x still guarantees ``pool_size`` survivors in
+      the worst case (all excluded fall inside the 4096 neighbourhood) while
+      freeing the budget to exclude far more recent shows.
+    * Keep the MOST-RECENTLY shown soft exclusions, not an arbitrary set slice.
+      recently_shown_order is ts-DESC; a recent repeat is the one a user notices,
+      so drop the oldest when we must trim. Fall back to the unordered set only
+      for callers/tests that don't provide an ordered view.
     """
     hard = user.library_ids | user.rejected_ids | user.disliked_ids
-    soft = user.recently_shown_ids - hard
-    keep_soft = max(0, VEC_KNN_MAX_K - max(pool_size * 3, 200) - len(hard))
-    if len(soft) > keep_soft:
-        soft = set(islice(soft, keep_soft))
+    keep_soft = max(0, VEC_KNN_MAX_K - max(pool_size, 200) - len(hard))
+    order = getattr(user, "recently_shown_order", None)
+    if order is None:
+        order = list(user.recently_shown_ids)
+    soft: set[int] = set()
+    for tid in order:
+        if len(soft) >= keep_soft:
+            break
+        if tid not in hard:
+            soft.add(tid)
     return hard | soft
 
 

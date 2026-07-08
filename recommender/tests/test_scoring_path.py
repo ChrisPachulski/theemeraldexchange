@@ -260,21 +260,55 @@ def test_bounded_exclusions_trims_soft_recently_shown_to_fit_knn() -> None:
     hard_lib = set(range(0, 858))
     hard_dis = set(range(10_000, 10_751))
     hard_rej = set(range(20_000, 20_050))
+    shown_order = list(range(100_000, 103_768))  # ts-DESC: most-recent first
     user = SimpleNamespace(
         library_ids=hard_lib,
         disliked_ids=hard_dis,
         rejected_ids=hard_rej,
-        recently_shown_ids=set(range(100_000, 103_768)),  # 3768 soft, the bloat
+        recently_shown_ids=set(shown_order),  # 3768 soft, the bloat
+        recently_shown_order=shown_order,
     )
     pool_size = 500
     excluded = bounded_exclusions(user, pool_size)
     hard = hard_lib | hard_dis | hard_rej
 
     assert hard <= excluded, "hard exclusions (owned/disliked/rejected) must never be dropped"
-    # Bounded so the clamped KNN (<= VEC_KNN_MAX_K) keeps headroom for the pool.
-    assert len(excluded) <= VEC_KNN_MAX_K - max(pool_size * 3, 200)
+    # Bounded so the clamped KNN (<= VEC_KNN_MAX_K) keeps pool_size headroom.
+    assert len(excluded) <= VEC_KNN_MAX_K - max(pool_size, 200)
     # The soft set WAS trimmed (not all 3768 recently-shown survived).
     assert len(excluded) < len(hard) + len(user.recently_shown_ids)
+    # ...but far more than the old pool_size*3 reserve allowed: a heavy household
+    # must retain enough recent exclusions to actually rotate off repeats.
+    kept_soft = len(excluded) - len(hard)
+    assert kept_soft > 1000, "heavy household kept too few soft exclusions to rotate"
+    # Recency-aware: the titles kept are the MOST-RECENTLY shown (front of the
+    # ts-DESC order), never an arbitrary slice that could re-show recent repeats.
+    assert set(shown_order[:kept_soft]) <= excluded
+
+
+def test_bounded_exclusions_keeps_most_recent_soft_when_trimming() -> None:
+    # When the soft set must be trimmed, the survivors are the most-recently
+    # shown (front of recently_shown_order), so a just-seen title is suppressed
+    # while an ancient one may recur — the "recommender only repeats itself" fix.
+    from types import SimpleNamespace
+    from app.retrieval import bounded_exclusions, VEC_KNN_MAX_K
+
+    # reserve == max(pool_size, 200) == 200, so keep_soft == 4096 - 200 - len(hard);
+    # size hard to leave exactly 5 soft slots.
+    hard = set(range(0, VEC_KNN_MAX_K - 200 - 5))  # leaves keep_soft == 5
+    recent = [900_001, 900_002, 900_003, 900_004, 900_005]
+    old = list(range(800_000, 800_050))
+    order = recent + old  # most-recent first
+    user = SimpleNamespace(
+        library_ids=hard,
+        disliked_ids=set(),
+        rejected_ids=set(),
+        recently_shown_ids=set(order),
+        recently_shown_order=order,
+    )
+    excluded = bounded_exclusions(user, pool_size=1)
+    kept = excluded - hard
+    assert kept == set(recent), "must keep the 5 most-recently-shown, drop the old"
 
 
 def test_bounded_exclusions_keeps_everything_when_it_already_fits() -> None:
