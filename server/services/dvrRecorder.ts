@@ -208,6 +208,21 @@ export class FfmpegRecorder implements Recorder {
         console.warn(`[dvr ${rec.id}] ffmpeg: ${line.trim()}`)
       }
     })
+    proc.on('error', (err) => {
+      // spawn can fail asynchronously (ENOENT: ffmpeg not on PATH, EMFILE: fd
+      // exhaustion, EACCES). Without this listener the 'error' event is unhandled
+      // and crashes the whole backend. Mirror iptvRemux's guard: scrub creds, drop
+      // the child, release the upstream slot acquired above (tryAcquire ran before
+      // ffmpeg confirmed launch, so a spawn error would otherwise strand the slot
+      // and permanently shrink the cap), and fail the row if it's still recording.
+      console.warn(`[dvr ${rec.id}] ffmpeg spawn error: ${scrubXtreamCreds(err.message)}`)
+      this.children.delete(rec.id)
+      this.tracker?.release(recordSessionId(rec.id))
+      const row = getRecording(this.db, rec.id)
+      if (row?.status === 'recording') {
+        markStatus(this.db, rec.id, 'failed', { error: `ffmpeg spawn error: ${scrubXtreamCreds(err.message)}` })
+      }
+    })
     proc.on('exit', (code, signal) => {
       this.children.delete(rec.id)
       // Free the upstream slot the instant ffmpeg releases the provider socket so

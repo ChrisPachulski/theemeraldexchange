@@ -279,6 +279,25 @@ describe('FfmpegRecorder (mocked spawn)', () => {
     expect(() => child.stderr.emit('data', Buffer.from('error opening https://prov.example/live/u/p/7.ts'))).not.toThrow()
   })
 
+  it('fails the recording and does not throw when ffmpeg errors on spawn', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const rec = new FfmpegRecorder(dir, db.raw, () => Date.parse(NOW))
+      const row = recordingRow()
+      rec.start(row)
+      const child = spawnMock.mock.results[0].value as FakeChild
+      // RED (pre-fix): no 'error' listener → emit throws an unhandled EventEmitter
+      // exception. GREEN: handled, row marked 'failed', child dropped.
+      expect(() => child.emit('error', new Error('spawn ffmpeg ENOENT'))).not.toThrow()
+      const updated = getRecording(db.raw, row.id)
+      expect(updated?.status).toBe('failed')
+      expect(updated?.error).toContain('ENOENT')
+      expect(rec.running().has(row.id)).toBe(false)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   it('stop() SIGTERMs the child; stopAll() stops every in-flight recording', () => {
     const rec = new FfmpegRecorder(dir, db.raw, () => Date.parse(NOW))
     const row = recordingRow()
@@ -416,6 +435,21 @@ describe('FfmpegRecorder upstream-connection accounting (finding 118)', () => {
     const child = spawnMock.mock.results[0].value as FakeChild
     child.emit('exit', 0, null)
     expect(streamConcurrency().list().some((s) => s.sessionId === `record:${row.id}`)).toBe(false)
+  })
+
+  it('releases the upstream slot when the recording ffmpeg errors on spawn', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const row = dueRecording()
+      const rec = new FfmpegRecorder(dir, db.raw, () => Date.parse(NOW), streamConcurrency(), () => 1)
+      tick(db.raw, rec, NOW)
+      expect(streamConcurrency().list().some((s) => s.sessionId === `record:${row.id}`)).toBe(true)
+      const child = spawnMock.mock.results[0].value as FakeChild
+      child.emit('error', new Error('spawn ffmpeg ENOENT'))
+      expect(streamConcurrency().list().some((s) => s.sessionId === `record:${row.id}`)).toBe(false)
+    } finally {
+      warn.mockRestore()
+    }
   })
 })
 
