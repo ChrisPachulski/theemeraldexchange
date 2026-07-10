@@ -97,7 +97,7 @@ transcode.all('/*', async (c) => {
 
   const headers: Record<string, string> = {}
 
-  const caller = recommenderCallerFromSession(session)
+  const caller = recommenderCallerFromSession(session, c.get('requestId'))
   if (caller && env.internalPrincipalSecret) {
     // A caller and a secret are present → we are not in off posture. The
     // internal-principal MUST be minted; if minting fails we fail closed with

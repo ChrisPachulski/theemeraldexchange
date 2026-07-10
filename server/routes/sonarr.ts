@@ -833,7 +833,7 @@ sonarr.post('/api/v3/series', sonarrMutateLimit, async (c) => {
         kind: 'tv',
         tmdb_id: tmdbId,
         signal: 'added',
-      }, recommenderCallerFromSession(session))
+      }, recommenderCallerFromSession(session, c.get('requestId')))
     }
   }
 

@@ -30,6 +30,7 @@ services:
     image: theemeraldexchange-backend:latest
     container_name: exchange-backend
     restart: unless-stopped
+    stop_grace_period: 20s
     # Hardening (audit 9-4): no privilege escalation, drop all Linux caps
     # (none are needed beyond the defaults that stay dropped), read-only root
     # fs. The only writable path is the /app/data bind mount below; /tmp is
@@ -280,6 +281,11 @@ services:
       # The optimizer is the only place Claude runs server-side. Per-user
       # suggestion calls never see this key — they go to the local model.
       ANTHROPIC_API_KEY: "${ANTHROPIC_OPTIMIZER_KEY:-}"
+      # Reuse the container-reachable GlitchTip DSN. The recommender already
+      # has a DSN-optional Sentry initializer; without this passthrough it was
+      # permanently inert in production.
+      EEX_TELEMETRY_DSN_INTERNAL: "${EEX_TELEMETRY_DSN_INTERNAL:-}"
+      EEX_TELEMETRY_DSN: "${EEX_TELEMETRY_DSN:-}"
 
   # ── media-core (M3) — Rust library server ─────────────────────────────────
   # Scans a read-only media library, owns media.db, and serves /api/media/*

@@ -35,6 +35,36 @@
 
 .usage-dashboard__body { padding: 0 var(--s-3) var(--s-3); }
 
+.usage-dashboard__funnel {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s-2);
+  margin: var(--s-2) var(--s-1) var(--s-3);
+}
+
+.usage-dashboard__funnel > div {
+  padding: var(--s-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  text-align: center;
+}
+
+.usage-dashboard__funnel dt,
+.usage-dashboard__funnel span {
+  font: 0.625rem/1.3 var(--font-mono);
+  color: var(--text-subtle);
+}
+
+.usage-dashboard__funnel dd {
+  margin: var(--s-1) 0 0;
+  font: var(--w-display) var(--t-md)/1 var(--font-display);
+  color: var(--emerald);
+}
+
+@media (max-width: 560px) {
+  .usage-dashboard__funnel { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 .usage-dashboard__empty,
 .usage-dashboard__error {
   margin: var(--s-2) var(--s-3);

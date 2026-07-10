@@ -78,7 +78,7 @@ Open it and fill in:
 | `SAB_URL`, `SAB_API_KEY` | Existing SAB install. |
 | `MIN_FREE_GB` | Default 100. |
 | `GLITCHTIP_SECRET_KEY`, `GLITCHTIP_DB_PASSWORD`, `GLITCHTIP_DOMAIN` | **Set BEFORE the first `compose up`** — see [docs/operations/glitchtip-setup.md](./docs/operations/glitchtip-setup.md). The DB password must be hex (base64 characters break the `DATABASE_URL`); the domain needs an `http(s)://` scheme. |
-| `EEX_TELEMETRY_DSN` | Does NOT exist yet on the first deploy — you mint it from the Glitchtip instance that deploy brings up, then redeploy. See the two-step bootstrap below. |
+| `EEX_TELEMETRY_DSN` | Optional GlitchTip browser/client ingestion DSN. Leave unset to run telemetry-off; configure later without blocking a healthy app deploy. |
 
 The full annotated key list lives in `.env.production.example`. The deploy
 script validates all required keys (and the `SESSION_SECRET` strength /
@@ -108,7 +108,7 @@ first** — it generates `GLITCHTIP_SECRET_KEY` / `GLITCHTIP_DB_PASSWORD` /
 `GLITCHTIP_DOMAIN`, which must exist in `.env.production` before the first
 `docker compose up`, and walks the admin-account + DSN minting steps.
 
-### 5. First NAS deploy (two-step bootstrap)
+### 5. First NAS deploy
 
 ```bash
 cd ~/Documents/theemeraldexchange
@@ -135,24 +135,20 @@ What the script actually does (`./scripts/deploy-nas.sh --help` prints its own s
    uid 10001, `media-core-db` → uid 10002) so a fresh volume doesn't crash-loop
    the `cap_drop: ALL` sidecars.
 6. Tags every currently-deployed image (`backend`, `recommender`, `media-core`,
-   `transcoder`) as `:rollback`, then runs `docker compose up -d --build` with
-   `EEX_RELEASE=<short sha of HEAD>` — `/api/version` reports that sha as
-   `release`, which is how you detect deploy drift.
-7. Restarts `exchange-cloudflared` (it shares the backend's netns; a backend
-   recreate stales the reference and the public site 502s until the restart).
+   `transcoder`) as `:rollback`, then builds each service sequentially through
+   `nas-safe-build.sh`. Its detached load, memory, timeout, and Plex-health
+   watchdogs abort before a compile can brown out the NAS.
+7. Recreates the stack with `docker compose up -d --no-build`, then
+   force-recreates `exchange-cloudflared` (it shares the backend's netns; only
+   recreation rebinds it to a new backend container).
 8. **Health-gates the whole stack** (~150s ceiling): backend + recommender +
    media-core + transcoder must all report docker-healthy. On failure it
    restores every `:rollback` image, re-ups, and prints per-container log and
    manual-rollback commands.
 
-> **The first deploy is a two-step bootstrap.** `EEX_TELEMETRY_DSN` cannot exist
-> yet — you mint it from the Glitchtip instance this very deploy brings up. The
-> backend crash-loops in that window **by design**, and the script detects the
-> unset DSN and skips the rollback instead of tearing down the Glitchtip you
-> need. Create the EEX project + DSN
-> ([glitchtip-setup.md §4](./docs/operations/glitchtip-setup.md)), set
-> `EEX_TELEMETRY_DSN` in `.env.production`, and run `./scripts/deploy-nas.sh`
-> again — the second run health-gates normally.
+GlitchTip is optional and reported separately from the core health gate. An
+unset DSN never excuses an unhealthy backend or sidecar; every failed core
+release is rolled back.
 
 First build takes several minutes (npm ci + two Rust release builds + image
 layers). Subsequent deploys are much faster (cached layers).

@@ -22,6 +22,10 @@ services:
     image: ghcr.io/chrispachulski/theemeraldexchange-backend:latest
     container_name: emerald-backend
     restart: unless-stopped
+    stop_grace_period: 20s
+    mem_limit: "${BACKEND_MEMORY_LIMIT:-768m}"
+    cpus: "${BACKEND_CPUS:-1.5}"
+    pids_limit: "${BACKEND_PIDS_LIMIT:-256}"
     security_opt:
       - "no-new-privileges:true"
     cap_drop:
@@ -88,6 +92,10 @@ services:
     image: ghcr.io/chrispachulski/theemeraldexchange-media-core:latest
     container_name: emerald-media-core
     restart: unless-stopped
+    stop_grace_period: 20s
+    mem_limit: "${MEDIA_CORE_MEMORY_LIMIT:-768m}"
+    cpus: "${MEDIA_CORE_CPUS:-1.0}"
+    pids_limit: "${MEDIA_CORE_PIDS_LIMIT:-256}"
     security_opt:
       - "no-new-privileges:true"
     cap_drop:
@@ -113,6 +121,10 @@ services:
     image: ghcr.io/chrispachulski/theemeraldexchange-transcoder:latest
     container_name: emerald-transcoder
     restart: unless-stopped
+    stop_grace_period: 20s
+    mem_limit: "${TRANSCODER_MEMORY_LIMIT:-3g}"
+    cpus: "${TRANSCODER_CPUS:-3.0}"
+    pids_limit: "${TRANSCODER_PIDS_LIMIT:-512}"
     security_opt:
       - "no-new-privileges:true"
     cap_drop:
@@ -140,6 +152,10 @@ services:
     image: ghcr.io/chrispachulski/theemeraldexchange-recommender:latest
     container_name: emerald-recommender
     restart: unless-stopped
+    stop_grace_period: 20s
+    mem_limit: "${RECOMMENDER_MEMORY_LIMIT:-1500m}"
+    cpus: "${RECOMMENDER_CPUS:-1.5}"
+    pids_limit: "${RECOMMENDER_PIDS_LIMIT:-256}"
     security_opt:
       - "no-new-privileges:true"
     cap_drop:

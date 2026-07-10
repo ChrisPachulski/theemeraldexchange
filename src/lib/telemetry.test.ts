@@ -25,11 +25,13 @@ async function loadFresh() {
 type WindowStub = {
   __EXCHANGE_CONFIG__?: { glitchtipDsn?: string }
   addEventListener: ReturnType<typeof vi.fn>
+  location: { origin: string }
 }
 
 function stubWindow(config?: { glitchtipDsn?: string }): WindowStub {
   const win: WindowStub = {
     addEventListener: vi.fn(),
+    location: { origin: 'http://localhost' },
   }
   if (config) win.__EXCHANGE_CONFIG__ = config
   vi.stubGlobal('window', win as unknown as Window & typeof globalThis)
@@ -97,7 +99,58 @@ describe('src/lib/telemetry', () => {
     const opts = vi.mocked(Sentry.init).mock.calls[0][0]
     expect(opts?.tracesSampleRate).toBe(0)
     expect(opts?.sendDefaultPii).toBe(false)
+    expect(opts?.integrations).toBeTypeOf('function')
+    const filtered = (opts?.integrations as (defaults: Array<{ name: string }>) => Array<{ name: string }>)([
+      { name: 'BrowserSession' },
+      { name: 'GlobalHandlers' },
+    ])
+    expect(filtered).toEqual([{ name: 'GlobalHandlers' }])
     expect(opts?.environment).toBe(import.meta.env.MODE)
+  })
+
+  it('fetches per-install config and records the deployed release before render', async () => {
+    stubWindow()
+    vi.stubEnv('VITE_GLITCHTIP_DSN', '')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Response.json({
+          dsn: 'https://server@glitchtip.test/7',
+          environment: 'production',
+          release: 'abc1234',
+        }),
+      ),
+    )
+    const { initTelemetryFromServer } = await loadFresh()
+    expect(await initTelemetryFromServer()).toBe(true)
+    expect(fetch).toHaveBeenCalledWith(
+      'http://localhost/api/telemetry/config',
+      expect.objectContaining({ credentials: 'include' }),
+    )
+    expect(vi.mocked(Sentry.init)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dsn: 'https://server@glitchtip.test/7',
+        environment: 'production',
+        release: 'abc1234',
+      }),
+    )
+  })
+
+  it('scrubs token query values and sensitive context before sending', async () => {
+    stubWindow({ glitchtipDsn: 'https://injected@glitchtip.test/1' })
+    vi.stubEnv('VITE_GLITCHTIP_DSN', '')
+    const { initTelemetry, captureError } = await loadFresh()
+    initTelemetry()
+    captureError(new Error('boom'), {
+      url: '/api/media/stream?t=SECRET&x=1',
+      mediaTitle: 'Private Movie',
+    })
+    expect(vi.mocked(Sentry.captureException)).toHaveBeenCalledWith(expect.any(Error), {
+      extra: {
+        url: '/api/media/stream?t=[redacted]&x=1',
+        mediaTitle: '[redacted]',
+      },
+    })
   })
 
   // D. idempotency / double-init guard

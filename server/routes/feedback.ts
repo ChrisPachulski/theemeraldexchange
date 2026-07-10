@@ -193,7 +193,7 @@ feedback.post('/', async (c) => {
 
     // Mirror to the recommender so the optimizer learns from outcomes.
     if (env.useLocalRecommender) {
-      const caller = recommenderCallerFromSession(session)
+      const caller = recommenderCallerFromSession(session, c.get('requestId'))
       if (oppositeSignalToClear) {
         void postClearFeedback({
           sub: session.sub,
@@ -280,7 +280,7 @@ feedback.delete('/:type/:tmdbId/:signal', async (c) => {
   // Always send a clear event for dot signals so stale mirrored like/dislike
   // rows don't survive a toggle or clear.
   if (env.useLocalRecommender) {
-    const caller = recommenderCallerFromSession(session)
+    const caller = recommenderCallerFromSession(session, c.get('requestId'))
     void postClearFeedback({
       sub: session.sub,
       kind: type,

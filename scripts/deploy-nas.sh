@@ -19,10 +19,9 @@
 #      server/, recommender/, crates/ FROM THAT STAGE — never the working
 #      tree — to /mnt/user/appdata/exchange-backend/ on the NAS.
 #   4. Ships .env.production → NAS as .env (consumed by docker compose).
-#   5. Tags every currently-deployed image as :rollback, then SSHs into the
-#      NAS and runs `docker compose up -d --build` with
-#      EEX_RELEASE=<short sha of HEAD> so /api/version reports the deployed
-#      commit (drift detection).
+#   5. Tags every currently-deployed image as :rollback, builds each project
+#      service through nas-safe-build.sh's Plex/load/memory watchdogs, then
+#      recreates the stack with `docker compose up -d --no-build`.
 #   6. Health-gates backend + recommender + media-core + transcoder; on
 #      failure rolls back to the :rollback images and prints the manual
 #      rollback commands for every image.
@@ -43,6 +42,7 @@ NAS_HOST="${NAS_HOST:-theemeraldexchange.local}"
 NAS_USER="${NAS_USER:-root}"
 APPDATA="${APPDATA:-/mnt/user/appdata/exchange-backend}"
 LOCAL_ENV="${LOCAL_ENV:-.env.production}"
+SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
 
 ALLOW_DIRTY=0
 for arg in "$@"; do
@@ -127,11 +127,8 @@ required=(
   RADARR_API_KEY
   SAB_API_KEY
 )
-# NOTE: EEX_TELEMETRY_DSN is required by env.ts in prod but is deliberately
-# NOT gated here — glitchtip-setup.md §2 runs this deploy once to bring the
-# Glitchtip stack up *before* a DSN exists, then redeploys with it set. The
-# backend crash-loops in that bootstrap window by design; Glitchtip itself
-# has no such dependency and comes up fine.
+# EEX_TELEMETRY_DSN is optional. Telemetry health is reported separately from
+# the core release gate and can never exempt an unhealthy application stack.
 env_value() {
   local key="$1"
   local line value
@@ -374,64 +371,29 @@ ssh "${NAS_USER}@${NAS_HOST}" "
   done
   exit 0"
 
-echo "→ Building and starting containers"
-# Unraid occasionally loses both docker compose forms (plugin + standalone)
-# after system updates. To keep deploys working without manual NAS
-# intervention, we try them in order and fall back to a direct docker
-# build + run that mirrors the docker-compose.yml. Only the backend
-# service is recreated this way. WARNING: cloudflared's PROCESS survives the
-# rebuild but it is pinned (network_mode: service:backend) to the netns of the
-# backend container we just `docker rm`'d, so on this fallback path the PUBLIC
-# tunnel is DOWN and — with compose unavailable by construction here — neither
-# the force-recreate below nor the watchdog can heal it. The post-build guard
-# detects that and hard-fails the deploy instead of reporting success.
-#
-# The fallback CANNOT recreate the compose network where
-# `http://recommender:8000` resolves, so it would silently downgrade
-# USE_LOCAL_RECOMMENDER=1 to trending. When that env is set, refuse
-# to fall back: hard-fail so the operator installs docker compose
-# instead of shipping a broken-but-running deploy.
-# EEX_RELEASE is interpolated by docker-compose.yml into the backend image's
-# build args (Dockerfile ARG → ENV → env.ts → /api/version `release`), so the
-# deployed API self-reports the exact commit this script shipped — that's the
-# drift detection /api/version exists for. Exported in the remote shell so
-# compose interpolation sees it (the shipped .env deliberately doesn't pin it).
-# CARGO_BUILD_JOBS caps the Rust compiles this build runs on the shared 6-thread
-# NAS. Empty → the Dockerfiles unset it → cargo uses ALL threads, the cold-compile
-# that has twice brown-outed Plex (see scripts/nas-safe-build.sh). Export it here
-# so every compose build below is capped, regardless of whether .env pins it.
-# Shell-env interpolation takes precedence over the shipped .env for compose.
+echo "→ Verifying Docker Compose before the guarded build"
+ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && docker compose version >/dev/null" || {
+  echo "ERROR: docker compose is required for a safe full-stack deploy." >&2
+  echo "       Raw docker builds and the partial single-container fallback are intentionally disabled." >&2
+  exit 1
+}
+
+# Every build goes through the detached two-layer watchdog. A plain compose
+# build has twice overwhelmed this NAS and starved Plex/SSH; a fixed jobs cap
+# alone does not protect memory or I/O. Build sequentially, then recreate from
+# the completed images without allowing Compose to start another build.
+for service in backend recommender media-core transcoder; do
+  echo "→ Guarded NAS build: ${service}"
+  EEX_RELEASE="${DEPLOY_SHA_SHORT}" \
+    NAS_HOST="${NAS_HOST}" \
+    NAS_USER="${NAS_USER}" \
+    APPDATA="${APPDATA}" \
+    "${SCRIPT_DIR}/nas-safe-build.sh" "${service}"
+done
+
+echo "→ Recreating containers from guarded-build images (--no-build)"
 ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && \
-  export EEX_RELEASE=${DEPLOY_SHA_SHORT} && \
-  export CARGO_BUILD_JOBS=2 && \
-  if docker compose version >/dev/null 2>&1; then \
-    docker compose up -d --build; \
-  elif command -v docker-compose >/dev/null 2>&1; then \
-    docker-compose up -d --build; \
-  elif grep -qE '^USE_LOCAL_RECOMMENDER=1' .env 2>/dev/null; then \
-    echo >&2; \
-    echo '[deploy] FATAL: docker compose is unavailable AND USE_LOCAL_RECOMMENDER=1.' >&2; \
-    echo '         The direct-docker fallback cannot wire the backend↔recommender' >&2; \
-    echo '         network — suggestions would silently degrade to trending.' >&2; \
-    echo '         Install docker compose on the NAS, then re-run.' >&2; \
-    exit 1; \
-  else \
-    echo '[deploy] compose unavailable — rebuilding backend directly'; \
-    echo '         (recommender disabled by env, so single-container is OK)'; \
-    docker build --build-arg EEX_RELEASE=${DEPLOY_SHA_SHORT} -t theemeraldexchange-backend:latest . && \
-    docker stop exchange-backend 2>/dev/null || true; \
-    docker rm exchange-backend 2>/dev/null || true; \
-    docker run -d \
-      --name exchange-backend \
-      --restart unless-stopped \
-      -p 127.0.0.1:3001:3001 \
-      -v ${APPDATA}/data:/app/data \
-      --env-file ${APPDATA}/.env \
-      -e NODE_ENV=production \
-      -e PORT=3001 \
-      -e GRAB_LOG_PATH=/app/data/grabs.jsonl \
-      theemeraldexchange-backend:latest; \
-  fi"
+  EEX_RELEASE=${DEPLOY_SHA_SHORT} docker compose up -d --no-build"
 
 # cloudflared joins the backend's network namespace (network_mode:
 # service:backend), so the tunnel origin (localhost:3001) only resolves while
@@ -502,21 +464,14 @@ ssh "${NAS_USER}@${NAS_HOST}" "chmod +x ${APPDATA}/scripts/nas-cloudflared-watch
 # backend (bad migration, env-gate crash, napi ABI mismatch) shipped with an
 # "✓ Deployed" and the API was simply down. Poll the backend's health until it
 # is actually serving; if it never does, roll back to the :rollback image.
-# Bootstrap window: on the very first deploy EEX_TELEMETRY_DSN doesn't exist yet
-# (you create it from the Glitchtip instance THIS deploy brings up — see
-# glitchtip-setup.md §2). The backend crash-loops by design that one time, so we
-# must NOT health-gate/roll-back the whole stack — that would tear down the
-# Glitchtip you need to mint the DSN from. Detect the unset DSN and, in that
-# window only, skip the rollback with guidance instead.
-telemetry_dsn="$(env_value EEX_TELEMETRY_DSN 2>/dev/null || true)"
 # Gate on the WHOLE service stack, not just the backend: recommender,
 # media-core and transcoder all carry docker healthchecks (compose +
 # image HEALTHCHECK), so a sidecar that crash-loops (bad migration,
 # missing INTERNAL_PRINCIPAL_SECRET, torch OOM) fails the deploy instead
 # of silently degrading suggestions/playback. The recommender's first
 # boot loads a sentence-transformer model (start_period 60s), hence the
-# generous ~150s ceiling. A MISSING sidecar is a warning, not a failure —
-# the direct-docker fallback path runs the backend alone by design.
+# generous ~150s ceiling. Every core service is required after a full-stack
+# deploy; missing is a release failure.
 echo "→ Waiting for backend + sidecars to report healthy (up to ~150s)"
 # The poll body lives in a variable because it runs TWICE: once after the
 # deploy and — if that fails — once more after the rollback, so the script
@@ -527,9 +482,8 @@ health_poll_remote='
   summary=""
   # Telemetry stack status (§15: telemetry is MANDATORY, but it is not in the
   # request path). Reported as WARN-not-fail, deliberately: hard-failing here
-  # would roll back the app images over a telemetry blip and — in the DSN
-  # bootstrap window — tear down the very Glitchtip instance the operator
-  # needs to mint the DSN from. glitchtip web carries a compose healthcheck
+  # would roll back healthy app images over a telemetry-only blip. Glitchtip
+  # web carries a compose healthcheck
   # (/_health/); the worker has none by design (see docker-compose.yml), so
   # for it the running-state is the signal (a crashed/restarting worker is
   # what real failure looks like).
@@ -550,22 +504,14 @@ health_poll_remote='
     summary=""
     for c in $containers; do
       s=$(docker inspect --format "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}" "$c" 2>/dev/null || echo missing)
-      if [ "$s" = "none" ] && [ "$c" = "exchange-backend" ]; then
-        # Direct-docker fallback container has no docker healthcheck — probe the port.
-        if curl -fsS http://127.0.0.1:3001/api/health >/dev/null 2>&1; then s="healthy(port-probe)"; fi
-      fi
       summary="$summary $c=$s"
       case "$s" in
-        healthy|"healthy(port-probe)") : ;;
-        missing)
-          if [ "$c" = "exchange-backend" ]; then echo "[deploy] exchange-backend container is missing"; exit 2; fi
-          ;; # missing sidecar: direct-docker fallback / partial stack — warn at the end
+        healthy) : ;;
         *) all_ok=0 ;;
       esac
     done
     if [ "$all_ok" = "1" ]; then
       echo "[deploy] stack healthy:$summary"
-      case "$summary" in *=missing*) echo "[deploy] WARN: some sidecars are missing (direct-docker fallback?):$summary" ;; esac
       report_telemetry
       exit 0
     fi
@@ -580,13 +526,7 @@ ssh "${NAS_USER}@${NAS_HOST}" "$health_poll_remote"
 health_rc=$?
 set -e
 
-if [ "$health_rc" -ne 0 ] && [ -z "$telemetry_dsn" ]; then
-  echo "→ Backend not healthy, but EEX_TELEMETRY_DSN is unset — this is the" >&2
-  echo "  expected Glitchtip bootstrap window, NOT a deploy failure. The stack is" >&2
-  echo "  up; create the EEX project + DSN (docs/operations/glitchtip-setup.md §4)," >&2
-  echo "  set EEX_TELEMETRY_DSN in .env.production, then re-run this deploy — the" >&2
-  echo "  next run health-gates the backend normally. Skipping rollback." >&2
-elif [ "$health_rc" -ne 0 ]; then
+if [ "$health_rc" -ne 0 ]; then
   echo "✗ Stack unhealthy after deploy (rc=$health_rc) — rolling back images AND config" >&2
   # Restore the compose file + .env snapshotted at the top of THIS run (the
   # last-healthy generation) before `compose up`, so a deploy broken by the
@@ -656,29 +596,24 @@ fi
 # NAS; deliberately NOT the public URL, so this verifies the container we just
 # deployed independent of Cloudflare edge state — the tunnel path is covered
 # by the cloudflared restart above). Only meaningful when the health gate
-# passed; the bootstrap window (health_rc != 0, no DSN) has a crash-looping
-# backend by design, so the check is skipped there.
-if [ "$health_rc" -eq 0 ]; then
-  echo "→ Verifying deployed release via /api/version (drift check)"
-  deployed_release=$(ssh "${NAS_USER}@${NAS_HOST}" \
-    "curl -fsS --max-time 10 http://127.0.0.1:3001/api/version" 2>/dev/null \
-    | sed -n 's/.*"release":"\([^"]*\)".*/\1/p')
-  if [ -z "$deployed_release" ]; then
-    # The health gate just proved /api/health serves, so an unreadable
-    # /api/version is transport noise (ssh blip), not drift evidence — warn,
-    # don't fail a verified-healthy deploy on it.
-    echo "[deploy] WARN: could not read /api/version for the drift check — verify manually:" >&2
-    echo "         ssh ${NAS_USER}@${NAS_HOST} 'curl -s http://127.0.0.1:3001/api/version'" >&2
-  elif [ "$deployed_release" != "$DEPLOY_SHA_SHORT" ]; then
-    echo "✗ RELEASE DRIFT: /api/version reports release '${deployed_release}' but this run shipped ${DEPLOY_SHA_SHORT}." >&2
-    echo "  The stack is healthy but serving the WRONG build — the new image did not" >&2
-    echo "  actually take (stale compose cache? container not recreated?). NOT rolling" >&2
-    echo "  back (the running code IS the previous build); investigate on the NAS:" >&2
-    echo "    ssh ${NAS_USER}@${NAS_HOST} 'cd ${APPDATA} && docker compose up -d --build --force-recreate backend'" >&2
-    exit 1
-  else
-    echo "[deploy] /api/version release matches ${DEPLOY_SHA_SHORT} — no drift."
-  fi
+echo "→ Verifying deployed release via /api/version (drift check)"
+deployed_release=$(ssh "${NAS_USER}@${NAS_HOST}" \
+  "curl -fsS --max-time 10 http://127.0.0.1:3001/api/version" 2>/dev/null \
+  | sed -n 's/.*"release":"\([^"]*\)".*/\1/p')
+if [ -z "$deployed_release" ]; then
+  # The health gate just proved /api/health serves, so an unreadable
+  # /api/version is transport noise (ssh blip), not drift evidence — warn,
+  # don't fail a verified-healthy deploy on it.
+  echo "[deploy] WARN: could not read /api/version for the drift check — verify manually:" >&2
+  echo "         ssh ${NAS_USER}@${NAS_HOST} 'curl -s http://127.0.0.1:3001/api/version'" >&2
+elif [ "$deployed_release" != "$DEPLOY_SHA_SHORT" ]; then
+  echo "✗ RELEASE DRIFT: /api/version reports release '${deployed_release}' but this run shipped ${DEPLOY_SHA_SHORT}." >&2
+  echo "  The stack is healthy but serving the WRONG build — the guarded image did not" >&2
+  echo "  actually take. Re-run nas-safe-build.sh for backend, then recreate with" >&2
+  echo "  docker compose up -d --no-build --force-recreate backend." >&2
+  exit 1
+else
+  echo "[deploy] /api/version release matches ${DEPLOY_SHA_SHORT} — no drift."
 fi
 
 echo "→ Reclaiming BuildKit cache + dangling images (the docker vdisk creeps ~1GB/deploy otherwise)"
@@ -692,12 +627,6 @@ echo "→ Reclaiming BuildKit cache + dangling images (the docker vdisk creeps ~
 ssh "${NAS_USER}@${NAS_HOST}" "docker builder prune -f --keep-storage 10GB >/dev/null 2>&1 || true; docker image prune -f >/dev/null 2>&1 || true"
 
 echo
-if [ "$health_rc" -eq 0 ]; then
-  echo "✓ Deployed commit ${DEPLOY_SHA} (release tag: ${DEPLOY_SHA_SHORT}) — health-gated and release-verified."
-else
-  # Only reachable in the Glitchtip bootstrap window (rollback skipped above).
-  echo "⚠ Deployed commit ${DEPLOY_SHA} (release tag: ${DEPLOY_SHA_SHORT}) — backend NOT healthy yet"
-  echo "  (expected: EEX_TELEMETRY_DSN bootstrap window — mint the DSN and re-deploy)."
-fi
+echo "✓ Deployed commit ${DEPLOY_SHA} (release tag: ${DEPLOY_SHA_SHORT}) — health-gated and release-verified."
 echo "  Public health endpoint:"
 echo "    curl -s https://api.theemeraldexchange.com/api/health"

@@ -5,6 +5,8 @@
 
 import * as Sentry from '@sentry/node'
 import { Hono } from 'hono'
+import type { Context } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
 import { cors } from 'hono/cors'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { requestId } from 'hono/request-id'
@@ -68,6 +70,35 @@ app.onError((err, c) => {
 // X-Request-Id), exposed to handlers via c.get('requestId') and echoed in the
 // X-Request-Id response header. Must run before the logger so the id is logged.
 app.use('*', requestId())
+
+// The passkey routes are public by design, and the media/transcoder proxies
+// buffer control-plane request bodies before forwarding them. Bound both at
+// the edge so a large or chunked body cannot exhaust the Node heap. Playback
+// bytes travel in GET responses and are unaffected by these request limits.
+export const PASSKEY_BODY_LIMIT_BYTES = 64 * 1024
+export const SIDECAR_CONTROL_BODY_LIMIT_BYTES = 1024 * 1024
+const payloadTooLarge = (c: Context) => c.json({ error: 'payload_too_large' }, 413)
+app.use(
+  '/api/auth/passkey/*',
+  bodyLimit({ maxSize: PASSKEY_BODY_LIMIT_BYTES, onError: payloadTooLarge }),
+)
+app.use(
+  '/api/media/*',
+  bodyLimit({ maxSize: SIDECAR_CONTROL_BODY_LIMIT_BYTES, onError: payloadTooLarge }),
+)
+app.use(
+  '/api/transcode/*',
+  bodyLimit({ maxSize: SIDECAR_CONTROL_BODY_LIMIT_BYTES, onError: payloadTooLarge }),
+)
+
+// SameSite=None is necessary for the split Netlify/API deployment. The CSRF
+// gate protects requests; these headers prevent a hostile parent page from
+// framing the signed-in UI and steering clicks through overlaid controls.
+app.use('*', async (c, next) => {
+  await next()
+  c.header('Content-Security-Policy', "frame-ancestors 'none'")
+  c.header('X-Frame-Options', 'DENY')
+})
 
 // MED-18: stream/segment/playlist auth is token-in-URL (`?t=`, `?u=`, `?token=`),
 // so any logger that prints the query string would write live bearer tokens into

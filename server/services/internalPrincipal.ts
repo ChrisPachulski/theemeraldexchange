@@ -68,6 +68,9 @@ export type InternalPrincipalInput = {
   /** Optional paired-device id when the call originated from a Bearer
    *  device token. Cookie-session calls leave this null. */
   deviceId?: string | null
+  /** Correlation id from the inbound Hono request. Background work omits it
+   * and receives a fresh ULID. */
+  reqId?: string
 }
 
 /** Mint an internal-principal JWE for one in-flight request.
@@ -80,7 +83,7 @@ export function mintInternalPrincipal(input: InternalPrincipalInput): string {
   const key = getInternalKey()
   const now = Math.floor(Date.now() / 1000)
   const exp = now + INTERNAL_PRINCIPAL_TTL_SECS
-  const reqId = generateUlid()
+  const reqId = input.reqId || generateUlid()
 
   // napi-rs 2.16 maps Rust `Option<String>` to TS `string | undefined` —
   // passing `null` triggers "Failed to convert JavaScript value `Null`".

@@ -32,6 +32,9 @@ export type SuggestionStripFeedback = {
   onDislike: (id: number, title: string) => void
   /** True when the feedback store is unreachable — dots render disabled. */
   unavailable: boolean
+  /** The latest optimistic mutation rolled back. Keep dots enabled so the
+   * user can retry, but surface the failure instead of silently reverting. */
+  saveFailed?: boolean
 }
 
 export type SuggestionStrip = {
@@ -137,6 +140,7 @@ export function useSuggestionStrip(
     // inline label hint. Otherwise dots silently appear "unset,"
     // indistinguishable from a clean first-run.
     unavailable: !!feedbackQuery.error,
+    saveFailed: !!setFeedback.error,
   }
 
   return {

@@ -22,10 +22,30 @@ type UsageRow = {
   costCents: number
 }
 
+type FunnelRate = { n: number; d: number; rate: number; ci95: [number, number] }
+type FunnelMetrics = {
+  window_days: number
+  impressions: number
+  metrics: {
+    added_rate: FunnelRate
+    click_rate: FunnelRate
+    like_rate: FunnelRate
+    dislike_rate: FunnelRate
+  }
+}
+
 async function fetchAdminUsage(): Promise<UsageRow[]> {
   const r = await fetch(apiUrl('/api/usage/admin'), { credentials: 'include' })
   if (!r.ok) throw new Error(`usage admin failed: ${r.status}`)
   return (await r.json()) as UsageRow[]
+}
+
+async function fetchFunnelMetrics(): Promise<FunnelMetrics> {
+  const r = await fetch(apiUrl('/api/recommender/metrics', { windowDays: 30 }), {
+    credentials: 'include',
+  })
+  if (!r.ok) throw new Error(`recommendation metrics failed: ${r.status}`)
+  return (await r.json()) as FunnelMetrics
 }
 
 function fmtTokens(n: number): string {
@@ -43,6 +63,13 @@ export function UsageDashboard() {
     refetchIntervalInBackground: false,
     staleTime: 10_000,
   })
+  const funnel = useQuery({
+    queryKey: ['recommender', 'metrics', 30],
+    queryFn: fetchFunnelMetrics,
+    refetchInterval: visible ? 60_000 : false,
+    refetchIntervalInBackground: false,
+    staleTime: 60_000,
+  })
 
   const totalCents = (query.data ?? []).reduce((sum, r) => sum + r.costCents, 0)
   const totalCalls = (query.data ?? []).reduce((sum, r) => sum + r.calls, 0)
@@ -50,13 +77,38 @@ export function UsageDashboard() {
   return (
     <details className="usage-dashboard">
       <summary className="usage-dashboard__summary">
-        <span className="usage-dashboard__title">AI usage (30d)</span>
+        <span className="usage-dashboard__title">Recommendation health &amp; AI usage (30d)</span>
         <span className="usage-dashboard__total">
-          {query.data ? `${totalCalls} calls · ${fmtCost(totalCents)}` : '—'}
+          {funnel.data
+            ? `${funnel.data.impressions} impressions · ${(funnel.data.metrics.added_rate.rate * 100).toFixed(1)}% added`
+            : query.data
+              ? `${totalCalls} calls · ${fmtCost(totalCents)}`
+              : '—'}
         </span>
       </summary>
 
       <div className="usage-dashboard__body">
+        {funnel.data && (
+          <dl className="usage-dashboard__funnel">
+            {(
+              [
+                ['Clicked', funnel.data.metrics.click_rate],
+                ['Added', funnel.data.metrics.added_rate],
+                ['Liked', funnel.data.metrics.like_rate],
+                ['Disliked', funnel.data.metrics.dislike_rate],
+              ] as const
+            ).map(([label, metric]) => (
+              <div key={label}>
+                <dt>{label}</dt>
+                <dd>{(metric.rate * 100).toFixed(1)}%</dd>
+                <span>{metric.n}/{metric.d}</span>
+              </div>
+            ))}
+          </dl>
+        )}
+        {funnel.error && (
+          <p className="usage-dashboard__error">Couldn't load recommendation health.</p>
+        )}
         {query.isPending && <p className="usage-dashboard__empty">Loading…</p>}
         {query.error && (
           <p className="usage-dashboard__error">
