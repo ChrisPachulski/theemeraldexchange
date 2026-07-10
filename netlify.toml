@@ -26,6 +26,12 @@
   command = "npm run build:spa"
   publish = "dist"
 
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Content-Security-Policy = "frame-ancestors 'none'"
+    X-Frame-Options = "DENY"
+
 [build.environment]
   NODE_VERSION = "24"
   # VITE_API_BASE_URL is set in the Netlify UI (Site settings → Environment

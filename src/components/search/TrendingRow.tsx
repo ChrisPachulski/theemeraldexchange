@@ -37,6 +37,8 @@ type Props = {
      *  carries an inline hint so the user can tell the difference
      *  between "I haven't set any dots" and "dots can't load." */
     unavailable?: boolean
+    /** Latest write rolled back; dots stay enabled for an immediate retry. */
+    saveFailed?: boolean
   }
   /**
    * Optional Recommended ⇄ Trending toggle anchored to the bottom-right
@@ -346,6 +348,12 @@ export function TrendingRow({
           <span className="trending__source-hint" role="status">
             {' '}
             · Feedback unavailable
+          </span>
+        )}
+        {feedback?.saveFailed && (
+          <span className="trending__source-hint" role="alert">
+            {' '}
+            · Feedback wasn't saved; try again
           </span>
         )}
       </StripHeader>

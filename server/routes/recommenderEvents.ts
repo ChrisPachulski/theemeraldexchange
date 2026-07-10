@@ -35,7 +35,10 @@ recommenderEvents.get('/metrics', requireAdmin, async (c) => {
   const raw = Number(c.req.query('windowDays') ?? 30)
   const windowDays = Number.isFinite(raw) ? Math.max(1, Math.min(365, Math.floor(raw))) : 30
   try {
-    const data = await getFunnelMetrics(windowDays, recommenderCallerFromSession(c.get('session')))
+    const data = await getFunnelMetrics(
+      windowDays,
+      recommenderCallerFromSession(c.get('session'), c.get('requestId')),
+    )
     return c.json(data as Record<string, unknown>)
   } catch (e) {
     return c.json(
@@ -85,7 +88,7 @@ recommenderEvents.post('/event', async (c) => {
       kind,
       tmdb_id: raw.tmdbId,
       signal: 'clicked',
-    }, recommenderCallerFromSession(session))
+    }, recommenderCallerFromSession(session, c.get('requestId')))
   }
   return c.json({ ok: true })
 })

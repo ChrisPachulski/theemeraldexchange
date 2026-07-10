@@ -133,10 +133,10 @@ export async function beginRegistration(
     userDisplayName: handle,
     userID,
     attestationType: 'none',
-    // residentKey 'required' makes these discoverable (usernameless login);
-    // userVerification 'preferred' avoids locking out authenticators without
-    // a biometric/PIN while still requesting one.
-    authenticatorSelection: { residentKey: 'required', userVerification: 'preferred' },
+    // Discoverable credentials keep login usernameless; user verification is
+    // required because possession of an unlocked/shared authenticator alone
+    // must not authenticate an owner or administrator.
+    authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
   })
   const challengeId = putChallenge('register', options.challenge, sub, handle)
   return { options, challengeId }
@@ -158,7 +158,7 @@ export async function verifyRegistration(
     expectedChallenge: ch.challenge,
     expectedOrigin: rp ? [rp.origin] : env.webauthnOrigins,
     expectedRPID: rp?.rpId ?? env.webauthnRpId,
-    requireUserVerification: false,
+    requireUserVerification: true,
   })
   if (!verification.verified || !verification.registrationInfo) {
     throw new Error('registration_unverified')
@@ -213,7 +213,7 @@ export async function beginLogin(rp?: RpOverride): Promise<{
 }> {
   const options = await generateAuthenticationOptions({
     rpID: rp?.rpId ?? env.webauthnRpId,
-    userVerification: 'preferred',
+    userVerification: 'required',
     allowCredentials: [], // discoverable: the authenticator offers its resident keys
   })
   const challengeId = putChallenge('login', options.challenge, null, null)
@@ -243,7 +243,7 @@ export async function verifyLogin(
     expectedChallenge: ch.challenge,
     expectedOrigin: rp ? [rp.origin] : env.webauthnOrigins,
     expectedRPID: rp?.rpId ?? env.webauthnRpId,
-    requireUserVerification: false,
+    requireUserVerification: true,
     credential: {
       id: row.credential_id,
       publicKey: new Uint8Array(row.public_key),

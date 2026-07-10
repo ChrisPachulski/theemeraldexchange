@@ -15,6 +15,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use regex::Regex;
+use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParsedName {
@@ -143,7 +144,8 @@ fn strip_tags(cleaned: &str) -> String {
 /// Strip a single trailing 4-digit 1900–2099 year token from a cleaned string.
 fn strip_trailing_year(cleaned: &str) -> String {
     let trimmed = cleaned.trim_end();
-    if let Some(last) = trimmed.rsplit(' ').next()
+    if trimmed.split_whitespace().count() > 1
+        && let Some(last) = trimmed.rsplit(' ').next()
         && last.len() == 4
         && last.chars().all(|c| c.is_ascii_digit())
         && let Ok(y) = last.parse::<i64>()
@@ -155,6 +157,29 @@ fn strip_trailing_year(cleaned: &str) -> String {
     trimmed.to_string()
 }
 
+/// Match Swift's join-key folding: case/diacritic insensitive, `&` expanded
+/// to `and`, and every non-alphanumeric character treated as a separator.
+///
+/// Keep this distinct from [`clean`]. `clean` prepares human-readable display
+/// titles and release-tag parsing; this function deliberately produces a more
+/// lossy cross-client identity key.
+fn fold_join_key(text: &str) -> String {
+    let folded: String = text
+        .to_lowercase()
+        .nfd()
+        .filter(|c| !is_combining_mark(*c))
+        .collect::<String>()
+        .replace('&', "and");
+
+    folded
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Canonical dedup key for a show: lowercase, separators→space, strip a single
 /// trailing year, strip quality/release tokens, collapse whitespace. Two
 /// filename variants of the same series (`Adventure Time` vs
@@ -164,7 +189,7 @@ pub fn normalize_show_name(raw: &str) -> String {
     let cleaned = clean(raw).to_lowercase();
     let no_tags = strip_tags(&cleaned);
     let no_year = strip_trailing_year(&no_tags);
-    no_year.split_whitespace().collect::<Vec<_>>().join(" ")
+    fold_join_key(&no_year)
 }
 
 /// Extract `(season, episode)` from a captured episode marker.

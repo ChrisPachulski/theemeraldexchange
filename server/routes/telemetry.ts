@@ -1,6 +1,6 @@
 // Telemetry configuration endpoint — §15.2 DSN distribution.
 //
-//   GET /api/telemetry/config  (requireAuth)
+//   GET /api/telemetry/config  (public bootstrap metadata)
 //
 // Returns the Sentry-compatible DSN and environment metadata that client
 // apps (iOS, tvOS, SPA) fetch at boot to initialize their SDK pointing at
@@ -11,12 +11,12 @@
 // Contract reference: §15.2
 
 import { Hono } from 'hono'
-import { requireAuth, type Env } from '../middleware/auth.js'
+import type { Env } from '../middleware/auth.js'
 import { env } from '../env.js'
 
 export const telemetry = new Hono<Env>()
 
-telemetry.get('/config', requireAuth, (c) => {
+telemetry.get('/config', (c) => {
   const dsn = env.EEX_TELEMETRY_DSN
   if (!dsn) {
     // EEX_TELEMETRY_DSN missing means Glitchtip hasn't been configured
@@ -28,7 +28,7 @@ telemetry.get('/config', requireAuth, (c) => {
         detail:
           'EEX_TELEMETRY_DSN is not set. Create an EEX project in ' +
           'Glitchtip, copy the DSN, and set EEX_TELEMETRY_DSN in your ' +
-          'environment. Telemetry is mandatory in the EEX stack (§15.1).',
+          'environment. Telemetry remains disabled until configured.',
       },
       503,
     )

@@ -285,6 +285,7 @@ const HIST_KINDS = new Set(['live', 'vod', 'series_episode'])
 // a recommender hiccup must never break watch-history persistence.
 function maybeEmitWatched(
   session: Session,
+  requestId: string | undefined,
   kind: string,
   itemId: string,
   now: WatchPoint,
@@ -309,7 +310,7 @@ function maybeEmitWatched(
     }
     if (recKind == null || tmdbId == null || !Number.isInteger(tmdbId) || tmdbId <= 0) return
 
-    const caller = recommenderCallerFromSession(session)
+    const caller = recommenderCallerFromSession(session, requestId)
     void postFeedback({ sub: session.sub, kind: recKind, tmdb_id: tmdbId, signal: 'watched' }, caller)
   } catch {
     // best-effort training signal; never surface to the watch-history write
@@ -626,6 +627,7 @@ iptv.post('/history', requireAuth, async (c) => {
   if (env.useLocalRecommender && kind !== 'live') {
     maybeEmitWatched(
       c.get('session'),
+      c.get('requestId'),
       kind,
       itemId,
       { position_secs: positionSecs, duration_secs: durationSecs, completed },

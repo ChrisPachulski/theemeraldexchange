@@ -354,11 +354,10 @@ jobs:
       - name: Install JS dependencies (for npm audit)
         run: npm ci
 
-      - name: npm audit (high+)
-        # --audit-level=high fails on high/critical only; moderate advisories
-        # are tracked but do not block CI. Promote to moderate once the tree
-        # is clean of existing moderate findings.
-        run: npm audit --audit-level=high --omit=dev
+      - name: npm audit (moderate+)
+        # Runtime-facing moderate advisories are release blockers too. Any
+        # exception must be explicit, vulnerability-specific, and time-bounded.
+        run: npm audit --audit-level=moderate --omit=dev
 
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
@@ -494,3 +493,11 @@ jobs:
         run: |
           shellcheck --version
           shellcheck --severity=warning scripts/*.sh
+
+      - name: Guard canonical deploy against raw NAS builds
+        run: |
+          if grep -Ev '^[[:space:]]*#' scripts/deploy-nas.sh \
+            | grep -Eq 'docker(-compose| compose).*(--build|[[:space:]]build([[:space:]]|$))|docker[[:space:]]+build([[:space:]]|$)'; then
+            echo 'deploy-nas.sh must route every build through nas-safe-build.sh' >&2
+            exit 1
+          fi

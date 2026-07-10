@@ -94,7 +94,10 @@ export function _resetServerIdForTests(): void {
  *  device_id claim. When that plumbing lands, extend this helper —
  *  every call site already passes through here, so it's a one-place
  *  change. */
-export function recommenderCallerFromSession(session: Session): RecommenderCaller | undefined {
+export function recommenderCallerFromSession(
+  session: Session,
+  requestId?: string,
+): RecommenderCaller | undefined {
   const serverId = getServerId()
   if (!serverId) return undefined
   return {
@@ -102,5 +105,6 @@ export function recommenderCallerFromSession(session: Session): RecommenderCalle
     role: session.role,
     authMode: authModeFromSession(session),
     serverId,
+    ...(requestId ? { reqId: requestId } : {}),
   }
 }

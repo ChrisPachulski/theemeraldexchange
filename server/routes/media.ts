@@ -4,6 +4,9 @@ import { env } from '../env.js'
 import { fetchStreamWithConnectTimeout, fetchWithTimeout, LAN_TIMEOUT_MS } from '../services/upstream.js'
 import { mintInternalPrincipal } from '../services/internalPrincipal.js'
 import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
+import { postFeedback } from '../services/recommender.js'
+import { mediaLibraryDb } from '../services/mediaLibraryDbSingleton.js'
+import { resolveLocalWatchedSignal } from '../services/localMediaWatchSignal.js'
 import type { Session } from '../session.js'
 import {
   signMediaToken,
@@ -110,8 +113,8 @@ function sessionFromSub(sub: string): Session {
 /** Build the Authorization header for a media-core call from a session, or
  *  return {} in the off/no-secret posture. Throws on mint failure so the caller
  *  can fail closed. */
-function principalHeader(session: Session): Record<string, string> {
-  const caller = recommenderCallerFromSession(session)
+function principalHeader(session: Session, requestId?: string): Record<string, string> {
+  const caller = recommenderCallerFromSession(session, requestId)
   if (caller && env.internalPrincipalSecret) {
     return { authorization: `Bearer ${mintInternalPrincipal(caller)}` }
   }
@@ -185,7 +188,7 @@ media.post('/playback/:kind/:id', async (c) => {
 
   let auth: Record<string, string>
   try {
-    auth = principalHeader(session)
+    auth = principalHeader(session, c.get('requestId'))
   } catch (e) {
     console.error('[media] playback grant: mint failed, failing closed:', e)
     return c.json({ error: 'principal_mint_failed' }, 502)
@@ -396,7 +399,7 @@ media.all('/*', async (c) => {
 
   let headers: Record<string, string>
   try {
-    headers = principalHeader(session)
+    headers = principalHeader(session, c.get('requestId'))
   } catch (e) {
     console.error('[media] failed to mint internal-principal, failing closed:', e)
     return c.json({ error: 'principal_mint_failed' }, 502)
@@ -410,10 +413,25 @@ media.all('/*', async (c) => {
   const method = c.req.method
   const hasBody = method !== 'GET' && method !== 'HEAD'
   let body: ArrayBuffer | undefined
+  let watchedSignal: ReturnType<typeof resolveLocalWatchedSignal> = null
   if (hasBody) {
     body = await c.req.arrayBuffer()
     const ct = c.req.header('content-type')
     if (ct) headers['content-type'] = ct
+    if (method === 'POST' && subpath === '/watch' && ct?.includes('application/json')) {
+      try {
+        watchedSignal = resolveLocalWatchedSignal(
+          mediaLibraryDb()?.raw ?? null,
+          session.sub,
+          JSON.parse(new TextDecoder().decode(body)),
+        )
+      } catch {
+        // The upstream remains authoritative for body validation. A malformed
+        // or temporarily unavailable local DB only suppresses this best-effort
+        // training signal; it never changes the watch-write response.
+        watchedSignal = null
+      }
+    }
   }
 
   const r = await fetchStreamWithConnectTimeout(
@@ -422,6 +440,19 @@ media.all('/*', async (c) => {
     LAN_TIMEOUT_MS,
     'media-core',
   )
+
+  if (r.ok && watchedSignal && env.useLocalRecommender) {
+    const caller = recommenderCallerFromSession(session, c.get('requestId'))
+    void postFeedback(
+      {
+        sub: session.sub,
+        kind: watchedSignal.kind,
+        tmdb_id: watchedSignal.tmdbId,
+        signal: 'watched',
+      },
+      caller,
+    )
+  }
 
   const outHeaders = new Headers()
   for (const name of FORWARD_RESPONSE_HEADERS) {

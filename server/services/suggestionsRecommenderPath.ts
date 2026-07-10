@@ -68,7 +68,7 @@ export async function runRecommenderSuggestionPath(
     timing,
     setTimingHeader,
   } = ctx
-  const caller = recommenderCallerFromSession(session)
+  const caller = recommenderCallerFromSession(session, c.get('requestId'))
   const userFeedback = await userFeedbackPromise
   const likedRaw = type === 'movie' ? userFeedback.movie.liked : userFeedback.tv.liked
   const dislikedRaw =

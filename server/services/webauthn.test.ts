@@ -151,10 +151,11 @@ describe('webauthn ceremony engine', () => {
     expect(swa.generateRegistrationOptions).toHaveBeenCalledTimes(1)
     const arg = swa.generateRegistrationOptions.mock.calls[0][0] as {
       userName: string
-      authenticatorSelection: { residentKey: string }
+      authenticatorSelection: { residentKey: string; userVerification: string }
     }
     expect(arg.userName).toBe('Chris')
     expect(arg.authenticatorSelection.residentKey).toBe('required')
+    expect(arg.authenticatorSelection.userVerification).toBe('required')
   })
 
   // ── C. verifyRegistration happy path + single-use ───────────────────────────
@@ -190,8 +191,10 @@ describe('webauthn ceremony engine', () => {
     // expectedChallenge passed to the crypto verifier matches the stored value.
     const verifyArg = swa.verifyRegistrationResponse.mock.calls[0][0] as {
       expectedChallenge: string
+      requireUserVerification: boolean
     }
     expect(verifyArg.expectedChallenge).toBe('chal-reg-abc')
+    expect(verifyArg.requireUserVerification).toBe(true)
 
     // SINGLE-USE: the challenge row was deleted; a second verify with the same id throws.
     expect(getChallenge(challengeId)).toBeUndefined()
@@ -281,8 +284,10 @@ describe('webauthn ceremony engine', () => {
 
     const arg = swa.generateAuthenticationOptions.mock.calls[0][0] as {
       allowCredentials: unknown[]
+      userVerification: string
     }
     expect(arg.allowCredentials).toEqual([])
+    expect(arg.userVerification).toBe('required')
   })
 
   // ── G. verifyLogin happy path + counter bump ────────────────────────────────
@@ -317,10 +322,12 @@ describe('webauthn ceremony engine', () => {
     // The crypto verifier received the STORED public key + counter.
     const arg = swa.verifyAuthenticationResponse.mock.calls[0][0] as {
       credential: { id: string; publicKey: Uint8Array; counter: number }
+      requireUserVerification: boolean
     }
     expect(arg.credential.id).toBe('cred-1')
     expect([...arg.credential.publicKey]).toEqual([4, 5, 6])
     expect(arg.credential.counter).toBe(0)
+    expect(arg.requireUserVerification).toBe(true)
   })
 
   // ── H. verifyLogin failure paths ────────────────────────────────────────────

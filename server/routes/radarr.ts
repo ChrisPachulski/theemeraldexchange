@@ -632,7 +632,7 @@ radarr.post('/api/v3/movie', radarrMutateLimit, async (c) => {
     if (tmdbId === undefined) return
     void postFeedback(
       { sub: session.sub, kind: 'movie', tmdb_id: tmdbId, signal: 'added' },
-      recommenderCallerFromSession(session),
+      recommenderCallerFromSession(session, c.get('requestId')),
     )
   }
 

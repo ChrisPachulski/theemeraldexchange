@@ -32,7 +32,10 @@
 #   StartedAt is Go RFC3339Nano (UTC, trailing-zero-trimmed fraction), so a
 #   naive string compare is WRONG (".5Z" would sort AFTER ".500000005Z"
 #   because 'Z' > '0'). Timestamps are normalized to a fixed-width all-digit
-#   form before comparison — see _norm_ts() and `--self-test`.
+#   form before comparison — see _norm_ts() and `--self-test`. Even when the
+#   timestamps are ordered, every pass compares local and public health. Two
+#   consecutive local=200/public!=200 samples trigger a tunnel recreate, which
+#   catches a disconnected/wedged tunnel that still owns the current netns.
 #
 # INSTALL ON THE NAS  (DEPLOY-STAGE — this repo does NOT install it; see the
 # report's deploy notes). As root on the NAS, add one crontab line
@@ -68,6 +71,9 @@
 #   DOCKER_BIN    docker executable             (default docker)
 #   COMPOSE_CMD   compose invocation            (default "docker compose")
 #   HEALTH_URL    post-recreate probe target    (default public /api/health)
+#   LOCAL_HEALTH_URL backend loopback probe      (default http://127.0.0.1:3001/api/health)
+#   FAILURE_STATE_FILE consecutive-failure state(default /tmp/eex-cf-watchdog-public-failures)
+#   PUBLIC_FAILURE_THRESHOLD samples to recover  (default 2)
 #   EEX_CF_WATCHDOG_LOG  extra logfile to tee timestamped lines into
 #                        (default unset — stdout only; cron redirect owns
 #                        persistence).
@@ -94,6 +100,9 @@ COMPOSE_CMD="${COMPOSE_CMD:-docker compose}"
 COMPOSE_CMDS=("$COMPOSE_CMD")
 [[ "$COMPOSE_CMD" == "docker-compose" ]] || COMPOSE_CMDS+=("docker-compose")
 HEALTH_URL="${HEALTH_URL:-https://api.theemeraldexchange.com/api/health}"
+LOCAL_HEALTH_URL="${LOCAL_HEALTH_URL:-http://127.0.0.1:3001/api/health}"
+FAILURE_STATE_FILE="${FAILURE_STATE_FILE:-/tmp/eex-cf-watchdog-public-failures}"
+PUBLIC_FAILURE_THRESHOLD="${PUBLIC_FAILURE_THRESHOLD:-2}"
 
 # ---------------------------------------------------------------------------
 # logging
@@ -166,7 +175,7 @@ inspect_started() {
 }
 
 health_probe() {
-  command -v curl >/dev/null 2>&1 || { log "health: curl unavailable — skipping probe"; return 0; }
+  command -v curl >/dev/null 2>&1 || { log "ERROR: health probe requires curl"; return 1; }
   local code
   for _ in 1 2 3 4 5; do
     code="$(curl -s -m 5 -o /dev/null -w '%{http_code}' "$HEALTH_URL" 2>/dev/null || echo 000)"
@@ -177,7 +186,55 @@ health_probe() {
     sleep 3
   done
   log "health: $HEALTH_URL -> ${code:-000} after retries (still unhealthy — investigate)"
-  return 0
+  return 1
+}
+
+probe_code() {
+  local url="$1"
+  command -v curl >/dev/null 2>&1 || { printf '000'; return; }
+  local code
+  code="$(curl -s -m 5 -o /dev/null -w '%{http_code}' "$url" 2>/dev/null)" || true
+  printf '%s' "${code:-000}"
+}
+
+health_decision() {
+  # Pure decision seam used by --self-test. Args: local-code public-code
+  # prior-failures threshold. Prints OK / LOCAL_BAD / WAIT / RECREATE.
+  local local_code="$1" public_code="$2" failures="$3" threshold="$4"
+  if [[ "$local_code" != "200" ]]; then say LOCAL_BAD; return; fi
+  if [[ "$public_code" == "200" ]]; then say OK; return; fi
+  failures=$((failures + 1))
+  if [[ "$failures" -ge "$threshold" ]]; then say RECREATE; else say WAIT; fi
+}
+
+check_public_path() {
+  local local_code public_code failures=0 decision
+  local_code="$(probe_code "$LOCAL_HEALTH_URL")"
+  public_code="$(probe_code "$HEALTH_URL")"
+  if [[ -f "$FAILURE_STATE_FILE" ]]; then
+    read -r failures < "$FAILURE_STATE_FILE" || failures=0
+  fi
+  [[ "$failures" =~ ^[0-9]+$ ]] || failures=0
+  decision="$(health_decision "$local_code" "$public_code" "$failures" "$PUBLIC_FAILURE_THRESHOLD")"
+  case "$decision" in
+    OK)
+      rm -f "$FAILURE_STATE_FILE"
+      log "health: local=200 public=200"
+      return 0 ;;
+    LOCAL_BAD)
+      rm -f "$FAILURE_STATE_FILE"
+      log "ERROR: local backend health is ${local_code:-000}; tunnel recreate would not help"
+      return 2 ;;
+    WAIT)
+      failures=$((failures + 1))
+      printf '%s\n' "$failures" > "$FAILURE_STATE_FILE"
+      log "WARN: local=200 public=${public_code:-000}; failure ${failures}/${PUBLIC_FAILURE_THRESHOLD}, waiting for confirmation"
+      return 0 ;;
+    RECREATE)
+      rm -f "$FAILURE_STATE_FILE"
+      recreate_cloudflared "local health 200 but public health ${public_code:-000} for ${PUBLIC_FAILURE_THRESHOLD} consecutive checks"
+      return $? ;;
+  esac
 }
 
 recreate_cloudflared() {
@@ -220,8 +277,12 @@ do_check() {
     recreate_cloudflared "backend recreated after cloudflared (stale netns)"
     return $?
   fi
-  log "OK: $CF_CTR StartedAt=$cf_ts >= $BACKEND_CTR StartedAt=$backend_ts — tunnel netns current, no action"
-  return 0
+  if [[ "$DRY_RUN" == "1" ]]; then
+    log "OK: $CF_CTR StartedAt=$cf_ts >= $BACKEND_CTR StartedAt=$backend_ts — dry-run, no action"
+    return 0
+  fi
+  log "NETNS: $CF_CTR StartedAt=$cf_ts >= $BACKEND_CTR StartedAt=$backend_ts — checking live tunnel path"
+  check_public_path
 }
 
 # ---------------------------------------------------------------------------
@@ -261,6 +322,22 @@ run_self_test() {
       "2026-07-06T15:49:10Z" "0001-01-01T00:00:00Z" RECREATE
   _st "minute boundary newer -> recreate" \
       "2026-07-06T15:50:00Z" "2026-07-06T15:49:59.999999999Z" RECREATE
+
+  _health_st() { # $1 desc $2 local $3 public $4 failures $5 threshold $6 expected
+    n=$((n + 1))
+    local got
+    got="$(health_decision "$2" "$3" "$4" "$5")"
+    if [[ "$got" == "$6" ]]; then
+      say "  PASS [$n] $1"
+    else
+      say "  FAIL [$n] $1 — expected $6 got $got"
+      fails=$((fails + 1))
+    fi
+  }
+  _health_st "healthy local and public path -> ok" 200 200 0 2 OK
+  _health_st "unhealthy local backend is not a tunnel incident" 503 530 1 2 LOCAL_BAD
+  _health_st "first public-only failure waits" 200 530 0 2 WAIT
+  _health_st "second public-only failure recovers" 200 530 1 2 RECREATE
 
   if [[ "$fails" -eq 0 ]]; then
     say "self-test: ALL $n CHECKS PASSED"
