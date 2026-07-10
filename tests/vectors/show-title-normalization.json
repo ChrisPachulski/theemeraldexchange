@@ -1,0 +1,46 @@
+{
+  "_meta": {
+    "format_version": 1,
+    "authored_from": "Swift MediaLibraryStore.normalizedShowTitle (apple Sources/EmeraldKit/State/MediaLibraryStore.swift ~L66) + its inline vector pin Tests/EmeraldKitTests/NormalizedShowTitleVectorTests.swift (apple 09dd5fe)",
+    "author": "ChrisPachulski",
+    "date": "2026-07-10",
+    "reviewed_by": "promise-audit: title-normalization-parity + title-normalization-shared-vectors",
+    "purpose": "Cross-language pin for the last-resort show-title join key ('The American Experiment' incident). The Swift MediaLibraryStore.normalizedShowTitle and Rust media_core::filename::normalize_show_name compute the SAME join key independently and were coupled only by a doc comment; the trailing-year strip was fixed independently in BOTH on the same day (apple 6368b8d, server dd7a817) because nothing pinned it. This file freezes the input->key contract so a unilateral tweak on either side goes red before it can silently desync the join.",
+    "swift_normalizer": "MediaLibraryStore.normalizedShowTitle",
+    "rust_normalizer": "media_core::filename::normalize_show_name",
+    "known_drift": "The Swift and Rust normalizers are NOT byte-identical today. Swift additionally (a) ASCII-folds diacritics, (b) maps '&' -> 'and', (c) splits on ALL non-alphanumerics (so an apostrophe is a token separator), and (d) guards the trailing-year strip with `parts.count > 1` so a title that is ONLY a year is KEPT. Rust's clean() treats only '.', '_', '-' and whitespace as separators, does not fold diacritics, does not expand '&', AND its strip_trailing_year (filename.rs ~L144) has NO lone-token guard, so normalize_show_name('1923') strips the only token and returns \"\" (empty) rather than '1923'. That last divergence is join-CRITICAL: an id-less show literally named for a year (e.g. Paramount's '1923') normalizes to empty on the Rust side and loses its last-resort Play-button join — the exact hazard the Swift doc comment calls out and guards against. Vectors that exercise these divergences carry \"swift_only\": true and \"rust_expected\" with the value the CURRENT Rust normalizer produces, so the Rust suite pins actual behaviour instead of a red aspiration. Consumers that require true cross-language parity must reconcile the two normalizers; until then these are documented drift, not test failures."
+  },
+  "vectors": [
+    { "name": "case-fold-upper", "input": "BREAKING BAD", "key": "breaking bad" },
+    { "name": "whitespace-collapse", "input": "Breaking   Bad", "key": "breaking bad" },
+    { "name": "diacritic-fold", "input": "Pokémon", "key": "pokemon", "swift_only": true, "rust_expected": "pokémon" },
+    { "name": "diacritic-already-ascii", "input": "Pokemon", "key": "pokemon" },
+    { "name": "ampersand-to-and", "input": "Will & Grace", "key": "will and grace", "swift_only": true, "rust_expected": "will & grace" },
+    { "name": "ampersand-spelled-and", "input": "Will and Grace", "key": "will and grace" },
+    { "name": "apostrophe-splits-token", "input": "Marvel's Daredevil", "key": "marvel s daredevil", "swift_only": true, "rust_expected": "marvel's daredevil" },
+    { "name": "hyphen-separator", "input": "Spider-Man", "key": "spider man" },
+    { "name": "trailing-year-stripped", "input": "The American Experiment 2026", "key": "the american experiment" },
+    { "name": "year-as-whole-title-kept", "input": "1923", "key": "1923", "swift_only": true, "rust_expected": "" },
+    { "name": "leading-year-survives", "input": "2049 Blade Runner", "key": "2049 blade runner" },
+    { "name": "leading-year-nonyear-trailing", "input": "1923 Yellowstone", "key": "1923 yellowstone" },
+    { "name": "number-outside-year-window", "input": "Catch 22", "key": "catch 22" }
+  ],
+  "equivalence_classes": [
+    {
+      "name": "pokemon-spellings",
+      "members": ["Pokémon", "POKEMON", "pokemon"],
+      "swift_only": true,
+      "rust_note": "Rust does not diacritic-fold, so 'Pokémon' does not join 'pokemon' under normalize_show_name."
+    },
+    {
+      "name": "will-and-grace-spellings",
+      "members": ["Will & Grace", "Will and Grace", "will  &  grace"],
+      "swift_only": true,
+      "rust_note": "Rust does not expand '&' to 'and', so the '&' spellings do not join 'Will and Grace' under normalize_show_name."
+    },
+    {
+      "name": "trailing-year-join",
+      "members": ["The American Experiment 2026", "The American Experiment"]
+    }
+  ]
+}
