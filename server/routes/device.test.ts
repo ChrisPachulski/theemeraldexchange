@@ -52,6 +52,14 @@ describe('mintDeviceToken + verifyDeviceToken', () => {
     expect(claims!.jti.length).toBe(26) // ULID
   })
 
+  it('verifyDeviceToken accepts a google-minted device token', async () => {
+    const token = await mintDeviceToken({ ...SAMPLE_INPUT, sub: 'google:998877', auth_mode: 'google' })
+    const claims = await verifyDeviceToken(token)
+    expect(claims).not.toBeNull()
+    expect(claims!.auth_mode).toBe('google')
+    expect(claims!.sub).toBe('google:998877')
+  })
+
   it('verifyDeviceToken returns null when the jti row is missing', async () => {
     // Mint a token whose jti will be deleted from device_tokens before verify.
     const token = await mintDeviceToken(SAMPLE_INPUT)
