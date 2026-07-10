@@ -285,7 +285,8 @@ export async function verifyDeviceToken(token: string): Promise<DeviceTokenClaim
   if (
     claims.authMode !== 'plex' &&
     claims.authMode !== 'local' &&
-    claims.authMode !== 'apple'
+    claims.authMode !== 'apple' &&
+    claims.authMode !== 'google'
   )
     return null
 

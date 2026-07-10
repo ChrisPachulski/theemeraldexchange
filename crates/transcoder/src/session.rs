@@ -2833,8 +2833,14 @@ mod tests {
         // offset suppresses it, because the from-0 renditions' source-rooted
         // timestamps disagree with the -ss video variant's re-stamped PTS by the
         // full resume distance (no cross-rendition sync anchor for AVPlayer).
-        assert!(alt_audio_advertisable(0), "from-start must advertise alt-audio");
-        assert!(!alt_audio_advertisable(1), "any resume offset must suppress");
+        assert!(
+            alt_audio_advertisable(0),
+            "from-start must advertise alt-audio"
+        );
+        assert!(
+            !alt_audio_advertisable(1),
+            "any resume offset must suppress"
+        );
         assert!(
             !alt_audio_advertisable(2400),
             "a 40min resume must suppress alt-audio"
@@ -2868,8 +2874,7 @@ mod tests {
             rendition_from(Some(&audio_track(Some("eng"), None)), 2, false, Some(2)),
         ];
         dedupe_rendition_names(&mut trip);
-        let uniq: std::collections::HashSet<&str> =
-            trip.iter().map(|r| r.name.as_str()).collect();
+        let uniq: std::collections::HashSet<&str> = trip.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(uniq.len(), 3, "all three NAMEs must be distinct: {trip:?}");
 
         // Distinct languages are left untouched.

@@ -14,6 +14,12 @@ export default defineConfig(({ mode }) => {
   // proxy block is irrelevant.
   return {
     plugins: [react()],
+    build: {
+      // hls.js and the Three.js gem scene are intentionally isolated lazy
+      // chunks (~509/516kB minified); neither is part of the entry path. Keep
+      // the warning ceiling just above them so genuine growth still surfaces.
+      chunkSizeWarningLimit: 520,
+    },
     server: {
       proxy: {
         '/api': { target: backendTarget, changeOrigin: false },

@@ -1,9 +1,8 @@
-// DVR API (M6 — DVR bucket, phase 1).
+// DVR API (M6).
 //
-// Schedule / list / cancel recordings of IPTV live channels. The recorder
-// engine that actually spawns ffmpeg and serves completed files is phase 2;
-// this router is mounted only when env.DVR_ENABLED is set, so a half-feature
-// (a scheduler that records nothing yet) is never exposed by default.
+// Schedule, list, play, cancel, and delete IPTV recordings. The scheduler and
+// ffmpeg recorder are registered at boot when DVR_ENABLED is set; the feature
+// stays opt-in because it consumes provider connections and disk.
 
 import { createReadStream, statSync, rmSync } from 'node:fs'
 import { Readable } from 'node:stream'

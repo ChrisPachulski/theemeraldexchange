@@ -19,10 +19,9 @@ import { contracts, type ContractsTypes } from './contractsBinding.js'
  * draft proposed stripping it from StreamKind, which was incorrect. See §5.3
  * for the full dual-membership mapping and the rationale for keeping it here.
  *
- * `'recording'` is M6-reserved (DVR): verifiers MUST accept it but no current
- * path mints it. It exists in the union (mirroring Rust
- * `stream_token::StreamKind::Recording` and the `recording-m6-reserved`
- * vector) so M6 code doesn't need a cross-language enum amendment.
+ * `'recording'` was reserved for M6 and is now minted by the DVR playback
+ * grant. It remains mirrored by Rust `stream_token::StreamKind::Recording`
+ * and the original `recording-m6-reserved` compatibility vector.
  */
 export type StreamKind =
   | 'live'

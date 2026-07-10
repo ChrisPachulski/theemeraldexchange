@@ -74,10 +74,21 @@ cat <<'DONE'
 
     docker compose up -d
 
-Then open  http://<this-host>:3001  and claim the server:
-the one-time setup token is printed in the backend log —
+Claim the server from a WebAuthn-secure address. First retrieve the one-time
+setup token —
 
     docker compose logs backend | grep -A3 unclaimed
+
+Then choose one path:
+
+  • Docker host with a browser: open http://localhost:3001
+  • Headless NAS: on your laptop run
+      ssh -N -L 3001:127.0.0.1:3001 <user>@<host>
+    and open http://localhost:3001 locally
+  • Tailscale profile: open the server's https://…ts.net URL
+
+Plain http://<host>:3001 (including a .local hostname) is not a secure
+WebAuthn context, so a browser cannot create the owner passkey there.
 
 Optional extras live in .env (remote access, TMDB, requests, live TV).
 DONE

@@ -738,7 +738,10 @@ mod tests {
             j.contains("-skip_frame nokey"),
             "thumb decode must skip non-keyframes: {j}"
         );
-        assert!(j.contains("-threads 2"), "thumb decode must cap threads: {j}");
+        assert!(
+            j.contains("-threads 2"),
+            "thumb decode must cap threads: {j}"
+        );
         let skip_at = j.find("-skip_frame").unwrap();
         let input_at = j.find("-i ").unwrap();
         assert!(

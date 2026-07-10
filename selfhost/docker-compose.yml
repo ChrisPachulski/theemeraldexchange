@@ -13,8 +13,9 @@
 #   remote     — private remote access via Tailscale Serve (TS_AUTHKEY)
 #
 # First run:  ./install.sh   (or: sh scripts/self-host-env.sh && docker compose up -d)
-# Then open http://<this-host>:3001 and claim the server with the setup
-# token printed in `docker compose logs backend`.
+# Then claim with the setup token printed in `docker compose logs backend`.
+# WebAuthn requires HTTPS or http://localhost: use a local browser, an SSH
+# localhost tunnel for a headless NAS, or the optional Tailscale HTTPS profile.
 
 services:
   backend:
