@@ -24,7 +24,7 @@
 # CPU (graceful: the boot smoke-test demotes VAAPI→libx264), so the image is safe
 # even on a box with no iGPU.
 
-FROM rust:1.96-slim-bookworm@sha256:b5f842fac1e3b4ff718a652a8e0173b62d9403ec826ef4998880b9347db30684 AS builder
+FROM rust:1.97-slim-bookworm@sha256:cfbb0e0ef7a73e736386bfa346f1cb0503c6d162969dc9426fb37834f3f64c25 AS builder
 
 WORKDIR /build
 
