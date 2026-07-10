@@ -225,8 +225,8 @@ app.route('/api/tmdb', tmdb)
 if (!env.IPTV_DISABLED) {
   app.route('/api/iptv', iptv)
 }
-// DVR (M6 phase 1) records IPTV live channels, so it requires IPTV mounted and
-// is off by default until the phase-2 recorder ships (see routes/dvr.ts).
+// DVR records IPTV live channels, so it requires IPTV to be mounted. It remains
+// operator-opt-in because recordings consume provider connections and disk.
 if (env.DVR_ENABLED && !env.IPTV_DISABLED) {
   app.route('/api/dvr', dvr)
 }

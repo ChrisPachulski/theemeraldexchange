@@ -208,6 +208,20 @@ export class FfmpegRecorder implements Recorder {
         console.warn(`[dvr ${rec.id}] ffmpeg: ${line.trim()}`)
       }
     })
+    proc.on('error', (err) => {
+      // spawn can fail asynchronously (ENOENT: ffmpeg not on PATH, EMFILE: fd
+      // exhaustion, EACCES). Without this listener the event is unhandled and
+      // crashes the backend. Drop the child, release its provider slot, and
+      // fail the row if it is still active.
+      const detail = scrubXtreamCreds(err.message)
+      console.warn(`[dvr ${rec.id}] ffmpeg spawn error: ${detail}`)
+      this.children.delete(rec.id)
+      this.tracker?.release(recordSessionId(rec.id))
+      const row = getRecording(this.db, rec.id)
+      if (row?.status === 'recording') {
+        markStatus(this.db, rec.id, 'failed', { error: `ffmpeg spawn error: ${detail}` })
+      }
+    })
     proc.on('exit', (code, signal) => {
       this.children.delete(rec.id)
       // Free the upstream slot the instant ffmpeg releases the provider socket so

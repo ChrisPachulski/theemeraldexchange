@@ -46,9 +46,17 @@ curl -fsSL https://raw.githubusercontent.com/ChrisPachulski/theemeraldexchange/m
 docker compose up -d
 ```
 
-The installer generates every secret and asks for your media folder. Then open
-`http://<host>:3001` and **claim the server**: register a passkey with the one-time setup token
-from `docker compose logs backend`. You're the owner — invite your household from the Users tab.
+The installer generates every secret and asks for your media folder. After startup, retrieve the
+one-time setup token with `docker compose logs backend | grep -A3 unclaimed`, then **claim the
+server** from a WebAuthn-secure address:
+
+- On a machine that runs Docker and has a browser, open `http://localhost:3001`.
+- For a headless NAS, create a tunnel from your laptop with
+  `ssh -N -L 3001:127.0.0.1:3001 <user>@<host>`, then open `http://localhost:3001` locally.
+- Or enable the Tailscale profile and use its HTTPS URL.
+
+Register a passkey with the setup token and you're the owner — invite your household from the
+Users tab.
 
 Everything else is opt-in, one flag each:
 
@@ -63,9 +71,10 @@ Everything else is opt-in, one flag each:
 | Error telemetry (self-hosted Glitchtip) | `COMPOSE_PROFILES=telemetry` + `TELEMETRY_ENABLED=1` |
 
 With everything off you still get the core product: library browsing + playback, passkey
-sign-in, owner-controlled invites, and local-first recommendations. Passkey note: use a
-hostname (`http://localhost:3001` on the box, the `.local` mDNS name, or the Tailscale https
-URL) — WebAuthn doesn't work on a bare `192.168.x.x` address.
+sign-in, owner-controlled invites, and local-first recommendations. Passkeys require HTTPS or
+the browser's loopback exception (`http://localhost`); plain HTTP on a LAN IP or `.local`
+hostname is not a secure context. Use the localhost/SSH-tunnel path above or the Tailscale HTTPS
+URL.
 
 **Platforms.** Images are multi-arch (linux/amd64 + linux/arm64) and boot-verified on both
 after every publish (`verify-images`):

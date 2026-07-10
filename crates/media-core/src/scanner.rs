@@ -399,7 +399,8 @@ async fn scan_once_with_probe_bin(
                 // this is what stops the 11 corrupt Mandalorian/Wednesday rips
                 // from costing up to 30s each on every scan forever. A re-encoded
                 // file (changed stat) probes immediately. Surface it either way.
-                if !probe_lookup_due(db, path_str, file.size_bytes, &file.mtime, Utc::now()).await? {
+                if !probe_lookup_due(db, path_str, file.size_bytes, &file.mtime, Utc::now()).await?
+                {
                     report.probe_failures += 1;
                     if report.probe_failed_paths.len() < PROBE_FAILED_PATHS_CAP {
                         report.probe_failed_paths.push(path_str.clone());
@@ -1090,8 +1091,12 @@ async fn backfill_metadata(
                 if rating.is_some() {
                     return Ok(false);
                 }
-                if !should_attempt_episode_lookup(false, *attempts, failed_at.as_deref(), Utc::now())
-                {
+                if !should_attempt_episode_lookup(
+                    false,
+                    *attempts,
+                    failed_at.as_deref(),
+                    Utc::now(),
+                ) {
                     return Ok(false);
                 }
                 return match tmdb.movie_content_rating(*tmdb_id).await {
@@ -1126,8 +1131,9 @@ async fn backfill_metadata(
             // negcache so an unmatchable title (home video, obscure/foreign rip)
             // stops issuing a live /search/movie on every scan — the query
             // cannot start succeeding without a file change.
-            let (match_attempts, match_failed_at) =
-                row.map(|(_, _, _, _, ma, mf)| (ma, mf)).unwrap_or((0, None));
+            let (match_attempts, match_failed_at) = row
+                .map(|(_, _, _, _, ma, mf)| (ma, mf))
+                .unwrap_or((0, None));
             if !should_attempt_episode_lookup(
                 false,
                 match_attempts,
@@ -3278,7 +3284,10 @@ mod tests {
         .fetch_one(&db.pool)
         .await
         .unwrap();
-        assert_eq!(attempts, 0, "keyless (transient) must NOT stamp the negcache");
+        assert_eq!(
+            attempts, 0,
+            "keyless (transient) must NOT stamp the negcache"
+        );
         assert!(failed_at.is_none());
     }
 
@@ -3317,8 +3326,7 @@ mod tests {
         let db = Db::connect_memory().await.unwrap();
         let file_id = seed_matched_unrated_movie(&db, "/lib/Heat (1995).mkv", 949).await;
         // Empty results = the movie carries no US certification.
-        let stub =
-            crate::tmdb::stub::StubServer::start(|_| (200, r#"{"results":[]}"#.to_string()));
+        let stub = crate::tmdb::stub::StubServer::start(|_| (200, r#"{"results":[]}"#.to_string()));
         let tmdb = TmdbClient::with_base(Some("k".into()), stub.base.clone());
         let parsed = ParsedName::Movie {
             title: "Heat".into(),
@@ -3440,8 +3448,7 @@ mod tests {
             .await
             .unwrap();
         // Empty results = TMDB has no such title (a definitive no-results).
-        let stub =
-            crate::tmdb::stub::StubServer::start(|_| (200, r#"{"results":[]}"#.to_string()));
+        let stub = crate::tmdb::stub::StubServer::start(|_| (200, r#"{"results":[]}"#.to_string()));
         let tmdb = TmdbClient::with_base(Some("k".into()), stub.base.clone());
         let parsed = ParsedName::Movie {
             title: "birthday".into(),
@@ -3456,7 +3463,10 @@ mod tests {
                 .fetch_one(&db.pool)
                 .await
                 .unwrap();
-        assert_eq!(attempts, 1, "definitive no-results must stamp the match negcache");
+        assert_eq!(
+            attempts, 1,
+            "definitive no-results must stamp the match negcache"
+        );
         let searches_after_first = stub.hit_count_containing("/search/movie");
         assert!(searches_after_first >= 1, "first pass must issue a search");
 
@@ -3500,7 +3510,10 @@ mod tests {
                 .fetch_one(&db.pool)
                 .await
                 .unwrap();
-        assert_eq!(attempts, 0, "transient match failure must NOT stamp the negcache");
+        assert_eq!(
+            attempts, 0,
+            "transient match failure must NOT stamp the negcache"
+        );
     }
 
     #[tokio::test]
@@ -3556,7 +3569,10 @@ mod tests {
         .fetch_one(&db.pool)
         .await
         .unwrap();
-        assert_eq!(attempts, 0, "transient episode 5xx must NOT stamp the negcache");
+        assert_eq!(
+            attempts, 0,
+            "transient episode 5xx must NOT stamp the negcache"
+        );
         assert!(stub.hit_count_containing("/episode/") >= 1);
 
         // Definitive 404 → stamp.
@@ -3564,7 +3580,9 @@ mod tests {
         let (show_id2, _) = seed_enriched_show_episode(&db2, "The Office", path, false).await;
         let stub2 = crate::tmdb::stub::StubServer::start(|_| (404, "{}".to_string()));
         let tmdb2 = TmdbClient::with_base(Some("k".into()), stub2.base.clone());
-        backfill_metadata(&db2, path, &parsed, &tmdb2).await.unwrap();
+        backfill_metadata(&db2, path, &parsed, &tmdb2)
+            .await
+            .unwrap();
         let attempts2: i64 = sqlx::query_scalar(
             "SELECT tmdb_lookup_attempts FROM episodes WHERE show_id = ? AND season = 1 AND episode = 1",
         )
@@ -3572,7 +3590,10 @@ mod tests {
         .fetch_one(&db2.pool)
         .await
         .unwrap();
-        assert_eq!(attempts2, 1, "definitive episode 404 must stamp the negcache");
+        assert_eq!(
+            attempts2, 1,
+            "definitive episode 404 must stamp the negcache"
+        );
     }
 
     #[tokio::test]
@@ -3829,7 +3850,9 @@ mod tests {
             kind: RootKind::Movies,
         }];
         let invocations = |c: &std::path::Path| -> usize {
-            std::fs::read_to_string(c).map(|s| s.lines().count()).unwrap_or(0)
+            std::fs::read_to_string(c)
+                .map(|s| s.lines().count())
+                .unwrap_or(0)
         };
 
         // (1) First scan: probe fails, the path is surfaced, stub invoked once.

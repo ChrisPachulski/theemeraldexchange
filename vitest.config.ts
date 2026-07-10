@@ -9,6 +9,11 @@ import { TEST_ENV } from './vitest.env'
 export default defineConfig({
   test: {
     environment: 'node',
+    // A few feature-gate tests deliberately reset the ESM graph and import the
+    // complete server app. On a busy local machine that cold import can exceed
+    // Vitest's 5s default even though the assertions complete immediately.
+    // Keep a finite ceiling, but give those integration-shaped unit tests room.
+    testTimeout: 10_000,
     // Restore any vi.stubGlobal() after every test, unconditionally. Files that
     // stub globals (fetch, etc.) already unstub in afterEach, but an async leak
     // — a handler touching fetch after the per-file restore, or a throw before

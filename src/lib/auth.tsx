@@ -16,6 +16,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { apiUrl } from './api/base'
 import { throwApiError } from './api/errors'
 import { SESSION_EXPIRED_EVENT } from './queryClient'
+import { requestSetupChecklist } from './setupChecklistFlag'
 import type {
   PublicKeyCredentialRequestOptionsJSON,
   PublicKeyCredentialCreationOptionsJSON,
@@ -639,7 +640,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setSetupClaimable(false)
             // Surface the first-run setup checklist to the fresh owner
             // (plan 006 Phase 3).
-            void import('./setupChecklistFlag').then((m) => m.requestSetupChecklist())
+            requestSetupChecklist()
           }
           setSignInState('idle')
           return true

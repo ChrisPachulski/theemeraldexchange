@@ -815,7 +815,11 @@ impl TmdbClient {
     /// carry — home video, obscure rip) on the cooldown schedule without
     /// stamping on a transient outage. On a Found hit, `imdb_id`/`tvdb_id`/
     /// rating are enriched exactly as [`Self::match_movie`].
-    pub async fn match_movie_outcome(&self, title: &str, year: Option<i64>) -> TmdbFetch<TmdbMatch> {
+    pub async fn match_movie_outcome(
+        &self,
+        title: &str,
+        year: Option<i64>,
+    ) -> TmdbFetch<TmdbMatch> {
         self.match_with_outcome(&self.search_movie_url(), "movie", title, year, true, None)
             .await
     }
@@ -854,7 +858,10 @@ impl TmdbClient {
         if self.api_key.is_none() {
             return TmdbFetch::Transient;
         }
-        let first = match self.search(url, title, year, year, is_movie, country_hint).await {
+        let first = match self
+            .search(url, title, year, year, is_movie, country_hint)
+            .await
+        {
             Ok(m) => m,
             Err(e) => {
                 tracing::warn!(
@@ -965,7 +972,10 @@ mod tests {
             ("Shameless".to_string(), None, Some("US".to_string()))
         );
         // A name that is ONLY a country token is not emptied.
-        assert_eq!(show_search_terms("UK", None), ("UK".to_string(), None, None));
+        assert_eq!(
+            show_search_terms("UK", None),
+            ("UK".to_string(), None, None)
+        );
         // A non-country trailing token is left alone.
         assert_eq!(
             show_search_terms("Severance", None),
@@ -1486,7 +1496,10 @@ mod tests {
             reqwest::StatusCode::TOO_MANY_REQUESTS,
             reqwest::StatusCode::FORBIDDEN,
         ] {
-            assert!(!status_is_definitive_miss(s), "status {s} must be transient");
+            assert!(
+                !status_is_definitive_miss(s),
+                "status {s} must be transient"
+            );
         }
     }
 
@@ -1603,10 +1616,7 @@ pub(crate) mod stub {
 
         /// How many recorded request paths contain `needle`.
         pub fn hit_count_containing(&self, needle: &str) -> usize {
-            self.hits()
-                .iter()
-                .filter(|p| p.contains(needle))
-                .count()
+            self.hits().iter().filter(|p| p.contains(needle)).count()
         }
 
         /// Total recorded requests.

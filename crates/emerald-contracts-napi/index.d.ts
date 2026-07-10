@@ -37,8 +37,8 @@ export interface StreamClaimsJs {
   /**
    * Stream kind tag per §5.3 — the full wire enum is
    * 'live' | 'vod' | 'series' | 'catchup' | 'segment' | 'remux' |
-   * 'playlist' | 'recording'. 'recording' is M6-reserved (DVR): verifiers
-   * accept it but no current path mints it. Mirrors Rust
+   * 'playlist' | 'recording'. 'recording' is used by DVR playback grants.
+   * Mirrors Rust
    * `stream_token::StreamKind` and the TS `StreamKind` union in
    * server/services/iptvStreamToken.ts.
    */
