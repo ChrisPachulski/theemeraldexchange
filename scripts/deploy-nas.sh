@@ -352,9 +352,11 @@ ssh "${NAS_USER}@${NAS_HOST}" "\
 # post-deploy healthcheck below). Timestamped per run — a single :rollback tag
 # was clobbered by any re-run, so a failed deploy followed by a second failed
 # deploy would have re-tagged the BROKEN images as the revert target. Keep the
-# newest 2 generations, prune older (including the legacy un-timestamped
-# :rollback tag, which sorts first). Best-effort: the first-ever deploy has no
-# prior images.
+# newest 2 timestamped generations and prune only older timestamped tags.
+# Descriptive operator tags such as :rollback-prelive sort after numeric tags,
+# so counting every `rollback*` tag can accidentally delete the rollback we
+# just created. Remove only the obsolete exact :rollback tag separately.
+# Best-effort: the first-ever deploy has no prior images.
 echo "→ Tagging current images as :rollback-${ROLLBACK_TS} (revert targets; keeping last 2 generations)"
 ssh "${NAS_USER}@${NAS_HOST}" "
   for img in theemeraldexchange-backend theemeraldexchange-recommender theemeraldexchange-media-core theemeraldexchange-transcoder; do
@@ -364,7 +366,8 @@ ssh "${NAS_USER}@${NAS_HOST}" "
     else
       echo \"[deploy] no prior \$img image to tag (first deploy)\"
     fi
-    docker image ls --format '{{.Tag}}' \"\$img\" | grep '^rollback' | sort | head -n -2 | \
+    docker rmi \"\$img:rollback\" >/dev/null 2>&1 && echo \"[deploy] pruned legacy rollback tag \$img:rollback\" || true
+    docker image ls --format '{{.Tag}}' \"\$img\" | grep -E '^rollback-[0-9]{8}-[0-9]{6}$' | sort | head -n -2 | \
       while read -r t; do
         docker rmi \"\$img:\$t\" >/dev/null 2>&1 && echo \"[deploy] pruned stale rollback tag \$img:\$t\"
       done
