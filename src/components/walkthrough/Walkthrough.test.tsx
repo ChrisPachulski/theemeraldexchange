@@ -21,6 +21,7 @@ function render(): string {
 
 afterEach(() => {
   vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
 })
 
 describe('Walkthrough sign-in', () => {
@@ -46,5 +47,17 @@ describe('Walkthrough sign-in', () => {
     // EmeraldMark renders a <canvas>; the hero gem mounts it.
     expect(html).toContain('<canvas')
     expect(html).toContain('walkthrough__hero-gem')
+  })
+
+  it('prefills an invite delivered in a private URL fragment', () => {
+    const code = 'A'.repeat(22)
+    vi.stubGlobal('window', {
+      location: { hash: `#/invite/${code}`, pathname: '/', search: '' },
+      history: { replaceState: vi.fn() },
+    })
+
+    const html = render()
+
+    expect(html).toContain(`value="${code}"`)
   })
 })

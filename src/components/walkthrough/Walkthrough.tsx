@@ -4,7 +4,7 @@ import { EmeraldMark } from '../atmosphere/EmeraldMark'
 import { TrendingRow } from '../search/TrendingRow'
 import type { TrendingItem } from '../../lib/hooks/useTrending'
 import type { DotState } from '../search/FeedbackDots'
-import { useAuth } from '../../lib/auth'
+import { inviteCodeError, useAuth } from '../../lib/auth'
 import { AppleSignInButton } from '../auth/AppleSignInButton'
 import { PasskeyButtons } from '../auth/PasskeyButtons'
 import './Walkthrough.css'
@@ -114,15 +114,23 @@ function ClaimBlock({ placement }: { placement: 'hero' | 'foot' }) {
   )
 }
 
-function SignInBlock({ placement }: { placement: 'hero' | 'foot' }) {
+function SignInBlock({
+  placement,
+  initialInviteCode,
+}: {
+  placement: 'hero' | 'foot'
+  initialInviteCode: string
+}) {
   const { signIn, signInState, signInError, discoveredServers, authMethods, setupClaimable } =
     useAuth()
-  const [inviteCode, setInviteCode] = useState('')
+  const [inviteCode, setInviteCode] = useState(initialInviteCode)
   const pending = signInState === 'pending' || signInState === 'opening'
   const code = inviteCode.trim()
+  const codeError = inviteCodeError(code)
   // A unique id per placement so the two SignInBlock instances on the
   // page don't share an htmlFor target.
   const inviteFieldId = `walkthrough-invite-${placement}`
+  const inviteErrorId = `${inviteFieldId}-error`
 
   // Unclaimed server → the claim flow replaces sign-in entirely (there is
   // nobody to sign in AS until an owner exists).
@@ -147,11 +155,22 @@ function SignInBlock({ placement }: { placement: 'hero' | 'foot' }) {
           onChange={(e) => setInviteCode(e.target.value)}
           placeholder="Paste the code the owner sent you"
           autoComplete="one-time-code"
+          autoCapitalize="none"
           spellCheck={false}
           disabled={pending}
+          aria-invalid={codeError ? true : undefined}
+          aria-describedby={codeError ? inviteErrorId : undefined}
         />
+        {codeError && (
+          <p id={inviteErrorId} className="walkthrough__signin-error" role="alert">
+            {codeError}
+          </p>
+        )}
       </div>
-      <div className="walkthrough__signin-buttons">
+      <fieldset
+        className="walkthrough__signin-buttons"
+        disabled={pending || Boolean(codeError)}
+      >
         {showPlex && (
           <button
             type="button"
@@ -164,7 +183,7 @@ function SignInBlock({ placement }: { placement: 'hero' | 'foot' }) {
         )}
         {showApple && <AppleSignInButton inviteCode={code || undefined} />}
         <PasskeyButtons inviteCode={code || undefined} />
-      </div>
+      </fieldset>
       <p className="walkthrough__signin-hint">
         Invitation-only. Returning members can sign in with a passkey
         {showApple ? ', Apple' : ''}
@@ -362,6 +381,24 @@ type Section = {
 
 export function Walkthrough() {
   const stripRef = useInView<HTMLElement>(() => {})
+  const [initialInviteCode] = useState(() => {
+    if (typeof window === 'undefined') return ''
+    const match = window.location.hash.match(/^#\/invite\/([^/?#]+)$/)
+    if (!match) return ''
+    try {
+      return decodeURIComponent(match[1])
+    } catch {
+      return match[1]
+    }
+  })
+
+  // The invite lives in the fragment so it is never sent in the initial HTTP
+  // request or Referer header. Remove it after reading so it does not linger in
+  // browser history or get copied accidentally from the address bar.
+  useEffect(() => {
+    if (!initialInviteCode || typeof window === 'undefined') return
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`)
+  }, [initialInviteCode])
 
   const sections: Section[] = [
     {
@@ -411,7 +448,7 @@ export function Walkthrough() {
             <h1 id="hero-title" className="walkthrough__hero-title">
               A private members’ page<br />for a household media library.
             </h1>
-            <SignInBlock placement="hero" />
+            <SignInBlock placement="hero" initialInviteCode={initialInviteCode} />
             <p className="walkthrough__hero-scroll">↓ scroll for the tour</p>
           </div>
         </header>
@@ -440,7 +477,7 @@ export function Walkthrough() {
             <h2 id="signin-foot-title" className="walkthrough__title">
               Invited? Pick up where you left off.
             </h2>
-            <SignInBlock placement="foot" />
+            <SignInBlock placement="foot" initialInviteCode={initialInviteCode} />
           </div>
         </section>
         <footer className="walkthrough__foot">

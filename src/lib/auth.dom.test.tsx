@@ -24,6 +24,9 @@ function AuthProbe() {
       <button type="button" onClick={() => void signIn()}>
         Start Plex sign-in
       </button>
+      <button type="button" onClick={() => void signIn('A'.repeat(20))}>
+        Start with incomplete invite
+      </button>
       <output aria-label="signed-in user">{user?.username ?? ''}</output>
       {signInError && <p role="alert">{signInError}</p>}
     </>
@@ -135,5 +138,26 @@ describe('Plex popup completion', () => {
       await poll?.()
     })
     expect(screen.getByLabelText('signed-in user')).toHaveTextContent('brother')
+  })
+
+  it('rejects an incomplete invite before opening Plex', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <AuthProbe />
+        </AuthProvider>
+      </QueryClientProvider>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start with incomplete invite' }))
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(window.open).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Invite codes are 22 characters. Paste the complete code.',
+    )
   })
 })

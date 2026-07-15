@@ -75,6 +75,16 @@ export function deniedMessage(reason: unknown): string {
   }
 }
 
+const INVITE_CODE_PATTERN = /^[A-Za-z0-9_-]{22}$/
+const INVALID_INVITE_CODE_MESSAGE =
+  'Invite codes are 22 characters. Paste the complete code.'
+
+/** Empty is valid for returning members; a supplied invite must be complete. */
+export function inviteCodeError(code?: string): string | null {
+  const value = code?.trim()
+  return !value || INVITE_CODE_PATTERN.test(value) ? null : INVALID_INVITE_CODE_MESSAGE
+}
+
 // Auth state shared by the whole app. The session is server-side
 // (HttpOnly cookie); we only mirror identity + role here so the UI can
 // gate buttons and show the username. /api/me returns 401 when no
@@ -222,6 +232,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const pollRef = useRef<number | null>(null)
   const popupRef = useRef<Window | null>(null)
   const signInInFlightRef = useRef(false)
+  const rejectMalformedInvite = useCallback((inviteCode?: string) => {
+    const message = inviteCodeError(inviteCode)
+    if (!message) return false
+    setSignInState('error')
+    setSignInError(message)
+    setSignOutError(null)
+    return true
+  }, [])
 
   // Initial session probe.
   useEffect(() => {
@@ -297,6 +315,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => () => stopPolling(), [stopPolling])
 
   const signIn = useCallback(async (inviteCode?: string) => {
+    if (rejectMalformedInvite(inviteCode)) return
     if (signInInFlightRef.current) return
     signInInFlightRef.current = true
     setSignInError(null)
@@ -444,7 +463,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSignInState('error')
       setSignInError(e instanceof Error ? e.message : String(e))
     }
-  }, [applyUser, stopPolling])
+  }, [applyUser, rejectMalformedInvite, stopPolling])
 
   const appleSignIn = useCallback(
     async (args: {
@@ -452,6 +471,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       nonce?: string
       inviteCode?: string
     }): Promise<boolean> => {
+      if (rejectMalformedInvite(args.inviteCode)) return false
       if (signInInFlightRef.current) return false
       signInInFlightRef.current = true
       setSignInError(null)
@@ -509,7 +529,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signInInFlightRef.current = false
       }
     },
-    [applyUser],
+    [applyUser, rejectMalformedInvite],
   )
 
   const passkeyLogin = useCallback(async (): Promise<boolean> => {
@@ -585,6 +605,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       inviteCode?: string
       setupToken?: string
     }): Promise<boolean> => {
+      if (rejectMalformedInvite(inviteCode)) return false
       if (signInInFlightRef.current) return false
       signInInFlightRef.current = true
       setSignInError(null)
@@ -667,7 +688,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signInInFlightRef.current = false
       }
     },
-    [applyUser],
+    [applyUser, rejectMalformedInvite],
   )
 
   const signOut = useCallback(async () => {
