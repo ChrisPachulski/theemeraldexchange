@@ -13,10 +13,18 @@ import './PasskeyButtons.css'
 //   - "Set one up" — first-time: needs a display name + a valid invite code
 //     (the invite authorizes the new identity onto the members allowlist,
 //     exactly like the Plex/Apple paths).
-export function PasskeyButtons({ inviteCode }: { inviteCode?: string }) {
+export function PasskeyButtons({
+  inviteCode,
+  startInRegistration = false,
+}: {
+  inviteCode?: string
+  startInRegistration?: boolean
+}) {
   const { passkeyLogin, passkeyRegister, signInState } = useAuth()
   const [supported, setSupported] = useState(false)
-  const [mode, setMode] = useState<'idle' | 'register'>('idle')
+  const [mode, setMode] = useState<'idle' | 'register'>(
+    startInRegistration ? 'register' : 'idle',
+  )
   const [handle, setHandle] = useState('')
   const pending = signInState === 'pending' || signInState === 'opening'
 
@@ -76,6 +84,7 @@ export function PasskeyButtons({ inviteCode }: { inviteCode?: string }) {
             placeholder="e.g. Chris"
             autoComplete="name"
             spellCheck={false}
+            autoFocus={startInRegistration}
             disabled={pending}
           />
           <div className="passkey-signin__actions">

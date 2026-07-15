@@ -182,7 +182,10 @@ function SignInBlock({
           </button>
         )}
         {showApple && <AppleSignInButton inviteCode={code || undefined} />}
-        <PasskeyButtons inviteCode={code || undefined} />
+        <PasskeyButtons
+          inviteCode={code || undefined}
+          startInRegistration={placement === 'hero' && Boolean(initialInviteCode)}
+        />
       </fieldset>
       <p className="walkthrough__signin-hint">
         Invitation-only. Returning members can sign in with a passkey

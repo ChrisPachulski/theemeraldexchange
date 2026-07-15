@@ -33,6 +33,12 @@ describe('PasskeyButtons registration', () => {
     vi.clearAllMocks()
   })
 
+  it('opens and focuses registration when an invite link requests setup', async () => {
+    render(<PasskeyButtons inviteCode={'A'.repeat(22)} startInRegistration />)
+
+    expect(await screen.findByRole('textbox', { name: 'Your name' })).toHaveFocus()
+  })
+
   it('submits passkey registration when Enter is pressed in the name field', async () => {
     const user = userEvent.setup()
     const inviteCode = 'A'.repeat(22)
