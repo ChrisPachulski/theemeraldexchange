@@ -57,7 +57,13 @@ export function PasskeyButtons({ inviteCode }: { inviteCode?: string }) {
           First time with a passkey? Set one up
         </button>
       ) : (
-        <div className="passkey-signin__register">
+        <form
+          className="passkey-signin__register"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void passkeyRegister({ handle: handle.trim(), inviteCode })
+          }}
+        >
           <label className="passkey-signin__label" htmlFor="passkey-handle">
             Your name
           </label>
@@ -74,9 +80,8 @@ export function PasskeyButtons({ inviteCode }: { inviteCode?: string }) {
           />
           <div className="passkey-signin__actions">
             <button
-              type="button"
+              type="submit"
               className="walkthrough__signin-button"
-              onClick={() => void passkeyRegister({ handle: handle.trim(), inviteCode })}
               disabled={pending || handle.trim().length === 0}
             >
               {pending ? 'Creating…' : 'Create passkey'}
@@ -94,7 +99,7 @@ export function PasskeyButtons({ inviteCode }: { inviteCode?: string }) {
             Needs a valid invite code above. Works on this device with Face ID,
             Touch ID, Windows Hello, or a security key; no Plex account required.
           </p>
-        </div>
+        </form>
       )}
     </div>
   )
