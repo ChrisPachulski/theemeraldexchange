@@ -109,6 +109,12 @@ export function authModeFromUser(user: Pick<AuthUser, 'sub' | 'auth_mode'>): Aut
 
 type SignInState = 'idle' | 'opening' | 'pending' | 'denied' | 'error'
 
+// Plex may close its auth popup before the newly-authorized PIN is visible to
+// the backend. Keep checking briefly so a successful sign-in cannot lose a
+// race against the popup's close event, while still recovering quickly when a
+// user intentionally cancels the window.
+const PLEX_POPUP_CLOSE_GRACE_MS = 10_000
+
 type AuthCtx = {
   loading: boolean
   user: AuthUser | null
@@ -311,6 +317,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     popupRef.current = popup
     let intervalId: number | null = null
+    let popupClosedAt: number | null = null
     const stopCurrentPoll = () => {
       stopPolling(intervalId)
       intervalId = null
@@ -360,14 +367,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       const deadline = Date.now() + 5 * 60 * 1000
       intervalId = window.setInterval(async () => {
+        const now = Date.now()
         if (popup.closed) {
-          stopCurrentPoll()
-          if (popupRef.current === popup) popupRef.current = null
-          setSignInState('error')
-          setSignInError('Plex sign-in window was closed before authorization finished.')
-          return
+          popupClosedAt ??= now
+          if (now - popupClosedAt >= PLEX_POPUP_CLOSE_GRACE_MS) {
+            stopCurrentPoll()
+            if (popupRef.current === popup) popupRef.current = null
+            setSignInState('error')
+            setSignInError('Plex sign-in window was closed before authorization finished.')
+            return
+          }
         }
-        if (Date.now() > deadline) {
+        if (now > deadline) {
           stopCurrentPoll()
           popup.close()
           if (popupRef.current === popup) popupRef.current = null
