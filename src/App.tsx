@@ -106,17 +106,31 @@ function Shell() {
   )
 }
 
-// Gate the whole dashboard behind a Plex session. Unauthenticated
+// Gate the whole dashboard behind a confirmed browser session. Unauthenticated
 // visitors land on the public Walkthrough — the showcase IS the
-// pre-auth experience, with Plex sign-in CTAs embedded in the hero
+// pre-auth experience, with provider sign-in CTAs embedded in the hero
 // and footer. The kraken atmosphere keeps playing under both states
-// so the brand is present from first paint. While /api/me is in
-// flight we render nothing — short (one-RTT) flash, avoids any
-// pop-in for already-authed users.
+// so the brand is present from first paint. While /api/me is in flight
+// we render nothing; an unavailable read gets a branded Retry state
+// instead of flashing the logged-out walkthrough.
 function AuthGate() {
-  const { loading, user } = useAuth()
-  if (loading) return null
-  if (!user) {
+  const { sessionState, sessionError, retrySession, user } = useAuth()
+  if (sessionState === 'loading') return null
+  if (sessionState === 'unavailable' || (sessionState === 'authenticated' && !user)) {
+    return (
+      <main role="main" aria-labelledby="session-unavailable-title">
+        <section role="alert" aria-live="polite">
+          <p>The Emerald Exchange</p>
+          <h1 id="session-unavailable-title">Session unavailable</h1>
+          <p>{sessionError ?? 'We couldn’t verify your session.'}</p>
+          <button type="button" onClick={() => void retrySession()}>
+            Retry
+          </button>
+        </section>
+      </main>
+    )
+  }
+  if (sessionState === 'anonymous') {
     // Suspense fallback here is essentially invisible — the Kraken inside
     // Walkthrough is the brand atmosphere, and on second visit the chunk
     // is already in HTTP cache. Render nothing during the brief gap.
@@ -126,6 +140,7 @@ function AuthGate() {
       </Suspense>
     )
   }
+  if (!user) return null
   return (
     <NavTransitionProvider>
       <Shell />

@@ -93,7 +93,7 @@ export function inviteCodeError(code?: string): string | null {
 export type Role = 'admin' | 'user'
 /** Which federated identity provider minted the session. Mirrors the
  *  server's AuthMode (session.ts). `local` is legacy/dev-only. */
-export type AuthMode = 'plex' | 'apple' | 'local'
+export type AuthMode = 'plex' | 'apple' | 'google' | 'local'
 export type AuthUser = {
   /** Namespaced subject: `plex:<id>` | `apple:<subject>`. Used by the
    *  SPA to scope per-user localStorage (BYO API key, etc.) so a shared
@@ -113,8 +113,146 @@ export type AuthUser = {
 export function authModeFromUser(user: Pick<AuthUser, 'sub' | 'auth_mode'>): AuthMode {
   if (user.auth_mode) return user.auth_mode
   if (user.sub.startsWith('apple:')) return 'apple'
+  if (user.sub.startsWith('google:')) return 'google'
   if (user.sub.startsWith('local:')) return 'local'
   return 'plex'
+}
+
+export type SessionState =
+  | 'loading'
+  | 'authenticated'
+  | 'anonymous'
+  | 'unavailable'
+
+type SessionReadResult =
+  | { status: 'authenticated'; user: AuthUser }
+  | { status: 'anonymous' }
+  | { status: 'unavailable' }
+  | { status: 'aborted' }
+
+const SESSION_READ_ATTEMPTS = 3
+const SESSION_READ_TIMEOUT_MS = 3_000
+const SESSION_READ_RETRY_BASE_MS = 100
+const SESSION_UNAVAILABLE_ERROR =
+  'We couldn’t verify your session. Check your connection and try again.'
+const SESSION_NOT_ESTABLISHED_ERROR =
+  'Sign-in succeeded, but the browser session could not be established. Try again.'
+const SESSION_CONFIRMATION_UNAVAILABLE_ERROR =
+  'Sign-in succeeded, but the browser session could not be confirmed. Check your connection and try again.'
+const SESSION_MISMATCH_ERROR =
+  'Sign-in could not be completed because the confirmed session did not match. Try again.'
+
+function isProviderSub(value: unknown): value is string {
+  if (typeof value !== 'string' || value !== value.trim()) return false
+  const separator = value.indexOf(':')
+  const provider = value.slice(0, separator)
+  const providerId = value.slice(separator + 1)
+  return (
+    separator > 0 &&
+    ['plex', 'apple', 'google', 'local'].includes(provider) &&
+    Boolean(providerId.trim())
+  )
+}
+
+function providerSubFromApi(value: unknown): string | null {
+  if (typeof value !== 'object' || value === null) return null
+  const sub = (value as Record<string, unknown>).sub
+  return isProviderSub(sub) ? sub : null
+}
+
+function authUserFromApi(value: unknown): AuthUser | null {
+  if (typeof value !== 'object' || value === null) return null
+  const candidate = value as Record<string, unknown>
+  const sub = candidate.sub
+  const username = candidate.username
+  const role = candidate.role
+  const authMode = candidate.auth_mode
+  if (!isProviderSub(sub)) return null
+  if (typeof username !== 'string' || !username.trim()) return null
+  if (role !== 'admin' && role !== 'user') return null
+  if (
+    authMode !== undefined &&
+    authMode !== 'plex' &&
+    authMode !== 'apple' &&
+    authMode !== 'google' &&
+    authMode !== 'local'
+  ) {
+    return null
+  }
+  return {
+    sub,
+    username,
+    role,
+    ...(authMode === undefined ? {} : { auth_mode: authMode }),
+  }
+}
+
+function waitForSessionRetry(delay: number, signal: AbortSignal): Promise<boolean> {
+  if (signal.aborted) return Promise.resolve(false)
+  return new Promise((resolve) => {
+    const finish = (completed: boolean) => {
+      window.clearTimeout(timer)
+      signal.removeEventListener('abort', onAbort)
+      resolve(completed)
+    }
+    const onAbort = () => finish(false)
+    const timer = window.setTimeout(() => finish(true), delay)
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+async function readBrowserSession(signal: AbortSignal): Promise<SessionReadResult> {
+  for (let attempt = 0; attempt < SESSION_READ_ATTEMPTS; attempt += 1) {
+    if (signal.aborted) return { status: 'aborted' }
+    const controller = new AbortController()
+    let rejectBoundary!: (reason: unknown) => void
+    const boundary = new Promise<never>((_resolve, reject) => {
+      rejectBoundary = reject
+    })
+    const onAbort = () => {
+      controller.abort()
+      rejectBoundary(new Error('session read aborted'))
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    const timeout = window.setTimeout(() => {
+      controller.abort()
+      rejectBoundary(new Error('session read timed out'))
+    }, SESSION_READ_TIMEOUT_MS)
+
+    try {
+      const result = await Promise.race([
+        (async (): Promise<SessionReadResult> => {
+          const response = await fetch(apiUrl('/api/me'), {
+            credentials: 'include',
+            signal: controller.signal,
+          })
+          if (signal.aborted) return { status: 'aborted' }
+          if (response.status === 401) return { status: 'anonymous' }
+          if (response.status !== 200) throw new Error(`unexpected status ${response.status}`)
+          const body = (await response.json()) as { user?: unknown }
+          if (signal.aborted) return { status: 'aborted' }
+          const user = authUserFromApi(body?.user)
+          if (!user) throw new Error('invalid session response')
+          return { status: 'authenticated', user }
+        })(),
+        boundary,
+      ])
+      return result
+    } catch {
+      if (signal.aborted) return { status: 'aborted' }
+    } finally {
+      window.clearTimeout(timeout)
+      signal.removeEventListener('abort', onAbort)
+    }
+
+    if (
+      attempt < SESSION_READ_ATTEMPTS - 1 &&
+      !(await waitForSessionRetry(SESSION_READ_RETRY_BASE_MS * (attempt + 1), signal))
+    ) {
+      return { status: 'aborted' }
+    }
+  }
+  return { status: 'unavailable' }
 }
 
 type SignInState = 'idle' | 'opening' | 'pending' | 'denied' | 'error'
@@ -145,6 +283,10 @@ function plexRetryDelay(retryAfter: string | null, now: number): number {
 
 type AuthCtx = {
   loading: boolean
+  sessionState: SessionState
+  sessionError: string | null
+  /** Re-read the HttpOnly-cookie session with a fresh bounded attempt set. */
+  retrySession: () => Promise<void>
   user: AuthUser | null
   /** Server-truth role from the session cookie. */
   role: Role | null
@@ -216,7 +358,8 @@ const AuthContext = createContext<AuthCtx | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const qc = useQueryClient()
-  const [loading, setLoading] = useState(true)
+  const [sessionState, setSessionState] = useState<SessionState>('loading')
+  const [sessionError, setSessionError] = useState<string | null>(null)
   const [user, setUser] = useState<AuthUser | null>(null)
   // Per-user data (feedback dots, usage totals, BYO-key-scoped
   // suggestions) lives in the React Query cache. Without a reset on
@@ -252,6 +395,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const pollGenerationRef = useRef(0)
   const popupRef = useRef<Window | null>(null)
   const signInInFlightRef = useRef(false)
+  const sessionReadRef = useRef<AbortController | null>(null)
+  const sessionReadGenerationRef = useRef(0)
+  const mountedRef = useRef(true)
   const rejectMalformedInvite = useCallback((inviteCode?: string) => {
     const message = inviteCodeError(inviteCode)
     if (!message) return false
@@ -261,25 +407,97 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return true
   }, [])
 
-  // Initial session probe.
-  useEffect(() => {
-    let alive = true
-    fetch(apiUrl('/api/me'), { credentials: 'include' })
-      .then(async (r) => {
-        if (!alive) return
-        if (r.status === 401) {
-          applyUser(null)
-        } else if (r.ok) {
-          const { user } = (await r.json()) as { user: AuthUser }
-          applyUser(user)
-        }
-      })
-      .catch(() => {})
-      .finally(() => alive && setLoading(false))
-    return () => {
-      alive = false
+  const readCurrentSession = useCallback(async (): Promise<SessionReadResult> => {
+    if (!mountedRef.current) return { status: 'aborted' }
+    sessionReadRef.current?.abort()
+    const controller = new AbortController()
+    const generation = ++sessionReadGenerationRef.current
+    sessionReadRef.current = controller
+    const result = await readBrowserSession(controller.signal)
+    if (
+      !mountedRef.current ||
+      controller.signal.aborted ||
+      sessionReadGenerationRef.current !== generation ||
+      sessionReadRef.current !== controller
+    ) {
+      return { status: 'aborted' }
     }
-  }, [applyUser])
+    sessionReadRef.current = null
+    return result
+  }, [])
+
+  const commitSessionResult = useCallback(
+    (result: Exclude<SessionReadResult, { status: 'aborted' }>) => {
+      if (!mountedRef.current) return
+      if (result.status === 'authenticated') {
+        applyUser(result.user)
+        setSessionState('authenticated')
+        setSessionError(null)
+      } else if (result.status === 'anonymous') {
+        applyUser(null)
+        setSessionState('anonymous')
+        setSessionError(null)
+      } else {
+        setSessionState('unavailable')
+        setSessionError(SESSION_UNAVAILABLE_ERROR)
+      }
+    },
+    [applyUser],
+  )
+
+  const retrySession = useCallback(async () => {
+    setSessionState('loading')
+    setSessionError(null)
+    const result = await readCurrentSession()
+    if (result.status !== 'aborted') commitSessionResult(result)
+  }, [commitSessionResult, readCurrentSession])
+
+  // Initial session probe. Cleanup aborts both the initial read and any later
+  // provider confirmation that happens to be in flight during unmount.
+  useEffect(() => {
+    mountedRef.current = true
+    void readCurrentSession().then((result) => {
+      if (result.status !== 'aborted') commitSessionResult(result)
+    })
+    return () => {
+      mountedRef.current = false
+      sessionReadGenerationRef.current += 1
+      sessionReadRef.current?.abort()
+      sessionReadRef.current = null
+    }
+  }, [commitSessionResult, readCurrentSession])
+
+  const confirmProviderSession = useCallback(
+    async (expectedSub: string): Promise<boolean> => {
+      setSessionState('loading')
+      setSessionError(null)
+      const result = await readCurrentSession()
+      if (result.status === 'aborted') return false
+      if (result.status === 'unavailable') {
+        commitSessionResult(result)
+        setSignInState('error')
+        setSignInError(SESSION_CONFIRMATION_UNAVAILABLE_ERROR)
+        return false
+      }
+      if (result.status === 'anonymous') {
+        commitSessionResult(result)
+        setSignInState('error')
+        setSignInError(SESSION_NOT_ESTABLISHED_ERROR)
+        return false
+      }
+      if (result.user.sub !== expectedSub) {
+        setSessionState('unavailable')
+        setSessionError(SESSION_MISMATCH_ERROR)
+        setSignInState('error')
+        setSignInError(SESSION_MISMATCH_ERROR)
+        return false
+      }
+      commitSessionResult(result)
+      setSignInError(null)
+      return true
+    },
+    [commitSessionResult, readCurrentSession],
+  )
 
   // Provider discovery + first-owner claim state (plan 006 Phase 1).
   // Best-effort: on failure authMethods stays null (all buttons render)
@@ -306,21 +524,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  // Centralised 401/403 handling. queryClient dispatches SESSION_EXPIRED_EVENT
-  // (debounced) when any query/mutation fails auth, so an expired cookie clears
-  // local auth state — applyUser(null) also wipes the query cache — and the
-  // AuthGate drops back to the login screen instead of a silently broken UI.
+  // Centralised 401/403 handling. A protected request can suggest that the
+  // cookie expired, but only /api/me is allowed to declare this browser
+  // anonymous. Revalidate through the same bounded reader so a transient API
+  // failure shows Retry instead of flashing the public walkthrough.
   useEffect(() => {
     const onExpired = () => {
-      setUser((prev) => {
-        if (!prev) return prev
-        qc.clear()
-        return null
-      })
+      void retrySession()
     }
     window.addEventListener(SESSION_EXPIRED_EVENT, onExpired)
     return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired)
-  }, [qc])
+  }, [retrySession])
 
   const stopPolling = useCallback(() => {
     if (pollRef.current !== null) window.clearTimeout(pollRef.current)
@@ -569,8 +783,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (!attemptIsCurrent()) return
           if (finishIfTerminal()) return
           if (data.status === 'authorized') {
-            finish('idle', null)
-            applyUser(data.user as AuthUser)
+            const providerSub = providerSubFromApi(data.user)
+            if (!providerSub) {
+              finish('error', 'Plex sign-in returned an unexpected response.')
+              return
+            }
+            stopPolling()
+            // stopPolling releases the Plex poller, but provider serialization
+            // must remain held until the cookie session is confirmed.
+            signInInFlightRef.current = true
+            let confirmed = false
+            try {
+              confirmed = await confirmProviderSession(providerSub)
+            } finally {
+              signInInFlightRef.current = false
+            }
+            if (!confirmed) return
+            setSignInState('idle')
+            setSignInError(null)
             setDiscoveredServers(data.discoveredServers ?? null)
             return
           }
@@ -589,7 +819,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!setupIsCurrent()) return
       finish('error', e instanceof Error ? e.message : String(e))
     }
-  }, [applyUser, rejectMalformedInvite, stopPolling])
+  }, [confirmProviderSession, rejectMalformedInvite, stopPolling])
 
   const appleSignIn = useCallback(
     async (args: {
@@ -639,7 +869,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         const data = (await r.json()) as { status?: string; user?: AuthUser }
         if (data.status === 'authorized' && data.user) {
-          applyUser(data.user)
+          const providerSub = providerSubFromApi(data.user)
+          if (!providerSub) {
+            setSignInState('error')
+            setSignInError('Apple sign-in returned an unexpected response.')
+            return false
+          }
+          if (!(await confirmProviderSession(providerSub))) return false
           setDiscoveredServers(null)
           setSignInState('idle')
           return true
@@ -655,7 +891,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signInInFlightRef.current = false
       }
     },
-    [applyUser, rejectMalformedInvite],
+    [confirmProviderSession, rejectMalformedInvite],
   )
 
   const passkeyLogin = useCallback(async (): Promise<boolean> => {
@@ -704,7 +940,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       const data = (await verifyRes.json()) as { ok?: boolean; user?: AuthUser }
       if (data.ok && data.user) {
-        applyUser(data.user)
+        const providerSub = providerSubFromApi(data.user)
+        if (!providerSub) {
+          setSignInState('error')
+          setSignInError('Passkey sign-in returned an unexpected response.')
+          return false
+        }
+        if (!(await confirmProviderSession(providerSub))) return false
         setDiscoveredServers(null)
         setSignInState('idle')
         return true
@@ -719,7 +961,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       signInInFlightRef.current = false
     }
-  }, [applyUser])
+  }, [confirmProviderSession])
 
   const passkeyRegister = useCallback(
     async ({
@@ -792,7 +1034,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           claimed?: boolean
         }
         if (data.ok && data.user) {
-          applyUser(data.user)
+          const providerSub = providerSubFromApi(data.user)
+          if (!providerSub) {
+            setSignInState('error')
+            setSignInError('Passkey setup returned an unexpected response.')
+            return false
+          }
+          if (!(await confirmProviderSession(providerSub))) return false
           setDiscoveredServers(null)
           if (data.claimed) {
             setSetupClaimable(false)
@@ -814,7 +1062,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signInInFlightRef.current = false
       }
     },
-    [applyUser, rejectMalformedInvite],
+    [confirmProviderSession, rejectMalformedInvite],
   )
 
   const signOut = useCallback(async () => {
@@ -835,10 +1083,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw error
     }
     applyUser(null)
+    setSessionState('anonymous')
+    setSessionError(null)
     setViewAs(null)
     setDiscoveredServers(null)
   }, [applyUser, setViewAs])
 
+  const loading = sessionState === 'loading'
   const role = user?.role ?? null
   // Only admins can preview as user. Anyone else gets their actual role
   // even if they somehow set viewAs (e.g. devtools).
@@ -850,6 +1101,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     <AuthContext.Provider
       value={{
         loading,
+        sessionState,
+        sessionError,
+        retrySession,
         user,
         role,
         effectiveRole,

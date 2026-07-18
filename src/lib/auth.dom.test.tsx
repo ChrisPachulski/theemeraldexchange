@@ -3,8 +3,17 @@
 import '@testing-library/jest-dom/vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { AuthProvider, useAuth } from './auth'
+import { SESSION_EXPIRED_EVENT } from './queryClient'
+
+const webauthnMocks = vi.hoisted(() => ({
+  startAuthentication: vi.fn(),
+  startRegistration: vi.fn(),
+}))
+
+vi.mock('@simplewebauthn/browser', () => webauthnMocks)
 
 function json(body: unknown, status = 200, headers?: HeadersInit): Response {
   const responseHeaders = new Headers(headers)
@@ -45,10 +54,620 @@ function AuthProbe() {
   )
 }
 
+type SessionAwareAuth = ReturnType<typeof useAuth> & {
+  sessionState?: 'loading' | 'authenticated' | 'anonymous' | 'unavailable'
+  sessionError?: string | null
+  retrySession?: () => Promise<void>
+}
+
+function SessionProbe() {
+  const auth = useAuth() as SessionAwareAuth
+  return (
+    <>
+      <output aria-label="session state">{auth.sessionState}</output>
+      <output aria-label="session user">{auth.user?.username ?? ''}</output>
+      {auth.sessionError && <p role="alert">{auth.sessionError}</p>}
+      <button
+        type="button"
+        disabled={!auth.retrySession}
+        onClick={() => void auth.retrySession?.()}
+      >
+        Retry session
+      </button>
+    </>
+  )
+}
+
+function ProviderProbe() {
+  const { signIn, appleSignIn, passkeyLogin, passkeyRegister, user, signInError } =
+    useAuth()
+  const [result, setResult] = useState('')
+  return (
+    <>
+      <button type="button" onClick={() => void signIn()}>
+        Plex provider
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          void appleSignIn({ identityToken: 'apple-token' }).then((ok) =>
+            setResult(String(ok)),
+          )
+        }
+      >
+        Apple provider
+      </button>
+      <button
+        type="button"
+        onClick={() => void passkeyLogin().then((ok) => setResult(String(ok)))}
+      >
+        Passkey login provider
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          void passkeyRegister({ handle: 'Sibling' }).then((ok) =>
+            setResult(String(ok)),
+          )
+        }
+      >
+        Passkey registration provider
+      </button>
+      <output aria-label="provider result">{result}</output>
+      <output aria-label="provider user">{user?.username ?? ''}</output>
+      {signInError && <p role="alert">{signInError}</p>}
+    </>
+  )
+}
+
+function renderWithAuth(
+  children: React.ReactNode,
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+) {
+  return {
+    queryClient,
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>{children}</AuthProvider>
+      </QueryClientProvider>,
+    ),
+  }
+}
+
+function auxiliaryAuthResponse(url: string): Response | null {
+  if (url.endsWith('/api/auth/methods')) {
+    return json({ plex: true, apple: true, google: false, passkey: true })
+  }
+  if (url.endsWith('/api/setup/status')) return json({ claimable: false })
+  return null
+}
+
+describe('browser session truth', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+  })
+
+  async function settleBoundedRead() {
+    await act(async () => {
+      await vi.runAllTimersAsync()
+      for (let i = 0; i < 10; i += 1) await Promise.resolve()
+    })
+  }
+
+  it('treats only an explicit /api/me 401 as anonymous', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      const auxiliary = auxiliaryAuthResponse(url)
+      if (auxiliary) return Promise.resolve(auxiliary)
+      if (url.endsWith('/api/me')) {
+        return Promise.resolve(json({ error: 'unauthenticated' }, 401))
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithAuth(<SessionProbe />)
+    await settleBoundedRead()
+
+    expect(screen.getByLabelText('session state')).toHaveTextContent('anonymous')
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/api/me'))).toHaveLength(1)
+  })
+
+  it.each([
+    {
+      failure: '500',
+      response: () => Promise.resolve(json({ error: 'unavailable' }, 500)),
+    },
+    {
+      failure: 'network error',
+      response: () => Promise.reject(new TypeError('network unavailable')),
+    },
+    {
+      failure: 'HTML returned as a 200',
+      response: () =>
+        Promise.resolve({
+          ...json({}, 200, { 'Content-Type': 'text/html' }),
+          json: async () => {
+            throw new SyntaxError('Unexpected token <')
+          },
+        } as Response),
+    },
+    {
+      failure: 'structurally invalid JSON',
+      response: () =>
+        Promise.resolve(
+          json({ user: { sub: 'plex:42', username: '', role: 'owner' } }),
+        ),
+    },
+  ])('keeps the session unavailable after a bounded $failure retry', async ({ response }) => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      const auxiliary = auxiliaryAuthResponse(url)
+      if (auxiliary) return Promise.resolve(auxiliary)
+      if (url.endsWith('/api/me')) return response()
+      return Promise.reject(new Error(`unexpected fetch: ${url}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithAuth(<SessionProbe />)
+    await settleBoundedRead()
+
+    expect(screen.getByLabelText('session state')).toHaveTextContent('unavailable')
+    expect(screen.getByRole('alert')).toHaveTextContent(/session/i)
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/api/me'))).toHaveLength(3)
+  })
+
+  it('times out and aborts each of three bounded /api/me attempts', async () => {
+    const signals: AbortSignal[] = []
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const auxiliary = auxiliaryAuthResponse(url)
+      if (auxiliary) return Promise.resolve(auxiliary)
+      if (!url.endsWith('/api/me')) {
+        return Promise.reject(new Error(`unexpected fetch: ${url}`))
+      }
+      const signal = init?.signal as AbortSignal
+      signals.push(signal)
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener(
+          'abort',
+          () => reject(new DOMException('Aborted', 'AbortError')),
+          { once: true },
+        )
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithAuth(<SessionProbe />)
+    await settleBoundedRead()
+
+    expect(signals).toHaveLength(3)
+    expect(signals.every((signal) => signal.aborted)).toBe(true)
+    expect(screen.getByLabelText('session state')).toHaveTextContent('unavailable')
+  })
+
+  it.each([
+    {
+      recovery: 'anonymous',
+      response: json({ error: 'unauthenticated' }, 401),
+      expectedUser: '',
+    },
+    {
+      recovery: 'authenticated',
+      response: json({
+        user: {
+          sub: 'google:member-42',
+          username: 'sibling',
+          role: 'user',
+          auth_mode: 'google',
+        },
+      }),
+      expectedUser: 'sibling',
+    },
+  ])('starts a fresh bounded Retry that can recover to $recovery', async ({
+    recovery,
+    response,
+    expectedUser,
+  }) => {
+    let meCalls = 0
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      const auxiliary = auxiliaryAuthResponse(url)
+      if (auxiliary) return Promise.resolve(auxiliary)
+      if (!url.endsWith('/api/me')) {
+        return Promise.reject(new Error(`unexpected fetch: ${url}`))
+      }
+      meCalls += 1
+      return Promise.resolve(meCalls <= 3 ? json({ error: 'unavailable' }, 503) : response)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithAuth(<SessionProbe />)
+    await settleBoundedRead()
+    expect(screen.getByLabelText('session state')).toHaveTextContent('unavailable')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry session' }))
+    await settleBoundedRead()
+
+    expect(screen.getByLabelText('session state')).toHaveTextContent(recovery)
+    expect(screen.getByLabelText('session user')).toHaveTextContent(expectedUser)
+    expect(meCalls).toBe(4)
+  })
+
+  it.each([
+    {
+      nextSession: 'unavailable',
+      response: json({ error: 'unavailable' }, 503),
+      expectedCalls: 4,
+    },
+    {
+      nextSession: 'anonymous',
+      response: json({ error: 'unauthenticated' }, 401),
+      expectedCalls: 2,
+    },
+  ])('revalidates a session-expiry event to $nextSession through /api/me', async ({
+    nextSession,
+    response,
+    expectedCalls,
+  }) => {
+    let meCalls = 0
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      const auxiliary = auxiliaryAuthResponse(url)
+      if (auxiliary) return Promise.resolve(auxiliary)
+      if (!url.endsWith('/api/me')) {
+        return Promise.reject(new Error(`unexpected fetch: ${url}`))
+      }
+      meCalls += 1
+      return Promise.resolve(
+        meCalls === 1
+          ? json({
+              user: {
+                sub: 'plex:42',
+                username: 'member',
+                role: 'user',
+                auth_mode: 'plex',
+              },
+            })
+          : response,
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithAuth(<SessionProbe />)
+    await settleBoundedRead()
+    expect(screen.getByLabelText('session state')).toHaveTextContent('authenticated')
+
+    window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
+    await settleBoundedRead()
+
+    expect(screen.getByLabelText('session state')).toHaveTextContent(nextSession)
+    expect(meCalls).toBe(expectedCalls)
+  })
+
+  it('aborts an initial read on unmount and ignores its late result', async () => {
+    const pendingMe = deferred<Response>()
+    let sessionSignal: AbortSignal | undefined
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const auxiliary = auxiliaryAuthResponse(url)
+      if (auxiliary) return Promise.resolve(auxiliary)
+      if (url.endsWith('/api/me')) {
+        sessionSignal = init?.signal as AbortSignal
+        return pendingMe.promise
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const clearSpy = vi.spyOn(queryClient, 'clear')
+
+    const view = renderWithAuth(<SessionProbe />, queryClient)
+    await act(async () => {
+      for (let i = 0; i < 5; i += 1) await Promise.resolve()
+    })
+    view.unmount()
+    clearSpy.mockClear()
+
+    pendingMe.resolve(
+      json({
+        user: { sub: 'plex:42', username: 'late', role: 'user', auth_mode: 'plex' },
+      }),
+    )
+    await act(async () => {
+      for (let i = 0; i < 5; i += 1) await Promise.resolve()
+    })
+
+    expect(sessionSignal?.aborted).toBe(true)
+    expect(clearSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('provider session confirmation', () => {
+  type ProviderCase = {
+    name: string
+    button: string
+    responseSub: string
+    booleanResult: boolean
+  }
+
+  const providers: ProviderCase[] = [
+    {
+      name: 'Plex',
+      button: 'Plex provider',
+      responseSub: 'plex:42',
+      booleanResult: false,
+    },
+    {
+      name: 'Apple',
+      button: 'Apple provider',
+      responseSub: 'apple:000000.deadbeef.0000',
+      booleanResult: true,
+    },
+    {
+      name: 'passkey login',
+      button: 'Passkey login provider',
+      responseSub: 'local:LOGIN',
+      booleanResult: true,
+    },
+    {
+      name: 'passkey registration',
+      button: 'Passkey registration provider',
+      responseSub: 'local:REGISTER',
+      booleanResult: true,
+    },
+  ]
+
+  let popup: { closed: boolean; close: ReturnType<typeof vi.fn>; location: { href: string } }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    popup = { closed: false, close: vi.fn(), location: { href: '' } }
+    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
+    webauthnMocks.startAuthentication.mockResolvedValue({ id: 'credential-login' })
+    webauthnMocks.startRegistration.mockResolvedValue({ id: 'credential-register' })
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    vi.clearAllMocks()
+    vi.useRealTimers()
+  })
+
+  async function flush() {
+    await act(async () => {
+      for (let i = 0; i < 12; i += 1) await Promise.resolve()
+    })
+  }
+
+  function providerFetch(
+    provider: ProviderCase,
+    confirmation: () => Promise<Response>,
+  ) {
+    let meCalls = 0
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      const auxiliary = auxiliaryAuthResponse(url)
+      if (auxiliary) return Promise.resolve(auxiliary)
+      if (url.endsWith('/api/me')) {
+        meCalls += 1
+        return meCalls === 1
+          ? Promise.resolve(json({ error: 'unauthenticated' }, 401))
+          : confirmation()
+      }
+      if (url.endsWith('/api/auth/plex/config')) {
+        return Promise.resolve(json({ clientId: 'client-id', product: 'The Emerald Exchange' }))
+      }
+      if (url.startsWith('https://plex.tv/api/v2/pins?')) {
+        return Promise.resolve(json({ id: 123, code: 'plex-code' }, 201))
+      }
+      if (url.endsWith('/api/auth/plex/check')) {
+        return Promise.resolve(
+          json({
+            status: 'authorized',
+            user: {
+              sub: provider.responseSub,
+              username: 'provider-response',
+              role: 'user',
+            },
+          }),
+        )
+      }
+      if (url.endsWith('/api/auth/apple')) {
+        return Promise.resolve(
+          json({
+            status: 'authorized',
+            user: {
+              sub: provider.responseSub,
+              username: 'provider-response',
+              role: 'user',
+            },
+          }),
+        )
+      }
+      if (url.endsWith('/api/auth/passkey/login/options')) {
+        return Promise.resolve(json({ options: { challenge: 'login' }, challengeId: 'login' }))
+      }
+      if (url.endsWith('/api/auth/passkey/login/verify')) {
+        return Promise.resolve(
+          json({
+            ok: true,
+            user: {
+              sub: provider.responseSub,
+              username: 'provider-response',
+              role: 'user',
+            },
+          }),
+        )
+      }
+      if (url.endsWith('/api/auth/passkey/register/options')) {
+        return Promise.resolve(
+          json({ options: { challenge: 'register' }, challengeId: 'register' }),
+        )
+      }
+      if (url.endsWith('/api/auth/passkey/register/verify')) {
+        return Promise.resolve(
+          json({
+            ok: true,
+            user: {
+              sub: provider.responseSub,
+              username: 'provider-response',
+              role: 'user',
+            },
+          }),
+        )
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    return { fetchMock, meCalls: () => meCalls }
+  }
+
+  async function startProvider(provider: ProviderCase) {
+    renderWithAuth(<ProviderProbe />)
+    await flush()
+    fireEvent.click(screen.getByRole('button', { name: provider.button }))
+    await flush()
+    if (provider.name === 'Plex') {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_500)
+      })
+    }
+    await flush()
+  }
+
+  it.each(providers)(
+    'does not apply $name response identity before matching /api/me confirmation',
+    async (provider) => {
+      const pendingConfirmation = deferred<Response>()
+      const { meCalls } = providerFetch(provider, () => pendingConfirmation.promise)
+
+      await startProvider(provider)
+
+      expect(meCalls()).toBe(2)
+      expect(screen.getByLabelText('provider user')).toBeEmptyDOMElement()
+
+      pendingConfirmation.resolve(
+        json({
+          user: {
+            sub: provider.responseSub,
+            username: 'confirmed-session',
+            role: 'user',
+            auth_mode: provider.responseSub.startsWith('local:')
+              ? 'local'
+              : provider.name.toLowerCase(),
+          },
+        }),
+      )
+      await flush()
+
+      expect(screen.getByLabelText('provider user')).toHaveTextContent('confirmed-session')
+      if (provider.booleanResult) {
+        expect(screen.getByLabelText('provider result')).toHaveTextContent('true')
+      }
+    },
+  )
+
+  it.each([
+    {
+      outcome: '401',
+      confirmation: () => Promise.resolve(json({ error: 'unauthenticated' }, 401)),
+      message: /session.*establish/i,
+    },
+    {
+      outcome: 'subject mismatch',
+      confirmation: () =>
+        Promise.resolve(
+          json({
+            user: {
+              sub: 'apple:000000.different.0000',
+              username: 'wrong-session',
+              role: 'user',
+              auth_mode: 'apple',
+            },
+          }),
+        ),
+      message: /session.*match/i,
+    },
+  ])('fails an Apple provider success closed on confirmation $outcome', async ({
+    confirmation,
+    message,
+  }) => {
+    const provider = providers[1]
+    providerFetch(provider, confirmation)
+
+    await startProvider(provider)
+    await flush()
+
+    expect(screen.getByLabelText('provider result')).toHaveTextContent('false')
+    expect(screen.getByLabelText('provider user')).toBeEmptyDOMElement()
+    expect(screen.getByRole('alert')).toHaveTextContent(message)
+  })
+
+  it('reports a retryable error after three unavailable confirmation reads', async () => {
+    const provider = providers[2]
+    const { meCalls } = providerFetch(provider, () =>
+      Promise.resolve(json({ error: 'unavailable' }, 503)),
+    )
+
+    await startProvider(provider)
+    await act(async () => {
+      await vi.runAllTimersAsync()
+    })
+    await flush()
+
+    expect(meCalls()).toBe(4)
+    expect(screen.getByLabelText('provider result')).toHaveTextContent('false')
+    expect(screen.getByLabelText('provider user')).toBeEmptyDOMElement()
+    expect(screen.getByRole('alert')).toHaveTextContent(/session.*try again/i)
+  })
+
+  it('does not start an orphan confirmation read when a provider settles after unmount', async () => {
+    const pendingProvider = deferred<Response>()
+    let meCalls = 0
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      const auxiliary = auxiliaryAuthResponse(url)
+      if (auxiliary) return Promise.resolve(auxiliary)
+      if (url.endsWith('/api/me')) {
+        meCalls += 1
+        return Promise.resolve(json({ error: 'unauthenticated' }, 401))
+      }
+      if (url.endsWith('/api/auth/apple')) return pendingProvider.promise
+      return Promise.reject(new Error(`unexpected fetch: ${url}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const view = renderWithAuth(<ProviderProbe />)
+    await flush()
+    fireEvent.click(screen.getByRole('button', { name: 'Apple provider' }))
+    await flush()
+    view.unmount()
+
+    pendingProvider.resolve(
+      json({
+        status: 'authorized',
+        user: { sub: 'apple:000000.deadbeef.0000' },
+      }),
+    )
+    await flush()
+
+    expect(meCalls).toBe(1)
+  })
+})
+
 describe('Plex popup completion', () => {
   let popup: { closed: boolean; close: ReturnType<typeof vi.fn>; location: { href: string } }
   let fetchMock: ReturnType<typeof vi.fn>
   let plexCheck: Mock<(init?: RequestInit) => Promise<Response>>
+  let meCalls: number
 
   const authorized = {
     status: 'authorized',
@@ -58,6 +677,7 @@ describe('Plex popup completion', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-18T12:00:00Z'))
+    meCalls = 0
     popup = { closed: false, close: vi.fn(), location: { href: '' } }
     plexCheck = vi.fn((_init?: RequestInit) =>
       Promise.resolve(json({ status: 'pending' })),
@@ -67,7 +687,12 @@ describe('Plex popup completion', () => {
     fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.endsWith('/api/me')) {
-        return Promise.resolve(json({ error: 'unauthenticated' }, 401))
+        meCalls += 1
+        return Promise.resolve(
+          meCalls === 1
+            ? json({ error: 'unauthenticated' }, 401)
+            : json({ user: authorized.user }),
+        )
       }
       if (url.endsWith('/api/auth/methods')) {
         return Promise.resolve(
