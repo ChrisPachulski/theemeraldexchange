@@ -1,5 +1,5 @@
 // setupState (plan 006 Phase 1) — real serverDb, real crypto. What we lock:
-//   - claimable ⇔ un-bootstrapped AND unclaimed (one-way door both ways)
+//   - claimable ⇔ no durable ownership gate AND unclaimed
 //   - the boot mint stores only sha256; verify is constant-time and only
 //     answers while claimable; markClaimed burns the hash
 //   - the private-address gate (nginx-ui advisory: bind setup locally)
@@ -28,9 +28,18 @@ import {
   markClaimed,
   isPrivateAddress,
 } from './setupState.js'
-import { addMember } from './members.js'
+import { addMember, revokeMember } from './members.js'
+import { env } from '../env.js'
 
 const OWNER = 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV'
+const envRw = env as unknown as Record<string, unknown>
+const originalOwnershipEnv = {
+  serverDbPath: env.SERVER_DB_PATH,
+  plexServerId: env.plexServerId,
+  adminSubs: env.adminSubs,
+  appleClientId: env.appleClientId,
+  googleClientIds: env.googleClientIds,
+}
 
 function wipe(): void {
   serverDb().raw.exec(
@@ -49,12 +58,23 @@ describe('setupState', () => {
   beforeAll(() => {
     serverDb()
   })
-  afterAll(() => {
-    closeServerDb()
-    fs.rmSync(tmpDbDir, { recursive: true, force: true })
-  })
   beforeEach(() => {
     wipe()
+    envRw.SERVER_DB_PATH = originalOwnershipEnv.serverDbPath
+    envRw.plexServerId = null
+    envRw.adminSubs = []
+    envRw.appleClientId = null
+    envRw.googleClientIds = []
+  })
+
+  afterAll(() => {
+    envRw.SERVER_DB_PATH = originalOwnershipEnv.serverDbPath
+    envRw.plexServerId = originalOwnershipEnv.plexServerId
+    envRw.adminSubs = originalOwnershipEnv.adminSubs
+    envRw.appleClientId = originalOwnershipEnv.appleClientId
+    envRw.googleClientIds = originalOwnershipEnv.googleClientIds
+    closeServerDb()
+    fs.rmSync(tmpDbDir, { recursive: true, force: true })
   })
 
   it('fresh install is claimable; boot mints a token; the plaintext verifies', () => {
@@ -86,11 +106,93 @@ describe('setupState', () => {
     expect(hash).toBeUndefined()
   })
 
-  it('a members row alone (any gate) ends claimability — the one-way door', () => {
+  it.each([
+    ['active', false],
+    ['revoked', true],
+  ])('an %s members row ends claimability — the one-way door', (_state, revoke) => {
+    ensureSetupToken()
+    const token = tokenFromFile()
     addMember({ sub: OWNER, authMode: 'local' })
+    if (revoke) revokeMember(OWNER)
     expect(isClaimable()).toBe(false)
     ensureSetupToken()
-    expect(verifySetupToken(tokenFromFile())).toBe(false)
+    expect(verifySetupToken(token)).toBe(false)
+  })
+
+  it.each([
+    ['Apple', () => { envRw.appleClientId = 'com.example.exchange' }],
+    ['Google', () => { envRw.googleClientIds = ['web.example.apps.googleusercontent.com'] }],
+  ])('%s configuration alone remains claimable', (_provider, configure) => {
+    configure()
+    expect(isClaimable()).toBe(true)
+  })
+
+  it.each([
+    ['Plex server ownership gate', () => { envRw.plexServerId = 'home-machine' }],
+    ['ADMIN_SUBS ownership gate', () => { envRw.adminSubs = ['plex:42'] }],
+  ])('%s closes claimability', (_gate, configure) => {
+    configure()
+    expect(isClaimable()).toBe(false)
+  })
+
+  it('the explicit claimed marker closes claimability without provider config', () => {
+    markClaimed(OWNER)
+    expect(isClaimable()).toBe(false)
+  })
+
+  it('warns that configured identity providers still require a passkey claim', () => {
+    envRw.appleClientId = 'SECRET-APPLE-ID'
+    envRw.googleClientIds = ['SECRET-GOOGLE-ID']
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+    try {
+      ensureSetupToken()
+      const line = warn.mock.calls.flat().join(' ')
+      expect(line).toContain('passkey')
+      expect(line).toContain('setup token')
+      expect(line).toContain('apple')
+      expect(line).toContain('google')
+      expect(line).not.toContain('SECRET-APPLE-ID')
+      expect(line).not.toContain('SECRET-GOOGLE-ID')
+      expect(line).not.toContain(tokenFromFile())
+    } finally {
+      warn.mockRestore()
+      info.mockRestore()
+    }
+  })
+
+  it('redacts the setup-token file path and raw write error from warnings', () => {
+    envRw.appleClientId = 'SECRET-APPLE-ID'
+    envRw.SERVER_DB_PATH = path.join(tmpDbDir, 'SECRET-DB-PATH', 'server.db')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+    try {
+      ensureSetupToken()
+      const line = warn.mock.calls.flat().join(' ')
+      expect(line).toContain('setup token')
+      expect(line).not.toContain('SECRET-APPLE-ID')
+      expect(line).not.toContain('SECRET-DB-PATH')
+      expect(line).not.toContain('ENOENT')
+    } finally {
+      warn.mockRestore()
+      info.mockRestore()
+    }
+  })
+
+  it('does not emit the provider warning after ownership is claimed', () => {
+    envRw.appleClientId = 'SECRET-APPLE-ID'
+    envRw.googleClientIds = ['SECRET-GOOGLE-ID']
+    markClaimed(OWNER)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+    try {
+      ensureSetupToken()
+      expect(warn).not.toHaveBeenCalled()
+      expect(info).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+      info.mockRestore()
+    }
   })
 
   it('re-boot while unclaimed rotates the token (old plaintext stops verifying)', () => {

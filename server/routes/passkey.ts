@@ -137,14 +137,14 @@ passkey.post('/register/verify', async (c) => {
   const { sub, handle, credential } = verified
 
   // ── first-owner claim (plan 006 Phase 1) ─────────────────────────────────
-  // A claimable install's memberStatus falls OPEN (membership.ts), so this
-  // registration would be admitted anyway — but as a row-less role-'user'
-  // that never seeds the allowlist. Presenting the boot-minted setup token
-  // upgrades the registration into the OWNER claim: role 'admin', a real
-  // members row (which closes the fall-open gate for everyone after), and
-  // the token burned. Source-gated to private/loopback socket addresses
-  // unless SETUP_ALLOW_REMOTE=1 (GHSA-mxqh-q9h6-v8pq: never leave first-run
-  // ownership claimable by whoever shows up first).
+  // First-owner claimability is separate from normal-login authZ: with no
+  // provider configured memberStatus may still fall open, while Apple/Google
+  // configuration makes it fail closed. Either way, only the boot-minted
+  // setup token enters this OWNER path: role 'admin', a real members row
+  // (which closes setup for good), and the token burned. Source-gated to
+  // private/loopback socket addresses unless SETUP_ALLOW_REMOTE=1
+  // (GHSA-mxqh-q9h6-v8pq: never leave first-run ownership claimable by
+  // whoever shows up first).
   const setupToken = typeof body?.setupToken === 'string' ? body.setupToken : undefined
   if (setupToken !== undefined) {
     let remoteAddr: string | undefined

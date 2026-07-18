@@ -1,15 +1,16 @@
 // server/services/membership.test.ts — branch coverage for memberStatus(),
-// the single provider-agnostic authZ decision shared by the Plex + Apple
-// login paths and the per-request session gate.
+// the single provider-agnostic authZ decision shared by the Plex, Apple,
+// Google, and passkey login paths and the per-request session gate.
 //
 // env.ts builds `export const env = {...} as const` from process.env at
 // module-evaluation time, so memberStatus's env-driven branches (ADMIN_SUBS,
-// PLEX_SERVER_ID, APPLE_CLIENT_ID) cannot be flipped by mutating env.* at
-// runtime. We use the env.test.ts idiom: mutate process.env, vi.resetModules(),
-// then dynamically `import('./membership.js')` to bind a fresh module to the
-// new env. SERVER_DB_PATH is held STABLE across re-imports so every freshly
-// re-imported serverDb singleton reopens the SAME temp file — rows seeded via
-// the statically-imported members.ts persist in the file, not module memory.
+// PLEX_SERVER_ID, APPLE_CLIENT_ID, GOOGLE_CLIENT_ID) cannot be flipped by
+// mutating env.* at runtime. We use the env.test.ts idiom: mutate process.env,
+// vi.resetModules(), then dynamically `import('./membership.js')` to bind a
+// fresh module to the new env. SERVER_DB_PATH is held STABLE across re-imports
+// so every freshly re-imported serverDb singleton reopens the SAME temp file —
+// rows seeded via the statically-imported members.ts persist in the file, not
+// module memory.
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
 import fs from 'node:fs'
@@ -33,6 +34,8 @@ const { tmpDbDir } = vi.hoisted(() => {
   delete process.env.ADMIN_SUBS
   delete process.env.APPLE_CLIENT_ID
   delete process.env.ENABLE_APPLE_SIGN_IN
+  delete process.env.GOOGLE_CLIENT_ID
+  delete process.env.ENABLE_GOOGLE_SIGN_IN
   return { tmpDbDir: dir }
 })
 
@@ -43,6 +46,7 @@ import { issueInvite } from './invites.js'
 const ADMIN = 'plex:42'
 const ALICE = 'apple:000001.0123456789abcdef0123456789abcdef.0001'
 const BOB = 'plex:7'
+const GOOGLE_BOB = 'google:104223294318414512345'
 
 function wipe(): void {
   serverDb().raw.exec('DELETE FROM members; DELETE FROM invites;')
@@ -80,6 +84,8 @@ describe('membership facade — memberStatus', () => {
     delete process.env.ADMIN_SUBS
     delete process.env.APPLE_CLIENT_ID
     delete process.env.ENABLE_APPLE_SIGN_IN
+    delete process.env.GOOGLE_CLIENT_ID
+    delete process.env.ENABLE_GOOGLE_SIGN_IN
     wipe()
   })
 
@@ -139,28 +145,35 @@ describe('membership facade — memberStatus', () => {
     expect(m.memberStatus(BOB)).toBe('allowed')
   })
 
-  // G) isAuthzBootstrapped line-91: a single members row flips the install
-  //    to bootstrapped even with zero env gate.
+  // G) a single members row flips normal login to fail closed even with zero
+  //    env gate.
   it('a single members row flips the install to bootstrapped (fall-through gone)', async () => {
     addMember({ sub: ALICE, authMode: 'apple' }) // one row exists
     const m = await importMembership({}) // still no env gate
-    // The lone members row makes isAuthzBootstrapped() true, so a stranger is
-    // denied even though no env gate is set.
+    // The lone members row is a durable gate, so a stranger is denied even
+    // though no env gate is set.
     expect(m.memberStatus(BOB)).toBe('not_member')
     // The seeded member itself is still allowed (it has an active row).
     expect(m.memberStatus(ALICE)).toBe('allowed')
   })
 
-  // H) isAuthzBootstrapped line-88: PLEX_SERVER_ID alone bootstraps.
+  // H) PLEX_SERVER_ID alone bootstraps normal-login authZ.
   it('PLEX_SERVER_ID alone bootstraps the gate', async () => {
     const m = await importMembership({ PLEX_SERVER_ID: 'machineid123' })
     expect(m.memberStatus(BOB)).toBe('not_member')
   })
 
-  // I) isAuthzBootstrapped line-90: APPLE_CLIENT_ID alone bootstraps.
+  // I) APPLE_CLIENT_ID alone bootstraps normal-login authZ.
   it('APPLE_CLIENT_ID alone bootstraps the gate', async () => {
     const m = await importMembership({ APPLE_CLIENT_ID: 'com.example.app' })
     expect(m.memberStatus(BOB)).toBe('not_member')
+  })
+
+  it('GOOGLE_CLIENT_ID alone bootstraps the gate', async () => {
+    const m = await importMembership({
+      GOOGLE_CLIENT_ID: 'web.example.apps.googleusercontent.com',
+    })
+    expect(m.memberStatus(GOOGLE_BOB)).toBe('not_member')
   })
 
   // J) re-export passthrough: the invite-redeem surface is wired through the
