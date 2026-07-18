@@ -31,12 +31,23 @@ async function buildApp(opts: {
   const app = new Hono()
   app.use('*', opts.middleware === 'trusted' ? requireTrustedOrigin : requireSafeOrigin)
   app.all('/echo', (c) => c.json({ ok: true }))
-  // A native-bootstrap token-minting path and the cookie web-login path, so the
-  // path-scoped cookieless exemption can be exercised against real route paths.
-  app.all('/api/auth/device/poll', (c) => c.json({ ok: true }))
+  for (const path of NATIVE_BOOTSTRAP_PATHS) {
+    app.all(path, (c) => c.json({ ok: true }))
+  }
+  // The cookie web-login path stays outside the native allowlist.
   app.all('/api/auth/plex/check', (c) => c.json({ ok: true }))
   return app
 }
+
+const NATIVE_BOOTSTRAP_PATHS = [
+  '/api/auth/device/poll',
+  '/api/auth/apple',
+  '/api/auth/google',
+  '/api/auth/passkey/login/options',
+  '/api/auth/passkey/login/verify',
+  '/api/auth/passkey/register/options',
+  '/api/auth/passkey/register/verify',
+] as const
 
 afterEach(() => {
   vi.doUnmock('../env.js')
@@ -235,23 +246,58 @@ describe('requireSafeOrigin — bearer-only (native app) exemption', () => {
 })
 
 describe('requireSafeOrigin — native bootstrap (cookieless token-mint) exemption', () => {
-  it('allows a cookieless, originless POST to /api/auth/device/poll (first-time TestFlight pair)', async () => {
-    // The exact failing case: native app pairing BEFORE it has a token — no
-    // cookie, no bearer yet, no browser Origin. Must pass the gate.
+  it.each(NATIVE_BOOTSTRAP_PATHS)(
+    'allows a cookieless, originless POST to %s',
+    async (path) => {
+      // Native pairing before it has a token: no cookie, bearer, or browser
+      // Origin. Every explicitly allowlisted bootstrap seam must pass.
+      const app = await buildApp({ allowedOrigins: ['https://app.example'], isProd: true })
+      const r = await app.request(path, { method: 'POST' })
+      expect(r.status).toBe(200)
+    },
+  )
+
+  it.each(NATIVE_BOOTSTRAP_PATHS)(
+    'rejects a hostile browser Origin on cookieless bootstrap path %s',
+    async (path) => {
+      const app = await buildApp({ allowedOrigins: ['https://app.example'], isProd: true })
+      const r = await app.request(path, {
+        method: 'POST',
+        headers: { Origin: 'https://attacker.example' },
+      })
+      expect(r.status).toBe(403)
+      expect(await r.json()).toEqual({ error: 'forbidden', reason: 'bad_origin' })
+    },
+  )
+
+  it.each([
+    ['allowed origin', { Origin: 'https://app.example' }, 200],
+    ['same-host origin', { Origin: 'https://nas.local:3001', Host: 'nas.local:3001' }, 200],
+    ['hostile origin', { Origin: 'https://attacker.example' }, 403],
+    ['malformed origin', { Origin: 'not a url' }, 403],
+    ['empty origin header', { Origin: '' }, 403],
+    ['opaque null origin', { Origin: 'null' }, 403],
+  ])('Google bootstrap applies normal origin validation for %s', async (_label, headers, status) => {
     const app = await buildApp({ allowedOrigins: ['https://app.example'], isProd: true })
-    const r = await app.request('/api/auth/device/poll', { method: 'POST' })
-    expect(r.status).toBe(200)
+    const r = await app.request('/api/auth/google', {
+      method: 'POST',
+      headers,
+    })
+    expect(r.status).toBe(status)
   })
 
-  it('allows a cookieless POST to a bootstrap path even with a HOSTILE Origin', async () => {
-    // A native client may still emit an Origin in some stacks; cookieless means
-    // no CSRF vector regardless, and CORS guards any Set-Cookie.
+  it.each([
+    ['missing Origin', { Cookie: 'eex.session=abc' }],
+    ['empty Cookie header', { Cookie: '' }],
+    [
+      'hostile Origin',
+      { Cookie: 'eex.session=abc', Origin: 'https://attacker.example' },
+    ],
+  ])('Google bootstrap with a cookie rejects %s', async (_label, headers) => {
     const app = await buildApp({ allowedOrigins: ['https://app.example'], isProd: true })
-    const r = await app.request('/api/auth/device/poll', {
-      method: 'POST',
-      headers: { Origin: 'https://attacker.example' },
-    })
-    expect(r.status).toBe(200)
+    const r = await app.request('/api/auth/google', { method: 'POST', headers })
+    expect(r.status).toBe(403)
+    expect(await r.json()).toEqual({ error: 'forbidden', reason: 'bad_origin' })
   })
 
   it('STILL gates a bootstrap path when a Cookie is present (cookie = CSRF vector)', async () => {

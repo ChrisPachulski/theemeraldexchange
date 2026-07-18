@@ -46,13 +46,13 @@ function isBearerOnly(c: Parameters<MiddlewareHandler>[0]): boolean {
 // URLSession client, not a browser) with no Cookie and no Origin header. That
 // trips the generic "missing Origin → fail closed" branch and 403s `bad_origin`,
 // so first-time TestFlight setup could not pair at all. These specific
-// token-minting endpoints are safe to admit cookieless:
+// token-minting endpoints are safe to admit only when they look like native
+// bootstrap traffic: no Cookie and no Origin header.
 //   - No ambient credential rides them (no cookie), so the cookie-CSRF threat
 //     this gate defends simply does not apply.
-//   - The cookie-SETTING variants (apple/google/passkey-verify also set the web
-//     session cookie) are still protected from login-CSRF / session fixation by
-//     CORS: cors() allows only env.allowedOrigins, so a hostile origin can never
-//     have its Set-Cookie applied by the victim's browser.
+//   - Any Origin means a browser-like request and must pass the normal allowed-
+//     origin or same-host checks. CORS response visibility is not a defense for
+//     a state-changing request that can set a login cookie.
 // Everything else stays gated — including /api/auth/plex/check (the cookie web
 // flow, deliberately Origin-gated against session fixation) and ANY cookie-
 // bearing request to these same paths.
@@ -67,7 +67,11 @@ const NATIVE_BOOTSTRAP_PATHS = new Set([
 ])
 
 function isNativeBootstrap(c: Parameters<MiddlewareHandler>[0]): boolean {
-  return !c.req.header('cookie') && NATIVE_BOOTSTRAP_PATHS.has(c.req.path)
+  return (
+    !c.req.raw.headers.has('cookie') &&
+    !c.req.raw.headers.has('origin') &&
+    NATIVE_BOOTSTRAP_PATHS.has(c.req.path)
+  )
 }
 
 // A request authenticated SOLELY by a `?t=` stream token (and NO cookie) carries

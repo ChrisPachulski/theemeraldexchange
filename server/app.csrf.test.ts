@@ -234,6 +234,22 @@ describe('app CSRF — state-changing routes reject bad Origin', () => {
   })
 })
 
+describe('app CSRF — native bootstrap paths reject browser login-CSRF', () => {
+  it('rejects a cookieless hostile text/plain POST to /api/auth/google before route parsing', async () => {
+    const r = await app.request('/api/auth/google', {
+      method: 'POST',
+      headers: {
+        Origin: HOSTILE,
+        'Content-Type': 'text/plain',
+      },
+      body: JSON.stringify({ credential: 'attacker-controlled-id-token' }),
+    })
+
+    expect(r.status).toBe(403)
+    expect(await r.json()).toEqual({ error: 'forbidden', reason: 'bad_origin' })
+  })
+})
+
 // --- State-changing routes with allowed Origin pass the gate ----
 
 describe('app CSRF — state-changing routes accept allowed Origin', () => {
