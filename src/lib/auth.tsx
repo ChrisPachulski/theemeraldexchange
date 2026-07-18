@@ -124,6 +124,24 @@ type SignInState = 'idle' | 'opening' | 'pending' | 'denied' | 'error'
 // race against the popup's close event, while still recovering quickly when a
 // user intentionally cancels the window.
 const PLEX_POPUP_CLOSE_GRACE_MS = 10_000
+const PLEX_POLL_BASE_DELAY_MS = 2_500
+const PLEX_POLL_MAX_DELAY_MS = 30_000
+const PLEX_POLL_MAX_FAILURES = 4
+const PLEX_POLL_DEADLINE_MS = 5 * 60 * 1000
+
+function plexRetryDelay(retryAfter: string | null, now: number): number {
+  const seconds = retryAfter === null ? Number.NaN : Number(retryAfter)
+  const requestedDelay = Number.isFinite(seconds)
+    ? seconds * 1000
+    : retryAfter
+      ? Date.parse(retryAfter) - now
+      : Number.NaN
+  if (!Number.isFinite(requestedDelay)) return PLEX_POLL_BASE_DELAY_MS
+  return Math.min(
+    PLEX_POLL_MAX_DELAY_MS,
+    Math.max(PLEX_POLL_BASE_DELAY_MS, requestedDelay),
+  )
+}
 
 type AuthCtx = {
   loading: boolean
@@ -230,6 +248,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [discoveredServers, setDiscoveredServers] =
     useState<AuthCtx['discoveredServers']>(null)
   const pollRef = useRef<number | null>(null)
+  const pollAbortRef = useRef<AbortController | null>(null)
+  const pollGenerationRef = useRef(0)
   const popupRef = useRef<Window | null>(null)
   const signInInFlightRef = useRef(false)
   const rejectMalformedInvite = useCallback((inviteCode?: string) => {
@@ -302,14 +322,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired)
   }, [qc])
 
-  const stopPolling = useCallback((intervalId?: number | null) => {
-    const id = intervalId === undefined ? pollRef.current : intervalId
-    if (id !== null && id !== undefined) {
-      window.clearInterval(id)
-    }
-    if (intervalId === undefined || pollRef.current === intervalId) {
-      pollRef.current = null
-    }
+  const stopPolling = useCallback(() => {
+    if (pollRef.current !== null) window.clearTimeout(pollRef.current)
+    pollRef.current = null
+    pollGenerationRef.current += 1
+    pollAbortRef.current?.abort()
+    pollAbortRef.current = null
+    signInInFlightRef.current = false
+    popupRef.current?.close()
+    popupRef.current = null
   }, [])
 
   useEffect(() => () => stopPolling(), [stopPolling])
@@ -317,11 +338,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signIn = useCallback(async (inviteCode?: string) => {
     if (rejectMalformedInvite(inviteCode)) return
     if (signInInFlightRef.current) return
+    stopPolling()
     signInInFlightRef.current = true
     setSignInError(null)
     setSignOutError(null)
-    stopPolling()
-    popupRef.current?.close()
     setSignInState('opening')
     const popup = window.open(
       '',
@@ -329,18 +349,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       'width=520,height=720,menubar=no,toolbar=no',
     )
     if (!popup) {
-      signInInFlightRef.current = false
+      stopPolling()
       setSignInState('error')
       setSignInError('Popup blocked. Allow popups for this site and try again.')
       return
     }
     popupRef.current = popup
-    let intervalId: number | null = null
-    let popupClosedAt: number | null = null
-    const stopCurrentPoll = () => {
-      stopPolling(intervalId)
-      intervalId = null
-      signInInFlightRef.current = false
+    const setupGeneration = pollGenerationRef.current
+    const setupIsCurrent = () => pollGenerationRef.current === setupGeneration
+    const finish = (state: SignInState, error: string | null) => {
+      stopPolling()
+      setSignInState(state)
+      setSignInError(error)
     }
     try {
       // Fetch the PUBLIC Plex client config (the clientId is the same
@@ -348,11 +368,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const cfgRes = await fetch(apiUrl('/api/auth/plex/config'), {
         credentials: 'include',
       })
+      if (!setupIsCurrent()) return
       if (!cfgRes.ok) throw new Error(`plex config failed: ${cfgRes.status}`)
       const { clientId, product } = (await cfgRes.json()) as {
         clientId: string
         product: string
       }
+      if (!setupIsCurrent()) return
 
       // Create the PIN DIRECTLY at plex.tv from the browser so plex.tv
       // attributes the sign-in to the VISITOR's own IP — not the server's
@@ -367,8 +389,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           'X-Plex-Client-Identifier': clientId,
         },
       })
+      if (!setupIsCurrent()) return
       if (!pinRes.ok) throw new Error(`plex pin create failed: ${pinRes.status}`)
       const pin = (await pinRes.json()) as { id: number; code: string }
+      if (!setupIsCurrent()) return
       const pinId = pin.id
 
       // Mirror of the old server-side buildAuthUrl: the PIN `code` (not the
@@ -384,27 +408,115 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       popup.location.href = authUrl
       setSignInState('pending')
 
-      const deadline = Date.now() + 5 * 60 * 1000
-      intervalId = window.setInterval(async () => {
+      const deadline = Date.now() + PLEX_POLL_DEADLINE_MS
+      let nextCheckAt = Date.now() + PLEX_POLL_BASE_DELAY_MS
+      let popupClosedAt: number | null = null
+      let consecutiveFailures = 0
+
+      const terminalPollError = () => {
         const now = Date.now()
-        if (popup.closed) {
-          popupClosedAt ??= now
-          if (now - popupClosedAt >= PLEX_POPUP_CLOSE_GRACE_MS) {
-            stopCurrentPoll()
-            if (popupRef.current === popup) popupRef.current = null
-            setSignInState('error')
-            setSignInError('Plex sign-in window was closed before authorization finished.')
-            return
-          }
+        if (popup.closed) popupClosedAt ??= now
+        if (
+          popupClosedAt !== null &&
+          now - popupClosedAt >= PLEX_POPUP_CLOSE_GRACE_MS
+        ) {
+          return 'Plex sign-in window was closed before authorization finished.'
         }
-        if (now > deadline) {
-          stopCurrentPoll()
-          popup.close()
-          if (popupRef.current === popup) popupRef.current = null
-          setSignInError('Plex sign-in expired. Try again.')
-          setSignInState('error')
+        return now >= deadline ? 'Plex sign-in expired. Try again.' : null
+      }
+
+      const scheduleTick = () => {
+        const generation = pollGenerationRef.current
+        const now = Date.now()
+        let delay = Math.min(
+          PLEX_POLL_BASE_DELAY_MS,
+          Math.max(0, nextCheckAt - now),
+          Math.max(0, deadline - now),
+        )
+        if (popupClosedAt !== null) {
+          delay = Math.min(
+            delay,
+            Math.max(0, PLEX_POPUP_CLOSE_GRACE_MS - (now - popupClosedAt)),
+          )
+        }
+        pollRef.current = window.setTimeout(() => {
+          if (pollGenerationRef.current !== generation) return
+          pollRef.current = null
+          void poll()
+        }, delay)
+      }
+
+      const scheduleNextCheck = (delay: number) => {
+        nextCheckAt = Date.now() + delay
+        scheduleTick()
+      }
+
+      const poll = async () => {
+        const now = Date.now()
+        const terminalError = terminalPollError()
+        if (terminalError) {
+          finish('error', terminalError)
           return
         }
+        if (now < nextCheckAt) {
+          scheduleTick()
+          return
+        }
+
+        const attemptGeneration = ++pollGenerationRef.current
+        const controller = new AbortController()
+        pollAbortRef.current = controller
+        const attemptIsCurrent = () =>
+          pollGenerationRef.current === attemptGeneration &&
+          pollAbortRef.current === controller &&
+          !controller.signal.aborted
+        const releaseAttempt = () => {
+          if (pollRef.current !== null) window.clearTimeout(pollRef.current)
+          pollRef.current = null
+          if (pollAbortRef.current === controller) pollAbortRef.current = null
+        }
+        const watchAttempt = () => {
+          const watchNow = Date.now()
+          let delay = Math.min(
+            PLEX_POLL_BASE_DELAY_MS,
+            Math.max(0, deadline - watchNow),
+          )
+          if (popupClosedAt !== null) {
+            delay = Math.min(
+              delay,
+              Math.max(
+                0,
+                PLEX_POPUP_CLOSE_GRACE_MS - (watchNow - popupClosedAt),
+              ),
+            )
+          }
+          pollRef.current = window.setTimeout(() => {
+            if (!attemptIsCurrent()) return
+            pollRef.current = null
+            const error = terminalPollError()
+            if (error) {
+              finish('error', error)
+              return
+            }
+            watchAttempt()
+          }, delay)
+        }
+        const retryTransientFailure = () => {
+          consecutiveFailures += 1
+          if (consecutiveFailures >= PLEX_POLL_MAX_FAILURES) {
+            finish('error', 'Plex sign-in is temporarily unavailable. Try again.')
+            return
+          }
+          releaseAttempt()
+          scheduleNextCheck(
+            Math.min(
+              PLEX_POLL_MAX_DELAY_MS,
+              PLEX_POLL_BASE_DELAY_MS * 2 ** (consecutiveFailures - 1),
+            ),
+          )
+        }
+
+        watchAttempt()
         try {
           // POST (not GET) so the CSRF middleware gates the cookie-
           // setting branch. Otherwise an attacker page could trigger a
@@ -417,51 +529,61 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             body: JSON.stringify(
               inviteCode ? { pinId, inviteCode } : { pinId },
             ),
+            signal: controller.signal,
           })
+          if (!attemptIsCurrent()) return
           if (r.status === 403) {
             const data = await r.json().catch(() => ({}))
-            stopCurrentPoll()
-            popup.close()
-            if (popupRef.current === popup) popupRef.current = null
-            setSignInState('denied')
-            setSignInError(deniedMessage(data?.reason))
+            if (!attemptIsCurrent()) return
+            finish('denied', deniedMessage(data?.reason))
+            return
+          }
+          if (r.status === 429) {
+            consecutiveFailures = 0
+            releaseAttempt()
+            scheduleNextCheck(plexRetryDelay(r.headers.get('Retry-After'), Date.now()))
+            return
+          }
+          if (r.status >= 500) {
+            retryTransientFailure()
             return
           }
           if (!r.ok) {
             if (r.status >= 400 && r.status < 500) {
               const data = await r.json().catch(() => ({}))
-              stopCurrentPoll()
-              popup.close()
-              if (popupRef.current === popup) popupRef.current = null
-              setSignInState('error')
-              setSignInError(
+              if (!attemptIsCurrent()) return
+              finish(
+                'error',
                 typeof data?.error === 'string'
                   ? `Plex sign-in failed: ${data.error}`
                   : 'Plex sign-in expired. Try again.',
               )
+            } else {
+              retryTransientFailure()
             }
             return
           }
           const data = await r.json()
+          if (!attemptIsCurrent()) return
           if (data.status === 'authorized') {
-            stopCurrentPoll()
-            popup.close()
-            if (popupRef.current === popup) popupRef.current = null
+            finish('idle', null)
             applyUser(data.user as AuthUser)
             setDiscoveredServers(data.discoveredServers ?? null)
-            setSignInState('idle')
+            return
           }
+          consecutiveFailures = 0
+          releaseAttempt()
+          scheduleNextCheck(PLEX_POLL_BASE_DELAY_MS)
         } catch {
-          // poll again
+          if (!attemptIsCurrent()) return
+          retryTransientFailure()
         }
-      }, 1500)
-      pollRef.current = intervalId
+      }
+
+      scheduleTick()
     } catch (e) {
-      signInInFlightRef.current = false
-      popup.close()
-      if (popupRef.current === popup) popupRef.current = null
-      setSignInState('error')
-      setSignInError(e instanceof Error ? e.message : String(e))
+      if (!setupIsCurrent()) return
+      finish('error', e instanceof Error ? e.message : String(e))
     }
   }, [applyUser, rejectMalformedInvite, stopPolling])
 
