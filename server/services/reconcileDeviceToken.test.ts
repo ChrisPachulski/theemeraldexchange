@@ -240,7 +240,9 @@ describe('reconcileDeviceToken', () => {
       revokeMemberSafely({
         targetSub: sub,
         actorSub: OTHER_ADMIN,
+        actorUsername: 'owner',
         immutableAdminSubs: [OTHER_ADMIN],
+        legacyAdminUsernames: [],
       }),
     ).toBe('revoked')
     seedDeviceToken('jti-D1', sub)

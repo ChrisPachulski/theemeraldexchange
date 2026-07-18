@@ -19,7 +19,7 @@
 // is the alternative used by invites.test.ts; top-level dynamic import is the
 // same idea without needing require() inside the hoisted block.)
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -442,22 +442,24 @@ describe('admin invites + members routes', () => {
       expect(revocationState(ADMIN_SUB, 'self-device', 'self-playlist')).toEqual(before)
     })
 
-    it('refuses revocation of the final DB-backed admin without touching cascades', async () => {
+    it('counts a live legacy Plex admin as authority when revoking a DB admin', async () => {
       envRw.adminSubs = []
       envRw.admins = ['legacy-operator']
       insertActiveMember(ADMIN_SUB, 'user')
       insertActiveMember(SECOND_ADMIN_SUB, 'admin')
       insertDeviceToken('final-device', SECOND_ADMIN_SUB)
       insertPlaylistToken('final-playlist', SECOND_ADMIN_SUB)
-      const before = revocationState(SECOND_ADMIN_SUB, 'final-device', 'final-playlist')
 
       const r = await appUnderTest().request(`/members/${SECOND_ADMIN_SUB}`, {
         method: 'DELETE',
         headers: { Cookie: await cookieFor(ADMIN_SUB, 'legacy-operator') },
       })
-      expect(r.status).toBe(409)
-      expect(await r.json()).toEqual({ error: 'cannot_revoke_final_admin' })
-      expect(revocationState(SECOND_ADMIN_SUB, 'final-device', 'final-playlist')).toEqual(before)
+      expect(r.status).toBe(200)
+      expect(await r.json()).toEqual({ ok: true })
+      const after = revocationState(SECOND_ADMIN_SUB, 'final-device', 'final-playlist')
+      expect((after.member as { revoked_at: string | null }).revoked_at).not.toBeNull()
+      expect(after.deviceRevocation).toMatchObject({ reason: 'member_revoked' })
+      expect((after.playlist as { revoked_at: string | null }).revoked_at).not.toBeNull()
     })
 
     it('allows one DB-backed admin to revoke a redundant second admin', async () => {
@@ -501,6 +503,35 @@ describe('admin invites + members routes', () => {
         .raw.prepare(`SELECT reason FROM device_token_revocations WHERE jti = ?`)
         .get('device-user-sub') as { reason: string } | undefined
       expect(deviceRevocation?.reason).toBe('member_revoked')
+    })
+
+    it('logs a cascade failure with request correlation but without the member sub', async () => {
+      insertActiveMember(USER_SUB, 'user')
+      const statement = iptvDb().stmts.revokePlaylistTokensBySub
+      const runSpy = vi.spyOn(statement, 'run').mockImplementation(() => {
+        throw new Error('simulated cascade failure')
+      })
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+      try {
+        const r = await appUnderTest().request(`/members/${USER_SUB}`, {
+          method: 'DELETE',
+          headers: {
+            Cookie: await adminCookie(),
+            'X-Request-Id': 'member-revoke-request',
+          },
+        })
+        expect(r.status).toBe(200)
+
+        const line = String(errorSpy.mock.calls.at(-1)?.[0] ?? '')
+        expect(line).toContain('[adminMembers] playlist-token cascade revoke failed')
+        expect(line).toContain('"requestId":"member-revoke-request"')
+        expect(line).toContain('simulated cascade failure')
+        expect(line).not.toContain(USER_SUB)
+      } finally {
+        errorSpy.mockRestore()
+        runSpy.mockRestore()
+      }
     })
 
     it('revoking a non-existent member → 404 not_found', async () => {

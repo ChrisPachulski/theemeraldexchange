@@ -39,7 +39,9 @@ function revokeForTest(sub: string): void {
     revokeMemberSafely({
       targetSub: sub,
       actorSub: ADMIN,
+      actorUsername: 'owner',
       immutableAdminSubs: [ADMIN],
+      legacyAdminUsernames: [],
     }),
   ).toBe('revoked')
 }
@@ -113,7 +115,9 @@ describe('members service', () => {
         revokeMemberSafely({
           targetSub: ADMIN,
           actorSub: BOB,
+          actorUsername: 'guest',
           immutableAdminSubs: [ADMIN],
+          legacyAdminUsernames: [],
         }),
       ).toBe('owner')
       expect(serverDb().raw.prepare(`SELECT * FROM members WHERE sub = ?`).get(ADMIN)).toEqual(
@@ -127,44 +131,116 @@ describe('members service', () => {
         revokeMemberSafely({
           targetSub: ADMIN,
           actorSub: ADMIN,
+          actorUsername: 'owner',
           immutableAdminSubs: [],
+          legacyAdminUsernames: [],
         }),
       ).toBe('self')
       expect(isMember(ADMIN)?.role).toBe('admin')
     })
 
-    it('protects the final active DB-backed administrator', () => {
+    it('revalidates a pre-authorized actor before touching the final administrator', () => {
       addMember({ sub: ADMIN, role: 'admin', authMode: 'plex' })
       expect(
         revokeMemberSafely({
           targetSub: ADMIN,
           actorSub: BOB,
+          actorUsername: 'former-admin',
           immutableAdminSubs: [],
+          legacyAdminUsernames: [],
         }),
-      ).toBe('final_admin')
+      ).toBe('actor_not_admin')
       expect(isMember(ADMIN)?.role).toBe('admin')
     })
 
-    it('serializes back-to-back admin revocations so the last authority remains', () => {
+    it('serializes pre-authorized admin revocations and revalidates the waiting actor', () => {
       addMember({ sub: ADMIN, role: 'admin', authMode: 'plex' })
       addMember({ sub: BOB, role: 'admin', authMode: 'plex' })
 
       expect(
         revokeMemberSafely({
           targetSub: ADMIN,
-          actorSub: ALICE,
+          actorSub: BOB,
+          actorUsername: 'bob',
           immutableAdminSubs: [],
+          legacyAdminUsernames: [],
         }),
       ).toBe('revoked')
       expect(
         revokeMemberSafely({
           targetSub: BOB,
-          actorSub: ALICE,
+          actorSub: ADMIN,
+          actorUsername: 'owner',
           immutableAdminSubs: [],
+          legacyAdminUsernames: [],
         }),
-      ).toBe('final_admin')
+      ).toBe('actor_not_admin')
       expect(isMember(ADMIN)).toBeNull()
       expect(isMember(BOB)?.role).toBe('admin')
+    })
+
+    it('prevents mutually pre-authorized legacy Plex admins from revoking each other', () => {
+      addMember({ sub: ADMIN, displayName: 'legacy-a', role: 'user', authMode: 'plex' })
+      addMember({ sub: BOB, displayName: 'legacy-b', role: 'user', authMode: 'plex' })
+      const legacyAdminUsernames = ['legacy-a', 'legacy-b']
+
+      expect(
+        revokeMemberSafely({
+          targetSub: BOB,
+          actorSub: ADMIN,
+          actorUsername: 'legacy-a',
+          immutableAdminSubs: [],
+          legacyAdminUsernames,
+        }),
+      ).toBe('revoked')
+      expect(
+        revokeMemberSafely({
+          targetSub: ADMIN,
+          actorSub: BOB,
+          actorUsername: 'legacy-b',
+          immutableAdminSubs: [],
+          legacyAdminUsernames,
+        }),
+      ).toBe('actor_not_admin')
+      expect(isMember(ADMIN)).not.toBeNull()
+      expect(isMember(BOB)).toBeNull()
+    })
+
+    it('never treats a non-Plex username collision as legacy admin authority', () => {
+      addMember({ sub: ADMIN, role: 'admin', authMode: 'plex' })
+      addMember({ sub: ALICE, displayName: 'legacy-a', role: 'user', authMode: 'apple' })
+
+      expect(
+        revokeMemberSafely({
+          targetSub: ADMIN,
+          actorSub: ALICE,
+          actorUsername: 'legacy-a',
+          immutableAdminSubs: [],
+          legacyAdminUsernames: ['legacy-a'],
+        }),
+      ).toBe('actor_not_admin')
+      expect(isMember(ADMIN)?.role).toBe('admin')
+    })
+
+    it('does not count malformed database rows as usable admin authorities', () => {
+      addMember({ sub: ADMIN, role: 'admin', authMode: 'plex' })
+      serverDb().raw.prepare(
+        `INSERT INTO members
+           (sub, display_name, role, auth_mode, invited_by, joined_at, revoked_at)
+         VALUES ('garbage', 'phantom', 'admin', 'plex', NULL, ?, NULL)`,
+      ).run(new Date().toISOString())
+
+      expect(
+        revokeMemberSafely({
+          targetSub: ADMIN,
+          actorSub: BOB,
+          actorUsername: 'former-admin',
+          immutableAdminSubs: [],
+          legacyAdminUsernames: [],
+        }),
+      ).toBe('actor_not_admin')
+      expect(isMember(ADMIN)?.role).toBe('admin')
+      expect(isMember('garbage')).toBeNull()
     })
 
     it('revokes an ordinary member and reports absent/already-revoked uniformly', () => {
@@ -172,7 +248,9 @@ describe('members service', () => {
       const args = {
         targetSub: BOB,
         actorSub: ADMIN,
+        actorUsername: 'owner',
         immutableAdminSubs: [ADMIN],
+        legacyAdminUsernames: [],
       }
       expect(revokeMemberSafely(args)).toBe('revoked')
       expect(revokeMemberSafely(args)).toBe('not_found')

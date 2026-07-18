@@ -137,21 +137,24 @@ export type SafeMemberRevocation =
   | 'not_found'
   | 'owner'
   | 'self'
-  | 'final_admin'
+  | 'actor_not_admin'
 
 /**
- * Revoke a member while preserving at least one durable administrator.
+ * Revoke a member only while the acting administrator is still authoritative.
  *
  * The immediate transaction acquires the server DB write lock before reading
- * the administrator set, so two independent revocations cannot both decide
- * they are leaving another admin behind. ADMIN_SUBS entries are immutable
- * authorities even without a row; a Set prevents double-counting one that
- * also has an active DB-backed admin row.
+ * the administrator set. This closes the pre-authorization race: if two admins
+ * try to revoke each other, the waiting request revalidates its actor after the
+ * first commit and fails closed. Because self-revocation is rejected before
+ * the transaction, proving the distinct actor is still a live authority is
+ * sufficient to prove at least one authority remains after the target write.
  */
 export function revokeMemberSafely(opts: {
   targetSub: string
   actorSub: string
+  actorUsername: string
   immutableAdminSubs: readonly string[]
+  legacyAdminUsernames: readonly string[]
 }): SafeMemberRevocation {
   if (!isValidSub(opts.targetSub)) return 'not_found'
 
@@ -161,20 +164,30 @@ export function revokeMemberSafely(opts: {
 
   const db = serverDb().raw
   const tx = db.transaction((): SafeMemberRevocation => {
-    const target = db
-      .prepare(`SELECT role, revoked_at FROM members WHERE sub = ?`)
-      .get(opts.targetSub) as
-      | { role: 'admin' | 'user'; revoked_at: string | null }
-      | undefined
-    if (!target || target.revoked_at !== null) return 'not_found'
+    const targetIsActive = db
+      .prepare(`SELECT 1 FROM members WHERE sub = ? AND revoked_at IS NULL`)
+      .get(opts.targetSub)
+    if (!targetIsActive) return 'not_found'
 
-    if (target.role === 'admin') {
-      const activeDbAdmins = db
-        .prepare(`SELECT sub FROM members WHERE role = 'admin' AND revoked_at IS NULL`)
-        .all() as Array<{ sub: string }>
-      const remainingAuthorities = new Set(immutableAdmins)
-      for (const { sub } of activeDbAdmins) remainingAuthorities.add(sub)
-      if (remainingAuthorities.size <= 1) return 'final_admin'
+    const legacyAdmins = new Set(
+      opts.legacyAdminUsernames.map((username) => username.trim().toLowerCase()).filter(Boolean),
+    )
+    if (!immutableAdmins.has(opts.actorSub)) {
+      if (!isValidSub(opts.actorSub)) return 'actor_not_admin'
+      const actor = db
+        .prepare(
+          `SELECT role
+             FROM members
+            WHERE sub = ? AND revoked_at IS NULL`,
+        )
+        .get(opts.actorSub) as Pick<Member, 'role'> | undefined
+      if (
+        !actor ||
+        (actor.role !== 'admin' &&
+          !isLegacyPlexAdmin(opts.actorSub, opts.actorUsername, legacyAdmins))
+      ) {
+        return 'actor_not_admin'
+      }
     }
 
     const changed = db
@@ -188,6 +201,20 @@ export function revokeMemberSafely(opts: {
   })
 
   return tx.immediate()
+}
+
+function isLegacyPlexAdmin(
+  sub: string,
+  username: string | null,
+  legacyAdmins: ReadonlySet<string>,
+): boolean {
+  if (!username) return false
+  try {
+    if (parseSub(sub).provider !== 'plex') return false
+  } catch {
+    return false
+  }
+  return legacyAdmins.has(username.trim().toLowerCase())
 }
 
 /**

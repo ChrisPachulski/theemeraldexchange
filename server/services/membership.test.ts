@@ -124,7 +124,9 @@ describe('membership facade — memberStatus', () => {
       revokeMemberSafely({
         targetSub: ALICE,
         actorSub: ADMIN,
+        actorUsername: 'owner',
         immutableAdminSubs: [ADMIN],
+        legacyAdminUsernames: [],
       }),
     ).toBe('revoked')
     const m = await importMembership({ ADMIN_SUBS: ADMIN })

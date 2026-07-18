@@ -26,6 +26,9 @@ import { issueInvite, listInvites, revokeInvite } from '../services/invites.js'
 import { listMembers, revokeMemberSafely, type Member } from '../services/members.js'
 import { iptvDb } from '../services/iptvDbSingleton.js'
 import { cascadeRevokeForSub } from '../services/reconcileDeviceToken.js'
+import { createLogger } from '../services/logger.js'
+
+const memberLog = createLogger('adminMembers')
 
 // ---------------------------------------------------------------------------
 // Invites
@@ -139,16 +142,19 @@ adminMembers.get('/', (c) => {
 
 adminMembers.delete('/:sub', (c) => {
   const sub = c.req.param('sub')
+  const session = c.get('session')
   const result = revokeMemberSafely({
     targetSub: sub,
-    actorSub: c.get('session').sub,
+    actorSub: session.sub,
+    actorUsername: session.username,
     immutableAdminSubs: env.adminSubs,
+    legacyAdminUsernames: env.admins,
   })
   if (result === 'not_found') return c.json({ error: 'not_found' }, 404)
   if (result === 'owner') return c.json({ error: 'cannot_revoke_owner' }, 409)
   if (result === 'self') return c.json({ error: 'cannot_revoke_self' }, 409)
-  if (result === 'final_admin') {
-    return c.json({ error: 'cannot_revoke_final_admin' }, 409)
+  if (result === 'actor_not_admin') {
+    return c.json({ error: 'forbidden', reason: 'admin_only' }, 403)
   }
 
   // The members row is the authoritative server authZ gate and is already
@@ -158,12 +164,18 @@ adminMembers.delete('/:sub', (c) => {
   try {
     cascadeRevokeForSub(sub, 'member_revoked')
   } catch (err) {
-    console.error('[adminMembers] device-token cascade revoke failed for sub=%s: %s', sub, err)
+    memberLog.error('device-token cascade revoke failed', {
+      requestId: c.get('requestId') ?? c.req.header('x-request-id') ?? 'unavailable',
+      error: err,
+    })
   }
   try {
     iptvDb().stmts.revokePlaylistTokensBySub.run(new Date().toISOString(), sub)
   } catch (err) {
-    console.error('[adminMembers] playlist-token cascade revoke failed for sub=%s: %s', sub, err)
+    memberLog.error('playlist-token cascade revoke failed', {
+      requestId: c.get('requestId') ?? c.req.header('x-request-id') ?? 'unavailable',
+      error: err,
+    })
   }
   return c.json({ ok: true })
 })
