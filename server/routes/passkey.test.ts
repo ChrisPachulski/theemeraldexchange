@@ -53,11 +53,21 @@ const setupState = vi.hoisted(() => ({
 }))
 vi.mock('../services/setupState.js', () => setupState)
 
-// The claim path wraps its mint in a serverDb transaction; a pass-through
-// keeps these tests at route-orchestration level (setupState/members are
-// already mocked, so there is no real db work to make atomic).
+const transactionHarness = vi.hoisted(() => ({
+  events: [] as string[],
+  transaction: vi.fn((fn: (...args: unknown[]) => unknown) => () => {
+    transactionHarness.events.push('transaction:begin')
+    const result = fn()
+    transactionHarness.events.push('transaction:commit')
+    return result
+  }),
+}))
+
+// The route's DB collaborators are mocked, but the transaction boundary is
+// recorded so orchestration tests can prove cookie/device work starts only
+// after the invited member + credential unit commits.
 vi.mock('../services/serverDb.js', () => ({
-  serverDb: () => ({ raw: { transaction: (fn: (...a: unknown[]) => unknown) => fn } }),
+  serverDb: () => ({ raw: { transaction: transactionHarness.transaction } }),
 }))
 
 import { passkey } from './passkey.js'
@@ -72,6 +82,7 @@ function post(path: string, body: unknown) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  transactionHarness.events.length = 0
   setSessionCookie.mockResolvedValue(undefined)
 })
 
@@ -106,8 +117,20 @@ describe('passkey register/verify', () => {
 
   it('mints a member then persists the credential on a valid invite', async () => {
     webauthn.verifyRegistration.mockResolvedValue(verified)
-    authorizeOrRedeem.mockReturnValue({ allowed: true })
-    members.isMember.mockReturnValue({ role: 'user' })
+    authorizeOrRedeem.mockImplementation(() => {
+      transactionHarness.events.push('invite:redeemed')
+      return { allowed: true }
+    })
+    webauthn.persistCredential.mockImplementation(() => {
+      transactionHarness.events.push('credential:persisted')
+    })
+    members.isMember.mockImplementation(() => {
+      transactionHarness.events.push('role:read')
+      return { role: 'user' }
+    })
+    setSessionCookie.mockImplementation(async () => {
+      transactionHarness.events.push('session:minted')
+    })
 
     const res = await post('/register/verify', {
       challengeId: 'cid-1',
@@ -122,6 +145,14 @@ describe('passkey register/verify', () => {
     expect(authorizeOrRedeem).toHaveBeenCalledWith(verified.sub, 'INVITE', 'Chris', 'local')
     expect(webauthn.persistCredential).toHaveBeenCalledTimes(1)
     expect(setSessionCookie).toHaveBeenCalledTimes(1)
+    expect(transactionHarness.events).toEqual([
+      'transaction:begin',
+      'invite:redeemed',
+      'credential:persisted',
+      'role:read',
+      'transaction:commit',
+      'session:minted',
+    ])
   })
 
   it('SECURITY: denied invite leaves NO orphan credential and mints no session', async () => {

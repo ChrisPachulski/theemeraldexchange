@@ -190,20 +190,23 @@ passkey.post('/register/verify', async (c) => {
     return c.json({ error: 'server_unclaimed' }, 403)
   }
 
-  // SHARED authZ gate — identical decision to the Plex/Apple paths. A fresh
-  // local: sub is never already a member, so this requires a valid invite.
-  const authz = authorizeOrRedeem(sub, inviteCode, handle, 'local')
-  if (!authz.allowed) {
-    // No credential persisted, no member minted — the orphan is avoided by
-    // ordering authZ before persistCredential.
+  // One transaction owns the complete invited registration unit. The invite
+  // helper's nested transaction becomes a SQLite savepoint on this same
+  // connection, so a later credential write failure rolls back both the
+  // member/regrant and invite use. Cookie/device minting remains after commit.
+  const registration = serverDb().raw.transaction((): { role: 'admin' | 'user' } | null => {
+    // SHARED authZ gate — identical decision to the Plex/Apple paths. A fresh
+    // local: sub is never already a member, so this requires a valid invite.
+    const authz = authorizeOrRedeem(sub, inviteCode, handle, 'local')
+    if (!authz.allowed) return null
+
+    persistCredential(sub, credential, deviceLabel ?? handle)
+    return { role: isMember(sub)?.role ?? 'user' }
+  })()
+  if (!registration) {
     return c.json({ error: 'no_invite' }, 403)
   }
-
-  // Membership minted (or pre-existing) — now durably record the passkey.
-  persistCredential(sub, credential, deviceLabel ?? handle)
-
-  const member = isMember(sub)
-  const role = member?.role ?? 'user'
+  const { role } = registration
 
   // Native app pairing: device-pair triple in the body → device-token
   // Bearer JWE (routes/device.ts wire shape) instead of a session cookie.
