@@ -39,10 +39,15 @@ const { serverDb, closeServerDb } = await import('../services/serverDb.js')
 const { iptvDb, closeIptvDb } = await import('../services/iptvDbSingleton.js')
 const { adminInvites, adminMembers } = await import('./adminInvites.js')
 const { createSession } = await import('../session.js')
+const { env } = await import('../env.js')
 const { Hono } = await import('hono')
 
 const ADMIN_SUB = 'plex:42' // matches ADMIN_SUBS → memberStatus 'allowed' + role 'admin'
 const USER_SUB = 'plex:7' // an ordinary active member → role 'user'
+const SECOND_ADMIN_SUB = 'plex:8'
+const envRw = env as unknown as Record<string, unknown>
+const originalAdminSubs = [...env.adminSubs]
+const originalAdmins = [...env.admins]
 
 function appUnderTest() {
   const app = new Hono<Env>()
@@ -57,6 +62,10 @@ function appUnderTest() {
 // plex.tv (it returns early when !session.plexAuthToken) — no fetch stub needed.
 async function adminCookie() {
   return `eex.session=${await createSession({ sub: ADMIN_SUB, username: 'owner', role: 'admin' })}`
+}
+
+async function cookieFor(sub: string, username: string) {
+  return `eex.session=${await createSession({ sub, username, role: 'admin' })}`
 }
 
 // Authenticated NON-admin: USER_SUB has an active members row so memberStatus
@@ -74,6 +83,44 @@ function insertActiveMember(sub: string, role: 'admin' | 'user' = 'user'): void 
        VALUES (?, ?, ?, 'plex', NULL, ?, NULL)`,
     )
     .run(sub, null, role, new Date().toISOString())
+}
+
+function insertDeviceToken(jti: string, sub: string): void {
+  serverDb()
+    .raw.prepare(
+      `INSERT INTO device_tokens
+         (jti, sub, device_id, device_name, username, platform, server_id,
+          issued_at, expires_at, last_seen_at, last_seen_version)
+       VALUES (?, ?, ?, 'Test device', NULL, 'ios', 'server', ?, ?, NULL, NULL)`,
+    )
+    .run(
+      jti,
+      sub,
+      `device-${jti}`,
+      new Date('2026-01-01T00:00:00Z').toISOString(),
+      new Date('2027-01-01T00:00:00Z').toISOString(),
+    )
+}
+
+function insertPlaylistToken(jti: string, sub: string): void {
+  iptvDb().stmts.insertPlaylistToken.run({
+    jti,
+    sub,
+    device_name: 'Kitchen TV',
+    issued_at: new Date('2026-01-01T00:00:00Z').toISOString(),
+    expires_at: new Date('2027-01-01T00:00:00Z').toISOString(),
+  })
+}
+
+function revocationState(sub: string, deviceJti: string, playlistJti: string) {
+  return {
+    member: serverDb().raw.prepare(`SELECT * FROM members WHERE sub = ?`).get(sub),
+    deviceToken: serverDb().raw.prepare(`SELECT * FROM device_tokens WHERE jti = ?`).get(deviceJti),
+    deviceRevocation: serverDb()
+      .raw.prepare(`SELECT * FROM device_token_revocations WHERE jti = ?`)
+      .get(deviceJti),
+    playlist: iptvDb().stmts.getPlaylistToken.get(playlistJti),
+  }
 }
 
 type InviteSummary = {
@@ -138,13 +185,22 @@ describe('admin invites + members routes', () => {
     delete process.env.ADMIN_SUBS
     delete process.env.SERVER_DB_PATH
     delete process.env.IPTV_DB_PATH
+    envRw.adminSubs = [...originalAdminSubs]
+    envRw.admins = [...originalAdmins]
     closeServerDb()
     closeIptvDb()
     fs.rmSync(tmpDir, { recursive: true, force: true })
   })
 
   beforeEach(() => {
-    serverDb().raw.exec('DELETE FROM members; DELETE FROM invites;')
+    envRw.adminSubs = [...originalAdminSubs]
+    envRw.admins = [...originalAdmins]
+    serverDb().raw.exec(
+      `DELETE FROM device_token_revocations;
+       DELETE FROM device_tokens;
+       DELETE FROM members;
+       DELETE FROM invites;`,
+    )
     iptvDb().raw.exec('DELETE FROM iptv_playlist_tokens;')
   })
 
@@ -353,6 +409,9 @@ describe('admin invites + members routes', () => {
   // -------------------------------------------------------------------------
   describe('DELETE /members/:sub — owner protection', () => {
     it('refuses to revoke the ADMIN_SUBS owner → 409 cannot_revoke_owner', async () => {
+      insertDeviceToken('owner-device', ADMIN_SUB)
+      insertPlaylistToken('owner-playlist', ADMIN_SUB)
+      const before = revocationState(ADMIN_SUB, 'owner-device', 'owner-playlist')
       const r = await appUnderTest().request(`/members/${ADMIN_SUB}`, {
         method: 'DELETE',
         headers: { Cookie: await adminCookie() },
@@ -363,33 +422,86 @@ describe('admin invites + members routes', () => {
       // Owner is implicit — no row should have been written for it.
       const row = serverDb().raw.prepare('SELECT 1 FROM members WHERE sub = ?').get(ADMIN_SUB)
       expect(row).toBeUndefined()
+      expect(revocationState(ADMIN_SUB, 'owner-device', 'owner-playlist')).toEqual(before)
     })
 
-  it('revokes an ordinary member → 200; the row is retained with revoked_at set', async () => {
-    insertActiveMember(USER_SUB, 'user')
-    iptvDb().stmts.insertPlaylistToken.run({
-      jti: 'playlist-user-sub',
-      sub: USER_SUB,
-      device_name: 'Kitchen TV',
-      issued_at: new Date('2026-01-01T00:00:00Z').toISOString(),
-      expires_at: new Date('2026-04-01T00:00:00Z').toISOString(),
+    it('refuses a DB-backed admin self-revocation without touching cascades', async () => {
+      envRw.adminSubs = []
+      envRw.admins = []
+      insertActiveMember(ADMIN_SUB, 'admin')
+      insertDeviceToken('self-device', ADMIN_SUB)
+      insertPlaylistToken('self-playlist', ADMIN_SUB)
+      const before = revocationState(ADMIN_SUB, 'self-device', 'self-playlist')
+
+      const r = await appUnderTest().request(`/members/${ADMIN_SUB}`, {
+        method: 'DELETE',
+        headers: { Cookie: await cookieFor(ADMIN_SUB, 'db-owner') },
+      })
+      expect(r.status).toBe(409)
+      expect(await r.json()).toEqual({ error: 'cannot_revoke_self' })
+      expect(revocationState(ADMIN_SUB, 'self-device', 'self-playlist')).toEqual(before)
     })
-    const del = await appUnderTest().request(`/members/${USER_SUB}`, {
-      method: 'DELETE',
-      headers: { Cookie: await adminCookie() },
+
+    it('refuses revocation of the final DB-backed admin without touching cascades', async () => {
+      envRw.adminSubs = []
+      envRw.admins = ['legacy-operator']
+      insertActiveMember(ADMIN_SUB, 'user')
+      insertActiveMember(SECOND_ADMIN_SUB, 'admin')
+      insertDeviceToken('final-device', SECOND_ADMIN_SUB)
+      insertPlaylistToken('final-playlist', SECOND_ADMIN_SUB)
+      const before = revocationState(SECOND_ADMIN_SUB, 'final-device', 'final-playlist')
+
+      const r = await appUnderTest().request(`/members/${SECOND_ADMIN_SUB}`, {
+        method: 'DELETE',
+        headers: { Cookie: await cookieFor(ADMIN_SUB, 'legacy-operator') },
+      })
+      expect(r.status).toBe(409)
+      expect(await r.json()).toEqual({ error: 'cannot_revoke_final_admin' })
+      expect(revocationState(SECOND_ADMIN_SUB, 'final-device', 'final-playlist')).toEqual(before)
+    })
+
+    it('allows one DB-backed admin to revoke a redundant second admin', async () => {
+      envRw.adminSubs = []
+      envRw.admins = []
+      insertActiveMember(ADMIN_SUB, 'admin')
+      insertActiveMember(SECOND_ADMIN_SUB, 'admin')
+
+      const r = await appUnderTest().request(`/members/${SECOND_ADMIN_SUB}`, {
+        method: 'DELETE',
+        headers: { Cookie: await cookieFor(ADMIN_SUB, 'first-admin') },
+      })
+      expect(r.status).toBe(200)
+      expect(await r.json()).toEqual({ ok: true })
+      const target = serverDb()
+        .raw.prepare(`SELECT revoked_at FROM members WHERE sub = ?`)
+        .get(SECOND_ADMIN_SUB) as { revoked_at: string | null }
+      expect(target.revoked_at).not.toBeNull()
+    })
+
+    it('revokes an ordinary member → 200; the row is retained with revoked_at set', async () => {
+      insertActiveMember(USER_SUB, 'user')
+      insertDeviceToken('device-user-sub', USER_SUB)
+      insertPlaylistToken('playlist-user-sub', USER_SUB)
+      const del = await appUnderTest().request(`/members/${USER_SUB}`, {
+        method: 'DELETE',
+        headers: { Cookie: await adminCookie() },
       })
       expect(del.status).toBe(200)
       expect((await del.json()) as { ok: boolean }).toEqual({ ok: true })
 
       const members = await listMembersViaRoute()
-    const revoked = members.find((m) => m.sub === USER_SUB)
-    expect(revoked).toBeDefined() // retained for audit, not removed
-    expect(revoked?.revoked_at).not.toBeNull()
-    const token = iptvDb().stmts.getPlaylistToken.get('playlist-user-sub') as
-      | { revoked_at: string | null }
-      | undefined
-    expect(token?.revoked_at).not.toBeNull()
-  })
+      const revoked = members.find((m) => m.sub === USER_SUB)
+      expect(revoked).toBeDefined() // retained for audit, not removed
+      expect(revoked?.revoked_at).not.toBeNull()
+      const token = iptvDb().stmts.getPlaylistToken.get('playlist-user-sub') as
+        | { revoked_at: string | null }
+        | undefined
+      expect(token?.revoked_at).not.toBeNull()
+      const deviceRevocation = serverDb()
+        .raw.prepare(`SELECT reason FROM device_token_revocations WHERE jti = ?`)
+        .get('device-user-sub') as { reason: string } | undefined
+      expect(deviceRevocation?.reason).toBe('member_revoked')
+    })
 
     it('revoking a non-existent member → 404 not_found', async () => {
       const r = await appUnderTest().request('/members/plex:8', {

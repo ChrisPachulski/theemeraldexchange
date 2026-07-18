@@ -17,6 +17,7 @@ import { serverDb } from './serverDb.js'
 import type { DeviceTokenClaims } from '../session.js'
 import { roleFor } from './sessionGate.js'
 import { memberStatus } from './membership.js'
+import { isMember } from './members.js'
 
 export type ReconciledDeviceSession = DeviceTokenClaims & {
   /** Stable identifier for /api/me. Device tokens don't carry a
@@ -75,9 +76,15 @@ export function reconcileDeviceToken(
     return null
   }
 
-  const role = row.username
+  let role = row.username
     ? roleFor(row.username, claims.sub)
     : roleFor('', claims.sub)
+  // Match cookie reconciliation: a first-owner/passkey claim stores admin on
+  // the exact member sub. Never trust the long-lived bearer claim; read the
+  // active row on every request so both promotion and demotion are immediate.
+  if (role !== 'admin' && isMember(claims.sub)?.role === 'admin') {
+    role = 'admin'
+  }
 
   return {
     ...claims,

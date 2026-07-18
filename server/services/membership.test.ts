@@ -40,7 +40,7 @@ const { tmpDbDir } = vi.hoisted(() => {
 })
 
 import { serverDb, closeServerDb } from './serverDb.js'
-import { addMember, revokeMember, isMember } from './members.js'
+import { addMember, revokeMemberSafely, isMember } from './members.js'
 import { issueInvite } from './invites.js'
 
 const ADMIN = 'plex:42'
@@ -120,7 +120,13 @@ describe('membership facade — memberStatus', () => {
   //    collapses to null).
   it('revoked members row -> revoked (not not_member)', async () => {
     addMember({ sub: ALICE, authMode: 'apple' })
-    revokeMember(ALICE)
+    expect(
+      revokeMemberSafely({
+        targetSub: ALICE,
+        actorSub: ADMIN,
+        immutableAdminSubs: [ADMIN],
+      }),
+    ).toBe('revoked')
     const m = await importMembership({ ADMIN_SUBS: ADMIN })
     const status = m.memberStatus(ALICE)
     expect(status).toBe('revoked')

@@ -132,24 +132,62 @@ export function addMember(opts: {
   return tx()
 }
 
+export type SafeMemberRevocation =
+  | 'revoked'
+  | 'not_found'
+  | 'owner'
+  | 'self'
+  | 'final_admin'
+
 /**
- * Revoke a member's access. Sets revoked_at; the row is kept for audit.
+ * Revoke a member while preserving at least one durable administrator.
  *
- * Returns true if a member row was revoked, false if no active member existed
- * for that sub (already revoked or never a member → 404 at the route).
+ * The immediate transaction acquires the server DB write lock before reading
+ * the administrator set, so two independent revocations cannot both decide
+ * they are leaving another admin behind. ADMIN_SUBS entries are immutable
+ * authorities even without a row; a Set prevents double-counting one that
+ * also has an active DB-backed admin row.
  */
-export function revokeMember(sub: string): boolean {
-  if (!isValidSub(sub)) return false
+export function revokeMemberSafely(opts: {
+  targetSub: string
+  actorSub: string
+  immutableAdminSubs: readonly string[]
+}): SafeMemberRevocation {
+  if (!isValidSub(opts.targetSub)) return 'not_found'
 
-  const info = serverDb()
-    .raw.prepare(
-      `UPDATE members
-          SET revoked_at = ?
-        WHERE sub = ? AND revoked_at IS NULL`,
-    )
-    .run(new Date().toISOString(), sub)
+  const immutableAdmins = new Set(opts.immutableAdminSubs.filter(isValidSub))
+  if (immutableAdmins.has(opts.targetSub)) return 'owner'
+  if (opts.targetSub === opts.actorSub) return 'self'
 
-  return info.changes > 0
+  const db = serverDb().raw
+  const tx = db.transaction((): SafeMemberRevocation => {
+    const target = db
+      .prepare(`SELECT role, revoked_at FROM members WHERE sub = ?`)
+      .get(opts.targetSub) as
+      | { role: 'admin' | 'user'; revoked_at: string | null }
+      | undefined
+    if (!target || target.revoked_at !== null) return 'not_found'
+
+    if (target.role === 'admin') {
+      const activeDbAdmins = db
+        .prepare(`SELECT sub FROM members WHERE role = 'admin' AND revoked_at IS NULL`)
+        .all() as Array<{ sub: string }>
+      const remainingAuthorities = new Set(immutableAdmins)
+      for (const { sub } of activeDbAdmins) remainingAuthorities.add(sub)
+      if (remainingAuthorities.size <= 1) return 'final_admin'
+    }
+
+    const changed = db
+      .prepare(
+        `UPDATE members
+            SET revoked_at = ?
+          WHERE sub = ? AND revoked_at IS NULL`,
+      )
+      .run(new Date().toISOString(), opts.targetSub)
+    return changed.changes === 1 ? 'revoked' : 'not_found'
+  })
+
+  return tx.immediate()
 }
 
 /**
@@ -182,4 +220,3 @@ function getMemberRow(sub: string): Member | null {
     .get(sub) as Member | undefined
   return row ?? null
 }
-

@@ -25,7 +25,7 @@ const { tmpDbDir } = vi.hoisted(() => {
 })
 
 import { serverDb, closeServerDb } from './serverDb.js'
-import { addMember, revokeMember } from './members.js'
+import { addMember, revokeMemberSafely } from './members.js'
 import type { DeviceTokenClaims } from '../session.js'
 
 type ReconcileModule = typeof import('./reconcileDeviceToken.js')
@@ -183,6 +183,26 @@ describe('reconcileDeviceToken', () => {
     expect(result?.role).toBe('admin')
   })
 
+  it('promotes and demotes a DB-backed admin role without trusting the token claim', async () => {
+    const { reconcileDeviceToken } = await importReconcile({ ADMIN_SUBS: OTHER_ADMIN })
+    const sub = 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV'
+    addMember({ sub, role: 'admin', authMode: 'local' })
+    seedDeviceToken('jti-db-admin', sub, 'Owner passkey')
+
+    const promoted = reconcileDeviceToken(
+      makeClaims('jti-db-admin', sub, { role: 'user', auth_mode: 'local' }),
+      null,
+    )
+    expect(promoted?.role).toBe('admin')
+
+    serverDb().raw.prepare(`UPDATE members SET role = 'user' WHERE sub = ?`).run(sub)
+    const demoted = reconcileDeviceToken(
+      makeClaims('jti-db-admin', sub, { role: 'admin', auth_mode: 'local' }),
+      null,
+    )
+    expect(demoted?.role).toBe('user')
+  })
+
   it('fails closed to user for legacy rows without a stored username', async () => {
     const { reconcileDeviceToken } = await importReconcile({
       ADMIN_SUBS: OTHER_ADMIN,
@@ -216,7 +236,13 @@ describe('reconcileDeviceToken', () => {
     const { reconcileDeviceToken } = await importReconcile({ ADMIN_SUBS: OTHER_ADMIN })
     const sub = 'plex:7'
     addMember({ sub, authMode: 'plex' })
-    revokeMember(sub)
+    expect(
+      revokeMemberSafely({
+        targetSub: sub,
+        actorSub: OTHER_ADMIN,
+        immutableAdminSubs: [OTHER_ADMIN],
+      }),
+    ).toBe('revoked')
     seedDeviceToken('jti-D1', sub)
     seedDeviceToken('jti-D2', sub)
 

@@ -18,7 +18,13 @@ const { tmpDbDir } = vi.hoisted(() => {
 })
 
 import { serverDb, closeServerDb } from './serverDb.js'
-import { isMember, listMembers, addMember, revokeMember, recordMemberLogin } from './members.js'
+import {
+  isMember,
+  listMembers,
+  addMember,
+  revokeMemberSafely,
+  recordMemberLogin,
+} from './members.js'
 
 const ADMIN = 'plex:42'
 const ALICE = 'apple:000001.0123456789abcdef0123456789abcdef.0001'
@@ -26,6 +32,16 @@ const BOB = 'plex:7'
 
 function wipe(): void {
   serverDb().raw.exec('DELETE FROM members; DELETE FROM invites;')
+}
+
+function revokeForTest(sub: string): void {
+  expect(
+    revokeMemberSafely({
+      targetSub: sub,
+      actorSub: ADMIN,
+      immutableAdminSubs: [ADMIN],
+    }),
+  ).toBe('revoked')
 }
 
 describe('members service', () => {
@@ -88,30 +104,87 @@ describe('members service', () => {
     expect(isMember('garbage')).toBeNull()
   })
 
-  it('revokeMember denies a member: isMember then returns null', () => {
-    addMember({ sub: ALICE, authMode: 'apple' })
-    expect(isMember(ALICE)).not.toBeNull()
+  describe('revokeMemberSafely', () => {
+    it('protects an immutable configured owner before touching its row', () => {
+      addMember({ sub: ADMIN, role: 'admin', authMode: 'plex' })
+      const before = serverDb().raw.prepare(`SELECT * FROM members WHERE sub = ?`).get(ADMIN)
 
-    expect(revokeMember(ALICE)).toBe(true)
-    expect(isMember(ALICE)).toBeNull()
+      expect(
+        revokeMemberSafely({
+          targetSub: ADMIN,
+          actorSub: BOB,
+          immutableAdminSubs: [ADMIN],
+        }),
+      ).toBe('owner')
+      expect(serverDb().raw.prepare(`SELECT * FROM members WHERE sub = ?`).get(ADMIN)).toEqual(
+        before,
+      )
+    })
 
-    // The row is retained for audit (revoked, not deleted).
-    const row = serverDb().raw.prepare('SELECT revoked_at FROM members WHERE sub = ?').get(ALICE) as
-      | { revoked_at: string | null }
-      | undefined
-    expect(row?.revoked_at).not.toBeNull()
-  })
+    it('protects a DB-backed administrator from self-revocation', () => {
+      addMember({ sub: ADMIN, role: 'admin', authMode: 'plex' })
+      expect(
+        revokeMemberSafely({
+          targetSub: ADMIN,
+          actorSub: ADMIN,
+          immutableAdminSubs: [],
+        }),
+      ).toBe('self')
+      expect(isMember(ADMIN)?.role).toBe('admin')
+    })
 
-  it('revokeMember returns false for an unknown or already-revoked sub', () => {
-    expect(revokeMember(BOB)).toBe(false)
-    addMember({ sub: BOB, authMode: 'plex' })
-    expect(revokeMember(BOB)).toBe(true)
-    expect(revokeMember(BOB)).toBe(false) // second revoke is a no-op
+    it('protects the final active DB-backed administrator', () => {
+      addMember({ sub: ADMIN, role: 'admin', authMode: 'plex' })
+      expect(
+        revokeMemberSafely({
+          targetSub: ADMIN,
+          actorSub: BOB,
+          immutableAdminSubs: [],
+        }),
+      ).toBe('final_admin')
+      expect(isMember(ADMIN)?.role).toBe('admin')
+    })
+
+    it('serializes back-to-back admin revocations so the last authority remains', () => {
+      addMember({ sub: ADMIN, role: 'admin', authMode: 'plex' })
+      addMember({ sub: BOB, role: 'admin', authMode: 'plex' })
+
+      expect(
+        revokeMemberSafely({
+          targetSub: ADMIN,
+          actorSub: ALICE,
+          immutableAdminSubs: [],
+        }),
+      ).toBe('revoked')
+      expect(
+        revokeMemberSafely({
+          targetSub: BOB,
+          actorSub: ALICE,
+          immutableAdminSubs: [],
+        }),
+      ).toBe('final_admin')
+      expect(isMember(ADMIN)).toBeNull()
+      expect(isMember(BOB)?.role).toBe('admin')
+    })
+
+    it('revokes an ordinary member and reports absent/already-revoked uniformly', () => {
+      addMember({ sub: BOB, role: 'user', authMode: 'plex' })
+      const args = {
+        targetSub: BOB,
+        actorSub: ADMIN,
+        immutableAdminSubs: [ADMIN],
+      }
+      expect(revokeMemberSafely(args)).toBe('revoked')
+      expect(revokeMemberSafely(args)).toBe('not_found')
+      expect(
+        revokeMemberSafely({ ...args, targetSub: 'plex:999' }),
+      ).toBe('not_found')
+    })
   })
 
   it('addMember re-grants a previously revoked member', () => {
     addMember({ sub: ALICE, displayName: 'Alice', authMode: 'apple' })
-    revokeMember(ALICE)
+    revokeForTest(ALICE)
     expect(isMember(ALICE)).toBeNull()
 
     const regranted = addMember({ sub: ALICE, displayName: 'Alice 2', authMode: 'apple' })
@@ -137,7 +210,7 @@ describe('members service', () => {
 
   it('recordMemberLogin does not resurrect a revoked member', () => {
     addMember({ sub: ALICE, displayName: 'old', authMode: 'apple' })
-    revokeMember(ALICE)
+    revokeForTest(ALICE)
     recordMemberLogin(ALICE, 'new')
     expect(isMember(ALICE)).toBeNull()
   })
@@ -145,7 +218,7 @@ describe('members service', () => {
   it('listMembers returns active and revoked rows, newest first', () => {
     addMember({ sub: BOB, authMode: 'plex' })
     addMember({ sub: ALICE, authMode: 'apple' })
-    revokeMember(BOB)
+    revokeForTest(BOB)
 
     const all = listMembers()
     expect(all.map(m => m.sub).sort()).toEqual([ALICE, BOB].sort())
