@@ -388,15 +388,16 @@ async function isOwnerServerMember(authToken: string): Promise<boolean> {
 
 auth.post('/plex/check', async (c) => {
   const parsed = await parseLimitedJson(c, AUTH_CHECK_MAX_BODY_BYTES)
-  if (parsed.tooLarge) return c.json({ error: 'body_too_large' }, 413)
   const body = parsed.body as { pinId?: unknown; inviteCode?: unknown } | null
   const pinIdRaw = typeof body?.pinId === 'string' || typeof body?.pinId === 'number' ? String(body.pinId) : undefined
-  if (!pinIdRaw) return c.json({ error: 'missing pinId' }, 400)
-  const pinId = Number(pinIdRaw)
-  if (!Number.isInteger(pinId)) return c.json({ error: 'bad pinId' }, 400)
-  const inviteCode = typeof body?.inviteCode === 'string' ? body.inviteCode : undefined
+  const pinIdCandidate = pinIdRaw ? Number(pinIdRaw) : NaN
+  const pinId = Number.isInteger(pinIdCandidate) ? pinIdCandidate : undefined
   const limited = enforceAuthRateLimit(c, 'check', pinId)
   if (limited) return limited
+  if (parsed.tooLarge) return c.json({ error: 'body_too_large' }, 413)
+  if (!pinIdRaw) return c.json({ error: 'missing pinId' }, 400)
+  if (pinId === undefined) return c.json({ error: 'bad pinId' }, 400)
+  const inviteCode = typeof body?.inviteCode === 'string' ? body.inviteCode : undefined
 
   const pin = await checkPin(pinId)
   if (!pin.authToken) return c.json({ status: 'pending' })

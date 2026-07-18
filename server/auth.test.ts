@@ -407,6 +407,74 @@ describe('POST /auth/plex/check', () => {
     expect(retryAfterSeconds).toBeGreaterThan(0)
   }, 30_000)
 
+  it('counts malformed bodies against the trusted-client backstop without consuming a PIN bucket', async () => {
+    ;(env as Record<string, unknown>).trustClientIpHeaders = true
+    stubPlex({ authToken: null })
+    const a = app()
+    const malformed = await Promise.all(
+      Array.from({ length: 300 }, () =>
+        a.request('/auth/plex/check', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'cf-connecting-ip': '198.51.100.20',
+          },
+          body: '{',
+        }),
+      ),
+    )
+    expect(malformed.map((response) => response.status)).toEqual(Array(300).fill(400))
+
+    const rejected = await a.request('/auth/plex/check', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'cf-connecting-ip': '198.51.100.20',
+      },
+      body: '{',
+    })
+    expect(rejected.status).toBe(429)
+    expect(Number(rejected.headers.get('Retry-After'))).toBeGreaterThan(0)
+
+    const validPin = await Promise.all(
+      Array.from({ length: 60 }, () =>
+        a.request('/auth/plex/check', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'cf-connecting-ip': '198.51.100.21',
+          },
+          body: JSON.stringify({ pinId: 12345 }),
+        }),
+      ),
+    )
+    expect(validPin.map((response) => response.status)).toEqual(Array(60).fill(200))
+
+    const pinRejected = await a.request('/auth/plex/check', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'cf-connecting-ip': '198.51.100.21',
+      },
+      body: JSON.stringify({ pinId: 12345 }),
+    })
+    expect(pinRejected.status).toBe(429)
+  }, 30_000)
+
+  it('413s an oversized body below the rate-limit backstops', async () => {
+    ;(env as Record<string, unknown>).trustClientIpHeaders = true
+    const r = await app().request('/auth/plex/check', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'cf-connecting-ip': '198.51.100.20',
+      },
+      body: JSON.stringify({ pinId: 12345, padding: 'x'.repeat(1024) }),
+    })
+    expect(r.status).toBe(413)
+    expect(await r.json()).toEqual({ error: 'body_too_large' })
+  })
+
   it('400s a missing pinId', async () => {
     const r = await app().request('/auth/plex/check', { method: 'POST' })
     expect(r.status).toBe(400)
