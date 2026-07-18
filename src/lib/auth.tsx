@@ -425,6 +425,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return now >= deadline ? 'Plex sign-in expired. Try again.' : null
       }
 
+      const finishIfTerminal = () => {
+        const error = terminalPollError()
+        if (!error) return false
+        finish('error', error)
+        return true
+      }
+
       const scheduleTick = () => {
         const generation = pollGenerationRef.current
         const now = Date.now()
@@ -453,11 +460,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       const poll = async () => {
         const now = Date.now()
-        const terminalError = terminalPollError()
-        if (terminalError) {
-          finish('error', terminalError)
-          return
-        }
+        if (finishIfTerminal()) return
         if (now < nextCheckAt) {
           scheduleTick()
           return
@@ -493,11 +496,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           pollRef.current = window.setTimeout(() => {
             if (!attemptIsCurrent()) return
             pollRef.current = null
-            const error = terminalPollError()
-            if (error) {
-              finish('error', error)
-              return
-            }
+            if (finishIfTerminal()) return
             watchAttempt()
           }, delay)
         }
@@ -532,9 +531,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             signal: controller.signal,
           })
           if (!attemptIsCurrent()) return
+          if (finishIfTerminal()) return
           if (r.status === 403) {
             const data = await r.json().catch(() => ({}))
             if (!attemptIsCurrent()) return
+            if (finishIfTerminal()) return
             finish('denied', deniedMessage(data?.reason))
             return
           }
@@ -552,6 +553,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (r.status >= 400 && r.status < 500) {
               const data = await r.json().catch(() => ({}))
               if (!attemptIsCurrent()) return
+              if (finishIfTerminal()) return
               finish(
                 'error',
                 typeof data?.error === 'string'
@@ -565,6 +567,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
           const data = await r.json()
           if (!attemptIsCurrent()) return
+          if (finishIfTerminal()) return
           if (data.status === 'authorized') {
             finish('idle', null)
             applyUser(data.user as AuthUser)
@@ -576,6 +579,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           scheduleNextCheck(PLEX_POLL_BASE_DELAY_MS)
         } catch {
           if (!attemptIsCurrent()) return
+          if (finishIfTerminal()) return
           retryTransientFailure()
         }
       }

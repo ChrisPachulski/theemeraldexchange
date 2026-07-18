@@ -281,6 +281,71 @@ describe('Plex popup completion', () => {
     )
   })
 
+  it.each([
+    {
+      boundary: 'the overall deadline',
+      reachBoundary: async () => {
+        vi.setSystemTime(new Date('2026-07-18T12:05:00Z'))
+      },
+      message: 'Plex sign-in expired. Try again.',
+    },
+    {
+      boundary: 'the popup-close grace period',
+      reachBoundary: async () => {
+        popup.closed = true
+        await advance(2_500)
+        vi.setSystemTime(new Date('2026-07-18T12:00:15Z'))
+      },
+      message: 'Plex sign-in window was closed before authorization finished.',
+    },
+  ])('ignores authorization settled after $boundary when its watchdog is overdue', async ({
+    reachBoundary,
+    message,
+  }) => {
+    const pendingCheck = deferred<Response>()
+    plexCheck.mockReturnValueOnce(pendingCheck.promise)
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const clearSpy = vi.spyOn(queryClient, 'clear')
+    renderAuth(queryClient)
+    await startPlexSignIn()
+    clearSpy.mockClear()
+
+    await advance(2_500)
+    await reachBoundary()
+    pendingCheck.resolve(json(authorized))
+    await act(async () => {
+      for (let i = 0; i < 5; i += 1) await Promise.resolve()
+    })
+
+    expect(clearSpy).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('signed-in user')).toBeEmptyDOMElement()
+    expect(screen.getByRole('alert')).toHaveTextContent(message)
+  })
+
+  it('ignores authorization whose body settles after the deadline watchdog is overdue', async () => {
+    const pendingBody = deferred<unknown>()
+    plexCheck.mockResolvedValueOnce({
+      ...json(authorized),
+      json: () => pendingBody.promise,
+    } as Response)
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const clearSpy = vi.spyOn(queryClient, 'clear')
+    renderAuth(queryClient)
+    await startPlexSignIn()
+    clearSpy.mockClear()
+
+    await advance(2_500)
+    vi.setSystemTime(new Date('2026-07-18T12:05:00Z'))
+    pendingBody.resolve(authorized)
+    await act(async () => {
+      for (let i = 0; i < 5; i += 1) await Promise.resolve()
+    })
+
+    expect(clearSpy).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('signed-in user')).toBeEmptyDOMElement()
+    expect(screen.getByRole('alert')).toHaveTextContent('Plex sign-in expired. Try again.')
+  })
+
   it('rejects an incomplete invite before opening Plex', async () => {
     renderAuth()
 
