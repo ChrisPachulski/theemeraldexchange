@@ -52,16 +52,24 @@ import { addMember } from './services/members.js'
 import { verifyAppleIdentityToken } from './services/appleAuth.js'
 import { verifyGoogleIdentityToken } from './services/googleAuth.js'
 import { maybeMintDeviceToken } from './services/devicePair.js'
+import { createLogger } from './services/logger.js'
 
 export const auth = new Hono()
+const authLog = createLogger('auth')
 
 type AuthRateLimitKind = 'pin' | 'check' | 'apple' | 'passkey' | 'google'
+type AuthRateLimitScope = 'global' | 'trusted_client' | 'pin' | 'identity'
 type AuthRateLimitBucket = { count: number; resetAt: number }
-type AuthRateLimitRule = { key: string; limit: number; windowMs: number }
+type AuthRateLimitRule = {
+  key: string
+  scope: AuthRateLimitScope
+  limit: number
+  windowMs: number
+}
 
 const AUTH_CLIENT_RATE_LIMITS: Record<AuthRateLimitKind, { limit: number; windowMs: number }> = {
   pin: { limit: 10, windowMs: 60_000 },
-  check: { limit: 60, windowMs: 60_000 },
+  check: { limit: 300, windowMs: 60_000 },
   // SIWA login + invite-redeem. Tighter than `check` (no innocuous
   // polling here — every apple request is a verify + an authZ decision)
   // so a stolen-invite / token-replay flood is blunted on top of the
@@ -84,8 +92,7 @@ const AUTH_GLOBAL_RATE_LIMITS: Record<AuthRateLimitKind, { limit: number; window
   passkey: { limit: 200, windowMs: 60_000 },
   google: { limit: 200, windowMs: 60_000 },
 }
-const AUTH_CHECK_PIN_RATE_LIMIT = { limit: 90, windowMs: 60_000 }
-const AUTH_RATE_LIMIT_MAX_BUCKETS = 256
+const AUTH_CHECK_PIN_RATE_LIMIT = { limit: 60, windowMs: 60_000 }
 const AUTH_RATE_LIMIT_SWEEP_MS = 60_000
 const AUTH_CHECK_MAX_BODY_BYTES = 1024
 // A SIWA identity token is a full RS256 JWT (~1KB+), so the 1KB cap used
@@ -112,13 +119,19 @@ function trustedAuthClientIdentity(c: Context): string | null {
 function authRateLimitRules(c: Context, kind: AuthRateLimitKind, pinId?: number): AuthRateLimitRule[] {
   const globalCfg = AUTH_GLOBAL_RATE_LIMITS[kind]
   const rules: AuthRateLimitRule[] = [
-    { key: `${kind}:global`, limit: globalCfg.limit, windowMs: globalCfg.windowMs },
+    {
+      key: `${kind}:global`,
+      scope: 'global',
+      limit: globalCfg.limit,
+      windowMs: globalCfg.windowMs,
+    },
   ]
   const clientIdentity = trustedAuthClientIdentity(c)
   if (clientIdentity) {
     const clientCfg = AUTH_CLIENT_RATE_LIMITS[kind]
     rules.push({
       key: `${kind}:client:${clientIdentity}`,
+      scope: 'trusted_client',
       limit: clientCfg.limit,
       windowMs: clientCfg.windowMs,
     })
@@ -126,6 +139,7 @@ function authRateLimitRules(c: Context, kind: AuthRateLimitKind, pinId?: number)
   if (kind === 'check' && pinId !== undefined) {
     rules.push({
       key: `${kind}:pin:${pinId}`,
+      scope: 'pin',
       limit: AUTH_CHECK_PIN_RATE_LIMIT.limit,
       windowMs: AUTH_CHECK_PIN_RATE_LIMIT.windowMs,
     })
@@ -134,26 +148,29 @@ function authRateLimitRules(c: Context, kind: AuthRateLimitKind, pinId?: number)
 }
 
 function sweepAuthRateLimitBuckets(now: number): void {
-  if (
-    authRateLimitBuckets.size <= AUTH_RATE_LIMIT_MAX_BUCKETS &&
-    now - authRateLimitLastSweep < AUTH_RATE_LIMIT_SWEEP_MS
-  ) {
-    return
-  }
+  if (now - authRateLimitLastSweep < AUTH_RATE_LIMIT_SWEEP_MS) return
   authRateLimitLastSweep = now
   for (const [key, bucket] of authRateLimitBuckets) {
     if (bucket.resetAt <= now) authRateLimitBuckets.delete(key)
   }
-  while (authRateLimitBuckets.size > AUTH_RATE_LIMIT_MAX_BUCKETS) {
-    let deleted = false
-    for (const key of authRateLimitBuckets.keys()) {
-      if (key.endsWith(':global')) continue
-      authRateLimitBuckets.delete(key)
-      deleted = true
-      break
-    }
-    if (!deleted) break
-  }
+}
+
+function rejectAuthRateLimit(
+  c: Context,
+  operation: AuthRateLimitKind,
+  scope: AuthRateLimitScope,
+  resetAt: number,
+  now: number,
+): Response {
+  const retryAfterSeconds = Math.max(1, Math.ceil((resetAt - now) / 1000))
+  c.header('Retry-After', String(retryAfterSeconds))
+  authLog.warn('rate limit rejected', {
+    operation,
+    scope,
+    requestId: c.get('requestId') ?? c.req.header('x-request-id') ?? 'unavailable',
+    retryAfterSeconds,
+  })
+  return c.json({ error: 'rate_limited' }, 429)
 }
 
 export function enforceAuthRateLimit(
@@ -171,9 +188,8 @@ export function enforceAuthRateLimit(
   })
   const limited = buckets.find(({ rule, bucket }) => bucket.count >= rule.limit)
   if (limited) {
-    c.header('Retry-After', String(Math.ceil((limited.bucket.resetAt - now) / 1000)))
     authRateLimitBuckets.set(limited.rule.key, limited.bucket)
-    return c.json({ error: 'rate_limited' }, 429)
+    return rejectAuthRateLimit(c, kind, limited.rule.scope, limited.bucket.resetAt, now)
   }
   for (const { rule, bucket } of buckets) {
     bucket.count += 1
@@ -182,27 +198,22 @@ export function enforceAuthRateLimit(
   return null
 }
 
-function enforceSingleBucketRule(c: Context, rule: AuthRateLimitRule): Response | null {
+function enforceSingleBucketRule(
+  c: Context,
+  kind: AuthRateLimitKind,
+  rule: AuthRateLimitRule,
+): Response | null {
   const now = Date.now()
   sweepAuthRateLimitBuckets(now)
   const current = authRateLimitBuckets.get(rule.key)
   const bucket = current && current.resetAt > now ? current : { count: 0, resetAt: now + rule.windowMs }
   if (bucket.count >= rule.limit) {
-    c.header('Retry-After', String(Math.ceil((bucket.resetAt - now) / 1000)))
     authRateLimitBuckets.set(rule.key, bucket)
-    return c.json({ error: 'rate_limited' }, 429)
+    return rejectAuthRateLimit(c, kind, rule.scope, bucket.resetAt, now)
   }
   bucket.count += 1
   authRateLimitBuckets.set(rule.key, bucket)
   return null
-}
-
-function enforceAuthCheckPinRateLimit(c: Context, pinId: number): Response | null {
-  return enforceSingleBucketRule(c, {
-    key: `check:pin:${pinId}`,
-    limit: AUTH_CHECK_PIN_RATE_LIMIT.limit,
-    windowMs: AUTH_CHECK_PIN_RATE_LIMIT.windowMs,
-  })
 }
 
 /**
@@ -231,8 +242,9 @@ export function enforceAuthIdentityRateLimit(
   if (!identity) return null
   const cfg = AUTH_CLIENT_RATE_LIMITS[kind]
   const digest = createHash('sha256').update(identity).digest('hex').slice(0, 16)
-  return enforceSingleBucketRule(c, {
+  return enforceSingleBucketRule(c, kind, {
     key: `${kind}:identity:${digest}`,
+    scope: 'identity',
     limit: cfg.limit,
     windowMs: cfg.windowMs,
   })
@@ -375,8 +387,6 @@ async function isOwnerServerMember(authToken: string): Promise<boolean> {
 }
 
 auth.post('/plex/check', async (c) => {
-  const preLimit = enforceAuthRateLimit(c, 'check')
-  if (preLimit) return preLimit
   const parsed = await parseLimitedJson(c, AUTH_CHECK_MAX_BODY_BYTES)
   if (parsed.tooLarge) return c.json({ error: 'body_too_large' }, 413)
   const body = parsed.body as { pinId?: unknown; inviteCode?: unknown } | null
@@ -385,7 +395,7 @@ auth.post('/plex/check', async (c) => {
   const pinId = Number(pinIdRaw)
   if (!Number.isInteger(pinId)) return c.json({ error: 'bad pinId' }, 400)
   const inviteCode = typeof body?.inviteCode === 'string' ? body.inviteCode : undefined
-  const limited = enforceAuthCheckPinRateLimit(c, pinId)
+  const limited = enforceAuthRateLimit(c, 'check', pinId)
   if (limited) return limited
 
   const pin = await checkPin(pinId)

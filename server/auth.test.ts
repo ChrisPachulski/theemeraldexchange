@@ -7,6 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Hono } from 'hono'
+import { requestId } from 'hono/request-id'
 
 // ---------------------------------------------------------------------------
 // Mock the sibling-owned authZ + SIWA modules. The members allowlist
@@ -116,6 +117,7 @@ import {
 
 function app() {
   const a = new Hono()
+  a.use('*', requestId())
   a.route('/auth', auth)
   a.route('/me', me)
   return a
@@ -250,39 +252,160 @@ describe('POST /auth/plex/check', () => {
     expect(await r.json()).toEqual({ status: 'pending' })
   })
 
-  it('allows normal polling but does not let rotated forwarding headers bypass PIN-check limits', async () => {
+  it('allows two normal PIN polling flows from one trusted client past 60 total checks', async () => {
     ;(env as Record<string, unknown>).trustClientIpHeaders = true
     stubPlex({ authToken: null })
-    // 60 sequential requests through the rate limiter; reuse one app
-    // instance (state is module-scoped, reset in beforeEach) instead of
-    // rebuilding the Hono router 63×. The generous timeout covers a
-    // slow shared CI runner — the prior 5000ms default flaked at
-    // ~5.1s on GitHub's 2-core hosts under parallel job load.
     const a = app()
-    for (let i = 0; i < 60; i++) {
-      const headers = { 'Content-Type': 'application/json', 'cf-connecting-ip': '198.51.100.20', 'x-forwarded-for': `203.0.113.${i}` }
-      const r = await a.request('/auth/plex/check', {
+    const responses = await Promise.all(
+      Array.from({ length: 62 }, (_, i) =>
+        a.request('/auth/plex/check', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'cf-connecting-ip': '198.51.100.20',
+            'x-forwarded-for': `203.0.113.${i}`,
+          },
+          body: JSON.stringify({ pinId: 12345 + (i % 2) }),
+        }),
+      ),
+    )
+    expect(responses.map((response) => response.status)).toEqual(Array(62).fill(200))
+  }, 15_000)
+
+  it('limits one PIN to 60 checks with Retry-After and a redacted structured warning', async () => {
+    stubPlex({ authToken: null })
+    const a = app()
+    const responses = await Promise.all(
+      Array.from({ length: 60 }, () =>
+        a.request('/auth/plex/check', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pinId: 12345 }),
+        }),
+      ),
+    )
+    expect(responses.map((response) => response.status)).toEqual(Array(60).fill(200))
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const rejected = await a.request('/auth/plex/check', {
         method: 'POST',
-        headers,
-        body: JSON.stringify({ pinId: 12345 }),
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Request-Id': 'plex-pin-rate-limit',
+          'cf-connecting-ip': '198.51.100.20',
+          Authorization: 'Bearer SECRET-TOKEN',
+          Cookie: 'eex.session=SECRET-COOKIE',
+        },
+        body: JSON.stringify({
+          pinId: 12345,
+          inviteCode: 'SECRET-INVITE',
+          identity: 'SECRET-IDENTITY',
+        }),
       })
-      expect(r.status).toBe(200)
+      expect(rejected.status).toBe(429)
+      expect(await rejected.json()).toEqual({ error: 'rate_limited' })
+      const retryAfterSeconds = Number(rejected.headers.get('Retry-After'))
+      expect(Number.isFinite(retryAfterSeconds)).toBe(true)
+      expect(retryAfterSeconds).toBeGreaterThan(0)
+
+      const line = String(warn.mock.calls.at(-1)?.[0] ?? '')
+      const context = JSON.parse(line.slice(line.indexOf('{'))) as Record<string, unknown>
+      expect(context).toEqual({
+        operation: 'check',
+        scope: 'pin',
+        requestId: 'plex-pin-rate-limit',
+        retryAfterSeconds,
+      })
+      for (const secret of [
+        '198.51.100.20',
+        '12345',
+        'SECRET-INVITE',
+        'SECRET-TOKEN',
+        'SECRET-COOKIE',
+        'SECRET-IDENTITY',
+      ]) {
+        expect(line).not.toContain(secret)
+      }
+    } finally {
+      warn.mockRestore()
     }
-    const r = await a.request('/auth/plex/check', {
+  }, 15_000)
+
+  it('keeps the 60-check PIN ceiling while other PIN buckets churn', async () => {
+    stubPlex({ authToken: null })
+    const a = app()
+    const first59 = await Promise.all(
+      Array.from({ length: 59 }, () =>
+        a.request('/auth/plex/check', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pinId: 12345 }),
+        }),
+      ),
+    )
+    expect(first59.map((response) => response.status)).toEqual(Array(59).fill(200))
+
+    const churn = await Promise.all(
+      Array.from({ length: 255 }, (_, i) =>
+        a.request('/auth/plex/check', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pinId: 30_000 + i }),
+        }),
+      ),
+    )
+    expect(churn.map((response) => response.status)).toEqual(Array(255).fill(200))
+
+    const sixtieth = await a.request('/auth/plex/check', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': '198.51.100.20', 'x-forwarded-for': '203.0.113.200' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pinId: 12345 }),
     })
-    expect(r.status).toBe(429)
-    expect(await r.json()).toEqual({ error: 'rate_limited' })
+    expect(sixtieth.status).toBe(200)
 
-    const other = await a.request('/auth/plex/check', {
+    const rejected = await a.request('/auth/plex/check', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': '198.51.100.21' },
-      body: JSON.stringify({ pinId: 12346 }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinId: 12345 }),
     })
-    expect(other.status).toBe(200)
-  }, 15_000)
+    expect(rejected.status).toBe(429)
+  }, 30_000)
+
+  it('caps a trusted client at 300 checks even while it rotates PINs', async () => {
+    ;(env as Record<string, unknown>).trustClientIpHeaders = true
+    stubPlex({ authToken: null })
+    const a = app()
+    const responses = await Promise.all(
+      Array.from({ length: 300 }, (_, i) =>
+        a.request('/auth/plex/check', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'cf-connecting-ip': '198.51.100.20',
+            'x-forwarded-for': `203.0.113.${i % 256}`,
+          },
+          body: JSON.stringify({ pinId: 20_000 + i }),
+        }),
+      ),
+    )
+    expect(responses.map((response) => response.status)).toEqual(Array(300).fill(200))
+
+    const rejected = await a.request('/auth/plex/check', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'cf-connecting-ip': '198.51.100.20',
+        'x-forwarded-for': '203.0.113.250',
+      },
+      body: JSON.stringify({ pinId: 99_999 }),
+    })
+    expect(rejected.status).toBe(429)
+    expect(await rejected.json()).toEqual({ error: 'rate_limited' })
+    const retryAfterSeconds = Number(rejected.headers.get('Retry-After'))
+    expect(Number.isFinite(retryAfterSeconds)).toBe(true)
+    expect(retryAfterSeconds).toBeGreaterThan(0)
+  }, 30_000)
 
   it('400s a missing pinId', async () => {
     const r = await app().request('/auth/plex/check', { method: 'POST' })
@@ -296,7 +419,7 @@ describe('POST /auth/plex/check', () => {
       const r = await a.request('/auth/plex/check', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': '198.51.100.20' },
-        body: JSON.stringify({ pinId: 12345 }),
+        body: JSON.stringify({ pinId: 12345 + (i % 2) }),
       })
       expect(r.status).toBe(200)
     }
