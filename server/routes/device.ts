@@ -30,7 +30,7 @@
 // and finds the authorized token. Mirrors the web SPA flow exactly.
 
 import { Hono } from 'hono'
-import { checkPin, getUser } from '../plex.js'
+import { checkPin, getUser, PlexRateLimitError } from '../plex.js'
 import { authorizeOrRedeem, enforceAuthRateLimit } from '../auth.js'
 import { roleFor } from '../services/sessionGate.js'
 import { parseLimitedJson } from '../services/parseLimitedJson.js'
@@ -85,7 +85,14 @@ device.post('/poll', async (c) => {
         ? body.inviteCode
         : undefined
 
-  const pin = await checkPin(pinId)
+  let pin: Awaited<ReturnType<typeof checkPin>>
+  try {
+    pin = await checkPin(pinId)
+  } catch (error) {
+    if (!(error instanceof PlexRateLimitError)) throw error
+    c.header('Retry-After', error.retryAfter)
+    return c.json({ error: 'plex_rate_limited' }, 429)
+  }
   if (!pin.authToken) return c.json({ status: 'pending' })
 
   const user = await getUser(pin.authToken)

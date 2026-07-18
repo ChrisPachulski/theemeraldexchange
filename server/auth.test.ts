@@ -252,6 +252,69 @@ describe('POST /auth/plex/check', () => {
     expect(await r.json()).toEqual({ status: 'pending' })
   })
 
+  it.each([
+    ['numeric', '17', '17'],
+    ['HTTP-date', 'Sat, 18 Jul 2026 23:59:59 GMT', 'Sat, 18 Jul 2026 23:59:59 GMT'],
+    ['malformed', 'eventually', '5'],
+    ['absent', undefined, '5'],
+  ])(
+    'returns provider-specific 429 for Plex backpressure with %s Retry-After',
+    async (_label, upstreamRetryAfter, expectedRetryAfter) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () =>
+          new Response('UPSTREAM-BODY-SECRET', {
+            status: 429,
+            headers:
+              upstreamRetryAfter === undefined
+                ? undefined
+                : { 'Retry-After': upstreamRetryAfter },
+          }),
+        ),
+      )
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+      const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
+      try {
+        const r = await app().request('/auth/plex/check', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer AUTHORIZATION-SECRET',
+            Cookie: 'eex.session=COOKIE-SECRET',
+          },
+          body: JSON.stringify({
+            pinId: 987654321,
+            inviteCode: 'INVITE-CODE-SECRET',
+          }),
+        })
+
+        expect(r.status).toBe(429)
+        expect(r.headers.get('Retry-After')).toBe(expectedRetryAfter)
+        expect(await r.json()).toEqual({ error: 'plex_rate_limited' })
+
+        const logs = [...errorSpy.mock.calls, ...infoSpy.mock.calls, ...warnSpy.mock.calls]
+          .flat()
+          .map(String)
+          .join('\n')
+        for (const secret of [
+          '987654321',
+          'UPSTREAM-BODY-SECRET',
+          'AUTHORIZATION-SECRET',
+          'COOKIE-SECRET',
+          'INVITE-CODE-SECRET',
+        ]) {
+          expect(logs).not.toContain(secret)
+        }
+      } finally {
+        errorSpy.mockRestore()
+        infoSpy.mockRestore()
+        warnSpy.mockRestore()
+      }
+    },
+  )
+
   it('allows two normal PIN polling flows from one trusted client past 60 total checks', async () => {
     ;(env as Record<string, unknown>).trustClientIpHeaders = true
     stubPlex({ authToken: null })

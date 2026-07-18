@@ -24,7 +24,12 @@ import {
 } from './plex.js'
 import { env } from './env.js'
 
-type Stub = { status: number; body: string; contentType?: string }
+type Stub = {
+  status: number
+  body: string
+  contentType?: string
+  headers?: Record<string, string>
+}
 const responses = new Map<string, Stub>()
 const errorsByNeedle = new Map<string, Error>()
 
@@ -49,7 +54,10 @@ beforeEach(() => {
       if (url.includes(needle)) {
         return new Response(stub.body, {
           status: stub.status,
-          headers: { 'Content-Type': stub.contentType ?? 'application/json' },
+          headers: {
+            'Content-Type': stub.contentType ?? 'application/json',
+            ...stub.headers,
+          },
         })
       }
     }
@@ -67,8 +75,13 @@ function stubJson(needle: string, body: unknown, status = 200) {
     contentType: 'application/json',
   })
 }
-function stubText(needle: string, body: string, status: number) {
-  responses.set(needle, { status, body, contentType: 'text/plain' })
+function stubText(
+  needle: string,
+  body: string,
+  status: number,
+  headers?: Record<string, string>,
+) {
+  responses.set(needle, { status, body, contentType: 'text/plain', headers })
 }
 function stubXml(needle: string, body: string, status = 200) {
   responses.set(needle, { status, body, contentType: 'application/xml' })
@@ -104,6 +117,73 @@ describe('checkPin', () => {
   it('throws on a non-ok status', async () => {
     stubText('/pins/5', 'boom', 500)
     await expect(checkPin(5)).rejects.toThrow('plex.checkPin failed: 500')
+  })
+
+  it.each([
+    ['numeric', '17', '17'],
+    ['HTTP-date', 'Sat, 18 Jul 2026 23:59:59 GMT', 'Sat, 18 Jul 2026 23:59:59 GMT'],
+    ['malformed', 'eventually', '5'],
+    ['absent', undefined, '5'],
+  ])('throws a typed 429 with a safe %s Retry-After', async (_label, upstream, expected) => {
+    stubText(
+      '/pins/987654321',
+      'UPSTREAM-BODY-SECRET',
+      429,
+      upstream === undefined ? undefined : { 'Retry-After': upstream },
+    )
+
+    let caught: unknown
+    try {
+      await checkPin(987654321)
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toMatchObject({
+      name: 'PlexRateLimitError',
+      retryAfter: expected,
+    })
+  })
+
+  it('never logs PIN, client, response body, or token artifacts', async () => {
+    const mutableEnv = env as unknown as Record<string, unknown>
+    const originalClientId = env.plexClientId
+    mutableEnv.plexClientId = 'CLIENT-ID-SECRET'
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
+    try {
+      stubText('/pins/987654321', 'UPSTREAM-BODY-SECRET', 500)
+      await expect(checkPin(987654321)).rejects.toThrow()
+
+      stubJson('/pins/123456789', {
+        id: 123456789,
+        code: 'PIN-CODE-SECRET',
+        authToken: 'PLEX-TOKEN-SECRET',
+      })
+      await checkPin(123456789)
+
+      const logs = [...errorSpy.mock.calls, ...infoSpy.mock.calls, ...warnSpy.mock.calls]
+        .flat()
+        .map(String)
+        .join('\n')
+      for (const secret of [
+        '987654321',
+        '123456789',
+        'CLIENT-ID-SECRET',
+        'UPSTREAM-BODY-SECRET',
+        'PIN-CODE-SECRET',
+        'PLEX-TOKEN-SECRET',
+      ]) {
+        expect(logs).not.toContain(secret)
+      }
+    } finally {
+      mutableEnv.plexClientId = originalClientId
+      errorSpy.mockRestore()
+      infoSpy.mockRestore()
+      warnSpy.mockRestore()
+    }
   })
 })
 
@@ -361,4 +441,3 @@ describe('listHomeUsers', () => {
     await expect(listHomeUsers(TOKEN)).resolves.toEqual([])
   })
 })
-

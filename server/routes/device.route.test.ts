@@ -14,12 +14,25 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // vi.mock is hoisted above imports and top-level consts, so the factory may not
 // close over ordinary module-scope variables. vi.hoisted runs WITH the hoist,
 // so these handles are initialized before the mocks reference them.
-const plex = vi.hoisted(() => ({
-  buildAuthUrl: vi.fn(),
-  checkPin: vi.fn(),
-  createPin: vi.fn(),
-  getUser: vi.fn(),
-}))
+const plex = vi.hoisted(() => {
+  class PlexRateLimitError extends Error {
+    readonly retryAfter: string
+
+    constructor(retryAfter: string) {
+      super('Plex PIN polling rate-limited')
+      this.name = 'PlexRateLimitError'
+      this.retryAfter = retryAfter
+    }
+  }
+
+  return {
+    buildAuthUrl: vi.fn(),
+    checkPin: vi.fn(),
+    createPin: vi.fn(),
+    getUser: vi.fn(),
+    PlexRateLimitError,
+  }
+})
 vi.mock('../plex.js', () => plex)
 
 const { authorizeOrRedeem, enforceAuthRateLimit } = vi.hoisted(() => ({
@@ -121,6 +134,20 @@ describe('device POST /poll — pin lifecycle', () => {
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ status: 'pending' })
     expect(plex.getUser).not.toHaveBeenCalled()
+  })
+
+  it('returns Plex backpressure as a provider-specific 429 without minting', async () => {
+    plex.checkPin.mockRejectedValue(
+      new plex.PlexRateLimitError('Sat, 18 Jul 2026 23:59:59 GMT'),
+    )
+
+    const res = await post('/poll', validPoll)
+
+    expect(res.status).toBe(429)
+    expect(res.headers.get('Retry-After')).toBe('Sat, 18 Jul 2026 23:59:59 GMT')
+    expect(await res.json()).toEqual({ error: 'plex_rate_limited' })
+    expect(plex.getUser).not.toHaveBeenCalled()
+    expect(session.mintDeviceToken).not.toHaveBeenCalled()
   })
 
   it('403 denied — authZ gate blocks an uninvited member and mints NO token', async () => {

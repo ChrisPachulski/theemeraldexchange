@@ -34,6 +34,7 @@ import {
   listResources,
   signOut as signOutPlex,
   PLEX_PRODUCT,
+  PlexRateLimitError,
 } from './plex.js'
 import {
   setSessionCookie,
@@ -399,7 +400,14 @@ auth.post('/plex/check', async (c) => {
   if (pinId === undefined) return c.json({ error: 'bad pinId' }, 400)
   const inviteCode = typeof body?.inviteCode === 'string' ? body.inviteCode : undefined
 
-  const pin = await checkPin(pinId)
+  let pin: Awaited<ReturnType<typeof checkPin>>
+  try {
+    pin = await checkPin(pinId)
+  } catch (error) {
+    if (!(error instanceof PlexRateLimitError)) throw error
+    c.header('Retry-After', error.retryAfter)
+    return c.json({ error: 'plex_rate_limited' }, 429)
+  }
   if (!pin.authToken) return c.json({ status: 'pending' })
 
   // authN: prove the Plex identity. This stays exactly as before — the

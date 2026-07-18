@@ -42,6 +42,36 @@ export type Pin = {
   authToken: string | null
 }
 
+const PLEX_RATE_LIMIT_FALLBACK_SECONDS = 5
+const PLEX_RATE_LIMIT_LOG_MAX_SECONDS = 30
+
+/** Expected Plex backpressure, kept distinct from local auth rate limits. */
+export class PlexRateLimitError extends Error {
+  readonly retryAfter: string
+
+  constructor(retryAfter: string) {
+    super('Plex PIN polling rate-limited')
+    this.name = 'PlexRateLimitError'
+    this.retryAfter = retryAfter
+  }
+}
+
+function normalizedRetryAfter(value: string | null): string {
+  const candidate = value?.trim()
+  if (candidate && (/^\d+$/.test(candidate) || Number.isFinite(Date.parse(candidate)))) {
+    return candidate
+  }
+  return String(PLEX_RATE_LIMIT_FALLBACK_SECONDS)
+}
+
+function retryAfterSecondsForLog(retryAfter: string): number {
+  const numeric = /^\d+$/.test(retryAfter)
+    ? Number(retryAfter)
+    : Math.ceil((Date.parse(retryAfter) - Date.now()) / 1000)
+  if (!Number.isFinite(numeric)) return PLEX_RATE_LIMIT_FALLBACK_SECONDS
+  return Math.min(PLEX_RATE_LIMIT_LOG_MAX_SECONDS, Math.max(0, numeric))
+}
+
 export type PlexUser = {
   id: number
   uuid: string
@@ -72,26 +102,21 @@ export async function checkPin(pinId: number): Promise<Pin> {
     WAN_TIMEOUT_MS,
     'plex.checkPin',
   )
-  if (!res.ok) {
-    const body = await res.text().catch(() => '<read failed>')
-    console.error(
-      `[plex.checkPin] FAILED status=${res.status} pinId=${pinId} clientID=${env.plexClientId} body=${body.slice(0, 300)}`,
+  if (res.status === 429) {
+    const retryAfter = normalizedRetryAfter(res.headers.get('Retry-After'))
+    console.warn(
+      `[plex.checkPin] rate_limited status=429 retryAfterSeconds=${retryAfterSecondsForLog(retryAfter)}`,
     )
+    throw new PlexRateLimitError(retryAfter)
+  }
+  if (!res.ok) {
+    console.error(`[plex.checkPin] failed status=${res.status}`)
     throw new Error(`plex.checkPin failed: ${res.status}`)
   }
   const data = (await res.json()) as Pin
-  // Log the polled state without leaking the authToken value. A
-  // {status:'pending'} loop in production now produces evidence:
-  //   - "tokenPresent=false" forever → plex.tv has not attached a token
-  //     (popup not authorized, or clientID mismatch between create/auth/
-  //     check; the most common cause is PLEX_CLIENT_ID drift between the
-  //     server boot and the popup auth URL the SPA opened)
-  //   - "tokenPresent=true" then the rest of the route runs as normal
-  // Logged at info on every poll — at 1.5s cadence that's ~40 lines/min
-  // per signing-in user, low enough to leave on permanently.
-  console.info(
-    `[plex.checkPin] ok pinId=${pinId} tokenPresent=${Boolean(data.authToken)} clientID=${env.plexClientId}`,
-  )
+  // Keep only low-cardinality outcome evidence. PIN ids and the client id are
+  // stable login artifacts and must never enter container logs.
+  console.info(`[plex.checkPin] ok tokenPresent=${Boolean(data.authToken)}`)
   return data
 }
 
