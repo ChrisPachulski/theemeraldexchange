@@ -55,11 +55,18 @@ vi.mock('../services/setupState.js', () => setupState)
 
 const transactionHarness = vi.hoisted(() => ({
   events: [] as string[],
-  transaction: vi.fn((fn: (...args: unknown[]) => unknown) => () => {
-    transactionHarness.events.push('transaction:begin')
-    const result = fn()
-    transactionHarness.events.push('transaction:commit')
-    return result
+  modes: [] as Array<'deferred' | 'immediate'>,
+  transaction: vi.fn((fn: (...args: unknown[]) => unknown) => {
+    const run = (mode: 'deferred' | 'immediate') => {
+      transactionHarness.modes.push(mode)
+      transactionHarness.events.push('transaction:begin')
+      const result = fn()
+      transactionHarness.events.push('transaction:commit')
+      return result
+    }
+    const deferred = () => run('deferred')
+    deferred.immediate = () => run('immediate')
+    return deferred
   }),
 }))
 
@@ -83,6 +90,7 @@ function post(path: string, body: unknown) {
 beforeEach(() => {
   vi.clearAllMocks()
   transactionHarness.events.length = 0
+  transactionHarness.modes.length = 0
   setSessionCookie.mockResolvedValue(undefined)
 })
 
@@ -145,6 +153,7 @@ describe('passkey register/verify', () => {
     expect(authorizeOrRedeem).toHaveBeenCalledWith(verified.sub, 'INVITE', 'Chris', 'local')
     expect(webauthn.persistCredential).toHaveBeenCalledTimes(1)
     expect(setSessionCookie).toHaveBeenCalledTimes(1)
+    expect(transactionHarness.modes).toEqual(['immediate'])
     expect(transactionHarness.events).toEqual([
       'transaction:begin',
       'invite:redeemed',
@@ -217,6 +226,7 @@ describe('first-owner claim (plan 006 Phase 1)', () => {
       expect.anything(),
       expect.objectContaining({ role: 'admin', auth_mode: 'local' }),
     )
+    expect(transactionHarness.modes).toEqual(['immediate'])
     // The claim never consults the invite gate.
     expect(authorizeOrRedeem).not.toHaveBeenCalled()
   })

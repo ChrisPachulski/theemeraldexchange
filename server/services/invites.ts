@@ -238,7 +238,7 @@ export function redeemInvite(
   })
 
   try {
-    return tx()
+    return tx.immediate()
   } catch (err) {
     if (err instanceof ExhaustedRace) return { ok: false, reason: 'exhausted' }
     throw err

@@ -175,7 +175,7 @@ passkey.post('/register/verify', async (c) => {
       persistCredential(sub, credential, deviceLabel ?? handle)
       markClaimed(sub)
       return true
-    })()
+    }).immediate()
     if (!claimed) return c.json({ error: 'already_claimed' }, 403)
     await setSessionCookie(c, { sub, username: handle, role: 'admin', auth_mode: 'local' })
     return c.json({ ok: true, claimed: true, user: { sub, username: handle, role: 'admin' } })
@@ -202,7 +202,7 @@ passkey.post('/register/verify', async (c) => {
 
     persistCredential(sub, credential, deviceLabel ?? handle)
     return { role: isMember(sub)?.role ?? 'user' }
-  })()
+  }).immediate()
   if (!registration) {
     return c.json({ error: 'no_invite' }, 403)
   }
