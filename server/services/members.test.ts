@@ -153,7 +153,7 @@ describe('members service', () => {
       expect(isMember(ADMIN)?.role).toBe('admin')
     })
 
-    it('serializes pre-authorized admin revocations and revalidates the waiting actor', () => {
+    it('revalidates a second pre-authorized actor after the first revocation commits', () => {
       addMember({ sub: ADMIN, role: 'admin', authMode: 'plex' })
       addMember({ sub: BOB, role: 'admin', authMode: 'plex' })
 

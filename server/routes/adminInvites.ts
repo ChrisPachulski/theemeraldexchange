@@ -146,7 +146,7 @@ adminMembers.delete('/:sub', (c) => {
   const result = revokeMemberSafely({
     targetSub: sub,
     actorSub: session.sub,
-    actorUsername: session.username,
+    actorUsername: c.get('identityUsername'),
     immutableAdminSubs: env.adminSubs,
     legacyAdminUsernames: env.admins,
   })

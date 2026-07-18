@@ -23,6 +23,9 @@ import type { DeviceTokenClaims } from '../session.js'
 export type Env = {
   Variables: {
     session: Session
+    /** Identity username used for live admin policy. For Bearer sessions this
+     * is not session.username, which intentionally remains the device label. */
+    identityUsername: string | null
     deviceClaims?: DeviceTokenClaims
   }
 }
@@ -37,7 +40,12 @@ export type Env = {
  *  to the cookie. That would let an attacker who somehow obtained a
  *  cookie bypass a freshly-revoked device token. */
 async function loadReconciledSession(c: Parameters<MiddlewareHandler<Env>>[0]): Promise<
-  | { ok: true; session: Session; deviceClaims?: DeviceTokenClaims }
+  | {
+      ok: true
+      session: Session
+      identityUsername: string | null
+      deviceClaims?: DeviceTokenClaims
+    }
   | { ok: false; reason: 'unauthenticated' | 'access_revoked' | 'invalid_bearer' }
 > {
   const bearer = await tryBearerAuth(c)
@@ -45,7 +53,12 @@ async function loadReconciledSession(c: Parameters<MiddlewareHandler<Env>>[0]): 
     if (!bearer.ok) {
       return { ok: false, reason: 'invalid_bearer' }
     }
-    return { ok: true, session: bearer.session, deviceClaims: bearer.claims }
+    return {
+      ok: true,
+      session: bearer.session,
+      identityUsername: bearer.identityUsername,
+      deviceClaims: bearer.claims,
+    }
   }
 
   // No Bearer present — try cookie.
@@ -59,7 +72,7 @@ async function loadReconciledSession(c: Parameters<MiddlewareHandler<Env>>[0]): 
     clearSessionCookie(c)
     return { ok: false, reason: 'access_revoked' }
   }
-  return { ok: true, session: reconciled }
+  return { ok: true, session: reconciled, identityUsername: reconciled.username }
 }
 
 export const requireAuth: MiddlewareHandler<Env> = async (c, next) => {
@@ -76,6 +89,7 @@ export const requireAuth: MiddlewareHandler<Env> = async (c, next) => {
     )
   }
   c.set('session', r.session)
+  c.set('identityUsername', r.identityUsername)
   if (r.deviceClaims) c.set('deviceClaims', r.deviceClaims)
   await next()
 }
@@ -97,5 +111,6 @@ export const requireAdmin: MiddlewareHandler<Env> = async (c, next) => {
     return c.json({ error: 'forbidden', reason: 'admin_only' }, 403)
   }
   c.set('session', r.session)
+  c.set('identityUsername', r.identityUsername)
   await next()
 }

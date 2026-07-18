@@ -38,7 +38,7 @@ process.env.ADMIN_SUBS = 'plex:42'
 const { serverDb, closeServerDb } = await import('../services/serverDb.js')
 const { iptvDb, closeIptvDb } = await import('../services/iptvDbSingleton.js')
 const { adminInvites, adminMembers } = await import('./adminInvites.js')
-const { createSession } = await import('../session.js')
+const { createSession, mintDeviceToken } = await import('../session.js')
 const { env } = await import('../env.js')
 const { Hono } = await import('hono')
 
@@ -83,6 +83,12 @@ function insertActiveMember(sub: string, role: 'admin' | 'user' = 'user'): void 
        VALUES (?, ?, ?, 'plex', NULL, ?, NULL)`,
     )
     .run(sub, null, role, new Date().toISOString())
+}
+
+function isActiveMember(sub: string): boolean {
+  return serverDb()
+    .raw.prepare(`SELECT 1 FROM members WHERE sub = ? AND revoked_at IS NULL`)
+    .get(sub) !== undefined
 }
 
 function insertDeviceToken(jti: string, sub: string): void {
@@ -460,6 +466,32 @@ describe('admin invites + members routes', () => {
       expect((after.member as { revoked_at: string | null }).revoked_at).not.toBeNull()
       expect(after.deviceRevocation).toMatchObject({ reason: 'member_revoked' })
       expect((after.playlist as { revoked_at: string | null }).revoked_at).not.toBeNull()
+    })
+
+    it('uses a Bearer admin identity username, not its device display label', async () => {
+      envRw.adminSubs = []
+      envRw.admins = ['legacy-operator']
+      insertActiveMember(ADMIN_SUB, 'user')
+      insertActiveMember(USER_SUB, 'user')
+      const token = await mintDeviceToken({
+        sub: ADMIN_SUB,
+        role: 'user',
+        auth_mode: 'plex',
+        device_id: '01HABCDEFGHJKMNPQRSTVWXYZ0',
+        device_name: 'Kitchen iPad',
+        username: 'legacy-operator',
+        device_platform: 'ios',
+        server_id: '01HXYZ01234567890ABCDEFGHJ',
+      })
+
+      const r = await appUnderTest().request(`/members/${USER_SUB}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+
+      expect(r.status).toBe(200)
+      expect(await r.json()).toEqual({ ok: true })
+      expect(isActiveMember(USER_SUB)).toBe(false)
     })
 
     it('allows one DB-backed admin to revoke a redundant second admin', async () => {

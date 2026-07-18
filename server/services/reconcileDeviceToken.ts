@@ -25,6 +25,9 @@ export type ReconciledDeviceSession = DeviceTokenClaims & {
    *  device_name from device_tokens instead. Stored separately on the
    *  reconcile result so callers can render either. */
   device_name: string
+  /** Verified identity username retained server-side at pairing. Distinct
+   * from device_name, which is only a UI label. */
+  identity_username: string | null
 }
 
 /** Reconcile a verified device-token against current server state.
@@ -90,6 +93,7 @@ export function reconcileDeviceToken(
     ...claims,
     role,
     device_name: row.device_name,
+    identity_username: row.username,
   }
 }
 

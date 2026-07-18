@@ -86,6 +86,7 @@ describe('tryBearerAuth (deviceTokenAuth middleware)', () => {
     expect(result.session.username).toBe('Living Room Apple TV')
     expect(result.session.role).toBe('admin')
     expect(result.session.auth_mode).toBe('plex')
+    expect(result.identityUsername).toBeNull()
     // Device tokens carry no Plex token.
     expect(result.session.plexAuthToken).toBeUndefined()
   })
@@ -158,6 +159,7 @@ describe('deviceSessionToSession', () => {
       nbf: 1_700_000_000,
       exp: 1_700_000_000 + 1000,
       device_name: 'Bedroom iPad',
+      identity_username: 'legacy-admin',
     }
 
     const session = deviceSessionToSession(reconciled)

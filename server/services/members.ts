@@ -152,7 +152,7 @@ export type SafeMemberRevocation =
 export function revokeMemberSafely(opts: {
   targetSub: string
   actorSub: string
-  actorUsername: string
+  actorUsername: string | null
   immutableAdminSubs: readonly string[]
   legacyAdminUsernames: readonly string[]
 }): SafeMemberRevocation {
