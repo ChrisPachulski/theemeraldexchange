@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { useAuth } from '../../lib/auth'
 import { browserSupportsWebAuthn } from '@simplewebauthn/browser'
 import './PasskeyButtons.css'
@@ -20,13 +20,16 @@ export function PasskeyButtons({
   inviteCode?: string
   startInRegistration?: boolean
 }) {
-  const { passkeyLogin, passkeyRegister, signInState } = useAuth()
+  const { passkeyLogin, passkeyRegister, activeSignIn } = useAuth()
   const [supported, setSupported] = useState(false)
   const [mode, setMode] = useState<'idle' | 'register'>(
     startInRegistration ? 'register' : 'idle',
   )
   const [handle, setHandle] = useState('')
-  const pending = signInState === 'pending' || signInState === 'opening'
+  const handleId = useId()
+  const pending = activeSignIn !== null
+  const loginPending = activeSignIn === 'passkey-login'
+  const registrationPending = activeSignIn === 'passkey-register'
 
   // Feature-detect once on mount; hide the whole block on browsers without
   // WebAuthn rather than offering a button that can only fail.
@@ -52,7 +55,7 @@ export function PasskeyButtons({
         onClick={() => void passkeyLogin()}
         disabled={pending}
       >
-        {pending ? 'Waiting…' : 'Sign in with a passkey'}
+        {loginPending ? 'Waiting…' : 'Sign in with a passkey'}
       </button>
 
       {mode === 'idle' ? (
@@ -72,11 +75,11 @@ export function PasskeyButtons({
             void passkeyRegister({ handle: handle.trim(), inviteCode })
           }}
         >
-          <label className="passkey-signin__label" htmlFor="passkey-handle">
+          <label className="passkey-signin__label" htmlFor={handleId}>
             Your name
           </label>
           <input
-            id="passkey-handle"
+            id={handleId}
             className="walkthrough__invite-input"
             type="text"
             value={handle}
@@ -93,7 +96,7 @@ export function PasskeyButtons({
               className="walkthrough__signin-button"
               disabled={pending || handle.trim().length === 0}
             >
-              {pending ? 'Creating…' : 'Create passkey'}
+              {registrationPending ? 'Creating…' : 'Create passkey'}
             </button>
             <button
               type="button"

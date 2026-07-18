@@ -9,12 +9,18 @@ import { PasskeyButtons } from './PasskeyButtons'
 const mocks = vi.hoisted(() => ({
   passkeyLogin: vi.fn(),
   passkeyRegister: vi.fn(),
+  activeSignIn: null as
+    | 'plex'
+    | 'apple'
+    | 'passkey-login'
+    | 'passkey-register'
+    | null,
 }))
 
 vi.mock('../../lib/auth', () => ({
   useAuth: () => ({
     ...mocks,
-    signInState: 'idle',
+    signInState: mocks.activeSignIn ? 'pending' : 'idle',
   }),
 }))
 
@@ -26,6 +32,7 @@ describe('PasskeyButtons registration', () => {
   beforeEach(() => {
     mocks.passkeyLogin.mockResolvedValue(false)
     mocks.passkeyRegister.mockResolvedValue(false)
+    mocks.activeSignIn = null
   })
 
   afterEach(() => {
@@ -51,5 +58,47 @@ describe('PasskeyButtons registration', () => {
 
     expect(mocks.passkeyRegister).toHaveBeenCalledOnce()
     expect(mocks.passkeyRegister).toHaveBeenCalledWith({ handle: 'Nick', inviteCode })
+  })
+
+  it('keeps passkey copy static while Apple is active', async () => {
+    mocks.activeSignIn = 'apple'
+
+    render(<PasskeyButtons startInRegistration />)
+
+    expect(await screen.findByRole('button', { name: 'Sign in with a passkey' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Create passkey' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Waiting…' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Creating…' })).not.toBeInTheDocument()
+  })
+
+  it('shows progress only on the active passkey operation', async () => {
+    mocks.activeSignIn = 'passkey-login'
+    const view = render(<PasskeyButtons />)
+
+    expect(await screen.findByRole('button', { name: 'Waiting…' })).toBeDisabled()
+    view.unmount()
+
+    mocks.activeSignIn = 'passkey-register'
+    render(<PasskeyButtons startInRegistration />)
+
+    expect(screen.getByRole('button', { name: 'Sign in with a passkey' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Creating…' })).toBeDisabled()
+  })
+
+  it('gives two registration forms unique label/input ids', async () => {
+    render(
+      <>
+        <PasskeyButtons startInRegistration />
+        <PasskeyButtons startInRegistration />
+      </>,
+    )
+
+    const inputs = await screen.findAllByRole('textbox', { name: 'Your name' })
+    const labels = screen.getAllByText('Your name')
+    expect(inputs).toHaveLength(2)
+    expect(inputs[0].id).not.toBe(inputs[1].id)
+    expect(labels.map((label) => label.getAttribute('for'))).toEqual(
+      inputs.map((input) => input.id),
+    )
   })
 })

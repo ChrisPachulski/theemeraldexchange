@@ -39,7 +39,7 @@ function deferred<T>() {
 }
 
 function AuthProbe() {
-  const { signIn, user, signInError } = useAuth()
+  const { signIn, activeSignIn, user, signInError } = useAuth()
   return (
     <>
       <button type="button" onClick={() => void signIn()}>
@@ -49,6 +49,7 @@ function AuthProbe() {
         Start with incomplete invite
       </button>
       <output aria-label="signed-in user">{user?.username ?? ''}</output>
+      <output aria-label="active sign-in">{activeSignIn ?? ''}</output>
       {signInError && <p role="alert">{signInError}</p>}
     </>
   )
@@ -79,8 +80,10 @@ function SessionProbe() {
 }
 
 function ProviderProbe() {
-  const { signIn, appleSignIn, passkeyLogin, passkeyRegister, user, signInError } =
-    useAuth()
+  const auth = useAuth() as ReturnType<typeof useAuth> & {
+    activeSignIn?: 'plex' | 'apple' | 'passkey-login' | 'passkey-register' | null
+  }
+  const { signIn, appleSignIn, passkeyLogin, passkeyRegister, user, signInError } = auth
   const [result, setResult] = useState('')
   return (
     <>
@@ -115,6 +118,7 @@ function ProviderProbe() {
       </button>
       <output aria-label="provider result">{result}</output>
       <output aria-label="provider user">{user?.username ?? ''}</output>
+      <output aria-label="active sign-in">{auth.activeSignIn ?? ''}</output>
       {signInError && <p role="alert">{signInError}</p>}
     </>
   )
@@ -395,6 +399,7 @@ describe('provider session confirmation', () => {
     button: string
     responseSub: string
     booleanResult: boolean
+    activeSignIn: 'plex' | 'apple' | 'passkey-login' | 'passkey-register'
   }
 
   const providers: ProviderCase[] = [
@@ -403,24 +408,28 @@ describe('provider session confirmation', () => {
       button: 'Plex provider',
       responseSub: 'plex:42',
       booleanResult: false,
+      activeSignIn: 'plex',
     },
     {
       name: 'Apple',
       button: 'Apple provider',
       responseSub: 'apple:000000.deadbeef.0000',
       booleanResult: true,
+      activeSignIn: 'apple',
     },
     {
       name: 'passkey login',
       button: 'Passkey login provider',
       responseSub: 'local:LOGIN',
       booleanResult: true,
+      activeSignIn: 'passkey-login',
     },
     {
       name: 'passkey registration',
       button: 'Passkey registration provider',
       responseSub: 'local:REGISTER',
       booleanResult: true,
+      activeSignIn: 'passkey-register',
     },
   ]
 
@@ -553,6 +562,9 @@ describe('provider session confirmation', () => {
 
       expect(meCalls()).toBe(2)
       expect(screen.getByLabelText('provider user')).toBeEmptyDOMElement()
+      expect(screen.getByLabelText('active sign-in')).toHaveTextContent(
+        provider.activeSignIn,
+      )
 
       pendingConfirmation.resolve(
         json({
@@ -569,11 +581,62 @@ describe('provider session confirmation', () => {
       await flush()
 
       expect(screen.getByLabelText('provider user')).toHaveTextContent('confirmed-session')
+      expect(screen.getByLabelText('active sign-in')).toBeEmptyDOMElement()
       if (provider.booleanResult) {
         expect(screen.getByLabelText('provider result')).toHaveTextContent('true')
       }
     },
   )
+
+  it('does not start a second provider while Apple confirmation owns the slot', async () => {
+    const apple = providers[1]
+    const pendingConfirmation = deferred<Response>()
+    const { fetchMock } = providerFetch(apple, () => pendingConfirmation.promise)
+
+    await startProvider(apple)
+    fireEvent.click(screen.getByRole('button', { name: 'Passkey login provider' }))
+    await flush()
+
+    expect(screen.getByLabelText('active sign-in')).toHaveTextContent('apple')
+    expect(webauthnMocks.startAuthentication).not.toHaveBeenCalled()
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).endsWith('/api/auth/passkey/login/options'),
+      ),
+    ).toHaveLength(0)
+
+    pendingConfirmation.resolve(
+      json({
+        user: {
+          sub: apple.responseSub,
+          username: 'confirmed-session',
+          role: 'user',
+          auth_mode: 'apple',
+        },
+      }),
+    )
+    await flush()
+  })
+
+  it.each([
+    { name: 'login', providerIndex: 2, cancel: webauthnMocks.startAuthentication },
+    { name: 'registration', providerIndex: 3, cancel: webauthnMocks.startRegistration },
+  ])('clears passkey $name activity after authenticator cancellation', async ({
+    providerIndex,
+    cancel,
+  }) => {
+    const provider = providers[providerIndex]
+    providerFetch(provider, () =>
+      Promise.resolve(json({ error: 'confirmation should not run' }, 500)),
+    )
+    cancel.mockRejectedValueOnce(new DOMException('cancelled', 'NotAllowedError'))
+
+    await startProvider(provider)
+
+    expect(screen.getByLabelText('provider result')).toHaveTextContent('false')
+    expect(screen.getByLabelText('active sign-in')).toBeEmptyDOMElement()
+    expect(screen.getByRole('alert')).toHaveTextContent(/cancelled/i)
+  })
 
   it.each([
     {
@@ -608,6 +671,7 @@ describe('provider session confirmation', () => {
 
     expect(screen.getByLabelText('provider result')).toHaveTextContent('false')
     expect(screen.getByLabelText('provider user')).toBeEmptyDOMElement()
+    expect(screen.getByLabelText('active sign-in')).toBeEmptyDOMElement()
     expect(screen.getByRole('alert')).toHaveTextContent(message)
   })
 
@@ -626,6 +690,7 @@ describe('provider session confirmation', () => {
     expect(meCalls()).toBe(4)
     expect(screen.getByLabelText('provider result')).toHaveTextContent('false')
     expect(screen.getByLabelText('provider user')).toBeEmptyDOMElement()
+    expect(screen.getByLabelText('active sign-in')).toBeEmptyDOMElement()
     expect(screen.getByRole('alert')).toHaveTextContent(/session.*try again/i)
   })
 
@@ -885,6 +950,7 @@ describe('Plex popup completion', () => {
 
     expect(signal?.aborted).toBe(true)
     expect(plexCheck).toHaveBeenCalledTimes(1)
+    expect(screen.getByLabelText('active sign-in')).toBeEmptyDOMElement()
     expect(screen.getByRole('alert')).toHaveTextContent('Plex sign-in expired. Try again.')
   })
 
@@ -901,6 +967,7 @@ describe('Plex popup completion', () => {
 
     expect(signal?.aborted).toBe(true)
     expect(plexCheck).toHaveBeenCalledTimes(1)
+    expect(screen.getByLabelText('active sign-in')).toBeEmptyDOMElement()
     expect(screen.getByRole('alert')).toHaveTextContent(
       'Plex sign-in window was closed before authorization finished.',
     )

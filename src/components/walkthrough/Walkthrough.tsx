@@ -34,10 +34,11 @@ const DEMO_STRIP: TrendingItem[] = [
 // the proof of ownership. Claiming registers a passkey as role 'admin' and
 // permanently closes the open first-run window.
 function ClaimBlock({ placement }: { placement: 'hero' | 'foot' }) {
-  const { passkeyRegister, signInState, signInError } = useAuth()
+  const { passkeyRegister, activeSignIn, signInError } = useAuth()
   const [handle, setHandle] = useState('')
   const [token, setToken] = useState('')
-  const pending = signInState === 'pending' || signInState === 'opening'
+  const pending = activeSignIn !== null
+  const claiming = activeSignIn === 'passkey-register'
   const nameId = `walkthrough-claim-name-${placement}`
   const tokenId = `walkthrough-claim-token-${placement}`
   // WebAuthn needs a secure context: https, or the localhost exception. On
@@ -104,7 +105,7 @@ function ClaimBlock({ placement }: { placement: 'hero' | 'foot' }) {
           }
           disabled={pending || handle.trim().length === 0 || token.trim().length === 0}
         >
-          {pending ? 'Claiming…' : 'Claim server & create passkey'}
+          {claiming ? 'Claiming…' : 'Claim server & create passkey'}
         </button>
       </div>
       {signInError && (
@@ -121,10 +122,11 @@ function SignInBlock({
   placement: 'hero' | 'foot'
   initialInviteCode: string
 }) {
-  const { signIn, signInState, signInError, discoveredServers, authMethods, setupClaimable } =
+  const { signIn, activeSignIn, signInError, discoveredServers, authMethods, setupClaimable } =
     useAuth()
   const [inviteCode, setInviteCode] = useState(initialInviteCode)
-  const pending = signInState === 'pending' || signInState === 'opening'
+  const pending = activeSignIn !== null
+  const plexPending = activeSignIn === 'plex'
   const code = inviteCode.trim()
   const codeError = inviteCodeError(code)
   // A unique id per placement so the two SignInBlock instances on the
@@ -178,7 +180,7 @@ function SignInBlock({
             onClick={() => void signIn(code || undefined)}
             disabled={pending}
           >
-            {pending ? 'Waiting for Plex…' : 'Sign in with Plex'}
+            {plexPending ? 'Waiting for Plex…' : 'Sign in with Plex'}
           </button>
         )}
         {showApple && <AppleSignInButton inviteCode={code || undefined} />}

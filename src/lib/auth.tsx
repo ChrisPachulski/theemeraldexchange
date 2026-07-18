@@ -256,6 +256,12 @@ async function readBrowserSession(signal: AbortSignal): Promise<SessionReadResul
 }
 
 type SignInState = 'idle' | 'opening' | 'pending' | 'denied' | 'error'
+export type ActiveSignIn =
+  | 'plex'
+  | 'apple'
+  | 'passkey-login'
+  | 'passkey-register'
+  | null
 
 // Plex may close its auth popup before the newly-authorized PIN is visible to
 // the backend. Keep checking briefly so a successful sign-in cannot lose a
@@ -302,6 +308,7 @@ type AuthCtx = {
   /** Toggle preview mode. Pass null to clear (back to actual role). */
   setViewAs: (role: Role | null) => void
   signInState: SignInState
+  activeSignIn: ActiveSignIn
   signInError: string | null
   signOutError: string | null
   /** Discovered Plex servers, only present when PLEX_SERVER_ID isn't set yet. */
@@ -321,8 +328,18 @@ type AuthCtx = {
    * error detail lives in `signInError` and the phase in `signInState`.
    */
   appleSignIn: (
-    args: { identityToken: string; nonce?: string; inviteCode?: string },
+    args: {
+      identityToken: string
+      nonce?: string
+      inviteCode?: string
+      /** Attempt returned by beginAppleSignIn for the pre-token SDK phase. */
+      attemptId?: number
+    },
   ) => Promise<boolean>
+  /** Reserve the shared sign-in slot before opening Apple's SDK popup. */
+  beginAppleSignIn: () => number | null
+  /** Release that slot when Apple's SDK popup is cancelled or fails. */
+  cancelAppleSignIn: (attemptId: number) => void
   /**
    * Sign in with an EXISTING passkey (WebAuthn). Usernameless — the
    * authenticator offers its discoverable resident keys, so no handle or
@@ -386,6 +403,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     writeStoredViewAs(next)
   }, [])
   const [signInState, setSignInState] = useState<SignInState>('idle')
+  const [activeSignIn, setActiveSignIn] = useState<ActiveSignIn>(null)
   const [signInError, setSignInError] = useState<string | null>(null)
   const [signOutError, setSignOutError] = useState<string | null>(null)
   const [discoveredServers, setDiscoveredServers] =
@@ -395,6 +413,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const pollGenerationRef = useRef(0)
   const popupRef = useRef<Window | null>(null)
   const signInInFlightRef = useRef(false)
+  const activeSignInRef = useRef<ActiveSignIn>(null)
+  const activeSignInAttemptRef = useRef<number | null>(null)
+  const nextSignInAttemptRef = useRef(0)
   const sessionReadRef = useRef<AbortController | null>(null)
   const sessionReadGenerationRef = useRef(0)
   const mountedRef = useRef(true)
@@ -536,16 +557,65 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired)
   }, [retrySession])
 
-  const stopPolling = useCallback(() => {
+  const beginSignIn = useCallback(
+    (provider: Exclude<ActiveSignIn, null>): number | null => {
+      if (!mountedRef.current || signInInFlightRef.current) return null
+      const attemptId = ++nextSignInAttemptRef.current
+      signInInFlightRef.current = true
+      activeSignInRef.current = provider
+      activeSignInAttemptRef.current = attemptId
+      setActiveSignIn(provider)
+      return attemptId
+    },
+    [],
+  )
+
+  const clearSignIn = useCallback(
+    (provider?: Exclude<ActiveSignIn, null>, attemptId?: number) => {
+      if (provider && activeSignInRef.current !== provider) return
+      if (
+        attemptId !== undefined &&
+        activeSignInAttemptRef.current !== attemptId
+      ) {
+        return
+      }
+      signInInFlightRef.current = false
+      activeSignInRef.current = null
+      activeSignInAttemptRef.current = null
+      if (mountedRef.current) setActiveSignIn(null)
+    },
+    [],
+  )
+
+  const beginAppleSignIn = useCallback(() => {
+    const attemptId = beginSignIn('apple')
+    if (attemptId === null) return null
+    setSignInError(null)
+    setSignOutError(null)
+    setSignInState('opening')
+    return attemptId
+  }, [beginSignIn])
+  const cancelAppleSignIn = useCallback((attemptId: number) => {
+    if (
+      activeSignInRef.current !== 'apple' ||
+      activeSignInAttemptRef.current !== attemptId
+    ) {
+      return
+    }
+    clearSignIn('apple', attemptId)
+    if (mountedRef.current) setSignInState('idle')
+  }, [clearSignIn])
+
+  const stopPolling = useCallback((clearActive = true) => {
     if (pollRef.current !== null) window.clearTimeout(pollRef.current)
     pollRef.current = null
     pollGenerationRef.current += 1
     pollAbortRef.current?.abort()
     pollAbortRef.current = null
-    signInInFlightRef.current = false
+    if (clearActive) clearSignIn()
     popupRef.current?.close()
     popupRef.current = null
-  }, [])
+  }, [clearSignIn])
 
   useEffect(() => () => stopPolling(), [stopPolling])
 
@@ -553,7 +623,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (rejectMalformedInvite(inviteCode)) return
     if (signInInFlightRef.current) return
     stopPolling()
-    signInInFlightRef.current = true
+    const plexAttemptId = beginSignIn('plex')
+    if (plexAttemptId === null) return
     setSignInError(null)
     setSignOutError(null)
     setSignInState('opening')
@@ -788,15 +859,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               finish('error', 'Plex sign-in returned an unexpected response.')
               return
             }
-            stopPolling()
-            // stopPolling releases the Plex poller, but provider serialization
-            // must remain held until the cookie session is confirmed.
-            signInInFlightRef.current = true
+            // Release Plex timers and the popup, but hold provider identity and
+            // serialization until the HttpOnly-cookie session is confirmed.
+            stopPolling(false)
             let confirmed = false
             try {
               confirmed = await confirmProviderSession(providerSub)
             } finally {
-              signInInFlightRef.current = false
+              clearSignIn('plex', plexAttemptId)
             }
             if (!confirmed) return
             setSignInState('idle')
@@ -819,17 +889,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!setupIsCurrent()) return
       finish('error', e instanceof Error ? e.message : String(e))
     }
-  }, [confirmProviderSession, rejectMalformedInvite, stopPolling])
+  }, [beginSignIn, clearSignIn, confirmProviderSession, rejectMalformedInvite, stopPolling])
 
   const appleSignIn = useCallback(
     async (args: {
       identityToken: string
       nonce?: string
       inviteCode?: string
+      attemptId?: number
     }): Promise<boolean> => {
-      if (rejectMalformedInvite(args.inviteCode)) return false
-      if (signInInFlightRef.current) return false
-      signInInFlightRef.current = true
+      const continuingApple =
+        args.attemptId !== undefined &&
+        signInInFlightRef.current &&
+        activeSignInRef.current === 'apple' &&
+        activeSignInAttemptRef.current === args.attemptId
+      if (args.attemptId !== undefined && !continuingApple) return false
+      if (rejectMalformedInvite(args.inviteCode)) {
+        if (continuingApple) clearSignIn('apple', args.attemptId)
+        return false
+      }
+      const appleAttemptId = continuingApple
+        ? args.attemptId!
+        : beginSignIn('apple')
+      if (appleAttemptId === null) return false
       setSignInError(null)
       setSignOutError(null)
       // No popup for the web SIWA path — the Apple JS SDK owns its own
@@ -888,15 +970,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSignInError(e instanceof Error ? e.message : String(e))
         return false
       } finally {
-        signInInFlightRef.current = false
+        clearSignIn('apple', appleAttemptId)
       }
     },
-    [confirmProviderSession, rejectMalformedInvite],
+    [beginSignIn, clearSignIn, confirmProviderSession, rejectMalformedInvite],
   )
 
   const passkeyLogin = useCallback(async (): Promise<boolean> => {
-    if (signInInFlightRef.current) return false
-    signInInFlightRef.current = true
+    const passkeyAttemptId = beginSignIn('passkey-login')
+    if (passkeyAttemptId === null) return false
     setSignInError(null)
     setSignOutError(null)
     setSignInState('pending')
@@ -959,9 +1041,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSignInError(e instanceof Error ? e.message : String(e))
       return false
     } finally {
-      signInInFlightRef.current = false
+      clearSignIn('passkey-login', passkeyAttemptId)
     }
-  }, [confirmProviderSession])
+  }, [beginSignIn, clearSignIn, confirmProviderSession])
 
   const passkeyRegister = useCallback(
     async ({
@@ -974,8 +1056,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setupToken?: string
     }): Promise<boolean> => {
       if (rejectMalformedInvite(inviteCode)) return false
-      if (signInInFlightRef.current) return false
-      signInInFlightRef.current = true
+      const passkeyAttemptId = beginSignIn('passkey-register')
+      if (passkeyAttemptId === null) return false
       setSignInError(null)
       setSignOutError(null)
       setSignInState('pending')
@@ -1059,10 +1141,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSignInError(e instanceof Error ? e.message : String(e))
         return false
       } finally {
-        signInInFlightRef.current = false
+        clearSignIn('passkey-register', passkeyAttemptId)
       }
     },
-    [confirmProviderSession, rejectMalformedInvite],
+    [beginSignIn, clearSignIn, confirmProviderSession, rejectMalformedInvite],
   )
 
   const signOut = useCallback(async () => {
@@ -1110,11 +1192,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isAdmin,
         setViewAs,
         signInState,
+        activeSignIn,
         signInError,
         signOutError,
         discoveredServers,
         signIn,
         appleSignIn,
+        beginAppleSignIn,
+        cancelAppleSignIn,
         passkeyLogin,
         passkeyRegister,
         signOut,
