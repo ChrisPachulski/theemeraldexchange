@@ -23,6 +23,7 @@ const ADMIN = 'plex:42'
 const ALICE = 'apple:000001.0123456789abcdef0123456789abcdef.0001'
 const BOB = 'plex:7'
 const CARL = 'plex:8'
+const GABRIEL = 'google:118234567890123456789'
 
 function wipe(): void {
   serverDb().raw.exec('DELETE FROM members; DELETE FROM invites;')
@@ -89,6 +90,25 @@ describe('invites service', () => {
     const row = serverDb()
       .raw.prepare(`SELECT invited_by FROM members WHERE sub = ?`)
       .get(ALICE) as { invited_by: string | null }
+    expect(row.invited_by).toBe(ADMIN)
+  })
+
+  it('redeems an invite for a Google identity with its role and issuer intact', () => {
+    const { code } = issueInvite(ADMIN)
+    expect(redeemInvite(code, GABRIEL, 'Gabriel', 'google')).toEqual({
+      ok: true,
+      created: true,
+    })
+
+    expect(isMember(GABRIEL)).toMatchObject({
+      sub: GABRIEL,
+      display_name: 'Gabriel',
+      role: 'user',
+      auth_mode: 'google',
+    })
+    const row = serverDb()
+      .raw.prepare(`SELECT invited_by FROM members WHERE sub = ?`)
+      .get(GABRIEL) as { invited_by: string | null }
     expect(row.invited_by).toBe(ADMIN)
   })
 
