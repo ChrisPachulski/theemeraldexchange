@@ -10,7 +10,7 @@
 # must be present at runtime. The Rust binary is glibc-linked, so the
 # runtime base matches the bookworm builder.
 
-FROM rust:1.97-slim-bookworm@sha256:cfbb0e0ef7a73e736386bfa346f1cb0503c6d162969dc9426fb37834f3f64c25 AS builder
+FROM rust:1.97-slim-bookworm@sha256:99e09cb2284e2ddbb73a995deee3e91783fd04d177602ccf6eab326d778ee777 AS builder
 
 WORKDIR /build
 
