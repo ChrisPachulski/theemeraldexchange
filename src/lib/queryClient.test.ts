@@ -1,5 +1,6 @@
-// Covers the untested auth-expiry logic in queryClient.ts: the debounced
-// SESSION_EXPIRED_EVENT dispatch on 401/403 and the no-retry-on-auth policy.
+// Covers the auth-expiry logic in queryClient.ts: debounced
+// SESSION_EXPIRED_EVENT dispatch on 401 (or an explicit unauthenticated code),
+// forbidden-403 exclusion, and the no-retry-on-auth policy.
 //
 // vitest runs in the `node` environment here (the repo default — see
 // vitest.config.ts). The project convention is node-env with manual global

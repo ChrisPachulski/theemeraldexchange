@@ -7,6 +7,7 @@
 import { throwApiError, ApiError } from './errors'
 import { apiUrl } from './base'
 import { withTimeout, type RequestOpts } from './timeout'
+import { SESSION_EXPIRED_EVENT } from '../queryClient'
 
 const BASE = '/api/media'
 
@@ -632,7 +633,8 @@ export const mediaApi = {
    *  fail on the Netlify-SPA-to-NAS-API split. keepalive fetches survive
    *  document teardown and support credentials + preflight in every
    *  current browser. Fire-and-forget; no timeout signal (unload-time
-   *  timers don't reliably run). */
+   *  timers don't reliably run). A response received before teardown
+   *  still reports a 401 through the shared session-expiry event. */
   flushWatch: (entry: WatchSaveEntry): void => {
     void fetch(apiUrl(`${BASE}/watch`), {
       method: 'POST',
@@ -640,7 +642,13 @@ export const mediaApi = {
       credentials: 'include',
       body: JSON.stringify(watchUpsertBody(entry)),
       keepalive: true,
-    }).catch(() => undefined)
+    })
+      .then((response) => {
+        if (response.status === 401) {
+          window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
+        }
+      })
+      .catch(() => undefined)
   },
 
   /** Keep a transcode session alive. The absolute heartbeatUrl already carries

@@ -1,4 +1,5 @@
 import { apiUrl } from './base'
+import { throwApiError } from './errors'
 
 // TMDB cast/crew via the backend proxy. Key stays server-side; this
 // client only knows the shape of the response. When TMDB_API_KEY isn't
@@ -37,6 +38,7 @@ export async function fetchCast(args: {
   const res = await fetch(apiUrl(`/api/tmdb/credits?${params}`), {
     credentials: 'include',
   })
+  if (res.status === 401 || res.status === 403) await throwApiError(res, 'TMDB credits')
   // 503 = TMDB_API_KEY not configured. Treat as empty cast — modal hides
   // the section. Other failures bubble.
   if (res.status === 503) return []

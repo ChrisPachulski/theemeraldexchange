@@ -7,6 +7,8 @@ import {
   putAnthropicKey,
   type AnthropicKeyInfo,
 } from '../api/settings'
+import { errorStatus } from '../api/errors'
+import { SESSION_EXPIRED_EVENT } from '../queryClient'
 
 // Per-user Anthropic API key, stored SERVER-SIDE (encrypted at rest,
 // scoped by sub — see server/services/userApiKeys.ts). The browser
@@ -106,7 +108,10 @@ export function useUserApiKey(): {
         clearLocalKey(localStorage, sub)
         applyInfo(next)
       })
-      .catch(() => {
+      .catch((error: unknown) => {
+        if (errorStatus(error) === 401) {
+          window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
+        }
         // leave the local copy; retry next mount
       })
       .finally(() => {

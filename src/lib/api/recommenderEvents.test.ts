@@ -1,12 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { postClickEvent } from './recommenderEvents'
+import { SESSION_EXPIRED_EVENT } from '../queryClient'
 
 const fetchMock = vi.fn()
 
 beforeEach(() => {
   fetchMock.mockReset()
   globalThis.fetch = fetchMock as typeof fetch
-  vi.stubGlobal('window', { location: { origin: 'http://localhost' } })
+  const windowTarget = new EventTarget() as EventTarget & {
+    location: { origin: string }
+  }
+  windowTarget.location = { origin: 'http://localhost' }
+  vi.stubGlobal('window', windowTarget)
 })
 
 describe('postClickEvent', () => {
@@ -46,5 +51,29 @@ describe('postClickEvent', () => {
     // must absorb it; an unhandled rejection here would fail the run.
     await Promise.resolve()
     await Promise.resolve()
+  })
+
+  it('dispatches session expiry when the swallowed response is a 401', async () => {
+    const listener = vi.fn()
+    window.addEventListener(SESSION_EXPIRED_EVENT, listener)
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 401 }))
+
+    postClickEvent('movie', 603)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(listener).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not dispatch session expiry for a forbidden 403', async () => {
+    const listener = vi.fn()
+    window.addEventListener(SESSION_EXPIRED_EVENT, listener)
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 403 }))
+
+    postClickEvent('movie', 603)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(listener).not.toHaveBeenCalled()
   })
 })

@@ -8,7 +8,7 @@
 
 import '@testing-library/jest-dom/vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiKeySettings } from './ApiKeySettings'
 
@@ -20,8 +20,9 @@ const { useUserApiKeyMock, setKeyMock, clearKeyMock } = vi.hoisted(() => ({
 
 vi.mock('../../lib/hooks/useUserApiKey', () => ({ useUserApiKey: useUserApiKeyMock }))
 
-function mount() {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+function mount(
+  qc = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+) {
   return render(
     <QueryClientProvider client={qc}>
       <ApiKeySettings />
@@ -78,6 +79,39 @@ describe('ApiKeySettings — key set', () => {
     mount()
     fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
     await waitFor(() => expect(clearKeyMock).toHaveBeenCalled())
+  })
+
+  it('surfaces a usage 401 as a status-carrying query error', async () => {
+    const errors: unknown[] = []
+    const qc = new QueryClient({
+      queryCache: new QueryCache({ onError: (error) => errors.push(error) }),
+      defaultOptions: { queries: { retry: false } },
+    })
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: 'unauthenticated' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    mount(qc)
+
+    await waitFor(() => expect(errors[0]).toMatchObject({ status: 401 }))
+  })
+
+  it('keeps the empty usage fallback for an upstream 5xx response', async () => {
+    const errors: unknown[] = []
+    const qc = new QueryClient({
+      queryCache: new QueryCache({ onError: (error) => errors.push(error) }),
+      defaultOptions: { queries: { retry: false } },
+    })
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(null, { status: 502 }))
+
+    mount(qc)
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
+    expect(screen.getByText('Set · 0 calls · $0.00')).toBeInTheDocument()
+    expect(errors).toEqual([])
   })
 })
 

@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiUrl } from '../api/base'
+import { throwApiError } from '../api/errors'
 
 // Per-user red/green feedback for the dots under each suggestion card.
 // Red (dislike) writes to BOTH the user's private dislike list AND the
@@ -28,8 +29,7 @@ async function fetchFeedback(): Promise<FeedbackResponse> {
     // tell the difference between a fresh user and a broken store.
     // Consumers that don't care about errors fall back to `data ??`
     // and render no dots, same UX as before.
-    const body = await r.text().catch(() => '')
-    throw new Error(`feedback ${r.status}: ${body.slice(0, 200)}`)
+    await throwApiError(r, 'Feedback')
   }
   return (await r.json()) as FeedbackResponse
 }
@@ -64,7 +64,7 @@ export function useSetFeedback(kind: FeedbackKind) {
           apiUrl(`/api/feedback/${kind}/${vars.tmdbId}/${signal}`),
           { method: 'DELETE', credentials: 'include' },
         )
-        if (!r.ok) throw new Error(`clear failed: ${r.status}`)
+        if (!r.ok) await throwApiError(r, 'Clear feedback')
         return
       }
       const r = await fetch(apiUrl('/api/feedback'), {
@@ -78,7 +78,7 @@ export function useSetFeedback(kind: FeedbackKind) {
           signal: vars.signal,
         }),
       })
-      if (!r.ok) throw new Error(`set failed: ${r.status}`)
+      if (!r.ok) await throwApiError(r, 'Set feedback')
     },
     onMutate: async ({ tmdbId, title, signal }) => {
       await qc.cancelQueries({ queryKey: ['feedback'] })

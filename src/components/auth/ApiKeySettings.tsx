@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useUserApiKey } from '../../lib/hooks/useUserApiKey'
 import { apiUrl } from '../../lib/api/base'
+import { throwApiError } from '../../lib/api/errors'
 import { fmtCost } from '../../lib/fmtCost'
 import './ApiKeySettings.css'
 
@@ -27,6 +28,7 @@ type UsageMe = {
 
 async function fetchUsageMe(): Promise<UsageMe | null> {
   const r = await fetch(apiUrl('/api/usage/me'), { credentials: 'include' })
+  if (r.status === 401 || r.status === 403) await throwApiError(r, 'Usage')
   if (!r.ok) return null
   return (await r.json()) as UsageMe
 }

@@ -10,6 +10,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ReactNode } from 'react'
 import { useUserApiKey } from './useUserApiKey'
+import { SESSION_EXPIRED_EVENT } from '../queryClient'
 
 const { getInfoMock, putKeyMock, deleteKeyMock, useAuthMock } = vi.hoisted(() => ({
   getInfoMock: vi.fn(),
@@ -95,6 +96,19 @@ describe('useUserApiKey — one-time silent localStorage migration', () => {
     renderHook(() => useUserApiKey(), { wrapper })
     await waitFor(() => expect(putKeyMock).toHaveBeenCalled())
     expect(localStorage.getItem(SCOPED)).toBe('sk-ant-local-key-abcd')
+  })
+
+  it('dispatches session expiry when the migration PUT fails with 401', async () => {
+    const listener = vi.fn()
+    window.addEventListener(SESSION_EXPIRED_EVENT, listener)
+    localStorage.setItem(SCOPED, 'sk-ant-local-key-abcd')
+    putKeyMock.mockRejectedValue(Object.assign(new Error('expired'), { status: 401 }))
+
+    renderHook(() => useUserApiKey(), { wrapper })
+
+    await waitFor(() => expect(listener).toHaveBeenCalledTimes(1))
+    expect(localStorage.getItem(SCOPED)).toBe('sk-ant-local-key-abcd')
+    window.removeEventListener(SESSION_EXPIRED_EVENT, listener)
   })
 
   it('does nothing when no local key exists', async () => {

@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { apiUrl } from '../../lib/api/base'
+import { throwApiError } from '../../lib/api/errors'
 import { useDocumentVisible } from '../../lib/hooks/useVisibility'
 import { fmtCost } from '../../lib/fmtCost'
 import './UsageDashboard.css'
@@ -36,7 +37,7 @@ type FunnelMetrics = {
 
 async function fetchAdminUsage(): Promise<UsageRow[]> {
   const r = await fetch(apiUrl('/api/usage/admin'), { credentials: 'include' })
-  if (!r.ok) throw new Error(`usage admin failed: ${r.status}`)
+  if (!r.ok) await throwApiError(r, 'Usage admin')
   return (await r.json()) as UsageRow[]
 }
 
@@ -44,7 +45,7 @@ async function fetchFunnelMetrics(): Promise<FunnelMetrics> {
   const r = await fetch(apiUrl('/api/recommender/metrics', { windowDays: 30 }), {
     credentials: 'include',
   })
-  if (!r.ok) throw new Error(`recommendation metrics failed: ${r.status}`)
+  if (!r.ok) await throwApiError(r, 'Recommendation metrics')
   return (await r.json()) as FunnelMetrics
 }
 

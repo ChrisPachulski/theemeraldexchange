@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { apiUrl } from '../api/base'
+import { throwApiError } from '../api/errors'
 
 // Deep-link resolver for in-library titles. The server route
 // /api/plex/library-links walks every Plex library section and emits
@@ -42,6 +43,7 @@ function emptyKindMap(): KindMap {
 
 async function fetchLinks(): Promise<LinkMap> {
   const r = await fetch(apiUrl(PLEX_LIBRARY_LINKS_PATH), { credentials: 'include' })
+  if (r.status === 401 || r.status === 403) await throwApiError(r, 'Plex library links')
   if (!r.ok) {
     // 409 (no_plex_token) and 502 (plex_unreachable) both yield an
     // empty map — linkFor still falls back to the search URL when a
@@ -53,6 +55,7 @@ async function fetchLinks(): Promise<LinkMap> {
 
 async function fetchServerId(): Promise<string | null> {
   const r = await fetch(apiUrl(PLEX_SERVER_ID_PATH), { credentials: 'include' })
+  if (r.status === 401 || r.status === 403) await throwApiError(r, 'Plex server id')
   if (!r.ok) return null
   const body = (await r.json()) as ServerIdResponse
   return body.serverId ?? null
