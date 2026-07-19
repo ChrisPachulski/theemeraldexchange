@@ -143,6 +143,60 @@ const SESSION_MISMATCH_ERROR =
   'Sign-in could not be completed because the confirmed session did not match. Try again.'
 const AUTH_INVALIDATION_CHANNEL = 'exchange:auth-change:v1'
 const SESSION_REFRESH_DEDUPE_MS = 100
+const AUTH_NETWORK_TIMEOUT_MS = 15_000
+
+class AuthRequestTimeoutError extends Error {
+  constructor() {
+    super('auth request timed out')
+    this.name = 'AuthRequestTimeoutError'
+  }
+}
+
+class AuthRequestCancelledError extends Error {
+  constructor() {
+    super('auth request cancelled')
+    this.name = 'AbortError'
+  }
+}
+
+/** Bound one non-interactive network leg to both its auth attempt and a hard
+ * timeout. The explicit race also settles when a test double or browser fetch
+ * fails to reject promptly after abort. Interactive WebAuthn/Apple UI never
+ * runs inside this boundary. */
+async function boundedAuthRequest<T>(
+  attemptSignal: AbortSignal,
+  timeoutMs: number,
+  request: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  if (attemptSignal.aborted) throw new AuthRequestCancelledError()
+  if (timeoutMs <= 0) throw new AuthRequestTimeoutError()
+
+  const controller = new AbortController()
+  let settled = false
+  let rejectBoundary!: (reason: unknown) => void
+  const boundary = new Promise<never>((_resolve, reject) => {
+    rejectBoundary = reject
+  })
+  const cancel = (error: Error) => {
+    if (settled) return
+    controller.abort()
+    rejectBoundary(error)
+  }
+  const onAbort = () => cancel(new AuthRequestCancelledError())
+  attemptSignal.addEventListener('abort', onAbort, { once: true })
+  const timeout = window.setTimeout(
+    () => cancel(new AuthRequestTimeoutError()),
+    timeoutMs,
+  )
+
+  try {
+    return await Promise.race([request(controller.signal), boundary])
+  } finally {
+    settled = true
+    window.clearTimeout(timeout)
+    attemptSignal.removeEventListener('abort', onAbort)
+  }
+}
 
 function isProviderSub(value: unknown): value is string {
   if (typeof value !== 'string' || value !== value.trim()) return false
@@ -427,6 +481,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signInInFlightRef = useRef(false)
   const activeSignInRef = useRef<ActiveSignIn>(null)
   const activeSignInAttemptRef = useRef<number | null>(null)
+  const activeSignInAbortRef = useRef<AbortController | null>(null)
   const nextSignInAttemptRef = useRef(0)
   const sessionReadRef = useRef<AbortController | null>(null)
   const sessionReadGenerationRef = useRef(0)
@@ -437,6 +492,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const authChannelRef = useRef<BroadcastChannel | null>(null)
   const authInvalidationEpochRef = useRef(0)
   const signOutInFlightRef = useRef(false)
+  const signOutAbortRef = useRef<AbortController | null>(null)
   const foregroundSessionReadRef = useRef<Promise<void> | null>(null)
   const mountedRef = useRef(true)
   const rejectMalformedInvite = useCallback((inviteCode?: string) => {
@@ -626,7 +682,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       !signOutInFlightRef.current &&
       signInInFlightRef.current &&
       activeSignInRef.current === provider &&
-      activeSignInAttemptRef.current === attemptId,
+      activeSignInAttemptRef.current === attemptId &&
+      activeSignInAbortRef.current?.signal.aborted === false,
     [],
   )
 
@@ -771,6 +828,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       cancelScheduledSessionRefresh()
       invalidateSessionReads()
       const attemptId = ++nextSignInAttemptRef.current
+      activeSignInAbortRef.current = new AbortController()
       signInInFlightRef.current = true
       activeSignInRef.current = provider
       activeSignInAttemptRef.current = attemptId
@@ -789,6 +847,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ) {
         return
       }
+      activeSignInAbortRef.current?.abort()
+      activeSignInAbortRef.current = null
       signInInFlightRef.current = false
       activeSignInRef.current = null
       activeSignInAttemptRef.current = null
@@ -828,7 +888,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     popupRef.current = null
   }, [clearSignIn])
 
-  useEffect(() => () => stopPolling(), [stopPolling])
+  useEffect(
+    () => () => {
+      stopPolling()
+      signOutAbortRef.current?.abort()
+      signOutAbortRef.current = null
+      signOutInFlightRef.current = false
+    },
+    [stopPolling],
+  )
 
   const signIn = useCallback(async (inviteCode?: string) => {
     if (rejectMalformedInvite(inviteCode)) return
@@ -836,6 +904,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     stopPolling()
     const plexAttemptId = beginSignIn('plex')
     if (plexAttemptId === null) return
+    const attemptSignal = activeSignInAbortRef.current!.signal
+    const deadline = Date.now() + PLEX_POLL_DEADLINE_MS
     setSignInError(null)
     setSignOutError(null)
     setSignInState('opening')
@@ -852,7 +922,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     popupRef.current = popup
     const setupGeneration = pollGenerationRef.current
-    const setupIsCurrent = () => pollGenerationRef.current === setupGeneration
+    const setupIsCurrent = () =>
+      pollGenerationRef.current === setupGeneration &&
+      isSignInAttemptCurrent('plex', plexAttemptId)
+    const setupTimeout = () =>
+      Math.min(AUTH_NETWORK_TIMEOUT_MS, Math.max(0, deadline - Date.now()))
     const finish = (state: SignInState, error: string | null) => {
       stopPolling()
       setSignInState(state)
@@ -861,15 +935,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       // Fetch the PUBLIC Plex client config (the clientId is the same
       // non-secret app id already embedded in every Plex auth URL).
-      const cfgRes = await fetch(apiUrl('/api/auth/plex/config'), {
-        credentials: 'include',
-      })
-      if (!setupIsCurrent()) return
-      if (!cfgRes.ok) throw new Error(`plex config failed: ${cfgRes.status}`)
-      const { clientId, product } = (await cfgRes.json()) as {
-        clientId: string
-        product: string
-      }
+      const { clientId, product } = await boundedAuthRequest(
+        attemptSignal,
+        setupTimeout(),
+        async (signal) => {
+          const cfgRes = await fetch(apiUrl('/api/auth/plex/config'), {
+            credentials: 'include',
+            signal,
+          })
+          if (!cfgRes.ok) throw new Error(`plex config failed: ${cfgRes.status}`)
+          return (await cfgRes.json()) as { clientId: string; product: string }
+        },
+      )
       if (!setupIsCurrent()) return
 
       // Create the PIN DIRECTLY at plex.tv from the browser so plex.tv
@@ -877,17 +954,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // home IP, which previously leaked onto Plex's "Security Alert" page
       // for everyone authenticating. The backend keeps polling with this
       // SAME clientId, so checkPin still finds the authorized token.
-      const pinRes = await fetch('https://plex.tv/api/v2/pins?strong=true', {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'X-Plex-Product': product,
-          'X-Plex-Client-Identifier': clientId,
+      const pin = await boundedAuthRequest(
+        attemptSignal,
+        setupTimeout(),
+        async (signal) => {
+          const pinRes = await fetch('https://plex.tv/api/v2/pins?strong=true', {
+            method: 'POST',
+            headers: {
+              Accept: 'application/json',
+              'X-Plex-Product': product,
+              'X-Plex-Client-Identifier': clientId,
+            },
+            signal,
+          })
+          if (!pinRes.ok) throw new Error(`plex pin create failed: ${pinRes.status}`)
+          return (await pinRes.json()) as { id: number; code: string }
         },
-      })
-      if (!setupIsCurrent()) return
-      if (!pinRes.ok) throw new Error(`plex pin create failed: ${pinRes.status}`)
-      const pin = (await pinRes.json()) as { id: number; code: string }
+      )
       if (!setupIsCurrent()) return
       const pinId = pin.id
 
@@ -904,7 +987,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       popup.location.href = authUrl
       setSignInState('pending')
 
-      const deadline = Date.now() + PLEX_POLL_DEADLINE_MS
       let nextCheckAt = Date.now() + PLEX_POLL_BASE_DELAY_MS
       let popupClosedAt: number | null = null
       let consecutiveFailures = 0
@@ -1102,9 +1184,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       scheduleTick()
     } catch (e) {
       if (!setupIsCurrent()) return
-      finish('error', e instanceof Error ? e.message : String(e))
+      finish(
+        'error',
+        e instanceof AuthRequestTimeoutError
+          ? 'Plex sign-in timed out. Check your connection and try again.'
+          : e instanceof Error
+            ? e.message
+            : String(e),
+      )
     }
-  }, [beginSignIn, clearSignIn, confirmProviderSession, rejectMalformedInvite, stopPolling])
+  }, [
+    beginSignIn,
+    clearSignIn,
+    confirmProviderSession,
+    isSignInAttemptCurrent,
+    rejectMalformedInvite,
+    stopPolling,
+  ])
 
   const appleSignIn = useCallback(
     async (args: {
@@ -1127,6 +1223,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ? args.attemptId!
         : beginSignIn('apple')
       if (appleAttemptId === null) return false
+      const attemptSignal = activeSignInAbortRef.current?.signal
+      if (!attemptSignal || !isSignInAttemptCurrent('apple', appleAttemptId)) {
+        clearSignIn('apple', appleAttemptId)
+        return false
+      }
       setSignInError(null)
       setSignOutError(null)
       // No popup for the web SIWA path — the Apple JS SDK owns its own
@@ -1140,20 +1241,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         if (args.nonce) body.nonce = args.nonce
         if (args.inviteCode) body.inviteCode = args.inviteCode
-        const r = await fetch(apiUrl('/api/auth/apple'), {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        })
+        const { response: r, data } = await boundedAuthRequest(
+          attemptSignal,
+          AUTH_NETWORK_TIMEOUT_MS,
+          async (signal) => {
+            const response = await fetch(apiUrl('/api/auth/apple'), {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+              signal,
+            })
+            const data = (await response.json().catch(() => ({}))) as {
+              status?: string
+              user?: AuthUser
+              reason?: unknown
+              error?: unknown
+            }
+            return { response, data }
+          },
+        )
+        if (!isSignInAttemptCurrent('apple', appleAttemptId)) return false
         if (r.status === 403) {
-          const data = await r.json().catch(() => ({}))
           setSignInState('denied')
           setSignInError(deniedMessage(data?.reason))
           return false
         }
         if (!r.ok) {
-          const data = await r.json().catch(() => ({}))
           setSignInState('error')
           setSignInError(
             r.status === 401
@@ -1164,7 +1278,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           )
           return false
         }
-        const data = (await r.json()) as { status?: string; user?: AuthUser }
         if (data.status === 'authorized' && data.user) {
           const providerSub = providerSubFromApi(data.user)
           if (!providerSub) {
@@ -1185,51 +1298,91 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSignInError('Apple sign-in returned an unexpected response.')
         return false
       } catch (e) {
+        if (
+          e instanceof AuthRequestCancelledError ||
+          !isSignInAttemptCurrent('apple', appleAttemptId)
+        ) {
+          return false
+        }
         setSignInState('error')
-        setSignInError(e instanceof Error ? e.message : String(e))
+        setSignInError(
+          e instanceof AuthRequestTimeoutError
+            ? 'Apple sign-in timed out. Check your connection and try again.'
+            : 'Apple sign-in is temporarily unavailable. Check your connection and try again.',
+        )
         return false
       } finally {
         clearSignIn('apple', appleAttemptId)
       }
     },
-    [beginSignIn, clearSignIn, confirmProviderSession, rejectMalformedInvite],
+    [
+      beginSignIn,
+      clearSignIn,
+      confirmProviderSession,
+      isSignInAttemptCurrent,
+      rejectMalformedInvite,
+    ],
   )
 
   const passkeyLogin = useCallback(async (): Promise<boolean> => {
     const passkeyAttemptId = beginSignIn('passkey-login')
     if (passkeyAttemptId === null) return false
+    const attemptSignal = activeSignInAbortRef.current!.signal
     setSignInError(null)
     setSignOutError(null)
     setSignInState('pending')
     try {
-      const optRes = await fetch(apiUrl('/api/auth/passkey/login/options'), {
-        method: 'POST',
-        credentials: 'include',
-      })
-      if (!optRes.ok) throw new Error(`passkey options failed: ${optRes.status}`)
-      const { options, challengeId } = (await optRes.json()) as {
-        options: PublicKeyCredentialRequestOptionsJSON
-        challengeId: string
-      }
+      const { options, challengeId } = await boundedAuthRequest(
+        attemptSignal,
+        AUTH_NETWORK_TIMEOUT_MS,
+        async (signal) => {
+          const optRes = await fetch(apiUrl('/api/auth/passkey/login/options'), {
+            method: 'POST',
+            credentials: 'include',
+            signal,
+          })
+          if (!optRes.ok) throw new Error(`passkey options failed: ${optRes.status}`)
+          return (await optRes.json()) as {
+            options: PublicKeyCredentialRequestOptionsJSON
+            challengeId: string
+          }
+        },
+      )
+      if (!isSignInAttemptCurrent('passkey-login', passkeyAttemptId)) return false
       const { startAuthentication } = await import('@simplewebauthn/browser')
       let assertion
       try {
         assertion = await startAuthentication({ optionsJSON: options })
       } catch {
+        if (!isSignInAttemptCurrent('passkey-login', passkeyAttemptId)) return false
         // User cancelled the OS prompt, no passkey for this site, or the
         // authenticator errored. Not a server failure — soft message.
         setSignInState('error')
         setSignInError('Passkey sign-in was cancelled or no passkey was found on this device.')
         return false
       }
-      const verifyRes = await fetch(apiUrl('/api/auth/passkey/login/verify'), {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ challengeId, response: assertion }),
-      })
+      if (!isSignInAttemptCurrent('passkey-login', passkeyAttemptId)) return false
+      const { response: verifyRes, data } = await boundedAuthRequest(
+        attemptSignal,
+        AUTH_NETWORK_TIMEOUT_MS,
+        async (signal) => {
+          const response = await fetch(apiUrl('/api/auth/passkey/login/verify'), {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ challengeId, response: assertion }),
+            signal,
+          })
+          const data = (await response.json().catch(() => ({}))) as {
+            ok?: boolean
+            user?: AuthUser
+            error?: unknown
+          }
+          return { response, data }
+        },
+      )
+      if (!isSignInAttemptCurrent('passkey-login', passkeyAttemptId)) return false
       if (verifyRes.status === 403) {
-        const data = await verifyRes.json().catch(() => ({}))
         setSignInState('denied')
         setSignInError(deniedMessage(data?.error))
         return false
@@ -1239,7 +1392,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSignInError('Passkey sign-in failed. Try again.')
         return false
       }
-      const data = (await verifyRes.json()) as { ok?: boolean; user?: AuthUser }
       if (data.ok && data.user) {
         const providerSub = providerSubFromApi(data.user)
         if (!providerSub) {
@@ -1264,13 +1416,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSignInError('Passkey sign-in returned an unexpected response.')
       return false
     } catch (e) {
+      if (
+        e instanceof AuthRequestCancelledError ||
+        !isSignInAttemptCurrent('passkey-login', passkeyAttemptId)
+      ) {
+        return false
+      }
       setSignInState('error')
-      setSignInError(e instanceof Error ? e.message : String(e))
+      setSignInError(
+        e instanceof AuthRequestTimeoutError
+          ? 'Passkey sign-in timed out. Check your connection and try again.'
+          : 'Passkey sign-in is temporarily unavailable. Check your connection and try again.',
+      )
       return false
     } finally {
       clearSignIn('passkey-login', passkeyAttemptId)
     }
-  }, [beginSignIn, clearSignIn, confirmProviderSession])
+  }, [
+    beginSignIn,
+    clearSignIn,
+    confirmProviderSession,
+    isSignInAttemptCurrent,
+  ])
 
   const passkeyRegister = useCallback(
     async ({
@@ -1285,49 +1452,78 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (rejectMalformedInvite(inviteCode)) return false
       const passkeyAttemptId = beginSignIn('passkey-register')
       if (passkeyAttemptId === null) return false
+      const attemptSignal = activeSignInAbortRef.current!.signal
       setSignInError(null)
       setSignOutError(null)
       setSignInState('pending')
       try {
-        const optRes = await fetch(apiUrl('/api/auth/passkey/register/options'), {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ handle }),
-        })
+        const { response: optRes, data: optionData } = await boundedAuthRequest(
+          attemptSignal,
+          AUTH_NETWORK_TIMEOUT_MS,
+          async (signal) => {
+            const response = await fetch(apiUrl('/api/auth/passkey/register/options'), {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ handle }),
+              signal,
+            })
+            const data = response.ok
+              ? ((await response.json()) as {
+                  options: PublicKeyCredentialCreationOptionsJSON
+                  challengeId: string
+                })
+              : null
+            return { response, data }
+          },
+        )
+        if (!isSignInAttemptCurrent('passkey-register', passkeyAttemptId)) return false
         if (optRes.status === 400) {
           setSignInState('error')
           setSignInError('Enter a display name to create a passkey.')
           return false
         }
         if (!optRes.ok) throw new Error(`passkey register options failed: ${optRes.status}`)
-        const { options, challengeId } = (await optRes.json()) as {
-          options: PublicKeyCredentialCreationOptionsJSON
-          challengeId: string
-        }
+        const { options, challengeId } = optionData!
         const { startRegistration } = await import('@simplewebauthn/browser')
         let attestation
         try {
           attestation = await startRegistration({ optionsJSON: options })
         } catch {
+          if (!isSignInAttemptCurrent('passkey-register', passkeyAttemptId)) return false
           setSignInState('error')
           setSignInError('Passkey setup was cancelled.')
           return false
         }
-        const verifyRes = await fetch(apiUrl('/api/auth/passkey/register/verify'), {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            challengeId,
-            response: attestation,
-            inviteCode,
-            setupToken,
-            deviceLabel: handle,
-          }),
-        })
+        if (!isSignInAttemptCurrent('passkey-register', passkeyAttemptId)) return false
+        const { response: verifyRes, data } = await boundedAuthRequest(
+          attemptSignal,
+          AUTH_NETWORK_TIMEOUT_MS,
+          async (signal) => {
+            const response = await fetch(apiUrl('/api/auth/passkey/register/verify'), {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                challengeId,
+                response: attestation,
+                inviteCode,
+                setupToken,
+                deviceLabel: handle,
+              }),
+              signal,
+            })
+            const data = (await response.json().catch(() => ({}))) as {
+              ok?: boolean
+              user?: AuthUser
+              claimed?: boolean
+              error?: unknown
+            }
+            return { response, data }
+          },
+        )
+        if (!isSignInAttemptCurrent('passkey-register', passkeyAttemptId)) return false
         if (verifyRes.status === 403) {
-          const data = await verifyRes.json().catch(() => ({}))
           setSignInState('denied')
           setSignInError(deniedMessage(data?.error))
           return false
@@ -1336,11 +1532,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setSignInState('error')
           setSignInError('Could not create the passkey. Try again.')
           return false
-        }
-        const data = (await verifyRes.json()) as {
-          ok?: boolean
-          user?: AuthUser
-          claimed?: boolean
         }
         if (data.ok && data.user) {
           const providerSub = providerSubFromApi(data.user)
@@ -1372,59 +1563,85 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSignInError('Passkey setup returned an unexpected response.')
         return false
       } catch (e) {
+        if (
+          e instanceof AuthRequestCancelledError ||
+          !isSignInAttemptCurrent('passkey-register', passkeyAttemptId)
+        ) {
+          return false
+        }
         setSignInState('error')
-        setSignInError(e instanceof Error ? e.message : String(e))
+        setSignInError(
+          e instanceof AuthRequestTimeoutError
+            ? 'Passkey setup timed out. Check your connection and try again.'
+            : 'Passkey setup is temporarily unavailable. Check your connection and try again.',
+        )
         return false
       } finally {
         clearSignIn('passkey-register', passkeyAttemptId)
       }
     },
-    [beginSignIn, clearSignIn, confirmProviderSession, rejectMalformedInvite],
+    [
+      beginSignIn,
+      clearSignIn,
+      confirmProviderSession,
+      isSignInAttemptCurrent,
+      rejectMalformedInvite,
+    ],
   )
 
   const signOut = useCallback(async () => {
     if (signOutInFlightRef.current) return
     signOutInFlightRef.current = true
+    const controller = new AbortController()
+    signOutAbortRef.current = controller
     setSignOutError(null)
     cancelScheduledSessionRefresh()
     invalidateSessionReads()
     stopPolling()
-    let response: Response
+    let failure: unknown = null
     try {
-      response = await fetch(apiUrl('/api/auth/logout'), {
-        method: 'POST',
-        credentials: 'include',
-      })
+      const response = await boundedAuthRequest(
+        controller.signal,
+        AUTH_NETWORK_TIMEOUT_MS,
+        (signal) =>
+          fetch(apiUrl('/api/auth/logout'), {
+            method: 'POST',
+            credentials: 'include',
+            signal,
+          }),
+      )
+      if (!response.ok) throw new Error(`logout failed: ${response.status}`)
     } catch (err) {
+      failure = err
+    } finally {
+      if (signOutAbortRef.current === controller) signOutAbortRef.current = null
       signOutInFlightRef.current = false
-      drainDeferredSessionRefresh()
-      setSignOutError('Sign-out failed. Check your connection and try again.')
-      throw err
+      if (mountedRef.current) {
+        invalidateSessionReads()
+        deferredRefreshRef.current = false
+        deferredRefreshBroadcastRef.current = false
+        applyUser(null)
+        setSessionState('anonymous')
+        setSessionError(null)
+        setSignInState('idle')
+        setSignInError(null)
+        setViewAs(null)
+        setDiscoveredServers(null)
+        if (failure) {
+          setSignOutError(
+            failure instanceof AuthRequestTimeoutError
+              ? 'Sign-out timed out. Your local session was cleared; try again if this device signs back in.'
+              : 'Sign-out failed on the server, but your local session was cleared. Try again if this device signs back in.',
+          )
+        }
+      }
     }
-    if (!response.ok) {
-      const error = new Error(`logout failed: ${response.status}`)
-      signOutInFlightRef.current = false
-      drainDeferredSessionRefresh()
-      setSignOutError('Sign-out failed. Try again.')
-      throw error
-    }
-    invalidateSessionReads()
-    deferredRefreshRef.current = false
-    deferredRefreshBroadcastRef.current = false
-    applyUser(null)
-    setSessionState('anonymous')
-    setSessionError(null)
-    setSignInState('idle')
-    setSignInError(null)
-    setViewAs(null)
-    setDiscoveredServers(null)
-    signOutInFlightRef.current = false
+    if (failure) throw failure
     broadcastAuthInvalidation()
   }, [
     applyUser,
     broadcastAuthInvalidation,
     cancelScheduledSessionRefresh,
-    drainDeferredSessionRefresh,
     invalidateSessionReads,
     setViewAs,
     stopPolling,

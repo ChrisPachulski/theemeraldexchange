@@ -131,6 +131,21 @@ describe('app CSRF — safe GETs pass through', () => {
       .toContain('Retry-After')
   })
 
+  it('allows the settings expected-principal header on CORS preflight', async () => {
+    const r = await app.request('/api/settings/anthropic-key', {
+      method: 'OPTIONS',
+      headers: {
+        Origin: ALLOWED,
+        'Access-Control-Request-Method': 'PUT',
+        'Access-Control-Request-Headers': 'content-type,x-eex-expected-sub',
+      },
+    })
+
+    expect(r.status).toBe(204)
+    expect(r.headers.get('Access-Control-Allow-Headers'))
+      .toContain('X-EEX-Expected-Sub')
+  })
+
   it('/api/limits works with no Origin', async () => {
     const r = await app.request('/api/limits')
     expect(r.status).toBe(200)

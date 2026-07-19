@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../auth'
 import {
   deleteAnthropicKey,
@@ -28,6 +28,14 @@ const SCOPED_PREFIX = 'eex.apiKey.'
 const LEGACY_KEY = 'eex.apiKey'
 
 export const KEY_INFO_QUERY_KEY = ['settings', 'anthropic-key'] as const
+
+type Principal = { sub: string }
+
+function principalChangedError(): Error {
+  const error = new Error('The signed-in account changed before the request started.')
+  error.name = 'AbortError'
+  return error
+}
 
 type MigrationStorage = Pick<Storage, 'getItem' | 'removeItem'>
 
@@ -65,10 +73,29 @@ export function useUserApiKey(): {
   const { user } = useAuth()
   const sub = user?.sub
   const qc = useQueryClient()
+  // Object identity is the auth generation: A -> signed out -> A produces a
+  // fresh principal even though the subject string matches again.
+  const principal = useMemo<Principal | null>(() => (sub ? { sub } : null), [sub])
+  const principalRef = useRef(principal)
+  const operationControllers = useRef(new Set<AbortController>())
+
+  useLayoutEffect(() => {
+    principalRef.current = principal
+  }, [principal])
+
+  useEffect(() => {
+    const controllers = operationControllers.current
+    return () => {
+      for (const controller of controllers) controller.abort()
+      controllers.clear()
+    }
+  }, [principal])
+
+  const queryKey = [...KEY_INFO_QUERY_KEY, sub] as const
 
   const info = useQuery({
-    queryKey: KEY_INFO_QUERY_KEY,
-    queryFn: getAnthropicKeyInfo,
+    queryKey,
+    queryFn: ({ signal }) => getAnthropicKeyInfo({ signal }),
     enabled: !!sub,
     // The set/last4 pair only changes through the mutations below (which
     // update the cache directly), so a short staleTime just avoids
@@ -76,8 +103,9 @@ export function useUserApiKey(): {
     staleTime: 60_000,
   })
 
-  const applyInfo = (next: AnthropicKeyInfo) => {
-    qc.setQueryData(KEY_INFO_QUERY_KEY, next)
+  const applyInfo = (captured: Principal, next: AnthropicKeyInfo) => {
+    if (principalRef.current !== captured) return
+    qc.setQueryData([...KEY_INFO_QUERY_KEY, captured.sub], next)
     // The suggestions lineups were fetched under the previous key state;
     // invalidate so the strip refetches with the new one (matches the
     // old localStorage flow's invalidation in ApiKeySettings).
@@ -91,52 +119,89 @@ export function useUserApiKey(): {
   // the same user's key, and overwriting a deliberate replacement with a
   // stale local copy would be worse. On PUT failure the local key is kept
   // and the migration retries on the next mount.
-  const migrating = useRef(false)
   useEffect(() => {
-    if (migrating.current) return
-    if (!sub || typeof localStorage === 'undefined' || !info.isSuccess) return
-    const local = readLocalKeyForMigration(localStorage, sub)
+    const captured = principal
+    const controllers = operationControllers.current
+    if (!captured || typeof localStorage === 'undefined' || !info.isSuccess) return
+    const local = readLocalKeyForMigration(localStorage, captured.sub)
     if (!local) return
     if (info.data.set) {
-      clearLocalKey(localStorage, sub)
+      if (principalRef.current === captured) {
+        clearLocalKey(localStorage, captured.sub)
+      }
       return
     }
-    migrating.current = true
-    putAnthropicKey(local.trim())
+    const controller = new AbortController()
+    controllers.add(controller)
+    // This check is intentionally adjacent to the POST. A stale effect must
+    // not send one user's old local key under another user's cookie.
+    if (principalRef.current !== captured) {
+      controller.abort()
+      controllers.delete(controller)
+      return
+    }
+    putAnthropicKey(local.trim(), {
+      expectedSub: captured.sub,
+      signal: controller.signal,
+    })
       .then((next) => {
-        clearLocalKey(localStorage, sub)
-        applyInfo(next)
+        if (controller.signal.aborted || principalRef.current !== captured) return
+        clearLocalKey(localStorage, captured.sub)
+        applyInfo(captured, next)
       })
       .catch((error: unknown) => {
+        if (controller.signal.aborted || principalRef.current !== captured) return
         notifySessionExpired(error)
         // leave the local copy; retry next mount
       })
       .finally(() => {
-        migrating.current = false
+        controllers.delete(controller)
       })
+    return () => {
+      controller.abort()
+      controllers.delete(controller)
+    }
     // applyInfo is stable enough for this once-per-state effect; the deps
     // that matter are the sub and the resolved server state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sub, info.isSuccess, info.data?.set])
+  }, [principal, info.isSuccess, info.data?.set])
 
-  const setMutation = useMutation({
-    mutationFn: (key: string) => putAnthropicKey(key),
-    onSuccess: applyInfo,
-  })
-  const clearMutation = useMutation({
-    mutationFn: deleteAnthropicKey,
-    onSuccess: applyInfo,
-  })
+  const runMutation = async (
+    captured: Principal | null,
+    operation: (sub: string, signal: AbortSignal) => Promise<AnthropicKeyInfo>,
+  ): Promise<void> => {
+    // A callback retained by the previous account can run after React renders
+    // the next one. Refuse it before creating or issuing a request.
+    if (!captured || principalRef.current !== captured) {
+      throw principalChangedError()
+    }
+    const controller = new AbortController()
+    operationControllers.current.add(controller)
+    try {
+      if (principalRef.current !== captured) throw principalChangedError()
+      const next = await operation(captured.sub, controller.signal)
+      if (controller.signal.aborted || principalRef.current !== captured) {
+        throw principalChangedError()
+      }
+      applyInfo(captured, next)
+    } finally {
+      operationControllers.current.delete(controller)
+    }
+  }
 
   return {
     hasKey: info.data?.set === true,
     fingerprint: info.data?.set ? (info.data.last4 ?? null) : null,
     loading: !!sub && info.isPending,
     setKey: async (v: string) => {
-      await setMutation.mutateAsync(v.trim())
+      await runMutation(principal, (expectedSub, signal) =>
+        putAnthropicKey(v.trim(), { expectedSub, signal }),
+      )
     },
     clearKey: async () => {
-      await clearMutation.mutateAsync()
+      await runMutation(principal, (expectedSub, signal) =>
+        deleteAnthropicKey({ expectedSub, signal }),
+      )
     },
   }
 }

@@ -140,6 +140,64 @@ function ProviderProbe() {
   )
 }
 
+function LogoutProbe() {
+  const auth = useAuth()
+  const [result, setResult] = useState('')
+  return (
+    <>
+      <output aria-label="logout session">{auth.sessionState}</output>
+      <output aria-label="logout user">{auth.user?.username ?? ''}</output>
+      <output aria-label="logout result">{result}</output>
+      {auth.signOutError && <p role="alert">{auth.signOutError}</p>}
+      <button
+        type="button"
+        onClick={() =>
+          void auth.signOut().then(
+            () => setResult('resolved'),
+            () => setResult('rejected'),
+          )
+        }
+      >
+        Sign out safely
+      </button>
+    </>
+  )
+}
+
+function AppleCancelProbe() {
+  const auth = useAuth()
+  const [attemptId, setAttemptId] = useState<number | null>(null)
+  return (
+    <>
+      <output aria-label="cancel active sign-in">{auth.activeSignIn ?? ''}</output>
+      <button
+        type="button"
+        onClick={() => {
+          const next = auth.beginAppleSignIn()
+          setAttemptId(next)
+          if (next !== null) {
+            void auth.appleSignIn({
+              identityToken: 'apple-token',
+              attemptId: next,
+            })
+          }
+        }}
+      >
+        Start cancellable Apple
+      </button>
+      <button
+        type="button"
+        disabled={attemptId === null}
+        onClick={() => {
+          if (attemptId !== null) auth.cancelAppleSignIn(attemptId)
+        }}
+      >
+        Cancel Apple
+      </button>
+    </>
+  )
+}
+
 function renderWithAuth(
   children: React.ReactNode,
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
@@ -827,6 +885,291 @@ describe('provider session confirmation', () => {
     await flush()
 
     expect(meCalls).toBe(1)
+  })
+})
+
+describe('bounded provider and logout requests', () => {
+  const NETWORK_TIMEOUT_MS = 15_000
+  let popup: { closed: boolean; close: ReturnType<typeof vi.fn>; location: { href: string } }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-18T12:00:00Z'))
+    popup = { closed: false, close: vi.fn(), location: { href: '' } }
+    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
+    webauthnMocks.startAuthentication.mockResolvedValue({ id: 'credential-login' })
+    webauthnMocks.startRegistration.mockResolvedValue({ id: 'credential-register' })
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    vi.clearAllMocks()
+    vi.useRealTimers()
+  })
+
+  async function flush() {
+    await act(async () => {
+      for (let i = 0; i < 12; i += 1) await Promise.resolve()
+    })
+  }
+
+  function providerResponse(url: string): Response {
+    if (url.endsWith('/api/auth/plex/config')) {
+      return json({ clientId: 'client-id', product: 'The Emerald Exchange' })
+    }
+    if (url.startsWith('https://plex.tv/api/v2/pins?')) {
+      return json({ id: 123, code: 'plex-code' }, 201)
+    }
+    if (url.endsWith('/api/auth/apple')) {
+      return json({ status: 'authorized', user: { sub: 'apple:1', username: 'Apple', role: 'user' } })
+    }
+    if (url.endsWith('/api/auth/passkey/login/options')) {
+      return json({ options: { challenge: 'login' }, challengeId: 'login' })
+    }
+    if (url.endsWith('/api/auth/passkey/login/verify')) {
+      return json({ ok: true, user: { sub: 'local:LOGIN', username: 'Passkey', role: 'user' } })
+    }
+    if (url.endsWith('/api/auth/passkey/register/options')) {
+      return json({ options: { challenge: 'register' }, challengeId: 'register' })
+    }
+    if (url.endsWith('/api/auth/passkey/register/verify')) {
+      return json({ ok: true, user: { sub: 'local:REGISTER', username: 'Passkey', role: 'user' } })
+    }
+    throw new Error(`missing provider response for ${url}`)
+  }
+
+  it.each([
+    { leg: 'Plex config', button: 'Plex provider', path: '/api/auth/plex/config', active: 'plex' },
+    { leg: 'Plex PIN', button: 'Plex provider', path: 'https://plex.tv/api/v2/pins?', active: 'plex' },
+    { leg: 'Apple verification', button: 'Apple provider', path: '/api/auth/apple', active: 'apple' },
+    { leg: 'passkey login options', button: 'Passkey login provider', path: '/api/auth/passkey/login/options', active: 'passkey-login' },
+    { leg: 'passkey login verification', button: 'Passkey login provider', path: '/api/auth/passkey/login/verify', active: 'passkey-login' },
+    { leg: 'passkey registration options', button: 'Passkey registration provider', path: '/api/auth/passkey/register/options', active: 'passkey-register' },
+    { leg: 'passkey registration verification', button: 'Passkey registration provider', path: '/api/auth/passkey/register/verify', active: 'passkey-register' },
+  ])('times out a black-holed $leg, releases the provider lock, and clears its timer', async ({
+    button,
+    path,
+    active,
+  }) => {
+    const blocked = deferred<Response>()
+    let blockOnce = true
+    let blockedSignal: AbortSignal | undefined
+    let blockedCalls = 0
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const auxiliary = auxiliaryAuthResponse(url)
+      if (auxiliary) return Promise.resolve(auxiliary)
+      if (url.endsWith('/api/me')) return Promise.resolve(json({ error: 'unauthenticated' }, 401))
+      if (url.includes(path)) {
+        blockedCalls += 1
+        if (blockOnce) {
+          blockOnce = false
+          blockedSignal = init?.signal as AbortSignal | undefined
+          return blocked.promise
+        }
+      }
+      return Promise.resolve(providerResponse(url))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithAuth(<ProviderProbe />)
+    await flush()
+    const baselineTimers = vi.getTimerCount()
+    fireEvent.click(screen.getByRole('button', { name: button }))
+    await flush()
+
+    expect(screen.getByLabelText('active sign-in')).toHaveTextContent(active)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(NETWORK_TIMEOUT_MS)
+    })
+    await flush()
+
+    expect(blockedSignal?.aborted).toBe(true)
+    expect(screen.getByLabelText('active sign-in')).toBeEmptyDOMElement()
+    expect(screen.getByRole('alert')).toHaveTextContent(/timed out/i)
+    expect(vi.getTimerCount()).toBe(baselineTimers)
+
+    fireEvent.click(screen.getByRole('button', { name: button }))
+    await flush()
+    expect(blockedCalls).toBe(2)
+  })
+
+  it('counts Plex setup time against the five-minute attempt deadline', async () => {
+    const configBody = deferred<unknown>()
+    let pinCalls = 0
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      const auxiliary = auxiliaryAuthResponse(url)
+      if (auxiliary) return Promise.resolve(auxiliary)
+      if (url.endsWith('/api/me')) return Promise.resolve(json({ error: 'unauthenticated' }, 401))
+      if (url.endsWith('/api/auth/plex/config')) {
+        return Promise.resolve({ ...json({}), json: () => configBody.promise } as Response)
+      }
+      if (url.startsWith('https://plex.tv/api/v2/pins?')) {
+        pinCalls += 1
+        return new Promise<Response>(() => {})
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithAuth(<ProviderProbe />)
+    await flush()
+    fireEvent.click(screen.getByRole('button', { name: 'Plex provider' }))
+    await flush()
+
+    vi.setSystemTime(new Date('2026-07-18T12:05:00Z'))
+    configBody.resolve({ clientId: 'client-id', product: 'The Emerald Exchange' })
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync()
+    })
+    await flush()
+
+    expect(pinCalls).toBe(0)
+    expect(popup.close).toHaveBeenCalled()
+    expect(screen.getByLabelText('active sign-in')).toBeEmptyDOMElement()
+    expect(screen.getByRole('alert')).toHaveTextContent(/expired|timed out/i)
+  })
+
+  it('aborts an in-flight provider request and removes its timer on unmount', async () => {
+    let signal: AbortSignal | undefined
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const auxiliary = auxiliaryAuthResponse(url)
+      if (auxiliary) return Promise.resolve(auxiliary)
+      if (url.endsWith('/api/me')) return Promise.resolve(json({ error: 'unauthenticated' }, 401))
+      if (url.endsWith('/api/auth/apple')) {
+        signal = init?.signal as AbortSignal | undefined
+        return new Promise<Response>(() => {})
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const view = renderWithAuth(<ProviderProbe />)
+    await flush()
+    const baselineTimers = vi.getTimerCount()
+    fireEvent.click(screen.getByRole('button', { name: 'Apple provider' }))
+    await flush()
+    expect(vi.getTimerCount()).toBe(baselineTimers + 1)
+
+    view.unmount()
+    await flush()
+
+    expect(signal?.aborted).toBe(true)
+    expect(vi.getTimerCount()).toBe(baselineTimers)
+  })
+
+  it('aborts an in-flight Apple verification when the attempt is cancelled', async () => {
+    let signal: AbortSignal | undefined
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const auxiliary = auxiliaryAuthResponse(url)
+      if (auxiliary) return Promise.resolve(auxiliary)
+      if (url.endsWith('/api/me')) return Promise.resolve(json({ error: 'unauthenticated' }, 401))
+      if (url.endsWith('/api/auth/apple')) {
+        signal = init?.signal as AbortSignal | undefined
+        return new Promise<Response>(() => {})
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithAuth(<AppleCancelProbe />)
+    await flush()
+    const baselineTimers = vi.getTimerCount()
+    fireEvent.click(screen.getByRole('button', { name: 'Start cancellable Apple' }))
+    await flush()
+    expect(screen.getByLabelText('cancel active sign-in')).toHaveTextContent('apple')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel Apple' }))
+    await flush()
+
+    expect(signal?.aborted).toBe(true)
+    expect(screen.getByLabelText('cancel active sign-in')).toBeEmptyDOMElement()
+    expect(vi.getTimerCount()).toBe(baselineTimers)
+  })
+
+  it('does not apply the network timeout to an interactive WebAuthn ceremony', async () => {
+    const ceremony = deferred<{ id: string }>()
+    webauthnMocks.startAuthentication.mockReturnValueOnce(ceremony.promise)
+    let verifyCalls = 0
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      const auxiliary = auxiliaryAuthResponse(url)
+      if (auxiliary) return Promise.resolve(auxiliary)
+      if (url.endsWith('/api/me')) return Promise.resolve(json({ error: 'unauthenticated' }, 401))
+      if (url.endsWith('/api/auth/passkey/login/options')) {
+        return Promise.resolve(json({ options: { challenge: 'login' }, challengeId: 'login' }))
+      }
+      if (url.endsWith('/api/auth/passkey/login/verify')) {
+        verifyCalls += 1
+        return Promise.resolve(json({ ok: false }, 401))
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithAuth(<ProviderProbe />)
+    await flush()
+    fireEvent.click(screen.getByRole('button', { name: 'Passkey login provider' }))
+    await flush()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(NETWORK_TIMEOUT_MS * 2)
+    })
+
+    expect(screen.getByLabelText('active sign-in')).toHaveTextContent('passkey-login')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(verifyCalls).toBe(0)
+
+    ceremony.resolve({ id: 'credential-login' })
+    await flush()
+    expect(verifyCalls).toBe(1)
+  })
+
+  it.each([
+    { failure: 'timeout', response: () => new Promise<Response>(() => {}), advance: NETWORK_TIMEOUT_MS },
+    { failure: 'HTTP failure', response: () => Promise.resolve(json({ error: 'down' }, 503)), advance: 0 },
+  ])('clears local auth and releases the logout guard after $failure', async ({ response, advance }) => {
+    let logoutCalls = 0
+    let logoutSignal: AbortSignal | undefined
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const auxiliary = auxiliaryAuthResponse(url)
+      if (auxiliary) return Promise.resolve(auxiliary)
+      if (url.endsWith('/api/me')) {
+        return Promise.resolve(json({ user: { sub: 'plex:1', username: 'Member', role: 'user' } }))
+      }
+      if (url.endsWith('/api/auth/logout')) {
+        logoutCalls += 1
+        logoutSignal = init?.signal as AbortSignal | undefined
+        return logoutCalls === 1 ? response() : Promise.resolve(json({ ok: true }))
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithAuth(<LogoutProbe />)
+    await flush()
+    expect(screen.getByLabelText('logout user')).toHaveTextContent('Member')
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out safely' }))
+    await flush()
+    if (advance) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(advance)
+      })
+      await flush()
+      expect(logoutSignal?.aborted).toBe(true)
+    }
+
+    expect(screen.getByLabelText('logout result')).toHaveTextContent('rejected')
+    expect(screen.getByLabelText('logout session')).toHaveTextContent('anonymous')
+    expect(screen.getByLabelText('logout user')).toBeEmptyDOMElement()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out safely' }))
+    await flush()
+    expect(logoutCalls).toBe(2)
   })
 })
 

@@ -138,4 +138,31 @@ describe('settings route — anthropic key lifecycle', () => {
     await app.request('/anthropic-key', { method: 'DELETE', headers: { Cookie: cookieB } })
     expect(getUserApiKey('plex:401')).toBe(KEY)
   })
+
+  it('rejects a PUT or DELETE whose expected principal no longer matches the session', async () => {
+    const app = appUnderTest()
+    const cookie = await cookieFor('plex:402')
+    setUserApiKey('plex:401', KEY)
+
+    const put = await app.request('/anthropic-key', {
+      method: 'PUT',
+      headers: {
+        Cookie: cookie,
+        'content-type': 'application/json',
+        'x-eex-expected-sub': 'plex:401',
+      },
+      body: JSON.stringify({ key: 'sk-ant-api03-wrong-principal-NEW2' }),
+    })
+    const del = await app.request('/anthropic-key', {
+      method: 'DELETE',
+      headers: { Cookie: cookie, 'x-eex-expected-sub': 'plex:401' },
+    })
+
+    expect(put.status).toBe(409)
+    expect(del.status).toBe(409)
+    expect(await put.json()).toEqual({ error: 'principal_changed' })
+    expect(await del.json()).toEqual({ error: 'principal_changed' })
+    expect(getUserApiKey('plex:401')).toBe(KEY)
+    expect(getUserApiKey('plex:402')).toBeNull()
+  })
 })

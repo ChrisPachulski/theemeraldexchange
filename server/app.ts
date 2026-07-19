@@ -139,6 +139,7 @@ if (env.allowedOrigins.length > 0) {
       allowHeaders: [
         'Content-Type',
         'X-Anthropic-Api-Key',
+        'X-EEX-Expected-Sub',
         'Authorization',
         'X-App-Version',
       ],

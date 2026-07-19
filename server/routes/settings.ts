@@ -24,6 +24,7 @@ import {
 // A pasted API key is well under 1 KB; anything bigger is hostile or a
 // paste accident. Bounded so the body read can't balloon memory.
 const MAX_BODY_BYTES = 4 * 1024
+const EXPECTED_SUB_HEADER = 'X-EEX-Expected-Sub'
 
 export const settings = new Hono<Env>()
 
@@ -36,6 +37,13 @@ settings.get('/anthropic-key', (c) => {
 
 settings.put('/anthropic-key', async (c) => {
   const session = c.get('session')
+  const expectedSub = c.req.header(EXPECTED_SUB_HEADER)
+  // This is a stale-browser-request guard, not authentication. The signed
+  // session remains authoritative; older clients that omit the header retain
+  // rollout compatibility.
+  if (expectedSub !== undefined && expectedSub !== session.sub) {
+    return c.json({ error: 'principal_changed' }, 409)
+  }
   const parsed = await parseLimitedJson(c, MAX_BODY_BYTES)
   if (parsed.tooLarge) return c.json({ error: 'body_too_large' }, 413)
   const body = (parsed.body ?? {}) as { key?: unknown }
@@ -54,6 +62,10 @@ settings.put('/anthropic-key', async (c) => {
 
 settings.delete('/anthropic-key', (c) => {
   const session = c.get('session')
+  const expectedSub = c.req.header(EXPECTED_SUB_HEADER)
+  if (expectedSub !== undefined && expectedSub !== session.sub) {
+    return c.json({ error: 'principal_changed' }, 409)
+  }
   deleteUserApiKey(session.sub)
   return c.json({ set: false })
 })
