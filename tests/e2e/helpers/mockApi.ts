@@ -23,13 +23,13 @@ export type MockUser = {
 }
 
 export const ADMIN_USER: MockUser = {
-  sub: 'admin-1',
+  sub: 'plex:1001',
   username: 'Admin',
   role: 'admin',
 }
 
 export const REGULAR_USER: MockUser = {
-  sub: 'user-1',
+  sub: 'plex:1002',
   username: 'Someone',
   role: 'user',
 }
@@ -52,6 +52,30 @@ export function mockMe(page: Page, user: MockUser | null) {
 // own handler BEFORE calling installBackgroundMocks(), since
 // page.route() matches in reverse-registration order.
 export async function installBackgroundMocks(page: Page) {
+  await page.route('**/api/auth/methods', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ plex: true, apple: false, google: false, passkey: true }),
+    }),
+  )
+
+  await page.route('**/api/setup/status', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ claimable: false }),
+    }),
+  )
+
+  await page.route('**/api/telemetry/config', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ enabled: false }),
+    }),
+  )
+
   // Limits — used by AddMovieModal for its size cap copy.
   await page.route('**/api/limits', (route) =>
     route.fulfill({

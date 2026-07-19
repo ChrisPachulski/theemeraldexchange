@@ -78,7 +78,7 @@ test.describe('self-host: bare boot → claim → gate closed → invites', () =
     if (dataDir) fs.rmSync(dataDir, { recursive: true, force: true })
   })
 
-  test('the full first-owner journey', async ({ page }) => {
+  test('the full first-owner and invited-member journey', async ({ page, browser }) => {
     // Real WebAuthn, virtual hardware: a CTAP2 resident-key authenticator.
     const cdp = await page.context().newCDPSession(page)
     await cdp.send('WebAuthn.enable')
@@ -132,10 +132,61 @@ test.describe('self-host: bare boot → claim → gate closed → invites', () =
       data: { label: 'first household member' },
     })
     expect(inv.ok(), `invite mint failed: ${inv.status()}`).toBeTruthy()
-    const invite = (await inv.json()) as { code?: string }
+    const invite = (await inv.json()) as { code?: string; code_hash_prefix?: string }
     expect(invite.code).toMatch(/^[A-Za-z0-9_-]{22}$/)
 
-    // 6. Optional integrations honestly absent: typed 503s, never 500s.
+    // 6. A separate browser receives only the URL fragment. Startup removes
+    //    it before telemetry or /api/me, keeps the code in memory, and opens
+    //    passkey registration. The real route transaction redeems the invite,
+    //    persists the credential, and establishes the member cookie together.
+    const memberContext = await browser.newContext()
+    try {
+      const memberPage = await memberContext.newPage()
+      const memberCdp = await memberContext.newCDPSession(memberPage)
+      await memberCdp.send('WebAuthn.enable')
+      await memberCdp.send('WebAuthn.addVirtualAuthenticator', {
+        options: {
+          protocol: 'ctap2',
+          transport: 'internal',
+          hasResidentKey: true,
+          hasUserVerification: true,
+          isUserVerified: true,
+          automaticPresenceSimulation: true,
+        },
+      })
+
+      await memberPage.goto(`${BASE}/#/invite/${invite.code}`)
+      await expect.poll(() => new URL(memberPage.url()).hash).toBe('')
+      await expect(memberPage.getByLabel('Invite code').first()).toHaveValue(invite.code!)
+      await memberPage.getByLabel('Your name').first().fill('Household member')
+      await memberPage.getByRole('button', { name: 'Create passkey' }).first().click()
+
+      await expect
+        .poll(async () => (await memberPage.request.get(`${BASE}/api/me`)).status(), {
+          timeout: 15_000,
+        })
+        .toBe(200)
+      const memberMe = (await (await memberPage.request.get(`${BASE}/api/me`)).json()) as {
+        user: { role: string; username: string; sub: string }
+      }
+      expect(memberMe.user).toMatchObject({ role: 'user', username: 'Household member' })
+      expect(memberMe.user.sub).toMatch(/^local:/)
+    } finally {
+      await memberContext.close()
+    }
+
+    // The owner sees the real single-use counter exhausted; the plaintext code
+    // never appears in this list and cannot authorize a second member.
+    const listed = await page.request.get(`${BASE}/api/admin/invites`)
+    expect(listed.ok()).toBe(true)
+    const listedBody = (await listed.json()) as {
+      invites: Array<{ code_hash_prefix: string; max_uses: number; used_count: number }>
+    }
+    expect(
+      listedBody.invites.find((row) => row.code_hash_prefix === invite.code_hash_prefix),
+    ).toMatchObject({ max_uses: 1, used_count: 1 })
+
+    // 7. Optional integrations honestly absent: typed 503s, never 500s.
     for (const [p, err] of [
       ['/api/sonarr/api/v3/series', 'sonarr_not_configured'],
       ['/api/auth/plex/config', 'plex_not_configured'],
