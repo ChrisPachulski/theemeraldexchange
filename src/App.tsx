@@ -113,7 +113,7 @@ function Shell() {
 // so the brand is present from first paint. While /api/me is in flight
 // we render nothing; an unavailable read gets a branded Retry state
 // instead of flashing the logged-out walkthrough.
-function AuthGate() {
+function AuthGate({ initialInviteCode }: { initialInviteCode: string }) {
   const { sessionState, sessionError, retrySession, user } = useAuth()
   if (sessionState === 'loading') return null
   if (sessionState === 'unavailable' || (sessionState === 'authenticated' && !user)) {
@@ -136,7 +136,7 @@ function AuthGate() {
     // is already in HTTP cache. Render nothing during the brief gap.
     return (
       <Suspense fallback={null}>
-        <Walkthrough />
+        <Walkthrough initialInviteCode={initialInviteCode} />
       </Suspense>
     )
   }
@@ -148,10 +148,10 @@ function AuthGate() {
   )
 }
 
-function App() {
+function App({ initialInviteCode = '' }: { initialInviteCode?: string }) {
   return (
     <AuthProvider>
-      <AuthGate />
+      <AuthGate initialInviteCode={initialInviteCode} />
     </AuthProvider>
   )
 }

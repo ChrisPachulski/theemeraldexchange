@@ -108,7 +108,7 @@ describe('src/lib/telemetry', () => {
     expect(opts?.environment).toBe(import.meta.env.MODE)
   })
 
-  it('fetches per-install config and records the deployed release before render', async () => {
+  it('fetches per-install config in the background and records the deployed release', async () => {
     stubWindow()
     vi.stubEnv('VITE_GLITCHTIP_DSN', '')
     vi.stubGlobal(
@@ -151,6 +151,48 @@ describe('src/lib/telemetry', () => {
         mediaTitle: '[redacted]',
       },
     })
+  })
+
+  it('redacts invite fragments from captured errors and every event URL field', async () => {
+    const sentinel = 'TELEMETRY_INVITE_SENTINEL'
+    const inviteUrl = `https://exchange.test/library#/invite/${sentinel}`
+    stubWindow({ glitchtipDsn: 'https://injected@glitchtip.test/1' })
+    vi.stubEnv('VITE_GLITCHTIP_DSN', '')
+    const { initTelemetry, captureError } = await loadFresh()
+    initTelemetry()
+
+    const error = new Error(`Startup failed at ${inviteUrl}`)
+    error.name = `StartupException ${inviteUrl}`
+    error.stack = `Error: Startup failed at ${inviteUrl}\n at boot (${inviteUrl}:1:1)`
+    captureError(error, { navigation: inviteUrl })
+
+    const [capturedError, capturedContext] = vi.mocked(Sentry.captureException).mock.calls[0]
+    expect(capturedError).toBeInstanceOf(Error)
+    expect((capturedError as Error).name).not.toContain(sentinel)
+    expect((capturedError as Error).message).not.toContain(sentinel)
+    expect((capturedError as Error).stack).not.toContain(sentinel)
+    expect(JSON.stringify(capturedContext)).not.toContain(sentinel)
+
+    const options = vi.mocked(Sentry.init).mock.calls[0][0]
+    const beforeSend = options?.beforeSend as unknown as (
+      event: Record<string, unknown>,
+    ) => Record<string, unknown>
+    const event = {
+      request: { url: inviteUrl },
+      message: `Navigation failed: ${inviteUrl}`,
+      exception: { values: [{ value: `Thrown from ${inviteUrl}` }] },
+      breadcrumbs: [
+        {
+          category: 'navigation',
+          message: `replaceState ${inviteUrl}`,
+          data: { from: inviteUrl, to: inviteUrl },
+        },
+      ],
+    }
+    const redacted = beforeSend(event)
+
+    expect(JSON.stringify(redacted)).not.toContain(sentinel)
+    expect(JSON.stringify(redacted)).toContain('#/invite/[redacted]')
   })
 
   // D. idempotency / double-init guard
@@ -208,13 +250,15 @@ describe('src/lib/telemetry', () => {
 
     const withCtx = new Error('boom')
     captureError(withCtx, { foo: 'bar' })
-    expect(vi.mocked(Sentry.captureException)).toHaveBeenCalledWith(withCtx, {
+    expect(vi.mocked(Sentry.captureException)).toHaveBeenCalledWith(expect.any(Error), {
       extra: { foo: 'bar' },
     })
+    expect((vi.mocked(Sentry.captureException).mock.calls[0][0] as Error).message).toBe('boom')
 
     const noCtx = new Error('y')
     captureError(noCtx)
-    expect(vi.mocked(Sentry.captureException)).toHaveBeenCalledWith(noCtx, undefined)
+    expect(vi.mocked(Sentry.captureException)).toHaveBeenCalledWith(expect.any(Error), undefined)
+    expect((vi.mocked(Sentry.captureException).mock.calls[1][0] as Error).message).toBe('y')
   })
 
   // G. isTelemetryActive reflects state

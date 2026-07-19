@@ -30,10 +30,17 @@ interface ServerTelemetryConfig {
 
 const SENSITIVE_KEY = /authorization|cookie|password|secret|token|email|username|\bsub\b|device|media_?path|title/i
 const TOKEN_QUERY = /([?&](?:t|u|token)=)[^&#\s]+/gi
+const INVITE_FRAGMENT = /(#[/]invite[/])[^/?#\s]+/gi
+
+function scrubTelemetryString(value: string): string {
+  return value
+    .replace(TOKEN_QUERY, '$1[redacted]')
+    .replace(INVITE_FRAGMENT, '$1[redacted]')
+}
 
 function scrubTelemetryValue(value: unknown, key = ''): unknown {
   if (SENSITIVE_KEY.test(key)) return '[redacted]'
-  if (typeof value === 'string') return value.replace(TOKEN_QUERY, '$1[redacted]')
+  if (typeof value === 'string') return scrubTelemetryString(value)
   if (Array.isArray(value)) return value.map((item) => scrubTelemetryValue(item))
   if (value && typeof value === 'object') {
     return Object.fromEntries(
@@ -44,6 +51,14 @@ function scrubTelemetryValue(value: unknown, key = ''): unknown {
     )
   }
   return value
+}
+
+function scrubCapturedError(error: unknown): unknown {
+  if (!(error instanceof Error)) return scrubTelemetryValue(error)
+  const scrubbed = new Error(scrubTelemetryString(error.message))
+  scrubbed.name = scrubTelemetryString(error.name)
+  if (error.stack) scrubbed.stack = scrubTelemetryString(error.stack)
+  return scrubbed
 }
 
 function resolveDsn(): string | undefined {
@@ -96,8 +111,8 @@ export function initTelemetry(): boolean {
 }
 
 /** Resolve build/server-injected config first, then fetch the public,
- * non-secret per-install DSN before the first React render. Network and
- * unconfigured responses degrade to telemetry-off without delaying startup. */
+ * non-secret per-install DSN in the background. Network and unconfigured
+ * responses degrade to telemetry-off without delaying startup. */
 export async function initTelemetryFromServer(): Promise<boolean> {
   if (initTelemetry()) return true
   try {
@@ -127,7 +142,7 @@ export async function initTelemetryFromServer(): Promise<boolean> {
 export function captureError(error: unknown, context?: Record<string, unknown>): void {
   if (!initialised) return
   Sentry.captureException(
-    error,
+    scrubCapturedError(error),
     context ? { extra: scrubTelemetryValue(context) as Record<string, unknown> } : undefined,
   )
 }

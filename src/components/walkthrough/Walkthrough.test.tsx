@@ -8,12 +8,12 @@ import { AuthProvider } from '../../lib/auth'
 // adds an invite-code field and a Sign in with Apple affordance alongside
 // the existing Plex button — without breaking the WebGL brand mark.
 
-function render(): string {
+function render(initialInviteCode = ''): string {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return renderToStaticMarkup(
     <QueryClientProvider client={qc}>
       <AuthProvider>
-        <Walkthrough />
+        <Walkthrough initialInviteCode={initialInviteCode} />
       </AuthProvider>
     </QueryClientProvider>,
   )
@@ -49,14 +49,10 @@ describe('Walkthrough sign-in', () => {
     expect(html).toContain('walkthrough__hero-gem')
   })
 
-  it('prefills an invite delivered in a private URL fragment', () => {
+  it('prefills an invite handed off from the scrubbed URL fragment', () => {
     const code = 'A'.repeat(22)
-    vi.stubGlobal('window', {
-      location: { hash: `#/invite/${code}`, pathname: '/', search: '' },
-      history: { replaceState: vi.fn() },
-    })
 
-    const html = render()
+    const html = render(code)
 
     expect(html).toContain(`value="${code}"`)
   })

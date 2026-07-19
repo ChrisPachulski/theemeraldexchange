@@ -384,26 +384,8 @@ type Section = {
   render: () => React.ReactElement
 }
 
-export function Walkthrough() {
+export function Walkthrough({ initialInviteCode = '' }: { initialInviteCode?: string }) {
   const stripRef = useInView<HTMLElement>(() => {})
-  const [initialInviteCode] = useState(() => {
-    if (typeof window === 'undefined') return ''
-    const match = window.location.hash.match(/^#\/invite\/([^/?#]+)$/)
-    if (!match) return ''
-    try {
-      return decodeURIComponent(match[1])
-    } catch {
-      return match[1]
-    }
-  })
-
-  // The invite lives in the fragment so it is never sent in the initial HTTP
-  // request or Referer header. Remove it after reading so it does not linger in
-  // browser history or get copied accidentally from the address bar.
-  useEffect(() => {
-    if (!initialInviteCode || typeof window === 'undefined') return
-    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`)
-  }, [initialInviteCode])
 
   const sections: Section[] = [
     {
