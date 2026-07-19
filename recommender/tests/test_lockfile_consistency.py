@@ -3,7 +3,7 @@ requirements.lock.
 
 The lock is hand-frozen from the production container (see its header), so a
 naive freeze-regen can silently revert a deliberate floor bump — exactly how
-the setuptools security bump (PYSEC-2025-49, >=78.1.1) would regress. This
+the setuptools security bump (PYSEC-2026-3447, >=83.0.0) would regress. This
 test makes such a revert a loud CI failure instead of a silent drift.
 """
 
@@ -73,11 +73,11 @@ def test_every_pyproject_floor_is_pinned_and_satisfied() -> None:
 
 
 def test_setuptools_security_floor_held() -> None:
-    # PYSEC-2025-49: the lock header documents this floor explicitly; a
+    # PYSEC-2026-3447: the lock header documents this floor explicitly; a
     # freeze-regen from a stale prod container must not drop it.
     locked = _locked_versions()
     assert locked.get("setuptools") is not None, "setuptools pin missing from requirements.lock"
-    assert locked["setuptools"] >= Version("78.1.1")
+    assert locked["setuptools"] >= Version("83.0.0")
 
 
 def test_every_pin_is_hash_pinned() -> None:
