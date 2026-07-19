@@ -94,6 +94,9 @@ function LifecycleProbe() {
       <output aria-label="session role">{auth.user?.role ?? ''}</output>
       <output aria-label="active sign-in">{auth.activeSignIn ?? ''}</output>
       <output aria-label="provider result">{providerResult}</output>
+      <output aria-label="discovered servers">
+        {auth.discoveredServers?.map((server) => server.name).join(', ') ?? ''}
+      </output>
       <button type="button" onClick={() => void auth.retrySession()}>
         Retry session
       </button>
@@ -114,6 +117,9 @@ function LifecycleProbe() {
         }
       >
         Passkey provider
+      </button>
+      <button type="button" onClick={() => void auth.signIn()}>
+        Plex provider
       </button>
       <button type="button" onClick={() => void auth.signOut()}>
         Sign out
@@ -156,6 +162,12 @@ function meCallCount(fetchMock: ReturnType<typeof vi.fn>): number {
   return fetchMock.mock.calls.filter(([input]) =>
     String(input).endsWith('/api/me'),
   ).length
+}
+
+function dispatchPageShow(persisted: boolean) {
+  const event = new Event('pageshow') as PageTransitionEvent
+  Object.defineProperty(event, 'persisted', { value: persisted })
+  window.dispatchEvent(event)
 }
 
 describe('browser session lifecycle reconciliation', () => {
@@ -299,6 +311,85 @@ describe('browser session lifecycle reconciliation', () => {
     expect(channel.postMessage).toHaveBeenCalledTimes(1)
   })
 
+  it('clears provider discovery state on a lifecycle-confirmed anonymous session', async () => {
+    const plexUser: AuthUser = {
+      sub: 'plex:42',
+      username: 'Plex member',
+      role: 'user',
+      auth_mode: 'plex',
+    }
+    let meCalls = 0
+    const popup = { closed: false, close: vi.fn(), location: { href: '' } }
+    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      const auxiliary = auxiliaryResponse(url)
+      if (auxiliary) return Promise.resolve(auxiliary)
+      if (url.endsWith('/api/me')) {
+        meCalls += 1
+        if (meCalls === 1) return Promise.resolve(json({ error: 'unauthenticated' }, 401))
+        if (meCalls === 2) return Promise.resolve(me(plexUser))
+        return Promise.resolve(json({ error: 'unauthenticated' }, 401))
+      }
+      if (url.endsWith('/api/auth/plex/config')) {
+        return Promise.resolve(json({ clientId: 'client-id', product: 'Exchange' }))
+      }
+      if (url.startsWith('https://plex.tv/api/v2/pins?')) {
+        return Promise.resolve(json({ id: 123, code: 'plex-code' }, 201))
+      }
+      if (url.endsWith('/api/auth/plex/check')) {
+        return Promise.resolve(
+          json({
+            status: 'authorized',
+            user: plexUser,
+            discoveredServers: [
+              { name: 'Family NAS', id: 'server-id', owned: true },
+            ],
+          }),
+        )
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderAuth()
+    await flush()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Plex provider' }))
+    await flush()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_500)
+    })
+    await flush()
+    expect(screen.getByLabelText('discovered servers')).toHaveTextContent('Family NAS')
+
+    window.dispatchEvent(new Event('focus'))
+    await runScheduledRefresh()
+
+    expect(screen.getByLabelText('session state')).toHaveTextContent('anonymous')
+    expect(screen.getByLabelText('discovered servers')).toBeEmptyDOMElement()
+  })
+
+  it('ignores normal-load pageshow but revalidates a BFCache restore', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      const auxiliary = auxiliaryResponse(url)
+      if (auxiliary) return Promise.resolve(auxiliary)
+      if (url.endsWith('/api/me')) return Promise.resolve(me(OLD_USER))
+      return Promise.reject(new Error(`unexpected fetch: ${url}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderAuth()
+    await flush()
+
+    dispatchPageShow(false)
+    await runScheduledRefresh()
+    expect(meCallCount(fetchMock)).toBe(1)
+
+    dispatchPageShow(true)
+    await runScheduledRefresh()
+    expect(meCallCount(fetchMock)).toBe(2)
+  })
+
   it('deduplicates a focus, visibility, and pageshow burst without polling', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input)
@@ -313,7 +404,7 @@ describe('browser session lifecycle reconciliation', () => {
 
     window.dispatchEvent(new Event('focus'))
     document.dispatchEvent(new Event('visibilitychange'))
-    window.dispatchEvent(new Event('pageshow'))
+    dispatchPageShow(true)
     await runScheduledRefresh()
 
     expect(meCallCount(fetchMock)).toBe(2)
@@ -416,6 +507,45 @@ describe('browser session lifecycle reconciliation', () => {
     expect(screen.getByLabelText('session state')).toHaveTextContent('authenticated')
     expect(screen.getByLabelText('session user')).toHaveTextContent('Old member')
     expect(queryClient.getQueryData(['private'])).toBe('keep me')
+  })
+
+  it('defers lifecycle refresh while a foreground session retry owns /api/me', async () => {
+    const heldRetry = deferred<Response>()
+    let meCalls = 0
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      const auxiliary = auxiliaryResponse(url)
+      if (auxiliary) return Promise.resolve(auxiliary)
+      if (!url.endsWith('/api/me')) {
+        return Promise.reject(new Error(`unexpected fetch: ${url}`))
+      }
+      meCalls += 1
+      if (meCalls === 1) return Promise.resolve(me(OLD_USER))
+      if (meCalls === 2) return heldRetry.promise
+      return Promise.resolve(json({ error: 'unavailable' }, 503))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderAuth()
+    await flush()
+
+    window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
+    await flush()
+    expect(screen.getByLabelText('session state')).toHaveTextContent('loading')
+    expect(meCalls).toBe(2)
+
+    window.dispatchEvent(new Event('focus'))
+    await runScheduledRefresh()
+
+    expect(meCalls).toBe(2)
+    expect(screen.getByLabelText('session state')).toHaveTextContent('loading')
+
+    heldRetry.resolve(me(OLD_USER))
+    await flush()
+    await runScheduledRefresh()
+
+    expect(meCalls).toBe(5)
+    expect(screen.getByLabelText('session state')).toHaveTextContent('authenticated')
+    expect(screen.getByLabelText('session user')).toHaveTextContent('Old member')
   })
 
   it('lets a newer foreground read win over a stale lifecycle result', async () => {

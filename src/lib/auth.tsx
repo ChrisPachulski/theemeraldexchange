@@ -437,6 +437,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const authChannelRef = useRef<BroadcastChannel | null>(null)
   const authInvalidationEpochRef = useRef(0)
   const signOutInFlightRef = useRef(false)
+  const foregroundSessionReadRef = useRef<object | null>(null)
   const mountedRef = useRef(true)
   const rejectMalformedInvite = useCallback((inviteCode?: string) => {
     const message = inviteCodeError(inviteCode)
@@ -499,6 +500,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         applyUser(null)
         setSessionState('anonymous')
         setSessionError(null)
+        setViewAs(null)
+        setDiscoveredServers(null)
         if (wasAuthenticated && options.broadcastAnonymous) {
           broadcastAuthInvalidation()
         }
@@ -508,7 +511,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSessionError(SESSION_UNAVAILABLE_ERROR)
       }
     },
-    [applyUser, broadcastAuthInvalidation],
+    [applyUser, broadcastAuthInvalidation, setViewAs],
   )
 
   const cancelScheduledSessionRefresh = useCallback(() => {
@@ -522,7 +525,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const scheduleSessionRefresh = useCallback(
     (broadcastAnonymous: boolean) => {
       if (!mountedRef.current) return
-      if (signInInFlightRef.current || signOutInFlightRef.current) {
+      if (
+        signInInFlightRef.current ||
+        signOutInFlightRef.current ||
+        foregroundSessionReadRef.current !== null
+      ) {
         deferredRefreshRef.current = true
         deferredRefreshBroadcastRef.current ||= broadcastAnonymous
         return
@@ -533,7 +540,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         sessionRefreshTimerRef.current = null
         const shouldBroadcastAnonymous = pendingRefreshBroadcastRef.current
         pendingRefreshBroadcastRef.current = false
-        if (signInInFlightRef.current || signOutInFlightRef.current) {
+        if (
+          signInInFlightRef.current ||
+          signOutInFlightRef.current ||
+          foregroundSessionReadRef.current !== null
+        ) {
           deferredRefreshRef.current = true
           deferredRefreshBroadcastRef.current ||= shouldBroadcastAnonymous
           return
@@ -566,13 +577,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return
     }
     cancelScheduledSessionRefresh()
+    const foregroundRead = {}
+    foregroundSessionReadRef.current = foregroundRead
     setSessionState('loading')
     setSessionError(null)
-    const result = await readCurrentSession()
-    if (result.status !== 'aborted') {
-      commitSessionResult(result, { broadcastAnonymous: true })
+    try {
+      const result = await readCurrentSession()
+      if (result.status !== 'aborted') {
+        commitSessionResult(result, { broadcastAnonymous: true })
+      }
+    } finally {
+      if (foregroundSessionReadRef.current === foregroundRead) {
+        foregroundSessionReadRef.current = null
+        drainDeferredSessionRefresh()
+      }
     }
-  }, [cancelScheduledSessionRefresh, commitSessionResult, readCurrentSession])
+  }, [
+    cancelScheduledSessionRefresh,
+    commitSessionResult,
+    drainDeferredSessionRefresh,
+    readCurrentSession,
+  ])
 
   // Initial session probe. Cleanup aborts both the initial read and any later
   // provider confirmation that happens to be in flight during unmount.
@@ -712,12 +737,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const refreshWhenVisible = () => {
       if (document.visibilityState === 'visible') refresh()
     }
+    const refreshFromBfCache = (event: PageTransitionEvent) => {
+      if (event.persisted) refresh()
+    }
     window.addEventListener('focus', refresh)
-    window.addEventListener('pageshow', refresh)
+    window.addEventListener('pageshow', refreshFromBfCache)
     document.addEventListener('visibilitychange', refreshWhenVisible)
     return () => {
       window.removeEventListener('focus', refresh)
-      window.removeEventListener('pageshow', refresh)
+      window.removeEventListener('pageshow', refreshFromBfCache)
       document.removeEventListener('visibilitychange', refreshWhenVisible)
     }
   }, [scheduleSessionRefresh])
