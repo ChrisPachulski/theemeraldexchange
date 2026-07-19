@@ -11,7 +11,7 @@ import {
   _resetLibraryStaleFallbackForTests,
   _resetTmdbInFlightForTests,
 } from './suggestions.js'
-import { createSession } from '../session.js'
+import { createMemberSession as createSession } from '../test/authFixture.js'
 import { _setRejectionsPathForTests, addRejection } from '../services/rejections.js'
 import { _setUserFeedbackPathForTests, setLike } from '../services/userFeedback.js'
 import { _setUsageLogPathForTests } from '../services/usageLog.js'

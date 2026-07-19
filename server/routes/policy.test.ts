@@ -6,7 +6,7 @@ import { Hono } from 'hono'
 import { policy, adminPolicy } from './policy.js'
 import { sonarr } from './sonarr.js'
 import { sab } from './sab.js'
-import { createSession } from '../session.js'
+import { createMemberSession as createSession } from '../test/authFixture.js'
 import {
   _setUserPoliciesPathForTests,
   getPolicy,

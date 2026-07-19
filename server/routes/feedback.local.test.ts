@@ -6,7 +6,7 @@ import type { Hono } from 'hono'
 import type { Env } from '../middleware/auth.js'
 
 let app: Hono<Env>
-let createSessionFn: typeof import('../session.js').createSession
+let createSessionFn: typeof import('../test/authFixture.js').createMemberSession
 let setUserFeedbackPath: typeof import('../services/userFeedback.js')._setUserFeedbackPathForTests
 let setRejectionsPath: typeof import('../services/rejections.js')._setRejectionsPathForTests
 
@@ -53,10 +53,10 @@ beforeAll(async () => {
 
   const { Hono } = await import('hono')
   const { feedback } = await import('./feedback.js')
-  const session = await import('../session.js')
+  const session = await import('../test/authFixture.js')
   const userFeedback = await import('../services/userFeedback.js')
   const rejections = await import('../services/rejections.js')
-  createSessionFn = session.createSession
+  createSessionFn = session.createMemberSession
   setUserFeedbackPath = userFeedback._setUserFeedbackPathForTests
   setRejectionsPath = rejections._setRejectionsPathForTests
   const a = new Hono<Env>()

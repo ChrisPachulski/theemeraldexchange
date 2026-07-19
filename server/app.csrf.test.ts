@@ -95,13 +95,13 @@ afterEach(() => {
 })
 
 async function sessionCookie(role: 'admin' | 'user' = 'admin') {
-  // Use the real createSession so the cookie format matches prod.
+  // Mint the real cookie plus the active membership established at login.
   // Username MUST match the vitest test-env ADMINS list when role is
   // admin — the auth middleware reconciles the cookie role against
   // env.admins on every protected request, so an admin cookie issued
   // for a username not in ADMINS gets demoted to user and the admin-
   // only DELETE/POST handlers return 403.
-  const { createSession } = await import('./session.js')
+  const { createMemberSession: createSession } = await import('./test/authFixture.js')
   const username = role === 'admin' ? 'admin-user' : 'user'
   const token = await createSession({ sub: 'plex:1', username, role })
   return `eex.session=${token}`

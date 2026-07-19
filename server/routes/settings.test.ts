@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import { settings } from './settings.js'
-import { createSession } from '../session.js'
+import { createMemberSession as createSession } from '../test/authFixture.js'
 import { serverDb } from '../services/serverDb.js'
 import { getUserApiKey, setUserApiKey } from '../services/userApiKeys.js'
 import type { Env } from '../middleware/auth.js'

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Hono } from 'hono'
 import { syncplay } from './syncplay.js'
-import { createSession } from '../session.js'
+import { createMemberSession as createSession } from '../test/authFixture.js'
 import { _resetSyncplayForTests } from '../services/syncplay.js'
 import type { Env } from '../middleware/auth.js'
 

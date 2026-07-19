@@ -9,7 +9,7 @@ import type { Hono } from 'hono'
 import type { Env } from '../middleware/auth.js'
 
 let app: Hono<Env>
-let createSessionFn: typeof import('../session.js').createSession
+let createSessionFn: typeof import('../test/authFixture.js').createMemberSession
 
 beforeAll(async () => {
   vi.resetModules()
@@ -55,8 +55,8 @@ beforeAll(async () => {
   }))
   const { Hono } = await import('hono')
   const { recommenderEvents } = await import('./recommenderEvents.js')
-  const session = await import('../session.js')
-  createSessionFn = session.createSession
+  const session = await import('../test/authFixture.js')
+  createSessionFn = session.createMemberSession
   const a = new Hono<Env>()
   a.route('/', recommenderEvents)
   app = a

@@ -17,7 +17,7 @@ import type { Hono } from 'hono'
 import type { Env } from '../middleware/auth.js'
 
 let app: Hono<Env>
-let createSessionFn: typeof import('../session.js').createSession
+let createSessionFn: typeof import('../test/authFixture.js').createMemberSession
 
 // Swappable media.db handle for the local-availability wiring test.
 // null = "media.db missing" (graceful degrade) for every other test.
@@ -74,8 +74,8 @@ beforeAll(async () => {
   }))
   const { Hono } = await import('hono')
   const { suggestions } = await import('./suggestions.js')
-  const session = await import('../session.js')
-  createSessionFn = session.createSession
+  const session = await import('../test/authFixture.js')
+  createSessionFn = session.createMemberSession
   const a = new Hono<Env>()
   a.route('/api/suggestions', suggestions)
   app = a

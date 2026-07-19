@@ -10,7 +10,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { Hono } from 'hono'
 import { plexAdmin } from './plex-admin.js'
-import { createSession } from '../session.js'
+import { createMemberSession as createSession } from '../test/authFixture.js'
 import type { Env } from '../middleware/auth.js'
 
 function appUnderTest() {

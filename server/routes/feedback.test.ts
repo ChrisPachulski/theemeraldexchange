@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { Hono } from 'hono'
 import { feedback } from './feedback.js'
-import { createSession } from '../session.js'
+import { createMemberSession as createSession } from '../test/authFixture.js'
 import {
   _setUserFeedbackPathForTests,
   getUserFeedback,
