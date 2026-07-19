@@ -125,6 +125,10 @@ services:
       WEBAUTHN_RP_ID: "${WEBAUTHN_RP_ID:-}"
       WEBAUTHN_RP_NAME: "${WEBAUTHN_RP_NAME:-}"
       WEBAUTHN_ORIGINS: "${WEBAUTHN_ORIGINS:-}"
+      # First-owner claims are private/loopback-only by default. Set to 1 only
+      # when the initial passkey claim must cross a trusted remote tunnel; the
+      # one-time setup token remains mandatory.
+      SETUP_ALLOW_REMOTE: "${SETUP_ALLOW_REMOTE:-0}"
       PLEX_SERVER_ID: "${PLEX_SERVER_ID:-}"
       # Bootstrap escape hatch for the brief first-deploy window before
       # PLEX_SERVER_ID is known. Without this passthrough, env.ts's

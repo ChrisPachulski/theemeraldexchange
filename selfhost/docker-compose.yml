@@ -77,6 +77,9 @@ services:
       WEBAUTHN_RP_ID: "${WEBAUTHN_RP_ID:-}"
       WEBAUTHN_RP_NAME: "${WEBAUTHN_RP_NAME:-}"
       WEBAUTHN_ORIGINS: "${WEBAUTHN_ORIGINS:-}"
+      # Keep first-owner claims private/loopback-only unless the operator
+      # explicitly needs to claim through a trusted remote tunnel.
+      SETUP_ALLOW_REMOTE: "${SETUP_ALLOW_REMOTE:-0}"
       # Requests/downloads (Sonarr / Radarr / SAB) — tabs hide when unset
       SONARR_URL: "${SONARR_URL:-}"
       SONARR_API_KEY: "${SONARR_API_KEY:-}"

@@ -65,6 +65,7 @@ describe('auth deployment configuration contract', () => {
     'WEBAUTHN_RP_ID',
     'WEBAUTHN_RP_NAME',
     'WEBAUTHN_ORIGINS',
+    'SETUP_ALLOW_REMOTE',
     'PLEX_CLIENT_ID',
     'PLEX_SERVER_ID',
     'ALLOW_UNSCOPED_PLEX_LOGIN',
@@ -118,10 +119,20 @@ describe('auth deployment configuration contract', () => {
   })
 
   it('keeps the NAS preflight boot-only when Plex has no server id', () => {
+    const requiredBlock = deployScript.match(/required=\(\n([\s\S]*?)\n\)/)?.[1] ?? ''
+    expect(requiredBlock).not.toMatch(/^\s*PLEX_CLIENT_ID\s*$/m)
     expect(deployScript).toContain('plex_client_id_value=$(env_value PLEX_CLIENT_ID')
     expect(deployScript).toContain('if [[ -z "$plex_client_id_value" ]]')
     expect(deployScript).toContain('This permits boot only')
     expect(deployScript).not.toMatch(/ANY Plex|open mode/)
+  })
+
+  it('excludes test-only server helpers from both production payload paths', () => {
+    expect(read('.dockerignore')).toMatch(/^server\/test\/$/m)
+    const serverSync =
+      deployScript.match(/echo "→ Syncing server\/"([\s\S]*?)echo "→ Syncing recommender\/"/)?.[1] ?? ''
+    expect(serverSync).toContain("--exclude 'test/'")
+    expect(serverSync).toContain('--delete-excluded')
   })
 
   it.each(surfaces)('$name passes every supported provider/authz input into the backend', ({ compose }) => {
@@ -136,5 +147,16 @@ describe('auth deployment configuration contract', () => {
       sharedKeys.filter((key) => !exampleHas(example, key)),
       'auth inputs missing from env example',
     ).toEqual([])
+  })
+
+  it.each(surfaces)('$name keeps remote first-owner claim disabled by default', ({ compose, example }) => {
+    expect(backendEnvironment(compose)).toMatch(
+      /^\s{6}SETUP_ALLOW_REMOTE:\s*["']\$\{SETUP_ALLOW_REMOTE:-0\}["']\s*$/m,
+    )
+    expect(example).toMatch(/^#?\s*SETUP_ALLOW_REMOTE=0\s*$/m)
+  })
+
+  it('documents remote first-owner claim in the root development example', () => {
+    expect(read('.env.example')).toMatch(/^SETUP_ALLOW_REMOTE=0\s*$/m)
   })
 })

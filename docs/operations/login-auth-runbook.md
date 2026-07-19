@@ -61,10 +61,26 @@ in logs is a security incident, not acceptable diagnostic context.
 
 Both root and published self-host Compose files pass the same provider/authz inputs:
 `ADMINS`, `ADMIN_SUBS`, Plex client/server ids, Apple and Google client ids plus enable guards,
-the emergency unscoped-Plex boot flag, and all WebAuthn RP fields. That flag only permits a
-Plex-configured production process to boot without a server id; it never overrides an existing
-members/provider gate. Contract tests fail when an input consumed by the backend disappears from
-a Compose surface or its environment example.
+the emergency unscoped-Plex boot flag, all WebAuthn RP fields, and `SETUP_ALLOW_REMOTE`. The Plex
+flag only permits a Plex-configured production process to boot without a server id; it never
+overrides a member/provider gate. Remote first-owner claim stays off by default. Enable it only to
+claim through a trusted remote tunnel, and return it to `0` afterward; the one-time setup token is
+still mandatory. Contract tests fail when an input consumed by the backend disappears from a
+Compose surface or its environment example.
+
+The root Cloudflare topology trusts `CF-Connecting-IP`/`True-Client-IP` because the backend is
+loopback-only and reachable through cloudflared; first-owner setup resolves those headers before
+the private container socket, so a public visitor stays public and is blocked. Self-host does not
+trust forwarded headers by default, so a client cannot spoof a private address. The supported
+Tailscale Serve profile remains inside the allowed `100.64.0.0/10` private set. Tailscale Funnel
+is not a supported first-claim path: use a proxy with an unambiguous trusted client-IP header or
+the short-lived `SETUP_ALLOW_REMOTE=1` override, then return it to `0`. Setup does not consume
+`X-Forwarded-For` because neither deployment defines a validated proxy-hop chain.
+
+Plex is optional in the NAS preflight; `PLEX_SERVER_ID` is validated only when a
+`PLEX_CLIENT_ID` is configured. Test-only server helpers are excluded from both the Docker build
+context and the curated NAS rsync payload, so authentication fixtures cannot enter a production
+image or host tree.
 
 Self-host serves the SPA and API from one origin by default. The owner deployment remains split
 origin until its edge routes `/api/*` through the canonical web host; it therefore requires an

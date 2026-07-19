@@ -116,7 +116,6 @@ fi
 
 required=(
   TUNNEL_TOKEN
-  PLEX_CLIENT_ID
   SESSION_SECRET
   STREAM_TOKEN_SECRET
   DEVICE_TOKEN_SECRET
@@ -263,7 +262,8 @@ rsync -av \
   "${NAS_USER}@${NAS_HOST}:${APPDATA}/"
 
 echo "→ Syncing server/"
-rsync -av --delete \
+rsync -av --delete --delete-excluded \
+  --exclude 'test/' \
   --exclude '*.test.ts' \
   --exclude 'middleware/*.test.ts' \
   "${STAGE_DIR}/server/" "${NAS_USER}@${NAS_HOST}:${APPDATA}/server/"

@@ -36,6 +36,7 @@ playwright-report
 
 # ---- Tests (not needed in the production image) -----------------------------
 tests
+server/test/
 **/*.test.ts
 **/*.test.tsx
 **/*.spec.ts
