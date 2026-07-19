@@ -486,8 +486,7 @@ auth.post('/plex/check', async (c) => {
 
   // Prime the membership cache so the very next protected request
   // doesn't re-hit plex.tv — the membership check we just performed
-  // (or the bootstrap "no PLEX_SERVER_ID" path) IS the freshest possible
-  // evidence we'll get.
+  // is the freshest possible evidence we'll get.
   _primeSessionGateCache(namespacedSub, 'member', pin.authToken)
 
   return c.json({

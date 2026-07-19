@@ -138,9 +138,8 @@ single invite/members allowlist:
 - **WebAuthn passkeys** (cross-platform, password-free)
 
 Normal login requires an active member/admin identity or invite redemption. A verified share on
-the configured Plex server is the explicit provider-backed admission path. For compatibility, a
-wholly unbootstrapped legacy install can admit its first verified identity; setup-token passkey
-claim is the preferred fresh-install path and the fallback closes once any durable gate exists.
+the configured Plex server is the explicit provider-backed admission path. Fresh-install state
+never grants normal login; ownership begins with the host-protected setup-token passkey claim.
 The Plex token is encrypted at rest (JWE); invite redemption is atomic and race-safe, and provider
 success is confirmed against the browser's `/api/me` session before the dashboard trusts it.
 

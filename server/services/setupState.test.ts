@@ -35,6 +35,7 @@ const OWNER = 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV'
 const envRw = env as unknown as Record<string, unknown>
 const originalOwnershipEnv = {
   serverDbPath: env.SERVER_DB_PATH,
+  plexClientId: env.plexClientId,
   plexServerId: env.plexServerId,
   adminSubs: env.adminSubs,
   appleClientId: env.appleClientId,
@@ -61,6 +62,7 @@ describe('setupState', () => {
   beforeEach(() => {
     wipe()
     envRw.SERVER_DB_PATH = originalOwnershipEnv.serverDbPath
+    envRw.plexClientId = null
     envRw.plexServerId = null
     envRw.adminSubs = []
     envRw.appleClientId = null
@@ -69,6 +71,7 @@ describe('setupState', () => {
 
   afterAll(() => {
     envRw.SERVER_DB_PATH = originalOwnershipEnv.serverDbPath
+    envRw.plexClientId = originalOwnershipEnv.plexClientId
     envRw.plexServerId = originalOwnershipEnv.plexServerId
     envRw.adminSubs = originalOwnershipEnv.adminSubs
     envRw.appleClientId = originalOwnershipEnv.appleClientId
@@ -130,6 +133,7 @@ describe('setupState', () => {
   })
 
   it.each([
+    ['Plex', () => { envRw.plexClientId = 'stable-public-client-id' }],
     ['Apple', () => { envRw.appleClientId = 'com.example.exchange' }],
     ['Google', () => { envRw.googleClientIds = ['web.example.apps.googleusercontent.com'] }],
   ])('%s configuration alone remains claimable', (_provider, configure) => {
@@ -151,6 +155,7 @@ describe('setupState', () => {
   })
 
   it('warns that configured identity providers still require a passkey claim', () => {
+    envRw.plexClientId = 'SECRET-PLEX-ID'
     envRw.appleClientId = 'SECRET-APPLE-ID'
     envRw.googleClientIds = ['SECRET-GOOGLE-ID']
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
@@ -160,8 +165,10 @@ describe('setupState', () => {
       const line = warn.mock.calls.flat().join(' ')
       expect(line).toContain('passkey')
       expect(line).toContain('setup token')
+      expect(line).toContain('plex')
       expect(line).toContain('apple')
       expect(line).toContain('google')
+      expect(line).not.toContain('SECRET-PLEX-ID')
       expect(line).not.toContain('SECRET-APPLE-ID')
       expect(line).not.toContain('SECRET-GOOGLE-ID')
       expect(line).not.toContain(tokenFromFile())

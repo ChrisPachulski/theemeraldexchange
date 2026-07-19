@@ -35,6 +35,7 @@ function exampleHas(source: string, key: string): boolean {
 }
 
 describe('auth deployment configuration contract', () => {
+  const deployScript = read('scripts/deploy-nas.sh')
   const surfaces = [
     {
       name: 'owner deployment',
@@ -78,6 +79,13 @@ describe('auth deployment configuration contract', () => {
         'SIBLING_ONLY',
       ),
     ).toBe(false)
+  })
+
+  it('keeps the NAS preflight boot-only when Plex has no server id', () => {
+    expect(deployScript).toContain('plex_client_id_value=$(env_value PLEX_CLIENT_ID')
+    expect(deployScript).toContain('if [[ -z "$plex_client_id_value" ]]')
+    expect(deployScript).toContain('This permits boot only')
+    expect(deployScript).not.toMatch(/ANY Plex|open mode/)
   })
 
   it.each(surfaces)('$name passes every supported provider/authz input into the backend', ({ compose }) => {

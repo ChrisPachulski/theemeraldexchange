@@ -59,22 +59,11 @@ export function memberStatus(sub: string): MemberStatus {
 
   if (row) return row.revoked_at === null ? 'allowed' : 'revoked'
 
-  // UN-BOOTSTRAPPED FALL-THROUGH (preserves the legacy bootstrap-mode that
-  // reconcileSession used to key off `!env.plexServerId`). An install that
-  // has configured NO authZ gate at all — no PLEX_SERVER_ID, no ADMIN_SUBS,
-  // no configured identity provider — AND has no members rows yet is a fresh
-  // / single-operator install with nothing to enforce against. In that state
-  // a verified identity is admitted, exactly as before, so the operator isn't
-  // locked out of their own freshly-deployed server before they've had a
-  // chance to seed the allowlist.
-  //
-  // The moment ANY gate is configured (PLEX_SERVER_ID set, ADMIN_SUBS set,
-  // Apple/Google configured) OR the first members row exists, this branch
-  // stops firing and the allowlist becomes strictly authoritative — a sub
-  // with no row is 'not_member' and denied. So enabling invitation-only
-  // access is a one-way door: seed one gate and the fall-through is gone.
-  if (isLoginAuthzBootstrapped()) return 'not_member'
-  return 'allowed'
+  // Fresh-install state is not authorization. First-owner setup has its own
+  // setup-token ceremony; normal provider and bearer paths always require an
+  // immutable admin identity, an active member, an invite, or the explicit
+  // verified Plex-server-share admission performed by the Plex route.
+  return 'not_member'
 }
 
 /**
@@ -90,16 +79,4 @@ export function hasDurableOwnershipGate(): boolean {
     .raw.prepare(`SELECT 1 FROM members LIMIT 1`)
     .get() as unknown
   return anyMember !== undefined
-}
-
-/**
- * True once normal login has an authZ gate to enforce. Identity-provider
- * configuration must fail closed for verified-but-unlisted Apple and Google
- * identities, but it is not durable ownership evidence: first-owner setup
- * deliberately uses hasDurableOwnershipGate() instead.
- */
-export function isLoginAuthzBootstrapped(): boolean {
-  if (env.appleClientId) return true
-  if ((env.googleClientIds ?? []).length > 0) return true
-  return hasDurableOwnershipGate()
 }

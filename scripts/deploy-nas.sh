@@ -179,27 +179,26 @@ case "$session_secret_lower" in
     ;;
 esac
 
-# PLEX_SERVER_ID gates sign-in to members of the household's Plex
-# server. A blank value turns the app into "any Plex user can sign
-# in," so the backend hard-fails at boot in prod unless the operator
-# explicitly opted into bootstrap mode. Mirror that check here so
-# deploy fails fast with a clearer message than a container crash
-# loop.
+# PLEX_SERVER_ID enables verified household-share admission. When Plex login
+# is configured, the backend requires either that id or an explicit boot-only
+# opt-in. The opt-in grants no authorization; mirror the backend check here so
+# deploy fails before a container crash loop.
+plex_client_id_value=$(env_value PLEX_CLIENT_ID || true)
 plex_server_id_value=$(env_value PLEX_SERVER_ID || true)
 allow_unscoped_plex_login_value=$(env_value ALLOW_UNSCOPED_PLEX_LOGIN || true)
-if [[ -n "$plex_server_id_value" ]]; then
+if [[ -z "$plex_client_id_value" ]]; then
+  : # Plex login disabled — no server scope is required.
+elif [[ -n "$plex_server_id_value" ]]; then
   : # populated — good
 elif [[ "$allow_unscoped_plex_login_value" == "1" ]]; then
   echo "[deploy] WARN: PLEX_SERVER_ID is blank and ALLOW_UNSCOPED_PLEX_LOGIN=1 is set." >&2
-  echo "         This means ANY Plex account can sign in. Use only for the brief" >&2
-  echo "         first-deploy window — discover your machineIdentifier via the SPA's" >&2
-  echo "         /api/me discoveredServers payload, set PLEX_SERVER_ID, and remove the" >&2
-  echo "         escape hatch immediately." >&2
+  echo "         This permits boot only; Plex identities still need membership or an invite." >&2
+  echo "         Set PLEX_SERVER_ID and remove the escape hatch as soon as possible." >&2
 else
   echo "ERROR: production env needs PLEX_SERVER_ID (your home Plex server's" >&2
   echo "       machineIdentifier) so sign-in is scoped to household members." >&2
-  echo "       For the first-deploy bootstrap window, set ALLOW_UNSCOPED_PLEX_LOGIN=1" >&2
-  echo "       explicitly to opt into the open mode. See DEPLOY.md." >&2
+  echo "       To permit boot without share admission, set ALLOW_UNSCOPED_PLEX_LOGIN=1." >&2
+  echo "       This does not grant login access. See DEPLOY.md." >&2
   exit 1
 fi
 

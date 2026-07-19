@@ -71,7 +71,7 @@ Open it and fill in:
 | `INTERNAL_PRINCIPAL_SECRET` | `openssl rand -base64 48`. IKM for the internal-principal JWE the backend mints toward recommender/media-core/transcoder. Distinct from every other secret. |
 | `RECOMMENDER_EVENT_SECRET` | `openssl rand -base64 48`. Shared secret signing backend → recommender calls. |
 | `ADMINS` | Your Plex username(s), comma-separated. |
-| `PLEX_SERVER_ID` | **Required in production when Plex login is configured**, unless `ALLOW_UNSCOPED_PLEX_LOGIN=1` explicitly permits emergency boot. The flag does not bypass existing member/provider gates; only a wholly unbootstrapped legacy install retains a first-verified-identity fallback. Prefer setup-token passkey claim, then set your home server's machineIdentifier and remove the opt-in. |
+| `PLEX_SERVER_ID` | **Required in production when Plex login is configured**, unless `ALLOW_UNSCOPED_PLEX_LOGIN=1` explicitly permits emergency boot. The flag grants no login access and never bypasses member/invite authorization. Prefer setup-token passkey claim, then set your home server's machineIdentifier and remove the opt-in. |
 | `ALLOWED_ORIGINS` | `https://theemeraldexchange.com` |
 | `SONARR_URL`, `SONARR_API_KEY` | Existing Sonarr install. |
 | `RADARR_URL`, `RADARR_API_KEY` | Existing Radarr install. |

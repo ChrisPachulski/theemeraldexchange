@@ -135,10 +135,9 @@ const plexClientId = opt('PLEX_CLIENT_ID') ?? null
 
 // PLEX_SERVER_ID is the machineIdentifier of the home Plex server.
 // When set, a verified share on that server is an admission path. When unset,
-// normal membership/provider gates still apply. A wholly unbootstrapped legacy
-// install has a narrow first-identity fallback, so production hard-fails unless
-// the operator explicitly permits boot via ALLOW_UNSCOPED_PLEX_LOGIN=1. The
-// flag does not bypass any existing authorization gate. Only enforce this when
+// normal membership/provider gates still apply. Production hard-fails unless
+// the operator explicitly permits boot via ALLOW_UNSCOPED_PLEX_LOGIN=1; that
+// flag does not bypass authorization. Only enforce this when
 // Plex login is configured; a Plex-free install has no Plex path to scope.
 const plexServerId = opt('PLEX_SERVER_ID') ?? null
 const allowUnscopedPlexLogin = process.env.ALLOW_UNSCOPED_PLEX_LOGIN === '1'
@@ -149,8 +148,8 @@ if (isProd && plexClientId && !plexServerId && !allowUnscopedPlexLogin) {
       'sign-ins to your household). Set it now, or set ' +
       'ALLOW_UNSCOPED_PLEX_LOGIN=1 explicitly to permit emergency boot ' +
       'without a server id (it does not bypass membership/provider gates). ' +
-      'Discover the id via the SPA\'s first login (discoveredServers) ' +
-      'and remove the escape hatch immediately.',
+      'Discover the id via Plex\'s resources API or an invited Plex login, ' +
+      'then remove the escape hatch immediately.',
   )
 }
 

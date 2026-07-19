@@ -137,10 +137,9 @@ passkey.post('/register/verify', async (c) => {
   const { sub, handle, credential } = verified
 
   // ── first-owner claim (plan 006 Phase 1) ─────────────────────────────────
-  // First-owner claimability is separate from normal-login authZ: with no
-  // provider configured memberStatus may still fall open, while Apple/Google
-  // configuration makes it fail closed. Either way, only the boot-minted
-  // setup token enters this OWNER path: role 'admin', a real members row
+  // First-owner claimability is separate from normal-login authZ, which is
+  // always fail closed for identities without a member/admin/invite/share.
+  // Only the boot-minted setup token enters this OWNER path: role 'admin', a real members row
   // (which closes setup for good), and the token burned. Source-gated to
   // private/loopback socket addresses unless SETUP_ALLOW_REMOTE=1
   // (GHSA-mxqh-q9h6-v8pq: never leave first-run ownership claimable by
@@ -182,9 +181,8 @@ passkey.post('/register/verify', async (c) => {
   }
 
   // While the install is claimable there is no admin, therefore no invite
-  // can legitimately exist — an un-tokened registration reaching this point
-  // could only be riding the fall-open window as an anonymous role-'user'.
-  // Close it: pre-claim, passkey registration REQUIRES the setup token.
+  // can legitimately exist. Pre-claim passkey registration requires the setup
+  // token so only the operator who can read the host secret can become owner.
   // (The SPA sees claimable via /api/setup/status and shows the claim flow.)
   if (isClaimable()) {
     return c.json({ error: 'server_unclaimed' }, 403)

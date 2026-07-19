@@ -10,7 +10,7 @@ import path from 'node:path'
 // a bare production backend (no Plex, no *arr, no IPTV, no telemetry, no
 // ALLOWED_ORIGINS) serving the real built SPA same-origin, claimed through
 // the real browser UI with a REAL WebAuthn ceremony (CDP virtual
-// authenticator), then proving the fall-open gate closed and the owner can
+// authenticator), then proving normal login stays fail closed and the owner can
 // mint invites. This is the "a stranger can run one" acceptance test.
 //
 // Spawns its OWN server (the shared integrationServer is a claimed,

@@ -17,7 +17,7 @@ import fs from 'node:fs'
 
 // Point the server.db singleton at a throwaway temp file BEFORE env.ts is
 // evaluated, and clear the gate env vars so the file's default env is
-// UN-bootstrapped except where a test opts in. vi.hoisted runs before the
+// without durable ownership except where a test opts in. vi.hoisted runs before the
 // static imports below, so it must require its own node builtins.
 const { tmpDbDir } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- vi.hoisted runs before ESM init
@@ -29,7 +29,8 @@ const { tmpDbDir } = vi.hoisted(() => {
   const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'membership-test-'))
   process.env.SERVER_DB_PATH = nodePath.join(dir, 'server.db')
 
-  // Start UN-bootstrapped: no env gate configured. Tests opt into each gate.
+  // Start without provider or durable-ownership configuration.
+  delete process.env.PLEX_CLIENT_ID
   delete process.env.PLEX_SERVER_ID
   delete process.env.ADMIN_SUBS
   delete process.env.APPLE_CLIENT_ID
@@ -79,7 +80,8 @@ describe('membership facade — memberStatus', () => {
     fs.rmSync(tmpDbDir, { recursive: true, force: true })
   })
   beforeEach(() => {
-    // Reset to UN-bootstrapped env between cases; individual tests opt in.
+    // Reset provider and ownership configuration between cases.
+    delete process.env.PLEX_CLIENT_ID
     delete process.env.PLEX_SERVER_ID
     delete process.env.ADMIN_SUBS
     delete process.env.APPLE_CLIENT_ID
@@ -89,12 +91,9 @@ describe('membership facade — memberStatus', () => {
     wipe()
   })
 
-  // A) line-47 guard wins over the line-78 fall-through.
+  // A) malformed identities fail closed before any DB lookup.
   it('malformed sub fails closed to not_member without a DB read', async () => {
     const m = await importMembership({})
-    // Env is UN-bootstrapped and there are no members rows, so a VALID sub
-    // would fall through to 'allowed'. An INVALID sub must short-circuit to
-    // 'not_member' FIRST, proving the validity guard wins.
     expect(m.memberStatus('garbage')).toBe('not_member')
     expect(m.memberStatus('not-a-sub')).toBe('not_member')
   })
@@ -136,48 +135,50 @@ describe('membership facade — memberStatus', () => {
     expect(status).not.toBe('not_member')
   })
 
-  // E) line-77 bootstrapped + unknown sub → 'not_member'.
+  // E) unknown identities are denied when a durable owner is configured.
   it('unknown valid sub with a gate configured -> not_member', async () => {
     const m = await importMembership({ ADMIN_SUBS: ADMIN })
     expect(m.memberStatus(BOB)).toBe('not_member')
   })
 
-  // F) line-78 UN-bootstrapped fall-through admits any valid sub.
-  it('UN-bootstrapped install admits any valid sub (fall-through)', async () => {
+  // F) Normal login never substitutes fresh-install state for authorization.
+  it('fresh install denies an unknown valid sub without an invite', async () => {
     const m = await importMembership({
       PLEX_SERVER_ID: undefined,
       ADMIN_SUBS: undefined,
       APPLE_CLIENT_ID: undefined,
       ENABLE_APPLE_SIGN_IN: undefined,
     })
-    expect(m.memberStatus(BOB)).toBe('allowed')
+    expect(m.memberStatus(BOB)).toBe('not_member')
   })
 
-  // G) a single members row flips normal login to fail closed even with zero
-  //    env gate.
-  it('a single members row flips the install to bootstrapped (fall-through gone)', async () => {
+  // G) an active member is allowed while an unknown identity stays denied.
+  it('an active row allows only that member', async () => {
     addMember({ sub: ALICE, authMode: 'apple' }) // one row exists
     const m = await importMembership({}) // still no env gate
-    // The lone members row is a durable gate, so a stranger is denied even
-    // though no env gate is set.
     expect(m.memberStatus(BOB)).toBe('not_member')
     // The seeded member itself is still allowed (it has an active row).
     expect(m.memberStatus(ALICE)).toBe('allowed')
   })
 
-  // H) PLEX_SERVER_ID alone bootstraps normal-login authZ.
-  it('PLEX_SERVER_ID alone bootstraps the gate', async () => {
+  // H) Provider configuration never substitutes for a member decision.
+  it('PLEX_SERVER_ID alone does not grant membership', async () => {
     const m = await importMembership({ PLEX_SERVER_ID: 'machineid123' })
     expect(m.memberStatus(BOB)).toBe('not_member')
   })
 
-  // I) APPLE_CLIENT_ID alone bootstraps normal-login authZ.
-  it('APPLE_CLIENT_ID alone bootstraps the gate', async () => {
+  it('PLEX_CLIENT_ID alone never grants membership', async () => {
+    const m = await importMembership({ PLEX_CLIENT_ID: 'stable-public-client-id' })
+    expect(m.memberStatus(BOB)).toBe('not_member')
+  })
+
+  // I) Federated provider identifiers likewise grant no access.
+  it('APPLE_CLIENT_ID alone does not grant membership', async () => {
     const m = await importMembership({ APPLE_CLIENT_ID: 'com.example.app' })
     expect(m.memberStatus(BOB)).toBe('not_member')
   })
 
-  it('GOOGLE_CLIENT_ID alone bootstraps the gate', async () => {
+  it('GOOGLE_CLIENT_ID alone does not grant membership', async () => {
     const m = await importMembership({
       GOOGLE_CLIENT_ID: 'web.example.apps.googleusercontent.com',
     })

@@ -5,8 +5,8 @@ import fs from 'node:fs'
 // evaluated. vi.hoisted runs before the static imports below (including the
 // fs/path/os imports), so it must require its own node builtins. env.ts reads
 // process.env.SERVER_DB_PATH at its own import time. We also delete every gate
-// env var so the install starts UN-bootstrapped — individual tests opt back
-// into a configured gate via importReconcile(overrides).
+// env var so the install starts without durable ownership configuration —
+// individual tests opt into policy via importReconcile(overrides).
 const { tmpDbDir } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- vi.hoisted runs before ESM init
   const nodeFs = require('node:fs') as typeof import('node:fs')

@@ -12,8 +12,8 @@
 //     install REQUIRES the token — possession of the box's logs/disk is
 //     the proof of ownership.
 //   - finishes: the claim mints the first member row as role 'admin'
-//     (the fall-open used to admit the owner as a row-less 'user', so the
-//     allowlist never seeded and the gate never closed). Writing the row
+//     (older releases could admit an owner as a row-less 'user', so the
+//     allowlist never seeded). Writing the row
 //     creates a durable ownership gate and the window is gone for good.
 //
 // Storage: the existing server_state KV table — no new migration.
@@ -53,8 +53,8 @@ function setState(key: string, value: string): void {
 
 /**
  * True while the install can still be claimed: no durable ownership gate and
- * no explicit claim marker. Apple/Google configuration alone intentionally
- * does not close this path; those providers cannot prove who owns the server.
+ * no explicit claim marker. Identity-provider configuration alone intentionally
+ * does not close this path; a provider client id cannot prove server ownership.
  */
 export function isClaimable(): boolean {
   if (hasDurableOwnershipGate()) return false
@@ -80,6 +80,7 @@ export function ensureSetupToken(): void {
     )
   }
   const configuredProviders: string[] = []
+  if (env.plexClientId) configuredProviders.push('plex')
   if (env.appleClientId) configuredProviders.push('apple')
   if ((env.googleClientIds ?? []).length > 0) configuredProviders.push('google')
   if (configuredProviders.length > 0) {

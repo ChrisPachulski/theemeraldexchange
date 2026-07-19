@@ -16,9 +16,8 @@ flash the public sign-in screen.
 
 Authorization is separate from authentication. Normal login requires an immutable `ADMIN_SUBS`
 entry, an active member row, invite redemption, or the explicit configured-Plex-server share
-path. Provider configuration alone never grants access. A wholly unbootstrapped legacy install
-(no server id, admin sub, Apple/Google provider, or member row) retains a narrow first verified
-identity fallback; setup-token passkey claim is preferred, and any durable gate closes it.
+path. Provider configuration and fresh-install state never grant access. First ownership uses the
+host-protected setup-token passkey ceremony.
 
 ## Plex polling and rate limits
 

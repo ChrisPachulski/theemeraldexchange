@@ -159,10 +159,8 @@ describe('env — trusted client IP headers', () => {
 })
 
 describe('env — production gating on PLEX_SERVER_ID (auth scope)', () => {
-  // Without PLEX_SERVER_ID set, server/auth.ts accepts ANY authenticated
-  // Plex user. In prod, blank PLEX_SERVER_ID would silently turn the
-  // invitation-only app into "any Plex user can sign in." Hard-fail
-  // unless the operator explicitly opted into bootstrap mode.
+  // This is a production configuration assertion, not an authorization
+  // bypass: normal login remains fail closed when the opt-in permits boot.
   it('production with unset PLEX_SERVER_ID throws', async () => {
     setBaselineEnv()
     process.env.NODE_ENV = 'production'
@@ -181,7 +179,7 @@ describe('env — production gating on PLEX_SERVER_ID (auth scope)', () => {
     await expect(loadEnv()).rejects.toThrow(/PLEX_SERVER_ID/)
   })
 
-  it('production with explicit ALLOW_UNSCOPED_PLEX_LOGIN=1 boots open (bootstrap)', async () => {
+  it('production with explicit ALLOW_UNSCOPED_PLEX_LOGIN=1 permits boot without a server id', async () => {
     setBaselineEnv()
     process.env.NODE_ENV = 'production'
     process.env.ALLOWED_ORIGINS = 'https://app.example'

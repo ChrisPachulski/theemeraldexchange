@@ -271,7 +271,7 @@ describe('first-owner claim (plan 006 Phase 1)', () => {
     expect(setSessionCookie).not.toHaveBeenCalled()
   })
 
-  it('SECURITY: while claimable, an un-tokened registration is refused (fall-open closed)', async () => {
+  it('SECURITY: while claimable, an un-tokened registration is refused', async () => {
     webauthn.verifyRegistration.mockResolvedValue(verified)
     setupState.isClaimable.mockReturnValue(true)
 
