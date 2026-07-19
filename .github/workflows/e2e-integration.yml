@@ -84,6 +84,13 @@ jobs:
       - name: Install real Chrome (proprietary codecs)
         run: npx playwright install chrome
 
+      # The bare self-host journey boots the production server, whose runtime
+      # contract intentionally rejects FFmpeg versions below 6.0.
+      - name: Install FFmpeg runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes ffmpeg
+
       - name: Integration tier (real backend, zero mocks)
         run: npm run test:e2e:integration
 
