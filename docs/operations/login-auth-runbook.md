@@ -32,6 +32,37 @@ member revocation on every login/session surface. To remove one, delete the exac
 `ADMIN_SUBS`, restart or redeploy so policy reloads, then revoke any remaining member row. The
 durable ownership marker keeps setup closed; it does not preserve the removed administrator role.
 
+## Lost owner credential recovery (break glass)
+
+Use this only when setup is already sealed and no active administrator credential can authenticate.
+It does not reopen first-owner setup, and the setup marker or migration tables must never be edited as
+a recovery shortcut.
+
+1. Take the normal server database and deployment-configuration backup before changing authority.
+2. Choose a configured provider identity whose cryptographic/provider proof the owner can still
+   complete. Establish its exact namespaced subject (`plex:`, `apple:`, or `google:`) from a controlled
+   provider/operator source; never derive it from a display name or email and never paste it into logs or
+   tickets. A lost passkey identity is intentionally absent: without its credential it cannot prove the
+   existing `local:` subject, and a fresh registration creates a different subject.
+3. Add only that exact subject to `ADMIN_SUBS` in the deployment source of truth, then use the normal
+   guarded restart/deploy so policy reloads. Do not enable remote setup or resurrect a setup token.
+4. Complete that provider login and verify `/api/me` reports the expected administrator, setup remains
+   `claimable:false`, and exactly one correlated `authorized` auth outcome is emitted.
+5. From the recovered administrator session, create and test a replacement through the normal
+   member/invite/passkey workflow. Invite redemption creates a `user`; there is no database-role promotion
+   endpoint.
+6. Add the replacement's now-known exact subject to `ADMIN_SUBS` while retaining the original break-glass
+   subject, then guarded-deploy and verify the replacement can authenticate as administrator with
+   setup still sealed.
+7. Only after that proof, remove the original subject in a second guarded deployment. Verify the
+   replacement administrator again, then revoke any remaining row for the original subject. Never leave
+   the deployment without at least one tested administrator authority.
+
+If the exact provider subject cannot be established or no configured provider proof remains possible,
+stop and restore through the normal backup/operator process; do not guess an identity or patch the live
+database. The L2 recovery milestone replaces this manual path with multiple credentials and a separately
+verified, short-lived recovery grant.
+
 ## Plex polling and rate limits
 
 The browser owns one completion-scheduled poll loop per attempt. It waits 2.5 seconds after a
@@ -76,6 +107,10 @@ Plex pending polls intentionally emit no outcome event. Exactly one event is exp
 denied, invalid, rate-limited, or transient terminal request; free-text context and
 identity-derived correlation fields are forbidden.
 
+No paging or threshold alert is attached to `auth_outcome` yet; the events are forensic until the L3
+auth-detection milestone lands. Until then, inspect them after every auth incident and production auth
+rollout rather than assuming they are actively watched.
+
 Per-member settings caches include the provider subject in their internal cache key. Secret-setting
 mutations also carry an expected-sub binding that the authenticated route checks before writing or
 deleting, so a shared-device account switch cannot redirect an in-flight migration to the next member.
@@ -109,6 +144,11 @@ Self-host serves the SPA and API from one origin by default. The owner deploymen
 origin until its edge routes `/api/*` through the canonical web host; it therefore requires an
 exact `ALLOWED_ORIGINS` list and uses the cross-site cookie posture reported at boot.
 
+In that owner topology, `/api/version` may report `schemas.exchange: {"present":false}` because the
+recommender database volume is deliberately mounted only into `exchange-recommender`, not the backend
+that serves the version probe. Treat recommender container health and its own migration verification as
+authoritative; this field is not the server/auth migration state.
+
 ## Rollout and rollback signals
 
 Rollback is warranted for a new `/api/me` revalidation loop, provider-success/session-confirmation
@@ -118,15 +158,17 @@ not edit an applied migration or restore a database without the normal backup wo
 
 ## Best-in-class roadmap
 
-1. Route `/api/*` through the canonical web origin. Prove forwarded host/scheme first, then use a
-   host-only `SameSite=Lax` cookie and remove browser CORS from the auth path.
-2. Make passkeys primary: allow multiple named credentials per member, prevent removal of the
-   final credential, and add recovery through a separately verified provider or owner-issued,
-   short-lived recovery grant.
-3. Add explicit idle and absolute session expiry, renew after privilege changes, and mark every
-   session-bearing response `Cache-Control: no-store`. Introduce server-side session state only
-   if browser-wide revocation or a materially shorter stolen-cookie window justifies it.
-4. Roll out CSP in report-only mode, inventory Apple/Google/WebAuthn/worker/media dependencies,
-   then enforce it with `object-src 'none'`, `base-uri`, and `form-action` restrictions.
-5. Keep Chromium virtual-authenticator coverage and add small Firefox/WebKit login smoke tiers.
-6. Replace broad originless native-bootstrap exemptions with one explicit device-pair contract.
+- **L2 — Passkey recovery:** allow multiple named credentials per member, prevent removal of the final
+  credential, and add recovery through a separately verified provider or owner-issued, short-lived
+  recovery grant.
+- **L3 — Auth detection:** alert on sustained low-cardinality `denied`, `rate_limited`, and `transient`
+  outcomes, and keep a credential-free login/session-confirmation synthetic. Pending polls and identity
+  fields stay out of event and alert dimensions.
+- **L4 — Single-origin auth:** route `/api/*` through the canonical web origin. Prove forwarded
+  host/scheme first, then use a host-only `SameSite=Lax` cookie and remove browser CORS from the auth path.
+- **L5 — Hardened lifecycle:** add idle and absolute session expiry, renew after privilege changes, mark
+  session-bearing responses `Cache-Control: no-store`, enforce CSP after a clean report-only period, add
+  Firefox/WebKit smoke tiers, and replace broad originless native-bootstrap exemptions with one explicit
+  device-pair contract.
+- **L6 — Session-store decision:** introduce server-side session state only if browser-wide revocation,
+  device inventory, or a materially shorter stolen-cookie window justifies it.

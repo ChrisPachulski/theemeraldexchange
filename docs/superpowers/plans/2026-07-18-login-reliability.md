@@ -17,8 +17,8 @@
 | 1–11: limiter, poller, session truth, provider UI, authZ/schema/CSRF/passkey/admin/privacy/lifecycle | Implemented and independently reviewed | Focused unit/DOM/route/build gates green. |
 | 12: protected-request expiry precision | Integrated; independent re-review Ready | Exact expiry classification, full producer inventory, single-flight `/api/me`, 659 client tests, focused server tests, SPA build, and lint green. |
 | 13: deployment posture and strict first-owner semantics | Integrated; independent re-review Ready | Seal every proven effective-admin login with a durable marker, preserve env-driven demotion, and share one member verdict across passkey/provider/cookie/bearer paths; 2,781 tests, configuration contract, server build/lint, real-restart probes, Claude consensus, and independent re-review green. |
-| 14: browser and production proof | Integrated; independent re-review Ready | Mocked Plex flow repeated 9/9 and real owner/member/reuse-denial journey repeated 3/3; final CI-equivalent and credential-free production synthetics remain release gates. |
-| 15: future roadmap | Design committed with this release | Each milestone has explicit exit criteria; no architecture rewrite is smuggled into the incident patch. |
+| 14: browser and production proof | Released; live gate independently Ready | Mocked Plex flow repeated 9/9 and real owner/member/reuse-denial journey repeated 3/3; production then completed 62/62 two-PIN shared-client checks without a 429, cookie, or authorization, with exact release/schema/logging checks green. A real credentialed ceremony remains intentionally deferred. |
+| 15: future roadmap | Reprioritized from production evidence | Recovery and multiple passkeys precede the now-proven-healthy split-origin migration; alerting, single-origin auth, lifecycle/CSP, and the evidence-based session-store decision retain explicit exit criteria. |
 
 No slice advances merely because its own focused test passes. The integration branch is rebuilt and retested from a clean process after every accepted review remediation.
 
@@ -291,11 +291,9 @@ No slice advances merely because its own focused test passes. The integration br
 - This design document
 - Future milestone/issue tracker chosen by the maintainer
 
-1. Prove proxy Host/scheme preservation.
-2. Plan canonical same-origin `/api/*` routing and SameSite migration.
-3. Design multiple passkeys, last-credential protection, and recovery.
-4. Roll out report-only then enforced CSP.
-5. Narrow native CSRF bootstrap exemptions.
-6. Add Firefox/WebKit auth smoke coverage.
-7. Reassess server-side session revocation only after recovery and single-origin work.
-8. Add Apple/Google variables to root and self-host Compose/examples, and contract-test provider deployment configuration.
+- **L2 — Passkey recovery:** design multiple passkeys, last-credential protection, and separately verified recovery.
+- **L3 — Auth detection:** attach low-cardinality alerting and credential-free availability synthetics to the new auth outcome contract.
+- **L4 — Single-origin auth:** prove proxy Host/scheme preservation, then plan canonical `/api/*` routing and the SameSite migration.
+- **L5 — Hardened lifecycle:** roll out report-only then enforced CSP, narrow native CSRF bootstrap exemptions to an explicit device-pair contract, and add Firefox/WebKit auth smoke coverage.
+- **L6 — Session-store decision:** reassess server-side session revocation only after recovery, alerting, and single-origin work.
+- **Ongoing deployment contract:** keep Apple/Google variables contract-tested across root and self-host Compose/examples before either provider is enabled.

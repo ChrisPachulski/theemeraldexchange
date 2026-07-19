@@ -1,8 +1,13 @@
 # Login Reliability and Security Design
 
-**Status:** Implemented; final verification and production rollout in progress
+**Status:** Implemented, independently verified, and deployed
 
 **Date:** 2026-07-18
+
+**Deployed application release:** `8a023c09` (2026-07-18 21:21 PDT / 2026-07-19 04:21 UTC)
+
+**Live verification boundary:** credential-free production auth synthetics are green; no real Plex or
+passkey credential ceremony was performed during rollout.
 
 **Owners:** The Emerald Exchange maintainers
 **Scope:** Web login, session bootstrap and expiry, Plex polling, auth throttling, provider/bootstrap authorization, passkey registration, deployment configuration, and auth operations
@@ -15,7 +20,7 @@ The work is split into three deliberately separate layers:
 
 1. **Incident repair:** make Plex polling single-flight and backoff-aware; raise the shared-IP abuse backstop; confirm every cookie-setting login through `/api/me`; distinguish a real 401 from a transient API outage; and make the active provider explicit in UI state.
 2. **Immediate authorization hardening:** decouple first-owner claimability from provider configuration, close the Google-only fall-open path without creating another owner lockout, and make invite redemption plus passkey persistence atomic.
-3. **Future architecture:** converge the SPA and API onto one browser origin, make passkeys the primary login with recovery and multiple credentials, add strict CSP, and only then reconsider server-side sessions if the household-scale threat model warrants them.
+3. **Future architecture:** make passkeys recoverable and support multiple credentials first, add alerting to the new auth outcomes, converge the SPA and API onto one browser origin, add strict CSP, and only then reconsider server-side sessions if the household-scale threat model warrants them.
 
 The first two layers are to be implemented and verified independently so an authZ change cannot obscure whether the production login incident is fixed.
 
@@ -348,7 +353,7 @@ Real operator/member login is not required for the synthetic checks and must not
 | Public proxy looks like loopback during owner claim | Trusted proxy client address precedes socket address | Public/private/spoofed-header route tests in both trust modes | Tailscale Serve remains private; Funnel/other public exposure requires explicit remote-claim posture. |
 | Invite is burned without a credential | One outer database transaction | Injected credential-write failure rollback test | Preserve DB backup and migration checks before rollout. |
 | Auth config exists in code but not deployment | Compose/template contract plus boot posture | Contract test over both Compose surfaces | Fail deployment before container recreation. |
-| Split-origin drift breaks cookies/WebAuthn | Exact configured origins and RP validation | Canonical-origin CORS/CSRF/passkey synthetics | Remove the class through the L2 single-origin milestone. |
+| Split-origin drift breaks cookies/WebAuthn | Exact configured origins and RP validation | Canonical-origin CORS/CSRF/passkey synthetics | Remove the class through the L4 single-origin milestone. |
 | A black-holed provider request wedges every login control | Attempt-scoped abort plus bounded fetch legs; Plex deadline includes setup | Never-settling fetch and second-attempt DOM regressions for every provider | Track timeout outcomes separately from credential denial. |
 | A shared-device account switch races a secret mutation | Subject-scoped cache, generation/abort guard, and expected-sub server binding | Mid-migration principal-flip test proves no cross-principal write, cache update, or local deletion | Keep every future per-member mutation explicitly bound to its initiating principal. |
 | Auth failures cannot be diagnosed safely | Closed structured outcome schema with request ID, rounded duration, and a strict field allowlist | Exactly-once/redaction tests across all terminal provider seams; pending polls produce no event | Alert on bounded outcome counts without adding identity or credential fields. |
@@ -369,11 +374,7 @@ Rollback triggers include new 401 loops, repeated session-confirmation false neg
 
 The immediate repair follows the current guidance in [NIST SP 800-63B](https://pages.nist.gov/800-63-4/sp800-63b.html), [WebAuthn Level 3](https://www.w3.org/TR/webauthn-3/), the [OAuth 2.0 Security Best Current Practice](https://www.rfc-editor.org/rfc/rfc9700.html), and the [OWASP Session Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html). The staged roadmap is intentionally ordered so recovery and observability arrive before a larger session-store migration.
 
-### 1. Single browser origin
-
-Route `/api/*` through the canonical web origin or serve the SPA from the backend. This removes cross-origin cookies and CORS from browser auth, allows host-only `SameSite=Lax` cookies, simplifies same-host CSRF enforcement, and lets the WebAuthn RP derive from one canonical origin. Before migration, prove that the edge preserves the public Host and scheme.
-
-### 2. Passkey-first with recovery
+### L2 — Passkey-first with recovery
 
 Support multiple credentials per member, credential naming/removal, recovery using a separately verified provider or owner-issued recovery grant, and clear last-credential safeguards. Keep Plex as an optional bootstrap/recovery provider rather than the only path.
 
@@ -381,15 +382,19 @@ Never merge identities from matching email/display-name claims alone. Linking a 
 
 The WebAuthn design continues to require discoverable credentials and user verification, aligned with [Web Authentication Level 3](https://www.w3.org/TR/webauthn-3/).
 
-### 3. Session lifecycle hardening
+### L3 — Operational detection and alerting
+
+Turn the low-cardinality `auth_outcome` contract into detection, not just forensic evidence. Alert on sustained provider-specific increases in `denied`, `rate_limited`, or `transient` outcomes; normal Plex `pending` checks remain event-free. Track the credential-free login synthetic and session-confirmation success rate separately so an availability regression pages before a household reports it. Alerts use provider, phase, outcome, and reason only—never identity, address, PIN, invite, credential, or session material—and link directly to the auth runbook.
+
+### L4 — Single browser origin
+
+Route `/api/*` through the canonical web origin or serve the SPA from the backend. This removes cross-origin cookies and CORS from browser auth, allows host-only `SameSite=Lax` cookies, simplifies same-host CSRF enforcement, and lets the WebAuthn RP derive from one canonical origin. Before migration, prove that the edge preserves the public Host and scheme.
+
+### L5 — Session lifecycle and defense in depth
 
 Add explicit idle and absolute expiry policy, session renewal after privilege changes, `Cache-Control: no-store` on session-bearing responses, and lifecycle telemetry. These follow the [OWASP Session Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html).
 
 High-impact administrator actions (role/membership changes, recovery issuance, credential removal, and global sign-out) require recent user verification. Session and recovery telemetry records only opaque correlation identifiers and outcomes; it never contains provider assertions, credential IDs, invite/recovery material, or account subjects.
-
-Server-side session generation/revocation should be introduced only if true browser-wide revocation, device inventory, or a shorter stolen-cookie window becomes a requirement. At household scale, the current per-request membership reconciliation already provides most of the authorization-revocation value.
-
-### 4. Defense in depth
 
 - Roll out a report-only CSP, inventory Apple/font/API/media/worker dependencies, then enforce `default-src`, `script-src`, `connect-src`, `object-src 'none'`, `base-uri`, and `form-action`.
 - Restrict native cookieless CSRF bypasses to an explicit device-pair bootstrap contract rather than every matching auth path.
@@ -398,15 +403,20 @@ Server-side session generation/revocation should be introduced only if true brow
 - Add a small Firefox/WebKit auth smoke tier while keeping CDP virtual-authenticator tests Chromium-specific.
 - Continue provider and identity throttling consistent with the [OWASP Authentication Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html).
 
+### L6 — Evidence-based session-store decision
+
+Server-side session generation/revocation should be introduced only if true browser-wide revocation, device inventory, or a shorter stolen-cookie window becomes a measured requirement. At household scale, the current per-request membership reconciliation already provides most of the authorization-revocation value. Record the decision either way instead of assuming that a larger session system is inherently safer.
+
 ### Delivery milestones and exit criteria
 
 | Milestone | Deliverable | Exit criteria |
 |---|---|---|
-| L1 — reliability baseline | The incident repair, cross-provider authorization symmetry, and ownership hardening in this release | Two same-address Plex attempts cross the former limit without local 429; every provider confirms through `/api/me` and the shared member verdict; full unit, integration, browser, configuration-contract, and production synthetic checks are green. |
-| L2 — single-origin auth | Canonical `/api/*` proxy, host-only cookie, same-host CSRF, canonical WebAuthn RP | Forwarded host/scheme are proven; cross-origin auth CORS is removed; Lax-cookie and CSRF tests pass at the public origin; rollback is rehearsed. |
-| L3 — passkey-first recovery | Multiple named passkeys, last-credential guard, separately verified recovery, credential inventory | Losing one authenticator cannot orphan an account; recovery cannot bypass membership or owner policy; backup/sync state is visible without treating it as proof of user verification. |
-| L4 — hardened lifecycle | Idle/absolute expiry, privilege-change renewal, no-store responses, CSP enforcement, Firefox/WebKit smoke | Expiry/revocation is observable and bounded across tabs/devices; report-only CSP has zero unexplained violations before enforcement; all three browser engines pass the login smoke tier. |
-| L5 — session-store decision | Evidence-based decision record, not an assumed rewrite | Add server-side sessions only if measured requirements demand browser-wide revocation, device inventory, or a shorter stolen-cookie window; otherwise retain the simpler encrypted-cookie model. |
+| L1 — reliability baseline | The incident repair, cross-provider authorization symmetry, and ownership hardening in this release | Two same-address Plex attempts cross the former limit without local 429; every provider success path confirms through `/api/me` and the shared member verdict in integration coverage; full unit, browser, configuration-contract, and credential-free production synthetic checks are green. |
+| L2 — passkey-first recovery | Multiple named passkeys, last-credential guard, separately verified recovery, credential inventory | Losing one authenticator cannot orphan an account; recovery cannot bypass membership or owner policy; backup/sync state is visible without treating it as proof of user verification. |
+| L3 — auth detection | Outcome alerts plus credential-free availability and session-confirmation synthetics | Sustained denied/rate-limited/transient regressions page with a runbook link; normal pending traffic and identity-derived fields never enter alert dimensions. |
+| L4 — single-origin auth | Canonical `/api/*` proxy, host-only cookie, same-host CSRF, canonical WebAuthn RP | Forwarded host/scheme are proven; cross-origin auth CORS is removed; Lax-cookie and CSRF tests pass at the public origin; rollback is rehearsed. |
+| L5 — hardened lifecycle | Idle/absolute expiry, privilege-change renewal, no-store responses, CSP enforcement, explicit native pairing, Firefox/WebKit smoke | Expiry/revocation is observable and bounded across tabs/devices; report-only CSP has zero unexplained violations before enforcement; all three browser engines pass the login smoke tier. |
+| L6 — session-store decision | Evidence-based decision record, not an assumed rewrite | Add server-side sessions only if measured requirements demand browser-wide revocation, device inventory, or a shorter stolen-cookie window; otherwise retain the simpler encrypted-cookie model. |
 
 ## Out of scope for this incident
 
