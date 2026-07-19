@@ -458,7 +458,7 @@ export const env = {
   /** Empty string in dev when not configured; mintInternalPrincipal asserts non-empty. */
   internalPrincipalSecret: rawInternalPrincipalSecret,
   admins: csv('ADMINS'),
-  /** Namespaced subs (apple:/plex:) that are admins + implicitly allowed
+  /** Namespaced subs (apple:/plex:/google:/local:) that are admins + implicitly allowed
    *  without an invite (owner bootstrap). parseSub-validated at boot. */
   adminSubs,
   /** SIWA `aud` — Apple Services ID / bundle id. null when unconfigured. */

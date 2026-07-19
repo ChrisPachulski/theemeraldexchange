@@ -105,7 +105,7 @@ services:
       EEX_TELEMETRY_DSN_INTERNAL: "${EEX_TELEMETRY_DSN_INTERNAL:-}"
       TELEMETRY_ENABLED: "${TELEMETRY_ENABLED:-}"
       ADMINS: "${ADMINS:-}"
-      # Owner-bootstrap + admin namespaced subs (apple:/plex:/local:). The
+      # Owner-bootstrap + admin namespaced subs (apple:/plex:/google:/local:). The
       # auth overhaul added env.ts READING of ADMIN_SUBS but not this
       # passthrough, so the value lived in .env yet never reached the
       # container — which silently locked the owner out the moment the

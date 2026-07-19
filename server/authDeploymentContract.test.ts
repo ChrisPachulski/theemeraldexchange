@@ -12,22 +12,28 @@ function backendEnvironment(source: string): string {
   const lines = source.split('\n')
   const backendStart = lines.findIndex((line) => /^ {2}backend:\s*$/.test(line))
   if (backendStart === -1) return ''
-
-  const environmentStart = lines.findIndex(
-    (line, index) => index > backendStart && /^ {4}environment:\s*$/.test(line),
+  const nextService = lines.findIndex(
+    (line, index) =>
+      index > backendStart && /^ {2}[A-Za-z0-9_-]+:\s*$/.test(line),
   )
+  const backend = lines.slice(backendStart + 1, nextService === -1 ? undefined : nextService)
+
+  const environmentStart = backend.findIndex((line) => /^ {4}environment:\s*$/.test(line))
   if (environmentStart === -1) return ''
 
-  const environmentEnd = lines.findIndex(
+  const environmentEnd = backend.findIndex(
     (line, index) => index > environmentStart && /^ {4}\S/.test(line),
   )
-  return lines
+  return backend
     .slice(environmentStart + 1, environmentEnd === -1 ? undefined : environmentEnd)
     .join('\n')
 }
 
 function composeHas(source: string, key: string): boolean {
-  return new RegExp(`^\\s{6}${key}:`, 'm').test(backendEnvironment(source))
+  return new RegExp(
+    `^\\s{6}${key}:\\s*["']?\\$\\{${key}(?::-[^}]*)?\\}["']?\\s*$`,
+    'm',
+  ).test(backendEnvironment(source))
 }
 
 function exampleHas(source: string, key: string): boolean {
@@ -40,7 +46,7 @@ describe('auth deployment configuration contract', () => {
     {
       name: 'owner deployment',
       compose: read('docker-compose.yml'),
-      example: read('.env.example'),
+      example: read('.env.production.example'),
     },
     {
       name: 'published self-host deployment',
@@ -77,6 +83,36 @@ describe('auth deployment configuration contract', () => {
           '      SIBLING_ONLY: value',
         ].join('\n'),
         'SIBLING_ONLY',
+      ),
+    ).toBe(false)
+  })
+
+  it('requires backend.environment to exist before accepting a later service input', () => {
+    expect(
+      composeHas(
+        [
+          'services:',
+          '  backend:',
+          '    image: backend',
+          '  worker:',
+          '    environment:',
+          '      SIBLING_ONLY: "${SIBLING_ONLY:-}"',
+        ].join('\n'),
+        'SIBLING_ONLY',
+      ),
+    ).toBe(false)
+  })
+
+  it('rejects a hardcoded backend value that does not pass through the named input', () => {
+    expect(
+      composeHas(
+        [
+          'services:',
+          '  backend:',
+          '    environment:',
+          '      AUTH_INPUT: hardcoded',
+        ].join('\n'),
+        'AUTH_INPUT',
       ),
     ).toBe(false)
   })

@@ -40,6 +40,9 @@ Both return `429` and a browser-readable `Retry-After`; neither is a terminal cr
 1. Check `/api/health`, `/api/version`, and `/api/auth/methods` from the canonical browser origin.
 2. Find the single boot row tagged `authentication posture`. Confirm provider booleans,
    same-origin/split-origin mode, trusted-header mode, allowed origins, and WebAuthn RP settings.
+   `request-derived` means same-origin passkeys bind to the checked request host/origin;
+   `configured` means the logged RP values are used. Any `invalid_origin` or `invalid_rp_id` is a
+   configuration failure, not a harmless redaction.
 3. Correlate terminal auth events by request id and provider/outcome. Never add PIN, invite,
    identity, IP, token, assertion, or cookie fields while debugging.
 4. For repeated local `429`s, identify the limiter scope. Normal two-user polling must fit below
