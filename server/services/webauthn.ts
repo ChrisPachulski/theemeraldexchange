@@ -58,6 +58,8 @@ interface CredentialRow {
   backed_up: number
 }
 
+export class WebAuthnVerificationError extends Error {}
+
 // ── challenge store (single-use, TTL-swept) ─────────────────────────────────
 
 function sweepExpiredChallenges(nowIso: string): void {
@@ -151,17 +153,22 @@ export async function verifyRegistration(
   rp?: RpOverride,
 ): Promise<{ sub: string; handle: string; credential: VerifiedCredential }> {
   const ch = takeChallenge(challengeId, 'register')
-  if (!ch || !ch.pending_sub) throw new Error('challenge_invalid')
+  if (!ch || !ch.pending_sub) throw new WebAuthnVerificationError('challenge_invalid')
 
-  const verification = await verifyRegistrationResponse({
-    response,
-    expectedChallenge: ch.challenge,
-    expectedOrigin: rp ? [rp.origin] : env.webauthnOrigins,
-    expectedRPID: rp?.rpId ?? env.webauthnRpId,
-    requireUserVerification: true,
-  })
+  let verification: Awaited<ReturnType<typeof verifyRegistrationResponse>>
+  try {
+    verification = await verifyRegistrationResponse({
+      response,
+      expectedChallenge: ch.challenge,
+      expectedOrigin: rp ? [rp.origin] : env.webauthnOrigins,
+      expectedRPID: rp?.rpId ?? env.webauthnRpId,
+      requireUserVerification: true,
+    })
+  } catch {
+    throw new WebAuthnVerificationError('registration_unverified')
+  }
   if (!verification.verified || !verification.registrationInfo) {
-    throw new Error('registration_unverified')
+    throw new WebAuthnVerificationError('registration_unverified')
   }
 
   const { credential, credentialBackedUp } = verification.registrationInfo
@@ -228,7 +235,7 @@ export async function verifyLogin(
   rp?: RpOverride,
 ): Promise<{ sub: string }> {
   const ch = takeChallenge(challengeId, 'login')
-  if (!ch) throw new Error('challenge_invalid')
+  if (!ch) throw new WebAuthnVerificationError('challenge_invalid')
 
   const row = serverDb()
     .raw.prepare(
@@ -236,22 +243,29 @@ export async function verifyLogin(
          FROM webauthn_credentials WHERE credential_id = ?`,
     )
     .get(response.id) as CredentialRow | undefined
-  if (!row) throw new Error('credential_unknown')
+  if (!row) throw new WebAuthnVerificationError('credential_unknown')
 
-  const verification = await verifyAuthenticationResponse({
-    response,
-    expectedChallenge: ch.challenge,
-    expectedOrigin: rp ? [rp.origin] : env.webauthnOrigins,
-    expectedRPID: rp?.rpId ?? env.webauthnRpId,
-    requireUserVerification: true,
-    credential: {
-      id: row.credential_id,
-      publicKey: new Uint8Array(row.public_key),
-      counter: row.counter,
-      transports: row.transports ? (JSON.parse(row.transports) as []) : undefined,
-    },
-  })
-  if (!verification.verified) throw new Error('authentication_unverified')
+  let verification: Awaited<ReturnType<typeof verifyAuthenticationResponse>>
+  try {
+    verification = await verifyAuthenticationResponse({
+      response,
+      expectedChallenge: ch.challenge,
+      expectedOrigin: rp ? [rp.origin] : env.webauthnOrigins,
+      expectedRPID: rp?.rpId ?? env.webauthnRpId,
+      requireUserVerification: true,
+      credential: {
+        id: row.credential_id,
+        publicKey: new Uint8Array(row.public_key),
+        counter: row.counter,
+        transports: row.transports ? (JSON.parse(row.transports) as []) : undefined,
+      },
+    })
+  } catch {
+    throw new WebAuthnVerificationError('authentication_unverified')
+  }
+  if (!verification.verified) {
+    throw new WebAuthnVerificationError('authentication_unverified')
+  }
 
   serverDb()
     .raw.prepare(`UPDATE webauthn_credentials SET counter = ?, last_used_at = ? WHERE credential_id = ?`)

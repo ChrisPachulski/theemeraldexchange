@@ -25,6 +25,7 @@ import {
   persistCredential,
   beginLogin,
   verifyLogin,
+  WebAuthnVerificationError,
   type RpOverride,
 } from '../services/webauthn.js'
 import { env } from '../env.js'
@@ -48,6 +49,7 @@ import { serverDb } from '../services/serverDb.js'
 import { getConnInfo } from '@hono/node-server/conninfo'
 import { resolveClientAddress } from '../services/clientAddress.js'
 import { effectiveRoleFor } from '../services/sessionGate.js'
+import { withAuthOutcome } from '../services/authOutcome.js'
 
 export const passkey = new Hono<Env>()
 
@@ -97,23 +99,34 @@ function rpForRequest(c: Context): RpOverride | undefined {
 
 // ── registration ────────────────────────────────────────────────────────────
 
-passkey.post('/register/options', async (c) => {
-  const limited = enforceAuthRateLimit(c, 'passkey')
+passkey.post('/register/options', (c) =>
+  withAuthOutcome(c, 'passkey', 'register_options', async (authOutcome) => {
+  const limited = enforceAuthRateLimit(c, 'passkey', undefined, authOutcome)
   if (limited) return limited
   const body = await c.req.json().catch(() => null)
   const handle = cleanHandle(body?.handle)
-  if (!handle) return c.json({ error: 'invalid_handle' }, 400)
+  if (!handle) {
+    authOutcome.record('invalid', 'invalid_request')
+    return c.json({ error: 'invalid_handle' }, 400)
+  }
   // Identity-keyed bucket (per attempted handle): blunts challenge-table burn
   // targeted at one handle even when per-client IP buckets are not engaged.
-  const identityLimited = enforceAuthIdentityRateLimit(c, 'passkey', `handle:${handle}`)
+  const identityLimited = enforceAuthIdentityRateLimit(
+    c,
+    'passkey',
+    `handle:${handle}`,
+    authOutcome,
+  )
   if (identityLimited) return identityLimited
 
   const { options, challengeId } = await beginRegistration(handle, rpForRequest(c))
   return c.json({ options, challengeId })
-})
+  }),
+)
 
-passkey.post('/register/verify', async (c) => {
-  const limited = enforceAuthRateLimit(c, 'passkey')
+passkey.post('/register/verify', (c) =>
+  withAuthOutcome(c, 'passkey', 'register_verify', async (authOutcome) => {
+  const limited = enforceAuthRateLimit(c, 'passkey', undefined, authOutcome)
   if (limited) return limited
   const body = await c.req.json().catch(() => null)
   const challengeId = typeof body?.challengeId === 'string' ? body.challengeId : null
@@ -122,19 +135,27 @@ passkey.post('/register/verify', async (c) => {
   const deviceLabel =
     typeof body?.deviceLabel === 'string' ? body.deviceLabel.trim().slice(0, MAX_LABEL) : null
   if (!challengeId || !response || typeof response !== 'object') {
+    authOutcome.record('invalid', 'invalid_request')
     return c.json({ error: 'invalid_request' }, 400)
   }
   // Identity-keyed bucket (per attempted credential id) — applies regardless
   // of IP-header trust; see enforceAuthIdentityRateLimit.
   const credId = credentialIdOf(response)
-  const identityLimited = enforceAuthIdentityRateLimit(c, 'passkey', credId ? `cred:${credId}` : null)
+  const identityLimited = enforceAuthIdentityRateLimit(
+    c,
+    'passkey',
+    credId ? `cred:${credId}` : null,
+    authOutcome,
+  )
   if (identityLimited) return identityLimited
 
   let verified
   try {
     verified = await verifyRegistration(challengeId, response, rpForRequest(c))
-  } catch {
+  } catch (error) {
+    if (!(error instanceof WebAuthnVerificationError)) throw error
     // Wrong/expired challenge or a failed attestation — never leak which.
+    authOutcome.record('invalid', 'verification_failed')
     return c.json({ error: 'registration_failed' }, 400)
   }
 
@@ -163,9 +184,11 @@ passkey.post('/register/verify', async (c) => {
       socketAddress,
     })
     if (!claimSourceAllowed(client?.address)) {
+      authOutcome.record('denied', 'setup_claim_denied')
       return c.json({ error: 'claim_source_blocked' }, 403)
     }
     if (!verifySetupToken(setupToken)) {
+      authOutcome.record('denied', 'setup_claim_denied')
       return c.json({ error: 'invalid_setup_token' }, 403)
     }
     // One transaction: re-check claimable (two racing claims serialize on
@@ -185,8 +208,12 @@ passkey.post('/register/verify', async (c) => {
       markClaimed(sub)
       return true
     }).immediate()
-    if (!claimed) return c.json({ error: 'already_claimed' }, 403)
+    if (!claimed) {
+      authOutcome.record('denied', 'setup_claim_denied')
+      return c.json({ error: 'already_claimed' }, 403)
+    }
     await setSessionCookie(c, { sub, username: handle, role: 'admin', auth_mode: 'local' })
+    authOutcome.record('authorized', 'cookie')
     return c.json({ ok: true, claimed: true, user: { sub, username: handle, role: 'admin' } })
   }
 
@@ -195,6 +222,7 @@ passkey.post('/register/verify', async (c) => {
   // token so only the operator who can read the host secret can become owner.
   // (The SPA sees claimable via /api/setup/status and shows the claim flow.)
   if (isClaimable()) {
+    authOutcome.record('denied', 'setup_claim_denied')
     return c.json({ error: 'server_unclaimed' }, 403)
   }
 
@@ -212,6 +240,7 @@ passkey.post('/register/verify', async (c) => {
     return { role: isMember(sub)?.role ?? 'user' }
   }).immediate()
   if (!registration) {
+    authOutcome.record('denied', 'no_invite')
     return c.json({ error: 'no_invite' }, 403)
   }
   const { role } = registration
@@ -224,28 +253,40 @@ passkey.post('/register/verify', async (c) => {
     auth_mode: 'local',
     username: handle,
   })
-  if (deviceResponse) return deviceResponse
+  if (deviceResponse) {
+    authOutcome.record(
+      deviceResponse.ok ? 'authorized' : 'invalid',
+      deviceResponse.ok ? 'device_pair' : 'invalid_request',
+    )
+    return deviceResponse
+  }
 
   await setSessionCookie(c, { sub, username: handle, role, auth_mode: 'local' })
+  authOutcome.record('authorized', 'cookie')
   return c.json({ ok: true, user: { sub, username: handle, role } })
-})
+  }),
+)
 
 // ── authentication ──────────────────────────────────────────────────────────
 
-passkey.post('/login/options', async (c) => {
-  const limited = enforceAuthRateLimit(c, 'passkey')
+passkey.post('/login/options', (c) =>
+  withAuthOutcome(c, 'passkey', 'login_options', async (authOutcome) => {
+  const limited = enforceAuthRateLimit(c, 'passkey', undefined, authOutcome)
   if (limited) return limited
   const { options, challengeId } = await beginLogin(rpForRequest(c))
   return c.json({ options, challengeId })
-})
+  }),
+)
 
-passkey.post('/login/verify', async (c) => {
-  const limited = enforceAuthRateLimit(c, 'passkey')
+passkey.post('/login/verify', (c) =>
+  withAuthOutcome(c, 'passkey', 'login_verify', async (authOutcome) => {
+  const limited = enforceAuthRateLimit(c, 'passkey', undefined, authOutcome)
   if (limited) return limited
   const body = await c.req.json().catch(() => null)
   const challengeId = typeof body?.challengeId === 'string' ? body.challengeId : null
   const response = body?.response
   if (!challengeId || !response || typeof response !== 'object') {
+    authOutcome.record('invalid', 'invalid_request')
     return c.json({ error: 'invalid_request' }, 400)
   }
   // Identity-keyed bucket (per attempted credential id): credential stuffing
@@ -253,13 +294,20 @@ passkey.post('/login/verify', async (c) => {
   // IP — the per-client buckets are skipped entirely unless
   // TRUST_CLIENT_IP_HEADERS=1, which is off on the tunnel default.
   const credId = credentialIdOf(response)
-  const identityLimited = enforceAuthIdentityRateLimit(c, 'passkey', credId ? `cred:${credId}` : null)
+  const identityLimited = enforceAuthIdentityRateLimit(
+    c,
+    'passkey',
+    credId ? `cred:${credId}` : null,
+    authOutcome,
+  )
   if (identityLimited) return identityLimited
 
   let sub: string
   try {
     ;({ sub } = await verifyLogin(challengeId, response, rpForRequest(c)))
-  } catch {
+  } catch (error) {
+    if (!(error instanceof WebAuthnVerificationError)) throw error
+    authOutcome.record('invalid', 'verification_failed')
     return c.json({ error: 'login_failed' }, 400)
   }
 
@@ -268,7 +316,10 @@ passkey.post('/login/verify', async (c) => {
   // reconciliation. In particular, an explicit ADMIN_SUBS owner remains an
   // immutable bootstrap authority even if its optional member row is absent.
   const status = memberStatus(sub)
-  if (status !== 'allowed') return c.json({ error: 'access_revoked' }, 403)
+  if (status !== 'allowed') {
+    authOutcome.record('denied', 'access_revoked')
+    return c.json({ error: 'access_revoked' }, 403)
+  }
 
   const member = isMember(sub)
   const username = member?.display_name ?? ''
@@ -276,7 +327,10 @@ passkey.post('/login/verify', async (c) => {
   // An allowed rowless identity is valid only through ADMIN_SUBS, which must
   // resolve to admin. Keep this defensive guard so policy/data drift cannot
   // turn a missing member row into an ordinary user session.
-  if (!member && role !== 'admin') return c.json({ error: 'access_revoked' }, 403)
+  if (!member && role !== 'admin') {
+    authOutcome.record('denied', 'access_revoked')
+    return c.json({ error: 'access_revoked' }, 403)
+  }
   // The assertion and active-member gate have both succeeded. Persist the
   // one-way ownership marker before issuing either a browser cookie or native
   // Bearer token so an ADMIN_SUBS upgrade cannot leave setup reopenable.
@@ -291,8 +345,16 @@ passkey.post('/login/verify', async (c) => {
     auth_mode: 'local',
     username,
   })
-  if (deviceResponse) return deviceResponse
+  if (deviceResponse) {
+    authOutcome.record(
+      deviceResponse.ok ? 'authorized' : 'invalid',
+      deviceResponse.ok ? 'device_pair' : 'invalid_request',
+    )
+    return deviceResponse
+  }
 
   await setSessionCookie(c, { sub, username, role, auth_mode: 'local' })
+  authOutcome.record('authorized', 'cookie')
   return c.json({ ok: true, user: { sub, username, role } })
-})
+  }),
+)

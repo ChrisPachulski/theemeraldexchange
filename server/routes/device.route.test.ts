@@ -17,6 +17,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const plex = vi.hoisted(() => {
   class PlexRateLimitError extends Error {
     readonly retryAfter: string
+    readonly retryAfterSeconds = 30
 
     constructor(retryAfter: string) {
       super('Plex PIN polling rate-limited')
@@ -156,17 +157,36 @@ describe('device POST /poll — pin lifecycle', () => {
   })
 
   it('returns Plex backpressure as a provider-specific 429 without minting', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     plex.checkPin.mockRejectedValue(
       new plex.PlexRateLimitError('Sat, 18 Jul 2026 23:59:59 GMT'),
     )
 
-    const res = await post('/poll', validPoll)
+    const res = await post('/poll', validPoll, { 'X-Request-Id': 'plex-device-backpressure' })
 
     expect(res.status).toBe(429)
     expect(res.headers.get('Retry-After')).toBe('Sat, 18 Jul 2026 23:59:59 GMT')
     expect(await res.json()).toEqual({ error: 'plex_rate_limited' })
     expect(plex.getUser).not.toHaveBeenCalled()
     expect(session.mintDeviceToken).not.toHaveBeenCalled()
+    const lines = warn.mock.calls
+      .flat()
+      .map(String)
+      .filter((line) => line.startsWith('[auth-outcome] '))
+    expect(lines).toHaveLength(1)
+    expect(warn.mock.calls).toHaveLength(1)
+    expect(JSON.parse(lines[0].slice(lines[0].indexOf('{')))).toEqual(
+      expect.objectContaining({
+        provider: 'plex',
+        phase: 'check',
+        outcome: 'rate_limited',
+        reason: 'provider_rate_limit',
+        scope: 'upstream',
+        retryAfterSeconds: 30,
+        requestId: 'plex-device-backpressure',
+      }),
+    )
+    warn.mockRestore()
   })
 
   it('403 denied — authZ gate blocks an uninvited member and mints NO token', async () => {
@@ -183,6 +203,7 @@ describe('device POST /poll — pin lifecycle', () => {
   })
 
   it('200 authorized — happy path mints token and returns identity', async () => {
+    const info = vi.spyOn(console, 'log').mockImplementation(() => undefined)
     plex.checkPin.mockResolvedValue({ authToken: 'tok' })
     plex.getUser.mockResolvedValue({ id: 12345, username: 'chris' })
     authorizeOrRedeem.mockReturnValue({ allowed: true })
@@ -190,13 +211,17 @@ describe('device POST /poll — pin lifecycle', () => {
     session.ensureServerId.mockReturnValue('SRV-ID-1')
     session.mintDeviceToken.mockResolvedValue('jwe.token.value')
 
-    const res = await post('/poll', {
-      pinId: 7,
-      device_id: 'dev-1',
-      device_name: 'Living Room',
-      device_platform: 'tvos',
-      invite_code: 'INV1',
-    })
+    const res = await post(
+      '/poll',
+      {
+        pinId: 7,
+        device_id: 'dev-1',
+        device_name: 'Living Room',
+        device_platform: 'tvos',
+        invite_code: 'INV1',
+      },
+      { 'X-Request-Id': 'plex-device-authorized' },
+    )
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       status: string
@@ -215,5 +240,23 @@ describe('device POST /poll — pin lifecycle', () => {
     expect(session.mintDeviceToken).toHaveBeenCalledWith(
       expect.objectContaining({ sub: 'plex:12345', device_id: 'dev-1' }),
     )
+    const lines = info.mock.calls
+      .flat()
+      .map(String)
+      .filter((line) => line.startsWith('[auth-outcome] '))
+    expect(lines).toHaveLength(1)
+    expect(JSON.parse(lines[0].slice(lines[0].indexOf('{')))).toEqual(
+      expect.objectContaining({
+        provider: 'plex',
+        phase: 'check',
+        outcome: 'authorized',
+        reason: 'device_pair',
+        requestId: 'plex-device-authorized',
+      }),
+    )
+    for (const secret of ['7', 'dev-1', 'Living Room', 'INV1', 'jwe.token.value', 'plex:12345']) {
+      expect(lines[0]).not.toContain(secret)
+    }
+    info.mockRestore()
   })
 })

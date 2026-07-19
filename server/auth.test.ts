@@ -180,12 +180,14 @@ function stubPlex(opts: {
   authToken?: string | null
   username?: string
   resources?: Array<{ name: string; clientIdentifier: string; owned: boolean; provides: string }>
+  resourcesStatus?: number
 }) {
   const {
     pinId = 12345,
     authToken = null,
     username = 'test-user',
     resources = [],
+    resourcesStatus = 200,
   } = opts
   vi.stubGlobal(
     'fetch',
@@ -226,13 +228,29 @@ function stubPlex(opts: {
       }
       if (url.includes('/api/v2/resources')) {
         return new Response(JSON.stringify(resources), {
-          status: 200,
+          status: resourcesStatus,
           headers: { 'Content-Type': 'application/json' },
         })
       }
       return new Response('not stubbed: ' + url, { status: 599 })
     }),
   )
+}
+
+function captureAuthOutcomeLines() {
+  const info = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+  return {
+    lines: () =>
+      [...info.mock.calls, ...warn.mock.calls]
+        .flat()
+        .map(String)
+        .filter((line) => line.startsWith('[auth-outcome] ')),
+    restore: () => {
+      info.mockRestore()
+      warn.mockRestore()
+    },
+  }
 }
 
 describe('GET /auth/plex/config', () => {
@@ -248,14 +266,20 @@ describe('GET /auth/plex/config', () => {
 
 describe('POST /auth/plex/check', () => {
   it('returns pending while plex.tv hasn\'t set authToken yet', async () => {
+    const logs = captureAuthOutcomeLines()
     stubPlex({ authToken: null })
-    const r = await app().request('/auth/plex/check', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pinId: 12345 }),
-    })
-    expect(r.status).toBe(200)
-    expect(await r.json()).toEqual({ status: 'pending' })
+    try {
+      const r = await app().request('/auth/plex/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pinId: 12345 }),
+      })
+      expect(r.status).toBe(200)
+      expect(await r.json()).toEqual({ status: 'pending' })
+      expect(logs.lines()).toEqual([])
+    } finally {
+      logs.restore()
+    }
   })
 
   it.each([
@@ -287,6 +311,7 @@ describe('POST /auth/plex/check', () => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'X-Request-Id': 'plex-upstream-rate-limit',
             Authorization: 'Bearer AUTHORIZATION-SECRET',
             Cookie: 'eex.session=COOKIE-SECRET',
           },
@@ -299,6 +324,24 @@ describe('POST /auth/plex/check', () => {
         expect(r.status).toBe(429)
         expect(r.headers.get('Retry-After')).toBe(expectedRetryAfter)
         expect(await r.json()).toEqual({ error: 'plex_rate_limited' })
+
+        const outcomeLines = [...errorSpy.mock.calls, ...infoSpy.mock.calls, ...warnSpy.mock.calls]
+          .flat()
+          .map(String)
+          .filter((line) => line.startsWith('[auth-outcome] '))
+        expect(outcomeLines).toHaveLength(1)
+        expect(warnSpy.mock.calls).toHaveLength(1)
+        expect(JSON.parse(outcomeLines[0].slice(outcomeLines[0].indexOf('{')))).toEqual(
+          expect.objectContaining({
+            provider: 'plex',
+            phase: 'check',
+            outcome: 'rate_limited',
+            reason: 'provider_rate_limit',
+            scope: 'upstream',
+            retryAfterSeconds: expect.any(Number),
+            requestId: 'plex-upstream-rate-limit',
+          }),
+        )
 
         const logs = [...errorSpy.mock.calls, ...infoSpy.mock.calls, ...warnSpy.mock.calls]
           .flat()
@@ -380,12 +423,21 @@ describe('POST /auth/plex/check', () => {
 
       const line = String(warn.mock.calls.at(-1)?.[0] ?? '')
       const context = JSON.parse(line.slice(line.indexOf('{'))) as Record<string, unknown>
-      expect(context).toEqual({
-        operation: 'check',
-        scope: 'pin',
-        requestId: 'plex-pin-rate-limit',
-        retryAfterSeconds,
-      })
+      expect(line.startsWith('[auth-outcome] terminal ')).toBe(true)
+      expect(warn.mock.calls).toHaveLength(1)
+      expect(context).toEqual(
+        expect.objectContaining({
+          provider: 'plex',
+          phase: 'check',
+          outcome: 'rate_limited',
+          reason: 'local_rate_limit',
+          scope: 'pin',
+          requestId: 'plex-pin-rate-limit',
+          retryAfterSeconds,
+        }),
+      )
+      expect(context.elapsedMs).toBeTypeOf('number')
+      expect((context.elapsedMs as number) % 100).toBe(0)
       for (const secret of [
         '198.51.100.20',
         '12345',
@@ -752,6 +804,41 @@ describe('POST /auth/plex/check', () => {
     expect(r.status).toBe(403)
     expect(await r.json()).toEqual({ status: 'denied', reason: 'no_invite' })
     expect(addMemberSpy).not.toHaveBeenCalled()
+  })
+
+  it('records a Plex membership-probe outage as transient while still failing closed', async () => {
+    const logs = captureAuthOutcomeLines()
+    ;(env as Record<string, unknown>).plexServerId = 'home-server-id'
+    stubPlex({
+      authToken: 'real-token',
+      username: 'stranger',
+      resourcesStatus: 503,
+    })
+    try {
+      const response = await app().request('/auth/plex/check', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Request-Id': 'plex-membership-outage',
+        },
+        body: JSON.stringify({ pinId: 12345 }),
+      })
+      expect(response.status).toBe(403)
+      const lines = logs.lines()
+      expect(lines).toHaveLength(1)
+      expect(JSON.parse(lines[0].slice(lines[0].indexOf('{')))).toEqual(
+        expect.objectContaining({
+          event: 'auth_outcome',
+          provider: 'plex',
+          phase: 'check',
+          outcome: 'transient',
+          reason: 'provider_unavailable',
+          requestId: 'plex-membership-outage',
+        }),
+      )
+    } finally {
+      logs.restore()
+    }
   })
 
   it('does NOT auto-admit a REVOKED member even if still shared on the server (explicit revoke wins)', async () => {
@@ -1182,6 +1269,137 @@ describe('POST /auth/google (Google Sign-In)', () => {
       expect(((await r.json()) as { status?: string }).status).toBe('authorized')
       expect(r.headers.get('set-cookie')).toContain('eex.session=')
     })
+  })
+})
+
+describe('structured browser login outcomes', () => {
+  it('records one redacted Plex cookie authorization', async () => {
+    const logs = captureAuthOutcomeLines()
+    allowlist.set('plex:999', 'allowed')
+    stubPlex({ authToken: 'PLEX-TOKEN-SENTINEL', username: 'USERNAME-SENTINEL' })
+    try {
+      const response = await app().request('/auth/plex/check', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Request-Id': 'plex-cookie-outcome',
+        },
+        body: JSON.stringify({ pinId: 12345, inviteCode: 'INVITE-SENTINEL' }),
+      })
+      expect(response.status).toBe(200)
+      const lines = logs.lines()
+      expect(lines).toHaveLength(1)
+      expect(JSON.parse(lines[0].slice(lines[0].indexOf('{')))).toEqual(
+        expect.objectContaining({
+          provider: 'plex',
+          phase: 'check',
+          outcome: 'authorized',
+          reason: 'cookie',
+          requestId: 'plex-cookie-outcome',
+        }),
+      )
+      for (const secret of [
+        'PLEX-TOKEN-SENTINEL',
+        'USERNAME-SENTINEL',
+        '12345',
+        'INVITE-SENTINEL',
+      ]) {
+        expect(lines[0]).not.toContain(secret)
+      }
+    } finally {
+      logs.restore()
+    }
+  })
+
+  it.each([
+    { provider: 'apple', path: '/auth/apple', token: 'valid-apple-token', sub: APPLE_SUB },
+    { provider: 'google', path: '/auth/google', token: 'valid-google-token', sub: GOOGLE_SUB },
+  ])('records one $provider cookie authorization', async ({ provider, path, token, sub }) => {
+    const logs = captureAuthOutcomeLines()
+    const priorApple = (env as Record<string, unknown>).appleClientId
+    const priorGoogle = (env as Record<string, unknown>).googleClientIds
+    ;(env as Record<string, unknown>).appleClientId = 'com.example.eex'
+    ;(env as Record<string, unknown>).googleClientIds = ['client-id']
+    allowlist.set(sub, 'allowed')
+    try {
+      const response = await app().request(path, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Request-Id': `${provider}-cookie-outcome`,
+        },
+        body: JSON.stringify({ identityToken: token }),
+      })
+      expect(response.status).toBe(200)
+      const lines = logs.lines()
+      expect(lines).toHaveLength(1)
+      expect(JSON.parse(lines[0].slice(lines[0].indexOf('{')))).toEqual(
+        expect.objectContaining({
+          provider,
+          phase: 'identity_verify',
+          outcome: 'authorized',
+          reason: 'cookie',
+          requestId: `${provider}-cookie-outcome`,
+        }),
+      )
+      expect(lines[0]).not.toContain(token)
+      expect(lines[0]).not.toContain(sub)
+    } finally {
+      ;(env as Record<string, unknown>).appleClientId = priorApple
+      ;(env as Record<string, unknown>).googleClientIds = priorGoogle
+      logs.restore()
+    }
+  })
+
+  it.each([
+    { provider: 'apple', path: '/auth/apple' },
+    { provider: 'google', path: '/auth/google' },
+  ])('records one bounded transient event when the $provider verifier throws', async ({ provider, path }) => {
+    const logs = captureAuthOutcomeLines()
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const priorApple = (env as Record<string, unknown>).appleClientId
+    const priorGoogle = (env as Record<string, unknown>).googleClientIds
+    ;(env as Record<string, unknown>).appleClientId = 'com.example.eex'
+    ;(env as Record<string, unknown>).googleClientIds = ['client-id']
+    if (provider === 'apple') {
+      appleVerifyImpl.fn = async () => {
+        throw new Error('VERIFIER-SECRET')
+      }
+    } else {
+      googleVerifyImpl.fn = async () => {
+        throw new Error('VERIFIER-SECRET')
+      }
+    }
+    try {
+      const response = await app().request(path, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Request-Id': `${provider}-verifier-error`,
+        },
+        body: JSON.stringify({ identityToken: 'TOKEN-SECRET' }),
+      })
+      expect(response.status).toBe(500)
+      const lines = logs.lines()
+      expect(lines).toHaveLength(1)
+      expect(JSON.parse(lines[0].slice(lines[0].indexOf('{')))).toEqual(
+        expect.objectContaining({
+          event: 'auth_outcome',
+          provider,
+          phase: 'identity_verify',
+          outcome: 'transient',
+          reason: 'server_error',
+          requestId: `${provider}-verifier-error`,
+        }),
+      )
+      expect(lines[0]).not.toContain('VERIFIER-SECRET')
+      expect(lines[0]).not.toContain('TOKEN-SECRET')
+    } finally {
+      ;(env as Record<string, unknown>).appleClientId = priorApple
+      ;(env as Record<string, unknown>).googleClientIds = priorGoogle
+      error.mockRestore()
+      logs.restore()
+    }
   })
 })
 

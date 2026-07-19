@@ -50,14 +50,24 @@ const RETRY_AFTER_HTTP_DATE_PATTERNS = [
   /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (?: [1-9]|[12]\d|3[01]) (?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d \d{4}$/,
 ]
 
+function boundedRetryAfterSeconds(retryAfter: string): number {
+  const numeric = /^\d+$/.test(retryAfter)
+    ? Number(retryAfter)
+    : Math.ceil((Date.parse(retryAfter) - Date.now()) / 1000)
+  if (!Number.isFinite(numeric)) return PLEX_RATE_LIMIT_FALLBACK_SECONDS
+  return Math.min(PLEX_RATE_LIMIT_LOG_MAX_SECONDS, Math.max(0, numeric))
+}
+
 /** Expected Plex backpressure, kept distinct from local auth rate limits. */
 export class PlexRateLimitError extends Error {
   readonly retryAfter: string
+  readonly retryAfterSeconds: number
 
   constructor(retryAfter: string) {
     super('Plex PIN polling rate-limited')
     this.name = 'PlexRateLimitError'
     this.retryAfter = retryAfter
+    this.retryAfterSeconds = boundedRetryAfterSeconds(retryAfter)
   }
 }
 
@@ -72,14 +82,6 @@ function normalizedRetryAfter(value: string | null): string {
     return candidate
   }
   return String(PLEX_RATE_LIMIT_FALLBACK_SECONDS)
-}
-
-function retryAfterSecondsForLog(retryAfter: string): number {
-  const numeric = /^\d+$/.test(retryAfter)
-    ? Number(retryAfter)
-    : Math.ceil((Date.parse(retryAfter) - Date.now()) / 1000)
-  if (!Number.isFinite(numeric)) return PLEX_RATE_LIMIT_FALLBACK_SECONDS
-  return Math.min(PLEX_RATE_LIMIT_LOG_MAX_SECONDS, Math.max(0, numeric))
 }
 
 export type PlexUser = {
@@ -114,9 +116,6 @@ export async function checkPin(pinId: number): Promise<Pin> {
   )
   if (res.status === 429) {
     const retryAfter = normalizedRetryAfter(res.headers.get('Retry-After'))
-    console.warn(
-      `[plex.checkPin] rate_limited status=429 retryAfterSeconds=${retryAfterSecondsForLog(retryAfter)}`,
-    )
     throw new PlexRateLimitError(retryAfter)
   }
   if (!res.ok) {

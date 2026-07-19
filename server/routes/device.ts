@@ -40,14 +40,18 @@ import {
   type AuthMode,
   type Role,
 } from '../session.js'
+import { withAuthOutcome } from '../services/authOutcome.js'
 
 export const device = new Hono()
 
 const PAIR_MAX_BODY_BYTES = 2048
 
-device.post('/poll', async (c) => {
+device.post('/poll', (c) => withAuthOutcome(c, 'plex', 'check', async (authOutcome) => {
   const parsed = await parseLimitedJson(c, PAIR_MAX_BODY_BYTES)
-  if (parsed.tooLarge) return c.json({ error: 'body_too_large' }, 413)
+  if (parsed.tooLarge) {
+    authOutcome.record('invalid', 'invalid_request')
+    return c.json({ error: 'body_too_large' }, 413)
+  }
   const body = parsed.body as {
     pinId?: unknown
     device_id?: unknown
@@ -61,23 +65,38 @@ device.post('/poll', async (c) => {
     typeof body?.pinId === 'string' || typeof body?.pinId === 'number'
       ? String(body.pinId)
       : undefined
-  if (!pinIdRaw) return c.json({ error: 'missing_pinId' }, 400)
+  if (!pinIdRaw) {
+    authOutcome.record('invalid', 'invalid_request')
+    return c.json({ error: 'missing_pinId' }, 400)
+  }
   const pinId = Number(pinIdRaw)
-  if (!Number.isInteger(pinId)) return c.json({ error: 'bad_pinId' }, 400)
+  if (!Number.isInteger(pinId)) {
+    authOutcome.record('invalid', 'invalid_request')
+    return c.json({ error: 'bad_pinId' }, 400)
+  }
 
   // Same bucket as the cookie checkPin path — per-IP + global + per-PIN.
   // Rate-limit BEFORE the two upstream plex.tv calls below so a poll flood
   // can't burn the Plex API budget or grind the authZ decision.
-  const limited = enforceAuthRateLimit(c, 'check', pinId)
+  const limited = enforceAuthRateLimit(c, 'check', pinId, authOutcome)
   if (limited) return limited
 
   const deviceId = typeof body?.device_id === 'string' ? body.device_id.trim() : ''
   const deviceName = typeof body?.device_name === 'string' ? body.device_name.trim() : ''
   const devicePlatform =
     typeof body?.device_platform === 'string' ? body.device_platform.trim() : ''
-  if (!deviceId) return c.json({ error: 'missing_device_id' }, 400)
-  if (!deviceName) return c.json({ error: 'missing_device_name' }, 400)
-  if (!devicePlatform) return c.json({ error: 'missing_device_platform' }, 400)
+  if (!deviceId) {
+    authOutcome.record('invalid', 'invalid_request')
+    return c.json({ error: 'missing_device_id' }, 400)
+  }
+  if (!deviceName) {
+    authOutcome.record('invalid', 'invalid_request')
+    return c.json({ error: 'missing_device_name' }, 400)
+  }
+  if (!devicePlatform) {
+    authOutcome.record('invalid', 'invalid_request')
+    return c.json({ error: 'missing_device_platform' }, 400)
+  }
   const inviteCode =
     typeof body?.invite_code === 'string'
       ? body.invite_code
@@ -91,6 +110,10 @@ device.post('/poll', async (c) => {
   } catch (error) {
     if (!(error instanceof PlexRateLimitError)) throw error
     c.header('Retry-After', error.retryAfter)
+    authOutcome.record('rate_limited', 'provider_rate_limit', {
+      scope: 'upstream',
+      retryAfterSeconds: error.retryAfterSeconds,
+    })
     return c.json({ error: 'plex_rate_limited' }, 429)
   }
   if (!pin.authToken) return c.json({ status: 'pending' })
@@ -112,6 +135,7 @@ device.post('/poll', async (c) => {
   // owners short-circuit memberStatus, so the operator is never locked out.
   const authz = authorizeOrRedeem(sub, inviteCode, user.username, 'plex')
   if (!authz.allowed) {
+    authOutcome.record('denied', 'no_invite')
     return c.json({ status: 'denied', reason: 'no_invite' }, 403)
   }
 
@@ -130,6 +154,8 @@ device.post('/poll', async (c) => {
     server_id: serverId,
   })
 
+  authOutcome.record('authorized', 'device_pair')
+
   return c.json({
     status: 'authorized',
     /** Bearer JWE — apps store in Keychain
@@ -145,4 +171,4 @@ device.post('/poll', async (c) => {
       role,
     },
   })
-})
+}))

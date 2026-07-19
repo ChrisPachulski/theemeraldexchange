@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // close over ordinary module-scope variables. vi.hoisted runs WITH the hoist,
 // so these handles are initialized before the mocks reference them.
 const webauthn = vi.hoisted(() => ({
+  WebAuthnVerificationError: class WebAuthnVerificationError extends Error {},
   beginRegistration: vi.fn(),
   verifyRegistration: vi.fn(),
   persistCredential: vi.fn(),
@@ -98,12 +99,28 @@ import { env } from '../env.js'
 
 const envRw = env as unknown as Record<string, unknown>
 
-function post(path: string, body: unknown) {
+function post(path: string, body: unknown, headers: Record<string, string> = {}) {
   return passkey.request(path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...headers },
     body: JSON.stringify(body),
   })
+}
+
+function captureAuthOutcomeLines() {
+  const info = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+  return {
+    lines: () =>
+      [...info.mock.calls, ...warn.mock.calls]
+        .flat()
+        .map(String)
+        .filter((line) => line.startsWith('[auth-outcome] ')),
+    restore: () => {
+      info.mockRestore()
+      warn.mockRestore()
+    },
+  }
 }
 
 beforeEach(() => {
@@ -204,7 +221,9 @@ describe('passkey register/verify', () => {
   })
 
   it('400s a failed/expired attestation without ever reaching authZ', async () => {
-    webauthn.verifyRegistration.mockRejectedValue(new Error('challenge_invalid'))
+    webauthn.verifyRegistration.mockRejectedValue(
+      new webauthn.WebAuthnVerificationError('challenge_invalid'),
+    )
     const res = await post('/register/verify', { challengeId: 'x', response: { id: 'c' } })
     expect(res.status).toBe(400)
     expect(authorizeOrRedeem).not.toHaveBeenCalled()
@@ -491,7 +510,9 @@ describe('passkey login/verify', () => {
   })
 
   it('400s a failed assertion', async () => {
-    webauthn.verifyLogin.mockRejectedValue(new Error('credential_unknown'))
+    webauthn.verifyLogin.mockRejectedValue(
+      new webauthn.WebAuthnVerificationError('credential_unknown'),
+    )
     const res = await post('/login/verify', { challengeId: 'cid', response: { id: 'c' } })
     expect(res.status).toBe(400)
     expect(members.isMember).not.toHaveBeenCalled()
@@ -508,16 +529,20 @@ describe('passkey identity-keyed rate limiting', () => {
       expect.anything(),
       'passkey',
       'cred:cred-xyz',
+      expect.anything(),
     )
   })
 
   it('register/verify keys an identity bucket on the attempted credential id', async () => {
-    webauthn.verifyRegistration.mockRejectedValue(new Error('challenge_invalid'))
+    webauthn.verifyRegistration.mockRejectedValue(
+      new webauthn.WebAuthnVerificationError('challenge_invalid'),
+    )
     await post('/register/verify', { challengeId: 'cid', response: { id: 'cred-abc' } })
     expect(enforceAuthIdentityRateLimit).toHaveBeenCalledWith(
       expect.anything(),
       'passkey',
       'cred:cred-abc',
+      expect.anything(),
     )
   })
 
@@ -528,6 +553,7 @@ describe('passkey identity-keyed rate limiting', () => {
       expect.anything(),
       'passkey',
       'handle:Chris',
+      expect.anything(),
     )
   })
 
@@ -539,5 +565,121 @@ describe('passkey identity-keyed rate limiting', () => {
     const res = await post('/login/verify', { challengeId: 'cid', response: { id: 'cred-xyz' } })
     expect(res.status).toBe(429)
     expect(webauthn.verifyLogin).not.toHaveBeenCalled()
+  })
+})
+
+describe('structured passkey outcomes', () => {
+  const verified = {
+    sub: 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV',
+    handle: 'SECRET-HANDLE',
+    credential: {
+      id: 'SECRET-CREDENTIAL',
+      publicKey: new Uint8Array([1]),
+      counter: 0,
+      transports: [],
+      backedUp: true,
+    },
+  }
+
+  it('records one redacted registration cookie authorization', async () => {
+    const logs = captureAuthOutcomeLines()
+    setupState.isClaimable.mockReturnValue(false)
+    webauthn.verifyRegistration.mockResolvedValue(verified)
+    authorizeOrRedeem.mockReturnValue({ allowed: true })
+    members.isMember.mockReturnValue({ role: 'user' })
+    try {
+      const response = await post(
+        '/register/verify',
+        {
+          challengeId: 'SECRET-CHALLENGE',
+          response: { id: 'SECRET-CREDENTIAL' },
+          inviteCode: 'SECRET-INVITE',
+        },
+        { 'X-Request-Id': 'passkey-register-outcome' },
+      )
+      expect(response.status).toBe(200)
+      const lines = logs.lines()
+      expect(lines).toHaveLength(1)
+      expect(JSON.parse(lines[0].slice(lines[0].indexOf('{')))).toEqual(
+        expect.objectContaining({
+          provider: 'passkey',
+          phase: 'register_verify',
+          outcome: 'authorized',
+          reason: 'cookie',
+          requestId: 'passkey-register-outcome',
+        }),
+      )
+      for (const secret of [
+        verified.sub,
+        verified.handle,
+        'SECRET-CREDENTIAL',
+        'SECRET-CHALLENGE',
+        'SECRET-INVITE',
+      ]) {
+        expect(lines[0]).not.toContain(secret)
+      }
+    } finally {
+      logs.restore()
+    }
+  })
+
+  it('records one redacted revoked-login denial', async () => {
+    const logs = captureAuthOutcomeLines()
+    webauthn.verifyLogin.mockResolvedValue({ sub: verified.sub })
+    memberStatus.mockReturnValue('revoked')
+    try {
+      const response = await post(
+        '/login/verify',
+        { challengeId: 'SECRET-CHALLENGE', response: { id: 'SECRET-CREDENTIAL' } },
+        { 'X-Request-Id': 'passkey-denied-outcome' },
+      )
+      expect(response.status).toBe(403)
+      const lines = logs.lines()
+      expect(lines).toHaveLength(1)
+      expect(JSON.parse(lines[0].slice(lines[0].indexOf('{')))).toEqual(
+        expect.objectContaining({
+          provider: 'passkey',
+          phase: 'login_verify',
+          outcome: 'denied',
+          reason: 'access_revoked',
+          requestId: 'passkey-denied-outcome',
+        }),
+      )
+      for (const secret of [verified.sub, 'SECRET-CREDENTIAL', 'SECRET-CHALLENGE']) {
+        expect(lines[0]).not.toContain(secret)
+      }
+    } finally {
+      logs.restore()
+    }
+  })
+
+  it('records one transient server error when login verification throws unexpectedly', async () => {
+    const logs = captureAuthOutcomeLines()
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    webauthn.verifyLogin.mockRejectedValue(new Error('DATABASE-ERROR-SENTINEL'))
+    try {
+      const response = await post(
+        '/login/verify',
+        { challengeId: 'SECRET-CHALLENGE', response: { id: 'SECRET-CREDENTIAL' } },
+        { 'X-Request-Id': 'passkey-server-error' },
+      )
+      expect(response.status).toBe(500)
+      const lines = logs.lines()
+      expect(lines).toHaveLength(1)
+      expect(JSON.parse(lines[0].slice(lines[0].indexOf('{')))).toEqual(
+        expect.objectContaining({
+          event: 'auth_outcome',
+          provider: 'passkey',
+          phase: 'login_verify',
+          outcome: 'transient',
+          reason: 'server_error',
+          requestId: 'passkey-server-error',
+        }),
+      )
+      expect(lines[0]).not.toContain('DATABASE-ERROR-SENTINEL')
+    } finally {
+      error.mockRestore()
+      logs.restore()
+    }
   })
 })

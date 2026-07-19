@@ -54,11 +54,13 @@ import { sealVerifiedAdminOwnership } from './services/setupState.js'
 import { verifyAppleIdentityToken } from './services/appleAuth.js'
 import { verifyGoogleIdentityToken } from './services/googleAuth.js'
 import { maybeMintDeviceToken } from './services/devicePair.js'
-import { createLogger } from './services/logger.js'
 import { resolveClientAddress } from './services/clientAddress.js'
+import {
+  type AuthOutcomeReporter,
+  withAuthOutcome,
+} from './services/authOutcome.js'
 
 export const auth = new Hono()
-const authLog = createLogger('auth')
 
 type AuthRateLimitKind = 'pin' | 'check' | 'apple' | 'passkey' | 'google'
 type AuthRateLimitScope = 'global' | 'trusted_client' | 'pin' | 'identity'
@@ -160,17 +162,15 @@ function sweepAuthRateLimitBuckets(now: number): void {
 
 function rejectAuthRateLimit(
   c: Context,
-  operation: AuthRateLimitKind,
   scope: AuthRateLimitScope,
   resetAt: number,
   now: number,
+  outcome: AuthOutcomeReporter,
 ): Response {
   const retryAfterSeconds = Math.max(1, Math.ceil((resetAt - now) / 1000))
   c.header('Retry-After', String(retryAfterSeconds))
-  authLog.warn('rate limit rejected', {
-    operation,
+  outcome.record('rate_limited', 'local_rate_limit', {
     scope,
-    requestId: c.get('requestId') ?? c.req.header('x-request-id') ?? 'unavailable',
     retryAfterSeconds,
   })
   return c.json({ error: 'rate_limited' }, 429)
@@ -179,7 +179,8 @@ function rejectAuthRateLimit(
 export function enforceAuthRateLimit(
   c: Context,
   kind: AuthRateLimitKind,
-  pinId?: number,
+  pinId: number | undefined,
+  outcome: AuthOutcomeReporter,
 ): Response | null {
   const now = Date.now()
   sweepAuthRateLimitBuckets(now)
@@ -192,7 +193,7 @@ export function enforceAuthRateLimit(
   const limited = buckets.find(({ rule, bucket }) => bucket.count >= rule.limit)
   if (limited) {
     authRateLimitBuckets.set(limited.rule.key, limited.bucket)
-    return rejectAuthRateLimit(c, kind, limited.rule.scope, limited.bucket.resetAt, now)
+    return rejectAuthRateLimit(c, limited.rule.scope, limited.bucket.resetAt, now, outcome)
   }
   for (const { rule, bucket } of buckets) {
     bucket.count += 1
@@ -203,8 +204,8 @@ export function enforceAuthRateLimit(
 
 function enforceSingleBucketRule(
   c: Context,
-  kind: AuthRateLimitKind,
   rule: AuthRateLimitRule,
+  outcome: AuthOutcomeReporter,
 ): Response | null {
   const now = Date.now()
   sweepAuthRateLimitBuckets(now)
@@ -212,7 +213,7 @@ function enforceSingleBucketRule(
   const bucket = current && current.resetAt > now ? current : { count: 0, resetAt: now + rule.windowMs }
   if (bucket.count >= rule.limit) {
     authRateLimitBuckets.set(rule.key, bucket)
-    return rejectAuthRateLimit(c, kind, rule.scope, bucket.resetAt, now)
+    return rejectAuthRateLimit(c, rule.scope, bucket.resetAt, now, outcome)
   }
   bucket.count += 1
   authRateLimitBuckets.set(rule.key, bucket)
@@ -241,16 +242,21 @@ export function enforceAuthIdentityRateLimit(
   c: Context,
   kind: AuthRateLimitKind,
   identity: string | null | undefined,
+  outcome: AuthOutcomeReporter,
 ): Response | null {
   if (!identity) return null
   const cfg = AUTH_CLIENT_RATE_LIMITS[kind]
   const digest = createHash('sha256').update(identity).digest('hex').slice(0, 16)
-  return enforceSingleBucketRule(c, kind, {
-    key: `${kind}:identity:${digest}`,
-    scope: 'identity',
-    limit: cfg.limit,
-    windowMs: cfg.windowMs,
-  })
+  return enforceSingleBucketRule(
+    c,
+    {
+      key: `${kind}:identity:${digest}`,
+      scope: 'identity',
+      limit: cfg.limit,
+      windowMs: cfg.windowMs,
+    },
+    outcome,
+  )
 }
 
 /** UNVERIFIED `sub` claim of a compact JWT — for rate-limit keying only.
@@ -388,7 +394,7 @@ auth.get('/methods', (c) =>
 // access (the user can retry or present an invite). This differs from the
 // per-request reconcile, which fails OPEN to avoid mass lockout on a plex.tv
 // hiccup once a member row already exists.
-async function isOwnerServerMember(authToken: string): Promise<boolean> {
+async function isOwnerServerMember(authToken: string): Promise<boolean | null> {
   if (!env.plexServerId) return false
   try {
     const resources = await listResources(authToken)
@@ -396,21 +402,30 @@ async function isOwnerServerMember(authToken: string): Promise<boolean> {
       (r) => r.provides.includes('server') && r.clientIdentifier === env.plexServerId,
     )
   } catch {
-    return false
+    return null
   }
 }
 
-auth.post('/plex/check', async (c) => {
+auth.post('/plex/check', (c) => withAuthOutcome(c, 'plex', 'check', async (authOutcome) => {
   const parsed = await parseLimitedJson(c, AUTH_CHECK_MAX_BODY_BYTES)
   const body = parsed.body as { pinId?: unknown; inviteCode?: unknown } | null
   const pinIdRaw = typeof body?.pinId === 'string' || typeof body?.pinId === 'number' ? String(body.pinId) : undefined
   const pinIdCandidate = pinIdRaw ? Number(pinIdRaw) : NaN
   const pinId = Number.isInteger(pinIdCandidate) ? pinIdCandidate : undefined
-  const limited = enforceAuthRateLimit(c, 'check', pinId)
+  const limited = enforceAuthRateLimit(c, 'check', pinId, authOutcome)
   if (limited) return limited
-  if (parsed.tooLarge) return c.json({ error: 'body_too_large' }, 413)
-  if (!pinIdRaw) return c.json({ error: 'missing pinId' }, 400)
-  if (pinId === undefined) return c.json({ error: 'bad pinId' }, 400)
+  if (parsed.tooLarge) {
+    authOutcome.record('invalid', 'invalid_request')
+    return c.json({ error: 'body_too_large' }, 413)
+  }
+  if (!pinIdRaw) {
+    authOutcome.record('invalid', 'invalid_request')
+    return c.json({ error: 'missing pinId' }, 400)
+  }
+  if (pinId === undefined) {
+    authOutcome.record('invalid', 'invalid_request')
+    return c.json({ error: 'bad pinId' }, 400)
+  }
   const inviteCode = typeof body?.inviteCode === 'string' ? body.inviteCode : undefined
 
   let pin: Awaited<ReturnType<typeof checkPin>>
@@ -419,6 +434,10 @@ auth.post('/plex/check', async (c) => {
   } catch (error) {
     if (!(error instanceof PlexRateLimitError)) throw error
     c.header('Retry-After', error.retryAfter)
+    authOutcome.record('rate_limited', 'provider_rate_limit', {
+      scope: 'upstream',
+      retryAfterSeconds: error.retryAfterSeconds,
+    })
     return c.json({ error: 'plex_rate_limited' }, 429)
   }
   if (!pin.authToken) return c.json({ status: 'pending' })
@@ -451,7 +470,10 @@ auth.post('/plex/check', async (c) => {
   // see 'allowed' on every subsequent request without re-probing.
   let admittedByPlexShare = false
   if (!allowed && env.plexServerId && memberStatus(namespacedSub) === 'not_member') {
-    if (await isOwnerServerMember(pin.authToken)) {
+    const plexMembership = await isOwnerServerMember(pin.authToken)
+    if (plexMembership === null) {
+      authOutcome.record('transient', 'provider_unavailable')
+    } else if (plexMembership) {
       addMember({
         sub: namespacedSub,
         displayName: user.username,
@@ -467,6 +489,7 @@ auth.post('/plex/check', async (c) => {
   }
 
   if (!allowed) {
+    authOutcome.record('denied', 'no_invite')
     return c.json({ status: 'denied', reason: 'no_invite' }, 403)
   }
   // Case-insensitive runtime role policy is finalized only after authZ. The
@@ -507,6 +530,8 @@ auth.post('/plex/check', async (c) => {
   // is the freshest possible evidence we'll get.
   _primeSessionGateCache(namespacedSub, 'member', pin.authToken)
 
+  authOutcome.record('authorized', 'cookie')
+
   return c.json({
     status: 'authorized',
     user: {
@@ -519,7 +544,7 @@ auth.post('/plex/check', async (c) => {
     // Only present when PLEX_SERVER_ID is unset — discovery aid.
     discoveredServers: servers.length > 0 ? servers : undefined,
   })
-})
+}))
 
 // POST /api/auth/apple — Sign in with Apple. The parallel of /plex/check:
 // it proves identity via the SIWA identity token (verified against
@@ -527,27 +552,39 @@ auth.post('/plex/check', async (c) => {
 // the SAME invite/members authZ gate as Plex. POST-only so requireSafeOrigin
 // (mounted on '*') gates it — a cross-site GET can't mint a session
 // (the /plex/check session-fixation rationale applies verbatim).
-auth.post('/apple', async (c) => {
-  const preLimit = enforceAuthRateLimit(c, 'apple')
+auth.post('/apple', (c) => withAuthOutcome(c, 'apple', 'identity_verify', async (authOutcome) => {
+  const preLimit = enforceAuthRateLimit(c, 'apple', undefined, authOutcome)
   if (preLimit) return preLimit
 
   // SIWA must be configured. Fail fast with 503 (server-side gap, not the
   // client's fault) rather than verifying against an empty aud.
   if (!isAppleConfigured()) {
+    authOutcome.record('transient', 'not_configured')
     return c.json({ error: 'apple_not_configured' }, 503)
   }
 
   const parsed = await parseLimitedJson(c, AUTH_APPLE_MAX_BODY_BYTES)
-  if (parsed.tooLarge) return c.json({ error: 'body_too_large' }, 413)
+  if (parsed.tooLarge) {
+    authOutcome.record('invalid', 'invalid_request')
+    return c.json({ error: 'body_too_large' }, 413)
+  }
   const body = parsed.body as
     | { identityToken?: unknown; nonce?: unknown; inviteCode?: unknown }
     | null
   const identityToken = typeof body?.identityToken === 'string' ? body.identityToken : undefined
-  if (!identityToken) return c.json({ error: 'missing identity_token' }, 400)
+  if (!identityToken) {
+    authOutcome.record('invalid', 'invalid_request')
+    return c.json({ error: 'missing identity_token' }, 400)
+  }
   // Identity-keyed bucket on the (unverified) SIWA sub: throttles a replay /
   // stuffing run against one Apple account even on deploys where client-IP
   // headers are untrusted and the per-client buckets never engage.
-  const identityLimited = enforceAuthIdentityRateLimit(c, 'apple', unverifiedJwtSub(identityToken))
+  const identityLimited = enforceAuthIdentityRateLimit(
+    c,
+    'apple',
+    unverifiedJwtSub(identityToken),
+    authOutcome,
+  )
   if (identityLimited) return identityLimited
   const nonce = typeof body?.nonce === 'string' ? body.nonce : undefined
   const inviteCode = typeof body?.inviteCode === 'string' ? body.inviteCode : undefined
@@ -562,6 +599,10 @@ auth.post('/apple', async (c) => {
     // 503 so a login isn't reported to the user as "your token is bad."
     // Everything else is a client-side auth failure → 401.
     const httpStatus = verified.error === 'jwks_unavailable' ? 503 : 401
+    authOutcome.record(
+      verified.error === 'jwks_unavailable' ? 'transient' : 'invalid',
+      verified.error === 'jwks_unavailable' ? 'provider_unavailable' : 'identity_token_invalid',
+    )
     return c.json({ error: 'invalid_identity_token', reason: verified.error }, httpStatus)
   }
 
@@ -576,6 +617,7 @@ auth.post('/apple', async (c) => {
   // SHARED authZ gate (identical to /plex/check).
   const authz = authorizeOrRedeem(namespacedSub, inviteCode, displayName, 'apple')
   if (!authz.allowed) {
+    authOutcome.record('denied', 'no_invite')
     return c.json({ status: 'denied', reason: 'no_invite' }, 403)
   }
   const role = effectiveRoleFor(displayName, namespacedSub)
@@ -590,7 +632,13 @@ auth.post('/apple', async (c) => {
     auth_mode: 'apple',
     username: displayName,
   })
-  if (deviceResponse) return deviceResponse
+  if (deviceResponse) {
+    authOutcome.record(
+      deviceResponse.ok ? 'authorized' : 'invalid',
+      deviceResponse.ok ? 'device_pair' : 'invalid_request',
+    )
+    return deviceResponse
+  }
 
   // Mint the session. NO plexAuthToken / verifiedPlexServerId — Apple
   // carries no Plex credential, and reconcileSession skips the plex.tv
@@ -606,6 +654,8 @@ auth.post('/apple', async (c) => {
   // skips re-work. No plexAuthToken/serverId fields for apple.
   _primeSessionGateCache(namespacedSub, 'member')
 
+  authOutcome.record('authorized', 'cookie')
+
   return c.json({
     status: 'authorized',
     user: {
@@ -615,23 +665,27 @@ auth.post('/apple', async (c) => {
       role,
     },
   })
-})
+}))
 
 // POST /api/auth/google — Google Sign-In. The Google parallel of
 // /api/auth/apple: prove identity via the Google ID token (verified against
 // Google's JWKS, never trusting a client-sent sub) and converge on the SAME
 // invite/members authZ gate. Device-pair body → device-token Bearer JWE;
 // browser body → session cookie. POST-only so requireSafeOrigin gates it.
-auth.post('/google', async (c) => {
-  const preLimit = enforceAuthRateLimit(c, 'google')
+auth.post('/google', (c) => withAuthOutcome(c, 'google', 'identity_verify', async (authOutcome) => {
+  const preLimit = enforceAuthRateLimit(c, 'google', undefined, authOutcome)
   if (preLimit) return preLimit
 
   if (!isGoogleConfigured()) {
+    authOutcome.record('transient', 'not_configured')
     return c.json({ error: 'google_not_configured' }, 503)
   }
 
   const parsed = await parseLimitedJson(c, AUTH_APPLE_MAX_BODY_BYTES)
-  if (parsed.tooLarge) return c.json({ error: 'body_too_large' }, 413)
+  if (parsed.tooLarge) {
+    authOutcome.record('invalid', 'invalid_request')
+    return c.json({ error: 'body_too_large' }, 413)
+  }
   const body = parsed.body as
     | { identityToken?: unknown; nonce?: unknown; inviteCode?: unknown }
     | null
@@ -643,10 +697,18 @@ auth.post('/google', async (c) => {
       : typeof (body as { idToken?: unknown })?.idToken === 'string'
         ? (body as { idToken: string }).idToken
         : undefined
-  if (!identityToken) return c.json({ error: 'missing identity_token' }, 400)
+  if (!identityToken) {
+    authOutcome.record('invalid', 'invalid_request')
+    return c.json({ error: 'missing identity_token' }, 400)
+  }
   // Identity-keyed bucket on the (unverified) Google sub: throttles a replay
   // run against one Google account even where client-IP headers are untrusted.
-  const identityLimited = enforceAuthIdentityRateLimit(c, 'google', unverifiedJwtSub(identityToken))
+  const identityLimited = enforceAuthIdentityRateLimit(
+    c,
+    'google',
+    unverifiedJwtSub(identityToken),
+    authOutcome,
+  )
   if (identityLimited) return identityLimited
   const nonce = typeof body?.nonce === 'string' ? body.nonce : undefined
   const inviteCode = typeof body?.inviteCode === 'string' ? body.inviteCode : undefined
@@ -658,6 +720,10 @@ auth.post('/google', async (c) => {
     // jwks_unavailable is OUR problem (transient Google outage) → 503 so a
     // login isn't reported to the user as "your token is bad." Else 401.
     const httpStatus = verified.error === 'jwks_unavailable' ? 503 : 401
+    authOutcome.record(
+      verified.error === 'jwks_unavailable' ? 'transient' : 'invalid',
+      verified.error === 'jwks_unavailable' ? 'provider_unavailable' : 'identity_token_invalid',
+    )
     return c.json({ error: 'invalid_identity_token', reason: verified.error }, httpStatus)
   }
 
@@ -671,6 +737,7 @@ auth.post('/google', async (c) => {
   // SHARED authZ gate (identical to /plex/check and /apple).
   const authz = authorizeOrRedeem(namespacedSub, inviteCode, displayName, 'google')
   if (!authz.allowed) {
+    authOutcome.record('denied', 'no_invite')
     return c.json({ status: 'denied', reason: 'no_invite' }, 403)
   }
   const role = effectiveRoleFor(displayName, namespacedSub)
@@ -683,7 +750,13 @@ auth.post('/google', async (c) => {
     auth_mode: 'google',
     username: displayName,
   })
-  if (deviceResponse) return deviceResponse
+  if (deviceResponse) {
+    authOutcome.record(
+      deviceResponse.ok ? 'authorized' : 'invalid',
+      deviceResponse.ok ? 'device_pair' : 'invalid_request',
+    )
+    return deviceResponse
+  }
 
   // Mint the session. NO plexAuthToken — Google carries no Plex credential,
   // and reconcileSession skips the plex.tv probe for google: subs.
@@ -696,6 +769,8 @@ auth.post('/google', async (c) => {
 
   _primeSessionGateCache(namespacedSub, 'member')
 
+  authOutcome.record('authorized', 'cookie')
+
   return c.json({
     status: 'authorized',
     user: {
@@ -705,7 +780,7 @@ auth.post('/google', async (c) => {
       role,
     },
   })
-})
+}))
 
 auth.post('/logout', async (c) => {
   const session = await readSession(c)
