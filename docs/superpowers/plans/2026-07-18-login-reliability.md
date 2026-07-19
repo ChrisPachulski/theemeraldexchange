@@ -266,7 +266,25 @@ No slice advances merely because its own focused test passes. The integration br
 9. Inspect redacted auth logs for correct outcome/retry evidence.
 10. Do not complete a real member/operator login without explicit credential authorization.
 
-## Task 15: Record the future migration backlog
+## Task 15: Close independent release-audit blockers
+
+**Files:**
+
+- Modify: `src/lib/auth.tsx` and auth lifecycle tests
+- Modify: `src/lib/hooks/useUserApiKey.ts`, the settings client/route, and focused tests
+- Add: a typed server auth-outcome reporter and tests
+- Modify: Plex, Apple, Google, and passkey terminal seams
+
+1. Bound every provider network leg and logout with attempt-scoped cancellation; release shared guards after timeout, cancellation, unmount, or error.
+2. Start the Plex total deadline before configuration/PIN setup, close its popup on abort, and keep the interactive WebAuthn ceremony outside the fetch timeout.
+3. Make logout fail safe locally even when the server request times out; a later `/api/me` remains the source of server-cookie truth.
+4. Scope Anthropic-key query data by provider subject and reject stale principal generations before any server mutation, cache write, or local credential removal.
+5. Bind settings mutations to the expected authenticated subject so a cookie change cannot redirect an in-flight secret write or delete to another household member.
+6. Emit exactly one typed, low-cardinality, redacted event for each terminal Plex, Apple, Google, and passkey outcome. Reuse the request ID, round elapsed time, and emit nothing for normal Plex pending polls.
+7. Prove black-holed provider requests cannot wedge the login lock, a slow WebAuthn prompt is not timed out, logout clears local state on timeout, principal switching cannot transfer a key, and sentinel login artifacts never enter serialized events.
+8. Re-run the complete matrix at the integrated commit and return the exact delta to the independent reviewers and Claude pane before deployment.
+
+## Task 16: Record the future migration backlog
 
 **Files:**
 

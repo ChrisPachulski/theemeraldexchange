@@ -198,10 +198,15 @@ This design deliberately revalidates rather than immediately destroying local st
 Structured auth events must answer these questions without exposing sensitive data:
 
 - Which provider and phase failed?
-- Was the outcome pending, authorized, denied, rate-limited, transient, cancelled, or expired?
+- Was the terminal server-observable outcome authorized, denied, invalid, rate-limited, or transient?
 - Which limiter scope rejected the request?
 - How long did the attempt take?
 - Which request ID correlates the event with the existing access log?
+
+Normal Plex pending polls emit no auth-outcome event: they are non-terminal, occur about 24 times per
+minute per healthy attempt, and would turn an operational signal into noise plus a PIN-correlation side
+channel. Client-only cancellation and expiry likewise remain browser lifecycle state rather than being
+invented as server outcomes.
 
 The service should emit a boot-time auth posture summary containing booleans and effective public configuration only: enabled providers, `serveSpa`, trusted-client-header mode, normalized allowed origins, WebAuthn RP ID, and WebAuthn origins. Secrets and raw administrator identities are excluded.
 
@@ -344,6 +349,9 @@ Real operator/member login is not required for the synthetic checks and must not
 | Invite is burned without a credential | One outer database transaction | Injected credential-write failure rollback test | Preserve DB backup and migration checks before rollout. |
 | Auth config exists in code but not deployment | Compose/template contract plus boot posture | Contract test over both Compose surfaces | Fail deployment before container recreation. |
 | Split-origin drift breaks cookies/WebAuthn | Exact configured origins and RP validation | Canonical-origin CORS/CSRF/passkey synthetics | Remove the class through the L2 single-origin milestone. |
+| A black-holed provider request wedges every login control | Attempt-scoped abort plus bounded fetch legs; Plex deadline includes setup | Never-settling fetch and second-attempt DOM regressions for every provider | Track timeout outcomes separately from credential denial. |
+| A shared-device account switch races a secret mutation | Subject-scoped cache, generation/abort guard, and expected-sub server binding | Mid-migration principal-flip test proves no cross-principal write, cache update, or local deletion | Keep every future per-member mutation explicitly bound to its initiating principal. |
+| Auth failures cannot be diagnosed safely | Closed structured outcome schema with request ID, rounded duration, and a strict field allowlist | Exactly-once/redaction tests across all terminal provider seams; pending polls produce no event | Alert on bounded outcome counts without adding identity or credential fields. |
 
 ## Rollout and rollback
 
@@ -353,7 +361,7 @@ Real operator/member login is not required for the synthetic checks and must not
 4. Build and deploy through the repository's NAS-safe workflow; never run a raw compile in the NAS application path.
 5. On boot, apply the forward-only Google auth-mode migration. It preserves the pre-migration members table as a recovery copy; do not edit the applied migration or treat application rollback as schema rollback.
 6. Verify health, release identity, auth methods, cookie/CORS/CSRF posture, two-flow limiter behavior, session-unavailable behavior, migration state, and redacted container logs.
-7. Watch auth outcome counts for at least one normal login window. Application rollback is code/config rollback; database restoration uses the normal backup workflow only.
+7. Watch redacted terminal auth outcome counts for at least one normal login window. Invalid credential-free synthetics may prove event shape; a real member/provider ceremony requires explicit operator authorization. Application rollback is code/config rollback; database restoration uses the normal backup workflow only.
 
 Rollback triggers include new 401 loops, repeated session-confirmation false negatives, limiter saturation below the documented envelope, or a setup state that is neither claimable nor owned.
 

@@ -14,6 +14,14 @@ Only an explicit `/api/me` `401` means anonymous. A timeout, network failure, `4
 fallback, or malformed JSON means the session is unavailable and should offer Retry. It must not
 flash the public sign-in screen.
 
+Every credential-setting provider network leg is bounded and belongs to one attempt-scoped abort
+signal. Non-interactive setup and verification legs have a 15-second request timeout; Plex checks are
+also bounded by the five-minute total attempt deadline. Timeout, cancellation/replacement, unmount, and
+sign-out release the shared login guard; none may leave all provider controls disabled until a reload.
+The interactive operating-system WebAuthn ceremony is not subject to the network timeout. Logout clears
+local protected state even when its server request times out, then a later `/api/me` reconciles the
+server cookie.
+
 Authorization is separate from authentication. Normal login requires an immutable `ADMIN_SUBS`
 entry, an active member row, invite redemption, or the explicit configured-Plex-server share
 path. Provider configuration and fresh-install state never grant access. First ownership uses the
@@ -61,6 +69,16 @@ Both return `429` and a browser-readable `Retry-After`; neither is a terminal cr
 Expected redactions cover inbound legacy login query fields, outbound Plex PIN URLs, Sentry
 events/breadcrumbs, and cascade-revocation bookkeeping. A raw provider subject or login artifact
 in logs is a security incident, not acceptable diagnostic context.
+
+The `auth_outcome` event is a closed operational contract: provider, phase, terminal outcome,
+low-cardinality reason/scope when applicable, request id, and rounded elapsed milliseconds only. Normal
+Plex pending polls intentionally emit no outcome event. Exactly one event is expected for an authorized,
+denied, invalid, rate-limited, or transient terminal request; free-text context and
+identity-derived correlation fields are forbidden.
+
+Per-member settings caches include the provider subject in their internal cache key. Secret-setting
+mutations also carry an expected-sub binding that the authenticated route checks before writing or
+deleting, so a shared-device account switch cannot redirect an in-flight migration to the next member.
 
 ## Deployment configuration
 
