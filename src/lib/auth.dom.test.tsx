@@ -7,6 +7,7 @@ import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { AuthProvider, useAuth } from './auth'
 import { SESSION_EXPIRED_EVENT } from './queryClient'
+import { useSuggested } from './hooks/useSuggested'
 
 const webauthnMocks = vi.hoisted(() => ({
   startAuthentication: vi.fn(),
@@ -77,6 +78,21 @@ function SessionProbe() {
       </button>
     </>
   )
+}
+
+function SuggestionsExpiryProbe() {
+  const auth = useAuth() as SessionAwareAuth
+  return (
+    <>
+      <SessionProbe />
+      {auth.sessionState === 'authenticated' && <SuggestionsQueryProbe />}
+    </>
+  )
+}
+
+function SuggestionsQueryProbe() {
+  const suggestions = useSuggested('movie', false, null)
+  return <output aria-label="suggestions state">{suggestions.status}</output>
 }
 
 function ProviderProbe() {
@@ -390,6 +406,55 @@ describe('browser session truth', () => {
 
     expect(screen.getByLabelText('session state')).toHaveTextContent('anonymous')
     expect(queryClient.getQueryData(['protected', 'watch-history'])).toBeUndefined()
+  })
+
+  it('revalidates a suggestions unauthenticated 401 and clears protected cache only after /api/me confirms anonymous', async () => {
+    const suggestions = deferred<Response>()
+    const expiryListener = vi.fn()
+    window.addEventListener(SESSION_EXPIRED_EVENT, expiryListener)
+    let meCalls = 0
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      const auxiliary = auxiliaryAuthResponse(url)
+      if (auxiliary) return Promise.resolve(auxiliary)
+      if (url.endsWith('/api/me')) {
+        meCalls += 1
+        return Promise.resolve(
+          meCalls === 1
+            ? json({
+                user: {
+                  sub: 'plex:42',
+                  username: 'member',
+                  role: 'user',
+                  auth_mode: 'plex',
+                },
+              })
+            : json({ error: 'unauthenticated' }, 401),
+        )
+      }
+      if (url.includes('/api/suggestions/movie')) return suggestions.promise
+      return Promise.reject(new Error(`unexpected fetch: ${url}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    renderWithAuth(<SuggestionsExpiryProbe />, queryClient)
+    await settleBoundedRead()
+
+    expect(screen.getByLabelText('session state')).toHaveTextContent('authenticated')
+    expect(screen.getByLabelText('suggestions state')).toHaveTextContent('pending')
+    queryClient.setQueryData(['protected', 'watch-history'], { items: [1] })
+
+    suggestions.resolve(json({ error: 'unauthenticated' }, 401))
+    await settleBoundedRead()
+
+    expect(expiryListener).toHaveBeenCalledTimes(1)
+    expect(meCalls).toBe(2)
+    expect(screen.getByLabelText('session state')).toHaveTextContent('anonymous')
+    expect(queryClient.getQueryData(['protected', 'watch-history'])).toBeUndefined()
+    window.removeEventListener(SESSION_EXPIRED_EVENT, expiryListener)
   })
 
   it('aborts an initial read on unmount and ignores its late result', async () => {

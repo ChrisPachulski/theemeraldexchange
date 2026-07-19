@@ -40,7 +40,7 @@ export async function throwApiError(res: Response, scope: string): Promise<never
     message = `Not enough disk space. ${freeGb} GB free, need ${thresholdGb} GB.`
   } else if (code === 'forbidden' && reason === 'admin_only') {
     message = "That action is admin-only."
-  } else if (code === 'unauthenticated' || res.status === 401) {
+  } else if (code === 'unauthenticated' && res.status === 401) {
     message = 'Your session expired. Sign in again.'
   } else if (code === 'default_quality_profile_missing') {
     const expected = typeof data.expected_name === 'string' ? data.expected_name : 'choose me'
@@ -125,10 +125,10 @@ export async function throwApiError(res: Response, scope: string): Promise<never
 /**
  * Duck-typed HTTP status of any thrown error, or undefined when the value
  * carries none. Several modules throw their own status-carrying error
- * classes instead of ApiError (e.g. SuggestionsError in useSuggested) —
- * cross-cutting consumers like the queryClient session-expiry detector
- * must not depend on `instanceof ApiError` or those errors silently
- * bypass them. Any error shaped `{ status: number }` participates.
+ * classes instead of ApiError. Cross-cutting consumers like the queryClient
+ * session-expiry detector must not depend on `instanceof ApiError` or those
+ * errors silently bypass them. Any error shaped `{ status: number }`
+ * participates.
  */
 export function errorStatus(e: unknown): number | undefined {
   if (e && typeof e === 'object' && 'status' in e) {

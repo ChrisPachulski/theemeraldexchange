@@ -54,6 +54,34 @@ describe('throwApiError', () => {
     })
   })
 
+  it.each([
+    {
+      status: 401,
+      body: {
+        error: 'upstream_unauthorized',
+        message: 'The upstream credentials were rejected.',
+      },
+    },
+    {
+      status: 403,
+      body: {
+        error: 'unauthenticated',
+        message: 'This request is forbidden.',
+      },
+    },
+  ])(
+    'reserves session-expired copy for exact 401 unauthenticated errors ($status)',
+    async ({ status, body }) => {
+      await expect(
+        throwApiError(jsonResponse(body, status), 'Suggestions'),
+      ).rejects.toMatchObject({
+        status,
+        code: body.error,
+        message: body.message,
+      })
+    },
+  )
+
   it('reports an edge unauthenticated 401 before an imperative caller can swallow it', async () => {
     const windowTarget = new EventTarget()
     const listener = vi.fn()

@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { apiUrl } from '../api/base'
+import { errorStatus, throwApiError } from '../api/errors'
 import type { TrendingItem } from './useTrending'
 
 // Library-aware personalized suggestions for the Discover surface. The
@@ -104,16 +105,6 @@ export type SuggestionResult = {
   diag: SuggestionDiag | null
 }
 
-export class SuggestionsError extends Error {
-  status: number
-  body: string
-  constructor(status: number, body: string) {
-    super(`suggestions ${status}: ${body.slice(0, 200)}`)
-    this.status = status
-    this.body = body
-  }
-}
-
 async function fetchSuggested(
   kind: 'movie' | 'tv',
   forceTrending: boolean,
@@ -136,8 +127,7 @@ async function fetchSuggested(
     // suggested.isError / suggested.error to the UI. Silently
     // collapsing 401/402/429/5xx into "no results" hid every backend
     // failure mode behind an indistinguishable blank strip.
-    const body = await r.text().catch(() => '')
-    throw new SuggestionsError(r.status, body)
+    await throwApiError(r, 'Suggestions')
   }
   const data = (await r.json()) as SuggestionsResponse
   return {
@@ -179,7 +169,8 @@ export function useSuggested(
     retry: (failureCount, err) => {
       // Don't retry 4xx — the user needs to fix their key / re-auth,
       // not wait for a network blip.
-      if (err instanceof SuggestionsError && err.status >= 400 && err.status < 500) return false
+      const status = errorStatus(err)
+      if (status !== undefined && status >= 400 && status < 500) return false
       return failureCount < 1
     },
   })

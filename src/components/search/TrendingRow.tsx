@@ -116,10 +116,21 @@ function StripHeader({
 }
 
 function describeError(error: unknown): { headline: string; hint: string } {
-  const e = error as { status?: number; body?: string; message?: string } | undefined
+  const e = error as {
+    status?: number
+    code?: string
+    body?: string
+    message?: string
+  } | undefined
   const status = e?.status
-  if (status === 401 || status === 403) {
+  if (status === 401 && e?.code === 'unauthenticated') {
     return { headline: 'Session expired', hint: 'Try signing out and back in.' }
+  }
+  if (status === 403) {
+    return {
+      headline: 'Access denied',
+      hint: "You don't have permission to load these suggestions.",
+    }
   }
   if (status === 402) {
     return {
