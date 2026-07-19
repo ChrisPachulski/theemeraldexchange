@@ -649,9 +649,10 @@ export const env = {
   // matches the NAS data bind-mount used by iptv.db and other data files.
   SERVER_DB_PATH: process.env.SERVER_DB_PATH ?? './data/server.db',
   // First-owner claim (plan 006 Phase 1): by default the claim endpoint
-  // only accepts requests whose SOCKET address is loopback/private (the
-  // nginx-ui advisory's bind-local recommendation, widened to LAN so a
-  // laptop can claim the NAS). Set to 1 only when deliberately claiming
+  // only accepts requests whose resolved client address is loopback/private
+  // (the nginx-ui advisory's bind-local recommendation, widened to LAN so a
+  // laptop can claim the NAS). Trusted proxy headers take precedence over the
+  // socket when explicitly enabled. Set to 1 only when deliberately claiming
   // through a tunnel/proxy — the setup token is still required either way.
   setupAllowRemote: process.env.SETUP_ALLOW_REMOTE === '1',
   IPTV_DB_PATH: process.env.IPTV_DB_PATH ?? './data/iptv.db',

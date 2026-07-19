@@ -201,4 +201,37 @@ describe('membership facade — memberStatus', () => {
     // And the freshly-minted member now reads as allowed via the facade.
     expect(m.memberStatus(BOB)).toBe('allowed')
   })
+
+  describe('durable ownership', () => {
+    it('does not treat a configured Plex server as durable ownership', async () => {
+      const m = await importMembership({ PLEX_SERVER_ID: 'machineid123' })
+      expect(m.hasDurableOwnershipGate()).toBe(false)
+    })
+
+    it('does not treat an ordinary member row as durable ownership', async () => {
+      addMember({ sub: ALICE, role: 'user', authMode: 'apple' })
+      const m = await importMembership({})
+      expect(m.hasDurableOwnershipGate()).toBe(false)
+    })
+
+    it.each([
+      ['active', false],
+      ['revoked', true],
+    ])('treats an %s admin row as durable ownership', async (_state, revoke) => {
+      addMember({ sub: ALICE, role: 'admin', authMode: 'apple' })
+      if (revoke) {
+        expect(
+          revokeMemberSafely({
+            targetSub: ALICE,
+            actorSub: ADMIN,
+            actorUsername: 'owner',
+            immutableAdminSubs: [ADMIN],
+            legacyAdminUsernames: [],
+          }),
+        ).toBe('revoked')
+      }
+      const m = await importMembership({})
+      expect(m.hasDurableOwnershipGate()).toBe(true)
+    })
+  })
 })

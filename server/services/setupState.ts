@@ -23,6 +23,7 @@
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { chmodSync, writeFileSync } from 'node:fs'
+import { isIP } from 'node:net'
 import { dirname, join } from 'node:path'
 import { serverDb } from './serverDb.js'
 import { hasDurableOwnershipGate } from './membership.js'
@@ -146,13 +147,14 @@ export function isPrivateAddress(addr: string): boolean {
   let ip = addr.trim().toLowerCase()
   if (ip.startsWith('[') && ip.endsWith(']')) ip = ip.slice(1, -1)
   if (ip.startsWith('::ffff:')) ip = ip.slice(7) // v4-mapped v6
+  if (isIP(ip) === 0) return false
   if (ip === '::1') return true // v6 loopback
   if (/^fe80:/.test(ip)) return true // v6 link-local
   if (/^f[cd][0-9a-f]{2}:/.test(ip)) return true // v6 ULA fc00::/7
   return V4_PRIVATE.some((re) => re.test(ip))
 }
 
-/** May a claim attempt proceed from this socket address? */
+/** May a claim attempt proceed from this resolved client address? */
 export function claimSourceAllowed(remoteAddr: string | undefined): boolean {
   if (env.setupAllowRemote) return true
   if (!remoteAddr) return false // fail closed when the socket is unreadable

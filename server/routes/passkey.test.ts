@@ -53,6 +53,11 @@ const setupState = vi.hoisted(() => ({
 }))
 vi.mock('../services/setupState.js', () => setupState)
 
+const connection = vi.hoisted(() => ({
+  getConnInfo: vi.fn(() => ({ remote: { address: '192.168.1.25' } })),
+}))
+vi.mock('@hono/node-server/conninfo', () => connection)
+
 const transactionHarness = vi.hoisted(() => ({
   events: [] as string[],
   modes: [] as Array<'deferred' | 'immediate'>,
@@ -78,6 +83,9 @@ vi.mock('../services/serverDb.js', () => ({
 }))
 
 import { passkey } from './passkey.js'
+import { env } from '../env.js'
+
+const envRw = env as unknown as Record<string, unknown>
 
 function post(path: string, body: unknown) {
   return passkey.request(path, {
@@ -89,6 +97,9 @@ function post(path: string, body: unknown) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  envRw.trustClientIpHeaders = false
+  connection.getConnInfo.mockReturnValue({ remote: { address: '192.168.1.25' } })
+  setupState.claimSourceAllowed.mockReturnValue(true)
   transactionHarness.events.length = 0
   transactionHarness.modes.length = 0
   setSessionCookie.mockResolvedValue(undefined)
@@ -255,6 +266,89 @@ describe('first-owner claim (plan 006 Phase 1)', () => {
     expect(setupState.verifySetupToken).not.toHaveBeenCalled()
     expect(webauthn.persistCredential).not.toHaveBeenCalled()
     setupState.claimSourceAllowed.mockReturnValue(true)
+  })
+
+  it.each([
+    {
+      name: 'blocks a public Cloudflare client instead of trusting the private proxy socket',
+      trusted: true,
+      socket: '127.0.0.1',
+      headers: { 'cf-connecting-ip': '203.0.113.9' },
+      expectedSource: '203.0.113.9',
+      allowed: false,
+    },
+    {
+      name: 'allows a private Cloudflare client',
+      trusted: true,
+      socket: '127.0.0.1',
+      headers: { 'cf-connecting-ip': '192.168.50.7' },
+      expectedSource: '192.168.50.7',
+      allowed: true,
+    },
+    {
+      name: 'uses True-Client-IP when Cloudflare connecting IP is absent',
+      trusted: true,
+      socket: '127.0.0.1',
+      headers: { 'true-client-ip': '203.0.113.11' },
+      expectedSource: '203.0.113.11',
+      allowed: false,
+    },
+    {
+      name: 'rejects a malformed trusted address instead of falling back to the proxy socket',
+      trusted: true,
+      socket: '127.0.0.1',
+      headers: { 'cf-connecting-ip': '127.example.invalid' },
+      expectedSource: '127.example.invalid',
+      allowed: false,
+    },
+    {
+      name: 'ignores a spoofed private header when proxy trust is off',
+      trusted: false,
+      socket: '203.0.113.10',
+      headers: { 'cf-connecting-ip': '192.168.50.8' },
+      expectedSource: '203.0.113.10',
+      allowed: false,
+    },
+    {
+      name: 'allows a direct private-LAN socket',
+      trusted: false,
+      socket: '192.168.1.55',
+      headers: {},
+      expectedSource: '192.168.1.55',
+      allowed: true,
+    },
+    {
+      name: 'allows a Tailscale Serve CGNAT socket',
+      trusted: false,
+      socket: '100.64.12.34',
+      headers: {},
+      expectedSource: '100.64.12.34',
+      allowed: true,
+    },
+    {
+      name: 'does not use X-Forwarded-For without a validated proxy chain',
+      trusted: true,
+      socket: '203.0.113.12',
+      headers: { 'x-forwarded-for': '192.168.1.56' },
+      expectedSource: '203.0.113.12',
+      allowed: false,
+    },
+  ])('$name', async ({ trusted, socket, headers, expectedSource, allowed }) => {
+    envRw.trustClientIpHeaders = trusted
+    connection.getConnInfo.mockReturnValue({ remote: { address: socket } })
+    setupState.claimSourceAllowed.mockReturnValue(allowed)
+    webauthn.verifyRegistration.mockResolvedValue(verified)
+    setupState.isClaimable.mockReturnValue(true)
+    setupState.verifySetupToken.mockReturnValue(true)
+
+    const res = await passkey.request('/register/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify(claimBody),
+    })
+
+    expect(res.status).toBe(allowed ? 200 : 403)
+    expect(setupState.claimSourceAllowed).toHaveBeenCalledWith(expectedSource)
   })
 
   it('SECURITY: race — claim already taken inside the transaction → 403 already_claimed', async () => {

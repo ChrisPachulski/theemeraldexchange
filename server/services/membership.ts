@@ -67,16 +67,16 @@ export function memberStatus(sub: string): MemberStatus {
 }
 
 /**
- * True once durable configuration or state proves that the owner/setup path
- * has another gate: a configured Plex server-share scope, an ADMIN_SUBS
- * owner-bootstrap entry, or any members row. A revoked row still counts so
- * deleting access cannot accidentally reopen first-owner setup.
+ * True once durable configuration or state proves that an owner exists:
+ * an ADMIN_SUBS owner-bootstrap entry or any admin members row. A revoked
+ * admin row still counts so revoking access cannot reopen first-owner setup.
+ * Provider configuration and ordinary member rows are authorization inputs,
+ * not proof of server ownership.
  */
 export function hasDurableOwnershipGate(): boolean {
-  if (env.plexServerId) return true
   if ((env.adminSubs ?? []).length > 0) return true
-  const anyMember = serverDb()
-    .raw.prepare(`SELECT 1 FROM members LIMIT 1`)
+  const anyAdmin = serverDb()
+    .raw.prepare(`SELECT 1 FROM members WHERE role = 'admin' LIMIT 1`)
     .get() as unknown
-  return anyMember !== undefined
+  return anyAdmin !== undefined
 }

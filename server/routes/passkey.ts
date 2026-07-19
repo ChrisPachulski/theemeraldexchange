@@ -44,6 +44,7 @@ import {
 } from '../services/setupState.js'
 import { serverDb } from '../services/serverDb.js'
 import { getConnInfo } from '@hono/node-server/conninfo'
+import { resolveClientAddress } from '../services/clientAddress.js'
 
 export const passkey = new Hono<Env>()
 
@@ -141,18 +142,24 @@ passkey.post('/register/verify', async (c) => {
   // always fail closed for identities without a member/admin/invite/share.
   // Only the boot-minted setup token enters this OWNER path: role 'admin', a real members row
   // (which closes setup for good), and the token burned. Source-gated to
-  // private/loopback socket addresses unless SETUP_ALLOW_REMOTE=1
+  // private/loopback client addresses unless SETUP_ALLOW_REMOTE=1
   // (GHSA-mxqh-q9h6-v8pq: never leave first-run ownership claimable by
   // whoever shows up first).
   const setupToken = typeof body?.setupToken === 'string' ? body.setupToken : undefined
   if (setupToken !== undefined) {
-    let remoteAddr: string | undefined
+    let socketAddress: string | undefined
     try {
-      remoteAddr = getConnInfo(c).remote.address
+      socketAddress = getConnInfo(c).remote.address
     } catch {
-      remoteAddr = undefined // fail closed below unless SETUP_ALLOW_REMOTE=1
+      socketAddress = undefined // fail closed below unless SETUP_ALLOW_REMOTE=1
     }
-    if (!claimSourceAllowed(remoteAddr)) {
+    const client = resolveClientAddress({
+      trustProxyHeaders: env.trustClientIpHeaders,
+      cfConnectingIp: c.req.header('cf-connecting-ip'),
+      trueClientIp: c.req.header('true-client-ip'),
+      socketAddress,
+    })
+    if (!claimSourceAllowed(client?.address)) {
       return c.json({ error: 'claim_source_blocked' }, 403)
     }
     if (!verifySetupToken(setupToken)) {

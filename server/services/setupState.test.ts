@@ -27,6 +27,7 @@ import {
   verifySetupToken,
   markClaimed,
   isPrivateAddress,
+  claimSourceAllowed,
 } from './setupState.js'
 import { addMember, revokeMemberSafely } from './members.js'
 import { env } from '../env.js'
@@ -40,6 +41,7 @@ const originalOwnershipEnv = {
   adminSubs: env.adminSubs,
   appleClientId: env.appleClientId,
   googleClientIds: env.googleClientIds,
+  setupAllowRemote: env.setupAllowRemote,
 }
 
 function wipe(): void {
@@ -67,6 +69,7 @@ describe('setupState', () => {
     envRw.adminSubs = []
     envRw.appleClientId = null
     envRw.googleClientIds = []
+    envRw.setupAllowRemote = false
   })
 
   afterAll(() => {
@@ -76,6 +79,7 @@ describe('setupState', () => {
     envRw.adminSubs = originalOwnershipEnv.adminSubs
     envRw.appleClientId = originalOwnershipEnv.appleClientId
     envRw.googleClientIds = originalOwnershipEnv.googleClientIds
+    envRw.setupAllowRemote = originalOwnershipEnv.setupAllowRemote
     closeServerDb()
     fs.rmSync(tmpDbDir, { recursive: true, force: true })
   })
@@ -109,13 +113,21 @@ describe('setupState', () => {
     expect(hash).toBeUndefined()
   })
 
+  it('an ordinary member row does not close first-owner claimability', () => {
+    ensureSetupToken()
+    const token = tokenFromFile()
+    addMember({ sub: OWNER, role: 'user', authMode: 'local' })
+    expect(isClaimable()).toBe(true)
+    expect(verifySetupToken(token)).toBe(true)
+  })
+
   it.each([
     ['active', false],
     ['revoked', true],
-  ])('an %s members row ends claimability — the one-way door', (_state, revoke) => {
+  ])('an %s admin row ends claimability — the one-way door', (_state, revoke) => {
     ensureSetupToken()
     const token = tokenFromFile()
-    addMember({ sub: OWNER, authMode: 'local' })
+    addMember({ sub: OWNER, role: 'admin', authMode: 'local' })
     if (revoke) {
       expect(
         revokeMemberSafely({
@@ -134,6 +146,7 @@ describe('setupState', () => {
 
   it.each([
     ['Plex', () => { envRw.plexClientId = 'stable-public-client-id' }],
+    ['Plex server scope', () => { envRw.plexServerId = 'home-machine' }],
     ['Apple', () => { envRw.appleClientId = 'com.example.exchange' }],
     ['Google', () => { envRw.googleClientIds = ['web.example.apps.googleusercontent.com'] }],
   ])('%s configuration alone remains claimable', (_provider, configure) => {
@@ -141,11 +154,8 @@ describe('setupState', () => {
     expect(isClaimable()).toBe(true)
   })
 
-  it.each([
-    ['Plex server ownership gate', () => { envRw.plexServerId = 'home-machine' }],
-    ['ADMIN_SUBS ownership gate', () => { envRw.adminSubs = ['plex:42'] }],
-  ])('%s closes claimability', (_gate, configure) => {
-    configure()
+  it('ADMIN_SUBS ownership gate closes claimability', () => {
+    envRw.adminSubs = ['plex:42']
     expect(isClaimable()).toBe(false)
   })
 
@@ -154,8 +164,9 @@ describe('setupState', () => {
     expect(isClaimable()).toBe(false)
   })
 
-  it('warns that configured identity providers still require a passkey claim', () => {
+  it('warns that configured identity providers and Plex scope still require a passkey claim', () => {
     envRw.plexClientId = 'SECRET-PLEX-ID'
+    envRw.plexServerId = 'SECRET-PLEX-SERVER-ID'
     envRw.appleClientId = 'SECRET-APPLE-ID'
     envRw.googleClientIds = ['SECRET-GOOGLE-ID']
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
@@ -169,6 +180,7 @@ describe('setupState', () => {
       expect(line).toContain('apple')
       expect(line).toContain('google')
       expect(line).not.toContain('SECRET-PLEX-ID')
+      expect(line).not.toContain('SECRET-PLEX-SERVER-ID')
       expect(line).not.toContain('SECRET-APPLE-ID')
       expect(line).not.toContain('SECRET-GOOGLE-ID')
       expect(line).not.toContain(tokenFromFile())
@@ -245,9 +257,16 @@ describe('setupState', () => {
       '172.32.0.1', // just past RFC1918 /12
       '2001:4860:4860::8888',
       '203.0.113.7',
+      '127.example.invalid',
       '',
     ]) {
       expect(isPrivateAddress(bad), bad).toBe(false)
     }
+  })
+
+  it('SETUP_ALLOW_REMOTE explicitly overrides the source-address gate', () => {
+    envRw.setupAllowRemote = true
+    expect(claimSourceAllowed('203.0.113.7')).toBe(true)
+    expect(claimSourceAllowed(undefined)).toBe(true)
   })
 })

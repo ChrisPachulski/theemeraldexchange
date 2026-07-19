@@ -54,6 +54,7 @@ import { verifyAppleIdentityToken } from './services/appleAuth.js'
 import { verifyGoogleIdentityToken } from './services/googleAuth.js'
 import { maybeMintDeviceToken } from './services/devicePair.js'
 import { createLogger } from './services/logger.js'
+import { resolveClientAddress } from './services/clientAddress.js'
 
 export const auth = new Hono()
 const authLog = createLogger('auth')
@@ -109,12 +110,12 @@ export function _resetAuthRateLimitsForTests(): void {
 }
 
 function trustedAuthClientIdentity(c: Context): string | null {
-  if (!env.trustClientIpHeaders) return null
-  const cfConnectingIp = c.req.header('cf-connecting-ip')?.trim()
-  if (cfConnectingIp) return `cf:${cfConnectingIp}`
-  const trueClientIp = c.req.header('true-client-ip')?.trim()
-  if (trueClientIp) return `true-client:${trueClientIp}`
-  return null
+  const client = resolveClientAddress({
+    trustProxyHeaders: env.trustClientIpHeaders,
+    cfConnectingIp: c.req.header('cf-connecting-ip'),
+    trueClientIp: c.req.header('true-client-ip'),
+  })
+  return client ? `${client.source}:${client.address}` : null
 }
 
 function authRateLimitRules(c: Context, kind: AuthRateLimitKind, pinId?: number): AuthRateLimitRule[] {
