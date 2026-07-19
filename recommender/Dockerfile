@@ -114,6 +114,7 @@ RUN mkdir -p /data /data/hf-cache \
  && chmod 755 /usr/local/bin/recommender-entrypoint
 
 ENV RECOMMENDER_DB_PATH=/data/exchange.db \
+    RECOMMENDER_MIGRATIONS_DIR=/srv/migrations \
     RECOMMENDER_HOST=0.0.0.0 \
     RECOMMENDER_PORT=8000 \
     HF_HOME=/data/hf-cache

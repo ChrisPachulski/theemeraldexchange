@@ -111,17 +111,26 @@ def _embedding_parity(fixture: dict[str, Any]) -> tuple[float, list[list[int]]]:
     return max_delta, top3
 
 
-def _persistence_smoke(fixture: dict[str, Any]) -> tuple[int, int, float]:
+def _persistence_smoke(fixture: dict[str, Any]) -> tuple[int, int, int, float]:
     # app.config freezes environment settings at import time. Set the temporary
     # database path before importing any application modules.
     with tempfile.TemporaryDirectory(prefix="eex-embedding-gate-") as temp_dir:
         db_path = Path(temp_dir) / "exchange.db"
         os.environ["RECOMMENDER_DB_PATH"] = str(db_path)
+        # This verifier is mounted at /ci, so Python resolves the installed app
+        # wheel instead of /srv/app. The image must make its migration location
+        # explicit so both import roots share one production configuration.
+        migrations_dir = Path("/srv/migrations")
+        _require(migrations_dir.is_dir(), f"image migrations missing at {migrations_dir}")
 
         from app.config import CONFIG
         from app.db import connect, deserialize_f32, migrate
         from workers.featurize import run
 
+        _require(
+            CONFIG.migrations_dir == migrations_dir,
+            f"configured migrations {CONFIG.migrations_dir} != image migrations {migrations_dir}",
+        )
         _require(
             CONFIG.embed_model == fixture["model"],
             f"configured model {CONFIG.embed_model!r} != baseline model {fixture['model']!r}",
@@ -130,7 +139,8 @@ def _persistence_smoke(fixture: dict[str, Any]) -> tuple[int, int, float]:
             CONFIG.embed_revision == fixture["model_revision"],
             "configured model revision does not match the baseline",
         )
-        migrate(db_path=db_path)
+        applied = migrate(db_path=db_path)
+        _require(applied, "fresh image database applied zero SQL migrations")
 
         conn = connect(db_path=db_path)
         try:
@@ -181,7 +191,7 @@ def _persistence_smoke(fixture: dict[str, Any]) -> tuple[int, int, float]:
             abs(stored_norm - 1.0) <= NORM_TOLERANCE,
             f"persisted vector norm {stored_norm:.8g} is not normalized",
         )
-        return processed, vec_count, stored_norm
+        return len(applied), processed, vec_count, stored_norm
 
 
 def main() -> None:
@@ -206,7 +216,7 @@ def main() -> None:
     _require(getattr(torch.version, "hip", None) is None, "ROCm-enabled torch wheel found")
 
     max_delta, top3 = _embedding_parity(fixture)
-    processed, vec_count, stored_norm = _persistence_smoke(fixture)
+    migration_count, processed, vec_count, stored_norm = _persistence_smoke(fixture)
     print(
         json.dumps(
             {
@@ -219,6 +229,7 @@ def main() -> None:
                 "model_revision": fixture["model_revision"],
                 "max_element_delta": max_delta,
                 "top3_stable": top3 == fixture["top3_neighbors"],
+                "migrations_applied": migration_count,
                 "rows_featurized": processed,
                 "title_vec_rows": vec_count,
                 "persisted_norm": stored_norm,
