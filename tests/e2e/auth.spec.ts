@@ -52,17 +52,20 @@ test.describe('auth session', () => {
       role: 'user' as const,
       auth_mode: 'plex',
     }
+    const providerUser = { ...user, username: 'Unconfirmed Plex profile' }
     let established = false
     let checks = 0
+    let confirmedMeCalls = 0
     const checkTimes: number[] = []
 
-    await page.route('**/api/me', (route) =>
-      route.fulfill({
+    await page.route('**/api/me', (route) => {
+      if (established) confirmedMeCalls += 1
+      return route.fulfill({
         status: established ? 200 : 401,
         contentType: 'application/json',
         body: JSON.stringify(established ? { user } : { error: 'unauthenticated' }),
-      }),
-    )
+      })
+    })
     await page.route('**/api/auth/plex/config', (route) =>
       route.fulfill({
         status: 200,
@@ -75,6 +78,13 @@ test.describe('auth session', () => {
       checkTimes.push(Date.now())
       if (checks === 1) {
         return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ status: 'pending' }),
+        })
+      }
+      if (checks === 2) {
+        return route.fulfill({
           status: 429,
           headers: { 'Retry-After': '3', 'Access-Control-Expose-Headers': 'Retry-After' },
           contentType: 'application/json',
@@ -85,7 +95,7 @@ test.describe('auth session', () => {
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ status: 'authorized', user }),
+        body: JSON.stringify({ status: 'authorized', user: providerUser }),
       })
     })
     await context.route('https://plex.tv/api/v2/pins**', (route) =>
@@ -105,10 +115,13 @@ test.describe('auth session', () => {
 
     await expect(page.getByRole('button', { name: 'Waiting for Plex…' }).first()).toBeVisible()
     await expect(page.getByRole('alert')).toHaveCount(0)
-    await expect(page.getByText(user.username, { exact: true })).toBeVisible({ timeout: 12_000 })
+    await expect(page.getByText(user.username, { exact: true })).toBeVisible({ timeout: 15_000 })
 
-    expect(checks).toBe(2)
-    expect(checkTimes[1] - checkTimes[0]).toBeGreaterThanOrEqual(2_800)
+    expect(checks).toBe(3)
+    expect(checkTimes[1] - checkTimes[0]).toBeGreaterThanOrEqual(2_300)
+    expect(checkTimes[2] - checkTimes[1]).toBeGreaterThanOrEqual(2_800)
+    expect(confirmedMeCalls).toBeGreaterThanOrEqual(1)
+    await expect(page.getByText(providerUser.username, { exact: true })).toHaveCount(0)
     await expect(page.getByRole('button', { name: /Sign in with Plex/i })).toHaveCount(0)
   })
 })

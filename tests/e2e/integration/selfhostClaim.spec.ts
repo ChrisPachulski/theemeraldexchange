@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import Database from 'better-sqlite3'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
@@ -19,7 +20,6 @@ import path from 'node:path'
 
 const PORT = 3199
 const BASE = `http://localhost:${PORT}`
-const HAS_DIST = fs.existsSync('dist/index.html')
 
 let server: ChildProcess | undefined
 let dataDir: string
@@ -41,12 +41,57 @@ async function waitForHealth(): Promise<void> {
   throw new Error('bare self-host server never became healthy')
 }
 
-test.describe('self-host: bare boot → claim → gate closed → invites', () => {
-  test.skip(!HAS_DIST, 'needs a vite build (dist/index.html) — run `npx vite build`')
+function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (exited: boolean) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      child.removeListener('exit', onExit)
+      resolve(exited)
+    }
+    const onExit = () => finish(true)
+    const timer = setTimeout(() => finish(false), timeoutMs)
+    child.once('exit', onExit)
+  })
+}
 
+async function stopServer(): Promise<void> {
+  const child = server
+  if (!child || child.exitCode !== null || child.signalCode !== null) return
+  const stopped = waitForExit(child, 5_000)
+  child.kill('SIGTERM')
+  if (await stopped) return
+  const killed = waitForExit(child, 5_000)
+  child.kill('SIGKILL')
+  if (!(await killed)) throw new Error('bare self-host server did not exit')
+}
+
+function identityCounts(): { members: number; credentials: number } {
+  const db = new Database(path.join(dataDir, 'server.db'), { readonly: true })
+  try {
+    const members = db.prepare('SELECT COUNT(*) AS count FROM members').get() as {
+      count: number
+    }
+    const credentials = db
+      .prepare('SELECT COUNT(*) AS count FROM webauthn_credentials')
+      .get() as { count: number }
+    return { members: members.count, credentials: credentials.count }
+  } finally {
+    db.close()
+  }
+}
+
+test.describe('self-host: bare boot → claim → gate closed → invites', () => {
   test.beforeAll(async () => {
+    if (!fs.existsSync('dist/index.html')) {
+      throw new Error('self-host claim E2E requires `npm run build:spa`; refusing to skip')
+    }
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eex-claim-'))
-    server = spawn('npx', ['tsx', 'server/index.ts'], {
+    // Launch the backend process directly, not through an `npx` wrapper, so
+    // teardown signals and awaits the process that actually owns the port.
+    server = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], {
       env: {
         PATH: process.env.PATH ?? '',
         HOME: process.env.HOME ?? '',
@@ -74,7 +119,7 @@ test.describe('self-host: bare boot → claim → gate closed → invites', () =
   })
 
   test.afterAll(async () => {
-    server?.kill()
+    await stopServer()
     if (dataDir) fs.rmSync(dataDir, { recursive: true, force: true })
   })
 
@@ -175,6 +220,42 @@ test.describe('self-host: bare boot → claim → gate closed → invites', () =
       await memberContext.close()
     }
 
+    const identitiesAfterRedemption = identityCounts()
+    expect(identitiesAfterRedemption).toEqual({ members: 2, credentials: 2 })
+
+    // 7. The same plaintext invite cannot authorize a second identity. Drive
+    // the complete registration ceremony in a third isolated cookie jar, then
+    // prove the route denied it before persisting either member or credential.
+    const rejectedContext = await browser.newContext()
+    try {
+      const rejectedPage = await rejectedContext.newPage()
+      const rejectedCdp = await rejectedContext.newCDPSession(rejectedPage)
+      await rejectedCdp.send('WebAuthn.enable')
+      await rejectedCdp.send('WebAuthn.addVirtualAuthenticator', {
+        options: {
+          protocol: 'ctap2',
+          transport: 'internal',
+          hasResidentKey: true,
+          hasUserVerification: true,
+          isUserVerified: true,
+          automaticPresenceSimulation: true,
+        },
+      })
+
+      await rejectedPage.goto(`${BASE}/#/invite/${invite.code}`)
+      await expect.poll(() => new URL(rejectedPage.url()).hash).toBe('')
+      await expect(rejectedPage.getByLabel('Invite code').first()).toHaveValue(invite.code!)
+      await rejectedPage.getByLabel('Your name').first().fill('Rejected member')
+      await rejectedPage.getByRole('button', { name: 'Create passkey' }).first().click()
+
+      await expect(rejectedPage.getByRole('alert').first()).toContainText(/invitation-only/i)
+      expect((await rejectedPage.request.get(`${BASE}/api/me`)).status()).toBe(401)
+    } finally {
+      await rejectedContext.close()
+    }
+
+    expect(identityCounts()).toEqual(identitiesAfterRedemption)
+
     // The owner sees the real single-use counter exhausted; the plaintext code
     // never appears in this list and cannot authorize a second member.
     const listed = await page.request.get(`${BASE}/api/admin/invites`)
@@ -186,7 +267,7 @@ test.describe('self-host: bare boot → claim → gate closed → invites', () =
       listedBody.invites.find((row) => row.code_hash_prefix === invite.code_hash_prefix),
     ).toMatchObject({ max_uses: 1, used_count: 1 })
 
-    // 7. Optional integrations honestly absent: typed 503s, never 500s.
+    // 8. Optional integrations honestly absent: typed 503s, never 500s.
     for (const [p, err] of [
       ['/api/sonarr/api/v3/series', 'sonarr_not_configured'],
       ['/api/auth/plex/config', 'plex_not_configured'],
