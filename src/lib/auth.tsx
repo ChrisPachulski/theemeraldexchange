@@ -141,6 +141,8 @@ const SESSION_CONFIRMATION_UNAVAILABLE_ERROR =
   'Sign-in succeeded, but the browser session could not be confirmed. Check your connection and try again.'
 const SESSION_MISMATCH_ERROR =
   'Sign-in could not be completed because the confirmed session did not match. Try again.'
+const AUTH_INVALIDATION_CHANNEL = 'exchange:auth-change:v1'
+const SESSION_REFRESH_DEDUPE_MS = 100
 
 function isProviderSub(value: unknown): value is string {
   if (typeof value !== 'string' || value !== value.trim()) return false
@@ -378,6 +380,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [sessionState, setSessionState] = useState<SessionState>('loading')
   const [sessionError, setSessionError] = useState<string | null>(null)
   const [user, setUser] = useState<AuthUser | null>(null)
+  const userRef = useRef<AuthUser | null>(null)
   // Per-user data (feedback dots, usage totals, BYO-key-scoped
   // suggestions) lives in the React Query cache. Without a reset on
   // identity change, a shared device leaks state across users — sign
@@ -387,12 +390,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // The fingerprint segment on suggestions/feedback keys helps but
   // isn't exhaustive: feedback's key is just ['feedback'], usage's
   // ['usage', ...] isn't sub-scoped, and a per-key audit grows brittle
-  // as new hooks land. Cache-clear on identity transition is the
-  // belt-and-suspenders fix — synchronous so the first re-render
-  // under the new identity already sees an empty cache.
+  // as new hooks land. Cache-clear on principal or role transition is the
+  // belt-and-suspenders fix — synchronous so the first re-render under a new
+  // authority sees an empty cache. A background recheck of the same principal
+  // deliberately preserves the cache and dashboard.
   const applyUser = useCallback(
     (next: AuthUser | null) => {
-      qc.clear()
+      const current = userRef.current
+      if (
+        next === null ||
+        current?.sub !== next.sub ||
+        current?.role !== next.role
+      ) {
+        qc.clear()
+      }
+      userRef.current = next
       setUser(next)
     },
     [qc],
@@ -418,6 +430,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const nextSignInAttemptRef = useRef(0)
   const sessionReadRef = useRef<AbortController | null>(null)
   const sessionReadGenerationRef = useRef(0)
+  const sessionRefreshTimerRef = useRef<number | null>(null)
+  const pendingRefreshBroadcastRef = useRef(false)
+  const deferredRefreshRef = useRef(false)
+  const deferredRefreshBroadcastRef = useRef(false)
+  const authChannelRef = useRef<BroadcastChannel | null>(null)
+  const authInvalidationEpochRef = useRef(0)
+  const signOutInFlightRef = useRef(false)
   const mountedRef = useRef(true)
   const rejectMalformedInvite = useCallback((inviteCode?: string) => {
     const message = inviteCodeError(inviteCode)
@@ -428,11 +447,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return true
   }, [])
 
+  const invalidateSessionReads = useCallback(() => {
+    sessionReadGenerationRef.current += 1
+    sessionReadRef.current?.abort()
+    sessionReadRef.current = null
+  }, [])
+
   const readCurrentSession = useCallback(async (): Promise<SessionReadResult> => {
     if (!mountedRef.current) return { status: 'aborted' }
-    sessionReadRef.current?.abort()
+    invalidateSessionReads()
     const controller = new AbortController()
-    const generation = ++sessionReadGenerationRef.current
+    const generation = sessionReadGenerationRef.current
     sessionReadRef.current = controller
     const result = await readBrowserSession(controller.signal)
     if (
@@ -445,33 +470,109 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     sessionReadRef.current = null
     return result
+  }, [invalidateSessionReads])
+
+  const broadcastAuthInvalidation = useCallback(() => {
+    try {
+      authChannelRef.current?.postMessage({
+        type: 'invalidate',
+        epoch: ++authInvalidationEpochRef.current,
+      })
+    } catch {
+      // Broadcast is best-effort. Local session truth never depends on it;
+      // focus/visibility/pageshow still reconcile tabs without channel support.
+    }
   }, [])
 
   const commitSessionResult = useCallback(
-    (result: Exclude<SessionReadResult, { status: 'aborted' }>) => {
+    (
+      result: Exclude<SessionReadResult, { status: 'aborted' }>,
+      options: { background?: boolean; broadcastAnonymous?: boolean } = {},
+    ) => {
       if (!mountedRef.current) return
       if (result.status === 'authenticated') {
         applyUser(result.user)
         setSessionState('authenticated')
         setSessionError(null)
       } else if (result.status === 'anonymous') {
+        const wasAuthenticated = userRef.current !== null
         applyUser(null)
         setSessionState('anonymous')
         setSessionError(null)
+        if (wasAuthenticated && options.broadcastAnonymous) {
+          broadcastAuthInvalidation()
+        }
       } else {
+        if (options.background && userRef.current !== null) return
         setSessionState('unavailable')
         setSessionError(SESSION_UNAVAILABLE_ERROR)
       }
     },
-    [applyUser],
+    [applyUser, broadcastAuthInvalidation],
   )
 
+  const cancelScheduledSessionRefresh = useCallback(() => {
+    if (sessionRefreshTimerRef.current !== null) {
+      window.clearTimeout(sessionRefreshTimerRef.current)
+      sessionRefreshTimerRef.current = null
+    }
+    pendingRefreshBroadcastRef.current = false
+  }, [])
+
+  const scheduleSessionRefresh = useCallback(
+    (broadcastAnonymous: boolean) => {
+      if (!mountedRef.current) return
+      if (signInInFlightRef.current || signOutInFlightRef.current) {
+        deferredRefreshRef.current = true
+        deferredRefreshBroadcastRef.current ||= broadcastAnonymous
+        return
+      }
+      pendingRefreshBroadcastRef.current ||= broadcastAnonymous
+      if (sessionRefreshTimerRef.current !== null) return
+      sessionRefreshTimerRef.current = window.setTimeout(() => {
+        sessionRefreshTimerRef.current = null
+        const shouldBroadcastAnonymous = pendingRefreshBroadcastRef.current
+        pendingRefreshBroadcastRef.current = false
+        if (signInInFlightRef.current || signOutInFlightRef.current) {
+          deferredRefreshRef.current = true
+          deferredRefreshBroadcastRef.current ||= shouldBroadcastAnonymous
+          return
+        }
+        void readCurrentSession().then((result) => {
+          if (result.status !== 'aborted') {
+            commitSessionResult(result, {
+              background: true,
+              broadcastAnonymous: shouldBroadcastAnonymous,
+            })
+          }
+        })
+      }, SESSION_REFRESH_DEDUPE_MS)
+    },
+    [commitSessionResult, readCurrentSession],
+  )
+
+  const drainDeferredSessionRefresh = useCallback(() => {
+    if (!deferredRefreshRef.current) return
+    const shouldBroadcastAnonymous = deferredRefreshBroadcastRef.current
+    deferredRefreshRef.current = false
+    deferredRefreshBroadcastRef.current = false
+    scheduleSessionRefresh(shouldBroadcastAnonymous)
+  }, [scheduleSessionRefresh])
+
   const retrySession = useCallback(async () => {
+    if (signInInFlightRef.current || signOutInFlightRef.current) {
+      deferredRefreshRef.current = true
+      deferredRefreshBroadcastRef.current = true
+      return
+    }
+    cancelScheduledSessionRefresh()
     setSessionState('loading')
     setSessionError(null)
     const result = await readCurrentSession()
-    if (result.status !== 'aborted') commitSessionResult(result)
-  }, [commitSessionResult, readCurrentSession])
+    if (result.status !== 'aborted') {
+      commitSessionResult(result, { broadcastAnonymous: true })
+    }
+  }, [cancelScheduledSessionRefresh, commitSessionResult, readCurrentSession])
 
   // Initial session probe. Cleanup aborts both the initial read and any later
   // provider confirmation that happens to be in flight during unmount.
@@ -482,18 +583,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })
     return () => {
       mountedRef.current = false
-      sessionReadGenerationRef.current += 1
-      sessionReadRef.current?.abort()
-      sessionReadRef.current = null
+      cancelScheduledSessionRefresh()
+      invalidateSessionReads()
     }
-  }, [commitSessionResult, readCurrentSession])
+  }, [
+    cancelScheduledSessionRefresh,
+    commitSessionResult,
+    invalidateSessionReads,
+    readCurrentSession,
+  ])
+
+  const isSignInAttemptCurrent = useCallback(
+    (provider: Exclude<ActiveSignIn, null>, attemptId: number) =>
+      !signOutInFlightRef.current &&
+      signInInFlightRef.current &&
+      activeSignInRef.current === provider &&
+      activeSignInAttemptRef.current === attemptId,
+    [],
+  )
 
   const confirmProviderSession = useCallback(
-    async (expectedSub: string): Promise<boolean> => {
+    async (
+      expectedSub: string,
+      provider: Exclude<ActiveSignIn, null>,
+      attemptId: number,
+    ): Promise<boolean> => {
+      if (!isSignInAttemptCurrent(provider, attemptId)) return false
       setSessionState('loading')
       setSessionError(null)
       const result = await readCurrentSession()
-      if (result.status === 'aborted') return false
+      if (
+        result.status === 'aborted' ||
+        !isSignInAttemptCurrent(provider, attemptId)
+      ) {
+        return false
+      }
       if (result.status === 'unavailable') {
         commitSessionResult(result)
         setSignInState('error')
@@ -515,9 +639,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       commitSessionResult(result)
       setSignInError(null)
+      broadcastAuthInvalidation()
       return true
     },
-    [commitSessionResult, readCurrentSession],
+    [
+      broadcastAuthInvalidation,
+      commitSessionResult,
+      isSignInAttemptCurrent,
+      readCurrentSession,
+    ],
   )
 
   // Provider discovery + first-owner claim state (plan 006 Phase 1).
@@ -545,6 +675,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  // Cross-tab messages are deliberately data-free: receiving tabs re-read the
+  // HttpOnly-cookie session instead of trusting identity sent by another tab.
+  // BroadcastChannel is optional; lifecycle events below provide eventual
+  // consistency on older or privacy-restricted browsers.
+  useEffect(() => {
+    if (typeof BroadcastChannel === 'undefined') return
+    let channel: BroadcastChannel
+    try {
+      channel = new BroadcastChannel(AUTH_INVALIDATION_CHANNEL)
+    } catch {
+      return
+    }
+    authChannelRef.current = channel
+    const onMessage = (event: MessageEvent<unknown>) => {
+      const data = event.data
+      if (
+        typeof data === 'object' &&
+        data !== null &&
+        (data as { type?: unknown }).type === 'invalidate' &&
+        typeof (data as { epoch?: unknown }).epoch === 'number'
+      ) {
+        scheduleSessionRefresh(false)
+      }
+    }
+    channel.addEventListener('message', onMessage)
+    return () => {
+      channel.removeEventListener('message', onMessage)
+      channel.close()
+      if (authChannelRef.current === channel) authChannelRef.current = null
+    }
+  }, [scheduleSessionRefresh])
+
+  useEffect(() => {
+    const refresh = () => scheduleSessionRefresh(true)
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') refresh()
+    }
+    window.addEventListener('focus', refresh)
+    window.addEventListener('pageshow', refresh)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    return () => {
+      window.removeEventListener('focus', refresh)
+      window.removeEventListener('pageshow', refresh)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+    }
+  }, [scheduleSessionRefresh])
+
   // Centralised 401/403 handling. A protected request can suggest that the
   // cookie expired, but only /api/me is allowed to declare this browser
   // anonymous. Revalidate through the same bounded reader so a transient API
@@ -560,6 +737,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const beginSignIn = useCallback(
     (provider: Exclude<ActiveSignIn, null>): number | null => {
       if (!mountedRef.current || signInInFlightRef.current) return null
+      cancelScheduledSessionRefresh()
+      invalidateSessionReads()
       const attemptId = ++nextSignInAttemptRef.current
       signInInFlightRef.current = true
       activeSignInRef.current = provider
@@ -567,7 +746,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setActiveSignIn(provider)
       return attemptId
     },
-    [],
+    [cancelScheduledSessionRefresh, invalidateSessionReads],
   )
 
   const clearSignIn = useCallback(
@@ -583,8 +762,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       activeSignInRef.current = null
       activeSignInAttemptRef.current = null
       if (mountedRef.current) setActiveSignIn(null)
+      drainDeferredSessionRefresh()
     },
-    [],
+    [drainDeferredSessionRefresh],
   )
 
   const beginAppleSignIn = useCallback(() => {
@@ -864,7 +1044,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             stopPolling(false)
             let confirmed = false
             try {
-              confirmed = await confirmProviderSession(providerSub)
+              confirmed = await confirmProviderSession(
+                providerSub,
+                'plex',
+                plexAttemptId,
+              )
             } finally {
               clearSignIn('plex', plexAttemptId)
             }
@@ -957,7 +1141,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setSignInError('Apple sign-in returned an unexpected response.')
             return false
           }
-          if (!(await confirmProviderSession(providerSub))) return false
+          if (
+            !(await confirmProviderSession(providerSub, 'apple', appleAttemptId))
+          ) {
+            return false
+          }
           setDiscoveredServers(null)
           setSignInState('idle')
           return true
@@ -1028,7 +1216,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setSignInError('Passkey sign-in returned an unexpected response.')
           return false
         }
-        if (!(await confirmProviderSession(providerSub))) return false
+        if (
+          !(await confirmProviderSession(
+            providerSub,
+            'passkey-login',
+            passkeyAttemptId,
+          ))
+        ) {
+          return false
+        }
         setDiscoveredServers(null)
         setSignInState('idle')
         return true
@@ -1122,7 +1318,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setSignInError('Passkey setup returned an unexpected response.')
             return false
           }
-          if (!(await confirmProviderSession(providerSub))) return false
+          if (
+            !(await confirmProviderSession(
+              providerSub,
+              'passkey-register',
+              passkeyAttemptId,
+            ))
+          ) {
+            return false
+          }
           setDiscoveredServers(null)
           if (data.claimed) {
             setSetupClaimable(false)
@@ -1148,7 +1352,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   )
 
   const signOut = useCallback(async () => {
+    if (signOutInFlightRef.current) return
+    signOutInFlightRef.current = true
     setSignOutError(null)
+    cancelScheduledSessionRefresh()
+    invalidateSessionReads()
+    stopPolling()
     let response: Response
     try {
       response = await fetch(apiUrl('/api/auth/logout'), {
@@ -1156,20 +1365,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         credentials: 'include',
       })
     } catch (err) {
+      signOutInFlightRef.current = false
+      drainDeferredSessionRefresh()
       setSignOutError('Sign-out failed. Check your connection and try again.')
       throw err
     }
     if (!response.ok) {
       const error = new Error(`logout failed: ${response.status}`)
+      signOutInFlightRef.current = false
+      drainDeferredSessionRefresh()
       setSignOutError('Sign-out failed. Try again.')
       throw error
     }
+    invalidateSessionReads()
+    deferredRefreshRef.current = false
+    deferredRefreshBroadcastRef.current = false
     applyUser(null)
     setSessionState('anonymous')
     setSessionError(null)
+    setSignInState('idle')
+    setSignInError(null)
     setViewAs(null)
     setDiscoveredServers(null)
-  }, [applyUser, setViewAs])
+    signOutInFlightRef.current = false
+    broadcastAuthInvalidation()
+  }, [
+    applyUser,
+    broadcastAuthInvalidation,
+    cancelScheduledSessionRefresh,
+    drainDeferredSessionRefresh,
+    invalidateSessionReads,
+    setViewAs,
+    stopPolling,
+  ])
 
   const loading = sessionState === 'loading'
   const role = user?.role ?? null
