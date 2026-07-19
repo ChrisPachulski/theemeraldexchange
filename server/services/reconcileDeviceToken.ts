@@ -61,7 +61,7 @@ export function reconcileDeviceToken(
         event: 'auth_device_cascade',
         outcome: 'bookkeeping_failed',
         surface: 'bearer',
-        causeType: e instanceof Error ? e.name : typeof e,
+        causeType: e instanceof Error ? 'error' : typeof e,
       })
     }
     return null

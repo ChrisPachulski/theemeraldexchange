@@ -14,10 +14,11 @@ Only an explicit `/api/me` `401` means anonymous. A timeout, network failure, `4
 fallback, or malformed JSON means the session is unavailable and should offer Retry. It must not
 flash the public sign-in screen.
 
-Authorization is separate from authentication. A verified provider identity must match an
-immutable `ADMIN_SUBS` entry or an active member row, or redeem an invite. Provider configuration
-alone never grants access. A Plex server-share verification is the one explicit provider-backed
-admission path.
+Authorization is separate from authentication. Normal login requires an immutable `ADMIN_SUBS`
+entry, an active member row, invite redemption, or the explicit configured-Plex-server share
+path. Provider configuration alone never grants access. A wholly unbootstrapped legacy install
+(no server id, admin sub, Apple/Google provider, or member row) retains a narrow first verified
+identity fallback; setup-token passkey claim is preferred, and any durable gate closes it.
 
 ## Plex polling and rate limits
 
@@ -58,8 +59,10 @@ in logs is a security incident, not acceptable diagnostic context.
 
 Both root and published self-host Compose files pass the same provider/authz inputs:
 `ADMINS`, `ADMIN_SUBS`, Plex client/server ids, Apple and Google client ids plus enable guards,
-and all WebAuthn RP fields. Contract tests fail when an input consumed by the backend disappears
-from a Compose surface or its environment example.
+the emergency unscoped-Plex boot flag, and all WebAuthn RP fields. That flag only permits a
+Plex-configured production process to boot without a server id; it never overrides an existing
+members/provider gate. Contract tests fail when an input consumed by the backend disappears from
+a Compose surface or its environment example.
 
 Self-host serves the SPA and API from one origin by default. The owner deployment remains split
 origin until its edge routes `/api/*` through the canonical web host; it therefore requires an

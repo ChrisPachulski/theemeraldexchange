@@ -63,6 +63,9 @@ services:
       # Plex login (a fresh install uses passkeys; Plex is one extra provider)
       PLEX_CLIENT_ID: "${PLEX_CLIENT_ID:-}"
       PLEX_SERVER_ID: "${PLEX_SERVER_ID:-}"
+      # Emergency production boot opt-in when Plex is configured without a
+      # server id. This does not bypass the members/provider authorization gate.
+      ALLOW_UNSCOPED_PLEX_LOGIN: "${ALLOW_UNSCOPED_PLEX_LOGIN:-0}"
       # Federated login providers. Identity-token verification uses public
       # provider keys, so no Apple/Google client secret is required here.
       APPLE_CLIENT_ID: "${APPLE_CLIENT_ID:-}"

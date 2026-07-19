@@ -58,7 +58,7 @@ function cascadeOnDenial(sub: string, reason: string): void {
     authLog.error('device token cascade failed', {
       event: 'auth_device_cascade',
       outcome: 'bookkeeping_failed',
-      causeType: e instanceof Error ? e.name : typeof e,
+      causeType: e instanceof Error ? 'error' : typeof e,
     })
   }
 }

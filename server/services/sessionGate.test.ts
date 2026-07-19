@@ -289,7 +289,9 @@ describe('reconcileSession — cascade device revocation', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     memberStatusImpl.fn = () => 'not_member'
     cascadeSpy.mockImplementationOnce(() => {
-      throw new Error(`database failure while revoking ${rawSub}`)
+      const error = new Error(`database failure while revoking ${rawSub}`)
+      error.name = `MutableErrorName-${rawSub}`
+      throw error
     })
 
     const result = await reconcileSession({ ...baseSession, sub: rawSub })
@@ -297,6 +299,7 @@ describe('reconcileSession — cascade device revocation', () => {
     expect(result).toBeNull()
     expect(errorSpy).toHaveBeenCalledOnce()
     expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(rawSub)
+    expect(String(errorSpy.mock.calls[0]?.[0])).toContain('"causeType":"error"')
   })
 
   it('does not log a raw identity when cascade bookkeeping succeeds', async () => {

@@ -11,9 +11,35 @@ export type AuthPostureConfig = {
 
 function safeOrigin(value: string): string {
   try {
-    return new URL(value).origin
+    const url = new URL(value)
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.origin === 'null') {
+      return 'invalid_origin'
+    }
+    return url.origin
   } catch {
     return 'invalid_origin'
+  }
+}
+
+function safeRpId(value: string): string {
+  const candidate = value.trim().toLowerCase()
+  if (
+    candidate.length === 0 ||
+    candidate.length > 253 ||
+    candidate.includes('/') ||
+    candidate.includes('@') ||
+    candidate.includes(':') ||
+    candidate.includes('?') ||
+    candidate.includes('#')
+  ) {
+    return 'invalid_rp_id'
+  }
+
+  try {
+    const url = new URL(`https://${candidate}`)
+    return url.hostname === candidate ? url.hostname : 'invalid_rp_id'
+  } catch {
+    return 'invalid_rp_id'
   }
 }
 
@@ -31,7 +57,7 @@ export function buildAuthPosture(config: AuthPostureConfig) {
     trustedClientIpHeaders: config.trustClientIpHeaders,
     sessionCookieSameSite: config.serveSpa ? 'lax' : 'none',
     allowedOrigins: config.allowedOrigins.map(safeOrigin),
-    webauthnRpId: config.webauthnRpId,
+    webauthnRpId: safeRpId(config.webauthnRpId),
     webauthnOrigins: config.webauthnOrigins.map(safeOrigin),
   } as const
 }

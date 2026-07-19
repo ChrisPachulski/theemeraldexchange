@@ -289,6 +289,7 @@ describe('reconcileDeviceToken', () => {
 
     expect(errorSpy).toHaveBeenCalledOnce()
     expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(rawSub)
+    expect(String(errorSpy.mock.calls[0]?.[0])).toContain('"causeType":"error"')
   })
 
   // F) cascadeRevokeForSub unit, direct.

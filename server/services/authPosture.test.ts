@@ -46,7 +46,7 @@ describe('buildAuthPosture', () => {
     })
   })
 
-  it('never copies URL credentials or paths into the boot log', () => {
+  it('never copies URL credentials, paths, or a hostile RP id into the boot log', () => {
     const posture = buildAuthPosture({
       plexClientId: null,
       appleClientId: null,
@@ -54,14 +54,17 @@ describe('buildAuthPosture', () => {
       serveSpa: false,
       trustClientIpHeaders: false,
       allowedOrigins: ['https://operator:secret@app.example.test/private'],
-      webauthnRpId: 'example.test',
-      webauthnOrigins: ['not a valid origin'],
+      webauthnRpId: 'https://owner:rp-secret@app.example.test/private',
+      webauthnOrigins: ['not a valid origin', 'javascript:origin-secret'],
     })
 
     expect(posture.allowedOrigins).toEqual(['https://app.example.test'])
-    expect(posture.webauthnOrigins).toEqual(['invalid_origin'])
+    expect(posture.webauthnRpId).toBe('invalid_rp_id')
+    expect(posture.webauthnOrigins).toEqual(['invalid_origin', 'invalid_origin'])
     expect(JSON.stringify(posture)).not.toContain('operator')
     expect(JSON.stringify(posture)).not.toContain('secret')
     expect(JSON.stringify(posture)).not.toContain('private')
+    expect(JSON.stringify(posture)).not.toContain('rp-secret')
+    expect(JSON.stringify(posture)).not.toContain('origin-secret')
   })
 })

@@ -3,10 +3,6 @@
 // server consumes.
 //
 // Required (always):
-//   PLEX_CLIENT_ID    — stable UUID identifying this app to plex.tv.
-//                       Generate once with `crypto.randomUUID()` and keep
-//                       it constant. Plex uses it to disambiguate
-//                       sessions; rotating it logs everyone out.
 //   SESSION_SECRET    — arbitrary-length string fed through SHA-256 to
 //                       derive the 32-byte AES-GCM key used to encrypt
 //                       session cookies (JWE). Rotating invalidates
@@ -20,14 +16,17 @@
 //                       the CSRF middleware would fail open.
 //
 // Optional:
+//   PLEX_CLIENT_ID    — stable UUID identifying this app to plex.tv.
+//                       Generate once with `crypto.randomUUID()` and keep
+//                       it constant. Plex uses it to disambiguate
+//                       sessions; rotating it logs everyone out.
 //   ADMINS            — comma-separated Plex usernames that get the
 //                       `admin` role. Everyone else who is a member of
 //                       the home server is `user`. Empty == no admins.
 //   PLEX_SERVER_ID    — machineIdentifier of the home Plex server.
-//                       When set, only members of that server can log
-//                       in. When unset, any authenticated Plex user is
-//                       allowed (useful for first-time setup until you
-//                       discover your server ID via /api/me).
+//                       When set, a verified share on that server is an
+//                       admission path. When unset in production, Plex
+//                       requires an explicit emergency boot opt-in.
 //   PORT              — backend listen port (default 3001).
 //   NODE_ENV          — 'production' switches cookies to SameSite=None;
 //                       Secure for cross-origin Netlify ↔ NAS use, and
@@ -135,16 +134,12 @@ if (isProd && allowedOrigins.length === 0 && !serveSpa) {
 const plexClientId = opt('PLEX_CLIENT_ID') ?? null
 
 // PLEX_SERVER_ID is the machineIdentifier of the home Plex server.
-// When set, only members of that server can sign in. When unset, the
-// auth flow accepts any authenticated Plex user — that's the
-// first-time-bootstrap mode so the operator can discover the server id
-// via /api/me's discoveredServers payload. In production, leaving it
-// blank silently turns the invitation-only app into "any Plex user can
-// sign in," so we hard-fail unless the operator explicitly opts in
-// via ALLOW_UNSCOPED_PLEX_LOGIN=1 (intended only for the brief
-// first-deploy window). Only enforced when Plex login is configured at
-// all (PLEX_CLIENT_ID set) — a Plex-free install has no Plex sign-in
-// path to scope.
+// When set, a verified share on that server is an admission path. When unset,
+// normal membership/provider gates still apply. A wholly unbootstrapped legacy
+// install has a narrow first-identity fallback, so production hard-fails unless
+// the operator explicitly permits boot via ALLOW_UNSCOPED_PLEX_LOGIN=1. The
+// flag does not bypass any existing authorization gate. Only enforce this when
+// Plex login is configured; a Plex-free install has no Plex path to scope.
 const plexServerId = opt('PLEX_SERVER_ID') ?? null
 const allowUnscopedPlexLogin = process.env.ALLOW_UNSCOPED_PLEX_LOGIN === '1'
 if (isProd && plexClientId && !plexServerId && !allowUnscopedPlexLogin) {
@@ -152,8 +147,8 @@ if (isProd && plexClientId && !plexServerId && !allowUnscopedPlexLogin) {
     'Missing required env var in production: PLEX_SERVER_ID ' +
       '(your home Plex server\'s machineIdentifier — required to scope ' +
       'sign-ins to your household). Set it now, or set ' +
-      'ALLOW_UNSCOPED_PLEX_LOGIN=1 explicitly to opt into the ' +
-      'first-deploy bootstrap mode that accepts ANY Plex user. ' +
+      'ALLOW_UNSCOPED_PLEX_LOGIN=1 explicitly to permit emergency boot ' +
+      'without a server id (it does not bypass membership/provider gates). ' +
       'Discover the id via the SPA\'s first login (discoveredServers) ' +
       'and remove the escape hatch immediately.',
   )
