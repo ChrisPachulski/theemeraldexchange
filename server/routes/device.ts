@@ -32,7 +32,7 @@
 import { Hono } from 'hono'
 import { checkPin, getUser, PlexRateLimitError } from '../plex.js'
 import { authorizeOrRedeem, enforceAuthRateLimit } from '../auth.js'
-import { roleFor } from '../services/sessionGate.js'
+import { effectiveRoleFor } from '../services/sessionGate.js'
 import { parseLimitedJson } from '../services/parseLimitedJson.js'
 import {
   mintDeviceToken,
@@ -115,7 +115,7 @@ device.post('/poll', async (c) => {
     return c.json({ status: 'denied', reason: 'no_invite' }, 403)
   }
 
-  const role: Role = roleFor(user.username, sub)
+  const role: Role = effectiveRoleFor(user.username, sub)
 
   const serverId = ensureServerId()
 

@@ -45,11 +45,13 @@ import {
 } from './session.js'
 import {
   _primeSessionGateCache,
+  effectiveRoleFor,
   reconcileSession,
   roleFor,
 } from './services/sessionGate.js'
 import { memberStatus, redeemInvite } from './services/membership.js'
 import { addMember } from './services/members.js'
+import { sealVerifiedAdminOwnership } from './services/setupState.js'
 import { verifyAppleIdentityToken } from './services/appleAuth.js'
 import { verifyGoogleIdentityToken } from './services/googleAuth.js'
 import { maybeMintDeviceToken } from './services/devicePair.js'
@@ -332,12 +334,22 @@ export function authorizeOrRedeem(
   displayName: string | null,
   authMode: AuthMode,
 ): { allowed: boolean } {
-  if (memberStatus(sub) === 'allowed') return { allowed: true }
-  if (inviteCode) {
+  let allowed = memberStatus(sub) === 'allowed'
+  if (!allowed && inviteCode) {
     const r = redeemInvite(inviteCode, sub, displayName, authMode)
-    if (r.ok) return { allowed: true }
+    allowed = r.ok
   }
-  return { allowed: false }
+  if (!allowed) return { allowed: false }
+
+  // Configuration may name an immutable ADMIN_SUBS owner or a legacy Plex
+  // ADMINS username, but configuration is not durable proof that the identity
+  // ever signed in. Only after provider authN and this shared authZ gate both
+  // succeed do we convert effective administrator authority into a one-way DB
+  // ownership seal. Every cookie and bearer login path passes this boundary.
+  if (effectiveRoleFor(displayName ?? '', sub) === 'admin') {
+    sealVerifiedAdminOwnership(sub)
+  }
+  return { allowed: true }
 }
 
 // Public, auth-free: hands the SPA the non-secret X-Plex-Client-Identifier
@@ -425,7 +437,7 @@ auth.post('/plex/check', async (c) => {
   // exact Plex casing (which is sometimes uppercase, sometimes lowercase
   // depending on how the account was created). roleFor lives in
   // sessionGate so the per-request reconcile uses the same definition.
-  const role = roleFor(user.username, namespacedSub)
+  let role = roleFor(user.username, namespacedSub)
 
   // SHARED authZ gate (identical to /api/auth/apple): the invite/members
   // allowlist — NOT the Plex machineId — decides access. An existing
@@ -459,6 +471,7 @@ auth.post('/plex/check', async (c) => {
   if (!allowed) {
     return c.json({ status: 'denied', reason: 'no_invite' }, 403)
   }
+  role = effectiveRoleFor(user.username, namespacedSub)
 
   // Discovery aid only (no longer an authZ gate): when PLEX_SERVER_ID is
   // unset, surface the user's servers so the operator can find the
@@ -556,13 +569,12 @@ auth.post('/apple', async (c) => {
   // Pass the apple: sub so roleFor refuses to match the attacker-controlled
   // email local-part against ADMINS (Plex usernames). An Apple admin must be
   // listed explicitly in ADMIN_SUBS (by stable sub) instead.
-  const role = roleFor(displayName, namespacedSub)
-
   // SHARED authZ gate (identical to /plex/check).
   const authz = authorizeOrRedeem(namespacedSub, inviteCode, displayName, 'apple')
   if (!authz.allowed) {
     return c.json({ status: 'denied', reason: 'no_invite' }, 403)
   }
+  const role = effectiveRoleFor(displayName, namespacedSub)
 
   // Native app pairing: when the body carries the device-pair triple, mint a
   // device-token Bearer JWE (same wire shape as routes/device.ts) instead of
@@ -652,13 +664,12 @@ auth.post('/google', async (c) => {
     verified.name ?? (verified.email ? verified.email.split('@')[0] : namespacedSub)
   // roleFor refuses to match a google: sub's id against ADMINS (Plex
   // usernames); a Google admin must be listed by stable sub in ADMIN_SUBS.
-  const role = roleFor(displayName, namespacedSub)
-
   // SHARED authZ gate (identical to /plex/check and /apple).
   const authz = authorizeOrRedeem(namespacedSub, inviteCode, displayName, 'google')
   if (!authz.allowed) {
     return c.json({ status: 'denied', reason: 'no_invite' }, 403)
   }
+  const role = effectiveRoleFor(displayName, namespacedSub)
 
   // Native app pairing: device-pair triple → device-token Bearer JWE instead
   // of a browser session cookie. Returns null for browser sign-ins.

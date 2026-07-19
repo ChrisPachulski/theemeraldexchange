@@ -138,10 +138,11 @@ services:
       ALLOW_UNSCOPED_PLEX_LOGIN: "${ALLOW_UNSCOPED_PLEX_LOGIN:-0}"
       PLEX_SERVER_URL: "${PLEX_SERVER_URL:-}"
       ALLOWED_ORIGINS: "${ALLOWED_ORIGINS}"
-      # Trust CF-Connecting-IP/True-Client-IP for per-client auth buckets only
-      # in this compose topology: cloudflared shares the backend netns and the
-      # host publish is loopback-only, so clients cannot set these headers by
-      # reaching the backend directly.
+      # Trust CF-Connecting-IP/True-Client-IP for per-client auth buckets and
+      # first-owner claim source policy only in this compose topology:
+      # cloudflared shares the backend netns and the host publish is
+      # loopback-only, so clients cannot forge these headers by reaching the
+      # backend directly.
       TRUST_CLIENT_IP_HEADERS: "1"
       # *arr / SAB are optional since plan 006 Phase 0: unset keys mean the
       # integration is not configured (typed 503 <service>_not_configured;

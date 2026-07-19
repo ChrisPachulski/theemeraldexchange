@@ -53,6 +53,11 @@ vi.mock('./services/members.js', () => ({
   isMember: () => null,
 }))
 
+const sealVerifiedAdminOwnershipSpy = vi.fn()
+vi.mock('./services/setupState.js', () => ({
+  sealVerifiedAdminOwnership: (sub: string) => sealVerifiedAdminOwnershipSpy(sub),
+}))
+
 // Apple verifier: success keyed on a fixed valid-token sentinel; otherwise
 // returns a typed failure. The verified sub is a valid apple-pattern sub.
 const APPLE_SUB = 'apple:000000.0123456789abcdef0123456789abcdef.0000'
@@ -139,6 +144,7 @@ beforeEach(() => {
   invites.clear()
   redeemSpy.mockClear()
   addMemberSpy.mockClear()
+  sealVerifiedAdminOwnershipSpy.mockClear()
   appleVerifyImpl.fn = async (idToken) => {
     if (idToken === 'valid-apple-token') {
       return {
@@ -587,7 +593,25 @@ describe('POST /auth/plex/check', () => {
     }
     expect(body.status).toBe('authorized')
     expect(body.user.role).toBe('admin')
+    expect(sealVerifiedAdminOwnershipSpy).toHaveBeenCalledWith('plex:999')
     expect(r.headers.get('set-cookie')).toContain('eex.session=')
+  })
+
+  it('does not mint an administrator session when the durable ownership seal fails', async () => {
+    allowlist.set('plex:999', 'allowed')
+    stubPlex({ authToken: 'real-token', username: 'admin-user' })
+    sealVerifiedAdminOwnershipSpy.mockImplementationOnce(() => {
+      throw new Error('seal failed')
+    })
+
+    const r = await app().request('/auth/plex/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinId: 12345 }),
+    })
+
+    expect(r.status).toBe(500)
+    expect(r.headers.get('set-cookie')).toBeNull()
   })
 
   it('assigns user role to non-listed usernames', async () => {
@@ -605,6 +629,7 @@ describe('POST /auth/plex/check', () => {
       discoveredServers?: { name: string; id: string; owned: boolean }[]
     }
     expect(body.user.role).toBe('user')
+    expect(sealVerifiedAdminOwnershipSpy).not.toHaveBeenCalled()
   })
 
   it('denies a Plex identity that is not a member and presents no invite (403 no_invite)', async () => {
@@ -622,6 +647,7 @@ describe('POST /auth/plex/check', () => {
     // No PLEX_SERVER_ID configured here (beforeEach nulls it), so the
     // Plex-server-share auto-admit must NOT fire.
     expect(addMemberSpy).not.toHaveBeenCalled()
+    expect(sealVerifiedAdminOwnershipSpy).not.toHaveBeenCalled()
   })
 
   it('auto-admits a Plex identity shared on the owner server (mints a member, no invite)', async () => {
@@ -807,7 +833,29 @@ describe('POST /auth/apple (Sign in with Apple)', () => {
       const body = (await r.json()) as { error: string; reason: string }
       expect(body.error).toBe('invalid_identity_token')
       expect(body.reason).toBe('invalid_signature')
+      expect(sealVerifiedAdminOwnershipSpy).not.toHaveBeenCalled()
     })
+  })
+
+  it('seals a verified ADMIN_SUBS Apple identity before minting its session', async () => {
+    const before = env.adminSubs
+    ;(env as Record<string, unknown>).adminSubs = [APPLE_SUB]
+    try {
+      await withApple(async () => {
+        allowlist.set(APPLE_SUB, 'allowed')
+        const r = await app().request('/auth/apple', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ identityToken: 'valid-apple-token' }),
+        })
+
+        expect(r.status).toBe(200)
+        expect(sealVerifiedAdminOwnershipSpy).toHaveBeenCalledWith(APPLE_SUB)
+        expect(r.headers.get('set-cookie')).toContain('eex.session=')
+      })
+    } finally {
+      ;(env as Record<string, unknown>).adminSubs = before
+    }
   })
 
   it('503s when Apple JWKS is unavailable (transient, not the user\'s fault)', async () => {

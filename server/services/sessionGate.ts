@@ -133,6 +133,13 @@ export function roleFor(username: string, sub?: string): Role {
   return env.admins.some((a) => a.toLowerCase() === lower) ? 'admin' : 'user'
 }
 
+/** Effective role for an identity whose provider proof has already succeeded. */
+export function effectiveRoleFor(username: string, sub: string): Role {
+  const configured = roleFor(username, sub)
+  if (configured === 'admin') return 'admin'
+  return isMember(sub)?.role === 'admin' ? 'admin' : 'user'
+}
+
 /**
  * Reconcile a decoded session against current env + Plex state.
  *
@@ -151,17 +158,9 @@ export async function reconcileSession(session: Session): Promise<Session | null
   // Pass the sub so the provider guard applies on every request — an apple:/
   // local: session can never be re-escalated to admin via an ADMINS username
   // collision, and ADMIN_SUBS admins keep admin without a username match.
-  let role = roleFor(session.username, session.sub)
-  // DB-backed admin (plan 006 Phase 1): a members row with role='admin' —
-  // the first-owner claim mints one — grants admin without an env edit.
-  // roleFor's provider guard still blocks USERNAME-based escalation for
-  // non-Plex subs; this is an exact-sub row match, so it is as unguessable
-  // as ADMIN_SUBS. Revocation stays live: demoting the row demotes the
-  // session on its next request, same as an env.admins edit.
-  if (role !== 'admin') {
-    const m = isMember(session.sub)
-    if (m?.role === 'admin') role = 'admin'
-  }
+  // DB-backed admin (plan 006 Phase 1) and configured authorities converge on
+  // the same exact-sub role decision used at successful login.
+  const role = effectiveRoleFor(session.username, session.sub)
 
   // AuthZ gate — the FIRST and AUTHORITATIVE decision, before any
   // provider-specific work. With the invite/members model the per-request

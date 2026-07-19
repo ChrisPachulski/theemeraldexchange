@@ -33,8 +33,8 @@
 //                       enforces ALLOWED_ORIGINS.
 //   TRUST_CLIENT_IP_HEADERS
 //                     — set to 1 only when the backend is reachable solely
-//                       through a trusted proxy/tunnel that owns CF/Forwarded
-//                       client IP headers.
+//                       through a trusted proxy/tunnel that owns CF/True-Client
+//                       IP headers; affects rate limits and owner-claim source.
 
 import { existsSync } from 'node:fs'
 import { config as dotenvConfig } from 'dotenv'
@@ -480,8 +480,9 @@ export const env = {
    *  the same-origin request-derived RP fallback (plan 006 Phase 2). */
   webauthnRpIdExplicit: Boolean(opt('WEBAUTHN_RP_ID')),
   allowedOrigins,
-  /** Trust Cloudflare/proxy client IP headers for per-client auth rate limits.
-   *  Keep off unless the backend is reachable only through that proxy. */
+  /** Trust Cloudflare/proxy client IP headers for per-client auth rate limits
+   *  and first-owner claim source policy. Keep off unless the backend is
+   *  reachable only through that proxy. */
   trustClientIpHeaders,
 
   // Backing services. URL defaults match the existing NAS deployment;

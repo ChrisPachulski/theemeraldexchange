@@ -59,19 +59,19 @@ The tunnel will show **"Inactive"** until the first NAS deploy registers a conne
 cp .env.production.example .env.production
 ```
 
-Open it and fill in:
+Open it and fill the required rows plus whichever optional integrations you use:
 
 | Var | Where it comes from |
 |---|---|
 | `TUNNEL_TOKEN` | The `eyJhI…` you copied above. |
-| `PLEX_CLIENT_ID` | Same value as in your `.env.local` (or generate fresh: `node -e 'console.log(crypto.randomUUID())'`). |
+| `PLEX_CLIENT_ID` *(optional)* | Enables Plex login. Use the same value as `.env.local` or generate one with `node -e 'console.log(crypto.randomUUID())'`. Leave unset for passkey/Apple/Google-only installs. |
 | `SESSION_SECRET` | Generate fresh: `openssl rand -base64 48`. Must be ≥32 bytes and not a placeholder — the deploy script hard-fails otherwise. **Different from dev** so the two environments can't share sessions. |
 | `STREAM_TOKEN_SECRET` | `openssl rand -base64 48`. Signs IPTV/media stream tokens (HMAC-SHA256). |
 | `DEVICE_TOKEN_SECRET` | `openssl rand -base64 48`. IKM for the device-token JWE (Apple device pairing). Must be distinct from every other secret. |
 | `INTERNAL_PRINCIPAL_SECRET` | `openssl rand -base64 48`. IKM for the internal-principal JWE the backend mints toward recommender/media-core/transcoder. Distinct from every other secret. |
 | `RECOMMENDER_EVENT_SECRET` | `openssl rand -base64 48`. Shared secret signing backend → recommender calls. |
-| `ADMINS` | Your Plex username(s), comma-separated. |
-| `PLEX_SERVER_ID` | **Required in production when Plex login is configured**, unless `ALLOW_UNSCOPED_PLEX_LOGIN=1` explicitly permits emergency boot. The flag grants no login access and never bypasses member/invite authorization. Prefer setup-token passkey claim, then set your home server's machineIdentifier and remove the opt-in. |
+| `ADMINS` *(optional, legacy Plex)* | Plex username(s), comma-separated. Prefer stable `ADMIN_SUBS` or first-owner passkey claim for new installs. |
+| `PLEX_SERVER_ID` *(conditional)* | Required only when Plex login is configured, unless `ALLOW_UNSCOPED_PLEX_LOGIN=1` explicitly permits emergency boot. The flag grants no login access and never bypasses member/invite authorization. Prefer setup-token passkey claim, then set your home server's machineIdentifier and remove the opt-in. |
 | `ALLOWED_ORIGINS` | `https://theemeraldexchange.com` |
 | `SONARR_URL`, `SONARR_API_KEY` | Existing Sonarr install. |
 | `RADARR_URL`, `RADARR_API_KEY` | Existing Radarr install. |

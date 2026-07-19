@@ -42,8 +42,8 @@ const { authorizeOrRedeem, enforceAuthRateLimit } = vi.hoisted(() => ({
 }))
 vi.mock('../auth.js', () => ({ authorizeOrRedeem, enforceAuthRateLimit }))
 
-const { roleFor } = vi.hoisted(() => ({ roleFor: vi.fn() }))
-vi.mock('../services/sessionGate.js', () => ({ roleFor }))
+const { effectiveRoleFor } = vi.hoisted(() => ({ effectiveRoleFor: vi.fn() }))
+vi.mock('../services/sessionGate.js', () => ({ effectiveRoleFor }))
 
 // AuthMode/Role are TYPES — erased at runtime, so a value-only factory is fine;
 // do not export them from the mock.
@@ -186,7 +186,7 @@ describe('device POST /poll — pin lifecycle', () => {
     plex.checkPin.mockResolvedValue({ authToken: 'tok' })
     plex.getUser.mockResolvedValue({ id: 12345, username: 'chris' })
     authorizeOrRedeem.mockReturnValue({ allowed: true })
-    roleFor.mockReturnValue('user')
+    effectiveRoleFor.mockReturnValue('user')
     session.ensureServerId.mockReturnValue('SRV-ID-1')
     session.mintDeviceToken.mockResolvedValue('jwe.token.value')
 

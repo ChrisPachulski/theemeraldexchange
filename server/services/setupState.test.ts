@@ -26,10 +26,11 @@ import {
   ensureSetupToken,
   verifySetupToken,
   markClaimed,
+  sealVerifiedAdminOwnership,
   isPrivateAddress,
   claimSourceAllowed,
 } from './setupState.js'
-import { addMember, revokeMemberSafely } from './members.js'
+import { addMember, isMember, revokeMemberSafely } from './members.js'
 import { env } from '../env.js'
 
 const OWNER = 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV'
@@ -157,6 +158,62 @@ describe('setupState', () => {
   it('ADMIN_SUBS ownership gate closes claimability', () => {
     envRw.adminSubs = ['plex:42']
     expect(isClaimable()).toBe(false)
+  })
+
+  it('a proven ADMIN_SUBS login stays durably closed after configuration removal', () => {
+    envRw.adminSubs = ['plex:42']
+    expect(isClaimable()).toBe(false)
+
+    sealVerifiedAdminOwnership('plex:42')
+    expect(
+      serverDb()
+        .raw.prepare(`SELECT value FROM server_state WHERE key = 'setup_claimed_by'`)
+        .pluck()
+        .get(),
+    ).toBe('plex:42')
+    envRw.adminSubs = []
+
+    expect(isClaimable()).toBe(false)
+    expect(isMember('plex:42')).toBeNull()
+  })
+
+  it('a proven legacy ADMINS login seals ownership without promoting its user row', () => {
+    addMember({
+      sub: 'plex:42',
+      displayName: 'legacy-owner',
+      role: 'user',
+      authMode: 'plex',
+    })
+    expect(isClaimable()).toBe(true)
+
+    sealVerifiedAdminOwnership('plex:42')
+    expect(
+      serverDb()
+        .raw.prepare(`SELECT value FROM server_state WHERE key = 'setup_claimed_by'`)
+        .pluck()
+        .get(),
+    ).toBe('plex:42')
+
+    expect(isClaimable()).toBe(false)
+    expect(isMember('plex:42')).toMatchObject({ role: 'user', revoked_at: null })
+  })
+
+  it('the verified-admin seal rejects malformed identities and preserves first-owner provenance', () => {
+    expect(() => sealVerifiedAdminOwnership('not-a-provider-sub')).toThrow(/sub_/)
+    expect(
+      serverDb()
+        .raw.prepare(`SELECT value FROM server_state WHERE key = 'setup_claimed_by'`)
+        .get(),
+    ).toBeUndefined()
+
+    sealVerifiedAdminOwnership('plex:42')
+    sealVerifiedAdminOwnership('google:104223294318414512345')
+    expect(
+      serverDb()
+        .raw.prepare(`SELECT value FROM server_state WHERE key = 'setup_claimed_by'`)
+        .pluck()
+        .get(),
+    ).toBe('plex:42')
   })
 
   it('the explicit claimed marker closes claimability without provider config', () => {

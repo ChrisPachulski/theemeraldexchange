@@ -27,6 +27,7 @@ import { isIP } from 'node:net'
 import { dirname, join } from 'node:path'
 import { serverDb } from './serverDb.js'
 import { hasDurableOwnershipGate } from './membership.js'
+import { parseSub } from './sub.js'
 import { env } from '../env.js'
 
 const TOKEN_HASH_KEY = 'setup_token_hash'
@@ -48,6 +49,15 @@ function setState(key: string, value: string): void {
     .raw.prepare(
       `INSERT INTO server_state (key, value, ts) VALUES (?, ?, datetime('now'))
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, ts = excluded.ts`,
+    )
+    .run(key, value)
+}
+
+function setStateOnce(key: string, value: string): void {
+  serverDb()
+    .raw.prepare(
+      `INSERT INTO server_state (key, value, ts) VALUES (?, ?, datetime('now'))
+       ON CONFLICT(key) DO NOTHING`,
     )
     .run(key, value)
 }
@@ -114,14 +124,26 @@ export function verifySetupToken(token: string): boolean {
 }
 
 /**
- * Record the claim and burn the token. Called inside the claim
- * transaction AFTER the admin member row is written — the members row closes
- * durable setup, and this key stops a second token holder (there is none, but
- * belt-and-braces) from re-claiming.
+ * Persist the one-way ownership marker and burn any outstanding setup token.
+ * Callers must already have verified the provider identity and effective admin
+ * authority. The first-owner passkey path invokes this inside its larger claim
+ * transaction; configured-admin login invokes it after shared authZ and before
+ * minting a cookie or bearer token. The first proven identity is preserved.
  */
+export function sealVerifiedAdminOwnership(sub: string): void {
+  parseSub(sub)
+  const db = serverDb().raw
+  const tx = db.transaction(() => {
+    // Preserve the first proven owner as audit provenance. Later successful
+    // administrator logins are idempotent and cannot reopen or rotate setup.
+    setStateOnce(CLAIMED_KEY, sub)
+    db.prepare(`DELETE FROM server_state WHERE key = ?`).run(TOKEN_HASH_KEY)
+  })
+  tx.immediate()
+}
+
 export function markClaimed(sub: string): void {
-  setState(CLAIMED_KEY, sub)
-  serverDb().raw.prepare(`DELETE FROM server_state WHERE key = ?`).run(TOKEN_HASH_KEY)
+  sealVerifiedAdminOwnership(sub)
 }
 
 // ── claim-source gate ───────────────────────────────────────────────────
