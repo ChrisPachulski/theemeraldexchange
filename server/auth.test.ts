@@ -670,8 +670,68 @@ describe('POST /auth/plex/check', () => {
     expect(r.status).toBe(200)
     expect(((await r.json()) as { status?: string }).status).toBe('authorized')
     expect(addMemberSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ sub: 'plex:999', authMode: 'plex', invitedBy: 'plex:server-share' }),
+      expect.objectContaining({
+        sub: 'plex:999',
+        role: 'user',
+        authMode: 'plex',
+        invitedBy: 'plex:server-share',
+      }),
     )
+    expect(sealVerifiedAdminOwnershipSpy).not.toHaveBeenCalled()
+  })
+
+  it('stores a shared legacy ADMINS identity as user, seals ownership, and returns runtime admin', async () => {
+    ;(env as Record<string, unknown>).plexServerId = 'home-server-id'
+    stubPlex({
+      authToken: 'real-token',
+      username: 'admin-user',
+      resources: [
+        { name: 'Home', clientIdentifier: 'home-server-id', owned: false, provides: 'server' },
+      ],
+    })
+
+    const r = await app().request('/auth/plex/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinId: 12345 }),
+    })
+
+    expect(r.status).toBe(200)
+    expect((await r.json()) as { user: { role: string } }).toMatchObject({
+      user: { role: 'admin' },
+    })
+    expect(addMemberSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sub: 'plex:999',
+        role: 'user',
+        invitedBy: 'plex:server-share',
+      }),
+    )
+    expect(sealVerifiedAdminOwnershipSpy).toHaveBeenCalledWith('plex:999')
+  })
+
+  it('does not mint a shared legacy-admin session when its ownership seal fails', async () => {
+    ;(env as Record<string, unknown>).plexServerId = 'home-server-id'
+    stubPlex({
+      authToken: 'real-token',
+      username: 'admin-user',
+      resources: [
+        { name: 'Home', clientIdentifier: 'home-server-id', owned: false, provides: 'server' },
+      ],
+    })
+    sealVerifiedAdminOwnershipSpy.mockImplementationOnce(() => {
+      throw new Error('seal failed')
+    })
+
+    const r = await app().request('/auth/plex/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinId: 12345 }),
+    })
+
+    expect(r.status).toBe(500)
+    expect(r.headers.get('set-cookie')).toBeNull()
+    expect(addMemberSpy).toHaveBeenCalledWith(expect.objectContaining({ role: 'user' }))
   })
 
   it('does NOT auto-admit a Plex identity that is not on the owner server (403)', async () => {

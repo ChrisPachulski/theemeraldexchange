@@ -19,6 +19,11 @@ entry, an active member row, invite redemption, or the explicit configured-Plex-
 path. Provider configuration and fresh-install state never grant access. First ownership uses the
 host-protected setup-token passkey ceremony.
 
+`ADMIN_SUBS` is an immutable environment-level authority and takes precedence over a database
+member revocation on every login/session surface. To remove one, delete the exact sub from
+`ADMIN_SUBS`, restart or redeploy so policy reloads, then revoke any remaining member row. The
+durable ownership marker keeps setup closed; it does not preserve the removed administrator role.
+
 ## Plex polling and rate limits
 
 The browser owns one completion-scheduled poll loop per attempt. It waits 2.5 seconds after a

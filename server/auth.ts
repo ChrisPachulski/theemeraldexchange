@@ -47,7 +47,6 @@ import {
   _primeSessionGateCache,
   effectiveRoleFor,
   reconcileSession,
-  roleFor,
 } from './services/sessionGate.js'
 import { memberStatus, redeemInvite } from './services/membership.js'
 import { addMember } from './services/members.js'
@@ -345,7 +344,8 @@ export function authorizeOrRedeem(
   // ADMINS username, but configuration is not durable proof that the identity
   // ever signed in. Only after provider authN and this shared authZ gate both
   // succeed do we convert effective administrator authority into a one-way DB
-  // ownership seal. Every cookie and bearer login path passes this boundary.
+  // ownership seal. The explicit Plex-share alternate seals at its own final
+  // success boundary after storing ordinary membership.
   if (effectiveRoleFor(displayName ?? '', sub) === 'admin') {
     sealVerifiedAdminOwnership(sub)
   }
@@ -433,12 +433,6 @@ auth.post('/plex/check', async (c) => {
   // session carry the prefixed form without needing the grace window.
   const namespacedSub = `plex:${String(user.id)}`
 
-  // Case-insensitive comparison so ADMINS env doesn't have to match the
-  // exact Plex casing (which is sometimes uppercase, sometimes lowercase
-  // depending on how the account was created). roleFor lives in
-  // sessionGate so the per-request reconcile uses the same definition.
-  let role = roleFor(user.username, namespacedSub)
-
   // SHARED authZ gate (identical to /api/auth/apple): the invite/members
   // allowlist — NOT the Plex machineId — decides access. An existing
   // member is admitted; otherwise a valid unredeemed invite in the body
@@ -455,23 +449,33 @@ auth.post('/plex/check', async (c) => {
   // re-admitted by a still-present Plex share — an explicit revoke wins. The
   // minted row makes the per-request reconcile (which keys on the allowlist)
   // see 'allowed' on every subsequent request without re-probing.
+  let admittedByPlexShare = false
   if (!allowed && env.plexServerId && memberStatus(namespacedSub) === 'not_member') {
     if (await isOwnerServerMember(pin.authToken)) {
       addMember({
         sub: namespacedSub,
         displayName: user.username,
-        role,
+        // Plex sharing grants membership, never durable administrator role.
+        // A legacy ADMINS match is runtime policy and must remain removable.
+        role: 'user',
         authMode: 'plex',
         invitedBy: 'plex:server-share',
       })
       allowed = true
+      admittedByPlexShare = true
     }
   }
 
   if (!allowed) {
     return c.json({ status: 'denied', reason: 'no_invite' }, 403)
   }
-  role = effectiveRoleFor(user.username, namespacedSub)
+  // Case-insensitive runtime role policy is finalized only after authZ. The
+  // shared gate already seals its admitted admin paths; Plex-share admission
+  // is the one alternate boundary and must seal before issuing credentials.
+  const role = effectiveRoleFor(user.username, namespacedSub)
+  if (admittedByPlexShare && role === 'admin') {
+    sealVerifiedAdminOwnership(namespacedSub)
+  }
 
   // Discovery aid only (no longer an authZ gate): when PLEX_SERVER_ID is
   // unset, surface the user's servers so the operator can find the
