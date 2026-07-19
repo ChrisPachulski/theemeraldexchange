@@ -54,7 +54,11 @@ describe('settings route — anthropic key lifecycle', () => {
     const cookie = await cookieFor('plex:401')
     const put = await app.request('/anthropic-key', {
       method: 'PUT',
-      headers: { Cookie: cookie, 'content-type': 'application/json' },
+      headers: {
+        Cookie: cookie,
+        'content-type': 'application/json',
+        'x-eex-expected-sub': 'plex:401',
+      },
       body: JSON.stringify({ key: KEY }),
     })
     expect(put.status).toBe(200)
@@ -77,7 +81,11 @@ describe('settings route — anthropic key lifecycle', () => {
     const cookie = await cookieFor('plex:401')
     const r = await appUnderTest().request('/anthropic-key', {
       method: 'PUT',
-      headers: { Cookie: cookie, 'content-type': 'application/json' },
+      headers: {
+        Cookie: cookie,
+        'content-type': 'application/json',
+        'x-eex-expected-sub': 'plex:401',
+      },
       body: JSON.stringify({ key: `  ${KEY}\n` }),
     })
     expect(r.status).toBe(200)
@@ -89,7 +97,11 @@ describe('settings route — anthropic key lifecycle', () => {
     for (const bad of ['', 'not-a-key', 'sk-ant-', 'sk-ant-has space', 42, null]) {
       const r = await appUnderTest().request('/anthropic-key', {
         method: 'PUT',
-        headers: { Cookie: cookie, 'content-type': 'application/json' },
+        headers: {
+          Cookie: cookie,
+          'content-type': 'application/json',
+          'x-eex-expected-sub': 'plex:401',
+        },
         body: JSON.stringify({ key: bad }),
       })
       expect(r.status).toBe(400)
@@ -108,7 +120,11 @@ describe('settings route — anthropic key lifecycle', () => {
     const cookie = await cookieFor('plex:401')
     const r = await appUnderTest().request('/anthropic-key', {
       method: 'PUT',
-      headers: { Cookie: cookie, 'content-type': 'application/json' },
+      headers: {
+        Cookie: cookie,
+        'content-type': 'application/json',
+        'x-eex-expected-sub': 'plex:401',
+      },
       body: JSON.stringify({ key: 'sk-ant-' + 'x'.repeat(64 * 1024) }),
     })
     expect(r.status).toBe(413)
@@ -120,7 +136,7 @@ describe('settings route — anthropic key lifecycle', () => {
     setUserApiKey('plex:401', KEY)
     const del = await app.request('/anthropic-key', {
       method: 'DELETE',
-      headers: { Cookie: cookie },
+      headers: { Cookie: cookie, 'x-eex-expected-sub': 'plex:401' },
     })
     expect(del.status).toBe(200)
     expect(await del.json()).toEqual({ set: false })
@@ -135,7 +151,10 @@ describe('settings route — anthropic key lifecycle', () => {
     const get = await app.request('/anthropic-key', { headers: { Cookie: cookieB } })
     expect(await get.json()).toEqual({ set: false })
 
-    await app.request('/anthropic-key', { method: 'DELETE', headers: { Cookie: cookieB } })
+    await app.request('/anthropic-key', {
+      method: 'DELETE',
+      headers: { Cookie: cookieB, 'x-eex-expected-sub': 'plex:402' },
+    })
     expect(getUserApiKey('plex:401')).toBe(KEY)
   })
 
@@ -164,5 +183,27 @@ describe('settings route — anthropic key lifecycle', () => {
     expect(await del.json()).toEqual({ error: 'principal_changed' })
     expect(getUserApiKey('plex:401')).toBe(KEY)
     expect(getUserApiKey('plex:402')).toBeNull()
+  })
+
+  it('rejects a PUT or DELETE when the expected-principal binding is missing', async () => {
+    const app = appUnderTest()
+    const cookie = await cookieFor('plex:402')
+    setUserApiKey('plex:402', KEY)
+
+    const put = await app.request('/anthropic-key', {
+      method: 'PUT',
+      headers: { Cookie: cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ key: 'sk-ant-api03-unbound-write-NEW2' }),
+    })
+    const del = await app.request('/anthropic-key', {
+      method: 'DELETE',
+      headers: { Cookie: cookie },
+    })
+
+    expect(put.status).toBe(409)
+    expect(del.status).toBe(409)
+    expect(await put.json()).toEqual({ error: 'principal_changed' })
+    expect(await del.json()).toEqual({ error: 'principal_changed' })
+    expect(getUserApiKey('plex:402')).toBe(KEY)
   })
 })

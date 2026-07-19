@@ -39,9 +39,9 @@ settings.put('/anthropic-key', async (c) => {
   const session = c.get('session')
   const expectedSub = c.req.header(EXPECTED_SUB_HEADER)
   // This is a stale-browser-request guard, not authentication. The signed
-  // session remains authoritative; older clients that omit the header retain
-  // rollout compatibility.
-  if (expectedSub !== undefined && expectedSub !== session.sub) {
+  // session remains authoritative, while a required exact binding prevents an
+  // already-open tab from redirecting a secret mutation after account switch.
+  if (expectedSub !== session.sub) {
     return c.json({ error: 'principal_changed' }, 409)
   }
   const parsed = await parseLimitedJson(c, MAX_BODY_BYTES)
@@ -63,7 +63,7 @@ settings.put('/anthropic-key', async (c) => {
 settings.delete('/anthropic-key', (c) => {
   const session = c.get('session')
   const expectedSub = c.req.header(EXPECTED_SUB_HEADER)
-  if (expectedSub !== undefined && expectedSub !== session.sub) {
+  if (expectedSub !== session.sub) {
     return c.json({ error: 'principal_changed' }, 409)
   }
   deleteUserApiKey(session.sub)
