@@ -27,8 +27,8 @@ the transcoder — is implementation detail, never visible from inside the exper
 - **You own the box** — self-hosted on your NAS; household signals never leave it.
 - **Live + on-demand** — an IPTV core with smoothed live cable, alongside a scanned,
   metadata-rich media library.
-- **Three ways in, one allowlist** — Plex OAuth, Sign in with Apple, and WebAuthn passkeys,
-  all converging on a single owner-controlled invite list.
+- **Four ways in, one allowlist** — Plex OAuth, Sign in with Apple, Sign in with Google,
+  and WebAuthn passkeys, all converging on a single owner-controlled invite list.
 - **Hardware transcoding** — HEVC→H.264 via Intel VAAPI on the NAS iGPU, software fallback off-box.
 - **Local-first recommendations** — a FastAPI + sqlite-vec scoring sidecar; your taste never
   leaves the NAS.
@@ -68,6 +68,8 @@ Everything else is opt-in, one flag each:
 | Requests & downloads (existing Sonarr / Radarr / SAB) | `SONARR_API_KEY` / `RADARR_API_KEY` / `SAB_API_KEY` |
 | Live TV (your Xtream/IPTV provider) | `XTREAM_HOST` / `XTREAM_USERNAME` / `XTREAM_PASSWORD` |
 | Plex login as an extra sign-in provider | `PLEX_CLIENT_ID` (+ `PLEX_SERVER_ID`) |
+| Sign in with Apple | `APPLE_CLIENT_ID` (`ENABLE_APPLE_SIGN_IN=1` is an optional fail-fast assertion) |
+| Sign in with Google | `GOOGLE_CLIENT_ID` (`ENABLE_GOOGLE_SIGN_IN=1` is an optional fail-fast assertion) |
 | Error telemetry (self-hosted Glitchtip) | `COMPOSE_PROFILES=telemetry` + `TELEMETRY_ENABLED=1` |
 
 With everything off you still get the core product: library browsing + playback, passkey
@@ -127,16 +129,18 @@ Four runtimes, one product:
 
 ## Authentication
 
-No homegrown password store. Identity comes from three parallel providers, all converging on a
+No homegrown password store. Identity comes from four parallel providers, all converging on a
 single invite/members allowlist:
 
 - **Plex OAuth** (PIN flow)
-- **Sign in with Apple** (RS256, alg/aud/iss/nonce-pinned) for the device-pair bearer flow
+- **Sign in with Apple** (RS256, alg/aud/iss/nonce-pinned)
+- **Sign in with Google** (RS256, issuer/audience-pinned across configured web/native clients)
 - **WebAuthn passkeys** (cross-platform, password-free)
 
 A user is authorized only if their identity is on the members allowlist, which the owner
 manages via invites. The Plex token is encrypted at rest (JWE); invite redemption is atomic and
-race-safe.
+race-safe, and provider success is confirmed against the browser's `/api/me` session before the
+dashboard trusts it.
 
 ## Backend surface (`/api`)
 

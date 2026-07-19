@@ -31,6 +31,9 @@ import { authModeFromSession } from '../session.js'
 import { cascadeRevokeForSub } from './reconcileDeviceToken.js'
 import { memberStatus } from './membership.js'
 import { isMember } from './members.js'
+import { createLogger } from './logger.js'
+
+const authLog = createLogger('auth')
 
 // Cascade-revocation contract (§3.4): when Plex definitively denies the
 // cookie user (auth_revoked or not_member), ALSO revoke every paired
@@ -42,17 +45,21 @@ function cascadeOnDenial(sub: string, reason: string): void {
   try {
     const n = cascadeRevokeForSub(sub, reason)
     if (n > 0) {
-      console.warn(
-        '[sessionGate] cascade-revoked %d device tokens for sub=%s reason=%s',
-        n,
-        sub,
+      authLog.warn('device token cascade completed', {
+        event: 'auth_device_cascade',
+        outcome: 'revoked',
+        revokedCount: n,
         reason,
-      )
+      })
     }
   } catch (e) {
     // Don't let a cascade-revoke DB hiccup mask the underlying denial —
     // the cookie path's null-return MUST still propagate. Log + swallow.
-    console.error('[sessionGate] cascade-revoke failed for sub=%s: %s', sub, e)
+    authLog.error('device token cascade failed', {
+      event: 'auth_device_cascade',
+      outcome: 'bookkeeping_failed',
+      causeType: e instanceof Error ? e.name : typeof e,
+    })
   }
 }
 

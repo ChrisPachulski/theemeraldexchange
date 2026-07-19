@@ -330,10 +330,10 @@ if (isProd && !telemetryDsn) {
 // secret for identity-token verification (the JWKS is public), so this
 // is the only Apple config the verifier consumes — consistent with the
 // "no new credential store" constraint. Optional in dev so a Plex-only
-// deploy still boots; required in production only when SIWA is enabled
-// via ENABLE_APPLE_SIGN_IN=1 (mirrors the explicit-opt-in pattern used
-// for ALLOW_UNSCOPED_PLEX_LOGIN), so forcing it on every Plex-only NAS
-// is avoided. The verifier additionally fails closed if this is null.
+// deploy still boots. APPLE_CLIENT_ID itself enables SIWA. The separately
+// named ENABLE_APPLE_SIGN_IN value is a deployment assertion: when it is 1
+// in production, a missing client id fails boot loudly. The verifier also
+// fails closed if the id is null.
 const appleClientId = opt('APPLE_CLIENT_ID') ?? null
 const enableAppleSignIn = process.env.ENABLE_APPLE_SIGN_IN === '1'
 if (isProd && enableAppleSignIn && !appleClientId) {
@@ -352,7 +352,8 @@ if (isProd && enableAppleSignIn && !appleClientId) {
 // verifier accepts any configured id. Like SIWA, identity-token
 // verification needs NO client secret (the JWKS is public) — consistent
 // with the "no new credential store" constraint. Optional in dev; required
-// in production only when Google is enabled via ENABLE_GOOGLE_SIGN_IN=1.
+// in production when ENABLE_GOOGLE_SIGN_IN=1 asserts that this deployment is
+// expected to offer Google. Supplying GOOGLE_CLIENT_ID itself enables it.
 const googleClientIds = csv('GOOGLE_CLIENT_ID')
 const enableGoogleSignIn = process.env.ENABLE_GOOGLE_SIGN_IN === '1'
 if (isProd && enableGoogleSignIn && googleClientIds.length === 0) {

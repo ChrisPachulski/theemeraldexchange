@@ -45,6 +45,8 @@ const PRESERVED_KEYS = [
   'INTERNAL_PRINCIPAL_SECRET',
   'APPLE_CLIENT_ID',
   'ENABLE_APPLE_SIGN_IN',
+  'GOOGLE_CLIENT_ID',
+  'ENABLE_GOOGLE_SIGN_IN',
   'ADMIN_SUBS',
   'TRUST_CLIENT_IP_HEADERS',
 ] as const
@@ -82,6 +84,8 @@ function setBaselineEnv() {
   delete process.env.RECOMMENDER_EVENT_SECRET
   delete process.env.APPLE_CLIENT_ID
   delete process.env.ENABLE_APPLE_SIGN_IN
+  delete process.env.GOOGLE_CLIENT_ID
+  delete process.env.ENABLE_GOOGLE_SIGN_IN
   delete process.env.ADMIN_SUBS
   delete process.env.TRUST_CLIENT_IP_HEADERS
 }
@@ -606,6 +610,35 @@ describe('env — APPLE_CLIENT_ID (SIWA aud)', () => {
     delete process.env.APPLE_CLIENT_ID
     const env = await loadEnv()
     expect(env.appleClientId).toBeNull()
+  })
+})
+
+describe('env — GOOGLE_CLIENT_ID (OIDC aud allow-list)', () => {
+  it('unset → empty and isGoogleConfigured() false', async () => {
+    setBaselineEnv()
+    delete process.env.GOOGLE_CLIENT_ID
+    const mod = await import('./env.js')
+    expect(mod.env.googleClientIds).toEqual([])
+    expect(mod.isGoogleConfigured()).toBe(false)
+  })
+
+  it('comma-separated ids are normalized and enable Google', async () => {
+    setBaselineEnv()
+    process.env.GOOGLE_CLIENT_ID = ' web-client , native-client '
+    const mod = await import('./env.js')
+    expect(mod.env.googleClientIds).toEqual(['web-client', 'native-client'])
+    expect(mod.isGoogleConfigured()).toBe(true)
+  })
+
+  it('production enable assertion without a client id fails boot', async () => {
+    setBaselineEnv()
+    process.env.NODE_ENV = 'production'
+    process.env.ALLOWED_ORIGINS = 'https://app.example'
+    process.env.PLEX_SERVER_ID = 'home-server-machine-id'
+    process.env.EEX_TELEMETRY_DSN = 'https://test@glitchtip.example.com/1'
+    process.env.ENABLE_GOOGLE_SIGN_IN = '1'
+    delete process.env.GOOGLE_CLIENT_ID
+    await expect(loadEnv()).rejects.toThrow(/GOOGLE_CLIENT_ID/)
   })
 })
 

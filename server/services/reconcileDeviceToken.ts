@@ -18,6 +18,9 @@ import type { DeviceTokenClaims } from '../session.js'
 import { roleFor } from './sessionGate.js'
 import { memberStatus } from './membership.js'
 import { isMember } from './members.js'
+import { createLogger } from './logger.js'
+
+const authLog = createLogger('auth')
 
 export type ReconciledDeviceSession = DeviceTokenClaims & {
   /** Stable identifier for /api/me. Device tokens don't carry a
@@ -54,7 +57,12 @@ export function reconcileDeviceToken(
     try {
       cascadeRevokeForSub(claims.sub, status === 'revoked' ? 'member_revoked' : 'not_member')
     } catch (e) {
-      console.error('[reconcileDeviceToken] cascade-revoke failed for sub=%s: %s', claims.sub, e)
+      authLog.error('device token cascade failed', {
+        event: 'auth_device_cascade',
+        outcome: 'bookkeeping_failed',
+        surface: 'bearer',
+        causeType: e instanceof Error ? e.name : typeof e,
+      })
     }
     return null
   }

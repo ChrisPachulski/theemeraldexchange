@@ -268,6 +268,29 @@ describe('reconcileDeviceToken', () => {
     expect(revocation('jti-E')?.reason).toBe('not_member')
   })
 
+  it('does not log a raw identity when cascade bookkeeping fails', async () => {
+    const { reconcileDeviceToken } = await importReconcile({ ADMIN_SUBS: OTHER_ADMIN })
+    const rawSub = 'plex:987654321'
+    seedDeviceToken('jti-log-redaction', rawSub)
+    serverDb().raw.exec(`
+      CREATE TRIGGER fail_test_revocation
+      BEFORE INSERT ON device_token_revocations
+      BEGIN
+        SELECT RAISE(ABORT, 'forced cascade failure');
+      END;
+    `)
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      expect(reconcileDeviceToken(makeClaims('jti-log-redaction', rawSub), null)).toBeNull()
+    } finally {
+      serverDb().raw.exec('DROP TRIGGER fail_test_revocation')
+    }
+
+    expect(errorSpy).toHaveBeenCalledOnce()
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(rawSub)
+  })
+
   // F) cascadeRevokeForSub unit, direct.
   it('cascadeRevokeForSub revokes exactly the sub\'s tokens, is idempotent, and returns 0 for nobody', async () => {
     const { cascadeRevokeForSub } = await importReconcile({})

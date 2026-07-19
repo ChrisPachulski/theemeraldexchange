@@ -31,6 +31,7 @@ import { runTelemetryDsnSelfCheck } from './services/serverTelemetry.js'
 import { ensureSetupToken } from './services/setupState.js'
 import { createLogger } from './services/logger.js'
 import { warnExpiredCompatWindows } from './services/compatWindows.js'
+import { buildAuthPosture } from './services/authPosture.js'
 
 const log = createLogger('boot')
 const shutdownLog = createLogger('shutdown')
@@ -79,6 +80,7 @@ void runTelemetryDsnSelfCheck()
 // first boot (INSERT OR IGNORE — safe to call on every subsequent boot).
 const serverId = ensureServerId()
 log.info('server_id resolved', { serverId })
+log.info('authentication posture', buildAuthPosture(env))
 
 // First-owner claim (plan 006 Phase 1): while the install is un-gated and
 // unclaimed, mint the one-time setup token and print it — the token is the

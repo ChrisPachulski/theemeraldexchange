@@ -57,9 +57,23 @@ services:
       DEVICE_TOKEN_SECRET: "${DEVICE_TOKEN_SECRET}"
       INTERNAL_PRINCIPAL_SECRET: "${INTERNAL_PRINCIPAL_SECRET}"
       # ── everything below is OPTIONAL — leave blank to skip ──
+      # Durable/legacy administrator bootstrap inputs.
+      ADMINS: "${ADMINS:-}"
+      ADMIN_SUBS: "${ADMIN_SUBS:-}"
       # Plex login (a fresh install uses passkeys; Plex is one extra provider)
       PLEX_CLIENT_ID: "${PLEX_CLIENT_ID:-}"
       PLEX_SERVER_ID: "${PLEX_SERVER_ID:-}"
+      # Federated login providers. Identity-token verification uses public
+      # provider keys, so no Apple/Google client secret is required here.
+      APPLE_CLIENT_ID: "${APPLE_CLIENT_ID:-}"
+      ENABLE_APPLE_SIGN_IN: "${ENABLE_APPLE_SIGN_IN:-}"
+      GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
+      ENABLE_GOOGLE_SIGN_IN: "${ENABLE_GOOGLE_SIGN_IN:-}"
+      # Passkey relying-party configuration. Set these when the browser uses
+      # a hostname other than localhost (for example Tailscale HTTPS).
+      WEBAUTHN_RP_ID: "${WEBAUTHN_RP_ID:-}"
+      WEBAUTHN_RP_NAME: "${WEBAUTHN_RP_NAME:-}"
+      WEBAUTHN_ORIGINS: "${WEBAUTHN_ORIGINS:-}"
       # Requests/downloads (Sonarr / Radarr / SAB) — tabs hide when unset
       SONARR_URL: "${SONARR_URL:-}"
       SONARR_API_KEY: "${SONARR_API_KEY:-}"

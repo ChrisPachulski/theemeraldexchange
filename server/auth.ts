@@ -356,8 +356,8 @@ auth.get('/plex/config', (c) => {
 // Public, auth-free: which login methods this install offers, so the native
 // app (and SPA) render only the providers that are actually configured. plex
 // is config-gated on PLEX_CLIENT_ID (optional since plan 006 Phase 0);
-// apple/google are flag+config gated; passkeys are always mounted (WebAuthn
-// has dev defaults).
+// apple/google are client-id gated (their ENABLE_* values are deployment
+// fail-fast assertions); passkeys are always mounted (WebAuthn has dev defaults).
 // The app reads this on the unpaired screen to build the provider button list.
 auth.get('/methods', (c) =>
   c.json({

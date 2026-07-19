@@ -111,10 +111,14 @@ services:
       # container — which silently locked the owner out the moment the
       # invite/members gate became authoritative (PLEX_SERVER_ID set).
       ADMIN_SUBS: "${ADMIN_SUBS:-}"
-      # Sign in with Apple — Services ID (aud) + explicit enable flag. Both
-      # optional; SIWA stays dormant until ENABLE_APPLE_SIGN_IN=1.
+      # Sign in with Apple — setting the Services ID enables SIWA. The ENABLE
+      # value is an optional deployment assertion that makes a missing ID fatal.
       APPLE_CLIENT_ID: "${APPLE_CLIENT_ID:-}"
       ENABLE_APPLE_SIGN_IN: "${ENABLE_APPLE_SIGN_IN:-}"
+      # Google web/native OAuth client ids accepted as ID-token audiences.
+      # Comma-separate ids when the web and native clients differ.
+      GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
+      ENABLE_GOOGLE_SIGN_IN: "${ENABLE_GOOGLE_SIGN_IN:-}"
       # Passkeys (WebAuthn). RP_ID defaults to 'localhost' in env.ts, which
       # breaks every prod ceremony — so it MUST be passed through. Same
       # passthrough gap that locked the owner out via ADMIN_SUBS.

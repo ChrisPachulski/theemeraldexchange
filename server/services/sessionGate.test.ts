@@ -284,6 +284,34 @@ describe('reconcileSession — allowlist authZ (authoritative)', () => {
 })
 
 describe('reconcileSession — cascade device revocation', () => {
+  it('does not log a raw identity when cascade bookkeeping fails', async () => {
+    const rawSub = 'plex:private-provider-subject'
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    memberStatusImpl.fn = () => 'not_member'
+    cascadeSpy.mockImplementationOnce(() => {
+      throw new Error(`database failure while revoking ${rawSub}`)
+    })
+
+    const result = await reconcileSession({ ...baseSession, sub: rawSub })
+
+    expect(result).toBeNull()
+    expect(errorSpy).toHaveBeenCalledOnce()
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(rawSub)
+  })
+
+  it('does not log a raw identity when cascade bookkeeping succeeds', async () => {
+    const rawSub = 'plex:private-provider-subject'
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    memberStatusImpl.fn = () => 'not_member'
+    cascadeSpy.mockReturnValueOnce(2)
+
+    const result = await reconcileSession({ ...baseSession, sub: rawSub })
+
+    expect(result).toBeNull()
+    expect(warnSpy).toHaveBeenCalledOnce()
+    expect(JSON.stringify(warnSpy.mock.calls)).not.toContain(rawSub)
+  })
+
   // When the allowlist denies the cookie user (revoked / not a member),
   // every paired Apple device for the same sub must also be revoked so
   // the M2 Bearer path is locked out on its next request. Idempotent.
