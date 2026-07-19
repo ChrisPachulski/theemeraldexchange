@@ -4,9 +4,9 @@
 # heavy sidecars (recommender torch stack, media-core/transcoder Rust
 # workspaces) only on push to main — which meant a PR could break a sidecar
 # Dockerfile and the failure surfaced only AFTER merge. This workflow closes
-# that gap: it builds the three sidecar images on PRs, but only when the
-# inputs that feed them change (path filter below), so routine SPA/server PRs
-# stay fast.
+# that gap: it builds the three sidecar images on PRs and exercises the
+# recommender's real embedding/persistence path, but only when the inputs that
+# feed them change (path filter below), so routine SPA/server PRs stay fast.
 #
 # The matrix fans the three images out in parallel; per-image GHA cache
 # scopes keep layer caches from clobbering each other.
@@ -63,6 +63,19 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           push: false
-          load: false
+          load: ${{ matrix.name == 'recommender' }}
+          tags: theemeraldexchange-${{ matrix.name }}:ci
           cache-from: type=gha,scope=sidecar-${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=sidecar-${{ matrix.name }}
+
+      - name: Verify recommender embedding compatibility
+        if: matrix.name == 'recommender'
+        run: |
+          docker run --rm \
+            --user 10001:10001 \
+            -e HF_HUB_DISABLE_XET=1 \
+            -v "$PWD/recommender/scripts/verify_embedding_runtime.py:/ci/verify_embedding_runtime.py:ro" \
+            -v "$PWD/recommender/tests/fixtures/torch_2_12_embedding_baseline.json:/ci/baseline.json:ro" \
+            --entrypoint python \
+            theemeraldexchange-recommender:ci \
+            /ci/verify_embedding_runtime.py /ci/baseline.json

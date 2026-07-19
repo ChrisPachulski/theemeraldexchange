@@ -62,6 +62,18 @@ Runs as a sibling container in the project's `docker-compose.yml` (service name
 `recommender`). Only reachable inside the Docker network — Hono is the public
 surface via Cloudflare Tunnel.
 
+The default MiniLM embedding model is pinned to the exact Hugging Face commit
+used in production. A custom model must always provide both settings so a
+mutable Hub branch cannot silently change persisted vectors:
+
+```bash
+RECOMMENDER_EMBED_MODEL=organization/model \
+RECOMMENDER_EMBED_MODEL_REVISION=<full-40-character-commit-sha>
+```
+
+The service fails fast when a custom model omits the revision or uses a mutable
+tag/branch instead of a full commit SHA.
+
 ## Model recipes
 
 Each recipe in `app/recipes/` exposes a single `score(user_ctx, candidates) -> [Pick]`.

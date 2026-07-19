@@ -468,9 +468,21 @@ jobs:
       - name: Build sidecar images (deploy branch only)
         if: github.ref == 'refs/heads/main'
         run: |
-          docker build -f ./recommender/Dockerfile .
+          docker build -t theemeraldexchange-recommender:ci -f ./recommender/Dockerfile .
           docker build -f ./crates/media-core/Dockerfile .
           docker build -f ./crates/transcoder/Dockerfile .
+
+      - name: Verify recommender image embedding compatibility
+        if: github.ref == 'refs/heads/main'
+        run: |
+          docker run --rm \
+            --user 10001:10001 \
+            -e HF_HUB_DISABLE_XET=1 \
+            -v "$PWD/recommender/scripts/verify_embedding_runtime.py:/ci/verify_embedding_runtime.py:ro" \
+            -v "$PWD/recommender/tests/fixtures/torch_2_12_embedding_baseline.json:/ci/baseline.json:ro" \
+            --entrypoint python \
+            theemeraldexchange-recommender:ci \
+            /ci/verify_embedding_runtime.py /ci/baseline.json
 
   shellcheck:
     # The ~500-line deploy script (scripts/deploy-nas.sh) snapshots, rsyncs,

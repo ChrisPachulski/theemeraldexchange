@@ -94,7 +94,7 @@ COPY recommender/migrations ./migrations
 COPY recommender/eval ./eval
 COPY recommender/docker-entrypoint.sh /usr/local/bin/recommender-entrypoint
 # Reproducible install from the committed lock (recommender/requirements.lock),
-# pinned to the proven-in-prod resolved set. This replaces the old
+# pinned to a CI-proven compatible resolved set. This replaces the old
 # `pip install .` that re-resolved pyproject's `>=` floors on every build (so
 # every rebuild silently drifted) and the bare `pip install torch` that pulled
 # whatever CPU torch was newest.

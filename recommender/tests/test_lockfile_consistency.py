@@ -1,14 +1,20 @@
 """Every pyproject.toml dependency floor must be satisfied by the pin in
 requirements.lock.
 
-The lock is hand-frozen from the production container (see its header), so a
-naive freeze-regen can silently revert a deliberate floor bump — exactly how
-the setuptools security bump (PYSEC-2026-3447, >=83.0.0) would regress. This
-test makes such a revert a loud CI failure instead of a silent drift.
+The lock began as a production-container freeze (see its header), with
+deliberate security and compatibility bumps layered on top. A naive freeze
+regen can silently revert those bumps — exactly how the setuptools security
+floor (PYSEC-2026-3447, >=83.0.0) would regress. These tests make such a revert
+a loud CI failure instead of silent drift.
 """
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
+import math
+import struct
 import tomllib
 from pathlib import Path
 
@@ -17,6 +23,7 @@ from packaging.utils import canonicalize_name
 from packaging.version import Version
 
 RECOMMENDER_DIR = Path(__file__).resolve().parents[1]
+EXPECTED_EMBEDDINGS_SHA256 = "c62435ea899eddc1149eff4c49e078e4781381fcabcce472054129e39f48630b"
 
 
 def _locked_entries() -> dict[str, tuple[Version, int]]:
@@ -78,6 +85,39 @@ def test_setuptools_security_floor_held() -> None:
     locked = _locked_versions()
     assert locked.get("setuptools") is not None, "setuptools pin missing from requirements.lock"
     assert locked["setuptools"] >= Version("83.0.0")
+
+
+def test_torch_setuptools_resolver_compatibility_floor() -> None:
+    # Torch 2.11 and 2.12 declare setuptools<82, which cannot coexist with
+    # the PYSEC-2026-3447 security floor above. Torch 2.13 removes that
+    # ceiling. Keep stale production freezes from restoring the conflict.
+    locked = _locked_versions()
+    assert locked.get("torch") is not None, "torch pin missing from requirements.lock"
+    assert locked["torch"] >= Version("2.13.0")
+
+
+def test_embedding_baseline_fixture_is_complete() -> None:
+    path = RECOMMENDER_DIR / "tests" / "fixtures" / "torch_2_12_embedding_baseline.json"
+    fixture = json.loads(path.read_text(encoding="utf-8"))
+    revision = fixture["model_revision"]
+    assert len(revision) == 40
+    assert all(character in "0123456789abcdef" for character in revision)
+    rows, dim = fixture["shape"]
+    encoded = fixture["embeddings_base64"].encode("ascii")
+    raw = base64.b64decode(encoded, validate=True)
+    assert len(raw) == rows * dim * 4
+    assert fixture["embeddings_sha256"] == EXPECTED_EMBEDDINGS_SHA256
+    assert hashlib.sha256(raw).hexdigest() == EXPECTED_EMBEDDINGS_SHA256
+
+    values = struct.unpack(f"<{rows * dim}f", raw)
+    assert all(math.isfinite(value) for value in values)
+    assert len(fixture["texts"]) == rows
+    assert len(fixture["top3_neighbors"]) == rows
+    for index, neighbors in enumerate(fixture["top3_neighbors"]):
+        assert len(neighbors) == 3
+        assert len(set(neighbors)) == 3
+        assert index not in neighbors
+        assert all(0 <= neighbor < rows for neighbor in neighbors)
 
 
 def test_every_pin_is_hash_pinned() -> None:
