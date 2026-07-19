@@ -71,7 +71,8 @@ export function memberStatus(sub: string): MemberStatus {
  * an ADMIN_SUBS owner-bootstrap entry or any admin members row. A revoked
  * admin row still counts so revoking access cannot reopen first-owner setup.
  * Provider configuration and ordinary member rows are authorization inputs,
- * not proof of server ownership.
+ * not proof of server ownership. Do not add provider client IDs or the legacy
+ * username-only ADMINS list here: configuration is intent, not identity proof.
  */
 export function hasDurableOwnershipGate(): boolean {
   if ((env.adminSubs ?? []).length > 0) return true

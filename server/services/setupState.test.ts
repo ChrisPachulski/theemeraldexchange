@@ -31,6 +31,7 @@ import {
   claimSourceAllowed,
 } from './setupState.js'
 import { addMember, isMember, revokeMemberSafely } from './members.js'
+import { memberStatus } from './membership.js'
 import { env } from '../env.js'
 
 const OWNER = 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV'
@@ -152,6 +153,13 @@ describe('setupState', () => {
     ['Google', () => { envRw.googleClientIds = ['web.example.apps.googleusercontent.com'] }],
   ])('%s configuration alone remains claimable', (_provider, configure) => {
     configure()
+    expect(isClaimable()).toBe(true)
+  })
+
+  it('keeps Plex provider configuration claimable while normal login stays fail-closed', () => {
+    envRw.plexClientId = 'stable-public-client-id'
+
+    expect(memberStatus('plex:424242')).toBe('not_member')
     expect(isClaimable()).toBe(true)
   })
 

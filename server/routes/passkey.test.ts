@@ -38,6 +38,11 @@ const members = vi.hoisted(() => ({
 }))
 vi.mock('../services/members.js', () => members)
 
+const { memberStatus } = vi.hoisted(() => ({
+  memberStatus: vi.fn<() => 'allowed' | 'revoked' | 'not_member'>(() => 'allowed'),
+}))
+vi.mock('../services/membership.js', () => ({ memberStatus }))
+
 const { setSessionCookie } = vi.hoisted(() => ({ setSessionCookie: vi.fn() }))
 vi.mock('../session.js', () => ({ setSessionCookie }))
 
@@ -110,6 +115,7 @@ beforeEach(() => {
   transactionHarness.modes.length = 0
   setSessionCookie.mockResolvedValue(undefined)
   effectiveRoleFor.mockReturnValue('user')
+  memberStatus.mockReturnValue('allowed')
 })
 
 describe('passkey register/options', () => {
@@ -431,6 +437,28 @@ describe('passkey login/verify', () => {
     expect(transactionHarness.events).toEqual(['ownership:sealed', 'session:minted'])
   })
 
+  it('uses the shared ADMIN_SUBS verdict when the passkey has no active member row', async () => {
+    const sub = 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV'
+    webauthn.verifyLogin.mockResolvedValue({ sub })
+    memberStatus.mockReturnValue('allowed')
+    members.isMember.mockReturnValue(null)
+    effectiveRoleFor.mockReturnValue('admin')
+
+    const res = await post('/login/verify', { challengeId: 'cid', response: { id: 'cred1' } })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({
+      ok: true,
+      user: { sub, username: '', role: 'admin' },
+    })
+    expect(memberStatus).toHaveBeenCalledWith(sub)
+    expect(setupState.sealVerifiedAdminOwnership).toHaveBeenCalledWith(sub)
+    expect(setSessionCookie).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ sub, role: 'admin' }),
+    )
+  })
+
   it('fails closed before minting when an admin ownership marker cannot be written', async () => {
     webauthn.verifyLogin.mockResolvedValue({ sub: 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV' })
     members.isMember.mockReturnValue({ role: 'user', display_name: 'Owner' })
@@ -451,6 +479,7 @@ describe('passkey login/verify', () => {
 
   it('SECURITY: a valid signature for a REVOKED member is denied (403)', async () => {
     webauthn.verifyLogin.mockResolvedValue({ sub: 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV' })
+    memberStatus.mockReturnValue('revoked')
     members.isMember.mockReturnValue(null) // revoked → collapsed to null
 
     const res = await post('/login/verify', { challengeId: 'cid', response: { id: 'cred1' } })
@@ -458,6 +487,7 @@ describe('passkey login/verify', () => {
     expect(await res.json()).toEqual({ error: 'access_revoked' })
     expect(setSessionCookie).not.toHaveBeenCalled()
     expect(setupState.sealVerifiedAdminOwnership).not.toHaveBeenCalled()
+    expect(memberStatus).toHaveBeenCalledWith('local:01ARZ3NDEKTSV4RRFFQ69G5FAV')
   })
 
   it('400s a failed assertion', async () => {

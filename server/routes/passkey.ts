@@ -34,6 +34,7 @@ import {
   enforceAuthIdentityRateLimit,
 } from '../auth.js'
 import { addMember, isMember, recordMemberLogin } from '../services/members.js'
+import { memberStatus } from '../services/membership.js'
 import { setSessionCookie } from '../session.js'
 import { maybeMintDeviceToken } from '../services/devicePair.js'
 import {
@@ -262,18 +263,25 @@ passkey.post('/login/verify', async (c) => {
     return c.json({ error: 'login_failed' }, 400)
   }
 
-  // The signature is valid — but authZ is separate: a revoked passkey user has
-  // no active members row and must be denied. isMember collapses revoked → null.
-  const member = isMember(sub)
-  if (!member) return c.json({ error: 'access_revoked' }, 403)
+  // The signature is valid — but authZ is separate and must use the same
+  // provider-agnostic verdict as Plex, Apple, Google, cookies, and Bearer
+  // reconciliation. In particular, an explicit ADMIN_SUBS owner remains an
+  // immutable bootstrap authority even if its optional member row is absent.
+  const status = memberStatus(sub)
+  if (status !== 'allowed') return c.json({ error: 'access_revoked' }, 403)
 
-  const username = member.display_name ?? ''
+  const member = isMember(sub)
+  const username = member?.display_name ?? ''
   const role = effectiveRoleFor(username, sub)
+  // An allowed rowless identity is valid only through ADMIN_SUBS, which must
+  // resolve to admin. Keep this defensive guard so policy/data drift cannot
+  // turn a missing member row into an ordinary user session.
+  if (!member && role !== 'admin') return c.json({ error: 'access_revoked' }, 403)
   // The assertion and active-member gate have both succeeded. Persist the
   // one-way ownership marker before issuing either a browser cookie or native
   // Bearer token so an ADMIN_SUBS upgrade cannot leave setup reopenable.
   if (role === 'admin') sealVerifiedAdminOwnership(sub)
-  recordMemberLogin(sub, member.display_name)
+  if (member) recordMemberLogin(sub, member.display_name)
 
   // Native app pairing: device-pair triple in the body → device-token
   // Bearer JWE (routes/device.ts wire shape) instead of a session cookie.

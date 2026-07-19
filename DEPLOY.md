@@ -86,6 +86,21 @@ script validates all required keys (and the `SESSION_SECRET` strength /
 
 This file is gitignored. If you ever lose it, regenerate the secrets and redeploy — every active session resets, which is fine.
 
+#### Upgrade note: legacy `ADMINS`-only installs
+
+Normal provider login is now fail-closed: a verified identity still needs an
+`ADMIN_SUBS` match, an active member row, an invite, or verified Plex-server
+share admission. Provider client IDs never make first-owner setup unavailable.
+
+An older install that has only the username-based `ADMINS` setting and no
+durable administrator row will therefore boot as claimable and print a new
+one-time setup token. Sign in once as the configured Plex administrator soon
+after upgrading. The successful, authorized login writes the immutable
+ownership marker and burns the setup token; later removing `ADMINS` can still
+demote that user, but it cannot reopen first-owner setup. Anyone previously
+admitted only by the removed rowless fall-open behavior must instead use
+`PLEX_SERVER_ID` share admission or receive an invite from the owner.
+
 ### 3. Netlify
 
 1. https://app.netlify.com/start → **Import from Git** → connect GitHub → pick the `theemeraldexchange` repo.
