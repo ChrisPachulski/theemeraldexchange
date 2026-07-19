@@ -44,6 +44,11 @@ export type Pin = {
 
 const PLEX_RATE_LIMIT_FALLBACK_SECONDS = 5
 const PLEX_RATE_LIMIT_LOG_MAX_SECONDS = 30
+const RETRY_AFTER_HTTP_DATE_PATTERNS = [
+  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (?:0[1-9]|[12]\d|3[01]) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} (?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d GMT$/,
+  /^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (?:0[1-9]|[12]\d|3[01])-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} (?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d GMT$/,
+  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (?: [1-9]|[12]\d|3[01]) (?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d \d{4}$/,
+]
 
 /** Expected Plex backpressure, kept distinct from local auth rate limits. */
 export class PlexRateLimitError extends Error {
@@ -58,7 +63,12 @@ export class PlexRateLimitError extends Error {
 
 function normalizedRetryAfter(value: string | null): string {
   const candidate = value?.trim()
-  if (candidate && (/^\d+$/.test(candidate) || Number.isFinite(Date.parse(candidate)))) {
+  if (
+    candidate &&
+    (/^\d+$/.test(candidate) ||
+      (RETRY_AFTER_HTTP_DATE_PATTERNS.some((pattern) => pattern.test(candidate)) &&
+        Number.isFinite(Date.parse(candidate))))
+  ) {
     return candidate
   }
   return String(PLEX_RATE_LIMIT_FALLBACK_SECONDS)

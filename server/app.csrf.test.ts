@@ -122,6 +122,15 @@ describe('app CSRF — safe GETs pass through', () => {
     expect(r.status).toBe(200)
   })
 
+  it('exposes Retry-After to the allowed cross-origin SPA', async () => {
+    const r = await app.request('/api/health', {
+      headers: { Origin: ALLOWED },
+    })
+    expect(r.status).toBe(200)
+    expect(r.headers.get('Access-Control-Expose-Headers'))
+      .toContain('Retry-After')
+  })
+
   it('/api/limits works with no Origin', async () => {
     const r = await app.request('/api/limits')
     expect(r.status).toBe(200)

@@ -100,12 +100,13 @@ app.use('*', async (c, next) => {
   c.header('X-Frame-Options', 'DENY')
 })
 
-// MED-18: stream/segment/playlist auth is token-in-URL (`?t=`, `?u=`, `?token=`),
-// so any logger that prints the query string would write live bearer tokens into
-// stdout/container logs. Redact those query values. Exported pure for test.
-const TOKEN_QUERY_RE = /([?&](?:t|u|token)=)[^&\s]+/gi
-export function redactStreamTokens(line: string): string {
-  return line.replace(TOKEN_QUERY_RE, '$1[redacted]')
+// MED-18: playback grants and malformed/legacy login requests can put auth
+// artifacts in the URL. Any logger that prints the query string must scrub
+// them even when the route ultimately rejects the request.
+const SECRET_QUERY_RE =
+  /([?&](?:t|u|token|pinId|inviteCode|invite_code|setupToken|idToken|id_token)=)[^&\s]+/gi
+export function redactRequestSecrets(line: string): string {
+  return line.replace(SECRET_QUERY_RE, '$1[redacted]')
 }
 
 // Request logger: method + redacted path + status + elapsed + request id. Custom
@@ -113,7 +114,7 @@ export function redactStreamTokens(line: string): string {
 // it to telemetry, and so the token redaction (MED-18) is applied to the path.
 app.use('*', async (c, next) => {
   const url = new URL(c.req.url)
-  const path = redactStreamTokens(url.pathname + url.search)
+  const path = redactRequestSecrets(url.pathname + url.search)
   const rid = c.get('requestId')
   const start = Date.now()
   console.log(`<-- ${c.req.method} ${path} [${rid}]`)
@@ -141,6 +142,9 @@ if (env.allowedOrigins.length > 0) {
         'Authorization',
         'X-App-Version',
       ],
+      // Retry-After is not CORS-safelisted. The split-origin SPA must read it
+      // to honor both provider and local backpressure.
+      exposeHeaders: ['Retry-After', 'X-Request-Id'],
     }),
   )
 }
@@ -215,8 +219,8 @@ app.get('/api/limits', (c) =>
 )
 
 app.route('/api/auth', auth)
-// Apple device-pair flow lives under the same /api/auth tree as the
-// Plex cookie flow. M2 PIN-pair: POST /start → POST /poll → device JWE.
+// Native device-pair flow lives under the same /api/auth tree as the Plex
+// cookie flow. The device creates its PIN directly, then POST /poll mints JWE.
 app.route('/api/auth/device', device)
 // Passkey (WebAuthn) login + registration — the cross-platform, password-free
 // identity path. Public (these endpoints ARE the login); self-owned local:

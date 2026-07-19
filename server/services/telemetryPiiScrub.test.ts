@@ -123,6 +123,34 @@ describe('piiScrub — extra edge cases', () => {
     expect(result.request.url).toBe('/stream?t=REDACTED&other=ok&t=REDACTED')
   })
 
+  it('scrubs Plex PIN ids from outbound fetch URLs in events', () => {
+    const event = asEvent({
+      request: { url: 'https://plex.tv/api/v2/pins/987654321' },
+      extra: { fetchUrl: 'https://plex.tv/api/v2/pins/987654321?strong=true' },
+    })
+    const result = piiScrub(event) as unknown as {
+      request: { url: string }
+      extra: { fetchUrl: string }
+    }
+    expect(result.request.url).toBe('https://plex.tv/api/v2/pins/REDACTED')
+    expect(result.extra.fetchUrl).toBe(
+      'https://plex.tv/api/v2/pins/REDACTED?strong=true',
+    )
+  })
+
+  it('scrubs auth secret query parameters from event URLs', () => {
+    const result = piiScrub(
+      asEvent({
+        request: {
+          url: '/api/auth/plex/check?pinId=987654321&inviteCode=INVITE-SECRET&safe=1',
+        },
+      }),
+    ) as unknown as { request: { url: string } }
+    expect(result.request.url).toBe(
+      '/api/auth/plex/check?pinId=REDACTED&inviteCode=REDACTED&safe=1',
+    )
+  })
+
   it('redacts Authorization headers regardless of scheme — Authorization key matches "auth" denylist substring', () => {
     // The Authorization header key contains the substring "auth" which is in
     // the extended REDACTED_FIELD_KEYS denylist (Sentry DEFAULT_DENYLIST).
@@ -187,6 +215,20 @@ describe('piiBreadcrumbScrub — §15.3 breadcrumb scrubber', () => {
     }
     const result = piiBreadcrumbScrub(breadcrumb)
     expect(result.message).toBe('Fetched /stream?t=REDACTED&quality=sd')
+  })
+
+  it('scrubs Plex PIN ids from NodeFetch breadcrumb URLs and messages', () => {
+    const breadcrumb = {
+      type: 'http',
+      category: 'fetch',
+      message: 'GET https://plex.tv/api/v2/pins/987654321',
+      data: { url: 'https://plex.tv/api/v2/pins/987654321' },
+    }
+    const result = piiBreadcrumbScrub(breadcrumb)
+    expect(result.message).toBe('GET https://plex.tv/api/v2/pins/REDACTED')
+    expect((result.data as { url: string }).url).toBe(
+      'https://plex.tv/api/v2/pins/REDACTED',
+    )
   })
 
   it('leaves breadcrumbs without PII untouched', () => {

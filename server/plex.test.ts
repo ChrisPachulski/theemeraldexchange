@@ -123,6 +123,9 @@ describe('checkPin', () => {
     ['numeric', '17', '17'],
     ['HTTP-date', 'Sat, 18 Jul 2026 23:59:59 GMT', 'Sat, 18 Jul 2026 23:59:59 GMT'],
     ['malformed', 'eventually', '5'],
+    ['non-HTTP date', 'January 1 2027', '5'],
+    ['signed delay', '-1', '5'],
+    ['decimal delay', '1.5', '5'],
     ['absent', undefined, '5'],
   ])('throws a typed 429 with a safe %s Retry-After', async (_label, upstream, expected) => {
     stubText(

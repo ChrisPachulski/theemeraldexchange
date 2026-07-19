@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// Route-level coverage for the Apple device-pair HTTP handler (POST /poll).
+// Route-level coverage for the native device-pair HTTP handler (POST /poll).
 // Mock every upstream dep with vi.hoisted + vi.mock so the tests
 // exercise ROUTE ORCHESTRATION only — body-limit parsing, the five field
 // validations, the body-too-large guard, and the pending/denied/authorized
@@ -38,7 +38,7 @@ vi.mock('../plex.js', () => plex)
 const { authorizeOrRedeem, enforceAuthRateLimit } = vi.hoisted(() => ({
   authorizeOrRedeem: vi.fn(),
   // Default: never rate-limited (returns null). Individual tests can override.
-  enforceAuthRateLimit: vi.fn(() => null),
+  enforceAuthRateLimit: vi.fn<() => Response | null>(() => null),
 }))
 vi.mock('../auth.js', () => ({ authorizeOrRedeem, enforceAuthRateLimit }))
 
@@ -128,6 +128,25 @@ describe('device POST /poll — body size guard', () => {
 })
 
 describe('device POST /poll — pin lifecycle', () => {
+  it('keeps the local auth limiter distinct from Plex provider backpressure', async () => {
+    enforceAuthRateLimit.mockReturnValueOnce(
+      new Response(JSON.stringify({ error: 'rate_limited' }), {
+        status: 429,
+        headers: {
+          'Content-Type': 'application/json',
+          'Retry-After': '60',
+        },
+      }),
+    )
+
+    const res = await post('/poll', validPoll)
+
+    expect(res.status).toBe(429)
+    expect(res.headers.get('Retry-After')).toBe('60')
+    expect(await res.json()).toEqual({ error: 'rate_limited' })
+    expect(plex.checkPin).not.toHaveBeenCalled()
+  })
+
   it('200 pending when the pin has no authToken yet', async () => {
     plex.checkPin.mockResolvedValue({ authToken: null })
     const res = await post('/poll', validPoll)
