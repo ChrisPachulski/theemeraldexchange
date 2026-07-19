@@ -28,7 +28,7 @@ import {
   markClaimed,
   isPrivateAddress,
 } from './setupState.js'
-import { addMember, revokeMember } from './members.js'
+import { addMember, revokeMemberSafely } from './members.js'
 import { env } from '../env.js'
 
 const OWNER = 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV'
@@ -113,7 +113,17 @@ describe('setupState', () => {
     ensureSetupToken()
     const token = tokenFromFile()
     addMember({ sub: OWNER, authMode: 'local' })
-    if (revoke) revokeMember(OWNER)
+    if (revoke) {
+      expect(
+        revokeMemberSafely({
+          targetSub: OWNER,
+          actorSub: 'plex:999999999',
+          actorUsername: 'setup-test-owner',
+          immutableAdminSubs: ['plex:999999999'],
+          legacyAdminUsernames: [],
+        }),
+      ).toBe('revoked')
+    }
     expect(isClaimable()).toBe(false)
     ensureSetupToken()
     expect(verifySetupToken(token)).toBe(false)
