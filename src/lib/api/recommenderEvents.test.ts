@@ -3,8 +3,11 @@ import { postClickEvent } from './recommenderEvents'
 import { SESSION_EXPIRED_EVENT } from '../queryClient'
 
 const fetchMock = vi.fn()
+let clock = 10_000
 
 beforeEach(() => {
+  clock += 3_000
+  vi.spyOn(Date, 'now').mockReturnValue(clock)
   fetchMock.mockReset()
   globalThis.fetch = fetchMock as typeof fetch
   const windowTarget = new EventTarget() as EventTarget & {
@@ -53,16 +56,49 @@ describe('postClickEvent', () => {
     await Promise.resolve()
   })
 
-  it('dispatches session expiry when the swallowed response is a 401', async () => {
+  it('dispatches session expiry when the swallowed response is an unauthenticated 401', async () => {
     const listener = vi.fn()
     window.addEventListener(SESSION_EXPIRED_EVENT, listener)
-    fetchMock.mockResolvedValueOnce(new Response(null, { status: 401 }))
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: 'unauthenticated' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
 
     postClickEvent('movie', 603)
-    await Promise.resolve()
-    await Promise.resolve()
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1))
+  })
 
-    expect(listener).toHaveBeenCalledTimes(1)
+  it('does not dispatch when an upstream failure happens to use HTTP 401', async () => {
+    const listener = vi.fn()
+    window.addEventListener(SESSION_EXPIRED_EVENT, listener)
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: 'upstream_unauthorized' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    postClickEvent('movie', 603)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(listener).not.toHaveBeenCalled()
+  })
+
+  it('uses the actual HTTP status even if the JSON body contains a status field', async () => {
+    const listener = vi.fn()
+    window.addEventListener(SESSION_EXPIRED_EVENT, listener)
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: 'unauthenticated', status: 502 }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    postClickEvent('movie', 603)
+
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1))
   })
 
   it('does not dispatch session expiry for a forbidden 403', async () => {

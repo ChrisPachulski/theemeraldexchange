@@ -7,7 +7,7 @@
 import { throwApiError, ApiError } from './errors'
 import { apiUrl } from './base'
 import { withTimeout, type RequestOpts } from './timeout'
-import { SESSION_EXPIRED_EVENT } from '../queryClient'
+import { notifySessionExpiredResponse } from '../sessionExpiry'
 
 const BASE = '/api/media'
 
@@ -643,11 +643,7 @@ export const mediaApi = {
       body: JSON.stringify(watchUpsertBody(entry)),
       keepalive: true,
     })
-      .then((response) => {
-        if (response.status === 401) {
-          window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
-        }
-      })
+      .then(notifySessionExpiredResponse)
       .catch(() => undefined)
   },
 

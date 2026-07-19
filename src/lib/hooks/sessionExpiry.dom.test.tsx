@@ -81,4 +81,39 @@ describe('protected hook fetchers', () => {
       'search?query=The%20Matrix',
     )
   })
+
+  it('keeps the Plex search fallback on 409 no_plex_token without expiring the session', async () => {
+    const listener = vi.fn()
+    window.addEventListener('exchange:session-expired', listener)
+    const errors: unknown[] = []
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/plex/library-links')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ error: 'no_plex_token' }), {
+            status: 409,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ serverId: 'server-1' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+    })
+
+    const { result } = renderHook(() => usePlexLinks(), {
+      wrapper: wrapper(errors),
+    })
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    expect(result.current.linkFor('movie', { tmdbId: 603, title: 'The Matrix' })).toContain(
+      'search?query=The%20Matrix',
+    )
+    expect(errors).toEqual([])
+    expect(listener).not.toHaveBeenCalled()
+    window.removeEventListener('exchange:session-expired', listener)
+  })
 })

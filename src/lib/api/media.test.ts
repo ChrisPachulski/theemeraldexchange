@@ -4,8 +4,11 @@ import { mediaApi, browserCaps, probedCaps, resetProbedCapsForTest } from './med
 import { SESSION_EXPIRED_EVENT } from '../queryClient'
 
 const fetchMock = vi.fn()
+let expiryClock = 20_000
 
 beforeEach(() => {
+  expiryClock += 3_000
+  vi.spyOn(Date, 'now').mockReturnValue(expiryClock)
   fetchMock.mockReset()
   globalThis.fetch = fetchMock as typeof fetch
   const windowTarget = new EventTarget() as EventTarget & {
@@ -351,10 +354,12 @@ describe('mediaApi playback + watch', () => {
     })
   })
 
-  it('flushWatch() dispatches session expiry for a swallowed 401 response', async () => {
+  it('flushWatch() dispatches session expiry for a swallowed unauthenticated 401 response', async () => {
     const listener = vi.fn()
     window.addEventListener(SESSION_EXPIRED_EVENT, listener)
-    fetchMock.mockResolvedValueOnce(new Response(null, { status: 401 }))
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({ error: 'unauthenticated' }, { status: 401 }),
+    )
 
     mediaApi.flushWatch({
       kind: 'movie',
@@ -362,10 +367,25 @@ describe('mediaApi playback + watch', () => {
       positionSecs: 12,
       durationSecs: 1200,
     })
-    await Promise.resolve()
-    await Promise.resolve()
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1))
+  })
 
-    expect(listener).toHaveBeenCalledTimes(1)
+  it('flushWatch() ignores a swallowed non-session 401 response', async () => {
+    const listener = vi.fn()
+    window.addEventListener(SESSION_EXPIRED_EVENT, listener)
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({ error: 'media_core_auth_failed' }, { status: 401 }),
+    )
+
+    mediaApi.flushWatch({
+      kind: 'movie',
+      id: 7,
+      positionSecs: 12,
+      durationSecs: 1200,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(listener).not.toHaveBeenCalled()
   })
 })
 

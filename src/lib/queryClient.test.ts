@@ -1,5 +1,5 @@
 // Covers the auth-expiry logic in queryClient.ts: debounced
-// SESSION_EXPIRED_EVENT dispatch on 401 (or an explicit unauthenticated code),
+// SESSION_EXPIRED_EVENT dispatch on 401 plus an explicit unauthenticated code,
 // forbidden-403 exclusion, and the no-retry-on-auth policy.
 //
 // vitest runs in the `node` environment here (the repo default — see
@@ -86,11 +86,11 @@ afterEach(() => {
 })
 
 describe('queryClient session-expiry dispatch', () => {
-  it('dispatches SESSION_EXPIRED_EVENT once for an ApiError 401 surfaced through the queryCache', async () => {
+  it('dispatches SESSION_EXPIRED_EVENT once for an edge unauthenticated 401 surfaced through the queryCache', async () => {
     const { mod, ApiError } = await freshModule()
     addListener(win, mod.SESSION_EXPIRED_EVENT)
 
-    fireQueryError(mod, new ApiError(401, 'x'))
+    fireQueryError(mod, new ApiError(401, 'x', 'unauthenticated'))
 
     expect(listener).toHaveBeenCalledTimes(1)
     expect(listener.mock.calls[0][0].type).toBe(mod.SESSION_EXPIRED_EVENT)
@@ -112,13 +112,13 @@ describe('queryClient session-expiry dispatch', () => {
     expect(listener).not.toHaveBeenCalled()
   })
 
-  it('DOES dispatch for a 403 explicitly coded unauthenticated (expired session surfaced as 403)', async () => {
+  it('does NOT dispatch for a 403 even when it is coded unauthenticated', async () => {
     const { mod, ApiError } = await freshModule()
     addListener(win, mod.SESSION_EXPIRED_EVENT)
 
     fireQueryError(mod, new ApiError(403, 'session expired', 'unauthenticated'))
 
-    expect(listener).toHaveBeenCalledTimes(1)
+    expect(listener).not.toHaveBeenCalled()
   })
 
   it('does NOT dispatch for ApiError 500', async () => {
@@ -139,11 +139,7 @@ describe('queryClient session-expiry dispatch', () => {
     expect(listener).not.toHaveBeenCalled()
   })
 
-  it('dispatches for a private status-carrying error class (duck-typed, not instanceof ApiError)', async () => {
-    // Regression guard: modules like useSuggested throw their own error
-    // classes carrying `.status`. The session-expiry detector must catch
-    // them — it used to require `instanceof ApiError`, so these bypassed
-    // the expired-session logout entirely.
+  it('does NOT dispatch for a private status-only 401 without the edge error code', async () => {
     class PrivateError extends Error {
       status: number
       constructor(status: number) {
@@ -156,7 +152,16 @@ describe('queryClient session-expiry dispatch', () => {
 
     fireQueryError(mod, new PrivateError(401))
 
-    expect(listener).toHaveBeenCalledTimes(1)
+    expect(listener).not.toHaveBeenCalled()
+  })
+
+  it('does NOT dispatch for an upstream 401 carrying a non-session error code', async () => {
+    const { mod, ApiError } = await freshModule()
+    addListener(win, mod.SESSION_EXPIRED_EVENT)
+
+    fireQueryError(mod, new ApiError(401, 'upstream rejected credentials', 'upstream_unauthorized'))
+
+    expect(listener).not.toHaveBeenCalled()
   })
 
   it('does NOT dispatch for a duck-typed non-auth status (500) or a non-numeric status', async () => {
@@ -184,9 +189,9 @@ describe('queryClient session-expiry dispatch', () => {
     addListener(win, mod.SESSION_EXPIRED_EVENT)
 
     // Date.now is pinned at 1_000_000 by beforeEach; second call is < 2000ms later.
-    fireQueryError(mod, new ApiError(401, 'first'))
+    fireQueryError(mod, new ApiError(401, 'first', 'unauthenticated'))
     vi.spyOn(Date, 'now').mockReturnValue(1_000_000 + 1_999)
-    fireQueryError(mod, new ApiError(401, 'second'))
+    fireQueryError(mod, new ApiError(401, 'second', 'unauthenticated'))
 
     expect(listener).toHaveBeenCalledTimes(1)
   })
@@ -195,10 +200,10 @@ describe('queryClient session-expiry dispatch', () => {
     const { mod, ApiError } = await freshModule()
     addListener(win, mod.SESSION_EXPIRED_EVENT)
 
-    fireQueryError(mod, new ApiError(401, 'first'))
+    fireQueryError(mod, new ApiError(401, 'first', 'unauthenticated'))
     // Advance to exactly the 2000ms boundary (now - lastDispatch === 2000, not < 2000).
     vi.spyOn(Date, 'now').mockReturnValue(1_000_000 + 2_000)
-    fireQueryError(mod, new ApiError(401, 'second'))
+    fireQueryError(mod, new ApiError(401, 'second', 'unauthenticated'))
 
     expect(listener).toHaveBeenCalledTimes(2)
   })
@@ -207,7 +212,7 @@ describe('queryClient session-expiry dispatch', () => {
     const { mod, ApiError } = await freshModule()
     addListener(win, mod.SESSION_EXPIRED_EVENT)
 
-    fireMutationError(mod, new ApiError(401, 'x'))
+    fireMutationError(mod, new ApiError(401, 'x', 'unauthenticated'))
 
     expect(listener).toHaveBeenCalledTimes(1)
   })
@@ -218,9 +223,25 @@ describe('queryClient session-expiry dispatch', () => {
 
     // Both caches funnel through the same module-scoped `lastDispatch` clock.
     // Date.now is pinned at 1_000_000 by beforeEach; the second hit is < 2000ms later.
-    fireQueryError(mod, new ApiError(401, 'query'))
+    fireQueryError(mod, new ApiError(401, 'query', 'unauthenticated'))
     vi.spyOn(Date, 'now').mockReturnValue(1_000_000 + 1_999)
-    fireMutationError(mod, new ApiError(401, 'mutation'))
+    fireMutationError(mod, new ApiError(401, 'mutation', 'unauthenticated'))
+
+    expect(listener).toHaveBeenCalledTimes(1)
+  })
+
+  it('exports one notifier whose debounce is shared with React Query producers', async () => {
+    const { mod, ApiError } = await freshModule()
+    addListener(win, mod.SESSION_EXPIRED_EVENT)
+    const notify = (
+      mod as QueryClientModule & { notifySessionExpired?: (error: unknown) => void }
+    ).notifySessionExpired
+
+    expect(notify).toBeTypeOf('function')
+    if (!notify) return
+
+    notify(new ApiError(401, 'imperative fetch', 'unauthenticated'))
+    fireQueryError(mod, new ApiError(401, 'query fetch', 'unauthenticated'))
 
     expect(listener).toHaveBeenCalledTimes(1)
   })
@@ -244,6 +265,6 @@ describe('queryClient session-expiry dispatch', () => {
     const { mod, ApiError } = await freshModule()
 
     // Should be a no-op, not a throw, when there's no window to dispatch on.
-    expect(() => fireQueryError(mod, new ApiError(401, 'x'))).not.toThrow()
+    expect(() => fireQueryError(mod, new ApiError(401, 'x', 'unauthenticated'))).not.toThrow()
   })
 })

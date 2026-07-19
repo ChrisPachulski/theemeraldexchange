@@ -1,7 +1,12 @@
 import { Hono, type Context, type Next } from 'hono'
 import { requireAuth, type Env } from '../middleware/auth.js'
 import { env } from '../env.js'
-import { fetchStreamWithConnectTimeout, fetchWithTimeout, LAN_TIMEOUT_MS } from '../services/upstream.js'
+import {
+  fetchStreamWithConnectTimeout,
+  fetchWithTimeout,
+  LAN_TIMEOUT_MS,
+  normalizeUpstreamAuthFailure,
+} from '../services/upstream.js'
 import { mintInternalPrincipal } from '../services/internalPrincipal.js'
 import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
 import { postFeedback } from '../services/recommender.js'
@@ -434,11 +439,14 @@ media.all('/*', async (c) => {
     }
   }
 
-  const r = await fetchStreamWithConnectTimeout(
-    upstream,
-    { method, headers, ...(hasBody && body !== undefined ? { body } : {}) },
-    LAN_TIMEOUT_MS,
-    'media-core',
+  const r = await normalizeUpstreamAuthFailure(
+    await fetchStreamWithConnectTimeout(
+      upstream,
+      { method, headers, ...(hasBody && body !== undefined ? { body } : {}) },
+      LAN_TIMEOUT_MS,
+      'media-core',
+    ),
+    'media_core',
   )
 
   if (r.ok && watchedSignal && env.useLocalRecommender) {

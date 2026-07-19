@@ -4,6 +4,8 @@
 // for non-2xx responses. ApiError preserves those fields so the UI can
 // render specific messages instead of "Sonarr /series: 507".
 
+import { notifySessionExpired } from '../sessionExpiry'
+
 export class ApiError extends Error {
   status: number
   code?: string
@@ -112,7 +114,12 @@ export async function throwApiError(res: Response, scope: string): Promise<never
     message = data.message
   }
 
-  throw new ApiError(res.status, message, code, data)
+  const error = new ApiError(res.status, message, code, data)
+  // Imperative callers sometimes intentionally swallow display errors (player
+  // teardown, best-effort cleanup). Report auth expiry at the typed HTTP
+  // boundary so those paths cannot hide an expired browser session.
+  notifySessionExpired(error)
+  throw error
 }
 
 /**

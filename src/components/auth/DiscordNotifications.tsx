@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { apiUrl } from '../../lib/api/base'
-import { SESSION_EXPIRED_EVENT } from '../../lib/queryClient'
+import { notifySessionExpiredResponse } from '../../lib/sessionExpiry'
 
 // Discord-webhook configuration card inside the admin UserMenu.
 // Fetches current state once on mount, lets the admin paste a webhook
@@ -11,12 +11,6 @@ type Status = { sonarr: boolean; radarr: boolean; configured: boolean }
 
 type Props = { onClose: () => void }
 
-function dispatchSessionExpiry(response: Response): void {
-  if (response.status === 401) {
-    window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
-  }
-}
-
 export function DiscordNotifications({ onClose }: Props) {
   const [status, setStatus] = useState<Status | null>(null)
   const [url, setUrl] = useState('')
@@ -26,8 +20,8 @@ export function DiscordNotifications({ onClose }: Props) {
   useEffect(() => {
     let alive = true
     fetch(apiUrl('/api/notifications/discord'), { credentials: 'include' })
-      .then((r) => {
-        dispatchSessionExpiry(r)
+      .then(async (r) => {
+        await notifySessionExpiredResponse(r)
         return r.ok ? r.json() : null
       })
       .then((s: Status | null) => {
@@ -49,7 +43,7 @@ export function DiscordNotifications({ onClose }: Props) {
         credentials: 'include',
         body: JSON.stringify({ webhookUrl: url.trim() }),
       })
-      dispatchSessionExpiry(res)
+      await notifySessionExpiredResponse(res)
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string }
         throw new Error(body.error ?? `save failed ${res.status}`)
@@ -72,7 +66,7 @@ export function DiscordNotifications({ onClose }: Props) {
         method: 'POST',
         credentials: 'include',
       })
-      dispatchSessionExpiry(res)
+      await notifySessionExpiredResponse(res)
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string }
         throw new Error(body.error ?? `test failed ${res.status}`)
@@ -99,7 +93,7 @@ export function DiscordNotifications({ onClose }: Props) {
         method: 'DELETE',
         credentials: 'include',
       })
-      dispatchSessionExpiry(res)
+      await notifySessionExpiredResponse(res)
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as {
           error?: string

@@ -1,5 +1,5 @@
 import { apiUrl } from './base'
-import { SESSION_EXPIRED_EVENT } from '../queryClient'
+import { notifySessionExpiredResponse } from '../sessionExpiry'
 
 // Fire-and-forget mirror to /api/recommender/event for client-side
 // conversion signals. Currently only 'clicked' lives here — added /
@@ -17,10 +17,6 @@ export function postClickEvent(kind: 'movie' | 'tv', tmdbId: number): void {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ kind, tmdbId, signal: 'clicked' }),
   })
-    .then((response) => {
-      if (response.status === 401) {
-        window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
-      }
-    })
+    .then(notifySessionExpiredResponse)
     .catch(() => {})
 }

@@ -98,15 +98,36 @@ describe('useUserApiKey — one-time silent localStorage migration', () => {
     expect(localStorage.getItem(SCOPED)).toBe('sk-ant-local-key-abcd')
   })
 
-  it('dispatches session expiry when the migration PUT fails with 401', async () => {
+  it('dispatches session expiry when the migration PUT fails with an unauthenticated 401', async () => {
     const listener = vi.fn()
     window.addEventListener(SESSION_EXPIRED_EVENT, listener)
     localStorage.setItem(SCOPED, 'sk-ant-local-key-abcd')
-    putKeyMock.mockRejectedValue(Object.assign(new Error('expired'), { status: 401 }))
+    putKeyMock.mockRejectedValue(
+      Object.assign(new Error('expired'), { status: 401, code: 'unauthenticated' }),
+    )
 
     renderHook(() => useUserApiKey(), { wrapper })
 
     await waitFor(() => expect(listener).toHaveBeenCalledTimes(1))
+    expect(localStorage.getItem(SCOPED)).toBe('sk-ant-local-key-abcd')
+    window.removeEventListener(SESSION_EXPIRED_EVENT, listener)
+  })
+
+  it('does not dispatch when migration sees a non-session 401', async () => {
+    const listener = vi.fn()
+    window.addEventListener(SESSION_EXPIRED_EVENT, listener)
+    localStorage.setItem(SCOPED, 'sk-ant-local-key-abcd')
+    putKeyMock.mockRejectedValue(
+      Object.assign(new Error('upstream key rejected'), {
+        status: 401,
+        code: 'upstream_unauthorized',
+      }),
+    )
+
+    renderHook(() => useUserApiKey(), { wrapper })
+
+    await waitFor(() => expect(putKeyMock).toHaveBeenCalled())
+    expect(listener).not.toHaveBeenCalled()
     expect(localStorage.getItem(SCOPED)).toBe('sk-ant-local-key-abcd')
     window.removeEventListener(SESSION_EXPIRED_EVENT, listener)
   })

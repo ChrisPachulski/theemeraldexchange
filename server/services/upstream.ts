@@ -41,6 +41,23 @@ export class NotConfiguredError extends Error {
   }
 }
 
+/**
+ * An internal integration's 401 describes this server's credentials, not the
+ * browser cookie. Normalize it before any route can forward it to the SPA,
+ * where 401 is reserved for edge authentication.
+ */
+export async function normalizeUpstreamAuthFailure(
+  response: Response,
+  service: string,
+): Promise<Response> {
+  if (response.status !== 401) return response
+  await response.body?.cancel().catch(() => {})
+  return new Response(JSON.stringify({ error: `${service}_auth_failed` }), {
+    status: 502,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
 export async function fetchWithTimeout(
   url: string | URL,
   init: RequestInit,

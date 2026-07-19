@@ -3,8 +3,9 @@
 // crafted "Not enough disk space. 50 GB free, need 100 GB." message
 // silently degrades back to "Sonarr /series: 507 Insufficient Storage".
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { throwApiError, ApiError } from './errors'
+import { SESSION_EXPIRED_EVENT } from '../sessionExpiry'
 
 function jsonResponse(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {
@@ -51,6 +52,23 @@ describe('throwApiError', () => {
     await expect(throwApiError(r, 'Sonarr /series')).rejects.toMatchObject({
       message: expect.stringMatching(/sign in again/i),
     })
+  })
+
+  it('reports an edge unauthenticated 401 before an imperative caller can swallow it', async () => {
+    const windowTarget = new EventTarget()
+    const listener = vi.fn()
+    windowTarget.addEventListener(
+      SESSION_EXPIRED_EVENT,
+      listener as unknown as EventListener,
+    )
+    vi.stubGlobal('window', windowTarget)
+
+    await expect(
+      throwApiError(jsonResponse({ error: 'unauthenticated' }, 401), 'Media playback'),
+    ).rejects.toMatchObject({ status: 401, code: 'unauthenticated' })
+
+    expect(listener).toHaveBeenCalledTimes(1)
+    vi.unstubAllGlobals()
   })
 
   it('falls back to status text when the body is not JSON', async () => {

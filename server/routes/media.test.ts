@@ -23,7 +23,8 @@ vi.mock('../services/internalPrincipal.js', () => ({
   mintInternalPrincipal: vi.fn(() => 'minted-token'),
 }))
 
-vi.mock('../services/upstream.js', () => ({
+vi.mock('../services/upstream.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/upstream.js')>()),
   fetchStreamWithConnectTimeout: vi.fn(),
   fetchWithTimeout: vi.fn(),
   LAN_TIMEOUT_MS: 5000,
@@ -90,6 +91,23 @@ describe('media proxy route', () => {
     const [url, init] = mockFetch.mock.calls[0]
     expect(url).toBe('http://media-core.test/api/media/movies')
     expect((init as FetchInitWithHeaders).headers['authorization']).toBe('Bearer minted-token')
+  })
+
+  it('normalizes a media-core principal 401 to a typed 502', async () => {
+    mockFetch.mockResolvedValue(
+      new Response(JSON.stringify({ error: 'unauthenticated' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const res = await media.request('/movies', {
+      method: 'GET',
+      headers: { host: 'localhost' },
+    })
+
+    expect(res.status).toBe(502)
+    expect(await res.json()).toEqual({ error: 'media_core_auth_failed' })
   })
 
   it('fails closed with 502 when mint throws while a secret is configured', async () => {

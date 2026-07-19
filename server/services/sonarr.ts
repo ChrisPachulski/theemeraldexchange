@@ -2,7 +2,12 @@
 // the X-Api-Key — it never leaves this process.
 
 import { env } from '../env.js'
-import { fetchWithTimeout, LAN_TIMEOUT_MS, NotConfiguredError } from './upstream.js'
+import {
+  fetchWithTimeout,
+  LAN_TIMEOUT_MS,
+  normalizeUpstreamAuthFailure,
+  NotConfiguredError,
+} from './upstream.js'
 
 export type RootFolder = {
   id: number
@@ -24,17 +29,20 @@ export async function sonarrFetch(
   if (query) {
     for (const [k, v] of query.entries()) url.searchParams.set(k, v)
   }
-  return fetchWithTimeout(
-    url.toString(),
-    {
-      ...init,
-      headers: {
-        ...(init.headers ?? {}),
-        'X-Api-Key': apiKey,
-        Accept: 'application/json',
+  return normalizeUpstreamAuthFailure(
+    await fetchWithTimeout(
+      url.toString(),
+      {
+        ...init,
+        headers: {
+          ...(init.headers ?? {}),
+          'X-Api-Key': apiKey,
+          Accept: 'application/json',
+        },
       },
-    },
-    timeoutMs,
+      timeoutMs,
+      'sonarr',
+    ),
     'sonarr',
   )
 }

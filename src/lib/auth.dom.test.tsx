@@ -355,6 +355,43 @@ describe('browser session truth', () => {
     expect(meCalls).toBe(expectedCalls)
   })
 
+  it('clears protected query data after expiry revalidation confirms anonymous', async () => {
+    let meCalls = 0
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      const auxiliary = auxiliaryAuthResponse(url)
+      if (auxiliary) return Promise.resolve(auxiliary)
+      if (!url.endsWith('/api/me')) {
+        return Promise.reject(new Error(`unexpected fetch: ${url}`))
+      }
+      meCalls += 1
+      return Promise.resolve(
+        meCalls === 1
+          ? json({
+              user: {
+                sub: 'plex:42',
+                username: 'member',
+                role: 'user',
+                auth_mode: 'plex',
+              },
+            })
+          : json({ error: 'unauthenticated' }, 401),
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { queryClient } = renderWithAuth(<SessionProbe />)
+    await settleBoundedRead()
+    queryClient.setQueryData(['protected', 'watch-history'], { items: [1] })
+    expect(queryClient.getQueryData(['protected', 'watch-history'])).toEqual({ items: [1] })
+
+    window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
+    await settleBoundedRead()
+
+    expect(screen.getByLabelText('session state')).toHaveTextContent('anonymous')
+    expect(queryClient.getQueryData(['protected', 'watch-history'])).toBeUndefined()
+  })
+
   it('aborts an initial read on unmount and ignores its late result', async () => {
     const pendingMe = deferred<Response>()
     let sessionSignal: AbortSignal | undefined

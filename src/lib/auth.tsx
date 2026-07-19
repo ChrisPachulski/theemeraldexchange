@@ -753,7 +753,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [scheduleSessionRefresh])
 
-  // Centralised 401/403 handling. A protected request can suggest that the
+  // Centralised edge-auth expiry handling. A protected request can suggest that the
   // cookie expired, but only /api/me is allowed to declare this browser
   // anonymous. Revalidate through the same bounded reader so a transient API
   // failure shows Retry instead of flashing the public walkthrough.

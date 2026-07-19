@@ -69,6 +69,17 @@ describe('radarrFetch', () => {
     expect(await r.text()).toBe('[]')
   })
 
+  it('normalizes an upstream credential 401 to a typed 502', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 }),
+    )
+
+    const r = await radarrFetch('/api/v3/movie')
+
+    expect(r.status).toBe(502)
+    expect(await r.json()).toEqual({ error: 'radarr_auth_failed' })
+  })
+
   it('honors a custom timeout override — aborts at timeoutMs, not the 15s LAN default', async () => {
     // Interactive search (GET /release) passes SEARCH_TIMEOUT_MS so a 20–60s
     // indexer query is not killed at 15s. Prove the 4th arg drives the abort

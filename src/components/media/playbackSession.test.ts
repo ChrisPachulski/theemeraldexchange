@@ -11,6 +11,8 @@ import {
   type PlaybackSessionHandlers,
 } from './playbackSession'
 import type { PlaybackGrant } from '../../lib/api/media'
+import { throwApiError } from '../../lib/api/errors'
+import { SESSION_EXPIRED_EVENT } from '../../lib/sessionExpiry'
 
 // MediaPlayer's grant/heartbeat/stop lifecycle, driven at the api-client
 // boundary with fake timers (the same mock seam IptvPlayer.test.tsx uses for
@@ -58,6 +60,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers()
+  vi.unstubAllGlobals()
 })
 
 describe('startPlaybackSession — grant flow', () => {
@@ -101,6 +104,34 @@ describe('startPlaybackSession — grant flow', () => {
     expect(handlers.onGrant).not.toHaveBeenCalled()
     expect(handlers.onGrantError).toHaveBeenCalledExactlyOnceWith(
       'Media /playback/movie/9 failed (503)',
+    )
+  })
+
+  it('cannot swallow an edge session expiry while surfacing a playback error', async () => {
+    const windowTarget = new EventTarget()
+    const listener = vi.fn()
+    windowTarget.addEventListener(
+      SESSION_EXPIRED_EVENT,
+      listener as unknown as EventListener,
+    )
+    vi.stubGlobal('window', windowTarget)
+    const { api, handlers } = harness(hlsGrant())
+    api.playback.mockImplementation(() =>
+      throwApiError(
+        new Response(JSON.stringify({ error: 'unauthenticated' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+        'Media /playback/movie/9',
+      ),
+    )
+
+    startPlaybackSession({ kind: 'movie', id: 9, api, handlers })
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(handlers.onGrantError).toHaveBeenCalledWith(
+      'Your session expired. Sign in again.',
     )
   })
 
