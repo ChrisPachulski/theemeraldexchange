@@ -38,6 +38,13 @@ vi.mock('./reconcileDeviceToken.js', () => ({
   roleFor: () => 'user',
 }))
 
+const { sealVerifiedAdminOwnershipSpy } = vi.hoisted(() => ({
+  sealVerifiedAdminOwnershipSpy: vi.fn(),
+}))
+vi.mock('./setupState.js', () => ({
+  sealVerifiedAdminOwnership: (sub: string) => sealVerifiedAdminOwnershipSpy(sub),
+}))
+
 // Mock the members allowlist (sibling-owned module). reconcileSession's
 // authZ now consults memberStatus FIRST and treats it as authoritative;
 // the per-test memberStatusImpl controls the verdict. Default 'allowed'
@@ -74,6 +81,7 @@ beforeEach(() => {
   memberStatusImpl.fn = () => 'allowed'
   isMemberImpl.fn = () => null
   cascadeSpy.mockClear()
+  sealVerifiedAdminOwnershipSpy.mockClear()
 })
 
 afterEach(() => {
@@ -95,6 +103,9 @@ describe('DB-backed admin role (plan 006 Phase 1 first-owner claim)', () => {
     } as Session)
     expect(s).not.toBeNull()
     expect(s?.role).toBe('admin')
+    expect(sealVerifiedAdminOwnershipSpy).toHaveBeenCalledWith(
+      'local:01ARZ3NDEKTSV4RRFFQ69G5FAV',
+    )
   })
 
   it('a members-row user role does NOT escalate (row must say admin)', async () => {
@@ -106,6 +117,7 @@ describe('DB-backed admin role (plan 006 Phase 1 first-owner claim)', () => {
       auth_mode: 'local',
     } as Session)
     expect(s?.role).toBe('user')
+    expect(sealVerifiedAdminOwnershipSpy).not.toHaveBeenCalled()
   })
 
   it('demoting the members row demotes the session on its next request', async () => {
@@ -117,6 +129,7 @@ describe('DB-backed admin role (plan 006 Phase 1 first-owner claim)', () => {
       auth_mode: 'local',
     } as Session)
     expect(s?.role).toBe('user')
+    expect(sealVerifiedAdminOwnershipSpy).not.toHaveBeenCalled()
   })
 })
 
@@ -167,6 +180,31 @@ describe('reconcileSession — role recompute', () => {
     })
     expect(r).not.toBeNull()
     expect(r!.role).toBe('admin')
+    expect(sealVerifiedAdminOwnershipSpy).toHaveBeenCalledWith(baseSession.sub)
+  })
+
+  it('seals an already-valid ADMIN_SUBS cookie session after live authZ succeeds', async () => {
+    const sub = 'apple:owner-sub'
+    const r = await reconcileSession({
+      sub,
+      username: 'owner',
+      role: 'user',
+      auth_mode: 'apple',
+    } as Session)
+
+    expect(r).toMatchObject({ sub, role: 'admin' })
+    expect(sealVerifiedAdminOwnershipSpy).toHaveBeenCalledWith(sub)
+  })
+
+  it('fails closed before returning a reconciled admin session when ownership cannot be sealed', async () => {
+    _primeSessionGateCache(baseSession.sub, 'member', baseSession.plexAuthToken)
+    sealVerifiedAdminOwnershipSpy.mockImplementationOnce(() => {
+      throw new Error('forced marker failure')
+    })
+
+    await expect(
+      reconcileSession({ ...baseSession, username: 'admin-user', role: 'user' }),
+    ).rejects.toThrow('forced marker failure')
   })
 })
 
@@ -183,12 +221,14 @@ describe('reconcileSession — allowlist authZ (authoritative)', () => {
     })
     const r = await reconcileSession(baseSession)
     expect(r).toBeNull()
+    expect(sealVerifiedAdminOwnershipSpy).not.toHaveBeenCalled()
   })
 
   it('denies a revoked member', async () => {
     memberStatusImpl.fn = () => 'revoked'
     const r = await reconcileSession(baseSession)
     expect(r).toBeNull()
+    expect(sealVerifiedAdminOwnershipSpy).not.toHaveBeenCalled()
   })
 
   it('allows an apple member without ever probing plex.tv', async () => {
@@ -240,6 +280,17 @@ describe('reconcileSession — allowlist authZ (authoritative)', () => {
     probeImpl.fn = async () => ({ kind: 'http_error', status: 401 })
     const r = await reconcileSession(baseSession)
     expect(r).toBeNull()
+    expect(sealVerifiedAdminOwnershipSpy).not.toHaveBeenCalled()
+  })
+
+  it('does not seal a configured admin whose Plex token is definitively revoked', async () => {
+    memberStatusImpl.fn = () => 'allowed'
+    probeImpl.fn = async () => ({ kind: 'http_error', status: 401 })
+
+    const r = await reconcileSession({ ...baseSession, username: 'admin-user' })
+
+    expect(r).toBeNull()
+    expect(sealVerifiedAdminOwnershipSpy).not.toHaveBeenCalled()
   })
 
   it('keeps a plex member signed in on a plex.tv 5xx (fail open on probe)', async () => {

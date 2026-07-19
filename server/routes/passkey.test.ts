@@ -41,6 +41,11 @@ vi.mock('../services/members.js', () => members)
 const { setSessionCookie } = vi.hoisted(() => ({ setSessionCookie: vi.fn() }))
 vi.mock('../session.js', () => ({ setSessionCookie }))
 
+const { effectiveRoleFor } = vi.hoisted(() => ({
+  effectiveRoleFor: vi.fn<() => 'admin' | 'user'>(() => 'user'),
+}))
+vi.mock('../services/sessionGate.js', () => ({ effectiveRoleFor }))
+
 // First-owner claim collaborators (plan 006 Phase 1). Default posture is a
 // CLAIMED install (isClaimable false) so the legacy invite-flow tests keep
 // exercising the shared authZ gate; the claim tests flip these per-case.
@@ -50,6 +55,7 @@ const setupState = vi.hoisted(() => ({
   markClaimed: vi.fn(),
   claimSourceAllowed: vi.fn(() => true),
   ensureSetupToken: vi.fn(),
+  sealVerifiedAdminOwnership: vi.fn(),
 }))
 vi.mock('../services/setupState.js', () => setupState)
 
@@ -103,6 +109,7 @@ beforeEach(() => {
   transactionHarness.events.length = 0
   transactionHarness.modes.length = 0
   setSessionCookie.mockResolvedValue(undefined)
+  effectiveRoleFor.mockReturnValue('user')
 })
 
 describe('passkey register/options', () => {
@@ -393,6 +400,53 @@ describe('passkey login/verify', () => {
       'Chris',
     )
     expect(setSessionCookie).toHaveBeenCalledTimes(1)
+    expect(setupState.sealVerifiedAdminOwnership).not.toHaveBeenCalled()
+  })
+
+  it('seals a verified ADMIN_SUBS passkey login before minting its admin session', async () => {
+    const sub = 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV'
+    webauthn.verifyLogin.mockResolvedValue({ sub })
+    members.isMember.mockReturnValue({ role: 'user', display_name: 'Owner' })
+    effectiveRoleFor.mockReturnValue('admin')
+    setupState.sealVerifiedAdminOwnership.mockImplementation(() => {
+      transactionHarness.events.push('ownership:sealed')
+    })
+    setSessionCookie.mockImplementation(async () => {
+      transactionHarness.events.push('session:minted')
+    })
+
+    const res = await post('/login/verify', { challengeId: 'cid', response: { id: 'cred1' } })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({
+      ok: true,
+      user: { sub, username: 'Owner', role: 'admin' },
+    })
+    expect(effectiveRoleFor).toHaveBeenCalledWith('Owner', sub)
+    expect(setupState.sealVerifiedAdminOwnership).toHaveBeenCalledWith(sub)
+    expect(setSessionCookie).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ sub, role: 'admin' }),
+    )
+    expect(transactionHarness.events).toEqual(['ownership:sealed', 'session:minted'])
+  })
+
+  it('fails closed before minting when an admin ownership marker cannot be written', async () => {
+    webauthn.verifyLogin.mockResolvedValue({ sub: 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV' })
+    members.isMember.mockReturnValue({ role: 'user', display_name: 'Owner' })
+    effectiveRoleFor.mockReturnValue('admin')
+    setupState.sealVerifiedAdminOwnership.mockImplementationOnce(() => {
+      throw new Error('forced marker failure')
+    })
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    try {
+      const res = await post('/login/verify', { challengeId: 'cid', response: { id: 'cred1' } })
+      expect(res.status).toBe(500)
+      expect(setSessionCookie).not.toHaveBeenCalled()
+    } finally {
+      errorSpy.mockRestore()
+    }
   })
 
   it('SECURITY: a valid signature for a REVOKED member is denied (403)', async () => {
@@ -403,6 +457,7 @@ describe('passkey login/verify', () => {
     expect(res.status).toBe(403)
     expect(await res.json()).toEqual({ error: 'access_revoked' })
     expect(setSessionCookie).not.toHaveBeenCalled()
+    expect(setupState.sealVerifiedAdminOwnership).not.toHaveBeenCalled()
   })
 
   it('400s a failed assertion', async () => {
@@ -410,6 +465,7 @@ describe('passkey login/verify', () => {
     const res = await post('/login/verify', { challengeId: 'cid', response: { id: 'c' } })
     expect(res.status).toBe(400)
     expect(members.isMember).not.toHaveBeenCalled()
+    expect(setupState.sealVerifiedAdminOwnership).not.toHaveBeenCalled()
   })
 })
 

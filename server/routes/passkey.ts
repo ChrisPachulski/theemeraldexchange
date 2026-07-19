@@ -41,10 +41,12 @@ import {
   verifySetupToken,
   markClaimed,
   claimSourceAllowed,
+  sealVerifiedAdminOwnership,
 } from '../services/setupState.js'
 import { serverDb } from '../services/serverDb.js'
 import { getConnInfo } from '@hono/node-server/conninfo'
 import { resolveClientAddress } from '../services/clientAddress.js'
+import { effectiveRoleFor } from '../services/sessionGate.js'
 
 export const passkey = new Hono<Env>()
 
@@ -265,19 +267,24 @@ passkey.post('/login/verify', async (c) => {
   const member = isMember(sub)
   if (!member) return c.json({ error: 'access_revoked' }, 403)
 
-  recordMemberLogin(sub, member.display_name)
   const username = member.display_name ?? ''
+  const role = effectiveRoleFor(username, sub)
+  // The assertion and active-member gate have both succeeded. Persist the
+  // one-way ownership marker before issuing either a browser cookie or native
+  // Bearer token so an ADMIN_SUBS upgrade cannot leave setup reopenable.
+  if (role === 'admin') sealVerifiedAdminOwnership(sub)
+  recordMemberLogin(sub, member.display_name)
 
   // Native app pairing: device-pair triple in the body → device-token
   // Bearer JWE (routes/device.ts wire shape) instead of a session cookie.
   const deviceResponse = await maybeMintDeviceToken(c, body, {
     sub,
-    role: member.role,
+    role,
     auth_mode: 'local',
     username,
   })
   if (deviceResponse) return deviceResponse
 
-  await setSessionCookie(c, { sub, username, role: member.role, auth_mode: 'local' })
-  return c.json({ ok: true, user: { sub, username, role: member.role } })
+  await setSessionCookie(c, { sub, username, role, auth_mode: 'local' })
+  return c.json({ ok: true, user: { sub, username, role } })
 })

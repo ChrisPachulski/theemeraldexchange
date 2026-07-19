@@ -96,6 +96,13 @@ function revocationCount(): number {
   ).n
 }
 
+function ownershipMarker(): string | null {
+  const row = serverDb()
+    .raw.prepare(`SELECT value FROM server_state WHERE key = 'setup_claimed_by'`)
+    .get() as { value: string } | undefined
+  return row?.value ?? null
+}
+
 describe('reconcileDeviceToken', () => {
   beforeAll(() => {
     // Force the singleton open against the temp DB; applies all migrations
@@ -123,7 +130,7 @@ describe('reconcileDeviceToken', () => {
     delete process.env.APPLE_CLIENT_ID
     delete process.env.ENABLE_APPLE_SIGN_IN
     serverDb().raw.exec(
-      'DELETE FROM device_tokens; DELETE FROM device_token_revocations; DELETE FROM members; DELETE FROM invites;',
+      "DELETE FROM device_tokens; DELETE FROM device_token_revocations; DELETE FROM members; DELETE FROM invites; DELETE FROM server_state WHERE key IN ('setup_claimed_by', 'setup_token_hash');",
     )
   })
 
@@ -153,6 +160,7 @@ describe('reconcileDeviceToken', () => {
     const row = tokenRow('jti-A')
     expect(row?.last_seen_at).not.toBeNull()
     expect(row?.last_seen_version).toBe('app-1.2.3')
+    expect(ownershipMarker()).toBe(ADMIN_SUB)
   })
 
   // B) ALLOWED PATH — appVersion null preserves prior last_seen_version (COALESCE).
@@ -227,6 +235,7 @@ describe('reconcileDeviceToken', () => {
 
     expect(result).toBeNull()
     expect(revocationCount()).toBe(0)
+    expect(ownershipMarker()).toBeNull()
   })
 
   // D) REVOKED MEMBER → null + cascade revoke with reason 'member_revoked'.
@@ -254,6 +263,7 @@ describe('reconcileDeviceToken', () => {
     expect(revocationCount()).toBe(2)
     expect(revocation('jti-D1')?.reason).toBe('member_revoked')
     expect(revocation('jti-D2')?.reason).toBe('member_revoked')
+    expect(ownershipMarker()).toBeNull()
   })
 
   // E) NON-MEMBER under a configured gate → null + cascade with reason 'not_member'.
@@ -266,6 +276,7 @@ describe('reconcileDeviceToken', () => {
 
     expect(result).toBeNull()
     expect(revocation('jti-E')?.reason).toBe('not_member')
+    expect(ownershipMarker()).toBeNull()
   })
 
   it('does not log a raw identity when cascade bookkeeping fails', async () => {
@@ -330,5 +341,6 @@ describe('reconcileDeviceToken', () => {
     expect(row?.last_seen_at).not.toBeNull()
     expect(row?.last_seen_version).toBe('app-2')
     expect(revocationCount()).toBe(0)
+    expect(ownershipMarker()).toBe(ADMIN_SUB)
   })
 })

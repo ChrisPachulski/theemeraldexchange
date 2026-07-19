@@ -15,10 +15,10 @@
 
 import { serverDb } from './serverDb.js'
 import type { DeviceTokenClaims } from '../session.js'
-import { roleFor } from './sessionGate.js'
+import { effectiveRoleFor, roleFor } from './sessionGate.js'
 import { memberStatus } from './membership.js'
-import { isMember } from './members.js'
 import { createLogger } from './logger.js'
+import { sealVerifiedAdminOwnership } from './setupState.js'
 
 const authLog = createLogger('auth')
 
@@ -87,15 +87,11 @@ export function reconcileDeviceToken(
     return null
   }
 
-  let role = row.username
-    ? roleFor(row.username, claims.sub)
-    : roleFor('', claims.sub)
-  // Match cookie reconciliation: a first-owner/passkey claim stores admin on
-  // the exact member sub. Never trust the long-lived bearer claim; read the
-  // active row on every request so both promotion and demotion are immediate.
-  if (role !== 'admin' && isMember(claims.sub)?.role === 'admin') {
-    role = 'admin'
-  }
+  // Never trust the long-lived bearer role claim. Use the same exact-sub,
+  // current-policy decision as cookie reconciliation, then close first-owner
+  // setup only after both live membership and the live jti row succeeded.
+  const role = effectiveRoleFor(row.username ?? '', claims.sub)
+  if (role === 'admin') sealVerifiedAdminOwnership(claims.sub)
 
   return {
     ...claims,

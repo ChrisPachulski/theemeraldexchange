@@ -132,6 +132,10 @@ export function verifySetupToken(token: string): boolean {
  */
 export function sealVerifiedAdminOwnership(sub: string): void {
   parseSub(sub)
+  // Reconciliation runs on every protected request. Once sealed, keep that
+  // hot path read-only instead of taking a SQLite write lock for every admin
+  // request. The transaction below remains the race-safe first-write boundary.
+  if (getState(CLAIMED_KEY) !== null) return
   const db = serverDb().raw
   const tx = db.transaction(() => {
     // Preserve the first proven owner as audit provenance. Later successful
