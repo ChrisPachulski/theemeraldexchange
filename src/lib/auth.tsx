@@ -437,7 +437,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const authChannelRef = useRef<BroadcastChannel | null>(null)
   const authInvalidationEpochRef = useRef(0)
   const signOutInFlightRef = useRef(false)
-  const foregroundSessionReadRef = useRef<object | null>(null)
+  const foregroundSessionReadRef = useRef<Promise<void> | null>(null)
   const mountedRef = useRef(true)
   const rejectMalformedInvite = useCallback((inviteCode?: string) => {
     const message = inviteCodeError(inviteCode)
@@ -570,28 +570,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     scheduleSessionRefresh(shouldBroadcastAnonymous)
   }, [scheduleSessionRefresh])
 
-  const retrySession = useCallback(async () => {
+  const retrySession = useCallback((): Promise<void> => {
     if (signInInFlightRef.current || signOutInFlightRef.current) {
       deferredRefreshRef.current = true
       deferredRefreshBroadcastRef.current = true
-      return
+      return Promise.resolve()
     }
+    const activeRead = foregroundSessionReadRef.current
+    if (activeRead) return activeRead
     cancelScheduledSessionRefresh()
-    const foregroundRead = {}
-    foregroundSessionReadRef.current = foregroundRead
     setSessionState('loading')
     setSessionError(null)
-    try {
-      const result = await readCurrentSession()
-      if (result.status !== 'aborted') {
-        commitSessionResult(result, { broadcastAnonymous: true })
-      }
-    } finally {
-      if (foregroundSessionReadRef.current === foregroundRead) {
-        foregroundSessionReadRef.current = null
-        drainDeferredSessionRefresh()
-      }
-    }
+    const foregroundRead = readCurrentSession()
+      .then((result) => {
+        if (result.status !== 'aborted') {
+          commitSessionResult(result, { broadcastAnonymous: true })
+        }
+      })
+      .finally(() => {
+        if (foregroundSessionReadRef.current === foregroundRead) {
+          foregroundSessionReadRef.current = null
+          drainDeferredSessionRefresh()
+        }
+      })
+    foregroundSessionReadRef.current = foregroundRead
+    return foregroundRead
   }, [
     cancelScheduledSessionRefresh,
     commitSessionResult,

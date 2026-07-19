@@ -548,6 +548,50 @@ describe('browser session lifecycle reconciliation', () => {
     expect(screen.getByLabelText('session user')).toHaveTextContent('Old member')
   })
 
+  it('coalesces expiry hints while the authoritative session read is in flight', async () => {
+    const heldRetry = deferred<Response>()
+    let meCalls = 0
+    let retrySignal: AbortSignal | undefined
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const auxiliary = auxiliaryResponse(url)
+      if (auxiliary) return Promise.resolve(auxiliary)
+      if (!url.endsWith('/api/me')) {
+        return Promise.reject(new Error(`unexpected fetch: ${url}`))
+      }
+      meCalls += 1
+      if (meCalls === 1) return Promise.resolve(me(OLD_USER))
+      retrySignal = init?.signal as AbortSignal
+      return heldRetry.promise
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { queryClient } = renderAuth()
+    await flush()
+    queryClient.setQueryData(['private'], 'old cache')
+
+    window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
+    await flush()
+    expect(meCalls).toBe(2)
+    expect(screen.getByLabelText('session state')).toHaveTextContent('loading')
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_100)
+    })
+    window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
+    await flush()
+
+    expect(meCalls).toBe(2)
+    expect(retrySignal?.aborted).toBe(false)
+
+    heldRetry.resolve(json({ code: 'unauthenticated', error: 'unauthenticated' }, 401))
+    await flush()
+
+    expect(meCalls).toBe(2)
+    expect(screen.getByLabelText('session state')).toHaveTextContent('anonymous')
+    expect(screen.getByLabelText('session user')).toBeEmptyDOMElement()
+    expect(queryClient.getQueryData(['private'])).toBeUndefined()
+  })
+
   it('lets a newer foreground read win over a stale lifecycle result', async () => {
     const stale = deferred<Response>()
     let meCalls = 0
