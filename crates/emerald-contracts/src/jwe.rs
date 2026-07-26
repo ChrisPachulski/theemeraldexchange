@@ -10,8 +10,8 @@
 //! AAD = the ASCII bytes of the encoded protected header (segment 1).
 //! Tag and ciphertext are split from `aes-gcm`'s combined output.
 
-use aes_gcm::aead::{Aead, KeyInit, OsRng, Payload};
-use aes_gcm::{AeadCore, Aes256Gcm, Nonce};
+use aes_gcm::Aes256Gcm;
+use aes_gcm::aead::{Aead, Generate, KeyInit, Nonce, Payload};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
@@ -54,7 +54,7 @@ pub fn encrypt(key: &[u8; 32], kid: &str, plaintext: &[u8]) -> String {
     let header_b64 = URL_SAFE_NO_PAD.encode(&header_json);
 
     let cipher = Aes256Gcm::new(key.into());
-    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+    let nonce = Nonce::<Aes256Gcm>::generate();
 
     // AAD = the encoded protected header (ASCII bytes).
     let aad = header_b64.as_bytes();
@@ -134,10 +134,11 @@ pub fn decrypt_with_key(key: &[u8; 32], token: &str) -> Result<Vec<u8>, JweError
 
     let cipher = Aes256Gcm::new(key.into());
     let aad = header_b64.as_bytes();
-    let nonce = Nonce::from_slice(&iv);
+    // Length was already checked above; `try_from` keeps it total.
+    let nonce = Nonce::<Aes256Gcm>::try_from(&iv[..]).map_err(|_| JweError::Malformed)?;
     cipher
         .decrypt(
-            nonce,
+            &nonce,
             Payload {
                 msg: &combined,
                 aad,
@@ -190,6 +191,44 @@ mod tests {
         assert_eq!(hdr.enc, "A256GCM");
         assert_eq!(hdr.kid, "device-v1");
         assert!(!b64.is_empty());
+    }
+
+    /// Wire-format regression guard.
+    ///
+    /// This token was produced by this crate's `encrypt` under `aes-gcm`
+    /// 0.10.3. It is checked in verbatim so that any future change to the
+    /// AEAD dependency, its default type parameters (nonce size, tag size),
+    /// the ciphertext/tag split, the AAD definition, or the compact
+    /// serialization is caught as a hard test failure instead of silently
+    /// making every already-issued `device_token` / `internal_principal`
+    /// undecryptable in production.
+    ///
+    /// If this test fails, the change is a DATA MIGRATION, not a refactor.
+    #[test]
+    fn decrypts_legacy_token_from_aes_gcm_0_10_3() {
+        const LEGACY_TOKEN: &str = concat!(
+            "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoia2F0LXYxIn0.",
+            ".ecpSP2xZUfXspvlm",
+            ".lxC7Qe6PkAOA40cyL3GlvbigYrrU",
+            ".I5NgAKF8nH5sPmDtcmZlHA"
+        );
+        let key = [7u8; 32];
+
+        let (hdr, _aad) = decode_protected_header(LEGACY_TOKEN).unwrap();
+        assert_eq!(hdr.alg, "dir");
+        assert_eq!(hdr.enc, "A256GCM");
+        assert_eq!(hdr.kid, "kat-v1");
+
+        let plaintext = decrypt_with_key(&key, LEGACY_TOKEN)
+            .expect("legacy 0.10.3 ciphertext must still decrypt");
+        assert_eq!(plaintext, b"legacy-payload-0.10.3");
+
+        // Pin the framing too: 12-byte IV, 16-byte tag, empty enc-key segment.
+        let parts: Vec<&str> = LEGACY_TOKEN.split('.').collect();
+        assert_eq!(parts.len(), 5);
+        assert!(parts[1].is_empty(), "alg:dir has an empty encrypted key");
+        assert_eq!(URL_SAFE_NO_PAD.decode(parts[2]).unwrap().len(), 12);
+        assert_eq!(URL_SAFE_NO_PAD.decode(parts[4]).unwrap().len(), 16);
     }
 
     #[test]
