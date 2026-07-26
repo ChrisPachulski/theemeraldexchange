@@ -18,8 +18,7 @@
 import Database from 'better-sqlite3'
 import { env } from '../env.js'
 import { getPolicy } from './userPolicies.js'
-import { sonarrFetch } from './sonarr.js'
-import { radarrFetch } from './radarr.js'
+import { radarrFetch, sonarrFetch } from './arr.js'
 
 // Canonical severity for the fixed policy rating set (mirrors the Swift
 // ParentalGate): movie + TV ladders collapsed onto one 0–4 scale.

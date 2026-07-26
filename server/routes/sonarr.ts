@@ -6,7 +6,7 @@ import { Hono } from 'hono'
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { requireSection } from '../services/userPolicies.js'
 import { rateLimit } from '../middleware/rateLimit.js'
-import { sonarrFetch, sonarrRootFolders } from '../services/sonarr.js'
+import { sonarrFetch, sonarrRootFolders } from '../services/arr.js'
 import { SEARCH_TIMEOUT_MS } from '../services/upstream.js'
 import {
   createGrabEventRecorder,

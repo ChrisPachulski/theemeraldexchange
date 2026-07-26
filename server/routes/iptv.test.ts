@@ -1306,7 +1306,7 @@ describe('segment proxy', () => {
   })
 
   it('refuses a segment whose public host RESOLVES to cloud metadata (DNS rebinding, finding 3-1/16-0)', async () => {
-    // The host string passes isPublicHttpsUpstream, but DNS points at the
+    // The host string passes isPublicUpstream, but DNS points at the
     // link-local cloud-metadata address — resolve-and-validate must reject
     // BEFORE any egress.
     __setSsrfLookupForTests(async () => [{ address: '169.254.169.254' }])
@@ -1365,7 +1365,7 @@ describe('segment proxy', () => {
 
   it('rejects a segment whose rid is not a parseable URL (bad_upstream 400)', async () => {
     // A valid segment token whose rid is a malformed URL string: new URL()
-    // throws, so the route returns bad_upstream 400 before isPublicHttpsUpstream
+    // throws, so the route returns bad_upstream 400 before isPublicUpstream
     // or any fetch. Covers the URL-parse try/catch branch (iptv.ts ~1153).
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
     const res = await app.request(

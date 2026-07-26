@@ -41,7 +41,7 @@ import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
 import { type Session } from '../session.js'
 import { crossedWatchThreshold, type WatchPoint } from '../services/watchSignal.js'
 import {
-  isPublicHttpsUpstream,
+  isPublicUpstream,
   guardedFetch,
   guardedFetchTrustedOrigin,
   SsrfBlockedError,
@@ -1449,7 +1449,7 @@ iptv.get('/stream/segment', async (c) => {
   // segments from separate public CDNs), so we enforce the standard SSRF
   // defense: https only, and reject any host that resolves to a private,
   // loopback, link-local, or otherwise non-public address.
-  if (!isPublicHttpsUpstream(url)) {
+  if (!isPublicUpstream(url)) {
     return c.json({ error: 'bad_upstream' }, 400)
   }
 
@@ -1465,7 +1465,7 @@ iptv.get('/stream/segment', async (c) => {
   c.req.raw.signal.addEventListener('abort', () => controller.abort(), { once: true })
   const range = c.req.header('range')
   // guardedFetch re-validates resolved IPs + every redirect hop on this
-  // attacker-influenceable segment URL (the isPublicHttpsUpstream check above
+  // attacker-influenceable segment URL (the isPublicUpstream check above
   // is the cheap up-front string reject) — findings 8-0/16-0.
   let upstreamRes: Response
   try {

@@ -4,44 +4,23 @@ import { sonarr } from '../api/sonarr'
 import { radarr } from '../api/radarr'
 import { useDocumentVisible } from './useVisibility'
 
-export function useDownloadQueue() {
+// All three queues poll in lockstep (same interval/staleTime) so the
+// Downloads tab never mixes a stale Sonarr snapshot with a fresh SAB
+// one — the season-cluster math would flicker otherwise.
+function usePolledQueue<T>(queryKey: [string, string], queryFn: () => Promise<T>) {
   const visible = useDocumentVisible()
   return useQuery({
-    queryKey: ['sab', 'queue'],
-    queryFn: sab.queue,
+    queryKey,
+    queryFn,
     refetchInterval: visible ? 3000 : false,
     refetchIntervalInBackground: false,
     staleTime: 1500,
   })
 }
 
-// Mirrors useDownloadQueue cadence — both feed the same panel and
-// should stay in lockstep so the season-cluster math doesn't flicker
-// between a stale Sonarr snapshot and a fresh SAB one.
-export function useSonarrQueue() {
-  const visible = useDocumentVisible()
-  return useQuery({
-    queryKey: ['sonarr', 'queue'],
-    queryFn: sonarr.queue,
-    refetchInterval: visible ? 3000 : false,
-    refetchIntervalInBackground: false,
-    staleTime: 1500,
-  })
-}
-
-// Same cadence as Sonarr queue — surfaces in-flight movie work
-// (delay/pending/queued states) while SAB has no active slot, so the
-// Downloads tab can show "indexer working" instead of "Queue is Open."
-export function useRadarrQueue() {
-  const visible = useDocumentVisible()
-  return useQuery({
-    queryKey: ['radarr', 'queue'],
-    queryFn: radarr.queue,
-    refetchInterval: visible ? 3000 : false,
-    refetchIntervalInBackground: false,
-    staleTime: 1500,
-  })
-}
+export const useDownloadQueue = () => usePolledQueue(['sab', 'queue'], sab.queue)
+export const useSonarrQueue = () => usePolledQueue(['sonarr', 'queue'], sonarr.queue)
+export const useRadarrQueue = () => usePolledQueue(['radarr', 'queue'], radarr.queue)
 
 export function useDownloadHistory(limit = 10) {
   return useQuery({

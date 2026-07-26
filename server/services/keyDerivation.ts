@@ -61,6 +61,8 @@ import { contracts } from './contractsBinding.js'
 // ---------------------------------------------------------------------------
 export const INFO_SESSION = 'eex/session/v1' as const
 export const INFO_DEVICE_TOKEN = 'eex/device-token/v1' as const
+// ponytail: unwired on purpose (see the locked note above) — this is the
+// cross-platform label registry; the Rust twin is INFO_STREAM_TOKEN_RESERVED.
 export const INFO_STREAM_TOKEN = 'eex/stream-token/v1' as const
 /** Per contract §4 (Hybrid D + Rust-canonical). 60-second JWE attached
  *  to every internal service call (recommender, M3 media-core, M4
