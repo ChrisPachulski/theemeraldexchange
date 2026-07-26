@@ -92,6 +92,7 @@ crates/emerald-contracts-pyo3/*.pyd
 
 # Playwright-MCP browser session scratch (page snapshots, traces)
 .playwright-mcp/
+.playwright-cli/
 
 # Auto-generated session resume state (regenerated each Stop/PreCompact)
 .eex/
