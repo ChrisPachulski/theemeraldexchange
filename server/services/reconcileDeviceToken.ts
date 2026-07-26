@@ -15,7 +15,7 @@
 
 import { serverDb } from './serverDb.js'
 import type { DeviceTokenClaims } from '../session.js'
-import { effectiveRoleFor, roleFor } from './sessionGate.js'
+import { effectiveRoleFor } from './sessionGate.js'
 import { memberStatus } from './membership.js'
 import { createLogger } from './logger.js'
 import { sealVerifiedAdminOwnership } from './setupState.js'
