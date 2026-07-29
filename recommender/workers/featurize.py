@@ -109,14 +109,23 @@ def run(*, limit: int | None = None) -> int:
     from sentence_transformers import SentenceTransformer
 
     conn = connect()
-    model = SentenceTransformer(CONFIG.embed_model)
+    model = SentenceTransformer(
+        CONFIG.embed_model,
+        revision=CONFIG.embed_revision,
+    )
     dim = CONFIG.embed_dim
 
     pending = _load_pending(conn, limit)
     if not pending:
         log.info("nothing to featurize")
         return 0
-    log.info("featurizing %d titles with %s (dim=%d)", len(pending), CONFIG.embed_model, dim)
+    log.info(
+        "featurizing %d titles with %s@%s (dim=%d)",
+        len(pending),
+        CONFIG.embed_model,
+        CONFIG.embed_revision[:12],
+        dim,
+    )
 
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     total = 0

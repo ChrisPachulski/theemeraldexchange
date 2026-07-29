@@ -23,7 +23,7 @@ import {
   _resetLibraryCacheForTests,
   _resetTmdbInFlightForTests,
 } from './suggestions.js'
-import { createSession } from '../session.js'
+import { createMemberSession } from '../test/authFixture.js'
 import { _setRejectionsPathForTests, addRejection } from '../services/rejections.js'
 import { _setUserFeedbackPathForTests, setLike } from '../services/userFeedback.js'
 import { _setUsageLogPathForTests } from '../services/usageLog.js'
@@ -285,7 +285,7 @@ function appUnderTest() {
 }
 
 async function userCookie() {
-  const t = await createSession({ sub: 'plex:1', username: 'guest', role: 'user' })
+  const t = await createMemberSession({ sub: 'plex:1', username: 'guest', role: 'user' })
   return `eex.session=${t}`
 }
 
@@ -907,7 +907,7 @@ describe('AI recommendations — LIVE EVAL (RECS_EVAL_LIVE=1)', () => {
 
       const app = new Hono<Env>()
       app.route('/', suggestions)
-      const cookie = `eex.session=${await createSession({ sub: 'live-eval', username: 'live-eval', role: 'user' })}`
+      const cookie = `eex.session=${await createMemberSession({ sub: 'plex:2', username: 'live-eval', role: 'user' })}`
 
       const r = await app.request('/movie', {
         headers: {

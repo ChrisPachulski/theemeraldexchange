@@ -61,6 +61,16 @@ describe('fetchCast', () => {
     await expect(fetchCast({ type: 'movie', tmdbId: 603 })).resolves.toEqual([])
   })
 
+  it('preserves a 401 as a status-carrying error before degraded fallbacks', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({ error: 'unauthenticated' }, { status: 401 }),
+    )
+
+    await expect(fetchCast({ type: 'movie', tmdbId: 603 })).rejects.toMatchObject({
+      status: 401,
+    })
+  })
+
   it('throws on other non-ok statuses', async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 500 }))
 

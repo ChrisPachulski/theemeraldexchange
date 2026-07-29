@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { apiUrl } from '../../lib/api/base'
+import { notifySessionExpiredResponse } from '../../lib/sessionExpiry'
 
 // Discord-webhook configuration card inside the admin UserMenu.
 // Fetches current state once on mount, lets the admin paste a webhook
@@ -19,7 +20,10 @@ export function DiscordNotifications({ onClose }: Props) {
   useEffect(() => {
     let alive = true
     fetch(apiUrl('/api/notifications/discord'), { credentials: 'include' })
-      .then((r) => (r.ok ? r.json() : null))
+      .then(async (r) => {
+        await notifySessionExpiredResponse(r)
+        return r.ok ? r.json() : null
+      })
       .then((s: Status | null) => {
         if (alive) setStatus(s)
       })
@@ -39,6 +43,7 @@ export function DiscordNotifications({ onClose }: Props) {
         credentials: 'include',
         body: JSON.stringify({ webhookUrl: url.trim() }),
       })
+      await notifySessionExpiredResponse(res)
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string }
         throw new Error(body.error ?? `save failed ${res.status}`)
@@ -61,6 +66,7 @@ export function DiscordNotifications({ onClose }: Props) {
         method: 'POST',
         credentials: 'include',
       })
+      await notifySessionExpiredResponse(res)
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string }
         throw new Error(body.error ?? `test failed ${res.status}`)
@@ -87,6 +93,7 @@ export function DiscordNotifications({ onClose }: Props) {
         method: 'DELETE',
         credentials: 'include',
       })
+      await notifySessionExpiredResponse(res)
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as {
           error?: string

@@ -19,7 +19,13 @@ from app import telemetry
 
 def _set_env(monkeypatch: pytest.MonkeyPatch, **env: str | None) -> None:
     # Start from a clean slate for the vars init_telemetry/_resolve_dsn read.
-    for key in ("EEX_TELEMETRY_DSN", "SENTRY_DSN", "GLITCHTIP_DSN", "NODE_ENV"):
+    for key in (
+        "EEX_TELEMETRY_DSN_INTERNAL",
+        "EEX_TELEMETRY_DSN",
+        "SENTRY_DSN",
+        "GLITCHTIP_DSN",
+        "NODE_ENV",
+    ):
         monkeypatch.delenv(key, raising=False)
     for key, value in env.items():
         if value is not None:
@@ -33,6 +39,13 @@ def test_no_dsn_skips(monkeypatch):
 
 
 def test_resolve_prefers_sentry_dsn(monkeypatch):
+    _set_env(
+        monkeypatch,
+        EEX_TELEMETRY_DSN_INTERNAL="internal-value",
+        EEX_TELEMETRY_DSN="public-value",
+    )
+    assert telemetry._resolve_dsn() == "internal-value"
+
     # Canonical EEX_TELEMETRY_DSN wins over SENTRY_DSN/GLITCHTIP_DSN (matches the
     # server stack; this is what makes the sidecar actually init in prod).
     _set_env(
@@ -83,6 +96,7 @@ def test_dsn_set_with_fake_sdk_initializes(monkeypatch):
     kwargs = recorded[0]
     assert kwargs["dsn"] == "https://fake@example.test/42"
     assert kwargs["send_default_pii"] is False
+    assert kwargs["auto_session_tracking"] is False
     assert kwargs["traces_sample_rate"] == 0.0
     assert kwargs["environment"] == "production"
 

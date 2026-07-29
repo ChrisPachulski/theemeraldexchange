@@ -65,4 +65,19 @@ describe('mintInternalPrincipal', () => {
     })
     expect(token.split('.').length).toBe(5)
   })
+
+  it('accepts the inbound correlation id for downstream tracing', async () => {
+    const { mintInternalPrincipal, _resetInternalKeyForTests } = await import(
+      './internalPrincipal.js'
+    )
+    _resetInternalKeyForTests()
+    const token = mintInternalPrincipal({
+      sub: 'plex:12345',
+      role: 'user',
+      authMode: 'plex',
+      serverId: 'server-uuid-1',
+      reqId: 'request-from-hono',
+    })
+    expect(token.split('.').length).toBe(5)
+  })
 })

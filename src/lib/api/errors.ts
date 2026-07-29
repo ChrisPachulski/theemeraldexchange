@@ -4,6 +4,8 @@
 // for non-2xx responses. ApiError preserves those fields so the UI can
 // render specific messages instead of "Sonarr /series: 507".
 
+import { notifySessionExpired } from '../sessionExpiry'
+
 export class ApiError extends Error {
   status: number
   code?: string
@@ -38,7 +40,7 @@ export async function throwApiError(res: Response, scope: string): Promise<never
     message = `Not enough disk space. ${freeGb} GB free, need ${thresholdGb} GB.`
   } else if (code === 'forbidden' && reason === 'admin_only') {
     message = "That action is admin-only."
-  } else if (code === 'unauthenticated' || res.status === 401) {
+  } else if (code === 'unauthenticated' && res.status === 401) {
     message = 'Your session expired. Sign in again.'
   } else if (code === 'default_quality_profile_missing') {
     const expected = typeof data.expected_name === 'string' ? data.expected_name : 'choose me'
@@ -112,21 +114,41 @@ export async function throwApiError(res: Response, scope: string): Promise<never
     message = data.message
   }
 
-  throw new ApiError(res.status, message, code, data)
+  const error = new ApiError(res.status, message, code, data)
+  // Imperative callers sometimes intentionally swallow display errors (player
+  // teardown, best-effort cleanup). Report auth expiry at the typed HTTP
+  // boundary so those paths cannot hide an expired browser session.
+  notifySessionExpired(error)
+  throw error
 }
 
 /**
  * Duck-typed HTTP status of any thrown error, or undefined when the value
  * carries none. Several modules throw their own status-carrying error
- * classes instead of ApiError (e.g. SuggestionsError in useSuggested) —
- * cross-cutting consumers like the queryClient session-expiry detector
- * must not depend on `instanceof ApiError` or those errors silently
- * bypass them. Any error shaped `{ status: number }` participates.
+ * classes instead of ApiError. Cross-cutting consumers like the queryClient
+ * session-expiry detector must not depend on `instanceof ApiError` or those
+ * errors silently bypass them. Any error shaped `{ status: number }`
+ * participates.
  */
 export function errorStatus(e: unknown): number | undefined {
   if (e && typeof e === 'object' && 'status' in e) {
     const s = (e as { status?: unknown }).status
     if (typeof s === 'number' && Number.isFinite(s)) return s
+  }
+  return undefined
+}
+
+/**
+ * Duck-typed backend error code (the `error` field of the JSON envelope, e.g.
+ * 'unauthenticated', 'section_blocked', 'forbidden'), or undefined when the
+ * value carries none. Kept parallel to errorStatus so cross-cutting consumers
+ * can distinguish an expired session ('unauthenticated') from a merely
+ * forbidden-but-authenticated 403 without depending on `instanceof ApiError`.
+ */
+export function errorCode(e: unknown): string | undefined {
+  if (e && typeof e === 'object' && 'code' in e) {
+    const c = (e as { code?: unknown }).code
+    if (typeof c === 'string' && c.length > 0) return c
   }
   return undefined
 }

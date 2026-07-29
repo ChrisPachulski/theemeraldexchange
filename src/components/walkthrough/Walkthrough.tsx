@@ -4,7 +4,7 @@ import { EmeraldMark } from '../atmosphere/EmeraldMark'
 import { TrendingRow } from '../search/TrendingRow'
 import type { TrendingItem } from '../../lib/hooks/useTrending'
 import type { DotState } from '../search/FeedbackDots'
-import { useAuth } from '../../lib/auth'
+import { inviteCodeError, useAuth } from '../../lib/auth'
 import { AppleSignInButton } from '../auth/AppleSignInButton'
 import { PasskeyButtons } from '../auth/PasskeyButtons'
 import './Walkthrough.css'
@@ -28,14 +28,121 @@ const DEMO_STRIP: TrendingItem[] = [
   { id: 76479, title: 'The Boys', posterPath: '/2zmTngn1tYC1AvfnrFLhxeD82hz.jpg', year: 2019 },
 ]
 
-function SignInBlock({ placement }: { placement: 'hero' | 'foot' }) {
-  const { signIn, signInState, signInError, discoveredServers } = useAuth()
-  const [inviteCode, setInviteCode] = useState('')
-  const pending = signInState === 'pending' || signInState === 'opening'
+// First-owner claim (plan 006 Phase 1): shown INSTEAD of the normal sign-in
+// while the server is unclaimed. The setup token comes from the server's
+// boot log (also ${data}/.setup-token) — possession of the box's logs is
+// the proof of ownership. Claiming registers a passkey as role 'admin' and
+// permanently closes the open first-run window.
+function ClaimBlock({ placement }: { placement: 'hero' | 'foot' }) {
+  const { passkeyRegister, activeSignIn, signInError } = useAuth()
+  const [handle, setHandle] = useState('')
+  const [token, setToken] = useState('')
+  const pending = activeSignIn !== null
+  const claiming = activeSignIn === 'passkey-register'
+  const nameId = `walkthrough-claim-name-${placement}`
+  const tokenId = `walkthrough-claim-token-${placement}`
+  // WebAuthn needs a secure context: https, or the localhost exception. On
+  // plain http over a LAN IP the passkey ceremony is refused by the BROWSER
+  // before the server ever sees it — show the fix instead of a doomed form.
+  if (typeof window !== 'undefined' && !window.isSecureContext) {
+    return (
+      <div className={`walkthrough__signin walkthrough__signin--${placement}`}>
+        <p className="walkthrough__eyebrow">Claim this server</p>
+        <p className="walkthrough__signin-hint" role="alert">
+          Passkeys need a secure page and this one isn&apos;t
+          (http over the network). Open the app as{' '}
+          <code>http://localhost:3001</code> on the server itself (or an SSH
+          tunnel: <code>ssh -L 3001:localhost:3001 &lt;server&gt;</code>), or
+          use an https address (e.g. Tailscale Serve), then claim from there.
+        </p>
+      </div>
+    )
+  }
+  return (
+    <div className={`walkthrough__signin walkthrough__signin--${placement}`}>
+      <p className="walkthrough__eyebrow">Claim this server</p>
+      <p className="walkthrough__signin-hint">
+        This server hasn&apos;t been claimed yet. Paste the one-time setup token
+        from the server&apos;s startup log to become its owner — you&apos;ll sign in
+        with a passkey (Face ID, Touch ID, Windows Hello, or a security key).
+      </p>
+      <div className="walkthrough__invite">
+        <label className="walkthrough__invite-label" htmlFor={nameId}>
+          Your name
+        </label>
+        <input
+          id={nameId}
+          className="walkthrough__invite-input"
+          type="text"
+          value={handle}
+          onChange={(e) => setHandle(e.target.value)}
+          placeholder="e.g. Chris"
+          autoComplete="name"
+          spellCheck={false}
+          disabled={pending}
+        />
+        <label className="walkthrough__invite-label" htmlFor={tokenId}>
+          Setup token
+        </label>
+        <input
+          id={tokenId}
+          className="walkthrough__invite-input"
+          type="text"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          placeholder="Paste the token from the server log"
+          autoComplete="one-time-code"
+          spellCheck={false}
+          disabled={pending}
+        />
+      </div>
+      <div className="walkthrough__signin-buttons">
+        <button
+          type="button"
+          className="walkthrough__signin-button"
+          onClick={() =>
+            void passkeyRegister({ handle: handle.trim(), setupToken: token.trim() })
+          }
+          disabled={pending || handle.trim().length === 0 || token.trim().length === 0}
+        >
+          {claiming ? 'Claiming…' : 'Claim server & create passkey'}
+        </button>
+      </div>
+      {signInError && (
+        <p className="walkthrough__signin-error" role="alert">{signInError}</p>
+      )}
+    </div>
+  )
+}
+
+function SignInBlock({
+  placement,
+  initialInviteCode,
+}: {
+  placement: 'hero' | 'foot'
+  initialInviteCode: string
+}) {
+  const { signIn, activeSignIn, signInError, discoveredServers, authMethods, setupClaimable } =
+    useAuth()
+  const [inviteCode, setInviteCode] = useState(initialInviteCode)
+  const pending = activeSignIn !== null
+  const plexPending = activeSignIn === 'plex'
   const code = inviteCode.trim()
+  const codeError = inviteCodeError(code)
   // A unique id per placement so the two SignInBlock instances on the
   // page don't share an htmlFor target.
   const inviteFieldId = `walkthrough-invite-${placement}`
+  const inviteErrorId = `${inviteFieldId}-error`
+
+  // Unclaimed server → the claim flow replaces sign-in entirely (there is
+  // nobody to sign in AS until an owner exists).
+  if (setupClaimable) return <ClaimBlock placement={placement} />
+
+  // Only offer the providers this install actually configured (plan 006
+  // Phase 1). null = methods not fetched yet → show everything rather than
+  // hiding the way in behind a slow request.
+  const showPlex = !authMethods || authMethods.plex
+  const showApple = !authMethods || authMethods.apple
   return (
     <div className={`walkthrough__signin walkthrough__signin--${placement}`}>
       <div className="walkthrough__invite">
@@ -50,27 +157,44 @@ function SignInBlock({ placement }: { placement: 'hero' | 'foot' }) {
           onChange={(e) => setInviteCode(e.target.value)}
           placeholder="Paste the code the owner sent you"
           autoComplete="one-time-code"
+          autoCapitalize="none"
           spellCheck={false}
           disabled={pending}
+          aria-invalid={codeError ? true : undefined}
+          aria-describedby={codeError ? inviteErrorId : undefined}
         />
+        {codeError && (
+          <p id={inviteErrorId} className="walkthrough__signin-error" role="alert">
+            {codeError}
+          </p>
+        )}
       </div>
-      <div className="walkthrough__signin-buttons">
-        <button
-          type="button"
-          className="walkthrough__signin-button"
-          onClick={() => void signIn(code || undefined)}
-          disabled={pending}
-        >
-          {pending ? 'Waiting for Plex…' : 'Sign in with Plex'}
-        </button>
-        <AppleSignInButton inviteCode={code || undefined} />
-        <PasskeyButtons inviteCode={code || undefined} />
-      </div>
+      <fieldset
+        className="walkthrough__signin-buttons"
+        disabled={pending || Boolean(codeError)}
+      >
+        {showPlex && (
+          <button
+            type="button"
+            className="walkthrough__signin-button"
+            onClick={() => void signIn(code || undefined)}
+            disabled={pending}
+          >
+            {plexPending ? 'Waiting for Plex…' : 'Sign in with Plex'}
+          </button>
+        )}
+        {showApple && <AppleSignInButton inviteCode={code || undefined} />}
+        <PasskeyButtons
+          inviteCode={code || undefined}
+          startInRegistration={placement === 'hero' && Boolean(initialInviteCode)}
+        />
+      </fieldset>
       <p className="walkthrough__signin-hint">
-        Invitation-only. Returning members can sign in with a passkey, Apple,
-        or the Plex account the library was shared to; no code needed.
-        First-time guests: paste your invite code above, then set up a passkey
-        or sign in with Plex/Apple.
+        Invitation-only. Returning members can sign in with a passkey
+        {showApple ? ', Apple' : ''}
+        {showPlex ? ', or the Plex account the library was shared to' : ''}; no
+        code needed. First-time guests: paste your invite code above, then set
+        up a passkey{showPlex || showApple ? ' or sign in with the other providers' : ''}.
       </p>
       {signInError && (
         <p className="walkthrough__signin-error" role="alert">{signInError}</p>
@@ -260,7 +384,7 @@ type Section = {
   render: () => React.ReactElement
 }
 
-export function Walkthrough() {
+export function Walkthrough({ initialInviteCode = '' }: { initialInviteCode?: string }) {
   const stripRef = useInView<HTMLElement>(() => {})
 
   const sections: Section[] = [
@@ -311,7 +435,7 @@ export function Walkthrough() {
             <h1 id="hero-title" className="walkthrough__hero-title">
               A private members’ page<br />for a household media library.
             </h1>
-            <SignInBlock placement="hero" />
+            <SignInBlock placement="hero" initialInviteCode={initialInviteCode} />
             <p className="walkthrough__hero-scroll">↓ scroll for the tour</p>
           </div>
         </header>
@@ -340,7 +464,7 @@ export function Walkthrough() {
             <h2 id="signin-foot-title" className="walkthrough__title">
               Invited? Pick up where you left off.
             </h2>
-            <SignInBlock placement="foot" />
+            <SignInBlock placement="foot" initialInviteCode={initialInviteCode} />
           </div>
         </section>
         <footer className="walkthrough__foot">

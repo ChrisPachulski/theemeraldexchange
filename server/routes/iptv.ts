@@ -16,6 +16,7 @@ import { promisify } from 'node:util'
 // the full synchronous compress.
 const gzipAsync = promisify(gzip)
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
+import { rateLimit } from '../middleware/rateLimit.js'
 import { requireSection } from '../services/userPolicies.js'
 import { capBlocksUnrated } from '../services/parentalRating.js'
 import { getAccountInfo, credsFromEnv } from '../services/xtream.js'
@@ -29,7 +30,7 @@ import {
   getVodDetail,
   getSeriesDetail,
 } from '../services/iptvCatalog.js'
-import { epgChannelWindow, epgGrid, epgNow } from '../services/iptvEpgQuery.js'
+import { epgChannelWindow, epgGrid, epgNow, epgSearch } from '../services/iptvEpgQuery.js'
 import { signStreamToken, verifyStreamToken, type StreamKind } from '../services/iptvStreamToken.js'
 import { checkReplay } from '../services/tokenReplayCache.js'
 import { parseSub } from '../services/sub.js'
@@ -40,20 +41,28 @@ import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
 import { type Session } from '../session.js'
 import { crossedWatchThreshold, type WatchPoint } from '../services/watchSignal.js'
 import {
-  isPublicHttpsUpstream,
+  isPublicUpstream,
   guardedFetch,
   guardedFetchTrustedOrigin,
   SsrfBlockedError,
 } from '../services/ssrfGuard.js'
-import { heartbeatRemuxSession } from '../services/iptvRemux.js'
+import {
+  heartbeatRemuxSession,
+  channelIsDeadFeed,
+  markChannelDeadFeed,
+  DEAD_FEED_CLEAN_EOF_MS,
+} from '../services/iptvRemux.js'
 import {
   ensureLiveRemuxEntry,
   dropOtherLiveRemuxSessions,
   getActiveLiveRemuxEntry,
+  forgetLiveRemuxEntry,
+  isChannelOfflineUpstream,
   remuxManifestReady,
   remuxSegmentResource,
   rewriteRemuxManifest,
 } from '../services/iptvLiveRemuxMap.js'
+import { resolveSiblingFeeds } from '../services/iptvSiblingFeeds.js'
 import {
   authorizePlaylistToken,
   buildPlaylistM3u,
@@ -253,6 +262,16 @@ iptv.delete('/sessions/:sessionId', requireAuth, (c) => {
   if (!target) return c.json({ error: 'not_found' }, 404)
   if (!isAdmin && target.sub !== sub) return c.json({ error: 'forbidden' }, 403)
   streamConcurrency().release(sessionId)
+  // A remux (AVPlayer live) slot is backed by an ffmpeg process holding a live
+  // upstream provider connection, tracked SEPARATELY from the concurrency slot.
+  // Releasing the slot alone leaves that ffmpeg alive until the 90s idle sweep,
+  // so freeing a session in the sessions widget did not actually free the
+  // provider connection. Stop the matching remux session now (keyed by the
+  // slot's resourceId=streamId + sub) so the connection releases immediately.
+  if (target.kind === 'remux') {
+    const entry = getActiveLiveRemuxEntry(target.resourceId, target.sub)
+    if (entry) forgetLiveRemuxEntry(target.resourceId, target.sub, entry.sessionId)
+  }
   return c.json({ ok: true, released: sessionId })
 })
 
@@ -266,6 +285,7 @@ const HIST_KINDS = new Set(['live', 'vod', 'series_episode'])
 // a recommender hiccup must never break watch-history persistence.
 function maybeEmitWatched(
   session: Session,
+  requestId: string | undefined,
   kind: string,
   itemId: string,
   now: WatchPoint,
@@ -290,7 +310,7 @@ function maybeEmitWatched(
     }
     if (recKind == null || tmdbId == null || !Number.isInteger(tmdbId) || tmdbId <= 0) return
 
-    const caller = recommenderCallerFromSession(session)
+    const caller = recommenderCallerFromSession(session, requestId)
     void postFeedback({ sub: session.sub, kind: recKind, tmdb_id: tmdbId, signal: 'watched' }, caller)
   } catch {
     // best-effort training signal; never surface to the watch-history write
@@ -371,6 +391,59 @@ iptv.get('/epg/grid', requireAuth, async (c) => {
   // /stream/* video-proxy endpoints are never wrapped in compression. Browsers
   // always send Accept-Encoding: gzip and inflate transparently; fall back to
   // plain JSON for clients that don't, or for small bodies.
+  const acceptsGzip = (c.req.header('accept-encoding') ?? '').toLowerCase().includes('gzip')
+  if (acceptsGzip && json.length > 64 * 1024) {
+    return c.body(await gzipAsync(json), 200, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Encoding': 'gzip',
+      Vary: 'Accept-Encoding',
+    })
+  }
+  return c.body(json, 200, { 'Content-Type': 'application/json; charset=utf-8' })
+})
+
+// Programme search materializes a match set from the WHOLE EPG store, and once
+// the client wires per-keystroke search it fires in bursts. Cap it per-caller so
+// a scripted authed user (or a keystroke storm) can't pin the event loop with
+// back-to-back scans — the same 429 backstop the *arr mutate routes carry.
+// Literal 10 req/s config: this is a read, not an indexer-budget burn, so it
+// needs no operator knob.
+const epgSearchRateLimit = rateLimit({
+  name: 'iptv-epg-search',
+  capacity: 10,
+  refill: 10,
+  intervalMs: 1000,
+})
+
+// Server-side programme search over the ENTIRE synced EPG store — not just the
+// warm channels the tvOS guide pre-fetches. Replaces the client-side scan seam
+// (EmeraldKit EpgSearch.programHits, capped to CatalogStore.guideChannelLimit),
+// so searching 'Yankees' / 'news' now reaches every channel's schedule without
+// shipping the full ~28 MB grid to a memory-constrained device. Query parsing
+// (q slice, categoryIds cap-500) + gzip mirror /epg/grid above.
+iptv.get('/epg/search', requireAuth, epgSearchRateLimit, async (c) => {
+  const rawQ = c.req.query('q')
+  const q = rawQ && rawQ.trim() ? rawQ.trim().slice(0, 100) : undefined
+  if (!q) return c.json({ error: 'invalid_query' }, 400)
+  // A 1-char query matches nearly every programme (q='e'), degrading the SQL
+  // LIKE into a whole-store scan; require >=2 chars so the filter narrows.
+  if (q.length < 2) return c.json({ error: 'invalid_query' }, 400)
+
+  const from = c.req.query('from') ?? new Date().toISOString()
+  const to = c.req.query('to') ?? new Date(Date.now() + 4 * 3600_000).toISOString()
+
+  const rawCategoryIds = c.req.query('categoryIds')
+  const categoryIds = rawCategoryIds
+    ? rawCategoryIds.split(',').map((s) => Number(s.trim())).filter((n) => Number.isInteger(n) && n > 0).slice(0, 500)
+    : undefined
+
+  const rawLimit = c.req.query('limit')
+  const limit = rawLimit != null && rawLimit !== '' ? Number(rawLimit) : undefined
+  if (limit != null && (!Number.isInteger(limit) || limit <= 0)) {
+    return c.json({ error: 'invalid_limit' }, 400)
+  }
+
+  const json = JSON.stringify(epgSearch(iptvDb(), from, to, { q, categoryIds, limit }))
   const acceptsGzip = (c.req.header('accept-encoding') ?? '').toLowerCase().includes('gzip')
   if (acceptsGzip && json.length > 64 * 1024) {
     return c.body(await gzipAsync(json), 200, {
@@ -554,6 +627,7 @@ iptv.post('/history', requireAuth, async (c) => {
   if (env.useLocalRecommender && kind !== 'live') {
     maybeEmitWatched(
       c.get('session'),
+      c.get('requestId'),
       kind,
       itemId,
       { position_secs: positionSecs, duration_secs: durationSecs, completed },
@@ -573,7 +647,13 @@ function clientWantsAvplayer(c: Context<Env>): boolean {
 // throttled to once per HEARTBEAT_THROTTLE_MS so a high-bitrate stream doesn't
 // hammer the tracker Map on every TS packet.
 const HEARTBEAT_THROTTLE_MS = 5_000
-function makeHeartbeatStream(onChunk: () => void): TransformStream<Uint8Array, Uint8Array> {
+function makeHeartbeatStream(
+  onChunk: () => void,
+  // Fires once when the UPSTREAM side closes cleanly (EOF), NOT on client abort
+  // or upstream error — the transform's flush() only runs on a normal readable
+  // completion. The live .ts proxy uses this to tag a dead-placeholder feed.
+  onUpstreamEof?: () => void,
+): TransformStream<Uint8Array, Uint8Array> {
   let lastBeat = 0
   return new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
@@ -587,6 +667,14 @@ function makeHeartbeatStream(onChunk: () => void): TransformStream<Uint8Array, U
         }
       }
       controller.enqueue(chunk)
+    },
+    flush() {
+      if (!onUpstreamEof) return
+      try {
+        onUpstreamEof()
+      } catch {
+        // Best-effort dead-feed bookkeeping; never let it break teardown.
+      }
     },
   })
 }
@@ -622,14 +710,30 @@ iptv.post('/stream/live/:streamId/grant', requireAuth, requireSection('live'), a
   }
 
   const { sub } = userOf(c)
+  const wantsRemux = clientWantsAvplayer(c)
+  // A guide PREVIEW grant (GuidePreview focuses a channel to paint a thumbnail)
+  // is NOT a watch: it must not run the one-tuner teardown below, or focusing a
+  // channel in the guide on one device would evict this same account's actively-
+  // watched channel on another device — which then respawns from its own poll
+  // and the two flap. Only a real watch grant tears the account's other tuners
+  // down. The client signals its intent via ?intent=preview (GuidePreview).
+  const isPreview = c.req.query('intent') === 'preview'
   const sessionId = `live:${streamId}:${sub}:${Date.now()}`
   const acquired = streamConcurrency().tryAcquire({
     sub,
     sessionId,
-    kind: clientWantsAvplayer(c) ? 'remux' : 'live',
+    kind: wantsRemux ? 'remux' : 'live',
     resourceId: streamId,
     ip: clientIp(c),
     title: sessionTitle('live', streamId),
+    // A remux grant opens a live upstream connection that is HARD-capped at
+    // IPTV_MAX_UPSTREAM_CONNECTIONS (ffmpeg). Cap concurrent remux grants at
+    // that ceiling so the surplus viewer gets a clean iptv_concurrency_limit
+    // 429 here instead of being silently ffmpeg-evicted mid-stream once the
+    // upstream cap is exceeded. Must satisfy CONCURRENT ≤ UPSTREAM for remux.
+    kindCap: wantsRemux
+      ? Math.min(env.IPTV_MAX_CONCURRENT_STREAMS, env.IPTV_MAX_UPSTREAM_CONNECTIONS)
+      : undefined,
   })
   if (!acquired.ok) {
     // source_unavailable (503) is handled above by resolveSourcePrecedence before
@@ -641,7 +745,7 @@ iptv.post('/stream/live/:streamId/grant', requireAuth, requireSection('live'), a
     return c.json({ ...acquired, sessions: enrichSessions(acquired.sessions) }, 429)
   }
 
-  if (clientWantsAvplayer(c)) {
+  if (wantsRemux) {
     // One live tuner per viewer: selecting a channel tears down this user's
     // OTHER live remux channels (the channel they were on, or a ghost from a
     // prior app-close) and frees their upstream provider connections + slots
@@ -650,8 +754,12 @@ iptv.post('/stream/live/:streamId/grant', requireAuth, requireSection('live'), a
     // This runs ONCE per channel selection (here), never on the manifest poll:
     // a lingering poll from the channel being left can respawn its own ffmpeg
     // but can no longer kill the freshly-tuned one, so the two never ping-pong.
-    for (const goneStreamId of dropOtherLiveRemuxSessions(sub, streamId)) {
-      streamConcurrency().releaseByResource(sub, 'remux', goneStreamId)
+    // Skipped for a preview grant (see isPreview above) so guide browsing never
+    // evicts the household's active watch.
+    if (!isPreview) {
+      for (const goneStreamId of dropOtherLiveRemuxSessions(sub, streamId)) {
+        streamConcurrency().releaseByResource(sub, 'remux', goneStreamId)
+      }
     }
     const token = signStreamToken(env.streamTokenSecret, {
       kind: 'remux', resourceId: streamId, sub, ttlSecs: env.IPTV_LIVE_TOKEN_TTL_SECS,
@@ -671,7 +779,11 @@ iptv.post('/stream/live/:streamId/grant', requireAuth, requireSection('live'), a
   })
 })
 
-iptv.post('/stream/catchup/:streamId/grant', requireAuth, async (c) => {
+iptv.post('/stream/catchup/:streamId/grant', requireAuth, requireSection('live'), async (c) => {
+  // Catchup is time-shifted live-channel content, so it belongs to the same
+  // `live` section as the live grant: a member whose policy denies Live TV must
+  // not be able to play a channel's last-7-days archive either. Enforced on the
+  // grant (the sole token-mint point) so a tampered client can't bypass it.
   // IPTV provider content is UNRATED (star ratings, never certifications) —
   // a parental rating cap therefore blocks these grants wholesale (fail
   // closed, same rule the clients apply to unrated titles).
@@ -739,7 +851,11 @@ iptv.post('/stream/catchup/:streamId/grant', requireAuth, async (c) => {
     kind: 'catchup',
     resourceId,
     sub,
-    ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
+    // On-demand (finite archive) playback re-presents this token on every
+    // seek/reconnect for the whole runtime — the 300s finite-asset TTL froze
+    // it at ~5min. Use the playback-duration TTL, like VOD/series and local
+    // media.
+    ttlSecs: env.IPTV_ONDEMAND_TOKEN_TTL_SECS,
   })
 
   return c.json({
@@ -812,10 +928,22 @@ iptv.get('/stream/live/:streamId.ts', async (c) => {
   // sessionId (the stream token is crate-canonical and carries no sid claim).
   streamConcurrency().heartbeatByResource(v.sub, 'live', streamId)
   const creds = credsFromEnv()
-  const upstreamUrl = `${creds.host}/live/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${streamId}.ts`
+  const upstreamUrlFor = (sid: string) =>
+    `${creds.host}/live/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${sid}.ts`
+
+  // Dead-feed failover parity with the remux path (Fox Soccer Plus incident).
+  // Chrome/Firefox/Edge live viewers get this raw .ts proxy, never the remux
+  // manifest, so without candidate iteration a granted-but-dead feed could never
+  // fail over to a live sibling and re-opening the channel stayed permanently
+  // dead on the web while it worked on the TV. Walk the ordered candidate feeds
+  // (self first, then siblings sharing epg_channel_id / normalized name), skip
+  // any remembered as a dead placeholder, and dial the first that answers.
+  const candidateFeeds = resolveSiblingFeeds(iptvDb().raw, streamId)
 
   const controller = new AbortController()
+  let clientAborted = false
   c.req.raw.signal.addEventListener('abort', () => {
+    clientAborted = true
     controller.abort()
     // Client gone — free the slot now rather than waiting for the idle sweep.
     streamConcurrency().releaseByResource(v.sub, 'live', streamId)
@@ -823,19 +951,38 @@ iptv.get('/stream/live/:streamId.ts', async (c) => {
 
   // SSRF: trusted creds origin, but re-validate any upstream-issued redirect
   // so a panel can't bounce the live byte stream into the internal network.
-  let upstream: Response
-  try {
-    upstream = await guardedFetchTrustedOrigin(upstreamUrl, {
-      signal: controller.signal,
-      headers: { 'User-Agent': 'IPTVSmarters' },
-    })
-  } catch (err) {
-    if (err instanceof SsrfBlockedError) return c.json({ error: 'bad_upstream' }, 400)
-    throw err
+  let upstream: Response | null = null
+  let dialedFeed: string | null = null
+  for (const feed of candidateFeeds) {
+    if (channelIsDeadFeed(feed)) continue
+    let resp: Response
+    try {
+      resp = await guardedFetchTrustedOrigin(upstreamUrlFor(feed), {
+        signal: controller.signal,
+        headers: { 'User-Agent': 'IPTVSmarters' },
+      })
+    } catch (err) {
+      if (err instanceof SsrfBlockedError) continue // a bad candidate — try the next sibling
+      throw err
+    }
+    if (resp.ok && resp.body) {
+      upstream = resp
+      dialedFeed = feed
+      break
+    }
+    // Non-2xx / bodyless: this feed is down right now — fall through to the next
+    // sibling rather than surfacing a hard 502 the client can never recover from.
   }
-  if (!upstream.ok || !upstream.body) {
-    return c.json({ error: `upstream_${upstream.status}` }, 502)
+  if (!upstream || !upstream.body || !dialedFeed) {
+    // Every candidate feed is dead or down: the channel is off the air upstream,
+    // a TERMINAL state distinct from a transient per-feed hiccup. Emit the same
+    // channel_offline_upstream contract the remux path uses (503) so the client
+    // stops retrying and offers an alternative instead of the old 502 that
+    // looped mpegts.js into a frozen spinner.
+    return c.json({ error: 'channel_offline_upstream' }, 503)
   }
+  const feed = dialedFeed
+  const dialedAt = Date.now()
   // X-Accel-Buffering: no tells nginx-class reverse proxies not to
   // buffer the response. Cloudflare honors it on the tunnel path,
   // which keeps stream chunks flowing client-ward instead of waiting
@@ -845,8 +992,21 @@ iptv.get('/stream/live/:streamId.ts', async (c) => {
   // segmenting) the MPEG-TS bytes.
   // Heartbeat the grant slot on every streamed chunk so a multi-minute live
   // view holds its concurrency slot past the 30s idle window (finding 8-1).
+  //
+  // Dead-placeholder detection (byte-proxy analogue of the remux path's
+  // ffmpeg-exit-0-under-60s check): a real live feed streams unbounded, but a
+  // dead-channel placeholder plays a ~30s slate loop then EOFs cleanly. If the
+  // UPSTREAM closes cleanly within the clean-EOF window and the client did NOT
+  // disconnect, remember the dialed feed as dead so the client's next reload
+  // (mpegts.js recover()) skips it and fails over to a live sibling.
   const heartbeatBody = upstream.body.pipeThrough(
-    makeHeartbeatStream(() => streamConcurrency().heartbeatByResource(v.sub, 'live', streamId)),
+    makeHeartbeatStream(
+      () => streamConcurrency().heartbeatByResource(v.sub, 'live', streamId),
+      () => {
+        if (clientAborted) return
+        if (Date.now() - dialedAt <= DEAD_FEED_CLEAN_EOF_MS) markChannelDeadFeed(feed)
+      },
+    ),
   )
   return new Response(heartbeatBody, {
     status: 200,
@@ -873,7 +1033,23 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
   streamConcurrency().heartbeatByResource(v.sub, 'remux', streamId)
 
   const creds = credsFromEnv()
-  const upstreamUrl = `${creds.host}/live/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${streamId}.ts`
+  const upstreamUrlFor = (sid: string) =>
+    `${creds.host}/live/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${sid}.ts`
+  const upstreamUrl = upstreamUrlFor(streamId)
+
+  // Dead-feed failover (Fox Soccer Plus incident): the ordered candidate feeds
+  // for this channel (itself first, then siblings sharing epg_channel_id /
+  // normalized name). ensureLiveRemuxEntry skips any candidate remembered as a
+  // dead placeholder and dials a live sibling; if ALL candidates are dead the
+  // channel is offline upstream (terminal), which we surface distinctly below.
+  const candidateFeeds = resolveSiblingFeeds(iptvDb().raw, streamId)
+  const ensureOpts = {
+    streamId,
+    sub: v.sub,
+    upstreamUrl,
+    siblingFeeds: () => candidateFeeds,
+    upstreamUrlFor,
+  }
 
   // NOTE: freeing the viewer's OTHER live channels happens once at GRANT time
   // (see the avplayer branch of POST .../grant), NOT here. AVPlayer re-fetches
@@ -882,13 +1058,18 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
   // player fires one more poll, or a second device) mutually annihilate — each
   // poll killed the other's ffmpeg, so neither ever built a segment window and
   // every channel showed infinite buffering / black screen.
-  let entry = ensureLiveRemuxEntry({ streamId, sub: v.sub, upstreamUrl })
-  // null = the channel is in its reconnect-throttle cooldown after a recent fast
-  // failure (a corrupt feed / provider abuse block). Do NOT dial again — answer
-  // with a short Retry-After so the client polls again without opening a new
-  // upstream connection, giving the provider time to cool. Re-dialing here is
-  // exactly the churn that triggered the abuse block in the first place.
+  let entry = ensureLiveRemuxEntry(ensureOpts)
+  // null has two causes, which the client must handle DIFFERENTLY:
+  //  - channel_offline_upstream (terminal): every candidate feed is a dead
+  //    placeholder — the channel is off the air upstream. No Retry-After; the
+  //    client should stop polling and offer the user an alternative, not spin.
+  //  - remux_warming (transient): the channel is merely in its reconnect-
+  //    throttle cooldown after a fast failure. Short Retry-After; re-dialing
+  //    here is the churn that trips the provider abuse block, so we don't.
   if (!entry) {
+    if (isChannelOfflineUpstream(candidateFeeds)) {
+      return c.json({ error: 'channel_offline_upstream' }, 503)
+    }
     c.header('Retry-After', '3')
     return c.json({ error: 'remux_warming' }, 503)
   }
@@ -912,7 +1093,7 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
     // ensureLiveRemuxEntry returns the same entry while the session is alive,
     // and null while a just-died session is in reconnect cooldown — in which
     // case stop waiting rather than busy-loop, and let the client retry.
-    const next = ensureLiveRemuxEntry({ streamId, sub: v.sub, upstreamUrl })
+    const next = ensureLiveRemuxEntry(ensureOpts)
     if (!next) break
     entry = next
     heartbeatRemuxSession(entry.sessionId)
@@ -920,9 +1101,14 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
   // A slow channel may have <START_SEGMENTS at the deadline; serve whatever it
   // has rather than fail. Only a manifest that never appeared at all is a retry.
   // Do NOT forget/stop the session here: it may still be slowly producing, and
-  // forgetting it just feeds the respawn churn. Answer 503+Retry-After so the
-  // client polls again (the reconnect throttle gates any actual re-dial).
+  // forgetting it just feeds the respawn churn. Answer 503 so the client polls
+  // again (the reconnect throttle gates any actual re-dial) — UNLESS every
+  // candidate feed is a dead placeholder, in which case surface the terminal
+  // channel_offline_upstream instead of an indistinguishable warming retry.
   if (!entry || !fs.existsSync(entry.manifestPath)) {
+    if (isChannelOfflineUpstream(candidateFeeds)) {
+      return c.json({ error: 'channel_offline_upstream' }, 503)
+    }
     c.header('Retry-After', '3')
     return c.json({ error: 'remux_warming' }, 503)
   }
@@ -1038,7 +1224,12 @@ iptv.get('/stream/catchup/:streamId/:startUtc/:durationMin.ts', async (c) => {
   })
 })
 
-iptv.post('/stream/vod/:streamId/grant', requireAuth, async (c) => {
+iptv.post('/stream/vod/:streamId/grant', requireAuth, requireSection('live'), async (c) => {
+  // IPTV VOD lives under the same `live` section as the live/catchup grants
+  // (the whole IPTV catalog is surfaced under the client's Live tab), so a
+  // member whose policy denies Live TV must not be able to mint a VOD stream
+  // token either. Enforced on the grant (the sole token-mint point) so a
+  // tampered client or replayed API call can't bypass it.
   // IPTV provider content is UNRATED (star ratings, never certifications) —
   // a parental rating cap therefore blocks these grants wholesale (fail
   // closed, same rule the clients apply to unrated titles).
@@ -1078,7 +1269,10 @@ iptv.post('/stream/vod/:streamId/grant', requireAuth, async (c) => {
   }
 
   const token = signStreamToken(env.streamTokenSecret, {
-    kind: 'vod', resourceId: streamId, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
+    // On-demand playback re-presents this token on every range GET / HLS
+    // segment fetch across the whole runtime — the 300s finite-asset TTL froze
+    // playback at ~5min. Playback-duration TTL, like local media.
+    kind: 'vod', resourceId: streamId, sub, ttlSecs: env.IPTV_ONDEMAND_TOKEN_TTL_SECS,
   })
   const delivery: 'hls' | 'progressive' = ext === 'm3u8' ? 'hls' : 'progressive'
 
@@ -1124,7 +1318,12 @@ iptv.get('/stream/vod/:streamId/:ext', async (c) => {
   })
 })
 
-iptv.post('/stream/series/:episodeId/grant', requireAuth, async (c) => {
+iptv.post('/stream/series/:episodeId/grant', requireAuth, requireSection('live'), async (c) => {
+  // IPTV series episodes live under the same `live` section as the live/catchup
+  // grants (the whole IPTV catalog is surfaced under the client's Live tab), so
+  // a member whose policy denies Live TV must not be able to mint a series
+  // stream token either. Enforced on the grant (the sole token-mint point) so a
+  // tampered client or replayed API call can't bypass it.
   // IPTV provider content is UNRATED (star ratings, never certifications) —
   // a parental rating cap therefore blocks these grants wholesale (fail
   // closed, same rule the clients apply to unrated titles).
@@ -1168,7 +1367,10 @@ iptv.post('/stream/series/:episodeId/grant', requireAuth, async (c) => {
   }
 
   const token = signStreamToken(env.streamTokenSecret, {
-    kind: 'series', resourceId: episodeId, sub, ttlSecs: env.IPTV_STREAM_TOKEN_TTL_SECS,
+    // On-demand playback re-presents this token on every range GET / HLS
+    // segment fetch across the whole runtime — the 300s finite-asset TTL froze
+    // playback at ~5min. Playback-duration TTL, like local media.
+    kind: 'series', resourceId: episodeId, sub, ttlSecs: env.IPTV_ONDEMAND_TOKEN_TTL_SECS,
   })
   const delivery: 'hls' | 'progressive' = ext === 'm3u8' ? 'hls' : 'progressive'
 
@@ -1183,6 +1385,14 @@ iptv.post('/stream/series/:episodeId/grant', requireAuth, async (c) => {
 iptv.get('/stream/series/:episodeId/:ext', async (c) => {
   const episodeId = c.req.param('episodeId')
   const ext = c.req.param('ext').toLowerCase()
+  // MED/LOW-24: episodeId and ext are interpolated RAW into the upstream provider
+  // URL (`${host}/series/${u}/${p}/${episodeId}.${ext}`). A `%3F`-decoded `?` (or
+  // other specials) in ext would inject query params into that request. Hono's
+  // single-segment param already blocks `/`, but constrain both to plain tokens
+  // before they reach the URL — the same guard the VOD byte route applies.
+  if (!/^[\w-]+$/.test(episodeId) || !/^[a-z0-9]{1,5}$/.test(ext)) {
+    return c.json({ error: 'invalid_id' }, 400)
+  }
   const v = checkToken(c, 'series', episodeId)
   if (!v.ok) return v.resp
   // Finding 8-1: heartbeat the grant slot on each series byte/range request.
@@ -1239,7 +1449,7 @@ iptv.get('/stream/segment', async (c) => {
   // segments from separate public CDNs), so we enforce the standard SSRF
   // defense: https only, and reject any host that resolves to a private,
   // loopback, link-local, or otherwise non-public address.
-  if (!isPublicHttpsUpstream(url)) {
+  if (!isPublicUpstream(url)) {
     return c.json({ error: 'bad_upstream' }, 400)
   }
 
@@ -1255,7 +1465,7 @@ iptv.get('/stream/segment', async (c) => {
   c.req.raw.signal.addEventListener('abort', () => controller.abort(), { once: true })
   const range = c.req.header('range')
   // guardedFetch re-validates resolved IPs + every redirect hop on this
-  // attacker-influenceable segment URL (the isPublicHttpsUpstream check above
+  // attacker-influenceable segment URL (the isPublicUpstream check above
   // is the cheap up-front string reject) — findings 8-0/16-0.
   let upstreamRes: Response
   try {

@@ -46,13 +46,13 @@ function isBearerOnly(c: Parameters<MiddlewareHandler>[0]): boolean {
 // URLSession client, not a browser) with no Cookie and no Origin header. That
 // trips the generic "missing Origin → fail closed" branch and 403s `bad_origin`,
 // so first-time TestFlight setup could not pair at all. These specific
-// token-minting endpoints are safe to admit cookieless:
+// token-minting endpoints are safe to admit only when they look like native
+// bootstrap traffic: no Cookie and no Origin header.
 //   - No ambient credential rides them (no cookie), so the cookie-CSRF threat
 //     this gate defends simply does not apply.
-//   - The cookie-SETTING variants (apple/google/passkey-verify also set the web
-//     session cookie) are still protected from login-CSRF / session fixation by
-//     CORS: cors() allows only env.allowedOrigins, so a hostile origin can never
-//     have its Set-Cookie applied by the victim's browser.
+//   - Any Origin means a browser-like request and must pass the normal allowed-
+//     origin or same-host checks. CORS response visibility is not a defense for
+//     a state-changing request that can set a login cookie.
 // Everything else stays gated — including /api/auth/plex/check (the cookie web
 // flow, deliberately Origin-gated against session fixation) and ANY cookie-
 // bearing request to these same paths.
@@ -67,7 +67,11 @@ const NATIVE_BOOTSTRAP_PATHS = new Set([
 ])
 
 function isNativeBootstrap(c: Parameters<MiddlewareHandler>[0]): boolean {
-  return !c.req.header('cookie') && NATIVE_BOOTSTRAP_PATHS.has(c.req.path)
+  return (
+    !c.req.raw.headers.has('cookie') &&
+    !c.req.raw.headers.has('origin') &&
+    NATIVE_BOOTSTRAP_PATHS.has(c.req.path)
+  )
 }
 
 // A request authenticated SOLELY by a `?t=` stream token (and NO cookie) carries
@@ -82,6 +86,23 @@ function isNativeBootstrap(c: Parameters<MiddlewareHandler>[0]): boolean {
 // a `?t=` and a cookie stays gated: the cookie is still a CSRF vector.
 function isStreamTokenOnly(c: Parameters<MiddlewareHandler>[0]): boolean {
   return !!c.req.query('t') && !c.req.header('cookie')
+}
+
+// Same-origin pass (plan 006 Phase 2): a request whose Origin host equals
+// its own Host header is definitionally not cross-site — a hostile page
+// cannot make a victim's browser send the TARGET's origin (browsers stamp
+// the ATTACKER's origin). This is what lets the backend-served SPA
+// (SERVE_SPA) mutate without the operator enumerating ALLOWED_ORIGINS,
+// and it is safe to apply unconditionally. Host-only compare (scheme
+// ignored) so a TLS-terminating sidecar (Tailscale Serve) in front of the
+// plain-http backend still matches.
+function isSameHostOrigin(origin: string | undefined, host: string | undefined): boolean {
+  if (!origin || !host) return false
+  try {
+    return new URL(origin).host === host
+  } catch {
+    return false
+  }
 }
 
 function checkOrigin(origin: string | undefined): { ok: true } | { ok: false; reason: string } {
@@ -110,6 +131,10 @@ export const requireSafeOrigin: MiddlewareHandler = async (c, next) => {
     await next()
     return
   }
+  if (isSameHostOrigin(c.req.header('origin'), c.req.header('host'))) {
+    await next()
+    return
+  }
   const verdict = checkOrigin(c.req.header('origin'))
   if (!verdict.ok) {
     return c.json({ error: 'forbidden', reason: verdict.reason }, 403)
@@ -124,6 +149,10 @@ export const requireSafeOrigin: MiddlewareHandler = async (c, next) => {
 // like the recommender's recently_shown rotation.
 export const requireTrustedOrigin: MiddlewareHandler = async (c, next) => {
   if (isBearerOnly(c)) {
+    await next()
+    return
+  }
+  if (isSameHostOrigin(c.req.header('origin'), c.req.header('host'))) {
     await next()
     return
   }

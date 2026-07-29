@@ -23,10 +23,15 @@
 #   3. Image size delta is ~50 MB. Acceptable given the glibc
 #      compatibility and the new linux-x64-gnu .node payload.
 
+# BUNDLE_SPA (plan 006 Phase 2): 'on' bundles the vite-built SPA into the
+# image (self-host, GHCR publish); 'off' (default) skips the SPA stage
+# entirely so the owner's NAS deploy never runs a vite build on the box.
+ARG BUNDLE_SPA=off
+
 # Digest-pinned for reproducible builds. The human tag is kept for readability;
 # the digest is the source of truth. Resolve a new digest with:
 #   docker buildx imagetools inspect rust:1.96-slim-bookworm
-FROM rust:1.96-slim-bookworm@sha256:b5f842fac1e3b4ff718a652a8e0173b62d9403ec826ef4998880b9347db30684 AS napi-builder
+FROM rust:1.97-slim-bookworm@sha256:99e09cb2284e2ddbb73a995deee3e91783fd04d177602ccf6eab326d778ee777 AS napi-builder
 
 WORKDIR /build
 
@@ -72,7 +77,47 @@ WORKDIR /build/crates/emerald-contracts-napi
 # crates/emerald-contracts-napi/package.json — this CLI emits the ABI-critical
 # .node that the crypto/contracts wire boundary loads, so a floating major is a
 # reproducibility risk for the wire-format-sensitive binding.
-RUN npx --yes --package @napi-rs/cli@3.7.0 napi build --platform --release
+# Cap the cargo compile behind napi build on shared hosts (cargo reads
+# CARGO_BUILD_JOBS natively; empty would be a parse error, so normalize
+# empty → unset) and keep it incremental via BuildKit cache mounts — the
+# same NAS-safety pattern as crates/transcoder/Dockerfile. The .node output
+# is copied by the CLI into the crate dir, OUTSIDE the target cache mount,
+# so the later COPY --from=napi-builder still sees it.
+ARG CARGO_BUILD_JOBS
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/build/target,sharing=locked \
+    if [ -z "${CARGO_BUILD_JOBS:-}" ]; then unset CARGO_BUILD_JOBS; fi \
+ && npx --yes --package @napi-rs/cli@3.7.0 napi build --platform --release
+
+# ---------------------------------------------------------------------------
+# SPA build (plan 006 Phase 2): the SELF-HOST image serves the web client
+# same-origin from ./dist (env.serveSpa auto-detects it). Gated behind
+# BUNDLE_SPA so the owner's NAS deploy (BUNDLE_SPA=off, the default) never
+# runs a vite build on the weak NAS CPU — BuildKit skips unused stages, so
+# with 'off' the spa-on stage costs nothing. The GHCR self-host publish
+# passes --build-arg BUNDLE_SPA=on.
+#
+# --ignore-scripts skips the better-sqlite3/node-gyp compile and the napi
+# prepare — a vite build needs neither native module (rollup/esbuild ship
+# prebuilt platform packages). VITE_API_BASE_URL is deliberately UNSET:
+# apiUrl() then falls back to window.location.origin, which is exactly
+# right for same-origin serving.
+FROM node:24-slim@sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf AS spa-on
+WORKDIR /spa
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts
+COPY index.html vite.config.ts tsconfig.json tsconfig.app.json tsconfig.node.json ./
+COPY src ./src
+COPY public ./public
+RUN npx vite build
+
+# Empty stand-in: BUNDLE_SPA=off yields an empty /spa/dist (no index.html),
+# so env.serveSpa auto-detection stays off — today's owner posture.
+FROM node:24-slim@sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf AS spa-off
+RUN mkdir -p /spa/dist
+
+FROM spa-${BUNDLE_SPA} AS spa-dist
 
 # ---------------------------------------------------------------------------
 # Digest-pinned for reproducible builds. Resolve a new digest with:
@@ -93,17 +138,19 @@ WORKDIR /app
 #   docker buildx imagetools inspect mwader/static-ffmpeg:7.1
 COPY --from=mwader/static-ffmpeg:7.1@sha256:a8090df5f5608daef387e1b2e93b98aaacb4d92153ad904e7d715c725724fca4 /ffmpeg /ffprobe /usr/local/bin/
 
-# Pre-stage the napi crate's JS surface + the linux-x64-gnu .node so the
+# Pre-stage the napi crate's JS surface + the platform .node so the
 # file: dep resolves and the prepare-script's existence check finds the
 # binary and short-circuits the rebuild. .dockerignore excludes
 # crates/*/target and **/*.node from the build context — the .node copy
-# from the napi-builder stage bypasses that.
+# from the napi-builder stage bypasses that. Glob (not the x64 name): the
+# napi-builder emits linux-x64-gnu.node on amd64 and linux-arm64-gnu.node
+# on arm64 (plan 006 Phase 5 multi-arch); index.js loads by platform.
 COPY crates/emerald-contracts-napi/package.json \
      crates/emerald-contracts-napi/index.js \
      crates/emerald-contracts-napi/index.d.ts \
      ./crates/emerald-contracts-napi/
 COPY --from=napi-builder \
-     /build/crates/emerald-contracts-napi/emerald-contracts-napi.linux-x64-gnu.node \
+     /build/crates/emerald-contracts-napi/*.node \
      ./crates/emerald-contracts-napi/
 
 COPY package.json package-lock.json ./
@@ -150,6 +197,11 @@ COPY tsconfig.json ./
 # --chmod guarantees the exec bit regardless of the staged file's mode.
 COPY --chmod=0755 bin/eex-ytresolve /usr/local/bin/eex-ytresolve
 ENV EEX_YTRESOLVE_BIN=/usr/local/bin/eex-ytresolve
+
+# SPA bundle (plan 006 Phase 2): empty dir when BUNDLE_SPA=off (owner
+# posture → env.serveSpa auto-off), the vite build when 'on' (self-host
+# → backend serves it same-origin at /).
+COPY --from=spa-dist /spa/dist ./dist
 
 # Bind-mount target for the grab-event log + sqlite DBs. Created here
 # so a fresh host directory still has the right ownership inside the

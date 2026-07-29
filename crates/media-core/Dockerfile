@@ -10,7 +10,7 @@
 # must be present at runtime. The Rust binary is glibc-linked, so the
 # runtime base matches the bookworm builder.
 
-FROM rust:1.96-slim-bookworm@sha256:b5f842fac1e3b4ff718a652a8e0173b62d9403ec826ef4998880b9347db30684 AS builder
+FROM rust:1.97-slim-bookworm@sha256:99e09cb2284e2ddbb73a995deee3e91783fd04d177602ccf6eab326d778ee777 AS builder
 
 WORKDIR /build
 
@@ -19,7 +19,24 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock LICENSE ./
 COPY crates ./crates
 
-RUN cargo build --release -p media-core
+# Compile-parallelism cap for constrained / shared hosts (same pattern as
+# crates/transcoder/Dockerfile — see the incident notes there). The NAS deploy
+# passes --build-arg CARGO_BUILD_JOBS via docker-compose build.args so a
+# rebuild cannot pin the CPU and starve Plex. Unset (CI / dev) = cargo's
+# default. compose interpolates an unset var to an EMPTY string, and empty is
+# a cargo parse error, so normalize empty → unset before building.
+ARG CARGO_BUILD_JOBS
+# BuildKit cache mounts make rebuilds INCREMENTAL: target/ + the crate
+# registry persist across builds, so a source change recompiles only the
+# changed crates instead of the whole workspace cold (the load storm that
+# brown-outed Plex). Cache mounts are not image layers, so the built binary
+# is copied OUT to a normal path for the runtime stage to grab.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/build/target,sharing=locked \
+    if [ -z "${CARGO_BUILD_JOBS:-}" ]; then unset CARGO_BUILD_JOBS; fi \
+ && cargo build --release -p media-core \
+ && cp /build/target/release/media-core /usr/local/bin/media-core-bin
 
 # ---------------------------------------------------------------------------
 FROM debian:bookworm-slim@sha256:96e378d7e6531ac9a15ad505478fcc2e69f371b10f5cdf87857c4b8188404716 AS runtime
@@ -39,7 +56,7 @@ RUN apt-get update \
  && useradd --system --uid 10002 --gid mediacore --home-dir /srv --no-create-home mediacore \
  && chown -R mediacore:mediacore /data /srv
 
-COPY --from=builder /build/target/release/media-core /usr/local/bin/media-core
+COPY --from=builder /usr/local/bin/media-core-bin /usr/local/bin/media-core
 
 # Bind 0.0.0.0 inside the container so the backend can reach it over the
 # docker network; compose publishes the port to the host's loopback only.

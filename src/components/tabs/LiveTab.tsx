@@ -2,7 +2,13 @@
 import { type KeyboardEvent, useEffect, useMemo, useState } from 'react'
 import IptvPlayer from '../player/IptvPlayer'
 import EpgGuide, { type GuideChannel } from './EpgGuide'
-import { iptvApi, type ChannelDto, type EpgProgrammeDto, type StreamGrant } from '../../lib/api/iptv'
+import {
+  iptvApi,
+  type ChannelDto,
+  type EpgProgrammeDto,
+  type SourceUnavailableError,
+  type StreamGrant,
+} from '../../lib/api/iptv'
 import { useIptvCategories } from '../../lib/hooks/useIptvCategories'
 import { useIptvEpgChannel, useIptvEpgNow } from '../../lib/hooks/useIptvEpg'
 import { useIptvLive } from '../../lib/hooks/useIptvLive'
@@ -36,6 +42,36 @@ function programmeDurationMin(programme: EpgProgrammeDto): number {
   return Math.max(1, Math.round((stop - start) / 60_000))
 }
 
+type PlayFailure = {
+  message: string
+  alternatives: SourceUnavailableError['available_alternatives']
+}
+
+// Maps a failed grant/play rejection to a user-visible status. Without this a
+// non-concurrency grant error (provider down, source_unavailable, policy block,
+// tunnel timeout) was rethrown into a void'ed click handler and vanished into
+// the unhandledrejection telemetry — the user clicked a channel and nothing
+// happened, no player, no error. The server's §9/§12.4 source_unavailable
+// contract carries available_alternatives the viewer must be shown as an
+// explicit choice; every other ApiError already carries a friendly message
+// from throwApiError.
+function playFailureFromError(err: unknown): PlayFailure {
+  const details =
+    (err && typeof err === 'object' ? (err as { details?: Record<string, unknown> }).details : undefined) ?? {}
+  if ((details as { reason?: string }).reason === 'source_unavailable') {
+    const raw = (details as { available_alternatives?: unknown }).available_alternatives
+    const alternatives = Array.isArray(raw)
+      ? (raw as SourceUnavailableError['available_alternatives'])
+      : []
+    return { message: "This channel's source is unavailable right now.", alternatives }
+  }
+  const message =
+    err instanceof Error && err.message
+      ? err.message
+      : 'Couldn’t start playback. Try again in a moment.'
+  return { message, alternatives: [] }
+}
+
 function formatGuideTime(iso: string): string {
   return new Intl.DateTimeFormat(undefined, {
     month: 'short',
@@ -53,6 +89,7 @@ export default function LiveTab() {
   const [playing, setPlaying] = useState<{ grant: StreamGrant; title: string; itemId: string } | null>(null)
   const [guideFor, setGuideFor] = useState<GuideChannel | null>(null)
   const [concurrencyError, setConcurrencyError] = useState<ConcurrencyLimitPayload | null>(null)
+  const [playError, setPlayError] = useState<PlayFailure | null>(null)
   const [pendingPlay, setPendingPlay] = useState<(() => Promise<void>) | null>(null)
   const [exportMsg, setExportMsg] = useState<string | null>(null)
   // Persisted curated guide-category selection (CSV of ids). Empty = the US+sports
@@ -114,6 +151,7 @@ export default function LiveTab() {
   }, [nowEpg.data])
 
   const playChannel = async (stream: { stream_id: number; name: string }) => {
+    setPlayError(null)
     const attempt = async () => {
       const grant = await iptvApi.grantLive(stream.stream_id.toString())
       setPlaying({ grant, title: stream.name, itemId: stream.stream_id.toString() })
@@ -128,7 +166,9 @@ export default function LiveTab() {
         setPendingPlay(() => attempt)
         return
       }
-      throw err
+      // Never rethrow into the void'ed click handler: surface the failure
+      // (with source_unavailable alternatives when the server sent them).
+      setPlayError(playFailureFromError(err))
     }
   }
 
@@ -136,6 +176,7 @@ export default function LiveTab() {
   // playChannel's concurrency handling so a 429 surfaces the kick-a-session
   // modal instead of throwing.
   const playCatchup = async (channel: GuideChannel, programme: EpgProgrammeDto) => {
+    setPlayError(null)
     const attempt = async () => {
       const grant = await iptvApi.grantCatchup(channel.id, programme.start_utc, programmeDurationMin(programme))
       setPlaying({ grant, title: `${channel.name}: ${epgTitle(programme.title)}`, itemId: String(channel.id) })
@@ -149,7 +190,7 @@ export default function LiveTab() {
         setPendingPlay(() => attempt)
         return
       }
-      throw err
+      setPlayError(playFailureFromError(err))
     }
   }
 
@@ -162,6 +203,25 @@ export default function LiveTab() {
 
   return (
     <section className="iptv-tab">
+      {playError && (
+        <div className="iptv-tab__status iptv-tab__status--error" role="alert">
+          <p>{playError.message}</p>
+          {playError.alternatives.length > 0 && (
+            <ul className="iptv-tab__alternatives">
+              {playError.alternatives.map((alt) => (
+                <li key={`${alt.source}:${alt.id}`}>{alt.displayName}</li>
+              ))}
+            </ul>
+          )}
+          <button
+            type="button"
+            className="iptv-tab__status-dismiss"
+            onClick={() => setPlayError(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
       {view === 'guide' ? (
         <EpgGuide
           categoryId={categoryId}
@@ -169,7 +229,7 @@ export default function LiveTab() {
           categoriesLoaded={!!cats.data}
           q={debounced}
           onPlayLive={(channel) => void playChannel(channel)}
-          onPlayCatchup={(channel, programme) => void playCatchup(channel, programme).catch(() => undefined)}
+          onPlayCatchup={(channel, programme) => void playCatchup(channel, programme)}
         />
       ) : (
       <>
@@ -362,7 +422,8 @@ export default function LiveTab() {
             const retry = pendingPlay
             setConcurrencyError(null)
             setPendingPlay(null)
-            if (retry) void retry().catch(() => undefined)
+            // A retry that fails after freeing a slot must not strand silently.
+            if (retry) void retry().catch((err) => setPlayError(playFailureFromError(err)))
           }}
         />
       )}

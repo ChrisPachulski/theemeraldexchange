@@ -5,8 +5,8 @@ import fs from 'node:fs'
 // evaluated. vi.hoisted runs before the static imports below (including the
 // fs/path/os imports), so it must require its own node builtins. env.ts reads
 // process.env.SERVER_DB_PATH at its own import time. We also delete every gate
-// env var so the install starts UN-bootstrapped — individual tests opt back
-// into a configured gate via importReconcile(overrides).
+// env var so the install starts without durable ownership configuration —
+// individual tests opt into policy via importReconcile(overrides).
 const { tmpDbDir } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- vi.hoisted runs before ESM init
   const nodeFs = require('node:fs') as typeof import('node:fs')
@@ -25,7 +25,7 @@ const { tmpDbDir } = vi.hoisted(() => {
 })
 
 import { serverDb, closeServerDb } from './serverDb.js'
-import { addMember, revokeMember } from './members.js'
+import { addMember, revokeMemberSafely } from './members.js'
 import type { DeviceTokenClaims } from '../session.js'
 
 type ReconcileModule = typeof import('./reconcileDeviceToken.js')
@@ -96,6 +96,13 @@ function revocationCount(): number {
   ).n
 }
 
+function ownershipMarker(): string | null {
+  const row = serverDb()
+    .raw.prepare(`SELECT value FROM server_state WHERE key = 'setup_claimed_by'`)
+    .get() as { value: string } | undefined
+  return row?.value ?? null
+}
+
 describe('reconcileDeviceToken', () => {
   beforeAll(() => {
     // Force the singleton open against the temp DB; applies all migrations
@@ -123,7 +130,7 @@ describe('reconcileDeviceToken', () => {
     delete process.env.APPLE_CLIENT_ID
     delete process.env.ENABLE_APPLE_SIGN_IN
     serverDb().raw.exec(
-      'DELETE FROM device_tokens; DELETE FROM device_token_revocations; DELETE FROM members; DELETE FROM invites;',
+      "DELETE FROM device_tokens; DELETE FROM device_token_revocations; DELETE FROM members; DELETE FROM invites; DELETE FROM server_state WHERE key IN ('setup_claimed_by', 'setup_token_hash');",
     )
   })
 
@@ -153,6 +160,7 @@ describe('reconcileDeviceToken', () => {
     const row = tokenRow('jti-A')
     expect(row?.last_seen_at).not.toBeNull()
     expect(row?.last_seen_version).toBe('app-1.2.3')
+    expect(ownershipMarker()).toBe(ADMIN_SUB)
   })
 
   // B) ALLOWED PATH — appVersion null preserves prior last_seen_version (COALESCE).
@@ -183,6 +191,26 @@ describe('reconcileDeviceToken', () => {
     expect(result?.role).toBe('admin')
   })
 
+  it('promotes and demotes a DB-backed admin role without trusting the token claim', async () => {
+    const { reconcileDeviceToken } = await importReconcile({ ADMIN_SUBS: OTHER_ADMIN })
+    const sub = 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV'
+    addMember({ sub, role: 'admin', authMode: 'local' })
+    seedDeviceToken('jti-db-admin', sub, 'Owner passkey')
+
+    const promoted = reconcileDeviceToken(
+      makeClaims('jti-db-admin', sub, { role: 'user', auth_mode: 'local' }),
+      null,
+    )
+    expect(promoted?.role).toBe('admin')
+
+    serverDb().raw.prepare(`UPDATE members SET role = 'user' WHERE sub = ?`).run(sub)
+    const demoted = reconcileDeviceToken(
+      makeClaims('jti-db-admin', sub, { role: 'admin', auth_mode: 'local' }),
+      null,
+    )
+    expect(demoted?.role).toBe('user')
+  })
+
   it('fails closed to user for legacy rows without a stored username', async () => {
     const { reconcileDeviceToken } = await importReconcile({
       ADMIN_SUBS: OTHER_ADMIN,
@@ -207,6 +235,7 @@ describe('reconcileDeviceToken', () => {
 
     expect(result).toBeNull()
     expect(revocationCount()).toBe(0)
+    expect(ownershipMarker()).toBeNull()
   })
 
   // D) REVOKED MEMBER → null + cascade revoke with reason 'member_revoked'.
@@ -216,7 +245,15 @@ describe('reconcileDeviceToken', () => {
     const { reconcileDeviceToken } = await importReconcile({ ADMIN_SUBS: OTHER_ADMIN })
     const sub = 'plex:7'
     addMember({ sub, authMode: 'plex' })
-    revokeMember(sub)
+    expect(
+      revokeMemberSafely({
+        targetSub: sub,
+        actorSub: OTHER_ADMIN,
+        actorUsername: 'owner',
+        immutableAdminSubs: [OTHER_ADMIN],
+        legacyAdminUsernames: [],
+      }),
+    ).toBe('revoked')
     seedDeviceToken('jti-D1', sub)
     seedDeviceToken('jti-D2', sub)
 
@@ -226,6 +263,7 @@ describe('reconcileDeviceToken', () => {
     expect(revocationCount()).toBe(2)
     expect(revocation('jti-D1')?.reason).toBe('member_revoked')
     expect(revocation('jti-D2')?.reason).toBe('member_revoked')
+    expect(ownershipMarker()).toBeNull()
   })
 
   // E) NON-MEMBER under a configured gate → null + cascade with reason 'not_member'.
@@ -238,6 +276,31 @@ describe('reconcileDeviceToken', () => {
 
     expect(result).toBeNull()
     expect(revocation('jti-E')?.reason).toBe('not_member')
+    expect(ownershipMarker()).toBeNull()
+  })
+
+  it('does not log a raw identity when cascade bookkeeping fails', async () => {
+    const { reconcileDeviceToken } = await importReconcile({ ADMIN_SUBS: OTHER_ADMIN })
+    const rawSub = 'plex:987654321'
+    seedDeviceToken('jti-log-redaction', rawSub)
+    serverDb().raw.exec(`
+      CREATE TRIGGER fail_test_revocation
+      BEFORE INSERT ON device_token_revocations
+      BEGIN
+        SELECT RAISE(ABORT, 'forced cascade failure');
+      END;
+    `)
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      expect(reconcileDeviceToken(makeClaims('jti-log-redaction', rawSub), null)).toBeNull()
+    } finally {
+      serverDb().raw.exec('DROP TRIGGER fail_test_revocation')
+    }
+
+    expect(errorSpy).toHaveBeenCalledOnce()
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(rawSub)
+    expect(String(errorSpy.mock.calls[0]?.[0])).toContain('"causeType":"error"')
   })
 
   // F) cascadeRevokeForSub unit, direct.
@@ -278,5 +341,6 @@ describe('reconcileDeviceToken', () => {
     expect(row?.last_seen_at).not.toBeNull()
     expect(row?.last_seen_version).toBe('app-2')
     expect(revocationCount()).toBe(0)
+    expect(ownershipMarker()).toBe(ADMIN_SUB)
   })
 })

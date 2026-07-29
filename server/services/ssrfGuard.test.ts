@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, beforeEach } from 'vitest'
 import {
-  isPublicHttpsUpstream,
+  isPublicUpstream,
   assertResolvesPublic,
   guardedFetch,
   guardedFetchTrustedOrigin,
@@ -8,9 +8,9 @@ import {
   __setSsrfLookupForTests,
 } from './ssrfGuard.js'
 
-const ok = (u: string) => isPublicHttpsUpstream(new URL(u))
+const ok = (u: string) => isPublicUpstream(new URL(u))
 
-describe('isPublicHttpsUpstream', () => {
+describe('isPublicUpstream', () => {
   it('allows legit public CDN hosts over http OR https (incl. cross-CDN providers)', () => {
     expect(ok('https://cdn.example.com/foo/seg.ts')).toBe(true)
     expect(ok('https://edge-17.provider.net/hls/seg-001.ts')).toBe(true)

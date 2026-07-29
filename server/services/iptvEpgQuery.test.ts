@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { openIptvDb, type IptvDb } from './iptvDb.js'
-import { epgChannelWindow, epgGrid, epgNow } from './iptvEpgQuery.js'
+import { epgChannelWindow, epgGrid, epgNow, epgSearch } from './iptvEpgQuery.js'
 
 describe('epg queries', () => {
   let db: IptvDb
@@ -240,5 +240,114 @@ describe('epg grid query plan (perf regression guard)', () => {
     const plan = planFor()
     expect(plan).toContain('SEARCH epg_programs')
     expect(plan).not.toContain('SCAN epg_programs')
+  })
+})
+
+describe('epgSearch pushes the filter into SQLite (does not materialize the whole window)', () => {
+  let dir: string
+  let db: IptvDb
+  let fromIso: string
+  let toIso: string
+  const CHANNELS = 200
+  const PROGS = 300 // 60k window rows total — stark vs. a handful of matches
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'epg-search-'))
+    db = openIptvDb(path.join(dir, 'iptv.db'))
+    const now = Date.now()
+    const DAY = 86_400_000
+    const past = now - DAY
+    const span = 8 * DAY
+    const slot = span / PROGS
+    const seed = db.raw.transaction(() => {
+      for (let c = 0; c < CHANNELS; c++) {
+        const cid = `c${c}`
+        db.stmts.upsertChannel.run({
+          stream_id: c + 1,
+          num: c + 1,
+          name: `Channel ${c}`,
+          stream_icon: null,
+          epg_channel_id: cid,
+          category_id: 1,
+          is_adult: 0,
+          tv_archive: 0,
+          tv_archive_duration: null,
+          added_ts: null,
+          fetched_at: new Date(now).toISOString(),
+        })
+        for (let p = 0; p < PROGS; p++) {
+          const start = past + p * slot
+          // Only channel c5 carries the needle, at two KNOWN indices — every other
+          // programme is generic filler the SQL filter must skip inside the engine.
+          db.stmts.upsertEpg.run({
+            channel_id: cid,
+            start_utc: new Date(start).toISOString(),
+            stop_utc: new Date(start + slot).toISOString(),
+            title: c === 5 && p === 7 ? 'Evening News' : 'Filler Show',
+            description: c === 5 && p === 20 ? 'Breaking news at ten' : 'nothing to see',
+          })
+        }
+      }
+    })
+    seed()
+    db.raw.pragma('optimize')
+    // A window wide enough that ALL 60k programmes overlap it — so the OLD code
+    // would materialize the entire store, and the fix's win is unambiguous.
+    fromIso = new Date(past).toISOString()
+    toIso = new Date(now + 8 * DAY).toISOString()
+  })
+
+  afterEach(() => {
+    db.close()
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('returns exactly the matched programmes with grid-aligned programIndex', () => {
+    const { hits, total } = epgSearch(db, fromIso, toIso, { q: 'news' })
+    expect(total).toBe(2)
+    expect(hits).toHaveLength(2)
+    // programIndex is the hit's position within channel c5's window-ordered list
+    // (0-based) — must match the grid's `row.programmes` index (7 and 20).
+    expect(hits.map((h) => h.programIndex).sort((a, b) => a - b)).toEqual([7, 20])
+    for (const h of hits) {
+      expect(h.streamId).toBe(6) // c5 → stream_id 6
+      expect(h.channelName).toBe('Channel 5')
+    }
+    // Case-insensitive: the title hit is 'News', the description hit is 'news'.
+    expect(hits.some((h) => h.programme.title === 'Evening News')).toBe(true)
+    expect(hits.some((h) => h.programme.description === 'Breaking news at ten')).toBe(true)
+  })
+
+  it('a LIKE metacharacter in the term is matched literally, not as a wildcard', () => {
+    // '%' would match everything if unescaped; escaped it matches nothing here.
+    expect(epgSearch(db, fromIso, toIso, { q: '%' }).total).toBe(0)
+  })
+
+  it('materializes only the match set into JS, not the full window', () => {
+    // Spy every prepared statement's .all() and record the largest row batch it
+    // hands back to JS. The OLD implementation's first query returned the entire
+    // window (~60k rows); the fix returns only matched rows + matched channels.
+    let maxRowsToJs = 0
+    const origPrepare = db.raw.prepare.bind(db.raw)
+    const spy = vi.spyOn(db.raw, 'prepare').mockImplementation(((sql: string) => {
+      const stmt = origPrepare(sql)
+      const origAll = stmt.all.bind(stmt)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(stmt as any).all = (...args: unknown[]) => {
+        const rows = origAll(...(args as [])) as unknown[]
+        if (Array.isArray(rows)) maxRowsToJs = Math.max(maxRowsToJs, rows.length)
+        return rows
+      }
+      return stmt
+    }) as unknown as typeof db.raw.prepare)
+    try {
+      const { total } = epgSearch(db, fromIso, toIso, { q: 'news' })
+      expect(total).toBe(2)
+    } finally {
+      spy.mockRestore()
+    }
+    // Red on the old full-materialization code: maxRowsToJs ≈ 60_000. Green now:
+    // the SQL LIKE returns just the 2 matches + the 1 matched-channel row.
+    expect(maxRowsToJs).toBeLessThan(1_000)
   })
 })

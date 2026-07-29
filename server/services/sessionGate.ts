@@ -30,6 +30,11 @@ import type { Role, Session } from '../session.js'
 import { authModeFromSession } from '../session.js'
 import { cascadeRevokeForSub } from './reconcileDeviceToken.js'
 import { memberStatus } from './membership.js'
+import { isMember } from './members.js'
+import { createLogger } from './logger.js'
+import { sealVerifiedAdminOwnership } from './setupState.js'
+
+const authLog = createLogger('auth')
 
 // Cascade-revocation contract (§3.4): when Plex definitively denies the
 // cookie user (auth_revoked or not_member), ALSO revoke every paired
@@ -41,17 +46,21 @@ function cascadeOnDenial(sub: string, reason: string): void {
   try {
     const n = cascadeRevokeForSub(sub, reason)
     if (n > 0) {
-      console.warn(
-        '[sessionGate] cascade-revoked %d device tokens for sub=%s reason=%s',
-        n,
-        sub,
+      authLog.warn('device token cascade completed', {
+        event: 'auth_device_cascade',
+        outcome: 'revoked',
+        revokedCount: n,
         reason,
-      )
+      })
     }
   } catch (e) {
     // Don't let a cascade-revoke DB hiccup mask the underlying denial —
     // the cookie path's null-return MUST still propagate. Log + swallow.
-    console.error('[sessionGate] cascade-revoke failed for sub=%s: %s', sub, e)
+    authLog.error('device token cascade failed', {
+      event: 'auth_device_cascade',
+      outcome: 'bookkeeping_failed',
+      causeType: e instanceof Error ? 'error' : typeof e,
+    })
   }
 }
 
@@ -125,6 +134,21 @@ export function roleFor(username: string, sub?: string): Role {
   return env.admins.some((a) => a.toLowerCase() === lower) ? 'admin' : 'user'
 }
 
+/** Effective role for an identity whose provider proof has already succeeded. */
+export function effectiveRoleFor(username: string, sub: string): Role {
+  const configured = roleFor(username, sub)
+  if (configured === 'admin') return 'admin'
+  return isMember(sub)?.role === 'admin' ? 'admin' : 'user'
+}
+
+/** Successful reconciliation boundary. An effective administrator has now
+ * passed both the signed-session proof and live authZ, so permanently close
+ * first-owner setup before returning any usable session. */
+function finishAuthorizedSession(session: Session, role: Role): Session {
+  if (role === 'admin') sealVerifiedAdminOwnership(session.sub)
+  return { ...session, role }
+}
+
 /**
  * Reconcile a decoded session against current env + Plex state.
  *
@@ -143,7 +167,9 @@ export async function reconcileSession(session: Session): Promise<Session | null
   // Pass the sub so the provider guard applies on every request — an apple:/
   // local: session can never be re-escalated to admin via an ADMINS username
   // collision, and ADMIN_SUBS admins keep admin without a username match.
-  const role = roleFor(session.username, session.sub)
+  // DB-backed admin (plan 006 Phase 1) and configured authorities converge on
+  // the same exact-sub role decision used at successful login.
+  const role = effectiveRoleFor(session.username, session.sub)
 
   // AuthZ gate — the FIRST and AUTHORITATIVE decision, before any
   // provider-specific work. With the invite/members model the per-request
@@ -166,7 +192,7 @@ export async function reconcileSession(session: Session): Promise<Session | null
   // the members allowlist is the live authZ. There is no Plex token to
   // confirm and no plex.tv outage to couple to.
   if (authMode !== 'plex') {
-    return { ...session, role }
+    return finishAuthorizedSession(session, role)
   }
 
   // plex: subs — the allowlist above is authoritative. The plex.tv probe
@@ -181,7 +207,7 @@ export async function reconcileSession(session: Session): Promise<Session | null
   // (e.g. a member added by the owner who hasn't re-logged-in), there is
   // nothing to probe — the allowlist decision stands.
   if (!env.plexServerId || !session.plexAuthToken) {
-    return { ...session, role }
+    return finishAuthorizedSession(session, role)
   }
 
   const now = Date.now()
@@ -193,7 +219,7 @@ export async function reconcileSession(session: Session): Promise<Session | null
       cached.tokenFingerprint === tokenFingerprint &&
       cached.plexServerId === env.plexServerId
     ) {
-      return { ...session, role }
+      return finishAuthorizedSession(session, role)
     }
     // A cached not_member is advisory only now — the allowlist already
     // said 'allowed', so we keep the member signed in and let an admin
@@ -225,7 +251,7 @@ export async function reconcileSession(session: Session): Promise<Session | null
       plexServerId: probe === 'not_member' ? undefined : env.plexServerId,
     })
   }
-  return { ...session, role }
+  return finishAuthorizedSession(session, role)
 }
 
 async function checkMembership(token: string): Promise<CheckStatus> {

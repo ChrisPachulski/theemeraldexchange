@@ -22,7 +22,6 @@
 //! `<track>` sidecar byte-for-byte.
 
 use crate::plan::SidecarSubtitle;
-use crate::trickplay::MEDIA_PLAYLIST_NAME;
 
 /// Filename the master gives the subtitle media playlist (synthesized by
 /// [`subs_playlist`], served by `routes::session_segment`).
@@ -47,23 +46,6 @@ pub(crate) fn media_tag(subs: &SidecarSubtitle) -> String {
     format!(
         "#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\",NAME=\"{name}\",{language_attr}AUTOSELECT=YES,DEFAULT=NO,FORCED={forced},URI=\"{SUBS_PLAYLIST_NAME}\"\n"
     )
-}
-
-/// MASTER playlist for a session with a subtitle rendition but no trick-play
-/// (the trick-play master grows the same subs group via [`media_tag`]).
-/// Mirrors `trickplay::master`'s shape: BANDWIDTH is required on the variant;
-/// CODECS is omitted like the proven trick-play master.
-pub(crate) fn master(variant_bandwidth_bps: u32, subs: &SidecarSubtitle) -> String {
-    let mut m = String::with_capacity(256);
-    m.push_str("#EXTM3U\n");
-    m.push_str("#EXT-X-VERSION:4\n");
-    m.push_str(&media_tag(subs));
-    m.push_str(&format!(
-        "#EXT-X-STREAM-INF:BANDWIDTH={variant_bandwidth_bps},SUBTITLES=\"subs\"\n"
-    ));
-    m.push_str(MEDIA_PLAYLIST_NAME);
-    m.push('\n');
-    m
 }
 
 /// The subtitle MEDIA playlist: one segment — the whole sidecar VTT — spanning
@@ -116,15 +98,6 @@ mod tests {
         assert!(tag.contains("NAME=\"Subtitles\""));
         assert!(!tag.contains("LANGUAGE="));
         assert!(tag.contains("FORCED=YES"));
-    }
-
-    #[test]
-    fn master_binds_variant_to_subs_group() {
-        let m = master(4_500_000, &subs(Some("eng"), false));
-        assert!(m.starts_with("#EXTM3U\n"));
-        assert!(m.contains("#EXT-X-MEDIA:TYPE=SUBTITLES"));
-        assert!(m.contains("#EXT-X-STREAM-INF:BANDWIDTH=4500000,SUBTITLES=\"subs\"\n"));
-        assert!(m.ends_with(&format!("{MEDIA_PLAYLIST_NAME}\n")));
     }
 
     #[test]

@@ -23,6 +23,7 @@ const ADMIN = 'plex:42'
 const ALICE = 'apple:000001.0123456789abcdef0123456789abcdef.0001'
 const BOB = 'plex:7'
 const CARL = 'plex:8'
+const GABRIEL = 'google:118234567890123456789'
 
 function wipe(): void {
   serverDb().raw.exec('DELETE FROM members; DELETE FROM invites;')
@@ -74,7 +75,7 @@ describe('invites service', () => {
     expect(() => issueInvite('garbage')).toThrow()
   })
 
-  it('redeem of a valid code creates a member', () => {
+  it('redeem of a valid code creates a member attributed to the issuing admin', () => {
     const { code } = issueInvite(ADMIN)
     const r = redeemInvite(code, ALICE, 'Alice', 'apple')
     expect(r).toEqual({ ok: true, created: true })
@@ -84,6 +85,31 @@ describe('invites service', () => {
     expect(m?.display_name).toBe('Alice')
     expect(m?.auth_mode).toBe('apple')
     expect(m?.role).toBe('user')
+    // Verdict A7: invited_by was provisioned+indexed but hardcoded NULL —
+    // the redeem must attribute the member to the invite's issuer.
+    const row = serverDb()
+      .raw.prepare(`SELECT invited_by FROM members WHERE sub = ?`)
+      .get(ALICE) as { invited_by: string | null }
+    expect(row.invited_by).toBe(ADMIN)
+  })
+
+  it('redeems an invite for a Google identity with its role and issuer intact', () => {
+    const { code } = issueInvite(ADMIN)
+    expect(redeemInvite(code, GABRIEL, 'Gabriel', 'google')).toEqual({
+      ok: true,
+      created: true,
+    })
+
+    expect(isMember(GABRIEL)).toMatchObject({
+      sub: GABRIEL,
+      display_name: 'Gabriel',
+      role: 'user',
+      auth_mode: 'google',
+    })
+    const row = serverDb()
+      .raw.prepare(`SELECT invited_by FROM members WHERE sub = ?`)
+      .get(GABRIEL) as { invited_by: string | null }
+    expect(row.invited_by).toBe(ADMIN)
   })
 
   it('redeem of an unknown code is invalid and creates no member', () => {

@@ -24,7 +24,7 @@
 # CPU (graceful: the boot smoke-test demotes VAAPI→libx264), so the image is safe
 # even on a box with no iGPU.
 
-FROM rust:1.96-slim-bookworm@sha256:b5f842fac1e3b4ff718a652a8e0173b62d9403ec826ef4998880b9347db30684 AS builder
+FROM rust:1.97-slim-bookworm@sha256:99e09cb2284e2ddbb73a995deee3e91783fd04d177602ccf6eab326d778ee777 AS builder
 
 WORKDIR /build
 
@@ -74,10 +74,20 @@ WORKDIR /srv
 #                            for VAAPI) backs both VAAPI and Vulkan.
 # curl is retained for the container HEALTHCHECK (audit 9-0). Then create a
 # non-root user that owns /scratch (where ffmpeg writes HLS segments).
+#
+# intel-media-va-driver is amd64-only (Intel iGPU — the whole point of it);
+# on arm64 (plan 006 Phase 5 multi-arch publish) apt has no such package and
+# the install exit-100s the build. Arch-split it: arm64 images run CPU
+# (libx264) transcode — the boot smoke-test already demotes missing HW
+# encoders gracefully, so the same binary/config works on both.
+ARG TARGETARCH
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates curl ffmpeg intel-media-va-driver libva2 libva-drm2 \
+      ca-certificates curl ffmpeg libva2 libva-drm2 \
       mesa-vulkan-drivers libvulkan1 \
+ && if [ "$TARGETARCH" = "amd64" ]; then \
+      apt-get install -y --no-install-recommends intel-media-va-driver; \
+    fi \
  && rm -rf /var/lib/apt/lists/* \
  && mkdir -p /scratch \
  && groupadd --system --gid 10003 transcoder \

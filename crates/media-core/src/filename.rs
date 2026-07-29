@@ -15,6 +15,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use regex::Regex;
+use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParsedName {
@@ -48,6 +49,17 @@ fn episode_re() -> &'static Regex {
         // `S02E05` (case-insensitive) or `2x05`.
         Regex::new(r"(?i)s(\d{1,2})e(\d{1,3})|(\d{1,2})x(\d{1,3})").unwrap()
     })
+}
+
+/// Matches a *reversed* `(YYYY)` year group — a close-paren immediately
+/// wrapping four digits then an open-paren (`)5991(`) — left behind when a
+/// movie basename like `Heat (1995)` is byte/char-reversed upstream to
+/// `)5991( taeH`. A forward, healthy name never contains `)DDDD(` (years are
+/// written `(YYYY)`), so this catches reversed MOVIE names, which carry no
+/// episode marker in either direction and so slip past [`episode_re`].
+fn reversed_year_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\)\d{4}\(").unwrap())
 }
 
 /// Case-insensitive matcher for the first scene/quality/codec/audio/HDR noise
@@ -132,7 +144,8 @@ fn strip_tags(cleaned: &str) -> String {
 /// Strip a single trailing 4-digit 1900–2099 year token from a cleaned string.
 fn strip_trailing_year(cleaned: &str) -> String {
     let trimmed = cleaned.trim_end();
-    if let Some(last) = trimmed.rsplit(' ').next()
+    if trimmed.split_whitespace().count() > 1
+        && let Some(last) = trimmed.rsplit(' ').next()
         && last.len() == 4
         && last.chars().all(|c| c.is_ascii_digit())
         && let Ok(y) = last.parse::<i64>()
@@ -144,6 +157,29 @@ fn strip_trailing_year(cleaned: &str) -> String {
     trimmed.to_string()
 }
 
+/// Match Swift's join-key folding: case/diacritic insensitive, `&` expanded
+/// to `and`, and every non-alphanumeric character treated as a separator.
+///
+/// Keep this distinct from [`clean`]. `clean` prepares human-readable display
+/// titles and release-tag parsing; this function deliberately produces a more
+/// lossy cross-client identity key.
+fn fold_join_key(text: &str) -> String {
+    let folded: String = text
+        .to_lowercase()
+        .nfd()
+        .filter(|c| !is_combining_mark(*c))
+        .collect::<String>()
+        .replace('&', "and");
+
+    folded
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Canonical dedup key for a show: lowercase, separators→space, strip a single
 /// trailing year, strip quality/release tokens, collapse whitespace. Two
 /// filename variants of the same series (`Adventure Time` vs
@@ -153,7 +189,7 @@ pub fn normalize_show_name(raw: &str) -> String {
     let cleaned = clean(raw).to_lowercase();
     let no_tags = strip_tags(&cleaned);
     let no_year = strip_trailing_year(&no_tags);
-    no_year.split_whitespace().collect::<Vec<_>>().join(" ")
+    fold_join_key(&no_year)
 }
 
 /// Extract `(season, episode)` from a captured episode marker.
@@ -251,7 +287,27 @@ fn looks_reversed(stem: &str) -> bool {
         return false;
     }
     let reversed: String = stem.chars().rev().collect();
-    episode_re().is_match(&reversed)
+    if episode_re().is_match(&reversed) {
+        return true;
+    }
+    // A reversed MOVIE name (`)5991( taeH`) has no episode marker in either
+    // direction, so the check above misses it — but its `(YYYY)` year group
+    // reversed to `)DDDD(`, a shape a forward/healthy basename never carries.
+    // Catch it so a corrupt movie name is refused (and counted) rather than
+    // silently indexed as a garbage-titled movie.
+    reversed_year_re().is_match(stem)
+}
+
+/// `true` when `name` (with or without a file extension) is a byte/char-reversed
+/// basename that [`classify`]/[`parse_filename`] deliberately refuse to
+/// classify (returning [`ParsedName::Unknown`] under every root). Refusing is
+/// safe, but it left the affected files — e.g. Sons of Anarchy's byte-reversed
+/// final season — silently and permanently absent from the library, with the
+/// only trace a WARN in ephemeral container logs. Exposing the predicate lets
+/// the scanner COUNT and SURFACE these files as an actionable library-health
+/// item (rename on disk + rescan) instead of losing them to the log.
+pub fn is_corrupt_reversed(name: &str) -> bool {
+    looks_reversed(strip_extension(name))
 }
 
 /// Parse a file name (with or without extension) into a [`ParsedName`] using
@@ -637,6 +693,43 @@ mod tests {
             normalize_show_name("2001 A Space Odyssey"),
             "2001 a space odyssey"
         );
+    }
+
+    #[test]
+    fn is_corrupt_reversed_flags_reversed_basenames_only() {
+        // S0 item 5: the predicate the scanner uses to SURFACE reversed/corrupt
+        // files as a library-health item. The live Sons of Anarchy corruption:
+        // stem byte-reversed, extension intact.
+        assert!(is_corrupt_reversed("010E70S yhcranA fo snoS.mkv"));
+        // ...and without an extension too (predicate strips it first).
+        assert!(is_corrupt_reversed("010E70S yhcranA fo snoS"));
+        // Healthy forward names (episode or movie) are never flagged.
+        assert!(!is_corrupt_reversed("Sons of Anarchy S07E010.mkv"));
+        assert!(!is_corrupt_reversed("The Wire - S02E05.mkv"));
+        assert!(!is_corrupt_reversed("Blade Runner (1982).mkv"));
+        // No episode marker in either direction: not "reversed", just unparsed.
+        assert!(!is_corrupt_reversed("random clip.mkv"));
+    }
+
+    #[test]
+    fn is_corrupt_reversed_flags_reversed_movie_names() {
+        // A reversed MOVIE basename carries no S/E marker in either direction —
+        // the episode-only predicate missed it and it was silently indexed as a
+        // gibberish-titled movie while files_refused_corrupt stayed 0. Its
+        // reversed `(YYYY)` group (`)5991(` from `Heat (1995)`) is the tell.
+        assert!(is_corrupt_reversed(")5991( taeH.mkv"));
+        assert!(is_corrupt_reversed(")5991( taeH"));
+        assert!(is_corrupt_reversed(")9102( recalP eht"));
+        // Under a Movies root the corrupt name is refused, never a Movie row.
+        let path = PathBuf::from("/media/Movies/)5991( taeH.mkv");
+        let parsed = classify(RootKind::Movies, &path, ")5991( taeH.mkv");
+        assert_eq!(parsed, ParsedName::Unknown);
+        assert!(!matches!(parsed, ParsedName::Movie { .. }));
+        // Healthy forward movie names (year in `(YYYY)` form or bare) stay clean.
+        assert!(!is_corrupt_reversed("Blade Runner (1982).mkv"));
+        assert!(!is_corrupt_reversed("Heat (1995).mkv"));
+        assert!(!is_corrupt_reversed("1917.mkv"));
+        assert!(!is_corrupt_reversed("2001 A Space Odyssey (1968).mkv"));
     }
 
     #[test]

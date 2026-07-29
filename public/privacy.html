@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="description" content="Privacy policy for The Emerald Exchange Apple clients." />
+    <link rel="canonical" href="https://theemeraldexchange.com/privacy" />
+    <link rel="icon" href="/brand/mark-3em.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/legal.css" />
+    <title>Privacy Policy | The Emerald Exchange</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to policy</a>
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="The Emerald Exchange home">
+        <span class="brand-gem" aria-hidden="true"></span>
+        <span>The Emerald Exchange</span>
+      </a>
+      <nav class="site-nav" aria-label="Legal and support">
+        <a href="/support">Support</a>
+        <a href="/privacy" aria-current="page">Privacy</a>
+      </nav>
+    </header>
+
+    <main id="content" class="legal-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Self-hosted by design</p>
+          <h1>Privacy Policy</h1>
+          <p class="lede">Emerald is a thin client for a media server that you own and operate. The developer does not run a backend for the app and does not receive your library, account, or viewing data.</p>
+          <p class="updated">Last updated July 12, 2026</p>
+        </div>
+        <aside class="exchange-path" aria-label="How data moves">
+          <div class="path-node"><span class="path-dot" aria-hidden="true"></span><span><strong>Your device</strong>Stores connection and sign-in state locally.</span></div>
+          <div class="path-node"><span class="path-dot" aria-hidden="true"></span><span><strong>Your server</strong>Receives library, playback, and progress requests.</span></div>
+          <div class="path-node"><span class="path-dot" aria-hidden="true"></span><span><strong>Services you choose</strong>Sign-in and artwork services are contacted only when needed.</span></div>
+        </aside>
+      </header>
+
+      <section class="policy-layout" aria-labelledby="device-data">
+        <div><p class="section-label">On device</p><h2 id="device-data">What the app stores</h2></div>
+        <div class="policy-copy">
+          <ul>
+            <li><strong>Your server address</strong>, the URL you enter to connect.</li>
+            <li><strong>An opaque device identifier</strong>, a random value generated on first launch so your server can recognize this installation. It is not your Apple ID or an advertising identifier.</li>
+            <li><strong>An authentication token</strong> issued by your server after sign-in. It is stored in the device Keychain. A development Simulator build uses app preferences instead.</li>
+          </ul>
+          <p>This information uses the operating system's standard app storage. When you sign out, Emerald removes your authentication credentials, paired-account state, the signed-out member's cached library data, and the tvOS Top Shelf snapshot. The configured server address remains so the sign-in screen can reconnect to the same server. The opaque device identifier remains for the lifetime of the app installation so your server can recognize the same device.</p>
+          <p>Choosing <strong>Change server</strong> also removes the configured server address. Deleting the app removes app-container information, including that address and the opaque identifier. Keychain credentials may persist after app deletion according to operating-system behavior. Sign out before deleting the app to remove the active authentication credential immediately.</p>
+        </div>
+      </section>
+
+      <section class="policy-layout" aria-labelledby="connections">
+        <div><p class="section-label">Connections</p><h2 id="connections">What the app sends</h2></div>
+        <div class="policy-copy">
+          <ul>
+            <li><strong>To your server:</strong> authenticated requests to browse your library, stream content, and save watch progress. Traffic goes to the address you configured and does not pass through the developer.</li>
+            <li><strong>To your self-hosted error service:</strong> the app may keep a capped local queue of crash and hang diagnostics. If your server supplies a valid GlitchTip HTTPS address, reports go directly there. They can include app build, platform, failure type, backtrace, and an operating-system diagnostic payload. They exclude your Emerald token, server address, advertising identifier, and identity.</li>
+            <li><strong>To Plex:</strong> only when you choose Sign in with Plex, using Plex's standard sign-in flow and subject to <a href="https://www.plex.tv/about/privacy-legal/">Plex's privacy policy</a>.</li>
+            <li><strong>To Google:</strong> only when your server offers Google sign-in and you choose it, using Google's standard OAuth flow and subject to <a href="https://policies.google.com/privacy">Google's privacy policy</a>.</li>
+            <li><strong>To artwork services:</strong> posters and cast artwork may load from TMDB, and trailer thumbnails from YouTube. These image requests reveal the requested image path and your IP address to the CDN. They do not send an Emerald token, account identifier, or watch history.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="policy-layout" aria-labelledby="collection">
+        <div><p class="section-label">Developer</p><h2 id="collection">Data collection</h2></div>
+        <div class="policy-copy">
+          <p>The developer collects no personal data. All account, viewing, and diagnostic information stays between your device and services you control, subject to how you configure and secure them.</p>
+          <p>The app contains no third-party analytics, advertising, or tracking SDKs, sets no advertising identifier, and embeds no advertising or tracking network. The developer does not sell, rent, or share your data because the developer never receives it.</p>
+        </div>
+      </section>
+
+      <section class="policy-layout" aria-labelledby="children">
+        <div><p class="section-label">Audience</p><h2 id="children">Children</h2></div>
+        <div class="policy-copy"><p>The app is not directed to children and the developer does not knowingly collect information from children.</p></div>
+      </section>
+
+      <section class="policy-layout" aria-labelledby="changes">
+        <div><p class="section-label">Policy</p><h2 id="changes">Changes</h2></div>
+        <div class="policy-copy"><p>If this policy changes, the last-updated date on this page and in the app will change accordingly.</p></div>
+      </section>
+
+      <section class="support-card" aria-labelledby="privacy-contact">
+        <p class="section-label">Contact</p>
+        <h2 id="privacy-contact">Questions about privacy?</h2>
+        <p>Ask what the app stores, where a request goes, or how to remove the active credential.</p>
+        <a href="mailto:pachun95@gmail.com">pachun95@gmail.com</a>
+      </section>
+    </main>
+
+    <footer class="site-footer"><span>© 2026 The Emerald Exchange</span><span>Canonical policy: https://theemeraldexchange.com/privacy</span></footer>
+  </body>
+</html>

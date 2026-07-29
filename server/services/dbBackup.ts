@@ -20,6 +20,7 @@
 //   2. Copy the chosen snapshot over the live DB:
 //        cp <BACKUP_DIR>/server-<ts>.db   <SERVER_DB_PATH>
 //        cp <BACKUP_DIR>/iptv-<ts>.db     <IPTV_DB_PATH>
+//        cp <BACKUP_DIR>/media-<ts>.db    <MEDIA_DB_PATH>
 //      and delete any stale -wal/-shm sidecars next to the live files.
 //   3. Start the server. server_id is preserved (it lives in server.db), so
 //      paired device tokens keep working.
@@ -113,8 +114,9 @@ export interface BackupResult {
 }
 
 /**
- * Run one backup pass: snapshot server.db (always) and iptv.db (when its file
- * exists), prune to the retention count, and stamp server_state.last_backup_at.
+ * Run one backup pass: snapshot server.db (always), iptv.db, and media.db (each
+ * when its file exists), prune to the retention count, and stamp
+ * server_state.last_backup_at.
  * Returns the snapshot paths and the stamp. Throws on snapshot failure so the
  * caller (cron wrapper) logs it — a silently-failing backup is worse than none.
  */
@@ -148,6 +150,21 @@ export function runScheduledBackup(now = new Date()): BackupResult {
     verifySnapshot(iptvDest)
     files.push(iptvDest)
     pruneSnapshots(dir, 'iptv', env.DB_BACKUP_KEEP)
+  }
+
+  // media.db — the media-core DB, bind-mounted into the backend, is the ONLY
+  // home of media_watch_state (Continue Watching, watched flags, resume
+  // positions). Its live writer is the media-core container (a cross-PROCESS
+  // snapshot), but VACUUM INTO over the shared WAL bind mount is still safe —
+  // WAL permits concurrent readers and the busy_timeout waits out any lock. Skip
+  // when the file is absent (an IPTV/media-less build never mounts it).
+  if (fs.existsSync(env.MEDIA_DB_PATH)) {
+    const mediaDest = path.join(dir, `media-${stamp}.db`)
+    fs.rmSync(mediaDest, { force: true })
+    vacuumIntoPath(env.MEDIA_DB_PATH, mediaDest)
+    verifySnapshot(mediaDest)
+    files.push(mediaDest)
+    pruneSnapshots(dir, 'media', env.DB_BACKUP_KEEP)
   }
 
   // Stamp last_backup_at on server.db so the DESTRUCTIVE-migration gate sees a

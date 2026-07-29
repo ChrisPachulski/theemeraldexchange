@@ -25,6 +25,8 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use crate::args::{ArgSpec, HwEncoder, ffmpeg_args_for, sidecar_vtt_args};
 use crate::concurrency::{Busy, Caps, Limiter, Permit};
 use crate::plan::{SegmentFormat, SidecarSubtitle, TranscodePlan};
+use crate::trickplay::AudioRendition;
+use media_core::models::AudioTrack;
 
 /// 30s with no heartbeat → reap (mirrors `IDLE_MS` in iptvRemux.ts).
 const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -140,6 +142,12 @@ pub struct StartOpts {
     /// are kept on the session so native manifests can advertise the rendition
     /// (see [`SessionManager::native_master`]).
     pub subtitle: Option<SidecarSubtitle>,
+    /// Source audio tracks (from the file probe, in probe order) — the metadata
+    /// the native master needs to NAME/tag each alternate-audio rendition. The
+    /// plan's `extra_audio` carries only indices/ops; the language + title come
+    /// from here (see [`SessionManager::spawn_audio_renditions`] and
+    /// [`audio_renditions`]). Empty for a single-audio title or the web path.
+    pub audio_tracks: Vec<AudioTrack>,
 }
 
 /// A point-in-time view of a session for the admin inventory (§4.5 phase 7).
@@ -197,6 +205,9 @@ struct Session {
     /// The sidecar subtitle being extracted for this session, if any — lets
     /// native manifests advertise it as an HLS SUBTITLES rendition.
     subtitle: Option<SidecarSubtitle>,
+    /// Source audio tracks (probe order), so the native master can NAME/tag the
+    /// alternate-audio renditions the plan's `extra_audio` indices refer to.
+    audio_tracks: Vec<AudioTrack>,
 }
 
 /// Control messages for a session's supervisor — the SOLE owner of the ffmpeg
@@ -279,6 +290,43 @@ async fn remove_dir_logged(dir: &PathBuf, id: &str, context: &str) {
     }
 }
 
+/// Remove ONLY the main video pipeline's outputs from a session dir, preserving
+/// the one-shot sidecar assets (`subtitles.vtt`, `thumb_*`, `audio_*`) that
+/// [`SessionManager::start`] spawns exactly once and a respawn never
+/// regenerates. Used by the pre-respawn clear: wiping the WHOLE dir on every
+/// Seek/Crash respawn deleted those assets permanently, so a subtitle toggle /
+/// scrub / alt-audio fetch after the first respawn hung the frontier wait and
+/// 404'd — subtitles, thumbnails and alt-audio silently died for the rest of the
+/// session. The main pipeline only ever writes `index.m3u8`, `seg_%05d.{ts,m4s}`
+/// and (fMP4) `init.mp4`, so a whitelist delete clears the stale playlist +
+/// segments (numbering continuity is held by `-start_number`, not by keeping old
+/// files) while leaving the sidecars — including an in-progress
+/// `subtitles.vtt.partial` — untouched.
+async fn clear_pipeline_outputs(dir: &PathBuf, id: &str) {
+    let mut entries = match tokio::fs::read_dir(dir).await {
+        Ok(e) => e,
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(session = %id, error = %e, "failed to read session dir for pre-respawn clear");
+            }
+            return;
+        }
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let is_pipeline_output = name == "index.m3u8"
+            || name == "init.mp4"
+            || (name.starts_with("seg_") && (name.ends_with(".ts") || name.ends_with(".m4s")));
+        if is_pipeline_output
+            && let Err(e) = tokio::fs::remove_file(entry.path()).await
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(session = %id, file = %name, error = %e, "failed to remove pipeline output in pre-respawn clear");
+        }
+    }
+}
+
 impl Session {
     fn manifest_path(&self) -> PathBuf {
         self.dir.join("index.m3u8")
@@ -298,6 +346,137 @@ impl Session {
             owner: self.owner.clone(),
         }
     }
+
+    /// Alternate-audio renditions to advertise in this session's native master,
+    /// or empty when the flag is off, the plan selected no extra tracks, or this
+    /// isn't a transcode plan. The PRIMARY (English-preferred) track is the
+    /// in-band rendition (`DEFAULT=YES`, no URI — it stays muxed in the video
+    /// variant, so the main pipeline is untouched); each EXTRA track becomes a
+    /// separate `audio_{n}.m3u8` URI rendition produced by
+    /// [`SessionManager::spawn_audio_renditions`]. The two never collide —
+    /// [`crate::plan::plan_extra_audio`] excludes the primary index.
+    fn alt_audio_renditions(&self) -> Vec<AudioRendition> {
+        if !crate::trickplay::alt_audio_enabled() || !alt_audio_advertisable(self.start_secs) {
+            return Vec::new();
+        }
+        let TranscodePlan::Transcode {
+            audio_index,
+            extra_audio,
+            ..
+        } = &self.plan
+        else {
+            return Vec::new();
+        };
+        if extra_audio.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::with_capacity(extra_audio.len() + 1);
+        out.push(rendition_from(
+            self.audio_tracks.get(*audio_index),
+            *audio_index,
+            true,
+            None,
+        ));
+        for (idx, _op) in extra_audio {
+            out.push(rendition_from(
+                self.audio_tracks.get(*idx),
+                *idx,
+                false,
+                Some(*idx),
+            ));
+        }
+        dedupe_rendition_names(&mut out);
+        out
+    }
+}
+
+/// Force every rendition in an alternate-audio group to a DISTINCT `NAME`, as
+/// RFC 8216 §4.3.4.1.1 requires ("All EXT-X-MEDIA tags in the same Group MUST
+/// have different NAME attributes"). [`rendition_from`] derives `NAME` from the
+/// language tag, so the single most common multi-audio layout — an English main
+/// track plus an English commentary — would otherwise emit two `NAME="eng"`
+/// lines in the same group, which AVPlayer collapses into one picker entry (the
+/// commentary becomes unselectable) or mis-keys selection between. On a collision
+/// the later entries get a positional suffix (`"eng"`, `"eng (2)"`, …); the first
+/// keeps its bare name. Pure over the rendition list so it is unit-testable
+/// without touching the process-global `TRANSCODER_ALT_AUDIO` env or a Session.
+fn dedupe_rendition_names(renditions: &mut [AudioRendition]) {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for r in renditions.iter_mut() {
+        if seen.insert(r.name.clone()) {
+            continue;
+        }
+        // Name already taken; take the smallest positional suffix that is free
+        // (guarding against a suffixed candidate itself colliding).
+        let base = r.name.clone();
+        let mut n = 2u32;
+        let unique = loop {
+            let candidate = format!("{base} ({n})");
+            if seen.insert(candidate.clone()) {
+                break candidate;
+            }
+            n += 1;
+        };
+        r.name = unique;
+    }
+}
+
+/// Whether an alternate-audio group is coherent to advertise for a session at
+/// this resume offset. The rendition passes ([`crate::trickplay::audio_rendition_args`])
+/// deliberately carry NO `-ss` — each covers the WHOLE title from 0 with
+/// source-rooted timestamps — but a RESUMED (`-ss`) video variant re-stamps its
+/// PTS from ~0 while sitting at an absolute playlist position, so at the resume
+/// point the video segment carries PTS ~0 and the audio rendition segment
+/// carries PTS ~`start_secs`. RFC 8216 requires renditions played together to
+/// share a timeline, so that full-resume-distance disagreement leaves AVPlayer
+/// no consistent cross-rendition sync anchor (offset audio / refused switch /
+/// stall). A from-start session (`start_secs == 0`) aligns because both pipelines
+/// then start their mux clocks identically. Until the main pipeline is taught to
+/// keep absolute PTS on resume (`-output_ts_offset`) AND that is validated on a
+/// real Apple TV, suppress the group on any resumed (or post-seek) session — the
+/// primary stays muxed in-band, so resume playback is unaffected; only the extra
+/// language picker is withheld until a from-start play.
+fn alt_audio_advertisable(start_secs: u64) -> bool {
+    start_secs == 0
+}
+
+/// Build one [`AudioRendition`] from an optional source [`AudioTrack`]. `NAME`
+/// prefers the language tag, then the track title, then a positional fallback —
+/// it is required and must never be empty. `uri_index` is `Some` for a
+/// separately-segmented rendition (`audio_{n}.m3u8`) and `None` for the in-band
+/// primary.
+fn rendition_from(
+    track: Option<&AudioTrack>,
+    position: usize,
+    is_default: bool,
+    uri_index: Option<usize>,
+) -> AudioRendition {
+    let language = track
+        .and_then(|t| t.language.clone())
+        .filter(|l| !l.trim().is_empty());
+    let name = language
+        .clone()
+        .or_else(|| {
+            track
+                .and_then(|t| t.title.clone())
+                .filter(|s| !s.trim().is_empty())
+        })
+        .unwrap_or_else(|| format!("Audio {}", position + 1));
+    AudioRendition {
+        name,
+        language,
+        is_default,
+        uri: uri_index.map(crate::trickplay::audio_playlist_name),
+    }
+}
+
+/// True for the on-disk assets an alternate-audio rendition pass writes — its
+/// media playlist (`audio_{n}.m3u8`) and segments (`audio_{n}_%05d.ts`). The
+/// segment route waits briefly on these (like the frontier video segments and
+/// the sidecar VTT) so a fetch that races the detached pass' first write retries
+/// instead of hard-404ing. Only rendition files start with `audio_`.
+pub(crate) fn is_audio_rendition_asset(name: &str) -> bool {
+    name.starts_with("audio_") && (name.ends_with(".ts") || name.ends_with(".m3u8"))
 }
 
 /// Errors a start can return.
@@ -986,7 +1165,7 @@ impl SessionManager {
                 .await;
         }
 
-        // Trick-play thumbnails (experimental; TRANSCODER_TRICKPLAY, default OFF):
+        // Trick-play thumbnails (TRANSCODER_TRICKPLAY, default ON since S5):
         // a detached one-shot samples the source into tiny all-keyframe segments
         // for AVPlayer's scrubbing preview. Re-encode only — the synthesized VOD
         // media playlist + uniform keyframe grid is what makes the master's
@@ -994,6 +1173,24 @@ impl SessionManager {
         // cheaply). See [`crate::trickplay`].
         if crate::trickplay::enabled() && opts.plan.reencodes_video() {
             self.spawn_trickplay_thumbs(&session_id, &opts.input_path, &dir);
+        }
+
+        // Alternate-audio renditions (experimental; TRANSCODER_ALT_AUDIO, default
+        // OFF): for each EXTRA audio track the plan selected, a detached one-shot
+        // segments that track into its own `audio_{n}.m3u8` rendition beside the
+        // segments — the URI the native master advertises. The primary stays
+        // muxed in-band, so the main stream is untouched; a failed pass just
+        // drops that one language from the picker. Native + multi-track only
+        // (empty `extra_audio` otherwise). See [`crate::trickplay`].
+        // Skip the passes entirely on a resumed session: the from-0 renditions
+        // would not align with the -ss video variant's re-stamped PTS, so the
+        // native master suppresses the group (alt_audio_advertisable) and the
+        // segments would just be wasted CPU on the NAS.
+        if crate::trickplay::alt_audio_enabled()
+            && alt_audio_advertisable(opts.start_secs)
+            && let TranscodePlan::Transcode { extra_audio, .. } = &opts.plan
+        {
+            self.spawn_audio_renditions(&session_id, &opts.input_path, &dir, extra_audio);
         }
 
         // Native full-timeline VOD alignment: a session writes its first segment at
@@ -1087,6 +1284,7 @@ impl SessionManager {
             duration_secs: opts.duration_secs,
             owner: opts.owner,
             subtitle: opts.subtitle,
+            audio_tracks: opts.audio_tracks,
         };
 
         self.sessions
@@ -1262,45 +1460,68 @@ impl SessionManager {
     /// data transform. `RESOLUTION` is omitted rather than fabricated (the source
     /// aspect isn't carried here); the variant plays fine without it.
     pub async fn trickplay_master(&self, id: &str) -> Option<String> {
-        let guard = self.sessions.lock().await;
-        let s = guard.get(id)?;
-        if !s.plan.reencodes_video() || s.duration_secs.filter(|d| *d > 0).is_none() {
-            return None;
-        }
-        // Advertise the source's average bitrate as the variant BANDWIDTH (a
-        // required attribute); fall back to a sane default when the grant didn't
-        // carry one.
-        let bandwidth_bps = s
-            .source_avg_kbps
-            .map(|kbps| kbps.saturating_mul(1000))
-            .unwrap_or(6_000_000);
-        Some(crate::trickplay::master(
-            bandwidth_bps,
-            None,
-            s.subtitle.as_ref(),
-        ))
-    }
-
-    /// Build the subtitle-carrying MASTER playlist for `id`, or `None` when the
-    /// session is unknown, has no sidecar subtitle, or has no finite VOD media
-    /// playlist for `media.m3u8` to resolve to (copy-remux without a keyframe
-    /// cache) — the caller then falls through to the existing manifest paths.
-    /// Served to NATIVE clients only; web keeps the EVENT playlist + `<track>`.
-    pub async fn native_master(&self, id: &str) -> Option<String> {
-        let (subtitle, bandwidth_bps) = {
+        let (bandwidth_bps, subtitle, audio) = {
             let guard = self.sessions.lock().await;
             let s = guard.get(id)?;
-            let subtitle = s.subtitle.clone()?;
+            if !s.plan.reencodes_video() || s.duration_secs.filter(|d| *d > 0).is_none() {
+                return None;
+            }
+            // Advertise the source's average bitrate as the variant BANDWIDTH (a
+            // required attribute); fall back to a sane default when the grant
+            // didn't carry one.
             let bandwidth_bps = s
                 .source_avg_kbps
                 .map(|kbps| kbps.saturating_mul(1000))
                 .unwrap_or(6_000_000);
-            (subtitle, bandwidth_bps)
+            (bandwidth_bps, s.subtitle.clone(), s.alt_audio_renditions())
+        };
+        // The I-frame rendition is real here (re-encode ⇒ the thumbnail pass runs
+        // on the same gate). Alternate audio joins it when the flag is on.
+        Some(crate::trickplay::master(
+            bandwidth_bps,
+            None,
+            true,
+            subtitle.as_ref(),
+            &audio,
+        ))
+    }
+
+    /// Build the MASTER playlist for a NATIVE session that needs one for a
+    /// subtitle and/or an alternate-audio group but is NOT served by
+    /// [`trickplay_master`](Self::trickplay_master) (i.e. a copy-remux, or a
+    /// re-encode with trick-play disabled). Returns `None` when the session has
+    /// neither a sidecar subtitle nor any advertised audio rendition, or when the
+    /// finite VOD `media.m3u8` won't resolve (copy-remux without a keyframe
+    /// cache) — the caller then falls through to the plain media playlist.
+    /// Served to NATIVE clients only; web keeps the EVENT playlist + `<track>`.
+    pub async fn native_master(&self, id: &str) -> Option<String> {
+        let (subtitle, audio, bandwidth_bps) = {
+            let guard = self.sessions.lock().await;
+            let s = guard.get(id)?;
+            let subtitle = s.subtitle.clone();
+            let audio = s.alt_audio_renditions();
+            // No rendition group to advertise ⇒ no master; fall through to the
+            // plain media playlist (unchanged serving path).
+            if subtitle.is_none() && audio.is_empty() {
+                return None;
+            }
+            let bandwidth_bps = s
+                .source_avg_kbps
+                .map(|kbps| kbps.saturating_mul(1000))
+                .unwrap_or(6_000_000);
+            (subtitle, audio, bandwidth_bps)
         };
         // The master's variant points at media.m3u8, which serves vod_manifest —
-        // only advertise the master when that will actually resolve.
+        // only advertise the master when that will actually resolve. No I-frame
+        // rendition: this path has no thumbnail pass (copy-remux / trick-play off).
         self.vod_manifest(id).await?;
-        Some(crate::subs_manifest::master(bandwidth_bps, &subtitle))
+        Some(crate::trickplay::master(
+            bandwidth_bps,
+            None,
+            false,
+            subtitle.as_ref(),
+            &audio,
+        ))
     }
 
     /// Build the subtitle MEDIA playlist (`subs.m3u8`) for `id`, or `None` when
@@ -1385,6 +1606,70 @@ impl SessionManager {
                 }
             }
         });
+    }
+
+    /// Kick a detached, one-shot ffmpeg pass per EXTRA audio track (best-effort;
+    /// mirrors [`spawn_trickplay_thumbs`](Self::spawn_trickplay_thumbs)). Each
+    /// pass segments its one track into its own `audio_{n}.m3u8` rendition beside
+    /// the main stream — no `-re`/main-HLS coupling, so it never delays the live
+    /// stream's first segment. A failed pass just drops that language from the
+    /// picker; `start` never blocks on it. Only called when `TRANSCODER_ALT_AUDIO`
+    /// is enabled and the plan selected extra tracks.
+    fn spawn_audio_renditions(
+        &self,
+        session_id: &str,
+        input: &str,
+        dir: &std::path::Path,
+        extra_audio: &[(usize, crate::plan::AudioOp)],
+    ) {
+        for (audio_index, op) in extra_audio {
+            let args = crate::trickplay::audio_rendition_args(
+                input,
+                &dir.to_string_lossy(),
+                *audio_index,
+                op,
+            );
+            let mut cmd = Command::new(&self.ffmpeg_bin);
+            cmd.args(&args)
+                .current_dir(dir)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped())
+                .kill_on_drop(true);
+            let id = session_id.to_string();
+            let index = *audio_index;
+            tokio::spawn(async move {
+                let mut child = match spawn_retrying_etxtbsy(&mut cmd).await {
+                    Ok(child) => child,
+                    Err(e) => {
+                        tracing::warn!(session = %id, index, error = %e, "failed to spawn audio rendition pass");
+                        return;
+                    }
+                };
+                let stderr = child.stderr.take();
+                if let Some(stderr) = stderr {
+                    use tokio::io::{AsyncBufReadExt, BufReader};
+                    let mut lines = BufReader::new(stderr).lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        let trimmed = line.trim();
+                        if !trimmed.is_empty() {
+                            tracing::warn!(session = %id, index, "audio rendition ffmpeg: {trimmed}");
+                        }
+                    }
+                }
+                match child.wait().await {
+                    Ok(status) if status.success() => {
+                        tracing::debug!(session = %id, index, "audio rendition complete")
+                    }
+                    Ok(status) => {
+                        tracing::warn!(session = %id, index, %status, "audio rendition pass exited non-zero")
+                    }
+                    Err(e) => {
+                        tracing::warn!(session = %id, index, error = %e, "audio rendition pass could not be awaited")
+                    }
+                }
+            });
+        }
     }
 
     /// Probe + cache `path`'s keyframes in the background, deduped against any
@@ -1640,12 +1925,15 @@ impl SessionManager {
             s.start_secs = spawn_secs;
             s.start_number = next_number;
         }
-        // Clear the dir so the fresh ffmpeg writes against a clean playlist.
-        // Without this, `append_list` re-writes index.m3u8 referencing new
-        // segments while the player may still hold the old list — stale media
-        // on every restart. (Numbering continuity is preserved by
-        // `-start_number` above, not by keeping old files around.)
-        remove_dir_logged(&dir, id, "pre-respawn clear").await;
+        // Clear the main pipeline's outputs so the fresh ffmpeg writes against a
+        // clean playlist. Without this, `append_list` re-writes index.m3u8
+        // referencing new segments while the player may still hold the old list
+        // — stale media on every restart. (Numbering continuity is preserved by
+        // `-start_number` above, not by keeping old files around.) A SELECTIVE
+        // clear (not a whole-dir wipe) so the one-shot sidecar assets
+        // subtitles.vtt / thumb_* / audio_* — which only start() produces and a
+        // respawn never regenerates — survive the restart.
+        clear_pipeline_outputs(&dir, id).await;
         if let Err(e) = tokio::fs::create_dir_all(&dir).await {
             tracing::warn!(session = %id, error = %e, "failed to recreate session dir for respawn");
             return Respawn::Failed;
@@ -1972,6 +2260,7 @@ mod tests {
             duration_secs: None,
             owner: None,
             subtitle: None,
+            audio_tracks: Vec::new(),
         }
     }
 
@@ -2042,6 +2331,25 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!("stub never wrote pid.txt");
+    }
+
+    /// Like [`read_stub_pid`] but waits until pid.txt holds a DIFFERENT pid than
+    /// `prev`. The pre-respawn clear is now selective (it preserves sidecars and
+    /// other non-pipeline files, pid.txt among them), so a respawn no longer
+    /// deletes the previous child's pid.txt before the fresh child overwrites it
+    /// — a bare re-read can catch the stale value. Poll for the change instead.
+    async fn read_stub_pid_changed(dir: &std::path::Path, prev: i32) -> i32 {
+        let path = dir.join("pid.txt");
+        for _ in 0..1000 {
+            if let Ok(s) = std::fs::read_to_string(&path)
+                && let Ok(pid) = s.trim().parse::<i32>()
+                && pid != prev
+            {
+                return pid;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("stub never wrote a new pid.txt");
     }
 
     /// True while `pid` is signalable. tokio reaps a killed child inside the
@@ -2201,6 +2509,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn respawn_preserves_one_shot_sidecar_assets() {
+        // Regression: a Seek/Crash respawn wiped the WHOLE session dir, deleting
+        // the one-shot sidecar assets (subtitles.vtt, thumb_*, audio_*) that only
+        // start() produces and a respawn never regenerates — so subtitles /
+        // scrub thumbnails / alt-audio silently died for the rest of the session.
+        // The pre-respawn clear must remove only the main pipeline's outputs and
+        // leave every sidecar intact.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
+        let id = mgr.start(opts("/lib/a.mkv")).await.unwrap();
+        let manifest = mgr.manifest_path(&id).await.unwrap();
+        wait_for(|| manifest.exists()).await;
+        let dir = manifest.parent().unwrap().to_path_buf();
+
+        // The sidecar assets the one-shot passes would have written, plus a
+        // stale main-pipeline segment that the clear MUST remove.
+        let vtt = dir.join("subtitles.vtt");
+        let partial = dir.join("subtitles.vtt.partial");
+        let thumb = dir.join("thumb_00003.ts");
+        let audio_pl = dir.join("audio_1.m3u8");
+        let stale_seg = dir.join("seg_00009.ts");
+        std::fs::write(&vtt, "WEBVTT\n").unwrap();
+        std::fs::write(&partial, "WEBVTT partial\n").unwrap();
+        std::fs::write(&thumb, "iframe").unwrap();
+        std::fs::write(&audio_pl, "#EXTM3U\n").unwrap();
+        std::fs::write(&stale_seg, "old").unwrap();
+
+        assert!(mgr.seek(&id, 120).await, "seek must succeed");
+        // The respawn rewrites the playlist; poll until it reappears so the
+        // clear has definitely run before we assert.
+        wait_for(|| manifest.exists()).await;
+
+        assert!(vtt.exists(), "subtitles.vtt must survive the respawn");
+        assert!(
+            partial.exists(),
+            "an in-progress subtitles.vtt.partial must survive the respawn"
+        );
+        assert!(thumb.exists(), "trickplay thumb must survive the respawn");
+        assert!(
+            audio_pl.exists(),
+            "alt-audio rendition playlist must survive the respawn"
+        );
+        // The stale main-pipeline segment is still cleared.
+        assert!(
+            !stale_seg.exists(),
+            "a stale seg_*.ts must be removed by the pre-respawn clear"
+        );
+
+        mgr.stop(&id).await;
+    }
+
+    #[tokio::test]
     async fn seek_terminates_previous_ffmpeg() {
         // Regression: seek used to take the Child out of the session map, but
         // the supervisor held the real handle across wait() — so the "kill"
@@ -2222,7 +2582,7 @@ mod tests {
         wait_for(|| !process_alive(old_pid)).await;
 
         // Exactly one fresh ffmpeg is running in the cleared dir.
-        let new_pid = read_stub_pid(&dir).await;
+        let new_pid = read_stub_pid_changed(&dir, old_pid).await;
         assert_ne!(new_pid, old_pid, "respawn must be a different process");
         assert!(process_alive(new_pid), "respawned ffmpeg must be running");
         assert_eq!(mgr.list().await[0].start_secs, 90);
@@ -2406,6 +2766,136 @@ mod tests {
         assert_eq!(segment_index("args.txt"), None);
         assert_eq!(segment_index("seg_.ts"), None);
         assert_eq!(segment_index("seg_abc.ts"), None);
+    }
+
+    fn audio_track(lang: Option<&str>, title: Option<&str>) -> AudioTrack {
+        AudioTrack {
+            index: 1,
+            codec: Some("aac".into()),
+            channels: Some(2),
+            language: lang.map(str::to_string),
+            title: title.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn rendition_name_prefers_language_then_title_then_position() {
+        // Language wins, and doubles as the display NAME (like the subs tag).
+        let r = rendition_from(
+            Some(&audio_track(Some("spa"), Some("Commentary"))),
+            1,
+            false,
+            Some(1),
+        );
+        assert_eq!(r.name, "spa");
+        assert_eq!(r.language.as_deref(), Some("spa"));
+        assert_eq!(r.uri.as_deref(), Some("audio_1.m3u8"));
+        assert!(!r.is_default);
+
+        // No language ⇒ fall back to the track title; LANGUAGE is then omitted.
+        let r = rendition_from(
+            Some(&audio_track(None, Some("Director"))),
+            2,
+            false,
+            Some(2),
+        );
+        assert_eq!(r.name, "Director");
+        assert!(r.language.is_none());
+        assert_eq!(r.uri.as_deref(), Some("audio_2.m3u8"));
+
+        // Neither ⇒ a positional NAME (never empty — NAME is required).
+        let r = rendition_from(Some(&audio_track(None, None)), 3, false, Some(3));
+        assert_eq!(r.name, "Audio 4");
+
+        // The in-band primary: DEFAULT, no URI, no track metadata.
+        let r = rendition_from(None, 0, true, None);
+        assert_eq!(r.name, "Audio 1");
+        assert!(r.is_default);
+        assert!(r.uri.is_none());
+    }
+
+    #[test]
+    fn blank_language_falls_through_to_title() {
+        // A whitespace-only tag must not become an empty NAME/LANGUAGE.
+        let r = rendition_from(
+            Some(&audio_track(Some("  "), Some("Extra"))),
+            1,
+            false,
+            Some(1),
+        );
+        assert_eq!(r.name, "Extra");
+        assert!(r.language.is_none());
+    }
+
+    #[test]
+    fn alt_audio_suppressed_on_resumed_sessions() {
+        // From-start plays advertise the group; any resumed (or post-seek)
+        // offset suppresses it, because the from-0 renditions' source-rooted
+        // timestamps disagree with the -ss video variant's re-stamped PTS by the
+        // full resume distance (no cross-rendition sync anchor for AVPlayer).
+        assert!(
+            alt_audio_advertisable(0),
+            "from-start must advertise alt-audio"
+        );
+        assert!(
+            !alt_audio_advertisable(1),
+            "any resume offset must suppress"
+        );
+        assert!(
+            !alt_audio_advertisable(2400),
+            "a 40min resume must suppress alt-audio"
+        );
+    }
+
+    #[test]
+    fn dedupe_rendition_names_disambiguates_same_language_tracks() {
+        // The common dual-eng layout: an English main track + an English
+        // commentary. rendition_from names both "eng" (language wins), so the
+        // group would emit two NAME="eng" lines — an RFC 8216 §4.3.4.1.1 MUST
+        // violation. The dedupe pass must make every NAME pairwise-distinct.
+        let mut group = vec![
+            rendition_from(Some(&audio_track(Some("eng"), None)), 0, true, None),
+            rendition_from(
+                Some(&audio_track(Some("eng"), Some("Commentary"))),
+                1,
+                false,
+                Some(1),
+            ),
+        ];
+        dedupe_rendition_names(&mut group);
+        let names: Vec<&str> = group.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["eng", "eng (2)"], "names must be distinct");
+
+        // A triple collision (plus a candidate that itself pre-exists) still
+        // converges to pairwise-distinct names with no accidental re-collision.
+        let mut trip = vec![
+            rendition_from(Some(&audio_track(Some("eng"), None)), 0, true, None),
+            rendition_from(Some(&audio_track(Some("eng"), None)), 1, false, Some(1)),
+            rendition_from(Some(&audio_track(Some("eng"), None)), 2, false, Some(2)),
+        ];
+        dedupe_rendition_names(&mut trip);
+        let uniq: std::collections::HashSet<&str> = trip.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(uniq.len(), 3, "all three NAMEs must be distinct: {trip:?}");
+
+        // Distinct languages are left untouched.
+        let mut mixed = vec![
+            rendition_from(Some(&audio_track(Some("eng"), None)), 0, true, None),
+            rendition_from(Some(&audio_track(Some("spa"), None)), 1, false, Some(1)),
+        ];
+        dedupe_rendition_names(&mut mixed);
+        assert_eq!(mixed[0].name, "eng");
+        assert_eq!(mixed[1].name, "spa");
+    }
+
+    #[test]
+    fn audio_rendition_assets_are_recognized() {
+        assert!(is_audio_rendition_asset("audio_1.m3u8"));
+        assert!(is_audio_rendition_asset("audio_2_00000.ts"));
+        // Not a rendition asset: the video variant, subs, iframe, arbitrary names.
+        assert!(!is_audio_rendition_asset("media.m3u8"));
+        assert!(!is_audio_rendition_asset("seg_00000.ts"));
+        assert!(!is_audio_rendition_asset("subs.m3u8"));
+        assert!(!is_audio_rendition_asset("audio_1.txt"));
     }
 
     #[test]
@@ -2665,6 +3155,7 @@ mod tests {
             duration_secs: None,
             owner: None,
             subtitle: None,
+            audio_tracks: Vec::new(),
         }
     }
 

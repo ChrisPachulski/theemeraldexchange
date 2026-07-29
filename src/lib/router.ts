@@ -5,6 +5,9 @@ export type Route = 'home' | 'tv' | 'movies' | 'downloads' | 'users' | 'live'
 const ROUTES: Route[] = ['home', 'tv', 'movies', 'live', 'downloads', 'users']
 const DEFAULT_ROUTE: Route = 'home'
 
+// ponytail: parseHash/nextHash are exported for the node-env unit tests
+// (no renderer, so useRoute itself can't be exercised); useRoute is the
+// only production caller.
 export function parseHash(): Route {
   const raw = window.location.hash.replace(/^#\/?/, '').trim().toLowerCase()
   return (ROUTES as string[]).includes(raw) ? (raw as Route) : DEFAULT_ROUTE

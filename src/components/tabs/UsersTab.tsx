@@ -16,9 +16,11 @@ type UserRow = {
 }
 
 class UsersFetchError extends Error {
+  status: number
   code?: string
-  constructor(message: string, code?: string) {
+  constructor(message: string, status: number, code?: string) {
     super(message)
+    this.status = status
     this.code = code
   }
 }
@@ -29,6 +31,7 @@ async function fetchUsers(): Promise<UserRow[]> {
     const body = (await r.json().catch(() => ({}))) as { message?: string; error?: string }
     throw new UsersFetchError(
       body.message ?? body.error ?? `users fetch ${r.status}`,
+      r.status,
       body.error,
     )
   }
@@ -42,10 +45,15 @@ export function UsersTab() {
     queryKey: ['users'],
     queryFn: fetchUsers,
     staleTime: 60_000,
-    retry: (failureCount, err) =>
-      err instanceof UsersFetchError && err.code === 'no_plex_token'
-        ? false
-        : failureCount < 2,
+    retry: (failureCount, err) => {
+      if (
+        err instanceof UsersFetchError &&
+        (err.status === 401 || err.status === 403 || err.code === 'no_plex_token')
+      ) {
+        return false
+      }
+      return failureCount < 2
+    },
   })
 
   if (q.isPending) {

@@ -58,6 +58,8 @@ interface CredentialRow {
   backed_up: number
 }
 
+export class WebAuthnVerificationError extends Error {}
+
 // ── challenge store (single-use, TTL-swept) ─────────────────────────────────
 
 function sweepExpiredChallenges(nowIso: string): void {
@@ -112,22 +114,31 @@ function takeChallenge(challengeId: string, ceremony: 'register' | 'login'): Cha
 /** Begin a registration ceremony for a NEW self-owned user. Mints a fresh
  *  `local:<ulid>` sub and returns creation options + an opaque challengeId the
  *  client echoes back at verify time. No member/credential is written yet. */
+/** Request-derived Relying Party (plan 006 Phase 2): when the backend
+ *  serves the SPA same-origin and the operator hasn't pinned
+ *  WEBAUTHN_RP_ID, the passkey routes derive the RP from the request's
+ *  own (same-host-verified) Origin so a LAN/tailnet self-host works with
+ *  zero WebAuthn env. Both ceremony halves derive it the same way, so
+ *  begin/verify agree as long as the client talks to one hostname. */
+export type RpOverride = { rpId: string; origin: string }
+
 export async function beginRegistration(
   handle: string,
+  rp?: RpOverride,
 ): Promise<{ options: PublicKeyCredentialCreationOptionsJSON; challengeId: string }> {
   const sub = newLocalSub()
   const userID = new TextEncoder().encode(sub) // 32 bytes for local:<26> — well under 64
   const options = await generateRegistrationOptions({
     rpName: env.webauthnRpName,
-    rpID: env.webauthnRpId,
+    rpID: rp?.rpId ?? env.webauthnRpId,
     userName: handle,
     userDisplayName: handle,
     userID,
     attestationType: 'none',
-    // residentKey 'required' makes these discoverable (usernameless login);
-    // userVerification 'preferred' avoids locking out authenticators without
-    // a biometric/PIN while still requesting one.
-    authenticatorSelection: { residentKey: 'required', userVerification: 'preferred' },
+    // Discoverable credentials keep login usernameless; user verification is
+    // required because possession of an unlocked/shared authenticator alone
+    // must not authenticate an owner or administrator.
+    authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
   })
   const challengeId = putChallenge('register', options.challenge, sub, handle)
   return { options, challengeId }
@@ -139,19 +150,25 @@ export async function beginRegistration(
 export async function verifyRegistration(
   challengeId: string,
   response: RegistrationResponseJSON,
+  rp?: RpOverride,
 ): Promise<{ sub: string; handle: string; credential: VerifiedCredential }> {
   const ch = takeChallenge(challengeId, 'register')
-  if (!ch || !ch.pending_sub) throw new Error('challenge_invalid')
+  if (!ch || !ch.pending_sub) throw new WebAuthnVerificationError('challenge_invalid')
 
-  const verification = await verifyRegistrationResponse({
-    response,
-    expectedChallenge: ch.challenge,
-    expectedOrigin: env.webauthnOrigins,
-    expectedRPID: env.webauthnRpId,
-    requireUserVerification: false,
-  })
+  let verification: Awaited<ReturnType<typeof verifyRegistrationResponse>>
+  try {
+    verification = await verifyRegistrationResponse({
+      response,
+      expectedChallenge: ch.challenge,
+      expectedOrigin: rp ? [rp.origin] : env.webauthnOrigins,
+      expectedRPID: rp?.rpId ?? env.webauthnRpId,
+      requireUserVerification: true,
+    })
+  } catch {
+    throw new WebAuthnVerificationError('registration_unverified')
+  }
   if (!verification.verified || !verification.registrationInfo) {
-    throw new Error('registration_unverified')
+    throw new WebAuthnVerificationError('registration_unverified')
   }
 
   const { credential, credentialBackedUp } = verification.registrationInfo
@@ -197,13 +214,13 @@ export function persistCredential(
 // ── authentication ──────────────────────────────────────────────────────────
 
 /** Begin a usernameless (discoverable-credential) login ceremony. */
-export async function beginLogin(): Promise<{
+export async function beginLogin(rp?: RpOverride): Promise<{
   options: PublicKeyCredentialRequestOptionsJSON
   challengeId: string
 }> {
   const options = await generateAuthenticationOptions({
-    rpID: env.webauthnRpId,
-    userVerification: 'preferred',
+    rpID: rp?.rpId ?? env.webauthnRpId,
+    userVerification: 'required',
     allowCredentials: [], // discoverable: the authenticator offers its resident keys
   })
   const challengeId = putChallenge('login', options.challenge, null, null)
@@ -215,9 +232,10 @@ export async function beginLogin(): Promise<{
 export async function verifyLogin(
   challengeId: string,
   response: AuthenticationResponseJSON,
+  rp?: RpOverride,
 ): Promise<{ sub: string }> {
   const ch = takeChallenge(challengeId, 'login')
-  if (!ch) throw new Error('challenge_invalid')
+  if (!ch) throw new WebAuthnVerificationError('challenge_invalid')
 
   const row = serverDb()
     .raw.prepare(
@@ -225,22 +243,29 @@ export async function verifyLogin(
          FROM webauthn_credentials WHERE credential_id = ?`,
     )
     .get(response.id) as CredentialRow | undefined
-  if (!row) throw new Error('credential_unknown')
+  if (!row) throw new WebAuthnVerificationError('credential_unknown')
 
-  const verification = await verifyAuthenticationResponse({
-    response,
-    expectedChallenge: ch.challenge,
-    expectedOrigin: env.webauthnOrigins,
-    expectedRPID: env.webauthnRpId,
-    requireUserVerification: false,
-    credential: {
-      id: row.credential_id,
-      publicKey: new Uint8Array(row.public_key),
-      counter: row.counter,
-      transports: row.transports ? (JSON.parse(row.transports) as []) : undefined,
-    },
-  })
-  if (!verification.verified) throw new Error('authentication_unverified')
+  let verification: Awaited<ReturnType<typeof verifyAuthenticationResponse>>
+  try {
+    verification = await verifyAuthenticationResponse({
+      response,
+      expectedChallenge: ch.challenge,
+      expectedOrigin: rp ? [rp.origin] : env.webauthnOrigins,
+      expectedRPID: rp?.rpId ?? env.webauthnRpId,
+      requireUserVerification: true,
+      credential: {
+        id: row.credential_id,
+        publicKey: new Uint8Array(row.public_key),
+        counter: row.counter,
+        transports: row.transports ? (JSON.parse(row.transports) as []) : undefined,
+      },
+    })
+  } catch {
+    throw new WebAuthnVerificationError('authentication_unverified')
+  }
+  if (!verification.verified) {
+    throw new WebAuthnVerificationError('authentication_unverified')
+  }
 
   serverDb()
     .raw.prepare(`UPDATE webauthn_credentials SET counter = ?, last_used_at = ? WHERE credential_id = ?`)

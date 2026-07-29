@@ -9,11 +9,20 @@ import path from 'node:path'
 // vi.mock factory can reach it) to simulate active vs. stale (ffmpeg-exited)
 // sessions.
 const h = vi.hoisted(() => {
-  const state = { active: [] as Array<{ sessionId: string }>, starts: 0 }
-  const start = vi.fn(() => {
+  const state = {
+    active: [] as Array<{ sessionId: string }>,
+    starts: 0,
+    // The streamId each startRemuxSession call actually dialed (in order), so a
+    // test can assert a dead-feed failover advanced to a SIBLING id.
+    dialedStreamIds: [] as string[],
+    // streamIds iptvRemux currently remembers as dead-channel placeholders.
+    deadFeeds: new Set<string>(),
+  }
+  const start = vi.fn((opts?: { streamId?: string }) => {
     state.starts += 1
     const sessionId = `sess-${state.starts}`
     state.active.push({ sessionId })
+    if (opts?.streamId !== undefined) state.dialedStreamIds.push(opts.streamId)
     return { sessionId, dir: `/tmp/${sessionId}`, manifestPath: `/tmp/${sessionId}/index.m3u8` }
   })
   const stop = vi.fn((sessionId: string) => {
@@ -33,8 +42,9 @@ vi.mock('./iptvStreamToken.js', () => ({
 }))
 vi.mock('./iptvRemux.js', () => ({
   channelNeedsReencode: () => false,
+  channelIsDeadFeed: (streamId: string) => h.state.deadFeeds.has(streamId),
   listRemuxSessions: () => h.state.active,
-  startRemuxSession: () => h.start(),
+  startRemuxSession: (opts: { streamId: string }) => h.start(opts),
   stopRemuxSession: (sessionId: string) => h.stop(sessionId),
 }))
 vi.mock('../env.js', () => ({
@@ -49,12 +59,15 @@ import {
   rewriteRemuxManifest,
   remuxManifestReady,
   remuxSegmentResource,
+  isChannelOfflineUpstream,
   _resetLiveRemuxIndexForTests,
 } from './iptvLiveRemuxMap.js'
 
 beforeEach(() => {
   h.state.active = []
   h.state.starts = 0
+  h.state.dialedStreamIds = []
+  h.state.deadFeeds.clear()
   h.start.mockClear()
   h.stop.mockClear()
   _resetLiveRemuxIndexForTests()
@@ -137,6 +150,49 @@ describe('rewriteRemuxManifest', () => {
   it('passes through an unrecognised non-tag, non-segment line untouched', () => {
     const out = rewriteRemuxManifest('#EXTINF:2.0,\nseg_00000.ts\nnot-a-segment.bin\n', '7', 's', 'u')
     expect(out).toContain('not-a-segment.bin')
+  })
+
+  // ── Cross-session media-sequence continuity (sibling-failover -12312) ────────
+  const seqOf = (m: string) => {
+    const line = m.split('\n').find((l) => l.startsWith('#EXT-X-MEDIA-SEQUENCE:'))
+    return line ? Number(line.split(':')[1]) : null
+  }
+  const discSeqOf = (m: string) => {
+    const line = m.split('\n').find((l) => l.startsWith('#EXT-X-DISCONTINUITY-SEQUENCE:'))
+    return line ? Number(line.split(':')[1]) : null
+  }
+  const window = (mediaSeq: number, first: number, count: number) => {
+    const lines = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-TARGETDURATION:3', `#EXT-X-MEDIA-SEQUENCE:${mediaSeq}`]
+    for (let i = 0; i < count; i++) {
+      lines.push('#EXTINF:2.0,', `seg_${String(first + i).padStart(5, '0')}.ts`)
+    }
+    return lines.join('\n') + '\n'
+  }
+
+  it('steady state (same session) leaves MEDIA-SEQUENCE untouched and emits no discontinuity sequence', () => {
+    const p1 = rewriteRemuxManifest(window(10, 10, 3), '42', 'sess-A', 'subZ')
+    const p2 = rewriteRemuxManifest(window(11, 11, 3), '42', 'sess-A', 'subZ')
+    expect(seqOf(p1)).toBe(10)
+    expect(seqOf(p2)).toBe(11)
+    expect(discSeqOf(p1)).toBeNull()
+    expect(discSeqOf(p2)).toBeNull()
+  })
+
+  it('a session swap keeps MEDIA-SEQUENCE monotonic and bumps the discontinuity sequence (fixes -12312)', () => {
+    // Session A serves a window up to sequence 14 (first 12, 3 segments).
+    const a = rewriteRemuxManifest(window(12, 12, 3), '42', 'sess-A', 'subZ')
+    expect(seqOf(a)).toBe(14 - 2) // first served sequence is 12
+    // A dead-feed failover swaps in sibling session B, whose ffmpeg restarts at
+    // MEDIA-SEQUENCE:0. Served naively this jumps BACKWARDS (12 -> 0) and stalls
+    // AVPlayer with -12312. The continuity carry must instead continue ABOVE 14.
+    const b = rewriteRemuxManifest(window(0, 0, 3), '42', 'sess-B', 'subZ')
+    expect(seqOf(b)).not.toBeNull()
+    expect(seqOf(b)!).toBeGreaterThan(14) // > the max sequence session A served
+    expect(discSeqOf(b)).toBe(1) // discontinuity-sequence bumped on the swap
+    // The new session's subsequent polls stay monotonic above the swap point.
+    const b2 = rewriteRemuxManifest(window(1, 1, 3), '42', 'sess-B', 'subZ')
+    expect(seqOf(b2)!).toBeGreaterThan(seqOf(b)!)
+    expect(discSeqOf(b2)).toBe(1)
   })
 })
 
@@ -250,5 +306,93 @@ describe('ensureLiveRemuxEntry / getActiveLiveRemuxEntry / forgetLiveRemuxEntry'
     ensureLiveRemuxEntry({ streamId: '5', sub: 'u', upstreamUrl: 'http://x' })
     expect(dropOtherLiveRemuxSessions('u', '5')).toEqual([])
     expect(h.stop).not.toHaveBeenCalled()
+  })
+})
+
+describe('dead-feed failover (Fox Soccer Plus incident, S1 item 7)', () => {
+  // Two channels share an epg_channel_id, so they are siblings carrying the same
+  // event. The route wires these as (siblingFeeds, upstreamUrlFor).
+  const siblingFeeds = () => ['1', '2']
+  const upstreamUrlFor = (id: string) => `http://up/${id}`
+  const opts = (streamId: string) => ({
+    streamId,
+    sub: 'u',
+    upstreamUrl: `http://up/${streamId}`,
+    siblingFeeds,
+    upstreamUrlFor,
+  })
+
+  it('advances to the sibling stream_id when the tuned feed EOFs as a dead placeholder', () => {
+    // t=1000: tune channel '1' — dials the tuned feed first.
+    const a = ensureLiveRemuxEntry(opts('1'), 1_000)
+    expect(a?.sessionId).toBe('sess-1')
+    expect(h.state.dialedStreamIds).toEqual(['1'])
+
+    // '1' turns out to be a dead-channel placeholder: ffmpeg exited code 0 after
+    // a few segments, so iptvRemux tagged stream '1' dead and dropped the session.
+    h.state.active = []
+    h.state.deadFeeds.add('1')
+
+    // Next ensure: the dead '1' is skipped and we advance to sibling '2' —
+    // NOT re-dial the dead '1'.
+    const b = ensureLiveRemuxEntry(opts('1'), 1_100)
+    expect(b?.sessionId).toBe('sess-2')
+    expect(h.state.dialedStreamIds).toEqual(['1', '2'])
+    // The entry stays keyed to the tuned channel '1' but records the dialed sibling.
+    expect(b?.streamId).toBe('1')
+    expect(b?.dialedStreamId).toBe('2')
+  })
+
+  it('reports the channel offline (null) once EVERY candidate feed is dead', () => {
+    ensureLiveRemuxEntry(opts('1'), 1_000)
+    h.state.active = []
+    h.state.deadFeeds.add('1') // tuned feed dead → fail over to '2'
+    const b = ensureLiveRemuxEntry(opts('1'), 1_100)
+    expect(b?.dialedStreamId).toBe('2')
+
+    h.state.active = []
+    h.state.deadFeeds.add('2') // sibling also dead → nothing left to dial
+    expect(ensureLiveRemuxEntry(opts('1'), 1_200)).toBeNull()
+    // No third dial happened — we did not re-open a known-dead upstream.
+    expect(h.state.dialedStreamIds).toEqual(['1', '2'])
+    // isChannelOfflineUpstream lets the route surface a terminal offline reason.
+    expect(isChannelOfflineUpstream(['1', '2'])).toBe(true)
+  })
+
+  it('a dead-feed failover is NOT throttled like a corrupt-feed fast-fail', () => {
+    // A corrupt feed dying young widens the reconnect backoff (see the throttle
+    // tests above), which would BLOCK an immediate re-dial. A dead-feed EOF must
+    // not: failing over to a sibling is a different upstream connection, so the
+    // sibling dial fires immediately at t=1_100 despite the young death.
+    ensureLiveRemuxEntry(opts('1'), 1_000)
+    h.state.active = []
+    h.state.deadFeeds.add('1')
+    const b = ensureLiveRemuxEntry(opts('1'), 1_100) // <5s later, would be throttled if fast-fail
+    expect(b?.dialedStreamId).toBe('2')
+  })
+
+  it('with no failover wiring, a dead tuned feed reports offline (single-feed channel)', () => {
+    // Default opts (no siblingFeeds): the only candidate is the tuned feed. Once
+    // it is dead, the channel is offline — the map returns null rather than
+    // re-dialing a known-dead upstream.
+    ensureLiveRemuxEntry({ streamId: '9', sub: 'u', upstreamUrl: 'http://up/9' }, 1_000)
+    h.state.active = []
+    h.state.deadFeeds.add('9')
+    expect(
+      ensureLiveRemuxEntry({ streamId: '9', sub: 'u', upstreamUrl: 'http://up/9' }, 1_100),
+    ).toBeNull()
+  })
+})
+
+describe('isChannelOfflineUpstream', () => {
+  it('true only when every candidate feed is a known dead placeholder', () => {
+    h.state.deadFeeds.add('1')
+    expect(isChannelOfflineUpstream(['1', '2'])).toBe(false) // '2' still live
+    h.state.deadFeeds.add('2')
+    expect(isChannelOfflineUpstream(['1', '2'])).toBe(true)
+  })
+
+  it('false for an empty candidate list', () => {
+    expect(isChannelOfflineUpstream([])).toBe(false)
   })
 })

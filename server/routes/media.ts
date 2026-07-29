@@ -1,9 +1,17 @@
 import { Hono, type Context, type Next } from 'hono'
 import { requireAuth, type Env } from '../middleware/auth.js'
 import { env } from '../env.js'
-import { fetchStreamWithConnectTimeout, fetchWithTimeout, LAN_TIMEOUT_MS } from '../services/upstream.js'
+import {
+  fetchStreamWithConnectTimeout,
+  fetchWithTimeout,
+  LAN_TIMEOUT_MS,
+  normalizeUpstreamAuthFailure,
+} from '../services/upstream.js'
 import { mintInternalPrincipal } from '../services/internalPrincipal.js'
 import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
+import { postFeedback } from '../services/recommender.js'
+import { mediaLibraryDb } from '../services/mediaLibraryDbSingleton.js'
+import { resolveLocalWatchedSignal } from '../services/localMediaWatchSignal.js'
 import type { Session } from '../session.js'
 import {
   signMediaToken,
@@ -60,8 +68,11 @@ type Caps = {
   /** Client's HLS player handles HEVC in fMP4 segments (enables HEVC copy-remux). */
   hls_fmp4_hevc: boolean
   /** Native HLS player (AVPlayer): opt into multi-audio muxing for in-band
-   *  language switching. Browser/MSE clients omit it (single English track). */
-  native_hls?: boolean
+   *  language switching. Browser/MSE clients omit it (single English track).
+   *  Non-optional so the POST handler's caps object CANNOT silently drop it again
+   *  (it did: the field was added to the type + capsQuery but not the handler, so
+   *  every AVPlayer grant lost multi-audio). PlaybackRequest keeps it optional. */
+  native_hls: boolean
   /** Client pipeline applies Dolby Vision RPUs itself (DV-capable Apple
    *  device). Gates DV direct-play and the transcoder's DV copy passthrough. */
   dolby_vision?: boolean
@@ -107,8 +118,8 @@ function sessionFromSub(sub: string): Session {
 /** Build the Authorization header for a media-core call from a session, or
  *  return {} in the off/no-secret posture. Throws on mint failure so the caller
  *  can fail closed. */
-function principalHeader(session: Session): Record<string, string> {
-  const caller = recommenderCallerFromSession(session)
+function principalHeader(session: Session, requestId?: string): Record<string, string> {
+  const caller = recommenderCallerFromSession(session, requestId)
   if (caller && env.internalPrincipalSecret) {
     return { authorization: `Bearer ${mintInternalPrincipal(caller)}` }
   }
@@ -165,6 +176,7 @@ media.post('/playback/:kind/:id', async (c) => {
         ? Math.floor(reqCaps.aac_max_channels)
         : DEFAULT_CAPS.aac_max_channels,
     hls_fmp4_hevc: Boolean(reqCaps.hls_fmp4_hevc),
+    native_hls: Boolean(reqCaps.native_hls),
     dolby_vision: Boolean(reqCaps.dolby_vision),
   }
   const startSecs =
@@ -181,7 +193,7 @@ media.post('/playback/:kind/:id', async (c) => {
 
   let auth: Record<string, string>
   try {
-    auth = principalHeader(session)
+    auth = principalHeader(session, c.get('requestId'))
   } catch (e) {
     console.error('[media] playback grant: mint failed, failing closed:', e)
     return c.json({ error: 'principal_mint_failed' }, 502)
@@ -285,6 +297,7 @@ media.post('/playback/:kind/:id', async (c) => {
   const manifestProbe = `${env.transcoderUrl}${handoff.manifestUrl}`
   const READY_DEADLINE_MS = 12_000
   const readyDeadline = Date.now() + READY_DEADLINE_MS
+  let ready = false
   while (Date.now() < readyDeadline) {
     try {
       // The manifest is a small text playlist — whole-transfer deadline so
@@ -298,7 +311,10 @@ media.post('/playback/:kind/:id', async (c) => {
       if (m.ok) {
         const body = await m.text()
         // `.ts` for MPEG-TS sessions, `.m4s` for fMP4 (HEVC copy) sessions.
-        if (/\.(?:ts|m4s)(\?|\s|$)/m.test(body)) break // a segment is listed → ready
+        if (/\.(?:ts|m4s)(\?|\s|$)/m.test(body)) {
+          ready = true
+          break // a segment is listed → ready
+        }
       }
     } catch {
       // transient — keep polling until the deadline
@@ -331,6 +347,36 @@ media.post('/playback/:kind/:id', async (c) => {
           forced: handoff.subtitle.forced ?? false,
         }
       : null
+
+  // Trick-play (S5): a re-encode session with a known duration synthesizes an
+  // I-frame playlist at `iframe.m3u8` (the AVPlayer-native equivalent of a Plex
+  // BIF) — the master the client loads already advertises it, but we surface the
+  // URL explicitly so the player can bind the scrubbing-preview rendition
+  // directly. Ground-truth it with ONE probe: the transcoder's iframe route
+  // 404s for copy-remux / no-duration / flag-off sessions, so a hit means the
+  // rendition genuinely exists (never a dead URL) and the token-wrapped path
+  // rides the same owner-bound `/session/<id>/*` proxy as the manifest. Trick-
+  // play is a progressive enhancement — any probe failure yields null, never a
+  // failed grant — and we skip it entirely when the manifest never became ready
+  // (that session is already degraded; the master still carries the rendition).
+  const iframePath = handoff.manifestUrl.replace(/\/index\.m3u8$/, '/iframe.m3u8')
+  let trickplayUrl: string | null = null
+  if (ready && iframePath !== handoff.manifestUrl) {
+    try {
+      const tp = await fetchWithTimeout(
+        `${env.transcoderUrl}${iframePath}`,
+        { method: 'GET', headers: auth },
+        LAN_TIMEOUT_MS,
+        'transcoder',
+      )
+      if (tp.ok && /#EXT-X-I-FRAMES-ONLY/.test(await tp.text())) {
+        trickplayUrl = withToken(iframePath)
+      }
+    } catch {
+      // Probe failed — leave trickplayUrl null; scrubbing previews are optional.
+    }
+  }
+
   return c.json({
     delivery: 'hls',
     url: withToken(handoff.manifestUrl),
@@ -339,6 +385,7 @@ media.post('/playback/:kind/:id', async (c) => {
     sessionId: sid,
     durationSecs,
     subtitle,
+    trickplayUrl,
   })
 })
 
@@ -357,7 +404,7 @@ media.all('/*', async (c) => {
 
   let headers: Record<string, string>
   try {
-    headers = principalHeader(session)
+    headers = principalHeader(session, c.get('requestId'))
   } catch (e) {
     console.error('[media] failed to mint internal-principal, failing closed:', e)
     return c.json({ error: 'principal_mint_failed' }, 502)
@@ -371,18 +418,49 @@ media.all('/*', async (c) => {
   const method = c.req.method
   const hasBody = method !== 'GET' && method !== 'HEAD'
   let body: ArrayBuffer | undefined
+  let watchedSignal: ReturnType<typeof resolveLocalWatchedSignal> = null
   if (hasBody) {
     body = await c.req.arrayBuffer()
     const ct = c.req.header('content-type')
     if (ct) headers['content-type'] = ct
+    if (method === 'POST' && subpath === '/watch' && ct?.includes('application/json')) {
+      try {
+        watchedSignal = resolveLocalWatchedSignal(
+          mediaLibraryDb()?.raw ?? null,
+          session.sub,
+          JSON.parse(new TextDecoder().decode(body)),
+        )
+      } catch {
+        // The upstream remains authoritative for body validation. A malformed
+        // or temporarily unavailable local DB only suppresses this best-effort
+        // training signal; it never changes the watch-write response.
+        watchedSignal = null
+      }
+    }
   }
 
-  const r = await fetchStreamWithConnectTimeout(
-    upstream,
-    { method, headers, ...(hasBody && body !== undefined ? { body } : {}) },
-    LAN_TIMEOUT_MS,
-    'media-core',
+  const r = await normalizeUpstreamAuthFailure(
+    await fetchStreamWithConnectTimeout(
+      upstream,
+      { method, headers, ...(hasBody && body !== undefined ? { body } : {}) },
+      LAN_TIMEOUT_MS,
+      'media-core',
+    ),
+    'media_core',
   )
+
+  if (r.ok && watchedSignal && env.useLocalRecommender) {
+    const caller = recommenderCallerFromSession(session, c.get('requestId'))
+    void postFeedback(
+      {
+        sub: session.sub,
+        kind: watchedSignal.kind,
+        tmdb_id: watchedSignal.tmdbId,
+        signal: 'watched',
+      },
+      caller,
+    )
+  }
 
   const outHeaders = new Headers()
   for (const name of FORWARD_RESPONSE_HEADERS) {

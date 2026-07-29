@@ -104,6 +104,42 @@ describe('recommenderCallerFromSession', () => {
     expect(vi.mocked(ensureServerId)).toHaveBeenCalledTimes(1)
   })
 
+  // §S0-6: a transient boot-time server.db race must NOT permanently demote the
+  // recommender. After the retry cooldown lapses, the next call retries and heals
+  // on its own — no process restart required.
+  it('recovers after the retry cooldown — a transient boot failure self-heals (S0-6)', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-06T00:00:00Z'))
+    try {
+      const { ensureServerId } = await import('./serverDb.js')
+      // Throw on the FIRST call (boot-time volume-mount race), succeed after.
+      vi.mocked(ensureServerId)
+        .mockImplementationOnce(() => {
+          throw new Error('server.db unavailable')
+        })
+        .mockReturnValue('server-uuid-healed')
+
+      const { recommenderCallerFromSession, _resetServerIdForTests } = await import(
+        './recommenderCaller.js'
+      )
+      _resetServerIdForTests()
+
+      // First call: server.db down → demoted to no-Bearer (undefined).
+      expect(recommenderCallerFromSession(makeSession('plex:1'))).toBeUndefined()
+      // Still inside the cooldown: no retry (would re-hit the disk), still down.
+      expect(recommenderCallerFromSession(makeSession('plex:1'))).toBeUndefined()
+      expect(vi.mocked(ensureServerId)).toHaveBeenCalledTimes(1)
+
+      // Advance past the cooldown → the next call retries and heals.
+      vi.advanceTimersByTime(30_001)
+      const healed = recommenderCallerFromSession(makeSession('plex:1'))
+      expect(healed?.serverId).toBe('server-uuid-healed')
+      expect(vi.mocked(ensureServerId)).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('_resetServerIdForTests clears both the cache and the failure latch', async () => {
     const { ensureServerId } = await import('./serverDb.js')
     vi.mocked(ensureServerId).mockImplementation(() => {

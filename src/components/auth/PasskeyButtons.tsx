@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { useAuth } from '../../lib/auth'
 import { browserSupportsWebAuthn } from '@simplewebauthn/browser'
 import './PasskeyButtons.css'
@@ -13,12 +13,23 @@ import './PasskeyButtons.css'
 //   - "Set one up" — first-time: needs a display name + a valid invite code
 //     (the invite authorizes the new identity onto the members allowlist,
 //     exactly like the Plex/Apple paths).
-export function PasskeyButtons({ inviteCode }: { inviteCode?: string }) {
-  const { passkeyLogin, passkeyRegister, signInState } = useAuth()
+export function PasskeyButtons({
+  inviteCode,
+  startInRegistration = false,
+}: {
+  inviteCode?: string
+  startInRegistration?: boolean
+}) {
+  const { passkeyLogin, passkeyRegister, activeSignIn } = useAuth()
   const [supported, setSupported] = useState(false)
-  const [mode, setMode] = useState<'idle' | 'register'>('idle')
+  const [mode, setMode] = useState<'idle' | 'register'>(
+    startInRegistration ? 'register' : 'idle',
+  )
   const [handle, setHandle] = useState('')
-  const pending = signInState === 'pending' || signInState === 'opening'
+  const handleId = useId()
+  const pending = activeSignIn !== null
+  const loginPending = activeSignIn === 'passkey-login'
+  const registrationPending = activeSignIn === 'passkey-register'
 
   // Feature-detect once on mount; hide the whole block on browsers without
   // WebAuthn rather than offering a button that can only fail.
@@ -44,7 +55,7 @@ export function PasskeyButtons({ inviteCode }: { inviteCode?: string }) {
         onClick={() => void passkeyLogin()}
         disabled={pending}
       >
-        {pending ? 'Waiting…' : 'Sign in with a passkey'}
+        {loginPending ? 'Waiting…' : 'Sign in with a passkey'}
       </button>
 
       {mode === 'idle' ? (
@@ -57,12 +68,18 @@ export function PasskeyButtons({ inviteCode }: { inviteCode?: string }) {
           First time with a passkey? Set one up
         </button>
       ) : (
-        <div className="passkey-signin__register">
-          <label className="passkey-signin__label" htmlFor="passkey-handle">
+        <form
+          className="passkey-signin__register"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void passkeyRegister({ handle: handle.trim(), inviteCode })
+          }}
+        >
+          <label className="passkey-signin__label" htmlFor={handleId}>
             Your name
           </label>
           <input
-            id="passkey-handle"
+            id={handleId}
             className="walkthrough__invite-input"
             type="text"
             value={handle}
@@ -70,16 +87,16 @@ export function PasskeyButtons({ inviteCode }: { inviteCode?: string }) {
             placeholder="e.g. Chris"
             autoComplete="name"
             spellCheck={false}
+            autoFocus={startInRegistration}
             disabled={pending}
           />
           <div className="passkey-signin__actions">
             <button
-              type="button"
+              type="submit"
               className="walkthrough__signin-button"
-              onClick={() => void passkeyRegister({ handle: handle.trim(), inviteCode })}
               disabled={pending || handle.trim().length === 0}
             >
-              {pending ? 'Creating…' : 'Create passkey'}
+              {registrationPending ? 'Creating…' : 'Create passkey'}
             </button>
             <button
               type="button"
@@ -94,7 +111,7 @@ export function PasskeyButtons({ inviteCode }: { inviteCode?: string }) {
             Needs a valid invite code above. Works on this device with Face ID,
             Touch ID, Windows Hello, or a security key; no Plex account required.
           </p>
-        </div>
+        </form>
       )}
     </div>
   )

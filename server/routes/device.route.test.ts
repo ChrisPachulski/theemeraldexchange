@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// Route-level coverage for the Apple device-pair HTTP handler (POST /poll).
+// Route-level coverage for the native device-pair HTTP handler (POST /poll).
 // Mock every upstream dep with vi.hoisted + vi.mock so the tests
 // exercise ROUTE ORCHESTRATION only — body-limit parsing, the five field
 // validations, the body-too-large guard, and the pending/denied/authorized
@@ -14,23 +14,37 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // vi.mock is hoisted above imports and top-level consts, so the factory may not
 // close over ordinary module-scope variables. vi.hoisted runs WITH the hoist,
 // so these handles are initialized before the mocks reference them.
-const plex = vi.hoisted(() => ({
-  buildAuthUrl: vi.fn(),
-  checkPin: vi.fn(),
-  createPin: vi.fn(),
-  getUser: vi.fn(),
-}))
+const plex = vi.hoisted(() => {
+  class PlexRateLimitError extends Error {
+    readonly retryAfter: string
+    readonly retryAfterSeconds = 30
+
+    constructor(retryAfter: string) {
+      super('Plex PIN polling rate-limited')
+      this.name = 'PlexRateLimitError'
+      this.retryAfter = retryAfter
+    }
+  }
+
+  return {
+    buildAuthUrl: vi.fn(),
+    checkPin: vi.fn(),
+    createPin: vi.fn(),
+    getUser: vi.fn(),
+    PlexRateLimitError,
+  }
+})
 vi.mock('../plex.js', () => plex)
 
 const { authorizeOrRedeem, enforceAuthRateLimit } = vi.hoisted(() => ({
   authorizeOrRedeem: vi.fn(),
   // Default: never rate-limited (returns null). Individual tests can override.
-  enforceAuthRateLimit: vi.fn(() => null),
+  enforceAuthRateLimit: vi.fn<() => Response | null>(() => null),
 }))
 vi.mock('../auth.js', () => ({ authorizeOrRedeem, enforceAuthRateLimit }))
 
-const { roleFor } = vi.hoisted(() => ({ roleFor: vi.fn() }))
-vi.mock('../services/sessionGate.js', () => ({ roleFor }))
+const { effectiveRoleFor } = vi.hoisted(() => ({ effectiveRoleFor: vi.fn() }))
+vi.mock('../services/sessionGate.js', () => ({ effectiveRoleFor }))
 
 // AuthMode/Role are TYPES — erased at runtime, so a value-only factory is fine;
 // do not export them from the mock.
@@ -115,12 +129,64 @@ describe('device POST /poll — body size guard', () => {
 })
 
 describe('device POST /poll — pin lifecycle', () => {
+  it('keeps the local auth limiter distinct from Plex provider backpressure', async () => {
+    enforceAuthRateLimit.mockReturnValueOnce(
+      new Response(JSON.stringify({ error: 'rate_limited' }), {
+        status: 429,
+        headers: {
+          'Content-Type': 'application/json',
+          'Retry-After': '60',
+        },
+      }),
+    )
+
+    const res = await post('/poll', validPoll)
+
+    expect(res.status).toBe(429)
+    expect(res.headers.get('Retry-After')).toBe('60')
+    expect(await res.json()).toEqual({ error: 'rate_limited' })
+    expect(plex.checkPin).not.toHaveBeenCalled()
+  })
+
   it('200 pending when the pin has no authToken yet', async () => {
     plex.checkPin.mockResolvedValue({ authToken: null })
     const res = await post('/poll', validPoll)
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ status: 'pending' })
     expect(plex.getUser).not.toHaveBeenCalled()
+  })
+
+  it('returns Plex backpressure as a provider-specific 429 without minting', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    plex.checkPin.mockRejectedValue(
+      new plex.PlexRateLimitError('Sat, 18 Jul 2026 23:59:59 GMT'),
+    )
+
+    const res = await post('/poll', validPoll, { 'X-Request-Id': 'plex-device-backpressure' })
+
+    expect(res.status).toBe(429)
+    expect(res.headers.get('Retry-After')).toBe('Sat, 18 Jul 2026 23:59:59 GMT')
+    expect(await res.json()).toEqual({ error: 'plex_rate_limited' })
+    expect(plex.getUser).not.toHaveBeenCalled()
+    expect(session.mintDeviceToken).not.toHaveBeenCalled()
+    const lines = warn.mock.calls
+      .flat()
+      .map(String)
+      .filter((line) => line.startsWith('[auth-outcome] '))
+    expect(lines).toHaveLength(1)
+    expect(warn.mock.calls).toHaveLength(1)
+    expect(JSON.parse(lines[0].slice(lines[0].indexOf('{')))).toEqual(
+      expect.objectContaining({
+        provider: 'plex',
+        phase: 'check',
+        outcome: 'rate_limited',
+        reason: 'provider_rate_limit',
+        scope: 'upstream',
+        retryAfterSeconds: 30,
+        requestId: 'plex-device-backpressure',
+      }),
+    )
+    warn.mockRestore()
   })
 
   it('403 denied — authZ gate blocks an uninvited member and mints NO token', async () => {
@@ -137,20 +203,25 @@ describe('device POST /poll — pin lifecycle', () => {
   })
 
   it('200 authorized — happy path mints token and returns identity', async () => {
+    const info = vi.spyOn(console, 'log').mockImplementation(() => undefined)
     plex.checkPin.mockResolvedValue({ authToken: 'tok' })
     plex.getUser.mockResolvedValue({ id: 12345, username: 'chris' })
     authorizeOrRedeem.mockReturnValue({ allowed: true })
-    roleFor.mockReturnValue('user')
+    effectiveRoleFor.mockReturnValue('user')
     session.ensureServerId.mockReturnValue('SRV-ID-1')
     session.mintDeviceToken.mockResolvedValue('jwe.token.value')
 
-    const res = await post('/poll', {
-      pinId: 7,
-      device_id: 'dev-1',
-      device_name: 'Living Room',
-      device_platform: 'tvos',
-      invite_code: 'INV1',
-    })
+    const res = await post(
+      '/poll',
+      {
+        pinId: 7,
+        device_id: 'dev-1',
+        device_name: 'Living Room',
+        device_platform: 'tvos',
+        invite_code: 'INV1',
+      },
+      { 'X-Request-Id': 'plex-device-authorized' },
+    )
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       status: string
@@ -169,5 +240,23 @@ describe('device POST /poll — pin lifecycle', () => {
     expect(session.mintDeviceToken).toHaveBeenCalledWith(
       expect.objectContaining({ sub: 'plex:12345', device_id: 'dev-1' }),
     )
+    const lines = info.mock.calls
+      .flat()
+      .map(String)
+      .filter((line) => line.startsWith('[auth-outcome] '))
+    expect(lines).toHaveLength(1)
+    expect(JSON.parse(lines[0].slice(lines[0].indexOf('{')))).toEqual(
+      expect.objectContaining({
+        provider: 'plex',
+        phase: 'check',
+        outcome: 'authorized',
+        reason: 'device_pair',
+        requestId: 'plex-device-authorized',
+      }),
+    )
+    for (const secret of ['7', 'dev-1', 'Living Room', 'INV1', 'jwe.token.value', 'plex:12345']) {
+      expect(lines[0]).not.toContain(secret)
+    }
+    info.mockRestore()
   })
 })

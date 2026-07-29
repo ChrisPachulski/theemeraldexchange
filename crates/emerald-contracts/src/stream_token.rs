@@ -15,8 +15,8 @@ use crate::canonical::json_escape_string;
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// Stream-token kind enum per §5.3. `'recording'` is M6-reserved (DVR
-/// pick) — accepted by verifiers but not minted by any current path.
+/// Stream-token kind enum per §5.3. `'recording'` was reserved for M6 and is
+/// now minted by the DVR playback grant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamKind {
     Live,
@@ -26,9 +26,8 @@ pub enum StreamKind {
     Segment,
     Remux,
     Playlist,
-    /// M6 reserved (DVR). Verifiers MUST treat unknown future values as
-    /// hard reject; this variant exists so future Rust code doesn't
-    /// require an enum amendment.
+    /// DVR recording playback. Verifiers still hard-reject unknown future
+    /// values.
     Recording,
 }
 

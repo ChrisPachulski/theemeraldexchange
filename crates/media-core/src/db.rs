@@ -47,6 +47,31 @@ pub const MIGRATIONS: &[(i64, &str, &str)] = &[
         "0008_album_art",
         include_str!("../migrations/0008_album_art.sql"),
     ),
+    (
+        9,
+        "0009_episode_negcache",
+        include_str!("../migrations/0009_episode_negcache.sql"),
+    ),
+    (
+        10,
+        "0010_content_rating",
+        include_str!("../migrations/0010_content_rating.sql"),
+    ),
+    (
+        11,
+        "0011_movie_rating_negcache",
+        include_str!("../migrations/0011_movie_rating_negcache.sql"),
+    ),
+    (
+        12,
+        "0012_movie_match_negcache",
+        include_str!("../migrations/0012_movie_match_negcache.sql"),
+    ),
+    (
+        13,
+        "0013_probe_negcache",
+        include_str!("../migrations/0013_probe_negcache.sql"),
+    ),
 ];
 
 #[derive(Clone)]
@@ -273,6 +298,105 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(fts, 3, "FTS5 virtual tables must be created by 0003");
+    }
+
+    #[tokio::test]
+    async fn episode_negcache_columns_exist_after_migration() {
+        // S0 item 4: migration 0009 adds the negative-result cache columns the
+        // scanner uses to stop re-probing permanently-404 episodes. Without them
+        // `episode_lookup_due` / `record_episode_lookup_failure` can't persist
+        // state and the retry storm returns.
+        let db = Db::connect_memory().await.unwrap();
+        let cols: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('episodes')")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+        assert!(
+            cols.iter().any(|c| c == "tmdb_lookup_attempts"),
+            "episodes must have tmdb_lookup_attempts; got {cols:?}"
+        );
+        assert!(
+            cols.iter().any(|c| c == "tmdb_lookup_failed_at"),
+            "episodes must have tmdb_lookup_failed_at; got {cols:?}"
+        );
+        // The default keeps existing rows re-probeable (0 attempts, no failure
+        // stamp) rather than mass-suppressing the current library. `dflt_value`
+        // comes back as the raw SQL text, so compare as text.
+        let default_attempts: Option<String> = sqlx::query_scalar(
+            "SELECT dflt_value FROM pragma_table_info('episodes') \
+             WHERE name = 'tmdb_lookup_attempts'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(default_attempts.as_deref(), Some("0"));
+    }
+
+    #[tokio::test]
+    async fn content_rating_columns_exist_after_migration() {
+        // S2 item S3: migration 0010 adds the US certification / content-rating
+        // column the parental gate filters on. Without it the scanner cannot
+        // persist a rating and the /api/media library exposes nothing a
+        // restricted profile can be blocked on.
+        let db = Db::connect_memory().await.unwrap();
+        let movie_cols: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('movies')")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+        assert!(
+            movie_cols.iter().any(|c| c == "content_rating"),
+            "movies must have content_rating; got {movie_cols:?}"
+        );
+        let show_cols: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('shows')")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+        assert!(
+            show_cols.iter().any(|c| c == "content_rating"),
+            "shows must have content_rating; got {show_cols:?}"
+        );
+        // Nullable with no default: an un-enriched row reads NULL ("unknown"),
+        // which the client treats like an unrated item rather than being
+        // mass-hidden until a rescan backfills it.
+        let default_rating: Option<String> = sqlx::query_scalar(
+            "SELECT dflt_value FROM pragma_table_info('movies') \
+             WHERE name = 'content_rating'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(default_rating, None);
+    }
+
+    #[tokio::test]
+    async fn movie_match_negcache_columns_exist_after_migration() {
+        // Migration 0012 adds the match-search negative cache columns the scanner
+        // uses to stop re-searching unmatchable (NULL tmdb_id) movies every scan.
+        let db = Db::connect_memory().await.unwrap();
+        let cols: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('movies')")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+        assert!(
+            cols.iter().any(|c| c == "match_lookup_attempts"),
+            "movies must have match_lookup_attempts; got {cols:?}"
+        );
+        assert!(
+            cols.iter().any(|c| c == "match_lookup_failed_at"),
+            "movies must have match_lookup_failed_at; got {cols:?}"
+        );
+        // Default keeps the current library re-searchable (0 attempts).
+        let default_attempts: Option<String> = sqlx::query_scalar(
+            "SELECT dflt_value FROM pragma_table_info('movies') \
+             WHERE name = 'match_lookup_attempts'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(default_attempts.as_deref(), Some("0"));
     }
 
     #[tokio::test]

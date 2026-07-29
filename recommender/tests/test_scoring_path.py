@@ -260,21 +260,55 @@ def test_bounded_exclusions_trims_soft_recently_shown_to_fit_knn() -> None:
     hard_lib = set(range(0, 858))
     hard_dis = set(range(10_000, 10_751))
     hard_rej = set(range(20_000, 20_050))
+    shown_order = list(range(100_000, 103_768))  # ts-DESC: most-recent first
     user = SimpleNamespace(
         library_ids=hard_lib,
         disliked_ids=hard_dis,
         rejected_ids=hard_rej,
-        recently_shown_ids=set(range(100_000, 103_768)),  # 3768 soft, the bloat
+        recently_shown_ids=set(shown_order),  # 3768 soft, the bloat
+        recently_shown_order=shown_order,
     )
     pool_size = 500
     excluded = bounded_exclusions(user, pool_size)
     hard = hard_lib | hard_dis | hard_rej
 
     assert hard <= excluded, "hard exclusions (owned/disliked/rejected) must never be dropped"
-    # Bounded so the clamped KNN (<= VEC_KNN_MAX_K) keeps headroom for the pool.
-    assert len(excluded) <= VEC_KNN_MAX_K - max(pool_size * 3, 200)
+    # Bounded so the clamped KNN (<= VEC_KNN_MAX_K) keeps pool_size headroom.
+    assert len(excluded) <= VEC_KNN_MAX_K - max(pool_size, 200)
     # The soft set WAS trimmed (not all 3768 recently-shown survived).
     assert len(excluded) < len(hard) + len(user.recently_shown_ids)
+    # ...but far more than the old pool_size*3 reserve allowed: a heavy household
+    # must retain enough recent exclusions to actually rotate off repeats.
+    kept_soft = len(excluded) - len(hard)
+    assert kept_soft > 1000, "heavy household kept too few soft exclusions to rotate"
+    # Recency-aware: the titles kept are the MOST-RECENTLY shown (front of the
+    # ts-DESC order), never an arbitrary slice that could re-show recent repeats.
+    assert set(shown_order[:kept_soft]) <= excluded
+
+
+def test_bounded_exclusions_keeps_most_recent_soft_when_trimming() -> None:
+    # When the soft set must be trimmed, the survivors are the most-recently
+    # shown (front of recently_shown_order), so a just-seen title is suppressed
+    # while an ancient one may recur — the "recommender only repeats itself" fix.
+    from types import SimpleNamespace
+    from app.retrieval import bounded_exclusions, VEC_KNN_MAX_K
+
+    # reserve == max(pool_size, 200) == 200, so keep_soft == 4096 - 200 - len(hard);
+    # size hard to leave exactly 5 soft slots.
+    hard = set(range(0, VEC_KNN_MAX_K - 200 - 5))  # leaves keep_soft == 5
+    recent = [900_001, 900_002, 900_003, 900_004, 900_005]
+    old = list(range(800_000, 800_050))
+    order = recent + old  # most-recent first
+    user = SimpleNamespace(
+        library_ids=hard,
+        disliked_ids=set(),
+        rejected_ids=set(),
+        recently_shown_ids=set(order),
+        recently_shown_order=order,
+    )
+    excluded = bounded_exclusions(user, pool_size=1)
+    kept = excluded - hard
+    assert kept == set(recent), "must keep the 5 most-recently-shown, drop the old"
 
 
 def test_bounded_exclusions_keeps_everything_when_it_already_fits() -> None:
@@ -289,6 +323,48 @@ def test_bounded_exclusions_keeps_everything_when_it_already_fits() -> None:
         recently_shown_ids={6, 7, 8},
     )
     assert bounded_exclusions(user, pool_size=50) == {1, 2, 3, 4, 5, 6, 7, 8}
+
+
+def _genre_cand(genre_ids):
+    from types import SimpleNamespace
+    return SimpleNamespace(title=SimpleNamespace(genre_ids=tuple(genre_ids)))
+
+
+def test_cap_kids_share_interleaves_so_every_prefix_respects_cap() -> None:
+    # 10 candidates, best-first, ALL kids-genre except indices 3, 7 (adult).
+    # A total-only cap would put the top kids first; the running cap must lead
+    # with the adult titles so the head of the strip isn't all cartoons.
+    from app.recipes.fused import _cap_kids_share
+    KID = (16,)
+    ADULT = (18,)
+    cands = [_genre_cand(ADULT if i in (3, 7) else KID) for i in range(10)]
+    order = list(range(10))  # already score-desc
+
+    chosen = _cap_kids_share(order, cands, n=4, cap=0.5)
+    # cap 0.5 over 4 slots => at most 2 kids; the two adults (3,7) must be pulled
+    # up ahead of the deferred kids so no prefix exceeds the ratio.
+    kids = [i for i in chosen if i not in (3, 7)]
+    assert len(chosen) == 4
+    assert len(kids) <= 2, "running cap exceeded"
+    assert 3 in chosen and 7 in chosen, "adult titles must be promoted into the strip"
+    # First card must be an adult title (a kid at pos 0 would be 1 > 0.5*1).
+    assert chosen[0] in (3, 7)
+
+
+def test_cap_kids_share_backfills_when_non_kids_exhausted() -> None:
+    # Pool is ALL kids: the cap can't be met, but the strip must NOT be short —
+    # deferred kids backfill to fill n.
+    from app.recipes.fused import _cap_kids_share
+    cands = [_genre_cand((16, 10751)) for _ in range(6)]
+    chosen = _cap_kids_share(list(range(6)), cands, n=5, cap=0.3)
+    assert len(chosen) == 5, "must never return a short strip"
+    assert len(set(chosen)) == 5, "no duplicate picks"
+
+
+def test_cap_kids_share_noop_when_cap_disabled() -> None:
+    from app.recipes.fused import _cap_kids_share
+    cands = [_genre_cand((16,)) for _ in range(5)]
+    assert _cap_kids_share(list(range(5)), cands, n=3, cap=1.0) == [0, 1, 2]
 
 
 def test_cold_start_pool_orders_by_popularity_and_excludes(conn) -> None:

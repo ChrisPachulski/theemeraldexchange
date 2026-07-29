@@ -39,8 +39,11 @@ describe('makeNonce', () => {
 type FakeScript = {
   src: string
   async: boolean
+  removed: boolean
   listeners: Record<string, Array<() => void>>
   addEventListener: (type: string, cb: () => void) => void
+  removeEventListener: (type: string, cb: () => void) => void
+  remove: () => void
   fire: (type: string) => void
 }
 
@@ -48,9 +51,18 @@ function makeFakeScript(): FakeScript {
   return {
     src: '',
     async: false,
+    removed: false,
     listeners: {},
     addEventListener(type, cb) {
       ;(this.listeners[type] ??= []).push(cb)
+    },
+    removeEventListener(type, cb) {
+      this.listeners[type] = (this.listeners[type] ?? []).filter(
+        (listener) => listener !== cb,
+      )
+    },
+    remove() {
+      this.removed = true
     },
     fire(type) {
       for (const cb of this.listeners[type] ?? []) cb()
@@ -63,17 +75,21 @@ function installFakeDom(opts: {
   onScriptCreated?: (s: FakeScript) => void
 }) {
   const created: FakeScript[] = []
+  const timers = new Map<number, () => void>()
+  let nextTimer = 1
   const win: Record<string, unknown> = {
     location: { origin: 'https://app.test' },
     AppleID: opts.appleId,
     setTimeout: (fn: () => void, _ms?: number) => {
-      // Never auto-fire the timeout in tests; return a token.
-      void fn
-      return 1 as unknown
+      const timer = nextTimer
+      nextTimer += 1
+      timers.set(timer, fn)
+      return timer as unknown
     },
+    clearTimeout: (timer: number) => timers.delete(timer),
   }
   const doc = {
-    querySelector: () => null,
+    querySelector: () => created.find((script) => !script.removed) ?? null,
     createElement: () => {
       const s = makeFakeScript()
       created.push(s)
@@ -84,7 +100,16 @@ function installFakeDom(opts: {
   }
   vi.stubGlobal('window', win)
   vi.stubGlobal('document', doc)
-  return { created, win }
+  return {
+    created,
+    win,
+    fireTimers: () => {
+      const callbacks = [...timers.values()]
+      timers.clear()
+      callbacks.forEach((callback) => callback())
+    },
+    pendingTimers: () => timers.size,
+  }
 }
 
 describe('loadAppleSdk', () => {
@@ -127,6 +152,51 @@ describe('loadAppleSdk', () => {
     const p = mod.loadAppleSdk()
     script!.fire('error')
     await expect(p).rejects.toThrow(/apple_sdk_load_error/)
+  })
+
+  it.each([
+    {
+      failure: 'load error',
+      expected: /apple_sdk_load_error/,
+      fail: (script: FakeScript, _fireTimers: () => void) => script.fire('error'),
+    },
+    {
+      failure: 'load without a global',
+      expected: /apple_sdk_no_global/,
+      fail: (script: FakeScript, _fireTimers: () => void) => script.fire('load'),
+    },
+    {
+      failure: 'timeout',
+      expected: /apple_sdk_timeout/,
+      fail: (_script: FakeScript, fireTimers: () => void) => fireTimers(),
+    },
+  ])('removes a dead script after $failure so the same page can retry', async ({
+    expected,
+    fail,
+  }) => {
+    const dom = installFakeDom({})
+    const mod = await import('./appleSdk')
+
+    const firstPromise = mod.loadAppleSdk()
+    const firstScript = dom.created[0]
+    fail(firstScript, dom.fireTimers)
+    await expect(firstPromise).rejects.toThrow(expected)
+    expect(dom.pendingTimers()).toBe(0)
+    expect(firstScript.listeners.load ?? []).toHaveLength(0)
+    expect(firstScript.listeners.error ?? []).toHaveLength(0)
+
+    const retryPromise = mod.loadAppleSdk()
+    const retryScript = dom.created.at(-1)!
+    dom.win.AppleID = { auth: {} }
+    retryScript.fire('load')
+    await expect(retryPromise).resolves.toBeUndefined()
+
+    expect(dom.created).toHaveLength(2)
+    expect(firstScript.removed).toBe(true)
+    expect(retryScript.removed).toBe(false)
+    expect(dom.pendingTimers()).toBe(0)
+    expect(retryScript.listeners.load ?? []).toHaveLength(0)
+    expect(retryScript.listeners.error ?? []).toHaveLength(0)
   })
 })
 

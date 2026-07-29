@@ -187,3 +187,136 @@ export function epgGrid(
     programmes: channel.epg_channel_id ? (byChannel.get(channel.epg_channel_id) ?? []) : [],
   }))
 }
+
+/** One programme-title/description search hit + the guide row it airs on. Mirrors
+ *  the Apple client's `ProgramHit` (EpgSearch.swift): `programme` reuses the exact
+ *  grid projection so it decodes into the same `EpgProgram` Swift type, and
+ *  `programIndex` is the hit's index within that channel's window-ordered
+ *  programme list (stable id `"<streamId>#<programIndex>"`). */
+export interface EpgSearchHit {
+  streamId: number
+  channelName: string
+  categoryId: number | null
+  programme: EpgProgramme
+  programIndex: number
+}
+
+export interface EpgSearchOptions {
+  /** Required search term; matched case-insensitively against title + description. */
+  q: string
+  /** Optional `category_id IN (...)` filter, mirroring the grid's curated-set filter. */
+  categoryIds?: number[]
+  /** Hard cap on returned hits (the client's own scan capped at 100). */
+  limit?: number
+}
+
+export interface EpgSearchResult {
+  hits: EpgSearchHit[]
+  total: number
+}
+
+// Ceiling on returned hits — mirrors the grid's cap philosophy so a broad term
+// ('news') can't build an unbounded result set. `total` still reports the full
+// match count so the client can show "showing N of M".
+const SEARCH_LIMIT_MAX = 500
+
+/** Escape LIKE metacharacters so a user term is matched LITERALLY: a `%`, `_`,
+ *  or `\` typed in the search box must not act as a wildcard/escape. Pairs with
+ *  `ESCAPE '\'` on the LIKE clause. */
+function escapeLike(term: string): string {
+  return term.replace(/[\\%_]/g, (ch) => `\\${ch}`)
+}
+
+/**
+ * Server-side programme search over the whole synced EPG store — the endpoint
+ * that replaces the client's warm-window-only `EpgSearch.programHits` seam.
+ *
+ * Semantics deliberately mirror that seam: case-insensitive "contains" over
+ * title OR description, hits ordered by channel (num, name) then programme
+ * start, one hit per (channel, matching programme) so duplicate feeds sharing
+ * an EPG id each surface (exactly as the grid renders one row per channel).
+ */
+export function epgSearch(
+  db: IptvDb,
+  fromIso: string,
+  toIso: string,
+  opts: EpgSearchOptions,
+): EpgSearchResult {
+  const term = opts.q.trim()
+  if (!term) return { hits: [], total: 0 }
+  const limit = Math.min(Math.max(opts.limit ?? 100, 1), SEARCH_LIMIT_MAX)
+
+  // Push the case-insensitive "contains" into SQLite rather than materializing
+  // EVERY window-overlapping programme (hundreds of thousands of rows) into JS
+  // and substring-scanning there — a synchronous better-sqlite3 scan that blocks
+  // the event loop serving live segments. A window function still numbers each
+  // programme by its position in its channel's window-ordered list (so
+  // `programIndex` lines up with the grid's `row.programmes`), but the outer
+  // filter returns ONLY the matched rows, so JS materializes the match set, not
+  // the whole window. LIKE is ASCII case-insensitive by default (mirrors the
+  // client's localizedCaseInsensitiveContains for ASCII terms); metacharacters
+  // in the term are escaped so a literal % / _ can't widen the match. Both id
+  // sides are stored lowercase (0005), so the id grouping below still joins.
+  const likeArg = `%${escapeLike(term)}%`
+  const matchedRows = db.raw.prepare(`
+    SELECT channel_id, start_utc, stop_utc, title, description, program_index
+    FROM (
+      SELECT channel_id, start_utc, stop_utc, title, description,
+        ROW_NUMBER() OVER (PARTITION BY channel_id ORDER BY start_utc ASC) - 1 AS program_index,
+        (COALESCE(title, '') LIKE @like ESCAPE '\\'
+          OR COALESCE(description, '') LIKE @like ESCAPE '\\') AS is_match
+      FROM epg_programs
+      WHERE start_utc < @to AND stop_utc > @from
+    )
+    WHERE is_match
+    ORDER BY channel_id, program_index
+  `).all({ like: likeArg, to: toIso, from: fromIso }) as Array<EpgProgramme & { program_index: number }>
+
+  const matchesByChannel = new Map<string, Array<{ programme: EpgProgramme; programIndex: number }>>()
+  const matchedIds: string[] = []
+  for (const row of matchedRows) {
+    const { program_index, ...programme } = row
+    let matches = matchesByChannel.get(row.channel_id)
+    if (!matches) {
+      matches = []
+      matchesByChannel.set(row.channel_id, matches)
+      matchedIds.push(row.channel_id)
+    }
+    matches.push({ programme, programIndex: program_index })
+  }
+  if (matchedIds.length === 0) return { hits: [], total: 0 }
+
+  // Resolve the matched EPG ids back to channel rows (one EPG id can map to
+  // several duplicate feeds; each becomes its own hit). Optional category filter
+  // narrows the channel set exactly as the grid does.
+  const where: string[] = [`${EPG_JOIN_ID} IN (${matchedIds.map(() => '?').join(',')})`]
+  const args: Array<string | number> = [...matchedIds]
+  if (opts.categoryIds && opts.categoryIds.length) {
+    where.push(`category_id IN (${opts.categoryIds.map(() => '?').join(',')})`)
+    args.push(...opts.categoryIds)
+  }
+  const channels = db.raw.prepare(`
+    SELECT stream_id, name, category_id, ${EPG_JOIN_ID} AS epg_channel_id
+    FROM channels
+    WHERE ${where.join(' AND ')}
+    ORDER BY num, name
+  `).all(...args) as Array<{ stream_id: number; name: string; category_id: number | null; epg_channel_id: string | null }>
+
+  const allHits: EpgSearchHit[] = []
+  for (const channel of channels) {
+    if (!channel.epg_channel_id) continue
+    const matches = matchesByChannel.get(channel.epg_channel_id)
+    if (!matches) continue
+    for (const { programme, programIndex } of matches) {
+      allHits.push({
+        streamId: channel.stream_id,
+        channelName: channel.name,
+        categoryId: channel.category_id,
+        programme,
+        programIndex,
+      })
+    }
+  }
+
+  return { hits: allHits.slice(0, limit), total: allHits.length }
+}

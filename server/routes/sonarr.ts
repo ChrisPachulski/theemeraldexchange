@@ -6,7 +6,7 @@ import { Hono } from 'hono'
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { requireSection } from '../services/userPolicies.js'
 import { rateLimit } from '../middleware/rateLimit.js'
-import { sonarrFetch, sonarrRootFolders } from '../services/sonarr.js'
+import { sonarrFetch, sonarrRootFolders } from '../services/arr.js'
 import { SEARCH_TIMEOUT_MS } from '../services/upstream.js'
 import {
   createGrabEventRecorder,
@@ -833,7 +833,7 @@ sonarr.post('/api/v3/series', sonarrMutateLimit, async (c) => {
         kind: 'tv',
         tmdb_id: tmdbId,
         signal: 'added',
-      }, recommenderCallerFromSession(session))
+      }, recommenderCallerFromSession(session, c.get('requestId')))
     }
   }
 

@@ -19,15 +19,18 @@ type Tab = {
   label: string
   adminOnly?: boolean
   iptv?: boolean
+  /** Limits key gating this tab (plan 006 Phase 3): tab hides when the
+   *  matching integration is unconfigured on this install. */
+  needs?: 'sonarrEnabled' | 'radarrEnabled' | 'sabEnabled'
 }
 
 const TABS: Tab[] = [
-  { route: 'tv', label: 'TV Shows' },
-  { route: 'movies', label: 'Movies' },
+  { route: 'tv', label: 'TV Shows', needs: 'sonarrEnabled' },
+  { route: 'movies', label: 'Movies', needs: 'radarrEnabled' },
   // `iptv: true` hides the tab when the server boots with IPTV_DISABLED=1
   // (contract §13.3 reviewer-insurance gate).
   { route: 'live', label: 'Live', iptv: true },
-  { route: 'downloads', label: 'Downloads' },
+  { route: 'downloads', label: 'Downloads', needs: 'sabEnabled' },
   { route: 'users', label: 'Users', adminOnly: true },
 ]
 
@@ -60,6 +63,9 @@ export function TopNav({ active }: Props) {
     (t) =>
       (!t.adminOnly || isAdmin) &&
       (!t.iptv || iptvEnabled) &&
+      // Optional integrations (plan 006 Phase 3): default true so older
+      // backends without the flags keep every tab.
+      (!t.needs || limits.data?.[t.needs] !== false) &&
       t.route !== active,
   )
 

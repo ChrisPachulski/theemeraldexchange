@@ -12,7 +12,7 @@
 # can't be reached from a context rooted at recommender/.
 
 # ─── Stage 1: build the emerald_contracts PyO3 wheel ─────────────────────────
-FROM rust:1.96-slim-bookworm@sha256:b5f842fac1e3b4ff718a652a8e0173b62d9403ec826ef4998880b9347db30684 AS rust-builder
+FROM rust:1.97-slim-bookworm@sha256:99e09cb2284e2ddbb73a995deee3e91783fd04d177602ccf6eab326d778ee777 AS rust-builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -94,7 +94,7 @@ COPY recommender/migrations ./migrations
 COPY recommender/eval ./eval
 COPY recommender/docker-entrypoint.sh /usr/local/bin/recommender-entrypoint
 # Reproducible install from the committed lock (recommender/requirements.lock),
-# pinned to the proven-in-prod resolved set. This replaces the old
+# pinned to a CI-proven compatible resolved set. This replaces the old
 # `pip install .` that re-resolved pyproject's `>=` floors on every build (so
 # every rebuild silently drifted) and the bare `pip install torch` that pulled
 # whatever CPU torch was newest.
@@ -114,6 +114,7 @@ RUN mkdir -p /data /data/hf-cache \
  && chmod 755 /usr/local/bin/recommender-entrypoint
 
 ENV RECOMMENDER_DB_PATH=/data/exchange.db \
+    RECOMMENDER_MIGRATIONS_DIR=/srv/migrations \
     RECOMMENDER_HOST=0.0.0.0 \
     RECOMMENDER_PORT=8000 \
     HF_HOME=/data/hf-cache

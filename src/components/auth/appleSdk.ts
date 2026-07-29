@@ -79,30 +79,40 @@ export function loadAppleSdk(timeoutMs = 10_000): Promise<void> {
     const existing = document.querySelector<HTMLScriptElement>(
       `script[src="${SDK_SRC}"]`,
     )
+    const script = existing ?? document.createElement('script')
+    let settled = false
+    let timeout: number | null = null
+    const finish = (error?: Error) => {
+      if (settled) return
+      settled = true
+      script.removeEventListener('load', onReady)
+      script.removeEventListener('error', onError)
+      if (timeout !== null) window.clearTimeout(timeout)
+      if (error) {
+        script.remove()
+        reject(error)
+      } else {
+        resolve()
+      }
+    }
     const onReady = () => {
-      if (window.AppleID?.auth) resolve()
-      else reject(new Error('apple_sdk_no_global'))
+      if (window.AppleID?.auth) finish()
+      else finish(new Error('apple_sdk_no_global'))
     }
-    if (existing) {
-      existing.addEventListener('load', onReady, { once: true })
-      existing.addEventListener(
-        'error',
-        () => reject(new Error('apple_sdk_load_error')),
-        { once: true },
-      )
-    } else {
-      const s = document.createElement('script')
-      s.src = SDK_SRC
-      s.async = true
-      s.addEventListener('load', onReady, { once: true })
-      s.addEventListener(
-        'error',
-        () => reject(new Error('apple_sdk_load_error')),
-        { once: true },
-      )
-      document.head.appendChild(s)
+    const onError = () => finish(new Error('apple_sdk_load_error'))
+
+    script.addEventListener('load', onReady)
+    script.addEventListener('error', onError)
+    timeout = window.setTimeout(
+      () => finish(new Error('apple_sdk_timeout')),
+      timeoutMs,
+    )
+
+    if (!existing) {
+      script.src = SDK_SRC
+      script.async = true
+      document.head.appendChild(script)
     }
-    window.setTimeout(() => reject(new Error('apple_sdk_timeout')), timeoutMs)
   }).catch((e) => {
     // Allow a later retry after a transient failure.
     sdkLoad = null

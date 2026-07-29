@@ -48,11 +48,6 @@ export function xmltvTimeToIso(s: string): string {
   return new Date(utcMs).toISOString()
 }
 
-// Exported only so the test file can `import` it — the real parsing happens in streamXmltv.
-export function parseXmltvProgramme(_unused: never): EpgProgrammeRow {
-  throw new Error('use streamXmltv')
-}
-
 function abortReason(signal: AbortSignal): Error {
   return signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason ?? 'aborted'))
 }

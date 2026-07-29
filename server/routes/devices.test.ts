@@ -8,7 +8,11 @@ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eex-devices-test-'))
 process.env.SERVER_DB_PATH = path.join(tmpDir, 'server.db')
 process.env.ADMINS = 'admin-user'
 
-const { mintDeviceToken, _resetDeviceKeyForTests, revokeDeviceToken } = await import(
+const {
+  mintDeviceToken: mintRawDeviceToken,
+  _resetDeviceKeyForTests,
+  revokeDeviceToken,
+} = await import(
   '../session.js'
 )
 const { closeServerDb, serverDb } = await import('../services/serverDb.js')
@@ -21,7 +25,9 @@ afterAll(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true })
 })
 
-const SAMPLE: Parameters<typeof mintDeviceToken>[0] = {
+type DeviceInput = Parameters<typeof mintRawDeviceToken>[0]
+
+const SAMPLE: DeviceInput = {
   sub: 'plex:11111',
   role: 'user',
   username: 'regular-user',
@@ -43,13 +49,30 @@ function bearerHeaders(token: string): Record<string, string> {
 // `^(0|[1-9][0-9]*)$`). A non-numeric sub like 'plex:admin1' fails
 // validation and `memberStatus` returns 'not_member' → 401 before
 // requireAdmin's role check ever runs, so we use a valid numeric sub here.
-const ADMIN_SAMPLE: Parameters<typeof mintDeviceToken>[0] = {
+const ADMIN_SAMPLE: DeviceInput = {
   ...SAMPLE,
   role: 'admin',
   username: 'admin-user',
   sub: 'plex:22222',
   device_id: '01HADMINDEVICEADMINDEVICE0',
   device_name: "Admin's Mac",
+}
+
+/** Pairing is reachable only after provider authorization, which guarantees
+ * an active member row. Keep route fixtures representative of that contract. */
+async function mintDeviceToken(input: DeviceInput): Promise<string> {
+  serverDb()
+    .raw.prepare(
+      `INSERT INTO members (sub, display_name, role, auth_mode, joined_at, revoked_at)
+       VALUES (?, ?, ?, ?, datetime('now'), NULL)
+       ON CONFLICT(sub) DO UPDATE SET
+         display_name = excluded.display_name,
+         role = excluded.role,
+         auth_mode = excluded.auth_mode,
+         revoked_at = NULL`,
+    )
+    .run(input.sub, input.username ?? null, input.role, input.auth_mode)
+  return mintRawDeviceToken(input)
 }
 
 describe('GET /api/devices/self', () => {
@@ -68,15 +91,13 @@ describe('GET /api/devices/self', () => {
 
   it('rejects a Bearer token whose member was revoked — closes the 180-day access window', async () => {
     const token = await mintDeviceToken(SAMPLE)
-    // First request succeeds: an un-bootstrapped install lets the allowlist
-    // fall open, so a freshly-paired device works.
+    // Pairing created an active member, so the first request succeeds.
     const ok = await app.request('/api/devices/self', { headers: bearerHeaders(token) })
     expect(ok.status).toBe(200)
     // Operator revokes the member via the allowlist.
     serverDb()
       .raw.prepare(
-        `INSERT INTO members (sub, display_name, role, auth_mode, joined_at, revoked_at)
-         VALUES (?, 'Revoked User', 'user', 'plex', datetime('now'), datetime('now'))`,
+        `UPDATE members SET revoked_at = datetime('now') WHERE sub = ?`,
       )
       .run(SAMPLE.sub)
     // The very NEXT Bearer request is denied — not honored until the 180-day
@@ -87,6 +108,12 @@ describe('GET /api/devices/self', () => {
       .raw.prepare('SELECT COUNT(*) AS n FROM device_token_revocations')
       .get() as { n: number }
     expect(rev.n).toBeGreaterThan(0)
+  })
+
+  it('rejects a never-member Bearer token even on a fresh install', async () => {
+    const token = await mintRawDeviceToken(SAMPLE)
+    const denied = await app.request('/api/devices/self', { headers: bearerHeaders(token) })
+    expect(denied.status).toBe(401)
   })
 
   it('lists devices owned by the caller and excludes other subs', async () => {

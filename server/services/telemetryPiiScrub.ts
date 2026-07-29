@@ -38,6 +38,20 @@ import type { Breadcrumb, BreadcrumbHint, ErrorEvent, EventHint } from '@sentry/
 import * as Sentry from '@sentry/node'
 import { contracts } from './contractsBinding.js'
 
+// Sentry's NodeFetch breadcrumb records the full outbound URL. Plex PIN ids
+// are bearer-adjacent login artifacts: with the public client id they can be
+// polled for an attached token. These URL-specific rules supplement the
+// cross-language value scrubber for SDK-generated request/breadcrumb strings.
+const PLEX_PIN_URL_RE = /((?:https?:\/\/plex\.tv)?\/api\/v2\/pins\/)\d+/gi
+const AUTH_QUERY_SECRET_RE =
+  /([?&](?:pinId|inviteCode|invite_code|setupToken|idToken|id_token)=)[^&#\s"']+/gi
+
+function scrubSensitiveUrlArtifacts(json: string): string {
+  return json
+    .replace(PLEX_PIN_URL_RE, '$1REDACTED')
+    .replace(AUTH_QUERY_SECRET_RE, '$1REDACTED')
+}
+
 // ---------------------------------------------------------------------------
 // setSentryUser — safe wrapper enforcing §15.2 + §15.4 prohibition
 // ---------------------------------------------------------------------------
@@ -87,7 +101,8 @@ function scrubValue(value: unknown): unknown {
   // JSON.stringify yields undefined for undefined/functions/symbols — the
   // walker has nothing to scrub in those, pass them through untouched.
   if (json === undefined) return value
-  return JSON.parse(contracts.piiScrubValue(json)) as unknown
+  const contractScrubbed = contracts.piiScrubValue(json)
+  return JSON.parse(scrubSensitiveUrlArtifacts(contractScrubbed)) as unknown
 }
 
 // Scrub a single string value (stream-grant t=<token> and JWE-compact

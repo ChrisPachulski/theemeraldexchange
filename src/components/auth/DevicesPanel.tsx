@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiUrl } from '../../lib/api/base'
+import { throwApiError } from '../../lib/api/errors'
 import './DevicesPanel.css'
 
 // Self-management surface for paired Apple devices (M2 PIN-pair flow).
@@ -29,6 +30,7 @@ type DeviceView = {
 
 async function fetchDevices(): Promise<DeviceView[]> {
   const r = await fetch(apiUrl('/api/devices/self'), { credentials: 'include' })
+  if (r.status === 401 || r.status === 403) await throwApiError(r, 'Devices')
   if (!r.ok) return []
   const body = (await r.json()) as { devices: DeviceView[] }
   return body.devices
@@ -39,7 +41,7 @@ async function revokeDevice(jti: string): Promise<void> {
     method: 'DELETE',
     credentials: 'include',
   })
-  if (!r.ok) throw new Error(`revoke_failed_${r.status}`)
+  if (!r.ok) await throwApiError(r, 'Revoke device')
 }
 
 async function logoutEverywhere(): Promise<number> {
@@ -47,7 +49,7 @@ async function logoutEverywhere(): Promise<number> {
     method: 'DELETE',
     credentials: 'include',
   })
-  if (!r.ok) throw new Error(`logout_failed_${r.status}`)
+  if (!r.ok) await throwApiError(r, 'Sign out everywhere')
   const body = (await r.json()) as { revoked_count: number }
   return body.revoked_count
 }
@@ -59,7 +61,7 @@ async function renameDevice(jti: string, deviceName: string): Promise<void> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ device_name: deviceName }),
   })
-  if (!r.ok) throw new Error(`rename_failed_${r.status}`)
+  if (!r.ok) await throwApiError(r, 'Rename device')
 }
 
 function fmtRelative(iso: string | null): string {

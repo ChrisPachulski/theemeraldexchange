@@ -106,9 +106,9 @@ export function InvitesPanel() {
       ? 'No members yet'
       : `${activeMembers.length} member${activeMembers.length === 1 ? '' : 's'}`
 
-  const copyCode = async (code: string) => {
+  const copyInviteLink = async (code: string) => {
     try {
-      await navigator.clipboard.writeText(code)
+      await navigator.clipboard.writeText(`${window.location.origin}/#/invite/${code}`)
       setCopied(true)
     } catch {
       // Clipboard blocked (insecure context / permissions) — the code is
@@ -125,9 +125,9 @@ export function InvitesPanel() {
       </summary>
 
       <p className="invites-panel__hint">
-        Generate an invite code, then send it to the new household member. They
-        paste it once on the sign-in page; after that their Apple or Plex login
-        is remembered. Codes are single-use and expire.
+        Generate an invite link, then send it to the new household member. It
+        fills their one-time code automatically; after that their Apple or Plex
+        login is remembered. Invites are single-use and expire.
       </p>
 
       {/* Create */}
@@ -170,16 +170,16 @@ export function InvitesPanel() {
       {justCreated && (
         <div className="invites-panel__reveal" role="status">
           <p className="invites-panel__reveal-title">
-            Copy this code now; it won&apos;t be shown again.
+            Copy this invite now; it won&apos;t be shown again.
           </p>
           <div className="invites-panel__reveal-row">
             <code className="invites-panel__code">{justCreated.code}</code>
             <button
               type="button"
               className="invites-panel__btn"
-              onClick={() => void copyCode(justCreated.code)}
+              onClick={() => void copyInviteLink(justCreated.code)}
             >
-              {copied ? 'Copied' : 'Copy'}
+              {copied ? 'Link copied' : 'Copy invite link'}
             </button>
           </div>
           <button

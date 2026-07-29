@@ -5,7 +5,7 @@
 
 import { createHash } from 'node:crypto'
 import { env } from './env.js'
-import { fetchWithTimeout, WAN_TIMEOUT_MS } from './services/upstream.js'
+import { fetchWithTimeout, WAN_TIMEOUT_MS, NotConfiguredError } from './services/upstream.js'
 
 const PLEX_BASE = 'https://plex.tv/api/v2'
 
@@ -18,10 +18,19 @@ const PLEX_BASE = 'https://plex.tv/api/v2'
 // server-side createPin leaked the host's IP onto plex.tv's auth page.
 export const PLEX_PRODUCT = 'The Emerald Exchange'
 
+// Plex login is optional (plan 006 Phase 0): unset PLEX_CLIENT_ID →
+// typed 503 plex_not_configured via onError instead of a boot failure.
+// Every plex.tv call funnels its client identifier through here.
+export function requirePlexClientId(): string {
+  const clientId = env.plexClientId
+  if (!clientId) throw new NotConfiguredError('plex')
+  return clientId
+}
+
 const baseHeaders = (): Record<string, string> => ({
   Accept: 'application/json',
   'X-Plex-Product': PLEX_PRODUCT,
-  'X-Plex-Client-Identifier': env.plexClientId,
+  'X-Plex-Client-Identifier': requirePlexClientId(),
   'X-Plex-Version': '0.1.0',
   'X-Plex-Platform': 'Web',
   'X-Plex-Device': PLEX_PRODUCT,
@@ -31,6 +40,48 @@ export type Pin = {
   id: number
   code: string
   authToken: string | null
+}
+
+const PLEX_RATE_LIMIT_FALLBACK_SECONDS = 5
+const PLEX_RATE_LIMIT_LOG_MAX_SECONDS = 30
+const RETRY_AFTER_HTTP_DATE_PATTERNS = [
+  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (?:0[1-9]|[12]\d|3[01]) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} (?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d GMT$/,
+  /^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (?:0[1-9]|[12]\d|3[01])-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} (?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d GMT$/,
+  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (?: [1-9]|[12]\d|3[01]) (?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d \d{4}$/,
+]
+
+function boundedRetryAfterSeconds(retryAfter: string): number {
+  const numeric = /^\d+$/.test(retryAfter)
+    ? Number(retryAfter)
+    : Math.ceil((Date.parse(retryAfter) - Date.now()) / 1000)
+  if (!Number.isFinite(numeric)) return PLEX_RATE_LIMIT_FALLBACK_SECONDS
+  return Math.min(PLEX_RATE_LIMIT_LOG_MAX_SECONDS, Math.max(0, numeric))
+}
+
+/** Expected Plex backpressure, kept distinct from local auth rate limits. */
+export class PlexRateLimitError extends Error {
+  readonly retryAfter: string
+  readonly retryAfterSeconds: number
+
+  constructor(retryAfter: string) {
+    super('Plex PIN polling rate-limited')
+    this.name = 'PlexRateLimitError'
+    this.retryAfter = retryAfter
+    this.retryAfterSeconds = boundedRetryAfterSeconds(retryAfter)
+  }
+}
+
+function normalizedRetryAfter(value: string | null): string {
+  const candidate = value?.trim()
+  if (
+    candidate &&
+    (/^\d+$/.test(candidate) ||
+      (RETRY_AFTER_HTTP_DATE_PATTERNS.some((pattern) => pattern.test(candidate)) &&
+        Number.isFinite(Date.parse(candidate))))
+  ) {
+    return candidate
+  }
+  return String(PLEX_RATE_LIMIT_FALLBACK_SECONDS)
 }
 
 export type PlexUser = {
@@ -63,26 +114,18 @@ export async function checkPin(pinId: number): Promise<Pin> {
     WAN_TIMEOUT_MS,
     'plex.checkPin',
   )
+  if (res.status === 429) {
+    const retryAfter = normalizedRetryAfter(res.headers.get('Retry-After'))
+    throw new PlexRateLimitError(retryAfter)
+  }
   if (!res.ok) {
-    const body = await res.text().catch(() => '<read failed>')
-    console.error(
-      `[plex.checkPin] FAILED status=${res.status} pinId=${pinId} clientID=${env.plexClientId} body=${body.slice(0, 300)}`,
-    )
+    console.error(`[plex.checkPin] failed status=${res.status}`)
     throw new Error(`plex.checkPin failed: ${res.status}`)
   }
   const data = (await res.json()) as Pin
-  // Log the polled state without leaking the authToken value. A
-  // {status:'pending'} loop in production now produces evidence:
-  //   - "tokenPresent=false" forever → plex.tv has not attached a token
-  //     (popup not authorized, or clientID mismatch between create/auth/
-  //     check; the most common cause is PLEX_CLIENT_ID drift between the
-  //     server boot and the popup auth URL the SPA opened)
-  //   - "tokenPresent=true" then the rest of the route runs as normal
-  // Logged at info on every poll — at 1.5s cadence that's ~40 lines/min
-  // per signing-in user, low enough to leave on permanently.
-  console.info(
-    `[plex.checkPin] ok pinId=${pinId} tokenPresent=${Boolean(data.authToken)} clientID=${env.plexClientId}`,
-  )
+  // Keep only low-cardinality outcome evidence. PIN ids and the client id are
+  // stable login artifacts and must never enter container logs.
+  console.info(`[plex.checkPin] ok tokenPresent=${Boolean(data.authToken)}`)
   return data
 }
 
@@ -224,7 +267,7 @@ export async function listAcceptedUsers(authToken: string): Promise<PlexFriend[]
     {
       headers: {
         'X-Plex-Product': 'The Emerald Exchange',
-        'X-Plex-Client-Identifier': env.plexClientId,
+        'X-Plex-Client-Identifier': requirePlexClientId(),
         'X-Plex-Token': authToken,
         Accept: 'application/xml',
       },
@@ -338,7 +381,7 @@ export async function listSharedServerInvitees(authToken: string): Promise<PlexF
     res = await fetch(url, {
       headers: {
         'X-Plex-Product': 'The Emerald Exchange',
-        'X-Plex-Client-Identifier': env.plexClientId,
+        'X-Plex-Client-Identifier': requirePlexClientId(),
         'X-Plex-Token': authToken,
         Accept: 'application/xml',
       },
@@ -424,7 +467,7 @@ export async function listHomeUsers(authToken: string): Promise<PlexFriend[]> {
     res = await fetch(url, {
       headers: {
         'X-Plex-Product': 'The Emerald Exchange',
-        'X-Plex-Client-Identifier': env.plexClientId,
+        'X-Plex-Client-Identifier': requirePlexClientId(),
         'X-Plex-Token': authToken,
         Accept: 'application/xml',
       },

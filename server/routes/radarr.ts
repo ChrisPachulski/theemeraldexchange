@@ -4,7 +4,7 @@ import { Hono, type Context } from 'hono'
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { requireSection } from '../services/userPolicies.js'
 import { rateLimit } from '../middleware/rateLimit.js'
-import { radarrFetch, radarrRootFolders } from '../services/radarr.js'
+import { radarrFetch, radarrRootFolders } from '../services/arr.js'
 import { SEARCH_TIMEOUT_MS } from '../services/upstream.js'
 import {
   createGrabEventRecorder,
@@ -632,7 +632,7 @@ radarr.post('/api/v3/movie', radarrMutateLimit, async (c) => {
     if (tmdbId === undefined) return
     void postFeedback(
       { sub: session.sub, kind: 'movie', tmdb_id: tmdbId, signal: 'added' },
-      recommenderCallerFromSession(session),
+      recommenderCallerFromSession(session, c.get('requestId')),
     )
   }
 

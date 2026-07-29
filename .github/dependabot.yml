@@ -9,9 +9,9 @@
 # Merge posture is no longer "report-only": the `main` ruleset hard-gates every
 # PR on the 7 ci.yml checks, and `.github/workflows/dependabot-auto-merge.yml`
 # auto-merges low-risk bumps (patch + non-cargo-minor) once green — majors and
-# cargo minors stay manual. The remaining advisory piece is the *vuln* posture:
-# the ci.yml audit job is still high/critical-only; tighten that before
-# TestFlight. The repo is private until then (no public exposure yet).
+# cargo minors stay manual. The audit job blocks moderate-and-higher runtime
+# advisories; any exception must carry an explicit reachability rationale and
+# removal date.
 #
 # `docker` ecosystem here covers the FROM/COPY --from base images in the
 # Dockerfiles; compose `image:` pins are bumped via the same ecosystem when

@@ -46,7 +46,12 @@ export function deviceSessionToSession(reconciled: ReconciledDeviceSession): Ses
 export async function tryBearerAuth(
   c: Context,
 ): Promise<
-  | { ok: true; session: Session; claims: DeviceTokenClaims }
+  | {
+      ok: true
+      session: Session
+      claims: DeviceTokenClaims
+      identityUsername: string | null
+    }
   | { ok: false; reason: 'invalid_bearer' | 'reconcile_failed' }
   | null
 > {
@@ -72,5 +77,10 @@ export async function tryBearerAuth(
   const reconciled = reconcileDeviceToken(claims, appVersion)
   if (!reconciled) return { ok: false, reason: 'reconcile_failed' }
 
-  return { ok: true, session: deviceSessionToSession(reconciled), claims }
+  return {
+    ok: true,
+    session: deviceSessionToSession(reconciled),
+    claims,
+    identityUsername: reconciled.identity_username,
+  }
 }

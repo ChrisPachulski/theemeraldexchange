@@ -131,6 +131,109 @@ tmdb.get('/credits', async (c) => {
   return c.json({ error: 'invalid_query' }, 400)
 })
 
+// Person → filmography for cast-card routing. The app already holds the TMDB
+// person id (CastMember.id, Cast.swift:13); this turns an inert cast avatar into
+// a "more from this actor" path. combined_credits carries both movie and tv
+// roles keyed by TMDB title id, which the app/SPA already route into existing
+// movie/tv detail. Two upstream calls (bio + credits) mirror the /credits
+// handler's fetch-then-forward shape rather than append_to_response, keeping
+// each TMDB path independently stubbable.
+type PersonCredit = {
+  id: number
+  media_type?: string
+  title?: string
+  name?: string
+  poster_path?: string | null
+  release_date?: string
+  first_air_date?: string
+  character?: string
+  vote_average?: number
+  popularity?: number
+}
+
+// Cap the filmography so a prolific actor (Samuel L. Jackson: 200+ credits)
+// can't return a multi-hundred-item payload. Popularity-ranked so the most
+// recognizable titles survive the cut.
+const PERSON_CAST_CAP = 40
+
+function projectPersonCast(cast: PersonCredit[] | undefined) {
+  return (cast ?? [])
+    .filter((r) => (r.media_type === 'movie' || r.media_type === 'tv') && (r.title || r.name))
+    .sort((a, b) => (b.popularity ?? 0) - (a.popularity ?? 0) || (b.vote_average ?? 0) - (a.vote_average ?? 0))
+    .slice(0, PERSON_CAST_CAP)
+    .map((r) => ({
+      id: r.id,
+      media_type: r.media_type,
+      title: r.title ?? null,
+      name: r.name ?? null,
+      poster_path: r.poster_path ?? null,
+      release_date: r.release_date ?? null,
+      first_air_date: r.first_air_date ?? null,
+      character: r.character ?? null,
+      vote_average: r.vote_average ?? null,
+    }))
+}
+
+async function fetchPersonCredits(
+  personId: number,
+): Promise<{ cast: ReturnType<typeof projectPersonCast> } | { error: string; status: 502 }> {
+  const creditsRes = await tmdbFetch(`/person/${personId}/combined_credits`)
+  if (!creditsRes || !creditsRes.ok) {
+    return { error: 'tmdb_credits_failed', status: 502 }
+  }
+  const credits = (await creditsRes.json()) as { cast?: PersonCredit[] }
+  return { cast: projectPersonCast(credits.cast) }
+}
+
+tmdb.get('/person/:personId', async (c) => {
+  if (!(env.tmdbReadAccessToken ?? env.tmdbApiKey)) {
+    return c.json({ error: 'tmdb_not_configured' }, 503)
+  }
+  const personId = positiveIntId(c.req.param('personId'))
+  if (personId === null) {
+    return c.json({ error: 'invalid_personId' }, 400)
+  }
+
+  const personRes = await tmdbFetch(`/person/${personId}`)
+  if (!personRes || !personRes.ok) {
+    return c.json({ error: 'tmdb_person_failed', status: personRes?.status }, 502)
+  }
+  const person = (await personRes.json()) as {
+    id: number
+    name: string
+    profile_path?: string | null
+    biography?: string
+    known_for_department?: string
+  }
+
+  const credits = await fetchPersonCredits(personId)
+  if ('error' in credits) return c.json({ error: credits.error }, credits.status)
+
+  return c.json({
+    id: person.id,
+    name: person.name,
+    profile_path: person.profile_path ?? null,
+    biography: person.biography ?? null,
+    known_for_department: person.known_for_department ?? null,
+    cast: credits.cast,
+  })
+})
+
+// Credits-only variant (no bio fetch) for callers that already have the person
+// header and just want the filmography list.
+tmdb.get('/person/:personId/credits', async (c) => {
+  if (!(env.tmdbReadAccessToken ?? env.tmdbApiKey)) {
+    return c.json({ error: 'tmdb_not_configured' }, 503)
+  }
+  const personId = positiveIntId(c.req.param('personId'))
+  if (personId === null) {
+    return c.json({ error: 'invalid_personId' }, 400)
+  }
+  const credits = await fetchPersonCredits(personId)
+  if ('error' in credits) return c.json({ error: credits.error }, credits.status)
+  return c.json({ cast: credits.cast })
+})
+
 // Trending feed — surfaces TMDB's week-window list of the most-talked-
 // about titles for the requested type. Used by the Discover tab as a
 // landing row so users see something to browse before they search.

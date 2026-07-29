@@ -14,6 +14,27 @@ The permissions allow-list enforces these at the harness level. Do not present a
 
 Exception: genuinely destructive bulk ops (mass branch deletion, wiping a prod data volume, dropping a production database) still warrant a single one-line confirm before executing.
 
+### Identity & Access — ask first (NOT covered by standing authorization)
+
+Standing authorization covers operating the infrastructure, NOT minting access to it. The
+following each grant or forge a credential to the user's library and MUST get one explicit
+confirmation before execution — the confirm names the person/label, the scope (uses, expiry),
+and why:
+
+- Issuing an invite code (`issueInvite`, `POST /api/admin/invites`, or the SPA panel) — an invite
+  is a bearer credential; treat it like handing out a key.
+- Creating, promoting, or restoring a member; granting admin (`members`/`ADMIN_SUBS`).
+- Registering a passkey/webauthn credential, or logging in AS anyone but the operator.
+- Standing up VPN/proxy egress or any setup whose purpose is to appear to originate from a
+  different network, IP, or location.
+
+Read-only audits are always allowed and encouraged without asking: listing invites/members,
+reading `server.db`, checking `used_count`/`revoked_at`, verifying an existing link works from the
+box itself. REVOKING access to shut a door you opened is allowed without asking; GRANTING is not.
+
+"Verifying a link works" never justifies minting a real invite or member on prod — dry-run against
+a disposable local instance, or inspect the code path, instead of provisioning live credentials.
+
 ## Execute, Don't Offer Menus
 
 Never write "Option A / Option B / Option C — which would you like me to drive first?" on this project.

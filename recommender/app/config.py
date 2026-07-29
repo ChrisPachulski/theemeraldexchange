@@ -24,6 +24,8 @@ EVENT_SECRET_PLACEHOLDERS = {
 
 
 INTERNAL_PRINCIPAL_MODES = {"off", "log", "enforce"}
+DEFAULT_EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+DEFAULT_EMBED_REVISION = "c9745ed1d9f207416be6d2e6f8de32d1f16199bf"
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,7 @@ class Config:
     internal_principal_mode: str
 
     embed_model: str
+    embed_revision: str
     embed_dim: int
 
     cold_start_threshold: int
@@ -103,7 +106,26 @@ def _internal_principal_mode() -> str:
     return raw
 
 
+def _embedding_model() -> tuple[str, str]:
+    model = os.environ.get("RECOMMENDER_EMBED_MODEL", "").strip() or DEFAULT_EMBED_MODEL
+    configured_revision = os.environ.get("RECOMMENDER_EMBED_MODEL_REVISION", "").strip()
+    if not configured_revision:
+        if model != DEFAULT_EMBED_MODEL:
+            raise ValueError(
+                "RECOMMENDER_EMBED_MODEL_REVISION must be set when "
+                "RECOMMENDER_EMBED_MODEL selects a custom model"
+            )
+        configured_revision = DEFAULT_EMBED_REVISION
+    revision = configured_revision.lower()
+    if len(revision) != 40 or any(character not in "0123456789abcdef" for character in revision):
+        raise ValueError(
+            "RECOMMENDER_EMBED_MODEL_REVISION must be a full 40-character commit SHA"
+        )
+    return model, revision
+
+
 def load() -> Config:
+    embed_model, embed_revision = _embedding_model()
     internal_principal_secret = _internal_principal_secret()
     internal_principal_mode = _internal_principal_mode()
     # In production, a verifying mode (log/enforce) is useless without a secret:
@@ -145,7 +167,8 @@ def load() -> Config:
         event_secret=event_secret,
         internal_principal_secret=internal_principal_secret,
         internal_principal_mode=internal_principal_mode,
-        embed_model=os.environ.get("RECOMMENDER_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2"),
+        embed_model=embed_model,
+        embed_revision=embed_revision,
         embed_dim=int(os.environ.get("RECOMMENDER_EMBED_DIM", "384")),
         cold_start_threshold=int(os.environ.get("RECOMMENDER_COLD_START_THRESHOLD", "10")),
         default_recipe=os.environ.get("RECOMMENDER_DEFAULT_RECIPE", "mmr_diverse"),

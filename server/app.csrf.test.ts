@@ -95,13 +95,13 @@ afterEach(() => {
 })
 
 async function sessionCookie(role: 'admin' | 'user' = 'admin') {
-  // Use the real createSession so the cookie format matches prod.
+  // Mint the real cookie plus the active membership established at login.
   // Username MUST match the vitest test-env ADMINS list when role is
   // admin — the auth middleware reconciles the cookie role against
   // env.admins on every protected request, so an admin cookie issued
   // for a username not in ADMINS gets demoted to user and the admin-
   // only DELETE/POST handlers return 403.
-  const { createSession } = await import('./session.js')
+  const { createMemberSession: createSession } = await import('./test/authFixture.js')
   const username = role === 'admin' ? 'admin-user' : 'user'
   const token = await createSession({ sub: 'plex:1', username, role })
   return `eex.session=${token}`
@@ -120,6 +120,30 @@ describe('app CSRF — safe GETs pass through', () => {
       headers: { Origin: HOSTILE },
     })
     expect(r.status).toBe(200)
+  })
+
+  it('exposes Retry-After to the allowed cross-origin SPA', async () => {
+    const r = await app.request('/api/health', {
+      headers: { Origin: ALLOWED },
+    })
+    expect(r.status).toBe(200)
+    expect(r.headers.get('Access-Control-Expose-Headers'))
+      .toContain('Retry-After')
+  })
+
+  it('allows the settings expected-principal header on CORS preflight', async () => {
+    const r = await app.request('/api/settings/anthropic-key', {
+      method: 'OPTIONS',
+      headers: {
+        Origin: ALLOWED,
+        'Access-Control-Request-Method': 'PUT',
+        'Access-Control-Request-Headers': 'content-type,x-eex-expected-sub',
+      },
+    })
+
+    expect(r.status).toBe(204)
+    expect(r.headers.get('Access-Control-Allow-Headers'))
+      .toContain('X-EEX-Expected-Sub')
   })
 
   it('/api/limits works with no Origin', async () => {
@@ -231,6 +255,22 @@ describe('app CSRF — state-changing routes reject bad Origin', () => {
     expect(r.status).toBe(403)
     const json = (await r.json()) as { reason?: string }
     expect(json.reason).toBe('bad_origin')
+  })
+})
+
+describe('app CSRF — native bootstrap paths reject browser login-CSRF', () => {
+  it('rejects a cookieless hostile text/plain POST to /api/auth/google before route parsing', async () => {
+    const r = await app.request('/api/auth/google', {
+      method: 'POST',
+      headers: {
+        Origin: HOSTILE,
+        'Content-Type': 'text/plain',
+      },
+      body: JSON.stringify({ credential: 'attacker-controlled-id-token' }),
+    })
+
+    expect(r.status).toBe(403)
+    expect(await r.json()).toEqual({ error: 'forbidden', reason: 'bad_origin' })
   })
 })
 

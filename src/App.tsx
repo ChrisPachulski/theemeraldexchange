@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect } from 'react'
 import { TopNav } from './components/nav/TopNav'
 import { HomeNav } from './components/nav/HomeNav'
+import { SetupChecklist } from './components/setup/SetupChecklist'
 import { HomeTab } from './components/tabs/HomeTab'
 import { Kraken } from './components/atmosphere/Kraken'
 import { LoadingPulse } from './components/feedback/LoadingPulse'
@@ -66,13 +67,24 @@ function Shell() {
   // The Live tab is gated by IPTV_DISABLED — bounce on stale links too
   // (the route still exists in the enum so old bookmarks don't 404 the
   // SPA itself; they just round-trip to home).
+  // Optional integrations (plan 006 Phase 3): a tab whose backing service
+  // is unconfigured bounces home, same as the IPTV gate.
+  const sonarrEnabled = limits.data?.sonarrEnabled !== false
+  const radarrEnabled = limits.data?.radarrEnabled !== false
+  const sabEnabled = limits.data?.sabEnabled !== false
   useEffect(() => {
     if (route === 'users' && !isAdmin) navigate('home')
     if (route === 'live' && !iptvEnabled) navigate('home')
-  }, [route, isAdmin, iptvEnabled, navigate])
+    if (route === 'tv' && !sonarrEnabled) navigate('home')
+    if (route === 'movies' && !radarrEnabled) navigate('home')
+    if (route === 'downloads' && !sabEnabled) navigate('home')
+  }, [route, isAdmin, iptvEnabled, sonarrEnabled, radarrEnabled, sabEnabled, navigate])
   const blocked =
     (route === 'users' && !isAdmin) ||
-    (route === 'live' && !iptvEnabled)
+    (route === 'live' && !iptvEnabled) ||
+    (route === 'tv' && !sonarrEnabled) ||
+    (route === 'movies' && !radarrEnabled) ||
+    (route === 'downloads' && !sabEnabled)
   const effectiveRoute: Route = blocked ? 'home' : route
   const ActiveTab = TABS[effectiveRoute]
   const krakenVariant = effectiveRoute === 'home' ? 'kraken' : 'resting'
@@ -81,6 +93,9 @@ function Shell() {
     <>
       <Kraken variant={krakenVariant} />
       {effectiveRoute === 'home' ? <HomeNav /> : <TopNav active={effectiveRoute} />}
+      {/* First-run setup checklist (plan 006 Phase 3): admin-only, appears
+          once after claiming a fresh server, dismissible forever. */}
+      {effectiveRoute === 'home' && <SetupChecklist />}
       <main role="main">
         <Suspense fallback={<LoadingPulse>Loading</LoadingPulse>}>
           <ActiveTab />
@@ -91,26 +106,41 @@ function Shell() {
   )
 }
 
-// Gate the whole dashboard behind a Plex session. Unauthenticated
+// Gate the whole dashboard behind a confirmed browser session. Unauthenticated
 // visitors land on the public Walkthrough — the showcase IS the
-// pre-auth experience, with Plex sign-in CTAs embedded in the hero
+// pre-auth experience, with provider sign-in CTAs embedded in the hero
 // and footer. The kraken atmosphere keeps playing under both states
-// so the brand is present from first paint. While /api/me is in
-// flight we render nothing — short (one-RTT) flash, avoids any
-// pop-in for already-authed users.
-function AuthGate() {
-  const { loading, user } = useAuth()
-  if (loading) return null
-  if (!user) {
+// so the brand is present from first paint. While /api/me is in flight
+// we render nothing; an unavailable read gets a branded Retry state
+// instead of flashing the logged-out walkthrough.
+function AuthGate({ initialInviteCode }: { initialInviteCode: string }) {
+  const { sessionState, sessionError, retrySession, user } = useAuth()
+  if (sessionState === 'loading') return null
+  if (sessionState === 'unavailable' || (sessionState === 'authenticated' && !user)) {
+    return (
+      <main role="main" aria-labelledby="session-unavailable-title">
+        <section role="alert" aria-live="polite">
+          <p>The Emerald Exchange</p>
+          <h1 id="session-unavailable-title">Session unavailable</h1>
+          <p>{sessionError ?? 'We couldn’t verify your session.'}</p>
+          <button type="button" onClick={() => void retrySession()}>
+            Retry
+          </button>
+        </section>
+      </main>
+    )
+  }
+  if (sessionState === 'anonymous') {
     // Suspense fallback here is essentially invisible — the Kraken inside
     // Walkthrough is the brand atmosphere, and on second visit the chunk
     // is already in HTTP cache. Render nothing during the brief gap.
     return (
       <Suspense fallback={null}>
-        <Walkthrough />
+        <Walkthrough initialInviteCode={initialInviteCode} />
       </Suspense>
     )
   }
+  if (!user) return null
   return (
     <NavTransitionProvider>
       <Shell />
@@ -118,10 +148,10 @@ function AuthGate() {
   )
 }
 
-function App() {
+function App({ initialInviteCode = '' }: { initialInviteCode?: string }) {
   return (
     <AuthProvider>
-      <AuthGate />
+      <AuthGate initialInviteCode={initialInviteCode} />
     </AuthProvider>
   )
 }

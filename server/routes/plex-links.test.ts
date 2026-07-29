@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Hono } from 'hono'
 import { plexLinks, _resetPlexLinksCacheForTests } from './plex-links.js'
-import { createSession } from '../session.js'
+import { createMemberSession as createSession } from '../test/authFixture.js'
 import type { Env } from '../middleware/auth.js'
 
 // Hono helper — wraps the route under test in a minimal app so we can

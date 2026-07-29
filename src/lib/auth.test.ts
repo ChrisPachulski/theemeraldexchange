@@ -50,6 +50,9 @@ describe('authModeFromUser', () => {
   it('infers local from the sub prefix', () => {
     expect(authModeFromUser({ sub: 'local:dev' })).toBe('local')
   })
+  it('infers google from the sub prefix', () => {
+    expect(authModeFromUser({ sub: 'google:member-42' })).toBe('google')
+  })
   it('defaults to plex for an unprefixed/plex sub', () => {
     expect(authModeFromUser({ sub: 'plex:42' })).toBe('plex')
   })

@@ -51,10 +51,11 @@ afterEach(() => {
 })
 
 async function sessionCookie(role: 'admin' | 'user' = 'user') {
-  // Real createSession so the cookie format matches prod. For admin the
+  // The fixture mints a real cookie and the active member row that every
+  // successful production login establishes. For admin the
   // username must be in the test-env ADMINS list ('admin-user') — the gate
   // recomputes the role from env.admins on every request.
-  const { createSession } = await import('./session.js')
+  const { createMemberSession: createSession } = await import('./test/authFixture.js')
   const username = role === 'admin' ? 'admin-user' : 'user'
   const token = await createSession({ sub: 'plex:1', username, role })
   return `eex.session=${token}`

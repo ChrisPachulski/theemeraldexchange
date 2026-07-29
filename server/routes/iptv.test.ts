@@ -9,6 +9,7 @@ import { __setSsrfLookupForTests } from '../services/ssrfGuard.js'
 import { signStreamToken } from '../services/iptvStreamToken.js'
 import { _resetLiveRemuxIndexForTests } from '../services/iptvLiveRemuxMap.js'
 import { _setUserPoliciesPathForTests } from '../services/userPolicies.js'
+import { __resetRateLimitsForTests } from '../middleware/rateLimit.js'
 import { env } from '../env.js'
 
 const dbState = vi.hoisted(() => ({
@@ -168,6 +169,9 @@ const remuxState = vi.hoisted(() => ({
   // virtual filesystem: path -> contents (manifest string, '' for segments)
   files: new Map<string, string>(),
   startCalls: [] as Array<{ streamId: string; sub: string; upstreamUrl: string }>,
+  // streamIds iptvRemux currently remembers as dead-channel placeholders, so a
+  // test can drive the dead-feed failover / channel_offline_upstream path.
+  deadFeeds: new Set<string>(),
 }))
 
 vi.mock('../services/iptvRemux.js', () => ({
@@ -183,6 +187,11 @@ vi.mock('../services/iptvRemux.js', () => ({
   }),
   heartbeatRemuxSession: vi.fn(),
   channelNeedsReencode: vi.fn(() => false),
+  channelIsDeadFeed: vi.fn((streamId: string) => remuxState.deadFeeds.has(streamId)),
+  markChannelDeadFeed: vi.fn((streamId: string) => {
+    remuxState.deadFeeds.add(streamId)
+  }),
+  DEAD_FEED_CLEAN_EOF_MS: 60_000,
 }))
 
 // node:fs is shared with better-sqlite3 migrations (which readFileSync the .sql
@@ -445,6 +454,77 @@ describe('DELETE /api/iptv/sessions/:sessionId', () => {
   })
 })
 
+describe('guide preview intent + remux session teardown (finding 89)', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+  const manifestPath = '/tmp/remux/sess-1/index.m3u8'
+  // ≥ START_SEGMENTS (4) so the manifest poll's readiness gate is satisfied at
+  // once and a live remux session is registered (see the remux delivery tests).
+  const sampleManifest =
+    '#EXTM3U\n#EXTINF:6,\nseg_00000.ts\n#EXTINF:6,\nseg_00001.ts\n' +
+    '#EXTINF:6,\nseg_00002.ts\n#EXTINF:6,\nseg_00003.ts\n'
+
+  beforeEach(() => {
+    remuxState.activeSessions.clear()
+    remuxState.files.clear()
+    remuxState.startCalls.length = 0
+    remuxState.deadFeeds.clear()
+    _resetLiveRemuxIndexForTests()
+  })
+
+  // Bring channel 10 up as a live remux session for the current account: grant it,
+  // then poll its manifest so ffmpeg (mock) + liveRemuxIndex both exist.
+  async function watchChannel10() {
+    await app.request('/api/iptv/stream/live/10/grant?client=avplayer', { method: 'POST' })
+    remuxState.files.set(manifestPath, sampleManifest)
+    const res = await app.request(
+      `/api/iptv/stream/live/10/remux/index.m3u8?t=${fakeToken('remux', '10')}`,
+    )
+    expect(res.status).toBe(200)
+    expect(remuxState.activeSessions.has('sess-1')).toBe(true)
+  }
+
+  it('a preview-intent grant does NOT evict the account\'s active watch session', async () => {
+    await watchChannel10()
+    // Same account focuses channel 20 in the guide → PREVIEW grant. It must NOT
+    // run the one-tuner teardown, so channel 10's live session survives.
+    const preview = await app.request(
+      '/api/iptv/stream/live/20/grant?client=avplayer&intent=preview',
+      { method: 'POST' },
+    )
+    expect(preview.status).toBe(200)
+    expect(remuxState.activeSessions.has('sess-1')).toBe(true)
+  })
+
+  it('a normal (non-preview) grant DOES evict the account\'s other live channel', async () => {
+    await watchChannel10()
+    // Contrast: without intent=preview, tuning a new channel tears the old down.
+    await app.request('/api/iptv/stream/live/20/grant?client=avplayer', { method: 'POST' })
+    expect(remuxState.activeSessions.has('sess-1')).toBe(false)
+  })
+
+  it('DELETE /sessions of a remux slot stops the underlying ffmpeg immediately', async () => {
+    await watchChannel10()
+    // The concurrency tracker holds the 'remux' slot minted at grant time
+    // (resourceId = the streamId). Killing that slot via the sessions widget must
+    // ALSO stop the remux ffmpeg so the provider connection releases now, not at
+    // the 90s idle sweep. Red before the DELETE fix: release() frees only the
+    // slot and leaves sess-1 active.
+    concurrencyState.sessions.push({
+      sessionId: 'grant-remux-10',
+      sub: 'plex:42',
+      kind: 'remux',
+      resourceId: '10',
+      title: 'CNN',
+      ip: null,
+      startedAt: 1,
+      lastSeen: 1,
+    })
+    const res = await app.request('/api/iptv/sessions/grant-remux-10', { method: 'DELETE' })
+    expect(res.status).toBe(200)
+    expect(remuxState.activeSessions.has('sess-1')).toBe(false)
+  })
+})
+
 describe('live stream grant + proxy', () => {
   const app = new Hono().route('/api/iptv', iptv)
 
@@ -590,6 +670,66 @@ describe('catchup stream grant + proxy', () => {
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     )
     fetchSpy.mockRestore()
+  })
+
+  // Catchup is time-shifted live content and shares the `live` section gate:
+  // a member whose policy denies Live TV must not get a catchup token either,
+  // even when no rating cap is set (capBlocksUnrated is a no-op when
+  // maxContentRating is null, so the section gate is the only thing that stops
+  // them). Mirrors the live-grant section-policy tests above.
+  describe('catchup section policy', () => {
+    let catchupPolicyDir: string
+    let catchupPolicyPath: string
+    beforeEach(async () => {
+      catchupPolicyDir = await fsp.mkdtemp(join(tmpdir(), 'iptv-catchup-policy-'))
+      catchupPolicyPath = join(catchupPolicyDir, 'user-policies.json')
+      _setUserPoliciesPathForTests(catchupPolicyPath)
+    })
+    afterEach(async () => {
+      _setUserPoliciesPathForTests(env.userPoliciesPath)
+      authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
+      await fsp.rm(catchupPolicyDir, { recursive: true, force: true })
+    })
+
+    const grantUrl = () => {
+      const startUtc = new Date(Date.now() - 60 * 60_000).toISOString()
+      return `/api/iptv/stream/catchup/10/grant?startUtc=${encodeURIComponent(startUtc)}&durationMin=30`
+    }
+
+    it('403 section_blocked for a non-admin whose policy denies live (no rating cap)', async () => {
+      authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+      await fsp.writeFile(
+        catchupPolicyPath,
+        JSON.stringify({
+          'plex:99': {
+            maxContentRating: null,
+            allowedSections: { live: false, downloads: true, arr: true },
+            kid: true,
+          },
+        }),
+      )
+      _setUserPoliciesPathForTests(catchupPolicyPath)
+      const res = await app.request(grantUrl(), { method: 'POST' })
+      expect(res.status).toBe(403)
+      expect(await res.json()).toEqual({ error: 'section_blocked' })
+    })
+
+    it('allows a non-admin whose policy permits live', async () => {
+      authState.session = { sub: 'plex:99', username: 'Teen', role: 'user' }
+      await fsp.writeFile(
+        catchupPolicyPath,
+        JSON.stringify({
+          'plex:99': {
+            maxContentRating: null,
+            allowedSections: { live: true, downloads: false, arr: false },
+            kid: false,
+          },
+        }),
+      )
+      _setUserPoliciesPathForTests(catchupPolicyPath)
+      const res = await app.request(grantUrl(), { method: 'POST' })
+      expect(res.status).toBe(200)
+    })
   })
 })
 
@@ -782,6 +922,20 @@ describe('vod stream grant + proxy', () => {
     }
   })
 
+  // MED/LOW-24: the series byte route interpolates `ext` raw into the upstream
+  // provider URL, so a `%3F`-decoded query string in ext must be rejected before
+  // any upstream fetch fires — the same guard the VOD byte route already applies.
+  it('rejects an injected query string in the series byte ext (invalid_id, no upstream fetch)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    const res = await app.request(
+      `/api/iptv/stream/series/ep-1/mp4%3Fdel%3D1?t=${fakeToken('series', 'ep-1')}`,
+    )
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toBe('invalid_id')
+    expect(fetchSpy).not.toHaveBeenCalled()
+    fetchSpy.mockRestore()
+  })
+
   it('rewrites HLS playlists to signed segment proxy URLs', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response([
       '#EXTM3U',
@@ -802,6 +956,74 @@ describe('vod stream grant + proxy', () => {
     )
     expect(text).toContain(`/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', 'https://panel.example.com/movie/u/p/seg-001.ts'))}`)
     fetchSpy.mockRestore()
+  })
+})
+
+// Regression (S0-3): VOD / series / catch-up grant tokens — AND the HLS
+// segment tokens minted from their manifests — used the 300s finite-asset TTL.
+// On-demand playback re-presents the token on every range GET / seek / HLS
+// segment fetch across the whole runtime, and the byte/segment handlers
+// re-check `exp` each time, so any movie or episode past ~5 minutes 401'd and
+// stalled/ejected mid-play (identical failure class to the already-fixed
+// live-cable-froze-at-5min bug). On-demand tokens must outlast a sitting — the
+// playback-duration TTL local media uses — while live remux segments stay short.
+describe('on-demand grant token TTL (S0-3 regression)', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+
+  // Read the ttlSecs the grant passed to the (mocked) signStreamToken for the
+  // given kind — same technique as the live-TTL regression test above.
+  async function grantTtl(path: string, kind: string): Promise<number> {
+    const mock = vi.mocked(signStreamToken)
+    mock.mockClear()
+    const res = await app.request(path, { method: 'POST' })
+    expect(res.status).toBe(200)
+    const call = mock.mock.calls.find(([, o]) => (o as { kind: string }).kind === kind)
+    expect(call, `grant should mint a ${kind} token`).toBeDefined()
+    return (call![1] as { ttlSecs: number }).ttlSecs
+  }
+
+  it('VOD grant token uses the long on-demand TTL, not the 300s finite-asset TTL', async () => {
+    const ttl = await grantTtl('/api/iptv/stream/vod/20/grant', 'vod')
+    expect(ttl).toBe(env.IPTV_ONDEMAND_TOKEN_TTL_SECS)
+    // The bug: this equalled IPTV_STREAM_TOKEN_TTL_SECS (300) → froze at 5min.
+    expect(ttl).toBeGreaterThan(env.IPTV_STREAM_TOKEN_TTL_SECS)
+  })
+
+  it('series grant token uses the long on-demand TTL', async () => {
+    const ttl = await grantTtl('/api/iptv/stream/series/ep-1/grant', 'series')
+    expect(ttl).toBe(env.IPTV_ONDEMAND_TOKEN_TTL_SECS)
+    expect(ttl).toBeGreaterThan(env.IPTV_STREAM_TOKEN_TTL_SECS)
+  })
+
+  it('catch-up grant token uses the long on-demand TTL', async () => {
+    const startUtc = new Date(Date.now() - 60 * 60_000).toISOString()
+    const ttl = await grantTtl(
+      `/api/iptv/stream/catchup/10/grant?startUtc=${encodeURIComponent(startUtc)}&durationMin=30`,
+      'catchup',
+    )
+    expect(ttl).toBe(env.IPTV_ONDEMAND_TOKEN_TTL_SECS)
+    expect(ttl).toBeGreaterThan(env.IPTV_STREAM_TOKEN_TTL_SECS)
+  })
+
+  it('HLS segment tokens minted from a VOD manifest use the long on-demand TTL', async () => {
+    const mock = vi.mocked(signStreamToken)
+    mock.mockClear()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response([
+      '#EXTM3U',
+      '#EXTINF:6.0,',
+      'seg-001.ts',
+    ].join('\n'), { status: 200, headers: { 'content-type': 'application/vnd.apple.mpegurl' } }))
+    try {
+      const res = await app.request(`/api/iptv/stream/vod/20/m3u8?t=${fakeToken('vod', '20')}`)
+      expect(res.status).toBe(200)
+      const seg = mock.mock.calls.find(([, o]) => (o as { kind: string }).kind === 'segment')
+      expect(seg, 'manifest rewrite should mint a segment token').toBeDefined()
+      const ttl = (seg![1] as { ttlSecs: number }).ttlSecs
+      expect(ttl).toBe(env.IPTV_ONDEMAND_TOKEN_TTL_SECS)
+      expect(ttl).toBeGreaterThan(env.IPTV_STREAM_TOKEN_TTL_SECS)
+    } finally {
+      fetchSpy.mockRestore()
+    }
   })
 })
 
@@ -866,6 +1088,95 @@ describe('series stream grant', () => {
     expect(body.url).toContain('/api/iptv/stream/series/ep-1/mkv?t=fake.series.ZXAtMQ')
     expect(body.delivery).toBe('progressive')
     expect(body.mime).toBe('video/x-matroska')
+  })
+})
+
+// The whole IPTV catalog (VOD + Series) is surfaced under the client's Live
+// tab, so the vod and series grants share the `live` section gate with the
+// live/catchup grants: a member whose policy denies Live TV must not be able to
+// mint a VOD or series token either, even with no rating cap set
+// (capBlocksUnrated is a no-op when maxContentRating is null, so the section
+// gate is the only thing that stops them). Mirrors the catchup section-policy
+// tests above.
+describe('vod + series section policy', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+  let sectionPolicyDir: string
+  let sectionPolicyPath: string
+  beforeEach(async () => {
+    sectionPolicyDir = await fsp.mkdtemp(join(tmpdir(), 'iptv-vodseries-policy-'))
+    sectionPolicyPath = join(sectionPolicyDir, 'user-policies.json')
+    _setUserPoliciesPathForTests(sectionPolicyPath)
+  })
+  afterEach(async () => {
+    _setUserPoliciesPathForTests(env.userPoliciesPath)
+    authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
+    await fsp.rm(sectionPolicyDir, { recursive: true, force: true })
+  })
+
+  const denyLive = async (sub: string) => {
+    await fsp.writeFile(
+      sectionPolicyPath,
+      JSON.stringify({
+        [sub]: {
+          maxContentRating: null,
+          allowedSections: { live: false, downloads: true, arr: true },
+          kid: true,
+        },
+      }),
+    )
+    _setUserPoliciesPathForTests(sectionPolicyPath)
+  }
+  const allowLive = async (sub: string) => {
+    await fsp.writeFile(
+      sectionPolicyPath,
+      JSON.stringify({
+        [sub]: {
+          maxContentRating: null,
+          allowedSections: { live: true, downloads: false, arr: false },
+          kid: false,
+        },
+      }),
+    )
+    _setUserPoliciesPathForTests(sectionPolicyPath)
+  }
+
+  it('403 section_blocked on vod grant for a non-admin whose policy denies live', async () => {
+    authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+    await denyLive('plex:99')
+    const res = await app.request('/api/iptv/stream/vod/20/grant', { method: 'POST' })
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: 'section_blocked' })
+  })
+
+  it('403 section_blocked on series grant for a non-admin whose policy denies live', async () => {
+    authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+    await denyLive('plex:99')
+    const res = await app.request('/api/iptv/stream/series/ep-1/grant', { method: 'POST' })
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: 'section_blocked' })
+  })
+
+  it('allows the vod grant for a non-admin whose policy permits live', async () => {
+    authState.session = { sub: 'plex:99', username: 'Teen', role: 'user' }
+    await allowLive('plex:99')
+    const res = await app.request('/api/iptv/stream/vod/20/grant', { method: 'POST' })
+    expect(res.status).toBe(200)
+  })
+
+  it('allows the series grant for a non-admin whose policy permits live', async () => {
+    authState.session = { sub: 'plex:99', username: 'Teen', role: 'user' }
+    await allowLive('plex:99')
+    const res = await app.request('/api/iptv/stream/series/ep-1/grant', { method: 'POST' })
+    expect(res.status).toBe(200)
+  })
+
+  it('admin is never blocked on vod/series even under a live:false policy', async () => {
+    authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
+    await denyLive('plex:42')
+    const vodRes = await app.request('/api/iptv/stream/vod/20/grant', { method: 'POST' })
+    expect(vodRes.status).toBe(200)
+    const seriesRes = await app.request('/api/iptv/stream/series/ep-1/grant', { method: 'POST' })
+    expect(seriesRes.status).toBe(200)
   })
 })
 
@@ -995,7 +1306,7 @@ describe('segment proxy', () => {
   })
 
   it('refuses a segment whose public host RESOLVES to cloud metadata (DNS rebinding, finding 3-1/16-0)', async () => {
-    // The host string passes isPublicHttpsUpstream, but DNS points at the
+    // The host string passes isPublicUpstream, but DNS points at the
     // link-local cloud-metadata address — resolve-and-validate must reject
     // BEFORE any egress.
     __setSsrfLookupForTests(async () => [{ address: '169.254.169.254' }])
@@ -1054,7 +1365,7 @@ describe('segment proxy', () => {
 
   it('rejects a segment whose rid is not a parseable URL (bad_upstream 400)', async () => {
     // A valid segment token whose rid is a malformed URL string: new URL()
-    // throws, so the route returns bad_upstream 400 before isPublicHttpsUpstream
+    // throws, so the route returns bad_upstream 400 before isPublicUpstream
     // or any fetch. Covers the URL-parse try/catch branch (iptv.ts ~1153).
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
     const res = await app.request(
@@ -1412,6 +1723,7 @@ describe('remux live delivery (AVPlayer)', () => {
     remuxState.activeSessions.clear()
     remuxState.files.clear()
     remuxState.startCalls.length = 0
+    remuxState.deadFeeds.clear()
     // Clear the live-remux index AND the reconnect-throttle state so a prior
     // test's "recent dial / fast death" can't throttle this test's first tune.
     _resetLiveRemuxIndexForTests()
@@ -1474,6 +1786,23 @@ describe('remux live delivery (AVPlayer)', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('index.m3u8 returns terminal channel_offline_upstream (no Retry-After) for a dead feed', async () => {
+    // Channel 10 (seeded in beforeAll, no live sibling) EOF'd cleanly as a
+    // dead-channel placeholder, so iptvRemux tagged it dead. Every candidate
+    // feed is now dead → the channel is offline upstream (terminal), which must
+    // be distinguishable from the transient remux_warming a client would retry.
+    remuxState.deadFeeds.add('10')
+    const res = await app.request(
+      `/api/iptv/stream/live/10/remux/index.m3u8?t=${fakeToken('remux', '10')}`,
+    )
+    expect(res.status).toBe(503)
+    expect(res.headers.get('Retry-After')).toBeNull()
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toBe('channel_offline_upstream')
+    // A known-dead feed is never re-dialed — no upstream connection is opened.
+    expect(remuxState.startCalls.length).toBe(0)
   })
 
   // ── seg ─────────────────────────────────────────────────────────────────
@@ -1547,5 +1876,221 @@ describe('remux live delivery (AVPlayer)', () => {
     expect(res.status).toBe(404)
     const body = (await res.json()) as { error: string }
     expect(body.error).toBe('segment_gone')
+  })
+})
+
+describe('GET /api/iptv/epg/search — server-side programme search', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+  // A fixed window so the test never depends on wall-clock. The endpoint's
+  // default is now..now+4h; we pass explicit from/to to bound the seeded data.
+  const from = '2026-07-06T00:00:00Z'
+  const to = '2026-07-06T06:00:00Z'
+
+  // Fresh token bucket per test so the per-caller limiter (capacity 10) never
+  // starts pre-drained from a neighbouring case.
+  beforeEach(() => {
+    __resetRateLimitsForTests()
+  })
+
+  beforeAll(() => {
+    const db = dbState.testDb!
+    // Two channels the tvOS guide would NOT pre-fetch (high num, beyond the warm
+    // cap) — the exact case the client-side scan could never reach.
+    db.stmts.upsertChannel.run({
+      stream_id: 700, num: 500, name: 'YES Network', stream_icon: null,
+      epg_channel_id: 'yes.us', category_id: 5, is_adult: 0,
+      tv_archive: 0, tv_archive_duration: null, added_ts: null, fetched_at: from,
+    })
+    db.stmts.upsertChannel.run({
+      stream_id: 701, num: 501, name: 'Food Net', stream_icon: null,
+      epg_channel_id: 'food.us', category_id: 6, is_adult: 0,
+      tv_archive: 0, tv_archive_duration: null, added_ts: null, fetched_at: from,
+    })
+    // YES: one description-match then one title-match (programIndex 0, then 1).
+    db.stmts.upsertEpg.run({
+      channel_id: 'yes.us', start_utc: '2026-07-06T01:00:00Z', stop_utc: '2026-07-06T02:00:00Z',
+      title: 'Pregame', description: 'Yankees preview',
+    })
+    db.stmts.upsertEpg.run({
+      channel_id: 'yes.us', start_utc: '2026-07-06T02:00:00Z', stop_utc: '2026-07-06T04:00:00Z',
+      title: 'Yankees vs Red Sox', description: 'MLB regular season',
+    })
+    // Food channel: no 'Yankees' anywhere — must never surface for that query.
+    db.stmts.upsertEpg.run({
+      channel_id: 'food.us', start_utc: '2026-07-06T01:00:00Z', stop_utc: '2026-07-06T02:00:00Z',
+      title: 'Cooking Show', description: 'recipes',
+    })
+  })
+
+  it('finds programmes on a channel absent from the warm grid, title + description', async () => {
+    const res = await app.request(
+      `/api/iptv/epg/search?q=Yankees&from=${from}&to=${to}`,
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      total: number
+      hits: Array<{
+        streamId: number; channelName: string; categoryId: number | null; programIndex: number
+        programme: { channel_id: string; start_utc: string; stop_utc: string; title: string | null; description: string | null }
+      }>
+    }
+    expect(body.total).toBe(2)
+    expect(body.hits).toHaveLength(2)
+    // Both hits are the non-warm YES channel; the Food channel never appears.
+    expect(body.hits.every((h) => h.streamId === 700 && h.channelName === 'YES Network' && h.categoryId === 5)).toBe(true)
+    // Ordered by programme start → description-match (idx 0) before title-match (idx 1).
+    expect(body.hits.map((h) => h.programIndex)).toEqual([0, 1])
+    expect(body.hits[1].programme.title).toBe('Yankees vs Red Sox')
+    // Programme reuses the grid projection (snake_case) so it decodes into the
+    // client's existing EpgProgram type.
+    expect(body.hits[0].programme).toMatchObject({
+      channel_id: 'yes.us',
+      start_utc: '2026-07-06T01:00:00Z',
+      stop_utc: '2026-07-06T02:00:00Z',
+    })
+  })
+
+  it('missing q → 400 invalid_query', async () => {
+    const res = await app.request(`/api/iptv/epg/search?from=${from}&to=${to}`)
+    expect(res.status).toBe(400)
+    expect((await res.json()) as { error: string }).toEqual({ error: 'invalid_query' })
+  })
+
+  it('1-char q → 400 invalid_query (min length narrows the scan)', async () => {
+    const res = await app.request(`/api/iptv/epg/search?q=e&from=${from}&to=${to}`)
+    expect(res.status).toBe(400)
+    expect((await res.json()) as { error: string }).toEqual({ error: 'invalid_query' })
+  })
+
+  it('rate-limits a burst: the 11th request within 1s → 429', async () => {
+    const url = `/api/iptv/epg/search?q=Yankees&from=${from}&to=${to}`
+    for (let i = 0; i < 10; i++) {
+      expect((await app.request(url)).status).toBe(200)
+    }
+    const res = await app.request(url)
+    expect(res.status).toBe(429)
+  })
+
+  it('categoryIds filter excludes channels outside the set', async () => {
+    // YES is category 5; filtering to category 6 (Food) yields no Yankees hit.
+    const res = await app.request(
+      `/api/iptv/epg/search?q=Yankees&from=${from}&to=${to}&categoryIds=6`,
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { total: number; hits: unknown[] }
+    expect(body.total).toBe(0)
+    expect(body.hits).toEqual([])
+  })
+
+  it('respects limit while total reports the full match count', async () => {
+    const res = await app.request(
+      `/api/iptv/epg/search?q=Yankees&from=${from}&to=${to}&limit=1`,
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { total: number; hits: unknown[] }
+    expect(body.hits).toHaveLength(1)
+    expect(body.total).toBe(2)
+  })
+})
+
+// Finding 95: dead-feed sibling failover on the RAW .ts byte proxy (the path
+// every Chrome/Firefox/Edge live viewer uses). The remux/HLS path already fails
+// over to a live sibling and reports channel_offline_upstream when all feeds are
+// dead; the .ts path dialed only the granted feed and returned a hard 502 that
+// mpegts.js could never recover from — same channel worked on the TV, stayed
+// permanently dead on the web. These drive the two mock upstreams + sibling the
+// verifier specified.
+describe('GET /api/iptv/stream/live/:id.ts — dead-feed sibling failover', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+  const tsUrl = (sid: string) => `https://panel.example.com/live/u/p/${sid}.ts`
+
+  beforeAll(() => {
+    const db = dbState.testDb!
+    // Two sibling feeds sharing an epg_channel_id — resolveSiblingFeeds('900')
+    // yields ['900','901']. A unique epg/name so they never fold into CNN et al.
+    db.stmts.upsertChannel.run({
+      stream_id: 900, num: 900, name: 'Gate95 Sports', stream_icon: null,
+      epg_channel_id: 'gate95.us', category_id: 9, is_adult: 0,
+      tv_archive: 0, tv_archive_duration: null, added_ts: null, fetched_at: '2026-07-06T00:00:00Z',
+    })
+    db.stmts.upsertChannel.run({
+      stream_id: 901, num: 901, name: 'Gate95 Sports', stream_icon: null,
+      epg_channel_id: 'gate95.us', category_id: 9, is_adult: 0,
+      tv_archive: 0, tv_archive_duration: null, added_ts: null, fetched_at: '2026-07-06T00:00:00Z',
+    })
+  })
+
+  beforeEach(() => {
+    remuxState.deadFeeds.clear()
+    __setSsrfLookupForTests(async () => [{ address: '203.0.113.7' }])
+  })
+
+  it('fails over to a live sibling when the granted feed is hard-down (was a 502 upstream_*)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: Parameters<typeof globalThis.fetch>[0]) => {
+      const url = String(input)
+      if (url.includes('/900.ts')) return new Response(null, { status: 404 })
+      if (url.includes('/901.ts')) return new Response('sibling-bytes', { status: 200 })
+      throw new Error(`unexpected fetch ${url}`)
+    })
+
+    const res = await app.request(`/api/iptv/stream/live/900.ts?t=${fakeToken('live', '900')}`)
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('video/mp2t')
+    expect(await res.text()).toBe('sibling-bytes')
+    // Dialed the dead feed first, then the live sibling.
+    expect(fetchSpy).toHaveBeenCalledWith(tsUrl('900'), expect.anything())
+    expect(fetchSpy).toHaveBeenCalledWith(tsUrl('901'), expect.anything())
+    fetchSpy.mockRestore()
+  })
+
+  it('returns 503 channel_offline_upstream when every candidate feed is down (not 502)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: Parameters<typeof globalThis.fetch>[0]) => {
+      const url = String(input)
+      if (url.includes('/900.ts') || url.includes('/901.ts')) return new Response(null, { status: 404 })
+      throw new Error(`unexpected fetch ${url}`)
+    })
+
+    const res = await app.request(`/api/iptv/stream/live/900.ts?t=${fakeToken('live', '900')}`)
+
+    expect(res.status).toBe(503)
+    expect((await res.json()) as { error: string }).toEqual({ error: 'channel_offline_upstream' })
+    fetchSpy.mockRestore()
+  })
+
+  it('skips a feed already remembered as a dead placeholder and dials the live sibling directly', async () => {
+    remuxState.deadFeeds.add('900')
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: Parameters<typeof globalThis.fetch>[0]) => {
+      const url = String(input)
+      if (url.includes('/901.ts')) return new Response('sibling-bytes', { status: 200 })
+      throw new Error(`unexpected fetch ${url}`)
+    })
+
+    const res = await app.request(`/api/iptv/stream/live/900.ts?t=${fakeToken('live', '900')}`)
+
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe('sibling-bytes')
+    // The remembered-dead granted feed is never dialed.
+    expect(fetchSpy).not.toHaveBeenCalledWith(tsUrl('900'), expect.anything())
+    expect(fetchSpy).toHaveBeenCalledWith(tsUrl('901'), expect.anything())
+    fetchSpy.mockRestore()
+  })
+
+  it('marks the dialed feed dead on a clean fast upstream EOF so the next reload fails over', async () => {
+    // A dead-channel placeholder plays a short slate loop then EOFs cleanly.
+    // Streaming it once must tag it dead (byte-proxy analogue of the remux
+    // ffmpeg-exit-0-under-60s check).
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: Parameters<typeof globalThis.fetch>[0]) => {
+      const url = String(input)
+      if (url.includes('/900.ts')) return new Response('slate', { status: 200 })
+      throw new Error(`unexpected fetch ${url}`)
+    })
+
+    const res = await app.request(`/api/iptv/stream/live/900.ts?t=${fakeToken('live', '900')}`)
+    expect(res.status).toBe(200)
+    // Drain the body so the transform's flush() (clean-EOF hook) runs.
+    await res.text()
+    expect(remuxState.deadFeeds.has('900')).toBe(true)
+    fetchSpy.mockRestore()
   })
 })

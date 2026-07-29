@@ -10,13 +10,27 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { env } from '../env.js'
 import { signStreamToken } from './iptvStreamToken.js'
-import { channelNeedsReencode, listRemuxSessions, startRemuxSession, stopRemuxSession } from './iptvRemux.js'
+import {
+  channelIsDeadFeed,
+  channelNeedsReencode,
+  listRemuxSessions,
+  startRemuxSession,
+  stopRemuxSession,
+} from './iptvRemux.js'
 
 export type LiveRemuxEntry = {
   sessionId: string
   dir: string
   manifestPath: string
+  // The channel the VIEWER tuned — the client-facing id. Stays constant across
+  // a dead-feed failover so the manifest/segment URLs, the (streamId, sub)
+  // index key, and dropOtherLiveRemuxSessions all keep referring to the tuned
+  // channel even when the underlying upstream is a sibling feed.
   streamId: string
+  // The feed stream_id we ACTUALLY dialed upstream. Equals `streamId` normally;
+  // a sibling id after a dead-feed failover. Used to attribute a dead-feed
+  // death to the right variant on the next ensure.
+  dialedStreamId: string
   sub: string
   // segFile -> the fully-tokenised /remux/seg URL minted the FIRST time that
   // segment appeared in the manifest. Reused on every later poll so a given
@@ -54,6 +68,37 @@ const lastConnectAt = new Map<string, number>() // key -> ms of the last upstrea
 const sessionSpawnAt = new Map<string, number>() // key -> ms the live session was spawned
 const failStreak = new Map<string, number>() // key -> consecutive fast-fail count
 
+// ── Cross-session media-sequence continuity (sibling-failover -12312 guard) ───
+//
+// A session swap — dead-feed failover to a sibling, or any respawn — starts a
+// BRAND-NEW ffmpeg in a fresh dir whose HLS muxer restarts at
+// #EXT-X-MEDIA-SEQUENCE:0 with all-new segment files. Served naively at the SAME
+// manifest URL, the client-facing media sequence would jump BACKWARDS and every
+// segment URL would change at once — AVPlayer rejects that reloaded live playlist
+// ("-12312 Media Entry URL not match previous playlist") and freezes on a single
+// frame until the client's stall watchdog tears the whole item down (~12-36s),
+// even though a healthy sibling was already producing segments.
+//
+// So we keep the client-facing sequence MONOTONIC across swaps: per (streamId,
+// sub) we carry an offset added to ffmpeg's local MEDIA-SEQUENCE, advanced on each
+// swap to continue just past the highest sequence already served, plus an
+// EXT-X-DISCONTINUITY-SEQUENCE bumped per swap so the player re-inits its decode
+// timeline for the new feed instead of mis-splicing it. Steady state (no swap) is
+// byte-for-byte unchanged: offset 0 and no discontinuity-sequence tag emitted.
+type SequenceContinuity = {
+  sessionId: string // the session `offset` was computed for; a change = a swap
+  offset: number // added to ffmpeg's local MEDIA-SEQUENCE
+  discontinuitySeq: number // EXT-X-DISCONTINUITY-SEQUENCE (0 until the first swap)
+  lastServedMax: number // highest client-facing sequence served for this key (-1 = none)
+}
+const sequenceContinuity = new Map<string, SequenceContinuity>()
+
+/** ffmpeg's local first-segment media sequence for this manifest (0 if absent). */
+function parseLocalMediaSequence(text: string): number {
+  const m = text.match(/^#EXT-X-MEDIA-SEQUENCE:(\d+)/m)
+  return m ? Number(m[1]) : 0
+}
+
 /** Backoff before the next upstream re-dial for a channel, by consecutive
  *  fast-failure count. 0 failures → 0 (immediate); then 5s, 10s, 20s, capped at
  *  30s. Pure so the throttle is unit-testable without a real clock. */
@@ -77,6 +122,45 @@ export function _resetLiveRemuxIndexForTests(): void {
   lastConnectAt.clear()
   sessionSpawnAt.clear()
   failStreak.clear()
+  sequenceContinuity.clear()
+}
+
+export type EnsureLiveRemuxOpts = {
+  streamId: string
+  sub: string
+  upstreamUrl: string
+  // Dead-feed failover (optional; the route wires these, unit tests may not).
+  // `siblingFeeds` returns the ORDERED candidate feed stream_ids for the tuned
+  // channel — itself first, then siblings sharing epg_channel_id / normalized
+  // name (see resolveSiblingFeeds). `upstreamUrlFor` builds the upstream URL for
+  // a chosen candidate so a sibling can actually be dialed. Without them the
+  // behaviour is unchanged: only the tuned feed is ever dialed.
+  siblingFeeds?: () => string[]
+  upstreamUrlFor?: (streamId: string) => string
+}
+
+/** The ordered candidate feeds for these opts (tuned feed first). */
+function candidateFeeds(opts: EnsureLiveRemuxOpts): string[] {
+  const list = opts.siblingFeeds?.()
+  return list && list.length > 0 ? list : [opts.streamId]
+}
+
+/** Pick the first candidate feed NOT currently remembered as a dead placeholder,
+ *  or null when EVERY candidate is a known dead feed (the channel is offline
+ *  upstream — nothing left to dial). */
+function pickLiveFeed(opts: EnsureLiveRemuxOpts): string | null {
+  for (const cand of candidateFeeds(opts)) {
+    if (!channelIsDeadFeed(cand)) return cand
+  }
+  return null
+}
+
+/** True when every candidate feed for `candidates` is a known dead placeholder,
+ *  i.e. the channel is off the air upstream (terminal), as opposed to a session
+ *  that is merely still warming. The manifest route uses this to split the two
+ *  503s: `channel_offline_upstream` (terminal) vs `remux_warming` (retry). */
+export function isChannelOfflineUpstream(candidates: string[]): boolean {
+  return candidates.length > 0 && candidates.every((c) => channelIsDeadFeed(c))
 }
 
 /**
@@ -84,28 +168,41 @@ export function _resetLiveRemuxIndexForTests(): void {
  * none exists or the recorded one's ffmpeg has exited (stale entries are dropped
  * on sight).
  *
- * Returns null when the channel is in its reconnect-throttle cooldown after a
- * recent fast failure — the caller must NOT treat that as a hard error or dial
- * again; it serves a short retry so the provider's abuse block can cool (see the
- * reconnect-throttle block above). `now` is injectable for tests.
+ * Dead-feed failover: when the feed we dialed EOF'd cleanly-and-fast (a
+ * dead-channel placeholder — see iptvRemux's channelIsDeadFeed), the next dial
+ * skips it and advances to a live sibling feed of the same channel. If every
+ * candidate feed is dead, this returns null and the caller distinguishes the
+ * terminal case via isChannelOfflineUpstream.
+ *
+ * Returns null when (a) the channel is in its reconnect-throttle cooldown after
+ * a recent fast failure, or (b) every candidate feed is a known dead placeholder
+ * (channel offline). The caller must NOT dial again on null — for (a) it serves a
+ * short retry so the provider's abuse block can cool; for (b) it surfaces a
+ * terminal channel_offline_upstream. `now` is injectable for tests.
  */
 export function ensureLiveRemuxEntry(
-  opts: {
-    streamId: string
-    sub: string
-    upstreamUrl: string
-  },
+  opts: EnsureLiveRemuxOpts,
   now: number = Date.now(),
 ): LiveRemuxEntry | null {
   const key = remuxKey(opts.streamId, opts.sub)
   let entry = liveRemuxIndex.get(key)
   if (entry && !isRemuxSessionActive(entry.sessionId)) {
-    // The session's ffmpeg has exited. Classify it: a young death (corrupt feed
-    // / abuse block) widens the reconnect backoff; a session that ran a healthy
-    // while clears it so a normal re-tune is immediate again.
-    const lived = now - (sessionSpawnAt.get(key) ?? now)
-    if (lived < FAST_FAIL_MS) failStreak.set(key, (failStreak.get(key) ?? 0) + 1)
-    else failStreak.delete(key)
+    // The session's ffmpeg has exited. Classify it.
+    if (channelIsDeadFeed(entry.dialedStreamId)) {
+      // A dead-channel placeholder EOF'd cleanly — NOT a corrupt-feed fast-fail.
+      // Don't widen the reconnect backoff (that guards rapid re-dials of the
+      // SAME corrupt upstream; a sibling is a different connection) and clear
+      // the last-dial gate so the immediate sibling dial isn't throttled. The
+      // dead-feed memory TTL is what stops us hammering the dead variant.
+      failStreak.delete(key)
+      lastConnectAt.delete(key)
+    } else {
+      // A young death (corrupt feed / abuse block) widens the reconnect backoff;
+      // a session that ran a healthy while clears it so a re-tune is immediate.
+      const lived = now - (sessionSpawnAt.get(key) ?? now)
+      if (lived < FAST_FAIL_MS) failStreak.set(key, (failStreak.get(key) ?? 0) + 1)
+      else failStreak.delete(key)
+    }
     liveRemuxIndex.delete(key)
     sessionSpawnAt.delete(key)
     entry = undefined
@@ -115,21 +212,36 @@ export function ensureLiveRemuxEntry(
     // backoff. First connect (streak 0) is immediate.
     const delay = reconnectDelayMs(failStreak.get(key) ?? 0)
     if (delay > 0 && now - (lastConnectAt.get(key) ?? 0) < delay) return null
-    lastConnectAt.set(key, now)
-    sessionSpawnAt.set(key, now)
+    // Choose the feed to dial, skipping any known dead-channel placeholder and
+    // failing over to a live sibling. Null = every candidate is dead (offline).
+    const dialStreamId = pickLiveFeed(opts)
+    if (dialStreamId === null) return null
+    const dialUrl =
+      dialStreamId === opts.streamId
+        ? opts.upstreamUrl
+        : (opts.upstreamUrlFor?.(dialStreamId) ?? opts.upstreamUrl)
     const session = startRemuxSession({
-      streamId: opts.streamId,
+      streamId: dialStreamId,
       sub: opts.sub,
-      upstreamUrl: opts.upstreamUrl,
+      upstreamUrl: dialUrl,
       // Skip the doomed copy attempt if this channel was already seen as
       // non-H.264; the first such tune starts as copy, detects it, and respawns.
-      reencodeVideo: channelNeedsReencode(opts.streamId),
+      reencodeVideo: channelNeedsReencode(dialStreamId),
     })
+    // null = startRemuxSession is at the hard upstream-connection cap and evicted
+    // a session to free a slot; the new dial is deferred to the next poll (once
+    // the evicted child releases its provider connection) so we never briefly
+    // hold cap+1 connections. Nothing was dialed — record no connect and let the
+    // caller serve a transient remux_warming.
+    if (!session) return null
+    lastConnectAt.set(key, now)
+    sessionSpawnAt.set(key, now)
     entry = {
       sessionId: session.sessionId,
       dir: session.dir,
       manifestPath: session.manifestPath,
       streamId: opts.streamId,
+      dialedStreamId: dialStreamId,
       sub: opts.sub,
       segUrlCache: new Map(),
     }
@@ -195,9 +307,40 @@ export function rewriteRemuxManifest(
   // by unit tests (whose signStreamToken mock is already deterministic).
   segUrlCache?: Map<string, string>,
 ): string {
+  // Cross-session media-sequence continuity: decide this manifest's client-facing
+  // first-segment sequence + discontinuity sequence BEFORE emitting the header, so
+  // a session swap never resets the sequence backwards (the -12312 stall). See the
+  // SequenceContinuity doc above. Keyed by the tuned (streamId, sub) so it survives
+  // a dead-feed failover, whose sessionId change is exactly the swap signal.
+  const contKey = remuxKey(streamId, sub)
+  const localSeq = parseLocalMediaSequence(text)
+  let cont = sequenceContinuity.get(contKey)
+  if (!cont) {
+    cont = { sessionId, offset: 0, discontinuitySeq: 0, lastServedMax: -1 }
+    sequenceContinuity.set(contKey, cont)
+  } else if (cont.sessionId !== sessionId) {
+    // Session swap: continue just past the highest sequence we already served so
+    // the client-facing sequence only ever increases, and bump the discontinuity
+    // sequence so the player treats the new feed as a fresh timeline.
+    cont.offset = Math.max(0, cont.lastServedMax + 1 - localSeq)
+    cont.discontinuitySeq += 1
+    cont.sessionId = sessionId
+  }
+  const adjustedFirst = localSeq + cont.offset
+
   let seenSegment = false
+  let mediaSeqEmitted = false
+  let segCount = 0
   const out: string[] = []
   const present = new Set<string>()
+  // Emit the (possibly rewritten) MEDIA-SEQUENCE header + a DISCONTINUITY-SEQUENCE
+  // when a swap has occurred. Idempotent via mediaSeqEmitted.
+  const emitSequenceHeader = (): void => {
+    if (mediaSeqEmitted) return
+    out.push(`#EXT-X-MEDIA-SEQUENCE:${adjustedFirst}`)
+    if (cont.discontinuitySeq > 0) out.push(`#EXT-X-DISCONTINUITY-SEQUENCE:${cont.discontinuitySeq}`)
+    mediaSeqEmitted = true
+  }
   for (const line of text.split(/\r?\n/)) {
     // A `#EXT-X-DISCONTINUITY` before the FIRST segment is meaningless — the tag
     // describes a change BETWEEN two segments, and there is nothing before the
@@ -210,6 +353,12 @@ export function rewriteRemuxManifest(
     // viewer never waits that long. Drop the pre-first-segment discontinuity;
     // keep genuine mid-stream ones (provider splices/ad markers).
     if (!seenSegment && line.trim() === '#EXT-X-DISCONTINUITY') continue
+    // Rewrite ffmpeg's local MEDIA-SEQUENCE to the monotonic client-facing value
+    // (and inject the discontinuity sequence right after it on a swap).
+    if (line.startsWith('#EXT-X-MEDIA-SEQUENCE:')) {
+      emitSequenceHeader()
+      continue
+    }
     if (!line || line.startsWith('#')) {
       out.push(line)
       continue
@@ -219,7 +368,11 @@ export function rewriteRemuxManifest(
       out.push(line)
       continue
     }
+    // Defensive: a manifest with no MEDIA-SEQUENCE header still needs the swap's
+    // sequence/discontinuity carried, so emit it just before the first segment.
+    if (!seenSegment && (adjustedFirst > 0 || cont.discontinuitySeq > 0)) emitSequenceHeader()
     seenSegment = true
+    segCount++
     present.add(segFile)
     // Reuse the URL minted on this segment's first appearance so it stays
     // byte-identical across reloads (see segUrlCache doc on LiveRemuxEntry).
@@ -243,6 +396,11 @@ export function rewriteRemuxManifest(
     for (const key of segUrlCache.keys()) {
       if (!present.has(key)) segUrlCache.delete(key)
     }
+  }
+  // Remember the highest client-facing sequence served so the NEXT session swap
+  // continues above it. Only advance when this manifest actually carried segments.
+  if (segCount > 0) {
+    cont.lastServedMax = Math.max(cont.lastServedMax, adjustedFirst + segCount - 1)
   }
   return out.join('\n')
 }

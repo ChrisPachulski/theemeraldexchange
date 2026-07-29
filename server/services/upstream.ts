@@ -29,6 +29,35 @@ export const WAN_TIMEOUT_MS = 10_000
 //     error before the client gives up.
 export const SEARCH_TIMEOUT_MS = 50_000
 
+// Thrown by a service helper when its integration has no credentials
+// configured (optional since plan 006 Phase 0). app.onError maps it to a
+// typed 503 `{ error: '<service>_not_configured' }` — the same shape as
+// the long-standing tmdb_not_configured — so an unconfigured integration
+// degrades to a hidden feature instead of a 500 or a boot failure.
+export class NotConfiguredError extends Error {
+  constructor(readonly service: string) {
+    super(`${service} is not configured (missing credentials)`)
+    this.name = 'NotConfiguredError'
+  }
+}
+
+/**
+ * An internal integration's 401 describes this server's credentials, not the
+ * browser cookie. Normalize it before any route can forward it to the SPA,
+ * where 401 is reserved for edge authentication.
+ */
+export async function normalizeUpstreamAuthFailure(
+  response: Response,
+  service: string,
+): Promise<Response> {
+  if (response.status !== 401) return response
+  await response.body?.cancel().catch(() => {})
+  return new Response(JSON.stringify({ error: `${service}_auth_failed` }), {
+    status: 502,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
 export async function fetchWithTimeout(
   url: string | URL,
   init: RequestInit,

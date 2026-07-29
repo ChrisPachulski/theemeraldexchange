@@ -1,0 +1,42 @@
+{
+  "_meta": {
+    "format_version": 1,
+    "authored_from": "Swift MediaLibraryStore.normalizedShowTitle (apple Sources/EmeraldKit/State/MediaLibraryStore.swift ~L66) + its inline vector pin Tests/EmeraldKitTests/NormalizedShowTitleVectorTests.swift (apple 09dd5fe)",
+    "author": "ChrisPachulski",
+    "date": "2026-07-10",
+    "reviewed_by": "promise-audit: title-normalization-parity + title-normalization-shared-vectors",
+    "purpose": "Cross-language pin for the last-resort show-title join key ('The American Experiment' incident). The Swift MediaLibraryStore.normalizedShowTitle and Rust media_core::filename::normalize_show_name compute the SAME join key independently and were coupled only by a doc comment; the trailing-year strip was fixed independently in BOTH on the same day (apple 6368b8d, server dd7a817) because nothing pinned it. This file freezes the input->key contract so a unilateral tweak on either side goes red before it can silently desync the join.",
+    "swift_normalizer": "MediaLibraryStore.normalizedShowTitle",
+    "rust_normalizer": "media_core::filename::normalize_show_name",
+    "contract": "Swift MediaLibraryStore.normalizedShowTitle and Rust media_core::filename::normalize_show_name must produce the same key for every vector and equivalence class. Both normalizers case-fold, remove diacritics, expand '&' to 'and', split non-alphanumeric punctuation, strip one trailing 1900-2099 year only when another title token remains, and collapse whitespace."
+  },
+  "vectors": [
+    { "name": "case-fold-upper", "input": "BREAKING BAD", "key": "breaking bad" },
+    { "name": "whitespace-collapse", "input": "Breaking   Bad", "key": "breaking bad" },
+    { "name": "diacritic-fold", "input": "Pokémon", "key": "pokemon" },
+    { "name": "diacritic-already-ascii", "input": "Pokemon", "key": "pokemon" },
+    { "name": "ampersand-to-and", "input": "Will & Grace", "key": "will and grace" },
+    { "name": "ampersand-spelled-and", "input": "Will and Grace", "key": "will and grace" },
+    { "name": "apostrophe-splits-token", "input": "Marvel's Daredevil", "key": "marvel s daredevil" },
+    { "name": "hyphen-separator", "input": "Spider-Man", "key": "spider man" },
+    { "name": "trailing-year-stripped", "input": "The American Experiment 2026", "key": "the american experiment" },
+    { "name": "year-as-whole-title-kept", "input": "1923", "key": "1923" },
+    { "name": "leading-year-survives", "input": "2049 Blade Runner", "key": "2049 blade runner" },
+    { "name": "leading-year-nonyear-trailing", "input": "1923 Yellowstone", "key": "1923 yellowstone" },
+    { "name": "number-outside-year-window", "input": "Catch 22", "key": "catch 22" }
+  ],
+  "equivalence_classes": [
+    {
+      "name": "pokemon-spellings",
+      "members": ["Pokémon", "POKEMON", "pokemon"]
+    },
+    {
+      "name": "will-and-grace-spellings",
+      "members": ["Will & Grace", "Will and Grace", "will  &  grace"]
+    },
+    {
+      "name": "trailing-year-join",
+      "members": ["The American Experiment 2026", "The American Experiment"]
+    }
+  ]
+}

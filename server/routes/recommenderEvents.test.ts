@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Hono } from 'hono'
 import { recommenderEvents } from './recommenderEvents.js'
-import { createSession } from '../session.js'
+import { createMemberSession as createSession } from '../test/authFixture.js'
 import type { Env } from '../middleware/auth.js'
 
 function appUnderTest() {

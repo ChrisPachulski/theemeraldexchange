@@ -5,9 +5,13 @@
 
 import * as Sentry from '@sentry/node'
 import { Hono } from 'hono'
+import type { Context } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
 import { cors } from 'hono/cors'
+import { serveStatic } from '@hono/node-server/serve-static'
 import { requestId } from 'hono/request-id'
 import { env } from './env.js'
+import { NotConfiguredError } from './services/upstream.js'
 import { serverDb } from './services/serverDb.js'
 import { requireSafeOrigin } from './middleware/csrf.js'
 import { auth, me } from './auth.js'
@@ -37,6 +41,7 @@ import { transcode } from './routes/transcode.js'
 import { devices, adminDevices } from './routes/devices.js'
 import { adminInvites, adminMembers } from './routes/adminInvites.js'
 import { passkey } from './routes/passkey.js'
+import { setup } from './routes/setup.js'
 import { version } from './routes/version.js'
 
 export const app = new Hono()
@@ -48,6 +53,12 @@ export const app = new Hono()
 // no PII leaves the box. captureException is a no-op when Sentry.init was never
 // called (dev without EEX_TELEMETRY_DSN), so this is safe in every environment.
 app.onError((err, c) => {
+  // Optional integrations (plan 006 Phase 0): an unconfigured service is an
+  // expected state, not an incident — typed 503 mirroring tmdb_not_configured,
+  // no telemetry capture.
+  if (err instanceof NotConfiguredError) {
+    return c.json({ error: `${err.service}_not_configured` }, 503)
+  }
   // LOW-29: tag the exception with the request id so a Glitchtip event can be
   // tied back to the matching `[<id>]` log line (and the client's X-Request-Id).
   Sentry.captureException(err, { tags: { request_id: c.get('requestId') } })
@@ -60,12 +71,42 @@ app.onError((err, c) => {
 // X-Request-Id response header. Must run before the logger so the id is logged.
 app.use('*', requestId())
 
-// MED-18: stream/segment/playlist auth is token-in-URL (`?t=`, `?u=`, `?token=`),
-// so any logger that prints the query string would write live bearer tokens into
-// stdout/container logs. Redact those query values. Exported pure for test.
-const TOKEN_QUERY_RE = /([?&](?:t|u|token)=)[^&\s]+/gi
-export function redactStreamTokens(line: string): string {
-  return line.replace(TOKEN_QUERY_RE, '$1[redacted]')
+// The passkey routes are public by design, and the media/transcoder proxies
+// buffer control-plane request bodies before forwarding them. Bound both at
+// the edge so a large or chunked body cannot exhaust the Node heap. Playback
+// bytes travel in GET responses and are unaffected by these request limits.
+export const PASSKEY_BODY_LIMIT_BYTES = 64 * 1024
+export const SIDECAR_CONTROL_BODY_LIMIT_BYTES = 1024 * 1024
+const payloadTooLarge = (c: Context) => c.json({ error: 'payload_too_large' }, 413)
+app.use(
+  '/api/auth/passkey/*',
+  bodyLimit({ maxSize: PASSKEY_BODY_LIMIT_BYTES, onError: payloadTooLarge }),
+)
+app.use(
+  '/api/media/*',
+  bodyLimit({ maxSize: SIDECAR_CONTROL_BODY_LIMIT_BYTES, onError: payloadTooLarge }),
+)
+app.use(
+  '/api/transcode/*',
+  bodyLimit({ maxSize: SIDECAR_CONTROL_BODY_LIMIT_BYTES, onError: payloadTooLarge }),
+)
+
+// SameSite=None is necessary for the split Netlify/API deployment. The CSRF
+// gate protects requests; these headers prevent a hostile parent page from
+// framing the signed-in UI and steering clicks through overlaid controls.
+app.use('*', async (c, next) => {
+  await next()
+  c.header('Content-Security-Policy', "frame-ancestors 'none'")
+  c.header('X-Frame-Options', 'DENY')
+})
+
+// MED-18: playback grants and malformed/legacy login requests can put auth
+// artifacts in the URL. Any logger that prints the query string must scrub
+// them even when the route ultimately rejects the request.
+const SECRET_QUERY_RE =
+  /([?&](?:t|u|token|pinId|inviteCode|invite_code|setupToken|idToken|id_token)=)[^&\s]+/gi
+export function redactRequestSecrets(line: string): string {
+  return line.replace(SECRET_QUERY_RE, '$1[redacted]')
 }
 
 // Request logger: method + redacted path + status + elapsed + request id. Custom
@@ -73,7 +114,7 @@ export function redactStreamTokens(line: string): string {
 // it to telemetry, and so the token redaction (MED-18) is applied to the path.
 app.use('*', async (c, next) => {
   const url = new URL(c.req.url)
-  const path = redactStreamTokens(url.pathname + url.search)
+  const path = redactRequestSecrets(url.pathname + url.search)
   const rid = c.get('requestId')
   const start = Date.now()
   console.log(`<-- ${c.req.method} ${path} [${rid}]`)
@@ -98,9 +139,13 @@ if (env.allowedOrigins.length > 0) {
       allowHeaders: [
         'Content-Type',
         'X-Anthropic-Api-Key',
+        'X-EEX-Expected-Sub',
         'Authorization',
         'X-App-Version',
       ],
+      // Retry-After is not CORS-safelisted. The split-origin SPA must read it
+      // to honor both provider and local backpressure.
+      exposeHeaders: ['Retry-After', 'X-Request-Id'],
     }),
   )
 }
@@ -164,17 +209,28 @@ app.get('/api/limits', (c) =>
     // (/api/media/music/*) and audio playback ride the same proxy, so both
     // facts are required. Public boolean — no secret leakage.
     musicEnabled: env.useMediaCore && env.musicRootsConfigured,
+    // Optional integrations (plan 006 Phase 3): the SPA hides the
+    // request/download surfaces an unconfigured install can't serve
+    // (mirrors iptvEnabled — the same facts are implied by the typed
+    // 503 <service>_not_configured anyway). Public booleans only.
+    sonarrEnabled: Boolean(env.sonarrApiKey),
+    radarrEnabled: Boolean(env.radarrApiKey),
+    sabEnabled: Boolean(env.sabApiKey),
   }),
 )
 
 app.route('/api/auth', auth)
-// Apple device-pair flow lives under the same /api/auth tree as the
-// Plex cookie flow. M2 PIN-pair: POST /start → POST /poll → device JWE.
+// Native device-pair flow lives under the same /api/auth tree as the Plex
+// cookie flow. The device creates its PIN directly, then POST /poll mints JWE.
 app.route('/api/auth/device', device)
 // Passkey (WebAuthn) login + registration — the cross-platform, password-free
 // identity path. Public (these endpoints ARE the login); self-owned local:
 // users gated by the same invite/members allowlist as Plex/Apple.
 app.route('/api/auth/passkey', passkey)
+// First-owner claim status (plan 006 Phase 1). Public: the SPA walkthrough
+// asks this once to decide whether to render the claim panel. The claim
+// itself is the passkey registration path + setup token.
+app.route('/api/setup', setup)
 app.route('/api/me', me)
 // /api/version is public — discovers server_id + auth_modes for Apple
 // PIN-pair (Keychain keying + UI gating). Mounted last under /api/v.
@@ -205,8 +261,8 @@ app.route('/api/tmdb', tmdb)
 if (!env.IPTV_DISABLED) {
   app.route('/api/iptv', iptv)
 }
-// DVR (M6 phase 1) records IPTV live channels, so it requires IPTV mounted and
-// is off by default until the phase-2 recorder ships (see routes/dvr.ts).
+// DVR records IPTV live channels, so it requires IPTV to be mounted. It remains
+// operator-opt-in because recordings consume provider connections and disk.
 if (env.DVR_ENABLED && !env.IPTV_DISABLED) {
   app.route('/api/dvr', dvr)
 }
@@ -260,4 +316,17 @@ if (env.useMediaCore) {
   // this proxy. Gated on the same flag as /api/media — without media-core
   // there is nothing to hand off.
   app.route('/api/transcode', transcode)
+}
+
+// ── SPA serving (plan 006 Phase 2) ─────────────────────────────────────────
+// A LAN self-host has no Netlify: the backend serves the built SPA from
+// ./dist same-origin. Auto-on when the image ships a dist (env.serveSpa),
+// off in the owner's split Netlify+API deployment. /api/* never falls
+// through to index.html — an unknown API path must stay a JSON 404, not a
+// 200 text/html that confuses every client.
+if (env.serveSpa) {
+  const spaStatic = serveStatic({ root: './dist' })
+  const spaIndex = serveStatic({ path: './dist/index.html' })
+  app.get('*', (c, next) => (c.req.path.startsWith('/api') ? next() : spaStatic(c, next)))
+  app.get('*', (c, next) => (c.req.path.startsWith('/api') ? next() : spaIndex(c, next)))
 }

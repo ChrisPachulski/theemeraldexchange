@@ -25,9 +25,13 @@ import { registerTokenSweepSchedule } from './services/tokenSweepScheduler.js'
 import { drainRemuxSessions } from './services/iptvRemux.js'
 import { iptvDb, closeIptvDb } from './services/iptvDbSingleton.js'
 import { startDvrScheduler, type DvrScheduler } from './services/dvrRecorder.js'
+import { registerDvrRecorder } from './routes/dvr.js'
 import { ensureServerId, closeServerDb } from './services/serverDb.js'
+import { runTelemetryDsnSelfCheck } from './services/serverTelemetry.js'
+import { ensureSetupToken } from './services/setupState.js'
 import { createLogger } from './services/logger.js'
 import { warnExpiredCompatWindows } from './services/compatWindows.js'
+import { buildAuthPosture } from './services/authPosture.js'
 
 const log = createLogger('boot')
 const shutdownLog = createLogger('shutdown')
@@ -42,10 +46,12 @@ try {
 
 // §15 Telemetry — Sentry-compatible SDK init pointing at the self-hoster's
 // Glitchtip instance. The DSN is distributed to client apps at boot via
-// GET /api/telemetry/config; the server itself also reports crashes here.
-if (env.EEX_TELEMETRY_DSN) {
+// GET /api/telemetry/config; the server itself also reports crashes here —
+// via the INTERNAL DSN when set, because the public DSN's host may not
+// resolve from inside the docker network (§S0-1).
+if (env.EEX_TELEMETRY_DSN_INTERNAL || env.EEX_TELEMETRY_DSN) {
   Sentry.init({
-    dsn: env.EEX_TELEMETRY_DSN,
+    dsn: env.EEX_TELEMETRY_DSN_INTERNAL ?? env.EEX_TELEMETRY_DSN ?? undefined,
     environment: env.isProd ? 'production' : 'staging',
     release: env.EEX_RELEASE,
     beforeSend: piiScrub,
@@ -57,14 +63,29 @@ if (env.EEX_TELEMETRY_DSN) {
 } else {
   log.warn(
     'EEX_TELEMETRY_DSN is not set. Sentry SDK will not be initialized. ' +
-      'Telemetry is mandatory in production (§15.1).',
+      'Telemetry is opt-in (§15.1 amended by plan 006); set TELEMETRY_ENABLED=1 ' +
+      'in deployments that run the telemetry stack so a lost DSN fails loudly.',
   )
 }
+
+// §S0-1: Glitchtip went blind for weeks because the DSN host was unresolvable
+// from inside this container — every send (SDK + background-job relay) threw
+// ENOTFOUND and was swallowed, so "no errors" silently meant "nothing
+// delivered". DNS-resolve + probe the DSN host once at boot and log LOUDLY on
+// failure so a broken telemetry pipeline can never again masquerade as healthy.
+// Fire-and-forget: it never throws and must not delay or block the listener.
+void runTelemetryDsnSelfCheck()
 
 // Boot sequence: open server.db, run migrations, generate server_id on
 // first boot (INSERT OR IGNORE — safe to call on every subsequent boot).
 const serverId = ensureServerId()
 log.info('server_id resolved', { serverId })
+log.info('authentication posture', buildAuthPosture(env))
+
+// First-owner claim (plan 006 Phase 1): while the install is un-gated and
+// unclaimed, mint the one-time setup token and print it — the token is the
+// proof-of-ownership the claim flow requires. No-op once claimed/gated.
+ensureSetupToken()
 
 // Surface any dated backward-compat shim whose removal date has passed —
 // expiry becomes a boot log line instead of a manual calendar sweep.
@@ -110,6 +131,9 @@ if (
 let dvrScheduler: DvrScheduler | null = null
 if (env.DVR_ENABLED && !env.IPTV_DISABLED) {
   dvrScheduler = startDvrScheduler(iptvDb().raw, env.DVR_DIR)
+  // Hand the DELETE route a handle so cancelling an in-flight recording stops
+  // its ffmpeg instead of leaving it pulling a provider connection + disk.
+  registerDvrRecorder(dvrScheduler.recorder)
 }
 
 let shuttingDown = false

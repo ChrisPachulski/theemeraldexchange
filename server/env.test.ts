@@ -38,11 +38,15 @@ const PRESERVED_KEYS = [
   'RECOMMENDER_EVENT_SECRET',
   'USE_LOCAL_RECOMMENDER',
   'EEX_TELEMETRY_DSN',
+  'TELEMETRY_ENABLED',
+  'SERVE_SPA',
   'STREAM_TOKEN_SECRET',
   'DEVICE_TOKEN_SECRET',
   'INTERNAL_PRINCIPAL_SECRET',
   'APPLE_CLIENT_ID',
   'ENABLE_APPLE_SIGN_IN',
+  'GOOGLE_CLIENT_ID',
+  'ENABLE_GOOGLE_SIGN_IN',
   'ADMIN_SUBS',
   'TRUST_CLIENT_IP_HEADERS',
 ] as const
@@ -64,6 +68,10 @@ afterEach(() => {
 
 function setBaselineEnv() {
   // The required-in-all-modes set. Tests override specific keys on top.
+  // SERVE_SPA pinned off: unset auto-detects on ./dist/index.html, which
+  // exists on any machine that ever ran a vite build — tests must not
+  // depend on that. Phase 2 tests flip it explicitly.
+  process.env.SERVE_SPA = '0'
   process.env.PLEX_CLIENT_ID = 'test-client'
   process.env.SESSION_SECRET = 'test-secret-test-secret-test-secret-test-secret'
   process.env.SONARR_API_KEY = 'k'
@@ -76,6 +84,8 @@ function setBaselineEnv() {
   delete process.env.RECOMMENDER_EVENT_SECRET
   delete process.env.APPLE_CLIENT_ID
   delete process.env.ENABLE_APPLE_SIGN_IN
+  delete process.env.GOOGLE_CLIENT_ID
+  delete process.env.ENABLE_GOOGLE_SIGN_IN
   delete process.env.ADMIN_SUBS
   delete process.env.TRUST_CLIENT_IP_HEADERS
 }
@@ -149,10 +159,8 @@ describe('env — trusted client IP headers', () => {
 })
 
 describe('env — production gating on PLEX_SERVER_ID (auth scope)', () => {
-  // Without PLEX_SERVER_ID set, server/auth.ts accepts ANY authenticated
-  // Plex user. In prod, blank PLEX_SERVER_ID would silently turn the
-  // invitation-only app into "any Plex user can sign in." Hard-fail
-  // unless the operator explicitly opted into bootstrap mode.
+  // This is a production configuration assertion, not an authorization
+  // bypass: normal login remains fail closed when the opt-in permits boot.
   it('production with unset PLEX_SERVER_ID throws', async () => {
     setBaselineEnv()
     process.env.NODE_ENV = 'production'
@@ -171,7 +179,7 @@ describe('env — production gating on PLEX_SERVER_ID (auth scope)', () => {
     await expect(loadEnv()).rejects.toThrow(/PLEX_SERVER_ID/)
   })
 
-  it('production with explicit ALLOW_UNSCOPED_PLEX_LOGIN=1 boots open (bootstrap)', async () => {
+  it('production with explicit ALLOW_UNSCOPED_PLEX_LOGIN=1 permits boot without a server id', async () => {
     setBaselineEnv()
     process.env.NODE_ENV = 'production'
     process.env.ALLOWED_ORIGINS = 'https://app.example'
@@ -201,6 +209,106 @@ describe('env — production gating on PLEX_SERVER_ID (auth scope)', () => {
     delete process.env.ALLOW_UNSCOPED_PLEX_LOGIN
     const env = await loadEnv()
     expect(env.plexServerId).toBeNull()
+  })
+})
+
+describe('env — Phase 0 (plan 006): optional integrations boot on a bare env', () => {
+  // The C5 verdict: production used to hard-require SONARR/RADARR/SAB
+  // API keys + PLEX_CLIENT_ID (+ telemetry DSN via C4), so a fresh
+  // self-host `docker compose up` died at boot. These lock the corrected
+  // contract: secrets + ALLOWED_ORIGINS are the only prod boot inputs.
+  function setBareProdEnv() {
+    setBaselineEnv()
+    process.env.NODE_ENV = 'production'
+    process.env.ALLOWED_ORIGINS = 'https://app.example'
+    delete process.env.PLEX_CLIENT_ID
+    delete process.env.PLEX_SERVER_ID
+    delete process.env.ALLOW_UNSCOPED_PLEX_LOGIN
+    delete process.env.SONARR_API_KEY
+    delete process.env.RADARR_API_KEY
+    delete process.env.SAB_API_KEY
+    delete process.env.DEFAULT_ROOT_FOLDER_PATH
+    delete process.env.EEX_TELEMETRY_DSN
+    delete process.env.TELEMETRY_ENABLED
+  }
+
+  it('production boots with no Plex, no *arr/SAB, no telemetry config', async () => {
+    setBareProdEnv()
+    const env = await loadEnv()
+    expect(env.isProd).toBe(true)
+    expect(env.plexClientId).toBeNull()
+    expect(env.sonarrApiKey).toBeNull()
+    expect(env.radarrApiKey).toBeNull()
+    expect(env.sabApiKey).toBeNull()
+  })
+
+  it('unset PLEX_CLIENT_ID → isPlexConfigured() false', async () => {
+    setBaselineEnv()
+    delete process.env.PLEX_CLIENT_ID
+    const mod = await import('./env.js')
+    expect(mod.env.plexClientId).toBeNull()
+    expect(mod.isPlexConfigured()).toBe(false)
+  })
+
+  it('set PLEX_CLIENT_ID → isPlexConfigured() true (owner posture unchanged)', async () => {
+    setBaselineEnv()
+    const mod = await import('./env.js')
+    expect(mod.isPlexConfigured()).toBe(true)
+  })
+
+  it('production with Plex configured still enforces the PLEX_SERVER_ID scope gate', async () => {
+    // The A8-verified invitation-only gate must survive Phase 0: making
+    // PLEX_CLIENT_ID optional must not relax scoping for installs that DO
+    // configure Plex. (Covered above for the bare install: no client id →
+    // no gate.)
+    setBareProdEnv()
+    process.env.PLEX_CLIENT_ID = 'test-client'
+    await expect(loadEnv()).rejects.toThrow(/PLEX_SERVER_ID/)
+  })
+
+  it('production with TELEMETRY_ENABLED=1 but no DSN throws (opt-in keeps its guard)', async () => {
+    setBareProdEnv()
+    process.env.TELEMETRY_ENABLED = '1'
+    await expect(loadEnv()).rejects.toThrow(/EEX_TELEMETRY_DSN/)
+  })
+
+  it('production root-folder gate fires only for a configured *arr', async () => {
+    // Sonarr configured without its root folder → still a boot error…
+    setBareProdEnv()
+    process.env.SONARR_API_KEY = 'k'
+    await expect(loadEnv()).rejects.toThrow(/ROOT_FOLDER_PATH/)
+  })
+
+  it('production with *arr unconfigured skips the root-folder gate', async () => {
+    setBareProdEnv()
+    const env = await loadEnv()
+    expect(env.sonarrApiKey).toBeNull()
+  })
+
+  // ── Phase 2: SERVE_SPA + ALLOWED_ORIGINS relaxation ──
+  it('SERVE_SPA=1 → serveSpa on; production boots without ALLOWED_ORIGINS', async () => {
+    setBareProdEnv()
+    delete process.env.ALLOWED_ORIGINS
+    process.env.SERVE_SPA = '1'
+    const env = await loadEnv()
+    expect(env.serveSpa).toBe(true)
+    expect(env.allowedOrigins).toEqual([])
+  })
+
+  it('SERVE_SPA=0 → serveSpa off; production still requires ALLOWED_ORIGINS', async () => {
+    setBareProdEnv()
+    delete process.env.ALLOWED_ORIGINS
+    process.env.SERVE_SPA = '0'
+    await expect(loadEnv()).rejects.toThrow(/ALLOWED_ORIGINS/)
+  })
+
+  it('WEBAUTHN_RP_ID set → webauthnRpIdExplicit (disables request-derived RP)', async () => {
+    setBaselineEnv()
+    process.env.SERVE_SPA = '1'
+    process.env.WEBAUTHN_RP_ID = 'exchange.example'
+    const env = await loadEnv()
+    expect(env.webauthnRpIdExplicit).toBe(true)
+    delete process.env.WEBAUTHN_RP_ID
   })
 })
 
@@ -503,6 +611,35 @@ describe('env — APPLE_CLIENT_ID (SIWA aud)', () => {
   })
 })
 
+describe('env — GOOGLE_CLIENT_ID (OIDC aud allow-list)', () => {
+  it('unset → empty and isGoogleConfigured() false', async () => {
+    setBaselineEnv()
+    delete process.env.GOOGLE_CLIENT_ID
+    const mod = await import('./env.js')
+    expect(mod.env.googleClientIds).toEqual([])
+    expect(mod.isGoogleConfigured()).toBe(false)
+  })
+
+  it('comma-separated ids are normalized and enable Google', async () => {
+    setBaselineEnv()
+    process.env.GOOGLE_CLIENT_ID = ' web-client , native-client '
+    const mod = await import('./env.js')
+    expect(mod.env.googleClientIds).toEqual(['web-client', 'native-client'])
+    expect(mod.isGoogleConfigured()).toBe(true)
+  })
+
+  it('production enable assertion without a client id fails boot', async () => {
+    setBaselineEnv()
+    process.env.NODE_ENV = 'production'
+    process.env.ALLOWED_ORIGINS = 'https://app.example'
+    process.env.PLEX_SERVER_ID = 'home-server-machine-id'
+    process.env.EEX_TELEMETRY_DSN = 'https://test@glitchtip.example.com/1'
+    process.env.ENABLE_GOOGLE_SIGN_IN = '1'
+    delete process.env.GOOGLE_CLIENT_ID
+    await expect(loadEnv()).rejects.toThrow(/GOOGLE_CLIENT_ID/)
+  })
+})
+
 describe('env — ADMIN_SUBS (owner bootstrap allowlist)', () => {
   it('unset → empty array', async () => {
     setBaselineEnv()
@@ -598,10 +735,14 @@ describe('env — fail-closed on missing/misconfigured token secrets (audit 17-5
     await expect(loadEnv()).rejects.toThrow(/INTERNAL_PRINCIPAL_SECRET/)
   })
 
-  it('production WITHOUT EEX_TELEMETRY_DSN throws at boot (§15.1 mandatory)', async () => {
+  it('production WITHOUT EEX_TELEMETRY_DSN boots with telemetry off (§15.1 amended by plan 006)', async () => {
+    // Telemetry is opt-in since Phase 0 (verdict C4): the boot guard only
+    // fires when TELEMETRY_ENABLED=1 (covered in the Phase 0 describe).
     setProdBaseline()
     delete process.env.EEX_TELEMETRY_DSN
-    await expect(loadEnv()).rejects.toThrow(/EEX_TELEMETRY_DSN/)
+    delete process.env.TELEMETRY_ENABLED
+    const env = await loadEnv()
+    expect(env.EEX_TELEMETRY_DSN).toBeNull()
   })
 
   it('throws when two token secrets are identical (pairwise-distinctness)', async () => {

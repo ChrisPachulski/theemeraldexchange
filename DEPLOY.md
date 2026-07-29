@@ -1,5 +1,16 @@
 # Deploying The Emerald Exchange (V2)
 
+Two tracks (plan 006):
+
+- **Self-host (LAN, easy)** — anyone standing up their own Emerald server. Pull-based
+  multi-arch images, no accounts/domain/build, browser claim flow. Lives in
+  [`selfhost/`](./selfhost/) — the quickstart is at the top of the README. Nothing below
+  applies to you.
+- **Owner full deployment** — this document: the original operator setup with every profile
+  on (Cloudflare Tunnel, Netlify SPA, Plex login, IPTV, Glitchtip telemetry). It is ONE
+  configuration of the same product; the self-host track gives up none of the member
+  experience.
+
 V2 splits the dashboard across two hosts. The SPA lives on Netlify; the Hono backend lives on the NAS behind a Cloudflare Tunnel.
 
 ```
@@ -17,8 +28,11 @@ api.theemeraldexchange.com       ──▶ Cloudflare Tunnel
 ```
 
 `docker-compose.yml` defines **9 services**: `backend`, `recommender`,
-`media-core`, `transcoder`, `cloudflared`, `glitchtip`, `glitchtip-db`,
-`glitchtip-redis`, `glitchtip-worker`. One deploy script
+`media-core`, `transcoder`, plus the profile-gated `cloudflared`
+(`remote-cloudflare`), `tailscale` (`remote`), and the Glitchtip four
+(`telemetry`). The owner deployment sets
+`COMPOSE_PROFILES=remote-cloudflare,telemetry` in `.env.production`
+(deploy-nas.sh appends it if missing). One deploy script
 (`scripts/deploy-nas.sh`) ships and health-gates the whole stack.
 
 ---
@@ -45,32 +59,50 @@ The tunnel will show **"Inactive"** until the first NAS deploy registers a conne
 cp .env.production.example .env.production
 ```
 
-Open it and fill in:
+Open it and fill the required rows plus whichever optional integrations you use:
 
 | Var | Where it comes from |
 |---|---|
 | `TUNNEL_TOKEN` | The `eyJhI…` you copied above. |
-| `PLEX_CLIENT_ID` | Same value as in your `.env.local` (or generate fresh: `node -e 'console.log(crypto.randomUUID())'`). |
+| `PLEX_CLIENT_ID` *(optional)* | Enables Plex login. Use the same value as `.env.local` or generate one with `node -e 'console.log(crypto.randomUUID())'`. Leave unset for passkey/Apple/Google-only installs. |
 | `SESSION_SECRET` | Generate fresh: `openssl rand -base64 48`. Must be ≥32 bytes and not a placeholder — the deploy script hard-fails otherwise. **Different from dev** so the two environments can't share sessions. |
 | `STREAM_TOKEN_SECRET` | `openssl rand -base64 48`. Signs IPTV/media stream tokens (HMAC-SHA256). |
 | `DEVICE_TOKEN_SECRET` | `openssl rand -base64 48`. IKM for the device-token JWE (Apple device pairing). Must be distinct from every other secret. |
 | `INTERNAL_PRINCIPAL_SECRET` | `openssl rand -base64 48`. IKM for the internal-principal JWE the backend mints toward recommender/media-core/transcoder. Distinct from every other secret. |
 | `RECOMMENDER_EVENT_SECRET` | `openssl rand -base64 48`. Shared secret signing backend → recommender calls. |
-| `ADMINS` | Your Plex username(s), comma-separated. |
-| `PLEX_SERVER_ID` | **Required in production** — your home Plex server's machineIdentifier. Without it, any authenticated Plex user can sign in. Discoverable via the SPA's first prod login (in the `discoveredServers` payload). Or query plex.tv directly. For the brief first-deploy bootstrap window before you know the id, set `ALLOW_UNSCOPED_PLEX_LOGIN=1` instead — but remove that opt-in as soon as you copy the id into `PLEX_SERVER_ID`. |
+| `ADMINS` *(optional, legacy Plex)* | Plex username(s), comma-separated. Prefer stable `ADMIN_SUBS` or first-owner passkey claim for new installs. |
+| `PLEX_SERVER_ID` *(conditional)* | Required only when Plex login is configured, unless `ALLOW_UNSCOPED_PLEX_LOGIN=1` explicitly permits emergency boot. The flag grants no login access and never bypasses member/invite authorization. Prefer setup-token passkey claim, then set your home server's machineIdentifier and remove the opt-in. |
 | `ALLOWED_ORIGINS` | `https://theemeraldexchange.com` |
 | `SONARR_URL`, `SONARR_API_KEY` | Existing Sonarr install. |
 | `RADARR_URL`, `RADARR_API_KEY` | Existing Radarr install. |
 | `SAB_URL`, `SAB_API_KEY` | Existing SAB install. |
 | `MIN_FREE_GB` | Default 100. |
 | `GLITCHTIP_SECRET_KEY`, `GLITCHTIP_DB_PASSWORD`, `GLITCHTIP_DOMAIN` | **Set BEFORE the first `compose up`** — see [docs/operations/glitchtip-setup.md](./docs/operations/glitchtip-setup.md). The DB password must be hex (base64 characters break the `DATABASE_URL`); the domain needs an `http(s)://` scheme. |
-| `EEX_TELEMETRY_DSN` | Does NOT exist yet on the first deploy — you mint it from the Glitchtip instance that deploy brings up, then redeploy. See the two-step bootstrap below. |
+| `EEX_TELEMETRY_DSN` | Optional GlitchTip browser/client ingestion DSN. Leave unset to run telemetry-off; configure later without blocking a healthy app deploy. |
 
 The full annotated key list lives in `.env.production.example`. The deploy
 script validates all required keys (and the `SESSION_SECRET` strength /
 `PLEX_SERVER_ID` scoping gates) before anything ships.
 
 This file is gitignored. If you ever lose it, regenerate the secrets and redeploy — every active session resets, which is fine.
+
+#### Upgrade note: legacy `ADMINS`-only installs
+
+Normal provider login is now fail-closed: a verified identity still needs an
+`ADMIN_SUBS` match, an active member row, an invite, or verified Plex-server
+share admission. Provider client IDs never make first-owner setup unavailable.
+
+An older install that has only the username-based `ADMINS` setting and no
+durable administrator row will therefore boot as claimable and print a new
+one-time setup token. If that username already has an active user member row or
+qualifies for configured `PLEX_SERVER_ID` share admission, sign in once as the
+configured Plex administrator soon after upgrading. Share admission stores an
+ordinary user row; the successful login applies `ADMINS` only as runtime
+policy, writes the immutable ownership marker, and burns the setup token. Later
+removing `ADMINS` therefore demotes that user without reopening first-owner
+setup. A rowless identity with no qualifying Plex share cannot bypass the new
+gate: claim the server with the setup-token passkey first, then issue an invite
+or configure `PLEX_SERVER_ID` admission.
 
 ### 3. Netlify
 
@@ -94,7 +126,7 @@ first** — it generates `GLITCHTIP_SECRET_KEY` / `GLITCHTIP_DB_PASSWORD` /
 `GLITCHTIP_DOMAIN`, which must exist in `.env.production` before the first
 `docker compose up`, and walks the admin-account + DSN minting steps.
 
-### 5. First NAS deploy (two-step bootstrap)
+### 5. First NAS deploy
 
 ```bash
 cd ~/Documents/theemeraldexchange
@@ -121,24 +153,20 @@ What the script actually does (`./scripts/deploy-nas.sh --help` prints its own s
    uid 10001, `media-core-db` → uid 10002) so a fresh volume doesn't crash-loop
    the `cap_drop: ALL` sidecars.
 6. Tags every currently-deployed image (`backend`, `recommender`, `media-core`,
-   `transcoder`) as `:rollback`, then runs `docker compose up -d --build` with
-   `EEX_RELEASE=<short sha of HEAD>` — `/api/version` reports that sha as
-   `release`, which is how you detect deploy drift.
-7. Restarts `exchange-cloudflared` (it shares the backend's netns; a backend
-   recreate stales the reference and the public site 502s until the restart).
+   `transcoder`) as `:rollback`, then builds each service sequentially through
+   `nas-safe-build.sh`. Its detached load, memory, timeout, and Plex-health
+   watchdogs abort before a compile can brown out the NAS.
+7. Recreates the stack with `docker compose up -d --no-build`, then
+   force-recreates `exchange-cloudflared` (it shares the backend's netns; only
+   recreation rebinds it to a new backend container).
 8. **Health-gates the whole stack** (~150s ceiling): backend + recommender +
    media-core + transcoder must all report docker-healthy. On failure it
    restores every `:rollback` image, re-ups, and prints per-container log and
    manual-rollback commands.
 
-> **The first deploy is a two-step bootstrap.** `EEX_TELEMETRY_DSN` cannot exist
-> yet — you mint it from the Glitchtip instance this very deploy brings up. The
-> backend crash-loops in that window **by design**, and the script detects the
-> unset DSN and skips the rollback instead of tearing down the Glitchtip you
-> need. Create the EEX project + DSN
-> ([glitchtip-setup.md §4](./docs/operations/glitchtip-setup.md)), set
-> `EEX_TELEMETRY_DSN` in `.env.production`, and run `./scripts/deploy-nas.sh`
-> again — the second run health-gates normally.
+GlitchTip is optional and reported separately from the core health gate. An
+unset DSN never excuses an unhealthy backend or sidecar; every failed core
+release is rolled back.
 
 First build takes several minutes (npm ci + two Rust release builds + image
 layers). Subsequent deploys are much faster (cached layers).

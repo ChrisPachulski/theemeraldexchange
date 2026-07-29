@@ -48,12 +48,12 @@ afterEach(() => {
 
 const VALID_DSN = 'https://abc123def456@glitchtip.example.com/42'
 
-describe('telemetry GET /config — auth gate', () => {
-  it('rejects unauthenticated request with 401 unauthenticated', async () => {
+describe('telemetry GET /config — public bootstrap', () => {
+  it('returns the non-secret DSN before authentication', async () => {
     ;(env as Record<string, unknown>).EEX_TELEMETRY_DSN = VALID_DSN
     const res = await appUnderTest().request('/config')
-    expect(res.status).toBe(401)
-    expect(await res.json()).toEqual({ error: 'unauthenticated' })
+    expect(res.status).toBe(200)
+    expect((await res.json() as { dsn: string }).dsn).toBe(VALID_DSN)
   })
 })
 

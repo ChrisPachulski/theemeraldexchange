@@ -19,4 +19,8 @@ export const TEST_ENV: Record<string, string> = {
   STREAM_TOKEN_SECRET: 'stream-token-secret-test-placeholder-xxxxxxxxx',
   DEVICE_TOKEN_SECRET: 'device-token-secret-test-placeholder-yyyyyyyyy',
   INTERNAL_PRINCIPAL_SECRET: 'internal-principal-secret-test-placeholder-zzz',
+  // Pin SPA serving OFF: unset auto-detects on ./dist/index.html (present on
+  // any machine that ever ran a vite build) AND the probe is an fs call at
+  // env import time, which trips suites that mock node:fs (iptv.test.ts).
+  SERVE_SPA: '0',
 }

@@ -161,7 +161,7 @@ async fn ffprobe_with_bin_timeout(
 
 /// Pure: map ffprobe's JSON document to a [`FileProbe`]. Keep this free of
 /// I/O so it is exhaustively unit-testable.
-pub fn parse_ffprobe_json(doc: &Value) -> FileProbe {
+fn parse_ffprobe_json(doc: &Value) -> FileProbe {
     let format = doc.get("format");
 
     let container = format

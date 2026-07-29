@@ -31,6 +31,9 @@ import {
   drainRemuxSessions,
   scrubXtreamCreds,
   channelNeedsReencode,
+  channelIsDeadFeed,
+  _clearDeadFeedMemoryForTests,
+  _clearDrainingForTests,
 } from './iptvRemux.js'
 import { env } from '../env.js'
 
@@ -54,6 +57,8 @@ describe('iptv remux session', () => {
   beforeEach(() => {
     for (const s of listRemuxSessions()) stopRemuxSession(s.sessionId)
     fs.rmSync(remuxTmpDir, { recursive: true, force: true })
+    _clearDeadFeedMemoryForTests()
+    _clearDrainingForTests()
     spawnMock.mockReset()
     spawnMock.mockImplementation(() => fakeProcess())
   })
@@ -64,7 +69,7 @@ describe('iptv remux session', () => {
   })
 
   it('copies video, re-encodes audio to AAC-LC, + hls sliding-window flags', () => {
-    const s = startRemuxSession({ streamId: '10', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })
+    const s = startRemuxSession({ streamId: '10', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })!
 
     expect(spawnMock).toHaveBeenCalledWith('ffmpeg', expect.any(Array), expect.objectContaining({ cwd: s.dir }))
     const args = spawnMock.mock.calls[0][1] as string[]
@@ -75,6 +80,11 @@ describe('iptv remux session', () => {
     expect(args).toContain('-probesize')
     expect(args).toContain('-analyzeduration')
     expect(args).toContain('10M')
+    // Per-read input timeout so a half-open (dead-without-FIN) provider socket
+    // makes ffmpeg exit instead of blocking in read for the kernel TCP timeout,
+    // which would wedge the manifest and defeat every client reconnect.
+    expect(args).toContain('-rw_timeout')
+    expect(args[args.indexOf('-rw_timeout') + 1]).toBe('15000000')
     expect(args).toContain('-c:v')
     expect(args).toContain('copy')
     expect(args).toContain('-c:a')
@@ -104,7 +114,7 @@ describe('iptv remux session', () => {
   })
 
   it('default video path copies; reencodeVideo uses libx264 + governance flags', () => {
-    const a = startRemuxSession({ streamId: '50', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })
+    const a = startRemuxSession({ streamId: '50', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })!
     const copyArgs = spawnMock.mock.calls[0][1] as string[]
     expect(copyArgs).toContain('copy')
     expect(copyArgs).not.toContain('libx264')
@@ -148,7 +158,7 @@ describe('iptv remux session', () => {
   })
 
   it('heartbeat extends lifetime; stop removes the entry', () => {
-    const s = startRemuxSession({ streamId: '10', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })
+    const s = startRemuxSession({ streamId: '10', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })!
     const before = listRemuxSessions().find((x) => x.sessionId === s.sessionId)
     expect(before).toBeTruthy()
 
@@ -163,11 +173,89 @@ describe('iptv remux session', () => {
   it('removes the entry when ffmpeg exits', () => {
     const proc = fakeProcess()
     spawnMock.mockReturnValueOnce(proc)
-    const s = startRemuxSession({ streamId: '11', sub: 'plex:test', upstreamUrl: 'https://x/z.ts' })
+    const s = startRemuxSession({ streamId: '11', sub: 'plex:test', upstreamUrl: 'https://x/z.ts' })!
 
     proc.emit('exit', 0, null)
 
     expect(listRemuxSessions().some((x) => x.sessionId === s.sessionId)).toBe(false)
+  })
+
+  // ── dead-feed detection (S1 item 7) ───────────────────────────────────────
+  it('tags a clean fast EOF (code 0 under 60s) as a dead feed', () => {
+    const proc = fakeProcess()
+    spawnMock.mockReturnValueOnce(proc)
+    startRemuxSession({ streamId: '70', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })
+    expect(channelIsDeadFeed('70')).toBe(false)
+
+    // ffmpeg copies the ~30s dead-channel stub then EOFs cleanly, almost at once.
+    proc.emit('exit', 0, null)
+
+    expect(channelIsDeadFeed('70')).toBe(true)
+  })
+
+  it('does NOT tag a non-zero exit (corrupt feed / 255) as a dead feed', () => {
+    const proc = fakeProcess()
+    spawnMock.mockReturnValueOnce(proc)
+    startRemuxSession({ streamId: '71', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })
+
+    proc.emit('exit', 255, null)
+
+    expect(channelIsDeadFeed('71')).toBe(false)
+  })
+
+  it('does NOT tag our own SIGKILL/SIGTERM teardown as a dead feed', () => {
+    const proc = fakeProcess()
+    spawnMock.mockReturnValueOnce(proc)
+    startRemuxSession({ streamId: '72', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })
+
+    proc.emit('exit', null, 'SIGKILL')
+
+    expect(channelIsDeadFeed('72')).toBe(false)
+  })
+
+  it('does NOT tag a code-0 exit AFTER a long healthy run as a dead feed', () => {
+    const proc = fakeProcess()
+    spawnMock.mockReturnValueOnce(proc)
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+    try {
+      startRemuxSession({ streamId: '73', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })
+      // Ran ~2 min: a clean EOF here is a normal end of a real feed, not a stub.
+      nowSpy.mockReturnValue(1_000_000 + 120_000)
+      proc.emit('exit', 0, null)
+    } finally {
+      nowSpy.mockRestore()
+    }
+    expect(channelIsDeadFeed('73')).toBe(false)
+  })
+
+  // Dead-feed memory must outlast a full sibling walk. A channel whose N sibling
+  // feeds are ALL dead placeholders is walked one at a time; each plays a ~30s
+  // slate then clean-EOFs and is tagged dead. When the LAST sibling dies the
+  // FIRST must still be remembered, or isChannelOfflineUpstream (all-dead-at-once)
+  // never fires and the walk re-dials sibling #1 forever (the Fox Soccer Plus
+  // carousel). Under the old 60s memory, '201' (tagged at t=30s, exp t=90s) had
+  // lapsed by the time '204' died at t=120s → RED. The bumped memory keeps all
+  // four remembered across the ~120s walk.
+  it('remembers every sibling of an all-dead channel simultaneously across a 4-feed walk', () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(0)
+    try {
+      const siblings = ['201', '202', '203', '204']
+      let t = 0
+      for (const sid of siblings) {
+        nowSpy.mockReturnValue(t)
+        const proc = fakeProcess()
+        spawnMock.mockReturnValueOnce(proc)
+        startRemuxSession({ streamId: sid, sub: 'plex:walk', upstreamUrl: 'https://x/y.ts' })
+        // ~30s dead-channel slate, then a clean EOF → tagged dead.
+        t += 30_000
+        nowSpy.mockReturnValue(t)
+        proc.emit('exit', 0, null)
+      }
+      // The instant the 4th sibling dies (t=120s), ALL four are still remembered.
+      for (const sid of siblings) expect(channelIsDeadFeed(sid)).toBe(true)
+    } finally {
+      nowSpy.mockRestore()
+    }
   })
 
   it('drainRemuxSessions SIGTERMs every active session and clears the registry (finding 14-2)', async () => {
@@ -189,21 +277,51 @@ describe('iptv remux session', () => {
     expect(listRemuxSessions()).toHaveLength(0)
   })
 
-  it('caps simultaneous upstream connections, evicting the least-recently-seen', () => {
+  it('never exceeds the upstream cap: at cap it evicts + DEFERS the new dial until the evicted child exits', () => {
     const prev = env.IPTV_MAX_UPSTREAM_CONNECTIONS
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     ;(env as { IPTV_MAX_UPSTREAM_CONNECTIONS: number }).IPTV_MAX_UPSTREAM_CONNECTIONS = 2
+    const procs: FakeProcess[] = []
+    const exited = new Set<FakeProcess>()
+    spawnMock.mockImplementation(() => {
+      const p = fakeProcess()
+      procs.push(p)
+      return p
+    })
+    // Live upstream connections = every ffmpeg spawned that has NOT yet emitted
+    // 'exit'. A SIGTERMed child keeps its provider socket open until it actually
+    // exits, so this — not sessions.size — is the count the provider abuse block
+    // reacts to. The invariant under test: it never reaches cap+1.
+    const liveChildren = (): number => procs.filter((p) => !exited.has(p)).length
     try {
-      const a = startRemuxSession({ streamId: '40', sub: 'plex:a', upstreamUrl: 'https://x/a.ts' })
-      const b = startRemuxSession({ streamId: '41', sub: 'plex:b', upstreamUrl: 'https://x/b.ts' })
+      const a = startRemuxSession({ streamId: '40', sub: 'plex:a', upstreamUrl: 'https://x/a.ts' })!
+      const b = startRemuxSession({ streamId: '41', sub: 'plex:b', upstreamUrl: 'https://x/b.ts' })!
       heartbeatRemuxSession(b.sessionId) // keep b fresher than a so a is the LRU
-      // Third tune is at the cap → the oldest (a) is evicted, never exceeding 2.
-      const c = startRemuxSession({ streamId: '42', sub: 'plex:c', upstreamUrl: 'https://x/c.ts' })
+      expect(liveChildren()).toBe(2)
+
+      // Third tune AT the cap: it evicts the LRU (a) but must NOT spawn a
+      // replacement while a's connection is still draining — that would hold 3
+      // live upstream connections at cap 2, the exact over-cap burst the provider
+      // punishes with corrupt video. So the dial is DEFERRED (returns null).
+      const deferred = startRemuxSession({ streamId: '42', sub: 'plex:c', upstreamUrl: 'https://x/c.ts' })
+      expect(deferred).toBeNull() // deferred, not dialed
+      expect(spawnMock).toHaveBeenCalledTimes(2) // no third ffmpeg yet
+      expect(liveChildren()).toBeLessThanOrEqual(2) // never cap+1
+
+      // The evicted child (a) finally releases its provider connection.
+      exited.add(procs[0])
+      procs[0].emit('exit', null, 'SIGTERM')
+      expect(liveChildren()).toBe(1)
+
+      // Now a slot is genuinely free → the re-tune dials, still within the cap.
+      const c = startRemuxSession({ streamId: '42', sub: 'plex:c', upstreamUrl: 'https://x/c.ts' })!
+      expect(c.sessionId).toBeTruthy()
+      expect(spawnMock).toHaveBeenCalledTimes(3)
+      expect(liveChildren()).toBe(2) // b + c
       const ids = listRemuxSessions().map((s) => s.sessionId)
-      expect(ids).toHaveLength(2)
-      expect(ids).not.toContain(a.sessionId)
       expect(ids).toContain(b.sessionId)
       expect(ids).toContain(c.sessionId)
+      expect(ids).not.toContain(a.sessionId)
     } finally {
       ;(env as { IPTV_MAX_UPSTREAM_CONNECTIONS: number }).IPTV_MAX_UPSTREAM_CONNECTIONS = prev
       warn.mockRestore()
@@ -236,7 +354,7 @@ describe('iptv remux session', () => {
     const proc = fakeProcess()
     spawnMock.mockReturnValueOnce(proc)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const s = startRemuxSession({ streamId: '31', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })
+    const s = startRemuxSession({ streamId: '31', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })!
 
     proc.emit('error', new Error('spawn ffmpeg ENOENT'))
 

@@ -1,13 +1,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ApiError } from './errors'
 import { mediaApi, browserCaps, probedCaps, resetProbedCapsForTest } from './media'
+import { SESSION_EXPIRED_EVENT } from '../queryClient'
 
 const fetchMock = vi.fn()
+let expiryClock = 20_000
 
 beforeEach(() => {
+  expiryClock += 3_000
+  vi.spyOn(Date, 'now').mockReturnValue(expiryClock)
   fetchMock.mockReset()
   globalThis.fetch = fetchMock as typeof fetch
-  vi.stubGlobal('window', { location: { origin: 'http://localhost' } })
+  const windowTarget = new EventTarget() as EventTarget & {
+    location: { origin: string }
+  }
+  windowTarget.location = { origin: 'http://localhost' }
+  vi.stubGlobal('window', windowTarget)
 })
 
 function jsonRes(body: unknown, init?: ResponseInit) {
@@ -345,6 +353,40 @@ describe('mediaApi playback + watch', () => {
       completed: false,
     })
   })
+
+  it('flushWatch() dispatches session expiry for a swallowed unauthenticated 401 response', async () => {
+    const listener = vi.fn()
+    window.addEventListener(SESSION_EXPIRED_EVENT, listener)
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({ error: 'unauthenticated' }, { status: 401 }),
+    )
+
+    mediaApi.flushWatch({
+      kind: 'movie',
+      id: 7,
+      positionSecs: 12,
+      durationSecs: 1200,
+    })
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1))
+  })
+
+  it('flushWatch() ignores a swallowed non-session 401 response', async () => {
+    const listener = vi.fn()
+    window.addEventListener(SESSION_EXPIRED_EVENT, listener)
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({ error: 'media_core_auth_failed' }, { status: 401 }),
+    )
+
+    mediaApi.flushWatch({
+      kind: 'movie',
+      id: 7,
+      positionSecs: 12,
+      durationSecs: 1200,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(listener).not.toHaveBeenCalled()
+  })
 })
 
 describe('browserCaps', () => {
@@ -442,4 +484,3 @@ describe('probedCaps', () => {
     expect(spy.mock.calls.length).toBe(callsAfterFirst)
   })
 })
-

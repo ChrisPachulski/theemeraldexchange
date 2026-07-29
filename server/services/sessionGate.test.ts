@@ -38,6 +38,13 @@ vi.mock('./reconcileDeviceToken.js', () => ({
   roleFor: () => 'user',
 }))
 
+const { sealVerifiedAdminOwnershipSpy } = vi.hoisted(() => ({
+  sealVerifiedAdminOwnershipSpy: vi.fn(),
+}))
+vi.mock('./setupState.js', () => ({
+  sealVerifiedAdminOwnership: (sub: string) => sealVerifiedAdminOwnershipSpy(sub),
+}))
+
 // Mock the members allowlist (sibling-owned module). reconcileSession's
 // authZ now consults memberStatus FIRST and treats it as authoritative;
 // the per-test memberStatusImpl controls the verdict. Default 'allowed'
@@ -48,6 +55,16 @@ const memberStatusImpl: { fn: (sub: string) => 'allowed' | 'revoked' | 'not_memb
 }
 vi.mock('./membership.js', () => ({
   memberStatus: (sub: string) => memberStatusImpl.fn(sub),
+}))
+
+// DB-backed admin (plan 006 Phase 1): reconcileSession honors an active
+// members row with role='admin' (the first-owner claim mints one). Default
+// null = no row, so every legacy test keeps its roleFor-driven role.
+const isMemberImpl: { fn: (sub: string) => { role: 'admin' | 'user' } | null } = {
+  fn: () => null,
+}
+vi.mock('./members.js', () => ({
+  isMember: (sub: string) => isMemberImpl.fn(sub),
 }))
 
 const baseSession: Session = {
@@ -62,11 +79,58 @@ beforeEach(() => {
   _resetSessionGateCacheForTests()
   probeImpl.fn = async () => ({ kind: 'network_error' })
   memberStatusImpl.fn = () => 'allowed'
+  isMemberImpl.fn = () => null
   cascadeSpy.mockClear()
+  sealVerifiedAdminOwnershipSpy.mockClear()
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
+})
+
+describe('DB-backed admin role (plan 006 Phase 1 first-owner claim)', () => {
+  it('a local: session with a members-row admin KEEPS admin across reconcile', async () => {
+    // The claimed owner: local: sub, not in ADMIN_SUBS/ADMINS, but their
+    // claim minted a members row with role='admin'. Without the DB-role
+    // check, reconcileSession would demote them to 'user' on their very
+    // first protected request.
+    isMemberImpl.fn = () => ({ role: 'admin' })
+    const s = await reconcileSession({
+      sub: 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV',
+      username: 'Owner',
+      role: 'admin',
+      auth_mode: 'local',
+    } as Session)
+    expect(s).not.toBeNull()
+    expect(s?.role).toBe('admin')
+    expect(sealVerifiedAdminOwnershipSpy).toHaveBeenCalledWith(
+      'local:01ARZ3NDEKTSV4RRFFQ69G5FAV',
+    )
+  })
+
+  it('a members-row user role does NOT escalate (row must say admin)', async () => {
+    isMemberImpl.fn = () => ({ role: 'user' })
+    const s = await reconcileSession({
+      sub: 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV',
+      username: 'admin-user', // ADMINS collision — must still be blocked for local:
+      role: 'user',
+      auth_mode: 'local',
+    } as Session)
+    expect(s?.role).toBe('user')
+    expect(sealVerifiedAdminOwnershipSpy).not.toHaveBeenCalled()
+  })
+
+  it('demoting the members row demotes the session on its next request', async () => {
+    isMemberImpl.fn = () => null // row deleted/demoted
+    const s = await reconcileSession({
+      sub: 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV',
+      username: 'Owner',
+      role: 'admin', // stale cookie claim
+      auth_mode: 'local',
+    } as Session)
+    expect(s?.role).toBe('user')
+    expect(sealVerifiedAdminOwnershipSpy).not.toHaveBeenCalled()
+  })
 })
 
 describe('roleFor', () => {
@@ -116,6 +180,31 @@ describe('reconcileSession — role recompute', () => {
     })
     expect(r).not.toBeNull()
     expect(r!.role).toBe('admin')
+    expect(sealVerifiedAdminOwnershipSpy).toHaveBeenCalledWith(baseSession.sub)
+  })
+
+  it('seals an already-valid ADMIN_SUBS cookie session after live authZ succeeds', async () => {
+    const sub = 'apple:owner-sub'
+    const r = await reconcileSession({
+      sub,
+      username: 'owner',
+      role: 'user',
+      auth_mode: 'apple',
+    } as Session)
+
+    expect(r).toMatchObject({ sub, role: 'admin' })
+    expect(sealVerifiedAdminOwnershipSpy).toHaveBeenCalledWith(sub)
+  })
+
+  it('fails closed before returning a reconciled admin session when ownership cannot be sealed', async () => {
+    _primeSessionGateCache(baseSession.sub, 'member', baseSession.plexAuthToken)
+    sealVerifiedAdminOwnershipSpy.mockImplementationOnce(() => {
+      throw new Error('forced marker failure')
+    })
+
+    await expect(
+      reconcileSession({ ...baseSession, username: 'admin-user', role: 'user' }),
+    ).rejects.toThrow('forced marker failure')
   })
 })
 
@@ -132,12 +221,14 @@ describe('reconcileSession — allowlist authZ (authoritative)', () => {
     })
     const r = await reconcileSession(baseSession)
     expect(r).toBeNull()
+    expect(sealVerifiedAdminOwnershipSpy).not.toHaveBeenCalled()
   })
 
   it('denies a revoked member', async () => {
     memberStatusImpl.fn = () => 'revoked'
     const r = await reconcileSession(baseSession)
     expect(r).toBeNull()
+    expect(sealVerifiedAdminOwnershipSpy).not.toHaveBeenCalled()
   })
 
   it('allows an apple member without ever probing plex.tv', async () => {
@@ -189,6 +280,17 @@ describe('reconcileSession — allowlist authZ (authoritative)', () => {
     probeImpl.fn = async () => ({ kind: 'http_error', status: 401 })
     const r = await reconcileSession(baseSession)
     expect(r).toBeNull()
+    expect(sealVerifiedAdminOwnershipSpy).not.toHaveBeenCalled()
+  })
+
+  it('does not seal a configured admin whose Plex token is definitively revoked', async () => {
+    memberStatusImpl.fn = () => 'allowed'
+    probeImpl.fn = async () => ({ kind: 'http_error', status: 401 })
+
+    const r = await reconcileSession({ ...baseSession, username: 'admin-user' })
+
+    expect(r).toBeNull()
+    expect(sealVerifiedAdminOwnershipSpy).not.toHaveBeenCalled()
   })
 
   it('keeps a plex member signed in on a plex.tv 5xx (fail open on probe)', async () => {
@@ -233,6 +335,37 @@ describe('reconcileSession — allowlist authZ (authoritative)', () => {
 })
 
 describe('reconcileSession — cascade device revocation', () => {
+  it('does not log a raw identity when cascade bookkeeping fails', async () => {
+    const rawSub = 'plex:private-provider-subject'
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    memberStatusImpl.fn = () => 'not_member'
+    cascadeSpy.mockImplementationOnce(() => {
+      const error = new Error(`database failure while revoking ${rawSub}`)
+      error.name = `MutableErrorName-${rawSub}`
+      throw error
+    })
+
+    const result = await reconcileSession({ ...baseSession, sub: rawSub })
+
+    expect(result).toBeNull()
+    expect(errorSpy).toHaveBeenCalledOnce()
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(rawSub)
+    expect(String(errorSpy.mock.calls[0]?.[0])).toContain('"causeType":"error"')
+  })
+
+  it('does not log a raw identity when cascade bookkeeping succeeds', async () => {
+    const rawSub = 'plex:private-provider-subject'
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    memberStatusImpl.fn = () => 'not_member'
+    cascadeSpy.mockReturnValueOnce(2)
+
+    const result = await reconcileSession({ ...baseSession, sub: rawSub })
+
+    expect(result).toBeNull()
+    expect(warnSpy).toHaveBeenCalledOnce()
+    expect(JSON.stringify(warnSpy.mock.calls)).not.toContain(rawSub)
+  })
+
   // When the allowlist denies the cookie user (revoked / not a member),
   // every paired Apple device for the same sub must also be revoked so
   // the M2 Bearer path is locked out on its next request. Idempotent.

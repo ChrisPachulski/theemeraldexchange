@@ -408,4 +408,167 @@ describe('applyMigrations', () => {
     const cols = db.pragma('table_info(foo)') as Array<{ name: string }>
     expect(cols.map(c => c.name)).toContain('name')
   })
+
+  it('upgrades the real members schema for Google without losing the recovery snapshot', () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    const db = memDb()
+    const dir = freshDir()
+    const realDir = path.resolve(__dirname, '..', 'migrations', 'server')
+
+    for (let version = 1; version <= 6; version += 1) {
+      const prefix = String(version).padStart(4, '0') + '_'
+      const filename = fs.readdirSync(realDir).find((name) => name.startsWith(prefix))
+      expect(filename).toBeDefined()
+      fs.copyFileSync(path.join(realDir, filename!), path.join(dir, filename!))
+    }
+    applyMigrations({ migrationsDir: dir, db })
+
+    const members = [
+      {
+        sub: 'plex:42',
+        display_name: 'Owner',
+        role: 'admin',
+        auth_mode: 'plex',
+        invited_by: null,
+        joined_at: '2026-01-02T03:04:05.000Z',
+        revoked_at: null,
+      },
+      {
+        sub: 'apple:000001.recovery.0001',
+        display_name: 'Former member',
+        role: 'user',
+        auth_mode: 'apple',
+        invited_by: 'plex:42',
+        joined_at: '2026-02-03T04:05:06.000Z',
+        revoked_at: '2026-03-04T05:06:07.000Z',
+      },
+      {
+        sub: 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV',
+        display_name: null,
+        role: 'user',
+        auth_mode: 'local',
+        invited_by: 'plex:42',
+        joined_at: '2026-04-05T06:07:08.000Z',
+        revoked_at: null,
+      },
+    ]
+    const insertMember = db.prepare(
+      `INSERT INTO members
+         (sub, display_name, role, auth_mode, invited_by, joined_at, revoked_at)
+       VALUES
+         (@sub, @display_name, @role, @auth_mode, @invited_by, @joined_at, @revoked_at)`,
+    )
+    for (const member of members) insertMember.run(member)
+    const invite = {
+      code_hash: 'a'.repeat(64),
+      issued_by: 'plex:42',
+      label: 'Google guest',
+      expires_at: '2027-01-01T00:00:00.000Z',
+      max_uses: 2,
+      used_count: 1,
+      created_at: '2026-05-06T07:08:09.000Z',
+      revoked_at: null,
+    }
+    db.prepare(
+      `INSERT INTO invites
+         (code_hash, issued_by, label, expires_at, max_uses, used_count, created_at, revoked_at)
+       VALUES
+         (@code_hash, @issued_by, @label, @expires_at, @max_uses, @used_count, @created_at, @revoked_at)`,
+    ).run(invite)
+
+    const dependencies = db
+      .prepare(
+        `SELECT type, name, sql
+           FROM sqlite_master
+          WHERE type IN ('view', 'trigger')
+            AND lower(COALESCE(sql, '')) LIKE '%members%'`,
+      )
+      .all()
+    expect(dependencies).toEqual([])
+    const indexedByDependencies = db
+      .prepare(
+        `SELECT type, name
+           FROM sqlite_master
+          WHERE lower(COALESCE(sql, '')) LIKE '%indexed by%members%'`,
+      )
+      .all()
+    expect(indexedByDependencies).toEqual([])
+    const foreignKeys = (
+      db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as Array<{
+        name: string
+      }>
+    ).flatMap(({ name }) =>
+      (db.pragma(`foreign_key_list(${JSON.stringify(name)})`) as Array<{ table: string }>).filter(
+        (row) => row.table === 'members',
+      ),
+    )
+    expect(foreignKeys).toEqual([])
+
+    const migration7 = fs
+      .readdirSync(realDir)
+      .find((name) => name.startsWith('0007_'))
+    expect(migration7).toBeDefined()
+    fs.copyFileSync(path.join(realDir, migration7!), path.join(dir, migration7!))
+    applyMigrations({ migrationsDir: dir, db })
+    expect(() => applyMigrations({ migrationsDir: dir, db })).not.toThrow()
+
+    expect(migrationRows(db).map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7])
+    const ordered = (table: string) =>
+      db
+        .prepare(
+          `SELECT sub, display_name, role, auth_mode, invited_by, joined_at, revoked_at
+             FROM ${table}
+            ORDER BY sub`,
+        )
+        .all()
+    const expectedMembers = [...members].sort((a, b) => a.sub.localeCompare(b.sub))
+    expect(ordered('members')).toEqual(expectedMembers)
+    expect(ordered('members_pre_google')).toEqual(expectedMembers)
+    expect(db.prepare(`SELECT * FROM invites`).get()).toEqual(invite)
+
+    const indexes = db
+      .prepare(
+        `SELECT name, tbl_name
+           FROM sqlite_master
+          WHERE type = 'index'
+            AND name IN (
+              'members_by_revoked',
+              'members_by_invited_by',
+              'members_v2_by_revoked',
+              'members_v2_by_invited_by'
+            )
+          ORDER BY name`,
+      )
+      .all()
+    expect(indexes).toEqual([
+      { name: 'members_by_invited_by', tbl_name: 'members_pre_google' },
+      { name: 'members_by_revoked', tbl_name: 'members_pre_google' },
+      { name: 'members_v2_by_invited_by', tbl_name: 'members' },
+      { name: 'members_v2_by_revoked', tbl_name: 'members' },
+    ])
+    expect(db.pragma('foreign_key_check')).toEqual([])
+
+    expect(() =>
+      insertMember.run({
+        sub: 'google:118234567890123456789',
+        display_name: 'Google member',
+        role: 'user',
+        auth_mode: 'google',
+        invited_by: 'plex:42',
+        joined_at: '2026-06-07T08:09:10.000Z',
+        revoked_at: null,
+      }),
+    ).not.toThrow()
+    expect(() =>
+      insertMember.run({
+        sub: 'future:123',
+        display_name: null,
+        role: 'user',
+        auth_mode: 'future',
+        invited_by: null,
+        joined_at: '2026-06-07T08:09:10.000Z',
+        revoked_at: null,
+      }),
+    ).toThrow(/CHECK constraint failed/)
+  })
 })

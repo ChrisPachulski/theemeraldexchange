@@ -27,15 +27,80 @@ the transcoder — is implementation detail, never visible from inside the exper
 - **You own the box** — self-hosted on your NAS; household signals never leave it.
 - **Live + on-demand** — an IPTV core with smoothed live cable, alongside a scanned,
   metadata-rich media library.
-- **Three ways in, one allowlist** — Plex OAuth, Sign in with Apple, and WebAuthn passkeys,
-  all converging on a single owner-controlled invite list.
+- **Four ways in, one allowlist** — Plex OAuth, Sign in with Apple, Sign in with Google,
+  and WebAuthn passkeys, all converging on a single owner-controlled invite list.
 - **Hardware transcoding** — HEVC→H.264 via Intel VAAPI on the NAS iGPU, software fallback off-box.
 - **Local-first recommendations** — a FastAPI + sqlite-vec scoring sidecar; your taste never
   leaves the NAS.
 - **Built to ship native** — the web client is the reference surface; native iOS/tvOS is the
   distribution target.
 
-## Quick start
+## Run your own Emerald server
+
+Like running a Jellyfin server: prebuilt multi-arch images (amd64 + arm64), no accounts, no
+domain, no build. On any box with Docker:
+
+```bash
+mkdir emerald && cd emerald
+curl -fsSL https://raw.githubusercontent.com/ChrisPachulski/theemeraldexchange/main/selfhost/install.sh | sh
+docker compose up -d
+```
+
+The installer generates every secret and asks for your media folder. After startup, retrieve the
+one-time setup token with `docker compose logs backend | grep -A3 unclaimed`, then **claim the
+server** from a WebAuthn-secure address:
+
+- On a machine that runs Docker and has a browser, open `http://localhost:3001`.
+- For a headless NAS, create a tunnel from your laptop with
+  `ssh -N -L 3001:127.0.0.1:3001 <user>@<host>`, then open `http://localhost:3001` locally.
+- Or enable the Tailscale profile and use its HTTPS URL.
+
+Register a passkey with the setup token and you're the owner — invite your household from the
+Users tab.
+
+Everything else is opt-in, one flag each:
+
+| Capability | Turn it on with |
+|---|---|
+| Remote access (private, via your [Tailscale](https://tailscale.com) tailnet) | `COMPOSE_PROFILES=remote` + `TS_AUTHKEY` |
+| Remote access (public, via Cloudflare Tunnel + your domain) | `COMPOSE_PROFILES=remote-cloudflare` + `TUNNEL_TOKEN` |
+| Richer metadata & discovery | `TMDB_READ_ACCESS_TOKEN` (free key) |
+| Requests & downloads (existing Sonarr / Radarr / SAB) | `SONARR_API_KEY` / `RADARR_API_KEY` / `SAB_API_KEY` |
+| Live TV (your Xtream/IPTV provider) | `XTREAM_HOST` / `XTREAM_USERNAME` / `XTREAM_PASSWORD` |
+| Plex login as an extra sign-in provider | `PLEX_CLIENT_ID` (+ `PLEX_SERVER_ID`) |
+| Sign in with Apple | `APPLE_CLIENT_ID` (`ENABLE_APPLE_SIGN_IN=1` is an optional fail-fast assertion) |
+| Sign in with Google | `GOOGLE_CLIENT_ID` (`ENABLE_GOOGLE_SIGN_IN=1` is an optional fail-fast assertion) |
+| Error telemetry (self-hosted Glitchtip) | `COMPOSE_PROFILES=telemetry` + `TELEMETRY_ENABLED=1` |
+
+With everything off you still get the core product: library browsing + playback, passkey
+sign-in, owner-controlled invites, and local-first recommendations. Passkeys require HTTPS or
+the browser's loopback exception (`http://localhost`); plain HTTP on a LAN IP or `.local`
+hostname is not a secure context. Use the localhost/SSH-tunnel path above or the Tailscale HTTPS
+URL.
+
+**Platforms.** Images are multi-arch (linux/amd64 + linux/arm64) and boot-verified on both
+after every publish (`verify-images`):
+
+- **Linux** (Ubuntu, Debian, …) — amd64 and arm64 (Raspberry Pi 5 class), native.
+- **macOS** — Docker Desktop (or OrbStack/colima); Apple Silicon runs the arm64 images at
+  native speed, Intel Macs the amd64 ones. Claim at `http://localhost:3001` on the Mac itself.
+- **Windows** — Docker Desktop with the WSL2 backend; run the installer **inside a WSL
+  (Ubuntu) shell**, not PowerShell — it's a POSIX script. `MEDIA_PATH` can point at
+  `/mnt/c/...`, though a path inside WSL's own filesystem scans faster.
+
+**Apple `container` and Microsoft WSL Containers (`wslc`).** Both new first-party runtimes
+run our images — they're standard OCI, and the backend is verified live on Apple `container`
+1.0 (macOS 26, Apple Silicon): `container run` of the GHCR image boots healthy with the SPA
+and claim flow working. What neither runtime has yet is **Compose**, which the multi-service
+bundle needs (inter-service DNS, health-ordered startup): Apple `container` resolves
+container names only after a sudo `container system dns` setup, and `wslc` (public preview,
+GA fall 2026) doesn't list Compose at all. Until they do, use a Compose-capable runtime for
+the full stack; single-image runs on either are fully supported.
+
+arm64 boxes transcode on CPU (Intel VAAPI hardware encode is x86-only) and fall back to
+yt-dlp for trailers — everything else is identical across platforms.
+
+## Quick start (development)
 
 ```bash
 npm install
@@ -64,16 +129,19 @@ Four runtimes, one product:
 
 ## Authentication
 
-No homegrown password store. Identity comes from three parallel providers, all converging on a
+No homegrown password store. Identity comes from four parallel providers, all converging on a
 single invite/members allowlist:
 
 - **Plex OAuth** (PIN flow)
-- **Sign in with Apple** (RS256, alg/aud/iss/nonce-pinned) for the device-pair bearer flow
+- **Sign in with Apple** (RS256, alg/aud/iss/nonce-pinned)
+- **Sign in with Google** (RS256, issuer/audience-pinned across configured web/native clients)
 - **WebAuthn passkeys** (cross-platform, password-free)
 
-A user is authorized only if their identity is on the members allowlist, which the owner
-manages via invites. The Plex token is encrypted at rest (JWE); invite redemption is atomic and
-race-safe.
+Normal login requires an active member/admin identity or invite redemption. A verified share on
+the configured Plex server is the explicit provider-backed admission path. Fresh-install state
+never grants normal login; ownership begins with the host-protected setup-token passkey claim.
+The Plex token is encrypted at rest (JWE); invite redemption is atomic and race-safe, and provider
+success is confirmed against the browser's `/api/me` session before the dashboard trusts it.
 
 ## Backend surface (`/api`)
 
@@ -162,11 +230,15 @@ cargo test -p emerald-contracts -p media-core -p transcoder
 
 ## Deploy
 
-Self-hosted on the NAS (`root@theemeraldexchange.local`, Unraid) via `docker-compose` (9
-services: backend, recommender, media-core, transcoder, cloudflared, and the 4-container
-Glitchtip telemetry stack) behind a Cloudflare Tunnel; the SPA ships to Netlify. Crash/error
-telemetry is per-self-hoster Glitchtip, with the DSN distributed server → client at boot. See
-**[DEPLOY.md](./DEPLOY.md)**.
+Two tracks (see **[DEPLOY.md](./DEPLOY.md)**):
+
+- **Self-host (LAN, easy)** — `selfhost/`: pull-based multi-arch images, 4 core services,
+  optional profiles. The quickstart at the top of this README.
+- **Owner full deployment** — the same images/compose with every profile on: NAS
+  (`docker-compose` with `COMPOSE_PROFILES=remote-cloudflare,telemetry` → backend, recommender,
+  media-core, transcoder, cloudflared, and the 4-container Glitchtip stack) behind a Cloudflare
+  Tunnel, SPA on Netlify, Plex login enabled. One configuration of the same product — nothing
+  the self-host track gives up is lost here.
 
 ## Docs
 

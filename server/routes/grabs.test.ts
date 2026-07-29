@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { Hono } from 'hono'
 import { grabs } from './grabs.js'
-import { createSession } from '../session.js'
+import { createMemberSession as createSession } from '../test/authFixture.js'
 import { appendGrabEvent, _setGrabLogPathForTests } from '../services/grabLog.js'
 import type { Env } from '../middleware/auth.js'
 

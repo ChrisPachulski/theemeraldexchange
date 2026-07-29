@@ -15,8 +15,12 @@
 
 import { serverDb } from './serverDb.js'
 import type { DeviceTokenClaims } from '../session.js'
-import { roleFor } from './sessionGate.js'
+import { effectiveRoleFor } from './sessionGate.js'
 import { memberStatus } from './membership.js'
+import { createLogger } from './logger.js'
+import { sealVerifiedAdminOwnership } from './setupState.js'
+
+const authLog = createLogger('auth')
 
 export type ReconciledDeviceSession = DeviceTokenClaims & {
   /** Stable identifier for /api/me. Device tokens don't carry a
@@ -24,6 +28,9 @@ export type ReconciledDeviceSession = DeviceTokenClaims & {
    *  device_name from device_tokens instead. Stored separately on the
    *  reconcile result so callers can render either. */
   device_name: string
+  /** Verified identity username retained server-side at pairing. Distinct
+   * from device_name, which is only a UI label. */
+  identity_username: string | null
 }
 
 /** Reconcile a verified device-token against current server state.
@@ -50,7 +57,12 @@ export function reconcileDeviceToken(
     try {
       cascadeRevokeForSub(claims.sub, status === 'revoked' ? 'member_revoked' : 'not_member')
     } catch (e) {
-      console.error('[reconcileDeviceToken] cascade-revoke failed for sub=%s: %s', claims.sub, e)
+      authLog.error('device token cascade failed', {
+        event: 'auth_device_cascade',
+        outcome: 'bookkeeping_failed',
+        surface: 'bearer',
+        causeType: e instanceof Error ? 'error' : typeof e,
+      })
     }
     return null
   }
@@ -75,14 +87,17 @@ export function reconcileDeviceToken(
     return null
   }
 
-  const role = row.username
-    ? roleFor(row.username, claims.sub)
-    : roleFor('', claims.sub)
+  // Never trust the long-lived bearer role claim. Use the same exact-sub,
+  // current-policy decision as cookie reconciliation, then close first-owner
+  // setup only after both live membership and the live jti row succeeded.
+  const role = effectiveRoleFor(row.username ?? '', claims.sub)
+  if (role === 'admin') sealVerifiedAdminOwnership(claims.sub)
 
   return {
     ...claims,
     role,
     device_name: row.device_name,
+    identity_username: row.username,
   }
 }
 
@@ -107,7 +122,3 @@ export function cascadeRevokeForSub(sub: string, reason: string): number {
   tx(jtis)
   return jtis.length
 }
-
-// roleFor is re-exported so middleware that builds a Session-shaped
-// view from a device token has a single import surface.
-export { roleFor }
