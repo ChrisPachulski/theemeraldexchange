@@ -24,7 +24,7 @@ rust-version = "1.96"
 
 [workspace.dependencies]
 aes-gcm = "0.11.0"
-base64 = "0.22"
+base64 = "0.23"
 hkdf = "0.12"
 hmac = "0.12"
 sha2 = "0.10"
