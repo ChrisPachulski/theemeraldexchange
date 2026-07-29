@@ -34,6 +34,13 @@ updates:
           - "typescript*"
           - "vite*"
           - "vitest*"
+          # `vitest*` does NOT match the scoped `@vitest/*` packages, so without
+          # this line @vitest/coverage-v8 fell through to the runtime-minor
+          # catch-all and got split into a SEPARATE PR from vitest itself.
+          # coverage-v8 declares an exact peer on vitest, so each half then
+          # failed `npm ci` with ERESOLVE before a single test could run.
+          # The pair must always bump together.
+          - "@vitest/*"
           - "@vitejs/*"
           - "@playwright/*"
           - "playwright"
