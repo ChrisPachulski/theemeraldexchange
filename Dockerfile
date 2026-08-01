@@ -103,7 +103,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 # prebuilt platform packages). VITE_API_BASE_URL is deliberately UNSET:
 # apiUrl() then falls back to window.location.origin, which is exactly
 # right for same-origin serving.
-FROM node:24-slim@sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf AS spa-on
+FROM node:25-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370 AS spa-on
 WORKDIR /spa
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
@@ -114,7 +114,7 @@ RUN npx vite build
 
 # Empty stand-in: BUNDLE_SPA=off yields an empty /spa/dist (no index.html),
 # so env.serveSpa auto-detection stays off — today's owner posture.
-FROM node:24-slim@sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf AS spa-off
+FROM node:25-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370 AS spa-off
 RUN mkdir -p /spa/dist
 
 FROM spa-${BUNDLE_SPA} AS spa-dist
@@ -122,7 +122,7 @@ FROM spa-${BUNDLE_SPA} AS spa-dist
 # ---------------------------------------------------------------------------
 # Digest-pinned for reproducible builds. Resolve a new digest with:
 #   docker buildx imagetools inspect node:24-slim
-FROM node:24-slim@sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf AS base
+FROM node:25-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370 AS base
 
 WORKDIR /app
 
