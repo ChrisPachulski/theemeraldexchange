@@ -1,7 +1,9 @@
 # HLS Trick-Play (I-frame scrubbing thumbnails) for the transcoder
 
-Status: **IMPLEMENTED behind `TRANSCODER_TRICKPLAY` (default OFF)**, re-encode VOD
-path + native (AVPlayer) clients only. This document is both the design record
+Status: **IMPLEMENTED behind `TRANSCODER_TRICKPLAY` (default ON since S5)**,
+re-encode VOD path + native (AVPlayer) clients only. An unset or blank value
+enables it; only an explicit falsy value (`0`/`false`/`no`/`off`) turns it off
+(`trickplay.rs:102-107`). This document is both the design record
 and the on-device verification guide.
 
 ## What "trick-play" means here
@@ -28,21 +30,21 @@ Grant → session → manifest → segments, all in `crates/transcoder`:
 1. **Grant.** `POST /api/transcode/grant` (`routes.rs::grant`, registered at
    `routes.rs:92`). Plans copy-vs-re-encode (`plan.rs`), starts a session, and
    returns JSON with `manifestUrl: "/api/transcode/session/{id}/index.m3u8"`
-   (`routes.rs:494`). The backend proxy forwards the client `User-Agent` to the
+   (`routes.rs:498`). The backend proxy forwards the client `User-Agent` to the
    transcoder.
-2. **Session + ffmpeg.** `session.rs::SessionManager::start` (`session.rs:867`)
+2. **Session + ffmpeg.** `session.rs::SessionManager::start` (`session.rs:1051`)
    creates a per-session scratch dir and spawns ONE supervised ffmpeg child that
    writes `index.m3u8` (an `EVENT` playlist) + `seg_%05d.ts` (or `.m4s` +
    `init.mp4` for HEVC-copy fMP4). The full ffmpeg argv is built in
    `args.rs::ffmpeg_args_for` (`args.rs:248`); the HLS muxer block is
-   `args.rs:654-708`. A re-encode forces a keyframe every `HLS_SEGMENT_SECS` (=2s,
-   `args.rs:494`), so re-encode segments are uniform 2s. A precedent for a second,
-   detached one-shot ffmpeg pass already exists:
-   `session.rs::spawn_sidecar_subtitle` (`session.rs:745`).
+   `args.rs:667-712`. A re-encode forces a keyframe every `HLS_SEGMENT_SECS` (=2s,
+   const at `args.rs:136`, forced at `args.rs:508`), so re-encode segments are
+   uniform 2s. A precedent for a second, detached one-shot ffmpeg pass already
+   exists: `session.rs::spawn_sidecar_subtitle` (`session.rs:929`).
 3. **Manifest.** `GET …/index.m3u8` → `routes.rs::session_manifest`
-   (`routes.rs:552`). It branches on the client:
+   (`routes.rs:579`). It branches on the client:
    - **Native** (User-Agent contains `AppleCoreMedia`/`CoreMedia`,
-     `routes.rs::is_native_hls_client` `routes.rs:544`) + **re-encode** → a
+     `routes.rs::is_native_hls_client` `routes.rs:548`) + **re-encode** → a
      complete finite VOD playlist synthesized in memory by
      `vod_manifest::synthesize` (`vod_manifest.rs:40`), served in place of the
      `EVENT` playlist so AVKit shows a real scrubber instead of a LIVE badge.
@@ -51,22 +53,29 @@ Grant → session → manifest → segments, all in `crates/transcoder`:
      `keyframes.rs`), else the on-disk `EVENT` playlist.
    - **Web (hls.js)** → the on-disk `EVENT` playlist, always.
 4. **Segments.** `GET …/session/{id}/{segment}` → `routes.rs::session_segment`
-   (`routes.rs:637`). Bare filenames resolve to files in the session dir
-   (`asset_path`, `session.rs:1373`). Native clients get a short frontier wait
-   for a not-yet-written segment (`routes.rs:665`).
+   (`routes.rs:674`). Bare filenames resolve to files in the session dir
+   (`asset_path`, `session.rs:1811`). Native clients get a short frontier wait
+   for a not-yet-written segment (`routes.rs:738`).
 
-There is **no** master playlist and **no** I-frame playlist anywhere in the repo
-today — confirmed by grep. The client always receives a single MEDIA playlist URL.
+*(Pre-change state, kept for the record:* at the time this section was written
+there was no master playlist and no I-frame playlist anywhere in the repo, and
+the client always received a single MEDIA playlist URL. Three master builders
+now exist — `trickplay.rs:210`, `session.rs:1462`, `session.rs:1497`.*)*
 
 ### Does introducing a master break existing clients?
 
-No, because the master is gated **strictly** behind `is_native_hls_client`
-(AppleCoreMedia UA) **and** the `TRANSCODER_TRICKPLAY` flag. The web SPA never
-sends an AppleCoreMedia UA, so it never receives a master — its `index.m3u8`
-stays the on-disk `EVENT` media playlist byte-for-byte. (Even if it did receive
-one, hls.js parses multivariant playlists fine and would just pick the single
-video variant; the change is safe by construction regardless of the SPA's
-player.) With the flag OFF, nothing changes for anyone.
+No, because every master is gated behind `is_native_hls_client` (AppleCoreMedia
+UA). The web SPA never sends an AppleCoreMedia UA, so it never receives a master
+— its `index.m3u8` stays the on-disk `EVENT` media playlist byte-for-byte. (Even
+if it did receive one, hls.js parses multivariant playlists fine and would just
+pick the single video variant; the change is safe by construction regardless of
+the SPA's player.)
+
+Note the trick-play flag is **not** the only path to a master any more. A native
+session with a sidecar subtitle or an alternate-audio group gets a MASTER from
+`native_master` with no trick-play involvement (`routes.rs:612-616`,
+`session.rs:1497-1525`), so "flag OFF ⇒ nothing changes for anyone" no longer
+holds. What the flag still gates is the I-frame rendition specifically.
 
 ## The two implementation options, evaluated
 
@@ -113,7 +122,8 @@ New module **`crates/transcoder/src/trickplay.rs`** (registered `lib.rs`,
 `mod trickplay;`) — pure, unit-tested:
 
 - `enabled()` / `is_truthy()` — reads `TRANSCODER_TRICKPLAY` (`1/true/yes/on`).
-- `master(bandwidth_bps, resolution)` — the MASTER playlist: one
+- `master(variant_bandwidth_bps, resolution, include_iframe, subs, audio)` — the
+  MASTER playlist: one
   `EXT-X-STREAM-INF` → `media.m3u8`, one `EXT-X-I-FRAME-STREAM-INF` →
   `iframe.m3u8`. `RESOLUTION` is omitted rather than fabricated (source aspect
   isn't carried at the serving point; the variant plays fine without it).
@@ -137,8 +147,9 @@ Wiring:
     `enabled() && is_native_hls_client && trickplay_master(id).is_some()`;
     otherwise unchanged.
   - `session_segment` intercepts `media.m3u8` (→ the synthesized VOD media
-    playlist, same bytes native `index.m3u8` serves today) and `iframe.m3u8`
-    (→ `trickplay_iframe`) when `enabled()`; otherwise unchanged. `thumb_*.ts`
+    playlist, same bytes native `index.m3u8` serves today) **unconditionally**,
+    since both masters reference it (`routes.rs:698`); only `iframe.m3u8`
+    (→ `trickplay_iframe`) stays flag-gated (`routes.rs:711`). `thumb_*.ts`
     segments are served by the existing on-disk asset read and 404 gracefully
     until the sampler writes them (a momentary blank preview, which AVPlayer
     tolerates on an I-frame rendition).
@@ -158,8 +169,10 @@ Wiring:
   rendition are all covered with no further change. The sibling video variant is
   a BARE line (`media.m3u8`), already tokenized by the relative-line rule.
   Absolute URIs keep their own auth (untouched). Covered by new unit tests
-  (both-rendition tokenization; single-quote + absolute cases). With the flag OFF
-  no master is emitted, so these tags never appear in prod today — zero risk.
+  (both-rendition tokenization; single-quote + absolute cases). With the flag now
+  defaulting ON, an unconfigured deploy DOES emit the master, so
+  `#EXT-X-I-FRAME-STREAM-INF` reaches the proxy rewrite in prod — this rewrite is
+  load-bearing, not dormant.
 
 ### End-to-end token-auth flow (native, flag ON, re-encode)
 
@@ -188,22 +201,29 @@ The grant URL is unchanged (`…/index.m3u8`); only its native-re-encode *respon
 becomes a master. All sub-URLs are same-directory relative, so the player
 resolves them correctly.
 
-## Why default OFF (honest caveats)
+## Why it shipped OFF first, and what changed (historical)
+
+Both caveats that justified opt-in have since been addressed; the flag now
+defaults ON (`trickplay.rs:86-90`, `:102-107`).
 
 1. **A second ffmpeg process per session on a Plex-co-tenant box.** The sampler is
-   tiny at the encoder (320px, 0.1 fps) but the `fps` filter still **decodes**
-   every source frame to pick one per interval, so on a long 4K title it is real
-   decode CPU competing with the main encode. Per the repo's NAS-safety rules,
-   that warrants opt-in, not default-on.
-2. **On-device acceptance is unverified here.** Whole-file (no-byterange)
+   tiny at the encoder (320px, 0.1 fps), and the original concern was that the
+   `fps` filter still decodes every source frame to pick one per interval —
+   real decode CPU competing with the main encode on a long 4K title.
+   *Addressed:* the sampler now passes `-skip_frame nokey` (keyframe-only decode)
+   and `-threads 2` as input options, specifically so it never walks every frame
+   (`trickplay.rs:348-351`).
+2. **On-device acceptance was unverified here.** Whole-file (no-byterange)
    single-I-frame TS segments in an `EXT-X-I-FRAMES-ONLY` playlist are spec-legal,
    but Apple's own `mediafilesegmenter` emits **byte-range** entries into larger
-   segments, and only a real Apple TV / iOS device can confirm AVPlayer renders
-   the whole-file form. This environment has no such device.
+   segments, so only a real Apple TV / iOS device could confirm AVPlayer renders
+   the whole-file form. *Addressed:* the rendition was validated on-device in S5,
+   which is what the default flip rests on (`trickplay.rs:86-90`).
 
-## On-device verification steps (before considering default-on)
+## On-device verification steps (re-run after any change to this path)
 
-1. Deploy the transcoder image with `TRANSCODER_TRICKPLAY=1`.
+1. Deploy the transcoder image with `TRANSCODER_TRICKPLAY=1` (or unset — it
+   defaults ON).
 2. Play a title that **re-encodes** (e.g. an HEVC-that-must-transcode or a forced
    re-encode) from the Apple TV client. Copy-remux titles will not show
    thumbnails (by design).
@@ -214,10 +234,13 @@ resolves them correctly.
    - If **no** thumbnails but playback is fine: whole-file iframe segments are
      likely being rejected — switch to **byte-range** mode (see below).
    - If playback breaks: check the master's `BANDWIDTH`/variant; fall back by
-     unsetting the flag (instant, no redeploy of behavior).
+     setting **`TRANSCODER_TRICKPLAY=0`** (instant, no redeploy of behavior).
+     Do NOT "unset the flag" — unset now means ON.
 5. Watch the box: `…/api/health` and Plex responsiveness during a first play of a
-   long title, to confirm the sampler's decode load is acceptable. If not,
-   raise `TRICKPLAY_INTERVAL_SECS` (fewer frames) or gate the sampler to idle.
+   long title, to confirm the sampler's decode load is acceptable. If not, gate
+   the sampler to idle, or raise `TRICKPLAY_INTERVAL_SECS` — note that one is a
+   `pub(crate) const` (`trickplay.rs:60`), read from no env var, so changing it
+   needs a rebuild, unlike the flag.
 
 ### Byte-range fallback (if whole-file segments don't render)
 
@@ -230,9 +253,9 @@ it is needed.
 
 ## Tests
 
-`crates/transcoder/src/trickplay.rs` unit tests (10): flag truthiness (pure, no
+`crates/transcoder/src/trickplay.rs` unit tests (20): flag truthiness (pure, no
 env mutation), master with/without resolution, I-frame playlist shape
 (`EXT-X-I-FRAMES-ONLY`, VOD, ENDLIST, no `EVENT`), `ceil` count, remainder tail,
 no byte-range, EXTINF-sums-to-duration, and the sampler argv (one keyframe per
 segment, no `-ss`, correct output paths). Full suite: `cargo test -p transcoder`
-(204 pass) and `cargo test --all` green.
+and `cargo test --all`.

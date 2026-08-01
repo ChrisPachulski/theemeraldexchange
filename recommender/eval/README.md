@@ -18,8 +18,12 @@ Each line:
 }
 ```
 
-* `library` — TMDB ids the household has indexed (household-scoped;
-  the model treats them as the positive centroid).
+* `library` — TMDB ids the household has indexed, **minus this row's
+  `positives`** (household-scoped; the model treats them as the positive
+  centroid). The subtraction is load-bearing, not cosmetic:
+  `retrieval.fetch_candidates` excludes `library_ids` from the candidate
+  pool, so a hand-written row that leaves its positives in `library` makes
+  every positive unrecallable and collapses recall toward zero.
 * `positives` — TMDB ids this user later liked / added / clicked.
   Scorer rewards recall against these.
 * `negatives` — ids the user later rejected / disliked. Scorer
@@ -43,7 +47,8 @@ RECOMMENDER_DB_PATH=./snapshot.db \
 
 The generator filters to (sub, kind) pairs that have at least one
 positive outcome AND a library at or above the recommender cold-start
-threshold (`RECOMMENDER_COLD_START_THRESHOLD`, default 10) in the last
+threshold (`RECOMMENDER_COLD_START_THRESHOLD`, default 10) — counted
+**after** the positives are subtracted, not on the indexed total — in the last
 30 days (`HOLDOUT_LOOKBACK_DAYS` env to override). Anything under those
 floors is routed through cold-start behavior at runtime, so it gets
 dropped at build time rather than polluting the personalized eval signal.

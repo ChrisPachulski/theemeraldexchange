@@ -59,6 +59,11 @@ official Debian repositories via `apt-get install`:
   **GPL-2.0-or-later (GPL v2+)**.
 - `intel-media-va-driver` (the Intel iHD VAAPI driver) — **MIT** licensed.
 - `libva2` / `libva-drm2` (the VAAPI userspace library) — **MIT** licensed.
+- `mesa-vulkan-drivers` / `libvulkan1` — installed unconditionally into the same
+  runtime image (`crates/transcoder/Dockerfile:87`) so the shipped ffmpeg's
+  `libplacebo` filter (the Dolby Vision path) can run. Their licenses are not
+  recorded in this repository; see each package's own
+  `/usr/share/doc/<package>/copyright` inside the image.
 
 Because the transcoder image redistributes **unmodified Debian binary
 packages**, the corresponding-source obligation is satisfied differently than
@@ -77,6 +82,24 @@ library. This is true in all three images, including the transcoder (it spawns
 `/usr/bin/ffmpeg` per session). Consequently the GPL obligations attach to the
 distributed FFmpeg binaries and libraries alone and do **not** extend to the
 project's first-party source code, which remains proprietary under `LICENSE`.
+
+## yt-dlp (backend server image)
+
+The backend server image also bundles **`yt-dlp`**, a third-party executable used
+to resolve a YouTube trailer/extra id to a directly-playable progressive URL.
+`server/services/ytdlp.ts` shells to it (`yt-dlp -g`); there is no linking of any
+kind against it.
+
+Its license is **not recorded in this repository** and must be taken from the
+upstream project's own notices before relying on this section for compliance;
+the same applies to the transitive Python packages pip resolves alongside it.
+
+**Supply-chain note.** Unlike the digest-pinned FFmpeg images, `yt-dlp` is
+installed **unpinned and unhashed** at image build time
+(`Dockerfile:182` — `pip3 install --no-cache-dir --break-system-packages -U
+yt-dlp`), so the exact version conveyed in any given image is whatever PyPI
+served at build time and is not recorded in this repository. It is upgraded
+deliberately (`-U`) because extractor breakage tracks upstream site changes.
 
 ## Written Offer for Corresponding Source
 
@@ -142,8 +165,9 @@ documented in this file.
 only**. GPL (v2 and v3) is incompatible with the Apple Developer Program License
 Agreement (DPLA), so this server-side compliance artifact does **not** clear the
 path for bundling a GPL FFmpeg inside an iOS application binary. Shipping FFmpeg
-in an iOS bundle requires the LGPL rebuild (Path A). See
-[`docs/MONETIZATION-AND-PUBLISHING.md`](./docs/MONETIZATION-AND-PUBLISHING.md)
-**BLOCKER 1** for the full App Store implications and the distinction between the
-self-hosted-server path (Path B, documented here) and the LGPL iOS-bundle path
-(Path A).
+in an iOS bundle requires the LGPL rebuild (Path A). Two distinct paths follow
+from that: **Path B**, the self-hosted-server distribution documented in this
+file, where the GPL binaries are conveyed with the server images and the source
+offer below applies; and **Path A**, an LGPL rebuild of FFmpeg without
+`--enable-gpl`, which is the only form that could ship inside an iOS application
+bundle. This document covers Path B only.

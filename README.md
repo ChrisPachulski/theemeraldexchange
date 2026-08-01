@@ -63,14 +63,14 @@ Everything else is opt-in, one flag each:
 | Capability | Turn it on with |
 |---|---|
 | Remote access (private, via your [Tailscale](https://tailscale.com) tailnet) | `COMPOSE_PROFILES=remote` + `TS_AUTHKEY` |
-| Remote access (public, via Cloudflare Tunnel + your domain) | `COMPOSE_PROFILES=remote-cloudflare` + `TUNNEL_TOKEN` |
+| Remote access (public, via Cloudflare Tunnel + your domain) | `COMPOSE_PROFILES=remote-cloudflare` + `TUNNEL_TOKEN` — **owner deployment only** (root `docker-compose.yml`); not in the self-host bundle |
 | Richer metadata & discovery | `TMDB_READ_ACCESS_TOKEN` (free key) |
 | Requests & downloads (existing Sonarr / Radarr / SAB) | `SONARR_API_KEY` / `RADARR_API_KEY` / `SAB_API_KEY` |
 | Live TV (your Xtream/IPTV provider) | `XTREAM_HOST` / `XTREAM_USERNAME` / `XTREAM_PASSWORD` |
 | Plex login as an extra sign-in provider | `PLEX_CLIENT_ID` (+ `PLEX_SERVER_ID`) |
 | Sign in with Apple | `APPLE_CLIENT_ID` (`ENABLE_APPLE_SIGN_IN=1` is an optional fail-fast assertion) |
 | Sign in with Google | `GOOGLE_CLIENT_ID` (`ENABLE_GOOGLE_SIGN_IN=1` is an optional fail-fast assertion) |
-| Error telemetry (self-hosted Glitchtip) | `COMPOSE_PROFILES=telemetry` + `TELEMETRY_ENABLED=1` |
+| Error telemetry (self-hosted Glitchtip) | `COMPOSE_PROFILES=telemetry` + `TELEMETRY_ENABLED=1` — **owner deployment only** (root `docker-compose.yml`); not in the self-host bundle |
 
 With everything off you still get the core product: library browsing + playback, passkey
 sign-in, owner-controlled invites, and local-first recommendations. Passkeys require HTTPS or
@@ -197,8 +197,10 @@ npm run dev:media-mock        # localhost:8095, run alongside npm run dev
 A fixture-backed stub that speaks media-core's HTTP surface (12 movies, 3 shows, a seeded watch
 store; direct-play only). Backend wiring: `USE_MEDIA_CORE=1`,
 `MEDIA_CORE_URL=http://127.0.0.1:8095`, and any 32+ char `INTERNAL_PRINCIPAL_SECRET`
-placeholder — the proxy fails closed without one, the mock ignores it. Builds the library UI
-without the Rust binary or a real `/media` library.
+placeholder — without one the proxy sends no internal principal at all (the off posture,
+`server/routes/media.ts:123`) rather than refusing, so set the placeholder to exercise the
+prod-shaped path; the mock ignores its value. Builds the library UI without the Rust binary
+or a real `/media` library.
 </details>
 
 <details>

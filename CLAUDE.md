@@ -117,8 +117,9 @@ Hard rules:
    DISCOVERS the box's spare cores at run time and caps the compile
    (`CARGO_BUILD_JOBS`), runs DETACHED (a dropped/starved SSH can't orphan it),
    prints a PROGRESS HEARTBEAT, and AUTO-ABORTS if Plex degrades or load/core
-   exceeds the ceiling. Slow is fine; overwhelming is not. See the
-   `nas-safe-build` skill for the full playbook.
+   exceeds the ceiling. Slow is fine; overwhelming is not. The full playbook is
+   the script's own header (`scripts/nas-safe-build.sh:1-53`): the why, the five
+   guarantees, usage, env knobs, and exit codes.
 
 3. **Recreate is cheap and always safe:** after a build, swap the image in with
    `docker compose up -d --no-build <service>` (no compile, seconds).
@@ -137,7 +138,7 @@ Hard rules:
 
 These gotchas were re-hit across multiple sessions. Treat them as invariants:
 
-- **`curl` is not available** in the local Bash sandbox (`command not found: curl`). Use `node`, `wget`, or a small `fetch.mjs` script for HTTP calls from the local shell. `curl` works fine over SSH on the NAS.
+- **`curl` IS available locally** (`/usr/bin/curl`, 8.7.1) and works over the network. An earlier version of this file claimed otherwise; that was wrong. **`wget` is NOT installed** — don't reach for it. `node` or a small `fetch.mjs` script also work. `curl` works fine over SSH on the NAS.
 - **`$status` is reserved in zsh** — never assign to it (`status=0` is a read-only variable). Use a different name (`exit_code`, `rc`, etc.).
 - **Guard bash-isms** — scripts may run under zsh or sh. Avoid `${var//pattern/replace}` and other bash-specific substitutions without explicit `#!/bin/bash` shebang.
 - **Prod host:** `root@theemeraldexchange.local`. Appdata root: `/mnt/user/appdata/exchange-backend/`. All remote ops: `ssh root@theemeraldexchange.local "..."` or `docker` commands forwarded via SSH.

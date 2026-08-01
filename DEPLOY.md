@@ -27,7 +27,7 @@ api.theemeraldexchange.com       ──▶ Cloudflare Tunnel
                                        └─▶ glitchtip (+ -db, -redis, -worker) — telemetry; loopback :8100
 ```
 
-`docker-compose.yml` defines **9 services**: `backend`, `recommender`,
+`docker-compose.yml` defines **10 services**: `backend`, `recommender`,
 `media-core`, `transcoder`, plus the profile-gated `cloudflared`
 (`remote-cloudflare`), `tailscale` (`remote`), and the Glitchtip four
 (`telemetry`). The owner deployment sets
@@ -80,7 +80,11 @@ Open it and fill the required rows plus whichever optional integrations you use:
 | `GLITCHTIP_SECRET_KEY`, `GLITCHTIP_DB_PASSWORD`, `GLITCHTIP_DOMAIN` | **Set BEFORE the first `compose up`** — see [docs/operations/glitchtip-setup.md](./docs/operations/glitchtip-setup.md). The DB password must be hex (base64 characters break the `DATABASE_URL`); the domain needs an `http(s)://` scheme. |
 | `EEX_TELEMETRY_DSN` | Optional GlitchTip browser/client ingestion DSN. Leave unset to run telemetry-off; configure later without blocking a healthy app deploy. |
 
-The full annotated key list lives in `.env.production.example`. The deploy
+`.env.production.example` carries an annotated list of the common keys, but it is
+**not** complete — the backend reads a number of keys that never appear in it,
+including `USE_MEDIA_CORE`, `USE_LOCAL_RECOMMENDER`, `MEDIA_LIBRARY_HOST_PATH`,
+and `ANTHROPIC_OPTIMIZER_KEY`, all four of which the procedures below tell you to
+set. `server/env.ts` is the authoritative list. The deploy
 script validates all required keys (and the `SESSION_SECRET` strength /
 `PLEX_SERVER_ID` scoping gates) before anything ships.
 
@@ -153,16 +157,26 @@ What the script actually does (`./scripts/deploy-nas.sh --help` prints its own s
    uid 10001, `media-core-db` → uid 10002) so a fresh volume doesn't crash-loop
    the `cap_drop: ALL` sidecars.
 6. Tags every currently-deployed image (`backend`, `recommender`, `media-core`,
-   `transcoder`) as `:rollback`, then builds each service sequentially through
-   `nas-safe-build.sh`. Its detached load, memory, timeout, and Plex-health
-   watchdogs abort before a compile can brown out the NAS.
+   `transcoder`) as **`:rollback-<UTC timestamp>`** — one generation per run,
+   the last 2 kept, and any legacy bare `:rollback` tag pruned. Then builds each
+   service sequentially through `nas-safe-build.sh`. Its detached load, memory,
+   timeout, and Plex-health watchdogs abort before a compile can brown out
+   the NAS.
 7. Recreates the stack with `docker compose up -d --no-build`, then
    force-recreates `exchange-cloudflared` (it shares the backend's netns; only
    recreation rebinds it to a new backend container).
-8. **Health-gates the whole stack** (~150s ceiling): backend + recommender +
+8. Installs the cloudflared stale-netns watchdog cron.
+9. **Health-gates the whole stack** (~150s ceiling): backend + recommender +
    media-core + transcoder must all report docker-healthy. On failure it
-   restores every `:rollback` image, re-ups, and prints per-container log and
-   manual-rollback commands.
+   restores the newest `:rollback-<ts>` generation, re-ups, and prints
+   per-container log and manual-rollback commands.
+
+Also part of the run, in payload order, though not numbered above: staging the
+`bin/eex-ytresolve` binary (fetched with `gh release download` from
+`ChrisPachulski/rust-yt-extractor` — **the deploy `exit 1`s if it is missing or
+empty, so `gh` must be authenticated**), snapshotting `docker-compose.yml` +
+`.env` for config rollback, and rsyncing `deploy/` for the tailscale `remote`
+profile.
 
 GlitchTip is optional and reported separately from the core health gate. An
 unset DSN never excuses an unhealthy backend or sidecar; every failed core
@@ -256,9 +270,10 @@ running stale code.
 `docker-compose.yml`. It owns a SQLite DB (sqlite-vec) at
 `/mnt/user/appdata/exchange-backend/recommender-db/exchange.db` and serves
 ranked picks to the Hono backend on the internal Docker network. The
-`recommender/` *source* dir on the NAS (synced by `deploy-nas.sh`) is
-the `build:` context for the image; the DB lives in `recommender-db/`
-so the two never collide.
+`recommender/` *source* dir on the NAS (synced by `deploy-nas.sh`) supplies the
+image's `dockerfile:`; the `build:` context is the appdata root, so the
+Dockerfile can reach `crates/emerald-contracts{,-pyo3}` for the PyO3 binding.
+The DB lives in `recommender-db/` so the two never collide.
 
 ### Roles
 
@@ -354,7 +369,10 @@ the regular nightly cron.
 
 The optimizer's auto-promotion path is gated by an evaluation set —
 without it, every nightly run records the candidate model as an
-inactive proposal and the active model stays put. The set is one
+inactive proposal and the active model stays put. Note the gate is not
+merely "a file exists": the optimizer stays record-only until the set
+has **at least 30 usable rows** (`MIN_HOLDOUT_SIZE`,
+`recommender/workers/optimizer.py:49`). The set is one
 JSON object per line (see `recommender/eval/README.md` for the
 schema) and lives at `RECOMMENDER_HOLDOUT_PATH` inside the container,
 defaulting to `/data/holdout.jsonl`.
@@ -364,13 +382,15 @@ defaulting to `/data/holdout.jsonl`.
 # wiring (file shape, env var, mount path), THEN replace it with a
 # real generated holdout before relying on auto-promotion. The
 # example is 3 synthetic rows — enough to satisfy load_holdout() but
-# NOT enough to make a meaningful eval signal.
+# well under the 30-row floor, so auto-promotion stays OFF until you
+# ship a real generated set.
 scp recommender/eval/holdout.example.jsonl \
   root@theemeraldexchange.local:/mnt/user/appdata/exchange-backend/recommender-db/holdout.jsonl
 
 # Real holdout: generate from the running recommender DB. The
 # generator filters to (sub, kind) pairs with at least one positive
-# outcome AND a library of at least 3 titles in the last 30 days.
+# outcome AND a library of at least 10 titles (MIN_LIBRARY, from
+# RECOMMENDER_COLD_START_THRESHOLD) in the last 30 days.
 ssh root@theemeraldexchange.local \
   'docker exec exchange-recommender python -m eval.build_holdout' \
   > /tmp/holdout.jsonl

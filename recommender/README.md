@@ -76,8 +76,12 @@ tag/branch instead of a full commit SHA.
 
 ## Model recipes
 
-Each recipe in `app/recipes/` exposes a single `score(user_ctx, candidates) -> [Pick]`.
-Adding a new recipe is just dropping a file in that folder and registering it.
+Each recipe in `app/recipes/` exposes a single
+`score(ctx: UserContext, conn: sqlite3.Connection, *, n: int, params: dict) -> RecipeResult`
+and a module-level `DEFAULTS`. Note the second positional is the DB connection,
+not a candidate list — recipes retrieve their own pool via `retrieval` — and `n`
+and `params` are keyword-only. Adding a new recipe is just dropping a file in
+that folder and registering it.
 The active recipe + its weights live in the `model_config` table — the optimizer
 edits this nightly with a ±20% weight-drift cap.
 
