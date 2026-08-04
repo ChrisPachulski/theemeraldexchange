@@ -2,8 +2,8 @@
 //
 // Mounted-DOM test for the Edit section's Folder picker. An in-library item
 // can carry a rootFolderPath that the live Radarr/Sonarr root-folder list no
-// longer contains — the root was removed or renamed upstream, or the operator
-// curated a subset. A single-line <select> whose `value` matches no <option>
+// longer contains — the root was removed or renamed upstream in Sonarr/Radarr
+// itself. A single-line <select> whose `value` matches no <option>
 // does not keep that value: the HTML reset algorithm selects the FIRST option
 // instead (blank only when the list is empty). So the panel displayed some
 // OTHER root folder while Save still submitted the item's real one — the
@@ -147,6 +147,15 @@ describe('EditSection — Folder picker with an orphaned root folder', () => {
 
   it('adds no duplicate option when the folder IS in the live list', async () => {
     const select = await openEdit('/mnt/scratch')
+    await screen.findByRole('option', { name: '/mnt/scratch' })
+    expect(folderOptions(select)).toEqual(['/data/media/movies', '/mnt/scratch'])
+  })
+
+  it('adds no near-duplicate option for a trailing-slash/case variant of a live folder', async () => {
+    // '/mnt/Scratch/' differs from the live '/mnt/scratch' only by a
+    // trailing slash and case — normalizeRootFolderPath must treat these as
+    // the same folder, or the picker would offer two options for one root.
+    const select = await openEdit('/mnt/Scratch/')
     await screen.findByRole('option', { name: '/mnt/scratch' })
     expect(folderOptions(select)).toEqual(['/data/media/movies', '/mnt/scratch'])
   })
