@@ -7,6 +7,7 @@ import { useConfirm } from '../confirm/useConfirm'
 import { useSonarrProfiles, useSonarrRootFolders } from '../../lib/hooks/useSonarrLibrary'
 import { useRadarrProfiles, useRadarrRootFolders } from '../../lib/hooks/useRadarrLibrary'
 import { useLimits } from '../../lib/hooks/useLimits'
+import { normalizeRootFolderPath } from '../../lib/pickDefaultRootFolder'
 import {
   getReleaseView as getView,
   setReleaseView as setView,
@@ -795,7 +796,7 @@ function HistorySection({ kind, itemId }: { kind: Kind; itemId: number }) {
 }
 
 // --- Edit (quality profile + root folder + monitored). ---------------------
-function EditSection({
+export function EditSection({
   kind,
   itemId,
   monitored,
@@ -871,6 +872,20 @@ function EditSection({
               disabled={!folders.data}
               onChange={(e) => setFolderChoice(e.target.value)}
             >
+              {/* The item's own folder may be absent from the live root-folder
+                  list — the mount was removed or renamed in Sonarr/Radarr
+                  after this item was added. A <select> can't hold a value
+                  with no matching <option> — it resets to the first one — so
+                  the panel would display, and appear to save, a DIFFERENT
+                  root than Save actually submits. Carry the orphan as its
+                  own option; the payload is unchanged. Compared with
+                  normalizeRootFolderPath (not `===`) so a trailing-slash or
+                  case difference from the *arr API doesn't spuriously
+                  duplicate the option the live list already has. */}
+              {folder != null &&
+                !folders.data?.some(
+                  (f) => normalizeRootFolderPath(f.path) === normalizeRootFolderPath(folder),
+                ) && <option value={folder}>{folder}</option>}
               {folders.data?.map((f) => (
                 <option key={f.id} value={f.path}>
                   {f.path}
