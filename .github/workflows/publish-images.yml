@@ -100,6 +100,18 @@ jobs:
         id: image
         run: echo "name=${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}/theemeraldexchange-${{ matrix.service.name }}" >> "$GITHUB_OUTPUT"
 
+      # Labels only — tags are applied to the manifest list in the merge job.
+      # These must be generated HERE: OCI labels live in the per-arch image
+      # config blob, which is sealed at build time. metadata-action in the
+      # merge job comes too late to affect it, which is why images published
+      # before this step carried no org.opencontainers.image.revision and had
+      # no machine-checkable link back to the commit they were built from.
+      - name: Docker meta (labels for the image config)
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ steps.image.outputs.name }}
+
       - name: Build + push by digest (${{ matrix.service.name }}/${{ matrix.platform.arch }})
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -108,6 +120,7 @@ jobs:
           file: ${{ matrix.service.dockerfile }}
           platforms: linux/${{ matrix.platform.arch }}
           build-args: ${{ matrix.service.build-args }}
+          labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=publish-${{ matrix.service.name }}-${{ matrix.platform.arch }}
           cache-to: type=gha,mode=max,scope=publish-${{ matrix.service.name }}-${{ matrix.platform.arch }}
@@ -164,9 +177,20 @@ jobs:
 
       - name: Create manifest list and push
         working-directory: /tmp/digests
+        env:
+          ANNOTATIONS: ${{ steps.meta.outputs.annotations }}
         run: |
           IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/theemeraldexchange-${{ matrix.service }}"
+          # Annotate the manifest LIST as well as the per-arch configs. `latest`
+          # resolves to this index, so without these `imagetools inspect` on the
+          # published tag shows no revision. metadata-action emits `manifest:`-
+          # prefixed keys; imagetools wants `index:` for the list itself.
+          ANNOT_ARGS=()
+          while IFS= read -r a; do
+            [ -n "$a" ] && ANNOT_ARGS+=(--annotation "index:${a#manifest:}")
+          done <<< "$ANNOTATIONS"
           docker buildx imagetools create \
+            "${ANNOT_ARGS[@]}" \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf "${IMAGE}@sha256:%s " *)
 
