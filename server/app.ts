@@ -14,6 +14,7 @@ import { env } from './env.js'
 import { NotConfiguredError } from './services/upstream.js'
 import { serverDb } from './services/serverDb.js'
 import { requireSafeOrigin } from './middleware/csrf.js'
+import { readSession } from './session.js'
 import { auth, me } from './auth.js'
 import { sonarr } from './routes/sonarr.js'
 import { radarr } from './routes/radarr.js'
@@ -175,9 +176,13 @@ app.get('/api/health', (c) => {
 
 // Public-ish (auth-free) endpoint exposing the configured limits so the
 // SPA can surface them in tooltips without each modal having to know
-// the env. Numeric values only — no secrets.
-app.get('/api/limits', (c) =>
-  c.json({
+// the env. Most values here are numeric/boolean or a curated profile
+// label — no secrets. The two root-folder paths below are filesystem
+// layout, a different disclosure class, so they're withheld from
+// unauthenticated callers (see their own comment).
+app.get('/api/limits', async (c) => {
+  const session = await readSession(c)
+  return c.json({
     minFreeGb: env.minFreeBytes / (1024 * 1024 * 1024),
     maxMovieGb: env.maxMovieGb,
     maxTvGbPerEpisode: env.maxTvGbPerEpisode,
@@ -201,10 +206,13 @@ app.get('/api/limits', (c) =>
     // defaultProfileName: the Add modals ALWAYS submit rootFolderPath, so
     // the server's own fallback never runs, and a client defaulting to
     // "whatever folder Sonarr/Radarr listed first" silently files adds
-    // under the wrong root. Not a secret — the same paths are already in
-    // the authenticated /api/{sonarr,radarr}/api/v3/rootfolder listing.
-    defaultSonarrRootFolderPath: env.defaultSonarrRootFolderPath,
-    defaultRadarrRootFolderPath: env.defaultRadarrRootFolderPath,
+    // under the wrong root. Unlike the other fields on this endpoint,
+    // these are host filesystem paths, not a profile label or a number —
+    // withheld from anyone without a valid session (the same strings ARE
+    // reachable once signed in, via /api/{sonarr,radarr}/api/v3/rootfolder,
+    // so this only closes the pre-auth disclosure, not a real secret).
+    defaultSonarrRootFolderPath: session ? env.defaultSonarrRootFolderPath : null,
+    defaultRadarrRootFolderPath: session ? env.defaultRadarrRootFolderPath : null,
     // Reviewer-insurance §13.3: SPA hides Live/VOD/Series tabs when
     // the server has no /api/iptv surface mounted. Public boolean —
     // no secret leakage (the same flag is implied by the 404 anyway).
@@ -226,8 +234,8 @@ app.get('/api/limits', (c) =>
     sonarrEnabled: Boolean(env.sonarrApiKey),
     radarrEnabled: Boolean(env.radarrApiKey),
     sabEnabled: Boolean(env.sabApiKey),
-  }),
-)
+  })
+})
 
 app.route('/api/auth', auth)
 // Native device-pair flow lives under the same /api/auth tree as the Plex
