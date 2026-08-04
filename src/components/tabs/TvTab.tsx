@@ -37,6 +37,7 @@ import {
   byYearDesc,
 } from '../../lib/librarySort'
 import { pickDefaultProfileId } from '../../lib/pickDefaultProfileId'
+import { pickDefaultRootFolder } from '../../lib/pickDefaultRootFolder'
 import './TvTab.css'
 
 function pickSearchPoster(item: SeriesSearchResult): string | undefined {
@@ -272,7 +273,7 @@ export function TvTab() {
         sonarrProfiles.data,
         (limits.data?.defaultProfileName ?? 'choose me').toLowerCase(),
       )
-      const rootFolder = sonarrFolders.data?.[0]?.path ?? null
+      const rootFolder = pickDefaultRootFolder(sonarrFolders.data, limits.data?.defaultSonarrRootFolderPath)
       const body = {
         tvdbId: item.tvdbId,
         ...(item.tmdbId !== undefined ? { tmdbId: item.tmdbId } : {}),

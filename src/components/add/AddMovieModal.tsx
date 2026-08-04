@@ -4,6 +4,7 @@ import { radarr, type MovieSearchResult } from '../../lib/api/radarr'
 import { useRadarrProfiles, useRadarrRootFolders } from '../../lib/hooks/useRadarrLibrary'
 import { useLimits } from '../../lib/hooks/useLimits'
 import { pickDefaultProfileId } from '../../lib/pickDefaultProfileId'
+import { pickDefaultRootFolder } from '../../lib/pickDefaultRootFolder'
 import {
   getReleaseView,
   setReleaseView,
@@ -46,7 +47,7 @@ export function AddMovieModal({ movie, onClose, onAdded, onError }: Props) {
   const profileId =
     profileChoice ??
     pickDefaultProfileId(profiles.data, (limits.data?.defaultProfileName ?? 'choose me').toLowerCase())
-  const rootFolder = folderChoice ?? folders.data?.[0]?.path ?? null
+  const rootFolder = folderChoice ?? pickDefaultRootFolder(folders.data, limits.data?.defaultRadarrRootFolderPath)
 
   useEffect(() => {
     const d = dialogRef.current

@@ -195,6 +195,16 @@ app.get('/api/limits', (c) =>
     // disagreeing with the server when the household curates under a
     // different label.
     defaultProfileName: env.defaultProfileName,
+    // Curated root-folder paths (exact upstream paths) the server prefers
+    // for non-admin adds — see the configuredFolderPath preference in
+    // services/arrAdd.ts. Surfaced for the same reason as
+    // defaultProfileName: the Add modals ALWAYS submit rootFolderPath, so
+    // the server's own fallback never runs, and a client defaulting to
+    // "whatever folder Sonarr/Radarr listed first" silently files adds
+    // under the wrong root. Not a secret — the same paths are already in
+    // the authenticated /api/{sonarr,radarr}/api/v3/rootfolder listing.
+    defaultSonarrRootFolderPath: env.defaultSonarrRootFolderPath,
+    defaultRadarrRootFolderPath: env.defaultRadarrRootFolderPath,
     // Reviewer-insurance §13.3: SPA hides Live/VOD/Series tabs when
     // the server has no /api/iptv surface mounted. Public boolean —
     // no secret leakage (the same flag is implied by the 404 anyway).

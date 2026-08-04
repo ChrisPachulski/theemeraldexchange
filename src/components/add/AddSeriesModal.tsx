@@ -5,6 +5,7 @@ import { useSonarrProfiles, useSonarrRootFolders } from '../../lib/hooks/useSona
 import { useLimits } from '../../lib/hooks/useLimits'
 import { useDialogDismiss } from '../../lib/useDialogDismiss'
 import { pickDefaultProfileId } from '../../lib/pickDefaultProfileId'
+import { pickDefaultRootFolder } from '../../lib/pickDefaultRootFolder'
 import {
   getReleaseView,
   setReleaseView,
@@ -97,7 +98,7 @@ export function AddSeriesModal({ series, onClose, onAdded, onError }: Props) {
   const profileId =
     profileChoice ??
     pickDefaultProfileId(profiles.data, (limits.data?.defaultProfileName ?? 'choose me').toLowerCase())
-  const rootFolder = folderChoice ?? folders.data?.[0]?.path ?? null
+  const rootFolder = folderChoice ?? pickDefaultRootFolder(folders.data, limits.data?.defaultSonarrRootFolderPath)
 
   const mutation = useMutation({
     mutationFn: (body: Record<string, unknown>) => sonarr.addSeries(body),

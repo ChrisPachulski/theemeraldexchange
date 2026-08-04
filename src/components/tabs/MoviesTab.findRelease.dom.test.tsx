@@ -18,18 +18,26 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ArrRelease } from '../../lib/api/arrAdvanced'
 
-const { addMovieMock, removeMovieMock, releasesMock, grabReleaseMock, searchResult } = vi.hoisted(() => ({
-  addMovieMock: vi.fn(),
-  removeMovieMock: vi.fn(),
-  releasesMock: vi.fn(),
-  grabReleaseMock: vi.fn(),
-  searchResult: {
-    tmdbId: 42,
-    title: 'Dune',
-    year: 2021,
-    overview: 'Spice.',
-  },
-}))
+const { addMovieMock, removeMovieMock, releasesMock, grabReleaseMock, searchResult, rootFolders, limitsData } =
+  vi.hoisted(() => ({
+    addMovieMock: vi.fn(),
+    removeMovieMock: vi.fn(),
+    releasesMock: vi.fn(),
+    grabReleaseMock: vi.fn(),
+    searchResult: {
+      tmdbId: 42,
+      title: 'Dune',
+      year: 2021,
+      overview: 'Spice.',
+    },
+    // Mutable holders (reset in beforeEach) so one case can model the real
+    // operator layout: several Radarr root folders with the curated one NOT
+    // first, plus the /api/limits field that names it.
+    rootFolders: { current: [{ id: 1, path: '/movies' }] as { id: number; path: string }[] },
+    limitsData: {
+      current: { mediaEnabled: false, defaultProfileName: 'Choose Me', maxMovieGb: 10 } as Record<string, unknown>,
+    },
+  }))
 
 // movieAvailability is the REAL helper (a just-added movie has no file → not
 // playable → no dead play affordances); only the network methods are stubbed.
@@ -55,10 +63,10 @@ vi.mock('../../lib/hooks/useMovieSearch', () => ({
 vi.mock('../../lib/hooks/useRadarrLibrary', () => ({
   useRadarrLibrary: () => ({ data: [], isPending: false, error: null }),
   useRadarrProfiles: () => ({ data: [{ id: 7, name: 'Choose Me' }] }),
-  useRadarrRootFolders: () => ({ data: [{ id: 1, path: '/movies' }] }),
+  useRadarrRootFolders: () => ({ data: rootFolders.current }),
 }))
 vi.mock('../../lib/hooks/useLimits', () => ({
-  useLimits: () => ({ data: { mediaEnabled: false, defaultProfileName: 'Choose Me', maxMovieGb: 10 } }),
+  useLimits: () => ({ data: limitsData.current }),
 }))
 vi.mock('../../lib/hooks/useCast', () => ({ useCast: () => ({ data: [], isLoading: false }) }))
 vi.mock('../../lib/hooks/usePlexLinks', () => ({
@@ -140,6 +148,8 @@ beforeEach(() => {
       this.dispatchEvent(new Event('close'))
     }
   }
+  rootFolders.current = [{ id: 1, path: '/movies' }]
+  limitsData.current = { mediaEnabled: false, defaultProfileName: 'Choose Me', maxMovieGb: 10 }
   addMovieMock.mockReset()
   removeMovieMock.mockReset()
   releasesMock.mockReset()
@@ -176,6 +186,28 @@ describe('MoviesTab — Find release (discover-time interactive search)', () => 
       rootFolderPath: '/movies',
       addOptions: { searchForMovie: false },
     })
+  })
+
+  it('files the add under the server-curated root folder, not merely the first one', async () => {
+    // Radarr lists the scratch mount first, but the operator curated
+    // DEFAULT_RADARR_ROOT_FOLDER_PATH=/data/media/movies. Find release ALWAYS
+    // submits rootFolderPath, so the server's own configuredFolderPath
+    // fallback never runs to correct us — picking folders[0] here silently
+    // filed every discover-time add under the wrong root.
+    rootFolders.current = [
+      { id: 1, path: '/mnt/scratch' },
+      { id: 2, path: '/data/media/movies' },
+    ]
+    // Trailing slash on purpose: the curated env var rarely matches the
+    // upstream spelling byte-for-byte, and we must submit Radarr's spelling.
+    limitsData.current = { ...limitsData.current, defaultRadarrRootFolderPath: '/data/media/movies/' }
+
+    mount()
+    await openDetail()
+    fireEvent.click(await screen.findByRole('button', { name: 'Find release' }))
+
+    await waitFor(() => expect(addMovieMock).toHaveBeenCalledTimes(1))
+    expect(addMovieMock.mock.calls[0][0]).toMatchObject({ rootFolderPath: '/data/media/movies' })
   })
 
   it('after the add, the interactive-search release list is shown (auto-open)', async () => {

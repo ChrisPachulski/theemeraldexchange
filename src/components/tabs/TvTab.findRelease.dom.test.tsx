@@ -16,20 +16,31 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ArrRelease } from '../../lib/api/arrAdvanced'
 
-const { addSeriesMock, removeSeriesMock, releasesMock, grabReleaseMock, searchResult } = vi.hoisted(() => ({
-  addSeriesMock: vi.fn(),
-  removeSeriesMock: vi.fn(),
-  releasesMock: vi.fn(),
-  grabReleaseMock: vi.fn(),
-  searchResult: {
-    tvdbId: 555,
-    tmdbId: 42,
-    title: 'Severance',
-    year: 2022,
-    overview: 'Work.',
-    seasons: [{ seasonNumber: 1, monitored: true }],
-  },
-}))
+const { addSeriesMock, removeSeriesMock, releasesMock, grabReleaseMock, searchResult, rootFolders, limitsData } =
+  vi.hoisted(() => ({
+    addSeriesMock: vi.fn(),
+    removeSeriesMock: vi.fn(),
+    releasesMock: vi.fn(),
+    grabReleaseMock: vi.fn(),
+    searchResult: {
+      tvdbId: 555,
+      tmdbId: 42,
+      title: 'Severance',
+      year: 2022,
+      overview: 'Work.',
+      seasons: [{ seasonNumber: 1, monitored: true }],
+    },
+    // Mutable holders (reset in beforeEach) so one case can model the real
+    // operator layout: several Sonarr root folders with the curated one NOT
+    // first, plus the /api/limits field that names it.
+    rootFolders: { current: [{ id: 1, path: '/tv' }] as { id: number; path: string }[] },
+    limitsData: {
+      current: { mediaEnabled: false, defaultProfileName: 'Choose Me', maxTvGbPerEpisode: 5 } as Record<
+        string,
+        unknown
+      >,
+    },
+  }))
 
 vi.mock('../../lib/api/sonarr', async () => {
   const actual = await vi.importActual<typeof import('../../lib/api/sonarr')>('../../lib/api/sonarr')
@@ -53,7 +64,7 @@ vi.mock('../../lib/hooks/useSeriesSearch', () => ({
 vi.mock('../../lib/hooks/useSonarrLibrary', () => ({
   useSonarrLibrary: () => ({ data: [], isPending: false, error: null }),
   useSonarrProfiles: () => ({ data: [{ id: 7, name: 'Choose Me' }] }),
-  useSonarrRootFolders: () => ({ data: [{ id: 1, path: '/tv' }] }),
+  useSonarrRootFolders: () => ({ data: rootFolders.current }),
 }))
 // One episode so the interactive-search season selector has a season to query
 // (the release list is gated on a resolved season number for TV).
@@ -65,7 +76,7 @@ vi.mock('../../lib/hooks/useSonarrEpisodes', () => ({
   }),
 }))
 vi.mock('../../lib/hooks/useLimits', () => ({
-  useLimits: () => ({ data: { mediaEnabled: false, defaultProfileName: 'Choose Me', maxTvGbPerEpisode: 5 } }),
+  useLimits: () => ({ data: limitsData.current }),
 }))
 vi.mock('../../lib/hooks/useCast', () => ({ useCast: () => ({ data: [], isLoading: false }) }))
 vi.mock('../../lib/hooks/usePlexLinks', () => ({
@@ -143,6 +154,8 @@ beforeEach(() => {
       this.dispatchEvent(new Event('close'))
     }
   }
+  rootFolders.current = [{ id: 1, path: '/tv' }]
+  limitsData.current = { mediaEnabled: false, defaultProfileName: 'Choose Me', maxTvGbPerEpisode: 5 }
   addSeriesMock.mockReset()
   removeSeriesMock.mockReset()
   releasesMock.mockReset()
@@ -181,6 +194,28 @@ describe('TvTab — Find release (discover-time interactive search)', () => {
       rootFolderPath: '/tv',
       addOptions: { searchForMissingEpisodes: false },
     })
+  })
+
+  it('files the add under the server-curated root folder, not merely the first one', async () => {
+    // Sonarr lists the scratch mount first, but the operator curated
+    // DEFAULT_SONARR_ROOT_FOLDER_PATH=/data/media/tv. Find release ALWAYS
+    // submits rootFolderPath, so the server's own configuredFolderPath
+    // fallback never runs to correct us — picking folders[0] here silently
+    // filed every discover-time add under the wrong root.
+    rootFolders.current = [
+      { id: 1, path: '/mnt/scratch' },
+      { id: 2, path: '/data/media/TV' },
+    ]
+    // Case + trailing slash differ from Sonarr's spelling on purpose: we must
+    // still submit Sonarr's exact string or the server 400s unknown_root_folder.
+    limitsData.current = { ...limitsData.current, defaultSonarrRootFolderPath: '/data/media/tv/' }
+
+    mount()
+    await openDetail()
+    fireEvent.click(await screen.findByRole('button', { name: 'Find release' }))
+
+    await waitFor(() => expect(addSeriesMock).toHaveBeenCalledTimes(1))
+    expect(addSeriesMock.mock.calls[0][0]).toMatchObject({ rootFolderPath: '/data/media/TV' })
   })
 
   it('after the add, the interactive-search release list is shown (auto-open)', async () => {
