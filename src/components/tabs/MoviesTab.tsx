@@ -35,6 +35,7 @@ import {
 } from '../../lib/librarySort'
 import { withViewTransition } from '../../lib/viewTransition'
 import { pickDefaultProfileId } from '../../lib/pickDefaultProfileId'
+import { pickDefaultRootFolder } from '../../lib/pickDefaultRootFolder'
 import './TvTab.css'
 
 function pickSearchPoster(item: MovieSearchResult): string | undefined {
@@ -260,7 +261,7 @@ export function MoviesTab() {
         radarrProfiles.data,
         (limits.data?.defaultProfileName ?? 'choose me').toLowerCase(),
       )
-      const rootFolder = radarrFolders.data?.[0]?.path ?? null
+      const rootFolder = pickDefaultRootFolder(radarrFolders.data, limits.data?.defaultRadarrRootFolderPath)
       const body = {
         tmdbId: item.tmdbId,
         title: item.title,
