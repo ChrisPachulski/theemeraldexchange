@@ -30,3 +30,37 @@ const dir = mkdtempSync(join(tmpdir(), `eex-vitest-w${workerId}-`))
 if (!process.env.SERVER_DB_PATH) process.env.SERVER_DB_PATH = join(dir, 'server.db')
 if (!process.env.MEDIA_DB_PATH) process.env.MEDIA_DB_PATH = join(dir, 'media.db')
 if (!process.env.IPTV_DB_PATH) process.env.IPTV_DB_PATH = join(dir, 'iptv.db')
+
+// localStorage shim for the jsdom environment (*.dom.test.tsx).
+//
+// WHY: Node 26 exposes `localStorage`/`sessionStorage` as own globals, but
+// localStorage reads back `undefined` unless the process was started with
+// --localstorage-file. Vitest's jsdom setup copies window properties onto the
+// global only when the key is absent from the global OR present in its own
+// KEYS list (node_modules/vitest/dist/chunks/*.js, getWindowKeys) — and that
+// list predates Web Storage in Node, so it contains neither name. Node's dead
+// global therefore wins the slot and jsdom's real localStorage is never
+// installed: `window === globalThis`, so there is no second copy to reach.
+// Net effect on Node >= 26: every jsdom test sees `localStorage === undefined`.
+//
+// Restores an in-memory Storage — the same lifetime jsdom's own gives (fresh
+// per test file, no disk). Node-environment tests are untouched: the guard
+// requires a `document`, which only the jsdom environment provides.
+if (typeof document !== 'undefined' && typeof globalThis.localStorage === 'undefined') {
+  const store = new Map<string, string>()
+  const storage: Storage = {
+    get length() {
+      return store.size
+    },
+    key: (i: number) => [...store.keys()][i] ?? null,
+    getItem: (k: string) => store.get(String(k)) ?? null,
+    setItem: (k: string, v: string) => void store.set(String(k), String(v)),
+    removeItem: (k: string) => void store.delete(String(k)),
+    clear: () => store.clear(),
+  }
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: storage,
+    configurable: true,
+    writable: true,
+  })
+}
