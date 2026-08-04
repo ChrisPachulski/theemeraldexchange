@@ -32,7 +32,12 @@ dist-ssr
 __pycache__/
 *.pyc
 
-# Internal-only docs & planning — kept locally, never published to the public repo
+# Internal-only docs & planning — kept locally, not published to the public repo.
+# Four files under docs/ are deliberate exceptions, force-added before this rule
+# and therefore permanently exempt from it (a tracked path ignores gitignore):
+# operations/login-auth-runbook.md, trickplay-iframe-spec.md, and the two
+# superpowers/ login-reliability records. Anything NEW under these dirs stays
+# local — never `git add -f` into them without deciding to publish it.
 docs/
 plans/
 .planning/

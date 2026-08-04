@@ -125,5 +125,6 @@ M1 (IPTV core) and M1.5 (the cross-service contract gate) shipped. M3 (the
 Rust media-core) is live in enforce mode and M4 (the transcoder) is deployed
 with hardware VAAPI encode — the web SPA already plays the local library
 through them. M2 brings the Apple clients (the App-Store target) and M5 the
-native media clients; both remain ahead. The repository stays private until
-the first binary is distributed; redistribution is not granted (see LICENSE).
+native media clients; both remain ahead. The repository is public so the
+self-host installer can fetch from it; redistribution is not granted (see
+LICENSE).

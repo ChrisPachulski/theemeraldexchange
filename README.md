@@ -247,6 +247,9 @@ Two tracks (see **[DEPLOY.md](./DEPLOY.md)**):
 - **[PRODUCT.md](./PRODUCT.md)** — audience, principles, scope.
 - **[DESIGN.md](./DESIGN.md)** — the design contract (palette, type, motion).
 - **[DEPLOY.md](./DEPLOY.md)** — NAS setup and ongoing deploys.
+- **[goal-apple-companion.md](./goal-apple-companion.md)** — the M2 Apple-client track (not started).
+- **[crates/emerald-contracts/README.md](./crates/emerald-contracts/README.md)** — the cross-language
+  token/HKDF/`sub` contract and its test-vector oracle.
 
 ## Status
 
@@ -258,5 +261,6 @@ The **Apple client track** — native playback, offline downloads, the Plex-Pass
 
 ## License
 
-Proprietary. Until the first binary is distributed the repository stays private; third-party
-redistribution is not granted. See **[LICENSE](./LICENSE)**.
+Proprietary. The repository is **public** — the self-host installer above fetches `selfhost/install.sh`
+straight from it — but publication is not a license: third-party redistribution and derivative works
+are not granted. See **[LICENSE](./LICENSE)**.
