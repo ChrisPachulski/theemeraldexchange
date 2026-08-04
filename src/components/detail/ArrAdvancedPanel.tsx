@@ -795,7 +795,7 @@ function HistorySection({ kind, itemId }: { kind: Kind; itemId: number }) {
 }
 
 // --- Edit (quality profile + root folder + monitored). ---------------------
-function EditSection({
+export function EditSection({
   kind,
   itemId,
   monitored,
@@ -871,6 +871,15 @@ function EditSection({
               disabled={!folders.data}
               onChange={(e) => setFolderChoice(e.target.value)}
             >
+              {/* The item's own folder may be absent from the live root-folder
+                  list (root removed/renamed upstream, or a curated subset). A
+                  <select> can't hold a value with no matching <option> — it
+                  resets to the first one — so the panel would display, and
+                  appear to save, a DIFFERENT root than Save actually submits.
+                  Carry the orphan as its own option; the payload is unchanged. */}
+              {folder != null && !folders.data?.some((f) => f.path === folder) && (
+                <option value={folder}>{folder}</option>
+              )}
               {folders.data?.map((f) => (
                 <option key={f.id} value={f.path}>
                   {f.path}
