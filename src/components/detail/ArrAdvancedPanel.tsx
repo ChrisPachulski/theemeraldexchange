@@ -8,6 +8,7 @@ import { useSonarrProfiles, useSonarrRootFolders } from '../../lib/hooks/useSona
 import { useRadarrProfiles, useRadarrRootFolders } from '../../lib/hooks/useRadarrLibrary'
 import { useLimits } from '../../lib/hooks/useLimits'
 import { normalizeRootFolderPath, pickDefaultRootFolder } from '../../lib/pickDefaultRootFolder'
+import { pickDefaultProfileId } from '../../lib/pickDefaultProfileId'
 import {
   getReleaseView as getView,
   setReleaseView as setView,
@@ -819,7 +820,16 @@ export function EditSection({
   const [profileChoice, setProfileChoice] = useState<number | null>(null)
   const [folderChoice, setFolderChoice] = useState<string | null>(null)
   const [monitorChoice, setMonitorChoice] = useState<boolean>(monitored)
-  const profileId = profileChoice ?? qualityProfileId ?? profiles.data?.[0]?.id ?? null
+  // No profile of its own → fall back to the operator-curated DEFAULT_PROFILE_NAME,
+  // same as the Add modals. Taking profiles[0] here instead would let a Save
+  // silently re-grade the item onto whichever profile the *arr API happened to
+  // list first — usually 'Any', the worst one. pickDefaultProfileId already
+  // mirrors the server's pickProfile chain and degrades to profiles[0] (and to
+  // null on an empty/absent list), so no extra ?? chain.
+  const profileId =
+    profileChoice ??
+    qualityProfileId ??
+    pickDefaultProfileId(profiles.data, (limits.data?.defaultProfileName ?? 'choose me').toLowerCase())
   // No folder of its own → fall back to the operator-curated
   // DEFAULT_*_ROOT_FOLDER_PATH, same as the Add modals. Taking folders[0] here
   // instead would let a Save silently re-home the item onto whichever root the
