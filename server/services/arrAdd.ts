@@ -325,7 +325,15 @@ export function gateRootFolderSpace(opts: {
   if (!opts.rootFolderPath) {
     return { ok: false, failure: { status: 400, body: { error: 'rootFolderPath_required' } } }
   }
-  const folder = opts.folders.find((f) => normalizePath(f.path) === normalizePath(opts.rootFolderPath!))
+  // Exact match first: on a case-sensitive filesystem, two distinct mounts
+  // (e.g. /data/Media and /data/media) can normalize to the same key, and a
+  // pure normalized match would silently redirect the write — and the
+  // measured free space — to whichever one happens to sort first. Only fall
+  // back to the normalized match (trailing-slash/case tolerance) when no
+  // byte-identical folder exists.
+  const folder =
+    opts.folders.find((f) => f.path === opts.rootFolderPath) ??
+    opts.folders.find((f) => normalizePath(f.path) === normalizePath(opts.rootFolderPath!))
   if (!folder) {
     return {
       ok: false,
