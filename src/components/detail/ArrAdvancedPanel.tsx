@@ -7,7 +7,7 @@ import { useConfirm } from '../confirm/useConfirm'
 import { useSonarrProfiles, useSonarrRootFolders } from '../../lib/hooks/useSonarrLibrary'
 import { useRadarrProfiles, useRadarrRootFolders } from '../../lib/hooks/useRadarrLibrary'
 import { useLimits } from '../../lib/hooks/useLimits'
-import { normalizeRootFolderPath } from '../../lib/pickDefaultRootFolder'
+import { normalizeRootFolderPath, pickDefaultRootFolder } from '../../lib/pickDefaultRootFolder'
 import {
   getReleaseView as getView,
   setReleaseView as setView,
@@ -812,6 +812,7 @@ export function EditSection({
   const sonarrFolders = useSonarrRootFolders()
   const radarrProfiles = useRadarrProfiles()
   const radarrFolders = useRadarrRootFolders()
+  const limits = useLimits()
   const profiles = kind === 'tv' ? sonarrProfiles : radarrProfiles
   const folders = kind === 'tv' ? sonarrFolders : radarrFolders
 
@@ -819,7 +820,18 @@ export function EditSection({
   const [folderChoice, setFolderChoice] = useState<string | null>(null)
   const [monitorChoice, setMonitorChoice] = useState<boolean>(monitored)
   const profileId = profileChoice ?? qualityProfileId ?? profiles.data?.[0]?.id ?? null
-  const folder = folderChoice ?? rootFolderPath ?? folders.data?.[0]?.path ?? null
+  // No folder of its own → fall back to the operator-curated
+  // DEFAULT_*_ROOT_FOLDER_PATH, same as the Add modals. Taking folders[0] here
+  // instead would let a Save silently re-home the item onto whichever root the
+  // *arr API happened to list first. pickDefaultRootFolder already degrades to
+  // folders[0] (and to null on an empty/absent list), so no extra ?? chain.
+  const folder =
+    folderChoice ??
+    rootFolderPath ??
+    pickDefaultRootFolder(
+      folders.data,
+      kind === 'tv' ? limits.data?.defaultSonarrRootFolderPath : limits.data?.defaultRadarrRootFolderPath,
+    )
 
   const save = useMutation({
     mutationFn: (): Promise<unknown> => {
