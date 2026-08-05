@@ -30,6 +30,13 @@ const membershipState = vi.hoisted(() => ({
   status: 'allowed' as 'allowed' | 'revoked' | 'not_member',
 }))
 
+// The DB-backed half of effectiveRoleFor (used by the serve-time rating gate on
+// /playlist.m3u, which has no session to read a role from). Mocked so this suite
+// never opens a real serverDb(); flip `membersState.member` to grant admin.
+const membersState = vi.hoisted(() => ({
+  member: null as { role: 'admin' | 'user' } | null,
+}))
+
 // Sub claim the fake token decoder reports. Tests override it to exercise the
 // strict namespaced-sub requirement (the M1 bare-numeric grace is removed).
 const tokenState = vi.hoisted(() => ({
@@ -49,6 +56,10 @@ vi.mock('../middleware/auth.js', async () => {
 
 vi.mock('../services/membership.js', () => ({
   memberStatus: vi.fn(() => membershipState.status),
+}))
+
+vi.mock('../services/members.js', () => ({
+  isMember: vi.fn(() => membersState.member),
 }))
 
 vi.mock('../services/xtream.js', () => ({
@@ -247,6 +258,7 @@ function fakeToken(kind: string, resourceId: string): string {
 beforeEach(() => {
   authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
   membershipState.status = 'allowed'
+  membersState.member = null
   tokenState.sub = 'plex:42'
   concurrencyState.sessions.length = 0
   concurrencyState.releasedByResource.length = 0
@@ -402,6 +414,106 @@ describe('playlist token lifecycle', () => {
       body: '{}',
     })
     expect(res.status).toBe(413)
+  })
+
+  // The mint gate on POST /playlist/token only covers tokens minted AFTER a cap
+  // exists. A token minted while uncapped stays valid for its 90-day TTL, so the
+  // cap has to be re-checked at serve time or a newly-capped member keeps pulling
+  // the full live playlist from VLC until someone hand-revokes the jti.
+  describe('serve-time rating cap on GET /playlist.m3u', () => {
+    let policyDir: string
+    let policyPath: string
+
+    beforeEach(async () => {
+      policyDir = await fsp.mkdtemp(join(tmpdir(), 'iptv-m3u-policy-'))
+      policyPath = join(policyDir, 'user-policies.json')
+      _setUserPoliciesPathForTests(policyPath)
+    })
+    afterEach(async () => {
+      _setUserPoliciesPathForTests(env.userPoliciesPath)
+      await fsp.rm(policyDir, { recursive: true, force: true })
+    })
+
+    // Mint uncapped (the mint gate passes), then apply the cap — exactly the
+    // residual-TTL window the serve-time gate exists to close.
+    async function mintThenCap(sub: string, maxContentRating: string | null) {
+      authState.session = { sub, username: 'Kid', role: 'user' }
+      tokenState.sub = sub
+      const minted = await mintPlaylistToken()
+      await fsp.writeFile(
+        policyPath,
+        JSON.stringify({
+          [sub]: {
+            maxContentRating,
+            allowedSections: { live: true, downloads: true, arr: true },
+            kid: true,
+          },
+        }),
+      )
+      _setUserPoliciesPathForTests(policyPath)
+      const url = new URL(minted.url)
+      return url.pathname + url.search
+    }
+
+    it('403 rating_blocked when a cap is applied after the token was minted', async () => {
+      const playlistPath = await mintThenCap('plex:99', 'PG')
+      const res = await app.request(playlistPath)
+      expect(res.status).toBe(403)
+      expect(await res.json()).toEqual({ error: 'rating_blocked' })
+    })
+
+    it('serves the playlist for an admin sub even under a content-rating cap', async () => {
+      const playlistPath = await mintThenCap('plex:99', 'PG')
+      // No session on this route — admin has to come from the same authority
+      // reconcileSession uses (the members row), not the cookie.
+      membersState.member = { role: 'admin' }
+      const res = await app.request(playlistPath)
+      expect(res.status).toBe(200)
+      expect(res.headers.get('content-type')).toBe('audio/x-mpegurl')
+    })
+
+    it('serves the playlist for a non-admin with no content-rating cap', async () => {
+      const playlistPath = await mintThenCap('plex:99', null)
+      const res = await app.request(playlistPath)
+      expect(res.status).toBe(200)
+      expect(res.headers.get('content-type')).toBe('audio/x-mpegurl')
+    })
+
+    // Mint while live is still allowed (mint gate passes), then the admin
+    // turns live off — the section-half of the same residual-TTL window.
+    async function mintThenRestrictLive(sub: string) {
+      authState.session = { sub, username: 'Kid', role: 'user' }
+      tokenState.sub = sub
+      const minted = await mintPlaylistToken()
+      await fsp.writeFile(
+        policyPath,
+        JSON.stringify({
+          [sub]: {
+            maxContentRating: null,
+            allowedSections: { live: false, downloads: true, arr: true },
+            kid: true,
+          },
+        }),
+      )
+      _setUserPoliciesPathForTests(policyPath)
+      const url = new URL(minted.url)
+      return url.pathname + url.search
+    }
+
+    it('403 section_blocked when live access is revoked after the token was minted', async () => {
+      const playlistPath = await mintThenRestrictLive('plex:99')
+      const res = await app.request(playlistPath)
+      expect(res.status).toBe(403)
+      expect(await res.json()).toEqual({ error: 'section_blocked' })
+    })
+
+    it('serves the playlist for an admin sub even with live access revoked', async () => {
+      const playlistPath = await mintThenRestrictLive('plex:99')
+      membersState.member = { role: 'admin' }
+      const res = await app.request(playlistPath)
+      expect(res.status).toBe(200)
+      expect(res.headers.get('content-type')).toBe('audio/x-mpegurl')
+    })
   })
 })
 
