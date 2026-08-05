@@ -5,7 +5,7 @@
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "engines": {
-    "node": ">=24"
+    "node": ">=26"
   },
   "scripts": {
     "dev": "concurrently -n vite,api -c cyan,magenta \"npm:dev:vite\" \"npm:dev:server\"",
