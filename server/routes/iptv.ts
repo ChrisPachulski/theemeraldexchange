@@ -694,6 +694,14 @@ function parsePositiveInt(value: string | undefined): number | null {
 }
 
 iptv.post('/stream/live/:streamId/grant', requireAuth, requireSection('live'), async (c) => {
+  // IPTV provider content is UNRATED (star ratings, never certifications) —
+  // a parental rating cap therefore blocks these grants wholesale (fail
+  // closed, same rule the catchup / VOD / series grants apply to the same
+  // unrated provider content). Live was the one hole: a capped member who
+  // could not play a channel's catchup archive could still tune it live.
+  if (await capBlocksUnrated(c.get('session'))) {
+    return c.json({ error: 'rating_blocked' }, 403)
+  }
   const streamId = c.req.param('streamId')
   if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
 
