@@ -60,6 +60,11 @@ def neighbors_for(cand: Candidate, ctx: UserContext, k: int = 2) -> list[TitleRo
 
     pool_ids: list[int] = []
     pool_embs: list[np.ndarray] = []
+    # A watched-and-liked title lands in BOTH pools with (near-)identical
+    # embeddings, so top-k could pick the same title twice and render
+    # "matches Severance, Severance". Keep the first occurrence only
+    # (library wins, its loop runs first) so pool_ids stays unique.
+    seen: set[int] = set()
 
     # Use the embedding-aligned id lists, NOT sorted(ids). The matrix
     # skips ids without an embedding; sorting the raw id set and zipping
@@ -67,10 +72,16 @@ def neighbors_for(cand: Candidate, ctx: UserContext, k: int = 2) -> list[TitleRo
     # the wrong neighbor in the "matches X, Y" pill.
     if ctx.library_embeddings is not None:
         for tid, emb in zip(ctx.library_embedding_ids, ctx.library_embeddings, strict=True):
+            if tid in seen:
+                continue
+            seen.add(tid)
             pool_ids.append(tid)
             pool_embs.append(emb)
     if ctx.liked_embeddings is not None:
         for tid, emb in zip(ctx.liked_embedding_ids, ctx.liked_embeddings, strict=True):
+            if tid in seen:
+                continue
+            seen.add(tid)
             pool_ids.append(tid)
             pool_embs.append(emb)
 
