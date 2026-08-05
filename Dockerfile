@@ -6,7 +6,7 @@
 # doesn't carry a Rust toolchain. Symmetric to recommender/Dockerfile's
 # rust-builder stage (which produces the PyO3 wheel).
 #
-# Stage 2 (base): node:24-slim runtime. Pre-stages the napi crate's JS
+# Stage 2 (base): node:26-slim runtime. Pre-stages the napi crate's JS
 # bits + the linux-x64-gnu .node from stage 1 INTO the crate's directory
 # so the `file:` dep resolves and the prepare-script existence check
 # passes without firing a runtime rebuild. The crate dir must exist
@@ -16,7 +16,7 @@
 #   1. napi-rs linux-x64-gnu artifact is glibc; alpine couldn't load it
 #      without rebuilding for musl (extra toolchain in stage 1).
 #   2. better-sqlite3 is compiled from source either way — it has NO
-#      prebuilt binary for node 24's ABI — so the npm ci layer below
+#      prebuilt binary for node 26's ABI — so the npm ci layer below
 #      installs python3+make+g++ and purges them in the same layer.
 #      (An earlier revision of this header claimed a prebuilt glibc
 #      binary existed; the RUN block below was always the reality.)
@@ -35,12 +35,12 @@ FROM rust:1.97-slim-bookworm@sha256:99e09cb2284e2ddbb73a995deee3e91783fd04d17760
 
 WORKDIR /build
 
-# napi-rs's CLI is a Node tool, so we need Node here. Pin to 24 to
+# napi-rs's CLI is a Node tool, so we need Node here. Pin to 26 to
 # match the runtime image — napi-rs's prebuilt-binary loader checks
 # N-API version compatibility, which tracks Node's major version.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
- && curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
+ && curl -fsSL https://deb.nodesource.com/setup_26.x | bash - \
  && apt-get install -y --no-install-recommends nodejs \
  && rm -rf /var/lib/apt/lists/*
 
@@ -103,7 +103,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 # prebuilt platform packages). VITE_API_BASE_URL is deliberately UNSET:
 # apiUrl() then falls back to window.location.origin, which is exactly
 # right for same-origin serving.
-FROM node:25-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370 AS spa-on
+FROM node:26-slim@sha256:aa8fa825983c9ce8c794de92beb9c5402572e07fb0b4b80164856497894cc722 AS spa-on
 WORKDIR /spa
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
@@ -114,15 +114,15 @@ RUN npx vite build
 
 # Empty stand-in: BUNDLE_SPA=off yields an empty /spa/dist (no index.html),
 # so env.serveSpa auto-detection stays off — today's owner posture.
-FROM node:25-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370 AS spa-off
+FROM node:26-slim@sha256:aa8fa825983c9ce8c794de92beb9c5402572e07fb0b4b80164856497894cc722 AS spa-off
 RUN mkdir -p /spa/dist
 
 FROM spa-${BUNDLE_SPA} AS spa-dist
 
 # ---------------------------------------------------------------------------
 # Digest-pinned for reproducible builds. Resolve a new digest with:
-#   docker buildx imagetools inspect node:24-slim
-FROM node:25-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370 AS base
+#   docker buildx imagetools inspect node:26-slim
+FROM node:26-slim@sha256:aa8fa825983c9ce8c794de92beb9c5402572e07fb0b4b80164856497894cc722 AS base
 
 WORKDIR /app
 
@@ -130,7 +130,7 @@ WORKDIR /app
 # boot and exits the process if it is missing or <6.0 (the backend extracts
 # video frames). Debian bookworm's apt ships ffmpeg 5.1, which FAILS that gate,
 # so we COPY statically-linked 7.x binaries from a pinned, binaries-only image
-# instead. Static build → no glibc/runtime deps, runs as-is on node:24-slim.
+# instead. Static build → no glibc/runtime deps, runs as-is on node:26-slim.
 # Digest-pinned — pinning this digest also pins the GPL ffmpeg/x264 binary
 # provenance at the heart of the licensing review. When the tag is bumped, record
 # the new digest plus the ffmpeg/x264 versions it ships in THIRD-PARTY-LICENSES.
@@ -154,9 +154,9 @@ COPY --from=napi-builder \
      ./crates/emerald-contracts-napi/
 
 COPY package.json package-lock.json ./
-# better-sqlite3 has no prebuilt binary for node 24, so npm ci compiles
+# better-sqlite3 has no prebuilt binary for node 26, so npm ci compiles
 # it from source via node-gyp — which needs python3 + a C++ toolchain.
-# node:24-slim ships none of these (CI's npm ci only works because the
+# node:26-slim ships none of these (CI's npm ci only works because the
 # GitHub runner has them preinstalled). Install the toolchain, build,
 # then purge it in the same layer so the runtime image stays slim — the
 # compiled .node persists and needs no toolchain at runtime.
@@ -192,7 +192,7 @@ COPY tsconfig.json ./
 # id to adaptive googlevideo streams, which server/services/ytmux.ts muxes into
 # a served mp4; on any failure the caller falls back to yt-dlp. The binary is
 # glibc x86_64 (built in rust:1.96-slim-bookworm), forward-compatible with this
-# node:24-slim runtime. Staged into the build context at bin/ by the deploy
+# node:26-slim runtime. Staged into the build context at bin/ by the deploy
 # (scripts/deploy-nas.sh fetches the release asset; .gitignored, never committed).
 # --chmod guarantees the exec bit regardless of the staged file's mode.
 COPY --chmod=0755 bin/eex-ytresolve /usr/local/bin/eex-ytresolve
