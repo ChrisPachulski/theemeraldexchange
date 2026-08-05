@@ -23,6 +23,7 @@ import {
 } from './dvrRecorder.js'
 import { scheduleRecording, markStatus, getRecording, type DvrRecording } from './dvrRecordings.js'
 import { streamConcurrency } from './iptvConcurrency.js'
+import { env } from '../env.js'
 
 const NOW = '2026-06-17T12:00:00.000Z'
 
@@ -420,6 +421,43 @@ describe('FfmpegRecorder upstream-connection accounting (finding 118)', () => {
       const entry = streamConcurrency().list().find((s) => s.sessionId === `record:${row.id}`)
       expect(entry?.kind).toBe('live')
       expect(entry?.resourceId).toBe('9')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('defers when the tracker itself is full of vod sessions (no upstream in use)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const row = dueRecording()
+      // Saturate the tracker's GLOBAL cap with vod sessions. vod opens no provider
+      // connection, so upstreamInUse() (live/remux only) stays 0 and the recorder's
+      // own upstream check does NOT defer — the ONLY thing standing between this
+      // recording and an over-cap ffmpeg is tryAcquire's return value.
+      for (let i = 0; i < env.IPTV_MAX_CONCURRENT_STREAMS; i++) {
+        const r = streamConcurrency().tryAcquire({
+          sub: `plex:vod${i}`,
+          sessionId: `vod:${i}`,
+          kind: 'vod',
+          resourceId: `v${i}`,
+        })
+        expect(r.ok).toBe(true)
+      }
+      const rec = new FfmpegRecorder(dir, db.raw, () => Date.parse(NOW), streamConcurrency(), () => 1)
+
+      // RED (pre-fix): tryAcquire's rejection was discarded, so ffmpeg spawned an
+      // untracked over-cap connection and the row flipped to 'recording'.
+      tick(db.raw, rec, NOW)
+      expect(spawnMock).not.toHaveBeenCalled()
+      expect(getRecording(db.raw, row.id)?.status).toBe('scheduled')
+      // …and no phantom slot was booked for a recording that never started.
+      expect(streamConcurrency().list().some((s) => s.sessionId === `record:${row.id}`)).toBe(false)
+
+      // A vod stream ends; the freed slot lets the next tick record for real.
+      streamConcurrency().release('vod:0')
+      tick(db.raw, rec, NOW)
+      expect(spawnMock).toHaveBeenCalledOnce()
+      expect(getRecording(db.raw, row.id)?.status).toBe('recording')
     } finally {
       warn.mockRestore()
     }
