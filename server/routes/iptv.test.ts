@@ -568,10 +568,13 @@ describe('live stream grant + proxy', () => {
     )
   })
 
-  // Per-user policy section gate (requireSection('live')). A member whose
-  // policy denies the `live` section gets 403 before any concurrency slot
-  // is acquired; allowed members and admins reach the normal grant path.
-  describe('live section policy', () => {
+  // Per-user policy gates. requireSection('live') stops a member whose policy
+  // denies the `live` section; capBlocksUnrated stops a member with ANY
+  // content-rating cap, because provider live channels are unrated (fail
+  // closed, identical to the catchup/VOD/series grants for the same content).
+  // Both fire before any concurrency slot is acquired; allowed members and
+  // admins reach the normal grant path.
+  describe('live section + rating policy', () => {
     let policyDir: string
     let policyPath: string
     beforeEach(async () => {
@@ -634,6 +637,115 @@ describe('live stream grant + proxy', () => {
       _setUserPoliciesPathForTests(policyPath)
       const res = await app.request('/api/iptv/stream/live/10/grant', { method: 'POST' })
       expect(res.status).toBe(200)
+    })
+
+    const writePolicy = async (sub: string, maxContentRating: string | null) => {
+      await fsp.writeFile(
+        policyPath,
+        JSON.stringify({
+          [sub]: {
+            maxContentRating,
+            allowedSections: { live: true, downloads: true, arr: true },
+            kid: true,
+          },
+        }),
+      )
+      _setUserPoliciesPathForTests(policyPath)
+    }
+
+    // Regression: the live grant was the ONE unrated-provider grant without the
+    // cap gate, so a capped member blocked from a channel's catchup archive
+    // could still tune the very same channel live.
+    it('403 rating_blocked for a non-admin with a content-rating cap on the live grant', async () => {
+      authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+      await writePolicy('plex:99', 'PG')
+      const res = await app.request('/api/iptv/stream/live/10/grant', { method: 'POST' })
+      expect(res.status).toBe(403)
+      expect(await res.json()).toEqual({ error: 'rating_blocked' })
+      // The gate must precede tryAcquire, or a blocked caller still burns a
+      // provider connection slot on every rejected tune.
+      expect(concurrencyState.sessions).toHaveLength(0)
+    })
+
+    // The remux (AVPlayer/HLS) branch mints a different token from the same
+    // handler — the gate is above the fork, so both are covered.
+    it('403 rating_blocked on the remux live grant too', async () => {
+      authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+      await writePolicy('plex:99', 'PG')
+      const res = await app.request('/api/iptv/stream/live/10/grant?client=avplayer', {
+        method: 'POST',
+      })
+      expect(res.status).toBe(403)
+      expect(concurrencyState.sessions).toHaveLength(0)
+    })
+
+    it('allows the live grant for a non-admin with no content-rating cap', async () => {
+      authState.session = { sub: 'plex:99', username: 'Teen', role: 'user' }
+      await writePolicy('plex:99', null)
+      const res = await app.request('/api/iptv/stream/live/10/grant', { method: 'POST' })
+      expect(res.status).toBe(200)
+    })
+
+    it('admin is never rating_blocked on the live grant', async () => {
+      authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
+      await writePolicy('plex:42', 'G')
+      const res = await app.request('/api/iptv/stream/live/10/grant', { method: 'POST' })
+      expect(res.status).toBe(200)
+    })
+
+    // Regression: the live grant was gated, but a capped member could still
+    // export an M3U (every live channel, each embedding a live token) and
+    // bypass the same rating cap entirely outside the in-app player.
+    it('403 rating_blocked minting a playlist token for a non-admin with a content-rating cap', async () => {
+      authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+      await writePolicy('plex:99', 'PG')
+      const res = await app.request('/api/iptv/playlist/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      })
+      expect(res.status).toBe(403)
+      expect(await res.json()).toEqual({ error: 'rating_blocked' })
+    })
+
+    it('allows minting a playlist token for a non-admin with no content-rating cap', async () => {
+      authState.session = { sub: 'plex:99', username: 'Teen', role: 'user' }
+      await writePolicy('plex:99', null)
+      const res = await app.request('/api/iptv/playlist/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      })
+      expect(res.status).toBe(200)
+    })
+
+    it('admin is never rating_blocked minting a playlist token', async () => {
+      authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
+      await writePolicy('plex:42', 'G')
+      const res = await app.request('/api/iptv/playlist/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      })
+      expect(res.status).toBe(200)
+    })
+
+    it('403 section_blocked minting a playlist token for a non-admin whose policy denies live', async () => {
+      authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+      await fsp.writeFile(
+        policyPath,
+        JSON.stringify({
+          'plex:99': {
+            maxContentRating: null,
+            allowedSections: { live: false, downloads: true, arr: true },
+            kid: true,
+          },
+        }),
+      )
+      _setUserPoliciesPathForTests(policyPath)
+      const res = await app.request('/api/iptv/playlist/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      })
+      expect(res.status).toBe(403)
+      expect(await res.json()).toEqual({ error: 'section_blocked' })
     })
   })
 })
