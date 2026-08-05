@@ -146,4 +146,56 @@ describe('dvr routes', () => {
     const bad = await dvr.request(`/recordings/${r.id}/play`, { headers: { range: 'bytes=5000-6000' } })
     expect(bad.status).toBe(416)
   })
+
+  // RFC 9110 §14.1.2 byte-range semantics, matched to the sibling trailer route
+  // (server/routes/tmdb.ts). Every case below was wrong before the fix.
+  it('play honours suffix, open-ended and past-EOF ranges (RFC 9110)', async () => {
+    const file = path.join(tmpDir, 'ranges.ts')
+    fs.writeFileSync(file, Buffer.alloc(1000, 1))
+    const r = scheduleRecording(db.raw, validBody)
+    markStatus(db.raw, r.id, 'completed', { file_path: file })
+    const play = (range?: string) =>
+      dvr.request(`/recordings/${r.id}/play`, range ? { headers: { range } } : undefined)
+
+    // suffix range = the LAST N bytes. RED before the fix: served bytes 0-100.
+    const suffix = await play('bytes=-100')
+    expect(suffix.status).toBe(206)
+    expect(suffix.headers.get('content-range')).toBe('bytes 900-999/1000')
+    expect(suffix.headers.get('content-length')).toBe('100')
+    expect((await suffix.arrayBuffer()).byteLength).toBe(100)
+
+    // suffix larger than the file clamps to the whole file, it is not an error.
+    const suffixBig = await play('bytes=-5000')
+    expect(suffixBig.status).toBe(206)
+    expect(suffixBig.headers.get('content-range')).toBe('bytes 0-999/1000')
+
+    // `bytes=-0` requests zero trailing bytes → unsatisfiable.
+    const suffixZero = await play('bytes=-0')
+    expect(suffixZero.status).toBe(416)
+    expect(suffixZero.headers.get('content-range')).toBe('bytes */1000')
+
+    // last-byte-pos past EOF is the remainder of the file, NOT a 416.
+    // RED before the fix: a tail read like this 416'd and stalled playback.
+    const pastEof = await play('bytes=900-999999')
+    expect(pastEof.status).toBe(206)
+    expect(pastEof.headers.get('content-range')).toBe('bytes 900-999/1000')
+    expect(pastEof.headers.get('content-length')).toBe('100')
+
+    // open-ended range → to EOF.
+    const openEnded = await play('bytes=900-')
+    expect(openEnded.status).toBe(206)
+    expect(openEnded.headers.get('content-range')).toBe('bytes 900-999/1000')
+
+    // first-byte-pos at/past EOF stays unsatisfiable.
+    const atEof = await play('bytes=1000-')
+    expect(atEof.status).toBe(416)
+    expect(atEof.headers.get('content-range')).toBe('bytes */1000')
+
+    // invalid syntax is ignored → full 200, never a 206.
+    for (const bogus of ['bytes=-', 'bytes=abc-def', 'chunks=0-9']) {
+      const res = await play(bogus)
+      expect(res.status).toBe(200)
+      expect(res.headers.get('content-length')).toBe('1000')
+    }
+  })
 })
