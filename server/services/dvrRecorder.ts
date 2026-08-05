@@ -183,23 +183,32 @@ export class FfmpegRecorder implements Recorder {
         return null
       }
     }
-    fs.mkdirSync(this.dir, { recursive: true })
-    const filePath = this.filePathFor(rec.id)
-    const durationSecs = Math.max(1, (Date.parse(rec.stop_utc) - this.nowMs()) / 1000)
-    const args = buildRecordArgs(liveUrl(rec.channel_stream_id), filePath, durationSecs)
-    const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] })
-
-    // Register the recording as a live upstream connection so it's visible in
-    // /api/iptv/sessions and counted by upstreamInUse for the next dial. Synthetic
-    // sub (`dvr:<id>`) so it never dedupes against a real viewer of the same
-    // channel. Released on ffmpeg exit below.
-    this.tracker?.tryAcquire({
+    // Reserve the slot BEFORE dialing: register the recording as a live upstream
+    // connection so it's visible in /api/iptv/sessions and counted by
+    // upstreamInUse for the next dial. Synthetic sub (`dvr:<id>`) so it never
+    // dedupes against a real viewer of the same channel. Released on ffmpeg exit
+    // below. A REJECTED acquire (the tracker's own global/kind cap is full — a
+    // ceiling upstreamInUse above does not see, since it only counts live/remux)
+    // defers exactly like the upstream check: spawning anyway would put ffmpeg on
+    // the provider over cap AND leave the connection untracked by every counter.
+    const slot = this.tracker?.tryAcquire({
       sub: `dvr:${rec.id}`,
       sessionId: recordSessionId(rec.id),
       kind: 'live',
       resourceId: String(rec.channel_stream_id),
       title: rec.channel_name,
     })
+    if (slot && !slot.ok) {
+      console.warn(`[dvr ${rec.id}] concurrency slot denied (${slot.reason}) — deferring recording`)
+      return null
+    }
+    // From here the slot is HELD: a throw below leaks it until the tracker's 30s
+    // idle sweep reaps it (no heartbeat ever lands on a child that never spawned).
+    fs.mkdirSync(this.dir, { recursive: true })
+    const filePath = this.filePathFor(rec.id)
+    const durationSecs = Math.max(1, (Date.parse(rec.stop_utc) - this.nowMs()) / 1000)
+    const args = buildRecordArgs(liveUrl(rec.channel_stream_id), filePath, durationSecs)
+    const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] })
 
     proc.stderr?.on('data', (chunk: Buffer) => {
       // ffmpeg echoes the input URL (with creds) on error — always scrub.
