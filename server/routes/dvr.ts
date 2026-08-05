@@ -218,11 +218,22 @@ dvr.get('/recordings/:id/play', dvrPlayAuth, (c) => {
   }
   const base = { 'Content-Type': 'video/mp2t', 'Accept-Ranges': 'bytes' }
   const range = c.req.header('range')
-  const m = range ? /^bytes=(\d*)-(\d*)$/.exec(range) : null
-  if (m) {
-    const start = m[1] ? parseInt(m[1], 10) : 0
-    const end = m[2] ? parseInt(m[2], 10) : size - 1
-    if (Number.isNaN(start) || start > end || end >= size) {
+  const m = range ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null
+  // Same parse as the trailer route (tmdb.ts); keep the two in step. `bytes=-`
+  // is invalid syntax → ignore the header and serve 200 full (RFC 9110 14.2).
+  if (m && !(m[1] === '' && m[2] === '')) {
+    let start: number
+    let end: number
+    if (m[1] === '') {
+      // suffix range: bytes=-N → the LAST N bytes, not the first N.
+      start = Math.max(0, size - parseInt(m[2], 10))
+      end = size - 1
+    } else {
+      start = parseInt(m[1], 10)
+      // A last-byte-pos past EOF means "to the end", not unsatisfiable.
+      end = m[2] === '' ? size - 1 : Math.min(parseInt(m[2], 10), size - 1)
+    }
+    if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= size) {
       return new Response(null, { status: 416, headers: { ...base, 'Content-Range': `bytes */${size}` } })
     }
     const body = Readable.toWeb(createReadStream(rec.file_path, { start, end })) as ReadableStream
