@@ -836,6 +836,64 @@ describe('sonarr POST /api/v3/series — wantedSearch flag', () => {
   })
 })
 
+// Mirrors the Radarr admin-path test. resolveSeriesAddBody returns the admin's
+// rawBody verbatim, so the caller's raw rootFolderPath is what reaches
+// gateRootFolderSpace — which used to compare with `===` and 400 a folder that
+// genuinely exists but differs by a trailing slash or case (stale cached folder
+// list, hand-written API call). The match must tolerate the variant AND the
+// body forwarded to Sonarr must carry Sonarr's canonical path, never the
+// caller's variant (Sonarr's own validation rejects the non-canonical form).
+describe('sonarr admin add — root folder path tolerance + canonical forwarding', () => {
+  const adminAdd = async (bodyPath: string) =>
+    appUnderTest().request('/api/v3/series', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: 'Admin Add',
+        tvdbId: 4242,
+        rootFolderPath: bodyPath,
+        qualityProfileId: 7,
+        monitored: true,
+        // Opt out of the background grab so the assertion stays on the gate.
+        addOptions: { searchForMissingEpisodes: false, searchForCutoffUnmetEpisodes: false },
+      }),
+    })
+
+  const forwardedAddBody = () => {
+    const addCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([u, init]) =>
+        String(u).includes('/api/v3/series') &&
+        !String(u).includes('rootfolder') &&
+        (init as RequestInit | undefined)?.method === 'POST',
+    )
+    expect(addCall).toBeDefined()
+    return JSON.parse((addCall![1] as RequestInit).body as string) as Record<string, unknown>
+  }
+
+  beforeEach(() => {
+    stub('/api/v3/rootfolder', [{ id: 1, path: '/data/tv', freeSpace: 500 * 1024 ** 3 }])
+    stub('/api/v3/series', { id: 4242, title: 'Admin Add', seasons: [] }, 201)
+  })
+
+  it('accepts a trailing-slash variant and forwards the canonical path', async () => {
+    const r = await adminAdd('/data/tv/')
+    expect(r.status).toBe(201)
+    expect(forwardedAddBody().rootFolderPath).toBe('/data/tv')
+  })
+
+  it('accepts a case variant and forwards the canonical path', async () => {
+    const r = await adminAdd('/DATA/TV')
+    expect(r.status).toBe(201)
+    expect(forwardedAddBody().rootFolderPath).toBe('/data/tv')
+  })
+
+  it('still 400s unknown_root_folder for a path that is genuinely absent', async () => {
+    const r = await adminAdd('/data/nope')
+    expect(r.status).toBe(400)
+    expect(await r.json()).toMatchObject({ error: 'unknown_root_folder' })
+  })
+})
+
 // POST /api/v3/series/:id/seasons/:n/monitor — admin-only single-season
 // toggle. Has its own param validation, GET-existing, then PUT, then
 // background grab. The PUT failure mode is a forwarded-body response,

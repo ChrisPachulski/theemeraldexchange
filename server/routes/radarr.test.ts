@@ -1351,6 +1351,86 @@ describe('radarr non-admin add — path matching tolerance (burn-it-all fixes)',
   // already confirm the comparator is the only thing that changed.
 })
 
+// The ADMIN add path forwards rawBody verbatim (resolveMovieAddBody returns
+// early for role==='admin' with a rootFolderPath), so the caller's raw path is
+// what reaches the space gate. gateRootFolderSpace used to compare it with
+// `===`, which 400'd unknown_root_folder on a folder that genuinely exists and
+// resolves fine 30 lines away through the non-admin materialize path — e.g. a
+// stale react-query-cached folder list in the admin's tab after Radarr's mount
+// formatting changed, or a hand-written admin API call.
+//
+// Both halves are asserted together: the match must TOLERATE the variant, and
+// the body forwarded upstream must carry Radarr's CANONICAL path, never the
+// caller's variant (forwarding the raw variant is what got the previous
+// attempt at this fix reverted — Radarr's own validation rejects a path that
+// only matches by normalization).
+describe('radarr admin add — root folder path tolerance + canonical forwarding', () => {
+  const capturingFetch = (rootFolderPath: string) => {
+    const state: { captured: Record<string, unknown> | null } = { captured: null }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.includes('/api/v3/rootfolder')) {
+          return new Response(
+            JSON.stringify([{ id: 1, path: rootFolderPath, freeSpace: 500 * 1024 ** 3 }]),
+            { status: 200 },
+          )
+        }
+        if (url.endsWith('/api/v3/movie') && init?.method === 'POST') {
+          state.captured = JSON.parse(init.body as string)
+          return new Response(JSON.stringify({ id: 4242, title: 'Admin Add' }), { status: 201 })
+        }
+        return new Response('[]', { status: 200 })
+      }),
+    )
+    return state
+  }
+
+  const adminAdd = async (bodyPath: string) =>
+    appUnderTest().request('/api/v3/movie', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: 'Admin Add',
+        tmdbId: 4242,
+        rootFolderPath: bodyPath,
+        qualityProfileId: 7,
+        monitored: true,
+        // "Just monitor" — keeps the assertion on the gate + forwarded body,
+        // not on the capped-grab pipeline (covered by its own tests).
+        addOptions: { searchForMovie: false },
+      }),
+    })
+
+  it('accepts a trailing-slash variant and forwards the canonical path', async () => {
+    const state = capturingFetch('/data/media/movies')
+    const r = await adminAdd('/data/media/movies/')
+    expect(r.status).toBe(201)
+    expect(state.captured).not.toBeNull()
+    expect((state.captured as unknown as Record<string, unknown>).rootFolderPath).toBe(
+      '/data/media/movies',
+    )
+  })
+
+  it('accepts a case variant and forwards the canonical path', async () => {
+    const state = capturingFetch('/data/media/movies')
+    const r = await adminAdd('/DATA/MEDIA/MOVIES')
+    expect(r.status).toBe(201)
+    expect(state.captured).not.toBeNull()
+    expect((state.captured as unknown as Record<string, unknown>).rootFolderPath).toBe(
+      '/data/media/movies',
+    )
+  })
+
+  it('still 400s unknown_root_folder for a path that is genuinely absent', async () => {
+    capturingFetch('/data/media/movies')
+    const r = await adminAdd('/data/media/nope')
+    expect(r.status).toBe(400)
+    expect(await r.json()).toMatchObject({ error: 'unknown_root_folder' })
+  })
+})
+
 describe('per-session rate limit middleware (finding 4-0)', () => {
   // Exercise the token-bucket directly on a tiny app so the assertion is about
   // the limiter mechanism, not the auth/upstream stack the *arr routes layer on

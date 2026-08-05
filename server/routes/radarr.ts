@@ -657,6 +657,10 @@ radarr.post('/api/v3/movie', radarrMutateLimit, async (c) => {
   const wantedSearch = body.addOptions?.searchForMovie !== false
   const cappedBody = {
     ...body,
+    // The gate matches paths by normalization (slash/case), so `body` may carry
+    // a variant Radarr's own POST validation would reject. Forward the canonical
+    // path the gate resolved to, never the caller's raw spelling.
+    rootFolderPath: spaceGate.folder.path,
     ...(wantedSearch ? { monitored: false } : {}),
     addOptions: { ...(body.addOptions ?? {}), searchForMovie: false },
   }
