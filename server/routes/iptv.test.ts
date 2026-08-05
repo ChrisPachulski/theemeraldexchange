@@ -692,6 +692,61 @@ describe('live stream grant + proxy', () => {
       const res = await app.request('/api/iptv/stream/live/10/grant', { method: 'POST' })
       expect(res.status).toBe(200)
     })
+
+    // Regression: the live grant was gated, but a capped member could still
+    // export an M3U (every live channel, each embedding a live token) and
+    // bypass the same rating cap entirely outside the in-app player.
+    it('403 rating_blocked minting a playlist token for a non-admin with a content-rating cap', async () => {
+      authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+      await writePolicy('plex:99', 'PG')
+      const res = await app.request('/api/iptv/playlist/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      })
+      expect(res.status).toBe(403)
+      expect(await res.json()).toEqual({ error: 'rating_blocked' })
+    })
+
+    it('allows minting a playlist token for a non-admin with no content-rating cap', async () => {
+      authState.session = { sub: 'plex:99', username: 'Teen', role: 'user' }
+      await writePolicy('plex:99', null)
+      const res = await app.request('/api/iptv/playlist/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      })
+      expect(res.status).toBe(200)
+    })
+
+    it('admin is never rating_blocked minting a playlist token', async () => {
+      authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
+      await writePolicy('plex:42', 'G')
+      const res = await app.request('/api/iptv/playlist/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      })
+      expect(res.status).toBe(200)
+    })
+
+    it('403 section_blocked minting a playlist token for a non-admin whose policy denies live', async () => {
+      authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+      await fsp.writeFile(
+        policyPath,
+        JSON.stringify({
+          'plex:99': {
+            maxContentRating: null,
+            allowedSections: { live: false, downloads: true, arr: true },
+            kid: true,
+          },
+        }),
+      )
+      _setUserPoliciesPathForTests(policyPath)
+      const res = await app.request('/api/iptv/playlist/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      })
+      expect(res.status).toBe(403)
+      expect(await res.json()).toEqual({ error: 'section_blocked' })
+    })
   })
 })
 

@@ -491,7 +491,18 @@ function secretsEqual(a: string, b: string): boolean {
 
 // Playlist-token lifecycle + M3U generation live in services/iptvPlaylist.ts;
 // these handlers only parse the HTTP shape and map outcomes to statuses.
-iptv.post('/playlist/token', requireAuth, async (c) => {
+iptv.post('/playlist/token', requireAuth, requireSection('live'), async (c) => {
+  // The exported M3U is every live channel, each embedding a per-channel
+  // `live` token (buildPlaylistM3u) — an unguarded mint here would let a
+  // capped member bypass the exact rating gate just added to the live grant
+  // by exporting a playlist instead of tuning in-app. Same rule, same
+  // exemptions (admins never blocked), applied at the OTHER place a live
+  // token gets minted. A token minted before this gate remains valid for
+  // its 90-day TTL; DELETE /playlist/tokens/:jti (already existed) revokes
+  // it early if that residual window is a concern for a specific member.
+  if (await capBlocksUnrated(c.get('session'))) {
+    return c.json({ error: 'rating_blocked' }, 403)
+  }
   const { sub } = userOf(c)
   // Optional device label — free-form string, max 120 chars. Returned in the
   // response so the admin list can show "iPhone 15 (kitchen)" next to the jti.
