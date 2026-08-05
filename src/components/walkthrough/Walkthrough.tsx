@@ -99,7 +99,7 @@ function ClaimBlock({ placement }: { placement: 'hero' | 'foot' }) {
       <div className="walkthrough__signin-buttons">
         <button
           type="button"
-          className="walkthrough__signin-button"
+          className="walkthrough__signin-button walkthrough__signin-button--primary"
           onClick={() =>
             void passkeyRegister({ handle: handle.trim(), setupToken: token.trim() })
           }
@@ -252,7 +252,19 @@ function TransitionDemo() {
         </video>
         {state !== 'playing' && (
           <span className="walkthrough__transition-cta">
-            {state === 'idle' ? '▶  Play' : '↻  Replay'}
+            {state === 'idle' ? (
+              <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                <path d="M8 5.5v13l11-6.5z" fill="currentColor" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                <path
+                  d="M12 5V2L7 6l5 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z"
+                  fill="currentColor"
+                />
+              </svg>
+            )}
+            {state === 'idle' ? 'Play' : 'Replay'}
           </span>
         )}
       </button>
@@ -433,10 +445,10 @@ export function Walkthrough({ initialInviteCode = '' }: { initialInviteCode?: st
           <div className="walkthrough__hero-card">
             <p className="walkthrough__eyebrow">The Emerald Exchange</p>
             <h1 id="hero-title" className="walkthrough__hero-title">
-              A private members’ page<br />for a household media library.
+              A private members’ page for a household media library.
             </h1>
             <SignInBlock placement="hero" initialInviteCode={initialInviteCode} />
-            <p className="walkthrough__hero-scroll">↓ scroll for the tour</p>
+            <p className="walkthrough__hero-scroll">[ scroll for the tour ]</p>
           </div>
         </header>
         {sections.map((s) => (

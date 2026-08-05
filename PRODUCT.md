@@ -1,11 +1,25 @@
 # PRODUCT — The Emerald Exchange
 
+<!-- impeccable:product-schema 1 -->
+
+## Platform
+
+web
+
+Native iOS/tvOS clients (EmeraldKit, milestone M2) are the roadmap target;
+the platform value flips to `adaptive` when they land with their own design
+language. Until then the shipped product is the web SPA.
+
 ## Register
+
+*Legacy note (kept by owner request, 2026-08-04). Deprecated: the current
+schema replaces the register axis with per-surface visitor modes; nothing
+reads this section anymore.*
 
 **product** — design serves the application. This is a tool, used repeatedly, by
 people who already know what they want when they open it.
 
-## Product purpose
+## Product Purpose
 
 An invite-only, self-hosted streaming platform — a Plex-style media experience
 the household owns end to end. Members sign in, browse the library, watch live
@@ -14,6 +28,13 @@ goal is a product good enough to ship as native iOS/tvOS clients through the
 App Store, not a homelab launcher. The underlying services (the *arr stack, SAB,
 IPTV providers, the transcoder) are implementation detail — never promoted,
 linked, or visible from inside the experience.
+
+## Positioning
+
+An invite-only streaming product the household owns end to end — App-Store-grade
+polish over a self-hosted stack, with member signals never leaving the NAS. Plex
+sells slick but rented; the *arr stack is owned but operator-grade; this is both
+owned and polished. (Owner-confirmed 2026-08-04.)
 
 ## Users
 
@@ -36,6 +57,34 @@ same affordances, for everyone authorized. Capability differences (owner-only
 admin: invites, members, devices) are surfaced through gated routes and
 confirmations, not hidden modes.
 
+## Operating Context
+
+- Self-hosted on the household NAS, which also runs the owner's Plex Media
+  Server; reached over the LAN at home and through a Cloudflare Tunnel for
+  invited remote members. Same product either way.
+- Evening couch traffic is the primary scene (phone in a dim living room);
+  daytime kitchen check-ins on a tablet are the secondary one. Sessions are
+  short and intentional: find a title, add or play it, put the device down.
+- The owner administers nightly from inside the same consumption surface;
+  operator tooling (Sonarr/Radarr/SAB) stays outside the member experience
+  per the recorded exceptions under Product Principles.
+- Active surfaces (downloads, live playback) poll; everything else is
+  request-driven, and polling pauses when the tab is hidden.
+
+## Capabilities and Constraints
+
+- Stack: React/TypeScript SPA (Vite) with a Node server (`server/`); Rust
+  crates provide media-core and the transcoder (hardware VAAPI encode);
+  a recommender sidecar handles personalization; `EmeraldKit/` is the Swift
+  package staged for the M2 Apple clients.
+- In-browser playback of the local library ships via transcoded HLS through
+  media-core and the transcoder when `USE_MEDIA_CORE=1`.
+- **Live** appears only when IPTV is enabled; **Users** is owner-only.
+- No public sign-up exists or ever will; authorization is the invite/members
+  allowlist by construction.
+- The repository stays private until the first binary is distributed;
+  redistribution is not granted (see LICENSE).
+
 ## Tone and personality
 
 Considered. Quiet confidence. The kind of interface that could pass for a
@@ -57,7 +106,7 @@ Voice: short, confident, no jargon. No "successfully added!" exclamations; just
 - **Homepage / Homarr** — tile grids of identical cards. Generic homelab vibe.
 - **Plex Dashboard / Tautulli** — operator stats masquerading as "for users."
 
-## Strategic principles
+## Product Principles
 
 1. **The app is the experience.** No links to the underlying services inside it.
    No "open in full app" fallback. If the client can't do something a member
@@ -118,6 +167,19 @@ folded into **TV** and **Movies** (the `useMediaLibrary` hooks plus
 media-core is mounted (`USE_MEDIA_CORE=1`). One catalog surface per content
 type — a member never has to know whether a title plays from the local
 library or is merely tracked.
+
+## Evidence on Hand
+
+- Real brand and atmosphere assets in the tree: the kraken video loops
+  (`public/kraken.webm`/`.mp4`, calmer `public/resting.webm`/`.mp4`,
+  `public/kraken-poster.jpg`), the WebGL gem scene (`src/lib/gemScene.ts`,
+  rendered by `EmeraldMark`), brand files under `public/brand/`, and legal
+  pages (`public/privacy.html`, `public/support.html`).
+- The real content is the household's own media library, served live through
+  the running stack; screenshots and demos can use it directly.
+- There are no testimonials, case studies, press mentions, or external
+  customers — this is a private household product. Future work must not
+  fabricate any.
 
 ## Roadmap
 

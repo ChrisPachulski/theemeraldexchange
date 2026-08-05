@@ -28,9 +28,13 @@
 
 /* Ultrawide (21:9 ≈ 2.33 and wider): switch to `contain` so the
    whole composition is preserved instead of cropping ~44% vertically.
-   Threshold sits between 16:9 (cover works) and 21:9 (cover crops
-   the kraken's head + foreground). */
-@media (min-aspect-ratio: 19 / 10) {
+   The threshold must be a real ultrawide MONITOR ratio, not "wider
+   than 16:9": ordinary desktop windows routinely hit 1.9-2.3 (a
+   1440-wide window only 650 tall is 2.2), and `contain` there
+   pillarboxes the 4:3 source into a centered column with black
+   voids — the login card ends up floating on dead black. The
+   earlier 19/10 threshold caused exactly that. */
+@media (min-aspect-ratio: 21 / 9) {
   .kraken__video {
     object-fit: contain;
   }
