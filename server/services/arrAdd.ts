@@ -309,6 +309,13 @@ export type SpaceGateFailure = { status: 400 | 507; body: Record<string, unknown
  * Availability is computed MINUS in-flight reservations so a second
  * concurrent add can't clear the gate against the same stale snapshot
  * the first add is already spending.
+ *
+ * The path match normalizes (trailing slash + case) like every other folder
+ * matcher in this file: the admin add path forwards the caller's rootFolderPath
+ * verbatim, so a stale cached folder list would otherwise 400 unknown_root_folder
+ * on a folder that genuinely exists. `folder.path` — the upstream canonical
+ * value, never the caller's variant — is what goes into the snapshot, so callers
+ * that forward `snapshot.path` upstream stay byte-identical to *arr's own form.
  */
 export function gateRootFolderSpace(opts: {
   rootFolderPath: string | undefined
@@ -318,7 +325,7 @@ export function gateRootFolderSpace(opts: {
   if (!opts.rootFolderPath) {
     return { ok: false, failure: { status: 400, body: { error: 'rootFolderPath_required' } } }
   }
-  const folder = opts.folders.find((f) => f.path === opts.rootFolderPath)
+  const folder = opts.folders.find((f) => normalizePath(f.path) === normalizePath(opts.rootFolderPath!))
   if (!folder) {
     return {
       ok: false,

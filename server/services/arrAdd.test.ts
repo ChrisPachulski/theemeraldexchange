@@ -85,6 +85,26 @@ describe('gateRootFolderSpace (shared fail-closed gate)', () => {
     if (above.ok) expect(above.folder).toEqual({ path: '/data/tv', freeSpace: HUGE })
   })
 
+  // The gate is the only folder matcher in this module that used `===`, so an
+  // admin body carrying a slash/case variant of a real folder 400'd while the
+  // same path resolved fine through materializeNonAdminAddBody. Matching
+  // normalizes now — but the snapshot must still expose the UPSTREAM spelling,
+  // because callers forward `folder.path` to *arr, whose own validation rejects
+  // anything that isn't byte-identical to its canonical form.
+  it.each([
+    ['trailing slash', '/data/tv/'],
+    ['missing trailing slash', '/data/tv'],
+    ['case', '/DATA/TV'],
+  ])('matches ignoring %s and reports the upstream canonical path', (_label, requested) => {
+    const r = gateRootFolderSpace({
+      rootFolderPath: requested,
+      folders: [{ path: '/data/tv/', freeSpace: HUGE }],
+      ledger,
+    })
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.folder.path).toBe('/data/tv/')
+  })
+
   it('subtracts in-flight reservations from availability', () => {
     const folder = { path: '/data/tv-gate-reserved', freeSpace: env.minFreeBytes + 10 * 1024 ** 3 }
     expect(ledger.reserve(folder, 9 * 1024 ** 3)).toBe(true)

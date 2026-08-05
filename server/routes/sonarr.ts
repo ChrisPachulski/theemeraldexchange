@@ -801,6 +801,10 @@ sonarr.post('/api/v3/series', sonarrMutateLimit, async (c) => {
   // filter is the only path that starts a download.
   const cappedBody = {
     ...body,
+    // The gate matches paths by normalization (slash/case), so `body` may carry
+    // a variant Sonarr's own POST validation would reject. Forward the canonical
+    // path the gate resolved to, never the caller's raw spelling.
+    rootFolderPath: folderSnapshot.path,
     addOptions: {
       ...(body.addOptions ?? {}),
       searchForMissingEpisodes: false,
