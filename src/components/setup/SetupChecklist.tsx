@@ -53,7 +53,7 @@ export function SetupChecklist() {
   return (
     <section className="setup-checklist" aria-label="Server setup checklist">
       <div className="setup-checklist__head">
-        <h2 className="setup-checklist__title">Your server is claimed 🎉</h2>
+        <h2 className="setup-checklist__title">Server claimed.</h2>
         <button
           type="button"
           className="setup-checklist__dismiss"
@@ -62,11 +62,11 @@ export function SetupChecklist() {
             setDismissed(true)
           }}
         >
-          Done — dismiss
+          Done
         </button>
       </div>
       <p className="setup-checklist__hint">
-        Everything below is optional — the server already works for on-demand
+        Everything below is optional; the server already works for on-demand
         browsing. Turn a capability on by setting its flag and restarting
         (<code>docker compose up -d</code>).
       </p>

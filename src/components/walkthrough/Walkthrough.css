@@ -30,12 +30,21 @@
   top: var(--s-6);
   right: var(--s-6);
   max-width: 560px;
-  padding: var(--s-5) var(--s-5) var(--s-6);
+  padding: var(--s-6);
   display: grid;
   gap: var(--s-4);
-  background: transparent;
-  border: 0;
-  box-shadow: none;
+  /* Earned glass: the card floats over the moving kraken, same recipe as
+     the foot sign-in card but a step more transparent so the storm still
+     bleeds through. Text-shadow alone couldn't hold the muted copy and
+     field labels against the bright sky. */
+  background: color-mix(in oklch, var(--bg) 74%, transparent);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow:
+    inset 0 1px 0 var(--frost),
+    0 36px 70px -30px var(--ink);
   text-align: left;
   justify-items: start;
 }
@@ -85,20 +94,18 @@
   line-height: 1.02;
   color: var(--text);
   margin: 0;
-  /* Soft ink halo so the type stays readable over the moving kraken
-     without a glass panel propping it up. Two stacked shadows give a
-     wider, gentler falloff than a single blur. */
+  text-wrap: balance;
   text-shadow:
     0 1px 2px oklch(0 0 0 / 0.55),
     0 8px 24px oklch(0 0 0 / 0.45);
 }
 
 .walkthrough__hero-scroll {
-  font-family: var(--font-display);
+  font-family: var(--font-mono);
   font-size: var(--t-xs);
-  letter-spacing: var(--tr-eyebrow);
+  letter-spacing: var(--tr-hud);
   text-transform: uppercase;
-  color: var(--text-subtle);
+  color: var(--text-muted);
   margin: var(--s-3) 0 0;
   text-align: center;
   animation: walkthrough-pulse 2.4s ease-in-out infinite;
@@ -170,7 +177,7 @@
 }
 
 .walkthrough__brand-mark {
-  margin: 0 0 var(--s-lg) calc(-1 * var(--s-xs));
+  margin: 0 0 var(--s-5) calc(-1 * var(--s-1));
 }
 
 .walkthrough__title {
@@ -246,8 +253,10 @@
 .walkthrough__transition-cta {
   position: absolute;
   inset: 0;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-3);
   font-family: var(--font-display);
   font-size: var(--t-lg);
   font-weight: var(--w-display);
@@ -404,12 +413,13 @@
 
 .walkthrough__invite-input::placeholder {
   color: var(--text-subtle);
-  font-family: var(--font-sans, inherit);
+  font-family: var(--font-body, inherit);
 }
 
 .walkthrough__invite-input:focus-visible {
   outline: none;
   border-color: var(--emerald);
+  box-shadow: 0 0 0 4px oklch(0.62 0.180 158 / 0.12);
 }
 
 .walkthrough__invite-input:disabled {
@@ -466,6 +476,42 @@
 .walkthrough__signin-button:disabled {
   opacity: 0.65;
   cursor: progress;
+}
+
+/* The claim CTA is the page's single primary action — solid Cut Emerald
+   per the system's button-primary, trailing mono arrow included. The
+   provider buttons keep the tinted treatment: three equal-weight ways in,
+   no false primary among them. */
+.walkthrough__signin-button--primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  background: var(--emerald);
+  border-color: transparent;
+}
+
+.walkthrough__signin-button--primary::after {
+  content: '->';
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  font-weight: var(--w-body);
+  letter-spacing: 0;
+  text-transform: none;
+  transform: translateY(-1px);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.walkthrough__signin-button--primary:hover:not(:disabled) {
+  background: var(--emerald-dim);
+}
+
+.walkthrough__signin-button--primary:hover:not(:disabled)::after {
+  transform: translate(2px, -1px);
+}
+
+.walkthrough__signin-button--primary:disabled::after {
+  content: '';
 }
 
 .walkthrough__signin-hint {
