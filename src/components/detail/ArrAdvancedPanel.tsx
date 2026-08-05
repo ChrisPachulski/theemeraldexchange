@@ -858,6 +858,18 @@ export function EditSection({
               disabled={!profiles.data}
               onChange={(e) => setProfileChoice(Number(e.target.value))}
             >
+              {/* Same orphan-value defect as the Folder select below: the
+                  item's own quality profile may have been renamed or deleted
+                  in Sonarr/Radarr after it was added, so its id is missing
+                  from the live list. A <select> can't hold a value with no
+                  matching <option> — it resets to the first one — so the panel
+                  would display a DIFFERENT profile than Save actually submits.
+                  Carry the orphan as its own option; the payload is unchanged.
+                  Profile ids are numeric, so a plain `===` match suffices (no
+                  normalizeRootFolderPath equivalent needed). */}
+              {profileId != null && !profiles.data?.some((p) => p.id === profileId) && (
+                <option value={profileId}>{`Profile ${profileId}`}</option>
+              )}
               {profiles.data?.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
