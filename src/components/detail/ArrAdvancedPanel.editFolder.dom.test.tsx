@@ -17,11 +17,20 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { rootFoldersMock, qualityProfilesMock, editMovieMock } = vi.hoisted(() => ({
-  rootFoldersMock: vi.fn(),
-  qualityProfilesMock: vi.fn(),
-  editMovieMock: vi.fn(),
-}))
+const { rootFoldersMock, qualityProfilesMock, editMovieMock, limitsData, SONARR_FOLDERS } = vi.hoisted(
+  () => ({
+    rootFoldersMock: vi.fn(),
+    qualityProfilesMock: vi.fn(),
+    editMovieMock: vi.fn(),
+    limitsData: { current: {} as Record<string, unknown> },
+    // Deliberately disjoint from the Radarr list so a kind ternary wired to
+    // the wrong app is caught rather than silently agreeing.
+    SONARR_FOLDERS: [
+      { id: 10, path: '/data/media/tv' },
+      { id: 11, path: '/data/media/tv-4k' },
+    ],
+  }),
+)
 
 vi.mock('../../lib/api/radarr', async () => {
   const actual = await vi.importActual<typeof import('../../lib/api/radarr')>('../../lib/api/radarr')
@@ -37,16 +46,21 @@ vi.mock('../../lib/api/radarr', async () => {
 })
 
 // kind='movie' never reads the Sonarr pickers, but the hooks still run (hooks
-// can't be conditional). Keep them off the network.
+// can't be conditional). Keep them off the network — and serve a real folder
+// list so the kind='tv' case below has one to pick a default from.
 vi.mock('../../lib/hooks/useSonarrLibrary', async () => {
   const actual =
     await vi.importActual<typeof import('../../lib/hooks/useSonarrLibrary')>('../../lib/hooks/useSonarrLibrary')
   return {
     ...actual,
     useSonarrProfiles: () => ({ data: undefined }),
-    useSonarrRootFolders: () => ({ data: undefined }),
+    useSonarrRootFolders: () => ({ data: SONARR_FOLDERS }),
   }
 })
+
+// The curated defaults live on /api/limits; mock the hook so the default-folder
+// tests can vary them without a network round-trip.
+vi.mock('../../lib/hooks/useLimits', () => ({ useLimits: () => ({ data: limitsData.current }) }))
 
 import { EditSection } from './ArrAdvancedPanel'
 
@@ -57,12 +71,12 @@ const LIVE_FOLDERS = [
   { id: 2, path: '/mnt/scratch' },
 ]
 
-function mount(rootFolderPath?: string) {
+function mount(rootFolderPath?: string, kind: 'tv' | 'movie' = 'movie') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
       <EditSection
-        kind="movie"
+        kind={kind}
         itemId={999}
         monitored
         qualityProfileId={7}
@@ -76,8 +90,8 @@ function mount(rootFolderPath?: string) {
 }
 
 // The Folder select only exists behind the Edit disclosure.
-async function openEdit(rootFolderPath?: string) {
-  mount(rootFolderPath)
+async function openEdit(rootFolderPath?: string, kind: 'tv' | 'movie' = 'movie') {
+  mount(rootFolderPath, kind)
   fireEvent.click(screen.getByRole('button', { name: /^Edit/ }))
   return await screen.findByRole('combobox', { name: 'Folder' })
 }
@@ -92,6 +106,7 @@ beforeEach(() => {
   rootFoldersMock.mockReset()
   qualityProfilesMock.mockReset()
   editMovieMock.mockReset()
+  limitsData.current = {}
   rootFoldersMock.mockResolvedValue(LIVE_FOLDERS)
   qualityProfilesMock.mockResolvedValue([{ id: 7, name: 'HD-1080p' }])
   editMovieMock.mockResolvedValue({ id: 999 })
@@ -158,5 +173,64 @@ describe('EditSection — Folder picker with an orphaned root folder', () => {
     const select = await openEdit('/mnt/Scratch/')
     await screen.findByRole('option', { name: '/mnt/scratch' })
     expect(folderOptions(select)).toEqual(['/data/media/movies', '/mnt/scratch'])
+  })
+})
+
+// An item with no rootFolderPath of its own (older *arr payloads, or a movie
+// added before a root was assigned) falls through to a default. Add used the
+// operator-curated DEFAULT_*_ROOT_FOLDER_PATH; Edit used folders[0] — so
+// opening Edit and pressing Save silently RE-HOMED the item onto whichever
+// root the *arr API happened to list first.
+describe('EditSection — Folder default when the item has no rootFolderPath', () => {
+  it('prefers the curated Radarr default over the live list’s first folder', async () => {
+    limitsData.current = { defaultRadarrRootFolderPath: '/mnt/scratch' }
+    const select = await openEdit(undefined)
+    await screen.findByRole('option', { name: '/mnt/scratch' })
+    expect((select as HTMLSelectElement).value).toBe('/mnt/scratch')
+    expect((select as HTMLSelectElement).value).not.toBe(LIVE_FOLDERS[0].path)
+  })
+
+  it('matches the curated default trailing-slash- and case-insensitively', async () => {
+    limitsData.current = { defaultRadarrRootFolderPath: '/MNT/Scratch/' }
+    const select = await openEdit(undefined)
+    await screen.findByRole('option', { name: '/mnt/scratch' })
+    // The live list's exact spelling wins, so no orphan option is synthesized.
+    expect((select as HTMLSelectElement).value).toBe('/mnt/scratch')
+    expect(folderOptions(select)).toEqual(['/data/media/movies', '/mnt/scratch'])
+  })
+
+  it('Save submits the curated default, not the first live folder', async () => {
+    limitsData.current = { defaultRadarrRootFolderPath: '/mnt/scratch' }
+    await openEdit(undefined)
+    await screen.findByRole('option', { name: '/mnt/scratch' })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(editMovieMock).toHaveBeenCalledTimes(1))
+    expect(editMovieMock.mock.calls[0][1]).toMatchObject({ rootFolderPath: '/mnt/scratch' })
+  })
+
+  it('reads the Sonarr default for kind="tv"', async () => {
+    limitsData.current = {
+      defaultSonarrRootFolderPath: '/data/media/tv-4k',
+      // A Radarr default must not leak into the TV branch.
+      defaultRadarrRootFolderPath: '/mnt/scratch',
+    }
+    const select = await openEdit(undefined, 'tv')
+    await screen.findByRole('option', { name: '/data/media/tv-4k' })
+    expect((select as HTMLSelectElement).value).toBe('/data/media/tv-4k')
+  })
+
+  it('still falls back to the first live folder when no default is configured', async () => {
+    limitsData.current = { defaultRadarrRootFolderPath: null }
+    const select = await openEdit(undefined)
+    await screen.findByRole('option', { name: '/data/media/movies' })
+    expect((select as HTMLSelectElement).value).toBe('/data/media/movies')
+  })
+
+  it('prefers the item’s own folder over the curated default', async () => {
+    limitsData.current = { defaultRadarrRootFolderPath: '/mnt/scratch' }
+    const select = await openEdit('/data/media/movies')
+    await screen.findByRole('option', { name: '/mnt/scratch' })
+    expect((select as HTMLSelectElement).value).toBe('/data/media/movies')
   })
 })
