@@ -17,7 +17,7 @@ import { promisify } from 'node:util'
 const gzipAsync = promisify(gzip)
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { rateLimit } from '../middleware/rateLimit.js'
-import { requireSection } from '../services/userPolicies.js'
+import { requireSection, getPolicy } from '../services/userPolicies.js'
 import { capBlocksUnrated } from '../services/parentalRating.js'
 import { effectiveRoleFor } from '../services/sessionGate.js'
 import { getAccountInfo, credsFromEnv } from '../services/xtream.js'
@@ -545,16 +545,30 @@ iptv.get('/playlist.m3u', async (c) => {
       401,
     )
   }
-  // Same rating rule as the mint gate above, re-checked at SERVE time. The
-  // mint gate alone leaves a residual hole: a token minted BEFORE a cap was
-  // applied (or before the mint gate existed) stays valid for its 90-day TTL,
-  // so a newly-capped member keeps exporting the full live playlist from VLC
-  // until an admin hand-revokes the jti. Policy changes must take effect on
-  // the next fetch, not at token expiry. There is no session here (token-in-
-  // URL auth, no cookie), so the role comes from the same authority
-  // reconcileSession uses — configured admins + the DB members row — and
-  // admins are never blocked, exactly as at mint.
+  // Same two gates the mint handler above applies (rating cap AND the live
+  // section gate), both re-checked at SERVE time. The mint gate alone leaves
+  // a residual hole: a token minted BEFORE a cap was applied, or before an
+  // admin turned live off, or before either gate existed, stays valid for
+  // its 90-day TTL — a newly-restricted member would keep exporting the full
+  // live playlist from VLC until an admin hand-revokes the jti. Policy
+  // changes must take effect on the next fetch, not at token expiry.
+  //
+  // There is no session here (token-in-URL auth, no cookie), so role comes
+  // from configured ADMIN_SUBS + the DB members row (effectiveRoleFor) — the
+  // same durable authority reconcileSession itself is built on. This is NOT
+  // literally identical to the cookie path: a legacy admin granted only via
+  // the ADMINS-by-Plex-username allowlist (not ADMIN_SUBS, no admin members
+  // row) resolves to 'user' here, since there is no username to check. That
+  // fails CLOSED — such an admin could be rating/section-blocked on their
+  // own export if they also carry a cap — not a security defect, just a
+  // narrower admin recognition than the cookie path's.
   const role = effectiveRoleFor('', auth.sub)
+  if (role !== 'admin') {
+    const policy = await getPolicy(auth.sub)
+    if (policy.allowedSections && !policy.allowedSections.live) {
+      return c.json({ error: 'section_blocked' }, 403)
+    }
+  }
   if (await capBlocksUnrated({ sub: auth.sub, role })) {
     return c.json({ error: 'rating_blocked' }, 403)
   }

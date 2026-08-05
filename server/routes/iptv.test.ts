@@ -478,6 +478,42 @@ describe('playlist token lifecycle', () => {
       expect(res.status).toBe(200)
       expect(res.headers.get('content-type')).toBe('audio/x-mpegurl')
     })
+
+    // Mint while live is still allowed (mint gate passes), then the admin
+    // turns live off — the section-half of the same residual-TTL window.
+    async function mintThenRestrictLive(sub: string) {
+      authState.session = { sub, username: 'Kid', role: 'user' }
+      tokenState.sub = sub
+      const minted = await mintPlaylistToken()
+      await fsp.writeFile(
+        policyPath,
+        JSON.stringify({
+          [sub]: {
+            maxContentRating: null,
+            allowedSections: { live: false, downloads: true, arr: true },
+            kid: true,
+          },
+        }),
+      )
+      _setUserPoliciesPathForTests(policyPath)
+      const url = new URL(minted.url)
+      return url.pathname + url.search
+    }
+
+    it('403 section_blocked when live access is revoked after the token was minted', async () => {
+      const playlistPath = await mintThenRestrictLive('plex:99')
+      const res = await app.request(playlistPath)
+      expect(res.status).toBe(403)
+      expect(await res.json()).toEqual({ error: 'section_blocked' })
+    })
+
+    it('serves the playlist for an admin sub even with live access revoked', async () => {
+      const playlistPath = await mintThenRestrictLive('plex:99')
+      membersState.member = { role: 'admin' }
+      const res = await app.request(playlistPath)
+      expect(res.status).toBe(200)
+      expect(res.headers.get('content-type')).toBe('audio/x-mpegurl')
+    })
   })
 })
 
