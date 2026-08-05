@@ -41,6 +41,13 @@ __pycache__/
 docs/
 plans/
 .planning/
+# Starforge autonomous-loop state. Its own .starforge/.gitignore is an ALLOWLIST
+# that un-ignores CONTROL.md/GOALS.md/NEXT-SESSION-GOAL.md so the loop can track
+# them; excluding the directory here stops git descending into it at all, so that
+# allowlist can never take effect. Deliberate: NEXT-SESSION-GOAL.md is a planning
+# artifact and this repo is public. The loop reads and writes these on disk either
+# way — untracked is the design, not a bug.
+.starforge/
 
 # Netlify CLI state (machine-local; hardcodes an absolute publish path)
 .netlify/
@@ -120,3 +127,6 @@ recommender/.venv-embed/
 .security-audit/
 scripts/security/.exposure-baseline.json
 scripts/security/exposure-drift.log
+# >>> starforge managed (ephemeral runtime dirs) >>>
+.claude/worktrees/
+# <<< starforge managed <<<

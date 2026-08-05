@@ -230,6 +230,34 @@ cargo test -p emerald-contracts -p media-core -p transcoder
 ( cd recommender && uv sync --extra dev && uv pip install --python .venv/bin/python maturin && .venv/bin/maturin develop --release -m ../crates/emerald-contracts-pyo3/Cargo.toml && uv run pytest )
 ```
 
+## Node runtime policy
+
+The project targets **one** Node line at a time — currently **Node 26**. `engines.node` is a hard
+floor equal to the line we ship, not a wider compatibility promise: it says `>=26` because nothing
+below 26 is tested.
+
+Seven declarations must always agree:
+
+| Where | What |
+| --- | --- |
+| [`.nvmrc`](./.nvmrc) | local dev, and the version `actions/setup-node` reads |
+| [`package.json`](./package.json) → `engines.node` | the supported floor |
+| [`package.json`](./package.json) → `@types/node` | typings major |
+| [`Dockerfile`](./Dockerfile) | three `FROM node:<n>-slim@sha256:…` stages |
+| [`Dockerfile`](./Dockerfile) | the NodeSource `setup_<n>.x` line in `napi-builder` |
+| [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) | four `node-version:` inputs |
+| [`.github/workflows/e2e-integration.yml`](./.github/workflows/e2e-integration.yml) | one `node-version:` input |
+
+**A Dependabot base-image bump is half an upgrade.** The `docker` ecosystem rewrites only the
+`FROM` tags — `.nvmrc`, `engines`, both workflows, and the NodeSource line are left behind. The
+24→25 move shipped with `napi-builder` still installing Node 24, so the N-API addon was compiled
+under one major and loaded under another.
+
+Upgrade when the current line reaches EOL or the next LTS lands; check the
+[release schedule](https://nodejs.org/en/about/previous-releases) rather than assuming. Node 26 is
+the Current line until it becomes LTS on 2026-10-28. From Node 27 onward every line is LTS — the
+odd/even split goes away, and so does most of this section.
+
 ## Deploy
 
 Two tracks (see **[DEPLOY.md](./DEPLOY.md)**):
