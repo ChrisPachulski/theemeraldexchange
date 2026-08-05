@@ -17,10 +17,11 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { rootFoldersMock, qualityProfilesMock, editMovieMock } = vi.hoisted(() => ({
+const { rootFoldersMock, qualityProfilesMock, editMovieMock, limitsData } = vi.hoisted(() => ({
   rootFoldersMock: vi.fn(),
   qualityProfilesMock: vi.fn(),
   editMovieMock: vi.fn(),
+  limitsData: { current: {} as Record<string, unknown> },
 }))
 
 vi.mock('../../lib/api/radarr', async () => {
@@ -47,6 +48,10 @@ vi.mock('../../lib/hooks/useSonarrLibrary', async () => {
     useSonarrRootFolders: () => ({ data: undefined }),
   }
 })
+
+// The curated default profile name lives on /api/limits; mock the hook so the
+// default-profile tests can vary it without a network round-trip.
+vi.mock('../../lib/hooks/useLimits', () => ({ useLimits: () => ({ data: limitsData.current }) }))
 
 import { EditSection } from './ArrAdvancedPanel'
 
@@ -93,6 +98,7 @@ beforeEach(() => {
   rootFoldersMock.mockReset()
   qualityProfilesMock.mockReset()
   editMovieMock.mockReset()
+  limitsData.current = {}
   rootFoldersMock.mockResolvedValue(LIVE_FOLDERS)
   qualityProfilesMock.mockResolvedValue(LIVE_PROFILES)
   editMovieMock.mockResolvedValue({ id: 999 })
@@ -153,5 +159,87 @@ describe('EditSection — Quality picker with an orphaned profile id', () => {
     await screen.findByRole('option', { name: 'HD-1080p' })
     expect(qualityOptions(select)).toEqual(['1', '2'])
     expect((select as HTMLSelectElement).value).toBe('2')
+  })
+})
+
+// An item with no qualityProfileId of its own (older *arr payloads, or a movie
+// added before a profile was assigned) falls through to a default. Add used the
+// operator-curated DEFAULT_PROFILE_NAME; Edit used profiles[0] — so opening Edit
+// and pressing Save silently RE-GRADED the item onto whichever profile the *arr
+// API happened to list first (usually 'Any', the worst one).
+//
+// Ids are deliberately NOT array indices here: 'Any' is id 2 at index 0 and the
+// curated 'HD-1080p' is id 5 at index 1, so a positional profiles[0] bug reads
+// as '2' and an id-based curated pick reads as '5'.
+describe('EditSection — Quality default when the item has no qualityProfileId of its own', () => {
+  const CURATED_PROFILES = [
+    { id: 2, name: 'Any' },
+    { id: 5, name: 'HD-1080p' },
+  ]
+
+  it('prefers the curated default profile over the live list’s first profile', async () => {
+    qualityProfilesMock.mockResolvedValue(CURATED_PROFILES)
+    limitsData.current = { defaultProfileName: 'HD-1080p' }
+    const select = await openEdit(undefined)
+    await screen.findByRole('option', { name: 'HD-1080p' })
+    expect((select as HTMLSelectElement).value).toBe('5')
+    expect((select as HTMLSelectElement).value).not.toBe(String(CURATED_PROFILES[0].id))
+  })
+
+  it('matches the curated default case-insensitively', async () => {
+    qualityProfilesMock.mockResolvedValue(CURATED_PROFILES)
+    limitsData.current = { defaultProfileName: 'hd-1080p' }
+    const select = await openEdit(undefined)
+    await screen.findByRole('option', { name: 'HD-1080p' })
+    expect((select as HTMLSelectElement).value).toBe('5')
+    // The live list's own entry wins, so no orphan option is synthesized.
+    expect(qualityOptions(select)).toEqual(['2', '5'])
+  })
+
+  it('Save submits the curated default, not the first live profile', async () => {
+    qualityProfilesMock.mockResolvedValue(CURATED_PROFILES)
+    limitsData.current = { defaultProfileName: 'HD-1080p' }
+    await openEdit(undefined)
+    await screen.findByRole('option', { name: 'HD-1080p' })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(editMovieMock).toHaveBeenCalledTimes(1))
+    expect(editMovieMock.mock.calls[0][1]).toMatchObject({ qualityProfileId: 5 })
+  })
+
+  it('falls back to the first live profile when nothing better exists', async () => {
+    // The terminal rung of pickDefaultProfileId. It needs a list with no
+    // curated match AND no 1080p/HD/non-'Any' entry — with CURATED_PROFILES
+    // above, the shared 1080p rung would fire first and never reach profiles[0].
+    qualityProfilesMock.mockResolvedValue([
+      { id: 4, name: 'Any' },
+      { id: 6, name: 'any' },
+    ])
+    limitsData.current = {}
+    const select = await openEdit(undefined)
+    await screen.findByRole('option', { name: 'any' })
+    expect((select as HTMLSelectElement).value).toBe('4')
+  })
+
+  it('still prefers HD-1080p over the first profile when no default is configured', async () => {
+    // Even with no curated name, Edit must use the same preference chain the
+    // server's pickProfile uses — 'Any' being listed first must not win.
+    qualityProfilesMock.mockResolvedValue(CURATED_PROFILES)
+    limitsData.current = {}
+    const select = await openEdit(undefined)
+    await screen.findByRole('option', { name: 'HD-1080p' })
+    expect((select as HTMLSelectElement).value).toBe('5')
+  })
+
+  it('prefers the item’s own profile over the curated default', async () => {
+    qualityProfilesMock.mockResolvedValue(CURATED_PROFILES)
+    limitsData.current = { defaultProfileName: 'HD-1080p' }
+    const select = await openEdit(2)
+    await screen.findByRole('option', { name: 'HD-1080p' })
+    expect((select as HTMLSelectElement).value).toBe('2')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(editMovieMock).toHaveBeenCalledTimes(1))
+    expect(editMovieMock.mock.calls[0][1]).toMatchObject({ qualityProfileId: 2 })
   })
 })
