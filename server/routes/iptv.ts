@@ -19,6 +19,7 @@ import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { rateLimit } from '../middleware/rateLimit.js'
 import { requireSection } from '../services/userPolicies.js'
 import { capBlocksUnrated } from '../services/parentalRating.js'
+import { effectiveRoleFor } from '../services/sessionGate.js'
 import { getAccountInfo, credsFromEnv } from '../services/xtream.js'
 import { nodeReadableToWebStream } from '../services/streamBridge.js'
 import { iptvDb } from '../services/iptvDbSingleton.js'
@@ -536,13 +537,26 @@ iptv.delete('/playlist/tokens/:jti', requireAuth, (c) => {
 
 // Hit by external players (VLC, iPlayTV, TiviMate) that have no session
 // cookie. Token-in-URL is the auth; see comment on /stream/live/:id.ts.
-iptv.get('/playlist.m3u', (c) => {
+iptv.get('/playlist.m3u', async (c) => {
   const auth = authorizePlaylistToken(c.req.query('t') ?? '')
   if (!auth.ok) {
     return c.json(
       auth.detail ? { error: auth.error, detail: auth.detail } : { error: auth.error },
       401,
     )
+  }
+  // Same rating rule as the mint gate above, re-checked at SERVE time. The
+  // mint gate alone leaves a residual hole: a token minted BEFORE a cap was
+  // applied (or before the mint gate existed) stays valid for its 90-day TTL,
+  // so a newly-capped member keeps exporting the full live playlist from VLC
+  // until an admin hand-revokes the jti. Policy changes must take effect on
+  // the next fetch, not at token expiry. There is no session here (token-in-
+  // URL auth, no cookie), so the role comes from the same authority
+  // reconcileSession uses — configured admins + the DB members row — and
+  // admins are never blocked, exactly as at mint.
+  const role = effectiveRoleFor('', auth.sub)
+  if (await capBlocksUnrated({ sub: auth.sub, role })) {
+    return c.json({ error: 'rating_blocked' }, 403)
   }
   return new Response(buildPlaylistM3u(auth.sub, publicBaseUrl(c)), {
     status: 200,
