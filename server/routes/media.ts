@@ -141,6 +141,24 @@ async function mediaAuth(c: Context<Env>, next: Next) {
     c.set('session', sessionFromSub(v.sub))
     return next()
   }
+  if (streamMatch) {
+    // Tokenless → session cookie/bearer fallback. A ?t= caller already cleared
+    // the parental gate when POST /playback minted the token; a session-authed
+    // caller never did, so re-apply it here — otherwise a capped profile can
+    // fetch /stream/:kind/:id straight from the cookie and skip the grant.
+    // Mirrors dvr.ts's dvrPlayAuth. ('audiobook' joins 'track' as exempt: audio
+    // carries no certification, which is why ratingBlocked has no case for it.)
+    const authDenied = await requireAuth(c, async () => {})
+    if (authDenied) return authDenied
+    const kind = streamMatch[1]
+    if (
+      (kind === 'movie' || kind === 'episode' || kind === 'track') &&
+      (await ratingBlocked(c.get('session'), kind, Number(streamMatch[2])))
+    ) {
+      return c.json({ error: 'rating_blocked' }, 403)
+    }
+    return next()
+  }
   return requireAuth(c, next)
 }
 
