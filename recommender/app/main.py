@@ -184,10 +184,14 @@ def metrics_funnel(
 def score(
     req: ScoreRequest,
     _auth: None = Depends(require_event_secret),
-    _principal: InternalPrincipal | None = Depends(internal_principal_dep),
+    principal: InternalPrincipal | None = Depends(internal_principal_dep),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> ScoreResponse:
     t0 = time.perf_counter()
+    # /score reads another user's private surface (stored feedback, watch
+    # history, recently_shown) purely off the body sub, so the same spoofing
+    # channel the mutating routes close applies here as a read leak.
+    req = req.model_copy(update={"sub": authoritative_sub(principal, req.sub)})
     ctx = load_user_context(conn, req, persist_library=False)
 
     model_version, recipe_name, params = select_model_config_for_context(conn, ctx)

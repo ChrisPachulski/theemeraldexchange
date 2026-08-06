@@ -9,6 +9,7 @@ identity-unauthenticated deployment.
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import replace
 
 import pytest
@@ -77,6 +78,88 @@ def _seeded_conn() -> sqlite3.Connection:
     conn.execute("CREATE TABLE title_vec (tmdb_id INTEGER)")
     conn.execute("CREATE TABLE model_config (version TEXT, active INTEGER)")
     return conn
+
+
+@contextmanager
+def _score_client(monkeypatch, mode: str, principal_sub: str):
+    """TestClient for /score with a verified principal and a spied context load.
+
+    ``load_user_context`` is replaced by a spy that records the sub it was
+    handed and then aborts with a sentinel 599 — the sub binding is the only
+    thing under test, so the real scoring pipeline (recipes, model_config,
+    vectors) is out of scope and would need a fully migrated DB.
+    """
+    seen: list[str] = []
+
+    def _spy(conn, req, *, persist_library=False):
+        seen.append(req.sub)
+        raise HTTPException(status_code=599, detail="stopped after sub binding")
+
+    _set_mode(monkeypatch, mode)
+    monkeypatch.setattr(main_module, "load_user_context", _spy)
+    overrides = main_module.app.dependency_overrides
+    overrides[main_module.get_db] = lambda: None
+    overrides[main_module.require_event_secret] = lambda: None
+    overrides[main_module.internal_principal_dep] = lambda: _principal(principal_sub)
+    try:
+        yield TestClient(main_module.app), seen
+    finally:
+        for dep in (
+            main_module.get_db,
+            main_module.require_event_secret,
+            main_module.internal_principal_dep,
+        ):
+            overrides.pop(dep, None)
+
+
+def test_score_enforce_mode_rejects_body_sub_spoof(monkeypatch):
+    """A caller with the shared event secret must not read another sub's picks.
+
+    /score reads stored feedback + recently_shown for `req.sub`, so a body sub
+    that disagrees with the verified principal is a cross-user read, not just a
+    write concern. Enforce mode rejects it BEFORE any context load.
+    """
+    with _score_client(monkeypatch, "enforce", "plex:494190801") as (client, seen):
+        r = client.post("/score", json={"sub": "plex:999000111", "kind": "movie", "n": 5})
+    assert r.status_code == 403, r.text
+    assert seen == [], "context must not be loaded for a rejected sub"
+
+
+def test_score_log_mode_binds_sub_to_verified_principal(monkeypatch):
+    """Log mode doesn't reject, but the verified principal still wins."""
+    with _score_client(monkeypatch, "log", "plex:494190801") as (client, seen):
+        r = client.post("/score", json={"sub": "plex:999000111", "kind": "movie", "n": 5})
+    assert r.status_code == 599, r.text
+    assert seen == ["plex:494190801"], "body sub leaked past the verified principal"
+
+
+def test_score_off_mode_still_uses_body_sub(monkeypatch):
+    """No principal bridge (mode=off) -> unchanged behavior, body sub is used."""
+    _set_mode(monkeypatch, "off")
+    seen: list[str] = []
+
+    def _spy(conn, req, *, persist_library=False):
+        seen.append(req.sub)
+        raise HTTPException(status_code=599, detail="stopped after sub binding")
+
+    monkeypatch.setattr(main_module, "load_user_context", _spy)
+    overrides = main_module.app.dependency_overrides
+    overrides[main_module.get_db] = lambda: None
+    overrides[main_module.require_event_secret] = lambda: None
+    overrides[main_module.internal_principal_dep] = lambda: None
+    try:
+        r = TestClient(main_module.app).post(
+            "/score", json={"sub": "plex:999000111", "kind": "movie", "n": 5}
+        )
+    finally:
+        for dep in (
+            main_module.get_db,
+            main_module.require_event_secret,
+            main_module.internal_principal_dep,
+        ):
+            overrides.pop(dep, None)
+    assert r.status_code == 599, r.text
+    assert seen == ["plex:999000111"]
 
 
 def test_health_surfaces_principal_mode(monkeypatch):
