@@ -11,9 +11,10 @@ function appUnderTest() {
   return app
 }
 
-async function cookieFor(sub: 'alice' | 'bob') {
-  const numericSub = sub === 'alice' ? 'plex:1' : 'plex:2'
-  const t = await createSession({ sub: numericSub, username: `user-${sub}`, role: 'user' })
+const SUBS = { alice: 'plex:1', bob: 'plex:2', carol: 'plex:3' } as const
+
+async function cookieFor(sub: keyof typeof SUBS) {
+  const t = await createSession({ sub: SUBS[sub], username: `user-${sub}`, role: 'user' })
   return `eex.session=${t}`
 }
 
@@ -233,6 +234,65 @@ describe('syncplay groups', () => {
     vi.advanceTimersByTime(61_000)
     const listing = await app.request('/groups', { headers: { Cookie: bob } })
     expect(((await listing.json()) as { items: Snapshot[] }).items).toHaveLength(0)
+  })
+
+  it('reassigns hostSub when the host idles out silently, same as an explicit leave', async () => {
+    const app = appUnderTest()
+    const alice = await cookieFor('alice')
+    const bob = await cookieFor('bob')
+
+    const g = (await (
+      await post(app, alice, '/groups', { media_kind: 'movie', media_id: 21 })
+    ).json()) as Snapshot
+    expect(g.host_sub).toBe('plex:1')
+    await post(app, bob, `/groups/${g.id}/join`)
+
+    // Bob keeps polling (the poll is the heartbeat); alice — the host — closes
+    // her tab and never polls again. She never hits /leave, so the only thing
+    // that removes her is the idle prune.
+    vi.advanceTimersByTime(40_000)
+    expect((await app.request(`/groups/${g.id}`, { headers: { Cookie: bob } })).status).toBe(200)
+
+    // 80s since alice's last sight: past the 60s window, while bob is only 40s
+    // stale and survives.
+    vi.advanceTimersByTime(40_000)
+    const res = await app.request(`/groups/${g.id}`, { headers: { Cookie: bob } })
+    expect(res.status).toBe(200)
+    const snap = (await res.json()) as Snapshot
+    expect(snap.members.map((m) => m.sub)).toEqual(['plex:2'])
+    // A silent timeout must hand hosting over exactly like /leave does, not
+    // leave host_sub pinned to a sub that is no longer in the group.
+    expect(snap.host_sub).toBe('plex:2')
+
+    // The listing reads through the same prune, so it must agree.
+    const [listed] = await listGroupsAs(app, bob)
+    expect(listed.host_sub).toBe('plex:2')
+  })
+
+  it('skips past members who idle out in the same sweep when rehoming the host', async () => {
+    const app = appUnderTest()
+    const alice = await cookieFor('alice')
+    const bob = await cookieFor('bob')
+    const carol = await cookieFor('carol')
+
+    const g = (await (
+      await post(app, alice, '/groups', { media_kind: 'movie', media_id: 23 })
+    ).json()) as Snapshot
+    await post(app, bob, `/groups/${g.id}/join`)
+    await post(app, carol, `/groups/${g.id}/join`)
+
+    // Only carol keeps the heartbeat alive; alice (host) and bob both go dark
+    // in the same prune sweep. Handing the group to the next member in the map
+    // would hand it to bob, who is on his way out in this very loop.
+    vi.advanceTimersByTime(40_000)
+    expect((await app.request(`/groups/${g.id}`, { headers: { Cookie: carol } })).status).toBe(200)
+
+    vi.advanceTimersByTime(40_000)
+    const snap = (await (
+      await app.request(`/groups/${g.id}`, { headers: { Cookie: carol } })
+    ).json()) as Snapshot
+    expect(snap.members.map((m) => m.sub)).toEqual(['plex:3'])
+    expect(snap.host_sub).toBe('plex:3')
   })
 
   // The command handler awaits the request body. Anything it resolved before

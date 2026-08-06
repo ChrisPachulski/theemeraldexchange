@@ -54,7 +54,15 @@ export function currentPosition(group: SyncGroup, nowMs: number): number {
 export function pruneIdle(nowMs: number): void {
   for (const [id, group] of groups) {
     for (const [sub, m] of group.members) {
-      if (nowMs - m.lastSeenMs > MEMBER_IDLE_MS) group.members.delete(sub)
+      if (nowMs - m.lastSeenMs <= MEMBER_IDLE_MS) continue
+      group.members.delete(sub)
+      // A silent timeout removes the host exactly like /leave does, so it has
+      // to hand hosting over the same way — otherwise hostSub keeps naming a
+      // departed member and every reader (both getGroup and listGroups route
+      // through here) reports a host who isn't in the group.
+      if (group.hostSub === sub && group.members.size > 0) {
+        group.hostSub = group.members.keys().next().value as string
+      }
     }
     if (group.members.size === 0) groups.delete(id)
   }
