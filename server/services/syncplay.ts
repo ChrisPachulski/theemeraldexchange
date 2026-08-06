@@ -108,6 +108,9 @@ export function leaveGroup(group: SyncGroup, sub: string): boolean {
     groups.delete(group.id)
     return false
   }
+  if (group.hostSub === sub) {
+    group.hostSub = group.members.keys().next().value as string
+  }
   group.version += 1
   return true
 }

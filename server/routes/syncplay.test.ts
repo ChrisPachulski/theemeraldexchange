@@ -217,6 +217,9 @@ describe('syncplay groups', () => {
     await post(app, alice, `/groups/${g.id}/leave`)
     const stillThere = await app.request(`/groups/${g.id}`, { headers: { Cookie: bob } })
     expect(stillThere.status).toBe(200)
+    // Host left but bob remains: hosting reassigns to a surviving member
+    // rather than staying pinned to a sub that's no longer in the group.
+    expect(((await stillThere.json()) as Snapshot).host_sub).toBe('plex:2')
 
     await post(app, bob, `/groups/${g.id}/leave`)
     expect((await app.request(`/groups/${g.id}`, { headers: { Cookie: bob } })).status).toBe(404)
