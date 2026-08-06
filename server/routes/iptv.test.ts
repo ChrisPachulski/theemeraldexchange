@@ -517,6 +517,64 @@ describe('playlist token lifecycle', () => {
   })
 })
 
+describe('GET /api/iptv/sessions', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+
+  type SessionsBody = { self: string; ours: Array<{ sessionId: string; sub: string; ip: string | null }> }
+
+  function seedSession(sessionId: string, sub: string) {
+    concurrencyState.sessions.push({
+      sessionId,
+      sub,
+      kind: 'live',
+      resourceId: '10',
+      title: 'CNN',
+      ip: '10.0.0.7',
+      startedAt: 1,
+      lastSeen: 1,
+    })
+  }
+
+  it('does not expose another household member\'s session to a non-admin', async () => {
+    authState.session = { sub: 'plex:42', username: 'Test', role: 'user' }
+    seedSession('own-session', 'plex:42')
+    seedSession('other-session', 'plex:other')
+
+    const res = await app.request('/api/iptv/sessions')
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as SessionsBody
+    expect(body.ours.map((s) => s.sessionId)).toEqual(['own-session'])
+    // Nothing about the other member leaks: no sub, no client IP, no title.
+    expect(body.ours.some((s) => s.sub === 'plex:other')).toBe(false)
+    expect(JSON.stringify(body)).not.toContain('plex:other')
+  })
+
+  it('returns an empty list to a non-admin holding no sessions', async () => {
+    authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+    seedSession('other-session', 'plex:other')
+
+    const res = await app.request('/api/iptv/sessions')
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as SessionsBody
+    expect(body.self).toBe('plex:99')
+    expect(body.ours).toEqual([])
+  })
+
+  it('still shows every session to an admin (support/kick visibility)', async () => {
+    authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
+    seedSession('own-session', 'plex:42')
+    seedSession('other-session', 'plex:other')
+
+    const res = await app.request('/api/iptv/sessions')
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as SessionsBody
+    expect(body.ours.map((s) => s.sessionId).sort()).toEqual(['other-session', 'own-session'])
+  })
+})
+
 describe('DELETE /api/iptv/sessions/:sessionId', () => {
   const app = new Hono().route('/api/iptv', iptv)
 

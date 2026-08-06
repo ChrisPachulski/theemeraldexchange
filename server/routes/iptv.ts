@@ -230,7 +230,12 @@ function enrichSessions(list: SessionView[]): Array<SessionView & { resolvedTitl
 // explain that distinction.
 iptv.get('/sessions', requireAuth, async (c) => {
   const { sub } = userOf(c)
-  const ours = enrichSessions(streamConcurrency().list())
+  // Scope to the caller's own sessions. The tracker is household-wide, so an
+  // unfiltered list handed every member the sub, resolved title and client IP
+  // of everyone else's active stream. Admins keep full visibility because they
+  // are the ones doing support/kicking — same gate as the DELETE below.
+  const isAdmin = c.get('session').role === 'admin'
+  const ours = enrichSessions(streamConcurrency().list().filter((s) => isAdmin || s.sub === sub))
   let upstream: { activeConnections: number; maxConnections: number; status: string } | null
   try {
     const info = await getAccountInfo()
