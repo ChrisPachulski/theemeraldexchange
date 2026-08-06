@@ -222,6 +222,23 @@ function enrichSessions(list: SessionView[]): Array<SessionView & { resolvedTitl
   return list.map((s) => ({ ...s, resolvedTitle: s.title ?? sessionTitle(s.kind, s.resourceId) }))
 }
 
+// Same leak class as the GET /sessions scoping above (commit b7b7bf5), reached
+// through the concurrency-cap 429: `acquired.sessions` on iptv_concurrency_limit
+// is the WHOLE household's session list, each entry carrying sub/ip/title. On a
+// small provider line the cap is hit routinely, and ConcurrencyLimitModal renders
+// this exact payload (title + IP) with a kick button. Non-admins must not learn
+// who else is streaming what from where. The response SHAPE is a closed-enum
+// contract the Swift client Decodable-switches on — every field stays PRESENT,
+// only the CONTENT of other members' rows is redacted. The caller's own row (and
+// everything, for admins) stays untouched so kick/support visibility doesn't regress.
+type RedactedSessionView = Omit<SessionView, 'sub' | 'ip'> & { sub: string | null; ip: string | null; resolvedTitle: string | null }
+function enrichSessionsFor(list: SessionView[], callerSub: string, isAdmin: boolean): RedactedSessionView[] {
+  return enrichSessions(list).map((s) => {
+    if (isAdmin || s.sub === callerSub) return s
+    return { ...s, sub: null, ip: null, title: 'another household member', resolvedTitle: 'another household member' }
+  })
+}
+
 // Connection diagnostics: surface our concurrency tracker + the upstream's
 // own active_cons/max_connections counters so the SPA can show "1 of 2
 // slots in use" and let the user kick whichever of OUR sessions is holding
@@ -794,7 +811,7 @@ iptv.post('/stream/live/:streamId/grant', requireAuth, requireSection('live'), a
     if (acquired.reason !== 'iptv_concurrency_limit') {
       return c.json({ ok: false, reason: acquired.reason }, 503)
     }
-    return c.json({ ...acquired, sessions: enrichSessions(acquired.sessions) }, 429)
+    return c.json({ ...acquired, sessions: enrichSessionsFor(acquired.sessions, sub, c.get('session').role === 'admin') }, 429)
   }
 
   if (wantsRemux) {
@@ -896,7 +913,7 @@ iptv.post('/stream/catchup/:streamId/grant', requireAuth, requireSection('live')
     if (acquired.reason !== 'iptv_concurrency_limit') {
       return c.json({ ok: false, reason: acquired.reason }, 503)
     }
-    return c.json({ ...acquired, sessions: enrichSessions(acquired.sessions) }, 429)
+    return c.json({ ...acquired, sessions: enrichSessionsFor(acquired.sessions, sub, c.get('session').role === 'admin') }, 429)
   }
 
   const token = signStreamToken(env.streamTokenSecret, {
@@ -1317,7 +1334,7 @@ iptv.post('/stream/vod/:streamId/grant', requireAuth, requireSection('live'), as
     if (acquired.reason !== 'iptv_concurrency_limit') {
       return c.json({ ok: false, reason: acquired.reason }, 503)
     }
-    return c.json({ ...acquired, sessions: enrichSessions(acquired.sessions) }, 429)
+    return c.json({ ...acquired, sessions: enrichSessionsFor(acquired.sessions, sub, c.get('session').role === 'admin') }, 429)
   }
 
   const token = signStreamToken(env.streamTokenSecret, {
@@ -1415,7 +1432,7 @@ iptv.post('/stream/series/:episodeId/grant', requireAuth, requireSection('live')
     if (acquired.reason !== 'iptv_concurrency_limit') {
       return c.json({ ok: false, reason: acquired.reason }, 503)
     }
-    return c.json({ ...acquired, sessions: enrichSessions(acquired.sessions) }, 429)
+    return c.json({ ...acquired, sessions: enrichSessionsFor(acquired.sessions, sub, c.get('session').role === 'admin') }, 429)
   }
 
   const token = signStreamToken(env.streamTokenSecret, {
