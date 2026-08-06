@@ -10,6 +10,7 @@ import {
   ingestAllExternalEpg,
   ingestExternalEpg,
 } from './iptvEpgExternal.js'
+import { __setSsrfLookupForTests } from './ssrfGuard.js'
 
 const FETCHED_AT = '2026-05-24T12:00:00Z'
 
@@ -44,6 +45,30 @@ function webBody(xml: string): ReadableStream<Uint8Array> {
 /** Stub global fetch to return `xml` as a 200 response body. */
 function stubFetchXml(xml: string): ReturnType<typeof vi.fn> {
   const fn = vi.fn(async () => ({ ok: true, status: 200, body: webBody(xml) }) as unknown as Response)
+  vi.stubGlobal('fetch', fn)
+  return fn
+}
+
+/**
+ * Stub fetch as an aggregator that 302s to `target`, modelling REAL platform
+ * fetch redirect semantics: with the WHATWG default `redirect: 'follow'` the
+ * runtime follows the 30x itself and hands back the TARGET's response, so the
+ * caller never sees the hop. Only `redirect: 'manual'` — which the SSRF egress
+ * loop sets — surfaces the 302 for re-validation.
+ *
+ * So the un-guarded plain-`fetch()` code path gets `payload` (the internal
+ * target's body) as a clean 200 and ingests it; the guarded path gets the 302
+ * and must refuse before the second hop. A request to any url OTHER than
+ * `origin` means the redirect target was dialed, and also answers with the
+ * payload — so a guard that fails open surfaces as ingested rows, not an error.
+ */
+function stubFetchRedirect(origin: string, target: string, payload: string): ReturnType<typeof vi.fn> {
+  const fn = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url !== origin || init?.redirect !== 'manual') {
+      return { ok: true, status: 200, body: webBody(payload) } as unknown as Response
+    }
+    return new Response(null, { status: 302, headers: { location: target } })
+  })
   vi.stubGlobal('fetch', fn)
   return fn
 }
@@ -306,6 +331,98 @@ describe('ingestExternalEpg — error paths', () => {
     expect(result.error).toBe('boom')
     expect(result.channelsMatched).toBe(0)
     expect(result.programmesStored).toBe(0)
+  })
+})
+
+describe('ingestExternalEpg — SSRF redirect guard', () => {
+  let db: IptvDb
+  beforeEach(() => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'extepg-'))
+    db = openIptvDb(path.join(tmp, 'iptv.db'))
+  })
+  afterEach(() => {
+    db.close()
+    vi.unstubAllGlobals()
+  })
+
+  it('refuses a 302 into cloud metadata (169.254.169.254) and never dials it', async () => {
+    // The external EPG feed is a THIRD-PARTY aggregator. Its URL is operator-
+    // configured (trusted initial hop), but the 30x it answers with is not: a
+    // compromised/hostile mirror can bounce ingestion at the link-local cloud
+    // metadata address and have the server fetch + parse whatever comes back.
+    // With plain fetch() the platform follows that redirect silently, so this
+    // ingests the internal payload and reports ok:true. guardedFetchTrustedOrigin
+    // sets redirect:'manual' and re-validates every hop, so the metadata address
+    // is refused before a second request is issued.
+    insertChannel(db, { stream_id: 100, name: 'US: ESPN', epg_channel_id: null })
+    const now = Date.now()
+    const internalPayload = buildFeed(
+      [{ id: 'espn.us', name: 'ESPN' }],
+      [{ channel: 'espn.us', startMs: now, stopMs: now + 3600_000, title: 'Leaked' }],
+    )
+    const fetchFn = stubFetchRedirect(
+      'https://epgshare01.example/all.xml.gz',
+      'http://169.254.169.254/latest/meta-data/iam/security-credentials/',
+      internalPayload,
+    )
+
+    const result = await ingestExternalEpg(db, 'https://epgshare01.example/all.xml.gz')
+
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/blocked non-public upstream/)
+    expect(result.error).toContain('169.254.169.254')
+    // The decisive assertion: exactly ONE request left the box — the trusted
+    // origin. The redirect target was never dialed.
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+    expect(fetchFn.mock.calls[0][0]).toBe('https://epgshare01.example/all.xml.gz')
+    // Nothing from the internal target was parsed or persisted.
+    expect(result.channelsMatched).toBe(0)
+    expect(result.programmesStored).toBe(0)
+    expect(countPrograms(db, 'espn.us')).toBe(0)
+    expect(resolvedId(db, 100)).toBe(null)
+  })
+
+  it('refuses a 302 into a loopback/internal service host', async () => {
+    const fetchFn = stubFetchRedirect(
+      'https://epgshare01.example/all.xml.gz',
+      'http://localhost:8000/admin',
+      buildFeed([], []),
+    )
+
+    const result = await ingestExternalEpg(db, 'https://epgshare01.example/all.xml.gz')
+
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/blocked non-public upstream/)
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+  })
+
+  it('still follows a public->public redirect to the real mirror (guard is not a blanket block)', async () => {
+    // Legitimate CDN behaviour must keep working: epgshare01 30x-ing to its own
+    // mirror resolves normally through the guarded egress loop.
+    insertChannel(db, { stream_id: 100, name: 'US: ESPN', epg_channel_id: null })
+    const now = Date.now()
+    const feed = buildFeed(
+      [{ id: 'espn.us', name: 'ESPN' }],
+      [{ channel: 'espn.us', startMs: now, stopMs: now + 3600_000 }],
+    )
+    // 8.8.8.8 is public, so the resolve-and-validate hop passes deterministically
+    // without touching real DNS.
+    __setSsrfLookupForTests(async () => [{ address: '8.8.8.8' }])
+    const fetchFn = stubFetchRedirect(
+      'https://epgshare01.example/all.xml.gz',
+      'https://mirror.example.com/all.xml',
+      feed,
+    )
+    try {
+      const result = await ingestExternalEpg(db, 'https://epgshare01.example/all.xml.gz')
+
+      expect(result.ok).toBe(true)
+      expect(result.programmesStored).toBe(1)
+      expect(fetchFn).toHaveBeenCalledTimes(2)
+      expect(fetchFn.mock.calls[1][0]).toBe('https://mirror.example.com/all.xml')
+    } finally {
+      __setSsrfLookupForTests(null)
+    }
   })
 })
 

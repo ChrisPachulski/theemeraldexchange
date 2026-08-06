@@ -16,6 +16,7 @@
 
 import { streamXmltv, normalizeEpgChannelId, type XmltvChannelDef, type EpgProgrammeRow } from './iptvEpg.js'
 import { webStreamToNodeReadable } from './streamBridge.js'
+import { guardedFetchTrustedOrigin } from './ssrfGuard.js'
 import { buildEpgNameIndex, resolveEpgId, type FeedChannelDef } from './iptvEpgResolve.js'
 import type { IptvDb } from './iptvDb.js'
 
@@ -88,7 +89,11 @@ export async function ingestExternalEpg(
   }, EXT_FETCH_TIMEOUT_MS)
 
   try {
-    const res = await fetch(url, { signal: controller.signal })
+    // SSRF: the feed URL is operator-configured (env / hardcoded default) so the
+    // initial hop is trusted as-is, but a third-party aggregator's 30x is
+    // attacker-influenceable — every redirect target is re-validated (public
+    // address only) before it is followed.
+    const res = await guardedFetchTrustedOrigin(url, { signal: controller.signal })
     if (!res.ok || !res.body) {
       return { url, ok: false, channelsMatched: 0, programmesStored: 0, error: `http_${res.status}` }
     }
