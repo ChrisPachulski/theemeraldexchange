@@ -86,10 +86,26 @@ async function transcodeAuth(c: Context<Env>, next: Next) {
 
 transcode.use('*', transcodeAuth)
 
+// Server-to-server control paths that must NEVER be reachable from a browser.
+// The transcoder does zero path validation on either — `POST /grant` starts an
+// ffmpeg session on the body's `file.path` and `POST /warm` demuxes the body's
+// `path` — because it trusts that only media-core (holding an internal
+// principal) can call them. This proxy mints that exact principal on every
+// forwarded request, so without this block any logged-in member could hand the
+// transcoder an arbitrary filesystem path: `/grant` streams it back as HLS
+// (arbitrary read past media-core's library-path checks), `/warm` spawns an
+// unbounded full-file demux per call (CPU DoS on a box that also runs Plex).
+// media-core calls the transcoder directly and never traverses this proxy, so
+// nothing legitimate loses a path here.
+const BLOCKED_CONTROL_PATHS = new Set(['/grant', '/warm'])
+
 transcode.all('/*', async (c) => {
   const session = c.get('session')
   const url = new URL(c.req.url)
   const subpath = url.pathname.replace(/^\/api\/transcode/, '') || '/'
+  // Blocked before ANY upstream URL construction or principal minting: a 404
+  // (not 403) so the proxy does not confirm the route exists upstream.
+  if (BLOCKED_CONTROL_PATHS.has(subpath)) return c.notFound()
   const token = url.searchParams.get('t')
   // Forward the original query MINUS our `?t=` (the transcoder authenticates via
   // the internal principal, not the stream token).

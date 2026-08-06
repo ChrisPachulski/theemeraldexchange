@@ -228,6 +228,71 @@ describe('transcode proxy route', () => {
   })
 })
 
+describe('transcode proxy — server-to-server control paths are unreachable', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    membershipState.status = 'allowed'
+    mockMint.mockReturnValue('minted-token')
+    mockCaller.mockReturnValue({
+      sub: 'plex:1',
+      role: 'user',
+      authMode: 'plex',
+      serverId: 'srv-test',
+    })
+  })
+
+  // The transcoder validates NEITHER path: `POST /grant` starts an ffmpeg
+  // session on the body's `file.path`, `POST /warm` demuxes the body's `path`.
+  // It gets away with that because it trusts the internal principal, which only
+  // media-core holds — and media-core calls it directly, never through this
+  // proxy. Since this proxy mints that same principal for any logged-in member,
+  // forwarding either path would hand a browser an arbitrary-filesystem-path
+  // read (/grant) and an unbounded per-call demux (/warm) on the Plex box.
+  // Blocked on EVERY method: `transcode.all` would otherwise forward a GET too.
+  it.each([
+    ['POST', '/grant'],
+    ['POST', '/warm'],
+    ['GET', '/grant'],
+    ['GET', '/warm'],
+  ])('%s %s → 404 and never reaches the transcoder', async (method, subpath) => {
+    // Armed so a forwarded request would visibly succeed (200) rather than
+    // throw — the 404 below has to come from the block, not from a stub miss.
+    mockFetch.mockResolvedValue(new Response('upstream should be unreachable', { status: 200 }))
+
+    const res = await transcode.request(subpath, {
+      method,
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      ...(method === 'GET' ? {} : { body: JSON.stringify({ path: '/etc/passwd' }) }),
+    })
+
+    expect(res.status).toBe(404)
+    expect(mockFetch).not.toHaveBeenCalled()
+    // Nor is the internal principal minted: the block runs before any mint, so
+    // media-core's trust is never attached to a browser-originated control call.
+    expect(mockMint).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    '/session/grant/index.m3u8',
+    '/session/abc/warm.ts',
+    '/grants',
+  ])('still proxies %s (the block is an exact subpath match, not a substring)', async (subpath) => {
+    // Over-blocking is the real risk of this change: a `includes('grant')`
+    // style guard would break live playback for any session id or asset name
+    // that happens to contain the word.
+    mockFetch.mockResolvedValue(new Response('ok', { status: 200 }))
+
+    const res = await transcode.request(subpath, {
+      method: 'GET',
+      headers: { host: 'localhost' },
+    })
+
+    expect(res.status).toBe(200)
+    expect(mockFetch).toHaveBeenCalledOnce()
+    expect(mockFetch.mock.calls[0][0]).toBe(`http://transcoder.test/api/transcode${subpath}`)
+  })
+})
+
 describe('appendTokenToManifest', () => {
   it('appends ?t= to relative segment lines and leaves tags/blanks untouched', () => {
     const manifest = [
