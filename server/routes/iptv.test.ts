@@ -708,6 +708,47 @@ describe('DELETE /api/iptv/sessions/:sessionId', () => {
     expect(await res.json()).toEqual({ ok: true, released: 'own-session' })
     expect(concurrencyState.sessions).toHaveLength(0)
   })
+
+  // A DVR recording holds a REAL upstream connection via its own ffmpeg, which
+  // only dvrRecorder.stop() can kill. Releasing just the accounting slot here
+  // would undercount upstreamInUse() while the provider connection stays open —
+  // exactly the over-cap dial the recorder's own deferral logic exists to avoid.
+  // Session id/sub shapes mirror dvrRecorder.start(): `record:<id>` / `dvr:<id>`.
+  it('refuses to release a dvr: recording session (must be stopped via the DVR panel)', async () => {
+    seedSession('record:01ABC', 'dvr:01ABC')
+
+    const res = await app.request('/api/iptv/sessions/record:01ABC', { method: 'DELETE' })
+
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({
+      error: 'dvr_recording_session',
+      message:
+        'stop this recording from the DVR panel (DELETE /api/dvr/recordings/:id), not the sessions widget',
+    })
+    // The whole point: the slot must survive, so upstreamInUse() keeps counting
+    // the connection the still-running ffmpeg actually holds.
+    expect(concurrencyState.sessions).toHaveLength(1)
+  })
+
+  it('refuses a dvr: recording session for a non-admin too, without leaking a 403/404 release', async () => {
+    authState.session = { sub: 'plex:42', username: 'Test', role: 'user' }
+    seedSession('record:01ABC', 'dvr:01ABC')
+
+    const res = await app.request('/api/iptv/sessions/record:01ABC', { method: 'DELETE' })
+
+    // Non-admins never own a synthetic sub, so the ownership gate rejects first.
+    expect(res.status).toBe(403)
+    expect(concurrencyState.sessions).toHaveLength(1)
+  })
+
+  it('still releases a normal live session whose sub merely contains "dvr:"', async () => {
+    seedSession('plex-session', 'plex:dvr:42')
+
+    const res = await app.request('/api/iptv/sessions/plex-session', { method: 'DELETE' })
+
+    expect(res.status).toBe(200)
+    expect(concurrencyState.sessions).toHaveLength(0)
+  })
 })
 
 describe('guide preview intent + remux session teardown (finding 89)', () => {
