@@ -774,6 +774,48 @@ describe('notifications POST /discord — serialization (withDiscordMutationLock
     // withDiscordMutationLock serialized the two requests' mutation sections.
     expect(maxConcurrent).toBe(1)
   })
+
+  it('a raced POST and DELETE are serialized — the DELETE cannot invalidate a webhook id the POST just read', async () => {
+    let inFlight = 0
+    let maxConcurrent = 0
+    handlers.push({
+      match: (u, m) => m === 'GET' && u.endsWith('/api/v3/notification'),
+      handler: () => jsonResponse([{ id: 7, name: EMERALD, implementation: 'Discord' }]),
+    })
+    const enterExit = async (): Promise<Response> => {
+      inFlight++
+      maxConcurrent = Math.max(maxConcurrent, inFlight)
+      await new Promise((r) => setTimeout(r, 5))
+      inFlight--
+      return jsonResponse({}, 200)
+    }
+    handlers.push({
+      match: (u, m) => m === 'PUT' && u.includes('/api/v3/notification/'),
+      handler: () => enterExit(),
+    })
+    handlers.push({
+      match: (u, m) => m === 'DELETE' && u.includes('/api/v3/notification/'),
+      handler: () => enterExit(),
+    })
+    const cookie = await adminCookie()
+    const postReq = () =>
+      appUnderTest().request('/discord', {
+        method: 'POST',
+        headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ webhookUrl: GOOD_WEBHOOK }),
+      })
+    const deleteReq = () =>
+      appUnderTest().request('/discord', {
+        method: 'DELETE',
+        headers: { Cookie: cookie },
+      })
+    const [r1, r2] = await Promise.all([postReq(), deleteReq()])
+    expect(r1.status).toBe(200)
+    expect(r2.status).toBe(200)
+    // withDiscordMutationLock serialized the POST's mutation section against
+    // the DELETE's — the DELETE never overlapped the POST's read-then-write.
+    expect(maxConcurrent).toBe(1)
+  })
 })
 
 describe('notifications POST /discord/test', () => {
