@@ -6,10 +6,11 @@ import { relativeTime, kindLabel } from './sessionFormatting'
 
 // Pill at the top-right of the IPTV shell showing "N / M slots" against
 // the mybunny upstream account cap. Tap to open the sessions panel; from
-// there the user can kick one of OUR sessions to free a slot. Sessions
-// from other IPTV apps using the same mybunny credentials directly (e.g.
-// KSPlayer on a phone) are invisible to us — the panel explains that and
-// surfaces the upstream's reported active_cons so the gap is visible.
+// there the user can kick one of OUR sessions to free a slot. Any session
+// we didn't open — another household member's device, a scheduled
+// recording, or a separate IPTV app on the same mybunny credentials — is
+// invisible to us, so the panel names no single cause and just surfaces the
+// upstream's reported active_cons to make the gap visible.
 
 export function ConnectionsWidget() {
   const [open, setOpen] = useState(false)
@@ -87,8 +88,8 @@ function ConnectionsPanel({
         {ours.length === 0 ? (
           <p className="iptv-conn-modal__empty">
             No sessions opened from this dashboard. If the upstream count is
-            above zero, the slot is held by another IPTV app (e.g. on a
-            phone). Close that app or restart the device to free it.
+            above zero, the slot may be in use elsewhere in your household or
+            by a scheduled recording.
           </p>
         ) : (
           <ul className="iptv-conn-modal__list">
