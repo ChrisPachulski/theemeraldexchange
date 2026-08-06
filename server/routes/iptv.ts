@@ -610,13 +610,18 @@ iptv.get('/playlist.m3u', async (c) => {
   })
 })
 
-iptv.get('/favorites', requireAuth, (c) => {
+// Favorites + continue-watching ARE the live section's user data (the item IDs
+// are live/vod/series rows from the same catalog), so they carry the same
+// requireSection('live') gate as the catalog, EPG, and grant routes above.
+// Without it a member denied Live TV could still read back — and keep writing —
+// the very channels and titles the section gate cut them off from.
+iptv.get('/favorites', requireAuth, requireSection('live'), (c) => {
   const { sub } = userOf(c)
   const rows = iptvDb().stmts.getFavorites.all(sub)
   return c.json(rows)
 })
 
-iptv.post('/favorites', requireAuth, async (c) => {
+iptv.post('/favorites', requireAuth, requireSection('live'), async (c) => {
   const { sub } = userOf(c)
   const body = await c.req.json().catch(() => ({})) as { kind?: unknown; itemId?: unknown }
   if (typeof body.kind !== 'string' || !KINDS.has(body.kind)) return c.json({ error: 'invalid_kind' }, 400)
@@ -631,7 +636,7 @@ iptv.post('/favorites', requireAuth, async (c) => {
   return c.body(null, 201)
 })
 
-iptv.delete('/favorites/:kind/:itemId', requireAuth, (c) => {
+iptv.delete('/favorites/:kind/:itemId', requireAuth, requireSection('live'), (c) => {
   const { sub } = userOf(c)
   const kind = c.req.param('kind')
   const itemId = c.req.param('itemId')
@@ -647,13 +652,13 @@ function parseHistoryLimit(rawLimit: string | undefined): number {
   return Math.min(100, Math.max(1, Math.floor(parsed)))
 }
 
-iptv.get('/history', requireAuth, (c) => {
+iptv.get('/history', requireAuth, requireSection('live'), (c) => {
   const { sub } = userOf(c)
   const rows = iptvDb().stmts.getHistory.all(sub, parseHistoryLimit(c.req.query('limit')))
   return c.json(rows)
 })
 
-iptv.post('/history', requireAuth, async (c) => {
+iptv.post('/history', requireAuth, requireSection('live'), async (c) => {
   const { sub } = userOf(c)
   const body = await c.req.json().catch(() => ({})) as {
     kind?: unknown

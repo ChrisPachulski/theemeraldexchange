@@ -2106,6 +2106,112 @@ describe('favorites + history', () => {
   })
 })
 
+// Regression: /favorites and /history carried only requireAuth while every
+// sibling IPTV data route (catalog, EPG, detail, grants) carried
+// requireSection('live'). Favorites and continue-watching ARE the live
+// section's user data — a member denied Live TV could still read back the
+// channel/VOD/series IDs they'd been cut off from, and keep writing to them.
+describe('favorites + history section policy', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+  let policyDir: string
+  let policyPath: string
+
+  beforeEach(async () => {
+    policyDir = await fsp.mkdtemp(join(tmpdir(), 'iptv-favhist-policy-'))
+    policyPath = join(policyDir, 'user-policies.json')
+    _setUserPoliciesPathForTests(policyPath)
+  })
+  afterEach(async () => {
+    _setUserPoliciesPathForTests(env.userPoliciesPath)
+    authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
+    await fsp.rm(policyDir, { recursive: true, force: true })
+  })
+
+  const writePolicy = async (sub: string, live: boolean) => {
+    await fsp.writeFile(
+      policyPath,
+      JSON.stringify({
+        [sub]: {
+          maxContentRating: null,
+          allowedSections: { live, downloads: true, arr: true },
+          kid: !live,
+        },
+      }),
+    )
+    _setUserPoliciesPathForTests(policyPath)
+  }
+
+  const postFavorite = () =>
+    app.request('/api/iptv/favorites', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'live', itemId: '10' }),
+    })
+  const postHistory = () =>
+    app.request('/api/iptv/history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'vod', itemId: '20', positionSecs: 30 }),
+    })
+
+  const blocked: Array<[string, () => Response | Promise<Response>]> = [
+    ['GET /favorites', () => app.request('/api/iptv/favorites')],
+    ['POST /favorites', postFavorite],
+    ['DELETE /favorites/:kind/:itemId', () => app.request('/api/iptv/favorites/live/10', { method: 'DELETE' })],
+    ['GET /history', () => app.request('/api/iptv/history?limit=10')],
+    ['POST /history', postHistory],
+  ]
+
+  it.each(blocked)('403 section_blocked on %s when the policy denies live', async (_name, call) => {
+    authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+    await writePolicy('plex:99', false)
+    const res = await call()
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: 'section_blocked' })
+  })
+
+  // The gate must not leak the denied member's data even on the read paths —
+  // a 403 body that still carried rows would defeat the point.
+  it('a denied GET /favorites returns no rows the member had previously saved', async () => {
+    authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+    await writePolicy('plex:99', true)
+    expect((await postFavorite()).status).toBe(201)
+
+    await writePolicy('plex:99', false)
+    const res = await app.request('/api/iptv/favorites')
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: 'section_blocked' })
+  })
+
+  it('allows favorites + history for a non-admin whose policy permits live', async () => {
+    authState.session = { sub: 'plex:98', username: 'Teen', role: 'user' }
+    await writePolicy('plex:98', true)
+
+    expect((await postFavorite()).status).toBe(201)
+    const favs = await app.request('/api/iptv/favorites')
+    expect(favs.status).toBe(200)
+    expect(await favs.json()).toContainEqual(expect.objectContaining({ kind: 'live', item_id: '10' }))
+
+    expect((await postHistory()).status).toBe(201)
+    const hist = await app.request('/api/iptv/history?limit=10')
+    expect(hist.status).toBe(200)
+    expect(await hist.json()).toContainEqual(expect.objectContaining({ kind: 'vod', item_id: '20' }))
+
+    expect((await app.request('/api/iptv/favorites/live/10', { method: 'DELETE' })).status).toBe(204)
+  })
+
+  it('admin is never blocked on favorites/history under a live:false policy', async () => {
+    authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
+    await writePolicy('plex:42', false)
+
+    expect((await app.request('/api/iptv/favorites')).status).toBe(200)
+    expect((await postFavorite()).status).toBe(201)
+    expect((await app.request('/api/iptv/history?limit=10')).status).toBe(200)
+    expect((await postHistory()).status).toBe(201)
+    expect((await app.request('/api/iptv/favorites/live/10', { method: 'DELETE' })).status).toBe(204)
+  })
+})
+
 describe('§9 source_unavailable propagation on grant endpoints', () => {
   const app = new Hono().route('/api/iptv', iptv)
 
