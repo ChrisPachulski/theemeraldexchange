@@ -340,7 +340,13 @@ function maybeEmitWatched(
   }
 }
 
-iptv.get('/categories', requireAuth, (c) => {
+// Catalog + EPG browse. Every route below carries requireSection('live') for
+// the same reason the grants and the DVR listings do: the whole IPTV surface
+// (live channels, provider VOD/series, and the guide) IS the `live` section, so
+// a member whose policy denies Live TV must not be able to browse it either.
+// Hiding it client-side is not enforcement — without this, a denied member (or
+// a tampered client) still got the full catalog and guide from these GETs.
+iptv.get('/categories', requireAuth, requireSection('live'), (c) => {
   const kind = c.req.query('kind') ?? ''
   if (!KINDS.has(kind)) return c.json({ error: 'invalid_kind' }, 400)
   return c.json(listCategories(iptvDb(), kind as 'live' | 'vod' | 'series'))
@@ -361,11 +367,11 @@ function parseListOpts(c: Context<Env>): { categoryId?: number; q?: string; limi
   }
 }
 
-iptv.get('/live', requireAuth, (c) => c.json(listLive(iptvDb(), parseListOpts(c))))
-iptv.get('/vod', requireAuth, (c) => c.json(listVod(iptvDb(), parseListOpts(c))))
-iptv.get('/series', requireAuth, (c) => c.json(listSeries(iptvDb(), parseListOpts(c))))
+iptv.get('/live', requireAuth, requireSection('live'), (c) => c.json(listLive(iptvDb(), parseListOpts(c))))
+iptv.get('/vod', requireAuth, requireSection('live'), (c) => c.json(listVod(iptvDb(), parseListOpts(c))))
+iptv.get('/series', requireAuth, requireSection('live'), (c) => c.json(listSeries(iptvDb(), parseListOpts(c))))
 
-iptv.get('/epg/now', requireAuth, (c) => {
+iptv.get('/epg/now', requireAuth, requireSection('live'), (c) => {
   const ids = (c.req.query('channelIds') ?? '')
     .split(',')
     .map((id) => Number(id))
@@ -373,7 +379,7 @@ iptv.get('/epg/now', requireAuth, (c) => {
   return c.json(epgNow(iptvDb(), ids))
 })
 
-iptv.get('/epg/channel/:channelId', requireAuth, (c) => {
+iptv.get('/epg/channel/:channelId', requireAuth, requireSection('live'), (c) => {
   const channelId = Number(c.req.param('channelId'))
   if (!Number.isInteger(channelId) || channelId <= 0) return c.json({ error: 'invalid_id' }, 400)
 
@@ -382,7 +388,7 @@ iptv.get('/epg/channel/:channelId', requireAuth, (c) => {
   return c.json(epgChannelWindow(iptvDb(), channelId, from, to))
 })
 
-iptv.get('/epg/grid', requireAuth, async (c) => {
+iptv.get('/epg/grid', requireAuth, requireSection('live'), async (c) => {
   const from = c.req.query('from') ?? new Date().toISOString()
   const to = c.req.query('to') ?? new Date(Date.now() + 4 * 3600_000).toISOString()
   const rawCategoryId = c.req.query('categoryId')
@@ -444,7 +450,7 @@ const epgSearchRateLimit = rateLimit({
 // so searching 'Yankees' / 'news' now reaches every channel's schedule without
 // shipping the full ~28 MB grid to a memory-constrained device. Query parsing
 // (q slice, categoryIds cap-500) + gzip mirror /epg/grid above.
-iptv.get('/epg/search', requireAuth, epgSearchRateLimit, async (c) => {
+iptv.get('/epg/search', requireAuth, requireSection('live'), epgSearchRateLimit, async (c) => {
   const rawQ = c.req.query('q')
   const q = rawQ && rawQ.trim() ? rawQ.trim().slice(0, 100) : undefined
   if (!q) return c.json({ error: 'invalid_query' }, 400)
@@ -478,14 +484,14 @@ iptv.get('/epg/search', requireAuth, epgSearchRateLimit, async (c) => {
   return c.body(json, 200, { 'Content-Type': 'application/json; charset=utf-8' })
 })
 
-iptv.get('/vod/:streamId', requireAuth, (c) => {
+iptv.get('/vod/:streamId', requireAuth, requireSection('live'), (c) => {
   const id = Number(c.req.param('streamId'))
   if (!Number.isFinite(id)) return c.json({ error: 'invalid_id' }, 400)
   const detail = getVodDetail(iptvDb(), id)
   return detail ? c.json(detail) : c.json({ error: 'not_found' }, 404)
 })
 
-iptv.get('/series/:seriesId', requireAuth, (c) => {
+iptv.get('/series/:seriesId', requireAuth, requireSection('live'), (c) => {
   const id = Number(c.req.param('seriesId'))
   if (!Number.isFinite(id)) return c.json({ error: 'invalid_id' }, 400)
   const detail = getSeriesDetail(iptvDb(), id)

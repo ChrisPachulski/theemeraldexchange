@@ -1003,6 +1003,82 @@ describe('live stream grant + proxy', () => {
       expect(res.status).toBe(403)
       expect(await res.json()).toEqual({ error: 'section_blocked' })
     })
+
+    // Regression: the grants and the DVR listings were gated, but every
+    // catalog/EPG *browse* GET was requireAuth-only. A member whose policy
+    // denies live still got the full channel list, the provider VOD/series
+    // catalog, and the whole guide — the client only hid the section, so any
+    // direct call (or a tampered client) walked straight through.
+    const browseRoutes = [
+      '/api/iptv/categories?kind=live',
+      '/api/iptv/live',
+      '/api/iptv/vod',
+      '/api/iptv/series',
+      '/api/iptv/epg/now?channelIds=10',
+      '/api/iptv/epg/channel/10',
+      '/api/iptv/epg/grid',
+      '/api/iptv/epg/search?q=news',
+      '/api/iptv/vod/20',
+      '/api/iptv/series/30',
+    ]
+
+    const writeSectionPolicy = async (sub: string, live: boolean) => {
+      await fsp.writeFile(
+        policyPath,
+        JSON.stringify({
+          [sub]: {
+            maxContentRating: null,
+            allowedSections: { live, downloads: true, arr: true },
+            kid: true,
+          },
+        }),
+      )
+      _setUserPoliciesPathForTests(policyPath)
+    }
+
+    it.each(browseRoutes)(
+      '403 section_blocked browsing %s for a non-admin whose policy denies live',
+      async (route) => {
+        authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+        await writeSectionPolicy('plex:99', false)
+        const res = await app.request(route)
+        expect(res.status).toBe(403)
+        expect(await res.json()).toEqual({ error: 'section_blocked' })
+      },
+    )
+
+    it.each(browseRoutes)('allows %s for a non-admin whose policy permits live', async (route) => {
+      authState.session = { sub: 'plex:99', username: 'Teen', role: 'user' }
+      await writeSectionPolicy('plex:99', true)
+      __resetRateLimitsForTests()
+      const res = await app.request(route)
+      expect(res.status).toBe(200)
+    })
+
+    it.each(browseRoutes)('admin browsing %s is never blocked under a live:false policy', async (route) => {
+      authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
+      await writeSectionPolicy('plex:42', false)
+      __resetRateLimitsForTests()
+      const res = await app.request(route)
+      expect(res.status).toBe(200)
+    })
+
+    // The gate must sit BEFORE epgSearchRateLimit, or a denied member drains
+    // their own 10/s token bucket on rejected calls and then eats a 429 the
+    // moment the section is granted back.
+    it('a blocked /epg/search caller does not burn the shared rate-limit budget', async () => {
+      authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+      __resetRateLimitsForTests()
+      await writeSectionPolicy('plex:99', false)
+      for (let i = 0; i < 11; i++) {
+        const blocked = await app.request('/api/iptv/epg/search?q=news')
+        expect(blocked.status).toBe(403)
+      }
+      // Same sub, section granted back: the bucket must still be full.
+      await writeSectionPolicy('plex:99', true)
+      const res = await app.request('/api/iptv/epg/search?q=news')
+      expect(res.status).toBe(200)
+    })
   })
 })
 
