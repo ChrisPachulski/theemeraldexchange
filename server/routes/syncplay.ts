@@ -31,12 +31,22 @@ function isMediaKind(v: unknown): v is SyncMediaKind {
   return v === 'movie' || v === 'episode'
 }
 
+// Discovery listing: every authenticated user may see that a group exists and
+// what it is pinned to (that is how you find one to join), but who is watching
+// is confidential to that group — same boundary GET /groups/:id enforces.
 syncplay.get('/groups', (c) => {
   const now = Date.now()
-  const items = listGroups(now).map((g) => ({
-    ...snapshot(g, now),
-    member_count: g.members.size,
-  }))
+  const sub = c.get('session').sub
+  const items = listGroups(now).map((g) => {
+    const snap = snapshot(g, now)
+    const isMember = g.members.has(sub)
+    return {
+      ...snap,
+      host_sub: isMember ? snap.host_sub : null,
+      members: isMember ? snap.members : [],
+      member_count: g.members.size,
+    }
+  })
   return c.json({ items })
 })
 
