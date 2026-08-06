@@ -575,6 +575,92 @@ describe('GET /api/iptv/sessions', () => {
   })
 })
 
+// BACKLOG 01e16f6f: the concurrency-cap 429 embeds the WHOLE household's
+// session list (same leak class as GET /sessions above, commit b7b7bf5) so
+// ConcurrencyLimitModal can render inline kick buttons without a round trip.
+// Reached more often than GET /sessions on a small provider line, since the
+// household hits the cap routinely. Redaction must hold the closed-enum
+// Swift contract: every field stays present, only OTHER members' content
+// is nulled/coarsened.
+describe('concurrency-cap 429 session redaction (BACKLOG 01e16f6f)', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+  let originalTryAcquire: typeof concurrencyState.tracker.tryAcquire
+
+  beforeEach(() => {
+    originalTryAcquire = concurrencyState.tracker.tryAcquire
+    concurrencyState.tracker.tryAcquire = () => ({
+      ok: false,
+      reason: 'iptv_concurrency_limit',
+      limit: 2,
+      current: 2,
+      sessions: [
+        { sessionId: 'own-session', sub: 'plex:42', kind: 'live', resourceId: '10', title: 'CNN', ip: '10.0.0.7', startedAt: 1, lastSeen: 1 },
+        { sessionId: 'other-session', sub: 'plex:other', kind: 'live', resourceId: '20', title: 'ESPN', ip: '10.0.0.9', startedAt: 1, lastSeen: 1 },
+      ],
+    })
+  })
+  afterEach(() => {
+    concurrencyState.tracker.tryAcquire = originalTryAcquire
+  })
+
+  type CapBody = {
+    sessions: Array<{
+      sessionId: string
+      sub: string | null
+      ip: string | null
+      title: string | null
+      resolvedTitle: string | null
+      kind: string
+      resourceId: string
+    }>
+  }
+
+  it('redacts another member\'s sub/ip/title but keeps the caller\'s own row intact', async () => {
+    authState.session = { sub: 'plex:42', username: 'Test', role: 'user' }
+    const res = await app.request('/api/iptv/stream/live/10/grant', { method: 'POST' })
+    expect(res.status).toBe(429)
+    const body = (await res.json()) as CapBody
+    const own = body.sessions.find((s) => s.sessionId === 'own-session')!
+    const other = body.sessions.find((s) => s.sessionId === 'other-session')!
+    expect(own.sub).toBe('plex:42')
+    expect(own.ip).toBe('10.0.0.7')
+    expect(own.title).toBe('CNN')
+    expect(other.sub).toBeNull()
+    expect(other.ip).toBeNull()
+    expect(other.title).toBe('another household member')
+    expect(other.resolvedTitle).toBe('another household member')
+    expect(JSON.stringify(body)).not.toContain('plex:other')
+    expect(JSON.stringify(body)).not.toContain('10.0.0.9')
+    expect(JSON.stringify(body)).not.toContain('ESPN')
+  })
+
+  it('still shows every session in full detail to an admin (support/kick visibility)', async () => {
+    authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
+    const res = await app.request('/api/iptv/stream/live/10/grant', { method: 'POST' })
+    expect(res.status).toBe(429)
+    const body = (await res.json()) as CapBody
+    const other = body.sessions.find((s) => s.sessionId === 'other-session')!
+    expect(other.sub).toBe('plex:other')
+    expect(other.ip).toBe('10.0.0.9')
+    expect(other.title).toBe('ESPN')
+  })
+
+  it('keeps the closed-enum field set stable so the Swift client contract holds', async () => {
+    authState.session = { sub: 'plex:42', username: 'Test', role: 'user' }
+    const res = await app.request('/api/iptv/stream/live/10/grant', { method: 'POST' })
+    const body = (await res.json()) as CapBody
+    for (const s of body.sessions) {
+      expect(s).toHaveProperty('sub')
+      expect(s).toHaveProperty('ip')
+      expect(s).toHaveProperty('title')
+      expect(s).toHaveProperty('resolvedTitle')
+      expect(s).toHaveProperty('sessionId')
+      expect(s).toHaveProperty('kind')
+      expect(s).toHaveProperty('resourceId')
+    }
+  })
+})
+
 describe('DELETE /api/iptv/sessions/:sessionId', () => {
   const app = new Hono().route('/api/iptv', iptv)
 
