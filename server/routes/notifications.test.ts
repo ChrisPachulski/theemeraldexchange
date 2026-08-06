@@ -774,6 +774,70 @@ describe('notifications POST /discord — serialization (withDiscordMutationLock
     // withDiscordMutationLock serialized the two requests' mutation sections.
     expect(maxConcurrent).toBe(1)
   })
+
+  it('a concurrent POST and DELETE are serialized — upstream calls do not interleave', async () => {
+    let inFlight = 0
+    let maxConcurrent = 0
+    const enter = () => {
+      inFlight++
+      maxConcurrent = Math.max(maxConcurrent, inFlight)
+    }
+    const exit = () => {
+      inFlight--
+    }
+    handlers.push({
+      // Not concurrency-tracked: both POST and DELETE list sonarr+radarr via
+      // Promise.all internally, which is legitimate intra-request concurrency,
+      // not overlap between the two racing requests.
+      match: (u, m) => m === 'GET' && u.endsWith('/api/v3/notification'),
+      handler: () => jsonResponse([{ id: 50, name: EMERALD, implementation: 'Discord' }]),
+    })
+    handlers.push({
+      match: (u, m) => m === 'POST' && u.endsWith('/api/v3/notification'),
+      handler: async () => {
+        enter()
+        await new Promise((r) => setTimeout(r, 5))
+        exit()
+        return jsonResponse({ id: 50 }, 201)
+      },
+    })
+    handlers.push({
+      match: (u, m) => m === 'PUT' && u.includes('/api/v3/notification/'),
+      handler: async () => {
+        enter()
+        await new Promise((r) => setTimeout(r, 5))
+        exit()
+        return jsonResponse({}, 200)
+      },
+    })
+    handlers.push({
+      match: (u, m) => m === 'DELETE' && u.includes('/api/v3/notification/'),
+      handler: async () => {
+        enter()
+        await new Promise((r) => setTimeout(r, 5))
+        exit()
+        return jsonResponse({}, 200)
+      },
+    })
+    const cookie = await adminCookie()
+    const postReq = () =>
+      appUnderTest().request('/discord', {
+        method: 'POST',
+        headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ webhookUrl: GOOD_WEBHOOK }),
+      })
+    const deleteReq = () =>
+      appUnderTest().request('/discord', {
+        method: 'DELETE',
+        headers: { Cookie: cookie },
+      })
+    const [postRes, deleteRes] = await Promise.all([postReq(), deleteReq()])
+    expect(postRes.status).toBe(200)
+    expect(deleteRes.status).toBe(200)
+    // withDiscordMutationLock serializes POST and DELETE against each other —
+    // a raced DELETE can't invalidate a webhook id that POST just read mid-flight.
+    expect(maxConcurrent).toBe(1)
+  })
 })
 
 describe('notifications POST /discord/test', () => {

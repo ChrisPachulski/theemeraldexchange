@@ -301,27 +301,29 @@ notifications.delete('/discord', async (c) => {
   // returned {ok:true, removed:0} even when both refused, so the SPA
   // showed "Removed" while connectors stayed active and the household
   // kept getting double-pings on the next grab.
-  const failures: NotificationDeleteFailure[] = []
-  let removed = 0
-  let existingByApp: Record<NotificationApp, number[]>
-  try {
-    const [sonarrIds, radarrIds] = await Promise.all([findEmeraldIds('sonarr'), findEmeraldIds('radarr')])
-    existingByApp = { sonarr: sonarrIds, radarr: radarrIds }
-  } catch (err) {
-    if (err instanceof NotificationListError) {
-      return c.json({ error: `${err.app}_list_failed`, status: err.status }, 502)
+  return withDiscordMutationLock(async () => {
+    const failures: NotificationDeleteFailure[] = []
+    let removed = 0
+    let existingByApp: Record<NotificationApp, number[]>
+    try {
+      const [sonarrIds, radarrIds] = await Promise.all([findEmeraldIds('sonarr'), findEmeraldIds('radarr')])
+      existingByApp = { sonarr: sonarrIds, radarr: radarrIds }
+    } catch (err) {
+      if (err instanceof NotificationListError) {
+        return c.json({ error: `${err.app}_list_failed`, status: err.status }, 502)
+      }
+      throw err
     }
-    throw err
-  }
-  for (const app of ['sonarr', 'radarr'] as const) {
-    const result = await deleteNotifications(app, existingByApp[app])
-    removed += result.removed
-    failures.push(...result.failures)
-  }
-  if (failures.length > 0) {
-    return c.json(partialDeletePayload(removed, failures), 502)
-  }
-  return c.json({ ok: true, removed })
+    for (const app of ['sonarr', 'radarr'] as const) {
+      const result = await deleteNotifications(app, existingByApp[app])
+      removed += result.removed
+      failures.push(...result.failures)
+    }
+    if (failures.length > 0) {
+      return c.json(partialDeletePayload(removed, failures), 502)
+    }
+    return c.json({ ok: true, removed })
+  })
 })
 
 // Fires a test embed at the configured webhook (uses Sonarr's test
@@ -329,24 +331,26 @@ notifications.delete('/discord', async (c) => {
 // will produce). Lets the household verify the channel is reachable
 // without waiting for a real download to complete.
 notifications.post('/discord/test', async (c) => {
-  let id: number | null
-  try {
-    id = await findEmerald('sonarr')
-  } catch (err) {
-    if (err instanceof NotificationListError) {
-      return c.json({ error: `${err.app}_list_failed`, status: err.status }, 502)
+  return withDiscordMutationLock(async () => {
+    let id: number | null
+    try {
+      id = await findEmerald('sonarr')
+    } catch (err) {
+      if (err instanceof NotificationListError) {
+        return c.json({ error: `${err.app}_list_failed`, status: err.status }, 502)
+      }
+      throw err
     }
-    throw err
-  }
-  if (id === null) return c.json({ error: 'not_configured' }, 409)
-  const res = await sonarrFetch(`/api/v3/notification/${id}/test`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: '{}',
+    if (id === null) return c.json({ error: 'not_configured' }, 409)
+    const res = await sonarrFetch(`/api/v3/notification/${id}/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      return c.json({ error: 'test_failed', status: res.status, detail: text.slice(0, 400) }, 502)
+    }
+    return c.json({ ok: true })
   })
-  if (!res.ok) {
-    const text = await res.text().catch(() => '')
-    return c.json({ error: 'test_failed', status: res.status, detail: text.slice(0, 400) }, 502)
-  }
-  return c.json({ ok: true })
 })
