@@ -284,6 +284,21 @@ iptv.delete('/sessions/:sessionId', requireAuth, (c) => {
   const target = all.find((s) => s.sessionId === sessionId)
   if (!target) return c.json({ error: 'not_found' }, 404)
   if (!isAdmin && target.sub !== sub) return c.json({ error: 'forbidden' }, 403)
+  // dvr: is a synthetic sub minted only by dvrRecorder.start() (server/services/dvrRecorder.ts) so an
+  // in-flight recording shows up in this list and counts toward upstreamInUse. It can never be a real
+  // user sub. Releasing it here would free the accounting slot while the real ffmpeg keeps recording and
+  // holding the actual upstream connection — undercounting upstreamInUse() and risking the provider's
+  // abuse-block. Route the admin to the DVR panel instead, which stops the process AND the slot together.
+  if (target.sub.startsWith('dvr:')) {
+    return c.json(
+      {
+        error: 'dvr_recording_session',
+        message:
+          'stop this recording from the DVR panel (DELETE /api/dvr/recordings/:id), not the sessions widget',
+      },
+      409,
+    )
+  }
   streamConcurrency().release(sessionId)
   // A remux (AVPlayer live) slot is backed by an ffmpeg process holding a live
   // upstream provider connection, tracked SEPARATELY from the concurrency slot.
