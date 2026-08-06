@@ -3,6 +3,7 @@ import { Readable } from 'node:stream'
 import { setImmediate as yieldEventLoop } from 'node:timers/promises'
 import { env } from '../env.js'
 import { gunzipNodeStream, webStreamToNodeReadable } from './streamBridge.js'
+import { guardedFetchTrustedOrigin } from './ssrfGuard.js'
 
 const EPG_FETCH_TIMEOUT_MS = 5 * 60_000
 const EPG_WALL_TIMEOUT_MS = 30 * 60_000
@@ -273,7 +274,10 @@ export async function fetchAndStreamEpg(
   }
   try {
     resetIdleTimer()
-    const res = await fetch(url, { signal: controller.signal })
+    // SSRF: same trusted-creds Xtream origin the segment/catchup routes guard —
+    // the panel URL is operator-configured, but any 30x it issues is
+    // attacker-influenceable and is re-validated before being followed.
+    const res = await guardedFetchTrustedOrigin(url, { signal: controller.signal })
     if (!res.ok || !res.body) throw new Error(`xtream.xmltv_${res.status}`)
     const source = webStreamToNodeReadable(res.body)
     const nodeStream = Readable.from((async function* () {
