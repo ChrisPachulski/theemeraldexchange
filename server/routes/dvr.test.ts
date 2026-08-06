@@ -66,6 +66,33 @@ describe('dvr routes', () => {
     expect(((await res.json()) as { error: string }).error).toBe('already_ended')
   })
 
+  // The overlap gate is enforced in validateNewRecording, but only the route
+  // supplies its scope (this channel + non-terminal rows). These cover that SQL.
+  it('POST rejects a window overlapping a live recording on the same channel (400)', async () => {
+    expect((await post(validBody)).status).toBe(201)
+    const clash = await post({ ...validBody, start_utc: '2099-01-01T10:30:00.000Z', stop_utc: '2099-01-01T12:00:00.000Z' })
+    expect(clash.status).toBe(400) // RED before the fix: 201, two tapes of one channel
+    expect(((await clash.json()) as { error: string }).error).toBe('channel_overlap')
+  })
+
+  it('POST allows a back-to-back window, and an overlap on another channel (201)', async () => {
+    expect((await post(validBody)).status).toBe(201)
+    // starts exactly as the first one ends — half-open windows do not collide
+    const nextUp = await post({ ...validBody, start_utc: FUTURE_STOP, stop_utc: '2099-01-01T12:00:00.000Z' })
+    expect(nextUp.status).toBe(201)
+    // same clock window, different channel → different tuner, allowed
+    const otherChannel = await post({ ...validBody, channel_stream_id: 99 })
+    expect(otherChannel.status).toBe(201)
+  })
+
+  it('POST allows a window overlapping a cancelled recording on the same channel (201)', async () => {
+    const first = (await (await post(validBody)).json()) as { recording: { id: string } }
+    await dvr.request(`/recordings/${first.recording.id}`, { method: 'DELETE' }) // → cancelled
+    // and a terminal row is likewise no obstacle
+    markStatus(db.raw, scheduleRecording(db.raw, validBody).id, 'completed')
+    expect((await post(validBody)).status).toBe(201)
+  })
+
   it('POST rejects malformed JSON (400)', async () => {
     const res = await post('{not json')
     expect(res.status).toBe(400)

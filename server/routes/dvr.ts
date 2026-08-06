@@ -66,7 +66,15 @@ dvr.post('/recordings', requireAdmin, async (c) => {
     start_utc: String(body.start_utc ?? ''),
     stop_utc: String(body.stop_utc ?? ''),
   }
-  const err = validateNewRecording(input, new Date().toISOString())
+  // Other recordings still holding this channel's tuner slot. Terminal rows are
+  // excluded — a cancelled/completed/failed/missed window is free to record over.
+  const existingForChannel = iptvDb()
+    .raw.prepare(
+      `SELECT start_utc, stop_utc FROM dvr_recordings
+        WHERE channel_stream_id = ? AND status IN ('scheduled','recording')`,
+    )
+    .all(input.channel_stream_id) as Array<{ start_utc: string; stop_utc: string }>
+  const err = validateNewRecording(input, new Date().toISOString(), existingForChannel)
   if (err) return c.json({ error: err }, 400)
   const recording = scheduleRecording(iptvDb().raw, input)
   return c.json({ recording }, 201)
