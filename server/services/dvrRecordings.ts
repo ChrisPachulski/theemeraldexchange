@@ -43,8 +43,18 @@ export interface NewRecordingInput {
  * Pure validation for a new recording. Returns a stable error code, or null if
  * the input is valid. A recording whose window has already fully ended can't be
  * recorded, so it is rejected here rather than scheduled into the past.
+ *
+ * `existingForChannel` is the caller's already-scoped list of other recordings
+ * on the SAME channel that still hold a tuner slot — i.e. rows filtered to
+ * `channel_stream_id` and `status IN ('scheduled','recording')`. Terminal rows
+ * (completed/failed/missed/cancelled) must be filtered out by the caller: their
+ * windows are free to record over. Left empty, the overlap rule is a no-op.
  */
-export function validateNewRecording(input: NewRecordingInput, nowIso: string): string | null {
+export function validateNewRecording(
+  input: NewRecordingInput,
+  nowIso: string,
+  existingForChannel: Array<{ start_utc: string; stop_utc: string }> = [],
+): string | null {
   if (!Number.isInteger(input.channel_stream_id) || input.channel_stream_id <= 0) {
     return 'invalid_channel'
   }
@@ -56,6 +66,14 @@ export function validateNewRecording(input: NewRecordingInput, nowIso: string): 
   if (Number.isNaN(start) || Number.isNaN(stop)) return 'invalid_time'
   if (stop <= start) return 'stop_before_start'
   if (stop <= now) return 'already_ended'
+  // Two overlapping recordings on one channel would each need their own
+  // provider connection (hard-capped) and would write two files of the same
+  // stream, so the second is refused. Windows are half-open [start, stop): a
+  // recording that ends exactly as the next begins is back-to-back, not an
+  // overlap, and must stay schedulable (that is how a full evening is taped).
+  for (const other of existingForChannel) {
+    if (Date.parse(other.start_utc) < stop && start < Date.parse(other.stop_utc)) return 'channel_overlap'
+  }
   return null
 }
 

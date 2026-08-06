@@ -13,6 +13,7 @@ import {
   markStatus,
   type DvrRecording,
   type NewRecordingInput,
+  type RecordingStatus,
 } from './dvrRecordings.js'
 
 const NOW = '2026-06-17T12:00:00.000Z'
@@ -47,6 +48,59 @@ describe('validateNewRecording', () => {
         NOW,
       ),
     ).toBe('already_ended')
+  })
+
+  // The validator is pure and takes the caller's list at face value. `forChannel`
+  // mirrors the scoping routes/dvr.ts applies in SQL (same channel_stream_id +
+  // status IN ('scheduled','recording')), so the tests below exercise the real
+  // contract rather than hand-waving what the caller passes.
+  type ExistingRow = {
+    channel_stream_id: number
+    status: RecordingStatus
+    start_utc: string
+    stop_utc: string
+  }
+  const forChannel = (rows: ExistingRow[], channelId: number) =>
+    rows.filter(
+      (r) => r.channel_stream_id === channelId && (r.status === 'scheduled' || r.status === 'recording'),
+    )
+  // validInput is 13:00–13:30 on channel 42; this row straddles its tail.
+  const straddling: ExistingRow = {
+    channel_stream_id: 42,
+    status: 'scheduled',
+    start_utc: '2026-06-17T13:15:00.000Z',
+    stop_utc: '2026-06-17T14:00:00.000Z',
+  }
+
+  it('rejects a window overlapping another recording on the same channel', () => {
+    expect(validateNewRecording(validInput, NOW, forChannel([straddling], 42))).toBe('channel_overlap')
+    // …in either direction, and when either window fully contains the other.
+    const before = { ...straddling, start_utc: '2026-06-17T12:45:00.000Z', stop_utc: '2026-06-17T13:05:00.000Z' }
+    expect(validateNewRecording(validInput, NOW, forChannel([before], 42))).toBe('channel_overlap')
+    const containing = { ...straddling, start_utc: '2026-06-17T12:00:00.000Z', stop_utc: '2026-06-17T15:00:00.000Z' }
+    expect(validateNewRecording(validInput, NOW, forChannel([containing], 42))).toBe('channel_overlap')
+    const contained = { ...straddling, start_utc: '2026-06-17T13:10:00.000Z', stop_utc: '2026-06-17T13:20:00.000Z' }
+    expect(validateNewRecording(validInput, NOW, forChannel([contained], 42))).toBe('channel_overlap')
+    // an in-flight ('recording') neighbour blocks just the same as a scheduled one
+    expect(validateNewRecording(validInput, NOW, forChannel([{ ...straddling, status: 'recording' }], 42))).toBe(
+      'channel_overlap',
+    )
+  })
+
+  it('allows back-to-back windows on the same channel (half-open intervals)', () => {
+    const endsAsWeStart = { ...straddling, start_utc: '2026-06-17T12:30:00.000Z', stop_utc: validInput.start_utc }
+    const startsAsWeEnd = { ...straddling, start_utc: validInput.stop_utc, stop_utc: '2026-06-17T14:00:00.000Z' }
+    expect(validateNewRecording(validInput, NOW, forChannel([endsAsWeStart, startsAsWeEnd], 42))).toBeNull()
+  })
+
+  it('ignores an overlapping recording on a different channel', () => {
+    expect(validateNewRecording(validInput, NOW, forChannel([{ ...straddling, channel_stream_id: 99 }], 42))).toBeNull()
+  })
+
+  it('ignores overlapping recordings in a terminal status', () => {
+    const terminal: RecordingStatus[] = ['completed', 'cancelled', 'failed', 'missed']
+    const rows = terminal.map((status) => ({ ...straddling, status }))
+    expect(validateNewRecording(validInput, NOW, forChannel(rows, 42))).toBeNull()
   })
 })
 
