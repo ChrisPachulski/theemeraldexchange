@@ -25,6 +25,42 @@ function post(app: ReturnType<typeof appUnderTest>, cookie: string, path: string
   })
 }
 
+// Sends a POST whose JSON body arrives in two chunks and runs `duringRead` in
+// the gap — i.e. while the handler is parked on `await parseLimitedJson`. The
+// stream cannot finish until `duringRead` has run, so the interleaving is
+// deterministic rather than a timing race.
+function postStreamed(
+  app: ReturnType<typeof appUnderTest>,
+  cookie: string,
+  path: string,
+  body: unknown,
+  duringRead: () => unknown,
+) {
+  const json = new TextEncoder().encode(JSON.stringify(body))
+  let sentHead = false
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (!sentHead) {
+        sentHead = true
+        controller.enqueue(json.subarray(0, 1))
+        return
+      }
+      await duringRead()
+      controller.enqueue(json.subarray(1))
+      controller.close()
+    },
+  })
+  return app.request(
+    new Request(`http://localhost${path}`, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: stream,
+      // Node requires this whenever the request body is a stream.
+      duplex: 'half',
+    } as RequestInit & { duplex: 'half' }),
+  )
+}
+
 type Snapshot = {
   id: string
   host_sub: string | null
@@ -194,6 +230,153 @@ describe('syncplay groups', () => {
     vi.advanceTimersByTime(61_000)
     const listing = await app.request('/groups', { headers: { Cookie: bob } })
     expect(((await listing.json()) as { items: Snapshot[] }).items).toHaveLength(0)
+  })
+
+  // The command handler awaits the request body. Anything it resolved before
+  // that await — the group, the membership check, the clock — is stale by the
+  // time it mutates, because other requests run in the gap.
+  describe('state resolved across the body-parse await', () => {
+    it('403s a member who left while his command body was still in flight', async () => {
+      const app = appUnderTest()
+      const alice = await cookieFor('alice')
+      const bob = await cookieFor('bob')
+
+      const g = (await (
+        await post(app, alice, '/groups', { media_kind: 'movie', media_id: 9 })
+      ).json()) as Snapshot
+      await post(app, bob, `/groups/${g.id}/join`)
+
+      // Bob starts a play command, then leaves from another tab before the
+      // body lands. Alice stays, so the group survives — only bob's membership
+      // is gone, and a non-member must not drive the shared transport.
+      const res = await postStreamed(
+        app,
+        bob,
+        `/groups/${g.id}/command`,
+        { type: 'play', position_secs: 99 },
+        () => post(app, bob, `/groups/${g.id}/leave`),
+      )
+      expect(res.status).toBe(403)
+
+      const after = (await (
+        await app.request(`/groups/${g.id}`, { headers: { Cookie: alice } })
+      ).json()) as Snapshot
+      expect(after.paused).toBe(true)
+      expect(after.position_secs).toBe(0)
+      expect(after.members.map((m) => m.sub)).toEqual(['plex:1'])
+    })
+
+    it('404s instead of mutating a group deleted while the body was in flight', async () => {
+      const app = appUnderTest()
+      const alice = await cookieFor('alice')
+
+      const g = (await (
+        await post(app, alice, '/groups', { media_kind: 'movie', media_id: 11 })
+      ).json()) as Snapshot
+
+      // Alice is the only member: her leave deletes the group outright, so the
+      // command must not report success against a detached object.
+      const res = await postStreamed(
+        app,
+        alice,
+        `/groups/${g.id}/command`,
+        { type: 'seek', position_secs: 120 },
+        () => post(app, alice, `/groups/${g.id}/leave`),
+      )
+      expect(res.status).toBe(404)
+      expect(await listGroupsAs(app, alice)).toHaveLength(0)
+    })
+
+    it('404s when the body read outlasts the idle window that prunes the group', async () => {
+      const app = appUnderTest()
+      const alice = await cookieFor('alice')
+
+      const g = (await (
+        await post(app, alice, '/groups', { media_kind: 'movie', media_id: 13 })
+      ).json()) as Snapshot
+
+      // No concurrent request at all — just a body that dribbles past the idle
+      // window. The group is pruned out from under the handler.
+      const res = await postStreamed(
+        app,
+        alice,
+        `/groups/${g.id}/command`,
+        { type: 'play', position_secs: 5 },
+        () => {
+          vi.advanceTimersByTime(61_000)
+        },
+      )
+      expect(res.status).toBe(404)
+    })
+
+    it('stamps the command with the clock at apply time, not at request start', async () => {
+      const app = appUnderTest()
+      const alice = await cookieFor('alice')
+
+      const g = (await (
+        await post(app, alice, '/groups', { media_kind: 'movie', media_id: 15 })
+      ).json()) as Snapshot
+
+      // 20s of wall clock burn while the body arrives (still inside the idle
+      // window). Alice asked to play from 30s; the group must start at 30s.
+      const res = await postStreamed(
+        app,
+        alice,
+        `/groups/${g.id}/command`,
+        { type: 'play', position_secs: 30 },
+        () => {
+          vi.advanceTimersByTime(20_000)
+        },
+      )
+      expect(res.status).toBe(200)
+      expect(((await res.json()) as Snapshot).position_secs).toBe(30)
+
+      // The poll is the discriminator: a pre-read `atMs` makes the playhead
+      // jump forward by the read's duration (30 -> 50) with no time elapsed.
+      const polled = (await (
+        await app.request(`/groups/${g.id}`, { headers: { Cookie: alice } })
+      ).json()) as Snapshot
+      expect(polled.position_secs).toBe(30)
+    })
+
+    it('still rejects a malformed streamed body before touching the group', async () => {
+      const app = appUnderTest()
+      const alice = await cookieFor('alice')
+
+      const g = (await (
+        await post(app, alice, '/groups', { media_kind: 'movie', media_id: 17 })
+      ).json()) as Snapshot
+
+      expect(
+        (
+          await postStreamed(
+            app,
+            alice,
+            `/groups/${g.id}/command`,
+            { type: 'seek' },
+            () => {},
+          )
+        ).status,
+      ).toBe(400)
+      expect(
+        (
+          await postStreamed(
+            app,
+            alice,
+            `/groups/${g.id}/command`,
+            { type: 'play', position_secs: 'soon' },
+            () => {},
+          )
+        ).status,
+      ).toBe(400)
+
+      const after = (await (
+        await app.request(`/groups/${g.id}`, { headers: { Cookie: alice } })
+      ).json()) as Snapshot
+      expect(after.paused).toBe(true)
+      expect(after.position_secs).toBe(0)
+      expect(after.version).toBe(g.version)
+    })
   })
 
   it('requires authentication', async () => {

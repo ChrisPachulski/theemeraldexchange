@@ -97,13 +97,15 @@ syncplay.get('/groups/:id', (c) => {
   return c.json(snapshot(group, now))
 })
 
+// Read the body BEFORE resolving the group. The read is an await, and groups
+// are mutable in-memory objects: one resolved on the near side of it can be
+// left, idle-pruned, or deleted while the bytes trickle in, so the handler
+// would drive a detached object (silent no-op) or apply a command for a member
+// who has since left (authz check outrunning its own decision). The clock is
+// stamped on the far side too — `atMs` taken before the read makes the playhead
+// jump forward by the read's duration on the very next poll.
 syncplay.post('/groups/:id/command', async (c) => {
   const session = c.get('session')
-  const now = Date.now()
-  const group = getGroup(c.req.param('id'), now)
-  if (!group) return c.json({ error: 'not_found' }, 404)
-  if (!group.members.has(session.sub)) return c.json({ error: 'not_member' }, 403)
-
   const parsed = await parseLimitedJson(c, MAX_BODY_BYTES)
   if (parsed.tooLarge) return c.json({ error: 'body_too_large' }, 413)
   const body = (parsed.body ?? {}) as { type?: unknown; position_secs?: unknown }
@@ -119,6 +121,11 @@ syncplay.post('/groups/:id/command', async (c) => {
   } else if (body.type === 'seek') {
     return c.json({ error: 'invalid_position' }, 400)
   }
+
+  const now = Date.now()
+  const group = getGroup(c.req.param('id'), now)
+  if (!group) return c.json({ error: 'not_found' }, 404)
+  if (!group.members.has(session.sub)) return c.json({ error: 'not_member' }, 403)
 
   touchMember(group, session.sub, now)
   applyCommand(group, body.type, position, now)
