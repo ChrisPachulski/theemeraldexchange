@@ -269,6 +269,31 @@ describe('syncplay groups', () => {
     expect(listed.host_sub).toBe('plex:2')
   })
 
+  it('bumps version when the idle prune drops a member, so pollers notice', async () => {
+    const app = appUnderTest()
+    const alice = await cookieFor('alice')
+    const bob = await cookieFor('bob')
+
+    const g = (await (
+      await post(app, alice, '/groups', { media_kind: 'movie', media_id: 24 })
+    ).json()) as Snapshot
+    const afterJoin = (await (await post(app, bob, `/groups/${g.id}/join`)).json()) as Snapshot
+
+    // Same shape as the silent-host-timeout case: two 40s hops with a poll in
+    // between so bob's heartbeat keeps him alive while alice ages out.
+    vi.advanceTimersByTime(40_000)
+    expect((await app.request(`/groups/${g.id}`, { headers: { Cookie: bob } })).status).toBe(200)
+
+    vi.advanceTimersByTime(40_000)
+    const pruned = (await (
+      await app.request(`/groups/${g.id}`, { headers: { Cookie: bob } })
+    ).json()) as Snapshot
+    expect(pruned.members.map((m) => m.sub)).toEqual(['plex:2'])
+    // Bob's client diffs on version alone. A prune that silently drops the
+    // host without bumping it leaves every poller rendering a stale roster.
+    expect(pruned.version).toBeGreaterThan(afterJoin.version)
+  })
+
   it('skips past members who idle out in the same sweep when rehoming the host', async () => {
     const app = appUnderTest()
     const alice = await cookieFor('alice')
