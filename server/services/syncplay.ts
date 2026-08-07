@@ -53,9 +53,11 @@ export function currentPosition(group: SyncGroup, nowMs: number): number {
 /** Drop idle members; drop groups with no members left. */
 export function pruneIdle(nowMs: number): void {
   for (const [id, group] of groups) {
+    let mutated = false
     for (const [sub, m] of group.members) {
       if (nowMs - m.lastSeenMs <= MEMBER_IDLE_MS) continue
       group.members.delete(sub)
+      mutated = true
       // A silent timeout removes the host exactly like /leave does, so it has
       // to hand hosting over the same way — otherwise hostSub keeps naming a
       // departed member and every reader (both getGroup and listGroups route
@@ -64,6 +66,10 @@ export function pruneIdle(nowMs: number): void {
         group.hostSub = group.members.keys().next().value as string
       }
     }
+    // A prune changes the roster (and possibly the host) exactly like /leave
+    // does, so it has to bump `version` the same way — otherwise pollers that
+    // diff on version never notice the departure or the rehost.
+    if (mutated && group.members.size > 0) group.version += 1
     if (group.members.size === 0) groups.delete(id)
   }
 }
