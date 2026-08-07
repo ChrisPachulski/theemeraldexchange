@@ -140,9 +140,9 @@ export function DownloadsTab() {
   // clear-and-retry across BOTH apps — movies jam exactly like episodes do.
   const isImportJammed = (r: { trackedDownloadState?: string }) =>
     r.trackedDownloadState === 'importPending' || r.trackedDownloadState === 'importBlocked'
-  const stuckCount =
-    (sonarrQueue.data?.records ?? []).filter(isImportJammed).length +
-    (radarrQueue.data?.records ?? []).filter(isImportJammed).length
+  const sonarrStuckCount = (sonarrQueue.data?.records ?? []).filter(isImportJammed).length
+  const radarrStuckCount = (radarrQueue.data?.records ?? []).filter(isImportJammed).length
+  const stuckCount = sonarrStuckCount + radarrStuckCount
   // The "present" item: whatever SAB is actively downloading right now.
   // Falls back to the first slot when the queue is paused / nothing has
   // started yet so the heading still surfaces the next-up filename
@@ -403,12 +403,16 @@ export function DownloadsTab() {
                     body: 'Removes them from the queue, blocklists the bad releases, and re-searches for replacements. This re-spends bandwidth; releases with no parseable version may jam again.',
                     confirmLabel: 'Clear and retry',
                     onConfirm: async () => {
+                      // Only call the apps that actually have jammed records:
+                      // Radarr is optional (Downloads is gated on SAB alone),
+                      // so an unconditional call 503s on a Radarr-less install
+                      // and masks a successful Sonarr clear behind an error.
                       // Both fire before either is awaited, so one app being
                       // down can't leave the other's jammed records behind;
                       // a rejection still surfaces in the confirm modal.
                       await Promise.all([
-                        clearStuck.mutateAsync(),
-                        clearStuckRadarr.mutateAsync(),
+                        ...(sonarrStuckCount > 0 ? [clearStuck.mutateAsync()] : []),
+                        ...(radarrStuckCount > 0 ? [clearStuckRadarr.mutateAsync()] : []),
                       ])
                     },
                   })

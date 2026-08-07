@@ -150,4 +150,22 @@ describe('DownloadsTab stuck-import banner', () => {
     // …and the failure still propagates to the confirm modal's error slot.
     await waitFor(() => expect(h.confirmError).toBeInstanceOf(Error))
   })
+
+  it('skips the Radarr call when only Sonarr is jammed (Radarr-less install must not 503 and mask a successful Sonarr clear)', async () => {
+    setQueues([{ id: 1, trackedDownloadState: 'importBlocked' }], [])
+    mount()
+    fireEvent.click(screen.getByRole('button', { name: 'Clear blocked' }))
+    await waitFor(() => expect(h.clearStuckSonarr).toHaveBeenCalledTimes(1))
+    expect(h.clearStuckRadarr).not.toHaveBeenCalled()
+    expect(h.confirmError).toBeNull()
+  })
+
+  it('skips the Sonarr call when only Radarr is jammed', async () => {
+    setQueues([], [{ id: 1, trackedDownloadState: 'importBlocked' }])
+    mount()
+    fireEvent.click(screen.getByRole('button', { name: 'Clear blocked' }))
+    await waitFor(() => expect(h.clearStuckRadarr).toHaveBeenCalledTimes(1))
+    expect(h.clearStuckSonarr).not.toHaveBeenCalled()
+    expect(h.confirmError).toBeNull()
+  })
 })
