@@ -983,7 +983,7 @@ radarr.post('/api/v3/movie/:id/upgrade', requireAdmin, radarrMutateLimit, async 
   })
 })
 
-radarr.delete('/api/v3/movie/:id', requireAdmin, async (c) => {
+radarr.delete('/api/v3/movie/:id', requireAdmin, radarrMutateLimit, async (c) => {
   // The :id param is URL-decoded by Hono BEFORE we use it, so an
   // attacker who passes `..%2Frootfolder%2F1` ends up with the literal
   // string `../rootfolder/1`. Once that hits the `new URL(base + path)`

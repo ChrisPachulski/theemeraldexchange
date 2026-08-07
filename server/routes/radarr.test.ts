@@ -124,6 +124,29 @@ describe('radarr — allow-list and gates', () => {
     expect(r.status).toBe(200)
   })
 
+  it('admin DELETE is rate-limited like every sibling mutate route', async () => {
+    // DELETE /movie/:id was the one write route that skipped
+    // radarrMutateLimit, so a single session could loop library deletions
+    // without ever draining the per-session token bucket every other mutate
+    // route shares. Driven through the real router (not a bare middleware
+    // harness) so the assertion covers the route wiring, not just rateLimit().
+    stub('/api/v3/movie/42', null, 200)
+    const app = appUnderTest()
+    const cookie = await adminCookie()
+    const statuses: number[] = []
+    let last!: Response
+    for (let i = 0; i < env.arrMutateRateCapacity + 1; i++) {
+      last = await app.request('/api/v3/movie/42', {
+        method: 'DELETE',
+        headers: { Cookie: cookie },
+      })
+      statuses.push(last.status)
+    }
+    expect(statuses.slice(0, -1)).not.toContain(429)
+    expect(last.status).toBe(429)
+    expect((await last.json()) as { error: string }).toMatchObject({ error: 'rate_limited' })
+  })
+
   it('admin DELETE with encoded-slash traversal returns 400, does not reach upstream', async () => {
     // Hono URL-decodes :id BEFORE we read it. Without validation, an
     // attacker who passes `..%2Frootfolder%2F1` (which Hono decodes
