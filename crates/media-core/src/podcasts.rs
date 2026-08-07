@@ -210,7 +210,14 @@ pub fn parse_rss(xml: &str) -> Result<Feed, String> {
     Ok(feed)
 }
 
-/// Fetch and parse a feed URL (http/https only).
+/// Hard ceiling on a fetched feed body, mirroring the size-bound intent of
+/// `server/services/parseLimitedJson.ts` — a malicious/compromised feed_url
+/// must not be able to exhaust memory via an unbounded response body.
+const MAX_FEED_BYTES: usize = 25 * 1024 * 1024;
+
+/// Fetch and parse a feed URL (http/https only). Streams the body with a
+/// running byte counter and bails out the moment `MAX_FEED_BYTES` is
+/// crossed, rather than buffering the whole response via `.text()`.
 pub async fn fetch_feed(url: &str) -> Result<Feed, String> {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err("feed_url must be http(s)".to_string());
@@ -219,15 +226,31 @@ pub async fn fetch_feed(url: &str) -> Result<Feed, String> {
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| e.to_string())?;
-    let xml = client
+    let mut resp = client
         .get(url)
         .header("User-Agent", "theemeraldexchange v1")
         .send()
         .await
-        .map_err(|e| format!("feed fetch failed: {e}"))?
-        .text()
+        .map_err(|e| format!("feed fetch failed: {e}"))?;
+
+    if let Some(len) = resp.content_length()
+        && len as usize > MAX_FEED_BYTES
+    {
+        return Err(format!("feed body exceeds {MAX_FEED_BYTES} byte limit"));
+    }
+
+    let mut body = Vec::new();
+    while let Some(chunk) = resp
+        .chunk()
         .await
-        .map_err(|e| format!("feed body failed: {e}"))?;
+        .map_err(|e| format!("feed body failed: {e}"))?
+    {
+        body.extend_from_slice(&chunk);
+        if body.len() > MAX_FEED_BYTES {
+            return Err(format!("feed body exceeds {MAX_FEED_BYTES} byte limit"));
+        }
+    }
+    let xml = String::from_utf8_lossy(&body).into_owned();
     parse_rss(&xml)
 }
 
@@ -378,5 +401,132 @@ mod tests {
         assert_eq!(parse_itunes_duration("1:02:03"), Some(3723));
         assert_eq!(parse_itunes_duration(""), None);
         assert_eq!(parse_itunes_duration("abc"), None);
+    }
+
+    /// Serve one raw HTTP response on an ephemeral port and hand back its URL.
+    /// When `hold_open`, the socket is deliberately never closed — a caller
+    /// that needs EOF to make a decision will hang, which is exactly what the
+    /// size-cap tests below are proving does *not* happen.
+    fn spawn_feed_server(response: Vec<u8>, hold_open: bool) -> String {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut discard = [0u8; 1024];
+            let _ = stream.read(&mut discard);
+            let _ = stream.write_all(&response);
+            if hold_open {
+                loop {
+                    std::thread::park();
+                }
+            }
+        });
+
+        format!("http://{addr}/feed.xml")
+    }
+
+    /// `fetch_feed` against `url`, failing the test rather than hanging if it
+    /// does not settle. The budget is deliberately shorter than `fetch_feed`'s
+    /// own 15s client timeout, so "bailed on the size cap" cannot be confused
+    /// with "gave up when the request timed out".
+    async fn fetch_feed_bounded(url: &str) -> Result<Feed, String> {
+        tokio::time::timeout(std::time::Duration::from_secs(5), fetch_feed(url))
+            .await
+            .expect("fetch_feed must settle on its own, not stall until the request timeout")
+    }
+
+    fn assert_size_cap_error(err: &str) {
+        assert!(
+            err.contains("exceeds") && err.contains("byte limit"),
+            "expected a size-cap rejection, got: {err}"
+        );
+    }
+
+    /// A hostile/compromised feed_url must not be able to exhaust memory by
+    /// streaming an unbounded body. This server sends just over the cap and
+    /// then, crucially, neither declares a `Content-Length` nor closes the
+    /// connection — an implementation that buffers to EOF (the old `.text()`
+    /// behavior) would hang forever waiting for a body-end signal that never
+    /// arrives. The running byte-counter must bail as soon as it crosses the
+    /// cap, so this resolves well inside the budget.
+    #[tokio::test]
+    async fn fetch_feed_rejects_oversized_body_without_waiting_for_eof() {
+        let mut response = b"HTTP/1.0 200 OK\r\nContent-Type: text/xml\r\n\r\n".to_vec();
+        response.extend(std::iter::repeat_n(b'a', MAX_FEED_BYTES + 1024));
+        let url = spawn_feed_server(response, true);
+
+        let err = fetch_feed_bounded(&url)
+            .await
+            .expect_err("oversized feed body must be rejected");
+        assert_size_cap_error(&err);
+    }
+
+    /// The other half of the guard: when the server *declares* an oversized
+    /// body up front, the preflight must reject on the header alone. This
+    /// server sends a 26 MiB `Content-Length` and then not a single body byte,
+    /// so the only way to settle inside the budget is to have never started
+    /// reading the body — deleting the `content_length()` preflight makes this
+    /// stall until the request timeout instead.
+    #[tokio::test]
+    async fn fetch_feed_rejects_declared_oversized_content_length_before_reading_body() {
+        let declared = MAX_FEED_BYTES + 1;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nContent-Length: {declared}\r\n\r\n"
+        );
+        let url = spawn_feed_server(response.into_bytes(), true);
+
+        let err = fetch_feed_bounded(&url)
+            .await
+            .expect_err("a declared oversized Content-Length must be rejected");
+        assert_size_cap_error(&err);
+    }
+
+    /// The cap must not break the normal path: an ordinary under-cap feed
+    /// still streams through the byte-counter and parses identically to
+    /// feeding the same XML straight to `parse_rss`.
+    #[tokio::test]
+    async fn fetch_feed_accepts_and_parses_an_under_cap_feed() {
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nContent-Length: {}\r\n\r\n{SAMPLE}",
+            SAMPLE.len()
+        );
+        let url = spawn_feed_server(response.into_bytes(), false);
+
+        let feed = fetch_feed_bounded(&url)
+            .await
+            .expect("an under-cap feed must fetch and parse");
+        assert_eq!(feed, parse_rss(SAMPLE).unwrap());
+    }
+
+    /// A feed with a stray non-UTF-8 byte (common mojibake in the wild) must
+    /// still parse via lossy replacement, not hard-fail -- matches this same
+    /// file's own `from_utf8_lossy` convention in `parse_rss`'s CDATA path.
+    #[tokio::test]
+    async fn fetch_feed_tolerates_non_utf8_bytes_via_lossy_decode() {
+        let mut body = SAMPLE.replace("Test Podcast", "Caf\u{e9} Show").into_bytes();
+        // Replace the (already-invalid-UTF-8-safe) marker with a raw latin-1 0xE9 byte.
+        if let Some(pos) = body.windows(2).position(|w| w == [0xC3, 0xA9]) {
+            body.splice(pos..pos + 2, [0xE9]);
+        }
+        let response = [
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            )
+            .into_bytes(),
+            body,
+        ]
+        .concat();
+        let url = spawn_feed_server(response, false);
+
+        fetch_feed_bounded(&url)
+            .await
+            .expect("a lossy-decodable feed with one bad byte must not hard-fail");
     }
 }
