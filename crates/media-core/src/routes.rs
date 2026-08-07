@@ -2794,11 +2794,13 @@ async fn run_whisper_job(
         .map_err(|e| format!("scratch dir: {e}"))?;
 
     let args = crate::subtitles::whisper_args(input_path, &scratch, model, Some(lang));
-    let output = tokio::process::Command::new(bin)
-        .args(&args)
-        .output()
-        .await
-        .map_err(|e| format!("spawn {bin}: {e}"))?;
+    let output = match tokio::process::Command::new(bin).args(&args).output().await {
+        Ok(o) => o,
+        Err(e) => {
+            let _ = tokio::fs::remove_dir_all(&scratch).await;
+            return Err(format!("spawn {bin}: {e}"));
+        }
+    };
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let tail: String = stderr.chars().rev().take(400).collect::<String>();
@@ -2808,10 +2810,9 @@ async fn run_whisper_job(
     }
 
     let produced = crate::subtitles::whisper_output_path(&scratch, input_path);
-    tokio::fs::rename(&produced, dest)
-        .await
-        .map_err(|e| format!("move {}: {e}", produced.display()))?;
+    let rename_result = tokio::fs::rename(&produced, dest).await;
     let _ = tokio::fs::remove_dir_all(&scratch).await;
+    rename_result.map_err(|e| format!("move {}: {e}", produced.display()))?;
     Ok(())
 }
 
@@ -4677,6 +4678,91 @@ mod tests {
         // to tell "retry shortly, at capacity" from "transcoder is down".
         let v = body_json(resp).await;
         assert_eq!(v["error"], "stream_slots_exhausted");
+    }
+
+    /// Scratch-dir path `run_whisper_job` derives from the sidecar destination.
+    fn whisper_scratch_for(
+        subtitles_dir: &std::path::Path,
+        dest: &std::path::Path,
+    ) -> std::path::PathBuf {
+        subtitles_dir.join(format!(
+            ".whisper-{}",
+            dest.file_stem().unwrap().to_string_lossy()
+        ))
+    }
+
+    #[tokio::test]
+    async fn run_whisper_job_cleans_scratch_when_output_missing() {
+        // A whisper that exits 0 without writing its .vtt makes the final rename
+        // fail. The scratch dir must not survive that error path — otherwise every
+        // failed transcode leaves a `.whisper-<stem>` turd in the subtitles dir.
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("fake-whisper.sh");
+        std::fs::write(&bin, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let subtitles_dir = tmp.path().join("subs");
+        std::fs::create_dir_all(&subtitles_dir).unwrap();
+        let input = tmp.path().join("movie.mkv");
+        std::fs::write(&input, b"bytes").unwrap();
+        let dest = subtitles_dir.join("movie.1.en.whisper.vtt");
+        let scratch = whisper_scratch_for(&subtitles_dir, &dest);
+
+        let err = super::run_whisper_job(
+            bin.to_str().unwrap(),
+            None,
+            input.to_str().unwrap(),
+            &subtitles_dir,
+            &dest,
+            "en",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            err.starts_with("move "),
+            "expected rename failure, got: {err}"
+        );
+        assert!(!dest.exists(), "no sidecar should be published");
+        assert!(
+            !scratch.exists(),
+            "scratch dir leaked after rename failure: {}",
+            scratch.display()
+        );
+    }
+
+    #[tokio::test]
+    async fn run_whisper_job_cleans_scratch_when_spawn_fails() {
+        // Same invariant on the earlier exit: a missing/unexecutable WHISPER_BIN
+        // must not leave the scratch dir it just created behind.
+        let tmp = tempfile::tempdir().unwrap();
+        let subtitles_dir = tmp.path().join("subs");
+        std::fs::create_dir_all(&subtitles_dir).unwrap();
+        let dest = subtitles_dir.join("movie.2.en.whisper.vtt");
+        let scratch = whisper_scratch_for(&subtitles_dir, &dest);
+        let missing_bin = tmp.path().join("no-such-whisper");
+
+        let err = super::run_whisper_job(
+            missing_bin.to_str().unwrap(),
+            None,
+            "/lib/movie.mkv",
+            &subtitles_dir,
+            &dest,
+            "en",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            err.starts_with("spawn "),
+            "expected spawn failure, got: {err}"
+        );
+        assert!(
+            !scratch.exists(),
+            "scratch dir leaked after spawn failure: {}",
+            scratch.display()
+        );
     }
 
     async fn seed_show_with_episodes(state: &AppState, n: i64) {
