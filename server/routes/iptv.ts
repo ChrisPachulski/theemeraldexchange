@@ -75,6 +75,7 @@ import {
   fetchAndRewriteHlsPlaylist,
   proxyRangeableUpstream,
 } from '../services/iptvHlsProxy.js'
+import { parseSegmentOwner } from '../services/iptvHlsRewrite.js'
 import { getSyncJob, startSyncJob } from '../services/iptvSyncJobs.js'
 import {
   channelArchiveRow,
@@ -1399,7 +1400,16 @@ iptv.get('/stream/vod/:streamId/:ext', async (c) => {
   const creds = credsFromEnv()
   const upstreamUrl = `${creds.host}/movie/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${streamId}.${ext}`
   if (ext === 'm3u8') {
-    return await fetchAndRewriteHlsPlaylist({ upstreamUrl, sub: v.sub, clientSignal: c.req.raw.signal })
+    // b5fa8293: an HLS VOD never comes back to this route — hls.js fetches the
+    // VOD playlist once (#EXT-X-ENDLIST ⇒ no reload) and then talks only to
+    // /stream/segment. Tag the rewritten URLs with this grant so those fetches
+    // heartbeat the slot the heartbeat above can no longer reach.
+    return await fetchAndRewriteHlsPlaylist({
+      upstreamUrl,
+      sub: v.sub,
+      clientSignal: c.req.raw.signal,
+      owner: { kind: 'vod', id: streamId },
+    })
   }
 
   const mime = ext === 'mkv' ? 'video/x-matroska' : 'video/mp4'
@@ -1496,7 +1506,14 @@ iptv.get('/stream/series/:episodeId/:ext', async (c) => {
   const creds = credsFromEnv()
   const upstreamUrl = `${creds.host}/series/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${episodeId}.${ext}`
   if (ext === 'm3u8') {
-    return await fetchAndRewriteHlsPlaylist({ upstreamUrl, sub: v.sub, clientSignal: c.req.raw.signal })
+    // b5fa8293 — same as VOD: the segment fetches are the only signal that this
+    // episode is still playing, so they must carry the grant they belong to.
+    return await fetchAndRewriteHlsPlaylist({
+      upstreamUrl,
+      sub: v.sub,
+      clientSignal: c.req.raw.signal,
+      owner: { kind: 'series', id: episodeId },
+    })
   }
 
   const mime = ext === 'mkv' ? 'video/x-matroska' : 'video/mp4'
@@ -1526,6 +1543,17 @@ iptv.get('/stream/segment', async (c) => {
   const segReplay = checkReplay(claims.jti, claims.exp, 'segment')
   if (!segReplay.allowed) return c.json({ error: segReplay.reason }, 401)
 
+  // b5fa8293: for HLS VOD/series this route IS the playback — the owning
+  // /stream/vod|series/:id/m3u8 route runs once and never again, so without
+  // this the grant's slot was idle-swept ~30s into a movie and the
+  // IPTV_MAX_CONCURRENT_STREAMS cap silently stopped counting an active
+  // viewer (the same defect already fixed for remux, live and progressive).
+  // `sub` comes from the verified token, so a tampered ok/oid can only ever
+  // touch the caller's own sessions; parseSegmentOwner still rejects any tag
+  // that isn't a well-formed vod/series id before it reaches the tracker.
+  const owner = parseSegmentOwner(c.req.query('ok'), c.req.query('oid'))
+  if (owner) streamConcurrency().heartbeatByResource(claims.sub, owner.kind, owner.id)
+
   const upstream = claims.rid
   let url: URL
   try {
@@ -1549,10 +1577,13 @@ iptv.get('/stream/segment', async (c) => {
   }
 
   if (url.pathname.toLowerCase().endsWith('.m3u8')) {
+    // Carry the owner down the master → variant → media-segment chain, or the
+    // heartbeat dies one level below the master playlist.
     return await fetchAndRewriteHlsPlaylist({
       upstreamUrl: upstream,
       sub: claims.sub,
       clientSignal: c.req.raw.signal,
+      owner,
     })
   }
 
