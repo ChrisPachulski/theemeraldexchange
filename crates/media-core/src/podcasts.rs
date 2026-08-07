@@ -403,15 +403,11 @@ mod tests {
         assert_eq!(parse_itunes_duration("abc"), None);
     }
 
-    /// A hostile/compromised feed_url must not be able to exhaust memory by
-    /// streaming an unbounded body. This server sends just over the cap and
-    /// then, crucially, neither declares a `Content-Length` nor closes the
-    /// connection — an implementation that buffers to EOF (the old `.text()`
-    /// behavior) would hang forever waiting for a body-end signal that never
-    /// arrives. The running byte-counter must bail as soon as it crosses the
-    /// cap, so this resolves well inside the timeout.
-    #[tokio::test]
-    async fn fetch_feed_rejects_oversized_body_without_waiting_for_eof() {
+    /// Serve one raw HTTP response on an ephemeral port and hand back its URL.
+    /// When `hold_open`, the socket is deliberately never closed — a caller
+    /// that needs EOF to make a decision will hang, which is exactly what the
+    /// size-cap tests below are proving does *not* happen.
+    fn spawn_feed_server(response: Vec<u8>, hold_open: bool) -> String {
         use std::io::{Read, Write};
         use std::net::TcpListener;
 
@@ -424,25 +420,87 @@ mod tests {
             };
             let mut discard = [0u8; 1024];
             let _ = stream.read(&mut discard);
-            let _ = stream.write_all(b"HTTP/1.0 200 OK\r\nContent-Type: text/xml\r\n\r\n");
-            let body = vec![b'a'; MAX_FEED_BYTES + 1024];
-            let _ = stream.write_all(&body);
-            // Deliberately never close the socket or send more: proves the
-            // caller didn't need EOF to decide the body was too large.
-            loop {
-                std::thread::park();
+            let _ = stream.write_all(&response);
+            if hold_open {
+                loop {
+                    std::thread::park();
+                }
             }
         });
 
-        let url = format!("http://{addr}/feed.xml");
-        let result = tokio::time::timeout(std::time::Duration::from_secs(10), fetch_feed(&url))
-            .await
-            .expect("fetch_feed must bail on oversize body instead of waiting for EOF");
+        format!("http://{addr}/feed.xml")
+    }
 
-        let err = result.expect_err("oversized feed body must be rejected");
+    /// `fetch_feed` against `url`, failing the test rather than hanging if it
+    /// does not settle. The budget is deliberately shorter than `fetch_feed`'s
+    /// own 15s client timeout, so "bailed on the size cap" cannot be confused
+    /// with "gave up when the request timed out".
+    async fn fetch_feed_bounded(url: &str) -> Result<Feed, String> {
+        tokio::time::timeout(std::time::Duration::from_secs(5), fetch_feed(url))
+            .await
+            .expect("fetch_feed must settle on its own, not stall until the request timeout")
+    }
+
+    fn assert_size_cap_error(err: &str) {
         assert!(
             err.contains("exceeds") && err.contains("byte limit"),
-            "unexpected error: {err}"
+            "expected a size-cap rejection, got: {err}"
         );
+    }
+
+    /// A hostile/compromised feed_url must not be able to exhaust memory by
+    /// streaming an unbounded body. This server sends just over the cap and
+    /// then, crucially, neither declares a `Content-Length` nor closes the
+    /// connection — an implementation that buffers to EOF (the old `.text()`
+    /// behavior) would hang forever waiting for a body-end signal that never
+    /// arrives. The running byte-counter must bail as soon as it crosses the
+    /// cap, so this resolves well inside the budget.
+    #[tokio::test]
+    async fn fetch_feed_rejects_oversized_body_without_waiting_for_eof() {
+        let mut response = b"HTTP/1.0 200 OK\r\nContent-Type: text/xml\r\n\r\n".to_vec();
+        response.extend(std::iter::repeat_n(b'a', MAX_FEED_BYTES + 1024));
+        let url = spawn_feed_server(response, true);
+
+        let err = fetch_feed_bounded(&url)
+            .await
+            .expect_err("oversized feed body must be rejected");
+        assert_size_cap_error(&err);
+    }
+
+    /// The other half of the guard: when the server *declares* an oversized
+    /// body up front, the preflight must reject on the header alone. This
+    /// server sends a 26 MiB `Content-Length` and then not a single body byte,
+    /// so the only way to settle inside the budget is to have never started
+    /// reading the body — deleting the `content_length()` preflight makes this
+    /// stall until the request timeout instead.
+    #[tokio::test]
+    async fn fetch_feed_rejects_declared_oversized_content_length_before_reading_body() {
+        let declared = MAX_FEED_BYTES + 1;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nContent-Length: {declared}\r\n\r\n"
+        );
+        let url = spawn_feed_server(response.into_bytes(), true);
+
+        let err = fetch_feed_bounded(&url)
+            .await
+            .expect_err("a declared oversized Content-Length must be rejected");
+        assert_size_cap_error(&err);
+    }
+
+    /// The cap must not break the normal path: an ordinary under-cap feed
+    /// still streams through the byte-counter and parses identically to
+    /// feeding the same XML straight to `parse_rss`.
+    #[tokio::test]
+    async fn fetch_feed_accepts_and_parses_an_under_cap_feed() {
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nContent-Length: {}\r\n\r\n{SAMPLE}",
+            SAMPLE.len()
+        );
+        let url = spawn_feed_server(response.into_bytes(), false);
+
+        let feed = fetch_feed_bounded(&url)
+            .await
+            .expect("an under-cap feed must fetch and parse");
+        assert_eq!(feed, parse_rss(SAMPLE).unwrap());
     }
 }
