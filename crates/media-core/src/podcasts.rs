@@ -7,6 +7,7 @@ use quick_xml::events::Event;
 
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
+use crate::ssrf_guard;
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Feed {
@@ -210,25 +211,49 @@ pub fn parse_rss(xml: &str) -> Result<Feed, String> {
     Ok(feed)
 }
 
-/// Fetch and parse a feed URL (http/https only).
+/// Fetch and parse a feed URL. The URL is household-supplied, so every hop —
+/// the original and each `Location` — must clear [`ssrf_guard::guard_url`]
+/// before we connect. Redirects are followed by hand (the client is built with
+/// `Policy::none()`) precisely so an upstream 30x into the internal network is
+/// re-checked here instead of chased blindly by reqwest.
 pub async fn fetch_feed(url: &str) -> Result<Feed, String> {
-    if !(url.starts_with("http://") || url.starts_with("https://")) {
-        return Err("feed_url must be http(s)".to_string());
-    }
+    let mut current =
+        reqwest::Url::parse(url.trim()).map_err(|_| "feed_url must be http(s)".to_string())?;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| e.to_string())?;
-    let xml = client
-        .get(url)
-        .header("User-Agent", "theemeraldexchange v1")
-        .send()
-        .await
-        .map_err(|e| format!("feed fetch failed: {e}"))?
-        .text()
-        .await
-        .map_err(|e| format!("feed body failed: {e}"))?;
-    parse_rss(&xml)
+
+    for _ in 0..=ssrf_guard::MAX_REDIRECTS {
+        ssrf_guard::guard_url(&current).await?;
+        let res = client
+            .get(current.clone())
+            .header("User-Agent", "theemeraldexchange v1")
+            .send()
+            .await
+            .map_err(|e| format!("feed fetch failed: {e}"))?;
+        if res.status().is_redirection() {
+            let location = res
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .ok_or_else(|| "feed fetch failed: redirect without location".to_string())?;
+            current = current
+                .join(location)
+                .map_err(|_| format!("feed fetch failed: bad redirect target: {location}"))?;
+            continue;
+        }
+        let xml = res
+            .text()
+            .await
+            .map_err(|e| format!("feed body failed: {e}"))?;
+        return parse_rss(&xml);
+    }
+    Err(format!(
+        "feed fetch failed: too many redirects (>{})",
+        ssrf_guard::MAX_REDIRECTS
+    ))
 }
 
 /// Write a fetched feed's channel + episodes for `podcast_id`. Episodes upsert

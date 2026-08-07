@@ -4082,6 +4082,80 @@ mod tests {
         assert_eq!(del.status(), StatusCode::NOT_FOUND);
     }
 
+    /// SSRF: `feed_url` is typed in by any household member, so an internal
+    /// address must be refused BEFORE a socket is opened.
+    ///
+    /// The gate is the connection counter on a real loopback listener, not the
+    /// status code — an UNGUARDED media-core also 400s here (a refused or
+    /// timed-out fetch is still a fetch error), so `accepted == 0` is the only
+    /// assertion that actually distinguishes "blocked" from "tried and failed".
+    /// The listener accepts and never replies, so an unguarded run additionally
+    /// blows the elapsed bound waiting out the 15s client timeout.
+    #[tokio::test]
+    async fn podcast_feed_url_cannot_reach_internal_addresses() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let state = test_state().await;
+        let app = crate::build_router(state);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let counter = accepted.clone();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                counter.fetch_add(1, Ordering::SeqCst);
+                held.push(stream); // hold it open; never answer
+            }
+        });
+
+        let started = std::time::Instant::now();
+        for feed_url in [
+            format!("http://127.0.0.1:{port}/feed.xml"), // loopback, listening
+            "http://169.254.169.254/latest/meta-data/".to_string(), // cloud metadata
+            "http://[::1]:8080/feed.xml".to_string(),    // v6 loopback literal
+            "http://10.0.0.7/feed.xml".to_string(),      // RFC-1918
+            "http://theemeraldexchange.local/feed.xml".to_string(), // LAN suffix
+            "http://media-core/feed.xml".to_string(),    // compose service DNS
+        ] {
+            let res = app
+                .clone()
+                .oneshot(json_req(
+                    "POST",
+                    "/api/media/podcasts?sub=plex:1",
+                    json!({ "feed_url": feed_url }).to_string(),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(
+                res.status(),
+                StatusCode::BAD_REQUEST,
+                "{feed_url} should be rejected"
+            );
+        }
+
+        assert_eq!(
+            accepted.load(Ordering::SeqCst),
+            0,
+            "guard must reject from the URL alone — no connection attempt"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "rejection must be immediate, not a connect/read timeout (took {:?})",
+            started.elapsed()
+        );
+
+        // And none of them got stored.
+        let list = body_json(
+            app.oneshot(req("GET", "/api/media/podcasts?sub=plex:1"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(list["items"].as_array().unwrap().len(), 0);
+    }
+
     #[tokio::test]
     async fn subtitle_endpoints_gate_on_unconfigured_features() {
         let state = test_state().await;
