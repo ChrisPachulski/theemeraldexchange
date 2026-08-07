@@ -250,7 +250,7 @@ pub async fn fetch_feed(url: &str) -> Result<Feed, String> {
             return Err(format!("feed body exceeds {MAX_FEED_BYTES} byte limit"));
         }
     }
-    let xml = String::from_utf8(body).map_err(|e| format!("feed body not utf-8: {e}"))?;
+    let xml = String::from_utf8_lossy(&body).into_owned();
     parse_rss(&xml)
 }
 
@@ -502,5 +502,31 @@ mod tests {
             .await
             .expect("an under-cap feed must fetch and parse");
         assert_eq!(feed, parse_rss(SAMPLE).unwrap());
+    }
+
+    /// A feed with a stray non-UTF-8 byte (common mojibake in the wild) must
+    /// still parse via lossy replacement, not hard-fail -- matches this same
+    /// file's own `from_utf8_lossy` convention in `parse_rss`'s CDATA path.
+    #[tokio::test]
+    async fn fetch_feed_tolerates_non_utf8_bytes_via_lossy_decode() {
+        let mut body = SAMPLE.replace("Test Podcast", "Caf\u{e9} Show").into_bytes();
+        // Replace the (already-invalid-UTF-8-safe) marker with a raw latin-1 0xE9 byte.
+        if let Some(pos) = body.windows(2).position(|w| w == [0xC3, 0xA9]) {
+            body.splice(pos..pos + 2, [0xE9]);
+        }
+        let response = [
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            )
+            .into_bytes(),
+            body,
+        ]
+        .concat();
+        let url = spawn_feed_server(response, false);
+
+        fetch_feed_bounded(&url)
+            .await
+            .expect("a lossy-decodable feed with one bad byte must not hard-fail");
     }
 }
