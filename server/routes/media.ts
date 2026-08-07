@@ -159,6 +159,23 @@ async function mediaAuth(c: Context<Env>, next: Next) {
     }
     return next()
   }
+  // Sidecar subtitles carry the title's dialogue verbatim — a capped profile
+  // reading /subtitles/movie/:id/file gets the content the rating cap denies,
+  // and /download + /transcribe additionally spend upstream quota/CPU on a
+  // blocked title. All four sidecar routes (list, /file, /download,
+  // /transcribe) share the `/subtitles/{kind}/{id}` prefix, so one guard here
+  // covers them uniformly; `/subtitles/status` never matches (its first segment
+  // is 'status', not movie|episode) and stays open, as it carries no content.
+  const subsMatch = subpath.match(/^\/subtitles\/(movie|episode)\/([^/?]+)/)
+  if (subsMatch) {
+    const authDenied = await requireAuth(c, async () => {})
+    if (authDenied) return authDenied
+    const kind = subsMatch[1] as 'movie' | 'episode'
+    if (await ratingBlocked(c.get('session'), kind, Number(subsMatch[2]))) {
+      return c.json({ error: 'rating_blocked' }, 403)
+    }
+    return next()
+  }
   return requireAuth(c, next)
 }
 
