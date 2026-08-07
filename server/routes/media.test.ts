@@ -324,6 +324,81 @@ describe('media proxy route', () => {
     expect(mockRatingBlocked).not.toHaveBeenCalled()
   })
 
+  it('403s a capped GET /subtitles/movie/:id/file (dialogue is the blocked content)', async () => {
+    // Mirrors the /stream cap test: the sidecar .vtt carries the title's
+    // dialogue verbatim, so serving it to a capped profile leaks exactly what
+    // the cap denies. It rode the catch-all proxy with auth only.
+    ratingState.blocked = true
+    mockFetch.mockResolvedValue(new Response('WEBVTT\n\n00:00.000 --> 00:02.000\nline', { status: 200 }))
+
+    const res = await media.request('/subtitles/movie/7/file?language=en&source=os', {
+      method: 'GET',
+      headers: { host: 'localhost' },
+    })
+
+    expect(res.status).toBe(403)
+    expect((await res.json()) as { error: string }).toEqual({ error: 'rating_blocked' })
+    // The cue text must never leave the box.
+    expect(mockFetch).not.toHaveBeenCalled()
+    expect(mockRatingBlocked).toHaveBeenCalledWith(
+      expect.objectContaining({ sub: 'plex:42' }),
+      'movie',
+      7,
+    )
+  })
+
+  // All four sidecar routes share the `/subtitles/{kind}/{id}` prefix, so the
+  // single prefix guard must cover list/file/download/transcribe alike — the
+  // write paths also spend OpenSubtitles quota / Whisper CPU on a blocked title.
+  it.each([
+    ['/subtitles/movie/7', 'GET', 'movie', 7],
+    ['/subtitles/movie/7/download', 'POST', 'movie', 7],
+    ['/subtitles/episode/99/transcribe', 'POST', 'episode', 99],
+    ['/subtitles/episode/99/file', 'GET', 'episode', 99],
+  ] as const)('403s a capped %s (%s)', async (path, method, kind, id) => {
+    ratingState.blocked = true
+    mockFetch.mockResolvedValue(new Response('{}', { status: 200 }))
+
+    const res = await media.request(path, { method, headers: { host: 'localhost' } })
+
+    expect(res.status).toBe(403)
+    expect(mockFetch).not.toHaveBeenCalled()
+    expect(mockRatingBlocked).toHaveBeenCalledWith(expect.anything(), kind, id)
+  })
+
+  it('still proxies /subtitles/movie/:id/file when the cap allows it', async () => {
+    // The guard must not become a blanket block on the sidecar routes.
+    ratingState.blocked = false
+    mockFetch.mockResolvedValue(
+      new Response('WEBVTT', { status: 200, headers: { 'Content-Type': 'text/vtt' } }),
+    )
+
+    const res = await media.request('/subtitles/movie/7/file?language=en', {
+      method: 'GET',
+      headers: { host: 'localhost' },
+    })
+
+    expect(res.status).toBe(200)
+    expect(String(mockFetch.mock.calls[0][0])).toBe(
+      'http://media-core.test/api/media/subtitles/movie/7/file?language=en',
+    )
+  })
+
+  it('leaves /subtitles/status off the rating gate', async () => {
+    // The job-status poll carries no title content and has no {kind}/{id} to
+    // resolve — 'status' must never be read as a media kind.
+    ratingState.blocked = true
+    mockFetch.mockResolvedValue(new Response('{"job":null}', { status: 200 }))
+
+    const res = await media.request('/subtitles/status', {
+      method: 'GET',
+      headers: { host: 'localhost' },
+    })
+
+    expect(res.status).toBe(200)
+    expect(mockRatingBlocked).not.toHaveBeenCalled()
+  })
+
   it('forwards POST body and content-type', async () => {
     mockFetch.mockResolvedValue(new Response('ok', { status: 200 }))
 
