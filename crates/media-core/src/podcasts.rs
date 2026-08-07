@@ -210,7 +210,14 @@ pub fn parse_rss(xml: &str) -> Result<Feed, String> {
     Ok(feed)
 }
 
-/// Fetch and parse a feed URL (http/https only).
+/// Hard ceiling on a fetched feed body, mirroring the size-bound intent of
+/// `server/services/parseLimitedJson.ts` — a malicious/compromised feed_url
+/// must not be able to exhaust memory via an unbounded response body.
+const MAX_FEED_BYTES: usize = 25 * 1024 * 1024;
+
+/// Fetch and parse a feed URL (http/https only). Streams the body with a
+/// running byte counter and bails out the moment `MAX_FEED_BYTES` is
+/// crossed, rather than buffering the whole response via `.text()`.
 pub async fn fetch_feed(url: &str) -> Result<Feed, String> {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err("feed_url must be http(s)".to_string());
@@ -219,15 +226,31 @@ pub async fn fetch_feed(url: &str) -> Result<Feed, String> {
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| e.to_string())?;
-    let xml = client
+    let mut resp = client
         .get(url)
         .header("User-Agent", "theemeraldexchange v1")
         .send()
         .await
-        .map_err(|e| format!("feed fetch failed: {e}"))?
-        .text()
+        .map_err(|e| format!("feed fetch failed: {e}"))?;
+
+    if let Some(len) = resp.content_length()
+        && len as usize > MAX_FEED_BYTES
+    {
+        return Err(format!("feed body exceeds {MAX_FEED_BYTES} byte limit"));
+    }
+
+    let mut body = Vec::new();
+    while let Some(chunk) = resp
+        .chunk()
         .await
-        .map_err(|e| format!("feed body failed: {e}"))?;
+        .map_err(|e| format!("feed body failed: {e}"))?
+    {
+        body.extend_from_slice(&chunk);
+        if body.len() > MAX_FEED_BYTES {
+            return Err(format!("feed body exceeds {MAX_FEED_BYTES} byte limit"));
+        }
+    }
+    let xml = String::from_utf8(body).map_err(|e| format!("feed body not utf-8: {e}"))?;
     parse_rss(&xml)
 }
 
@@ -378,5 +401,48 @@ mod tests {
         assert_eq!(parse_itunes_duration("1:02:03"), Some(3723));
         assert_eq!(parse_itunes_duration(""), None);
         assert_eq!(parse_itunes_duration("abc"), None);
+    }
+
+    /// A hostile/compromised feed_url must not be able to exhaust memory by
+    /// streaming an unbounded body. This server sends just over the cap and
+    /// then, crucially, neither declares a `Content-Length` nor closes the
+    /// connection — an implementation that buffers to EOF (the old `.text()`
+    /// behavior) would hang forever waiting for a body-end signal that never
+    /// arrives. The running byte-counter must bail as soon as it crosses the
+    /// cap, so this resolves well inside the timeout.
+    #[tokio::test]
+    async fn fetch_feed_rejects_oversized_body_without_waiting_for_eof() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut discard = [0u8; 1024];
+            let _ = stream.read(&mut discard);
+            let _ = stream.write_all(b"HTTP/1.0 200 OK\r\nContent-Type: text/xml\r\n\r\n");
+            let body = vec![b'a'; MAX_FEED_BYTES + 1024];
+            let _ = stream.write_all(&body);
+            // Deliberately never close the socket or send more: proves the
+            // caller didn't need EOF to decide the body was too large.
+            loop {
+                std::thread::park();
+            }
+        });
+
+        let url = format!("http://{addr}/feed.xml");
+        let result = tokio::time::timeout(std::time::Duration::from_secs(10), fetch_feed(&url))
+            .await
+            .expect("fetch_feed must bail on oversize body instead of waiting for EOF");
+
+        let err = result.expect_err("oversized feed body must be rejected");
+        assert!(
+            err.contains("exceeds") && err.contains("byte limit"),
+            "unexpected error: {err}"
+        );
     }
 }
