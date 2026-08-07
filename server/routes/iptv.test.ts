@@ -106,10 +106,12 @@ const concurrencyState = vi.hoisted(() => {
     lastSeen: number
   }> = []
   const releasedByResource: Array<{ sub: string; kind: string; resourceId: string }> = []
+  const heartbeatsByResource: Array<{ sub: string; kind: string; resourceId: string }> = []
 
   return {
     sessions,
     releasedByResource,
+    heartbeatsByResource,
     tracker: {
       tryAcquire: ({ sub, sessionId, kind, resourceId, ip, title }: {
         sub: string
@@ -133,7 +135,10 @@ const concurrencyState = vi.hoisted(() => {
         return { ok: true, sessionId }
       },
       heartbeat: () => {},
-      heartbeatByResource: () => true,
+      heartbeatByResource: (sub: string, kind: string, resourceId: string) => {
+        heartbeatsByResource.push({ sub, kind, resourceId })
+        return true
+      },
       release: (sessionId: string) => {
         const index = sessions.findIndex((session) => session.sessionId === sessionId)
         if (index !== -1) sessions.splice(index, 1)
@@ -262,6 +267,7 @@ beforeEach(() => {
   tokenState.sub = 'plex:42'
   concurrencyState.sessions.length = 0
   concurrencyState.releasedByResource.length = 0
+  concurrencyState.heartbeatsByResource.length = 0
   dbState.testDb?.raw.exec('DELETE FROM iptv_playlist_tokens;')
 })
 
@@ -1879,6 +1885,153 @@ describe('segment proxy', () => {
     expect(res.status).not.toBe(400)
     expect(fetchSpy).toHaveBeenCalled()
     fetchSpy.mockRestore()
+  })
+})
+
+// BACKLOG b5fa8293 — HLS VOD/series playback never heartbeat its concurrency
+// slot past the FIRST manifest request. `/stream/vod|series/:id/m3u8` runs once
+// (a VOD playlist ends with #EXT-X-ENDLIST, so hls.js never reloads it) and
+// every byte afterwards is fetched from `/stream/segment`, which had no idea
+// which grant it belonged to and heartbeat nothing. The slot went idle ~30s into
+// a movie and was swept, so IPTV_MAX_CONCURRENT_STREAMS silently stopped
+// counting an actively-playing viewer — the exact defect already fixed for
+// remux (finding 8-1), live and the progressive byte routes.
+describe('HLS on-demand concurrency heartbeat (b5fa8293)', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+
+  const segUrl = (upstream: string, ownerQuery = '') =>
+    `/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', upstream))}${ownerQuery}`
+
+  // Fresh Response per call: the route pipes upstream.body, which a single
+  // shared Response would only allow to be consumed once.
+  const mockUpstream = (body: () => string, init?: ResponseInit) =>
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(body(), { status: 200, ...init }))
+
+  const segmentLines = (text: string) =>
+    text.split('\n').filter((line) => line.includes('/api/iptv/stream/segment'))
+
+  it('tags every rewritten URL in a VOD manifest with its owning grant', async () => {
+    const fetchSpy = mockUpstream(() => [
+      '#EXTM3U',
+      '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="en",URI="subs/en.m3u8"',
+      '#EXT-X-STREAM-INF:BANDWIDTH=1280000',
+      'level1.m3u8',
+      '#EXTINF:6.0,',
+      'seg-001.ts',
+    ].join('\n'))
+    try {
+      const res = await app.request(`/api/iptv/stream/vod/20/m3u8?t=${fakeToken('vod', '20')}`)
+      expect(res.status).toBe(200)
+      const lines = segmentLines(await res.text())
+      // Sub-playlists, the EXT-X-MEDIA URI attribute AND media segments must all
+      // carry the tag — a variant that loses it takes every segment below it.
+      expect(lines).toHaveLength(3)
+      for (const line of lines) expect(line).toContain('&ok=vod&oid=20')
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it('tags every rewritten URL in a series manifest with its owning episode', async () => {
+    const fetchSpy = mockUpstream(() => ['#EXTM3U', '#EXTINF:6.0,', 'seg-001.ts'].join('\n'))
+    try {
+      const res = await app.request(`/api/iptv/stream/series/ep-1/m3u8?t=${fakeToken('series', 'ep-1')}`)
+      expect(res.status).toBe(200)
+      expect(segmentLines(await res.text())).toEqual([
+        expect.stringContaining('&ok=series&oid=ep-1'),
+      ])
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  // THE regression: pre-fix this array stayed empty no matter how long playback
+  // ran, which is what let the idle sweep reclaim a live viewer's slot.
+  it('heartbeats the owning VOD grant on EVERY segment fetch, not just the manifest', async () => {
+    const fetchSpy = mockUpstream(() => 'seg', { headers: { 'content-type': 'video/mp2t' } })
+    try {
+      for (let i = 0; i < 3; i++) {
+        const res = await app.request(segUrl(`https://cdn.example.com/foo/seg-00${i}.ts`, '&ok=vod&oid=20'))
+        expect(res.status).toBe(200)
+      }
+      expect(concurrencyState.heartbeatsByResource).toEqual([
+        { sub: 'plex:42', kind: 'vod', resourceId: '20' },
+        { sub: 'plex:42', kind: 'vod', resourceId: '20' },
+        { sub: 'plex:42', kind: 'vod', resourceId: '20' },
+      ])
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it('carries the owner through the master → variant → media-segment recursion', async () => {
+    const fetchSpy = mockUpstream(() => ['#EXTM3U', '#EXTINF:6.0,', 'seg.ts'].join('\n'))
+    try {
+      const res = await app.request(
+        segUrl('https://cdn.example.com/foo/level1.m3u8', '&ok=series&oid=ep-1'),
+      )
+      expect(res.status).toBe(200)
+      // The variant fetch itself heartbeats...
+      expect(concurrencyState.heartbeatsByResource).toEqual([
+        { sub: 'plex:42', kind: 'series', resourceId: 'ep-1' },
+      ])
+      // ...and the media segments it emits still carry the tag one level down.
+      expect(segmentLines(await res.text())).toEqual([
+        expect.stringContaining('&ok=series&oid=ep-1'),
+      ])
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it('ignores an absent or malformed owner tag instead of writing it to the tracker', async () => {
+    const fetchSpy = mockUpstream(() => 'seg', { headers: { 'content-type': 'video/mp2t' } })
+    try {
+      for (const q of [
+        '', // untagged (live remux + any legacy URL still in flight)
+        '&ok=vod', // kind without id
+        '&oid=20', // id without kind
+        '&ok=live&oid=10', // not an on-demand kind — live has its own heartbeat
+        '&ok=remux&oid=10',
+        '&ok=catchup&oid=10',
+        `&ok=vod&oid=${encodeURIComponent('../../etc/passwd')}`,
+        `&ok=vod&oid=${encodeURIComponent("20' OR 1=1")}`,
+      ]) {
+        const res = await app.request(segUrl('https://cdn.example.com/foo/seg.ts', q))
+        expect(res.status, `owner query ${q || '(none)'}`).toBe(200)
+      }
+      expect(concurrencyState.heartbeatsByResource).toEqual([])
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it('does not heartbeat when the segment token itself is rejected', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    const res = await app.request('/api/iptv/stream/segment?u=bogus&ok=vod&oid=20')
+    expect(res.status).toBe(401)
+    expect(concurrencyState.heartbeatsByResource).toEqual([])
+    expect(fetchSpy).not.toHaveBeenCalled()
+    fetchSpy.mockRestore()
+  })
+
+  // The tag is not a capability: `sub` is taken from the verified token, so the
+  // worst a forged ok/oid can do is keep the CALLER'S OWN session alive.
+  it('attributes the heartbeat to the signed token sub, never to a client-supplied one', async () => {
+    tokenState.sub = 'plex:99'
+    const fetchSpy = mockUpstream(() => 'seg', { headers: { 'content-type': 'video/mp2t' } })
+    try {
+      const res = await app.request(
+        segUrl('https://cdn.example.com/foo/seg.ts', '&ok=vod&oid=20&sub=plex%3A42'),
+      )
+      expect(res.status).toBe(200)
+      expect(concurrencyState.heartbeatsByResource).toEqual([
+        { sub: 'plex:99', kind: 'vod', resourceId: '20' },
+      ])
+    } finally {
+      tokenState.sub = 'plex:42'
+      fetchSpy.mockRestore()
+    }
   })
 })
 

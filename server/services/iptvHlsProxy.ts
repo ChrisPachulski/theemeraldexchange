@@ -6,7 +6,7 @@
 // always produced), so they are unit-testable without a router.
 
 import { env } from '../env.js'
-import { rewriteManifest } from './iptvHlsRewrite.js'
+import { rewriteManifest, type SegmentOwner } from './iptvHlsRewrite.js'
 import { signStreamToken } from './iptvStreamToken.js'
 import {
   isPublicUpstream,
@@ -69,11 +69,18 @@ export async function readBoundedText(res: Response, maxBytes: number): Promise<
  * drip-feeding upstream cannot pin the request open, and a client that
  * gives up tears the upstream fetch down with it (matching the live/
  * segment byte paths, which propagate the request signal).
+ *
+ * `owner` tags every rewritten URL with the grant this playback belongs
+ * to so the segment route can heartbeat its concurrency slot (b5fa8293).
+ * It MUST be threaded through the sub-playlist recursion — a master
+ * playlist's variants are themselves fetched via /stream/segment, and a
+ * dropped tag there loses the heartbeat for every media segment below it.
  */
 export async function fetchAndRewriteHlsPlaylist(opts: {
   upstreamUrl: string
   sub: string
   clientSignal: AbortSignal
+  owner?: SegmentOwner | null
 }): Promise<Response> {
   let parsed: URL
   try {
@@ -114,7 +121,13 @@ export async function fetchAndRewriteHlsPlaylist(opts: {
       // finite-asset TTL. Mirror the grant's playback-duration TTL.
       ttlSecs: env.IPTV_ONDEMAND_TOKEN_TTL_SECS,
     })
-  const rewritten = rewriteManifest(text, opts.upstreamUrl, sign, '/api/iptv/stream/segment')
+  const rewritten = rewriteManifest(
+    text,
+    opts.upstreamUrl,
+    sign,
+    '/api/iptv/stream/segment',
+    opts.owner,
+  )
 
   return new Response(rewritten, {
     status: 200,
