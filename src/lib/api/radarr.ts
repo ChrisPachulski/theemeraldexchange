@@ -88,6 +88,10 @@ export type RadarrQueueRecord = {
   size?: number
   title?: string
   status?: string
+  // Radarr's import-pipeline state. 'importPending'/'importBlocked' mean the
+  // download finished but Radarr can't move it into the library — these jam
+  // the queue and are what the Downloads tab surfaces + clears.
+  trackedDownloadState?: string
 }
 
 export type RadarrQueuePage = {
@@ -107,6 +111,9 @@ export const radarr = {
   removeMovie: (id: number, deleteFiles = false) =>
     del(`/movie/${id}`, { deleteFiles, addImportExclusion: false }),
   queue: () => get<RadarrQueuePage>('/queue', { pageSize: 200 }),
+  // Admin: remove + blocklist + re-search every import-jammed record.
+  clearStuck: () =>
+    post<{ removed: number }, Record<string, never>>('/queue/clear-stuck', {}),
   upgrade: (id: number) =>
     post<
       | { status: 'grabbing'; title: string; sizeGb: number; qualityWeight: number }

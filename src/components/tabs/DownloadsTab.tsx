@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { sab } from '../../lib/api/sab'
 import { sonarr } from '../../lib/api/sonarr'
+import { radarr } from '../../lib/api/radarr'
 import {
   useDownloadQueue,
   useRadarrQueue,
@@ -88,6 +89,11 @@ export function DownloadsTab() {
     mutationFn: () => sonarr.clearStuck(),
     onSettled: () => qc.invalidateQueries({ queryKey: ['sonarr', 'queue'] }),
   })
+  // Same for Radarr — movies jam in import exactly like episodes do.
+  const clearStuckRadarr = useMutation({
+    mutationFn: () => radarr.clearStuck(),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['radarr', 'queue'] }),
+  })
 
   if (queue.error) {
     return (
@@ -128,14 +134,15 @@ export function DownloadsTab() {
   )
   const pendingCount = sonarrPending.length + radarrPending.length
   const indexerWorking = idle && pendingCount > 0
-  // Finished downloads jammed in Sonarr's import stage: downloaded but never
-  // added to the library. The SAB-only queue view above can't see these, so
-  // they pile up invisibly. Surface the count + an admin clear-and-retry.
-  const stuckCount = (sonarrQueue.data?.records ?? []).filter(
-    (r) =>
-      r.trackedDownloadState === 'importPending' ||
-      r.trackedDownloadState === 'importBlocked',
-  ).length
+  // Finished downloads jammed in the Sonarr/Radarr import stage: downloaded
+  // but never added to the library. The SAB-only queue view above can't see
+  // these, so they pile up invisibly. Surface the count + an admin
+  // clear-and-retry across BOTH apps — movies jam exactly like episodes do.
+  const isImportJammed = (r: { trackedDownloadState?: string }) =>
+    r.trackedDownloadState === 'importPending' || r.trackedDownloadState === 'importBlocked'
+  const sonarrStuckCount = (sonarrQueue.data?.records ?? []).filter(isImportJammed).length
+  const radarrStuckCount = (radarrQueue.data?.records ?? []).filter(isImportJammed).length
+  const stuckCount = sonarrStuckCount + radarrStuckCount
   // The "present" item: whatever SAB is actively downloading right now.
   // Falls back to the first slot when the queue is paused / nothing has
   // started yet so the heading still surfaces the next-up filename
@@ -383,25 +390,37 @@ export function DownloadsTab() {
             <p className="downloads-tab__stuck-text">
               <strong>{stuckCount}</strong> finished{' '}
               {stuckCount === 1 ? 'download is' : 'downloads are'} stuck in import
-              (downloaded, but Sonarr couldn't add them to the library).
+              (downloaded, but couldn't be added to the library).
             </p>
             {isAdmin && (
               <button
                 type="button"
                 className="downloads-tab__stuck-btn"
-                disabled={clearStuck.isPending}
+                disabled={clearStuck.isPending || clearStuckRadarr.isPending}
                 onClick={() =>
                   confirm({
                     title: `Clear ${stuckCount} stuck ${stuckCount === 1 ? 'download' : 'downloads'}?`,
                     body: 'Removes them from the queue, blocklists the bad releases, and re-searches for replacements. This re-spends bandwidth; releases with no parseable version may jam again.',
                     confirmLabel: 'Clear and retry',
                     onConfirm: async () => {
-                      await clearStuck.mutateAsync()
+                      // Only call the apps that actually have jammed records:
+                      // Radarr is optional (Downloads is gated on SAB alone),
+                      // so an unconditional call 503s on a Radarr-less install
+                      // and masks a successful Sonarr clear behind an error.
+                      // Both fire before either is awaited, so one app being
+                      // down can't leave the other's jammed records behind;
+                      // a rejection still surfaces in the confirm modal.
+                      await Promise.all([
+                        ...(sonarrStuckCount > 0 ? [clearStuck.mutateAsync()] : []),
+                        ...(radarrStuckCount > 0 ? [clearStuckRadarr.mutateAsync()] : []),
+                      ])
                     },
                   })
                 }
               >
-                {clearStuck.isPending ? 'Clearing…' : 'Clear blocked'}
+                {clearStuck.isPending || clearStuckRadarr.isPending
+                  ? 'Clearing…'
+                  : 'Clear blocked'}
               </button>
             )}
           </div>
