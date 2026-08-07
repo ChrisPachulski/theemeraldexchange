@@ -1,5 +1,5 @@
 import { env } from '../env.js'
-import { fetchJsonWithTimeout, fetchWithTimeout } from './upstream.js'
+import { guardedFetchTrustedOrigin } from './ssrfGuard.js'
 import { normalizeEpgChannelId, type EpgProgrammeRow } from './iptvEpg.js'
 
 export interface XtreamCreds {
@@ -63,7 +63,7 @@ export function parseAccountInfo(payload: unknown): AccountInfo {
 
 export async function getAccountInfo(creds: XtreamCreds = credsFromEnv()): Promise<AccountInfo> {
   const probe = `${creds.host}/player_api.php?username=${encodeURIComponent(creds.username)}&password=${encodeURIComponent(creds.password)}`
-  const res = await fetchWithTimeout(probe, {}, env.IPTV_LIST_TIMEOUT_MS, 'xtream.account_info')
+  const res = await guardedFetchTrustedOrigin(probe, {}, { hopTimeoutMs: env.IPTV_LIST_TIMEOUT_MS })
   if (!res.ok) throw new Error(`xtream_account_${res.status}`)
   const json = (await res.json()) as unknown
   return parseAccountInfo(json)
@@ -187,8 +187,20 @@ export function parseSeriesList(raw: unknown, fetchedAt: string): SeriesRow[] {
   })
 }
 
+// Every catalog-sync call funnels through here, so routing it through the SSRF
+// egress loop covers all of them at once. The panel host itself is operator-
+// configured (trusted, and legitimately plain http on some resellers), but a
+// 30x it answers with is provider-controlled — without redirect:'manual' the
+// platform fetch would silently follow it into the compose network / link-local
+// metadata and hand the response back here to be parsed as a catalog payload.
 async function getJson(url: string, label: string): Promise<unknown> {
-  return fetchJsonWithTimeout(url, {}, env.IPTV_LIST_TIMEOUT_MS, label)
+  const res = await guardedFetchTrustedOrigin(url, {}, { hopTimeoutMs: env.IPTV_LIST_TIMEOUT_MS })
+  if (!res.ok) {
+    // Cancel the unread body before throwing so undici can pool the socket.
+    await res.body?.cancel().catch(() => {})
+    throw new Error(`${label}_${res.status}`)
+  }
+  return res.json()
 }
 
 export async function fetchCategories(
