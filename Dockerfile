@@ -31,7 +31,7 @@ ARG BUNDLE_SPA=off
 # Digest-pinned for reproducible builds. The human tag is kept for readability;
 # the digest is the source of truth. Resolve a new digest with:
 #   docker buildx imagetools inspect rust:1.96-slim-bookworm
-FROM rust:1.97-slim-bookworm@sha256:99e09cb2284e2ddbb73a995deee3e91783fd04d177602ccf6eab326d778ee777 AS napi-builder
+FROM rust:1.97-slim-bookworm@sha256:96c0af8cf054fd006435089f0076729716784ec9be485bd655de59c55df105ce AS napi-builder
 
 WORKDIR /build
 
