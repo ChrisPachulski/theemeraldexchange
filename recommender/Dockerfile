@@ -55,7 +55,7 @@ RUN /opt/maturin-venv/bin/maturin build \
       --out /wheels
 
 # ─── Stage 2: runtime image ──────────────────────────────────────────────────
-FROM python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203 AS base
+FROM python:3.13-slim@sha256:9662417aace5ae7b8e2609cce472b72a8958e134ba372808abe9cc1a0c0125e6 AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
