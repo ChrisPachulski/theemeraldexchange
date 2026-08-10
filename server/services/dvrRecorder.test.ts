@@ -81,7 +81,7 @@ class FakeRecorder implements Recorder {
     this.run.add(rec.id)
     return `/rec/${rec.id}.ts`
   }
-  stop(id: string): void {
+  async stop(id: string): Promise<void> {
     this.stopped.push(id)
     this.run.delete(id)
   }
@@ -112,14 +112,14 @@ describe('tick (fake recorder, temp iptv DB)', () => {
       NOW,
     )
 
-  it('starts due, stops finished, marks missed; sets file_path on start', () => {
+  it('starts due, stops finished, marks missed; sets file_path on start', async () => {
     const a = sched('2026-06-17T11:00:00.000Z', '2026-06-17T13:00:00.000Z')
     const b = sched('2026-06-17T10:00:00.000Z', '2026-06-17T11:30:00.000Z')
     markStatus(db.raw, b.id, 'recording', {}, NOW)
     const c = sched('2026-06-17T09:00:00.000Z', '2026-06-17T10:00:00.000Z')
 
     const rec = new FakeRecorder()
-    tick(db.raw, rec, NOW)
+    await tick(db.raw, rec, NOW)
 
     expect(rec.started).toEqual([a.id])
     expect(getRecording(db.raw, a.id)?.status).toBe('recording')
@@ -129,45 +129,45 @@ describe('tick (fake recorder, temp iptv DB)', () => {
     expect(getRecording(db.raw, c.id)?.status).toBe('missed')
   })
 
-  it('does not re-start a recording already in flight', () => {
+  it('does not re-start a recording already in flight', async () => {
     const a = sched('2026-06-17T11:00:00.000Z', '2026-06-17T13:00:00.000Z')
     markStatus(db.raw, a.id, 'recording', { file_path: `/rec/${a.id}.ts` }, NOW)
     const rec = new FakeRecorder()
     rec.markRunning(a.id)
-    tick(db.raw, rec, NOW)
+    await tick(db.raw, rec, NOW)
     expect(rec.started).toEqual([])
   })
 
-  it('resumes an open recording orphaned by a restart (running() empty)', () => {
+  it('resumes an open recording orphaned by a restart (running() empty)', async () => {
     // A backend restart mid-window leaves the row 'recording' but the in-memory
     // child is gone (fresh recorder → running() empty). tick must re-invoke
     // start for the remaining window instead of abandoning it.
     const a = sched('2026-06-17T11:00:00.000Z', '2026-06-17T13:00:00.000Z')
     markStatus(db.raw, a.id, 'recording', { file_path: `/rec/${a.id}.ts` }, NOW)
     const rec = new FakeRecorder() // running() is empty — simulates post-restart
-    tick(db.raw, rec, NOW)
+    await tick(db.raw, rec, NOW)
     expect(rec.started).toEqual([a.id])
     expect(getRecording(db.raw, a.id)?.status).toBe('recording')
   })
 
-  it('completes a resumed recording once its window finally closes', () => {
+  it('completes a resumed recording once its window finally closes', async () => {
     const a = sched('2026-06-17T11:00:00.000Z', '2026-06-17T13:00:00.000Z')
     markStatus(db.raw, a.id, 'recording', {}, NOW)
     const rec = new FakeRecorder()
     // First tick (post-restart) resumes it…
-    tick(db.raw, rec, NOW)
+    await tick(db.raw, rec, NOW)
     expect(rec.started).toEqual([a.id])
     // …a later tick past stop_utc stops + completes it.
-    tick(db.raw, rec, '2026-06-17T13:30:00.000Z')
+    await tick(db.raw, rec, '2026-06-17T13:30:00.000Z')
     expect(rec.stopped).toEqual([a.id])
     expect(getRecording(db.raw, a.id)?.status).toBe('completed')
   })
 
-  it('marks a recording failed when the recorder throws on start', () => {
+  it('marks a recording failed when the recorder throws on start', async () => {
     const a = sched('2026-06-17T11:00:00.000Z', '2026-06-17T13:00:00.000Z')
     const rec = new FakeRecorder()
     rec.throwOnStart = true
-    tick(db.raw, rec, NOW)
+    await tick(db.raw, rec, NOW)
     const row = getRecording(db.raw, a.id)
     expect(row?.status).toBe('failed')
     expect(row?.error).toContain('spawn_failed')
@@ -297,14 +297,28 @@ describe('FfmpegRecorder (mocked spawn)', () => {
     }
   })
 
-  it('stop() SIGTERMs the child; stopAll() stops every in-flight recording', () => {
+  it('stop() SIGTERMs the child and resolves only on the real exit', async () => {
     const rec = new FfmpegRecorder(dir, db.raw, () => Date.parse(NOW))
     const row = recordingRow()
     rec.start(row)
     const child = spawnMock.mock.results[0].value as FakeChild
-    rec.stop(row.id)
+
+    const stopped = rec.stop(row.id)
     expect(child.kill).toHaveBeenCalledWith('SIGTERM')
-    rec.stop('unknown-id') // no throw on a missing child
+    // Still pending: ffmpeg is flushing and closing the .ts after the signal.
+    let settled = false
+    void stopped.then(() => {
+      settled = true
+    })
+    await new Promise((r) => setImmediate(r))
+    expect(settled).toBe(false)
+
+    child.emit('exit', null, 'SIGTERM')
+    await expect(stopped).resolves.toBeUndefined()
+
+    // An unknown/already-exited id resolves immediately instead of hanging.
+    await expect(rec.stop('unknown-id')).resolves.toBeUndefined()
+    await expect(rec.stop(row.id)).resolves.toBeUndefined() // child already gone
     rec.stopAll()
   })
 
@@ -329,7 +343,7 @@ describe('FfmpegRecorder (mocked spawn)', () => {
       const row = recordingRow()
       rec.start(row)
       const child = spawnMock.mock.results[0].value as FakeChild
-      rec.stop(row.id)
+      void rec.stop(row.id) // stays pending: this child never exits
       expect(child.kill).toHaveBeenCalledWith('SIGTERM')
       expect(child.kill).not.toHaveBeenCalledWith('SIGKILL')
       vi.advanceTimersByTime(5000) // child never exited → exitCode/signalCode null
@@ -339,6 +353,52 @@ describe('FfmpegRecorder (mocked spawn)', () => {
     }
   })
 
+  // The window closed at 13:00; the scheduler ticks at 13:30, so a SIGTERM exit
+  // is a genuine completion (not a mid-window interruption) for these two.
+  const AFTER_WINDOW = '2026-06-17T13:30:00.000Z'
+
+  it('leaves the row recording until ffmpeg actually exits, then completes it', async () => {
+    const rec = new FfmpegRecorder(dir, db.raw, () => Date.parse(AFTER_WINDOW))
+    const row = recordingRow() // 'recording', window 11:00–13:00
+    rec.start(row)
+    const child = spawnMock.mock.results[0].value as FakeChild
+
+    // tick stops it, but this child — like real ffmpeg — does not exit the
+    // instant it is signalled; it is still flushing and closing the .ts.
+    const ticked = tick(db.raw, rec, AFTER_WINDOW)
+    await new Promise((r) => setImmediate(r)) // drain microtasks + timers queue
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM')
+    // RED (pre-fix): tick wrote 'completed' the moment it sent SIGTERM, so the
+    // API would mint a playback grant for a file still being written.
+    expect(getRecording(db.raw, row.id)?.status).toBe('recording')
+
+    child.exitCode = 0
+    child.emit('exit', 0, null) // ffmpeg closed the file for real
+    await ticked
+    expect(getRecording(db.raw, row.id)?.status).toBe('completed')
+    expect(rec.running().has(row.id)).toBe(false)
+  })
+
+  it("keeps ffmpeg's failed verdict when a stopped recording exits non-zero", async () => {
+    // The optimistic write also MASKED failures: 'completed' landed first, so
+    // the exit handler's `status !== 'recording'` guard skipped the real
+    // failure and a broken capture was published as a finished recording.
+    const rec = new FfmpegRecorder(dir, db.raw, () => Date.parse(AFTER_WINDOW))
+    const row = recordingRow()
+    rec.start(row)
+    const child = spawnMock.mock.results[0].value as FakeChild
+
+    const ticked = tick(db.raw, rec, AFTER_WINDOW)
+    await new Promise((r) => setImmediate(r))
+    child.exitCode = 1
+    child.emit('exit', 1, null)
+    await ticked
+
+    const updated = getRecording(db.raw, row.id)
+    expect(updated?.status).toBe('failed')
+    expect(updated?.error).toContain('code=1')
+  })
+
   it('does NOT SIGKILL a child that already exited on SIGTERM', () => {
     vi.useFakeTimers()
     try {
@@ -346,7 +406,7 @@ describe('FfmpegRecorder (mocked spawn)', () => {
       const row = recordingRow()
       rec.start(row)
       const child = spawnMock.mock.results[0].value as FakeChild
-      rec.stop(row.id)
+      void rec.stop(row.id)
       child.signalCode = 'SIGTERM' // child obeyed the SIGTERM and exited
       vi.advanceTimersByTime(5000)
       expect(child.kill).not.toHaveBeenCalledWith('SIGKILL')
@@ -391,7 +451,7 @@ describe('FfmpegRecorder upstream-connection accounting (finding 118)', () => {
     return getRecording(db.raw, r.id) as DvrRecording
   }
 
-  it('defers a due recording when the single upstream slot is held by a live viewer, then records once it frees', () => {
+  it('defers a due recording when the single upstream slot is held by a live viewer, then records once it frees', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       const row = dueRecording()
@@ -407,14 +467,14 @@ describe('FfmpegRecorder upstream-connection accounting (finding 118)', () => {
 
       // RED (pre-fix): ffmpeg spawns a 2nd provider connection over cap.
       // GREEN: the recording is DEFERRED — no spawn, row stays 'scheduled'.
-      tick(db.raw, rec, NOW)
+      await tick(db.raw, rec, NOW)
       expect(spawnMock).not.toHaveBeenCalled()
       expect(getRecording(db.raw, row.id)?.status).toBe('scheduled')
 
       // The viewer stops; the slot frees.
       streamConcurrency().release('live:1:plex:viewer:1')
 
-      tick(db.raw, rec, NOW)
+      await tick(db.raw, rec, NOW)
       expect(spawnMock).toHaveBeenCalledOnce()
       expect(getRecording(db.raw, row.id)?.status).toBe('recording')
       // The active recording is now visible in the sessions list + holds a slot.
@@ -426,7 +486,7 @@ describe('FfmpegRecorder upstream-connection accounting (finding 118)', () => {
     }
   })
 
-  it('defers when the tracker itself is full of vod sessions (no upstream in use)', () => {
+  it('defers when the tracker itself is full of vod sessions (no upstream in use)', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       const row = dueRecording()
@@ -447,7 +507,7 @@ describe('FfmpegRecorder upstream-connection accounting (finding 118)', () => {
 
       // RED (pre-fix): tryAcquire's rejection was discarded, so ffmpeg spawned an
       // untracked over-cap connection and the row flipped to 'recording'.
-      tick(db.raw, rec, NOW)
+      await tick(db.raw, rec, NOW)
       expect(spawnMock).not.toHaveBeenCalled()
       expect(getRecording(db.raw, row.id)?.status).toBe('scheduled')
       // …and no phantom slot was booked for a recording that never started.
@@ -455,7 +515,7 @@ describe('FfmpegRecorder upstream-connection accounting (finding 118)', () => {
 
       // A vod stream ends; the freed slot lets the next tick record for real.
       streamConcurrency().release('vod:0')
-      tick(db.raw, rec, NOW)
+      await tick(db.raw, rec, NOW)
       expect(spawnMock).toHaveBeenCalledOnce()
       expect(getRecording(db.raw, row.id)?.status).toBe('recording')
     } finally {
@@ -463,22 +523,22 @@ describe('FfmpegRecorder upstream-connection accounting (finding 118)', () => {
     }
   })
 
-  it('releases the upstream slot when the recording ffmpeg exits', () => {
+  it('releases the upstream slot when the recording ffmpeg exits', async () => {
     const row = dueRecording()
     const rec = new FfmpegRecorder(dir, db.raw, () => Date.parse(NOW), streamConcurrency(), () => 1)
-    tick(db.raw, rec, NOW)
+    await tick(db.raw, rec, NOW)
     expect(streamConcurrency().list().some((s) => s.sessionId === `record:${row.id}`)).toBe(true)
     const child = spawnMock.mock.results[0].value as FakeChild
     child.emit('exit', 0, null)
     expect(streamConcurrency().list().some((s) => s.sessionId === `record:${row.id}`)).toBe(false)
   })
 
-  it('releases the upstream slot when the recording ffmpeg errors on spawn', () => {
+  it('releases the upstream slot when the recording ffmpeg errors on spawn', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       const row = dueRecording()
       const rec = new FfmpegRecorder(dir, db.raw, () => Date.parse(NOW), streamConcurrency(), () => 1)
-      tick(db.raw, rec, NOW)
+      await tick(db.raw, rec, NOW)
       expect(streamConcurrency().list().some((s) => s.sessionId === `record:${row.id}`)).toBe(true)
       const child = spawnMock.mock.results[0].value as FakeChild
       child.emit('error', new Error('spawn ffmpeg ENOENT'))
