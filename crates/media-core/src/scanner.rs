@@ -2130,6 +2130,22 @@ pub fn exif_datetime_to_sortable(raw: &str) -> Option<String> {
     ))
 }
 
+/// A field's raw ASCII text, e.g. `"2023:06:14 10:20:30"` for a datetime
+/// tag. Deliberately NOT `Field::display_value()`: that renders datetime
+/// tags through a tag-specific formatter that swaps the spec's colon date
+/// separators for dashes, a shape `exif_datetime_to_sortable` then rejected
+/// — which is why `taken_at` was NULL for every photo. The reader already
+/// splits on the NUL terminator, so these bytes are the bare value.
+/// Non-ASCII values (the numeric dimension tags) yield `None`.
+fn exif_field_ascii(field: &exif::Field) -> Option<String> {
+    match &field.value {
+        exif::Value::Ascii(values) => values
+            .first()
+            .map(|bytes| String::from_utf8_lossy(bytes).into_owned()),
+        _ => None,
+    }
+}
+
 /// Read EXIF taken-at + pixel dimensions. Blocking I/O — call inside
 /// `spawn_blocking`. Any failure (no EXIF, unsupported container) → defaults.
 pub fn read_photo_meta(path: &std::path::Path) -> PhotoMeta {
@@ -2142,7 +2158,7 @@ pub fn read_photo_meta(path: &std::path::Path) -> PhotoMeta {
     };
     let field_str = |tag: exif::Tag| {
         exif.get_field(tag, exif::In::PRIMARY)
-            .map(|f| f.display_value().to_string())
+            .and_then(exif_field_ascii)
     };
     let field_uint = |tag: exif::Tag| {
         exif.get_field(tag, exif::In::PRIMARY)
@@ -4476,6 +4492,138 @@ mod tests {
         assert_eq!(exif_datetime_to_sortable("garbage"), None);
         assert_eq!(exif_datetime_to_sortable("2023-06-14 10:20:30"), None);
         assert_eq!(exif_datetime_to_sortable(""), None);
+    }
+
+    /// Smallest JPEG kamadak-exif will parse: an SOI marker, an APP1 segment
+    /// holding `"Exif\0\0"` and a TIFF block, then EOI. Hand-assembled so the
+    /// test drives the real container/EXIF decode rather than a mocked
+    /// `Field`. IFD0 carries `DateTime`, and an `ExifIFDPointer` hangs a
+    /// sub-IFD carrying `DateTimeOriginal` plus the pixel dimension tags.
+    fn exif_jpeg(datetime: &str, datetime_original: Option<&str>) -> Vec<u8> {
+        fn entry(buf: &mut Vec<u8>, tag: u16, kind: u16, count: u32, value: u32) {
+            buf.extend_from_slice(&tag.to_le_bytes());
+            buf.extend_from_slice(&kind.to_le_bytes());
+            buf.extend_from_slice(&count.to_le_bytes());
+            buf.extend_from_slice(&value.to_le_bytes());
+        }
+        let dt = format!("{datetime}\0").into_bytes();
+        let dto = datetime_original.map(|s| format!("{s}\0").into_bytes());
+        // IFD0 spans 2 + 2*12 + 4 bytes from offset 8; the sub-IFD spans
+        // 2 + n*12 + 4 from there, and out-of-line data follows it.
+        let sub_ifd_off: u32 = 38;
+        let sub_entries: u32 = if dto.is_some() { 3 } else { 2 };
+        let data_off: u32 = sub_ifd_off + 2 + sub_entries * 12 + 4;
+
+        let mut tiff = Vec::new();
+        tiff.extend_from_slice(b"II");
+        tiff.extend_from_slice(&42u16.to_le_bytes());
+        tiff.extend_from_slice(&8u32.to_le_bytes());
+        tiff.extend_from_slice(&2u16.to_le_bytes()); // IFD0, 2 entries
+        entry(&mut tiff, 0x0132, 2, dt.len() as u32, data_off); // DateTime
+        entry(&mut tiff, 0x8769, 4, 1, sub_ifd_off); // ExifIFDPointer
+        tiff.extend_from_slice(&0u32.to_le_bytes()); // no IFD1
+        assert_eq!(tiff.len(), sub_ifd_off as usize, "IFD0 layout drifted");
+        tiff.extend_from_slice(&(sub_entries as u16).to_le_bytes());
+        if let Some(dto) = &dto {
+            // DateTimeOriginal, stored out of line right after DateTime.
+            entry(
+                &mut tiff,
+                0x9003,
+                2,
+                dto.len() as u32,
+                data_off + dt.len() as u32,
+            );
+        }
+        entry(&mut tiff, 0xA002, 4, 1, 1920); // PixelXDimension (inline)
+        entry(&mut tiff, 0xA003, 4, 1, 1080); // PixelYDimension (inline)
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        assert_eq!(tiff.len(), data_off as usize, "sub-IFD layout drifted");
+        tiff.extend_from_slice(&dt);
+        if let Some(dto) = &dto {
+            tiff.extend_from_slice(dto);
+        }
+
+        let mut app1 = b"Exif\0\0".to_vec();
+        app1.extend_from_slice(&tiff);
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        jpeg.extend_from_slice(&((app1.len() + 2) as u16).to_be_bytes());
+        jpeg.extend_from_slice(&app1);
+        jpeg.extend_from_slice(&[0xFF, 0xD9]);
+        jpeg
+    }
+
+    #[test]
+    fn read_photo_meta_reads_taken_at_from_a_real_jpeg() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shot.jpg");
+        std::fs::write(
+            &path,
+            exif_jpeg("2023:06:14 10:20:30", Some("2021:03:04 05:06:07")),
+        )
+        .unwrap();
+
+        // DateTimeOriginal wins over DateTime, and lands in the sortable
+        // shape the photo gallery's ORDER BY COALESCE(taken_at, mtime)
+        // relies on. Before the fix this whole field came back None.
+        assert_eq!(
+            read_photo_meta(&path),
+            PhotoMeta {
+                taken_at: Some("2021-03-04T05:06:07".to_string()),
+                width: Some(1920),
+                height: Some(1080),
+            }
+        );
+
+        // No DateTimeOriginal → fall back to IFD0's DateTime.
+        let scan = dir.path().join("scan.jpg");
+        std::fs::write(&scan, exif_jpeg("2023:06:14 10:20:30", None)).unwrap();
+        assert_eq!(
+            read_photo_meta(&scan).taken_at,
+            Some("2023-06-14T10:20:30".to_string())
+        );
+
+        // A file with no EXIF at all still degrades to defaults, not a panic.
+        let bare = dir.path().join("bare.jpg");
+        std::fs::write(&bare, [0xFF, 0xD8, 0xFF, 0xD9]).unwrap();
+        assert_eq!(read_photo_meta(&bare), PhotoMeta::default());
+    }
+
+    /// Pins the trap this bug came from: kamadak-exif holds the raw,
+    /// spec-conformant colon-separated bytes, but `display_value()` renders
+    /// datetime tags with dash separators. Reading through `display_value()`
+    /// is what fed `exif_datetime_to_sortable` a shape it rejected, leaving
+    /// `taken_at` NULL for every photo. If a future kamadak-exif changes
+    /// either rendering, this test says so instead of the gallery silently
+    /// falling back to mtime again.
+    #[test]
+    fn exif_display_value_reformats_datetimes_but_raw_ascii_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shot.jpg");
+        std::fs::write(
+            &path,
+            exif_jpeg("2023:06:14 10:20:30", Some("2021:03:04 05:06:07")),
+        )
+        .unwrap();
+        let file = std::fs::File::open(&path).unwrap();
+        let mut reader = std::io::BufReader::new(file);
+        let exif = exif::Reader::new()
+            .read_from_container(&mut reader)
+            .unwrap();
+        let field = exif
+            .get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY)
+            .expect("fixture carries DateTimeOriginal");
+
+        // The rendering that broke it, and the raw bytes that fix it.
+        assert_eq!(field.display_value().to_string(), "2021-03-04 05:06:07");
+        assert_eq!(
+            exif_field_ascii(field),
+            Some("2021:03:04 05:06:07".to_string())
+        );
+        // Numeric values (the dimension tags) yield None, not a panic.
+        let dims = exif
+            .get_field(exif::Tag::PixelXDimension, exif::In::PRIMARY)
+            .expect("fixture carries PixelXDimension");
+        assert_eq!(exif_field_ascii(dims), None);
     }
 
     #[test]
