@@ -8,6 +8,7 @@ import { createReadStream, statSync, rmSync } from 'node:fs'
 import { Readable } from 'node:stream'
 import { Hono, type Context, type Next } from 'hono'
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
+import { rateLimit } from '../middleware/rateLimit.js'
 import { requireSection } from '../services/userPolicies.js'
 import { capBlocksUnrated } from '../services/parentalRating.js'
 import { memberStatus } from '../services/membership.js'
@@ -24,6 +25,18 @@ import {
 } from '../services/dvrRecordings.js'
 
 export const dvr = new Hono<Env>()
+
+// Per-caller token bucket on the admin-mutate routes, matching every sibling
+// mutate surface (radarr/sonarr/sab). A schedule claims a hard-capped provider
+// connection plus unbounded disk and a delete does real fs work, so a looped
+// client — or a leaked admin session — is exactly the DoS shape finding 4-0
+// covered. Reuses the ARR_MUTATE_RATE_* knobs: same shape, no new dial.
+const dvrMutateLimit = rateLimit({
+  name: 'dvr-mutate',
+  capacity: env.arrMutateRateCapacity,
+  refill: env.arrMutateRateRefill,
+  intervalMs: env.arrMutateRateIntervalMs,
+})
 
 // The DVR play token's kind. `'recording'` is the M6-reserved StreamKind that
 // verifiers already accept cross-language (see iptvStreamToken.ts §5.3) — this
@@ -52,7 +65,7 @@ export function registerDvrRecorder(recorder: DvrStopper | null): void {
 }
 
 // Schedule a recording. Admin-gated (mutates the DVR queue + will consume disk).
-dvr.post('/recordings', requireAdmin, async (c) => {
+dvr.post('/recordings', requireAdmin, dvrMutateLimit, async (c) => {
   let body: Partial<NewRecordingInput>
   try {
     body = (await c.req.json()) as Partial<NewRecordingInput>
@@ -100,7 +113,7 @@ dvr.get('/recordings/:id', requireAuth, requireSection('live'), (c) => {
 // ffmpeg (the recorder's exit handler then removes the junk partial), and a
 // terminal delete has to remove the completed .ts (otherwise "deleting to free
 // space" frees nothing and DVR_DIR grows unbounded).
-dvr.delete('/recordings/:id', requireAdmin, (c) => {
+dvr.delete('/recordings/:id', requireAdmin, dvrMutateLimit, (c) => {
   const id = c.req.param('id')
   const rec = getRecording(iptvDb().raw, id)
   if (!rec) return c.json({ error: 'not_found' }, 404)

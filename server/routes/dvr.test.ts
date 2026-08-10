@@ -19,6 +19,8 @@ vi.mock('../services/iptvDbSingleton.js', () => ({ iptvDb: () => dbHolder }))
 
 import { openIptvDb, type IptvDb } from '../services/iptvDb.js'
 import { scheduleRecording, markStatus } from '../services/dvrRecordings.js'
+import { __resetRateLimitsForTests } from '../middleware/rateLimit.js'
+import { env } from '../env.js'
 import { dvr, registerDvrRecorder } from './dvr.js'
 
 const FUTURE_START = '2099-01-01T10:00:00.000Z'
@@ -35,6 +37,11 @@ describe('dvr routes', () => {
   let tmpDir: string
   let db: IptvDb
   beforeEach(() => {
+    // The mutate limiter's buckets are module-level and the mocked requireAdmin
+    // sets no session, so every test here shares one caller key — without this
+    // reset the suite's own POST/DELETE traffic would drain the bucket and later
+    // tests would 429 on requests they never meant to rate-limit.
+    __resetRateLimitsForTests()
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvr-route-'))
     db = openIptvDb(path.join(tmpDir, 'iptv.db'))
     dbHolder.raw = db.raw
@@ -141,6 +148,38 @@ describe('dvr routes', () => {
     const del = await dvr.request(`/recordings/${r.id}`, { method: 'DELETE' })
     expect(((await del.json()) as { status: string }).status).toBe('deleted')
     expect(fs.existsSync(file)).toBe(false) // RED before the fix: file leaked
+  })
+
+  // Admin-mutate rate limit, matching every sibling mutate surface
+  // (radarr/sonarr/sab). A recording schedule consumes a hard-capped provider
+  // connection and unbounded disk, and a delete does real fs work — so a looped
+  // admin-authed client must be refused, not served. RED before the fix: no DVR
+  // route ever 429s.
+  it('DELETE /recordings/:id 429s past the mutate bucket capacity', async () => {
+    const cap = env.arrMutateRateCapacity
+    const statuses: number[] = []
+    for (let i = 0; i < cap + 1; i++) {
+      statuses.push((await dvr.request('/recordings/nope', { method: 'DELETE' })).status)
+    }
+    expect(statuses.slice(0, cap).every((s) => s !== 429)).toBe(true)
+    expect(statuses[cap]).toBe(429)
+  })
+
+  it('POST /recordings 429s past the mutate bucket capacity, with a rate_limited body', async () => {
+    const cap = env.arrMutateRateCapacity
+    const statuses: number[] = []
+    let last: Response | null = null
+    for (let i = 0; i < cap + 1; i++) {
+      // Distinct channels so the overlap gate never rejects before the limiter.
+      last = await post({ ...validBody, channel_stream_id: 1000 + i })
+      statuses.push(last.status)
+    }
+    expect(statuses.slice(0, cap).every((s) => s !== 429)).toBe(true)
+    expect(statuses[cap]).toBe(429)
+    expect(((await last!.json()) as { error: string }).error).toBe('rate_limited')
+    // Limiter refuses BEFORE the handler: the over-cap request scheduled nothing.
+    const listed = (await (await dvr.request('/recordings')).json()) as { recordings: unknown[] }
+    expect(listed.recordings).toHaveLength(cap)
   })
 
   it('play 404s when not completed or the file is missing', async () => {
