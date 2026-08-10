@@ -17,6 +17,7 @@ pub mod podcasts;
 pub mod probe;
 pub mod routes;
 pub mod scanner;
+pub mod ssrf_guard;
 pub mod subtitles;
 pub mod tmdb;
 

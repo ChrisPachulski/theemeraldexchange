@@ -7,6 +7,7 @@ use quick_xml::events::Event;
 
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
+use crate::ssrf_guard;
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Feed {
@@ -215,43 +216,96 @@ pub fn parse_rss(xml: &str) -> Result<Feed, String> {
 /// must not be able to exhaust memory via an unbounded response body.
 const MAX_FEED_BYTES: usize = 25 * 1024 * 1024;
 
-/// Fetch and parse a feed URL (http/https only). Streams the body with a
-/// running byte counter and bails out the moment `MAX_FEED_BYTES` is
-/// crossed, rather than buffering the whole response via `.text()`.
+/// Fetch and parse a feed URL. The URL is household-supplied, so BOTH bounds
+/// apply on every hop:
+///   - reachability: the original URL and each `Location` must clear
+///     [`ssrf_guard::guard_url`] before we connect. Redirects are followed by
+///     hand (the client is built with `Policy::none()`) precisely so an
+///     upstream 30x into the internal network is re-checked here instead of
+///     chased blindly by reqwest.
+///   - size: the body is streamed with a running byte counter and bails the
+///     moment `MAX_FEED_BYTES` is crossed, rather than buffering via `.text()`.
+///
+/// The two landed on this function independently (the size bound first), so the
+/// merge keeps both — a redirect loop built on `.text()` would have silently
+/// dropped the memory-exhaustion bound and the lossy decode alongside it.
 pub async fn fetch_feed(url: &str) -> Result<Feed, String> {
-    if !(url.starts_with("http://") || url.starts_with("https://")) {
-        return Err("feed_url must be http(s)".to_string());
-    }
+    fetch_feed_inner(url, Reachability::Guarded).await
+}
+
+/// Reachability policy for a [`fetch_feed`] hop. Production is always
+/// `Guarded`. The size-cap and lossy-decode tests serve from a `127.0.0.1`
+/// listener — an address the guard correctly refuses — so they need the
+/// reachability check skipped to reach the streaming/decode paths they are
+/// actually about. The permissive variant is `#[cfg(test)]`: it does not exist
+/// in a release build, so this is a test seam, not a production bypass.
+/// `fetch_feed_guards_loopback` pins that the public entry point still guards.
+#[derive(Clone, Copy)]
+enum Reachability {
+    Guarded,
+    #[cfg(test)]
+    SkipForLoopbackTests,
+}
+
+async fn fetch_feed_inner(url: &str, reach: Reachability) -> Result<Feed, String> {
+    let mut current =
+        reqwest::Url::parse(url.trim()).map_err(|_| "feed_url must be http(s)".to_string())?;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| e.to_string())?;
-    let mut resp = client
-        .get(url)
-        .header("User-Agent", "theemeraldexchange v1")
-        .send()
-        .await
-        .map_err(|e| format!("feed fetch failed: {e}"))?;
 
-    if let Some(len) = resp.content_length()
-        && len as usize > MAX_FEED_BYTES
-    {
-        return Err(format!("feed body exceeds {MAX_FEED_BYTES} byte limit"));
-    }
+    for _ in 0..=ssrf_guard::MAX_REDIRECTS {
+        match reach {
+            Reachability::Guarded => ssrf_guard::guard_url(&current).await?,
+            #[cfg(test)]
+            Reachability::SkipForLoopbackTests => {}
+        }
+        let mut resp = client
+            .get(current.clone())
+            .header("User-Agent", "theemeraldexchange v1")
+            .send()
+            .await
+            .map_err(|e| format!("feed fetch failed: {e}"))?;
 
-    let mut body = Vec::new();
-    while let Some(chunk) = resp
-        .chunk()
-        .await
-        .map_err(|e| format!("feed body failed: {e}"))?
-    {
-        body.extend_from_slice(&chunk);
-        if body.len() > MAX_FEED_BYTES {
+        if resp.status().is_redirection() {
+            let location = resp
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .ok_or_else(|| "feed fetch failed: redirect without location".to_string())?;
+            current = current
+                .join(location)
+                .map_err(|_| format!("feed fetch failed: bad redirect target: {location}"))?;
+            continue;
+        }
+
+        // Declared length first (cheap reject), then the streamed counter — a
+        // lying/absent Content-Length must not buy an unbounded read.
+        if let Some(len) = resp.content_length()
+            && len as usize > MAX_FEED_BYTES
+        {
             return Err(format!("feed body exceeds {MAX_FEED_BYTES} byte limit"));
         }
+        let mut body = Vec::new();
+        while let Some(chunk) = resp
+            .chunk()
+            .await
+            .map_err(|e| format!("feed body failed: {e}"))?
+        {
+            body.extend_from_slice(&chunk);
+            if body.len() > MAX_FEED_BYTES {
+                return Err(format!("feed body exceeds {MAX_FEED_BYTES} byte limit"));
+            }
+        }
+        let xml = String::from_utf8_lossy(&body).into_owned();
+        return parse_rss(&xml);
     }
-    let xml = String::from_utf8_lossy(&body).into_owned();
-    parse_rss(&xml)
+    Err(format!(
+        "feed fetch failed: too many redirects (>{})",
+        ssrf_guard::MAX_REDIRECTS
+    ))
 }
 
 /// Write a fetched feed's channel + episodes for `podcast_id`. Episodes upsert
@@ -436,9 +490,30 @@ mod tests {
     /// own 15s client timeout, so "bailed on the size cap" cannot be confused
     /// with "gave up when the request timed out".
     async fn fetch_feed_bounded(url: &str) -> Result<Feed, String> {
-        tokio::time::timeout(std::time::Duration::from_secs(5), fetch_feed(url))
+        // Skips only the reachability check (the server is on 127.0.0.1, which the
+        // SSRF guard refuses by design); every other path is the production one.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            fetch_feed_inner(url, Reachability::SkipForLoopbackTests),
+        )
+        .await
+        .expect("fetch_feed must settle on its own, not stall until the request timeout")
+    }
+
+    /// The seam above must never drift into a production bypass: the PUBLIC
+    /// entry point still refuses a loopback target before it connects. If the
+    /// guard is ever unwired from `fetch_feed`, this fails while the seam-using
+    /// tests above stay green.
+    #[tokio::test]
+    async fn fetch_feed_guards_loopback() {
+        let url = spawn_feed_server(b"HTTP/1.0 200 OK\r\n\r\n<rss/>".to_vec(), false);
+        let err = fetch_feed(&url)
             .await
-            .expect("fetch_feed must settle on its own, not stall until the request timeout")
+            .expect_err("the public fetch_feed must refuse a loopback feed_url");
+        assert!(
+            err.contains("blocked private/reserved address"),
+            "expected an SSRF rejection, got: {err}"
+        );
     }
 
     fn assert_size_cap_error(err: &str) {
