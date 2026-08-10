@@ -124,6 +124,29 @@ describe('radarr — allow-list and gates', () => {
     expect(r.status).toBe(200)
   })
 
+  it('admin DELETE is rate-limited like every sibling mutate route', async () => {
+    // DELETE /movie/:id was the one write route that skipped
+    // radarrMutateLimit, so a single session could loop library deletions
+    // without ever draining the per-session token bucket every other mutate
+    // route shares. Driven through the real router (not a bare middleware
+    // harness) so the assertion covers the route wiring, not just rateLimit().
+    stub('/api/v3/movie/42', null, 200)
+    const app = appUnderTest()
+    const cookie = await adminCookie()
+    const statuses: number[] = []
+    let last!: Response
+    for (let i = 0; i < env.arrMutateRateCapacity + 1; i++) {
+      last = await app.request('/api/v3/movie/42', {
+        method: 'DELETE',
+        headers: { Cookie: cookie },
+      })
+      statuses.push(last.status)
+    }
+    expect(statuses.slice(0, -1)).not.toContain(429)
+    expect(last.status).toBe(429)
+    expect((await last.json()) as { error: string }).toMatchObject({ error: 'rate_limited' })
+  })
+
   it('admin DELETE with encoded-slash traversal returns 400, does not reach upstream', async () => {
     // Hono URL-decodes :id BEFORE we read it. Without validation, an
     // attacker who passes `..%2Frootfolder%2F1` (which Hono decodes
@@ -2252,5 +2275,90 @@ describe('radarr advanced — malformed body & non-JSON upstream branches', () =
     expect(r.status).toBe(200)
     // Empty patch → upstream object round-trips unchanged.
     expect(putBody).toEqual({ id: 9, title: 'X', monitored: true, qualityProfileId: 4 })
+  })
+})
+
+// Parity with the Sonarr clear-stuck suite. Movies jam in Radarr's import
+// stage exactly like episodes do in Sonarr's; before this route existed they
+// were unclearable from the Downloads tab.
+describe('radarr clear-stuck', () => {
+  it('rejects user role with 403', async () => {
+    const r = await appUnderTest().request('/api/v3/queue/clear-stuck', {
+      method: 'POST',
+      headers: { Cookie: await userCookie(), 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    expect(r.status).toBe(403)
+  })
+
+  it('removes + blocklists only import-jammed records, leaving active ones', async () => {
+    // Stub bulk first so its suffix wins over the broader /api/v3/queue match.
+    stub('/api/v3/queue/bulk', {})
+    stub('/api/v3/queue', {
+      records: [
+        { id: 1, trackedDownloadState: 'importBlocked' },
+        { id: 2, trackedDownloadState: 'downloading' }, // healthy — must NOT be touched
+        { id: 3, trackedDownloadState: 'importPending' },
+      ],
+    })
+    const r = await appUnderTest().request('/api/v3/queue/clear-stuck', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual({ removed: 2 })
+    const bulk = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.find(([u]) =>
+      String(u).includes('/api/v3/queue/bulk'),
+    )
+    expect(bulk).toBeTruthy()
+    const [bulkUrl, init] = bulk as [string, RequestInit]
+    expect(String(bulkUrl)).toContain('removeFromClient=true')
+    expect(String(bulkUrl)).toContain('blocklist=true')
+    expect(String(bulkUrl)).toContain('skipRedownload=false')
+    expect(init.method).toBe('DELETE')
+    expect(JSON.parse(init.body as string)).toEqual({ ids: [1, 3] })
+  })
+
+  it('returns removed:0 and skips the bulk call when nothing is jammed', async () => {
+    stub('/api/v3/queue/bulk', {})
+    stub('/api/v3/queue', {
+      records: [{ id: 1, trackedDownloadState: 'downloading' }],
+    })
+    const r = await appUnderTest().request('/api/v3/queue/clear-stuck', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual({ removed: 0 })
+    const calledBulk = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.some(([u]) =>
+      String(u).includes('/api/v3/queue/bulk'),
+    )
+    expect(calledBulk).toBe(false)
+  })
+
+  it('502 queue_unreachable when the queue read fails', async () => {
+    stub('/api/v3/queue', { error: 'boom' }, 502)
+    const r = await appUnderTest().request('/api/v3/queue/clear-stuck', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    expect(r.status).toBe(502)
+    expect(await r.json()).toEqual({ error: 'queue_unreachable' })
+  })
+
+  it('502 bulk_delete_failed when the bulk DELETE fails', async () => {
+    // bulk stub first so its suffix wins over the broader /api/v3/queue match.
+    stub('/api/v3/queue/bulk', { error: 'nope' }, 500)
+    stub('/api/v3/queue', { records: [{ id: 7, trackedDownloadState: 'importBlocked' }] })
+    const r = await appUnderTest().request('/api/v3/queue/clear-stuck', {
+      method: 'POST',
+      headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    expect(r.status).toBe(502)
+    expect(await r.json()).toEqual({ error: 'bulk_delete_failed', status: 500 })
   })
 })

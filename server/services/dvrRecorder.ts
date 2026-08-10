@@ -76,8 +76,13 @@ export interface Recorder {
    * not marked failed — the next tick retries it while its window is still open.
    */
   start(rec: DvrRecording): string | null
-  /** Stop an in-flight recording (the file is finalized by the recorder). */
-  stop(recId: string): void
+  /**
+   * Stop an in-flight recording. Resolves only once the recorder has ACTUALLY
+   * finished writing (for ffmpeg: the child process has exited), so a caller
+   * that awaits it can trust the file on disk is complete and the row's final
+   * status has been written. Resolves immediately for an unknown id.
+   */
+  stop(recId: string): Promise<void>
   /** Ids currently being recorded. */
   running(): Set<string>
   /** Refresh the upstream-slot heartbeat for in-flight recordings so a
@@ -91,17 +96,21 @@ export interface Recorder {
  * start due 'scheduled' rows, RESUME open 'recording' rows orphaned by a restart
  * (in toStart but skipped when the recorder is already running them), stop
  * 'recording' rows whose window closed, and mark fully-elapsed-unstarted rows
- * 'missed'. The real recorder's ffmpeg-exit handler is what finalizes
- * completed/failed; `tick` marking 'completed' on a deliberate stop is
- * idempotent with that (the exit handler only acts while the row is still
- * 'recording'). A resumed recording re-captures the REMAINING window into a
+ * 'missed'. Stopping an in-flight recording AWAITS the recorder: 'completed'
+ * must never be written while ffmpeg still holds the file open, or the API
+ * hands out a playback grant for a truncated .ts (and the exit handler's real
+ * verdict — failed on a non-zero exit — gets overwritten by an optimistic
+ * guess). The recorder's exit handler is what normally finalizes
+ * completed/failed; the post-await write here is the backstop for a recorder
+ * that doesn't self-finalize, and only fires while the row is still
+ * 'recording'. A resumed recording re-captures the REMAINING window into a
  * fresh file — the pre-restart partial is not stitched in (single-file design).
  */
-export function tick(
+export async function tick(
   db: Database.Database,
   recorder: Recorder,
   nowIso: string = new Date().toISOString(),
-): void {
+): Promise<void> {
   const rows = listRecordings(db).filter(
     (r) => r.status === 'scheduled' || r.status === 'recording',
   )
@@ -130,8 +139,17 @@ export function tick(
     }
   }
   for (const r of plan.toStop) {
-    recorder.stop(r.id)
-    markStatus(db, r.id, 'completed', {}, nowIso)
+    // Wait for the recorder to ACTUALLY finish before touching the status; a
+    // row with no live child (post-restart orphan) resolves immediately, so it
+    // still finalizes in this same pass.
+    await recorder.stop(r.id)
+    // A live child's exit handler has by now written the true outcome
+    // (completed, or failed on a non-zero exit) — only finalize here while the
+    // row is still 'recording': an orphan, or a Recorder that doesn't
+    // self-finalize.
+    if (getRecording(db, r.id)?.status === 'recording') {
+      markStatus(db, r.id, 'completed', {}, nowIso)
+    }
   }
   for (const r of plan.toMiss) {
     markStatus(db, r.id, 'missed', {}, nowIso)
@@ -183,23 +201,32 @@ export class FfmpegRecorder implements Recorder {
         return null
       }
     }
-    fs.mkdirSync(this.dir, { recursive: true })
-    const filePath = this.filePathFor(rec.id)
-    const durationSecs = Math.max(1, (Date.parse(rec.stop_utc) - this.nowMs()) / 1000)
-    const args = buildRecordArgs(liveUrl(rec.channel_stream_id), filePath, durationSecs)
-    const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] })
-
-    // Register the recording as a live upstream connection so it's visible in
-    // /api/iptv/sessions and counted by upstreamInUse for the next dial. Synthetic
-    // sub (`dvr:<id>`) so it never dedupes against a real viewer of the same
-    // channel. Released on ffmpeg exit below.
-    this.tracker?.tryAcquire({
+    // Reserve the slot BEFORE dialing: register the recording as a live upstream
+    // connection so it's visible in /api/iptv/sessions and counted by
+    // upstreamInUse for the next dial. Synthetic sub (`dvr:<id>`) so it never
+    // dedupes against a real viewer of the same channel. Released on ffmpeg exit
+    // below. A REJECTED acquire (the tracker's own global/kind cap is full — a
+    // ceiling upstreamInUse above does not see, since it only counts live/remux)
+    // defers exactly like the upstream check: spawning anyway would put ffmpeg on
+    // the provider over cap AND leave the connection untracked by every counter.
+    const slot = this.tracker?.tryAcquire({
       sub: `dvr:${rec.id}`,
       sessionId: recordSessionId(rec.id),
       kind: 'live',
       resourceId: String(rec.channel_stream_id),
       title: rec.channel_name,
     })
+    if (slot && !slot.ok) {
+      console.warn(`[dvr ${rec.id}] concurrency slot denied (${slot.reason}) — deferring recording`)
+      return null
+    }
+    // From here the slot is HELD: a throw below leaks it until the tracker's 30s
+    // idle sweep reaps it (no heartbeat ever lands on a child that never spawned).
+    fs.mkdirSync(this.dir, { recursive: true })
+    const filePath = this.filePathFor(rec.id)
+    const durationSecs = Math.max(1, (Date.parse(rec.stop_utc) - this.nowMs()) / 1000)
+    const args = buildRecordArgs(liveUrl(rec.channel_stream_id), filePath, durationSecs)
+    const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] })
 
     proc.stderr?.on('data', (chunk: Buffer) => {
       // ffmpeg echoes the input URL (with creds) on error — always scrub.
@@ -268,19 +295,30 @@ export class FfmpegRecorder implements Recorder {
     }
   }
 
-  stop(recId: string): void {
+  /**
+   * SIGTERM the child (SIGKILL backstop at 5s) and resolve only once it has
+   * ACTUALLY exited. ffmpeg finishes flushing and closes the .ts after the
+   * signal, so resolving on the signal instead of the exit would let the caller
+   * mark a still-being-written file 'completed'. The extra 'exit' listener runs
+   * AFTER the spawn-time one, so by the time we resolve, that handler has
+   * already released the upstream slot and written the row's real outcome.
+   */
+  stop(recId: string): Promise<void> {
     const proc = this.children.get(recId)
-    if (!proc) return
-    proc.kill('SIGTERM')
-    const killTimer = setTimeout(() => {
-      // proc.killed only means a signal was SUCCESSFULLY SENT, not that the
-      // child exited — so it is true the instant SIGTERM is delivered and the
-      // SIGKILL backstop could never fire on a wedged ffmpeg. A child that has
-      // actually exited has a non-null exitCode (clean) or signalCode (killed);
-      // escalate to SIGKILL only while BOTH are still null (truly running).
-      if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL')
-    }, 5_000)
-    killTimer.unref?.()
+    if (!proc) return Promise.resolve() // never started / already exited
+    return new Promise<void>((resolve) => {
+      proc.once('exit', () => resolve())
+      proc.kill('SIGTERM')
+      const killTimer = setTimeout(() => {
+        // proc.killed only means a signal was SUCCESSFULLY SENT, not that the
+        // child exited — so it is true the instant SIGTERM is delivered and the
+        // SIGKILL backstop could never fire on a wedged ffmpeg. A child that has
+        // actually exited has a non-null exitCode (clean) or signalCode (killed);
+        // escalate to SIGKILL only while BOTH are still null (truly running).
+        if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL')
+      }, 5_000)
+      killTimer.unref?.()
+    })
   }
 
   running(): Set<string> {
@@ -294,9 +332,10 @@ export class FfmpegRecorder implements Recorder {
     for (const id of this.children.keys()) this.tracker.heartbeat(recordSessionId(id))
   }
 
-  /** SIGTERM every in-flight recording (graceful shutdown). */
+  /** SIGTERM every in-flight recording (graceful shutdown; signal only — the
+   *  shutdown path doesn't block on the children's exits). */
   stopAll(): void {
-    for (const id of this.children.keys()) this.stop(id)
+    for (const id of this.children.keys()) void this.stop(id)
   }
 }
 
@@ -314,14 +353,17 @@ export function startDvrScheduler(
   // Inject the shared concurrency tracker + upstream cap so recordings are
   // accounted against IPTV_MAX_UPSTREAM_CONNECTIONS alongside live viewers.
   const recorder = new FfmpegRecorder(dir, db, Date.now, streamConcurrency())
-  const run = (): void => {
+  // Fire-and-forget: a tick now awaits ffmpeg's exit when it stops a recording,
+  // so it is async — errors are caught here rather than becoming an unhandled
+  // rejection, and ticks are never blocked on each other by the interval.
+  const run = async (): Promise<void> => {
     try {
-      tick(db, recorder)
+      await tick(db, recorder)
     } catch (err) {
       console.error('[dvr] scheduler tick failed:', err)
     }
   }
-  run()
+  void run()
   const handle = setInterval(run, intervalMs)
   handle.unref?.()
   return {

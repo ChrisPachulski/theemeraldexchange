@@ -18,6 +18,13 @@ export type Limits = {
    *  materializeNonAdmin path instead of silently hardcoding
    *  "choose me." Optional for forward-compat. */
   defaultProfileName?: string
+  /** Curated root-folder paths the server prefers for non-admin adds.
+   *  The Add modals/tabs always submit rootFolderPath, so the server's
+   *  own fallback never runs — the client has to prefer the same folder
+   *  or the add silently lands under whichever root the *arr listed
+   *  first. Null/absent on older backends → first-folder fallback. */
+  defaultSonarrRootFolderPath?: string | null
+  defaultRadarrRootFolderPath?: string | null
   /** False when the server was booted with IPTV_DISABLED=1 — Live, VOD,
    *  and IPTV-Series tabs hide. Default true on older backends that
    *  predate the flag. Reviewer-insurance per contract §13.3. */
@@ -39,6 +46,8 @@ const DEFAULT_LIMITS: Limits = {
   maxTvGbPerEpisode: 5,
   useLocalRecommender: false,
   defaultProfileName: 'choose me',
+  defaultSonarrRootFolderPath: null,
+  defaultRadarrRootFolderPath: null,
   iptvEnabled: true,
   mediaEnabled: true,
   sonarrEnabled: true,

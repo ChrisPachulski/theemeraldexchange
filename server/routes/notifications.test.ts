@@ -742,7 +742,7 @@ describe('notifications POST /discord — mutation sequencing / rollback', () =>
   })
 })
 
-describe('notifications POST /discord — serialization (withDiscordMutationLock)', () => {
+describe('notifications /discord — serialization (withDiscordMutationLock)', () => {
   it('concurrent POSTs are serialized — the second mutation does not overlap the first', async () => {
     let inFlight = 0
     let maxConcurrent = 0
@@ -773,6 +773,92 @@ describe('notifications POST /discord — serialization (withDiscordMutationLock
     expect(r2.status).toBe(200)
     // withDiscordMutationLock serialized the two requests' mutation sections.
     expect(maxConcurrent).toBe(1)
+  })
+
+  // A POST racing a DELETE is the dangerous interleave: DELETE reads its id
+  // list, POST creates/updates, DELETE then removes only what it saw — the
+  // operator is told "Removed" while a live connector remains (or vice
+  // versa). Concurrency is tracked ONLY on the mutating upstream calls
+  // (PUT/POST-create/DELETE); both handlers legitimately Promise.all their
+  // own sonarr+radarr GET listings, and that intra-request overlap is fine.
+  it('a concurrent POST and DELETE do not interleave their mutations', async () => {
+    let inFlight = 0
+    let maxConcurrent = 0
+    const order: string[] = []
+    handlers.push({
+      match: (u, m) => m === 'GET' && u.endsWith('/api/v3/notification'),
+      handler: () => jsonResponse([{ id: 7, name: EMERALD, implementation: 'Discord' }]),
+    })
+    handlers.push({
+      match: (u, m) => (m === 'PUT' || m === 'DELETE') && u.includes('/api/v3/notification/7'),
+      handler: async (_u, init) => {
+        const method = (init.method ?? 'GET').toUpperCase()
+        order.push(method)
+        inFlight++
+        maxConcurrent = Math.max(maxConcurrent, inFlight)
+        await new Promise((r) => setTimeout(r, 20))
+        inFlight--
+        return jsonResponse({ id: 7 })
+      },
+    })
+    const cookie = await adminCookie()
+    const post = appUnderTest().request('/discord', {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ webhookUrl: GOOD_WEBHOOK }),
+    })
+    const del = appUnderTest().request('/discord', {
+      method: 'DELETE',
+      headers: { Cookie: cookie },
+    })
+    const [postRes, delRes] = await Promise.all([post, del])
+    expect(postRes.status).toBe(200)
+    expect(delRes.status).toBe(200)
+    expect(await delRes.json()).toEqual({ ok: true, removed: 2 })
+    expect(maxConcurrent).toBe(1)
+    // Whichever handler won the lock finished BOTH its upstreams before the
+    // other started — no PUT wedged between the two DELETEs, and no DELETE
+    // wedged between the two PUTs.
+    expect(['PUT,PUT,DELETE,DELETE', 'DELETE,DELETE,PUT,PUT']).toContain(order.join(','))
+  })
+
+  // /discord/test resolves an id from a list read and then fires at it. A
+  // DELETE landing between those two steps tests an id that no longer
+  // exists, so it takes the lock too.
+  it('a concurrent POST /discord/test and DELETE do not interleave', async () => {
+    let inFlight = 0
+    let maxConcurrent = 0
+    const order: string[] = []
+    const track = async (label: string): Promise<Response> => {
+      order.push(label)
+      inFlight++
+      maxConcurrent = Math.max(maxConcurrent, inFlight)
+      await new Promise((r) => setTimeout(r, 20))
+      inFlight--
+      return jsonResponse({ id: 7 })
+    }
+    handlers.push({
+      match: (u, m) => m === 'GET' && u.endsWith('/api/v3/notification'),
+      handler: () => jsonResponse([{ id: 7, name: EMERALD, implementation: 'Discord' }]),
+    })
+    // Registered before the bare-id DELETE matcher so the /test path wins.
+    handlers.push({
+      match: (u, m) => m === 'POST' && u.endsWith('/api/v3/notification/7/test'),
+      handler: () => track('TEST'),
+    })
+    handlers.push({
+      match: (u, m) => m === 'DELETE' && u.endsWith('/api/v3/notification/7'),
+      handler: () => track('DELETE'),
+    })
+    const cookie = await adminCookie()
+    const [testRes, delRes] = await Promise.all([
+      appUnderTest().request('/discord/test', { method: 'POST', headers: { Cookie: cookie } }),
+      appUnderTest().request('/discord', { method: 'DELETE', headers: { Cookie: cookie } }),
+    ])
+    expect(testRes.status).toBe(200)
+    expect(delRes.status).toBe(200)
+    expect(maxConcurrent).toBe(1)
+    expect(['TEST,DELETE,DELETE', 'DELETE,DELETE,TEST']).toContain(order.join(','))
   })
 })
 

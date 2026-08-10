@@ -17,8 +17,9 @@ import { promisify } from 'node:util'
 const gzipAsync = promisify(gzip)
 import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
 import { rateLimit } from '../middleware/rateLimit.js'
-import { requireSection } from '../services/userPolicies.js'
+import { requireSection, getPolicy } from '../services/userPolicies.js'
 import { capBlocksUnrated } from '../services/parentalRating.js'
+import { effectiveRoleFor } from '../services/sessionGate.js'
 import { getAccountInfo, credsFromEnv } from '../services/xtream.js'
 import { nodeReadableToWebStream } from '../services/streamBridge.js'
 import { iptvDb } from '../services/iptvDbSingleton.js'
@@ -74,6 +75,7 @@ import {
   fetchAndRewriteHlsPlaylist,
   proxyRangeableUpstream,
 } from '../services/iptvHlsProxy.js'
+import { parseSegmentOwner } from '../services/iptvHlsRewrite.js'
 import { getSyncJob, startSyncJob } from '../services/iptvSyncJobs.js'
 import {
   channelArchiveRow,
@@ -221,6 +223,23 @@ function enrichSessions(list: SessionView[]): Array<SessionView & { resolvedTitl
   return list.map((s) => ({ ...s, resolvedTitle: s.title ?? sessionTitle(s.kind, s.resourceId) }))
 }
 
+// Same leak class as the GET /sessions scoping above (commit b7b7bf5), reached
+// through the concurrency-cap 429: `acquired.sessions` on iptv_concurrency_limit
+// is the WHOLE household's session list, each entry carrying sub/ip/title. On a
+// small provider line the cap is hit routinely, and ConcurrencyLimitModal renders
+// this exact payload (title + IP) with a kick button. Non-admins must not learn
+// who else is streaming what from where. The response SHAPE is a closed-enum
+// contract the Swift client Decodable-switches on — every field stays PRESENT,
+// only the CONTENT of other members' rows is redacted. The caller's own row (and
+// everything, for admins) stays untouched so kick/support visibility doesn't regress.
+type RedactedSessionView = Omit<SessionView, 'sub' | 'ip'> & { sub: string | null; ip: string | null; resolvedTitle: string | null }
+function enrichSessionsFor(list: SessionView[], callerSub: string, isAdmin: boolean): RedactedSessionView[] {
+  return enrichSessions(list).map((s) => {
+    if (isAdmin || s.sub === callerSub) return s
+    return { ...s, sub: null, ip: null, title: 'another household member', resolvedTitle: 'another household member' }
+  })
+}
+
 // Connection diagnostics: surface our concurrency tracker + the upstream's
 // own active_cons/max_connections counters so the SPA can show "1 of 2
 // slots in use" and let the user kick whichever of OUR sessions is holding
@@ -229,7 +248,12 @@ function enrichSessions(list: SessionView[]): Array<SessionView & { resolvedTitl
 // explain that distinction.
 iptv.get('/sessions', requireAuth, async (c) => {
   const { sub } = userOf(c)
-  const ours = enrichSessions(streamConcurrency().list())
+  // Scope to the caller's own sessions. The tracker is household-wide, so an
+  // unfiltered list handed every member the sub, resolved title and client IP
+  // of everyone else's active stream. Admins keep full visibility because they
+  // are the ones doing support/kicking — same gate as the DELETE below.
+  const isAdmin = c.get('session').role === 'admin'
+  const ours = enrichSessions(streamConcurrency().list().filter((s) => isAdmin || s.sub === sub))
   let upstream: { activeConnections: number; maxConnections: number; status: string } | null
   try {
     const info = await getAccountInfo()
@@ -261,6 +285,21 @@ iptv.delete('/sessions/:sessionId', requireAuth, (c) => {
   const target = all.find((s) => s.sessionId === sessionId)
   if (!target) return c.json({ error: 'not_found' }, 404)
   if (!isAdmin && target.sub !== sub) return c.json({ error: 'forbidden' }, 403)
+  // dvr: is a synthetic sub minted only by dvrRecorder.start() (server/services/dvrRecorder.ts) so an
+  // in-flight recording shows up in this list and counts toward upstreamInUse. It can never be a real
+  // user sub. Releasing it here would free the accounting slot while the real ffmpeg keeps recording and
+  // holding the actual upstream connection — undercounting upstreamInUse() and risking the provider's
+  // abuse-block. Route the admin to the DVR panel instead, which stops the process AND the slot together.
+  if (target.sub.startsWith('dvr:')) {
+    return c.json(
+      {
+        error: 'dvr_recording_session',
+        message:
+          'stop this recording from the DVR panel (DELETE /api/dvr/recordings/:id), not the sessions widget',
+      },
+      409,
+    )
+  }
   streamConcurrency().release(sessionId)
   // A remux (AVPlayer live) slot is backed by an ffmpeg process holding a live
   // upstream provider connection, tracked SEPARATELY from the concurrency slot.
@@ -317,7 +356,13 @@ function maybeEmitWatched(
   }
 }
 
-iptv.get('/categories', requireAuth, (c) => {
+// Catalog + EPG browse. Every route below carries requireSection('live') for
+// the same reason the grants and the DVR listings do: the whole IPTV surface
+// (live channels, provider VOD/series, and the guide) IS the `live` section, so
+// a member whose policy denies Live TV must not be able to browse it either.
+// Hiding it client-side is not enforcement — without this, a denied member (or
+// a tampered client) still got the full catalog and guide from these GETs.
+iptv.get('/categories', requireAuth, requireSection('live'), (c) => {
   const kind = c.req.query('kind') ?? ''
   if (!KINDS.has(kind)) return c.json({ error: 'invalid_kind' }, 400)
   return c.json(listCategories(iptvDb(), kind as 'live' | 'vod' | 'series'))
@@ -338,11 +383,11 @@ function parseListOpts(c: Context<Env>): { categoryId?: number; q?: string; limi
   }
 }
 
-iptv.get('/live', requireAuth, (c) => c.json(listLive(iptvDb(), parseListOpts(c))))
-iptv.get('/vod', requireAuth, (c) => c.json(listVod(iptvDb(), parseListOpts(c))))
-iptv.get('/series', requireAuth, (c) => c.json(listSeries(iptvDb(), parseListOpts(c))))
+iptv.get('/live', requireAuth, requireSection('live'), (c) => c.json(listLive(iptvDb(), parseListOpts(c))))
+iptv.get('/vod', requireAuth, requireSection('live'), (c) => c.json(listVod(iptvDb(), parseListOpts(c))))
+iptv.get('/series', requireAuth, requireSection('live'), (c) => c.json(listSeries(iptvDb(), parseListOpts(c))))
 
-iptv.get('/epg/now', requireAuth, (c) => {
+iptv.get('/epg/now', requireAuth, requireSection('live'), (c) => {
   const ids = (c.req.query('channelIds') ?? '')
     .split(',')
     .map((id) => Number(id))
@@ -350,7 +395,7 @@ iptv.get('/epg/now', requireAuth, (c) => {
   return c.json(epgNow(iptvDb(), ids))
 })
 
-iptv.get('/epg/channel/:channelId', requireAuth, (c) => {
+iptv.get('/epg/channel/:channelId', requireAuth, requireSection('live'), (c) => {
   const channelId = Number(c.req.param('channelId'))
   if (!Number.isInteger(channelId) || channelId <= 0) return c.json({ error: 'invalid_id' }, 400)
 
@@ -359,7 +404,7 @@ iptv.get('/epg/channel/:channelId', requireAuth, (c) => {
   return c.json(epgChannelWindow(iptvDb(), channelId, from, to))
 })
 
-iptv.get('/epg/grid', requireAuth, async (c) => {
+iptv.get('/epg/grid', requireAuth, requireSection('live'), async (c) => {
   const from = c.req.query('from') ?? new Date().toISOString()
   const to = c.req.query('to') ?? new Date(Date.now() + 4 * 3600_000).toISOString()
   const rawCategoryId = c.req.query('categoryId')
@@ -421,7 +466,7 @@ const epgSearchRateLimit = rateLimit({
 // so searching 'Yankees' / 'news' now reaches every channel's schedule without
 // shipping the full ~28 MB grid to a memory-constrained device. Query parsing
 // (q slice, categoryIds cap-500) + gzip mirror /epg/grid above.
-iptv.get('/epg/search', requireAuth, epgSearchRateLimit, async (c) => {
+iptv.get('/epg/search', requireAuth, requireSection('live'), epgSearchRateLimit, async (c) => {
   const rawQ = c.req.query('q')
   const q = rawQ && rawQ.trim() ? rawQ.trim().slice(0, 100) : undefined
   if (!q) return c.json({ error: 'invalid_query' }, 400)
@@ -455,14 +500,14 @@ iptv.get('/epg/search', requireAuth, epgSearchRateLimit, async (c) => {
   return c.body(json, 200, { 'Content-Type': 'application/json; charset=utf-8' })
 })
 
-iptv.get('/vod/:streamId', requireAuth, (c) => {
+iptv.get('/vod/:streamId', requireAuth, requireSection('live'), (c) => {
   const id = Number(c.req.param('streamId'))
   if (!Number.isFinite(id)) return c.json({ error: 'invalid_id' }, 400)
   const detail = getVodDetail(iptvDb(), id)
   return detail ? c.json(detail) : c.json({ error: 'not_found' }, 404)
 })
 
-iptv.get('/series/:seriesId', requireAuth, (c) => {
+iptv.get('/series/:seriesId', requireAuth, requireSection('live'), (c) => {
   const id = Number(c.req.param('seriesId'))
   if (!Number.isFinite(id)) return c.json({ error: 'invalid_id' }, 400)
   const detail = getSeriesDetail(iptvDb(), id)
@@ -491,7 +536,18 @@ function secretsEqual(a: string, b: string): boolean {
 
 // Playlist-token lifecycle + M3U generation live in services/iptvPlaylist.ts;
 // these handlers only parse the HTTP shape and map outcomes to statuses.
-iptv.post('/playlist/token', requireAuth, async (c) => {
+iptv.post('/playlist/token', requireAuth, requireSection('live'), async (c) => {
+  // The exported M3U is every live channel, each embedding a per-channel
+  // `live` token (buildPlaylistM3u) — an unguarded mint here would let a
+  // capped member bypass the exact rating gate just added to the live grant
+  // by exporting a playlist instead of tuning in-app. Same rule, same
+  // exemptions (admins never blocked), applied at the OTHER place a live
+  // token gets minted. A token minted before this gate remains valid for
+  // its 90-day TTL; DELETE /playlist/tokens/:jti (already existed) revokes
+  // it early if that residual window is a concern for a specific member.
+  if (await capBlocksUnrated(c.get('session'))) {
+    return c.json({ error: 'rating_blocked' }, 403)
+  }
   const { sub } = userOf(c)
   // Optional device label — free-form string, max 120 chars. Returned in the
   // response so the admin list can show "iPhone 15 (kitchen)" next to the jti.
@@ -525,13 +581,40 @@ iptv.delete('/playlist/tokens/:jti', requireAuth, (c) => {
 
 // Hit by external players (VLC, iPlayTV, TiviMate) that have no session
 // cookie. Token-in-URL is the auth; see comment on /stream/live/:id.ts.
-iptv.get('/playlist.m3u', (c) => {
+iptv.get('/playlist.m3u', async (c) => {
   const auth = authorizePlaylistToken(c.req.query('t') ?? '')
   if (!auth.ok) {
     return c.json(
       auth.detail ? { error: auth.error, detail: auth.detail } : { error: auth.error },
       401,
     )
+  }
+  // Same two gates the mint handler above applies (rating cap AND the live
+  // section gate), both re-checked at SERVE time. The mint gate alone leaves
+  // a residual hole: a token minted BEFORE a cap was applied, or before an
+  // admin turned live off, or before either gate existed, stays valid for
+  // its 90-day TTL — a newly-restricted member would keep exporting the full
+  // live playlist from VLC until an admin hand-revokes the jti. Policy
+  // changes must take effect on the next fetch, not at token expiry.
+  //
+  // There is no session here (token-in-URL auth, no cookie), so role comes
+  // from configured ADMIN_SUBS + the DB members row (effectiveRoleFor) — the
+  // same durable authority reconcileSession itself is built on. This is NOT
+  // literally identical to the cookie path: a legacy admin granted only via
+  // the ADMINS-by-Plex-username allowlist (not ADMIN_SUBS, no admin members
+  // row) resolves to 'user' here, since there is no username to check. That
+  // fails CLOSED — such an admin could be rating/section-blocked on their
+  // own export if they also carry a cap — not a security defect, just a
+  // narrower admin recognition than the cookie path's.
+  const role = effectiveRoleFor('', auth.sub)
+  if (role !== 'admin') {
+    const policy = await getPolicy(auth.sub)
+    if (policy.allowedSections && !policy.allowedSections.live) {
+      return c.json({ error: 'section_blocked' }, 403)
+    }
+  }
+  if (await capBlocksUnrated({ sub: auth.sub, role })) {
+    return c.json({ error: 'rating_blocked' }, 403)
   }
   return new Response(buildPlaylistM3u(auth.sub, publicBaseUrl(c)), {
     status: 200,
@@ -543,13 +626,18 @@ iptv.get('/playlist.m3u', (c) => {
   })
 })
 
-iptv.get('/favorites', requireAuth, (c) => {
+// Favorites + continue-watching ARE the live section's user data (the item IDs
+// are live/vod/series rows from the same catalog), so they carry the same
+// requireSection('live') gate as the catalog, EPG, and grant routes above.
+// Without it a member denied Live TV could still read back — and keep writing —
+// the very channels and titles the section gate cut them off from.
+iptv.get('/favorites', requireAuth, requireSection('live'), (c) => {
   const { sub } = userOf(c)
   const rows = iptvDb().stmts.getFavorites.all(sub)
   return c.json(rows)
 })
 
-iptv.post('/favorites', requireAuth, async (c) => {
+iptv.post('/favorites', requireAuth, requireSection('live'), async (c) => {
   const { sub } = userOf(c)
   const body = await c.req.json().catch(() => ({})) as { kind?: unknown; itemId?: unknown }
   if (typeof body.kind !== 'string' || !KINDS.has(body.kind)) return c.json({ error: 'invalid_kind' }, 400)
@@ -564,7 +652,7 @@ iptv.post('/favorites', requireAuth, async (c) => {
   return c.body(null, 201)
 })
 
-iptv.delete('/favorites/:kind/:itemId', requireAuth, (c) => {
+iptv.delete('/favorites/:kind/:itemId', requireAuth, requireSection('live'), (c) => {
   const { sub } = userOf(c)
   const kind = c.req.param('kind')
   const itemId = c.req.param('itemId')
@@ -580,13 +668,13 @@ function parseHistoryLimit(rawLimit: string | undefined): number {
   return Math.min(100, Math.max(1, Math.floor(parsed)))
 }
 
-iptv.get('/history', requireAuth, (c) => {
+iptv.get('/history', requireAuth, requireSection('live'), (c) => {
   const { sub } = userOf(c)
   const rows = iptvDb().stmts.getHistory.all(sub, parseHistoryLimit(c.req.query('limit')))
   return c.json(rows)
 })
 
-iptv.post('/history', requireAuth, async (c) => {
+iptv.post('/history', requireAuth, requireSection('live'), async (c) => {
   const { sub } = userOf(c)
   const body = await c.req.json().catch(() => ({})) as {
     kind?: unknown
@@ -694,6 +782,14 @@ function parsePositiveInt(value: string | undefined): number | null {
 }
 
 iptv.post('/stream/live/:streamId/grant', requireAuth, requireSection('live'), async (c) => {
+  // IPTV provider content is UNRATED (star ratings, never certifications) —
+  // a parental rating cap therefore blocks these grants wholesale (fail
+  // closed, same rule the catchup / VOD / series grants apply to the same
+  // unrated provider content). Live was the one hole: a capped member who
+  // could not play a channel's catchup archive could still tune it live.
+  if (await capBlocksUnrated(c.get('session'))) {
+    return c.json({ error: 'rating_blocked' }, 403)
+  }
   const streamId = c.req.param('streamId')
   if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
 
@@ -742,7 +838,7 @@ iptv.post('/stream/live/:streamId/grant', requireAuth, requireSection('live'), a
     if (acquired.reason !== 'iptv_concurrency_limit') {
       return c.json({ ok: false, reason: acquired.reason }, 503)
     }
-    return c.json({ ...acquired, sessions: enrichSessions(acquired.sessions) }, 429)
+    return c.json({ ...acquired, sessions: enrichSessionsFor(acquired.sessions, sub, c.get('session').role === 'admin') }, 429)
   }
 
   if (wantsRemux) {
@@ -844,7 +940,7 @@ iptv.post('/stream/catchup/:streamId/grant', requireAuth, requireSection('live')
     if (acquired.reason !== 'iptv_concurrency_limit') {
       return c.json({ ok: false, reason: acquired.reason }, 503)
     }
-    return c.json({ ...acquired, sessions: enrichSessions(acquired.sessions) }, 429)
+    return c.json({ ...acquired, sessions: enrichSessionsFor(acquired.sessions, sub, c.get('session').role === 'admin') }, 429)
   }
 
   const token = signStreamToken(env.streamTokenSecret, {
@@ -1265,7 +1361,7 @@ iptv.post('/stream/vod/:streamId/grant', requireAuth, requireSection('live'), as
     if (acquired.reason !== 'iptv_concurrency_limit') {
       return c.json({ ok: false, reason: acquired.reason }, 503)
     }
-    return c.json({ ...acquired, sessions: enrichSessions(acquired.sessions) }, 429)
+    return c.json({ ...acquired, sessions: enrichSessionsFor(acquired.sessions, sub, c.get('session').role === 'admin') }, 429)
   }
 
   const token = signStreamToken(env.streamTokenSecret, {
@@ -1304,7 +1400,16 @@ iptv.get('/stream/vod/:streamId/:ext', async (c) => {
   const creds = credsFromEnv()
   const upstreamUrl = `${creds.host}/movie/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${streamId}.${ext}`
   if (ext === 'm3u8') {
-    return await fetchAndRewriteHlsPlaylist({ upstreamUrl, sub: v.sub, clientSignal: c.req.raw.signal })
+    // b5fa8293: an HLS VOD never comes back to this route — hls.js fetches the
+    // VOD playlist once (#EXT-X-ENDLIST ⇒ no reload) and then talks only to
+    // /stream/segment. Tag the rewritten URLs with this grant so those fetches
+    // heartbeat the slot the heartbeat above can no longer reach.
+    return await fetchAndRewriteHlsPlaylist({
+      upstreamUrl,
+      sub: v.sub,
+      clientSignal: c.req.raw.signal,
+      owner: { kind: 'vod', id: streamId },
+    })
   }
 
   const mime = ext === 'mkv' ? 'video/x-matroska' : 'video/mp4'
@@ -1363,7 +1468,7 @@ iptv.post('/stream/series/:episodeId/grant', requireAuth, requireSection('live')
     if (acquired.reason !== 'iptv_concurrency_limit') {
       return c.json({ ok: false, reason: acquired.reason }, 503)
     }
-    return c.json({ ...acquired, sessions: enrichSessions(acquired.sessions) }, 429)
+    return c.json({ ...acquired, sessions: enrichSessionsFor(acquired.sessions, sub, c.get('session').role === 'admin') }, 429)
   }
 
   const token = signStreamToken(env.streamTokenSecret, {
@@ -1401,7 +1506,14 @@ iptv.get('/stream/series/:episodeId/:ext', async (c) => {
   const creds = credsFromEnv()
   const upstreamUrl = `${creds.host}/series/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${episodeId}.${ext}`
   if (ext === 'm3u8') {
-    return await fetchAndRewriteHlsPlaylist({ upstreamUrl, sub: v.sub, clientSignal: c.req.raw.signal })
+    // b5fa8293 — same as VOD: the segment fetches are the only signal that this
+    // episode is still playing, so they must carry the grant they belong to.
+    return await fetchAndRewriteHlsPlaylist({
+      upstreamUrl,
+      sub: v.sub,
+      clientSignal: c.req.raw.signal,
+      owner: { kind: 'series', id: episodeId },
+    })
   }
 
   const mime = ext === 'mkv' ? 'video/x-matroska' : 'video/mp4'
@@ -1431,6 +1543,17 @@ iptv.get('/stream/segment', async (c) => {
   const segReplay = checkReplay(claims.jti, claims.exp, 'segment')
   if (!segReplay.allowed) return c.json({ error: segReplay.reason }, 401)
 
+  // b5fa8293: for HLS VOD/series this route IS the playback — the owning
+  // /stream/vod|series/:id/m3u8 route runs once and never again, so without
+  // this the grant's slot was idle-swept ~30s into a movie and the
+  // IPTV_MAX_CONCURRENT_STREAMS cap silently stopped counting an active
+  // viewer (the same defect already fixed for remux, live and progressive).
+  // `sub` comes from the verified token, so a tampered ok/oid can only ever
+  // touch the caller's own sessions; parseSegmentOwner still rejects any tag
+  // that isn't a well-formed vod/series id before it reaches the tracker.
+  const owner = parseSegmentOwner(c.req.query('ok'), c.req.query('oid'))
+  if (owner) streamConcurrency().heartbeatByResource(claims.sub, owner.kind, owner.id)
+
   const upstream = claims.rid
   let url: URL
   try {
@@ -1454,10 +1577,13 @@ iptv.get('/stream/segment', async (c) => {
   }
 
   if (url.pathname.toLowerCase().endsWith('.m3u8')) {
+    // Carry the owner down the master → variant → media-segment chain, or the
+    // heartbeat dies one level below the master playlist.
     return await fetchAndRewriteHlsPlaylist({
       upstreamUrl: upstream,
       sub: claims.sub,
       clientSignal: c.req.raw.signal,
+      owner,
     })
   }
 

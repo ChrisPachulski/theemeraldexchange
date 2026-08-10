@@ -7,6 +7,8 @@ import { useConfirm } from '../confirm/useConfirm'
 import { useSonarrProfiles, useSonarrRootFolders } from '../../lib/hooks/useSonarrLibrary'
 import { useRadarrProfiles, useRadarrRootFolders } from '../../lib/hooks/useRadarrLibrary'
 import { useLimits } from '../../lib/hooks/useLimits'
+import { normalizeRootFolderPath, pickDefaultRootFolder } from '../../lib/pickDefaultRootFolder'
+import { pickDefaultProfileId } from '../../lib/pickDefaultProfileId'
 import {
   getReleaseView as getView,
   setReleaseView as setView,
@@ -795,7 +797,7 @@ function HistorySection({ kind, itemId }: { kind: Kind; itemId: number }) {
 }
 
 // --- Edit (quality profile + root folder + monitored). ---------------------
-function EditSection({
+export function EditSection({
   kind,
   itemId,
   monitored,
@@ -811,14 +813,35 @@ function EditSection({
   const sonarrFolders = useSonarrRootFolders()
   const radarrProfiles = useRadarrProfiles()
   const radarrFolders = useRadarrRootFolders()
+  const limits = useLimits()
   const profiles = kind === 'tv' ? sonarrProfiles : radarrProfiles
   const folders = kind === 'tv' ? sonarrFolders : radarrFolders
 
   const [profileChoice, setProfileChoice] = useState<number | null>(null)
   const [folderChoice, setFolderChoice] = useState<string | null>(null)
   const [monitorChoice, setMonitorChoice] = useState<boolean>(monitored)
-  const profileId = profileChoice ?? qualityProfileId ?? profiles.data?.[0]?.id ?? null
-  const folder = folderChoice ?? rootFolderPath ?? folders.data?.[0]?.path ?? null
+  // No profile of its own → fall back to the operator-curated DEFAULT_PROFILE_NAME,
+  // same as the Add modals. Taking profiles[0] here instead would let a Save
+  // silently re-grade the item onto whichever profile the *arr API happened to
+  // list first — usually 'Any', the worst one. pickDefaultProfileId already
+  // mirrors the server's pickProfile chain and degrades to profiles[0] (and to
+  // null on an empty/absent list), so no extra ?? chain.
+  const profileId =
+    profileChoice ??
+    qualityProfileId ??
+    pickDefaultProfileId(profiles.data, (limits.data?.defaultProfileName ?? 'choose me').toLowerCase())
+  // No folder of its own → fall back to the operator-curated
+  // DEFAULT_*_ROOT_FOLDER_PATH, same as the Add modals. Taking folders[0] here
+  // instead would let a Save silently re-home the item onto whichever root the
+  // *arr API happened to list first. pickDefaultRootFolder already degrades to
+  // folders[0] (and to null on an empty/absent list), so no extra ?? chain.
+  const folder =
+    folderChoice ??
+    rootFolderPath ??
+    pickDefaultRootFolder(
+      folders.data,
+      kind === 'tv' ? limits.data?.defaultSonarrRootFolderPath : limits.data?.defaultRadarrRootFolderPath,
+    )
 
   const save = useMutation({
     mutationFn: (): Promise<unknown> => {
@@ -857,6 +880,18 @@ function EditSection({
               disabled={!profiles.data}
               onChange={(e) => setProfileChoice(Number(e.target.value))}
             >
+              {/* Same orphan-value defect as the Folder select below: the
+                  item's own quality profile may have been renamed or deleted
+                  in Sonarr/Radarr after it was added, so its id is missing
+                  from the live list. A <select> can't hold a value with no
+                  matching <option> — it resets to the first one — so the panel
+                  would display a DIFFERENT profile than Save actually submits.
+                  Carry the orphan as its own option; the payload is unchanged.
+                  Profile ids are numeric, so a plain `===` match suffices (no
+                  normalizeRootFolderPath equivalent needed). */}
+              {profileId != null && !profiles.data?.some((p) => p.id === profileId) && (
+                <option value={profileId}>{`Profile ${profileId}`}</option>
+              )}
               {profiles.data?.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
@@ -871,6 +906,20 @@ function EditSection({
               disabled={!folders.data}
               onChange={(e) => setFolderChoice(e.target.value)}
             >
+              {/* The item's own folder may be absent from the live root-folder
+                  list — the mount was removed or renamed in Sonarr/Radarr
+                  after this item was added. A <select> can't hold a value
+                  with no matching <option> — it resets to the first one — so
+                  the panel would display, and appear to save, a DIFFERENT
+                  root than Save actually submits. Carry the orphan as its
+                  own option; the payload is unchanged. Compared with
+                  normalizeRootFolderPath (not `===`) so a trailing-slash or
+                  case difference from the *arr API doesn't spuriously
+                  duplicate the option the live list already has. */}
+              {folder != null &&
+                !folders.data?.some(
+                  (f) => normalizeRootFolderPath(f.path) === normalizeRootFolderPath(folder),
+                ) && <option value={folder}>{folder}</option>}
               {folders.data?.map((f) => (
                 <option key={f.id} value={f.path}>
                   {f.path}

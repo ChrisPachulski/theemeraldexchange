@@ -4,6 +4,10 @@ const membershipState = vi.hoisted(() => ({
   status: 'allowed' as 'allowed' | 'revoked' | 'not_member',
 }))
 
+// Parental rating cap. Default-open (no cap) so the grant tests below are
+// unaffected; the /stream cap tests flip it per-case.
+const ratingState = vi.hoisted(() => ({ blocked: false }))
+
 vi.mock('../env.js', () => ({
   env: {
     mediaCoreUrl: 'http://media-core.test',
@@ -41,6 +45,10 @@ vi.mock('../services/membership.js', () => ({
   memberStatus: vi.fn(() => membershipState.status),
 }))
 
+vi.mock('../services/parentalRating.js', () => ({
+  ratingBlocked: vi.fn(async () => ratingState.blocked),
+}))
+
 // Shape of the second arg the route passes to fetchWithTimeout: a fetch
 // RequestInit whose headers we assert on. Narrow once here so the call-site
 // casts stay readable.
@@ -54,6 +62,7 @@ import { media } from './media.js'
 import { fetchStreamWithConnectTimeout, fetchWithTimeout } from '../services/upstream.js'
 import { mintInternalPrincipal } from '../services/internalPrincipal.js'
 import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
+import { ratingBlocked } from '../services/parentalRating.js'
 
 // The media route deliberately splits wrappers: control-plane JSON (grant,
 // transcode handoff, readiness probe) goes through fetchWithTimeout (whole-
@@ -62,11 +71,13 @@ const mockFetch = vi.mocked(fetchStreamWithConnectTimeout)
 const mockFetchTimed = vi.mocked(fetchWithTimeout)
 const mockMint = vi.mocked(mintInternalPrincipal)
 const mockCaller = vi.mocked(recommenderCallerFromSession)
+const mockRatingBlocked = vi.mocked(ratingBlocked)
 
 describe('media proxy route', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     membershipState.status = 'allowed'
+    ratingState.blocked = false
     mockMint.mockReturnValue('minted-token')
     mockCaller.mockReturnValue({
       sub: 'plex:1',
@@ -247,6 +258,147 @@ describe('media proxy route', () => {
     expect(body.items[0].name).toBe('Miles Davis')
   })
 
+  it('403s a cookie-authed /stream/:kind/:id above the caller rating cap (no ?t=)', async () => {
+    // The cap is enforced at grant time (POST /playback), but /stream/:kind/:id
+    // also accepts a plain session cookie. Without a re-check there, a capped
+    // profile streams the raw bytes and skips the grant entirely.
+    ratingState.blocked = true
+    mockFetch.mockResolvedValue(new Response('movie-bytes', { status: 200 }))
+
+    const res = await media.request('/stream/movie/7', {
+      method: 'GET',
+      headers: { host: 'localhost' },
+    })
+
+    expect(res.status).toBe(403)
+    expect((await res.json()) as { error: string }).toEqual({ error: 'rating_blocked' })
+    // The bytes must never leave the box.
+    expect(mockFetch).not.toHaveBeenCalled()
+    expect(mockRatingBlocked).toHaveBeenCalledWith(
+      expect.objectContaining({ sub: 'plex:42' }),
+      'movie',
+      7,
+    )
+  })
+
+  it('403s a cookie-authed /stream/episode/:id above the cap too', async () => {
+    ratingState.blocked = true
+    mockFetch.mockResolvedValue(new Response('ep-bytes', { status: 200 }))
+
+    const res = await media.request('/stream/episode/99', {
+      method: 'GET',
+      headers: { host: 'localhost', range: 'bytes=0-1023' },
+    })
+
+    expect(res.status).toBe(403)
+    expect(mockFetch).not.toHaveBeenCalled()
+    expect(mockRatingBlocked).toHaveBeenCalledWith(expect.anything(), 'episode', 99)
+  })
+
+  it('still proxies a cookie-authed /stream/:kind/:id the cap allows', async () => {
+    // The gate must not become a blanket block on the cookie path.
+    ratingState.blocked = false
+    mockFetch.mockResolvedValue(
+      new Response('movie-bytes', { status: 200, headers: { 'Content-Type': 'video/mp4' } }),
+    )
+
+    const res = await media.request('/stream/movie/7', {
+      method: 'GET',
+      headers: { host: 'localhost' },
+    })
+
+    expect(res.status).toBe(200)
+    expect(mockFetch).toHaveBeenCalledOnce()
+    expect(String(mockFetch.mock.calls[0][0])).toBe('http://media-core.test/api/media/stream/movie/7')
+  })
+
+  it('leaves non-/stream media subpaths off the rating gate', async () => {
+    // Metadata/browse routes are cap-filtered client-side; the gate is only for
+    // the bytes, so a policy read must not be added to every catalog call.
+    ratingState.blocked = true
+    mockFetch.mockResolvedValue(new Response('{}', { status: 200 }))
+
+    const res = await media.request('/movies', { method: 'GET', headers: { host: 'localhost' } })
+
+    expect(res.status).toBe(200)
+    expect(mockRatingBlocked).not.toHaveBeenCalled()
+  })
+
+  it('403s a capped GET /subtitles/movie/:id/file (dialogue is the blocked content)', async () => {
+    // Mirrors the /stream cap test: the sidecar .vtt carries the title's
+    // dialogue verbatim, so serving it to a capped profile leaks exactly what
+    // the cap denies. It rode the catch-all proxy with auth only.
+    ratingState.blocked = true
+    mockFetch.mockResolvedValue(new Response('WEBVTT\n\n00:00.000 --> 00:02.000\nline', { status: 200 }))
+
+    const res = await media.request('/subtitles/movie/7/file?language=en&source=os', {
+      method: 'GET',
+      headers: { host: 'localhost' },
+    })
+
+    expect(res.status).toBe(403)
+    expect((await res.json()) as { error: string }).toEqual({ error: 'rating_blocked' })
+    // The cue text must never leave the box.
+    expect(mockFetch).not.toHaveBeenCalled()
+    expect(mockRatingBlocked).toHaveBeenCalledWith(
+      expect.objectContaining({ sub: 'plex:42' }),
+      'movie',
+      7,
+    )
+  })
+
+  // All four sidecar routes share the `/subtitles/{kind}/{id}` prefix, so the
+  // single prefix guard must cover list/file/download/transcribe alike — the
+  // write paths also spend OpenSubtitles quota / Whisper CPU on a blocked title.
+  it.each([
+    ['/subtitles/movie/7', 'GET', 'movie', 7],
+    ['/subtitles/movie/7/download', 'POST', 'movie', 7],
+    ['/subtitles/episode/99/transcribe', 'POST', 'episode', 99],
+    ['/subtitles/episode/99/file', 'GET', 'episode', 99],
+  ] as const)('403s a capped %s (%s)', async (path, method, kind, id) => {
+    ratingState.blocked = true
+    mockFetch.mockResolvedValue(new Response('{}', { status: 200 }))
+
+    const res = await media.request(path, { method, headers: { host: 'localhost' } })
+
+    expect(res.status).toBe(403)
+    expect(mockFetch).not.toHaveBeenCalled()
+    expect(mockRatingBlocked).toHaveBeenCalledWith(expect.anything(), kind, id)
+  })
+
+  it('still proxies /subtitles/movie/:id/file when the cap allows it', async () => {
+    // The guard must not become a blanket block on the sidecar routes.
+    ratingState.blocked = false
+    mockFetch.mockResolvedValue(
+      new Response('WEBVTT', { status: 200, headers: { 'Content-Type': 'text/vtt' } }),
+    )
+
+    const res = await media.request('/subtitles/movie/7/file?language=en', {
+      method: 'GET',
+      headers: { host: 'localhost' },
+    })
+
+    expect(res.status).toBe(200)
+    expect(String(mockFetch.mock.calls[0][0])).toBe(
+      'http://media-core.test/api/media/subtitles/movie/7/file?language=en',
+    )
+  })
+
+  it('leaves /subtitles/status off the rating gate', async () => {
+    // The job-status poll carries no title content and has no {kind}/{id} to
+    // resolve — 'status' must never be read as a media kind.
+    ratingState.blocked = true
+    mockFetch.mockResolvedValue(new Response('{"job":null}', { status: 200 }))
+
+    const res = await media.request('/subtitles/status', {
+      method: 'GET',
+      headers: { host: 'localhost' },
+    })
+
+    expect(res.status).toBe(200)
+    expect(mockRatingBlocked).not.toHaveBeenCalled()
+  })
+
   it('forwards POST body and content-type', async () => {
     mockFetch.mockResolvedValue(new Response('ok', { status: 200 }))
 
@@ -267,6 +419,7 @@ describe('media playback grant', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     membershipState.status = 'allowed'
+    ratingState.blocked = false
     mockMint.mockReturnValue('minted-token')
     mockCaller.mockReturnValue({
       sub: 'plex:42',
@@ -339,6 +492,38 @@ describe('media playback grant', () => {
     expect(mockFetchTimed).toHaveBeenCalledOnce()
     expect(String(mockFetchTimed.mock.calls[0][0])).toContain('/api/media/play/track/42/grant')
     expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('a ?t= stream token replays without re-reading the rating policy', async () => {
+    // The token could only have been minted by the gated POST /playback, so the
+    // per-range GET must not pay a policy read — that asymmetry is the reason
+    // the tokenless branch needs its own gate.
+    mockFetchTimed.mockResolvedValueOnce(
+      new Response(JSON.stringify({ directPlay: true, file: { duration_secs: 1200 } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const grant = await media.request('/playback/movie/7', {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: '{}',
+    })
+    expect(mockRatingBlocked).toHaveBeenCalledOnce() // gated once, at grant time
+    const { url } = (await grant.json()) as { url: string }
+    vi.clearAllMocks()
+    // A cap applied AFTER the grant must not retroactively 403 the token path.
+    ratingState.blocked = true
+    mockFetch.mockResolvedValue(new Response('bytes', { status: 200 }))
+
+    const res = await media.request(url.replace(/^\/api\/media/, ''), {
+      method: 'GET',
+      headers: { host: 'localhost' },
+    })
+
+    expect(res.status).toBe(200)
+    expect(mockRatingBlocked).not.toHaveBeenCalled()
+    expect(mockFetch).toHaveBeenCalledOnce()
   })
 
   it('rejects a direct-play stream token after membership revocation', async () => {

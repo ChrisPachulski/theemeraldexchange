@@ -103,6 +103,48 @@ forwardRead('/api/v3/movie/lookup')
 // silently 404'd in prod, leaving movie pending states invisible.
 forwardRead('/api/v3/queue')
 
+// Admin-only: clear downloads jammed in Radarr's import stage
+// (trackedDownloadState importPending/importBlocked). Mirrors the Sonarr
+// route — these are completed downloads Radarr can't move into the library;
+// left alone they pile up in the queue forever and the Downloads tab can't
+// act on them. Removes from the client, blocklists the bad release, and lets
+// Radarr re-search for a parseable replacement. Rate-limited because each
+// removal kicks a search.
+radarr.post('/api/v3/queue/clear-stuck', requireAdmin, radarrMutateLimit, async (c) => {
+  const qr = await radarrFetch(
+    '/api/v3/queue',
+    { method: 'GET' },
+    new URLSearchParams({ pageSize: '2000' }),
+  )
+  if (!qr.ok) return c.json({ error: 'queue_unreachable' }, 502)
+  const page = (await qr.json()) as {
+    records?: Array<{ id: number; trackedDownloadState?: string }>
+  }
+  const ids = (page.records ?? [])
+    .filter(
+      (r) =>
+        r.trackedDownloadState === 'importPending' ||
+        r.trackedDownloadState === 'importBlocked',
+    )
+    .map((r) => r.id)
+  if (ids.length === 0) return c.json({ removed: 0 })
+  const del = await radarrFetch(
+    '/api/v3/queue/bulk',
+    {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    },
+    new URLSearchParams({
+      removeFromClient: 'true',
+      blocklist: 'true',
+      skipRedownload: 'false',
+    }),
+  )
+  if (!del.ok) return c.json({ error: 'bulk_delete_failed', status: del.status }, 502)
+  return c.json({ removed: ids.length })
+})
+
 // ===========================================================================
 // Advanced options (admin-only power-user actions). Contract: R1–R6 in
 // docs/superpowers/specs/2026-06-22-arr-advanced-options-design.md. Mirrors
@@ -941,7 +983,7 @@ radarr.post('/api/v3/movie/:id/upgrade', requireAdmin, radarrMutateLimit, async 
   })
 })
 
-radarr.delete('/api/v3/movie/:id', requireAdmin, async (c) => {
+radarr.delete('/api/v3/movie/:id', requireAdmin, radarrMutateLimit, async (c) => {
   // The :id param is URL-decoded by Hono BEFORE we use it, so an
   // attacker who passes `..%2Frootfolder%2F1` ends up with the literal
   // string `../rootfolder/1`. Once that hits the `new URL(base + path)`

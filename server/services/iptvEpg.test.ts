@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest'
-import { xmltvTimeToIso, streamXmltv, type EpgProgrammeRow } from './iptvEpg.js'
+import { afterEach, describe, it, expect, vi } from 'vitest'
+import { xmltvTimeToIso, streamXmltv, fetchAndStreamEpg, type EpgProgrammeRow } from './iptvEpg.js'
+import { SsrfBlockedError, __setSsrfLookupForTests } from './ssrfGuard.js'
 import { Readable } from 'node:stream'
 
 describe('xmltv helpers', () => {
@@ -86,6 +87,92 @@ describe('xmltvTimeToIso rejects malformed input', () => {
 
   it('throws on a too-short (13-digit) datetime', () => {
     expect(() => xmltvTimeToIso('2026052410300 +0000')).toThrow(/xmltv_time_bad_format/)
+  })
+})
+
+describe('fetchAndStreamEpg SSRF redirect guard', () => {
+  const PANEL = 'http://panel.example.com'
+  const CREDS = { host: PANEL, username: 'example-user', password: 'placeholder' }
+
+  /** A Web ReadableStream over `xml` — the shape `res.body` has. */
+  function webBody(xml: string): ReadableStream<Uint8Array> {
+    return Readable.toWeb(Readable.from(Buffer.from(xml))) as unknown as ReadableStream<Uint8Array>
+  }
+
+  /**
+   * Stub fetch as the Xtream panel 302-ing to `target`. Models REAL platform
+   * fetch semantics: with the WHATWG default `redirect: 'follow'` the runtime
+   * follows the hop itself and returns the TARGET's response, so unguarded code
+   * parses internal bytes without ever seeing the redirect. Only the SSRF egress
+   * loop's `redirect: 'manual'` surfaces the 302 for re-validation. Any request
+   * to a NON-panel url is the redirect target being dialed, and answers with the
+   * payload — so a guard that fails open shows up as parsed rows, not an error.
+   */
+  function stubFetchRedirect(target: string, payload: string) {
+    const fn = vi.fn(async (url: string, init?: RequestInit) => {
+      const isPanel = url.startsWith(PANEL)
+      if (!isPanel || init?.redirect !== 'manual') {
+        return { ok: true, status: 200, body: webBody(payload) } as unknown as Response
+      }
+      return new Response(null, { status: 302, headers: { location: target } })
+    })
+    vi.stubGlobal('fetch', fn)
+    return fn
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    __setSsrfLookupForTests(null)
+  })
+
+  it('rejects a panel 302 into cloud metadata instead of parsing the target response', async () => {
+    // The panel host is operator-configured (trusted initial hop) — but the
+    // redirect it answers with is attacker-influenceable, exactly like the
+    // live-segment and catchup routes that already guard this same host. With
+    // plain fetch() the platform follows the hop and streamXmltv happily parses
+    // whatever the internal address returned; guardedFetchTrustedOrigin refuses
+    // it before a second request leaves the box.
+    const internalXml =
+      `<?xml version="1.0"?><tv><programme start="20260524103000 +0000" ` +
+      `stop="20260524110000 +0000" channel="leak.1"><title>Leaked</title></programme></tv>`
+    const fetchFn = stubFetchRedirect('http://169.254.169.254/latest/meta-data/', internalXml)
+    const rows: EpgProgrammeRow[] = []
+
+    const err = await fetchAndStreamEpg((r) => rows.push(r), CREDS).then(
+      () => null,
+      (e: unknown) => e,
+    )
+
+    expect(err).toBeInstanceOf(SsrfBlockedError)
+    expect(String(err)).toMatch(/blocked non-public upstream.*169\.254\.169\.254/)
+    // Nothing from the redirect target was parsed...
+    expect(rows).toHaveLength(0)
+    // ...and only the trusted panel was ever dialed.
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+    expect(String(fetchFn.mock.calls[0][0]).startsWith(PANEL)).toBe(true)
+  })
+
+  it('rejects a panel 302 into an internal service hostname', async () => {
+    const fetchFn = stubFetchRedirect('http://recommender:8000/x', '<?xml version="1.0"?><tv></tv>')
+    await expect(fetchAndStreamEpg(() => {}, CREDS)).rejects.toBeInstanceOf(SsrfBlockedError)
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+  })
+
+  it('still follows a public->public panel redirect and streams the final feed', async () => {
+    // The guard must not break the legitimate case: panels routinely 30x to a
+    // separate public CDN. 8.8.8.8 keeps resolve-and-validate off real DNS.
+    __setSsrfLookupForTests(async () => [{ address: '8.8.8.8' }])
+    const xml =
+      `<?xml version="1.0"?><tv><programme start="20260524103000 +0000" ` +
+      `stop="20260524110000 +0000" channel="cnn.us"><title>News</title></programme></tv>`
+    const fetchFn = stubFetchRedirect('https://cdn.example.com/xmltv.php', xml)
+    const rows: EpgProgrammeRow[] = []
+
+    await fetchAndStreamEpg((r) => rows.push(r), CREDS)
+
+    expect(rows.map((r) => r.title)).toEqual(['News'])
+    expect(fetchFn).toHaveBeenCalledTimes(2)
+    expect(fetchFn.mock.calls[1][0]).toBe('https://cdn.example.com/xmltv.php')
   })
 })
 

@@ -30,6 +30,13 @@ const membershipState = vi.hoisted(() => ({
   status: 'allowed' as 'allowed' | 'revoked' | 'not_member',
 }))
 
+// The DB-backed half of effectiveRoleFor (used by the serve-time rating gate on
+// /playlist.m3u, which has no session to read a role from). Mocked so this suite
+// never opens a real serverDb(); flip `membersState.member` to grant admin.
+const membersState = vi.hoisted(() => ({
+  member: null as { role: 'admin' | 'user' } | null,
+}))
+
 // Sub claim the fake token decoder reports. Tests override it to exercise the
 // strict namespaced-sub requirement (the M1 bare-numeric grace is removed).
 const tokenState = vi.hoisted(() => ({
@@ -49,6 +56,10 @@ vi.mock('../middleware/auth.js', async () => {
 
 vi.mock('../services/membership.js', () => ({
   memberStatus: vi.fn(() => membershipState.status),
+}))
+
+vi.mock('../services/members.js', () => ({
+  isMember: vi.fn(() => membersState.member),
 }))
 
 vi.mock('../services/xtream.js', () => ({
@@ -95,10 +106,12 @@ const concurrencyState = vi.hoisted(() => {
     lastSeen: number
   }> = []
   const releasedByResource: Array<{ sub: string; kind: string; resourceId: string }> = []
+  const heartbeatsByResource: Array<{ sub: string; kind: string; resourceId: string }> = []
 
   return {
     sessions,
     releasedByResource,
+    heartbeatsByResource,
     tracker: {
       tryAcquire: ({ sub, sessionId, kind, resourceId, ip, title }: {
         sub: string
@@ -122,7 +135,10 @@ const concurrencyState = vi.hoisted(() => {
         return { ok: true, sessionId }
       },
       heartbeat: () => {},
-      heartbeatByResource: () => true,
+      heartbeatByResource: (sub: string, kind: string, resourceId: string) => {
+        heartbeatsByResource.push({ sub, kind, resourceId })
+        return true
+      },
       release: (sessionId: string) => {
         const index = sessions.findIndex((session) => session.sessionId === sessionId)
         if (index !== -1) sessions.splice(index, 1)
@@ -247,9 +263,11 @@ function fakeToken(kind: string, resourceId: string): string {
 beforeEach(() => {
   authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
   membershipState.status = 'allowed'
+  membersState.member = null
   tokenState.sub = 'plex:42'
   concurrencyState.sessions.length = 0
   concurrencyState.releasedByResource.length = 0
+  concurrencyState.heartbeatsByResource.length = 0
   dbState.testDb?.raw.exec('DELETE FROM iptv_playlist_tokens;')
 })
 
@@ -403,6 +421,250 @@ describe('playlist token lifecycle', () => {
     })
     expect(res.status).toBe(413)
   })
+
+  // The mint gate on POST /playlist/token only covers tokens minted AFTER a cap
+  // exists. A token minted while uncapped stays valid for its 90-day TTL, so the
+  // cap has to be re-checked at serve time or a newly-capped member keeps pulling
+  // the full live playlist from VLC until someone hand-revokes the jti.
+  describe('serve-time rating cap on GET /playlist.m3u', () => {
+    let policyDir: string
+    let policyPath: string
+
+    beforeEach(async () => {
+      policyDir = await fsp.mkdtemp(join(tmpdir(), 'iptv-m3u-policy-'))
+      policyPath = join(policyDir, 'user-policies.json')
+      _setUserPoliciesPathForTests(policyPath)
+    })
+    afterEach(async () => {
+      _setUserPoliciesPathForTests(env.userPoliciesPath)
+      await fsp.rm(policyDir, { recursive: true, force: true })
+    })
+
+    // Mint uncapped (the mint gate passes), then apply the cap — exactly the
+    // residual-TTL window the serve-time gate exists to close.
+    async function mintThenCap(sub: string, maxContentRating: string | null) {
+      authState.session = { sub, username: 'Kid', role: 'user' }
+      tokenState.sub = sub
+      const minted = await mintPlaylistToken()
+      await fsp.writeFile(
+        policyPath,
+        JSON.stringify({
+          [sub]: {
+            maxContentRating,
+            allowedSections: { live: true, downloads: true, arr: true },
+            kid: true,
+          },
+        }),
+      )
+      _setUserPoliciesPathForTests(policyPath)
+      const url = new URL(minted.url)
+      return url.pathname + url.search
+    }
+
+    it('403 rating_blocked when a cap is applied after the token was minted', async () => {
+      const playlistPath = await mintThenCap('plex:99', 'PG')
+      const res = await app.request(playlistPath)
+      expect(res.status).toBe(403)
+      expect(await res.json()).toEqual({ error: 'rating_blocked' })
+    })
+
+    it('serves the playlist for an admin sub even under a content-rating cap', async () => {
+      const playlistPath = await mintThenCap('plex:99', 'PG')
+      // No session on this route — admin has to come from the same authority
+      // reconcileSession uses (the members row), not the cookie.
+      membersState.member = { role: 'admin' }
+      const res = await app.request(playlistPath)
+      expect(res.status).toBe(200)
+      expect(res.headers.get('content-type')).toBe('audio/x-mpegurl')
+    })
+
+    it('serves the playlist for a non-admin with no content-rating cap', async () => {
+      const playlistPath = await mintThenCap('plex:99', null)
+      const res = await app.request(playlistPath)
+      expect(res.status).toBe(200)
+      expect(res.headers.get('content-type')).toBe('audio/x-mpegurl')
+    })
+
+    // Mint while live is still allowed (mint gate passes), then the admin
+    // turns live off — the section-half of the same residual-TTL window.
+    async function mintThenRestrictLive(sub: string) {
+      authState.session = { sub, username: 'Kid', role: 'user' }
+      tokenState.sub = sub
+      const minted = await mintPlaylistToken()
+      await fsp.writeFile(
+        policyPath,
+        JSON.stringify({
+          [sub]: {
+            maxContentRating: null,
+            allowedSections: { live: false, downloads: true, arr: true },
+            kid: true,
+          },
+        }),
+      )
+      _setUserPoliciesPathForTests(policyPath)
+      const url = new URL(minted.url)
+      return url.pathname + url.search
+    }
+
+    it('403 section_blocked when live access is revoked after the token was minted', async () => {
+      const playlistPath = await mintThenRestrictLive('plex:99')
+      const res = await app.request(playlistPath)
+      expect(res.status).toBe(403)
+      expect(await res.json()).toEqual({ error: 'section_blocked' })
+    })
+
+    it('serves the playlist for an admin sub even with live access revoked', async () => {
+      const playlistPath = await mintThenRestrictLive('plex:99')
+      membersState.member = { role: 'admin' }
+      const res = await app.request(playlistPath)
+      expect(res.status).toBe(200)
+      expect(res.headers.get('content-type')).toBe('audio/x-mpegurl')
+    })
+  })
+})
+
+describe('GET /api/iptv/sessions', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+
+  type SessionsBody = { self: string; ours: Array<{ sessionId: string; sub: string; ip: string | null }> }
+
+  function seedSession(sessionId: string, sub: string) {
+    concurrencyState.sessions.push({
+      sessionId,
+      sub,
+      kind: 'live',
+      resourceId: '10',
+      title: 'CNN',
+      ip: '10.0.0.7',
+      startedAt: 1,
+      lastSeen: 1,
+    })
+  }
+
+  it('does not expose another household member\'s session to a non-admin', async () => {
+    authState.session = { sub: 'plex:42', username: 'Test', role: 'user' }
+    seedSession('own-session', 'plex:42')
+    seedSession('other-session', 'plex:other')
+
+    const res = await app.request('/api/iptv/sessions')
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as SessionsBody
+    expect(body.ours.map((s) => s.sessionId)).toEqual(['own-session'])
+    // Nothing about the other member leaks: no sub, no client IP, no title.
+    expect(body.ours.some((s) => s.sub === 'plex:other')).toBe(false)
+    expect(JSON.stringify(body)).not.toContain('plex:other')
+  })
+
+  it('returns an empty list to a non-admin holding no sessions', async () => {
+    authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+    seedSession('other-session', 'plex:other')
+
+    const res = await app.request('/api/iptv/sessions')
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as SessionsBody
+    expect(body.self).toBe('plex:99')
+    expect(body.ours).toEqual([])
+  })
+
+  it('still shows every session to an admin (support/kick visibility)', async () => {
+    authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
+    seedSession('own-session', 'plex:42')
+    seedSession('other-session', 'plex:other')
+
+    const res = await app.request('/api/iptv/sessions')
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as SessionsBody
+    expect(body.ours.map((s) => s.sessionId).sort()).toEqual(['other-session', 'own-session'])
+  })
+})
+
+// BACKLOG 01e16f6f: the concurrency-cap 429 embeds the WHOLE household's
+// session list (same leak class as GET /sessions above, commit b7b7bf5) so
+// ConcurrencyLimitModal can render inline kick buttons without a round trip.
+// Reached more often than GET /sessions on a small provider line, since the
+// household hits the cap routinely. Redaction must hold the closed-enum
+// Swift contract: every field stays present, only OTHER members' content
+// is nulled/coarsened.
+describe('concurrency-cap 429 session redaction (BACKLOG 01e16f6f)', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+  let originalTryAcquire: typeof concurrencyState.tracker.tryAcquire
+
+  beforeEach(() => {
+    originalTryAcquire = concurrencyState.tracker.tryAcquire
+    concurrencyState.tracker.tryAcquire = () => ({
+      ok: false,
+      reason: 'iptv_concurrency_limit',
+      limit: 2,
+      current: 2,
+      sessions: [
+        { sessionId: 'own-session', sub: 'plex:42', kind: 'live', resourceId: '10', title: 'CNN', ip: '10.0.0.7', startedAt: 1, lastSeen: 1 },
+        { sessionId: 'other-session', sub: 'plex:other', kind: 'live', resourceId: '20', title: 'ESPN', ip: '10.0.0.9', startedAt: 1, lastSeen: 1 },
+      ],
+    })
+  })
+  afterEach(() => {
+    concurrencyState.tracker.tryAcquire = originalTryAcquire
+  })
+
+  type CapBody = {
+    sessions: Array<{
+      sessionId: string
+      sub: string | null
+      ip: string | null
+      title: string | null
+      resolvedTitle: string | null
+      kind: string
+      resourceId: string
+    }>
+  }
+
+  it('redacts another member\'s sub/ip/title but keeps the caller\'s own row intact', async () => {
+    authState.session = { sub: 'plex:42', username: 'Test', role: 'user' }
+    const res = await app.request('/api/iptv/stream/live/10/grant', { method: 'POST' })
+    expect(res.status).toBe(429)
+    const body = (await res.json()) as CapBody
+    const own = body.sessions.find((s) => s.sessionId === 'own-session')!
+    const other = body.sessions.find((s) => s.sessionId === 'other-session')!
+    expect(own.sub).toBe('plex:42')
+    expect(own.ip).toBe('10.0.0.7')
+    expect(own.title).toBe('CNN')
+    expect(other.sub).toBeNull()
+    expect(other.ip).toBeNull()
+    expect(other.title).toBe('another household member')
+    expect(other.resolvedTitle).toBe('another household member')
+    expect(JSON.stringify(body)).not.toContain('plex:other')
+    expect(JSON.stringify(body)).not.toContain('10.0.0.9')
+    expect(JSON.stringify(body)).not.toContain('ESPN')
+  })
+
+  it('still shows every session in full detail to an admin (support/kick visibility)', async () => {
+    authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
+    const res = await app.request('/api/iptv/stream/live/10/grant', { method: 'POST' })
+    expect(res.status).toBe(429)
+    const body = (await res.json()) as CapBody
+    const other = body.sessions.find((s) => s.sessionId === 'other-session')!
+    expect(other.sub).toBe('plex:other')
+    expect(other.ip).toBe('10.0.0.9')
+    expect(other.title).toBe('ESPN')
+  })
+
+  it('keeps the closed-enum field set stable so the Swift client contract holds', async () => {
+    authState.session = { sub: 'plex:42', username: 'Test', role: 'user' }
+    const res = await app.request('/api/iptv/stream/live/10/grant', { method: 'POST' })
+    const body = (await res.json()) as CapBody
+    for (const s of body.sessions) {
+      expect(s).toHaveProperty('sub')
+      expect(s).toHaveProperty('ip')
+      expect(s).toHaveProperty('title')
+      expect(s).toHaveProperty('resolvedTitle')
+      expect(s).toHaveProperty('sessionId')
+      expect(s).toHaveProperty('kind')
+      expect(s).toHaveProperty('resourceId')
+    }
+  })
 })
 
 describe('DELETE /api/iptv/sessions/:sessionId', () => {
@@ -450,6 +712,47 @@ describe('DELETE /api/iptv/sessions/:sessionId', () => {
 
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ ok: true, released: 'own-session' })
+    expect(concurrencyState.sessions).toHaveLength(0)
+  })
+
+  // A DVR recording holds a REAL upstream connection via its own ffmpeg, which
+  // only dvrRecorder.stop() can kill. Releasing just the accounting slot here
+  // would undercount upstreamInUse() while the provider connection stays open —
+  // exactly the over-cap dial the recorder's own deferral logic exists to avoid.
+  // Session id/sub shapes mirror dvrRecorder.start(): `record:<id>` / `dvr:<id>`.
+  it('refuses to release a dvr: recording session (must be stopped via the DVR panel)', async () => {
+    seedSession('record:01ABC', 'dvr:01ABC')
+
+    const res = await app.request('/api/iptv/sessions/record:01ABC', { method: 'DELETE' })
+
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({
+      error: 'dvr_recording_session',
+      message:
+        'stop this recording from the DVR panel (DELETE /api/dvr/recordings/:id), not the sessions widget',
+    })
+    // The whole point: the slot must survive, so upstreamInUse() keeps counting
+    // the connection the still-running ffmpeg actually holds.
+    expect(concurrencyState.sessions).toHaveLength(1)
+  })
+
+  it('refuses a dvr: recording session for a non-admin too, without leaking a 403/404 release', async () => {
+    authState.session = { sub: 'plex:42', username: 'Test', role: 'user' }
+    seedSession('record:01ABC', 'dvr:01ABC')
+
+    const res = await app.request('/api/iptv/sessions/record:01ABC', { method: 'DELETE' })
+
+    // Non-admins never own a synthetic sub, so the ownership gate rejects first.
+    expect(res.status).toBe(403)
+    expect(concurrencyState.sessions).toHaveLength(1)
+  })
+
+  it('still releases a normal live session whose sub merely contains "dvr:"', async () => {
+    seedSession('plex-session', 'plex:dvr:42')
+
+    const res = await app.request('/api/iptv/sessions/plex-session', { method: 'DELETE' })
+
+    expect(res.status).toBe(200)
     expect(concurrencyState.sessions).toHaveLength(0)
   })
 })
@@ -568,10 +871,13 @@ describe('live stream grant + proxy', () => {
     )
   })
 
-  // Per-user policy section gate (requireSection('live')). A member whose
-  // policy denies the `live` section gets 403 before any concurrency slot
-  // is acquired; allowed members and admins reach the normal grant path.
-  describe('live section policy', () => {
+  // Per-user policy gates. requireSection('live') stops a member whose policy
+  // denies the `live` section; capBlocksUnrated stops a member with ANY
+  // content-rating cap, because provider live channels are unrated (fail
+  // closed, identical to the catchup/VOD/series grants for the same content).
+  // Both fire before any concurrency slot is acquired; allowed members and
+  // admins reach the normal grant path.
+  describe('live section + rating policy', () => {
     let policyDir: string
     let policyPath: string
     beforeEach(async () => {
@@ -633,6 +939,191 @@ describe('live stream grant + proxy', () => {
       )
       _setUserPoliciesPathForTests(policyPath)
       const res = await app.request('/api/iptv/stream/live/10/grant', { method: 'POST' })
+      expect(res.status).toBe(200)
+    })
+
+    const writePolicy = async (sub: string, maxContentRating: string | null) => {
+      await fsp.writeFile(
+        policyPath,
+        JSON.stringify({
+          [sub]: {
+            maxContentRating,
+            allowedSections: { live: true, downloads: true, arr: true },
+            kid: true,
+          },
+        }),
+      )
+      _setUserPoliciesPathForTests(policyPath)
+    }
+
+    // Regression: the live grant was the ONE unrated-provider grant without the
+    // cap gate, so a capped member blocked from a channel's catchup archive
+    // could still tune the very same channel live.
+    it('403 rating_blocked for a non-admin with a content-rating cap on the live grant', async () => {
+      authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+      await writePolicy('plex:99', 'PG')
+      const res = await app.request('/api/iptv/stream/live/10/grant', { method: 'POST' })
+      expect(res.status).toBe(403)
+      expect(await res.json()).toEqual({ error: 'rating_blocked' })
+      // The gate must precede tryAcquire, or a blocked caller still burns a
+      // provider connection slot on every rejected tune.
+      expect(concurrencyState.sessions).toHaveLength(0)
+    })
+
+    // The remux (AVPlayer/HLS) branch mints a different token from the same
+    // handler — the gate is above the fork, so both are covered.
+    it('403 rating_blocked on the remux live grant too', async () => {
+      authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+      await writePolicy('plex:99', 'PG')
+      const res = await app.request('/api/iptv/stream/live/10/grant?client=avplayer', {
+        method: 'POST',
+      })
+      expect(res.status).toBe(403)
+      expect(concurrencyState.sessions).toHaveLength(0)
+    })
+
+    it('allows the live grant for a non-admin with no content-rating cap', async () => {
+      authState.session = { sub: 'plex:99', username: 'Teen', role: 'user' }
+      await writePolicy('plex:99', null)
+      const res = await app.request('/api/iptv/stream/live/10/grant', { method: 'POST' })
+      expect(res.status).toBe(200)
+    })
+
+    it('admin is never rating_blocked on the live grant', async () => {
+      authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
+      await writePolicy('plex:42', 'G')
+      const res = await app.request('/api/iptv/stream/live/10/grant', { method: 'POST' })
+      expect(res.status).toBe(200)
+    })
+
+    // Regression: the live grant was gated, but a capped member could still
+    // export an M3U (every live channel, each embedding a live token) and
+    // bypass the same rating cap entirely outside the in-app player.
+    it('403 rating_blocked minting a playlist token for a non-admin with a content-rating cap', async () => {
+      authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+      await writePolicy('plex:99', 'PG')
+      const res = await app.request('/api/iptv/playlist/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      })
+      expect(res.status).toBe(403)
+      expect(await res.json()).toEqual({ error: 'rating_blocked' })
+    })
+
+    it('allows minting a playlist token for a non-admin with no content-rating cap', async () => {
+      authState.session = { sub: 'plex:99', username: 'Teen', role: 'user' }
+      await writePolicy('plex:99', null)
+      const res = await app.request('/api/iptv/playlist/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      })
+      expect(res.status).toBe(200)
+    })
+
+    it('admin is never rating_blocked minting a playlist token', async () => {
+      authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
+      await writePolicy('plex:42', 'G')
+      const res = await app.request('/api/iptv/playlist/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      })
+      expect(res.status).toBe(200)
+    })
+
+    it('403 section_blocked minting a playlist token for a non-admin whose policy denies live', async () => {
+      authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+      await fsp.writeFile(
+        policyPath,
+        JSON.stringify({
+          'plex:99': {
+            maxContentRating: null,
+            allowedSections: { live: false, downloads: true, arr: true },
+            kid: true,
+          },
+        }),
+      )
+      _setUserPoliciesPathForTests(policyPath)
+      const res = await app.request('/api/iptv/playlist/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      })
+      expect(res.status).toBe(403)
+      expect(await res.json()).toEqual({ error: 'section_blocked' })
+    })
+
+    // Regression: the grants and the DVR listings were gated, but every
+    // catalog/EPG *browse* GET was requireAuth-only. A member whose policy
+    // denies live still got the full channel list, the provider VOD/series
+    // catalog, and the whole guide — the client only hid the section, so any
+    // direct call (or a tampered client) walked straight through.
+    const browseRoutes = [
+      '/api/iptv/categories?kind=live',
+      '/api/iptv/live',
+      '/api/iptv/vod',
+      '/api/iptv/series',
+      '/api/iptv/epg/now?channelIds=10',
+      '/api/iptv/epg/channel/10',
+      '/api/iptv/epg/grid',
+      '/api/iptv/epg/search?q=news',
+      '/api/iptv/vod/20',
+      '/api/iptv/series/30',
+    ]
+
+    const writeSectionPolicy = async (sub: string, live: boolean) => {
+      await fsp.writeFile(
+        policyPath,
+        JSON.stringify({
+          [sub]: {
+            maxContentRating: null,
+            allowedSections: { live, downloads: true, arr: true },
+            kid: true,
+          },
+        }),
+      )
+      _setUserPoliciesPathForTests(policyPath)
+    }
+
+    it.each(browseRoutes)(
+      '403 section_blocked browsing %s for a non-admin whose policy denies live',
+      async (route) => {
+        authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+        await writeSectionPolicy('plex:99', false)
+        const res = await app.request(route)
+        expect(res.status).toBe(403)
+        expect(await res.json()).toEqual({ error: 'section_blocked' })
+      },
+    )
+
+    it.each(browseRoutes)('allows %s for a non-admin whose policy permits live', async (route) => {
+      authState.session = { sub: 'plex:99', username: 'Teen', role: 'user' }
+      await writeSectionPolicy('plex:99', true)
+      __resetRateLimitsForTests()
+      const res = await app.request(route)
+      expect(res.status).toBe(200)
+    })
+
+    it.each(browseRoutes)('admin browsing %s is never blocked under a live:false policy', async (route) => {
+      authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
+      await writeSectionPolicy('plex:42', false)
+      __resetRateLimitsForTests()
+      const res = await app.request(route)
+      expect(res.status).toBe(200)
+    })
+
+    // The gate must sit BEFORE epgSearchRateLimit, or a denied member drains
+    // their own 10/s token bucket on rejected calls and then eats a 429 the
+    // moment the section is granted back.
+    it('a blocked /epg/search caller does not burn the shared rate-limit budget', async () => {
+      authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+      __resetRateLimitsForTests()
+      await writeSectionPolicy('plex:99', false)
+      for (let i = 0; i < 11; i++) {
+        const blocked = await app.request('/api/iptv/epg/search?q=news')
+        expect(blocked.status).toBe(403)
+      }
+      // Same sub, section granted back: the bucket must still be full.
+      await writeSectionPolicy('plex:99', true)
+      const res = await app.request('/api/iptv/epg/search?q=news')
       expect(res.status).toBe(200)
     })
   })
@@ -1397,6 +1888,153 @@ describe('segment proxy', () => {
   })
 })
 
+// BACKLOG b5fa8293 — HLS VOD/series playback never heartbeat its concurrency
+// slot past the FIRST manifest request. `/stream/vod|series/:id/m3u8` runs once
+// (a VOD playlist ends with #EXT-X-ENDLIST, so hls.js never reloads it) and
+// every byte afterwards is fetched from `/stream/segment`, which had no idea
+// which grant it belonged to and heartbeat nothing. The slot went idle ~30s into
+// a movie and was swept, so IPTV_MAX_CONCURRENT_STREAMS silently stopped
+// counting an actively-playing viewer — the exact defect already fixed for
+// remux (finding 8-1), live and the progressive byte routes.
+describe('HLS on-demand concurrency heartbeat (b5fa8293)', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+
+  const segUrl = (upstream: string, ownerQuery = '') =>
+    `/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', upstream))}${ownerQuery}`
+
+  // Fresh Response per call: the route pipes upstream.body, which a single
+  // shared Response would only allow to be consumed once.
+  const mockUpstream = (body: () => string, init?: ResponseInit) =>
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(body(), { status: 200, ...init }))
+
+  const segmentLines = (text: string) =>
+    text.split('\n').filter((line) => line.includes('/api/iptv/stream/segment'))
+
+  it('tags every rewritten URL in a VOD manifest with its owning grant', async () => {
+    const fetchSpy = mockUpstream(() => [
+      '#EXTM3U',
+      '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="en",URI="subs/en.m3u8"',
+      '#EXT-X-STREAM-INF:BANDWIDTH=1280000',
+      'level1.m3u8',
+      '#EXTINF:6.0,',
+      'seg-001.ts',
+    ].join('\n'))
+    try {
+      const res = await app.request(`/api/iptv/stream/vod/20/m3u8?t=${fakeToken('vod', '20')}`)
+      expect(res.status).toBe(200)
+      const lines = segmentLines(await res.text())
+      // Sub-playlists, the EXT-X-MEDIA URI attribute AND media segments must all
+      // carry the tag — a variant that loses it takes every segment below it.
+      expect(lines).toHaveLength(3)
+      for (const line of lines) expect(line).toContain('&ok=vod&oid=20')
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it('tags every rewritten URL in a series manifest with its owning episode', async () => {
+    const fetchSpy = mockUpstream(() => ['#EXTM3U', '#EXTINF:6.0,', 'seg-001.ts'].join('\n'))
+    try {
+      const res = await app.request(`/api/iptv/stream/series/ep-1/m3u8?t=${fakeToken('series', 'ep-1')}`)
+      expect(res.status).toBe(200)
+      expect(segmentLines(await res.text())).toEqual([
+        expect.stringContaining('&ok=series&oid=ep-1'),
+      ])
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  // THE regression: pre-fix this array stayed empty no matter how long playback
+  // ran, which is what let the idle sweep reclaim a live viewer's slot.
+  it('heartbeats the owning VOD grant on EVERY segment fetch, not just the manifest', async () => {
+    const fetchSpy = mockUpstream(() => 'seg', { headers: { 'content-type': 'video/mp2t' } })
+    try {
+      for (let i = 0; i < 3; i++) {
+        const res = await app.request(segUrl(`https://cdn.example.com/foo/seg-00${i}.ts`, '&ok=vod&oid=20'))
+        expect(res.status).toBe(200)
+      }
+      expect(concurrencyState.heartbeatsByResource).toEqual([
+        { sub: 'plex:42', kind: 'vod', resourceId: '20' },
+        { sub: 'plex:42', kind: 'vod', resourceId: '20' },
+        { sub: 'plex:42', kind: 'vod', resourceId: '20' },
+      ])
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it('carries the owner through the master → variant → media-segment recursion', async () => {
+    const fetchSpy = mockUpstream(() => ['#EXTM3U', '#EXTINF:6.0,', 'seg.ts'].join('\n'))
+    try {
+      const res = await app.request(
+        segUrl('https://cdn.example.com/foo/level1.m3u8', '&ok=series&oid=ep-1'),
+      )
+      expect(res.status).toBe(200)
+      // The variant fetch itself heartbeats...
+      expect(concurrencyState.heartbeatsByResource).toEqual([
+        { sub: 'plex:42', kind: 'series', resourceId: 'ep-1' },
+      ])
+      // ...and the media segments it emits still carry the tag one level down.
+      expect(segmentLines(await res.text())).toEqual([
+        expect.stringContaining('&ok=series&oid=ep-1'),
+      ])
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it('ignores an absent or malformed owner tag instead of writing it to the tracker', async () => {
+    const fetchSpy = mockUpstream(() => 'seg', { headers: { 'content-type': 'video/mp2t' } })
+    try {
+      for (const q of [
+        '', // untagged (live remux + any legacy URL still in flight)
+        '&ok=vod', // kind without id
+        '&oid=20', // id without kind
+        '&ok=live&oid=10', // not an on-demand kind — live has its own heartbeat
+        '&ok=remux&oid=10',
+        '&ok=catchup&oid=10',
+        `&ok=vod&oid=${encodeURIComponent('../../etc/passwd')}`,
+        `&ok=vod&oid=${encodeURIComponent("20' OR 1=1")}`,
+      ]) {
+        const res = await app.request(segUrl('https://cdn.example.com/foo/seg.ts', q))
+        expect(res.status, `owner query ${q || '(none)'}`).toBe(200)
+      }
+      expect(concurrencyState.heartbeatsByResource).toEqual([])
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it('does not heartbeat when the segment token itself is rejected', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    const res = await app.request('/api/iptv/stream/segment?u=bogus&ok=vod&oid=20')
+    expect(res.status).toBe(401)
+    expect(concurrencyState.heartbeatsByResource).toEqual([])
+    expect(fetchSpy).not.toHaveBeenCalled()
+    fetchSpy.mockRestore()
+  })
+
+  // The tag is not a capability: `sub` is taken from the verified token, so the
+  // worst a forged ok/oid can do is keep the CALLER'S OWN session alive.
+  it('attributes the heartbeat to the signed token sub, never to a client-supplied one', async () => {
+    tokenState.sub = 'plex:99'
+    const fetchSpy = mockUpstream(() => 'seg', { headers: { 'content-type': 'video/mp2t' } })
+    try {
+      const res = await app.request(
+        segUrl('https://cdn.example.com/foo/seg.ts', '&ok=vod&oid=20&sub=plex%3A42'),
+      )
+      expect(res.status).toBe(200)
+      expect(concurrencyState.heartbeatsByResource).toEqual([
+        { sub: 'plex:99', kind: 'vod', resourceId: '20' },
+      ])
+    } finally {
+      tokenState.sub = 'plex:42'
+      fetchSpy.mockRestore()
+    }
+  })
+})
+
 describe('POST /api/iptv/admin/sync', () => {
   it('returns a job id and final stats', async () => {
     const app = new Hono().route('/api/iptv', iptv)
@@ -1659,6 +2297,112 @@ describe('favorites + history', () => {
       completed: number
     }>
     expect(hist[0]).toMatchObject({ kind: 'vod', item_id: '20', position_secs: 90, completed: 0 })
+  })
+})
+
+// Regression: /favorites and /history carried only requireAuth while every
+// sibling IPTV data route (catalog, EPG, detail, grants) carried
+// requireSection('live'). Favorites and continue-watching ARE the live
+// section's user data — a member denied Live TV could still read back the
+// channel/VOD/series IDs they'd been cut off from, and keep writing to them.
+describe('favorites + history section policy', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+  let policyDir: string
+  let policyPath: string
+
+  beforeEach(async () => {
+    policyDir = await fsp.mkdtemp(join(tmpdir(), 'iptv-favhist-policy-'))
+    policyPath = join(policyDir, 'user-policies.json')
+    _setUserPoliciesPathForTests(policyPath)
+  })
+  afterEach(async () => {
+    _setUserPoliciesPathForTests(env.userPoliciesPath)
+    authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
+    await fsp.rm(policyDir, { recursive: true, force: true })
+  })
+
+  const writePolicy = async (sub: string, live: boolean) => {
+    await fsp.writeFile(
+      policyPath,
+      JSON.stringify({
+        [sub]: {
+          maxContentRating: null,
+          allowedSections: { live, downloads: true, arr: true },
+          kid: !live,
+        },
+      }),
+    )
+    _setUserPoliciesPathForTests(policyPath)
+  }
+
+  const postFavorite = () =>
+    app.request('/api/iptv/favorites', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'live', itemId: '10' }),
+    })
+  const postHistory = () =>
+    app.request('/api/iptv/history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'vod', itemId: '20', positionSecs: 30 }),
+    })
+
+  const blocked: Array<[string, () => Response | Promise<Response>]> = [
+    ['GET /favorites', () => app.request('/api/iptv/favorites')],
+    ['POST /favorites', postFavorite],
+    ['DELETE /favorites/:kind/:itemId', () => app.request('/api/iptv/favorites/live/10', { method: 'DELETE' })],
+    ['GET /history', () => app.request('/api/iptv/history?limit=10')],
+    ['POST /history', postHistory],
+  ]
+
+  it.each(blocked)('403 section_blocked on %s when the policy denies live', async (_name, call) => {
+    authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+    await writePolicy('plex:99', false)
+    const res = await call()
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: 'section_blocked' })
+  })
+
+  // The gate must not leak the denied member's data even on the read paths —
+  // a 403 body that still carried rows would defeat the point.
+  it('a denied GET /favorites returns no rows the member had previously saved', async () => {
+    authState.session = { sub: 'plex:99', username: 'Kid', role: 'user' }
+    await writePolicy('plex:99', true)
+    expect((await postFavorite()).status).toBe(201)
+
+    await writePolicy('plex:99', false)
+    const res = await app.request('/api/iptv/favorites')
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: 'section_blocked' })
+  })
+
+  it('allows favorites + history for a non-admin whose policy permits live', async () => {
+    authState.session = { sub: 'plex:98', username: 'Teen', role: 'user' }
+    await writePolicy('plex:98', true)
+
+    expect((await postFavorite()).status).toBe(201)
+    const favs = await app.request('/api/iptv/favorites')
+    expect(favs.status).toBe(200)
+    expect(await favs.json()).toContainEqual(expect.objectContaining({ kind: 'live', item_id: '10' }))
+
+    expect((await postHistory()).status).toBe(201)
+    const hist = await app.request('/api/iptv/history?limit=10')
+    expect(hist.status).toBe(200)
+    expect(await hist.json()).toContainEqual(expect.objectContaining({ kind: 'vod', item_id: '20' }))
+
+    expect((await app.request('/api/iptv/favorites/live/10', { method: 'DELETE' })).status).toBe(204)
+  })
+
+  it('admin is never blocked on favorites/history under a live:false policy', async () => {
+    authState.session = { sub: 'plex:42', username: 'Test', role: 'admin' }
+    await writePolicy('plex:42', false)
+
+    expect((await app.request('/api/iptv/favorites')).status).toBe(200)
+    expect((await postFavorite()).status).toBe(201)
+    expect((await app.request('/api/iptv/history?limit=10')).status).toBe(200)
+    expect((await postHistory()).status).toBe(201)
+    expect((await app.request('/api/iptv/favorites/live/10', { method: 'DELETE' })).status).toBe(204)
   })
 })
 

@@ -66,7 +66,15 @@ dvr.post('/recordings', requireAdmin, async (c) => {
     start_utc: String(body.start_utc ?? ''),
     stop_utc: String(body.stop_utc ?? ''),
   }
-  const err = validateNewRecording(input, new Date().toISOString())
+  // Other recordings still holding this channel's tuner slot. Terminal rows are
+  // excluded — a cancelled/completed/failed/missed window is free to record over.
+  const existingForChannel = iptvDb()
+    .raw.prepare(
+      `SELECT start_utc, stop_utc FROM dvr_recordings
+        WHERE channel_stream_id = ? AND status IN ('scheduled','recording')`,
+    )
+    .all(input.channel_stream_id) as Array<{ start_utc: string; stop_utc: string }>
+  const err = validateNewRecording(input, new Date().toISOString(), existingForChannel)
   if (err) return c.json({ error: err }, 400)
   const recording = scheduleRecording(iptvDb().raw, input)
   return c.json({ recording }, 201)
@@ -218,11 +226,22 @@ dvr.get('/recordings/:id/play', dvrPlayAuth, (c) => {
   }
   const base = { 'Content-Type': 'video/mp2t', 'Accept-Ranges': 'bytes' }
   const range = c.req.header('range')
-  const m = range ? /^bytes=(\d*)-(\d*)$/.exec(range) : null
-  if (m) {
-    const start = m[1] ? parseInt(m[1], 10) : 0
-    const end = m[2] ? parseInt(m[2], 10) : size - 1
-    if (Number.isNaN(start) || start > end || end >= size) {
+  const m = range ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null
+  // Same parse as the trailer route (tmdb.ts); keep the two in step. `bytes=-`
+  // is invalid syntax → ignore the header and serve 200 full (RFC 9110 14.2).
+  if (m && !(m[1] === '' && m[2] === '')) {
+    let start: number
+    let end: number
+    if (m[1] === '') {
+      // suffix range: bytes=-N → the LAST N bytes, not the first N.
+      start = Math.max(0, size - parseInt(m[2], 10))
+      end = size - 1
+    } else {
+      start = parseInt(m[1], 10)
+      // A last-byte-pos past EOF means "to the end", not unsatisfiable.
+      end = m[2] === '' ? size - 1 : Math.min(parseInt(m[2], 10), size - 1)
+    }
+    if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= size) {
       return new Response(null, { status: 416, headers: { ...base, 'Content-Range': `bytes */${size}` } })
     }
     const body = Readable.toWeb(createReadStream(rec.file_path, { start, end })) as ReadableStream

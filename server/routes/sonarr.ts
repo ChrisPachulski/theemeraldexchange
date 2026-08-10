@@ -1112,7 +1112,7 @@ sonarr.post('/api/v3/series/:id/seasons/:n/monitor', requireAdmin, sonarrMutateL
 })
 
 // Delete a series — admin only.
-sonarr.delete('/api/v3/series/:id', requireAdmin, async (c) => {
+sonarr.delete('/api/v3/series/:id', requireAdmin, sonarrMutateLimit, async (c) => {
   // Same encoded-slash defense as radarr's DELETE: Hono URL-decodes
   // :id before we read it, so `..%2Frootfolder%2F1` produces the
   // literal `../rootfolder/1`. Once that flows through the

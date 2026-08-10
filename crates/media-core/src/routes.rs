@@ -2794,11 +2794,13 @@ async fn run_whisper_job(
         .map_err(|e| format!("scratch dir: {e}"))?;
 
     let args = crate::subtitles::whisper_args(input_path, &scratch, model, Some(lang));
-    let output = tokio::process::Command::new(bin)
-        .args(&args)
-        .output()
-        .await
-        .map_err(|e| format!("spawn {bin}: {e}"))?;
+    let output = match tokio::process::Command::new(bin).args(&args).output().await {
+        Ok(o) => o,
+        Err(e) => {
+            let _ = tokio::fs::remove_dir_all(&scratch).await;
+            return Err(format!("spawn {bin}: {e}"));
+        }
+    };
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let tail: String = stderr.chars().rev().take(400).collect::<String>();
@@ -2808,10 +2810,9 @@ async fn run_whisper_job(
     }
 
     let produced = crate::subtitles::whisper_output_path(&scratch, input_path);
-    tokio::fs::rename(&produced, dest)
-        .await
-        .map_err(|e| format!("move {}: {e}", produced.display()))?;
+    let rename_result = tokio::fs::rename(&produced, dest).await;
     let _ = tokio::fs::remove_dir_all(&scratch).await;
+    rename_result.map_err(|e| format!("move {}: {e}", produced.display()))?;
     Ok(())
 }
 
@@ -4082,6 +4083,80 @@ mod tests {
         assert_eq!(del.status(), StatusCode::NOT_FOUND);
     }
 
+    /// SSRF: `feed_url` is typed in by any household member, so an internal
+    /// address must be refused BEFORE a socket is opened.
+    ///
+    /// The gate is the connection counter on a real loopback listener, not the
+    /// status code — an UNGUARDED media-core also 400s here (a refused or
+    /// timed-out fetch is still a fetch error), so `accepted == 0` is the only
+    /// assertion that actually distinguishes "blocked" from "tried and failed".
+    /// The listener accepts and never replies, so an unguarded run additionally
+    /// blows the elapsed bound waiting out the 15s client timeout.
+    #[tokio::test]
+    async fn podcast_feed_url_cannot_reach_internal_addresses() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let state = test_state().await;
+        let app = crate::build_router(state);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let counter = accepted.clone();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                counter.fetch_add(1, Ordering::SeqCst);
+                held.push(stream); // hold it open; never answer
+            }
+        });
+
+        let started = std::time::Instant::now();
+        for feed_url in [
+            format!("http://127.0.0.1:{port}/feed.xml"), // loopback, listening
+            "http://169.254.169.254/latest/meta-data/".to_string(), // cloud metadata
+            "http://[::1]:8080/feed.xml".to_string(),    // v6 loopback literal
+            "http://10.0.0.7/feed.xml".to_string(),      // RFC-1918
+            "http://theemeraldexchange.local/feed.xml".to_string(), // LAN suffix
+            "http://media-core/feed.xml".to_string(),    // compose service DNS
+        ] {
+            let res = app
+                .clone()
+                .oneshot(json_req(
+                    "POST",
+                    "/api/media/podcasts?sub=plex:1",
+                    json!({ "feed_url": feed_url }).to_string(),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(
+                res.status(),
+                StatusCode::BAD_REQUEST,
+                "{feed_url} should be rejected"
+            );
+        }
+
+        assert_eq!(
+            accepted.load(Ordering::SeqCst),
+            0,
+            "guard must reject from the URL alone — no connection attempt"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "rejection must be immediate, not a connect/read timeout (took {:?})",
+            started.elapsed()
+        );
+
+        // And none of them got stored.
+        let list = body_json(
+            app.oneshot(req("GET", "/api/media/podcasts?sub=plex:1"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(list["items"].as_array().unwrap().len(), 0);
+    }
+
     #[tokio::test]
     async fn subtitle_endpoints_gate_on_unconfigured_features() {
         let state = test_state().await;
@@ -4677,6 +4752,91 @@ mod tests {
         // to tell "retry shortly, at capacity" from "transcoder is down".
         let v = body_json(resp).await;
         assert_eq!(v["error"], "stream_slots_exhausted");
+    }
+
+    /// Scratch-dir path `run_whisper_job` derives from the sidecar destination.
+    fn whisper_scratch_for(
+        subtitles_dir: &std::path::Path,
+        dest: &std::path::Path,
+    ) -> std::path::PathBuf {
+        subtitles_dir.join(format!(
+            ".whisper-{}",
+            dest.file_stem().unwrap().to_string_lossy()
+        ))
+    }
+
+    #[tokio::test]
+    async fn run_whisper_job_cleans_scratch_when_output_missing() {
+        // A whisper that exits 0 without writing its .vtt makes the final rename
+        // fail. The scratch dir must not survive that error path — otherwise every
+        // failed transcode leaves a `.whisper-<stem>` turd in the subtitles dir.
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("fake-whisper.sh");
+        std::fs::write(&bin, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let subtitles_dir = tmp.path().join("subs");
+        std::fs::create_dir_all(&subtitles_dir).unwrap();
+        let input = tmp.path().join("movie.mkv");
+        std::fs::write(&input, b"bytes").unwrap();
+        let dest = subtitles_dir.join("movie.1.en.whisper.vtt");
+        let scratch = whisper_scratch_for(&subtitles_dir, &dest);
+
+        let err = super::run_whisper_job(
+            bin.to_str().unwrap(),
+            None,
+            input.to_str().unwrap(),
+            &subtitles_dir,
+            &dest,
+            "en",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            err.starts_with("move "),
+            "expected rename failure, got: {err}"
+        );
+        assert!(!dest.exists(), "no sidecar should be published");
+        assert!(
+            !scratch.exists(),
+            "scratch dir leaked after rename failure: {}",
+            scratch.display()
+        );
+    }
+
+    #[tokio::test]
+    async fn run_whisper_job_cleans_scratch_when_spawn_fails() {
+        // Same invariant on the earlier exit: a missing/unexecutable WHISPER_BIN
+        // must not leave the scratch dir it just created behind.
+        let tmp = tempfile::tempdir().unwrap();
+        let subtitles_dir = tmp.path().join("subs");
+        std::fs::create_dir_all(&subtitles_dir).unwrap();
+        let dest = subtitles_dir.join("movie.2.en.whisper.vtt");
+        let scratch = whisper_scratch_for(&subtitles_dir, &dest);
+        let missing_bin = tmp.path().join("no-such-whisper");
+
+        let err = super::run_whisper_job(
+            missing_bin.to_str().unwrap(),
+            None,
+            "/lib/movie.mkv",
+            &subtitles_dir,
+            &dest,
+            "en",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            err.starts_with("spawn "),
+            "expected spawn failure, got: {err}"
+        );
+        assert!(
+            !scratch.exists(),
+            "scratch dir leaked after spawn failure: {}",
+            scratch.display()
+        );
     }
 
     async fn seed_show_with_episodes(state: &AppState, n: i64) {

@@ -110,7 +110,10 @@ export type SessionKind = 'live' | 'vod' | 'series' | 'catchup' | 'remux'
 
 export type SessionRow = {
   sessionId: string
-  sub: string
+  // null for another household member's row in a non-admin's concurrency-cap
+  // 429 view (server redacts sub/ip/title on rows that aren't the caller's own
+  // or, for admins, always populated — see enrichSessionsFor in server/routes/iptv.ts).
+  sub: string | null
   kind: SessionKind
   resourceId: string
   title: string | null

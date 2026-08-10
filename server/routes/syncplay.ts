@@ -31,12 +31,22 @@ function isMediaKind(v: unknown): v is SyncMediaKind {
   return v === 'movie' || v === 'episode'
 }
 
+// Discovery listing: every authenticated user may see that a group exists and
+// what it is pinned to (that is how you find one to join), but who is watching
+// is confidential to that group — same boundary GET /groups/:id enforces.
 syncplay.get('/groups', (c) => {
   const now = Date.now()
-  const items = listGroups(now).map((g) => ({
-    ...snapshot(g, now),
-    member_count: g.members.size,
-  }))
+  const sub = c.get('session').sub
+  const items = listGroups(now).map((g) => {
+    const snap = snapshot(g, now)
+    const isMember = g.members.has(sub)
+    return {
+      ...snap,
+      host_sub: isMember ? snap.host_sub : null,
+      members: isMember ? snap.members : [],
+      member_count: g.members.size,
+    }
+  })
   return c.json({ items })
 })
 
@@ -87,13 +97,15 @@ syncplay.get('/groups/:id', (c) => {
   return c.json(snapshot(group, now))
 })
 
+// Read the body BEFORE resolving the group. The read is an await, and groups
+// are mutable in-memory objects: one resolved on the near side of it can be
+// left, idle-pruned, or deleted while the bytes trickle in, so the handler
+// would drive a detached object (silent no-op) or apply a command for a member
+// who has since left (authz check outrunning its own decision). The clock is
+// stamped on the far side too — `atMs` taken before the read makes the playhead
+// jump forward by the read's duration on the very next poll.
 syncplay.post('/groups/:id/command', async (c) => {
   const session = c.get('session')
-  const now = Date.now()
-  const group = getGroup(c.req.param('id'), now)
-  if (!group) return c.json({ error: 'not_found' }, 404)
-  if (!group.members.has(session.sub)) return c.json({ error: 'not_member' }, 403)
-
   const parsed = await parseLimitedJson(c, MAX_BODY_BYTES)
   if (parsed.tooLarge) return c.json({ error: 'body_too_large' }, 413)
   const body = (parsed.body ?? {}) as { type?: unknown; position_secs?: unknown }
@@ -109,6 +121,11 @@ syncplay.post('/groups/:id/command', async (c) => {
   } else if (body.type === 'seek') {
     return c.json({ error: 'invalid_position' }, 400)
   }
+
+  const now = Date.now()
+  const group = getGroup(c.req.param('id'), now)
+  if (!group) return c.json({ error: 'not_found' }, 404)
+  if (!group.members.has(session.sub)) return c.json({ error: 'not_member' }, 403)
 
   touchMember(group, session.sub, now)
   applyCommand(group, body.type, position, now)
