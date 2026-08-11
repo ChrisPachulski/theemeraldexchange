@@ -146,6 +146,20 @@ describe('app CSRF — safe GETs pass through', () => {
       .toContain('X-EEX-Expected-Sub')
   })
 
+  it('allows PATCH on device renaming CORS preflight', async () => {
+    const r = await app.request('/api/devices/self/device-jti/name', {
+      method: 'OPTIONS',
+      headers: {
+        Origin: ALLOWED,
+        'Access-Control-Request-Method': 'PATCH',
+      },
+    })
+
+    expect(r.status).toBe(204)
+    expect(r.headers.get('Access-Control-Allow-Methods'))
+      .toContain('PATCH')
+  })
+
   it('/api/limits works with no Origin', async () => {
     const r = await app.request('/api/limits')
     expect(r.status).toBe(200)

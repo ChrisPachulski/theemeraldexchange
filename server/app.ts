@@ -134,7 +134,7 @@ if (env.allowedOrigins.length > 0) {
     cors({
       origin: env.allowedOrigins,
       credentials: true,
-      allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
       // `Authorization` is required for M2 Apple Bearer auth — preflight
       // for any device-token request would 403 without it. `X-App-Version`
       // lets device-authed clients self-report their build for the
