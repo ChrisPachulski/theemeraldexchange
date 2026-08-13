@@ -67,6 +67,19 @@ async function writeLine(line: string): Promise<void> {
   await fs.appendFile(logPath, line, { encoding: 'utf8' })
 }
 
+function splitOnNewlineByte(buf: Buffer): Buffer[] {
+  const pieces: Buffer[] = []
+  let start = 0
+  for (let i = 0; i < buf.length; i++) {
+    if (buf[i] === 0x0a) {
+      pieces.push(buf.subarray(start, i))
+      start = i + 1
+    }
+  }
+  pieces.push(buf.subarray(start))
+  return pieces
+}
+
 async function readTail(path: string, limit: number): Promise<string[]> {
   let fd
   try {
@@ -77,23 +90,23 @@ async function readTail(path: string, limit: number): Promise<string[]> {
   try {
     const stat = await fd.stat()
     let pos = stat.size
-    let leftover = ''
+    let leftover: Buffer = Buffer.alloc(0)
     const lines: string[] = []
     while (pos > 0 && lines.length < limit) {
       const readSize = Math.min(CHUNK_SIZE, pos)
       pos -= readSize
       const buf = Buffer.alloc(readSize)
       await fd.read(buf, 0, readSize, pos)
-      const combined = buf.toString('utf8') + leftover
-      const pieces = combined.split('\n')
+      const combined = Buffer.concat([buf, leftover])
+      const pieces = splitOnNewlineByte(combined)
       leftover = pieces[0]
       for (let i = pieces.length - 1; i >= 1 && lines.length < limit; i--) {
         const piece = pieces[i]
-        if (piece.length > 0) lines.push(piece)
+        if (piece.length > 0) lines.push(piece.toString('utf8'))
       }
     }
     if (pos === 0 && leftover.length > 0 && lines.length < limit) {
-      lines.push(leftover)
+      lines.push(leftover.toString('utf8'))
     }
     return lines.slice(0, limit)
   } finally {
@@ -132,7 +145,7 @@ async function readTailUntilCutoff(
   try {
     const stat = await fd.stat()
     let pos = stat.size
-    let leftover = ''
+    let leftover: Buffer = Buffer.alloc(0)
     const events: UsageEvent[] = []
     let stop = false
     while (pos > 0 && events.length < hardLimit && !stop) {
@@ -140,17 +153,17 @@ async function readTailUntilCutoff(
       pos -= readSize
       const buf = Buffer.alloc(readSize)
       await fd.read(buf, 0, readSize, pos)
-      const combined = buf.toString('utf8') + leftover
-      const pieces = combined.split('\n')
+      const combined = Buffer.concat([buf, leftover])
+      const pieces = splitOnNewlineByte(combined)
       leftover = pieces[0]
       // Iterate from newest line in this chunk to oldest. As soon as
       // any line is older than the cutoff, set stop — every subsequent
       // line (and every line in older chunks) is also older.
       for (let i = pieces.length - 1; i >= 1; i--) {
         const piece = pieces[i]
-        if (!piece) continue
+        if (piece.length === 0) continue
         try {
-          const ev = JSON.parse(piece) as UsageEvent
+          const ev = JSON.parse(piece.toString('utf8')) as UsageEvent
           if (new Date(ev.ts).getTime() < cutoffMs) {
             stop = true
             break
@@ -163,9 +176,9 @@ async function readTailUntilCutoff(
       }
     }
     // Final leftover at pos === 0 is the very first line of the file.
-    if (!stop && pos === 0 && leftover && events.length < hardLimit) {
+    if (!stop && pos === 0 && leftover.length > 0 && events.length < hardLimit) {
       try {
-        const ev = JSON.parse(leftover) as UsageEvent
+        const ev = JSON.parse(leftover.toString('utf8')) as UsageEvent
         if (new Date(ev.ts).getTime() >= cutoffMs) events.push(ev)
       } catch {
         // skip

@@ -14,6 +14,28 @@ import {
 let tmpRoot: string
 let path: string
 
+const CHUNK_SIZE = 64 * 1024
+
+async function writeUtf8BoundaryEvent(): Promise<void> {
+  const username = '💚'
+  const event = {
+    ts: new Date().toISOString(),
+    sub: 'boundary',
+    username,
+    type: 'claude_call',
+    model: 'm',
+    kind: 'movie',
+    costCents: 0.25,
+    error: '',
+  }
+  const baseLine = JSON.stringify(event) + '\n'
+  const markerOffset = Buffer.from(baseLine).indexOf(Buffer.from(username))
+  const paddingLength = markerOffset + 1 + CHUNK_SIZE - Buffer.byteLength(baseLine)
+  const line = JSON.stringify({ ...event, error: 'x'.repeat(paddingLength) }) + '\n'
+
+  await fs.writeFile(path, line)
+}
+
 beforeEach(async () => {
   tmpRoot = await fs.mkdtemp(join(tmpdir(), 'usagelog-'))
   path = join(tmpRoot, 'usage.jsonl')
@@ -59,6 +81,14 @@ describe('usageLog append + tail', () => {
     await appendUsageEvent({ sub: 'b', username: 'b', type: 'claude_call', model: 'm', kind: 'tv' })
     const events = await readRecentUsageEvents(10)
     expect(events).toHaveLength(2)
+  })
+
+  it('preserves UTF-8 split across read chunks', async () => {
+    await writeUtf8BoundaryEvent()
+
+    const events = await readRecentUsageEvents(1)
+
+    expect(events[0].username).toBe('💚')
   })
 
   it('rejects append failures without poisoning later appends', async () => {
@@ -123,6 +153,20 @@ describe('summarizeUsage', () => {
     })
     const inOneHour = Date.now() + 60 * 60 * 1000
     expect(await summarizeUsage(inOneHour)).toEqual([])
+  })
+
+  it('preserves UTF-8 split across summary read chunks', async () => {
+    await writeUtf8BoundaryEvent()
+
+    const summary = await summarizeUsage(0)
+
+    expect(summary).toHaveLength(1)
+    expect(summary[0]).toMatchObject({
+      sub: 'boundary',
+      username: '💚',
+      calls: 1,
+      costCents: 0.25,
+    })
   })
 
   it('stops scanning once it hits an event older than the cutoff', async () => {
