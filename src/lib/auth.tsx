@@ -59,6 +59,12 @@ export function deniedMessage(reason: unknown): string {
       return 'Invitation-only. Ask the owner for an invite code, then sign in again.'
     case 'access_revoked':
       return 'Your access to this library has been revoked. Ask the owner to restore it.'
+    case 'workos_state_invalid':
+      return 'That sign-in link expired. Start the WorkOS sign-in again.'
+    case 'workos_code_invalid':
+      return 'WorkOS rejected the sign-in. Try again.'
+    case 'workos_unavailable':
+      return 'WorkOS is unreachable right now. Try again in a moment.'
     case 'not_a_server_member':
       return "You aren't a member of this Plex server."
     // First-owner claim (plan 006 Phase 1)
@@ -93,7 +99,7 @@ export function inviteCodeError(code?: string): string | null {
 export type Role = 'admin' | 'user'
 /** Which federated identity provider minted the session. Mirrors the
  *  server's AuthMode (session.ts). `local` is legacy/dev-only. */
-export type AuthMode = 'plex' | 'apple' | 'google' | 'local'
+export type AuthMode = 'plex' | 'apple' | 'google' | 'workos' | 'local'
 export type AuthUser = {
   /** Namespaced subject: `plex:<id>` | `apple:<subject>`. Used by the
    *  SPA to scope per-user localStorage (BYO API key, etc.) so a shared
@@ -114,6 +120,7 @@ export function authModeFromUser(user: Pick<AuthUser, 'sub' | 'auth_mode'>): Aut
   if (user.auth_mode) return user.auth_mode
   if (user.sub.startsWith('apple:')) return 'apple'
   if (user.sub.startsWith('google:')) return 'google'
+  if (user.sub.startsWith('workos:')) return 'workos'
   if (user.sub.startsWith('local:')) return 'local'
   return 'plex'
 }
@@ -205,7 +212,7 @@ function isProviderSub(value: unknown): value is string {
   const providerId = value.slice(separator + 1)
   return (
     separator > 0 &&
-    ['plex', 'apple', 'google', 'local'].includes(provider) &&
+    ['plex', 'apple', 'google', 'workos', 'local'].includes(provider) &&
     Boolean(providerId.trim())
   )
 }
@@ -231,6 +238,7 @@ function authUserFromApi(value: unknown): AuthUser | null {
     authMode !== 'plex' &&
     authMode !== 'apple' &&
     authMode !== 'google' &&
+    authMode !== 'workos' &&
     authMode !== 'local'
   ) {
     return null
@@ -422,7 +430,13 @@ type AuthCtx = {
    * null until fetched — render all buttons while unknown so a slow API
    * never hides the way in.
    */
-  authMethods: { plex: boolean; apple: boolean; google: boolean; passkey: boolean } | null
+  authMethods: {
+    plex: boolean
+    apple: boolean
+    google: boolean
+    workos?: boolean
+    passkey: boolean
+  } | null
   /** True while the server is unclaimed (plan 006 Phase 1 claim flow). */
   setupClaimable: boolean
 }

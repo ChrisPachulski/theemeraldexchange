@@ -94,6 +94,7 @@ export function ensureSetupToken(): void {
   if (env.plexClientId) configuredProviders.push('plex')
   if (env.appleClientId) configuredProviders.push('apple')
   if ((env.googleClientIds ?? []).length > 0) configuredProviders.push('google')
+  if (env.workosClientId) configuredProviders.push('workos')
   if (configuredProviders.length > 0) {
     const verb = configuredProviders.length === 1 ? 'is' : 'are'
     console.warn(

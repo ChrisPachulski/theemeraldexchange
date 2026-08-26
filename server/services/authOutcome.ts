@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import { createLogger } from './logger.js'
 
-export const AUTH_OUTCOME_PROVIDERS = ['plex', 'apple', 'google', 'passkey'] as const
+export const AUTH_OUTCOME_PROVIDERS = ['plex', 'apple', 'google', 'workos', 'passkey'] as const
 export const AUTH_OUTCOME_PHASES = [
   'check',
   'identity_verify',

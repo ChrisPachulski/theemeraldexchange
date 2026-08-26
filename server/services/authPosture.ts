@@ -2,6 +2,7 @@ export type AuthPostureConfig = {
   plexClientId: string | null
   appleClientId: string | null
   googleClientIds: readonly string[]
+  workosClientId: string | null
   serveSpa: boolean
   isProd: boolean
   trustClientIpHeaders: boolean
@@ -58,6 +59,7 @@ export function buildAuthPosture(config: AuthPostureConfig) {
       plex: Boolean(config.plexClientId),
       apple: Boolean(config.appleClientId),
       google: config.googleClientIds.length > 0,
+      workos: Boolean(config.workosClientId),
       passkey: true,
     },
     serveSpa: config.serveSpa,

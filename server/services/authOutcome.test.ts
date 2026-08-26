@@ -17,7 +17,7 @@ afterEach(() => {
 
 describe('auth outcome reporter', () => {
   it('uses closed low-cardinality dimensions', () => {
-    expect(AUTH_OUTCOME_PROVIDERS).toEqual(['plex', 'apple', 'google', 'passkey'])
+    expect(AUTH_OUTCOME_PROVIDERS).toEqual(['plex', 'apple', 'google', 'workos', 'passkey'])
     expect(AUTH_OUTCOME_PHASES).toEqual([
       'check',
       'identity_verify',

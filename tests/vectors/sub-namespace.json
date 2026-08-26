@@ -93,5 +93,24 @@
     "input": "plex:0:extra:colons",
     "valid": false,
     "error": "sub_invalid_format"
+  },
+  {
+    "name": "valid-workos-user",
+    "input": "workos:user_01E4ZCR3C56J083X43JQXF3JK5",
+    "valid": true,
+    "provider": "workos",
+    "id": "user_01E4ZCR3C56J083X43JQXF3JK5"
+  },
+  {
+    "name": "invalid-workos-no-user-prefix",
+    "input": "workos:01E4ZCR3C56J083X43JQXF3JK5",
+    "valid": false,
+    "error": "sub_invalid_format"
+  },
+  {
+    "name": "invalid-workos-lowercase",
+    "input": "workos:user_01e4zcr3c56j083x43jqxf3jk5",
+    "valid": false,
+    "error": "sub_invalid_format"
   }
 ]

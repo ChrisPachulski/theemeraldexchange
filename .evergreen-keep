@@ -1,0 +1,4 @@
+# Tracked env templates: empty keys only, never real values.
+.env.example
+.env.production.example
+selfhost/.env.example

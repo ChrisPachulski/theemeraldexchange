@@ -92,6 +92,7 @@ fn sub_namespace_vector() {
                 emerald_contracts::Provider::Local => "local",
                 emerald_contracts::Provider::Apple => "apple",
                 emerald_contracts::Provider::Google => "google",
+                emerald_contracts::Provider::Workos => "workos",
             };
             assert_eq!(
                 provider,

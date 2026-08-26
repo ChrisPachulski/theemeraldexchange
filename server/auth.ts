@@ -27,7 +27,13 @@
 
 import { Hono, type Context } from 'hono'
 import { createHash } from 'node:crypto'
-import { env, isPlexConfigured, isAppleConfigured, isGoogleConfigured } from './env.js'
+import {
+  env,
+  isPlexConfigured,
+  isAppleConfigured,
+  isGoogleConfigured,
+  isWorkosConfigured,
+} from './env.js'
 import {
   checkPin,
   getUser,
@@ -53,6 +59,9 @@ import { addMember } from './services/members.js'
 import { sealVerifiedAdminOwnership } from './services/setupState.js'
 import { verifyAppleIdentityToken } from './services/appleAuth.js'
 import { verifyGoogleIdentityToken } from './services/googleAuth.js'
+import { exchangeWorkosCode, workosAuthorizationUrl } from './services/workosAuth.js'
+import { getCookie, setCookie, deleteCookie } from 'hono/cookie'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { maybeMintDeviceToken } from './services/devicePair.js'
 import { resolveClientAddress } from './services/clientAddress.js'
 import {
@@ -62,7 +71,7 @@ import {
 
 export const auth = new Hono()
 
-type AuthRateLimitKind = 'pin' | 'check' | 'apple' | 'passkey' | 'google'
+type AuthRateLimitKind = 'pin' | 'check' | 'apple' | 'passkey' | 'google' | 'workos'
 type AuthRateLimitScope = 'global' | 'trusted_client' | 'pin' | 'identity'
 type AuthRateLimitBucket = { count: number; resetAt: number }
 type AuthRateLimitRule = {
@@ -89,6 +98,8 @@ const AUTH_CLIENT_RATE_LIMITS: Record<AuthRateLimitKind, { limit: number; window
   // Google Sign-In: same posture as apple — every request is a JWKS verify
   // + authZ decision, no innocuous polling.
   google: { limit: 20, windowMs: 60_000 },
+  // WorkOS redirect start + code-exchange callback: same posture as google.
+  workos: { limit: 20, windowMs: 60_000 },
 }
 const AUTH_GLOBAL_RATE_LIMITS: Record<AuthRateLimitKind, { limit: number; windowMs: number }> = {
   pin: { limit: 120, windowMs: 60_000 },
@@ -96,6 +107,7 @@ const AUTH_GLOBAL_RATE_LIMITS: Record<AuthRateLimitKind, { limit: number; window
   apple: { limit: 200, windowMs: 60_000 },
   passkey: { limit: 200, windowMs: 60_000 },
   google: { limit: 200, windowMs: 60_000 },
+  workos: { limit: 200, windowMs: 60_000 },
 }
 const AUTH_CHECK_PIN_RATE_LIMIT = { limit: 60, windowMs: 60_000 }
 const AUTH_RATE_LIMIT_SWEEP_MS = 60_000
@@ -383,6 +395,7 @@ auth.get('/methods', (c) =>
     plex: isPlexConfigured(),
     apple: isAppleConfigured(),
     google: isGoogleConfigured(),
+    workos: isWorkosConfigured(),
     passkey: true,
   }),
 )
@@ -780,6 +793,102 @@ auth.post('/google', (c) => withAuthOutcome(c, 'google', 'identity_verify', asyn
       role,
     },
   })
+}))
+
+// WorkOS AuthKit — redirect flow. GET /workos/start parks a CSRF nonce (+
+// the optional invite code) in a short-lived HttpOnly cookie and sends the
+// browser to the hosted login page; GET /workos/callback trades the code
+// for the verified `workos:` sub and converges on the SAME invite/members
+// authZ gate as every other provider. Both legs are top-level navigations,
+// so results travel back to the SPA as a redirect (`?auth_error=<reason>`
+// on failure) rather than JSON.
+const WORKOS_STATE_COOKIE = 'eex_workos_state'
+const WORKOS_STATE_TTL_SECS = 600
+const WORKOS_CALLBACK_PATH = '/api/auth/workos/callback'
+const INVITE_CODE_SHAPE = /^[A-Za-z0-9_-]{22}$/
+
+function spaRedirect(c: Context, params?: Record<string, string>): Response {
+  // Backend-served SPA → same origin; split-origin → the first allowed SPA
+  // origin (dev falls back to the Vite proxy origin).
+  const base = env.serveSpa ? new URL(c.req.url).origin : (env.allowedOrigins[0] ?? '/')
+  const url = new URL('/', base)
+  for (const [k, v] of Object.entries(params ?? {})) url.searchParams.set(k, v)
+  return c.redirect(url.toString(), 302)
+}
+
+// ponytail: no limiter on /start — it only writes a 10-minute cookie and
+// redirects; the code exchange on /callback is the guarded leg.
+auth.get('/workos/start', (c) => {
+  if (!isWorkosConfigured()) return c.json({ error: 'workos_not_configured' }, 503)
+
+  const rawInvite = c.req.query('invite') ?? ''
+  const invite = INVITE_CODE_SHAPE.test(rawInvite) ? rawInvite : ''
+  const nonce = randomBytes(16).toString('hex')
+  setCookie(c, WORKOS_STATE_COOKIE, `${nonce}.${invite}`, {
+    httpOnly: true,
+    secure: env.isProd,
+    sameSite: 'Lax',
+    path: WORKOS_CALLBACK_PATH,
+    maxAge: WORKOS_STATE_TTL_SECS,
+  })
+  return c.redirect(workosAuthorizationUrl(nonce), 302)
+})
+
+auth.get('/workos/callback', (c) => withAuthOutcome(c, 'workos', 'identity_verify', async (authOutcome) => {
+  const preLimit = enforceAuthRateLimit(c, 'workos', undefined, authOutcome)
+  if (preLimit) return preLimit
+  if (!isWorkosConfigured()) {
+    authOutcome.record('transient', 'not_configured')
+    return c.json({ error: 'workos_not_configured' }, 503)
+  }
+
+  const stored = getCookie(c, WORKOS_STATE_COOKIE) ?? ''
+  deleteCookie(c, WORKOS_STATE_COOKIE, { path: WORKOS_CALLBACK_PATH })
+  const dot = stored.indexOf('.')
+  const expectedNonce = dot > 0 ? stored.slice(0, dot) : ''
+  const inviteCode = dot > 0 && stored.length > dot + 1 ? stored.slice(dot + 1) : undefined
+  const state = c.req.query('state') ?? ''
+  const code = c.req.query('code')
+  const stateOk =
+    expectedNonce.length > 0 &&
+    state.length === expectedNonce.length &&
+    timingSafeEqual(Buffer.from(state), Buffer.from(expectedNonce))
+  if (!stateOk || !code) {
+    authOutcome.record('invalid', 'invalid_request')
+    return spaRedirect(c, { auth_error: 'workos_state_invalid' })
+  }
+
+  const verified = await exchangeWorkosCode(code)
+  if (!verified.ok) {
+    const transient = verified.error === 'provider_unavailable'
+    authOutcome.record(
+      transient ? 'transient' : 'invalid',
+      transient ? 'provider_unavailable' : 'identity_token_invalid',
+    )
+    return spaRedirect(c, { auth_error: transient ? 'workos_unavailable' : 'workos_code_invalid' })
+  }
+
+  const namespacedSub = verified.sub.raw
+  const displayName =
+    verified.name ?? (verified.email ? verified.email.split('@')[0] : namespacedSub)
+  // SHARED authZ gate (identical to /plex/check, /apple and /google). A
+  // WorkOS admin is listed by stable sub in ADMIN_SUBS, never by name.
+  const authz = authorizeOrRedeem(namespacedSub, inviteCode, displayName, 'workos')
+  if (!authz.allowed) {
+    authOutcome.record('denied', 'no_invite')
+    return spaRedirect(c, { auth_error: 'no_invite' })
+  }
+  const role = effectiveRoleFor(displayName, namespacedSub)
+
+  await setSessionCookie(c, {
+    sub: namespacedSub,
+    username: displayName,
+    role,
+    auth_mode: 'workos',
+  })
+  _primeSessionGateCache(namespacedSub, 'member')
+  authOutcome.record('authorized', 'cookie')
+  return spaRedirect(c)
 }))
 
 auth.post('/logout', async (c) => {

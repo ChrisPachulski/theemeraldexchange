@@ -60,7 +60,7 @@ export type Role = 'admin' | 'user'
  *  'apple' is added now (zero cost) so D17 changes are not reopened
  *  when Sign in with Apple lands in M2. 'google' joins the union for the
  *  native non-Plex login workstream (Google OIDC, `google:` subs). */
-export type AuthMode = 'plex' | 'local' | 'apple' | 'google'
+export type AuthMode = 'plex' | 'local' | 'apple' | 'google' | 'workos'
 
 export type Session = {
   sub: string // plex user id (string for jwt sub claim)
@@ -103,6 +103,7 @@ export function authModeFromSession(session: Pick<Session, 'sub'>): AuthMode {
   if (session.sub.startsWith('local:')) return 'local'
   if (session.sub.startsWith('apple:')) return 'apple'
   if (session.sub.startsWith('google:')) return 'google'
+  if (session.sub.startsWith('workos:')) return 'workos'
   return 'plex'
 }
 
@@ -286,7 +287,8 @@ export async function verifyDeviceToken(token: string): Promise<DeviceTokenClaim
     claims.authMode !== 'plex' &&
     claims.authMode !== 'local' &&
     claims.authMode !== 'apple' &&
-    claims.authMode !== 'google'
+    claims.authMode !== 'google' &&
+    claims.authMode !== 'workos'
   )
     return null
 
@@ -399,7 +401,8 @@ async function tryDecrypt(token: string, key: Uint8Array): Promise<Session | nul
       auth_mode !== 'plex' &&
       auth_mode !== 'local' &&
       auth_mode !== 'apple' &&
-      auth_mode !== 'google'
+      auth_mode !== 'google' &&
+      auth_mode !== 'workos'
     ) {
       return null
     }

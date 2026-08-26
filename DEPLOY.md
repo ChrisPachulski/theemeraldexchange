@@ -72,6 +72,7 @@ Open it and fill the required rows plus whichever optional integrations you use:
 | `RECOMMENDER_EVENT_SECRET` | `openssl rand -base64 48`. Shared secret signing backend → recommender calls. |
 | `ADMINS` *(optional, legacy Plex)* | Plex username(s), comma-separated. Prefer stable `ADMIN_SUBS` or first-owner passkey claim for new installs. |
 | `PLEX_SERVER_ID` *(conditional)* | Required only when Plex login is configured, unless `ALLOW_UNSCOPED_PLEX_LOGIN=1` explicitly permits emergency boot. The flag grants no login access and never bypasses member/invite authorization. Prefer setup-token passkey claim, then set your home server's machineIdentifier and remove the opt-in. |
+| `WORKOS_CLIENT_ID`, `WORKOS_API_KEY`, `WORKOS_REDIRECT_URI` *(optional)* | WorkOS dashboard → API keys. Redirect URI is `https://api.theemeraldexchange.com/api/auth/workos/callback`, registered verbatim in the dashboard. Turn "Sign up" off there; add your `workos:user_…` id to `ADMIN_SUBS` for owner access. |
 | `ALLOWED_ORIGINS` | `https://theemeraldexchange.com` |
 | `SONARR_URL`, `SONARR_API_KEY` | Existing Sonarr install. |
 | `RADARR_URL`, `RADARR_API_KEY` | Existing Radarr install. |

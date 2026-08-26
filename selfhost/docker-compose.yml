@@ -72,6 +72,12 @@ services:
       ENABLE_APPLE_SIGN_IN: "${ENABLE_APPLE_SIGN_IN:-}"
       GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
       ENABLE_GOOGLE_SIGN_IN: "${ENABLE_GOOGLE_SIGN_IN:-}"
+      # WorkOS AuthKit (hosted login). The API key is the code-exchange secret;
+      # the redirect URI must match the dashboard exactly.
+      WORKOS_CLIENT_ID: "${WORKOS_CLIENT_ID:-}"
+      WORKOS_API_KEY: "${WORKOS_API_KEY:-}"
+      WORKOS_REDIRECT_URI: "${WORKOS_REDIRECT_URI:-}"
+      ENABLE_WORKOS_SIGN_IN: "${ENABLE_WORKOS_SIGN_IN:-}"
       # Passkey relying-party configuration. Set these when the browser uses
       # a hostname other than localhost (for example Tailscale HTTPS).
       WEBAUTHN_RP_ID: "${WEBAUTHN_RP_ID:-}"
