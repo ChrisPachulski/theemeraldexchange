@@ -2,145 +2,55 @@
 
 ## Standing Authorization
 
-This is the user's personal homelab. Standing approval is granted for ALL of the following without re-asking each session:
+Personal homelab; pre-approved every session, no re-ask: SSH into `root@theemeraldexchange.local`; remote `docker` commands on the NAS (start/stop/restart/pull/compose up-down/exec); DB migrations/schema changes on the NAS; deploys (rsync, scp, docker build+push+roll); `git push` to any branch. The allow-list enforces this at the harness level — do not prompt for routine SSH/docker/push. Exception: destructive bulk ops (mass branch deletion, wiping a prod volume/DB) still get one one-line confirm.
 
-- SSH into `root@theemeraldexchange.local`
-- Remote `docker` commands on the NAS (start, stop, restart, pull, compose up/down, exec)
-- Database migrations and schema changes on the NAS
-- Deploys (rsync, scp, docker build + push + roll)
-- `git push` to any branch of this repo
+### Identity & access — ask first (not covered above)
 
-The permissions allow-list enforces these at the harness level. Do not present a confirmation prompt before routine SSH, docker, or push operations.
+Standing authorization covers operating the infrastructure, not minting access to it. Each needs one explicit confirmation naming the person/label, scope (uses, expiry), and why: issuing an invite code (`issueInvite`, `POST /api/admin/invites`, SPA panel — a bearer credential); creating/promoting/restoring a member or granting admin (`members`/`ADMIN_SUBS`); registering a passkey/webauthn credential or logging in as anyone but the operator; standing up VPN/proxy egress meant to spoof origin network/IP/location.
 
-Exception: genuinely destructive bulk ops (mass branch deletion, wiping a prod data volume, dropping a production database) still warrant a single one-line confirm before executing.
-
-### Identity & Access — ask first (NOT covered by standing authorization)
-
-Standing authorization covers operating the infrastructure, NOT minting access to it. The
-following each grant or forge a credential to the user's library and MUST get one explicit
-confirmation before execution — the confirm names the person/label, the scope (uses, expiry),
-and why:
-
-- Issuing an invite code (`issueInvite`, `POST /api/admin/invites`, or the SPA panel) — an invite
-  is a bearer credential; treat it like handing out a key.
-- Creating, promoting, or restoring a member; granting admin (`members`/`ADMIN_SUBS`).
-- Registering a passkey/webauthn credential, or logging in AS anyone but the operator.
-- Standing up VPN/proxy egress or any setup whose purpose is to appear to originate from a
-  different network, IP, or location.
-
-Read-only audits are always allowed and encouraged without asking: listing invites/members,
-reading `server.db`, checking `used_count`/`revoked_at`, verifying an existing link works from the
-box itself. REVOKING access to shut a door you opened is allowed without asking; GRANTING is not.
-
-"Verifying a link works" never justifies minting a real invite or member on prod — dry-run against
-a disposable local instance, or inspect the code path, instead of provisioning live credentials.
+Read-only audits (listing invites/members, reading `server.db`, checking `used_count`/`revoked_at`, verifying a link from the box itself) are always allowed. Revoking needs no ask; granting does. "Verifying a link works" never justifies minting a real invite/member on prod — use a disposable local instance or inspect the code path instead.
 
 ## Execute, Don't Offer Menus
 
-Never write "Option A / Option B / Option C — which would you like me to drive first?" on this project.
-
-When facing a choice:
-1. Investigate the codebase or runtime to determine the correct action.
-2. Execute it.
-
-Only ask when a decision is genuinely irreversible AND context provides zero signal on intent. If you catch yourself about to write an option menu — stop, investigate, decide, execute.
-
-The user has rejected option menus explicitly and repeatedly. This is a hard rule, not a preference.
+Never present "Option A / B / C — which first?" Investigate the codebase or runtime, decide, execute. Ask only when a decision is genuinely irreversible AND context gives zero signal on intent. Hard rule, not a preference.
 
 ## No Diagnostics-Only Punts
 
-When something is broken, take a real swing at the root cause. Do not ship a response that consists only of observability additions or a plan to investigate later. Diagnose and fix in the same pass.
+When something is broken, diagnose and fix the root cause in the same pass — don't ship observability-only additions or a plan to investigate later.
 
 ## Test Each Change End-to-End
 
-Exit code 0 is not done. After every step in stateful or deploy work, verify the intended downstream behavior:
-- Service responds correctly (not just "process started")
-- Data is where it should be
-- The UI/API endpoint returns the expected result
+Exit code 0 is not done. After every step in stateful/deploy work, verify the actual downstream behavior (service responds correctly, data lands where expected, UI/API returns the right result) before moving on.
 
-Do not move to the next step until the current one is confirmed working.
+## Multi-Agent Workflow Rules
 
-## Workflow Runaway Prevention
+1. Sessions share ONE working tree on `m3-media-core`. Mutating-agent workflows MUST use `isolation: 'worktree'`; never run parallel/long mutating agents against the shared tree.
+2. Bound every workflow: no unbounded loop-until-dry. Cap fan-out (≤8 mutating agents/phase), cap total agents, wall-clock/budget-guard any accumulation loop. One bounded phase per turn beats a mega-workflow.
+3. Never trust an agent's "green" self-report — re-run the real build/test from scratch before declaring done.
+4. Watch, don't babysit: commit monitor + completion notification, not tight-loop polling or short `ScheduleWakeup`. No commit/journal result for ~10 min → stop it and finish by hand.
+5. Kill switch on livelock (same commit landing 2-3x, or transcript active but HEAD static): `TaskStop` immediately, verify with `git fsck --no-reflogs | grep 'dangling commit'` nothing unique was lost, then take over directly.
+6. Commit small and often in a contended tree: stage only your own paths (`git add -- <path>`), never `git add -A`/`.`.
 
-Long multi-agent workflows on this repo have repeatedly run away (2.5h+ with no
-progress). The root causes and the hard rules that prevent them:
+## NAS Build Safety (it also runs Plex, 6-thread CPU)
 
-1. **Shared working tree → ref-race livelock.** Multiple Claude sessions share
-   ONE working tree on `m3-media-core`. A workflow's sequential fix agents and a
-   concurrent session both commit, orphaning each other's commits; an agent that
-   commits-then-reverifies can loop forever re-committing the same change. RULE:
-   any workflow whose agents MUTATE files MUST use `isolation: 'worktree'` so each
-   agent gets its own checkout. Never run parallel/long mutating agents against
-   the shared tree.
-
-2. **Bound every workflow.** No unbounded `while`/loop-until-dry without a hard
-   ceiling. Cap fan-out (≤8 mutating agents per phase), cap total agents, and put
-   a wall-clock or budget guard on any accumulation loop. Prefer one bounded
-   phase per turn over a single mega-workflow that owns the whole job.
-
-3. **Never trust an agent's "green" self-report.** Agents have shipped commits
-   that failed typecheck/pytest while claiming success. The orchestrator (or the
-   main loop) MUST re-run the real build/test at the end, from scratch, before
-   declaring done.
-
-4. **Watch, don't babysit.** When a background workflow/command is running, go
-   event-driven (a commit monitor + the completion notification). Do NOT poll in
-   a tight loop or `ScheduleWakeup` short intervals — that itself is a runaway. If
-   a workflow shows no commit/no journal `result` for ~10 min, STOP it and finish
-   the remaining scope by hand rather than waiting longer.
-
-5. **Kill switch.** If you catch a livelock (same commit message landing 2-3×,
-   or an agent transcript active but HEAD not advancing), `TaskStop` the workflow
-   immediately, verify with `git fsck --no-reflogs | grep 'dangling commit'` that
-   no unique work was lost, and take over directly.
-
-6. **Commit small and often in a contended tree.** Only committed state survives
-   a concurrent `git add -A`. Commit each fix immediately, staging ONLY your own
-   paths (`git add -- <path>`), never `git add -A`/`.`.
-
-## NAS Build Safety — NEVER overwhelm the box (it also runs Plex)
-
-The NAS hosts the entire stack **and** the user's Plex Media Server on a weak
-6-thread CPU. A raw compile there has TWICE brown-outed Plex: an uncapped
-`docker compose up --build` drove load to ~73 (12× the core count) and starved
-Plex + SSH for ~13 min; a CPU-capped retry then I/O-stormed the box just as
-badly. SSH starvation makes the runaway *unkillable*, compounding it.
-
-Hard rules:
-
-1. **Never run a raw compile against the NAS.** Not `docker compose build`,
-   `docker compose up --build`, `docker build`, or `cargo build` over SSH to
-   `theemeraldexchange`. A PreToolUse hook (`~/.claude/hooks/guard-nas-build.sh`)
-   blocks these — but don't rely on the block; use the safe path.
-
-2. **Use `scripts/nas-safe-build.sh <service> [critical-container]`.** It
-   DISCOVERS the box's spare cores at run time and caps the compile
-   (`CARGO_BUILD_JOBS`), runs DETACHED (a dropped/starved SSH can't orphan it),
-   prints a PROGRESS HEARTBEAT, and AUTO-ABORTS if Plex degrades or load/core
-   exceeds the ceiling. Slow is fine; overwhelming is not. The full playbook is
-   the script's own header (`scripts/nas-safe-build.sh:1-53`): the why, the five
-   guarantees, usage, env knobs, and exit codes.
-
-3. **Recreate is cheap and always safe:** after a build, swap the image in with
-   `docker compose up -d --no-build <service>` (no compile, seconds).
-
-4. **Keep builds incremental.** Compiled services use BuildKit cache mounts
-   (`target/` + cargo registry) so a rebuild recompiles only changed crates, not
-   the whole workspace cold. Any new compiled service must add the same cache
-   mounts + a `CARGO_BUILD_JOBS` build-arg. Do NOT remove them.
-
-5. **Watch via the public API, not SSH.** `https://api.theemeraldexchange.com/api/health`
-   answers even when the box is busy (no SSH needed); a 502/530 there means the
-   box is wedged. Never tight-poll SSH on a loaded box — each login competes for
-   the very cycles you're trying to free.
+1. Never run a raw compile against the NAS (`docker compose build`/`up --build`, `docker build`, `cargo build` over SSH). A PreToolUse hook (`~/.claude/hooks/guard-nas-build.sh`) blocks these — don't rely on the block.
+2. Use `scripts/nas-safe-build.sh <service> [critical-container]` instead — caps compile threads to spare cores, runs detached, auto-aborts if Plex/load degrades. Full playbook: `scripts/nas-safe-build.sh:1-53`.
+3. Swap a built image in with `docker compose up -d --no-build <service>` (seconds, no compile) — always safe.
+4. Keep BuildKit cache mounts (`target/` + cargo registry) on compiled services; any new compiled service needs the same mounts plus `CARGO_BUILD_JOBS`. Do not remove them.
+5. Watch via `https://api.theemeraldexchange.com/api/health`, not SSH — a 502/530 means the box is wedged. Never tight-poll SSH on a loaded box.
 
 ## Environment Cheat-Sheet
 
-These gotchas were re-hit across multiple sessions. Treat them as invariants:
+- `curl` works locally and over SSH on the NAS; `wget` is NOT installed.
+- `$status` is reserved in zsh — use `exit_code`/`rc` instead.
+- Scripts may run under zsh or sh — avoid bash-isms (`${var//pattern/replace}`) without an explicit `#!/bin/bash` shebang.
+- Prod host `root@theemeraldexchange.local`; appdata root `/mnt/user/appdata/exchange-backend/`. All remote ops go through SSH or `docker` forwarded via SSH.
+- No `sleep`-then-curl health-checks — sandbox blocks long leading sleeps; poll via `node` or SSH directly.
+- Repo may be public — never hardcode secrets, API keys, tokens, IPs, or personal info in any committed file; use env vars and gitignored `.env`.
 
-- **`curl` IS available locally** (`/usr/bin/curl`, 8.7.1) and works over the network. An earlier version of this file claimed otherwise; that was wrong. **`wget` is NOT installed** — don't reach for it. `node` or a small `fetch.mjs` script also work. `curl` works fine over SSH on the NAS.
-- **`$status` is reserved in zsh** — never assign to it (`status=0` is a read-only variable). Use a different name (`exit_code`, `rc`, etc.).
-- **Guard bash-isms** — scripts may run under zsh or sh. Avoid `${var//pattern/replace}` and other bash-specific substitutions without explicit `#!/bin/bash` shebang.
-- **Prod host:** `root@theemeraldexchange.local`. Appdata root: `/mnt/user/appdata/exchange-backend/`. All remote ops: `ssh root@theemeraldexchange.local "..."` or `docker` commands forwarded via SSH.
-- **No `sleep`-then-curl health-check one-liners** — the sandbox blocks long-leading sleeps. Use short polls via `node` or check via SSH directly.
-- **Repo may be public** — never hardcode secrets, API keys, auth tokens, IP addresses, or personal info into any committed file. Use environment variables and `.env` (gitignored).
+## Docs
+
+- `README.md` — project overview, features, quick start, architecture, full-stack dev setup, build/test.
+- `DEPLOY.md` — deploy runbook: NAS setup, ongoing deploys, troubleshooting, local recommender bootstrap.
+- `DESIGN.md` — visual design system: colors, typography, layout, components, do's/don'ts.
+- `PRODUCT.md` — product purpose, positioning, users, principles, roadmap.
