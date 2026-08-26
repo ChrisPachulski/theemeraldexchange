@@ -10,7 +10,7 @@
 
 import { Hono } from 'hono'
 import Database from 'better-sqlite3'
-import { env, isAppleConfigured, isGoogleConfigured } from '../env.js'
+import { env, isAppleConfigured, isGoogleConfigured, isWorkosConfigured } from '../env.js'
 import { ensureServerId } from '../session.js'
 
 export const version = new Hono()
@@ -46,6 +46,7 @@ version.get('/', (c) => {
   const auth_modes: string[] = ['plex']
   if (isAppleConfigured()) auth_modes.push('apple')
   if (isGoogleConfigured()) auth_modes.push('google')
+  if (isWorkosConfigured()) auth_modes.push('workos')
   auth_modes.push('passkey')
 
   return c.json({

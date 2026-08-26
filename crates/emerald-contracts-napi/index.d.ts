@@ -121,7 +121,7 @@ export function internalPrincipalEncrypt(
 // ---------------------------------------------------------------------------
 
 export interface SubJs {
-  provider: 'plex' | 'local' | 'apple'
+  provider: 'plex' | 'local' | 'apple' | 'google' | 'workos'
   id: string
   raw: string
 }

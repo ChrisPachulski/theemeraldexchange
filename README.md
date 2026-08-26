@@ -70,6 +70,7 @@ Everything else is opt-in, one flag each:
 | Plex login as an extra sign-in provider | `PLEX_CLIENT_ID` (+ `PLEX_SERVER_ID`) |
 | Sign in with Apple | `APPLE_CLIENT_ID` (`ENABLE_APPLE_SIGN_IN=1` is an optional fail-fast assertion) |
 | Sign in with Google | `GOOGLE_CLIENT_ID` (`ENABLE_GOOGLE_SIGN_IN=1` is an optional fail-fast assertion) |
+| WorkOS AuthKit (hosted login page) | `WORKOS_CLIENT_ID` + `WORKOS_API_KEY` + `WORKOS_REDIRECT_URI` (`ENABLE_WORKOS_SIGN_IN=1` optional assertion) |
 | Error telemetry (self-hosted Glitchtip) | `COMPOSE_PROFILES=telemetry` + `TELEMETRY_ENABLED=1` — **owner deployment only** (root `docker-compose.yml`); not in the self-host bundle |
 
 With everything off you still get the core product: library browsing + playback, passkey
@@ -136,6 +137,7 @@ single invite/members allowlist:
 - **Sign in with Apple** (RS256, alg/aud/iss/nonce-pinned)
 - **Sign in with Google** (RS256, issuer/audience-pinned across configured web/native clients)
 - **WebAuthn passkeys** (cross-platform, password-free)
+- **WorkOS AuthKit** (redirect to a hosted login page; `workos:` subs)
 
 Normal login requires an active member/admin identity or invite redemption. A verified share on
 the configured Plex server is the explicit provider-backed admission path. Fresh-install state

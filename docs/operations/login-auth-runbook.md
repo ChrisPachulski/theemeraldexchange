@@ -4,9 +4,14 @@ This is the operator contract for browser login, native pairing, session truth, 
 owner-controlled members allowlist. It deliberately contains no credential values, provider
 subjects, invite codes, PINs, cookies, or example bearer tokens.
 
+WorkOS is a redirect flow: `/api/auth/workos/start` parks a nonce (+ optional invite code) in a
+10-minute HttpOnly cookie scoped to the callback path; `/api/auth/workos/callback` checks the nonce,
+exchanges the code server-side with `WORKOS_API_KEY`, runs the same allowlist gate, sets the session
+cookie, and redirects to the SPA (`?auth_error=<reason>` on failure).
+
 ## What “logged in” means
 
-A provider response is not browser-session truth. Plex, Apple, Google, and passkey flows may set
+A provider response is not browser-session truth. Plex, Apple, Google, WorkOS, and passkey flows may set
 the encrypted HttpOnly cookie, but the SPA commits the identity only after a credentialed
 `GET /api/me` returns the same namespaced subject.
 

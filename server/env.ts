@@ -359,8 +359,27 @@ if (isProd && enableGoogleSignIn && googleClientIds.length === 0) {
   )
 }
 
+// WORKOS_* — WorkOS AuthKit (hosted login: Apple/Google/magic link/etc.
+// behind one redirect flow). WORKOS_CLIENT_ID + WORKOS_API_KEY together
+// enable /api/auth/workos/*; the API key is the code-exchange client secret
+// and is never sent to the browser. WORKOS_REDIRECT_URI is the exact
+// callback registered in the WorkOS dashboard (the public API origin +
+// /api/auth/workos/callback) — explicit rather than request-derived so a
+// proxied Host header can never redirect the code somewhere else.
+const workosClientId = opt('WORKOS_CLIENT_ID') ?? null
+const workosApiKey = opt('WORKOS_API_KEY') ?? null
+const workosRedirectUri = opt('WORKOS_REDIRECT_URI') ?? null
+const enableWorkosSignIn = process.env.ENABLE_WORKOS_SIGN_IN === '1'
+if (isProd && enableWorkosSignIn && !(workosClientId && workosApiKey && workosRedirectUri)) {
+  throw new Error(
+    'Missing required env vars in production when ENABLE_WORKOS_SIGN_IN=1: ' +
+      'WORKOS_CLIENT_ID, WORKOS_API_KEY and WORKOS_REDIRECT_URI. Set them, ' +
+      'or unset ENABLE_WORKOS_SIGN_IN to run without WorkOS.',
+  )
+}
+
 // ADMIN_SUBS — comma-separated, namespaced subs (apple:<subject> |
-// plex:<id> | google:<sub> | local:<ulid>) that are admins AND implicitly
+// plex:<id> | google:<sub> | workos:<user_id> | local:<ulid>) that are admins AND implicitly
 // allowed without an invite. parseSub accepts all four providers — a
 // passkey-only install can bootstrap its owner with a local: entry
 // (verdict A6: this always worked; only these docs hid it).
@@ -439,6 +458,12 @@ export function isGoogleConfigured(): boolean {
   return env.googleClientIds.length > 0
 }
 
+/** True when WorkOS AuthKit sign-in is configured (client id, API key and
+ *  redirect URI all present). Read through env so tests can flip it. */
+export function isWorkosConfigured(): boolean {
+  return Boolean(env.workosClientId && env.workosApiKey && env.workosRedirectUri)
+}
+
 export const env = {
   // Trimming (done by opt() at the hoisted const above) is load-bearing
   // for the plex.tv PIN flow: this value flows into BOTH the
@@ -465,6 +490,12 @@ export const env = {
   appleClientId,
   /** Google ID-token `aud` allow-list — OAuth client id(s). [] when unconfigured. */
   googleClientIds,
+  /** WorkOS AuthKit client id. null when unconfigured. */
+  workosClientId,
+  /** WorkOS API key (code-exchange secret). null when unconfigured. */
+  workosApiKey,
+  /** Exact callback URI registered with WorkOS. null when unconfigured. */
+  workosRedirectUri,
   /** WebAuthn Relying Party id (registrable domain the passkey binds to). */
   webauthnRpId,
   /** Human-facing name shown in the OS passkey prompt. */

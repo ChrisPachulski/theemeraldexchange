@@ -1,6 +1,7 @@
 //! Subject (`sub`) namespace parsing per §8 of the cross-service contract.
 //!
-//! Four provider namespaces: `plex:`, `local:`, `apple:`, `google:`. The
+//! Five provider namespaces: `plex:`, `local:`, `apple:`, `google:`,
+//! `workos:`. The
 //! format is `<provider>:<id>`. Regex literals are the contract — Rust + TS +
 //! Swift implementations MUST match exactly. Verified against
 //! `tests/vectors/sub-namespace.json`.
@@ -24,12 +25,17 @@ pub const APPLE_REGEX: &str = r"^apple:[0-9]{6}\.[0-9a-f]{32}\.[0-9]{4}$";
 /// practice ~21 digits, never reused). Numeric-only, generous length.
 pub const GOOGLE_REGEX: &str = r"^google:[0-9]{1,32}$";
 
+/// `workos:` — WorkOS AuthKit user id: `user_` + 26-char uppercase
+/// Crockford Base32 ULID (e.g. `user_01E4ZCR3C56J083X43JQXF3JK5`).
+pub const WORKOS_REGEX: &str = r"^workos:user_[0-9A-HJKMNP-TV-Z]{26}$";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Provider {
     Plex,
     Local,
     Apple,
     Google,
+    Workos,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,7 +50,7 @@ pub struct Sub {
 pub enum SubError {
     /// Sub is not in `<provider>:<id>` shape at all.
     Unprefixed,
-    /// Provider prefix is unknown (not plex/local/apple/google).
+    /// Provider prefix is unknown (not plex/local/apple/google/workos).
     UnknownProvider,
     /// Provider matches but the id portion fails the regex.
     InvalidFormat,
@@ -65,6 +71,10 @@ fn apple_re() -> &'static Regex {
 fn google_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| Regex::new(GOOGLE_REGEX).expect("static regex"))
+}
+fn workos_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(WORKOS_REGEX).expect("static regex"))
 }
 
 /// Parse a namespaced `sub` string. The string MUST already carry a
@@ -114,6 +124,17 @@ pub fn parse_sub(s: &str) -> Result<Sub, SubError> {
             if google_re().is_match(s) {
                 Ok(Sub {
                     provider: Provider::Google,
+                    id: rest.to_string(),
+                    raw: s.to_string(),
+                })
+            } else {
+                Err(SubError::InvalidFormat)
+            }
+        }
+        "workos" => {
+            if workos_re().is_match(s) {
+                Ok(Sub {
+                    provider: Provider::Workos,
                     id: rest.to_string(),
                     raw: s.to_string(),
                 })
@@ -179,6 +200,21 @@ mod tests {
     fn google_rejects_non_numeric() {
         assert_eq!(
             parse_sub("google:abc").unwrap_err(),
+            SubError::InvalidFormat,
+        );
+    }
+
+    #[test]
+    fn valid_workos() {
+        let s = parse_sub("workos:user_01E4ZCR3C56J083X43JQXF3JK5").unwrap();
+        assert_eq!(s.provider, Provider::Workos);
+        assert_eq!(s.id, "user_01E4ZCR3C56J083X43JQXF3JK5");
+    }
+
+    #[test]
+    fn workos_rejects_missing_user_prefix() {
+        assert_eq!(
+            parse_sub("workos:01E4ZCR3C56J083X43JQXF3JK5").unwrap_err(),
             SubError::InvalidFormat,
         );
     }

@@ -29,7 +29,7 @@
 
 import { contracts } from './contractsBinding.js'
 
-export type SubProvider = 'plex' | 'local' | 'apple' | 'google'
+export type SubProvider = 'plex' | 'local' | 'apple' | 'google' | 'workos'
 
 export type Sub = {
   provider: SubProvider

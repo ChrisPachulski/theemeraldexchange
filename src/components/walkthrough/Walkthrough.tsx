@@ -7,6 +7,8 @@ import type { DotState } from '../search/FeedbackDots'
 import { inviteCodeError, useAuth } from '../../lib/auth'
 import { AppleSignInButton } from '../auth/AppleSignInButton'
 import { PasskeyButtons } from '../auth/PasskeyButtons'
+import { apiUrl } from '../../lib/api/base'
+import { deniedMessage } from '../../lib/auth'
 import './Walkthrough.css'
 
 // Default unauthenticated landing for theemeraldexchange. The
@@ -143,6 +145,12 @@ function SignInBlock({
   // hiding the way in behind a slow request.
   const showPlex = !authMethods || authMethods.plex
   const showApple = !authMethods || authMethods.apple
+  const showWorkos = Boolean(authMethods?.workos)
+  // The WorkOS callback lands back here with ?auth_error=<reason> on failure.
+  const workosError =
+    typeof window === 'undefined'
+      ? null
+      : new URLSearchParams(window.location.search).get('auth_error')
   return (
     <div className={`walkthrough__signin walkthrough__signin--${placement}`}>
       <div className="walkthrough__invite">
@@ -184,6 +192,15 @@ function SignInBlock({
           </button>
         )}
         {showApple && <AppleSignInButton inviteCode={code || undefined} />}
+        {showWorkos && (
+          <a
+            className="walkthrough__signin-button"
+            href={apiUrl('/api/auth/workos/start', code ? { invite: code } : undefined)}
+            aria-disabled={pending || Boolean(codeError) ? true : undefined}
+          >
+            Sign in with WorkOS
+          </a>
+        )}
         <PasskeyButtons
           inviteCode={code || undefined}
           startInRegistration={placement === 'hero' && Boolean(initialInviteCode)}
@@ -196,6 +213,9 @@ function SignInBlock({
         code needed. First-time guests: paste your invite code above, then set
         up a passkey{showPlex || showApple ? ' or sign in with the other providers' : ''}.
       </p>
+      {!signInError && workosError && (
+        <p className="walkthrough__signin-error" role="alert">{deniedMessage(workosError)}</p>
+      )}
       {signInError && (
         <p className="walkthrough__signin-error" role="alert">{signInError}</p>
       )}

@@ -54,7 +54,7 @@ fn hkdf_internal_principal<'py>(py: Python<'py>, secret: &[u8]) -> Bound<'py, Py
 // ---------------------------------------------------------------------------
 
 /// Parse a namespaced `sub` string. Returns a dict
-/// `{provider: 'plex'|'local'|'apple'|'google', id: str, raw: str}`.
+/// `{provider: 'plex'|'local'|'apple'|'google'|'workos', id: str, raw: str}`.
 /// Raises `ValueError` on malformed input.
 #[pyfunction]
 fn parse_sub<'py>(py: Python<'py>, s: &str) -> PyResult<Bound<'py, PyDict>> {
@@ -64,6 +64,7 @@ fn parse_sub<'py>(py: Python<'py>, s: &str) -> PyResult<Bound<'py, PyDict>> {
         Provider::Local => "local",
         Provider::Apple => "apple",
         Provider::Google => "google",
+        Provider::Workos => "workos",
     };
     let d = PyDict::new(py);
     d.set_item("provider", provider)?;
