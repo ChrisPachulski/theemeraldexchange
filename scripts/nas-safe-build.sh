@@ -85,7 +85,12 @@ PIDF="/tmp/${RUN_TAG}.pgid"
 say() { printf '[nas-safe-build] %s\n' "$*"; }
 
 # A short SSH that fails fast under load instead of hanging the whole script.
-nas() { timeout 25 ssh -o ConnectTimeout=12 -o BatchMode=yes "$NAS" "$@"; }
+# macOS ships no `timeout`; fall back to bare ssh (ConnectTimeout still bounds the connect).
+if command -v timeout >/dev/null 2>&1; then
+  nas() { timeout 25 ssh -o ConnectTimeout=12 -o BatchMode=yes "$NAS" "$@"; }
+else
+  nas() { ssh -o ConnectTimeout=12 -o BatchMode=yes "$NAS" "$@"; }
+fi
 
 # ── 1. DISCOVER capacity + launch the build, detached, on the NAS ────────────
 # Everything below the marker runs ON the NAS in one shot: it reads the box's
