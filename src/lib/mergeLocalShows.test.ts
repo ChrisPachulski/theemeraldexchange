@@ -20,6 +20,9 @@ describe('mergeLocalShows', () => {
   it('skips local shows Sonarr already tracks by tvdb or tmdb id', () => {
     expect(mergeLocalShows(sonarr, [local({ tvdbId: 100 }), local({ tmdbId: 200 })])).toHaveLength(1)
   })
+  it('drops local rows the scanner never identified (no tmdb/tvdb id)', () => {
+    expect(mergeLocalShows(sonarr, [local({ title: 'Dora 02 Lost and Found TVRip 6' })])).toHaveLength(1)
+  })
   it('returns Sonarr alone while local shows are still loading', () => {
     expect(mergeLocalShows(sonarr, undefined)).toHaveLength(1)
   })
