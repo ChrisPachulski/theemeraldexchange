@@ -118,12 +118,12 @@ export function roleFor(username: string, sub?: string): Role {
   if (sub && (env.adminSubs ?? []).includes(sub)) return 'admin'
   // Legacy admin-by-Plex-username (env.admins) must NEVER promote a non-Plex
   // identity. ADMINS is documented as *Plex usernames*; for Apple the username
-  // is `verified.email.split('@')[0]` (attacker-chosen) and for passkeys it is
+  // is `verified.email.split('@')[0]` (attacker-chosen) and for legacy local: rows it is
   // a self-chosen handle — matching either against ADMINS would let any invited
   // apple:/local: user whose name collides with an admin entry escalate to
   // admin, and reconcileSession would re-grant it on every request. Block the
   // username match for the non-Plex providers; plex: and legacy bare-numeric
-  // Plex subs keep the historical behavior. Apple/passkey/Google admins must
+  // Plex subs keep the historical behavior. Apple/Google/WorkOS admins must
   // instead be named explicitly by stable sub in ADMIN_SUBS (handled above).
   if (
     sub &&

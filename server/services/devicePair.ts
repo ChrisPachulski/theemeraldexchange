@@ -2,7 +2,7 @@
 //
 // The native app (tvOS/iOS) needs a device-token Bearer JWE, not a web
 // session cookie. The Plex pair flow mints one in routes/device.ts; this
-// helper gives the Apple / passkey / Google routes the SAME capability
+// helper gives the Apple / Google routes the SAME capability
 // without duplicating the parse → mint → respond block three times.
 //
 // Contract: when the request body carries the device-pair triple

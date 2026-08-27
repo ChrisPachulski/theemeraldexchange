@@ -13,9 +13,8 @@
 #   remote     — private remote access via Tailscale Serve (TS_AUTHKEY)
 #
 # First run:  ./install.sh   (or: sh scripts/self-host-env.sh && docker compose up -d)
-# Then claim with the setup token printed in `docker compose logs backend`.
-# WebAuthn requires HTTPS or http://localhost: use a local browser, an SSH
-# localhost tunnel for a headless NAS, or the optional Tailscale HTTPS profile.
+# Then set ADMIN_SUBS to your provider sub (workos:/plex:/apple:/google:) and
+# restart: that identity is the owner.
 
 services:
   backend:
@@ -60,7 +59,7 @@ services:
       # Durable/legacy administrator bootstrap inputs.
       ADMINS: "${ADMINS:-}"
       ADMIN_SUBS: "${ADMIN_SUBS:-}"
-      # Plex login (a fresh install uses passkeys; Plex is one extra provider)
+      # Plex login (one optional provider; WorkOS/Apple/Google are the others)
       PLEX_CLIENT_ID: "${PLEX_CLIENT_ID:-}"
       PLEX_SERVER_ID: "${PLEX_SERVER_ID:-}"
       # Emergency production boot opt-in when Plex is configured without a
@@ -78,14 +77,6 @@ services:
       WORKOS_API_KEY: "${WORKOS_API_KEY:-}"
       WORKOS_REDIRECT_URI: "${WORKOS_REDIRECT_URI:-}"
       ENABLE_WORKOS_SIGN_IN: "${ENABLE_WORKOS_SIGN_IN:-}"
-      # Passkey relying-party configuration. Set these when the browser uses
-      # a hostname other than localhost (for example Tailscale HTTPS).
-      WEBAUTHN_RP_ID: "${WEBAUTHN_RP_ID:-}"
-      WEBAUTHN_RP_NAME: "${WEBAUTHN_RP_NAME:-}"
-      WEBAUTHN_ORIGINS: "${WEBAUTHN_ORIGINS:-}"
-      # Keep first-owner claims private/loopback-only unless the operator
-      # explicitly needs to claim through a trusted remote tunnel.
-      SETUP_ALLOW_REMOTE: "${SETUP_ALLOW_REMOTE:-0}"
       # Requests/downloads (Sonarr / Radarr / SAB) — tabs hide when unset
       SONARR_URL: "${SONARR_URL:-}"
       SONARR_API_KEY: "${SONARR_API_KEY:-}"
@@ -201,7 +192,7 @@ services:
   # ── PRIVATE remote access (COMPOSE_PROFILES=remote) ──────────────────────
   # Tailscale Serve: https://<TS_HOSTNAME>.<your-tailnet>.ts.net, visible to
   # YOUR tailnet devices only — never the public internet. The https hostname
-  # also gives passkeys a proper secure context away from home.
+  # also keeps login cookies Secure away from home.
   tailscale:
     image: tailscale/tailscale:v1.94.1@sha256:21df0b5a84efa35c0a507f4dd2340e1b1295683634a28968707354d5bd991d9c
     container_name: emerald-tailscale

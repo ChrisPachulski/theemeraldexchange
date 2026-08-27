@@ -12,7 +12,7 @@
 
 .apple-signin__button {
   /* Full-width + centered so it sits flush in the sign-in stack alongside
-     the Plex and passkey buttons (was inline/left-aligned, which read as a
+     the Plex and WorkOS buttons (was inline/left-aligned, which read as a
      mismatched odd-one-out). */
   width: 100%;
   display: inline-flex;

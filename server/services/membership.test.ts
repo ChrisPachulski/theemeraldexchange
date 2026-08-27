@@ -1,6 +1,6 @@
 // server/services/membership.test.ts — branch coverage for memberStatus(),
 // the single provider-agnostic authZ decision shared by the Plex, Apple,
-// Google, and passkey login paths and the per-request session gate.
+// Google, and WorkOS login paths and the per-request session gate.
 //
 // env.ts builds `export const env = {...} as const` from process.env at
 // module-evaluation time, so memberStatus's env-driven branches (ADMIN_SUBS,

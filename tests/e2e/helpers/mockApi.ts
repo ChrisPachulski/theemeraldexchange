@@ -56,15 +56,7 @@ export async function installBackgroundMocks(page: Page) {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ plex: true, apple: false, google: false, passkey: true }),
-    }),
-  )
-
-  await page.route('**/api/setup/status', (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ claimable: false }),
+      body: JSON.stringify({ plex: true, apple: false, google: false, workos: false }),
     }),
   )
 

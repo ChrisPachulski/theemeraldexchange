@@ -7,9 +7,6 @@ export type AuthPostureConfig = {
   isProd: boolean
   trustClientIpHeaders: boolean
   allowedOrigins: readonly string[]
-  webauthnRpId: string
-  webauthnRpIdExplicit: boolean
-  webauthnOrigins: readonly string[]
 }
 
 function safeOrigin(value: string): string {
@@ -28,31 +25,8 @@ function safeOrigin(value: string): string {
   }
 }
 
-function safeRpId(value: string): string {
-  const candidate = value.trim().toLowerCase()
-  if (
-    candidate.length === 0 ||
-    candidate.length > 253 ||
-    candidate.includes('/') ||
-    candidate.includes('@') ||
-    candidate.includes(':') ||
-    candidate.includes('?') ||
-    candidate.includes('#')
-  ) {
-    return 'invalid_rp_id'
-  }
-
-  try {
-    const url = new URL(`https://${candidate}`)
-    return url.hostname === candidate ? url.hostname : 'invalid_rp_id'
-  } catch {
-    return 'invalid_rp_id'
-  }
-}
-
 /** Public, secret-free authentication posture suitable for one boot log row. */
 export function buildAuthPosture(config: AuthPostureConfig) {
-  const requestDerivedWebauthn = config.serveSpa && !config.webauthnRpIdExplicit
   return {
     event: 'auth_posture',
     providers: {
@@ -60,16 +34,10 @@ export function buildAuthPosture(config: AuthPostureConfig) {
       apple: Boolean(config.appleClientId),
       google: config.googleClientIds.length > 0,
       workos: Boolean(config.workosClientId),
-      passkey: true,
     },
     serveSpa: config.serveSpa,
     trustedClientIpHeaders: config.trustClientIpHeaders,
     sessionCookieSameSite: config.serveSpa || !config.isProd ? 'lax' : 'none',
     allowedOrigins: config.allowedOrigins.map(safeOrigin),
-    webauthnRpMode: requestDerivedWebauthn ? 'request-derived' : 'configured',
-    webauthnRpId: requestDerivedWebauthn ? 'request_host' : safeRpId(config.webauthnRpId),
-    webauthnOrigins: requestDerivedWebauthn
-      ? ['request_origin']
-      : config.webauthnOrigins.map(safeOrigin),
   } as const
 }

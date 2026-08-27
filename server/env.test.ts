@@ -302,14 +302,6 @@ describe('env — Phase 0 (plan 006): optional integrations boot on a bare env',
     await expect(loadEnv()).rejects.toThrow(/ALLOWED_ORIGINS/)
   })
 
-  it('WEBAUTHN_RP_ID set → webauthnRpIdExplicit (disables request-derived RP)', async () => {
-    setBaselineEnv()
-    process.env.SERVE_SPA = '1'
-    process.env.WEBAUTHN_RP_ID = 'exchange.example'
-    const env = await loadEnv()
-    expect(env.webauthnRpIdExplicit).toBe(true)
-    delete process.env.WEBAUTHN_RP_ID
-  })
 })
 
 describe('env — PLEX_SERVER_ID null coercion', () => {

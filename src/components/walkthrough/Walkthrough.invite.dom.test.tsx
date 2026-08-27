@@ -6,32 +6,21 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Walkthrough } from './Walkthrough'
 
-const passkeyProps = vi.hoisted(() => [] as Array<{
-  inviteCode?: string
-  startInRegistration?: boolean
-}>)
-
 vi.mock('../../lib/auth', () => ({
   inviteCodeError: () => null,
+  deniedMessage: () => 'denied',
   useAuth: () => ({
     signIn: vi.fn(),
     activeSignIn: null,
     signInError: null,
     discoveredServers: null,
-    authMethods: { plex: true, apple: false, google: false, passkey: true },
-    setupClaimable: false,
+    authMethods: { plex: true, apple: false, google: false, workos: true },
   }),
 }))
 vi.mock('../atmosphere/Kraken', () => ({ Kraken: () => null }))
 vi.mock('../atmosphere/EmeraldMark', () => ({ EmeraldMark: () => null }))
 vi.mock('../search/TrendingRow', () => ({ TrendingRow: () => null }))
 vi.mock('../auth/AppleSignInButton', () => ({ AppleSignInButton: () => null }))
-vi.mock('../auth/PasskeyButtons', () => ({
-  PasskeyButtons: (props: { inviteCode?: string; startInRegistration?: boolean }) => {
-    passkeyProps.push(props)
-    return <span data-invite={props.inviteCode} data-registration={props.startInRegistration} />
-  },
-}))
 
 class IntersectionObserverStub {
   observe() {}
@@ -40,7 +29,6 @@ class IntersectionObserverStub {
 
 describe('Walkthrough invite handoff', () => {
   beforeEach(() => {
-    passkeyProps.length = 0
     vi.stubGlobal('IntersectionObserver', IntersectionObserverStub)
   })
 
@@ -62,9 +50,9 @@ describe('Walkthrough invite handoff', () => {
     const inviteInputs = screen.getAllByRole('textbox', { name: /Invite code/ })
     expect(inviteInputs).toHaveLength(2)
     for (const input of inviteInputs) expect(input).toHaveValue(sentinel)
-    expect(passkeyProps.length).toBeGreaterThanOrEqual(2)
-    expect(passkeyProps.every((props) => props.inviteCode === sentinel)).toBe(true)
-    expect(passkeyProps.some((props) => props.startInRegistration === true)).toBe(true)
-    expect(passkeyProps.some((props) => props.startInRegistration === false)).toBe(true)
+    // Both blocks' Google + Apple links carry the invite to the WorkOS start route.
+    const links = screen.getAllByRole('link', { name: /Sign in with (Google|Apple)/ })
+    expect(links).toHaveLength(4)
+    for (const link of links) expect(link).toHaveAttribute('href', expect.stringContaining(`invite=${sentinel}`))
   })
 })

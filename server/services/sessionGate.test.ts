@@ -58,7 +58,7 @@ vi.mock('./membership.js', () => ({
 }))
 
 // DB-backed admin (plan 006 Phase 1): reconcileSession honors an active
-// members row with role='admin' (the first-owner claim mints one). Default
+// members row with role='admin' (legacy first-owner claims minted one). Default
 // null = no row, so every legacy test keeps its roleFor-driven role.
 const isMemberImpl: { fn: (sub: string) => { role: 'admin' | 'user' } | null } = {
   fn: () => null,
@@ -88,10 +88,10 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('DB-backed admin role (plan 006 Phase 1 first-owner claim)', () => {
+describe('DB-backed admin role (legacy first-owner claim rows)', () => {
   it('a local: session with a members-row admin KEEPS admin across reconcile', async () => {
-    // The claimed owner: local: sub, not in ADMIN_SUBS/ADMINS, but their
-    // claim minted a members row with role='admin'. Without the DB-role
+    // A legacy claimed owner: local: sub, not in ADMIN_SUBS/ADMINS, but a
+    // members row with role='admin' exists. Without the DB-role
     // check, reconcileSession would demote them to 'user' on their very
     // first protected request.
     isMemberImpl.fn = () => ({ role: 'admin' })
@@ -144,7 +144,7 @@ describe('roleFor', () => {
   })
   it('refuses to promote an apple/local identity whose displayName matches ADMINS', () => {
     // Cross-provider escalation guard: Apple displayName is the attacker-chosen
-    // email local-part and a passkey handle is self-chosen — neither may match
+    // email local-part and a local: handle is self-chosen — neither may match
     // the Plex-username ADMINS list, or any invited apple:/local: user could
     // pick a colliding name and become admin.
     expect(roleFor('admin-user', 'apple:001')).toBe('user')

@@ -14,8 +14,6 @@ const mocks = vi.hoisted(() => ({
   activeSignIn: null as
     | 'plex'
     | 'apple'
-    | 'passkey-login'
-    | 'passkey-register'
     | null,
 }))
 

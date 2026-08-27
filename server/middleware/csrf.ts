@@ -60,10 +60,6 @@ const NATIVE_BOOTSTRAP_PATHS = new Set([
   '/api/auth/device/poll',
   '/api/auth/apple',
   '/api/auth/google',
-  '/api/auth/passkey/login/options',
-  '/api/auth/passkey/login/verify',
-  '/api/auth/passkey/register/options',
-  '/api/auth/passkey/register/verify',
 ])
 
 function isNativeBootstrap(c: Parameters<MiddlewareHandler>[0]): boolean {

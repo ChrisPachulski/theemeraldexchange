@@ -195,7 +195,7 @@ describe('reconcileDeviceToken', () => {
     const { reconcileDeviceToken } = await importReconcile({ ADMIN_SUBS: OTHER_ADMIN })
     const sub = 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV'
     addMember({ sub, role: 'admin', authMode: 'local' })
-    seedDeviceToken('jti-db-admin', sub, 'Owner passkey')
+    seedDeviceToken('jti-db-admin', sub, 'Owner phone')
 
     const promoted = reconcileDeviceToken(
       makeClaims('jti-db-admin', sub, { role: 'user', auth_mode: 'local' }),

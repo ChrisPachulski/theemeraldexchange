@@ -17,7 +17,7 @@ afterEach(() => {
 
 describe('auth outcome reporter', () => {
   it('uses closed low-cardinality dimensions', () => {
-    expect(AUTH_OUTCOME_PROVIDERS).toEqual(['plex', 'apple', 'google', 'workos', 'passkey'])
+    expect(AUTH_OUTCOME_PROVIDERS).toEqual(['plex', 'apple', 'google', 'workos'])
     expect(AUTH_OUTCOME_PHASES).toEqual([
       'check',
       'identity_verify',
@@ -46,7 +46,6 @@ describe('auth outcome reporter', () => {
       'no_invite',
       'verification_failed',
       'access_revoked',
-      'setup_claim_denied',
     ])
     expect(AUTH_OUTCOME_SCOPES).toEqual([
       'global',

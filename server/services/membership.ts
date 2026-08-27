@@ -1,5 +1,5 @@
 // server/services/membership.ts — the authZ FACADE shared by all login
-// paths (Plex + Apple + Google + passkey) and the per-request session gate.
+// paths (Plex + Apple + Google + WorkOS) and the per-request session gate.
 //
 // This module is the seam between the routes layer (server/auth.ts,
 // server/services/sessionGate.ts) and the membership data layer
@@ -7,7 +7,7 @@
 // invites). The routes/gate import a single provider-agnostic surface —
 // `memberStatus` + `redeemInvite` — and never reach into the underlying
 // tables directly. Keeping the facade here means the Plex, Apple, Google,
-// and passkey paths converge on EXACTLY the same authZ decision.
+// and WorkOS paths converge on EXACTLY the same authZ decision.
 //
 // Schema: server/migrations/server/0003_members_invites.sql.
 
@@ -60,7 +60,7 @@ export function memberStatus(sub: string): MemberStatus {
   if (row) return row.revoked_at === null ? 'allowed' : 'revoked'
 
   // Fresh-install state is not authorization. First-owner setup has its own
-  // setup-token ceremony; normal provider and bearer paths always require an
+  // ADMIN_SUBS bootstrap; normal provider and bearer paths always require an
   // immutable admin identity, an active member, an invite, or the explicit
   // verified Plex-server-share admission performed by the Plex route.
   return 'not_member'

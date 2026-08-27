@@ -38,9 +38,9 @@ owned and polished. (Owner-confirmed 2026-08-04.)
 
 ## Users
 
-Identity comes from three parallel providers — Plex OAuth, Sign in with Apple,
-and WebAuthn passkeys — all converging on one invite/members allowlist the owner
-controls. Three audiences, treated identically once authorized:
+Identity comes from parallel providers — WorkOS AuthKit (Google/Apple), Plex OAuth,
+Sign in with Apple, and Sign in with Google — all converging on one invite/members
+allowlist the owner controls. Three audiences, treated identically once authorized:
 
 - **The owner (you)** — technical, administers the library and invites. Uses
   this nightly to curate content and watch. Does not want operator UIs cluttering

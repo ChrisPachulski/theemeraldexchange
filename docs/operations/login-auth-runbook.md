@@ -11,7 +11,7 @@ cookie, and redirects to the SPA (`?auth_error=<reason>` on failure).
 
 ## What “logged in” means
 
-A provider response is not browser-session truth. Plex, Apple, Google, WorkOS, and passkey flows may set
+A provider response is not browser-session truth. Plex, Apple, Google, and WorkOS flows may set
 the encrypted HttpOnly cookie, but the SPA commits the identity only after a credentialed
 `GET /api/me` returns the same namespaced subject.
 
@@ -23,14 +23,14 @@ Every credential-setting provider network leg is bounded and belongs to one atte
 signal. Non-interactive setup and verification legs have a 15-second request timeout; Plex checks are
 also bounded by the five-minute total attempt deadline. Timeout, cancellation/replacement, unmount, and
 sign-out release the shared login guard; none may leave all provider controls disabled until a reload.
-The interactive operating-system WebAuthn ceremony is not subject to the network timeout. Logout clears
+Logout clears
 local protected state even when its server request times out, then a later `/api/me` reconciles the
 server cookie.
 
 Authorization is separate from authentication. Normal login requires an immutable `ADMIN_SUBS`
 entry, an active member row, invite redemption, or the explicit configured-Plex-server share
-path. Provider configuration and fresh-install state never grant access. First ownership uses the
-host-protected setup-token passkey ceremony.
+path. Provider configuration and fresh-install state never grant access. First ownership is the
+operator's own provider sub listed in `ADMIN_SUBS`.
 
 `ADMIN_SUBS` is an immutable environment-level authority and takes precedence over a database
 member revocation on every login/session surface. To remove one, delete the exact sub from
@@ -39,22 +39,22 @@ durable ownership marker keeps setup closed; it does not preserve the removed ad
 
 ## Lost owner credential recovery (break glass)
 
-Use this only when setup is already sealed and no active administrator credential can authenticate.
-It does not reopen first-owner setup, and the setup marker or migration tables must never be edited as
+Use this when no active administrator credential can authenticate. Recovery is always another
+provider sub added to `ADMIN_SUBS`; the ownership marker and migration tables must never be edited as
 a recovery shortcut.
 
 1. Take the normal server database and deployment-configuration backup before changing authority.
 2. Choose a configured provider identity whose cryptographic/provider proof the owner can still
-   complete. Establish its exact namespaced subject (`plex:`, `apple:`, or `google:`) from a controlled
-   provider/operator source; never derive it from a display name or email and never paste it into logs or
-   tickets. A lost passkey identity is intentionally absent: without its credential it cannot prove the
-   existing `local:` subject, and a fresh registration creates a different subject.
+   complete. Establish its exact namespaced subject (`workos:`, `plex:`, `apple:`, or `google:`) from a
+   controlled provider/operator source (the WorkOS dashboard's Users page, `server.db` on the box); never
+   derive it from a display name or email and never paste it into logs or tickets. Legacy `local:`
+   rows cannot be recovered: their login path no longer exists.
 3. Add only that exact subject to `ADMIN_SUBS` in the deployment source of truth, then use the normal
-   guarded restart/deploy so policy reloads. Do not enable remote setup or resurrect a setup token.
-4. Complete that provider login and verify `/api/me` reports the expected administrator, setup remains
-   `claimable:false`, and exactly one correlated `authorized` auth outcome is emitted.
+   guarded restart/deploy so policy reloads.
+4. Complete that provider login and verify `/api/me` reports the expected administrator and exactly one
+   correlated `authorized` auth outcome is emitted.
 5. From the recovered administrator session, create and test a replacement through the normal
-   member/invite/passkey workflow. Invite redemption creates a `user`; there is no database-role promotion
+   member/invite workflow. Invite redemption creates a `user`; there is no database-role promotion
    endpoint.
 6. Add the replacement's now-known exact subject to `ADMIN_SUBS` while retaining the original break-glass
    subject, then guarded-deploy and verify the replacement can authenticate as administrator with
@@ -65,8 +65,7 @@ a recovery shortcut.
 
 If the exact provider subject cannot be established or no configured provider proof remains possible,
 stop and restore through the normal backup/operator process; do not guess an identity or patch the live
-database. The L2 recovery milestone replaces this manual path with multiple credentials and a separately
-verified, short-lived recovery grant.
+database. 
 
 ## Plex polling and rate limits
 
@@ -88,9 +87,7 @@ Both return `429` and a browser-readable `Retry-After`; neither is a terminal cr
 
 1. Check `/api/health`, `/api/version`, and `/api/auth/methods` from the canonical browser origin.
 2. Find the single boot row tagged `authentication posture`. Confirm provider booleans,
-   same-origin/split-origin mode, trusted-header mode, allowed origins, and WebAuthn RP settings.
-   `request-derived` means same-origin passkeys bind to the checked request host/origin;
-   `configured` means the logged RP values are used. Any `invalid_origin` or `invalid_rp_id` is a
+   same-origin/split-origin mode, trusted-header mode, and allowed origins. Any `invalid_origin` is a
    configuration failure, not a harmless redaction.
 3. Correlate terminal auth events by request id and provider/outcome. Never add PIN, invite,
    identity, IP, token, assertion, or cookie fields while debugging.
@@ -99,8 +96,6 @@ Both return `429` and a browser-readable `Retry-After`; neither is a terminal cr
 5. If a provider reports success but the UI refuses entry, inspect the subsequent `/api/me`
    status. A `401` means the cookie was not established; transient statuses mean reachability or
    split-origin cookie/CORS configuration.
-6. If passkeys fail before the OS prompt, compare the exact browser origin with
-   `WEBAUTHN_RP_ID` and `WEBAUTHN_ORIGINS`. WebAuthn requires HTTPS except for localhost.
 
 Expected redactions cover inbound legacy login query fields, outbound Plex PIN URLs, Sentry
 events/breadcrumbs, and cascade-revocation bookkeeping. A raw provider subject or login artifact
@@ -124,21 +119,15 @@ deleting, so a shared-device account switch cannot redirect an in-flight migrati
 
 Both root and published self-host Compose files pass the same provider/authz inputs:
 `ADMINS`, `ADMIN_SUBS`, Plex client/server ids, Apple and Google client ids plus enable guards,
-the emergency unscoped-Plex boot flag, all WebAuthn RP fields, and `SETUP_ALLOW_REMOTE`. The Plex
-flag only permits a Plex-configured production process to boot without a server id; it never
-overrides a member/provider gate. Remote first-owner claim stays off by default. Enable it only to
-claim through a trusted remote tunnel, and return it to `0` afterward; the one-time setup token is
-still mandatory. Contract tests fail when an input consumed by the backend disappears from a
-Compose surface or its environment example.
+the emergency unscoped-Plex boot flag, and the WorkOS client id / API key / redirect URI plus enable
+guard. The Plex flag only permits a Plex-configured production process to boot without a server id; it
+never overrides a member/provider gate. Contract tests fail when an input consumed by the backend
+disappears from a Compose surface or its environment example.
 
 The root Cloudflare topology trusts `CF-Connecting-IP`/`True-Client-IP` because the backend is
-loopback-only and reachable through cloudflared; first-owner setup resolves those headers before
-the private container socket, so a public visitor stays public and is blocked. Self-host does not
-trust forwarded headers by default, so a client cannot spoof a private address. The supported
-Tailscale Serve profile remains inside the allowed `100.64.0.0/10` private set. Tailscale Funnel
-is not a supported first-claim path: use a proxy with an unambiguous trusted client-IP header or
-the short-lived `SETUP_ALLOW_REMOTE=1` override, then return it to `0`. Setup does not consume
-`X-Forwarded-For` because neither deployment defines a validated proxy-hop chain.
+loopback-only and reachable through cloudflared. Self-host does not trust forwarded headers by
+default, so a client cannot spoof a private address for rate-limit buckets. Neither deployment
+consumes `X-Forwarded-For` because neither defines a validated proxy-hop chain.
 
 Plex is optional in the NAS preflight; `PLEX_SERVER_ID` is validated only when a
 `PLEX_CLIENT_ID` is configured. Test-only server helpers are excluded from both the Docker build
@@ -157,15 +146,11 @@ authoritative; this field is not the server/auth migration state.
 ## Rollout and rollback signals
 
 Rollback is warranted for a new `/api/me` revalidation loop, provider-success/session-confirmation
-false negatives, limiter saturation below the documented envelope, a setup state that is neither
-owned nor claimable, or any unredacted login artifact. Database migrations are forward-only; do
+false negatives, limiter saturation below the documented envelope, or any unredacted login artifact. Database migrations are forward-only; do
 not edit an applied migration or restore a database without the normal backup workflow.
 
 ## Best-in-class roadmap
 
-- **L2 — Passkey recovery:** allow multiple named credentials per member, prevent removal of the final
-  credential, and add recovery through a separately verified provider or owner-issued, short-lived
-  recovery grant.
 - **L3 — Auth detection:** alert on sustained low-cardinality `denied`, `rate_limited`, and `transient`
   outcomes, and keep a credential-free login/session-confirmation synthetic. Pending polls and identity
   fields stay out of event and alert dimensions.

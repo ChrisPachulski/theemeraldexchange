@@ -48,11 +48,8 @@ describe('AuthGate session availability', () => {
       }
       if (url.endsWith('/api/auth/methods')) {
         return Promise.resolve(
-          json({ plex: true, apple: false, google: false, passkey: true }),
+          json({ plex: true, apple: false, google: false, workos: false }),
         )
-      }
-      if (url.endsWith('/api/setup/status')) {
-        return Promise.resolve(json({ claimable: false }))
       }
       return Promise.reject(new Error(`unexpected fetch: ${url}`))
     }))
@@ -92,11 +89,8 @@ describe('AuthGate session availability', () => {
       }
       if (url.endsWith('/api/auth/methods')) {
         return Promise.resolve(
-          json({ plex: true, apple: false, google: false, passkey: true }),
+          json({ plex: true, apple: false, google: false, workos: false }),
         )
-      }
-      if (url.endsWith('/api/setup/status')) {
-        return Promise.resolve(json({ claimable: false }))
       }
       return Promise.reject(new Error(`unexpected fetch: ${url}`))
     }))

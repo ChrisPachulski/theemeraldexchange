@@ -27,8 +27,8 @@ the transcoder — is implementation detail, never visible from inside the exper
 - **You own the box** — self-hosted on your NAS; household signals never leave it.
 - **Live + on-demand** — an IPTV core with smoothed live cable, alongside a scanned,
   metadata-rich media library.
-- **Four ways in, one allowlist** — Plex OAuth, Sign in with Apple, Sign in with Google,
-  and WebAuthn passkeys, all converging on a single owner-controlled invite list.
+- **Four ways in, one allowlist** — WorkOS AuthKit (Google/Apple), Plex OAuth, Sign in with
+  Apple, and Sign in with Google, all converging on a single owner-controlled invite list.
 - **Hardware transcoding** — HEVC→H.264 via Intel VAAPI on the NAS iGPU, software fallback off-box.
 - **Local-first recommendations** — a FastAPI + sqlite-vec scoring sidecar; your taste never
   leaves the NAS.
@@ -46,17 +46,10 @@ curl -fsSL https://raw.githubusercontent.com/ChrisPachulski/theemeraldexchange/m
 docker compose up -d
 ```
 
-The installer generates every secret and asks for your media folder. After startup, retrieve the
-one-time setup token with `docker compose logs backend | grep -A3 unclaimed`, then **claim the
-server** from a WebAuthn-secure address:
-
-- On a machine that runs Docker and has a browser, open `http://localhost:3001`.
-- For a headless NAS, create a tunnel from your laptop with
-  `ssh -N -L 3001:127.0.0.1:3001 <user>@<host>`, then open `http://localhost:3001` locally.
-- Or enable the Tailscale profile and use its HTTPS URL.
-
-Register a passkey with the setup token and you're the owner — invite your household from the
-Users tab.
+The installer generates every secret and asks for your media folder. Then **make yourself the
+owner**: put your provider sub (`workos:user_…`, `plex:<id>`, `apple:<subject>` or
+`google:<subject>`) in `ADMIN_SUBS` in `.env`, restart, sign in with that provider, and invite
+your household from the avatar menu.
 
 Everything else is opt-in, one flag each:
 
@@ -73,11 +66,8 @@ Everything else is opt-in, one flag each:
 | WorkOS AuthKit (hosted login page) | `WORKOS_CLIENT_ID` + `WORKOS_API_KEY` + `WORKOS_REDIRECT_URI` (`ENABLE_WORKOS_SIGN_IN=1` optional assertion) |
 | Error telemetry (self-hosted Glitchtip) | `COMPOSE_PROFILES=telemetry` + `TELEMETRY_ENABLED=1` — **owner deployment only** (root `docker-compose.yml`); not in the self-host bundle |
 
-With everything off you still get the core product: library browsing + playback, passkey
-sign-in, owner-controlled invites, and local-first recommendations. Passkeys require HTTPS or
-the browser's loopback exception (`http://localhost`); plain HTTP on a LAN IP or `.local`
-hostname is not a secure context. Use the localhost/SSH-tunnel path above or the Tailscale HTTPS
-URL.
+With everything off you still get the core product: library browsing + playback, owner-controlled
+invites, and local-first recommendations — but at least one sign-in provider must be configured.
 
 **Platforms.** Images are multi-arch (linux/amd64 + linux/arm64) and boot-verified on both
 after every publish (`verify-images`):
@@ -92,7 +82,7 @@ after every publish (`verify-images`):
 **Apple `container` and Microsoft WSL Containers (`wslc`).** Both new first-party runtimes
 run our images — they're standard OCI, and the backend is verified live on Apple `container`
 1.0 (macOS 26, Apple Silicon): `container run` of the GHCR image boots healthy with the SPA
-and claim flow working. What neither runtime has yet is **Compose**, which the multi-service
+and sign-in working. What neither runtime has yet is **Compose**, which the multi-service
 bundle needs (inter-service DNS, health-ordered startup): Apple `container` resolves
 container names only after a sudo `container system dns` setup, and `wslc` (public preview,
 GA fall 2026) doesn't list Compose at all. Until they do, use a Compose-capable runtime for
@@ -136,19 +126,18 @@ single invite/members allowlist:
 - **Plex OAuth** (PIN flow)
 - **Sign in with Apple** (RS256, alg/aud/iss/nonce-pinned)
 - **Sign in with Google** (RS256, issuer/audience-pinned across configured web/native clients)
-- **WebAuthn passkeys** (cross-platform, password-free)
 - **WorkOS AuthKit** (redirect to a hosted login page; `workos:` subs)
 
 Normal login requires an active member/admin identity or invite redemption. A verified share on
 the configured Plex server is the explicit provider-backed admission path. Fresh-install state
-never grants normal login; ownership begins with the host-protected setup-token passkey claim.
+never grants normal login; ownership begins with the operator's own sub in `ADMIN_SUBS`.
 The Plex token is encrypted at rest (JWE); invite redemption is atomic and race-safe, and provider
 success is confirmed against the browser's `/api/me` session before the dashboard trusts it.
 
 ## Backend surface (`/api`)
 
 Everything the SPA needs hangs off `/api`, mounted in `server/app.ts` (the authoritative route
-list): auth (`auth`, `auth/passkey`, `auth/device`) and identity (`me`, `devices`, `admin/*`),
+list): auth (`auth`, `auth/workos`, `auth/device`) and identity (`me`, `devices`, `admin/*`),
 the \*arr / SAB / IPTV / DVR bridges, TMDB and recommender proxies, telemetry, and — when
 `USE_MEDIA_CORE=1` — `media` + `transcode` (the HLS playback proxy for non-direct-play files).
 CORS is an explicit allowlist (`env.allowedOrigins`); state-changing requests are Origin-gated

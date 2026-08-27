@@ -9,12 +9,6 @@ import { AuthProvider, useAuth } from './auth'
 import { SESSION_EXPIRED_EVENT } from './queryClient'
 import { useSuggested } from './hooks/useSuggested'
 
-const webauthnMocks = vi.hoisted(() => ({
-  startAuthentication: vi.fn(),
-  startRegistration: vi.fn(),
-}))
-
-vi.mock('@simplewebauthn/browser', () => webauthnMocks)
 
 function json(body: unknown, status = 200, headers?: HeadersInit): Response {
   const responseHeaders = new Headers(headers)
@@ -97,9 +91,9 @@ function SuggestionsQueryProbe() {
 
 function ProviderProbe() {
   const auth = useAuth() as ReturnType<typeof useAuth> & {
-    activeSignIn?: 'plex' | 'apple' | 'passkey-login' | 'passkey-register' | null
+    activeSignIn?: 'plex' | 'apple' | null
   }
-  const { signIn, appleSignIn, passkeyLogin, passkeyRegister, user, signInError } = auth
+  const { signIn, appleSignIn, user, signInError } = auth
   const [result, setResult] = useState('')
   return (
     <>
@@ -115,22 +109,6 @@ function ProviderProbe() {
         }
       >
         Apple provider
-      </button>
-      <button
-        type="button"
-        onClick={() => void passkeyLogin().then((ok) => setResult(String(ok)))}
-      >
-        Passkey login provider
-      </button>
-      <button
-        type="button"
-        onClick={() =>
-          void passkeyRegister({ handle: 'Sibling' }).then((ok) =>
-            setResult(String(ok)),
-          )
-        }
-      >
-        Passkey registration provider
       </button>
       <output aria-label="provider result">{result}</output>
       <output aria-label="provider user">{user?.username ?? ''}</output>
@@ -214,9 +192,8 @@ function renderWithAuth(
 
 function auxiliaryAuthResponse(url: string): Response | null {
   if (url.endsWith('/api/auth/methods')) {
-    return json({ plex: true, apple: true, google: false, passkey: true })
+    return json({ plex: true, apple: true, google: false, workos: false })
   }
-  if (url.endsWith('/api/setup/status')) return json({ claimable: false })
   return null
 }
 
@@ -559,7 +536,7 @@ describe('provider session confirmation', () => {
     button: string
     responseSub: string
     booleanResult: boolean
-    activeSignIn: 'plex' | 'apple' | 'passkey-login' | 'passkey-register'
+    activeSignIn: 'plex' | 'apple'
   }
 
   const providers: ProviderCase[] = [
@@ -577,20 +554,6 @@ describe('provider session confirmation', () => {
       booleanResult: true,
       activeSignIn: 'apple',
     },
-    {
-      name: 'passkey login',
-      button: 'Passkey login provider',
-      responseSub: 'local:LOGIN',
-      booleanResult: true,
-      activeSignIn: 'passkey-login',
-    },
-    {
-      name: 'passkey registration',
-      button: 'Passkey registration provider',
-      responseSub: 'local:REGISTER',
-      booleanResult: true,
-      activeSignIn: 'passkey-register',
-    },
   ]
 
   let popup: { closed: boolean; close: ReturnType<typeof vi.fn>; location: { href: string } }
@@ -599,8 +562,6 @@ describe('provider session confirmation', () => {
     vi.useFakeTimers()
     popup = { closed: false, close: vi.fn(), location: { href: '' } }
     vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
-    webauthnMocks.startAuthentication.mockResolvedValue({ id: 'credential-login' })
-    webauthnMocks.startRegistration.mockResolvedValue({ id: 'credential-register' })
   })
 
   afterEach(() => {
@@ -653,38 +614,6 @@ describe('provider session confirmation', () => {
         return Promise.resolve(
           json({
             status: 'authorized',
-            user: {
-              sub: provider.responseSub,
-              username: 'provider-response',
-              role: 'user',
-            },
-          }),
-        )
-      }
-      if (url.endsWith('/api/auth/passkey/login/options')) {
-        return Promise.resolve(json({ options: { challenge: 'login' }, challengeId: 'login' }))
-      }
-      if (url.endsWith('/api/auth/passkey/login/verify')) {
-        return Promise.resolve(
-          json({
-            ok: true,
-            user: {
-              sub: provider.responseSub,
-              username: 'provider-response',
-              role: 'user',
-            },
-          }),
-        )
-      }
-      if (url.endsWith('/api/auth/passkey/register/options')) {
-        return Promise.resolve(
-          json({ options: { challenge: 'register' }, challengeId: 'register' }),
-        )
-      }
-      if (url.endsWith('/api/auth/passkey/register/verify')) {
-        return Promise.resolve(
-          json({
-            ok: true,
             user: {
               sub: provider.responseSub,
               username: 'provider-response',
@@ -754,14 +683,13 @@ describe('provider session confirmation', () => {
     const { fetchMock } = providerFetch(apple, () => pendingConfirmation.promise)
 
     await startProvider(apple)
-    fireEvent.click(screen.getByRole('button', { name: 'Passkey login provider' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Plex provider' }))
     await flush()
 
     expect(screen.getByLabelText('active sign-in')).toHaveTextContent('apple')
-    expect(webauthnMocks.startAuthentication).not.toHaveBeenCalled()
     expect(
       fetchMock.mock.calls.filter(([input]) =>
-        String(input).endsWith('/api/auth/passkey/login/options'),
+        String(input).endsWith('/api/auth/plex/config'),
       ),
     ).toHaveLength(0)
 
@@ -776,26 +704,6 @@ describe('provider session confirmation', () => {
       }),
     )
     await flush()
-  })
-
-  it.each([
-    { name: 'login', providerIndex: 2, cancel: webauthnMocks.startAuthentication },
-    { name: 'registration', providerIndex: 3, cancel: webauthnMocks.startRegistration },
-  ])('clears passkey $name activity after authenticator cancellation', async ({
-    providerIndex,
-    cancel,
-  }) => {
-    const provider = providers[providerIndex]
-    providerFetch(provider, () =>
-      Promise.resolve(json({ error: 'confirmation should not run' }, 500)),
-    )
-    cancel.mockRejectedValueOnce(new DOMException('cancelled', 'NotAllowedError'))
-
-    await startProvider(provider)
-
-    expect(screen.getByLabelText('provider result')).toHaveTextContent('false')
-    expect(screen.getByLabelText('active sign-in')).toBeEmptyDOMElement()
-    expect(screen.getByRole('alert')).toHaveTextContent(/cancelled/i)
   })
 
   it.each([
@@ -836,7 +744,7 @@ describe('provider session confirmation', () => {
   })
 
   it('reports a retryable error after three unavailable confirmation reads', async () => {
-    const provider = providers[2]
+    const provider = providers[1]
     const { meCalls } = providerFetch(provider, () =>
       Promise.resolve(json({ error: 'unavailable' }, 503)),
     )
@@ -897,8 +805,6 @@ describe('bounded provider and logout requests', () => {
     vi.setSystemTime(new Date('2026-07-18T12:00:00Z'))
     popup = { closed: false, close: vi.fn(), location: { href: '' } }
     vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
-    webauthnMocks.startAuthentication.mockResolvedValue({ id: 'credential-login' })
-    webauthnMocks.startRegistration.mockResolvedValue({ id: 'credential-register' })
   })
 
   afterEach(() => {
@@ -924,18 +830,6 @@ describe('bounded provider and logout requests', () => {
     if (url.endsWith('/api/auth/apple')) {
       return json({ status: 'authorized', user: { sub: 'apple:1', username: 'Apple', role: 'user' } })
     }
-    if (url.endsWith('/api/auth/passkey/login/options')) {
-      return json({ options: { challenge: 'login' }, challengeId: 'login' })
-    }
-    if (url.endsWith('/api/auth/passkey/login/verify')) {
-      return json({ ok: true, user: { sub: 'local:LOGIN', username: 'Passkey', role: 'user' } })
-    }
-    if (url.endsWith('/api/auth/passkey/register/options')) {
-      return json({ options: { challenge: 'register' }, challengeId: 'register' })
-    }
-    if (url.endsWith('/api/auth/passkey/register/verify')) {
-      return json({ ok: true, user: { sub: 'local:REGISTER', username: 'Passkey', role: 'user' } })
-    }
     throw new Error(`missing provider response for ${url}`)
   }
 
@@ -943,10 +837,6 @@ describe('bounded provider and logout requests', () => {
     { leg: 'Plex config', button: 'Plex provider', path: '/api/auth/plex/config', active: 'plex' },
     { leg: 'Plex PIN', button: 'Plex provider', path: 'https://plex.tv/api/v2/pins?', active: 'plex' },
     { leg: 'Apple verification', button: 'Apple provider', path: '/api/auth/apple', active: 'apple' },
-    { leg: 'passkey login options', button: 'Passkey login provider', path: '/api/auth/passkey/login/options', active: 'passkey-login' },
-    { leg: 'passkey login verification', button: 'Passkey login provider', path: '/api/auth/passkey/login/verify', active: 'passkey-login' },
-    { leg: 'passkey registration options', button: 'Passkey registration provider', path: '/api/auth/passkey/register/options', active: 'passkey-register' },
-    { leg: 'passkey registration verification', button: 'Passkey registration provider', path: '/api/auth/passkey/register/verify', active: 'passkey-register' },
   ])('times out a black-holed $leg, releases the provider lock, and clears its timer', async ({
     button,
     path,
@@ -1091,43 +981,6 @@ describe('bounded provider and logout requests', () => {
     expect(vi.getTimerCount()).toBe(baselineTimers)
   })
 
-  it('does not apply the network timeout to an interactive WebAuthn ceremony', async () => {
-    const ceremony = deferred<{ id: string }>()
-    webauthnMocks.startAuthentication.mockReturnValueOnce(ceremony.promise)
-    let verifyCalls = 0
-    const fetchMock = vi.fn((input: RequestInfo | URL) => {
-      const url = String(input)
-      const auxiliary = auxiliaryAuthResponse(url)
-      if (auxiliary) return Promise.resolve(auxiliary)
-      if (url.endsWith('/api/me')) return Promise.resolve(json({ error: 'unauthenticated' }, 401))
-      if (url.endsWith('/api/auth/passkey/login/options')) {
-        return Promise.resolve(json({ options: { challenge: 'login' }, challengeId: 'login' }))
-      }
-      if (url.endsWith('/api/auth/passkey/login/verify')) {
-        verifyCalls += 1
-        return Promise.resolve(json({ ok: false }, 401))
-      }
-      return Promise.reject(new Error(`unexpected fetch: ${url}`))
-    })
-    vi.stubGlobal('fetch', fetchMock)
-
-    renderWithAuth(<ProviderProbe />)
-    await flush()
-    fireEvent.click(screen.getByRole('button', { name: 'Passkey login provider' }))
-    await flush()
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(NETWORK_TIMEOUT_MS * 2)
-    })
-
-    expect(screen.getByLabelText('active sign-in')).toHaveTextContent('passkey-login')
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-    expect(verifyCalls).toBe(0)
-
-    ceremony.resolve({ id: 'credential-login' })
-    await flush()
-    expect(verifyCalls).toBe(1)
-  })
-
   it.each([
     { failure: 'timeout', response: () => new Promise<Response>(() => {}), advance: NETWORK_TIMEOUT_MS },
     { failure: 'HTTP failure', response: () => Promise.resolve(json({ error: 'down' }, 503)), advance: 0 },
@@ -1206,11 +1059,8 @@ describe('Plex popup completion', () => {
       }
       if (url.endsWith('/api/auth/methods')) {
         return Promise.resolve(
-          json({ plex: true, apple: false, google: false, passkey: true }),
+          json({ plex: true, apple: false, google: false, workos: false }),
         )
-      }
-      if (url.endsWith('/api/setup/status')) {
-        return Promise.resolve(json({ claimable: false }))
       }
       if (url.endsWith('/api/auth/plex/config')) {
         return Promise.resolve(json({ clientId: 'client-id', product: 'The Emerald Exchange' }))
