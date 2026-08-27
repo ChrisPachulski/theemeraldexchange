@@ -12,6 +12,10 @@
   padding: var(--s-5);
   max-width: var(--library-max);
   margin: 0 auto;
+  /* The tab shell is itself a CSS grid; a grid child's default min-width:auto
+     would pin this at 3 x min-col and overflow narrow viewports sideways. */
+  width: 100%;
+  min-width: 0;
 }
 
 @media (min-width: 640px) {
