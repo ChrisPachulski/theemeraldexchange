@@ -192,15 +192,20 @@ function SignInBlock({
           </button>
         )}
         {showApple && <AppleSignInButton inviteCode={code || undefined} />}
-        {showWorkos && (
-          <a
-            className="walkthrough__signin-button"
-            href={apiUrl('/api/auth/workos/start', code ? { invite: code } : undefined)}
-            aria-disabled={pending || Boolean(codeError) ? true : undefined}
-          >
-            Sign in with WorkOS
-          </a>
-        )}
+        {showWorkos &&
+          (['google', 'apple'] as const).map((provider) => (
+            <a
+              key={provider}
+              className="walkthrough__signin-button"
+              href={apiUrl('/api/auth/workos/start', {
+                provider,
+                ...(code ? { invite: code } : {}),
+              })}
+              aria-disabled={pending || Boolean(codeError) ? true : undefined}
+            >
+              Sign in with {provider === 'google' ? 'Google' : 'Apple'}
+            </a>
+          ))}
         <PasskeyButtons
           inviteCode={code || undefined}
           startInRegistration={placement === 'hero' && Boolean(initialInviteCode)}

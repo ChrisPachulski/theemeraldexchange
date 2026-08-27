@@ -59,7 +59,12 @@ import { addMember } from './services/members.js'
 import { sealVerifiedAdminOwnership } from './services/setupState.js'
 import { verifyAppleIdentityToken } from './services/appleAuth.js'
 import { verifyGoogleIdentityToken } from './services/googleAuth.js'
-import { exchangeWorkosCode, workosAuthorizationUrl } from './services/workosAuth.js'
+import {
+  exchangeWorkosCode,
+  workosAuthorizationUrl,
+  WORKOS_PROVIDERS,
+  type WorkosProvider,
+} from './services/workosAuth.js'
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { maybeMintDeviceToken } from './services/devicePair.js'
@@ -823,6 +828,9 @@ auth.get('/workos/start', (c) => {
 
   const rawInvite = c.req.query('invite') ?? ''
   const invite = INVITE_CODE_SHAPE.test(rawInvite) ? rawInvite : ''
+  const rawProvider = c.req.query('provider')
+  const provider =
+    rawProvider && rawProvider in WORKOS_PROVIDERS ? (rawProvider as WorkosProvider) : undefined
   const nonce = randomBytes(16).toString('hex')
   setCookie(c, WORKOS_STATE_COOKIE, `${nonce}.${invite}`, {
     httpOnly: true,
@@ -831,7 +839,7 @@ auth.get('/workos/start', (c) => {
     path: WORKOS_CALLBACK_PATH,
     maxAge: WORKOS_STATE_TTL_SECS,
   })
-  return c.redirect(workosAuthorizationUrl(nonce), 302)
+  return c.redirect(workosAuthorizationUrl(nonce, provider), 302)
 })
 
 auth.get('/workos/callback', (c) => withAuthOutcome(c, 'workos', 'identity_verify', async (authOutcome) => {

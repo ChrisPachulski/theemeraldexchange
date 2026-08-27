@@ -31,14 +31,22 @@ export type WorkosVerified = {
   name: string | null
 }
 
-/** AuthKit hosted-login URL. `state` is the CSRF nonce the callback compares
- *  against its cookie; `provider=authkit` routes through the hosted UI. */
-export function workosAuthorizationUrl(state: string): string {
+/** Social providers we deep-link straight to (skipping the hosted chooser).
+ *  Keys are what the SPA sends; values are WorkOS's provider identifiers. */
+export const WORKOS_PROVIDERS = {
+  google: 'GoogleOAuth',
+  apple: 'AppleOAuth',
+} as const
+export type WorkosProvider = keyof typeof WORKOS_PROVIDERS
+
+/** AuthKit login URL. `state` is the CSRF nonce the callback compares against
+ *  its cookie; `provider` deep-links to Google/Apple, else the hosted UI. */
+export function workosAuthorizationUrl(state: string, provider?: WorkosProvider): string {
   const url = new URL(WORKOS_AUTHORIZE_URL)
   url.searchParams.set('client_id', env.workosClientId ?? '')
   url.searchParams.set('redirect_uri', env.workosRedirectUri ?? '')
   url.searchParams.set('response_type', 'code')
-  url.searchParams.set('provider', 'authkit')
+  url.searchParams.set('provider', provider ? WORKOS_PROVIDERS[provider] : 'authkit')
   url.searchParams.set('state', state)
   return url.toString()
 }

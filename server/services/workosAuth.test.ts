@@ -51,6 +51,11 @@ describe('workosAuthorizationUrl', () => {
     expect(url.searchParams.get('state')).toBe('nonce-1')
     expect(url.searchParams.has('client_secret')).toBe(false)
   })
+
+  it('deep-links Google and Apple through WorkOS provider ids', () => {
+    expect(new URL(workosAuthorizationUrl('n', 'google')).searchParams.get('provider')).toBe('GoogleOAuth')
+    expect(new URL(workosAuthorizationUrl('n', 'apple')).searchParams.get('provider')).toBe('AppleOAuth')
+  })
 })
 
 describe('exchangeWorkosCode', () => {
