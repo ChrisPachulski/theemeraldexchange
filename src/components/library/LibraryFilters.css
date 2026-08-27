@@ -11,7 +11,7 @@
   padding: 0 var(--s-5);
   /* Leave room on the right for the fixed alphabet strip. */
   padding-right: calc(var(--s-5) + 44px);
-  max-width: var(--content-max);
+  max-width: var(--library-max);
   margin: 0 auto;
   width: 100%;
 }

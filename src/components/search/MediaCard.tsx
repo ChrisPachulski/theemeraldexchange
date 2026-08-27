@@ -6,11 +6,13 @@ type Props = {
   year?: number
   meta?: string
   overview?: string
+  /** Score line, like '8.6 IMDb · 92% RT'. */
+  rating?: string
   inLibrary?: boolean
   onClick?: () => void
 }
 
-export function MediaCard({ poster, title, year, meta, overview, inLibrary, onClick }: Props) {
+export function MediaCard({ poster, title, year, meta, overview, rating, inLibrary, onClick }: Props) {
   // Metadata pieces are joined with the signature double-dash separator
   // (typographic punctuation per DESIGN.md). The year, when present, is
   // rendered as the first chip-aligned datum.
@@ -52,6 +54,13 @@ export function MediaCard({ poster, title, year, meta, overview, inLibrary, onCl
                 )}
                 <span className="media-card__meta-text">{c}</span>
               </span>
+            ))}
+          </p>
+        )}
+        {rating && (
+          <p className="media-card__rating" aria-label="ratings">
+            {rating.split(' · ').map((piece) => (
+              <span key={piece} className="media-card__rating-chip">{piece}</span>
             ))}
           </p>
         )}

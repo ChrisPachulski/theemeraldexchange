@@ -1,25 +1,28 @@
+/* Poster-led cards fill the viewport in as many ~440px columns as fit
+   (1 on phones, 2 on tablets, 3-4 on desktop) instead of pinning to two
+   columns inside a 1040px prose measure. The column minimum keeps the
+   body half of each card wide enough for title + meta + ratings + overview.
+   VirtualResultGrid mirrors this math in JS (RESULT_GRID_MIN_COL_PX). */
 .result-grid {
-  /* Asymmetric poster-led cards (per DESIGN.md "no card-grid monotony")
-     stay two columns from small tablet through iPad landscape so the
-     body half of each card keeps room for title + meta + overview. The
-     prior 1080px rule was a dead duplicate of the 640px rule. */
+  --result-grid-min-col: 440px;
+  --result-grid-gap: var(--s-4);
   display: grid;
   grid-template-columns: 1fr;
   gap: var(--s-3);
   padding: var(--s-5);
-  max-width: var(--content-max);
+  max-width: var(--library-max);
   margin: 0 auto;
 }
 
 @media (min-width: 640px) {
   .result-grid {
-    grid-template-columns: repeat(2, 1fr);
-    gap: var(--s-4);
+    grid-template-columns: repeat(auto-fill, minmax(var(--result-grid-min-col), 1fr));
+    gap: var(--result-grid-gap);
   }
 }
 
 /* Virtualized variant: the outer element is a positioned block (not a grid);
-   each windowed row lays its 1-2 cells out with the same column rhythm and gap
+   each windowed row lays its cells out with the same column rhythm and gap
    as the static grid above. */
 .result-grid--virtual {
   display: block;
@@ -37,8 +40,8 @@
 
 @media (min-width: 640px) {
   .result-grid__row {
-    grid-template-columns: repeat(2, 1fr);
-    gap: var(--s-4);
-    padding-bottom: var(--s-4);
+    grid-template-columns: repeat(auto-fill, minmax(var(--result-grid-min-col), 1fr));
+    gap: var(--result-grid-gap);
+    padding-bottom: var(--result-grid-gap);
   }
 }

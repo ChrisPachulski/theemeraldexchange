@@ -581,6 +581,12 @@ export const env = {
   tmdbReadAccessToken: opt('TMDB_READ_ACCESS_TOKEN') ?? null,
   tmdbApiKey: opt('TMDB_API_KEY') ?? null,
 
+  // Optional OMDb key (free, omdbapi.com). When set, cards and the detail
+  // modal show IMDb / Rotten Tomatoes / Metacritic scores for every title
+  // with an IMDb id. Without it, /api/ratings returns 503 and the UI shows
+  // only what Sonarr/Radarr carry.
+  omdbApiKey: opt('OMDB_API_KEY') ?? null,
+
   // Local recommender sidecar. When USE_LOCAL_RECOMMENDER=1, /api/suggestions
   // skips Claude entirely and asks the recommender service (Python +
   // sqlite-vec, running in the same compose stack) for ranked picks.

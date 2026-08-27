@@ -10,6 +10,18 @@ const VIRTUALIZE_THRESHOLD = 200
 // (title + meta + overview), so the virtualizer remeasures via measureElement;
 // this only governs the very first paint and the scroll-height estimate.
 const ESTIMATED_ROW_PX = 220
+// Column math mirrors ResultGrid.css: 1 column below 640px, otherwise as many
+// columns of at least RESULT_GRID_MIN_COL_PX as fit inside the row's inline
+// padding (--s-5 each side) with a --s-4 gap between them.
+const RESULT_GRID_MIN_COL_PX = 440
+const RESULT_GRID_GAP_PX = 16
+const RESULT_GRID_PAD_PX = 24
+
+function resultGridColumns(containerWidth: number): number {
+  if (containerWidth < 640) return 1
+  const inner = containerWidth - RESULT_GRID_PAD_PX * 2
+  return Math.max(1, Math.floor((inner + RESULT_GRID_GAP_PX) / (RESULT_GRID_MIN_COL_PX + RESULT_GRID_GAP_PX)))
+}
 
 type ChildrenProps = { children: ReactNode }
 
@@ -53,15 +65,14 @@ function ResultGridCell({ children }: { children: ReactNode }) {
 
 function VirtualResultGrid<T>({ items, renderItem, getKey }: VirtualProps<T>) {
   const containerRef = useRef<HTMLDivElement | null>(null)
-  // Column count mirrors ResultGrid.css: 1 column below 640px, 2 at/above it.
   const [cols, setCols] = useState(() =>
-    typeof window !== 'undefined' && window.innerWidth >= 640 ? 2 : 1,
+    resultGridColumns(typeof window !== 'undefined' ? window.innerWidth : 0),
   )
 
   useEffect(() => {
     const el = containerRef.current
     if (!el) return undefined
-    const measure = () => setCols(el.clientWidth >= 640 ? 2 : 1)
+    const measure = () => setCols(resultGridColumns(el.clientWidth))
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(el)

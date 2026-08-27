@@ -58,6 +58,7 @@ Everything else is opt-in, one flag each:
 | Remote access (private, via your [Tailscale](https://tailscale.com) tailnet) | `COMPOSE_PROFILES=remote` + `TS_AUTHKEY` |
 | Remote access (public, via Cloudflare Tunnel + your domain) | `COMPOSE_PROFILES=remote-cloudflare` + `TUNNEL_TOKEN` — **owner deployment only** (root `docker-compose.yml`); not in the self-host bundle |
 | Richer metadata & discovery | `TMDB_READ_ACCESS_TOKEN` (free key) |
+| IMDb / Rotten Tomatoes / Metacritic scores on cards | `OMDB_API_KEY` (free key) |
 | Requests & downloads (existing Sonarr / Radarr / SAB) | `SONARR_API_KEY` / `RADARR_API_KEY` / `SAB_API_KEY` |
 | Live TV (your Xtream/IPTV provider) | `XTREAM_HOST` / `XTREAM_USERNAME` / `XTREAM_PASSWORD` |
 | Plex login as an extra sign-in provider | `PLEX_CLIENT_ID` (+ `PLEX_SERVER_ID`) |

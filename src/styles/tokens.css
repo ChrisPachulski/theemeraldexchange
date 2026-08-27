@@ -90,6 +90,7 @@
 
   /* Layout */
   --content-max: 1040px;
+  --library-max: 1760px;      /* result grids + their filter bars; wider than prose */
   --pod-h: 56px;
   --pod-inset: 16px;          /* top inset of the floating HUD pod */
   --hero-pad-top: 132px;      /* below pod, on tabs that have hero search */

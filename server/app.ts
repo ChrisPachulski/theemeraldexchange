@@ -20,6 +20,7 @@ import { sonarr } from './routes/sonarr.js'
 import { radarr } from './routes/radarr.js'
 import { sab } from './routes/sab.js'
 import { tmdb } from './routes/tmdb.js'
+import { ratings } from './routes/ratings.js'
 import { iptv } from './routes/iptv.js'
 import { dvr } from './routes/dvr.js'
 import { users } from './routes/users.js'
@@ -253,6 +254,7 @@ app.route('/api/sonarr', sonarr)
 app.route('/api/radarr', radarr)
 app.route('/api/sab', sab)
 app.route('/api/tmdb', tmdb)
+app.route('/api/ratings', ratings)
 // Contract §13.3 reviewer-insurance flag: when IPTV_DISABLED is set the
 // /api/iptv tree is unmounted. The transitive iptv module imports still
 // load (Node ESM is eager), so the better-sqlite3 + node-cron deps are

@@ -15,6 +15,8 @@ import { EmeraldMark } from '../atmosphere/EmeraldMark'
 import { useAuth } from '../../lib/auth'
 import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useSeriesSearch } from '../../lib/hooks/useSeriesSearch'
+import { useRatings } from '../../lib/hooks/useRatings'
+import { fmtRatings, type RatingsMap } from '../../lib/api/ratings'
 import { useSonarrLibrary, useSonarrProfiles, useSonarrRootFolders } from '../../lib/hooks/useSonarrLibrary'
 import { useSonarrEpisodes } from '../../lib/hooks/useSonarrEpisodes'
 import { useSuggestionStrip } from '../../lib/hooks/useSuggestionStrip'
@@ -83,10 +85,14 @@ function buildSeriesMeta(item: SeriesSearchResult | Series): DetailMeta[] {
   return rows
 }
 
-function fmtSeriesRating(item: SeriesSearchResult): string | undefined {
+// OMDb scores (IMDb / RT / Metacritic) when we have them; else Sonarr's lone
+// TVDB score so the line is never blank for a rated show.
+function fmtSeriesRating(item: SeriesSearchResult, ratings: RatingsMap): string | undefined {
+  const omdb = item.imdbId ? fmtRatings(ratings[item.imdbId]) : undefined
+  if (omdb) return omdb
   const r = item.ratings
   if (!r?.value) return undefined
-  return r.votes ? `${r.value.toFixed(1)} (${r.votes.toLocaleString()} votes)` : r.value.toFixed(1)
+  return r.votes ? `${r.value.toFixed(1)} TVDB (${r.votes.toLocaleString()} votes)` : `${r.value.toFixed(1)} TVDB`
 }
 
 type TvSort = 'title-asc' | 'title-desc' | 'year-desc' | 'year-asc' | 'network'
@@ -132,6 +138,7 @@ export function TvTab() {
 
   const [adding, setAdding] = useState<SeriesSearchResult | null>(null)
   const [viewing, setViewing] = useState<SeriesSearchResult | Series | null>(null)
+  const viewingRatings = useRatings([viewing?.imdbId])
   const [toast, setToast] = useState<string | null>(null)
   // Find-release flow: a title added transiently (monitored, auto-grab off)
   // purely so the interactive release browser can open on it. If the admin
@@ -471,7 +478,7 @@ export function TvTab() {
           viewing.certification,
         ].filter((x): x is string => Boolean(x)) : []}
         genres={viewing?.genres}
-        rating={viewing ? fmtSeriesRating(viewing) : undefined}
+        rating={viewing ? fmtSeriesRating(viewing, viewingRatings) : undefined}
         overview={viewing?.overview}
         meta={viewing ? buildSeriesMeta(viewing) : []}
         cast={cast.data}
@@ -601,6 +608,7 @@ type DiscoverProps = {
 }
 
 function DiscoverResults({ query, loading, error, results, libraryByTvdb, onCardClick }: DiscoverProps) {
+  const ratings = useRatings(results.map((r) => r.imdbId))
   if (query.length < 2) return null
   if (loading) return <LoadingPulse>Searching</LoadingPulse>
   if (error) {
@@ -628,6 +636,7 @@ function DiscoverResults({ query, loading, error, results, libraryByTvdb, onCard
             year={item.year}
             meta={meta || undefined}
             overview={item.overview}
+            rating={fmtSeriesRating(item, ratings)}
             inLibrary={inLib}
             onClick={() => onCardClick(item)}
           />
@@ -647,6 +656,7 @@ type LibraryProps = {
 }
 
 function LibraryResults({ query, letter, loading, error, items, onCardClick }: LibraryProps) {
+  const ratings = useRatings(items.map((i) => i.imdbId))
   if (loading) return <LoadingPulse>Loading library</LoadingPulse>
   if (error) {
     return (
@@ -684,6 +694,7 @@ function LibraryResults({ query, letter, loading, error, items, onCardClick }: L
             year={s.year}
             meta={meta || undefined}
             overview={s.overview}
+            rating={fmtSeriesRating(s, ratings)}
             onClick={() => onCardClick(s)}
           />
         )

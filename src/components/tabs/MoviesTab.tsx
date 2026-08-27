@@ -14,6 +14,8 @@ import { LoadingPulse } from '../feedback/LoadingPulse'
 import { EmeraldMark } from '../atmosphere/EmeraldMark'
 import { useAuth } from '../../lib/auth'
 import { useDebounced } from '../../lib/hooks/useDebounced'
+import { useRatings } from '../../lib/hooks/useRatings'
+import { fmtRatings, type RatingsMap } from '../../lib/api/ratings'
 import { useMovieSearch } from '../../lib/hooks/useMovieSearch'
 import { useRadarrLibrary, useRadarrProfiles, useRadarrRootFolders } from '../../lib/hooks/useRadarrLibrary'
 import { useSuggestionStrip } from '../../lib/hooks/useSuggestionStrip'
@@ -88,7 +90,11 @@ function buildMovieMeta(item: MovieSearchResult | Movie): DetailMeta[] {
   return rows
 }
 
-function fmtMovieRating(item: MovieSearchResult): string | undefined {
+// OMDb scores (IMDb / RT / Metacritic) when we have them; else whatever
+// Radarr carries (IMDb + TMDB, RT only occasionally).
+function fmtMovieRating(item: MovieSearchResult, ratings: RatingsMap): string | undefined {
+  const omdb = item.imdbId ? fmtRatings(ratings[item.imdbId]) : undefined
+  if (omdb) return omdb
   const pieces: string[] = []
   const r = item.ratings
   if (r?.imdb?.value) pieces.push(`${r.imdb.value.toFixed(1)} IMDb`)
@@ -145,6 +151,7 @@ export function MoviesTab() {
 
   const [adding, setAdding] = useState<MovieSearchResult | null>(null)
   const [viewing, setViewing] = useState<MovieSearchResult | Movie | null>(null)
+  const viewingRatings = useRatings([viewing?.imdbId])
   const [toast, setToast] = useState<string | null>(null)
   // Find-release flow: a title added transiently (monitored, auto-grab off)
   // purely so the interactive release browser can open on it. If the admin
@@ -459,7 +466,7 @@ export function MoviesTab() {
           viewing.certification,
         ].filter((x): x is string => Boolean(x)) : []}
         genres={viewing?.genres}
-        rating={viewing ? fmtMovieRating(viewing) : undefined}
+        rating={viewing ? fmtMovieRating(viewing, viewingRatings) : undefined}
         overview={viewing?.overview}
         meta={viewing ? buildMovieMeta(viewing) : []}
         cast={cast.data}
@@ -559,6 +566,7 @@ type DiscoverProps = {
 }
 
 function DiscoverResults({ query, loading, error, results, libraryByTmdb, onCardClick }: DiscoverProps) {
+  const ratings = useRatings(results.map((r) => r.imdbId))
   if (query.length < 2) return null
   if (loading) return <LoadingPulse>Searching</LoadingPulse>
   if (error) {
@@ -586,6 +594,7 @@ function DiscoverResults({ query, loading, error, results, libraryByTmdb, onCard
             year={item.year}
             meta={meta || undefined}
             overview={item.overview}
+            rating={fmtMovieRating(item, ratings)}
             inLibrary={inLib}
             onClick={() => onCardClick(item)}
           />
@@ -605,6 +614,7 @@ type LibraryProps = {
 }
 
 function LibraryResults({ query, letter, loading, error, items, onCardClick }: LibraryProps) {
+  const ratings = useRatings(items.map((i) => i.imdbId))
   if (loading) return <LoadingPulse>Loading library</LoadingPulse>
   if (error) {
     return (
@@ -642,6 +652,7 @@ function LibraryResults({ query, letter, loading, error, items, onCardClick }: L
             year={m.year}
             meta={meta || undefined}
             overview={m.overview}
+            rating={fmtMovieRating(m, ratings)}
             onClick={() => onCardClick(m)}
           />
         )

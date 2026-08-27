@@ -10,7 +10,7 @@
 
 .tv-tab__controls {
   padding: 0 var(--s-5);
-  max-width: var(--content-max);
+  max-width: var(--library-max);
   margin: 0 auto;
   width: 100%;
 }
