@@ -22,8 +22,7 @@ import { useSonarrEpisodes } from '../../lib/hooks/useSonarrEpisodes'
 import { useSuggestionStrip } from '../../lib/hooks/useSuggestionStrip'
 import { useLimits } from '../../lib/hooks/useLimits'
 import { usePlexLinks } from '../../lib/hooks/usePlexLinks'
-import { resumePosition, useLocalShowIndex, useLocalShows, useMediaWatch } from '../../lib/hooks/useMediaLibrary'
-import { mergeLocalShows, type LibraryRow } from '../../lib/mergeLocalShows'
+import { resumePosition, useLocalShowIndex, useMediaWatch } from '../../lib/hooks/useMediaLibrary'
 import { MediaPlayer } from '../media/MediaPlayer'
 import { EpisodePicker } from '../media/EpisodePicker'
 import { TrendingRow } from '../search/TrendingRow'
@@ -100,7 +99,7 @@ function seriesRatingPieces(item: SeriesSearchResult, ratings: RatingsMap): Rati
 type TvSort = 'title-asc' | 'title-desc' | 'year-desc' | 'year-asc' | 'network'
 type TvStatus = 'all' | 'continuing' | 'ended' | 'upcoming'
 
-const TV_COMPARATORS: Record<TvSort, (a: LibraryRow, b: LibraryRow) => number> = {
+const TV_COMPARATORS: Record<TvSort, (a: Series, b: Series) => number> = {
   'title-asc': byTitleAsc,
   'title-desc': byTitleDesc,
   'year-desc': byYearDesc,
@@ -177,12 +176,7 @@ export function TvTab() {
   // modal can offer in-browser episode playback. Gated on mediaEnabled.
   const mediaEnabled = limits.data?.mediaEnabled !== false
   const localShowIdx = useLocalShowIndex(mediaEnabled)
-  const localShows = useLocalShows(mediaEnabled)
   const mediaWatch = useMediaWatch(mediaEnabled)
-  const libraryRows = useMemo(
-    () => mergeLocalShows(library.data, localShows.data),
-    [library.data, localShows.data],
-  )
   const localShowId =
     viewing && typeof viewing.tmdbId === 'number'
       ? localShowIdx.data?.get(viewing.tmdbId)
@@ -257,8 +251,8 @@ export function TvTab() {
   // for title sorts (Plex behavior — "The Mandalorian" sorts under M).
   // Alphabet bucket runs against the same key so the bar matches the sort.
   const textFilteredLibrary = useMemo(
-    () => filterAndSortLibrary(libraryRows, { query, status, comparator: TV_COMPARATORS[sort] }),
-    [libraryRows, query, status, sort],
+    () => filterAndSortLibrary(library.data, { query, status, comparator: TV_COMPARATORS[sort] }),
+    [library.data, query, status, sort],
   )
 
   const availableLetters = useMemo(
@@ -347,7 +341,7 @@ export function TvTab() {
     const inLib = libraryByTvdb.get(item.tvdbId)
     setViewing(inLib ?? item)
   }
-  const handleLibraryClick = (s: LibraryRow) => {
+  const handleLibraryClick = (s: Series) => {
     setViewing(s)
   }
 
@@ -401,7 +395,7 @@ export function TvTab() {
         </>
       ) : (
         <>
-          {!library.isPending && !library.error && libraryRows.length > 0 && (
+          {!library.isPending && !library.error && (library.data?.length ?? 0) > 0 && (
             <>
               <LibraryFilters
                 sortOptions={TV_SORT_OPTIONS}
@@ -458,7 +452,7 @@ export function TvTab() {
               if (next === 'discover') setLetter('all')
             })
           }}
-          libraryCount={libraryRows.length}
+          libraryCount={library.data?.length}
         />
       </div>
 
@@ -658,8 +652,8 @@ type LibraryProps = {
   letter: LibraryLetter
   loading: boolean
   error: unknown
-  items: LibraryRow[]
-  onCardClick: (s: LibraryRow) => void
+  items: Series[]
+  onCardClick: (s: Series) => void
 }
 
 function LibraryResults({ query, letter, loading, error, items, onCardClick }: LibraryProps) {
@@ -695,8 +689,8 @@ function LibraryResults({ query, letter, loading, error, items, onCardClick }: L
           .join(' · ')
         return (
           <MediaCard
-            key={'id' in s ? s.id : `local-${s.tvdbId}-${s.tmdbId ?? 0}`}
-            poster={'id' in s ? pickLibraryPoster(s) : pickSearchPoster(s)}
+            key={s.id}
+            poster={pickLibraryPoster(s)}
             title={s.title}
             year={s.year}
             meta={meta || undefined}

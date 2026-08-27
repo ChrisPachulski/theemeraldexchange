@@ -84,7 +84,6 @@ vi.mock('../../lib/hooks/usePlexLinks', () => ({
 }))
 vi.mock('../../lib/hooks/useMediaLibrary', () => ({
   useLocalShowIndex: () => ({ data: new Map() }),
-  useLocalShows: () => ({ data: [] }),
   useMediaWatch: () => ({ data: new Map() }),
   resumePosition: () => undefined,
 }))

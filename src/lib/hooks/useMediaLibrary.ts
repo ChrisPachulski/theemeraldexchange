@@ -25,17 +25,6 @@ export function useLocalMovieIndex(enabled: boolean) {
 // tmdbId -> local media-core show id, for matching a discover/Sonarr show to a
 // locally-available one (powers the show DetailModal "Watch episodes" button).
 // Paged (allShows) for the same whole-library reason as useLocalMovieIndex.
-// Every locally-scanned show (media.db). The TV library merges the ones
-// Sonarr does not track so a title that only exists on disk still gets a card.
-export function useLocalShows(enabled: boolean) {
-  return useQuery({
-    queryKey: ['media', 'shows', 'index'],
-    queryFn: ({ signal }) => mediaApi.allShows({ signal }),
-    staleTime: 60_000,
-    enabled,
-  })
-}
-
 export function useLocalShowIndex(enabled: boolean) {
   return useQuery({
     queryKey: ['media', 'shows', 'index'],
