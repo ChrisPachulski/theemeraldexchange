@@ -1,5 +1,6 @@
 import { useNavTransition } from '../../lib/navTransition'
 import { UserMenu } from '../auth/UserMenu'
+import { usePlexUser } from '../../lib/hooks/usePlexLinks'
 import { EmeraldMark } from '../atmosphere/EmeraldMark'
 import './HomeNav.css'
 
@@ -15,6 +16,7 @@ const PLEX_URL = 'https://app.plex.tv/desktop'
 
 export function HomeNav() {
   const { navigate } = useNavTransition()
+  const plexUser = usePlexUser()
 
   return (
     <>
@@ -30,17 +32,19 @@ export function HomeNav() {
       </button>
 
       <div className="home-nav__right">
-        <a
-          href={PLEX_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="home-nav__watch"
-          aria-label="Open Plex in a new tab"
-        >
-          <EmeraldMark width={18} variant="single" className="home-nav__watch-glyph" />
-          <span className="home-nav__watch-label">Watch</span>
-          <span className="home-nav__watch-arrow" aria-hidden="true">{'->'}</span>
-        </a>
+        {plexUser && (
+          <a
+            href={PLEX_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="home-nav__watch"
+            aria-label="Open Plex in a new tab"
+          >
+            <EmeraldMark width={18} variant="single" className="home-nav__watch-glyph" />
+            <span className="home-nav__watch-label">Watch</span>
+            <span className="home-nav__watch-arrow" aria-hidden="true">{'->'}</span>
+          </a>
+        )}
         <UserMenu />
       </div>
     </>

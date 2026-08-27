@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { authModeFromUser, useAuth, type AuthUser } from '../auth'
 import { apiUrl } from '../api/base'
 import { throwApiError } from '../api/errors'
 
@@ -113,25 +114,39 @@ export function resolvePlexLink(
   return null
 }
 
+/** Plex affordances (Watch link, Play in Plex) exist only for members who
+ *  signed in through Plex — anyone else has no Plex account to land in. */
+export function isPlexUser(user: Pick<AuthUser, 'sub' | 'auth_mode'> | null): boolean {
+  return user !== null && authModeFromUser(user) === 'plex'
+}
+
+export function usePlexUser(): boolean {
+  const { user } = useAuth()
+  return isPlexUser(user)
+}
+
 export function usePlexLinks(): {
   linkFor: (kind: 'movie' | 'tv', lookup: LinkLookup) => string | null
   isLoading: boolean
 } {
+  const plex = usePlexUser()
   const links = useQuery({
     queryKey: ['plex', 'library-links'],
     queryFn: fetchLinks,
     staleTime: 5 * 60_000,
     refetchOnMount: false,
+    enabled: plex,
   })
   const serverId = useQuery({
     queryKey: ['plex', 'server-id'],
     queryFn: fetchServerId,
     // Server id never changes during a session; cache it forever.
     staleTime: Infinity,
+    enabled: plex,
   })
 
   const linkFor = (kind: 'movie' | 'tv', lookup: LinkLookup): string | null =>
-    resolvePlexLink(links.data ?? null, serverId.data ?? null, kind, lookup)
+    plex ? resolvePlexLink(links.data ?? null, serverId.data ?? null, kind, lookup) : null
 
   return {
     linkFor,

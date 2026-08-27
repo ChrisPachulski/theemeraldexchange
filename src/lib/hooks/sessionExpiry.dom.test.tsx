@@ -11,6 +11,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useFeedback } from './useUserFeedback'
 import { usePlexLinks } from './usePlexLinks'
 
+// usePlexLinks only fetches for a Plex-authed session; give it one.
+vi.mock('../auth', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../auth')>()),
+  useAuth: () => ({ user: { sub: 'plex:1', auth_mode: 'plex' } }),
+}))
+
 function wrapper(errors: unknown[]) {
   const client = new QueryClient({
     queryCache: new QueryCache({ onError: (error) => errors.push(error) }),

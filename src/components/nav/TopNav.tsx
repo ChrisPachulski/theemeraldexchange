@@ -4,6 +4,7 @@ import { useNavTransition } from '../../lib/navTransition'
 import { useAuth } from '../../lib/auth'
 import { useLimits } from '../../lib/hooks/useLimits'
 import { UserMenu } from '../auth/UserMenu'
+import { usePlexUser } from '../../lib/hooks/usePlexLinks'
 import { EmeraldMark } from '../atmosphere/EmeraldMark'
 import './TopNav.css'
 
@@ -49,6 +50,7 @@ type Props = {
 
 export function TopNav({ active }: Props) {
   const { transitionTo, navigate } = useNavTransition()
+  const plexUser = usePlexUser()
   const { isAdmin } = useAuth()
   const limits = useLimits()
   const iptvEnabled = limits.data?.iptvEnabled !== false // default true on older backends
@@ -123,17 +125,19 @@ export function TopNav({ active }: Props) {
       </nav>
 
       <div className="top-nav__right">
-        <a
-          href={PLEX_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="top-nav__watch"
-          aria-label="Open Plex in a new tab"
-        >
-          <EmeraldMark width={18} variant="single" className="top-nav__watch-glyph" />
-          <span className="top-nav__watch-label">Watch</span>
-          <span className="top-nav__watch-arrow" aria-hidden="true">{'->'}</span>
-        </a>
+        {plexUser && (
+          <a
+            href={PLEX_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="top-nav__watch"
+            aria-label="Open Plex in a new tab"
+          >
+            <EmeraldMark width={18} variant="single" className="top-nav__watch-glyph" />
+            <span className="top-nav__watch-label">Watch</span>
+            <span className="top-nav__watch-arrow" aria-hidden="true">{'->'}</span>
+          </a>
+        )}
         <UserMenu />
       </div>
     </>

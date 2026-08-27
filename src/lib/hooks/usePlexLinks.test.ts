@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildPlexDeepLink, buildPlexSearchLink, resolvePlexLink, type LinkMap } from './usePlexLinks'
+import { buildPlexDeepLink, buildPlexSearchLink, isPlexUser, resolvePlexLink, type LinkMap } from './usePlexLinks'
 
 const EMPTY_MAP: LinkMap = {
   movie: { byTmdb: {}, byTvdb: {}, byImdb: {} },
@@ -114,5 +114,15 @@ describe('resolvePlexLink — id fallback chain', () => {
     }
     expect(resolvePlexLink(map, 'srv', 'movie', { tmdbId: 27205 })).toContain('rk')
     expect(resolvePlexLink(map, 'srv', 'movie', { tmdbId: '27205' })).toContain('rk')
+  })
+})
+
+describe('isPlexUser', () => {
+  it('is true only for a Plex-minted session', () => {
+    expect(isPlexUser({ sub: 'plex:123' })).toBe(true)
+    expect(isPlexUser({ sub: 'plex:123', auth_mode: 'plex' })).toBe(true)
+    expect(isPlexUser({ sub: 'workos:abc', auth_mode: 'workos' })).toBe(false)
+    expect(isPlexUser({ sub: 'google:abc' })).toBe(false)
+    expect(isPlexUser(null)).toBe(false)
   })
 })
