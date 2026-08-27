@@ -21,16 +21,13 @@ function localShowAsSeries(show: MediaShow): SeriesSearchResult {
   }
 }
 
-/** Sonarr library plus local-only shows, matched by TVDB then TMDB id.
- *  Local rows the scanner could not identify (no TMDB/TVDB id — raw folder
- *  names like "Dora 02 Lost and Found TVRip 6") are left out. */
+/** Sonarr library plus local-only shows, matched by TVDB then TMDB id. */
 export function mergeLocalShows(sonarr: Series[] | undefined, local: MediaShow[] | undefined): LibraryRow[] {
   if (!sonarr) return []
   if (!local) return sonarr
   const tvdb = new Set(sonarr.map((s) => s.tvdbId))
   const tmdb = new Set(sonarr.map((s) => s.tmdbId).filter((x): x is number => typeof x === 'number'))
   const extra = local
-    .filter((l) => l.tmdbId !== null || l.tvdbId !== null)
     .filter((l) => !(l.tvdbId !== null && tvdb.has(l.tvdbId)) && !(l.tmdbId !== null && tmdb.has(l.tmdbId)))
     .map(localShowAsSeries)
   return [...sonarr, ...extra]
