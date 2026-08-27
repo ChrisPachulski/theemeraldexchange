@@ -98,7 +98,8 @@ export function InvitesPanel() {
     onError: (e) => setError(errMessage(e, 'Could not revoke that member. Try again.')),
   })
 
-  const invites: InviteView[] = invitesQ.data ?? []
+  // Expired/revoked rows stay in the DB for audit but are noise here.
+  const invites: InviteView[] = (invitesQ.data ?? []).filter((i) => i.status === 'active')
   const members: MemberView[] = membersQ.data ?? []
   const activeMembers = members.filter((m) => !m.revoked_at)
   const summary =
@@ -200,7 +201,7 @@ export function InvitesPanel() {
         <p className="invites-panel__section-title">Outstanding invites</p>
         {invitesQ.isLoading && <p className="invites-panel__loading">Loading…</p>}
         {!invitesQ.isLoading && invites.length === 0 && (
-          <p className="invites-panel__empty">No invites issued.</p>
+          <p className="invites-panel__empty">No outstanding invites.</p>
         )}
         {invites.length > 0 && (
           <ul className="invites-panel__list">
