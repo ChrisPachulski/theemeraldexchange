@@ -229,13 +229,6 @@
   color: var(--text-subtle);
 }
 
-.detail__rating {
-  font-family: var(--font-mono);
-  font-size: var(--t-sm);
-  color: var(--emerald);
-  margin: 0;
-  font-feature-settings: 'tnum' 1;
-}
 
 .detail__genres {
   list-style: none;

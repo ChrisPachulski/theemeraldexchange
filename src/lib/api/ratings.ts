@@ -44,8 +44,3 @@ export function ratingPieces(r: TitleRatings | undefined): RatingPiece[] {
   if (r.metacritic !== null) out.push({ kind: 'mc', value: String(r.metacritic), score: r.metacritic, label: `Metacritic ${r.metacritic}` })
   return out
 }
-
-/** Plain-text form for the detail modal. */
-export function ratingText(pieces: RatingPiece[]): string | undefined {
-  return pieces.length ? pieces.map((p) => p.label).join(' · ') : undefined
-}

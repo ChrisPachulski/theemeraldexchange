@@ -66,10 +66,10 @@ function Mark({ piece }: { piece: RatingPiece }) {
   }
 }
 
-export function RatingChips({ pieces }: { pieces: RatingPiece[] }) {
+export function RatingChips({ pieces, size = 'md' }: { pieces: RatingPiece[]; size?: 'md' | 'lg' }) {
   if (pieces.length === 0) return null
   return (
-    <p className="rating-chips" aria-label="ratings">
+    <p className={`rating-chips rating-chips--${size}`} aria-label="ratings">
       {pieces.map((p) => (
         <span key={p.kind} className="rating-chip" title={p.label} aria-label={p.label}>
           <Mark piece={p} />

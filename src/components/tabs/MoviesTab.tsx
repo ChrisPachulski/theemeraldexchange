@@ -15,7 +15,7 @@ import { EmeraldMark } from '../atmosphere/EmeraldMark'
 import { useAuth } from '../../lib/auth'
 import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useRatings } from '../../lib/hooks/useRatings'
-import { ratingPieces, ratingText, type RatingPiece, type RatingsMap } from '../../lib/api/ratings'
+import { ratingPieces, type RatingPiece, type RatingsMap } from '../../lib/api/ratings'
 import { useMovieSearch } from '../../lib/hooks/useMovieSearch'
 import { useRadarrLibrary, useRadarrProfiles, useRadarrRootFolders } from '../../lib/hooks/useRadarrLibrary'
 import { useSuggestionStrip } from '../../lib/hooks/useSuggestionStrip'
@@ -466,7 +466,7 @@ export function MoviesTab() {
           viewing.certification,
         ].filter((x): x is string => Boolean(x)) : []}
         genres={viewing?.genres}
-        rating={viewing ? ratingText(movieRatingPieces(viewing, viewingRatings)) : undefined}
+        rating={viewing ? movieRatingPieces(viewing, viewingRatings) : undefined}
         overview={viewing?.overview}
         meta={viewing ? buildMovieMeta(viewing) : []}
         cast={cast.data}

@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import type { RatingPiece } from '../../lib/api/ratings'
+import { RatingChips } from '../search/RatingChips'
 import { castCharacter, TMDB_IMAGE_BASE, type CastMember } from '../../lib/api/tmdb'
 import { useDialogDismiss } from '../../lib/useDialogDismiss'
 import './DetailModal.css'
@@ -70,8 +72,8 @@ type Props = {
   overview?: string
   /** Detail key/value rows for the metadata block. */
   meta: DetailMeta[]
-  /** Optional rating display, like '8.6 IMDb · 92% RT'. */
-  rating?: string
+  /** Score chips (icon + value), same as MediaCard. */
+  rating?: RatingPiece[]
   /** Cast members from TMDB. Empty array hides the cast section. */
   cast?: CastMember[]
   /** Whether cast is still loading; renders skeleton placeholders. */
@@ -257,7 +259,7 @@ export function DetailModal({
                 ))}
               </p>
             )}
-            {rating && <p className="detail__rating">{rating}</p>}
+            {rating && rating.length > 0 && <RatingChips pieces={rating} size="lg" />}
             {genres && genres.length > 0 && (
               <ul className="detail__genres">
                 {genres.map((g) => (

@@ -16,7 +16,7 @@ import { useAuth } from '../../lib/auth'
 import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useSeriesSearch } from '../../lib/hooks/useSeriesSearch'
 import { useRatings } from '../../lib/hooks/useRatings'
-import { ratingPieces, ratingText, type RatingPiece, type RatingsMap } from '../../lib/api/ratings'
+import { ratingPieces, type RatingPiece, type RatingsMap } from '../../lib/api/ratings'
 import { useSonarrLibrary, useSonarrProfiles, useSonarrRootFolders } from '../../lib/hooks/useSonarrLibrary'
 import { useSonarrEpisodes } from '../../lib/hooks/useSonarrEpisodes'
 import { useSuggestionStrip } from '../../lib/hooks/useSuggestionStrip'
@@ -479,7 +479,7 @@ export function TvTab() {
           viewing.certification,
         ].filter((x): x is string => Boolean(x)) : []}
         genres={viewing?.genres}
-        rating={viewing ? ratingText(seriesRatingPieces(viewing, viewingRatings)) : undefined}
+        rating={viewing ? seriesRatingPieces(viewing, viewingRatings) : undefined}
         overview={viewing?.overview}
         meta={viewing ? buildSeriesMeta(viewing) : []}
         cast={cast.data}
