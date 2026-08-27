@@ -120,7 +120,7 @@ describe('session — auth_mode', () => {
   it('rejects a cookie with an unrecognized auth_mode value', async () => {
     // A token carrying an auth_mode we do not recognize is rejected rather than
     // coerced — bad data never passes the gate.
-    const token = await mintJwe({ sub: 'plex:42', username: 'someone', role: 'user', auth_mode: 'webauthn' })
+    const token = await mintJwe({ sub: 'plex:42', username: 'someone', role: 'user', auth_mode: 'magic' })
     expect(await verifySession(token)).toBeNull()
   })
 })

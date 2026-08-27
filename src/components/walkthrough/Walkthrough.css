@@ -430,9 +430,9 @@
    Apple and Plex affordances read as a pair. */
 .walkthrough__signin-buttons {
   /* A single full-width vertical stack — every sign-in method (Plex, Apple,
-     passkey) gets the same footprint and reflows cleanly at any viewport
+     WorkOS) gets the same footprint and reflows cleanly at any viewport
      width. The previous flex-wrap ROW broke on resize once the full-width
-     passkey block was added: a width:100% column mixed with inline buttons
+     provider block was added: a width:100% column mixed with inline buttons
      wrapped chaotically. A column stack is robust and reads cleaner. */
   display: flex;
   flex-direction: column;

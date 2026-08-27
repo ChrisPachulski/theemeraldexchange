@@ -85,10 +85,7 @@ describe('SPA startup invite handling', () => {
         })
       }
       if (url.endsWith('/api/auth/methods')) {
-        return Response.json({ plex: true, apple: false, google: false, passkey: true })
-      }
-      if (url.endsWith('/api/setup/status')) {
-        return Response.json({ claimable: false })
+        return Response.json({ plex: true, apple: false, google: false, workos: false })
       }
       throw new Error(`unexpected fetch: ${url}`)
     }))

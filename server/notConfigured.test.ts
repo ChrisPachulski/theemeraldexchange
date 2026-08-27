@@ -52,7 +52,6 @@ beforeAll(async () => {
       recommenderUrl: 'http://recommender:8000',
       // Phase 2: backend-served SPA posture (LAN self-host).
       serveSpa: true,
-      webauthnRpIdExplicit: false,
     },
     isPlexConfigured: () => false,
     isAppleConfigured: () => false,

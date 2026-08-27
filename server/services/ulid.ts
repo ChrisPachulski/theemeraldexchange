@@ -2,7 +2,7 @@
 //
 // The M1.5 contract (§8.1) requires a `local:` sub to be a 26-char uppercase
 // Crockford Base32 ULID matching /^[0-9A-HJKMNP-TV-Z]{26}$/. We mint these for
-// self-owned passkey users. Rather than pull a dependency whose default RNG is
+// self-owned local: users. Rather than pull a dependency whose default RNG is
 // Math.random, this is ~15 lines using node:crypto.
 //
 // Layout (standard ULID): 48-bit millisecond timestamp (10 chars) + 80 bits of

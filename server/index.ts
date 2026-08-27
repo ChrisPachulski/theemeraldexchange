@@ -28,7 +28,6 @@ import { startDvrScheduler, type DvrScheduler } from './services/dvrRecorder.js'
 import { registerDvrRecorder } from './routes/dvr.js'
 import { ensureServerId, closeServerDb } from './services/serverDb.js'
 import { runTelemetryDsnSelfCheck } from './services/serverTelemetry.js'
-import { ensureSetupToken } from './services/setupState.js'
 import { createLogger } from './services/logger.js'
 import { warnExpiredCompatWindows } from './services/compatWindows.js'
 import { buildAuthPosture } from './services/authPosture.js'
@@ -82,11 +81,6 @@ const serverId = ensureServerId()
 log.info('server_id resolved', { serverId })
 log.info('authentication posture', buildAuthPosture(env))
 
-// First-owner claim (plan 006 Phase 1): while the install is un-gated and
-// unclaimed, mint the one-time setup token and print it — the token is the
-// proof-of-ownership the claim flow requires. No-op once claimed/gated.
-ensureSetupToken()
-
 // Surface any dated backward-compat shim whose removal date has passed —
 // expiry becomes a boot log line instead of a manual calendar sweep.
 warnExpiredCompatWindows()
@@ -106,8 +100,7 @@ const server = serve(
 // durability matters even on IPTV_DISABLED builds, finding 14-4).
 const cronTasks: ScheduledTask[] = []
 cronTasks.push(registerDbBackupSchedule(env.DB_BACKUP_CRON))
-// Hygiene sweep of expired auth rows (device_tokens + webauthn_challenges,
-// LOW-9). Not IPTV-gated — server.db grows on every build.
+// Hygiene sweep of expired auth rows (device_tokens, LOW-9). Not IPTV-gated — server.db grows on every build.
 cronTasks.push(registerTokenSweepSchedule(env.TOKEN_SWEEP_CRON))
 
 // IPTV sync is opt-in: only register the cron when all three Xtream creds

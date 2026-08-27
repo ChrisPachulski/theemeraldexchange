@@ -380,12 +380,9 @@ if (isProd && enableWorkosSignIn && !(workosClientId && workosApiKey && workosRe
 
 // ADMIN_SUBS — comma-separated, namespaced subs (apple:<subject> |
 // plex:<id> | google:<sub> | workos:<user_id> | local:<ulid>) that are admins AND implicitly
-// allowed without an invite. parseSub accepts all four providers — a
-// passkey-only install can bootstrap its owner with a local: entry
-// (verdict A6: this always worked; only these docs hid it).
-// This is the owner-bootstrap: the operator's own Apple/Plex sub goes
-// here so their very first login on a fresh install needs no invite and
-// lands them as admin even when their Plex username isn't in ADMINS
+// allowed without an invite. This is the owner-bootstrap: the operator's
+// own provider sub goes here so their very first login on a fresh install
+// needs no invite and lands them as admin even when their Plex username isn't in ADMINS
 // (apple: subs have no stable Plex username). Each entry is validated
 // with parseSub at boot so a malformed entry fails closed (throws)
 // rather than silently granting nothing. ADMINS (Plex usernames, legacy)
@@ -402,27 +399,6 @@ const adminSubs = csv('ADMIN_SUBS').map((s) => {
     )
   }
 })
-
-// ── Passkeys (WebAuthn) ──────────────────────────────────────────────────
-// The cross-platform, password-free identity spine. Three knobs:
-//   WEBAUTHN_RP_ID    — the Relying Party id: the registrable domain the
-//                       passkey is bound to (e.g. "theemeraldexchange.com").
-//                       MUST be the origin's host or a parent domain of it.
-//                       Defaults to "localhost" for dev.
-//   WEBAUTHN_RP_NAME  — human-facing name shown in the OS passkey prompt.
-//   WEBAUTHN_ORIGINS  — comma-separated allowed origins (full scheme+host
-//                       [+port]) the assertion may come from. Defaults to the
-//                       app's CORS allow-list so a typical deploy needs no
-//                       extra config; override when the login page lives on a
-//                       different origin than the API callers.
-const webauthnRpId = (opt('WEBAUTHN_RP_ID') ?? 'localhost').trim()
-const webauthnRpName = (opt('WEBAUTHN_RP_NAME') ?? 'The Emerald Exchange').trim()
-const webauthnOrigins = (() => {
-  const explicit = csv('WEBAUTHN_ORIGINS')
-  if (explicit.length > 0) return explicit
-  if (allowedOrigins.length > 0) return allowedOrigins
-  return ['http://localhost:5173', 'http://localhost:3001']
-})()
 
 /** True when Plex OAuth is configured for this installation.
  *
@@ -496,20 +472,11 @@ export const env = {
   workosApiKey,
   /** Exact callback URI registered with WorkOS. null when unconfigured. */
   workosRedirectUri,
-  /** WebAuthn Relying Party id (registrable domain the passkey binds to). */
-  webauthnRpId,
-  /** Human-facing name shown in the OS passkey prompt. */
-  webauthnRpName,
-  /** Allowed origins a passkey assertion may originate from. */
-  webauthnOrigins,
   plexServerId,
   port: positiveInt('PORT', 3001),
   isProd,
   /** Backend serves the built SPA from ./dist (plan 006 Phase 2). */
   serveSpa,
-  /** True when the operator pinned WEBAUTHN_RP_ID explicitly — disables
-   *  the same-origin request-derived RP fallback (plan 006 Phase 2). */
-  webauthnRpIdExplicit: Boolean(opt('WEBAUTHN_RP_ID')),
   allowedOrigins,
   /** Trust Cloudflare/proxy client IP headers for per-client auth rate limits
    *  and first-owner claim source policy. Keep off unless the backend is
@@ -680,13 +647,6 @@ export const env = {
   // a new server_id and silently revokes all device tokens. Default
   // matches the NAS data bind-mount used by iptv.db and other data files.
   SERVER_DB_PATH: process.env.SERVER_DB_PATH ?? './data/server.db',
-  // First-owner claim (plan 006 Phase 1): by default the claim endpoint
-  // only accepts requests whose resolved client address is loopback/private
-  // (the nginx-ui advisory's bind-local recommendation, widened to LAN so a
-  // laptop can claim the NAS). Trusted proxy headers take precedence over the
-  // socket when explicitly enabled. Set to 1 only when deliberately claiming
-  // through a tunnel/proxy — the setup token is still required either way.
-  setupAllowRemote: process.env.SETUP_ALLOW_REMOTE === '1',
   IPTV_DB_PATH: process.env.IPTV_DB_PATH ?? './data/iptv.db',
   // Scheduled DB-snapshot retention dir + count + cadence (finding 14-4).
   // VACUUM INTO snapshots of server.db + iptv.db land here on a cron and on
@@ -696,7 +656,7 @@ export const env = {
   DB_BACKUP_DIR: process.env.DB_BACKUP_DIR ?? './data/backups',
   DB_BACKUP_KEEP: positiveInt('DB_BACKUP_KEEP', 7),
   DB_BACKUP_CRON: process.env.DB_BACKUP_CRON ?? '30 3 * * *',
-  // Nightly sweep of expired device_tokens + webauthn_challenges (LOW-9).
+  // Nightly sweep of expired device_tokens (LOW-9).
   TOKEN_SWEEP_CRON: process.env.TOKEN_SWEEP_CRON ?? '15 3 * * *',
   IPTV_EPG_PATH: opt('IPTV_EPG_PATH') ?? '/xmltv.php',
   // Global cap on concurrent IPTV streams of ANY kind (live/remux/vod/series/

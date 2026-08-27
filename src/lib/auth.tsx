@@ -16,11 +16,6 @@ import { useQueryClient } from '@tanstack/react-query'
 import { apiUrl } from './api/base'
 import { throwApiError } from './api/errors'
 import { SESSION_EXPIRED_EVENT } from './queryClient'
-import { requestSetupChecklist } from './setupChecklistFlag'
-import type {
-  PublicKeyCredentialRequestOptionsJSON,
-  PublicKeyCredentialCreationOptionsJSON,
-} from '@simplewebauthn/browser'
 
 // Persists the admin "view-as" preview across reloads so an admin who
 // chose to preview the dashboard as a regular user doesn't get bumped
@@ -67,15 +62,6 @@ export function deniedMessage(reason: unknown): string {
       return 'WorkOS is unreachable right now. Try again in a moment.'
     case 'not_a_server_member':
       return "You aren't a member of this Plex server."
-    // First-owner claim (plan 006 Phase 1)
-    case 'invalid_setup_token':
-      return 'That setup token is wrong or expired. Copy it from the server log (or the .setup-token file) and try again.'
-    case 'claim_source_blocked':
-      return 'Claiming is only allowed from the local network. Connect to the same LAN as the server (or set SETUP_ALLOW_REMOTE=1).'
-    case 'already_claimed':
-      return 'Someone already claimed this server.'
-    case 'server_unclaimed':
-      return 'This server has not been claimed yet. Its owner must claim it with the setup token first.'
     default:
       return 'Access denied.'
   }
@@ -168,7 +154,7 @@ class AuthRequestCancelledError extends Error {
 
 /** Bound one non-interactive network leg to both its auth attempt and a hard
  * timeout. The explicit race also settles when a test double or browser fetch
- * fails to reject promptly after abort. Interactive WebAuthn/Apple UI never
+ * fails to reject promptly after abort. Interactive Apple UI never
  * runs inside this boundary. */
 async function boundedAuthRequest<T>(
   attemptSignal: AbortSignal,
@@ -323,8 +309,6 @@ type SignInState = 'idle' | 'opening' | 'pending' | 'denied' | 'error'
 export type ActiveSignIn =
   | 'plex'
   | 'apple'
-  | 'passkey-login'
-  | 'passkey-register'
   | null
 
 // Plex may close its auth popup before the newly-authorized PIN is visible to
@@ -404,26 +388,6 @@ type AuthCtx = {
   beginAppleSignIn: () => number | null
   /** Release that slot when Apple's SDK popup is cancelled or fails. */
   cancelAppleSignIn: (attemptId: number) => void
-  /**
-   * Sign in with an EXISTING passkey (WebAuthn). Usernameless — the
-   * authenticator offers its discoverable resident keys, so no handle or
-   * code is needed. This is the cross-platform, Plex-independent login.
-   * Returns true on success (session minted), false otherwise (detail in
-   * signInError / signInState).
-   */
-  passkeyLogin: () => Promise<boolean>
-  /**
-   * Register a NEW passkey for a first-time member. Mints a self-owned
-   * `local:<ulid>` identity, so it needs a display handle and a valid
-   * invite code (the invite is what authorizes the new identity onto the
-   * members allowlist — same gate as Plex/Apple). Returns true on success.
-   */
-  passkeyRegister: (args: {
-    handle: string
-    inviteCode?: string
-    /** First-owner claim (plan 006 Phase 1): the boot-minted setup token. */
-    setupToken?: string
-  }) => Promise<boolean>
   signOut: () => Promise<void>
   /**
    * Which login providers this install actually offers (/api/auth/methods).
@@ -435,10 +399,7 @@ type AuthCtx = {
     apple: boolean
     google: boolean
     workos?: boolean
-    passkey: boolean
   } | null
-  /** True while the server is unclaimed (plan 006 Phase 1 claim flow). */
-  setupClaimable: boolean
 }
 
 const AuthContext = createContext<AuthCtx | null>(null)
@@ -749,24 +710,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ],
   )
 
-  // Provider discovery + first-owner claim state (plan 006 Phase 1).
-  // Best-effort: on failure authMethods stays null (all buttons render)
-  // and setupClaimable stays false (normal sign-in).
+  // Provider discovery. Best-effort: on failure authMethods stays null (all
+  // buttons render).
   const [authMethods, setAuthMethods] = useState<AuthCtx['authMethods']>(null)
-  const [setupClaimable, setSetupClaimable] = useState(false)
   useEffect(() => {
     let alive = true
     fetch(apiUrl('/api/auth/methods'))
       .then(async (r) => {
         if (alive && r.ok) setAuthMethods((await r.json()) as AuthCtx['authMethods'])
-      })
-      .catch(() => {})
-    fetch(apiUrl('/api/setup/status'))
-      .then(async (r) => {
-        if (alive && r.ok) {
-          const { claimable } = (await r.json()) as { claimable?: boolean }
-          setSetupClaimable(Boolean(claimable))
-        }
       })
       .catch(() => {})
     return () => {
@@ -1338,271 +1289,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ],
   )
 
-  const passkeyLogin = useCallback(async (): Promise<boolean> => {
-    const passkeyAttemptId = beginSignIn('passkey-login')
-    if (passkeyAttemptId === null) return false
-    const attemptSignal = activeSignInAbortRef.current!.signal
-    setSignInError(null)
-    setSignOutError(null)
-    setSignInState('pending')
-    try {
-      const { options, challengeId } = await boundedAuthRequest(
-        attemptSignal,
-        AUTH_NETWORK_TIMEOUT_MS,
-        async (signal) => {
-          const optRes = await fetch(apiUrl('/api/auth/passkey/login/options'), {
-            method: 'POST',
-            credentials: 'include',
-            signal,
-          })
-          if (!optRes.ok) throw new Error(`passkey options failed: ${optRes.status}`)
-          return (await optRes.json()) as {
-            options: PublicKeyCredentialRequestOptionsJSON
-            challengeId: string
-          }
-        },
-      )
-      if (!isSignInAttemptCurrent('passkey-login', passkeyAttemptId)) return false
-      const { startAuthentication } = await import('@simplewebauthn/browser')
-      let assertion
-      try {
-        assertion = await startAuthentication({ optionsJSON: options })
-      } catch {
-        if (!isSignInAttemptCurrent('passkey-login', passkeyAttemptId)) return false
-        // User cancelled the OS prompt, no passkey for this site, or the
-        // authenticator errored. Not a server failure — soft message.
-        setSignInState('error')
-        setSignInError('Passkey sign-in was cancelled or no passkey was found on this device.')
-        return false
-      }
-      if (!isSignInAttemptCurrent('passkey-login', passkeyAttemptId)) return false
-      const { response: verifyRes, data } = await boundedAuthRequest(
-        attemptSignal,
-        AUTH_NETWORK_TIMEOUT_MS,
-        async (signal) => {
-          const response = await fetch(apiUrl('/api/auth/passkey/login/verify'), {
-            method: 'POST',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ challengeId, response: assertion }),
-            signal,
-          })
-          const data = (await response.json().catch(() => ({}))) as {
-            ok?: boolean
-            user?: AuthUser
-            error?: unknown
-          }
-          return { response, data }
-        },
-      )
-      if (!isSignInAttemptCurrent('passkey-login', passkeyAttemptId)) return false
-      if (verifyRes.status === 403) {
-        setSignInState('denied')
-        setSignInError(deniedMessage(data?.error))
-        return false
-      }
-      if (!verifyRes.ok) {
-        setSignInState('error')
-        setSignInError('Passkey sign-in failed. Try again.')
-        return false
-      }
-      if (data.ok && data.user) {
-        const providerSub = providerSubFromApi(data.user)
-        if (!providerSub) {
-          setSignInState('error')
-          setSignInError('Passkey sign-in returned an unexpected response.')
-          return false
-        }
-        if (
-          !(await confirmProviderSession(
-            providerSub,
-            'passkey-login',
-            passkeyAttemptId,
-          ))
-        ) {
-          return false
-        }
-        setDiscoveredServers(null)
-        setSignInState('idle')
-        return true
-      }
-      setSignInState('error')
-      setSignInError('Passkey sign-in returned an unexpected response.')
-      return false
-    } catch (e) {
-      if (
-        e instanceof AuthRequestCancelledError ||
-        !isSignInAttemptCurrent('passkey-login', passkeyAttemptId)
-      ) {
-        return false
-      }
-      setSignInState('error')
-      setSignInError(
-        e instanceof AuthRequestTimeoutError
-          ? 'Passkey sign-in timed out. Check your connection and try again.'
-          : 'Passkey sign-in is temporarily unavailable. Check your connection and try again.',
-      )
-      return false
-    } finally {
-      clearSignIn('passkey-login', passkeyAttemptId)
-    }
-  }, [
-    beginSignIn,
-    clearSignIn,
-    confirmProviderSession,
-    isSignInAttemptCurrent,
-  ])
-
-  const passkeyRegister = useCallback(
-    async ({
-      handle,
-      inviteCode,
-      setupToken,
-    }: {
-      handle: string
-      inviteCode?: string
-      setupToken?: string
-    }): Promise<boolean> => {
-      if (rejectMalformedInvite(inviteCode)) return false
-      const passkeyAttemptId = beginSignIn('passkey-register')
-      if (passkeyAttemptId === null) return false
-      const attemptSignal = activeSignInAbortRef.current!.signal
-      setSignInError(null)
-      setSignOutError(null)
-      setSignInState('pending')
-      try {
-        const { response: optRes, data: optionData } = await boundedAuthRequest(
-          attemptSignal,
-          AUTH_NETWORK_TIMEOUT_MS,
-          async (signal) => {
-            const response = await fetch(apiUrl('/api/auth/passkey/register/options'), {
-              method: 'POST',
-              credentials: 'include',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ handle }),
-              signal,
-            })
-            const data = response.ok
-              ? ((await response.json()) as {
-                  options: PublicKeyCredentialCreationOptionsJSON
-                  challengeId: string
-                })
-              : null
-            return { response, data }
-          },
-        )
-        if (!isSignInAttemptCurrent('passkey-register', passkeyAttemptId)) return false
-        if (optRes.status === 400) {
-          setSignInState('error')
-          setSignInError('Enter a display name to create a passkey.')
-          return false
-        }
-        if (!optRes.ok) throw new Error(`passkey register options failed: ${optRes.status}`)
-        const { options, challengeId } = optionData!
-        const { startRegistration } = await import('@simplewebauthn/browser')
-        let attestation
-        try {
-          attestation = await startRegistration({ optionsJSON: options })
-        } catch {
-          if (!isSignInAttemptCurrent('passkey-register', passkeyAttemptId)) return false
-          setSignInState('error')
-          setSignInError('Passkey setup was cancelled.')
-          return false
-        }
-        if (!isSignInAttemptCurrent('passkey-register', passkeyAttemptId)) return false
-        const { response: verifyRes, data } = await boundedAuthRequest(
-          attemptSignal,
-          AUTH_NETWORK_TIMEOUT_MS,
-          async (signal) => {
-            const response = await fetch(apiUrl('/api/auth/passkey/register/verify'), {
-              method: 'POST',
-              credentials: 'include',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                challengeId,
-                response: attestation,
-                inviteCode,
-                setupToken,
-                deviceLabel: handle,
-              }),
-              signal,
-            })
-            const data = (await response.json().catch(() => ({}))) as {
-              ok?: boolean
-              user?: AuthUser
-              claimed?: boolean
-              error?: unknown
-            }
-            return { response, data }
-          },
-        )
-        if (!isSignInAttemptCurrent('passkey-register', passkeyAttemptId)) return false
-        if (verifyRes.status === 403) {
-          setSignInState('denied')
-          setSignInError(deniedMessage(data?.error))
-          return false
-        }
-        if (!verifyRes.ok) {
-          setSignInState('error')
-          setSignInError('Could not create the passkey. Try again.')
-          return false
-        }
-        if (data.ok && data.user) {
-          const providerSub = providerSubFromApi(data.user)
-          if (!providerSub) {
-            setSignInState('error')
-            setSignInError('Passkey setup returned an unexpected response.')
-            return false
-          }
-          if (
-            !(await confirmProviderSession(
-              providerSub,
-              'passkey-register',
-              passkeyAttemptId,
-            ))
-          ) {
-            return false
-          }
-          setDiscoveredServers(null)
-          if (data.claimed) {
-            setSetupClaimable(false)
-            // Surface the first-run setup checklist to the fresh owner
-            // (plan 006 Phase 3).
-            requestSetupChecklist()
-          }
-          setSignInState('idle')
-          return true
-        }
-        setSignInState('error')
-        setSignInError('Passkey setup returned an unexpected response.')
-        return false
-      } catch (e) {
-        if (
-          e instanceof AuthRequestCancelledError ||
-          !isSignInAttemptCurrent('passkey-register', passkeyAttemptId)
-        ) {
-          return false
-        }
-        setSignInState('error')
-        setSignInError(
-          e instanceof AuthRequestTimeoutError
-            ? 'Passkey setup timed out. Check your connection and try again.'
-            : 'Passkey setup is temporarily unavailable. Check your connection and try again.',
-        )
-        return false
-      } finally {
-        clearSignIn('passkey-register', passkeyAttemptId)
-      }
-    },
-    [
-      beginSignIn,
-      clearSignIn,
-      confirmProviderSession,
-      isSignInAttemptCurrent,
-      rejectMalformedInvite,
-    ],
-  )
-
   const signOut = useCallback(async () => {
     if (signOutInFlightRef.current) return
     signOutInFlightRef.current = true
@@ -1690,11 +1376,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         appleSignIn,
         beginAppleSignIn,
         cancelAppleSignIn,
-        passkeyLogin,
-        passkeyRegister,
         signOut,
         authMethods,
-        setupClaimable,
       }}
     >
       {children}

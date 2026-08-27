@@ -8,12 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuthProvider, useAuth, type AuthUser } from './auth'
 import { SESSION_EXPIRED_EVENT } from './queryClient'
 
-const webauthnMocks = vi.hoisted(() => ({
-  startAuthentication: vi.fn(),
-  startRegistration: vi.fn(),
-}))
-
-vi.mock('@simplewebauthn/browser', () => webauthnMocks)
 
 function json(body: unknown, status = 200): Response {
   return {
@@ -56,9 +50,8 @@ function me(user: AuthUser): Response {
 
 function auxiliaryResponse(url: string): Response | null {
   if (url.endsWith('/api/auth/methods')) {
-    return json({ plex: true, apple: true, google: false, passkey: true })
+    return json({ plex: true, apple: true, google: false, workos: false })
   }
-  if (url.endsWith('/api/setup/status')) return json({ claimable: false })
   return null
 }
 
@@ -109,14 +102,6 @@ function LifecycleProbe() {
         }
       >
         Apple provider
-      </button>
-      <button
-        type="button"
-        onClick={() =>
-          void auth.passkeyLogin().then((ok) => setProviderResult(String(ok)))
-        }
-      >
-        Passkey provider
       </button>
       <button type="button" onClick={() => void auth.signIn()}>
         Plex provider
@@ -176,7 +161,6 @@ describe('browser session lifecycle reconciliation', () => {
     FakeBroadcastChannel.instances = []
     vi.stubGlobal('BroadcastChannel', FakeBroadcastChannel)
     vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
-    webauthnMocks.startAuthentication.mockResolvedValue({ id: 'credential' })
   })
 
   afterEach(() => {
@@ -681,7 +665,6 @@ describe('browser session lifecycle reconciliation', () => {
 
   it.each([
     { provider: 'Apple', button: 'Apple provider', active: 'apple' },
-    { provider: 'passkey', button: 'Passkey provider', active: 'passkey-login' },
   ])('defers session expiry during held $provider confirmation and drains one refresh', async ({
     button,
     active,
@@ -700,12 +683,6 @@ describe('browser session lifecycle reconciliation', () => {
       }
       if (url.endsWith('/api/auth/apple')) {
         return Promise.resolve(json({ status: 'authorized', user: NEW_USER }))
-      }
-      if (url.endsWith('/api/auth/passkey/login/options')) {
-        return Promise.resolve(json({ options: { challenge: 'challenge' }, challengeId: 'id' }))
-      }
-      if (url.endsWith('/api/auth/passkey/login/verify')) {
-        return Promise.resolve(json({ ok: true, user: NEW_USER }))
       }
       return Promise.reject(new Error(`unexpected fetch: ${url}`))
     })

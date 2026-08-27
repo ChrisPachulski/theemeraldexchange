@@ -3,7 +3,7 @@
 Two tracks (plan 006):
 
 - **Self-host (LAN, easy)** — anyone standing up their own Emerald server. Pull-based
-  multi-arch images, no accounts/domain/build, browser claim flow. Lives in
+  multi-arch images, no accounts/domain/build. Lives in
   [`selfhost/`](./selfhost/) — the quickstart is at the top of the README. Nothing below
   applies to you.
 - **Owner full deployment** — this document: the original operator setup with every profile
@@ -64,14 +64,14 @@ Open it and fill the required rows plus whichever optional integrations you use:
 | Var | Where it comes from |
 |---|---|
 | `TUNNEL_TOKEN` | The `eyJhI…` you copied above. |
-| `PLEX_CLIENT_ID` *(optional)* | Enables Plex login. Use the same value as `.env.local` or generate one with `node -e 'console.log(crypto.randomUUID())'`. Leave unset for passkey/Apple/Google-only installs. |
+| `PLEX_CLIENT_ID` *(optional)* | Enables Plex login. Use the same value as `.env.local` or generate one with `node -e 'console.log(crypto.randomUUID())'`. Leave unset for WorkOS/Apple/Google-only installs. |
 | `SESSION_SECRET` | Generate fresh: `openssl rand -base64 48`. Must be ≥32 bytes and not a placeholder — the deploy script hard-fails otherwise. **Different from dev** so the two environments can't share sessions. |
 | `STREAM_TOKEN_SECRET` | `openssl rand -base64 48`. Signs IPTV/media stream tokens (HMAC-SHA256). |
 | `DEVICE_TOKEN_SECRET` | `openssl rand -base64 48`. IKM for the device-token JWE (Apple device pairing). Must be distinct from every other secret. |
 | `INTERNAL_PRINCIPAL_SECRET` | `openssl rand -base64 48`. IKM for the internal-principal JWE the backend mints toward recommender/media-core/transcoder. Distinct from every other secret. |
 | `RECOMMENDER_EVENT_SECRET` | `openssl rand -base64 48`. Shared secret signing backend → recommender calls. |
-| `ADMINS` *(optional, legacy Plex)* | Plex username(s), comma-separated. Prefer stable `ADMIN_SUBS` or first-owner passkey claim for new installs. |
-| `PLEX_SERVER_ID` *(conditional)* | Required only when Plex login is configured, unless `ALLOW_UNSCOPED_PLEX_LOGIN=1` explicitly permits emergency boot. The flag grants no login access and never bypasses member/invite authorization. Prefer setup-token passkey claim, then set your home server's machineIdentifier and remove the opt-in. |
+| `ADMINS` *(optional, legacy Plex)* | Plex username(s), comma-separated. Prefer stable `ADMIN_SUBS` for new installs. |
+| `PLEX_SERVER_ID` *(conditional)* | Required only when Plex login is configured, unless `ALLOW_UNSCOPED_PLEX_LOGIN=1` explicitly permits emergency boot. The flag grants no login access and never bypasses member/invite authorization. Set your home server's machineIdentifier as soon as it is known and remove the opt-in. |
 | `WORKOS_CLIENT_ID`, `WORKOS_API_KEY`, `WORKOS_REDIRECT_URI` *(optional)* | WorkOS dashboard → API keys. Redirect URI is `https://api.theemeraldexchange.com/api/auth/workos/callback`, registered verbatim in the dashboard. Turn "Sign up" off there; add your `workos:user_…` id to `ADMIN_SUBS` for owner access. |
 | `ALLOWED_ORIGINS` | `https://theemeraldexchange.com` |
 | `SONARR_URL`, `SONARR_API_KEY` | Existing Sonarr install. |
@@ -95,19 +95,15 @@ This file is gitignored. If you ever lose it, regenerate the secrets and redeplo
 
 Normal provider login is now fail-closed: a verified identity still needs an
 `ADMIN_SUBS` match, an active member row, an invite, or verified Plex-server
-share admission. Provider client IDs never make first-owner setup unavailable.
+share admission. The owner bootstrap is `ADMIN_SUBS`: list your own provider
+sub there and the first login with that identity lands as admin, no invite.
 
-An older install that has only the username-based `ADMINS` setting and no
-durable administrator row will therefore boot as claimable and print a new
-one-time setup token. If that username already has an active user member row or
-qualifies for configured `PLEX_SERVER_ID` share admission, sign in once as the
-configured Plex administrator soon after upgrading. Share admission stores an
-ordinary user row; the successful login applies `ADMINS` only as runtime
-policy, writes the immutable ownership marker, and burns the setup token. Later
-removing `ADMINS` therefore demotes that user without reopening first-owner
-setup. A rowless identity with no qualifying Plex share cannot bypass the new
-gate: claim the server with the setup-token passkey first, then issue an invite
-or configure `PLEX_SERVER_ID` admission.
+An older install that has only the username-based `ADMINS` setting keeps
+working: the successful Plex login applies `ADMINS` as runtime policy and
+writes the immutable ownership marker. Later removing `ADMINS` demotes that
+user. A rowless identity with no qualifying Plex share cannot bypass the gate:
+add its sub to `ADMIN_SUBS`, issue an invite, or configure `PLEX_SERVER_ID`
+admission.
 
 ### 3. Netlify
 

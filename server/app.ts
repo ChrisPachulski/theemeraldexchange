@@ -41,8 +41,6 @@ import { media } from './routes/media.js'
 import { transcode } from './routes/transcode.js'
 import { devices, adminDevices } from './routes/devices.js'
 import { adminInvites, adminMembers } from './routes/adminInvites.js'
-import { passkey } from './routes/passkey.js'
-import { setup } from './routes/setup.js'
 import { version } from './routes/version.js'
 
 export const app = new Hono()
@@ -72,17 +70,12 @@ app.onError((err, c) => {
 // X-Request-Id response header. Must run before the logger so the id is logged.
 app.use('*', requestId())
 
-// The passkey routes are public by design, and the media/transcoder proxies
-// buffer control-plane request bodies before forwarding them. Bound both at
-// the edge so a large or chunked body cannot exhaust the Node heap. Playback
-// bytes travel in GET responses and are unaffected by these request limits.
-export const PASSKEY_BODY_LIMIT_BYTES = 64 * 1024
+// The media/transcoder proxies buffer control-plane request bodies before
+// forwarding them. Bound them at the edge so a large or chunked body cannot
+// exhaust the Node heap. Playback bytes travel in GET responses and are
+// unaffected by these request limits.
 export const SIDECAR_CONTROL_BODY_LIMIT_BYTES = 1024 * 1024
 const payloadTooLarge = (c: Context) => c.json({ error: 'payload_too_large' }, 413)
-app.use(
-  '/api/auth/passkey/*',
-  bodyLimit({ maxSize: PASSKEY_BODY_LIMIT_BYTES, onError: payloadTooLarge }),
-)
 app.use(
   '/api/media/*',
   bodyLimit({ maxSize: SIDECAR_CONTROL_BODY_LIMIT_BYTES, onError: payloadTooLarge }),
@@ -105,7 +98,7 @@ app.use('*', async (c, next) => {
 // artifacts in the URL. Any logger that prints the query string must scrub
 // them even when the route ultimately rejects the request.
 const SECRET_QUERY_RE =
-  /([?&](?:t|u|token|pinId|inviteCode|invite_code|setupToken|idToken|id_token)=)[^&\s]+/gi
+  /([?&](?:t|u|token|pinId|inviteCode|invite_code|idToken|id_token)=)[^&\s]+/gi
 export function redactRequestSecrets(line: string): string {
   return line.replace(SECRET_QUERY_RE, '$1[redacted]')
 }
@@ -241,14 +234,6 @@ app.route('/api/auth', auth)
 // Native device-pair flow lives under the same /api/auth tree as the Plex
 // cookie flow. The device creates its PIN directly, then POST /poll mints JWE.
 app.route('/api/auth/device', device)
-// Passkey (WebAuthn) login + registration — the cross-platform, password-free
-// identity path. Public (these endpoints ARE the login); self-owned local:
-// users gated by the same invite/members allowlist as Plex/Apple.
-app.route('/api/auth/passkey', passkey)
-// First-owner claim status (plan 006 Phase 1). Public: the SPA walkthrough
-// asks this once to decide whether to render the claim panel. The claim
-// itself is the passkey registration path + setup token.
-app.route('/api/setup', setup)
 app.route('/api/me', me)
 // /api/version is public — discovers server_id + auth_modes for Apple
 // PIN-pair (Keychain keying + UI gating). Mounted last under /api/v.

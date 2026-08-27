@@ -40,14 +40,12 @@ function schemaState(dbPath: string): SchemaState {
 version.get('/', (c) => {
   // Mirror /api/auth/methods so the unpaired screen and the version probe
   // agree on which logins this install offers. plex is always present
-  // (PLEX_CLIENT_ID is required to boot); passkey is always mounted
-  // (WebAuthn has dev defaults, so it's a real no-Plex login for anyone in
-  // the allowlist); apple/google appear only when their client IDs are set.
+  // (PLEX_CLIENT_ID is required to boot); apple/google/workos appear only
+  // when their client IDs are set.
   const auth_modes: string[] = ['plex']
   if (isAppleConfigured()) auth_modes.push('apple')
   if (isGoogleConfigured()) auth_modes.push('google')
   if (isWorkosConfigured()) auth_modes.push('workos')
-  auth_modes.push('passkey')
 
   return c.json({
     server_id: ensureServerId(),

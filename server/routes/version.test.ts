@@ -96,9 +96,8 @@ describe('GET /api/version', () => {
     expect(body).toMatchObject({
       server_id: expect.any(String),
       release: 'test-release',
-      // No APPLE_CLIENT_ID / GOOGLE_CLIENT_ID in this env → plex + the
-      // always-on passkey login only.
-      auth_modes: ['plex', 'passkey'],
+      // No APPLE_CLIENT_ID / GOOGLE_CLIENT_ID / WORKOS_* in this env → plex only.
+      auth_modes: ['plex'],
       accepting_device_pairs: true,
       schemas: {
         iptv: { current: 6 },
@@ -122,7 +121,7 @@ describe('GET /api/version', () => {
     ;(env as Record<string, unknown>).googleClientIds = ['example.apps.googleusercontent.com']
     try {
       const body = await getVersion()
-      expect(body.auth_modes).toEqual(['plex', 'apple', 'google', 'passkey'])
+      expect(body.auth_modes).toEqual(['plex', 'apple', 'google'])
     } finally {
       ;(env as Record<string, unknown>).appleClientId = beforeApple
       ;(env as Record<string, unknown>).googleClientIds = beforeGoogle

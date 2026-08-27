@@ -76,7 +76,7 @@ import {
 
 export const auth = new Hono()
 
-type AuthRateLimitKind = 'pin' | 'check' | 'apple' | 'passkey' | 'google' | 'workos'
+type AuthRateLimitKind = 'pin' | 'check' | 'apple' | 'google' | 'workos'
 type AuthRateLimitScope = 'global' | 'trusted_client' | 'pin' | 'identity'
 type AuthRateLimitBucket = { count: number; resetAt: number }
 type AuthRateLimitRule = {
@@ -94,12 +94,6 @@ const AUTH_CLIENT_RATE_LIMITS: Record<AuthRateLimitKind, { limit: number; window
   // so a stolen-invite / token-replay flood is blunted on top of the
   // 128-bit invite entropy and the Apple-JWKS signature requirement.
   apple: { limit: 20, windowMs: 60_000 },
-  // WebAuthn login + registration. Every passkey request is either a
-  // challenge mint or a crypto verify + DB write (register also redeems an
-  // invite) — no innocuous polling — so it gets the same tight bucket as
-  // apple. Blunts credential-stuffing against /login/verify and challenge-
-  // table burn against /register/options.
-  passkey: { limit: 20, windowMs: 60_000 },
   // Google Sign-In: same posture as apple — every request is a JWKS verify
   // + authZ decision, no innocuous polling.
   google: { limit: 20, windowMs: 60_000 },
@@ -110,7 +104,6 @@ const AUTH_GLOBAL_RATE_LIMITS: Record<AuthRateLimitKind, { limit: number; window
   pin: { limit: 120, windowMs: 60_000 },
   check: { limit: 600, windowMs: 60_000 },
   apple: { limit: 200, windowMs: 60_000 },
-  passkey: { limit: 200, windowMs: 60_000 },
   google: { limit: 200, windowMs: 60_000 },
   workos: { limit: 200, windowMs: 60_000 },
 }
@@ -244,7 +237,7 @@ function enforceSingleBucketRule(
  * (off by default — behind the Cloudflare tunnel the operator must opt in),
  * which left only the coarse global buckets biting on the default deploy.
  * These buckets key on the ATTEMPTED identity instead (pinId / SIWA sub /
- * passkey credential id / registration handle), so a stuffing or replay run
+ * provider identity), so a stuffing or replay run
  * against one credential is throttled at the per-client rate no matter which
  * IP it arrives from or whether IP headers are trusted.
  *
@@ -346,8 +339,8 @@ async function parseLimitedJson(c: Context, maxBytes: number): Promise<{ tooLarg
 // parseSub-validated namespaced form. authZ never trusts a client sub.
 //
 // authMode spans every identity provider — 'plex' | 'apple' | 'local'
-// (passkey/WebAuthn) | 'google' — because the allowlist is the single shared
-// authZ gate for every login path. Exported so the passkey/apple/google
+// (legacy local: rows) | 'google' | 'workos' — because the allowlist is the single shared
+// authZ gate for every login path. Exported so the apple/google/workos
 // routes reuse the exact same admit/redeem decision rather than
 // reimplementing it.
 export function authorizeOrRedeem(
@@ -393,7 +386,7 @@ auth.get('/plex/config', (c) => {
 // app (and SPA) render only the providers that are actually configured. plex
 // is config-gated on PLEX_CLIENT_ID (optional since plan 006 Phase 0);
 // apple/google are client-id gated (their ENABLE_* values are deployment
-// fail-fast assertions); passkeys are always mounted (WebAuthn has dev defaults).
+// fail-fast assertions); workos needs its client id, API key and redirect URI.
 // The app reads this on the unpaired screen to build the provider button list.
 auth.get('/methods', (c) =>
   c.json({
@@ -401,7 +394,6 @@ auth.get('/methods', (c) =>
     apple: isAppleConfigured(),
     google: isGoogleConfigured(),
     workos: isWorkosConfigured(),
-    passkey: true,
   }),
 )
 

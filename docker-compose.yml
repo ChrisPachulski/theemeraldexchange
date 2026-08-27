@@ -125,16 +125,6 @@ services:
       WORKOS_API_KEY: "${WORKOS_API_KEY:-}"
       WORKOS_REDIRECT_URI: "${WORKOS_REDIRECT_URI:-}"
       ENABLE_WORKOS_SIGN_IN: "${ENABLE_WORKOS_SIGN_IN:-}"
-      # Passkeys (WebAuthn). RP_ID defaults to 'localhost' in env.ts, which
-      # breaks every prod ceremony — so it MUST be passed through. Same
-      # passthrough gap that locked the owner out via ADMIN_SUBS.
-      WEBAUTHN_RP_ID: "${WEBAUTHN_RP_ID:-}"
-      WEBAUTHN_RP_NAME: "${WEBAUTHN_RP_NAME:-}"
-      WEBAUTHN_ORIGINS: "${WEBAUTHN_ORIGINS:-}"
-      # First-owner claims are private/loopback-only by default. Set to 1 only
-      # when the initial passkey claim must cross a trusted remote tunnel; the
-      # one-time setup token remains mandatory.
-      SETUP_ALLOW_REMOTE: "${SETUP_ALLOW_REMOTE:-0}"
       PLEX_SERVER_ID: "${PLEX_SERVER_ID:-}"
       # Bootstrap escape hatch for the brief first-deploy window before
       # PLEX_SERVER_ID is known. Without this passthrough, env.ts's
@@ -144,8 +134,8 @@ services:
       ALLOW_UNSCOPED_PLEX_LOGIN: "${ALLOW_UNSCOPED_PLEX_LOGIN:-0}"
       PLEX_SERVER_URL: "${PLEX_SERVER_URL:-}"
       ALLOWED_ORIGINS: "${ALLOWED_ORIGINS}"
-      # Trust CF-Connecting-IP/True-Client-IP for per-client auth buckets and
-      # first-owner claim source policy only in this compose topology:
+      # Trust CF-Connecting-IP/True-Client-IP for per-client auth buckets
+      # only in this compose topology:
       # cloudflared shares the backend netns and the host publish is
       # loopback-only, so clients cannot forge these headers by reaching the
       # backend directly.
@@ -540,8 +530,8 @@ services:
   # The default opt-in remote story: COMPOSE_PROFILES=remote. Tailscale
   # Serve exposes the backend at https://<TS_HOSTNAME>.<tailnet>.ts.net to
   # tailnet devices ONLY — never the public internet — and the real
-  # hostname + automatic HTTPS give passkeys a proper secure context on
-  # remote devices (the WebAuthn RP-ID constraint). Public exposure is a
+  # hostname + automatic HTTPS keep login cookies Secure on remote
+  # devices. Public exposure is a
   # separate, deliberate escalation: Tailscale Funnel (edit serve.json) or
   # the remote-cloudflare profile above.
   #

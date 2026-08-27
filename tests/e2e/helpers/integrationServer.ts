@@ -11,7 +11,7 @@
 //      pointed at the stub;
 //   3. a TEST-ONLY login route (/api/test/login) that mints a real
 //      session cookie via the same createSession/setSessionCookie path
-//      production logins use. There is no passkey/Plex ceremony a
+//      production logins use. There is no Plex ceremony a
 //      headless browser can complete, so this is the sanctioned seam —
 //      it lives HERE in the e2e helper layer (never in server/) and the
 //      process refuses to boot at all unless NODE_ENV === 'test'.

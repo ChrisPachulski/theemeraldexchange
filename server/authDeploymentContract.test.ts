@@ -66,10 +66,6 @@ describe('auth deployment configuration contract', () => {
     'WORKOS_API_KEY',
     'WORKOS_REDIRECT_URI',
     'ENABLE_WORKOS_SIGN_IN',
-    'WEBAUTHN_RP_ID',
-    'WEBAUTHN_RP_NAME',
-    'WEBAUTHN_ORIGINS',
-    'SETUP_ALLOW_REMOTE',
     'PLEX_CLIENT_ID',
     'PLEX_SERVER_ID',
     'ALLOW_UNSCOPED_PLEX_LOGIN',
@@ -153,14 +149,4 @@ describe('auth deployment configuration contract', () => {
     ).toEqual([])
   })
 
-  it.each(surfaces)('$name keeps remote first-owner claim disabled by default', ({ compose, example }) => {
-    expect(backendEnvironment(compose)).toMatch(
-      /^\s{6}SETUP_ALLOW_REMOTE:\s*["']\$\{SETUP_ALLOW_REMOTE:-0\}["']\s*$/m,
-    )
-    expect(example).toMatch(/^#?\s*SETUP_ALLOW_REMOTE=0\s*$/m)
-  })
-
-  it('documents remote first-owner claim in the root development example', () => {
-    expect(read('.env.example')).toMatch(/^SETUP_ALLOW_REMOTE=0\s*$/m)
-  })
 })
