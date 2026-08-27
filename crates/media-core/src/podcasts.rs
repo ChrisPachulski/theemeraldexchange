@@ -584,7 +584,9 @@ mod tests {
     /// file's own `from_utf8_lossy` convention in `parse_rss`'s CDATA path.
     #[tokio::test]
     async fn fetch_feed_tolerates_non_utf8_bytes_via_lossy_decode() {
-        let mut body = SAMPLE.replace("Test Podcast", "Caf\u{e9} Show").into_bytes();
+        let mut body = SAMPLE
+            .replace("Test Podcast", "Caf\u{e9} Show")
+            .into_bytes();
         // Replace the (already-invalid-UTF-8-safe) marker with a raw latin-1 0xE9 byte.
         if let Some(pos) = body.windows(2).position(|w| w == [0xC3, 0xA9]) {
             body.splice(pos..pos + 2, [0xE9]);

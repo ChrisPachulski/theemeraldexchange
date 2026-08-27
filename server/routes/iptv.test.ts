@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, it, expect, vi } from 'vitest'
 import { Hono, type MiddlewareHandler } from 'hono'
+import type { AcquireResult } from '../services/iptvConcurrency.js'
 import { promises as fsp } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -120,7 +121,7 @@ const concurrencyState = vi.hoisted(() => {
         resourceId: string
         ip?: string | null
         title?: string | null
-      }) => {
+      }): AcquireResult => {
         const now = Date.now()
         sessions.push({
           sessionId,
@@ -594,7 +595,7 @@ describe('concurrency-cap 429 session redaction (BACKLOG 01e16f6f)', () => {
 
   beforeEach(() => {
     originalTryAcquire = concurrencyState.tracker.tryAcquire
-    concurrencyState.tracker.tryAcquire = () => ({
+    concurrencyState.tracker.tryAcquire = (): AcquireResult => ({
       ok: false,
       reason: 'iptv_concurrency_limit',
       limit: 2,
