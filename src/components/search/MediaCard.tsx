@@ -1,3 +1,5 @@
+import type { RatingPiece } from '../../lib/api/ratings'
+import { RatingChips } from './RatingChips'
 import './MediaCard.css'
 
 type Props = {
@@ -6,8 +8,8 @@ type Props = {
   year?: number
   meta?: string
   overview?: string
-  /** Score line, like '8.6 IMDb · 92% RT'. */
-  rating?: string
+  /** Score chips (icon + value), in source order. */
+  rating?: RatingPiece[]
   inLibrary?: boolean
   onClick?: () => void
 }
@@ -57,13 +59,7 @@ export function MediaCard({ poster, title, year, meta, overview, rating, inLibra
             ))}
           </p>
         )}
-        {rating && (
-          <p className="media-card__rating" aria-label="ratings">
-            {rating.split(' · ').map((piece) => (
-              <span key={piece} className="media-card__rating-chip">{piece}</span>
-            ))}
-          </p>
-        )}
+        {rating && <RatingChips pieces={rating} />}
         {overview && <p className="media-card__overview">{overview}</p>}
       </div>
     </button>

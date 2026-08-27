@@ -143,25 +143,6 @@
   /* nothing extra */
 }
 
-.media-card__rating {
-  margin: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--s-1);
-}
-
-.media-card__rating-chip {
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
-  letter-spacing: var(--tr-hud);
-  text-transform: uppercase;
-  color: var(--text);
-  background: var(--emerald-dim);
-  padding: 2px var(--s-2);
-  border-radius: var(--r-pod);
-  white-space: nowrap;
-}
-
 .media-card__overview {
   font-size: var(--t-sm);
   color: var(--text-muted);

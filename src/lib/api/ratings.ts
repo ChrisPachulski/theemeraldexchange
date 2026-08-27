@@ -24,13 +24,28 @@ export async function fetchRatings(ids: string[]): Promise<RatingsResponse> {
   return (await res.json()) as RatingsResponse
 }
 
-/** '8.6 IMDb · 96% RT · 97% Popcorn · 74 MC' — omits missing sources; undefined when all are. */
-export function fmtRatings(r: TitleRatings | undefined): string | undefined {
-  if (!r) return undefined
-  const pieces: string[] = []
-  if (r.imdb !== null) pieces.push(`${r.imdb.toFixed(1)} IMDb`)
-  if (r.rt !== null) pieces.push(`${r.rt}% RT`)
-  if (r.rtAudience !== null) pieces.push(`${r.rtAudience}% Popcorn`)
-  if (r.metacritic !== null) pieces.push(`${r.metacritic} MC`)
-  return pieces.length ? pieces.join(' · ') : undefined
+/** One score with its source; rendered as an icon + value chip. */
+export type RatingPiece = {
+  kind: 'imdb' | 'rt' | 'popcorn' | 'mc' | 'tvdb' | 'tmdb'
+  value: string
+  /** Numeric score for icon state (fresh/rotten, Metacritic colour). */
+  score: number
+  /** Screen-reader / tooltip text. */
+  label: string
+}
+
+/** Icon-chip pieces from OMDb/RT scores; empty when every source is null. */
+export function ratingPieces(r: TitleRatings | undefined): RatingPiece[] {
+  if (!r) return []
+  const out: RatingPiece[] = []
+  if (r.imdb !== null) out.push({ kind: 'imdb', value: r.imdb.toFixed(1), score: r.imdb, label: `IMDb ${r.imdb.toFixed(1)}` })
+  if (r.rt !== null) out.push({ kind: 'rt', value: `${r.rt}%`, score: r.rt, label: `Rotten Tomatoes Tomatometer ${r.rt}%` })
+  if (r.rtAudience !== null) out.push({ kind: 'popcorn', value: `${r.rtAudience}%`, score: r.rtAudience, label: `Rotten Tomatoes Popcornmeter ${r.rtAudience}%` })
+  if (r.metacritic !== null) out.push({ kind: 'mc', value: String(r.metacritic), score: r.metacritic, label: `Metacritic ${r.metacritic}` })
+  return out
+}
+
+/** Plain-text form for the detail modal. */
+export function ratingText(pieces: RatingPiece[]): string | undefined {
+  return pieces.length ? pieces.map((p) => p.label).join(' · ') : undefined
 }

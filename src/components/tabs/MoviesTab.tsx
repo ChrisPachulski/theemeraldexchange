@@ -15,7 +15,7 @@ import { EmeraldMark } from '../atmosphere/EmeraldMark'
 import { useAuth } from '../../lib/auth'
 import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useRatings } from '../../lib/hooks/useRatings'
-import { fmtRatings, type RatingsMap } from '../../lib/api/ratings'
+import { ratingPieces, ratingText, type RatingPiece, type RatingsMap } from '../../lib/api/ratings'
 import { useMovieSearch } from '../../lib/hooks/useMovieSearch'
 import { useRadarrLibrary, useRadarrProfiles, useRadarrRootFolders } from '../../lib/hooks/useRadarrLibrary'
 import { useSuggestionStrip } from '../../lib/hooks/useSuggestionStrip'
@@ -90,17 +90,17 @@ function buildMovieMeta(item: MovieSearchResult | Movie): DetailMeta[] {
   return rows
 }
 
-// OMDb scores (IMDb / RT / Metacritic) when we have them; else whatever
-// Radarr carries (IMDb + TMDB, RT only occasionally).
-function fmtMovieRating(item: MovieSearchResult, ratings: RatingsMap): string | undefined {
-  const omdb = item.imdbId ? fmtRatings(ratings[item.imdbId]) : undefined
-  if (omdb) return omdb
-  const pieces: string[] = []
+// OMDb/RT scores when we have them; else whatever Radarr carries (IMDb +
+// TMDB, RT only occasionally).
+function movieRatingPieces(item: MovieSearchResult, ratings: RatingsMap): RatingPiece[] {
+  const pieces = item.imdbId ? ratingPieces(ratings[item.imdbId]) : []
+  if (pieces.length) return pieces
   const r = item.ratings
-  if (r?.imdb?.value) pieces.push(`${r.imdb.value.toFixed(1)} IMDb`)
-  if (r?.tmdb?.value) pieces.push(`${r.tmdb.value.toFixed(1)} TMDB`)
-  if (r?.rottenTomatoes?.value) pieces.push(`${r.rottenTomatoes.value}% RT`)
-  return pieces.length ? pieces.join(' · ') : undefined
+  const out: RatingPiece[] = []
+  if (r?.imdb?.value) out.push({ kind: 'imdb', value: r.imdb.value.toFixed(1), score: r.imdb.value, label: `IMDb ${r.imdb.value.toFixed(1)}` })
+  if (r?.tmdb?.value) out.push({ kind: 'tmdb', value: r.tmdb.value.toFixed(1), score: r.tmdb.value, label: `TMDB ${r.tmdb.value.toFixed(1)}` })
+  if (r?.rottenTomatoes?.value) out.push({ kind: 'rt', value: `${r.rottenTomatoes.value}%`, score: r.rottenTomatoes.value, label: `Rotten Tomatoes Tomatometer ${r.rottenTomatoes.value}%` })
+  return out
 }
 
 type MovieSort = 'title-asc' | 'title-desc' | 'year-desc' | 'year-asc' | 'runtime-desc' | 'runtime-asc' | 'studio'
@@ -466,7 +466,7 @@ export function MoviesTab() {
           viewing.certification,
         ].filter((x): x is string => Boolean(x)) : []}
         genres={viewing?.genres}
-        rating={viewing ? fmtMovieRating(viewing, viewingRatings) : undefined}
+        rating={viewing ? ratingText(movieRatingPieces(viewing, viewingRatings)) : undefined}
         overview={viewing?.overview}
         meta={viewing ? buildMovieMeta(viewing) : []}
         cast={cast.data}
@@ -594,7 +594,7 @@ function DiscoverResults({ query, loading, error, results, libraryByTmdb, onCard
             year={item.year}
             meta={meta || undefined}
             overview={item.overview}
-            rating={fmtMovieRating(item, ratings)}
+            rating={movieRatingPieces(item, ratings)}
             inLibrary={inLib}
             onClick={() => onCardClick(item)}
           />
@@ -652,7 +652,7 @@ function LibraryResults({ query, letter, loading, error, items, onCardClick }: L
             year={m.year}
             meta={meta || undefined}
             overview={m.overview}
-            rating={fmtMovieRating(m, ratings)}
+            rating={movieRatingPieces(m, ratings)}
             onClick={() => onCardClick(m)}
           />
         )

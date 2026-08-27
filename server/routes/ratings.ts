@@ -238,7 +238,9 @@ function enqueue(ids: string[], now: number): Promise<void>[] {
   return ids.map((id) => inflight.get(id)!)
 }
 
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+// unref: the timer must not keep the process (or a vitest worker) alive after
+// the fill jobs have already won the race.
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms).unref())
 
 // GET /api/ratings?ids=tt0903747,tt1520211
 // → { ratings: { "tt0903747": { imdb: 9.5, rt: 96, rtAudience: 97, metacritic: 87 }, ... },

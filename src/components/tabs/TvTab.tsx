@@ -16,7 +16,7 @@ import { useAuth } from '../../lib/auth'
 import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useSeriesSearch } from '../../lib/hooks/useSeriesSearch'
 import { useRatings } from '../../lib/hooks/useRatings'
-import { fmtRatings, type RatingsMap } from '../../lib/api/ratings'
+import { ratingPieces, ratingText, type RatingPiece, type RatingsMap } from '../../lib/api/ratings'
 import { useSonarrLibrary, useSonarrProfiles, useSonarrRootFolders } from '../../lib/hooks/useSonarrLibrary'
 import { useSonarrEpisodes } from '../../lib/hooks/useSonarrEpisodes'
 import { useSuggestionStrip } from '../../lib/hooks/useSuggestionStrip'
@@ -85,14 +85,15 @@ function buildSeriesMeta(item: SeriesSearchResult | Series): DetailMeta[] {
   return rows
 }
 
-// OMDb scores (IMDb / RT / Metacritic) when we have them; else Sonarr's lone
-// TVDB score so the line is never blank for a rated show.
-function fmtSeriesRating(item: SeriesSearchResult, ratings: RatingsMap): string | undefined {
-  const omdb = item.imdbId ? fmtRatings(ratings[item.imdbId]) : undefined
-  if (omdb) return omdb
+// OMDb/RT scores when we have them; else Sonarr's lone TVDB score so the
+// chip row is never blank for a rated show.
+function seriesRatingPieces(item: SeriesSearchResult, ratings: RatingsMap): RatingPiece[] {
+  const pieces = item.imdbId ? ratingPieces(ratings[item.imdbId]) : []
+  if (pieces.length) return pieces
   const r = item.ratings
-  if (!r?.value) return undefined
-  return r.votes ? `${r.value.toFixed(1)} TVDB (${r.votes.toLocaleString()} votes)` : `${r.value.toFixed(1)} TVDB`
+  if (!r?.value) return []
+  const votes = r.votes ? ` (${r.votes.toLocaleString()} votes)` : ''
+  return [{ kind: 'tvdb', value: r.value.toFixed(1), score: r.value, label: `TVDB ${r.value.toFixed(1)}${votes}` }]
 }
 
 type TvSort = 'title-asc' | 'title-desc' | 'year-desc' | 'year-asc' | 'network'
@@ -478,7 +479,7 @@ export function TvTab() {
           viewing.certification,
         ].filter((x): x is string => Boolean(x)) : []}
         genres={viewing?.genres}
-        rating={viewing ? fmtSeriesRating(viewing, viewingRatings) : undefined}
+        rating={viewing ? ratingText(seriesRatingPieces(viewing, viewingRatings)) : undefined}
         overview={viewing?.overview}
         meta={viewing ? buildSeriesMeta(viewing) : []}
         cast={cast.data}
@@ -636,7 +637,7 @@ function DiscoverResults({ query, loading, error, results, libraryByTvdb, onCard
             year={item.year}
             meta={meta || undefined}
             overview={item.overview}
-            rating={fmtSeriesRating(item, ratings)}
+            rating={seriesRatingPieces(item, ratings)}
             inLibrary={inLib}
             onClick={() => onCardClick(item)}
           />
@@ -694,7 +695,7 @@ function LibraryResults({ query, letter, loading, error, items, onCardClick }: L
             year={s.year}
             meta={meta || undefined}
             overview={s.overview}
-            rating={fmtSeriesRating(s, ratings)}
+            rating={seriesRatingPieces(s, ratings)}
             onClick={() => onCardClick(s)}
           />
         )

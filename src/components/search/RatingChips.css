@@ -1,0 +1,32 @@
+.rating-chips {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1);
+}
+
+.rating-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 var(--s-2) 0 5px;
+  border-radius: var(--r-pod);
+  background: var(--surface-2);
+  border: 1px solid var(--frost-stronger);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: var(--tr-hud);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.rating-chip svg {
+  display: block;
+  flex-shrink: 0;
+}
+
+.rating-chip__src {
+  font-size: 0.5625rem;
+  color: var(--text-muted);
+}
