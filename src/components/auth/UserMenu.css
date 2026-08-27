@@ -67,6 +67,10 @@
   top: calc(100% + var(--s-2));
   right: 0;
   min-width: 260px;
+  /* Admin dropdown outgrows short/mobile viewports; scroll inside it. */
+  max-height: calc(100dvh - 100% - var(--s-4));
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: var(--s-2);
   display: grid;
   gap: 0;
