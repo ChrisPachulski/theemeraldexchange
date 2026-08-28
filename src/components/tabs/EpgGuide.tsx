@@ -9,6 +9,7 @@
 // Rows are vertically windowed (only the on-screen slice is mounted) so the
 // grid stays smooth across the full has-EPG set (~11.5k channels).
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { ReplayButton } from '../nav/ReplayButton'
 import { type EpgGridDto, type EpgProgrammeDto } from '../../lib/api/iptv'
 import { useIptvEpgGrid } from '../../lib/hooks/useIptvEpg'
 import { blockWidth, visibleRowRange } from '../../lib/epgLayout'
@@ -303,9 +304,12 @@ function GuideDetailPane({
   onJumpToLive: () => void
 }) {
   const jump = (
-    <button type="button" className="epg-detail__jump" onClick={onJumpToLive}>
-      Jump to live
-    </button>
+    <>
+      <ReplayButton inline />
+      <button type="button" className="epg-detail__jump" onClick={onJumpToLive}>
+        Jump to live
+      </button>
+    </>
   )
   if (!detail || !detail.prog) {
     return (

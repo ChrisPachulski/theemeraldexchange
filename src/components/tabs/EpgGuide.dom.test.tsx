@@ -14,6 +14,9 @@ import type { EpgGridDto } from '../../lib/api/iptv'
 
 const { gridMock } = vi.hoisted(() => ({ gridMock: vi.fn() }))
 
+// The detail pane hosts the inline Replay pill, which needs the nav-transition
+// context; stub it so the guide renders without the app shell.
+vi.mock('../../lib/navTransition', () => ({ useNavTransition: () => ({ replay: () => {} }) }))
 vi.mock('../../lib/hooks/useIptvEpg', () => ({
   useIptvEpgGrid: () => gridMock(),
 }))

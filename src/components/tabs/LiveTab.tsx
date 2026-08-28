@@ -86,7 +86,7 @@ export default function LiveTab() {
   const [view, setView] = useState<'cards' | 'guide'>('guide')
   const [categoryId, setCategoryId] = useState<number | undefined>(undefined)
   const [offset, setOffset] = useState(0)
-  const [playing, setPlaying] = useState<{ grant: StreamGrant; title: string; itemId: string } | null>(null)
+  const [playing, setPlaying] = useState<{ grant: StreamGrant; title: string; itemId: string; live?: boolean } | null>(null)
   const [guideFor, setGuideFor] = useState<GuideChannel | null>(null)
   const [concurrencyError, setConcurrencyError] = useState<ConcurrencyLimitPayload | null>(null)
   const [playError, setPlayError] = useState<PlayFailure | null>(null)
@@ -154,7 +154,7 @@ export default function LiveTab() {
     setPlayError(null)
     const attempt = async () => {
       const grant = await iptvApi.grantLive(stream.stream_id.toString())
-      setPlaying({ grant, title: stream.name, itemId: stream.stream_id.toString() })
+      setPlaying({ grant, title: stream.name, itemId: stream.stream_id.toString(), live: true })
     }
     try {
       await attempt()
@@ -405,8 +405,21 @@ export default function LiveTab() {
 
       {playing && (
         <PlayerModal
+          key={playing.grant.url}
           playing={playing}
           onClose={() => setPlaying(null)}
+          onEscalate={
+            // Live raw-TS channel the browser demuxer can't hold: swap to the
+            // server remux (same grant the Apple app uses) once.
+            playing.live && playing.grant.delivery === 'mpegts'
+              ? () => {
+                  void iptvApi.grantLive(playing.itemId, { avplayer: true }).then(
+                    (grant) => setPlaying((cur) => (cur && cur.itemId === playing.itemId ? { ...cur, grant } : cur)),
+                    (err) => setPlayError(playFailureFromError(err)),
+                  )
+                }
+              : undefined
+          }
           onPositionUpdate={(positionSecs, durationSecs) => reportPosition(positionSecs, durationSecs, false)}
         />
       )}
@@ -439,10 +452,12 @@ function PlayerModal({
   playing,
   onClose,
   onPositionUpdate,
+  onEscalate,
 }: {
   playing: { grant: StreamGrant; title: string; itemId: string }
   onClose: () => void
   onPositionUpdate: (positionSecs: number, durationSecs: number | null) => void
+  onEscalate?: () => void
 }) {
   const modalRef = useModalA11y<HTMLDivElement>(onClose)
   return (
@@ -460,7 +475,7 @@ function PlayerModal({
           ×
         </button>
       </div>
-      <IptvPlayer grant={playing.grant} autoPlay onPositionUpdate={onPositionUpdate} />
+      <IptvPlayer grant={playing.grant} autoPlay onPositionUpdate={onPositionUpdate} onDeliveryStruggling={onEscalate} />
     </div>
   )
 }

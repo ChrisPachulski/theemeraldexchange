@@ -101,7 +101,7 @@ function Shell() {
           <ActiveTab />
         </Suspense>
       </main>
-      <ReplayButton />
+      {effectiveRoute !== 'live' && <ReplayButton />}
     </>
   )
 }

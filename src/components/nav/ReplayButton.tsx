@@ -5,12 +5,12 @@ import './ReplayButton.css'
 // The clip-played gate is one-shot per browser (localStorage), so most
 // of the time this is the only way to see the flourish again.
 
-export function ReplayButton() {
+export function ReplayButton({ inline = false }: { inline?: boolean }) {
   const { replay } = useNavTransition()
   return (
     <button
       type="button"
-      className="replay-btn"
+      className={inline ? 'replay-btn replay-btn--inline' : 'replay-btn'}
       aria-label="Replay intro clip"
       onClick={replay}
     >

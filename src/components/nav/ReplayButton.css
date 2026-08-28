@@ -50,6 +50,14 @@
   transform: translateY(-1px);
 }
 
+/* Inline variant: sits in a toolbar row (the Live guide's detail header,
+   left of "Jump to live") instead of floating over the page. */
+.replay-btn--inline {
+  position: static;
+  height: 28px;
+  flex-shrink: 0;
+}
+
 @media (max-width: 480px) {
   .replay-btn__label {
     display: none;

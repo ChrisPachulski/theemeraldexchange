@@ -1028,10 +1028,21 @@ export default function IptvPlayer({
       let stallTimer: number | null = null
       let stableTimer: number | null = null
       let stallMark = 0
+      let escalated = false
       const RECOVERY_CAP = 8
 
       const recover = () => {
         if (cancelled || recovering) return
+        // A raw TS the in-browser demuxer cannot keep in sync (mpegts.js logs
+        // "sync_byte ... not 0x47" and freezes ~7s in, no ERROR event) never
+        // heals by reloading. After one failed reload hand the channel to the
+        // server's ffmpeg remux (HLS), which re-syncs the packets, instead of
+        // burning the reload budget on the same frozen picture.
+        if (onDeliveryStruggling && recoveries >= 1 && !escalated) {
+          escalated = true
+          onDeliveryStruggling()
+          return
+        }
         if (recoveries >= RECOVERY_CAP) {
           setError('Live stream interrupted. Close and re-open the channel to retry.')
           return
