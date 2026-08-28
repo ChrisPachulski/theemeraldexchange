@@ -181,16 +181,31 @@ describe('iptv remux session', () => {
   })
 
   // ── dead-feed detection (S1 item 7) ───────────────────────────────────────
-  it('tags a clean fast EOF (code 0 under 60s) as a dead feed', () => {
-    const proc = fakeProcess()
-    spawnMock.mockReturnValueOnce(proc)
+  it('tags a feed dead on the SECOND clean fast EOF (code 0 under 60s), not the first', () => {
+    const first = fakeProcess()
+    spawnMock.mockReturnValueOnce(first)
     startRemuxSession({ streamId: '70', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })
     expect(channelIsDeadFeed('70')).toBe(false)
 
-    // ffmpeg copies the ~30s dead-channel stub then EOFs cleanly, almost at once.
-    proc.emit('exit', 0, null)
+    // One fast clean EOF is ambiguous: a dead-channel stub OR a provider
+    // connection-cap kick. Strike one only — the feed is re-dialed.
+    first.emit('exit', 0, null)
+    expect(channelIsDeadFeed('70')).toBe(false)
 
+    // The re-dial EOFs the same way: a placeholder for real. Now it is dead.
+    const second = fakeProcess()
+    spawnMock.mockReturnValueOnce(second)
+    startRemuxSession({ streamId: '70', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })
+    second.emit('exit', 0, null)
     expect(channelIsDeadFeed('70')).toBe(true)
+  })
+
+  it('a single provider kick (one fast clean EOF) never demotes the feed', () => {
+    const proc = fakeProcess()
+    spawnMock.mockReturnValueOnce(proc)
+    startRemuxSession({ streamId: '74', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })
+    proc.emit('exit', 0, null)
+    expect(channelIsDeadFeed('74')).toBe(false)
   })
 
   it('does NOT tag a non-zero exit (corrupt feed / 255) as a dead feed', () => {
@@ -241,17 +256,22 @@ describe('iptv remux session', () => {
     try {
       const siblings = ['201', '202', '203', '204']
       let t = 0
-      for (const sid of siblings) {
-        nowSpy.mockReturnValue(t)
-        const proc = fakeProcess()
-        spawnMock.mockReturnValueOnce(proc)
-        startRemuxSession({ streamId: sid, sub: 'plex:walk', upstreamUrl: 'https://x/y.ts' })
-        // ~30s dead-channel slate, then a clean EOF → tagged dead.
-        t += 30_000
-        nowSpy.mockReturnValue(t)
-        proc.emit('exit', 0, null)
+      // Two passes: the first pass is strike one per sibling (re-dial), the
+      // second pass tags each dead. The walk is ~240s end to end.
+      for (let pass = 0; pass < 2; pass++) {
+        for (const sid of siblings) {
+          nowSpy.mockReturnValue(t)
+          const proc = fakeProcess()
+          spawnMock.mockReturnValueOnce(proc)
+          startRemuxSession({ streamId: sid, sub: 'plex:walk', upstreamUrl: 'https://x/y.ts' })
+          // ~30s dead-channel slate, then a clean EOF.
+          t += 30_000
+          nowSpy.mockReturnValue(t)
+          proc.emit('exit', 0, null)
+        }
       }
-      // The instant the 4th sibling dies (t=120s), ALL four are still remembered.
+      // The instant the 4th sibling dies for the second time (t=240s), ALL four
+      // are still remembered.
       for (const sid of siblings) expect(channelIsDeadFeed(sid)).toBe(true)
     } finally {
       nowSpy.mockRestore()

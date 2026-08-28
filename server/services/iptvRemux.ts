@@ -157,12 +157,42 @@ export function channelIsDeadFeed(streamId: string): boolean {
   return true
 }
 
-/** Remember `streamId` as a dead-channel placeholder so subsequent dials skip
- *  it and fail over to a sibling. Called by the remux path on a clean fast
- *  ffmpeg EOF, and by the raw .ts byte proxy on a clean fast upstream EOF (a
- *  ~30s slate loop) so Chrome/Firefox/Edge viewers get the same failover. */
+// A fast clean EOF is ALSO what a provider connection-cap kick looks like: the
+// provider closes the surplus socket with a normal FIN a few seconds in (seen
+// on prod 2026-08-27 — overlapping reconnects on a 2-connection plan got NHL
+// Network's three best feeds silently tagged dead and the viewer failed over to
+// the 4th-choice feed for 10 min). A placeholder does it EVERY time; a kick is
+// transient. So one strike is only remembered, and a feed is declared dead on
+// the SECOND fast clean EOF inside the strike window. The cost for a genuinely
+// dead channel is one extra slate loop per sibling before channel_offline
+// fires; the win is that a transient kick never demotes the primary feed.
+const DEAD_FEED_STRIKE_WINDOW_MS = DEAD_FEED_MEMORY_MS
+const DEAD_FEED_STRIKES_TO_TAG = 2
+const deadStrikes = new Map<string, { count: number; expiresAt: number }>()
+
+/** Record a fast clean EOF for `streamId`. The first strike is remembered; the
+ *  second inside the window tags the feed as a dead-channel placeholder so
+ *  subsequent dials skip it and fail over to a sibling. Called by the remux
+ *  path on a clean fast ffmpeg EOF, and by the raw .ts byte proxy on a clean
+ *  fast upstream EOF (a ~30s slate loop) so both delivery paths agree. */
 export function markChannelDeadFeed(streamId: string): void {
-  deadFeed.set(streamId, Date.now() + DEAD_FEED_MEMORY_MS)
+  const now = Date.now()
+  const prior = deadStrikes.get(streamId)
+  const count = prior && prior.expiresAt > now ? prior.count + 1 : 1
+  if (count < DEAD_FEED_STRIKES_TO_TAG) {
+    deadStrikes.set(streamId, { count, expiresAt: now + DEAD_FEED_STRIKE_WINDOW_MS })
+    console.warn(
+      `[iptv-remux] stream ${streamId} fast clean EOF (strike ${count}/${DEAD_FEED_STRIKES_TO_TAG}) — ` +
+        `re-dialing before declaring it dead`,
+    )
+    return
+  }
+  deadStrikes.delete(streamId)
+  deadFeed.set(streamId, now + DEAD_FEED_MEMORY_MS)
+  console.warn(
+    `[iptv-remux] stream ${streamId} fast clean EOF ${count}x — tagged as a dead feed for ` +
+      `${DEAD_FEED_MEMORY_MS / 1000}s; failing over to a sibling`,
+  )
 }
 
 /** How fast a clean EOF must arrive to count as a dead-placeholder loop rather
@@ -173,6 +203,7 @@ export const DEAD_FEED_CLEAN_EOF_MS = DEAD_FEED_MAX_LIFETIME_MS
 /** Test seam: drop all remembered dead feeds so cases don't cross-contaminate. */
 export function _clearDeadFeedMemoryForTests(): void {
   deadFeed.clear()
+  deadStrikes.clear()
 }
 
 // Only http(s) upstreams are valid IPTV inputs. Reject anything else
