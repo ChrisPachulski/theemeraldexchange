@@ -891,6 +891,101 @@ auth.get('/workos/callback', (c) => withAuthOutcome(c, 'workos', 'identity_verif
   return spaRedirect(c)
 }))
 
+// ── Native (Apple app) WorkOS sign-in ───────────────────────────────────────
+// The app opens the AuthKit URL in an in-app ASWebAuthenticationSession with
+// PKCE and gets the code back on its custom scheme; no cookie is involved, so
+// the state nonce rides in the response instead of a cookie and the exchange
+// mints a device token exactly like /apple and /google do.
+const NATIVE_STATE_TTL_SECS = 600
+const CODE_CHALLENGE_SHAPE = /^[A-Za-z0-9_-]{43}$/
+const CODE_VERIFIER_SHAPE = /^[A-Za-z0-9_-]{43,128}$/
+const nativeStates = new Map<string, number>()
+
+auth.post('/workos/native/start', async (c) => {
+  if (!isWorkosConfigured()) return c.json({ error: 'workos_not_configured' }, 503)
+  const parsed = await parseLimitedJson(c, AUTH_CHECK_MAX_BODY_BYTES)
+  if (parsed.tooLarge) return c.json({ error: 'body_too_large' }, 413)
+  const body = parsed.body as { code_challenge?: unknown; provider?: unknown } | null
+  const challenge = typeof body?.code_challenge === 'string' ? body.code_challenge : ''
+  if (!CODE_CHALLENGE_SHAPE.test(challenge)) return c.json({ error: 'invalid_code_challenge' }, 400)
+  const provider =
+    typeof body?.provider === 'string' && body.provider in WORKOS_PROVIDERS
+      ? (body.provider as WorkosProvider)
+      : undefined
+  const now = Math.floor(Date.now() / 1000)
+  for (const [k, exp] of nativeStates) if (exp < now) nativeStates.delete(k)
+  const state = randomBytes(16).toString('hex')
+  nativeStates.set(state, now + NATIVE_STATE_TTL_SECS)
+  return c.json({
+    url: workosAuthorizationUrl(state, provider, {
+      redirectUri: env.workosNativeRedirectUri,
+      codeChallenge: challenge,
+    }),
+    state,
+    redirect_uri: env.workosNativeRedirectUri,
+  })
+})
+
+auth.post('/workos/native', (c) => withAuthOutcome(c, 'workos', 'identity_verify', async (authOutcome) => {
+  const preLimit = enforceAuthRateLimit(c, 'workos', undefined, authOutcome)
+  if (preLimit) return preLimit
+  if (!isWorkosConfigured()) {
+    authOutcome.record('transient', 'not_configured')
+    return c.json({ error: 'workos_not_configured' }, 503)
+  }
+  const parsed = await parseLimitedJson(c, AUTH_APPLE_MAX_BODY_BYTES)
+  if (parsed.tooLarge) {
+    authOutcome.record('invalid', 'invalid_request')
+    return c.json({ error: 'body_too_large' }, 413)
+  }
+  const body = parsed.body as
+    | { code?: unknown; code_verifier?: unknown; state?: unknown; inviteCode?: unknown }
+    | null
+  const code = typeof body?.code === 'string' ? body.code : ''
+  const verifier = typeof body?.code_verifier === 'string' ? body.code_verifier : ''
+  const state = typeof body?.state === 'string' ? body.state : ''
+  const now = Math.floor(Date.now() / 1000)
+  const stateExp = nativeStates.get(state)
+  nativeStates.delete(state)
+  if (!code || !CODE_VERIFIER_SHAPE.test(verifier) || stateExp === undefined || stateExp < now) {
+    authOutcome.record('invalid', 'invalid_request')
+    return c.json({ error: 'invalid_request' }, 400)
+  }
+  const inviteCode = typeof body?.inviteCode === 'string' ? body.inviteCode : undefined
+
+  const verified = await exchangeWorkosCode(code, verifier)
+  if (!verified.ok) {
+    const transient = verified.error === 'provider_unavailable'
+    authOutcome.record(
+      transient ? 'transient' : 'invalid',
+      transient ? 'provider_unavailable' : 'identity_token_invalid',
+    )
+    return c.json({ error: transient ? 'workos_unavailable' : 'workos_code_invalid' }, transient ? 503 : 401)
+  }
+  const namespacedSub = verified.sub.raw
+  const displayName =
+    verified.name ?? (verified.email ? verified.email.split('@')[0] : namespacedSub)
+  const authz = authorizeOrRedeem(namespacedSub, inviteCode, displayName, 'workos')
+  if (!authz.allowed) {
+    authOutcome.record('denied', 'no_invite')
+    return c.json({ status: 'denied', reason: 'no_invite' }, 403)
+  }
+  const role = effectiveRoleFor(displayName, namespacedSub)
+  const deviceResponse = await maybeMintDeviceToken(c, body, {
+    sub: namespacedSub,
+    role,
+    auth_mode: 'workos',
+    username: displayName,
+  })
+  if (!deviceResponse) {
+    authOutcome.record('invalid', 'invalid_request')
+    return c.json({ error: 'missing_device_fields' }, 400)
+  }
+  authOutcome.record(deviceResponse.ok ? 'authorized' : 'invalid', deviceResponse.ok ? 'device_pair' : 'invalid_request')
+  _primeSessionGateCache(namespacedSub, 'member')
+  return deviceResponse
+}))
+
 auth.post('/logout', async (c) => {
   const session = await readSession(c)
   if (session?.plexAuthToken) {

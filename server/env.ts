@@ -369,6 +369,9 @@ if (isProd && enableGoogleSignIn && googleClientIds.length === 0) {
 const workosClientId = opt('WORKOS_CLIENT_ID') ?? null
 const workosApiKey = opt('WORKOS_API_KEY') ?? null
 const workosRedirectUri = opt('WORKOS_REDIRECT_URI') ?? null
+// Custom-scheme callback the Apple app's in-app WorkOS sheet returns to. Must
+// also be registered as a redirect URI in the WorkOS dashboard.
+const workosNativeRedirectUri = opt('WORKOS_NATIVE_REDIRECT_URI') ?? 'emerald://auth/workos'
 const enableWorkosSignIn = process.env.ENABLE_WORKOS_SIGN_IN === '1'
 if (isProd && enableWorkosSignIn && !(workosClientId && workosApiKey && workosRedirectUri)) {
   throw new Error(
@@ -472,6 +475,7 @@ export const env = {
   workosApiKey,
   /** Exact callback URI registered with WorkOS. null when unconfigured. */
   workosRedirectUri,
+  workosNativeRedirectUri,
   plexServerId,
   port: positiveInt('PORT', 3001),
   isProd,

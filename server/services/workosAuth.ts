@@ -41,19 +41,31 @@ export type WorkosProvider = keyof typeof WORKOS_PROVIDERS
 
 /** AuthKit login URL. `state` is the CSRF nonce the callback compares against
  *  its cookie; `provider` deep-links to Google/Apple, else the hosted UI. */
-export function workosAuthorizationUrl(state: string, provider?: WorkosProvider): string {
+export function workosAuthorizationUrl(
+  state: string,
+  provider?: WorkosProvider,
+  native?: { redirectUri: string; codeChallenge: string },
+): string {
   const url = new URL(WORKOS_AUTHORIZE_URL)
   url.searchParams.set('client_id', env.workosClientId ?? '')
-  url.searchParams.set('redirect_uri', env.workosRedirectUri ?? '')
+  url.searchParams.set('redirect_uri', native?.redirectUri ?? env.workosRedirectUri ?? '')
   url.searchParams.set('response_type', 'code')
   url.searchParams.set('provider', provider ? WORKOS_PROVIDERS[provider] : 'authkit')
   url.searchParams.set('state', state)
+  if (native) {
+    // PKCE (public client): the app proves possession of the verifier at
+    // exchange time, so a code intercepted on the custom-scheme redirect is
+    // useless on its own.
+    url.searchParams.set('code_challenge', native.codeChallenge)
+    url.searchParams.set('code_challenge_method', 'S256')
+  }
   return url.toString()
 }
 
 /** Trade the callback's authorization code for the WorkOS user. */
 export async function exchangeWorkosCode(
   code: string,
+  codeVerifier?: string,
 ): Promise<WorkosVerified | { ok: false; error: WorkosVerifyError }> {
   let res: Response
   try {
@@ -65,6 +77,7 @@ export async function exchangeWorkosCode(
         client_secret: env.workosApiKey,
         grant_type: 'authorization_code',
         code,
+        ...(codeVerifier ? { code_verifier: codeVerifier } : {}),
       }),
       signal: AbortSignal.timeout(EXCHANGE_TIMEOUT_MS),
     })
