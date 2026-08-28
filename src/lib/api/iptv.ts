@@ -330,8 +330,19 @@ export const iptvApi = Object.assign({
     if (opts.limit != null) params.limit = opts.limit
     return get<EpgGridDto[]>('/epg/grid', params)
   },
+  // Every browser tunes live through the server remux (HLS), the same session
+  // AVPlayer uses — not the raw .ts byte proxy + mpegts.js. Measured on prod
+  // (2026-08-27): the provider bursts ~10 s of backlog on connect, so the remux
+  // has a 4-segment window ~2.5 s after dial and hls.js starts at once with that
+  // backlog as its cushion; the provider then pauses delivery for 7-8 s at a
+  // time, which the cushion absorbs. On the raw path every mpegts.js stall
+  // reload re-dialed the provider (a 2-connection plan) — the overlapping
+  // reconnects seen in prod logs tripped its abuse block and corrupted the feed
+  // for everyone. With one shared ffmpeg per channel a client reconnect only
+  // re-reads segments from disk; the upstream connection is never re-dialed.
+  // `avplayer: false` opts back into the raw .ts path (VLC-style clients).
   grantLive: (streamId: string, opts?: { avplayer?: boolean }) => {
-    const avplayer = opts?.avplayer ?? preferAvplayer()
+    const avplayer = opts?.avplayer ?? true
     const suffix = avplayer ? '?client=avplayer' : ''
     return grant(`/stream/live/${streamId}/grant${suffix}`)
   },
