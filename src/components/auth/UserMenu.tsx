@@ -4,6 +4,7 @@ import { DiscordNotifications } from './DiscordNotifications'
 import { ApiKeySettings } from './ApiKeySettings'
 import { DevicesPanel } from './DevicesPanel'
 import { InvitesPanel } from './InvitesPanel'
+import { LinkDeviceModal } from './LinkDeviceModal'
 import './UserMenu.css'
 
 // Trigger pill in the top-right cluster + dropdown panel for the
@@ -28,6 +29,7 @@ const APP_LINKS = [
 export function UserMenu() {
   const { user, role, effectiveRole, isAdmin, setViewAs, signOut, signOutError } = useAuth()
   const [open, setOpen] = useState(false)
+  const [linking, setLinking] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -153,6 +155,16 @@ export function UserMenu() {
             type="button"
             className="user-menu__signout"
             onClick={() => {
+              setOpen(false)
+              setLinking(true)
+            }}
+          >
+            Link a TV or phone
+          </button>
+          <button
+            type="button"
+            className="user-menu__signout"
+            onClick={() => {
               void signOut()
                 .then(() => setOpen(false))
                 .catch(() => {})
@@ -165,6 +177,7 @@ export function UserMenu() {
           )}
         </div>
       )}
+      {linking && <LinkDeviceModal initialCode="" onClose={() => setLinking(false)} />}
     </div>
   )
 }

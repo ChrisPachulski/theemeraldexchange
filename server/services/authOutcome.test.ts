@@ -17,7 +17,7 @@ afterEach(() => {
 
 describe('auth outcome reporter', () => {
   it('uses closed low-cardinality dimensions', () => {
-    expect(AUTH_OUTCOME_PROVIDERS).toEqual(['plex', 'apple', 'google', 'workos'])
+    expect(AUTH_OUTCOME_PROVIDERS).toEqual(['plex', 'apple', 'google', 'workos', 'link'])
     expect(AUTH_OUTCOME_PHASES).toEqual([
       'check',
       'identity_verify',
@@ -36,6 +36,7 @@ describe('auth outcome reporter', () => {
     expect(AUTH_OUTCOME_REASONS).toEqual([
       'cookie',
       'device_pair',
+      'device_link',
       'local_rate_limit',
       'provider_rate_limit',
       'not_configured',

@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect } from 'react'
+import { Suspense, lazy, useEffect, useState } from 'react'
 import { TopNav } from './components/nav/TopNav'
 import { HomeNav } from './components/nav/HomeNav'
 import { SetupChecklist } from './components/setup/SetupChecklist'
@@ -8,6 +8,8 @@ import { LoadingPulse } from './components/feedback/LoadingPulse'
 import { useRoute, type Route } from './lib/router'
 import { NavTransitionProvider } from './lib/navTransition'
 import { ReplayButton } from './components/nav/ReplayButton'
+import { LinkDeviceModal } from './components/auth/LinkDeviceModal'
+import { clearPendingLinkCode, readPendingLinkCode } from './lib/linkFragment'
 import { AuthProvider, useAuth } from './lib/auth'
 import { useLimits } from './lib/hooks/useLimits'
 // View Transitions cross-fade + persistent-shell view-transition-names.
@@ -59,6 +61,9 @@ const TABS: Record<Route, React.ComponentType> = {
 
 function Shell() {
   const [route, navigate] = useRoute()
+  // A `#/link/CODE` landing (device pairing) survives the provider redirect
+  // in sessionStorage; open the claim modal once the member is signed in.
+  const [linkCode, setLinkCode] = useState<string | null>(() => readPendingLinkCode())
   const { isAdmin } = useAuth()
   const limits = useLimits()
   const iptvEnabled = limits.data?.iptvEnabled !== false
@@ -102,6 +107,15 @@ function Shell() {
         </Suspense>
       </main>
       {effectiveRoute !== 'live' && <ReplayButton />}
+      {linkCode !== null && (
+        <LinkDeviceModal
+          initialCode={linkCode}
+          onClose={() => {
+            clearPendingLinkCode()
+            setLinkCode(null)
+          }}
+        />
+      )}
     </>
   )
 }

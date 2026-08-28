@@ -6,6 +6,7 @@ import { ConfirmProvider } from './components/confirm/ConfirmProvider'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { initTelemetryFromServer } from './lib/telemetry'
 import { consumeInviteFragment } from './lib/inviteFragment'
+import { consumeLinkFragment } from './lib/linkFragment'
 import { mountAnimatedFavicon } from './lib/animatedFavicon'
 import App from './App'
 import './index.css'
@@ -13,6 +14,7 @@ import './index.css'
 // Invite fragments are bearer secrets. Consume them before telemetry or React
 // can observe the startup URL, including when the visitor is already signed in.
 const initialInviteCode = consumeInviteFragment()
+consumeLinkFragment()
 
 // Injected/build-time telemetry still initialises synchronously inside this
 // call; a server-config fetch continues in the background without delaying UI.

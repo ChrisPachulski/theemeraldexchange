@@ -38,6 +38,7 @@ import { usage } from './routes/usage.js'
 import { recommenderEvents } from './routes/recommenderEvents.js'
 import { telemetry } from './routes/telemetry.js'
 import { device } from './routes/device.js'
+import { deviceLink } from './routes/deviceLink.js'
 import { media } from './routes/media.js'
 import { transcode } from './routes/transcode.js'
 import { devices, adminDevices } from './routes/devices.js'
@@ -234,6 +235,7 @@ app.get('/api/limits', async (c) => {
 app.route('/api/auth', auth)
 // Native device-pair flow lives under the same /api/auth tree as the Plex
 // cookie flow. The device creates its PIN directly, then POST /poll mints JWE.
+app.route('/api/auth/device/link', deviceLink)
 app.route('/api/auth/device', device)
 app.route('/api/me', me)
 // /api/version is public — discovers server_id + auth_modes for Apple
