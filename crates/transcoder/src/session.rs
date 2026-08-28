@@ -838,6 +838,14 @@ impl SessionManager {
     /// stack up and starve the box.
     fn uses_full_hw_pipeline(&self, plan: &TranscodePlan, source_codec: Option<&str>) -> bool {
         use crate::plan::VideoOp;
+        // AV1/VP9 HDR tone-map does NOT ride the full-HW VAAPI-decode pipeline: its
+        // surfaces can't hwmap to Vulkan for libplacebo, so it CPU-decodes and
+        // hwuploads (see args.rs `cpu_vulkan_tonemap`). Only hevc/h264 surfaces map
+        // to Vulkan, so only they (plus non-tone-map plans) are full-HW here.
+        let vulkan_hwmap_safe = matches!(
+            source_codec.map(str::to_ascii_lowercase).as_deref(),
+            None | Some("hevc" | "h265" | "h264" | "avc" | "avc1")
+        );
         self.vaapi_hw_decode
             && matches!(self.encoder, HwEncoder::Vaapi)
             && source_codec.is_some_and(is_vaapi_hw_decodable)
@@ -851,6 +859,14 @@ impl SessionManager {
                     ..
                 }
             )
+            && (vulkan_hwmap_safe
+                || !matches!(
+                    plan,
+                    TranscodePlan::Transcode {
+                        video: VideoOp::EncodeH264 { tone_map: true, .. },
+                        ..
+                    }
+                ))
     }
 
     /// Spawn one ffmpeg child for a session directory. Shared by `start` and the
@@ -887,6 +903,7 @@ impl SessionManager {
             start_secs,
             encoder: self.encoder,
             hw_decode,
+            source_codec,
             media_kind,
             start_number,
             source_avg_kbps,

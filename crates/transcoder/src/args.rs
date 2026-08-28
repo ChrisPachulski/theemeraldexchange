@@ -174,6 +174,12 @@ pub struct ArgSpec<'a> {
     pub encoder: HwEncoder,
     /// Full-hardware VAAPI decode (see [`ffmpeg_args_hw`] docs).
     pub hw_decode: bool,
+    /// Source video codec (lowercase, e.g. `hevc`/`h264`/`av1`), used to pick the
+    /// HDR tone-map route: hevc/h264 VAAPI surfaces hwmap to Vulkan for libplacebo,
+    /// but AV1/VP9 surfaces do NOT (ffmpeg hwmap "Function not implemented"), so
+    /// AV1/VP9 HDR decodes on the CPU and hwuploads to Vulkan instead. `None`
+    /// behaves as hevc/h264 (Vulkan-hwmap-safe).
+    pub source_codec: Option<&'a str>,
     /// The session's media kind (`movie`/`episode`/…). Drives the HLS endlist
     /// semantics: live kinds keep `omit_endlist`, finite VOD gets
     /// `EXT-X-ENDLIST` on clean EOF (see [`is_live_media_kind`]).
@@ -234,6 +240,7 @@ pub fn ffmpeg_args_hw(
         start_secs,
         encoder,
         hw_decode,
+        source_codec: None,
         media_kind: "movie",
         start_number: 0,
         source_avg_kbps: None,
@@ -253,6 +260,7 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
         start_secs,
         encoder,
         hw_decode,
+        source_codec,
         media_kind,
         start_number,
         source_avg_kbps,
@@ -314,17 +322,40 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
     // the encoder, so opening the GPU device for it would be pure waste.
     let hw_surface_reencode = matches!(encoder, HwEncoder::Vaapi | HwEncoder::Qsv)
         && matches!(video, VideoOp::EncodeH264 { .. });
-    // Full-HW HDR tone-map runs libplacebo (a VULKAN filter) between the VAAPI
-    // decode and the VAAPI encode — tonemap_vaapi is unusable here because it
-    // hard-errors ("No mastering display data from input" -> "Invalid argument")
-    // on HDR10 streams that carry no mastering-display metadata (common in x265
-    // rips: War of the Worlds, Game of Thrones S5), which crash-loops ffmpeg so
-    // the session never emits a segment. libplacebo tone-maps robustly with or
-    // without that metadata at the same GPU speed. It needs a Vulkan device
-    // initialized before -i; the filtergraph hwmaps VAAPI<->Vulkan (see
-    // build_vaapi_hw_filter). Non-HDR full-HW (pure scale) stays pure VAAPI.
-    let full_hw_tonemap = full_hw && matches!(video, VideoOp::EncodeH264 { tone_map: true, .. });
-    if full_hw {
+    // HDR->SDR tone-map runs libplacebo (a VULKAN filter), never tonemap_vaapi:
+    // tonemap_vaapi hard-errors ("No mastering display data from input" ->
+    // "Invalid argument") on HDR10 without mastering-display metadata (x265 rips:
+    // War of the Worlds, Game of Thrones S5) and crash-loops the session so it
+    // never emits a segment; libplacebo tone-maps robustly with or without that
+    // metadata at the same GPU speed. libplacebo needs a Vulkan device and frames
+    // ON that device. HEVC/H264 VAAPI-decoded surfaces hwmap to Vulkan directly
+    // (the fast full-HW route). AV1/VP9 VAAPI surfaces do NOT (ffmpeg hwmap
+    // "Function not implemented"), so those decode on the CPU and hwupload to
+    // Vulkan — still GPU-tone-mapped and GPU-encoded, ~1.4x realtime on 4K.
+    let is_hdr_tonemap =
+        matches!(video, VideoOp::EncodeH264 { tone_map: true, burn_subtitle_index: None, .. });
+    let vulkan_hwmap_safe = matches!(
+        source_codec.map(str::to_ascii_lowercase).as_deref(),
+        None | Some("hevc" | "h265" | "h264" | "avc" | "avc1")
+    );
+    // AV1/VP9 HDR tone-map: CPU-decode + hwupload-to-Vulkan libplacebo. Only when
+    // the VAAPI encoder is selected (the Vulkan->VAAPI handoff targets h264_vaapi).
+    let cpu_vulkan_tonemap =
+        matches!(encoder, HwEncoder::Vaapi) && is_hdr_tonemap && !vulkan_hwmap_safe;
+    // Suppress the VAAPI full-HW decode route for the AV1/VP9 tone-map case (its
+    // surfaces can't reach Vulkan) — everything else keeps its prior gate.
+    let full_hw = full_hw && !cpu_vulkan_tonemap;
+    // Full-HW (VAAPI-decode) HDR tone-map: hevc/h264 only, needs a Vulkan device.
+    let full_hw_tonemap = full_hw && is_hdr_tonemap;
+    if cpu_vulkan_tonemap {
+        // No -hwaccel: decode on the CPU. Both a Vulkan device (for libplacebo)
+        // and a VAAPI device (for the h264_vaapi encode the filtergraph hwmaps
+        // back to) are initialized before -i.
+        push(&mut a, "-init_hw_device");
+        push(&mut a, "vulkan=vk");
+        push(&mut a, "-init_hw_device");
+        push(&mut a, &format!("vaapi=va:{VAAPI_RENDER_NODE}"));
+    } else if full_hw {
         if full_hw_tonemap {
             push(&mut a, "-init_hw_device");
             push(&mut a, "vulkan=vk");
@@ -527,7 +558,12 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
             // (tonemap_vaapi/scale_vaapi) and the graph terminates in NV12
             // directly — no upload. The software path scales/tone-maps/burns on
             // CPU frames, then converts to NV12 and uploads as the LAST link.
-            let mut vf = if full_hw {
+            let mut vf = if cpu_vulkan_tonemap {
+                // AV1/VP9 HDR: CPU-decoded frames are hwuploaded to Vulkan for
+                // libplacebo (tone-map + scale), then hwmapped to a VAAPI surface
+                // for h264_vaapi. No trailing hwupload (already a GPU surface).
+                Some(build_cpu_vulkan_tonemap_filter(*scale_to_height))
+            } else if full_hw {
                 Some(build_vaapi_hw_filter(*scale_to_height, *tone_map))
             } else {
                 build_video_filter(*scale_to_height, *tone_map, *burn_subtitle_index, input)
@@ -543,7 +579,7 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
             // under full-HW (frames are already on the GPU). Empirically validated
             // against the deployed ffmpeg for plain 8-bit, 10-bit, scaled, and
             // 4K-HDR-tone-mapped sources (see crates/transcoder HW bring-up).
-            if !full_hw {
+            if !full_hw && !cpu_vulkan_tonemap {
                 let upload = match encoder {
                     HwEncoder::Vaapi => Some("format=nv12,hwupload"),
                     HwEncoder::Qsv => Some("format=nv12,hwupload=extra_hw_frames=64"),
@@ -822,6 +858,25 @@ fn build_video_filter(
 /// HDR10 streams without mastering-display metadata (x265 rips) and crash-loops the
 /// session. With neither tone-map nor scale we still run `scale_vaapi=format=nv12`
 /// as a cheap GPU format pass to guarantee the NV12 the encoder needs.
+/// AV1/VP9 HDR tone-map filtergraph: CPU-decoded frames are uploaded to a Vulkan
+/// device, libplacebo tone-maps HDR->SDR BT.709 (and scales, one pass), then the
+/// result is mapped to a VAAPI surface for `h264_vaapi`. Used because AV1/VP9
+/// VAAPI-decoded surfaces cannot hwmap to Vulkan (ffmpeg "Function not
+/// implemented"), unlike HEVC/H264 which take the faster VAAPI-decode route in
+/// [`build_vaapi_hw_filter`]. `format=p010` normalizes the 10-bit input the
+/// Vulkan upload expects.
+fn build_cpu_vulkan_tonemap_filter(scale_to_height: Option<i64>) -> String {
+    let placebo = "libplacebo=tonemapping=bt.2390:colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv:format=nv12";
+    match scale_to_height {
+        Some(h) => format!(
+            "format=p010,hwupload=derive_device=vulkan,{placebo}:w=-2:h={h},hwmap=derive_device=vaapi"
+        ),
+        None => format!(
+            "format=p010,hwupload=derive_device=vulkan,{placebo},hwmap=derive_device=vaapi"
+        ),
+    }
+}
+
 fn build_vaapi_hw_filter(scale_to_height: Option<i64>, tone_map: bool) -> String {
     // HDR->SDR: libplacebo on Vulkan, NOT tonemap_vaapi. tonemap_vaapi errors
     // "No mastering display data from input" -> "Invalid argument" on HDR10 lacking
@@ -1082,6 +1137,7 @@ mod tests {
             start_secs: 120,
             encoder: HwEncoder::Cpu,
             hw_decode: false,
+            source_codec: None,
             media_kind: "live",
             start_number: 0,
         });
@@ -1699,6 +1755,7 @@ mod tests {
             start_secs: 0,
             encoder: HwEncoder::Cpu,
             hw_decode: false,
+            source_codec: None,
             media_kind: "movie",
             start_number: 0,
             source_avg_kbps: Some(4_000),
@@ -1714,6 +1771,7 @@ mod tests {
             start_secs: 0,
             encoder: HwEncoder::Cpu,
             hw_decode: false,
+            source_codec: None,
             media_kind: "movie",
             start_number: 0,
             source_avg_kbps: Some(40_000),
@@ -1854,6 +1912,7 @@ mod tests {
             start_secs: 0,
             encoder: HwEncoder::Cpu,
             hw_decode: false,
+            source_codec: None,
             media_kind: kind,
             start_number: 0,
         })
@@ -1870,6 +1929,7 @@ mod tests {
             start_secs: 0,
             encoder: HwEncoder::Cpu,
             hw_decode: false,
+            source_codec: None,
             media_kind: "movie",
             start_number: n,
         };
@@ -2020,6 +2080,61 @@ mod tests {
             args.join(" ")
         );
         assert!(args.join(" ").contains("-init_hw_device vulkan=vk"), "{}", args.join(" "));
+    }
+
+    #[test]
+    fn av1_hdr_tonemap_cpu_decodes_and_hwuploads_to_vulkan() {
+        // AV1 HDR->SDR: VAAPI surfaces can't hwmap to Vulkan, so decode on the CPU
+        // and hwupload to Vulkan for libplacebo, then hwmap back to VAAPI for the
+        // h264_vaapi encode. NO -hwaccel; BOTH a Vulkan and a VAAPI device inited.
+        let plan = encode(Some(1080), true, None);
+        let args = ffmpeg_args_for(&ArgSpec {
+            plan: &plan,
+            input: "/in.mkv",
+            session_dir: "/tmp/s",
+            start_secs: 0,
+            encoder: HwEncoder::Vaapi,
+            hw_decode: true,
+            source_codec: Some("av1"),
+            media_kind: "movie",
+            start_number: 0,
+            source_avg_kbps: None,
+        });
+        let j = args.join(" ");
+        let vf_idx = args.iter().position(|s| s == "-vf").expect("missing -vf");
+        assert_eq!(
+            args[vf_idx + 1],
+            "format=p010,hwupload=derive_device=vulkan,libplacebo=tonemapping=bt.2390:colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv:format=nv12:w=-2:h=1080,hwmap=derive_device=vaapi",
+            "{j}"
+        );
+        assert!(j.contains("-init_hw_device vulkan=vk"), "vulkan dev: {j}");
+        assert!(j.contains("-init_hw_device vaapi=va:/dev/dri/renderD128"), "vaapi dev: {j}");
+        assert!(!j.contains("-hwaccel "), "no -hwaccel (CPU decode): {j}");
+        assert!(!j.contains("tonemap_vaapi"), "no tonemap_vaapi: {j}");
+        assert!(!j.contains("format=nv12,hwupload"), "no trailing vaapi hwupload: {j}");
+    }
+
+    #[test]
+    fn hevc_hdr_tonemap_keeps_vaapi_decode_route() {
+        // HEVC surfaces DO hwmap to Vulkan, so hevc HDR keeps the fast VAAPI-decode
+        // full-HW route (contrast av1 above).
+        let plan = encode(Some(1080), true, None);
+        let args = ffmpeg_args_for(&ArgSpec {
+            plan: &plan,
+            input: "/in.mkv",
+            session_dir: "/tmp/s",
+            start_secs: 0,
+            encoder: HwEncoder::Vaapi,
+            hw_decode: true,
+            source_codec: Some("hevc"),
+            media_kind: "movie",
+            start_number: 0,
+            source_avg_kbps: None,
+        });
+        let j = args.join(" ");
+        assert!(j.contains("-hwaccel vaapi"), "hevc keeps VAAPI decode: {j}");
+        assert!(j.contains("hwmap=derive_device=vulkan,libplacebo"), "hevc vaapi->vulkan: {j}");
+        assert!(!j.contains("format=p010,hwupload=derive_device=vulkan"), "not the cpu path: {j}");
     }
 
     #[test]
